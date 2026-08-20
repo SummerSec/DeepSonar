@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Broadcast, CaretDown, CaretUp, DownloadSimple, Eye, EyeSlash, Funnel, PaperPlaneTilt, TreeStructure, X } from "@phosphor-icons/react";
+import { Broadcast, CaretDown, CaretUp, DownloadSimple, Eye, EyeSlash, Funnel, TreeStructure, X } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
@@ -17,7 +17,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { toPng } from "html-to-image";
-import { api, type CanvasBroadcastPage, type CanvasData, type CanvasHumanMessage, type CanvasHumanMessagePage, type CanvasNode, type FindingTrace } from "./api";
+import { api, type CanvasBroadcastPage, type CanvasData, type CanvasHumanMessagePage, type CanvasNode, type FindingTrace } from "./api";
 import { BROADCAST_STATUS_COLOR, broadcastStatusLabel, deriveCanvasBroadcasts, visibleBroadcastOverlayEdges, type CanvasBroadcastProjection } from "./canvas-broadcasts";
 import {
   applyCanvasDelta,
@@ -49,7 +49,6 @@ import { canvasEdgeTypes, ORTHOGONAL_EDGE_TYPE } from "./orthogonal-edge";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
 import { nodeDisplayColor, nodeTypes, semanticNodeKind, SEMANTIC_STYLE, type SemanticNodeKind } from "./nodes";
-import { HumanMessageComposer } from "./HumanMessageComposer";
 import { humanMessageStatusLabel, isActiveHumanMessageTarget, messagesForCanvasNode } from "./human-messages";
 import { Sidebar } from "./Sidebar";
 import { SearchableMultiSelect } from "./SearchableSelect";
@@ -425,6 +424,7 @@ export function CanvasView({
   onOpenFact,
   onTraceFinding,
   onExitTrace,
+  onSendHumanMessage,
 }: {
   canvasId: string;
   /** 非过程画布 Tab 时停渲染 Job/节点抽屉，避免盖住列表（#219）。 */
@@ -436,6 +436,7 @@ export function CanvasView({
   onOpenFact?: (factId: string) => void;
   onTraceFinding?: (findingId: string) => void;
   onExitTrace?: () => void;
+  onSendHumanMessage?: (node: CanvasNode) => void;
 }) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
@@ -444,7 +445,6 @@ export function CanvasView({
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   const [messagePage, setMessagePage] = useState<CanvasHumanMessagePage | null>(null);
   const [messageError, setMessageError] = useState<string | null>(null);
-  const [composerOpen, setComposerOpen] = useState(false);
   const [elkResult, setElkResult] = useState<{
     key: string;
     positions: Map<string, { x: number; y: number }>;
@@ -490,7 +490,6 @@ export function CanvasView({
   useEffect(() => {
     if (!active) {
       clearSelected();
-      setComposerOpen(false);
     }
   }, [active, clearSelected]);
 
@@ -1196,10 +1195,6 @@ export function CanvasView({
       {exportImageError && (
         <div className="canvas-export-error" role="status">{exportImageError}</div>
       )}
-      <button type="button" className="human-message-launch" onClick={() => setComposerOpen(true)}>
-        <PaperPlaneTilt size={16} weight="fill" />
-        <span><strong>发消息</strong><small>{selected ? `当前选择：${selected.title}` : "Hub 或 active 运行节点"}</small></span>
-      </button>
       {messageError && <div className="human-message-sync-error">消息账本同步失败：{messageError}</div>}
       {messagePage && messagePage.total > 0 && (
         <section className="human-message-status-panel" aria-label="最近人工消息">
@@ -1567,7 +1562,7 @@ export function CanvasView({
             jobId={selected.job_id}
             onClose={clearSelected}
             messages={(messagePage?.items ?? []).filter((message) => message.target_job_id === selected.job_id)}
-            onSendMessage={() => setComposerOpen(true)}
+            onSendMessage={onSendHumanMessage ? () => onSendHumanMessage(selected) : undefined}
           />
         ) : (
           <Sidebar
@@ -1580,26 +1575,14 @@ export function CanvasView({
                 : undefined
             }
             messages={messagesForCanvasNode(messagePage?.items ?? [], selected.id)}
-            onSendMessage={isActiveHumanMessageTarget(selected) ? () => setComposerOpen(true) : undefined}
+            onSendMessage={
+              onSendHumanMessage && (selected.node_type === "human" || isActiveHumanMessageTarget(selected))
+                ? () => onSendHumanMessage(selected)
+                : undefined
+            }
             broadcastItems={broadcasts.sourceItems.get(selected.id) ?? []}
           />
         ))}
-      {shouldRenderCanvasOverlays(active) && composerOpen && (
-        <HumanMessageComposer
-          canvasId={canvasId}
-          projectId={data.canvas?.project_id ?? null}
-          selectedNode={selected}
-          onClose={() => setComposerOpen(false)}
-          onSent={(created: CanvasHumanMessage) => {
-            setMessagePage((current) => current ? {
-              ...current,
-              items: [created, ...current.items.filter((item) => item.id !== created.id)],
-              total: current.total + (current.items.some((item) => item.id === created.id) ? 0 : 1),
-            } : { canvas_id: canvasId, items: [created], total: 1, truncated: false });
-            setComposerOpen(false);
-          }}
-        />
-      )}
     </div>
   );
 }

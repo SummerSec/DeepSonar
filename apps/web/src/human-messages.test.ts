@@ -6,7 +6,10 @@ import {
   humanMessageStatusLabel,
   humanMessageTargetForNode,
   humanMessageTargetLabel,
+  humanMessageTargetNodeForJobId,
+  humanMessageTargetNodeFromContext,
   isActiveHumanMessageTarget,
+  jobCanReceiveHumanReply,
   messagesForCanvasNode,
   safeHumanMessageFileName,
 } from "./human-messages.js";
@@ -61,7 +64,31 @@ test("target mapping only permits active intent, job and report nodes", () => {
   assert.deepEqual(humanMessageTargetForNode(activeIntent), { kind: "job", node_id: "intent-1" });
   assert.equal(isActiveHumanMessageTarget(node({ node_type: "report", status: "succeeded" })), false);
   assert.equal(isActiveHumanMessageTarget(node({ node_type: "finding", status: "running" })), false);
-  assert.deepEqual(humanMessageTargetForNode(null), { kind: "hub" });
+  assert.equal(humanMessageTargetForNode(null), null);
+});
+
+test("human intervention reply resolves the waiting job node, otherwise no target", () => {
+  const waitingJob = node({ id: "job-node", node_type: "job", status: "waiting_human" });
+  const humanNode = node({
+    id: "human-1",
+    node_type: "human",
+    status: "open",
+    job_id: "job-1",
+    body_json: { reason: "需要授权", job_id: "job-1" },
+  });
+  assert.equal(isActiveHumanMessageTarget(humanNode), false);
+  assert.equal(humanMessageTargetNodeFromContext(humanNode, [waitingJob, humanNode])?.id, "job-node");
+  assert.equal(humanMessageTargetNodeFromContext(humanNode, [humanNode]), null);
+  assert.equal(humanMessageTargetForNode(humanNode), null);
+  assert.equal(humanMessageTargetNodeForJobId("job-1", [waitingJob, humanNode])?.id, "job-node");
+  assert.equal(humanMessageTargetNodeForJobId("missing", [waitingJob]), null);
+});
+
+test("本次运行列表只给 waiting_human 的 Job 直接回复入口", () => {
+  assert.equal(jobCanReceiveHumanReply({ status: "waiting_human" }), true);
+  assert.equal(jobCanReceiveHumanReply({ status: "running" }), false);
+  assert.equal(jobCanReceiveHumanReply({ status: "succeeded" }), false);
+  assert.equal(jobCanReceiveHumanReply({ type: "human", status: "running" }), false);
 });
 
 test("file keys are message-scoped, ordered and path safe", () => {

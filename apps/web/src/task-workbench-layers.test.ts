@@ -38,5 +38,8 @@ test("task workbench wires layer helpers and gates CanvasView overlays", () => {
   assert.match(canvas, /active = true/);
   assert.match(canvas, /if \(!active\) \{\s*clearSelected\(\);/);
   assert.match(canvas, /shouldRenderCanvasOverlays\(active\) && selected/);
-  assert.match(canvas, /shouldRenderCanvasOverlays\(active\) && composerOpen/);
+  assert.doesNotMatch(canvas, /human-message-launch/);
+  assert.doesNotMatch(canvas, /<HumanMessageComposer/);
+  assert.match(canvas, /onSendHumanMessage\?/);
+  assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)\}/);
 });

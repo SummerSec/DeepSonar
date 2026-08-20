@@ -26,16 +26,17 @@ export function HumanMessageComposer({
   const inputId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
   const nodeEligible = isActiveHumanMessageTarget(selectedNode);
-  const [targetKind, setTargetKind] = useState<"hub" | "job">(nodeEligible ? "job" : "hub");
+  const [targetKind, setTargetKind] = useState<"hub" | "job" | null>(nodeEligible ? "job" : null);
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const trimmed = body.trim();
-  const target = targetKind === "job" && nodeEligible ? humanMessageTargetForNode(selectedNode) : { kind: "hub" as const };
-  const canSubmit = Boolean(projectId && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy);
-  const targetTitle = target.kind === "hub" ? "Hub" : selectedNode?.title ?? "当前运行";
+  const jobTarget = nodeEligible ? humanMessageTargetForNode(selectedNode) : null;
+  const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
+  const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy);
+  const targetTitle = target?.kind === "hub" ? "Hub" : target?.kind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
   const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
 
   const addFiles = (incoming: FileList | null) => {
@@ -46,7 +47,7 @@ export function HumanMessageComposer({
   };
 
   const submit = async () => {
-    if (!canSubmit || !projectId) return;
+    if (!canSubmit || !projectId || !target) return;
     const messageId = crypto.randomUUID();
     setBusy(true);
     setError("");
@@ -101,6 +102,9 @@ export function HumanMessageComposer({
         <div className="human-message-composer-body">
           <fieldset disabled={busy}>
             <legend>发送目标</legend>
+            {!nodeEligible && (
+              <p className="human-message-target-hint">当前上下文没有可投递的活动 intent / job / report。human 节点不能投递；若要发给 Hub，请显式选择。</p>
+            )}
             <label className={targetKind === "hub" ? "is-selected" : ""}>
               <input type="radio" name={`${inputId}-target`} checked={targetKind === "hub"} onChange={() => setTargetKind("hub")} />
               <span><strong>Hub</strong><small>发送给当前任务的活跃 Hub；没有活跃 Hub 时由系统唤醒</small></span>
