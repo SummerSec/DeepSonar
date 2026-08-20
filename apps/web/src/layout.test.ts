@@ -33,7 +33,7 @@ test("fallback routes are orthogonal buses between node ports", () => {
   assert.equal(points[0]?.x, 280);
   assert.equal(points[points.length - 1]?.x, 400);
   for (const point of points.slice(1, -1)) {
-    assert.ok(point.x >= 280 && point.x <= 400, "forward bus stays in the interlayer gutter");
+    assert.ok(point.x >= 280 && point.x <= 336, "forward bus stays in the near-side gutter");
   }
   for (let i = 1; i < points.length; i += 1) {
     const prev = points[i - 1];

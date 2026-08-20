@@ -12,11 +12,11 @@ test("orthogonal bus is a three-segment gutter, not a diagonal", () => {
   const points = orthogonalBusPoints({ x: 0, y: 10 }, { x: 200, y: 110 });
   assert.deepEqual(points, [
     { x: 0, y: 10 },
-    { x: 100, y: 10 },
-    { x: 100, y: 110 },
+    { x: 56, y: 10 },
+    { x: 56, y: 110 },
     { x: 200, y: 110 },
   ]);
-  assert.match(polylinePath(points), /^M 0 10 L 100 10 L 100 110 L 200 110$/);
+  assert.match(polylinePath(points), /^M 0 10 L 56 10 L 56 110 L 200 110$/);
 });
 
 test("same-column buses wrap above the cards instead of down the centerline", () => {

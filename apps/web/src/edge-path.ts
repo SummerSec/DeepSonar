@@ -27,9 +27,10 @@ export function simplifyPolyline(points: readonly LayoutPoint[]): LayoutPoint[] 
 }
 
 /**
- * Layer-gutter bus: leave the east port, travel in the gap between columns,
- * enter the west port. Same-column / back-edges wrap above the cards so the
- * vertical segment never sits on the node centerline.
+ * Layer-gutter bus: leave the east port, travel in the first gap after the
+ * source, enter the west port. Never take 50% of a skip-layer span (that
+ * puts a barcode through the columns in between). Same-column / back-edges
+ * wrap above the cards so the vertical segment never sits on the centerline.
  */
 export function orthogonalBusPoints(
   source: LayoutPoint,
@@ -38,11 +39,12 @@ export function orthogonalBusPoints(
   laneCount = 1,
 ): LayoutPoint[] {
   const lanes = Math.max(laneCount, 1);
-  const laneT = lanes <= 1 ? 0.5 : (Math.min(Math.max(lane, 0), lanes - 1) + 1) / (lanes + 1);
+  const laneOffset = (Math.min(Math.max(lane, 0), lanes - 1) - (lanes - 1) / 2) * 8;
   const span = target.x - source.x;
   if (span > 24) {
     if (near(source.y, target.y)) return simplifyPolyline([source, target]);
-    const midX = source.x + Math.max(28, span * laneT);
+    const gutter = Math.min(56, Math.max(36, span * 0.5));
+    const midX = Math.min(source.x + gutter + laneOffset, target.x - 20);
     return simplifyPolyline([
       source,
       { x: midX, y: source.y },

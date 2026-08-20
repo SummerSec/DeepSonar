@@ -118,7 +118,7 @@ export function orthogonalRoutesFromPositions(
     const from = positions.get(edge.from_node_id);
     const to = positions.get(edge.to_node_id);
     if (!from || !to) continue;
-    const key = `${Math.round(from.x)}->${Math.round(to.x)}`;
+    const key = edge.from_node_id;
     const list = grouped.get(key);
     if (list) list.push(edge);
     else grouped.set(key, [edge]);
