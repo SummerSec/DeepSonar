@@ -15,6 +15,14 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
   assert.equal(roleNameForJobType("report"), "report");
   assert.equal(PLATFORM_DEFAULT_AGENT_CLI, "claude-code");
   assert.match(withRuntimeTestToolchainPolicy("test", null, "deepsonar-base") ?? "", /Runtime test toolchain/);
+  assert.match(
+    withRuntimeTestToolchainPolicy("test", null, "deepsonar-openharmony-test") ?? "",
+    /OpenHarmony hdc device protocol/,
+  );
+  assert.doesNotMatch(
+    withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
+    /OpenHarmony hdc device protocol/,
+  );
   assert.equal(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit"), "custom");
 });
 

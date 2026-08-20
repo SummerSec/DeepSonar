@@ -36,5 +36,13 @@ assert.equal(
   withRuntimeTestToolchainPolicy("audit", null, "deepsonar-audit"),
   null,
 );
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-openharmony-test") ?? "",
+  /OpenHarmony hdc device protocol/,
+);
+assert.doesNotMatch(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
+  /OpenHarmony hdc device protocol/,
+);
 
 console.log("OK: runtime test policy selection and idempotence");

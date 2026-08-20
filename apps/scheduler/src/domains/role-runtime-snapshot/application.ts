@@ -130,6 +130,14 @@ This Job uses a Scheduler-selected, trusted runtime image. Before testing, read 
 - If a required preinstalled command is missing, stop the dynamic attempt and submit structured inconclusive/needs-human evidence. Never claim a confirmed Finding from a static description alone.
 - Record the runtime image key/digest, tool versions, target revision, exact steps, expected result, actual result, and limitations in emit_fact.verification for runtime-test evidence.`;
 
+export const OPENHARMONY_HDC_POLICY = `### OpenHarmony hdc device protocol (Scheduler policy)
+
+This Job uses deepsonar-openharmony-test. Dynamic device evidence must come from the pinned official OpenHarmony hdc (OpenHarmony Device Connector), the same way Chrome Test uses CDP.
+
+- Read /opt/deepsonar/tool-manifest.json and confirm device.protocol is hdc. Use hdc for list targets, shell, file send/recv, install, hilog, fport, and hdc tconn host:port or a host-mapped device. USB privileges are out of scope.
+- Do not install DevEco, a full SDK, HarmonyOS proprietary toolchains, nmap, or Kali process tools (gdb/strace) as a substitute device protocol.
+- If hdc list targets is empty ([Empty]), submit structured inconclusive/needs_human evidence. Never invent device results from host narration, source comments, or build logs.`;
+
 export function withRuntimeTestToolchainPolicy(
   roleName: string,
   instructions: string | null,
@@ -137,9 +145,14 @@ export function withRuntimeTestToolchainPolicy(
 ): string | null {
   const dynamicVerify = roleName === "verify" && resolvedRuntimeImageKey !== null && resolvedRuntimeImageKey !== "deepsonar-base";
   if (roleName !== "test" && !dynamicVerify) return instructions;
-  const base = instructions?.trim() ?? "";
-  if (base.includes("### Runtime test toolchain (Scheduler policy)")) return base;
-  return `${base}${base ? "\n\n" : ""}${RUNTIME_TEST_TOOLCHAIN_POLICY}`;
+  let text = instructions?.trim() ?? "";
+  if (!text.includes("### Runtime test toolchain (Scheduler policy)")) {
+    text = `${text}${text ? "\n\n" : ""}${RUNTIME_TEST_TOOLCHAIN_POLICY}`;
+  }
+  if (resolvedRuntimeImageKey === "deepsonar-openharmony-test" && !text.includes("### OpenHarmony hdc device protocol (Scheduler policy)")) {
+    text = `${text}${text ? "\n\n" : ""}${OPENHARMONY_HDC_POLICY}`;
+  }
+  return text;
 }
 
 /** The complete frozen runtime input consumed by Dispatcher/Executor. */

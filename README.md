@@ -176,7 +176,7 @@ pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3
 | `deepsonar-audit` | **audit** | base + Semgrep、Gitleaks、ShellCheck、binutils | 完整应用构建链（如 Maven 起 Spring） |
 | `deepsonar-kali-minimal`（Kali Test） | **test** | 多版本 Python + `uv`、Temurin JDK、Maven、Go、Rust 等 | Kali metapackage/GUI、DinD |
 | `deepsonar-chrome-{audit,test,fuzz}` | Chrome 专项（项目 opt-in） | 静态分析 / Chromium+CDP / 固定 V8 `d8`+libfuzzer | 通用业务审计默认路径 |
-| `deepsonar-openharmony-{audit,test,fuzz}` | OpenHarmony 专项（项目 opt-in） | 对应 OH 审计 / 构建测试 / fuzz 工具链 | 通用业务审计默认路径 |
+| `deepsonar-openharmony-{audit,test,fuzz}` | OpenHarmony 专项（项目 opt-in） | 对应 OH 审计 / 构建测试（含官方 hdc） / fuzz 工具链 | 通用业务审计默认路径 |
 
 #### 镜像仓库（中国区 ACR）
 
