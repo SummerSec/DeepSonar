@@ -75,7 +75,8 @@ test("core keeps the historical facade while delegating Hub orchestration", () =
     "Hub eligibility must lock the canvas before checking duplicate active Hub jobs",
   );
   assert.match(application, /assertFrozenRuntimeImageLocal/);
-  assert.match(application, /runtime_image_not_local/);
+  assert.match(application, /runtimeImageNotLocalCanvasBlock/);
+  assert.match(application, /RuntimeImageNotLocalError/);
   assert.match(application, /isHubRoundWithinBudget\(Number\(count\), rules\.maxHubRounds\)/);
   assert.match(application, /requirements_json = requirements_json - 'hub_evidence_signature'/);
 });

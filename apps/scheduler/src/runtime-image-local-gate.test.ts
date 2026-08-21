@@ -71,7 +71,8 @@ test("resume inspects the frozen digest, not latest", async () => {
     }),
     RuntimeImageNotLocalError,
   );
-  assert.deepEqual(inspected.filter((ref) => ref === FROZEN_REF || ref === LATEST_REF || ref === DIGEST || ref === LATEST), [FROZEN_REF]);
+  assert.ok(inspected.includes(FROZEN_REF));
+  assert.ok(inspected.every((ref) => ref === FROZEN_REF || ref === DIGEST));
   assert.equal(inspected.includes(LATEST_REF), false);
   assert.equal(inspected.includes(LATEST), false);
 });

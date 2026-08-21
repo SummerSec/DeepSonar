@@ -151,7 +151,7 @@ test("resume inspects the snapshot that will run, not a later catalog digest", (
   const inspect = resume.indexOf("assertFrozenRuntimeImageLocal");
   const transition = resume.indexOf("transitionJob");
   assert.ok(stale >= 0 && inspect > stale && transition > inspect);
-  assert.match(resume.slice(inspect, inspect + 400), /rerun-current \? currentSnapshot : job\.agent_snapshot_json/);
+  assert.match(resume.slice(inspect, inspect + 400), /mode === "rerun-current" \? currentSnapshot : job\.agent_snapshot_json/);
 });
 
 test("Dispatcher and real executor provision from the frozen snapshot only", () => {
