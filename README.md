@@ -166,59 +166,6 @@ pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3
 
 项目镜像策略：`inherit_global`（默认，只认全局 RoleConfig 镜像与 model / 默认 CLI）或 `project_managed`（项目 `role_runtime_images` 集中绑定；项目 RoleConfig **不接受**独立 `runtime_image_key`，但可托管自己的 model）。
 
-### 官方运行时镜像与语言能力
-
-官方运行时按职责拆包，**镜像选择以项目镜像策略 + 全局/项目映射为准**（Job 创建时冻结不可变 digest），不要用全局 env 指定 CLI 或在沙箱内临时 `apt` 装工具链：
-
-| 镜像 | 默认角色 | 主要能力 | 刻意不含 |
-|------|----------|----------|----------|
-| `deepsonar-base` | explore / analyze / review / code / hub / **verify** | Node 22 slim、git、系统 python3、curl、rg、jq | 多版本语言、JDK、Go、Rust、Maven |
-| `deepsonar-audit` | **audit** | base + Semgrep、Gitleaks、ShellCheck、binutils | 完整应用构建链（如 Maven 起 Spring） |
-| `deepsonar-kali-minimal`（Kali Test） | **test** | 多版本 Python + `uv`、Temurin JDK、Maven、Go、Rust 等 | Kali metapackage/GUI、DinD |
-| `deepsonar-chrome-{audit,test,fuzz}` | Chrome 专项（项目 opt-in） | 静态分析 / Chromium+CDP / 固定 V8 `d8`+libfuzzer | 通用业务审计默认路径 |
-| `deepsonar-openharmony-{audit,test,fuzz}` | OpenHarmony 专项（项目 opt-in） | 对应 OH 审计 / 构建测试（含官方 hdc） / fuzz 工具链 | 通用业务审计默认路径 |
-
-#### 镜像仓库（中国区 ACR）
-
-`v*` Release 会同步推送到阿里云个人版 ACR（与 GHCR 同一批 digest）：
-
-```text
-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/<image>:<version>
-```
-
-| 镜像 | 用途 |
-|------|------|
-| `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` | 官方运行时 |
-| `deepsonar-chrome-test` / `-audit` / `-fuzz` | Chrome 专项（项目 opt-in） |
-| `deepsonar-openharmony-test` / `-audit` / `-fuzz` | OpenHarmony 专项（项目 opt-in） |
-| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` / `deepsonar-assets-helper` / `deepsonar-silo` | 平台服务（helper/silo 在下一正式 Release 首发） |
-
-```bash
-REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-VER=<release-version-without-v>   # 与 GitHub Release 的 vX.Y.Z 对齐
-
-for img in \
-  deepsonar-base deepsonar-audit deepsonar-kali-minimal \
-  deepsonar-chrome-test deepsonar-chrome-audit deepsonar-chrome-fuzz \
-  deepsonar-openharmony-test deepsonar-openharmony-audit deepsonar-openharmony-fuzz \
-  deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper deepsonar-silo
-do
-  docker pull "$REG/$img:$VER"
-done
-```
-
-也可用发布附件清单：`deploy/pull-runtime-images.sh --file deploy/runtime-image-registry.json`（优先 `name@sha256:…`）。real 模式请把不可变 digest 写入 `DEEPSONAR_OFFICIAL_*_IMAGE`。白名单需包含 ACR host：
-
-```dotenv
-DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=ghcr.io,docker.io,registry-1.docker.io,crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com
-```
-
-**静态审计 vs 动态验证**
-
-- **只读代码出 Finding**（audit）：多数语言可用 `deepsonar-audit`。
-- **runtime_test / 编译 / PoC**（test）：使用 **Kali Test** 或项目专项镜像，不要绑 base。
-- 不要在沙箱内冷装 JDK/Maven；以 `agent-harness/*runtime.json` 的版本、能力和体积契约为准。
-
 基本验证：
 
 ```bash
