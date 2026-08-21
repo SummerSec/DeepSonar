@@ -177,7 +177,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 `project_managed` 时只取 `role_runtime_images`（角色名到可信 runtime key 或 `null`），缺项或
 `null` 使用系统 `deepsonar-base`，并允许项目 RoleConfig 托管自己的 model / 默认 CLI。
 项目 RoleConfig 的 `runtime_image_key` 不再作为项目镜像来源。
-项目对市场版本的绑定：`project_runtime_images.selected_version_id=null` 跟随最新 trusted；显式 UUID 为 pin，官方升版 / registry sync 不自动改写。pin 对当前通道与宿主平台不再可执行、但最新 trusted 可用时，预检与建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin，并给出一键升级或改为跟随最新），不静默换 digest。
+项目对市场版本的绑定：`project_runtime_images.selected_version_id=null` 跟随最新 trusted，不必再写 UUID。显式 UUID 为 pin。官方 catalog 提升 / registry sync 成功后，只把**官方**且已过期（当前通道/宿主平台不再是可执行 trusted，同时新 latest trusted 可用）的项目 pin 滚到 `latest_version_id`；只改 `project_runtime_images.selected_version_id`，已冻结 Job 快照与历史 Attempt 不动。`pin_ok` 的显式旧版（仍 trusted 可执行）不改。第三方 pin 仍 fail closed，不自动换 digest。需要钉死旧官方版本的项目设 `pin_policy=hold`；默认 `follow`。每次自动滚动写 `audit_logs`（`runtime_image.official_pin_roll`，trigger=`official_catalog_promote`）。hold / 第三方过期 pin 仍返回 `409 RUNTIME_IMAGE_PIN_STALE`（含一键升级）。空壳画布（已提交但无 Job）可在 pin 滚动后 `POST /tasks/:id/retry` 补入口 Hub。
 
 ### 6.1 Compose 任务的冻结种子
 
@@ -298,7 +298,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | Runtime Platform API 能力一致性 | #145/#152 | **已完成**：五个治理 adapter 均声明 Job 级 HTTP `platformControlApi` 且 `controlMcp=false`；所有 CLI 只走 Job 级 API，冻结 adapter 缺少 API capability 或 operation 时执行前 fail closed |
 | 项目镜像继承一致性 | #146 | `inherit_global` 继续只认全局 RoleConfig 镜像；`project_managed` 只认项目 `role_runtime_images` 映射。修复遗留项目 RoleConfig `runtime_image_key` 在导入、展示或 readiness 中被误当作有效配置的问题，不恢复 #130 已删除的独立项目镜像覆盖 |
 | inherit_global 忽略遗留项目模型 | #233 | **已完成**：`inherit_global`（缺省 / 脏值）下 Job 快照的 `model` / `upstream_model` / 默认 CLI 只认全局 RoleConfig + 账号主模型；遗留项目 RoleConfig.model 在 `resolveAgentSnapshotForJob` 解析时忽略，不删除历史行。`credential.batch_bind` 仍可不改写行上 model，但 impact/UI 标明这些值在 inherit 下不生效 |
-| 项目 runtime image pin 过期 | #244 | **已完成**：不静默改写显式 pin。`version_id=null` 跟随最新 trusted；pin 无法解析而最新 trusted 可用时 readiness / 建任务 `409 RUNTIME_IMAGE_PIN_STALE`（含一键升级），市场行标 `pin_stale`，避免 500 + 市场假装正常 |
+| 项目 runtime image pin 过期 | #244 | **#284 修订口径**：不再「永不改写显式 pin」。官方 stale pin 在 catalog 提升时自动滚；`pin_ok` 显式旧版、第三方、`pin_policy=hold` 仍不自动换。过期且未滚动时 readiness / 建任务仍 `409 RUNTIME_IMAGE_PIN_STALE`（含一键升级），市场行标 `pin_stale` |
+| 官方升版自动滚过期项目 pin | #284 | **已完成**：权威官方 catalog apply / registry sync 后批量把过期官方 `selected_version_id` 滚到 latest trusted；只改项目绑定，不动 Job 快照；`version_id=null` 不写 UUID；每条滚动写 `runtime_image.official_pin_roll` 审计（trigger=`official_catalog_promote`）；默认 `pin_policy=follow`，opt-out=`hold`。空壳任务可 retry 补 Hub |
 | 任务定时开始（北京 08:00） | #147 | **已完成并关 issue**：见 §5；`task-schedule` / `schedule-wake`、dispatcher 门禁、Web 表单与列表 `scheduled` 相位；无 schema 迁移 |
 | 过程画布视口 / MiniMap | #185 | **已完成**：过程画布切走任务页签时保持挂载与尺寸（`visibility` 而非 `display:none`）；节点携带稳定宽高；`fitView` 在零尺寸/空 bounds 时拒绝，容器从 0 恢复后再适配；右上角 MiniMap 可点击/拖动/缩放并避开筛选面板 |
 | 任务工作台画布层穿透 | #219 | **已完成**：非画布 Tab 仍用 `visibility` 保住 React Flow 尺寸，但画布层固定 `z-0`，列表/报告用 `theme-drawer` + `z-10` 不透明盖住合成层；`CanvasView` 在 `active=false` 时收起并停渲染 Job/节点抽屉与人工消息层，避免与「本次运行」页级抽屉叠层 |
@@ -334,7 +335,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v36）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v37）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

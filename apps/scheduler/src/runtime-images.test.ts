@@ -14,6 +14,7 @@ import {
   runtimeImageRefForChannel,
   runtimeImageVersionPin,
   classifyRuntimeImagePin,
+  shouldRollOfficialProjectPin,
   diagnoseRuntimeImageSelectionFailure,
   officialDefaultImageRevokedWarning,
   requestRuntimeImagePreparation,
@@ -725,6 +726,46 @@ test("null pin follows latest trusted; explicit pin stays until it is no longer 
     pinMatchesExecutableTrusted: false,
     latestTrustedVersionId: null,
   }), "unavailable");
+});
+
+test("official catalog promote rolls only stale official follow pins", () => {
+  const pin = "99999999-9999-4999-8999-999999999999";
+  const latest = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  assert.equal(shouldRollOfficialProjectPin({
+    official: true,
+    pinPolicy: "follow",
+    selectedVersionId: pin,
+    pinClassification: "pin_stale",
+    latestTrustedVersionId: latest,
+  }), true);
+  assert.equal(shouldRollOfficialProjectPin({
+    official: true,
+    pinPolicy: "follow",
+    selectedVersionId: pin,
+    pinClassification: "pin_ok",
+    latestTrustedVersionId: latest,
+  }), false);
+  assert.equal(shouldRollOfficialProjectPin({
+    official: false,
+    pinPolicy: "follow",
+    selectedVersionId: pin,
+    pinClassification: "pin_stale",
+    latestTrustedVersionId: latest,
+  }), false);
+  assert.equal(shouldRollOfficialProjectPin({
+    official: true,
+    pinPolicy: "hold",
+    selectedVersionId: pin,
+    pinClassification: "pin_stale",
+    latestTrustedVersionId: latest,
+  }), false);
+  assert.equal(shouldRollOfficialProjectPin({
+    official: true,
+    pinPolicy: "follow",
+    selectedVersionId: null,
+    pinClassification: "follow_latest",
+    latestTrustedVersionId: latest,
+  }), false);
 });
 
 test("stale pin HTTP mapping is 409 with an upgrade action, not a generic 500", () => {

@@ -4,9 +4,17 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 官方 runtime catalog 提升后，自动把已过期的官方项目 pin 滚到最新 trusted（#284）。只改 `project_runtime_images.selected_version_id`，不改 Job 快照；`version_id=null` 仍跟随最新；`pin_ok` 显式旧版、第三方 pin 与 `pin_policy=hold` 不自动换 digest。每次滚动写 `runtime_image.official_pin_roll` 审计。市场行可显示「已随官方升到 x.y.z」。建任务前先解析 Hub 快照，避免 pin 过期留下无 Job 空壳画布；已有空壳可 `POST /tasks/:id/retry`。
+
 ### 修复
 
 - 人工介入请求可不回复直接隐藏，也可在“显示历史”中取消隐藏；回复成功后仍按用户与任务记为“已回复”并随已处理项隐藏。两者都只改变工作台展示偏好，不把请求误记为“忽略”，也不改写 Job 调度语义。
+
+### 部署 / 升级说明
+
+- Schema 升至 v37（`project_runtime_images.pin_policy`，默认 `follow`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
 
 ## [0.1.43] - 2026-08-21
 

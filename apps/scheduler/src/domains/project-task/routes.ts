@@ -33,6 +33,7 @@ import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
+import { runtimeImageHttpError } from "../../runtime-images.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
@@ -310,6 +311,19 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       });
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+
+    try {
+      await resolveAgentSnapshotForJob(
+        sql,
+        id,
+        "hub_reason",
+        body.kind === "compose" ? body.seed_finding_ids ?? [] : [],
+      );
+    } catch (error) {
+      const mapped = runtimeImageHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      throw error;
     }
 
     let canvasId: string;

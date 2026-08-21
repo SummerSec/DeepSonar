@@ -1464,7 +1464,7 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/runtime-images",
-    summary: "镜像市场列表（可按项目和关键字过滤）。项目作用域返回 selected_version / pin_stale：过期 pin 不会被最新 trusted 行掩盖。",
+    summary: "镜像市场列表（可按项目和关键字过滤）。项目作用域返回 selected_version / pin_stale / pin_policy：官方 stale pin 会在 catalog 提升时自动滚到最新 trusted，hold 与第三方除外。",
     scope: "images:read",
     tags: ["Runtime Images"],
     query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
@@ -1696,7 +1696,7 @@ const OPS: Op[] = [
   {
     method: "put",
     path: "/projects/{id}/runtime-images/{imageId}",
-    summary: "项目启用/停用可信镜像。version_id 省略或 null 表示跟随最新 trusted；显式 UUID 为 pin，过期 pin 不会自动改写。",
+    summary: "项目启用/停用可信镜像。version_id 省略或 null 表示跟随最新 trusted；显式 UUID 为 pin。官方 stale pin 在 catalog 提升时自动滚到最新 trusted；pin_policy=hold 或第三方 pin 不自动改写。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
@@ -1705,6 +1705,7 @@ const OPS: Op[] = [
       properties: {
         enabled: { type: "boolean" },
         version_id: { type: "string", format: "uuid", nullable: true },
+        pin_policy: { type: "string", enum: ["follow", "hold"], description: "hold 钉死当前官方 pin，catalog 提升时不自动滚动；跟随最新时强制 follow" },
       },
     },
   },

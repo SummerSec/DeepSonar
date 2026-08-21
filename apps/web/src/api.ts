@@ -1030,6 +1030,7 @@ export interface RuntimeImageSummary {
   selected_version: string | null;
   selected_trust_status: RuntimeImageTrustStatus | null;
   pin_stale: boolean;
+  pin_policy?: "follow" | "hold" | null;
   latest_version_id: string | null;
   latest_version: string | null;
   digest: string | null;
@@ -1204,6 +1205,15 @@ export interface RuntimeImageCatalogSyncResult {
   product_count: number;
   version_count: number;
   synced_at: string;
+  pin_rolls?: Array<{
+    project_id: string;
+    image_id: string;
+    image_key: string;
+    from_version_id: string;
+    from_version: string | null;
+    to_version_id: string;
+    to_version: string | null;
+  }>;
 }
 
 export interface RuntimeImagePullItem {
@@ -2318,8 +2328,13 @@ export const api = {
     imageId: string,
     enabled: boolean,
     versionId?: string | null,
-  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean; selected_version_id: string | null } | RuntimeImagePreparingResponse>(
-    "PUT", `/projects/${projectId}/runtime-images/${imageId}`, { enabled, version_id: versionId ?? null },
+    pinPolicy?: "follow" | "hold",
+  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean; selected_version_id: string | null; pin_policy?: "follow" | "hold" } | RuntimeImagePreparingResponse>(
+    "PUT", `/projects/${projectId}/runtime-images/${imageId}`, {
+      enabled,
+      version_id: versionId ?? null,
+      ...(pinPolicy ? { pin_policy: pinPolicy } : {}),
+    },
   ),
   /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
   tokens: () => get<ApiToken[]>("/tokens"),

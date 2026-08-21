@@ -61,11 +61,22 @@ const execFileP = promisify(execFile);
 export type RuntimeImageRegistryVersion = RuntimeImageRegistryVersionContract;
 export type RuntimeImageRegistry = RuntimeImageRegistryContract;
 
+export interface OfficialProjectPinRoll {
+  project_id: string;
+  image_id: string;
+  image_key: string;
+  from_version_id: string;
+  from_version: string | null;
+  to_version_id: string;
+  to_version: string | null;
+}
+
 export interface RuntimeImageCatalogSyncResult {
   registry: RuntimeImageRegistry;
   product_count: number;
   version_count: number;
   synced_at: string;
+  pin_rolls: OfficialProjectPinRoll[];
 }
 
 export function shouldReconcileRuntimeImagePromotions(registry: RuntimeImageRegistry): boolean {
@@ -228,6 +239,13 @@ export function diagnoseRuntimeImageSelectionFailure(input: RuntimeImageSelectio
 
 /** Explicit project pin vs latest trusted. Null pin already follows latest. */
 export type RuntimeImagePinClassification = "follow_latest" | "pin_ok" | "pin_stale" | "unavailable";
+export const RUNTIME_IMAGE_PIN_POLICIES = ["follow", "hold"] as const;
+export type RuntimeImagePinPolicy = (typeof RUNTIME_IMAGE_PIN_POLICIES)[number];
+export const OFFICIAL_CATALOG_PIN_ROLL_TRIGGER = "official_catalog_promote";
+
+export function runtimeImagePinPolicy(value: unknown): RuntimeImagePinPolicy {
+  return value === "hold" ? "hold" : "follow";
+}
 
 export function classifyRuntimeImagePin(input: {
   selectedVersionId: string | null | undefined;
@@ -239,6 +257,21 @@ export function classifyRuntimeImagePin(input: {
   if (!pin) return latest ? "follow_latest" : "unavailable";
   if (input.pinMatchesExecutableTrusted) return "pin_ok";
   return latest ? "pin_stale" : "unavailable";
+}
+
+/** Official catalog promote may rewrite only stale official pins that opted into follow. */
+export function shouldRollOfficialProjectPin(input: {
+  official: boolean;
+  pinPolicy?: unknown;
+  selectedVersionId: string | null | undefined;
+  pinClassification: RuntimeImagePinClassification;
+  latestTrustedVersionId: string | null | undefined;
+}): boolean {
+  if (!input.official) return false;
+  if (runtimeImagePinPolicy(input.pinPolicy) === "hold") return false;
+  const pin = runtimeImageVersionPin(input.selectedVersionId);
+  const latest = input.latestTrustedVersionId ?? null;
+  return Boolean(pin && latest && pin !== latest && input.pinClassification === "pin_stale");
 }
 
 export function runtimeImagePinStaleMessage(input: {
@@ -1110,6 +1143,117 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
 }
 
 /**
+ * After an authoritative official catalog apply, roll project pins that are no
+ * longer executable trusted on the current channel/host to the new latest.
+ * Third-party pins, hold policy, follow-latest (null), and still-executable
+ * explicit pins are left untouched. Frozen Job snapshots are never rewritten.
+ */
+export async function rollStaleOfficialProjectPins(
+  db: typeof sql = sql,
+  options: { imageIds?: string[] } = {},
+): Promise<OfficialProjectPinRoll[]> {
+  const imageIds = options.imageIds?.filter(Boolean) ?? [];
+  if (options.imageIds && imageIds.length === 0) return [];
+  const selectedChannel = await readRuntimeRegistryChannel(db, "share");
+  const hostPlatform = hostRuntimePlatform();
+  const platformJson = db.json([hostPlatform]);
+  return db.begin(async (tx) => {
+    const candidates = await tx`
+      SELECT
+        pri.project_id,
+        pri.runtime_image_id,
+        pri.selected_version_id AS from_version_id,
+        pin.version AS from_version,
+        ri.image_key,
+        latest.id AS to_version_id,
+        latest.version AS to_version
+      FROM project_runtime_images pri
+      JOIN runtime_images ri
+        ON ri.id = pri.runtime_image_id
+       AND ri.official = true
+       AND ri.enabled = true
+      LEFT JOIN runtime_image_versions pin
+        ON pin.id = pri.selected_version_id
+      LEFT JOIN LATERAL (
+        SELECT v.id
+        FROM runtime_image_versions v
+        JOIN runtime_image_version_refs channel_ref
+          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
+        WHERE v.id = pri.selected_version_id
+          AND v.runtime_image_id = ri.id
+          AND v.trust_status = 'trusted'
+          AND v.platforms_json @> ${platformJson}
+        LIMIT 1
+      ) pin_ok ON true
+      JOIN LATERAL (
+        SELECT v.id, v.version
+        FROM runtime_image_versions v
+        JOIN runtime_image_version_refs channel_ref
+          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
+        WHERE v.runtime_image_id = ri.id
+          AND v.trust_status = 'trusted'
+          AND v.platforms_json @> ${platformJson}
+        ORDER BY v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
+        LIMIT 1
+      ) latest ON true
+      WHERE pri.selected_version_id IS NOT NULL
+        AND pri.pin_policy IS DISTINCT FROM 'hold'
+        AND pin_ok.id IS NULL
+        AND latest.id IS DISTINCT FROM pri.selected_version_id
+        AND (${imageIds.length === 0} OR pri.runtime_image_id = ANY(${imageIds}))`;
+    const rolled: OfficialProjectPinRoll[] = [];
+    for (const row of candidates) {
+      const [saved] = await tx`
+        UPDATE project_runtime_images
+        SET selected_version_id = ${row.to_version_id}, updated_at = now()
+        WHERE project_id = ${row.project_id}
+          AND runtime_image_id = ${row.runtime_image_id}
+          AND selected_version_id = ${row.from_version_id}
+          AND pin_policy IS DISTINCT FROM 'hold'
+        RETURNING project_id`;
+      if (!saved) continue;
+      const roll: OfficialProjectPinRoll = {
+        project_id: String(row.project_id),
+        image_id: String(row.runtime_image_id),
+        image_key: String(row.image_key),
+        from_version_id: String(row.from_version_id),
+        from_version: row.from_version ? String(row.from_version) : null,
+        to_version_id: String(row.to_version_id),
+        to_version: row.to_version ? String(row.to_version) : null,
+      };
+      await tx`
+        INSERT INTO audit_logs ${tx({
+          actor_type: "system",
+          actor_id: "scheduler",
+          action: "runtime_image.official_pin_roll",
+          project_id: roll.project_id,
+          resource_type: "project_runtime_image",
+          resource_id: roll.image_id,
+          request_id: null,
+          ip: null,
+          user_agent: null,
+          before_json: tx.json({
+            selected_version_id: roll.from_version_id,
+            version: roll.from_version,
+          } as never),
+          after_json: tx.json({
+            selected_version_id: roll.to_version_id,
+            version: roll.to_version,
+            trigger: OFFICIAL_CATALOG_PIN_ROLL_TRIGGER,
+            image_key: roll.image_key,
+          } as never),
+          result: "ok",
+          error_code: null,
+        })}`.catch((error) => {
+        console.error("[audit] 系统写入失败 runtime_image.official_pin_roll:", error instanceof Error ? error.message : error);
+      });
+      rolled.push(roll);
+    }
+    return rolled;
+  });
+}
+
+/**
  * 将一份已解析的官方清单写入 DB（bootstrap / 远程同步 / 运维手动上传共用）。
  * env 覆盖仅在「清单里该产品 versions 为空」时补位，不会覆盖已有 digest。
  */
@@ -1138,6 +1282,7 @@ export async function applyOfficialRuntimeCatalog(
       selectedRefs.set(version, selectRuntimeImageRef(item.image_key, version));
     }
   }
+  const appliedImageIds: string[] = [];
   for (const item of registry.images) {
     const [image] = await sql`
       INSERT INTO runtime_images ${sql({
@@ -1150,6 +1295,7 @@ export async function applyOfficialRuntimeCatalog(
       WHERE runtime_images.official = true
       RETURNING id`;
     if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
+    appliedImageIds.push(String(image.id));
     const appliedDigests = new Set<string>();
     for (const version of item.versions) {
       const legacyChannel = version.image_ref ? legacyChannelForRef(version.image_ref) : null;
@@ -1356,11 +1502,15 @@ export async function applyOfficialRuntimeCatalog(
       console.error("[audit] 系统写入失败 runtime_image.official_trust_empty:", error instanceof Error ? error.message : error);
     });
   }
+  const pin_rolls = insertOnly
+    ? []
+    : await rollStaleOfficialProjectPins(sql, { imageIds: appliedImageIds });
   return {
     registry,
     product_count: registry.images.length,
     version_count: registry.images.reduce((total, image) => total + image.versions.length, 0),
     synced_at: new Date().toISOString(),
+    pin_rolls,
   };
 }
 

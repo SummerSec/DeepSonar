@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 36);
+INSERT INTO schema_meta (id, version) VALUES ('global', 37);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1064,9 +1064,13 @@ CREATE TABLE project_runtime_images (
   runtime_image_id uuid NOT NULL REFERENCES runtime_images(id) ON DELETE CASCADE,
   selected_version_id uuid REFERENCES runtime_image_versions(id),
   enabled boolean NOT NULL DEFAULT true,
+  -- follow: official stale pins roll to latest trusted on catalog promote.
+  -- hold: keep this explicit pin even after official catalog promote.
+  pin_policy text NOT NULL DEFAULT 'follow',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (project_id, runtime_image_id)
+  PRIMARY KEY (project_id, runtime_image_id),
+  CONSTRAINT project_runtime_images_pin_policy_check CHECK (pin_policy IN ('follow', 'hold'))
 );
 
 -- 角色运行配置（全局 project_id IS NULL + 项目级覆盖）

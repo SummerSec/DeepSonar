@@ -648,11 +648,16 @@ export function RuntimeImagesPage() {
     }
   };
 
-  const bind = async (image: RuntimeImageSummary, enabled: boolean, versionId?: string | null) => {
+  const bind = async (
+    image: RuntimeImageSummary,
+    enabled: boolean,
+    versionId?: string | null,
+    pinPolicy?: "follow" | "hold",
+  ) => {
     if (!projectId) return;
     setBusy(image.id);
     try {
-      const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId);
+      const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId, pinPolicy);
       if ("saved" in result && result.saved === false) {
         setPullStatus(result.task);
         setNotice(projectBindingDeferredNotice(image.name));
@@ -1164,7 +1169,7 @@ export function RuntimeImagesPage() {
                         <button
                           className="secondary-button"
                           disabled={busy === image.id}
-                          onClick={() => void bind(image, true, null)}
+                          onClick={() => void bind(image, true, null, "follow")}
                         >
                           改为跟随最新
                         </button>
@@ -1323,7 +1328,7 @@ export function RuntimeImagesPage() {
                 <div className="rounded-xl border border-amber-400/25 bg-amber-400/[.08] p-3">
                   <div className="font-mono text-[9px] tracking-[.14em] text-amber-300">STALE PROJECT PIN</div>
                   <p className="mt-1 text-[11px] leading-5 text-amber-100/90">
-                    项目仍固定在 {selected.image.selected_version ?? selected.image.selected_version_id}，该版本当前不是可执行的 trusted。最新 trusted 为 {selected.image.latest_version ?? "新版本"}。不会自动改写显式 pin。
+                    项目仍固定在 {selected.image.selected_version ?? selected.image.selected_version_id}，该版本当前不是可执行的 trusted。最新 trusted 为 {selected.image.latest_version ?? "新版本"}。官方 catalog 提升会自动滚动未 hold 的过期 pin；第三方与 hold 仍需手动升级。
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {selected.image.latest_version_id && (
@@ -1338,7 +1343,7 @@ export function RuntimeImagesPage() {
                     <button
                       className="secondary-button"
                       disabled={busy === selected.image.id}
-                      onClick={() => void bind(selected.image, true, null)}
+                      onClick={() => void bind(selected.image, true, null, "follow")}
                     >
                       改为跟随最新
                     </button>
@@ -1349,7 +1354,7 @@ export function RuntimeImagesPage() {
                 <div className="rounded-xl border border-acc-400/20 bg-acc-400/[.05] p-3">
                   <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PIN PLATFORM VERSION</div>
                   <p className="theme-muted mt-1 text-[11px] leading-5">
-                    为项目固定某一平台的可信 digest。不固定（version_id=null）时跟随最新 trusted，官方升版后自动可用。显式 pin 不会在 registry sync 时被改写。
+                    为项目固定某一平台的可信 digest。不固定（version_id=null）时跟随最新 trusted。官方过期 pin 会在 catalog 提升时滚到最新 trusted；需要钉死旧官方版本时选「保持此版本」。
                   </p>
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                     <SearchableSelect
@@ -1383,12 +1388,27 @@ export function RuntimeImagesPage() {
                       disabled={busy === selected.image.id}
                       onClick={() => {
                         const picked = projectVersionPick[selected.image.id] || selected.image.selected_version_id || null;
-                        void bind(selected.image, true, picked || null);
+                        const policy = picked && selected.image.pin_policy === "hold" ? "hold" : "follow";
+                        void bind(selected.image, true, picked || null, policy);
                       }}
                     >
                       固定到项目
                     </button>
                   </div>
+                  {selected.image.official && selected.image.selected_version_id && (
+                    <button
+                      className="secondary-button mt-2"
+                      disabled={busy === selected.image.id}
+                      onClick={() => void bind(
+                        selected.image,
+                        true,
+                        selected.image.selected_version_id,
+                        selected.image.pin_policy === "hold" ? "follow" : "hold",
+                      )}
+                    >
+                      {selected.image.pin_policy === "hold" ? "取消保持，跟随官方升版" : "保持此版本（官方升版不滚动）"}
+                    </button>
+                  )}
                 </div>
               )}
               {selected.versions.filter((version) => versionMatchesPlatform(version, platformFilter)).length === 0 ? (
