@@ -1426,29 +1426,60 @@ export function runtimeImagePullStatus(): RuntimeImagePullTask | null {
   return runtimeImagePullTask;
 }
 
-function startRuntimeImagePreparationTask(
-  refs: readonly { image_key: string; image_ref: string }[],
-  purpose: string,
-  prepare: (imageRef: string) => Promise<void> = prepareRuntimeImage,
-): RuntimeImagePullTask {
-  if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
-    const active = new Set(runtimeImagePullTask.items.map((item) => item.image_ref));
-    if (refs.every((item) => active.has(item.image_ref))) return runtimeImagePullTask;
-    throw new RuntimeImagePreparationBusyError();
-  }
-  const items: RuntimeImagePullItem[] = [...new Map(refs.map((item) => [item.image_ref, {
-    image_key: item.image_key,
-    image_ref: item.image_ref,
-    status: "queued" as const,
-    error: null,
-  }])).values()];
-  const task: RuntimeImagePullTask = {
-    task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),
-    purpose,
-    status: "queued", started_at: null, finished_at: null, total: items.length, completed: 0, items,
+/** Test-only: drop the process-wide pull pointer. In-flight IIFEs keep mutating their own task object. */
+export function resetRuntimeImagePullTask(): void {
+  runtimeImagePullTask = null;
+}
+
+export function runtimeImagePreparationCovers(
+  task: Pick<RuntimeImagePullTask, "items">,
+  refs: readonly { image_ref: string }[],
+): boolean {
+  const activeRefs = new Set(task.items.map((item) => item.image_ref));
+  if (refs.every((item) => activeRefs.has(item.image_ref))) return true;
+  const activeDigests = new Set(
+    task.items.map((item) => immutableDigest(item.image_ref)).filter((value): value is string => Boolean(value)),
+  );
+  if (activeDigests.size === 0) return false;
+  return refs.every((item) => {
+    const digest = immutableDigest(item.image_ref);
+    return digest !== null && activeDigests.has(digest);
+  });
+}
+
+export function canPreemptRuntimeImagePreparation(currentPurpose: string | undefined, nextPurpose: string): boolean {
+  return nextPurpose.startsWith("registry_channel:") && currentPurpose === "admin_bulk";
+}
+
+export function isRegistryChannelPreparationPurpose(purpose: string): boolean {
+  return purpose.startsWith("registry_channel:");
+}
+
+export function registryChannelPreparationBusyResult(
+  currentChannel: RuntimeImageRegistryChannel,
+  proposedChannel: RuntimeImageRegistryChannel,
+  task: RuntimeImagePullTask,
+): {
+  status: "preparing";
+  saved: false;
+  selected_channel: RuntimeImageRegistryChannel;
+  proposed_channel: RuntimeImageRegistryChannel;
+  task: RuntimeImagePullTask;
+} {
+  return {
+    status: "preparing",
+    saved: false,
+    selected_channel: currentChannel,
+    proposed_channel: proposedChannel,
+    task,
   };
-  runtimeImagePullTask = task;
-  void (async () => {
+}
+
+export async function runRuntimeImagePreparationTask(
+  task: RuntimeImagePullTask,
+  prepare: (imageRef: string) => Promise<void>,
+): Promise<void> {
+  try {
     task.status = "running";
     task.started_at = new Date().toISOString();
     for (const item of task.items) {
@@ -1464,7 +1495,50 @@ function startRuntimeImagePreparationTask(
     }
     task.status = task.items.some((item) => item.status === "failed") ? "failed" : "succeeded";
     task.finished_at = new Date().toISOString();
-  })();
+  } catch (error) {
+    try {
+      for (const item of task.items) {
+        if (item.status === "queued" || item.status === "running") {
+          item.status = "failed";
+          item.error = item.error ?? (sanitizeRuntimeImageError(error) || "runtime image preparation failed");
+        }
+      }
+    } catch {
+      // Leave the top-level finally to clear queued/running even if item bookkeeping fails.
+    }
+  } finally {
+    if (task.status === "queued" || task.status === "running") {
+      task.status = "failed";
+      task.finished_at = new Date().toISOString();
+    }
+  }
+}
+
+function startRuntimeImagePreparationTask(
+  refs: readonly { image_key: string; image_ref: string }[],
+  purpose: string,
+  prepare: (imageRef: string) => Promise<void> = prepareRuntimeImage,
+): RuntimeImagePullTask {
+  if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
+    if (runtimeImagePreparationCovers(runtimeImagePullTask, refs)) return runtimeImagePullTask;
+    if (!canPreemptRuntimeImagePreparation(runtimeImagePullTask.purpose, purpose)) {
+      if (isRegistryChannelPreparationPurpose(purpose)) return runtimeImagePullTask;
+      throw new RuntimeImagePreparationBusyError();
+    }
+  }
+  const items: RuntimeImagePullItem[] = [...new Map(refs.map((item) => [item.image_ref, {
+    image_key: item.image_key,
+    image_ref: item.image_ref,
+    status: "queued" as const,
+    error: null,
+  }])).values()];
+  const task: RuntimeImagePullTask = {
+    task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),
+    purpose,
+    status: "queued", started_at: null, finished_at: null, total: items.length, completed: 0, items,
+  };
+  runtimeImagePullTask = task;
+  void runRuntimeImagePreparationTask(task, prepare);
   return task;
 }
 

@@ -1496,7 +1496,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/runtime-images/registry/channel",
     summary: "切换官方运行时镜像分发通道",
-    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图返回 202 preparing/saved:false，旧通道保持有效，准备完成后重试才提交。绝不跨通道回退，历史 Job 快照不改写。",
+    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图或已有 in-flight 准备任务均返回 202 preparing/saved:false 与当前 pull-status，旧通道保持有效，准备完成后重试才提交。不把 runtime_image_preparation_busy 当硬失败。绝不跨通道回退，历史 Job 快照不改写。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
@@ -1519,6 +1519,25 @@ const OPS: Op[] = [
               properties: {
                 selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
                 previous_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+              },
+            },
+          },
+        },
+      },
+      "202": {
+        description: "镜像尚未就绪或已有准备任务，通道未落库",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "saved", "selected_channel", "proposed_channel", "task"],
+              properties: {
+                status: { type: "string", enum: ["preparing"] },
+                saved: { type: "boolean", enum: [false] },
+                selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                proposed_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                task: { type: "object", additionalProperties: true },
               },
             },
           },

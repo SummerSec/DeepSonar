@@ -122,7 +122,7 @@ and is changed only through the authenticated Scheduler API:
 | Method | Path | Scope | Contract |
 | --- | --- | --- | --- |
 | GET | `/runtime-images/registry` | `images:read` | Returns the parsed catalog plus `selected_channel`. |
-| PATCH | `/runtime-images/registry/channel` | `images:manage` | Strict body `{ "channel": "github"\|"dockerhub"\|"aliyun-acr" }`; extra fields, query overrides, and environment overrides are rejected. Project-scoped tokens receive `403 PROJECT_SCOPE_FORBIDDEN`. |
+| PATCH | `/runtime-images/registry/channel` | `images:manage` | Strict body `{ "channel": "github"\|"dockerhub"\|"aliyun-acr" }`; extra fields, query overrides, and environment overrides are rejected. Project-scoped tokens receive `403 PROJECT_SCOPE_FORBIDDEN`. Missing images or an in-flight preparation return `202 preparing/saved:false` plus the current `pull-status`; the previous channel stays active until a later retry persists. |
 
 The channel update is audited as
 `runtime_image.registry_channel_update`. Job creation reads the selector under
@@ -136,6 +136,9 @@ The Web UI exposes the platform-global `selected_channel` as a fixed
 `github`/`dockerhub`/`aliyun-acr` selector on the marketplace page. It keeps
 that source choice separate from the CPU architecture/platform filter,
 requires `images:manage` for mutation, surfaces loading/403/mutation states,
-and refreshes the registry metadata and marketplace rows after a successful
-switch. It does not accept arbitrary registry URLs or source input. Together
-with exact-channel pull and immutable Job snapshots, this completes Issue #70.
+keeps the selector on the pending target while preparation is in flight, and
+refreshes the registry metadata and marketplace rows after a successful
+switch. An in-flight pull is shown on the shared progress panel rather than as
+a hard channel-switch failure. It does not accept arbitrary registry URLs or
+source input. Together with exact-channel pull and immutable Job snapshots,
+this completes Issue #70.

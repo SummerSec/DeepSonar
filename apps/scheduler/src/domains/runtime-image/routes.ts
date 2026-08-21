@@ -22,6 +22,7 @@ import {
   runtimeImageVersionPin,
   runtimeImageRegistryWithOverrides,
   readRuntimeRegistryChannel,
+  registryChannelPreparationBusyResult,
   RuntimeImageChannelUnavailableError,
   RuntimeImagePreparationBusyError,
   runtimeImageHttpError,
@@ -206,9 +207,19 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     } catch (error) {
       const mapped = runtimeImageHttpError(error);
       if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
-      return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 500).send({
+      if (error instanceof RuntimeImagePreparationBusyError) {
+        const task = runtimeImagePullStatus();
+        if (task) {
+          return reply.code(202).send(registryChannelPreparationBusyResult(
+            await readRuntimeRegistryChannel(sql),
+            parsed.data.channel as RuntimeImageRegistryChannel,
+            task,
+          ));
+        }
+      }
+      return reply.code(500).send({
         error: sanitizeRuntimeImageError(error) || "runtime registry channel update failed",
-        error_code: error instanceof RuntimeImagePreparationBusyError ? error.code : "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED",
+        error_code: "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED",
       });
     }
   });

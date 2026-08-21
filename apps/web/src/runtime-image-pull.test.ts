@@ -3,12 +3,16 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   formatPullElapsed,
+  isRegistryChannelSwitchLocked,
   isRuntimeImagePullBusyError,
   projectBindingBusyNotice,
   projectBindingDeferredNotice,
   pullHeadline,
   pullItemStatusLabel,
   pullPurposeLabel,
+  registryChannelBusyNotice,
+  registryChannelDeferredNotice,
+  registryChannelSelectValue,
   shortImageRef,
 } from "./runtime-image-pull";
 
@@ -55,4 +59,34 @@ test("project runtime image page polls the shared pull-status panel", () => {
   assert.match(page, /isRuntimeImagePullBusyError/);
   assert.doesNotMatch(page, /if \(projectId\) return;\s*void api\.runtimeImagesPullStatus/);
   assert.doesNotMatch(page, /!projectId && pullStatus/);
+});
+
+test("channel switch busy is progress, not a hard failure", () => {
+  assert.equal(
+    registryChannelDeferredNotice("GitHub Container Registry", 3),
+    "正在后台准备 GitHub Container Registry 的 3 个镜像；当前通道未切换，完成后会自动保存",
+  );
+  assert.equal(registryChannelBusyNotice({
+    task_id: "task",
+    purpose: "admin_bulk",
+    status: "running",
+    started_at: null,
+    finished_at: null,
+    total: 2,
+    completed: 1,
+    items: [],
+  }), "当前拉取任务未完成（注册表预热 1/2），完成后会自动切换通道");
+  assert.equal(registryChannelSelectValue("github", "aliyun-acr"), "github");
+  assert.equal(registryChannelSelectValue(null, "aliyun-acr"), "aliyun-acr");
+  assert.equal(isRegistryChannelSwitchLocked("github", { status: "running" }, null), true);
+  assert.equal(isRegistryChannelSwitchLocked("github", { status: "failed" }, null), false);
+  assert.equal(isRuntimeImagePullBusyError("PATCH /runtime-images/registry/channel -> 409: runtime_image_preparation_busy"), true);
+
+  const page = readFileSync(new URL("./pages/RuntimeImagesPage.tsx", import.meta.url), "utf8");
+  assert.match(page, /registryChannelSelectValue\(pendingChannel/);
+  assert.match(page, /isRegistryChannelSwitchLocked\(pendingChannel/);
+  assert.match(page, /registryChannelBusyNotice/);
+  assert.match(page, /persistRegistryChannel\(channel\)/);
+  assert.match(page, /isRuntimeImagePullBusyError\(message\)/);
+  assert.match(page, /rememberInFlightChannel/);
 });
