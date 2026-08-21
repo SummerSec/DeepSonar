@@ -49,8 +49,20 @@ export const DEFAULT_MAX_DEPTH = 3;
 /** 每个父节点默认揭开的直接后继数；其余按「再显示」分层加载 */
 export const DEFAULT_CHILD_LIMIT = 12;
 export const CHILD_REVEAL_STEP = 12;
+/** Initial readable projection budget; depth alone does not bound shallow, bushy graphs. */
+export const DEFAULT_VISIBLE_NODE_BUDGET = 24;
+export const VISIBLE_NODE_REVEAL_STEP = 24;
 /** React Flow 一次挂载上限，避免筛选命中整图时主线程卡死 */
 export const MAX_RENDERED_NODES = 180;
+
+export function nextVisibleNodeBudget(
+  current: number,
+  available: number,
+  maximum = MAX_RENDERED_NODES,
+): number {
+  const ceiling = Math.min(Math.max(0, Math.trunc(available)), Math.max(1, Math.trunc(maximum)));
+  return Math.min(ceiling, Math.max(1, Math.trunc(current)) + VISIBLE_NODE_REVEAL_STEP);
+}
 
 export function childLimitFor(parentId: string, extraByParent: ReadonlyMap<string, number>): number {
   return DEFAULT_CHILD_LIMIT + (extraByParent.get(parentId) ?? 0);

@@ -14,7 +14,7 @@
 | 层 | 真相 | 职责 | 不做 |
 |----|------|------|------|
 | **本地库 / Web** | 管理真相 | 项目、任务（画布）、角色、凭据、规则、镜像准入 | 不在 Agent 里改基建 |
-| **Canvas** | 过程真相 | fact / intent / finding / job 节点与边；服务端 `x/y` 仅作 placement/exchange hint，Web 对当前可见投影布局 | Agent 不提案坐标 |
+| **Canvas** | 过程真相 | fact / intent / finding / job 节点与边；服务端 `x/y` 仅作 placement/exchange hint，Web 对当前可见投影布局：默认深度 3 且首批总计 24 个节点，elkjs 同时负责主 DAG 节点与边路由，指向 root 的完成反馈边脱离排位并走共享收敛 rail | Agent 不提案坐标 |
 | **Sandbox** | 执行真相 | 每 Job 全新 `/workspace`；独立可写 `HOME`；CLI + Job 级控制 API | 仅持当前 Job 冻结的 CLI 配置，终态即销毁 |
 | **Scheduler** | 副作用唯一执行者 | claim、状态机、派生 verify/report、Reaper、注入快照 | 不做业务推理 |
 
