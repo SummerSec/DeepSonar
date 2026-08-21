@@ -81,6 +81,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /canvases/:id/broadcasts | tasks:read | Fact/Finding 广播投递账本；`injected` 仅表示已注入会话，不表示 Agent 已阅读 |
 | GET | /canvases/:id/messages | tasks:read | 读取人工消息账本，`limit` 为 1–500 |
 | POST | /canvases/:id/messages | tasks:write | 发送人工消息 `{message_id,target:{kind:hub\|job,node_id?},body,attachment_version_ids}`；带附件还要求 `assets:read` |
+| POST | /canvases/:id/human-nodes/:nodeId/ignore | jobs:control | 忽略仍为 open 的人工介入节点；若对应 Job 为 waiting_human 则关闭旧 Attempt 并恢复 pending |
 
 ### 共享资产
 

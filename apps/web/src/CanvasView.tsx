@@ -425,6 +425,8 @@ export function CanvasView({
   onTraceFinding,
   onExitTrace,
   onSendHumanMessage,
+  humanMessagePanelCollapsed = true,
+  onToggleHumanMessagePanel,
 }: {
   canvasId: string;
   /** 非过程画布 Tab 时停渲染 Job/节点抽屉，避免盖住列表（#219）。 */
@@ -437,6 +439,8 @@ export function CanvasView({
   onTraceFinding?: (findingId: string) => void;
   onExitTrace?: () => void;
   onSendHumanMessage?: (node: CanvasNode) => void;
+  humanMessagePanelCollapsed?: boolean;
+  onToggleHumanMessagePanel?: () => void;
 }) {
   const [data, setData] = useState<CanvasData | null>(null);
   const [selected, setSelected] = useState<CanvasNode | null>(null);
@@ -445,6 +449,9 @@ export function CanvasView({
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   const [messagePage, setMessagePage] = useState<CanvasHumanMessagePage | null>(null);
   const [messageError, setMessageError] = useState<string | null>(null);
+  const [localMessagePanelCollapsed, setLocalMessagePanelCollapsed] = useState(true);
+  const messagePanelCollapsed = onToggleHumanMessagePanel ? humanMessagePanelCollapsed : localMessagePanelCollapsed;
+  const toggleMessagePanel = onToggleHumanMessagePanel ?? (() => setLocalMessagePanelCollapsed((open) => !open));
   const [elkResult, setElkResult] = useState<{
     key: string;
     positions: Map<string, { x: number; y: number }>;
@@ -1197,17 +1204,30 @@ export function CanvasView({
       )}
       {messageError && <div className="human-message-sync-error">消息账本同步失败：{messageError}</div>}
       {messagePage && messagePage.total > 0 && (
-        <section className="human-message-status-panel" aria-label="最近人工消息">
-          <div><strong>人工消息</strong><span>{messagePage.total}{messagePage.truncated ? "+" : ""} 条</span></div>
-          <ol>{messagePage.items.slice(0, 5).map((message) => <li key={message.id} onClick={() => {
-            const humanNode = data.nodes.find((node) => node.id === message.human_node_id);
-            if (humanNode) setSelected(humanNode);
-          }}>
-            <span className={`is-${message.status}`} />
-            <p><strong>{message.target_kind === "hub" ? "Hub" : data.nodes.find((node) => node.id === message.target_node_id)?.title ?? "运行节点"}</strong><small>{message.body}</small></p>
-            <em className={`is-${message.status}`}>{humanMessageStatusLabel(message.status)}</em>
-          </li>)}</ol>
-          <p>“已注入会话”只代表传输完成；只有显式 ACK 才是“Agent 已确认”。</p>
+        <section className={`human-message-status-panel${messagePanelCollapsed ? " is-collapsed" : " is-open"}`} aria-label="最近人工消息">
+          <button
+            type="button"
+            className="human-message-status-heading"
+            aria-expanded={!messagePanelCollapsed}
+            onClick={toggleMessagePanel}
+          >
+            <strong>人工消息</strong>
+            <span>{messagePage.total}{messagePage.truncated ? "+" : ""} 条</span>
+            {messagePanelCollapsed ? <CaretDown size={12} /> : <CaretUp size={12} />}
+          </button>
+          {!messagePanelCollapsed && (
+            <>
+              <ol>{messagePage.items.slice(0, 5).map((message) => <li key={message.id} onClick={() => {
+                const humanNode = data.nodes.find((node) => node.id === message.human_node_id);
+                if (humanNode) setSelected(humanNode);
+              }}>
+                <span className={`is-${message.status}`} />
+                <p><strong>{message.target_kind === "hub" ? "Hub" : data.nodes.find((node) => node.id === message.target_node_id)?.title ?? "运行节点"}</strong><small>{message.body}</small></p>
+                <em className={`is-${message.status}`}>{humanMessageStatusLabel(message.status)}</em>
+              </li>)}</ol>
+              <p>“已注入会话”只代表传输完成；只有显式 ACK 才是“Agent 已确认”。</p>
+            </>
+          )}
         </section>
       )}
       {shouldMountBroadcastLedger(broadcastPage) && broadcastPage && (

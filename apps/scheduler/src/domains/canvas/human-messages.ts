@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { maybeTriggerHub, normalizePendingJobPriority } from "../../core.js";
 import { sql } from "../../db.js";
-import { maybeTriggerHub } from "../../core.js";
-import { beginEffect, markEffectUnknown, settleEffect } from "../job-attempt/index.js";
+import { beginEffect, markAttemptInterrupted, markEffectUnknown, settleEffect } from "../job-attempt/index.js";
+import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { readSharedAssetBlob } from "../shared-assets/index.js";
 
 export type HumanMessageStatus = "planned" | "injected" | "acknowledged" | "unknown" | "failed";
@@ -281,6 +282,104 @@ export async function acknowledgeHumanMessage(jobId: string, messageId: string, 
       WHERE id=${messageId} RETURNING *`;
     await tx`UPDATE canvas_nodes SET status='acknowledged', updated_at=now() WHERE id=${message.human_node_id}`;
     return updated;
+  });
+}
+
+export const HUMAN_IGNORE_CONTINUE_HINT =
+  "用户已忽略此次人工介入。请在没有额外人工授权的情况下继续推进，不要再次为同一事项调用 request_human。";
+
+export class HumanInterventionError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly errorCode: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function isAlreadyIgnoredHumanNode(node: { status?: unknown; body_json?: unknown }): boolean {
+  const body = (node.body_json ?? {}) as Record<string, unknown>;
+  return String(node.status ?? "") === "ignored" || body.resolution === "ignored";
+}
+
+export function canIgnoreHumanNode(node: { node_type?: unknown; status?: unknown; body_json?: unknown }): boolean {
+  if (node.node_type !== "human") return false;
+  if (isAlreadyIgnoredHumanNode(node)) return false;
+  const status = String(node.status ?? "open");
+  return status === "open" || status === "";
+}
+
+export function humanIgnoreBodyPatch(ignoredAt: string, actorName: string | null): {
+  resolution: "ignored";
+  ignored_at: string;
+  ignored_by: string | null;
+  instruction: string;
+} {
+  return {
+    resolution: "ignored",
+    ignored_at: ignoredAt,
+    ignored_by: actorName,
+    instruction: HUMAN_IGNORE_CONTINUE_HINT,
+  };
+}
+
+export async function ignoreHumanIntervention(input: {
+  canvasId: string;
+  nodeId: string;
+  actorName: string | null;
+}): Promise<{
+  node_id: string;
+  status: "ignored";
+  job_id: string | null;
+  job_resumed: boolean;
+  already_ignored: boolean;
+}> {
+  return sql.begin(async (tx) => {
+    const [canvas] = await tx`SELECT id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
+    if (!canvas) throw new HumanInterventionError(404, "CANVAS_NOT_FOUND", "canvas not found");
+    const [node] = await tx`
+      SELECT id, node_type, status, job_id, body_json
+      FROM canvas_nodes WHERE id=${input.nodeId} AND canvas_id=${input.canvasId}
+      FOR UPDATE`;
+    if (!node) throw new HumanInterventionError(404, "HUMAN_NODE_NOT_FOUND", "human node not found");
+    if (node.node_type !== "human") {
+      throw new HumanInterventionError(409, "NOT_HUMAN_NODE", "节点不是人工介入请求");
+    }
+    const jobId = node.job_id ? String(node.job_id) : null;
+    if (isAlreadyIgnoredHumanNode(node)) {
+      return { node_id: String(node.id), status: "ignored" as const, job_id: jobId, job_resumed: false, already_ignored: true };
+    }
+    if (!canIgnoreHumanNode(node)) {
+      throw new HumanInterventionError(409, "HUMAN_NOT_IGNORABLE", "只有未处理的人工介入可以忽略");
+    }
+    await tx`
+      UPDATE canvas_nodes
+      SET status='ignored', body_json = body_json || ${tx.json(humanIgnoreBodyPatch(new Date().toISOString(), input.actorName))}, updated_at=now()
+      WHERE id=${input.nodeId}`;
+    let jobResumed = false;
+    if (jobId) {
+      const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} AND canvas_id=${input.canvasId} FOR UPDATE`;
+      if (job && String(job.status) === "waiting_human") {
+        await markAttemptInterrupted(tx as unknown as typeof sql, jobId, "人工忽略介入请求");
+        const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
+          error: null,
+          lease_expires_at: null,
+          claimed_at: null,
+          started_at: null,
+          finished_at: null,
+          heartbeat_at: null,
+        });
+        if (!resumed) throw new HumanInterventionError(409, "JOB_RESUME_FAILED", "恢复等待人工的 Job 失败");
+        await normalizePendingJobPriority(jobId, tx as unknown as typeof sql);
+        await tx`
+          UPDATE canvas_nodes SET status='pending', updated_at=now()
+          WHERE job_id=${jobId} AND node_type IN ('job', 'intent', 'report')`;
+        await tx`SELECT pg_notify('deepsonar_jobs', 'human_ignored')`;
+        jobResumed = true;
+      }
+    }
+    return { node_id: String(node.id), status: "ignored" as const, job_id: jobId, job_resumed: jobResumed, already_ignored: false };
   });
 }
 

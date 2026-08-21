@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AckHumanMessagePayload, resolvePlatformTools } from "@deepsonar/shared-types";
-import { humanMessageWorkspacePath, safeHumanMessageFilename } from "./human-messages.js";
+import {
+  canIgnoreHumanNode,
+  HUMAN_IGNORE_CONTINUE_HINT,
+  humanIgnoreBodyPatch,
+  humanMessageWorkspacePath,
+  isAlreadyIgnoredHumanNode,
+  safeHumanMessageFilename,
+} from "./human-messages.js";
 import { actorHasScope, requiredScopeForRoute, type Actor } from "../../auth.js";
 
 test("human message attachment paths remain inside the scheduler-owned inbox", () => {
@@ -28,6 +35,21 @@ test("acknowledgement contract is strict and cannot be disabled per role", () =>
 test("human message routes use task read/write scopes", () => {
   assert.equal(requiredScopeForRoute("GET", "/canvases/:id/messages"), "tasks:read");
   assert.equal(requiredScopeForRoute("POST", "/canvases/:id/messages"), "tasks:write");
+  assert.equal(requiredScopeForRoute("POST", "/canvases/:id/human-nodes/:nodeId/ignore"), "jobs:control");
+});
+
+test("only open human nodes can be ignored and ignored is a terminal resolution", () => {
+  assert.equal(canIgnoreHumanNode({ node_type: "human", status: "open" }), true);
+  assert.equal(canIgnoreHumanNode({ node_type: "human", status: null }), true);
+  assert.equal(canIgnoreHumanNode({ node_type: "human", status: "acknowledged" }), false);
+  assert.equal(canIgnoreHumanNode({ node_type: "intent", status: "open" }), false);
+  assert.equal(isAlreadyIgnoredHumanNode({ status: "ignored" }), true);
+  assert.equal(isAlreadyIgnoredHumanNode({ status: "open", body_json: { resolution: "ignored" } }), true);
+  assert.equal(canIgnoreHumanNode({ node_type: "human", status: "ignored" }), false);
+  const patch = humanIgnoreBodyPatch("2026-08-21T00:00:00.000Z", "alice");
+  assert.equal(patch.resolution, "ignored");
+  assert.equal(patch.instruction, HUMAN_IGNORE_CONTINUE_HINT);
+  assert.match(HUMAN_IGNORE_CONTINUE_HINT, /不要再次为同一事项调用 request_human/);
 });
 
 test("attachment messages accept assets read, management, or admin authority", () => {

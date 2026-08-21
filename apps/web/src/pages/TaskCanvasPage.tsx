@@ -4,7 +4,6 @@ import {
   DotsThree,
   FileText,
   Graph,
-  HandPalm,
   ListBullets,
   PaperPlaneTilt,
   Note,
@@ -36,11 +35,19 @@ import { composeRetryErrorMessage } from "../composeTaskModel";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { FactDetailPanel } from "../FactDetailPanel";
 import { factPageFilterKey, readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
+import { HumanInterventionBanner } from "../HumanInterventionBanner";
 import { HumanMessageComposer } from "../HumanMessageComposer";
 import {
+  humanInterventionUiPrefUserKey,
   humanMessageTargetNodeForJobId,
   humanMessageTargetNodeFromContext,
   jobCanReceiveHumanReply,
+  listHumanInterventions,
+  openHumanInterventionForJob,
+  readHumanInterventionPrefs,
+  writeHumanInterventionPrefs,
+  type HumanInterventionItem,
+  type HumanInterventionPrefs,
 } from "../human-messages";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { MarkdownView } from "../MarkdownView";
@@ -195,6 +202,11 @@ export function TaskCanvasPage() {
   const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerNode, setComposerNode] = useState<CanvasNode | null>(null);
+  const [ignoreBusyId, setIgnoreBusyId] = useState<string | null>(null);
+  const prefUserKey = humanInterventionUiPrefUserKey(me);
+  const [interventionPrefs, setInterventionPrefs] = useState<HumanInterventionPrefs>(() =>
+    readHumanInterventionPrefs(prefUserKey, canvasId ?? ""),
+  );
 
   // Lifecycle counters remain live while the task is open, independent of API polling.
   useEffect(() => {
@@ -219,6 +231,7 @@ export function TaskCanvasPage() {
     setError(null);
     setComposerOpen(false);
     setComposerNode(null);
+    setInterventionPrefs(readHumanInterventionPrefs(prefUserKey, canvasId));
     loadFindingIndex(canvasId)
       .then((rows) => {
         if (!stop) setFindingIndex(rows);
@@ -257,7 +270,7 @@ export function TaskCanvasPage() {
       stop = true;
       clearInterval(t);
     };
-  }, [canvasId, projectId]);
+  }, [canvasId, projectId, prefUserKey]);
 
   useEffect(() => {
     if (!canvasId) return;
@@ -711,25 +724,35 @@ export function TaskCanvasPage() {
   const humanFacts = nodes.filter(
     (n) => n.node_type === "fact" && n.verification_status === "needs_human",
   );
-  const humanInterventions = nodes
-    .filter((node) => node.node_type === "human")
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-    .slice(0, 12)
-    .map((node) => {
-      const subject = node.body_json?.subject;
-      const subjectFindingId = subject && typeof subject === "object" && typeof (subject as Record<string, unknown>).finding_id === "string"
-        ? String((subject as Record<string, unknown>).finding_id)
-        : null;
-      return {
-        node,
-        reason: typeof node.body_json?.reason === "string" ? node.body_json.reason : "等待人工判断",
-        findingId: typeof node.body_json?.finding_id === "string" ? node.body_json.finding_id : subjectFindingId,
-        jobId: node.job_id ?? (typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null),
-      };
-    });
+  const humanInterventions = listHumanInterventions(nodes);
+  const updateInterventionPrefs = (prefs: HumanInterventionPrefs) => {
+    setInterventionPrefs(prefs);
+    if (canvasId) writeHumanInterventionPrefs(prefUserKey, canvasId, prefs);
+  };
   const openHumanReply = (target: CanvasNode | null) => {
     setComposerNode(target);
     setComposerOpen(true);
+  };
+  const ignoreIntervention = async (item: HumanInterventionItem) => {
+    if (!canvasId) return;
+    setIgnoreBusyId(item.node.id);
+    try {
+      const result = await api.ignoreHumanIntervention(canvasId, item.node.id);
+      setNodes((current) => current.map((node) => (
+        node.id === item.node.id
+          ? { ...node, status: "ignored", body_json: { ...node.body_json, resolution: "ignored" } }
+          : result.job_resumed && result.job_id && node.job_id === result.job_id && (node.node_type === "job" || node.node_type === "intent" || node.node_type === "report")
+            ? { ...node, status: "pending" }
+            : node
+      )));
+      const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
+      setJobs(js.items);
+      flash(result.job_resumed ? "已忽略并继续推进" : "已忽略");
+    } catch (error) {
+      flash(`忽略失败：${error instanceof Error ? error.message : error}`);
+    } finally {
+      setIgnoreBusyId(null);
+    }
   };
   const visibleFindings = findings.filter(
     (finding) => (!severities.length || severities.includes(finding.severity ?? ""))
@@ -1103,34 +1126,16 @@ export function TaskCanvasPage() {
       )}
 
       {humanInterventions.length > 0 && (
-        <section className="relative z-20 mx-3 mb-2 rounded-2xl bg-amber-400/[.06] px-3 py-2 ring-1 ring-amber-300/20 sm:px-4" aria-label="人工介入">
-          <div className="mb-2 flex items-center gap-2">
-            <HandPalm size={14} className="text-amber-300" />
-            <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
-            <span className="font-mono text-[9px] text-zinc-600">最近 {humanInterventions.length} 条</span>
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {humanInterventions.map(({ node, reason, findingId, jobId }) => (
-              <div key={node.id} className="theme-surface flex min-w-[260px] max-w-[420px] flex-1 items-start gap-3 rounded-lg px-3 py-2 ring-1">
-                <div className="min-w-0 flex-1">
-                  <div className="break-words text-[12px] text-zinc-300">{node.title}</div>
-                  <div className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-zinc-600">{reason}</div>
-                </div>
-                <div className="flex shrink-0 flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={() => openHumanReply(humanMessageTargetNodeFromContext(node, nodes))}
-                    className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-300 hover:text-amber-200"
-                  >
-                    <PaperPlaneTilt size={12} /> 回复
-                  </button>
-                  {findingId && <button type="button" onClick={() => setQuery("finding", findingId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Finding</button>}
-                  {jobId && <button type="button" onClick={() => setQuery("job", jobId)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Job</button>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <HumanInterventionBanner
+          items={humanInterventions}
+          prefs={interventionPrefs}
+          ignoreBusyId={ignoreBusyId}
+          onPrefsChange={updateInterventionPrefs}
+          onReply={(item) => openHumanReply(humanMessageTargetNodeFromContext(item.node, nodes))}
+          onIgnore={(item) => void ignoreIntervention(item)}
+          onOpenFinding={(findingId) => setQuery("finding", findingId)}
+          onOpenJob={(jobId) => setQuery("job", jobId)}
+        />
       )}
 
       <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
@@ -1155,6 +1160,11 @@ export function TaskCanvasPage() {
                 setSearchParams(sp, { replace: true });
               }}
               onSendHumanMessage={(node) => openHumanReply(humanMessageTargetNodeFromContext(node, nodes))}
+              humanMessagePanelCollapsed={interventionPrefs.messagesCollapsed}
+              onToggleHumanMessagePanel={() => updateInterventionPrefs({
+                ...interventionPrefs,
+                messagesCollapsed: !interventionPrefs.messagesCollapsed,
+              })}
             />
           </div>
         </div>
@@ -1424,6 +1434,20 @@ export function TaskCanvasPage() {
                               className="inline-flex items-center gap-1 rounded-md border border-amber-900/40 px-2.5 py-1 font-mono text-[12px] text-amber-300 transition-colors hover:bg-amber-950/40"
                             >
                               <PaperPlaneTilt size={12} /> 回复
+                            </button>
+                          )}
+                          {openHumanInterventionForJob(nodes, j.id) && (
+                            <button
+                              type="button"
+                              disabled={ignoreBusyId !== null}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const item = humanInterventions.find((row) => row.jobId === j.id && row.pending);
+                                if (item) void ignoreIntervention(item);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[12px] text-zinc-400 transition-colors hover:text-zinc-200 disabled:opacity-50"
+                            >
+                              忽略
                             </button>
                           )}
                           {ACTIVE_JOB.has(j.status) && (

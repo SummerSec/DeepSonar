@@ -95,6 +95,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/broadcasts": "tasks:read",
   "GET /canvases/:id/messages": "tasks:read",
   "POST /canvases/:id/messages": "tasks:write",
+  "POST /canvases/:id/human-nodes/:nodeId/ignore": "jobs:control",
   "GET /canvases/:id/summary": "tasks:read",
   "GET /canvases/:id/delta": "tasks:read",
   "GET /canvases/:id/nodes/:nodeId": "tasks:read",

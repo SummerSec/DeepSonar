@@ -34,6 +34,12 @@ test("changing jobs resets terminal state and tears down the previous terminal",
   assert.match(workspace, /<TerminalPanel key=\{jobId\}/);
 });
 
+test("job result human messages default collapsed through the shared list", () => {
+  assert.match(panel, /<HumanMessageList/);
+  assert.match(panel, /expandedIds=\{expandedMessageIds\}/);
+  assert.doesNotMatch(panel, /human-message-detail-section" aria-label="人工消息"/);
+});
+
 test("results keep one vertical scroller while Markdown remains fully visible", () => {
   const resultStart = panel.indexOf('tab === "result"');
   const liveStart = panel.indexOf('tab === "live"', resultStart);

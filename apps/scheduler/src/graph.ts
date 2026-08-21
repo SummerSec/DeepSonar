@@ -50,6 +50,23 @@ function short(value: unknown, max: number): string {
   return valueText.length > max ? valueText.slice(0, Math.max(0, max - 1)) + "…" : valueText;
 }
 
+export function humanHintProjection(hint: {
+  id?: unknown;
+  title?: unknown;
+  status?: unknown;
+  job_id?: unknown;
+  body_json?: unknown;
+}): Record<string, unknown> {
+  const body = (hint.body_json ?? {}) as Record<string, unknown>;
+  return {
+    id: hint.id,
+    status: hint.status ?? "open",
+    content: short(body.reason ?? hint.title, 520),
+    ...(typeof body.resolution === "string" ? { resolution: body.resolution } : {}),
+    ...(typeof body.instruction === "string" ? { instruction: short(body.instruction, 280) } : {}),
+  };
+}
+
 function boundedJson(value: unknown, max: number): unknown {
   const raw = JSON.stringify(value ?? null);
   if (raw.length <= max) return value ?? null;
@@ -147,7 +164,7 @@ export async function buildGraphSnapshot(
   const [canvas] = await sql`
     SELECT title, target_json FROM canvases WHERE id = ${canvasId}`;
   const nodes = await sql`
-    SELECT id, node_type, title, body_json, status, created_at
+    SELECT id, node_type, title, body_json, status, job_id, created_at
     FROM canvas_nodes WHERE canvas_id = ${canvasId}
     ORDER BY created_at`;
   const edges = await sql`
@@ -403,10 +420,7 @@ export async function buildGraphSnapshot(
     );
     addSection(
       "hints",
-      hints.slice(-16).map((hint) => {
-        const body = (hint.body_json ?? {}) as Record<string, unknown>;
-        return row({ id: hint.id, content: short(body.reason ?? hint.title, 520) });
-      }),
+      hints.slice(-16).map((hint) => row(humanHintProjection(hint))),
     );
   } else if (scope === "agent") {
     const intentNode = options.intentNodeId
@@ -462,6 +476,14 @@ export async function buildGraphSnapshot(
           verify_status: finding.verify_status,
           ...(finding.imported ? { location: short(finding.location, 140) } : {}),
         })),
+    );
+    const agentJobId = intentNode?.job_id ? String(intentNode.job_id) : null;
+    addSection(
+      "hints",
+      hints
+        .filter((hint) => agentJobId && String(hint.job_id ?? "") === agentJobId)
+        .slice(-8)
+        .map((hint) => row(humanHintProjection(hint))),
     );
   } else if (scope === "verify") {
     const finding = options.findingId ? findingById.get(options.findingId) : undefined;

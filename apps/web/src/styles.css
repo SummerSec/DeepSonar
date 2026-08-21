@@ -1143,6 +1143,11 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 /* Human → runtime messages: durable transport ledger, separate from topology. */
 .human-message-sync-error { position: absolute; right: 16px; bottom: 172px; z-index: 20; max-width: min(360px, calc(100% - 32px)); border: 1px solid color-mix(in srgb, var(--red-bright) 48%, var(--line)); border-radius: 7px; padding: 7px 10px; color: color-mix(in srgb, var(--red-bright) 70%, var(--text)); background: color-mix(in srgb, var(--panel-raised) 86%, var(--red) 14%); font: 400 10px var(--font-mono); }
 .human-message-status-panel { position: absolute; right: 16px; bottom: 172px; z-index: 10; width: min(410px, calc(100% - 32px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: color-mix(in srgb, var(--panel-raised) 95%, transparent); box-shadow: 0 12px 32px rgb(0 0 0 / .28); }
+.human-message-status-panel.is-collapsed { width: min(220px, calc(100% - 32px)); }
+.human-message-status-heading { display: flex; width: 100%; align-items: center; gap: 8px; padding: 9px 11px; border: 0; border-bottom: 1px solid var(--line); color: inherit; background: transparent; cursor: pointer; text-align: left; }
+.human-message-status-heading strong { color: var(--text); font-size: 11px; }
+.human-message-status-heading span { margin-left: auto; color: var(--muted); font: 400 9px var(--font-mono); }
+.human-message-status-panel.is-collapsed .human-message-status-heading { border-bottom: 0; }
 .human-message-status-panel > div { display: flex; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--line); }
 .human-message-status-panel > div strong { color: var(--text); font-size: 11px; }
 .human-message-status-panel > div span { margin-left: auto; color: var(--muted); font: 400 9px var(--font-mono); }
@@ -1212,7 +1217,10 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .human-message-detail-heading { display: flex; padding: 9px 11px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 11px; }
 .human-message-detail-heading strong { margin-left: auto; color: var(--muted); font: 500 10px var(--font-mono); }
 .human-message-detail-section > ol { margin: 0; padding: 0; list-style: none; }
+.human-message-detail-toggle { display: flex; width: 100%; align-items: center; gap: 6px; border: 0; padding: 0; color: inherit; background: transparent; cursor: pointer; text-align: left; }
+.human-message-detail-toggle > svg { flex: none; color: var(--muted); }
 .human-message-detail-section > ol > li { display: flex; padding: 10px 11px; border-bottom: 1px solid var(--line); flex-direction: column; gap: 6px; }
+.human-message-detail-section p.is-preview { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
 .human-message-detail-section > ol > li:last-child { border-bottom: 0; }
 .human-message-detail-meta { display: flex; align-items: baseline; gap: 8px; }
 .human-message-detail-meta strong { color: var(--live); font: 500 10px var(--font-mono); }

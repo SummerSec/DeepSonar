@@ -1876,6 +1876,14 @@ export const api = {
       attachments: Array.isArray(created.attachments) ? created.attachments : [],
     };
   },
+  ignoreHumanIntervention: (canvasId: string, nodeId: string) =>
+    send<{
+      node_id: string;
+      status: "ignored";
+      job_id: string | null;
+      job_resumed: boolean;
+      already_ignored: boolean;
+    }>("POST", `/canvases/${canvasId}/human-nodes/${nodeId}/ignore`),
   canvasNode: (canvasId: string, nodeId: string) =>
     get<{ node: CanvasNode; projection: "L1" }>(`/canvases/${canvasId}/nodes/${nodeId}`),
   factsPage: (

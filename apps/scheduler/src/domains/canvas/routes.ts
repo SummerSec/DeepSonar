@@ -16,7 +16,7 @@ import { sql } from "../../db.js";
 import { cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { buildCanvasDelta, cursorGap, parseCanvasRevision } from "../../canvas-delta.js";
 import { parseCanvasBroadcastLimit } from "./broadcast-contract.js";
-import { createHumanMessage, listHumanMessages } from "./human-messages.js";
+import { createHumanMessage, HumanInterventionError, ignoreHumanIntervention, listHumanMessages } from "./human-messages.js";
 import { registerCanvasFactRoutes } from "./facts.js";
 import { projectTaskExecution } from "../../task-execution-control.js";
 
@@ -326,6 +326,37 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
         error: error instanceof Error ? error.message : "human message rejected",
         error_code: statusCode === 404 ? "CANVAS_NOT_FOUND" : statusCode === 409 ? "TARGET_NOT_ACTIVE" : "HUMAN_MESSAGE_REJECTED",
       });
+    }
+  });
+
+  app.post("/canvases/:id/human-nodes/:nodeId/ignore", async (req, reply) => {
+    const { id, nodeId } = req.params as { id: string; nodeId: string };
+    try {
+      const result = await ignoreHumanIntervention({
+        canvasId: id,
+        nodeId,
+        actorName: req.actor?.name ?? null,
+      });
+      await audit(req, {
+        action: "canvas.human_intervention.ignore",
+        resourceType: "canvas_node",
+        resourceId: nodeId,
+        result: "ok",
+        after: result,
+      });
+      return result;
+    } catch (error) {
+      if (error instanceof HumanInterventionError) {
+        await audit(req, {
+          action: "canvas.human_intervention.ignore",
+          resourceType: "canvas_node",
+          resourceId: nodeId,
+          result: error.statusCode >= 500 ? "error" : "denied",
+          errorCode: error.errorCode,
+        });
+        return reply.code(error.statusCode).send({ error: error.message, error_code: error.errorCode });
+      }
+      throw error;
     }
   });
 

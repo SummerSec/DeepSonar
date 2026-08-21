@@ -7,6 +7,8 @@ const source = readFileSync(new URL("./CanvasView.tsx", import.meta.url), "utf8"
 test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /defaultCanvasFiltersOpen\(/);
   assert.match(source, /const \[broadcastLedgerOpen, setBroadcastLedgerOpen\] = useState\(false\)/);
+  assert.match(source, /human-message-status-panel\$\{messagePanelCollapsed \? " is-collapsed" : " is-open"\}/);
+  assert.match(source, /aria-expanded=\{!messagePanelCollapsed\}/);
   assert.match(source, /aria-expanded=\{broadcastLedgerOpen\}/);
   assert.match(source, /aria-controls="canvas-broadcast-ledger"/);
   assert.match(source, /filtersOpen \? "is-open" : "is-collapsed"/);

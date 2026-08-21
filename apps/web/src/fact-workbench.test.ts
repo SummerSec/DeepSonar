@@ -177,20 +177,29 @@ test("Finding 待人工区提供强制验证与两类结构化证据 Job", () =>
 
 test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   const page = source("pages/TaskCanvasPage.tsx");
-  assert.match(page, /node\.node_type === "human"/);
-  assert.match(page, /\.slice\(0, 12\)/);
-  assert.match(page, /body_json\?\.subject/);
-  assert.match(page, /body_json\?\.finding_id/);
-  assert.match(page, /body_json\?\.job_id/);
+  const helpers = source("human-messages.ts");
+  assert.match(helpers, /node\.node_type !== "human"/);
+  assert.match(helpers, /\.slice\(0, limit\)/);
+  assert.match(helpers, /body_json\?\.subject/);
+  assert.match(helpers, /body_json\?\.finding_id/);
+  assert.match(helpers, /body_json\?\.job_id/);
   assert.doesNotMatch(page, /match\([^\n]*finding_id|description[^\n]*finding_id/);
-  const banner = page.indexOf('aria-label="人工介入"');
+  const bannerMount = page.indexOf("<HumanInterventionBanner");
   const canvasLayer = page.indexOf("taskWorkbenchCanvasLayerClass(tab === \"canvas\")");
-  assert.ok(banner >= 0 && canvasLayer > banner, "人工介入条必须在画布层外，各 Tab 都可点回复");
-  assert.match(page, /openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)/);
+  assert.ok(bannerMount >= 0 && canvasLayer > bannerMount, "人工介入条必须在画布层外，各 Tab 都可点回复");
+  assert.match(page, /openHumanReply\(humanMessageTargetNodeFromContext\(item\.node, nodes\)\)/);
   assert.match(page, /<HumanMessageComposer/);
   assert.match(page, /jobCanReceiveHumanReply\(j\)/);
   assert.match(page, /onSendMessage=\{\(\) => openHumanReply\(humanMessageTargetNodeForJobId\(selectedJob, nodes\)\)\}/);
   assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)\}/);
+  assert.match(page, /ignoreHumanIntervention/);
+  assert.match(page, /listHumanInterventions\(nodes\)/);
+  const banner = source("HumanInterventionBanner.tsx");
+  assert.match(banner, /aria-label="人工介入"/);
+  assert.match(banner, /忽略/);
+  assert.match(banner, /bannerCollapsed/);
+  assert.match(banner, /hideProcessed/);
+  assert.match(banner, /aria-expanded/);
   const composer = source("HumanMessageComposer.tsx");
   assert.match(composer, /nodeEligible \? "job" : null/);
   assert.match(composer, /targetKind === "hub" \? \{ kind: "hub" as const \} : null/);

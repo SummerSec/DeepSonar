@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { CanvasHumanMessage, CanvasNode } from "./api.js";
 import {
+  canIgnoreHumanIntervention,
+  defaultHumanInterventionPrefs,
+  humanInterventionPrefKey,
+  humanInterventionUiPrefUserKey,
   humanMessageAssetKey,
   humanMessageStatusLabel,
   humanMessageTargetForNode,
@@ -9,9 +13,16 @@ import {
   humanMessageTargetNodeForJobId,
   humanMessageTargetNodeFromContext,
   isActiveHumanMessageTarget,
+  isPendingHumanIntervention,
   jobCanReceiveHumanReply,
+  listHumanInterventions,
   messagesForCanvasNode,
+  openHumanInterventionForJob,
+  readHumanInterventionPrefs,
   safeHumanMessageFileName,
+  toggleExpandedId,
+  visibleHumanInterventions,
+  writeHumanInterventionPrefs,
 } from "./human-messages.js";
 
 function node(overrides: Partial<CanvasNode>): CanvasNode {
@@ -105,4 +116,75 @@ test("target and human-node details derive from the durable message ledger", () 
   assert.equal(humanMessageTargetLabel(message({ target_kind: "hub", target_node_id: null }), []), "Hub");
   assert.deepEqual(messagesForCanvasNode([row], "human-1"), [row]);
   assert.deepEqual(messagesForCanvasNode([row], "node-1"), [row]);
+});
+
+test("open human interventions can be ignored; processed history cannot", () => {
+  const pending = node({
+    id: "human-open",
+    node_type: "human",
+    status: "open",
+    job_id: "job-1",
+    body_json: { reason: "需要授权", subject: { finding_id: "finding-1" } },
+  });
+  const ignored = node({
+    id: "human-ignored",
+    node_type: "human",
+    status: "ignored",
+    job_id: "job-1",
+    body_json: { reason: "旧请求", resolution: "ignored" },
+  });
+  const delivered = node({
+    id: "human-msg",
+    node_type: "human",
+    status: "acknowledged",
+    body_json: { message_id: "message-1", reason: "已投递说明" },
+  });
+  assert.equal(isPendingHumanIntervention(pending), true);
+  assert.equal(canIgnoreHumanIntervention(pending), true);
+  assert.equal(canIgnoreHumanIntervention(ignored), false);
+  assert.equal(canIgnoreHumanIntervention(delivered), false);
+  assert.equal(openHumanInterventionForJob([pending, ignored], "job-1")?.id, "human-open");
+  const listed = listHumanInterventions([delivered, pending, ignored]);
+  assert.deepEqual(listed.map((item) => item.node.id), ["human-msg", "human-open", "human-ignored"]);
+  assert.deepEqual(visibleHumanInterventions(listed, true).map((item) => item.node.id), ["human-open"]);
+  assert.equal(listed.find((item) => item.node.id === "human-open")?.findingId, "finding-1");
+});
+
+test("collapse prefs default collapsed and persist per user and task", () => {
+  const store = new Map<string, string>();
+  const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    },
+  });
+  try {
+    const defaults = defaultHumanInterventionPrefs();
+    assert.equal(defaults.bannerCollapsed, true);
+    assert.equal(defaults.hideProcessed, true);
+    assert.equal(defaults.messagesCollapsed, true);
+    assert.deepEqual(defaults.expandedIds, []);
+    assert.equal(humanInterventionPrefKey("user-1", "canvas-1"), "deepsonar:human-intervention:user-1:canvas-1");
+    assert.equal(humanInterventionUiPrefUserKey({ user: { id: "u1" }, actor: { name: "alice" } }), "u1");
+    assert.equal(humanInterventionUiPrefUserKey({ user: null, actor: { name: "dev" } }), "dev");
+    writeHumanInterventionPrefs("user-1", "canvas-1", {
+      ...defaults,
+      bannerCollapsed: false,
+      hideProcessed: false,
+      expandedIds: ["human-open"],
+      messagesCollapsed: false,
+    });
+    const stored = readHumanInterventionPrefs("user-1", "canvas-1");
+    assert.equal(stored.bannerCollapsed, false);
+    assert.equal(stored.hideProcessed, false);
+    assert.deepEqual(stored.expandedIds, ["human-open"]);
+    assert.notDeepEqual(readHumanInterventionPrefs("user-2", "canvas-1"), stored);
+    assert.deepEqual(toggleExpandedId(["a"], "b"), ["a", "b"]);
+    assert.deepEqual(toggleExpandedId(["a", "b"], "a"), ["b"]);
+  } finally {
+    if (localStorageDescriptor) Object.defineProperty(globalThis, "localStorage", localStorageDescriptor);
+    else delete (globalThis as { localStorage?: Storage }).localStorage;
+  }
 });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { config } from "./config.js";
-import { graphProjectionMarkers, parseHubDecision, serializeFindingStatusIndex } from "./graph.js";
+import { graphProjectionMarkers, humanHintProjection, parseHubDecision, serializeFindingStatusIndex } from "./graph.js";
 import { buildEvidenceSnapshot, findingVerificationSummaries } from "./verify.js";
 
 test("Hub Finding status index keeps all 357 entries within the 48 KB budget", () => {
@@ -176,4 +176,27 @@ test("batch Finding summaries use one query per dataset and preserve gate fields
   assert.equal(summaries.get("finding-1")?.verify_status, "pending");
   assert.equal(summaries.get("finding-1")?.verification_attempt, 2);
   assert.deepEqual(summaries.get("finding-1")?.missing_evidence, ["independent_review", "runtime_test"]);
+});
+
+test("human hints expose ignored resolution so resumed agents can continue", () => {
+  assert.deepEqual(
+    humanHintProjection({
+      id: "hint-1",
+      title: "需要授权",
+      status: "ignored",
+      body_json: { reason: "需要授权", resolution: "ignored", instruction: "用户已忽略此次人工介入。继续推进。" },
+    }),
+    {
+      id: "hint-1",
+      status: "ignored",
+      content: "需要授权",
+      resolution: "ignored",
+      instruction: "用户已忽略此次人工介入。继续推进。",
+    },
+  );
+  assert.deepEqual(humanHintProjection({ id: "hint-2", title: "等待", status: "open", body_json: { reason: "等待人工" } }), {
+    id: "hint-2",
+    status: "open",
+    content: "等待人工",
+  });
 });

@@ -98,6 +98,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - 运行时将每条消息的附件按 message UUID 放入动态收件箱 `/workspace/.deepsonar/inbox/<message-id>/`，并在注入文本中提供不可变路径、摘要与字节数。收件箱不是 Agent 可写回的控制队列，也不改变原有 snapshot 输入。
 - 确认严格分两阶段：`injected` 仅表示“已注入会话，等待 Agent 确认”；只有目标 Agent 显式调用受治理的 ACK operation，持久化 `acknowledged_at`（及可选 `ack_summary`）后，UI 才显示“Agent 已确认”。不得从普通文本回复、Session 内容或节点标题推断已读/已处理。
 - `planned` / `injected` / `acknowledged` / `unknown` / `failed` 均真实展示；未知窗口与失败不会触发消息自动重发。人类若要再次发送，必须在确认目标和账本状态后主动提交新消息 UUID。
+- **人工介入折叠与忽略（#277）**：任务工作台介入条、画布消息面板默认折叠；已处理/历史项默认可隐藏，展开状态按用户+任务写入 `localStorage`（`deepsonar:human-intervention:<user>:<canvas>`）。`POST /canvases/:id/human-nodes/:nodeId/ignore`（`jobs:control`）把仍为 `open` 的 human 节点标为 `ignored`；若对应 Job 仍是 `waiting_human`，关闭旧 Attempt 并恢复 `pending`，图 YAML `hints` 带上 `resolution=ignored`，Agent 据此继续而不是挂起。
 
 ### 4.2 Fact/Finding 画布广播（真注入 + 投递账本）
 
@@ -320,6 +321,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | Chrome / 长工具 stall 误杀 | #257 | **已完成**：Reaper stall 仍以语义事件为主、默认 900s；`tool.call.started/completed` 写入进度事件与 `payload_json.runtime_activity`。在飞工具且 lease 未过期时不判停滞，使 clang-tidy / fuzz / 其它角色的长 Bash 不被 15 分钟静默窗口误杀。`deepsonar-chrome-audit/test` 下限 5400s、`deepsonar-chrome-fuzz` 10800s；不抬高全局 `DEEPSONAR_JOB_STALL_SEC`。无工具活动的普通 Job 仍在 900s 后收口。 |
 | 配置中心 / 运行时护栏 | #263 | **Batch 1 已落地**：平台默认写入 `global_settings.rules_json`；角色覆盖在 `role_configs.runtime_knobs_json`；Job 冻结 `agent_snapshot_json.runtime_knobs`。覆盖 `stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`（仅平台）。Web 配置中心可改，保存走既有 toast + `settings.global_update` / `settings.project_update` / `role_config.upsert` 审计。后续批次（lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检）仍走部署 env。 |
 | 官方运行时不预装决策扫描器 | #267 / #266 | **已完成**：官方 base/audit/kali/chrome/openharmony 只提供基础工具；移除 Semgrep / gitleaks / shellcheck 与 Chrome 固定扫描规则/入口。Finding 质量靠 harness + Verify，不复现企业 SAST/密钥扫描。合入后须发版重建 `deepsonar-audit`、`deepsonar-kali-minimal`、`deepsonar-chrome-audit`。 |
+| 人工介入折叠与忽略 | #277 | **已完成**：介入条/消息面板默认可折叠并隐藏历史；`POST /canvases/:id/human-nodes/:nodeId/ignore` 将 open human 节点标 ignored，waiting_human Job 恢复 pending 后继续。 |
 
 ## 12. 仓库地图
 
