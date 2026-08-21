@@ -98,6 +98,8 @@ test("runtime registry channel OpenAPI is strict and project-scope aware", () =>
   });
   assert.match(String(channel.description), /PROJECT_SCOPE_FORBIDDEN/);
   assert.match(String(channel.description), /github.*dockerhub.*aliyun-acr/);
+  assert.match(String(channel.description), /in-flight|pull-status|runtime_image_preparation_busy/);
+  assert.equal(channel.responses["202"].content["application/json"].schema.properties.saved.enum[0], false);
   assert.match(String(channel.responses["403"].content["application/json"].schema.properties.error_code.enum), /PROJECT_SCOPE_FORBIDDEN/);
   assert.match(String(channel.responses["500"].content["application/json"].schema.properties.error_code.enum), /RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED/);
   assert.match(String(pull.description), /RUNTIME_IMAGE_CHANNEL_UNAVAILABLE/);

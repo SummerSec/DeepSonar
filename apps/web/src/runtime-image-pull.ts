@@ -56,3 +56,31 @@ export function projectBindingBusyNotice(task: RuntimeImagePullTask | null): str
   }
   return `当前拉取任务未完成（${pullPurposeLabel(task.purpose)} ${task.completed}/${task.total}），请等待完成后再启用`;
 }
+
+export function registryChannelDeferredNotice(channelLabel: string, total: number): string {
+  return `正在后台准备 ${channelLabel} 的 ${total} 个镜像；当前通道未切换，完成后会自动保存`;
+}
+
+export function registryChannelBusyNotice(task: RuntimeImagePullTask | null): string {
+  if (!task || task.status === "idle") {
+    return "当前已有镜像拉取任务在运行，完成后会自动切换通道";
+  }
+  return `当前拉取任务未完成（${pullPurposeLabel(task.purpose)} ${task.completed}/${task.total}），完成后会自动切换通道`;
+}
+
+export function registryChannelSelectValue(
+  pendingChannel: string | null | undefined,
+  selectedChannel: string | null | undefined,
+): string {
+  return pendingChannel || selectedChannel || "";
+}
+
+export function isRegistryChannelSwitchLocked(
+  pendingChannel: string | null | undefined,
+  pullStatus: Pick<RuntimeImagePullTask, "status"> | null | undefined,
+  busy: string | null | undefined,
+): boolean {
+  if (busy === "registry-channel") return true;
+  if (!pendingChannel) return false;
+  return pullStatus?.status === "queued" || pullStatus?.status === "running";
+}

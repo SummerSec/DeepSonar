@@ -24,12 +24,16 @@ import {
 } from "../runtime-image-option";
 import {
   formatPullElapsed,
+  isRegistryChannelSwitchLocked,
   isRuntimeImagePullBusyError,
   projectBindingBusyNotice,
   projectBindingDeferredNotice,
   pullHeadline,
   pullItemStatusLabel,
   pullPurposeLabel,
+  registryChannelBusyNotice,
+  registryChannelDeferredNotice,
+  registryChannelSelectValue,
   shortImageRef,
 } from "../runtime-image-pull";
 import { EmptyState, HelpTip, PageHeader, PageSkeleton, formatTime } from "../ui";
@@ -264,6 +268,7 @@ export function RuntimeImagesPage() {
   const [registryLoadError, setRegistryLoadError] = useState<string | null>(null);
   const [channelStatus, setChannelStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [channelMessage, setChannelMessage] = useState<string | null>(null);
+  const [pendingChannel, setPendingChannel] = useState<RuntimeImageRegistryChannel | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [manualForm, setManualForm] = useState({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
   const [pullStatus, setPullStatus] = useState<RuntimeImagePullTask | null>(null);
@@ -273,6 +278,7 @@ export function RuntimeImagesPage() {
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [projectVersionPick, setProjectVersionPick] = useState<Record<string, string>>({});
   const marketplaceRequestGeneration = useRef(0);
+  const autoPersistedPullTaskId = useRef<string | null>(null);
 
   const canAdoptLocal = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:approve")));
   const canManageCatalog = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:manage") || me.actor?.scopes.includes("images:approve")));
@@ -333,6 +339,8 @@ export function RuntimeImagesPage() {
       setRegistryLoadError(null);
       setChannelStatus("idle");
       setChannelMessage(null);
+      setPendingChannel(null);
+      autoPersistedPullTaskId.current = null;
       return;
     }
     let active = true;
@@ -484,44 +492,107 @@ export function RuntimeImagesPage() {
     }
   };
 
+  const persistRegistryChannel = async (channel: RuntimeImageRegistryChannel) => {
+    const result = await api.setRuntimeImagesRegistryChannel(channel);
+    if ("saved" in result && result.saved === false) {
+      if (result.task) setPullStatus(result.task);
+      setPendingChannel(channel);
+      setChannelStatus("pending");
+      setChannelMessage(result.task
+        ? registryChannelDeferredNotice(registryChannelLabel(channel), result.task.total)
+        : registryChannelBusyNotice(result.task ?? null));
+      return "preparing" as const;
+    }
+    if (!result.selected_channel) throw new Error("通道切换响应缺少 selected_channel");
+    const selectedChannel = result.selected_channel;
+    setPendingChannel(null);
+    autoPersistedPullTaskId.current = null;
+    setRegistry((current) => current ? { ...current, selected_channel: selectedChannel } : current);
+    try {
+      await refreshMarketplace();
+      setChannelStatus("success");
+      setChannelMessage(`已切换至 ${registryChannelLabel(selectedChannel)}，市场数据已刷新`);
+    } catch (refreshCause) {
+      const refreshMessage = refreshCause instanceof Error ? refreshCause.message : String(refreshCause);
+      setChannelStatus("error");
+      setChannelMessage(`已切换至 ${registryChannelLabel(selectedChannel)}，但市场数据刷新失败：${refreshMessage || "请手动刷新"}`);
+    }
+    return "saved" as const;
+  };
+
+  const rememberInFlightChannel = async (channel: RuntimeImageRegistryChannel) => {
+    try {
+      const task = await api.runtimeImagesPullStatus();
+      setPullStatus(task);
+      setPendingChannel(channel);
+      setChannelStatus("pending");
+      setChannelMessage(registryChannelBusyNotice(task));
+    } catch {
+      setPendingChannel(channel);
+      setChannelStatus("pending");
+      setChannelMessage(registryChannelBusyNotice(null));
+    }
+  };
+
   const updateRegistryChannel = async (channel: RuntimeImageRegistryChannel) => {
-    if (!registry || channel === registry.selected_channel) return;
+    if (!registry) return;
+    if (channel === registry.selected_channel && !pendingChannel) return;
+    if (isRegistryChannelSwitchLocked(pendingChannel, pullStatus, busy)) return;
     if (!canManageRegistryChannel) {
       setChannelStatus("error");
       setChannelMessage("当前账号无权切换官方仓库通道（需要 images:manage 权限）");
       return;
     }
     setBusy("registry-channel");
+    setPendingChannel(channel);
     setChannelStatus("pending");
     setChannelMessage("正在切换官方仓库通道…");
     setError(null);
     try {
-      const result = await api.setRuntimeImagesRegistryChannel(channel);
-      if ("saved" in result && result.saved === false) {
-        setPullStatus(result.task);
-        setChannelStatus("pending");
-        setChannelMessage(`正在后台准备 ${registryChannelLabel(channel)} 的 ${result.task.total} 个镜像；当前通道未切换，请完成后重试`);
+      await persistRegistryChannel(channel);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (isRuntimeImagePullBusyError(message)) {
+        await rememberInFlightChannel(channel);
         return;
       }
-      if (!result.selected_channel) throw new Error("通道切换响应缺少 selected_channel");
-      const selectedChannel = result.selected_channel;
-      setRegistry((current) => current ? { ...current, selected_channel: selectedChannel } : current);
-      try {
-        await refreshMarketplace();
-        setChannelStatus("success");
-        setChannelMessage(`已切换至 ${registryChannelLabel(selectedChannel)}，市场数据已刷新`);
-      } catch (refreshCause) {
-        const refreshMessage = refreshCause instanceof Error ? refreshCause.message : String(refreshCause);
-        setChannelStatus("error");
-        setChannelMessage(`已切换至 ${registryChannelLabel(selectedChannel)}，但市场数据刷新失败：${refreshMessage || "请手动刷新"}`);
-      }
-    } catch (cause) {
       setChannelStatus("error");
       setChannelMessage(registryChannelMutationError(cause));
     } finally {
       setBusy(null);
     }
   };
+
+  useEffect(() => {
+    if (!pendingChannel || projectId) return;
+    if (pullStatus?.status === "failed") {
+      setChannelStatus("error");
+      setChannelMessage(`准备 ${registryChannelLabel(pendingChannel)} 失败，可再次选择该通道重试`);
+      return;
+    }
+    if (pullStatus?.status !== "succeeded") return;
+    const taskId = pullStatus.task_id ?? "unknown";
+    if (autoPersistedPullTaskId.current === taskId) return;
+    autoPersistedPullTaskId.current = taskId;
+    const channel = pendingChannel;
+    setBusy("registry-channel");
+    setChannelStatus("pending");
+    setChannelMessage("正在保存官方仓库通道…");
+    void persistRegistryChannel(channel)
+      .then((outcome) => {
+        if (outcome === "preparing") autoPersistedPullTaskId.current = null;
+      })
+      .catch((cause) => {
+        autoPersistedPullTaskId.current = null;
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (isRuntimeImagePullBusyError(message)) {
+          return rememberInFlightChannel(channel);
+        }
+        setChannelStatus("error");
+        setChannelMessage(registryChannelMutationError(cause));
+      })
+      .finally(() => setBusy(null));
+  }, [pendingChannel, projectId, pullStatus?.status, pullStatus?.task_id]);
 
   /** 手动更新市场：选择本地 runtime-image-registry.json 上传并写入 DB */
   const applyRegistryFile = async (file: File | null) => {
@@ -771,11 +842,11 @@ export function RuntimeImagesPage() {
               <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <fieldset
                   className="min-w-0 flex-1"
-                  disabled={!registry || registryLoading || busy !== null || !canManageRegistryChannel}
+                  disabled={!registry || registryLoading || busy !== null || !canManageRegistryChannel || isRegistryChannelSwitchLocked(pendingChannel, pullStatus, busy)}
                   aria-describedby={channelMessage || !canManageRegistryChannel ? "runtime-registry-channel-status" : undefined}
                 >
                   <SearchableSelect
-                    value={registry?.selected_channel ?? ""}
+                    value={registryChannelSelectValue(pendingChannel, registry?.selected_channel)}
                     onChange={(next) => void updateRegistryChannel(next as RuntimeImageRegistryChannel)}
                     options={REGISTRY_CHANNEL_OPTIONS.map((option) => ({
                       value: option.id,

@@ -66,6 +66,51 @@ test("runtime registry channel mutation uses the server-owned PATCH contract", a
   }
 });
 
+test("runtime registry channel API keeps a 202 preparing body for the UI", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    status: "preparing",
+    saved: false,
+    selected_channel: "aliyun-acr",
+    proposed_channel: "github",
+    task: {
+      task_id: "task",
+      purpose: "admin_bulk",
+      status: "running",
+      started_at: null,
+      finished_at: null,
+      total: 1,
+      completed: 0,
+      items: [],
+    },
+  }), {
+    status: 202,
+    headers: { "content-type": "application/json" },
+  });
+
+  try {
+    const result = await api.setRuntimeImagesRegistryChannel("github");
+    assert.deepEqual(result, {
+      status: "preparing",
+      saved: false,
+      selected_channel: "aliyun-acr",
+      proposed_channel: "github",
+      task: {
+        task_id: "task",
+        purpose: "admin_bulk",
+        status: "running",
+        started_at: null,
+        finished_at: null,
+        total: 1,
+        completed: 0,
+        items: [],
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("runtime registry channel API preserves a forbidden response for the UI", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({

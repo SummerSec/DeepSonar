@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertRuntimeImageAvailable,
+  canPreemptRuntimeImagePreparation,
   compareRuntimeImageVersionLabels,
   createServerOwnedRuntimeImageRegistryPolicy,
   ensureRuntimeImageAvailable,
@@ -15,8 +16,13 @@ import {
   classifyRuntimeImagePin,
   diagnoseRuntimeImageSelectionFailure,
   officialDefaultImageRevokedWarning,
+  requestRuntimeImagePreparation,
+  resetRuntimeImagePullTask,
+  registryChannelPreparationBusyResult,
   runtimeImageHttpError,
+  runtimeImagePreparationCovers,
   RuntimeImageNotReadyError,
+  RuntimeImagePreparationBusyError,
   RuntimeImageNotTrustedError,
   RuntimeImagePinStaleError,
   RuntimeImagePlatformUnavailableError,
@@ -28,6 +34,7 @@ import {
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
   verifiedSameDigestChannelRefs,
+  runRuntimeImagePreparationTask,
   withSharedAssetsHelperRef,
   RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
   RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
@@ -795,4 +802,163 @@ test("selector diagnosis distinguishes revoked official versions from missing pl
   });
   assert.ok(missingPlatform instanceof RuntimeImagePlatformUnavailableError);
   assert.equal(officialDefaultImageRevokedWarning("deepsonar-base"), "official default image deepsonar-base revoked");
+});
+
+test("preparation lock reuses same digest across registry hosts", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const task = {
+    items: [{ image_key: "base", image_ref: `cr.example.invalid/base@${digest}`, status: "running" as const, error: null }],
+  };
+  assert.equal(runtimeImagePreparationCovers(task, [
+    { image_ref: `ghcr.io/example/base@${digest}` },
+  ]), true);
+  assert.equal(runtimeImagePreparationCovers(task, [
+    { image_ref: `ghcr.io/example/other@sha256:${"b".repeat(64)}` },
+  ]), false);
+  assert.equal(canPreemptRuntimeImagePreparation("admin_bulk", "registry_channel:github"), true);
+  assert.equal(canPreemptRuntimeImagePreparation("project_binding:p:i", "registry_channel:github"), false);
+});
+
+test("channel switch busy payload stays 202 and does not persist", () => {
+  const body = registryChannelPreparationBusyResult("aliyun-acr", "github", {
+    task_id: "task",
+    purpose: "admin_bulk",
+    status: "running",
+    started_at: null,
+    finished_at: null,
+    total: 1,
+    completed: 0,
+    items: [],
+  });
+  assert.equal(body.saved, false);
+  assert.equal(body.status, "preparing");
+  assert.equal(body.selected_channel, "aliyun-acr");
+  assert.equal(body.proposed_channel, "github");
+  assert.equal(body.task?.purpose, "admin_bulk");
+});
+
+test("abnormal preparation exit leaves queued/running", async () => {
+  const items = [{
+    image_key: "base",
+    image_ref: `example.invalid/base@sha256:${"c".repeat(64)}`,
+    status: "queued" as const,
+    error: null,
+  }];
+  let reads = 0;
+  const task = {
+    task_id: "task",
+    purpose: "admin_bulk",
+    status: "queued" as const,
+    started_at: null,
+    finished_at: null,
+    total: 1,
+    completed: 0,
+    get items() {
+      reads += 1;
+      if (reads > 1) throw new Error("iterator exploded");
+      return items;
+    },
+  };
+  await runRuntimeImagePreparationTask(task, async () => {});
+  assert.equal(task.status, "failed");
+  assert.ok(task.finished_at);
+});
+
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("channel switch reuses an in-flight prep for the same digest on another host", async () => {
+  resetRuntimeImagePullTask();
+  const digest = `sha256:${"d".repeat(64)}`;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const first = await requestRuntimeImagePreparation(
+      [{ image_key: "base", image_ref: `cr.example.invalid/base@${digest}` }],
+      "admin_bulk",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(first.ready, false);
+    if (first.ready) return;
+    const second = await requestRuntimeImagePreparation(
+      [{ image_key: "base", image_ref: `ghcr.io/example/base@${digest}` }],
+      "registry_channel:github",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(second.ready, false);
+    if (second.ready) return;
+    assert.equal(second.task.task_id, first.task.task_id);
+    assert.equal(second.task.purpose, "admin_bulk");
+  } finally {
+    release();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
+});
+
+test("channel switch preempts a current-channel admin_bulk with different digest", async () => {
+  resetRuntimeImagePullTask();
+  let releaseAdmin!: () => void;
+  const adminBlocked = new Promise<void>((resolve) => { releaseAdmin = resolve; });
+  let releaseChannel!: () => void;
+  const channelBlocked = new Promise<void>((resolve) => { releaseChannel = resolve; });
+  try {
+    const admin = await requestRuntimeImagePreparation(
+      [{ image_key: "base", image_ref: `cr.example.invalid/base@sha256:${"e".repeat(64)}` }],
+      "admin_bulk",
+      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked },
+    );
+    assert.equal(admin.ready, false);
+    if (admin.ready) return;
+    const channel = await requestRuntimeImagePreparation(
+      [{ image_key: "base", image_ref: `ghcr.io/example/base@sha256:${"f".repeat(64)}` }],
+      "registry_channel:github",
+      { inspect: async () => ({ exists: false }), prepare: async () => channelBlocked },
+    );
+    assert.equal(channel.ready, false);
+    if (channel.ready) return;
+    assert.notEqual(channel.task.task_id, admin.task.task_id);
+    assert.equal(channel.task.purpose, "registry_channel:github");
+    assert.match(channel.task.status, /queued|running/);
+  } finally {
+    releaseAdmin();
+    releaseChannel();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
+});
+
+test("channel switch observes a non-preemptable in-flight task instead of throwing 409", async () => {
+  resetRuntimeImagePullTask();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const binding = await requestRuntimeImagePreparation(
+      [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"1".repeat(64)}` }],
+      "project_binding:p:i",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(binding.ready, false);
+    if (binding.ready) return;
+    const channel = await requestRuntimeImagePreparation(
+      [{ image_key: "base", image_ref: `ghcr.io/example/base@sha256:${"2".repeat(64)}` }],
+      "registry_channel:github",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(channel.ready, false);
+    if (channel.ready) return;
+    assert.equal(channel.task.task_id, binding.task.task_id);
+    assert.equal(channel.task.purpose, "project_binding:p:i");
+    await assert.rejects(
+      () => requestRuntimeImagePreparation(
+        [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"3".repeat(64)}` }],
+        "project_binding:p:other",
+        { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      ),
+      RuntimeImagePreparationBusyError,
+    );
+  } finally {
+    release();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
 });
