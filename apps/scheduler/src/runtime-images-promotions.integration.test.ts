@@ -304,4 +304,184 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM runtime_images WHERE id = ${imageId}`;
     }
   });
+
+  test("official catalog promote rolls stale official pins only", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    process.env.AGENT_MODE = "fake";
+    process.env.DEEPSONAR_IMAGE_REGISTRY = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec";
+    const { migrate, sql } = await import("./db.js");
+    const runtime = await import("./runtime-images.js");
+    await migrate();
+
+    const suffix = randomUUID().slice(0, 8);
+    const officialKey = `deepsonar-pin-roll-${suffix}`;
+    const thirdPartyKey = `third-party-pin-roll-${suffix}`;
+    const officialId = randomUUID();
+    const thirdPartyId = randomUUID();
+    const oldOfficialVersionId = randomUUID();
+    const pinOkVersionId = randomUUID();
+    const oldThirdVersionId = randomUUID();
+    const newThirdVersionId = randomUUID();
+    const staleProjectId = randomUUID();
+    const pinOkProjectId = randomUUID();
+    const thirdPartyProjectId = randomUUID();
+    const holdProjectId = randomUUID();
+    const followLatestProjectId = randomUUID();
+    const canvasId = randomUUID();
+    const jobId = randomUUID();
+    const hostPlatform = runtime.hostRuntimePlatform();
+    const oldDigest = `sha256:${"1".repeat(64)}`;
+    const pinOkDigest = `sha256:${"2".repeat(64)}`;
+    const newDigest = `sha256:${"3".repeat(64)}`;
+    const thirdOldDigest = `sha256:${"4".repeat(64)}`;
+    const thirdNewDigest = `sha256:${"5".repeat(64)}`;
+    const newGithub = `ghcr.io/summersec/${officialKey}@${newDigest}`;
+    const newAcr = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${officialKey}@${newDigest}`;
+    const pinOkAcr = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${officialKey}@${pinOkDigest}`;
+    const snapshotBefore = {
+      runtime_image: { runtime_image_version_id: oldOfficialVersionId, image_key: officialKey },
+    };
+
+    try {
+      await sql`UPDATE global_settings SET runtime_registry_channel = 'aliyun-acr' WHERE id = 'global'`;
+      await sql`
+        INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official)
+        VALUES
+          (${officialId}, ${officialKey}, 'Official roll', 'fixture', 'SummerSec', 'official', true),
+          (${thirdPartyId}, ${thirdPartyKey}, 'Third party roll', 'fixture', 'Other', 'third_party', false)`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        VALUES
+          (${oldOfficialVersionId}, ${officialId}, '0.1.41', ${`ghcr.io/summersec/${officialKey}@${oldDigest}`},
+           ${`ghcr.io/summersec/${officialKey}@${oldDigest}`}, ${oldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
+          (${pinOkVersionId}, ${officialId}, '0.1.40', ${pinOkAcr}, ${pinOkAcr}, ${pinOkDigest},
+           ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
+          (${oldThirdVersionId}, ${thirdPartyId}, '9.0.0', ${`example.local/${thirdPartyKey}@${thirdOldDigest}`},
+           ${`example.local/${thirdPartyKey}@${thirdOldDigest}`}, ${thirdOldDigest}, ${sql.json([hostPlatform] as never)}, 'disabled', NULL),
+          (${newThirdVersionId}, ${thirdPartyId}, '9.1.0', ${`example.local/${thirdPartyKey}@${thirdNewDigest}`},
+           ${`example.local/${thirdPartyKey}@${thirdNewDigest}`}, ${thirdNewDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now())`;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
+        VALUES (${pinOkVersionId}, 'aliyun-acr', ${pinOkAcr}, ${pinOkAcr}, ${pinOkDigest}, ${sql.json({ source: "fixture" } as never)})`;
+
+      for (const [projectId, name] of [
+        [staleProjectId, "stale official"],
+        [pinOkProjectId, "pin ok official"],
+        [thirdPartyProjectId, "third party"],
+        [holdProjectId, "hold official"],
+        [followLatestProjectId, "follow latest"],
+      ] as const) {
+        await sql`
+          INSERT INTO projects (id, canvas_id, name)
+          VALUES (${projectId}, ${`canvas-${projectId}`}, ${name})`;
+      }
+      await sql`
+        INSERT INTO canvases (id, project_id, title)
+        VALUES (${canvasId}, ${staleProjectId}, 'frozen snapshot canvas')`;
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, agent_snapshot_json)
+        VALUES (${jobId}, ${staleProjectId}, ${canvasId}, 'hub_reason', ${sql.json(snapshotBefore as never)})`;
+      await sql`
+        INSERT INTO project_runtime_images (project_id, runtime_image_id, selected_version_id, enabled, pin_policy)
+        VALUES
+          (${staleProjectId}, ${officialId}, ${oldOfficialVersionId}, true, 'follow'),
+          (${pinOkProjectId}, ${officialId}, ${pinOkVersionId}, true, 'follow'),
+          (${thirdPartyProjectId}, ${thirdPartyId}, ${oldThirdVersionId}, true, 'follow'),
+          (${holdProjectId}, ${officialId}, ${oldOfficialVersionId}, true, 'hold'),
+          (${followLatestProjectId}, ${officialId}, NULL, true, 'follow')`;
+
+      const result = await runtime.applyOfficialRuntimeCatalog({
+        schema: "deepsonar.registry/v2",
+        schema_version: 2,
+        source: "remote",
+        images: [{
+          image_key: officialKey,
+          name: "Official roll",
+          description: "fixture",
+          publisher: "SummerSec",
+          source_kind: "official",
+          project_opt_in: false,
+          versions: [{
+            version: "0.1.43",
+            image_ref: newGithub,
+            digest: newDigest,
+            platforms: [hostPlatform],
+            registry_refs: { github: newGithub, "aliyun-acr": newAcr },
+          }],
+        }],
+      });
+
+      const [newVersion] = await sql`
+        SELECT id, version FROM runtime_image_versions
+        WHERE runtime_image_id = ${officialId} AND digest = ${newDigest}`;
+      assert.ok(newVersion?.id);
+      assert.equal(newVersion.version, "0.1.43");
+      assert.equal(result.pin_rolls.length, 1);
+      assert.equal(result.pin_rolls[0]?.project_id, staleProjectId);
+      assert.equal(result.pin_rolls[0]?.image_key, officialKey);
+      assert.equal(result.pin_rolls[0]?.from_version_id, oldOfficialVersionId);
+      assert.equal(result.pin_rolls[0]?.from_version, "0.1.41");
+      assert.equal(result.pin_rolls[0]?.to_version_id, String(newVersion.id));
+      assert.equal(result.pin_rolls[0]?.to_version, "0.1.43");
+
+      const pins = await sql`
+        SELECT project_id, selected_version_id, pin_policy
+        FROM project_runtime_images
+        WHERE runtime_image_id IN (${officialId}, ${thirdPartyId})
+        ORDER BY project_id`;
+      const pinByProject = Object.fromEntries(pins.map((row) => [String(row.project_id), row]));
+      assert.equal(String(pinByProject[staleProjectId]?.selected_version_id), String(newVersion.id));
+      assert.equal(String(pinByProject[pinOkProjectId]?.selected_version_id), pinOkVersionId);
+      assert.equal(String(pinByProject[thirdPartyProjectId]?.selected_version_id), oldThirdVersionId);
+      assert.equal(String(pinByProject[holdProjectId]?.selected_version_id), oldOfficialVersionId);
+      assert.equal(pinByProject[holdProjectId]?.pin_policy, "hold");
+      assert.equal(pinByProject[followLatestProjectId]?.selected_version_id, null);
+
+      const [audit] = await sql`
+        SELECT action, project_id, before_json, after_json
+        FROM audit_logs
+        WHERE action = 'runtime_image.official_pin_roll' AND project_id = ${staleProjectId}
+        ORDER BY id DESC LIMIT 1`;
+      assert.equal(audit?.action, "runtime_image.official_pin_roll");
+      assert.equal(String(audit?.before_json?.selected_version_id), oldOfficialVersionId);
+      assert.equal(String(audit?.after_json?.selected_version_id), String(newVersion.id));
+      assert.equal(audit?.after_json?.trigger, "official_catalog_promote");
+      assert.equal(audit?.after_json?.image_key, officialKey);
+
+      const [frozenJob] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${jobId}`;
+      assert.deepEqual(frozenJob?.agent_snapshot_json, snapshotBefore);
+
+      const fallback = await runtime.applyOfficialRuntimeCatalog({
+        schema: "deepsonar.registry/v2",
+        schema_version: 2,
+        source: "bundled",
+        fallback: true,
+        images: [{
+          image_key: officialKey,
+          name: "Official roll",
+          description: "fixture",
+          publisher: "SummerSec",
+          source_kind: "official",
+          project_opt_in: false,
+          versions: [{
+            version: "0.1.43",
+            image_ref: newGithub,
+            digest: newDigest,
+            platforms: [hostPlatform],
+            registry_refs: { github: newGithub, "aliyun-acr": newAcr },
+          }],
+        }],
+      });
+      assert.deepEqual(fallback.pin_rolls, []);
+      const [holdPin] = await sql`
+        SELECT selected_version_id FROM project_runtime_images
+        WHERE project_id = ${holdProjectId} AND runtime_image_id = ${officialId}`;
+      assert.equal(String(holdPin?.selected_version_id), oldOfficialVersionId);
+    } finally {
+      await sql`DELETE FROM jobs WHERE id = ${jobId}`;
+      await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
+      await sql`DELETE FROM runtime_images WHERE id IN (${officialId}, ${thirdPartyId})`;
+    }
+  });
 }

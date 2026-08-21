@@ -224,7 +224,7 @@ git pull
 
 schema 大版本变化时须按基线重建库（无升级路径）。升级前先备份。
 
-官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。请到 **镜像市场 / 各项目运行时镜像** 检查 `project_runtime_images.selected_version_id`：`null` 跟随最新 trusted；显式 pin 不会被 sync 改写。过期 pin 会在预检/建任务返回 `RUNTIME_IMAGE_PIN_STALE`，可一键升级到最新 trusted，或改为跟随最新。不要只看市场最新行就当作项目绑定已更新。
+官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。权威 catalog apply 会把**已过期**的官方项目 pin 滚到最新 trusted（只改 `selected_version_id`，不改 Job 快照）。`null` 仍跟随最新；`pin_ok` 的显式旧版、第三方 pin 与 `pin_policy=hold` 不会被改写。过期且未滚动的 pin 会在预检/建任务返回 `RUNTIME_IMAGE_PIN_STALE`，可一键升级或改为跟随最新。已提交但无 Job 的空壳任务可在 pin 滚动后 `POST /tasks/:id/retry`。
 
 ## 8. 常见问题
 

@@ -19,6 +19,7 @@ import {
   resolveConfiguredRuntimeImagesForChannel,
   resolveRuntimeImageForProjectBinding,
   runtimeImagePullStatus,
+  runtimeImagePinPolicy,
   runtimeImageVersionPin,
   runtimeImageRegistryWithOverrides,
   readRuntimeRegistryChannel,
@@ -77,6 +78,7 @@ const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_cred
 const ProjectRuntimeImageBody = z.object({
   enabled: z.boolean().default(true),
   version_id: z.string().uuid().nullish(),
+  pin_policy: z.enum(["follow", "hold"]).optional(),
 });
 
 export function registerRuntimeImageRoutes(app: FastifyInstance): void {
@@ -95,6 +97,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
              ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
              pri.enabled AS project_enabled, pri.selected_version_id,
+             COALESCE(pri.pin_policy, 'follow') AS pin_policy,
              pin.version AS selected_version,
              pin.trust_status AS selected_trust_status,
              CASE
@@ -230,7 +233,12 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       await audit(req, {
         action: "runtime_image.registry_sync",
         resourceType: "runtime_image_catalog",
-        after: { product_count: result.product_count, version_count: result.version_count, synced_at: result.synced_at },
+        after: {
+          product_count: result.product_count,
+          version_count: result.version_count,
+          synced_at: result.synced_at,
+          pin_roll_count: result.pin_rolls.length,
+        },
       });
       return reply.code(200).send(result);
     } catch (error) {
@@ -256,6 +264,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
           version_count: result.version_count,
           synced_at: result.synced_at,
           source: "upload",
+          pin_roll_count: result.pin_rolls.length,
         },
       });
       return reply.code(200).send(result);
@@ -809,6 +818,20 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const [image] = await sql`SELECT id, enabled FROM runtime_images WHERE id = ${imageId}`;
     if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
     const selectedVersionId = runtimeImageVersionPin(body.version_id);
+    if (body.pin_policy === "hold" && !selectedVersionId) {
+      return reply.code(400).send({
+        error: "pin_policy=hold 需要显式 version_id，跟随最新请使用 follow",
+        error_code: "RUNTIME_IMAGE_PIN_POLICY_INVALID",
+      });
+    }
+    const [existing] = await sql`
+      SELECT pin_policy FROM project_runtime_images
+      WHERE project_id = ${id} AND runtime_image_id = ${imageId}`;
+    const pinPolicy = !selectedVersionId
+      ? "follow"
+      : body.pin_policy !== undefined
+        ? runtimeImagePinPolicy(body.pin_policy)
+        : runtimeImagePinPolicy(existing?.pin_policy);
     try {
       if (body.enabled) {
         if (config.runtime.agentMode === "fake") {
@@ -843,10 +866,12 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
         runtime_image_id: imageId,
         selected_version_id: selectedVersionId,
         enabled: body.enabled,
+        pin_policy: pinPolicy,
       } as never)}
       ON CONFLICT (project_id, runtime_image_id) DO UPDATE SET
         selected_version_id = EXCLUDED.selected_version_id,
         enabled = EXCLUDED.enabled,
+        pin_policy = EXCLUDED.pin_policy,
         updated_at = now()
       RETURNING *`;
     await audit(req, {
@@ -854,7 +879,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       resourceType: "runtime_image",
       resourceId: imageId,
       projectId: id,
-      after: { enabled: body.enabled, selected_version_id: selectedVersionId },
+      after: { enabled: body.enabled, selected_version_id: selectedVersionId, pin_policy: pinPolicy },
     });
     return row;
   });

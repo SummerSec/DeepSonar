@@ -47,6 +47,21 @@ test("stale project pin label is distinct from follow-latest and a still-valid p
     latest_version: "0.1.39",
     pin_stale: false,
   }), "固定 0.1.38 · 最新 0.1.39");
+  assert.equal(runtimeImagePinLabel({
+    selected_version_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    selected_version: "0.1.43",
+    latest_version: "0.1.43",
+    pin_stale: false,
+    official: true,
+  }), "已随官方升到 0.1.43");
+  assert.equal(runtimeImagePinLabel({
+    selected_version_id: "99999999-9999-4999-8999-999999999999",
+    selected_version: "0.1.41",
+    latest_version: "0.1.43",
+    pin_stale: true,
+    official: true,
+    pin_policy: "hold",
+  }), "固定 0.1.41 · 保持 · 已过期");
 });
 
 test("runtime image kind hint distinguishes specialty opt-in from base", () => {
