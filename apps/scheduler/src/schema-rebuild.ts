@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { MIGRATE_LOCK_ID, parseTableManifest, runMigrations, SCHEMA_FILE, type MigrationConnection } from "./migration-runner.js";
+import { assertOwnedSequencesAligned, preparePublicSearchPath, reconcileOwnedSequences } from "./owned-sequences.js";
 import { SCHEMA_VERSION } from "./schema-version.js";
 
 const execFileAsync = promisify(execFile);
@@ -85,37 +86,6 @@ export function quoteIdent(identifier: string): string {
 
 export function quoteSqlLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-/** information_schema shape used to decide which columns own a sequence. */
-export type SequenceColumnMeta = {
-  isIdentity: string;
-  columnDefault: string | null;
-};
-
-/** IDENTITY 与 serial/bigserial（column_default = nextval(...)）都要在回填后 setval。 */
-export function isOwnedSequenceColumn(column: SequenceColumnMeta): boolean {
-  if (column.isIdentity === "YES") return true;
-  return /^\s*nextval\s*\(/i.test(column.columnDefault ?? "");
-}
-
-/** Empty MAX → is_called=false (next nextval is 1). MAX=N → is_called=true (next is N+1). */
-export function ownedSequenceSetvalIsCalled(maxId: number | null): boolean {
-  return maxId != null;
-}
-
-export function ownedSequenceMaxSql(table: string, column: string): string {
-  return `(SELECT MAX(${quoteIdent(column)}) FROM public.${quoteIdent(table)})`;
-}
-
-export function ownedSequenceResetSql(table: string, column: string): string {
-  const sequence = `pg_get_serial_sequence(${quoteSqlLiteral(`public.${table}`)}, ${quoteSqlLiteral(column)})`;
-  const maxSql = ownedSequenceMaxSql(table, column);
-  return (
-    `SELECT setval(${sequence}, ` +
-    `GREATEST(COALESCE(${maxSql}, 1), 1), ` +
-    `${maxSql} IS NOT NULL)`
-  );
 }
 
 export function intersectColumns(source: Iterable<string>, target: Iterable<string>): string[] {
@@ -326,25 +296,6 @@ async function readForeignKeys(db: MigrationConnection, schema: string): Promise
   }));
 }
 
-/** Official seeds / new baseline tables are not in copiedTables; reset every public base table. */
-async function resetOwnedSequences(db: MigrationConnection): Promise<void> {
-  const tables = await listBaseTables(db, "public");
-  for (const table of tables) {
-    const columns = await db<{ column_name: string; is_identity: string; column_default: string | null }>`
-      SELECT column_name, is_identity, column_default
-      FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = ${table}
-    `;
-    for (const column of columns) {
-      if (!isOwnedSequenceColumn({
-        isIdentity: column.is_identity,
-        columnDefault: column.column_default,
-      })) continue;
-      await db.unsafe(ownedSequenceResetSql(table, column.column_name));
-    }
-  }
-}
-
 function extractStatement(schemaSql: string, startMarker: string, endMarker: string): string {
   const start = schemaSql.indexOf(startMarker);
   if (start < 0) throw new Error(`schema.sql is missing statement starting with ${startMarker}`);
@@ -438,6 +389,7 @@ async function recreatePublicSchema(db: MigrationConnection): Promise<void> {
   await db.unsafe("CREATE SCHEMA public");
   await db.unsafe("GRANT ALL ON SCHEMA public TO CURRENT_USER");
   await db.unsafe("GRANT ALL ON SCHEMA public TO public");
+  await preparePublicSearchPath(db);
 }
 
 async function maybeDump(options: RebuildOptions, warnings: string[]): Promise<string | null> {
@@ -573,7 +525,7 @@ export async function rebuildSchemaToLatest(
   }
 
   await ensureOfficialSeeds(db, schemaSql);
-  await resetOwnedSequences(db);
+  await reconcileOwnedSequences(db);
   await runMigrations(db, { schemaFile, targetVersion });
 
   if (!options.keepStaging) {
@@ -581,6 +533,8 @@ export async function rebuildSchemaToLatest(
   } else {
     warnings.push(`staging schema ${REBUILD_STAGING_SCHEMA} was kept (${sourceTables.length} tables)`);
   }
+  // Staging drop must not take the live public sequences with it.
+  await assertOwnedSequencesAligned(db);
 
   return { plan, applied: true, dumpPath, copiedTables, warnings };
 }

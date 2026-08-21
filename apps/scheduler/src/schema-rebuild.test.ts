@@ -2,14 +2,17 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildCopyInsertSql,
-  CATALOG_TABLES,
-  intersectColumns,
   isOwnedSequenceColumn,
-  officialCatalogBackfillSql,
+  ownedSequenceLookupSql,
   ownedSequenceMaxSql,
   ownedSequenceResetSql,
   ownedSequenceSetvalIsCalled,
+} from "./owned-sequences.js";
+import {
+  buildCopyInsertSql,
+  CATALOG_TABLES,
+  intersectColumns,
+  officialCatalogBackfillSql,
   roleConfigBackfillSql,
   roleConfigModuleBackfillSql,
   topologicalCopyOrder,
@@ -155,12 +158,17 @@ test("owned sequence reset includes bigserial nextval defaults and IDENTITY", ()
     false,
   );
   const sql = ownedSequenceResetSql("events", "id");
+  const lookup = ownedSequenceLookupSql("events", "id");
   const maxSql = ownedSequenceMaxSql("events", "id");
   assert.equal(maxSql, '(SELECT MAX("id") FROM public."events")');
-  assert.match(sql, /pg_get_serial_sequence\('public\.events', 'id'\)/);
+  assert.match(lookup, /tbl_ns\.nspname = 'public'/);
+  assert.match(lookup, /seq_ns\.nspname = 'public'/);
+  assert.match(lookup, /dep\.deptype IN \('a', 'i'\)/);
+  assert.doesNotMatch(lookup, /pg_get_serial_sequence/);
+  assert.match(sql, /setval\(\(/);
   assert.match(sql, /GREATEST\(COALESCE\(\(SELECT MAX\("id"\) FROM public\."events"\), 1\), 1\)/);
-  assert.match(sql, /setval\(/);
   assert.match(sql, /\(SELECT MAX\("id"\) FROM public\."events"\) IS NOT NULL/);
+  assert.doesNotMatch(sql, /pg_get_serial_sequence/);
   assert.equal(ownedSequenceSetvalIsCalled(null), false);
   assert.equal(ownedSequenceSetvalIsCalled(1), true);
   assert.equal(ownedSequenceSetvalIsCalled(42), true);
@@ -187,7 +195,8 @@ test("schema baseline serial and IDENTITY primary keys are all in the rebuild re
 
 test("owned sequence reset is over all public base tables after official seeds", async () => {
   const source = await readFile(new URL("./schema-rebuild.ts", import.meta.url), "utf8");
-  assert.match(source, /await ensureOfficialSeeds\(db, schemaSql\);\s*\n\s*await resetOwnedSequences\(db\);/);
-  assert.match(source, /const tables = await listBaseTables\(db, "public"\)/);
+  assert.match(source, /await ensureOfficialSeeds\(db, schemaSql\);\s*\n\s*await reconcileOwnedSequences\(db\);/);
+  assert.match(source, /await assertOwnedSequencesAligned\(db\);/);
   assert.doesNotMatch(source, /resetOwnedSequences\(db, copiedTables\)/);
+  assert.doesNotMatch(source, /pg_get_serial_sequence/);
 });

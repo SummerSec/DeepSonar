@@ -322,6 +322,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 配置中心 / 运行时护栏 | #263 | **Batch 1 已落地**：平台默认写入 `global_settings.rules_json`；角色覆盖在 `role_configs.runtime_knobs_json`；Job 冻结 `agent_snapshot_json.runtime_knobs`。覆盖 `stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`（仅平台）。Web 配置中心可改，保存走既有 toast + `settings.global_update` / `settings.project_update` / `role_config.upsert` 审计。后续批次（lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检）仍走部署 env。 |
 | 官方运行时不预装决策扫描器 | #267 / #266 | **已完成**：官方 base/audit/kali/chrome/openharmony 只提供基础工具；移除 Semgrep / gitleaks / shellcheck 与 Chrome 固定扫描规则/入口。Finding 质量靠 harness + Verify，不复现企业 SAST/密钥扫描。合入后须发版重建 `deepsonar-audit`、`deepsonar-kali-minimal`、`deepsonar-chrome-audit`。 |
 | 人工介入折叠与忽略 | #277 | **已完成**：介入条/消息面板默认可折叠并隐藏历史；`POST /canvases/:id/human-nodes/:nodeId/ignore` 将 open human 节点标 ignored，waiting_human Job 恢复 pending 后继续。 |
+| rebuild / 启动序列对齐 | #281 | **已完成**：`OVERRIDING SYSTEM VALUE` 回填后只对 public 上 IDENTITY/serial 做 `setval(MAX)`；rebuild 结束与 Scheduler 启动自动对齐并 fail closed。不改 append-only，审计 PK 仍是 IDENTITY。 |
 
 ## 12. 仓库地图
 
@@ -333,7 +334,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v36）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填，Scheduler 启动不做增量升级 |
+| `database/schema.sql` | 唯一 schema 基线（当前 v36）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

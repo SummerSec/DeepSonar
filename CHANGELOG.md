@@ -6,6 +6,7 @@
 
 ### 修复
 
+- `db:rebuild` 回填后只对 **public** 上的 owned sequence `setval(MAX(id))`，并在 rebuild 结束与 Scheduler 启动时校验 `last_value >= MAX`、下次 `nextval` 为 `MAX+1`。漂移会自动对齐，对不齐则 fail closed，避免 `audit_logs_pkey` / `events_pkey` 撞号（#281）。不改 append-only，也不把审计主键改成 UUID。
 - 任务页人工介入默认折叠、可隐藏历史，并提供「忽略」以跳过等待（#277）。忽略会把 human 节点标为 `ignored`；若 Job 仍为 `waiting_human` 则恢复 pending，让 Agent 继续推进。折叠/隐藏按用户与任务写入 localStorage。
 - 镜像市场切换官方仓库通道时，若已有准备/拉取任务，返回当前 `pull-status`（202）并展示进度，不再把 `409 runtime_image_preparation_busy` 当硬失败（#278）。同 digest 复用准备锁，通道切换可抢占当前通道的 `admin_bulk`。下拉保持待切换通道，完成后自动重试落库。准备任务异常退出会离开 `queued`/`running`。
 

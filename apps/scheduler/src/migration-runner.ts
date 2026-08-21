@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextDecoder } from "node:util";
+import { reconcileOwnedSequences } from "./owned-sequences.js";
 import { SCHEMA_VERSION } from "./schema-version.js";
 
 /** The subset of postgres.js used by the schema bootstrap runner. */
@@ -301,6 +302,7 @@ export async function runMigrations(
   if (state.table_count === 0) {
     await db.unsafe(latestBody);
     await assertStructure(db, expectedManifest, `fresh baseline v${targetVersion}`);
+    await reconcileOwnedSequences(db);
     const version = await readSchemaVersion(db);
     if (version !== targetVersion) {
       throw new Error(
@@ -326,5 +328,6 @@ export async function runMigrations(
   }
 
   await assertStructure(db, expectedManifest, `schema v${targetVersion}`);
+  await reconcileOwnedSequences(db);
   return [];
 }
