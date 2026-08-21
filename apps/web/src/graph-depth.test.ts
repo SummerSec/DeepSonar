@@ -7,6 +7,9 @@ import {
   computeNodeDepths,
   computeVisibleIds,
   DEFAULT_CHILD_LIMIT,
+  DEFAULT_VISIBLE_NODE_BUDGET,
+  MAX_RENDERED_NODES,
+  nextVisibleNodeBudget,
   remainingCappedChildren,
 } from "./graph-depth";
 
@@ -82,4 +85,21 @@ test("render cap preserves stable node creation order within the same depth", ()
   const ids = new Set(["root", "a", "b", "c"]);
   const capped = capRenderedIds(ids, [node("root", "root"), node("c"), node("a"), node("b")], depths, 3);
   assert.deepEqual([...capped.ids], ["root", "c", "a"]);
+});
+
+test("default total budget bounds shallow wide graphs and reveals stable batches", () => {
+  const children = Array.from({ length: 50 }, (_, index) => node(`n${index}`));
+  const nodes = [node("root", "root"), ...children];
+  const depths = new Map(nodes.map((item) => [item.id, item.node_type === "root" ? 1 : 2]));
+  const first = capRenderedIds(new Set(nodes.map((item) => item.id)), nodes, depths, DEFAULT_VISIBLE_NODE_BUDGET);
+  assert.equal(first.ids.size, DEFAULT_VISIBLE_NODE_BUDGET);
+  assert.deepEqual([...first.ids].slice(0, 4), ["root", "n0", "n1", "n2"]);
+  assert.equal(first.truncated, 51 - DEFAULT_VISIBLE_NODE_BUDGET);
+
+  const secondBudget = nextVisibleNodeBudget(DEFAULT_VISIBLE_NODE_BUDGET, nodes.length);
+  assert.equal(secondBudget, 48);
+  const second = capRenderedIds(new Set(nodes.map((item) => item.id)), nodes, depths, secondBudget);
+  assert.deepEqual([...second.ids].slice(0, DEFAULT_VISIBLE_NODE_BUDGET), [...first.ids]);
+  assert.equal(nextVisibleNodeBudget(secondBudget, nodes.length), nodes.length);
+  assert.equal(nextVisibleNodeBudget(MAX_RENDERED_NODES, 500), MAX_RENDERED_NODES);
 });

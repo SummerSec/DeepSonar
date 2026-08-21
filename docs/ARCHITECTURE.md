@@ -100,7 +100,7 @@ Finding        可派生  Followup Job（verify 等，由规则引擎决定）
 
 边类型：`child` / `produces` / `verifies` / `next`
 
-**布局纪律**：服务端在节点落库时写入启发式 `canvas_nodes.x/y`，但它只是 placement/exchange hint，不是 UI 权威坐标。Web 对当前可见投影布局：≤200 节点使用 **elkjs** 分层 DAG，超阈值或 ELK 失败时使用固定语义列；默认深度 3、每父节点首批 12、常规投影上限 180（显式链路聚焦例外），PNG 只导出当前可见投影。Agent 不能提案坐标；画布布局不在 Agent 权限内；前端节点不可拖动（`nodesDraggable=false`）。全图 `layout_revision` 权威重算仍按 #148 暂缓。
+**布局纪律**：服务端在节点落库时写入启发式 `canvas_nodes.x/y`，但它只是 placement/exchange hint，不是 UI 权威坐标。Web 对当前可见投影布局：≤200 节点使用 **elkjs** 分层 DAG，并直接消费 ELK 的主边路由；超阈值或 ELK 失败时使用固定语义列与本地正交路由。指向 `root` 的完成反馈边仍渲染、可追踪并随当前投影导出，但不参与主 DAG 排位，统一走共享收敛 rail。默认深度 3、每父节点首批 12、首批总计 24 个节点，可按稳定创建顺序继续显示或显式展开全部；常规投影硬上限 180（搜索、显式链路/节点聚焦不受默认 24 节点预算裁剪），PNG 只导出当前可见投影。Agent 不能提案坐标；画布布局不在 Agent 权限内；前端节点不可拖动（`nodesDraggable=false`）。全图 `layout_revision` 权威重算仍按 #148 暂缓。
 
 #### 人工消息投递与两阶段 ACK
 

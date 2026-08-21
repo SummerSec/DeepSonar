@@ -2,6 +2,7 @@ import type { CanvasEdge, CanvasNode } from "./api";
 import {
   collectElkSectionPoints,
   orthogonalBusPoints,
+  simplifyPolyline,
   type LayoutPoint,
 } from "./edge-path";
 
@@ -10,7 +11,7 @@ export type { LayoutPoint };
 /**
  * elkjs 分层 DAG 自动布局（§8.3 Phase ③）：
  * 从 root 向右自由生长，层级由图的拓扑决定（不再是固定语义列）。
- * 环（fact → root 的收敛边）由 ELK cycle-breaking 处理。
+ * 调用方从布局约束中排除 fact/finding → root 的完成反馈边，避免展示回边扭曲主 DAG。
  * layoutNodes（固定列）保留为首帧占位，elk 算完即替换。
  *
  * 高度按实际卡片估算；间距必须覆盖渲染高度，否则会视觉重合。
@@ -37,6 +38,14 @@ export type ElkLayoutResult = {
   positions: Map<string, LayoutPoint>;
   edgePoints: Map<string, LayoutPoint[]>;
 };
+
+export function layoutConstraintEdges(
+  edges: readonly CanvasEdge[],
+  nodes: readonly Pick<CanvasNode, "id" | "node_type">[],
+): CanvasEdge[] {
+  const rootIds = new Set(nodes.filter((node) => node.node_type === "root").map((node) => node.id));
+  return edges.filter((edge) => !rootIds.has(edge.to_node_id));
+}
 
 export async function elkLayout(
   nodes: CanvasNode[],
@@ -140,6 +149,69 @@ export function orthogonalRoutesFromPositions(
         ),
       );
     });
+  }
+  return routes;
+}
+
+/**
+ * Root feedback edges share one stable perimeter rail. Individual edge ids
+ * remain renderable/traceable/exportable, while overlapping outer segments
+ * read as one convergence path instead of one full-height wall per reference.
+ */
+export function rootFeedbackRoutesFromPositions(
+  edges: readonly CanvasEdge[],
+  positions: ReadonlyMap<string, LayoutPoint>,
+  nodes: readonly CanvasNode[],
+): Map<string, LayoutPoint[]> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const laidNodes = nodes
+    .map((node) => ({ node, position: positions.get(node.id) }))
+    .filter((item): item is { node: CanvasNode; position: LayoutPoint } => Boolean(item.position));
+  const routes = new Map<string, LayoutPoint[]>();
+  if (laidNodes.length === 0) return routes;
+
+  const leftRailX = Math.min(...laidNodes.map(({ position }) => position.x)) - 40;
+  const topRailY = Math.min(...laidNodes.map(({ position }) => position.y)) - 40;
+  const rightRailX = Math.max(...laidNodes.map(({ position }) => position.x + NODE_W)) + 40;
+
+  for (const edge of edges) {
+    const targetNode = nodeById.get(edge.to_node_id);
+    if (targetNode?.node_type !== "root") continue;
+    const source = positions.get(edge.from_node_id);
+    const target = positions.get(edge.to_node_id);
+    if (!source || !target) continue;
+    const sourceNode = nodeById.get(edge.from_node_id);
+    const sourceY = source.y + (sourceNode ? NODE_H[sourceNode.node_type] ?? 172 : 172) / 2;
+    const targetY = target.y + (NODE_H[targetNode.node_type] ?? 172) / 2;
+    routes.set(edge.id, simplifyPolyline([
+      { x: source.x + NODE_W, y: sourceY },
+      { x: rightRailX, y: sourceY },
+      { x: rightRailX, y: topRailY },
+      { x: leftRailX, y: topRailY },
+      { x: leftRailX, y: targetY },
+      { x: target.x, y: targetY },
+    ]));
+  }
+  return routes;
+}
+
+/**
+ * Select the route sent to React Flow. ELK owns primary-edge routing whenever
+ * it laid out the current projection; only missing sections use the local
+ * fallback. Root feedback is excluded from ELK and uses the shared rail.
+ */
+export function renderedEdgeRoutes(
+  edges: readonly CanvasEdge[],
+  positions: Map<string, LayoutPoint>,
+  nodes: CanvasNode[],
+  elkEdgePoints: ReadonlyMap<string, LayoutPoint[]> | null,
+): Map<string, LayoutPoint[]> {
+  const fallback = orthogonalRoutesFromPositions([...edges], positions, nodes);
+  const feedback = rootFeedbackRoutesFromPositions(edges, positions, nodes);
+  const routes = new Map<string, LayoutPoint[]>();
+  for (const edge of edges) {
+    const points = feedback.get(edge.id) ?? elkEdgePoints?.get(edge.id) ?? fallback.get(edge.id);
+    if (points) routes.set(edge.id, points);
   }
   return routes;
 }

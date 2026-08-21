@@ -44,7 +44,14 @@ export function orthogonalBusPoints(
   if (span > 24) {
     if (near(source.y, target.y)) return simplifyPolyline([source, target]);
     const gutter = Math.min(56, Math.max(36, span * 0.5));
-    const midX = Math.min(source.x + gutter + laneOffset, target.x - 20);
+    // A wide fan-out can make the centered lane offset larger than the
+    // gutter. Keep every bend strictly between the two ports so an east-port
+    // edge never starts by travelling back through its source card.
+    const margin = Math.min(20, span / 3);
+    const midX = Math.max(
+      source.x + margin,
+      Math.min(source.x + gutter + laneOffset, target.x - margin),
+    );
     return simplifyPolyline([
       source,
       { x: midX, y: source.y },

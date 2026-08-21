@@ -39,12 +39,23 @@ import {
   countDirectChildren,
   DEFAULT_CHILD_LIMIT,
   DEFAULT_MAX_DEPTH,
+  DEFAULT_VISIBLE_NODE_BUDGET,
   isEffectivelyExpanded,
   MAX_RENDERED_NODES,
   maxDepthOf,
+  nextVisibleNodeBudget,
   remainingCappedChildren,
+  VISIBLE_NODE_REVEAL_STEP,
 } from "./graph-depth";
-import { elkLayout, layoutNodes, NODE_H, NODE_W, orthogonalRoutesFromPositions, type LayoutPoint } from "./layout";
+import {
+  elkLayout,
+  layoutConstraintEdges,
+  layoutNodes,
+  NODE_H,
+  NODE_W,
+  renderedEdgeRoutes,
+  type LayoutPoint,
+} from "./layout";
 import { canvasEdgeTypes, ORTHOGONAL_EDGE_TYPE } from "./orthogonal-edge";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { EDGE_STYLE } from "./edge-style";
@@ -215,6 +226,7 @@ function CanvasMiniMap({ nodes }: { nodes: Node[] }) {
 function toFlow(
   data: CanvasData,
   elkPos: Map<string, { x: number; y: number }> | null,
+  elkEdgePoints: ReadonlyMap<string, LayoutPoint[]> | null,
   fallbackPos: Map<string, { x: number; y: number }> | null,
   depths: Map<string, number>,
   maxDepth: number,
@@ -235,7 +247,7 @@ function toFlow(
   for (const node of data.nodes) {
     positions.set(node.id, elkPos?.get(node.id) ?? fallbackPos?.get(node.id) ?? { x: node.x, y: node.y });
   }
-  const fallbackRoutes = orthogonalRoutesFromPositions(data.edges, positions, data.nodes);
+  const edgeRoutes = renderedEdgeRoutes(data.edges, positions, data.nodes, elkEdgePoints);
   return {
     nodes: data.nodes.map((n) => {
       const depth = depths.get(n.id) ?? 1;
@@ -281,7 +293,7 @@ function toFlow(
           source: e.from_node_id,
           target: e.to_node_id,
           type: ORTHOGONAL_EDGE_TYPE,
-          data: { points: fallbackRoutes.get(e.id) },
+          data: { points: edgeRoutes.get(e.id) },
           animated: animateEdges,
           className: `deepsonar-edge deepsonar-edge-${e.edge_type}`,
           style: {
@@ -473,6 +485,9 @@ export function CanvasView({
   const [traceMode, setTraceMode] = useState<TraceFocusMode>("hide");
   /** 全局深度上限；默认前 3 层。展开全部深度 = graphMax；回到默认 = 3 并清空手动覆盖 */
   const [maxDepth, setMaxDepth] = useState(DEFAULT_MAX_DEPTH);
+  /** Default depth is still too broad for shallow graphs; reveal a stable batch at a time. */
+  const [visibleNodeBudget, setVisibleNodeBudget] = useState(DEFAULT_VISIBLE_NODE_BUDGET);
+  const [fullProjectionRequested, setFullProjectionRequested] = useState(false);
   /** 用户强制展开（覆盖默认 depth 折叠） */
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   /** 用户强制收起（覆盖默认 depth 展开） */
@@ -622,6 +637,8 @@ export function CanvasView({
     focusedNodeRef.current = "";
     setElkResult(null);
     setMaxDepth(DEFAULT_MAX_DEPTH);
+    setVisibleNodeBudget(DEFAULT_VISIBLE_NODE_BUDGET);
+    setFullProjectionRequested(false);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
     setChildExtra(new Map());
@@ -793,10 +810,13 @@ export function CanvasView({
       next.add(id);
       return next;
     });
+    setVisibleNodeBudget((current) => Math.min(MAX_RENDERED_NODES, current + CHILD_REVEAL_STEP));
   }, []);
 
   const expandAll = useCallback(() => {
     setMaxDepth(graphMaxDepth);
+    setVisibleNodeBudget(MAX_RENDERED_NODES);
+    setFullProjectionRequested(true);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
     setChildExtra(new Map());
@@ -805,6 +825,8 @@ export function CanvasView({
   /** 隐藏深层：回到默认前 3 层，并清掉所有手动展开/收起 */
   const collapseToDefault = useCallback(() => {
     setMaxDepth(DEFAULT_MAX_DEPTH);
+    setVisibleNodeBudget(DEFAULT_VISIBLE_NODE_BUDGET);
+    setFullProjectionRequested(false);
     setExpandedIds(new Set());
     setCollapsedIds(new Set());
     setChildExtra(new Map());
@@ -824,6 +846,7 @@ export function CanvasView({
 
   const layeredVisible = useMemo(() => {
     if (!data) return new Set<string>();
+    if (fullProjectionRequested) return depthReachable;
     return computeVisibleIds(
       data.nodes,
       data.edges,
@@ -833,7 +856,7 @@ export function CanvasView({
       collapsedIds,
       (id) => childLimitFor(id, childExtra),
     );
-  }, [childExtra, collapsedIds, data, depths, effectiveMaxDepth, expandedIds]);
+  }, [childExtra, collapsedIds, data, depthReachable, depths, effectiveMaxDepth, expandedIds, fullProjectionRequested]);
 
   const filterActive = Boolean(
     kindFilter.length || severityFilter.length || roleFilter.length || statusFilter.length || query.trim(),
@@ -847,7 +870,12 @@ export function CanvasView({
     if (!data) return { displayIds: new Set<string>(), matchedCount: 0, renderTruncated: 0 };
 
     if (!filterActive) {
-      const capped = capRenderedIds(layeredVisible, data.nodes, depths, MAX_RENDERED_NODES);
+      const capped = capRenderedIds(
+        layeredVisible,
+        data.nodes,
+        depths,
+        fullProjectionRequested ? MAX_RENDERED_NODES : visibleNodeBudget,
+      );
       return { displayIds: capped.ids, matchedCount: layeredVisible.size, renderTruncated: capped.truncated };
     }
 
@@ -891,6 +919,7 @@ export function CanvasView({
     depthReachable,
     depths,
     filterActive,
+    fullProjectionRequested,
     kindFilter,
     layeredVisible,
     query,
@@ -898,14 +927,16 @@ export function CanvasView({
     severityFilter,
     showContext,
     statusFilter,
+    visibleNodeBudget,
   ]);
 
   const traceIds = useMemo(() => findingTraceIds(trace, data), [data, trace]);
   const traceActive = Boolean(trace && traceIds.nodeIds.size > 0);
-  const displayIds = useMemo(
-    () => traceActive ? traceDisplayIds(baseDisplayIds, traceIds.nodeIds, traceMode) : baseDisplayIds,
-    [baseDisplayIds, traceActive, traceIds.nodeIds, traceMode],
-  );
+  const displayIds = useMemo(() => {
+    const projected = traceActive ? traceDisplayIds(baseDisplayIds, traceIds.nodeIds, traceMode) : new Set(baseDisplayIds);
+    if (focusNodeId && data?.nodes.some((node) => node.id === focusNodeId)) projected.add(focusNodeId);
+    return projected;
+  }, [baseDisplayIds, data?.nodes, focusNodeId, traceActive, traceIds.nodeIds, traceMode]);
 
   // 布局签名：展示节点/边集合变化 → 重算（含筛选、深度、展开收起、图生长）
   const topologyTrace = useMemo(
@@ -913,24 +944,30 @@ export function CanvasView({
     [traceActive, traceIds.edgeIds, traceMode],
   );
 
+  const visibleTopology = useMemo(() => {
+    if (!data || displayIds.size === 0) return [] as CanvasData["edges"];
+    return visibleTopologyEdges(data.edges, displayIds, topologyTrace);
+  }, [data, displayIds, topologyTrace]);
+
+  const primaryLayoutEdges = useMemo(
+    () => layoutConstraintEdges(visibleTopology, data?.nodes ?? []),
+    [data?.nodes, visibleTopology],
+  );
+
   const layoutKey = useMemo(() => {
     if (!data || displayIds.size === 0) return "";
     const nids = [...displayIds].sort().join(",");
-    const eids = visibleTopologyEdges(data.edges, displayIds, topologyTrace)
-      .map((e) => e.id)
-      .sort()
-      .join(",");
+    const eids = primaryLayoutEdges.map((edge) => edge.id).sort().join(",");
     return `${nids}|${eids}`;
-  }, [data, displayIds, topologyTrace]);
+  }, [data, displayIds, primaryLayoutEdges]);
 
   const layoutSubgraph = useMemo(() => {
     if (!data || !layoutKey) return { nodes: [] as CanvasNode[], edges: [] as CanvasData["edges"] };
     return {
       nodes: data.nodes.filter((n) => displayIds.has(n.id)),
-      edges: visibleTopologyEdges(data.edges, displayIds, topologyTrace),
+      edges: primaryLayoutEdges,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 与 layoutKey 同步
-  }, [data, layoutKey, topologyTrace]);
+  }, [data, displayIds, layoutKey, primaryLayoutEdges]);
 
   // elkjs：对小型当前展示子图重算最优分层布局。超过阈值跳过 ELK，用列布局兜底，
   // 不再使用服务端默认 (0,0) 叠在一起。
@@ -964,6 +1001,7 @@ export function CanvasView({
     [layoutSubgraph],
   );
   const elkPos = elkResult?.key === layoutKey ? elkResult.positions : null;
+  const elkEdgePoints = elkResult?.key === layoutKey ? elkResult.edgePoints : null;
   const handlers = useMemo(
     () => ({ expandNode, collapseNode, revealMoreChildren }),
     [collapseNode, expandNode, revealMoreChildren],
@@ -986,11 +1024,12 @@ export function CanvasView({
     const subset: CanvasData = {
       ...data,
       nodes: data.nodes.filter((n) => displayIds.has(n.id)),
-      edges: visibleTopologyEdges(data.edges, displayIds, topologyTrace),
+      edges: visibleTopology,
     };
     const flow = toFlow(
       subset,
       elkPos,
+      elkEdgePoints,
       fallbackPos,
       depths,
       effectiveMaxDepth,
@@ -1016,6 +1055,7 @@ export function CanvasView({
     displayIds,
     effectiveMaxDepth,
     elkPos,
+    elkEdgePoints,
     expandedIds,
     fallbackPos,
     filterActive,
@@ -1026,6 +1066,7 @@ export function CanvasView({
     traceIds.edgeIds,
     traceIds.nodeIds,
     traceMode,
+    visibleTopology,
   ]);
 
   const exportCanvasImage = useCallback(async () => {
@@ -1091,11 +1132,16 @@ export function CanvasView({
     if (filterActive) return 0;
     return Math.max(0, depthReachable.size - layeredVisible.size);
   }, [depthReachable, filterActive, layeredVisible]);
+  const canRevealMoreProjection = !filterActive && !fullProjectionRequested && renderTruncated > 0;
+  const revealMoreProjection = useCallback(() => {
+    setVisibleNodeBudget((current) => nextVisibleNodeBudget(current, layeredVisible.size));
+  }, [layeredVisible.size]);
 
   const manualOverrideCount = expandedIds.size + collapsedIds.size;
   const isFullyOpen =
-    effectiveMaxDepth >= graphMaxDepth && expandedIds.size === 0 && collapsedIds.size === 0;
+    fullProjectionRequested && effectiveMaxDepth >= graphMaxDepth && expandedIds.size === 0 && collapsedIds.size === 0;
   const isDefaultCollapsed =
+    !fullProjectionRequested && visibleNodeBudget === DEFAULT_VISIBLE_NODE_BUDGET &&
     maxDepth === DEFAULT_MAX_DEPTH && expandedIds.size === 0 && collapsedIds.size === 0;
 
   const layoutReady = layoutSubgraph.nodes.length > 0 && (
@@ -1176,14 +1222,16 @@ export function CanvasView({
       </div>
     );
 
-  const hiddenEdgeCount = countHiddenTopologyEdges(data.edges.length, layoutSubgraph.edges.length);
+  const hiddenEdgeCount = countHiddenTopologyEdges(data.edges.length, visibleTopology.length);
   const hiddenEdgesLabel = hiddenEdgeHint(hiddenEdgeCount);
   const depthSummary =
     [
       `深度 ≤${effectiveMaxDepth}`,
       depthHiddenCount > 0 ? `藏 ${depthHiddenCount}` : null,
       layeredHiddenCount > 0 ? `分层 ${layeredHiddenCount}` : null,
-      renderTruncated > 0 ? `截 ${renderTruncated}` : null,
+      renderTruncated > 0
+        ? `${fullProjectionRequested || filterActive ? "上限截" : "批次藏"} ${renderTruncated}`
+        : null,
     ].filter(Boolean).join(" · ");
   const manualOverrideHint =
     manualOverrideCount > 0 ? ` · 手调 ${manualOverrideCount}` : "";
@@ -1360,7 +1408,9 @@ export function CanvasView({
                   : `显示 ${visibleNodes.length} / ${totalNodeCount}`}
                 {depthHiddenCount > 0 ? ` · 深度藏 ${depthHiddenCount}` : ""}
                 {layeredHiddenCount > 0 ? ` · 首批隐藏 ${layeredHiddenCount}` : ""}
-                {renderTruncated > 0 ? ` · 常规上限截断 ${renderTruncated}` : ""}
+                {renderTruncated > 0
+                  ? ` · ${fullProjectionRequested || filterActive ? "常规上限截断" : "默认批次隐藏"} ${renderTruncated}`
+                  : ""}
                 {manualOverrideHint}
               </span>
               {hiddenEdgesLabel && (
@@ -1455,6 +1505,16 @@ export function CanvasView({
               >
                 回到默认
               </button>
+              {canRevealMoreProjection && (
+                <button
+                  type="button"
+                  onClick={revealMoreProjection}
+                  className="rounded-full px-2.5 py-1 font-mono text-[10px] text-cyan-300 ring-1 ring-cyan-300/25 transition-colors hover:bg-cyan-300/[.08]"
+                  title={`按稳定顺序继续显示最多 ${Math.min(renderTruncated, VISIBLE_NODE_REVEAL_STEP)} 个节点`}
+                >
+                  继续显示 {Math.min(renderTruncated, VISIBLE_NODE_REVEAL_STEP)} 个
+                </button>
+              )}
               {depthHiddenCount > 0 && (
                 <span className="font-mono text-[10px] text-[var(--muted)]">藏 {depthHiddenCount} 个节点</span>
               )}
@@ -1469,7 +1529,7 @@ export function CanvasView({
                 </span>
               )}
               <span className="w-full font-mono text-[9px] leading-relaxed text-zinc-600 sm:ml-auto sm:w-auto">
-                默认深度 {DEFAULT_MAX_DEPTH}；每个父节点首批 {DEFAULT_CHILD_LIMIT} 个后继；常规投影上限 {MAX_RENDERED_NODES} 个节点
+                默认深度 {DEFAULT_MAX_DEPTH}；首批总计 {DEFAULT_VISIBLE_NODE_BUDGET} 个节点；每个父节点首批 {DEFAULT_CHILD_LIMIT} 个后继；常规上限 {MAX_RENDERED_NODES}
               </span>
             </div>
 

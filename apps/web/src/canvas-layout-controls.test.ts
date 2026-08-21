@@ -26,9 +26,16 @@ test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /edgeTypes=\{canvasEdgeTypes\}/);
   assert.match(source, /visibleBroadcastOverlayEdges\(/);
   assert.match(source, /DEFAULT_CHILD_LIMIT/);
+  assert.match(source, /DEFAULT_VISIBLE_NODE_BUDGET/);
+  assert.match(source, /继续显示 \{Math\.min\(renderTruncated, VISIBLE_NODE_REVEAL_STEP\)\} 个/);
   assert.match(source, /展开全部深度/);
   assert.match(source, /回到默认/);
-  assert.match(source, /常规投影上限 \{MAX_RENDERED_NODES\} 个节点/);
+  assert.match(source, /首批总计 \{DEFAULT_VISIBLE_NODE_BUDGET\} 个节点/);
+  assert.match(source, /const elkEdgePoints = elkResult\?\.key === layoutKey \? elkResult\.edgePoints : null/);
+  assert.match(source, /elkEdgePoints,\s*fallbackPos,/);
+  assert.match(source, /data: \{ points: edgeRoutes\.get\(e\.id\) \}/);
+  assert.match(source, /projected\.add\(focusNodeId\)/, "explicit node focus bypasses the default projection budget");
+  assert.match(source, /traceDisplayIds\(baseDisplayIds, traceIds\.nodeIds, traceMode\)/);
   assert.match(source, /导出当前可见投影为 PNG/);
   assert.match(source, /筛选过程节点/);
   assert.match(source, /shouldRecoverViewport\(/);
