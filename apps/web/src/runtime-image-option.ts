@@ -34,7 +34,8 @@ export function isRuntimeImagePinStale(
 }
 
 export function runtimeImagePinLabel(
-  image: Pick<RuntimeImageSummary, "selected_version_id" | "selected_version" | "latest_version" | "pin_stale" | "official" | "pin_policy">,
+  image: Pick<RuntimeImageSummary, "selected_version_id" | "selected_version" | "latest_version" | "pin_stale"> &
+    Partial<Pick<RuntimeImageSummary, "official" | "pin_policy">>,
 ): string {
   if (!image.selected_version_id) return "自动（跟随最新 trusted）";
   const pin = image.selected_version ?? "已选版本";
