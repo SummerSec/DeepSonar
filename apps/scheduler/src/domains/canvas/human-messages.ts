@@ -310,7 +310,12 @@ export function canIgnoreHumanNode(node: { node_type?: unknown; status?: unknown
   return status === "open" || status === "";
 }
 
-export function humanIgnoreBodyPatch(ignoredAt: string, actorName: string | null): Record<string, unknown> {
+export function humanIgnoreBodyPatch(ignoredAt: string, actorName: string | null): {
+  resolution: "ignored";
+  ignored_at: string;
+  ignored_by: string | null;
+  instruction: string;
+} {
   return {
     resolution: "ignored",
     ignored_at: ignoredAt,
