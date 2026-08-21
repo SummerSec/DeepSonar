@@ -105,10 +105,10 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const [nodes, edges] = await Promise.all([
       sql`
         SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, updated_at
-        FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
+        FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at, id`,
       sql`
         SELECT id, from_node_id, to_node_id, edge_type
-        FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
+        FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at, id`,
     ]);
     return {
       canvas: projectTaskExecution(canvas as Record<string, unknown>),
@@ -185,10 +185,10 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
               ELSE '{}'::jsonb
             END AS body_json,
             x, y, w, h, status, verification_status, job_id, updated_at
-          FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at`,
+          FROM canvas_nodes WHERE canvas_id = ${id} ORDER BY created_at, id`,
         tx`
           SELECT id, from_node_id, to_node_id, edge_type
-          FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at`,
+          FROM canvas_edges WHERE canvas_id = ${id} ORDER BY created_at, id`,
       ]);
       return { canvas, nodes, edges };
     });
@@ -634,10 +634,10 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const [nodes, edges] = await Promise.all([
       sql`
         SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, updated_at
-        FROM canvas_nodes WHERE canvas_id = ${project.canvas_id} ORDER BY created_at`,
+        FROM canvas_nodes WHERE canvas_id = ${project.canvas_id} ORDER BY created_at, id`,
       sql`
         SELECT id, from_node_id, to_node_id, edge_type
-        FROM canvas_edges WHERE canvas_id = ${project.canvas_id} ORDER BY created_at`,
+        FROM canvas_edges WHERE canvas_id = ${project.canvas_id} ORDER BY created_at, id`,
     ]);
     return { canvas_id: project.canvas_id, nodes, edges };
   });

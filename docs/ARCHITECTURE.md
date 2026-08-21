@@ -100,7 +100,7 @@ Finding        可派生  Followup Job（verify 等，由规则引擎决定）
 
 边类型：`child` / `produces` / `verifies` / `next`
 
-**布局纪律**：节点坐标由**服务端 auto-layout 分配**——分层 DAG 布局用 **elkjs**（比 dagre 更适合"链 + 分支"结构），坐标在节点落库时算好写入 `canvas_nodes.x/y`。Agent 不能提案坐标；画布布局不在 Agent 权限内。前端只读渲染（`nodesDraggable=false`）。
+**布局纪律**：服务端在节点落库时写入启发式 `canvas_nodes.x/y`，但它只是 placement/exchange hint，不是 UI 权威坐标。Web 对当前可见投影布局：≤200 节点使用 **elkjs** 分层 DAG，超阈值或 ELK 失败时使用固定语义列；默认深度 3、每父节点首批 12、常规投影上限 180（显式链路聚焦例外），PNG 只导出当前可见投影。Agent 不能提案坐标；画布布局不在 Agent 权限内；前端节点不可拖动（`nodesDraggable=false`）。全图 `layout_revision` 权威重算仍按 #148 暂缓。
 
 #### 人工消息投递与两阶段 ACK
 
@@ -285,7 +285,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 - **语言：全 TypeScript**。前端 React + React Flow，后端同语言可让 `shared-types`（job/event/finding schema）前后端单源复用，避免跨语言维护两份 schema
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
-- 画布：**React Flow（@xyflow/react，MIT）+ elkjs 服务端布局**。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
+- 画布：**React Flow（@xyflow/react，MIT）+ Web 端 elkjs 可见投影布局**；大投影固定列兜底，服务端 `x/y` 仅作 placement/exchange hint。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
 - 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
 - Plane：自托管 Community + API Token
 
@@ -630,7 +630,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - **角色颜色（Schema v16）**：`agent_roles.ui_color` 仅允许 `#RRGGBB`，由 Scheduler 在创建事务内持 `deepsonar_role_color_allocator` advisory lock，从非语义保留色的共享调色板分配；调色板耗尽后先用稳定、最大间距的 HSL 候选，再用覆盖完整 `2^24` 色域的确定性 RGB 置换，跳过保留色、已占用色和过暗颜色，色域真正耗尽才失败。删除角色会释放颜色，导入包里的颜色只是提示，保留色/冲突色/缺失色会在同一锁内重映射；system / hub 角色始终为 `NULL`。角色 Job 创建时把最终色冻结进 intent/job `body_json`，旧节点安全回退语义色；前端边 stroke/marker 取源节点最终色，`edge_type` 只控制 dash 与动画速度。
 - **语义事件限流（Schema v17 / Issue #57）**：`job_event_rate_limits` 为每 Job 持久化固定窗口计数行；`progress`、普通语义事件与 `done`/`human` 终态控制事件使用独立预算。摄入事务在 dedup 后锁行并原子递增；超限是带 `event_rate_limited` 与 retry 元数据的全事务拒绝，重放不占预算。
 - **事件触发任务**：`POST /projects/{id}/events` 接收 `source/event_type/event_id/data`；`project + source + event_id` 唯一，重复投递返回原画布和入口 Job，不重复执行
-- Phase ③：elkjs 分层布局 + hint 注入（human 节点已入 hub 上下文 hints）
+- Phase ③：Web 端 elkjs 可见投影分层布局 + hint 注入（human 节点已入 hub 上下文 hints）；服务端全图权威布局未实现并按 #148 暂缓
 
 ### 8.6 图上下文预算与读图作用域
 

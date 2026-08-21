@@ -58,6 +58,7 @@ import {
   hasPositiveNodeBounds,
   isUsableFlowSize,
   resolveFitMinZoom,
+  resolveViewportGeneration,
   resolveViewportNodeIds,
   shouldRecoverViewport,
 } from "./canvas-viewport";
@@ -456,7 +457,6 @@ export function CanvasView({
     key: string;
     positions: Map<string, { x: number; y: number }>;
     edgePoints: Map<string, LayoutPoint[]>;
-    mode: "elk" | "fallback";
   } | null>(null);
   const [kindFilter, setKindFilter] = useState<string[]>([]);
   const [severityFilter, setSeverityFilter] = useState<string[]>([]);
@@ -471,7 +471,7 @@ export function CanvasView({
   const [exportingImage, setExportingImage] = useState(false);
   const [exportImageError, setExportImageError] = useState<string | null>(null);
   const [traceMode, setTraceMode] = useState<TraceFocusMode>("hide");
-  /** 全局深度上限；默认前 3 层。全开 = graphMax；隐藏 = 回到 3 并清空手动覆盖 */
+  /** 全局深度上限；默认前 3 层。展开全部深度 = graphMax；回到默认 = 3 并清空手动覆盖 */
   const [maxDepth, setMaxDepth] = useState(DEFAULT_MAX_DEPTH);
   /** 用户强制展开（覆盖默认 depth 折叠） */
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
@@ -733,7 +733,7 @@ export function CanvasView({
     [data],
   );
   const outgoing = useMemo(
-    () => (data ? buildOutgoing(data.edges) : new Map<string, string[]>()),
+    () => (data ? buildOutgoing(data.edges, data.nodes) : new Map<string, string[]>()),
     [data],
   );
   const graphMaxDepth = useMemo(() => maxDepthOf(depths), [depths]);
@@ -945,10 +945,10 @@ export function CanvasView({
     const { nodes: layoutN, edges: layoutE } = layoutSubgraph;
     elkLayout(layoutN, layoutE)
       .then((m) => {
-        if (alive) setElkResult({ key: layoutKey, positions: m.positions, edgePoints: m.edgePoints, mode: "elk" });
+        if (alive) setElkResult({ key: layoutKey, positions: m.positions, edgePoints: m.edgePoints });
       })
       .catch(() => {
-        if (alive) setElkResult({ key: layoutKey, positions: new Map(), edgePoints: new Map(), mode: "fallback" });
+        if (alive) setElkResult({ key: layoutKey, positions: new Map(), edgePoints: new Map() });
       });
     return () => {
       alive = false;
@@ -964,12 +964,6 @@ export function CanvasView({
     [layoutSubgraph],
   );
   const elkPos = elkResult?.key === layoutKey ? elkResult.positions : null;
-  const layoutMode = elkResult?.key === layoutKey
-    ? elkResult.mode
-    : layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD
-      ? "fallback"
-      : null;
-
   const handlers = useMemo(
     () => ({ expandNode, collapseNode, revealMoreChildren }),
     [collapseNode, expandNode, revealMoreChildren],
@@ -1107,9 +1101,14 @@ export function CanvasView({
   const layoutReady = layoutSubgraph.nodes.length > 0 && (
     layoutSubgraph.nodes.length > ELK_NODE_THRESHOLD || elkPos !== null
   );
-  const viewportGeneration = layoutReady
-    ? `${canvasId}:${layoutKey}#${layoutMode ?? "server"}#focus:${focusNodeId ?? ""}`
-    : "";
+  const visibleFocusNodeId = focusNodeId && displayIds.has(focusNodeId) ? focusNodeId : null;
+  const viewportGeneration = resolveViewportGeneration(
+    canvasId,
+    layoutReady,
+    traceIds.nodeIds,
+    traceActive,
+    visibleFocusNodeId,
+  );
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -1360,8 +1359,8 @@ export function CanvasView({
                   ? `命中 ${matchedCount} / ${totalNodeCount}`
                   : `显示 ${visibleNodes.length} / ${totalNodeCount}`}
                 {depthHiddenCount > 0 ? ` · 深度藏 ${depthHiddenCount}` : ""}
-                {layeredHiddenCount > 0 ? ` · 分层 ${layeredHiddenCount}` : ""}
-                {renderTruncated > 0 ? ` · 截 ${renderTruncated}` : ""}
+                {layeredHiddenCount > 0 ? ` · 首批隐藏 ${layeredHiddenCount}` : ""}
+                {renderTruncated > 0 ? ` · 常规上限截断 ${renderTruncated}` : ""}
                 {manualOverrideHint}
               </span>
               {hiddenEdgesLabel && (
@@ -1390,8 +1389,8 @@ export function CanvasView({
                 onClick={() => void exportCanvasImage()}
                 disabled={exportingImage || visibleNodes.length === 0}
                 className={`${filterActive ? "" : "ml-auto"} canvas-export-button`}
-                title={exportingImage ? "正在导出 PNG" : "导出完整画布为 PNG"}
-                aria-label={exportingImage ? "正在导出画布图片" : "导出画布图片"}
+                title={exportingImage ? "正在导出 PNG" : "导出当前可见投影为 PNG"}
+                aria-label={exportingImage ? "正在导出当前可见投影" : "导出当前可见投影图片"}
               >
                 <DownloadSimple size={13} />
               </button>
@@ -1404,7 +1403,7 @@ export function CanvasView({
               </button>
             </div>
 
-            {/* 深度：可手动输入上限（默认 3）；全开 / 隐藏；单节点展开在卡片上操作 */}
+            {/* 深度：可手动输入上限（默认 3）；展开全部深度 / 回到默认；单节点展开在卡片上操作 */}
             <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl theme-surface px-3 py-2.5 ring-1">
               <TreeStructure size={14} className="shrink-0 text-acc-400" />
               <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500">
@@ -1445,16 +1444,16 @@ export function CanvasView({
                 className="rounded-full px-2.5 py-1 font-mono text-[10px] text-acc-400 ring-1 ring-acc-400/25 transition-colors hover:bg-acc-400/[.08] disabled:opacity-35"
                 title="展开全部深度"
               >
-                全开
+                展开全部深度
               </button>
               <button
                 type="button"
                 disabled={isDefaultCollapsed}
                 onClick={collapseToDefault}
                 className="rounded-full px-2.5 py-1 font-mono text-[10px] text-zinc-400 ring-1 ring-white/[.08] transition-colors hover:bg-white/[.05] hover:text-zinc-200 disabled:opacity-35"
-                title={`隐藏深层：只保留前 ${DEFAULT_MAX_DEPTH} 层，并清除手动展开`}
+                title={`回到默认：只展示前 ${DEFAULT_MAX_DEPTH} 层，并清除手动展开/收起`}
               >
-                隐藏
+                回到默认
               </button>
               {depthHiddenCount > 0 && (
                 <span className="font-mono text-[10px] text-[var(--muted)]">藏 {depthHiddenCount} 个节点</span>
@@ -1470,7 +1469,7 @@ export function CanvasView({
                 </span>
               )}
               <span className="w-full font-mono text-[9px] leading-relaxed text-zinc-600 sm:ml-auto sm:w-auto">
-                默认深度 {DEFAULT_MAX_DEPTH}；每层先揭开 {DEFAULT_CHILD_LIMIT} 个后继
+                默认深度 {DEFAULT_MAX_DEPTH}；每个父节点首批 {DEFAULT_CHILD_LIMIT} 个后继；常规投影上限 {MAX_RENDERED_NODES} 个节点
               </span>
             </div>
 
@@ -1562,8 +1561,8 @@ export function CanvasView({
               onClick={() => void exportCanvasImage()}
               disabled={exportingImage || visibleNodes.length === 0}
               className="canvas-export-button m-2 ml-0"
-              title={exportingImage ? "正在导出 PNG" : "导出完整画布为 PNG"}
-              aria-label={exportingImage ? "正在导出画布图片" : "导出画布图片"}
+              title={exportingImage ? "正在导出 PNG" : "导出当前可见投影为 PNG"}
+              aria-label={exportingImage ? "正在导出当前可见投影" : "导出当前可见投影图片"}
             >
               <DownloadSimple size={14} />
             </button>

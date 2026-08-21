@@ -56,7 +56,7 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [TODO_CANVAS_PROCESS_TRUTH.md](TODO_CANVAS_PROCESS_TRUTH.md) | **A as-built · B 主路径可用** | 广播已交付；布局为服务端落点+前端 ELK。**全图 `layout_revision` 权威重算暂缓 → #148** |
+| [TODO_CANVAS_PROCESS_TRUTH.md](TODO_CANVAS_PROCESS_TRUTH.md) | **A as-built · B 主路径可用** | 广播已交付；服务端 `x/y` 是 placement/exchange hint，Web 对当前可见投影布局（≤200 节点 ELK，超阈值固定列）。**全图 `layout_revision` 权威重算暂缓 → #148** |
 
 ---
 
@@ -93,7 +93,7 @@
 | Agent CLI 钉死版本 | 仓库已更新；**正式沙箱镜像**需 `v*` release 后才含新 CLI |
 | #34 增量 ALTER 链 | **刻意搁置**；坚持基线 + 重建库。运维可用 `pnpm db:rebuild` 备份后按列交集回填，不是启动自动升级 |
 | #281 rebuild 序列漂移 | **已关**；回填后只 reset public owned sequences，rebuild 结束与 Scheduler 启动自动 `setval` + fail closed，避免 `audit_logs_pkey` / `events_pkey` |
-| #148 全图 `layout_revision` | **暂缓设计**；过程真相 A 已 as-built，布局继续服务端落点 + 前端 ELK |
+| #148 全图 `layout_revision` | **暂缓设计**；当前采用可见投影优先：默认深度 3、每父节点首批 12、常规投影上限 180（显式链路聚焦例外），Web 布局且只导出当前可见投影 |
 | #242 态势数据看板 | **P0 as-built**（总量/分布/近 7 日/Top N/活动时间线）；P1 风险与 P2 吞吐未做 |
 | 导入导出便携 Secret 加密 / 包签名 | **产品明确不导出明文**；加密包与签名未纳入交付 |
 

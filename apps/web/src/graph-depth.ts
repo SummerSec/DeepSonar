@@ -9,7 +9,7 @@ export function computeNodeDepths(
   nodes: CanvasNode[],
   edges: CanvasEdge[],
 ): Map<string, number> {
-  const outgoing = buildOutgoing(edges);
+  const outgoing = buildOutgoing(edges, nodes);
   const depth = new Map<string, number>();
   const queue: string[] = [];
 
@@ -62,12 +62,26 @@ export function maxDepthOf(depths: Map<string, number>): number {
   return max;
 }
 
-export function buildOutgoing(edges: CanvasEdge[]): Map<string, string[]> {
-  const outgoing = new Map<string, string[]>();
+export function buildOutgoing(edges: CanvasEdge[], nodes: readonly CanvasNode[] = []): Map<string, string[]> {
+  const grouped = new Map<string, CanvasEdge[]>();
+  const nodeRank = new Map(nodes.map((node, index) => [node.id, index]));
   for (const e of edges) {
-    const list = outgoing.get(e.from_node_id);
-    if (list) list.push(e.to_node_id);
-    else outgoing.set(e.from_node_id, [e.to_node_id]);
+    const list = grouped.get(e.from_node_id);
+    if (list) list.push(e);
+    else grouped.set(e.from_node_id, [e]);
+  }
+  const outgoing = new Map<string, string[]>();
+  for (const [from, list] of grouped) {
+    // The Canvas API returns nodes in stable creation order. Preserve that
+    // causal order for siblings, then use durable ids as deterministic ties;
+    // never inherit arbitrary edge array order.
+    list.sort((a, b) =>
+      (nodeRank.get(a.to_node_id) ?? Number.MAX_SAFE_INTEGER) -
+        (nodeRank.get(b.to_node_id) ?? Number.MAX_SAFE_INTEGER) ||
+      a.to_node_id.localeCompare(b.to_node_id) ||
+      a.id.localeCompare(b.id),
+    );
+    outgoing.set(from, list.map((edge) => edge.to_node_id));
   }
   return outgoing;
 }
@@ -110,7 +124,7 @@ export function computeVisibleIds(
   collapsedIds: ReadonlySet<string>,
   childLimitForParent?: (parentId: string) => number,
 ): Set<string> {
-  const outgoing = buildOutgoing(edges);
+  const outgoing = buildOutgoing(edges, nodes);
   const visible = new Set<string>();
   const queue: string[] = [];
 
@@ -166,12 +180,15 @@ export function capRenderedIds(
   max: number,
 ): { ids: Set<string>; truncated: number } {
   if (ids.size <= max) return { ids: new Set(ids), truncated: 0 };
+  const nodeRank = new Map(nodes.map((node, index) => [node.id, index]));
   const ordered = nodes
     .filter((node) => ids.has(node.id))
     .sort((a, b) => {
       if (a.node_type === "root" && b.node_type !== "root") return -1;
       if (b.node_type === "root" && a.node_type !== "root") return 1;
-      return (depths.get(a.id) ?? 99) - (depths.get(b.id) ?? 99);
+      return (depths.get(a.id) ?? 99) - (depths.get(b.id) ?? 99) ||
+        (nodeRank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (nodeRank.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
+        a.id.localeCompare(b.id);
     });
   return {
     ids: new Set(ordered.slice(0, max).map((node) => node.id)),

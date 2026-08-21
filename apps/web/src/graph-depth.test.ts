@@ -43,6 +43,17 @@ test("bushy graphs keep default child cap instead of mounting every fact", () =>
   assert.equal(remainingCappedChildren("hub", new Map([["hub", facts.map((fact) => fact.id)]]), DEFAULT_CHILD_LIMIT), 28);
 });
 
+test("sibling projection is deterministic regardless of API edge order", () => {
+  const nodes = [node("root", "root"), node("b"), node("a"), node("c")];
+  const shuffled = [edge("root", "c", "edge-3"), edge("root", "a", "edge-1"), edge("root", "b", "edge-2")];
+  const reversed = [...shuffled].reverse();
+  const depths = computeNodeDepths(nodes, shuffled);
+  const first = computeVisibleIds(nodes, shuffled, depths, 2, new Set(), new Set(), () => 2);
+  const second = computeVisibleIds(nodes, reversed, depths, 2, new Set(), new Set(), () => 2);
+  assert.deepEqual([...first], ["root", "b", "a"], "stable node creation order wins over edge arrival order");
+  assert.deepEqual([...second], [...first]);
+});
+
 test("revealing extra children raises only that parent's cap", () => {
   assert.equal(childLimitFor("hub", new Map([["hub", 12]])), DEFAULT_CHILD_LIMIT + 12);
   assert.equal(childLimitFor("other", new Map([["hub", 12]])), DEFAULT_CHILD_LIMIT);
@@ -64,4 +75,11 @@ test("render cap keeps root and truncates the rest", () => {
   assert.equal(capped.truncated, 2);
   assert.equal(capped.ids.has("root"), true);
   assert.equal(capped.ids.size, 2);
+});
+
+test("render cap preserves stable node creation order within the same depth", () => {
+  const depths = new Map([["root", 1], ["a", 2], ["b", 2], ["c", 2]]);
+  const ids = new Set(["root", "a", "b", "c"]);
+  const capped = capRenderedIds(ids, [node("root", "root"), node("c"), node("a"), node("b")], depths, 3);
+  assert.deepEqual([...capped.ids], ["root", "c", "a"]);
 });

@@ -2,8 +2,9 @@
 
 > **状态（2026-08-13）**  
 > - **A. Fact/Finding 广播**：**as-built 已交付**（注入 + `canvas_broadcasts` + API + 画布 UI）。见「A as-built」与 `DESIGN.md` §4.2。  
-> - **B. 连线/布局**：**主路径已可用**（服务端启发式落点写库 + 前端小图 ELK / 大图 DB 坐标 + 八类边）。  
+> - **B. 连线/布局**：**主路径已可用**（服务端 `x/y` 是 placement/exchange hint；Web 对当前可见投影布局，≤200 节点用 ELK、超阈值用固定列；八类边）。
 > - **`layout_revision` 全图权威重算：暂缓** — 见 GitHub **#148**，后续重议设计，不按本文 B2 原样强推。  
+> - **当前投影护栏**：默认深度 3；每个父节点首批 12 个后继；常规投影上限 180 个节点（显式链路聚焦例外）；PNG 只导出当前可见投影。
 > 索引：[`README.md`](README.md)。  
 > 相关代码：`canvas-updates.ts`、`domains/canvas/`、`canvas_broadcasts`、`apps/web/src/canvas-broadcasts.ts`、`CanvasView.tsx`、`api.ts` EdgeType。
 
@@ -11,7 +12,7 @@
 
 - **A 已解决「无法回答投递给谁」**：独立表 `canvas_broadcasts`、`planned→injected|unknown`（及失败路径）、`GET /canvases/:id/broadcasts`、画布广播面板。真注入仍走 `sendMessage`；`injected` ≠ 模型已读。
 - **A 的边界仍有效**：仅并发 running 目标；仅 `incrementalMessages=true` 的 CLI 订阅（Claude Code / Pi；Codex / OpenCode 不追加）。进程内订阅不能证明跨进程全局 `no_subscriber`。
-- **B 不应重写调度语义**：权威边类型是八类，不是原草案的六类。先修契约漂移、数据库唯一性和 Report 可视连接，再做按因果 round 的服务端权威布局；保留现有 Verify/Hub/Report 门禁。
+- **B 不应重写调度语义**：权威边类型是八类，不是原草案的六类。先修契约漂移、数据库唯一性和 Report 可视连接；是否需要按因果 round 的服务端权威布局由 #148 另议，保留现有 Verify/Hub/Report 门禁。
 - **历史观测样本（2026-08-03）**仅作布局 B 的动机（坐标重叠、Verify 门禁等），**不再**描述「无 broadcast API / 无账本」——该缺口 A 已补。
 - **发布必须等任务收敛**：schema 基线已按仓库当前版本纪律重建；后续 B 的结构变更仍须先备份和恢复演练，不在运行中任务上直接实施。
 
@@ -470,9 +471,11 @@ OpenAPI、`skills/deepsonar-management/` 与前端 API 类型同步一笔，并�
 
 | 层 | 机制 |
 |----|------|
-| 落库时 | 简单偏移 `x+300/340`，`y+count*140`（服务端占位） |
-| 前端主布局 | **elkjs layered RIGHT**（拓扑分层） |
-| 兜底 | 固定语义列：root → 普通 job → finding → verify/intent → fact |
+| 落库时 | 简单偏移 `x+300/340`，`y+count*140`；只作为 placement/exchange hint，不是 UI 权威坐标 |
+| 可见投影 | 默认深度 3；每父节点按稳定创建顺序首批 12 个后继；常规投影上限 180 个节点，显式链路聚焦可例外 |
+| 前端主布局 | 当前可见投影 ≤200 节点时用 **elkjs layered RIGHT**（拓扑分层） |
+| 前端兜底 | 当前可见投影 >200 节点或 ELK 失败时用固定语义列：root → 普通 job → finding → verify/intent → fact |
+| PNG 导出 | 导出当前可见投影，不承诺完整 DB 图或跨客户端坐标复现 |
 
 ### 合理之处
 
@@ -482,11 +485,11 @@ OpenAPI、`skills/deepsonar-management/` 与前端 API 类型同步一笔，并�
 
 ### 不合理之处
 
-1. **DB 坐标 vs 前端 ELK 双轨** → 过程真相分裂。
+1. **没有跨消费者的权威坐标**：DB `x/y` 是 hint，屏幕坐标是前端可见投影结果；API/导入包与 PNG 不承诺同一排布。
 2. **ELK 全边同权** → 决策边与系统边搅在一起。
 3. **兜底列 intent 与 verify 同列（列 3）**，且按类型固定列无法表达 `finding→rework intent` 的下一轮因果。
-4. 前端已有默认深度 3 和通用展开/收起，但不是按 intent/Finding 组的语义聚合；30+ Finding 的大扇出仍难扫。
-5. **落库坐标已真实碰撞**：当前 20 组、40 个节点共享坐标；前端 ELK 掩盖了落库坐标不可用的问题，但导出/API 与屏幕仍不是同一布局。
+4. 前端已有默认深度 3、每父节点首批 12 与 180 节点渲染上限，但不是按 intent/Finding 组的语义聚合；30+ Finding 的大扇出仍难扫。
+5. **落库 hint 已真实碰撞**：历史样本有 20 组、40 个节点共享坐标；当前 UI 不把它当权威坐标，API/导入包也不得暗示其等同屏幕布局。
 
 ## B.4 是否符合第一性原理
 
@@ -543,14 +546,14 @@ OpenAPI、`skills/deepsonar-management/` 与前端 API 类型同步一笔，并�
 
 ### B.5.3 布局
 
-**权威坐标与布局 revision**
+**历史提案：权威坐标与布局 revision（#148 暂缓，非 as-built、不得按本节直接实施）**
 
-- 最终态：Scheduler 的布局服务对完整图计算坐标，并在单事务中更新所有 `canvas_nodes.x/y` 与画布 `layout_revision/layout_algorithm`；前端只读这些坐标。
+- 曾设想的最终态：Scheduler 的布局服务对完整图计算坐标，并在单事务中更新所有 `canvas_nodes.x/y` 与画布 `layout_revision/layout_algorithm`；前端只读这些坐标。
 - v13 为 `canvases` 增加非空 `graph_revision bigint default 0`、`layout_revision bigint default -1`、`layout_status text default 'dirty' CHECK (layout_status IN ('dirty','running','ready','failed'))`，以及可空的 `layout_algorithm/layout_error`。空库新建画布从 dirty 开始；旧包导入完成后保持 `layout_revision=-1` 并排队首轮重算。若开发环境采用显式 ALTER 而非重建，所有既有画布统一回填 `graph_revision>=0, layout_revision=-1, layout_status='dirty'`，不把旧占位坐标冒充权威布局。
 - 数据库 trigger 覆盖 node/edge insert/delete 及节点布局相关语义字段（如 node_type/title/status/w/h/job_id）更新并递增 graph revision，明确排除 x/y 和不会改变卡片尺寸的正文更新；特殊正文变更若会影响布局，由对应 Scheduler 路径显式 mark dirty。这样 API、导入和后台派生不会漏标。一次布局事务写坐标并令 `layout_revision=起始 graph_revision`，因此 `graph_revision>layout_revision` 可直接判 stale。
 - 节点/边事务提交后只标记布局 dirty；布局服务按 canvas debounce，并用 advisory lock 保证同一画布单写。它读取起始 graph revision，计算后若 revision 已变化则丢弃结果并重算，避免旧布局覆盖新图。
 - 成功时写 `layout_status=ready`；失败时写 `failed` 并保留上一版权威坐标。`graph_revision>layout_revision` 统一派生为 stale（不是第五种落库状态）。前端临时 ELK 只能作为明确标记的降级展示，不能回写 DB，也不能用于导出。
-- 迁移前的短期状态继续由前端 ELK 展示，但 API/导出必须声明 DB 坐标只是 placement hint；完成服务端迁移后移除双轨表述。
+- 当前正式契约不是“迁移前临时态”：DB 坐标是 placement/exchange hint；Web 对当前可见投影布局；PNG 只导出该投影。只有 #148 明确了跨 UI/导出/多端的权威坐标消费者后，才重新设计服务端方案。
 - 节点尺寸、间距、算法版本移到前后端共用模块；不能让 Scheduler 用一套 NODE_W/H、Web 卡片再用另一套尺寸。布局元数据和错误不进入 Agent prompt。
 
 **语义子图布局（优先于全图 ELK 同权）**
@@ -602,7 +605,9 @@ root/source → intent(round 1) → fact|finding
 3. 节点详情展示完整入边/出边与来源 Job/轮次，便于人工追 rework/verify 父级。
 4. v13 增加 edge 八类 CHECK + 唯一约束，写入统一为 shared-types 校验后的原子 upsert；加入非法类型和并发重复插入验证。
 
-### Phase B2（布局）
+### Phase B2（历史布局设想；#148 暂缓）
+
+以下条目保留为设计史，不是当前实现计划；不得据此新增 schema 或服务端 ELK：
 
 1. 先实现因果 round + 决策主轴/系统卫星布局，验证 rework 链，不依赖未经验证的 ELK “边权”选项。
 2. Finding 聚合/展开交互；折叠前后底层 node/edge 数不变。
