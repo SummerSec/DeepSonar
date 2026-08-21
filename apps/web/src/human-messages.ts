@@ -112,10 +112,14 @@ export interface HumanInterventionPrefs {
   hideProcessed: boolean;
   expandedIds: string[];
   messagesCollapsed: boolean;
+  /** Request nodes the current user has already answered through a matching Job reply. */
+  repliedIds: string[];
+  /** Request nodes the current user explicitly hid without changing scheduler state. */
+  hiddenIds: string[];
 }
 
 export function defaultHumanInterventionPrefs(): HumanInterventionPrefs {
-  return { bannerCollapsed: true, hideProcessed: true, expandedIds: [], messagesCollapsed: true };
+  return { bannerCollapsed: true, hideProcessed: true, expandedIds: [], messagesCollapsed: true, repliedIds: [], hiddenIds: [] };
 }
 
 export function humanInterventionPrefKey(userKey: string, canvasId: string): string {
@@ -133,6 +137,8 @@ export function readHumanInterventionPrefs(userKey: string, canvasId: string): H
       hideProcessed: parsed.hideProcessed !== false,
       expandedIds: Array.isArray(parsed.expandedIds) ? parsed.expandedIds.filter((id): id is string => typeof id === "string") : [],
       messagesCollapsed: parsed.messagesCollapsed !== false,
+      repliedIds: Array.isArray(parsed.repliedIds) ? parsed.repliedIds.filter((id): id is string => typeof id === "string") : [],
+      hiddenIds: Array.isArray(parsed.hiddenIds) ? parsed.hiddenIds.filter((id): id is string => typeof id === "string") : [],
     };
   } catch {
     return fallback;
@@ -195,8 +201,21 @@ export function listHumanInterventions(nodes: readonly CanvasNode[], limit = 12)
 export function visibleHumanInterventions(
   items: readonly HumanInterventionItem[],
   hideProcessed: boolean,
+  repliedIds: readonly string[] = [],
+  hiddenIds: readonly string[] = [],
 ): HumanInterventionItem[] {
-  return hideProcessed ? items.filter((item) => item.pending) : [...items];
+  if (!hideProcessed) return [...items];
+  const replied = new Set(repliedIds);
+  const hidden = new Set(hiddenIds);
+  return items.filter((item) => item.pending && !replied.has(item.node.id) && !hidden.has(item.node.id));
+}
+
+export function countVisiblePendingHumanInterventions(
+  items: readonly HumanInterventionItem[],
+  repliedIds: readonly string[] = [],
+  hiddenIds: readonly string[] = [],
+): number {
+  return visibleHumanInterventions(items, true, repliedIds, hiddenIds).length;
 }
 
 export function openHumanInterventionForJob(nodes: readonly CanvasNode[], jobId: string | null | undefined): CanvasNode | null {

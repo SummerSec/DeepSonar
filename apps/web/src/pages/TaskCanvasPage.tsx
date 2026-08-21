@@ -202,6 +202,7 @@ export function TaskCanvasPage() {
   const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerNode, setComposerNode] = useState<CanvasNode | null>(null);
+  const [composerInterventionId, setComposerInterventionId] = useState<string | null>(null);
   const [ignoreBusyId, setIgnoreBusyId] = useState<string | null>(null);
   const prefUserKey = humanInterventionUiPrefUserKey(me);
   const [interventionPrefs, setInterventionPrefs] = useState<HumanInterventionPrefs>(() =>
@@ -231,6 +232,7 @@ export function TaskCanvasPage() {
     setError(null);
     setComposerOpen(false);
     setComposerNode(null);
+    setComposerInterventionId(null);
     setInterventionPrefs(readHumanInterventionPrefs(prefUserKey, canvasId));
     loadFindingIndex(canvasId)
       .then((rows) => {
@@ -730,7 +732,9 @@ export function TaskCanvasPage() {
     if (canvasId) writeHumanInterventionPrefs(prefUserKey, canvasId, prefs);
   };
   const openHumanReply = (target: CanvasNode | null) => {
+    const targetJobId = target?.job_id ?? (typeof target?.body_json?.job_id === "string" ? target.body_json.job_id : null);
     setComposerNode(target);
+    setComposerInterventionId(openHumanInterventionForJob(nodes, targetJobId)?.id ?? null);
     setComposerOpen(true);
   };
   const ignoreIntervention = async (item: HumanInterventionItem) => {
@@ -1545,10 +1549,17 @@ export function TaskCanvasPage() {
           canvasId={canvasId}
           projectId={projectId ?? null}
           selectedNode={composerNode}
-          onClose={() => { setComposerOpen(false); setComposerNode(null); }}
+          onClose={() => { setComposerOpen(false); setComposerNode(null); setComposerInterventionId(null); }}
           onSent={() => {
+            if (composerInterventionId) {
+              updateInterventionPrefs({
+                ...interventionPrefs,
+                repliedIds: [...new Set([...interventionPrefs.repliedIds, composerInterventionId])].slice(-100),
+              });
+            }
             setComposerOpen(false);
             setComposerNode(null);
+            setComposerInterventionId(null);
             flash("消息已写入投递账本");
           }}
         />

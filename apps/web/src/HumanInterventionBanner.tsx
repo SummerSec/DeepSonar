@@ -1,6 +1,6 @@
-import { CaretDown, CaretRight, EyeSlash, HandPalm, PaperPlaneTilt } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, Eye, EyeSlash, HandPalm, PaperPlaneTilt, Prohibit } from "@phosphor-icons/react";
 import type { HumanInterventionItem, HumanInterventionPrefs } from "./human-messages";
-import { toggleExpandedId, visibleHumanInterventions } from "./human-messages";
+import { countVisiblePendingHumanInterventions, toggleExpandedId, visibleHumanInterventions } from "./human-messages";
 
 export function HumanInterventionBanner({
   items,
@@ -21,8 +21,10 @@ export function HumanInterventionBanner({
   onOpenFinding: (findingId: string) => void;
   onOpenJob: (jobId: string) => void;
 }) {
-  const pendingCount = items.filter((item) => item.pending).length;
-  const visible = visibleHumanInterventions(items, prefs.hideProcessed);
+  const replied = new Set(prefs.repliedIds);
+  const hidden = new Set(prefs.hiddenIds);
+  const pendingCount = countVisiblePendingHumanInterventions(items, prefs.repliedIds, prefs.hiddenIds);
+  const visible = visibleHumanInterventions(items, prefs.hideProcessed, prefs.repliedIds, prefs.hiddenIds);
   const hiddenCount = items.length - visible.length;
   if (items.length === 0) return null;
 
@@ -54,9 +56,11 @@ export function HumanInterventionBanner({
       {!prefs.bannerCollapsed && (
         <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
           {visible.length === 0 ? (
-            <p className="px-1 py-2 font-mono text-[10px] text-zinc-600">已处理的介入已隐藏。</p>
+            <p className="px-1 py-2 font-mono text-[10px] text-zinc-600">介入项已隐藏，可显示历史恢复查看。</p>
           ) : visible.map((item) => {
             const expanded = prefs.expandedIds.includes(item.node.id);
+            const hasReplied = replied.has(item.node.id);
+            const isHidden = hidden.has(item.node.id);
             return (
               <div key={item.node.id} className="theme-surface flex min-w-[260px] max-w-[420px] flex-1 items-start gap-3 rounded-lg px-3 py-2 ring-1">
                 <div className="min-w-0 flex-1">
@@ -74,7 +78,7 @@ export function HumanInterventionBanner({
                   </button>
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
-                  {item.pending && (
+                  {item.pending && !hasReplied && (
                     <button
                       type="button"
                       onClick={() => onReply(item)}
@@ -83,17 +87,32 @@ export function HumanInterventionBanner({
                       <PaperPlaneTilt size={12} /> 回复
                     </button>
                   )}
-                  {item.pending && (
+                  {item.pending && !hasReplied && (
                     <button
                       type="button"
                       disabled={ignoreBusyId === item.node.id}
                       onClick={() => onIgnore(item)}
                       className="inline-flex items-center gap-1 font-mono text-[10px] text-zinc-500 hover:text-zinc-300 disabled:opacity-50"
                     >
-                      <EyeSlash size={12} /> {ignoreBusyId === item.node.id ? "忽略中…" : "忽略"}
+                      <Prohibit size={12} /> {ignoreBusyId === item.node.id ? "忽略中…" : "忽略"}
                     </button>
                   )}
-                  {!item.pending && <span className="font-mono text-[10px] text-zinc-600">{item.node.status === "ignored" ? "已忽略" : "已处理"}</span>}
+                  {hasReplied && <span className="font-mono text-[10px] text-zinc-600">已回复</span>}
+                  {!item.pending && !hasReplied && <span className="font-mono text-[10px] text-zinc-600">{item.node.status === "ignored" ? "已忽略" : "已处理"}</span>}
+                  <button
+                    type="button"
+                    onClick={() => onPrefsChange({
+                      ...prefs,
+                      hideProcessed: isHidden ? prefs.hideProcessed : true,
+                      hiddenIds: isHidden
+                        ? prefs.hiddenIds.filter((id) => id !== item.node.id)
+                        : [...new Set([...prefs.hiddenIds, item.node.id])].slice(-100),
+                    })}
+                    className="inline-flex items-center gap-1 font-mono text-[10px] text-zinc-500 hover:text-zinc-300"
+                  >
+                    {isHidden ? <Eye size={12} /> : <EyeSlash size={12} />}
+                    {isHidden ? "取消隐藏" : "隐藏"}
+                  </button>
                   {item.findingId && <button type="button" onClick={() => onOpenFinding(item.findingId!)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Finding</button>}
                   {item.jobId && <button type="button" onClick={() => onOpenJob(item.jobId!)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Job</button>}
                 </div>

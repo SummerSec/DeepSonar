@@ -3,6 +3,7 @@ import test from "node:test";
 import type { CanvasHumanMessage, CanvasNode } from "./api.js";
 import {
   canIgnoreHumanIntervention,
+  countVisiblePendingHumanInterventions,
   defaultHumanInterventionPrefs,
   humanInterventionPrefKey,
   humanInterventionUiPrefUserKey,
@@ -147,6 +148,12 @@ test("open human interventions can be ignored; processed history cannot", () => 
   const listed = listHumanInterventions([delivered, pending, ignored]);
   assert.deepEqual(listed.map((item) => item.node.id), ["human-msg", "human-open", "human-ignored"]);
   assert.deepEqual(visibleHumanInterventions(listed, true).map((item) => item.node.id), ["human-open"]);
+  assert.deepEqual(visibleHumanInterventions(listed, true, ["human-open"]), []);
+  assert.deepEqual(visibleHumanInterventions(listed, true, [], ["human-open"]), []);
+  assert.deepEqual(visibleHumanInterventions(listed, false, ["human-open"]).map((item) => item.node.id), ["human-msg", "human-open", "human-ignored"]);
+  assert.deepEqual(visibleHumanInterventions(listed, false, [], ["human-open"]).map((item) => item.node.id), ["human-msg", "human-open", "human-ignored"]);
+  assert.equal(countVisiblePendingHumanInterventions(listed), 1);
+  assert.equal(countVisiblePendingHumanInterventions(listed, [], ["human-open"]), 0);
   assert.equal(listed.find((item) => item.node.id === "human-open")?.findingId, "finding-1");
 });
 
@@ -166,6 +173,8 @@ test("collapse prefs default collapsed and persist per user and task", () => {
     assert.equal(defaults.hideProcessed, true);
     assert.equal(defaults.messagesCollapsed, true);
     assert.deepEqual(defaults.expandedIds, []);
+    assert.deepEqual(defaults.repliedIds, []);
+    assert.deepEqual(defaults.hiddenIds, []);
     assert.equal(humanInterventionPrefKey("user-1", "canvas-1"), "deepsonar:human-intervention:user-1:canvas-1");
     assert.equal(humanInterventionUiPrefUserKey({ user: { id: "u1" }, actor: { name: "alice" } }), "u1");
     assert.equal(humanInterventionUiPrefUserKey({ user: null, actor: { name: "dev" } }), "dev");
@@ -175,11 +184,15 @@ test("collapse prefs default collapsed and persist per user and task", () => {
       hideProcessed: false,
       expandedIds: ["human-open"],
       messagesCollapsed: false,
+      repliedIds: ["human-replied"],
+      hiddenIds: ["human-hidden"],
     });
     const stored = readHumanInterventionPrefs("user-1", "canvas-1");
     assert.equal(stored.bannerCollapsed, false);
     assert.equal(stored.hideProcessed, false);
     assert.deepEqual(stored.expandedIds, ["human-open"]);
+    assert.deepEqual(stored.repliedIds, ["human-replied"]);
+    assert.deepEqual(stored.hiddenIds, ["human-hidden"]);
     assert.notDeepEqual(readHumanInterventionPrefs("user-2", "canvas-1"), stored);
     assert.deepEqual(toggleExpandedId(["a"], "b"), ["a", "b"]);
     assert.deepEqual(toggleExpandedId(["a", "b"], "a"), ["b"]);

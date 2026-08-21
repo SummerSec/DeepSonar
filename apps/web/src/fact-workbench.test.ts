@@ -194,11 +194,17 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)\}/);
   assert.match(page, /ignoreHumanIntervention/);
   assert.match(page, /listHumanInterventions\(nodes\)/);
+  assert.match(page, /setComposerInterventionId\(openHumanInterventionForJob\(nodes, targetJobId\)\?\.id \?\? null\)/);
+  assert.match(page, /repliedIds: \[\.\.\.new Set\(\[\.\.\.interventionPrefs\.repliedIds, composerInterventionId\]\)\]/);
   const banner = source("HumanInterventionBanner.tsx");
   assert.match(banner, /aria-label="人工介入"/);
   assert.match(banner, /忽略/);
   assert.match(banner, /bannerCollapsed/);
   assert.match(banner, /hideProcessed/);
+  assert.match(banner, /已回复/);
+  assert.match(banner, /hiddenIds/);
+  assert.match(banner, /取消隐藏/);
+  assert.match(banner, /hideProcessed: isHidden \? prefs\.hideProcessed : true/);
   assert.match(banner, /aria-expanded/);
   const composer = source("HumanMessageComposer.tsx");
   assert.match(composer, /nodeEligible \? "job" : null/);
