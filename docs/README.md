@@ -80,7 +80,7 @@
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
 | #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
-| #244 | **已关**；官方升版后显式项目 pin 不自动跟随；过期 pin 与最新 trusted 分开，预检/建任务 `RUNTIME_IMAGE_PIN_STALE` + 一键升级 |
+| #244 / #284 | **已关**；stale 与 latest trusted 分开；权威官方 catalog 提升会默认自动滚动已不可执行的官方显式 pin，项目可设 `official_runtime_pin_policy=hold` 保持 409 + 人工升级；可执行旧 pin、第三方 pin 与冻结 Job 不改 |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |
 | #157 / #158 | **已关**；共享资产孤儿卷回收、官方 `deepsonar-assets-helper` 发布与 busybox pin 回退、provision admission |
 | #243 Windows deploy.ps1 | **已关**；UTF-8 BOM + ASCII，避免 PS 5.1 代码页 ParserError；pull/up 与 `deploy.sh` 对齐 |

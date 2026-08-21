@@ -31,6 +31,7 @@ import {
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
   officialCatalogWriteMode,
+  officialRuntimePinPolicy,
   shouldReconcileRuntimeImagePromotions,
   validateRuntimeImageRegistryPolicy,
   verifiedSameDigestChannelRefs,
@@ -53,6 +54,13 @@ test("bundled fallback 不是可覆盖数据库状态的权威清单", () => {
   assert.equal(shouldReconcileRuntimeImagePromotions(registry(false)), true);
   assert.equal(officialCatalogWriteMode(registry(true)), "insert-only");
   assert.equal(officialCatalogWriteMode(registry(false)), "authoritative");
+});
+
+test("official runtime pin policy defaults to rolling stale pins and supports explicit hold", () => {
+  assert.equal(officialRuntimePinPolicy(undefined), "roll_stale");
+  assert.equal(officialRuntimePinPolicy({}), "roll_stale");
+  assert.equal(officialRuntimePinPolicy({ official_runtime_pin_policy: "invalid" }), "roll_stale");
+  assert.equal(officialRuntimePinPolicy({ official_runtime_pin_policy: "hold" }), "hold");
 });
 
 test("远端同步失败后缩短下一次重试等待", () => {

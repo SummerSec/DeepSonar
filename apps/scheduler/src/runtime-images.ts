@@ -68,6 +68,27 @@ export interface RuntimeImageCatalogSyncResult {
   synced_at: string;
 }
 
+export const OFFICIAL_RUNTIME_PIN_POLICIES = ["roll_stale", "hold"] as const;
+export type OfficialRuntimePinPolicy = typeof OFFICIAL_RUNTIME_PIN_POLICIES[number];
+
+/** Invalid/absent legacy config keeps the safe product default: repair only stale official pins. */
+export function officialRuntimePinPolicy(configJson: unknown): OfficialRuntimePinPolicy {
+  const value = configJson && typeof configJson === "object" && !Array.isArray(configJson)
+    ? (configJson as Record<string, unknown>).official_runtime_pin_policy
+    : undefined;
+  return value === "hold" ? "hold" : "roll_stale";
+}
+
+export interface OfficialRuntimePinRoll {
+  project_id: string;
+  runtime_image_id: string;
+  image_key: string;
+  from_version_id: string;
+  from_version: string;
+  to_version_id: string;
+  to_version: string;
+}
+
 export function shouldReconcileRuntimeImagePromotions(registry: RuntimeImageRegistry): boolean {
   return registry.fallback !== true;
 }
@@ -392,6 +413,125 @@ export async function readRuntimeRegistryChannel(
     throw new Error("global runtime registry channel is invalid");
   }
   return channel;
+}
+
+/**
+ * Repair explicit project pins that became non-executable after an official
+ * catalog promotion. The update and its audit entry are one SQL statement so
+ * a pin can never roll without durable attribution. Frozen Job snapshots are
+ * intentionally outside this query.
+ */
+export async function rollStaleOfficialProjectPins(
+  db: typeof sql,
+  options: {
+    channel?: RuntimeImageRegistryChannel;
+    hostPlatform?: "linux/amd64" | "linux/arm64";
+  } = {},
+): Promise<OfficialRuntimePinRoll[]> {
+  const channel = options.channel ?? await readRuntimeRegistryChannel(db);
+  const platform = options.hostPlatform ?? hostRuntimePlatform();
+  const rows = await db`
+    WITH latest AS (
+      SELECT DISTINCT ON (v.runtime_image_id)
+             v.runtime_image_id,
+             v.id AS version_id,
+             v.version
+      FROM runtime_image_versions v
+      JOIN runtime_images ri ON ri.id = v.runtime_image_id
+      JOIN runtime_image_version_refs channel_ref
+        ON channel_ref.version_id = v.id AND channel_ref.channel = ${channel}
+      WHERE ri.official = true
+        AND ri.enabled = true
+        AND v.trust_status = 'trusted'
+        AND v.platforms_json @> ${sql.json([platform] as never)}
+      ORDER BY v.runtime_image_id,
+               v.promoted_at DESC NULLS LAST,
+               v.approved_at DESC NULLS LAST,
+               v.created_at DESC
+    ), stale AS (
+      SELECT pri.project_id,
+             pri.runtime_image_id,
+             ri.image_key,
+             pri.selected_version_id AS from_version_id,
+             pinned.version AS from_version,
+             latest.version_id AS to_version_id,
+             latest.version AS to_version
+      FROM project_runtime_images pri
+      JOIN projects p ON p.id = pri.project_id
+      JOIN runtime_images ri ON ri.id = pri.runtime_image_id AND ri.official = true
+      JOIN runtime_image_versions pinned
+        ON pinned.id = pri.selected_version_id AND pinned.runtime_image_id = pri.runtime_image_id
+      JOIN latest ON latest.runtime_image_id = pri.runtime_image_id
+      LEFT JOIN runtime_image_version_refs pinned_ref
+        ON pinned_ref.version_id = pinned.id AND pinned_ref.channel = ${channel}
+      WHERE pri.selected_version_id IS NOT NULL
+        AND COALESCE(p.config_json->>'official_runtime_pin_policy', 'roll_stale') <> 'hold'
+        AND latest.version_id <> pri.selected_version_id
+        AND NOT (
+          pinned.trust_status = 'trusted'
+          AND pinned.platforms_json @> ${sql.json([platform] as never)}
+          AND pinned_ref.id IS NOT NULL
+        )
+    ), updated AS (
+      UPDATE project_runtime_images pri
+      SET selected_version_id = stale.to_version_id,
+          updated_at = now()
+      FROM stale
+      WHERE pri.project_id = stale.project_id
+        AND pri.runtime_image_id = stale.runtime_image_id
+        AND pri.selected_version_id = stale.from_version_id
+      RETURNING pri.project_id,
+                pri.runtime_image_id,
+                stale.image_key,
+                stale.from_version_id,
+                stale.from_version,
+                stale.to_version_id,
+                stale.to_version
+    ), audited AS (
+      INSERT INTO audit_logs (
+        actor_type, actor_id, action, project_id, resource_type, resource_id,
+        before_json, after_json, result
+      )
+      SELECT 'system',
+             'scheduler',
+             'runtime_image.project_pin_auto_roll',
+             updated.project_id,
+             'runtime_image',
+             updated.runtime_image_id::text,
+             jsonb_build_object(
+               'project_id', updated.project_id,
+               'image_key', updated.image_key,
+               'version_id', updated.from_version_id,
+               'version', updated.from_version
+             ),
+             jsonb_build_object(
+               'project_id', updated.project_id,
+               'image_key', updated.image_key,
+               'from_version_id', updated.from_version_id,
+               'from_version', updated.from_version,
+               'to_version_id', updated.to_version_id,
+               'to_version', updated.to_version,
+               'source', 'official_catalog_promote'
+             ),
+             'ok'
+      FROM updated
+      RETURNING project_id, resource_id
+    )
+    SELECT updated.*
+    FROM updated
+    JOIN audited
+      ON audited.project_id = updated.project_id
+     AND audited.resource_id = updated.runtime_image_id::text
+    ORDER BY updated.project_id, updated.image_key`;
+  return rows.map((row) => ({
+    project_id: String(row.project_id),
+    runtime_image_id: String(row.runtime_image_id),
+    image_key: String(row.image_key),
+    from_version_id: String(row.from_version_id),
+    from_version: String(row.from_version),
+    to_version_id: String(row.to_version_id),
+    to_version: String(row.to_version),
+  }));
 }
 
 /**
@@ -1326,6 +1466,12 @@ export async function applyOfficialRuntimeCatalog(
     await sql`
       UPDATE runtime_image_versions SET promoted_at = NULL, updated_at = now()
       WHERE runtime_image_id = ${image.id} AND trust_status = 'disabled'`;
+  }
+  if (reconcilePromotions) {
+    const rolled = await rollStaleOfficialProjectPins(sql);
+    if (rolled.length > 0) {
+      console.log(`[runtime-images] 官方清单提升后自动滚动 ${rolled.length} 个过期项目 pin`);
+    }
   }
   await writeOfficialDefaultImageTrustWarnings(sql).catch((error) => {
     console.warn("[runtime-images] official trust warning query failed:", error instanceof Error ? error.message : error);

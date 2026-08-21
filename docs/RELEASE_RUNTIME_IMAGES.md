@@ -50,7 +50,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 1. GitHub Release 附件（Scheduler 优先拉取的 remote 目录）  
 2. 仓库内 `deploy/runtime-image-registry.json`（bundled 回退，由 workflow 自动回写默认分支）
 
-Scheduler 定时读取官方 GitHub Release 的最新清单；失败时回退仓库内置清单。新正式版本成为默认 promoted 版本，旧版本只保留给显式项目 pin 与历史 Job 快照。`selected_version_id=null` 跟随最新 trusted；显式 UUID pin 在 sync 时不会被改写。若旧 pin 对当前通道/宿主平台不再是可执行 trusted，而最新 trusted 可用，预检与建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（不自动改写），市场行带 `pin_stale`，可一键升级 pin 或改为跟随最新。升级平台镜像后应检查各项目 runtime image pin。
+Scheduler 定时读取官方 GitHub Release 的最新清单；失败时回退仓库内置清单。新正式版本成为默认 promoted 版本，旧版本保留给仍可执行的项目显式 pin 与历史 Job 快照。`selected_version_id=null` 跟随最新 trusted 且保持空值；权威官方 catalog apply 会把对当前通道/宿主平台已不可执行的官方显式 pin 自动滚到最新可执行 trusted，并写含 from/to 与 `source=official_catalog_promote` 的审计。可执行旧 pin、第三方 pin、历史 Job/Attempt 不改。项目若必须停留旧官方版本，先把 `official_runtime_pin_policy` 设为 `hold`；该 pin 不可执行时继续返回 `409 RUNTIME_IMAGE_PIN_STALE`，可再人工升级或改为跟随最新。
 
 GHCR 包说明来自 OCI 元数据。Dockerfile 为单平台 manifest 写入 `org.opencontainers.image.title`、`description`、`source` 与 `licenses`；Release workflow 同时把这些值写入多架构 image index annotation。项目源码使用 `LicenseRef-DeepSonar-Proprietary`，但镜像内第三方组件仍分别适用其自身许可证，详见根目录 `THIRD_PARTY_NOTICES.md` 与随镜像生成的组件清单。修改说明后必须重新发布镜像，既有 digest 的包页面不会被原地改写。
 

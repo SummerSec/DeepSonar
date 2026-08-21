@@ -8,6 +8,8 @@ import { globalRules, mergeGlobalRulesPatch, PLATFORM_DEFAULT_AGENT_CLI, rulesFo
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
 import {
+  OFFICIAL_RUNTIME_PIN_POLICIES,
+  officialRuntimePinPolicy,
   requestRuntimeImagePreparation,
   resolveRuntimeImageForJob,
   RuntimeImagePreparationBusyError,
@@ -129,6 +131,7 @@ const SettingsPatchBody = z.object({
     z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
     z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
   ).optional(),
+  official_runtime_pin_policy: z.enum(OFFICIAL_RUNTIME_PIN_POLICIES).optional(),
 });
 const GlobalSettingsPatchBody = z.object({
   rules: GlobalRulesPatch.optional(),
@@ -353,6 +356,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
+      official_runtime_pin_policy: officialRuntimePinPolicy(cfg),
       active_jobs: Number(activeRow?.count ?? 0),
     };
   });
@@ -417,6 +421,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       if (body.image_strategy === "inherit_global") delete cfg.role_runtime_images;
     }
     if (body.role_runtime_images !== undefined) cfg.role_runtime_images = body.role_runtime_images;
+    if (body.official_runtime_pin_policy !== undefined) {
+      cfg.official_runtime_pin_policy = body.official_runtime_pin_policy;
+    }
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
@@ -475,6 +482,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_finding_protocol: effectiveFindingProtocol,
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
+      official_runtime_pin_policy: officialRuntimePinPolicy(cfg),
       active_jobs: Number(activeRow?.count ?? 0),
     };
   });

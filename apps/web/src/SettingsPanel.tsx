@@ -11,6 +11,7 @@ import {
   type ProjectRoleConfigEntry,
   type ProviderCredential,
   type ProjectSettings,
+  type OfficialRuntimePinPolicy,
   type FindingProtocolConfig,
   type EffectiveFindingProtocol,
   type RoleConfigInput,
@@ -144,6 +145,7 @@ export function SettingsPanel({
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [imageStrategy, setImageStrategy] = useState<ProjectImageStrategy>("inherit_global");
   const [roleRuntimeImages, setRoleRuntimeImages] = useState<Record<string, string | null>>({});
+  const [officialRuntimePinPolicy, setOfficialRuntimePinPolicy] = useState<OfficialRuntimePinPolicy>("roll_stale");
   const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
   const [imagePolicyBusy, setImagePolicyBusy] = useState(false);
   const [imagePolicySaved, setImagePolicySaved] = useState(false);
@@ -203,6 +205,7 @@ export function SettingsPanel({
           setEffectiveFindingProtocol(s.effective_finding_protocol);
           setImageStrategy(s.image_strategy ?? "inherit_global");
           setRoleRuntimeImages(s.role_runtime_images ?? {});
+          setOfficialRuntimePinPolicy(s.official_runtime_pin_policy ?? "roll_stale");
           const storedQuota = (s.rules as { maxConcurrentJobs?: unknown }).maxConcurrentJobs;
           setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
         })
@@ -324,6 +327,7 @@ export function SettingsPanel({
     try {
       const result = await api.patchSettings(projectId, {
         image_strategy: imageStrategy,
+        official_runtime_pin_policy: officialRuntimePinPolicy,
         ...(imageStrategy === "project_managed" ? { role_runtime_images: roleRuntimeImages } : {}),
       });
       if ("saved" in result && result.saved === false) {
@@ -824,6 +828,21 @@ export function SettingsPanel({
                       </span>
                     </label>
                   </div>
+
+                  <label className="block space-y-1.5 border-t border-ink-800 pt-3">
+                    <span className="text-[12px] text-zinc-300">官方镜像过期 pin</span>
+                    <select
+                      value={officialRuntimePinPolicy}
+                      onChange={(event) => setOfficialRuntimePinPolicy(event.target.value as OfficialRuntimePinPolicy)}
+                      className="theme-input-surface w-full rounded-md border px-3 py-2 text-[12px] text-zinc-200 outline-none sm:max-w-sm"
+                    >
+                      <option value="roll_stale">自动滚到最新 trusted（默认）</option>
+                      <option value="hold">保留旧 pin（不可执行时继续阻断）</option>
+                    </select>
+                    <small className="block text-[11px] leading-5 text-zinc-500">
+                      仅影响官方 catalog 中已失效的显式 pin；仍可执行的旧版本、第三方镜像和已冻结 Job 不会改写。
+                    </small>
+                  </label>
 
                   <div className="space-y-2">
                     {imagePolicyRoles.map((role) => {

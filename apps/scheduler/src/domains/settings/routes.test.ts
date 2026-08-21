@@ -15,6 +15,13 @@ test("项目镜像策略 PATCH 的非法请求体返回 400", async () => {
 
   assert.equal(response.statusCode, 400);
   assert.match(response.json<{ error: string }>().error, /invalid project settings rules/);
+
+  const invalidPinPolicy = await app.inject({
+    method: "PATCH",
+    url: "/projects/not-a-uuid/settings",
+    payload: { official_runtime_pin_policy: "silent_latest" },
+  });
+  assert.equal(invalidPinPolicy.statusCode, 400);
   await app.close();
 });
 

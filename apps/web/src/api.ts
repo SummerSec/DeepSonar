@@ -809,11 +809,13 @@ export interface ProjectSettings {
   effective_finding_protocol: EffectiveFindingProtocol;
   image_strategy: ProjectImageStrategy;
   role_runtime_images: Record<string, string | null>;
+  official_runtime_pin_policy: OfficialRuntimePinPolicy;
   /** claimed / provisioning / running；waiting_human 不占调度额度。 */
   active_jobs: number;
 }
 
 export type ProjectImageStrategy = "inherit_global" | "project_managed";
+export type OfficialRuntimePinPolicy = "roll_stale" | "hold";
 
 /** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='hub' = 唯一决策中枢；kind='system' = 系统角色（verify/report 等） */
 export interface AgentRole {
@@ -2108,6 +2110,7 @@ export const api = {
       finding_protocol?: FindingProtocolConfig | null;
       image_strategy?: ProjectImageStrategy;
       role_runtime_images?: Record<string, string | null>;
+      official_runtime_pin_policy?: OfficialRuntimePinPolicy;
     },
   ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),

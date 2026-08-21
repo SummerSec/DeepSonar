@@ -177,7 +177,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 `project_managed` 时只取 `role_runtime_images`（角色名到可信 runtime key 或 `null`），缺项或
 `null` 使用系统 `deepsonar-base`，并允许项目 RoleConfig 托管自己的 model / 默认 CLI。
 项目 RoleConfig 的 `runtime_image_key` 不再作为项目镜像来源。
-项目对市场版本的绑定：`project_runtime_images.selected_version_id=null` 跟随最新 trusted；显式 UUID 为 pin，官方升版 / registry sync 不自动改写。pin 对当前通道与宿主平台不再可执行、但最新 trusted 可用时，预检与建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin，并给出一键升级或改为跟随最新），不静默换 digest。
+项目对市场版本的绑定：`project_runtime_images.selected_version_id=null` 跟随最新 trusted；显式 UUID 为 pin。权威官方 catalog 提升后，Scheduler 只把对当前通道/宿主平台已不可执行的官方 pin 自动滚到最新可执行 trusted，并写 `runtime_image.project_pin_auto_roll` 审计（`source=official_catalog_promote`）；仍可执行的旧 pin 保持固定，第三方 pin 从不自动换 digest，已冻结 Job/Attempt 快照不改写。项目可在设置中将 `official_runtime_pin_policy` 设为 `hold` 显式停用自动滚动（默认 `roll_stale`）；此时 stale pin 继续由预检与建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`。空值跟随最新并始终保持 `null`。
 
 ### 6.1 Compose 任务的冻结种子
 

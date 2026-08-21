@@ -189,7 +189,7 @@ if (!testDatabaseUrl) {
     }
   });
 
-  test("stale project pin is distinct from latest trusted and is not silently rewritten", async () => {
+  test("resolver distinguishes a stale explicit pin from latest trusted", async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     const { migrate, sql } = await import("./db.js");
     const runtime = await import("./runtime-images.js");
@@ -253,6 +253,148 @@ if (!testDatabaseUrl) {
       assert.equal(explicitPin.image_digest, oldDigest);
     } finally {
       await sql`DELETE FROM runtime_images WHERE id = ${imageId}`;
+    }
+  });
+
+  test("authoritative official catalog promotion rolls only stale non-held official project pins", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    const { migrate, sql } = await import("./db.js");
+    const runtime = await import("./runtime-images.js");
+    await migrate();
+
+    const suffix = randomUUID().slice(0, 8);
+    const imageKey = `deepsonar-auto-roll-${suffix}`;
+    const imageId = randomUUID();
+    const staleVersionId = randomUUID();
+    const executableOldVersionId = randomUUID();
+    const staleDigest = `sha256:${"1".repeat(64)}`;
+    const executableOldDigest = `sha256:${"2".repeat(64)}`;
+    const newDigest = `sha256:${"3".repeat(64)}`;
+    const hostPlatform = runtime.hostRuntimePlatform();
+    const staleGithub = `ghcr.io/summersec/${imageKey}@${staleDigest}`;
+    const executableOldAcr = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${executableOldDigest}`;
+    const newGithub = `ghcr.io/summersec/${imageKey}@${newDigest}`;
+    const newAcr = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${newDigest}`;
+    const projects = {
+      auto: randomUUID(),
+      hold: randomUUID(),
+      executableOld: randomUUID(),
+      followLatest: randomUUID(),
+      thirdParty: randomUUID(),
+    };
+    const frozenJobId = randomUUID();
+    const thirdPartyImageId = randomUUID();
+    const thirdPartyOldVersionId = randomUUID();
+    const thirdPartyLatestVersionId = randomUUID();
+    try {
+      await sql`UPDATE global_settings SET runtime_registry_channel = 'aliyun-acr' WHERE id = 'global'`;
+      for (const [kind, projectId] of Object.entries(projects)) {
+        await sql`
+          INSERT INTO projects (id, canvas_id, name, config_json)
+          VALUES (
+            ${projectId},
+            ${`canvas-${projectId}`},
+            ${`Official pin roll ${kind} ${suffix}`},
+            ${sql.json((kind === "hold" ? { official_runtime_pin_policy: "hold" } : {}) as never)}
+          )`;
+      }
+      await sql`
+        INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official)
+        VALUES (${imageId}, ${imageKey}, 'Auto roll fixture', 'fixture', 'SummerSec', 'official', true)`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        VALUES
+          (${staleVersionId}, ${imageId}, '0.1.40', ${staleGithub}, ${staleGithub}, ${staleDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
+          (${executableOldVersionId}, ${imageId}, '0.1.41', ${executableOldAcr}, ${executableOldAcr}, ${executableOldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL)`;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
+        VALUES (${executableOldVersionId}, 'aliyun-acr', ${executableOldAcr}, ${executableOldAcr}, ${executableOldDigest}, ${sql.json({ source: "fixture" } as never)})`;
+      await sql`
+        INSERT INTO project_runtime_images (project_id, runtime_image_id, selected_version_id, enabled)
+        VALUES
+          (${projects.auto}, ${imageId}, ${staleVersionId}, true),
+          (${projects.hold}, ${imageId}, ${staleVersionId}, true),
+          (${projects.executableOld}, ${imageId}, ${executableOldVersionId}, true),
+          (${projects.followLatest}, ${imageId}, NULL, true)`;
+      await sql`
+        INSERT INTO jobs (id, project_id, type, status, agent_snapshot_json)
+        VALUES (
+          ${frozenJobId}, ${projects.auto}, 'audit', 'succeeded',
+          ${sql.json({ runtime_image_version_id: staleVersionId, image_digest: staleDigest } as never)}
+        )`;
+
+      const thirdOldRef = `registry.internal/third-party-${suffix}@sha256:${"4".repeat(64)}`;
+      const thirdLatestRef = `registry.internal/third-party-${suffix}@sha256:${"5".repeat(64)}`;
+      await sql`
+        INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official)
+        VALUES (${thirdPartyImageId}, ${`third-party-${suffix}`}, 'Third party fixture', 'fixture', 'fixture', 'third_party', false)`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        VALUES
+          (${thirdPartyOldVersionId}, ${thirdPartyImageId}, '1.0.0', ${thirdOldRef}, ${thirdOldRef}, ${`sha256:${"4".repeat(64)}`}, ${sql.json([hostPlatform] as never)}, 'revoked', NULL),
+          (${thirdPartyLatestVersionId}, ${thirdPartyImageId}, '1.1.0', ${thirdLatestRef}, ${thirdLatestRef}, ${`sha256:${"5".repeat(64)}`}, ${sql.json([hostPlatform] as never)}, 'trusted', now())`;
+      await sql`
+        INSERT INTO project_runtime_images (project_id, runtime_image_id, selected_version_id, enabled)
+        VALUES (${projects.thirdParty}, ${thirdPartyImageId}, ${thirdPartyOldVersionId}, true)`;
+
+      const catalog = {
+        schema: "deepsonar.registry/v2" as const,
+        schema_version: 2 as const,
+        source: "remote" as const,
+        fallback: false,
+        images: [{
+          image_key: imageKey,
+          name: "Auto roll fixture",
+          description: "fixture",
+          publisher: "SummerSec",
+          source_kind: "official" as const,
+          project_opt_in: false,
+          versions: [{
+            version: "0.1.42",
+            image_ref: newGithub,
+            digest: newDigest,
+            platforms: [hostPlatform],
+            registry_refs: { github: newGithub, "aliyun-acr": newAcr },
+          }],
+        }],
+      };
+      await runtime.applyOfficialRuntimeCatalog(catalog);
+      await runtime.applyOfficialRuntimeCatalog(catalog);
+
+      const bindings = await sql`
+        SELECT project_id, selected_version_id
+        FROM project_runtime_images
+        WHERE project_id = ANY(${Object.values(projects)}::uuid[])`;
+      const selected = new Map(bindings.map((row) => [String(row.project_id), row.selected_version_id ? String(row.selected_version_id) : null]));
+      const [savedNew] = await sql`
+        SELECT id FROM runtime_image_versions WHERE runtime_image_id = ${imageId} AND digest = ${newDigest}`;
+      assert.ok(savedNew?.id);
+      assert.equal(selected.get(projects.auto), String(savedNew.id), "default policy must roll a stale official pin");
+      assert.equal(selected.get(projects.hold), staleVersionId, "hold policy must preserve a stale official pin");
+      assert.equal(selected.get(projects.executableOld), executableOldVersionId, "an executable trusted old pin must stay pinned");
+      assert.equal(selected.get(projects.followLatest), null, "follow-latest must remain null");
+      assert.equal(selected.get(projects.thirdParty), thirdPartyOldVersionId, "third-party pins must never auto-roll");
+
+      const [frozenJob] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${frozenJobId}`;
+      assert.equal(frozenJob.agent_snapshot_json.runtime_image_version_id, staleVersionId, "historical Job snapshots stay immutable");
+
+      const audits = await sql`
+        SELECT action, project_id, resource_id, before_json, after_json
+        FROM audit_logs
+        WHERE action = 'runtime_image.project_pin_auto_roll'
+          AND project_id = ANY(${Object.values(projects)}::uuid[])`;
+      assert.equal(audits.length, 1, "every actual roll gets exactly one audit and skipped pins get none");
+      assert.equal(String(audits[0].project_id), projects.auto);
+      assert.equal(audits[0].resource_id, imageId);
+      assert.equal(audits[0].before_json.image_key, imageKey);
+      assert.equal(audits[0].before_json.version_id, staleVersionId);
+      assert.equal(audits[0].after_json.from_version, "0.1.40");
+      assert.equal(audits[0].after_json.to_version, "0.1.42");
+      assert.equal(audits[0].after_json.source, "official_catalog_promote");
+    } finally {
+      // Audit rows intentionally retain their project FK; the integration DB is disposable.
     }
   });
 

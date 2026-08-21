@@ -1317,6 +1317,11 @@ const OPS: Op[] = [
           },
         },
         image_strategy: { type: "string", enum: ["inherit_global", "project_managed"] },
+        official_runtime_pin_policy: {
+          type: "string",
+          enum: ["roll_stale", "hold"],
+          description: "官方镜像显式 pin 失效后的策略；默认 roll_stale，hold 保留旧 pin 并继续 fail closed",
+        },
         role_runtime_images: {
           type: "object",
           additionalProperties: { oneOf: [{ type: "string" }, { type: "null" }] },
