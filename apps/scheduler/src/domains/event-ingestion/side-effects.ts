@@ -177,6 +177,12 @@ export function sha16(s: string): string {
   return createHash("sha256").update(s).digest("hex").slice(0, 16);
 }
 
+async function markJobWaitingHuman(tx: EventIngestionTransaction, jobId: string): Promise<void> {
+  await tx`
+    UPDATE jobs SET status = 'waiting_human'
+    WHERE id = ${jobId} AND status = 'running'`;
+}
+
 async function blockHubOnMissingLocalImage(
   tx: EventIngestionTransaction,
   jobId: string,
@@ -184,9 +190,7 @@ async function blockHubOnMissingLocalImage(
   error: RuntimeImageNotLocalError,
 ): Promise<void> {
   const block = runtimeImageNotLocalCanvasBlock(error.details);
-  await tx`
-    UPDATE jobs SET status = 'waiting_human'
-    WHERE id = ${jobId} AND status = 'running'`;
+  await markJobWaitingHuman(tx, jobId);
   const [jobNode] = await tx`
     SELECT id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
   await tx`
@@ -1145,8 +1149,7 @@ export function createEventIngestionSideEffectApplication(
       const p = validatedPayload as HumanPayload;
       const canvasId = (job.canvas_id as string | null) ?? null;
       await validateHumanSubject(tx, job as Record<string, unknown>, p);
-      await tx`
-      UPDATE jobs SET status = 'waiting_human' WHERE id = ${jobId} AND status = 'running'`;
+      await markJobWaitingHuman(tx, jobId);
       const [jobNode] = await tx`
       SELECT id, canvas_id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
       if (jobNode) {

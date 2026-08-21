@@ -21,7 +21,7 @@ const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
     id: "event-ingestion.semantic-human",
     file: "domains/event-ingestion/side-effects.ts",
     targets: ["waiting_human"],
-    purpose: "request_human moves a running Job into the human gate",
+    purpose: "request_human and local-image Hub block move a running Job into the human gate",
     pattern:
       /UPDATE\s+jobs\s+SET\s+status\s*=\s*'waiting_human'[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
   },
