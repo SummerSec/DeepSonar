@@ -15,6 +15,7 @@ import { decodeCursor, cursorForRow, page, pageLimit } from "../../pagination.js
 import { createVerifyRound, markFindingNeedsHuman } from "../../verify.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
+import { assertFrozenRuntimeImageLocal } from "../../runtime-images.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 
 const FindingNeedsHumanBody = z
@@ -420,6 +421,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
         canvasId,
         await resolveAgentSnapshotForJob(tx, finding.project_id as string, role, [id]),
       );
+      await assertFrozenRuntimeImageLocal(snapshot, { roleName: role });
       const description = role === "review" ? "人工发起独立复核" : "人工发起运行实测";
       const prompt = role === "review"
         ? `对 Finding ${id} 做独立复核。核对其证据、可达路径与反例；通过 emit_fact 提交 verification.evidence_kind=review 的结构化证据，必须绑定该 finding_id 与实际 subject_revision。`

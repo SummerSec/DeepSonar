@@ -1,6 +1,12 @@
 import { CaretDown, CaretRight, Eye, EyeSlash, HandPalm, PaperPlaneTilt, Prohibit } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import type { HumanInterventionItem, HumanInterventionPrefs } from "./human-messages";
-import { countVisiblePendingHumanInterventions, toggleExpandedId, visibleHumanInterventions } from "./human-messages";
+import {
+  countVisiblePendingHumanInterventions,
+  runtimeImageNotLocalIntervention,
+  toggleExpandedId,
+  visibleHumanInterventions,
+} from "./human-messages";
 
 export function HumanInterventionBanner({
   items,
@@ -11,6 +17,7 @@ export function HumanInterventionBanner({
   onIgnore,
   onOpenFinding,
   onOpenJob,
+  imagesHref,
 }: {
   items: readonly HumanInterventionItem[];
   prefs: HumanInterventionPrefs;
@@ -20,6 +27,7 @@ export function HumanInterventionBanner({
   onIgnore: (item: HumanInterventionItem) => void;
   onOpenFinding: (findingId: string) => void;
   onOpenJob: (jobId: string) => void;
+  imagesHref?: string | null;
 }) {
   const replied = new Set(prefs.repliedIds);
   const hidden = new Set(prefs.hiddenIds);
@@ -115,6 +123,9 @@ export function HumanInterventionBanner({
                   </button>
                   {item.findingId && <button type="button" onClick={() => onOpenFinding(item.findingId!)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Finding</button>}
                   {item.jobId && <button type="button" onClick={() => onOpenJob(item.jobId!)} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">Job</button>}
+                  {runtimeImageNotLocalIntervention(item.node) && imagesHref && (
+                    <Link to={imagesHref} className="font-mono text-[10px] text-acc-400 hover:text-acc-300">去市场准备</Link>
+                  )}
                 </div>
               </div>
             );

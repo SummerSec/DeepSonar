@@ -324,8 +324,20 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                     <span>
                       <b>{check.message}</b>
                       {repair && (isExternalHref(repair.href)
-                        ? <a href={repair.href} target="_blank" rel="noreferrer">{repair.target}<ArrowUpRight size={12} /></a>
-                        : <Link to={repair.href}>{repair.target}<ArrowUpRight size={12} /></Link>)}
+                        ? <a href={repair.href} target="_blank" rel="noreferrer">{check.code === "RUNTIME_IMAGE_NOT_LOCAL" ? "去市场准备" : repair.target}<ArrowUpRight size={12} /></a>
+                        : <Link to={repair.href}>{check.code === "RUNTIME_IMAGE_NOT_LOCAL" ? "去市场准备" : repair.target}<ArrowUpRight size={12} /></Link>)}
+                      {check.code === "RUNTIME_IMAGE_NOT_LOCAL" && check.runtime_image && (
+                        <span className="intent-launch-image-local">
+                          {check.runtime_image.image_key}
+                          {check.runtime_image.version ? ` ${check.runtime_image.version}` : ""}
+                          {check.runtime_image.digest
+                            ? ` · ${check.runtime_image.digest.replace(/^sha256:/, "").slice(0, 12)}`
+                            : ""}
+                          {repair
+                            ? null
+                            : <Link to={readiness.scope.project_id ? `/projects/${readiness.scope.project_id}/images` : "/images"}>去市场准备<ArrowUpRight size={12} /></Link>}
+                        </span>
+                      )}
                       {check.code === "RUNTIME_IMAGE_PIN_STALE"
                         && readiness.scope.project_id
                         && check.runtime_image?.runtime_image_id

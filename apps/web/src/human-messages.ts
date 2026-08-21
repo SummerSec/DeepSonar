@@ -184,6 +184,21 @@ export function humanInterventionJobId(node: CanvasNode): string | null {
   return typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null;
 }
 
+export function runtimeImageNotLocalIntervention(node: CanvasNode): {
+  image_key: string;
+  version: string | null;
+  digest: string | null;
+} | null {
+  if (node.node_type !== "human") return null;
+  const body = node.body_json ?? {};
+  if (body.kind !== "runtime_image_not_local" && body.error_code !== "RUNTIME_IMAGE_NOT_LOCAL") return null;
+  return {
+    image_key: typeof body.image_key === "string" ? body.image_key : "",
+    version: typeof body.version === "string" ? body.version : null,
+    digest: typeof body.digest === "string" ? body.digest : null,
+  };
+}
+
 export function listHumanInterventions(nodes: readonly CanvasNode[], limit = 12): HumanInterventionItem[] {
   return nodes
     .filter((node) => node.node_type === "human")

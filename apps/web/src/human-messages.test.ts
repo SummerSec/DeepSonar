@@ -17,6 +17,7 @@ import {
   isPendingHumanIntervention,
   jobCanReceiveHumanReply,
   listHumanInterventions,
+  runtimeImageNotLocalIntervention,
   messagesForCanvasNode,
   openHumanInterventionForJob,
   readHumanInterventionPrefs,
@@ -155,6 +156,26 @@ test("open human interventions can be ignored; processed history cannot", () => 
   assert.equal(countVisiblePendingHumanInterventions(listed), 1);
   assert.equal(countVisiblePendingHumanInterventions(listed, [], ["human-open"]), 0);
   assert.equal(listed.find((item) => item.node.id === "human-open")?.findingId, "finding-1");
+  const imageBlock = node({
+    id: "human-image",
+    node_type: "human",
+    status: "open",
+    job_id: "hub-1",
+    body_json: {
+      kind: "runtime_image_not_local",
+      error_code: "RUNTIME_IMAGE_NOT_LOCAL",
+      image_key: "deepsonar-audit",
+      version: "0.1.41",
+      digest: `sha256:${"1".repeat(64)}`,
+      reason: "本机没有冻结镜像",
+    },
+  });
+  assert.deepEqual(runtimeImageNotLocalIntervention(imageBlock), {
+    image_key: "deepsonar-audit",
+    version: "0.1.41",
+    digest: `sha256:${"1".repeat(64)}`,
+  });
+  assert.equal(runtimeImageNotLocalIntervention(pending), null);
 });
 
 test("collapse prefs default collapsed and persist per user and task", () => {

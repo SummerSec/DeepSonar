@@ -15,6 +15,7 @@ import {
   freezeAgentSnapshotNetworkPolicy,
 } from "../role-runtime-snapshot/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
+import { assertFrozenRuntimeImageLocal } from "../../runtime-images.js";
 
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 export const JOB_NOT_RESUMABLE = "JOB_NOT_RESUMABLE" as const;
@@ -244,6 +245,10 @@ export async function requeueJob(
         detail: { job_id: jobId, stale_fields: staleFields },
       };
     }
+
+    await assertFrozenRuntimeImageLocal(
+      (mode === "rerun-current" ? currentSnapshot : job.agent_snapshot_json) as Record<string, unknown>,
+    );
 
     // waiting_human may still own the previous active Attempt. Close it as an
     // interrupted execution and preserve every settled/unknown effect; the

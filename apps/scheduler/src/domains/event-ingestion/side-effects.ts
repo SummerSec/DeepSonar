@@ -25,6 +25,11 @@ import {
   type HubReferenceLookup,
 } from "../../graph.js";
 import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "../../control-input.js";
+import {
+  assertFrozenRuntimeImageLocal,
+  RuntimeImageNotLocalError,
+  runtimeImageNotLocalCanvasBlock,
+} from "../../runtime-images.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
 import {
   assertComposeFindingInScope,
@@ -139,6 +144,10 @@ export interface EventIngestionSideEffectPorts {
     status: "succeeded" | "failed",
     result?: EventFinalizeResult,
   ) => Promise<unknown>;
+  assertFrozenRuntimeImageLocal?: (
+    snapshot: AgentRuntimeSnapshot,
+    options?: { roleName?: string | null },
+  ) => Promise<void>;
 }
 
 export type EventCanvasEdgeInput = {
@@ -166,6 +175,40 @@ function dedupeCanvasEdges(edges: readonly EventCanvasEdgeInput[]): EventCanvasE
 
 export function sha16(s: string): string {
   return createHash("sha256").update(s).digest("hex").slice(0, 16);
+}
+
+async function markJobWaitingHuman(tx: EventIngestionTransaction, jobId: string): Promise<void> {
+  await tx`
+    UPDATE jobs SET status = 'waiting_human'
+    WHERE id = ${jobId} AND status = 'running'`;
+}
+
+async function blockHubOnMissingLocalImage(
+  tx: EventIngestionTransaction,
+  jobId: string,
+  canvasId: string,
+  error: RuntimeImageNotLocalError,
+): Promise<void> {
+  const block = runtimeImageNotLocalCanvasBlock(error.details);
+  await markJobWaitingHuman(tx, jobId);
+  const [jobNode] = await tx`
+    SELECT id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
+  await tx`
+    INSERT INTO canvas_nodes ${tx({
+      canvas_id: canvasId,
+      job_id: jobId,
+      node_type: "human",
+      title: block.title,
+      body_json: block as never,
+      x: jobNode ? Number(jobNode.x) + 150 : 200,
+      y: jobNode ? Number(jobNode.y) - 160 : 200,
+      status: "open",
+    })}`;
+  if (jobNode) {
+    await tx`
+      UPDATE canvas_nodes SET status = 'waiting_human', updated_at = now()
+      WHERE id = ${jobNode.id}`;
+  }
 }
 
 export function createEventIngestionSideEffectApplication(
@@ -891,6 +934,18 @@ export function createEventIngestionSideEffectApplication(
       const hubEdges: EventCanvasEdgeInput[] = [];
 
       const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
+      const preparedIntents: Array<{
+        it: (typeof intents)[number];
+        role: string;
+        title: string;
+        snapshot: AgentRuntimeSnapshot;
+        workerPrompt: string;
+        relatedImportedIds: string[];
+        applyHubFollowup: boolean;
+        verificationFollowup: ReturnType<FindingVerificationApplication["buildVerificationFollowupPayload"]>;
+        followupFindingId: string | null;
+        schedulingPurpose: SchedulingPurpose;
+      }> = [];
 
       for (const it of intents) {
         if (roles.length === 0) {
@@ -960,9 +1015,45 @@ export function createEventIngestionSideEffectApplication(
             snapshotFindingIds,
           ),
         );
+        try {
+          await (ports.assertFrozenRuntimeImageLocal ?? assertFrozenRuntimeImageLocal)(snapshot, { roleName: role });
+        } catch (error) {
+          if (error instanceof RuntimeImageNotLocalError) {
+            await blockHubOnMissingLocalImage(tx, jobId, canvasId, error);
+            return;
+          }
+          throw error;
+        }
         // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
         const applyHubFollowup = hubFollowup && !verificationFollowup;
         const schedulingPurpose: SchedulingPurpose = verificationFollowup ? "convergence_evidence" : "discovery";
+        preparedIntents.push({
+          it,
+          role,
+          title,
+          snapshot,
+          workerPrompt,
+          relatedImportedIds,
+          applyHubFollowup,
+          verificationFollowup,
+          followupFindingId,
+          schedulingPurpose,
+        });
+      }
+
+      for (const prepared of preparedIntents) {
+        const {
+          it,
+          role,
+          title,
+          snapshot,
+          workerPrompt,
+          relatedImportedIds,
+          applyHubFollowup,
+          verificationFollowup,
+          followupFindingId,
+          schedulingPurpose,
+        } = prepared;
         const [roleJob] = await tx`
         INSERT INTO jobs ${tx({
           project_id: job.project_id as string,
@@ -1058,8 +1149,7 @@ export function createEventIngestionSideEffectApplication(
       const p = validatedPayload as HumanPayload;
       const canvasId = (job.canvas_id as string | null) ?? null;
       await validateHumanSubject(tx, job as Record<string, unknown>, p);
-      await tx`
-      UPDATE jobs SET status = 'waiting_human' WHERE id = ${jobId} AND status = 'running'`;
+      await markJobWaitingHuman(tx, jobId);
       const [jobNode] = await tx`
       SELECT id, canvas_id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
       if (jobNode) {

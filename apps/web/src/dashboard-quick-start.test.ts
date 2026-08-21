@@ -214,3 +214,12 @@ test("legacy readiness links normalize to real settings panels", () => {
   assert.equal(resolveReadinessFix({ href: `/projects/${project.id}/settings?tab=credentials`, target: "credentials" }, projectScope)?.href, "/settings/credentials");
   assert.equal(resolveReadinessFix({ href: "/projects", target: "task-network-policy" }, globalScope)?.href, "/settings/platform?tab=rules");
 });
+
+test("IntentLaunchRail surfaces local image identity and a prepare link", async () => {
+  const { readFileSync } = await import("node:fs");
+  const rail = readFileSync(new URL("./components/IntentLaunchRail.tsx", import.meta.url), "utf8");
+  assert.match(rail, /RUNTIME_IMAGE_NOT_LOCAL/);
+  assert.match(rail, /去市场准备/);
+  assert.match(rail, /runtime_image\.digest/);
+  assert.match(rail, /runtime_image\.version/);
+});

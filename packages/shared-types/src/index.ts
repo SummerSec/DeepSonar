@@ -653,6 +653,10 @@ export const ReadinessRuntimeImageSummary = z.object({
   latest_version_id: z.string().uuid().nullable().optional(),
   latest_version: z.string().nullable().optional(),
   pin_stale: z.boolean().optional(),
+  /** Immutable digest reference the host must already have locally. */
+  image_ref: z.string().nullable().optional(),
+  /** Executable catalog version label (not necessarily the project pin). */
+  version: z.string().nullable().optional(),
 });
 export type ReadinessRuntimeImageSummary = z.infer<typeof ReadinessRuntimeImageSummary>;
 
