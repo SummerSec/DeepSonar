@@ -426,11 +426,20 @@ export async function rollStaleOfficialProjectPins(
   options: {
     channel?: RuntimeImageRegistryChannel;
     hostPlatform?: "linux/amd64" | "linux/arm64";
+    imageIds?: string[];
   } = {},
 ): Promise<OfficialRuntimePinRoll[]> {
-  const channel = options.channel ?? await readRuntimeRegistryChannel(db);
-  const platform = options.hostPlatform ?? hostRuntimePlatform();
-  const rows = await db`
+  const imageIds = options.imageIds?.filter(Boolean) ?? [];
+  if (options.imageIds && imageIds.length === 0) return [];
+  return db.begin(async (transaction) => {
+    const tx = transaction as unknown as typeof sql;
+    // Keep the selected channel stable until stale classification, binding
+    // updates, and their audits have all committed.
+    const lockedChannel = await readRuntimeRegistryChannel(tx);
+    const channel = options.channel ?? lockedChannel;
+    const platform = options.hostPlatform ?? hostRuntimePlatform();
+    const platformJson = tx.json([platform] as never);
+    const rows = await tx`
     WITH latest AS (
       SELECT DISTINCT ON (v.runtime_image_id)
              v.runtime_image_id,
@@ -443,7 +452,8 @@ export async function rollStaleOfficialProjectPins(
       WHERE ri.official = true
         AND ri.enabled = true
         AND v.trust_status = 'trusted'
-        AND v.platforms_json @> ${sql.json([platform] as never)}
+        AND v.platforms_json @> ${platformJson}
+        AND (${imageIds.length === 0} OR v.runtime_image_id = ANY(${imageIds}::uuid[]))
       ORDER BY v.runtime_image_id,
                v.promoted_at DESC NULLS LAST,
                v.approved_at DESC NULLS LAST,
@@ -469,7 +479,7 @@ export async function rollStaleOfficialProjectPins(
         AND latest.version_id <> pri.selected_version_id
         AND NOT (
           pinned.trust_status = 'trusted'
-          AND pinned.platforms_json @> ${sql.json([platform] as never)}
+          AND pinned.platforms_json @> ${platformJson}
           AND pinned_ref.id IS NOT NULL
         )
     ), updated AS (
@@ -523,15 +533,16 @@ export async function rollStaleOfficialProjectPins(
       ON audited.project_id = updated.project_id
      AND audited.resource_id = updated.runtime_image_id::text
     ORDER BY updated.project_id, updated.image_key`;
-  return rows.map((row) => ({
-    project_id: String(row.project_id),
-    runtime_image_id: String(row.runtime_image_id),
-    image_key: String(row.image_key),
-    from_version_id: String(row.from_version_id),
-    from_version: String(row.from_version),
-    to_version_id: String(row.to_version_id),
-    to_version: String(row.to_version),
-  }));
+    return rows.map((row) => ({
+      project_id: String(row.project_id),
+      runtime_image_id: String(row.runtime_image_id),
+      image_key: String(row.image_key),
+      from_version_id: String(row.from_version_id),
+      from_version: String(row.from_version),
+      to_version_id: String(row.to_version_id),
+      to_version: String(row.to_version),
+    }));
+  });
 }
 
 /**
@@ -1278,6 +1289,7 @@ export async function applyOfficialRuntimeCatalog(
       selectedRefs.set(version, selectRuntimeImageRef(item.image_key, version));
     }
   }
+  const appliedImageIds: string[] = [];
   for (const item of registry.images) {
     const [image] = await sql`
       INSERT INTO runtime_images ${sql({
@@ -1290,6 +1302,7 @@ export async function applyOfficialRuntimeCatalog(
       WHERE runtime_images.official = true
       RETURNING id`;
     if (!image) throw new Error(`官方镜像 key 已被非官方产品占用: ${item.image_key}`);
+    appliedImageIds.push(String(image.id));
     const appliedDigests = new Set<string>();
     for (const version of item.versions) {
       const legacyChannel = version.image_ref ? legacyChannelForRef(version.image_ref) : null;
@@ -1468,7 +1481,7 @@ export async function applyOfficialRuntimeCatalog(
       WHERE runtime_image_id = ${image.id} AND trust_status = 'disabled'`;
   }
   if (reconcilePromotions) {
-    const rolled = await rollStaleOfficialProjectPins(sql);
+    const rolled = await rollStaleOfficialProjectPins(sql, { imageIds: appliedImageIds });
     if (rolled.length > 0) {
       console.log(`[runtime-images] 官方清单提升后自动滚动 ${rolled.length} 个过期项目 pin`);
     }

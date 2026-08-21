@@ -281,11 +281,15 @@ if (!testDatabaseUrl) {
       executableOld: randomUUID(),
       followLatest: randomUUID(),
       thirdParty: randomUUID(),
+      unrelatedOfficial: randomUUID(),
     };
     const frozenJobId = randomUUID();
     const thirdPartyImageId = randomUUID();
     const thirdPartyOldVersionId = randomUUID();
     const thirdPartyLatestVersionId = randomUUID();
+    const unrelatedImageId = randomUUID();
+    const unrelatedOldVersionId = randomUUID();
+    const unrelatedLatestVersionId = randomUUID();
     try {
       await sql`UPDATE global_settings SET runtime_registry_channel = 'aliyun-acr' WHERE id = 'global'`;
       for (const [kind, projectId] of Object.entries(projects)) {
@@ -339,6 +343,27 @@ if (!testDatabaseUrl) {
         INSERT INTO project_runtime_images (project_id, runtime_image_id, selected_version_id, enabled)
         VALUES (${projects.thirdParty}, ${thirdPartyImageId}, ${thirdPartyOldVersionId}, true)`;
 
+      const unrelatedKey = `deepsonar-unrelated-${suffix}`;
+      const unrelatedOldDigest = `sha256:${"6".repeat(64)}`;
+      const unrelatedLatestDigest = `sha256:${"7".repeat(64)}`;
+      const unrelatedOldRef = `ghcr.io/summersec/${unrelatedKey}@${unrelatedOldDigest}`;
+      const unrelatedLatestRef = `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${unrelatedKey}@${unrelatedLatestDigest}`;
+      await sql`
+        INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official)
+        VALUES (${unrelatedImageId}, ${unrelatedKey}, 'Unrelated official fixture', 'fixture', 'SummerSec', 'official', true)`;
+      await sql`
+        INSERT INTO runtime_image_versions
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        VALUES
+          (${unrelatedOldVersionId}, ${unrelatedImageId}, '0.1.40', ${unrelatedOldRef}, ${unrelatedOldRef}, ${unrelatedOldDigest}, ${sql.json([hostPlatform] as never)}, 'revoked', NULL),
+          (${unrelatedLatestVersionId}, ${unrelatedImageId}, '0.1.42', ${unrelatedLatestRef}, ${unrelatedLatestRef}, ${unrelatedLatestDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now())`;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
+        VALUES (${unrelatedLatestVersionId}, 'aliyun-acr', ${unrelatedLatestRef}, ${unrelatedLatestRef}, ${unrelatedLatestDigest}, ${sql.json({ source: "fixture" } as never)})`;
+      await sql`
+        INSERT INTO project_runtime_images (project_id, runtime_image_id, selected_version_id, enabled)
+        VALUES (${projects.unrelatedOfficial}, ${unrelatedImageId}, ${unrelatedOldVersionId}, true)`;
+
       const catalog = {
         schema: "deepsonar.registry/v2" as const,
         schema_version: 2 as const,
@@ -376,6 +401,11 @@ if (!testDatabaseUrl) {
       assert.equal(selected.get(projects.executableOld), executableOldVersionId, "an executable trusted old pin must stay pinned");
       assert.equal(selected.get(projects.followLatest), null, "follow-latest must remain null");
       assert.equal(selected.get(projects.thirdParty), thirdPartyOldVersionId, "third-party pins must never auto-roll");
+      assert.equal(
+        selected.get(projects.unrelatedOfficial),
+        unrelatedOldVersionId,
+        "a partial catalog apply must not roll an official image absent from that catalog",
+      );
 
       const [frozenJob] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${frozenJobId}`;
       assert.equal(frozenJob.agent_snapshot_json.runtime_image_version_id, staleVersionId, "historical Job snapshots stay immutable");

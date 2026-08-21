@@ -1323,7 +1323,7 @@ export function RuntimeImagesPage() {
                 <div className="rounded-xl border border-amber-400/25 bg-amber-400/[.08] p-3">
                   <div className="font-mono text-[9px] tracking-[.14em] text-amber-300">STALE PROJECT PIN</div>
                   <p className="mt-1 text-[11px] leading-5 text-amber-100/90">
-                    项目仍固定在 {selected.image.selected_version ?? selected.image.selected_version_id}，该版本当前不是可执行的 trusted。最新 trusted 为 {selected.image.latest_version ?? "新版本"}。不会自动改写显式 pin。
+                    项目仍固定在 {selected.image.selected_version ?? selected.image.selected_version_id}，该版本当前不是可执行的 trusted。最新 trusted 为 {selected.image.latest_version ?? "新版本"}。官方 catalog 提升会自动滚动未设 hold 的过期 pin；第三方或项目 hold 仍需手动升级。
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {selected.image.latest_version_id && (
@@ -1349,7 +1349,7 @@ export function RuntimeImagesPage() {
                 <div className="rounded-xl border border-acc-400/20 bg-acc-400/[.05] p-3">
                   <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PIN PLATFORM VERSION</div>
                   <p className="theme-muted mt-1 text-[11px] leading-5">
-                    为项目固定某一平台的可信 digest。不固定（version_id=null）时跟随最新 trusted，官方升版后自动可用。显式 pin 不会在 registry sync 时被改写。
+                    为项目固定某一平台的可信 digest。不固定（version_id=null）时跟随最新 trusted。官方显式 pin 过期后会在 catalog 提升时自动滚到最新 trusted；需要保留旧官方版本时，请在项目镜像策略中设为 hold。
                   </p>
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                     <SearchableSelect
