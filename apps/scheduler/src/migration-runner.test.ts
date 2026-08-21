@@ -56,6 +56,12 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.equal(manifest.has("schema_migrations"), false);
 });
 
+test("boot path reconciles owned sequences after structure checks", async () => {
+  const source = await readFile(new URL("./migration-runner.ts", import.meta.url), "utf8");
+  assert.match(source, /await reconcileOwnedSequences\(db\);/);
+  assert.match(source, /import \{ reconcileOwnedSequences \} from "\.\/owned-sequences\.js"/);
+});
+
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
 async function createDatabase(admin: ReturnType<typeof postgres>): Promise<{ name: string; url: string }> {

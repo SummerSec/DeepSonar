@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts src/schema-rebuild.test.ts",
+    "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts src/schema-rebuild.test.ts src/schema-rebuild.integration.test.ts",
     "db:rebuild": "tsx src/schema-rebuild-cli.ts"
   },
   "dependencies": {

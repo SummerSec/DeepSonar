@@ -34,8 +34,10 @@ pnpm db:rebuild -- --apply
 默认会尝试 `pg_dump -Fc` 到 `data/backups/`，再把 `public` 表移到
 `deepsonar_rebuild_src`，套用当前 `database/schema.sql`，按拓扑序复制交集列，
 最后补官方 catalog 种子（空 catalog 保留新基线；已有 RoleConfig / 用户 /
-项目等按列拷回），再对**全部 public 基表**上 IDENTITY / serial / bigserial
-列做序列 reset：空表下次 `nextval` 为 1，非空 `MAX=N` 则下次为 `N+1`。
+项目等按列拷回），再按 `pg_depend` 只 reset **public** 上 IDENTITY / serial /
+bigserial 列（不信任 `pg_get_serial_sequence`，避免打到随后被丢掉的 staging
+序列）：空表下次 `nextval` 为 1，非空 `MAX=N` 则下次为 `N+1`。rebuild 结束会
+再断言一次；Scheduler 启动对已漂移的序列自动 `setval`，对不齐 fail closed。
 `--force` 才允许在已是当前版本、结构未知或仍有活跃 Job
 时继续。这不是 Scheduler 启动时的自动升级，也不是 #34 增量 migration。
 
