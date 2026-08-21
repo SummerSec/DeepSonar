@@ -8,6 +8,7 @@ import {
   isUsableFlowSize,
   READABLE_FIT_MIN_ZOOM,
   resolveFitMinZoom,
+  resolveViewportGeneration,
   resolveViewportNodeIds,
   shouldRecoverViewport,
 } from "./canvas-viewport.js";
@@ -47,6 +48,26 @@ test("trace focus fits the explicit node while an unfocused trace fits its visib
     undefined,
     "empty trace targets must fall back to the full visible graph",
   );
+});
+
+test("normal projection changes preserve the initial viewport generation", () => {
+  assert.equal(resolveViewportGeneration("canvas-1", false, new Set(), false), "");
+  const initial = resolveViewportGeneration("canvas-1", true, new Set(["old-node"]), false);
+  const afterFilterOrExpansion = resolveViewportGeneration("canvas-1", true, new Set(["new-node"]), false);
+  assert.equal(initial, "canvas-1:initial");
+  assert.equal(afterFilterOrExpansion, initial);
+});
+
+test("explicit node focus receives a deterministic one-time fit generation", () => {
+  assert.equal(
+    resolveViewportGeneration("canvas-1", true, new Set(["finding", "source"]), true, "finding"),
+    "canvas-1:focus:finding",
+  );
+  assert.equal(
+    resolveViewportGeneration("canvas-1", true, new Set(["source", "finding"]), true, "finding"),
+    "canvas-1:focus:finding",
+  );
+  assert.deepEqual(resolveViewportNodeIds(["source", "finding"], new Set(), false, "finding"), ["finding"]);
 });
 
 test("automatic fitView keeps a readable min zoom; the pane can still zoom further out", () => {

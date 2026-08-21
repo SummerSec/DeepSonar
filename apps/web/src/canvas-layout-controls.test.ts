@@ -15,7 +15,7 @@ test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /getNodesBounds\(visibleNodes\)/);
   assert.match(source, /getViewportForBounds\(bounds,/);
   assert.match(source, /toPng\(viewport,/);
-  assert.match(source, /aria-label=\{exportingImage \? "正在导出画布图片" : "导出画布图片"\}/);
+  assert.match(source, /aria-label=\{exportingImage \? "正在导出当前可见投影" : "导出当前可见投影图片"\}/);
   assert.match(source, /height: NODE_H\[n\.node_type\] \?\? 172/);
   assert.match(source, /<CanvasMiniMap nodes=\{visibleNodes\} \/>/);
   assert.match(source, /pannable/);
@@ -26,6 +26,10 @@ test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /edgeTypes=\{canvasEdgeTypes\}/);
   assert.match(source, /visibleBroadcastOverlayEdges\(/);
   assert.match(source, /DEFAULT_CHILD_LIMIT/);
+  assert.match(source, /展开全部深度/);
+  assert.match(source, /回到默认/);
+  assert.match(source, /常规投影上限 \{MAX_RENDERED_NODES\} 个节点/);
+  assert.match(source, /导出当前可见投影为 PNG/);
   assert.match(source, /筛选过程节点/);
   assert.match(source, /shouldRecoverViewport\(/);
   assert.match(source, /hasPositiveNodeBounds\(fitTargets\)/);

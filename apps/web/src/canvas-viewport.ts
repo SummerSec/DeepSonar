@@ -47,16 +47,32 @@ export function shouldRecoverViewport(
   return !isUsableFlowSize(previousWidth, previousHeight) && isUsableFlowSize(width, height);
 }
 
+/**
+ * Normal projection changes must not repeatedly reset a viewport the user has
+ * panned or zoomed. A canvas gets one automatic fit; an explicit node or
+ * trace focus gets its own stable generation and may fit once when entered.
+ */
+export function resolveViewportGeneration(
+  canvasId: string,
+  layoutReady: boolean,
+  traceNodeIds: ReadonlySet<string>,
+  traceActive: boolean,
+  focusNodeId?: string | null,
+): string {
+  if (!layoutReady) return "";
+  if (focusNodeId) return `${canvasId}:focus:${focusNodeId}`;
+  if (!traceActive) return `${canvasId}:initial`;
+  return `${canvasId}:trace:${[...traceNodeIds].sort().join(",")}`;
+}
+
 export function resolveViewportNodeIds(
   visibleNodeIds: readonly string[],
   traceNodeIds: ReadonlySet<string>,
   traceActive: boolean,
   focusNodeId?: string | null,
 ): string[] | undefined {
+  if (focusNodeId && visibleNodeIds.includes(focusNodeId)) return [focusNodeId];
   if (!traceActive) return undefined;
-  if (focusNodeId && traceNodeIds.has(focusNodeId) && visibleNodeIds.includes(focusNodeId)) {
-    return [focusNodeId];
-  }
   const chain = visibleNodeIds.filter((id) => traceNodeIds.has(id));
   return chain.length > 0 ? chain : undefined;
 }
