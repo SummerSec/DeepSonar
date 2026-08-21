@@ -704,6 +704,14 @@ const OPS: Op[] = [
       },
     },
   },
+  {
+    method: "post",
+    path: "/canvases/{id}/human-nodes/{nodeId}/ignore",
+    summary: "忽略未处理的人工介入",
+    description: "将 open 的 human 节点标为 ignored。若对应 Job 仍为 waiting_human，则关闭旧 Attempt 并恢复为 pending，让 Agent 在图上看到忽略决议后继续推进。已忽略的请求幂等返回。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
   { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",

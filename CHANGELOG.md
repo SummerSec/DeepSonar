@@ -6,6 +6,7 @@
 
 ### 修复
 
+- 任务页人工介入默认折叠、可隐藏历史，并提供「忽略」以跳过等待（#277）。忽略会把 human 节点标为 `ignored`；若 Job 仍为 `waiting_human` 则恢复 pending，让 Agent 继续推进。折叠/隐藏按用户与任务写入 localStorage。
 - 镜像市场切换官方仓库通道时，若已有准备/拉取任务，返回当前 `pull-status`（202）并展示进度，不再把 `409 runtime_image_preparation_busy` 当硬失败（#278）。同 digest 复用准备锁，通道切换可抢占当前通道的 `admin_bulk`。下拉保持待切换通道，完成后自动重试落库。准备任务异常退出会离开 `queued`/`running`。
 
 ## [0.1.42] - 2026-08-20

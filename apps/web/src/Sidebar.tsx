@@ -5,7 +5,7 @@ import { broadcastStatusLabel, BROADCAST_STATUS_COLOR } from "./canvas-broadcast
 import { LiveStream } from "./LiveStream";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
-import { humanMessageStatusLabel } from "./human-messages";
+import { HumanMessageList } from "./HumanMessageList";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
 const CANCELLABLE_NODE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -66,6 +66,7 @@ export function Sidebar({
 }) {
   const confirm = useConfirmDialog();
   const [job, setJob] = useState<JobDetail | null>(null);
+  const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [forceBusy, setForceBusy] = useState(false);
   const [forceMsg, setForceMsg] = useState<string | null>(null);
@@ -260,19 +261,12 @@ export function Sidebar({
                   </div>
                 </div>
               )}
-              {messages.length > 0 && (
-                <section className="human-message-detail-section mb-3" aria-label="人工消息明细">
-                  <div className="human-message-detail-heading"><span>{node.node_type === "human" ? "人工消息" : "发往此节点"}</span><strong>{messages.length}</strong></div>
-                  <ol>{messages.map((message) => <li key={message.id}>
-                    <div className="human-message-detail-meta"><strong>{humanMessageStatusLabel(message.status)}</strong><span>{new Date(message.planned_at).toLocaleString()}</span></div>
-                    <p>{message.body}</p>
-                    {message.attachments.length > 0 && <ul>{message.attachments.map((attachment) => <li key={attachment.version_id}>{attachment.filename ?? attachment.logical_key ?? attachment.version_id}<small>{attachment.bytes.toLocaleString()} bytes · {attachment.content_type ?? attachment.content_sha256.slice(0, 12)}</small></li>)}</ul>}
-                    {message.delivered_at && <small>投递：{new Date(message.delivered_at).toLocaleString()}</small>}
-                    {message.acknowledged_at && <small>ACK：{new Date(message.acknowledged_at).toLocaleString()}{message.ack_summary ? ` · ${message.ack_summary}` : ""}</small>}
-                    {message.error && <small className="is-error">{message.error}</small>}
-                  </li>)}</ol>
-                </section>
-              )}
+              <HumanMessageList
+                messages={messages}
+                heading={node.node_type === "human" ? "人工消息" : "发往此节点"}
+                expandedIds={expandedMessageIds}
+                onExpandedIdsChange={setExpandedMessageIds}
+              />
               {(node.node_type === "fact" || node.node_type === "finding") && (
                 <section className="broadcast-sidebar-section mb-3" aria-label="广播目标明细">
                   <div className="broadcast-sidebar-heading">

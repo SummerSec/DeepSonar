@@ -124,6 +124,7 @@ POST /canvases/:id/convergence/pause
 POST /canvases/:id/convergence/resume
 POST /canvases/:id/convergence/run-hub-now
 POST /canvases/:id/convergence/stop-after-gate
+POST /canvases/:id/human-nodes/:nodeId/ignore
 POST /canvases/:id/messages
 POST /control/v1/jobs/:jobId/operations/:operationId
 POST /canvases/:id/jobs/cancel-active
@@ -296,6 +297,7 @@ POST /findings/{id}/report
 POST /findings/{id}/shared-assets
 POST /findings/{id}/evidence-jobs
 POST /findings/{id}/verify
+POST /canvases/{id}/human-nodes/{nodeId}/ignore
 POST /canvases/{id}/messages
 POST /jobs
 POST /jobs/{id}/cancel

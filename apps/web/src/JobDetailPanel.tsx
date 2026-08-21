@@ -7,7 +7,7 @@ import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
 import { SearchableMultiSelect } from "./SearchableSelect";
-import { humanMessageStatusLabel } from "./human-messages";
+import { HumanMessageList } from "./HumanMessageList";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SessionViewer } from "./session-viewer/SessionViewer";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
@@ -175,6 +175,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const [sessionLoad, setSessionLoad] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>("live");
+  const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [eventTypeFilter, setEventTypeFilter] = useState<string[]>([]);
@@ -219,6 +220,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     setDownloadError(null);
     setEventTypeFilter([]);
     setEventQuery("");
+    setExpandedMessageIds([]);
     api.credentials().then((list) => alive && setCredentials(list)).catch(() => {});
     api.authMe().then((me) => {
       if (!alive) return;
@@ -701,19 +703,12 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                 </div>
               )}
 
-              {messages.length > 0 && (
-                <section className="human-message-detail-section" aria-label="人工消息">
-                  <div className="human-message-detail-heading"><span>人工消息</span><strong>{messages.length}</strong></div>
-                  <ol>{messages.map((message) => <li key={message.id}>
-                    <div className="human-message-detail-meta"><strong>{humanMessageStatusLabel(message.status)}</strong><span>{new Date(message.planned_at).toLocaleString()}</span></div>
-                    <p>{message.body}</p>
-                    {message.attachments.length > 0 && <ul>{message.attachments.map((attachment) => <li key={attachment.version_id}>{attachment.filename ?? attachment.logical_key ?? attachment.version_id}<small>{attachment.bytes.toLocaleString()} bytes · {attachment.content_type ?? attachment.content_sha256.slice(0, 12)}</small></li>)}</ul>}
-                    {message.delivered_at && <small>投递：{new Date(message.delivered_at).toLocaleString()}</small>}
-                    {message.acknowledged_at && <small>ACK：{new Date(message.acknowledged_at).toLocaleString()}{message.ack_summary ? ` · ${message.ack_summary}` : ""}</small>}
-                    {message.error && <small className="is-error">{message.error}</small>}
-                  </li>)}</ol>
-                </section>
-              )}
+              <HumanMessageList
+                messages={messages}
+                heading="人工消息"
+                expandedIds={expandedMessageIds}
+                onExpandedIdsChange={setExpandedMessageIds}
+              />
               <section className="theme-surface rounded-2xl p-4 ring-1">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400/90">

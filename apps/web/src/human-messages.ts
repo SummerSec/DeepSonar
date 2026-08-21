@@ -94,3 +94,116 @@ export function messagesForCanvasNode(
 ): CanvasHumanMessage[] {
   return messages.filter((message) => message.human_node_id === nodeId || message.target_node_id === nodeId);
 }
+
+/** Open request_human / comment / blocker nodes still waiting for an operator. */
+export const HUMAN_INTERVENTION_PENDING_STATUSES = new Set(["open", ""]);
+export const HUMAN_INTERVENTION_PREF_PREFIX = "deepsonar:human-intervention";
+
+export interface HumanInterventionItem {
+  node: CanvasNode;
+  reason: string;
+  findingId: string | null;
+  jobId: string | null;
+  pending: boolean;
+}
+
+export interface HumanInterventionPrefs {
+  bannerCollapsed: boolean;
+  hideProcessed: boolean;
+  expandedIds: string[];
+  messagesCollapsed: boolean;
+}
+
+export function defaultHumanInterventionPrefs(): HumanInterventionPrefs {
+  return { bannerCollapsed: true, hideProcessed: true, expandedIds: [], messagesCollapsed: true };
+}
+
+export function humanInterventionPrefKey(userKey: string, canvasId: string): string {
+  return `${HUMAN_INTERVENTION_PREF_PREFIX}:${userKey || "local"}:${canvasId}`;
+}
+
+export function readHumanInterventionPrefs(userKey: string, canvasId: string): HumanInterventionPrefs {
+  const fallback = defaultHumanInterventionPrefs();
+  try {
+    const raw = globalThis.localStorage?.getItem(humanInterventionPrefKey(userKey, canvasId));
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<HumanInterventionPrefs>;
+    return {
+      bannerCollapsed: parsed.bannerCollapsed !== false,
+      hideProcessed: parsed.hideProcessed !== false,
+      expandedIds: Array.isArray(parsed.expandedIds) ? parsed.expandedIds.filter((id): id is string => typeof id === "string") : [],
+      messagesCollapsed: parsed.messagesCollapsed !== false,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeHumanInterventionPrefs(userKey: string, canvasId: string, prefs: HumanInterventionPrefs): void {
+  try {
+    globalThis.localStorage?.setItem(humanInterventionPrefKey(userKey, canvasId), JSON.stringify(prefs));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function toggleExpandedId(ids: readonly string[], id: string): string[] {
+  return ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id];
+}
+
+function subjectFindingId(node: CanvasNode): string | null {
+  const subject = node.body_json?.subject;
+  if (subject && typeof subject === "object" && typeof (subject as Record<string, unknown>).finding_id === "string") {
+    return String((subject as Record<string, unknown>).finding_id);
+  }
+  return typeof node.body_json?.finding_id === "string" ? node.body_json.finding_id : null;
+}
+
+export function isIgnoredHumanIntervention(node: CanvasNode): boolean {
+  return node.status === "ignored" || node.body_json?.resolution === "ignored";
+}
+
+export function isPendingHumanIntervention(node: CanvasNode): boolean {
+  if (node.node_type !== "human" || isIgnoredHumanIntervention(node)) return false;
+  return HUMAN_INTERVENTION_PENDING_STATUSES.has(node.status ?? "");
+}
+
+/** Operator can dismiss an open intervention; processed/history only hide. */
+export function canIgnoreHumanIntervention(node: CanvasNode): boolean {
+  return isPendingHumanIntervention(node);
+}
+
+export function humanInterventionJobId(node: CanvasNode): string | null {
+  if (node.job_id) return node.job_id;
+  return typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null;
+}
+
+export function listHumanInterventions(nodes: readonly CanvasNode[], limit = 12): HumanInterventionItem[] {
+  return nodes
+    .filter((node) => node.node_type === "human")
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, limit)
+    .map((node) => ({
+      node,
+      reason: typeof node.body_json?.reason === "string" ? node.body_json.reason : node.title || "等待人工判断",
+      findingId: subjectFindingId(node),
+      jobId: humanInterventionJobId(node),
+      pending: isPendingHumanIntervention(node),
+    }));
+}
+
+export function visibleHumanInterventions(
+  items: readonly HumanInterventionItem[],
+  hideProcessed: boolean,
+): HumanInterventionItem[] {
+  return hideProcessed ? items.filter((item) => item.pending) : [...items];
+}
+
+export function openHumanInterventionForJob(nodes: readonly CanvasNode[], jobId: string | null | undefined): CanvasNode | null {
+  if (!jobId) return null;
+  return nodes.find((node) => node.node_type === "human" && humanInterventionJobId(node) === jobId && isPendingHumanIntervention(node)) ?? null;
+}
+
+export function humanInterventionUiPrefUserKey(me: { user?: { id?: string | null } | null; actor?: { name?: string | null } | null } | null | undefined): string {
+  return me?.user?.id || me?.actor?.name || "local";
+}
