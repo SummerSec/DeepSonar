@@ -317,6 +317,35 @@ test("real preflight fails closed for CLI/provider and untrusted image mismatche
   assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_NOT_TRUSTED"));
 });
 
+test("catalog ready but local inspect miss fails readiness with RUNTIME_IMAGE_NOT_LOCAL", () => {
+  const digest = `sha256:${"b".repeat(64)}`;
+  const result = evaluateReadiness(baseInput({
+    localImagePresence: {
+      [`sha256:${"a".repeat(64)}`]: true,
+      [digest]: false,
+    },
+  }));
+  assert.equal(result.ready, false);
+  const check = result.checks.find((item) => item.code === "RUNTIME_IMAGE_NOT_LOCAL" && item.role?.name === "audit");
+  assert.ok(check);
+  assert.equal(check?.runtime_image?.digest, digest);
+  assert.equal(check?.runtime_image?.image_key, "deepsonar-audit");
+  assert.equal(check?.fix?.action, "runtime_images");
+  assert.equal(result.checks.some((item) => item.code === "RUNTIME_IMAGE_READY" && item.role?.name === "hub_reason"), true);
+});
+
+test("catalog ready and local inspect hit keeps RUNTIME_IMAGE_READY", () => {
+  const result = evaluateReadiness(baseInput({
+    localImagePresence: {
+      [`sha256:${"a".repeat(64)}`]: true,
+      [`sha256:${"b".repeat(64)}`]: true,
+    },
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_NOT_LOCAL"), false);
+  assert.ok(result.checks.some((check) => check.code === "RUNTIME_IMAGE_READY" && check.role?.name === "audit"));
+});
+
 test("fake preflight remains actionable without pretending online evidence exists", () => {
   const result = evaluateReadiness(baseInput({
     executionMode: "fake",
@@ -526,6 +555,12 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     baseInput({ allowEgress: false, materialSource: "external_or_workspace" }),
     baseInput({ materialSource: "unspecified" }),
     baseInput({ projectStatus: "archived" }),
+    baseInput({
+      localImagePresence: {
+        [`sha256:${"a".repeat(64)}`]: false,
+        [`sha256:${"b".repeat(64)}`]: false,
+      },
+    }),
   ];
   const globalVariant = baseInput({
     scope: { kind: "global", projectId: null },
@@ -577,6 +612,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     RUNTIME_IMAGE_DIGEST_INVALID: "runtime_images",
     RUNTIME_IMAGE_ADMISSION_INCOMPLETE: "runtime_images",
     RUNTIME_IMAGE_ADMISSION_BYPASSED: "runtime_images",
+    RUNTIME_IMAGE_NOT_LOCAL: "runtime_images",
     NETWORK_POLICY_MATERIAL_CONFLICT: "rules",
     MATERIAL_SOURCE_UNSPECIFIED: "rules",
     PROJECT_ARCHIVED: "rules",
@@ -624,6 +660,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     "RUNTIME_IMAGE_DIGEST_INVALID",
     "RUNTIME_IMAGE_ADMISSION_INCOMPLETE",
     "RUNTIME_IMAGE_ADMISSION_BYPASSED",
+    "RUNTIME_IMAGE_NOT_LOCAL",
     "RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED",
     "NETWORK_POLICY_MATERIAL_CONFLICT",
     "MATERIAL_SOURCE_UNSPECIFIED",

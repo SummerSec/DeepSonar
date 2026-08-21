@@ -22,6 +22,7 @@ import {
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
+import { assertFrozenRuntimeImageLocal, RuntimeImageNotLocalError } from "./runtime-images.js";
 
 export function isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean {
   return coreIsSeverityInVerifyScope(minSeverity, severity);
@@ -284,6 +285,12 @@ export async function createVerifyRound(
     opts.canvasId,
     await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding", [findingId]),
   );
+  try {
+    await assertFrozenRuntimeImageLocal(snapshot, { roleName: "verify" });
+  } catch (error) {
+    if (error instanceof RuntimeImageNotLocalError) return null;
+    throw error;
+  }
   const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };

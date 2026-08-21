@@ -119,6 +119,8 @@ export interface RuntimeImageSnapshot {
   image_key: string;
   image_ref: string;
   image_digest: string;
+  /** Catalog version label at freeze time; historical snapshots may omit it. */
+  image_version?: string | null;
   tools_manifest_sha256: string | null;
   admission_scan_id: string | null;
   contract_version: string;
@@ -371,6 +373,12 @@ export function runtimeImageHttpError(error: unknown): { statusCode: number; bod
       },
     };
   }
+  if (error instanceof RuntimeImageNotLocalError) {
+    return {
+      statusCode: error.statusCode,
+      body: runtimeImageNotLocalHttpBody(error),
+    };
+  }
   return null;
 }
 
@@ -380,6 +388,163 @@ export class RuntimeImageNotReadyError extends Error {
   constructor(readonly imageRef: string) {
     super(`runtime_image_not_ready: runtime image is not prepared locally: ${imageRef}`);
     this.name = "RuntimeImageNotReadyError";
+  }
+}
+
+export const RUNTIME_IMAGE_NOT_LOCAL = "RUNTIME_IMAGE_NOT_LOCAL" as const;
+
+export type RuntimeImageNotLocalDetails = {
+  image_key: string;
+  version: string | null;
+  digest: string;
+  image_ref: string;
+  runtime_image_id?: string | null;
+  role_name?: string | null;
+};
+
+export function shortRuntimeImageDigest(digest: string | null | undefined): string {
+  if (!digest) return "";
+  const hex = digest.replace(/^sha256:/i, "");
+  return hex ? `sha256:${hex.slice(0, 12)}…` : digest;
+}
+
+export function runtimeImagePrepareEntry(): { method: "GET"; path: string } {
+  return { method: "GET", path: "/runtime-images/registry/pull-status" };
+}
+
+export function runtimeImageNotLocalMessage(details: RuntimeImageNotLocalDetails): string {
+  const version = details.version ? ` ${details.version}` : "";
+  const role = details.role_name ? `角色 ${details.role_name} 所需` : "";
+  const digest = shortRuntimeImageDigest(details.digest) || details.digest;
+  return `${role}运行镜像 ${details.image_key}${version}（${digest}）不在本机。请在镜像市场准备该 digest，或对已冻结 Job 使用 rerun-current。`;
+}
+
+export function runtimeImageNotLocalCanvasBlock(details: RuntimeImageNotLocalDetails): {
+  title: string;
+  reason: string;
+  kind: "runtime_image_not_local";
+  error_code: typeof RUNTIME_IMAGE_NOT_LOCAL;
+  image_key: string;
+  version: string | null;
+  digest: string;
+  image_ref: string;
+  prepare: { method: "GET"; path: string };
+  role?: string;
+} {
+  return {
+    title: `运行镜像未在本机：${details.image_key}${details.version ? ` ${details.version}` : ""}`,
+    reason: runtimeImageNotLocalMessage(details),
+    kind: "runtime_image_not_local",
+    error_code: RUNTIME_IMAGE_NOT_LOCAL,
+    image_key: details.image_key,
+    version: details.version,
+    digest: details.digest,
+    image_ref: details.image_ref,
+    prepare: runtimeImagePrepareEntry(),
+    ...(details.role_name ? { role: details.role_name } : {}),
+  };
+}
+
+export function runtimeImageNotLocalHttpBody(error: RuntimeImageNotLocalError): Record<string, unknown> {
+  return {
+    error: error.message,
+    error_code: error.httpCode,
+    reason: error.code,
+    image_key: error.image_key,
+    version: error.version,
+    digest: error.digest,
+    image_ref: error.imageRef,
+    prepare: runtimeImagePrepareEntry(),
+    next_action: "prepare-frozen-digest-or-rerun-current",
+    ...(error.role_name ? { role: error.role_name } : {}),
+  };
+}
+
+/** Pre-create / resume gate: same inspect-only rule as Dispatcher, richer HTTP body. */
+export class RuntimeImageNotLocalError extends RuntimeImageNotReadyError {
+  readonly httpCode = RUNTIME_IMAGE_NOT_LOCAL;
+  readonly statusCode = 409 as const;
+  readonly image_key: string;
+  readonly version: string | null;
+  readonly digest: string;
+  readonly role_name: string | null;
+  readonly runtime_image_id: string | null;
+
+  constructor(readonly details: RuntimeImageNotLocalDetails) {
+    super(details.image_ref);
+    this.name = "RuntimeImageNotLocalError";
+    this.message = runtimeImageNotLocalMessage(details);
+    this.image_key = details.image_key;
+    this.version = details.version;
+    this.digest = details.digest;
+    this.role_name = details.role_name ?? null;
+    this.runtime_image_id = details.runtime_image_id ?? null;
+  }
+}
+
+export function shouldInspectLocalRuntimeImage(): boolean {
+  return config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
+}
+
+export type FrozenRuntimeImageLike = {
+  name?: string | null;
+  runtime_image_key?: string | null;
+  runtime_image?: {
+    image_key?: string | null;
+    image_ref?: string | null;
+    image_digest?: string | null;
+    image_version?: string | null;
+    runtime_image_id?: string | null;
+  } | null;
+};
+
+/**
+ * Inspect-only gate for a frozen (or about-to-freeze) snapshot digest.
+ * Fake mode and non-local-docker providers skip unless a test injects `inspect`
+ * or sets `requireLocal`. Never pulls.
+ */
+export async function assertFrozenRuntimeImageLocal(
+  snapshot: FrozenRuntimeImageLike,
+  options: {
+    inspect?: RuntimeImageEnsureDependencies["inspect"];
+    requireLocal?: boolean;
+    version?: string | null;
+    roleName?: string | null;
+  } = {},
+): Promise<void> {
+  if (options.requireLocal === false) return;
+  const shouldRun = options.requireLocal === true
+    || options.inspect !== undefined
+    || shouldInspectLocalRuntimeImage();
+  if (!shouldRun) return;
+
+  const image = snapshot.runtime_image ?? {};
+  const imageRef = typeof image.image_ref === "string" ? image.image_ref.trim() : "";
+  const digest = typeof image.image_digest === "string" && /^sha256:[0-9a-f]{64}$/i.test(image.image_digest)
+    ? image.image_digest.toLowerCase()
+    : immutableDigest(imageRef);
+  const details: RuntimeImageNotLocalDetails = {
+    image_key: String(image.image_key ?? snapshot.runtime_image_key ?? "unknown"),
+    version: options.version ?? (typeof image.image_version === "string" ? image.image_version : null),
+    digest: digest ?? "",
+    image_ref: imageRef,
+    runtime_image_id: image.runtime_image_id ?? null,
+    role_name: options.roleName ?? (typeof snapshot.name === "string" ? snapshot.name : null),
+  };
+  if (!imageRef || !digest) {
+    throw new RuntimeImageNotLocalError({
+      ...details,
+      digest: digest ?? "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      image_ref: imageRef || "missing-immutable-ref",
+    });
+  }
+  try {
+    await assertRuntimeImageAvailable(imageRef, options.inspect);
+  } catch (error) {
+    if (error instanceof RuntimeImageNotReadyError && !(error instanceof RuntimeImageNotLocalError)) {
+      throw new RuntimeImageNotLocalError(details);
+    }
+    throw error;
   }
 }
 
@@ -794,6 +959,7 @@ function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
     image_key: imageKey,
     image_ref: `fake://${imageKey}@${digest}`,
     image_digest: digest,
+    image_version: null,
     tools_manifest_sha256: null,
     admission_scan_id: null,
     contract_version: RUNTIME_IMAGE_CONTRACT,
@@ -2283,6 +2449,7 @@ async function selectRuntimeImageSnapshot(
     image_key: String(row.image_key),
     image_ref: resolvedRef,
     image_digest: digest,
+    image_version: row.version ? String(row.version) : null,
     tools_manifest_sha256: row.tools_manifest_sha256 ? String(row.tools_manifest_sha256) : null,
     admission_scan_id: row.admission_scan_id ? String(row.admission_scan_id) : null,
     contract_version: String(row.contract_version),

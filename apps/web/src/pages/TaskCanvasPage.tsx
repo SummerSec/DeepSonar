@@ -1139,6 +1139,7 @@ export function TaskCanvasPage() {
           onIgnore={(item) => void ignoreIntervention(item)}
           onOpenFinding={(findingId) => setQuery("finding", findingId)}
           onOpenJob={(jobId) => setQuery("job", jobId)}
+          imagesHref={`/projects/${projectId}/images`}
         />
       )}
 
