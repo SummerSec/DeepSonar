@@ -193,8 +193,10 @@ export function dayKey(iso: string | null | undefined): string | null {
 /**
  * Task buckets follow the same precedence as the web task lifecycle:
  * archived > active work (incl. pause) > failure > report phase >
- * analysis complete > completion > idle. Scheduled wait stays in running
- * because those canvases still occupy the active Job queue.
+ * analysis complete > governed completion > idle. Scheduled wait stays in
+ * running because those canvases still occupy the active Job queue.
+ * ended_at without started_at is a never-started terminal failure, not
+ * completed — claim/provision can finish a Job before it enters running.
  */
 export function classifyDashboardTask(row: DashboardTaskRow, now: Date = new Date()): DashboardTaskStatus {
   const archived = normalized(row.status) === "archived";
@@ -211,15 +213,20 @@ export function classifyDashboardTask(row: DashboardTaskRow, now: Date = new Dat
     && !row.started_at
     && activeCount > 0;
 
+  const hasStarted = Boolean(row.started_at);
+  const neverStartedTerminal = jobCount > 0 && Boolean(row.ended_at) && !hasStarted;
+
   if (archived) return "archived";
   if (waitingOnSchedule) return "running";
   if (executionState === "pausing") return "pausing";
   if (executionState === "paused") return "paused";
   if (activeCount > 0) return "running";
-  if (isFailure(rootStatus) || isFailure(reportStatus)) return "failed";
+  if (isFailure(rootStatus) || isFailure(reportStatus) || neverStartedTerminal) return "failed";
   if (rootStatus === "reporting" || isReportGeneration(reportStatus)) return "reporting";
   if (rootStatus === "analysis_complete") return "analysis_complete";
-  if (jobCount > 0 && row.ended_at) return "completed";
+  if (jobCount > 0 && hasStarted && row.ended_at && (isSuccess(rootStatus) || isSuccess(reportStatus))) {
+    return "completed";
+  }
   return "idle";
 }
 

@@ -252,7 +252,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
-- **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）
+- **任务是否在跑：以 `active_count` / 活跃 Job 为准**；勿把 `last_job_status=succeeded` 当成任务已完成（#46）。**已完成** 还要求至少一次 `started_at` 且根/报告处于成功终态；仅有 `ended_at` 的从未 running 失败（provision 写了 `finished_at`）不是完成（#292）
 - 画布只读；Finding 详情偏 GitHub Issue（disposition + 评论可唤醒 Hub）
 - Finding 列表/画布运行区显示冻结的 profile、可选 category 与 CVSS 版本/基础分；按 severity、profile、verify 状态筛选。详情保留向量、定性严重度、利用难度和原始 JSON；报告按 profile 分组、展示 category，并携带 tags、evidence_refs 与 scoring。
 - Finding 详情直接展示服务端统一的验证追踪（来源、review/test Fact、Intent/Fact 有向流、Verify 轮次与 exact Hub）；可用 `traceFinding` 深链在画布中淡化或隐藏非链路节点，并按 `focusNode` 定位单个证据节点。弱关联不从 prompt 推断，未连边 Intent 与证据缺口显式呈现。
@@ -277,7 +277,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 节点/边着色 + Agent 专色 | #42 | **已完成**：边随源节点色；新建 role 分配未占用色（`agent_roles.ui_color`） |
 | 双轨报告 | #43/#142 | **已完成**：任务收敛后按冻结输入摘要生成版本化 Task Report，默认返回最新版本并保留历史；每条 `confirmed` Finding 自动生成独立、冻结输入的版本化 Finding Report。两条轨道都限制同一目标同时一个活跃报告，不修改 Finding 状态 |
 | 通用 Finding + CVSS | #44 | **已完成**：通用 `profile/category/tags/evidence_refs` 与可选 severity/scoring；协议按任务>项目>全局解析并随画布冻结；真实 Agent 通过严格的 Job 级 API operation 提案，Scheduler 重算 CVSS 4.0/3.1、保留协议允许的未知版本原始数据；Web/报告支持标识、筛选与分组 |
-| 任务卡片状态 | #46 | **已完成**：任务级相位与 `active_count` 同源；勿用 `last_job_status=succeeded` 当任务完成 |
+| 任务卡片状态 | #46 / #292 | **已完成**：任务级相位与 `active_count` 同源；勿用 `last_job_status=succeeded` 或仅有 `ended_at` 的从未 running 失败当任务完成 |
 | 启动 orphan 批量恢复与证据回退 | #186 | **已完成**：启动 reconcile 不再由 role Worker orphan 立即派生 Hub；任务恢复优先批量重跑同画布启动中断 Worker（同 Job、新 Attempt，明确 action/jobs，不重放 unknown effect）；缺 finalized manifest 时有界暴露 raw stream synthetic manifest 与真实 Session capture_error |
 | Job 旧快照恢复与当前配置重跑 | #202 | **已完成**：resume 只用旧冻结快照且受治理身份漂移时 `SNAPSHOT_STALE`；`rerun-current` 在 claim admission 与 Canvas→Job 锁下完整重冻当前配置，同 Job/新 Attempt 保留画布和历史 effect；任务 resume 对 stale 批次原子拒绝并返回 Job IDs |
 | 产品 IA 与 Agent 市场 | #49 | **已完成**：5 个一级工作流入口；发现/运行回归项目任务主路径并保留命令检索；Agent、模块市场、安全、凭据、平台数据按权限边界拆页；官方模板与安全约束的本地 agentpack 安装 MVP |
