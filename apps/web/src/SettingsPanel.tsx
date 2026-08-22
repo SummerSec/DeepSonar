@@ -33,6 +33,7 @@ import { MarkdownView } from "./MarkdownView";
 import { FindingProtocolEditor } from "./FindingProtocolEditor";
 import { SharedAssetsPanel } from "./SharedAssetsPanel";
 import { SearchableSelect } from "./SearchableSelect";
+import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { inferToastKind, showToast } from "./toast";
 import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
@@ -830,27 +831,27 @@ export function SettingsPanel({
                       const globalImage = globalConfigOf(role.id)?.runtime_image_key;
                       const currentImage = roleRuntimeImages[role.name] ?? "";
                       return (
-                        <div key={role.id} className="grid gap-2 border-t border-ink-800 pt-2 sm:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] sm:items-center">
-                          <div>
+                        <div key={role.id} className="grid gap-2 border-t border-ink-800 pt-2 sm:grid-cols-[minmax(6.5rem,9rem)_minmax(0,1fr)] sm:items-start">
+                          <div className="min-w-0">
                             <div className="text-[13px] text-zinc-300">{role.title || role.name}</div>
                             <div className="font-mono text-[10px] text-zinc-600">{role.name}</div>
                           </div>
                           {imageStrategy === "inherit_global" ? (
-                            <div className="font-mono text-[11px] text-zinc-500">全局镜像：{globalImage ?? "全局未绑定（系统默认）"}</div>
+                            <div className="min-w-0 break-words font-mono text-[11px] leading-5 text-zinc-500">全局镜像：{globalImage ?? "全局未绑定（系统默认）"}</div>
                           ) : (
                             <SearchableSelect
                               value={currentImage}
                               onChange={(next) => setRoleRuntimeImages((current) => ({ ...current, [role.name]: next || null }))}
                               options={[
                                 { value: "", label: "系统基础环境" },
-                                ...projectRuntimeImageChoices.map((image) => ({ value: image.image_key, label: `${image.name} · ${image.image_key}` })),
+                                ...projectRuntimeImageChoices.map((image) => runtimeImageSelectOption(image, projectId)),
                                 ...(currentImage && !projectRuntimeImageChoices.some((image) => image.image_key === currentImage)
                                   ? [{ value: currentImage, label: `${currentImage}（当前 · 需检查启用）` }]
                                   : []),
                               ]}
                               placeholder="选择运行镜像"
                               ariaLabel={`${role.title || role.name} 的运行镜像`}
-                              className="w-full"
+                              className="searchable-select-wrap"
                             />
                           )}
                         </div>
