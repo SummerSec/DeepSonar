@@ -144,9 +144,21 @@
 .datetime-local-trigger.is-invalid {
   border-color: color-mix(in srgb, #ef4444 45%, var(--line-strong)) !important;
 }
-.datetime-local-popup input[type="date"],
-.datetime-local-popup input[type="time"] {
-  color-scheme: inherit;
+.datetime-local-popup {
+  color: var(--text);
+  background: var(--panel-raised);
+  border-color: var(--line-strong);
+}
+.datetime-local-grid {
+  display: grid;
+  gap: 2px;
+}
+.datetime-local-grid.is-days {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.datetime-local-grid.is-hours,
+.datetime-local-grid.is-minutes {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 * { box-sizing: border-box; }
