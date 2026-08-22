@@ -29,6 +29,7 @@ test("authoritative zero active_count clears a stale visible running Job", () =>
     jobCount: 1,
     jobs: [{ status: "running" }],
     rootStatus: "succeeded",
+    startedAt: "2026-08-04T00:00:00.000Z",
     endedAt: "2026-08-04T00:00:00.000Z",
   });
   assert.equal(lifecycle.status, "completed");
@@ -46,6 +47,7 @@ test("completed tasks retain their ended timestamp", () => {
     activeCount: 0,
     jobCount: 2,
     rootStatus: "succeeded",
+    startedAt: "2026-08-04T01:00:00.000Z",
     endedAt: "2026-08-04T01:02:03.000Z",
   });
   assert.equal(lifecycle.status, "completed");
@@ -53,10 +55,37 @@ test("completed tasks retain their ended timestamp", () => {
   assert.equal(lifecycle.endedAt, "2026-08-04T01:02:03.000Z");
 });
 
-test("a terminal rollup with ended_at is completed even without root details", () => {
+test("a never-started terminal rollup is failed, not completed", () => {
   const lifecycle = deriveTaskLifecycle({ jobCount: 1, endedAt: "2026-08-04T01:02:03.000Z" });
-  assert.equal(lifecycle.status, "completed");
+  assert.equal(lifecycle.status, "failed");
   assert.equal(lifecycle.isActive, false);
+});
+
+test("issue 292 sample: provision failure without started_at is not completed", () => {
+  const lifecycle = deriveTaskLifecycle({
+    activeCount: 0,
+    jobCount: 1,
+    startedAt: null,
+    endedAt: "2026-08-22T08:00:00.000Z",
+    rootStatus: "active",
+    jobs: [{ status: "failed" }],
+  });
+  assert.equal(lifecycle.status, "failed");
+  assert.equal(lifecycle.label, "失败");
+  assert.equal(lifecycle.isActive, false);
+});
+
+test("governed completion still requires a real started_at", () => {
+  assert.equal(
+    deriveTaskLifecycle({
+      activeCount: 0,
+      jobCount: 1,
+      rootStatus: "succeeded",
+      startedAt: null,
+      endedAt: "2026-08-04T01:02:03.000Z",
+    }).status,
+    "failed",
+  );
 });
 
 test("archived always wins over every execution signal", () => {
@@ -127,6 +156,48 @@ test("report generation outranks a successful root phase", () => {
   assert.equal(
     deriveTaskLifecycle({ jobCount: 2, rootStatus: "succeeded", reportStatus: "pending" }).status,
     "reporting",
+  );
+});
+
+test("ended_at after a real start is not completed without root or report success", () => {
+  assert.equal(
+    deriveTaskLifecycle({
+      activeCount: 0,
+      jobCount: 1,
+      startedAt: "2026-08-04T00:00:00.000Z",
+      endedAt: "2026-08-04T01:02:03.000Z",
+      rootStatus: "active",
+    }).status,
+    "idle",
+  );
+});
+
+test("never-started cancelled or timed-out Jobs are failed even without a rollup end", () => {
+  assert.equal(
+    deriveTaskLifecycle({
+      jobCount: 1,
+      startedAt: null,
+      jobs: [{ status: "timeout" }],
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    deriveTaskLifecycle({
+      jobCount: 1,
+      startedAt: null,
+      endedAt: "2026-08-04T01:02:03.000Z",
+      jobs: [{ status: "cancelled" }],
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    deriveTaskLifecycle({
+      jobCount: 1,
+      startedAt: null,
+      endedAt: "2026-08-04T01:02:03.000Z",
+      jobs: [{ status: "orphan" }],
+    }).status,
+    "failed",
   );
 });
 

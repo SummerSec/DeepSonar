@@ -80,6 +80,20 @@ test("task classification follows active_count and does not treat last job succe
   }), NOW), "archived");
   assert.equal(classifyDashboardTask(task({
     active_count: 0,
+    job_count: 1,
+    started_at: null,
+    ended_at: "2026-08-22T08:00:00.000Z",
+    root_status: "active",
+  }), NOW), "failed");
+  assert.equal(classifyDashboardTask(task({
+    active_count: 0,
+    job_count: 1,
+    started_at: "2026-08-19T02:10:00.000Z",
+    ended_at: "2026-08-19T03:00:00.000Z",
+    root_status: "active",
+  }), NOW), "idle");
+  assert.equal(classifyDashboardTask(task({
+    active_count: 0,
     target_json: { execution_control: { paused: true } },
   }), NOW), "paused");
 });
