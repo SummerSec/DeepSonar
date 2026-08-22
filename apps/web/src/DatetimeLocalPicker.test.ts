@@ -16,6 +16,10 @@ test("scheduled start picker uses a clickable calendar and time table", () => {
   assert.match(picker, /aria-label="分钟表"/);
   assert.match(picker, /上个月/);
   assert.match(picker, /下个月/);
+  assert.match(picker, /isCalendarDateDisabled/);
+  assert.match(picker, /isCalendarHourDisabled/);
+  assert.match(picker, /isCalendarMinuteDisabled/);
+  assert.match(picker, /disabled=\{disabled\}/);
   assert.doesNotMatch(picker, /type="date"/);
   assert.doesNotMatch(picker, /type="time"/);
   assert.doesNotMatch(picker, /type="datetime-local"/);

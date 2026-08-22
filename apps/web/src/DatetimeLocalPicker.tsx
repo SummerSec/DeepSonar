@@ -5,12 +5,15 @@ import {
   HOUR_OPTIONS,
   WEEKDAY_LABELS,
   applyCalendarDate,
+  applyCalendarHour,
   applyCalendarTime,
   buildMonthCalendar,
   calendarMonthOf,
   formatDatetimeLocalDisplay,
-  isLocalDatePast,
-  joinTimeParts,
+  isCalendarDateDisabled,
+  isCalendarHourDisabled,
+  isCalendarMinuteDisabled,
+  isCalendarMonthFullyPast,
   minuteChoices,
   shiftCalendarMonth,
   splitDatetimeLocal,
@@ -23,6 +26,7 @@ function TableButton({
   selected,
   muted,
   today,
+  disabled,
   ariaLabel,
   onClick,
 }: {
@@ -30,6 +34,7 @@ function TableButton({
   selected: boolean;
   muted?: boolean;
   today?: boolean;
+  disabled?: boolean;
   ariaLabel?: string;
   onClick: () => void;
 }) {
@@ -38,10 +43,11 @@ function TableButton({
       type="button"
       aria-label={ariaLabel}
       aria-pressed={selected}
+      disabled={disabled}
       onClick={onClick}
       className={[
         "grid min-h-7 place-items-center rounded-md font-mono text-[12px] leading-none transition-colors",
-        selected ? "bg-acc-500/[.12] text-acc-400" : muted ? "theme-muted hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]" : "text-[var(--text)] hover:bg-[var(--surface-tint-strong)]",
+        disabled ? "cursor-not-allowed opacity-35" : selected ? "bg-acc-500/[.12] text-acc-400" : muted ? "theme-muted hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]" : "text-[var(--text)] hover:bg-[var(--surface-tint-strong)]",
         today && !selected ? "ring-1 ring-[var(--line-strong)]" : "",
       ].join(" ")}
     >
@@ -75,6 +81,14 @@ export function DatetimeLocalPicker({
   const cells = useMemo(() => buildMonthCalendar(view.year, view.month), [view.month, view.year]);
   const minutes = minuteChoices(minute || undefined);
   const stacked = position.width < 460;
+  const now = new Date();
+  const targetDate = date || todayLocalDate(now);
+  const prevMonth = shiftCalendarMonth(view.year, view.month, -1);
+  const prevMonthDisabled = isCalendarMonthFullyPast(prevMonth.year, prevMonth.month, now);
+
+  const commit = (next: string | null) => {
+    if (next) onChange(next);
+  };
 
   const updatePosition = useCallback(() => {
     const anchor = triggerRef.current;
@@ -164,7 +178,7 @@ export function DatetimeLocalPicker({
           <div className={stacked ? "flex flex-col gap-3" : "flex gap-3"}>
             <div className={stacked ? "min-w-0" : "w-[252px] shrink-0"}>
               <div className="mb-1.5 flex items-center gap-1">
-                <button type="button" className="theme-muted grid size-7 place-items-center rounded-md hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]" aria-label="上个月" onClick={() => setView((current) => shiftCalendarMonth(current.year, current.month, -1))}>
+                <button type="button" disabled={prevMonthDisabled} className={`theme-muted grid size-7 place-items-center rounded-md ${prevMonthDisabled ? "cursor-not-allowed opacity-35" : "hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]"}`} aria-label="上个月" onClick={() => setView((current) => shiftCalendarMonth(current.year, current.month, -1))}>
                   <CaretLeft size={12} aria-hidden="true" />
                 </button>
                 <span className="min-w-0 flex-1 text-center font-mono text-[12px] text-[var(--text)]">{view.year}年{view.month}月</span>
@@ -178,17 +192,21 @@ export function DatetimeLocalPicker({
                 ))}
               </div>
               <div className="datetime-local-grid is-days" role="grid" aria-label="日期表">
-                {cells.map((cell) => (
-                  <TableButton
-                    key={cell.date}
-                    label={String(cell.day)}
-                    ariaLabel={cell.date}
-                    selected={cell.date === date}
-                    muted={!cell.inMonth || isLocalDatePast(cell.date)}
-                    today={cell.isToday}
-                    onClick={() => onChange(applyCalendarDate(value, cell.date))}
-                  />
-                ))}
+                {cells.map((cell) => {
+                  const disabled = isCalendarDateDisabled(cell.date, now);
+                  return (
+                    <TableButton
+                      key={cell.date}
+                      label={String(cell.day)}
+                      ariaLabel={cell.date}
+                      selected={cell.date === date}
+                      muted={!cell.inMonth || disabled}
+                      today={cell.isToday}
+                      disabled={disabled}
+                      onClick={() => commit(applyCalendarDate(value, cell.date, now))}
+                    />
+                  );
+                })}
               </div>
             </div>
             <div className="min-w-0 flex-1">
@@ -201,7 +219,8 @@ export function DatetimeLocalPicker({
                     label={option}
                     ariaLabel={`${option} 时`}
                     selected={option === hour}
-                    onClick={() => onChange(applyCalendarTime(value, joinTimeParts(option, minute || "00"), todayLocalDate()))}
+                    disabled={isCalendarHourDisabled(targetDate, option, now)}
+                    onClick={() => commit(applyCalendarHour(value, option, targetDate, now))}
                   />
                 ))}
               </div>
@@ -213,7 +232,8 @@ export function DatetimeLocalPicker({
                     label={option}
                     ariaLabel={`${option} 分`}
                     selected={option === minute}
-                    onClick={() => onChange(applyCalendarTime(value, joinTimeParts(hour || "00", option), todayLocalDate()))}
+                    disabled={isCalendarMinuteDisabled(targetDate, hour, option, now)}
+                    onClick={() => commit(applyCalendarTime(value, `${hour || "00"}:${option}`, targetDate, now))}
                   />
                 ))}
               </div>

@@ -69,6 +69,51 @@ export function isLocalDatePast(date: string, now = new Date()): boolean {
   return date < todayLocalDate(now);
 }
 
+function minutesOf(time: string): number {
+  const { hour, minute } = splitTimeParts(time);
+  return (Number(hour) || 0) * 60 + (Number(minute) || 0);
+}
+
+function nextFutureMinuteSlot(now: Date): string | null {
+  const next = (Math.floor((now.getHours() * 60 + now.getMinutes()) / DATETIME_MINUTE_STEP) + 1) * DATETIME_MINUTE_STEP;
+  if (next >= 24 * 60) return null;
+  return joinTimeParts(String(Math.floor(next / 60)), String(next % 60));
+}
+
+/** Strictly after `now`; past calendar days and remaining-less today are not schedulable. */
+export function nextFutureTimeOnDate(date: string, preferredTime: string, now = new Date()): string | null {
+  if (isLocalDatePast(date, now)) return null;
+  const preferred = (preferredTime.trim() || "00:00").slice(0, 5);
+  if (date > todayLocalDate(now)) return preferred;
+  const nextSlot = nextFutureMinuteSlot(now);
+  if (!nextSlot) return null;
+  return preferred && minutesOf(preferred) > now.getHours() * 60 + now.getMinutes() ? preferred : nextSlot;
+}
+
+export function isCalendarDateDisabled(date: string, now = new Date()): boolean {
+  return nextFutureTimeOnDate(date, "23:59", now) == null;
+}
+
+export function isCalendarTimeDisabled(date: string, time: string, now = new Date()): boolean {
+  if (!date || isCalendarDateDisabled(date, now)) return true;
+  if (date > todayLocalDate(now)) return false;
+  const ms = Date.parse(joinDatetimeLocal(date, time));
+  return Number.isFinite(ms) && ms <= now.getTime();
+}
+
+export function isCalendarHourDisabled(date: string, hour: string, now = new Date()): boolean {
+  return isCalendarTimeDisabled(date, joinTimeParts(hour, String(60 - DATETIME_MINUTE_STEP)), now);
+}
+
+export function isCalendarMinuteDisabled(date: string, hour: string, minute: string, now = new Date()): boolean {
+  return isCalendarTimeDisabled(date, joinTimeParts(hour || "00", minute), now);
+}
+
+export function isCalendarMonthFullyPast(year: number, month: number, now = new Date()): boolean {
+  const last = new Date(year, month, 0);
+  return isCalendarDateDisabled(formatLocalDate(last.getFullYear(), last.getMonth() + 1, last.getDate()), now);
+}
+
 export function splitTimeParts(time: string): { hour: string; minute: string } {
   const [hour = "", minute = ""] = time.split(":");
   return { hour: hour.slice(0, 2), minute: minute.slice(0, 2) };
@@ -78,13 +123,27 @@ export function joinTimeParts(hour: string, minute: string): string {
   return `${pad2(Number(hour) || 0)}:${pad2(Number(minute) || 0)}`;
 }
 
-export function applyCalendarDate(value: string, nextDate: string): string {
-  return joinDatetimeLocal(nextDate, splitDatetimeLocal(value).time);
+export function applyCalendarDate(value: string, nextDate: string, now = new Date()): string | null {
+  const nextTime = nextFutureTimeOnDate(nextDate, splitDatetimeLocal(value).time, now);
+  return nextTime ? joinDatetimeLocal(nextDate, nextTime) : null;
 }
 
-export function applyCalendarTime(value: string, nextTime: string, fallbackDate = todayLocalDate()): string {
+export function applyCalendarHour(value: string, hour: string, fallbackDate = todayLocalDate(), now = new Date()): string | null {
+  const { date, time } = splitDatetimeLocal(value);
+  const targetDate = date || fallbackDate;
+  if (isCalendarHourDisabled(targetDate, hour, now)) return null;
+  const { minute } = splitTimeParts(time);
+  const candidate = joinTimeParts(hour, minute || "00");
+  if (!isCalendarTimeDisabled(targetDate, candidate, now)) return joinDatetimeLocal(targetDate, candidate);
+  const first = MINUTE_OPTIONS.find((step) => !isCalendarTimeDisabled(targetDate, joinTimeParts(hour, step), now));
+  return first ? joinDatetimeLocal(targetDate, joinTimeParts(hour, first)) : null;
+}
+
+export function applyCalendarTime(value: string, nextTime: string, fallbackDate = todayLocalDate(), now = new Date()): string | null {
   const { date } = splitDatetimeLocal(value);
-  return joinDatetimeLocal(date || fallbackDate, nextTime);
+  const targetDate = date || fallbackDate;
+  if (isCalendarTimeDisabled(targetDate, nextTime, now)) return null;
+  return joinDatetimeLocal(targetDate, nextTime);
 }
 
 export function minuteChoices(selected?: string): string[] {

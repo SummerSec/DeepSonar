@@ -6,10 +6,15 @@ import {
   MINUTE_OPTIONS,
   WEEKDAY_LABELS,
   applyCalendarDate,
+  applyCalendarHour,
   applyCalendarTime,
   buildMonthCalendar,
   calendarMonthOf,
   formatDatetimeLocalDisplay,
+  isCalendarDateDisabled,
+  isCalendarHourDisabled,
+  isCalendarMinuteDisabled,
+  isCalendarMonthFullyPast,
   isLocalDatePast,
   joinDatetimeLocal,
   joinTimeParts,
@@ -60,12 +65,31 @@ test("time table exposes 24 hours and 5-minute steps", () => {
 });
 
 test("picking a date and time via calendar/time tables keeps submit-time validation", () => {
-  const now = Date.parse("2026-08-18T12:00:00.000Z");
-  const picked = applyCalendarTime(applyCalendarDate("2026-08-19T08:00", "2026-08-22"), joinTimeParts("14", "30"));
+  const now = new Date("2026-08-18T12:00:00.000Z");
+  const picked = applyCalendarTime(applyCalendarDate("2026-08-19T08:00", "2026-08-22", now) ?? "", joinTimeParts("14", "30"), "2026-08-22", now);
   assert.equal(picked, "2026-08-22T14:30");
-  assert.equal(formatDatetimeLocalDisplay(picked), "2026-08-22 14:30");
-  assert.equal(scheduleTimeIssue(picked, now), null);
-  assert.match(scheduleTimeIssue(applyCalendarTime(applyCalendarDate("", "2020-01-01"), "08:00"), now) ?? "", /过去/);
+  assert.equal(formatDatetimeLocalDisplay(picked ?? ""), "2026-08-22 14:30");
+  assert.equal(scheduleTimeIssue(picked ?? "", now.getTime()), null);
+});
+
+test("calendar and time table cannot select past wall-clock values", () => {
+  const now = new Date(2026, 7, 22, 15, 32, 0);
+  assert.equal(isCalendarDateDisabled("2026-08-21", now), true);
+  assert.equal(isCalendarDateDisabled("2026-08-22", now), false);
+  assert.equal(isCalendarDateDisabled("2026-08-23", now), false);
+  assert.equal(isCalendarMonthFullyPast(2026, 7, now), true);
+  assert.equal(isCalendarMonthFullyPast(2026, 8, now), false);
+  assert.equal(isCalendarHourDisabled("2026-08-22", "14", now), true);
+  assert.equal(isCalendarHourDisabled("2026-08-22", "15", now), false);
+  assert.equal(isCalendarMinuteDisabled("2026-08-22", "15", "30", now), true);
+  assert.equal(isCalendarMinuteDisabled("2026-08-22", "15", "35", now), false);
+  assert.equal(applyCalendarDate("2026-08-22T08:00", "2026-08-21", now), null);
+  assert.equal(applyCalendarDate("2026-08-22T08:00", "2026-08-22", now), "2026-08-22T15:35");
+  assert.equal(applyCalendarDate("2026-08-22T08:00", "2026-08-23", now), "2026-08-23T08:00");
+  assert.equal(applyCalendarHour("2026-08-22T08:00", "14", "2026-08-22", now), null);
+  assert.equal(applyCalendarHour("2026-08-22T08:00", "15", "2026-08-22", now), "2026-08-22T15:35");
+  assert.equal(applyCalendarTime("2026-08-22T15:00", "15:30", "2026-08-22", now), null);
+  assert.equal(applyCalendarTime("2026-08-22T15:00", "15:35", "2026-08-22", now), "2026-08-22T15:35");
 });
 
 test("new task form does not bind a live min to native datetime-local", () => {
