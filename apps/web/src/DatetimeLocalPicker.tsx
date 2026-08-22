@@ -1,11 +1,54 @@
-import { CalendarBlank, CaretDown } from "@phosphor-icons/react";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { CalendarBlank, CaretDown, CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  HOUR_OPTIONS,
+  WEEKDAY_LABELS,
+  applyCalendarDate,
+  applyCalendarTime,
+  buildMonthCalendar,
+  calendarMonthOf,
   formatDatetimeLocalDisplay,
-  joinDatetimeLocal,
+  isLocalDatePast,
+  joinTimeParts,
+  minuteChoices,
+  shiftCalendarMonth,
   splitDatetimeLocal,
+  splitTimeParts,
+  todayLocalDate,
 } from "./task-schedule";
+
+function TableButton({
+  label,
+  selected,
+  muted,
+  today,
+  ariaLabel,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  muted?: boolean;
+  today?: boolean;
+  ariaLabel?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      aria-pressed={selected}
+      onClick={onClick}
+      className={[
+        "grid min-h-7 place-items-center rounded-md font-mono text-[12px] leading-none transition-colors",
+        selected ? "bg-acc-500/[.12] text-acc-400" : muted ? "theme-muted hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]" : "text-[var(--text)] hover:bg-[var(--surface-tint-strong)]",
+        today && !selected ? "ring-1 ring-[var(--line-strong)]" : "",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
 
 export function DatetimeLocalPicker({
   value,
@@ -23,19 +66,25 @@ export function DatetimeLocalPicker({
   const popupId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const dateRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState({ top: 0, left: 0, width: 320 });
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 340 });
   const { date, time } = splitDatetimeLocal(value);
+  const { hour, minute } = splitTimeParts(time);
   const display = formatDatetimeLocalDisplay(value);
+  const [view, setView] = useState(() => calendarMonthOf(date));
+  const cells = useMemo(() => buildMonthCalendar(view.year, view.month), [view.month, view.year]);
+  const minutes = minuteChoices(minute || undefined);
+  const stacked = position.width < 460;
 
   const updatePosition = useCallback(() => {
     const anchor = triggerRef.current;
     if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, 320), Math.max(24, window.innerWidth - 24));
+    const width = Math.min(Math.max(340, Math.min(rect.width, 520)), Math.max(24, window.innerWidth - 24));
+    const estimatedHeight = width < 460 ? 480 : 280;
+    const above = window.innerHeight - rect.bottom < estimatedHeight && rect.top > estimatedHeight;
     setPosition({
-      top: rect.bottom + 6,
+      top: above ? Math.max(12, rect.top - estimatedHeight - 6) : rect.bottom + 6,
       left: Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12)),
       width,
     });
@@ -44,8 +93,13 @@ export function DatetimeLocalPicker({
   useLayoutEffect(() => {
     if (!open) return;
     updatePosition();
-    dateRef.current?.focus();
+    popupRef.current?.focus();
   }, [open, updatePosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    setView(calendarMonthOf(date));
+  }, [date, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -82,6 +136,7 @@ export function DatetimeLocalPicker({
         aria-expanded={open}
         aria-controls={open ? popupId : undefined}
         aria-invalid={invalid || undefined}
+        aria-required={required || undefined}
         aria-describedby={describedBy}
         aria-label={display ? `开始时刻 ${display}，打开选择器` : "开始时刻，打开选择器"}
         title={display ? `${display} · 打开选择器` : "打开选择器"}
@@ -101,33 +156,68 @@ export function DatetimeLocalPicker({
           ref={popupRef}
           id={popupId}
           role="dialog"
+          tabIndex={-1}
           aria-label="选择开始日期与时刻"
-          className="datetime-local-popup theme-drawer fixed z-[140] rounded-lg border p-3 shadow-2xl"
-          style={{ top: position.top, left: position.left, width: position.width }}
+          className="datetime-local-popup theme-drawer fixed z-[140] overflow-auto rounded-lg border p-3 shadow-2xl outline-none"
+          style={{ top: position.top, left: position.left, width: position.width, maxHeight: `min(520px, calc(100vh - ${position.top + 12}px))` }}
         >
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label className="block">
-              <span className="theme-muted mb-1 block font-mono text-[10px] uppercase tracking-[0.12em]">日期</span>
-              <input
-                ref={dateRef}
-                type="date"
-                value={date}
-                required={required}
-                onChange={(event) => onChange(joinDatetimeLocal(event.target.value, time))}
-                className="theme-input-surface w-full rounded-md border px-2.5 py-2 font-mono text-[13px] outline-none"
-              />
-            </label>
-            <label className="block">
-              <span className="theme-muted mb-1 block font-mono text-[10px] uppercase tracking-[0.12em]">时刻</span>
-              <input
-                type="time"
-                step={60}
-                value={time}
-                required={required}
-                onChange={(event) => onChange(joinDatetimeLocal(date, event.target.value))}
-                className="theme-input-surface w-full rounded-md border px-2.5 py-2 font-mono text-[13px] outline-none"
-              />
-            </label>
+          <div className={stacked ? "flex flex-col gap-3" : "flex gap-3"}>
+            <div className={stacked ? "min-w-0" : "w-[252px] shrink-0"}>
+              <div className="mb-1.5 flex items-center gap-1">
+                <button type="button" className="theme-muted grid size-7 place-items-center rounded-md hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]" aria-label="上个月" onClick={() => setView((current) => shiftCalendarMonth(current.year, current.month, -1))}>
+                  <CaretLeft size={12} aria-hidden="true" />
+                </button>
+                <span className="min-w-0 flex-1 text-center font-mono text-[12px] text-[var(--text)]">{view.year}年{view.month}月</span>
+                <button type="button" className="theme-muted grid size-7 place-items-center rounded-md hover:bg-[var(--surface-tint-strong)] hover:text-[var(--text)]" aria-label="下个月" onClick={() => setView((current) => shiftCalendarMonth(current.year, current.month, 1))}>
+                  <CaretRight size={12} aria-hidden="true" />
+                </button>
+              </div>
+              <div className="datetime-local-grid is-days mb-1">
+                {WEEKDAY_LABELS.map((label) => (
+                  <span key={label} className="theme-muted grid min-h-5 place-items-center font-mono text-[10px]">{label}</span>
+                ))}
+              </div>
+              <div className="datetime-local-grid is-days" role="grid" aria-label="日期表">
+                {cells.map((cell) => (
+                  <TableButton
+                    key={cell.date}
+                    label={String(cell.day)}
+                    ariaLabel={cell.date}
+                    selected={cell.date === date}
+                    muted={!cell.inMonth || isLocalDatePast(cell.date)}
+                    today={cell.isToday}
+                    onClick={() => onChange(applyCalendarDate(value, cell.date))}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="min-w-0 flex-1">
+              <span className="theme-muted mb-1.5 block font-mono text-[10px] uppercase tracking-[0.12em]">时刻 {time || "00:00"}</span>
+              <span className="theme-muted mb-1 block font-mono text-[10px]">小时</span>
+              <div className="datetime-local-grid is-hours mb-2" role="listbox" aria-label="小时表">
+                {HOUR_OPTIONS.map((option) => (
+                  <TableButton
+                    key={option}
+                    label={option}
+                    ariaLabel={`${option} 时`}
+                    selected={option === hour}
+                    onClick={() => onChange(applyCalendarTime(value, joinTimeParts(option, minute || "00"), todayLocalDate()))}
+                  />
+                ))}
+              </div>
+              <span className="theme-muted mb-1 block font-mono text-[10px]">分钟</span>
+              <div className="datetime-local-grid is-minutes" role="listbox" aria-label="分钟表">
+                {minutes.map((option) => (
+                  <TableButton
+                    key={option}
+                    label={option}
+                    ariaLabel={`${option} 分`}
+                    selected={option === minute}
+                    onClick={() => onChange(applyCalendarTime(value, joinTimeParts(hour || "00", option), todayLocalDate()))}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         </div>,
         document.body,

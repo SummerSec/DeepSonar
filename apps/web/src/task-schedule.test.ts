@@ -2,10 +2,21 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  HOUR_OPTIONS,
+  MINUTE_OPTIONS,
+  WEEKDAY_LABELS,
+  applyCalendarDate,
+  applyCalendarTime,
+  buildMonthCalendar,
+  calendarMonthOf,
   formatDatetimeLocalDisplay,
+  isLocalDatePast,
   joinDatetimeLocal,
+  joinTimeParts,
+  minuteChoices,
   parseDatetimeLocalToIso,
   scheduleTimeIssue,
+  shiftCalendarMonth,
   splitDatetimeLocal,
   toDatetimeLocalValue,
 } from "./task-schedule";
@@ -26,9 +37,41 @@ test("schedule validation rejects empty and past values at submit time", () => {
   assert.equal(parseDatetimeLocalToIso(future), new Date(future).toISOString());
 });
 
+test("calendar table is a Monday-first month grid with prev/next months", () => {
+  const today = new Date(2026, 7, 22);
+  const cells = buildMonthCalendar(2026, 8, today);
+  assert.equal(WEEKDAY_LABELS.join(""), "一二三四五六日");
+  assert.equal(cells.length, 42);
+  assert.deepEqual(cells[0], { date: "2026-07-27", day: 27, inMonth: false, isToday: false });
+  assert.deepEqual(cells[5], { date: "2026-08-01", day: 1, inMonth: true, isToday: false });
+  assert.equal(cells.find((cell) => cell.date === "2026-08-22")?.isToday, true);
+  assert.deepEqual(calendarMonthOf("2026-08-19"), { year: 2026, month: 8 });
+  assert.deepEqual(shiftCalendarMonth(2026, 1, -1), { year: 2025, month: 12 });
+  assert.deepEqual(shiftCalendarMonth(2025, 12, 1), { year: 2026, month: 1 });
+  assert.equal(isLocalDatePast("2026-08-21", today), true);
+  assert.equal(isLocalDatePast("2026-08-22", today), false);
+});
+
+test("time table exposes 24 hours and 5-minute steps", () => {
+  assert.deepEqual(HOUR_OPTIONS, Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")));
+  assert.deepEqual(MINUTE_OPTIONS, ["00", "05", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"]);
+  assert.deepEqual(minuteChoices("08"), ["00", "05", "08", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"]);
+  assert.equal(joinTimeParts("9", "5"), "09:05");
+});
+
+test("picking a date and time via calendar/time tables keeps submit-time validation", () => {
+  const now = Date.parse("2026-08-18T12:00:00.000Z");
+  const picked = applyCalendarTime(applyCalendarDate("2026-08-19T08:00", "2026-08-22"), joinTimeParts("14", "30"));
+  assert.equal(picked, "2026-08-22T14:30");
+  assert.equal(formatDatetimeLocalDisplay(picked), "2026-08-22 14:30");
+  assert.equal(scheduleTimeIssue(picked, now), null);
+  assert.match(scheduleTimeIssue(applyCalendarTime(applyCalendarDate("", "2020-01-01"), "08:00"), now) ?? "", /过去/);
+});
+
 test("new task form does not bind a live min to native datetime-local", () => {
   const tasks = readFileSync(new URL("./pages/TasksPage.tsx", import.meta.url), "utf8");
   assert.match(tasks, /DatetimeLocalPicker/);
+  assert.match(tasks, /下一北京时间 08:00/);
   assert.doesNotMatch(tasks, /type="datetime-local"/);
   assert.doesNotMatch(tasks, /\[color-scheme:dark\]/);
   assert.doesNotMatch(tasks, /min=\{toDatetimeLocalValue/);

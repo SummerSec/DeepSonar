@@ -54,4 +54,9 @@ test("project image drawer and terminal chrome follow theme tokens", () => {
   const tasks = readFileSync(path.join(sourceRoot, "pages", "TasksPage.tsx"), "utf8");
   assert.doesNotMatch(tasks, /\[color-scheme:dark\]/);
   assert.doesNotMatch(tasks, /type="datetime-local"/);
+
+  const picker = readFileSync(path.join(sourceRoot, "DatetimeLocalPicker.tsx"), "utf8");
+  assert.match(picker, /theme-drawer/);
+  assert.match(picker, /theme-input-surface/);
+  assert.doesNotMatch(picker, /type="date"|type="time"|type="datetime-local"/);
 });
