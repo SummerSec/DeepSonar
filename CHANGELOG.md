@@ -4,17 +4,29 @@
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-08-23
+
 ### 新增
 
 - 官方 runtime catalog 提升后，自动把已过期的官方项目 pin 滚到最新 trusted（#284）。只改 `project_runtime_images.selected_version_id`，不改 Job 快照；`version_id=null` 仍跟随最新；`pin_ok` 显式旧版、第三方 pin 与 `pin_policy=hold` 不自动换 digest。每次滚动写 `runtime_image.official_pin_roll` 审计。市场行可显示「已随官方升到 x.y.z」。建任务前先解析 Hub 快照，避免 pin 过期留下无 Job 空壳画布；已有空壳可 `POST /tasks/:id/retry`。
+- 任务 / Job 启动前对本机冻结 digest 做与 Dispatcher 相同的 inspect-only 校验（#286）。catalog trusted 不再当成「本机可跑」；缺图则拒绝插入 Job，返回可诊断错误（digest / 版本 / 准备入口），执行期仍禁止隐式 `docker pull`。resume 校验快照 digest，不改用 latest。
+- 新建任务「指定时间」改为可点击月历与时刻表（#294），不再依赖浏览器原生 `date` / `time` 控件。调度语义不变：仍提交 `scheduled_start_at` UTC，本机墙钟显示，提交时拒绝过去时刻。
 
 ### 修复
 
 - 人工介入请求可不回复直接隐藏，也可在“显示历史”中取消隐藏；回复成功后仍按用户与任务记为“已回复”并随已处理项隐藏。两者都只改变工作台展示偏好，不把请求误记为“忽略”，也不改写 Job 调度语义。
+- 从未真正 `running`（`started_at` 为空）且唯一 Job 在 provision 失败的任务，不再被列表 / 工作台 / Dashboard 标成「已完成」（#292）。全部 Job 终态但从未开始时，失败 / timeout / orphan / cancelled 显示失败，不再只靠 `ended_at` 误判完成。
+- 过程画布按稳定可见投影展示（#289 / #290）：默认深度 3、每父节点先揭开 12 个子节点、默认 24 个可见节点预算并以 24 为步长展开，180 节点硬上限仍在。主干边使用 ELK 实际路由，回到 root 的反馈边走外围收敛轨道，不再反向穿过源卡片。筛选 / 展开 / delta 布局保留用户平移缩放；PNG 导出标明当前可见投影。
+- 项目设置镜像策略下拉不再截断产品名，触发器可换行显示完整镜像名。
+
+### 变更
+
+- 根 README 去掉重复的运行时镜像能力表、中国区 ACR 拉取示例及静态审计 / 动态验证说明；镜像发布与升级仍以 `docs/RELEASE_RUNTIME_IMAGES.md` 与 `DESIGN.md` 为准。
 
 ### 部署 / 升级说明
 
 - Schema 升至 v37（`project_runtime_images.pin_policy`，默认 `follow`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 本版本不改官方运行时镜像内容。Release 指纹未变时跳过 docker build，只打新版本 tag。升版后官方 stale pin 会自动滚到最新 trusted；本机仍须准备即将冻结的那条 digest，不会在执行期隐式拉取。
 
 ## [0.1.43] - 2026-08-21
 
@@ -428,6 +440,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.44]: https://github.com/SummerSec/DeepSonar/compare/v0.1.43...v0.1.44
 [0.1.43]: https://github.com/SummerSec/DeepSonar/compare/v0.1.42...v0.1.43
 [0.1.42]: https://github.com/SummerSec/DeepSonar/compare/v0.1.41...v0.1.42
 [0.1.41]: https://github.com/SummerSec/DeepSonar/compare/v0.1.40...v0.1.41
