@@ -130,6 +130,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.searchable-select-wrap {
+  width: 100%;
+  min-width: 0;
+}
+.searchable-select-wrap .searchable-select-trigger {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  align-items: flex-start;
+  height: auto;
+  min-height: 32px;
+}
+.searchable-select-wrap .searchable-select-trigger-copy,
+.searchable-select-wrap .searchable-select-trigger-primary,
+.searchable-select-wrap .searchable-select-trigger-hint {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  word-break: break-word;
+}
 .datetime-local-trigger {
   display: flex;
   width: 100%;
