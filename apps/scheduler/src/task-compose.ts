@@ -4,11 +4,12 @@ import path from "node:path";
 import { composeScopeForPrompt } from "./compose-scope.js";
 import { config } from "./config.js";
 import type { sql } from "./db.js";
+import { COMPOSE_SEED_DISPOSITIONS } from "./finding-disposition.js";
 
 export const TASK_KINDS = ["standard", "compose"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 export const MAX_TASK_SEED_FINDINGS = 8;
-export const COMPOSE_SEED_DISPOSITIONS = ["open", "accepted", "confirmed_vuln"] as const;
+export { COMPOSE_SEED_DISPOSITIONS };
 
 export interface FrozenTaskSeedFinding {
   id: string;
@@ -91,7 +92,7 @@ async function loadEligibleSeedFindings(
   const byId = new Map(rows.map((row) => [String(row.id).toLowerCase(), row]));
   if (byId.size !== ids.length) {
     throw new TaskSeedInputError(
-      "种子必须全部属于当前项目，且当前处置为 open/accepted/confirmed_vuln（不要求 confirmed）",
+      "种子必须全部属于当前项目，且当前处置为 open/accepted/human_reproducing/confirmed_vuln（不要求 confirmed）",
     );
   }
   return Promise.all(ids.map(async (id) => {

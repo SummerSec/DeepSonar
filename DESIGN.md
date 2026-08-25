@@ -181,7 +181,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 ### 6.1 Compose 任务的冻结种子
 
-- `kind=compose` 必须从当前项目选择 1–8 条未否定处置（`open` / `accepted` / `confirmed_vuln`）的 Finding；**不要求** `verify_status=confirmed`。`pending` / `verifying` / `needs_human` / `confirmed` 均可作种子。`standard` 禁止携带种子。默认排除 `rejected_fp` / `resolved` / `archived`。
+- `kind=compose` 必须从当前项目选择 1–8 条未否定处置（`open` / `accepted` / `human_reproducing` / `confirmed_vuln`）的 Finding；**不要求** `verify_status=confirmed`。`pending` / `verifying` / `needs_human` / `confirmed` 均可作种子。`standard` 禁止携带种子。默认排除 `rejected_fp` / `resolved` / `archived`。
 - 创建时把选中 Finding 的必要摘要、来源身份以及冻结当时的 `verify_status` / `disposition` 写入 `canvases.target_json.seed_findings`，并生成当前画布内的只读 finding 投影。投影只作为背景，**不是本画布 canonical Finding**：不复制 Finding 记录，不进入本画布 Verify 生命周期；原 Verify 仍在源画布。新证据应回到源 Finding 或产出明确的新 Finding，不得把投影节点当成可确认正本。
 - Graph 对 Agent 暴露当前画布节点 UUID，并标记 `imported` / `readonly`；项目 Finding UUID 和完整冻结摘要不进入 prompt。Hub 仍只能引用当前画布 canonical 节点。YAML 另投影 `compose_scope`（种子位置与「禁止扩大资产范围」规则）。
 - **范围护栏（#273）**：compose 画布只围绕冻结种子做确认、补证与组合链，禁止新一轮资产扫描。Hub 不得下发未绑定种子投影的 explore/audit；若保留 explore/audit，必须绑定至少一条 imported 种子，prompt 只覆盖该种子资产。`emit_finding` 必须能追溯到种子资产（同仓/同模块或组合链位置），越界新资产由 Scheduler 拒绝。
@@ -244,7 +244,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 ## 10. 前端信息架构
 
-- 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。
+- 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。进入项目后，**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
+- Finding 人工处置含 `human_reproducing`（人工复现中）：人已接手手工复现 / 打 PoC，尚未标「漏洞存在」或「拒绝误报」。**不是**技术 `verify_status=confirmed`，不能旁路 `confirmed_vuln` 的 Verify 门。compose 种子视为未否定处置。
 - **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1 风险分布与 P2 吞吐看板未做。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
@@ -318,6 +319,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 通道切换不因 in-flight 准备 409 锁死 | #278 | **已完成**：`PATCH /runtime-images/registry/channel` 在已有准备任务时返回当前 `pull-status`（202），不把 busy 当硬失败；同 digest 复用准备锁，通道切换可抢占 `admin_bulk`；准备任务异常退出离开 `queued`/`running`。Web 下拉保持 pending 目标通道，完成后自动重试落库；进行中禁用重入。缺图仍不落库，Job 执行期仍只 inspect。 |
 | 凭据删除不受可恢复 Job 永久锁死 | #234 | **已完成**：`DELETE /credentials/:id` 只拦 `pending_unclaimed` 与 `active_frozen`（claimed/provisioning/running/waiting_human）。`failed/timeout/orphan` 与 `succeeded/cancelled` 一样：影响投影照列，确认框可提示删除后不能按原快照 resume，但不 409。删除仍与 resume 串行加锁，不自动恢复、不改写冻结快照。 |
 | 态势普通数据看板 | #242 | **P0 已落地**：`/` 运营总览（总量/状态分布/近 7 日/活跃项目 Top N/最近活动）+ 关注队列仍为处置入口；`GET /dashboard/overview` 做轻量聚合，因 Job/Finding 列表有窗口上限。**P1 风险看板、P2 吞吐看板未做。** |
+| 项目风险台 + 人工复现中 | #302 | **已落地**：`/projects/:id/findings` 为本项目全部任务 Finding 风险台（「项目风险 / 风险发现」）；`GET /projects/:id/findings/summary` 做未截断聚合。处置新增 `human_reproducing`，compose 视为未否定；不旁路 Verify，不做跨项目 P1 看板。 |
 | Windows deploy.ps1 编码与 pull 语义 | #243 | **已完成**：`deploy.ps1` 以 UTF-8 BOM 保存且正文仅 ASCII，避免 Windows PowerShell 5.1 按系统代码页把中文/全角标点解析成 ParserError；`pull`/`up` 与 `deploy.sh` 对齐（默认 real + 拉 ACR 应用镜像；优先官方 `deepsonar-assets-helper` / `deepsonar-silo`，缺失回退 busybox pin / pgsty silo；`-Source build` 才本地 `--build`；`-NoBuild` 仍映射为 pull）。推荐终端 `pwsh`。 |
 | 任务下发后就地改标题与内容 | #251 | **已完成**：`PATCH /tasks/:canvasId` 更新 `canvases.title` 与 `target_json.title/content/goal`，并同步 root 节点标题/body；只影响后续 Hub 读图、新派生 Job 与显式重试，不改写已冻结 `agent_snapshot_json`。工作台「任务内容」对未归档且具 `tasks:write` 的主体可编辑保存；viewer 只读。 |
 | Chrome / 长工具 stall 误杀 | #257 | **已完成**：Reaper stall 仍以语义事件为主、默认 900s；`tool.call.started/completed` 写入进度事件与 `payload_json.runtime_activity`。在飞工具且 lease 未过期时不判停滞，使 clang-tidy / fuzz / 其它角色的长 Bash 不被 15 分钟静默窗口误杀。`deepsonar-chrome-audit/test` 下限 5400s、`deepsonar-chrome-fuzz` 10800s；不抬高全局 `DEEPSONAR_JOB_STALL_SEC`。无工具活动的普通 Job 仍在 900s 后收口。 |
@@ -338,7 +340,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `packages/runtime-sandbox` | SandboxRunner / agentbox |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v37）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v38）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

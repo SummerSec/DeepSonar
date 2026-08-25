@@ -68,6 +68,7 @@ GET /platform/exports
 GET /platform/shared-assets
 GET /projects
 GET /projects/:id
+GET /projects/:id/findings/summary
 GET /projects/:id/canvas
 GET /projects/:id/canvases
 GET /projects/:id/exports
@@ -242,6 +243,7 @@ GET /plane-info
 GET /platform/shared-assets
 GET /projects
 GET /projects/{id}
+GET /projects/{id}/findings/summary
 GET /projects/{id}/canvas
 GET /projects/{id}/canvases
 GET /projects/{id}/readiness
@@ -271,6 +273,7 @@ GET /tokens
 PATCH /agent-roles/{id}
 PATCH /canvases/{id}/facts/{nodeId}/verification
 PATCH /credentials/{id}
+PATCH /findings/{id}/disposition
 PATCH /findings/{id}/verify-status
 PATCH /global-settings
 PATCH /jobs/{id}/priority

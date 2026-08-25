@@ -12,6 +12,7 @@ import {
   triggerHubFromHumanComment,
 } from "../../core.js";
 import { sql } from "../../db.js";
+import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
 import { readEvidenceManifestOrInflight, readMainSession, readNormalizedStreamPage } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
@@ -201,7 +202,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     });
   });
 
-  const DISPOSITIONS = ["open", "accepted", "confirmed_vuln", "rejected_fp", "resolved", "archived"] as const;
+  const DISPOSITIONS = FINDING_DISPOSITIONS;
 
   app.patch("/findings/:id/disposition", async (req, reply) => {
     const { id } = req.params as { id: string };

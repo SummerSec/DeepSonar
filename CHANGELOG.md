@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 项目风险台：进入项目后的「项目风险 / 风险发现」列出该项目全部任务 Finding；顶部用 `GET /projects/:id/findings/summary` 聚合严重度 / 验证 / 处置，避免列表 500 条窗口静默截断（#302）。
+- Finding 处置新增 `human_reproducing`（人工复现中）。可作 compose 种子；`confirmed_vuln` 仍要求 Verify 已 confirmed。Schema 升至 v38。
+
 ## [0.1.44] - 2026-08-23
 
 ### 新增

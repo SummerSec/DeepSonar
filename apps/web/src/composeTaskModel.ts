@@ -1,7 +1,7 @@
 import type { FindingSummary } from "./api";
 
 export const MAX_COMPOSE_SEEDS = 8;
-export const COMPOSE_SEED_DISPOSITIONS = new Set(["open", "accepted", "confirmed_vuln"]);
+export const COMPOSE_SEED_DISPOSITIONS = new Set(["open", "accepted", "human_reproducing", "confirmed_vuln"]);
 export const COMPOSE_SEED_VERIFY_OPTIONS = [
   { value: "pending", label: "待验证" },
   { value: "verifying", label: "验证中" },

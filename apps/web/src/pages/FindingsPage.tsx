@@ -1,11 +1,20 @@
 import { GitMerge, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type FindingSummary, type Project } from "../api";
+import { api, type FindingSummary, type Project, type ProjectFindingsSummary } from "../api";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
 import { composeSeedTaskUrl, isComposeSeedCandidate, MAX_COMPOSE_SEEDS } from "../composeTaskModel";
+import {
+  canvasScopedTotal,
+  dispositionBadgeTone,
+  filterProjectFindings,
+  findingsListTruncated,
+  PROJECT_RISK_EYEBROW,
+  PROJECT_RISK_SUBTITLE,
+  PROJECT_RISK_TITLE,
+} from "../findings-risk-desk";
 import {
   DataTable,
   DISPOSITION_OPTIONS,
@@ -39,13 +48,7 @@ function FindingStateBadges({ finding }: { finding: FindingSummary }) {
     : verifyStatus === "needs_human"
       ? "border-amber-400/25 bg-amber-400/[.08] text-amber-300"
       : "border-sky-400/20 bg-sky-400/[.06] text-sky-300";
-  const dispositionTone = disposition === "confirmed_vuln"
-    ? "border-red-400/25 bg-red-400/[.08] text-red-300"
-    : disposition === "open"
-      ? "border-amber-400/25 bg-amber-400/[.08] text-amber-300"
-      : disposition === "accepted"
-        ? "border-sky-400/20 bg-sky-400/[.06] text-sky-300"
-        : "border-zinc-400/20 bg-zinc-400/[.06] text-zinc-400";
+  const dispositionTone = dispositionBadgeTone(disposition);
   return (
     <div className="flex flex-wrap gap-1.5">
       <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] ${verifyTone}`} title={`技术验证状态：${VERIFY_LABELS[verifyStatus] ?? verifyStatus}`}>
@@ -68,10 +71,12 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   const verifyStatuses = readMultiSearchParam(searchParams, "verify");
   const dispositions = readMultiSearchParam(searchParams, "disposition");
   const projectFilters = readMultiSearchParam(searchParams, "project");
+  const canvasFilters = readMultiSearchParam(searchParams, "canvas");
   const q = searchParams.get("q") ?? "";
   const selectedFinding = searchParams.get("finding");
 
   const [rows, setRows] = useState<FindingSummary[]>([]);
+  const [summary, setSummary] = useState<ProjectFindingsSummary | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,18 +92,21 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     api.projects().then(setProjects).catch(() => {});
   }, [scope]);
 
-  // 拉当前作用域全量发现，severity/verify/项目/搜索在前端筛，才能展示「筛选后 / 全量」
+  // 项目页另拉 Scheduler 聚合，避免 500 条列表窗口静默截断全量计数
   useEffect(() => {
     let stop = false;
     const tick = () => {
-      api
-        .findings({
-          // 项目页只限定本项目；全局页不过滤，便于统计全量
-          project_id: scope === "project" ? projectId : undefined,
-        })
-        .then((list) => {
+      const list = api.findings({
+        project_id: scope === "project" ? projectId : undefined,
+      });
+      const rollup = scope === "project" && projectId
+        ? api.projectFindingsSummary(projectId)
+        : Promise.resolve(null);
+      Promise.all([list, rollup])
+        .then(([items, nextSummary]) => {
           if (!stop) {
-            setRows(list);
+            setRows(items);
+            setSummary(nextSummary);
             setError(null);
             setLoading(false);
           }
@@ -125,7 +133,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     setSearchParams(next, { replace: true });
   };
 
-  const setMultiParam = (key: "severity" | "profile" | "verify" | "disposition" | "project", values: string[]) => {
+  const setMultiParam = (key: "severity" | "profile" | "verify" | "disposition" | "project" | "canvas", values: string[]) => {
     const next = new URLSearchParams(searchParams);
     writeMultiSearchParam(next, key, values);
     setSearchParams(next, { replace: true });
@@ -154,25 +162,46 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       .sort((a, b) => a.name.localeCompare(b.name, "zh"));
   }, [projects, rows]);
 
+  const canvasOptions = useMemo(() => {
+    if (summary?.canvases.length) {
+      return summary.canvases.map((canvas) => ({ id: canvas.id, name: canvas.title, count: canvas.count }));
+    }
+    const map = new Map<string, { name: string; count: number }>();
+    for (const finding of rows) {
+      if (!finding.canvas_id) continue;
+      const current = map.get(finding.canvas_id);
+      map.set(finding.canvas_id, {
+        name: finding.canvas_title ?? finding.canvas_id.slice(0, 8),
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+    return [...map.entries()]
+      .map(([id, value]) => ({ id, name: value.name, count: value.count }))
+      .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  }, [summary, rows]);
+
   const visible = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return rows.filter((f) => {
-      if (severities.length && !severities.includes(f.severity ?? "")) return false;
-      if (profiles.length && !profiles.includes(f.profile)) return false;
-      if (verifyStatuses.length && !verifyStatuses.includes(f.verify_status ?? "pending")) return false;
-      if (dispositions.length && !dispositions.includes(String(f.disposition ?? "open"))) return false;
-      if (scope === "global" && projectFilters.length && !projectFilters.includes(f.project_id)) return false;
-      if (!needle) return true;
-      const hay =
-        `${f.title} ${f.profile} ${f.category ?? ""} ${f.summary ?? ""} ${f.location ?? ""} ${f.project_name ?? ""} ${f.canvas_title ?? ""} ${f.tags_json.join(" ")} ${f.fingerprint ?? ""}`.toLowerCase();
-      return hay.includes(needle);
+    const scoped = filterProjectFindings(rows, {
+      severities,
+      profiles,
+      verifyStatuses,
+      dispositions,
+      canvasIds: scope === "project" ? canvasFilters : undefined,
+      q,
     });
-  }, [rows, severities, profiles, verifyStatuses, dispositions, projectFilters, q, scope]);
+    if (scope !== "global" || !projectFilters.length) return scoped;
+    return scoped.filter((finding) => projectFilters.includes(finding.project_id));
+  }, [rows, severities, profiles, verifyStatuses, dispositions, canvasFilters, projectFilters, q, scope]);
 
   const filterActive = Boolean(
-    severities.length || profiles.length || verifyStatuses.length || dispositions.length || q.trim() || (scope === "global" && projectFilters.length),
+    severities.length || profiles.length || verifyStatuses.length || dispositions.length || q.trim()
+      || (scope === "global" && projectFilters.length)
+      || (scope === "project" && canvasFilters.length),
   );
-  const totalCount = rows.length;
+  const projectTotal = summary?.project_total ?? summary?.total ?? rows.length;
+  const rollupTotal = canvasScopedTotal(summary, canvasFilters) ?? projectTotal;
+  const listTruncated = scope === "project" && findingsListTruncated(rows.length, projectTotal);
+  const totalCount = scope === "project" ? rollupTotal : rows.length;
   const filteredCount = visible.length;
   const filterChips = [
     ...severities.map((value) => `风险 ${value}`),
@@ -180,6 +209,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     ...verifyStatuses.map((value) => `验证 ${VERIFY_LABELS[value] ?? value}`),
     ...dispositions.map((value) => `处置 ${DISPOSITION_LABELS[value] ?? value}`),
     ...(scope === "global" ? projectFilters.map((value) => `项目 ${projectOptions.find((project) => project.id === value)?.name ?? value.slice(0, 8)}`) : []),
+    ...(scope === "project" ? canvasFilters.map((value) => `任务 ${canvasOptions.find((canvas) => canvas.id === value)?.name ?? value.slice(0, 8)}`) : []),
     ...(q.trim() ? [`搜索 “${q.trim()}”`] : []),
   ];
 
@@ -191,6 +221,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
     next.delete("disposition");
     next.delete("q");
     next.delete("project");
+    next.delete("canvas");
     setSearchDraft("");
     setSearchParams(next, { replace: true });
   };
@@ -218,10 +249,24 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
   return (
     <div className="page-scroll">
       <PageHeader
-        title={scope === "global" ? "发现" : "项目发现"}
-        eyebrow="EVIDENCE REGISTER"
-        subtitle="点开任一发现可查看完整内容、验证路径与人工处置。筛选结果与全量对比见下方计数条。"
+        title={scope === "global" ? "发现" : PROJECT_RISK_TITLE}
+        eyebrow={scope === "global" ? "EVIDENCE REGISTER" : PROJECT_RISK_EYEBROW}
+        subtitle={scope === "global"
+          ? "跨项目证据检索。进入某个项目后请用「项目风险」看该项目全部任务的发现。"
+          : PROJECT_RISK_SUBTITLE}
       />
+
+      {scope === "project" && summary && (
+        <ProjectRiskSummary
+          summary={summary}
+          severities={severities}
+          verifyStatuses={verifyStatuses}
+          dispositions={dispositions}
+          onSeverity={(values) => setMultiParam("severity", values)}
+          onVerify={(values) => setMultiParam("verify", values)}
+          onDisposition={(values) => setMultiParam("disposition", values)}
+        />
+      )}
 
       <FilterCountBar
         filtered={filteredCount}
@@ -231,6 +276,12 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         filters={filterChips}
         onClear={clearFilters}
       />
+
+      {listTruncated && (
+        <p className="mb-4 font-mono text-[11px] text-amber-300/90">
+          列表窗口显示 {rows.length} 条，项目全量 {projectTotal} 条。上方计数来自项目聚合，不是当前页。
+        </p>
+      )}
 
       {scope === "project" && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-y border-white/[.05] py-3">
@@ -275,12 +326,13 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
           <table className="data-table-adaptive w-full">
             <colgroup>
               {scope === "project" && <col style={{ width: "5%" }} />}
-              <col style={{ width: scope === "global" ? "11%" : "11%" }} />
-              <col style={{ width: scope === "global" ? "28%" : "36%" }} />
+              <col style={{ width: scope === "global" ? "11%" : "10%" }} />
+              <col style={{ width: scope === "global" ? "28%" : "28%" }} />
               {scope === "global" && <col style={{ width: "14%" }} />}
-              <col style={{ width: scope === "global" ? "20%" : "24%" }} />
-              <col style={{ width: scope === "global" ? "14%" : "16%" }} />
-              <col style={{ width: scope === "global" ? "13%" : "12%" }} />
+              {scope === "project" && <col style={{ width: "16%" }} />}
+              <col style={{ width: scope === "global" ? "20%" : "18%" }} />
+              <col style={{ width: scope === "global" ? "14%" : "15%" }} />
+              <col style={{ width: scope === "global" ? "13%" : "8%" }} />
             </colgroup>
             <thead>
               <tr>
@@ -349,6 +401,21 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                     </div>
                   </th>
                 )}
+                {scope === "project" && (
+                  <th className="table-head-cell">
+                    <div className="table-head-stack">
+                      <span className="table-head-label">来源任务</span>
+                      <SearchableMultiSelect
+                        value={canvasFilters}
+                        onChange={(values) => setMultiParam("canvas", values)}
+                        options={canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name }))}
+                        placeholder="全部任务"
+                        ariaLabel="按来源任务筛选"
+                        className="contents"
+                      />
+                    </div>
+                  </th>
+                )}
                 <th className="table-head-cell">位置</th>
                 <th className="table-head-cell">
                   <div className="table-head-stack">
@@ -378,7 +445,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
               {visible.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={scope === "global" ? 6 : 6}
+                    colSpan={scope === "global" ? 6 : 7}
                     className="px-4 py-12 text-center text-[13px] text-zinc-600"
                   >
                     {error
@@ -448,6 +515,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                         </Link>
                       </td>
                     )}
+                    {scope === "project" && (
+                      <td className={`${tdCls} max-w-[180px] truncate font-mono text-[13px] text-zinc-500`}>
+                        {f.canvas_title || f.canvas_id?.slice(0, 8) || "—"}
+                      </td>
+                    )}
                     <td className={`${tdCls} max-w-[220px] truncate font-mono text-[13px] text-zinc-500`}>
                       {f.location || "—"}
                     </td>
@@ -501,6 +573,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
               <SearchableMultiSelect value={severities} onChange={(values) => setMultiParam("severity", values)} options={SEVERITIES.map((value) => ({ value, label: value }))} placeholder="全部风险" ariaLabel="Severity" className="contents" />
               <SearchableMultiSelect value={profiles} onChange={(values) => setMultiParam("profile", values)} options={Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} placeholder="全部 profile" ariaLabel="Finding profile" className="contents" />
               {scope === "global" && <SearchableMultiSelect value={projectFilters} onChange={(values) => setMultiParam("project", values)} options={projectOptions.map((project) => ({ value: project.id, label: project.name }))} placeholder="全部项目" ariaLabel="项目" className="contents" />}
+              {scope === "project" && <SearchableMultiSelect value={canvasFilters} onChange={(values) => setMultiParam("canvas", values)} options={canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name }))} placeholder="全部任务" ariaLabel="来源任务" className="contents" />}
               <SearchableMultiSelect value={verifyStatuses} onChange={(values) => setMultiParam("verify", values)} options={VERIFY_OPTIONS} placeholder="全部验证" ariaLabel="验证状态" className="contents" />
               <SearchableMultiSelect value={dispositions} onChange={(values) => setMultiParam("disposition", values)} options={DISPOSITION_OPTIONS} placeholder="全部处置" ariaLabel="处置状态" className="contents" />
             </div>
@@ -541,7 +614,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                   </div>
                   {finding.summary && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">{finding.summary}</p>}
                   <div className="mt-3 flex items-center gap-2 border-t border-white/[.045] pt-3 text-[9px] text-zinc-600">
-                    <span className="truncate">{finding.project_name}</span><span>·</span>
+                    <span className="truncate">{scope === "project" ? (finding.canvas_title || "未标注任务") : finding.project_name}</span><span>·</span>
                     <span className="truncate font-mono">{finding.location || "无位置"}</span>
                     <div className="ml-auto shrink-0"><FindingStateBadges finding={finding} /></div>
                   </div>
@@ -554,6 +627,101 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       {selectedFinding && (
         <FindingDetailPanel findingId={selectedFinding} onClose={() => openFinding(null)} />
       )}
+    </div>
+  );
+}
+
+function toggleChip(current: readonly string[], value: string): string[] {
+  return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+}
+
+function ProjectRiskSummary({
+  summary,
+  severities,
+  verifyStatuses,
+  dispositions,
+  onSeverity,
+  onVerify,
+  onDisposition,
+}: {
+  summary: ProjectFindingsSummary;
+  severities: readonly string[];
+  verifyStatuses: readonly string[];
+  dispositions: readonly string[];
+  onSeverity: (values: string[]) => void;
+  onVerify: (values: string[]) => void;
+  onDisposition: (values: string[]) => void;
+}) {
+  return (
+    <section className="mb-4 rounded-2xl bg-white/[.035] px-4 py-3.5 ring-1 ring-white/[.08] sm:px-5" aria-label="项目风险汇总">
+      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+        项目全量 {summary.total} 条 · 不受列表窗口截断
+      </div>
+      <div className="grid gap-3 lg:grid-cols-3">
+        <SummaryChipRow
+          label="严重度"
+          items={summary.severity}
+          labels={Object.fromEntries(SEVERITIES.map((value) => [value, value]))}
+          selected={severities}
+          onToggle={(value) => onSeverity(toggleChip(severities, value))}
+        />
+        <SummaryChipRow
+          label="验证"
+          items={summary.verify_status}
+          labels={VERIFY_LABELS}
+          selected={verifyStatuses}
+          onToggle={(value) => onVerify(toggleChip(verifyStatuses, value))}
+        />
+        <SummaryChipRow
+          label="处置"
+          items={summary.disposition}
+          labels={DISPOSITION_LABELS}
+          selected={dispositions}
+          onToggle={(value) => onDisposition(toggleChip(dispositions, value))}
+        />
+      </div>
+    </section>
+  );
+}
+
+function SummaryChipRow({
+  label,
+  items,
+  labels,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  items: Array<{ key: string; count: number }>;
+  labels: Record<string, string>;
+  selected: readonly string[];
+  onToggle: (value: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 font-mono text-[10px] text-zinc-500">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.filter((item) => item.count > 0 || selected.includes(item.key)).map((item) => {
+          const active = selected.includes(item.key);
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onToggle(item.key)}
+              className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${
+                active
+                  ? "border-acc-400/40 bg-acc-500/[.12] text-acc-200"
+                  : "border-white/[.08] bg-white/[.03] text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              {labels[item.key] ?? (item.key === "unset" ? "未评级" : item.key)} {item.count}
+            </button>
+          );
+        })}
+        {items.every((item) => item.count === 0) && (
+          <span className="font-mono text-[10px] text-zinc-600">无</span>
+        )}
+      </div>
     </div>
   );
 }

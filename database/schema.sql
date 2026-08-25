@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 37);
+INSERT INTO schema_meta (id, version) VALUES ('global', 38);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -253,7 +253,7 @@ CREATE TABLE findings (
     verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human')
   ),
   CONSTRAINT findings_disposition_check CHECK (
-    disposition IN ('open', 'accepted', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
+    disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
   )
 );
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);

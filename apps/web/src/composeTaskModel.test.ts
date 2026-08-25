@@ -39,6 +39,7 @@ function finding(overrides: Partial<FindingSummary> = {}): FindingSummary {
 test("compose candidate eligibility allows unconfirmed verify_status and excludes negative dispositions", () => {
   assert.equal(isComposeSeedCandidate(finding()), true);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "accepted" })), true);
+  assert.equal(isComposeSeedCandidate(finding({ disposition: "human_reproducing" })), true);
   assert.equal(isComposeSeedCandidate(finding({ disposition: "confirmed_vuln" })), true);
   assert.equal(isComposeSeedCandidate(finding({ verify_status: "pending" })), true);
   assert.equal(isComposeSeedCandidate(finding({ verify_status: "verifying" })), true);
@@ -68,7 +69,7 @@ test("compose candidate filters cover every severity, disposition, profile, orig
 
 test("compose retry errors turn stale seeds into an actionable next step", () => {
   assert.equal(
-    composeRetryErrorMessage(new Error("POST /tasks/id/retry -> 409: 种子必须全部属于当前项目，且当前处置为 open/accepted/confirmed_vuln（不要求 confirmed）")),
+    composeRetryErrorMessage(new Error("POST /tasks/id/retry -> 409: 种子必须全部属于当前项目，且当前处置为 open/accepted/human_reproducing/confirmed_vuln（不要求 confirmed）")),
     "冻结种子当前已不可用。请回到 Findings 重新选择可代入项并新建组合任务。",
   );
   assert.equal(composeRetryErrorMessage(new Error("network down")), "重试失败：network down");

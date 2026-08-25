@@ -469,7 +469,9 @@ Job 事件仍必须经过本摄入硬门。
 - `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup、`execution_state`、收尾/待领取计数及最近一次 job 状态/优先级）
 - `GET  /canvases/{id}`  单任务画布节点/边；Canvas 元数据带同一执行控制投影
 - `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
-- `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤
+- `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤；未分页窗口 500 条
+- `GET /projects/{id}/findings/summary`  项目风险聚合（严重度 / verify_status / disposition / 来源任务），不受列表窗口截断
+- `PATCH /findings/{id}/disposition`  人工处置；`human_reproducing` 为复现中；`confirmed_vuln` 仍要求 `verify_status=confirmed`
 - `GET /findings/{id}`  Finding 详情；返回协议字段、评分原文/规范化结果、验证轮次、来源事件和结构化 trace
 - `POST /jobs/{id}/cancel`
 - `POST /jobs/{id}/resume`  使用旧冻结快照重新执行；身份漂移时 `409 SNAPSHOT_STALE`
@@ -554,7 +556,7 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `target_json`。`resolveFindingProtocol` 按任务 > 项目 > 全局覆盖（数组按层替换并去重），生成
 `EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
 
-compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目且 disposition 为 `open|accepted|confirmed_vuln`（**不要求** `confirmed`），然后把内容与冻结当时的 `verify_status`/`disposition` 写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID 与 `compose_scope` 位置规则；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。compose 画布禁止未绑定种子的 explore/audit，且 `emit_finding` 必须落在种子资产范围内。
+compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目且 disposition 为 `open|accepted|human_reproducing|confirmed_vuln`（**不要求** `confirmed`），然后把内容与冻结当时的 `verify_status`/`disposition` 写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID 与 `compose_scope` 位置规则；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。compose 画布禁止未绑定种子的 explore/audit，且 `emit_finding` 必须落在种子资产范围内。
 
 Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 

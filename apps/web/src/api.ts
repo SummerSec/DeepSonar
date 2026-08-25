@@ -533,10 +533,23 @@ export interface JobSummary {
 export type FindingDisposition =
   | "open"
   | "accepted"
+  | "human_reproducing"
   | "confirmed_vuln"
   | "rejected_fp"
   | "resolved"
   | "archived";
+
+export interface ProjectFindingsSummary {
+  project_id: string;
+  total: number;
+  project_total: number;
+  list_window: number;
+  truncated: boolean;
+  severity: Array<{ key: string; count: number }>;
+  verify_status: Array<{ key: string; count: number }>;
+  disposition: Array<{ key: string; count: number }>;
+  canvases: Array<{ id: string; title: string; count: number }>;
+}
 
 /** 发现清单 */
 export interface FindingSummary {
@@ -2024,6 +2037,8 @@ export const api = {
     disposition: opts?.disposition,
     canvas_id: opts?.canvas_id,
   })}`)),
+  projectFindingsSummary: (projectId: string, opts?: { canvas_id?: string }) =>
+    get<ProjectFindingsSummary>(`/projects/${projectId}/findings/summary${qs({ canvas_id: opts?.canvas_id })}`),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
   projectSharedAssets: (projectId: string, page: { limit?: number; offset?: number } = {}) =>
     get<SharedAssetPage>(`/projects/${projectId}/shared-assets${qs({ limit: page.limit?.toString(), offset: page.offset?.toString() })}`),

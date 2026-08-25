@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  COMPOSE_SEED_DISPOSITIONS,
   MAX_TASK_SEED_FINDINGS,
   TaskSeedInputError,
   freezeTaskSeedTarget,
@@ -42,6 +43,10 @@ test("OpenAPI advertises compose task input and Finding candidate filters", () =
   assert.match(JSON.stringify(taskProperties.seed_finding_ids), /未确认/);
   const findingFilters = new Set((document.paths["/findings"].get.parameters ?? []).map((parameter) => parameter.name));
   for (const filter of ["severity", "profile", "category", "verify_status", "disposition"]) assert.ok(findingFilters.has(filter));
+  assert.match(JSON.stringify(document.paths["/findings"].get), /human_reproducing/);
+  assert.ok(document.paths["/projects/{id}/findings/summary"]?.get);
+  assert.match(JSON.stringify(document.paths["/findings/{id}/disposition"]?.patch), /human_reproducing/);
+  assert.deepEqual([...COMPOSE_SEED_DISPOSITIONS], ["open", "accepted", "human_reproducing", "confirmed_vuln"]);
 });
 
 test("standard tasks remain seedless and unauthorized entries cannot opt into compose", async () => {
