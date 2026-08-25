@@ -14,7 +14,7 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("../../db.js");
-    const { ingestEvent } = await import("../../core.js");
+    const { ingestEvent, ingestEventBundle } = await import("../../core.js");
     const { ControlInputError } = await import("../../control-input.js");
     const { createAttempt, markAttemptInterrupted } = await import("../job-attempt/application.js");
     await migrate();
@@ -351,6 +351,81 @@ if (!testDatabaseUrl) {
       const [resumedHubState] = await sql<{ status: string }[]>`
         SELECT status FROM jobs WHERE id = ${resumedHubJob}`;
       assert.equal(resumedHubState.status, "succeeded");
+
+      await sql`
+        UPDATE jobs SET status = 'succeeded'
+        WHERE project_id = ${projectId}
+          AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
+      const humanCloseSnapshot = {
+        ...hubSnapshot,
+        name: "hub",
+        platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
+      };
+      const sameTurnCloseJob = await makeJob("hub_reason", "running", humanCloseSnapshot);
+      await createAttempt(sql, sameTurnCloseJob, { agent_cli: "claude-code" });
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json)
+        VALUES (
+          ${sameTurnCloseJob}, ${randomUUID()}, 1, 'human_message_acknowledged',
+          ${sql.json({ message_id: randomUUID(), summary: "ack close instruction" })}
+        )`;
+      const sameTurnClose = await ingestEventBundle(sameTurnCloseJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: { complete: { from: [], description: "human asked to close the audit" } },
+        },
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "done",
+          payload: { summary: "closed after human message" },
+        },
+      ]);
+      assert.deepEqual(sameTurnClose.map((result) => result.deduped), [false, false]);
+      const [sameTurnState] = await sql<{ status: string; events: number }[]>`
+        SELECT status, (SELECT COUNT(*)::int FROM events WHERE job_id = ${sameTurnCloseJob} AND type IN ('hub_decision', 'done')) AS events
+        FROM jobs WHERE id = ${sameTurnCloseJob}`;
+      assert.deepEqual(sameTurnState, { status: "succeeded", events: 2 });
+
+      const doneFirstCloseJob = await makeJob("hub_reason", "running", humanCloseSnapshot);
+      await createAttempt(sql, doneFirstCloseJob, { agent_cli: "claude-code" });
+      const lateDoneId = randomUUID();
+      const doneFirstClose = await ingestEventBundle(doneFirstCloseJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "done",
+          payload: { summary: "first terminal in the same turn" },
+        },
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: { complete: { from: [], description: "decision after mark_job_done in the same turn" } },
+        },
+        {
+          v: 1,
+          event_id: lateDoneId,
+          type: "done",
+          payload: { summary: "late mark_job_done after successful close" },
+        },
+      ]);
+      assert.equal(doneFirstClose[0]?.deduped, false);
+      assert.equal(doneFirstClose[1]?.deduped, false);
+      assert.equal(doneFirstClose[2]?.deduped, true, "late same-ingest mark_job_done is a no-op");
+      const [doneFirstState] = await sql<{ status: string; events: number; late_done: number }[]>`
+        SELECT
+          status,
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${doneFirstCloseJob} AND type IN ('hub_decision', 'done')) AS events,
+          (SELECT COUNT(*)::int FROM events WHERE event_id = ${lateDoneId}) AS late_done
+        FROM jobs WHERE id = ${doneFirstCloseJob}`;
+      assert.deepEqual(doneFirstState, { status: "succeeded", events: 2, late_done: 0 });
+
+      const priorTerminalJob = await makeJob("hub_reason", "succeeded", humanCloseSnapshot);
+      await assertRejectedWithoutWrites(priorTerminalJob, "done", "job_not_running");
+      await assertRejectedWithoutWrites(priorTerminalJob, "hub_decision", "job_not_running");
 
       const duplicateDoneJob = await makeJob("review", "running", workerSnapshot);
       await ingestEvent(duplicateDoneJob, {

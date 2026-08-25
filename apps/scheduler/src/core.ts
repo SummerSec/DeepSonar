@@ -140,8 +140,10 @@ const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplic
 
 const eventIngestionApplication = createEventIngestionApplication(
   sql,
-  async (tx, jobId, envelope) => {
-    await eventIngestionSideEffectApplication.applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload);
+  async (tx, jobId, envelope, ingest) => {
+    await eventIngestionSideEffectApplication.applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload, {
+      jobStatusAtLock: ingest?.jobStatusAtLock,
+    });
   },
   {
     maxPayloadBytes: SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
@@ -1254,9 +1256,10 @@ function sameTerminalCanvasNodes(left: TerminalCanvasNodeSnapshot[], right: Term
 
 /**
  * 结束处理（§8.2）：done/failed 只能把 running 改为终态。
- * 语义事件入口在同一摄入事务提交前拒绝非 running Job（稳定
- * `job_not_running`，对外全事务回滚）；仅相同 event_id 的 dedup replay
- * 会在该门槛前直接返回。
+ * 语义事件入口在同一摄入事务提交前拒绝「开始时」非 running 的 Job（稳定
+ * `job_not_running`，对外全事务回滚）。同一摄入里更早的事件已经成功
+ * 终态时，后续 mark_job_done 视为幂等，不得整笔回滚。仅相同 event_id
+ * 的 dedup replay 会在该门槛前直接返回。
  * 终态永不被迟到事件覆盖。
  */
 export async function finalizeJob(
