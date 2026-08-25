@@ -30,6 +30,7 @@ if (!testDatabaseUrl) {
     const jobB = randomUUID();
     const findingA = randomUUID();
     const findingB = randomUUID();
+    const emptyProjectId = randomUUID();
     try {
       await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${randomUUID()}, 'multi-task risk')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES
@@ -74,7 +75,6 @@ if (!testDatabaseUrl) {
       });
       assert.equal(JSON.parse(canvasSummary.payload).total, 1);
 
-      const emptyProjectId = randomUUID();
       await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${emptyProjectId}, ${randomUUID()}, 'empty risk')`;
       const emptySummary = await app.inject({ method: "GET", url: `/projects/${emptyProjectId}/findings/summary` });
       assert.equal(emptySummary.statusCode, 200);
@@ -99,13 +99,14 @@ if (!testDatabaseUrl) {
       const after = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary` });
       assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "human_reproducing")?.count, 1);
 
-      await sql`DELETE FROM findings WHERE project_id = ${emptyProjectId}`;
-      await sql`DELETE FROM projects WHERE id = ${emptyProjectId}`;
     } finally {
-      await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
+      // PATCH /findings/:id/disposition 会写 audit_logs(project_id)。
+      // 该表 append-only（禁止 DELETE/UPDATE），因此不能先清审计再删项目。
+      // 与 recovery-issue186 一样：清掉可调度行，留下被审计引用的项目壳。
+      await sql`DELETE FROM findings WHERE project_id = ANY(${[projectId, emptyProjectId]}::uuid[])`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await sql`DELETE FROM projects WHERE id = ${emptyProjectId}`;
       await app.close();
     }
   });
