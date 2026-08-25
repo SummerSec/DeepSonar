@@ -34,6 +34,7 @@ const STATUS_LABEL: Record<string, string> = {
   // Finding 人工处置
   open: "待处置",
   accepted: "已接受",
+  human_reproducing: "人工复现中",
   confirmed_vuln: "漏洞存在",
   rejected_fp: "拒绝误报",
   resolved: "处理完成",
@@ -43,6 +44,7 @@ const STATUS_LABEL: Record<string, string> = {
 export const DISPOSITION_OPTIONS: { value: string; label: string }[] = [
   { value: "open", label: "待处置" },
   { value: "accepted", label: "接受" },
+  { value: "human_reproducing", label: "人工复现中" },
   { value: "confirmed_vuln", label: "漏洞存在" },
   { value: "rejected_fp", label: "拒绝误报" },
   { value: "resolved", label: "处理完成" },

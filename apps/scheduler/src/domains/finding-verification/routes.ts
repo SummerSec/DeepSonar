@@ -11,8 +11,11 @@ import {
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import { sql } from "../../db.js";
 import { loadFindingTrace } from "../../finding-trace.js";
+import { FINDINGS_LIST_WINDOW } from "../../finding-disposition.js";
+import { isUuid } from "../../project-scope.js";
 import { decodeCursor, cursorForRow, page, pageLimit } from "../../pagination.js";
 import { createVerifyRound, markFindingNeedsHuman } from "../../verify.js";
+import { loadProjectFindingsSummary } from "./project-findings-summary.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { assertFrozenRuntimeImageLocal } from "../../runtime-images.js";
@@ -101,7 +104,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     if (after && (!cursor?.created_at || !cursor.id)) {
       return reply.code(400).send({ error: "invalid findings cursor", error_code: "INVALID_CURSOR" });
     }
-    const limit = paginated ? pageLimit(q.limit) : 500;
+    const limit = paginated ? pageLimit(q.limit) : FINDINGS_LIST_WINDOW;
     const rows = await sql`
       SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
              f.profile, f.category, f.tags_json, f.evidence_refs_json, f.scoring_json,
@@ -140,6 +143,24 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       hasMore,
       live: false,
     });
+  });
+
+  app.get("/projects/:id/findings/summary", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) {
+      return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
+    }
+    const q = req.query as { canvas_id?: string };
+    const canvasIds = String(q.canvas_id ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (canvasIds.some((value) => !isUuid(value))) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
+    const summary = await loadProjectFindingsSummary(id, canvasIds);
+    if (!summary) return reply.code(404).send({ error: "project not found", error_code: "NOT_FOUND" });
+    return summary;
   });
 
   app.patch("/findings/:id/verify-status", async (req, reply) => {

@@ -118,7 +118,8 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /findings | findings:read | Finding 列表；`?project_id=` / `?canvas_id=` |
+| GET | /findings | findings:read | Finding 列表；`?project_id=` / `?canvas_id=`；未分页窗口 500 条 |
+| GET | /projects/:id/findings/summary | findings:read | 项目风险聚合（严重度 / verify_status / disposition / 来源任务）；可选 `?canvas_id=` |
 | GET | /findings/:id | findings:read | Finding 详情、验证 Jobs、来源事件、评论、链接、验证轮次和 trace |
 | POST | /findings/:id/verify | jobs:control | 人工强制创建下一轮 Scheduler Verify；可选 `{reason?}`，仍受活动任务、轮次和深度护栏约束 |
 | POST | /findings/:id/evidence-jobs | jobs:control | 新建绑定当前 Finding 的补证 Job，body 为 `{role: review\|test}` |

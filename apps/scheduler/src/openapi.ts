@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
 import { config } from "./config.js";
+import { FINDING_DISPOSITIONS } from "./finding-disposition.js";
 import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -531,6 +532,17 @@ const OPS: Op[] = [
   },
   { method: "get", path: "/projects/{id}", summary: "项目详情", scope: "projects:read", tags: ["Projects"] },
   {
+    method: "get",
+    path: "/projects/{id}/findings/summary",
+    summary: "项目风险聚合（不受 Finding 列表窗口截断）",
+    description: "按严重度、verify_status、disposition 与来源任务计数；可选 canvas_id 收窄。列表窗口仍由 GET /findings 限制。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: {
+      canvas_id: { type: "string", description: "逗号分隔的来源画布 UUID，收窄聚合范围" },
+    },
+  },
+  {
     method: "patch",
     path: "/projects/{id}",
     summary: "更新项目",
@@ -979,7 +991,7 @@ const OPS: Op[] = [
       profile: { type: "string" },
       category: { type: "string" },
       verify_status: { type: "string" },
-      disposition: { type: "string", enum: ["open", "accepted", "confirmed_vuln", "rejected_fp", "resolved", "archived"] },
+      disposition: { type: "string", enum: [...FINDING_DISPOSITIONS] },
     },
   },
   {
@@ -989,6 +1001,23 @@ const OPS: Op[] = [
     description: "trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。",
     scope: "findings:read",
     tags: ["Findings"],
+  },
+  {
+    method: "patch",
+    path: "/findings/{id}/disposition",
+    summary: "人工更新 Finding 处置态",
+    description: "disposition 为人工业务闭环；confirmed_vuln 仍要求 verify_status=confirmed，不得旁路技术确认。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    body: {
+      type: "object",
+      required: ["disposition"],
+      additionalProperties: false,
+      properties: {
+        disposition: { type: "string", enum: [...FINDING_DISPOSITIONS] },
+        note: { type: "string", maxLength: 2000 },
+      },
+    },
   },
   {
     method: "patch",
