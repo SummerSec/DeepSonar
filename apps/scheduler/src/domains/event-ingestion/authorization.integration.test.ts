@@ -16,6 +16,7 @@ if (!testDatabaseUrl) {
     const { migrate, sql } = await import("../../db.js");
     const { ingestEvent } = await import("../../core.js");
     const { ControlInputError } = await import("../../control-input.js");
+    const { createAttempt, markAttemptInterrupted } = await import("../job-attempt/application.js");
     await migrate();
 
     const projectId = randomUUID();
@@ -278,18 +279,78 @@ if (!testDatabaseUrl) {
       });
       assert.deepEqual(hubReplay, { deduped: true }, "dedup must win before status/history on a terminal replay");
 
-      const humanJob = await makeJob("review", "running", workerSnapshot);
-      await ingestEvent(humanJob, {
+      const humanPayload = {
+        reason: "operator review",
+        subject: { type: "platform_blocker", kind: "business_decision" },
+      };
+      const ingestHuman = (jobId: string) => ingestEvent(jobId, {
         v: 1,
         event_id: randomUUID(),
         type: "human",
-        payload: {
-          reason: "operator review",
-          subject: { type: "platform_blocker", kind: "business_decision" },
-        },
+        payload: humanPayload,
       });
+      const ingestDone = (jobId: string, summary: string) => ingestEvent(jobId, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary },
+      });
+      const resumeFrozenAttempt = async (jobId: string) => {
+        await markAttemptInterrupted(sql, jobId, "使用旧冻结快照重新执行");
+        const attempt = await createAttempt(sql, jobId, { agent_cli: "claude-code" });
+        await sql`
+          UPDATE jobs
+          SET status = 'running', error = NULL, finished_at = NULL
+          WHERE id = ${jobId}`;
+        return attempt;
+      };
+
+      const humanJob = await makeJob("review", "running", workerSnapshot);
+      await ingestHuman(humanJob);
       await sql`UPDATE jobs SET status = 'running' WHERE id = ${humanJob}`;
       await assertRejectedWithoutWrites(humanJob, "done", "duplicate_tool_call");
+
+      const sameAttemptHumanJob = await makeJob("review", "running", workerSnapshot);
+      await createAttempt(sql, sameAttemptHumanJob, { agent_cli: "claude-code" });
+      await ingestHuman(sameAttemptHumanJob);
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${sameAttemptHumanJob}`;
+      await assertRejectedWithoutWrites(sameAttemptHumanJob, "done", "duplicate_tool_call");
+
+      const resumedHumanJob = await makeJob("review", "running", workerSnapshot);
+      await createAttempt(sql, resumedHumanJob, { agent_cli: "claude-code" });
+      await ingestHuman(resumedHumanJob);
+      await resumeFrozenAttempt(resumedHumanJob);
+      const resumedDone = await ingestDone(resumedHumanJob, "resume after request_human");
+      assert.equal(resumedDone.deduped, false);
+      const [resumedState] = await sql<{ status: string }[]>`
+        SELECT status FROM jobs WHERE id = ${resumedHumanJob}`;
+      assert.equal(resumedState.status, "succeeded");
+
+      await sql`
+        UPDATE jobs SET status = 'succeeded'
+        WHERE project_id = ${projectId}
+          AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
+      const hubResumeSnapshot = {
+        ...hubSnapshot,
+        name: "hub",
+        platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
+      };
+      const resumedHubJob = await makeJob("hub_reason", "running", hubResumeSnapshot);
+      await createAttempt(sql, resumedHubJob, { agent_cli: "claude-code" });
+      await ingestHuman(resumedHubJob);
+      await resumeFrozenAttempt(resumedHubJob);
+      const resumedHubDecision = await ingestEvent(resumedHubJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "hub_decision",
+        payload: { complete: { from: [], description: "resume after request_human" } },
+      });
+      assert.equal(resumedHubDecision.deduped, false);
+      const resumedHubDone = await ingestDone(resumedHubJob, "hub resume completion");
+      assert.equal(resumedHubDone.deduped, false);
+      const [resumedHubState] = await sql<{ status: string }[]>`
+        SELECT status FROM jobs WHERE id = ${resumedHubJob}`;
+      assert.equal(resumedHubState.status, "succeeded");
 
       const duplicateDoneJob = await makeJob("review", "running", workerSnapshot);
       await ingestEvent(duplicateDoneJob, {

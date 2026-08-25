@@ -365,20 +365,32 @@ export function createEventIngestionSideEffectApplication(
 
   /**
    * Terminal/control events are serialized by the Job lock acquired upstream.
-   * A Hub decision may be followed by exactly one done event; human is mutually
-   * exclusive with both, and each event type is single-shot per Job.
+   * Mutex is per current Attempt: a Hub decision may be followed by exactly
+   * one done event; human is mutually exclusive with both; each type is
+   * single-shot. Prior-attempt rows stay on the Job ledger after resume and
+   * must not poison the new Attempt. No active Attempt (tests / recovery)
+   * keeps the Job-wide count.
    */
   async function assertTerminalEventHistory(tx: EventIngestionTransaction, jobId: string, type: string): Promise<void> {
     if (!(type in SEMANTIC_TOOL_BY_EVENT) || !["done", "human", "hub_decision"].includes(type)) return;
     const rows = await tx<{ type: string }[]>`
     SELECT type FROM events
     WHERE job_id = ${jobId} AND type IN ('done', 'human', 'hub_decision')
+      AND created_at >= COALESCE(
+        (
+          SELECT created_at FROM job_attempts
+          WHERE job_id = ${jobId} AND status = 'active'
+          ORDER BY attempt_no DESC
+          LIMIT 1
+        ),
+        '-infinity'::timestamptz
+      )
     ORDER BY job_seq`;
     const doneCount = rows.filter((row) => row.type === "done").length;
     const humanCount = rows.filter((row) => row.type === "human").length;
     const hubCount = rows.filter((row) => row.type === "hub_decision").length;
     if (doneCount > 1 || humanCount > 1 || hubCount > 1) {
-      throw new ControlInputError("duplicate_tool_call", "同一 Job 的终态工具每类只能提交一次。", type);
+      throw new ControlInputError("duplicate_tool_call", "同一 Attempt 的终态工具每类只能提交一次。", type);
     }
     if (humanCount > 0 && (doneCount > 0 || hubCount > 0)) {
       throw new ControlInputError(
