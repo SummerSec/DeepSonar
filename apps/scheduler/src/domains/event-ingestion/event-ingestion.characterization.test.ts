@@ -12,6 +12,12 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   assert.ok(facade.length < 700, "core must not retain the semantic side-effect implementation");
 
   assert.doesNotMatch(coreSource, /SEMANTIC_TOOL_BY_EVENT|semanticJobContract|assertTerminalEventHistory/);
+  assert.match(sideEffectSource, /assertTerminalEventHistory/);
+  assert.match(
+    sideEffectSource,
+    /created_at >= COALESCE\([\s\S]*job_attempts[\s\S]*status = 'active'/,
+    "terminal mutex must be scoped to the current Attempt, not the whole Job ledger",
+  );
   assert.match(sideEffectSource, /createEventIngestionSideEffectApplication/);
   assert.match(sideEffectSource, /findingVerification/);
   assert.match(sideEffectSource, /resolveAgentSnapshotForJob/);
