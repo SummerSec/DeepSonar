@@ -21,6 +21,12 @@ export interface EventIngestionResult {
   seq?: number;
 }
 
+/** Snapshot of the Job row at ingest-transaction lock time. */
+export interface EventIngestContext {
+  /** `jobs.status` when this ingest transaction locked the row. */
+  jobStatusAtLock: string;
+}
+
 /**
  * Semantic convergence is an explicit application callback so the append
  * boundary can remain transaction-owned. Production composition uses the
@@ -31,7 +37,25 @@ export type EventSideEffects = (
   tx: EventIngestionTransaction,
   jobId: string,
   envelope: EventEnvelope,
+  ingest?: EventIngestContext,
 ) => Promise<void>;
+
+/**
+ * Hub complete/intents must land before mark_job_done finalizes the Job.
+ * A same-turn close may arrive as `done` then `hub_decision`; keep other
+ * events in their original relative order.
+ */
+export function orderSemanticIngestBundle<T extends { type: string }>(envelopes: readonly T[]): T[] {
+  const rest: T[] = [];
+  const hub: T[] = [];
+  const done: T[] = [];
+  for (const envelope of envelopes) {
+    if (envelope.type === "hub_decision") hub.push(envelope);
+    else if (envelope.type === "done") done.push(envelope);
+    else rest.push(envelope);
+  }
+  return [...rest, ...hub, ...done];
+}
 
 export interface EventIngestionApplication {
   ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<EventIngestionResult>;
@@ -233,9 +257,10 @@ async function appendAndApplyBundle(
       if (!canvas) throw new Error(`canvas ${hint.canvasId} does not exist`);
     }
 
-    const [job] = await tx<{ id: string; canvas_id: string | null }[]>`
-      SELECT id, canvas_id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+    const [job] = await tx<{ id: string; canvas_id: string | null; status: string }[]>`
+      SELECT id, canvas_id, status FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) throw new Error(`job ${jobId} does not exist`);
+    const ingest: EventIngestContext = { jobStatusAtLock: String(job.status) };
 
     const actualJobCanvasId = (job.canvas_id as string | null) ?? null;
     if (actualJobCanvasId !== hint.jobCanvasId) {
@@ -250,7 +275,14 @@ async function appendAndApplyBundle(
     await revalidateCanvasHint(tx, jobId, hint);
 
     const results: EventIngestionResult[] = [];
-    for (const envelope of envelopes) {
+    let finalizedInThisIngest = false;
+    for (const envelope of orderSemanticIngestBundle(envelopes)) {
+      // A later mark_job_done in the same ingest must not roll back a
+      // successful close that already left running.
+      if (finalizedInThisIngest && envelope.type === "done") {
+        results.push({ deduped: true });
+        continue;
+      }
       const dedup = await tx`
         INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
         ON CONFLICT (event_id) DO NOTHING
@@ -290,7 +322,11 @@ async function appendAndApplyBundle(
       // The callback runs before this transaction commits.  A thrown side
       // effect rolls back every event_dedup/events row and side effect in the
       // bundle, making retry of the same bundle safe without a new marker.
-      await sideEffects(tx, jobId, envelope);
+      await sideEffects(tx, jobId, envelope, ingest);
+      if (envelope.type === "done") {
+        const [current] = await tx<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+        finalizedInThisIngest = current?.status === "succeeded";
+      }
       results.push({ deduped: false, seq: next });
     }
     return results;

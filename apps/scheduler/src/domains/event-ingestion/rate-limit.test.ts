@@ -13,7 +13,7 @@ import {
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
-import { assertSemanticEventPayloadSize } from "./application.js";
+import { assertSemanticEventPayloadSize, orderSemanticIngestBundle } from "./application.js";
 
 import {
   DEFAULT_EVENT_RATE_LIMIT_POLICY,
@@ -113,4 +113,16 @@ test("rate-limit rejection exposes stable retry metadata without payload content
     window_seconds: 60,
   });
   assert.doesNotMatch(error.message, /secret|payload/i);
+});
+
+test("same-turn hub close keeps hub_decision before mark_job_done", () => {
+  assert.deepEqual(
+    orderSemanticIngestBundle([
+      { type: "progress", id: "p" },
+      { type: "done", id: "d1" },
+      { type: "hub_decision", id: "h" },
+      { type: "done", id: "d2" },
+    ]).map((event) => event.id),
+    ["p", "h", "d1", "d2"],
+  );
 });

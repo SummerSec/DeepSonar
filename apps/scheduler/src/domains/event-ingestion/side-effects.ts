@@ -41,6 +41,12 @@ import { frozenTaskSeeds, TaskSeedInputError } from "../../task-compose.js";
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
   hubEdgeBatchInsert?: HubEdgeBatchInsert;
+  /**
+   * Job.status when the ingest transaction locked the row. Same-turn follow-up
+   * events after this ingest already finalized must not use the post-finalize
+   * status to fail-and-rollback the close.
+   */
+  jobStatusAtLock?: string;
 }
 
 export interface EventIngestionSideEffectApplication {
@@ -354,11 +360,18 @@ export function createEventIngestionSideEffectApplication(
 
   /** Semantic events are accepted only while the Scheduler still owns a
    * running Job.  The event-ingestion transaction has already locked this row;
-   * the check therefore rolls back the current dedup marker, quota row, event,
-   * and any Canvas side effects when a terminal/late callback arrives. */
-  function assertSemanticJobRunning(job: Record<string, unknown>, type: string): void {
+   * a late callback against a Job that was already terminal *before* this
+   * ingest still rolls back. A follow-up in the same ingest after an earlier
+   * event finalized the Job uses the lock-time status so it cannot wipe the
+   * successful close. */
+  function assertSemanticJobRunning(
+    job: Record<string, unknown>,
+    type: string,
+    services: EventSideEffectServices = {},
+  ): void {
     if (!SEMANTIC_TOOL_BY_EVENT[type]) return;
-    if (job.status !== "running") {
+    const statusAtIngest = services.jobStatusAtLock ?? job.status;
+    if (statusAtIngest !== "running") {
       throw new ControlInputError("job_not_running", "语义事件只能提交给 status=running 的 Job。", "status");
     }
   }
@@ -669,8 +682,18 @@ export function createEventIngestionSideEffectApplication(
     const hubDecision = type === "hub_decision" ? parseHubDecisionPayload(payload) : undefined;
     const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) throw new Error(`job ${jobId} 不存在`);
-    assertSemanticJobRunning(job as Record<string, unknown>, type);
+    assertSemanticJobRunning(job as Record<string, unknown>, type, services);
     assertSemanticToolAuthority(job as Record<string, unknown>, type);
+    // Late mark_job_done after this ingest already finalized successfully is
+    // idempotent: keep the accepted event, skip a second finalize, and do not
+    // fail-and-rollback the close.
+    if (
+      type === "done"
+      && job.status === "succeeded"
+      && services.jobStatusAtLock === "running"
+    ) {
+      return;
+    }
     await assertTerminalEventHistory(tx, jobId, type);
 
     if (type === "done") {
