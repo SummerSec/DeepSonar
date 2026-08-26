@@ -1,5 +1,6 @@
 import { sql } from "../../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
+import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
 import {
   assertFrozenRuntimeImageLocal,
   RuntimeImageNotLocalError,
@@ -367,6 +368,8 @@ export function createHubOrchestrationApplication(
       }
       throw error;
     }
+    const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+    const hubPayload = { trigger, scheduling_purpose: "hub" };
     const [hubJob] = await tx`
       INSERT INTO jobs ${tx({
         project_id: projectId,
@@ -374,7 +377,10 @@ export function createHubOrchestrationApplication(
         agent_snapshot_json: snapshot as never,
         type: "hub_reason",
         priority: ports.fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-        payload_json: { trigger, scheduling_purpose: "hub" } as never,
+        payload_json: {
+          ...hubPayload,
+          dispatched_prompt: extractDispatchPrompt("hub_reason", hubPayload, canvas?.target_json),
+        } as never,
         timeout_sec: rules.auditTimeoutSec,
         followup_depth: 0,
       })}

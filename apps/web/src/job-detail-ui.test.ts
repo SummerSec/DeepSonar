@@ -51,6 +51,10 @@ test("results keep one vertical scroller while Markdown remains fully visible", 
   assert.match(result, /MarkdownView markdown=\{dispatchPrompt\} scrollable=\{false\}/);
   assert.match(result, /MarkdownView markdown=\{runSummary\} scrollable=\{false\}/);
   assert.match(result, /navigator\.clipboard\?\.writeText\(dispatchPrompt\)/);
+  assert.match(panel, /detail\.dispatched_prompt/);
+  assert.match(panel, /extractDispatchPrompt\(detail\.job\.type, detail\.job\.payload_json\)/);
+  assert.match(panel, /没有可展示的下发 prompt/);
+  assert.doesNotMatch(panel, /未找到冻结的下发 prompt/);
   assert.match(markdown, /scrollable = true/);
   assert.match(markdown, /scrollable \? "max-h-\[65vh\] overflow-auto" : "overflow-visible"/);
 });

@@ -949,6 +949,8 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
  */
 .react-flow .react-flow__edges svg {
   overflow: visible !important;
+  width: 1px !important;
+  height: 1px !important;
   max-width: none !important;
   max-height: none !important;
 }
@@ -1048,6 +1050,16 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   background: color-mix(in srgb, var(--broadcast-target) 8%, transparent);
 }
 .broadcast-node-badge.has-failure { border-color: color-mix(in srgb, var(--broadcast-failed) 60%, var(--line)); }
+.react-flow__panel.canvas-chrome-panel {
+  z-index: 50;
+  margin: 12px;
+  max-width: calc(100% - 24px);
+}
+.react-flow__panel.canvas-legend-panel {
+  z-index: 10;
+  margin: 12px;
+  max-width: calc(100% - 24px);
+}
 .canvas-filter-panel {
   z-index: 50;
   width: min(760px, calc(100% - 32px));

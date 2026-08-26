@@ -496,6 +496,8 @@ export interface JobDetail {
   usage: JobUsageSummary[];
   /** Structured module omissions copied from the frozen snapshot (old jobs: []). */
   missing_modules: unknown[];
+  /** 结果页下发 prompt：冻结 dispatched_prompt，否则从 intent/画布目标回填。 */
+  dispatched_prompt: string | null;
   /** 上下文生命周期的有界摘要；缺失表示旧 Job 尚未记录。 */
   context_diagnostics: ContextDiagnostics | null;
 }

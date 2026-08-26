@@ -9,6 +9,11 @@
 - 项目风险台：进入项目后的「项目风险 / 风险发现」列出该项目全部任务 Finding；顶部用 `GET /projects/:id/findings/summary` 聚合严重度 / 验证 / 处置，避免列表 500 条窗口静默截断（#302）。
 - Finding 处置新增 `human_reproducing`（人工复现中）。可作 compose 种子；`confirmed_vuln` 仍要求 Verify 已 confirmed。Schema 升至 v38。
 
+### 修复
+
+- Job 结果页「下发 Prompt」：运行时把去掉画布 YAML 的完整输入冻结到 `payload.dispatched_prompt`；既有 Hub 后续轮次从 canvas 任务正文 / 触发原因回填，不再空白。
+- 过程画布筛选坞与图例放入 React Flow `Panel`，避免被 pane 盖住；去掉 `onlyRenderVisibleElements`，边 SVG 使用 1px + `overflow: visible`，平移后连线不再被裁掉。
+
 ## [0.1.44] - 2026-08-23
 
 ### 新增

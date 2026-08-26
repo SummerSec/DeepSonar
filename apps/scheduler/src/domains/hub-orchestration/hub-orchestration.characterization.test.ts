@@ -78,5 +78,6 @@ test("core keeps the historical facade while delegating Hub orchestration", () =
   assert.match(application, /runtimeImageNotLocalCanvasBlock/);
   assert.match(application, /RuntimeImageNotLocalError/);
   assert.match(application, /isHubRoundWithinBudget\(Number\(count\), rules\.maxHubRounds\)/);
+  assert.match(application, /dispatched_prompt: extractDispatchPrompt\("hub_reason"/);
   assert.match(application, /requirements_json = requirements_json - 'hub_evidence_signature'/);
 });

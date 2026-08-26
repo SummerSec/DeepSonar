@@ -10,6 +10,7 @@ import { SearchableMultiSelect } from "./SearchableSelect";
 import { HumanMessageList } from "./HumanMessageList";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SessionViewer } from "./session-viewer/SessionViewer";
+import { extractDispatchPrompt } from "./job-dispatch-prompt";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 /**
@@ -453,21 +454,12 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     return hit?.name?.trim() || id;
   }, [snapshot, credentials]);
 
-  /** 下发 prompt / 运行摘要：来自 payload.intent 与 done 事件 */
+  /** 下发 prompt：优先 API 冻结/回填结果，再读 payload.intent */
   const dispatchPrompt = useMemo(() => {
     if (!detail) return "";
-    const payload = (detail.job.payload_json ?? {}) as Record<string, unknown>;
-    const intent = (payload.intent ?? null) as Record<string, unknown> | null;
-    const fromIntent = typeof intent?.prompt === "string" ? intent.prompt.trim() : "";
-    if (fromIntent) return fromIntent;
-    // hub / 其它类型可能把目标写在 task / goal / content
-    for (const key of ["prompt", "task_prompt", "worker_prompt", "content", "goal"] as const) {
-      const v = payload[key];
-      if (typeof v === "string" && v.trim()) return v.trim();
-    }
-    const target = payload.target as Record<string, unknown> | undefined;
-    if (target && typeof target.content === "string" && target.content.trim()) return target.content.trim();
-    return "";
+    const fromApi = typeof detail.dispatched_prompt === "string" ? detail.dispatched_prompt.trim() : "";
+    if (fromApi) return fromApi;
+    return extractDispatchPrompt(detail.job.type, detail.job.payload_json);
   }, [detail]);
 
   const intentDescription = useMemo(() => {
@@ -735,7 +727,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   </div>
                 ) : (
                   <p className="font-mono text-[12px] text-zinc-600">
-                    未找到冻结的下发 prompt（Hub 即时拼装的系统消息可能不在 payload；Worker 任务见 payload.intent.prompt）。
+                    没有可展示的下发 prompt。Hub 后续轮次只存 trigger，新运行会把去掉画布 YAML 的完整输入冻结到 payload.dispatched_prompt。
                   </p>
                 )}
               </section>
