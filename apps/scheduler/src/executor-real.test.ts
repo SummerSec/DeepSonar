@@ -471,6 +471,8 @@ test("tool.call.started/completed are mapped into stall-visible progress activit
   assert.match(source, /recordToolCallActivity\("completed"/);
   assert.match(source, /toolCallProgressMessage/);
   assert.match(source, /payload_json = payload_json \|\| \$\{sql\.json\(toolCallActivityPatch/);
+  assert.match(source, /dispatched_prompt: dispatchedPrompt/);
+  assert.match(source, /operatorVisibleDispatchPrompt\(initialInput, graph\?\.yaml/);
 });
 
 test("all role Jobs, including audit, may publish shared assets", () => {

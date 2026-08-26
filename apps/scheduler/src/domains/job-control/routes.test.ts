@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { isPublicJobTypeAllowed } from "./routes.js";
 
@@ -18,4 +19,12 @@ test("public POST /jobs maps compatibility aliases before checking enabled roles
 
 test("public POST /jobs preserves the governed verify snapshot compatibility lane", () => {
   assert.equal(isPublicJobTypeAllowed("verify", []), true);
+});
+
+test("GET /jobs/:id returns operator-visible dispatched_prompt without runtime_context", () => {
+  const source = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  assert.match(source, /extractDispatchPrompt/);
+  assert.match(source, /dispatched_prompt: dispatchedPrompt \|\| null/);
+  assert.match(source, /SELECT title, target_json FROM canvases/);
+  assert.doesNotMatch(source, /runtime_context\.prompt/);
 });

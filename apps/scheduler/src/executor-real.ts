@@ -115,6 +115,7 @@ import {
   persistJobRuntimeContext,
 } from "./domains/context/index.js";
 import { updateAttemptSession } from "./domains/job-attempt/application.js";
+import { operatorVisibleDispatchPrompt } from "./job-dispatch-prompt.js";
 
 function invalidToolPayload(
   tool: PlatformToolName,
@@ -1045,6 +1046,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
     initialInput += `\n\n本 Job 已冻结 ${snapshot.shared_assets!.length} 个只读共享资产，预挂载到 ${SHARED_ASSETS_READONLY_ROOT}（Scheduler 从本地或 S3 兼容 BlobStore 注入，Agent 无下载工具/无对象存储凭据）。先 list_shared_assets，再按返回的 mount_path/read_path 用普通文件工具读取；可 cp 到 /workspace 普通目录使用，禁止修改共享目录，禁止从共享目录 publish。`;
   }
+  const dispatchedPrompt = operatorVisibleDispatchPrompt(initialInput, graph?.yaml ?? null);
 
   const roleDescription = snapshot.role_description;
   const instructions = instructionDocument({
@@ -1233,7 +1235,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     recorded_at: new Date().toISOString(),
   };
   await sql`
-    UPDATE jobs SET payload_json = payload_json || ${sql.json({ runtime_evidence: runtimeEvidence } as never)}
+    UPDATE jobs SET payload_json = payload_json || ${sql.json({ runtime_evidence: runtimeEvidence, dispatched_prompt: dispatchedPrompt } as never)}
     WHERE id = ${job.id as string}`;
 
   await emit("progress", {

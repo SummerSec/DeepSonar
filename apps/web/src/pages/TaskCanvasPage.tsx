@@ -1148,7 +1148,7 @@ export function TaskCanvasPage() {
           className={taskWorkbenchCanvasLayerClass(tab === "canvas")}
           aria-hidden={tab !== "canvas"}
         >
-          <div className="min-h-0 flex-1">
+          <div className="h-full min-h-0 flex-1">
             <CanvasView
               canvasId={canvasId}
               active={tab === "canvas"}

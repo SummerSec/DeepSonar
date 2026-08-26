@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
+import { extractDispatchPrompt, parseJsonRecord } from "../../job-dispatch-prompt.js";
 import {
   createJob,
   ensureCanvasForTask,
@@ -367,7 +368,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "not found" });
-    const [events, findings, attempts, effects, broadcasts, usage] = await Promise.all([
+    const [events, findings, attempts, effects, broadcasts, usage, canvases] = await Promise.all([
       sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 50`,
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
       sql`SELECT id, attempt_no, status, phase, replay_policy, cancel_requested, cancel_requested_at,
@@ -389,6 +390,9 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
                  output_tokens, total_tokens, adjustment_tokens, settlement_status, source,
                  observed_at, created_at
             FROM job_usage_ledger WHERE job_id = ${id} ORDER BY request_no DESC LIMIT 100`,
+      job.canvas_id
+        ? sql`SELECT title, target_json FROM canvases WHERE id = ${job.canvas_id as string}`
+        : Promise.resolve([] as Array<{ title?: unknown; target_json?: unknown }>),
     ]);
     const snapshot = job.agent_snapshot_json;
     const missingModules =
@@ -416,8 +420,17 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       })
       .find((value) => value !== undefined);
     const contextDiagnostics = projectContextDiagnostics(runtimeEvidence.context ?? attemptContext ?? null);
+    const canvas = canvases[0];
+    const dispatchedPrompt = extractDispatchPrompt(
+      String(job.type ?? ""),
+      payloadRecord,
+      canvas
+        ? { title: canvas.title, ...parseJsonRecord(canvas.target_json) }
+        : undefined,
+    );
     return {
       job: safeJob,
+      dispatched_prompt: dispatchedPrompt || null,
       events: events.map((event) => ({
         ...event,
         payload_json: projectJobEventPayload(event.payload_json),

@@ -8,6 +8,7 @@ import {
   getViewportForBounds,
   MarkerType,
   MiniMap,
+  Panel,
   Position,
   ReactFlow,
   useReactFlow,
@@ -369,10 +370,7 @@ function Legend() {
     { dash: EDGE_STYLE.child.dash, label: "child" },
   ];
   return (
-    <div
-      className="surface-shell absolute bottom-3 left-3 z-10 max-w-[min(720px,calc(100%-1.5rem))] rounded-[17px] p-1"
-      style={{ position: "absolute" }}
-    >
+    <div className="surface-shell max-w-[min(720px,calc(100%-1.5rem))] rounded-[17px] p-1">
       <div className="surface-core flex flex-col gap-2 rounded-[13px] px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-1 font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">节点</span>
@@ -1327,45 +1325,6 @@ export function CanvasView({
           )}
         </section>
       )}
-      {traceActive && (
-        <div className="surface-shell absolute left-4 top-4 z-20 max-w-[calc(100%-2rem)] rounded-[14px] p-1">
-          <div className="surface-core flex flex-wrap items-center gap-2 rounded-[10px] px-3 py-2">
-            <TreeStructure size={15} className="text-acc-400" />
-            <span className="text-[12px] font-medium text-zinc-200">Finding 验证链路</span>
-            <span className="hidden font-mono text-[10px] text-zinc-500 sm:inline">
-              {traceIds.nodeIds.size} 节点 · {traceIds.edgeIds.size} 边
-            </span>
-            <div className="ml-auto inline-flex rounded-lg theme-surface p-0.5 ring-1">
-              <button
-                type="button"
-                onClick={() => setTraceMode("dim")}
-                aria-pressed={traceMode === "dim"}
-                title="淡化非链路节点"
-                className={`inline-flex size-7 items-center justify-center rounded-md ${traceMode === "dim" ? "bg-white/[.1] text-acc-300" : "text-zinc-500"}`}
-              >
-                <Eye size={14} />
-              </button>
-              <button
-                type="button"
-                onClick={() => setTraceMode("hide")}
-                aria-pressed={traceMode === "hide"}
-                title="隐藏非链路节点"
-                className={`inline-flex size-7 items-center justify-center rounded-md ${traceMode === "hide" ? "bg-white/[.1] text-acc-300" : "text-zinc-500"}`}
-              >
-                <EyeSlash size={14} />
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={onExitTrace}
-              className="inline-flex size-7 items-center justify-center rounded-md text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
-              title="退出链路聚焦"
-            >
-              <X size={13} />
-            </button>
-          </div>
-        </div>
-      )}
       <ReactFlow
         className="h-full w-full"
         nodes={visibleNodes}
@@ -1377,7 +1336,6 @@ export function CanvasView({
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
-        onlyRenderVisibleElements
         minZoom={FULL_GRAPH_MIN_ZOOM}
         maxZoom={2}
         proOptions={{ hideAttribution: false }}
@@ -1392,11 +1350,50 @@ export function CanvasView({
         <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} color="#263037" />
         <Controls showInteractive={false} position="bottom-right" />
         <CanvasMiniMap nodes={visibleNodes} />
-      </ReactFlow>
-
-      <div
-        className={`canvas-filter-panel nopan nodrag nowheel surface-shell absolute left-4 ${traceActive ? "top-20" : "top-4"} z-[50] rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
-      >
+        <Panel position="top-left" className="canvas-chrome-panel pointer-events-none">
+          <div className="pointer-events-auto flex max-w-full flex-col gap-2">
+            {traceActive && (
+              <div className="surface-shell max-w-[calc(100%-0.5rem)] rounded-[14px] p-1">
+                <div className="surface-core flex flex-wrap items-center gap-2 rounded-[10px] px-3 py-2">
+                  <TreeStructure size={15} className="text-acc-400" />
+                  <span className="text-[12px] font-medium text-zinc-200">Finding 验证链路</span>
+                  <span className="hidden font-mono text-[10px] text-zinc-500 sm:inline">
+                    {traceIds.nodeIds.size} 节点 · {traceIds.edgeIds.size} 边
+                  </span>
+                  <div className="ml-auto inline-flex rounded-lg theme-surface p-0.5 ring-1">
+                    <button
+                      type="button"
+                      onClick={() => setTraceMode("dim")}
+                      aria-pressed={traceMode === "dim"}
+                      title="淡化非链路节点"
+                      className={`inline-flex size-7 items-center justify-center rounded-md ${traceMode === "dim" ? "bg-white/[.1] text-acc-300" : "text-zinc-500"}`}
+                    >
+                      <Eye size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTraceMode("hide")}
+                      aria-pressed={traceMode === "hide"}
+                      title="隐藏非链路节点"
+                      className={`inline-flex size-7 items-center justify-center rounded-md ${traceMode === "hide" ? "bg-white/[.1] text-acc-300" : "text-zinc-500"}`}
+                    >
+                      <EyeSlash size={14} />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onExitTrace}
+                    className="inline-flex size-7 items-center justify-center rounded-md text-zinc-500 ring-1 ring-white/[.08] hover:text-white"
+                    title="退出链路聚焦"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div
+              className={`canvas-filter-panel nopan nodrag nowheel surface-shell rounded-[20px] p-1 ${filtersOpen ? "is-open" : "is-collapsed"}`}
+            >
         {filtersOpen ? (
           <div className="surface-core rounded-[16px] px-4 py-3">
             <div className="mb-3 flex items-center gap-2 border-b border-[var(--line)] pb-2.5">
@@ -1628,8 +1625,15 @@ export function CanvasView({
             </button>
           </div>
         )}
-      </div>
-      <Legend />
+            </div>
+          </div>
+        </Panel>
+        <Panel position="bottom-left" className="canvas-legend-panel pointer-events-none">
+          <div className="pointer-events-auto">
+            <Legend />
+          </div>
+        </Panel>
+      </ReactFlow>
       {/*
         节点详情分流：
         - fact/finding/root/note/human/report：优先看节点 body（description/summary 等）

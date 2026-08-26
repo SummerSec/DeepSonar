@@ -21,7 +21,10 @@ test("canvas utilities expose accessible toggles and image export", () => {
   assert.match(source, /pannable/);
   assert.match(source, /zoomable/);
   assert.match(source, /ariaLabel="过程画布缩略图"/);
-  assert.match(source, /onlyRenderVisibleElements/);
+  assert.doesNotMatch(source, /onlyRenderVisibleElements/);
+  assert.match(source, /<Panel position="top-left"/);
+  assert.match(source, /<Panel position="bottom-left"/);
+  assert.match(source, /canvas-chrome-panel/);
   assert.match(source, /ORTHOGONAL_EDGE_TYPE/);
   assert.match(source, /edgeTypes=\{canvasEdgeTypes\}/);
   assert.match(source, /visibleBroadcastOverlayEdges\(/);
@@ -47,5 +50,6 @@ test("canvas utilities expose accessible toggles and image export", () => {
 test("task workbench keeps the process canvas mounted when switching tabs", () => {
   const page = readFileSync(new URL("./pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
   assert.match(page, /taskWorkbenchCanvasLayerClass\(tab === "canvas"\)/);
+  assert.match(page, /h-full min-h-0 flex-1/);
   assert.doesNotMatch(page, /tab === "canvas" \? "flex flex-col" : "hidden"/);
 });

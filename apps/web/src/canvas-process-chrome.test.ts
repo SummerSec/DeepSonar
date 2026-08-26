@@ -67,7 +67,8 @@ test("canvas view wires discoverable chrome instead of silent unmount", () => {
   assert.match(source, /shouldMountBroadcastLedger\(broadcastPage\)/);
   assert.match(source, /hiddenEdgeHint\(/);
   assert.match(source, /broadcastLedgerHeading\(/);
-  assert.match(source, /z-\[50\]/);
+  assert.match(source, /<Panel position="top-left"/);
+  assert.match(source, /canvas-chrome-panel/);
   assert.doesNotMatch(source, /broadcastPage && broadcastPage\.total > 0/);
   assert.doesNotMatch(source, /const \[filtersOpen, setFiltersOpen\] = useState\(false\)/);
   assert.doesNotMatch(
@@ -94,6 +95,8 @@ test("collapsed dock keeps 筛选节点 readable and cannot clip to export-only"
 test("edge strokes keep size, pane var, z-index, and light-theme contrast", () => {
   const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
   assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*overflow:\s*visible\s*!important/);
+  assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*width:\s*1px\s*!important/);
+  assert.match(css, /\.react-flow \.react-flow__edges svg[\s\S]*height:\s*1px\s*!important/);
   assert.doesNotMatch(
     css,
     /\.react-flow \.react-flow__edges svg[\s\S]{0,280}height:\s*100%\s*!important/,
