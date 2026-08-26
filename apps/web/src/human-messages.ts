@@ -40,8 +40,8 @@ export function isReplyableHumanMessageTarget(
   node: CanvasNode | null | undefined,
   jobs?: readonly HumanMessageJobRef[] | null,
 ): node is CanvasNode {
-  if (isActiveHumanMessageTarget(node)) return true;
-  if (!node || !(node.node_type === "intent" || node.node_type === "job" || node.node_type === "report")) return false;
+  if (!node || (node.node_type !== "intent" && node.node_type !== "job" && node.node_type !== "report")) return false;
+  if (node.job_id && node.status && HUMAN_MESSAGE_ACTIVE_STATUSES.has(node.status)) return true;
   const jobId = jobIdFromNode(node);
   return Boolean(jobId && jobs?.some((job) => job.id === jobId && job.status === "waiting_human"));
 }
