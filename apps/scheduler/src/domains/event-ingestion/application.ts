@@ -57,6 +57,11 @@ export function orderSemanticIngestBundle<T extends { type: string }>(envelopes:
   return [...rest, ...hub, ...done];
 }
 
+/** Same-turn mark_job_done / submit_hub_decision after an accepted request_human must not roll back the wait. */
+export function shouldSkipTerminalAfterAcceptedHuman(type: string, acceptedHuman: boolean): boolean {
+  return acceptedHuman && (type === "done" || type === "hub_decision");
+}
+
 export interface EventIngestionApplication {
   ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<EventIngestionResult>;
   /** Append and apply a same-Job semantic terminal bundle atomically. */
@@ -276,10 +281,17 @@ async function appendAndApplyBundle(
 
     const results: EventIngestionResult[] = [];
     let finalizedInThisIngest = false;
+    let acceptedHumanInThisIngest = false;
     for (const envelope of orderSemanticIngestBundle(envelopes)) {
       // A later mark_job_done in the same ingest must not roll back a
       // successful close that already left running.
       if (finalizedInThisIngest && envelope.type === "done") {
+        results.push({ deduped: true });
+        continue;
+      }
+      // request_human is also a successful close. A same-turn done/hub after it
+      // is a no-op so the wait gate is not rolled back by exclusivity.
+      if (shouldSkipTerminalAfterAcceptedHuman(envelope.type, acceptedHumanInThisIngest)) {
         results.push({ deduped: true });
         continue;
       }
@@ -323,9 +335,10 @@ async function appendAndApplyBundle(
       // effect rolls back every event_dedup/events row and side effect in the
       // bundle, making retry of the same bundle safe without a new marker.
       await sideEffects(tx, jobId, envelope, ingest);
-      if (envelope.type === "done") {
+      if (envelope.type === "done" || envelope.type === "human") {
         const [current] = await tx<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
-        finalizedInThisIngest = current?.status === "succeeded";
+        if (envelope.type === "done") finalizedInThisIngest = current?.status === "succeeded";
+        if (envelope.type === "human") acceptedHumanInThisIngest = current?.status === "waiting_human";
       }
       results.push({ deduped: false, seq: next });
     }

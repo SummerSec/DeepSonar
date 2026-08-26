@@ -910,6 +910,12 @@ async function runJob(jobId: string) {
       });
     }
   } catch (e) {
+    const [current] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+    if (current?.status === "waiting_human") {
+      // request_human already closed this run. A late exclusive-tool rejection
+      // must not paint the wait gate as failed or hide the reply target.
+      return;
+    }
     const rawMessage = e instanceof Error ? e.message : String(e);
     const details = e && typeof e === "object" && "code" in e
       ? (e as { code?: unknown; metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown } })

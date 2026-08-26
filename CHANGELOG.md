@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时，跳过后续终态并保住 `waiting_human`，不再因 `duplicate_tool_call` 整笔回滚（续 #298 / #300）。Executor 先落 human 再看 runner 错误；Dispatcher 已在人工门时不再把 Job / 画布刷成 failed。
+- `request_human` 同时把对应 `job` / `intent` / `report` 画布节点标为 `waiting_human`。向等待人工的 Job 回复与忽略共用恢复路径（关 Attempt → `pending` → 唤醒调度），避免消息停在 `planned`。Job 账本仍为 `waiting_human` 时，即使画布节点已被刷成 failed 也可定向回复；解析不到活动 Job 仍不得默认发给 Hub。
+
 ## [0.1.45] - 2026-08-26
 
 ### 新增

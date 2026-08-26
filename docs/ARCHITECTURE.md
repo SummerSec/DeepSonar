@@ -104,7 +104,7 @@ Finding        可派生  Followup Job（verify 等，由规则引擎决定）
 
 #### 人工消息投递与两阶段 ACK
 
-画布允许人类向 Hub 或 active `intent` / `job` / `report` 节点发送文字与多文件，但消息账本不是拓扑本体：`human_messages` 与 `human_message_attachments` 持久化原始正文、目标、不可变资产版本及投递状态；服务端另建 `human` 节点用于过程可视化，Web 的状态 panel、target badge 和详情均由独立 `GET /canvases/:id/messages` 轮询派生，不把消息字段合并进 L0/L1 topology 数据。未处理的 `request_human` 节点可用 `POST /canvases/:id/human-nodes/:nodeId/ignore` 标为 `ignored`；对应 `waiting_human` Job 会恢复 `pending`，图 YAML hints 带上忽略决议。
+画布允许人类向 Hub 或 active `intent` / `job` / `report` 节点发送文字与多文件，但消息账本不是拓扑本体：`human_messages` 与 `human_message_attachments` 持久化原始正文、目标、不可变资产版本及投递状态；服务端另建 `human` 节点用于过程可视化，Web 的状态 panel、target badge 和详情均由独立 `GET /canvases/:id/messages` 轮询派生，不把消息字段合并进 L0/L1 topology 数据。未处理的 `request_human` 节点可用 `POST /canvases/:id/human-nodes/:nodeId/ignore` 标为 `ignored`；对应 `waiting_human` Job 会恢复 `pending`，图 YAML hints 带上忽略决议。向仍为 `waiting_human` 的 Job 发送人工消息走同一恢复路径，使新 Attempt 能注入已入账消息。
 
 附件先通过项目共享资产 API 上传，key 使用消息 UUID 命名空间和安全文件名；只有整批上传成功，才用所有 `version_id` 创建消息。运行时校验 blob 摘要/字节数后，将不可变版本写入 `/workspace/.deepsonar/inbox/<message-id>/` 动态收件箱，再把正文、附件路径与显式 ACK 要求注入目标会话。部分上传失败不创建残缺消息；已上传资产留在项目资产账本中供审计。
 
@@ -254,7 +254,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 
 ### 4.5 人工介入与恢复
 
-- `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、Plane 标 Blocked 并建立 human 节点
+- `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、对应 `job`/`intent`/`report` 画布节点同步该状态、Plane 标 Blocked 并建立 human 节点。同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时跳过后续终态，保住 wait gate；同 Attempt 分次提交仍互斥
 - 人处理完后可调用 `POST /jobs/{id}/resume` 使用旧冻结快照重新入队；当前受治理身份漂移时返回 `SNAPSHOT_STALE`，改用 `POST /jobs/{id}/rerun-current` 按当前配置重冻。两者都是同 Job、新 Attempt，不跨已销毁沙箱恢复 CLI Session
 - Finding 详情可调用 `POST /findings/{id}/verify` 强制新建 Verify round，或调用 `POST /findings/{id}/evidence-jobs` 新建绑定该 Finding 的 review/test 补证 Job。两类动作继续受 follow-up 深度、验证轮次、活动任务唯一性与终态约束，不修改历史 Job；若同画布 Hub 正在等待人工，则在同一事务恢复为 `pending`
 - 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写

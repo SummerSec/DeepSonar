@@ -308,11 +308,13 @@ if (!testDatabaseUrl) {
           subject: { type: "platform_blocker", kind: "credential" },
         },
       });
-      const [platformState, platformNode] = await Promise.all([
+      const [platformState, platformNode, platformJobNode] = await Promise.all([
         sql`SELECT status FROM jobs WHERE id = ${platformHub.jobId}`,
         sql`SELECT body_json FROM canvas_nodes WHERE job_id = ${platformHub.jobId} AND node_type = 'human'`,
+        sql`SELECT status FROM canvas_nodes WHERE id = ${platformHub.nodeId}`,
       ]);
       assert.equal(platformState[0].status, "waiting_human");
+      assert.equal(platformJobNode[0].status, "waiting_human");
       assert.deepEqual((platformNode[0].body_json as Record<string, unknown>).subject, {
         type: "platform_blocker",
         kind: "credential",

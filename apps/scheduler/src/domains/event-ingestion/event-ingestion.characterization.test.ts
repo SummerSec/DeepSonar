@@ -26,11 +26,17 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   );
   assert.match(applicationSource, /orderSemanticIngestBundle/);
   assert.match(applicationSource, /finalizedInThisIngest && envelope\.type === "done"/);
+  assert.match(applicationSource, /shouldSkipTerminalAfterAcceptedHuman/);
+  assert.match(applicationSource, /acceptedHumanInThisIngest/);
   assert.match(sideEffectSource, /createEventIngestionSideEffectApplication/);
   assert.match(sideEffectSource, /findingVerification/);
   assert.match(sideEffectSource, /resolveAgentSnapshotForJob/);
   assert.match(sideEffectSource, /assertFrozenRuntimeImageLocal/);
   assert.match(sideEffectSource, /blockHubOnMissingLocalImage/);
+  assert.match(
+    sideEffectSource,
+    /UPDATE canvas_nodes SET status = 'waiting_human'[\s\S]*node_type IN \('job', 'intent', 'report'\)/,
+  );
   assert.match(sideEffectSource, /finalizeJob/);
   assert.doesNotMatch(sideEffectSource, /from ["'](?:\.\.\/)+core\.js["']/);
   assert.doesNotMatch(sideEffectSource, /import\(/);

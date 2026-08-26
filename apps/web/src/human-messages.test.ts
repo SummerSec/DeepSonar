@@ -14,6 +14,7 @@ import {
   humanMessageTargetNodeForJobId,
   humanMessageTargetNodeFromContext,
   isActiveHumanMessageTarget,
+  isReplyableHumanMessageTarget,
   isPendingHumanIntervention,
   jobCanReceiveHumanReply,
   listHumanInterventions,
@@ -95,6 +96,25 @@ test("human intervention reply resolves the waiting job node, otherwise no targe
   assert.equal(humanMessageTargetForNode(humanNode), null);
   assert.equal(humanMessageTargetNodeForJobId("job-1", [waitingJob, humanNode])?.id, "job-node");
   assert.equal(humanMessageTargetNodeForJobId("missing", [waitingJob]), null);
+});
+
+test("failed canvas node remains replyable when the Job ledger is waiting_human", () => {
+  const failedJobNode = node({ id: "job-node", node_type: "job", status: "failed" });
+  const humanNode = node({
+    id: "human-1",
+    node_type: "human",
+    status: "open",
+    job_id: "job-1",
+    body_json: { reason: "需要授权", job_id: "job-1" },
+  });
+  const jobs = [{ id: "job-1", status: "waiting_human" }];
+  assert.equal(isActiveHumanMessageTarget(failedJobNode), false);
+  assert.equal(isReplyableHumanMessageTarget(failedJobNode, jobs), true);
+  assert.equal(isReplyableHumanMessageTarget(failedJobNode, [{ id: "job-1", status: "failed" }]), false);
+  assert.equal(humanMessageTargetNodeFromContext(humanNode, [failedJobNode, humanNode])?.id, undefined);
+  assert.equal(humanMessageTargetNodeFromContext(humanNode, [failedJobNode, humanNode], jobs)?.id, "job-node");
+  assert.deepEqual(humanMessageTargetForNode(failedJobNode, jobs), { kind: "job", node_id: "job-node" });
+  assert.equal(humanMessageTargetNodeForJobId("job-1", [failedJobNode], jobs)?.id, "job-node");
 });
 
 test("本次运行列表只给 waiting_human 的 Job 直接回复入口", () => {

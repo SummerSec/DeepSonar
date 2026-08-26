@@ -187,6 +187,9 @@ async function markJobWaitingHuman(tx: EventIngestionTransaction, jobId: string)
   await tx`
     UPDATE jobs SET status = 'waiting_human'
     WHERE id = ${jobId} AND status = 'running'`;
+  await tx`
+    UPDATE canvas_nodes SET status = 'waiting_human', updated_at = now()
+    WHERE job_id = ${jobId} AND node_type IN ('job', 'intent', 'report')`;
 }
 
 async function blockHubOnMissingLocalImage(
@@ -210,11 +213,6 @@ async function blockHubOnMissingLocalImage(
       y: jobNode ? Number(jobNode.y) - 160 : 200,
       status: "open",
     })}`;
-  if (jobNode) {
-    await tx`
-      UPDATE canvas_nodes SET status = 'waiting_human', updated_at = now()
-      WHERE id = ${jobNode.id}`;
-  }
 }
 
 export function createEventIngestionSideEffectApplication(

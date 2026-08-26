@@ -13,7 +13,7 @@ import {
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
-import { assertSemanticEventPayloadSize, orderSemanticIngestBundle } from "./application.js";
+import { assertSemanticEventPayloadSize, orderSemanticIngestBundle, shouldSkipTerminalAfterAcceptedHuman } from "./application.js";
 
 import {
   DEFAULT_EVENT_RATE_LIMIT_POLICY,
@@ -125,4 +125,13 @@ test("same-turn hub close keeps hub_decision before mark_job_done", () => {
     ]).map((event) => event.id),
     ["p", "h", "d1", "d2"],
   );
+});
+
+test("same-ingest terminals after accepted request_human are skipped", () => {
+  assert.equal(shouldSkipTerminalAfterAcceptedHuman("done", true), true);
+  assert.equal(shouldSkipTerminalAfterAcceptedHuman("hub_decision", true), true);
+  assert.equal(shouldSkipTerminalAfterAcceptedHuman("human", true), false);
+  assert.equal(shouldSkipTerminalAfterAcceptedHuman("progress", true), false);
+  assert.equal(shouldSkipTerminalAfterAcceptedHuman("done", false), false);
+  assert.equal(shouldSkipTerminalAfterAcceptedHuman("hub_decision", false), false);
 });

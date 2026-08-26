@@ -33,8 +33,24 @@ export function isActiveHumanMessageTarget(node: CanvasNode | null | undefined):
   );
 }
 
-export function humanMessageTargetForNode(node: CanvasNode | null | undefined): HumanMessageTarget | null {
-  return isActiveHumanMessageTarget(node) ? { kind: "job", node_id: node.id } : null;
+export type HumanMessageJobRef = { id: string; status?: string | null };
+
+/** 节点本身可投，或账本 Job 仍为 waiting_human（画布节点被刷成 failed 时仍可回复）。 */
+export function isReplyableHumanMessageTarget(
+  node: CanvasNode | null | undefined,
+  jobs?: readonly HumanMessageJobRef[] | null,
+): node is CanvasNode {
+  if (isActiveHumanMessageTarget(node)) return true;
+  if (!node || !(node.node_type === "intent" || node.node_type === "job" || node.node_type === "report")) return false;
+  const jobId = jobIdFromNode(node);
+  return Boolean(jobId && jobs?.some((job) => job.id === jobId && job.status === "waiting_human"));
+}
+
+export function humanMessageTargetForNode(
+  node: CanvasNode | null | undefined,
+  jobs?: readonly HumanMessageJobRef[] | null,
+): HumanMessageTarget | null {
+  return isReplyableHumanMessageTarget(node, jobs) ? { kind: "job", node_id: node.id } : null;
 }
 
 function jobIdFromNode(node: CanvasNode | null | undefined): string | null {
@@ -43,23 +59,25 @@ function jobIdFromNode(node: CanvasNode | null | undefined): string | null {
   return typeof node.body_json?.job_id === "string" ? node.body_json.job_id : null;
 }
 
-/** human 节点本身不能投递；解析到同 Job 的活动 intent/job/report，否则没有目标。 */
+/** human 节点本身不能投递；解析到同 Job 的可回复 intent/job/report，否则没有目标。 */
 export function humanMessageTargetNodeFromContext(
   selected: CanvasNode | null | undefined,
   nodes: readonly CanvasNode[],
+  jobs?: readonly HumanMessageJobRef[] | null,
 ): CanvasNode | null {
-  if (isActiveHumanMessageTarget(selected)) return selected;
+  if (isReplyableHumanMessageTarget(selected, jobs)) return selected;
   const jobId = jobIdFromNode(selected);
   if (!jobId) return null;
-  return nodes.find((node) => node.job_id === jobId && isActiveHumanMessageTarget(node)) ?? null;
+  return nodes.find((node) => node.job_id === jobId && isReplyableHumanMessageTarget(node, jobs)) ?? null;
 }
 
 export function humanMessageTargetNodeForJobId(
   jobId: string | null | undefined,
   nodes: readonly CanvasNode[],
+  jobs?: readonly HumanMessageJobRef[] | null,
 ): CanvasNode | null {
   if (!jobId) return null;
-  return nodes.find((node) => node.job_id === jobId && isActiveHumanMessageTarget(node)) ?? null;
+  return nodes.find((node) => node.job_id === jobId && isReplyableHumanMessageTarget(node, jobs)) ?? null;
 }
 
 /** 本次运行列表只给正在等待人工的 Job 直接回复；human 是节点类型，不是 Job 类型。 */

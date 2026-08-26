@@ -133,7 +133,7 @@ const descriptionCautions = {
   mark_job_done: requireDoneVerdict
     ? "Verify 必须带 verdict；示例 {\"summary\":\"…\",\"verdict\":\"confirmed\"}。缺少 verdict 会 isError，请立即重试并补上。"
     : "仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；结束时只调用一次，首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，成功后不得重试。",
-  request_human: "仅在必要授权、凭据、高风险审批或业务判断阻塞时调用一次；必须显式传结构化 subject，调用后停止，不得再调用 mark_job_done，仅在返回 isError 后重试。",
+  request_human: "仅在必要授权、凭据、高风险审批或业务判断阻塞时调用一次；必须显式传结构化 subject，调用后停止，不得再调用 mark_job_done 或 submit_hub_decision，仅在返回 isError 后重试。",
   list_shared_assets: "用于发现本 Job 冻结的只读资产，再按返回路径读取；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取，可安全重复查询。",
   publish_shared_asset: "只发布普通 /workspace 中可复用的工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在返回 isError 后重试。",
   ack_human_message: "仅在实际收到对应人工消息后调用；成功后该消息进入 acknowledged。不要猜测 message_id，不得确认其他 Job 的消息。仅在返回 isError 后重试。",

@@ -1135,7 +1135,7 @@ export function TaskCanvasPage() {
           prefs={interventionPrefs}
           ignoreBusyId={ignoreBusyId}
           onPrefsChange={updateInterventionPrefs}
-          onReply={(item) => openHumanReply(humanMessageTargetNodeFromContext(item.node, nodes))}
+          onReply={(item) => openHumanReply(humanMessageTargetNodeFromContext(item.node, nodes, jobs))}
           onIgnore={(item) => void ignoreIntervention(item)}
           onOpenFinding={(findingId) => setQuery("finding", findingId)}
           onOpenJob={(jobId) => setQuery("job", jobId)}
@@ -1164,7 +1164,7 @@ export function TaskCanvasPage() {
                 sp.delete("focusNode");
                 setSearchParams(sp, { replace: true });
               }}
-              onSendHumanMessage={(node) => openHumanReply(humanMessageTargetNodeFromContext(node, nodes))}
+              onSendHumanMessage={(node) => openHumanReply(humanMessageTargetNodeFromContext(node, nodes, jobs))}
               humanMessagePanelCollapsed={interventionPrefs.messagesCollapsed}
               onToggleHumanMessagePanel={() => updateInterventionPrefs({
                 ...interventionPrefs,
@@ -1434,7 +1434,7 @@ export function TaskCanvasPage() {
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openHumanReply(humanMessageTargetNodeForJobId(j.id, nodes));
+                                openHumanReply(humanMessageTargetNodeForJobId(j.id, nodes, jobs));
                               }}
                               className="inline-flex items-center gap-1 rounded-md border border-amber-900/40 px-2.5 py-1 font-mono text-[12px] text-amber-300 transition-colors hover:bg-amber-950/40"
                             >
@@ -1541,7 +1541,7 @@ export function TaskCanvasPage() {
         <JobDetailPanel
           jobId={selectedJob}
           onClose={() => setQuery("job", null)}
-          onSendMessage={() => openHumanReply(humanMessageTargetNodeForJobId(selectedJob, nodes))}
+          onSendMessage={() => openHumanReply(humanMessageTargetNodeForJobId(selectedJob, nodes, jobs))}
         />
       )}
       {composerOpen && (
@@ -1550,6 +1550,7 @@ export function TaskCanvasPage() {
           canvasId={canvasId}
           projectId={projectId ?? null}
           selectedNode={composerNode}
+          jobs={jobs}
           onClose={() => { setComposerOpen(false); setComposerNode(null); setComposerInterventionId(null); }}
           onSent={() => {
             if (composerInterventionId) {
