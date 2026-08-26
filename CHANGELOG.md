@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.45] - 2026-08-26
+
 ### 新增
 
 - 项目风险台：进入项目后的「项目风险 / 风险发现」列出该项目全部任务 Finding；顶部用 `GET /projects/:id/findings/summary` 聚合严重度 / 验证 / 处置，避免列表 500 条窗口静默截断（#302）。
@@ -13,6 +15,13 @@
 
 - Job 结果页「下发 Prompt」：运行时把去掉画布 YAML 的完整输入冻结到 `payload.dispatched_prompt`；既有 Hub 后续轮次从 canvas 任务正文 / 触发原因回填，不再空白。
 - 过程画布筛选坞与图例放入 React Flow `Panel`，避免被 pane 盖住；去掉 `onlyRenderVisibleElements`，边 SVG 使用 1px + `overflow: visible`，平移后连线不再被裁掉。
+- resume 已 `request_human` 的 Job 后，终态互斥只计当前 Attempt：旧 Attempt 的 human 不再把新会话 `mark_job_done` / `submit_hub_decision` 判成 `duplicate_tool_call`（#298）。
+- Hub 人工收尾同一回合先 `submit_hub_decision` 再 `mark_job_done` 时，running 守卫用摄入加锁时的状态；迟到 done 幂等，不再 `job_not_running` 整笔回滚（#300）。
+
+### 部署 / 升级说明
+
+- Schema 升至 v38（`findings.disposition` 增加 `human_reproducing`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 本版本不改官方运行时镜像内容。Release 指纹未变时跳过 docker build，只打新版本 tag。
 
 ## [0.1.44] - 2026-08-23
 
@@ -450,6 +459,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/SummerSec/DeepSonar/compare/v0.1.43...v0.1.44
 [0.1.43]: https://github.com/SummerSec/DeepSonar/compare/v0.1.42...v0.1.43
 [0.1.42]: https://github.com/SummerSec/DeepSonar/compare/v0.1.41...v0.1.42
