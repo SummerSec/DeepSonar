@@ -5,7 +5,8 @@ import {
   HUMAN_MESSAGE_MAX_LENGTH,
   humanMessageAssetKey,
   humanMessageTargetForNode,
-  isActiveHumanMessageTarget,
+  isReplyableHumanMessageTarget,
+  type HumanMessageJobRef,
 } from "./human-messages";
 
 const MAX_ATTACHMENTS = 20;
@@ -14,18 +15,20 @@ export function HumanMessageComposer({
   canvasId,
   projectId,
   selectedNode,
+  jobs,
   onClose,
   onSent,
 }: {
   canvasId: string;
   projectId: string | null;
   selectedNode: CanvasNode | null;
+  jobs?: readonly HumanMessageJobRef[];
   onClose: () => void;
   onSent: (message: CanvasHumanMessage) => void;
 }) {
   const inputId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
-  const nodeEligible = isActiveHumanMessageTarget(selectedNode);
+  const nodeEligible = isReplyableHumanMessageTarget(selectedNode, jobs);
   const [targetKind, setTargetKind] = useState<"hub" | "job" | null>(nodeEligible ? "job" : null);
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -33,7 +36,7 @@ export function HumanMessageComposer({
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const trimmed = body.trim();
-  const jobTarget = nodeEligible ? humanMessageTargetForNode(selectedNode) : null;
+  const jobTarget = nodeEligible ? humanMessageTargetForNode(selectedNode, jobs) : null;
   const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy);
   const targetTitle = target?.kind === "hub" ? "Hub" : target?.kind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
@@ -111,7 +114,7 @@ export function HumanMessageComposer({
             </label>
             <label className={`${targetKind === "job" ? "is-selected" : ""} ${nodeEligible ? "" : "is-disabled"}`}>
               <input type="radio" name={`${inputId}-target`} checked={targetKind === "job"} disabled={!nodeEligible} onChange={() => setTargetKind("job")} />
-              <span><strong>{nodeEligible ? selectedNode.title : "当前选中的运行节点"}</strong><small>{nodeEligible ? `${selectedNode.node_type} · ${selectedNode.status} · 直接投递此运行会话` : "仅 active 的 intent / job / report 节点可发送"}</small></span>
+              <span><strong>{nodeEligible ? selectedNode.title : "当前选中的运行节点"}</strong><small>{nodeEligible ? `${selectedNode.node_type} · ${selectedNode.status} · 直接投递此运行会话` : "仅活动运行或 Job 仍为 waiting_human 的 intent / job / report 可发送"}</small></span>
             </label>
           </fieldset>
 

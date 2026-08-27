@@ -238,6 +238,21 @@ test("deferred Verify terminal event preserves verdict and missing evidence", ()
   });
 });
 
+test("accepted request_human is ingested before runner errors so the wait gate survives", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.ok(
+    source.indexOf("if (semanticState.human)")
+      < source.indexOf("if (isSemanticAgentRunError(result))"),
+    "request_human must persist before semantic/runner errors fail the Job",
+  );
+  assert.match(
+    dispatcher,
+    /if \(current\?\.status === "waiting_human"\) \{\s*[\s\S]*?return;/,
+    "dispatcher must not fail an already accepted human wait",
+  );
+});
+
 test("host semantic failures remain fail-closed while ordinary runner errors are distinct", () => {
   assert.equal(isSemanticAgentRunError({ errorKind: "semantic", error: "ordinary" }), true);
   assert.equal(isSemanticAgentRunError({ error: "语义事件处理失败: invalid control" }), true);

@@ -41,5 +41,5 @@ test("task workbench wires layer helpers and gates CanvasView overlays", () => {
   assert.doesNotMatch(canvas, /human-message-launch/);
   assert.doesNotMatch(canvas, /<HumanMessageComposer/);
   assert.match(canvas, /onSendHumanMessage\?/);
-  assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)\}/);
+  assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes, jobs\)\)\}/);
 });

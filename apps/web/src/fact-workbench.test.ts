@@ -187,11 +187,12 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   const bannerMount = page.indexOf("<HumanInterventionBanner");
   const canvasLayer = page.indexOf("taskWorkbenchCanvasLayerClass(tab === \"canvas\")");
   assert.ok(bannerMount >= 0 && canvasLayer > bannerMount, "人工介入条必须在画布层外，各 Tab 都可点回复");
-  assert.match(page, /openHumanReply\(humanMessageTargetNodeFromContext\(item\.node, nodes\)\)/);
+  assert.match(page, /openHumanReply\(humanMessageTargetNodeFromContext\(item\.node, nodes, jobs\)\)/);
   assert.match(page, /<HumanMessageComposer/);
   assert.match(page, /jobCanReceiveHumanReply\(j\)/);
-  assert.match(page, /onSendMessage=\{\(\) => openHumanReply\(humanMessageTargetNodeForJobId\(selectedJob, nodes\)\)\}/);
-  assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes\)\)\}/);
+  assert.match(page, /onSendMessage=\{\(\) => openHumanReply\(humanMessageTargetNodeForJobId\(selectedJob, nodes, jobs\)\)\}/);
+  assert.match(page, /onSendHumanMessage=\{\(node\) => openHumanReply\(humanMessageTargetNodeFromContext\(node, nodes, jobs\)\)\}/);
+  assert.match(page, /jobs=\{jobs\}/);
   assert.match(page, /ignoreHumanIntervention/);
   assert.match(page, /listHumanInterventions\(nodes\)/);
   assert.match(page, /setComposerInterventionId\(openHumanInterventionForJob\(nodes, targetJobId\)\?\.id \?\? null\)/);
@@ -210,6 +211,7 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   assert.match(banner, /hideProcessed: isHidden \? prefs\.hideProcessed : true/);
   assert.match(banner, /aria-expanded/);
   const composer = source("HumanMessageComposer.tsx");
+  assert.match(composer, /isReplyableHumanMessageTarget\(selectedNode, jobs\)/);
   assert.match(composer, /nodeEligible \? "job" : null/);
   assert.match(composer, /targetKind === "hub" \? \{ kind: "hub" as const \} : null/);
   assert.doesNotMatch(composer, /nodeEligible \? "job" : "hub"/);

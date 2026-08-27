@@ -190,10 +190,10 @@ export async function createHumanMessage(input: {
           AND n.node_type IN ('intent','job','report') AND j.status=ANY(${ACTIVE_STATUSES})
         FOR UPDATE OF j`;
       if (!targetNode?.job_id) throw Object.assign(new Error("目标节点不是该画布的活动运行节点"), { statusCode: 409 });
-      [targetJob] = await tx`SELECT id FROM jobs WHERE id=${String(targetNode.job_id)}`;
+      [targetJob] = await tx`SELECT id, status FROM jobs WHERE id=${String(targetNode.job_id)}`;
     } else {
       [targetJob] = await tx`
-        SELECT id FROM jobs WHERE canvas_id=${input.canvasId} AND type='hub_reason'
+        SELECT id, status FROM jobs WHERE canvas_id=${input.canvasId} AND type='hub_reason'
           AND status=ANY(${ACTIVE_STATUSES}) ORDER BY created_at DESC LIMIT 1 FOR UPDATE`;
     }
 
@@ -216,7 +216,7 @@ export async function createHumanMessage(input: {
         type: "human_message",
       }, { force: true, manual: true, sourceNodeIds: [humanNodeId], trigger: { kind: "human_message", message_id: input.id } });
       [targetJob] = await tx`
-        SELECT id FROM jobs WHERE canvas_id=${input.canvasId} AND type='hub_reason'
+        SELECT id, status FROM jobs WHERE canvas_id=${input.canvasId} AND type='hub_reason'
           AND status IN ('pending','claimed','provisioning','running') ORDER BY created_at DESC LIMIT 1`;
     }
     if (!targetJob) throw new Error("无法建立人类消息目标 Job");
@@ -246,6 +246,10 @@ export async function createHumanMessage(input: {
         VALUES
           (${input.id}, ${String(version.id)}, ${filename}, ${humanMessageWorkspacePath(input.id, workspaceFilename)},
            ${String(version.content_sha256)}, ${Number(version.bytes)})`;
+    }
+    if (String(targetJob.status) === "waiting_human") {
+      const resumed = await resumeWaitingHumanJob(tx as unknown as typeof sql, String(targetJob.id), "人工回复后继续");
+      if (!resumed) throw Object.assign(new Error("恢复等待人工的 Job 失败"), { statusCode: 409 });
     }
     return { message, created: true };
   });
@@ -301,6 +305,31 @@ export class HumanInterventionError extends Error {
 export function isAlreadyIgnoredHumanNode(node: { status?: unknown; body_json?: unknown }): boolean {
   const body = (node.body_json ?? {}) as Record<string, unknown>;
   return String(node.status ?? "") === "ignored" || body.resolution === "ignored";
+}
+
+async function resumeWaitingHumanJob(
+  tx: typeof sql,
+  jobId: string,
+  reason: string,
+): Promise<boolean> {
+  const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} FOR UPDATE`;
+  if (!job || String(job.status) !== "waiting_human") return false;
+  await markAttemptInterrupted(tx as unknown as typeof sql, jobId, reason);
+  const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
+    error: null,
+    lease_expires_at: null,
+    claimed_at: null,
+    started_at: null,
+    finished_at: null,
+    heartbeat_at: null,
+  });
+  if (!resumed) return false;
+  await normalizePendingJobPriority(jobId, tx as unknown as typeof sql);
+  await tx`
+    UPDATE canvas_nodes SET status='pending', updated_at=now()
+    WHERE job_id=${jobId} AND node_type IN ('job', 'intent', 'report')`;
+  await tx`SELECT pg_notify('deepsonar_jobs', 'human_reply')`;
+  return true;
 }
 
 export function canIgnoreHumanNode(node: { node_type?: unknown; status?: unknown; body_json?: unknown }): boolean {
@@ -361,21 +390,8 @@ export async function ignoreHumanIntervention(input: {
     if (jobId) {
       const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} AND canvas_id=${input.canvasId} FOR UPDATE`;
       if (job && String(job.status) === "waiting_human") {
-        await markAttemptInterrupted(tx as unknown as typeof sql, jobId, "人工忽略介入请求");
-        const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
-          error: null,
-          lease_expires_at: null,
-          claimed_at: null,
-          started_at: null,
-          finished_at: null,
-          heartbeat_at: null,
-        });
+        const resumed = await resumeWaitingHumanJob(tx as unknown as typeof sql, jobId, "人工忽略介入请求");
         if (!resumed) throw new HumanInterventionError(409, "JOB_RESUME_FAILED", "恢复等待人工的 Job 失败");
-        await normalizePendingJobPriority(jobId, tx as unknown as typeof sql);
-        await tx`
-          UPDATE canvas_nodes SET status='pending', updated_at=now()
-          WHERE job_id=${jobId} AND node_type IN ('job', 'intent', 'report')`;
-        await tx`SELECT pg_notify('deepsonar_jobs', 'human_ignored')`;
         jobResumed = true;
       }
     }

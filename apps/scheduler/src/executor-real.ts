@@ -938,7 +938,7 @@ Finding：${trigger.finding_id ?? "未知"}
 请读整图决策：
 1. 若目标已覆盖且**自动验证范围内 Finding 为 confirmed 或 needs_human** → complete（随后自动 Report；SARIF 仅含 confirmed）；
 2. 若自动验证范围内仍有 pending/verifying → 派发补证或推动验证，不得 complete；低于 minVerifySeverity 的策略排除项不阻塞；
-3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并调用 request_human；必须显式传 Finding 或 platform_blocker subject，禁止只传 reason。`;
+3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并调用 request_human；必须显式传 Finding 或 platform_blocker subject，禁止只传 reason。调用 request_human 后停止，不要再 submit_hub_decision 或 mark_job_done。`;
     } else if (["user_task", "plane_issue", "external_event"].includes(trigger?.kind ?? "")) {
       initialInput += "\n\n这是首次决策轮次；没有执行证据时不得直接 complete，初始 intent 可从 YAML root_id 的 UUID 值出发，不要填写 root_id 字段名。";
       if (trigger?.kind === "external_event") {
@@ -1673,13 +1673,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   );
   await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 
-  // Host semantic validation is fail-closed. A transient Provider/CLI error
-  // may be superseded by an accepted terminal control event below.
-  if (isSemanticAgentRunError(result)) throw reconstructAgentRunError(result.error ?? "语义事件处理失败", result.errorDetails);
-  // A final runner failure remains authoritative. Only a result explicitly
-  // marked as a later terminal success may carry a stale earlier error.
-  if (isFinalAgentRunnerError(result)) throw reconstructAgentRunError(result.error!, result.errorDetails);
-
+  // An accepted request_human is the terminal close. Persist it even when a
+  // later exclusive tool or runner error would otherwise fail the Job.
   if (semanticState.human) {
     await ingestSemanticEventObserved(jobId, {
       v: 1,
@@ -1689,6 +1684,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     });
     return;
   }
+  // Host semantic validation is fail-closed. A transient Provider/CLI error
+  // may be superseded by an accepted terminal control event below.
+  if (isSemanticAgentRunError(result)) throw reconstructAgentRunError(result.error ?? "语义事件处理失败", result.errorDetails);
+  // A final runner failure remains authoritative. Only a result explicitly
+  // marked as a later terminal success may carry a stale earlier error.
+  if (isFinalAgentRunnerError(result)) throw reconstructAgentRunError(result.error!, result.errorDetails);
   if (!semanticState.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。

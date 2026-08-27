@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AckHumanMessagePayload, resolvePlatformTools } from "@deepsonar/shared-types";
+import { readFileSync } from "node:fs";
 import {
   canIgnoreHumanNode,
   HUMAN_IGNORE_CONTINUE_HINT,
@@ -36,6 +37,15 @@ test("human message routes use task read/write scopes", () => {
   assert.equal(requiredScopeForRoute("GET", "/canvases/:id/messages"), "tasks:read");
   assert.equal(requiredScopeForRoute("POST", "/canvases/:id/messages"), "tasks:write");
   assert.equal(requiredScopeForRoute("POST", "/canvases/:id/human-nodes/:nodeId/ignore"), "jobs:control");
+});
+
+test("replying to waiting_human resumes the Job on the same path as ignore", () => {
+  const source = readFileSync(new URL("./human-messages.ts", import.meta.url), "utf8");
+  assert.match(source, /async function resumeWaitingHumanJob/);
+  assert.match(source, /targetJob\.status\) === "waiting_human"/);
+  assert.match(source, /resumeWaitingHumanJob\(tx as unknown as typeof sql, String\(targetJob\.id\), "人工回复后继续"\)/);
+  assert.match(source, /resumeWaitingHumanJob\(tx as unknown as typeof sql, jobId, "人工忽略介入请求"\)/);
+  assert.match(source, /pg_notify\('deepsonar_jobs', 'human_reply'\)/);
 });
 
 test("only open human nodes can be ignored and ignored is a terminal resolution", () => {

@@ -316,6 +316,69 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET status = 'running' WHERE id = ${sameAttemptHumanJob}`;
       await assertRejectedWithoutWrites(sameAttemptHumanJob, "done", "duplicate_tool_call");
 
+      const sameIngestHumanJob = await makeJob("review", "running", workerSnapshot);
+      await createAttempt(sql, sameIngestHumanJob, { agent_cli: "claude-code" });
+      const lateDoneAfterHumanId = randomUUID();
+      const sameIngestHuman = await ingestEventBundle(sameIngestHumanJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "human",
+          payload: humanPayload,
+        },
+        {
+          v: 1,
+          event_id: lateDoneAfterHumanId,
+          type: "done",
+          payload: { summary: "late mark_job_done after request_human" },
+        },
+      ]);
+      assert.equal(sameIngestHuman[0]?.deduped, false);
+      assert.equal(sameIngestHuman[1]?.deduped, true, "same-ingest done after accepted request_human is a no-op");
+      const [sameIngestHumanState] = await sql<{ status: string; human_events: number; done_events: number; late_done: number }[]>`
+        SELECT
+          status,
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${sameIngestHumanJob} AND type = 'human') AS human_events,
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${sameIngestHumanJob} AND type = 'done') AS done_events,
+          (SELECT COUNT(*)::int FROM events WHERE event_id = ${lateDoneAfterHumanId}) AS late_done
+        FROM jobs WHERE id = ${sameIngestHumanJob}`;
+      assert.deepEqual(sameIngestHumanState, {
+        status: "waiting_human",
+        human_events: 1,
+        done_events: 0,
+        late_done: 0,
+      });
+
+      const sameIngestHubJob = await makeJob("hub_reason", "running", {
+        ...hubSnapshot,
+        name: "hub",
+        platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
+      });
+      await createAttempt(sql, sameIngestHubJob, { agent_cli: "claude-code" });
+      const lateHubAfterHumanId = randomUUID();
+      const sameIngestHub = await ingestEventBundle(sameIngestHubJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "human",
+          payload: humanPayload,
+        },
+        {
+          v: 1,
+          event_id: lateHubAfterHumanId,
+          type: "hub_decision",
+          payload: { complete: { from: [], description: "late hub after request_human" } },
+        },
+      ]);
+      assert.equal(sameIngestHub[0]?.deduped, false);
+      assert.equal(sameIngestHub[1]?.deduped, true, "same-ingest hub after accepted request_human is a no-op");
+      const [sameIngestHubState] = await sql<{ status: string; late_hub: number }[]>`
+        SELECT
+          status,
+          (SELECT COUNT(*)::int FROM events WHERE event_id = ${lateHubAfterHumanId}) AS late_hub
+        FROM jobs WHERE id = ${sameIngestHubJob}`;
+      assert.deepEqual(sameIngestHubState, { status: "waiting_human", late_hub: 0 });
+
       const resumedHumanJob = await makeJob("review", "running", workerSnapshot);
       await createAttempt(sql, resumedHumanJob, { agent_cli: "claude-code" });
       await ingestHuman(resumedHumanJob);
