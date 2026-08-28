@@ -120,7 +120,12 @@ function hostSession(): OpenSandboxSession {
         return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime.contract/v1" }), stderr: "" };
       }
       if (command.includes("env")) return { exitCode: 0, stdout: "PATH=/bin\nHOME=/workspace\n", stderr: "" };
-      if (command.startsWith("command -v ")) return { exitCode: 1, stdout: "", stderr: "" };
+      if (command.includes("192.0.2.1")) return { exitCode: 1, stdout: "", stderr: "" };
+      if (command.includes("CapPrm")) {
+        return { exitCode: 0, stdout: "CapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\n", stderr: "" };
+      }
+      if (command.includes("poc-link") && command.includes("test ! -L")) return { exitCode: 44, stdout: "", stderr: "" };
+      if (command.startsWith("command -v ") || command.startsWith("test -f ")) return { exitCode: 1, stdout: "", stderr: "" };
       if (command.includes("readlink") || command.includes("test ! -L")) return { exitCode: 0, stdout: "", stderr: "" };
       return { exitCode: 0, stdout: "", stderr: "" };
     },
@@ -131,7 +136,7 @@ function hostSession(): OpenSandboxSession {
         async kill() {},
         async resize() {},
         async *[Symbol.asyncIterator]() {
-          yield { type: "stdout" as const, chunk: "steerterm" };
+          yield { type: "stdout" as const, chunk: "steerterm-ok" };
           yield { type: "exit" as const, exitCode: 0 };
         },
       };
@@ -166,9 +171,15 @@ test("OpenSandbox host PoC covers files, incremental stdin, PTY, and reconnect",
   const result = await runOpenSandboxHostPoc(client, { image: "img@sha256:" + "a".repeat(64), apiKey: "secret-key" });
   assert.equal(result.fileOk, true);
   assert.equal(result.reservedRejected, true);
+  assert.equal(result.symlinkRejected, true);
+  assert.equal(result.oversizedRejected, true);
+  assert.equal(result.pathEscapeRejected, true);
   assert.equal(result.envClean, true);
   assert.equal(result.incrementalOk, true);
   assert.equal(result.ptyOk, true);
+  assert.equal(result.terminalOk, true);
+  assert.equal(result.networkIsolated, true);
+  assert.equal(result.hardLimits, true);
   assert.equal(result.reconnected, true);
   assert.equal(result.leftovers, 0);
 });

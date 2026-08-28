@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
+import { shellQuote } from "./runtime-host.js";
 
 export const OPENSANDBOX_POC_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
@@ -86,7 +87,11 @@ function ids(): { jobId: string; attemptId: string } {
   return { jobId: randomUUID(), attemptId: randomUUID() };
 }
 
-async function collectText(process: AsyncIterable<{ type: string; chunk?: string; exitCode?: number }>, timeoutMs: number): Promise<{ text: string; exitCode?: number }> {
+async function collectText(
+  process: AsyncIterable<{ type: string; chunk?: string; exitCode?: number }>,
+  timeoutMs: number,
+  until?: RegExp,
+): Promise<{ text: string; exitCode?: number }> {
   const chunks: string[] = [];
   let exitCode: number | undefined;
   const deadline = Date.now() + timeoutMs;
@@ -94,9 +99,35 @@ async function collectText(process: AsyncIterable<{ type: string; chunk?: string
     if (Date.now() > deadline) throw new Error("OPENSANDBOX_POC_STREAM_TIMEOUT");
     if (event.type === "stdout" || event.type === "stderr") chunks.push(event.chunk ?? "");
     if (event.type === "exit") exitCode = event.exitCode;
+    if (until && until.test(chunks.join(""))) break;
   }
   return { text: chunks.join(""), exitCode };
 }
+
+const NETWORK_ISOLATION_SCRIPT = `
+import socket, sys
+def tcp(host, port, family=socket.AF_INET):
+    s = socket.socket(family, socket.SOCK_STREAM)
+    s.settimeout(2)
+    try:
+        s.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+leaked = tcp("192.0.2.1", 80)
+try:
+    leaked = leaked or tcp("2001:db8::1", 80, socket.AF_INET6)
+except OSError:
+    pass
+try:
+    socket.getaddrinfo("this-name-should-not-resolve.invalid", 80)
+    leaked = True
+except socket.gaierror:
+    pass
+sys.exit(0 if leaked else 1)
+`.trim();
 
 export async function runOpenSandboxHostPoc(
   client: OpenSandboxClient,
@@ -106,9 +137,15 @@ export async function runOpenSandboxHostPoc(
   provisionMs: number;
   fileOk: boolean;
   reservedRejected: boolean;
+  symlinkRejected: boolean;
+  oversizedRejected: boolean;
+  pathEscapeRejected: boolean;
   envClean: boolean;
   incrementalOk: boolean;
   ptyOk: boolean;
+  terminalOk: boolean;
+  networkIsolated: boolean;
+  hardLimits: boolean;
   reconnected: boolean;
   leftovers: number;
   clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>>;
@@ -133,6 +170,20 @@ export async function runOpenSandboxHostPoc(
     await host.readWorkspaceFile("/workspace/.deepsonar/secret", 32).catch((error) => {
       reservedRejected = error instanceof Error && /forbidden/.test(error.message);
     });
+    let pathEscapeRejected = false;
+    await host.readWorkspaceFile("/etc/passwd", 32).catch((error) => {
+      pathEscapeRejected = error instanceof Error && /forbidden/.test(error.message);
+    });
+    await host.run("ln -s /etc/passwd /workspace/poc-link", { timeoutMs: 5_000 });
+    let symlinkRejected = false;
+    await host.readWorkspaceFile("/workspace/poc-link", 32).catch((error) => {
+      symlinkRejected = error instanceof Error && /not_regular|forbidden/.test(error.message);
+    });
+    await host.uploadFile("x".repeat(64), "/workspace/poc-big.txt");
+    let oversizedRejected = false;
+    await host.readWorkspaceFile("/workspace/poc-big.txt", 8).catch((error) => {
+      oversizedRejected = error instanceof Error && /too_large/.test(error.message);
+    });
     const env = await host.run("sh -c 'env'", { timeoutMs: 10_000 });
     const envClean = env.exitCode === 0
       && !/OPEN[_-]?SANDBOX[_-]?API[_-]?KEY|OPENSANDBOX_SERVER_API_KEY/i.test(env.stdout)
@@ -148,6 +199,26 @@ export async function runOpenSandboxHostPoc(
     const ptyOut = await collectText(pty, 15_000);
     await pty.kill().catch(() => {});
     const ptyOk = ptyOut.text.includes("term");
+    const term = await runner.openTerminal(handle, { cols: 80, rows: 24 });
+    const terminalCollect = collectText(
+      (async function* () {
+        for await (const chunk of term.output) yield { type: "stdout" as const, chunk };
+      })(),
+      10_000,
+      /term-ok/,
+    );
+    await term.resize(100, 30);
+    await term.write("printf 'term-ok\\n'\n");
+    const terminalOut = await terminalCollect;
+    await term.close();
+    const terminalOk = /term-ok/.test(terminalOut.text);
+    const isolated = await host.run(`python3 -c ${shellQuote(NETWORK_ISOLATION_SCRIPT)}`, { timeoutMs: 10_000 });
+    const networkIsolated = isolated.exitCode === 1;
+    const limitsProbe = await host.run("grep -E '^(CapPrm|CapEff|NoNewPrivs):' /proc/1/status", { timeoutMs: 5_000 });
+    const hardLimits = limitsProbe.exitCode === 0
+      && /CapPrm:\s*0+\b/.test(limitsProbe.stdout)
+      && /CapEff:\s*0+\b/.test(limitsProbe.stdout)
+      && /NoNewPrivs:\s*1\b/.test(limitsProbe.stdout);
     const reconnected = new OpenSandboxRunner(client);
     const remote = await reconnected.ensureHost(handle);
     const probe = await remote.run("true", { timeoutMs: 10_000 });
@@ -161,9 +232,15 @@ export async function runOpenSandboxHostPoc(
       provisionMs,
       fileOk,
       reservedRejected,
+      symlinkRejected,
+      oversizedRejected,
+      pathEscapeRejected,
       envClean,
       incrementalOk,
       ptyOk,
+      terminalOk,
+      networkIsolated,
+      hardLimits,
       reconnected: probe.exitCode === 0,
       leftovers: 0,
       clis,

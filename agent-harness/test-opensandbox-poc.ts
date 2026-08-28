@@ -60,9 +60,13 @@ const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
 let hostSummary = "skipped";
 if (runtimeImage) {
   const host = await runOpenSandboxHostPoc(client, { image: runtimeImage, apiKey });
-  if (!host.fileOk || !host.reservedRejected || !host.envClean || !host.incrementalOk || !host.ptyOk || !host.reconnected) {
+  if (
+    !host.fileOk || !host.reservedRejected || !host.symlinkRejected || !host.oversizedRejected
+    || !host.pathEscapeRejected || !host.envClean || !host.incrementalOk || !host.ptyOk
+    || !host.terminalOk || !host.networkIsolated || !host.hardLimits || !host.reconnected
+  ) {
     throw new Error(`OpenSandbox host PoC unexpected result: ${JSON.stringify(host)}`);
   }
-  hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} clis=${JSON.stringify(host.clis)}`;
+  hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} isolated=${host.networkIsolated} limits=${host.hardLimits} clis=${JSON.stringify(host.clis)}`;
 }
 console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary}`);
