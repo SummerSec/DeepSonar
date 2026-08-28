@@ -667,8 +667,8 @@ export async function executeReal(
   ) {
     throw new Error(`job ${jobId} 的预置平台 capability 与冻结快照不一致`);
   }
-  // The platform skill is reserved by name. Never pass a RoleConfig copy to
-  // AgentBox, otherwise a role module could shadow control instructions.
+  // The platform skill is reserved by name. Never pass a RoleConfig copy into
+  // the sandbox, otherwise a role module could shadow control instructions.
   const runtimeSkills = injectPlatformControlSkill(snapshot.skills);
   const canSubmitHubDecision = controlToolNames.includes("submit_hub_decision");
   const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
@@ -1502,7 +1502,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
 
   // Runtime callback 使用与平台语义事件相同的沙箱安全文件读取器；
-  // AgentBox 完成运行准备后才绑定该读取器。
+  // 沙箱完成运行准备后才绑定该读取器。
   let readSandboxWorkspaceFileForRuntime: (filePath: string, maxBytes: number) => Promise<Buffer> = async () => {
     throw new Error("runtime workspace reader is not ready");
   };

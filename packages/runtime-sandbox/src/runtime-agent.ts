@@ -1,6 +1,6 @@
 /**
- * Provider-neutral Agent execution. Scheduler and OpenSandbox/Agentbox hosts
- * both call runRealAgent(host, spec).
+ * Provider-neutral Agent execution. Scheduler and OpenSandbox hosts
+ * call runRealAgent(host, spec).
  */
 import { createHash } from "node:crypto";
 import path from "node:path";

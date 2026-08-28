@@ -1,4 +1,4 @@
-# Opt-in production overlay. Default real mode stays Agentbox.
+# Default real-mode overlay. Scheduler SANDBOX_PROVIDER=opensandbox.
 #   SANDBOX_PROVIDER=opensandbox OPEN_SANDBOX_API_KEY=... ./deploy/deploy.sh up real pull
 # Host port defaults to 18080 so it does not collide with DEEPSONAR_WEB_PORT=8080.
 # Images are immutable digest pins from opensandbox-version.ts.

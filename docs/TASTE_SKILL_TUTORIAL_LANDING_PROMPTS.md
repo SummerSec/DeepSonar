@@ -86,7 +86,7 @@ DeepSonar is a multi-project code-audit scheduling platform.
 Four truths:
 1. Local DB = only source of truth
 2. Canvas = process truth (fact-intent bipartite graph per task)
-3. Sandbox = execution truth (agentbox; default networkMode none)
+3. Sandbox = execution truth (OpenSandbox; default networkMode none)
 4. Scheduler = the only executor with side effects
 
 Core discipline:
