@@ -1,5 +1,6 @@
 /**
- * Live proof that OpenSandbox workers can only submit semantics via Job Platform API.
+ * Live proof that OpenSandbox workers submit semantics only via Job Platform API.
+ * Real jobs use restricted (allow_egress=false) or egress — never none.
  * Requires OPEN_SANDBOX_POC=1, a reachable OpenSandbox server, and TEST_DATABASE_URL.
  */
 import { randomUUID } from "node:crypto";
@@ -99,38 +100,67 @@ try {
   const limits = { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true };
   const invokePy = `
 import json, os, socket, urllib.error, urllib.request
-gw = "127.0.0.1"
-with open("/proc/net/route") as fh:
-    for line in fh:
-        fields = line.split()
-        if len(fields) > 2 and fields[1] == "00000000":
-            gw = socket.inet_ntoa(int(fields[2], 16).to_bytes(4, "little"))
-            break
-job = os.environ["DEEPSONAR_JOB_ID"]
-token = os.environ["DEEPSONAR_API_TOKEN"]
-req = urllib.request.Request(
-    f"http://{gw}:3100/control/v1/jobs/{job}/operations/emit_fact",
-    data=json.dumps({"title":"OpenSandbox fact","description":"Submitted from inside an OpenSandbox worker via Job Platform API."}).encode(),
-    headers={"Authorization":"Bearer " + token,"Idempotency-Key":os.environ["DEEPSONAR_IDEMPOTENCY_KEY"],"Content-Type":"application/json"},
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        print("CODE:" + str(resp.status))
-        print(resp.read().decode())
-except urllib.error.HTTPError as exc:
-    print("CODE:" + str(exc.code))
-    print(exc.read().decode())
-except Exception as exc:
-    print("CODE:0")
-    print(type(exc).__name__)
+
+def gw():
+    with open("/proc/net/route") as fh:
+        for line in fh:
+            fields = line.split()
+            if len(fields) > 2 and fields[1] == "00000000":
+                return socket.inet_ntoa(int(fields[2], 16).to_bytes(4, "little"))
+    return ""
+
+def leaked():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2)
+    try:
+        s.connect(("192.0.2.1", 80))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+def post(token):
+    base = os.environ["DEEPSONAR_API_BASE_URL"].rstrip("/")
+    req = urllib.request.Request(
+        base + "/operations/emit_fact",
+        data=json.dumps({"title":"OpenSandbox fact","description":"Submitted from inside an OpenSandbox worker via Job Platform API."}).encode(),
+        headers={
+            "Authorization": "Bearer " + token,
+            "Idempotency-Key": os.environ.get("DEEPSONAR_IDEMPOTENCY_KEY", ""),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except Exception:
+        return 0
+
+print("GW:" + gw())
+print("LEAK:" + ("1" if leaked() else "0"))
+if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
+    print("CODE:" + str(post(os.environ["DEEPSONAR_API_TOKEN"])))
+    print("UNAUTH:" + str(post("invalid-token")))
 `.trim();
-  const runInvoke = async (network: "none" | "egress") => {
+
+  const summarize = (label: string, result: { exitCode: number; stdout: string; stderr: string }) =>
+    `${label} exit=${result.exitCode} stdout=${result.stdout.slice(0, 240)} stderr=${result.stderr.slice(0, 240)}`;
+
+  const runInvoke = async (
+    network: "none" | "restricted",
+    env: Record<string, string>,
+    gatewayUpstreamUrl?: string,
+  ) => {
     const handle = await runner.provision({
       jobId: randomUUID(),
       attemptId: randomUUID(),
       image: runtimeImage,
       network,
+      gatewayUpstreamUrl,
       limits,
       expectedContract: "deepsonar.runtime.contract/v1",
     });
@@ -139,33 +169,43 @@ except Exception as exc:
       await host.uploadFile(invokePy, "/workspace/poc-emit-fact.py");
       return await host.run("python3 /workspace/poc-emit-fact.py", {
         timeoutMs: network === "none" ? 8_000 : 12_000,
-        env: {
-          DEEPSONAR_JOB_ID: jobId,
-          DEEPSONAR_API_TOKEN: grant.token,
-          DEEPSONAR_IDEMPOTENCY_KEY: randomUUID(),
-        },
+        env,
       });
     } finally {
       await runner.destroy(handle).catch(() => {});
     }
   };
 
-  const isolated = await runInvoke("none");
-  const isolatedBlocked = isolated.exitCode !== 0 || !/CODE:200/.test(`${isolated.stdout}${isolated.stderr}`);
-  const allowed = await runInvoke("egress");
+  const isolated = await runInvoke("none", { DEEPSONAR_POC_MODE: "isolated" });
+  const isolatedBlocked = isolated.exitCode === 0 && /LEAK:0/.test(isolated.stdout);
+  if (!isolatedBlocked) {
+    throw new Error(`network=none leaked TEST-NET or failed: ${summarize("none", isolated)}`);
+  }
+
+  const gw = /GW:(\d+\.\d+\.\d+\.\d+)/.exec(isolated.stdout)?.[1]
+    || process.env.OPEN_SANDBOX_POC_CONTROL_HOST?.trim()
+    || "172.17.0.1";
+  const allowed = await runInvoke("restricted", {
+    DEEPSONAR_POC_MODE: "submit",
+    DEEPSONAR_API_BASE_URL: `http://${gw}:3100/control/v1/jobs/${jobId}`,
+    DEEPSONAR_API_TOKEN: grant.token,
+    DEEPSONAR_JOB_ID: jobId,
+    DEEPSONAR_IDEMPOTENCY_KEY: randomUUID(),
+  }, `http://${gw}:3100/gateway`);
   const submitted = allowed.exitCode === 0 && /CODE:200/.test(allowed.stdout);
-  if (!submitted) {
-    throw new Error(`OpenSandbox Platform API invoke failed: exit=${allowed.exitCode} stdout=${allowed.stdout.slice(0, 240)} stderr=${allowed.stderr.slice(0, 240)}`);
+  const rejectedUnauth = allowed.exitCode === 0 && /UNAUTH:401/.test(allowed.stdout);
+  const restrictedIsolated = /LEAK:0/.test(allowed.stdout);
+  if (!submitted || !rejectedUnauth || !restrictedIsolated) {
+    throw new Error(`restricted Platform API invoke failed: ${summarize("restricted", allowed)}`);
   }
 
   const leftovers = await runner.listResources();
   if (leftovers.length > 0) {
     throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
   }
-  if (!isolatedBlocked) throw new Error("network=none was able to submit Platform API events");
   if (!calls.includes("emit_fact")) throw new Error("emit_fact handler was not invoked");
   unregisterRuntimeHandler(jobId);
-  console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} calls=${calls.join(",")}`);
+  console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} unauth=401 restrictedIsolated=${restrictedIsolated} calls=${calls.join(",")}`);
 } finally {
   if (closeApp) await closeApp().catch(() => {});
   if (endSql) await endSql().catch(() => {});
