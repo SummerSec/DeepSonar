@@ -3,7 +3,8 @@
  * effect_pending / running crash must orphan and destroy, never auto-replay.
  * Requires OPEN_SANDBOX_POC=1, TEST_DATABASE_URL, and a reachable server.
  * Kubernetes/Kata server additionally needs OPEN_SANDBOX_KUBERNETES=1
- * so provision omits Docker-only ResourceName=pids.
+ * so provision omits Docker-only ResourceName=pids. The smoke script
+ * rebuilds @deepsonar/runtime-sandbox so Scheduler imports the current dist.
  */
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";

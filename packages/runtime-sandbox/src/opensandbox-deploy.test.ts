@@ -51,6 +51,11 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(pkg, /ci:smoke:opensandbox-prod-stack/);
   assert.match(pkg, /ci:smoke:opensandbox-prod-compose/);
   assert.match(pkg, /ci:smoke:opensandbox-prod-official/);
+  assert.match(pkg, /ci:smoke:opensandbox-reconcile": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-reaper": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-api": "pnpm --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-cli-control": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   const isolate = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod-isolated.yml"), "utf8");
   assert.match(isolate, /name: \$\{OPEN_SANDBOX_POC_GATEWAY_NET:-os-poc-sandbox-gateway\}/);
   assert.doesNotMatch(isolate, /^\s+name:\s*deepsonar-sandbox-gateway/m);
