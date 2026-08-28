@@ -2,6 +2,7 @@
  * Vendor-model proof that real CLIs inside OpenSandbox talk to Model Gateway
  * and submit Job Platform API operations themselves. Long-lived vendor keys stay
  * in Scheduler credentials; the sandbox only receives a job gateway token.
+ * Uses product restricted network (allow_egress=false): Gateway/Control only.
  * Mock LLM is not a substitute. Default: run every CLI that has a vendor key.
  */
 import { execFile } from "node:child_process";
@@ -256,7 +257,7 @@ try {
     });
     const runtimeHome = "/workspace/.deepsonar-home";
     const gatewayEnv = runtimeCliEnv({
-      DEEPSONAR_ALLOW_EGRESS: "1",
+      DEEPSONAR_ALLOW_EGRESS: "0",
       DEEPSONAR_GATEWAY_TOKEN: token.plaintext,
       ...capability.env,
     });
@@ -299,7 +300,7 @@ try {
       jobId,
       attemptId,
       image: runtimeImage,
-      network: "egress",
+      network: "restricted",
       gatewayUpstreamUrl: config.gateway.proxyUpstreamUrl,
       limits: snapshot.sandbox_limits,
       env: gatewayEnv,

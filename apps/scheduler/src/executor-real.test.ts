@@ -137,6 +137,9 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.match(source, /encodeGetState/);
   assert.match(source, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
   assert.match(source, /deepsonar\/\$\{plan\.model\}/);
+  assert.match(source, /network: "restricted"/);
+  assert.match(source, /DEEPSONAR_ALLOW_EGRESS: "0"/);
+  assert.doesNotMatch(source, /network: "egress"/);
   assert.doesNotMatch(source, /mintJobCapabilityToken\(/);
   assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
 });
