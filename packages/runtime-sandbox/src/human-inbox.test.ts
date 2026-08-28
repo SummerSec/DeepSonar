@@ -4,22 +4,20 @@ import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { HUMAN_INBOX_WRITER_SCRIPT, writeHumanInboxWorkspaceFile } from "./agentbox.js";
+import { HUMAN_INBOX_WRITER_SCRIPT, parseHumanInboxWorkspacePath } from "./runtime-shared.js";
 
-function sandboxWithContainer(containerId = "container-1") {
-  return {
-    raw: { container: { inspect: async () => ({ Id: containerId }) } },
-  };
-}
-
-test("human inbox writer rejects paths outside its exact message directory shape before invoking Docker", async () => {
+test("human inbox path parser rejects paths outside its exact message directory shape", () => {
   for (const value of [
     "/workspace/file.txt",
     "/workspace/.deepsonar/inbox/not-a-uuid/file.txt",
     "/workspace/.deepsonar/inbox/11111111-1111-4111-8111-111111111111/../secret",
   ]) {
-    await assert.rejects(writeHumanInboxWorkspaceFile(sandboxWithContainer() as never, value, Buffer.from("x")), /path_forbidden/u);
+    assert.throws(() => parseHumanInboxWorkspacePath(value), /path_forbidden/u);
   }
+  assert.deepEqual(
+    parseHumanInboxWorkspacePath("/workspace/.deepsonar/inbox/11111111-1111-4111-8111-111111111111/evidence.bin"),
+    { messageId: "11111111-1111-4111-8111-111111111111", filename: "evidence.bin" },
+  );
 });
 
 test("human inbox command protocol is descriptor-relative and never uses uploadFile", () => {
@@ -28,13 +26,6 @@ test("human inbox command protocol is descriptor-relative and never uses uploadF
   assert.match(HUMAN_INBOX_WRITER_SCRIPT, /os\.O_EXCL/u);
   assert.deepEqual([...HUMAN_INBOX_WRITER_SCRIPT.matchAll(/os\.open\(/gu)].length >= 3, true);
   assert.doesNotMatch(HUMAN_INBOX_WRITER_SCRIPT, /(?:realpath|follow_symlinks\s*=\s*True)/u);
-});
-
-test("human inbox writer requires a scheduler-owned local Docker container", async () => {
-  await assert.rejects(
-    writeHumanInboxWorkspaceFile({ raw: {} } as never, "/workspace/.deepsonar/inbox/11111111-1111-4111-8111-111111111111/evidence.bin", Buffer.from("evidence")),
-    /container_unavailable/u,
-  );
 });
 
 function runInboxProtocol(workspace: string, messageId: string, filename: string, bytes: Buffer): Promise<void> {

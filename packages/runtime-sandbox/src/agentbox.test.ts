@@ -48,7 +48,19 @@ import {
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
   removeContainerWithRetry,
+  writeHumanInboxWorkspaceFile,
 } from "./agentbox.js";
+
+test("human inbox writer requires a scheduler-owned local Docker container", async () => {
+  await assert.rejects(
+    writeHumanInboxWorkspaceFile(
+      { raw: {} } as never,
+      "/workspace/.deepsonar/inbox/11111111-1111-4111-8111-111111111111/evidence.bin",
+      Buffer.from("evidence"),
+    ),
+    /container_unavailable/u,
+  );
+});
 
 test("container force removal retries exponentially and reports exhaustion", async () => {
   const calls: string[][] = [];

@@ -3,6 +3,8 @@
  * Phase 4 deletes Agentbox; these stay as the adapter-independent surface.
  */
 
+import path from "node:path";
+
 export const DEEPSONAR_GATEWAY_PROXY_HOST = "deepsonar-gateway-proxy";
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
@@ -89,6 +91,17 @@ export function assertSharedAssetsVolumeOwnership(
   ) {
     throw new Error("shared assets volume is not a local Scheduler-managed volume for this Job");
   }
+}
+
+const HUMAN_INBOX_PATH =
+  /^\/workspace\/\.deepsonar\/inbox\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,240})$/iu;
+
+/** Scheduler-owned inbox path: exact `/workspace/.deepsonar/inbox/<uuid>/<filename>`. */
+export function parseHumanInboxWorkspacePath(filePath: string): { messageId: string; filename: string } {
+  const normalized = path.posix.normalize(filePath);
+  const match = HUMAN_INBOX_PATH.exec(filePath);
+  if (normalized !== filePath || !match) throw new Error("human_message_workspace_path_forbidden");
+  return { messageId: match[1]!, filename: match[2]! };
 }
 
 export const HUMAN_INBOX_WRITER_SCRIPT = String.raw`

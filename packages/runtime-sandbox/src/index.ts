@@ -204,6 +204,7 @@ export {
   SHARED_ASSETS_MOUNT_PATH,
   SHARED_ASSETS_VOLUME_LABEL,
   assertSharedAssetsVolumeOwnership,
+  parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
 export {

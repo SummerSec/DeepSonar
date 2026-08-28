@@ -14,6 +14,7 @@ import {
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
   assertSharedAssetsVolumeOwnership,
+  parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
 import {
@@ -736,14 +737,12 @@ export async function writeHumanInboxWorkspaceFile(
   filePath: string,
   bytes: Buffer,
 ): Promise<void> {
-  const normalized = path.posix.normalize(filePath);
-  const match = /^\/workspace\/\.deepsonar\/inbox\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,240})$/iu.exec(filePath);
-  if (normalized !== filePath || !match) throw new Error("human_message_workspace_path_forbidden");
+  const { messageId, filename } = parseHumanInboxWorkspacePath(filePath);
   const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
   const containerId = inspected?.Id;
   if (!containerId) throw new Error("human_message_container_unavailable");
   try {
-    await execFileWithInput("docker", ["exec", "-i", containerId, "python3", "-c", HUMAN_INBOX_WRITER_SCRIPT, "/workspace", match[1], match[2]], bytes);
+    await execFileWithInput("docker", ["exec", "-i", containerId, "python3", "-c", HUMAN_INBOX_WRITER_SCRIPT, "/workspace", messageId, filename], bytes);
   } catch {
     throw new Error("human_message_workspace_write_rejected");
   }

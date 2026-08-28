@@ -8,6 +8,7 @@ import {
   HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
+  parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
@@ -268,11 +269,9 @@ export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): Runti
       return bytes;
     },
     async writeHumanInboxFile(filePath, bytes) {
-      const normalized = path.posix.normalize(filePath);
-      const match = /^\/workspace\/\.deepsonar\/inbox\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,240})$/iu.exec(filePath);
-      if (normalized !== filePath || !match) throw new Error("human_message_workspace_path_forbidden");
+      const { messageId, filename } = parseHumanInboxWorkspacePath(filePath);
       const result = await session.run(
-        `python3 -c ${shellQuote(HUMAN_INBOX_WRITER_SCRIPT)} /workspace ${match[1]} ${match[2]}`,
+        `python3 -c ${shellQuote(HUMAN_INBOX_WRITER_SCRIPT)} /workspace ${messageId} ${filename}`,
         { stdin: bytes, timeoutMs: 15_000 },
       );
       if (result.exitCode !== 0) throw new Error("human_message_workspace_write_rejected");

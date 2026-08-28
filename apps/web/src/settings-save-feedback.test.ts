@@ -9,6 +9,8 @@ const toast = readFileSync(new URL("./toast.tsx", import.meta.url), "utf8");
 test("AppShell reads /health version instead of faking scheduler status only", () => {
   assert.match(shell, /api\.health\(\)/);
   assert.match(shell, /formatHealthVersion/);
+  assert.match(shell, /formatHealthOpenSandbox/);
+  assert.match(shell, /health\.opensandbox/);
   assert.match(shell, /调度器在线/);
 });
 
