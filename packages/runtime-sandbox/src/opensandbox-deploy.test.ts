@@ -152,6 +152,7 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HARD_LIMITS/);
+  assert.match(k8sPoc, /kubernetesResources: true/);
   assert.match(harness, /--project-directory/);
 });
 

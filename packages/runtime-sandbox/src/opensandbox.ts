@@ -147,7 +147,7 @@ export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCre
     resource: {
       cpu: String(limits.cpu),
       memory: `${limits.memoryMiB}Mi`,
-      pids: String(limits.pidsLimit),
+      ...(input.kubernetesResources ? {} : { pids: String(limits.pidsLimit) }),
     },
     timeoutSeconds: null,
     networkPolicy: mapOpenSandboxNetworkPolicy(input.network, input.gatewayUpstreamUrl),

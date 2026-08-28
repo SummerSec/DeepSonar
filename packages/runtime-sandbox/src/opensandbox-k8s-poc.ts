@@ -98,6 +98,7 @@ export async function runOpenSandboxK8sPoc(
     network: "restricted",
     gatewayUpstreamUrl: "http://gateway.invalid:3100/gateway",
     expectedContract: input.expectedContract ?? OPENSANDBOX_POC_CONTRACT,
+    kubernetesResources: true,
     limits: { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
   });
   try {

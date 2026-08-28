@@ -84,7 +84,7 @@ function kataWorld(live: OpenSandboxSession) {
         : [],
     };
   };
-  return { client, kubectl };
+  return { client, kubectl, get created() { return created; } };
 }
 
 test("Kata cluster probe requires runtimeclass, namespace, and quota", () => {
@@ -119,14 +119,16 @@ test("Kata workload discovery fail-closes docker-mode leftovers", () => {
 });
 
 test("OpenSandbox Kata PoC requires a kata-qemu workload and leftover-free destroy", async () => {
-  const { client, kubectl } = kataWorld(session());
-  const result = await runOpenSandboxK8sPoc(client, kubectl, { image: "img@sha256:" + "a".repeat(64) });
+  const world = kataWorld(session());
+  const result = await runOpenSandboxK8sPoc(world.client, world.kubectl, { image: "img@sha256:" + "a".repeat(64) });
   assert.equal(result.kata, true);
   assert.equal(result.isolated, true);
   assert.equal(result.hostEscapeBlocked, true);
   assert.equal(result.envClean, true);
   assert.equal(result.hardLimits, true);
   assert.equal(result.leftovers, 0);
+  assert.equal(world.created?.resource.pids, undefined);
+  assert.deepEqual(world.created?.resource, { cpu: "1", memory: "512Mi" });
 
   await assert.rejects(
     () => probeKataCluster(async () => ({})),

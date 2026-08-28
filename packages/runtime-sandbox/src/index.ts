@@ -25,6 +25,11 @@ export interface ProvisionInput {
   expectedToolsManifestSha256?: string | null;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
+  /**
+   * Kubernetes ResourceName 不接受 Docker 专有的 `pids`。
+   * 仍要求冻结 pidsLimit；只是不要写进 Pod resources。
+   */
+  kubernetesResources?: boolean;
   /** provision 超时/取消时必须中止外部资源创建。 */
   signal?: AbortSignal;
 }
