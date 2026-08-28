@@ -120,8 +120,9 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\[selectedCli\]/);
   assert.match(source, /encodeSteer/);
   assert.match(source, /CLI_SESSION_ADAPTERS\[selectedCli\]\.exportSession/);
+  assert.match(source, /parseAgentSession/);
   assert.match(source, /adapter\.resume/);
-  assert.match(source, /steered=true archived=true resumed=true leftover=0/);
+  assert.match(source, /steered=true archived=true viewed=true resumed=true leftover=0/);
   assert.match(source, /clis=\$\{ran\.join\(/);
   assert.match(source, /preparePlatformCapability/);
   assert.match(source, /adapter\.start/);

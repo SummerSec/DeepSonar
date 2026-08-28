@@ -106,6 +106,7 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /vendor key leaked into OpenSandbox worker env/);
   assert.match(poc, /for \(const selectedCli of selectedClis\)/);
   assert.match(poc, /CLI_SESSION_ADAPTERS/);
+  assert.match(poc, /parseAgentSession/);
   assert.match(poc, /encodeSteer/);
   assert.match(poc, /adapter\.resume/);
   assert.doesNotMatch(poc, /ANTHROPIC_API_KEY: vendorKey|ANTHROPIC_API_KEY: vendorSecret/);
@@ -122,7 +123,13 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(harness, /prod-config/);
   assert.match(harness, /prod-up/);
   assert.match(harness, /runOpenSandboxK8sPoc/);
+  assert.match(harness, /envClean/);
   assert.match(harness, /docker-compose.real.yml/);
+  const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-poc.ts"), "utf8");
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HARD_LIMITS/);
   assert.match(harness, /--project-directory/);
 });
 

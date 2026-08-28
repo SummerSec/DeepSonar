@@ -15,6 +15,7 @@ import {
   shouldRunOpenSandboxPoc,
   type AdapterRuntimeState,
 } from "@deepsonar/runtime-sandbox";
+import { parseAgentSession } from "../../web/src/session-viewer/parseAgentSession.ts";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox CLI control PoC (set OPEN_SANDBOX_POC=1)");
@@ -353,6 +354,13 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
       if (bundle.artifacts.length === 0) {
         throw new Error(`${selectedCli} session archive empty: ${bundle.captureError ?? "no artifacts"}`);
       }
+      const artifact = bundle.artifacts.find((item) => item.kind === "main")
+        ?? bundle.artifacts.find((item) => item.kind === "vendor_export")
+        ?? bundle.artifacts[0]!;
+      const parsed = parseAgentSession(artifact.content, { cli: selectedCli });
+      if (parsed.items.length === 0 || parsed.totals.parsed === 0) {
+        throw new Error(`${selectedCli} session viewer parsed empty: format=${parsed.format} bytes=${Buffer.byteLength(artifact.content)}`);
+      }
       await started.kill().catch(() => {});
       const resumeProcess = await adapter.resume({
         ...startContext,
@@ -376,7 +384,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
   }
   const skipped = vendorCliIds.filter((cli) => !ran.includes(cli));
   console.log(
-    `OK: OpenSandbox CLI vendor control clis=${ran.join(",")} skipped=${skipped.join(",") || "none"} gateway=true submitted=true steered=true archived=true resumed=true leftover=0`,
+    `OK: OpenSandbox CLI vendor control clis=${ran.join(",")} skipped=${skipped.join(",") || "none"} gateway=true submitted=true steered=true archived=true viewed=true resumed=true leftover=0`,
   );
 } finally {
   if (closeApp) await closeApp().catch(() => {});

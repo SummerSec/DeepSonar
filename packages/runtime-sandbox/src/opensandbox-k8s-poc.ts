@@ -1,7 +1,9 @@
 /**
  * Live Kubernetes + Kata proof (#162 Phase 3). Skip-safe unless explicitly enabled.
  * Static overlay tests are not a substitute: this fails closed unless a sandbox
- * workload actually uses RuntimeClass=kata-qemu and then cleans leftover pods.
+ * workload actually uses RuntimeClass=kata-qemu, network isolation and host-escape
+ * probes succeed, OpenSandbox credentials stay out of the guest env, hard limits
+ * are visible, and leftover pods are cleaned.
  */
 import { randomUUID } from "node:crypto";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
@@ -75,11 +77,13 @@ export async function probeKataCluster(kubectl: KubectlJson): Promise<KataCluste
 export async function runOpenSandboxK8sPoc(
   client: OpenSandboxClient,
   kubectl: KubectlJson,
-  input: { image?: string; expectedContract?: string },
+  input: { image?: string; expectedContract?: string; apiKey?: string },
 ): Promise<{
   kata: true;
-  isolated: boolean;
-  hostEscapeBlocked: boolean;
+  isolated: true;
+  hostEscapeBlocked: true;
+  envClean: true;
+  hardLimits: true;
   leftovers: number;
   leftoverPods: number;
 }> {
@@ -103,11 +107,26 @@ export async function runOpenSandboxK8sPoc(
     );
     const host = await runner.ensureHost(handle);
     const isolated = await host.run(`python3 -c ${shellQuote(NETWORK_ISOLATION_SCRIPT)}`, { timeoutMs: 10_000 });
+    if (isolated.exitCode !== 1) throw new Error("OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED");
     const escape = await host.run(HOST_ESCAPE_PROBE, { timeoutMs: 10_000 });
+    if (escape.exitCode !== 0) throw new Error("OPENSANDBOX_POC_KATA_HOST_ESCAPE");
+    const env = await host.run("sh -c 'env'", { timeoutMs: 10_000 });
+    const envClean = env.exitCode === 0
+      && !/OPEN[_-]?SANDBOX[_-]?API[_-]?KEY|OPENSANDBOX_SERVER_API_KEY/i.test(env.stdout)
+      && (!input.apiKey || !env.stdout.includes(input.apiKey));
+    if (!envClean) throw new Error("OPENSANDBOX_POC_KATA_ENV_LEAK");
+    const limitsProbe = await host.run("grep -E '^(CapPrm|CapEff|NoNewPrivs):' /proc/1/status", { timeoutMs: 5_000 });
+    const hardLimits = limitsProbe.exitCode === 0
+      && /CapPrm:\s*0+/.test(limitsProbe.stdout)
+      && /CapEff:\s*0+/.test(limitsProbe.stdout)
+      && /NoNewPrivs:\s*1/.test(limitsProbe.stdout);
+    if (!hardLimits) throw new Error("OPENSANDBOX_POC_KATA_HARD_LIMITS");
     return {
       kata: true,
-      isolated: isolated.exitCode === 1,
-      hostEscapeBlocked: escape.exitCode === 0,
+      isolated: true,
+      hostEscapeBlocked: true,
+      envClean: true,
+      hardLimits: true,
       leftovers: 0,
       leftoverPods: 0,
     };
