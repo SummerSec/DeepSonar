@@ -184,6 +184,19 @@ test("scheduler production build excludes live OpenSandbox PoC harnesses", () =>
   assert.deepEqual(tsconfig.exclude, ["src/**/*.poc.ts"]);
 });
 
+test("OpenSandbox official prod PoC uses prod+real+overlay compose on Docker bridge", () => {
+  const source = readFileSync(new URL("./opensandbox-prod-official.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /docker-compose.prod.yml/);
+  assert.match(source, /docker-compose.real.yml/);
+  assert.match(source, /docker-compose.opensandbox.prod.yml/);
+  assert.match(source, /iptables-legacy/);
+  assert.match(source, /FORWARD/);
+  assert.match(source, /ACCEPT/);
+  assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
+  assert.doesNotMatch(source, /network_mode: host/);
+});
+
 test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2 server", () => {
   const source = readFileSync(new URL("./opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
   assert.match(source, /docker-compose.opensandbox.host.yml/);
