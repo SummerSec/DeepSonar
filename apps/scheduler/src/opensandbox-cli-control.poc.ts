@@ -153,8 +153,8 @@ try {
       ${credentialId}, ${`OpenSandbox ${selectedCli} vendor`}, 'llm_provider', ${plan.provider},
       ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
       ${fingerprintOf(vendorSecret)}, ${last4Of(vendorSecret)}, 'active', ${selectedCli},
-      ${sql.json("baseUrl" in plan ? { base_url: plan.baseUrl } : {})},
-      ${sql.json(settingsConfig)}
+      ${sql.json(JSON.parse(JSON.stringify("baseUrl" in plan ? { base_url: plan.baseUrl } : {})))},
+      ${sql.json(JSON.parse(JSON.stringify(settingsConfig)))}
     )`;
 
   const snapshot = {
