@@ -107,6 +107,7 @@ function runProdConfigCase(): string {
   try {
     const rendered = spawnSync("sudo", [
       "-n", "docker", "compose",
+      "--project-directory", dir,
       "--env-file", envFile,
       "-f", join(repoRoot, "deploy/docker-compose.prod.yml"),
       "-f", join(repoRoot, "deploy/docker-compose.real.yml"),

@@ -86,4 +86,5 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(harness, /listOfficialOpenSandboxRuntimeImages/);
   assert.match(harness, /prod-config/);
   assert.match(harness, /docker-compose.real.yml/);
+  assert.match(harness, /--project-directory/);
 });
