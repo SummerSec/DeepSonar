@@ -1,13 +1,17 @@
 /**
- * Live proof that Reaper timeout/orphan owns OpenSandbox leftovers.
- * isAlive must be true before reap and false after destroy. leftover=0.
+ * Live proof that Reaper timeout/orphan owns OpenSandbox leftovers:
+ * revoke tokens, close PTY, destroy sandbox, remove shared assets. leftover=0.
  */
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import postgres from "postgres";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   freezeAgentCliRuntime,
   shouldRunOpenSandboxPoc,
+  type SandboxTerminalSession,
 } from "@deepsonar/runtime-sandbox";
 import { buildAttemptState } from "./domains/job-attempt/model.js";
 
@@ -46,7 +50,9 @@ const liveAttemptId = randomUUID();
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
 let runner: Awaited<typeof import("./runtime.js")>["runner"] | null = null;
-const provisioned: Array<{ jobId: string; sandboxId: string }> = [];
+let assets: Awaited<typeof import("./runtime.js")>["sharedAssetsVolumeManager"] | null = null;
+let staging: string | null = null;
+const provisioned: Array<{ jobId: string; sandboxId: string; terminal: SandboxTerminalSession }> = [];
 
 try {
   await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
@@ -57,16 +63,21 @@ try {
   process.env.OPEN_SANDBOX_API_KEY = apiKey;
   process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
 
-  const [dbModule, runtimeModule, { reapOnce }] = await Promise.all([
+  const [dbModule, runtimeModule, { reapOnce }, { mintJobCapabilityToken }] = await Promise.all([
     import("./db.js"),
     import("./runtime.js"),
     import("./reaper.js"),
+    import("./domains/platform-api/tokens.js"),
   ]);
   runner = runtimeModule.runner;
+  assets = runtimeModule.sharedAssetsVolumeManager;
   const sandboxRunner = runtimeModule.runner;
   const { sql, migrate } = dbModule;
   endSql = () => sql.end({ timeout: 5 });
   await migrate();
+  staging = await mkdtemp(path.join(os.tmpdir(), "os-reaper-assets-"));
+  const seedPath = path.join(staging, "seed.txt");
+  await writeFile(seedPath, "reaper-seed\n");
 
   const snapshot = {
     name: "audit",
@@ -81,7 +92,16 @@ try {
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox reaper')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox reaper')`;
 
-  const provision = async (jobId: string, attemptId: string) => {
+  const prepareAssets = async (jobId: string) => {
+    const volumeName = await assets!.prepare({
+      jobId,
+      files: [{ sourcePath: seedPath, relativePath: "seed.txt" }],
+      catalog: { jobId },
+    });
+    if (!volumeName) throw new Error(`shared assets volume missing for ${jobId}`);
+    return volumeName;
+  };
+  const provision = async (jobId: string, attemptId: string, volumeName: string) => {
     const handle = await sandboxRunner.provision({
       jobId,
       attemptId,
@@ -89,14 +109,20 @@ try {
       network: "none",
       limits: snapshot.sandbox_limits,
       expectedContract: "deepsonar.runtime.contract/v1",
+      sharedAssetsMount: { volumeName },
     });
-    provisioned.push({ jobId, sandboxId: handle.sandboxId });
+    const terminal = await sandboxRunner.openTerminal(handle, { cols: 80, rows: 24 });
+    void terminal.output[Symbol.asyncIterator]().next().catch(() => {});
+    provisioned.push({ jobId, sandboxId: handle.sandboxId, terminal });
     return handle.sandboxId;
   };
 
-  const timeoutSandbox = await provision(timeoutJobId, timeoutAttemptId);
-  const orphanSandbox = await provision(orphanJobId, orphanAttemptId);
-  const liveSandbox = await provision(liveJobId, liveAttemptId);
+  const timeoutVolume = await prepareAssets(timeoutJobId);
+  const orphanVolume = await prepareAssets(orphanJobId);
+  const liveVolume = await prepareAssets(liveJobId);
+  const timeoutSandbox = await provision(timeoutJobId, timeoutAttemptId, timeoutVolume);
+  const orphanSandbox = await provision(orphanJobId, orphanAttemptId, orphanVolume);
+  const liveSandbox = await provision(liveJobId, liveAttemptId, liveVolume);
   const aliveBefore = {
     timeout: await sandboxRunner.isAlive({ sandboxId: timeoutSandbox }),
     orphan: await sandboxRunner.isAlive({ sandboxId: orphanSandbox }),
@@ -128,6 +154,9 @@ try {
       (${timeoutAttemptId}, ${timeoutJobId}, 1, 'active', 'agent.ready', now(), ${timeoutSandbox}, ${sql.json(attemptState(timeoutAttemptId, timeoutJobId, timeoutSandbox))}),
       (${orphanAttemptId}, ${orphanJobId}, 1, 'active', 'agent.ready', now(), ${orphanSandbox}, ${sql.json(attemptState(orphanAttemptId, orphanJobId, orphanSandbox))}),
       (${liveAttemptId}, ${liveJobId}, 1, 'active', 'agent.ready', now(), ${liveSandbox}, ${sql.json(attemptState(liveAttemptId, liveJobId, liveSandbox))})`;
+  await mintJobCapabilityToken(timeoutJobId);
+  await mintJobCapabilityToken(orphanJobId);
+  await mintJobCapabilityToken(liveJobId);
 
   const reaped = await reapOnce();
   const jobsAfter = await sql`SELECT id, status FROM jobs`;
@@ -156,13 +185,47 @@ try {
   if (aliveAfter.timeout || aliveAfter.orphan) {
     throw new Error(`reaped sandboxes must be dead: ${JSON.stringify(aliveAfter)}`);
   }
-  console.log(`OK: OpenSandbox reaper timeout=1 orphan=1 live=1 leftover=0 aliveAfter=${JSON.stringify(aliveAfter)}`);
+  const tokens = await sql`SELECT job_id, revoked_at, revoke_reason FROM job_capability_tokens`;
+  const tokenOf = (id: string) => tokens.find((row) => String(row.job_id) === id);
+  if (!tokenOf(timeoutJobId)?.revoked_at || String(tokenOf(timeoutJobId)?.revoke_reason) !== "reaper") {
+    throw new Error(`timeout token must be revoked by reaper`);
+  }
+  if (!tokenOf(orphanJobId)?.revoked_at || String(tokenOf(orphanJobId)?.revoke_reason) !== "reaper") {
+    throw new Error(`orphan token must be revoked by reaper`);
+  }
+  if (tokenOf(liveJobId)?.revoked_at) throw new Error("live token must stay active");
+  const managed = await assets!.listManaged();
+  const volumeOf = (id: string) => managed.some((item) => item.jobId === id);
+  if (volumeOf(timeoutJobId) || volumeOf(orphanJobId)) {
+    throw new Error("reaped jobs must lose shared assets volumes");
+  }
+  if (!volumeOf(liveJobId)) throw new Error("live shared assets volume must survive reap");
+  const timeoutTerm = provisioned.find((item) => item.jobId === timeoutJobId)?.terminal;
+  const orphanTerm = provisioned.find((item) => item.jobId === orphanJobId)?.terminal;
+  const liveTerm = provisioned.find((item) => item.jobId === liveJobId)?.terminal;
+  await timeoutTerm!.write("x").then(
+    () => { throw new Error("timeout PTY must close after reap"); },
+    () => {},
+  );
+  await orphanTerm!.write("x").then(
+    () => { throw new Error("orphan PTY must close after reap"); },
+    () => {},
+  );
+  await liveTerm!.write("");
+  console.log(`OK: OpenSandbox reaper timeout=1 orphan=1 live=1 leftover=0 tokens=revoked pty=closed assets=0 aliveAfter=${JSON.stringify(aliveAfter)}`);
 } finally {
   if (runner) {
     for (const item of provisioned) {
+      await item.terminal.close().catch(() => {});
       await runner.destroy({ sandboxId: item.sandboxId }).catch(() => {});
     }
   }
+  if (assets) {
+    for (const jobId of [timeoutJobId, orphanJobId, liveJobId]) {
+      await assets.removeForJob(jobId).catch(() => {});
+    }
+  }
+  if (staging) await rm(staging, { recursive: true, force: true }).catch(() => {});
   if (endSql) await endSql().catch(() => {});
   if (databaseCreated) {
     await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => {});
