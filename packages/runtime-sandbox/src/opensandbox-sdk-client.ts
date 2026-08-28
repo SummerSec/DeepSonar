@@ -47,6 +47,7 @@ function connectionConfig(connection: OpenSandboxConnection): ConnectionConfig {
     protocol: connection.protocol ?? "http",
     useServerProxy: connection.useServerProxy ?? true,
     disableMetrics: true,
+    requestTimeoutSeconds: 180,
   });
 }
 
