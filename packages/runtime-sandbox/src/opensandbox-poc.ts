@@ -642,7 +642,9 @@ async function resumeOpenSandboxCli(
   });
   const payload = adapter.encodeInput("resume-ping", state);
   if (payload) await process.write(payload).catch(() => {});
-  await process.closeStdin().catch(() => {});
+  if (payload || !adapter.capabilities.incrementalMessages) {
+    await process.closeStdin().catch(() => {});
+  }
   await collectText(process, 3_000);
   await process.kill().catch(() => {});
   return true;
@@ -733,7 +735,7 @@ export async function runOpenSandboxCliLaunchPoc(
       if (adapter.encodeShutdown) {
         await process.write(adapter.encodeShutdown(state)).catch(() => {});
       }
-      if (payload) {
+      if (payload || !adapter.capabilities.incrementalMessages) {
         await process.closeStdin().catch(() => { stdinClosed = false; });
       }
       const out = await collectText(process, 15_000);

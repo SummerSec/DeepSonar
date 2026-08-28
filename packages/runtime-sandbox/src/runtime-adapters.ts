@@ -673,7 +673,7 @@ const codex = Object.freeze<RuntimeAdapter>({
   compatibleImageKeys: ALL_IMAGE_KEYS,
   start: (context) => sandboxCodex(context.host, context),
   resume: (context) => sandboxCodex(context.host, context, context.sessionId),
-  encodeInput: (content) => content,
+  encodeInput: () => "",
   decodeOutput: decodeCodex,
 });
 

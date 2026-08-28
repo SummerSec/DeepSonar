@@ -2999,7 +2999,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     if (reason) attemptCloseReason = reason;
     void exec.closeStdin().catch(() => {});
   };
-  if (!adapter.capabilities.incrementalMessages && adapter.encodeInput(spec.input)) closeStdin("initial_input");
+  if (!adapter.capabilities.incrementalMessages) closeStdin("initial_input");
   try {
     while (true) {
       let resumedExec: typeof exec | undefined;

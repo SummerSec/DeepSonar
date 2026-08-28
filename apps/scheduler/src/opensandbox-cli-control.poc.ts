@@ -221,8 +221,9 @@ post mark_job_done '{"summary":"Claude Code vendor-model Platform API proof fini
         })
       : adapter.encodeInput(prompt);
     if (payload) await process.write(payload).catch(() => {});
+    if (!adapter.capabilities.incrementalMessages) await process.closeStdin().catch(() => {});
     const text = await collectText(process, 120_000);
-    await process.closeStdin().catch(() => {});
+    if (adapter.capabilities.incrementalMessages) await process.closeStdin().catch(() => {});
     await process.kill().catch(() => {});
     const submitted = operations.every((name) => calls.includes(name));
     if (!submitted) {
