@@ -1,6 +1,7 @@
 /**
  * runtime-adapter：调度器与沙箱之间的唯一接口（ARCHITECTURE §5 / #162）
- * 实现可替换：noop（骨架）→ provider adapter（Agentbox 过渡 / OpenSandbox）
+ * 实现可替换：noop（骨架）→ provider adapter（OpenSandbox / Agentbox 过渡）
+ * Agentbox 只经 package 子路径 `./agentbox` 加载，主 barrel 不静态 import agentbox-sdk。
  */
 
 import type { RuntimeHost, RuntimeResource } from "./runtime-host.js";
@@ -174,13 +175,6 @@ export {
 } from "./opensandbox-version.js";
 export type { OpenSandboxPin } from "./opensandbox-version.js";
 export type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxSession } from "./opensandbox.js";
-export {
-  AgentboxRunner,
-  createAgentboxRuntimeHost,
-  wrapAgentboxProcess,
-  assertSharedAssetsContainerMount,
-  sharedAssetsVolumeBinds,
-} from "./agentbox.js";
 export {
   CONTAINER_REMOVE_MAX_ATTEMPTS,
   CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,

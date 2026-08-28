@@ -24,6 +24,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./agentbox": {
+      "types": "./src/agentbox.ts",
+      "default": "./dist/agentbox.js"
     }
   }
 }

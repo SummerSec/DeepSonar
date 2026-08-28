@@ -1,5 +1,4 @@
 import {
-  AgentboxRunner,
   DockerSharedAssetsVolumeManager,
   NoopRunner,
   NoopSharedAssetsVolumeManager,
@@ -12,7 +11,7 @@ import {
 } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 
-function createRealRunner(): SandboxRunner {
+async function createRealRunner(): Promise<SandboxRunner> {
   if (config.runtime.provider === "opensandbox") {
     const pin = readOpenSandboxPin({
       sdk: config.runtime.openSandbox.sdkVersion || undefined,
@@ -28,6 +27,7 @@ function createRealRunner(): SandboxRunner {
       pin,
     }), { bind: bindGatewayProxyToOpenSandboxNetwork });
   }
+  const { AgentboxRunner } = await import("@deepsonar/runtime-sandbox/agentbox");
   return new AgentboxRunner();
 }
 
@@ -36,7 +36,7 @@ function createRealRunner(): SandboxRunner {
  * reaper 回收必须打到同一个实例上）
  */
 export const runner: SandboxRunner =
-  config.runtime.agentMode === "real" ? createRealRunner() : new NoopRunner();
+  config.runtime.agentMode === "real" ? await createRealRunner() : new NoopRunner();
 
 export const sharedAssetsVolumeManager: SharedAssetsVolumeManager =
   config.runtime.agentMode === "real"

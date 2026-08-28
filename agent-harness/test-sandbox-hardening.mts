@@ -1,5 +1,5 @@
 // SEC-03 验证：AgentboxRunner provision 的容器必须带资源/权限硬限制
-import { AgentboxRunner } from "../packages/runtime-sandbox/src/index.ts";
+import { AgentboxRunner } from "../packages/runtime-sandbox/src/agentbox.ts";
 import { execFileSync } from "node:child_process";
 
 const runner = new AgentboxRunner();

@@ -125,3 +125,18 @@ test("OpenSandbox adapter does not import Agentbox SDK types", () => {
   assert.match(shared, /export const SHARED_ASSETS_MOUNT_PATH/);
   assert.match(shared, /export function parseToolManifest/);
 });
+
+test("main barrel keeps Agentbox on a lazy subpath so OpenSandbox does not load agentbox-sdk", () => {
+  const barrel = readFileSync(join(root, "packages/runtime-sandbox/src/index.ts"), "utf8");
+  const runtime = readFileSync(join(root, "apps/scheduler/src/runtime.ts"), "utf8");
+  const pkg = JSON.parse(readFileSync(join(root, "packages/runtime-sandbox/package.json"), "utf8")) as {
+    exports?: Record<string, { types?: string; default?: string }>;
+  };
+  assert.doesNotMatch(barrel, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(barrel, /AgentboxRunner|createAgentboxRuntimeHost|wrapAgentboxProcess/);
+  assert.equal(pkg.exports?.["./agentbox"]?.types, "./src/agentbox.ts");
+  assert.equal(pkg.exports?.["./agentbox"]?.default, "./dist/agentbox.js");
+  assert.doesNotMatch(runtime, /import\s*\{[^}]*AgentboxRunner/);
+  assert.match(runtime, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
+  assert.match(runtime, /config\.runtime\.provider === ["']opensandbox["']/);
+});
