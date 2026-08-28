@@ -28,6 +28,7 @@ $EnvExample = Join-Path $DeployDir ".env.example"
 $MasterKeyFile = Join-Path $DeployDir "master.key"
 $ComposeFile = Join-Path $DeployDir "docker-compose.prod.yml"
 $RealComposeFile = Join-Path $DeployDir "docker-compose.real.yml"
+$OpenSandboxComposeFile = Join-Path $DeployDir "docker-compose.opensandbox.prod.yml"
 $DefaultImageRegistry = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
 $AcrHost = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"
 $DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
@@ -265,6 +266,10 @@ Initialize-Env
 $ComposeArgs = @("compose", "-p", "deepsonar", "--env-file", $EnvFile, "-f", $ComposeFile)
 if ($Mode -eq "real") {
   $ComposeArgs += @("-f", $RealComposeFile)
+}
+# Opt-in only. Default real mode stays Agentbox until #162 Phase 4.
+if ($env:SANDBOX_PROVIDER -eq "opensandbox") {
+  $ComposeArgs += @("-f", $OpenSandboxComposeFile)
 }
 
 Push-Location $RepoRoot

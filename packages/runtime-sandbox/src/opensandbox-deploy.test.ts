@@ -28,6 +28,21 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
 });
 
+test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () => {
+  const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+  const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
+  const deployPs1 = readFileSync(join(root, "deploy/deploy.ps1"), "utf8");
+  assert.match(overlay, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(overlay, /SANDBOX_PROVIDER: opensandbox/);
+  assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
+  assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
+  assert.doesNotMatch(overlay, /:latest|network_mode:\s*host/);
+  assert.match(deploySh, /\[ "\$\{SANDBOX_PROVIDER:-\}" = "opensandbox" \]/);
+  assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
+  assert.match(deployPs1, /\$env:SANDBOX_PROVIDER -eq "opensandbox"/);
+  assert.match(deployPs1, /docker-compose.opensandbox.prod.yml/);
+});
+
 test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema", () => {
   const toml = readFileSync(join(root, "deploy/opensandbox/config.k8s.toml"), "utf8");
   const template = readFileSync(join(root, "deploy/opensandbox/batchsandbox-template.yaml"), "utf8");

@@ -110,12 +110,21 @@ test("real executor round-trips only controlled rate-limit details after string 
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
 });
 
+test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.run", () => {
+  const source = readFileSync(new URL("./opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /dispatchOnce\(\)/);
+  assert.match(source, /cancelJob\(jobId/);
+  assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
+});
+
 test("OpenSandbox Platform API PoC injects capability env at provision, not host.run", () => {
   const source = readFileSync(new URL("./opensandbox-platform-api.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
   assert.match(source, /import\("\.\/runtime\.js"\)/);
-  assert.match(source, /preparePlatformCapability\(jobId, snapshot\)/);
+  assert.match(source, /preparePlatformCapability\(jobId, snapshot/);
   assert.match(source, /\.\.\.capability\.env/);
   assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
   assert.doesNotMatch(source, /mintJobCapabilityToken/);

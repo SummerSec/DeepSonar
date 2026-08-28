@@ -11,6 +11,7 @@ ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
 MASTER_KEY_FILE="$SCRIPT_DIR/master.key"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.prod.yml"
 REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
+OPENSANDBOX_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.opensandbox.prod.yml"
 
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
@@ -161,6 +162,10 @@ SILO_IMAGE=${SILO_IMAGE:-$DEFAULT_SILO_IMAGE}
 set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
 if [ "$MODE" = "real" ]; then
   set -- "$@" -f "$REAL_COMPOSE_FILE"
+fi
+# Opt-in only. Default real mode stays Agentbox until #162 Phase 4.
+if [ "${SANDBOX_PROVIDER:-}" = "opensandbox" ]; then
+  set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
 fi
 
 cd "$REPO_ROOT"
@@ -313,6 +318,9 @@ case "$ACTION" in
       echo "[deploy] 当前为 fake 模式（仅状态机）；真实沙箱请使用：./deploy/deploy.sh up real"
     else
       echo "[deploy] 当前为 real 模式（真实沙箱）；需挂载容器 runtime socket（见 docker-compose.real.yml）"
+      if [ "${SANDBOX_PROVIDER:-}" = "opensandbox" ]; then
+        echo "[deploy] SANDBOX_PROVIDER=opensandbox overlay enabled (docker-compose.opensandbox.prod.yml)"
+      fi
     fi
     echo "[deploy] Scheduler is live; runtime image readiness is reported by /api/health (Dispatcher waits until ready)"
     ;;

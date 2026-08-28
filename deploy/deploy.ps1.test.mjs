@@ -55,6 +55,8 @@ test("deploy.ps1 pull/up matches deploy.sh app-image and official-image semantic
   assert.match(text, /up -d --pull missing/);
   assert.match(text, /up -d --build/);
   assert.match(text, /if \(\$NoBuild\) \{ \$Source = "pull" \}/);
+  assert.match(text, /\$env:SANDBOX_PROVIDER -eq "opensandbox"/);
+  assert.match(text, /docker-compose.opensandbox.prod.yml/);
 });
 
 test("pwsh parser accepts deploy.ps1 when a PowerShell host is installed", (t) => {
