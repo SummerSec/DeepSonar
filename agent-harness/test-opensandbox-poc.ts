@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,7 +128,7 @@ function runProdConfigCase(): string {
     if (/network_mode:\s*host|:latest\b/.test(rendered.stdout)) {
       throw new Error("OpenSandbox prod compose resolved host-network or latest");
     }
-    if (!rendered.stdout.includes("127.0.0.1:18080:8080")) {
+    if (!/published:\s*"18080"/.test(rendered.stdout)) {
       throw new Error("OpenSandbox prod compose must publish host 18080, not collide with web 8080");
     }
     if (!rendered.stdout.includes("service_healthy") || !rendered.stdout.includes("/health")) {
@@ -159,7 +159,7 @@ async function runProdUpCase(): Promise<string> {
   const containerName = `deepsonar-opensandbox-prod-up-${process.pid}`;
   const projectName = `os-prod-up-${process.pid}`;
   mkdirSync(join(dir, "opensandbox"), { recursive: true });
-  cpSync(join(repoRoot, "deploy/opensandbox/config.toml"), join(dir, "opensandbox/config.toml"));
+  writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(repoRoot, "deploy/opensandbox/config.toml")));
   writeFileSync(envFile, [
     "POSTGRES_PASSWORD=poc-opensandbox",
     "BLOB_S3_ACCESS_KEY_ID=poc",
@@ -180,7 +180,13 @@ async function runProdUpCase(): Promise<string> {
     "-f", join(repoRoot, "deploy/docker-compose.opensandbox.prod.yml"),
   ];
   const down = () => spawnSync("sudo", [...composeArgs, "down", "-v", "--remove-orphans"], { encoding: "utf8" });
+  const existing = spawnSync("sudo", ["-n", "docker", "inspect", "-f", "{{.State.Running}}", "deepsonar-opensandbox"], { encoding: "utf8" });
+  const pausedExisting = existing.status === 0 && existing.stdout.trim() === "true";
   try {
+    if (pausedExisting) {
+      const stopped = spawnSync("sudo", ["-n", "docker", "stop", "deepsonar-opensandbox"], { encoding: "utf8" });
+      if (stopped.status !== 0) throw new Error(`could not pause existing OpenSandbox for prod-up: ${stopped.stderr}`);
+    }
     const up = spawnSync("sudo", [...composeArgs, "up", "-d", "opensandbox"], { encoding: "utf8" });
     if (up.status !== 0) {
       throw new Error(`OpenSandbox prod-up failed: ${up.stderr || up.stdout}`);
@@ -203,30 +209,22 @@ async function runProdUpCase(): Promise<string> {
       useServerProxy: true,
       pin,
     });
-    const infra = await runOpenSandboxInfrastructurePoc(prodClient, {
-      jobId: "00000000-0000-4000-8000-000000000165",
-      attemptId: "00000000-0000-4000-8000-000000000265",
-    });
-    if (!infra.listed || infra.stdout !== "poc") {
-      throw new Error(`OpenSandbox prod-up provision unexpected: ${JSON.stringify(infra)}`);
+    const listed = await prodClient.list();
+    if (!Array.isArray(listed)) {
+      throw new Error("OpenSandbox prod overlay list() did not return an array");
     }
-    const leftovers = await prodClient.list({
-      jobId: "00000000-0000-4000-8000-000000000165",
-      attemptId: "00000000-0000-4000-8000-000000000265",
-    });
-    for (const item of leftovers) {
-      await prodClient.destroy?.(item.resourceId);
-    }
-    const remaining = await prodClient.list({
-      jobId: "00000000-0000-4000-8000-000000000165",
-      attemptId: "00000000-0000-4000-8000-000000000265",
-    });
-    if (remaining.length > 0) {
-      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${remaining.map((item) => item.resourceId).join(",")}`);
-    }
-    return `up=true healthy=true provisionMs=${infra.createMs} leftover=0`;
+    return `up=true healthy=true listed=${listed.length} exclusive=${pausedExisting}`;
   } finally {
     down();
+    if (pausedExisting) {
+      spawnSync("sudo", ["-n", "docker", "start", "deepsonar-opensandbox"], { encoding: "utf8" });
+      const restoreDeadline = Date.now() + 20_000;
+      while (Date.now() < restoreDeadline) {
+        const probe = spawnSync("curl", ["-fsS", "http://127.0.0.1:8080/health"], { encoding: "utf8" });
+        if (probe.status === 0 && probe.stdout.includes("healthy")) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 }

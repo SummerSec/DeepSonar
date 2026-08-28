@@ -10,6 +10,7 @@ import {
   freezeAgentCliRuntime,
   shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
+import { buildAttemptState } from "./domains/job-attempt/model.js";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox reconcile PoC (set OPEN_SANDBOX_POC=1)");
@@ -105,12 +106,16 @@ try {
       (${runningJobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshotJson)}, 3600)`;
   await sql`UPDATE jobs SET sandbox_id = ${pendingSandbox} WHERE id = ${pendingJobId}`;
   await sql`UPDATE jobs SET sandbox_id = ${runningSandbox} WHERE id = ${runningJobId}`;
+  const attemptState = (id: string, jobId: string, phase: "preparing" | "provision.effect_pending" | "agent.ready", sandboxId: string | null) => {
+    const state = buildAttemptState({ attemptId: id, jobId, attemptNo: 1, phase });
+    return JSON.parse(JSON.stringify({ ...state, sandbox_id: sandboxId }));
+  };
   await sql`
-    INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, started_at, sandbox_id)
+    INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, started_at, sandbox_id, state_json)
     VALUES
-      (${requeueAttemptId}, ${requeueJobId}, 1, 'active', 'preparing', now(), NULL),
-      (${pendingAttemptId}, ${pendingJobId}, 1, 'active', 'provision.effect_pending', now(), ${pendingSandbox}),
-      (${runningAttemptId}, ${runningJobId}, 1, 'active', 'agent.ready', now(), ${runningSandbox})`;
+      (${requeueAttemptId}, ${requeueJobId}, 1, 'active', 'preparing', now(), NULL, ${sql.json(attemptState(requeueAttemptId, requeueJobId, "preparing", null))}),
+      (${pendingAttemptId}, ${pendingJobId}, 1, 'active', 'provision.effect_pending', now(), ${pendingSandbox}, ${sql.json(attemptState(pendingAttemptId, pendingJobId, "provision.effect_pending", pendingSandbox))}),
+      (${runningAttemptId}, ${runningJobId}, 1, 'active', 'agent.ready', now(), ${runningSandbox}, ${sql.json(attemptState(runningAttemptId, runningJobId, "agent.ready", runningSandbox))})`;
   await sql`
     INSERT INTO job_attempt_effects (
       attempt_id, job_id, effect_id, effect_kind, status, replay_policy, resource_identity_json
