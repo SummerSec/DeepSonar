@@ -2,7 +2,8 @@
 # Namespace isolates infrastructure only; it does not replace project/Job auth.
 # Apply namespace.yaml, runtimeclass-kata.yaml, and resourcequota.yaml before
 # pointing the server at this overlay. Live Kata verification is still required.
-# gVisor + egress sidecar is not inferred from upstream docs and stays unverified.
+# gVisor + egress sidecar is live-incompatible (iptables nat / nft unsupported).
+# Product path is Kata + BatchSandbox; agent-sandbox CRD is rejected.
 
 [server]
 host = "0.0.0.0"
