@@ -136,6 +136,10 @@ test("OpenSandbox adapter does not import Agentbox SDK types", () => {
   assert.doesNotMatch(gateway, /from ["']agentbox-sdk["']/);
   assert.doesNotMatch(docker, /from ["']\.\/agentbox\.js["']/);
   assert.doesNotMatch(docker, /from ["']agentbox-sdk["']/);
+  assert.match(docker, /export async function readDockerWorkspaceFile/);
+  const assetsIntegration = readFileSync(join(root, "packages/runtime-sandbox/src/shared-assets-volume.integration.test.ts"), "utf8");
+  assert.doesNotMatch(assetsIntegration, /from ["']\.\/agentbox\.js["']/);
+  assert.match(assetsIntegration, /from ["']\.\/runtime-docker\.js["']/);
   assert.match(adapter, /from ["']\.\/runtime-shared\.js["']/);
   assert.match(agent, /export async function runRealAgent/);
   assert.match(shared, /export const SHARED_ASSETS_MOUNT_PATH/);

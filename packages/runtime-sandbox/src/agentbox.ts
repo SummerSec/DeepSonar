@@ -13,7 +13,6 @@ import {
   HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
-  assertReadableWorkspacePath,
   assertSharedAssetsVolumeOwnership,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
@@ -22,6 +21,7 @@ import {
   docker,
   forceRemoveContainer,
   listDeepSonarContainers,
+  readDockerWorkspaceFile,
   removeContainerWithRetry,
 } from "./runtime-docker.js";
 import {
@@ -55,6 +55,7 @@ export {
   isDeepsonarRestrictedNetwork,
   listDeepSonarContainers,
   parseDeepSonarContainerRows,
+  readDockerWorkspaceFile,
   removeContainerWithRetry,
 } from "./runtime-docker.js";
 export type { DeepSonarContainer } from "./runtime-docker.js";
@@ -352,7 +353,12 @@ export function createAgentboxRuntimeHost(sandbox: Sandbox): RuntimeHost {
     async uploadFile(content, destPath) {
       await sandbox.uploadFile(typeof content === "string" ? content : content.toString("utf8"), destPath);
     },
-    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+    readWorkspaceFile: async (filePath, maxBytes) => {
+      const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
+      const containerId = inspected?.Id;
+      if (!containerId) throw new Error("shared_asset_container_unavailable");
+      return readDockerWorkspaceFile(containerId, filePath, maxBytes);
+    },
     writeHumanInboxFile: (filePath, bytes) => writeHumanInboxWorkspaceFile(sandbox, filePath, bytes),
   };
 }
@@ -664,49 +670,6 @@ export type {
   TerminalProcessAttempt,
   TerminalProcessOutcome,
 } from "./runtime-agent.js";
-
-export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: string, maxBytes: number): Promise<Buffer> {
-  assertReadableWorkspacePath(filePath);
-  const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
-  const containerId = inspected?.Id;
-  if (!containerId) throw new Error("shared_asset_container_unavailable");
-  const quoted = shellQuote(filePath);
-  const command = [
-    "set -eu",
-    `test ! -L ${quoted} || exit 44`,
-    `exec 3<${quoted}`,
-    "resolved=$(readlink -f /proc/self/fd/3)",
-    'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
-    'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
-    "test -f /proc/self/fd/3 || exit 47",
-    "size=$(stat -Lc %s /proc/self/fd/3)",
-    `test "$size" -le ${maxBytes} || exit 48`,
-    "cat <&3",
-  ].join("; ");
-  return await new Promise<Buffer>((resolve, reject) => {
-    execFile(
-      "docker",
-      ["exec", containerId, "/bin/sh", "-c", command],
-      { timeout: 15_000, encoding: "buffer", maxBuffer: maxBytes + 1 },
-      (error, stdout) => {
-        if (error) {
-          const code = (error as unknown as { code?: string | number }).code;
-          if (code === 48 || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return reject(new Error("asset_file_too_large"));
-          if (code === 45 || code === 46) return reject(new Error("shared_asset_source_path_forbidden"));
-          if (code === 44 || code === 47) return reject(new Error("shared_asset_source_not_regular_file"));
-          return reject(new Error("shared_asset_source_changed"));
-        }
-        const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
-        if (bytes.byteLength > maxBytes) return reject(new Error("asset_file_too_large"));
-        resolve(bytes);
-      },
-    );
-  });
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
 
 async function execFileWithInput(file: string, args: string[], bytes: Buffer): Promise<void> {
   await new Promise<void>((resolve, reject) => {

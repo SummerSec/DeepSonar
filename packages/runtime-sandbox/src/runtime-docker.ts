@@ -5,6 +5,7 @@
 import { execFile } from "node:child_process";
 import http from "node:http";
 import { promisify } from "node:util";
+import { assertReadableWorkspacePath } from "./runtime-shared.js";
 
 const execFileP = promisify(execFile);
 const CANONICAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -213,4 +214,45 @@ export async function listDeepSonarContainers(): Promise<DeepSonarContainer[]> {
 /** 强删容器（孤儿回收） */
 export async function forceRemoveContainer(containerId: string): Promise<void> {
   await removeContainerWithRetry(containerId);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/** Descriptor-relative workspace read used by shared-asset publish. */
+export async function readDockerWorkspaceFile(containerId: string, filePath: string, maxBytes: number): Promise<Buffer> {
+  assertReadableWorkspacePath(filePath);
+  const quoted = shellQuote(filePath);
+  const command = [
+    "set -eu",
+    `test ! -L ${quoted} || exit 44`,
+    `exec 3<${quoted}`,
+    "resolved=$(readlink -f /proc/self/fd/3)",
+    'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
+    'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
+    "test -f /proc/self/fd/3 || exit 47",
+    "size=$(stat -Lc %s /proc/self/fd/3)",
+    `test "$size" -le ${maxBytes} || exit 48`,
+    "cat <&3",
+  ].join("; ");
+  return await new Promise<Buffer>((resolve, reject) => {
+    execFile(
+      "docker",
+      ["exec", containerId, "/bin/sh", "-c", command],
+      { timeout: 15_000, encoding: "buffer", maxBuffer: maxBytes + 1 },
+      (error, stdout) => {
+        if (error) {
+          const code = (error as unknown as { code?: string | number }).code;
+          if (code === 48 || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return reject(new Error("asset_file_too_large"));
+          if (code === 45 || code === 46) return reject(new Error("shared_asset_source_path_forbidden"));
+          if (code === 44 || code === 47) return reject(new Error("shared_asset_source_not_regular_file"));
+          return reject(new Error("shared_asset_source_changed"));
+        }
+        const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
+        if (bytes.byteLength > maxBytes) return reject(new Error("asset_file_too_large"));
+        resolve(bytes);
+      },
+    );
+  });
 }

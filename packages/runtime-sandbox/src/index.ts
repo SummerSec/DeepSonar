@@ -182,6 +182,7 @@ export {
   forceRemoveContainer,
   listDeepSonarContainers,
   parseDeepSonarContainerRows,
+  readDockerWorkspaceFile,
   removeContainerWithRetry,
   isDeepsonarGatewayNetwork,
   isDeepsonarRestrictedNetwork,
