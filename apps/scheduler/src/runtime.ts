@@ -41,6 +41,6 @@ export const runner: SandboxRunner =
   config.runtime.agentMode === "real" ? await createRealRunner() : new NoopRunner();
 
 export const sharedAssetsVolumeManager: SharedAssetsVolumeManager =
-  config.runtime.agentMode === "real"
+  config.runtime.agentMode === "real" && !config.runtime.openSandbox.kubernetes
     ? new DockerSharedAssetsVolumeManager(config.sharedAssets.helperImage)
     : new NoopSharedAssetsVolumeManager();

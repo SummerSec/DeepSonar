@@ -206,6 +206,7 @@ test("main barrel keeps Agentbox on a lazy subpath so OpenSandbox does not load 
   assert.match(runtime, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
   assert.match(runtime, /config\.runtime\.provider === ["']opensandbox["']/);
   assert.match(runtime, /kubernetesResources: config\.runtime\.openSandbox\.kubernetes/);
+  assert.match(runtime, /!config\.runtime\.openSandbox\.kubernetes/);
   const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
   assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
 });
