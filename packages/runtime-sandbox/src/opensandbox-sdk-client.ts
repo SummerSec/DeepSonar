@@ -1,7 +1,9 @@
 /**
  * Live @alibaba-group/opensandbox binding. Provider types stay in this module.
  */
-import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import {
   ConnectionConfig,
@@ -11,15 +13,22 @@ import {
 } from "@alibaba-group/opensandbox";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
-import { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META } from "./opensandbox-version.js";
+import { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, OPENSANDBOX_SDK_VERSION, assertOpenSandboxSdkVersion } from "./opensandbox-version.js";
 import { openOpenSandboxPty } from "./opensandbox-pty.js";
-import { assertOpenSandboxSdkVersion, OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
 import { shellQuote } from "./runtime-host.js";
 
-const require = createRequire(import.meta.url);
-
 export function installedOpenSandboxSdkVersion(): string {
-  return String((require("@alibaba-group/opensandbox/package.json") as { version: string }).version);
+  let dir = dirname(fileURLToPath(import.meta.resolve("@alibaba-group/opensandbox")));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: string; version?: string };
+      if (pkg.name === "@alibaba-group/opensandbox" && pkg.version) return pkg.version;
+    } catch {
+      /* walk up from dist/ */
+    }
+    dir = dirname(dir);
+  }
+  throw new Error("OPENSANDBOX_SDK_VERSION_UNREADABLE");
 }
 
 export function assertOpenSandboxSdkPin(sdk: string): string {
