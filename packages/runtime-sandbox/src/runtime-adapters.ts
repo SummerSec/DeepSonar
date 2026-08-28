@@ -655,12 +655,12 @@ function codexConfigArg(key: string, value: string): string {
 
 function sandboxCodex(host: RuntimeHost, context: AdapterStartContext, sessionId?: string): Promise<RuntimeProcess> {
   let command = sessionId
-    ? `codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
-    : "codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check";
+    ? `stdbuf -oL -eL codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
+    : "stdbuf -oL -eL codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check";
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
   command += sessionId ? ` -- ${promptArg(context.input)}` : " -";
-  return host.runAsync(command, { cwd: context.cwd, env: context.env, pty: true });
+  return host.runAsync(command, { cwd: context.cwd, env: context.env });
 }
 
 const codex = Object.freeze<RuntimeAdapter>({

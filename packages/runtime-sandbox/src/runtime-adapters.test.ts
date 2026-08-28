@@ -557,9 +557,10 @@ test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复�
   assert.match(fake.commands[0], /gpt-5/);
   assert.match(fake.commands[1], /exec resume/);
   assert.match(fake.commands[0], /--skip-git-repo-check/);
+  assert.match(fake.commands[0], /stdbuf -oL -eL/);
   assert.match(fake.commands[1], /codex-s1/);
-  assert.equal(fake.ptys[0], true);
-  assert.equal(fake.ptys[1], true);
+  assert.equal(fake.ptys[0], undefined);
+  assert.equal(fake.ptys[1], undefined);
   assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
   assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
 });
