@@ -52,6 +52,7 @@ import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js"
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
+import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -502,6 +503,15 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       } else {
         console.error(`[dispatcher] host disk status unknown at ${disk.path}: new claims paused`);
       }
+      return [];
+    }
+  }
+  if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+    const server = await refreshOpenSandboxServerStatus();
+    if (!openSandboxAllowsDispatch(server)) {
+      console.error(
+        `[dispatcher] OPENSANDBOX_SERVER ${server.level} at ${server.domain}: new claims paused`,
+      );
       return [];
     }
   }

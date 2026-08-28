@@ -158,6 +158,44 @@ test("readiness exposes HOST_DISK_PRESSURE and blocks only at error threshold", 
   assert.ok(error.checks.some((check) =>
     check.code === "HOST_DISK_PRESSURE" && check.severity === "error"));
 });
+test("OpenSandbox server probe fails readiness when unreachable or unconfigured", () => {
+  const ready = evaluateReadiness(baseInput({
+    openSandboxServer: {
+      level: "ok",
+      domain: "127.0.0.1:8080",
+      checkedAt: "2026-08-04T00:00:00.000Z",
+      error: null,
+    },
+  }));
+  assert.equal(ready.ready, true);
+  assert.ok(ready.checks.some((check) => check.code === "OPENSANDBOX_SERVER_READY"));
+
+  const unconfigured = evaluateReadiness(baseInput({
+    openSandboxServer: {
+      level: "unconfigured",
+      domain: "127.0.0.1:8080",
+      checkedAt: "2026-08-04T00:00:00.000Z",
+      error: "OPEN_SANDBOX_API_KEY missing",
+    },
+  }));
+  assert.equal(unconfigured.ready, false);
+  assert.ok(unconfigured.checks.some((check) =>
+    check.code === "OPENSANDBOX_SERVER_UNCONFIGURED" && check.severity === "error"));
+
+  const unavailable = evaluateReadiness(baseInput({
+    openSandboxServer: {
+      level: "error",
+      domain: "127.0.0.1:8080",
+      checkedAt: "2026-08-04T00:00:00.000Z",
+      error: "opensandbox health timed out",
+    },
+  }));
+  assert.equal(unavailable.ready, false);
+  assert.ok(unavailable.checks.some((check) =>
+    check.code === "OPENSANDBOX_SERVER_UNAVAILABLE" && check.message.includes("opensandbox health timed out")));
+  assert.equal(JSON.stringify(unavailable).includes("OPEN_SANDBOX_API_KEY="), false);
+});
+
 test("readiness follows strategy and ignores legacy project image column", () => {
   const inherited = evaluateReadiness(baseInput({
     projectImagePolicy: { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-chrome-audit" } },

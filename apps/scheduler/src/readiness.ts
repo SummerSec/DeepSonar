@@ -31,6 +31,7 @@ import {
   type ProjectImagePolicy,
 } from "./domains/role-runtime-snapshot/application.js";
 import { refreshHostDiskPressure, type HostDiskPressureStatus } from "./host-disk.js";
+import { refreshOpenSandboxServerStatus, type OpenSandboxServerStatus } from "./opensandbox-health.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -125,6 +126,8 @@ export interface ReadinessEvaluationInput {
   runtimeImages?: ReadinessRuntimeImageRow[];
   audits?: ReadinessAuditRow[];
   hostDisk?: HostDiskPressureStatus;
+  /** OpenSandbox server probe. Omitted = skip (unit tests / non-opensandbox). */
+  openSandboxServer?: OpenSandboxServerStatus;
   /** digest → local inspect result. Omitted = skip host-layer check (unit tests). */
   localImagePresence?: Record<string, boolean>;
 }
@@ -482,6 +485,25 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     ));
   }
 
+  if (input.openSandboxServer?.level === "ok") {
+    checks.push(pass(
+      "OPENSANDBOX_SERVER_READY",
+      `OpenSandbox server ${input.openSandboxServer.domain} 可访问。`,
+    ));
+  } else if (input.openSandboxServer?.level === "unconfigured") {
+    checks.push(fail(
+      "OPENSANDBOX_SERVER_UNCONFIGURED",
+      "SANDBOX_PROVIDER=opensandbox 但未配置 OPEN_SANDBOX_API_KEY；不能探测或调度沙箱。",
+      null,
+    ));
+  } else if (input.openSandboxServer?.level === "error") {
+    checks.push(fail(
+      "OPENSANDBOX_SERVER_UNAVAILABLE",
+      `OpenSandbox server ${input.openSandboxServer.domain} 不可用${input.openSandboxServer.error ? `：${input.openSandboxServer.error}` : ""}。`,
+      null,
+    ));
+  }
+
   if (input.scope.projectId && input.projectStatus === "archived") {
     checks.push(fail(
       "PROJECT_ARCHIVED",
@@ -797,6 +819,9 @@ export async function loadReadiness(
   const hostDisk = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker"
     ? await refreshHostDiskPressure()
     : undefined;
+  const openSandboxServer = config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox"
+    ? await refreshOpenSandboxServerStatus()
+    : undefined;
   const projectId = options.projectId ?? null;
   const scope: ReadinessScopeInput = { kind: projectId ? "project" : "global", projectId };
   const projectRow = projectId
@@ -928,6 +953,7 @@ export async function loadReadiness(
     runtimeImages: images as unknown as ReadinessRuntimeImageRow[],
     audits: audits as unknown as ReadinessAuditRow[],
     hostDisk,
+    openSandboxServer,
     localImagePresence: await inspectLocalRuntimeImagePresence(images as unknown as ReadinessRuntimeImageRow[]),
   });
 }
