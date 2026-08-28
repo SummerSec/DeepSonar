@@ -3,7 +3,13 @@
  * Provider SDK types stay in this module; callers only see RuntimeHost / SandboxRunner.
  */
 import path from "node:path";
-import { HUMAN_INBOX_WRITER_SCRIPT, RuntimeImageContractError, SHARED_ASSETS_MOUNT_PATH, parseToolManifest } from "./agentbox.js";
+import {
+  DEEPSONAR_GATEWAY_PROXY_HOST,
+  HUMAN_INBOX_WRITER_SCRIPT,
+  RuntimeImageContractError,
+  SHARED_ASSETS_MOUNT_PATH,
+  parseToolManifest,
+} from "./agentbox.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 import { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
@@ -122,16 +128,14 @@ export function mapOpenSandboxNetworkPolicy(
   if (network === "none") return { defaultAction: "deny", egress: [] };
   if (network === "egress") return { defaultAction: "allow", egress: [] };
   if (!gatewayUpstreamUrl) throw new Error("real sandbox missing Gateway upstream URL");
-  let host: string;
   try {
-    host = new URL(gatewayUpstreamUrl).hostname;
+    if (!new URL(gatewayUpstreamUrl).hostname) throw new Error("invalid Gateway upstream URL");
   } catch {
     throw new Error("invalid Gateway upstream URL");
   }
-  if (!host) throw new Error("invalid Gateway upstream URL");
   return {
     defaultAction: "deny",
-    egress: [{ action: "allow", target: host }],
+    egress: [{ action: "allow", target: DEEPSONAR_GATEWAY_PROXY_HOST }],
   };
 }
 
@@ -274,12 +278,22 @@ export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): Runti
   };
 }
 
+export type OpenSandboxGatewayBinder = (input: {
+  sandboxId: string;
+  upstreamUrl: string;
+  image: string;
+  signal?: AbortSignal;
+}) => Promise<{ hostname: string; ip: string }>;
+
 export class OpenSandboxRunner implements SandboxRunner {
   private readonly sessions = new Map<string, OpenSandboxSession>();
   private readonly provisioning = new Map<string, Promise<OpenSandboxSession>>();
   private readonly terminals = new Map<string, Set<SandboxTerminalSession>>();
 
-  constructor(private readonly client: OpenSandboxClient) {}
+  constructor(
+    private readonly client: OpenSandboxClient,
+    private readonly gateway?: { bind: OpenSandboxGatewayBinder },
+  ) {}
 
   async provision(input: ProvisionInput): Promise<RunHandle> {
     if (input.signal?.aborted) throw new Error("provision 已取消");
@@ -308,6 +322,19 @@ export class OpenSandboxRunner implements SandboxRunner {
         if (hashResult.exitCode !== 0 || hashResult.stdout.trim() !== input.expectedToolsManifestSha256.replace(/^sha256:/, "")) {
           throw new RuntimeImageContractError("tool manifest sha256 mismatch");
         }
+      }
+      if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl) {
+        const bind = await this.gateway.bind({
+          sandboxId: session.id,
+          upstreamUrl: input.gatewayUpstreamUrl,
+          image: input.image,
+          signal: input.signal,
+        });
+        const hosts = await host.run(
+          `grep -F ${shellQuote(bind.hostname)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(bind.ip)} ${shellQuote(bind.hostname)} >> /etc/hosts`,
+          { timeoutMs: 5_000 },
+        );
+        if (hosts.exitCode !== 0) throw new Error("failed to bind deepsonar-gateway-proxy in sandbox hosts");
       }
       return { sandboxId: session.id };
     } catch (error) {

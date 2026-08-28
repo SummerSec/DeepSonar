@@ -4,6 +4,7 @@ import {
   NoopRunner,
   NoopSharedAssetsVolumeManager,
   OpenSandboxRunner,
+  bindGatewayProxyToOpenSandboxNetwork,
   createSdkOpenSandboxClient,
   readOpenSandboxPin,
   type SandboxRunner,
@@ -25,7 +26,7 @@ function createRealRunner(): SandboxRunner {
       protocol: config.runtime.openSandbox.protocol,
       useServerProxy: config.runtime.openSandbox.useServerProxy,
       pin,
-    }));
+    }), { bind: bindGatewayProxyToOpenSandboxNetwork });
   }
   return new AgentboxRunner();
 }

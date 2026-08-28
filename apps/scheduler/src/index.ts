@@ -111,7 +111,8 @@ async function main() {
     console.log("[runtime-images] startup image set ready; dispatcher enabled");
   }, {
     afterPrepare: async (refs) => {
-      if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return;
+      if (config.runtime.agentMode === "fake") return;
+      if (config.runtime.provider !== "local-docker" && config.runtime.provider !== "opensandbox") return;
       const base = refs.find((item) => item.image_key === "deepsonar-base") ?? refs[0];
       if (!base) return;
       await preheatManagedGateway({

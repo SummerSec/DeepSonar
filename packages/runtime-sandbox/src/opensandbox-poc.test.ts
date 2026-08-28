@@ -215,7 +215,7 @@ test("OpenSandbox restricted PoC fail-closes non-gateway egress", async () => {
   assert.deepEqual(result, { isolated: true, leftovers: 0 });
   assert.deepEqual(created[0]?.networkPolicy, {
     defaultAction: "deny",
-    egress: [{ action: "allow", target: "gateway.invalid" }],
+    egress: [{ action: "allow", target: "deepsonar-gateway-proxy" }],
   });
 });
 

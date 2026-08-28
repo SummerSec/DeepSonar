@@ -223,6 +223,7 @@ const terminalSessions = new Map<string, Set<SandboxTerminalSession>>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
 const GATEWAY_PROXY = "deepsonar-gateway-proxy";
+export const DEEPSONAR_GATEWAY_PROXY_HOST = GATEWAY_PROXY;
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
 export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
@@ -725,6 +726,50 @@ export async function preheatManagedGateway(input: {
   createTimeoutMs?: number;
 }): Promise<void> {
   await ensureGatewayProxy(input.upstreamUrl, input.image, { createTimeoutMs: input.createTimeoutMs });
+}
+
+/** Attach the path-filtering sidecar to an OpenSandbox egress network and return its IPv4. */
+export async function bindGatewayProxyToOpenSandboxNetwork(input: {
+  sandboxId: string;
+  upstreamUrl: string;
+  image: string;
+  signal?: AbortSignal;
+}): Promise<{ hostname: string; ip: string }> {
+  await ensureGatewayProxy(input.upstreamUrl, input.image, { signal: input.signal });
+  const sandboxName = `sandbox-${input.sandboxId}`;
+  const egressName = `sandbox-egress-${input.sandboxId}`;
+  let peer = egressName;
+  try {
+    await docker("inspect", "--format", "{{.Id}}", egressName);
+  } catch {
+    const mode = (await docker("inspect", "--format", "{{.HostConfig.NetworkMode}}", sandboxName)).trim();
+    peer = mode.startsWith("container:") ? mode.slice("container:".length) : sandboxName;
+  }
+  const peerNets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", peer)) as Record<
+    string,
+    { IPAddress?: string }
+  >;
+  const networkName = Object.keys(peerNets).find((name) => peerNets[name]?.IPAddress?.trim());
+  if (!networkName) throw new Error("OpenSandbox sandbox has no IPv4 network for Gateway proxy");
+  const proxyId = (await docker("inspect", "--format", "{{.Id}}", GATEWAY_PROXY)).trim();
+  const proxyNets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", proxyId)) as Record<
+    string,
+    { IPAddress?: string }
+  >;
+  if (!(networkName in proxyNets)) {
+    try {
+      await docker("network", "connect", "--alias", GATEWAY_PROXY, networkName, proxyId);
+    } catch {
+      await docker("network", "connect", networkName, proxyId);
+    }
+  }
+  const refreshed = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", proxyId)) as Record<
+    string,
+    { IPAddress?: string }
+  >;
+  const ip = refreshed[networkName]?.IPAddress?.trim();
+  if (!ip) throw new Error(`${GATEWAY_PROXY} missing IPv4 on ${networkName}`);
+  return { hostname: GATEWAY_PROXY, ip };
 }
 
 export function resetManagedGatewayStateForTests(): void {

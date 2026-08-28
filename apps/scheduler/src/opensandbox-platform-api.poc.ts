@@ -6,7 +6,9 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import {
+  bindGatewayProxyToOpenSandboxNetwork,
   createSdkOpenSandboxClient,
+  DEEPSONAR_GATEWAY_PROXY_HOST,
   OpenSandboxRunner,
   readOpenSandboxPin,
   shouldRunOpenSandboxPoc,
@@ -96,7 +98,7 @@ try {
     useServerProxy: true,
     pin,
   });
-  const runner = new OpenSandboxRunner(client);
+  const runner = new OpenSandboxRunner(client, { bind: bindGatewayProxyToOpenSandboxNetwork });
   const limits = { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true };
   const invokePy = `
 import json, os, socket, urllib.error, urllib.request, uuid
@@ -190,15 +192,12 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     throw new Error(`network=none leaked TEST-NET or failed: ${summarize("none", isolated)}`);
   }
 
-  const gw = /GW:(\d+\.\d+\.\d+\.\d+)/.exec(isolated.stdout)?.[1]
-    || process.env.OPEN_SANDBOX_POC_CONTROL_HOST?.trim()
-    || "172.17.0.1";
   const allowed = await runInvoke("restricted", {
     DEEPSONAR_POC_MODE: "submit",
-    DEEPSONAR_API_BASE_URL: `http://${gw}:3100/control/v1/jobs/${jobId}`,
+    DEEPSONAR_API_BASE_URL: `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1/jobs/${jobId}`,
     DEEPSONAR_API_TOKEN: grant.token,
     DEEPSONAR_JOB_ID: jobId,
-  }, `http://${gw}:3100/gateway`);
+  }, "http://host.docker.internal:3100/gateway");
   const submitted = operations.every((name) => allowed.exitCode === 0 && allowed.stdout.includes(`CALL:${name}=200`));
   const rejectedUnauth = allowed.exitCode === 0 && /UNAUTH:401/.test(allowed.stdout);
   const restrictedIsolated = /LEAK:0/.test(allowed.stdout);

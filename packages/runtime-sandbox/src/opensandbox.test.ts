@@ -84,7 +84,7 @@ test("OpenSandbox maps none/restricted/egress without host-network", () => {
   assert.deepEqual(mapOpenSandboxNetworkPolicy("none"), { defaultAction: "deny", egress: [] });
   assert.deepEqual(mapOpenSandboxNetworkPolicy("egress"), { defaultAction: "allow", egress: [] });
   assert.deepEqual(
-    mapOpenSandboxNetworkPolicy("restricted", "http://deepsonar-gateway-proxy:3100/gateway"),
+    mapOpenSandboxNetworkPolicy("restricted", "http://host.docker.internal:3100/gateway"),
     { defaultAction: "deny", egress: [{ action: "allow", target: "deepsonar-gateway-proxy" }] },
   );
   assert.throws(() => mapOpenSandboxNetworkPolicy("restricted"), /Gateway/);
@@ -128,6 +128,29 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   await host.uploadFile("hello", "/workspace/note.txt");
   assert.deepEqual(client.session.files, [{ path: "/workspace/note.txt", bytes: 5 }]);
   assert.equal(await runner.isAlive(handle), true);
+});
+
+test("OpenSandbox restricted provision binds the Gateway hostname into /etc/hosts", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  });
+  assert.equal(
+    client.created[0]?.networkPolicy.egress[0]?.target,
+    "deepsonar-gateway-proxy",
+  );
+  assert.ok(client.session.commands.some((command) => (
+    command.includes("deepsonar-gateway-proxy") && command.includes("172.19.0.9") && command.includes("/etc/hosts")
+  )));
 });
 
 test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {

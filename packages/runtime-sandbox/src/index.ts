@@ -131,6 +131,7 @@ export {
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
+export type { OpenSandboxGatewayBinder } from "./opensandbox.js";
 export {
   OPENSANDBOX_POC_ADAPTER_IDS,
   OPENSANDBOX_POC_CLI_IDS,
@@ -179,6 +180,8 @@ export {
   materializationPathCollisions,
   normalizeRuntimeErrorDetails,
   parseDeepSonarContainerRows,
+  bindGatewayProxyToOpenSandboxNetwork,
+  DEEPSONAR_GATEWAY_PROXY_HOST,
   preheatManagedGateway,
   removeContainerWithRetry,
   redactRuntimeSecrets,
