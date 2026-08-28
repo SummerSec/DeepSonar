@@ -110,6 +110,19 @@ test("real executor round-trips only controlled rate-limit details after string 
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
 });
 
+test("OpenSandbox Platform API PoC injects capability env at provision, not host.run", () => {
+  const source = readFileSync(new URL("./opensandbox-platform-api.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /import\("\.\/runtime\.js"\)/);
+  assert.match(source, /preparePlatformCapability\(jobId, snapshot\)/);
+  assert.match(source, /\.\.\.capability\.env/);
+  assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
+  assert.doesNotMatch(source, /mintJobCapabilityToken/);
+  assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
+  assert.match(source, /os\.environ\["DEEPSONAR_API_TOKEN"\]/);
+});
+
 test("real executor passes the reserved Skill to AgentBox without putting the API token in the manifest", () => {
   const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
   const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");

@@ -1,16 +1,16 @@
 /**
  * Live proof that OpenSandbox workers submit semantics only via Job Platform API.
+ * Uses the scheduler singleton runner + preparePlatformCapability so tokens
+ * enter the sandbox at provision time (the dispatcher path), not host.run.
  * Real jobs use restricted (allow_egress=false) or egress — never none.
  * Requires OPEN_SANDBOX_POC=1, a reachable OpenSandbox server, and TEST_DATABASE_URL.
  */
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import {
-  bindGatewayProxyToOpenSandboxNetwork,
-  createSdkOpenSandboxClient,
+  AGENT_CLI_RUNTIME_ADAPTERS,
   DEEPSONAR_GATEWAY_PROXY_HOST,
-  OpenSandboxRunner,
-  readOpenSandboxPin,
+  freezeAgentCliRuntime,
   shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
 
@@ -39,6 +39,7 @@ targetUrl.search = "";
 const projectId = randomUUID();
 const canvasId = randomUUID();
 const jobId = randomUUID();
+const isolatedJobId = randomUUID();
 const operations = ["emit_fact", "emit_finding", "mark_job_done"] as const;
 const calls: string[] = [];
 let closeApp: (() => Promise<unknown>) | null = null;
@@ -49,17 +50,31 @@ try {
   await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
   databaseCreated = true;
   process.env.DATABASE_URL = targetUrl.toString();
-  process.env.AGENT_MODE = "fake";
+  process.env.AGENT_MODE = "real";
+  process.env.SANDBOX_PROVIDER = "opensandbox";
+  process.env.OPEN_SANDBOX_API_KEY = apiKey;
+  process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
+  process.env.DEEPSONAR_API_SANDBOX_URL = `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1`;
+  process.env.DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL = "http://host.docker.internal:3100/gateway";
 
-  const [{ default: Fastify }, dbModule, platformApi] = await Promise.all([
+  const [
+    { default: Fastify },
+    dbModule,
+    platformApi,
+    { runner },
+    { preparePlatformCapability },
+    { config },
+  ] = await Promise.all([
     import("fastify"),
     import("./db.js"),
     import("./domains/platform-api/index.js"),
+    import("./runtime.js"),
+    import("./executor-real.js"),
+    import("./config.js"),
   ]);
   const { sql, migrate } = dbModule;
   const {
     activateProvisionedJobCapabilityTokens,
-    mintJobCapabilityToken,
     registerPlatformControlRoutes,
     registerRuntimeHandler,
     unregisterRuntimeHandler,
@@ -72,7 +87,14 @@ try {
   await app.listen({ port: 3100, host: "0.0.0.0" });
   closeApp = () => app.close();
 
-  const snapshot = { name: "audit", platform_tools: [...operations] };
+  const snapshot = {
+    name: "audit",
+    platform_tools: [...operations],
+    agent_cli: "claude-code",
+    agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
+    sandbox_limits: { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
+    runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
+  };
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox Platform API')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox Platform API')`;
   await sql`
@@ -80,26 +102,24 @@ try {
       id, project_id, canvas_id, type, status, agent_snapshot_json,
       started_at, timeout_sec, lease_expires_at
     ) VALUES (
-      ${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshot)},
+      ${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(JSON.parse(JSON.stringify(snapshot)))},
       now(), 3600, now() + interval '1 hour'
     )`;
-  const grant = await mintJobCapabilityToken(jobId);
+  const capability = await preparePlatformCapability(jobId, snapshot as Parameters<typeof preparePlatformCapability>[1]);
+  const expectedBase = `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1/jobs/${jobId}`;
+  if (capability.env.DEEPSONAR_API_BASE_URL !== expectedBase) {
+    throw new Error(`preparePlatformCapability URL drifted from product sidecar path`);
+  }
+  if (config.runtime.provider !== "opensandbox" || config.runtime.agentMode !== "real") {
+    throw new Error("scheduler singleton runner is not OpenSandbox real mode");
+  }
   await activateProvisionedJobCapabilityTokens(jobId);
   registerRuntimeHandler(jobId, async (context) => {
     calls.push(context.operationId);
     return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
   }, [...operations]);
 
-  const pin = readOpenSandboxPin({});
-  const client = createSdkOpenSandboxClient({
-    domain: process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080",
-    apiKey,
-    protocol: process.env.OPEN_SANDBOX_PROTOCOL === "https" ? "https" : "http",
-    useServerProxy: true,
-    pin,
-  });
-  const runner = new OpenSandboxRunner(client, { bind: bindGatewayProxyToOpenSandboxNetwork });
-  const limits = { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true };
+  const limits = snapshot.sandbox_limits;
   const invokePy = `
 import json, os, socket, urllib.error, urllib.request, uuid
 
@@ -148,6 +168,10 @@ def post(operation, payload, token):
 
 print("GW:" + gw())
 print("LEAK:" + ("1" if leaked() else "0"))
+print("ENV_BASE:" + os.environ.get("DEEPSONAR_API_BASE_URL", ""))
+print("ENV_JOB:" + os.environ.get("DEEPSONAR_JOB_ID", ""))
+print("ENV_TOKEN:" + ("1" if os.environ.get("DEEPSONAR_API_TOKEN") else "0"))
+print("ENV_OS_KEY:" + ("1" if os.environ.get("OPEN_SANDBOX_API_KEY") else "0"))
 if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     token = os.environ["DEEPSONAR_API_TOKEN"]
     proxy = os.environ["DEEPSONAR_GATEWAY_PROXY_HOST"]
@@ -162,17 +186,19 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     `${label} exit=${result.exitCode} stdout=${result.stdout.slice(0, 240)} stderr=${result.stderr.slice(0, 240)}`;
 
   const runInvoke = async (
+    targetJobId: string,
     network: "none" | "restricted",
     env: Record<string, string>,
     gatewayUpstreamUrl?: string,
   ) => {
     const handle = await runner.provision({
-      jobId: randomUUID(),
+      jobId: targetJobId,
       attemptId: randomUUID(),
       image: runtimeImage,
       network,
       gatewayUpstreamUrl,
       limits,
+      env,
       expectedContract: "deepsonar.runtime.contract/v1",
     });
     try {
@@ -180,35 +206,40 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
       await host.uploadFile(invokePy, "/workspace/poc-emit-fact.py");
       return await host.run("python3 /workspace/poc-emit-fact.py", {
         timeoutMs: network === "none" ? 8_000 : 12_000,
-        env,
       });
     } finally {
       await runner.destroy(handle).catch(() => {});
     }
   };
 
-  const isolated = await runInvoke("none", { DEEPSONAR_POC_MODE: "isolated" });
+  const isolated = await runInvoke(isolatedJobId, "none", { DEEPSONAR_POC_MODE: "isolated" });
   const isolatedBlocked = isolated.exitCode === 0 && /LEAK:0/.test(isolated.stdout);
   if (!isolatedBlocked) {
     throw new Error(`network=none leaked TEST-NET or failed: ${summarize("none", isolated)}`);
   }
 
-  const allowed = await runInvoke("restricted", {
+  const allowed = await runInvoke(jobId, "restricted", {
+    DEEPSONAR_ALLOW_EGRESS: "0",
     DEEPSONAR_POC_MODE: "submit",
-    DEEPSONAR_API_BASE_URL: `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1/jobs/${jobId}`,
-    DEEPSONAR_API_TOKEN: grant.token,
-    DEEPSONAR_JOB_ID: jobId,
     DEEPSONAR_GATEWAY_PROXY_HOST,
-  }, "http://host.docker.internal:3100/gateway");
+    ...capability.env,
+  }, config.gateway.proxyUpstreamUrl);
+  const provisionedEnv = /ENV_TOKEN:1/.test(allowed.stdout)
+    && allowed.stdout.includes(`ENV_BASE:${expectedBase}`)
+    && allowed.stdout.includes(`ENV_JOB:${jobId}`)
+    && /ENV_OS_KEY:0/.test(allowed.stdout);
   const submitted = operations.every((name) => allowed.exitCode === 0 && allowed.stdout.includes(`CALL:${name}=200`));
   const rejectedUnauth = allowed.exitCode === 0 && /UNAUTH:401/.test(allowed.stdout);
   const restrictedIsolated = /LEAK:0/.test(allowed.stdout);
   const sidecarOnly = /HEALTH:200/.test(allowed.stdout) && /BLOCKED:404/.test(allowed.stdout);
-  if (!submitted || !rejectedUnauth || !restrictedIsolated || !sidecarOnly) {
+  if (!provisionedEnv || !submitted || !rejectedUnauth || !restrictedIsolated || !sidecarOnly) {
     throw new Error(`restricted Platform API invoke failed: ${summarize("restricted", allowed)}`);
   }
 
-  const leftovers = await runner.listResources();
+  const leftovers = [
+    ...await runner.listResources({ jobId }),
+    ...await runner.listResources({ jobId: isolatedJobId }),
+  ];
   if (leftovers.length > 0) {
     throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
   }
@@ -216,7 +247,7 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     throw new Error(`Platform API handlers missing: expected ${operations.join(",")} got ${calls.join(",")}`);
   }
   unregisterRuntimeHandler(jobId);
-  console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} unauth=401 restrictedIsolated=${restrictedIsolated} sidecarOnly=${sidecarOnly} calls=${calls.join(",")}`);
+  console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} unauth=401 restrictedIsolated=${restrictedIsolated} sidecarOnly=${sidecarOnly} provisionedEnv=${provisionedEnv} calls=${calls.join(",")}`);
 } finally {
   if (closeApp) await closeApp().catch(() => {});
   if (endSql) await endSql().catch(() => {});
