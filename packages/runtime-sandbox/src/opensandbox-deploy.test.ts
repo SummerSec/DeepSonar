@@ -56,6 +56,7 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(pkg, /ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-api": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-cli-control": "pnpm --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-gvisor": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   const isolate = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod-isolated.yml"), "utf8");
   assert.match(isolate, /name: \$\{OPEN_SANDBOX_POC_GATEWAY_NET:-os-poc-sandbox-gateway\}/);
   assert.doesNotMatch(isolate, /^\s+name:\s*deepsonar-sandbox-gateway/m);
@@ -167,6 +168,12 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HARD_LIMITS/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_AGENT_SANDBOX_PRESENT/);
+  const gvisorPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-gvisor-poc.ts"), "utf8");
+  assert.match(gvisorPoc, /OPENSANDBOX_POC_GVISOR_EGRESS_UNEXPECTED/);
+  assert.match(gvisorPoc, /Failed to initialize nft/);
+  assert.match(gvisorPoc, /release\/20251006\/x86_64\/runsc/);
+  assert.doesNotMatch(gvisorPoc, /storage\.googleapis\.com\/gvisor\/releases\/release\/latest/);
   assert.match(k8sPoc, /kubernetesResources: true/);
   assert.match(harness, /--project-directory/);
 });

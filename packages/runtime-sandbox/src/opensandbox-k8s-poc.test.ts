@@ -150,6 +150,7 @@ test("OpenSandbox Kata PoC requires a kata-qemu workload and leftover-free destr
   assert.equal(result.hardLimits, true);
   assert.equal(result.gatewayAllowed, true);
   assert.equal(result.denyBlocked, true);
+  assert.equal(result.agentSandbox, false);
   assert.equal(result.leftovers, 0);
   assert.equal(world.created?.resource.pids, undefined);
   assert.deepEqual(world.created?.resource, { cpu: "1", memory: "512Mi" });
@@ -168,6 +169,13 @@ test("OpenSandbox Kata PoC fail-closes isolation, host escape, env leak, and mis
   await assert.rejects(() => runOpenSandboxK8sPoc(gateway.client, gateway.kubectl, { image }), /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
   const deny = kataWorld(session({ denyBlocked: false }));
   await assert.rejects(() => runOpenSandboxK8sPoc(deny.client, deny.kubectl, { image }), /OPENSANDBOX_POC_KATA_DENY_LEAK/);
+  const agent = kataWorld(session());
+  const original = agent.kubectl;
+  agent.kubectl = async (args: string[]) => {
+    if (args[1] === "crd") return { metadata: { name: "sandboxes.agents.x-k8s.io" } };
+    return original(args);
+  };
+  await assert.rejects(() => runOpenSandboxK8sPoc(agent.client, agent.kubectl, { image }), /OPENSANDBOX_POC_AGENT_SANDBOX_PRESENT/);
   const escaped = kataWorld(session({ hostEscapeBlocked: false }));
   await assert.rejects(() => runOpenSandboxK8sPoc(escaped.client, escaped.kubectl, { image }), /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   const envName = kataWorld(session({ envStdout: "OPENSANDBOX_SERVER_API_KEY=secret\n" }));

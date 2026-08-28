@@ -169,6 +169,15 @@ export {
   shouldRunOpenSandboxK8sPoc,
 } from "./opensandbox-k8s-poc.js";
 export {
+  AGENT_SANDBOX_CRD,
+  OPENSANDBOX_GVISOR_RUNSC_URL,
+  OPENSANDBOX_GVISOR_RUNSC_VERSION,
+  readAgentSandboxCrd,
+  readGvisorNatProbe,
+  runOpenSandboxGvisorPoc,
+  shouldRunOpenSandboxGvisorPoc,
+} from "./opensandbox-gvisor-poc.js";
+export {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,
   OPENSANDBOX_PIN_SCHEMA,

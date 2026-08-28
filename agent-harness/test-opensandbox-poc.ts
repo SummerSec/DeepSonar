@@ -258,10 +258,10 @@ if (caseName === "k8s") {
     expectedContract: "deepsonar.runtime.contract/v1",
     apiKey,
   });
-  if (!k8s.kata || !k8s.isolated || !k8s.hostEscapeBlocked || !k8s.envClean || !k8s.hardLimits || !k8s.gatewayAllowed || !k8s.denyBlocked || k8s.leftovers !== 0 || k8s.leftoverPods !== 0) {
+  if (!k8s.kata || !k8s.isolated || !k8s.hostEscapeBlocked || !k8s.envClean || !k8s.hardLimits || !k8s.gatewayAllowed || !k8s.denyBlocked || k8s.agentSandbox || k8s.leftovers !== 0 || k8s.leftoverPods !== 0) {
     throw new Error(`OpenSandbox Kata PoC unexpected result: ${JSON.stringify(k8s)}`);
   }
-  console.log(`OK: OpenSandbox Kata live kata=true isolated=${k8s.isolated} hostEscapeBlocked=${k8s.hostEscapeBlocked} envClean=${k8s.envClean} hardLimits=${k8s.hardLimits} gatewayAllowed=${k8s.gatewayAllowed} denyBlocked=${k8s.denyBlocked} leftovers=0`);
+  console.log(`OK: OpenSandbox Kata live kata=true isolated=${k8s.isolated} hostEscapeBlocked=${k8s.hostEscapeBlocked} envClean=${k8s.envClean} hardLimits=${k8s.hardLimits} gatewayAllowed=${k8s.gatewayAllowed} denyBlocked=${k8s.denyBlocked} agentSandbox=false leftovers=0`);
   process.exit(0);
 }
 

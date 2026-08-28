@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import { NETWORK_ISOLATION_SCRIPT, OPENSANDBOX_POC_CONTRACT, OPENSANDBOX_POC_IMAGE } from "./opensandbox-poc.js";
+import { readAgentSandboxCrd } from "./opensandbox-gvisor-poc.js";
 import { shellQuote } from "./runtime-host.js";
 
 export const OPENSANDBOX_K8S_NAMESPACE = "deepsonar-opensandbox";
@@ -199,8 +200,16 @@ export async function runOpenSandboxK8sPoc(
   denyBlocked: true;
   leftovers: number;
   leftoverPods: number;
+  agentSandbox: false;
 }> {
   await probeKataCluster(kubectl);
+  let agentSandbox = false;
+  try {
+    agentSandbox = readAgentSandboxCrd(await kubectl(["get", "crd", "sandboxes.agents.x-k8s.io", "-o", "json"]));
+  } catch {
+    agentSandbox = false;
+  }
+  if (agentSandbox) throw new Error("OPENSANDBOX_POC_AGENT_SANDBOX_PRESENT");
   const image = input.image ?? OPENSANDBOX_POC_IMAGE;
   const staging = await mkdtemp(path.join(os.tmpdir(), "os-kata-egress-"));
   const manifests = egressProbeManifests(image);
@@ -268,6 +277,7 @@ export async function runOpenSandboxK8sPoc(
         denyBlocked: true,
         leftovers: 0,
         leftoverPods: 0,
+        agentSandbox: false,
       };
     } finally {
       await runner.destroy(handle).catch(() => {});

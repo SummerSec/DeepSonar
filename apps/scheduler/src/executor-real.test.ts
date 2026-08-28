@@ -144,6 +144,16 @@ test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
+test("OpenSandbox gVisor PoC fail-closes a working iptables nat table", () => {
+  const source = readFileSync(new URL("./opensandbox-gvisor.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /shouldRunOpenSandboxGvisorPoc/);
+  assert.match(source, /runOpenSandboxGvisorPoc/);
+  assert.match(source, /OPEN_SANDBOX_POC_GVISOR=1/);
+  assert.match(source, /compatible=false/);
+  assert.match(source, /natUnsupported=true/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
 test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", () => {
   const source = readFileSync(new URL("./opensandbox-reaper.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
