@@ -15,6 +15,7 @@
     "typecheck": "pnpm -r typecheck",
     "ci:smoke:mcp": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts",
     "ci:smoke:opensandbox": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts",
+    "ci:smoke:opensandbox-api": "pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-platform-api.poc.ts",
     "ci:smoke:runtime-policy": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-runtime-policy.ts",
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web test:lifecycle",
