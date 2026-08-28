@@ -116,6 +116,8 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.match(source, /OPENAI_API_KEY/);
   assert.match(source, /DEEPSEEK_API_KEY/);
   assert.match(source, /needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E/);
+  assert.match(source, /vendor CLI E2E requires all five CLIs/);
+  assert.match(source, /vendor CLI E2E incomplete/);
   assert.match(source, /for \(const selectedCli of selectedClis\)/);
   assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\[selectedCli\]/);
   assert.match(source, /encodeSteer/);

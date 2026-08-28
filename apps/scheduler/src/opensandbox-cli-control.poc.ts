@@ -40,9 +40,22 @@ if (requestedCli && !(requestedCli in vendorPlans)) {
 }
 const selectedClis = (requestedCli ? [requestedCli as VendorCli] : vendorCliIds)
   .filter((cli) => Boolean(vendorPlans[cli].secret));
+if (requestedCli && selectedClis.length === 0) {
+  console.error(`OPEN_SANDBOX_POC_CLI=${requestedCli} needs its vendor key for vendor-model E2E`);
+  process.exit(1);
+}
 if (selectedClis.length === 0) {
   console.log("skip: OpenSandbox CLI control PoC needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E");
   process.exit(0);
+}
+if (!requestedCli && selectedClis.length !== vendorCliIds.length) {
+  const missing = [
+    !vendorPlans["claude-code"].secret ? "ANTHROPIC_API_KEY" : "",
+    !vendorPlans.codex.secret ? "OPENAI_API_KEY" : "",
+    !vendorPlans.dsh.secret ? "DEEPSEEK_API_KEY" : "",
+  ].filter(Boolean);
+  console.error(`vendor CLI E2E requires all five CLIs; missing ${missing.join(",")}`);
+  process.exit(1);
 }
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -388,6 +401,9 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
     ran.push(selectedCli);
   }
   const skipped = vendorCliIds.filter((cli) => !ran.includes(cli));
+  if (!requestedCli && skipped.length > 0) {
+    throw new Error(`vendor CLI E2E incomplete: skipped=${skipped.join(",")}`);
+  }
   console.log(
     `OK: OpenSandbox CLI vendor control clis=${ran.join(",")} skipped=${skipped.join(",") || "none"} gateway=true submitted=true steered=true archived=true viewed=true resumed=true leftover=0`,
   );
