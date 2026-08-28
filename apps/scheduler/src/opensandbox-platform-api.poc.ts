@@ -99,7 +99,7 @@ try {
   const runner = new OpenSandboxRunner(client);
   const limits = { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true };
   const invokePy = `
-import json, os, socket, urllib.error, urllib.request
+import json, os, socket, urllib.error, urllib.request, uuid
 
 def gw():
     with open("/proc/net/route") as fh:
@@ -133,7 +133,7 @@ def post(operation, payload, token):
         data=json.dumps(payload).encode(),
         headers={
             "Authorization": "Bearer " + token,
-            "Idempotency-Key": os.environ.get("DEEPSONAR_IDEMPOTENCY_KEY", "poc") + "-" + operation,
+            "Idempotency-Key": str(uuid.uuid4()),
             "Content-Type": "application/json",
         },
         method="POST",
@@ -198,7 +198,6 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     DEEPSONAR_API_BASE_URL: `http://${gw}:3100/control/v1/jobs/${jobId}`,
     DEEPSONAR_API_TOKEN: grant.token,
     DEEPSONAR_JOB_ID: jobId,
-    DEEPSONAR_IDEMPOTENCY_KEY: randomUUID(),
   }, `http://${gw}:3100/gateway`);
   const submitted = operations.every((name) => allowed.exitCode === 0 && allowed.stdout.includes(`CALL:${name}=200`));
   const rejectedUnauth = allowed.exitCode === 0 && /UNAUTH:401/.test(allowed.stdout);
