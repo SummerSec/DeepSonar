@@ -132,6 +132,7 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.match(source, /adapter\.start/);
   assert.match(source, /adapter\.materialize/);
   assert.match(source, /qualifyPiModelRef/);
+  assert.match(source, /encodeGetState/);
   assert.doesNotMatch(source, /mintJobCapabilityToken\(/);
   assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
 });

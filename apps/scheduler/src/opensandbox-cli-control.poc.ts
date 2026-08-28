@@ -353,6 +353,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
       };
       await adapter.materialize?.(startContext);
       const started = await adapter.start(startContext);
+      if (adapter.encodeGetState) await started.write(adapter.encodeGetState()).catch(() => {});
       const payload = adapter.encodeInput(prompt, state);
       if (payload) await started.write(payload).catch(() => {});
       let steered = !adapter.capabilities.incrementalMessages;
