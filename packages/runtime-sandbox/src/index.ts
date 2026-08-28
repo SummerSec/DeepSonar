@@ -124,6 +124,14 @@ export {
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
+export {
+  OPENSANDBOX_PIN_SCHEMA,
+  OPENSANDBOX_SDK_VERSION,
+  assertOpenSandboxImmutableRef,
+  assertOpenSandboxSdkVersion,
+  readOpenSandboxPin,
+} from "./opensandbox-version.js";
+export type { OpenSandboxPin } from "./opensandbox-version.js";
 export type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxSession } from "./opensandbox.js";
 export {
   AgentboxRunner,

@@ -203,6 +203,9 @@ export const config = {
       apiKey: str("OPEN_SANDBOX_API_KEY", ""),
       protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https" ? "https" : "http") as "http" | "https",
       useServerProxy: bool("OPEN_SANDBOX_USE_SERVER_PROXY", true),
+      sdkVersion: str("OPEN_SANDBOX_SDK_VERSION", ""),
+      serverImage: str("OPENSANDBOX_SERVER_IMAGE", ""),
+      execdImage: str("OPENSANDBOX_EXECD_IMAGE", ""),
     },
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {

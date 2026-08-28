@@ -5,6 +5,7 @@
 import path from "node:path";
 import { HUMAN_INBOX_WRITER_SCRIPT, RuntimeImageContractError, SHARED_ASSETS_MOUNT_PATH, parseToolManifest } from "./agentbox.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
+import type { OpenSandboxPin } from "./opensandbox-version.js";
 import {
   assertWorkspaceWritePath,
   shellQuote,
@@ -31,6 +32,7 @@ export interface OpenSandboxConnection {
   apiKey: string;
   protocol?: "http" | "https";
   useServerProxy?: boolean;
+  pin?: OpenSandboxPin;
 }
 
 export interface OpenSandboxCreateInput {
@@ -389,6 +391,10 @@ export class OpenSandboxRunner implements SandboxRunner {
   }
 }
 
-export function createSdkOpenSandboxClient(_connection: OpenSandboxConnection): OpenSandboxClient {
+export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): OpenSandboxClient {
+  if (connection.pin) {
+    // Pin is validated at construction; live SDK binding lands when the server digest is published.
+    void connection.pin.sdk;
+  }
   throw new Error("OPENSANDBOX_SDK_CLIENT_UNBOUND: inject OpenSandboxClient for Phase 2 PoC");
 }

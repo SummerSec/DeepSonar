@@ -5,6 +5,7 @@ import {
   NoopSharedAssetsVolumeManager,
   OpenSandboxRunner,
   createSdkOpenSandboxClient,
+  readOpenSandboxPin,
   type SandboxRunner,
   type SharedAssetsVolumeManager,
 } from "@deepsonar/runtime-sandbox";
@@ -12,7 +13,18 @@ import { config } from "./config.js";
 
 function createRealRunner(): SandboxRunner {
   if (config.runtime.provider === "opensandbox") {
-    return new OpenSandboxRunner(createSdkOpenSandboxClient(config.runtime.openSandbox));
+    const pin = readOpenSandboxPin({
+      sdk: config.runtime.openSandbox.sdkVersion || undefined,
+      serverImage: config.runtime.openSandbox.serverImage || undefined,
+      execdImage: config.runtime.openSandbox.execdImage || undefined,
+    });
+    return new OpenSandboxRunner(createSdkOpenSandboxClient({
+      domain: config.runtime.openSandbox.domain,
+      apiKey: config.runtime.openSandbox.apiKey,
+      protocol: config.runtime.openSandbox.protocol,
+      useServerProxy: config.runtime.openSandbox.useServerProxy,
+      pin,
+    }));
   }
   return new AgentboxRunner();
 }
