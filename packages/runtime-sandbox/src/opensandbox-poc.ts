@@ -3,7 +3,7 @@
  * Default CI stays skip-safe; set OPEN_SANDBOX_POC=1 only when a server is up.
  */
 import { randomUUID } from "node:crypto";
-import { runRealAgent, SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
+import { runRealAgent, runtimeCliEnv, SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -495,7 +495,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"id":"dummy","object":"model"}')
+        self.wfile.write(b'{"object":"list","data":[{"id":"dummy","object":"model"}]}')
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         self.rfile.read(n)
@@ -509,6 +509,13 @@ class H(BaseHTTPRequestHandler):
                 ("message_stop", {"type":"message_stop"}),
             ])
             return
+        if "responses" in self.path:
+            sse(self, [
+                ("response.created", {"type":"response.created","response":{"id":"resp_poc","status":"in_progress"}}),
+                ("response.output_text.delta", {"type":"response.output_text.delta","delta":"pong"}),
+                ("response.completed", {"type":"response.completed","response":{"id":"resp_poc","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}]}}),
+            ])
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -519,6 +526,87 @@ class H(BaseHTTPRequestHandler):
 ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
 `.trim();
 
+const POC_HOME = "/workspace/.deepsonar-home";
+const POC_MOCK_BASE = "http://127.0.0.1:8765";
+
+function pocCliModel(id: AgentCliId): string {
+  return id === "open-code" || id === "pi" ? "deepsonar/dummy" : "dummy";
+}
+
+function pocDshProvider() {
+  return {
+    provider: "xxxx",
+    model: "dummy",
+    config: {
+      providers: {
+        xxxx: {
+          api: "openai-responses",
+          apiKey: "sk-mock",
+          baseURL: `${POC_MOCK_BASE}/v1`,
+          models: [{ id: "dummy" }],
+        },
+      },
+    },
+  };
+}
+
+async function materializePocProviderFiles(host: RuntimeHost): Promise<void> {
+  await host.run(
+    [
+      `mkdir -p ${POC_HOME}/.claude ${POC_HOME}/.codex ${POC_HOME}/.pi/agent ${POC_HOME}/.dsh /workspace/.opencode /workspace/.deepsonar`,
+      `printf '%s\\n' '{"mcpServers":{}}' > /workspace/.deepsonar/mcp.json`,
+    ].join(" && "),
+    { timeoutMs: 5_000 },
+  );
+  await host.uploadFile(JSON.stringify({ OPENAI_API_KEY: "sk-mock" }, null, 2) + "\n", `${POC_HOME}/.codex/auth.json`);
+  await host.uploadFile(
+    [
+      'model_provider = "custom"',
+      'model = "dummy"',
+      "disable_response_storage = true",
+      "",
+      "[model_providers.custom]",
+      'name = "custom"',
+      `base_url = "${POC_MOCK_BASE}/v1"`,
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      "",
+    ].join("\n"),
+    `${POC_HOME}/.codex/config.toml`,
+  );
+  await host.uploadFile(
+    JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      model: "deepsonar/dummy",
+      provider: {
+        deepsonar: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "deepsonar",
+          options: { apiKey: "sk-mock", baseURL: `${POC_MOCK_BASE}/v1` },
+          models: { dummy: { name: "dummy" } },
+        },
+      },
+    }, null, 2) + "\n",
+    "/workspace/.opencode/config.json",
+  );
+  await host.uploadFile(
+    JSON.stringify({
+      providers: {
+        deepsonar: {
+          baseUrl: `${POC_MOCK_BASE}/v1`,
+          apiKey: "sk-mock",
+          models: [{ id: "dummy" }],
+        },
+      },
+    }, null, 2) + "\n",
+    `${POC_HOME}/.pi/agent/models.json`,
+  );
+  await host.uploadFile(
+    JSON.stringify({ deepsonar: { type: "api_key", key: "sk-mock" } }, null, 2) + "\n",
+    `${POC_HOME}/.pi/agent/auth.json`,
+  );
+}
+
 async function exportOpenSandboxCliSession(
   host: RuntimeHost,
   cli: AgentCliId,
@@ -526,9 +614,9 @@ async function exportOpenSandboxCliSession(
   sessionFile?: string,
 ) {
   return CLI_SESSION_ADAPTERS[cli].exportSession({
-    run: (command) => host.run(command, { timeoutMs: 15_000 }),
+    run: (command) => host.run(command, { timeoutMs: 15_000, env: { HOME: POC_HOME } }),
     readText: async (path) => {
-      const result = await host.run(`cat -- ${JSON.stringify(path)}`, { timeoutMs: 15_000 });
+      const result = await host.run(`cat -- ${JSON.stringify(path)}`, { timeoutMs: 15_000, env: { HOME: POC_HOME } });
       return result.exitCode === 0 ? result.stdout : null;
     },
   }, sessionId, sessionFile);
@@ -570,10 +658,7 @@ export async function runOpenSandboxCliLaunchPoc(
   });
   try {
     const host = await runner.ensureHost(handle);
-    await host.run(
-      "mkdir -p /workspace/.deepsonar /workspace/.deepsonar-home/.pi/agent /workspace/.opencode && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json",
-      { timeoutMs: 5_000 },
-    );
+    await materializePocProviderFiles(host);
     await host.uploadFile(MOCK_LLM_SCRIPT, "/tmp/deepsonar-mock-llm.py");
     const mock = await host.runAsync("python3 /tmp/deepsonar-mock-llm.py", { cwd: "/tmp" });
     const waitMock = [
@@ -588,13 +673,13 @@ export async function runOpenSandboxCliLaunchPoc(
     await host.run(`python3 -c ${shellQuote(waitMock)}`, { timeoutMs: 10_000 }).catch(() => {});
     const alive = await runner.isAlive(handle);
     if (!alive) throw new Error("OPENSANDBOX_POC_NOT_ALIVE");
-    const mockEnv = {
+    const mockEnv = runtimeCliEnv({
       ANTHROPIC_API_KEY: "sk-mock",
       ANTHROPIC_AUTH_TOKEN: "sk-mock",
-      ANTHROPIC_BASE_URL: "http://127.0.0.1:8765",
+      ANTHROPIC_BASE_URL: POC_MOCK_BASE,
       OPENAI_API_KEY: "sk-mock",
-      OPENAI_BASE_URL: "http://127.0.0.1:8765/v1",
-    };
+      OPENAI_BASE_URL: `${POC_MOCK_BASE}/v1`,
+    });
     const launched = {} as Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], OpenSandboxCliLaunchResult>;
     for (const id of OPENSANDBOX_POC_ADAPTER_IDS) {
       const adapter = AGENT_CLI_RUNTIME_ADAPTERS[id];
@@ -602,16 +687,16 @@ export async function runOpenSandboxCliLaunchPoc(
         host,
         env: mockEnv,
         cwd: "/workspace",
-        model: "dummy",
+        model: pocCliModel(id),
         input: "ping",
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
-        dshProvider: { provider: "dummy", model: "dummy", config: { providers: { dummy: { type: "dummy" } } } },
+        dshProvider: pocDshProvider(),
       };
       await adapter.materialize?.(context);
       const process = await adapter.start(context);
       const state: AdapterRuntimeState = {
-        model: "dummy",
-        modelProvider: "dummy",
+        model: id === "dsh" ? "dummy" : pocCliModel(id),
+        modelProvider: id === "dsh" ? "xxxx" : "dummy",
         cwd: "/workspace",
         contextIdentity: {
           context_id: "poc162",
@@ -643,7 +728,7 @@ export async function runOpenSandboxCliLaunchPoc(
         await process.write(adapter.encodeShutdown(state)).catch(() => {});
       }
       await process.closeStdin().catch(() => { stdinClosed = false; });
-      const out = await collectText(process, 8_000);
+      const out = await collectText(process, 15_000);
       await process.kill().catch(() => {});
       applyRuntimeOutputText(adapter, out.text, state);
       let archived = false;

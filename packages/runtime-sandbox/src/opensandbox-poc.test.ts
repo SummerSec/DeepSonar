@@ -371,6 +371,15 @@ test("CLI missing-binary detector ignores model-not-found text", () => {
   assert.equal(isOpenSandboxCliMissing("node: No such file or directory\n"), true);
 });
 
+test("OpenSandbox CLI launch PoC materializes governed provider files under runtime HOME", () => {
+  const source = readFileSync(new URL("./opensandbox-poc.ts", import.meta.url), "utf8");
+  assert.match(source, /runtimeCliEnv/);
+  assert.match(source, /\.codex\/config\.toml/);
+  assert.match(source, /\.pi\/agent\/models\.json/);
+  assert.match(source, /openai-responses/);
+  assert.match(source, /wire_api = "responses"/);
+});
+
 test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async () => {
   const result = await runOpenSandboxCliLaunchPoc({
     async create() {
