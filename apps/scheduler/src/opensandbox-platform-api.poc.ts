@@ -128,18 +128,12 @@ OPS = [
     ("mark_job_done", {"summary": "OpenSandbox Platform API live proof finished from the worker."}),
 ]
 
-def post(operation, payload, token):
-    base = os.environ["DEEPSONAR_API_BASE_URL"].rstrip("/")
-    req = urllib.request.Request(
-        f"{base}/operations/{operation}",
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": "Bearer " + token,
-            "Idempotency-Key": str(uuid.uuid4()),
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+def http(url, data=None, token=""):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+        headers["Idempotency-Key"] = str(uuid.uuid4())
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status
@@ -148,13 +142,20 @@ def post(operation, payload, token):
     except Exception:
         return 0
 
+def post(operation, payload, token):
+    base = os.environ["DEEPSONAR_API_BASE_URL"].rstrip("/")
+    return http(f"{base}/operations/{operation}", json.dumps(payload).encode(), token)
+
 print("GW:" + gw())
 print("LEAK:" + ("1" if leaked() else "0"))
 if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     token = os.environ["DEEPSONAR_API_TOKEN"]
+    proxy = os.environ["DEEPSONAR_GATEWAY_PROXY_HOST"]
     for name, payload in OPS:
         print(f"CALL:{name}=" + str(post(name, payload, token)))
     print("UNAUTH:" + str(post("emit_fact", OPS[0][1], "invalid-token")))
+    print("HEALTH:" + str(http(f"http://{proxy}:3100/_deepsonar_health")))
+    print("BLOCKED:" + str(http(f"http://{proxy}:3100/auth")))
 `.trim();
 
   const summarize = (label: string, result: { exitCode: number; stdout: string; stderr: string }) =>
@@ -197,11 +198,13 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     DEEPSONAR_API_BASE_URL: `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1/jobs/${jobId}`,
     DEEPSONAR_API_TOKEN: grant.token,
     DEEPSONAR_JOB_ID: jobId,
+    DEEPSONAR_GATEWAY_PROXY_HOST,
   }, "http://host.docker.internal:3100/gateway");
   const submitted = operations.every((name) => allowed.exitCode === 0 && allowed.stdout.includes(`CALL:${name}=200`));
   const rejectedUnauth = allowed.exitCode === 0 && /UNAUTH:401/.test(allowed.stdout);
   const restrictedIsolated = /LEAK:0/.test(allowed.stdout);
-  if (!submitted || !rejectedUnauth || !restrictedIsolated) {
+  const sidecarOnly = /HEALTH:200/.test(allowed.stdout) && /BLOCKED:404/.test(allowed.stdout);
+  if (!submitted || !rejectedUnauth || !restrictedIsolated || !sidecarOnly) {
     throw new Error(`restricted Platform API invoke failed: ${summarize("restricted", allowed)}`);
   }
 
@@ -213,7 +216,7 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     throw new Error(`Platform API handlers missing: expected ${operations.join(",")} got ${calls.join(",")}`);
   }
   unregisterRuntimeHandler(jobId);
-  console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} unauth=401 restrictedIsolated=${restrictedIsolated} calls=${calls.join(",")}`);
+  console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} unauth=401 restrictedIsolated=${restrictedIsolated} sidecarOnly=${sidecarOnly} calls=${calls.join(",")}`);
 } finally {
   if (closeApp) await closeApp().catch(() => {});
   if (endSql) await endSql().catch(() => {});
