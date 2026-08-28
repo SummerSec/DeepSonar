@@ -124,9 +124,9 @@ if (runtimeImage) {
   recoverySummary = `alive=${recovery.alive} reconnect=${recovery.reconnected} dead=${recovery.deadAfterDestroy} leftovers=${recovery.leftovers}`;
 }
 let cliSummary = "skipped";
-if (runtimeImage) {
+if (runtimeImage && !skipCli) {
   const launched = await runOpenSandboxCliLaunchPoc(client, { image: runtimeImage });
-  const failed = Object.entries(launched).filter(([, item]) => !item.started || item.notFound || !item.stdinClosed);
+  const failed = Object.entries(launched).filter(([, item]) => !item.started || item.notFound || !item.stdinClosed || !item.inputWritten || !item.steered);
   if (failed.length > 0) {
     throw new Error(`OpenSandbox CLI launch PoC unexpected result: ${JSON.stringify(launched)}`);
   }

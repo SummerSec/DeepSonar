@@ -258,6 +258,8 @@ test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async ()
     assert.equal(result[id].started, true);
     assert.equal(result[id].notFound, false);
     assert.equal(result[id].stdinClosed, true);
+    assert.equal(result[id].inputWritten, true);
+    assert.equal(result[id].steered, true);
   }
 });
 

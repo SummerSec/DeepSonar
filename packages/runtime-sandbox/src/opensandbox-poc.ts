@@ -416,10 +416,58 @@ export async function runOpenSandboxImageContractPoc(
   }
 }
 
+export type OpenSandboxCliLaunchResult = {
+  started: boolean;
+  notFound: boolean;
+  stdinClosed: boolean;
+  inputWritten: boolean;
+  steered: boolean;
+};
+
+const MOCK_LLM_SCRIPT = `
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+
+def sse(handler, events):
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.end_headers()
+    for event, data in events:
+        handler.wfile.write(f"event: {event}\\ndata: {json.dumps(data)}\\n\\n".encode())
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"id":"dummy","object":"model"}')
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        if "messages" in self.path:
+            sse(self, [
+                ("message_start", {"type":"message_start","message":{"id":"msg_poc","type":"message","role":"assistant","content":[],"model":"dummy","stop_reason":None,"usage":{"input_tokens":1,"output_tokens":1}}}),
+                ("content_block_start", {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                ("content_block_delta", {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"pong"}}),
+                ("content_block_stop", {"type":"content_block_stop","index":0}),
+                ("message_delta", {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+                ("message_stop", {"type":"message_stop"}),
+            ])
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"id":"chat_poc","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}).encode())
+    def log_message(self, *args):
+        pass
+
+ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
+`.trim();
+
 export async function runOpenSandboxCliLaunchPoc(
   client: OpenSandboxClient,
   input: { image: string },
-): Promise<Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], { started: boolean; notFound: boolean; stdinClosed: boolean }>> {
+): Promise<Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], OpenSandboxCliLaunchResult>> {
   const runner = new OpenSandboxRunner(client);
   const { jobId, attemptId } = ids();
   const handle = await runner.provision({
@@ -436,14 +484,33 @@ export async function runOpenSandboxCliLaunchPoc(
       "mkdir -p /workspace/.deepsonar /workspace/.deepsonar-home/.pi/agent /workspace/.opencode && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json",
       { timeoutMs: 5_000 },
     );
+    await host.uploadFile(MOCK_LLM_SCRIPT, "/tmp/deepsonar-mock-llm.py");
+    const mock = await host.runAsync("python3 /tmp/deepsonar-mock-llm.py", { cwd: "/tmp" });
+    const waitMock = [
+      "import socket,time",
+      "for _ in range(40):",
+      " s=socket.socket();s.settimeout(0.2)",
+      " try:",
+      "  s.connect(('127.0.0.1',8765));s.close();print('up');break",
+      " except Exception:",
+      "  time.sleep(0.2)",
+    ].join("\n");
+    await host.run(`python3 -c ${shellQuote(waitMock)}`, { timeoutMs: 10_000 }).catch(() => {});
     const alive = await runner.isAlive(handle);
     if (!alive) throw new Error("OPENSANDBOX_POC_NOT_ALIVE");
-    const launched = {} as Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], { started: boolean; notFound: boolean; stdinClosed: boolean }>;
+    const mockEnv = {
+      ANTHROPIC_API_KEY: "sk-mock",
+      ANTHROPIC_AUTH_TOKEN: "sk-mock",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:8765",
+      OPENAI_API_KEY: "sk-mock",
+      OPENAI_BASE_URL: "http://127.0.0.1:8765/v1",
+    };
+    const launched = {} as Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], OpenSandboxCliLaunchResult>;
     for (const id of OPENSANDBOX_POC_ADAPTER_IDS) {
       const adapter = AGENT_CLI_RUNTIME_ADAPTERS[id];
       const context = {
         host,
-        env: {},
+        env: mockEnv,
         cwd: "/workspace",
         model: "dummy",
         input: "ping",
@@ -467,7 +534,21 @@ export async function runOpenSandboxCliLaunchPoc(
       };
       let stdinClosed = true;
       const payload = adapter.encodeInput("ping", state);
-      if (payload) await process.write(payload).catch(() => { stdinClosed = false; });
+      let inputWritten = true;
+      if (payload) await process.write(payload).catch(() => { inputWritten = false; });
+      let steered = !adapter.capabilities.incrementalMessages;
+      const steerPayload = adapter.encodeSteer?.("steer", state)
+        ?? (adapter.capabilities.incrementalMessages ? adapter.encodeInput("steer", state) : "");
+      if (steerPayload) {
+        steered = true;
+        await process.write(steerPayload).catch(() => { steered = false; });
+      }
+      if (adapter.encodeFollowUp) {
+        await process.write(adapter.encodeFollowUp("follow", state)).catch(() => { steered = false; });
+      }
+      if (adapter.encodeGetState) {
+        await process.write(adapter.encodeGetState()).catch(() => {});
+      }
       await process.closeStdin().catch(() => { stdinClosed = false; });
       const out = await collectText(process, 4_000);
       await process.kill().catch(() => {});
@@ -475,8 +556,11 @@ export async function runOpenSandboxCliLaunchPoc(
         started: true,
         notFound: isOpenSandboxCliMissing(out.text),
         stdinClosed,
+        inputWritten,
+        steered,
       };
     }
+    await mock.kill().catch(() => {});
     return launched;
   } finally {
     await runner.destroy(handle).catch(() => {});
