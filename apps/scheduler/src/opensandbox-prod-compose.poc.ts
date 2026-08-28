@@ -3,8 +3,8 @@
  * already-running OpenSandbox. Does not start a second server and does
  * not stop the Phase 2 `deepsonar-opensandbox` container.
  *
- * Postgres+scheduler use host network so they can reach loopback OpenSandbox
- * and each other; this VM's compose bridge times out inter-container TCP.
+ * Postgres+scheduler+silo use host network so they can reach loopback OpenSandbox
+ * and each other; this VM's compose bridge drops inter-container TCP.
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -32,6 +32,7 @@ const projectName = `os-prod-compose-${process.pid}-${randomUUID().slice(0, 8)}`
 const schedulerPort = process.env.OPEN_SANDBOX_POC_SCHEDULER_PORT?.trim() || "13100";
 const webPort = process.env.OPEN_SANDBOX_POC_WEB_PORT?.trim() || "18082";
 const postgresPort = process.env.OPEN_SANDBOX_POC_POSTGRES_PORT?.trim() || "15432";
+const siloPort = process.env.OPEN_SANDBOX_POC_SILO_PORT?.trim() || "19000";
 const envFile = join(dir, ".env");
 const masterKeyFile = join(dir, "master.key");
 const composeArgs = [
@@ -68,6 +69,10 @@ writeFileSync(envFile, [
   `SCHEDULER_HOST_PORT=${schedulerPort}`,
   `DEEPSONAR_WEB_PORT=${webPort}`,
   `POSTGRES_BIND_PORT=${postgresPort}`,
+  `SILO_API_PORT=${siloPort}`,
+  "BLOB_S3_ACCESS_KEY_ID=pocsilo",
+  "BLOB_S3_SECRET_ACCESS_KEY=pocsilo-secret",
+  "BLOB_S3_BUCKET=deepsonar",
   "",
 ].join("\n"), { mode: 0o600 });
 
@@ -107,13 +112,21 @@ try {
   if (!existingOpenSandboxRunning()) {
     throw new Error("prod-compose stopped Phase 2 deepsonar-opensandbox");
   }
+  const siloLive = spawnSync("curl", ["-fsS", `http://127.0.0.1:${siloPort}/minio/health/live`], { encoding: "utf8" });
+  if (siloLive.status !== 0) {
+    throw new Error(`silo health failed on 127.0.0.1:${siloPort}: ${siloLive.stderr || siloLive.stdout}`);
+  }
+  const blobStore = run(["-n", "docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", `${projectName}-scheduler-1`]);
+  if (!/^BLOB_STORE=s3$/m.test(blobStore.stdout) || !blobStore.stdout.includes(`BLOB_S3_ENDPOINT=http://127.0.0.1:${siloPort}`)) {
+    throw new Error("scheduler is not using host Silo");
+  }
   const listed = run(["-n", "docker", "ps", "-q", "--filter", "name=opensandbox"]);
   const opensandboxCount = listed.stdout.trim().split("\n").filter(Boolean).length;
   if (opensandboxCount !== 1) {
     throw new Error(`expected exactly one OpenSandbox container, got ${opensandboxCount}`);
   }
   console.log(
-    `OK: OpenSandbox prod-compose scheduler=200 web=200 probe=ready leftover_server=1 port=${schedulerPort} webPort=${webPort}`,
+    `OK: OpenSandbox prod-compose scheduler=200 web=200 silo=ready blob=s3 probe=ready leftover_server=1 port=${schedulerPort} webPort=${webPort} siloPort=${siloPort}`,
   );
 } finally {
   down();

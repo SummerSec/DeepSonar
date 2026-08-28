@@ -191,6 +191,8 @@ test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2
   assert.match(source, /network_mode: host|host network/);
   assert.match(source, /\/api\/health/);
   assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.match(source, /BLOB_STORE=s3/);
+  assert.match(source, /silo=ready blob=s3/);
   assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
   assert.doesNotMatch(source, /provision\(|executeReal\(/);
 });

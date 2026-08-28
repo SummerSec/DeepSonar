@@ -54,11 +54,14 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(hostOverlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-127\.0\.0\.1:8080\}/);
   assert.match(hostOverlay, /network_mode: host/);
   assert.match(hostOverlay, /host\.docker\.internal:host-gateway/);
-  assert.match(hostOverlay, /BLOB_STORE: fs/);
+  assert.match(hostOverlay, /BLOB_STORE: s3/);
+  assert.match(hostOverlay, /127\.0\.0\.1:\$\{SILO_API_PORT:-19000\}/);
+  assert.match(hostOverlay, /^\s+silo:/m);
+  assert.match(hostOverlay, /^\s+silo-init:/m);
   assert.match(hostOverlay, /\/var\/run\/docker\.sock/);
   assert.match(hostOverlay, /Dockerfile\.scheduler/);
   assert.match(hostOverlay, /Dockerfile\.web/);
-  assert.doesNotMatch(hostOverlay, /^\s+silo:|container_name:/m);
+  assert.doesNotMatch(hostOverlay, /container_name:/);
   assert.match(ci, /OpenSandbox production compose merge/);
   assert.match(ci, /published: "18080"/);
 });

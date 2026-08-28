@@ -1,6 +1,6 @@
-# Production scheduler+web images attached to an already-running OpenSandbox.
-# Filesystem blobs avoid Silo. Postgres+scheduler use host network because this
-# VM's compose bridge times out inter-container TCP (same class as the Silo dial).
+# Production scheduler+web+silo images attached to an already-running OpenSandbox.
+# Host network for postgres/scheduler/silo because this VM's compose bridge
+# drops inter-container TCP (ping/wget on a user bridge lose all packets).
 #   OPEN_SANDBOX_API_KEY=... docker compose -f deploy/docker-compose.opensandbox.host.yml up -d --build
 services:
   postgres:
@@ -16,6 +16,45 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  silo:
+    image: ${SILO_IMAGE:-docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z}
+    command:
+      - server
+      - /data
+      - --address
+      - 127.0.0.1:${SILO_API_PORT:-19000}
+      - --console-address
+      - 127.0.0.1:${SILO_CONSOLE_PORT:-19001}
+    network_mode: host
+    environment:
+      MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:?set BLOB_S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:?set BLOB_S3_SECRET_ACCESS_KEY}
+      MINIO_ADDRESS: 127.0.0.1:${SILO_API_PORT:-19000}
+    volumes:
+      - silo_data:/data
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  silo-init:
+    image: ${SILO_IMAGE:-docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z}
+    restart: "no"
+    network_mode: host
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mcli alias set local http://127.0.0.1:${SILO_API_PORT:-19000} "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"
+    environment:
+      MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:?set BLOB_S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:?set BLOB_S3_SECRET_ACCESS_KEY}
+      BLOB_S3_BUCKET: ${BLOB_S3_BUCKET:-deepsonar}
+    depends_on:
+      silo:
+        condition: service_healthy
 
   scheduler:
     image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.45}
@@ -38,7 +77,14 @@ services:
       DEEPSONAR_MASTER_KEY_FILE: /run/secrets/deepsonar_master_key
       DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:-0.1.45}
       DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-0.1.45-os-compose}
-      BLOB_STORE: fs
+      BLOB_STORE: s3
+      BLOB_S3_ENDPOINT: http://127.0.0.1:${SILO_API_PORT:-19000}
+      BLOB_S3_REGION: ${BLOB_S3_REGION:-us-east-1}
+      BLOB_S3_BUCKET: ${BLOB_S3_BUCKET:-deepsonar}
+      BLOB_S3_ACCESS_KEY_ID: ${BLOB_S3_ACCESS_KEY_ID:?set BLOB_S3_ACCESS_KEY_ID}
+      BLOB_S3_SECRET_ACCESS_KEY: ${BLOB_S3_SECRET_ACCESS_KEY:?set BLOB_S3_SECRET_ACCESS_KEY}
+      BLOB_S3_FORCE_PATH_STYLE: "true"
+      BLOB_S3_CACHE_DIR: /app/data/blobs
       BLOB_DIR: /app/data/blobs
     volumes:
       - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
@@ -47,6 +93,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      silo:
+        condition: service_healthy
+      silo-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.SCHEDULER_PORT+'/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -70,3 +120,4 @@ services:
 
 volumes:
   scheduler_blobs:
+  silo_data:
