@@ -98,6 +98,8 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(quota, /defaultRequest:/);
   assert.match(template, /requests:/);
   assert.match(template, /limits:/);
+  assert.match(template, /drop: \["ALL"\]/);
+  assert.match(template, /allowPrivilegeEscalation: false/);
   assert.match(kustomization, /namespace\.yaml/);
   assert.match(kustomization, /runtimeclass-kata\.yaml/);
   assert.match(kustomization, /resourcequota\.yaml/);

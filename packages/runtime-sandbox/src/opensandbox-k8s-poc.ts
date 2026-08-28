@@ -116,12 +116,12 @@ export async function runOpenSandboxK8sPoc(
       && !/OPEN[_-]?SANDBOX[_-]?API[_-]?KEY|OPENSANDBOX_SERVER_API_KEY/i.test(env.stdout)
       && (!input.apiKey || !env.stdout.includes(input.apiKey));
     if (!envClean) throw new Error("OPENSANDBOX_POC_KATA_ENV_LEAK");
-    const limitsProbe = await host.run("grep -E '^(CapPrm|CapEff|NoNewPrivs):' /proc/1/status", { timeoutMs: 5_000 });
+    const limitsProbe = await host.run("grep -E '^(CapPrm|CapEff|NoNewPrivs):' /proc/self/status", { timeoutMs: 5_000 });
     const hardLimits = limitsProbe.exitCode === 0
       && /CapPrm:\s*0+/.test(limitsProbe.stdout)
       && /CapEff:\s*0+/.test(limitsProbe.stdout)
       && /NoNewPrivs:\s*1/.test(limitsProbe.stdout);
-    if (!hardLimits) throw new Error("OPENSANDBOX_POC_KATA_HARD_LIMITS");
+    if (!hardLimits) throw new Error(`OPENSANDBOX_POC_KATA_HARD_LIMITS: ${limitsProbe.stdout.trim() || limitsProbe.stderr.trim()}`);
     return {
       kata: true,
       isolated: true,

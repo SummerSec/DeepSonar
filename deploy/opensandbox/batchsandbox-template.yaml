@@ -9,7 +9,11 @@ spec:
     spec:
       restartPolicy: Never
       containers:
-        - resources:
+        - securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
             requests:
               cpu: "500m"
               memory: 512Mi
