@@ -39,6 +39,11 @@ const targetUrl = new URL(databaseUrl);
 targetUrl.pathname = `/${databaseName}`;
 targetUrl.search = "";
 
+const kubernetes = ["1", "true", "yes", "on"].includes((process.env.OPEN_SANDBOX_KUBERNETES ?? "").toLowerCase());
+/** Kata nodes also run system pods; two `cpu:1` sandboxes fail scheduling on a 2-core node. */
+const sandboxCpu = kubernetes ? 0.4 : 1;
+console.log(`OpenSandbox reconcile kubernetes=${kubernetes} cpu=${sandboxCpu} domain=${process.env.OPEN_SANDBOX_DOMAIN ?? ""}`);
+
 const projectId = randomUUID();
 const canvasId = randomUUID();
 const requeueJobId = randomUUID();
@@ -77,7 +82,7 @@ try {
     platform_tools: ["emit_fact", "emit_finding", "mark_job_done"],
     agent_cli: "claude-code",
     agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
-    sandbox_limits: { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
+    sandbox_limits: { cpu: sandboxCpu, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
     runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
     network_policy: { allow_egress: false },
   };
