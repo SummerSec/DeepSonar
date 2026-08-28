@@ -68,10 +68,11 @@ if (!cancel.cancelled || cancel.leftovers !== 0) {
 const requestedArch = process.env.OPEN_SANDBOX_POC_ARCH?.trim();
 let archSummary = "skipped";
 if (requestedArch === "amd64" || requestedArch === "arm64") {
+  const archImage = process.env.OPEN_SANDBOX_POC_ARCH_IMAGE?.trim() || process.env.OPEN_SANDBOX_POC_IMAGE;
   const arch = await runOpenSandboxArchPoc(client, {
     jobId: "00000000-0000-4000-8000-000000000164",
     attemptId: "00000000-0000-4000-8000-000000000264",
-    image: process.env.OPEN_SANDBOX_POC_IMAGE,
+    image: archImage,
     arch: requestedArch,
   });
   archSummary = `arch=${arch.arch} leftovers=${arch.leftovers}`;

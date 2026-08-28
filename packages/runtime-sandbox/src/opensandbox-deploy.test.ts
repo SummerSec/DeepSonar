@@ -76,3 +76,9 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(kustomization, /resourcequota\.yaml/);
   assert.doesNotMatch(kustomization, /batchsandbox-template\.yaml/);
 });
+
+test("OpenSandbox live harness pins arch image separately from contract-fail busybox", () => {
+  const harness = readFileSync(join(root, "agent-harness/test-opensandbox-poc.ts"), "utf8");
+  assert.match(harness, /OPEN_SANDBOX_POC_ARCH_IMAGE/);
+  assert.match(harness, /runOpenSandboxArchPoc/);
+});
