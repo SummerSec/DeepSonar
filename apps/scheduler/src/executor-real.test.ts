@@ -167,6 +167,7 @@ test("OpenSandbox prod-stack PoC hits Scheduler /readiness against a live server
   assert.match(source, /registerSettingsRoutes/);
   assert.match(source, /GET \/readiness/);
   assert.match(source, /OPENSANDBOX_SERVER_READY/);
+  assert.match(source, /opensandbox\?\.level !== "ok"/);
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(|provision\(/);
 });
 

@@ -88,6 +88,13 @@ try {
   if (!body.checks?.some((check) => check.code === "OPENSANDBOX_SERVER_READY")) {
     throw new Error("GET /readiness missing OPENSANDBOX_SERVER_READY");
   }
+  const healthBody = JSON.parse(health.payload) as {
+    ok?: boolean;
+    opensandbox?: { level?: string; ready?: boolean };
+  };
+  if (healthBody.ok !== true || healthBody.opensandbox?.level !== "ok" || healthBody.opensandbox.ready !== true) {
+    throw new Error(`GET /health opensandbox not ready: ${health.payload}`);
+  }
   const leaked = `${readiness.payload}${health.payload}`.includes(apiKey);
   if (leaked) throw new Error("OpenSandbox API key leaked into readiness/health");
   const leftovers = await runner.listResources();

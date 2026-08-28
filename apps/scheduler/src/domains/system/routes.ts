@@ -2,6 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { renderMetrics } from "../../metrics.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "../../openapi.js";
 import { resolveProductVersion } from "../../product-version.js";
+import {
+  openSandboxAllowsDispatch,
+  refreshOpenSandboxServerStatus,
+  type OpenSandboxServerStatus,
+} from "../../opensandbox-health.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
 import { dispatcherRuntimeStatus } from "../../startup-status.js";
 
@@ -21,6 +26,7 @@ export function registerSystemRoutes(
     runtimeImageStatus?: typeof runtimeImageWarmupStatus;
     dispatcherStatus?: typeof dispatcherRuntimeStatus;
     officialImageWarnings?: () => Promise<string[]> | string[];
+    openSandboxStatus?: () => Promise<OpenSandboxServerStatus> | OpenSandboxServerStatus;
   } = {},
 ): void {
   app.get("/metrics", async (_req, reply) =>
@@ -67,15 +73,23 @@ export function registerSystemRoutes(
     if (officialTrustWarnings.length > 0) {
       console.warn(`[health] ${officialTrustWarnings.join("; ")}`);
     }
+    const openSandbox = await Promise.resolve(
+      (dependencies.openSandboxStatus ?? refreshOpenSandboxServerStatus)(),
+    );
     return {
       ok: true,
-      ready: runtimeImages.ready && dispatcher.enabled,
+      ready: runtimeImages.ready && dispatcher.enabled && openSandboxAllowsDispatch(openSandbox),
       version: resolveProductVersion(),
       runtime_images: {
         ...runtimeImages,
         official_trust_warnings: officialTrustWarnings,
       },
       dispatcher,
+      opensandbox: {
+        level: openSandbox.level,
+        domain: openSandbox.domain,
+        ready: openSandboxAllowsDispatch(openSandbox),
+      },
       ts: Date.now(),
     };
   });

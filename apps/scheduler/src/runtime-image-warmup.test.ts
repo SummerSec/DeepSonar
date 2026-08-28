@@ -81,6 +81,34 @@ test("/health ready requires both warmup and dispatcher", async () => {
   await app.close();
 });
 
+test("/health ready fails closed when OpenSandbox server is down", async () => {
+  const app = Fastify();
+  registerSystemRoutes(app, {
+    runtimeImageStatus: () => ({
+      status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
+    }),
+    dispatcherStatus: () => ({ enabled: true, started_at: "2026-01-01T00:00:00.000Z" }),
+    officialImageWarnings: () => [],
+    openSandboxStatus: () => ({
+      level: "error",
+      domain: "127.0.0.1:8080",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      error: "opensandbox health timed out",
+    }),
+  });
+  const response = await app.inject({ method: "GET", url: "/health" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().ready, false);
+  assert.deepEqual(response.json().opensandbox, {
+    level: "error",
+    domain: "127.0.0.1:8080",
+    ready: false,
+  });
+  assert.equal(JSON.stringify(response.json()).includes("timed out"), false);
+  await app.close();
+});
+
 test("warmup starts without blocking liveness and enables dispatch only after preparation", async () => {
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => { release = resolve; });
