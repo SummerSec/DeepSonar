@@ -190,11 +190,11 @@ post mark_job_done '{"summary":"Claude Code vendor-model Platform API proof fini
     await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
     const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
     const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
-    const vendorEnv = selectedCli === "claude-code"
-      ? { ANTHROPIC_API_KEY: vendorKey }
-      : selectedCli === "dsh"
-        ? { DEEPSEEK_API_KEY: vendorKey }
-        : { OPENAI_API_KEY: vendorKey };
+    const vendorEnv: Record<string, string> = {
+      ...(selectedCli === "claude-code" ? { ANTHROPIC_API_KEY: vendorKey } : {}),
+      ...(selectedCli === "dsh" ? { DEEPSEEK_API_KEY: vendorKey } : {}),
+      ...(selectedCli === "codex" || selectedCli === "open-code" || selectedCli === "pi" ? { OPENAI_API_KEY: vendorKey } : {}),
+    };
     const process = await adapter.start({
       host,
       env: vendorEnv,
@@ -206,7 +206,19 @@ post mark_job_done '{"summary":"Claude Code vendor-model Platform API proof fini
         : {}),
     });
     const payload = selectedCli === "dsh"
-      ? adapter.encodeInput(prompt, { model: "deepseek-chat", modelProvider: "deepseek", cwd: "/workspace" })
+      ? adapter.encodeInput(prompt, {
+          model: "deepseek-chat",
+          modelProvider: "deepseek",
+          cwd: "/workspace",
+          contextIdentity: {
+            context_id: jobId.replaceAll("-", ""),
+            context_revision: 0,
+            adapter_id: "dsh",
+            adapter_version: adapter.version,
+            runtime_identity: "poc",
+            transform_chain_digest: "0",
+          },
+        })
       : adapter.encodeInput(prompt);
     if (payload) await process.write(payload).catch(() => {});
     const text = await collectText(process, 120_000);
