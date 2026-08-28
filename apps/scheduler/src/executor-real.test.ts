@@ -171,6 +171,16 @@ test("OpenSandbox prod-stack PoC hits Scheduler /readiness against a live server
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(|provision\(/);
 });
 
+test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2 server", () => {
+  const source = readFileSync(new URL("./opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /docker-compose.opensandbox.host.yml/);
+  assert.match(source, /host\.docker\.internal:8080/);
+  assert.match(source, /\/api\/health/);
+  assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
+  assert.doesNotMatch(source, /provision\(|executeReal\(/);
+});
+
 test("OpenSandbox real runner loads Agentbox only through the lazy package subpath", () => {
   const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
   assert.match(source, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);

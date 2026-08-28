@@ -1,0 +1,21 @@
+# Attach production scheduler/web to an already-running OpenSandbox.
+# Does not start, stop, or replace the OpenSandbox service.
+#   OPEN_SANDBOX_API_KEY=... OPEN_SANDBOX_DOMAIN=host.docker.internal:8080 \
+#     docker compose -f docker-compose.prod.yml -f docker-compose.real.yml \
+#     -f docker-compose.opensandbox.host.yml up -d --build postgres silo silo-init scheduler web
+services:
+  scheduler:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${SCHEDULER_HOST_PORT:-13100}:3100"
+    environment:
+      SANDBOX_PROVIDER: opensandbox
+      OPEN_SANDBOX_DOMAIN: ${OPEN_SANDBOX_DOMAIN:-host.docker.internal:8080}
+      OPEN_SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
+      OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
+      OPEN_SANDBOX_USE_SERVER_PROXY: ${OPEN_SANDBOX_USE_SERVER_PROXY:-true}
+
+networks:
+  sandbox_gateway:
+    name: ${OPEN_SANDBOX_POC_GATEWAY_NET:-os-prod-compose-gateway}
