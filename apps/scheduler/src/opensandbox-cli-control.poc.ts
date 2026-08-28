@@ -133,7 +133,7 @@ try {
     { config },
     { encryptSecret, fingerprintOf, last4Of, PROVIDER_ENV_MAP },
     { mintJobToken, registerGateway },
-    { materializeProviderSettings, routeMaterializedProviderFilesThroughGateway },
+    { materializeProviderSettings, qualifyPiModelRef, routeMaterializedProviderFilesThroughGateway },
     { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings },
   ] = await Promise.all([
     import("fastify"),
@@ -344,11 +344,14 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         env: gatewayEnv,
         cwd: "/workspace",
         input: prompt,
-        model: plan.model,
+        model: selectedCli === "pi"
+          ? qualifyPiModelRef(plan.model, runtimeConfigFiles) ?? plan.model
+          : plan.model,
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
         contextIdentity: state.contextIdentity,
         ...(dshProvider ? { dshProvider } : {}),
       };
+      await adapter.materialize?.(startContext);
       const started = await adapter.start(startContext);
       const payload = adapter.encodeInput(prompt, state);
       if (payload) await started.write(payload).catch(() => {});
