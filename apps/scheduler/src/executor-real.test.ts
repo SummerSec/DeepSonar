@@ -133,6 +133,16 @@ test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
+test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", () => {
+  const source = readFileSync(new URL("./opensandbox-reaper.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /reapOnce\(\)/);
+  assert.match(source, /isAlive/);
+  assert.match(source, /timeout=1 orphan=1/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
 test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.run", () => {
   const source = readFileSync(new URL("./opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
