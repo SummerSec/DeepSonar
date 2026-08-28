@@ -45,6 +45,10 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
   assert.match(deployPs1, /\$env:SANDBOX_PROVIDER -eq "opensandbox"/);
   assert.match(deployPs1, /docker-compose.opensandbox.prod.yml/);
+  const pkg = readFileSync(join(root, "package.json"), "utf8");
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.match(pkg, /ci:smoke:opensandbox-prod-stack/);
+  assert.match(ci, /OpenSandbox production compose merge/);
 });
 
 test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema", () => {

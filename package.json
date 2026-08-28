@@ -18,6 +18,7 @@
     "ci:smoke:opensandbox-images": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts -- --case images",
     "ci:smoke:opensandbox-prod": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts -- --case prod-config",
     "ci:smoke:opensandbox-prod-up": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts -- --case prod-up",
+    "ci:smoke:opensandbox-prod-stack": "pnpm --filter @deepsonar/plane-client build && pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-prod-stack.poc.ts",
     "ci:smoke:opensandbox-k8s": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts -- --case k8s",
     "ci:smoke:opensandbox-reconcile": "pnpm --filter @deepsonar/plane-client build && pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-reconcile.poc.ts",
     "ci:smoke:opensandbox-reaper": "pnpm --filter @deepsonar/plane-client build && pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-reaper.poc.ts",

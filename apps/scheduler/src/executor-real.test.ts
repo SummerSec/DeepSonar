@@ -160,6 +160,16 @@ test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.
   assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
 });
 
+test("OpenSandbox prod-stack PoC hits Scheduler /readiness against a live server", () => {
+  const source = readFileSync(new URL("./opensandbox-prod-stack.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /registerSettingsRoutes/);
+  assert.match(source, /GET \/readiness/);
+  assert.match(source, /OPENSANDBOX_SERVER_READY/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(|provision\(/);
+});
+
 test("OpenSandbox real runner loads Agentbox only through the lazy package subpath", () => {
   const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
   assert.match(source, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
