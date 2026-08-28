@@ -115,6 +115,7 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.doesNotMatch(external, /(?:^|\s)latest(?:\s|$)|workload_provider = "agent-sandbox"|type = "gvisor"/m);
   assert.match(k8sCompose, /config\.k8s\.external\.toml/);
   assert.match(k8sCompose, /OPEN_SANDBOX_KUBECONFIG/);
+  assert.match(k8sCompose, /OPEN_SANDBOX_KUBERNETES=1/);
   assert.match(k8sCompose, /deepsonar-opensandbox-k8s/);
   assert.match(k8sCompose, /127\.0\.0\.1:18084\/health/);
   assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
@@ -199,4 +200,7 @@ test("main barrel keeps Agentbox on a lazy subpath so OpenSandbox does not load 
   assert.doesNotMatch(runtime, /import\s*\{[^}]*AgentboxRunner/);
   assert.match(runtime, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
   assert.match(runtime, /config\.runtime\.provider === ["']opensandbox["']/);
+  assert.match(runtime, /kubernetesResources: config\.runtime\.openSandbox\.kubernetes/);
+  const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
+  assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
 });

@@ -120,6 +120,29 @@ test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", 
   assert.equal(input.platform, undefined);
 });
 
+test("OpenSandbox runner constructor omits pids when kubernetesResources is set", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client, undefined, { kubernetesResources: true });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.deepEqual(client.created[0]?.resource, { cpu: "2", memory: "2048Mi" });
+  const docker = fakeClient();
+  const dockerRunner = new OpenSandboxRunner(docker);
+  await dockerRunner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.deepEqual(docker.created[0]?.resource, { cpu: "2", memory: "2048Mi", pids: "512" });
+});
+
 test("OpenSandbox runner provisions, exposes host, and verifies contract", async () => {
   const client = fakeClient();
   const runner = new OpenSandboxRunner(client);

@@ -25,7 +25,9 @@ async function createRealRunner(): Promise<SandboxRunner> {
       protocol: config.runtime.openSandbox.protocol,
       useServerProxy: config.runtime.openSandbox.useServerProxy,
       pin,
-    }), { bind: bindGatewayProxyToOpenSandboxNetwork });
+    }), { bind: bindGatewayProxyToOpenSandboxNetwork }, {
+      kubernetesResources: config.runtime.openSandbox.kubernetes,
+    });
   }
   const { AgentboxRunner } = await import("@deepsonar/runtime-sandbox/agentbox");
   return new AgentboxRunner();

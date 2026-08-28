@@ -2,6 +2,8 @@
  * Live proof that Scheduler boot reconcile owns OpenSandbox leftovers.
  * effect_pending / running crash must orphan and destroy, never auto-replay.
  * Requires OPEN_SANDBOX_POC=1, TEST_DATABASE_URL, and a reachable server.
+ * Kubernetes/Kata server additionally needs OPEN_SANDBOX_KUBERNETES=1
+ * so provision omits Docker-only ResourceName=pids.
  */
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";

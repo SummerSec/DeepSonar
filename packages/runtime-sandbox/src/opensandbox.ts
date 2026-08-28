@@ -269,6 +269,15 @@ export type OpenSandboxGatewayBinder = (input: {
   signal?: AbortSignal;
 }) => Promise<{ hostname: string; ip: string }>;
 
+export interface OpenSandboxRunnerOptions {
+  /**
+   * Kubernetes ResourceName 不接受 Docker 专有的 `pids`。
+   * 仍要求冻结 pidsLimit；只是不要写进 Pod resources。
+   * Per-call `ProvisionInput.kubernetesResources` 优先。
+   */
+  kubernetesResources?: boolean;
+}
+
 export class OpenSandboxRunner implements SandboxRunner {
   private readonly sessions = new Map<string, OpenSandboxSession>();
   private readonly provisioning = new Map<string, Promise<OpenSandboxSession>>();
@@ -277,12 +286,16 @@ export class OpenSandboxRunner implements SandboxRunner {
   constructor(
     private readonly client: OpenSandboxClient,
     private readonly gateway?: { bind: OpenSandboxGatewayBinder },
+    private readonly options: OpenSandboxRunnerOptions = {},
   ) {}
 
   async provision(input: ProvisionInput): Promise<RunHandle> {
     if (input.signal?.aborted) throw new Error("provision 已取消");
     const key = `${input.jobId}:${input.attemptId}`;
-    const created = this.client.create(mapOpenSandboxCreateInput(input));
+    const created = this.client.create(mapOpenSandboxCreateInput({
+      ...input,
+      kubernetesResources: input.kubernetesResources ?? this.options.kubernetesResources,
+    }));
     this.provisioning.set(key, created);
     let session: OpenSandboxSession | undefined;
     try {

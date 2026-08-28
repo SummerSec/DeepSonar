@@ -207,6 +207,8 @@ export const config = {
       serverImage: str("OPENSANDBOX_SERVER_IMAGE", ""),
       execdImage: str("OPENSANDBOX_EXECD_IMAGE", ""),
       egressImage: str("OPENSANDBOX_EGRESS_IMAGE", ""),
+      /** Kubernetes 后端省略 Docker 专有 ResourceName=`pids`；仍要求冻结 pidsLimit。 */
+      kubernetes: bool("OPEN_SANDBOX_KUBERNETES", false),
     },
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {

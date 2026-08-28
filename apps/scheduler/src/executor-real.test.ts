@@ -138,6 +138,7 @@ test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay
   assert.match(source, /reconcileOnBoot\(\)/);
   assert.match(source, /effect_pending/);
   assert.match(source, /leftover=0 replay=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
