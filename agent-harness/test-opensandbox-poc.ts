@@ -63,8 +63,9 @@ if (!cancel.cancelled || cancel.leftovers !== 0) {
   throw new Error(`OpenSandbox cancel PoC unexpected result: ${JSON.stringify(cancel)}`);
 }
 const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+const skipHost = process.env.OPEN_SANDBOX_POC_SKIP_HOST === "1";
 let hostSummary = "skipped";
-if (runtimeImage) {
+if (runtimeImage && !skipHost) {
   const host = await runOpenSandboxHostPoc(client, { image: runtimeImage, apiKey });
   if (
     !host.fileOk || !host.reservedRejected || !host.symlinkRejected || !host.oversizedRejected
@@ -77,7 +78,7 @@ if (runtimeImage) {
   hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} isolated=${host.networkIsolated} limits=${host.hardLimits} tab=${host.tabOk} interrupt=${host.interruptOk} closed=${host.closedOnDestroy} clis=${JSON.stringify(host.clis)}`;
 }
 let assetsSummary = "skipped";
-if (runtimeImage) {
+if (runtimeImage && !skipHost) {
   const jobId = randomUUID();
   const volumeName = `deepsonar-assets-${jobId}`;
   const created = spawnSync("sudo", [
@@ -105,7 +106,7 @@ if (runtimeImage) {
   }
 }
 let restrictedSummary = "skipped";
-if (runtimeImage) {
+if (runtimeImage && !skipHost) {
   const restricted = await runOpenSandboxRestrictedPoc(client, { image: runtimeImage });
   if (!restricted.isolated) {
     throw new Error(`OpenSandbox restricted PoC unexpected result: ${JSON.stringify(restricted)}`);

@@ -90,6 +90,12 @@ function ids(): { jobId: string; attemptId: string } {
   return { jobId: randomUUID(), attemptId: randomUUID() };
 }
 
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function collectText(
   process: AsyncIterable<{ type: string; chunk?: string; exitCode?: number }>,
   timeoutMs: number,
@@ -97,14 +103,32 @@ async function collectText(
 ): Promise<{ text: string; exitCode?: number }> {
   const chunks: string[] = [];
   let exitCode: number | undefined;
+  const iterator = process[Symbol.asyncIterator]();
   const deadline = Date.now() + timeoutMs;
-  for await (const event of process) {
-    if (Date.now() > deadline) throw new Error("OPENSANDBOX_POC_STREAM_TIMEOUT");
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    let timedOut = false;
+    const next = await Promise.race([
+      iterator.next(),
+      waitMs(remaining).then(() => {
+        timedOut = true;
+        return { done: true as const, value: undefined };
+      }),
+    ]);
+    if (timedOut) break;
+    if (next.done) break;
+    const event = next.value;
+    if (!event) break;
     if (event.type === "stdout" || event.type === "stderr") chunks.push(event.chunk ?? "");
     if (event.type === "exit") exitCode = event.exitCode;
     if (until && until.test(chunks.join(""))) break;
   }
-  return { text: chunks.join(""), exitCode };
+  const text = chunks.join("");
+  if (until && !until.test(text) && exitCode === undefined && Date.now() >= deadline) {
+    throw new Error("OPENSANDBOX_POC_STREAM_TIMEOUT");
+  }
+  return { text, exitCode };
 }
 
 const NETWORK_ISOLATION_SCRIPT = `
@@ -408,6 +432,8 @@ export async function runOpenSandboxCliLaunchPoc(
       "mkdir -p /workspace/.deepsonar /workspace/.deepsonar-home/.pi/agent /workspace/.opencode && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json",
       { timeoutMs: 5_000 },
     );
+    const alive = await runner.isAlive(handle);
+    if (!alive) throw new Error("OPENSANDBOX_POC_NOT_ALIVE");
     const launched = {} as Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], { started: boolean; notFound: boolean; stdinClosed: boolean }>;
     for (const id of OPENSANDBOX_POC_ADAPTER_IDS) {
       const adapter = AGENT_CLI_RUNTIME_ADAPTERS[id];
@@ -439,10 +465,7 @@ export async function runOpenSandboxCliLaunchPoc(
       const payload = adapter.encodeInput("ping", state);
       if (payload) await process.write(payload).catch(() => { stdinClosed = false; });
       await process.closeStdin().catch(() => { stdinClosed = false; });
-      const out = await collectText(process, 12_000).catch(async () => {
-        await process.kill().catch(() => {});
-        return { text: "" };
-      });
+      const out = await collectText(process, 4_000);
       await process.kill().catch(() => {});
       launched[id] = {
         started: true,
