@@ -90,6 +90,15 @@ try {
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox reconcile')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox reconcile')`;
 
+  const leftovers = await sandboxRunner.listResources();
+  for (const resource of leftovers) {
+    await sandboxRunner.destroyResource(resource).catch(() => {});
+  }
+  const remaining = await sandboxRunner.listResources();
+  if (remaining.length > 0) {
+    throw new Error(`OPENSANDBOX_POC_DIRTY: ${remaining.map((item) => item.resourceId).join(",")}`);
+  }
+
   const provision = async (jobId: string, attemptId: string) => {
     const handle = await sandboxRunner.provision({
       jobId,
