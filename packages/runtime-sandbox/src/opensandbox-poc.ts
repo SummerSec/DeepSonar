@@ -2,10 +2,21 @@
  * Optional live OpenSandbox server smoke (#162 Phase 2).
  * Default CI stays skip-safe; set OPEN_SANDBOX_POC=1 only when a server is up.
  */
-import type { OpenSandboxClient } from "./opensandbox.js";
+import { randomUUID } from "node:crypto";
+import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
+import type { ProvisionInput, SandboxRunner } from "./index.js";
 
 export const OPENSANDBOX_POC_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
+export const OPENSANDBOX_POC_CONTRACT = "deepsonar.runtime.contract/v1";
+export const OPENSANDBOX_POC_CLI_IDS = ["claude", "codex", "opencode", "pi", "dsh"] as const;
+const OPENSANDBOX_POC_CLI_PROBES: Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], string> = {
+  claude: "command -v claude",
+  codex: "command -v codex",
+  opencode: "command -v opencode",
+  pi: "command -v pi",
+  dsh: "test -f /usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js",
+};
 
 export function shouldRunOpenSandboxPoc(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.OPEN_SANDBOX_POC === "1";
@@ -54,7 +65,7 @@ export async function runOpenSandboxContractFailPoc(
     image: input.image ?? OPENSANDBOX_POC_IMAGE,
     network: "none",
     limits: { cpu: 1, memoryMiB: 256, pidsLimit: 64, capDropAll: true, noNewPrivileges: true },
-    expectedContract: "deepsonar.runtime/v1",
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
   }).then(
     () => {
       throw new Error("OPENSANDBOX_POC_CONTRACT_SHOULD_FAIL");
@@ -67,4 +78,128 @@ export async function runOpenSandboxContractFailPoc(
   );
   const leftovers = await runner.listResources({ jobId: input.jobId, attemptId: input.attemptId });
   return { rejected: true, leftovers: leftovers.length };
+}
+
+const hostLimits = { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true };
+
+function ids(): { jobId: string; attemptId: string } {
+  return { jobId: randomUUID(), attemptId: randomUUID() };
+}
+
+async function collectText(process: AsyncIterable<{ type: string; chunk?: string; exitCode?: number }>, timeoutMs: number): Promise<{ text: string; exitCode?: number }> {
+  const chunks: string[] = [];
+  let exitCode: number | undefined;
+  const deadline = Date.now() + timeoutMs;
+  for await (const event of process) {
+    if (Date.now() > deadline) throw new Error("OPENSANDBOX_POC_STREAM_TIMEOUT");
+    if (event.type === "stdout" || event.type === "stderr") chunks.push(event.chunk ?? "");
+    if (event.type === "exit") exitCode = event.exitCode;
+  }
+  return { text: chunks.join(""), exitCode };
+}
+
+export async function runOpenSandboxHostPoc(
+  client: OpenSandboxClient,
+  input: { image: string; apiKey?: string },
+): Promise<{
+  sandboxId: string;
+  provisionMs: number;
+  fileOk: boolean;
+  reservedRejected: boolean;
+  envClean: boolean;
+  incrementalOk: boolean;
+  ptyOk: boolean;
+  reconnected: boolean;
+  leftovers: number;
+  clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>>;
+}> {
+  const runner = new OpenSandboxRunner(client);
+  const { jobId, attemptId } = ids();
+  const started = Date.now();
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "none",
+    limits: hostLimits,
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
+  });
+  const provisionMs = Date.now() - started;
+  try {
+    const host = await runner.ensureHost(handle);
+    await host.uploadFile("note", "/workspace/poc-note.txt");
+    const fileOk = (await host.readWorkspaceFile("/workspace/poc-note.txt", 32)).toString() === "note";
+    let reservedRejected = false;
+    await host.readWorkspaceFile("/workspace/.deepsonar/secret", 32).catch((error) => {
+      reservedRejected = error instanceof Error && /forbidden/.test(error.message);
+    });
+    const env = await host.run("sh -c 'env'", { timeoutMs: 10_000 });
+    const envClean = env.exitCode === 0
+      && !/OPEN[_-]?SANDBOX[_-]?API[_-]?KEY|OPENSANDBOX_SERVER_API_KEY/i.test(env.stdout)
+      && (!input.apiKey || !env.stdout.includes(input.apiKey));
+    const incremental = await host.runAsync("sh -c 'read x; printf %s \"$x\"'", { cwd: "/workspace" });
+    await incremental.write("steer\n");
+    const incrementalOut = await collectText(incremental, 15_000);
+    const incrementalOk = incrementalOut.text.includes("steer");
+    const pty = await host.runAsync("sh -c 'read x; printf %s \"$x\"'", { cwd: "/workspace", pty: true });
+    if (!pty.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
+    await pty.resize(80, 24);
+    await pty.write("term\n");
+    const ptyOut = await collectText(pty, 15_000);
+    await pty.kill().catch(() => {});
+    const ptyOk = ptyOut.text.includes("term");
+    const reconnected = new OpenSandboxRunner(client);
+    const remote = await reconnected.ensureHost(handle);
+    const probe = await remote.run("true", { timeoutMs: 10_000 });
+    const clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>> = {};
+    for (const id of OPENSANDBOX_POC_CLI_IDS) {
+      const found = await remote.run(OPENSANDBOX_POC_CLI_PROBES[id], { timeoutMs: 5_000 });
+      clis[id] = found.exitCode === 0;
+    }
+    return {
+      sandboxId: handle.sandboxId,
+      provisionMs,
+      fileOk,
+      reservedRejected,
+      envClean,
+      incrementalOk,
+      ptyOk,
+      reconnected: probe.exitCode === 0,
+      leftovers: 0,
+      clis,
+    };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
+}
+
+export async function runOpenSandboxCancelPoc(
+  runner: SandboxRunner,
+  input: { image?: string },
+): Promise<{ cancelled: true; leftovers: number }> {
+  const { jobId, attemptId } = ids();
+  const abort = new AbortController();
+  const provision = runner.provision({
+    jobId,
+    attemptId,
+    image: input.image ?? OPENSANDBOX_POC_IMAGE,
+    network: "none",
+    limits: hostLimits,
+    signal: abort.signal,
+  } satisfies ProvisionInput);
+  abort.abort();
+  await provision.then(
+    () => {
+      throw new Error("OPENSANDBOX_POC_CANCEL_SHOULD_REJECT");
+    },
+    (error) => {
+      if (!(error instanceof Error) || !/已取消/.test(error.message)) throw error;
+    },
+  );
+  const leftovers = await runner.listResources({ jobId, attemptId });
+  return { cancelled: true, leftovers: leftovers.length };
 }

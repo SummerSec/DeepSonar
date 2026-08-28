@@ -2,7 +2,9 @@ import {
   createSdkOpenSandboxClient,
   OpenSandboxRunner,
   readOpenSandboxPin,
+  runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
+  runOpenSandboxHostPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
@@ -48,4 +50,19 @@ const contract = await runOpenSandboxContractFailPoc(new OpenSandboxRunner(clien
 if (!contract.rejected || contract.leftovers !== 0) {
   throw new Error(`OpenSandbox contract PoC unexpected result: ${JSON.stringify(contract)}`);
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers}`);
+const cancel = await runOpenSandboxCancelPoc(new OpenSandboxRunner(client), {
+  image: process.env.OPEN_SANDBOX_POC_IMAGE,
+});
+if (!cancel.cancelled || cancel.leftovers !== 0) {
+  throw new Error(`OpenSandbox cancel PoC unexpected result: ${JSON.stringify(cancel)}`);
+}
+const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+let hostSummary = "skipped";
+if (runtimeImage) {
+  const host = await runOpenSandboxHostPoc(client, { image: runtimeImage, apiKey });
+  if (!host.fileOk || !host.reservedRejected || !host.envClean || !host.incrementalOk || !host.ptyOk || !host.reconnected) {
+    throw new Error(`OpenSandbox host PoC unexpected result: ${JSON.stringify(host)}`);
+  }
+  hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} clis=${JSON.stringify(host.clis)}`;
+}
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary}`);

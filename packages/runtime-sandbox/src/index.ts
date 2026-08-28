@@ -131,8 +131,12 @@ export {
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
 export {
+  OPENSANDBOX_POC_CLI_IDS,
+  OPENSANDBOX_POC_CONTRACT,
   OPENSANDBOX_POC_IMAGE,
+  runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
+  runOpenSandboxHostPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";
