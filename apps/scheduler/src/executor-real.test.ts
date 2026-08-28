@@ -255,11 +255,10 @@ test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2
   assert.doesNotMatch(source, /provision\(|executeReal\(/);
 });
 
-test("OpenSandbox real runner loads Agentbox only through the lazy package subpath", () => {
+test("OpenSandbox real runner does not load Agentbox", () => {
   const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
-  assert.match(source, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
-  assert.match(source, /config\.runtime\.provider === ["']opensandbox["']/);
-  assert.doesNotMatch(source, /import\s*\{[^}]*AgentboxRunner/);
+  assert.doesNotMatch(source, /AgentboxRunner|runtime-sandbox\/agentbox/);
+  assert.match(source, /provider !== ["']opensandbox["']/);
 });
 
 test("OpenSandbox Platform API PoC injects capability env at provision, not host.run", () => {
@@ -276,7 +275,7 @@ test("OpenSandbox Platform API PoC injects capability env at provision, not host
   assert.match(source, /submit_hub_decision/);
 });
 
-test("real executor passes the reserved Skill to AgentBox without putting the API token in the manifest", () => {
+test("real executor passes the reserved Skill to the sandbox without putting the API token in the manifest", () => {
   const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
   const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /skills:\s*runtimeSkills as never/);

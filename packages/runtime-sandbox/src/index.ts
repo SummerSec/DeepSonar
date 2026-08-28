@@ -1,7 +1,6 @@
 /**
  * runtime-adapter：调度器与沙箱之间的唯一接口（ARCHITECTURE §5 / #162）
- * 实现可替换：noop（骨架）→ provider adapter（OpenSandbox / Agentbox 过渡）
- * Agentbox 只经 package 子路径 `./agentbox` 加载，主 barrel 不静态 import agentbox-sdk。
+ * 实现可替换：noop（骨架）→ OpenSandbox（real 默认）。
  */
 
 import type { RuntimeHost, RuntimeResource } from "./runtime-host.js";
@@ -231,9 +230,15 @@ export {
   SHARED_ASSETS_VOLUME_LABEL,
   WORKSPACE_RESERVED_ROOTS,
   assertReadableWorkspacePath,
+  assertSharedAssetsContainerMount,
   assertSharedAssetsVolumeOwnership,
+  bindProvisionAbortSignal,
+  buildTerminalShellCommand,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
+  sharedAssetsVolumeBinds,
+  terminalShellCommand,
+  writeTerminalInput,
 } from "./runtime-shared.js";
 export {
   createSemanticToolState,

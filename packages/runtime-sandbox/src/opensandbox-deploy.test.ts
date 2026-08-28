@@ -28,7 +28,7 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
 });
 
-test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () => {
+test("OpenSandbox production overlay is the default real deploy path", () => {
   const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
   const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
   const deployPs1 = readFileSync(join(root, "deploy/deploy.ps1"), "utf8");
@@ -41,10 +41,10 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
   assert.doesNotMatch(overlay, /:latest|network_mode:\s*host/);
   assert.doesNotMatch(overlay, /127\.0\.0\.1:8080:8080/);
-  assert.match(deploySh, /\[ "\$\{SANDBOX_PROVIDER:-\}" = "opensandbox" \]/);
+  assert.match(deploySh, /SANDBOX_PROVIDER:-opensandbox/);
   assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
   assert.match(deploySh, /iptables-legacy -P FORWARD ACCEPT/);
-  assert.match(deployPs1, /\$env:SANDBOX_PROVIDER -eq "opensandbox"/);
+  assert.match(deployPs1, /IsNullOrWhiteSpace\(\$env:SANDBOX_PROVIDER\)/);
   assert.match(deployPs1, /docker-compose.opensandbox.prod.yml/);
   const pkg = readFileSync(join(root, "package.json"), "utf8");
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
@@ -233,22 +233,23 @@ test("OpenSandbox adapter does not import Agentbox SDK types", () => {
   assert.match(shared, /export function parseToolManifest/);
 });
 
-test("main barrel keeps Agentbox on a lazy subpath so OpenSandbox does not load agentbox-sdk", () => {
+test("real runner is OpenSandbox only and Agentbox is deleted", () => {
   const barrel = readFileSync(join(root, "packages/runtime-sandbox/src/index.ts"), "utf8");
   const runtime = readFileSync(join(root, "apps/scheduler/src/runtime.ts"), "utf8");
   const pkg = JSON.parse(readFileSync(join(root, "packages/runtime-sandbox/package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
     exports?: Record<string, { types?: string; default?: string }>;
   };
   assert.doesNotMatch(barrel, /from ["']\.\/agentbox\.js["']/);
-  assert.doesNotMatch(barrel, /AgentboxRunner|createAgentboxRuntimeHost|wrapAgentboxProcess/);
-  assert.equal(pkg.exports?.["./agentbox"]?.types, "./src/agentbox.ts");
-  assert.equal(pkg.exports?.["./agentbox"]?.default, "./dist/agentbox.js");
-  assert.doesNotMatch(runtime, /import\s*\{[^}]*AgentboxRunner/);
-  assert.match(runtime, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
-  assert.match(runtime, /config\.runtime\.provider === ["']opensandbox["']/);
+  assert.doesNotMatch(barrel, /AgentboxRunner|createAgentboxRuntimeHost|wrapAgentboxProcess|agentbox-sdk/);
+  assert.equal(pkg.exports?.["./agentbox"], undefined);
+  assert.equal(pkg.dependencies?.["agentbox-sdk"], undefined);
+  assert.doesNotMatch(runtime, /AgentboxRunner|runtime-sandbox\/agentbox/);
+  assert.match(runtime, /provider !== ["']opensandbox["']/);
   assert.match(runtime, /kubernetesResources: config\.runtime\.openSandbox\.kubernetes/);
   assert.match(runtime, /KubernetesSharedAssetsVolumeManager/);
   assert.match(runtime, /bindGatewayProxyToKubernetesService/);
   const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
+  assert.match(config, /SANDBOX_PROVIDER", "opensandbox"/);
   assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
 });

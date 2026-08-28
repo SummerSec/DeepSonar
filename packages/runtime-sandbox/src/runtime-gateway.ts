@@ -1,6 +1,6 @@
 /**
  * Scheduler-owned Model Gateway sidecar (#162).
- * Agentbox and OpenSandbox both attach to this proxy; do not import agentbox-sdk.
+ * OpenSandbox attaches to this proxy.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { DEEPSONAR_GATEWAY_PROXY_HOST } from "./runtime-shared.js";

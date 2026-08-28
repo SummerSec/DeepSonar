@@ -163,8 +163,8 @@ set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
 if [ "$MODE" = "real" ]; then
   set -- "$@" -f "$REAL_COMPOSE_FILE"
 fi
-# Opt-in only. Default real mode stays Agentbox until #162 Phase 4.
-if [ "${SANDBOX_PROVIDER:-}" = "opensandbox" ]; then
+# real 默认 OpenSandbox；显式 SANDBOX_PROVIDER= 其它值才跳过 overlay。
+if [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
   set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
   # Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
   if command -v sudo >/dev/null 2>&1; then
@@ -324,7 +324,7 @@ case "$ACTION" in
       echo "[deploy] 当前为 fake 模式（仅状态机）；真实沙箱请使用：./deploy/deploy.sh up real"
     else
       echo "[deploy] 当前为 real 模式（真实沙箱）；需挂载容器 runtime socket（见 docker-compose.real.yml）"
-      if [ "${SANDBOX_PROVIDER:-}" = "opensandbox" ]; then
+      if [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
         echo "[deploy] SANDBOX_PROVIDER=opensandbox overlay enabled (docker-compose.opensandbox.prod.yml)"
       fi
     fi

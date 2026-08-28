@@ -1,6 +1,5 @@
 /**
- * Provider-neutral runtime primitives shared by Agentbox and OpenSandbox.
- * Phase 4 deletes Agentbox; these stay as the adapter-independent surface.
+ * Provider-neutral runtime primitives for OpenSandbox and host Docker helpers.
  */
 
 import path from "node:path";
@@ -9,6 +8,7 @@ export const DEEPSONAR_GATEWAY_PROXY_HOST = "deepsonar-gateway-proxy";
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
 export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
+const SHARED_ASSETS_VOLUME_RE = /^deepsonar-assets-[a-z0-9][a-z0-9_.-]{0,62}$/;
 export const WORKSPACE_RESERVED_ROOTS = [
   "/workspace/.deepsonar",
   "/workspace/.deepsonar-home",
@@ -156,3 +156,69 @@ finally:
     for descriptor in reversed(fds):
         os.close(descriptor)
 `;
+
+export function terminalShellCommand(shell: "bash" | "sh"): string {
+  return shell === "bash" ? "exec bash -il" : "exec /bin/sh -i";
+}
+
+export function buildTerminalShellCommand(): string {
+  return [
+    "if command -v bash >/dev/null 2>&1; then",
+    `${terminalShellCommand("bash")};`,
+    "else",
+    `${terminalShellCommand("sh")};`,
+    "fi",
+  ].join(" ");
+}
+
+export async function writeTerminalInput(
+  process: { write?: (input: string) => Promise<void> },
+  data: string,
+): Promise<void> {
+  if (!process.write) throw new Error("TERMINAL_SESSION_CLOSED");
+  await process.write(data);
+}
+
+export function sharedAssetsVolumeBinds(mount?: { volumeName: string }): string[] {
+  if (!mount) return [];
+  if (!SHARED_ASSETS_VOLUME_RE.test(mount.volumeName)) {
+    throw new Error("shared assets volume must be a Scheduler-owned deepsonar-assets-* named volume");
+  }
+  return [`${mount.volumeName}:${SHARED_ASSETS_MOUNT_PATH}:ro`];
+}
+
+export function assertSharedAssetsContainerMount(
+  inspected: { Mounts?: unknown },
+  volumeName: string,
+): void {
+  const mounts = Array.isArray(inspected.Mounts) ? inspected.Mounts : [];
+  const targetMounts = mounts.filter((entry) => (
+    entry && typeof entry === "object"
+    && (entry as Record<string, unknown>).Destination === SHARED_ASSETS_MOUNT_PATH
+  ));
+  const mount = targetMounts[0] as Record<string, unknown> | undefined;
+  if (
+    targetMounts.length !== 1
+    || mount?.Type !== "volume"
+    || mount?.Name !== volumeName
+    || mount?.RW !== false
+  ) {
+    throw new Error("sandbox shared assets mount does not match the frozen read-only volume");
+  }
+}
+
+export function bindProvisionAbortSignal(
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): () => void {
+  if (!signal) return () => {};
+  let handled = false;
+  const abort = () => {
+    if (handled) return;
+    handled = true;
+    onAbort();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  return () => signal.removeEventListener("abort", abort);
+}

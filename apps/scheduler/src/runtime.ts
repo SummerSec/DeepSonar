@@ -26,29 +26,28 @@ function kubernetesSharedAssetsManager(): SharedAssetsVolumeManager {
 }
 
 async function createRealRunner(): Promise<SandboxRunner> {
-  if (config.runtime.provider === "opensandbox") {
-    const pin = readOpenSandboxPin({
-      sdk: config.runtime.openSandbox.sdkVersion || undefined,
-      serverImage: config.runtime.openSandbox.serverImage || undefined,
-      execdImage: config.runtime.openSandbox.execdImage || undefined,
-      egressImage: config.runtime.openSandbox.egressImage || undefined,
-    });
-    return new OpenSandboxRunner(createSdkOpenSandboxClient({
-      domain: config.runtime.openSandbox.domain,
-      apiKey: config.runtime.openSandbox.apiKey,
-      protocol: config.runtime.openSandbox.protocol,
-      useServerProxy: config.runtime.openSandbox.useServerProxy,
-      pin,
-    }), {
-      bind: config.runtime.openSandbox.kubernetes
-        ? bindGatewayProxyToKubernetesService
-        : bindGatewayProxyToOpenSandboxNetwork,
-    }, {
-      kubernetesResources: config.runtime.openSandbox.kubernetes,
-    });
+  if (config.runtime.provider !== "opensandbox") {
+    throw new Error(`SANDBOX_PROVIDER=${config.runtime.provider} 已移除；real 只支持 opensandbox`);
   }
-  const { AgentboxRunner } = await import("@deepsonar/runtime-sandbox/agentbox");
-  return new AgentboxRunner();
+  const pin = readOpenSandboxPin({
+    sdk: config.runtime.openSandbox.sdkVersion || undefined,
+    serverImage: config.runtime.openSandbox.serverImage || undefined,
+    execdImage: config.runtime.openSandbox.execdImage || undefined,
+    egressImage: config.runtime.openSandbox.egressImage || undefined,
+  });
+  return new OpenSandboxRunner(createSdkOpenSandboxClient({
+    domain: config.runtime.openSandbox.domain,
+    apiKey: config.runtime.openSandbox.apiKey,
+    protocol: config.runtime.openSandbox.protocol,
+    useServerProxy: config.runtime.openSandbox.useServerProxy,
+    pin,
+  }), {
+    bind: config.runtime.openSandbox.kubernetes
+      ? bindGatewayProxyToKubernetesService
+      : bindGatewayProxyToOpenSandboxNetwork,
+  }, {
+    kubernetesResources: config.runtime.openSandbox.kubernetes,
+  });
 }
 
 /**

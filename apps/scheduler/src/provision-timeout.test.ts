@@ -56,5 +56,5 @@ test("dispatcher records provision latency by sandbox provider", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /deepsonar_sandbox_provision_seconds_sum/);
   assert.match(source, /deepsonar_sandbox_provision_failed_total/);
-  assert.match(source, /provider === "opensandbox" \? "opensandbox" : "agentbox"/);
+  assert.match(source, /agentMode !== "real"\s*\n\s*\? "noop"\s*\n\s*: "opensandbox"/);
 });

@@ -1,6 +1,5 @@
 /**
- * Host Docker CLI/API helpers shared by Agentbox and the Gateway sidecar.
- * This module must not import agentbox-sdk.
+ * Host Docker CLI/API helpers for the Gateway sidecar and shared-assets volumes.
  */
 import { execFile } from "node:child_process";
 import http from "node:http";

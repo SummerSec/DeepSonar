@@ -51,7 +51,7 @@
         │ 起沙箱/跑 Agent              │ 结构化事件
 ┌───────▼──────────┐         ┌────────▼─────────┐
 │  Runtime         │         │  Canvas Service  │
-│  agentbox 沙箱    │         │  每项目一张画布   │
+│  OpenSandbox 沙箱 │         │  每项目一张画布   │
 │  + Claude Code   │         │  节点/边/事件     │
 └──────────────────┘         └──────────────────┘
 ```
@@ -125,7 +125,7 @@ pending → claimed → provisioning → running → succeeded
 **Lease 机制（防悬挂，核心纪律）：**
 
 - Job 进入 `running` 时写入 `lease_expires_at = now + LEASE_TTL`（默认 120s）
-- 调度器经 `RuntimeHost` / `SandboxRunner.isAlive` 探测存活并续 lease；进程/通道断开即停续。real 默认仍走 Agentbox；`SANDBOX_PROVIDER=opensandbox` 时走 OpenSandbox，不把本机 Docker inspect 当唯一真相
+- 调度器经 `RuntimeHost` / `SandboxRunner.isAlive` 探测存活并续 lease；进程/通道断开即停续。real 默认 OpenSandbox，不把本机 Docker inspect 当唯一真相
 - **Reaper**（调度器内置定时任务，默认每 30s 扫描）：
   - 发现 `status=running 且 lease_expires_at < now` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed` → 回写 Plane
   - 发现 `运行时长 > timeout_sec` → 标记 `timeout` → 同上回收
@@ -202,7 +202,7 @@ loop:
   1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
   2. 原子 claim（DB advisory lock 串行化配额判断）→ 读取 `global_settings.effective_rules` 的全局/每项目 cap，再按“Provider → Credential → Model ID → Agent CLI”检查资源配额 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher；规则更新也会 notify，后续 claim 热生效
   3. Canvas：创建/更新 job 节点（running）
-  4. Runtime：经 `SandboxRunner` 起沙箱（默认 Agentbox；`SANDBOX_PROVIDER=opensandbox` 时为 OpenSandbox），注入任务包、静态控制 Skill 与冻结 API operation allowlist
+  4. Runtime：经 `SandboxRunner` 起沙箱（real 默认 OpenSandbox），注入任务包、静态控制 Skill 与冻结 API operation allowlist
   5. 启动冻结的 Agent CLI；文本流经 Runtime Adapter 回传，语义事件经 Job 级控制 API 回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
@@ -275,7 +275,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 |------|------|------|
 | **plane-adapter** | HTTP Client | 拉 Issue、改状态、评论；字段映射 |
 | **scheduler-core** | 服务 + Postgres | jobs/events、claim、状态机、限流、Reaper、规则引擎 |
-| **runtime-adapter** | provider-neutral RuntimeHost（#162） | provision/run/stop/delete 与 process/file/PTY；Agentbox 为过渡实现，OpenSandbox 为长期目标；CLI adapter 不引用 SDK 类型 |
+| **runtime-adapter** | provider-neutral RuntimeHost（#162） | provision/run/stop/delete 与 process/file/PTY；real 默认 OpenSandbox；CLI adapter 不引用 SDK 类型 |
 | **canvas-service** | API + React Flow 渲染 | 节点边 CRUD；auto-layout；只读 WS 推送 |
 | **agent-harness** | 沙箱内包装脚本 | 读任务 JSON、调 CLI、把工具调用转成 Event API、心跳 |
 | **web-ui** | React + React Flow (@xyflow/react, MIT) | 打开某项目画布；链到 Plane |
@@ -286,7 +286,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ Web 端 elkjs 可见投影布局**；大投影固定列兜底，服务端 `x/y` 仅作 placement/exchange hint。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
-- 运行时：**provider-neutral RuntimeHost（#162）**——Scheduler 只通过内部契约驱动沙箱生命周期、流式进程、文件与 PTY，重启后经 `ensureHost` 按持久 resource ID 重连。当前 real 默认仍由 Agentbox local-docker 实现这些契约；OpenSandbox Docker adapter 已绑定 `@alibaba-group/opensandbox@0.1.11`，经 `SANDBOX_PROVIDER=opensandbox` 启用，升级只接受显式 pin。Phase 3 部署 overlay 为 Kubernetes BatchSandbox + Kata `kata-qemu`（`deploy/opensandbox/config.k8s.toml`），namespace 另有 ResourceQuota/LimitRange（`kustomization.yaml` 只装配基础设施清单）；对 K8s server 须设 `OPEN_SANDBOX_KUBERNETES=1`，`OpenSandboxRunner` 省略 Docker 专有 ResourceName=`pids` 但仍要求冻结 `pidsLimit`；`pnpm ci:smoke:opensandbox-k8s` 真机 `kata=true leftovers=0`（官方 base，`RuntimeClass=kata-qemu`，隔离/逃逸/env/hard limits）；`pnpm ci:smoke:opensandbox-gvisor` 真机证明 gVisor+egress `compatible=false natUnsupported=true`；集群若存在 `sandboxes.agents.x-k8s.io` 则 fail closed，不按文档推断可用。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。语义事件只经 Job 级 Platform API 回传（`restricted` 仅放行 `deepsonar-gateway-proxy`，由路径过滤 sidecar 转发 `/gateway` 与 `/control/v1`）。OpenSandbox lifecycle / execd / API key 只留在 Scheduler 适配层。无厂商 LLM 凭据的五类 adapter 协议（初始 input、增量 steer/follow-up、stdin 关闭）、Job/Attempt 重启对账（新 runner `list`/`ensureHost`/`isAlive` 后销毁 leftover=0），以及 OpenSandbox 内 `restricted` 经调度器 `preparePlatformCapability` 在 provision 注入短期 token、worker 只读沙箱 env 提交 `emit_fact`/`emit_finding`/`mark_job_done`（无效 token 401，`provisionedEnv=true`）已在官方 base 真机验证；`dispatchOnce` 已证明 claim/provision 后 leftover=0；生产可用 `SANDBOX_PROVIDER=opensandbox` 叠加 overlay，默认仍为 Agentbox。`pnpm ci:smoke:opensandbox-prod` 渲染 prod+real+overlay 且不启动栈；`pnpm ci:smoke:opensandbox-images` 对 registry 中九个官方 key 做 contract 重验与五类 CLI 探测（本机 leftover=0）。`isAlive` 不把单次 execd 探测当唯一真相。假客户端上五类 CLI 对瞬态 `503` 均按各自契约同会话恢复，永久 `401` 不恢复；DSH 在 `initialize` 前冻结 `session-${context_id}`。SDK create 可透传 `platform={os,arch}`；本机 Docker 真机已覆盖 `arch=amd64 leftovers=0` 与官方 arm64 child + qemu `arch=arm64 leftovers=0`。Dispatcher 按 provider 记 provision 时延。厂商 E2E 入口 `pnpm ci:smoke:opensandbox-cli-control` 把长期 Provider Key 留在 Scheduler 凭据库，经 `/gateway` 转发，不注入沙箱。`pnpm ci:smoke:opensandbox-k8s` 在显式开启时要求工作负载实际使用 `RuntimeClass=kata-qemu` 且 leftover=0，并证明 Kata + egress sidecar 放行 `deepsonar-gateway-proxy`、拦住同命名空间兄弟 Service；restricted/egress 的 Kubernetes 路径走 `bindGatewayProxyToKubernetesService`，把 Scheduler 持有的 Gateway Service ClusterIP 写入沙箱 `/etc/hosts`（缺 Service / headless=`None` fail closed），不再 skip 或调用 Docker ExtraHosts；缺集群 skip，静态 overlay 不能代替。生产 overlay 发布 `127.0.0.1:18080` 并 health-gate scheduler；`pnpm ci:smoke:opensandbox-prod-up` 独占拉起 overlay server，打 `/health` 并鉴权 `list()`；完整 provision 仍由 Phase 2 server 证明。`pnpm ci:smoke:opensandbox-reconcile` 用 `reconcileOnBoot` 证明 `effect_pending`/running 崩溃 orphan 且不自动重放；K8s/Kata 真机同样 `requeued=1 orphaned=2 leftover=0 replay=0`。`pnpm ci:smoke:opensandbox-reaper` K8s/Kata 真机 `timeout=1 orphan=1 live=1 leftover=0 tokens=revoked pty=closed assets=0`（`KubernetesSharedAssetsVolumeManager` PVC）。`OPEN_SANDBOX_KUBERNETES=1` 时省略 ResourceName=`pids`，共享资产走 labeled PVC，Gateway bind 走 ClusterIP。镜像契约与共享资产原语在 `runtime-shared.ts`，OpenSandbox adapter 不再 import `agentbox.ts`。主 barrel 不 re-export Agentbox；`SANDBOX_PROVIDER=opensandbox` 时 Scheduler 只经 `@deepsonar/runtime-sandbox` 加载 OpenSandbox，不加载 `agentbox-sdk`。Dispatcher 本机 `docker inspect` 仅限 `local-docker`；OpenSandbox 在 provision 后重验冻结 digest/contract。`SANDBOX_PROVIDER=opensandbox` 时 readiness / claim 探测 OpenSandbox server（鉴权 `list()`），缺 key 或不可达 fail closed。`pnpm ci:smoke:opensandbox-prod-stack` 用进程内 Scheduler 证明 `/readiness` 含 `OPENSANDBOX_SERVER_READY`，且 `/health.opensandbox.level=ok`。`GET /health` 在 OpenSandbox 模式下把鉴权探测写入 `opensandbox`，server 不可达则 `ready=false`。核心 CI 渲染 prod+real+overlay compose merge。这些不能代替五类 CLI 厂商模型完整 E2E，也不能代替 Phase 4 删除 Agentbox。
+- 运行时：**provider-neutral RuntimeHost（#162）**——Scheduler 只通过内部契约驱动沙箱生命周期、流式进程、文件与 PTY，重启后经 `ensureHost` 按持久 resource ID 重连。real 默认由 OpenSandbox 实现这些契约，绑定 `@alibaba-group/opensandbox@0.1.11`，升级只接受显式 pin。Phase 3 部署 overlay 为 Kubernetes BatchSandbox + Kata `kata-qemu`（`deploy/opensandbox/config.k8s.toml`），namespace 另有 ResourceQuota/LimitRange（`kustomization.yaml` 只装配基础设施清单）；对 K8s server 须设 `OPEN_SANDBOX_KUBERNETES=1`，`OpenSandboxRunner` 省略 Docker 专有 ResourceName=`pids` 但仍要求冻结 `pidsLimit`；`pnpm ci:smoke:opensandbox-k8s` 真机 `kata=true leftovers=0`（官方 base，`RuntimeClass=kata-qemu`，隔离/逃逸/env/hard limits）；`pnpm ci:smoke:opensandbox-gvisor` 真机证明 gVisor+egress `compatible=false natUnsupported=true`；集群若存在 `sandboxes.agents.x-k8s.io` 则 fail closed，不按文档推断可用。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。语义事件只经 Job 级 Platform API 回传（`restricted` 仅放行 `deepsonar-gateway-proxy`，由路径过滤 sidecar 转发 `/gateway` 与 `/control/v1`）。OpenSandbox lifecycle / execd / API key 只留在 Scheduler 适配层。无厂商 LLM 凭据的五类 adapter 协议（初始 input、增量 steer/follow-up、stdin 关闭）、Job/Attempt 重启对账（新 runner `list`/`ensureHost`/`isAlive` 后销毁 leftover=0），以及 OpenSandbox 内 `restricted` 经调度器 `preparePlatformCapability` 在 provision 注入短期 token、worker 只读沙箱 env 提交 `emit_fact`/`emit_finding`/`mark_job_done`（无效 token 401，`provisionedEnv=true`）已在官方 base 真机验证；`dispatchOnce` 已证明 claim/provision 后 leftover=0；生产可用 `SANDBOX_PROVIDER=opensandbox` 叠加 overlay，默认仍为 Agentbox。`pnpm ci:smoke:opensandbox-prod` 渲染 prod+real+overlay 且不启动栈；`pnpm ci:smoke:opensandbox-images` 对 registry 中九个官方 key 做 contract 重验与五类 CLI 探测（本机 leftover=0）。`isAlive` 不把单次 execd 探测当唯一真相。假客户端上五类 CLI 对瞬态 `503` 均按各自契约同会话恢复，永久 `401` 不恢复；DSH 在 `initialize` 前冻结 `session-${context_id}`。SDK create 可透传 `platform={os,arch}`；本机 Docker 真机已覆盖 `arch=amd64 leftovers=0` 与官方 arm64 child + qemu `arch=arm64 leftovers=0`。Dispatcher 按 provider 记 provision 时延。厂商 E2E 入口 `pnpm ci:smoke:opensandbox-cli-control` 把长期 Provider Key 留在 Scheduler 凭据库，经 `/gateway` 转发，不注入沙箱。`pnpm ci:smoke:opensandbox-k8s` 在显式开启时要求工作负载实际使用 `RuntimeClass=kata-qemu` 且 leftover=0，并证明 Kata + egress sidecar 放行 `deepsonar-gateway-proxy`、拦住同命名空间兄弟 Service；restricted/egress 的 Kubernetes 路径走 `bindGatewayProxyToKubernetesService`，把 Scheduler 持有的 Gateway Service ClusterIP 写入沙箱 `/etc/hosts`（缺 Service / headless=`None` fail closed），不再 skip 或调用 Docker ExtraHosts；缺集群 skip，静态 overlay 不能代替。生产 overlay 发布 `127.0.0.1:18080` 并 health-gate scheduler；`pnpm ci:smoke:opensandbox-prod-up` 独占拉起 overlay server，打 `/health` 并鉴权 `list()`；完整 provision 仍由 Phase 2 server 证明。`pnpm ci:smoke:opensandbox-reconcile` 用 `reconcileOnBoot` 证明 `effect_pending`/running 崩溃 orphan 且不自动重放；K8s/Kata 真机同样 `requeued=1 orphaned=2 leftover=0 replay=0`。`pnpm ci:smoke:opensandbox-reaper` K8s/Kata 真机 `timeout=1 orphan=1 live=1 leftover=0 tokens=revoked pty=closed assets=0`（`KubernetesSharedAssetsVolumeManager` PVC）。`OPEN_SANDBOX_KUBERNETES=1` 时省略 ResourceName=`pids`，共享资产走 labeled PVC，Gateway bind 走 ClusterIP。镜像契约与共享资产原语在 `runtime-shared.ts`，OpenSandbox adapter 不再 import `agentbox.ts`。主 barrel 不 re-export Agentbox；`SANDBOX_PROVIDER=opensandbox` 时 Scheduler 只经 `@deepsonar/runtime-sandbox` 加载 OpenSandbox，不加载 `agentbox-sdk`。Dispatcher 本机 `docker inspect` 仅限 `local-docker`；OpenSandbox 在 provision 后重验冻结 digest/contract。`SANDBOX_PROVIDER=opensandbox` 时 readiness / claim 探测 OpenSandbox server（鉴权 `list()`），缺 key 或不可达 fail closed。`pnpm ci:smoke:opensandbox-prod-stack` 用进程内 Scheduler 证明 `/readiness` 含 `OPENSANDBOX_SERVER_READY`，且 `/health.opensandbox.level=ok`。`GET /health` 在 OpenSandbox 模式下把鉴权探测写入 `opensandbox`，server 不可达则 `ready=false`。核心 CI 渲染 prod+real+overlay compose merge。这些不能代替五类 CLI 厂商模型完整 E2E，也不能代替 Phase 4 删除 Agentbox。
 - Plane：自托管 Community + API Token
 
 暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。
@@ -487,7 +487,7 @@ Job 事件仍必须经过本摄入硬门。
 
 ## 8. Agent 任务包与事件通道
 
-调度器通过 provider-neutral `RuntimeHost` 在一次性沙箱内以官方 CLI 协议拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。Agentbox 是过渡实现；OpenSandbox 经 `SANDBOX_PROVIDER=opensandbox` 启用。
+调度器通过 provider-neutral `RuntimeHost` 在一次性沙箱内以官方 CLI 协议拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。real 默认 OpenSandbox。
 
 系统按 Job 冻结快照动态组装：
 
@@ -703,7 +703,7 @@ deepsonar/
     image-admission/    # 第三方镜像准入 Worker
   packages/
     plane-client/       # 可选 Plane 集成
-    runtime-sandbox/    # SandboxRunner / RuntimeHost（OpenSandbox + Agentbox 过渡）
+    runtime-sandbox/    # SandboxRunner / RuntimeHost（OpenSandbox）
     shared-types/       # zod 契约单源
   agent-harness/        # 镜像定义、指纹、冒烟
   deploy/               # Compose、一键脚本、运行时清单（见 deploy/README.md）
@@ -748,7 +748,7 @@ DEEPSONAR_HUB_ENABLED=true
 DEEPSONAR_HUB_MAX_ROUNDS=20
 DEEPSONAR_HUB_MAX_INTENTS=6
 
-SANDBOX_PROVIDER=local-docker
+SANDBOX_PROVIDER=opensandbox
 DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
 
@@ -811,7 +811,7 @@ CANVAS_LAYOUT=auto
 2. 按 §6 建表（**一次把 event_id / fingerprint / lease 字段建对**）
 3. 实现 `jobs` 状态机 + 手动 `POST /jobs` + Reaper
 4. Plane 适配器：list ready / update state
-5. runtime 适配层：agentbox-sdk local-docker 最小封装
+5. runtime 适配层：OpenSandbox SDK（`@alibaba-group/opensandbox`）最小封装
 6. 假 Agent 脚本打通 Event → DB（含幂等重试演练）
 7. 再挂真 CLI 与画布 UI
 
@@ -823,7 +823,7 @@ CANVAS_LAYOUT=auto
 |------|------|
 | 项目管理 | **Plane** |
 | 过程数据 | **每项目一张无限画布**（nodes/edges 表为真相） |
-| 执行隔离 | **SandboxRunner 沙箱**（real 默认 Agentbox local-docker；长期目标 OpenSandbox，经 `SANDBOX_PROVIDER=opensandbox` 启用） |
+| 执行隔离 | **SandboxRunner 沙箱**（real 默认 OpenSandbox） |
 | 调度 | **自研薄调度 + 状态机 + Lease/Reaper**（单实例） |
 | Agent 智能 | **提案式工具**；派生决策收归规则引擎 |
 | 可靠性 | **事件幂等 + finding 去重 + 崩溃可恢复** |
@@ -840,7 +840,7 @@ CANVAS_LAYOUT=auto
 - **DB 轮询而非 Webhook/Redis**：延迟秒级可接受；二期再升级
 - **画布不做多人协同编辑**：第一期只读展示 + 服务端写入；协同编辑是二期候选
 - **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
-- **运行时边界是 RuntimeHost（#162）**：五类 CLI 不引用 provider SDK 类型；语义事件只经 Job 级 Platform API。real 默认仍走 Agentbox local-docker；OpenSandbox Docker adapter 已落地，经 `SANDBOX_PROVIDER=opensandbox` 启用。Phase 4 在门禁齐后删除 Agentbox。
+- **运行时边界是 RuntimeHost（#162）**：五类 CLI 不引用 provider SDK 类型；语义事件只经 Job 级 Platform API。real 默认 OpenSandbox；Agentbox 实现与 `agentbox-sdk` 已删除。
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
 - **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算
 - **不评估 Claude Agent SDK**：只用 CLI 路线（经 Runtime Adapter 的 claude-code provider）

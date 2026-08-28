@@ -267,8 +267,9 @@ $ComposeArgs = @("compose", "-p", "deepsonar", "--env-file", $EnvFile, "-f", $Co
 if ($Mode -eq "real") {
   $ComposeArgs += @("-f", $RealComposeFile)
 }
-# Opt-in only. Default real mode stays Agentbox until #162 Phase 4.
-if ($env:SANDBOX_PROVIDER -eq "opensandbox") {
+# Real mode defaults to OpenSandbox; set SANDBOX_PROVIDER to skip the overlay.
+$sandboxProvider = if ([string]::IsNullOrWhiteSpace($env:SANDBOX_PROVIDER)) { "opensandbox" } else { $env:SANDBOX_PROVIDER }
+if ($Mode -eq "real" -and $sandboxProvider -eq "opensandbox") {
   $ComposeArgs += @("-f", $OpenSandboxComposeFile)
 }
 

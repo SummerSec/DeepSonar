@@ -365,8 +365,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   app.post("/runtime-images/:id([0-9a-fA-F-]{36})/adopt-local", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = LocalRuntimeImageAdoptBody.parse(req.body);
-    if (config.runtime.provider !== "local-docker") {
-      return reply.code(400).send({ error: "adopt-local 仅支持 SANDBOX_PROVIDER=local-docker" });
+    if (config.runtime.openSandbox.kubernetes) {
+      return reply.code(400).send({ error: "adopt-local 需要调度器宿主 Docker，不能在 Kubernetes 运行时使用" });
     }
     const result = await inspectLocalRuntimeImageForProduct(id, body.image_ref);
     if (!result.image) return reply.code(404).send({ error: "runtime image not found" });
@@ -532,8 +532,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     if (!digest) return reply.code(400).send({
       error: local ? "local-build 必须使用完整本地 image ID：sha256:64hex" : "必须使用不可变引用 name@sha256:…；可移动 tag 不会被信任",
     });
-    if (local && config.runtime.provider !== "local-docker") {
-      return reply.code(400).send({ error: "local-build 仅支持 SANDBOX_PROVIDER=local-docker" });
+    if (local && config.runtime.openSandbox.kubernetes) {
+      return reply.code(400).send({ error: "local-build 需要调度器宿主 Docker，不能在 Kubernetes 运行时使用" });
     }
     if (!local && !config.images.isRegistryAllowed(body.image_ref)) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });

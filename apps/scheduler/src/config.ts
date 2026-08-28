@@ -194,9 +194,9 @@ export const config = {
   },
 
   runtime: {
-    provider: str("SANDBOX_PROVIDER", "local-docker"),
+    provider: str("SANDBOX_PROVIDER", "opensandbox"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
-    /** fake=内置假 agent（联调用）；real=真实沙箱（Agentbox 过渡或 OpenSandbox） */
+    /** fake=内置假 agent（联调用）；real=OpenSandbox 真实沙箱 */
     agentMode: str("AGENT_MODE", "real"),
     openSandbox: {
       domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:8080"),

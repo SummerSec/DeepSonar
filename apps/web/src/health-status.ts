@@ -6,7 +6,7 @@ export type HealthOpenSandbox = {
   ready?: boolean;
 };
 
-/** Operator-facing /health.opensandbox line. Skipped (Agentbox default) stays hidden. */
+/** Operator-facing /health.opensandbox line. Skipped (fake / 未探测) stays hidden. */
 export function formatHealthOpenSandbox(status: HealthOpenSandbox | null | undefined): string | null {
   if (status?.level === "ok") return "OpenSandbox 就绪";
   if (status?.level === "error") return "OpenSandbox 不可达";

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { formatHealthOpenSandbox, healthOpenSandboxDegraded } from "./health-status";
 
-test("OpenSandbox health copy stays hidden on the Agentbox default path", () => {
+test("OpenSandbox health copy stays hidden when the probe is skipped", () => {
   assert.equal(formatHealthOpenSandbox(undefined), null);
   assert.equal(formatHealthOpenSandbox({ level: "skipped", domain: "127.0.0.1:8080", ready: true }), null);
   assert.equal(healthOpenSandboxDegraded({ level: "skipped", ready: true }), false);

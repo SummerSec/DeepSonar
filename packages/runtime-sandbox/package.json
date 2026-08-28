@@ -13,7 +13,6 @@
   "dependencies": {
     "@alibaba-group/opensandbox": "0.1.11",
     "@deepsonar/shared-types": "workspace:*",
-    "agentbox-sdk": "^0.1.501",
     "undici": "^7.29.0"
   },
   "devDependencies": {
@@ -24,10 +23,6 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
-    },
-    "./agentbox": {
-      "types": "./src/agentbox.ts",
-      "default": "./dist/agentbox.js"
     }
   }
 }

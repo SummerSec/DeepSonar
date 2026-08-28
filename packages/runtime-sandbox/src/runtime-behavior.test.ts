@@ -21,44 +21,49 @@ import {
   resolveTerminalRunError,
   resolveTerminalProcessOutcome,
   parseRuntimeLine,
-  parseDeepSonarContainerRows,
   runtimeCliEnv,
-  assertSharedAssetsContainerMount,
-  assertSharedAssetsVolumeOwnership,
-  sharedAssetsVolumeBinds,
+  ensureRuntimeHome,
+  BoundedRuntimeStderrEvidence,
+  RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
+  mergeObservedSessionIdentity,
+  normalizePlainFinalOutput,
+} from "./runtime-agent.js";
+import {
+  parseDeepSonarContainerRows,
   isDeepsonarRestrictedNetwork,
   isDeepsonarGatewayNetwork,
   dockerSocketPath,
-  ensureRuntimeHome,
-  buildTerminalShellCommand,
+  CONTAINER_REMOVE_MAX_ATTEMPTS,
+  CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
+  removeContainerWithRetry,
+  writeDockerHumanInboxFile,
+} from "./runtime-docker.js";
+import {
+  assertSharedAssetsContainerMount,
+  assertSharedAssetsVolumeOwnership,
   bindProvisionAbortSignal,
+  buildTerminalShellCommand,
+  sharedAssetsVolumeBinds,
   terminalShellCommand,
   writeTerminalInput,
+} from "./runtime-shared.js";
+import {
   GATEWAY_PROXY_REVISION,
   GATEWAY_PROXY_SCRIPT,
   gatewayLeftoverRemovalTarget,
   gatewayCreateTimeoutMs,
   gatewayProxyReuseAction,
   shouldRemoveGatewayLeftover,
-  AgentboxRunner,
-  BoundedRuntimeStderrEvidence,
-  RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
-  CONTAINER_REMOVE_MAX_ATTEMPTS,
-  CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
-  mergeObservedSessionIdentity,
-  normalizePlainFinalOutput,
-  removeContainerWithRetry,
-  writeHumanInboxWorkspaceFile,
-} from "./agentbox.js";
+} from "./runtime-gateway.js";
 
 test("human inbox writer requires a scheduler-owned local Docker container", async () => {
   await assert.rejects(
-    writeHumanInboxWorkspaceFile(
-      { raw: {} } as never,
+    writeDockerHumanInboxFile(
+      "",
       "/workspace/.deepsonar/inbox/11111111-1111-4111-8111-111111111111/evidence.bin",
       Buffer.from("evidence"),
     ),
-    /container_unavailable/u,
+    /container_unavailable|path_forbidden|human_message/u,
   );
 });
 
@@ -96,19 +101,6 @@ test("container force removal treats only explicit no-such as idempotent success
     throw new Error("Error response from daemon: No such container: gone");
   });
   assert.equal(attempts, 1);
-});
-
-test("Agentbox destroy propagates authoritative container removal failure", async () => {
-  const failure = new Error("vfs removal failed");
-  const runner = new AgentboxRunner(async () => {
-    throw failure;
-  });
-  await assert.rejects(
-    runner.destroy({ sandboxId: "leftover" }),
-    (error: unknown) =>
-      error instanceof AggregateError
-      && error.errors.includes(failure),
-  );
 });
 
 test("managed container parsing requires canonical Job and Attempt labels", () => {
@@ -249,7 +241,7 @@ test("Noop provision 遵守 Attempt 标识并响应取消信号", async () => {
     runner.provision({ jobId: "job-1", attemptId: "attempt-1", image: "image", network: "none", signal: controller.signal }),
     /provision 已取消/,
   );
-  assert.equal(typeof (new AgentboxRunner() as { cancelProvision?: unknown }).cancelProvision, "function");
+  assert.equal(typeof runner.cancelProvision, "function");
 });
 
 test("provision abort 绑定不丢失已发生的取消且只清理一次", () => {

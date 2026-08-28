@@ -764,7 +764,7 @@ async function runJob(jobId: string) {
       // Capability authentication remains disabled until `running`, but the
       // plaintext must exist before Docker creates immutable Config.Env.
       platformCapability = await preparePlatformCapability(jobId, snapshot);
-      // Agentbox 在调度器宿主 docker inspect；OpenSandbox 由 server 拉镜像，
+      // OpenSandbox 由 server 拉镜像，
       // 合同/digest 在 provision 后重验，不能把本机缺层当成 Job 不可调度。
       if (shouldInspectLocalRuntimeImage()) {
         await assertRuntimeImageAvailable(runtimeImage);
@@ -850,7 +850,7 @@ async function runJob(jobId: string) {
           : (await globalRules(sql)).provisionTimeoutSec;
         const provider = config.runtime.agentMode !== "real"
           ? "noop"
-          : config.runtime.provider === "opensandbox" ? "opensandbox" : "agentbox";
+          : "opensandbox";
         const provisionStarted = Date.now();
         try {
           handle = await withProvisionTimeout(
