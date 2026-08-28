@@ -14,6 +14,7 @@ import {
   DEEPSONAR_GATEWAY_PROXY_HOST,
   applyRuntimeOutputText,
   freezeAgentCliRuntime,
+  runtimeCliEnv,
   shouldRunOpenSandboxPoc,
   type AdapterRuntimeState,
 } from "@deepsonar/runtime-sandbox";
@@ -252,12 +253,11 @@ try {
       ttlSec: 3600,
     });
     const runtimeHome = "/workspace/.deepsonar-home";
-    const gatewayEnv: Record<string, string> = {
+    const gatewayEnv = runtimeCliEnv({
       DEEPSONAR_ALLOW_EGRESS: "1",
       DEEPSONAR_GATEWAY_TOKEN: token.plaintext,
       ...capability.env,
-      HOME: runtimeHome,
-    };
+    });
     let runtimeConfigFiles = selectedCli === "dsh"
       ? []
       : materializeProviderSettings({
@@ -280,13 +280,18 @@ try {
       for (const key of mapping.secretKeys) gatewayEnv[key] = token.plaintext;
       if (mapping.baseUrlKey) gatewayEnv[mapping.baseUrlKey] = config.gateway.sandboxUrl;
     }
-    if (
-      Object.values(gatewayEnv).includes(vendorSecret)
-      || gatewayEnv.DEEPSEEK_API_KEY
-      || runtimeConfigFiles.some((file) => file.content.includes(vendorSecret))
-    ) {
-      throw new Error("vendor key leaked into OpenSandbox worker env");
-    }
+    const assertVendorKeyIsolated = (contents: readonly string[], where: "env" | "workspace") => {
+      if (
+        Object.values(gatewayEnv).includes(vendorSecret)
+        || gatewayEnv.DEEPSEEK_API_KEY
+        || contents.some((content) => content.includes(vendorSecret))
+      ) {
+        throw new Error(where === "workspace"
+          ? "vendor key leaked into OpenSandbox worker workspace"
+          : "vendor key leaked into OpenSandbox worker env");
+      }
+    };
+    assertVendorKeyIsolated(runtimeConfigFiles.map((file) => file.content), "env");
 
     const handle = await runner.provision({
       jobId,
@@ -301,13 +306,17 @@ try {
     try {
       const host = await runner.ensureHost(handle);
       await host.run(`mkdir -p /workspace/.deepsonar ${runtimeHome} && printf '%s\\n' '{"mcpServers":{}}' > /workspace/.deepsonar/mcp.json`, { timeoutMs: 5_000 });
+      const uploadedTargets: string[] = [];
       for (const file of runtimeConfigFiles) {
         const targets = selectedCli === "pi" && file.path.startsWith(".pi/")
           ? [`${runtimeHome}/${file.path}`]
           : selectedCli === "open-code"
             ? [`/workspace/${file.path}`]
             : [`/workspace/${file.path}`, `${runtimeHome}/${file.path}`];
-        for (const target of targets) await host.uploadFile(file.content, target);
+        for (const target of targets) {
+          await host.uploadFile(file.content, target);
+          uploadedTargets.push(target);
+        }
       }
       await host.uploadFile(`#!/bin/sh
 set -eu
@@ -378,25 +387,62 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         ...(dshProvider ? { dshProvider } : {}),
       };
       await adapter.materialize?.(startContext);
-      const started = await adapter.start(startContext);
-      if (adapter.encodeGetState) await started.write(adapter.encodeGetState()).catch(() => {});
+      const workspaceLeakTargets = selectedCli === "dsh"
+        ? ["/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml"]
+        : uploadedTargets;
+      const workspaceContents: string[] = [JSON.stringify(dshProvider ?? {})];
+      for (const target of workspaceLeakTargets) {
+        const result = await host.run(`cat -- ${JSON.stringify(target)}`, { timeoutMs: 5_000 });
+        if (result.exitCode === 0) workspaceContents.push(result.stdout);
+      }
+      assertVendorKeyIsolated(workspaceContents, "workspace");
+      const submitted = () => operations.every((name) => calls.includes(name));
+      const nudgeText = "协议要求的 Job Platform API 还没有完成。请立即运行: sh /workspace/poc-cli-emit.sh";
+      let running = await adapter.start(startContext);
+      if (adapter.encodeGetState) await running.write(adapter.encodeGetState()).catch(() => {});
       const payload = adapter.encodeInput(prompt, state);
-      if (payload) await started.write(payload).catch(() => {});
+      if (payload) await running.write(payload).catch(() => {});
       let steered = !adapter.capabilities.incrementalMessages;
       const steerPayload = adapter.encodeSteer?.("Continue and finish the script.", state)
         ?? (adapter.capabilities.incrementalMessages ? adapter.encodeInput("Continue and finish the script.", state) : "");
       if (steerPayload) {
         steered = true;
-        await started.write(steerPayload).catch(() => { steered = false; });
+        await running.write(steerPayload).catch(() => { steered = false; });
       }
       if (adapter.encodeFollowUp) {
-        await started.write(adapter.encodeFollowUp("follow-up: confirm the script finished.", state)).catch(() => { steered = false; });
+        await running.write(adapter.encodeFollowUp("follow-up: confirm the script finished.", state)).catch(() => { steered = false; });
       }
-      if (!adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
-      const text = await collectText(started, 180_000, () => operations.every((name) => calls.includes(name)));
-      if (adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
-      applyRuntimeOutputText(adapter, text, state);
-      if (!operations.every((name) => calls.includes(name))) {
+      if (!adapter.capabilities.incrementalMessages) await running.closeStdin().catch(() => {});
+      let text = "";
+      let nudgesLeft = 3;
+      const deadline = Date.now() + 180_000;
+      while (!submitted() && Date.now() < deadline) {
+        const slice = Math.max(1, Math.min(nudgesLeft > 0 ? 45_000 : deadline - Date.now(), deadline - Date.now()));
+        const chunk = await collectText(running, slice, submitted);
+        text += chunk;
+        applyRuntimeOutputText(adapter, chunk, state);
+        if (submitted() || Date.now() >= deadline) break;
+        if (nudgesLeft <= 0) break;
+        nudgesLeft--;
+        steered = true;
+        if (adapter.capabilities.incrementalMessages) {
+          const nudgePayload = adapter.encodeFollowUp?.(nudgeText, state)
+            ?? adapter.encodeSteer?.(nudgeText, state)
+            ?? adapter.encodeInput(nudgeText, state);
+          if (nudgePayload) await running.write(nudgePayload).catch(() => { steered = false; });
+        } else {
+          if (!state.sessionId) throw new Error(`${selectedCli} completion gate missing session`);
+          await running.kill().catch(() => {});
+          running = await adapter.resume({
+            ...startContext,
+            input: nudgeText,
+            sessionId: state.sessionId,
+            sessionFile: state.sessionFile,
+          });
+        }
+      }
+      if (adapter.capabilities.incrementalMessages) await running.closeStdin().catch(() => {});
+      if (!submitted()) {
         throw new Error(`${selectedCli} did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
       }
       if (!steered) throw new Error(`${selectedCli} steer/follow-up was not written`);
@@ -418,7 +464,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
       if (parsed.items.length === 0 || parsed.totals.parsed === 0) {
         throw new Error(`${selectedCli} session viewer parsed empty: format=${parsed.format} bytes=${Buffer.byteLength(artifact.content)}`);
       }
-      await started.kill().catch(() => {});
+      await running.kill().catch(() => {});
       const resumeProcess = await adapter.resume({
         ...startContext,
         sessionId: state.sessionId,
