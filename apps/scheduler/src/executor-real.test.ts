@@ -156,8 +156,7 @@ test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.
   assert.match(source, /dispatchOnce\(\)/);
   assert.match(source, /cancelJob\(jobId/);
   assert.match(source, /createSharedAsset/);
-  assert.match(source, /openTerminal/);
-  assert.match(source, /tokens=revoked pty=closed assets=0/);
+  assert.match(source, /tokens=revoked assets=0/);
   assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
 });
 

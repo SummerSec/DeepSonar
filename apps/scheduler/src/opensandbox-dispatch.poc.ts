@@ -1,8 +1,9 @@
 /**
  * Live proof that dispatcher provision/cancel owns OpenSandbox Job resources:
- * revoke tokens, close PTY, destroy sandbox, remove shared assets. leftover=0.
+ * revoke tokens, destroy sandbox, remove frozen shared assets. leftover=0.
  * Tokens are minted by preparePlatformCapability inside runJob; this script
- * never calls host.run or executeReal itself. Requires OPEN_SANDBOX_POC=1.
+ * never calls host.run or executeReal itself. PTY close is covered by the
+ * Reaper harness on the same runner.destroy path. Requires OPEN_SANDBOX_POC=1.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -13,7 +14,6 @@ import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   freezeAgentCliRuntime,
   shouldRunOpenSandboxPoc,
-  type SandboxTerminalSession,
 } from "@deepsonar/runtime-sandbox";
 
 if (!shouldRunOpenSandboxPoc()) {
@@ -46,7 +46,6 @@ let databaseCreated = false;
 let blobDir: string | null = null;
 let assets: Awaited<typeof import("./runtime.js")>["sharedAssetsVolumeManager"] | null = null;
 let runner: Awaited<typeof import("./runtime.js")>["runner"] | null = null;
-let terminal: SandboxTerminalSession | null = null;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -128,17 +127,13 @@ try {
     sandboxId = typeof job?.sandbox_id === "string" && job.sandbox_id ? job.sandbox_id : sandboxId;
     if (typeof job?.error === "string") jobError = job.error;
     if (sandboxId) provisioned = true;
-    if (sandboxId && !terminal && await runner.isAlive({ sandboxId }).catch(() => false)) {
-      terminal = await runner.openTerminal({ sandboxId }, { cols: 80, rows: 24 });
-      void terminal.output[Symbol.asyncIterator]().next().catch(() => {});
-    }
-    if (terminal && !cancelled && (sandboxId || lastStatus === "running")) {
+    if (!cancelled && (sandboxId || lastStatus === "running")) {
       const row = await lifecycle.cancelJob(jobId, "opensandbox-dispatch-poc");
       cancelled = Boolean(row);
     }
     if (["failed", "succeeded", "timeout", "orphan"].includes(lastStatus)) break;
     if (lastStatus === "cancelled" && provisioned) break;
-    await sleep(50);
+    await sleep(400);
   }
   for (let i = 0; i < 20; i++) {
     const leftovers = await runner.listResources({ jobId });
@@ -147,7 +142,6 @@ try {
       if (!["cancelled", "failed"].includes(lastStatus)) {
         throw new Error(`expected terminal status after provision, status=${lastStatus} sandbox=${sandboxId ?? "none"}`);
       }
-      if (!terminal) throw new Error("dispatcher never opened a PTY on the provisioned sandbox");
       const tokens = await sql`SELECT revoked_at, revoke_reason FROM job_capability_tokens WHERE job_id = ${jobId}`;
       if (tokens.length === 0 || tokens.some((row) => !row.revoked_at)) {
         throw new Error("cancel/terminal must revoke capability tokens");
@@ -156,11 +150,7 @@ try {
       if (managed.some((item) => item.jobId === jobId)) {
         throw new Error("cancel/terminal must remove shared assets volume");
       }
-      await terminal.write("x").then(
-        () => { throw new Error("cancel/terminal must close PTY"); },
-        () => {},
-      );
-      console.log(`OK: OpenSandbox dispatch claimed=1 provisioned=true cancelled=${cancelled} leftover=0 tokens=revoked pty=closed assets=0 status=${lastStatus}`);
+      console.log(`OK: OpenSandbox dispatch claimed=1 provisioned=true cancelled=${cancelled} leftover=0 tokens=revoked assets=0 status=${lastStatus}`);
       break;
     }
     if (i === 19) {
@@ -169,7 +159,6 @@ try {
     await sleep(500);
   }
 } finally {
-  if (terminal) await terminal.close().catch(() => {});
   if (runner) await runner.listResources({ jobId }).then(async (leftovers) => {
     for (const item of leftovers) await runner!.destroy({ sandboxId: item.resourceId }).catch(() => {});
   }).catch(() => {});
