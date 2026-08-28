@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError } from "./opensandbox-sdk-client.js";
+import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, joinCommandLogText } from "./opensandbox-sdk-client.js";
 import { OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 
@@ -16,6 +16,11 @@ test("OpenSandbox destroy treats already-gone sandboxes as success", () => {
   assert.equal(isOpenSandboxGoneError({ statusCode: 404, message: "gone" }), true);
   assert.equal(isOpenSandboxGoneError({ error: { code: "DOCKER::SANDBOX_NOT_FOUND" } }), true);
   assert.equal(isOpenSandboxGoneError(new Error("ready timeout")), false);
+});
+
+test("OpenSandbox command logs join line items with newlines", () => {
+  assert.equal(joinCommandLogText([{ text: "/tmp/a.jsonl" }, { text: "/tmp/b.jsonl" }]), "/tmp/a.jsonl\n/tmp/b.jsonl");
+  assert.equal(joinCommandLogText([{ text: "chunk-one\nchunk-two\n" }]), "chunk-one\nchunk-two\n");
 });
 
 test("OpenSandbox runAsync env wrapping always uses a shell so compound commands stay intact", () => {

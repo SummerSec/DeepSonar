@@ -69,6 +69,14 @@ export function isOpenSandboxGoneError(error: unknown): boolean {
   return status === 404 || /SANDBOX_NOT_FOUND/i.test(`${nested} ${message}`);
 }
 
+export function joinCommandLogText(items?: Array<{ text?: string }>): string {
+  const parts = (items ?? []).map((item) => item.text ?? "");
+  if (parts.length === 0) return "";
+  // execd /command 把每一行做成独立 log item，且 text 不含换行。
+  if (parts.every((part) => !part.includes("\n"))) return parts.join("\n");
+  return parts.join("");
+}
+
 export function commandWithEnv(command: string, env?: Record<string, string>): string {
   if (!env || Object.keys(env).length === 0) return command;
   const assigns = Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ");
@@ -92,8 +100,8 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
       });
       return {
         exitCode: execution.exitCode ?? (execution.error ? 1 : 0),
-        stdout: (execution.logs.stdout ?? []).map((item) => item.text).join(""),
-        stderr: (execution.logs.stderr ?? []).map((item) => item.text).join(""),
+        stdout: joinCommandLogText(execution.logs.stdout),
+        stderr: joinCommandLogText(execution.logs.stderr),
       };
     },
     async runAsync(command, options) {

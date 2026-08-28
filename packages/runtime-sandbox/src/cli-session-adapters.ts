@@ -96,10 +96,7 @@ const codexAdapter: AgentCliSessionAdapter = {
   async exportSession(runtime, sessionId) {
     const command =
       `base=\"\${CODEX_HOME:-\${HOME:-/root}/.codex}/sessions\"; ` +
-      `if [ -d \"$base\" ]; then ` +
-      `find \"$base\" -type f -name ${sh(`*${sessionId}*.jsonl`)} -print; ` +
-      `grep -rl -m1 -- ${sh(sessionId)} \"$base\" --include='*.jsonl'; ` +
-      `fi`;
+      `if [ -d \"$base\" ]; then find \"$base\" -type f -name ${sh(`*${sessionId}*.jsonl`)} -print; fi`;
     // Codex 0.147 把 rollout JSONL 异步落到 sessions/YYYY/MM/DD/；进程刚结束时目录可能还没有。
     for (let attempt = 0; attempt < 8; attempt++) {
       const result = await runtime.run(command);
