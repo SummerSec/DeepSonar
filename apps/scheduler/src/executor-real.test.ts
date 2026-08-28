@@ -180,6 +180,7 @@ test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2
   const source = readFileSync(new URL("./opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
   assert.match(source, /docker-compose.opensandbox.host.yml/);
   assert.match(source, /host\.docker\.internal:8080/);
+  assert.match(source, /startHostGatewayProxy/);
   assert.match(source, /\/api\/health/);
   assert.match(source, /deepsonar-opensandbox must stay running/);
   assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);

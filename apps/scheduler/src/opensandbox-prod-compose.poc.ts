@@ -1,11 +1,17 @@
 /**
- * Live proof that production compose can run scheduler+web against an
+ * Live proof that production scheduler+web images can attach to an
  * already-running OpenSandbox. Does not start a second server and does
  * not stop the Phase 2 `deepsonar-opensandbox` container.
+ *
+ * Phase 2 server is host-network + 127.0.0.1:8080. Compose extra_hosts
+ * maps host.docker.internal to docker0, so this PoC proxies that
+ * gateway address onto loopback without touching the live server.
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer, connect, type Server } from "node:net";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
@@ -21,25 +27,20 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const deployDir = join(dirname(fileURLToPath(import.meta.url)), "../../../deploy");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+const deployDir = join(repoRoot, "deploy");
+const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-compose-"));
 const projectName = `os-prod-compose-${process.pid}-${randomUUID().slice(0, 8)}`;
 const schedulerPort = process.env.OPEN_SANDBOX_POC_SCHEDULER_PORT?.trim() || "13100";
 const webPort = process.env.OPEN_SANDBOX_POC_WEB_PORT?.trim() || "18082";
 const postgresPort = process.env.OPEN_SANDBOX_POC_POSTGRES_PORT?.trim() || "15432";
-const gatewayNet = `${projectName}-gateway`;
-const envFile = join(deployDir, ".env");
-const masterKeyFile = join(deployDir, "master.key");
-const envExisted = existsSync(envFile);
-const masterExisted = existsSync(masterKeyFile);
-const envBackup = envExisted ? readFileSync(envFile) : null;
-const masterBackup = masterExisted ? readFileSync(masterKeyFile) : null;
+const envFile = join(dir, ".env");
+const masterKeyFile = join(dir, "master.key");
 const composeArgs = [
   "-n", "docker", "compose",
   "--project-name", projectName,
   "--project-directory", deployDir,
   "--env-file", envFile,
-  "-f", join(deployDir, "docker-compose.prod.yml"),
-  "-f", join(deployDir, "docker-compose.real.yml"),
   "-f", join(deployDir, "docker-compose.opensandbox.host.yml"),
 ];
 
@@ -52,6 +53,30 @@ function existingOpenSandboxRunning(): boolean {
   return inspected.status === 0 && inspected.stdout.trim() === "true";
 }
 
+function hostGatewayIp(): string {
+  const docker0 = networkInterfaces().docker0?.find((entry) => entry.family === "IPv4" && !entry.internal);
+  if (!docker0?.address) throw new Error("docker0 IPv4 is required to proxy host.docker.internal:8080");
+  return docker0.address;
+}
+
+function startHostGatewayProxy(listenIp: string): Promise<Server> {
+  const server = createServer((client) => {
+    const upstream = connect({ host: "127.0.0.1", port: 8080 });
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on("error", close);
+    upstream.on("error", close);
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(8080, listenIp, () => resolve(server));
+  });
+}
+
 if (!existingOpenSandboxRunning()) {
   throw new Error("Phase 2 deepsonar-opensandbox must stay running for prod-compose");
 }
@@ -59,40 +84,32 @@ if (!existingOpenSandboxRunning()) {
 writeFileSync(masterKeyFile, `${"00".repeat(32)}\n`, { mode: 0o600 });
 writeFileSync(envFile, [
   "POSTGRES_PASSWORD=poc-opensandbox-compose",
-  "BLOB_S3_ACCESS_KEY_ID=poc",
-  "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
   "DEEPSONAR_IMAGE_TAG=0.1.45",
   "DEEPSONAR_VERSION=0.1.45-os-compose",
-  "DEEPSONAR_MASTER_KEY_FILE=/run/secrets/deepsonar_master_key",
   "DEEPSONAR_ADMIN_TOKEN=poc-admin-token",
-  "DEEPSONAR_AUTH_REQUIRED=true",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
   "OPEN_SANDBOX_DOMAIN=host.docker.internal:8080",
   "OPEN_SANDBOX_PROTOCOL=http",
+  `OPEN_SANDBOX_POC_MASTER_KEY=${masterKeyFile}`,
   `SCHEDULER_HOST_PORT=${schedulerPort}`,
   `DEEPSONAR_WEB_PORT=${webPort}`,
-  `POSTGRES_BIND=127.0.0.1:${postgresPort}`,
-  "SILO_API_BIND=127.0.0.1:19000",
-  "SILO_CONSOLE_BIND=127.0.0.1:19001",
-  `OPEN_SANDBOX_POC_GATEWAY_NET=${gatewayNet}`,
+  `POSTGRES_BIND_PORT=${postgresPort}`,
   "",
 ].join("\n"), { mode: 0o600 });
 
 const down = () => run([...composeArgs, "down", "-v", "--remove-orphans"], 180_000);
+const gatewayIp = hostGatewayIp();
+const proxy = await startHostGatewayProxy(gatewayIp);
 
 try {
-  const build = run([
-    ...composeArgs,
-    "up", "-d", "--build",
-    "postgres", "silo", "silo-init", "scheduler", "web",
-  ], 1_200_000);
+  const build = run([...composeArgs, "up", "-d", "--build"], 1_200_000);
   if (build.status !== 0) {
-    const logs = run([...composeArgs, "logs", "--tail=80", "silo-init", "silo", "scheduler", "web"], 30_000);
+    const logs = run([...composeArgs, "logs", "--tail=80"], 30_000);
     throw new Error(`prod-compose up failed: ${build.stderr || build.stdout}\n${logs.stdout}\n${logs.stderr}`);
   }
 
-  const deadline = Date.now() + 240_000;
   type HealthProbe = { ok?: boolean; opensandbox?: { level?: string; ready?: boolean; domain?: string } };
+  const deadline = Date.now() + 240_000;
   let schedulerHealth: HealthProbe | null = null;
   let webHealth: HealthProbe | null = null;
   while (Date.now() < deadline) {
@@ -106,18 +123,20 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   if (schedulerHealth?.opensandbox?.level !== "ok" || webHealth?.opensandbox?.level !== "ok") {
-    throw new Error(`prod-compose health not ready: scheduler=${JSON.stringify(schedulerHealth)} web=${JSON.stringify(webHealth)}`);
+    const logs = run([...composeArgs, "logs", "--tail=80", "scheduler", "web"], 30_000);
+    throw new Error(`prod-compose health not ready: scheduler=${JSON.stringify(schedulerHealth)} web=${JSON.stringify(webHealth)}\n${logs.stdout}`);
   }
   if (schedulerHealth.opensandbox?.domain && !schedulerHealth.opensandbox.domain.includes("8080")) {
     throw new Error(`unexpected OpenSandbox domain ${schedulerHealth.opensandbox.domain}`);
   }
-  const leaked = JSON.stringify({ schedulerHealth, webHealth }).includes(apiKey);
-  if (leaked) throw new Error("OpenSandbox API key leaked into compose health");
+  if (JSON.stringify({ schedulerHealth, webHealth }).includes(apiKey)) {
+    throw new Error("OpenSandbox API key leaked into compose health");
+  }
   if (!existingOpenSandboxRunning()) {
     throw new Error("prod-compose stopped Phase 2 deepsonar-opensandbox");
   }
-  const second = run(["-n", "docker", "ps", "-q", "--filter", "name=opensandbox"]);
-  const opensandboxCount = second.stdout.trim().split("\n").filter(Boolean).length;
+  const listed = run(["-n", "docker", "ps", "-q", "--filter", "name=opensandbox"]);
+  const opensandboxCount = listed.stdout.trim().split("\n").filter(Boolean).length;
   if (opensandboxCount !== 1) {
     throw new Error(`expected exactly one OpenSandbox container, got ${opensandboxCount}`);
   }
@@ -126,8 +145,6 @@ try {
   );
 } finally {
   down();
-  if (envBackup) writeFileSync(envFile, envBackup, { mode: 0o600 });
-  else if (!envExisted && existsSync(envFile)) unlinkSync(envFile);
-  if (masterBackup) writeFileSync(masterKeyFile, masterBackup, { mode: 0o600 });
-  else if (!masterExisted && existsSync(masterKeyFile)) unlinkSync(masterKeyFile);
+  proxy.close();
+  rmSync(dir, { recursive: true, force: true });
 }

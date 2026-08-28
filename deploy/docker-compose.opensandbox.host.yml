@@ -1,24 +1,73 @@
-# Attach production scheduler/web to an already-running OpenSandbox.
-# Does not start, stop, or replace the OpenSandbox service.
-#   OPEN_SANDBOX_API_KEY=... OPEN_SANDBOX_DOMAIN=host.docker.internal:8080 \
-#     docker compose -f docker-compose.prod.yml -f docker-compose.real.yml \
-#     -f docker-compose.opensandbox.host.yml up -d --build postgres silo silo-init scheduler web
+# Production scheduler+web images attached to an already-running OpenSandbox.
+# Uses filesystem blobs so this smoke does not depend on Silo overlay networking.
+# host.docker.internal:8080 needs a host-gateway→loopback proxy when the Phase 2
+# server is bound to 127.0.0.1 (pnpm ci:smoke:opensandbox-prod-compose starts one).
+#   OPEN_SANDBOX_API_KEY=... docker compose -f deploy/docker-compose.opensandbox.host.yml up -d --build
 services:
-  silo-init:
-    command:
-      - i=0; while [ "$$i" -lt 30 ]; do mcli alias set local http://silo:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}" && exit 0; i=$$((i+1)); sleep 2; done; exit 1
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: deepsonar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: deepsonar
+    ports:
+      - "127.0.0.1:${POSTGRES_BIND_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepsonar -d deepsonar"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   scheduler:
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.45}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.scheduler
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:${SCHEDULER_HOST_PORT:-13100}:3100"
     environment:
+      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      SCHEDULER_HOST: 0.0.0.0
+      SCHEDULER_PORT: 3100
+      AGENT_MODE: real
       SANDBOX_PROVIDER: opensandbox
       OPEN_SANDBOX_DOMAIN: ${OPEN_SANDBOX_DOMAIN:-host.docker.internal:8080}
       OPEN_SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
       OPEN_SANDBOX_USE_SERVER_PROXY: ${OPEN_SANDBOX_USE_SERVER_PROXY:-true}
+      DEEPSONAR_AUTH_REQUIRED: "true"
+      DEEPSONAR_ADMIN_TOKEN: ${DEEPSONAR_ADMIN_TOKEN:-poc-admin-token}
+      DEEPSONAR_MASTER_KEY_FILE: /run/secrets/deepsonar_master_key
+      DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:-0.1.45}
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-0.1.45-os-compose}
+      BLOB_STORE: fs
+      BLOB_DIR: /app/data/blobs
+    ports:
+      - "127.0.0.1:${SCHEDULER_HOST_PORT:-13100}:3100"
+    volumes:
+      - ${OPEN_SANDBOX_POC_MASTER_KEY:-./master.key}:/run/secrets/deepsonar_master_key:ro
+      - scheduler_blobs:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
-networks:
-  sandbox_gateway:
-    name: ${OPEN_SANDBOX_POC_GATEWAY_NET:-os-prod-compose-gateway}
+  web:
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-0.1.45}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    environment:
+      SCHEDULER_URL: http://scheduler:3100
+    ports:
+      - "127.0.0.1:${DEEPSONAR_WEB_PORT:-18082}:8080"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+
+volumes:
+  scheduler_blobs:
