@@ -330,7 +330,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | resume 后旧 human 毒化新 Attempt | #298 | **已完成**：`assertTerminalEventHistory` 只统计当前 active Attempt 之后的终态事件；resume-frozen / 新 Attempt 可 `mark_job_done` / `submit_hub_decision`。同 Attempt 真互斥仍拒绝；同摄入先成功 `request_human` 再跟迟到 done/hub 按 #300 skip，不整笔回滚。 |
 | 人工收尾同回合 job_not_running | #300 | **已完成**：同一摄入事务用 lock 时 Job 状态做 running 守卫；`hub_decision` 先于 `done` 落地；本回合已成功终态后的迟到 `mark_job_done` 幂等，不整笔回滚。先成功 `request_human` 后再跟同摄入 done/hub 同样记 `deduped`，保住 `waiting_human`。开始前已终态的迟到回调仍 `job_not_running`。 |
 | rebuild / 启动序列对齐 | #281 | **已完成**：`OVERRIDING SYSTEM VALUE` 回填后只对 public 上 IDENTITY/serial 做 `setval(MAX)`；rebuild 结束与 Scheduler 启动自动对齐并 fail closed。不改 append-only，审计 PK 仍是 IDENTITY。 |
-| 长期从 Agentbox 迁移到 OpenSandbox | #162 | **Phase 1 已落地，Phase 2 SDK 已绑定**：`RuntimeHost` 是唯一执行边界；五类 CLI（含 Pi / DSH）不按 provider 分流。`createSdkOpenSandboxClient` 绑定 `@alibaba-group/opensandbox@0.1.11`，升级只接受显式 SDK 版本与 `name@sha256` pin。共享资产走 Docker named volume 的 PVC 后端；交互/增量 stdin 走 execd `/pty` WebSocket（pipe 给 CLI，PTY 给终端）。`SANDBOX_PROVIDER=opensandbox` 才启用。Phase 3 Kubernetes/Kata、Phase 4 删除 Agentbox，以及真实 server E2E 门禁仍待完成。 |
+| 长期从 Agentbox 迁移到 OpenSandbox | #162 | **Phase 1 已落地，Phase 2 SDK + 官方 digest pin 已绑定**：`RuntimeHost` 是唯一执行边界；五类 CLI（含 Pi / DSH）不按 provider 分流。SDK `@alibaba-group/opensandbox@0.1.11`；server `v0.2.3` / execd `1.1.0` / egress `v1.1.7` 只认 `name@sha256`。部署 TOML 用官方 schema（bridge、`drop_capabilities=["ALL"]`、`no_new_privileges`、PVC 共享资产）。`SANDBOX_PROVIDER=opensandbox` 才启用。Phase 3 Kubernetes/Kata、Phase 4 删除 Agentbox，以及真实 server E2E 门禁仍待完成。 |
 
 ## 12. 仓库地图
 

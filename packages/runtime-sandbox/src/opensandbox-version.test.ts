@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  OPENSANDBOX_EGRESS_IMAGE,
+  OPENSANDBOX_EXECD_IMAGE,
   OPENSANDBOX_SDK_VERSION,
+  OPENSANDBOX_SERVER_IMAGE,
   assertOpenSandboxImmutableRef,
   assertOpenSandboxSdkVersion,
   readOpenSandboxPin,
@@ -21,7 +24,9 @@ test("OpenSandbox upgrades only accept pinned SDK and digest refs", () => {
   );
   const pin = readOpenSandboxPin({ sdk: "0.1.11" });
   assert.equal(pin.schema, "deepsonar.opensandbox/v1");
-  assert.equal(pin.serverImage, null);
+  assert.equal(pin.serverImage, OPENSANDBOX_SERVER_IMAGE);
+  assert.equal(pin.execdImage, OPENSANDBOX_EXECD_IMAGE);
+  assert.equal(pin.egressImage, OPENSANDBOX_EGRESS_IMAGE);
 });
 
 test("OpenSandbox RuntimeHost is CLI-agnostic and includes Pi and DSH", () => {

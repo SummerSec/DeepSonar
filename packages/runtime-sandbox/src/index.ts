@@ -125,8 +125,11 @@ export {
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
 export {
+  OPENSANDBOX_EGRESS_IMAGE,
+  OPENSANDBOX_EXECD_IMAGE,
   OPENSANDBOX_PIN_SCHEMA,
   OPENSANDBOX_SDK_VERSION,
+  OPENSANDBOX_SERVER_IMAGE,
   assertOpenSandboxImmutableRef,
   assertOpenSandboxSdkVersion,
   readOpenSandboxPin,

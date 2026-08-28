@@ -17,6 +17,7 @@ function createRealRunner(): SandboxRunner {
       sdk: config.runtime.openSandbox.sdkVersion || undefined,
       serverImage: config.runtime.openSandbox.serverImage || undefined,
       execdImage: config.runtime.openSandbox.execdImage || undefined,
+      egressImage: config.runtime.openSandbox.egressImage || undefined,
     });
     return new OpenSandboxRunner(createSdkOpenSandboxClient({
       domain: config.runtime.openSandbox.domain,
