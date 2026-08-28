@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createSdkOpenSandboxClient,
+  listOfficialOpenSandboxRuntimeImages,
   OpenSandboxRunner,
+  OPENSANDBOX_SERVER_IMAGE,
   readOpenSandboxPin,
   runOpenSandboxArchPoc,
   runOpenSandboxAssetsPoc,
@@ -13,10 +19,13 @@ import {
   runOpenSandboxHostPoc,
   runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
+  runOpenSandboxOfficialImagesPoc,
   runOpenSandboxRestrictedPoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
 import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox live PoC (set OPEN_SANDBOX_POC=1 with a reachable server)");
@@ -47,8 +56,8 @@ const caseName = (() => {
   const idx = process.argv.indexOf("--case");
   return idx >= 0 ? (process.argv[idx + 1] ?? "") : "all";
 })();
-if (caseName !== "all" && caseName !== "arch") {
-  throw new Error("OpenSandbox PoC --case must be all or arch");
+if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config") {
+  throw new Error("OpenSandbox PoC --case must be all, arch, images, or prod-config");
 }
 
 async function runArchCase(): Promise<string> {
@@ -69,6 +78,68 @@ async function runArchCase(): Promise<string> {
 if (caseName === "arch") {
   const archSummary = await runArchCase();
   console.log(`OK: OpenSandbox arch PoC ${archSummary}`);
+  process.exit(0);
+}
+
+function officialImagesFromRegistry(): ReturnType<typeof listOfficialOpenSandboxRuntimeImages> {
+  const registry = JSON.parse(readFileSync(join(repoRoot, "deploy/runtime-image-registry.json"), "utf8"));
+  const listed = listOfficialOpenSandboxRuntimeImages(registry);
+  const filter = (process.env.OPEN_SANDBOX_POC_IMAGE_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  return filter.length > 0 ? listed.filter((item) => filter.includes(item.key)) : listed;
+}
+
+async function runImagesCase(): Promise<string> {
+  const results = await runOpenSandboxOfficialImagesPoc(client, officialImagesFromRegistry());
+  return results.map((item) => `${item.key} provisionMs=${item.provisionMs} leftovers=${item.leftovers}`).join(" ");
+}
+
+function runProdConfigCase(): string {
+  const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-"));
+  const envFile = join(dir, ".env");
+  writeFileSync(envFile, [
+    "POSTGRES_PASSWORD=poc-opensandbox",
+    "BLOB_S3_ACCESS_KEY_ID=poc",
+    "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
+    "DEEPSONAR_IMAGE_TAG=0.1.45",
+    "OPEN_SANDBOX_API_KEY=poc-opensandbox",
+    "",
+  ].join("\n"));
+  try {
+    const rendered = spawnSync("sudo", [
+      "-n", "docker", "compose",
+      "--env-file", envFile,
+      "-f", join(repoRoot, "deploy/docker-compose.prod.yml"),
+      "-f", join(repoRoot, "deploy/docker-compose.real.yml"),
+      "-f", join(repoRoot, "deploy/docker-compose.opensandbox.prod.yml"),
+      "config",
+    ], { encoding: "utf8" });
+    if (rendered.status !== 0) {
+      throw new Error(`OpenSandbox prod compose config failed: ${rendered.stderr || rendered.stdout}`);
+    }
+    if (!rendered.stdout.includes("SANDBOX_PROVIDER: opensandbox") || !rendered.stdout.includes("AGENT_MODE: real")) {
+      throw new Error("OpenSandbox prod compose missing scheduler SANDBOX_PROVIDER or AGENT_MODE=real");
+    }
+    if (!rendered.stdout.includes(OPENSANDBOX_SERVER_IMAGE)) {
+      throw new Error("OpenSandbox prod compose missing pinned server digest");
+    }
+    if (/network_mode:\s*host|:latest\b/.test(rendered.stdout)) {
+      throw new Error("OpenSandbox prod compose resolved host-network or latest");
+    }
+    return "merged=true provider=opensandbox pinned=true";
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (caseName === "images") {
+  const imagesSummary = await runImagesCase();
+  console.log(`OK: OpenSandbox official images PoC ${imagesSummary}`);
+  process.exit(0);
+}
+
+if (caseName === "prod-config") {
+  const prodSummary = runProdConfigCase();
+  console.log(`OK: OpenSandbox production overlay ${prodSummary}`);
   process.exit(0);
 }
 

@@ -4,10 +4,13 @@ import test from "node:test";
 import {
   OPENSANDBOX_POC_CONTRACT,
   OPENSANDBOX_POC_IMAGE,
+  OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS,
+  listOfficialOpenSandboxRuntimeImages,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
   runOpenSandboxCliLaunchPoc,
   runOpenSandboxImageContractPoc,
+  runOpenSandboxOfficialImagesPoc,
   runOpenSandboxRestrictedPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
@@ -346,6 +349,64 @@ test("OpenSandbox restricted PoC fail-closes non-gateway egress", async () => {
     defaultAction: "deny",
     egress: [{ action: "allow", target: "deepsonar-gateway-proxy" }],
   });
+});
+
+test("official OpenSandbox image list requires pinned registry keys", () => {
+  const digest = "a".repeat(64);
+  const images = OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.map((key) => ({
+    image_key: key,
+    versions: [{ registry_refs: { dockerhub: `docker.io/sumsec/deepsonar@sha256:${digest}` } }],
+  }));
+  const listed = listOfficialOpenSandboxRuntimeImages({ images });
+  assert.equal(listed.length, OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.length);
+  assert.equal(listed[0]?.image, `docker.io/sumsec/deepsonar@sha256:${digest}`);
+  assert.throws(
+    () => listOfficialOpenSandboxRuntimeImages({ images: images.slice(1) }),
+    /OPENSANDBOX_POC_REGISTRY_MISSING/,
+  );
+  assert.throws(
+    () => listOfficialOpenSandboxRuntimeImages({ images: [{ image_key: "deepsonar-base", versions: [{ image_ref: "latest" }] }] }),
+    /OPENSANDBOX_POC_REGISTRY_UNPINNED/,
+  );
+});
+
+test("official OpenSandbox image PoC requires all five CLIs", async () => {
+  const present = hostSession();
+  const originalRun = present.run.bind(present);
+  present.run = async (command, options) => {
+    if (command.startsWith("command -v ") || command.startsWith("test -f ")) {
+      return { exitCode: 0, stdout: "/usr/bin/cli\n", stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const ok = await runOpenSandboxOfficialImagesPoc({
+    async create() {
+      return present;
+    },
+    async connect() {
+      return present;
+    },
+    async list() {
+      return [];
+    },
+  }, [{ key: "deepsonar-base", image: "img@sha256:" + "a".repeat(64) }]);
+  assert.equal(ok[0]?.leftovers, 0);
+  assert.equal(ok[0]?.clis.claude, true);
+
+  await assert.rejects(
+    () => runOpenSandboxOfficialImagesPoc({
+      async create() {
+        return hostSession();
+      },
+      async connect() {
+        return hostSession();
+      },
+      async list() {
+        return [];
+      },
+    }, [{ key: "deepsonar-base", image: "img@sha256:" + "a".repeat(64) }]),
+    /OPENSANDBOX_POC_IMAGE_CLI_MISSING/,
+  );
 });
 
 test("OpenSandbox image contract PoC reprovisions and reports leftovers", async () => {

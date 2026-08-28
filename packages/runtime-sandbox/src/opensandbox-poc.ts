@@ -21,6 +21,50 @@ export const OPENSANDBOX_POC_IMAGE =
 export const OPENSANDBOX_POC_CONTRACT = "deepsonar.runtime.contract/v1";
 export const OPENSANDBOX_POC_CLI_IDS = ["claude", "codex", "opencode", "pi", "dsh"] as const;
 export const OPENSANDBOX_POC_ADAPTER_IDS = ["claude-code", "codex", "open-code", "pi", "dsh"] as const satisfies readonly AgentCliId[];
+export const OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS = [
+  "deepsonar-base",
+  "deepsonar-audit",
+  "deepsonar-kali-minimal",
+  "deepsonar-chrome-audit",
+  "deepsonar-chrome-test",
+  "deepsonar-chrome-fuzz",
+  "deepsonar-openharmony-test",
+  "deepsonar-openharmony-audit",
+  "deepsonar-openharmony-fuzz",
+] as const;
+const OFFICIAL_IMAGE_REF_RE = /^.+@sha256:[0-9a-f]{64}$/;
+
+export type OfficialOpenSandboxRuntimeImage = { key: string; image: string };
+
+export function listOfficialOpenSandboxRuntimeImages(registry: unknown): OfficialOpenSandboxRuntimeImage[] {
+  const images = registry && typeof registry === "object" && "images" in registry && Array.isArray(registry.images)
+    ? registry.images
+    : null;
+  if (!images) throw new Error("OPENSANDBOX_POC_REGISTRY_INVALID");
+  const listed: OfficialOpenSandboxRuntimeImage[] = [];
+  for (const item of images) {
+    if (!item || typeof item !== "object") throw new Error("OPENSANDBOX_POC_REGISTRY_INVALID");
+    const rec = item as { image_key?: unknown; versions?: unknown };
+    const key = typeof rec.image_key === "string" ? rec.image_key.trim() : "";
+    const version = Array.isArray(rec.versions) ? rec.versions[0] : undefined;
+    const refs = version && typeof version === "object" ? (version as { registry_refs?: unknown; image_ref?: unknown }) : undefined;
+    const channelRefs = refs?.registry_refs && typeof refs.registry_refs === "object"
+      ? refs.registry_refs as { dockerhub?: unknown }
+      : undefined;
+    const image = (typeof channelRefs?.dockerhub === "string" && channelRefs.dockerhub.trim())
+      || (typeof refs?.image_ref === "string" && refs.image_ref.trim())
+      || "";
+    if (!key || !OFFICIAL_IMAGE_REF_RE.test(image)) {
+      throw new Error(`OPENSANDBOX_POC_REGISTRY_UNPINNED: ${key || "unknown"}`);
+    }
+    listed.push({ key, image });
+  }
+  const missing = OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.filter((key) => !listed.some((item) => item.key === key));
+  if (missing.length > 0) {
+    throw new Error(`OPENSANDBOX_POC_REGISTRY_MISSING: ${missing.join(",")}`);
+  }
+  return listed;
+}
 
 export function isOpenSandboxCliMissing(text: string): boolean {
   return /command not found|No such file or directory|(?:^|[\n\r])(?:\/bin\/)?(?:ba)?sh: [^\n]* not found/i.test(text);
@@ -462,6 +506,26 @@ export async function runOpenSandboxImageContractPoc(
       throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
     }
   }
+}
+
+export async function runOpenSandboxOfficialImagesPoc(
+  client: OpenSandboxClient,
+  images: readonly OfficialOpenSandboxRuntimeImage[],
+): Promise<Array<OfficialOpenSandboxRuntimeImage & {
+  provisionMs: number;
+  clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>>;
+  leftovers: number;
+}>> {
+  const results = [];
+  for (const item of images) {
+    const extra = await runOpenSandboxImageContractPoc(client, { image: item.image });
+    const missing = OPENSANDBOX_POC_CLI_IDS.filter((id) => extra.clis[id] !== true);
+    if (missing.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_IMAGE_CLI_MISSING: ${item.key} ${missing.join(",")}`);
+    }
+    results.push({ ...item, ...extra });
+  }
+  return results;
 }
 
 export type OpenSandboxCliLaunchResult = {
