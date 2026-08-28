@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   createSdkOpenSandboxClient,
   OpenSandboxRunner,
   readOpenSandboxPin,
+  runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
@@ -69,4 +72,32 @@ if (runtimeImage) {
   }
   hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} isolated=${host.networkIsolated} limits=${host.hardLimits} clis=${JSON.stringify(host.clis)}`;
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary}`);
+let assetsSummary = "skipped";
+if (runtimeImage) {
+  const jobId = randomUUID();
+  const volumeName = `deepsonar-assets-${jobId}`;
+  const created = spawnSync("sudo", [
+    "docker", "volume", "create",
+    "--label", "deepsonar.shared_assets.managed=true",
+    "--label", `deepsonar.shared_assets.job=${jobId}`,
+    volumeName,
+  ], { encoding: "utf8" });
+  if (created.status === 0) {
+    try {
+      const seeded = spawnSync("sudo", [
+        "docker", "run", "--rm", "-v", `${volumeName}:/data`,
+        "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23",
+        "sh", "-c", "echo seed > /data/poc-seed.txt",
+      ], { encoding: "utf8" });
+      if (seeded.status !== 0) throw new Error(seeded.stderr || "seed volume failed");
+      const assets = await runOpenSandboxAssetsPoc(client, { image: runtimeImage, volumeName, jobId });
+      if (!assets.mounted || !assets.readonly || !assets.seedOk) {
+        throw new Error(`OpenSandbox assets PoC unexpected result: ${JSON.stringify(assets)}`);
+      }
+      assetsSummary = `mounted=${assets.mounted} readonly=${assets.readonly} seedOk=${assets.seedOk}`;
+    } finally {
+      spawnSync("sudo", ["docker", "volume", "rm", "-f", volumeName], { encoding: "utf8" });
+    }
+  }
+}
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary}`);

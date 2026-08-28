@@ -3,6 +3,7 @@
  * Default CI stays skip-safe; set OPEN_SANDBOX_POC=1 only when a server is up.
  */
 import { randomUUID } from "node:crypto";
+import { SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
 import { shellQuote } from "./runtime-host.js";
@@ -281,4 +282,40 @@ export async function runOpenSandboxCancelPoc(
   );
   const leftovers = await runner.listResources({ jobId, attemptId });
   return { cancelled: true, leftovers: leftovers.length };
+}
+
+export async function runOpenSandboxAssetsPoc(
+  client: OpenSandboxClient,
+  input: { image: string; volumeName: string; jobId?: string; attemptId?: string },
+): Promise<{ mounted: boolean; readonly: boolean; seedOk: boolean; leftovers: number }> {
+  const runner = new OpenSandboxRunner(client);
+  const jobId = input.jobId ?? ids().jobId;
+  const attemptId = input.attemptId ?? ids().attemptId;
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "none",
+    limits: hostLimits,
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
+    sharedAssetsMount: { volumeName: input.volumeName },
+  });
+  try {
+    const host = await runner.ensureHost(handle);
+    const mounted = await host.run(`test -d ${SHARED_ASSETS_MOUNT_PATH} && echo mounted`, { timeoutMs: 5_000 });
+    const seed = await host.run(`cat ${SHARED_ASSETS_MOUNT_PATH}/poc-seed.txt`, { timeoutMs: 5_000 });
+    const write = await host.run(`touch ${SHARED_ASSETS_MOUNT_PATH}/poc-write`, { timeoutMs: 5_000 });
+    return {
+      mounted: mounted.exitCode === 0 && mounted.stdout.includes("mounted"),
+      readonly: write.exitCode !== 0,
+      seedOk: seed.exitCode === 0 && seed.stdout.includes("seed"),
+      leftovers: 0,
+    };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
 }

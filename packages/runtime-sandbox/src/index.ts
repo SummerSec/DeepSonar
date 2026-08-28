@@ -134,6 +134,7 @@ export {
   OPENSANDBOX_POC_CLI_IDS,
   OPENSANDBOX_POC_CONTRACT,
   OPENSANDBOX_POC_IMAGE,
+  runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,

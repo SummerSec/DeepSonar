@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   OPENSANDBOX_POC_CONTRACT,
   OPENSANDBOX_POC_IMAGE,
+  runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
@@ -119,6 +120,9 @@ function hostSession(): OpenSandboxSession {
       if (command.includes("tool-manifest.json") && command.includes("cat ")) {
         return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime.contract/v1" }), stderr: "" };
       }
+      if (command.includes("poc-seed.txt")) return { exitCode: 0, stdout: "seed\n", stderr: "" };
+      if (command.includes("poc-write")) return { exitCode: 1, stdout: "", stderr: "Read-only file system" };
+      if (command.includes("shared") && command.includes("mounted")) return { exitCode: 0, stdout: "mounted\n", stderr: "" };
       if (command.includes("env")) return { exitCode: 0, stdout: "PATH=/bin\nHOME=/workspace\n", stderr: "" };
       if (command.includes("192.0.2.1")) return { exitCode: 1, stdout: "", stderr: "" };
       if (command.includes("CapPrm")) {
@@ -182,6 +186,30 @@ test("OpenSandbox host PoC covers files, incremental stdin, PTY, and reconnect",
   assert.equal(result.hardLimits, true);
   assert.equal(result.reconnected, true);
   assert.equal(result.leftovers, 0);
+});
+
+test("OpenSandbox assets PoC mounts Scheduler volume read-only and reads the seed", async () => {
+  const session = hostSession();
+  const created: OpenSandboxCreateInput[] = [];
+  const client: OpenSandboxClient = {
+    async create(input) {
+      created.push(input);
+      return session;
+    },
+    async connect(id) {
+      return id === session.id ? session : undefined;
+    },
+    async list() {
+      return [];
+    },
+  };
+  const result = await runOpenSandboxAssetsPoc(client, {
+    image: "img@sha256:" + "a".repeat(64),
+    volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111",
+  });
+  assert.deepEqual(result, { mounted: true, readonly: true, seedOk: true, leftovers: 0 });
+  assert.equal(created[0]?.volumes[0]?.readOnly, true);
+  assert.equal(created[0]?.volumes[0]?.pvc.createIfNotExists, false);
 });
 
 test("OpenSandbox cancel PoC rejects in-flight provision and reports leftovers", async () => {
