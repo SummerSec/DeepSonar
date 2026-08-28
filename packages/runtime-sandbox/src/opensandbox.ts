@@ -171,6 +171,25 @@ function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
   return process;
 }
 
+export function awaitProvisionSession<T>(created: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return created;
+  if (signal.aborted) return Promise.reject(new Error("provision 已取消"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error("provision 已取消"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    created.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 function assertReadableWorkspacePath(filePath: string): void {
   if (
     !filePath.startsWith("/workspace/") ||
@@ -244,7 +263,7 @@ export class OpenSandboxRunner implements SandboxRunner {
     this.provisioning.set(key, created);
     let session: OpenSandboxSession | undefined;
     try {
-      session = await created;
+      session = await awaitProvisionSession(created, input.signal);
       if (input.signal?.aborted) throw new Error("provision 已取消");
       this.sessions.set(session.id, session);
       const host = createOpenSandboxRuntimeHost(session);
@@ -273,6 +292,11 @@ export class OpenSandboxRunner implements SandboxRunner {
         await session.close().catch(() => {});
       }
       await this.destroyByLabels(input.jobId, input.attemptId).catch(() => {});
+      void created.then(async (late) => {
+        this.sessions.delete(late.id);
+        await late.kill().catch(() => {});
+        await late.close().catch(() => {});
+      }).catch(() => {});
       throw error;
     } finally {
       this.provisioning.delete(key);

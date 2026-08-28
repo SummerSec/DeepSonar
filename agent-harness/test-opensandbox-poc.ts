@@ -1,6 +1,8 @@
 import {
   createSdkOpenSandboxClient,
+  OpenSandboxRunner,
   readOpenSandboxPin,
+  runOpenSandboxContractFailPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
@@ -38,4 +40,12 @@ const result = await runOpenSandboxInfrastructurePoc(client, {
 if (!result.listed || result.stdout !== "poc") {
   throw new Error(`OpenSandbox PoC unexpected result: ${JSON.stringify(result)}`);
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId}`);
+const contract = await runOpenSandboxContractFailPoc(new OpenSandboxRunner(client), {
+  jobId: "00000000-0000-4000-8000-000000000163",
+  attemptId: "00000000-0000-4000-8000-000000000263",
+  image: process.env.OPEN_SANDBOX_POC_IMAGE,
+});
+if (!contract.rejected || contract.leftovers !== 0) {
+  throw new Error(`OpenSandbox contract PoC unexpected result: ${JSON.stringify(contract)}`);
+}
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers}`);

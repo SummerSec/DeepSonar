@@ -124,6 +124,7 @@ export type {
 } from "./runtime-agent-config.js";
 export {
   OpenSandboxRunner,
+  awaitProvisionSession,
   createSdkOpenSandboxClient,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
@@ -131,6 +132,7 @@ export {
 } from "./opensandbox.js";
 export {
   OPENSANDBOX_POC_IMAGE,
+  runOpenSandboxContractFailPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";

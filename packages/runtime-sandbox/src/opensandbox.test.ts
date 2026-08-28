@@ -175,6 +175,58 @@ test("OpenSandbox openTerminal reconnects through ensureHost", async () => {
   await terminal.close();
 });
 
+test("OpenSandbox provision abort rejects in-flight create and kills late sessions", async () => {
+  const session = fakeSession();
+  let killed = 0;
+  session.kill = async () => {
+    killed += 1;
+  };
+  let release: ((value: OpenSandboxSession) => void) | undefined;
+  const client = fakeClient(session);
+  client.create = () => new Promise((resolve) => {
+    release = resolve;
+  });
+  const abort = new AbortController();
+  const runner = new OpenSandboxRunner(client);
+  const pending = runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    signal: abort.signal,
+  });
+  abort.abort();
+  await assert.rejects(pending, /已取消/);
+  release?.(session);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(killed >= 1);
+});
+
+test("OpenSandbox contract mismatch destroys the created session", async () => {
+  const session = fakeSession();
+  let killed = 0;
+  session.kill = async () => {
+    killed += 1;
+  };
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "wrong" }), stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), /contract mismatch/);
+  assert.equal(killed >= 1, true);
+});
+
 test("OpenSandbox host rejects reserved workspace reads and inbox path traversal", async () => {
   const client = fakeClient();
   const runner = new OpenSandboxRunner(client);

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   OPENSANDBOX_POC_IMAGE,
+  runOpenSandboxContractFailPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";
+import { OpenSandboxRunner } from "./opensandbox.js";
 import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
 
 function fakePocClient(): OpenSandboxClient & { created: OpenSandboxCreateInput[]; killed: number } {
@@ -62,7 +64,45 @@ test("OpenSandbox infrastructure PoC creates, probes, lists, and destroys", asyn
   assert.equal(result.sandboxId, "poc-1");
   assert.equal(result.stdout, "poc");
   assert.equal(result.listed, true);
+  assert.ok(result.createMs >= 0);
   assert.equal(client.created[0]?.timeoutSeconds, null);
   assert.equal(client.created[0]?.networkPolicy.defaultAction, "deny");
   assert.equal(client.killed, 1);
+});
+
+test("OpenSandbox runner PoC fail-closes missing runtime contract and cleans leftovers", async () => {
+  const session = {
+    id: "poc-1",
+    async run() {
+      return { exitCode: 1, stdout: "", stderr: "no manifest" };
+    },
+    async runAsync() {
+      throw new Error("unused");
+    },
+    async writeFile() {},
+    async readFile() {
+      return Buffer.from("");
+    },
+    async getState() {
+      return "Running";
+    },
+    async kill() {},
+    async close() {},
+  };
+  const client: OpenSandboxClient = {
+    async create() {
+      return session;
+    },
+    async connect() {
+      return undefined;
+    },
+    async list() {
+      return [];
+    },
+  };
+  const result = await runOpenSandboxContractFailPoc(new OpenSandboxRunner(client), {
+    jobId: "job-1",
+    attemptId: "att-1",
+  });
+  assert.deepEqual(result, { rejected: true, leftovers: 0 });
 });
