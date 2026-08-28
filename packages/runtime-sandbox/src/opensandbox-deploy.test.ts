@@ -104,6 +104,7 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /encryptSecret/);
   assert.match(poc, /DEEPSONAR_GATEWAY_TOKEN/);
   assert.match(poc, /vendor key leaked into OpenSandbox worker env/);
+  assert.match(poc, /submit_hub_decision/);
   assert.match(poc, /for \(const selectedCli of selectedClis\)/);
   assert.match(poc, /CLI_SESSION_ADAPTERS/);
   assert.match(poc, /parseAgentSession/);

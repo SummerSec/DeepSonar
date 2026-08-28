@@ -40,7 +40,7 @@ const projectId = randomUUID();
 const canvasId = randomUUID();
 const jobId = randomUUID();
 const isolatedJobId = randomUUID();
-const operations = ["emit_fact", "emit_finding", "mark_job_done"] as const;
+const operations = ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"] as const;
 const calls: string[] = [];
 let closeApp: (() => Promise<unknown>) | null = null;
 let endSql: (() => Promise<unknown>) | null = null;
@@ -145,6 +145,7 @@ def leaked():
 OPS = [
     ("emit_fact", {"title": "OpenSandbox fact", "description": "Submitted from inside an OpenSandbox worker via Job Platform API."}),
     ("emit_finding", {"title": "OpenSandbox finding from restricted worker", "summary": "This finding proves Job Platform API ingest from an OpenSandbox restricted sandbox."}),
+    ("submit_hub_decision", {"complete": {"from": [], "description": "OpenSandbox hub complete decision from the worker."}}),
     ("mark_job_done", {"summary": "OpenSandbox Platform API live proof finished from the worker."}),
 ]
 

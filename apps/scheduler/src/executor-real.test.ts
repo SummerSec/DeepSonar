@@ -125,6 +125,7 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.match(source, /steered=true archived=true viewed=true resumed=true leftover=0/);
   assert.match(source, /clis=\$\{ran\.join\(/);
   assert.match(source, /preparePlatformCapability/);
+  assert.match(source, /submit_hub_decision/);
   assert.match(source, /adapter\.start/);
   assert.doesNotMatch(source, /mintJobCapabilityToken\(/);
   assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
@@ -212,6 +213,7 @@ test("OpenSandbox Platform API PoC injects capability env at provision, not host
   assert.doesNotMatch(source, /mintJobCapabilityToken/);
   assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
   assert.match(source, /os\.environ\["DEEPSONAR_API_TOKEN"\]/);
+  assert.match(source, /submit_hub_decision/);
 });
 
 test("real executor passes the reserved Skill to AgentBox without putting the API token in the manifest", () => {

@@ -64,7 +64,7 @@ targetUrl.search = "";
 
 const projectId = randomUUID();
 const canvasId = randomUUID();
-const operations = ["emit_fact", "emit_finding", "mark_job_done"] as const;
+const operations = ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"] as const;
 let closeApp: (() => Promise<unknown>) | null = null;
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
@@ -285,6 +285,7 @@ PY
 }
 post emit_fact '{"title":"CLI fact","description":"Submitted by a vendor CLI inside OpenSandbox via Job Platform API."}'
 post emit_finding '{"title":"CLI finding","summary":"Vendor CLI invoked Job Platform API from the worker."}'
+post submit_hub_decision '{"complete":{"from":[],"description":"Vendor CLI submitted a hub complete decision."}}'
 post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
 `, "/workspace/poc-cli-emit.sh");
       await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
