@@ -10,7 +10,7 @@ import {
   OpenSandboxRunner,
   readOpenSandboxPin,
   shouldRunOpenSandboxPoc,
-} from "../../../packages/runtime-sandbox/src/index.ts";
+} from "@deepsonar/runtime-sandbox";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox Platform API PoC (set OPEN_SANDBOX_POC=1)");
@@ -51,8 +51,8 @@ try {
 
   const [{ default: Fastify }, dbModule, platformApi] = await Promise.all([
     import("fastify"),
-    import("./db.ts"),
-    import("./domains/platform-api/index.ts"),
+    import("./db.js"),
+    import("./domains/platform-api/index.js"),
   ]);
   const { sql, migrate } = dbModule;
   const {
