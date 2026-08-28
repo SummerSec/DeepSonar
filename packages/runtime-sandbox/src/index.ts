@@ -147,6 +147,7 @@ export {
   runOpenSandboxInfrastructurePoc,
   runOpenSandboxRecoveryPoc,
   runOpenSandboxRestrictedPoc,
+  runOpenSandboxRetryPoc,
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";
 export {

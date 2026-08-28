@@ -17,9 +17,22 @@ if (!shouldRunOpenSandboxPoc()) {
   process.exit(0);
 }
 
-const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
-if (!anthropicKey) {
-  console.log("skip: OpenSandbox CLI control PoC needs ANTHROPIC_API_KEY for vendor-model E2E");
+const vendorKeys = {
+  "claude-code": process.env.ANTHROPIC_API_KEY?.trim(),
+  codex: process.env.OPENAI_API_KEY?.trim(),
+  "open-code": process.env.OPENAI_API_KEY?.trim(),
+  pi: process.env.OPENAI_API_KEY?.trim(),
+  dsh: process.env.DEEPSEEK_API_KEY?.trim(),
+} as const;
+const requestedCli = process.env.OPEN_SANDBOX_POC_CLI?.trim() || "claude-code";
+if (!(requestedCli in vendorKeys)) {
+  console.error(`OPEN_SANDBOX_POC_CLI must be one of ${Object.keys(vendorKeys).join(", ")}`);
+  process.exit(1);
+}
+const selectedCli = requestedCli as keyof typeof vendorKeys;
+const vendorKey = vendorKeys[selectedCli];
+if (!vendorKey) {
+  console.log("skip: OpenSandbox CLI control PoC needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E");
   process.exit(0);
 }
 
@@ -109,8 +122,8 @@ try {
   const snapshot = {
     name: "audit",
     platform_tools: [...operations],
-    agent_cli: "claude-code",
-    agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
+    agent_cli: selectedCli,
+    agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS[selectedCli]),
     sandbox_limits: { cpu: 1, memoryMiB: 1024, pidsLimit: 256, capDropAll: true, noNewPrivileges: true },
     runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
   };
@@ -136,7 +149,9 @@ try {
     env: {
       DEEPSONAR_ALLOW_EGRESS: "1",
       ...capability.env,
-      ANTHROPIC_API_KEY: anthropicKey,
+      ...(selectedCli === "claude-code" ? { ANTHROPIC_API_KEY: vendorKey } : {}),
+      ...(selectedCli === "dsh" ? { DEEPSEEK_API_KEY: vendorKey } : {}),
+      ...(selectedCli === "codex" || selectedCli === "open-code" || selectedCli === "pi" ? { OPENAI_API_KEY: vendorKey } : {}),
     },
     expectedContract: "deepsonar.runtime.contract/v1",
   });
@@ -173,23 +188,33 @@ post emit_finding '{"title":"CLI finding","summary":"Claude Code invoked Job Pla
 post mark_job_done '{"summary":"Claude Code vendor-model Platform API proof finished."}'
 `, "/workspace/poc-cli-emit.sh");
     await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
-    const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
     const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
+    const vendorEnv = selectedCli === "claude-code"
+      ? { ANTHROPIC_API_KEY: vendorKey }
+      : selectedCli === "dsh"
+        ? { DEEPSEEK_API_KEY: vendorKey }
+        : { OPENAI_API_KEY: vendorKey };
     const process = await adapter.start({
       host,
-      env: { ANTHROPIC_API_KEY: anthropicKey },
+      env: vendorEnv,
       cwd: "/workspace",
       input: prompt,
       mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+      ...(selectedCli === "dsh"
+        ? { dshProvider: { provider: "deepseek", model: "deepseek-chat", config: { providers: { deepseek: { type: "openai" } } } } }
+        : {}),
     });
-    const payload = adapter.encodeInput(prompt);
+    const payload = selectedCli === "dsh"
+      ? adapter.encodeInput(prompt, { model: "deepseek-chat", modelProvider: "deepseek", cwd: "/workspace" })
+      : adapter.encodeInput(prompt);
     if (payload) await process.write(payload).catch(() => {});
     const text = await collectText(process, 120_000);
     await process.closeStdin().catch(() => {});
     await process.kill().catch(() => {});
     const submitted = operations.every((name) => calls.includes(name));
     if (!submitted) {
-      throw new Error(`Claude Code did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
+      throw new Error(`${selectedCli} did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
     }
   } finally {
     await runner.destroy(handle).catch(() => {});
@@ -197,7 +222,7 @@ post mark_job_done '{"summary":"Claude Code vendor-model Platform API proof fini
   const leftovers = await runner.listResources({ jobId });
   if (leftovers.length > 0) throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
   unregisterRuntimeHandler(jobId);
-  console.log(`OK: OpenSandbox CLI vendor control submitted=true leftover=0 calls=${calls.join(",")}`);
+  console.log(`OK: OpenSandbox CLI vendor control cli=${selectedCli} submitted=true leftover=0 calls=${calls.join(",")}`);
 } finally {
   if (closeApp) await closeApp().catch(() => {});
   if (endSql) await endSql().catch(() => {});

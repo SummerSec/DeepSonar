@@ -113,8 +113,10 @@ test("real executor round-trips only controlled rate-limit details after string 
 test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", () => {
   const source = readFileSync(new URL("./opensandbox-cli-control.poc.ts", import.meta.url), "utf8");
   assert.match(source, /ANTHROPIC_API_KEY/);
-  assert.match(source, /needs ANTHROPIC_API_KEY for vendor-model E2E/);
-  assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\["claude-code"\]/);
+  assert.match(source, /OPENAI_API_KEY/);
+  assert.match(source, /DEEPSEEK_API_KEY/);
+  assert.match(source, /needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E/);
+  assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\[selectedCli\]/);
   assert.match(source, /preparePlatformCapability/);
   assert.match(source, /adapter\.start/);
   assert.doesNotMatch(source, /mintJobCapabilityToken\(/);

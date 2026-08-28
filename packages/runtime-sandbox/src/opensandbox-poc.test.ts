@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   OPENSANDBOX_POC_CONTRACT,
@@ -12,6 +13,7 @@ import {
   runOpenSandboxHostPoc,
   runOpenSandboxInfrastructurePoc,
   runOpenSandboxRecoveryPoc,
+  runOpenSandboxRetryPoc,
   shouldRunOpenSandboxPoc,
   isOpenSandboxCliMissing,
 } from "./opensandbox-poc.js";
@@ -426,4 +428,79 @@ test("OpenSandbox cancel PoC rejects in-flight provision and reports leftovers",
   release?.(session);
   const result = await pending;
   assert.deepEqual(result, { cancelled: true, leftovers: 0 });
+});
+
+function retrySession(status: 503 | 401): OpenSandboxSession & { commands: string[] } {
+  const base = hostSession();
+  const commands: string[] = [];
+  const sessionId = status === 503 ? "retry-sess-503" : "retry-sess-401";
+  return {
+    ...base,
+    commands,
+    async runAsync(command) {
+      commands.push(command);
+      if (!/\bclaude\b/.test(command)) return base.runAsync(command);
+      const resume = command.includes("--resume");
+      const init = { type: "system", subtype: "init", session_id: sessionId };
+      const error = {
+        type: "result",
+        subtype: "error",
+        is_error: true,
+        result: status === 503 ? "upstream status: 503" : "HTTP 401 unauthorized",
+      };
+      const success = { type: "result", subtype: "success", result: "ok" };
+      const lines = resume && status === 503 ? [init, success] : [init, error];
+      return {
+        async write() {},
+        async closeStdin() {},
+        async kill() {},
+        async resize() {},
+        async *[Symbol.asyncIterator]() {
+          yield { type: "stdout" as const, chunk: `${lines.map((line) => JSON.stringify(line)).join("\n")}\n` };
+          yield { type: "exit" as const, exitCode: resume && status === 503 ? 0 : 1 };
+        },
+      };
+    },
+  };
+}
+
+function retryClient(session: OpenSandboxSession): OpenSandboxClient {
+  return {
+    async create() {
+      return session;
+    },
+    async connect(id) {
+      return id === session.id ? session : undefined;
+    },
+    async list() {
+      return [];
+    },
+  };
+}
+
+test("OpenSandbox runRealAgent retries a transient 503 on the same Claude session", async () => {
+  const session = retrySession(503);
+  const result = await runOpenSandboxRetryPoc(retryClient(session), { image: "img@sha256:" + "a".repeat(64) });
+  assert.equal(result.retrying, true);
+  assert.equal(result.reason, "http");
+  assert.equal(result.skipped, false);
+  assert.equal(result.leftovers, 0);
+  assert.equal(result.terminalOutcome, "success");
+  assert.ok(session.commands.some((command) => command.includes("--resume 'retry-sess-503'")));
+});
+
+test("runRealAgent captures CLI session identity through applyRuntimeOutput", () => {
+  const source = readFileSync(new URL("./agentbox.ts", import.meta.url), "utf8");
+  assert.match(source, /applyRuntimeOutput\(adapter, rawParsed, adapterState\)/);
+  assert.doesNotMatch(source, /const decodedEvents = adapter\.decodeOutput\(rawParsed, adapterState\)/);
+});
+
+test("OpenSandbox runRealAgent does not resume a permanent 401", async () => {
+  const session = retrySession(401);
+  const result = await runOpenSandboxRetryPoc(retryClient(session), { image: "img@sha256:" + "a".repeat(64) });
+  assert.equal(result.retrying, false);
+  assert.equal(result.skipped, false);
+  assert.equal(result.leftovers, 0);
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(session.commands.some((command) => command.includes("--resume")), false);
 });

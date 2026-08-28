@@ -22,6 +22,7 @@ import type {
   AgentSubAgentConfig,
 } from "./runtime-agent-config.js";
 import {
+  applyRuntimeOutput,
   parsePiJsonlRecord,
   PiJsonlFramer,
   requireAgentCliRuntimeAdapter,
@@ -3046,7 +3047,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
               continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
             }
             const rawParsed = parsedLine.parsed;
-            const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
+            const decodedEvents = applyRuntimeOutput(adapter, rawParsed, adapterState);
             await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
             bindObservedResumeIdentity();
             for (const parsed of decodedEvents) {

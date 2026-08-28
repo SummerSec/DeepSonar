@@ -3,7 +3,7 @@
  * Default CI stays skip-safe; set OPEN_SANDBOX_POC=1 only when a server is up.
  */
 import { randomUUID } from "node:crypto";
-import { SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
+import { runRealAgent, SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -714,6 +714,60 @@ export async function runOpenSandboxRecoveryPoc(
       aliveAfterReconnect,
       deadAfterDestroy,
       leftovers: leftovers.length,
+    };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
+}
+
+export type OpenSandboxRetryResult = {
+  retrying: boolean;
+  reason?: string;
+  skipped: boolean;
+  skipCause?: string;
+  leftovers: number;
+  terminalOutcome?: string;
+};
+
+export async function runOpenSandboxRetryPoc(
+  client: OpenSandboxClient,
+  input: { image: string },
+): Promise<OpenSandboxRetryResult> {
+  const runner = new OpenSandboxRunner(client);
+  const { jobId, attemptId } = ids();
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "none",
+    limits: hostLimits,
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
+  });
+  try {
+    const host = await runner.ensureHost(handle);
+    const events: Array<Record<string, unknown>> = [];
+    const result = await runRealAgent(host, {
+      provider: "claude-code",
+      env: {
+        ANTHROPIC_API_KEY: "sk-mock",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:8765",
+      },
+      input: "ping",
+      onEvent: (event) => events.push(event),
+    });
+    const retry = events.find((event) => event.type === "run.retrying");
+    const skipped = events.find((event) => event.type === "run.retry_skipped");
+    return {
+      retrying: Boolean(retry),
+      reason: typeof retry?.reason === "string" ? retry.reason : undefined,
+      skipped: Boolean(skipped),
+      skipCause: typeof skipped?.cause === "string" ? skipped.cause : undefined,
+      leftovers: 0,
+      terminalOutcome: result.terminalOutcome,
     };
   } finally {
     await runner.destroy(handle).catch(() => {});
