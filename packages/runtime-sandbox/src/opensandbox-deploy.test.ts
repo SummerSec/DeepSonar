@@ -77,6 +77,17 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.doesNotMatch(kustomization, /batchsandbox-template\.yaml/);
 });
 
+test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () => {
+  const poc = readFileSync(join(root, "apps/scheduler/src/opensandbox-cli-control.poc.ts"), "utf8");
+  assert.match(poc, /registerGateway/);
+  assert.match(poc, /mintJobToken/);
+  assert.match(poc, /encryptSecret/);
+  assert.match(poc, /DEEPSONAR_GATEWAY_TOKEN/);
+  assert.match(poc, /vendor key leaked into OpenSandbox worker env/);
+  assert.doesNotMatch(poc, /ANTHROPIC_API_KEY: vendorKey|ANTHROPIC_API_KEY: vendorSecret/);
+  assert.doesNotMatch(poc, /OPENAI_API_KEY: vendorKey|DEEPSEEK_API_KEY: vendorKey/);
+});
+
 test("OpenSandbox live harness pins arch image separately from contract-fail busybox", () => {
   const harness = readFileSync(join(root, "agent-harness/test-opensandbox-poc.ts"), "utf8");
   assert.match(harness, /OPEN_SANDBOX_POC_ARCH_IMAGE/);
