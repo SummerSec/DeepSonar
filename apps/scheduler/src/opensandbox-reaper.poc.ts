@@ -1,6 +1,10 @@
 /**
  * Live proof that Reaper timeout/orphan owns OpenSandbox leftovers:
  * revoke tokens, close PTY, destroy sandbox, remove shared assets. leftover=0.
+ * Kubernetes/Kata server additionally needs OPEN_SANDBOX_KUBERNETES=1
+ * so provision omits Docker-only ResourceName=pids. Shared assets stay
+ * Docker volumes; K8s uses NoopSharedAssetsVolumeManager and skips mounts.
+ * The smoke script rebuilds @deepsonar/runtime-sandbox so Scheduler imports the current dist.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -38,6 +42,12 @@ const databaseName = `deepsonar_os_reaper_${process.pid}_${Date.now()}_${randomU
 const targetUrl = new URL(databaseUrl);
 targetUrl.pathname = `/${databaseName}`;
 targetUrl.search = "";
+
+const kubernetes = ["1", "true", "yes", "on"].includes((process.env.OPEN_SANDBOX_KUBERNETES ?? "").toLowerCase());
+/** Three concurrent Kata VMs on a 2-core / 4Gi node; keep below system+sidecar headroom. */
+const sandboxCpu = kubernetes ? 0.3 : 1;
+const sandboxMemoryMiB = kubernetes ? 256 : 512;
+console.log(`OpenSandbox reaper kubernetes=${kubernetes} cpu=${sandboxCpu} memoryMiB=${sandboxMemoryMiB} domain=${process.env.OPEN_SANDBOX_DOMAIN ?? ""}`);
 
 const projectId = randomUUID();
 const canvasId = randomUUID();
@@ -84,7 +94,7 @@ try {
     platform_tools: ["emit_fact", "emit_finding", "mark_job_done"],
     agent_cli: "claude-code",
     agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
-    sandbox_limits: { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
+    sandbox_limits: { cpu: sandboxCpu, memoryMiB: sandboxMemoryMiB, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
     runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
     network_policy: { allow_egress: false },
   };
@@ -92,7 +102,17 @@ try {
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox reaper')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox reaper')`;
 
+  const leftovers = await sandboxRunner.listResources();
+  for (const resource of leftovers) {
+    await sandboxRunner.destroyResource(resource).catch(() => {});
+  }
+  const remaining = await sandboxRunner.listResources();
+  if (remaining.length > 0) {
+    throw new Error(`OPENSANDBOX_POC_DIRTY: ${remaining.map((item) => item.resourceId).join(",")}`);
+  }
+
   const prepareAssets = async (jobId: string) => {
+    if (kubernetes) return null;
     const volumeName = await assets!.prepare({
       jobId,
       files: [{ sourcePath: seedPath, relativePath: "seed.txt" }],
@@ -101,7 +121,7 @@ try {
     if (!volumeName) throw new Error(`shared assets volume missing for ${jobId}`);
     return volumeName;
   };
-  const provision = async (jobId: string, attemptId: string, volumeName: string) => {
+  const provision = async (jobId: string, attemptId: string, volumeName: string | null) => {
     const handle = await sandboxRunner.provision({
       jobId,
       attemptId,
@@ -109,7 +129,7 @@ try {
       network: "none",
       limits: snapshot.sandbox_limits,
       expectedContract: "deepsonar.runtime.contract/v1",
-      sharedAssetsMount: { volumeName },
+      ...(volumeName ? { sharedAssetsMount: { volumeName } } : {}),
     });
     const terminal = await sandboxRunner.openTerminal(handle, { cols: 80, rows: 24 });
     void terminal.output[Symbol.asyncIterator]().next().catch(() => {});
@@ -200,12 +220,14 @@ try {
     throw new Error(`orphan token must be revoked by reaper`);
   }
   if (tokenOf(liveJobId)?.revoked_at) throw new Error("live token must stay active");
-  const managed = await assets!.listManaged();
-  const volumeOf = (id: string) => managed.some((item) => item.jobId === id);
-  if (volumeOf(timeoutJobId) || volumeOf(orphanJobId)) {
-    throw new Error("reaped jobs must lose shared assets volumes");
+  if (!kubernetes) {
+    const managed = await assets!.listManaged();
+    const volumeOf = (id: string) => managed.some((item) => item.jobId === id);
+    if (volumeOf(timeoutJobId) || volumeOf(orphanJobId)) {
+      throw new Error("reaped jobs must lose shared assets volumes");
+    }
+    if (!volumeOf(liveJobId)) throw new Error("live shared assets volume must survive reap");
   }
-  if (!volumeOf(liveJobId)) throw new Error("live shared assets volume must survive reap");
   const timeoutTerm = provisioned.find((item) => item.jobId === timeoutJobId)?.terminal;
   const orphanTerm = provisioned.find((item) => item.jobId === orphanJobId)?.terminal;
   const liveTerm = provisioned.find((item) => item.jobId === liveJobId)?.terminal;

@@ -157,6 +157,10 @@ test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", 
   assert.match(source, /openTerminal/);
   assert.match(source, /sharedAssetsVolumeManager/);
   assert.match(source, /tokens=revoked pty=closed assets=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.3 : 1/);
+  assert.match(source, /OPENSANDBOX_POC_DIRTY/);
+  assert.match(source, /NoopSharedAssetsVolumeManager/);
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
