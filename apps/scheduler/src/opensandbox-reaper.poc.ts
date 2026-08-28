@@ -137,10 +137,10 @@ try {
       id, project_id, canvas_id, type, status, agent_snapshot_json, timeout_sec,
       sandbox_id, started_at, lease_expires_at
     ) VALUES
-      (${timeoutJobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshotJson)}, 1,
-       ${timeoutSandbox}, now() - interval '10 minutes', now() + interval '1 hour'),
+      (${timeoutJobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshotJson)}, 3600,
+       ${timeoutSandbox}, now(), now() + interval '1 hour'),
       (${orphanJobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshotJson)}, 3600,
-       ${orphanSandbox}, now(), now() - interval '1 minute'),
+       ${orphanSandbox}, now(), now() + interval '1 hour'),
       (${liveJobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(snapshotJson)}, 3600,
        ${liveSandbox}, now(), now() + interval '1 hour')`;
   const attemptState = (id: string, jobId: string, sandboxId: string) =>
@@ -157,6 +157,12 @@ try {
   await mintJobCapabilityToken(timeoutJobId);
   await mintJobCapabilityToken(orphanJobId);
   await mintJobCapabilityToken(liveJobId);
+  await sql`
+    UPDATE jobs SET timeout_sec = 1, started_at = now() - interval '10 minutes'
+    WHERE id = ${timeoutJobId}`;
+  await sql`
+    UPDATE jobs SET lease_expires_at = now() - interval '1 minute'
+    WHERE id = ${orphanJobId}`;
 
   const reaped = await reapOnce();
   const jobsAfter = await sql`SELECT id, status FROM jobs`;
