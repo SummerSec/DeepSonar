@@ -22,7 +22,9 @@ import {
   runOpenSandboxOfficialImagesPoc,
   runOpenSandboxRestrictedPoc,
   runOpenSandboxK8sPoc,
+  runOpenSandboxK8sAssetsPoc,
   shouldRunOpenSandboxK8sPoc,
+  shouldRunOpenSandboxK8sAssetsPoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
 import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
@@ -58,8 +60,8 @@ const caseName = (() => {
   const idx = process.argv.indexOf("--case");
   return idx >= 0 ? (process.argv[idx + 1] ?? "") : "all";
 })();
-if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config" && caseName !== "prod-up" && caseName !== "k8s") {
-  throw new Error("OpenSandbox PoC --case must be all, arch, images, prod-config, prod-up, or k8s");
+if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config" && caseName !== "prod-up" && caseName !== "k8s" && caseName !== "k8s-assets") {
+  throw new Error("OpenSandbox PoC --case must be all, arch, images, prod-config, prod-up, k8s, or k8s-assets");
 }
 
 async function runArchCase(): Promise<string> {
@@ -262,6 +264,35 @@ if (caseName === "k8s") {
     throw new Error(`OpenSandbox Kata PoC unexpected result: ${JSON.stringify(k8s)}`);
   }
   console.log(`OK: OpenSandbox Kata live kata=true isolated=${k8s.isolated} hostEscapeBlocked=${k8s.hostEscapeBlocked} envClean=${k8s.envClean} hardLimits=${k8s.hardLimits} gatewayAllowed=${k8s.gatewayAllowed} denyBlocked=${k8s.denyBlocked} agentSandbox=false leftovers=0`);
+  process.exit(0);
+}
+
+if (caseName === "k8s-assets") {
+  if (!shouldRunOpenSandboxK8sAssetsPoc()) {
+    console.log("skip: OpenSandbox Kata shared-assets PoC (set OPEN_SANDBOX_POC_K8S=1 OPEN_SANDBOX_POC_K8S_ASSETS=1)");
+    process.exit(0);
+  }
+  const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+  if (!runtimeImage) {
+    throw new Error("OPEN_SANDBOX_POC_RUNTIME_IMAGE is required for Kata shared-assets proof");
+  }
+  const kubectlJson = async (args: string[]) => {
+    const rendered = spawnSync("kubectl", args, { encoding: "utf8" });
+    if (rendered.status !== 0) {
+      throw new Error(`kubectl ${args.join(" ")} failed: ${rendered.stderr || rendered.stdout}`);
+    }
+    const text = rendered.stdout.trim();
+    if (!text) return {};
+    return (text.startsWith("{") || text.startsWith("[")) ? JSON.parse(text) as unknown : { raw: text };
+  };
+  const assets = await runOpenSandboxK8sAssetsPoc(client, kubectlJson, {
+    image: runtimeImage,
+    expectedContract: "deepsonar.runtime.contract/v1",
+  });
+  if (!assets.kata || !assets.mounted || !assets.seedOk || !assets.readonly || assets.leftovers !== 0 || assets.leftoverPods !== 0 || assets.leftoverPvcs !== 0) {
+    throw new Error(`OpenSandbox Kata assets PoC unexpected result: ${JSON.stringify(assets)}`);
+  }
+  console.log(`OK: OpenSandbox Kata assets mounted=true seedOk=true readonly=true leftovers=0 leftoverPvcs=0`);
   process.exit(0);
 }
 

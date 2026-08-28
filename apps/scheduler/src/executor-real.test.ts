@@ -144,6 +144,17 @@ test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
+test("OpenSandbox Kata shared-assets PoC is independent of isolation smoke", () => {
+  const source = readFileSync(new URL("../../../packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts", import.meta.url), "utf8");
+  const harness = readFileSync(new URL("../../../agent-harness/test-opensandbox-poc.ts", import.meta.url), "utf8");
+  assert.match(source, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(source, /sharedAssetsMount/);
+  assert.match(source, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
+  assert.match(source, /leftoverPvcs/);
+  assert.match(harness, /caseName === "k8s-assets"/);
+  assert.doesNotMatch(source, /runOpenSandboxK8sPoc\(/);
+});
+
 test("OpenSandbox gVisor PoC fail-closes a working iptables nat table", () => {
   const source = readFileSync(new URL("./opensandbox-gvisor.poc.ts", import.meta.url), "utf8");
   assert.match(source, /shouldRunOpenSandboxGvisorPoc/);

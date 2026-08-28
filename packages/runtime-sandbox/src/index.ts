@@ -169,6 +169,11 @@ export {
   shouldRunOpenSandboxK8sPoc,
 } from "./opensandbox-k8s-poc.js";
 export {
+  runOpenSandboxK8sAssetsPoc,
+  sharedAssetsClaimName,
+  shouldRunOpenSandboxK8sAssetsPoc,
+} from "./opensandbox-k8s-assets-poc.js";
+export {
   AGENT_SANDBOX_CRD,
   OPENSANDBOX_GVISOR_RUNSC_URL,
   OPENSANDBOX_GVISOR_RUNSC_VERSION,

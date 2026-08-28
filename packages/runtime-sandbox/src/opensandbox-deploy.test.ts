@@ -57,6 +57,7 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(pkg, /ci:smoke:opensandbox-api": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-cli-control": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-gvisor": "pnpm --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-k8s-assets": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   const isolate = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod-isolated.yml"), "utf8");
   assert.match(isolate, /name: \$\{OPEN_SANDBOX_POC_GATEWAY_NET:-os-poc-sandbox-gateway\}/);
   assert.doesNotMatch(isolate, /^\s+name:\s*deepsonar-sandbox-gateway/m);
@@ -126,6 +127,11 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(k8sCompose, /127\.0\.0\.1:18084\/health/);
   assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
   assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
+  const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts"), "utf8");
+  assert.match(assetsPoc, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(assetsPoc, /sharedAssetsMount/);
+  assert.match(assetsPoc, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
+  assert.match(assetsPoc, /OPENSANDBOX_POC_K8S_PVC_LEFTOVER/);
 });
 
 test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () => {
@@ -151,12 +157,13 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   const harness = readFileSync(join(root, "agent-harness/test-opensandbox-poc.ts"), "utf8");
   assert.match(harness, /OPEN_SANDBOX_POC_ARCH_IMAGE/);
   assert.match(harness, /runOpenSandboxArchPoc/);
-  assert.match(harness, /--case must be all, arch, images, prod-config, prod-up, or k8s/);
+  assert.match(harness, /--case must be all, arch, images, prod-config, prod-up, k8s, or k8s-assets/);
   assert.match(harness, /runOpenSandboxOfficialImagesPoc/);
   assert.match(harness, /listOfficialOpenSandboxRuntimeImages/);
   assert.match(harness, /prod-config/);
   assert.match(harness, /prod-up/);
   assert.match(harness, /runOpenSandboxK8sPoc/);
+  assert.match(harness, /runOpenSandboxK8sAssetsPoc/);
   assert.match(harness, /envClean/);
   assert.match(harness, /docker-compose.real.yml/);
   const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-poc.ts"), "utf8");
