@@ -56,8 +56,10 @@ export function findRemainingJobClaims(pvcs: unknown, jobId: string): number {
 }
 
 export function readSeederSucceeded(pod: unknown): boolean {
-  return pod && typeof pod === "object" && "status" in pod
-    && (pod as { status?: { phase?: string } }).status?.phase === "Succeeded";
+  return Boolean(
+    pod && typeof pod === "object" && "status" in pod
+    && (pod as { status?: { phase?: string } }).status?.phase === "Succeeded",
+  );
 }
 
 function assetsManifests(input: { claimName: string; jobId: string; seederName: string; image: string; storageClass: string }): Record<"pvc" | "seeder", string> {
