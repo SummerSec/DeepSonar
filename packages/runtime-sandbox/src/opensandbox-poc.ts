@@ -739,7 +739,6 @@ export async function runOpenSandboxCliLaunchPoc(
         await process.closeStdin().catch(() => { stdinClosed = false; });
       }
       const out = await collectText(process, 15_000);
-      await process.kill().catch(() => {});
       if (globalThis.process.env.OPEN_SANDBOX_POC_CLI_DEBUG === "1") {
         console.error(`[opensandbox-cli ${id}] ${out.text.replace(/\s+/g, " ").slice(0, 1500)}`);
       }
@@ -757,6 +756,7 @@ export async function runOpenSandboxCliLaunchPoc(
           artifacts.push({ name: artifact.name, content: artifact.content });
         }
       }
+      await process.kill().catch(() => {});
       const resumed = await resumeOpenSandboxCli(adapter, context, state).catch(() => false);
       launched[id] = {
         started: true,

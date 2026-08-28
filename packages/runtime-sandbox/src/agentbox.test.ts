@@ -1333,7 +1333,7 @@ test("Codex session discovery falls back to HOME when CODEX_HOME is unset", asyn
   await CLI_SESSION_ADAPTERS.codex.exportSession({
     async run(value) {
       command = value;
-      return { exitCode: 0, stdout: "", stderr: "" };
+      return { exitCode: 0, stdout: "/tmp/session-1.jsonl\n", stderr: "" };
     },
     async readText() {
       return null;
