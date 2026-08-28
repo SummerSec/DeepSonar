@@ -112,6 +112,15 @@ test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", 
     limits,
   });
   assert.deepEqual(k8s.resource, { cpu: "2", memory: "2048Mi" });
+  const k8sFractional = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    kubernetesResources: true,
+    limits: { ...limits, cpu: 0.4 },
+  });
+  assert.deepEqual(k8sFractional.resource, { cpu: "400m", memory: "2048Mi" });
   assert.equal(requireOpenSandboxLimits(limits).pidsLimit, 512);
   assert.equal(input.volumes[0]?.readOnly, true);
   assert.equal(input.volumes[0]?.pvc.claimName, "deepsonar-assets-11111111-1111-4111-8111-111111111111");

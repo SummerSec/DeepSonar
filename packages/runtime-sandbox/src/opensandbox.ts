@@ -145,7 +145,9 @@ export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCre
       ...(input.resourceLabels ?? {}),
     },
     resource: {
-      cpu: String(limits.cpu),
+      cpu: input.kubernetesResources && !Number.isInteger(limits.cpu)
+        ? `${Math.max(1, Math.round(limits.cpu * 1000))}m`
+        : String(limits.cpu),
       memory: `${limits.memoryMiB}Mi`,
       ...(input.kubernetesResources ? {} : { pids: String(limits.pidsLimit) }),
     },
