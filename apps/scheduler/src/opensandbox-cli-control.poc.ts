@@ -16,9 +16,11 @@ import {
   freezeAgentCliRuntime,
   runtimeCliEnv,
   shouldRunOpenSandboxPoc,
+  skillMaterializationPath,
   type AdapterRuntimeState,
 } from "@deepsonar/runtime-sandbox";
 import { parseAgentSession } from "../../web/src/session-viewer/parseAgentSession.ts";
+import { DEEPSONAR_CONTROL_SKILL } from "./platform-control-skill.js";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox CLI control PoC (set OPEN_SANDBOX_POC=1)");
@@ -135,7 +137,7 @@ try {
     dbModule,
     platformApi,
     { runner },
-    { preparePlatformCapability },
+    { preparePlatformCapability, PLATFORM_SYSTEM_PROMPT },
     { config },
     { encryptSecret, fingerprintOf, last4Of, PROVIDER_ENV_MAP },
     { mintJobToken, registerGateway },
@@ -350,7 +352,15 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
 `, "/workspace/poc-cli-emit.sh");
       await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
       const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
-      const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
+      const skillPath = skillMaterializationPath("deepsonar-control", "SKILL.md", selectedCli);
+      await host.run(`mkdir -p -- ${JSON.stringify(skillPath.slice(0, skillPath.lastIndexOf("/")))}`, { timeoutMs: 5_000 });
+      await host.uploadFile(DEEPSONAR_CONTROL_SKILL.files["SKILL.md"], skillPath);
+      const systemPromptPath = "/workspace/.deepsonar/system-prompt.txt";
+      await host.uploadFile(PLATFORM_SYSTEM_PROMPT, systemPromptPath);
+      const prompt = [
+        "通过本 Job 已注入的 Job-scoped control API 提交 emit_fact、emit_finding、submit_hub_decision 和 mark_job_done。",
+        "普通文本描述不算完成。可直接运行: sh /workspace/poc-cli-emit.sh",
+      ].join(" ");
       const dshProvider = selectedCli === "dsh"
         ? buildDshPiAiRuntimeProjection({
           settingsConfig,
@@ -383,6 +393,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
             ? `deepsonar/${plan.model}`
             : plan.model,
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+        systemPromptPath,
         contextIdentity: state.contextIdentity,
         ...(dshProvider ? { dshProvider } : {}),
       };

@@ -244,6 +244,7 @@ export {
   redactRuntimeSecrets,
   runRealAgent,
   runtimeCliEnv,
+  skillMaterializationPath,
 } from "./runtime-agent.js";
 export type { DeepSonarContainer } from "./runtime-docker.js";
 export type { RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails, SemanticToolState } from "./runtime-agent.js";
