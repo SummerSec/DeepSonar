@@ -14,6 +14,14 @@ import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
+import {
+  DEEPSONAR_GATEWAY_PROXY_HOST,
+  HUMAN_INBOX_WRITER_SCRIPT,
+  RuntimeImageContractError,
+  SHARED_ASSETS_MOUNT_PATH,
+  assertSharedAssetsVolumeOwnership,
+  parseToolManifest,
+} from "./runtime-shared.js";
 import { assertContextResume, type ContextIdentity } from "./context-contract.js";
 import type {
   AgentCommandConfig,
@@ -31,6 +39,17 @@ import {
 } from "./runtime-adapters.js";
 import { assertWorkspaceWritePath, type RuntimeHost, type RuntimeProcess, type RuntimeProcessChunk, type RuntimeResource } from "./runtime-host.js";
 import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
+
+export {
+  DEEPSONAR_GATEWAY_PROXY_HOST,
+  HUMAN_INBOX_WRITER_SCRIPT,
+  RuntimeImageContractError,
+  SHARED_ASSETS_JOB_LABEL,
+  SHARED_ASSETS_MOUNT_PATH,
+  SHARED_ASSETS_VOLUME_LABEL,
+  assertSharedAssetsVolumeOwnership,
+  parseToolManifest,
+} from "./runtime-shared.js";
 
 const execFileP = promisify(execFile);
 const CANONICAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -223,11 +242,7 @@ const provisioningSandboxes = new Map<string, Sandbox>();
 const terminalSessions = new Map<string, Set<SandboxTerminalSession>>();
 const RESTRICTED_NETWORK = "deepsonar-restricted";
 const GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
-const GATEWAY_PROXY = "deepsonar-gateway-proxy";
-export const DEEPSONAR_GATEWAY_PROXY_HOST = GATEWAY_PROXY;
-export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
-export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
-export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
+const GATEWAY_PROXY = DEEPSONAR_GATEWAY_PROXY_HOST;
 const SHARED_ASSETS_VOLUME_RE = /^deepsonar-assets-[a-z0-9][a-z0-9_.-]{0,62}$/;
 let restrictedNetworkReady: Promise<void> | null = null;
 let gatewayNetworkReady: Promise<void> | null = null;
@@ -282,26 +297,6 @@ interface SharedAssetsVolumeInspection {
 
 interface SharedAssetsContainerInspection {
   Mounts?: unknown;
-}
-
-/** Validate daemon-owned metadata before Docker can auto-create a typoed volume. */
-export function assertSharedAssetsVolumeOwnership(
-  inspected: SharedAssetsVolumeInspection,
-  volumeName: string,
-  jobId: string,
-): void {
-  const labels = inspected.Labels && typeof inspected.Labels === "object"
-    ? inspected.Labels as Record<string, unknown>
-    : {};
-  if (
-    inspected.Name !== volumeName ||
-    inspected.Driver !== "local" ||
-    inspected.Scope !== "local" ||
-    labels[SHARED_ASSETS_VOLUME_LABEL] !== "true" ||
-    labels[SHARED_ASSETS_JOB_LABEL] !== jobId
-  ) {
-    throw new Error("shared assets volume is not a local Scheduler-managed volume for this Job");
-  }
 }
 
 /** Validate the actual container after attach as well as after fresh provision. */
@@ -777,55 +772,6 @@ export function resetManagedGatewayStateForTests(): void {
   gatewayProxyReady = null;
 }
 
-/**
- * 解析运行时 tool-manifest。部分已发布 OH 镜像在合法 JSON 后多了字面量 `\n`
- *（Dockerfile 单引号里写了 +"\\n"），严格 parse 会报
- * "Unexpected non-whitespace character after JSON"。
- */
-export function parseToolManifest(raw: string): { contract?: string } {
-  const text = raw.replace(/^\uFEFF/, "").trim();
-  try {
-    return JSON.parse(text) as { contract?: string };
-  } catch (first) {
-    // 去掉尾部孤立的 \n / 多余空白后再试
-    const stripped = text.replace(/(?:\\n)+\s*$/g, "").trim();
-    if (stripped !== text) {
-      try {
-        return JSON.parse(stripped) as { contract?: string };
-      } catch {
-        /* fall through */
-      }
-    }
-    // 取第一个完整 JSON 值（从首个 { 起 brace-match）
-    const start = text.indexOf("{");
-    if (start >= 0) {
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      for (let i = start; i < text.length; i++) {
-        const ch = text[i]!;
-        if (inString) {
-          if (escape) escape = false;
-          else if (ch === "\\") escape = true;
-          else if (ch === "\"") inString = false;
-          continue;
-        }
-        if (ch === "\"") {
-          inString = true;
-          continue;
-        }
-        if (ch === "{") depth++;
-        else if (ch === "}") {
-          depth--;
-          if (depth === 0) {
-            return JSON.parse(text.slice(start, i + 1)) as { contract?: string };
-          }
-        }
-      }
-    }
-    throw first instanceof Error ? first : new Error(String(first));
-  }
-}
 
 /** dockerode createContainer 调用签名（只需要我们注入 HostConfig 的部分） */
 interface CreateContainerOptions {
@@ -1239,14 +1185,6 @@ export class AgentboxRunner implements SandboxRunner {
   }
 }
 
-/** 调度器可据此区分供应链准入失败与普通 provision 故障。 */
-export class RuntimeImageContractError extends Error {
-  readonly code = "RUNTIME_IMAGE_CONTRACT";
-  constructor(message: string) {
-    super(message);
-    this.name = "RuntimeImageContractError";
-  }
-}
 
 // ---------- 重启 reconcile 用的引擎直查（JOB-04） ----------
 
@@ -1739,42 +1677,6 @@ export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: strin
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
-
-export const HUMAN_INBOX_WRITER_SCRIPT = String.raw`
-import os
-import sys
-
-workspace, message_id, filename = sys.argv[1:]
-flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-fds = []
-try:
-    current = os.open(workspace, flags)
-    fds.append(current)
-    for component in (".deepsonar", "inbox", message_id):
-        try:
-            os.mkdir(component, 0o700, dir_fd=current)
-        except FileExistsError:
-            pass
-        child = os.open(component, flags, dir_fd=current)
-        fds.append(child)
-        current = child
-    output = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=current)
-    try:
-        while True:
-            chunk = sys.stdin.buffer.read(65536)
-            if not chunk:
-                break
-            view = memoryview(chunk)
-            while view:
-                written = os.write(output, view)
-                view = view[written:]
-        os.fsync(output)
-    finally:
-        os.close(output)
-finally:
-    for descriptor in reversed(fds):
-        os.close(descriptor)
-`;
 
 async function execFileWithInput(file: string, args: string[], bytes: Buffer): Promise<void> {
   await new Promise<void>((resolve, reject) => {

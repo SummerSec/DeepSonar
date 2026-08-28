@@ -3,7 +3,8 @@
  * Default CI stays skip-safe; set OPEN_SANDBOX_POC=1 only when a server is up.
  */
 import { randomUUID } from "node:crypto";
-import { runRealAgent, runtimeCliEnv, SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
+import { runRealAgent, runtimeCliEnv } from "./agentbox.js";
+import { SHARED_ASSETS_MOUNT_PATH } from "./runtime-shared.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";

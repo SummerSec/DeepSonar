@@ -1,10 +1,11 @@
 # Opt-in production overlay. Default real mode stays Agentbox.
 #   SANDBOX_PROVIDER=opensandbox OPEN_SANDBOX_API_KEY=... ./deploy/deploy.sh up real pull
+# Host port defaults to 18080 so it does not collide with DEEPSONAR_WEB_PORT=8080.
 # Images are immutable digest pins from opensandbox-version.ts.
 services:
   opensandbox:
     image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778}
-    container_name: deepsonar-opensandbox
+    container_name: ${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-opensandbox}
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -16,7 +17,12 @@ services:
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
       - opensandbox-data:/var/lib/opensandbox
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${OPEN_SANDBOX_HOST_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks:
       - deepsonar
 
@@ -28,7 +34,8 @@ services:
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
       OPEN_SANDBOX_USE_SERVER_PROXY: ${OPEN_SANDBOX_USE_SERVER_PROXY:-true}
     depends_on:
-      - opensandbox
+      opensandbox:
+        condition: service_healthy
 
 volumes:
   opensandbox-data:

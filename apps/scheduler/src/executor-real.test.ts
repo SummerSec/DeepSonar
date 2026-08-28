@@ -123,6 +123,16 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
 });
 
+test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay", () => {
+  const source = readFileSync(new URL("./opensandbox-reconcile.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /reconcileOnBoot\(\)/);
+  assert.match(source, /effect_pending/);
+  assert.match(source, /leftover=0 replay=0/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
 test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.run", () => {
   const source = readFileSync(new URL("./opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);

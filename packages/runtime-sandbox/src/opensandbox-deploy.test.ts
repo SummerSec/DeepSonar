@@ -35,8 +35,12 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(overlay, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(overlay, /SANDBOX_PROVIDER: opensandbox/);
   assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
+  assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18080/);
+  assert.match(overlay, /condition: service_healthy/);
+  assert.match(overlay, /127\.0\.0\.1:8080\/health/);
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
   assert.doesNotMatch(overlay, /:latest|network_mode:\s*host/);
+  assert.doesNotMatch(overlay, /127\.0\.0\.1:8080:8080/);
   assert.match(deploySh, /\[ "\$\{SANDBOX_PROVIDER:-\}" = "opensandbox" \]/);
   assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
   assert.match(deployPs1, /\$env:SANDBOX_PROVIDER -eq "opensandbox"/);
@@ -92,11 +96,22 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   const harness = readFileSync(join(root, "agent-harness/test-opensandbox-poc.ts"), "utf8");
   assert.match(harness, /OPEN_SANDBOX_POC_ARCH_IMAGE/);
   assert.match(harness, /runOpenSandboxArchPoc/);
-  assert.match(harness, /--case must be all, arch, images, prod-config, or k8s/);
+  assert.match(harness, /--case must be all, arch, images, prod-config, prod-up, or k8s/);
   assert.match(harness, /runOpenSandboxOfficialImagesPoc/);
   assert.match(harness, /listOfficialOpenSandboxRuntimeImages/);
   assert.match(harness, /prod-config/);
+  assert.match(harness, /prod-up/);
   assert.match(harness, /runOpenSandboxK8sPoc/);
   assert.match(harness, /docker-compose.real.yml/);
   assert.match(harness, /--project-directory/);
+});
+
+test("OpenSandbox adapter does not import Agentbox SDK types", () => {
+  const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
+  const shared = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-shared.ts"), "utf8");
+  assert.doesNotMatch(adapter, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(adapter, /from ["']agentbox-sdk["']/);
+  assert.match(adapter, /from ["']\.\/runtime-shared\.js["']/);
+  assert.match(shared, /export const SHARED_ASSETS_MOUNT_PATH/);
+  assert.match(shared, /export function parseToolManifest/);
 });

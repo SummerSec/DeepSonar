@@ -9,7 +9,7 @@ import {
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
   parseToolManifest,
-} from "./agentbox.js";
+} from "./runtime-shared.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 import { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {

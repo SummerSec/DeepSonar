@@ -178,7 +178,6 @@ export {
   AgentboxRunner,
   createAgentboxRuntimeHost,
   wrapAgentboxProcess,
-  parseToolManifest,
   cleanupUnhealthyManagedGateway,
   createSemanticToolState,
   CONTAINER_REMOVE_MAX_ATTEMPTS,
@@ -194,7 +193,6 @@ export {
   normalizeRuntimeErrorDetails,
   parseDeepSonarContainerRows,
   bindGatewayProxyToOpenSandboxNetwork,
-  DEEPSONAR_GATEWAY_PROXY_HOST,
   preheatManagedGateway,
   removeContainerWithRetry,
   redactRuntimeSecrets,
@@ -203,15 +201,20 @@ export {
   runRealAgent,
   shouldRemoveGatewayLeftover,
   assertSharedAssetsContainerMount,
-  assertSharedAssetsVolumeOwnership,
   isDeepsonarGatewayNetwork,
   isDeepsonarRestrictedNetwork,
-  SHARED_ASSETS_MOUNT_PATH,
-  SHARED_ASSETS_JOB_LABEL,
-  SHARED_ASSETS_VOLUME_LABEL,
   sharedAssetsVolumeBinds,
 } from "./agentbox.js";
-export { RuntimeImageContractError } from "./agentbox.js";
+export {
+  DEEPSONAR_GATEWAY_PROXY_HOST,
+  HUMAN_INBOX_WRITER_SCRIPT,
+  RuntimeImageContractError,
+  SHARED_ASSETS_JOB_LABEL,
+  SHARED_ASSETS_MOUNT_PATH,
+  SHARED_ASSETS_VOLUME_LABEL,
+  assertSharedAssetsVolumeOwnership,
+  parseToolManifest,
+} from "./runtime-shared.js";
 export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails } from "./agentbox.js";
 export type { SemanticToolState } from "./agentbox.js";
 export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";

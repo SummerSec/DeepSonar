@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,8 +58,8 @@ const caseName = (() => {
   const idx = process.argv.indexOf("--case");
   return idx >= 0 ? (process.argv[idx + 1] ?? "") : "all";
 })();
-if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config" && caseName !== "k8s") {
-  throw new Error("OpenSandbox PoC --case must be all, arch, images, prod-config, or k8s");
+if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config" && caseName !== "prod-up" && caseName !== "k8s") {
+  throw new Error("OpenSandbox PoC --case must be all, arch, images, prod-config, prod-up, or k8s");
 }
 
 async function runArchCase(): Promise<string> {
@@ -128,7 +128,13 @@ function runProdConfigCase(): string {
     if (/network_mode:\s*host|:latest\b/.test(rendered.stdout)) {
       throw new Error("OpenSandbox prod compose resolved host-network or latest");
     }
-    return "merged=true provider=opensandbox pinned=true";
+    if (!rendered.stdout.includes("127.0.0.1:18080:8080")) {
+      throw new Error("OpenSandbox prod compose must publish host 18080, not collide with web 8080");
+    }
+    if (!rendered.stdout.includes("service_healthy") || !rendered.stdout.includes("/health")) {
+      throw new Error("OpenSandbox prod compose missing health-gated scheduler dependency");
+    }
+    return "merged=true provider=opensandbox pinned=true port=18080 healthy=true";
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -143,6 +149,91 @@ if (caseName === "images") {
 if (caseName === "prod-config") {
   const prodSummary = runProdConfigCase();
   console.log(`OK: OpenSandbox production overlay ${prodSummary}`);
+  process.exit(0);
+}
+
+async function runProdUpCase(): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-up-"));
+  const envFile = join(dir, ".env");
+  const hostPort = process.env.OPEN_SANDBOX_POC_PROD_HOST_PORT?.trim() || "18081";
+  const containerName = `deepsonar-opensandbox-prod-up-${process.pid}`;
+  const projectName = `os-prod-up-${process.pid}`;
+  mkdirSync(join(dir, "opensandbox"), { recursive: true });
+  cpSync(join(repoRoot, "deploy/opensandbox/config.toml"), join(dir, "opensandbox/config.toml"));
+  writeFileSync(envFile, [
+    "POSTGRES_PASSWORD=poc-opensandbox",
+    "BLOB_S3_ACCESS_KEY_ID=poc",
+    "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
+    "DEEPSONAR_IMAGE_TAG=0.1.45",
+    `OPEN_SANDBOX_API_KEY=${apiKey}`,
+    `OPEN_SANDBOX_HOST_PORT=${hostPort}`,
+    `OPEN_SANDBOX_CONTAINER_NAME=${containerName}`,
+    "",
+  ].join("\n"));
+  const composeArgs = [
+    "-n", "docker", "compose",
+    "--project-name", projectName,
+    "--project-directory", dir,
+    "--env-file", envFile,
+    "-f", join(repoRoot, "deploy/docker-compose.prod.yml"),
+    "-f", join(repoRoot, "deploy/docker-compose.real.yml"),
+    "-f", join(repoRoot, "deploy/docker-compose.opensandbox.prod.yml"),
+  ];
+  const down = () => spawnSync("sudo", [...composeArgs, "down", "-v", "--remove-orphans"], { encoding: "utf8" });
+  try {
+    const up = spawnSync("sudo", [...composeArgs, "up", "-d", "opensandbox"], { encoding: "utf8" });
+    if (up.status !== 0) {
+      throw new Error(`OpenSandbox prod-up failed: ${up.stderr || up.stdout}`);
+    }
+    const deadline = Date.now() + 60_000;
+    let healthy = false;
+    while (Date.now() < deadline) {
+      const probe = spawnSync("curl", ["-fsS", `http://127.0.0.1:${hostPort}/health`], { encoding: "utf8" });
+      if (probe.status === 0 && probe.stdout.includes("healthy")) {
+        healthy = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!healthy) throw new Error(`OpenSandbox prod overlay never became healthy on :${hostPort}`);
+    const prodClient = createSdkOpenSandboxClient({
+      domain: `127.0.0.1:${hostPort}`,
+      apiKey,
+      protocol: "http",
+      useServerProxy: true,
+      pin,
+    });
+    const infra = await runOpenSandboxInfrastructurePoc(prodClient, {
+      jobId: "00000000-0000-4000-8000-000000000165",
+      attemptId: "00000000-0000-4000-8000-000000000265",
+    });
+    if (!infra.listed || infra.stdout !== "poc") {
+      throw new Error(`OpenSandbox prod-up provision unexpected: ${JSON.stringify(infra)}`);
+    }
+    const leftovers = await prodClient.list({
+      jobId: "00000000-0000-4000-8000-000000000165",
+      attemptId: "00000000-0000-4000-8000-000000000265",
+    });
+    for (const item of leftovers) {
+      await prodClient.destroy?.(item.resourceId);
+    }
+    const remaining = await prodClient.list({
+      jobId: "00000000-0000-4000-8000-000000000165",
+      attemptId: "00000000-0000-4000-8000-000000000265",
+    });
+    if (remaining.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${remaining.map((item) => item.resourceId).join(",")}`);
+    }
+    return `up=true healthy=true provisionMs=${infra.createMs} leftover=0`;
+  } finally {
+    down();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (caseName === "prod-up") {
+  const prodUpSummary = await runProdUpCase();
+  console.log(`OK: OpenSandbox production overlay live ${prodUpSummary}`);
   process.exit(0);
 }
 
