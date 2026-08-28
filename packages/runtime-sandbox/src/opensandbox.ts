@@ -53,6 +53,8 @@ export interface OpenSandboxCreateInput {
     readOnly: true;
     pvc: { claimName: string; createIfNotExists: false };
   }>;
+  /** Scheduler/PoC only. Agent and Hub cannot choose the sandbox architecture. */
+  platform?: { os: "linux"; arch: "amd64" | "arm64" };
   signal?: AbortSignal;
 }
 

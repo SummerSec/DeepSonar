@@ -11,6 +11,7 @@ import {
   runOpenSandboxRestrictedPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
+  runOpenSandboxArchPoc,
   runOpenSandboxInfrastructurePoc,
   runOpenSandboxRecoveryPoc,
   runOpenSandboxRetryPoc,
@@ -80,6 +81,47 @@ test("OpenSandbox infrastructure PoC creates, probes, lists, and destroys", asyn
   assert.equal(client.created[0]?.timeoutSeconds, null);
   assert.equal(client.created[0]?.networkPolicy.defaultAction, "deny");
   assert.equal(client.killed, 1);
+});
+
+test("OpenSandbox arch PoC pins linux/arm64 and fail-closes a mismatch", async () => {
+  const created: OpenSandboxCreateInput[] = [];
+  const session: OpenSandboxSession = {
+    id: "arch-1",
+    async run() {
+      return { exitCode: 0, stdout: "aarch64\n", stderr: "" };
+    },
+    async runAsync() {
+      throw new Error("unused");
+    },
+    async writeFile() {},
+    async readFile() {
+      return Buffer.from("");
+    },
+    async getState() {
+      return "Running";
+    },
+    async kill() {},
+    async close() {},
+  };
+  const client: OpenSandboxClient = {
+    async create(input) {
+      created.push(input);
+      return session;
+    },
+    async connect() {
+      return session;
+    },
+    async list() {
+      return [];
+    },
+  };
+  const result = await runOpenSandboxArchPoc(client, { jobId: "job-1", attemptId: "att-1", arch: "arm64" });
+  assert.equal(result.arch, "arm64");
+  assert.deepEqual(created[0]?.platform, { os: "linux", arch: "arm64" });
+  await assert.rejects(
+    () => runOpenSandboxArchPoc(client, { jobId: "job-2", attemptId: "att-2", arch: "amd64" }),
+    /OPENSANDBOX_POC_ARCH_MISMATCH/,
+  );
 });
 
 test("OpenSandbox runner PoC fail-closes missing runtime contract and cleans leftovers", async () => {

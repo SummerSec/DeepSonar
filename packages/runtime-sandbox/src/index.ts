@@ -138,6 +138,7 @@ export {
   OPENSANDBOX_POC_CONTRACT,
   OPENSANDBOX_POC_IMAGE,
   isOpenSandboxCliMissing,
+  runOpenSandboxArchPoc,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCliLaunchPoc,
   runOpenSandboxCancelPoc,

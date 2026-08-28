@@ -139,6 +139,7 @@ export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): O
         timeoutSeconds: null,
         networkPolicy: input.networkPolicy,
         volumes: input.volumes,
+        ...(input.platform ? { platform: input.platform } : {}),
         skipHealthCheck: false,
       });
       if (input.signal?.aborted) {

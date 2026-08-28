@@ -107,6 +107,7 @@ test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", 
   assert.equal(input.volumes[0]?.pvc.claimName, "deepsonar-assets-11111111-1111-4111-8111-111111111111");
   assert.equal(input.volumes[0]?.pvc.createIfNotExists, false);
   assert.ok(!Object.values(input.env).some((value) => /api[_-]?key/i.test(value)));
+  assert.equal(input.platform, undefined);
 });
 
 test("OpenSandbox runner provisions, exposes host, and verifies contract", async () => {

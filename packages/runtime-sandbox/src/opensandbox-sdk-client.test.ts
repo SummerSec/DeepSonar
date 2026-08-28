@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError } from "./opensandbox-sdk-client.js";
 import { OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
@@ -20,6 +21,11 @@ test("OpenSandbox destroy treats already-gone sandboxes as success", () => {
 test("OpenSandbox runAsync env wrapping always uses a shell so compound commands stay intact", () => {
   assert.equal(commandWithEnv("true"), "true");
   assert.match(commandWithEnv("if true; then exec bash -il; fi", { TERM: "xterm" }), /env TERM='xterm' sh -c /);
+});
+
+test("OpenSandbox SDK create forwards an explicit linux/arm64 platform", () => {
+  const source = readFileSync(new URL("./opensandbox-sdk-client.ts", import.meta.url), "utf8");
+  assert.match(source, /input\.platform \? \{ platform: input\.platform \}/);
 });
 
 test("Pi and DSH stay on the same OpenSandbox RuntimeHost path", () => {

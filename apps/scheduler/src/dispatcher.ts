@@ -834,16 +834,27 @@ async function runJob(jobId: string) {
         const provisionSec = typeof frozenProvisionSec === "number" && frozenProvisionSec > 0
           ? frozenProvisionSec
           : (await globalRules(sql)).provisionTimeoutSec;
-        handle = await withProvisionTimeout(
-          runner.provision(provisionInput),
-          provisionSec * 1000,
-          `provision 超时（${provisionSec}s）`,
-          () => interruptProvision(jobId, attemptId!),
-          (lateHandle) => runner.destroy(lateHandle).catch((error) => {
-            inc("deepsonar_sandbox_cleanup_failed_total");
-            console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
-          }),
-        );
+        const provider = config.runtime.agentMode !== "real"
+          ? "noop"
+          : config.runtime.provider === "opensandbox" ? "opensandbox" : "agentbox";
+        const provisionStarted = Date.now();
+        try {
+          handle = await withProvisionTimeout(
+            runner.provision(provisionInput),
+            provisionSec * 1000,
+            `provision 超时（${provisionSec}s）`,
+            () => interruptProvision(jobId, attemptId!),
+            (lateHandle) => runner.destroy(lateHandle).catch((error) => {
+              inc("deepsonar_sandbox_cleanup_failed_total");
+              console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
+            }),
+          );
+          inc("deepsonar_sandbox_provision_seconds_sum", { provider }, Math.max(1, Math.round((Date.now() - provisionStarted) / 1000)));
+          inc("deepsonar_sandbox_provision_seconds_count", { provider });
+        } catch (error) {
+          inc("deepsonar_sandbox_provision_failed_total", { provider });
+          throw error;
+        }
       } finally {
         unregisterProvision();
       }

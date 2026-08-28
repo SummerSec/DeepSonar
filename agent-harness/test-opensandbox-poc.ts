@@ -4,6 +4,7 @@ import {
   createSdkOpenSandboxClient,
   OpenSandboxRunner,
   readOpenSandboxPin,
+  runOpenSandboxArchPoc,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
   runOpenSandboxCliLaunchPoc,
@@ -63,6 +64,19 @@ const cancel = await runOpenSandboxCancelPoc(new OpenSandboxRunner(client), {
 });
 if (!cancel.cancelled || cancel.leftovers !== 0) {
   throw new Error(`OpenSandbox cancel PoC unexpected result: ${JSON.stringify(cancel)}`);
+}
+const requestedArch = process.env.OPEN_SANDBOX_POC_ARCH?.trim();
+let archSummary = "skipped";
+if (requestedArch === "amd64" || requestedArch === "arm64") {
+  const arch = await runOpenSandboxArchPoc(client, {
+    jobId: "00000000-0000-4000-8000-000000000164",
+    attemptId: "00000000-0000-4000-8000-000000000264",
+    image: process.env.OPEN_SANDBOX_POC_IMAGE,
+    arch: requestedArch,
+  });
+  archSummary = `arch=${arch.arch} leftovers=${arch.leftovers}`;
+} else if (requestedArch) {
+  throw new Error("OPEN_SANDBOX_POC_ARCH must be amd64 or arm64");
 }
 const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
 const skipHost = process.env.OPEN_SANDBOX_POC_SKIP_HOST === "1";
@@ -175,4 +189,4 @@ for (const image of extraImages) {
   const extra = await runOpenSandboxImageContractPoc(client, { image });
   extraSummaries.push(`${image.slice(-12)} provisionMs=${extra.provisionMs} clis=${JSON.stringify(extra.clis)}`);
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} recovery=${recoverySummary} cli=${cliSummary} extra=${extraSummaries.join(";") || "skipped"}`);
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} arch=${archSummary} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} recovery=${recoverySummary} cli=${cliSummary} extra=${extraSummaries.join(";") || "skipped"}`);

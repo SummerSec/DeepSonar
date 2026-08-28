@@ -70,6 +70,47 @@ export async function runOpenSandboxInfrastructurePoc(
   }
 }
 
+export function observeOpenSandboxArch(machine: string): "amd64" | "arm64" | string {
+  const value = machine.trim();
+  if (value === "x86_64" || value === "amd64") return "amd64";
+  if (value === "aarch64" || value === "arm64") return "arm64";
+  return value;
+}
+
+export async function runOpenSandboxArchPoc(
+  client: OpenSandboxClient,
+  input: { jobId: string; attemptId: string; image?: string; arch: "amd64" | "arm64" },
+): Promise<{ sandboxId: string; arch: "amd64" | "arm64"; leftovers: number }> {
+  const session = await client.create({
+    image: input.image ?? OPENSANDBOX_POC_IMAGE,
+    env: {},
+    metadata: { "deepsonar.job": input.jobId, "deepsonar.attempt": input.attemptId },
+    resource: { cpu: "1", memory: "256Mi", pids: "64" },
+    timeoutSeconds: null,
+    networkPolicy: { defaultAction: "deny", egress: [] },
+    volumes: [],
+    platform: { os: "linux", arch: input.arch },
+  });
+  try {
+    const probe = await session.run("uname -m", { timeoutMs: 15_000 });
+    if (probe.exitCode !== 0) {
+      throw new Error(`OPENSANDBOX_POC_ARCH_EXEC_FAILED: ${probe.stderr || probe.stdout}`);
+    }
+    const observed = observeOpenSandboxArch(probe.stdout);
+    if (observed !== input.arch) {
+      throw new Error(`OPENSANDBOX_POC_ARCH_MISMATCH: wanted ${input.arch}, got ${probe.stdout.trim()}`);
+    }
+    return { sandboxId: session.id, arch: observed, leftovers: 0 };
+  } finally {
+    await session.kill().catch(() => {});
+    await session.close().catch(() => {});
+    const leftovers = await client.list({ jobId: input.jobId, attemptId: input.attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
+}
+
 export async function runOpenSandboxContractFailPoc(
   runner: { provision: (input: import("./index.js").ProvisionInput) => Promise<unknown>; listResources: (filter?: { jobId?: string; attemptId?: string }) => Promise<Array<{ resourceId: string }>> },
   input: { jobId: string; attemptId: string; image?: string },
@@ -597,6 +638,9 @@ export async function runOpenSandboxCliLaunchPoc(
       }
       if (adapter.encodeGetState) {
         await process.write(adapter.encodeGetState()).catch(() => {});
+      }
+      if (adapter.encodeShutdown) {
+        await process.write(adapter.encodeShutdown(state)).catch(() => {});
       }
       await process.closeStdin().catch(() => { stdinClosed = false; });
       const out = await collectText(process, 8_000);
