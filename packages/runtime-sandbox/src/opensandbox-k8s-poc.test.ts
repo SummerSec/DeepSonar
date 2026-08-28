@@ -15,6 +15,8 @@ const HARD_LIMITS = "CapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nNoNew
 
 function session(overrides?: {
   isolated?: boolean;
+  gatewayAllowed?: boolean;
+  denyBlocked?: boolean;
   hostEscapeBlocked?: boolean;
   envStdout?: string;
   limitsStdout?: string;
@@ -27,6 +29,12 @@ function session(overrides?: {
       }
       if (command.includes("192.0.2.1")) {
         return { exitCode: overrides?.isolated === false ? 0 : 1, stdout: "", stderr: "" };
+      }
+      if (command.includes("deepsonar-gateway-proxy")) {
+        return { exitCode: overrides?.gatewayAllowed === false ? 1 : 0, stdout: "", stderr: "" };
+      }
+      if (command.includes("deepsonar-egress-deny-probe")) {
+        return { exitCode: overrides?.denyBlocked === false ? 0 : 1, stdout: "", stderr: "" };
       }
       if (command.includes("/var/run/docker.sock")) {
         return { exitCode: overrides?.hostEscapeBlocked === false ? 1 : 0, stdout: "", stderr: "" };
@@ -73,10 +81,14 @@ function kataWorld(live: OpenSandboxSession) {
     },
   };
   const kubectl = async (args: string[]) => {
+    if (args[0] === "apply" || args[0] === "delete") return { kind: "Status" };
     if (args[1] === "runtimeclass") return { metadata: { name: "kata-qemu" }, handler: "kata-qemu" };
     if (args[1] === "namespace") return { metadata: { name: "deepsonar-opensandbox" } };
     if (args[1] === "resourcequota") {
       return { items: [{ metadata: { name: "deepsonar-opensandbox" }, spec: { hard: { pods: "32" } } }] };
+    }
+    if (args[1] === "pod" || args[1] === "service") {
+      return { metadata: { name: args[2] }, status: { phase: "Running" } };
     }
     const jobId = created?.metadata["deepsonar.job"] ?? "";
     return {
@@ -129,6 +141,8 @@ test("OpenSandbox Kata PoC requires a kata-qemu workload and leftover-free destr
   assert.equal(result.hostEscapeBlocked, true);
   assert.equal(result.envClean, true);
   assert.equal(result.hardLimits, true);
+  assert.equal(result.gatewayAllowed, true);
+  assert.equal(result.denyBlocked, true);
   assert.equal(result.leftovers, 0);
   assert.equal(world.created?.resource.pids, undefined);
   assert.deepEqual(world.created?.resource, { cpu: "1", memory: "512Mi" });
@@ -143,6 +157,10 @@ test("OpenSandbox Kata PoC fail-closes isolation, host escape, env leak, and mis
   const image = "img@sha256:" + "a".repeat(64);
   const leaked = kataWorld(session({ isolated: false }));
   await assert.rejects(() => runOpenSandboxK8sPoc(leaked.client, leaked.kubectl, { image }), /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
+  const gateway = kataWorld(session({ gatewayAllowed: false }));
+  await assert.rejects(() => runOpenSandboxK8sPoc(gateway.client, gateway.kubectl, { image }), /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
+  const deny = kataWorld(session({ denyBlocked: false }));
+  await assert.rejects(() => runOpenSandboxK8sPoc(deny.client, deny.kubectl, { image }), /OPENSANDBOX_POC_KATA_DENY_LEAK/);
   const escaped = kataWorld(session({ hostEscapeBlocked: false }));
   await assert.rejects(() => runOpenSandboxK8sPoc(escaped.client, escaped.kubectl, { image }), /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   const envName = kataWorld(session({ envStdout: "OPENSANDBOX_SERVER_API_KEY=secret\n" }));
