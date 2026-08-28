@@ -148,6 +148,7 @@ test("OpenSandbox Kata shared-assets PoC is independent of isolation smoke", () 
   const source = readFileSync(new URL("../../../packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts", import.meta.url), "utf8");
   const harness = readFileSync(new URL("../../../agent-harness/test-opensandbox-poc.ts", import.meta.url), "utf8");
   assert.match(source, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
   assert.match(source, /sharedAssetsMount/);
   assert.match(source, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
   assert.match(source, /leftoverPvcs/);
@@ -181,7 +182,9 @@ test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", 
   assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
   assert.match(source, /kubernetes \? 0\.3 : 1/);
   assert.match(source, /OPENSANDBOX_POC_DIRTY/);
-  assert.match(source, /NoopSharedAssetsVolumeManager/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /reaped jobs must lose shared assets volumes/);
+  assert.doesNotMatch(source, /if \(kubernetes\) return null/);
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 

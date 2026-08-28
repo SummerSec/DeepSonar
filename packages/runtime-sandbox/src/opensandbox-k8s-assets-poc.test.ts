@@ -5,7 +5,6 @@ import {
   findRemainingJobClaims,
   readDefaultStorageClass,
   readPvcPhase,
-  readSeederSucceeded,
   runOpenSandboxK8sAssetsPoc,
   sharedAssetsClaimName,
   shouldRunOpenSandboxK8sAssetsPoc,
@@ -53,6 +52,7 @@ function session(overrides?: { mounted?: boolean; seed?: string; writable?: bool
 function assetsWorld(live: OpenSandboxSession) {
   let created: OpenSandboxCreateInput | undefined;
   let alive = true;
+  const claims = new Set<string>();
   live.kill = async () => {
     alive = false;
   };
@@ -69,7 +69,15 @@ function assetsWorld(live: OpenSandboxSession) {
     },
   };
   const kubectl = async (args: string[]) => {
-    if (args[0] === "apply" || args[0] === "delete") return { kind: "Status" };
+    if (args[0] === "apply") {
+      const file = args[2] ?? "";
+      if (file.includes("pvc.yaml")) {
+        const match = /name: (deepsonar-assets-[0-9a-f-]+)/.exec(await (await import("node:fs/promises")).readFile(file, "utf8").catch(() => ""));
+        if (match) claims.add(match[1]);
+      }
+      return { kind: "Status" };
+    }
+    if (args[0] === "cp" || args[0] === "delete") return { raw: "deleted" };
     if (args[1] === "runtimeclass") return { metadata: { name: "kata-qemu" }, handler: "kata-qemu" };
     if (args[1] === "namespace") return { metadata: { name: "deepsonar-opensandbox" } };
     if (args[1] === "resourcequota") {
@@ -79,12 +87,26 @@ function assetsWorld(live: OpenSandboxSession) {
       return { items: [{ metadata: { name: "local-path" } }] };
     }
     if (args[1] === "pvc") {
-      return args.includes("-n") && args.includes("-o") && !args.includes("get")
-        ? { items: [] }
-        : { metadata: { name: args[2] }, status: { phase: "Bound" }, items: [] };
+      const name = args[2] ?? "";
+      if (args.includes("-l") || (args[2] === "-n")) return { items: [] };
+      if (!claims.has(name)) {
+        const error = new Error(`pvc "${name}" not found`);
+        throw error;
+      }
+      return {
+        metadata: {
+          name,
+          labels: {
+            "deepsonar.shared_assets.managed": "true",
+            "deepsonar.shared_assets.job": name.slice("deepsonar-assets-".length),
+          },
+        },
+        status: { phase: "Bound" },
+        items: [],
+      };
     }
     if (args[1] === "pod" && String(args[2] ?? "").startsWith("deepsonar-assets-seeder-")) {
-      return { metadata: { name: args[2] }, status: { phase: "Succeeded" } };
+      return { metadata: { name: args[2] }, status: { phase: "Running" } };
     }
     const jobId = created?.metadata["deepsonar.job"] ?? "";
     return {
@@ -108,9 +130,8 @@ test("Kata shared-assets PoC is skip-safe until explicitly enabled", () => {
 
 test("shared-assets PVC name stays Scheduler-owned deepsonar-assets-*", () => {
   assert.equal(sharedAssetsClaimName(JOB), `deepsonar-assets-${JOB}`);
-  assert.throws(() => sharedAssetsClaimName("not-a-job"), /OPENSANDBOX_POC_K8S_ASSETS_JOB/);
+  assert.throws(() => sharedAssetsClaimName("not-a-job"), /invalid shared-assets Job id/);
   assert.equal(readPvcPhase({ status: { phase: "Bound" } }), "Bound");
-  assert.equal(readSeederSucceeded({ status: { phase: "Succeeded" } }), true);
   assert.equal(findRemainingJobClaims({ items: [{ job: JOB }, { job: "other" }] }, JOB), 1);
 });
 

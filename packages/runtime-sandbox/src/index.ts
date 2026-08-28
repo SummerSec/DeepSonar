@@ -242,8 +242,9 @@ export {
 } from "./runtime-agent.js";
 export type { DeepSonarContainer } from "./runtime-docker.js";
 export type { RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails, SemanticToolState } from "./runtime-agent.js";
-export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";
+export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager, managedSharedAssetsVolumeName } from "./shared-assets-volume.js";
 export type { SharedAssetsVolumeManager, SharedAssetVolumeFile } from "./shared-assets-volume.js";
+export { KubernetesSharedAssetsVolumeManager, readDefaultStorageClass } from "./kubernetes-shared-assets-volume.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 export type {
   AgentCliSessionAdapter,

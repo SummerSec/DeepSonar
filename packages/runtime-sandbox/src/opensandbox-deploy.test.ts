@@ -128,10 +128,14 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
   assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
   const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts"), "utf8");
+  const runtime = readFileSync(join(root, "apps/scheduler/src/runtime.ts"), "utf8");
   assert.match(assetsPoc, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(assetsPoc, /KubernetesSharedAssetsVolumeManager/);
   assert.match(assetsPoc, /sharedAssetsMount/);
   assert.match(assetsPoc, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
   assert.match(assetsPoc, /OPENSANDBOX_POC_K8S_PVC_LEFTOVER/);
+  assert.match(runtime, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(runtime, /OPEN_SANDBOX_KUBECONFIG/);
 });
 
 test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () => {
@@ -224,7 +228,7 @@ test("main barrel keeps Agentbox on a lazy subpath so OpenSandbox does not load 
   assert.match(runtime, /import\(["']@deepsonar\/runtime-sandbox\/agentbox["']\)/);
   assert.match(runtime, /config\.runtime\.provider === ["']opensandbox["']/);
   assert.match(runtime, /kubernetesResources: config\.runtime\.openSandbox\.kubernetes/);
-  assert.match(runtime, /!config\.runtime\.openSandbox\.kubernetes/);
+  assert.match(runtime, /KubernetesSharedAssetsVolumeManager/);
   const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
   assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
 });

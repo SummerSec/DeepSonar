@@ -1,5 +1,6 @@
 import {
   DockerSharedAssetsVolumeManager,
+  KubernetesSharedAssetsVolumeManager,
   NoopRunner,
   NoopSharedAssetsVolumeManager,
   OpenSandboxRunner,
@@ -10,6 +11,18 @@ import {
   type SharedAssetsVolumeManager,
 } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
+
+function kubernetesSharedAssetsManager(): SharedAssetsVolumeManager {
+  const kubeconfig = process.env.OPEN_SANDBOX_KUBECONFIG?.trim() || process.env.KUBECONFIG?.trim();
+  if (!kubeconfig) {
+    throw new Error("OPEN_SANDBOX_KUBECONFIG 或 KUBECONFIG 在 OPEN_SANDBOX_KUBERNETES=1 时必填");
+  }
+  return new KubernetesSharedAssetsVolumeManager({
+    helperImage: config.sharedAssets.helperImage,
+    kubeconfig,
+    namespace: process.env.OPEN_SANDBOX_K8S_NAMESPACE?.trim() || "deepsonar-opensandbox",
+  });
+}
 
 async function createRealRunner(): Promise<SandboxRunner> {
   if (config.runtime.provider === "opensandbox") {
@@ -41,6 +54,8 @@ export const runner: SandboxRunner =
   config.runtime.agentMode === "real" ? await createRealRunner() : new NoopRunner();
 
 export const sharedAssetsVolumeManager: SharedAssetsVolumeManager =
-  config.runtime.agentMode === "real" && !config.runtime.openSandbox.kubernetes
-    ? new DockerSharedAssetsVolumeManager(config.sharedAssets.helperImage)
-    : new NoopSharedAssetsVolumeManager();
+  config.runtime.agentMode !== "real"
+    ? new NoopSharedAssetsVolumeManager()
+    : config.runtime.openSandbox.kubernetes
+      ? kubernetesSharedAssetsManager()
+      : new DockerSharedAssetsVolumeManager(config.sharedAssets.helperImage);

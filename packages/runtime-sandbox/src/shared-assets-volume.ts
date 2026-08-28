@@ -77,9 +77,13 @@ export interface SharedAssetsVolumeManager {
   listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>>;
 }
 
-function volumeName(jobId: string): string {
+export function managedSharedAssetsVolumeName(jobId: string): string {
   if (!JOB_ID_RE.test(jobId)) throw new Error("invalid shared-assets Job id");
   return `deepsonar-assets-${jobId.toLowerCase()}`;
+}
+
+function volumeName(jobId: string): string {
+  return managedSharedAssetsVolumeName(jobId);
 }
 
 function jobIdFromVolumeName(name: string): string | null {

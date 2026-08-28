@@ -2,8 +2,8 @@
  * Live proof that Reaper timeout/orphan owns OpenSandbox leftovers:
  * revoke tokens, close PTY, destroy sandbox, remove shared assets. leftover=0.
  * Kubernetes/Kata server additionally needs OPEN_SANDBOX_KUBERNETES=1
- * so provision omits Docker-only ResourceName=pids. Shared assets stay
- * Docker volumes; K8s uses NoopSharedAssetsVolumeManager and skips mounts.
+ * so provision omits Docker-only ResourceName=pids. Shared assets use
+ * Docker named volumes or KubernetesSharedAssetsVolumeManager PVCs.
  * The smoke script rebuilds @deepsonar/runtime-sandbox so Scheduler imports the current dist.
  */
 import { randomUUID } from "node:crypto";
@@ -112,7 +112,6 @@ try {
   }
 
   const prepareAssets = async (jobId: string) => {
-    if (kubernetes) return null;
     const volumeName = await assets!.prepare({
       jobId,
       files: [{ sourcePath: seedPath, relativePath: "seed.txt" }],
@@ -220,14 +219,12 @@ try {
     throw new Error(`orphan token must be revoked by reaper`);
   }
   if (tokenOf(liveJobId)?.revoked_at) throw new Error("live token must stay active");
-  if (!kubernetes) {
-    const managed = await assets!.listManaged();
-    const volumeOf = (id: string) => managed.some((item) => item.jobId === id);
-    if (volumeOf(timeoutJobId) || volumeOf(orphanJobId)) {
-      throw new Error("reaped jobs must lose shared assets volumes");
-    }
-    if (!volumeOf(liveJobId)) throw new Error("live shared assets volume must survive reap");
+  const managed = await assets!.listManaged();
+  const volumeOf = (id: string) => managed.some((item) => item.jobId === id);
+  if (volumeOf(timeoutJobId) || volumeOf(orphanJobId)) {
+    throw new Error("reaped jobs must lose shared assets volumes");
   }
+  if (!volumeOf(liveJobId)) throw new Error("live shared assets volume must survive reap");
   const timeoutTerm = provisioned.find((item) => item.jobId === timeoutJobId)?.terminal;
   const orphanTerm = provisioned.find((item) => item.jobId === orphanJobId)?.terminal;
   const liveTerm = provisioned.find((item) => item.jobId === liveJobId)?.terminal;
