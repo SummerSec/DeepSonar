@@ -85,23 +85,26 @@ try {
   let cancelled = false;
   let lastStatus = "pending";
   let sandboxId: string | null = null;
+  let jobError = "";
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    const [job] = await sql`SELECT status, sandbox_id FROM jobs WHERE id = ${jobId}`;
+    const [job] = await sql`SELECT status, sandbox_id, error FROM jobs WHERE id = ${jobId}`;
     lastStatus = String(job?.status ?? "");
     sandboxId = typeof job?.sandbox_id === "string" && job.sandbox_id ? job.sandbox_id : sandboxId;
+    if (typeof job?.error === "string") jobError = job.error;
     if (sandboxId) provisioned = true;
-    if (!cancelled && (sandboxId || lastStatus === "running" || lastStatus === "provisioning")) {
+    if (!cancelled && (sandboxId || lastStatus === "running")) {
       const row = await lifecycle.cancelJob(jobId, "opensandbox-dispatch-poc");
       cancelled = Boolean(row);
     }
-    if (["cancelled", "failed", "succeeded", "timeout", "orphan"].includes(lastStatus)) break;
+    if (["failed", "succeeded", "timeout", "orphan"].includes(lastStatus)) break;
+    if (lastStatus === "cancelled" && provisioned) break;
     await sleep(400);
   }
   for (let i = 0; i < 20; i++) {
     const leftovers = await runner.listResources({ jobId });
     if (leftovers.length === 0) {
-      if (!provisioned) throw new Error(`dispatcher never provisioned an OpenSandbox (status=${lastStatus})`);
+      if (!provisioned) throw new Error(`dispatcher never provisioned an OpenSandbox (status=${lastStatus} error=${jobError.slice(0, 240)})`);
       if (!["cancelled", "failed"].includes(lastStatus)) {
         throw new Error(`expected terminal status after provision, status=${lastStatus} sandbox=${sandboxId ?? "none"}`);
       }
