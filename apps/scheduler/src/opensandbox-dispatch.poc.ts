@@ -146,10 +146,16 @@ try {
       if (tokens.length === 0 || tokens.some((row) => !row.revoked_at)) {
         throw new Error("cancel/terminal must revoke capability tokens");
       }
-      const managed = await assets!.listManaged();
-      if (managed.some((item) => item.jobId === jobId)) {
-        throw new Error("cancel/terminal must remove shared assets volume");
+      let volumeGone = false;
+      for (let retry = 0; retry < 20; retry++) {
+        const managed = await assets!.listManaged();
+        if (!managed.some((item) => item.jobId === jobId)) {
+          volumeGone = true;
+          break;
+        }
+        await sleep(250);
       }
+      if (!volumeGone) throw new Error("cancel/terminal must remove shared assets volume");
       console.log(`OK: OpenSandbox dispatch claimed=1 provisioned=true cancelled=${cancelled} leftover=0 tokens=revoked assets=0 status=${lastStatus}`);
       break;
     }
