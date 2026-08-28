@@ -21,17 +21,20 @@ function fakeSandbox(): {
   host: never;
   commands: string[];
   envs: Record<string, string>[];
+  ptys: Array<boolean | undefined>;
   runCommands: string[];
   uploads: Array<{ path: string; content: string }>;
 } {
   const commands: string[] = [];
   const envs: Record<string, string>[] = [];
+  const ptys: Array<boolean | undefined> = [];
   const runCommands: string[] = [];
   const uploads: Array<{ path: string; content: string }> = [];
   const host = {
-    runAsync: async (command: string, options: { env?: Record<string, string> }) => {
+    runAsync: async (command: string, options: { env?: Record<string, string>; pty?: boolean }) => {
       commands.push(command);
       envs.push(options.env ?? {});
+      ptys.push(options.pty);
       return {} as never;
     },
     run: async (command: string) => {
@@ -42,7 +45,7 @@ function fakeSandbox(): {
       uploads.push({ path, content });
     },
   } as never;
-  return { host, commands, envs, runCommands, uploads };
+  return { host, commands, envs, ptys, runCommands, uploads };
 }
 
 function testDshProvider(reasoning?: string) {
@@ -555,6 +558,8 @@ test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复�
   assert.match(fake.commands[1], /exec resume/);
   assert.match(fake.commands[0], /--skip-git-repo-check/);
   assert.match(fake.commands[1], /codex-s1/);
+  assert.equal(fake.ptys[0], true);
+  assert.equal(fake.ptys[1], true);
   assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
   assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
 });
@@ -607,6 +612,8 @@ test("OpenCode commands pin config path and support same-session resume", async 
   assert.match(fake.commands[1], /--session 'oc-s1'/);
   assert.equal(fake.envs[0].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
   assert.equal(fake.envs[1].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
+  assert.equal(fake.ptys[0], true);
+  assert.equal(fake.ptys[1], true);
   assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
   assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
 });

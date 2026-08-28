@@ -660,7 +660,7 @@ function sandboxCodex(host: RuntimeHost, context: AdapterStartContext, sessionId
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
   command += sessionId ? ` -- ${promptArg(context.input)}` : " -";
-  return host.runAsync(command, { cwd: context.cwd, env: context.env });
+  return host.runAsync(command, { cwd: context.cwd, env: context.env, pty: true });
 }
 
 const codex = Object.freeze<RuntimeAdapter>({
@@ -688,14 +688,14 @@ const openCode = Object.freeze<RuntimeAdapter>({
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
     command += ` -- ${promptArg(input)}`;
-    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" } });
+    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" }, pty: true });
   },
   resume: ({ host, env, cwd, model, reasoning, input, sessionId }) => {
     let command = `opencode run --session ${shellQuote(sessionId)} --format json --thinking --dangerously-skip-permissions --pure`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
     command += ` -- ${promptArg(input)}`;
-    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" } });
+    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" }, pty: true });
   },
   materialize: async ({ host }) => {
     // OpenCode 使用 JSON 配置；Provider 文件上传后将 Scheduler 管理的 MCP 描述
