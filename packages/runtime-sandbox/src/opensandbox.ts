@@ -298,7 +298,7 @@ export class OpenSandboxRunner implements SandboxRunner {
     if (sessions) {
       await Promise.allSettled([...sessions].map((session) => session.close()));
     }
-    const session = this.sessions.get(handle.sandboxId) ?? await this.client.connect(handle.sandboxId);
+    const session = await this.sessionOf(handle.sandboxId);
     this.sessions.delete(handle.sandboxId);
     if (!session) return;
     await session.kill();
@@ -306,9 +306,8 @@ export class OpenSandboxRunner implements SandboxRunner {
   }
 
   async isAlive(handle: RunHandle): Promise<boolean> {
-    const session = this.sessions.get(handle.sandboxId) ?? await this.client.connect(handle.sandboxId);
+    const session = await this.sessionOf(handle.sandboxId);
     if (!session) return false;
-    this.sessions.set(handle.sandboxId, session);
     try {
       const state = await session.getState();
       if (!/^running$/i.test(state)) return false;
@@ -320,8 +319,7 @@ export class OpenSandboxRunner implements SandboxRunner {
   }
 
   async openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession> {
-    const host = this.hostOf(handle);
-    if (!host) throw new Error("TERMINAL_SANDBOX_NOT_OWNED");
+    const host = await this.ensureHost(handle);
     const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
     const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
     const process = await host.runAsync("if command -v bash >/dev/null 2>&1; then exec bash -il; else exec /bin/sh -i; fi", {
@@ -370,16 +368,30 @@ export class OpenSandboxRunner implements SandboxRunner {
     return session ? createOpenSandboxRuntimeHost(session) : undefined;
   }
 
+  async ensureHost(handle: RunHandle): Promise<RuntimeHost> {
+    const session = await this.sessionOf(handle.sandboxId);
+    if (!session) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
+    return createOpenSandboxRuntimeHost(session);
+  }
+
   listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]> {
     return this.client.list(filter);
   }
 
   async destroyResource(resource: RuntimeResource): Promise<void> {
-    const session = this.sessions.get(resource.resourceId) ?? await this.client.connect(resource.resourceId);
+    const session = await this.sessionOf(resource.resourceId);
     this.sessions.delete(resource.resourceId);
     if (!session) return;
     await session.kill();
     await session.close();
+  }
+
+  private async sessionOf(id: string): Promise<OpenSandboxSession | undefined> {
+    const cached = this.sessions.get(id);
+    if (cached) return cached;
+    const session = await this.client.connect(id);
+    if (session) this.sessions.set(id, session);
+    return session;
   }
 
   private async destroyByLabels(jobId: string, attemptId: string): Promise<void> {

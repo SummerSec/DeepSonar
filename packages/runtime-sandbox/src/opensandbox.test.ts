@@ -157,6 +157,24 @@ test("OpenSandbox cancelProvision destroys labeled leftovers", async () => {
   assert.equal(killed, 1);
 });
 
+test("OpenSandbox ensureHost reconnects after process-local cache miss", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client);
+  assert.equal(runner.hostOf({ sandboxId: "sbx-1" }), undefined);
+  const host = await runner.ensureHost({ sandboxId: "sbx-1" });
+  assert.ok(host);
+  assert.ok(runner.hostOf({ sandboxId: "sbx-1" }));
+  await assert.rejects(runner.ensureHost({ sandboxId: "missing" }), /不在注册表/);
+});
+
+test("OpenSandbox openTerminal reconnects through ensureHost", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client);
+  const terminal = await runner.openTerminal({ sandboxId: "sbx-1" }, { cols: 80, rows: 24 });
+  assert.ok(terminal.id);
+  await terminal.close();
+});
+
 test("OpenSandbox host rejects reserved workspace reads and inbox path traversal", async () => {
   const client = fakeClient();
   const runner = new OpenSandboxRunner(client);

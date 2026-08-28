@@ -27,3 +27,24 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.match(compose, /driver: bridge/);
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
 });
+
+test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema", () => {
+  const toml = readFileSync(join(root, "deploy/opensandbox/config.k8s.toml"), "utf8");
+  const template = readFileSync(join(root, "deploy/opensandbox/batchsandbox-template.yaml"), "utf8");
+  const runtimeClass = readFileSync(join(root, "deploy/opensandbox/runtimeclass-kata.yaml"), "utf8");
+  const namespace = readFileSync(join(root, "deploy/opensandbox/namespace.yaml"), "utf8");
+  assert.match(toml, /type = "kubernetes"/);
+  assert.match(toml, /type = "kata"/);
+  assert.match(toml, /k8s_runtime_class = "kata-qemu"/);
+  assert.match(toml, /workload_provider = "batchsandbox"/);
+  assert.match(toml, /namespace = "deepsonar-opensandbox"/);
+  assert.match(toml, /mode = "direct"/);
+  assert.doesNotMatch(toml, /(?:^|\s)latest(?:\s|$)|workload_provider = "agent-sandbox"|type = "gvisor"/m);
+  assert.match(toml, new RegExp(OPENSANDBOX_EXECD_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(template, /restartPolicy: Never/);
+  assert.doesNotMatch(template, /runtimeClassName/);
+  assert.match(runtimeClass, /name: kata-qemu/);
+  assert.match(runtimeClass, /handler: kata-qemu/);
+  assert.match(namespace, /name: deepsonar-opensandbox/);
+});

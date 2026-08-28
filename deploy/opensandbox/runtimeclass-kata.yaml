@@ -1,0 +1,10 @@
+# Kata RuntimeClass for OpenSandbox (#162 Phase 3).
+# Must exist before the server starts with [secure_runtime].type = "kata".
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata-qemu
+handler: kata-qemu
+scheduling:
+  nodeSelector:
+    katacontainers.io/kata-runtime: "true"

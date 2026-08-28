@@ -81,7 +81,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 运行时（`packages/runtime-sandbox/`）
 
-- `SandboxRunner` + `RuntimeHost` 是调度器与沙箱之间的唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（过渡实现）↔ `OpenSandboxRunner`（#162，绑定 `@alibaba-group/opensandbox@0.1.11`，server/execd/egress 只认 `name@sha256`）。五类 CLI adapter 只依赖内部 process/file 契约，不引用 provider SDK 类型。real 默认仍走 Agentbox；`SANDBOX_PROVIDER=opensandbox` 才启用 OpenSandbox。升级只改显式 pin，禁止 `latest`。换 provider 只动这个包。
+- `SandboxRunner` + `RuntimeHost` 是调度器与沙箱之间的唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（过渡实现）↔ `OpenSandboxRunner`（#162，绑定 `@alibaba-group/opensandbox@0.1.11`，server/execd/egress 只认 `name@sha256`）。五类 CLI adapter 只依赖内部 process/file 契约，不引用 provider SDK 类型。real 默认仍走 Agentbox；`SANDBOX_PROVIDER=opensandbox` 才启用 OpenSandbox。重启后续跑走 `ensureHost`。K8s overlay 为 BatchSandbox + Kata（`deploy/opensandbox/config.k8s.toml`）。升级只改显式 pin，禁止 `latest`。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
 - **系统沙箱**：RoleConfig 的 `runtime_image_key=null` 表示不绑定市场镜像；Scheduler 仍使用受治理的最小 Base 底座，并在 Job 快照中冻结不可变 digest。Test/Audit 等专项角色才默认或显式绑定专项镜像。
 - **最新版本策略**：官方市场从 GitHub Release 的 `latest/runtime-image-registry.json` 同步并只提升最新版本；旧版本仅保留给显式 pin 与历史 Job，实际执行始终使用快照中的 digest，不使用可变 `latest`。

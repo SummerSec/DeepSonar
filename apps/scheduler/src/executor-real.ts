@@ -1521,8 +1521,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   let result: Awaited<ReturnType<typeof runRealAgent>>;
   try {
-    const host = runner.hostOf({ sandboxId: job.sandbox_id as string });
-    if (!host) throw new Error(`沙箱 ${job.sandbox_id} 不在注册表（可能已被回收）`);
+    const host = await runner.ensureHost({ sandboxId: job.sandbox_id as string });
     result = await runRealAgent(
     host,
     {

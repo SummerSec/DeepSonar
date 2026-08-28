@@ -1170,6 +1170,12 @@ export class AgentboxRunner implements SandboxRunner {
     return sandbox ? createAgentboxRuntimeHost(sandbox) : undefined;
   }
 
+  async ensureHost(handle: RunHandle): Promise<RuntimeHost> {
+    const host = this.hostOf(handle);
+    if (!host) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
+    return host;
+  }
+
   async listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]> {
     const rows = await listDeepSonarContainers();
     return rows

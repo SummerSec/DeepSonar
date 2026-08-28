@@ -1,0 +1,12 @@
+# BatchSandbox CR template (#162 Phase 3). Official merge shape.
+# RuntimeClass is injected by OpenSandbox from [secure_runtime].k8s_runtime_class.
+# Do not set runtimeClassName here. Namespace is infrastructure isolation only.
+
+metadata:
+spec:
+  replicas: 1
+  template:
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - operator: "Exists"

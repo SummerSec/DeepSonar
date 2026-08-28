@@ -72,8 +72,10 @@ export interface SandboxRunner {
   isAlive(handle: RunHandle): Promise<boolean>;
   /** Optional, provider-backed PTY in the existing Job sandbox. */
   openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession>;
-  /** Process/file host for the provisioned sandbox. Missing after process restart until reconnect. */
+  /** Sync cache only. Missing after process restart until ensureHost reconnects. */
   hostOf(handle: RunHandle): RuntimeHost | undefined;
+  /** Reconnect a persisted provider resource so Scheduler restart can resume exec/PTY. */
+  ensureHost(handle: RunHandle): Promise<RuntimeHost>;
   listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]>;
   destroyResource(resource: RuntimeResource): Promise<void>;
 }
@@ -94,6 +96,9 @@ export class NoopRunner implements SandboxRunner {
   }
   hostOf(): RuntimeHost | undefined {
     return undefined;
+  }
+  async ensureHost(): Promise<RuntimeHost> {
+    throw new Error("NOOP_HOST_UNSUPPORTED");
   }
   async listResources(): Promise<RuntimeResource[]> {
     return [];
@@ -124,6 +129,11 @@ export {
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
+export {
+  OPENSANDBOX_POC_IMAGE,
+  runOpenSandboxInfrastructurePoc,
+  shouldRunOpenSandboxPoc,
+} from "./opensandbox-poc.js";
 export {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,
