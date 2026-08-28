@@ -8,9 +8,12 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
+  CLI_SESSION_ADAPTERS,
   DEEPSONAR_GATEWAY_PROXY_HOST,
+  applyRuntimeOutputText,
   freezeAgentCliRuntime,
   shouldRunOpenSandboxPoc,
+  type AdapterRuntimeState,
 } from "@deepsonar/runtime-sandbox";
 
 if (!shouldRunOpenSandboxPoc()) {
@@ -201,10 +204,12 @@ try {
       allowedModels: [plan.model],
       ttlSec: 3600,
     });
+    const runtimeHome = "/workspace/.deepsonar-home";
     const gatewayEnv: Record<string, string> = {
       DEEPSONAR_ALLOW_EGRESS: "1",
       DEEPSONAR_GATEWAY_TOKEN: token.plaintext,
       ...capability.env,
+      HOME: runtimeHome,
     };
     if (selectedCli === "dsh") {
       for (const key of mapping.secretKeys) delete gatewayEnv[key];
@@ -284,7 +289,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
       await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
       const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
       const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
-      await host.run("mkdir -p /workspace/.deepsonar-home", { timeoutMs: 5_000 });
+      await host.run(`mkdir -p ${runtimeHome}`, { timeoutMs: 5_000 });
       const dshProvider = selectedCli === "dsh"
         ? buildDshPiAiRuntimeProjection({
           settingsConfig,
@@ -293,38 +298,74 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
           model: plan.model,
         })
         : undefined;
-      const started = await adapter.start({
+      const state: AdapterRuntimeState = {
+        model: plan.model,
+        modelProvider: selectedCli === "dsh" ? "deepseek" : plan.provider,
+        cwd: "/workspace",
+        contextIdentity: {
+          context_id: jobId.replaceAll("-", ""),
+          context_revision: 0,
+          adapter_id: selectedCli,
+          adapter_version: adapter.version,
+          runtime_identity: "poc",
+          transform_chain_digest: "0",
+        },
+      };
+      const startContext = {
         host,
         env: gatewayEnv,
         cwd: "/workspace",
         input: prompt,
         model: plan.model,
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+        contextIdentity: state.contextIdentity,
         ...(dshProvider ? { dshProvider } : {}),
-      });
-      const payload = selectedCli === "dsh"
-        ? adapter.encodeInput(prompt, {
-            model: plan.model,
-            modelProvider: "deepseek",
-            cwd: "/workspace",
-            contextIdentity: {
-              context_id: jobId.replaceAll("-", ""),
-              context_revision: 0,
-              adapter_id: "dsh",
-              adapter_version: adapter.version,
-              runtime_identity: "poc",
-              transform_chain_digest: "0",
-            },
-          })
-        : adapter.encodeInput(prompt);
+      };
+      const started = await adapter.start(startContext);
+      const payload = adapter.encodeInput(prompt, state);
       if (payload) await started.write(payload).catch(() => {});
+      let steered = !adapter.capabilities.incrementalMessages;
+      const steerPayload = adapter.encodeSteer?.("Continue and finish the script.", state)
+        ?? (adapter.capabilities.incrementalMessages ? adapter.encodeInput("Continue and finish the script.", state) : "");
+      if (steerPayload) {
+        steered = true;
+        await started.write(steerPayload).catch(() => { steered = false; });
+      }
+      if (adapter.encodeFollowUp) {
+        await started.write(adapter.encodeFollowUp("follow-up: confirm the script finished.", state)).catch(() => { steered = false; });
+      }
       if (!adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
       const text = await collectText(started, 120_000, () => operations.every((name) => calls.includes(name)));
       if (adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
-      await started.kill().catch(() => {});
+      applyRuntimeOutputText(adapter, text, state);
       if (!operations.every((name) => calls.includes(name))) {
         throw new Error(`${selectedCli} did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
       }
+      if (!steered) throw new Error(`${selectedCli} steer/follow-up was not written`);
+      if (!state.sessionId) throw new Error(`${selectedCli} did not expose a session id for archive`);
+      const bundle = await CLI_SESSION_ADAPTERS[selectedCli].exportSession({
+        run: (command) => host.run(command, { timeoutMs: 15_000, env: { HOME: runtimeHome } }),
+        readText: async (filePath) => {
+          const result = await host.run(`cat -- ${JSON.stringify(filePath)}`, { timeoutMs: 15_000, env: { HOME: runtimeHome } });
+          return result.exitCode === 0 ? result.stdout : null;
+        },
+      }, state.sessionId, state.sessionFile);
+      if (bundle.artifacts.length === 0) {
+        throw new Error(`${selectedCli} session archive empty: ${bundle.captureError ?? "no artifacts"}`);
+      }
+      await started.kill().catch(() => {});
+      const resumeProcess = await adapter.resume({
+        ...startContext,
+        sessionId: state.sessionId,
+        sessionFile: state.sessionFile,
+      });
+      const resumePayload = adapter.encodeInput("resume-ping", state);
+      if (resumePayload) await resumeProcess.write(resumePayload).catch(() => {});
+      if (resumePayload || !adapter.capabilities.incrementalMessages) {
+        await resumeProcess.closeStdin().catch(() => {});
+      }
+      await collectText(resumeProcess, 15_000, () => false);
+      await resumeProcess.kill().catch(() => {});
     } finally {
       await runner.destroy(handle).catch(() => {});
     }
@@ -335,7 +376,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
   }
   const skipped = vendorCliIds.filter((cli) => !ran.includes(cli));
   console.log(
-    `OK: OpenSandbox CLI vendor control clis=${ran.join(",")} skipped=${skipped.join(",") || "none"} gateway=true submitted=true leftover=0`,
+    `OK: OpenSandbox CLI vendor control clis=${ran.join(",")} skipped=${skipped.join(",") || "none"} gateway=true submitted=true steered=true archived=true resumed=true leftover=0`,
   );
 } finally {
   if (closeApp) await closeApp().catch(() => {});
