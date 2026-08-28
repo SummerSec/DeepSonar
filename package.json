@@ -17,6 +17,7 @@
     "ci:smoke:opensandbox": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts",
     "ci:smoke:opensandbox-api": "pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-platform-api.poc.ts",
     "ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar/plane-client build && pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-dispatch.poc.ts",
+    "ci:smoke:opensandbox-cli-control": "pnpm --filter @deepsonar/scheduler exec tsx src/opensandbox-cli-control.poc.ts",
     "ci:smoke:runtime-policy": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-runtime-policy.ts",
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web test:lifecycle",

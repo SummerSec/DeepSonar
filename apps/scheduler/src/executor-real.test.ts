@@ -110,6 +110,15 @@ test("real executor round-trips only controlled rate-limit details after string 
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
 });
 
+test("OpenSandbox CLI control PoC starts claude-code and does not mint tokens in host.run", () => {
+  const source = readFileSync(new URL("./opensandbox-cli-control.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\["claude-code"\]/);
+  assert.match(source, /preparePlatformCapability/);
+  assert.match(source, /adapter\.start/);
+  assert.match(source, /poc-cli-emit\.sh/);
+  assert.doesNotMatch(source, /mintJobCapabilityToken\(/);
+});
+
 test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.run", () => {
   const source = readFileSync(new URL("./opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
