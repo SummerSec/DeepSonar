@@ -735,8 +735,18 @@ export type OpenSandboxRetryResult = {
 
 export async function runOpenSandboxRetryPoc(
   client: OpenSandboxClient,
-  input: { image: string },
+  input: { image: string; provider?: AgentCliId },
 ): Promise<OpenSandboxRetryResult> {
+  const provider = input.provider ?? "claude-code";
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS[provider];
+  const identity = {
+    context_id: "poc162",
+    context_revision: 0,
+    adapter_id: adapter.id,
+    adapter_version: adapter.version,
+    runtime_identity: "poc",
+    transform_chain_digest: "0",
+  };
   const runner = new OpenSandboxRunner(client);
   const { jobId, attemptId } = ids();
   const handle = await runner.provision({
@@ -751,12 +761,24 @@ export async function runOpenSandboxRetryPoc(
     const host = await runner.ensureHost(handle);
     const events: Array<Record<string, unknown>> = [];
     const result = await runRealAgent(host, {
-      provider: "claude-code",
+      provider,
+      model: "dummy",
       env: {
         ANTHROPIC_API_KEY: "sk-mock",
         ANTHROPIC_BASE_URL: "http://127.0.0.1:8765",
+        OPENAI_API_KEY: "sk-mock",
+        OPENAI_BASE_URL: "http://127.0.0.1:8765/v1",
       },
       input: "ping",
+      contextIdentity: identity,
+      getResumeContextIdentity: async ({ sessionId, sessionFile }) => ({
+        ...identity,
+        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(sessionFile ? { session_file: sessionFile } : {}),
+      }),
+      ...(provider === "dsh"
+        ? { dshProvider: { provider: "dummy", model: "dummy", config: { providers: { dummy: { type: "dummy" } } } } }
+        : {}),
       onEvent: (event) => events.push(event),
     });
     const retry = events.find((event) => event.type === "run.retrying");

@@ -162,7 +162,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
 
 test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  const state = { contextIdentity: {
+  const state = { sessionId: undefined as string | undefined, contextIdentity: {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
     adapter_id: "dsh", adapter_version: "0.1.0-rc.7", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
@@ -170,6 +170,7 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
   assert.equal(init.method, "initialize");
   assert.deepEqual(init.params, { cwd: "/workspace", provider: "xxxx", model: "gpt-5.6" });
+  assert.equal(state.sessionId, "session-ctx_0123456789abcdef0123456789abcdef");
   const initEvents = adapter.decodeOutput({ jsonrpc: "2.0", id: init.id, result: { serverInfo: { name: "deepseek-harness-sdk-runtime", version: "0.0.1" } } }, state);
   assert.equal(initEvents[0]?.type, "runtime_outbound");
   const prompt = JSON.parse(String(initEvents[0]?.content).trim()) as Record<string, unknown>;

@@ -430,26 +430,71 @@ test("OpenSandbox cancel PoC rejects in-flight provision and reports leftovers",
   assert.deepEqual(result, { cancelled: true, leftovers: 0 });
 });
 
+function retryCliOf(command: string): "claude-code" | "codex" | "open-code" | "pi" | "dsh" | undefined {
+  if (/\bclaude\b/.test(command)) return "claude-code";
+  if (/\bcodex\b/.test(command)) return "codex";
+  if (/\bopencode\b/.test(command)) return "open-code";
+  if (command.includes("pi --mode rpc")) return "pi";
+  if (command.includes("dsh-sdk-jsonrpc-demo") || command.includes("packaged-bin.js")) return "dsh";
+  return undefined;
+}
+
+function retryLines(
+  cli: NonNullable<ReturnType<typeof retryCliOf>>,
+  phase: "fail" | "ok",
+  status: 503 | 401,
+): Record<string, unknown>[] {
+  const sessionId = `retry-${cli}`;
+  const err = status === 503 ? "upstream status: 503" : "HTTP 401 unauthorized";
+  if (cli === "claude-code") {
+    const init = { type: "system", subtype: "init", session_id: sessionId };
+    return phase === "ok"
+      ? [init, { type: "result", subtype: "success", result: "ok" }]
+      : [init, { type: "result", subtype: "error", is_error: true, result: err }];
+  }
+  if (cli === "codex") {
+    const init = { type: "thread.started", thread_id: sessionId };
+    return phase === "ok"
+      ? [init, { type: "turn.completed", result: "ok" }]
+      : [init, { type: "error", message: err }];
+  }
+  if (cli === "open-code") {
+    const init = { type: "session.created", sessionID: sessionId };
+    return phase === "ok"
+      ? [init, { type: "run.completed", result: "ok" }]
+      : [init, { type: "run.failed", error: err }];
+  }
+  if (cli === "pi") {
+    const state = {
+      type: "response",
+      command: "get_state",
+      success: true,
+      data: { sessionId, sessionFile: `/workspace/.deepsonar-home/.pi/agent/${sessionId}.jsonl` },
+    };
+    return phase === "ok"
+      ? [state, { type: "message_end", message: { content: [{ type: "text", text: "ok" }] } }, { type: "agent_settled" }]
+      : [state, { type: "error", message: err }];
+  }
+  return phase === "ok"
+    ? [{ jsonrpc: "2.0", method: "session.status", params: { status: "idle", sessionId: "session-poc162" } }]
+    : [{ jsonrpc: "2.0", id: "deepsonar-initialize-1", error: { message: err } }];
+}
+
 function retrySession(status: 503 | 401): OpenSandboxSession & { commands: string[] } {
   const base = hostSession();
   const commands: string[] = [];
-  const sessionId = status === 503 ? "retry-sess-503" : "retry-sess-401";
+  const starts = new Map<string, number>();
   return {
     ...base,
     commands,
     async runAsync(command) {
       commands.push(command);
-      if (!/\bclaude\b/.test(command)) return base.runAsync(command);
-      const resume = command.includes("--resume");
-      const init = { type: "system", subtype: "init", session_id: sessionId };
-      const error = {
-        type: "result",
-        subtype: "error",
-        is_error: true,
-        result: status === 503 ? "upstream status: 503" : "HTTP 401 unauthorized",
-      };
-      const success = { type: "result", subtype: "success", result: "ok" };
-      const lines = resume && status === 503 ? [init, success] : [init, error];
+      const cli = retryCliOf(command);
+      if (!cli) return base.runAsync(command);
+      const count = (starts.get(cli) ?? 0) + 1;
+      starts.set(cli, count);
+      const resume = count > 1;
+      const lines = retryLines(cli, resume && status === 503 ? "ok" : "fail", status);
       return {
         async write() {},
         async closeStdin() {},
@@ -478,15 +523,28 @@ function retryClient(session: OpenSandboxSession): OpenSandboxClient {
   };
 }
 
-test("OpenSandbox runRealAgent retries a transient 503 on the same Claude session", async () => {
-  const session = retrySession(503);
-  const result = await runOpenSandboxRetryPoc(retryClient(session), { image: "img@sha256:" + "a".repeat(64) });
-  assert.equal(result.retrying, true);
-  assert.equal(result.reason, "http");
-  assert.equal(result.skipped, false);
-  assert.equal(result.leftovers, 0);
-  assert.equal(result.terminalOutcome, "success");
-  assert.ok(session.commands.some((command) => command.includes("--resume 'retry-sess-503'")));
+test("OpenSandbox runRealAgent retries a transient 503 on the same session for every CLI", async () => {
+  const image = "img@sha256:" + "a".repeat(64);
+  for (const provider of ["claude-code", "codex", "open-code", "pi", "dsh"] as const) {
+    const session = retrySession(503);
+    const result = await runOpenSandboxRetryPoc(retryClient(session), { image, provider });
+    assert.equal(result.retrying, true, provider);
+    assert.equal(result.reason, "http", provider);
+    assert.equal(result.skipped, false, provider);
+    assert.equal(result.leftovers, 0, provider);
+    assert.equal(result.terminalOutcome, "success", provider);
+    if (provider === "claude-code") {
+      assert.ok(session.commands.some((command) => command.includes("--resume 'retry-claude-code'")), provider);
+    } else if (provider === "codex") {
+      assert.ok(session.commands.some((command) => /exec resume 'retry-codex'/.test(command)), provider);
+    } else if (provider === "open-code") {
+      assert.ok(session.commands.some((command) => command.includes("--session 'retry-open-code'")), provider);
+    } else if (provider === "pi") {
+      assert.ok(session.commands.some((command) => command.includes("--session '/workspace/.deepsonar-home/.pi/agent/retry-pi.jsonl'")), provider);
+    } else {
+      assert.ok(session.commands.filter((command) => command.includes("packaged-bin.js")).length >= 2, provider);
+    }
+  }
 });
 
 test("runRealAgent captures CLI session identity through applyRuntimeOutput", () => {
@@ -495,12 +553,19 @@ test("runRealAgent captures CLI session identity through applyRuntimeOutput", ()
   assert.doesNotMatch(source, /const decodedEvents = adapter\.decodeOutput\(rawParsed, adapterState\)/);
 });
 
-test("OpenSandbox runRealAgent does not resume a permanent 401", async () => {
-  const session = retrySession(401);
-  const result = await runOpenSandboxRetryPoc(retryClient(session), { image: "img@sha256:" + "a".repeat(64) });
-  assert.equal(result.retrying, false);
-  assert.equal(result.skipped, false);
-  assert.equal(result.leftovers, 0);
-  assert.equal(result.terminalOutcome, "failure");
-  assert.equal(session.commands.some((command) => command.includes("--resume")), false);
+test("OpenSandbox runRealAgent does not resume a permanent 401 for any CLI", async () => {
+  const image = "img@sha256:" + "a".repeat(64);
+  for (const provider of ["claude-code", "codex", "open-code", "pi", "dsh"] as const) {
+    const session = retrySession(401);
+    const result = await runOpenSandboxRetryPoc(retryClient(session), { image, provider });
+    assert.equal(result.retrying, false, provider);
+    assert.equal(result.skipped, false, provider);
+    assert.equal(result.leftovers, 0, provider);
+    assert.equal(result.terminalOutcome, "failure", provider);
+    assert.equal(
+      session.commands.some((command) => /--resume|exec resume |--session /.test(command)),
+      false,
+      provider,
+    );
+  }
 });

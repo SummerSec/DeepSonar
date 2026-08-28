@@ -1,0 +1,38 @@
+# Infrastructure quota only (#162 Phase 3). Does not replace project/Job auth.
+# Live Kata verification is still required before treating this overlay as proven.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: deepsonar-opensandbox
+  namespace: deepsonar-opensandbox
+  labels:
+    app.kubernetes.io/name: deepsonar-opensandbox
+    deepsonar.opensandbox/isolation: infrastructure
+spec:
+  hard:
+    pods: "32"
+    requests.cpu: "32"
+    requests.memory: 64Gi
+    limits.cpu: "64"
+    limits.memory: 128Gi
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: deepsonar-opensandbox
+  namespace: deepsonar-opensandbox
+  labels:
+    app.kubernetes.io/name: deepsonar-opensandbox
+    deepsonar.opensandbox/isolation: infrastructure
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "1"
+        memory: 1Gi
+      defaultRequest:
+        cpu: "500m"
+        memory: 512Mi
+      max:
+        cpu: "4"
+        memory: 8Gi

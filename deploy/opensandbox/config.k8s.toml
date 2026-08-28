@@ -1,5 +1,7 @@
 # OpenSandbox Kubernetes + Kata (#162 Phase 3). Official server schema only.
 # Namespace isolates infrastructure only; it does not replace project/Job auth.
+# Apply namespace.yaml, runtimeclass-kata.yaml, and resourcequota.yaml before
+# pointing the server at this overlay. Live Kata verification is still required.
 # gVisor + egress sidecar is not inferred from upstream docs and stays unverified.
 
 [server]

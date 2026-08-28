@@ -1129,6 +1129,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
     state.dshInitialInput = content;
     state.finalText = undefined;
     if (!state.modelProvider || !state.model) throw new Error("DSH_PROVIDER_IDENTITY_MISSING");
+    dshSessionId(state);
     return dshRequest("initialize", { cwd: state.cwd ?? "/workspace", provider: state.modelProvider, model: state.model }, state);
   },
   encodeSteer: dshPrompt,

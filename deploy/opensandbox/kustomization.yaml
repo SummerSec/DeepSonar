@@ -1,0 +1,8 @@
+# Infrastructure isolation only (#162 Phase 3). Does not replace project/Job auth.
+# BatchSandbox template is server config, not a cluster resource.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - runtimeclass-kata.yaml
+  - resourcequota.yaml

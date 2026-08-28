@@ -48,6 +48,8 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   const template = readFileSync(join(root, "deploy/opensandbox/batchsandbox-template.yaml"), "utf8");
   const runtimeClass = readFileSync(join(root, "deploy/opensandbox/runtimeclass-kata.yaml"), "utf8");
   const namespace = readFileSync(join(root, "deploy/opensandbox/namespace.yaml"), "utf8");
+  const quota = readFileSync(join(root, "deploy/opensandbox/resourcequota.yaml"), "utf8");
+  const kustomization = readFileSync(join(root, "deploy/opensandbox/kustomization.yaml"), "utf8");
   assert.match(toml, /type = "kubernetes"/);
   assert.match(toml, /type = "kata"/);
   assert.match(toml, /k8s_runtime_class = "kata-qemu"/);
@@ -62,4 +64,15 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(runtimeClass, /name: kata-qemu/);
   assert.match(runtimeClass, /handler: kata-qemu/);
   assert.match(namespace, /name: deepsonar-opensandbox/);
+  assert.match(quota, /kind: ResourceQuota/);
+  assert.match(quota, /kind: LimitRange/);
+  assert.match(quota, /namespace: deepsonar-opensandbox/);
+  assert.match(quota, /pods: "32"/);
+  assert.match(quota, /defaultRequest:/);
+  assert.match(template, /requests:/);
+  assert.match(template, /limits:/);
+  assert.match(kustomization, /namespace\.yaml/);
+  assert.match(kustomization, /runtimeclass-kata\.yaml/);
+  assert.match(kustomization, /resourcequota\.yaml/);
+  assert.doesNotMatch(kustomization, /batchsandbox-template\.yaml/);
 });
