@@ -141,6 +141,8 @@ test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", 
   assert.match(source, /isAlive/);
   assert.match(source, /timeout=1 orphan=1/);
   assert.match(source, /mintJobCapabilityToken/);
+  assert.match(source, /UPDATE jobs SET timeout_sec = 1/);
+  assert.match(source, /UPDATE jobs SET lease_expires_at/);
   assert.match(source, /openTerminal/);
   assert.match(source, /sharedAssetsVolumeManager/);
   assert.match(source, /tokens=revoked pty=closed assets=0/);
