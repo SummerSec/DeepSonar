@@ -512,9 +512,14 @@ class H(BaseHTTPRequestHandler):
         if "responses" in self.path:
             sse(self, [
                 ("response.created", {"type":"response.created","response":{"id":"resp_poc","status":"in_progress"}}),
-                ("response.output_text.delta", {"type":"response.output_text.delta","delta":"pong"}),
+                ("response.output_item.added", {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_poc","type":"message","role":"assistant","content":[]}}),
+                ("response.content_part.added", {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}),
+                ("response.output_text.delta", {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"pong"}),
+                ("response.output_text.done", {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"pong"}),
+                ("response.output_item.done", {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_poc","type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}}),
                 ("response.completed", {"type":"response.completed","response":{"id":"resp_poc","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}]}}),
             ])
+            handler.wfile.write(b"data: [DONE]\\n\\n")
             return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -593,6 +598,7 @@ async function materializePocProviderFiles(host: RuntimeHost): Promise<void> {
     JSON.stringify({
       providers: {
         deepsonar: {
+          api: "openai-responses",
           baseUrl: `${POC_MOCK_BASE}/v1`,
           apiKey: "sk-mock",
           models: [{ id: "dummy" }],
@@ -727,9 +733,14 @@ export async function runOpenSandboxCliLaunchPoc(
       if (adapter.encodeShutdown) {
         await process.write(adapter.encodeShutdown(state)).catch(() => {});
       }
-      await process.closeStdin().catch(() => { stdinClosed = false; });
+      if (payload) {
+        await process.closeStdin().catch(() => { stdinClosed = false; });
+      }
       const out = await collectText(process, 15_000);
       await process.kill().catch(() => {});
+      if (globalThis.process.env.OPEN_SANDBOX_POC_CLI_DEBUG === "1") {
+        console.error(`[opensandbox-cli ${id}] ${out.text.replace(/\s+/g, " ").slice(0, 1500)}`);
+      }
       applyRuntimeOutputText(adapter, out.text, state);
       let archived = false;
       let archiveCount = 0;

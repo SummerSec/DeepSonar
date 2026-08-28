@@ -553,6 +553,7 @@ test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复�
   assert.match(fake.commands[1], /model_reasoning_effort/);
   assert.match(fake.commands[0], /gpt-5/);
   assert.match(fake.commands[1], /exec resume/);
+  assert.match(fake.commands[0], /--skip-git-repo-check/);
   assert.match(fake.commands[1], /codex-s1/);
   assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
   assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
@@ -563,6 +564,8 @@ test("OpenCode JSON events normalize text and tool completion without scraping t
   const state = {};
   const session = adapter.decodeOutput({ type: "session.created", sessionID: "oc-s1" }, state)[0];
   assert.deepEqual(session, { type: "system", subtype: "init", session_id: "oc-s1" });
+  const liveSession = adapter.decodeOutput({ type: "step_start", sessionID: "ses_live" }, {})[0];
+  assert.deepEqual(liveSession, { type: "system", subtype: "init", session_id: "ses_live" });
   const text = adapter.decodeOutput({ type: "text", sessionID: "oc-s1", part: { type: "text", text: "structured" } }, state)[0];
   assert.equal((text?.message as { content?: Array<{ text?: unknown }> })?.content?.[0]?.text, "structured");
   const tool = adapter.decodeOutput({ type: "tool_use", sessionID: "oc-s1", part: { type: "tool", callID: "oc1", tool: "deepsonar-control_mark_job_done", state: { status: "running", input: { summary: "done" } } } }, state);

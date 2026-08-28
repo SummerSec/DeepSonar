@@ -530,7 +530,7 @@ function decodeOpenCode(line: Record<string, unknown>, state: AdapterRuntimeStat
   if (contextObservation.length > 0) return contextObservation;
   const type = String(line.type ?? line.event ?? "");
   rememberSession(line, state);
-  if (type === "session.created" || type === "session.started" || type === "run.started") {
+  if (type === "session.created" || type === "session.started" || type === "run.started" || type === "step_start") {
     state.sessionId = String(line.sessionID ?? line.session_id ?? line.id ?? "");
     return [{ type: "system", subtype: "init", session_id: state.sessionId }];
   }
@@ -655,8 +655,8 @@ function codexConfigArg(key: string, value: string): string {
 
 function sandboxCodex(host: RuntimeHost, context: AdapterStartContext, sessionId?: string): Promise<RuntimeProcess> {
   let command = sessionId
-    ? `codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox`
-    : "codex exec --json --dangerously-bypass-approvals-and-sandbox";
+    ? `codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
+    : "codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check";
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
   command += sessionId ? ` -- ${promptArg(context.input)}` : " -";
