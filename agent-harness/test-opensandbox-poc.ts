@@ -249,7 +249,9 @@ if (caseName === "k8s") {
     if (rendered.status !== 0) {
       throw new Error(`kubectl ${args.join(" ")} failed: ${rendered.stderr || rendered.stdout}`);
     }
-    return JSON.parse(rendered.stdout) as unknown;
+    const text = rendered.stdout.trim();
+    if (!text) return {};
+    return (text.startsWith("{") || text.startsWith("[")) ? JSON.parse(text) as unknown : { raw: text };
   };
   const k8s = await runOpenSandboxK8sPoc(client, kubectlJson, {
     image: runtimeImage,

@@ -172,7 +172,7 @@ async function deleteNamedJson(kubectl: KubectlJson, args: string[]): Promise<vo
   } catch {
     return;
   }
-  await kubectl(["delete", ...args, "-o", "json"]);
+  await kubectl(["delete", ...args, "-o", "name"]);
 }
 
 export async function runOpenSandboxK8sPoc(
@@ -262,9 +262,9 @@ export async function runOpenSandboxK8sPoc(
       if (remaining > 0) throw new Error(`OPENSANDBOX_POC_KATA_POD_LEFTOVER: ${remaining}`);
     }
   } finally {
-    await deleteNamedJson(kubectl, ["pod", EGRESS_PROBE_POD, "-n", OPENSANDBOX_K8S_NAMESPACE]);
-    await deleteNamedJson(kubectl, ["service", GATEWAY_PROBE_SERVICE, "-n", OPENSANDBOX_K8S_NAMESPACE]);
-    await deleteNamedJson(kubectl, ["service", DENY_PROBE_SERVICE, "-n", OPENSANDBOX_K8S_NAMESPACE]);
+    await deleteNamedJson(kubectl, ["pod", EGRESS_PROBE_POD, "-n", OPENSANDBOX_K8S_NAMESPACE]).catch(() => {});
+    await deleteNamedJson(kubectl, ["service", GATEWAY_PROBE_SERVICE, "-n", OPENSANDBOX_K8S_NAMESPACE]).catch(() => {});
+    await deleteNamedJson(kubectl, ["service", DENY_PROBE_SERVICE, "-n", OPENSANDBOX_K8S_NAMESPACE]).catch(() => {});
     await rm(staging, { recursive: true, force: true }).catch(() => {});
   }
 }
