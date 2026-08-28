@@ -188,15 +188,17 @@ export async function runOpenSandboxHostPoc(
     const envClean = env.exitCode === 0
       && !/OPEN[_-]?SANDBOX[_-]?API[_-]?KEY|OPENSANDBOX_SERVER_API_KEY/i.test(env.stdout)
       && (!input.apiKey || !env.stdout.includes(input.apiKey));
-    const incremental = await host.runAsync("sh -c 'read x; printf %s \"$x\"'", { cwd: "/workspace" });
+    const incremental = await host.runAsync("python3 -c 'import sys; sys.stdout.write(sys.stdin.readline()); sys.stdout.flush()'", { cwd: "/workspace" });
+    const incrementalCollect = collectText(incremental, 15_000, /steer/);
     await incremental.write("steer\n");
-    const incrementalOut = await collectText(incremental, 15_000);
+    const incrementalOut = await incrementalCollect;
     const incrementalOk = incrementalOut.text.includes("steer");
-    const pty = await host.runAsync("sh -c 'read x; printf %s \"$x\"'", { cwd: "/workspace", pty: true });
+    const pty = await host.runAsync("python3 -c 'import sys; sys.stdout.write(sys.stdin.readline()); sys.stdout.flush()'", { cwd: "/workspace", pty: true });
     if (!pty.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
+    const ptyCollect = collectText(pty, 15_000, /term/);
     await pty.resize(80, 24);
     await pty.write("term\n");
-    const ptyOut = await collectText(pty, 15_000);
+    const ptyOut = await ptyCollect;
     await pty.kill().catch(() => {});
     const ptyOk = ptyOut.text.includes("term");
     const term = await runner.openTerminal(handle, { cols: 80, rows: 24 });
