@@ -128,17 +128,17 @@ try {
     sandboxId = typeof job?.sandbox_id === "string" && job.sandbox_id ? job.sandbox_id : sandboxId;
     if (typeof job?.error === "string") jobError = job.error;
     if (sandboxId) provisioned = true;
-    if (sandboxId && !terminal) {
+    if (sandboxId && !terminal && await runner.isAlive({ sandboxId }).catch(() => false)) {
       terminal = await runner.openTerminal({ sandboxId }, { cols: 80, rows: 24 });
       void terminal.output[Symbol.asyncIterator]().next().catch(() => {});
     }
-    if (!cancelled && (sandboxId || lastStatus === "running")) {
+    if (terminal && !cancelled && (sandboxId || lastStatus === "running")) {
       const row = await lifecycle.cancelJob(jobId, "opensandbox-dispatch-poc");
       cancelled = Boolean(row);
     }
     if (["failed", "succeeded", "timeout", "orphan"].includes(lastStatus)) break;
     if (lastStatus === "cancelled" && provisioned) break;
-    await sleep(400);
+    await sleep(50);
   }
   for (let i = 0; i < 20; i++) {
     const leftovers = await runner.listResources({ jobId });
