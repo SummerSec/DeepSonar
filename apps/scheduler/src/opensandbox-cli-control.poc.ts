@@ -4,7 +4,9 @@
  * in Scheduler credentials; the sandbox only receives a job gateway token.
  * Mock LLM is not a substitute. Default: run every CLI that has a vendor key.
  */
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import postgres from "postgres";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
@@ -64,6 +66,13 @@ const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
 if (!databaseUrl || !apiKey || !runtimeImage) {
   console.error("TEST_DATABASE_URL, OPEN_SANDBOX_API_KEY, and OPEN_SANDBOX_POC_RUNTIME_IMAGE are required");
   process.exit(1);
+}
+
+const execFileP = promisify(execFile);
+try {
+  await execFileP("docker", ["info"], { timeout: 10_000 });
+} catch {
+  throw new Error("vendor CLI E2E needs host docker access for Gateway bind");
 }
 
 const adminUrl = new URL(databaseUrl);
