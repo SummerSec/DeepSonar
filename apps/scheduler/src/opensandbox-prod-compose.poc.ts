@@ -3,15 +3,13 @@
  * already-running OpenSandbox. Does not start a second server and does
  * not stop the Phase 2 `deepsonar-opensandbox` container.
  *
- * Phase 2 server is host-network + 127.0.0.1:8080. Compose extra_hosts
- * maps host.docker.internal to docker0, so this PoC proxies that
- * gateway address onto loopback without touching the live server.
+ * Postgres+scheduler use host network so they can reach loopback OpenSandbox
+ * and each other; this VM's compose bridge times out inter-container TCP.
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createServer, connect, type Server } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { networkInterfaces, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
@@ -53,30 +51,6 @@ function existingOpenSandboxRunning(): boolean {
   return inspected.status === 0 && inspected.stdout.trim() === "true";
 }
 
-function hostGatewayIp(): string {
-  const docker0 = networkInterfaces().docker0?.find((entry) => entry.family === "IPv4" && !entry.internal);
-  if (!docker0?.address) throw new Error("docker0 IPv4 is required to proxy host.docker.internal:8080");
-  return docker0.address;
-}
-
-function startHostGatewayProxy(listenIp: string): Promise<Server> {
-  const server = createServer((client) => {
-    const upstream = connect({ host: "127.0.0.1", port: 8080 });
-    const close = () => {
-      client.destroy();
-      upstream.destroy();
-    };
-    client.on("error", close);
-    upstream.on("error", close);
-    client.pipe(upstream);
-    upstream.pipe(client);
-  });
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(8080, listenIp, () => resolve(server));
-  });
-}
-
 if (!existingOpenSandboxRunning()) {
   throw new Error("Phase 2 deepsonar-opensandbox must stay running for prod-compose");
 }
@@ -88,7 +62,7 @@ writeFileSync(envFile, [
   "DEEPSONAR_VERSION=0.1.45-os-compose",
   "DEEPSONAR_ADMIN_TOKEN=poc-admin-token",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
-  "OPEN_SANDBOX_DOMAIN=host.docker.internal:8080",
+  "OPEN_SANDBOX_DOMAIN=127.0.0.1:8080",
   "OPEN_SANDBOX_PROTOCOL=http",
   `OPEN_SANDBOX_POC_MASTER_KEY=${masterKeyFile}`,
   `SCHEDULER_HOST_PORT=${schedulerPort}`,
@@ -98,8 +72,6 @@ writeFileSync(envFile, [
 ].join("\n"), { mode: 0o600 });
 
 const down = () => run([...composeArgs, "down", "-v", "--remove-orphans"], 180_000);
-const gatewayIp = hostGatewayIp();
-const proxy = await startHostGatewayProxy(gatewayIp);
 
 try {
   const build = run([...composeArgs, "up", "-d", "--build"], 1_200_000);
@@ -145,6 +117,5 @@ try {
   );
 } finally {
   down();
-  proxy.close();
   rmSync(dir, { recursive: true, force: true });
 }

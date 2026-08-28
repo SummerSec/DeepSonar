@@ -1,19 +1,18 @@
 # Production scheduler+web images attached to an already-running OpenSandbox.
-# Uses filesystem blobs so this smoke does not depend on Silo overlay networking.
-# host.docker.internal:8080 needs a host-gateway→loopback proxy when the Phase 2
-# server is bound to 127.0.0.1 (pnpm ci:smoke:opensandbox-prod-compose starts one).
+# Filesystem blobs avoid Silo. Postgres+scheduler use host network because this
+# VM's compose bridge times out inter-container TCP (same class as the Silo dial).
 #   OPEN_SANDBOX_API_KEY=... docker compose -f deploy/docker-compose.opensandbox.host.yml up -d --build
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    network_mode: host
     environment:
       POSTGRES_USER: deepsonar
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: deepsonar
-    ports:
-      - "127.0.0.1:${POSTGRES_BIND_PORT:-15432}:5432"
+      PGPORT: ${POSTGRES_BIND_PORT:-15432}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U deepsonar -d deepsonar"]
+      test: ["CMD-SHELL", "pg_isready -U deepsonar -d deepsonar -p ${POSTGRES_BIND_PORT:-15432}"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -23,15 +22,14 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     environment:
-      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_BIND_PORT:-15432}/deepsonar
       SCHEDULER_HOST: 0.0.0.0
-      SCHEDULER_PORT: 3100
+      SCHEDULER_PORT: ${SCHEDULER_HOST_PORT:-13100}
       AGENT_MODE: real
       SANDBOX_PROVIDER: opensandbox
-      OPEN_SANDBOX_DOMAIN: ${OPEN_SANDBOX_DOMAIN:-host.docker.internal:8080}
+      OPEN_SANDBOX_DOMAIN: ${OPEN_SANDBOX_DOMAIN:-127.0.0.1:8080}
       OPEN_SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
       OPEN_SANDBOX_USE_SERVER_PROXY: ${OPEN_SANDBOX_USE_SERVER_PROXY:-true}
@@ -42,8 +40,6 @@ services:
       DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-0.1.45-os-compose}
       BLOB_STORE: fs
       BLOB_DIR: /app/data/blobs
-    ports:
-      - "127.0.0.1:${SCHEDULER_HOST_PORT:-13100}:3100"
     volumes:
       - ${OPEN_SANDBOX_POC_MASTER_KEY:-./master.key}:/run/secrets/deepsonar_master_key:ro
       - scheduler_blobs:/app/data
@@ -51,7 +47,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.SCHEDULER_PORT+'/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -61,8 +57,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      SCHEDULER_URL: http://scheduler:3100
+      SCHEDULER_URL: http://host.docker.internal:${SCHEDULER_HOST_PORT:-13100}
     ports:
       - "127.0.0.1:${DEEPSONAR_WEB_PORT:-18082}:8080"
     depends_on:
