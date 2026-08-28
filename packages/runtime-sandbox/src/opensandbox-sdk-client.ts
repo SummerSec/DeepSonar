@@ -59,10 +59,10 @@ function ptyHeaders(connection: OpenSandboxConnection, extra?: Record<string, st
   return headers;
 }
 
-function commandWithEnv(command: string, env?: Record<string, string>): string {
+export function commandWithEnv(command: string, env?: Record<string, string>): string {
   if (!env || Object.keys(env).length === 0) return command;
   const assigns = Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ");
-  return `env ${assigns} ${command}`;
+  return `env ${assigns} sh -c ${shellQuote(command)}`;
 }
 
 function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenSandboxSession {

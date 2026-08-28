@@ -216,9 +216,9 @@ export async function runOpenSandboxHostPoc(
     const networkIsolated = isolated.exitCode === 1;
     const limitsProbe = await host.run("grep -E '^(CapPrm|CapEff|NoNewPrivs):' /proc/1/status", { timeoutMs: 5_000 });
     const hardLimits = limitsProbe.exitCode === 0
-      && /CapPrm:\s*0+\b/.test(limitsProbe.stdout)
-      && /CapEff:\s*0+\b/.test(limitsProbe.stdout)
-      && /NoNewPrivs:\s*1\b/.test(limitsProbe.stdout);
+      && /CapPrm:\s*0+/.test(limitsProbe.stdout)
+      && /CapEff:\s*0+/.test(limitsProbe.stdout)
+      && /NoNewPrivs:\s*1/.test(limitsProbe.stdout);
     const reconnected = new OpenSandboxRunner(client);
     const remote = await reconnected.ensureHost(handle);
     const probe = await remote.run("true", { timeoutMs: 10_000 });

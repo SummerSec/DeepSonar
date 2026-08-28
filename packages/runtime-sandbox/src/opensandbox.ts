@@ -346,11 +346,14 @@ export class OpenSandboxRunner implements SandboxRunner {
     const host = await this.ensureHost(handle);
     const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
     const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
-    const process = await host.runAsync("if command -v bash >/dev/null 2>&1; then exec bash -il; else exec /bin/sh -i; fi", {
-      cwd: "/workspace",
-      env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
-      pty: true,
-    });
+    const process = await host.runAsync(
+      `sh -c ${shellQuote("if command -v bash >/dev/null 2>&1; then exec bash -il; else exec /bin/sh -i; fi")}`,
+      {
+        cwd: "/workspace",
+        env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+        pty: true,
+      },
+    );
     if (!process.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
     let closed = false;
     const output = (async function* () {

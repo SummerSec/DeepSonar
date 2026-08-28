@@ -26,7 +26,8 @@ function fakeSession(id = "sbx-1"): OpenSandboxSession & { commands: string[]; f
       if (command === "true") return { exitCode: 0, stdout: "", stderr: "" };
       return { exitCode: 0, stdout: "", stderr: "" };
     },
-    async runAsync() {
+    async runAsync(command) {
+      commands.push(command);
       return {
         async write() {},
         async closeStdin() {},
@@ -172,6 +173,7 @@ test("OpenSandbox openTerminal reconnects through ensureHost", async () => {
   const runner = new OpenSandboxRunner(client);
   const terminal = await runner.openTerminal({ sandboxId: "sbx-1" }, { cols: 80, rows: 24 });
   assert.ok(terminal.id);
+  assert.match(client.session.commands.join("\n"), /sh -c .*bash -il/);
   await terminal.close();
 });
 
