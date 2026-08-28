@@ -1,5 +1,5 @@
 /**
- * Live proof that OpenSandbox workers submit semantics only via Job Platform API.
+ * Live proof that OpenSandbox workers submit Fact/Finding/Hub/done only via Job Platform API.
  * Uses the scheduler singleton runner + preparePlatformCapability so tokens
  * enter the sandbox at provision time (the dispatcher path), not host.run.
  * Real jobs use restricted (allow_egress=false) or egress — never none.
