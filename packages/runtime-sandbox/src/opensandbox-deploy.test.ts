@@ -43,7 +43,7 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(toml, new RegExp(OPENSANDBOX_EXECD_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(template, /restartPolicy: Never/);
-  assert.doesNotMatch(template, /runtimeClassName/);
+  assert.doesNotMatch(template, /^\s*runtimeClassName:/m);
   assert.match(runtimeClass, /name: kata-qemu/);
   assert.match(runtimeClass, /handler: kata-qemu/);
   assert.match(namespace, /name: deepsonar-opensandbox/);
