@@ -91,6 +91,12 @@ test("fake mode and explicit skip do not inspect the host", async () => {
   assert.match(readFileSync(new URL("./readiness.ts", import.meta.url), "utf8"), /executionMode === "fake"/);
 });
 
+test("OpenSandbox dispatch does not require a scheduler-local docker inspect", () => {
+  const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(dispatcher, /shouldInspectLocalRuntimeImage\(\)/);
+  assert.match(dispatcher, /if \(shouldInspectLocalRuntimeImage\(\)\) \{\s*await assertRuntimeImageAvailable\(runtimeImage\);/s);
+});
+
 test("HTTP mapping exposes digest, immutable ref and prepare entry", () => {
   const error = new RuntimeImageNotLocalError({
     image_key: "deepsonar-audit",
