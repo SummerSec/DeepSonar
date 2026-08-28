@@ -91,7 +91,7 @@ be registered or admitted:
 | CLI | 归档来源/格式 | 明确边界 |
 | --- | --- | --- |
 | `claude-code` | 本次沙箱 `HOME/.claude/projects` 下匹配 `sessionId` 的 JSONL（含主会话与 `subagents`） | 发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
-| `codex` | `CODEX_HOME/sessions`（未设置时 `HOME/.codex/sessions`）的 JSONL | 仅按本次 `sessionId` 发现；发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
+| `codex` | `CODEX_HOME/sessions`（未设置时 `HOME/.codex/sessions`）下按本次 `sessionId` 匹配的 `YYYY/MM/DD/rollout-*.jsonl` | 仅按本次 `sessionId` 发现；发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
 | `open-code` | `opencode export <sessionId>` vendor export | stdout 超过 32 MiB、导出失败或空结果时显式 `captureError` |
 | `pi` | runtime 返回且位于 `/workspace/.deepsonar-home/.pi/agent/` 的受治理 `sessionFile` JSONL | 缺失/路径越界/读取错误或超过 32 MiB 时显式 `captureError` |
 | `dsh` | `/workspace/.deepsonar-home/.dsh/sessions/<project>/<sessionId>/session.jsonl` JSONL | 非法或多项目匹配、发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
