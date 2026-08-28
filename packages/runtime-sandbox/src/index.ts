@@ -155,6 +155,14 @@ export {
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";
 export {
+  OPENSANDBOX_K8S_NAMESPACE,
+  OPENSANDBOX_KATA_RUNTIME_CLASS,
+  findKataWorkload,
+  probeKataCluster,
+  runOpenSandboxK8sPoc,
+  shouldRunOpenSandboxK8sPoc,
+} from "./opensandbox-k8s-poc.js";
+export {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,
   OPENSANDBOX_PIN_SCHEMA,

@@ -21,6 +21,8 @@ import {
   runOpenSandboxInfrastructurePoc,
   runOpenSandboxOfficialImagesPoc,
   runOpenSandboxRestrictedPoc,
+  runOpenSandboxK8sPoc,
+  shouldRunOpenSandboxK8sPoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
 import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
@@ -56,8 +58,8 @@ const caseName = (() => {
   const idx = process.argv.indexOf("--case");
   return idx >= 0 ? (process.argv[idx + 1] ?? "") : "all";
 })();
-if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config") {
-  throw new Error("OpenSandbox PoC --case must be all, arch, images, or prod-config");
+if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config" && caseName !== "k8s") {
+  throw new Error("OpenSandbox PoC --case must be all, arch, images, prod-config, or k8s");
 }
 
 async function runArchCase(): Promise<string> {
@@ -141,6 +143,33 @@ if (caseName === "images") {
 if (caseName === "prod-config") {
   const prodSummary = runProdConfigCase();
   console.log(`OK: OpenSandbox production overlay ${prodSummary}`);
+  process.exit(0);
+}
+
+if (caseName === "k8s") {
+  if (!shouldRunOpenSandboxK8sPoc()) {
+    console.log("skip: OpenSandbox Kata PoC (set OPEN_SANDBOX_POC_K8S=1 with kubectl and RuntimeClass=kata-qemu)");
+    process.exit(0);
+  }
+  const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+  if (!runtimeImage) {
+    throw new Error("OPEN_SANDBOX_POC_RUNTIME_IMAGE is required for Kata live proof");
+  }
+  const kubectlJson = async (args: string[]) => {
+    const rendered = spawnSync("kubectl", args, { encoding: "utf8" });
+    if (rendered.status !== 0) {
+      throw new Error(`kubectl ${args.join(" ")} failed: ${rendered.stderr || rendered.stdout}`);
+    }
+    return JSON.parse(rendered.stdout) as unknown;
+  };
+  const k8s = await runOpenSandboxK8sPoc(client, kubectlJson, {
+    image: runtimeImage,
+    expectedContract: "deepsonar.runtime.contract/v1",
+  });
+  if (!k8s.kata || !k8s.isolated || !k8s.hostEscapeBlocked || k8s.leftovers !== 0 || k8s.leftoverPods !== 0) {
+    throw new Error(`OpenSandbox Kata PoC unexpected result: ${JSON.stringify(k8s)}`);
+  }
+  console.log(`OK: OpenSandbox Kata live kata=true isolated=${k8s.isolated} hostEscapeBlocked=${k8s.hostEscapeBlocked} leftovers=0`);
   process.exit(0);
 }
 

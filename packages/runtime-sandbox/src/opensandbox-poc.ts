@@ -227,7 +227,7 @@ async function collectText(
   return { text, exitCode };
 }
 
-const NETWORK_ISOLATION_SCRIPT = `
+export const NETWORK_ISOLATION_SCRIPT = `
 import socket, sys
 def tcp(host, port, family=socket.AF_INET):
     s = socket.socket(family, socket.SOCK_STREAM)
