@@ -8,7 +8,9 @@ import {
   runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
+  runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
+  runOpenSandboxRestrictedPoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
 
@@ -66,11 +68,12 @@ if (runtimeImage) {
   if (
     !host.fileOk || !host.reservedRejected || !host.symlinkRejected || !host.oversizedRejected
     || !host.pathEscapeRejected || !host.envClean || !host.incrementalOk || !host.ptyOk
-    || !host.terminalOk || !host.networkIsolated || !host.hardLimits || !host.reconnected
+    || !host.terminalOk || !host.tabOk || !host.interruptOk || !host.closedOnDestroy
+    || !host.networkIsolated || !host.hardLimits || !host.reconnected
   ) {
     throw new Error(`OpenSandbox host PoC unexpected result: ${JSON.stringify(host)}`);
   }
-  hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} isolated=${host.networkIsolated} limits=${host.hardLimits} clis=${JSON.stringify(host.clis)}`;
+  hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} isolated=${host.networkIsolated} limits=${host.hardLimits} tab=${host.tabOk} interrupt=${host.interruptOk} closed=${host.closedOnDestroy} clis=${JSON.stringify(host.clis)}`;
 }
 let assetsSummary = "skipped";
 if (runtimeImage) {
@@ -100,4 +103,18 @@ if (runtimeImage) {
     }
   }
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary}`);
+let restrictedSummary = "skipped";
+if (runtimeImage) {
+  const restricted = await runOpenSandboxRestrictedPoc(client, { image: runtimeImage });
+  if (!restricted.isolated) {
+    throw new Error(`OpenSandbox restricted PoC unexpected result: ${JSON.stringify(restricted)}`);
+  }
+  restrictedSummary = `isolated=${restricted.isolated}`;
+}
+const extraImages = (process.env.OPEN_SANDBOX_POC_EXTRA_IMAGES ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+const extraSummaries: string[] = [];
+for (const image of extraImages) {
+  const extra = await runOpenSandboxImageContractPoc(client, { image });
+  extraSummaries.push(`${image.slice(-12)} provisionMs=${extra.provisionMs} clis=${JSON.stringify(extra.clis)}`);
+}
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} extra=${extraSummaries.join(";") || "skipped"}`);

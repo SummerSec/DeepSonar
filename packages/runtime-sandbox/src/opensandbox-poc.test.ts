@@ -5,6 +5,8 @@ import {
   OPENSANDBOX_POC_IMAGE,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
+  runOpenSandboxImageContractPoc,
+  runOpenSandboxRestrictedPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
   runOpenSandboxInfrastructurePoc,
@@ -140,7 +142,7 @@ function hostSession(): OpenSandboxSession {
         async kill() {},
         async resize() {},
         async *[Symbol.asyncIterator]() {
-          yield { type: "stdout" as const, chunk: "steerterm-ok" };
+          yield { type: "stdout" as const, chunk: "steerterm-ok hello-complete.txt ^C" };
           yield { type: "exit" as const, exitCode: 0 };
         },
       };
@@ -182,10 +184,52 @@ test("OpenSandbox host PoC covers files, incremental stdin, PTY, and reconnect",
   assert.equal(result.incrementalOk, true);
   assert.equal(result.ptyOk, true);
   assert.equal(result.terminalOk, true);
+  assert.equal(result.tabOk, true);
+  assert.equal(result.interruptOk, true);
+  assert.equal(result.closedOnDestroy, true);
   assert.equal(result.networkIsolated, true);
   assert.equal(result.hardLimits, true);
   assert.equal(result.reconnected, true);
   assert.equal(result.leftovers, 0);
+});
+
+test("OpenSandbox restricted PoC fail-closes non-gateway egress", async () => {
+  const session = hostSession();
+  const created: OpenSandboxCreateInput[] = [];
+  const client: OpenSandboxClient = {
+    async create(input) {
+      created.push(input);
+      return session;
+    },
+    async connect(id) {
+      return id === session.id ? session : undefined;
+    },
+    async list() {
+      return [];
+    },
+  };
+  const result = await runOpenSandboxRestrictedPoc(client, { image: "img@sha256:" + "a".repeat(64) });
+  assert.deepEqual(result, { isolated: true, leftovers: 0 });
+  assert.deepEqual(created[0]?.networkPolicy, {
+    defaultAction: "deny",
+    egress: [{ action: "allow", target: "gateway.invalid" }],
+  });
+});
+
+test("OpenSandbox image contract PoC reprovisions and reports leftovers", async () => {
+  const result = await runOpenSandboxImageContractPoc({
+    async create() {
+      return hostSession();
+    },
+    async connect() {
+      return hostSession();
+    },
+    async list() {
+      return [];
+    },
+  }, { image: "img@sha256:" + "a".repeat(64) });
+  assert.equal(result.leftovers, 0);
+  assert.ok(result.provisionMs >= 0);
 });
 
 test("OpenSandbox assets PoC mounts Scheduler volume read-only and reads the seed", async () => {

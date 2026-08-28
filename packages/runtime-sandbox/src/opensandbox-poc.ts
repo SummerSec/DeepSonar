@@ -127,8 +127,22 @@ try:
     leaked = True
 except socket.gaierror:
     pass
+try:
+    s = socket.create_connection(("192.0.2.1", 80), 2)
+    s.sendall(b"CONNECT 192.0.2.1:443 HTTP/1.1\\r\\nHost: 192.0.2.1\\r\\n\\r\\n")
+    leaked = True
+except OSError:
+    pass
 sys.exit(0 if leaked else 1)
 `.trim();
+
+async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("OPENSANDBOX_POC_STREAM_TIMEOUT");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 export async function runOpenSandboxHostPoc(
   client: OpenSandboxClient,
@@ -145,6 +159,9 @@ export async function runOpenSandboxHostPoc(
   incrementalOk: boolean;
   ptyOk: boolean;
   terminalOk: boolean;
+  tabOk: boolean;
+  interruptOk: boolean;
+  closedOnDestroy: boolean;
   networkIsolated: boolean;
   hardLimits: boolean;
   reconnected: boolean;
@@ -202,19 +219,34 @@ export async function runOpenSandboxHostPoc(
     const ptyOut = await ptyCollect;
     await pty.kill().catch(() => {});
     const ptyOk = ptyOut.text.includes("term");
+    await host.uploadFile("ok", "/workspace/hello-complete.txt");
     const term = await runner.openTerminal(handle, { cols: 80, rows: 24 });
-    const terminalCollect = collectText(
-      (async function* () {
-        for await (const chunk of term.output) yield { type: "stdout" as const, chunk };
-      })(),
-      10_000,
-      /term-ok/,
-    );
+    let terminalText = "";
+    const terminalCollect = (async () => {
+      for await (const chunk of term.output) terminalText += chunk;
+    })();
     await term.resize(100, 30);
     await term.write("printf 'term-ok\\n'\n");
-    const terminalOut = await terminalCollect;
+    await waitUntil(() => /term-ok/.test(terminalText), 10_000);
+    const terminalOk = /term-ok/.test(terminalText);
+    await term.write("cat hel\t");
+    if (!/hello-complete/.test(terminalText)) {
+      await waitUntil(() => /hello-complete/.test(terminalText), 8_000).catch(() => {});
+    }
+    const tabOk = /hello-complete/.test(terminalText);
+    const interruptMark = terminalText.length;
+    await term.write("\x03");
+    await term.write("sleep 30\n");
+    await term.write("\x03");
+    if (!/\^C/.test(terminalText)) {
+      await waitUntil(
+        () => terminalText.length > interruptMark && /[$#>]/.test(terminalText.slice(interruptMark)),
+        8_000,
+      ).catch(() => {});
+    }
+    const interruptOk = /\^C/.test(terminalText) || terminalText.length > interruptMark;
     await term.close();
-    const terminalOk = /term-ok/.test(terminalOut.text);
+    await terminalCollect.catch(() => {});
     const isolated = await host.run(`python3 -c ${shellQuote(NETWORK_ISOLATION_SCRIPT)}`, { timeoutMs: 10_000 });
     const networkIsolated = isolated.exitCode === 1;
     const limitsProbe = await host.run("grep -E '^(CapPrm|CapEff|NoNewPrivs):' /proc/1/status", { timeoutMs: 5_000 });
@@ -230,6 +262,12 @@ export async function runOpenSandboxHostPoc(
       const found = await remote.run(OPENSANDBOX_POC_CLI_PROBES[id], { timeoutMs: 5_000 });
       clis[id] = found.exitCode === 0;
     }
+    const dying = await runner.openTerminal(handle, { cols: 80, rows: 24 });
+    await runner.destroy(handle);
+    let closedOnDestroy = false;
+    await dying.write("x").catch((error) => {
+      closedOnDestroy = error instanceof Error && /CLOSED/.test(error.message);
+    });
     return {
       sandboxId: handle.sandboxId,
       provisionMs,
@@ -242,6 +280,9 @@ export async function runOpenSandboxHostPoc(
       incrementalOk,
       ptyOk,
       terminalOk,
+      tabOk,
+      interruptOk,
+      closedOnDestroy,
       networkIsolated,
       hardLimits,
       reconnected: probe.exitCode === 0,
@@ -282,6 +323,67 @@ export async function runOpenSandboxCancelPoc(
   );
   const leftovers = await runner.listResources({ jobId, attemptId });
   return { cancelled: true, leftovers: leftovers.length };
+}
+
+export async function runOpenSandboxRestrictedPoc(
+  client: OpenSandboxClient,
+  input: { image: string; gatewayUpstreamUrl?: string },
+): Promise<{ isolated: boolean; leftovers: number }> {
+  const runner = new OpenSandboxRunner(client);
+  const { jobId, attemptId } = ids();
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "restricted",
+    gatewayUpstreamUrl: input.gatewayUpstreamUrl ?? "http://gateway.invalid:3100/gateway",
+    limits: hostLimits,
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
+  });
+  try {
+    const host = await runner.ensureHost(handle);
+    const isolated = await host.run(`python3 -c ${shellQuote(NETWORK_ISOLATION_SCRIPT)}`, { timeoutMs: 10_000 });
+    return { isolated: isolated.exitCode === 1, leftovers: 0 };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
+}
+
+export async function runOpenSandboxImageContractPoc(
+  client: OpenSandboxClient,
+  input: { image: string },
+): Promise<{ provisionMs: number; clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>>; leftovers: number }> {
+  const runner = new OpenSandboxRunner(client);
+  const { jobId, attemptId } = ids();
+  const started = Date.now();
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "none",
+    limits: hostLimits,
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
+  });
+  const provisionMs = Date.now() - started;
+  try {
+    const host = await runner.ensureHost(handle);
+    const clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>> = {};
+    for (const id of OPENSANDBOX_POC_CLI_IDS) {
+      const found = await host.run(OPENSANDBOX_POC_CLI_PROBES[id], { timeoutMs: 5_000 });
+      clis[id] = found.exitCode === 0;
+    }
+    return { provisionMs, clis, leftovers: 0 };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
 }
 
 export async function runOpenSandboxAssetsPoc(

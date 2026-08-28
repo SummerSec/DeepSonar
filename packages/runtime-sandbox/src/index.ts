@@ -138,7 +138,9 @@ export {
   runOpenSandboxCancelPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
+  runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
+  runOpenSandboxRestrictedPoc,
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";
 export {
