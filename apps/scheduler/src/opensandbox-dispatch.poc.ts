@@ -8,13 +8,15 @@
  * omits pids and shared assets use KubernetesSharedAssetsVolumeManager.
  */
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import postgres from "postgres";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   freezeAgentCliRuntime,
+  gatewayServiceManifest,
   shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
 
@@ -88,6 +90,12 @@ try {
   const { sql, migrate } = dbModule;
   endSql = () => sql.end({ timeout: 5 });
   await migrate();
+  if (kubernetes) {
+    const svcPath = path.join(blobDir, "gateway-service.yaml");
+    await writeFile(svcPath, gatewayServiceManifest());
+    const applied = spawnSync("kubectl", ["apply", "-f", svcPath, "-o", "name"], { encoding: "utf8" });
+    if (applied.status !== 0) throw new Error(`gateway Service apply failed: ${applied.stderr || applied.stdout}`);
+  }
 
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox dispatch')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox dispatch')`;
@@ -176,6 +184,9 @@ try {
     for (const item of leftovers) await runner!.destroy({ sandboxId: item.resourceId }).catch(() => {});
   }).catch(() => {});
   if (assets) await assets.removeForJob(jobId).catch(() => {});
+  if (kubernetes) {
+    spawnSync("kubectl", ["delete", "service", "deepsonar-gateway-proxy", "-n", "deepsonar-opensandbox", "--ignore-not-found", "-o", "name"], { encoding: "utf8" });
+  }
   if (endSql) await endSql().catch(() => {});
   if (blobDir) await rm(blobDir, { recursive: true, force: true }).catch(() => {});
   if (databaseCreated) {

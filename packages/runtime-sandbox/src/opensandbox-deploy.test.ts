@@ -171,10 +171,13 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(harness, /envClean/);
   assert.match(harness, /docker-compose.real.yml/);
   const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-poc.ts"), "utf8");
+  const k8sGateway = readFileSync(join(root, "packages/runtime-sandbox/src/kubernetes-gateway.ts"), "utf8");
+  const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
-  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
-  assert.match(k8sPoc, /\/etc\/hosts/);
+  assert.match(k8sPoc, /bindGatewayProxyToKubernetesService/);
+  assert.match(k8sGateway, /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
+  assert.match(adapter, /\/etc\/hosts/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_DENY_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);
@@ -229,6 +232,7 @@ test("main barrel keeps Agentbox on a lazy subpath so OpenSandbox does not load 
   assert.match(runtime, /config\.runtime\.provider === ["']opensandbox["']/);
   assert.match(runtime, /kubernetesResources: config\.runtime\.openSandbox\.kubernetes/);
   assert.match(runtime, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(runtime, /bindGatewayProxyToKubernetesService/);
   const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
   assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
 });

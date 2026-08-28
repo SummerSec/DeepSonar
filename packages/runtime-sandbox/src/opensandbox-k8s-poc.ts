@@ -9,10 +9,13 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { bindGatewayProxyToKubernetesService } from "./kubernetes-gateway.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import { NETWORK_ISOLATION_SCRIPT, OPENSANDBOX_POC_CONTRACT, OPENSANDBOX_POC_IMAGE } from "./opensandbox-poc.js";
 import { readAgentSandboxCrd } from "./opensandbox-gvisor-poc.js";
 import { shellQuote } from "./runtime-host.js";
+
+export { readServiceClusterIP } from "./kubernetes-gateway.js";
 
 export const OPENSANDBOX_K8S_NAMESPACE = "deepsonar-opensandbox";
 export const OPENSANDBOX_KATA_RUNTIME_CLASS = "kata-qemu";
@@ -127,15 +130,6 @@ export function readKataClusterProbe(resources: {
   return { runtimeClass, namespace, quota };
 }
 
-export function readServiceClusterIP(service: unknown): string {
-  const ip = service && typeof service === "object" && "spec" in service
-    ? String((service as { spec?: { clusterIP?: unknown } }).spec?.clusterIP ?? "")
-    : "";
-  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip) || ip === "None") {
-    throw new Error("OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP");
-  }
-  return ip;
-}
 
 export function findKataWorkload(pods: unknown, jobId: string): { name: string; runtimeClassName: string } {
   const items = pods && typeof pods === "object" && Array.isArray((pods as { items?: unknown }).items)
@@ -220,7 +214,17 @@ export async function runOpenSandboxK8sPoc(
   }
   try {
     await waitForEgressProbe(kubectl);
-    const runner = new OpenSandboxRunner(client);
+    const runner = new OpenSandboxRunner(client, {
+      bind: (bindInput) => bindGatewayProxyToKubernetesService({
+        ...bindInput,
+        namespace: OPENSANDBOX_K8S_NAMESPACE,
+        kubectl: async (args) => {
+          const value = await kubectl(args);
+          if (value && typeof value === "object" && "raw" in value) return String((value as { raw?: unknown }).raw ?? "");
+          return JSON.stringify(value ?? {});
+        },
+      }),
+    });
     const jobId = randomUUID();
     const attemptId = randomUUID();
     const handle = await runner.provision({
@@ -241,13 +245,6 @@ export async function runOpenSandboxK8sPoc(
       const host = await runner.ensureHost(handle);
       const isolated = await host.run(`python3 -c ${shellQuote(NETWORK_ISOLATION_SCRIPT)}`, { timeoutMs: 10_000 });
       if (isolated.exitCode !== 1) throw new Error("OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED");
-      const gatewayService = await kubectl(["get", "service", GATEWAY_PROBE_SERVICE, "-n", OPENSANDBOX_K8S_NAMESPACE, "-o", "json"]);
-      const gatewayIp = readServiceClusterIP(gatewayService);
-      const hosts = await host.run(
-        `grep -F ${shellQuote(GATEWAY_PROBE_SERVICE)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(gatewayIp)} ${shellQuote(GATEWAY_PROBE_SERVICE)} >> /etc/hosts`,
-        { timeoutMs: 5_000 },
-      );
-      if (hosts.exitCode !== 0) throw new Error("OPENSANDBOX_POC_KATA_GATEWAY_HOSTS");
       const allowed = await host.run(`python3 -c ${shellQuote(KATA_GATEWAY_ALLOW_SCRIPT)}`, { timeoutMs: 15_000 });
       if (allowed.exitCode !== 0) {
         throw new Error(`OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED: ${allowed.stderr.trim() || allowed.stdout.trim()}`);

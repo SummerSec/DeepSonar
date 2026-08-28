@@ -196,13 +196,13 @@ test("OpenSandbox restricted provision binds the Gateway hostname into /etc/host
   )));
 });
 
-test("OpenSandbox Kubernetes restricted provision does not call the Docker Gateway binder", async () => {
+test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP", async () => {
   const client = fakeClient();
   let bound = 0;
   const runner = new OpenSandboxRunner(client, {
     bind: async () => {
       bound += 1;
-      return { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" };
+      return { hostname: "deepsonar-gateway-proxy", ip: "10.43.0.10" };
     },
   }, { kubernetesResources: true });
   await runner.provision({
@@ -214,8 +214,10 @@ test("OpenSandbox Kubernetes restricted provision does not call the Docker Gatew
     limits,
     expectedContract: "deepsonar.runtime/v1",
   });
-  assert.equal(bound, 0);
-  assert.ok(!client.session.commands.some((command) => command.includes("172.19.0.9")));
+  assert.equal(bound, 1);
+  assert.ok(client.session.commands.some((command) => (
+    command.includes("deepsonar-gateway-proxy") && command.includes("10.43.0.10") && command.includes("/etc/hosts")
+  )));
 });
 
 test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {

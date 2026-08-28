@@ -4,6 +4,7 @@ import {
   NoopRunner,
   NoopSharedAssetsVolumeManager,
   OpenSandboxRunner,
+  bindGatewayProxyToKubernetesService,
   bindGatewayProxyToOpenSandboxNetwork,
   createSdkOpenSandboxClient,
   readOpenSandboxPin,
@@ -38,7 +39,11 @@ async function createRealRunner(): Promise<SandboxRunner> {
       protocol: config.runtime.openSandbox.protocol,
       useServerProxy: config.runtime.openSandbox.useServerProxy,
       pin,
-    }), { bind: bindGatewayProxyToOpenSandboxNetwork }, {
+    }), {
+      bind: config.runtime.openSandbox.kubernetes
+        ? bindGatewayProxyToKubernetesService
+        : bindGatewayProxyToOpenSandboxNetwork,
+    }, {
       kubernetesResources: config.runtime.openSandbox.kubernetes,
     });
   }

@@ -218,6 +218,11 @@ export {
   shouldRemoveGatewayLeftover,
 } from "./runtime-gateway.js";
 export {
+  bindGatewayProxyToKubernetesService,
+  gatewayServiceManifest,
+  readServiceClusterIP,
+} from "./kubernetes-gateway.js";
+export {
   DEEPSONAR_GATEWAY_PROXY_HOST,
   HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,

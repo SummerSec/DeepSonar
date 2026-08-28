@@ -322,8 +322,7 @@ export class OpenSandboxRunner implements SandboxRunner {
           throw new RuntimeImageContractError("tool manifest sha256 mismatch");
         }
       }
-      const kubernetes = input.kubernetesResources ?? this.options.kubernetesResources;
-      if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl && !kubernetes) {
+      if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl) {
         const bind = await this.gateway.bind({
           sandboxId: session.id,
           upstreamUrl: input.gatewayUpstreamUrl,

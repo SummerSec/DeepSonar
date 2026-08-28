@@ -199,6 +199,7 @@ test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.
   assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
   assert.match(source, /kubernetes \? 0\.3 : 1/);
   assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /gatewayServiceManifest/);
   assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
 });
 
