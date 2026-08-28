@@ -6,6 +6,7 @@ import {
   readOpenSandboxPin,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
+  runOpenSandboxCliLaunchPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
   runOpenSandboxImageContractPoc,
@@ -111,10 +112,19 @@ if (runtimeImage) {
   }
   restrictedSummary = `isolated=${restricted.isolated}`;
 }
+let cliSummary = "skipped";
+if (runtimeImage) {
+  const launched = await runOpenSandboxCliLaunchPoc(client, { image: runtimeImage });
+  const failed = Object.entries(launched).filter(([, item]) => !item.started || item.notFound || !item.stdinClosed);
+  if (failed.length > 0) {
+    throw new Error(`OpenSandbox CLI launch PoC unexpected result: ${JSON.stringify(launched)}`);
+  }
+  cliSummary = JSON.stringify(launched);
+}
 const extraImages = (process.env.OPEN_SANDBOX_POC_EXTRA_IMAGES ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 const extraSummaries: string[] = [];
 for (const image of extraImages) {
   const extra = await runOpenSandboxImageContractPoc(client, { image });
   extraSummaries.push(`${image.slice(-12)} provisionMs=${extra.provisionMs} clis=${JSON.stringify(extra.clis)}`);
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} extra=${extraSummaries.join(";") || "skipped"}`);
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} cli=${cliSummary} extra=${extraSummaries.join(";") || "skipped"}`);

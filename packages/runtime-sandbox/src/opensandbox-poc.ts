@@ -6,12 +6,14 @@ import { randomUUID } from "node:crypto";
 import { SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
+import { AGENT_CLI_RUNTIME_ADAPTERS, type AgentCliId } from "./runtime-adapters.js";
 import { shellQuote } from "./runtime-host.js";
 
 export const OPENSANDBOX_POC_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
 export const OPENSANDBOX_POC_CONTRACT = "deepsonar.runtime.contract/v1";
 export const OPENSANDBOX_POC_CLI_IDS = ["claude", "codex", "opencode", "pi", "dsh"] as const;
+export const OPENSANDBOX_POC_ADAPTER_IDS = ["claude-code", "codex", "open-code", "pi", "dsh"] as const satisfies readonly AgentCliId[];
 const OPENSANDBOX_POC_CLI_PROBES: Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], string> = {
   claude: "command -v claude",
   codex: "command -v codex",
@@ -377,6 +379,78 @@ export async function runOpenSandboxImageContractPoc(
       clis[id] = found.exitCode === 0;
     }
     return { provisionMs, clis, leftovers: 0 };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
+}
+
+export async function runOpenSandboxCliLaunchPoc(
+  client: OpenSandboxClient,
+  input: { image: string },
+): Promise<Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], { started: boolean; notFound: boolean; stdinClosed: boolean }>> {
+  const runner = new OpenSandboxRunner(client);
+  const { jobId, attemptId } = ids();
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "none",
+    limits: hostLimits,
+    expectedContract: OPENSANDBOX_POC_CONTRACT,
+  });
+  try {
+    const host = await runner.ensureHost(handle);
+    await host.run(
+      "mkdir -p /workspace/.deepsonar /workspace/.deepsonar-home/.pi/agent /workspace/.opencode && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json",
+      { timeoutMs: 5_000 },
+    );
+    const launched = {} as Record<(typeof OPENSANDBOX_POC_ADAPTER_IDS)[number], { started: boolean; notFound: boolean; stdinClosed: boolean }>;
+    for (const id of OPENSANDBOX_POC_ADAPTER_IDS) {
+      const adapter = AGENT_CLI_RUNTIME_ADAPTERS[id];
+      const context = {
+        host,
+        env: {},
+        cwd: "/workspace",
+        model: "dummy",
+        input: "ping",
+        mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+        dshProvider: { provider: "dummy", model: "dummy", config: { providers: { dummy: { type: "dummy" } } } },
+      };
+      await adapter.materialize?.(context);
+      const process = await adapter.start(context);
+      const state = {
+        model: "dummy",
+        modelProvider: "dummy",
+        cwd: "/workspace",
+        contextIdentity: {
+          context_id: "poc162",
+          context_revision: 0,
+          adapter_id: id,
+          adapter_version: adapter.version,
+          runtime_identity: "poc",
+          transform_chain_digest: "0",
+        },
+      };
+      let stdinClosed = true;
+      const payload = adapter.encodeInput("ping", state);
+      if (payload) await process.write(payload).catch(() => { stdinClosed = false; });
+      await process.closeStdin().catch(() => { stdinClosed = false; });
+      const out = await collectText(process, 12_000).catch(async () => {
+        await process.kill().catch(() => {});
+        return { text: "" };
+      });
+      await process.kill().catch(() => {});
+      launched[id] = {
+        started: true,
+        notFound: /not found|No such file|command not found/i.test(out.text),
+        stdinClosed,
+      };
+    }
+    return launched;
   } finally {
     await runner.destroy(handle).catch(() => {});
     const leftovers = await runner.listResources({ jobId, attemptId });

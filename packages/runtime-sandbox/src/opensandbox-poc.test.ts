@@ -5,6 +5,7 @@ import {
   OPENSANDBOX_POC_IMAGE,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
+  runOpenSandboxCliLaunchPoc,
   runOpenSandboxImageContractPoc,
   runOpenSandboxRestrictedPoc,
   runOpenSandboxContractFailPoc,
@@ -230,6 +231,25 @@ test("OpenSandbox image contract PoC reprovisions and reports leftovers", async 
   }, { image: "img@sha256:" + "a".repeat(64) });
   assert.equal(result.leftovers, 0);
   assert.ok(result.provisionMs >= 0);
+});
+
+test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async () => {
+  const result = await runOpenSandboxCliLaunchPoc({
+    async create() {
+      return hostSession();
+    },
+    async connect() {
+      return hostSession();
+    },
+    async list() {
+      return [];
+    },
+  }, { image: "img@sha256:" + "a".repeat(64) });
+  for (const id of ["claude-code", "codex", "open-code", "pi", "dsh"] as const) {
+    assert.equal(result[id].started, true);
+    assert.equal(result[id].notFound, false);
+    assert.equal(result[id].stdinClosed, true);
+  }
 });
 
 test("OpenSandbox assets PoC mounts Scheduler volume read-only and reads the seed", async () => {
