@@ -110,10 +110,16 @@ test("OpenSandbox adapter does not import Agentbox SDK types", () => {
   const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
   const shared = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-shared.ts"), "utf8");
   const agent = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-agent.ts"), "utf8");
+  const gateway = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-gateway.ts"), "utf8");
+  const docker = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-docker.ts"), "utf8");
   assert.doesNotMatch(adapter, /from ["']\.\/agentbox\.js["']/);
   assert.doesNotMatch(adapter, /from ["']agentbox-sdk["']/);
   assert.doesNotMatch(agent, /from ["']\.\/agentbox\.js["']/);
   assert.doesNotMatch(agent, /from ["']agentbox-sdk["']/);
+  assert.doesNotMatch(gateway, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(gateway, /from ["']agentbox-sdk["']/);
+  assert.doesNotMatch(docker, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(docker, /from ["']agentbox-sdk["']/);
   assert.match(adapter, /from ["']\.\/runtime-shared\.js["']/);
   assert.match(agent, /export async function runRealAgent/);
   assert.match(shared, /export const SHARED_ASSETS_MOUNT_PATH/);

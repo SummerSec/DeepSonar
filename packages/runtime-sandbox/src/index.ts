@@ -178,26 +178,30 @@ export {
   AgentboxRunner,
   createAgentboxRuntimeHost,
   wrapAgentboxProcess,
-  cleanupUnhealthyManagedGateway,
+  assertSharedAssetsContainerMount,
+  sharedAssetsVolumeBinds,
+} from "./agentbox.js";
+export {
   CONTAINER_REMOVE_MAX_ATTEMPTS,
   CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
   CONTAINER_REMOVE_TIMEOUT_MS,
-  DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
   forceRemoveContainer,
-  gatewayCreateTimeoutMs,
-  gatewayProxyReuseAction,
   listDeepSonarContainers,
   parseDeepSonarContainerRows,
-  bindGatewayProxyToOpenSandboxNetwork,
-  preheatManagedGateway,
   removeContainerWithRetry,
-  resetManagedGatewayStateForTests,
-  shouldRemoveGatewayLeftover,
-  assertSharedAssetsContainerMount,
   isDeepsonarGatewayNetwork,
   isDeepsonarRestrictedNetwork,
-  sharedAssetsVolumeBinds,
-} from "./agentbox.js";
+} from "./runtime-docker.js";
+export {
+  cleanupUnhealthyManagedGateway,
+  DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
+  gatewayCreateTimeoutMs,
+  gatewayProxyReuseAction,
+  bindGatewayProxyToOpenSandboxNetwork,
+  preheatManagedGateway,
+  resetManagedGatewayStateForTests,
+  shouldRemoveGatewayLeftover,
+} from "./runtime-gateway.js";
 export {
   DEEPSONAR_GATEWAY_PROXY_HOST,
   HUMAN_INBOX_WRITER_SCRIPT,
@@ -218,7 +222,7 @@ export {
   runRealAgent,
   runtimeCliEnv,
 } from "./runtime-agent.js";
-export type { DeepSonarContainer } from "./agentbox.js";
+export type { DeepSonarContainer } from "./runtime-docker.js";
 export type { RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails, SemanticToolState } from "./runtime-agent.js";
 export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";
 export type { SharedAssetsVolumeManager, SharedAssetVolumeFile } from "./shared-assets-volume.js";
