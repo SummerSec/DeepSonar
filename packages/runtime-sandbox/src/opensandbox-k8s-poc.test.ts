@@ -5,6 +5,7 @@ import {
   findKataWorkload,
   findRemainingJobPods,
   probeKataCluster,
+  waitForRemainingJobPods,
   readKataClusterProbe,
   runOpenSandboxK8sPoc,
   shouldRunOpenSandboxK8sPoc,
@@ -99,7 +100,7 @@ test("Kata cluster probe requires runtimeclass, namespace, and quota", () => {
   assert.equal(shouldRunOpenSandboxK8sPoc({ OPEN_SANDBOX_POC: "1", OPEN_SANDBOX_POC_K8S: "1" }), true);
 });
 
-test("Kata workload discovery fail-closes docker-mode leftovers", () => {
+test("Kata workload discovery fail-closes docker-mode leftovers", async () => {
   const jobId = "job-kata";
   const found = findKataWorkload({
     items: [{ metadata: { name: "pod-1", labels: { job: jobId } }, spec: { runtimeClassName: "kata-qemu" } }],
@@ -116,6 +117,8 @@ test("Kata workload discovery fail-closes docker-mode leftovers", () => {
     /OPENSANDBOX_POC_KATA_RUNTIMECLASS_NOT_USED/,
   );
   assert.equal(findRemainingJobPods({ items: [{ job: jobId }, { job: "other" }] }, jobId), 1);
+  const gone = await waitForRemainingJobPods(async () => ({ items: [] }), jobId, 1_000);
+  assert.equal(gone, 0);
 });
 
 test("OpenSandbox Kata PoC requires a kata-qemu workload and leftover-free destroy", async () => {

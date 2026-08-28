@@ -137,10 +137,7 @@ export async function runOpenSandboxK8sPoc(
     if (leftovers.length > 0) {
       throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
     }
-    const remaining = findRemainingJobPods(
-      await kubectl(["get", "pods", "-n", OPENSANDBOX_K8S_NAMESPACE, "-o", "json"]),
-      jobId,
-    );
+    const remaining = await waitForRemainingJobPods(kubectl, jobId);
     if (remaining > 0) throw new Error(`OPENSANDBOX_POC_KATA_POD_LEFTOVER: ${remaining}`);
   }
 }
@@ -150,4 +147,22 @@ export function findRemainingJobPods(pods: unknown, jobId: string): number {
     ? (pods as { items: unknown[] }).items
     : [];
   return items.filter((item) => JSON.stringify(item).includes(jobId)).length;
+}
+
+export async function waitForRemainingJobPods(
+  kubectl: KubectlJson,
+  jobId: string,
+  timeoutMs = 30_000,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let remaining = Number.POSITIVE_INFINITY;
+  while (Date.now() <= deadline) {
+    remaining = findRemainingJobPods(
+      await kubectl(["get", "pods", "-n", OPENSANDBOX_K8S_NAMESPACE, "-o", "json"]),
+      jobId,
+    );
+    if (remaining === 0) return 0;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return remaining;
 }
