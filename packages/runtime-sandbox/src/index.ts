@@ -214,6 +214,8 @@ export {
   AGENT_CLI_RUNTIME_ADAPTERS,
   CONTROL_RUNTIME_CAPABILITIES,
   PiJsonlFramer,
+  applyRuntimeOutput,
+  applyRuntimeOutputText,
   parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,

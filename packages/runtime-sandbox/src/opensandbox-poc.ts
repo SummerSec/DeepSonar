@@ -6,8 +6,15 @@ import { randomUUID } from "node:crypto";
 import { SHARED_ASSETS_MOUNT_PATH } from "./agentbox.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import type { ProvisionInput, SandboxRunner } from "./index.js";
-import { AGENT_CLI_RUNTIME_ADAPTERS, type AgentCliId } from "./runtime-adapters.js";
-import { shellQuote } from "./runtime-host.js";
+import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+import {
+  AGENT_CLI_RUNTIME_ADAPTERS,
+  applyRuntimeOutputText,
+  type AdapterStartContext,
+  type AdapterRuntimeState,
+  type AgentCliId,
+} from "./runtime-adapters.js";
+import { shellQuote, type RuntimeHost } from "./runtime-host.js";
 
 export const OPENSANDBOX_POC_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
@@ -422,6 +429,13 @@ export type OpenSandboxCliLaunchResult = {
   stdinClosed: boolean;
   inputWritten: boolean;
   steered: boolean;
+  sessionId?: string;
+  sessionFile?: string;
+  archived: boolean;
+  archiveCount: number;
+  archiveError?: string;
+  resumed: boolean;
+  artifacts: Array<{ name: string; content: string }>;
 };
 
 const MOCK_LLM_SCRIPT = `
@@ -463,6 +477,41 @@ class H(BaseHTTPRequestHandler):
 
 ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
 `.trim();
+
+async function exportOpenSandboxCliSession(
+  host: RuntimeHost,
+  cli: AgentCliId,
+  sessionId: string,
+  sessionFile?: string,
+) {
+  return CLI_SESSION_ADAPTERS[cli].exportSession({
+    run: (command) => host.run(command, { timeoutMs: 15_000 }),
+    readText: async (path) => {
+      const result = await host.run(`cat -- ${JSON.stringify(path)}`, { timeoutMs: 15_000 });
+      return result.exitCode === 0 ? result.stdout : null;
+    },
+  }, sessionId, sessionFile);
+}
+
+async function resumeOpenSandboxCli(
+  adapter: (typeof AGENT_CLI_RUNTIME_ADAPTERS)[AgentCliId],
+  context: AdapterStartContext,
+  state: AdapterRuntimeState,
+): Promise<boolean> {
+  if (!state.sessionId) return false;
+  if (adapter.id === "pi" && !state.sessionFile) return false;
+  const process = await adapter.resume({
+    ...context,
+    sessionId: state.sessionId,
+    sessionFile: state.sessionFile,
+  });
+  const payload = adapter.encodeInput("resume-ping", state);
+  if (payload) await process.write(payload).catch(() => {});
+  await process.closeStdin().catch(() => {});
+  await collectText(process, 3_000);
+  await process.kill().catch(() => {});
+  return true;
+}
 
 export async function runOpenSandboxCliLaunchPoc(
   client: OpenSandboxClient,
@@ -519,7 +568,7 @@ export async function runOpenSandboxCliLaunchPoc(
       };
       await adapter.materialize?.(context);
       const process = await adapter.start(context);
-      const state = {
+      const state: AdapterRuntimeState = {
         model: "dummy",
         modelProvider: "dummy",
         cwd: "/workspace",
@@ -552,12 +601,34 @@ export async function runOpenSandboxCliLaunchPoc(
       await process.closeStdin().catch(() => { stdinClosed = false; });
       const out = await collectText(process, 4_000);
       await process.kill().catch(() => {});
+      applyRuntimeOutputText(adapter, out.text, state);
+      let archived = false;
+      let archiveCount = 0;
+      let archiveError: string | undefined;
+      const artifacts: Array<{ name: string; content: string }> = [];
+      if (state.sessionId) {
+        const bundle = await exportOpenSandboxCliSession(host, id, state.sessionId, state.sessionFile);
+        archiveCount = bundle.artifacts.length;
+        archiveError = bundle.captureError;
+        archived = archiveCount > 0;
+        for (const artifact of bundle.artifacts) {
+          artifacts.push({ name: artifact.name, content: artifact.content });
+        }
+      }
+      const resumed = await resumeOpenSandboxCli(adapter, context, state).catch(() => false);
       launched[id] = {
         started: true,
         notFound: isOpenSandboxCliMissing(out.text),
         stdinClosed,
         inputWritten,
         steered,
+        sessionId: state.sessionId,
+        sessionFile: state.sessionFile,
+        archived,
+        archiveCount,
+        archiveError,
+        resumed,
+        artifacts,
       };
     }
     await mock.kill().catch(() => {});

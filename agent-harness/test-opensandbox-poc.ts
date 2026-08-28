@@ -15,6 +15,7 @@ import {
   runOpenSandboxRestrictedPoc,
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/src/index.ts";
+import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox live PoC (set OPEN_SANDBOX_POC=1 with a reachable server)");
@@ -130,7 +131,27 @@ if (runtimeImage && !skipCli) {
   if (failed.length > 0) {
     throw new Error(`OpenSandbox CLI launch PoC unexpected result: ${JSON.stringify(launched)}`);
   }
-  cliSummary = JSON.stringify(launched);
+  const viewer: Record<string, { sessionId?: string; archived: boolean; resumed: boolean; items: number; format?: string }> = {};
+  for (const [id, item] of Object.entries(launched)) {
+    const artifact = item.artifacts[0];
+    const parsed = artifact ? parseAgentSession(artifact.content, { cli: id }) : undefined;
+    viewer[id] = {
+      sessionId: item.sessionId,
+      archived: item.archived,
+      resumed: item.resumed,
+      items: parsed?.items.length ?? 0,
+      format: parsed?.format,
+    };
+  }
+  cliSummary = JSON.stringify({ launch: Object.fromEntries(Object.entries(launched).map(([id, item]) => [id, {
+    started: item.started,
+    steered: item.steered,
+    sessionId: item.sessionId,
+    archived: item.archived,
+    archiveCount: item.archiveCount,
+    archiveError: item.archiveError,
+    resumed: item.resumed,
+  }])), viewer });
 }
 const extraImages = (process.env.OPEN_SANDBOX_POC_EXTRA_IMAGES ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 const extraSummaries: string[] = [];

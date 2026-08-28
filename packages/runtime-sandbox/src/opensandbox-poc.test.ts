@@ -117,6 +117,62 @@ test("OpenSandbox runner PoC fail-closes missing runtime contract and cleans lef
   assert.deepEqual(result, { rejected: true, leftovers: 0 });
 });
 
+function fakeSessionArtifact(cli: string, sessionId: string): string {
+  if (cli === "claude-code") {
+    return [
+      JSON.stringify({ type: "user", message: { role: "user", content: "ping" } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "pong" }] } }),
+      "",
+    ].join("\n");
+  }
+  if (cli === "codex") {
+    return [
+      JSON.stringify({ type: "thread.started", thread_id: sessionId }),
+      JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "pong" } }),
+      "",
+    ].join("\n");
+  }
+  if (cli === "pi") {
+    return [
+      JSON.stringify({ type: "agent_start" }),
+      JSON.stringify({ type: "message_end", message: { content: [{ type: "text", text: "pong" }] } }),
+      "",
+    ].join("\n");
+  }
+  if (cli === "dsh") {
+    return `${JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session.event",
+      params: {
+        sessionId,
+        event: { type: "assistant/message", data: { message: { content: [{ type: "text", text: "pong" }] } } },
+      },
+    })}\n`;
+  }
+  return JSON.stringify({ id: sessionId, messages: [{ role: "user", content: "ping" }, { role: "assistant", content: "pong" }] });
+}
+
+function fakeCliStdout(command: string): string | undefined {
+  if (/\bclaude\b/.test(command)) return `${JSON.stringify({ type: "system", subtype: "init", session_id: "poc-claude-session" })}\n`;
+  if (/\bcodex\b/.test(command)) return `${JSON.stringify({ type: "thread.started", thread_id: "poc-codex-session" })}\n`;
+  if (/\bopencode\b/.test(command)) return `${JSON.stringify({ type: "session.created", sessionID: "poc-opencode-session" })}\n`;
+  if (command.includes("pi --mode rpc")) {
+    return `${JSON.stringify({
+      type: "response",
+      command: "get_state",
+      success: true,
+      data: {
+        sessionId: "poc-pi-session",
+        sessionFile: "/workspace/.deepsonar-home/.pi/agent/poc-pi-session.jsonl",
+      },
+    })}\n`;
+  }
+  if (command.includes("dsh-sdk-jsonrpc-demo") || command.includes("packaged-bin.js")) {
+    return `${JSON.stringify({ jsonrpc: "2.0", method: "session.status", params: { status: "idle" } })}\n`;
+  }
+  return undefined;
+}
+
 function hostSession(): OpenSandboxSession {
   const files = new Map<string, string>([["/workspace/poc-note.txt", "note"]]);
   return {
@@ -128,6 +184,34 @@ function hostSession(): OpenSandboxSession {
       if (command.includes("poc-seed.txt")) return { exitCode: 0, stdout: "seed\n", stderr: "" };
       if (command.includes("poc-write")) return { exitCode: 1, stdout: "", stderr: "Read-only file system" };
       if (command.includes("shared") && command.includes("mounted")) return { exitCode: 0, stdout: "mounted\n", stderr: "" };
+      if (command.includes(".claude/projects")) {
+        const match = command.match(/-name '([^']+)\.jsonl'/);
+        const sessionId = match?.[1] ?? "poc-claude-session";
+        return { exitCode: 0, stdout: `/root/.claude/projects/poc/${sessionId}.jsonl\n`, stderr: "" };
+      }
+      if (command.includes(".codex") && command.includes("sessions")) {
+        const match = command.match(/grep -l -m1 -- '([^']+)'/);
+        const sessionId = match?.[1] ?? "poc-codex-session";
+        return { exitCode: 0, stdout: `/root/.codex/sessions/${sessionId}.jsonl\n`, stderr: "" };
+      }
+      if (command.includes("opencode export")) {
+        const match = command.match(/opencode export '([^']+)'/);
+        const sessionId = match?.[1] ?? "poc-opencode-session";
+        return { exitCode: 0, stdout: fakeSessionArtifact("open-code", sessionId), stderr: "" };
+      }
+      if (command.includes(".dsh/sessions")) {
+        const match = command.match(/-path '\*\/([^']+)\/session\.jsonl'/);
+        const sessionId = match?.[1] ?? "session-poc162";
+        return { exitCode: 0, stdout: `/workspace/.deepsonar-home/.dsh/sessions/proj/${sessionId}/session.jsonl\n`, stderr: "" };
+      }
+      const cat = command.match(/cat -- ("(?:\\.|[^"])+")/);
+      if (cat) {
+        const filePath = JSON.parse(cat[1]!) as string;
+        if (filePath.includes("/.claude/")) return { exitCode: 0, stdout: fakeSessionArtifact("claude-code", filePath), stderr: "" };
+        if (filePath.includes("/.codex/")) return { exitCode: 0, stdout: fakeSessionArtifact("codex", filePath), stderr: "" };
+        if (filePath.includes("/.pi/")) return { exitCode: 0, stdout: fakeSessionArtifact("pi", filePath), stderr: "" };
+        if (filePath.includes("/.dsh/")) return { exitCode: 0, stdout: fakeSessionArtifact("dsh", "session-poc162"), stderr: "" };
+      }
       if (command.includes("env")) return { exitCode: 0, stdout: "PATH=/bin\nHOME=/workspace\n", stderr: "" };
       if (command.includes("192.0.2.1")) return { exitCode: 1, stdout: "", stderr: "" };
       if (command.includes("CapPrm")) {
@@ -138,14 +222,15 @@ function hostSession(): OpenSandboxSession {
       if (command.includes("readlink") || command.includes("test ! -L")) return { exitCode: 0, stdout: "", stderr: "" };
       return { exitCode: 0, stdout: "", stderr: "" };
     },
-    async runAsync() {
+    async runAsync(command) {
+      const cliOut = fakeCliStdout(command);
       return {
         async write() {},
         async closeStdin() {},
         async kill() {},
         async resize() {},
         async *[Symbol.asyncIterator]() {
-          yield { type: "stdout" as const, chunk: "steerterm-ok hello-complete.txt ^C" };
+          yield { type: "stdout" as const, chunk: cliOut ?? "steerterm-ok hello-complete.txt ^C" };
           yield { type: "exit" as const, exitCode: 0 };
         },
       };
@@ -260,6 +345,12 @@ test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async ()
     assert.equal(result[id].stdinClosed, true);
     assert.equal(result[id].inputWritten, true);
     assert.equal(result[id].steered, true);
+    assert.ok(result[id].sessionId, `${id} should capture session_id`);
+    assert.equal(result[id].archived, true);
+    assert.ok(result[id].archiveCount > 0);
+    assert.equal(result[id].resumed, true);
+    assert.ok(result[id].artifacts[0]?.content);
+    if (id === "pi") assert.match(result[id].sessionFile ?? "", /\/workspace\/\.deepsonar-home\/\.pi\/agent\//);
   }
 });
 

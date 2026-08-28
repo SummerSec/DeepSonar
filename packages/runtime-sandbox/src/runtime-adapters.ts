@@ -1185,3 +1185,45 @@ export function freezeAgentCliRuntime(adapter: RuntimeAdapter): {
 }
 
 export type AgentCliRuntimeSnapshot = ReturnType<typeof freezeAgentCliRuntime>;
+
+function captureSessionIdentity(item: Record<string, unknown>, state: AdapterRuntimeState): void {
+  const id = item.sessionID ?? item.session_id ?? item.thread_id;
+  if (typeof id === "string" && id) state.sessionId = id;
+  const file = item.sessionFile ?? item.session_file;
+  if (typeof file === "string" && file) state.sessionFile = file;
+  const data = item.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    if (typeof record.sessionId === "string" && record.sessionId) state.sessionId = record.sessionId;
+    if (typeof record.sessionFile === "string" && record.sessionFile) state.sessionFile = record.sessionFile;
+  }
+}
+
+/** Decode one CLI JSONL object and persist session identity onto `state`. */
+export function applyRuntimeOutput(
+  adapter: RuntimeAdapter,
+  line: Record<string, unknown>,
+  state: AdapterRuntimeState,
+): Record<string, unknown>[] {
+  const events = adapter.decodeOutput(line, state);
+  captureSessionIdentity(line, state);
+  for (const event of events) captureSessionIdentity(event, state);
+  return events;
+}
+
+/** Walk mixed CLI stdout and keep the last observed session identity. */
+export function applyRuntimeOutputText(
+  adapter: RuntimeAdapter,
+  text: string,
+  state: AdapterRuntimeState,
+): void {
+  for (const raw of text.split(/\r?\n/)) {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      applyRuntimeOutput(adapter, JSON.parse(trimmed) as Record<string, unknown>, state);
+    } catch {
+      // ignore non-JSON fragments mixed into CLI stdout
+    }
+  }
+}

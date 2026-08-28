@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   PiJsonlFramer,
+  applyRuntimeOutput,
+  applyRuntimeOutputText,
   parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,
@@ -93,6 +95,38 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.controlMcp, false);
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.platformControlApi, true);
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
+});
+
+test("applyRuntimeOutput keeps session identity from CLI JSONL", () => {
+  const claude = { sessionId: undefined as string | undefined };
+  applyRuntimeOutput(
+    AGENT_CLI_RUNTIME_ADAPTERS["claude-code"],
+    { type: "system", subtype: "init", session_id: "sess-claude" },
+    claude,
+  );
+  assert.equal(claude.sessionId, "sess-claude");
+
+  const pi = { sessionId: undefined as string | undefined, sessionFile: undefined as string | undefined };
+  applyRuntimeOutput(
+    AGENT_CLI_RUNTIME_ADAPTERS.pi,
+    {
+      type: "response",
+      command: "get_state",
+      success: true,
+      data: { sessionId: "sess-pi", sessionFile: "/workspace/.deepsonar-home/.pi/agent/sess-pi.jsonl" },
+    },
+    pi,
+  );
+  assert.equal(pi.sessionId, "sess-pi");
+  assert.equal(pi.sessionFile, "/workspace/.deepsonar-home/.pi/agent/sess-pi.jsonl");
+
+  const mixed = { sessionId: undefined as string | undefined };
+  applyRuntimeOutputText(
+    AGENT_CLI_RUNTIME_ADAPTERS.codex,
+    "noise\n{\"type\":\"thread.started\",\"thread_id\":\"sess-codex\"}\n",
+    mixed,
+  );
+  assert.equal(mixed.sessionId, "sess-codex");
 });
 
 test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
