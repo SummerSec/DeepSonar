@@ -7,6 +7,7 @@ import {
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
   runOpenSandboxCliLaunchPoc,
+  runOpenSandboxRecoveryPoc,
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
   runOpenSandboxImageContractPoc,
@@ -113,6 +114,14 @@ if (runtimeImage && !skipHost) {
   }
   restrictedSummary = `isolated=${restricted.isolated}`;
 }
+let recoverySummary = "skipped";
+if (runtimeImage) {
+  const recovery = await runOpenSandboxRecoveryPoc(client, { image: runtimeImage, expectedContract: "deepsonar.runtime.contract/v1" });
+  if (!recovery.alive || !recovery.reconnected || !recovery.aliveAfterReconnect || !recovery.deadAfterDestroy || recovery.leftovers !== 0) {
+    throw new Error(`OpenSandbox recovery PoC unexpected result: ${JSON.stringify(recovery)}`);
+  }
+  recoverySummary = `alive=${recovery.alive} reconnect=${recovery.reconnected} dead=${recovery.deadAfterDestroy} leftovers=${recovery.leftovers}`;
+}
 let cliSummary = "skipped";
 if (runtimeImage) {
   const launched = await runOpenSandboxCliLaunchPoc(client, { image: runtimeImage });
@@ -128,4 +137,4 @@ for (const image of extraImages) {
   const extra = await runOpenSandboxImageContractPoc(client, { image });
   extraSummaries.push(`${image.slice(-12)} provisionMs=${extra.provisionMs} clis=${JSON.stringify(extra.clis)}`);
 }
-console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} cli=${cliSummary} extra=${extraSummaries.join(";") || "skipped"}`);
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} recovery=${recoverySummary} cli=${cliSummary} extra=${extraSummaries.join(";") || "skipped"}`);

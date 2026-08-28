@@ -145,6 +145,14 @@ export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): O
         return undefined;
       }
     },
+    async destroy(id) {
+      const manager = SandboxManager.create({ connectionConfig: config });
+      try {
+        await manager.killSandbox(id);
+      } finally {
+        await manager.close().catch(() => undefined);
+      }
+    },
     async list(filter) {
       const manager = SandboxManager.create({ connectionConfig: config });
       try {

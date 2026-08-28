@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   OpenSandboxRunner,
+  evaluateOpenSandboxAlive,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
@@ -127,6 +128,29 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   await host.uploadFile("hello", "/workspace/note.txt");
   assert.deepEqual(client.session.files, [{ path: "/workspace/note.txt", bytes: 5 }]);
   assert.equal(await runner.isAlive(handle), true);
+});
+
+test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {
+  let probes = 0;
+  assert.equal(await evaluateOpenSandboxAlive({
+    getState: async () => "Running",
+    probe: async () => {
+      probes += 1;
+      if (probes < 2) throw new Error("execd blip");
+      return { exitCode: 0 };
+    },
+  }), true);
+  assert.equal(probes, 2);
+  assert.equal(await evaluateOpenSandboxAlive({
+    getState: async () => "Paused",
+    probe: async () => {
+      throw new Error("must not probe a non-running sandbox");
+    },
+  }), false);
+  assert.equal(await evaluateOpenSandboxAlive({
+    getState: async () => { throw new Error("api down"); },
+    probe: async () => ({ exitCode: 0 }),
+  }), false);
 });
 
 test("OpenSandbox isAlive requires lifecycle Running and a healthy exec probe", async () => {

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   cleanupManagedResourcesOnce,
   resetResourceCleanupStateForTests,
+  shouldCleanupManagedResources,
   type DesiredStateCleanupDependencies,
 } from "./resource-cleanup.js";
 
@@ -28,6 +29,12 @@ function dependencies(overrides: Partial<DesiredStateCleanupDependencies> = {}):
     ...overrides,
   };
 }
+
+test("desired-state cleanup runs for any real provider, including OpenSandbox", () => {
+  assert.equal(shouldCleanupManagedResources({ agentMode: "real", provider: "opensandbox" }), true);
+  assert.equal(shouldCleanupManagedResources({ agentMode: "real", provider: "local-docker" }), true);
+  assert.equal(shouldCleanupManagedResources({ agentMode: "fake", provider: "opensandbox" }), false);
+});
 
 test("desired-state cleanup preserves only exact active Job/Attempt resources", async () => {
   resetResourceCleanupStateForTests();

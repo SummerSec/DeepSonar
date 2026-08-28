@@ -9,7 +9,7 @@ import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { planeWriteback } from "./plane-sync.js";
-import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
+import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./resource-cleanup.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -107,7 +107,7 @@ export function startReaper() {
       if (result.timeouts + result.orphans + result.provisionStuck + result.stalled > 0) {
         console.log("[reaper]", result);
       }
-      if (config.runtime.agentMode === "real" && config.runtime.provider === "local-docker") {
+      if (shouldCleanupManagedResources(config.runtime)) {
         const cleanup = await cleanupManagedResourcesOnce();
         if (cleanup.removedContainers + cleanup.removedVolumes + cleanup.failures > 0) {
           console.log("[cleanup]", cleanup);

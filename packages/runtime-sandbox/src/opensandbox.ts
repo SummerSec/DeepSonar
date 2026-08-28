@@ -79,6 +79,31 @@ export interface OpenSandboxClient {
   create(input: OpenSandboxCreateInput): Promise<OpenSandboxSession>;
   connect(id: string): Promise<OpenSandboxSession | undefined>;
   list(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]>;
+  destroy?(id: string): Promise<void>;
+}
+
+export const OPENSANDBOX_ALIVE_PROBE_ATTEMPTS = 3;
+
+export async function evaluateOpenSandboxAlive(input: {
+  getState: () => Promise<string>;
+  probe: () => Promise<{ exitCode: number }>;
+}): Promise<boolean> {
+  let state: string;
+  try {
+    state = await input.getState();
+  } catch {
+    return false;
+  }
+  if (!/^running$/i.test(state)) return false;
+  for (let attempt = 0; attempt < OPENSANDBOX_ALIVE_PROBE_ATTEMPTS; attempt++) {
+    try {
+      const probe = await input.probe();
+      if (probe.exitCode === 0) return true;
+    } catch {
+      /* 单次 execd 失败不是唯一真相，继续对照 lifecycle 重试 */
+    }
+  }
+  return false;
 }
 
 export function requireOpenSandboxLimits(limits: SandboxLimits | undefined): Required<Pick<SandboxLimits, "cpu" | "memoryMiB" | "pidsLimit">> {
@@ -322,24 +347,16 @@ export class OpenSandboxRunner implements SandboxRunner {
     if (sessions) {
       await Promise.allSettled([...sessions].map((session) => session.close()));
     }
-    const session = await this.sessionOf(handle.sandboxId);
-    this.sessions.delete(handle.sandboxId);
-    if (!session) return;
-    await session.kill();
-    await session.close();
+    await this.destroyResource({ resourceId: handle.sandboxId, jobId: "", attemptId: "" });
   }
 
   async isAlive(handle: RunHandle): Promise<boolean> {
     const session = await this.sessionOf(handle.sandboxId);
     if (!session) return false;
-    try {
-      const state = await session.getState();
-      if (!/^running$/i.test(state)) return false;
-      const probe = await session.run("true", { timeoutMs: 5_000 });
-      return probe.exitCode === 0;
-    } catch {
-      return false;
-    }
+    return evaluateOpenSandboxAlive({
+      getState: () => session.getState(),
+      probe: () => session.run("true", { timeoutMs: 5_000 }),
+    });
   }
 
   async openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession> {
@@ -406,8 +423,18 @@ export class OpenSandboxRunner implements SandboxRunner {
   }
 
   async destroyResource(resource: RuntimeResource): Promise<void> {
-    const session = await this.sessionOf(resource.resourceId);
+    const cached = this.sessions.get(resource.resourceId);
     this.sessions.delete(resource.resourceId);
+    if (cached) {
+      await cached.kill().catch(() => {});
+      await cached.close().catch(() => {});
+    }
+    if (this.client.destroy) {
+      await this.client.destroy(resource.resourceId);
+      return;
+    }
+    if (cached) return;
+    const session = await this.client.connect(resource.resourceId);
     if (!session) return;
     await session.kill();
     await session.close();

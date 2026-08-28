@@ -11,6 +11,7 @@ import {
   runOpenSandboxContractFailPoc,
   runOpenSandboxHostPoc,
   runOpenSandboxInfrastructurePoc,
+  runOpenSandboxRecoveryPoc,
   shouldRunOpenSandboxPoc,
   isOpenSandboxCliMissing,
 } from "./opensandbox-poc.js";
@@ -282,6 +283,35 @@ test("OpenSandbox assets PoC mounts Scheduler volume read-only and reads the see
   assert.deepEqual(result, { mounted: true, readonly: true, seedOk: true, leftovers: 0 });
   assert.equal(created[0]?.volumes[0]?.readOnly, true);
   assert.equal(created[0]?.volumes[0]?.pvc.createIfNotExists, false);
+});
+
+test("OpenSandbox recovery PoC reconnects a new runner then destroys leftovers", async () => {
+  const session = hostSession();
+  let present = true;
+  session.getState = async () => (present ? "Running" : "Stopped");
+  const result = await runOpenSandboxRecoveryPoc({
+    async create() {
+      return session;
+    },
+    async connect(id) {
+      return id === session.id ? session : undefined;
+    },
+    async list() {
+      return present
+        ? [{ resourceId: session.id, jobId: "job", attemptId: "att", state: "Running" }]
+        : [];
+    },
+    async destroy() {
+      present = false;
+    },
+  }, { image: "img@sha256:" + "a".repeat(64) });
+  assert.deepEqual(result, {
+    alive: true,
+    reconnected: true,
+    aliveAfterReconnect: true,
+    deadAfterDestroy: true,
+    leftovers: 0,
+  });
 });
 
 test("OpenSandbox cancel PoC rejects in-flight provision and reports leftovers", async () => {

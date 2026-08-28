@@ -31,6 +31,10 @@ export interface DesiredStateCleanupResult {
   failures: number;
 }
 
+export function shouldCleanupManagedResources(runtime: { agentMode: string; provider: string }): boolean {
+  return runtime.agentMode === "real";
+}
+
 function defaultDependencies(volumeManager: SharedAssetsVolumeManager): DesiredStateCleanupDependencies {
   return {
     loadActiveResources: async () => {

@@ -522,3 +522,49 @@ export async function runOpenSandboxAssetsPoc(
     }
   }
 }
+
+export async function runOpenSandboxRecoveryPoc(
+  client: OpenSandboxClient,
+  input: { image: string; expectedContract?: string },
+): Promise<{
+  alive: boolean;
+  reconnected: boolean;
+  aliveAfterReconnect: boolean;
+  deadAfterDestroy: boolean;
+  leftovers: number;
+}> {
+  const runner = new OpenSandboxRunner(client);
+  const { jobId, attemptId } = ids();
+  const handle = await runner.provision({
+    jobId,
+    attemptId,
+    image: input.image,
+    network: "none",
+    limits: hostLimits,
+    expectedContract: input.expectedContract,
+  });
+  try {
+    const alive = await runner.isAlive(handle);
+    const remote = new OpenSandboxRunner(client);
+    const listed = await remote.listResources({ jobId, attemptId });
+    const reconnected = listed.some((item) => item.resourceId === handle.sandboxId);
+    await remote.ensureHost({ sandboxId: handle.sandboxId });
+    const aliveAfterReconnect = await remote.isAlive({ sandboxId: handle.sandboxId });
+    await remote.destroy({ sandboxId: handle.sandboxId });
+    const leftovers = await remote.listResources({ jobId, attemptId });
+    const deadAfterDestroy = !(await remote.isAlive({ sandboxId: handle.sandboxId }).catch(() => false));
+    return {
+      alive,
+      reconnected,
+      aliveAfterReconnect,
+      deadAfterDestroy,
+      leftovers: leftovers.length,
+    };
+  } finally {
+    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId, attemptId });
+    if (leftovers.length > 0) {
+      throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    }
+  }
+}

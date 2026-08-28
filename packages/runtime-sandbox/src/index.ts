@@ -126,6 +126,7 @@ export {
   OpenSandboxRunner,
   awaitProvisionSession,
   createSdkOpenSandboxClient,
+  evaluateOpenSandboxAlive,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
@@ -143,6 +144,7 @@ export {
   runOpenSandboxHostPoc,
   runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
+  runOpenSandboxRecoveryPoc,
   runOpenSandboxRestrictedPoc,
   shouldRunOpenSandboxPoc,
 } from "./opensandbox-poc.js";
