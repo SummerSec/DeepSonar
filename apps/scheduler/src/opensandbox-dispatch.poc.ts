@@ -4,6 +4,8 @@
  * Tokens are minted by preparePlatformCapability inside runJob; this script
  * never calls host.run or executeReal itself. PTY close is covered by the
  * Reaper harness on the same runner.destroy path. Requires OPEN_SANDBOX_POC=1.
+ * Kubernetes/Kata additionally needs OPEN_SANDBOX_KUBERNETES=1 so provision
+ * omits pids and shared assets use KubernetesSharedAssetsVolumeManager.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -37,6 +39,11 @@ const databaseName = `deepsonar_os_dispatch_${process.pid}_${Date.now()}_${rando
 const targetUrl = new URL(databaseUrl);
 targetUrl.pathname = `/${databaseName}`;
 targetUrl.search = "";
+
+const kubernetes = ["1", "true", "yes", "on"].includes((process.env.OPEN_SANDBOX_KUBERNETES ?? "").toLowerCase());
+const sandboxCpu = kubernetes ? 0.3 : 1;
+const sandboxMemoryMiB = kubernetes ? 256 : 512;
+console.log(`OpenSandbox dispatch kubernetes=${kubernetes} cpu=${sandboxCpu} memoryMiB=${sandboxMemoryMiB} domain=${process.env.OPEN_SANDBOX_DOMAIN ?? ""}`);
 
 const projectId = randomUUID();
 const canvasId = randomUUID();
@@ -100,7 +107,7 @@ try {
     platform_tools: ["emit_fact", "emit_finding", "mark_job_done"],
     agent_cli: "claude-code",
     agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
-    sandbox_limits: { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
+    sandbox_limits: { cpu: sandboxCpu, memoryMiB: sandboxMemoryMiB, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
     runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
     network_policy: { allow_egress: false },
     shared_assets_revision: frozen.revision,
@@ -120,7 +127,7 @@ try {
   let lastStatus = "pending";
   let sandboxId: string | null = null;
   let jobError = "";
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + (kubernetes ? 180_000 : 90_000);
   while (Date.now() < deadline) {
     const [job] = await sql`SELECT status, sandbox_id, error FROM jobs WHERE id = ${jobId}`;
     lastStatus = String(job?.status ?? "");
