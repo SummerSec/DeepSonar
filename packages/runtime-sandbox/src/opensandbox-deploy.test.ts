@@ -55,6 +55,7 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.match(hostOverlay, /network_mode: host/);
   assert.match(hostOverlay, /host\.docker\.internal:host-gateway/);
   assert.match(hostOverlay, /BLOB_STORE: fs/);
+  assert.match(hostOverlay, /\/var\/run\/docker\.sock/);
   assert.match(hostOverlay, /Dockerfile\.scheduler/);
   assert.match(hostOverlay, /Dockerfile\.web/);
   assert.doesNotMatch(hostOverlay, /^\s+silo:|container_name:/m);

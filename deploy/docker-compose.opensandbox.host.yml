@@ -41,6 +41,7 @@ services:
       BLOB_STORE: fs
       BLOB_DIR: /app/data/blobs
     volumes:
+      - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ${OPEN_SANDBOX_POC_MASTER_KEY:-./master.key}:/run/secrets/deepsonar_master_key:ro
       - scheduler_blobs:/app/data
     depends_on:
