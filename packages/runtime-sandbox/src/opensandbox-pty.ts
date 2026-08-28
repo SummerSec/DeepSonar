@@ -152,6 +152,8 @@ export async function openOpenSandboxPty(
       ws.send(encodePtyStdin(data));
     },
     async closeStdin() {
+      // execd PTY/pipe 只转发 0x00 stdin 字节，没有关闭写端的控制帧。
+      // 这里只禁止后续 write；需要立即 EOF 的 CLI 必须在命令里重定向 stdin。
       closed = true;
     },
     async kill() {
