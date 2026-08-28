@@ -87,7 +87,8 @@ try {
     "postgres", "silo", "silo-init", "scheduler", "web",
   ], 1_200_000);
   if (build.status !== 0) {
-    throw new Error(`prod-compose up failed: ${build.stderr || build.stdout}`);
+    const logs = run([...composeArgs, "logs", "--tail=80", "silo-init", "silo", "scheduler", "web"], 30_000);
+    throw new Error(`prod-compose up failed: ${build.stderr || build.stdout}\n${logs.stdout}\n${logs.stderr}`);
   }
 
   const deadline = Date.now() + 240_000;

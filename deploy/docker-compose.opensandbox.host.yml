@@ -4,6 +4,18 @@
 #     docker compose -f docker-compose.prod.yml -f docker-compose.real.yml \
 #     -f docker-compose.opensandbox.host.yml up -d --build postgres silo silo-init scheduler web
 services:
+  silo-init:
+    command:
+      - >-
+        i=0;
+        while [ "$$i" -lt 30 ]; do
+          mcli alias set local http://silo:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+          && mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"
+          && exit 0;
+          i=$$((i+1));
+          sleep 2;
+        done;
+        exit 1
   scheduler:
     extra_hosts:
       - "host.docker.internal:host-gateway"
