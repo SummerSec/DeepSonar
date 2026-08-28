@@ -120,7 +120,12 @@ try {
   process.env.AGENT_MODE = "real";
   process.env.SANDBOX_PROVIDER = "opensandbox";
   process.env.OPEN_SANDBOX_API_KEY = apiKey;
-  process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
+  if (process.env.OPEN_SANDBOX_POC_K8S === "1") {
+    process.env.OPEN_SANDBOX_KUBERNETES = "1";
+  } else {
+    delete process.env.OPEN_SANDBOX_KUBERNETES;
+    process.env.OPEN_SANDBOX_DOMAIN = "127.0.0.1:8080";
+  }
   process.env.DEEPSONAR_API_SANDBOX_URL = `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1`;
   process.env.DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL = "http://host.docker.internal:3100/gateway";
 
@@ -133,7 +138,13 @@ try {
     { config },
     { encryptSecret, fingerprintOf, last4Of, PROVIDER_ENV_MAP },
     { mintJobToken, registerGateway },
-    { materializeProviderSettings, qualifyPiModelRef, routeMaterializedProviderFilesThroughGateway },
+    {
+      jobGatewayAllowedModels,
+      legacySettingsConfig,
+      materializeProviderSettings,
+      qualifyPiModelRef,
+      routeMaterializedProviderFilesThroughGateway,
+    },
     { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings },
   ] = await Promise.all([
     import("fastify"),
@@ -184,7 +195,13 @@ try {
         baseURL: "https://api.deepseek.com",
         model: plan.model,
       })
-      : {};
+      : legacySettingsConfig({
+        provider: plan.provider,
+        secret: "gateway-placeholder",
+        metadata: "baseUrl" in plan ? { base_url: plan.baseUrl } : {},
+        agentCli: selectedCli,
+        model: plan.model,
+      });
     await sql`
       INSERT INTO credentials (
         id, name, kind, provider, ciphertext, nonce, auth_tag, fingerprint, last4, status,
@@ -228,7 +245,10 @@ try {
       jobId,
       projectId,
       credentialId,
-      allowedModels: [plan.model],
+      allowedModels: jobGatewayAllowedModels({
+        roleModel: plan.model,
+        settingsConfig,
+      }).concat(selectedCli === "open-code" ? [`deepsonar/${plan.model}`] : []),
       ttlSec: 3600,
     });
     const runtimeHome = "/workspace/.deepsonar-home";
@@ -238,24 +258,13 @@ try {
       ...capability.env,
       HOME: runtimeHome,
     };
-    if (selectedCli === "dsh") {
-      for (const key of mapping.secretKeys) delete gatewayEnv[key];
-      if (mapping.baseUrlKey) delete gatewayEnv[mapping.baseUrlKey];
-    } else {
-      for (const key of mapping.secretKeys) gatewayEnv[key] = token.plaintext;
-      if (mapping.baseUrlKey) gatewayEnv[mapping.baseUrlKey] = config.gateway.sandboxUrl;
-    }
-    if (Object.values(gatewayEnv).includes(vendorSecret) || gatewayEnv.DEEPSEEK_API_KEY) {
-      throw new Error("vendor key leaked into OpenSandbox worker env");
-    }
-
-    let runtimeConfigFiles = selectedCli === "pi"
-      ? materializeProviderSettings({
-        agentCli: "pi",
-        settingsConfig: { provider: plan.provider, baseUrl: "https://gateway.invalid", api: "openai-responses", models: [{ id: plan.model }] },
+    let runtimeConfigFiles = selectedCli === "dsh"
+      ? []
+      : materializeProviderSettings({
+        agentCli: selectedCli,
+        settingsConfig,
         overrides: { model: plan.model },
-      })
-      : [];
+      });
     if (runtimeConfigFiles.length > 0) {
       runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
         agentCli: selectedCli,
@@ -263,6 +272,20 @@ try {
         gatewayBaseUrl: config.gateway.sandboxUrl,
         jobToken: token.plaintext,
       });
+    }
+    if (selectedCli === "dsh" || runtimeConfigFiles.length > 0) {
+      for (const key of mapping.secretKeys) delete gatewayEnv[key];
+      if (mapping.baseUrlKey) delete gatewayEnv[mapping.baseUrlKey];
+    } else {
+      for (const key of mapping.secretKeys) gatewayEnv[key] = token.plaintext;
+      if (mapping.baseUrlKey) gatewayEnv[mapping.baseUrlKey] = config.gateway.sandboxUrl;
+    }
+    if (
+      Object.values(gatewayEnv).includes(vendorSecret)
+      || gatewayEnv.DEEPSEEK_API_KEY
+      || runtimeConfigFiles.some((file) => file.content.includes(vendorSecret))
+    ) {
+      throw new Error("vendor key leaked into OpenSandbox worker env");
     }
 
     const handle = await runner.provision({
@@ -277,12 +300,14 @@ try {
     });
     try {
       const host = await runner.ensureHost(handle);
-      await host.run("mkdir -p /workspace/.deepsonar && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json", { timeoutMs: 5_000 });
+      await host.run(`mkdir -p /workspace/.deepsonar ${runtimeHome} && printf '%s\\n' '{"mcpServers":{}}' > /workspace/.deepsonar/mcp.json`, { timeoutMs: 5_000 });
       for (const file of runtimeConfigFiles) {
-        const target = selectedCli === "pi" && file.path.startsWith(".pi/")
-          ? `/workspace/.deepsonar-home/${file.path}`
-          : `/workspace/${file.path}`;
-        await host.uploadFile(file.content, target);
+        const targets = selectedCli === "pi" && file.path.startsWith(".pi/")
+          ? [`${runtimeHome}/${file.path}`]
+          : selectedCli === "open-code"
+            ? [`/workspace/${file.path}`]
+            : [`/workspace/${file.path}`, `${runtimeHome}/${file.path}`];
+        for (const target of targets) await host.uploadFile(file.content, target);
       }
       await host.uploadFile(`#!/bin/sh
 set -eu
@@ -317,7 +342,6 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
       await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
       const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
       const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
-      await host.run(`mkdir -p ${runtimeHome}`, { timeoutMs: 5_000 });
       const dshProvider = selectedCli === "dsh"
         ? buildDshPiAiRuntimeProjection({
           settingsConfig,
@@ -346,7 +370,9 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         input: prompt,
         model: selectedCli === "pi"
           ? qualifyPiModelRef(plan.model, runtimeConfigFiles) ?? plan.model
-          : plan.model,
+          : selectedCli === "open-code"
+            ? `deepsonar/${plan.model}`
+            : plan.model,
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
         contextIdentity: state.contextIdentity,
         ...(dshProvider ? { dshProvider } : {}),

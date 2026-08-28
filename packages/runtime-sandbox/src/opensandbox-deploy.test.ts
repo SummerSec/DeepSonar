@@ -156,8 +156,11 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /encodeSteer/);
   assert.match(poc, /adapter\.resume/);
   assert.match(poc, /adapter\.materialize/);
+  assert.match(poc, /legacySettingsConfig/);
   assert.match(poc, /qualifyPiModelRef/);
   assert.match(poc, /encodeGetState/);
+  assert.match(poc, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
+  assert.match(poc, /deepsonar-home/);
   assert.doesNotMatch(poc, /ANTHROPIC_API_KEY: vendorKey|ANTHROPIC_API_KEY: vendorSecret/);
   assert.doesNotMatch(poc, /OPENAI_API_KEY: vendorKey|DEEPSEEK_API_KEY: vendorKey/);
 });
