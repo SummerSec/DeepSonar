@@ -660,7 +660,7 @@ test("OpenSandbox runRealAgent retries a transient 503 on the same session for e
 });
 
 test("runRealAgent captures CLI session identity through applyRuntimeOutput", () => {
-  const source = readFileSync(new URL("./agentbox.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./runtime-agent.ts", import.meta.url), "utf8");
   assert.match(source, /applyRuntimeOutput\(adapter, rawParsed, adapterState\)/);
   assert.doesNotMatch(source, /const decodedEvents = adapter\.decodeOutput\(rawParsed, adapterState\)/);
 });

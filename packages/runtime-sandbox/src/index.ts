@@ -179,26 +179,19 @@ export {
   createAgentboxRuntimeHost,
   wrapAgentboxProcess,
   cleanupUnhealthyManagedGateway,
-  createSemanticToolState,
   CONTAINER_REMOVE_MAX_ATTEMPTS,
   CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
   CONTAINER_REMOVE_TIMEOUT_MS,
   DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
-  discardPendingSemanticTools,
   forceRemoveContainer,
   gatewayCreateTimeoutMs,
   gatewayProxyReuseAction,
   listDeepSonarContainers,
-  materializationPathCollisions,
-  normalizeRuntimeErrorDetails,
   parseDeepSonarContainerRows,
   bindGatewayProxyToOpenSandboxNetwork,
   preheatManagedGateway,
   removeContainerWithRetry,
-  redactRuntimeSecrets,
-  parseRuntimeLine,
   resetManagedGatewayStateForTests,
-  runRealAgent,
   shouldRemoveGatewayLeftover,
   assertSharedAssetsContainerMount,
   isDeepsonarGatewayNetwork,
@@ -215,8 +208,18 @@ export {
   assertSharedAssetsVolumeOwnership,
   parseToolManifest,
 } from "./runtime-shared.js";
-export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails } from "./agentbox.js";
-export type { SemanticToolState } from "./agentbox.js";
+export {
+  createSemanticToolState,
+  discardPendingSemanticTools,
+  materializationPathCollisions,
+  normalizeRuntimeErrorDetails,
+  parseRuntimeLine,
+  redactRuntimeSecrets,
+  runRealAgent,
+  runtimeCliEnv,
+} from "./runtime-agent.js";
+export type { DeepSonarContainer } from "./agentbox.js";
+export type { RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails, SemanticToolState } from "./runtime-agent.js";
 export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";
 export type { SharedAssetsVolumeManager, SharedAssetVolumeFile } from "./shared-assets-volume.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
