@@ -133,7 +133,11 @@ try {
   const app = Fastify({ logger: false });
   registerPlatformControlRoutes(app);
   registerGateway(app);
-  await app.listen({ port: 3100, host: "0.0.0.0" });
+  try {
+    await app.listen({ port: 3100, host: "0.0.0.0" });
+  } catch (error) {
+    throw new Error(`vendor CLI PoC needs 0.0.0.0:3100 for deepsonar-gateway-proxy: ${error instanceof Error ? error.message : String(error)}`);
+  }
   closeApp = () => app.close();
 
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox CLI control')`;
@@ -337,7 +341,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         await started.write(adapter.encodeFollowUp("follow-up: confirm the script finished.", state)).catch(() => { steered = false; });
       }
       if (!adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
-      const text = await collectText(started, 120_000, () => operations.every((name) => calls.includes(name)));
+      const text = await collectText(started, 180_000, () => operations.every((name) => calls.includes(name)));
       if (adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
       applyRuntimeOutputText(adapter, text, state);
       if (!operations.every((name) => calls.includes(name))) {

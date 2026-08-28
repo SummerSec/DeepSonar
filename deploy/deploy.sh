@@ -166,6 +166,12 @@ fi
 # Opt-in only. Default real mode stays Agentbox until #162 Phase 4.
 if [ "${SANDBOX_PROVIDER:-}" = "opensandbox" ]; then
   set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
+  # Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -n iptables-legacy -P FORWARD ACCEPT 2>/dev/null \
+      || sudo -n iptables -P FORWARD ACCEPT 2>/dev/null \
+      || true
+  fi
 fi
 
 cd "$REPO_ROOT"

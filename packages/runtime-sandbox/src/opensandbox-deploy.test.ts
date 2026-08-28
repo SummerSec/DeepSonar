@@ -43,6 +43,7 @@ test("OpenSandbox production overlay is opt-in and keeps default Agentbox", () =
   assert.doesNotMatch(overlay, /127\.0\.0\.1:8080:8080/);
   assert.match(deploySh, /\[ "\$\{SANDBOX_PROVIDER:-\}" = "opensandbox" \]/);
   assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
+  assert.match(deploySh, /iptables-legacy -P FORWARD ACCEPT/);
   assert.match(deployPs1, /\$env:SANDBOX_PROVIDER -eq "opensandbox"/);
   assert.match(deployPs1, /docker-compose.opensandbox.prod.yml/);
   const pkg = readFileSync(join(root, "package.json"), "utf8");
@@ -129,6 +130,8 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /vendor key leaked into OpenSandbox worker env/);
   assert.match(poc, /submit_hub_decision/);
   assert.match(poc, /for \(const selectedCli of selectedClis\)/);
+  assert.match(poc, /vendor CLI PoC needs 0\.0\.0\.0:3100/);
+  assert.match(poc, /180_000/);
   assert.match(poc, /CLI_SESSION_ADAPTERS/);
   assert.match(poc, /parseAgentSession/);
   assert.match(poc, /encodeSteer/);
