@@ -98,7 +98,7 @@ try {
   const runner = new OpenSandboxRunner(client);
   const limits = { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true };
   const invokePy = `
-import json, socket, urllib.error, urllib.request
+import json, os, socket, urllib.error, urllib.request
 gw = "127.0.0.1"
 with open("/proc/net/route") as fh:
     for line in fh:
@@ -106,10 +106,12 @@ with open("/proc/net/route") as fh:
         if len(fields) > 2 and fields[1] == "00000000":
             gw = socket.inet_ntoa(int(fields[2], 16).to_bytes(4, "little"))
             break
+job = os.environ["DEEPSONAR_JOB_ID"]
+token = os.environ["DEEPSONAR_API_TOKEN"]
 req = urllib.request.Request(
-    f"http://{gw}:3100/control/v1/jobs/${jobId}/operations/emit_fact",
+    f"http://{gw}:3100/control/v1/jobs/{job}/operations/emit_fact",
     data=json.dumps({"title":"OpenSandbox fact","description":"Submitted from inside an OpenSandbox worker via Job Platform API."}).encode(),
-    headers={"Authorization":"Bearer ${grant.token}","Idempotency-Key":"${randomUUID()}","Content-Type":"application/json"},
+    headers={"Authorization":"Bearer " + token,"Idempotency-Key":os.environ["DEEPSONAR_IDEMPOTENCY_KEY"],"Content-Type":"application/json"},
     method="POST",
 )
 try:
@@ -123,41 +125,37 @@ except Exception as exc:
     print("CODE:0")
     print(type(exc).__name__)
 `.trim();
-  const invoke = `python3 -c ${JSON.stringify(invokePy)}`;
+  const runInvoke = async (network: "none" | "egress") => {
+    const handle = await runner.provision({
+      jobId: randomUUID(),
+      attemptId: randomUUID(),
+      image: runtimeImage,
+      network,
+      limits,
+      expectedContract: "deepsonar.runtime.contract/v1",
+    });
+    try {
+      const host = await runner.ensureHost(handle);
+      await host.uploadFile(invokePy, "/workspace/poc-emit-fact.py");
+      return await host.run("python3 /workspace/poc-emit-fact.py", {
+        timeoutMs: network === "none" ? 8_000 : 12_000,
+        env: {
+          DEEPSONAR_JOB_ID: jobId,
+          DEEPSONAR_API_TOKEN: grant.token,
+          DEEPSONAR_IDEMPOTENCY_KEY: randomUUID(),
+        },
+      });
+    } finally {
+      await runner.destroy(handle).catch(() => {});
+    }
+  };
 
-  const isolated = await runner.provision({
-    jobId: randomUUID(),
-    attemptId: randomUUID(),
-    image: runtimeImage,
-    network: "none",
-    limits,
-    expectedContract: "deepsonar.runtime.contract/v1",
-  });
-  let isolatedBlocked = false;
-  try {
-    const host = await runner.ensureHost(isolated);
-    const probe = await host.run(invoke, { timeoutMs: 8_000 });
-    isolatedBlocked = probe.exitCode !== 0 || !/CODE:200/.test(`${probe.stdout}${probe.stderr}`);
-  } finally {
-    await runner.destroy(isolated).catch(() => {});
-  }
-
-  const allowed = await runner.provision({
-    jobId: randomUUID(),
-    attemptId: randomUUID(),
-    image: runtimeImage,
-    network: "egress",
-    limits,
-    expectedContract: "deepsonar.runtime.contract/v1",
-  });
-  let submitted = false;
-  try {
-    const host = await runner.ensureHost(allowed);
-    const result = await host.run(invoke, { timeoutMs: 12_000 });
-    submitted = result.exitCode === 0 && /CODE:200/.test(result.stdout);
-    if (!submitted) throw new Error(`OpenSandbox Platform API invoke failed: ${JSON.stringify(result)}`);
-  } finally {
-    await runner.destroy(allowed).catch(() => {});
+  const isolated = await runInvoke("none");
+  const isolatedBlocked = isolated.exitCode !== 0 || !/CODE:200/.test(`${isolated.stdout}${isolated.stderr}`);
+  const allowed = await runInvoke("egress");
+  const submitted = allowed.exitCode === 0 && /CODE:200/.test(allowed.stdout);
+  if (!submitted) {
+    throw new Error(`OpenSandbox Platform API invoke failed: exit=${allowed.exitCode} stdout=${allowed.stdout.slice(0, 240)} stderr=${allowed.stderr.slice(0, 240)}`);
   }
 
   const leftovers = await runner.listResources();
