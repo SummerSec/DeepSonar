@@ -659,7 +659,9 @@ function sandboxCodex(host: RuntimeHost, context: AdapterStartContext, sessionId
     : "stdbuf -oL -eL codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check";
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
-  command += sessionId ? ` -- ${promptArg(context.input)}` : " -";
+  // OpenSandbox execd runAsync 的 stdin 管道刷不出 Codex JSONL；argv 提示与
+  // sandbox.commands.run 真机路径一致。启动与恢复都不再读 stdin `-`。
+  command += ` -- ${promptArg(context.input)}`;
   return host.runAsync(command, { cwd: context.cwd, env: context.env });
 }
 
