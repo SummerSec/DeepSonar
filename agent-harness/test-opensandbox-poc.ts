@@ -43,6 +43,35 @@ const client = createSdkOpenSandboxClient({
   useServerProxy: true,
   pin,
 });
+const caseName = (() => {
+  const idx = process.argv.indexOf("--case");
+  return idx >= 0 ? (process.argv[idx + 1] ?? "") : "all";
+})();
+if (caseName !== "all" && caseName !== "arch") {
+  throw new Error("OpenSandbox PoC --case must be all or arch");
+}
+
+async function runArchCase(): Promise<string> {
+  const requestedArch = process.env.OPEN_SANDBOX_POC_ARCH?.trim();
+  if (requestedArch !== "amd64" && requestedArch !== "arm64") {
+    throw new Error("OPEN_SANDBOX_POC_ARCH must be amd64 or arm64");
+  }
+  const archImage = process.env.OPEN_SANDBOX_POC_ARCH_IMAGE?.trim() || process.env.OPEN_SANDBOX_POC_IMAGE;
+  const arch = await runOpenSandboxArchPoc(client, {
+    jobId: "00000000-0000-4000-8000-000000000164",
+    attemptId: "00000000-0000-4000-8000-000000000264",
+    image: archImage,
+    arch: requestedArch,
+  });
+  return `arch=${arch.arch} leftovers=${arch.leftovers}`;
+}
+
+if (caseName === "arch") {
+  const archSummary = await runArchCase();
+  console.log(`OK: OpenSandbox arch PoC ${archSummary}`);
+  process.exit(0);
+}
+
 const result = await runOpenSandboxInfrastructurePoc(client, {
   jobId: "00000000-0000-4000-8000-000000000162",
   attemptId: "00000000-0000-4000-8000-000000000262",
@@ -68,14 +97,7 @@ if (!cancel.cancelled || cancel.leftovers !== 0) {
 const requestedArch = process.env.OPEN_SANDBOX_POC_ARCH?.trim();
 let archSummary = "skipped";
 if (requestedArch === "amd64" || requestedArch === "arm64") {
-  const archImage = process.env.OPEN_SANDBOX_POC_ARCH_IMAGE?.trim() || process.env.OPEN_SANDBOX_POC_IMAGE;
-  const arch = await runOpenSandboxArchPoc(client, {
-    jobId: "00000000-0000-4000-8000-000000000164",
-    attemptId: "00000000-0000-4000-8000-000000000264",
-    image: archImage,
-    arch: requestedArch,
-  });
-  archSummary = `arch=${arch.arch} leftovers=${arch.leftovers}`;
+  archSummary = await runArchCase();
 } else if (requestedArch) {
   throw new Error("OPEN_SANDBOX_POC_ARCH must be amd64 or arm64");
 }

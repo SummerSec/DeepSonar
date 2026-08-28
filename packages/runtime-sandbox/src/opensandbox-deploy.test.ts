@@ -81,4 +81,5 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   const harness = readFileSync(join(root, "agent-harness/test-opensandbox-poc.ts"), "utf8");
   assert.match(harness, /OPEN_SANDBOX_POC_ARCH_IMAGE/);
   assert.match(harness, /runOpenSandboxArchPoc/);
+  assert.match(harness, /--case must be all or arch/);
 });
