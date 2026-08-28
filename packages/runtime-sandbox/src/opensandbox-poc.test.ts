@@ -12,6 +12,7 @@ import {
   runOpenSandboxHostPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
+  isOpenSandboxCliMissing,
 } from "./opensandbox-poc.js";
 import { OpenSandboxRunner } from "./opensandbox.js";
 import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
@@ -231,6 +232,13 @@ test("OpenSandbox image contract PoC reprovisions and reports leftovers", async 
   }, { image: "img@sha256:" + "a".repeat(64) });
   assert.equal(result.leftovers, 0);
   assert.ok(result.provisionMs >= 0);
+});
+
+test("CLI missing-binary detector ignores model-not-found text", () => {
+  assert.equal(isOpenSandboxCliMissing("Model dummy not found\n"), false);
+  assert.equal(isOpenSandboxCliMissing("sh: pi: not found\n"), true);
+  assert.equal(isOpenSandboxCliMissing("bash: claude: command not found\n"), true);
+  assert.equal(isOpenSandboxCliMissing("node: No such file or directory\n"), true);
 });
 
 test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async () => {

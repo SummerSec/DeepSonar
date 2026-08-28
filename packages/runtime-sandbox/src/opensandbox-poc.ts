@@ -14,6 +14,10 @@ export const OPENSANDBOX_POC_IMAGE =
 export const OPENSANDBOX_POC_CONTRACT = "deepsonar.runtime.contract/v1";
 export const OPENSANDBOX_POC_CLI_IDS = ["claude", "codex", "opencode", "pi", "dsh"] as const;
 export const OPENSANDBOX_POC_ADAPTER_IDS = ["claude-code", "codex", "open-code", "pi", "dsh"] as const satisfies readonly AgentCliId[];
+
+export function isOpenSandboxCliMissing(text: string): boolean {
+  return /command not found|No such file or directory|(?:^|[\n\r])(?:\/bin\/)?(?:ba)?sh: [^\n]* not found/i.test(text);
+}
 const OPENSANDBOX_POC_CLI_PROBES: Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], string> = {
   claude: "command -v claude",
   codex: "command -v codex",
@@ -469,7 +473,7 @@ export async function runOpenSandboxCliLaunchPoc(
       await process.kill().catch(() => {});
       launched[id] = {
         started: true,
-        notFound: /not found|No such file|command not found/i.test(out.text),
+        notFound: isOpenSandboxCliMissing(out.text),
         stdinClosed,
       };
     }
