@@ -120,14 +120,20 @@ def leaked():
     finally:
         s.close()
 
-def post(token):
+OPS = [
+    ("emit_fact", {"title": "OpenSandbox fact", "description": "Submitted from inside an OpenSandbox worker via Job Platform API."}),
+    ("emit_finding", {"title": "OpenSandbox finding from restricted worker", "summary": "This finding proves Job Platform API ingest from an OpenSandbox restricted sandbox."}),
+    ("mark_job_done", {"summary": "OpenSandbox Platform API live proof finished from the worker."}),
+]
+
+def post(operation, payload, token):
     base = os.environ["DEEPSONAR_API_BASE_URL"].rstrip("/")
     req = urllib.request.Request(
-        base + "/operations/emit_fact",
-        data=json.dumps({"title":"OpenSandbox fact","description":"Submitted from inside an OpenSandbox worker via Job Platform API."}).encode(),
+        f"{base}/operations/{operation}",
+        data=json.dumps(payload).encode(),
         headers={
             "Authorization": "Bearer " + token,
-            "Idempotency-Key": os.environ.get("DEEPSONAR_IDEMPOTENCY_KEY", ""),
+            "Idempotency-Key": os.environ.get("DEEPSONAR_IDEMPOTENCY_KEY", "poc") + "-" + operation,
             "Content-Type": "application/json",
         },
         method="POST",
@@ -143,8 +149,10 @@ def post(token):
 print("GW:" + gw())
 print("LEAK:" + ("1" if leaked() else "0"))
 if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
-    print("CODE:" + str(post(os.environ["DEEPSONAR_API_TOKEN"])))
-    print("UNAUTH:" + str(post("invalid-token")))
+    token = os.environ["DEEPSONAR_API_TOKEN"]
+    for name, payload in OPS:
+        print(f"CALL:{name}=" + str(post(name, payload, token)))
+    print("UNAUTH:" + str(post("emit_fact", OPS[0][1], "invalid-token")))
 `.trim();
 
   const summarize = (label: string, result: { exitCode: number; stdout: string; stderr: string }) =>
@@ -192,7 +200,7 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     DEEPSONAR_JOB_ID: jobId,
     DEEPSONAR_IDEMPOTENCY_KEY: randomUUID(),
   }, `http://${gw}:3100/gateway`);
-  const submitted = allowed.exitCode === 0 && /CODE:200/.test(allowed.stdout);
+  const submitted = operations.every((name) => allowed.exitCode === 0 && allowed.stdout.includes(`CALL:${name}=200`));
   const rejectedUnauth = allowed.exitCode === 0 && /UNAUTH:401/.test(allowed.stdout);
   const restrictedIsolated = /LEAK:0/.test(allowed.stdout);
   if (!submitted || !rejectedUnauth || !restrictedIsolated) {
@@ -203,7 +211,9 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
   if (leftovers.length > 0) {
     throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
   }
-  if (!calls.includes("emit_fact")) throw new Error("emit_fact handler was not invoked");
+  if (!operations.every((name) => calls.includes(name))) {
+    throw new Error(`Platform API handlers missing: expected ${operations.join(",")} got ${calls.join(",")}`);
+  }
   unregisterRuntimeHandler(jobId);
   console.log(`OK: OpenSandbox Platform API isolated=${isolatedBlocked} submitted=${submitted} unauth=401 restrictedIsolated=${restrictedIsolated} calls=${calls.join(",")}`);
 } finally {
