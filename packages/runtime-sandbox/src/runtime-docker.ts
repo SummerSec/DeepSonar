@@ -5,7 +5,7 @@
 import { execFile } from "node:child_process";
 import http from "node:http";
 import { promisify } from "node:util";
-import { assertReadableWorkspacePath } from "./runtime-shared.js";
+import { HUMAN_INBOX_WRITER_SCRIPT, assertReadableWorkspacePath, parseHumanInboxWorkspacePath } from "./runtime-shared.js";
 
 const execFileP = promisify(execFile);
 const CANONICAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -255,4 +255,25 @@ export async function readDockerWorkspaceFile(containerId: string, filePath: str
       },
     );
   });
+}
+
+async function execFileWithInput(file: string, args: string[], bytes: Buffer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(file, args, { timeout: 15_000, maxBuffer: 1024 * 1024 }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+    child.stdin?.on("error", reject);
+    child.stdin?.end(bytes);
+  });
+}
+
+/** Scheduler-owned, descriptor-relative write boundary for human-message attachments. */
+export async function writeDockerHumanInboxFile(containerId: string, filePath: string, bytes: Buffer): Promise<void> {
+  const { messageId, filename } = parseHumanInboxWorkspacePath(filePath);
+  try {
+    await execFileWithInput("docker", ["exec", "-i", containerId, "python3", "-c", HUMAN_INBOX_WRITER_SCRIPT, "/workspace", messageId, filename], bytes);
+  } catch {
+    throw new Error("human_message_workspace_write_rejected");
+  }
 }

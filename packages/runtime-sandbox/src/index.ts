@@ -184,6 +184,7 @@ export {
   parseDeepSonarContainerRows,
   readDockerWorkspaceFile,
   removeContainerWithRetry,
+  writeDockerHumanInboxFile,
   isDeepsonarGatewayNetwork,
   isDeepsonarRestrictedNetwork,
 } from "./runtime-docker.js";

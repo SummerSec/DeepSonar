@@ -7,14 +7,11 @@
  * - Gateway sidecar / Docker CLI 公共层在 runtime-gateway.ts 与 runtime-docker.ts。
  */
 import { Sandbox } from "agentbox-sdk";
-import { execFile } from "node:child_process";
 import path from "node:path";
 import {
-  HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
   assertSharedAssetsVolumeOwnership,
-  parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
 import {
@@ -23,6 +20,7 @@ import {
   listDeepSonarContainers,
   readDockerWorkspaceFile,
   removeContainerWithRetry,
+  writeDockerHumanInboxFile,
 } from "./runtime-docker.js";
 import {
   GATEWAY_NETWORK,
@@ -57,6 +55,7 @@ export {
   parseDeepSonarContainerRows,
   readDockerWorkspaceFile,
   removeContainerWithRetry,
+  writeDockerHumanInboxFile,
 } from "./runtime-docker.js";
 export type { DeepSonarContainer } from "./runtime-docker.js";
 export {
@@ -359,7 +358,12 @@ export function createAgentboxRuntimeHost(sandbox: Sandbox): RuntimeHost {
       if (!containerId) throw new Error("shared_asset_container_unavailable");
       return readDockerWorkspaceFile(containerId, filePath, maxBytes);
     },
-    writeHumanInboxFile: (filePath, bytes) => writeHumanInboxWorkspaceFile(sandbox, filePath, bytes),
+    writeHumanInboxFile: async (filePath, bytes) => {
+      const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
+      const containerId = inspected?.Id;
+      if (!containerId) throw new Error("human_message_container_unavailable");
+      return writeDockerHumanInboxFile(containerId, filePath, bytes);
+    },
   };
 }
 
@@ -671,31 +675,14 @@ export type {
   TerminalProcessOutcome,
 } from "./runtime-agent.js";
 
-async function execFileWithInput(file: string, args: string[], bytes: Buffer): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = execFile(file, args, { timeout: 15_000, maxBuffer: 1024 * 1024 }, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-    child.stdin?.on("error", reject);
-    child.stdin?.end(bytes);
-  });
-}
-
-/** Scheduler-owned, descriptor-relative write boundary for human-message attachments. */
 export async function writeHumanInboxWorkspaceFile(
   sandbox: Pick<Sandbox, "raw">,
   filePath: string,
   bytes: Buffer,
 ): Promise<void> {
-  const { messageId, filename } = parseHumanInboxWorkspacePath(filePath);
   const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
   const containerId = inspected?.Id;
   if (!containerId) throw new Error("human_message_container_unavailable");
-  try {
-    await execFileWithInput("docker", ["exec", "-i", containerId, "python3", "-c", HUMAN_INBOX_WRITER_SCRIPT, "/workspace", messageId, filename], bytes);
-  } catch {
-    throw new Error("human_message_workspace_write_rejected");
-  }
+  return writeDockerHumanInboxFile(containerId, filePath, bytes);
 }
 

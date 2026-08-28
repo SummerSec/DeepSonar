@@ -1,8 +1,8 @@
 /**
- * Vendor-model proof that a real CLI inside OpenSandbox talks to Model Gateway
- * and submits Job Platform API operations itself. Long-lived vendor keys stay
+ * Vendor-model proof that real CLIs inside OpenSandbox talk to Model Gateway
+ * and submit Job Platform API operations themselves. Long-lived vendor keys stay
  * in Scheduler credentials; the sandbox only receives a job gateway token.
- * Mock LLM is not a substitute; skip when the vendor key is absent.
+ * Mock LLM is not a substitute. Default: run every CLI that has a vendor key.
  */
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
@@ -27,14 +27,16 @@ const vendorPlans = {
   pi: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
   dsh: { secret: process.env.DEEPSEEK_API_KEY?.trim(), provider: "openai", model: "deepseek-chat", baseUrl: "https://api.deepseek.com" },
 } as const;
-const requestedCli = process.env.OPEN_SANDBOX_POC_CLI?.trim() || "claude-code";
-if (!(requestedCli in vendorPlans)) {
-  console.error(`OPEN_SANDBOX_POC_CLI must be one of ${Object.keys(vendorPlans).join(", ")}`);
+type VendorCli = keyof typeof vendorPlans;
+const vendorCliIds = Object.keys(vendorPlans) as VendorCli[];
+const requestedCli = process.env.OPEN_SANDBOX_POC_CLI?.trim();
+if (requestedCli && !(requestedCli in vendorPlans)) {
+  console.error(`OPEN_SANDBOX_POC_CLI must be one of ${vendorCliIds.join(", ")}`);
   process.exit(1);
 }
-const selectedCli = requestedCli as keyof typeof vendorPlans;
-const plan = vendorPlans[selectedCli];
-if (!plan.secret) {
+const selectedClis = (requestedCli ? [requestedCli as VendorCli] : vendorCliIds)
+  .filter((cli) => Boolean(vendorPlans[cli].secret));
+if (selectedClis.length === 0) {
   console.log("skip: OpenSandbox CLI control PoC needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E");
   process.exit(0);
 }
@@ -58,11 +60,7 @@ targetUrl.search = "";
 
 const projectId = randomUUID();
 const canvasId = randomUUID();
-const jobId = randomUUID();
-const attemptId = randomUUID();
-const credentialId = randomUUID();
 const operations = ["emit_fact", "emit_finding", "mark_job_done"] as const;
-const calls: string[] = [];
 let closeApp: (() => Promise<unknown>) | null = null;
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
@@ -70,6 +68,7 @@ let databaseCreated = false;
 const collectText = async (
   process: AsyncIterable<{ type: string; chunk?: string }>,
   timeoutMs: number,
+  submitted: () => boolean,
 ) => {
   const chunks: string[] = [];
   const deadline = Date.now() + timeoutMs;
@@ -83,7 +82,7 @@ const collectText = async (
     ]);
     if (next.done) break;
     if (next.value?.type === "stdout" || next.value?.type === "stderr") chunks.push(next.value.chunk ?? "");
-    if (calls.length >= operations.length) break;
+    if (submitted()) break;
   }
   return chunks.join("");
 };
@@ -133,118 +132,127 @@ try {
   await app.listen({ port: 3100, host: "0.0.0.0" });
   closeApp = () => app.close();
 
-  const vendorSecret = plan.secret;
-  const encrypted = encryptSecret(vendorSecret);
-  const mapping = PROVIDER_ENV_MAP[plan.provider];
-  if (!mapping) throw new Error(`unsupported vendor provider ${plan.provider}`);
-  const settingsConfig = selectedCli === "dsh"
-    ? defaultDshPiAiSettings({
-      route: "deepseek",
-      protocol: "openai-completions",
-      baseURL: "https://api.deepseek.com",
-      model: plan.model,
-    })
-    : {};
-  await sql`
-    INSERT INTO credentials (
-      id, name, kind, provider, ciphertext, nonce, auth_tag, fingerprint, last4, status,
-      agent_cli, public_metadata_json, settings_config_json
-    ) VALUES (
-      ${credentialId}, ${`OpenSandbox ${selectedCli} vendor`}, 'llm_provider', ${plan.provider},
-      ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
-      ${fingerprintOf(vendorSecret)}, ${last4Of(vendorSecret)}, 'active', ${selectedCli},
-      ${sql.json(JSON.parse(JSON.stringify("baseUrl" in plan ? { base_url: plan.baseUrl } : {})))},
-      ${sql.json(JSON.parse(JSON.stringify(settingsConfig)))}
-    )`;
-
-  const snapshot = {
-    name: "audit",
-    platform_tools: [...operations],
-    agent_cli: selectedCli,
-    agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS[selectedCli]),
-    credential_id: credentialId,
-    credential_provider: plan.provider,
-    model: plan.model,
-    sandbox_limits: { cpu: 1, memoryMiB: 1024, pidsLimit: 256, capDropAll: true, noNewPrivileges: true },
-    runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
-    config_files: [] as Array<{ path: string; content: string; content_sha256: string }>,
-    settings_config_json: settingsConfig,
-  };
   await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox CLI control')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox CLI control')`;
-  await sql`
-    INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, timeout_sec, started_at, lease_expires_at)
-    VALUES (${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(JSON.parse(JSON.stringify(snapshot)))}, 3600, now(), now() + interval '1 hour')`;
-  await sql`
-    INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, started_at)
-    VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.ready', now())`;
 
-  const capability = await preparePlatformCapability(jobId, snapshot as Parameters<typeof preparePlatformCapability>[1]);
-  await activateProvisionedJobCapabilityTokens(jobId);
-  registerRuntimeHandler(jobId, async (context) => {
-    calls.push(context.operationId);
-    return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
-  }, [...operations]);
+  const ran: VendorCli[] = [];
+  for (const selectedCli of selectedClis) {
+    const plan = vendorPlans[selectedCli];
+    const vendorSecret = plan.secret;
+    if (!vendorSecret) throw new Error(`missing vendor secret for ${selectedCli}`);
+    const jobId = randomUUID();
+    const attemptId = randomUUID();
+    const credentialId = randomUUID();
+    const calls: string[] = [];
+    const encrypted = encryptSecret(vendorSecret);
+    const mapping = PROVIDER_ENV_MAP[plan.provider];
+    if (!mapping) throw new Error(`unsupported vendor provider ${plan.provider}`);
+    const settingsConfig = selectedCli === "dsh"
+      ? defaultDshPiAiSettings({
+        route: "deepseek",
+        protocol: "openai-completions",
+        baseURL: "https://api.deepseek.com",
+        model: plan.model,
+      })
+      : {};
+    await sql`
+      INSERT INTO credentials (
+        id, name, kind, provider, ciphertext, nonce, auth_tag, fingerprint, last4, status,
+        agent_cli, public_metadata_json, settings_config_json
+      ) VALUES (
+        ${credentialId}, ${`OpenSandbox ${selectedCli} vendor`}, 'llm_provider', ${plan.provider},
+        ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
+        ${fingerprintOf(vendorSecret)}, ${last4Of(vendorSecret)}, 'active', ${selectedCli},
+        ${sql.json(JSON.parse(JSON.stringify("baseUrl" in plan ? { base_url: plan.baseUrl } : {})))},
+        ${sql.json(JSON.parse(JSON.stringify(settingsConfig)))}
+      )`;
 
-  const token = await mintJobToken({
-    jobId,
-    projectId,
-    credentialId,
-    allowedModels: [plan.model],
-    ttlSec: 3600,
-  });
-  const gatewayEnv: Record<string, string> = {
-    DEEPSONAR_ALLOW_EGRESS: "1",
-    DEEPSONAR_GATEWAY_TOKEN: token.plaintext,
-    ...capability.env,
-  };
-  if (selectedCli === "dsh") {
-    for (const key of mapping.secretKeys) delete gatewayEnv[key];
-    if (mapping.baseUrlKey) delete gatewayEnv[mapping.baseUrlKey];
-  } else {
-    for (const key of mapping.secretKeys) gatewayEnv[key] = token.plaintext;
-    if (mapping.baseUrlKey) gatewayEnv[mapping.baseUrlKey] = config.gateway.sandboxUrl;
-  }
-  if (Object.values(gatewayEnv).includes(vendorSecret) || gatewayEnv.DEEPSEEK_API_KEY) {
-    throw new Error("vendor key leaked into OpenSandbox worker env");
-  }
+    const snapshot = {
+      name: "audit",
+      platform_tools: [...operations],
+      agent_cli: selectedCli,
+      agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS[selectedCli]),
+      credential_id: credentialId,
+      credential_provider: plan.provider,
+      model: plan.model,
+      sandbox_limits: { cpu: 1, memoryMiB: 1024, pidsLimit: 256, capDropAll: true, noNewPrivileges: true },
+      runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
+      config_files: [] as Array<{ path: string; content: string; content_sha256: string }>,
+      settings_config_json: settingsConfig,
+    };
+    await sql`
+      INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, timeout_sec, started_at, lease_expires_at)
+      VALUES (${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(JSON.parse(JSON.stringify(snapshot)))}, 3600, now(), now() + interval '1 hour')`;
+    await sql`
+      INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, started_at)
+      VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.ready', now())`;
 
-  let runtimeConfigFiles = selectedCli === "pi"
-    ? materializeProviderSettings({
-      agentCli: "pi",
-      settingsConfig: { provider: plan.provider, baseUrl: "https://gateway.invalid", api: "openai-responses", models: [{ id: plan.model }] },
-      overrides: { model: plan.model },
-    })
-    : [];
-  if (runtimeConfigFiles.length > 0) {
-    runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
-      agentCli: selectedCli,
-      files: runtimeConfigFiles,
-      gatewayBaseUrl: config.gateway.sandboxUrl,
-      jobToken: token.plaintext,
+    const capability = await preparePlatformCapability(jobId, snapshot as Parameters<typeof preparePlatformCapability>[1]);
+    await activateProvisionedJobCapabilityTokens(jobId);
+    registerRuntimeHandler(jobId, async (context) => {
+      calls.push(context.operationId);
+      return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
+    }, [...operations]);
+
+    const token = await mintJobToken({
+      jobId,
+      projectId,
+      credentialId,
+      allowedModels: [plan.model],
+      ttlSec: 3600,
     });
-  }
-
-  const handle = await runner.provision({
-    jobId,
-    attemptId,
-    image: runtimeImage,
-    network: "egress",
-    gatewayUpstreamUrl: config.gateway.proxyUpstreamUrl,
-    limits: snapshot.sandbox_limits,
-    env: gatewayEnv,
-    expectedContract: "deepsonar.runtime.contract/v1",
-  });
-  try {
-    const host = await runner.ensureHost(handle);
-    await host.run("mkdir -p /workspace/.deepsonar && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json", { timeoutMs: 5_000 });
-    for (const file of runtimeConfigFiles) {
-      const target = selectedCli === "pi" && file.path.startsWith(".pi/")
-        ? `/workspace/.deepsonar-home/${file.path}`
-        : `/workspace/${file.path}`;
-      await host.uploadFile(file.content, target);
+    const gatewayEnv: Record<string, string> = {
+      DEEPSONAR_ALLOW_EGRESS: "1",
+      DEEPSONAR_GATEWAY_TOKEN: token.plaintext,
+      ...capability.env,
+    };
+    if (selectedCli === "dsh") {
+      for (const key of mapping.secretKeys) delete gatewayEnv[key];
+      if (mapping.baseUrlKey) delete gatewayEnv[mapping.baseUrlKey];
+    } else {
+      for (const key of mapping.secretKeys) gatewayEnv[key] = token.plaintext;
+      if (mapping.baseUrlKey) gatewayEnv[mapping.baseUrlKey] = config.gateway.sandboxUrl;
     }
-    await host.uploadFile(`#!/bin/sh
+    if (Object.values(gatewayEnv).includes(vendorSecret) || gatewayEnv.DEEPSEEK_API_KEY) {
+      throw new Error("vendor key leaked into OpenSandbox worker env");
+    }
+
+    let runtimeConfigFiles = selectedCli === "pi"
+      ? materializeProviderSettings({
+        agentCli: "pi",
+        settingsConfig: { provider: plan.provider, baseUrl: "https://gateway.invalid", api: "openai-responses", models: [{ id: plan.model }] },
+        overrides: { model: plan.model },
+      })
+      : [];
+    if (runtimeConfigFiles.length > 0) {
+      runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
+        agentCli: selectedCli,
+        files: runtimeConfigFiles,
+        gatewayBaseUrl: config.gateway.sandboxUrl,
+        jobToken: token.plaintext,
+      });
+    }
+
+    const handle = await runner.provision({
+      jobId,
+      attemptId,
+      image: runtimeImage,
+      network: "egress",
+      gatewayUpstreamUrl: config.gateway.proxyUpstreamUrl,
+      limits: snapshot.sandbox_limits,
+      env: gatewayEnv,
+      expectedContract: "deepsonar.runtime.contract/v1",
+    });
+    try {
+      const host = await runner.ensureHost(handle);
+      await host.run("mkdir -p /workspace/.deepsonar && printf '%s\\n' '{\"mcpServers\":{}}' > /workspace/.deepsonar/mcp.json", { timeoutMs: 5_000 });
+      for (const file of runtimeConfigFiles) {
+        const target = selectedCli === "pi" && file.path.startsWith(".pi/")
+          ? `/workspace/.deepsonar-home/${file.path}`
+          : `/workspace/${file.path}`;
+        await host.uploadFile(file.content, target);
+      }
+      await host.uploadFile(`#!/bin/sh
 set -eu
 base=$(printf '%s' "$DEEPSONAR_API_BASE_URL" | sed 's:/*$::')
 token=$DEEPSONAR_API_TOKEN
@@ -273,58 +281,62 @@ post emit_fact '{"title":"CLI fact","description":"Submitted by a vendor CLI ins
 post emit_finding '{"title":"CLI finding","summary":"Vendor CLI invoked Job Platform API from the worker."}'
 post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
 `, "/workspace/poc-cli-emit.sh");
-    await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
-    const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
-    const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
-    await host.run("mkdir -p /workspace/.deepsonar-home", { timeoutMs: 5_000 });
-    const dshProvider = selectedCli === "dsh"
-      ? buildDshPiAiRuntimeProjection({
-        settingsConfig,
-        credentialProvider: plan.provider,
-        gatewayBaseUrl: config.gateway.sandboxUrl,
-        model: plan.model,
-      })
-      : undefined;
-    const started = await adapter.start({
-      host,
-      env: gatewayEnv,
-      cwd: "/workspace",
-      input: prompt,
-      model: plan.model,
-      mcpConfigPath: "/workspace/.deepsonar/mcp.json",
-      ...(dshProvider ? { dshProvider } : {}),
-    });
-    const payload = selectedCli === "dsh"
-      ? adapter.encodeInput(prompt, {
+      await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
+      const adapter = AGENT_CLI_RUNTIME_ADAPTERS[selectedCli];
+      const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
+      await host.run("mkdir -p /workspace/.deepsonar-home", { timeoutMs: 5_000 });
+      const dshProvider = selectedCli === "dsh"
+        ? buildDshPiAiRuntimeProjection({
+          settingsConfig,
+          credentialProvider: plan.provider,
+          gatewayBaseUrl: config.gateway.sandboxUrl,
           model: plan.model,
-          modelProvider: "deepseek",
-          cwd: "/workspace",
-          contextIdentity: {
-            context_id: jobId.replaceAll("-", ""),
-            context_revision: 0,
-            adapter_id: "dsh",
-            adapter_version: adapter.version,
-            runtime_identity: "poc",
-            transform_chain_digest: "0",
-          },
         })
-      : adapter.encodeInput(prompt);
-    if (payload) await started.write(payload).catch(() => {});
-    if (!adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
-    const text = await collectText(started, 120_000);
-    if (adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
-    await started.kill().catch(() => {});
-    const submitted = operations.every((name) => calls.includes(name));
-    if (!submitted) {
-      throw new Error(`${selectedCli} did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
+        : undefined;
+      const started = await adapter.start({
+        host,
+        env: gatewayEnv,
+        cwd: "/workspace",
+        input: prompt,
+        model: plan.model,
+        mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+        ...(dshProvider ? { dshProvider } : {}),
+      });
+      const payload = selectedCli === "dsh"
+        ? adapter.encodeInput(prompt, {
+            model: plan.model,
+            modelProvider: "deepseek",
+            cwd: "/workspace",
+            contextIdentity: {
+              context_id: jobId.replaceAll("-", ""),
+              context_revision: 0,
+              adapter_id: "dsh",
+              adapter_version: adapter.version,
+              runtime_identity: "poc",
+              transform_chain_digest: "0",
+            },
+          })
+        : adapter.encodeInput(prompt);
+      if (payload) await started.write(payload).catch(() => {});
+      if (!adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
+      const text = await collectText(started, 120_000, () => operations.every((name) => calls.includes(name)));
+      if (adapter.capabilities.incrementalMessages) await started.closeStdin().catch(() => {});
+      await started.kill().catch(() => {});
+      if (!operations.every((name) => calls.includes(name))) {
+        throw new Error(`${selectedCli} did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
+      }
+    } finally {
+      await runner.destroy(handle).catch(() => {});
     }
-  } finally {
-    await runner.destroy(handle).catch(() => {});
+    const leftovers = await runner.listResources({ jobId });
+    if (leftovers.length > 0) throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
+    unregisterRuntimeHandler(jobId);
+    ran.push(selectedCli);
   }
-  const leftovers = await runner.listResources({ jobId });
-  if (leftovers.length > 0) throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
-  unregisterRuntimeHandler(jobId);
-  console.log(`OK: OpenSandbox CLI vendor control cli=${selectedCli} gateway=true submitted=true leftover=0 calls=${calls.join(",")}`);
+  const skipped = vendorCliIds.filter((cli) => !ran.includes(cli));
+  console.log(
+    `OK: OpenSandbox CLI vendor control clis=${ran.join(",")} skipped=${skipped.join(",") || "none"} gateway=true submitted=true leftover=0`,
+  );
 } finally {
   if (closeApp) await closeApp().catch(() => {});
   if (endSql) await endSql().catch(() => {});

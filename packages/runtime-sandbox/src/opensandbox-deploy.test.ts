@@ -104,6 +104,7 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /encryptSecret/);
   assert.match(poc, /DEEPSONAR_GATEWAY_TOKEN/);
   assert.match(poc, /vendor key leaked into OpenSandbox worker env/);
+  assert.match(poc, /for \(const selectedCli of selectedClis\)/);
   assert.doesNotMatch(poc, /ANTHROPIC_API_KEY: vendorKey|ANTHROPIC_API_KEY: vendorSecret/);
   assert.doesNotMatch(poc, /OPENAI_API_KEY: vendorKey|DEEPSEEK_API_KEY: vendorKey/);
 });
@@ -137,6 +138,7 @@ test("OpenSandbox adapter does not import Agentbox SDK types", () => {
   assert.doesNotMatch(docker, /from ["']\.\/agentbox\.js["']/);
   assert.doesNotMatch(docker, /from ["']agentbox-sdk["']/);
   assert.match(docker, /export async function readDockerWorkspaceFile/);
+  assert.match(docker, /export async function writeDockerHumanInboxFile/);
   const assetsIntegration = readFileSync(join(root, "packages/runtime-sandbox/src/shared-assets-volume.integration.test.ts"), "utf8");
   assert.doesNotMatch(assetsIntegration, /from ["']\.\/agentbox\.js["']/);
   assert.match(assetsIntegration, /from ["']\.\/runtime-docker\.js["']/);
