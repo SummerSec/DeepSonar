@@ -1987,7 +1987,7 @@ async function materializeAgentFiles(
     writes.push([subAgentMaterializationPath(sub.name), `---\n${lines.join("\n")}\n---\n\n${sub.instructions.trim()}\n`]);
   }
   for (const skill of spec.skills ?? []) {
-    if (!("files" in skill)) continue; // repo skill 走下方安装命令
+    if (!("files" in skill) || !skill.files) continue; // repo skill 走下方安装命令
     for (const [rel, content] of Object.entries(skill.files)) {
       writes.push([skillMaterializationPath(skill.name, rel, provider), content]);
     }

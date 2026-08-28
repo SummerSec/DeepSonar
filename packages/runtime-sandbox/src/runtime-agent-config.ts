@@ -15,8 +15,8 @@ export interface AgentSubAgentConfig {
 }
 
 export type AgentSkillConfig =
-  | { name: string; files: Record<string, string> }
-  | { name: string; repo: string; files?: undefined };
+  | { name: string; source?: "embedded"; files: Record<string, string> }
+  | { name: string; repo: string; source?: string; files?: undefined };
 
 export type AgentMcpConfig =
   | {
