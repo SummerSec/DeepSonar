@@ -97,6 +97,22 @@ test("Claude 工具结果用户行不生成占位且混合文本不泄漏结果"
   assert.equal(result.items.filter((item) => item.kind === "tool_result").length, 2);
 });
 
+test("parses concatenated Claude session objects without newlines", () => {
+  const text = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "ping" })
+    + JSON.stringify({
+      type: "user",
+      message: { role: "user", content: "请继续分析" },
+    })
+    + JSON.stringify({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "pong" }] },
+    });
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  assert.equal(result.totals.lines, 3);
+  assert.equal(result.items.filter((item) => item.kind === "user").length, 1);
+  assert.equal(result.items.filter((item) => item.kind === "assistant").length, 1);
+});
+
 test("Claude 只把带前缀的 enqueue 归一化为画布广播", () => {
   const broadcast = "[DeepSonar 画布增量通知]\nnode_id: node-1\ntitle: 登录旁路\nsource_job_id: job-1";
   const text = [

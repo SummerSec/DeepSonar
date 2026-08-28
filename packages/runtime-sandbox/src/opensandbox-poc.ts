@@ -599,7 +599,7 @@ export async function runOpenSandboxCliLaunchPoc(
         await process.write(adapter.encodeGetState()).catch(() => {});
       }
       await process.closeStdin().catch(() => { stdinClosed = false; });
-      const out = await collectText(process, 4_000);
+      const out = await collectText(process, 8_000);
       await process.kill().catch(() => {});
       applyRuntimeOutputText(adapter, out.text, state);
       let archived = false;

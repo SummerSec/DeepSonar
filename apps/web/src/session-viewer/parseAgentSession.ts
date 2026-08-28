@@ -1531,6 +1531,47 @@ function parseObjectRows(
   };
 }
 
+/** Split JSONL or concatenated JSON objects (`}{`) without requiring newlines. */
+function extractJsonDocuments(text: string): { documents: string[]; skipped: number } {
+  const documents: string[] = [];
+  let skipped = 0;
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (depth === 0 && ch !== "{" && ch !== "[" && !/\s/.test(ch)) {
+      skipped += 1;
+      while (i + 1 < text.length && text[i + 1] !== "{" && text[i + 1] !== "[" && text[i + 1] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if ((ch === "}" || ch === "]") && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        documents.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return { documents, skipped };
+}
+
 /** Parse raw session archive text (JSONL preferred; also single JSON array/object). */
 export function parseAgentSession(text: string, options?: ParseAgentSessionOptions): SessionParseResult {
   const preferred = normalizeSessionCli(options?.cli);
@@ -1571,13 +1612,11 @@ export function parseAgentSession(text: string, options?: ParseAgentSessionOptio
   }
 
   const rows: Record<string, unknown>[] = [];
-  let skipped = 0;
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    const value = line.trim();
-    if (!value) continue;
+  const extracted = extractJsonDocuments(text);
+  let skipped = extracted.skipped;
+  for (const document of extracted.documents) {
     try {
-      const parsed = JSON.parse(value) as unknown;
+      const parsed = JSON.parse(document) as unknown;
       const rec = asRecord(parsed);
       if (rec) rows.push(rec);
       else skipped += 1;
@@ -1587,7 +1626,7 @@ export function parseAgentSession(text: string, options?: ParseAgentSessionOptio
   }
   const result = parseObjectRows(rows, preferred);
   result.totals.skipped += skipped;
-  result.totals.lines = lines.filter((line) => line.trim()).length;
+  result.totals.lines = extracted.documents.length;
   return result;
 }
 

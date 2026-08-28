@@ -131,7 +131,18 @@ if (runtimeImage && !skipCli) {
   if (failed.length > 0) {
     throw new Error(`OpenSandbox CLI launch PoC unexpected result: ${JSON.stringify(launched)}`);
   }
-  const viewer: Record<string, { sessionId?: string; archived: boolean; resumed: boolean; items: number; format?: string }> = {};
+  const viewer: Record<string, {
+    sessionId?: string;
+    archived: boolean;
+    resumed: boolean;
+    items: number;
+    format?: string;
+    lines?: number;
+    parsed?: number;
+    skipped?: number;
+    bytes?: number;
+    preview?: string;
+  }> = {};
   for (const [id, item] of Object.entries(launched)) {
     const artifact = item.artifacts[0];
     const parsed = artifact ? parseAgentSession(artifact.content, { cli: id }) : undefined;
@@ -141,6 +152,11 @@ if (runtimeImage && !skipCli) {
       resumed: item.resumed,
       items: parsed?.items.length ?? 0,
       format: parsed?.format,
+      lines: parsed?.totals.lines,
+      parsed: parsed?.totals.parsed,
+      skipped: parsed?.totals.skipped,
+      bytes: artifact ? Buffer.byteLength(artifact.content) : 0,
+      preview: artifact?.content.replace(/\s+/g, " ").slice(0, 180),
     };
   }
   cliSummary = JSON.stringify({ launch: Object.fromEntries(Object.entries(launched).map(([id, item]) => [id, {
