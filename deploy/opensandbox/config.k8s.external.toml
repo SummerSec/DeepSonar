@@ -1,12 +1,11 @@
-# OpenSandbox Kubernetes + Kata (#162 Phase 3). Official server schema only.
-# Namespace isolates infrastructure only; it does not replace project/Job auth.
-# Apply namespace.yaml, runtimeclass-kata.yaml, and resourcequota.yaml before
-# pointing the server at this overlay. Live Kata verification is still required.
-# gVisor + egress sidecar is not inferred from upstream docs and stays unverified.
+# Out-of-cluster OpenSandbox Kubernetes server (#162 Phase 3).
+# In-cluster production uses config.k8s.toml (kubeconfig_path unset).
+# This overlay talks to an existing cluster; it does not replace project/Job auth.
+# Do not stop the Phase 2 Docker OpenSandbox server (port 8080).
 
 [server]
 host = "0.0.0.0"
-port = 8080
+port = 18084
 max_sandbox_timeout_seconds = 86400
 
 [log]
@@ -21,7 +20,7 @@ type = "kata"
 k8s_runtime_class = "kata-qemu"
 
 [kubernetes]
-# Unset/null uses in-cluster credentials. Out-of-cluster PoC uses config.k8s.external.toml.
+kubeconfig_path = "/etc/opensandbox/kubeconfig"
 namespace = "deepsonar-opensandbox"
 workload_provider = "batchsandbox"
 image_pull_policy = "IfNotPresent"

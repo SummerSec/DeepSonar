@@ -102,6 +102,20 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(kustomization, /runtimeclass-kata\.yaml/);
   assert.match(kustomization, /resourcequota\.yaml/);
   assert.doesNotMatch(kustomization, /batchsandbox-template\.yaml/);
+  const external = readFileSync(join(root, "deploy/opensandbox/config.k8s.external.toml"), "utf8");
+  const k8sCompose = readFileSync(join(root, "deploy/docker-compose.opensandbox.k8s.yml"), "utf8");
+  assert.match(external, /type = "kubernetes"/);
+  assert.match(external, /type = "kata"/);
+  assert.match(external, /k8s_runtime_class = "kata-qemu"/);
+  assert.match(external, /kubeconfig_path = "\/etc\/opensandbox\/kubeconfig"/);
+  assert.match(external, /port = 18084/);
+  assert.doesNotMatch(external, /(?:^|\s)latest(?:\s|$)|workload_provider = "agent-sandbox"|type = "gvisor"/m);
+  assert.match(k8sCompose, /config\.k8s\.external\.toml/);
+  assert.match(k8sCompose, /OPEN_SANDBOX_KUBECONFIG/);
+  assert.match(k8sCompose, /deepsonar-opensandbox-k8s/);
+  assert.match(k8sCompose, /127\.0\.0\.1:18084\/health/);
+  assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
+  assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
 });
 
 test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () => {
