@@ -24,7 +24,7 @@ import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
 import { startRuntimeImageGc } from "./runtime-image-gc.js";
 
 async function main() {
-  // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
+  // 运行时 SDK 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
   // 绝不能因此崩掉整个调度进程 —— 记日志即可，job 级错误由 runJob 的 try/catch 兜底
   process.on("unhandledRejection", (reason) => {
     console.error("[fatal-guard] unhandledRejection:", reason instanceof Error ? reason.message : reason);

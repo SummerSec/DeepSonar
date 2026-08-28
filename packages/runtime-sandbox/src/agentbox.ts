@@ -8,12 +8,6 @@
  *   （is_error 省略或为 false）后才释放语义事件，不经过沙箱目标网络，也不依赖 Agent 可写文件。
  */
 import { Sandbox } from "agentbox-sdk";
-import type {
-  AgentCommandConfig,
-  AgentMcpConfig,
-  AgentSkillConfig,
-  AgentSubAgentConfig,
-} from "agentbox-sdk";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
@@ -21,6 +15,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
 import { assertContextResume, type ContextIdentity } from "./context-contract.js";
+import type {
+  AgentCommandConfig,
+  AgentMcpConfig,
+  AgentSkillConfig,
+  AgentSubAgentConfig,
+} from "./runtime-agent-config.js";
 import {
   parsePiJsonlRecord,
   PiJsonlFramer,
@@ -28,6 +28,7 @@ import {
   type AgentCliRuntimeSnapshot,
   type DshProviderRuntimeConfig,
 } from "./runtime-adapters.js";
+import { assertWorkspaceWritePath, type RuntimeHost, type RuntimeProcess, type RuntimeProcessChunk, type RuntimeResource } from "./runtime-host.js";
 import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 
 const execFileP = promisify(execFile);
@@ -735,7 +736,7 @@ export function resetManagedGatewayStateForTests(): void {
  *（Dockerfile 单引号里写了 +"\\n"），严格 parse 会报
  * "Unexpected non-whitespace character after JSON"。
  */
-function parseToolManifest(raw: string): { contract?: string } {
+export function parseToolManifest(raw: string): { contract?: string } {
   const text = raw.replace(/^\uFEFF/, "").trim();
   try {
     return JSON.parse(text) as { contract?: string };
@@ -830,6 +831,99 @@ function hardenCreateContainer(
       };
     }
     return orig(opts);
+  };
+}
+
+type AgentboxExecHandle = AsyncIterable<{ type?: string; chunk?: string; exitCode?: number }> & {
+  id?: string;
+  write?: (data: string) => Promise<void>;
+  kill: () => Promise<void>;
+  wait?: () => Promise<unknown>;
+  raw?: {
+    stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean; end?: () => void };
+    exec?: { resize?: (size: { w: number; h: number }) => Promise<void> };
+  };
+};
+
+export function wrapAgentboxProcess(handle: AgentboxExecHandle): RuntimeProcess {
+  let closed = false;
+  const process: RuntimeProcess = {
+    id: handle.id,
+    get stdinClosed() {
+      const stream = handle.raw?.stream;
+      return closed || stream?.destroyed === true || stream?.writableEnded === true || stream?.writable === false;
+    },
+    async write(data) {
+      if (process.stdinClosed) throw new Error("agent stdin 已关闭，无法追加消息");
+      if (!handle.write) throw new Error("沙箱 exec 不支持 stdin 写入");
+      try {
+        await handle.write(data);
+      } catch (error) {
+        closed = true;
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`agent stdin 写入失败: ${msg}`);
+      }
+    },
+    async closeStdin() {
+      closed = true;
+      if (handle.raw?.stream?.end) {
+        try {
+          handle.raw.stream.end();
+        } catch {
+          /* already ended */
+        }
+        return;
+      }
+      await handle.kill().catch(() => {});
+    },
+    kill: () => handle.kill(),
+    async resize(cols, rows) {
+      const resize = handle.raw?.exec?.resize;
+      if (!resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
+      await resize({
+        w: Math.max(20, Math.min(240, Math.trunc(cols))),
+        h: Math.max(5, Math.min(100, Math.trunc(rows))),
+      });
+    },
+    async *[Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk> {
+      for await (const event of handle) {
+        if (event.type === "stderr") yield { type: "stderr", chunk: event.chunk ?? "" };
+        else if (event.type === "exit") yield { type: "exit", exitCode: event.exitCode ?? 0 };
+        else yield { type: "stdout", chunk: event.chunk ?? "" };
+      }
+    },
+  };
+  return process;
+}
+
+export function createAgentboxRuntimeHost(sandbox: Sandbox): RuntimeHost {
+  return {
+    async run(command, options) {
+      const result = await sandbox.run(command, {
+        cwd: options?.cwd,
+        env: options?.env,
+        timeoutMs: options?.timeoutMs,
+      });
+      return {
+        exitCode: result.exitCode ?? 0,
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+      };
+    },
+    async runAsync(command, options) {
+      const handle = await sandbox.runAsync(command, {
+        cwd: options?.cwd,
+        env: options?.env,
+        pty: options?.pty,
+        timeoutMs: options?.timeoutMs ?? 0,
+      });
+      return wrapAgentboxProcess(handle as AgentboxExecHandle);
+    },
+    async uploadFile(content, destPath) {
+      await sandbox.uploadFile(typeof content === "string" ? content : content.toString("utf8"), destPath);
+    },
+    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+    writeHumanInboxFile: (filePath, bytes) => writeHumanInboxWorkspaceFile(sandbox, filePath, bytes),
   };
 }
 
@@ -1024,20 +1118,21 @@ export class AgentboxRunner implements SandboxRunner {
     if (sandbox.provider !== "local-docker") throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
     const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
     const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
-    const process = await sandbox.runAsync(buildTerminalShellCommand(), {
+    const rawProcess = await sandbox.runAsync(buildTerminalShellCommand(), {
       cwd: "/workspace",
       env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
       pty: true,
       timeoutMs: 0,
-    });
+    }) as AgentboxExecHandle;
+    const process = wrapAgentboxProcess(rawProcess);
     let closed = false;
     const output = (async function* () {
       for await (const event of process) {
-        if (event.type === "stdout" || event.type === "stderr") yield event.chunk ?? "";
+        if (event.type === "stdout" || event.type === "stderr") yield event.chunk;
       }
     })();
     const session: SandboxTerminalSession = {
-      id: process.id,
+      id: process.id ?? `term-${handle.sandboxId}`,
       output,
       write: async (data) => {
         if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
@@ -1045,12 +1140,8 @@ export class AgentboxRunner implements SandboxRunner {
       },
       resize: async (nextCols, nextRows) => {
         if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
-        const exec = (process.raw as { exec?: { resize?: (size: { w: number; h: number }) => Promise<void> } } | undefined)?.exec;
-        if (!exec?.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
-        await exec.resize({
-          w: Math.max(20, Math.min(240, Math.trunc(nextCols))),
-          h: Math.max(5, Math.min(100, Math.trunc(nextRows))),
-        });
+        if (!process.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
+        await process.resize(nextCols, nextRows);
       },
       close: async () => {
         if (closed) return;
@@ -1067,16 +1158,32 @@ export class AgentboxRunner implements SandboxRunner {
     sessions.add(session);
     terminalSessions.set(handle.sandboxId, sessions);
     await session.resize(cols, rows);
-    void process.wait().catch(() => undefined).finally(() => {
+    void rawProcess.wait?.().catch(() => undefined).finally(() => {
       closed = true;
       terminalSessions.get(handle.sandboxId)?.delete(session);
     });
     return session;
   }
 
-  /** 供 executor 取沙箱实例（上传种子文件 / 跑 agent / 读结果） */
-  static sandboxOf(handle: RunHandle): Sandbox | undefined {
-    return sandboxes.get(handle.sandboxId);
+  hostOf(handle: RunHandle): RuntimeHost | undefined {
+    const sandbox = sandboxes.get(handle.sandboxId);
+    return sandbox ? createAgentboxRuntimeHost(sandbox) : undefined;
+  }
+
+  async listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]> {
+    const rows = await listDeepSonarContainers();
+    return rows
+      .filter((row) => (!filter?.jobId || row.jobId === filter.jobId) && (!filter?.attemptId || row.attemptId === filter.attemptId))
+      .map((row) => ({
+        resourceId: row.containerId,
+        jobId: row.jobId,
+        attemptId: row.attemptId,
+        state: row.state,
+      }));
+  }
+
+  async destroyResource(resource: RuntimeResource): Promise<void> {
+    await this.removeContainer(resource.resourceId);
   }
 }
 
@@ -1515,9 +1622,9 @@ export function normalizePlainFinalOutput(
  * （首行是 tar 头里的文件名），不能当文件内容用；这里走 exec cat。
  * 文件不存在返回 null（调用方区分「尚未创建」与「读失败」）。
  */
-async function readSandboxFileText(sandbox: Sandbox, filePath: string): Promise<string | null> {
+async function readSandboxFileText(host: Pick<RuntimeHost, "run">, filePath: string): Promise<string | null> {
   const q = `'${filePath.replace(/'/g, `'\\''`)}'`;
-  const res = await sandbox.run(`if [ -f ${q} ]; then cat ${q}; else exit 44; fi`, { timeoutMs: 15000 });
+  const res = await host.run(`if [ -f ${q} ]; then cat ${q}; else exit 44; fi`, { timeoutMs: 15000 });
   if (res.exitCode === 44) return null;
   if (res.exitCode !== 0) {
     throw new Error(`读取沙箱文件失败(exit=${res.exitCode}): ${res.stderr.slice(0, 200)}`);
@@ -1660,10 +1767,10 @@ export function runtimeCliEnv(env: Record<string, string>): Record<string, strin
   };
 }
 
-export async function ensureRuntimeHome(sandbox: Pick<Sandbox, "run">): Promise<void> {
+export async function ensureRuntimeHome(host: Pick<RuntimeHost, "run">): Promise<void> {
   let result: { exitCode: number };
   try {
-    result = await sandbox.run(
+    result = await host.run(
       `mkdir -p -- ${shellQuote(RUNTIME_HOME)} && test -d ${shellQuote(RUNTIME_HOME)} && test -w ${shellQuote(RUNTIME_HOME)}`,
       { timeoutMs: 15_000 },
     );
@@ -1853,7 +1960,7 @@ export function materializationPathCollisions(
  * Codex `.codex/skills`、OpenCode `.config/opencode/skills`、Pi `.pi/agent/skills`）；repo skills 需出网安装，尽力而为。
  */
 async function materializeAgentFiles(
-  sandbox: Sandbox,
+  host: Pick<RuntimeHost, "run" | "uploadFile">,
   spec: RealAgentSpec,
   cliEnv: Record<string, string>,
 ): Promise<void> {
@@ -1887,14 +1994,14 @@ async function materializeAgentFiles(
   }
   for (const [filePath, content] of writes) {
     const dir = path.posix.dirname(filePath);
-    await sandbox.run(`mkdir -p -- ${shellQuote(dir)}`);
-    await sandbox.uploadFile(content, filePath);
+    await host.run(`mkdir -p -- ${shellQuote(dir)}`);
+    await host.uploadFile(content, filePath);
   }
   // repo 形式 skill：需要出网，失败只告警不阻断
   for (const skill of spec.skills ?? []) {
     if ("files" in skill || !skill.repo) continue;
     const skillAgent = provider === "open-code" ? "opencode" : provider === "claude-code" ? "claude-code" : provider;
-    const res = await sandbox.run(
+    const res = await host.run(
       `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
       { timeoutMs: 120_000, env: cliEnv },
     ).catch(() => null);
@@ -2657,9 +2764,7 @@ function semanticToolNameForEvent(event: Record<string, unknown>): string {
   return map[type] ?? (type ? `control:${type}` : "control_tool");
 }
 
-export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
-  const sandbox = AgentboxRunner.sandboxOf(handle);
-  if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
+export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
   // 按键比较能力映射，不使用 JSON.stringify：Postgres JSONB 不保留对象键插入顺序，
@@ -2689,36 +2794,28 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   // 1. 从冻结快照生成本 Job 的完整 /workspace。目标内容不由 Scheduler 预下载，
   // Worker 根据 Hub prompt 与网络策略自行决定如何取材。
   for (const [filePath, content] of Object.entries(spec.workspaceFiles ?? {})) {
-    const normalized = path.posix.normalize(filePath);
-    if (
-      !normalized.startsWith("/workspace/") ||
-      normalized !== filePath ||
-      normalized.includes("/../") ||
-      normalized.includes("\0")
-    ) {
-      throw new Error(`拒绝写入 workspace 之外的动态文件: ${filePath}`);
-    }
+    const normalized = assertWorkspaceWritePath(filePath);
     const dir = path.posix.dirname(normalized);
-    if (dir !== "/workspace") await sandbox.run(`mkdir -p -- ${shellQuote(dir)}`);
-    await sandbox.uploadFile(content, normalized);
+    if (dir !== "/workspace") await host.run(`mkdir -p -- ${shellQuote(dir)}`);
+    await host.uploadFile(content, normalized);
   }
 
-  // 2. agentbox 只当沙箱用：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
+  // 2. 沙箱只当执行宿主：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
   //    控制 MCP 仍由宿主注册并捕获结构化 tool_use/tool_result，不经沙箱目标网络。
   const cliEnv = runtimeCliEnv(spec.env);
-  await ensureRuntimeHome(sandbox);
-  await materializeAgentFiles(sandbox, spec, cliEnv);
+  await ensureRuntimeHome(host);
+  await materializeAgentFiles(host, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
   if (spec.provider !== "pi") {
-    await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
+    await host.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
   }
   let systemPromptPath: string | null = null;
   if (spec.systemPrompt) {
     systemPromptPath = `${RUNTIME_DIR}/system-prompt.txt`;
-    await sandbox.uploadFile(spec.systemPrompt, systemPromptPath);
+    await host.uploadFile(spec.systemPrompt, systemPromptPath);
   }
   await adapter.materialize?.({
-    sandbox,
+    host,
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -2745,7 +2842,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     }
   };
   const adapterContext = {
-    sandbox,
+    host,
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -2769,22 +2866,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
   };
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
-  // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
-  let stdinClosed = false;
   const writeEncoded = async (encoded: string) => {
     if (!encoded) return;
-    if (!exec.write) throw new Error("沙箱 exec 不支持 stdin 写入");
-    const rawStream = (exec.raw as { stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean } } | undefined)?.stream;
-    if (stdinClosed || rawStream?.destroyed || rawStream?.writableEnded || rawStream?.writable === false) {
-      throw new Error("agent stdin 已关闭，无法追加消息");
-    }
-    try {
-      await exec.write(encoded);
-    } catch (error) {
-      stdinClosed = true;
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`agent stdin 写入失败: ${msg}`);
-    }
+    await exec.write(encoded);
   };
   const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content, adapterState));
   const writeSteerMessage = async (content: string) => writeEncoded(
@@ -2796,8 +2880,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   if (adapter.encodeGetState) await writeEncoded(adapter.encodeGetState());
   const disposeMessageSource = await spec.onRunReady?.({
     sendMessage: writeSteerMessage,
-    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
-    writeWorkspaceFile: (filePath, bytes) => writeHumanInboxWorkspaceFile(sandbox, filePath, bytes),
+    readWorkspaceFile: (filePath, maxBytes) => host.readWorkspaceFile(filePath, maxBytes),
+    writeWorkspaceFile: (filePath, bytes) => host.writeHumanInboxFile(filePath, bytes),
   });
   try {
     // 在首条 prompt 写入 stdin 前注册 Job 级运行 handler，避免 CLI 的首次 API
@@ -2861,15 +2945,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
   const closeStdin = (reason?: TerminalAttemptCloseReason) => {
     if (reason) attemptCloseReason = reason;
-    stdinClosed = true;
-    const raw = exec.raw as { stream?: { end?: () => void } } | undefined;
-    if (raw?.stream?.end) {
-      try {
-        raw.stream.end();
-      } catch {
-        /* already ended */
-      }
-    } else void exec.kill().catch(() => {});
+    void exec.closeStdin().catch(() => {});
   };
   if (!adapter.capabilities.incrementalMessages && adapter.encodeInput(spec.input)) closeStdin("initial_input");
   try {
@@ -2973,7 +3049,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                 const safeSemanticEvent = redactToolTelemetry(event, undefined, 0, secretValues) as Record<string, unknown>;
                 try {
                   await spec.onSemanticEvent?.(safeSemanticEvent, {
-                    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+                    readWorkspaceFile: (filePath, maxBytes) => host.readWorkspaceFile(filePath, maxBytes),
                   });
                 } catch (error) {
                   // Host-side control validation runs after MCP returned
@@ -3156,7 +3232,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       exec = resumedExec;
       // 只有增量 CLI 通过 stream-json stdin 注入恢复消息；Codex/OpenCode
       // 已把恢复消息作为固定命令参数传入，不能再重复写入 stdin。
-      stdinClosed = !adapter.capabilities.incrementalMessages;
       stdoutBuffer = "";
       attemptFinalText = "";
       attemptExitCode = 0;
@@ -3189,7 +3264,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const files: Record<string, string> = {};
   for (const path of spec.resultFiles ?? []) {
     try {
-      const text = await readSandboxFileText(sandbox, path);
+      const text = await readSandboxFileText(host, path);
       if (text !== null) files[path] = redactSecretValues(text, secretValues);
     } catch {
       // 文件不存在 = agent 没写，容忍
@@ -3199,8 +3274,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const rawSession = sessionId
     ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
         {
-          run: (command) => sandbox.run(command, { timeoutMs: 20_000, env: cliEnv }),
-          readText: (filePath) => readSandboxFileText(sandbox, filePath),
+          run: (command) => host.run(command, { timeoutMs: 20_000, env: cliEnv }),
+          readText: (filePath) => readSandboxFileText(host, filePath),
         },
         sessionId,
         sessionFile || undefined,
@@ -3214,13 +3289,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const session = rawSession
     ? redactRuntimeSecrets(rawSession, secretValues) as SessionBundle
     : undefined;
-  await sandbox.run(`rm -rf -- ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
+  await host.run(`rm -rf -- ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
   const cleanupPaths = [...(spec.resultFiles ?? [])]
     .filter((p) => p.startsWith("/workspace/"));
   if (cleanupPaths.length > 0) {
-    await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});
+    await host.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});
   }
 
   return {

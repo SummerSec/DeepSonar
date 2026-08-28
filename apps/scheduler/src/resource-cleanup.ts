@@ -1,12 +1,10 @@
 import {
-  forceRemoveContainer,
-  listDeepSonarContainers,
   type DeepSonarContainer,
   type SharedAssetsVolumeManager,
 } from "@deepsonar/runtime-sandbox";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
-import { sharedAssetsVolumeManager } from "./runtime.js";
+import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 
 const ACTIVE_JOB_STATUSES = ["claimed", "provisioning", "running", "waiting_human"] as const;
 
@@ -46,8 +44,13 @@ function defaultDependencies(volumeManager: SharedAssetsVolumeManager): DesiredS
         attemptId: row.attempt_id ? String(row.attempt_id).toLowerCase() : null,
       }));
     },
-    listContainers: listDeepSonarContainers,
-    removeContainer: forceRemoveContainer,
+    listContainers: async () => (await runner.listResources()).map((resource) => ({
+      containerId: resource.resourceId,
+      jobId: resource.jobId,
+      attemptId: resource.attemptId,
+      state: resource.state ?? "",
+    })),
+    removeContainer: (containerId) => runner.destroyResource({ resourceId: containerId, jobId: "", attemptId: "" }),
     listVolumes: () => volumeManager.listManaged(),
     removeVolumeForJob: (jobId) => volumeManager.removeForJob(jobId),
   };

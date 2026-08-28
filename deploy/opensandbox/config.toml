@@ -1,0 +1,24 @@
+# OpenSandbox Docker PoC (#162 Phase 2).
+# Explicit bridge network only — do not use host-network.
+# Pin server/execd/egress images via OPENSANDBOX_*_IMAGE immutable digests.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+api_key_env = "OPEN_SANDBOX_API_KEY"
+
+[runtime]
+type = "docker"
+execd_image = "${OPENSANDBOX_EXECD_IMAGE}"
+
+[docker]
+network_mode = "bridge"
+api_timeout = 180
+
+[egress]
+enabled = true
+
+[store]
+# Scheduler owns Job TTL; server persistence is only for reconnect/reconcile.
+driver = "sqlite"
+path = "/var/lib/opensandbox/opensandbox.db"

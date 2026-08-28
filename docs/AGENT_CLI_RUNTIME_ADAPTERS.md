@@ -11,7 +11,9 @@ provider-specific CLI protocols.
 ## Contract
 
 `packages/runtime-sandbox/src/runtime-adapters.ts` is the single registry for
-real Agent CLIs. Each registered adapter declares:
+real Agent CLIs. Adapters talk only to the provider-neutral `RuntimeHost`
+(`run` / `runAsync` / `uploadFile`); they must not import Agentbox or
+OpenSandbox SDK types. Each registered adapter declares:
 
 - a stable adapter id and installed CLI version;
 - required capabilities (`streamEvents`, `completionGate`, `sessionCapture`,

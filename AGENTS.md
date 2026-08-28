@@ -25,7 +25,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 - **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:mcp`；后者文件名是历史命名，当前验证的是 Job 控制 API-only 契约。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
 - **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI，当前是 `test` 角色默认镜像且不要求项目 opt-in。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
-- **运行模式**：默认 `AGENT_MODE=real`（agentbox-sdk 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
+- **运行模式**：默认 `AGENT_MODE=real`（真实沙箱；默认 Agentbox，PoC 可设 `SANDBOX_PROVIDER=opensandbox`）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
 - **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission/assets-helper/silo 等 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。核心 CI 在 `.github/workflows/ci.yml`（**PR 与 main 合并后**触发，功能分支每次 push 不再跑；main 上纯 `*.md`/`docs/`/`skills/` 跳过；可 `workflow_dispatch` 手动补跑；同 ref 并发会取消旧 run）；Chrome 与 OpenHarmony 专项 CI 分别在 `.github/workflows/chrome-runtime.yml` / `.github/workflows/openharmony-runtime.yml`，按自身 Dockerfile、配置/脚本、`.dockerignore`、共享 fingerprint/cache 机制或 workflow 变更触发；GHCR 制品发布在 `release.yml`。
 - **镜像发布 / 如何更新镜像**（`release.yml` + `agent-harness/image-build-fingerprint.mjs`）：
@@ -81,7 +81,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 运行时（`packages/runtime-sandbox/`）
 
-- `SandboxRunner` 是调度器与沙箱之间唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（agentbox-sdk，可切 local-docker/e2b/daytona）。换 provider 只动这个包。
+- `SandboxRunner` + `RuntimeHost` 是调度器与沙箱之间的唯一接口：`NoopRunner`（骨架）↔ `AgentboxRunner`（过渡实现）↔ `OpenSandboxRunner`（#162）。五类 CLI adapter 只依赖内部 process/file 契约，不引用 provider SDK 类型。real 默认仍走 Agentbox；`SANDBOX_PROVIDER=opensandbox` 才启用 OpenSandbox PoC。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
 - **系统沙箱**：RoleConfig 的 `runtime_image_key=null` 表示不绑定市场镜像；Scheduler 仍使用受治理的最小 Base 底座，并在 Job 快照中冻结不可变 digest。Test/Audit 等专项角色才默认或显式绑定专项镜像。
 - **最新版本策略**：官方市场从 GitHub Release 的 `latest/runtime-image-registry.json` 同步并只提升最新版本；旧版本仅保留给显式 pin 与历史 Job，实际执行始终使用快照中的 digest，不使用可变 `latest`。

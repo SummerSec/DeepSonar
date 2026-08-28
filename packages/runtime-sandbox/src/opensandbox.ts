@@ -1,0 +1,394 @@
+/**
+ * OpenSandbox adapter (#162 Phase 2). Scheduler still owns Job/Attempt state.
+ * Provider SDK types stay in this module; callers only see RuntimeHost / SandboxRunner.
+ */
+import path from "node:path";
+import { HUMAN_INBOX_WRITER_SCRIPT, RuntimeImageContractError, SHARED_ASSETS_MOUNT_PATH, parseToolManifest } from "./agentbox.js";
+import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
+import {
+  assertWorkspaceWritePath,
+  shellQuote,
+  type RuntimeHost,
+  type RuntimeProcess,
+  type RuntimeProcessChunk,
+  type RuntimeResource,
+} from "./runtime-host.js";
+
+export const OPENSANDBOX_JOB_META = "deepsonar.job";
+export const OPENSANDBOX_ATTEMPT_META = "deepsonar.attempt";
+
+const WORKSPACE_RESERVED_ROOTS = [
+  "/workspace/.deepsonar",
+  "/workspace/.deepsonar-home",
+  SHARED_ASSETS_MOUNT_PATH,
+  "/workspace/.claude",
+  "/workspace/.codex",
+  "/workspace/.opencode",
+];
+
+export interface OpenSandboxConnection {
+  domain: string;
+  apiKey: string;
+  protocol?: "http" | "https";
+  useServerProxy?: boolean;
+}
+
+export interface OpenSandboxCreateInput {
+  image: string;
+  env: Record<string, string>;
+  metadata: Record<string, string>;
+  resource: { cpu: string; memory: string; pids?: string };
+  timeoutSeconds: null;
+  networkPolicy: { defaultAction: "deny" | "allow"; egress: Array<{ action: "allow" | "deny"; target: string }> };
+  volumes: Array<{
+    name: string;
+    mountPath: string;
+    readOnly: true;
+    host: { source: string; type: "volume" };
+  }>;
+  signal?: AbortSignal;
+}
+
+export interface OpenSandboxExecHandle {
+  id?: string;
+  write(data: string): Promise<void>;
+  closeStdin(): Promise<void>;
+  kill(): Promise<void>;
+  resize?(cols: number, rows: number): Promise<void>;
+  [Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk>;
+}
+
+export interface OpenSandboxSession {
+  id: string;
+  run(command: string, options?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; stdin?: Buffer }): Promise<{
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    stdoutBytes?: Buffer;
+  }>;
+  runAsync(command: string, options?: { cwd?: string; env?: Record<string, string>; pty?: boolean }): Promise<OpenSandboxExecHandle>;
+  writeFile(destPath: string, content: string | Buffer): Promise<void>;
+  readFile(filePath: string): Promise<Buffer>;
+  getState(): Promise<string>;
+  kill(): Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface OpenSandboxClient {
+  create(input: OpenSandboxCreateInput): Promise<OpenSandboxSession>;
+  connect(id: string): Promise<OpenSandboxSession | undefined>;
+  list(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]>;
+}
+
+export function requireOpenSandboxLimits(limits: SandboxLimits | undefined): Required<Pick<SandboxLimits, "cpu" | "memoryMiB" | "pidsLimit">> {
+  if (limits?.cpu == null || limits.cpu <= 0) throw new Error("SANDBOX_LIMITS_MISSING: cpu");
+  if (limits.memoryMiB == null || limits.memoryMiB <= 0) throw new Error("SANDBOX_LIMITS_MISSING: memoryMiB");
+  if (limits.pidsLimit == null || limits.pidsLimit <= 0) throw new Error("SANDBOX_LIMITS_MISSING: pidsLimit");
+  if (limits.capDropAll === false) throw new Error("SANDBOX_LIMITS_INSECURE: capDropAll");
+  if (limits.noNewPrivileges === false) throw new Error("SANDBOX_LIMITS_INSECURE: noNewPrivileges");
+  return { cpu: limits.cpu, memoryMiB: limits.memoryMiB, pidsLimit: limits.pidsLimit };
+}
+
+export function mapOpenSandboxNetworkPolicy(
+  network: ProvisionInput["network"],
+  gatewayUpstreamUrl?: string,
+): OpenSandboxCreateInput["networkPolicy"] {
+  if (network === "none") return { defaultAction: "deny", egress: [] };
+  if (network === "egress") return { defaultAction: "allow", egress: [] };
+  if (!gatewayUpstreamUrl) throw new Error("real sandbox missing Gateway upstream URL");
+  let host: string;
+  try {
+    host = new URL(gatewayUpstreamUrl).hostname;
+  } catch {
+    throw new Error("invalid Gateway upstream URL");
+  }
+  if (!host) throw new Error("invalid Gateway upstream URL");
+  return {
+    defaultAction: "deny",
+    egress: [{ action: "allow", target: host }],
+  };
+}
+
+export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCreateInput {
+  const limits = requireOpenSandboxLimits(input.limits);
+  return {
+    image: input.image,
+    env: input.env ?? {},
+    metadata: {
+      [OPENSANDBOX_JOB_META]: input.jobId,
+      [OPENSANDBOX_ATTEMPT_META]: input.attemptId,
+      ...(input.resourceLabels ?? {}),
+    },
+    resource: {
+      cpu: String(limits.cpu),
+      memory: `${limits.memoryMiB}Mi`,
+      pids: String(limits.pidsLimit),
+    },
+    timeoutSeconds: null,
+    networkPolicy: mapOpenSandboxNetworkPolicy(input.network, input.gatewayUpstreamUrl),
+    volumes: input.sharedAssetsMount
+      ? [{
+          name: input.sharedAssetsMount.volumeName,
+          mountPath: SHARED_ASSETS_MOUNT_PATH,
+          readOnly: true,
+          host: { source: input.sharedAssetsMount.volumeName, type: "volume" },
+        }]
+      : [],
+    signal: input.signal,
+  };
+}
+
+function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
+  let closed = false;
+  const process: RuntimeProcess = {
+    id: handle.id,
+    get stdinClosed() {
+      return closed;
+    },
+    async write(data) {
+      if (closed) throw new Error("agent stdin 已关闭，无法追加消息");
+      try {
+        await handle.write(data);
+      } catch (error) {
+        closed = true;
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`agent stdin 写入失败: ${msg}`);
+      }
+    },
+    async closeStdin() {
+      closed = true;
+      await handle.closeStdin();
+    },
+    kill: () => handle.kill(),
+    resize: handle.resize ? (cols, rows) => handle.resize!(cols, rows) : undefined,
+    async *[Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk> {
+      for await (const event of { [Symbol.asyncIterator]: () => handle[Symbol.asyncIterator]() }) {
+        yield event;
+      }
+    },
+  };
+  return process;
+}
+
+function assertReadableWorkspacePath(filePath: string): void {
+  if (
+    !filePath.startsWith("/workspace/") ||
+    WORKSPACE_RESERVED_ROOTS.some((root) => filePath === root || filePath.startsWith(`${root}/`))
+  ) {
+    throw new Error("shared_asset_source_path_forbidden");
+  }
+}
+
+export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): RuntimeHost {
+  return {
+    run: (command, options) => session.run(command, options),
+    async runAsync(command, options) {
+      return wrapOpenSandboxProcess(await session.runAsync(command, options));
+    },
+    async uploadFile(content, destPath) {
+      const normalized = destPath.startsWith("/workspace/") ? destPath : destPath;
+      if (normalized.startsWith("/workspace/")) assertWorkspaceWritePath(normalized);
+      const dir = path.posix.dirname(normalized);
+      if (dir !== "/" && dir !== ".") {
+        await session.run(`mkdir -p -- ${shellQuote(dir)}`);
+      }
+      await session.writeFile(normalized, content);
+    },
+    async readWorkspaceFile(filePath, maxBytes) {
+      assertReadableWorkspacePath(filePath);
+      const quoted = shellQuote(filePath);
+      const inspect = await session.run([
+        "set -eu",
+        `test ! -L ${quoted} || exit 44`,
+        `exec 3<${quoted}`,
+        "resolved=$(readlink -f /proc/self/fd/3)",
+        'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
+        'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
+        "test -f /proc/self/fd/3 || exit 47",
+        "size=$(stat -Lc %s /proc/self/fd/3)",
+        `test "$size" -le ${maxBytes} || exit 48`,
+      ].join("; "));
+      if (inspect.exitCode === 48) throw new Error("asset_file_too_large");
+      if (inspect.exitCode === 45 || inspect.exitCode === 46) throw new Error("shared_asset_source_path_forbidden");
+      if (inspect.exitCode === 44 || inspect.exitCode === 47) throw new Error("shared_asset_source_not_regular_file");
+      if (inspect.exitCode !== 0) throw new Error("shared_asset_source_changed");
+      const bytes = await session.readFile(filePath);
+      if (bytes.byteLength > maxBytes) throw new Error("asset_file_too_large");
+      return bytes;
+    },
+    async writeHumanInboxFile(filePath, bytes) {
+      const normalized = path.posix.normalize(filePath);
+      const match = /^\/workspace\/\.deepsonar\/inbox\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,240})$/iu.exec(filePath);
+      if (normalized !== filePath || !match) throw new Error("human_message_workspace_path_forbidden");
+      const result = await session.run(
+        `python3 -c ${shellQuote(HUMAN_INBOX_WRITER_SCRIPT)} /workspace ${match[1]} ${match[2]}`,
+        { stdin: bytes, timeoutMs: 15_000 },
+      );
+      if (result.exitCode !== 0) throw new Error("human_message_workspace_write_rejected");
+    },
+  };
+}
+
+export class OpenSandboxRunner implements SandboxRunner {
+  private readonly sessions = new Map<string, OpenSandboxSession>();
+  private readonly provisioning = new Map<string, Promise<OpenSandboxSession>>();
+  private readonly terminals = new Map<string, Set<SandboxTerminalSession>>();
+
+  constructor(private readonly client: OpenSandboxClient) {}
+
+  async provision(input: ProvisionInput): Promise<RunHandle> {
+    if (input.signal?.aborted) throw new Error("provision 已取消");
+    const key = `${input.jobId}:${input.attemptId}`;
+    const created = this.client.create(mapOpenSandboxCreateInput(input));
+    this.provisioning.set(key, created);
+    let session: OpenSandboxSession | undefined;
+    try {
+      session = await created;
+      if (input.signal?.aborted) throw new Error("provision 已取消");
+      this.sessions.set(session.id, session);
+      const host = createOpenSandboxRuntimeHost(session);
+      const contractResult = await host.run(
+        `test -d /workspace && test -x /bin/sh${input.sharedAssetsMount ? ` && test -d ${SHARED_ASSETS_MOUNT_PATH}` : ""} && cat /opt/deepsonar/tool-manifest.json`,
+        { timeoutMs: 15_000 },
+      );
+      if (contractResult.exitCode !== 0) {
+        throw new RuntimeImageContractError("runtime image missing /workspace, /bin/sh, or tool manifest");
+      }
+      const manifest = parseToolManifest(contractResult.stdout);
+      if (input.expectedContract && manifest.contract !== input.expectedContract) {
+        throw new RuntimeImageContractError(`runtime contract mismatch: expected ${input.expectedContract}, got ${manifest.contract ?? "missing"}`);
+      }
+      if (input.expectedToolsManifestSha256) {
+        const hashResult = await host.run("sha256sum /opt/deepsonar/tool-manifest.json | cut -d' ' -f1", { timeoutMs: 5_000 });
+        if (hashResult.exitCode !== 0 || hashResult.stdout.trim() !== input.expectedToolsManifestSha256.replace(/^sha256:/, "")) {
+          throw new RuntimeImageContractError("tool manifest sha256 mismatch");
+        }
+      }
+      return { sandboxId: session.id };
+    } catch (error) {
+      if (session) {
+        this.sessions.delete(session.id);
+        await session.kill().catch(() => {});
+        await session.close().catch(() => {});
+      }
+      await this.destroyByLabels(input.jobId, input.attemptId).catch(() => {});
+      throw error;
+    } finally {
+      this.provisioning.delete(key);
+    }
+  }
+
+  async cancelProvision(input: { jobId: string; attemptId: string }): Promise<void> {
+    const pending = this.provisioning.get(`${input.jobId}:${input.attemptId}`);
+    if (pending) {
+      const session = await pending.catch(() => undefined);
+      if (session) {
+        this.sessions.delete(session.id);
+        await session.kill().catch(() => {});
+        await session.close().catch(() => {});
+      }
+    }
+    await this.destroyByLabels(input.jobId, input.attemptId);
+  }
+
+  async destroy(handle: RunHandle): Promise<void> {
+    const sessions = this.terminals.get(handle.sandboxId);
+    this.terminals.delete(handle.sandboxId);
+    if (sessions) {
+      await Promise.allSettled([...sessions].map((session) => session.close()));
+    }
+    const session = this.sessions.get(handle.sandboxId) ?? await this.client.connect(handle.sandboxId);
+    this.sessions.delete(handle.sandboxId);
+    if (!session) return;
+    await session.kill();
+    await session.close();
+  }
+
+  async isAlive(handle: RunHandle): Promise<boolean> {
+    const session = this.sessions.get(handle.sandboxId) ?? await this.client.connect(handle.sandboxId);
+    if (!session) return false;
+    this.sessions.set(handle.sandboxId, session);
+    try {
+      const state = await session.getState();
+      if (!/^running$/i.test(state)) return false;
+      const probe = await session.run("true", { timeoutMs: 5_000 });
+      return probe.exitCode === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  async openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession> {
+    const host = this.hostOf(handle);
+    if (!host) throw new Error("TERMINAL_SANDBOX_NOT_OWNED");
+    const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
+    const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
+    const process = await host.runAsync("if command -v bash >/dev/null 2>&1; then exec bash -il; else exec /bin/sh -i; fi", {
+      cwd: "/workspace",
+      env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+      pty: true,
+    });
+    if (!process.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
+    let closed = false;
+    const output = (async function* () {
+      for await (const event of process) {
+        if (event.type === "stdout" || event.type === "stderr") yield event.chunk;
+      }
+    })();
+    const session: SandboxTerminalSession = {
+      id: process.id ?? `term-${handle.sandboxId}`,
+      output,
+      write: async (data) => {
+        if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
+        await process.write(data);
+      },
+      resize: async (nextCols, nextRows) => {
+        if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
+        await process.resize?.(nextCols, nextRows);
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        this.terminals.get(handle.sandboxId)?.delete(session);
+        await process.kill().catch(() => undefined);
+      },
+    };
+    const sessions = this.terminals.get(handle.sandboxId) ?? new Set<SandboxTerminalSession>();
+    if (sessions.size >= 4) {
+      await session.close();
+      throw new Error("TERMINAL_SESSION_LIMIT");
+    }
+    sessions.add(session);
+    this.terminals.set(handle.sandboxId, sessions);
+    await session.resize(cols, rows);
+    return session;
+  }
+
+  hostOf(handle: RunHandle): RuntimeHost | undefined {
+    const session = this.sessions.get(handle.sandboxId);
+    return session ? createOpenSandboxRuntimeHost(session) : undefined;
+  }
+
+  listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]> {
+    return this.client.list(filter);
+  }
+
+  async destroyResource(resource: RuntimeResource): Promise<void> {
+    const session = this.sessions.get(resource.resourceId) ?? await this.client.connect(resource.resourceId);
+    this.sessions.delete(resource.resourceId);
+    if (!session) return;
+    await session.kill();
+    await session.close();
+  }
+
+  private async destroyByLabels(jobId: string, attemptId: string): Promise<void> {
+    const leftovers = await this.client.list({ jobId, attemptId });
+    for (const resource of leftovers) {
+      await this.destroyResource(resource);
+    }
+  }
+}
+
+export function createSdkOpenSandboxClient(_connection: OpenSandboxConnection): OpenSandboxClient {
+  throw new Error("OPENSANDBOX_SDK_CLIENT_UNBOUND: inject OpenSandboxClient for Phase 2 PoC");
+}

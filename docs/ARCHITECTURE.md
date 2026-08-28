@@ -275,7 +275,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 |------|------|------|
 | **plane-adapter** | HTTP Client | 拉 Issue、改状态、评论；字段映射 |
 | **scheduler-core** | 服务 + Postgres | jobs/events、claim、状态机、限流、Reaper、规则引擎 |
-| **runtime-adapter** | agentbox-sdk（TwillAI, MIT） | provision/run/stop/delete；timeoutMs；networkMode 网络隔离；local-docker 起步，可切 e2b/Daytona 云端 |
+| **runtime-adapter** | provider-neutral RuntimeHost（#162） | provision/run/stop/delete 与 process/file/PTY；Agentbox 为过渡实现，OpenSandbox 为长期目标；CLI adapter 不引用 SDK 类型 |
 | **canvas-service** | API + React Flow 渲染 | 节点边 CRUD；auto-layout；只读 WS 推送 |
 | **agent-harness** | 沙箱内包装脚本 | 读任务 JSON、调 CLI、把工具调用转成 Event API、心跳 |
 | **web-ui** | React + React Flow (@xyflow/react, MIT) | 打开某项目画布；链到 Plane |
@@ -286,7 +286,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ Web 端 elkjs 可见投影布局**；大投影固定列兜底，服务端 `x/y` 仅作 placement/exchange hint。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
-- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
+- 运行时：**provider-neutral RuntimeHost（#162）**——Scheduler 只通过内部契约驱动沙箱生命周期、流式进程、文件与 PTY。当前 real 默认仍由 Agentbox local-docker 实现这些契约；OpenSandbox Docker adapter 已落地并可经 `SANDBOX_PROVIDER=opensandbox` 做 PoC。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。语义事件只经 Job 级 Platform API 回传，**不经沙箱网络**（见 §8）。OpenSandbox lifecycle / execd / API key 只留在 Scheduler 适配层。
 - Plane：自托管 Community + API Token
 
 暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。

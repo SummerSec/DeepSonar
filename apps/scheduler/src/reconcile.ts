@@ -1,4 +1,4 @@
-import { forceRemoveContainer, listDeepSonarContainers } from "@deepsonar/runtime-sandbox";
+import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
@@ -7,7 +7,6 @@ import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
-import { sharedAssetsVolumeManager } from "./runtime.js";
 import { config } from "./config.js";
 import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
 
@@ -22,8 +21,15 @@ import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
  */
 export async function reconcileOnBoot(): Promise<void> {
   const lifecycle = createSqlJobLifecycleApplication();
-  const managesLocalDocker = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
-  const containers = managesLocalDocker ? await listDeepSonarContainers() : [];
+  const managesReal = config.runtime.agentMode === "real";
+  const containers = managesReal
+    ? (await runner.listResources()).map((resource) => ({
+        containerId: resource.resourceId,
+        jobId: resource.jobId,
+        attemptId: resource.attemptId,
+        state: resource.state ?? "",
+      }))
+    : [];
   const activeJobs = await sql`
     SELECT j.id, j.status, j.sandbox_id, a.id AS attempt_id
       FROM jobs j
@@ -46,7 +52,7 @@ export async function reconcileOnBoot(): Promise<void> {
   // 1. 孤儿容器（标签指向的 job 已非活动）
   for (const c of containers) {
     if (activeJobIds.has(c.jobId) && activeAttemptIds.get(c.jobId) === c.attemptId) continue;
-    await forceRemoveContainer(c.containerId)
+    await runner.destroyResource({ resourceId: c.containerId, jobId: c.jobId, attemptId: c.attemptId })
       .then(() => console.warn(`[reconcile] 回收孤儿容器 ${c.containerId}（job/attempt 不匹配）`))
       .catch((e) => console.error(`[reconcile] 容器回收失败 ${c.containerId}:`, e instanceof Error ? e.message : e));
   }
@@ -67,7 +73,7 @@ export async function reconcileOnBoot(): Promise<void> {
   for (const job of provisionRecovery.orphaned) {
     const jobId = String(job.id);
     const cid = (job.sandbox_id as string | null) ?? containerByJob.get(jobId);
-    if (cid) await forceRemoveContainer(cid).catch(() => {});
+    if (cid) await runner.destroyResource({ resourceId: cid, jobId, attemptId: "" }).catch(() => {});
     await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
@@ -90,7 +96,7 @@ export async function reconcileOnBoot(): Promise<void> {
     const jobId = j.id as string;
     const cid = (j.sandbox_id as string | null) ?? containerByJob.get(jobId);
     if (cid) {
-      await forceRemoveContainer(cid)
+      await runner.destroyResource({ resourceId: cid, jobId, attemptId: "" })
         .catch((e) => console.error(`[reconcile] 容器回收失败 ${cid}:`, e instanceof Error ? e.message : e));
     }
     await sharedAssetsVolumeManager.removeForJob(jobId).catch(() => {
@@ -103,7 +109,7 @@ export async function reconcileOnBoot(): Promise<void> {
   }
 
   await refreshSharedAssetsOrphanMetrics();
-  if (managesLocalDocker) {
+  if (managesReal) {
     const cleanup = await cleanupManagedResourcesOnce();
     if (cleanup.removedContainers + cleanup.removedVolumes + cleanup.failures > 0) {
       console.log("[reconcile] desired-state cleanup:", cleanup);

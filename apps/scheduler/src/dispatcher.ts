@@ -1016,7 +1016,7 @@ export async function withProvisionTimeout<T>(
   throw new Error(message);
 }
 
-/** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
+/** 执行器路由：real 模式走 provider-neutral RuntimeHost；否则内置假 agent（联调/演示用） */
 async function execute(jobId: string, type: string, platformCapability: PreparedPlatformCapability | null) {
   if (config.runtime.agentMode === "real" && (await isRealType(type))) {
     if (!platformCapability) throw new Error(`job ${jobId} 缺少 provision 阶段的平台 capability`);

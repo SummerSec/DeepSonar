@@ -1,0 +1,26 @@
+# Optional Phase 2 overlay. Do not start without immutable image pins.
+#   OPENSANDBOX_SERVER_IMAGE=name@sha256:... OPEN_SANDBOX_API_KEY=... docker compose -f deploy/docker-compose.opensandbox.yml up
+services:
+  opensandbox:
+    image: ${OPENSANDBOX_SERVER_IMAGE:?set an immutable name@sha256 digest}
+    container_name: deepsonar-opensandbox
+    restart: unless-stopped
+    environment:
+      SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
+      OPEN_SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
+      OPENSANDBOX_EXECD_IMAGE: ${OPENSANDBOX_EXECD_IMAGE:?set an immutable execd digest}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
+      - opensandbox-data:/var/lib/opensandbox
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - deepsonar-opensandbox
+
+volumes:
+  opensandbox-data:
+
+networks:
+  deepsonar-opensandbox:
+    driver: bridge

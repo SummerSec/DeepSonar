@@ -1,7 +1,9 @@
 /**
- * runtime-adapter：调度器与沙箱之间的唯一接口（ARCHITECTURE §5）
- * 实现可替换：noop（骨架）→ agentbox-sdk local-docker → e2b/daytona 云端
+ * runtime-adapter：调度器与沙箱之间的唯一接口（ARCHITECTURE §5 / #162）
+ * 实现可替换：noop（骨架）→ provider adapter（Agentbox 过渡 / OpenSandbox）
  */
+
+import type { RuntimeHost, RuntimeResource } from "./runtime-host.js";
 
 export interface ProvisionInput {
   jobId: string;
@@ -64,12 +66,16 @@ export interface SandboxTerminalSession {
 export interface SandboxRunner {
   provision(input: ProvisionInput): Promise<RunHandle>;
   /** 取消尚未返回句柄的 provision，必须销毁已创建或正在创建的资源。 */
-  cancelProvision?(input: { jobId: string; attemptId: string }): Promise<void>;
+  cancelProvision(input: { jobId: string; attemptId: string }): Promise<void>;
   destroy(handle: RunHandle): Promise<void>;
   /** Reaper 探测：控制通道是否存活（§3.3 lease 依据） */
   isAlive(handle: RunHandle): Promise<boolean>;
   /** Optional, provider-backed PTY in the existing Job sandbox. */
-  openTerminal?(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession>;
+  openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession>;
+  /** Process/file host for the provisioned sandbox. Missing after process restart until reconnect. */
+  hostOf(handle: RunHandle): RuntimeHost | undefined;
+  listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]>;
+  destroyResource(resource: RuntimeResource): Promise<void>;
 }
 
 /** Phase 0 骨架：不起真实沙箱，只走状态机 */
@@ -86,10 +92,44 @@ export class NoopRunner implements SandboxRunner {
   async openTerminal(): Promise<SandboxTerminalSession> {
     throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
   }
+  hostOf(): RuntimeHost | undefined {
+    return undefined;
+  }
+  async listResources(): Promise<RuntimeResource[]> {
+    return [];
+  }
+  async destroyResource(): Promise<void> {}
 }
 
+export type {
+  RuntimeAsyncRunOptions,
+  RuntimeCommandResult,
+  RuntimeHost,
+  RuntimeProcess,
+  RuntimeProcessChunk,
+  RuntimeResource,
+  RuntimeRunOptions,
+} from "./runtime-host.js";
+export { assertWorkspaceWritePath, shellQuote } from "./runtime-host.js";
+export type {
+  AgentCommandConfig,
+  AgentMcpConfig,
+  AgentSkillConfig,
+  AgentSubAgentConfig,
+} from "./runtime-agent-config.js";
+export {
+  OpenSandboxRunner,
+  createSdkOpenSandboxClient,
+  mapOpenSandboxCreateInput,
+  mapOpenSandboxNetworkPolicy,
+  requireOpenSandboxLimits,
+} from "./opensandbox.js";
+export type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxSession } from "./opensandbox.js";
 export {
   AgentboxRunner,
+  createAgentboxRuntimeHost,
+  wrapAgentboxProcess,
+  parseToolManifest,
   cleanupUnhealthyManagedGateway,
   createSemanticToolState,
   CONTAINER_REMOVE_MAX_ATTEMPTS,

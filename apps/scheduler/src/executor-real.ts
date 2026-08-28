@@ -26,6 +26,7 @@ import {
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import { runner } from "./runtime.js";
 import { buildDshPiAiRuntimeProjection } from "./dsh-pi-ai-settings.js";
 import {
   assertJobCanPublishSharedAsset,
@@ -1520,8 +1521,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   let result: Awaited<ReturnType<typeof runRealAgent>>;
   try {
+    const host = runner.hostOf({ sandboxId: job.sandbox_id as string });
+    if (!host) throw new Error(`沙箱 ${job.sandbox_id} 不在注册表（可能已被回收）`);
     result = await runRealAgent(
-    { sandboxId: job.sandbox_id as string },
+    host,
     {
       provider,
       adapter: snapshot.agent_runtime,
@@ -1559,7 +1562,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         return contextIdentity(runtimeContext);
       },
       systemPrompt: PLATFORM_SYSTEM_PROMPT,
-      // 完整运行快照：workspace 文件由系统生成，其余组件由 agentbox setup 差量上传。
+      // 完整运行快照：workspace 文件由系统生成，其余组件由 RuntimeHost 差量上传。
       skills: runtimeSkills as never,
       commands: snapshot.commands as never,
       mcps: mcps as never,

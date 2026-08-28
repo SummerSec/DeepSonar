@@ -196,8 +196,14 @@ export const config = {
   runtime: {
     provider: str("SANDBOX_PROVIDER", "local-docker"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
-    /** fake=内置假 agent（联调用）；real=agentbox-sdk 真实 agent */
+    /** fake=内置假 agent（联调用）；real=真实沙箱（Agentbox 过渡或 OpenSandbox） */
     agentMode: str("AGENT_MODE", "real"),
+    openSandbox: {
+      domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:8080"),
+      apiKey: str("OPEN_SANDBOX_API_KEY", ""),
+      protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https" ? "https" : "http") as "http" | "https",
+      useServerProxy: bool("OPEN_SANDBOX_USE_SERVER_PROXY", true),
+    },
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {
       cpu: int("DEEPSONAR_SANDBOX_CPU", 2),
