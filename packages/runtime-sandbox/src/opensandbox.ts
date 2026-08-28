@@ -8,6 +8,7 @@ import {
   HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
+  assertReadableWorkspacePath,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
@@ -23,15 +24,6 @@ import {
 } from "./runtime-host.js";
 
 export { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META } from "./opensandbox-version.js";
-
-const WORKSPACE_RESERVED_ROOTS = [
-  "/workspace/.deepsonar",
-  "/workspace/.deepsonar-home",
-  SHARED_ASSETS_MOUNT_PATH,
-  "/workspace/.claude",
-  "/workspace/.codex",
-  "/workspace/.opencode",
-];
 
 export interface OpenSandboxConnection {
   domain: string;
@@ -220,15 +212,6 @@ export function awaitProvisionSession<T>(created: Promise<T>, signal?: AbortSign
       },
     );
   });
-}
-
-function assertReadableWorkspacePath(filePath: string): void {
-  if (
-    !filePath.startsWith("/workspace/") ||
-    WORKSPACE_RESERVED_ROOTS.some((root) => filePath === root || filePath.startsWith(`${root}/`))
-  ) {
-    throw new Error("shared_asset_source_path_forbidden");
-  }
 }
 
 export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): RuntimeHost {

@@ -9,6 +9,23 @@ export const DEEPSONAR_GATEWAY_PROXY_HOST = "deepsonar-gateway-proxy";
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
 export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
+export const WORKSPACE_RESERVED_ROOTS = [
+  "/workspace/.deepsonar",
+  "/workspace/.deepsonar-home",
+  SHARED_ASSETS_MOUNT_PATH,
+  "/workspace/.claude",
+  "/workspace/.codex",
+  "/workspace/.opencode",
+] as const;
+
+export function assertReadableWorkspacePath(filePath: string): void {
+  if (
+    !filePath.startsWith("/workspace/") ||
+    WORKSPACE_RESERVED_ROOTS.some((root) => filePath === root || filePath.startsWith(`${root}/`))
+  ) {
+    throw new Error("shared_asset_source_path_forbidden");
+  }
+}
 
 export class RuntimeImageContractError extends Error {
   readonly code = "RUNTIME_IMAGE_CONTRACT";

@@ -13,6 +13,7 @@ import {
   HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
+  assertReadableWorkspacePath,
   assertSharedAssetsVolumeOwnership,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
@@ -665,20 +666,7 @@ export type {
 } from "./runtime-agent.js";
 
 export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: string, maxBytes: number): Promise<Buffer> {
-  const reservedRoots = [
-    "/workspace/.deepsonar",
-    "/workspace/.deepsonar-home",
-    SHARED_ASSETS_MOUNT_PATH,
-    "/workspace/.claude",
-    "/workspace/.codex",
-    "/workspace/.opencode",
-  ];
-  if (
-    !filePath.startsWith("/workspace/") ||
-    reservedRoots.some((root) => filePath === root || filePath.startsWith(`${root}/`))
-  ) {
-    throw new Error("shared_asset_source_path_forbidden");
-  }
+  assertReadableWorkspacePath(filePath);
   const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
   const containerId = inspected?.Id;
   if (!containerId) throw new Error("shared_asset_container_unavailable");

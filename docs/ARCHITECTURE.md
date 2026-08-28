@@ -125,7 +125,7 @@ pending → claimed → provisioning → running → succeeded
 **Lease 机制（防悬挂，核心纪律）：**
 
 - Job 进入 `running` 时写入 `lease_expires_at = now + LEASE_TTL`（默认 120s）
-- 调度器经沙箱控制通道（agentbox-sdk）探测存活并续 lease；进程/通道断开即停续
+- 调度器经 `RuntimeHost` / `SandboxRunner.isAlive` 探测存活并续 lease；进程/通道断开即停续。real 默认仍走 Agentbox；`SANDBOX_PROVIDER=opensandbox` 时走 OpenSandbox，不把本机 Docker inspect 当唯一真相
 - **Reaper**（调度器内置定时任务，默认每 30s 扫描）：
   - 发现 `status=running 且 lease_expires_at < now` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed` → 回写 Plane
   - 发现 `运行时长 > timeout_sec` → 标记 `timeout` → 同上回收
@@ -202,7 +202,7 @@ loop:
   1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
   2. 原子 claim（DB advisory lock 串行化配额判断）→ 读取 `global_settings.effective_rules` 的全局/每项目 cap，再按“Provider → Credential → Model ID → Agent CLI”检查资源配额 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher；规则更新也会 notify，后续 claim 热生效
   3. Canvas：创建/更新 job 节点（running）
-  4. Runtime：起沙箱（agentbox-sdk），注入任务包、静态控制 Skill 与冻结 API operation allowlist
+  4. Runtime：经 `SandboxRunner` 起沙箱（默认 Agentbox；`SANDBOX_PROVIDER=opensandbox` 时为 OpenSandbox），注入任务包、静态控制 Skill 与冻结 API operation allowlist
   5. 启动冻结的 Agent CLI；文本流经 Runtime Adapter 回传，语义事件经 Job 级控制 API 回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
@@ -487,13 +487,13 @@ Job 事件仍必须经过本摄入硬门。
 
 ## 8. Agent 任务包与事件通道
 
-调度器通过 agentbox-sdk 在一次性沙箱内以 server 进程方式拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。
+调度器通过 provider-neutral `RuntimeHost` 在一次性沙箱内以官方 CLI 协议拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。Agentbox 是过渡实现；OpenSandbox 经 `SANDBOX_PROVIDER=opensandbox` 启用。
 
 系统按 Job 冻结快照动态组装：
 
 - `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令；两份文件由同一内容生成并保持逐字一致
 - 平台内置且不可覆盖的静态 `deepsonar-control` Skill：只描述 capabilities/OpenAPI discovery、短期 Bearer Token、UUID `Idempotency-Key`、HTTP 错误处理与 API-only 规则；Skill 内容对所有 Job 相同，不携带动态权限清单
-- Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
+- Provider 项目配置文件，以及运行时物化下发的 plugin/skill/command/MCP/subagent
 - 非敏感环境变量、白名单 `env_keys`、按 Job 签发的短期模型凭据，以及只在执行期注入的短期平台 API capability token；两类 token 权限域与存储表完全分离
 - 画布创建时冻结的 Finding 协议说明：模式、默认/允许 profile、CVSS 默认/接受版本和必评分 profile；运行中以协议名和来源显著标识
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
@@ -703,7 +703,7 @@ deepsonar/
     image-admission/    # 第三方镜像准入 Worker
   packages/
     plane-client/       # 可选 Plane 集成
-    runtime-sandbox/    # agentbox-sdk（local-docker / e2b / daytona）
+    runtime-sandbox/    # SandboxRunner / RuntimeHost（OpenSandbox + Agentbox 过渡）
     shared-types/       # zod 契约单源
   agent-harness/        # 镜像定义、指纹、冒烟
   deploy/               # Compose、一键脚本、运行时清单（见 deploy/README.md）
@@ -823,7 +823,7 @@ CANVAS_LAYOUT=auto
 |------|------|
 | 项目管理 | **Plane** |
 | 过程数据 | **每项目一张无限画布**（nodes/edges 表为真相） |
-| 执行隔离 | **agentbox-sdk 沙箱**（local-docker 起步，可切云端 provider） |
+| 执行隔离 | **SandboxRunner 沙箱**（real 默认 Agentbox local-docker；长期目标 OpenSandbox，经 `SANDBOX_PROVIDER=opensandbox` 启用） |
 | 调度 | **自研薄调度 + 状态机 + Lease/Reaper**（单实例） |
 | Agent 智能 | **提案式工具**；派生决策收归规则引擎 |
 | 可靠性 | **事件幂等 + finding 去重 + 崩溃可恢复** |
@@ -840,10 +840,10 @@ CANVAS_LAYOUT=auto
 - **DB 轮询而非 Webhook/Redis**：延迟秒级可接受；二期再升级
 - **画布不做多人协同编辑**：第一期只读展示 + 服务端写入；协同编辑是二期候选
 - **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
-- **运行时选 TwillAI/agentbox-sdk（MIT）**：TS SDK 统一驱动沙箱与 Agent，事件走控制通道不经沙箱网络（化解"审计沙箱断网"与"事件回调"的矛盾，沙箱内零凭据）。已知风险：0.1.x 早期项目（2026-07 仍活跃），靠 runtime-adapter 接口隔离，最坏情况 fork local-docker provider（代码薄）
+- **运行时边界是 RuntimeHost（#162）**：五类 CLI 不引用 provider SDK 类型；语义事件只经 Job 级 Platform API。real 默认仍走 Agentbox local-docker；OpenSandbox Docker adapter 已落地，经 `SANDBOX_PROVIDER=opensandbox` 启用。Phase 4 在门禁齐后删除 Agentbox。
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
 - **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算
-- **不评估 Claude Agent SDK**：只用 CLI 路线（经 agentbox-sdk 的 claude-code provider）
+- **不评估 Claude Agent SDK**：只用 CLI 路线（经 Runtime Adapter 的 claude-code provider）
 - **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper、无 Plane 同步），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
 - **画布引擎选 React Flow 而非 tldraw/Excalidraw**：画布本质是结构化节点-边图而非白板；React Flow（MIT）与 nodes/edges 表 1:1 映射、节点即 React 组件（finding 卡片可交互）；tldraw 生产商用有授权费用、Excalidraw 无法嵌入 React 节点。若二期需要手绘标注/多人白板协同，再单独评估 tldraw
 - **全 TypeScript**：配合 React Flow 生态一套类型打通；若未来 CLI/沙箱层需要 Python 工具，通过容器内独立进程解决，不引入第二后端语言

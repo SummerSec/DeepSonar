@@ -203,6 +203,8 @@ export {
   SHARED_ASSETS_JOB_LABEL,
   SHARED_ASSETS_MOUNT_PATH,
   SHARED_ASSETS_VOLUME_LABEL,
+  WORKSPACE_RESERVED_ROOTS,
+  assertReadableWorkspacePath,
   assertSharedAssetsVolumeOwnership,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
