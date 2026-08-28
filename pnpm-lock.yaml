@@ -168,12 +168,18 @@ importers:
 
   packages/runtime-sandbox:
     dependencies:
+      '@alibaba-group/opensandbox':
+        specifier: 0.1.11
+        version: 0.1.11
       '@deepsonar/shared-types':
         specifier: workspace:*
         version: link:../shared-types
       agentbox-sdk:
         specifier: ^0.1.501
         version: 0.1.501
+      undici:
+        specifier: ^7.29.0
+        version: 7.29.0
     devDependencies:
       '@types/node':
         specifier: ^26.1.2
@@ -196,6 +202,10 @@ importers:
         version: 5.9.3
 
 packages:
+
+  '@alibaba-group/opensandbox@0.1.11':
+    resolution: {integrity: sha512-xDJzs+5yYAPrje+z3GKUmXezpVq3kO/NyP8BM9JwzCbfuSr5vQyHJI3/Pu4FBGdb/xQnxMcWFlsKqC4/80OeiQ==}
+    engines: {node: '>=20'}
 
   '@aws-sdk/checksums@3.1000.24':
     resolution: {integrity: sha512-7TWLjypP8kk3savsDBRuhZJx7mBuFFA2136BQhwwLllsAnO4Tmq/p+SXZaNxbuulkzUFz3BZzj0bb4YzexZcNQ==}
@@ -2652,6 +2662,11 @@ packages:
         optional: true
 
 snapshots:
+
+  '@alibaba-group/opensandbox@0.1.11':
+    dependencies:
+      openapi-fetch: 0.14.1
+      undici: 7.29.0
 
   '@aws-sdk/checksums@3.1000.24':
     dependencies:

@@ -102,7 +102,8 @@ test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", 
   assert.equal(input.metadata["deepsonar.attempt"], "22222222-2222-4222-8222-222222222222");
   assert.deepEqual(input.resource, { cpu: "2", memory: "2048Mi", pids: "512" });
   assert.equal(input.volumes[0]?.readOnly, true);
-  assert.equal(input.volumes[0]?.host.type, "volume");
+  assert.equal(input.volumes[0]?.pvc.claimName, "deepsonar-assets-11111111-1111-4111-8111-111111111111");
+  assert.equal(input.volumes[0]?.pvc.createIfNotExists, false);
   assert.ok(!Object.values(input.env).some((value) => /api[_-]?key/i.test(value)));
 });
 

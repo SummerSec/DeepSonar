@@ -2,6 +2,8 @@
 
 export const OPENSANDBOX_PIN_SCHEMA = "deepsonar.opensandbox/v1" as const;
 export const OPENSANDBOX_SDK_VERSION = "0.1.11";
+export const OPENSANDBOX_JOB_META = "deepsonar.job";
+export const OPENSANDBOX_ATTEMPT_META = "deepsonar.attempt";
 
 const IMMUTABLE_OCI_RE = /^.+@sha256:[0-9a-f]{64}$/;
 

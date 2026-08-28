@@ -5,7 +5,7 @@
 import path from "node:path";
 import { HUMAN_INBOX_WRITER_SCRIPT, RuntimeImageContractError, SHARED_ASSETS_MOUNT_PATH, parseToolManifest } from "./agentbox.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
-import type { OpenSandboxPin } from "./opensandbox-version.js";
+import { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
   assertWorkspaceWritePath,
   shellQuote,
@@ -15,8 +15,7 @@ import {
   type RuntimeResource,
 } from "./runtime-host.js";
 
-export const OPENSANDBOX_JOB_META = "deepsonar.job";
-export const OPENSANDBOX_ATTEMPT_META = "deepsonar.attempt";
+export { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META } from "./opensandbox-version.js";
 
 const WORKSPACE_RESERVED_ROOTS = [
   "/workspace/.deepsonar",
@@ -46,7 +45,7 @@ export interface OpenSandboxCreateInput {
     name: string;
     mountPath: string;
     readOnly: true;
-    host: { source: string; type: "volume" };
+    pvc: { claimName: string; createIfNotExists: false };
   }>;
   signal?: AbortSignal;
 }
@@ -133,7 +132,7 @@ export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCre
           name: input.sharedAssetsMount.volumeName,
           mountPath: SHARED_ASSETS_MOUNT_PATH,
           readOnly: true,
-          host: { source: input.sharedAssetsMount.volumeName, type: "volume" },
+          pvc: { claimName: input.sharedAssetsMount.volumeName, createIfNotExists: false },
         }]
       : [],
     signal: input.signal,
@@ -391,10 +390,4 @@ export class OpenSandboxRunner implements SandboxRunner {
   }
 }
 
-export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): OpenSandboxClient {
-  if (connection.pin) {
-    // Pin is validated at construction; live SDK binding lands when the server digest is published.
-    void connection.pin.sdk;
-  }
-  throw new Error("OPENSANDBOX_SDK_CLIENT_UNBOUND: inject OpenSandboxClient for Phase 2 PoC");
-}
+export { createSdkOpenSandboxClient } from "./opensandbox-sdk-client.js";
