@@ -126,6 +126,16 @@ export function readKataClusterProbe(resources: {
   return { runtimeClass, namespace, quota };
 }
 
+export function readServiceClusterIP(service: unknown): string {
+  const ip = service && typeof service === "object" && "spec" in service
+    ? String((service as { spec?: { clusterIP?: unknown } }).spec?.clusterIP ?? "")
+    : "";
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip) || ip === "None") {
+    throw new Error("OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP");
+  }
+  return ip;
+}
+
 export function findKataWorkload(pods: unknown, jobId: string): { name: string; runtimeClassName: string } {
   const items = pods && typeof pods === "object" && Array.isArray((pods as { items?: unknown }).items)
     ? (pods as { items: Array<{ metadata?: { name?: string }; spec?: { runtimeClassName?: string } }> }).items
@@ -222,6 +232,13 @@ export async function runOpenSandboxK8sPoc(
       const host = await runner.ensureHost(handle);
       const isolated = await host.run(`python3 -c ${shellQuote(NETWORK_ISOLATION_SCRIPT)}`, { timeoutMs: 10_000 });
       if (isolated.exitCode !== 1) throw new Error("OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED");
+      const gatewayService = await kubectl(["get", "service", GATEWAY_PROBE_SERVICE, "-n", OPENSANDBOX_K8S_NAMESPACE, "-o", "json"]);
+      const gatewayIp = readServiceClusterIP(gatewayService);
+      const hosts = await host.run(
+        `grep -F ${shellQuote(GATEWAY_PROBE_SERVICE)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(gatewayIp)} ${shellQuote(GATEWAY_PROBE_SERVICE)} >> /etc/hosts`,
+        { timeoutMs: 5_000 },
+      );
+      if (hosts.exitCode !== 0) throw new Error("OPENSANDBOX_POC_KATA_GATEWAY_HOSTS");
       const allowed = await host.run(`python3 -c ${shellQuote(KATA_GATEWAY_ALLOW_SCRIPT)}`, { timeoutMs: 15_000 });
       if (allowed.exitCode !== 0) {
         throw new Error(`OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED: ${allowed.stderr.trim() || allowed.stdout.trim()}`);

@@ -161,6 +161,8 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-poc.ts"), "utf8");
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
+  assert.match(k8sPoc, /\/etc\/hosts/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_DENY_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);

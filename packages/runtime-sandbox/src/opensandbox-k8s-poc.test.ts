@@ -7,6 +7,7 @@ import {
   probeKataCluster,
   waitForRemainingJobPods,
   readKataClusterProbe,
+  readServiceClusterIP,
   runOpenSandboxK8sPoc,
   shouldRunOpenSandboxK8sPoc,
 } from "./opensandbox-k8s-poc.js";
@@ -30,10 +31,10 @@ function session(overrides?: {
       if (command.includes("192.0.2.1")) {
         return { exitCode: overrides?.isolated === false ? 0 : 1, stdout: "", stderr: "" };
       }
-      if (command.includes("deepsonar-gateway-proxy")) {
+      if (command.includes("urlopen") && command.includes("deepsonar-gateway-proxy")) {
         return { exitCode: overrides?.gatewayAllowed === false ? 1 : 0, stdout: "", stderr: "" };
       }
-      if (command.includes("deepsonar-egress-deny-probe")) {
+      if (command.includes("urlopen") && command.includes("deepsonar-egress-deny-probe")) {
         return { exitCode: overrides?.denyBlocked === false ? 0 : 1, stdout: "", stderr: "" };
       }
       if (command.includes("/var/run/docker.sock")) {
@@ -88,7 +89,7 @@ function kataWorld(live: OpenSandboxSession) {
       return { items: [{ metadata: { name: "deepsonar-opensandbox" }, spec: { hard: { pods: "32" } } }] };
     }
     if (args[1] === "pod" || args[1] === "service") {
-      return { metadata: { name: args[2] }, status: { phase: "Running" } };
+      return { metadata: { name: args[2] }, spec: { clusterIP: "10.43.0.10" }, status: { phase: "Running" } };
     }
     const jobId = created?.metadata["deepsonar.job"] ?? "";
     return {
@@ -99,6 +100,12 @@ function kataWorld(live: OpenSandboxSession) {
   };
   return { client, kubectl, get created() { return created; } };
 }
+
+test("Kata Gateway Service ClusterIP is required before /etc/hosts bind", () => {
+  assert.equal(readServiceClusterIP({ spec: { clusterIP: "10.43.0.10" } }), "10.43.0.10");
+  assert.throws(() => readServiceClusterIP({ spec: { clusterIP: "None" } }), /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
+  assert.throws(() => readServiceClusterIP({}), /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
+});
 
 test("Kata cluster probe requires runtimeclass, namespace, and quota", () => {
   const ok = readKataClusterProbe({
