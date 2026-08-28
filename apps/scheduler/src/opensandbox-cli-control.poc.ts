@@ -1,7 +1,7 @@
 /**
- * Live proof that Claude Code inside OpenSandbox submits Job Platform API
- * operations itself (Bash tool_use from a local mock Anthropic), using
- * provision-injected DEEPSONAR_API_* env. Not a vendor-model E2E.
+ * Vendor-model proof that Claude Code inside OpenSandbox submits Job Platform API
+ * operations itself. Requires OPEN_SANDBOX_POC=1 and ANTHROPIC_API_KEY.
+ * Mock Anthropic is not a substitute; skip when the vendor key is absent.
  */
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
@@ -14,6 +14,12 @@ import {
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox CLI control PoC (set OPEN_SANDBOX_POC=1)");
+  process.exit(0);
+}
+
+const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+if (!anthropicKey) {
+  console.log("skip: OpenSandbox CLI control PoC needs ANTHROPIC_API_KEY for vendor-model E2E");
   process.exit(0);
 }
 
@@ -124,15 +130,13 @@ try {
     jobId,
     attemptId: randomUUID(),
     image: runtimeImage,
-    network: "restricted",
+    network: "egress",
     gatewayUpstreamUrl: config.gateway.proxyUpstreamUrl,
     limits: snapshot.sandbox_limits,
     env: {
-      DEEPSONAR_ALLOW_EGRESS: "0",
+      DEEPSONAR_ALLOW_EGRESS: "1",
       ...capability.env,
-      ANTHROPIC_API_KEY: "sk-mock",
-      ANTHROPIC_AUTH_TOKEN: "sk-mock",
-      ANTHROPIC_BASE_URL: "http://127.0.0.1:8765",
+      ANTHROPIC_API_KEY: anthropicKey,
     },
     expectedContract: "deepsonar.runtime.contract/v1",
   });
@@ -145,7 +149,7 @@ base=$(printf '%s' "$DEEPSONAR_API_BASE_URL" | sed 's:/*$::')
 token=$DEEPSONAR_API_TOKEN
 post() {
   python3 - "$base" "$token" "$1" "$2" <<'PY'
-import json, os, sys, urllib.request, uuid
+import sys, urllib.error, urllib.request, uuid
 base, token, op, payload = sys.argv[1:5]
 req = urllib.request.Request(
     f"{base}/operations/{op}",
@@ -164,78 +168,28 @@ except urllib.error.HTTPError as exc:
     print(f"CALL:{op}={exc.code}")
 PY
 }
-post emit_fact '{"title":"CLI fact","description":"Submitted by Claude Code Bash inside OpenSandbox."}'
+post emit_fact '{"title":"CLI fact","description":"Submitted by Claude Code inside OpenSandbox."}'
 post emit_finding '{"title":"CLI finding","summary":"Claude Code invoked Job Platform API from the worker."}'
-post mark_job_done '{"summary":"Claude Code Platform API live proof finished."}'
+post mark_job_done '{"summary":"Claude Code vendor-model Platform API proof finished."}'
 `, "/workspace/poc-cli-emit.sh");
     await host.run("chmod +x /workspace/poc-cli-emit.sh", { timeoutMs: 5_000 });
-    const mockPy = `
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
-n = {"i": 0}
-def sse(handler, events):
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream")
-    handler.end_headers()
-    for event, data in events:
-        handler.wfile.write(f"event: {event}\\ndata: {json.dumps(data)}\\n\\n".encode())
-class H(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"data":[{"id":"dummy","object":"model"}]}')
-    def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        n["i"] += 1
-        if n["i"] == 1:
-            sse(self, [
-                ("message_start", {"type":"message_start","message":{"id":"msg_cli","type":"message","role":"assistant","content":[],"model":"dummy","stop_reason":None,"usage":{"input_tokens":1,"output_tokens":1}}}),
-                ("content_block_start", {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_cli","name":"Bash","input":{}}}),
-                ("content_block_delta", {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\":\\"sh /workspace/poc-cli-emit.sh\\"}"}}),
-                ("content_block_stop", {"type":"content_block_stop","index":0}),
-                ("message_delta", {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}),
-                ("message_stop", {"type":"message_stop"}),
-            ])
-            return
-        sse(self, [
-            ("message_start", {"type":"message_start","message":{"id":"msg_done","type":"message","role":"assistant","content":[],"model":"dummy","stop_reason":None,"usage":{"input_tokens":1,"output_tokens":1}}}),
-            ("content_block_start", {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
-            ("content_block_delta", {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}),
-            ("content_block_stop", {"type":"content_block_stop","index":0}),
-            ("message_delta", {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
-            ("message_stop", {"type":"message_stop"}),
-        ])
-    def log_message(self, *args):
-        pass
-ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
-`.trim();
-    await host.uploadFile(mockPy, "/tmp/deepsonar-mock-llm.py");
-    const mock = await host.runAsync("python3 /tmp/deepsonar-mock-llm.py", { cwd: "/tmp" });
-    await host.uploadFile("import socket,time\nfor _ in range(40):\n s=socket.socket();s.settimeout(0.2)\n try:\n  s.connect(('127.0.0.1',8765));s.close();print('up');break\n except Exception:\n  time.sleep(0.2)\n", "/tmp/wait-mock.py");
-    await host.run("python3 /tmp/wait-mock.py", { timeoutMs: 10_000 }).catch(() => {});
     const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
+    const prompt = "Run exactly this command and nothing else: sh /workspace/poc-cli-emit.sh";
     const process = await adapter.start({
       host,
-      env: {
-        ANTHROPIC_API_KEY: "sk-mock",
-        ANTHROPIC_AUTH_TOKEN: "sk-mock",
-        ANTHROPIC_BASE_URL: "http://127.0.0.1:8765",
-      },
+      env: { ANTHROPIC_API_KEY: anthropicKey },
       cwd: "/workspace",
-      model: "dummy",
-      input: "Submit the required Job Platform API events by running sh /workspace/poc-cli-emit.sh",
+      input: prompt,
       mcpConfigPath: "/workspace/.deepsonar/mcp.json",
     });
-    const payload = adapter.encodeInput("Submit the required Job Platform API events by running sh /workspace/poc-cli-emit.sh");
+    const payload = adapter.encodeInput(prompt);
     if (payload) await process.write(payload).catch(() => {});
-    const text = await collectText(process, 45_000);
+    const text = await collectText(process, 120_000);
     await process.closeStdin().catch(() => {});
     await process.kill().catch(() => {});
-    await mock.kill().catch(() => {});
     const submitted = operations.every((name) => calls.includes(name));
     if (!submitted) {
-      throw new Error(`Claude Code did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.slice(0, 400)}`);
+      throw new Error(`Claude Code did not submit Platform API ops: calls=${calls.join(",") || "none"} out=${text.replace(/\n/g, " ").slice(0, 400)}`);
     }
   } finally {
     await runner.destroy(handle).catch(() => {});
@@ -243,7 +197,7 @@ ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
   const leftovers = await runner.listResources({ jobId });
   if (leftovers.length > 0) throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
   unregisterRuntimeHandler(jobId);
-  console.log(`OK: OpenSandbox CLI control submitted=true leftover=0 calls=${calls.join(",")}`);
+  console.log(`OK: OpenSandbox CLI vendor control submitted=true leftover=0 calls=${calls.join(",")}`);
 } finally {
   if (closeApp) await closeApp().catch(() => {});
   if (endSql) await endSql().catch(() => {});
