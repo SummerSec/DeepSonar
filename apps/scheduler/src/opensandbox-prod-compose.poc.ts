@@ -91,15 +91,16 @@ try {
   }
 
   const deadline = Date.now() + 240_000;
-  let schedulerHealth: { opensandbox?: { level?: string; ready?: boolean; domain?: string }; ok?: boolean } | null = null;
-  let webHealth: { opensandbox?: { level?: string; ready?: boolean } } | null = null;
+  type HealthProbe = { ok?: boolean; opensandbox?: { level?: string; ready?: boolean; domain?: string } };
+  let schedulerHealth: HealthProbe | null = null;
+  let webHealth: HealthProbe | null = null;
   while (Date.now() < deadline) {
     const schedulerProbe = spawnSync("curl", ["-fsS", `http://127.0.0.1:${schedulerPort}/health`], { encoding: "utf8" });
     const webProbe = spawnSync("curl", ["-fsS", `http://127.0.0.1:${webPort}/api/health`], { encoding: "utf8" });
     if (schedulerProbe.status === 0 && webProbe.status === 0) {
-      schedulerHealth = JSON.parse(schedulerProbe.stdout) as typeof schedulerHealth;
-      webHealth = JSON.parse(webProbe.stdout) as typeof webHealth;
-      if (schedulerHealth?.opensandbox?.level === "ok" && webHealth?.opensandbox?.level === "ok") break;
+      schedulerHealth = JSON.parse(schedulerProbe.stdout) as HealthProbe;
+      webHealth = JSON.parse(webProbe.stdout) as HealthProbe;
+      if (schedulerHealth.opensandbox?.level === "ok" && webHealth.opensandbox?.level === "ok") break;
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }

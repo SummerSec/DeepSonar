@@ -171,6 +171,11 @@ test("OpenSandbox prod-stack PoC hits Scheduler /readiness against a live server
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(|provision\(/);
 });
 
+test("scheduler production build excludes live OpenSandbox PoC harnesses", () => {
+  const tsconfig = JSON.parse(readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8")) as { exclude?: string[] };
+  assert.deepEqual(tsconfig.exclude, ["src/**/*.poc.ts"]);
+});
+
 test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2 server", () => {
   const source = readFileSync(new URL("./opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
   assert.match(source, /docker-compose.opensandbox.host.yml/);
