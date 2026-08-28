@@ -59,6 +59,16 @@ function ptyHeaders(connection: OpenSandboxConnection, extra?: Record<string, st
   return headers;
 }
 
+export function isOpenSandboxGoneError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const status = "statusCode" in error ? Number((error as { statusCode?: number }).statusCode) : 0;
+  const nested = "error" in error && error.error && typeof error.error === "object"
+    ? String((error.error as { code?: string; message?: string }).code ?? "")
+    : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return status === 404 || /SANDBOX_NOT_FOUND/i.test(`${nested} ${message}`);
+}
+
 export function commandWithEnv(command: string, env?: Record<string, string>): string {
   if (!env || Object.keys(env).length === 0) return command;
   const assigns = Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ");
@@ -149,6 +159,8 @@ export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): O
       const manager = SandboxManager.create({ connectionConfig: config });
       try {
         await manager.killSandbox(id);
+      } catch (error) {
+        if (!isOpenSandboxGoneError(error)) throw error;
       } finally {
         await manager.close().catch(() => undefined);
       }

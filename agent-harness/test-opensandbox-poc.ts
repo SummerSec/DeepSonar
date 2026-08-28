@@ -65,6 +65,7 @@ if (!cancel.cancelled || cancel.leftovers !== 0) {
 }
 const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
 const skipHost = process.env.OPEN_SANDBOX_POC_SKIP_HOST === "1";
+const skipCli = process.env.OPEN_SANDBOX_POC_SKIP_CLI === "1";
 let hostSummary = "skipped";
 if (runtimeImage && !skipHost) {
   const host = await runOpenSandboxHostPoc(client, { image: runtimeImage, apiKey });
