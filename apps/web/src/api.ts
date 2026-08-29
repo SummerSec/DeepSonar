@@ -498,12 +498,17 @@ export interface CanvasBroadcastSummary {
 
 export interface JobUsageSummary {
   id: string;
+  attempt_id?: string;
   effect_id: string;
+  request_no: number;
   provider: string;
   model: string;
+  input_tokens: number;
+  output_tokens: number;
   total_tokens: number;
   adjustment_tokens: number;
   settlement_status: "settled" | "unknown" | "not_reported";
+  source?: string;
   observed_at: string;
 }
 

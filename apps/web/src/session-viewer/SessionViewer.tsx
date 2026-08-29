@@ -14,13 +14,17 @@ import {
 } from "./parseAgentSession";
 import {
   buildSessionLedger,
+  buildSessionTokenUsage,
   filterSessionLedger,
+  sessionHasTokenUsage,
   sessionLedgerTurnCount,
   sessionViewerWorkspaceMode,
+  type SessionGatewayUsageRow,
   type SessionLedgerRow,
+  type SessionTokenUsage,
 } from "./sessionViewerModel";
 
-type ViewerTab = "timeline" | "stats" | "raw";
+type ViewerTab = "timeline" | "usage" | "stats" | "raw";
 
 export type SessionViewerProps = {
   text: string;
@@ -30,6 +34,8 @@ export type SessionViewerProps = {
   sessionId?: string | null;
   /** 数据来源说明，如「CLI Session 归档」或「过程流回退」 */
   sourceLabel?: string | null;
+  /** Job 详情返回的 Gateway `job_usage_ledger` 行；与 Session 归档 usage 分列展示。 */
+  gatewayUsage?: readonly SessionGatewayUsageRow[];
   onDownload?: () => void;
   downloadError?: string | null;
 };
@@ -261,16 +267,17 @@ export function SessionViewer({
   cli,
   sessionId,
   sourceLabel,
+  gatewayUsage = [],
   onDownload,
   downloadError,
 }: SessionViewerProps) {
-  const [tab, setTab] = useState<ViewerTab>("timeline");
+  const parsed = useMemo(() => parseAgentSession(text, { cli }), [text, cli]);
+  const rows = useMemo(() => buildSessionLedger(parsed.items), [parsed.items]);
+  const tokenUsage = useMemo(() => buildSessionTokenUsage(rows, gatewayUsage), [rows, gatewayUsage]);
+  const [tab, setTab] = useState<ViewerTab>(() => (text.trim() ? "timeline" : "usage"));
   const [kindFilter, setKindFilter] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-
-  const parsed = useMemo(() => parseAgentSession(text, { cli }), [text, cli]);
-  const rows = useMemo(() => buildSessionLedger(parsed.items), [parsed.items]);
   const filteredRows = useMemo(
     () => filterSessionLedger(rows, { query }).filter(
       (row) => kindFilter.length === 0 || kindFilter.includes(row.item.kind),
@@ -305,6 +312,7 @@ export function SessionViewer({
 
   const tabs: Array<[ViewerTab, string]> = [
     ["timeline", `账本 ${parsed.items.length}`],
+    ["usage", `用量 ${tokenUsage.gateway?.requests ?? tokenUsage.session.reportedEvents}`],
     ["stats", `统计 ${parsed.tools.length}`],
     ["raw", "原始记录"],
   ];
@@ -415,6 +423,8 @@ export function SessionViewer({
         </>
       )}
 
+      {tab === "usage" && <SessionUsagePane usage={tokenUsage} />}
+
       {tab === "stats" && (
         <div className="session-viewer__stats-pane">
           <section className="session-viewer__stats-card">
@@ -480,4 +490,148 @@ function StatChip({ label, value, title }: { label: string; value: string; title
 
 function TokenStat({ label, value }: { label: string; value: number }) {
   return <div><dt>{label}</dt><dd>{formatTokenCount(value)} <small>({value})</small></dd></div>;
+}
+
+function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
+  if (!sessionHasTokenUsage(usage)) {
+    return (
+      <div className="session-viewer__empty-state">
+        <strong>没有可展示的 Token 消耗</strong>
+        <p>Session 归档未带 usage，且该 Job 尚无 Gateway 用量账本。成本定价不在本页计算。</p>
+      </div>
+    );
+  }
+
+  const { session, gateway } = usage;
+  return (
+    <div className="session-viewer__stats-pane">
+      <section className="session-viewer__stats-card">
+        <h3>Session 归档消耗</h3>
+        <dl className="session-viewer__token-summary">
+          <TokenStat label="输入" value={session.input} />
+          <TokenStat label="输出" value={session.output} />
+          <TokenStat label="缓存读" value={session.cacheRead} />
+          <TokenStat label="缓存写" value={session.cacheWrite} />
+          <div>
+            <dt>峰值上下文</dt>
+            <dd>{session.peakContext == null ? "—" : <>{formatTokenCount(session.peakContext)} <small>({session.peakContext})</small></>}</dd>
+          </div>
+        </dl>
+        <p className="session-viewer__note">
+          来自 CLI 原始 Session 的 usage 字段，按事件累加；峰值上下文 = 单条 usage 的 input + cache。
+          {session.reportedEvents === 0 ? " 当前归档未报告 usage。" : ` 共 ${session.reportedEvents} 条带用量事件。`}
+        </p>
+      </section>
+
+      <section className="session-viewer__stats-card">
+        <h3>Gateway 账本消耗</h3>
+        {gateway ? (
+          <>
+            <dl className="session-viewer__token-summary">
+              <TokenStat label="请求" value={gateway.requests} />
+              <TokenStat label="输入" value={gateway.input} />
+              <TokenStat label="输出" value={gateway.output} />
+              <TokenStat label="合计" value={gateway.total} />
+            </dl>
+            <p className="session-viewer__note">
+              平台 Model Gateway 写入的 `job_usage_ledger`，按请求记账；settled {gateway.settled}
+              {gateway.unknown ? ` · unknown ${gateway.unknown}` : ""}
+              {gateway.notReported ? ` · 未上报 ${gateway.notReported}` : ""}
+              。与 Session 归档数字不必相等，本页不对账、不定价。
+            </p>
+          </>
+        ) : (
+          <p className="session-viewer__note">该 Job 尚无 Gateway 用量行。真实运行经 Gateway 出站后才会落账。</p>
+        )}
+      </section>
+
+      {session.turns.length > 0 && (
+        <section className="session-viewer__stats-card">
+          <h3>按轮次</h3>
+          <table className="session-viewer__table">
+            <thead>
+              <tr>
+                <th>Turn</th>
+                <th className="session-viewer__num">输入</th>
+                <th className="session-viewer__num">输出</th>
+                <th className="session-viewer__num">缓存读</th>
+                <th className="session-viewer__num">缓存写</th>
+                <th className="session-viewer__num">事件</th>
+              </tr>
+            </thead>
+            <tbody>
+              {session.turns.map((turn) => (
+                <tr key={turn.turn}>
+                  <td>{String(turn.turn).padStart(2, "0")}</td>
+                  <td className="session-viewer__num">{formatTokenCount(turn.input)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(turn.output)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(turn.cacheRead)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(turn.cacheWrite)}</td>
+                  <td className="session-viewer__num">{turn.events}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {gateway && gateway.models.length > 0 && (
+        <section className="session-viewer__stats-card">
+          <h3>按模型</h3>
+          <table className="session-viewer__table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th className="session-viewer__num">请求</th>
+                <th className="session-viewer__num">输入</th>
+                <th className="session-viewer__num">输出</th>
+                <th className="session-viewer__num">合计</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gateway.models.map((model) => (
+                <tr key={model.key}>
+                  <td>{model.provider} / {model.model}</td>
+                  <td className="session-viewer__num">{model.requests}</td>
+                  <td className="session-viewer__num">{formatTokenCount(model.input)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(model.output)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(model.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {gateway && gateway.rows.length > 0 && (
+        <section className="session-viewer__stats-card">
+          <h3>请求明细</h3>
+          <table className="session-viewer__table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>模型</th>
+                <th className="session-viewer__num">输入</th>
+                <th className="session-viewer__num">输出</th>
+                <th className="session-viewer__num">合计</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gateway.rows.map((row) => (
+                <tr key={`${row.request_no}:${row.provider}:${row.model}:${row.observed_at ?? ""}`}>
+                  <td>{row.request_no}</td>
+                  <td>{row.model}</td>
+                  <td className="session-viewer__num">{formatTokenCount(Number(row.input_tokens || 0))}</td>
+                  <td className="session-viewer__num">{formatTokenCount(Number(row.output_tokens || 0))}</td>
+                  <td className="session-viewer__num">{formatTokenCount(Number(row.total_tokens || 0))}</td>
+                  <td>{row.settlement_status ?? "settled"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </div>
+  );
 }
