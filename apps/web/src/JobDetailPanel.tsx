@@ -16,7 +16,7 @@ import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 /**
  * 运行详情（画布节点 / 运行列表共用）：
  * - 结果：下发 prompt + 运行摘要 + 产出（已结束默认）
- * - 实时流 / 事件 / Session（时间线/统计/原始 + 下载）/ 产出发现 / 运行配置
+ * - 实时流 / 事件 / Session（时间线/用量/统计/原始 + 下载）/ 产出发现 / 运行配置
  */
 type DetailTab = "result" | "live" | "events" | "session" | "findings" | "config";
 const ACTIVE = new Set(["claimed", "provisioning", "running", "waiting_human"]);
@@ -119,6 +119,8 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
     counts[delivery.delivery_status] = (counts[delivery.delivery_status] ?? 0) + 1;
     return counts;
   }, {});
+  const inputTokens = detail.usage.reduce((total, row) => total + Number(row.input_tokens || 0), 0);
+  const outputTokens = detail.usage.reduce((total, row) => total + Number(row.output_tokens || 0), 0);
   const totalTokens = detail.usage.reduce((total, row) => total + Number(row.total_tokens || 0), 0);
   if (!latestAttempt && detail.effects.length === 0 && detail.broadcasts.length === 0 && detail.usage.length === 0) {
     return <p className="font-mono text-[12px] text-zinc-600">该运行尚未记录执行账本。</p>;
@@ -132,7 +134,12 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
         />
         <ConfigField label="执行阶段" value={latestAttempt?.phase ?? "—"} />
         <ConfigField label="外部效果" value={`${detail.effects.length} · 未决 ${unknownEffects.length}`} />
-        <ConfigField label="模型用量" value={`${detail.usage.length} 次 · ${totalTokens} tokens`} />
+        <ConfigField
+          label="模型用量"
+          value={detail.usage.length
+            ? `${detail.usage.length} 次 · in ${inputTokens} / out ${outputTokens} / Σ ${totalTokens}`
+            : "—"}
+        />
       </div>
       <div className="font-mono text-[11px] text-zinc-400">
         <span className="text-zinc-600">增量投递：</span>
@@ -967,6 +974,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   cli={evidence?.manifest.cli}
                   sessionId={evidence?.manifest.session_id}
                   sourceLabel="CLI Session 归档"
+                  gatewayUsage={detail.usage}
                   downloadError={downloadError}
                   onDownload={() =>
                     api.downloadJobSession(jobId).catch((e) => setDownloadError(String(e)))
@@ -984,10 +992,19 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                     text={stream.map((row) => JSON.stringify(row)).join("\n")}
                     cli={evidence?.manifest.cli ?? agentCli}
                     sourceLabel="过程流回退"
+                    gatewayUsage={detail.usage}
                   />
                 </>
               )}
-              {sessionLoad === "missing" && stream.length === 0 && (
+              {sessionLoad === "missing" && stream.length === 0 && detail.usage.length > 0 && (
+                <SessionViewer
+                  text=""
+                  cli={evidence?.manifest.cli ?? agentCli}
+                  sourceLabel="Gateway 用量账本"
+                  gatewayUsage={detail.usage}
+                />
+              )}
+              {sessionLoad === "missing" && stream.length === 0 && detail.usage.length === 0 && (
                 <div className="theme-surface space-y-2 rounded-2xl p-8 text-center text-[13px] text-zinc-500 ring-1">
                   <p>
                     {active
@@ -998,7 +1015,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   </p>
                   <p className="font-mono text-[11px] leading-5 text-zinc-600">
                     常见原因：AGENT_MODE=fake（不会落盘 Session）、运行中尚未 finalize、
-                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现时间线 / 统计 / 原始。
+                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现时间线 / 用量 / 统计 / 原始。
                   </p>
                 </div>
               )}

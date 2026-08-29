@@ -11,6 +11,18 @@ test("inspector uses the maintained safe Markdown renderer and preserves source 
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
 });
 
+test("session viewer exposes a dedicated token usage tab", () => {
+  assert.match(source, /type ViewerTab = "timeline" \| "usage" \| "stats" \| "raw"/);
+  assert.match(source, /\["usage", `用量 /);
+  assert.match(source, /gatewayUsage = \[\]/);
+  assert.match(source, /<SessionUsagePane usage=\{tokenUsage\} \/>/);
+  assert.match(source, /Session 归档消耗/);
+  assert.match(source, /Gateway 账本消耗/);
+  assert.match(source, /按轮次/);
+  assert.match(source, /按模型/);
+  assert.match(source, /请求明细/);
+});
+
 test("inspector exposes Chinese source, copy, and transient feedback actions", () => {
   assert.match(source, /aria-label=\{showSource \? "渲染" : "原文"\}/);
   assert.match(source, /\{showSource \? "渲染" : "原文"\}/);

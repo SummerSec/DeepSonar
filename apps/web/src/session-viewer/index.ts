@@ -1,5 +1,11 @@
 export { SessionViewer, type SessionViewerProps } from "./SessionViewer";
 export {
+  buildSessionTokenUsage,
+  sessionHasTokenUsage,
+  type SessionGatewayUsageRow,
+  type SessionTokenUsage,
+} from "./sessionViewerModel";
+export {
   cacheHitRate,
   formatCacheHitRate,
   formatTokenCount,
