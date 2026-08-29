@@ -120,10 +120,14 @@ try {
   if (!/^BLOB_STORE=s3$/m.test(blobStore.stdout) || !blobStore.stdout.includes(`BLOB_S3_ENDPOINT=http://127.0.0.1:${siloPort}`)) {
     throw new Error("scheduler is not using host Silo");
   }
-  const listed = run(["-n", "docker", "ps", "-q", "--filter", "name=opensandbox"]);
-  const opensandboxCount = listed.stdout.trim().split("\n").filter(Boolean).length;
-  if (opensandboxCount !== 1) {
-    throw new Error(`expected exactly one OpenSandbox container, got ${opensandboxCount}`);
+  const listed = run(["-n", "docker", "ps", "--format", "{{.Names}}", "--filter", "name=opensandbox"]);
+  const names = listed.stdout.trim().split("\n").filter(Boolean);
+  if (!names.includes("deepsonar-opensandbox")) {
+    throw new Error("prod-compose lost Phase 2 deepsonar-opensandbox");
+  }
+  const spawned = names.filter((name) => name.includes(projectName));
+  if (spawned.length > 0) {
+    throw new Error(`prod-compose started extra OpenSandbox: ${spawned.join(",")}`);
   }
   console.log(
     `OK: OpenSandbox prod-compose scheduler=200 web=200 silo=ready blob=s3 probe=ready leftover_server=1 port=${schedulerPort} webPort=${webPort} siloPort=${siloPort}`,
