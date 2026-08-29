@@ -24,4 +24,11 @@ test("usage board asks the dashboard usage API with period and optional custom r
   assert.match(source, /from: customFrom/);
   assert.match(source, /to: customTo/);
   assert.match(source, /type="date"/);
+  assert.match(source, /usage-ledger__date/);
+});
+
+test("usage ledger date fields do not reintroduce native picker style hooks", () => {
+  const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  assert.match(styles, /\.usage-ledger__date/);
+  assert.doesNotMatch(styles, /input\[type="date"\]/);
 });

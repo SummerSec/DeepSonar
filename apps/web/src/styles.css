@@ -2547,7 +2547,7 @@ input[type="password"]::-webkit-textfield-decoration-container {
   color: var(--muted);
   font: 500 10px var(--font-mono);
 }
-.usage-ledger__custom input[type="date"] {
+.usage-ledger__date {
   min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 8px;

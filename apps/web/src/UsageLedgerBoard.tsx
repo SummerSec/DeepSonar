@@ -93,11 +93,11 @@ export function UsageLedgerBoard({
           <div className="usage-ledger__custom">
             <label>
               <span>开始日期</span>
-              <input type="date" value={customFrom} max={customTo || shanghaiYmd()} onChange={(event) => setCustomFrom(event.target.value)} />
+              <input className="usage-ledger__date" type="date" value={customFrom} max={customTo || shanghaiYmd()} onChange={(event) => setCustomFrom(event.target.value)} />
             </label>
             <label>
               <span>结束日期</span>
-              <input type="date" value={customTo} min={customFrom} max={shanghaiYmd()} onChange={(event) => setCustomTo(event.target.value)} />
+              <input className="usage-ledger__date" type="date" value={customTo} min={customFrom} max={shanghaiYmd()} onChange={(event) => setCustomTo(event.target.value)} />
             </label>
             <small>按北京时间日历日，含首尾，最长 366 天。</small>
           </div>
