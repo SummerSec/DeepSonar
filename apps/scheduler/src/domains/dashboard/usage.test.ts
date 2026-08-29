@@ -5,12 +5,14 @@ import {
   buildDashboardUsage,
   resolveUsageWindow,
   type UsageLedgerRow,
+  type UsageQueryError,
+  type UsageWindow,
 } from "./usage.js";
 
 const NOW = new Date("2026-08-19T10:00:00.000+08:00");
 
-function errorCode(value: { error_code?: string }): string | undefined {
-  return value.error_code;
+function errorCode(value: UsageWindow | UsageQueryError): string | undefined {
+  return "error_code" in value ? value.error_code : undefined;
 }
 
 function row(overrides: Partial<UsageLedgerRow> = {}): UsageLedgerRow {
