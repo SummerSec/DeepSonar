@@ -44,6 +44,7 @@ GET /credentials/:id/impact
 GET /credentials/:id/models
 GET /credentials/providers
 GET /dashboard/overview
+GET /dashboard/usage
 GET /exports/:id
 GET /exports/:id/download
 GET /findings
@@ -224,6 +225,7 @@ GET /credentials/{id}/impact
 GET /credentials/{id}/models
 GET /credentials/providers
 GET /dashboard/overview
+GET /dashboard/usage
 GET /findings
 GET /canvases/{id}/messages
 GET /findings/{id}

@@ -510,6 +510,26 @@ const OPS: Op[] = [
       },
     },
   },
+  {
+    method: "get",
+    path: "/dashboard/usage",
+    summary: "用量账本看板",
+    description:
+      "聚合 job_usage_ledger。period=day|week|month 为 Asia/Shanghai 滚动窗口；period=custom 时 from/to 为含首尾的日历日或 ISO 时刻，跨度最长 366 天。可选 project_id / canvas_id。不定价。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      period: { type: "string", enum: ["day", "week", "month", "custom"] },
+      from: { type: "string", description: "自定义起点：YYYY-MM-DD（上海日历日）或 ISO 时刻" },
+      to: { type: "string", description: "自定义终点：YYYY-MM-DD（含当日）或 ISO 时刻" },
+      project_id: { type: "string", format: "uuid" },
+      canvas_id: { type: "string", format: "uuid" },
+    },
+    responses: {
+      "200": { description: "用量账本聚合" },
+      "400": { description: "自定义时间非法、倒序、超长或缺失" },
+    },
+  },
 
   // projects
   { method: "get", path: "/projects", summary: "项目列表", scope: "projects:read", tags: ["Projects"] },
