@@ -842,7 +842,7 @@ CANVAS_LAYOUT=auto
 - **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
 - **运行时选 TwillAI/agentbox-sdk（MIT）**：TS SDK 统一驱动沙箱与 Agent，事件走控制通道不经沙箱网络（化解"审计沙箱断网"与"事件回调"的矛盾，沙箱内零凭据）。已知风险：0.1.x 早期项目（2026-07 仍活跃），靠 runtime-adapter 接口隔离，最坏情况 fork local-docker provider（代码薄）
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
-- **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算
+- **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算。`GET /dashboard/usage` 按日/周/月或自定义时间把账本聚到全局/项目/任务看板，不把 Session 归档 usage 与 Gateway 行对账成同一数字
 - **不评估 Claude Agent SDK**：只用 CLI 路线（经 agentbox-sdk 的 claude-code provider）
 - **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper、无 Plane 同步），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
 - **画布引擎选 React Flow 而非 tldraw/Excalidraw**：画布本质是结构化节点-边图而非白板；React Flow（MIT）与 nodes/edges 表 1:1 映射、节点即 React 组件（finding 卡片可交互）；tldraw 生产商用有授权费用、Excalidraw 无法嵌入 React 节点。若二期需要手绘标注/多人白板协同，再单独评估 tldraw

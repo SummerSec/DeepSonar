@@ -11,6 +11,7 @@ import {
   periodHint,
   toSlices,
 } from "../dashboard-overview";
+import { UsageLedgerBoard } from "../UsageLedgerBoard";
 import { EmptyState, PageHeader, PageSkeleton, PrimaryButton, SectionHeading, SeverityBadge, StatCard, StatusBadge, formatTime, relativeTime } from "../ui";
 
 const ACTIVE = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -96,6 +97,7 @@ export function DashboardPage() {
                 <DistributionChart title="Finding 验证" slices={toSlices("findings", overview.distributions.findings)} />
               </div>
               <TrendChart days={overview.trend_7d} />
+              <UsageLedgerBoard scope="global" />
               {/* TODO(#242 P1): Finding severity/disposition 分布、未闭环高风险列表、按项目/资产仓覆盖 */}
               {/* TODO(#242 P2): Job 成功率与耗时、角色对比、并发水位、失败原因摘要 */}
             </>

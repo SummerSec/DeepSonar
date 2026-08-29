@@ -50,6 +50,7 @@ import {
   type HumanInterventionPrefs,
 } from "../human-messages";
 import { JobDetailPanel } from "../JobDetailPanel";
+import { UsageLedgerBoard } from "../UsageLedgerBoard";
 import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
 import { taskWorkbenchCanvasLayerClass, taskWorkbenchListPaneClass } from "../task-workbench-layers";
@@ -1352,6 +1353,9 @@ export function TaskCanvasPage() {
 
         {tab === "jobs" && (
           <div className={`${taskWorkbenchListPaneClass()} overflow-y-auto p-4 sm:p-6`}>
+            <div className="mb-5">
+              <UsageLedgerBoard scope="task" projectId={projectId} canvasId={canvasId} />
+            </div>
             <div className="mb-4 flex flex-col gap-3 rounded-2xl bg-white/[.018] p-3 ring-1 ring-white/[.045] sm:flex-row sm:flex-wrap sm:items-end">
               <SearchableMultiSelect value={jobStatusFilters} onChange={setJobStatusFilters} placeholder="全部状态" options={Array.from(new Set(jobs.map((job) => job.status))).sort().map((value) => ({ value, label: value }))} label="状态" />
               <SearchableMultiSelect value={jobRoleTypeFilters} onChange={setJobRoleTypeFilters} placeholder="全部角色 / 类型" options={jobRoleTypeOptions.map((value) => ({ value, label: value }))} label="角色 / Job 类型" />

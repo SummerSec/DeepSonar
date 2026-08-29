@@ -64,14 +64,14 @@ export function registerRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid Fact node id", error_code: "INVALID_ID" });
     }
     const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
-    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.project_id && !isUuid(query.project_id)) {
+    if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage") && query.project_id && !isUuid(query.project_id)) {
       return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
     }
-    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.canvas_id && !isUuid(query.canvas_id)) {
+    if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage") && query.canvas_id && !isUuid(query.canvas_id)) {
       return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
     }
     const actorProjectId = req.actor?.projectId;
-    if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.canvas_id) {
+    if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage") && query.canvas_id) {
       const [canvas] = await sql`SELECT project_id FROM canvases WHERE id = ${query.canvas_id}`;
       if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "NOT_FOUND" });
       if (query.project_id && query.project_id.toLowerCase() !== String(canvas.project_id).toLowerCase()) {

@@ -2494,6 +2494,136 @@ input[type="password"]::-webkit-textfield-decoration-container {
   .dashboard-period-strip { grid-template-columns: 1fr; }
 }
 
+.usage-ledger { margin: 12px 0 16px; }
+.usage-ledger__core { padding: 16px 18px 18px; }
+.usage-ledger__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.usage-ledger__head h2 {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -.03em;
+}
+.usage-ledger__head p {
+  max-width: 640px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.usage-ledger__periods { display: flex; flex-wrap: wrap; gap: 6px; }
+.usage-ledger__periods button {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: transparent;
+  font: 500 10px var(--font-mono);
+  cursor: pointer;
+}
+.usage-ledger__periods button.is-active,
+.usage-ledger__periods button:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--surface-tint);
+}
+.usage-ledger__custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+.usage-ledger__custom label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font: 500 10px var(--font-mono);
+}
+.usage-ledger__date {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--surface-tint);
+  font: 500 12px var(--font-mono);
+}
+.usage-ledger__custom small {
+  flex: 1 1 16rem;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.usage-ledger__totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 10px;
+  margin: 16px 0 0;
+}
+.usage-ledger__totals dt { color: var(--muted); font: 500 9px var(--font-mono); letter-spacing: .08em; }
+.usage-ledger__totals dd { margin: 4px 0 0; color: var(--text); font: 600 18px var(--font-mono); }
+.usage-ledger__note,
+.usage-ledger__empty,
+.usage-ledger__error {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font: 500 11px var(--font-mono);
+  line-height: 1.5;
+}
+.usage-ledger__error { color: #f0a0a8; }
+.usage-ledger__series {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-top: 14px;
+  padding-bottom: 4px;
+}
+.usage-ledger__col { display: flex; min-width: 22px; flex: 1; flex-direction: column; align-items: center; gap: 4px; }
+.usage-ledger__bar {
+  display: flex;
+  height: 76px;
+  align-items: end;
+  justify-content: center;
+}
+.usage-ledger__bar span {
+  width: 8px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, #75cfff 70%, transparent);
+}
+.usage-ledger__col small { color: var(--muted); font: 500 9px var(--font-mono); }
+.usage-ledger__tables {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  margin-top: 16px;
+}
+.usage-ledger__tables.is-global { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.usage-ledger__tables h3 { margin: 0 0 8px; color: var(--text); font-size: 12px; font-weight: 500; }
+.usage-ledger__tables table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.usage-ledger__tables th {
+  border-bottom: 1px solid var(--line-strong);
+  padding: 0 0 6px;
+  color: var(--muted);
+  font: 400 9px var(--font-mono);
+  letter-spacing: .06em;
+  text-align: left;
+}
+.usage-ledger__tables td { border-bottom: 1px solid var(--line); padding: 7px 0; color: var(--text); font-family: var(--font-mono); }
+.usage-ledger__tables td:first-child { font-family: inherit; }
+.usage-ledger__tables td small { display: block; margin-top: 2px; color: var(--muted); font: 400 10px var(--font-mono); }
+.usage-ledger__tables a { color: var(--text); }
+@media (max-width: 1100px) {
+  .usage-ledger__tables.is-global { grid-template-columns: 1fr; }
+}
+
 /* Dashboard quick-start: a compact intent rail, not a generic form card. */
 .intent-launch-rail { margin-bottom: 14px; }
 .intent-launch-core { position: relative; overflow: hidden; padding: 22px 24px 20px; background: var(--panel-raised); }
