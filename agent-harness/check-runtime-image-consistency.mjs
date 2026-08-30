@@ -421,9 +421,11 @@ expect(mobileDockerfile.includes("bundletool") && mobileDockerfile.includes("apk
 expect(mobileDockerfile.includes("mobile-so.sh") && mobileDockerfile.includes("radare2") && !mobileDockerfile.includes("ghidra_"), "Mobile must install lightweight SO tools and must not bake Ghidra");
 expect(mobileDockerfile.includes("不预装") && mobileDockerfile.includes("MobSF") && mobileDockerfile.includes("Burp"), "Mobile must document that MobSF/Burp/IDA stay out");
 expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/adb");
-expect(mobileEnv.includes("mitmdump --version") && mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke mitmdump/Frida/Objection");
+expect(mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke Frida/Objection");
+expect(!mobileEnv.includes("mitmdump --version"), "Mobile env check must not require mitmdump");
 expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mobileEnv.includes("hdc"), "Mobile env check must smoke iOS host tools and hdc");
-expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite ida64 ghidra analyzeHeadless cutter deveco"), "Mobile env check must fail if decision scanners, GUI, Ghidra, or commercial tools reappear");
+expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite mitmdump mitmproxy ida64 ghidra analyzeHeadless cutter deveco"), "Mobile env check must fail if decision scanners, GUI, Ghidra, mitmproxy, or commercial tools reappear");
+expect(!mobileDockerfile.includes("mitmproxy==") && !mobileDockerfile.includes("bin/mitmdump"), "Mobile must not install mitmproxy");
 expect(mobileEnv.includes("r2 -qv") && mobileEnv.includes("mobile-so.sh --check"), "Mobile env check must smoke radare2 and SO helper");
 expect(mobileSo.includes("readelf") && mobileSo.includes("r2 -qq") && mobileSo.includes("lief"), "Mobile SO helper must inspect ELF with readelf/r2/LIEF");
 expect(mobileAdb.includes("needs_human") && mobileAdb.includes("inconclusive") && mobileAdb.includes("no_adb_target"), "Mobile adb helper must emit structured no-target evidence");

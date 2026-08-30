@@ -142,7 +142,6 @@
       "capabilities": ["python-runtime"]
     },
     "pip": {
-      "mitmproxy": { "version": "12.2.3", "license": "MIT", "capabilities": ["http-intercept"] },
       "frida-tools": { "version": "14.10.4", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
       "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
       "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] },

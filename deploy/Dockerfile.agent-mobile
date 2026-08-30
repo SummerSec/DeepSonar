@@ -1,9 +1,9 @@
 # DeepSonar 官方移动端审计运行时。project opt-in。
-# Android：JADX CLI + apktool + bundletool + apkeep + androguard + 官方 ADB + mitmproxy + Frida/Objection
+# Android：JADX CLI + apktool + bundletool + apkeep + androguard + 官方 ADB + Frida/Objection
 # Native .so：binutils + 官方 radare2 + LIEF（不装 Ghidra / IDA / Cutter）
 # iOS：Linux 宿主 libimobiledevice（无 Xcode / Simulator）
 # OpenHarmony：HAP 静态检查 + 官方 hdc（不烘焙完整 SDK / DevEco）
-# 不预装 jadx-gui、MobSF、Burp、IDA、Ghidra、决策扫描器或第三方 MCP/GUI。
+# 不预装 jadx-gui、MobSF、Burp、mitmproxy、IDA、Ghidra、决策扫描器或第三方 MCP/GUI。
 ARG BASE_IMAGE=deepsonar-base:local
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
 
@@ -34,7 +34,6 @@ ARG UV_VERSION=0.11.32
 ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
 ARG UV_ARM64_SHA256=4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31
 ARG PYTHON_VERSION=3.12.13
-ARG MITMPROXY_VERSION=12.2.3
 ARG FRIDA_TOOLS_VERSION=14.10.4
 ARG OBJECTION_VERSION=1.12.5
 ARG ANDROGUARD_VERSION=4.1.4
@@ -162,12 +161,10 @@ RUN set -eux; \
     uv python install "$PYTHON_VERSION"; \
   uv venv /opt/deepsonar/mobile-venv --python "$PYTHON_VERSION"; \
   UV_PYTHON_DOWNLOADS=never uv pip install --python /opt/deepsonar/mobile-venv \
-    "mitmproxy==${MITMPROXY_VERSION}" \
     "frida-tools==${FRIDA_TOOLS_VERSION}" \
     "objection==${OBJECTION_VERSION}" \
     "androguard==${ANDROGUARD_VERSION}" \
     "lief==${LIEF_VERSION}"; \
-  ln -s /opt/deepsonar/mobile-venv/bin/mitmdump /opt/deepsonar/bin/mitmdump; \
   ln -s /opt/deepsonar/mobile-venv/bin/frida /opt/deepsonar/bin/frida; \
   ln -s /opt/deepsonar/mobile-venv/bin/objection /opt/deepsonar/bin/objection; \
   ln -s /opt/deepsonar/mobile-venv/bin/androguard /opt/deepsonar/bin/androguard; \
@@ -190,7 +187,7 @@ RUN set -eux; \
   done; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","mitmdump","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
 

@@ -5,11 +5,11 @@ usage() {
   cat <<'EOF'
 用法：mobile-env.sh --check
 
-移动端专项运行时提供 Android（JADX CLI、apktool、bundletool、apkeep、androguard、官方 ADB、mitmdump、Frida/Objection）、
+移动端专项运行时提供 Android（JADX CLI、apktool、bundletool、apkeep、androguard、官方 ADB、Frida/Objection）、
 轻量 .so（binutils / radare2 / LIEF）、
 iOS Linux 宿主（idevice_id / ideviceinstaller / plistutil / iproxy）与
 OpenHarmony 应用/设备（HAP 静态检查 + 官方 hdc）。
-不预装决策扫描器、jadx-gui、MobSF、Burp、IDA、Ghidra、DevEco、第三方 MCP 或完整 OH SDK。
+不预装决策扫描器、jadx-gui、MobSF、Burp、mitmproxy、IDA、Ghidra、DevEco、第三方 MCP 或完整 OH SDK。
 EOF
 }
 
@@ -31,7 +31,6 @@ check_manifest() {
     (.tools | index("adb")) and
     (.tools | index("hdc")) and
     (.tools | index("idevice_id")) and
-    (.tools | index("mitmdump")) and
     (.tools | index("frida")) and
     (.tools | index("objection"))
   ' /opt/deepsonar/tool-manifest.json >/dev/null
@@ -50,7 +49,7 @@ smoke_hdc() {
 
 check_tools() {
   local command_name
-  for command_name in java jadx apktool bundletool apkeep androguard readelf objdump nm r2 adb hdc idevice_id ideviceinstaller plistutil iproxy mitmdump frida objection jq unzip; do
+  for command_name in java jadx apktool bundletool apkeep androguard readelf objdump nm r2 adb hdc idevice_id ideviceinstaller plistutil iproxy frida objection jq unzip; do
     command -v "$command_name" >/dev/null 2>&1 || {
       printf 'Mobile 环境检查失败：缺少命令 %s\n' "$command_name" >&2
       return 1
@@ -70,10 +69,9 @@ check_tools() {
   smoke_hdc
   idevice_id --help >/dev/null 2>&1 || idevice_id -h >/dev/null 2>&1 || true
   plistutil -h >/dev/null 2>&1 || plistutil --help >/dev/null 2>&1 || true
-  mitmdump --version >/dev/null
   frida --version >/dev/null
   objection version >/dev/null
-  for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite ida64 ghidra analyzeHeadless cutter deveco; do
+  for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite mitmdump mitmproxy ida64 ghidra analyzeHeadless cutter deveco; do
     if command -v "$command_name" >/dev/null 2>&1; then
       printf 'Mobile 运行时不得预装 %s\n' "$command_name" >&2
       return 1
