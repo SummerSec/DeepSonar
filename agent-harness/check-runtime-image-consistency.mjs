@@ -115,6 +115,16 @@ const schedulerRuntimeImageRoutes = readFileSync(
 );
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const chromeRuntimeSmoke = readFileSync(new URL("./test-chrome-runtime.mjs", import.meta.url), "utf8");
+const mobileConfig = JSON.parse(readFileSync(new URL("./mobile-runtime.json", import.meta.url), "utf8"));
+const mobileDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-mobile", import.meta.url), "utf8");
+const mobileEnv = readFileSync(new URL("../deploy/mobile-env.sh", import.meta.url), "utf8");
+const mobileAdb = readFileSync(new URL("../deploy/mobile-adb.sh", import.meta.url), "utf8");
+const mobileAdbBin = readFileSync(new URL("../deploy/mobile-adb-bin.sh", import.meta.url), "utf8");
+const mobileHdc = readFileSync(new URL("../deploy/mobile-hdc.sh", import.meta.url), "utf8");
+const mobileIos = readFileSync(new URL("../deploy/mobile-ios.sh", import.meta.url), "utf8");
+const mobileHap = readFileSync(new URL("../deploy/mobile-hap.sh", import.meta.url), "utf8");
+const mobileSmoke = readFileSync(new URL("./test-mobile-runtime.mjs", import.meta.url), "utf8");
+const mobileWorkflow = readFileSync(new URL("../.github/workflows/mobile-runtime.yml", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const schedulerRuntimeSnapshot = readFileSync(
@@ -171,8 +181,16 @@ assertSpecialistWorkflow(openHarmonyWorkflow, "OpenHarmony", [
   "agent-harness/test-openharmony-hdc.mjs", ".dockerignore",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/openharmony-runtime.yml",
 ]);
+assertSpecialistWorkflow(mobileWorkflow, "Mobile", [
+  "deploy/Dockerfile.agent-mobile", "deploy/mobile-*.sh", "deploy/vendor/openharmony-hdc/**",
+  "agent-harness/mobile-runtime.json",
+  "agent-harness/test-mobile-runtime.mjs", ".dockerignore",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/mobile-runtime.yml",
+]);
 expect(!ciWorkflow.includes("chrome-runtime-images"), "core ci workflow must not contain the Chrome specialist job");
 expect(!ciWorkflow.includes("openharmony-runtime-images"), "core ci workflow must not contain the OpenHarmony specialist job");
+expect(!ciWorkflow.includes("mobile-runtime-images"), "core ci workflow must not contain the Mobile specialist job");
+expect(!ciWorkflow.includes("android-runtime-images"), "core ci workflow must not contain a leftover Android specialist job");
 expect(ciWorkflow.includes("toolset: base") && ciWorkflow.includes("toolset: audit") && ciWorkflow.includes("toolset: kali-minimal"), "core ci workflow must retain base/audit/kali runtime jobs");
 expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.includes("timeout-minutes: 240") && chromeWorkflow.includes("platforms: linux/amd64") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome workflow must retain its cold-build allowance, amd64 matrix, and smoke");
 expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
@@ -236,6 +254,7 @@ for (const required of ["org.opencontainers.image.title", "org.opencontainers.im
   expect(openHarmonyDockerfile.includes(required), `Dockerfile.agent-openharmony missing package metadata ${required}`);
   expect(openHarmonyAuditDockerfile.includes(required), `Dockerfile.agent-openharmony-audit missing package metadata ${required}`);
   expect(openHarmonyFuzzDockerfile.includes(required), `Dockerfile.agent-openharmony-fuzz missing package metadata ${required}`);
+  expect(mobileDockerfile.includes(required), `Dockerfile.agent-mobile missing package metadata ${required}`);
 }
 expect(kaliDockerfile.includes(`ARG BASE_IMAGE=${kaliConfig.baseImage}`), "Kali minimal base image digest drift");
 expect(kaliDockerfile.includes("FROM ${BASE_IMAGE}"), "Kali minimal Dockerfile must consume the pinned BASE_IMAGE arg");
@@ -343,6 +362,58 @@ for (const item of chromeImages) {
   expect(item.dockerfile.includes("/opt/deepsonar/tool-manifest.json"), `${item.key} must generate tool-manifest.json`);
   expect(item.dockerfile.includes("io.deepsonar.contract") && item.dockerfile.includes("org.opencontainers.image.description"), `${item.key} OCI metadata missing`);
 }
+const mobileImage = openHarmonyRegistry.images?.find((entry) => entry.image_key === "deepsonar-mobile");
+expect(mobileImage, "registry 缺少 deepsonar-mobile");
+if (mobileImage) {
+  expect(mobileImage.source_kind === "official", "deepsonar-mobile 必须是 official");
+  expect(mobileImage.project_opt_in === true, "deepsonar-mobile 必须启用 project_opt_in");
+  expect(mobileImage.default_role === "audit", "deepsonar-mobile default_role 必须是 audit");
+  expect(Array.isArray(mobileImage.versions), "deepsonar-mobile registry versions 必须是数组");
+}
+expect(mobileConfig.contract === "deepsonar.runtime.contract/v1", "Mobile runtime contract drift");
+expect(mobileConfig.project_opt_in === true, "Mobile config must remain project_opt_in");
+expect(mobileConfig.platforms?.join(",") === "linux/amd64,linux/arm64", "Mobile must declare both release platforms");
+expect(mobileConfig.downloads?.jadx?.version === "1.5.6", "Mobile must pin JADX 1.5.6");
+expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin apktool 3.0.3");
+expect(mobileConfig.downloads?.["platform-tools"]?.version === "36.0.0", "Mobile must pin platform-tools 36.0.0");
+expect(mobileConfig.downloads?.hdc?.version === "3.2.0b", "Mobile must pin official hdc 3.2.0b");
+expect(mobileConfig.downloads?.jadx?.assets?.all?.sha256 === "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974", "Mobile JADX SHA256 drift");
+expect(mobileConfig.downloads?.apktool?.assets?.all?.sha256 === "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423", "Mobile apktool SHA256 drift");
+expect(mobileConfig.downloads?.["platform-tools"]?.assets?.all?.sha256 === "0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8", "Mobile platform-tools SHA256 drift");
+expect(mobileConfig.downloads?.hdc?.assets?.amd64?.sha256 === "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e", "Mobile hdc SHA256 drift");
+expect(mobileDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "Mobile must default to local governed base");
+expect(mobileDockerfile.includes("FROM ${BASE_IMAGE}"), "Mobile must consume BASE_IMAGE");
+expect(mobileDockerfile.includes("apt-get install -y --no-install-recommends"), "Mobile apt install must disable recommends");
+expect(mobileDockerfile.includes("USER deepsonar"), "Mobile must run as non-root");
+expect(mobileDockerfile.includes("/opt/deepsonar/tool-manifest.json"), "Mobile must generate tool-manifest.json");
+expect(mobileDockerfile.includes("io.deepsonar.contract") && mobileDockerfile.includes("org.opencontainers.image.description"), "Mobile OCI metadata missing");
+expect(mobileDockerfile.includes("ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974"), "Mobile Dockerfile JADX checksum drift");
+expect(mobileDockerfile.includes("ARG APKTOOL_SHA256=dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423"), "Mobile Dockerfile apktool checksum drift");
+expect(mobileDockerfile.includes("ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8"), "Mobile Dockerfile platform-tools checksum drift");
+expect(mobileDockerfile.includes("ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e"), "Mobile Dockerfile hdc checksum drift");
+expect(mobileDockerfile.includes("libimobiledevice-utils") && mobileDockerfile.includes("ideviceinstaller"), "Mobile must install iOS host protocol tools");
+expect(mobileDockerfile.includes("qemu-user-static") && mobileAdbBin.includes("qemu-x86_64-static"), "Mobile arm64 must run official linux-x64 adb via qemu-user-static");
+expect(mobileDockerfile.includes("openharmony-hdc-bin.sh") && mobileDockerfile.includes("vendor/openharmony-hdc/hdc"), "Mobile must reuse vendored official hdc");
+expect(!mobileDockerfile.includes("jadx-gui") || mobileDockerfile.includes("rm -f") && mobileDockerfile.includes("jadx-gui"), "Mobile must not keep jadx-gui");
+expect(!/apt-get install[^\n]*(mobsf|MobSF|burp|Burp|ida64|deveco)/i.test(mobileDockerfile), "Mobile must not apt-install MobSF/Burp/IDA/DevEco");
+expect(mobileDockerfile.includes("不预装") && mobileDockerfile.includes("MobSF") && mobileDockerfile.includes("Burp"), "Mobile must document that MobSF/Burp/IDA stay out");
+expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/adb");
+expect(mobileEnv.includes("mitmdump --version") && mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke mitmdump/Frida/Objection");
+expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mobileEnv.includes("hdc"), "Mobile env check must smoke iOS host tools and hdc");
+expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite ida64 deveco"), "Mobile env check must fail if decision scanners or GUI/commercial tools reappear");
+expect(mobileAdb.includes("needs_human") && mobileAdb.includes("inconclusive") && mobileAdb.includes("no_adb_target"), "Mobile adb helper must emit structured no-target evidence");
+expect(mobileHdc.includes("needs_human") && mobileHdc.includes("no_hdc_target") && mobileIos.includes("no_ios_target"), "Mobile hdc/ios helpers must emit structured no-target evidence");
+expect(mobileHap.includes("pack.info") && mobileHap.includes("module.json"), "Mobile HAP helper must inspect pack.info/module.json");
+expect(mobileSmoke.includes("adb version smoke") || mobileSmoke.includes("Android Debug Bridge version"), "Mobile unit smoke must cover adb version");
+expect(mobileSmoke.includes("no_adb_target") && mobileSmoke.includes("needs_human"), "Mobile unit smoke must cover empty adb devices without a device");
+expect(mobileSmoke.includes("no_hdc_target") && mobileSmoke.includes("no_ios_target") && mobileSmoke.includes("pack.info"), "Mobile unit smoke must cover hdc, iOS, and HAP helpers");
+expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
+expect((mobileWorkflow.match(/toolset: mobile/g) ?? []).length === 2, "Mobile workflow must retain exactly two matrix entries");
+expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (mobileWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 1, "Mobile workflow must retain amd64/arm64 matrix coverage");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("agent-harness/mobile-runtime.json"), "Mobile fingerprint must include the runtime manifest");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/vendor/openharmony-hdc/hdc"), "Mobile fingerprint must include vendored hdc");
+expect(schedulerRuntimeSnapshot.includes("Mobile device protocols (Scheduler policy)"), "Mobile snapshots must require official adb/hdc/ios device evidence");
+expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-mobile-runtime.mjs"), "ci:images must run the Mobile helper smoke");
 expect(chromeSources.contract === "deepsonar.chrome.runtime.sources/v1", "Chrome source metadata contract drift");
 expect(chromeSources.chromium.version === "151.0.7922.71-1~deb12u1", "Chrome Chromium version must remain pinned");
 expect(chromeSources.debianSecuritySnapshot === "20260731T162426Z", "Chrome Debian security snapshot must remain pinned");
@@ -397,6 +468,7 @@ for (const [file, content] of [
   expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
 }
 expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
+expect(prepareScript.includes("deepsonar-mobile") && prepareScript.includes("Dockerfile.agent-mobile"), "prepare 脚本必须接入 Mobile 镜像");
 expect(chromeWorkflow.includes("chrome-runtime-images") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome CI must build and smoke Chrome runtime images");
 expect(chromeRuntimeSmoke.includes('const targetPlatform = process.argv[5] ?? "linux/amd64"') && chromeRuntimeSmoke.includes('"--platform", targetPlatform') && chromeRuntimeSmoke.includes("linux/amd64") && chromeRuntimeSmoke.includes("linux/arm64"), "Chrome runtime smoke must validate a target platform and pass it to every Docker run");
 expect(ciWorkflow.includes("chrome-fuzz-arm64-build:") && ciWorkflow.includes("chrome-fuzz-arm64:") && ciWorkflow.includes("needs: chrome-fuzz-arm64-build") && ciWorkflow.includes("runs-on: ubuntu-24.04-arm") && ciWorkflow.includes("steps.image.outputs.digest") && ciWorkflow.includes("docker/setup-qemu-action@v3") && ciWorkflow.includes("platforms: linux/arm64") && ciWorkflow.includes('docker pull --platform linux/arm64 "$image_ref"') && ciWorkflow.includes("test-chrome-runtime.mjs") && ciWorkflow.includes("agent-harness/chrome-fuzz-runtime.json linux/arm64"), "核心 CI 必须交叉构建 Chrome Fuzz arm64，并在原生 ARM64 runner 上执行不可变镜像冒烟");
@@ -412,6 +484,12 @@ for (const [file, content] of [
   ["openharmony-audit-scan.sh", openHarmonyAuditScan],
   ["openharmony-fuzz-env.sh", openHarmonyFuzzEnv],
   ["openharmony-fuzz-build.sh", openHarmonyFuzzBuild],
+  ["mobile-env.sh", mobileEnv],
+  ["mobile-adb.sh", mobileAdb],
+  ["mobile-adb-bin.sh", mobileAdbBin],
+  ["mobile-hdc.sh", mobileHdc],
+  ["mobile-ios.sh", mobileIos],
+  ["mobile-hap.sh", mobileHap],
 ]) {
   const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);
@@ -502,6 +580,7 @@ const officialRuntimeSources = [
   ["chrome-test-runtime.json", JSON.stringify(chromeTestConfig)],
   ["chrome-fuzz-runtime.json", JSON.stringify(chromeFuzzConfig)],
   ["openharmony-test-runtime.json", JSON.stringify(openHarmonyTestConfig)],
+  ["mobile-runtime.json", JSON.stringify(mobileConfig)],
   ["Dockerfile.agent", dockerfile],
   ["Dockerfile.agent-kali-minimal", kaliDockerfile],
   ["Dockerfile.agent-chrome-audit", chromeAuditDockerfile],
@@ -510,6 +589,7 @@ const officialRuntimeSources = [
   ["Dockerfile.agent-openharmony", openHarmonyDockerfile],
   ["Dockerfile.agent-openharmony-audit", openHarmonyAuditDockerfile],
   ["Dockerfile.agent-openharmony-fuzz", openHarmonyFuzzDockerfile],
+  ["Dockerfile.agent-mobile", mobileDockerfile],
   ["agent-harness/image.mjs", localDefinition],
 ];
 for (const [label, source] of officialRuntimeSources) {
@@ -622,7 +702,8 @@ expect(
 expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
-expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
+expect(releaseWorkflow.includes("  mobile:") && releaseWorkflow.includes("Dockerfile.agent-mobile"), "release workflow 必须发布 Mobile 专项镜像");
+expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, mobile]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
 for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
   expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);
 }
@@ -642,7 +723,7 @@ expect(openHarmonyRegistry.images.every((image) => image.versions.every((version
 expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");
 expect(registryScript.includes("registry_records must include ${channel} evidence"), "every release descriptor must carry all three channel outcomes");
 expect(registryScript.includes("registry_evidence must contain exactly all three channels"), "v2 generator must require exactly three channel evidence entries");
-expect(registryScript.includes("must contain exactly the nine official image keys"), "release/bundled registry checks must require all nine official products");
+expect(registryScript.includes("must contain exactly the ten official image keys"), "release/bundled registry checks must require all ten official products");
 expect(schedulerRegistryContract.includes("assertKnownKeys") && schedulerRegistryContract.includes("project_opt_in must be boolean"), "Scheduler catalog parser must reject unknown fields and invalid project_opt_in types");
 expect(schedulerRegistryContract.includes("RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE") && schedulerRegistryContract.includes("UNAVAILABLE_REASON_RE"), "Scheduler catalog parser must bound provenance and unavailable reasons");
 expect(recordContractScript.includes("AVAILABLE_PROVENANCE") && recordContractScript.includes("REASON_RE"), "release record verifier must use fixed provenance and bounded reasons");
@@ -667,4 +748,4 @@ if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));
   process.exit(1);
 }
-console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz", "chrome-audit", "chrome-test", "chrome-fuzz"].join("、")}）`);
+console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz", "chrome-audit", "chrome-test", "chrome-fuzz", "mobile"].join("、")}）`);

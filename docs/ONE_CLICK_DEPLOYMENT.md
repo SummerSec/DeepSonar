@@ -23,7 +23,7 @@ Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000�
 | `deploy/docker-compose.real.yml` | real 模式：挂载 Docker Socket |
 | `deploy/docker-compose.online.yml` | 空兼容层（旧脚本 `-f` 仍可用；推荐直接用 prod + pull） |
 | `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` / `.assets-helper` / `.silo` | 平台服务镜像 |
-| `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony） |
+| `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony/Android） |
 | `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
 | `deploy/runtime-image-registry.json` | 官方运行时清单（bundled fallback） |
 | `deploy/deploy.sh` / `deploy.ps1` | 一键脚本 |
@@ -150,6 +150,7 @@ Cosign 3 默认不对官方 catalog digest 验签（`signature: skipped`）。�
 | `deepsonar-kali-minimal` | Test 默认（无 metapackage/GUI） |
 | `deepsonar-openharmony-*` | OH 源码 test/audit/fuzz（project opt-in） |
 | `deepsonar-chrome-*` | Chrome audit/test/fuzz（project opt-in） |
+| `deepsonar-mobile` | 移动端 Android/iOS/OpenHarmony（JADX/apktool/ADB/Frida、libimobiledevice、HAP/hdc；project opt-in） |
 
 Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
 

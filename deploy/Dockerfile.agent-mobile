@@ -1,0 +1,182 @@
+# DeepSonar 官方移动端审计运行时。project opt-in。
+# Android：JADX CLI + apktool + 官方 ADB + mitmproxy + Frida/Objection
+# iOS：Linux 宿主 libimobiledevice（无 Xcode / Simulator）
+# OpenHarmony：HAP 静态检查 + 官方 hdc（不烘焙完整 SDK / DevEco）
+# 不预装 jadx-gui、MobSF、Burp、IDA 或决策扫描器。
+ARG BASE_IMAGE=deepsonar-base:local
+ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
+
+FROM ${JDK17_IMAGE} AS jdk17
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+USER root
+ARG TARGETARCH
+ARG JADX_VERSION=1.5.6
+ARG JADX_URL=https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+ARG APKTOOL_VERSION=3.0.3
+ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+ARG APKTOOL_SHA256=dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423
+ARG PLATFORM_TOOLS_VERSION=36.0.0
+ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r36.0.0-linux.zip
+ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8
+ARG HDC_VERSION=3.2.0b
+ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e
+ARG HDC_LIBUSB_SHARED_SHA256=431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887
+ARG UV_VERSION=0.11.32
+ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
+ARG UV_ARM64_SHA256=4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31
+ARG PYTHON_VERSION=3.12.13
+ARG MITMPROXY_VERSION=12.2.3
+ARG FRIDA_TOOLS_VERSION=14.10.4
+ARG OBJECTION_VERSION=1.12.5
+ARG FRIDA_SERVER_VERSION=17.17.0
+ARG FRIDA_SERVER_ARM_SHA256=a102c7f83fce8089394c3cc9a05812c841e8f254a80bcf7162280d7c1cbea208
+ARG FRIDA_SERVER_ARM64_SHA256=09d1fad867b27d69562a79289f4c412e85867f5d38ab72877036ed35e4223021
+ARG FRIDA_SERVER_X64_SHA256=5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c
+
+COPY --from=jdk17 /opt/java/openjdk /opt/deepsonar/jdks/17
+COPY deploy/mobile-env.sh /tmp/mobile-env.sh
+COPY deploy/mobile-adb.sh /tmp/mobile-adb.sh
+COPY deploy/mobile-adb-bin.sh /tmp/mobile-adb-bin.sh
+COPY deploy/mobile-hdc.sh /tmp/mobile-hdc.sh
+COPY deploy/mobile-ios.sh /tmp/mobile-ios.sh
+COPY deploy/mobile-hap.sh /tmp/mobile-hap.sh
+COPY deploy/openharmony-hdc-bin.sh /tmp/openharmony-hdc-bin.sh
+COPY deploy/vendor/openharmony-hdc/hdc /tmp/hdc
+COPY deploy/vendor/openharmony-hdc/libusb_shared.so /tmp/libusb_shared.so
+
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl unzip xz-utils \
+    libimobiledevice-utils ideviceinstaller libplist3-utils libusbmuxd-tools; \
+  if [ "$TARGETARCH" = "arm64" ]; then \
+    dpkg --add-architecture amd64; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      qemu-user-static libc6:amd64 libstdc++6:amd64 libgcc-s1:amd64 libatomic1:amd64; \
+  fi; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  install -d -m 0755 \
+    /opt/deepsonar/bin \
+    /opt/deepsonar/jadx \
+    /opt/deepsonar/apktool \
+    /opt/deepsonar/platform-tools \
+    /opt/deepsonar/hdc \
+    /opt/deepsonar/frida-server \
+    /workspace; \
+  ln -s /opt/deepsonar/jdks/17/bin/java /usr/local/bin/java; \
+  ln -s /opt/deepsonar/jdks/17/bin/javac /usr/local/bin/javac; \
+  jadx_archive="/tmp/jadx-${JADX_VERSION}.zip"; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$JADX_URL" -o "$jadx_archive"; \
+  echo "$JADX_SHA256  $jadx_archive" | sha256sum -c -; \
+  unzip -q "$jadx_archive" -d /opt/deepsonar/jadx; \
+  if [ -x /opt/deepsonar/jadx/bin/jadx ]; then \
+    ln -s /opt/deepsonar/jadx/bin/jadx /opt/deepsonar/bin/jadx; \
+  else \
+    ln -s /opt/deepsonar/jadx/jadx-${JADX_VERSION}/bin/jadx /opt/deepsonar/bin/jadx; \
+  fi; \
+  rm -f "$jadx_archive" /opt/deepsonar/jadx/bin/jadx-gui /opt/deepsonar/jadx/jadx-${JADX_VERSION}/bin/jadx-gui; \
+  apktool_jar="/opt/deepsonar/apktool/apktool.jar"; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$APKTOOL_URL" -o "$apktool_jar"; \
+  echo "$APKTOOL_SHA256  $apktool_jar" | sha256sum -c -; \
+  printf '%s\n' '#!/usr/bin/env bash' 'exec java -jar /opt/deepsonar/apktool/apktool.jar "$@"' > /opt/deepsonar/bin/apktool; \
+  chmod 0755 /opt/deepsonar/bin/apktool; \
+  platform_archive="/tmp/platform-tools.zip"; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$PLATFORM_TOOLS_URL" -o "$platform_archive"; \
+  echo "$PLATFORM_TOOLS_SHA256  $platform_archive" | sha256sum -c -; \
+  unzip -q "$platform_archive" -d /tmp; \
+  install -m 0755 /tmp/platform-tools/adb /opt/deepsonar/platform-tools/adb; \
+  rm -rf "$platform_archive" /tmp/platform-tools; \
+  echo "$HDC_SHA256  /tmp/hdc" | sha256sum -c -; \
+  echo "$HDC_LIBUSB_SHARED_SHA256  /tmp/libusb_shared.so" | sha256sum -c -; \
+  install -m 0755 /tmp/hdc /opt/deepsonar/hdc/hdc; \
+  install -m 0755 /tmp/libusb_shared.so /opt/deepsonar/hdc/libusb_shared.so; \
+  install -m 0755 /tmp/mobile-adb-bin.sh /opt/deepsonar/bin/adb; \
+  install -m 0755 /tmp/openharmony-hdc-bin.sh /opt/deepsonar/bin/hdc; \
+  install -m 0755 /tmp/mobile-adb.sh /opt/deepsonar/bin/mobile-adb.sh; \
+  install -m 0755 /tmp/mobile-hdc.sh /opt/deepsonar/bin/mobile-hdc.sh; \
+  install -m 0755 /tmp/mobile-ios.sh /opt/deepsonar/bin/mobile-ios.sh; \
+  install -m 0755 /tmp/mobile-hap.sh /opt/deepsonar/bin/mobile-hap.sh; \
+  install -m 0755 /tmp/mobile-env.sh /opt/deepsonar/bin/mobile-env.sh; \
+  rm -f /tmp/mobile-env.sh /tmp/mobile-adb.sh /tmp/mobile-adb-bin.sh \
+    /tmp/mobile-hdc.sh /tmp/mobile-ios.sh /tmp/mobile-hap.sh \
+    /tmp/openharmony-hdc-bin.sh /tmp/hdc /tmp/libusb_shared.so; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+    amd64) uv_arch=x86_64; uv_sha="$UV_AMD64_SHA256" ;; \
+    arm64) uv_arch=aarch64; uv_sha="$UV_ARM64_SHA256" ;; \
+    *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+  esac; \
+  uv_archive=/tmp/uv.tar.gz; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 \
+    "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}-unknown-linux-gnu.tar.gz" -o "$uv_archive"; \
+  echo "$uv_sha  $uv_archive" | sha256sum -c -; \
+  tar -xzf "$uv_archive" -C /usr/local/bin --strip-components=1; \
+  rm "$uv_archive"; \
+  UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python UV_PYTHON_BIN_DIR=/usr/local/bin \
+    uv python install "$PYTHON_VERSION"; \
+  uv venv /opt/deepsonar/mobile-venv --python "$PYTHON_VERSION"; \
+  UV_PYTHON_DOWNLOADS=never uv pip install --python /opt/deepsonar/mobile-venv \
+    "mitmproxy==${MITMPROXY_VERSION}" \
+    "frida-tools==${FRIDA_TOOLS_VERSION}" \
+    "objection==${OBJECTION_VERSION}"; \
+  ln -s /opt/deepsonar/mobile-venv/bin/mitmdump /opt/deepsonar/bin/mitmdump; \
+  ln -s /opt/deepsonar/mobile-venv/bin/frida /opt/deepsonar/bin/frida; \
+  ln -s /opt/deepsonar/mobile-venv/bin/objection /opt/deepsonar/bin/objection; \
+  uv cache clean; \
+  for pair in \
+    "android-arm:${FRIDA_SERVER_ARM_SHA256}" \
+    "android-arm64:${FRIDA_SERVER_ARM64_SHA256}" \
+    "android-x86_64:${FRIDA_SERVER_X64_SHA256}"
+  do \
+    name="${pair%%:*}"; \
+    sha="${pair#*:}"; \
+    archive="/tmp/frida-server-${name}.xz"; \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 \
+      "https://github.com/frida/frida/releases/download/${FRIDA_SERVER_VERSION}/frida-server-${FRIDA_SERVER_VERSION}-${name}.xz" \
+      -o "$archive"; \
+    echo "$sha  $archive" | sha256sum -c -; \
+    xz -d -c "$archive" > "/opt/deepsonar/frida-server/frida-server-${name}"; \
+    chmod 0755 "/opt/deepsonar/frida-server/frida-server-${name}"; \
+    rm -f "$archive"; \
+  done; \
+  if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
+  if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","mitmdump","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
+  PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
+
+ENV IS_SANDBOX=1 \
+    JAVA_HOME=/opt/deepsonar/jdks/17 \
+    ADB_HOME=/opt/deepsonar/platform-tools \
+    HDC_HOME=/opt/deepsonar/hdc \
+    UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH=/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+
+FROM scratch
+ARG OCI_TITLE="DeepSonar Mobile"
+ARG OCI_DESCRIPTION="Project-opt-in mobile runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco or full OH SDK."
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="mobile" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1 \
+    JAVA_HOME=/opt/deepsonar/jdks/17 \
+    ADB_HOME=/opt/deepsonar/platform-tools \
+    HDC_HOME=/opt/deepsonar/hdc \
+    UV_PYTHON_INSTALL_DIR=/opt/deepsonar/python \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH=/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

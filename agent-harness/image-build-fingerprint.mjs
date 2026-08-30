@@ -171,6 +171,22 @@ export const PRESETS = {
     ],
     platforms: "linux/amd64,linux/arm64",
   },
+  "deepsonar-mobile": {
+    dockerfile: "deploy/Dockerfile.agent-mobile",
+    paths: [
+      "agent-harness/mobile-runtime.json",
+      "deploy/mobile-env.sh",
+      "deploy/mobile-adb.sh",
+      "deploy/mobile-adb-bin.sh",
+      "deploy/mobile-hdc.sh",
+      "deploy/mobile-ios.sh",
+      "deploy/mobile-hap.sh",
+      "deploy/openharmony-hdc-bin.sh",
+      "deploy/vendor/openharmony-hdc/hdc",
+      "deploy/vendor/openharmony-hdc/libusb_shared.so",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
 };
 
 function fail(msg) {

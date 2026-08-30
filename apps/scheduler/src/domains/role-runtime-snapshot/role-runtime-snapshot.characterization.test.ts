@@ -23,6 +23,14 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
     withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
     /OpenHarmony hdc device protocol/,
   );
+  assert.match(
+    withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+    /Mobile device protocols/,
+  );
+  assert.doesNotMatch(
+    withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
+    /Mobile device protocols/,
+  );
   assert.equal(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit"), "custom");
 });
 

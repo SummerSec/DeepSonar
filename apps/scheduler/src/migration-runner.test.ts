@@ -39,6 +39,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.match(body, /'deepsonar-chrome-audit'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /'deepsonar-chrome-test'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /'deepsonar-chrome-fuzz'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
+  assert.match(body, /'deepsonar-mobile'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /CREATE TABLE job_capability_tokens\s*\(/i);
   assert.match(body, /CREATE TABLE job_attempts\s*\(/i);
   assert.match(body, /CREATE TABLE job_attempt_effects\s*\(/i);

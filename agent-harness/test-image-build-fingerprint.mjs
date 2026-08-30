@@ -39,5 +39,6 @@ assert(keys.includes("deepsonar-scheduler"), "scheduler preset required");
 assert(keys.includes("deepsonar-assets-helper"), "assets-helper preset required");
 assert(keys.includes("deepsonar-silo"), "silo preset required");
 assert(keys.includes("deepsonar-chrome-audit") && keys.includes("deepsonar-chrome-test") && keys.includes("deepsonar-chrome-fuzz"), "Chrome presets required");
+assert(keys.includes("deepsonar-mobile"), "mobile preset required");
 
 console.log(`image-build-fingerprint ok (${keys.length} presets)`);

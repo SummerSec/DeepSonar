@@ -228,7 +228,7 @@ python scripts/deepsonar-api.py plane info
 ```
 
 - `runtime_image_key: null` = **系统底座**（调度默认 deepsonar-base，不必写 key）。
-- 官方专项：`deepsonar-audit`、`deepsonar-kali-minimal`、Chrome 系列（`deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`）及 OpenHarmony 系列（`deepsonar-openharmony-*`，`project_opt_in`）。
+- 官方专项：`deepsonar-audit`、`deepsonar-kali-minimal`、Chrome 系列（`deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`）、OpenHarmony 系列（`deepsonar-openharmony-*`，`project_opt_in`）及移动端（`deepsonar-mobile`，`project_opt_in`）。
 - `sandbox_limits` 仅是项目 RoleConfig 的覆盖（读取项目投影时为 `sandbox_limits_json`，CPU/内存/PIDs 等）；仍受服务端硬上限约束，Job 创建时冻结。
 - **OpenHarmony 等 opt-in 专项**：RoleConfig 可先 pin；**真正跑 Job** 仍要求项目在镜像市场启用。
 - `platform_tools`：每个 Agent **全量可选**；未声明 = 全开；仅 **`mark_job_done` 不可关**。

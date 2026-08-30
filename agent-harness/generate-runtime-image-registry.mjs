@@ -29,6 +29,7 @@ const EXPECTED_KEYS = [
   "deepsonar-chrome-audit",
   "deepsonar-chrome-test",
   "deepsonar-chrome-fuzz",
+  "deepsonar-mobile",
 ];
 
 // v2 consolidates all platforms into one version; the legacy v1 compatibility
@@ -276,7 +277,7 @@ function assertImageBase(image, index) {
 
 function assertV1Registry(registry) {
   if (!Array.isArray(registry.images)) fail("v1 registry images 必须是数组");
-  if (registry.images.length !== EXPECTED_KEYS.length) fail("v1 registry must contain exactly the nine official image keys");
+  if (registry.images.length !== EXPECTED_KEYS.length) fail("v1 registry must contain exactly the ten official image keys");
   const seenImages = new Set();
   const seenRefs = new Map();
   for (const [index, image] of registry.images.entries()) {
@@ -304,12 +305,12 @@ function assertV1Registry(registry) {
       }
     }
   }
-  if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v1 registry must contain exactly the nine official image keys");
+  if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v1 registry must contain exactly the ten official image keys");
 }
 
 function assertV2Registry(registry) {
   if (!Array.isArray(registry.images)) fail("v2 registry images 必须是数组");
-  if (registry.images.length !== EXPECTED_KEYS.length) fail("v2 registry must contain exactly the nine official image keys");
+  if (registry.images.length !== EXPECTED_KEYS.length) fail("v2 registry must contain exactly the ten official image keys");
   const seenImages = new Set();
   const seenRefs = new Set();
   for (const [index, image] of registry.images.entries()) {
@@ -365,7 +366,7 @@ function assertV2Registry(registry) {
       }
     }
   }
-  if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v2 registry must contain exactly the nine official image keys");
+  if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v2 registry must contain exactly the ten official image keys");
 }
 
 export function assertRegistry(registry) {
@@ -384,7 +385,7 @@ export function assertRegistry(registry) {
 function expectedImagesFromTemplate(template) {
   if (!Array.isArray(template.images)) fail("bundled template images 无效");
   const images = new Map(template.images.map((image) => [image.image_key, image]));
-  if (images.size !== EXPECTED_KEYS.length || EXPECTED_KEYS.some((key) => !images.has(key))) fail("bundled template 必须包含九项官方运行时镜像");
+  if (images.size !== EXPECTED_KEYS.length || EXPECTED_KEYS.some((key) => !images.has(key))) fail("bundled template 必须包含十项官方运行时镜像");
   return images;
 }
 

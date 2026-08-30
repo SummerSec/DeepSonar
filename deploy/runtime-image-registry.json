@@ -415,6 +415,17 @@
           }
         }
       ]
+    },
+    {
+      "image_key": "deepsonar-mobile",
+      "name": "DeepSonar Mobile",
+      "description": "移动端审计运行时：Android JADX/apktool/ADB/Frida、iOS libimobiledevice、OpenHarmony HAP/hdc；project opt-in；不预装 MobSF/GUI/商业套件/DevEco",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "source_url": "https://github.com/SummerSec/DeepSonar",
+      "project_opt_in": true,
+      "default_role": "audit",
+      "versions": []
     }
   ],
   "source": "remote"

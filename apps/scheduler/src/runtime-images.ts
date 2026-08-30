@@ -836,6 +836,7 @@ const TOOLSET_TO_RUNTIME_IMAGE_KEY: Record<string, string> = {
   "chrome-audit": "deepsonar-chrome-audit",
   "chrome-test": "deepsonar-chrome-test",
   "chrome-fuzz": "deepsonar-chrome-fuzz",
+  mobile: "deepsonar-mobile",
 };
 
 function imageRepository(imageRef: string): string | null {

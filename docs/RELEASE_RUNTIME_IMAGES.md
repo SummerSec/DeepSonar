@@ -2,7 +2,7 @@
 
 > **状态：运维 as-built**。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
 
-`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony 与 Chrome 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`。
+`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome 与 Mobile 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。
 
 同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` **提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json for vX.Y.Z`），用于更新内置 bundled 回退清单。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。若默认分支开启了「禁止 GITHUB_TOKEN 直推」类保护规则，需为 Actions 放行或改用可写 PAT。
 
@@ -41,7 +41,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test 与 Chrome Fuzz 九项。Chrome 条目在源码内置 bundled 清单中可以保持 `versions: []`；只有 Release 对两个平台完成真实构建、发布和 inspect 后，生成器才会写入版本与 digest。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz 与 Mobile 十项。Chrome / Mobile 条目在源码内置 bundled 清单中可以保持 `versions: []`；只有 Release 对两个平台完成真实构建、发布和 inspect 后，生成器才会写入版本与 digest。
 
 **一版本多平台**：v2 多架构发布时，每个产品在 `versions[]` 只有一条 canonical 记录，`platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限。旧 v1 清单仍按一平台一版本兼容解析；Scheduler 当前只消费 v2 的 GitHub `image_ref` 投影。
 
