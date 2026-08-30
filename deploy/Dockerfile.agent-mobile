@@ -74,7 +74,7 @@ RUN set -eux; \
   apt-get install -y --no-install-recommends \
     binutils=${BINUTILS_VERSION} \
     ca-certificates curl unzip xz-utils \
-    libimobiledevice-utils ideviceinstaller libplist3-utils libusbmuxd-tools \
+    libimobiledevice-utils ideviceinstaller libplist-utils libusbmuxd-tools \
     "$r2_deb"; \
   rm -f "$r2_deb"; \
   if [ "$TARGETARCH" = "arm64" ]; then \

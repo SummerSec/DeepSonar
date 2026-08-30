@@ -150,7 +150,7 @@
     "apt": {
       "libimobiledevice-utils": { "capabilities": ["ios-device-protocol"] },
       "ideviceinstaller": { "capabilities": ["ios-app-install"] },
-      "libplist3-utils": { "capabilities": ["plist"] },
+      "libplist-utils": { "capabilities": ["plist"] },
       "libusbmuxd-tools": { "capabilities": ["ios-usbmuxd"] },
       "binutils": { "version": "2.40-2", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] }
     }

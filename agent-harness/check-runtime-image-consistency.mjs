@@ -433,6 +433,8 @@ expect(mobileDockerfile.includes("binutils=${BINUTILS_VERSION}"), "Mobile Docker
 expect(mobileDockerfile.includes("ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8"), "Mobile Dockerfile platform-tools checksum drift");
 expect(mobileDockerfile.includes("ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e"), "Mobile Dockerfile hdc checksum drift");
 expect(mobileDockerfile.includes("libimobiledevice-utils") && mobileDockerfile.includes("ideviceinstaller"), "Mobile must install iOS host protocol tools");
+expect(mobileDockerfile.includes("libplist-utils") && !mobileDockerfile.includes("libplist3-utils"), "Mobile must install Debian libplist-utils, not the nonexistent libplist3-utils");
+expect(mobileConfig.managed?.apt?.["libplist-utils"] && !mobileConfig.managed?.apt?.["libplist3-utils"], "Mobile manifest must name Debian libplist-utils");
 expect(mobileDockerfile.includes("qemu-user-static") && mobileAdbBin.includes("qemu-x86_64-static"), "Mobile arm64 must run official linux-x64 adb via qemu-user-static");
 expect(mobileDockerfile.includes("openharmony-hdc-bin.sh") && mobileDockerfile.includes("vendor/openharmony-hdc/hdc"), "Mobile must reuse vendored official hdc");
 expect(!mobileDockerfile.includes("jadx-gui") || mobileDockerfile.includes("rm -f") && mobileDockerfile.includes("jadx-gui"), "Mobile must not keep jadx-gui");
