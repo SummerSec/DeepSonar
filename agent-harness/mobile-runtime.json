@@ -104,6 +104,22 @@
         "arm64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31" }
       }
     },
+    "radare2": {
+      "version": "6.2.0",
+      "license": "LGPL-3.0-only",
+      "capabilities": ["elf-disassembly"],
+      "source": "official radare2 GitHub release debian packages (not Cutter GUI)",
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/radareorg/radare2/releases/download/6.2.0/radare2_6.2.0_amd64.deb",
+          "sha256": "eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb"
+        },
+        "arm64": {
+          "url": "https://github.com/radareorg/radare2/releases/download/6.2.0/radare2_6.2.0_arm64.deb",
+          "sha256": "e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec"
+        }
+      }
+    },
     "frida-server": {
       "version": "17.17.0",
       "license": "wxWindows Library Licence 3.1",
@@ -129,20 +145,22 @@
       "mitmproxy": { "version": "12.2.3", "license": "MIT", "capabilities": ["http-intercept"] },
       "frida-tools": { "version": "14.10.4", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
       "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
-      "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] }
+      "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] },
+      "lief": { "version": "1.0.0", "license": "Apache-2.0", "capabilities": ["elf-parse"] }
     },
     "apt": {
       "libimobiledevice-utils": { "capabilities": ["ios-device-protocol"] },
       "ideviceinstaller": { "capabilities": ["ios-app-install"] },
       "libplist3-utils": { "capabilities": ["plist"] },
-      "libusbmuxd-tools": { "capabilities": ["ios-usbmuxd"] }
+      "libusbmuxd-tools": { "capabilities": ["ios-usbmuxd"] },
+      "binutils": { "version": "2.40-2", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] }
     }
   },
   "toolsets": {
     "mobile": {
       "imageKey": "deepsonar-mobile",
-      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco, MCP servers, or full OH SDK.",
-      "maxSizeMiB": 1750
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
+      "maxSizeMiB": 1850
     }
   }
 }

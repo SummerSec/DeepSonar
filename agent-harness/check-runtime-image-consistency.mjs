@@ -123,6 +123,7 @@ const mobileAdbBin = readFileSync(new URL("../deploy/mobile-adb-bin.sh", import.
 const mobileHdc = readFileSync(new URL("../deploy/mobile-hdc.sh", import.meta.url), "utf8");
 const mobileIos = readFileSync(new URL("../deploy/mobile-ios.sh", import.meta.url), "utf8");
 const mobileHap = readFileSync(new URL("../deploy/mobile-hap.sh", import.meta.url), "utf8");
+const mobileSo = readFileSync(new URL("../deploy/mobile-so.sh", import.meta.url), "utf8");
 const mobileSmoke = readFileSync(new URL("./test-mobile-runtime.mjs", import.meta.url), "utf8");
 const mobileWorkflow = readFileSync(new URL("../.github/workflows/mobile-runtime.yml", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
@@ -378,6 +379,9 @@ expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin ap
 expect(mobileConfig.downloads?.bundletool?.version === "1.18.3", "Mobile must pin bundletool 1.18.3");
 expect(mobileConfig.downloads?.apkeep?.version === "1.0.0", "Mobile must pin apkeep 1.0.0");
 expect(mobileConfig.managed?.pip?.androguard?.version === "4.1.4", "Mobile must pin androguard 4.1.4");
+expect(mobileConfig.managed?.pip?.lief?.version === "1.0.0", "Mobile must pin LIEF 1.0.0");
+expect(mobileConfig.managed?.apt?.binutils?.version === "2.40-2", "Mobile must pin binutils 2.40-2");
+expect(mobileConfig.downloads?.radare2?.version === "6.2.0", "Mobile must pin radare2 6.2.0");
 expect(mobileConfig.downloads?.["platform-tools"]?.version === "36.0.0", "Mobile must pin platform-tools 36.0.0");
 expect(mobileConfig.downloads?.hdc?.version === "3.2.0b", "Mobile must pin official hdc 3.2.0b");
 expect(mobileConfig.downloads?.jadx?.assets?.all?.sha256 === "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974", "Mobile JADX SHA256 drift");
@@ -385,6 +389,8 @@ expect(mobileConfig.downloads?.apktool?.assets?.all?.sha256 === "dbf930b076c6b9b
 expect(mobileConfig.downloads?.bundletool?.assets?.all?.sha256 === "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29", "Mobile bundletool SHA256 drift");
 expect(mobileConfig.downloads?.apkeep?.assets?.amd64?.sha256 === "a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e", "Mobile apkeep amd64 SHA256 drift");
 expect(mobileConfig.downloads?.apkeep?.assets?.arm64?.sha256 === "5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049", "Mobile apkeep arm64 SHA256 drift");
+expect(mobileConfig.downloads?.radare2?.assets?.amd64?.sha256 === "eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb", "Mobile radare2 amd64 SHA256 drift");
+expect(mobileConfig.downloads?.radare2?.assets?.arm64?.sha256 === "e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec", "Mobile radare2 arm64 SHA256 drift");
 expect(mobileConfig.downloads?.["platform-tools"]?.assets?.all?.sha256 === "0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8", "Mobile platform-tools SHA256 drift");
 expect(mobileConfig.downloads?.hdc?.assets?.amd64?.sha256 === "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e", "Mobile hdc SHA256 drift");
 expect(mobileDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "Mobile must default to local governed base");
@@ -399,6 +405,10 @@ expect(mobileDockerfile.includes("ARG BUNDLETOOL_SHA256=a099cfa1543f55593bc2ed16
 expect(mobileDockerfile.includes("ARG APKEEP_AMD64_SHA256=a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e"), "Mobile Dockerfile apkeep amd64 checksum drift");
 expect(mobileDockerfile.includes("ARG APKEEP_ARM64_SHA256=5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049"), "Mobile Dockerfile apkeep arm64 checksum drift");
 expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
+expect(mobileDockerfile.includes("lief==${LIEF_VERSION}"), "Mobile Dockerfile must install pinned LIEF");
+expect(mobileDockerfile.includes("ARG RADARE2_AMD64_SHA256=eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb"), "Mobile Dockerfile radare2 amd64 checksum drift");
+expect(mobileDockerfile.includes("ARG RADARE2_ARM64_SHA256=e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec"), "Mobile Dockerfile radare2 arm64 checksum drift");
+expect(mobileDockerfile.includes("binutils=${BINUTILS_VERSION}"), "Mobile Dockerfile must pin binutils");
 expect(mobileDockerfile.includes("ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8"), "Mobile Dockerfile platform-tools checksum drift");
 expect(mobileDockerfile.includes("ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e"), "Mobile Dockerfile hdc checksum drift");
 expect(mobileDockerfile.includes("libimobiledevice-utils") && mobileDockerfile.includes("ideviceinstaller"), "Mobile must install iOS host protocol tools");
@@ -408,17 +418,22 @@ expect(!mobileDockerfile.includes("jadx-gui") || mobileDockerfile.includes("rm -
 expect(!/apt-get install[^\n]*(mobsf|MobSF|burp|Burp|ida64|deveco)/i.test(mobileDockerfile), "Mobile must not apt-install MobSF/Burp/IDA/DevEco");
 expect(!/jadx-ai-mcp|apktool-mcp|firerpa|quark-engine/i.test(mobileDockerfile), "Mobile must not bake awesome-ai-reverse MCP wrappers or decision scanners");
 expect(mobileDockerfile.includes("bundletool") && mobileDockerfile.includes("apkeep") && mobileDockerfile.includes("androguard"), "Mobile must install bundletool/apkeep/androguard");
+expect(mobileDockerfile.includes("mobile-so.sh") && mobileDockerfile.includes("radare2") && !mobileDockerfile.includes("ghidra_"), "Mobile must install lightweight SO tools and must not bake Ghidra");
 expect(mobileDockerfile.includes("不预装") && mobileDockerfile.includes("MobSF") && mobileDockerfile.includes("Burp"), "Mobile must document that MobSF/Burp/IDA stay out");
 expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/adb");
 expect(mobileEnv.includes("mitmdump --version") && mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke mitmdump/Frida/Objection");
 expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mobileEnv.includes("hdc"), "Mobile env check must smoke iOS host tools and hdc");
-expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite ida64 deveco"), "Mobile env check must fail if decision scanners or GUI/commercial tools reappear");
+expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite ida64 ghidra analyzeHeadless cutter deveco"), "Mobile env check must fail if decision scanners, GUI, Ghidra, or commercial tools reappear");
+expect(mobileEnv.includes("r2 -qv") && mobileEnv.includes("mobile-so.sh --check"), "Mobile env check must smoke radare2 and SO helper");
+expect(mobileSo.includes("readelf") && mobileSo.includes("r2 -qq") && mobileSo.includes("lief"), "Mobile SO helper must inspect ELF with readelf/r2/LIEF");
 expect(mobileAdb.includes("needs_human") && mobileAdb.includes("inconclusive") && mobileAdb.includes("no_adb_target"), "Mobile adb helper must emit structured no-target evidence");
 expect(mobileHdc.includes("needs_human") && mobileHdc.includes("no_hdc_target") && mobileIos.includes("no_ios_target"), "Mobile hdc/ios helpers must emit structured no-target evidence");
 expect(mobileHap.includes("pack.info") && mobileHap.includes("module.json"), "Mobile HAP helper must inspect pack.info/module.json");
 expect(mobileSmoke.includes("adb version smoke") || mobileSmoke.includes("Android Debug Bridge version"), "Mobile unit smoke must cover adb version");
 expect(mobileSmoke.includes("no_adb_target") && mobileSmoke.includes("needs_human"), "Mobile unit smoke must cover empty adb devices without a device");
 expect(mobileSmoke.includes("no_hdc_target") && mobileSmoke.includes("no_ios_target") && mobileSmoke.includes("pack.info"), "Mobile unit smoke must cover hdc, iOS, and HAP helpers");
+expect(mobileSmoke.includes("so --check") && mobileSmoke.includes("libdemo.so"), "Mobile unit smoke must cover SO helper");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-so.sh"), "Mobile fingerprint must include the SO helper");
 expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
 expect((mobileWorkflow.match(/toolset: mobile/g) ?? []).length === 2, "Mobile workflow must retain exactly two matrix entries");
 expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (mobileWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 1, "Mobile workflow must retain amd64/arm64 matrix coverage");
@@ -502,6 +517,7 @@ for (const [file, content] of [
   ["mobile-hdc.sh", mobileHdc],
   ["mobile-ios.sh", mobileIos],
   ["mobile-hap.sh", mobileHap],
+  ["mobile-so.sh", mobileSo],
 ]) {
   const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);

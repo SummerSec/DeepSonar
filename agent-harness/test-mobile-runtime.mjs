@@ -176,4 +176,41 @@ if (hapInspect.status !== 0 || !hapInspect.stdout.includes("pack.info") || !hapI
   throw new Error(`hap inspect must print pack.info\n${hapInspect.stdout}\n${hapInspect.stderr}`);
 }
 
+const soDir = mkdtempSync(join(tmpdir(), "mobile-so-"));
+const soBin = writeFake("mobile-so-", "r2", `#!/usr/bin/env bash
+if [[ "$1" == "-qv" ]]; then
+  echo '6.2.0'
+  exit 0
+fi
+echo 'ELF header'
+echo 'iI'
+exit 0
+`);
+for (const [name, script] of [
+  ["readelf", "#!/usr/bin/env bash\necho 'ELF Header'\nexit 0\n"],
+  ["objdump", "#!/usr/bin/env bash\necho 'GNU objdump 2.40'\nexit 0\n"],
+  ["nm", "#!/usr/bin/env bash\nexit 0\n"],
+  ["file", "#!/usr/bin/env bash\necho \"$1: ELF 64-bit LSB shared object\"\nexit 0\n"],
+  ["python", "#!/usr/bin/env bash\necho '1.0.0'\nexit 0\n"],
+]) {
+  writeFileSync(join(soDir, name), script);
+  chmodSync(join(soDir, name), 0o755);
+}
+const soCheck = runHelper("deploy/mobile-so.sh", ["--check"], {
+  PATH: `${soDir}:${soBin.slice(0, soBin.lastIndexOf("/"))}:${process.env.PATH}`,
+  MOBILE_PYTHON: join(soDir, "python"),
+});
+if (soCheck.status !== 0 || !soCheck.stdout.includes("binutils + radare2 + LIEF")) {
+  throw new Error(`so --check failed: ${soCheck.status}\n${soCheck.stdout}\n${soCheck.stderr}`);
+}
+const soFile = join(soDir, "libdemo.so");
+writeFileSync(soFile, "not-a-real-elf");
+const soInspect = runHelper("deploy/mobile-so.sh", ["inspect", soFile], {
+  PATH: `${soDir}:${soBin.slice(0, soBin.lastIndexOf("/"))}:${process.env.PATH}`,
+  MOBILE_PYTHON: join(soDir, "python"),
+});
+if (soInspect.status !== 0 || !soInspect.stdout.includes("readelf") || !soInspect.stdout.includes("LIEF")) {
+  throw new Error(`so inspect must print readelf/LIEF sections\n${soInspect.stdout}\n${soInspect.stderr}`);
+}
+
 console.log("mobile runtime helper smoke ok");

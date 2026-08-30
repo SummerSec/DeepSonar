@@ -2213,12 +2213,12 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
           labels: |
             org.opencontainers.image.title=DeepSonar Mobile
-            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/商业套件/DevEco/MCP。
+            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP。
             org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           annotations: |
             org.opencontainers.image.title=DeepSonar Mobile
-            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/商业套件/DevEco/MCP。
+            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP。
             org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
             org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
           tags: |

@@ -1,8 +1,9 @@
 # DeepSonar 官方移动端审计运行时。project opt-in。
 # Android：JADX CLI + apktool + bundletool + apkeep + androguard + 官方 ADB + mitmproxy + Frida/Objection
+# Native .so：binutils + 官方 radare2 + LIEF（不装 Ghidra / IDA / Cutter）
 # iOS：Linux 宿主 libimobiledevice（无 Xcode / Simulator）
 # OpenHarmony：HAP 静态检查 + 官方 hdc（不烘焙完整 SDK / DevEco）
-# 不预装 jadx-gui、MobSF、Burp、IDA、决策扫描器或第三方 MCP/GUI。
+# 不预装 jadx-gui、MobSF、Burp、IDA、Ghidra、决策扫描器或第三方 MCP/GUI。
 ARG BASE_IMAGE=deepsonar-base:local
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
 
@@ -37,6 +38,11 @@ ARG MITMPROXY_VERSION=12.2.3
 ARG FRIDA_TOOLS_VERSION=14.10.4
 ARG OBJECTION_VERSION=1.12.5
 ARG ANDROGUARD_VERSION=4.1.4
+ARG LIEF_VERSION=1.0.0
+ARG BINUTILS_VERSION=2.40-2
+ARG RADARE2_VERSION=6.2.0
+ARG RADARE2_AMD64_SHA256=eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb
+ARG RADARE2_ARM64_SHA256=e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec
 ARG FRIDA_SERVER_VERSION=17.17.0
 ARG FRIDA_SERVER_ARM_SHA256=a102c7f83fce8089394c3cc9a05812c841e8f254a80bcf7162280d7c1cbea208
 ARG FRIDA_SERVER_ARM64_SHA256=09d1fad867b27d69562a79289f4c412e85867f5d38ab72877036ed35e4223021
@@ -49,15 +55,29 @@ COPY deploy/mobile-adb-bin.sh /tmp/mobile-adb-bin.sh
 COPY deploy/mobile-hdc.sh /tmp/mobile-hdc.sh
 COPY deploy/mobile-ios.sh /tmp/mobile-ios.sh
 COPY deploy/mobile-hap.sh /tmp/mobile-hap.sh
+COPY deploy/mobile-so.sh /tmp/mobile-so.sh
 COPY deploy/openharmony-hdc-bin.sh /tmp/openharmony-hdc-bin.sh
 COPY deploy/vendor/openharmony-hdc/hdc /tmp/hdc
 COPY deploy/vendor/openharmony-hdc/libusb_shared.so /tmp/libusb_shared.so
 
 RUN set -eux; \
   apt-get update; \
+  case "$TARGETARCH" in \
+    amd64) r2_deb_arch=amd64; r2_sha="$RADARE2_AMD64_SHA256" ;; \
+    arm64) r2_deb_arch=arm64; r2_sha="$RADARE2_ARM64_SHA256" ;; \
+    *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  r2_deb="/tmp/radare2_${RADARE2_VERSION}_${r2_deb_arch}.deb"; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 \
+    "https://github.com/radareorg/radare2/releases/download/${RADARE2_VERSION}/radare2_${RADARE2_VERSION}_${r2_deb_arch}.deb" \
+    -o "$r2_deb"; \
+  echo "$r2_sha  $r2_deb" | sha256sum -c -; \
   apt-get install -y --no-install-recommends \
+    binutils=${BINUTILS_VERSION} \
     ca-certificates curl unzip xz-utils \
-    libimobiledevice-utils ideviceinstaller libplist3-utils libusbmuxd-tools; \
+    libimobiledevice-utils ideviceinstaller libplist3-utils libusbmuxd-tools \
+    "$r2_deb"; \
+  rm -f "$r2_deb"; \
   if [ "$TARGETARCH" = "arm64" ]; then \
     dpkg --add-architecture amd64; \
     apt-get update; \
@@ -121,9 +141,10 @@ RUN set -eux; \
   install -m 0755 /tmp/mobile-hdc.sh /opt/deepsonar/bin/mobile-hdc.sh; \
   install -m 0755 /tmp/mobile-ios.sh /opt/deepsonar/bin/mobile-ios.sh; \
   install -m 0755 /tmp/mobile-hap.sh /opt/deepsonar/bin/mobile-hap.sh; \
+  install -m 0755 /tmp/mobile-so.sh /opt/deepsonar/bin/mobile-so.sh; \
   install -m 0755 /tmp/mobile-env.sh /opt/deepsonar/bin/mobile-env.sh; \
   rm -f /tmp/mobile-env.sh /tmp/mobile-adb.sh /tmp/mobile-adb-bin.sh \
-    /tmp/mobile-hdc.sh /tmp/mobile-ios.sh /tmp/mobile-hap.sh \
+    /tmp/mobile-hdc.sh /tmp/mobile-ios.sh /tmp/mobile-hap.sh /tmp/mobile-so.sh \
     /tmp/openharmony-hdc-bin.sh /tmp/hdc /tmp/libusb_shared.so; \
   arch="$(dpkg --print-architecture)"; \
   case "$arch" in \
@@ -144,7 +165,8 @@ RUN set -eux; \
     "mitmproxy==${MITMPROXY_VERSION}" \
     "frida-tools==${FRIDA_TOOLS_VERSION}" \
     "objection==${OBJECTION_VERSION}" \
-    "androguard==${ANDROGUARD_VERSION}"; \
+    "androguard==${ANDROGUARD_VERSION}" \
+    "lief==${LIEF_VERSION}"; \
   ln -s /opt/deepsonar/mobile-venv/bin/mitmdump /opt/deepsonar/bin/mitmdump; \
   ln -s /opt/deepsonar/mobile-venv/bin/frida /opt/deepsonar/bin/frida; \
   ln -s /opt/deepsonar/mobile-venv/bin/objection /opt/deepsonar/bin/objection; \
@@ -168,7 +190,7 @@ RUN set -eux; \
   done; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","mitmdump","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","mitmdump","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
 
@@ -183,7 +205,7 @@ WORKDIR /workspace
 
 FROM scratch
 ARG OCI_TITLE="DeepSonar Mobile"
-ARG OCI_DESCRIPTION="Project-opt-in mobile runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco, MCP servers or full OH SDK."
+ARG OCI_DESCRIPTION="Project-opt-in mobile runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers or full OH SDK."
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="mobile" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
