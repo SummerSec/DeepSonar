@@ -185,6 +185,7 @@ request is made, `initialize` must return the official server identity, and
 at most the last 8 KiB of smoke stderr. Runtime CLI stderr is separately written
 as exact-secret-redacted `runtime.stderr` chunks in normalized evidence with a
 1 MiB total cap and explicit truncation record; the Job error remains a short
-tail summary. Full model-turn local-docker smokes still require the corresponding
+tail summary. Full model-turn OpenSandbox vendor E2E
+(`pnpm ci:smoke:opensandbox-cli-control`) still requires the corresponding
 provider credentials; credential-unavailable results must be reported
-separately from adapter or parser failures.
+separately from adapter or parser failures. Mock LLM is not a substitute.
