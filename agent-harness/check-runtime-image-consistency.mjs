@@ -441,6 +441,8 @@ expect(mobileDockerfile.includes("ARG RADARE2_ARM64_SHA256=e866525e9874588d478d5
 expect(mobileDockerfile.includes("binutils=${BINUTILS_VERSION}"), "Mobile Dockerfile must pin binutils");
 expect(mobileDockerfile.includes("ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8"), "Mobile Dockerfile platform-tools checksum drift");
 expect(mobileDockerfile.includes("ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e"), "Mobile Dockerfile hdc checksum drift");
+expect(mobileDockerfile.includes("ca-certificates curl unzip xz-utils libatomic1"), "Mobile must install libatomic1 on both architectures for official hdc");
+expect(mobileConfig.managed?.apt?.libatomic1, "Mobile manifest must name libatomic1 for official hdc");
 expect(mobileDockerfile.includes("libimobiledevice-utils") && mobileDockerfile.includes("ideviceinstaller"), "Mobile must install iOS host protocol tools");
 expect(mobileDockerfile.includes("libplist-utils") && !mobileDockerfile.includes("libplist3-utils"), "Mobile must install Debian libplist-utils, not the nonexistent libplist3-utils");
 expect(mobileConfig.managed?.apt?.["libplist-utils"] && !mobileConfig.managed?.apt?.["libplist3-utils"], "Mobile manifest must name Debian libplist-utils");

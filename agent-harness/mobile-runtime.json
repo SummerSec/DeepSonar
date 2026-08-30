@@ -149,6 +149,7 @@
       "lief": { "version": "1.0.0", "license": "Apache-2.0", "capabilities": ["elf-parse"] }
     },
     "apt": {
+      "libatomic1": { "capabilities": ["hdc-runtime"] },
       "libimobiledevice-utils": { "capabilities": ["ios-device-protocol"] },
       "ideviceinstaller": { "capabilities": ["ios-app-install"] },
       "libplist-utils": { "capabilities": ["plist"] },

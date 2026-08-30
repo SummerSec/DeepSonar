@@ -63,7 +63,7 @@ RUN set -eux; \
   apt-get -o Acquire::Retries=3 update; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     binutils=${BINUTILS_VERSION} \
-    ca-certificates curl unzip xz-utils \
+    ca-certificates curl unzip xz-utils libatomic1 \
     libimobiledevice-utils ideviceinstaller libplist-utils libusbmuxd-tools; \
   if [ "$TARGETARCH" = "arm64" ]; then \
     dpkg --add-architecture amd64; \
