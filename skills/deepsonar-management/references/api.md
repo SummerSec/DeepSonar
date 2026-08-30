@@ -49,6 +49,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /dashboard/overview | projects:read | 态势 P0 运营总览聚合：项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动；项目级 token 只看到本项目 |
+| GET | /dashboard/usage | projects:read | 用量账本：聚合 `job_usage_ledger`。`period=day\|week\|month` 为上海日历滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的 `YYYY-MM-DD` 或 ISO 时刻，最长 366 天。可选 `project_id`/`canvas_id`；不定价；项目级 token 只看到本项目 |
 | GET | /projects | projects:read | 项目列表 |
 | POST | /projects | projects:write | 创建 `{name, description?, plane_project_id?}` |
 | GET | /projects/:id | projects:read | 项目详情 |

@@ -798,6 +798,12 @@
   font-family: var(--font-mono);
 }
 
+.session-viewer__table .session-viewer__num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .session-viewer__table td:not(:first-child) {
   color: var(--muted);
   font-family: var(--font-mono);

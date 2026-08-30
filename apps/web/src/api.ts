@@ -79,6 +79,38 @@ export interface DashboardOverview {
   recent_activity: DashboardActivityItem[];
 }
 
+export type UsagePeriod = "day" | "week" | "month" | "custom";
+
+export interface UsageTokenTotals {
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  jobs: number;
+  projects: number;
+  tasks: number;
+  settled: number;
+  unknown: number;
+  not_reported: number;
+}
+
+export interface DashboardUsage {
+  generated_at: string;
+  calendar_timezone: string;
+  period: UsagePeriod;
+  range: { start: string; end: string; days: string[] };
+  totals: UsageTokenTotals;
+  series: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens"> & { date: string }>;
+  projects: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "jobs" | "tasks"> & { id: string; name: string }>;
+  tasks: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "jobs"> & {
+    canvas_id: string | null;
+    title: string;
+    project_id: string;
+    project_name: string;
+  }>;
+  models: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens"> & { provider: string; model: string }>;
+}
+
 export interface Project {
   id: string;
   /** 可空：NULL = 纯本地项目（Plane 为可选绑定） */
@@ -466,12 +498,17 @@ export interface CanvasBroadcastSummary {
 
 export interface JobUsageSummary {
   id: string;
+  attempt_id?: string;
   effect_id: string;
+  request_no: number;
   provider: string;
   model: string;
+  input_tokens: number;
+  output_tokens: number;
   total_tokens: number;
   adjustment_tokens: number;
   settlement_status: "settled" | "unknown" | "not_reported";
+  source?: string;
   observed_at: string;
 }
 
@@ -1763,6 +1800,19 @@ function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
 
 export const api = {
   dashboardOverview: () => get<DashboardOverview>("/dashboard/overview"),
+  dashboardUsage: (query: {
+    period?: UsagePeriod;
+    from?: string;
+    to?: string;
+    project_id?: string;
+    canvas_id?: string;
+  } = {}) => get<DashboardUsage>(`/dashboard/usage${qs({
+    period: query.period,
+    from: query.from,
+    to: query.to,
+    project_id: query.project_id,
+    canvas_id: query.canvas_id,
+  })}`),
   projects: () => get<Project[]>("/projects"),
   createProject: (p: { name: string; description?: string; plane_project_id?: string | null; image_strategy?: ProjectImageStrategy }) =>
     send<Project>("POST", "/projects", p),

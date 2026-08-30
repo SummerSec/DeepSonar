@@ -84,7 +84,7 @@ be registered or admitted:
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | **Session 归档** | `packages/runtime-sandbox/src/cli-session-adapters.ts`（`SupportedAgentCli` + `CLI_SESSION_ADAPTERS`） | 按 CLI 发现/导出原始 session（JSONL / vendor export），写入 Job evidence；`sessionCapture: true` 才启用 |
-| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 工具统计 / Token / 原始；**保留下载原始文件** |
+| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 用量（归档 usage + Gateway 账本） / 工具统计 / 原始；**保留下载原始文件** |
 
 当前五类 CLI 的归档边界如下；它们是独立格式，不承诺共用 schema：
 
