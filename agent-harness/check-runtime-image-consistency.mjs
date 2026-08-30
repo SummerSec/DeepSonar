@@ -161,6 +161,12 @@ const expectDockerfileParse = (source, label) => {
     continued = trimmed.endsWith("\\");
   }
   expect(!continued, `${label} ends with a dangling line continuation`);
+  const joined = source.replace(/\\\r?\n/g, " ");
+  for (const [index, line] of joined.split(/\r?\n/).entries()) {
+    if (/\bfor\b/.test(line) && /\bdo\b/.test(line) && !/;\s*do\b/.test(line)) {
+      expect(false, `${label} joined line ${index + 1}: for-list must use '; do' because Dockerfile continuations collapse to one /bin/sh line`);
+    }
+  }
 };
 const reasoningPlugin = "dsh-reasoning-settings";
 const reasoningPluginVersion = "0.3.0";
@@ -453,8 +459,8 @@ expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mo
 expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite mitmdump mitmproxy ida64 ghidra analyzeHeadless cutter deveco"), "Mobile env check must fail if decision scanners, GUI, Ghidra, mitmproxy, or commercial tools reappear");
 expect(!mobileDockerfile.includes("mitmproxy==") && !mobileDockerfile.includes("bin/mitmdump"), "Mobile must not install mitmproxy");
 expect(
-  mobileDockerfile.includes('"android-x86_64:${FRIDA_SERVER_X64_SHA256}" \\'),
-  "Mobile Frida server loop last item must keep a Dockerfile line continuation",
+  mobileDockerfile.includes('"android-x86_64:${FRIDA_SERVER_X64_SHA256}"; \\'),
+  "Mobile Frida server loop last item must end with '; \\' so dash sees a valid for-list after line joining",
 );
 expectDockerfileParse(dockerfile, "Dockerfile.agent");
 expectDockerfileParse(kaliDockerfile, "Dockerfile.agent-kali-minimal");
