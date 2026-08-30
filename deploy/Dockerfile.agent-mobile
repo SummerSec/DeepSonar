@@ -172,7 +172,7 @@ RUN set -eux; \
   for pair in \
     "android-arm:${FRIDA_SERVER_ARM_SHA256}" \
     "android-arm64:${FRIDA_SERVER_ARM64_SHA256}" \
-    "android-x86_64:${FRIDA_SERVER_X64_SHA256}"
+    "android-x86_64:${FRIDA_SERVER_X64_SHA256}" \
   do \
     name="${pair%%:*}"; \
     sha="${pair#*:}"; \

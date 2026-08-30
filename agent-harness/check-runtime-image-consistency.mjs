@@ -141,6 +141,27 @@ const openHarmonyWorkflow = readFileSync(new URL("../.github/workflows/openharmo
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
+const DOCKERFILE_INSTRUCTIONS = new Set([
+  "FROM", "RUN", "CMD", "LABEL", "MAINTAINER", "EXPOSE", "ENV", "ADD", "COPY",
+  "ENTRYPOINT", "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL",
+  "HEALTHCHECK", "SHELL",
+]);
+const expectDockerfileParse = (source, label) => {
+  let continued = false;
+  for (const [index, line] of source.split(/\r?\n/).entries()) {
+    const trimmed = line.replace(/\s+$/, "");
+    if (continued) {
+      continued = trimmed.endsWith("\\");
+      continue;
+    }
+    const body = trimmed.trim();
+    if (!body || body.startsWith("#")) continue;
+    const word = body.split(/\s+/, 1)[0];
+    expect(DOCKERFILE_INSTRUCTIONS.has(word.toUpperCase()), `${label} line ${index + 1}: unknown instruction: ${word}`);
+    continued = trimmed.endsWith("\\");
+  }
+  expect(!continued, `${label} ends with a dangling line continuation`);
+};
 const reasoningPlugin = "dsh-reasoning-settings";
 const reasoningPluginVersion = "0.3.0";
 const reasoningPluginCommit = "5768999dbbbb5088fd27f89c85970fe2f7b2c5c6";
@@ -426,6 +447,19 @@ expect(!mobileEnv.includes("mitmdump --version"), "Mobile env check must not req
 expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mobileEnv.includes("hdc"), "Mobile env check must smoke iOS host tools and hdc");
 expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite mitmdump mitmproxy ida64 ghidra analyzeHeadless cutter deveco"), "Mobile env check must fail if decision scanners, GUI, Ghidra, mitmproxy, or commercial tools reappear");
 expect(!mobileDockerfile.includes("mitmproxy==") && !mobileDockerfile.includes("bin/mitmdump"), "Mobile must not install mitmproxy");
+expect(
+  mobileDockerfile.includes('"android-x86_64:${FRIDA_SERVER_X64_SHA256}" \\'),
+  "Mobile Frida server loop last item must keep a Dockerfile line continuation",
+);
+expectDockerfileParse(dockerfile, "Dockerfile.agent");
+expectDockerfileParse(kaliDockerfile, "Dockerfile.agent-kali-minimal");
+expectDockerfileParse(openHarmonyDockerfile, "Dockerfile.agent-openharmony");
+expectDockerfileParse(openHarmonyAuditDockerfile, "Dockerfile.agent-openharmony-audit");
+expectDockerfileParse(openHarmonyFuzzDockerfile, "Dockerfile.agent-openharmony-fuzz");
+expectDockerfileParse(chromeAuditDockerfile, "Dockerfile.agent-chrome-audit");
+expectDockerfileParse(chromeTestDockerfile, "Dockerfile.agent-chrome-test");
+expectDockerfileParse(chromeFuzzDockerfile, "Dockerfile.agent-chrome-fuzz");
+expectDockerfileParse(mobileDockerfile, "Dockerfile.agent-mobile");
 expect(mobileEnv.includes("r2 -qv") && mobileEnv.includes("mobile-so.sh --check"), "Mobile env check must smoke radare2 and SO helper");
 expect(mobileSo.includes("readelf") && mobileSo.includes("r2 -qq") && mobileSo.includes("lief"), "Mobile SO helper must inspect ELF with readelf/r2/LIEF");
 expect(mobileAdb.includes("needs_human") && mobileAdb.includes("inconclusive") && mobileAdb.includes("no_adb_target"), "Mobile adb helper must emit structured no-target evidence");
@@ -657,6 +691,8 @@ expect(PRESETS["deepsonar-assets-helper"]?.dockerfile === "deploy/Dockerfile.ass
 expect(PRESETS["deepsonar-silo"]?.dockerfile === "deploy/Dockerfile.silo" && PRESETS["deepsonar-silo"]?.platforms === "linux/amd64", "silo fingerprint preset 必须与 app 镜像一致");
 const assetsHelperDockerfile = readFileSync(new URL("../deploy/Dockerfile.assets-helper", import.meta.url), "utf8");
 const siloDockerfile = readFileSync(new URL("../deploy/Dockerfile.silo", import.meta.url), "utf8");
+expectDockerfileParse(assetsHelperDockerfile, "Dockerfile.assets-helper");
+expectDockerfileParse(siloDockerfile, "Dockerfile.silo");
 const sharedAssetsVolume = readFileSync(new URL("../packages/runtime-sandbox/src/shared-assets-volume.ts", import.meta.url), "utf8");
 const deployScript = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
 const busyboxHelperPin = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
