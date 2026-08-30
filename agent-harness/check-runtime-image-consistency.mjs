@@ -416,7 +416,7 @@ expect(mobileConfig.downloads?.["platform-tools"]?.assets?.all?.sha256 === "0ead
 expect(mobileConfig.downloads?.hdc?.assets?.amd64?.sha256 === "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e", "Mobile hdc SHA256 drift");
 expect(mobileDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "Mobile must default to local governed base");
 expect(mobileDockerfile.includes("FROM ${BASE_IMAGE}"), "Mobile must consume BASE_IMAGE");
-expect(mobileDockerfile.includes("apt-get install -y --no-install-recommends"), "Mobile apt install must disable recommends");
+expect(mobileDockerfile.includes("install -y --no-install-recommends"), "Mobile apt install must disable recommends");
 expect(mobileDockerfile.includes("USER deepsonar"), "Mobile must run as non-root");
 expect(mobileDockerfile.includes("/opt/deepsonar/tool-manifest.json"), "Mobile must generate tool-manifest.json");
 expect(mobileDockerfile.includes("io.deepsonar.contract") && mobileDockerfile.includes("org.opencontainers.image.description"), "Mobile OCI metadata missing");
@@ -425,6 +425,9 @@ expect(mobileDockerfile.includes("ARG APKTOOL_SHA256=dbf930b076c6b9be08d57c449ca
 expect(mobileDockerfile.includes("ARG BUNDLETOOL_SHA256=a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"), "Mobile Dockerfile bundletool checksum drift");
 expect(mobileDockerfile.includes("ARG APKEEP_AMD64_SHA256=a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e"), "Mobile Dockerfile apkeep amd64 checksum drift");
 expect(mobileDockerfile.includes("ARG APKEEP_ARM64_SHA256=5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049"), "Mobile Dockerfile apkeep arm64 checksum drift");
+expect(mobileDockerfile.includes("frida==${FRIDA_SERVER_VERSION}"), "Mobile must pin frida Python binding to the same version as frida-server");
+expect(mobileConfig.managed?.pip?.frida?.version === "17.17.0", "Mobile manifest must pin frida 17.17.0");
+expect(mobileConfig.toolsets?.mobile?.maxSizeMiB === 2400, "Mobile size budget must leave margin for JDK/venv/frida-server");
 expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
 expect(mobileDockerfile.includes("lief==${LIEF_VERSION}"), "Mobile Dockerfile must install pinned LIEF");
 expect(mobileDockerfile.includes("ARG RADARE2_AMD64_SHA256=eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb"), "Mobile Dockerfile radare2 amd64 checksum drift");
@@ -466,6 +469,7 @@ expect(mobileEnv.includes("r2 -qv") && mobileEnv.includes("mobile-so.sh --check"
 expect(mobileSo.includes("readelf") && mobileSo.includes("r2 -qq") && mobileSo.includes("lief"), "Mobile SO helper must inspect ELF with readelf/r2/LIEF");
 expect(mobileAdb.includes("needs_human") && mobileAdb.includes("inconclusive") && mobileAdb.includes("no_adb_target"), "Mobile adb helper must emit structured no-target evidence");
 expect(mobileHdc.includes("needs_human") && mobileHdc.includes("no_hdc_target") && mobileIos.includes("no_ios_target"), "Mobile hdc/ios helpers must emit structured no-target evidence");
+expect(mobileHdc.includes("[Cc]onnect server") && mobileSmoke.includes("noisy hdc"), "Mobile hdc helper must drop server noise from target lines");
 expect(mobileHap.includes("pack.info") && mobileHap.includes("module.json"), "Mobile HAP helper must inspect pack.info/module.json");
 expect(mobileSmoke.includes("adb version smoke") || mobileSmoke.includes("Android Debug Bridge version"), "Mobile unit smoke must cover adb version");
 expect(mobileSmoke.includes("no_adb_target") && mobileSmoke.includes("needs_human"), "Mobile unit smoke must cover empty adb devices without a device");
@@ -771,6 +775,10 @@ expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || r
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
 expect(releaseWorkflow.includes("  mobile:") && releaseWorkflow.includes("Dockerfile.agent-mobile"), "release workflow 必须发布 Mobile 专项镜像");
+expect(
+  /mobile:[\s\S]*setup-qemu-action@v3[\s\S]*Dockerfile\.agent-mobile/.test(releaseWorkflow),
+  "release mobile job must set up QEMU before the multi-arch build",
+);
 expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, mobile]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
 for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
   expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);

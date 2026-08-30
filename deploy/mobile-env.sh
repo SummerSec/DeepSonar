@@ -67,8 +67,7 @@ check_tools() {
   /opt/deepsonar/bin/mobile-so.sh --check >/dev/null
   adb version >/dev/null
   smoke_hdc
-  idevice_id --help >/dev/null 2>&1 || idevice_id -h >/dev/null 2>&1 || true
-  plistutil -h >/dev/null 2>&1 || plistutil --help >/dev/null 2>&1 || true
+  plistutil -h >/dev/null 2>&1 || plistutil --help >/dev/null 2>&1
   frida --version >/dev/null
   objection version >/dev/null
   for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite mitmdump mitmproxy ida64 ghidra analyzeHeadless cutter deveco; do

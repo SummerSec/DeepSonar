@@ -114,6 +114,34 @@ if (emptyJson.status !== "needs_human" || emptyJson.verdict !== "inconclusive" |
   throw new Error(`empty hdc targets JSON contract drift: ${empty.stdout}`);
 }
 
+const noiseOnlyHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "list" && "$2" == "targets" ]]; then
+  printf 'Connect server failed\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const noiseOnly = runHelper("deploy/mobile-hdc.sh", ["targets"], { HDC_BIN: noiseOnlyHdc });
+if (noiseOnly.status !== 2) throw new Error(`hdc server noise must be treated as no target, got ${noiseOnly.status}\n${noiseOnly.stdout}`);
+const noiseOnlyJson = JSON.parse(noiseOnly.stdout);
+if (noiseOnlyJson.reason !== "no_hdc_target") throw new Error(`hdc server noise JSON drift: ${noiseOnly.stdout}`);
+
+const noisyHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "list" && "$2" == "targets" ]]; then
+  printf 'Connect server failed\\n127.0.0.1:5555\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const noisy = runHelper("deploy/mobile-hdc.sh", ["targets"], { HDC_BIN: noisyHdc });
+if (noisy.status !== 0) throw new Error(`noisy hdc targets failed: ${noisy.status}\n${noisy.stdout}\n${noisy.stderr}`);
+const noisyJson = JSON.parse(noisy.stdout);
+if (noisyJson.status !== "ok" || noisyJson.targets?.[0] !== "127.0.0.1:5555" || noisyJson.targets.length !== 1) {
+  throw new Error(`noisy hdc stderr must not become a target: ${noisy.stdout}`);
+}
+
 const presentHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
 if [[ "$1" == "list" && "$2" == "targets" ]]; then
   printf '127.0.0.1:5555\\n'

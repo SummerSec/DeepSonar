@@ -48,12 +48,13 @@ list_targets() {
   require_hdc
   local raw cleaned
   raw="$("$hdc_bin" list targets 2>&1 || true)"
-  cleaned="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-  if [[ -z "$cleaned" || "$cleaned" == "[Empty]" ]]; then
+  cleaned="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | grep -Ev -e '^$' -e '^\[Empty\]$' -e '[Ff]ail' -e '[Ee]rror' -e '[Cc]onnect server' || true)"
+  if [[ -z "$cleaned" ]]; then
     emit_no_target
     return 2
   fi
-  printf '%s\n' "$cleaned" | jq -R -s '{protocol:"hdc",status:"ok",targets:[split("\n")[] | gsub("^\\s+|\\s+$";"") | select(length>0 and . != "[Empty]")]}'
+  printf '%s\n' "$cleaned" | jq -R -s '{protocol:"hdc",status:"ok",targets:[split("\n")[] | gsub("^\\s+|\\s+$";"") | select(length>0)]}'
 }
 
 if [[ "${1:-}" == "--check" && $# -eq 1 ]]; then

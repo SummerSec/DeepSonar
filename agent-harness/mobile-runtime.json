@@ -142,6 +142,7 @@
       "capabilities": ["python-runtime"]
     },
     "pip": {
+      "frida": { "version": "17.17.0", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
       "frida-tools": { "version": "14.10.4", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
       "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
       "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] },
@@ -159,7 +160,7 @@
     "mobile": {
       "imageKey": "deepsonar-mobile",
       "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
-      "maxSizeMiB": 1850
+      "maxSizeMiB": 2400
     }
   }
 }

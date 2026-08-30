@@ -60,7 +60,21 @@ COPY deploy/vendor/openharmony-hdc/hdc /tmp/hdc
 COPY deploy/vendor/openharmony-hdc/libusb_shared.so /tmp/libusb_shared.so
 
 RUN set -eux; \
-  apt-get update; \
+  apt-get -o Acquire::Retries=3 update; \
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+    binutils=${BINUTILS_VERSION} \
+    ca-certificates curl unzip xz-utils \
+    libimobiledevice-utils ideviceinstaller libplist-utils libusbmuxd-tools; \
+  if [ "$TARGETARCH" = "arm64" ]; then \
+    dpkg --add-architecture amd64; \
+    apt-get -o Acquire::Retries=3 update; \
+    apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+      qemu-user-static libc6:amd64 libstdc++6:amd64 libgcc-s1:amd64 libatomic1:amd64; \
+  fi; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*
+
+RUN set -eux; \
   case "$TARGETARCH" in \
     amd64) r2_deb_arch=amd64; r2_sha="$RADARE2_AMD64_SHA256" ;; \
     arm64) r2_deb_arch=arm64; r2_sha="$RADARE2_ARM64_SHA256" ;; \
@@ -71,20 +85,10 @@ RUN set -eux; \
     "https://github.com/radareorg/radare2/releases/download/${RADARE2_VERSION}/radare2_${RADARE2_VERSION}_${r2_deb_arch}.deb" \
     -o "$r2_deb"; \
   echo "$r2_sha  $r2_deb" | sha256sum -c -; \
-  apt-get install -y --no-install-recommends \
-    binutils=${BINUTILS_VERSION} \
-    ca-certificates curl unzip xz-utils \
-    libimobiledevice-utils ideviceinstaller libplist-utils libusbmuxd-tools \
-    "$r2_deb"; \
-  rm -f "$r2_deb"; \
-  if [ "$TARGETARCH" = "arm64" ]; then \
-    dpkg --add-architecture amd64; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      qemu-user-static libc6:amd64 libstdc++6:amd64 libgcc-s1:amd64 libatomic1:amd64; \
-  fi; \
-  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
-    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  dpkg -i "$r2_deb"; \
+  rm -f "$r2_deb"
+
+RUN set -eux; \
   install -d -m 0755 \
     /opt/deepsonar/bin \
     /opt/deepsonar/jadx \
@@ -161,6 +165,7 @@ RUN set -eux; \
     uv python install "$PYTHON_VERSION"; \
   uv venv /opt/deepsonar/mobile-venv --python "$PYTHON_VERSION"; \
   UV_PYTHON_DOWNLOADS=never uv pip install --python /opt/deepsonar/mobile-venv \
+    "frida==${FRIDA_SERVER_VERSION}" \
     "frida-tools==${FRIDA_TOOLS_VERSION}" \
     "objection==${OBJECTION_VERSION}" \
     "androguard==${ANDROGUARD_VERSION}" \
