@@ -206,7 +206,7 @@ PUT body：
 
 `runtime_image_key`：
 - `null` = 系统底座（调度默认 deepsonar-base）
-- 官方 Chrome 产品 key 包括 `deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`；以运行时 registry 为准
+- 官方 Chrome 产品 key 包括 `deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`；移动端为 `deepsonar-mobile`；以运行时 registry 为准
 - 官方 catalog（含 `project_opt_in` 专项如 OpenHarmony）可先写入 RoleConfig
 - Job 解析时：官方非 opt-in 默认可跑；opt-in / 第三方仍要求**项目启用**
 - 与镜像市场列表对齐（enabled 官方全量可选）

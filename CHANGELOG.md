@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 官方 `deepsonar-mobile` 专项镜像（project opt-in）：覆盖 Android（JADX CLI、apktool、bundletool、apkeep、androguard、官方 ADB、Frida/Objection；`.so` 用 binutils / radare2 / LIEF）、iOS Linux 宿主（libimobiledevice / plistutil / iproxy）与 OpenHarmony 应用/设备（HAP 静态检查 + 官方 hdc）。对照 [awesome-ai-reverse](https://github.com/DiscoverBox/awesome-ai-reverse) 只并入官方可钉死的基础 CLI；不预装 MobSF、jadx-gui、Burp、mitmproxy、IDA、Ghidra、DevEco、决策扫描器或 JADX-AI-MCP / apktool-mcp / FIRERPA 等 MCP。无 adb / hdc / idevice 目标时必须结构化 `needs_human` / `inconclusive`。现有 `deepsonar-openharmony-*` 仍负责源码构建/Clang/fuzz。
+
 ### 修复
 
 - 同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时，跳过后续终态并保住 `waiting_human`，不再因 `duplicate_tool_call` 整笔回滚（续 #298 / #300）。Executor 先落 human 再看 runner 错误；Dispatcher 已在人工门时不再把 Job / 画布刷成 failed。

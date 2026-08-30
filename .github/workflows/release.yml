@@ -2146,8 +2146,242 @@ jobs:
           path: release-digests/openharmony-fuzz.json
           if-no-files-found: error
 
+  mobile:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          labels: |
+            org.opencontainers.image.title=DeepSonar Mobile
+            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar Mobile
+            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-mobile
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=mobile-{{version}}
+            type=sha,prefix=mobile-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-mobile \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-mobile
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile:buildcache
+            type=gha,scope=mobile
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile:buildcache,mode=max
+            type=gha,mode=max,scope=mobile
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存 Mobile manifest digest
+        env:
+          IMAGE_KEY: deepsonar-mobile
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          node agent-harness/record-runtime-image-digest.mjs release-digests/mobile.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-mobile
+          path: release-digests/mobile.json
+          if-no-files-found: error
+
   release:
-    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images]
+    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, mobile]
     runs-on: ubuntu-latest
     env:
       ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}

@@ -138,6 +138,14 @@ This Job uses deepsonar-openharmony-test. Dynamic device evidence must come from
 - Do not install DevEco, a full SDK, HarmonyOS proprietary toolchains, nmap, or Kali process tools (gdb/strace) as a substitute device protocol.
 - If hdc list targets is empty ([Empty]), submit structured inconclusive/needs_human evidence. Never invent device results from host narration, source comments, or build logs.`;
 
+export const MOBILE_RUNTIME_POLICY = `### Mobile device protocols (Scheduler policy)
+
+This Job uses deepsonar-mobile. Official image covers Android, iOS host tools, and OpenHarmony app/device protocol. Do not install MobSF, jadx-gui, Burp, IDA, Ghidra, DevEco, a full OpenHarmony SDK, third-party MCP servers, or decision scanners.
+
+- **Android.** Java/Kotlin APK/AAB work uses the pinned JADX CLI, apktool, bundletool, apkeep, and androguard. Native .so / ELF work uses readelf/objdump/nm, radare2, LIEF, and mobile-so.sh inspect. Dynamic evidence must come from official adb (devices/shell/push|pull/install/forward/reverse) or a host-mapped device/emulator. Instrumentation uses Frida/Objection and /opt/deepsonar/frida-server. Do not install mitmproxy/Burp. Empty adb devices → needs_human / inconclusive. Never invent device, traffic, or native/OLLVM results from JADX.
+- **iOS.** Linux host only: idevice_id / ideviceinstaller / plistutil / iproxy. No Xcode, Simulator, or class-dump. IPA static work is unzip + plistutil. Empty idevice_id → needs_human / inconclusive. Never invent device results from IPA unzip.
+- **OpenHarmony.** HAP static work is unzip + pack.info / module.json. Device evidence must come from the pinned official hdc (same vendor bits as deepsonar-openharmony-test): list targets, shell, file send/recv, install, hilog, fport, tconn. Empty hdc list targets ([Empty]) → needs_human / inconclusive. Do not install DevEco or a full SDK as a substitute.`;
+
 export function withRuntimeTestToolchainPolicy(
   roleName: string,
   instructions: string | null,
@@ -151,6 +159,9 @@ export function withRuntimeTestToolchainPolicy(
   }
   if (resolvedRuntimeImageKey === "deepsonar-openharmony-test" && !text.includes("### OpenHarmony hdc device protocol (Scheduler policy)")) {
     text = `${text}${text ? "\n\n" : ""}${OPENHARMONY_HDC_POLICY}`;
+  }
+  if (resolvedRuntimeImageKey === "deepsonar-mobile" && !text.includes("### Mobile device protocols (Scheduler policy)")) {
+    text = `${text}${text ? "\n\n" : ""}${MOBILE_RUNTIME_POLICY}`;
   }
   return text;
 }
