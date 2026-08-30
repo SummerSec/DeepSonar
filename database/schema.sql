@@ -1402,7 +1402,7 @@ INSERT INTO runtime_images (image_key, name, description, publisher, source_url,
   ('deepsonar-chrome-audit', 'DeepSonar Chrome Audit', 'Chrome-backed official audit runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
   ('deepsonar-chrome-test', 'DeepSonar Chrome Test', 'Chrome-backed official test runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
   ('deepsonar-chrome-fuzz', 'DeepSonar Chrome Fuzz', 'Chrome-backed official fuzz runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
-  ('deepsonar-mobile', 'DeepSonar Mobile', '移动端审计运行时：Android JADX/apktool/ADB/Frida、iOS libimobiledevice、OpenHarmony HAP/hdc；project opt-in；不预装 MobSF/GUI/商业套件/DevEco', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true)
+  ('deepsonar-mobile', 'DeepSonar Mobile', '移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、iOS libimobiledevice、OpenHarmony HAP/hdc；project opt-in；不预装 MobSF/GUI/商业套件/DevEco/MCP', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true)
 ON CONFLICT (image_key) DO NOTHING;
 
 INSERT INTO runtime_data_layers (layer_key, name, tool_name, description, enabled) VALUES

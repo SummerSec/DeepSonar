@@ -36,6 +36,34 @@
         }
       }
     },
+    "bundletool": {
+      "version": "1.18.3",
+      "license": "Apache-2.0",
+      "capabilities": ["aab-decode"],
+      "source": "official Google bundletool GitHub release jar",
+      "assets": {
+        "all": {
+          "url": "https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar",
+          "sha256": "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"
+        }
+      }
+    },
+    "apkeep": {
+      "version": "1.0.0",
+      "license": "MIT",
+      "capabilities": ["apk-fetch"],
+      "source": "official EFForg apkeep GitHub release linux gnu binaries",
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/EFForg/apkeep/releases/download/1.0.0/apkeep-x86_64-unknown-linux-gnu",
+          "sha256": "a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e"
+        },
+        "arm64": {
+          "url": "https://github.com/EFForg/apkeep/releases/download/1.0.0/apkeep-aarch64-unknown-linux-gnu",
+          "sha256": "5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049"
+        }
+      }
+    },
     "platform-tools": {
       "version": "36.0.0",
       "license": "Android SDK License",
@@ -100,7 +128,8 @@
     "pip": {
       "mitmproxy": { "version": "12.2.3", "license": "MIT", "capabilities": ["http-intercept"] },
       "frida-tools": { "version": "14.10.4", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
-      "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] }
+      "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
+      "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] }
     },
     "apt": {
       "libimobiledevice-utils": { "capabilities": ["ios-device-protocol"] },
@@ -112,8 +141,8 @@
   "toolsets": {
     "mobile": {
       "imageKey": "deepsonar-mobile",
-      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco, or full OH SDK.",
-      "maxSizeMiB": 1600
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco, MCP servers, or full OH SDK.",
+      "maxSizeMiB": 1750
     }
   }
 }

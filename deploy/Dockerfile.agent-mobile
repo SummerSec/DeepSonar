@@ -1,8 +1,8 @@
 # DeepSonar 官方移动端审计运行时。project opt-in。
-# Android：JADX CLI + apktool + 官方 ADB + mitmproxy + Frida/Objection
+# Android：JADX CLI + apktool + bundletool + apkeep + androguard + 官方 ADB + mitmproxy + Frida/Objection
 # iOS：Linux 宿主 libimobiledevice（无 Xcode / Simulator）
 # OpenHarmony：HAP 静态检查 + 官方 hdc（不烘焙完整 SDK / DevEco）
-# 不预装 jadx-gui、MobSF、Burp、IDA 或决策扫描器。
+# 不预装 jadx-gui、MobSF、Burp、IDA、决策扫描器或第三方 MCP/GUI。
 ARG BASE_IMAGE=deepsonar-base:local
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
 
@@ -17,6 +17,12 @@ ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
 ARG APKTOOL_VERSION=3.0.3
 ARG APKTOOL_URL=https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
 ARG APKTOOL_SHA256=dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423
+ARG BUNDLETOOL_VERSION=1.18.3
+ARG BUNDLETOOL_URL=https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+ARG BUNDLETOOL_SHA256=a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
+ARG APKEEP_VERSION=1.0.0
+ARG APKEEP_AMD64_SHA256=a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e
+ARG APKEEP_ARM64_SHA256=5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049
 ARG PLATFORM_TOOLS_VERSION=36.0.0
 ARG PLATFORM_TOOLS_URL=https://dl.google.com/android/repository/platform-tools_r36.0.0-linux.zip
 ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8
@@ -30,6 +36,7 @@ ARG PYTHON_VERSION=3.12.13
 ARG MITMPROXY_VERSION=12.2.3
 ARG FRIDA_TOOLS_VERSION=14.10.4
 ARG OBJECTION_VERSION=1.12.5
+ARG ANDROGUARD_VERSION=4.1.4
 ARG FRIDA_SERVER_VERSION=17.17.0
 ARG FRIDA_SERVER_ARM_SHA256=a102c7f83fce8089394c3cc9a05812c841e8f254a80bcf7162280d7c1cbea208
 ARG FRIDA_SERVER_ARM64_SHA256=09d1fad867b27d69562a79289f4c412e85867f5d38ab72877036ed35e4223021
@@ -63,6 +70,7 @@ RUN set -eux; \
     /opt/deepsonar/bin \
     /opt/deepsonar/jadx \
     /opt/deepsonar/apktool \
+    /opt/deepsonar/bundletool \
     /opt/deepsonar/platform-tools \
     /opt/deepsonar/hdc \
     /opt/deepsonar/frida-server \
@@ -84,6 +92,19 @@ RUN set -eux; \
   echo "$APKTOOL_SHA256  $apktool_jar" | sha256sum -c -; \
   printf '%s\n' '#!/usr/bin/env bash' 'exec java -jar /opt/deepsonar/apktool/apktool.jar "$@"' > /opt/deepsonar/bin/apktool; \
   chmod 0755 /opt/deepsonar/bin/apktool; \
+  bundletool_jar="/opt/deepsonar/bundletool/bundletool.jar"; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$BUNDLETOOL_URL" -o "$bundletool_jar"; \
+  echo "$BUNDLETOOL_SHA256  $bundletool_jar" | sha256sum -c -; \
+  printf '%s\n' '#!/usr/bin/env bash' 'exec java -jar /opt/deepsonar/bundletool/bundletool.jar "$@"' > /opt/deepsonar/bin/bundletool; \
+  chmod 0755 /opt/deepsonar/bin/bundletool; \
+  case "$TARGETARCH" in \
+    amd64) apkeep_url="https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-x86_64-unknown-linux-gnu"; apkeep_sha="$APKEEP_AMD64_SHA256" ;; \
+    arm64) apkeep_url="https://github.com/EFForg/apkeep/releases/download/${APKEEP_VERSION}/apkeep-aarch64-unknown-linux-gnu"; apkeep_sha="$APKEEP_ARM64_SHA256" ;; \
+    *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$apkeep_url" -o /opt/deepsonar/bin/apkeep; \
+  echo "$apkeep_sha  /opt/deepsonar/bin/apkeep" | sha256sum -c -; \
+  chmod 0755 /opt/deepsonar/bin/apkeep; \
   platform_archive="/tmp/platform-tools.zip"; \
   curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$PLATFORM_TOOLS_URL" -o "$platform_archive"; \
   echo "$PLATFORM_TOOLS_SHA256  $platform_archive" | sha256sum -c -; \
@@ -122,10 +143,12 @@ RUN set -eux; \
   UV_PYTHON_DOWNLOADS=never uv pip install --python /opt/deepsonar/mobile-venv \
     "mitmproxy==${MITMPROXY_VERSION}" \
     "frida-tools==${FRIDA_TOOLS_VERSION}" \
-    "objection==${OBJECTION_VERSION}"; \
+    "objection==${OBJECTION_VERSION}" \
+    "androguard==${ANDROGUARD_VERSION}"; \
   ln -s /opt/deepsonar/mobile-venv/bin/mitmdump /opt/deepsonar/bin/mitmdump; \
   ln -s /opt/deepsonar/mobile-venv/bin/frida /opt/deepsonar/bin/frida; \
   ln -s /opt/deepsonar/mobile-venv/bin/objection /opt/deepsonar/bin/objection; \
+  ln -s /opt/deepsonar/mobile-venv/bin/androguard /opt/deepsonar/bin/androguard; \
   uv cache clean; \
   for pair in \
     "android-arm:${FRIDA_SERVER_ARM_SHA256}" \
@@ -145,7 +168,7 @@ RUN set -eux; \
   done; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","mitmdump","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","mitmdump","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
 
@@ -160,7 +183,7 @@ WORKDIR /workspace
 
 FROM scratch
 ARG OCI_TITLE="DeepSonar Mobile"
-ARG OCI_DESCRIPTION="Project-opt-in mobile runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco or full OH SDK."
+ARG OCI_DESCRIPTION="Project-opt-in mobile runtime for Android, iOS host tools, and OpenHarmony HAP/hdc. No MobSF, GUI, Burp, IDA, DevEco, MCP servers or full OH SDK."
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="mobile" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
