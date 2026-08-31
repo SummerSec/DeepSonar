@@ -20,6 +20,8 @@ import {
   runOpenSandboxRetryPoc,
   shouldRunOpenSandboxPoc,
   isOpenSandboxCliMissing,
+  VENDOR_OFFICIAL_ORIGINS,
+  assertVendorOfficialOrigin,
   assertVendorUpstreamPayload,
   assertVendorUpstreamStatus,
 } from "./opensandbox-poc.js";
@@ -83,6 +85,15 @@ test("vendor model E2E fail-closes HTML or non-JSON upstream payloads", () => {
   assert.doesNotThrow(() => assertVendorUpstreamStatus(400));
   assert.throws(() => assertVendorUpstreamStatus(401), /VENDOR_UPSTREAM_HTTP_401/);
   assert.throws(() => assertVendorUpstreamStatus(403), /VENDOR_UPSTREAM_HTTP_403/);
+});
+
+test("vendor model E2E fail-closes non-official aggregator origins", () => {
+  assert.doesNotThrow(() => assertVendorOfficialOrigin("anthropic", VENDOR_OFFICIAL_ORIGINS.anthropic));
+  assert.doesNotThrow(() => assertVendorOfficialOrigin("openai", `${VENDOR_OFFICIAL_ORIGINS.openai}/`));
+  assert.doesNotThrow(() => assertVendorOfficialOrigin("deepseek", VENDOR_OFFICIAL_ORIGINS.deepseek));
+  assert.throws(() => assertVendorOfficialOrigin("anthropic", "https://example.invalid"), /VENDOR_UPSTREAM_NOT_OFFICIAL:anthropic/);
+  assert.throws(() => assertVendorOfficialOrigin("openai", "https://example.invalid/v1"), /VENDOR_UPSTREAM_NOT_OFFICIAL:openai/);
+  assert.throws(() => assertVendorOfficialOrigin("deepseek", "http://127.0.0.1:8080"), /VENDOR_UPSTREAM_NOT_OFFICIAL:deepseek/);
 });
 
 test("OpenSandbox infrastructure PoC creates, probes, lists, and destroys", async () => {

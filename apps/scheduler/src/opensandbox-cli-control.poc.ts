@@ -14,6 +14,8 @@ import {
   CLI_SESSION_ADAPTERS,
   DEEPSONAR_GATEWAY_PROXY_HOST,
   applyRuntimeOutputText,
+  VENDOR_OFFICIAL_ORIGINS,
+  assertVendorOfficialOrigin,
   assertVendorUpstreamPayload,
   assertVendorUpstreamStatus,
   freezeAgentCliRuntime,
@@ -44,17 +46,20 @@ type VendorPlan = {
 };
 const vendorCliIds = ["claude-code", "codex", "open-code", "pi", "dsh"] as const;
 type VendorCli = (typeof vendorCliIds)[number];
+const vendorOfficialKind = (cli: VendorCli): keyof typeof VENDOR_OFFICIAL_ORIGINS => (
+  cli === "claude-code" ? "anthropic" : cli === "dsh" ? "deepseek" : "openai"
+);
 const vendorPlans: Record<VendorCli, VendorPlan> = {
   "claude-code": {
     secret: anthropicSecret,
     provider: "anthropic",
     model: anthropicModel,
-    ...(anthropicBaseUrl ? { baseUrl: anthropicBaseUrl } : {}),
+    baseUrl: VENDOR_OFFICIAL_ORIGINS.anthropic,
   },
-  codex: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
-  "open-code": { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
-  pi: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
-  dsh: { secret: process.env.DEEPSEEK_API_KEY?.trim(), provider: "openai", model: "deepseek-chat", baseUrl: "https://api.deepseek.com" },
+  codex: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5", baseUrl: VENDOR_OFFICIAL_ORIGINS.openai },
+  "open-code": { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5", baseUrl: VENDOR_OFFICIAL_ORIGINS.openai },
+  pi: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5", baseUrl: VENDOR_OFFICIAL_ORIGINS.openai },
+  dsh: { secret: process.env.DEEPSEEK_API_KEY?.trim(), provider: "openai", model: "deepseek-chat", baseUrl: VENDOR_OFFICIAL_ORIGINS.deepseek },
 };
 const requestedCli = process.env.OPEN_SANDBOX_POC_CLI?.trim();
 if (requestedCli && !(requestedCli in vendorPlans)) {
@@ -80,6 +85,9 @@ if (!requestedCli && selectedClis.length !== vendorCliIds.length) {
   console.error(`vendor CLI E2E requires all five CLIs; missing ${missing.join(",")}`);
   process.exit(1);
 }
+if (anthropicBaseUrl) {
+  assertVendorOfficialOrigin("anthropic", anthropicBaseUrl);
+}
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 const apiKey = process.env.OPEN_SANDBOX_API_KEY?.trim();
@@ -96,9 +104,11 @@ try {
   throw new Error("vendor CLI E2E needs host docker access for Gateway bind");
 }
 
-async function assertVendorPlanReachable(plan: VendorPlan, secret: string): Promise<void> {
-  const anthropic = plan.provider === "anthropic";
-  const origin = (plan.baseUrl || (anthropic ? "https://api.anthropic.com" : "https://api.openai.com")).replace(/\/$/, "");
+async function assertVendorPlanReachable(cli: VendorCli, plan: VendorPlan, secret: string): Promise<void> {
+  const kind = vendorOfficialKind(cli);
+  const anthropic = kind === "anthropic";
+  const origin = (plan.baseUrl || VENDOR_OFFICIAL_ORIGINS[kind]).replace(/\/$/, "");
+  assertVendorOfficialOrigin(kind, origin);
   const url = anthropic ? `${origin}/v1/messages` : `${origin}/v1/chat/completions`;
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -131,7 +141,7 @@ for (const cli of selectedClis) {
   const key = `${plan.provider}:${plan.baseUrl ?? ""}`;
   if (probed.has(key)) continue;
   probed.add(key);
-  await assertVendorPlanReachable(plan, secret);
+  await assertVendorPlanReachable(cli, plan, secret);
 }
 
 const adminUrl = new URL(databaseUrl);

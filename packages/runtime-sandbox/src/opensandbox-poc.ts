@@ -71,6 +71,24 @@ export function isOpenSandboxCliMissing(text: string): boolean {
   return /command not found|No such file or directory|(?:^|[\n\r])(?:\/bin\/)?(?:ba)?sh: [^\n]* not found/i.test(text);
 }
 
+export const VENDOR_OFFICIAL_ORIGINS = {
+  anthropic: "https://api.anthropic.com",
+  openai: "https://api.openai.com",
+  deepseek: "https://api.deepseek.com",
+} as const;
+
+/** Vendor-model E2E only accepts the three official vendor hosts; aggregators cannot close #162. */
+export function assertVendorOfficialOrigin(
+  kind: keyof typeof VENDOR_OFFICIAL_ORIGINS,
+  origin: string,
+): void {
+  const expected = VENDOR_OFFICIAL_ORIGINS[kind];
+  const normalized = origin.trim().replace(/\/$/, "").toLowerCase();
+  if (normalized !== expected) {
+    throw new Error(`VENDOR_UPSTREAM_NOT_OFFICIAL:${kind}`);
+  }
+}
+
 /** Vendor-model E2E fail-closes on HTML/WAF pages; mock or captcha is not a model JSON endpoint. */
 export function assertVendorUpstreamPayload(contentType: string, body: string): void {
   const ct = contentType.toLowerCase();

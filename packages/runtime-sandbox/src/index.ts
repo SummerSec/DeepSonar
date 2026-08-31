@@ -145,6 +145,8 @@ export {
   OPENSANDBOX_POC_IMAGE,
   OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS,
   isOpenSandboxCliMissing,
+  VENDOR_OFFICIAL_ORIGINS,
+  assertVendorOfficialOrigin,
   assertVendorUpstreamPayload,
   assertVendorUpstreamStatus,
   listOfficialOpenSandboxRuntimeImages,
