@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
+import { Script } from "node:vm";
 import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
@@ -124,6 +125,7 @@ const mobileHdc = readFileSync(new URL("../deploy/mobile-hdc.sh", import.meta.ur
 const mobileIos = readFileSync(new URL("../deploy/mobile-ios.sh", import.meta.url), "utf8");
 const mobileHap = readFileSync(new URL("../deploy/mobile-hap.sh", import.meta.url), "utf8");
 const mobileSo = readFileSync(new URL("../deploy/mobile-so.sh", import.meta.url), "utf8");
+const mobileApkCheckPackBin = readFileSync(new URL("../deploy/mobile-apkcheckpack-bin.sh", import.meta.url), "utf8");
 const mobileSmoke = readFileSync(new URL("./test-mobile-runtime.mjs", import.meta.url), "utf8");
 const mobileWorkflow = readFileSync(new URL("../.github/workflows/mobile-runtime.yml", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
@@ -165,6 +167,14 @@ const expectDockerfileParse = (source, label) => {
   for (const [index, line] of joined.split(/\r?\n/).entries()) {
     if (/\bfor\b/.test(line) && /\bdo\b/.test(line) && !/;\s*do\b/.test(line)) {
       expect(false, `${label} joined line ${index + 1}: for-list must use '; do' because Dockerfile continuations collapse to one /bin/sh line`);
+    }
+  }
+  const evalSnippets = [...joined.matchAll(/node -e '([^']*)'/g)].map((match) => match[1]);
+  for (const [index, snippet] of evalSnippets.entries()) {
+    try {
+      new Script(snippet);
+    } catch (error) {
+      expect(false, `${label} node -e snippet ${index + 1} is invalid JS: ${error instanceof Error ? error.message : error}`);
     }
   }
 };
@@ -406,6 +416,9 @@ expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin ap
 expect(mobileConfig.downloads?.bundletool?.version === "1.18.3", "Mobile must pin bundletool 1.18.3");
 expect(mobileConfig.downloads?.apkeep?.version === "1.0.0", "Mobile must pin apkeep 1.0.0");
 expect(mobileConfig.managed?.pip?.androguard?.version === "4.1.4", "Mobile must pin androguard 4.1.4");
+expect(mobileConfig.downloads?.apkcheckpack?.version === "20260618", "Mobile must pin ApkCheckPack 20260618");
+expect(mobileConfig.downloads?.apkcheckpack?.assets?.all?.sha256 === "c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b", "Mobile ApkCheckPack SHA256 drift");
+expect(mobileConfig.downloads?.apkcheckpack?.license === "NOASSERTION", "Mobile ApkCheckPack must record upstream has no SPDX license");
 expect(mobileConfig.managed?.pip?.lief?.version === "1.0.0", "Mobile must pin LIEF 1.0.0");
 expect(mobileConfig.managed?.apt?.binutils?.version === "2.40-2", "Mobile must pin binutils 2.40-2");
 expect(mobileConfig.downloads?.radare2?.version === "6.2.0", "Mobile must pin radare2 6.2.0");
@@ -435,6 +448,15 @@ expect(mobileDockerfile.includes("frida==${FRIDA_SERVER_VERSION}"), "Mobile must
 expect(mobileConfig.managed?.pip?.frida?.version === "17.17.0", "Mobile manifest must pin frida 17.17.0");
 expect(mobileConfig.toolsets?.mobile?.maxSizeMiB === 2400, "Mobile size budget must leave margin for JDK/venv/frida-server");
 expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
+expect(mobileDockerfile.includes("ARG APKCHECKPACK_SHA256=c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"), "Mobile Dockerfile ApkCheckPack checksum drift");
+expect(mobileDockerfile.includes("APKCHECKPACK_URL") && mobileDockerfile.includes("moyuwa/ApkCheckPack"), "Mobile Dockerfile must download pinned ApkCheckPack from GitHub Release");
+expect(mobileDockerfile.includes("mobile-apkcheckpack-bin.sh") && mobileDockerfile.includes("/opt/deepsonar/bin/apkcheckpack"), "Mobile must install the ApkCheckPack qemu wrapper");
+expect(
+  /"claude"\],device:\{/.test(mobileDockerfile) && !/"claude"\]\},device:\{/.test(mobileDockerfile),
+  "Mobile tool-manifest node -e must keep tools as an object field, not close const m before device",
+);
+expect(!existsSync(new URL("../deploy/mobile-apkcheckpack-scan.sh", import.meta.url)), "Mobile must not add a platform-prescribed ApkCheckPack scan entry");
+expect(!mobileDockerfile.includes("apkcheckpack-scan.sh") && !mobileEnv.includes("apkcheckpack-scan.sh"), "Mobile must not install an ApkCheckPack scan script");
 expect(mobileDockerfile.includes("lief==${LIEF_VERSION}"), "Mobile Dockerfile must install pinned LIEF");
 expect(mobileDockerfile.includes("ARG RADARE2_AMD64_SHA256=eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb"), "Mobile Dockerfile radare2 amd64 checksum drift");
 expect(mobileDockerfile.includes("ARG RADARE2_ARM64_SHA256=e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec"), "Mobile Dockerfile radare2 arm64 checksum drift");
@@ -454,7 +476,8 @@ expect(!/jadx-ai-mcp|apktool-mcp|firerpa|quark-engine/i.test(mobileDockerfile), 
 expect(mobileDockerfile.includes("bundletool") && mobileDockerfile.includes("apkeep") && mobileDockerfile.includes("androguard"), "Mobile must install bundletool/apkeep/androguard");
 expect(mobileDockerfile.includes("mobile-so.sh") && mobileDockerfile.includes("radare2") && !mobileDockerfile.includes("ghidra_"), "Mobile must install lightweight SO tools and must not bake Ghidra");
 expect(mobileDockerfile.includes("不预装") && mobileDockerfile.includes("MobSF") && mobileDockerfile.includes("Burp"), "Mobile must document that MobSF/Burp/IDA stay out");
-expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/adb");
+expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("apkcheckpack -h") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/apkcheckpack/adb");
+expect(mobileApkCheckPackBin.includes("qemu-x86_64-static") && mobileApkCheckPackBin.includes("ApkCheckPack"), "Mobile ApkCheckPack wrapper must run the official linux-x64 binary via qemu on arm64");
 expect(mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke Frida/Objection");
 expect(!mobileEnv.includes("mitmdump --version"), "Mobile env check must not require mitmdump");
 expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mobileEnv.includes("hdc"), "Mobile env check must smoke iOS host tools and hdc");
@@ -483,7 +506,9 @@ expect(mobileSmoke.includes("adb version smoke") || mobileSmoke.includes("Androi
 expect(mobileSmoke.includes("no_adb_target") && mobileSmoke.includes("needs_human"), "Mobile unit smoke must cover empty adb devices without a device");
 expect(mobileSmoke.includes("no_hdc_target") && mobileSmoke.includes("no_ios_target") && mobileSmoke.includes("pack.info"), "Mobile unit smoke must cover hdc, iOS, and HAP helpers");
 expect(mobileSmoke.includes("so --check") && mobileSmoke.includes("libdemo.so"), "Mobile unit smoke must cover SO helper");
+expect(mobileSmoke.includes("apkcheckpack") && mobileSmoke.includes("APK检测工具"), "Mobile unit smoke must cover ApkCheckPack wrapper help");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-so.sh"), "Mobile fingerprint must include the SO helper");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-apkcheckpack-bin.sh"), "Mobile fingerprint must include the ApkCheckPack wrapper");
 expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
 expect((mobileWorkflow.match(/toolset: mobile/g) ?? []).length === 2, "Mobile workflow must retain exactly two matrix entries");
 expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (mobileWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 1, "Mobile workflow must retain amd64/arm64 matrix coverage");
@@ -568,6 +593,7 @@ for (const [file, content] of [
   ["mobile-ios.sh", mobileIos],
   ["mobile-hap.sh", mobileHap],
   ["mobile-so.sh", mobileSo],
+  ["mobile-apkcheckpack-bin.sh", mobileApkCheckPackBin],
 ]) {
   const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);

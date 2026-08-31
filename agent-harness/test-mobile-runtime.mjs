@@ -241,4 +241,23 @@ if (soInspect.status !== 0 || !soInspect.stdout.includes("readelf") || !soInspec
   throw new Error(`so inspect must print readelf/LIEF sections\n${soInspect.stdout}\n${soInspect.stderr}`);
 }
 
+const apkcheckpack = writeFake("mobile-apkcheckpack-", "ApkCheckPack", `#!/usr/bin/env bash
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  echo 'APK检测工具 - 用于检测APK文件中的特征'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const apkHelp = runHelper("deploy/mobile-apkcheckpack-bin.sh", ["-h"], { APKCHECKPACK_BIN: apkcheckpack });
+if (apkHelp.status !== 0 || !apkHelp.stdout.includes("APK检测工具")) {
+  throw new Error(`apkcheckpack -h smoke failed: status=${apkHelp.status}\n${apkHelp.stdout}\n${apkHelp.stderr}`);
+}
+const apkMissing = runHelper("deploy/mobile-apkcheckpack-bin.sh", ["-h"], {
+  APKCHECKPACK_BIN: join(tmpdir(), "missing-apkcheckpack-binary"),
+});
+if (apkMissing.status !== 127) {
+  throw new Error(`missing apkcheckpack must exit 127, got ${apkMissing.status}\n${apkMissing.stdout}\n${apkMissing.stderr}`);
+}
+
 console.log("mobile runtime helper smoke ok");
