@@ -211,6 +211,7 @@ export {
 export {
   cleanupUnhealthyManagedGateway,
   DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
+  GATEWAY_PROXY_SCRIPT,
   gatewayCreateTimeoutMs,
   gatewayProxyReuseAction,
   bindGatewayProxyToOpenSandboxNetwork,

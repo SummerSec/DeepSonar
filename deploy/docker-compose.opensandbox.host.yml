@@ -57,7 +57,7 @@ services:
         condition: service_healthy
 
   scheduler:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.45}
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.46}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
@@ -73,12 +73,12 @@ services:
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
       OPEN_SANDBOX_USE_SERVER_PROXY: ${OPEN_SANDBOX_USE_SERVER_PROXY:-true}
       DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://deepsonar-gateway-proxy:3100/gateway}
-      DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://127.0.0.1:13100/gateway}
+      DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://host.docker.internal:${SCHEDULER_HOST_PORT:-13100}/gateway}
       DEEPSONAR_AUTH_REQUIRED: "true"
       DEEPSONAR_ADMIN_TOKEN: ${DEEPSONAR_ADMIN_TOKEN:?set DEEPSONAR_ADMIN_TOKEN}
       DEEPSONAR_MASTER_KEY_FILE: /run/secrets/deepsonar_master_key
-      DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:-0.1.45}
-      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-0.1.45-os-compose}
+      DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:-0.1.46}
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-0.1.46-os-compose}
       BLOB_STORE: s3
       BLOB_S3_ENDPOINT: http://127.0.0.1:${SILO_API_PORT:-19000}
       BLOB_S3_REGION: ${BLOB_S3_REGION:-us-east-1}
@@ -106,7 +106,7 @@ services:
       retries: 20
 
   web:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-0.1.45}
+    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-0.1.46}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web

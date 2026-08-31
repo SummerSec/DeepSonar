@@ -261,10 +261,14 @@ test("OpenSandbox prod-compose PoC source-text contract builds against Phase 2 s
   assert.match(source, /deepsonar-opensandbox must stay running/);
   assert.match(source, /BLOB_STORE=s3/);
   assert.match(source, /silo=ready blob=s3/);
+  assert.match(source, /host\.docker\.internal:\$\{schedulerPort\}\/gateway/);
+  assert.match(source, /_deepsonar_health/);
+  assert.match(source, /sidecar \/gateway forward failed/);
   assert.match(source, /prod-compose started extra OpenSandbox/);
   assert.doesNotMatch(source, /expected exactly one OpenSandbox container/);
   assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
   assert.doesNotMatch(source, /provision\(|executeReal\(/);
+  assert.doesNotMatch(source, /127\.0\.0\.1:\$\{schedulerPort\}\/gateway/);
 });
 
 test("OpenSandbox real runner source-text contract does not load Agentbox", () => {

@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
+import { GATEWAY_PROXY_SCRIPT, shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox prod-compose PoC (set OPEN_SANDBOX_POC=1)");
@@ -59,8 +59,8 @@ if (!existingOpenSandboxRunning()) {
 writeFileSync(masterKeyFile, `${"00".repeat(32)}\n`, { mode: 0o600 });
 writeFileSync(envFile, [
   "POSTGRES_PASSWORD=poc-opensandbox-compose",
-  "DEEPSONAR_IMAGE_TAG=0.1.45",
-  "DEEPSONAR_VERSION=0.1.45-os-compose",
+  "DEEPSONAR_IMAGE_TAG=0.1.46",
+  "DEEPSONAR_VERSION=0.1.46-os-compose",
   "DEEPSONAR_ADMIN_TOKEN=poc-admin-token",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
   "OPEN_SANDBOX_DOMAIN=127.0.0.1:8080",
@@ -120,6 +120,66 @@ try {
   if (!/^BLOB_STORE=s3$/m.test(blobStore.stdout) || !blobStore.stdout.includes(`BLOB_S3_ENDPOINT=http://127.0.0.1:${siloPort}`)) {
     throw new Error("scheduler is not using host Silo");
   }
+  const expectedUpstream = `DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL=http://host.docker.internal:${schedulerPort}/gateway`;
+  if (!blobStore.stdout.includes(expectedUpstream)) {
+    throw new Error(`scheduler gateway upstream is not sidecar-reachable: ${expectedUpstream}`);
+  }
+  if (/DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL=http:\/\/127\.0\.0\.1:/.test(blobStore.stdout)) {
+    throw new Error("scheduler gateway upstream still points at sidecar loopback");
+  }
+  const sidecarNetHealth = run([
+    "-n", "docker", "run", "--rm", "--add-host", "host.docker.internal:host-gateway",
+    "alpine:3.20", "wget", "-qS", "-O", "-", `http://host.docker.internal:${schedulerPort}/health`,
+  ], 30_000);
+  if (sidecarNetHealth.status !== 0 || !/"ok"|opensandbox/.test(sidecarNetHealth.stdout)) {
+    throw new Error(`sidecar-net health failed: ${sidecarNetHealth.stderr || sidecarNetHealth.stdout}`);
+  }
+  const sidecarNetGateway = run([
+    "-n", "docker", "run", "--rm", "--add-host", "host.docker.internal:host-gateway",
+    "alpine:3.20", "wget", "-qS", "-O", "/dev/null", `http://host.docker.internal:${schedulerPort}/gateway`,
+  ], 30_000);
+  const sidecarNetHeaders = `${sidecarNetGateway.stderr}\n${sidecarNetGateway.stdout}`;
+  if (!/HTTP\/\S+\s+[1-5]\d\d/.test(sidecarNetHeaders) || /Connection refused|Failed to connect/i.test(sidecarNetHeaders)) {
+    throw new Error(`sidecar-net gateway unreachable: ${sidecarNetHeaders}`);
+  }
+  const gatewayImage = run(["-n", "docker", "inspect", "-f", "{{.Config.Image}}", "deepsonar-gateway-proxy"]);
+  if (gatewayImage.status !== 0 || !gatewayImage.stdout.trim()) {
+    throw new Error("sidecar /gateway forward probe needs a node-capable gateway image");
+  }
+  const probeName = `${projectName}-gw-probe`;
+  const started = run([
+    "-n", "docker", "run", "-d", "--name", probeName,
+    "--add-host", "host.docker.internal:host-gateway",
+    "-e", `DEEPSONAR_GATEWAY_UPSTREAM=http://host.docker.internal:${schedulerPort}/gateway`,
+    "--entrypoint", "node", gatewayImage.stdout.trim(), "-e", GATEWAY_PROXY_SCRIPT,
+  ], 60_000);
+  try {
+    if (started.status !== 0) {
+      throw new Error(`sidecar probe start failed: ${started.stderr || started.stdout}`);
+    }
+    let healthy = false;
+    for (let i = 0; i < 20; i++) {
+      const ping = run([
+        "-n", "docker", "exec", probeName, "node", "-e",
+        "fetch('http://127.0.0.1:3100/_deepsonar_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+      ], 10_000);
+      if (ping.status === 0) {
+        healthy = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (!healthy) throw new Error("sidecar /_deepsonar_health failed");
+    const forwarded = run([
+      "-n", "docker", "exec", probeName, "node", "-e",
+      "fetch('http://127.0.0.1:3100/gateway').then(r=>{process.stdout.write(String(r.status));process.exit(r.status===502?1:0)}).catch(()=>process.exit(1))",
+    ], 15_000);
+    if (forwarded.status !== 0) {
+      throw new Error(`sidecar /gateway forward failed: ${forwarded.stderr || forwarded.stdout}`);
+    }
+  } finally {
+    run(["-n", "docker", "rm", "-f", probeName], 30_000);
+  }
   const listed = run(["-n", "docker", "ps", "--format", "{{.Names}}", "--filter", "name=opensandbox"]);
   const names = listed.stdout.trim().split("\n").filter(Boolean);
   if (!names.includes("deepsonar-opensandbox")) {
@@ -130,7 +190,7 @@ try {
     throw new Error(`prod-compose started extra OpenSandbox: ${spawned.join(",")}`);
   }
   console.log(
-    `OK: OpenSandbox prod-compose scheduler=200 web=200 silo=ready blob=s3 probe=ready leftover_server=1 port=${schedulerPort} webPort=${webPort} siloPort=${siloPort}`,
+    `OK: OpenSandbox prod-compose scheduler=200 web=200 silo=ready blob=s3 probe=ready gateway=forwarded leftover_server=1 port=${schedulerPort} webPort=${webPort} siloPort=${siloPort}`,
   );
 } finally {
   down();

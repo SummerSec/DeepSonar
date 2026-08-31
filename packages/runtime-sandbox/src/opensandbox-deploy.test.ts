@@ -65,7 +65,8 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.doesNotMatch(isolate, /^\s+name:\s*deepsonar-sandbox-gateway/m);
   const hostOverlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.host.yml"), "utf8");
   assert.match(hostOverlay, /SANDBOX_PROVIDER: opensandbox/);
-  assert.match(hostOverlay, /DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: \$\{DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http:\/\/127\.0\.0\.1:13100\/gateway\}/);
+  assert.match(hostOverlay, /DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: \$\{DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http:\/\/host\.docker\.internal:\$\{SCHEDULER_HOST_PORT:-13100\}\/gateway\}/);
+  assert.doesNotMatch(hostOverlay, /127\.0\.0\.1:13100\/gateway/);
   assert.match(hostOverlay, /DEEPSONAR_ADMIN_TOKEN: \$\{DEEPSONAR_ADMIN_TOKEN:\?set DEEPSONAR_ADMIN_TOKEN\}/);
   assert.doesNotMatch(hostOverlay, /poc-admin-token/);
   assert.match(hostOverlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-127\.0\.0\.1:8080\}/);
@@ -81,6 +82,9 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.doesNotMatch(hostOverlay, /container_name:/);
   assert.match(ci, /OpenSandbox production compose merge/);
   assert.match(ci, /published: "18080"/);
+  assert.match(ci, /OpenSandbox host overlay gateway upstream/);
+  assert.match(ci, /host\.docker\.internal:14100\/gateway/);
+  assert.match(ci, /127\.0\.0\.1:13100\/gateway/);
 });
 
 test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema", () => {
