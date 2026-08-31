@@ -460,6 +460,7 @@ export class OpenSandboxRunner implements SandboxRunner {
     if (cached) {
       await cached.kill().catch(() => {});
       await cached.close().catch(() => {});
+      return;
     }
     if (this.client.destroy) {
       await this.client.destroy(resource.resourceId);

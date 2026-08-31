@@ -15,6 +15,10 @@ test("OpenSandbox SDK pin matches the installed package and rejects drift", () =
 test("OpenSandbox destroy treats already-gone sandboxes as success", () => {
   assert.equal(isOpenSandboxGoneError({ statusCode: 404, message: "gone" }), true);
   assert.equal(isOpenSandboxGoneError({ error: { code: "DOCKER::SANDBOX_NOT_FOUND" } }), true);
+  assert.equal(isOpenSandboxGoneError({
+    statusCode: 500,
+    message: 'Conflict ("removal of container abc is already in progress")',
+  }), true);
   assert.equal(isOpenSandboxGoneError(new Error("ready timeout")), false);
 });
 

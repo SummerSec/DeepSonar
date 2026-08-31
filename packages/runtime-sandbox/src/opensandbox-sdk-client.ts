@@ -63,10 +63,12 @@ export function isOpenSandboxGoneError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const status = "statusCode" in error ? Number((error as { statusCode?: number }).statusCode) : 0;
   const nested = "error" in error && error.error && typeof error.error === "object"
-    ? String((error.error as { code?: string; message?: string }).code ?? "")
+    ? String((error.error as { code?: string; message?: string }).code ?? (error.error as { message?: string }).message ?? "")
     : "";
   const message = error instanceof Error ? error.message : String(error);
-  return status === 404 || /SANDBOX_NOT_FOUND/i.test(`${nested} ${message}`);
+  const text = `${nested} ${message}`;
+  return status === 404 || status === 409
+    || /SANDBOX_NOT_FOUND|already in progress/i.test(text);
 }
 
 export function joinCommandLogText(items?: Array<{ text?: string }>): string {
