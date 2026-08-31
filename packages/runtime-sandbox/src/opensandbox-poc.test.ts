@@ -228,6 +228,9 @@ function hostSession(): OpenSandboxSession {
       if (command.includes("tool-manifest.json") && command.includes("cat ")) {
         return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime.contract/v1" }), stderr: "" };
       }
+      if (command === "cat /proc/mounts") {
+        return { exitCode: 0, stdout: "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n", stderr: "" };
+      }
       if (command.includes("poc-seed.txt")) return { exitCode: 0, stdout: "seed\n", stderr: "" };
       if (command.includes("poc-write")) return { exitCode: 1, stdout: "", stderr: "Read-only file system" };
       if (command.includes("shared") && command.includes("mounted")) return { exitCode: 0, stdout: "mounted\n", stderr: "" };
@@ -503,9 +506,14 @@ test("OpenSandbox recovery PoC reconnects a new runner then destroys leftovers",
     async connect(id) {
       return id === session.id ? session : undefined;
     },
-    async list() {
+    async list(filter) {
       return present
-        ? [{ resourceId: session.id, jobId: "job", attemptId: "att", state: "Running" }]
+        ? [{
+            resourceId: session.id,
+            jobId: filter?.jobId ?? "11111111-1111-4111-8111-111111111111",
+            attemptId: filter?.attemptId ?? "22222222-2222-4222-8222-222222222222",
+            state: "Running",
+          }]
         : [];
     },
     async destroy() {

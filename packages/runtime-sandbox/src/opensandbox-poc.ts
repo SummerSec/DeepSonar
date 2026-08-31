@@ -732,8 +732,8 @@ export async function runOpenSandboxCliLaunchPoc(
   try {
     const host = await runner.ensureHost(handle);
     await materializePocProviderFiles(host);
-    await host.uploadFile(MOCK_LLM_SCRIPT, "/tmp/deepsonar-mock-llm.py");
-    const mock = await host.runAsync("python3 /tmp/deepsonar-mock-llm.py", { cwd: "/tmp" });
+    await host.uploadFile(MOCK_LLM_SCRIPT, "/workspace/deepsonar-mock-llm.py");
+    const mock = await host.runAsync("python3 /workspace/deepsonar-mock-llm.py", { cwd: "/workspace" });
     const waitMock = [
       "import socket,time",
       "for _ in range(40):",
