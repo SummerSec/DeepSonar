@@ -30,15 +30,30 @@ if (!shouldRunOpenSandboxPoc()) {
 
 process.env.DEEPSONAR_MASTER_KEY ??= "00".repeat(32);
 
-const vendorPlans = {
-  "claude-code": { secret: process.env.ANTHROPIC_API_KEY?.trim(), provider: "anthropic", model: "claude-sonnet-4-5" },
+const anthropicSecret = process.env.ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_AUTH_TOKEN?.trim();
+const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
+const anthropicModel = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-5";
+
+type VendorPlan = {
+  secret?: string;
+  provider: "anthropic" | "openai";
+  model: string;
+  baseUrl?: string;
+};
+const vendorCliIds = ["claude-code", "codex", "open-code", "pi", "dsh"] as const;
+type VendorCli = (typeof vendorCliIds)[number];
+const vendorPlans: Record<VendorCli, VendorPlan> = {
+  "claude-code": {
+    secret: anthropicSecret,
+    provider: "anthropic",
+    model: anthropicModel,
+    ...(anthropicBaseUrl ? { baseUrl: anthropicBaseUrl } : {}),
+  },
   codex: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
   "open-code": { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
   pi: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5" },
   dsh: { secret: process.env.DEEPSEEK_API_KEY?.trim(), provider: "openai", model: "deepseek-chat", baseUrl: "https://api.deepseek.com" },
-} as const;
-type VendorCli = keyof typeof vendorPlans;
-const vendorCliIds = Object.keys(vendorPlans) as VendorCli[];
+};
 const requestedCli = process.env.OPEN_SANDBOX_POC_CLI?.trim();
 if (requestedCli && !(requestedCli in vendorPlans)) {
   console.error(`OPEN_SANDBOX_POC_CLI must be one of ${vendorCliIds.join(", ")}`);
@@ -202,7 +217,7 @@ try {
       : legacySettingsConfig({
         provider: plan.provider,
         secret: "gateway-placeholder",
-        metadata: "baseUrl" in plan ? { base_url: plan.baseUrl } : {},
+        metadata: plan.baseUrl ? { base_url: plan.baseUrl } : {},
         agentCli: selectedCli,
         model: plan.model,
       });
@@ -214,7 +229,7 @@ try {
         ${credentialId}, ${`OpenSandbox ${selectedCli} vendor`}, 'llm_provider', ${plan.provider},
         ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
         ${fingerprintOf(vendorSecret)}, ${last4Of(vendorSecret)}, 'active', ${selectedCli},
-        ${sql.json(JSON.parse(JSON.stringify("baseUrl" in plan ? { base_url: plan.baseUrl } : {})))},
+        ${sql.json(JSON.parse(JSON.stringify(plan.baseUrl ? { base_url: plan.baseUrl } : {})))},
         ${sql.json(JSON.parse(JSON.stringify(settingsConfig)))}
       )`;
 
@@ -252,7 +267,10 @@ try {
       allowedModels: jobGatewayAllowedModels({
         roleModel: plan.model,
         settingsConfig,
-      }).concat(selectedCli === "open-code" ? [`deepsonar/${plan.model}`] : []),
+      }).concat([
+        ...(selectedCli === "open-code" ? [`deepsonar/${plan.model}`] : []),
+        ...(plan.model.includes("[") ? [plan.model.replace(/\[[^\]]*\]$/u, "")] : []),
+      ]),
       ttlSec: 3600,
     });
     const runtimeHome = "/workspace/.deepsonar-home";
