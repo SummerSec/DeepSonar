@@ -434,7 +434,7 @@ test("official OpenSandbox image PoC requires all five CLIs", async () => {
 test("OpenSandbox image contract PoC retries proxy exec flakes", () => {
   const source = readFileSync(new URL("./opensandbox-poc.ts", import.meta.url), "utf8");
   assert.match(source, /IMAGE_CONTRACT_TRANSIENT/);
-  assert.match(source, /SANDBOX_NOT_FOUND/);
+  assert.match(source, /SANDBOX_NOT_FOUND\|Sandbox \[\\w-\]\+ not found/);
   assert.match(source, /runOpenSandboxImageContractOnce/);
   assert.match(source, /timeoutMs: 15_000/);
   assert.match(source, /attempt < 5/);
@@ -447,7 +447,7 @@ test("OpenSandbox image contract PoC re-provisions after SANDBOX_NOT_FOUND", asy
   const dead = hostSession();
   const deadRun = dead.run.bind(dead);
   dead.run = async (command, options) => {
-    if (command.startsWith("command -v ")) throw new Error("DOCKER::SANDBOX_NOT_FOUND");
+    if (command.startsWith("command -v ")) throw new Error("Sandbox ce7ab2bd-c539-4d5a-9762-5610f7e67807 not found.");
     return deadRun(command, options);
   };
   const live = hostSession();

@@ -488,7 +488,7 @@ export async function runOpenSandboxRestrictedPoc(
   }
 }
 
-const IMAGE_CONTRACT_TRANSIENT = /proxy|UNKNOWN_ERROR|SANDBOX_NOT_FOUND/i;
+const IMAGE_CONTRACT_TRANSIENT = /proxy|UNKNOWN_ERROR|SANDBOX_NOT_FOUND|Sandbox [\w-]+ not found/i;
 
 async function runOpenSandboxImageContractOnce(
   client: OpenSandboxClient,
