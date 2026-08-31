@@ -20,6 +20,13 @@ function session(overrides?: { mounted?: boolean; seed?: string; writable?: bool
       if (command.includes("tool-manifest.json") && command.includes("cat ")) {
         return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime.contract/v1" }), stderr: "" };
       }
+      if (command === "cat /proc/mounts") {
+        return {
+          exitCode: 0,
+          stdout: overrides?.mounted === false ? "/dev/sda /workspace ext4 rw 0 0\n" : "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n",
+          stderr: "",
+        };
+      }
       if (command.includes("test -d") && command.includes("mounted")) {
         return { exitCode: overrides?.mounted === false ? 1 : 0, stdout: overrides?.mounted === false ? "" : "mounted\n", stderr: "" };
       }
@@ -167,7 +174,7 @@ test("OpenSandbox Kata assets PoC fail-closes missing mount, seed, or writable v
   const unmounted = assetsWorld(session({ mounted: false }));
   await assert.rejects(
     () => runOpenSandboxK8sAssetsPoc(unmounted.client, unmounted.kubectl, { image, timeoutMs: 2_000 }),
-    /OPENSANDBOX_POC_K8S_ASSETS_UNMOUNTED/,
+    /shared assets volume was not mounted|OPENSANDBOX_POC_K8S_ASSETS_UNMOUNTED/,
   );
   const empty = assetsWorld(session({ seed: "" }));
   await assert.rejects(
