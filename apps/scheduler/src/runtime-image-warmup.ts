@@ -96,19 +96,16 @@ export function startRuntimeImageWarmupOnBoot(
   onReady: () => void,
   extras: { afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void> } = {},
 ): () => void {
+  const hostPull = config.runtime.agentMode === "real"
+    && (config.runtime.provider === "local-docker" || config.runtime.provider === "opensandbox");
   startupCoordinator = createRuntimeImageWarmupCoordinator({
-    resolveRefs: async () => withSharedAssetsHelperRef(await resolveStartupRuntimeImages()),
-    prepare: prepareRuntimeImage,
+    resolveRefs: hostPull
+      ? async () => withSharedAssetsHelperRef(await resolveStartupRuntimeImages())
+      : async () => [],
+    prepare: hostPull ? prepareRuntimeImage : async () => {},
     afterPrepare: extras.afterPrepare,
     onReady,
   });
-  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") {
-    startupCoordinator = createRuntimeImageWarmupCoordinator({
-      resolveRefs: async () => [],
-      prepare: async () => {},
-      onReady,
-    });
-  }
   startupCoordinator.start();
   return () => startupCoordinator?.stop();
 }

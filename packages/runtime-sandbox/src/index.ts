@@ -232,6 +232,7 @@ export {
   WORKSPACE_RESERVED_ROOTS,
   assertReadableWorkspacePath,
   assertSharedAssetsContainerMount,
+  assertSharedAssetsGuestMount,
   assertSharedAssetsVolumeOwnership,
   bindProvisionAbortSignal,
   buildTerminalShellCommand,

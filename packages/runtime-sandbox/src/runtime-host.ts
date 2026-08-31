@@ -62,6 +62,7 @@ export function assertWorkspaceWritePath(filePath: string): string {
     !normalized.startsWith("/workspace/") ||
     normalized !== filePath ||
     normalized.includes("/../") ||
+    /(?:^|\/)\.\.(?:\/|$)/.test(normalized) ||
     normalized.includes("\0")
   ) {
     throw new Error(`拒绝写入 workspace 之外的动态文件: ${filePath}`);

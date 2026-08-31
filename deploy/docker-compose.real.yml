@@ -5,6 +5,7 @@ services:
   scheduler:
     environment:
       AGENT_MODE: real
+      SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-opensandbox}
       BLOB_DIR: /app/data/blobs
       # Sandboxes call the managed proxy; the proxy reaches Scheduler on the shared bridge.
       DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://deepsonar-gateway-proxy:3100/gateway}

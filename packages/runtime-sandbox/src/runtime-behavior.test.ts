@@ -40,6 +40,7 @@ import {
 } from "./runtime-docker.js";
 import {
   assertSharedAssetsContainerMount,
+  assertSharedAssetsGuestMount,
   assertSharedAssetsVolumeOwnership,
   bindProvisionAbortSignal,
   buildTerminalShellCommand,
@@ -759,6 +760,16 @@ test("warm attach accepts only the exact read-only shared assets mount", () => {
       /frozen read-only volume/,
     );
   }
+});
+
+test("guest shared-assets mount requires /proc/mounts, not just a directory", () => {
+  assert.doesNotThrow(() => assertSharedAssetsGuestMount(
+    "overlay / overlay rw 0 0\n/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n",
+  ));
+  assert.throws(
+    () => assertSharedAssetsGuestMount("overlay / overlay rw 0 0\n"),
+    /shared assets volume was not mounted/,
+  );
 });
 
 test("rate-limit error details keep only server-owned bounded metadata", () => {

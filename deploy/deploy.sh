@@ -166,13 +166,20 @@ fi
 # real 默认 OpenSandbox；显式 SANDBOX_PROVIDER= 其它值才跳过 overlay。
 if [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
   set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
-  # Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
-  if command -v sudo >/dev/null 2>&1; then
-    sudo -n iptables-legacy -P FORWARD ACCEPT 2>/dev/null \
-      || sudo -n iptables -P FORWARD ACCEPT 2>/dev/null \
-      || true
-  fi
 fi
+
+# Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
+# Only `up` may touch host FORWARD; down/logs/status/check/pull must not.
+relax_bridge_forward() {
+  [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
+  command -v sudo >/dev/null 2>&1 || return 0
+  echo "[deploy] relaxing Docker FORWARD policy for OpenSandbox bridge (up only)"
+  if sudo -n iptables-legacy -P FORWARD ACCEPT 2>/dev/null \
+    || sudo -n iptables -P FORWARD ACCEPT 2>/dev/null; then
+    return 0
+  fi
+  echo "[deploy] could not set FORWARD ACCEPT; docker0/bridge rules may still drop packets" >&2
+}
 
 cd "$REPO_ROOT"
 
@@ -286,6 +293,7 @@ case "$ACTION" in
     echo "[deploy] 服务已停止，数据库和 blob volume 已保留"
     ;;
   up)
+    relax_bridge_forward
     "$@" config --quiet
     pull_official_silo
     pull_shared_assets_helper

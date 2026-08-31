@@ -187,6 +187,15 @@ export function sharedAssetsVolumeBinds(mount?: { volumeName: string }): string[
   return [`${mount.volumeName}:${SHARED_ASSETS_MOUNT_PATH}:ro`];
 }
 
+/** Guest /proc/mounts must contain the frozen shared-assets path; an empty host dir is not enough. */
+export function assertSharedAssetsGuestMount(procMounts: string, mountPath = SHARED_ASSETS_MOUNT_PATH): void {
+  const found = procMounts.split("\n").some((line) => {
+    const fields = line.trim().split(/\s+/);
+    return fields[1] === mountPath;
+  });
+  if (!found) throw new RuntimeImageContractError("shared assets volume was not mounted");
+}
+
 export function assertSharedAssetsContainerMount(
   inspected: { Mounts?: unknown },
   volumeName: string,

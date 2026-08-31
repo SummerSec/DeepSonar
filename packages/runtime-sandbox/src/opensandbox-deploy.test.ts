@@ -43,7 +43,9 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.doesNotMatch(overlay, /127\.0\.0\.1:8080:8080/);
   assert.match(deploySh, /SANDBOX_PROVIDER:-opensandbox/);
   assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
-  assert.match(deploySh, /iptables-legacy -P FORWARD ACCEPT/);
+  assert.match(deploySh, /up\)[\s\S]*relax_bridge_forward/);
+  assert.match(deploySh, /relax_bridge_forward[\s\S]*iptables-legacy -P FORWARD ACCEPT/);
+  assert.match(deploySh, /down\/logs\/status\/check\/pull must not/);
   assert.match(deployPs1, /IsNullOrWhiteSpace\(\$env:SANDBOX_PROVIDER\)/);
   assert.match(deployPs1, /docker-compose.opensandbox.prod.yml/);
   const pkg = readFileSync(join(root, "package.json"), "utf8");
@@ -63,6 +65,9 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.doesNotMatch(isolate, /^\s+name:\s*deepsonar-sandbox-gateway/m);
   const hostOverlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.host.yml"), "utf8");
   assert.match(hostOverlay, /SANDBOX_PROVIDER: opensandbox/);
+  assert.match(hostOverlay, /DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: \$\{DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http:\/\/127\.0\.0\.1:13100\/gateway\}/);
+  assert.match(hostOverlay, /DEEPSONAR_ADMIN_TOKEN: \$\{DEEPSONAR_ADMIN_TOKEN:\?set DEEPSONAR_ADMIN_TOKEN\}/);
+  assert.doesNotMatch(hostOverlay, /poc-admin-token/);
   assert.match(hostOverlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-127\.0\.0\.1:8080\}/);
   assert.match(hostOverlay, /network_mode: host/);
   assert.match(hostOverlay, /host\.docker\.internal:host-gateway/);

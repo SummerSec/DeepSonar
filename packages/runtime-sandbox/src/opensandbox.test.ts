@@ -261,6 +261,26 @@ test("OpenSandbox listResources keeps only dual canonical-UUID labels", async ()
   }), true);
 });
 
+test("OpenSandbox provision fail-closes when the shared assets volume is not mounted", async () => {
+  const session = fakeSession();
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command === "cat /proc/mounts") return { exitCode: 0, stdout: "overlay / overlay rw 0 0\n", stderr: "" };
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  }), /shared assets volume was not mounted/);
+});
+
 test("OpenSandbox isAlive requires lifecycle Running and a healthy exec probe", async () => {
   const session = fakeSession();
   session.getState = async () => "Paused";

@@ -9,6 +9,7 @@ import {
   RuntimeImageContractError,
   SHARED_ASSETS_MOUNT_PATH,
   assertReadableWorkspacePath,
+  assertSharedAssetsGuestMount,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
@@ -223,8 +224,7 @@ export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): Runti
       return wrapOpenSandboxProcess(await session.runAsync(command, options));
     },
     async uploadFile(content, destPath) {
-      const normalized = destPath.startsWith("/workspace/") ? destPath : destPath;
-      if (normalized.startsWith("/workspace/")) assertWorkspaceWritePath(normalized);
+      const normalized = assertWorkspaceWritePath(destPath);
       const dir = path.posix.dirname(normalized);
       if (dir !== "/" && dir !== ".") {
         await session.run(`mkdir -p -- ${shellQuote(dir)}`);
@@ -311,6 +311,11 @@ export class OpenSandboxRunner implements SandboxRunner {
       );
       if (contractResult.exitCode !== 0) {
         throw new RuntimeImageContractError("runtime image missing /workspace, /bin/sh, or tool manifest");
+      }
+      if (input.sharedAssetsMount) {
+        const mounts = await host.run("cat /proc/mounts", { timeoutMs: 5_000 });
+        if (mounts.exitCode !== 0) throw new RuntimeImageContractError("shared assets mount probe failed");
+        assertSharedAssetsGuestMount(mounts.stdout);
       }
       const manifest = parseToolManifest(contractResult.stdout);
       if (input.expectedContract && manifest.contract !== input.expectedContract) {
