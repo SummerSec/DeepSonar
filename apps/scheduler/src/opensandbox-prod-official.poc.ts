@@ -10,7 +10,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
+import {
+  createSdkOpenSandboxClient,
+  readOpenSandboxPin,
+  runOpenSandboxInfrastructurePoc,
+  shouldRunOpenSandboxPoc,
+} from "@deepsonar/runtime-sandbox";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox official prod PoC (set OPEN_SANDBOX_POC=1)");
@@ -69,8 +74,8 @@ writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(deployDir,
 writeFileSync(masterKeyFile, `${"00".repeat(32)}\n`, { mode: 0o600 });
 writeFileSync(envFile, [
   "POSTGRES_PASSWORD=poc-opensandbox-official",
-  "DEEPSONAR_IMAGE_TAG=0.1.45",
-  "DEEPSONAR_VERSION=0.1.45-os-official",
+  "DEEPSONAR_IMAGE_TAG=0.1.46",
+  "DEEPSONAR_VERSION=0.1.46-os-official",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
   `OPEN_SANDBOX_HOST_PORT=${osHostPort}`,
   `OPEN_SANDBOX_CONTAINER_NAME=${osContainer}`,
@@ -127,8 +132,28 @@ try {
   if (opensandboxCount < 2) {
     throw new Error(`expected Phase 2 plus overlay OpenSandbox, got ${opensandboxCount}`);
   }
+  const overlayClient = createSdkOpenSandboxClient({
+    domain: `127.0.0.1:${osHostPort}`,
+    apiKey,
+    protocol: "http",
+    useServerProxy: true,
+    pin: readOpenSandboxPin({}),
+  });
+  const jobId = randomUUID();
+  const attemptId = randomUUID();
+  const created = await runOpenSandboxInfrastructurePoc(overlayClient, { jobId, attemptId });
+  if (!created.listed || created.stdout !== "poc") {
+    throw new Error(`official overlay provision unexpected: ${JSON.stringify(created)}`);
+  }
+  const leftovers = await overlayClient.list({ jobId, attemptId });
+  if (leftovers.length > 0) {
+    throw new Error(`official overlay leftover: ${leftovers.map((item) => item.resourceId).join(",")}`);
+  }
+  if (!existingOpenSandboxRunning()) {
+    throw new Error("official overlay provision stopped Phase 2 deepsonar-opensandbox");
+  }
   console.log(
-    `OK: OpenSandbox official prod web=200 silo=ready overlay=healthy leftover_server=1 bridge=true port=${webPort} osPort=${osHostPort}`,
+    `OK: OpenSandbox official prod web=200 silo=ready overlay=healthy leftover_server=1 bridge=true provision=true leftover=0 createMs=${created.createMs} port=${webPort} osPort=${osHostPort}`,
   );
 } finally {
   down();
