@@ -488,7 +488,9 @@ export async function runOpenSandboxRestrictedPoc(
   }
 }
 
-export async function runOpenSandboxImageContractPoc(
+const IMAGE_CONTRACT_TRANSIENT = /proxy|UNKNOWN_ERROR|SANDBOX_NOT_FOUND/i;
+
+async function runOpenSandboxImageContractOnce(
   client: OpenSandboxClient,
   input: { image: string },
 ): Promise<{ provisionMs: number; clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>>; leftovers: number }> {
@@ -529,6 +531,25 @@ export async function runOpenSandboxImageContractPoc(
       throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
     }
   }
+}
+
+/** Overlay leftover can lose a just-created sandbox; re-provision instead of probing a dead handle. */
+export async function runOpenSandboxImageContractPoc(
+  client: OpenSandboxClient,
+  input: { image: string },
+): Promise<{ provisionMs: number; clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>>; leftovers: number }> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await runOpenSandboxImageContractOnce(client, input);
+    } catch (error) {
+      lastError = error;
+      const text = error instanceof Error ? error.message : String(error);
+      if (attempt === 2 || !IMAGE_CONTRACT_TRANSIENT.test(text)) throw error;
+      await waitMs(3_000 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 export async function runOpenSandboxOfficialImagesPoc(

@@ -433,10 +433,44 @@ test("official OpenSandbox image PoC requires all five CLIs", async () => {
 
 test("OpenSandbox image contract PoC retries proxy exec flakes", () => {
   const source = readFileSync(new URL("./opensandbox-poc.ts", import.meta.url), "utf8");
-  assert.match(source, /proxy\|UNKNOWN_ERROR/);
+  assert.match(source, /IMAGE_CONTRACT_TRANSIENT/);
+  assert.match(source, /SANDBOX_NOT_FOUND/);
+  assert.match(source, /runOpenSandboxImageContractOnce/);
   assert.match(source, /timeoutMs: 15_000/);
   assert.match(source, /attempt < 5/);
   assert.match(source, /2_000 \* \(attempt \+ 1\)/);
+  assert.match(source, /attempt < 3/);
+});
+
+test("OpenSandbox image contract PoC re-provisions after SANDBOX_NOT_FOUND", async () => {
+  let creates = 0;
+  const dead = hostSession();
+  const deadRun = dead.run.bind(dead);
+  dead.run = async (command, options) => {
+    if (command.startsWith("command -v ")) throw new Error("DOCKER::SANDBOX_NOT_FOUND");
+    return deadRun(command, options);
+  };
+  const live = hostSession();
+  const liveRun = live.run.bind(live);
+  live.run = async (command, options) => {
+    if (command.startsWith("command -v ")) return { exitCode: 0, stdout: "/usr/bin/cli\n", stderr: "" };
+    return liveRun(command, options);
+  };
+  const result = await runOpenSandboxImageContractPoc({
+    async create() {
+      creates += 1;
+      return creates === 1 ? dead : live;
+    },
+    async connect() {
+      return creates === 1 ? dead : live;
+    },
+    async list() {
+      return [];
+    },
+  }, { image: "img@sha256:" + "a".repeat(64) });
+  assert.equal(creates, 2);
+  assert.equal(result.leftovers, 0);
+  assert.equal(result.clis.claude, true);
 });
 
 test("OpenSandbox image contract PoC reprovisions and reports leftovers", async () => {
