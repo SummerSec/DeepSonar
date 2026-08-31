@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
+import { Script } from "node:vm";
 import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
@@ -166,6 +167,14 @@ const expectDockerfileParse = (source, label) => {
   for (const [index, line] of joined.split(/\r?\n/).entries()) {
     if (/\bfor\b/.test(line) && /\bdo\b/.test(line) && !/;\s*do\b/.test(line)) {
       expect(false, `${label} joined line ${index + 1}: for-list must use '; do' because Dockerfile continuations collapse to one /bin/sh line`);
+    }
+  }
+  const evalSnippets = [...joined.matchAll(/node -e '([^']*)'/g)].map((match) => match[1]);
+  for (const [index, snippet] of evalSnippets.entries()) {
+    try {
+      new Script(snippet);
+    } catch (error) {
+      expect(false, `${label} node -e snippet ${index + 1} is invalid JS: ${error instanceof Error ? error.message : error}`);
     }
   }
 };
@@ -442,6 +451,10 @@ expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile D
 expect(mobileDockerfile.includes("ARG APKCHECKPACK_SHA256=c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"), "Mobile Dockerfile ApkCheckPack checksum drift");
 expect(mobileDockerfile.includes("APKCHECKPACK_URL") && mobileDockerfile.includes("moyuwa/ApkCheckPack"), "Mobile Dockerfile must download pinned ApkCheckPack from GitHub Release");
 expect(mobileDockerfile.includes("mobile-apkcheckpack-bin.sh") && mobileDockerfile.includes("/opt/deepsonar/bin/apkcheckpack"), "Mobile must install the ApkCheckPack qemu wrapper");
+expect(
+  /"claude"\],device:\{/.test(mobileDockerfile) && !/"claude"\]\},device:\{/.test(mobileDockerfile),
+  "Mobile tool-manifest node -e must keep tools as an object field, not close const m before device",
+);
 expect(!existsSync(new URL("../deploy/mobile-apkcheckpack-scan.sh", import.meta.url)), "Mobile must not add a platform-prescribed ApkCheckPack scan entry");
 expect(!mobileDockerfile.includes("apkcheckpack-scan.sh") && !mobileEnv.includes("apkcheckpack-scan.sh"), "Mobile must not install an ApkCheckPack scan script");
 expect(mobileDockerfile.includes("lief==${LIEF_VERSION}"), "Mobile Dockerfile must install pinned LIEF");
