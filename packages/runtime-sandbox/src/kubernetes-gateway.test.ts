@@ -10,7 +10,11 @@ test("Kubernetes Gateway bind requires a real ClusterIP", () => {
   assert.equal(readServiceClusterIP({ spec: { clusterIP: "10.43.0.10" } }), "10.43.0.10");
   assert.throws(() => readServiceClusterIP({ spec: { clusterIP: "None" } }), /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
   assert.throws(() => readServiceClusterIP({}), /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
-  assert.match(gatewayServiceManifest("deepsonar-opensandbox"), /name: deepsonar-gateway-proxy/);
+  const manifest = gatewayServiceManifest("deepsonar-opensandbox");
+  assert.match(manifest, /name: deepsonar-gateway-proxy/);
+  assert.match(manifest, /port: 3100/);
+  assert.match(manifest, /targetPort: 3100/);
+  assert.doesNotMatch(manifest, /port: 80/);
 });
 
 test("Kubernetes Gateway bind fail-closes a missing or headless Service", async () => {

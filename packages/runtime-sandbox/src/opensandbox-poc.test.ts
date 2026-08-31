@@ -373,6 +373,16 @@ test("official OpenSandbox image list requires pinned registry keys", () => {
   );
 });
 
+test("deploy registry lists required OpenSandbox images and extra official keys", () => {
+  const registry = JSON.parse(readFileSync(new URL("../../../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
+  const listed = listOfficialOpenSandboxRuntimeImages(registry);
+  for (const key of OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS) {
+    assert.ok(listed.some((item) => item.key === key), key);
+  }
+  assert.ok(listed.some((item) => item.key === "deepsonar-mobile"), "deepsonar-mobile");
+  assert.ok(listed.length >= OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.length + 1);
+});
+
 test("official OpenSandbox image PoC requires all five CLIs", async () => {
   const present = hostSession();
   const originalRun = present.run.bind(present);

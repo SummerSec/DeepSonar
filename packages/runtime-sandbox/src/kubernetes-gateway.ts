@@ -71,7 +71,8 @@ metadata:
   namespace: ${namespace}
 spec:
   ports:
-    - port: 80
+    - name: gateway
+      port: 3100
       targetPort: 3100
 `;
 }

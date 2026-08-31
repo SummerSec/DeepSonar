@@ -201,6 +201,9 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
   assert.match(k8sPoc, /bindGatewayProxyToKubernetesService/);
   assert.match(k8sGateway, /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
+  assert.match(k8sGateway, /port: 3100/);
+  assert.match(k8sGateway, /targetPort: 3100/);
+  assert.doesNotMatch(k8sGateway, /port: 80/);
   assert.match(adapter, /\/etc\/hosts/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_DENY_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
