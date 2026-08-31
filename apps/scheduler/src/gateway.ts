@@ -449,22 +449,32 @@ function addUsage(target: UsageBreakdown, next: UsageBreakdown): void {
   target.cacheWrite += next.cacheWrite;
 }
 
+/** 残缺 JSON 的尽力而为兜底：只认同一层扁平字段，嵌套 cache_creation / *_details 必须走 JSON 解析。 */
 function extractUsageByRegex(text: string): UsageBreakdown {
   const totals = { ...EMPTY_USAGE };
-  for (const m of text.matchAll(/"usage"\s*:\s*\{[^}]*?"input_tokens"\s*:\s*(\d+)[^}]*?"output_tokens"\s*:\s*(\d+)/g)) {
-    addUsage(totals, { input: Number(m[1]), output: Number(m[2]), total: Number(m[1]) + Number(m[2]), cacheRead: 0, cacheWrite: 0 });
-  }
-  for (const m of text.matchAll(/"usage"\s*:\s*\{[^}]*?"prompt_tokens"\s*:\s*(\d+)[^}]*?"completion_tokens"\s*:\s*(\d+)/g)) {
-    addUsage(totals, { input: Number(m[1]), output: Number(m[2]), total: Number(m[1]) + Number(m[2]), cacheRead: 0, cacheWrite: 0 });
+  for (const m of text.matchAll(/"usage"\s*:\s*\{([^}]*)/g)) {
+    const body = m[1] ?? "";
+    const input = Number(/"input_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"prompt_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    const output = Number(/"output_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"completion_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    const cacheRead = Number(/"cache_read_input_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"cache_read_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    const cacheWrite = Number(/"cache_creation_input_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"cache_write_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    if (input + output + cacheRead + cacheWrite <= 0) continue;
+    addUsage(totals, { input, output, total: input + output, cacheRead, cacheWrite });
   }
   return totals;
+}
+
+function usageObjectStart(text: string, afterColon: number): number {
+  let i = afterColon;
+  while (i < text.length && /\s/u.test(text[i]!)) i += 1;
+  return text[i] === "{" ? i : -1;
 }
 
 export function extractUsageBreakdown(text: string): UsageBreakdown {
   const totals = { ...EMPTY_USAGE };
   let parsed = false;
   for (const match of text.matchAll(/"usage"\s*:/g)) {
-    const objectStart = text.indexOf("{", match.index + match[0].length);
+    const objectStart = usageObjectStart(text, match.index + match[0].length);
     if (objectStart < 0) continue;
     const raw = extractBalancedObject(text, objectStart);
     if (!raw) continue;
@@ -476,7 +486,7 @@ export function extractUsageBreakdown(text: string): UsageBreakdown {
       addUsage(totals, next);
       parsed = true;
     } catch {
-      /* 残缺 JSON 走正则兜底 */
+      /* 残缺对象留给正则兜底 */
     }
   }
   if (parsed) return totals;

@@ -129,3 +129,14 @@ test("OpenAI prompt_tokens_details.cached_tokens 记为缓存读，嵌套对象�
     cacheWrite: 0,
   });
 });
+
+test("usage 为 null 时不吞后续无关对象；扁平残缺 JSON 仍能记下缓存读", () => {
+  assert.deepEqual(
+    extractUsageBreakdown('data: {"usage":null,"other":{"input_tokens":9,"output_tokens":3,"cache_read_input_tokens":4}}'),
+    { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 },
+  );
+  assert.deepEqual(
+    extractUsageBreakdown('data: {"usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":30}'),
+    { input: 11, output: 2, total: 13, cacheRead: 30, cacheWrite: 0 },
+  );
+});

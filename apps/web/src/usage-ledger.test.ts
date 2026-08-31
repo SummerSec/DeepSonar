@@ -43,13 +43,16 @@ test("usage ledger date fields do not reintroduce native picker style hooks", ()
   assert.doesNotMatch(styles, /input\[type="date"\]/);
 });
 
-test("usage board shows cache columns and remembers collapse per user and page", () => {
+test("usage board source still wires cache columns and collapse toggle", () => {
   const source = readFileSync(new URL("./UsageLedgerBoard.tsx", import.meta.url), "utf8");
   assert.match(source, /缓存读/);
   assert.match(source, /缓存写/);
   assert.match(source, /cache_read_input_tokens/);
   assert.match(source, /usage-ledger__toggle/);
   assert.match(source, /readUsageLedgerCollapsed/);
+});
+
+test("collapse prefs default expanded and persist per user and page", () => {
   assert.equal(usageLedgerPageKey("global"), "global");
   assert.equal(usageLedgerPageKey("project", "p1"), "project:p1");
   assert.equal(usageLedgerPageKey("task", "p1", "c1"), "task:c1");
