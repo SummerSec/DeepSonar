@@ -261,6 +261,56 @@ test("OpenSandbox listResources keeps only dual canonical-UUID labels", async ()
   }), true);
 });
 
+test("OpenSandbox provision fail-closes when the shared assets volume is not Scheduler-owned", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client, undefined, {
+    inspectSharedAssetsVolume: async () => {
+      throw new Error("shared assets volume is not a local Scheduler-managed volume for this Job");
+    },
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  }), /Scheduler-managed volume/);
+  assert.equal(client.created.length, 0);
+});
+
+test("OpenSandbox Kubernetes provision skips Docker volume inspect", async () => {
+  const session = fakeSession();
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command === "cat /proc/mounts") {
+      return { exitCode: 0, stdout: "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n", stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  let inspected = 0;
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client, undefined, {
+    kubernetesResources: true,
+    inspectSharedAssetsVolume: async () => {
+      inspected += 1;
+      throw new Error("docker inspect must not run on Kubernetes");
+    },
+  });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  });
+  assert.equal(inspected, 0);
+  assert.equal(client.created.length, 1);
+});
+
 test("OpenSandbox provision fail-closes when the shared assets volume is not mounted", async () => {
   const session = fakeSession();
   session.run = async (command) => {
@@ -270,7 +320,9 @@ test("OpenSandbox provision fail-closes when the shared assets volume is not mou
     if (command === "cat /proc/mounts") return { exitCode: 0, stdout: "overlay / overlay rw 0 0\n", stderr: "" };
     return { exitCode: 0, stdout: "", stderr: "" };
   };
-  const runner = new OpenSandboxRunner(fakeClient(session));
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    inspectSharedAssetsVolume: async () => {},
+  });
   await assert.rejects(runner.provision({
     jobId: "11111111-1111-4111-8111-111111111111",
     attemptId: "22222222-2222-4222-8222-222222222222",

@@ -873,9 +873,17 @@ export async function runOpenSandboxCliLaunchPoc(
 
 export async function runOpenSandboxAssetsPoc(
   client: OpenSandboxClient,
-  input: { image: string; volumeName: string; jobId?: string; attemptId?: string },
+  input: {
+    image: string;
+    volumeName: string;
+    jobId?: string;
+    attemptId?: string;
+    inspectSharedAssetsVolume?: (volumeName: string, jobId: string) => Promise<void>;
+  },
 ): Promise<{ mounted: boolean; readonly: boolean; seedOk: boolean; leftovers: number }> {
-  const runner = new OpenSandboxRunner(client);
+  const runner = new OpenSandboxRunner(client, undefined, {
+    inspectSharedAssetsVolume: input.inspectSharedAssetsVolume,
+  });
   const jobId = input.jobId ?? ids().jobId;
   const attemptId = input.attemptId ?? ids().attemptId;
   const handle = await runner.provision({

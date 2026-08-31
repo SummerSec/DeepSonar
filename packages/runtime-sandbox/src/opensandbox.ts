@@ -10,9 +10,11 @@ import {
   SHARED_ASSETS_MOUNT_PATH,
   assertReadableWorkspacePath,
   assertSharedAssetsGuestMount,
+  assertSharedAssetsVolumeOwnership,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
 } from "./runtime-shared.js";
+import { docker } from "./runtime-docker.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 import { isManagedRuntimeResource, OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
@@ -278,6 +280,22 @@ export interface OpenSandboxRunnerOptions {
    * Per-call `ProvisionInput.kubernetesResources` 优先。
    */
   kubernetesResources?: boolean;
+  /** Docker 路径：create 前校验 Scheduler 已准备的 labeled volume，避免引擎自动建空卷。 */
+  inspectSharedAssetsVolume?: (volumeName: string, jobId: string) => Promise<void>;
+}
+
+export async function inspectPreparedSharedAssetsVolume(volumeName: string, jobId: string): Promise<void> {
+  const raw = await docker("volume", "inspect", volumeName, "--format", "{{json .}}");
+  let inspected: unknown;
+  try {
+    inspected = JSON.parse(raw);
+  } catch {
+    throw new Error("shared assets volume inspect is not JSON");
+  }
+  if (!inspected || typeof inspected !== "object") {
+    throw new Error("shared assets volume inspect is not JSON");
+  }
+  assertSharedAssetsVolumeOwnership(inspected, volumeName, jobId);
 }
 
 export class OpenSandboxRunner implements SandboxRunner {
@@ -293,6 +311,11 @@ export class OpenSandboxRunner implements SandboxRunner {
 
   async provision(input: ProvisionInput): Promise<RunHandle> {
     if (input.signal?.aborted) throw new Error("provision 已取消");
+    const kubernetes = input.kubernetesResources ?? this.options.kubernetesResources;
+    if (input.sharedAssetsMount && !kubernetes) {
+      const inspect = this.options.inspectSharedAssetsVolume ?? inspectPreparedSharedAssetsVolume;
+      await inspect(input.sharedAssetsMount.volumeName, input.jobId);
+    }
     const key = `${input.jobId}:${input.attemptId}`;
     const created = this.client.create(mapOpenSandboxCreateInput({
       ...input,

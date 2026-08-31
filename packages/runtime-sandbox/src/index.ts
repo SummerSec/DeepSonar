@@ -132,6 +132,7 @@ export {
   awaitProvisionSession,
   createSdkOpenSandboxClient,
   evaluateOpenSandboxAlive,
+  inspectPreparedSharedAssetsVolume,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,

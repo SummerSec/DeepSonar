@@ -514,6 +514,7 @@ test("OpenSandbox assets PoC mounts Scheduler volume read-only and reads the see
   const result = await runOpenSandboxAssetsPoc(client, {
     image: "img@sha256:" + "a".repeat(64),
     volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111",
+    inspectSharedAssetsVolume: async () => {},
   });
   assert.deepEqual(result, { mounted: true, readonly: true, seedOk: true, leftovers: 0 });
   assert.equal(created[0]?.volumes[0]?.readOnly, true);
