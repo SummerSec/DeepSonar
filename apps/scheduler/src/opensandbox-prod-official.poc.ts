@@ -12,7 +12,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSdkOpenSandboxClient,
+  OPENSANDBOX_POC_CLI_IDS,
   readOpenSandboxPin,
+  runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
   shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
@@ -155,11 +157,22 @@ try {
   if (leftovers.length > 0) {
     throw new Error(`official overlay leftover: ${leftovers.map((item) => item.resourceId).join(",")}`);
   }
+  const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+  let official: { provisionMs: number; clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>> } | null = null;
+  if (runtimeImage) {
+    official = await runOpenSandboxImageContractPoc(overlayClient, { image: runtimeImage });
+    const missing = OPENSANDBOX_POC_CLI_IDS.filter((id) => official.clis[id] !== true);
+    if (missing.length > 0) {
+      throw new Error(`official overlay runtime CLI missing: ${missing.join(",")}`);
+    }
+  }
   if (!existingOpenSandboxRunning()) {
     throw new Error("official overlay provision stopped Phase 2 deepsonar-opensandbox");
   }
   console.log(
-    `OK: OpenSandbox official prod web=200 silo=ready overlay=healthy leftover_server=1 bridge=true provision=true leftover=0 createMs=${created.createMs} port=${webPort} osPort=${osHostPort}`,
+    `OK: OpenSandbox official prod web=200 silo=ready overlay=healthy leftover_server=1 bridge=true provision=true leftover=0 createMs=${created.createMs}${
+      official ? ` official=true officialMs=${official.provisionMs} clis=${OPENSANDBOX_POC_CLI_IDS.join(",")}` : ""
+    } port=${webPort} osPort=${osHostPort}`,
   );
 } finally {
   down();
