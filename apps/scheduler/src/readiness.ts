@@ -8,7 +8,7 @@ import {
   type ReadinessRoleSummary,
   type ReadinessRuntimeImageSummary,
 } from "@deepsonar/shared-types";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
 import { isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
@@ -816,7 +816,7 @@ export async function loadReadiness(
     materialSource?: ReadinessMaterialSource;
   } = {},
 ): Promise<ReadinessResponseType> {
-  const hostDisk = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker"
+  const hostDisk = managesHostDockerRuntime()
     ? await refreshHostDiskPressure()
     : undefined;
   const openSandboxServer = config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox"

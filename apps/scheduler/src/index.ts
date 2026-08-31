@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { getSharedAssetBlobStore } from "./blob-store/index.js";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import { migrate, sql } from "./db.js";
 import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
@@ -45,8 +45,7 @@ async function main() {
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
-  const managesLocalDocker = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
-  if (managesLocalDocker) await refreshHostDiskPressure();
+  if (managesHostDockerRuntime()) await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();
 
   const app = Fastify({
@@ -112,7 +111,7 @@ async function main() {
   }, {
     afterPrepare: async (refs) => {
       if (config.runtime.agentMode === "fake") return;
-      if (config.runtime.provider !== "local-docker" && config.runtime.provider !== "opensandbox") return;
+      if (config.runtime.provider !== "opensandbox") return;
       const base = refs.find((item) => item.image_key === "deepsonar-base") ?? refs[0];
       if (!base) return;
       await preheatManagedGateway({

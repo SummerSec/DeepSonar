@@ -327,3 +327,16 @@ export const config = {
     },
   },
 } as const;
+
+/** OpenSandbox Docker shares the Scheduler host engine; Kata does not. */
+export function managesHostDockerRuntime(
+  runtime: {
+    agentMode: string;
+    provider: string;
+    openSandbox?: { kubernetes?: boolean };
+  } = config.runtime,
+): boolean {
+  return runtime.agentMode === "real"
+    && runtime.provider === "opensandbox"
+    && runtime.openSandbox?.kubernetes !== true;
+}

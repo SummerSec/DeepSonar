@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import {
   hostDiskAllowsDispatch,
   refreshHostDiskPressure,
@@ -12,6 +12,17 @@ function statfsAt(usedPercent: number) {
   const used = BigInt(Math.floor(usedPercent * 100));
   return async () => ({ blocks, bavail: blocks - used });
 }
+
+test("host Docker lifecycle follows OpenSandbox Docker, not Kata or deleted providers", () => {
+  assert.equal(managesHostDockerRuntime({ agentMode: "real", provider: "opensandbox" }), true);
+  assert.equal(managesHostDockerRuntime({
+    agentMode: "real",
+    provider: "opensandbox",
+    openSandbox: { kubernetes: true },
+  }), false);
+  assert.equal(managesHostDockerRuntime({ agentMode: "fake", provider: "opensandbox" }), false);
+  assert.equal(managesHostDockerRuntime({ agentMode: "real", provider: "local-docker" }), false);
+});
 
 test("host disk pressure distinguishes ok, warning and dispatch-blocking error", async () => {
   const ok = await refreshHostDiskPressure(statfsAt(config.hostDisk.warningPercent - 1));

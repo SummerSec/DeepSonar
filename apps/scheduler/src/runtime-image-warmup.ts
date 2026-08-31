@@ -96,8 +96,7 @@ export function startRuntimeImageWarmupOnBoot(
   onReady: () => void,
   extras: { afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void> } = {},
 ): () => void {
-  const hostPull = config.runtime.agentMode === "real"
-    && (config.runtime.provider === "local-docker" || config.runtime.provider === "opensandbox");
+  const hostPull = config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox";
   startupCoordinator = createRuntimeImageWarmupCoordinator({
     resolveRefs: hostPull
       ? async () => withSharedAssetsHelperRef(await resolveStartupRuntimeImages())

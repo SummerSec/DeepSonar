@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { config } from "../../config.js";
+import { config, managesHostDockerRuntime } from "../../config.js";
 import { projectCredentialMetadata } from "../../credentials.js";
 import { sql } from "../../db.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
@@ -841,7 +841,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
           if (!version) return reply.code(409).send({ error: "镜像没有可启用的可信版本" });
         } else {
           const snapshot = await resolveRuntimeImageForProjectBinding(sql, imageId, selectedVersionId);
-          if (config.runtime.provider === "local-docker") {
+          if (managesHostDockerRuntime()) {
             const preparation = await requestRuntimeImagePreparation(
               [{ image_key: snapshot.image_key, image_ref: snapshot.image_ref }],
               `project_binding:${id}:${imageId}`,

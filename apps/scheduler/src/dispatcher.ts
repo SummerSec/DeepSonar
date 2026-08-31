@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
   DISPATCH_CLAIM_ADVISORY_KEY,
@@ -493,7 +493,7 @@ async function graphEligibilityReasonFromDb(
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string }[]> {
-  if (config.runtime.agentMode === "real" && config.runtime.provider === "local-docker") {
+  if (managesHostDockerRuntime()) {
     const disk = await refreshHostDiskPressure();
     if (!hostDiskAllowsDispatch(disk)) {
       if (disk.level === "error") {
