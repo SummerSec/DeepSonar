@@ -262,6 +262,7 @@ test("OpenSandbox prod-compose PoC source-text contract builds against Phase 2 s
   assert.match(source, /BLOB_STORE=s3/);
   assert.match(source, /silo=ready blob=s3/);
   assert.match(source, /host\.docker\.internal:\$\{schedulerPort\}\/gateway/);
+  assert.match(source, /GATEWAY_PROXY_SCRIPT/);
   assert.match(source, /_deepsonar_health/);
   assert.match(source, /sidecar \/gateway forward failed/);
   assert.match(source, /prod-compose started extra OpenSandbox/);
