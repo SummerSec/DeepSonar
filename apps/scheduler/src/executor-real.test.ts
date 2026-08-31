@@ -124,6 +124,8 @@ test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () 
   assert.match(source, /vendor CLI E2E requires all five CLIs/);
   assert.match(source, /vendor CLI E2E incomplete/);
   assert.match(source, /vendor CLI E2E needs host docker access for Gateway bind/);
+  assert.match(source, /assertVendorUpstreamPayload/);
+  assert.match(source, /assertVendorPlanReachable/);
   assert.match(source, /for \(const selectedCli of selectedClis\)/);
   assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\[selectedCli\]/);
   assert.match(source, /encodeSteer/);

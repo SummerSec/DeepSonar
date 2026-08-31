@@ -14,6 +14,7 @@ import {
   CLI_SESSION_ADAPTERS,
   DEEPSONAR_GATEWAY_PROXY_HOST,
   applyRuntimeOutputText,
+  assertVendorUpstreamPayload,
   freezeAgentCliRuntime,
   runtimeCliEnv,
   shouldRunOpenSandboxPoc,
@@ -92,6 +93,42 @@ try {
   await execFileP("docker", ["info"], { timeout: 10_000 });
 } catch {
   throw new Error("vendor CLI E2E needs host docker access for Gateway bind");
+}
+
+async function assertVendorPlanReachable(plan: VendorPlan, secret: string): Promise<void> {
+  const anthropic = plan.provider === "anthropic";
+  const origin = (plan.baseUrl || (anthropic ? "https://api.anthropic.com" : "https://api.openai.com")).replace(/\/$/, "");
+  const url = anthropic ? `${origin}/v1/messages` : `${origin}/v1/chat/completions`;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${secret}`,
+  };
+  if (anthropic) {
+    headers["x-api-key"] = secret;
+    headers["anthropic-version"] = "2023-06-01";
+  }
+  const model = plan.model.replace(/\[[^\]]*\]$/u, "");
+  const body = anthropic
+    ? { model, max_tokens: 8, messages: [{ role: "user", content: "ping" }] }
+    : { model, max_tokens: 8, messages: [{ role: "user", content: "ping" }] };
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  assertVendorUpstreamPayload(response.headers.get("content-type") ?? "", await response.text());
+}
+
+const probed = new Set<string>();
+for (const cli of selectedClis) {
+  const plan = vendorPlans[cli];
+  const secret = plan.secret;
+  if (!secret) continue;
+  const key = `${plan.provider}:${plan.baseUrl ?? ""}`;
+  if (probed.has(key)) continue;
+  probed.add(key);
+  await assertVendorPlanReachable(plan, secret);
 }
 
 const adminUrl = new URL(databaseUrl);

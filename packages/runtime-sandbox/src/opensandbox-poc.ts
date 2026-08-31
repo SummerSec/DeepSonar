@@ -70,6 +70,18 @@ export function listOfficialOpenSandboxRuntimeImages(registry: unknown): Officia
 export function isOpenSandboxCliMissing(text: string): boolean {
   return /command not found|No such file or directory|(?:^|[\n\r])(?:\/bin\/)?(?:ba)?sh: [^\n]* not found/i.test(text);
 }
+
+/** Vendor-model E2E fail-closes on HTML/WAF pages; mock or captcha is not a model JSON endpoint. */
+export function assertVendorUpstreamPayload(contentType: string, body: string): void {
+  const ct = contentType.toLowerCase();
+  const text = body.trimStart();
+  if (ct.includes("text/html") || text.startsWith("<!") || /^<html[\s>]/i.test(text)) {
+    throw new Error("VENDOR_UPSTREAM_NOT_JSON");
+  }
+  if (!text.startsWith("{") && !text.startsWith("[")) {
+    throw new Error("VENDOR_UPSTREAM_NOT_JSON");
+  }
+}
 const OPENSANDBOX_POC_CLI_PROBES: Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], string> = {
   claude: "command -v claude",
   codex: "command -v codex",

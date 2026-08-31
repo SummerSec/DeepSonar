@@ -20,6 +20,7 @@ import {
   runOpenSandboxRetryPoc,
   shouldRunOpenSandboxPoc,
   isOpenSandboxCliMissing,
+  assertVendorUpstreamPayload,
 } from "./opensandbox-poc.js";
 import { OpenSandboxRunner } from "./opensandbox.js";
 import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
@@ -69,6 +70,14 @@ test("OpenSandbox PoC stays skip-safe unless explicitly enabled", () => {
   assert.equal(shouldRunOpenSandboxPoc({ OPEN_SANDBOX_POC: "1" }), true);
   assert.match(OPENSANDBOX_POC_IMAGE, /busybox@sha256:[0-9a-f]{64}/);
   assert.equal(OPENSANDBOX_POC_CONTRACT, "deepsonar.runtime.contract/v1");
+});
+
+test("vendor model E2E fail-closes HTML or non-JSON upstream payloads", () => {
+  assert.doesNotThrow(() => assertVendorUpstreamPayload("application/json", '{"type":"error"}'));
+  assert.doesNotThrow(() => assertVendorUpstreamPayload("application/json; charset=utf-8", "\n{\"id\":\"ok\"}"));
+  assert.throws(() => assertVendorUpstreamPayload("text/html", "<!doctype html>"), /VENDOR_UPSTREAM_NOT_JSON/);
+  assert.throws(() => assertVendorUpstreamPayload("application/json", "<html><body>captcha</body></html>"), /VENDOR_UPSTREAM_NOT_JSON/);
+  assert.throws(() => assertVendorUpstreamPayload("text/plain", "ok"), /VENDOR_UPSTREAM_NOT_JSON/);
 });
 
 test("OpenSandbox infrastructure PoC creates, probes, lists, and destroys", async () => {
