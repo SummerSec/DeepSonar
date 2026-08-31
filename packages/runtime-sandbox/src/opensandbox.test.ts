@@ -398,3 +398,22 @@ test("OpenSandbox host rejects reserved workspace reads and inbox path traversal
     /path_forbidden/,
   );
 });
+
+test("OpenSandbox destroy waits until the sandbox disappears from list", async () => {
+  const client = fakeClient();
+  let present = 2;
+  client.destroy = async () => {
+    present -= 1;
+  };
+  client.list = async () => (present > 0
+    ? [{
+        resourceId: "sbx-1",
+        jobId: "11111111-1111-4111-8111-111111111111",
+        attemptId: "22222222-2222-4222-8222-222222222222",
+        state: "Running",
+      }]
+    : []);
+  const runner = new OpenSandboxRunner(client);
+  await runner.destroy({ sandboxId: "sbx-1" });
+  assert.equal(present, 0);
+});

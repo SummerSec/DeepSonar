@@ -53,7 +53,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(pkg, /ci:smoke:opensandbox-prod-stack/);
   assert.match(pkg, /ci:smoke:opensandbox-prod-compose": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-prod-official/);
+  assert.match(pkg, /ci:smoke:opensandbox-prod-official": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-reconcile": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-reaper": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);

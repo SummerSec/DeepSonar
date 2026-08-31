@@ -379,6 +379,7 @@ export class OpenSandboxRunner implements SandboxRunner {
       await Promise.allSettled([...sessions].map((session) => session.close()));
     }
     await this.destroyResource({ resourceId: handle.sandboxId, jobId: "", attemptId: "" });
+    await this.waitUntilGone(handle.sandboxId);
   }
 
   async isAlive(handle: RunHandle): Promise<boolean> {
@@ -484,6 +485,17 @@ export class OpenSandboxRunner implements SandboxRunner {
     for (const resource of leftovers) {
       await this.destroyResource(resource);
     }
+  }
+
+  private async waitUntilGone(resourceId: string, timeoutMs = 20_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const items = await this.client.list();
+      if (!items.some((item) => item.resourceId === resourceId)) return;
+      await this.destroyResource({ resourceId, jobId: "", attemptId: "" }).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    throw new Error(`OPENSANDBOX_DESTROY_LEFTOVER: ${resourceId}`);
   }
 }
 

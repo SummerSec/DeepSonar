@@ -513,7 +513,7 @@ export async function runOpenSandboxImageContractPoc(
     }
     return { provisionMs, clis, leftovers: 0 };
   } finally {
-    await runner.destroy(handle).catch(() => {});
+    await runner.destroy(handle);
     const leftovers = await runner.listResources({ jobId, attemptId });
     if (leftovers.length > 0) {
       throw new Error(`OPENSANDBOX_POC_LEFTOVER: ${leftovers.map((item) => item.resourceId).join(",")}`);
