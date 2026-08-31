@@ -14,7 +14,7 @@ test("usage JSON 跨 chunk 且完整记录落在前一块尾部时只累计一�
   scanner.push('data: {"usage":{"input_tokens":12,"output_tokens":5}}\n');
   scanner.push('data: {"usage":{"input_tokens":12,');
   scanner.push('"output_tokens":5}}\n');
-  assert.deepEqual(scanner.finish(), { input: 12, output: 5, total: 17 });
+  assert.deepEqual(scanner.finish(), { input: 12, output: 5, total: 17, cacheRead: 0, cacheWrite: 0 });
 });
 
 test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {
@@ -102,8 +102,30 @@ test("Gateway 出站 body 按冻结 snapshot.upstream_model 改写 CLI 别名", 
 
 test("OpenAI usage 字段可解析，重复完整行不会重复计费", () => {
   const line = 'data: {"usage":{"prompt_tokens":20,"completion_tokens":7}}';
-  assert.deepEqual(extractUsageBreakdown(line), { input: 20, output: 7, total: 27 });
+  assert.deepEqual(extractUsageBreakdown(line), { input: 20, output: 7, total: 27, cacheRead: 0, cacheWrite: 0 });
   const scanner = createGatewayUsageScanner();
   scanner.push(`${line}\n${line}\n`);
-  assert.deepEqual(scanner.finish(), { input: 20, output: 7, total: 27 });
+  assert.deepEqual(scanner.finish(), { input: 20, output: 7, total: 27, cacheRead: 0, cacheWrite: 0 });
+});
+
+test("Anthropic 缓存读写与嵌套 cache_creation 计入账本，不并入 input/total", () => {
+  const line = 'data: {"usage":{"input_tokens":50,"output_tokens":8,"cache_read_input_tokens":900,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":500}}}';
+  assert.deepEqual(extractUsageBreakdown(line), {
+    input: 50,
+    output: 8,
+    total: 58,
+    cacheRead: 900,
+    cacheWrite: 2500,
+  });
+});
+
+test("OpenAI prompt_tokens_details.cached_tokens 记为缓存读，嵌套对象不打断 input/output", () => {
+  const line = 'data: {"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":80},"completion_tokens":12}}';
+  assert.deepEqual(extractUsageBreakdown(line), {
+    input: 100,
+    output: 12,
+    total: 112,
+    cacheRead: 80,
+    cacheWrite: 0,
+  });
 });

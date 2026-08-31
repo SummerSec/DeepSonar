@@ -21,6 +21,8 @@ function row(overrides: Partial<UsageLedgerRow> = {}): UsageLedgerRow {
     input_tokens: 10,
     output_tokens: 4,
     total_tokens: 14,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
     settlement_status: "settled",
     provider: "anthropic",
     model: "claude",
@@ -119,6 +121,8 @@ test("usage board aggregates tokens by day, project, task, and model", () => {
         input_tokens: 20,
         output_tokens: 6,
         total_tokens: 26,
+        cache_read_input_tokens: 80,
+        cache_creation_input_tokens: 12,
         job_id: "job-2",
         canvas_id: "canvas-2",
         canvas_title: "复测",
@@ -143,6 +147,9 @@ test("usage board aggregates tokens by day, project, task, and model", () => {
   assert.equal(usage.totals.input_tokens, 40);
   assert.equal(usage.totals.output_tokens, 14);
   assert.equal(usage.totals.total_tokens, 54);
+  assert.equal(usage.totals.cache_read_input_tokens, 80);
+  assert.equal(usage.totals.cache_creation_input_tokens, 12);
+  assert.equal(usage.series.find((day) => day.date === "2026-08-18")?.cache_read_input_tokens, 80);
   assert.equal(usage.totals.jobs, 3);
   assert.equal(usage.totals.projects, 2);
   assert.equal(usage.totals.tasks, 3);

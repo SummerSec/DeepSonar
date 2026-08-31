@@ -29,3 +29,38 @@ export function usagePeriodLabel(period: UsagePeriod): string {
 export function usageEmpty(usage: DashboardUsage | null): boolean {
   return !usage || usage.totals.requests === 0;
 }
+
+export const USAGE_LEDGER_PREF_PREFIX = "deepsonar:usage-ledger";
+
+export function usageLedgerPageKey(
+  scope: "global" | "project" | "task",
+  projectId?: string,
+  canvasId?: string,
+): string {
+  if (scope === "task" && canvasId) return `task:${canvasId}`;
+  if (scope === "project" && projectId) return `project:${projectId}`;
+  return "global";
+}
+
+export function usageLedgerPrefKey(userKey: string, pageKey: string): string {
+  return `${USAGE_LEDGER_PREF_PREFIX}:${userKey || "local"}:${pageKey}`;
+}
+
+export function readUsageLedgerCollapsed(userKey: string, pageKey: string): boolean {
+  try {
+    const raw = globalThis.localStorage?.getItem(usageLedgerPrefKey(userKey, pageKey));
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { collapsed?: unknown };
+    return parsed.collapsed === true;
+  } catch {
+    return false;
+  }
+}
+
+export function writeUsageLedgerCollapsed(userKey: string, pageKey: string, collapsed: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(usageLedgerPrefKey(userKey, pageKey), JSON.stringify({ collapsed }));
+  } catch {
+    /* quota / private mode */
+  }
+}

@@ -387,7 +387,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
            WHERE source_job_id = ${id} OR target_job_id = ${id}
            ORDER BY created_at DESC LIMIT 100`,
       sql`SELECT id, attempt_id, effect_id, request_no, provider, model, input_tokens,
-                 output_tokens, total_tokens, adjustment_tokens, settlement_status, source,
+                 output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+                 adjustment_tokens, settlement_status, source,
                  observed_at, created_at
             FROM job_usage_ledger WHERE job_id = ${id} ORDER BY request_no DESC LIMIT 100`,
       job.canvas_id

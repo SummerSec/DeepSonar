@@ -564,7 +564,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 
-每次 Gateway 请求写入 `job_usage_ledger`，通过 `attempt_id + effect_id` 幂等关联 Job Attempt；只保留 provider/model、请求序号、输入/输出/总 token 及 `settled|unknown|not_reported`，不落 prompt、响应正文、请求头和凭据。跨 chunk 的 SSE usage 只在完整记录边界解析并去重。响应已经发给 Worker 后账本写入失败不抛出未处理异常，同时递增低基数失败指标并留下 effect 对账线索。
+每次 Gateway 请求写入 `job_usage_ledger`，通过 `attempt_id + effect_id` 幂等关联 Job Attempt；只保留 provider/model、请求序号、输入/输出/总 token、缓存读/写 token 及 `settled|unknown|not_reported`，不落 prompt、响应正文、请求头和凭据。跨 chunk 的 SSE usage 只在完整记录边界解析并去重。响应已经发给 Worker 后账本写入失败不抛出未处理异常，同时递增低基数失败指标并留下 effect 对账线索。
 
 并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。项目可在 `projects.config_json.rules.maxConcurrentJobs` 把本项目 claim 预算收到不高于 `maxJobsPerProject` 的值（`0` 暂停新领取）；未设置则继承全局每项目上限。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型可用性只认 Credential `settings_config` 声明的清单，旧 `allowed_model_ids` 字段读写均静默忽略。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。
 
@@ -843,7 +843,7 @@ CANVAS_LAYOUT=auto
 - **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
 - **运行时选 TwillAI/agentbox-sdk（MIT）**：TS SDK 统一驱动沙箱与 Agent，事件走控制通道不经沙箱网络（化解"审计沙箱断网"与"事件回调"的矛盾，沙箱内零凭据）。已知风险：0.1.x 早期项目（2026-07 仍活跃），靠 runtime-adapter 接口隔离，最坏情况 fork local-docker provider（代码薄）
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
-- **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算。`GET /dashboard/usage` 按日/周/月或自定义时间把账本聚到全局/项目/任务看板，不把 Session 归档 usage 与 Gateway 行对账成同一数字
+- **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果（含缓存读/写）；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算。`GET /dashboard/usage` 按日/周/月或自定义时间把账本聚到全局/项目/任务看板，不把 Session 归档 usage 与 Gateway 行对账成同一数字
 - **不评估 Claude Agent SDK**：只用 CLI 路线（经 agentbox-sdk 的 claude-code provider）
 - **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper、无 Plane 同步），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
 - **画布引擎选 React Flow 而非 tldraw/Excalidraw**：画布本质是结构化节点-边图而非白板；React Flow（MIT）与 nodes/edges 表 1:1 映射、节点即 React 组件（finding 卡片可交互）；tldraw 生产商用有授权费用、Excalidraw 无法嵌入 React 节点。若二期需要手绘标注/多人白板协同，再单独评估 tldraw
