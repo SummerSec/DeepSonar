@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.46] - 2026-08-31
+
 ### 新增
 
 - 官方 `deepsonar-mobile` 专项镜像（project opt-in）：覆盖 Android（JADX CLI、apktool、bundletool、apkeep、androguard、官方 ADB、Frida/Objection；`.so` 用 binutils / radare2 / LIEF）、iOS Linux 宿主（libimobiledevice / plistutil / iproxy）与 OpenHarmony 应用/设备（HAP 静态检查 + 官方 hdc）。对照 [awesome-ai-reverse](https://github.com/DiscoverBox/awesome-ai-reverse) 只并入官方可钉死的基础 CLI；不预装 MobSF、jadx-gui、Burp、mitmproxy、IDA、Ghidra、DevEco、决策扫描器或 JADX-AI-MCP / apktool-mcp / FIRERPA 等 MCP。无 adb / hdc / idevice 目标时必须结构化 `needs_human` / `inconclusive`。现有 `deepsonar-openharmony-*` 仍负责源码构建/Clang/fuzz。
@@ -469,6 +471,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/SummerSec/DeepSonar/compare/v0.1.43...v0.1.44
 [0.1.43]: https://github.com/SummerSec/DeepSonar/compare/v0.1.42...v0.1.43
