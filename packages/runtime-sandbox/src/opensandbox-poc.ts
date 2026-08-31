@@ -82,6 +82,12 @@ export function assertVendorUpstreamPayload(contentType: string, body: string): 
     throw new Error("VENDOR_UPSTREAM_NOT_JSON");
   }
 }
+
+/** 2xx = usable; 400 = auth accepted on the ping. 401 JSON is not an official vendor key. */
+export function assertVendorUpstreamStatus(status: number): void {
+  if ((status >= 200 && status < 300) || status === 400) return;
+  throw new Error(`VENDOR_UPSTREAM_HTTP_${status}`);
+}
 const OPENSANDBOX_POC_CLI_PROBES: Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], string> = {
   claude: "command -v claude",
   codex: "command -v codex",

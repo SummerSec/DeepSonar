@@ -21,6 +21,7 @@ import {
   shouldRunOpenSandboxPoc,
   isOpenSandboxCliMissing,
   assertVendorUpstreamPayload,
+  assertVendorUpstreamStatus,
 } from "./opensandbox-poc.js";
 import { OpenSandboxRunner } from "./opensandbox.js";
 import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
@@ -78,6 +79,10 @@ test("vendor model E2E fail-closes HTML or non-JSON upstream payloads", () => {
   assert.throws(() => assertVendorUpstreamPayload("text/html", "<!doctype html>"), /VENDOR_UPSTREAM_NOT_JSON/);
   assert.throws(() => assertVendorUpstreamPayload("application/json", "<html><body>captcha</body></html>"), /VENDOR_UPSTREAM_NOT_JSON/);
   assert.throws(() => assertVendorUpstreamPayload("text/plain", "ok"), /VENDOR_UPSTREAM_NOT_JSON/);
+  assert.doesNotThrow(() => assertVendorUpstreamStatus(200));
+  assert.doesNotThrow(() => assertVendorUpstreamStatus(400));
+  assert.throws(() => assertVendorUpstreamStatus(401), /VENDOR_UPSTREAM_HTTP_401/);
+  assert.throws(() => assertVendorUpstreamStatus(403), /VENDOR_UPSTREAM_HTTP_403/);
 });
 
 test("OpenSandbox infrastructure PoC creates, probes, lists, and destroys", async () => {

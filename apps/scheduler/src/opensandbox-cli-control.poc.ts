@@ -15,6 +15,7 @@ import {
   DEEPSONAR_GATEWAY_PROXY_HOST,
   applyRuntimeOutputText,
   assertVendorUpstreamPayload,
+  assertVendorUpstreamStatus,
   freezeAgentCliRuntime,
   runtimeCliEnv,
   shouldRunOpenSandboxPoc,
@@ -117,7 +118,9 @@ async function assertVendorPlanReachable(plan: VendorPlan, secret: string): Prom
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   });
-  assertVendorUpstreamPayload(response.headers.get("content-type") ?? "", await response.text());
+  const text = await response.text();
+  assertVendorUpstreamPayload(response.headers.get("content-type") ?? "", text);
+  assertVendorUpstreamStatus(response.status);
 }
 
 const probed = new Set<string>();
