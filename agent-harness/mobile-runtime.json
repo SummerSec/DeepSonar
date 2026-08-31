@@ -120,6 +120,18 @@
         }
       }
     },
+    "apkcheckpack": {
+      "version": "20260618",
+      "license": "NOASSERTION",
+      "capabilities": ["apk-packer-fingerprint"],
+      "source": "upstream GitHub release linux-amd64 binary (statically linked). amd64 runs it natively; arm64 runs the same official binary via qemu-user-static. Not a platform-prescribed scan entry.",
+      "assets": {
+        "all": {
+          "url": "https://github.com/moyuwa/ApkCheckPack/releases/download/20260618/ApkCheckPack_linux_amd64",
+          "sha256": "c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"
+        }
+      }
+    },
     "frida-server": {
       "version": "17.17.0",
       "license": "wxWindows Library Licence 3.1",
@@ -160,7 +172,7 @@
   "toolsets": {
     "mobile": {
       "imageKey": "deepsonar-mobile",
-      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
       "maxSizeMiB": 2400
     }
   }

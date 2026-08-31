@@ -150,7 +150,7 @@ Cosign 3 默认不对官方 catalog digest 验签（`signature: skipped`）。�
 | `deepsonar-kali-minimal` | Test 默认（无 metapackage/GUI） |
 | `deepsonar-openharmony-*` | OH 源码 test/audit/fuzz（project opt-in） |
 | `deepsonar-chrome-*` | Chrome audit/test/fuzz（project opt-in） |
-| `deepsonar-mobile` | 移动端 Android/iOS/OpenHarmony（JADX/apktool/bundletool/apkeep/androguard/ADB/Frida、binutils/radare2/LIEF、libimobiledevice、HAP/hdc；project opt-in） |
+| `deepsonar-mobile` | 移动端 Android/iOS/OpenHarmony（JADX/apktool/bundletool/apkeep/androguard/ApkCheckPack/ADB/Frida、binutils/radare2/LIEF、libimobiledevice、HAP/hdc；project opt-in） |
 
 Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_TEST_TOOLCHAINS.md`](./RUNTIME_TEST_TOOLCHAINS.md)。
 

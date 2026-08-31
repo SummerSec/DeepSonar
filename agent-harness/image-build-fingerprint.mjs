@@ -182,6 +182,7 @@ export const PRESETS = {
       "deploy/mobile-ios.sh",
       "deploy/mobile-hap.sh",
       "deploy/mobile-so.sh",
+      "deploy/mobile-apkcheckpack-bin.sh",
       "deploy/openharmony-hdc-bin.sh",
       "deploy/vendor/openharmony-hdc/hdc",
       "deploy/vendor/openharmony-hdc/libusb_shared.so",

@@ -7,6 +7,7 @@
 ### 新增
 
 - 官方 `deepsonar-mobile` 专项镜像（project opt-in）：覆盖 Android（JADX CLI、apktool、bundletool、apkeep、androguard、官方 ADB、Frida/Objection；`.so` 用 binutils / radare2 / LIEF）、iOS Linux 宿主（libimobiledevice / plistutil / iproxy）与 OpenHarmony 应用/设备（HAP 静态检查 + 官方 hdc）。对照 [awesome-ai-reverse](https://github.com/DiscoverBox/awesome-ai-reverse) 只并入官方可钉死的基础 CLI；不预装 MobSF、jadx-gui、Burp、mitmproxy、IDA、Ghidra、DevEco、决策扫描器或 JADX-AI-MCP / apktool-mcp / FIRERPA 等 MCP。无 adb / hdc / idevice 目标时必须结构化 `needs_human` / `inconclusive`。现有 `deepsonar-openharmony-*` 仍负责源码构建/Clang/fuzz。
+- `deepsonar-mobile` 钉入 [ApkCheckPack](https://github.com/moyuwa/ApkCheckPack) `20260618`（linux-amd64 静态二进制 + arm64 qemu）。Agent 可选用的加固/SDK 指纹 CLI，不是平台规定扫描入口，也不把输出当成 Finding。
 
 ### 修复
 

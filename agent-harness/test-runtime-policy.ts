@@ -48,6 +48,10 @@ assert.match(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
   /Mobile device protocols/,
 );
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /apkcheckpack/,
+);
 assert.doesNotMatch(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
   /Mobile device protocols/,
