@@ -189,6 +189,7 @@ export {
   OPENSANDBOX_SERVER_IMAGE,
   assertOpenSandboxImmutableRef,
   assertOpenSandboxSdkVersion,
+  isManagedRuntimeResource,
   readOpenSandboxPin,
 } from "./opensandbox-version.js";
 export type { OpenSandboxPin } from "./opensandbox-version.js";

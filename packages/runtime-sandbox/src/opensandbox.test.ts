@@ -10,6 +10,7 @@ import {
   type OpenSandboxCreateInput,
   type OpenSandboxSession,
 } from "./opensandbox.js";
+import { isManagedRuntimeResource } from "./opensandbox-version.js";
 
 function fakeSession(id = "sbx-1"): OpenSandboxSession & { commands: string[]; files: Array<{ path: string; bytes: number }> } {
   const commands: string[] = [];
@@ -241,6 +242,23 @@ test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays R
     getState: async () => { throw new Error("api down"); },
     probe: async () => ({ exitCode: 0 }),
   }), false);
+});
+
+test("OpenSandbox listResources keeps only dual canonical-UUID labels", async () => {
+  const client = fakeClient();
+  client.list = async () => [
+    { resourceId: "foreign", jobId: "", attemptId: "", state: "Running" },
+    { resourceId: "partial", jobId: "11111111-1111-4111-8111-111111111111", attemptId: "not-a-uuid", state: "Running" },
+    { resourceId: "managed", jobId: "11111111-1111-4111-8111-111111111111", attemptId: "22222222-2222-4222-8222-222222222222", state: "Running" },
+  ];
+  const runner = new OpenSandboxRunner(client);
+  const listed = await runner.listResources();
+  assert.deepEqual(listed.map((item) => item.resourceId), ["managed"]);
+  assert.equal(isManagedRuntimeResource({ jobId: "", attemptId: "" }), false);
+  assert.equal(isManagedRuntimeResource({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+  }), true);
 });
 
 test("OpenSandbox isAlive requires lifecycle Running and a healthy exec probe", async () => {

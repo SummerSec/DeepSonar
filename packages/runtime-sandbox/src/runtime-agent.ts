@@ -21,8 +21,11 @@ import {
   type DshProviderRuntimeConfig,
 } from "./runtime-adapters.js";
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
+import { createStdinCloseKiller } from "./runtime-stdin-close.js";
+
 
 export type ReasoningEffort = string;
+export { createStdinCloseKiller, DEFAULT_STDIN_CLOSE_KILL_MS } from "./runtime-stdin-close.js";
 
 export interface RealAgentSpec {
   provider: "claude-code" | "open-code" | "codex" | "dsh" | "pi";
@@ -97,6 +100,11 @@ export interface RealAgentSpec {
   secretValues?: readonly string[];
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
   onWarning?: (warning: { code: string; detail?: string }) => void;
+  /**
+   * closeStdin("terminal_result") 后若 CLI 仍驻留等 stdin，有界等待再 kill。
+   * 仅测试注入短超时；默认约 8s。initial_input 不会触发。
+   */
+  stdinCloseKillMs?: number;
 }
 
 export interface RealAgentResult {
@@ -1589,10 +1597,16 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let attemptTerminalResult: TerminalProcessAttempt["terminalResult"];
   let attemptCloseReason: TerminalAttemptCloseReason | undefined;
   let attemptStderrTail = "";
-  // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
+  // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin；
+  // execd 没有 EOF 控制帧，terminal_result 后有界等待再 kill，避免成功路径挂到 Reaper。
+  const stdinCloseKiller = createStdinCloseKiller({
+    kill: () => { void exec.kill().catch(() => {}); },
+    graceMs: spec.stdinCloseKillMs,
+  });
   const closeStdin = (reason?: TerminalAttemptCloseReason) => {
     if (reason) attemptCloseReason = reason;
     void exec.closeStdin().catch(() => {});
+    stdinCloseKiller.afterClose(reason);
   };
   if (!adapter.capabilities.incrementalMessages) closeStdin("initial_input");
   try {
@@ -1795,6 +1809,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       } catch (error) {
         processError = error;
       } finally {
+        stdinCloseKiller.cancel();
         if (piFramer) {
           try {
             piFramer.finish();
@@ -1902,6 +1917,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       terminalOutcome = "failure";
     }
   } finally {
+    stdinCloseKiller.cancel();
     discardPendingSemanticTools(semanticToolState, (warning) => spec.onWarning?.(warning));
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }

@@ -505,6 +505,17 @@ test("cli hint forces format when content is ambiguous", () => {
   assert.ok(asPi.items.some((item) => item.kind === "user" || item.kind === "assistant"));
 });
 
+test("unclosed JSONL junk starting with [ does not swallow later records", () => {
+  const text = [
+    "[garbage",
+    JSON.stringify({ type: "user", message: { role: "user", content: "hello" } }),
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  assert.equal(result.items.filter((item) => item.kind === "user").length, 1);
+  assert.equal(result.items.filter((item) => item.kind === "assistant").length, 1);
+});
+
 test("parses empty and invalid lines without throwing", () => {
   const result = parseAgentSession("\nnot-json\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}\n");
   assert.ok(result.totals.skipped >= 1);

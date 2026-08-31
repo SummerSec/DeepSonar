@@ -60,6 +60,24 @@ test("desired-state cleanup preserves only exact active Job/Attempt resources", 
   });
 });
 
+test("desired-state cleanup ignores sandboxes without dual canonical UUIDs", async () => {
+  resetResourceCleanupStateForTests();
+  const removedContainers: string[] = [];
+  const result = await cleanupManagedResourcesOnce(dependencies({
+    listContainers: async () => [
+      { containerId: "foreign", jobId: "", attemptId: "", state: "running" },
+      { containerId: "partial", jobId: terminalJob, attemptId: "not-a-uuid", state: "exited" },
+      { containerId: "managed-orphan", jobId: terminalJob, attemptId: oldAttempt, state: "exited" },
+    ],
+    listVolumes: async () => [],
+    removeContainer: async (containerId) => {
+      removedContainers.push(containerId);
+    },
+  }));
+  assert.deepEqual(removedContainers, ["managed-orphan"]);
+  assert.equal(result.removedContainers, 1);
+});
+
 test("desired-state cleanup reports residual resources and retries them next cycle", async () => {
   resetResourceCleanupStateForTests();
   let attempts = 0;

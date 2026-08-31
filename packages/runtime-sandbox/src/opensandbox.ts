@@ -13,7 +13,7 @@ import {
   parseToolManifest,
 } from "./runtime-shared.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
-import { OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
+import { isManagedRuntimeResource, OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
   assertWorkspaceWritePath,
   shellQuote,
@@ -444,8 +444,8 @@ export class OpenSandboxRunner implements SandboxRunner {
     return createOpenSandboxRuntimeHost(session);
   }
 
-  listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]> {
-    return this.client.list(filter);
+  async listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]> {
+    return (await this.client.list(filter)).filter(isManagedRuntimeResource);
   }
 
   async destroyResource(resource: RuntimeResource): Promise<void> {

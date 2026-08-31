@@ -1,6 +1,7 @@
 import {
   type DeepSonarContainer,
   type SharedAssetsVolumeManager,
+  isManagedRuntimeResource,
 } from "@deepsonar/runtime-sandbox";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
@@ -94,7 +95,9 @@ export async function cleanupManagedResourcesOnce(
       dependencies.listVolumes(),
     ]);
     const orphanContainers = containers.filter(
-      (container) => !activeAttempts.has(`${container.jobId.toLowerCase()}:${container.attemptId.toLowerCase()}`),
+      (container) =>
+        isManagedRuntimeResource(container)
+        && !activeAttempts.has(`${container.jobId.toLowerCase()}:${container.attemptId.toLowerCase()}`),
     );
     const orphanVolumes = volumes.filter((volume) => !activeJobIds.has(volume.jobId.toLowerCase()));
 

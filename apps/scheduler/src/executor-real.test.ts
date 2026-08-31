@@ -110,7 +110,8 @@ test("real executor round-trips only controlled rate-limit details after string 
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
 });
 
-test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", () => {
+// 以下 OpenSandbox 用例只核对 PoC 源文本契约，不启动 server，也不算 live smoke。
+test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () => {
   const source = readFileSync(new URL("./opensandbox-cli-control.poc.ts", import.meta.url), "utf8");
   assert.match(source, /ANTHROPIC_API_KEY/);
   assert.match(source, /ANTHROPIC_AUTH_TOKEN/);
@@ -148,7 +149,7 @@ test("OpenSandbox CLI control PoC is vendor-key gated and starts claude-code", (
   assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
 });
 
-test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay", () => {
+test("OpenSandbox reconcile PoC source-text contract orphans unknown effects", () => {
   const source = readFileSync(new URL("./opensandbox-reconcile.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
@@ -161,7 +162,7 @@ test("OpenSandbox reconcile PoC orphans unknown effects and does not auto-replay
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
-test("OpenSandbox Kata shared-assets PoC is independent of isolation smoke", () => {
+test("OpenSandbox Kata shared-assets PoC source-text contract is independent of isolation smoke", () => {
   const source = readFileSync(new URL("../../../packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts", import.meta.url), "utf8");
   const harness = readFileSync(new URL("../../../agent-harness/test-opensandbox-poc.ts", import.meta.url), "utf8");
   assert.match(source, /OPEN_SANDBOX_POC_K8S_ASSETS/);
@@ -173,7 +174,7 @@ test("OpenSandbox Kata shared-assets PoC is independent of isolation smoke", () 
   assert.doesNotMatch(source, /runOpenSandboxK8sPoc\(/);
 });
 
-test("OpenSandbox gVisor PoC fail-closes a working iptables nat table", () => {
+test("OpenSandbox gVisor PoC source-text contract fail-closes a working iptables nat table", () => {
   const source = readFileSync(new URL("./opensandbox-gvisor.poc.ts", import.meta.url), "utf8");
   assert.match(source, /shouldRunOpenSandboxGvisorPoc/);
   assert.match(source, /runOpenSandboxGvisorPoc/);
@@ -183,7 +184,7 @@ test("OpenSandbox gVisor PoC fail-closes a working iptables nat table", () => {
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
-test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", () => {
+test("OpenSandbox reaper PoC source-text contract times out and orphans leftovers", () => {
   const source = readFileSync(new URL("./opensandbox-reaper.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
@@ -205,7 +206,7 @@ test("OpenSandbox reaper PoC times out and orphans live OpenSandbox leftovers", 
   assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
 });
 
-test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.run", () => {
+test("OpenSandbox dispatch PoC source-text contract uses dispatcher claim/provision/cancel", () => {
   const source = readFileSync(new URL("./opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
@@ -220,7 +221,7 @@ test("OpenSandbox dispatch PoC uses dispatcher claim/provision/cancel, not host.
   assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
 });
 
-test("OpenSandbox prod-stack PoC hits Scheduler /readiness against a live server", () => {
+test("OpenSandbox prod-stack PoC source-text contract hits Scheduler /readiness", () => {
   const source = readFileSync(new URL("./opensandbox-prod-stack.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
@@ -236,7 +237,7 @@ test("scheduler production build excludes live OpenSandbox PoC harnesses", () =>
   assert.deepEqual(tsconfig.exclude, ["src/**/*.poc.ts"]);
 });
 
-test("OpenSandbox official prod PoC uses prod+real+overlay compose on Docker bridge", () => {
+test("OpenSandbox official prod PoC source-text contract uses prod+real+overlay compose", () => {
   const source = readFileSync(new URL("./opensandbox-prod-official.poc.ts", import.meta.url), "utf8");
   assert.match(source, /docker-compose.prod.yml/);
   assert.match(source, /docker-compose.real.yml/);
@@ -249,7 +250,7 @@ test("OpenSandbox official prod PoC uses prod+real+overlay compose on Docker bri
   assert.doesNotMatch(source, /network_mode: host/);
 });
 
-test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2 server", () => {
+test("OpenSandbox prod-compose PoC source-text contract builds against Phase 2 server", () => {
   const source = readFileSync(new URL("./opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
   assert.match(source, /docker-compose.opensandbox.host.yml/);
   assert.match(source, /127\.0\.0\.1:8080/);
@@ -264,13 +265,13 @@ test("OpenSandbox prod-compose PoC builds scheduler+web against the live Phase 2
   assert.doesNotMatch(source, /provision\(|executeReal\(/);
 });
 
-test("OpenSandbox real runner does not load Agentbox", () => {
+test("OpenSandbox real runner source-text contract does not load Agentbox", () => {
   const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /AgentboxRunner|runtime-sandbox\/agentbox/);
   assert.match(source, /provider !== ["']opensandbox["']/);
 });
 
-test("OpenSandbox Platform API PoC injects capability env at provision, not host.run", () => {
+test("OpenSandbox Platform API PoC source-text contract injects capability env at provision", () => {
   const source = readFileSync(new URL("./opensandbox-platform-api.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);

@@ -1,3 +1,4 @@
+import { isManagedRuntimeResource } from "@deepsonar/runtime-sandbox";
 import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
@@ -23,12 +24,14 @@ export async function reconcileOnBoot(): Promise<void> {
   const lifecycle = createSqlJobLifecycleApplication();
   const managesReal = config.runtime.agentMode === "real";
   const containers = managesReal
-    ? (await runner.listResources()).map((resource) => ({
-        containerId: resource.resourceId,
-        jobId: resource.jobId,
-        attemptId: resource.attemptId,
-        state: resource.state ?? "",
-      }))
+    ? (await runner.listResources())
+        .filter(isManagedRuntimeResource)
+        .map((resource) => ({
+          containerId: resource.resourceId,
+          jobId: resource.jobId,
+          attemptId: resource.attemptId,
+          state: resource.state ?? "",
+        }))
     : [];
   const activeJobs = await sql`
     SELECT j.id, j.status, j.sandbox_id, a.id AS attempt_id

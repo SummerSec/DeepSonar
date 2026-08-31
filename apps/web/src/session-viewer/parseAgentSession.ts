@@ -1547,6 +1547,13 @@ function extractJsonDocuments(text: string): { documents: string[]; skipped: num
       else if (ch === "\"") inString = false;
       continue;
     }
+    if (ch === "\n" && depth > 0) {
+      skipped += 1;
+      depth = 0;
+      start = -1;
+      escape = false;
+      continue;
+    }
     if (depth === 0 && ch !== "{" && ch !== "[" && !/\s/.test(ch)) {
       skipped += 1;
       while (i + 1 < text.length && text[i + 1] !== "{" && text[i + 1] !== "[" && text[i + 1] !== "\n") i += 1;

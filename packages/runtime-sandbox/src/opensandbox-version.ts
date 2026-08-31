@@ -5,6 +5,14 @@ export const OPENSANDBOX_SDK_VERSION = "0.1.11";
 export const OPENSANDBOX_JOB_META = "deepsonar.job";
 export const OPENSANDBOX_ATTEMPT_META = "deepsonar.attempt";
 
+/** Same canonical UUID guard as Docker leftover enumeration. */
+export const CANONICAL_RUNTIME_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isManagedRuntimeResource(resource: { jobId?: string | null; attemptId?: string | null }): boolean {
+  return CANONICAL_RUNTIME_UUID_RE.test(String(resource.jobId ?? ""))
+    && CANONICAL_RUNTIME_UUID_RE.test(String(resource.attemptId ?? ""));
+}
+
 /** Official multi-arch index digests. Bump with SDK; never latest. */
 export const OPENSANDBOX_SERVER_IMAGE =
   "docker.io/opensandbox/server@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778";
