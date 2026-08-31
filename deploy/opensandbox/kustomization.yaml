@@ -6,3 +6,4 @@ resources:
   - namespace.yaml
   - runtimeclass-kata.yaml
   - resourcequota.yaml
+  - gateway-service.yaml

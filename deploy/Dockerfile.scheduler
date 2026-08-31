@@ -1,6 +1,16 @@
 FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
 
-RUN apk add --no-cache ca-certificates git docker-cli \
+# kubectl is required when OPEN_SANDBOX_KUBERNETES=1 (Gateway ClusterIP bind + PVC seeder).
+ARG TARGETARCH=amd64
+ARG KUBECTL_VERSION=v1.36.4
+RUN apk add --no-cache ca-certificates git docker-cli wget \
+  && arch="$TARGETARCH" \
+  && if [ "$arch" = "amd64" ]; then sha=8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a; \
+     elif [ "$arch" = "arm64" ]; then sha=0ecf44450ee6063bf19dd166a103ee6df4a9034455c2abce626e6eea657d73fb; \
+     else echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1; fi \
+  && wget -q -O /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" \
+  && echo "${sha}  /usr/local/bin/kubectl" | sha256sum -c - \
+  && chmod +x /usr/local/bin/kubectl \
   && corepack enable
 
 WORKDIR /app

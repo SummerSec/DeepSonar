@@ -121,7 +121,18 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(kustomization, /namespace\.yaml/);
   assert.match(kustomization, /runtimeclass-kata\.yaml/);
   assert.match(kustomization, /resourcequota\.yaml/);
+  assert.match(kustomization, /gateway-service\.yaml/);
   assert.doesNotMatch(kustomization, /batchsandbox-template\.yaml/);
+  const gatewayService = readFileSync(join(root, "deploy/opensandbox/gateway-service.yaml"), "utf8");
+  assert.match(gatewayService, /name: deepsonar-gateway-proxy/);
+  assert.match(gatewayService, /port: 3100/);
+  assert.match(gatewayService, /targetPort: 3100/);
+  assert.doesNotMatch(gatewayService, /selector:/);
+  assert.doesNotMatch(gatewayService, /port: 80/);
+  const schedulerDockerfile = readFileSync(join(root, "deploy/Dockerfile.scheduler"), "utf8");
+  assert.match(schedulerDockerfile, /KUBECTL_VERSION=v1\.36\.4/);
+  assert.match(schedulerDockerfile, /\/usr\/local\/bin\/kubectl/);
+  assert.match(schedulerDockerfile, /sha256sum -c/);
   const external = readFileSync(join(root, "deploy/opensandbox/config.k8s.external.toml"), "utf8");
   const k8sCompose = readFileSync(join(root, "deploy/docker-compose.opensandbox.k8s.yml"), "utf8");
   assert.match(external, /type = "kubernetes"/);
