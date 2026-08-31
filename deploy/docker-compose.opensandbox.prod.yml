@@ -23,13 +23,16 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks:
-      - deepsonar
+    # Sidecars use Docker default bridge (TOML network_mode=bridge). A
+    # user-defined compose network cannot urlopen those IPs on this host.
+    network_mode: bridge
 
   scheduler:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       SANDBOX_PROVIDER: opensandbox
-      OPEN_SANDBOX_DOMAIN: ${OPEN_SANDBOX_DOMAIN:-opensandbox:8080}
+      OPEN_SANDBOX_DOMAIN: ${OPEN_SANDBOX_DOMAIN:-host.docker.internal:${OPEN_SANDBOX_HOST_PORT:-18080}}
       OPEN_SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
       OPEN_SANDBOX_USE_SERVER_PROXY: ${OPEN_SANDBOX_USE_SERVER_PROXY:-true}

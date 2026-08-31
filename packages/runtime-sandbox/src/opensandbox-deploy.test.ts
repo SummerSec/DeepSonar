@@ -34,7 +34,8 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   const deployPs1 = readFileSync(join(root, "deploy/deploy.ps1"), "utf8");
   assert.match(overlay, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(overlay, /SANDBOX_PROVIDER: opensandbox/);
-  assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
+  assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-host\.docker\.internal:\$\{OPEN_SANDBOX_HOST_PORT:-18080\}\}/);
+  assert.match(overlay, /network_mode: bridge/);
   assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18080/);
   assert.match(overlay, /condition: service_healthy/);
   assert.match(overlay, /127\.0\.0\.1:8080\/health/);
