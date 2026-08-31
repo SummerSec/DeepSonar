@@ -142,16 +142,17 @@ try {
   if (!/HTTP\/\S+\s+[1-5]\d\d/.test(sidecarNetHeaders) || /Connection refused|Failed to connect/i.test(sidecarNetHeaders)) {
     throw new Error(`sidecar-net gateway unreachable: ${sidecarNetHeaders}`);
   }
-  const gatewayImage = run(["-n", "docker", "inspect", "-f", "{{.Config.Image}}", "deepsonar-gateway-proxy"]);
-  if (gatewayImage.status !== 0 || !gatewayImage.stdout.trim()) {
-    throw new Error("sidecar /gateway forward probe needs a node-capable gateway image");
+  const leftoverImage = run(["-n", "docker", "inspect", "-f", "{{.Config.Image}}", "deepsonar-gateway-proxy"]);
+  const gatewayImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim() || leftoverImage.stdout.trim();
+  if (!gatewayImage) {
+    throw new Error(`sidecar /gateway forward probe needs OPEN_SANDBOX_POC_RUNTIME_IMAGE or a leftover gateway image: ${leftoverImage.stderr || leftoverImage.stdout}`);
   }
   const probeName = `${projectName}-gw-probe`;
   const started = run([
     "-n", "docker", "run", "-d", "--name", probeName,
     "--add-host", "host.docker.internal:host-gateway",
     "-e", `DEEPSONAR_GATEWAY_UPSTREAM=http://host.docker.internal:${schedulerPort}/gateway`,
-    "--entrypoint", "node", gatewayImage.stdout.trim(), "-e", GATEWAY_PROXY_SCRIPT,
+    "--entrypoint", "node", gatewayImage, "-e", GATEWAY_PROXY_SCRIPT,
   ], 60_000);
   try {
     if (started.status !== 0) {
