@@ -77,6 +77,7 @@ writeFileSync(envFile, [
   "DEEPSONAR_IMAGE_TAG=0.1.46",
   "DEEPSONAR_VERSION=0.1.46-os-official",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
+  "OPEN_SANDBOX_DOMAIN=opensandbox:8080",
   `OPEN_SANDBOX_HOST_PORT=${osHostPort}`,
   `OPEN_SANDBOX_CONTAINER_NAME=${osContainer}`,
   `DEEPSONAR_WEB_PORT=${webPort}`,
