@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { config, managesHostDockerRuntime } from "./config.js";
 import {
@@ -22,6 +23,10 @@ test("host Docker lifecycle follows OpenSandbox Docker, not Kata or deleted prov
   }), false);
   assert.equal(managesHostDockerRuntime({ agentMode: "fake", provider: "opensandbox" }), false);
   assert.equal(managesHostDockerRuntime({ agentMode: "real", provider: "local-docker" }), false);
+  assert.match(
+    readFileSync(new URL("./index.ts", import.meta.url), "utf8"),
+    /const stopHostDiskMonitor = managesHostDockerRuntime\(\)/,
+  );
 });
 
 test("host disk pressure distinguishes ok, warning and dispatch-blocking error", async () => {

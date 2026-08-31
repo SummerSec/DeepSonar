@@ -76,7 +76,7 @@ async function main() {
   const stopTransfer = startTransferWorker();
   const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
   const stopRuntimeImageGc = startRuntimeImageGc();
-  const stopHostDiskMonitor = managesLocalDocker
+  const stopHostDiskMonitor = managesHostDockerRuntime()
     ? startHostDiskMonitor(() => {
         if (dispatcherRuntimeStatus().enabled) kickDispatcher();
       })
