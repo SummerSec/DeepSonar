@@ -121,6 +121,8 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
   }, {});
   const inputTokens = detail.usage.reduce((total, row) => total + Number(row.input_tokens || 0), 0);
   const outputTokens = detail.usage.reduce((total, row) => total + Number(row.output_tokens || 0), 0);
+  const cacheReadTokens = detail.usage.reduce((total, row) => total + Number(row.cache_read_input_tokens || 0), 0);
+  const cacheWriteTokens = detail.usage.reduce((total, row) => total + Number(row.cache_creation_input_tokens || 0), 0);
   const totalTokens = detail.usage.reduce((total, row) => total + Number(row.total_tokens || 0), 0);
   if (!latestAttempt && detail.effects.length === 0 && detail.broadcasts.length === 0 && detail.usage.length === 0) {
     return <p className="font-mono text-[12px] text-zinc-600">该运行尚未记录执行账本。</p>;
@@ -137,7 +139,7 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
         <ConfigField
           label="模型用量"
           value={detail.usage.length
-            ? `${detail.usage.length} 次 · in ${inputTokens} / out ${outputTokens} / Σ ${totalTokens}`
+            ? `${detail.usage.length} 次 · in ${inputTokens} / out ${outputTokens} / cache ${cacheReadTokens}/${cacheWriteTokens} / Σ ${totalTokens}`
             : "—"}
         />
       </div>

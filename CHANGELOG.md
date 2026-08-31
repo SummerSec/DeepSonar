@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 用量账本记录并展示 Gateway 缓存读/写 token（`cache_read_input_tokens` / `cache_creation_input_tokens`）。CURRENT PROJECT 增加「项目账本」`/projects/:id/usage`，任务工作台不再内嵌项目账本。全局 / 项目 / 任务账本可折叠，偏好按用户 + 页面记忆，默认展开。Schema 升至 v39。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+
 ## [0.1.46] - 2026-08-31
 
 ### 新增

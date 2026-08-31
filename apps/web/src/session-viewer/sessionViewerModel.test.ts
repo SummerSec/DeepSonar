@@ -52,7 +52,7 @@ test("aggregates session token usage by turn and keeps gateway ledger separate",
     { id: "a2", kind: "assistant", title: "助手", tokens: { input: 10, output: 4, cacheWrite: 6 } },
   ]);
   const usage = buildSessionTokenUsage(rows, [
-    { request_no: 2, provider: "anthropic", model: "claude", input_tokens: 90, output_tokens: 8, total_tokens: 98, settlement_status: "settled" },
+    { request_no: 2, provider: "anthropic", model: "claude", input_tokens: 90, output_tokens: 8, total_tokens: 98, cache_read_input_tokens: 40, cache_creation_input_tokens: 6, settlement_status: "settled" },
     { request_no: 1, provider: "anthropic", model: "claude", input_tokens: 30, output_tokens: 5, total_tokens: 35, settlement_status: "unknown" },
     { request_no: 3, provider: "openai", model: "gpt", input_tokens: 7, output_tokens: 2, total_tokens: 9, settlement_status: "settled" },
   ]);
@@ -76,6 +76,8 @@ test("aggregates session token usage by turn and keeps gateway ledger separate",
   assert.equal(usage.gateway?.input, 127);
   assert.equal(usage.gateway?.output, 15);
   assert.equal(usage.gateway?.total, 142);
+  assert.equal(usage.gateway?.cacheRead, 40);
+  assert.equal(usage.gateway?.cacheWrite, 6);
   assert.equal(usage.gateway?.settled, 2);
   assert.equal(usage.gateway?.unknown, 1);
   assert.deepEqual(usage.gateway?.rows.map((row) => row.request_no), [1, 2, 3]);

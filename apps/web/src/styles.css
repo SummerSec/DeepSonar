@@ -2496,6 +2496,7 @@ input[type="password"]::-webkit-textfield-decoration-container {
 
 .usage-ledger { margin: 12px 0 16px; }
 .usage-ledger__core { padding: 16px 18px 18px; }
+.usage-ledger.is-collapsed .usage-ledger__core { padding-bottom: 14px; }
 .usage-ledger__head {
   display: flex;
   flex-wrap: wrap;
@@ -2517,6 +2518,22 @@ input[type="password"]::-webkit-textfield-decoration-container {
   font-size: 12px;
   line-height: 1.6;
 }
+.usage-ledger__toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.usage-ledger__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: transparent;
+  font: 500 11px var(--font-mono);
+}
+.usage-ledger__toggle:hover { border-color: var(--line-strong); color: var(--text); }
+.usage-ledger__toggle svg { transition: transform .16s ease; }
+.usage-ledger__toggle svg.is-collapsed { transform: rotate(-90deg); }
 .usage-ledger__periods { display: flex; flex-wrap: wrap; gap: 6px; }
 .usage-ledger__periods button {
   min-height: 28px;

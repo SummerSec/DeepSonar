@@ -95,6 +95,7 @@
 | #281 rebuild 序列漂移 | **已关**；回填后只 reset public owned sequences，rebuild 结束与 Scheduler 启动自动 `setval` + fail closed，避免 `audit_logs_pkey` / `events_pkey` |
 | #148 全图 `layout_revision` | **暂缓设计**；当前采用可见投影优先：默认深度 3、每父节点首批 12、首批总计 24，可稳定继续显示/显式展开全部；常规投影上限 180，搜索和显式链路/节点聚焦不受默认预算裁剪。Web 布局且只导出当前可见投影 |
 | #242 态势数据看板 | **P0 as-built**（总量/分布/近 7 日/Top N/活动时间线）；P1 风险与 P2 吞吐未做 |
+| #312 用量账本缓存与项目 tab | **as-built**：Gateway 落库缓存读/写；项目账本独立 tab；任务工作台不再内嵌；看板可折叠 |
 | 导入导出便携 Secret 加密 / 包签名 | **产品明确不导出明文**；加密包与签名未纳入交付 |
 
 ---

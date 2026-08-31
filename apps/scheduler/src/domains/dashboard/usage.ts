@@ -19,6 +19,8 @@ export interface UsageTokenTotals {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   jobs: number;
   projects: number;
   tasks: number;
@@ -27,23 +29,28 @@ export interface UsageTokenTotals {
   not_reported: number;
 }
 
-export interface UsageSeriesDay extends Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens"> {
+type UsageTokenCounts = Pick<
+  UsageTokenTotals,
+  "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "cache_read_input_tokens" | "cache_creation_input_tokens"
+>;
+
+export interface UsageSeriesDay extends UsageTokenCounts {
   date: string;
 }
 
-export interface UsageProjectRow extends Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "jobs" | "tasks"> {
+export interface UsageProjectRow extends Pick<UsageTokenTotals, keyof UsageTokenCounts | "jobs" | "tasks"> {
   id: string;
   name: string;
 }
 
-export interface UsageTaskRow extends Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "jobs"> {
+export interface UsageTaskRow extends Pick<UsageTokenTotals, keyof UsageTokenCounts | "jobs"> {
   canvas_id: string | null;
   title: string;
   project_id: string;
   project_name: string;
 }
 
-export interface UsageModelRow extends Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens"> {
+export interface UsageModelRow extends UsageTokenCounts {
   provider: string;
   model: string;
 }
@@ -79,6 +86,8 @@ export interface UsageLedgerRow {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   settlement_status: string;
   provider: string;
   model: string;
@@ -172,12 +181,20 @@ export function resolveUsageWindow(input: {
   return { period: "custom", now, start, endExclusive: boundedEnd, days };
 }
 
-function emptyTotals(): UsageTokenTotals {
+function emptyTokenCounts(): UsageTokenCounts {
   return {
     requests: 0,
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  };
+}
+
+function emptyTotals(): UsageTokenTotals {
+  return {
+    ...emptyTokenCounts(),
     jobs: 0,
     projects: 0,
     tasks: 0,
@@ -188,7 +205,7 @@ function emptyTotals(): UsageTokenTotals {
 }
 
 function emptyDay(date: string): UsageSeriesDay {
-  return { date, requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  return { date, ...emptyTokenCounts() };
 }
 
 function asCount(value: unknown): number {
@@ -197,13 +214,15 @@ function asCount(value: unknown): number {
 }
 
 function addTokens(
-  target: Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens">,
-  row: Pick<UsageLedgerRow, "input_tokens" | "output_tokens" | "total_tokens">,
+  target: UsageTokenCounts,
+  row: Pick<UsageLedgerRow, "input_tokens" | "output_tokens" | "total_tokens" | "cache_read_input_tokens" | "cache_creation_input_tokens">,
 ): void {
   target.requests += 1;
   target.input_tokens += asCount(row.input_tokens);
   target.output_tokens += asCount(row.output_tokens);
   target.total_tokens += asCount(row.total_tokens);
+  target.cache_read_input_tokens += asCount(row.cache_read_input_tokens);
+  target.cache_creation_input_tokens += asCount(row.cache_creation_input_tokens);
 }
 
 function rankByTotal<T extends { total_tokens: number; requests: number }>(rows: T[]): T[] {
@@ -241,10 +260,7 @@ export function buildDashboardUsage(input: {
     const project = projects.get(row.project_id) ?? {
       id: row.project_id,
       name: row.project_name || "未命名项目",
-      requests: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
+      ...emptyTokenCounts(),
       jobs: 0,
       tasks: 0,
       jobIds: new Set<string>(),
@@ -261,10 +277,7 @@ export function buildDashboardUsage(input: {
       title: row.canvas_title?.trim() || (row.canvas_id ? "未命名任务" : "未绑定画布"),
       project_id: row.project_id,
       project_name: row.project_name || "未命名项目",
-      requests: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
+      ...emptyTokenCounts(),
       jobs: 0,
       jobIds: new Set<string>(),
     };
@@ -276,10 +289,7 @@ export function buildDashboardUsage(input: {
     const model = models.get(modelKey) ?? {
       provider: row.provider || "unknown",
       model: row.model || "—",
-      requests: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
+      ...emptyTokenCounts(),
     };
     addTokens(model, row);
     models.set(modelKey, model);
@@ -333,6 +343,7 @@ export async function loadDashboardUsage(input: {
   const canvasId = input.canvasId ?? null;
   const rows = await sql<Record<string, unknown>[]>`
     SELECT u.observed_at, u.input_tokens, u.output_tokens, u.total_tokens,
+           u.cache_read_input_tokens, u.cache_creation_input_tokens,
            u.settlement_status, u.provider, u.model, u.job_id, u.project_id,
            p.name AS project_name, j.canvas_id, c.title AS canvas_title
     FROM job_usage_ledger u
@@ -351,6 +362,8 @@ export async function loadDashboardUsage(input: {
       input_tokens: asCount(row.input_tokens),
       output_tokens: asCount(row.output_tokens),
       total_tokens: asCount(row.total_tokens),
+      cache_read_input_tokens: asCount(row.cache_read_input_tokens),
+      cache_creation_input_tokens: asCount(row.cache_creation_input_tokens),
       settlement_status: asText(row.settlement_status),
       provider: asText(row.provider),
       model: asText(row.model),

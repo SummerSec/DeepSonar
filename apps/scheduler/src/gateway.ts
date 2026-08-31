@@ -365,21 +365,132 @@ export function joinGatewayUpstreamUrl(baseUrl: string, upstreamPath: string, qs
 }
 
 /** 从 SSE 流片段/JSON 文本里尽力提取 usage（不累加精确账单，只用于额度熔断）。 */
-export type UsageBreakdown = { input: number; output: number; total: number };
+export type UsageBreakdown = {
+  input: number;
+  output: number;
+  total: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+const EMPTY_USAGE: UsageBreakdown = { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
+
+function asUsageCount(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+function asUsageRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function extractBalancedObject(text: string, start: number): string | null {
+  if (text[start] !== "{") return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") { inString = true; continue; }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function cacheReadFromUsage(usage: Record<string, unknown>): number {
+  const top = asUsageCount(usage.cache_read_input_tokens)
+    || asUsageCount(usage.cache_read_tokens)
+    || asUsageCount(usage.cached_input_tokens)
+    || asUsageCount(usage.cached_tokens);
+  if (top > 0) return top;
+  const details = asUsageRecord(usage.prompt_tokens_details) ?? asUsageRecord(usage.input_tokens_details);
+  return details ? asUsageCount(details.cached_tokens) : 0;
+}
+
+function cacheWriteFromUsage(usage: Record<string, unknown>): number {
+  const top = asUsageCount(usage.cache_creation_input_tokens)
+    || asUsageCount(usage.cache_write_tokens)
+    || asUsageCount(usage.cache_creation_tokens);
+  const nested = asUsageRecord(usage.cache_creation);
+  if (!nested) return top;
+  const nestedSum = asUsageCount(nested.ephemeral_5m_input_tokens)
+    + asUsageCount(nested.ephemeral_1h_input_tokens)
+    + asUsageCount(nested.ephemeral_input_tokens);
+  return nestedSum > 0 ? Math.max(top, nestedSum) : top;
+}
+
+function usageFromRecord(usage: Record<string, unknown>): UsageBreakdown {
+  const input = asUsageCount(usage.input_tokens) || asUsageCount(usage.prompt_tokens);
+  const output = asUsageCount(usage.output_tokens) || asUsageCount(usage.completion_tokens);
+  return {
+    input,
+    output,
+    total: input + output,
+    cacheRead: cacheReadFromUsage(usage),
+    cacheWrite: cacheWriteFromUsage(usage),
+  };
+}
+
+function addUsage(target: UsageBreakdown, next: UsageBreakdown): void {
+  target.input += next.input;
+  target.output += next.output;
+  target.total += next.total;
+  target.cacheRead += next.cacheRead;
+  target.cacheWrite += next.cacheWrite;
+}
+
+/** 残缺 JSON 的尽力而为兜底：只认同一层扁平字段，嵌套 cache_creation / *_details 必须走 JSON 解析。 */
+function extractUsageByRegex(text: string): UsageBreakdown {
+  const totals = { ...EMPTY_USAGE };
+  for (const m of text.matchAll(/"usage"\s*:\s*\{([^}]*)/g)) {
+    const body = m[1] ?? "";
+    const input = Number(/"input_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"prompt_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    const output = Number(/"output_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"completion_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    const cacheRead = Number(/"cache_read_input_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"cache_read_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    const cacheWrite = Number(/"cache_creation_input_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? /"cache_write_tokens"\s*:\s*(\d+)/.exec(body)?.[1] ?? 0);
+    if (input + output + cacheRead + cacheWrite <= 0) continue;
+    addUsage(totals, { input, output, total: input + output, cacheRead, cacheWrite });
+  }
+  return totals;
+}
+
+function usageObjectStart(text: string, afterColon: number): number {
+  let i = afterColon;
+  while (i < text.length && /\s/u.test(text[i]!)) i += 1;
+  return text[i] === "{" ? i : -1;
+}
 
 export function extractUsageBreakdown(text: string): UsageBreakdown {
-  let input = 0;
-  let output = 0;
-  for (const m of text.matchAll(/"usage"\s*:\s*\{[^}]*?"input_tokens"\s*:\s*(\d+)[^}]*?"output_tokens"\s*:\s*(\d+)/g)) {
-    input += Number(m[1]);
-    output += Number(m[2]);
+  const totals = { ...EMPTY_USAGE };
+  let parsed = false;
+  for (const match of text.matchAll(/"usage"\s*:/g)) {
+    const objectStart = usageObjectStart(text, match.index + match[0].length);
+    if (objectStart < 0) continue;
+    const raw = extractBalancedObject(text, objectStart);
+    if (!raw) continue;
+    try {
+      const record = asUsageRecord(JSON.parse(raw) as unknown);
+      if (!record) continue;
+      const next = usageFromRecord(record);
+      if (next.total <= 0 && next.cacheRead <= 0 && next.cacheWrite <= 0) continue;
+      addUsage(totals, next);
+      parsed = true;
+    } catch {
+      /* 残缺对象留给正则兜底 */
+    }
   }
-  // OpenAI 格式 prompt_tokens/completion_tokens
-  for (const m of text.matchAll(/"usage"\s*:\s*\{[^}]*?"prompt_tokens"\s*:\s*(\d+)[^}]*?"completion_tokens"\s*:\s*(\d+)/g)) {
-    input += Number(m[1]);
-    output += Number(m[2]);
-  }
-  return { input, output, total: input + output };
+  if (parsed) return totals;
+  return extractUsageByRegex(text);
 }
 
 /**
@@ -391,19 +502,15 @@ export function createGatewayUsageScanner(): {
   finish: () => UsageBreakdown;
 } {
   let tail = "";
-  let input = 0;
-  let output = 0;
-  let total = 0;
+  const totals = { ...EMPTY_USAGE };
   const seen = new Set<string>();
   const observe = (line: string): void => {
     const record = extractUsageBreakdown(line);
-    if (record.total <= 0) return;
+    if (record.total <= 0 && record.cacheRead <= 0 && record.cacheWrite <= 0) return;
     const key = createHash("sha256").update(line).digest("hex");
     if (seen.has(key)) return;
     seen.add(key);
-    input += record.input;
-    output += record.output;
-    total += record.total;
+    addUsage(totals, record);
   };
   return {
     push(chunk) {
@@ -414,7 +521,7 @@ export function createGatewayUsageScanner(): {
     },
     finish() {
       if (tail) observe(tail);
-      return { input, output, total };
+      return { ...totals };
     },
   };
 }
@@ -448,6 +555,8 @@ async function appendUsageLedger(
       input_tokens: input.usage.input,
       output_tokens: input.usage.output,
       total_tokens: input.usage.total,
+      cache_read_input_tokens: input.usage.cacheRead,
+      cache_creation_input_tokens: input.usage.cacheWrite,
       adjustment_tokens: input.usage.total - input.usage.input - input.usage.output,
       settlement_status: input.status,
       source: input.source,
@@ -670,7 +779,7 @@ export function registerGateway(app: FastifyInstance): void {
           requestNo,
           provider: safeProvider,
           model,
-          usage: { input: 0, output: 0, total: 0 },
+          usage: { ...EMPTY_USAGE },
           status: "unknown",
           source: "gateway_error",
         }, "unknown", error);
@@ -706,7 +815,7 @@ export function registerGateway(app: FastifyInstance): void {
           requestNo,
           provider: safeProvider,
           model,
-          usage: { input: 0, output: 0, total: 0 },
+          usage: { ...EMPTY_USAGE },
           status: "not_reported",
           source: isSse ? "gateway_stream" : "gateway_response",
         }, "settled");

@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 38);
+INSERT INTO schema_meta (id, version) VALUES ('global', 39);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -689,6 +689,8 @@ CREATE TABLE job_usage_ledger (
   input_tokens bigint NOT NULL DEFAULT 0,
   output_tokens bigint NOT NULL DEFAULT 0,
   total_tokens bigint NOT NULL DEFAULT 0,
+  cache_read_input_tokens bigint NOT NULL DEFAULT 0,
+  cache_creation_input_tokens bigint NOT NULL DEFAULT 0,
   adjustment_tokens bigint NOT NULL DEFAULT 0,
   settlement_status text NOT NULL DEFAULT 'settled',
   source text NOT NULL DEFAULT 'gateway_response',
@@ -700,6 +702,7 @@ CREATE TABLE job_usage_ledger (
   CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
   CONSTRAINT job_usage_ledger_counts_check CHECK (
     input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
+    AND cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0
     AND adjustment_tokens BETWEEN -1000000000000 AND 1000000000000
   ),
   CONSTRAINT job_usage_ledger_status_check CHECK (settlement_status IN ('settled', 'unknown', 'not_reported')),
