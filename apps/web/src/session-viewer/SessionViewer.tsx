@@ -531,6 +531,8 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
               <TokenStat label="请求" value={gateway.requests} />
               <TokenStat label="输入" value={gateway.input} />
               <TokenStat label="输出" value={gateway.output} />
+              <TokenStat label="缓存读" value={gateway.cacheRead} />
+              <TokenStat label="缓存写" value={gateway.cacheWrite} />
               <TokenStat label="合计" value={gateway.total} />
             </dl>
             <p className="session-viewer__note">
@@ -585,6 +587,8 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
                 <th className="session-viewer__num">请求</th>
                 <th className="session-viewer__num">输入</th>
                 <th className="session-viewer__num">输出</th>
+                <th className="session-viewer__num">缓存读</th>
+                <th className="session-viewer__num">缓存写</th>
                 <th className="session-viewer__num">合计</th>
               </tr>
             </thead>
@@ -595,6 +599,8 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
                   <td className="session-viewer__num">{model.requests}</td>
                   <td className="session-viewer__num">{formatTokenCount(model.input)}</td>
                   <td className="session-viewer__num">{formatTokenCount(model.output)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(model.cacheRead)}</td>
+                  <td className="session-viewer__num">{formatTokenCount(model.cacheWrite)}</td>
                   <td className="session-viewer__num">{formatTokenCount(model.total)}</td>
                 </tr>
               ))}
@@ -613,6 +619,8 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
                 <th>模型</th>
                 <th className="session-viewer__num">输入</th>
                 <th className="session-viewer__num">输出</th>
+                <th className="session-viewer__num">缓存读</th>
+                <th className="session-viewer__num">缓存写</th>
                 <th className="session-viewer__num">合计</th>
                 <th>状态</th>
               </tr>
@@ -624,6 +632,8 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
                   <td>{row.model}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.input_tokens || 0))}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.output_tokens || 0))}</td>
+                  <td className="session-viewer__num">{formatTokenCount(Number(row.cache_read_input_tokens || 0))}</td>
+                  <td className="session-viewer__num">{formatTokenCount(Number(row.cache_creation_input_tokens || 0))}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.total_tokens || 0))}</td>
                   <td>{row.settlement_status ?? "settled"}</td>
                 </tr>

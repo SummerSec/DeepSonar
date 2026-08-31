@@ -1,0 +1,179 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "mobile",
+  "downloads": {
+    "jdk": {
+      "major": "17",
+      "version": "17.0.19+10",
+      "image": "eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "capabilities": ["java-runtime", "java-compiler"]
+    },
+    "jadx": {
+      "version": "1.5.6",
+      "license": "Apache-2.0",
+      "capabilities": ["apk-decompile"],
+      "source": "official JADX GitHub release CLI zip (not jadx-gui)",
+      "assets": {
+        "all": {
+          "url": "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+          "sha256": "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974"
+        }
+      }
+    },
+    "apktool": {
+      "version": "3.0.3",
+      "license": "Apache-2.0",
+      "capabilities": ["apk-decode"],
+      "source": "official Apktool GitHub release jar",
+      "assets": {
+        "all": {
+          "url": "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+          "sha256": "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423"
+        }
+      }
+    },
+    "bundletool": {
+      "version": "1.18.3",
+      "license": "Apache-2.0",
+      "capabilities": ["aab-decode"],
+      "source": "official Google bundletool GitHub release jar",
+      "assets": {
+        "all": {
+          "url": "https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar",
+          "sha256": "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"
+        }
+      }
+    },
+    "apkeep": {
+      "version": "1.0.0",
+      "license": "MIT",
+      "capabilities": ["apk-fetch"],
+      "source": "official EFForg apkeep GitHub release linux gnu binaries",
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/EFForg/apkeep/releases/download/1.0.0/apkeep-x86_64-unknown-linux-gnu",
+          "sha256": "a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e"
+        },
+        "arm64": {
+          "url": "https://github.com/EFForg/apkeep/releases/download/1.0.0/apkeep-aarch64-unknown-linux-gnu",
+          "sha256": "5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049"
+        }
+      }
+    },
+    "platform-tools": {
+      "version": "36.0.0",
+      "license": "Android SDK License",
+      "capabilities": ["adb", "device-protocol"],
+      "source": "official Android SDK platform-tools linux zip (x86_64). amd64 runs it natively; arm64 runs the same official binary via qemu-user-static.",
+      "assets": {
+        "all": {
+          "url": "https://dl.google.com/android/repository/platform-tools_r36.0.0-linux.zip",
+          "sha256": "0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8"
+        }
+      }
+    },
+    "hdc": {
+      "version": "3.2.0b",
+      "sdkVersion": "6.0.0.47",
+      "license": "Apache-2.0",
+      "capabilities": ["hdc", "device-protocol"],
+      "source": "Vendored official OpenHarmony public SDK toolchains/hdc + libusb_shared; same bits as deepsonar-openharmony-test. Do not bake a full SDK or DevEco.",
+      "companion": ["libusb_shared.so"],
+      "assets": {
+        "amd64": {
+          "sha256": "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e",
+          "libusbSharedSha256": "431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887"
+        },
+        "arm64": {
+          "sha256": "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e",
+          "libusbSharedSha256": "431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887",
+          "hostInterpreter": "qemu-user-static"
+        }
+      }
+    },
+    "uv": {
+      "version": "0.11.32",
+      "license": "Apache-2.0 OR MIT",
+      "capabilities": ["python-version-manager", "python-package-manager"],
+      "assets": {
+        "amd64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz", "sha256": "aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967" },
+        "arm64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31" }
+      }
+    },
+    "radare2": {
+      "version": "6.2.0",
+      "license": "LGPL-3.0-only",
+      "capabilities": ["elf-disassembly"],
+      "source": "official radare2 GitHub release debian packages (not Cutter GUI)",
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/radareorg/radare2/releases/download/6.2.0/radare2_6.2.0_amd64.deb",
+          "sha256": "eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb"
+        },
+        "arm64": {
+          "url": "https://github.com/radareorg/radare2/releases/download/6.2.0/radare2_6.2.0_arm64.deb",
+          "sha256": "e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec"
+        }
+      }
+    },
+    "apkcheckpack": {
+      "version": "20260618",
+      "license": "NOASSERTION",
+      "capabilities": ["apk-packer-fingerprint"],
+      "source": "upstream GitHub release linux-amd64 binary (statically linked). amd64 runs it natively; arm64 runs the same official binary via qemu-user-static. Not a platform-prescribed scan entry.",
+      "assets": {
+        "all": {
+          "url": "https://github.com/moyuwa/ApkCheckPack/releases/download/20260618/ApkCheckPack_linux_amd64",
+          "sha256": "c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"
+        }
+      }
+    },
+    "frida-server": {
+      "version": "17.17.0",
+      "license": "wxWindows Library Licence 3.1",
+      "capabilities": ["runtime-instrumentation", "device-companion"],
+      "source": "official Frida GitHub release android servers",
+      "assets": {
+        "android-arm": { "url": "https://github.com/frida/frida/releases/download/17.17.0/frida-server-17.17.0-android-arm.xz", "sha256": "a102c7f83fce8089394c3cc9a05812c841e8f254a80bcf7162280d7c1cbea208" },
+        "android-arm64": { "url": "https://github.com/frida/frida/releases/download/17.17.0/frida-server-17.17.0-android-arm64.xz", "sha256": "09d1fad867b27d69562a79289f4c412e85867f5d38ab72877036ed35e4223021" },
+        "android-x86_64": { "url": "https://github.com/frida/frida/releases/download/17.17.0/frida-server-17.17.0-android-x86_64.xz", "sha256": "5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c" }
+      }
+    }
+  },
+  "managed": {
+    "python": {
+      "source": "astral/python-build-standalone",
+      "manager": "uv@0.11.32",
+      "versions": ["3.12.13"],
+      "default": "3.12.13",
+      "license": "PSF-2.0",
+      "capabilities": ["python-runtime"]
+    },
+    "pip": {
+      "frida": { "version": "17.17.0", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
+      "frida-tools": { "version": "14.10.4", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
+      "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
+      "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] },
+      "lief": { "version": "1.0.0", "license": "Apache-2.0", "capabilities": ["elf-parse"] }
+    },
+    "apt": {
+      "libatomic1": { "capabilities": ["hdc-runtime"] },
+      "libimobiledevice-utils": { "capabilities": ["ios-device-protocol"] },
+      "ideviceinstaller": { "capabilities": ["ios-app-install"] },
+      "libplist-utils": { "capabilities": ["plist"] },
+      "libusbmuxd-tools": { "capabilities": ["ios-usbmuxd"] },
+      "binutils": { "version": "2.40-2", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] }
+    }
+  },
+  "toolsets": {
+    "mobile": {
+      "imageKey": "deepsonar-mobile",
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
+      "maxSizeMiB": 2400
+    }
+  }
+}

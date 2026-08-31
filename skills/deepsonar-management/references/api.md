@@ -49,7 +49,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /dashboard/overview | projects:read | 态势 P0 运营总览聚合：项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动；项目级 token 只看到本项目 |
-| GET | /dashboard/usage | projects:read | 用量账本：聚合 `job_usage_ledger`。`period=day\|week\|month` 为上海日历滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的 `YYYY-MM-DD` 或 ISO 时刻，最长 366 天。可选 `project_id`/`canvas_id`；不定价；项目级 token 只看到本项目 |
+| GET | /dashboard/usage | projects:read | 用量账本：聚合 `job_usage_ledger`（含缓存读/写）。`period=day\|week\|month` 为上海日历滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的 `YYYY-MM-DD` 或 ISO 时刻，最长 366 天。可选 `project_id`/`canvas_id`；不定价；项目级 token 只看到本项目 |
 | GET | /projects | projects:read | 项目列表 |
 | POST | /projects | projects:write | 创建 `{name, description?, plane_project_id?}` |
 | GET | /projects/:id | projects:read | 项目详情 |
@@ -206,7 +206,7 @@ PUT body：
 
 `runtime_image_key`：
 - `null` = 系统底座（调度默认 deepsonar-base）
-- 官方 Chrome 产品 key 包括 `deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`；以运行时 registry 为准
+- 官方 Chrome 产品 key 包括 `deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`；移动端为 `deepsonar-mobile`；以运行时 registry 为准
 - 官方 catalog（含 `project_opt_in` 专项如 OpenHarmony）可先写入 RoleConfig
 - Job 解析时：官方非 opt-in 默认可跑；opt-in / 第三方仍要求**项目启用**
 - 与镜像市场列表对齐（enabled 官方全量可选）

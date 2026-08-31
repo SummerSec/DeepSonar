@@ -100,7 +100,7 @@
     "ci:smoke:images": "python agent-harness/test-runtime-images-api.py",
     "ci:smoke:pi-rpc": "node agent-harness/test-pi-rpc.mjs",
     "ci:test:transfer-schema": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-transfer-schema-version.ts",
-    "ci:images": "node agent-harness/check-runtime-image-consistency.mjs && node agent-harness/test-oci-image-size.mjs && node agent-harness/test-openharmony-hdc.mjs",
+    "ci:images": "node agent-harness/check-runtime-image-consistency.mjs && node agent-harness/test-oci-image-size.mjs && node agent-harness/test-openharmony-hdc.mjs && node agent-harness/test-mobile-runtime.mjs",
     "db:up": "docker compose -f deploy/docker-compose.yml up -d",
     "db:down": "docker compose -f deploy/docker-compose.yml down",
     "db:up:deploy": "node deploy/ensure-postgres.mjs",

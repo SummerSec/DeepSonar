@@ -21,7 +21,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 38);
+  assert.equal(SCHEMA_VERSION, 39);
   assert.match(body, /CREATE TABLE login_rate_limits/i);
   assert.match(body, /login_rate_limits_window_idx/i);
   assert.match(body, /verification_status\s+text/i);
@@ -39,6 +39,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.match(body, /'deepsonar-chrome-audit'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /'deepsonar-chrome-test'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /'deepsonar-chrome-fuzz'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
+  assert.match(body, /'deepsonar-mobile'[^\n]+\btrue\s*,\s*true\s*,\s*true\)/i);
   assert.match(body, /CREATE TABLE job_capability_tokens\s*\(/i);
   assert.match(body, /CREATE TABLE job_attempts\s*\(/i);
   assert.match(body, /CREATE TABLE job_attempt_effects\s*\(/i);

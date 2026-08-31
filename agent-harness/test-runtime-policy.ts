@@ -44,5 +44,17 @@ assert.doesNotMatch(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
   /OpenHarmony hdc device protocol/,
 );
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /Mobile device protocols/,
+);
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /apkcheckpack/,
+);
+assert.doesNotMatch(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
+  /Mobile device protocols/,
+);
 
 console.log("OK: runtime test policy selection and idempotence");

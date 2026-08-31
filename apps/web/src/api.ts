@@ -86,6 +86,8 @@ export interface UsageTokenTotals {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   jobs: number;
   projects: number;
   tasks: number;
@@ -94,21 +96,27 @@ export interface UsageTokenTotals {
   not_reported: number;
 }
 
+type UsageTokenCounts = Pick<
+  UsageTokenTotals,
+  "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "cache_read_input_tokens" | "cache_creation_input_tokens"
+>;
+
 export interface DashboardUsage {
   generated_at: string;
   calendar_timezone: string;
   period: UsagePeriod;
   range: { start: string; end: string; days: string[] };
   totals: UsageTokenTotals;
-  series: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens"> & { date: string }>;
-  projects: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "jobs" | "tasks"> & { id: string; name: string }>;
-  tasks: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens" | "jobs"> & {
+  series: Array<UsageTokenCounts & { date: string }>;
+  projects: Array<UsageTokenCounts & { id: string; name: string; jobs: number; tasks: number }>;
+  tasks: Array<UsageTokenCounts & {
     canvas_id: string | null;
     title: string;
     project_id: string;
     project_name: string;
+    jobs: number;
   }>;
-  models: Array<Pick<UsageTokenTotals, "requests" | "input_tokens" | "output_tokens" | "total_tokens"> & { provider: string; model: string }>;
+  models: Array<UsageTokenCounts & { provider: string; model: string }>;
 }
 
 export interface Project {
@@ -506,6 +514,8 @@ export interface JobUsageSummary {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
   adjustment_tokens: number;
   settlement_status: "settled" | "unknown" | "not_reported";
   source?: string;

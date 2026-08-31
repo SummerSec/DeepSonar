@@ -27,13 +27,13 @@ pnpm typecheck        # 全 workspace 类型检查
 - **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI，当前是 `test` 角色默认镜像且不要求项目 opt-in。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
 - **运行模式**：默认 `AGENT_MODE=real`（OpenSandbox 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
-- **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission/assets-helper/silo 等 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。核心 CI 在 `.github/workflows/ci.yml`（**PR 与 main 合并后**触发，功能分支每次 push 不再跑；main 上纯 `*.md`/`docs/`/`skills/` 跳过；可 `workflow_dispatch` 手动补跑；同 ref 并发会取消旧 run）；Chrome 与 OpenHarmony 专项 CI 分别在 `.github/workflows/chrome-runtime.yml` / `.github/workflows/openharmony-runtime.yml`，按自身 Dockerfile、配置/脚本、`.dockerignore`、共享 fingerprint/cache 机制或 workflow 变更触发；GHCR 制品发布在 `release.yml`。
+- **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission/assets-helper/silo 等 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。核心 CI 在 `.github/workflows/ci.yml`（**PR 与 main 合并后**触发，功能分支每次 push 不再跑；main 上纯 `*.md`/`docs/`/`skills/` 跳过；可 `workflow_dispatch` 手动补跑；同 ref 并发会取消旧 run）；Chrome、OpenHarmony 与 Mobile 专项 CI 分别在 `.github/workflows/chrome-runtime.yml` / `.github/workflows/openharmony-runtime.yml` / `.github/workflows/mobile-runtime.yml`，按自身 Dockerfile、配置/脚本、`.dockerignore`、共享 fingerprint/cache 机制或 workflow 变更触发；GHCR 制品发布在 `release.yml`。
 - **镜像发布 / 如何更新镜像**（`release.yml` + `agent-harness/image-build-fingerprint.mjs`）：
   1. **改内容才会重建**：指纹 = schema version + Dockerfile + `.dockerignore` + 依赖路径 + build-args + platforms。GHCR 上存在 `src-<fingerprint>` 则 **跳过 docker build**，只对 **GHCR / ACR / Docker Hub** 打新版本 tag（版本照升，digest 可复用）。
   2. **常规更新步骤**：改对应 Dockerfile / `agent-harness/*-runtime.json` / OpenHarmony 脚本等 → 专项 workflow 先按路径过滤运行并通过 → 合并 main 且核心 CI 绿 → 推新 `v*` tag **或** Actions → `release` → Run workflow（`version`/`ref` 可留空：版本=最新 `v*`，源码=所选分支 HEAD）→ 看 job summary：`image build unchanged` = 未重建；否则全量构建并 pin 新 `src-*`。
   3. **只升版本号、内容未变**：仍会出新 GitHub Release 与各仓版本 tag，但 Kali 等大镜像不会重编（预期行为）。
   4. **强制重建**（内容未变也要重编）：删除 GHCR 上该镜像的 `src-<fp>` 标签后再跑 release；或改任一指纹输入（Dockerfile 注释/`.dockerignore`/依赖文件）使 fingerprint 变化；算法语义变化时 bump `FINGERPRINT_SCHEMA_VERSION`。本地可先算指纹：`node agent-harness/image-build-fingerprint.mjs --preset deepsonar-kali-minimal`。
-  5. **改谁重建谁**（preset 见 `image-build-fingerprint.mjs`）：`deepsonar-base`/`audit` ← `Dockerfile.agent` + runtime-images；`kali-minimal` ← Kali Dockerfile + kali-minimal-runtime；`scheduler`/`web`/`image-admission` ← 各自 Dockerfile 与 COPY 进镜像的源码；`assets-helper` ← `Dockerfile.assets-helper`；`silo` ← `Dockerfile.silo`；`openharmony-*` / `chrome-*` ← 对应 Dockerfile/配置/脚本 + **base 的 digest**（base 变了专项镜像会跟着重编）。
+  5. **改谁重建谁**（preset 见 `image-build-fingerprint.mjs`）：`deepsonar-base`/`audit` ← `Dockerfile.agent` + runtime-images；`kali-minimal` ← Kali Dockerfile + kali-minimal-runtime；`scheduler`/`web`/`image-admission` ← 各自 Dockerfile 与 COPY 进镜像的源码；`assets-helper` ← `Dockerfile.assets-helper`；`silo` ← `Dockerfile.silo`；`openharmony-*` / `chrome-*` / `mobile` ← 对应 Dockerfile/配置/脚本 + **base 的 digest**（base 变了专项镜像会跟着重编）。
   6. **发布通道**：ACR → GHCR → Docker Hub 分仓 `imagetools`（禁止一次混仓）；Docker Hub 仅当 `DOCKERHUB_USERNAME`+`DOCKERHUB_TOKEN` 齐全；缺凭据跳过该通道并记 unavailable，已配置却失败则 fail closed。多架构 index 须写镜像专属 annotations。
   7. **发布纪律**：main CI 全绿后再打新 `v*`；禁止覆盖旧 tag / 改已发布 digest 的说明；清单 `runtime-image-registry.json` 随 Release 回写默认分支。细节见 `docs/RELEASE_RUNTIME_IMAGES.md`。
 
@@ -93,7 +93,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v38，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
+- **Schema**：`database/schema.sql` 是唯一基线（当前 v39，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
 - **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
@@ -102,7 +102,7 @@ pnpm typecheck        # 全 workspace 类型检查
 ### 前端（`apps/web/`，React 19 + @xyflow/react + elkjs + Tailwind 4）
 
 - 只读渲染（`nodesDraggable=false`）；节点坐标由服务端 elkjs 布局算好落库，Agent 不能提案坐标。
-- 页面（`src/pages/`）：Dashboard、Projects、Tasks、TaskCanvas、Jobs、Findings、Agents、AgentMarketplace、RuntimeImages、PlatformSettings、ProjectData（导入导出）与 Login，经 `/api` 代理访问调度器。
+- 页面（`src/pages/`）：Dashboard、Projects、Tasks、TaskCanvas、Jobs、Findings、Agents、AgentMarketplace、RuntimeImages、PlatformSettings、ProjectData（导入导出）、ProjectUsage（项目账本）与 Login，经 `/api` 代理访问调度器。
 - Findings 按 GitHub Issues 范式管理：disposition 状态流转 + 评论，评论可触发 hub 继续分析。
 
 ## 开发时的注意事项

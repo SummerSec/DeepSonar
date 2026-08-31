@@ -21,10 +21,12 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 - 不在 Job 内用 `apt-get`、JDK/Maven 压缩包、SDKMAN、`./mvnw` 或其它 bootstrap fallback 安装或下载工具链。项目依赖是否可下载仍由冻结的 `DEEPSONAR_ALLOW_EGRESS` 决定。
 - 工具缺失时停止动态尝试，提交 `inconclusive`/`needs_human` 结构化证据；不得用静态叙述冒充运行时结果。
 - OpenHarmony Test 的设备协议是官方 `hdc`（`list targets` / `shell` / `file send|recv` / `install` / `hilog` / `fport` / `tconn`）。无 target 时必须结构化 `needs_human` / `inconclusive`，禁止把主机构建日志或源码叙述写成设备结果。audit/fuzz 仍可使用主机 Clang/ASan/libFuzzer；不要把 gdb/strace 或 Kali 进程工具当成 OH 的设备协议。
+- 移动端专项镜像 `deepsonar-mobile`：Android 设备协议是官方 `adb`；iOS Linux 宿主是 `idevice_id` / `ideviceinstaller` / `iproxy`（无 Xcode/Simulator）；OpenHarmony 设备协议是官方 `hdc`（与 OH Test 同一 vendor 二进制），HAP 静态检查用 unzip + `pack.info` / `module.json`。Android 静态检查：Java/Kotlin 用 JADX CLI、apktool、bundletool、apkeep、androguard，以及 Agent 可调用的钉死 `apkcheckpack`（加固/SDK 指纹，不是平台扫描入口）；`.so` 用 `readelf`/`objdump`/`nm`、radare2 与 LIEF（`mobile-so.sh inspect`）。运行时插桩用 Frida/Objection 与 `/opt/deepsonar/frida-server`。不预装 mitmproxy/Burp。无 adb / hdc / idevice 目标时必须结构化 `needs_human` / `inconclusive`，禁止把反编译或 HAP/IPA 解压叙述写成设备、流量或原生结果。不预装 MobSF / jadx-gui / Burp / IDA / Ghidra / DevEco / 第三方 MCP。
 - 合格的 test 证据至少要有 `subject_revision`、完整 `steps`、`expected`，以及 `actual` 或 `artifact_refs`，且 test 与 review 必须来自不同 Job。
 
 ## 冒烟与真实证据
 
+- `node agent-harness/test-mobile-runtime.mjs` 用假 adb / hdc / idevice_id 与样本 HAP 检查版本冒烟与空设备 `needs_human` / `inconclusive`，不要求真机。
 - `node agent-harness/test-runtime-image.mjs <image> kali-minimal agent-harness/kali-minimal-runtime.json` 在断网、丢弃 capabilities 和资源限制下检查预装 Java/Go/Rust/Python/Maven；其中 `mvn -v` 只验证工具存在，不下载依赖。
 - `node agent-harness/test-maven-package.mjs <image>` 使用联网最小 POM 构建并运行一个 Java 类，仓库放在临时目录，不写入镜像的 `.m2`。
 - `python agent-harness/test-runtime-images-api.py` 检查 Test 默认 Kali、Verify 默认 Base、显式项目级 Verify 动态覆盖和 Job 不可变 snapshot。

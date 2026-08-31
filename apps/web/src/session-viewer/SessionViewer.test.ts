@@ -18,6 +18,8 @@ test("session viewer exposes a dedicated token usage tab", () => {
   assert.match(source, /<SessionUsagePane usage=\{tokenUsage\} \/>/);
   assert.match(source, /Session 归档消耗/);
   assert.match(source, /Gateway 账本消耗/);
+  assert.match(source, /gateway\.cacheRead/);
+  assert.match(source, /cache_read_input_tokens/);
   assert.match(source, /按轮次/);
   assert.match(source, /按模型/);
   assert.match(source, /请求明细/);

@@ -19,6 +19,8 @@ export type SessionGatewayUsageRow = {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
   settlement_status?: string;
   observed_at?: string;
 };
@@ -31,6 +33,8 @@ export type SessionGatewayModelUsage = {
   input: number;
   output: number;
   total: number;
+  cacheRead: number;
+  cacheWrite: number;
 };
 
 export type SessionTokenUsage = {
@@ -44,6 +48,8 @@ export type SessionTokenUsage = {
     input: number;
     output: number;
     total: number;
+    cacheRead: number;
+    cacheWrite: number;
     settled: number;
     unknown: number;
     notReported: number;
@@ -193,6 +199,8 @@ export function buildSessionTokenUsage(
     input: 0,
     output: 0,
     total: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
     settled: 0,
     unknown: 0,
     notReported: 0,
@@ -211,6 +219,8 @@ export function buildSessionTokenUsage(
     gateway.input += tokenCount(row.input_tokens);
     gateway.output += tokenCount(row.output_tokens);
     gateway.total += tokenCount(row.total_tokens);
+    gateway.cacheRead += tokenCount(row.cache_read_input_tokens);
+    gateway.cacheWrite += tokenCount(row.cache_creation_input_tokens);
     if (row.settlement_status === "unknown") gateway.unknown += 1;
     else if (row.settlement_status === "not_reported") gateway.notReported += 1;
     else gateway.settled += 1;
@@ -223,11 +233,15 @@ export function buildSessionTokenUsage(
       input: 0,
       output: 0,
       total: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
     };
     model.requests += 1;
     model.input += tokenCount(row.input_tokens);
     model.output += tokenCount(row.output_tokens);
     model.total += tokenCount(row.total_tokens);
+    model.cacheRead += tokenCount(row.cache_read_input_tokens);
+    model.cacheWrite += tokenCount(row.cache_creation_input_tokens);
     models.set(key, model);
   }
   gateway.models = [...models.values()].sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
