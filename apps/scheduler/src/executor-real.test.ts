@@ -250,7 +250,10 @@ test("OpenSandbox official prod PoC source-text contract uses prod+real+overlay 
   assert.match(source, /deepsonar-opensandbox must stay running/);
   assert.match(source, /runOpenSandboxInfrastructurePoc/);
   assert.match(source, /runOpenSandboxImageContractPoc/);
+  assert.match(source, /runOpenSandboxOfficialImagesPoc/);
+  assert.match(source, /listOfficialOpenSandboxRuntimeImages/);
   assert.match(source, /OPEN_SANDBOX_POC_RUNTIME_IMAGE/);
+  assert.match(source, /OPEN_SANDBOX_POC_IMAGE_KEYS/);
   assert.match(source, /OPEN_SANDBOX_DOMAIN=opensandbox:8080/);
   assert.match(source, /network", "connect", "bridge"/);
   assert.match(source, /provision=true leftover=0/);

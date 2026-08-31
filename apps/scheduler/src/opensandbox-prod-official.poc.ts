@@ -12,10 +12,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSdkOpenSandboxClient,
+  listOfficialOpenSandboxRuntimeImages,
   OPENSANDBOX_POC_CLI_IDS,
   readOpenSandboxPin,
   runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
+  runOpenSandboxOfficialImagesPoc,
   shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
 
@@ -158,8 +160,19 @@ try {
     throw new Error(`official overlay leftover: ${leftovers.map((item) => item.resourceId).join(",")}`);
   }
   const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+  const imageKeys = (process.env.OPEN_SANDBOX_POC_IMAGE_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean);
   let official: { provisionMs: number; clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>> } | null = null;
-  if (runtimeImage) {
+  let officialImages: Array<{ key: string; provisionMs: number }> = [];
+  if (imageKeys.length > 0) {
+    const listed = listOfficialOpenSandboxRuntimeImages(
+      JSON.parse(readFileSync(join(repoRoot, "deploy/runtime-image-registry.json"), "utf8")),
+    );
+    const selected = listed.filter((item) => imageKeys.includes(item.key));
+    if (selected.length !== imageKeys.length) {
+      throw new Error(`official overlay image keys not in registry: ${imageKeys.filter((key) => !listed.some((item) => item.key === key)).join(",")}`);
+    }
+    officialImages = await runOpenSandboxOfficialImagesPoc(overlayClient, selected);
+  } else if (runtimeImage) {
     official = await runOpenSandboxImageContractPoc(overlayClient, { image: runtimeImage });
     const missing = OPENSANDBOX_POC_CLI_IDS.filter((id) => official.clis[id] !== true);
     if (missing.length > 0) {
@@ -169,10 +182,13 @@ try {
   if (!existingOpenSandboxRunning()) {
     throw new Error("official overlay provision stopped Phase 2 deepsonar-opensandbox");
   }
+  const officialSummary = officialImages.length > 0
+    ? ` official=true keys=${officialImages.map((item) => `${item.key}:${item.provisionMs}`).join(",")} leftover=0`
+    : official
+      ? ` official=true officialMs=${official.provisionMs} clis=${OPENSANDBOX_POC_CLI_IDS.join(",")}`
+      : "";
   console.log(
-    `OK: OpenSandbox official prod web=200 silo=ready overlay=healthy leftover_server=1 bridge=true provision=true leftover=0 createMs=${created.createMs}${
-      official ? ` official=true officialMs=${official.provisionMs} clis=${OPENSANDBOX_POC_CLI_IDS.join(",")}` : ""
-    } port=${webPort} osPort=${osHostPort}`,
+    `OK: OpenSandbox official prod web=200 silo=ready overlay=healthy leftover_server=1 bridge=true provision=true leftover=0 createMs=${created.createMs}${officialSummary} port=${webPort} osPort=${osHostPort}`,
   );
 } finally {
   down();
