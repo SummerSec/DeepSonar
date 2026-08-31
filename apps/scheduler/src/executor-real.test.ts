@@ -250,6 +250,7 @@ test("OpenSandbox official prod PoC source-text contract uses prod+real+overlay 
   assert.match(source, /deepsonar-opensandbox must stay running/);
   assert.match(source, /runOpenSandboxInfrastructurePoc/);
   assert.match(source, /OPEN_SANDBOX_DOMAIN=opensandbox:8080/);
+  assert.match(source, /network", "connect", "bridge"/);
   assert.match(source, /provision=true leftover=0/);
   assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
   assert.doesNotMatch(source, /network_mode: host/);

@@ -100,6 +100,11 @@ try {
     const logs = run([...composeArgs, "logs", "--tail=80"], 30_000);
     throw new Error(`official prod up failed: ${up.stderr || up.stdout}\n${logs.stdout}\n${logs.stderr}`);
   }
+  const attached = run(["-n", "docker", "network", "connect", "bridge", osContainer]);
+  const attachedText = `${attached.stderr}\n${attached.stdout}`;
+  if (attached.status !== 0 && !/already exists in network|already connected/i.test(attachedText)) {
+    throw new Error(`official overlay could not join default bridge: ${attachedText}`);
+  }
 
   type HealthProbe = { ok?: boolean; opensandbox?: { level?: string; ready?: boolean; domain?: string } };
   const deadline = Date.now() + 240_000;

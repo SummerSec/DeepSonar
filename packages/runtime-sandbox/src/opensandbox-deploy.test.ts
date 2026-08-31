@@ -35,8 +35,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(overlay, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(overlay, /SANDBOX_PROVIDER: opensandbox/);
   assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
-  assert.match(overlay, /name: bridge/);
-  assert.match(overlay, /external: true/);
+  assert.match(deploySh, /network connect bridge/);
   assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18080/);
   assert.match(overlay, /condition: service_healthy/);
   assert.match(overlay, /127\.0\.0\.1:8080\/health/);

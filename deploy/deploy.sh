@@ -170,6 +170,16 @@ fi
 
 # Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
 # Only `up` may touch host FORWARD; down/logs/status/check/pull must not.
+attach_opensandbox_default_bridge() {
+  [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
+  name="${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-opensandbox}"
+  echo "[deploy] attaching $name to Docker default bridge for egress sidecars"
+  if docker network connect bridge "$name"; then
+    return 0
+  fi
+  docker network inspect bridge --format '{{range .Containers}}{{.Name}} {{end}}' | grep -Fqw "$name"
+}
+
 relax_bridge_forward() {
   [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
   command -v sudo >/dev/null 2>&1 || return 0
@@ -305,6 +315,7 @@ case "$ACTION" in
       # 不传 --build：优先使用已拉取的 image: 标签，避免强制本地构建
       "$@" up -d --pull missing
     fi
+    attach_opensandbox_default_bridge
     port=$(awk -F= '$1=="DEEPSONAR_WEB_PORT" {print $2; exit}' "$ENV_FILE")
     port=${port:-8080}
     health="http://127.0.0.1:$port/api/health"

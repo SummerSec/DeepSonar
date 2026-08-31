@@ -25,7 +25,6 @@ services:
       retries: 20
     networks:
       - deepsonar
-      - default_bridge
 
   scheduler:
     environment:
@@ -40,11 +39,3 @@ services:
 
 volumes:
   opensandbox-data:
-
-# Sidecars use Docker default bridge (TOML network_mode=bridge). The server
-# stays on compose `deepsonar` for scheduler DNS and also joins `bridge`
-# so sidecar urlopen is not a cross-network timeout.
-networks:
-  default_bridge:
-    name: bridge
-    external: true
