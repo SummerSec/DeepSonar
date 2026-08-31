@@ -63,10 +63,10 @@ export function isOpenSandboxGoneError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const status = "statusCode" in error ? Number((error as { statusCode?: number }).statusCode) : 0;
   const nested = "error" in error && error.error && typeof error.error === "object"
-    ? String((error.error as { code?: string; message?: string }).code ?? (error.error as { message?: string }).message ?? "")
+    ? `${(error.error as { code?: string }).code ?? ""} ${(error.error as { message?: string }).message ?? ""}`
     : "";
-  const message = error instanceof Error ? error.message : String(error);
-  const text = `${nested} ${message}`;
+  const ownMessage = "message" in error ? String((error as { message?: unknown }).message ?? "") : "";
+  const text = `${nested} ${ownMessage}`;
   return status === 404 || status === 409
     || /SANDBOX_NOT_FOUND|already in progress/i.test(text);
 }

@@ -508,8 +508,18 @@ export async function runOpenSandboxImageContractPoc(
     const host = await runner.ensureHost(handle);
     const clis: Partial<Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], boolean>> = {};
     for (const id of OPENSANDBOX_POC_CLI_IDS) {
-      const found = await host.run(OPENSANDBOX_POC_CLI_PROBES[id], { timeoutMs: 5_000 });
-      clis[id] = found.exitCode === 0;
+      let found: { exitCode: number } | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          found = await host.run(OPENSANDBOX_POC_CLI_PROBES[id], { timeoutMs: 15_000 });
+          break;
+        } catch (error) {
+          const text = error instanceof Error ? error.message : String(error);
+          if (attempt === 2 || !/proxy|UNKNOWN_ERROR/i.test(text)) throw error;
+          await waitMs(1_000);
+        }
+      }
+      clis[id] = found?.exitCode === 0;
     }
     return { provisionMs, clis, leftovers: 0 };
   } finally {

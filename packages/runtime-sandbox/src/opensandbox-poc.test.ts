@@ -431,6 +431,12 @@ test("official OpenSandbox image PoC requires all five CLIs", async () => {
   );
 });
 
+test("OpenSandbox image contract PoC retries proxy exec flakes", () => {
+  const source = readFileSync(new URL("./opensandbox-poc.ts", import.meta.url), "utf8");
+  assert.match(source, /proxy\|UNKNOWN_ERROR/);
+  assert.match(source, /timeoutMs: 15_000/);
+});
+
 test("OpenSandbox image contract PoC reprovisions and reports leftovers", async () => {
   const result = await runOpenSandboxImageContractPoc({
     async create() {
