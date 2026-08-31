@@ -29,7 +29,7 @@ const DENY_PROBE_SERVICE = "deepsonar-egress-deny-probe";
 export const KATA_GATEWAY_ALLOW_SCRIPT = `
 import urllib.request, sys
 try:
-    urllib.request.urlopen("http://${GATEWAY_PROBE_SERVICE}/", timeout=8)
+    urllib.request.urlopen("http://${GATEWAY_PROBE_SERVICE}:3100/", timeout=8)
     sys.exit(0)
 except Exception as error:
     sys.stderr.write(str(error))
@@ -81,7 +81,8 @@ spec:
   selector:
     app: ${EGRESS_PROBE_POD}
   ports:
-    - port: 80
+    - name: gateway
+      port: 3100
       targetPort: 8080
 `,
     deny: `apiVersion: v1

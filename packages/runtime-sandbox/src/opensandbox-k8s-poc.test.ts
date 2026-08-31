@@ -31,7 +31,7 @@ function session(overrides?: {
       if (command.includes("192.0.2.1")) {
         return { exitCode: overrides?.isolated === false ? 0 : 1, stdout: "", stderr: "" };
       }
-      if (command.includes("urlopen") && command.includes("deepsonar-gateway-proxy")) {
+      if (command.includes("urlopen") && command.includes("deepsonar-gateway-proxy:3100")) {
         return { exitCode: overrides?.gatewayAllowed === false ? 1 : 0, stdout: "", stderr: "" };
       }
       if (command.includes("urlopen") && command.includes("deepsonar-egress-deny-probe")) {
