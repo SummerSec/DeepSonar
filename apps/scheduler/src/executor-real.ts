@@ -1516,6 +1516,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         model,
         contextWindowTokens: snapshot.context_window_tokens,
         reasoning,
+        platformSystemPrompt: PLATFORM_SYSTEM_PROMPT,
       })
     : undefined;
 

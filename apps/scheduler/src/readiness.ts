@@ -678,6 +678,14 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
           checks.push(fail("AGENT_CLI_IMAGE_INCOMPATIBLE", `${role.name} 的 ${adapter.id} 与 runtime image ${imageKey} 不兼容；请选择受治理的匹配镜像。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
         } else {
           checks.push(pass("AGENT_CLI_READY", `${role.name} 已解析到受治理的 ${adapter.id} runtime adapter。`, { role: summary }));
+          if (adapter.id === "dsh") {
+            checks.push(attention(
+              "DSH_UPSTREAM_CLIENT_FINGERPRINT",
+              `${role.name} 使用 DSH：部分 OpenAI-compatible 上游会按请求首条 system 消息识别客户端。平台已将 DSH 首条 system 投影为 pi 兼容帧（不改变 DSH JSON-RPC 协议）。若 Job 仍报 unauthorized client，请改用 agent_cli=pi 或更换上游。`,
+              roleConfigFix(input.scope),
+              { role: summary },
+            ));
+          }
         }
       }
     }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "@deepsonar/runtime-sandbox";
 import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
 
 const thirdPartySettings = {
@@ -55,7 +56,25 @@ test("DSH runtime projection routes third-party profiles through the Job Gateway
   assert.equal(profile.apiKeyEnv, "DEEPSONAR_GATEWAY_TOKEN");
   assert.equal(profile.reasoning, "max");
   assert.equal((profile.models as Array<Record<string, unknown>>)[0]?.contextWindow, 256_000);
-  assert.equal(JSON.stringify(runtime).includes("127.0.0.1"), false);
+  assert.equal(JSON.stringify(runtime.config).includes("127.0.0.1"), false);
+  assert.equal(runtime.systemPrompt, DSH_PI_COMPAT_SYSTEM_PROMPT);
+  assert.equal("headers" in profile, false);
+});
+
+test("DSH request frame projects a pi-compatible system prompt outside the pi-ai profile", () => {
+  const platform = "你在 DeepSonar 的一次性 Worker 沙箱中运行。";
+  const runtime = buildDshPiAiRuntimeProjection({
+    settingsConfig: thirdPartySettings,
+    credentialProvider: "openai",
+    gatewayBaseUrl: "http://deepsonar-gateway:3100/gateway",
+    platformSystemPrompt: platform,
+  });
+  assert.ok(runtime.systemPrompt.startsWith(DSH_PI_COMPAT_SYSTEM_PROMPT));
+  assert.match(runtime.systemPrompt, /operating inside pi/);
+  assert.ok(runtime.systemPrompt.includes(platform));
+  assert.equal(projectDshSystemPrompt(runtime.systemPrompt), runtime.systemPrompt);
+  assert.equal(JSON.stringify(runtime.config).includes(platform), false);
+  assert.equal(JSON.stringify(runtime.config).includes(DSH_PI_COMPAT_SYSTEM_PROMPT), false);
 });
 
 test("DSH reasoning uses canonical levels while model mappings own custom wire values", () => {

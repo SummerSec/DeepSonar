@@ -67,7 +67,7 @@ export function buildDshCordisSmokeConfig() {
     dshHome: !!js process.env.DSH_HOME ?? '/workspace/.deepsonar-home/.dsh'
     includeHarnessIdentity: false
     includeRuntimeContext: false
-    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a software engineering agent.'
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.'
     tools:
       mode: native
     workspaceContext: false

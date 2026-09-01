@@ -1,5 +1,8 @@
 import { CONTEXT_WINDOW_TOKENS_MAX, CONTEXT_WINDOW_TOKENS_MIN, DSH_REASONING_EFFORTS, isDshReasoningEffort } from "@deepsonar/shared-types";
+import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "@deepsonar/runtime-sandbox";
 import { parseDocument, stringify } from "yaml";
+
+export { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt };
 
 export const DSH_PI_AI_PLUGIN = "@deepseek-ai/dsh-llm-pi-ai";
 export const DSH_GATEWAY_KEY_ENV = "DEEPSONAR_GATEWAY_TOKEN";
@@ -77,6 +80,8 @@ export interface DshPiAiRuntimeProjection {
   provider: string;
   model: string;
   config: { providers: Record<string, Record<string, unknown>> };
+  /** First system-message frame projected for upstream client checks. Not written into the pi-ai profile. */
+  systemPrompt: string;
 }
 
 export interface OfficialLlmPiAiProfile {
@@ -270,6 +275,7 @@ export function buildDshPiAiRuntimeProjection(input: {
   model?: string | null;
   contextWindowTokens?: number | null;
   reasoning?: string | null;
+  platformSystemPrompt?: string | null;
 }): DshPiAiRuntimeProjection {
   const parsed = parseDshPiAiSettings(input.settingsConfig, input.credentialProvider);
   const selectedModel = input.model?.trim() || parsed.modelIds[0]!;
@@ -299,7 +305,12 @@ export function buildDshPiAiRuntimeProjection(input: {
     const selected = models.find((model) => model.id === selectedModel)!;
     selected.contextWindow = limit;
   }
-  return { provider: parsed.provider, model: selectedModel, config: { providers: { [parsed.provider]: profile } } };
+  return {
+    provider: parsed.provider,
+    model: selectedModel,
+    config: { providers: { [parsed.provider]: profile } },
+    systemPrompt: projectDshSystemPrompt(input.platformSystemPrompt),
+  };
 }
 
 export function defaultDshPiAiSettings(input: {
