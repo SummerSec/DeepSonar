@@ -4,9 +4,27 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-01
+
+### 修复
+
+- task retry / 唤醒 Hub 时当前 RoleConfig / Credential 无法解析，稳定返回 `409 SNAPSHOT_STALE`，不再 500（#315）。
+- 角色 `agent_cli` 更新时，绑定 LLM 凭据在 Provider 兼容矩阵通过后跟随最新配置；Job 解析以角色为准，凭据 `agent_cli` 仅为软提示（#316）。
+- Provider `/models` 探测失败不再阻塞凭据或角色保存；catalog 软降级为空，仍可写 health（#317）。
+- pi / dsh adapter 解析上游错误里嵌入的 JSON `message`，Job `last_error` 展示短原因（#320）。
+- dsh 在平台 system prompt 前投影英文 coding-assistant opener，对齐 pi 风格 `input[0]`，减少兼容网关按 system 帧全部 401（#321）。
+- 控制台侧栏版本号链接到官方 GitHub `releases/tag/vX.Y.Z`；脏 tag 回退 releases 首页；空版本不渲染链接（#327）。
+
 ### 变更
 
-- 刷新治理 Agent CLI pin（#319）：Claude Code `2.1.231` → `2.1.252`，Pi Coding Agent `0.84.1` → `0.84.4`，DSH 完整 package closure `0.1.0-rc.7` → `0.1.1-rc.2`（npm `latest` 标签仍指向过期的 `0.0.1-rc.*`，不以该标签为准）。adapter、Base/Kali Dockerfile 与 runtime 清单同步更新 `dist.integrity`。本提交不重建或发布官方镜像。
+- 刷新治理 Agent CLI pin（#319）：Claude Code `2.1.231` → `2.1.252`，Pi Coding Agent `0.84.1` → `0.84.4`，DSH 完整 package closure `0.1.0-rc.7` → `0.1.1-rc.2`（npm `latest` 标签仍指向过期的 `0.0.1-rc.*`，不以该标签为准）。adapter、Base/Kali Dockerfile 与 runtime 清单同步更新 `dist.integrity`。
+- OpenSandbox server 宿主端口默认改为 `18081`（`docker-compose.opensandbox.prod.yml` / `.env.example`）。调度器仍经 compose 网络 `opensandbox:8080` 访问，不受宿主端口影响。
+
+### 部署 / 升级说明
+
+- 本版本无 schema 变更。
+- CLI pin 变更会重建官方 Agent 运行时镜像（Base / Kali 等）；Release 指纹变化后才会 docker build。
+- 已用 `OPEN_SANDBOX_HOST_PORT=18080` 的部署可继续显式覆盖；新默认是 `18081`。
 
 ## [0.2.1] - 2026-09-01
 
@@ -509,6 +527,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.2.2]: https://github.com/SummerSec/DeepSonar/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
 [0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
