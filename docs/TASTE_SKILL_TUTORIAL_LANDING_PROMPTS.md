@@ -86,7 +86,7 @@ DeepSonar is a multi-project code-audit scheduling platform.
 Four truths:
 1. Local DB = only source of truth
 2. Canvas = process truth (fact-intent bipartite graph per task)
-3. Sandbox = execution truth (agentbox; default networkMode none)
+3. Sandbox = execution truth (OpenSandbox; default networkMode none)
 4. Scheduler = the only executor with side effects
 
 Core discipline:
@@ -102,7 +102,7 @@ Core discipline:
 - Agent config layers: agent_roles → role_configs (global + project) →
   jobs.agent_snapshot_json (frozen at create) → payload_json.runtime_evidence
 - Fake mode: AGENT_MODE=fake (NoopRunner, state machine only)
-- Real mode: AGENT_MODE=real (agentbox-sdk sandbox)
+- Real mode: AGENT_MODE=real (OpenSandbox)
 - Schema single source: database/schema.sql, applied on scheduler start
 - Web is read-mostly process surface; nodes not agent-draggable; layout server-side
 - Plane is optional integration; default path is local project/task API

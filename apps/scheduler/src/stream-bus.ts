@@ -11,7 +11,7 @@ import { encodeCursor, page, pageLimit, parseCursor, CursorError, type PageEnvel
  */
 
 export interface StreamItem {
-  /** agentbox normalized event type or a scheduler run marker */
+  /** runtime normalized event type or a scheduler run marker */
   type: string;
   /** Stable attempt identity shared with the evidence archive. */
   attempt_id: string;

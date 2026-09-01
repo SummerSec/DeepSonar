@@ -1,0 +1,15 @@
+# Scheduler-owned Gateway Service (#162). ClusterIP is written into sandbox /etc/hosts.
+# No pod selector here: leftover/production attach Endpoints separately.
+apiVersion: v1
+kind: Service
+metadata:
+  name: deepsonar-gateway-proxy
+  namespace: deepsonar-opensandbox
+  labels:
+    app.kubernetes.io/name: deepsonar-gateway-proxy
+    deepsonar.opensandbox/isolation: infrastructure
+spec:
+  ports:
+    - name: gateway
+      port: 3100
+      targetPort: 3100

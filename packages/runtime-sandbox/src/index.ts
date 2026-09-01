@@ -1,7 +1,9 @@
 /**
- * runtime-adapter：调度器与沙箱之间的唯一接口（ARCHITECTURE §5）
- * 实现可替换：noop（骨架）→ agentbox-sdk local-docker → e2b/daytona 云端
+ * runtime-adapter：调度器与沙箱之间的唯一接口（ARCHITECTURE §5 / #162）
+ * 实现可替换：noop（骨架）→ OpenSandbox（real 默认）。
  */
+
+import type { RuntimeHost, RuntimeResource } from "./runtime-host.js";
 
 export interface ProvisionInput {
   jobId: string;
@@ -22,6 +24,11 @@ export interface ProvisionInput {
   expectedToolsManifestSha256?: string | null;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
+  /**
+   * Kubernetes ResourceName 不接受 Docker 专有的 `pids`。
+   * 仍要求冻结 pidsLimit；只是不要写进 Pod resources。
+   */
+  kubernetesResources?: boolean;
   /** provision 超时/取消时必须中止外部资源创建。 */
   signal?: AbortSignal;
 }
@@ -64,12 +71,18 @@ export interface SandboxTerminalSession {
 export interface SandboxRunner {
   provision(input: ProvisionInput): Promise<RunHandle>;
   /** 取消尚未返回句柄的 provision，必须销毁已创建或正在创建的资源。 */
-  cancelProvision?(input: { jobId: string; attemptId: string }): Promise<void>;
+  cancelProvision(input: { jobId: string; attemptId: string }): Promise<void>;
   destroy(handle: RunHandle): Promise<void>;
   /** Reaper 探测：控制通道是否存活（§3.3 lease 依据） */
   isAlive(handle: RunHandle): Promise<boolean>;
   /** Optional, provider-backed PTY in the existing Job sandbox. */
-  openTerminal?(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession>;
+  openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession>;
+  /** Sync cache only. Missing after process restart until ensureHost reconnects. */
+  hostOf(handle: RunHandle): RuntimeHost | undefined;
+  /** Reconnect a persisted provider resource so Scheduler restart can resume exec/PTY. */
+  ensureHost(handle: RunHandle): Promise<RuntimeHost>;
+  listResources(filter?: { jobId?: string; attemptId?: string }): Promise<RuntimeResource[]>;
+  destroyResource(resource: RuntimeResource): Promise<void>;
 }
 
 /** Phase 0 骨架：不起真实沙箱，只走状态机 */
@@ -86,45 +99,171 @@ export class NoopRunner implements SandboxRunner {
   async openTerminal(): Promise<SandboxTerminalSession> {
     throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
   }
+  hostOf(): RuntimeHost | undefined {
+    return undefined;
+  }
+  async ensureHost(): Promise<RuntimeHost> {
+    throw new Error("NOOP_HOST_UNSUPPORTED");
+  }
+  async listResources(): Promise<RuntimeResource[]> {
+    return [];
+  }
+  async destroyResource(): Promise<void> {}
 }
 
+export type {
+  RuntimeAsyncRunOptions,
+  RuntimeCommandResult,
+  RuntimeHost,
+  RuntimeProcess,
+  RuntimeProcessChunk,
+  RuntimeResource,
+  RuntimeRunOptions,
+} from "./runtime-host.js";
+export { assertWorkspaceWritePath, shellQuote } from "./runtime-host.js";
+export type {
+  AgentCommandConfig,
+  AgentMcpConfig,
+  AgentSkillConfig,
+  AgentSubAgentConfig,
+} from "./runtime-agent-config.js";
 export {
-  AgentboxRunner,
-  cleanupUnhealthyManagedGateway,
-  createSemanticToolState,
+  OpenSandboxRunner,
+  awaitProvisionSession,
+  createSdkOpenSandboxClient,
+  evaluateOpenSandboxAlive,
+  inspectPreparedSharedAssetsVolume,
+  mapOpenSandboxCreateInput,
+  mapOpenSandboxNetworkPolicy,
+  requireOpenSandboxLimits,
+} from "./opensandbox.js";
+export type { OpenSandboxGatewayBinder, OpenSandboxRunnerOptions } from "./opensandbox.js";
+export {
+  OPENSANDBOX_POC_ADAPTER_IDS,
+  OPENSANDBOX_POC_CLI_IDS,
+  OPENSANDBOX_POC_CONTRACT,
+  OPENSANDBOX_POC_IMAGE,
+  OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS,
+  isOpenSandboxCliMissing,
+  VENDOR_OFFICIAL_ORIGINS,
+  assertVendorOfficialOrigin,
+  assertVendorUpstreamPayload,
+  assertVendorUpstreamStatus,
+  listOfficialOpenSandboxRuntimeImages,
+  runOpenSandboxArchPoc,
+  runOpenSandboxAssetsPoc,
+  runOpenSandboxCliLaunchPoc,
+  runOpenSandboxCancelPoc,
+  runOpenSandboxContractFailPoc,
+  runOpenSandboxHostPoc,
+  runOpenSandboxImageContractPoc,
+  runOpenSandboxOfficialImagesPoc,
+  runOpenSandboxInfrastructurePoc,
+  runOpenSandboxRecoveryPoc,
+  runOpenSandboxRestrictedPoc,
+  runOpenSandboxRetryPoc,
+  shouldRunOpenSandboxPoc,
+} from "./opensandbox-poc.js";
+export {
+  OPENSANDBOX_K8S_NAMESPACE,
+  OPENSANDBOX_KATA_RUNTIME_CLASS,
+  findKataWorkload,
+  probeKataCluster,
+  runOpenSandboxK8sPoc,
+  shouldRunOpenSandboxK8sPoc,
+} from "./opensandbox-k8s-poc.js";
+export {
+  runOpenSandboxK8sAssetsPoc,
+  sharedAssetsClaimName,
+  shouldRunOpenSandboxK8sAssetsPoc,
+} from "./opensandbox-k8s-assets-poc.js";
+export {
+  AGENT_SANDBOX_CRD,
+  OPENSANDBOX_GVISOR_RUNSC_URL,
+  OPENSANDBOX_GVISOR_RUNSC_VERSION,
+  readAgentSandboxCrd,
+  readGvisorNatProbe,
+  runOpenSandboxGvisorPoc,
+  shouldRunOpenSandboxGvisorPoc,
+} from "./opensandbox-gvisor-poc.js";
+export {
+  OPENSANDBOX_EGRESS_IMAGE,
+  OPENSANDBOX_EXECD_IMAGE,
+  OPENSANDBOX_PIN_SCHEMA,
+  OPENSANDBOX_SDK_VERSION,
+  OPENSANDBOX_SERVER_IMAGE,
+  assertOpenSandboxImmutableRef,
+  assertOpenSandboxSdkVersion,
+  isManagedRuntimeResource,
+  readOpenSandboxPin,
+} from "./opensandbox-version.js";
+export type { OpenSandboxPin } from "./opensandbox-version.js";
+export type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxSession } from "./opensandbox.js";
+export {
   CONTAINER_REMOVE_MAX_ATTEMPTS,
   CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
   CONTAINER_REMOVE_TIMEOUT_MS,
-  DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
-  discardPendingSemanticTools,
   forceRemoveContainer,
-  gatewayCreateTimeoutMs,
-  gatewayProxyReuseAction,
   listDeepSonarContainers,
-  materializationPathCollisions,
-  normalizeRuntimeErrorDetails,
   parseDeepSonarContainerRows,
-  preheatManagedGateway,
+  readDockerWorkspaceFile,
   removeContainerWithRetry,
-  redactRuntimeSecrets,
-  parseRuntimeLine,
-  resetManagedGatewayStateForTests,
-  runRealAgent,
-  shouldRemoveGatewayLeftover,
-  assertSharedAssetsContainerMount,
-  assertSharedAssetsVolumeOwnership,
+  writeDockerHumanInboxFile,
   isDeepsonarGatewayNetwork,
   isDeepsonarRestrictedNetwork,
-  SHARED_ASSETS_MOUNT_PATH,
+} from "./runtime-docker.js";
+export {
+  cleanupUnhealthyManagedGateway,
+  DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
+  GATEWAY_PROXY_SCRIPT,
+  gatewayCreateTimeoutMs,
+  gatewayProxyReuseAction,
+  bindGatewayProxyToOpenSandboxNetwork,
+  preheatManagedGateway,
+  resetManagedGatewayStateForTests,
+  shouldRemoveGatewayLeftover,
+} from "./runtime-gateway.js";
+export {
+  bindGatewayProxyToKubernetesService,
+  gatewayServiceManifest,
+  readServiceClusterIP,
+} from "./kubernetes-gateway.js";
+export {
+  DEEPSONAR_GATEWAY_PROXY_HOST,
+  HUMAN_INBOX_WRITER_SCRIPT,
+  RuntimeImageContractError,
   SHARED_ASSETS_JOB_LABEL,
+  SHARED_ASSETS_MOUNT_PATH,
   SHARED_ASSETS_VOLUME_LABEL,
+  WORKSPACE_RESERVED_ROOTS,
+  assertReadableWorkspacePath,
+  assertSharedAssetsContainerMount,
+  assertSharedAssetsGuestMount,
+  assertSharedAssetsVolumeOwnership,
+  bindProvisionAbortSignal,
+  buildTerminalShellCommand,
+  parseHumanInboxWorkspacePath,
+  parseToolManifest,
   sharedAssetsVolumeBinds,
-} from "./agentbox.js";
-export { RuntimeImageContractError } from "./agentbox.js";
-export type { DeepSonarContainer, RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails } from "./agentbox.js";
-export type { SemanticToolState } from "./agentbox.js";
-export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager } from "./shared-assets-volume.js";
+  terminalShellCommand,
+  writeTerminalInput,
+} from "./runtime-shared.js";
+export {
+  createSemanticToolState,
+  discardPendingSemanticTools,
+  materializationPathCollisions,
+  normalizeRuntimeErrorDetails,
+  parseRuntimeLine,
+  redactRuntimeSecrets,
+  runRealAgent,
+  runtimeCliEnv,
+  skillMaterializationPath,
+} from "./runtime-agent.js";
+export type { DeepSonarContainer } from "./runtime-docker.js";
+export type { RealAgentResult, RealAgentSpec, ReasoningEffort, RuntimeErrorDetails, SemanticToolState } from "./runtime-agent.js";
+export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, NoopSharedAssetsVolumeManager, managedSharedAssetsVolumeName } from "./shared-assets-volume.js";
 export type { SharedAssetsVolumeManager, SharedAssetVolumeFile } from "./shared-assets-volume.js";
+export { KubernetesSharedAssetsVolumeManager, readDefaultStorageClass } from "./kubernetes-shared-assets-volume.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
 export type {
   AgentCliSessionAdapter,
@@ -136,6 +275,8 @@ export {
   AGENT_CLI_RUNTIME_ADAPTERS,
   CONTROL_RUNTIME_CAPABILITIES,
   PiJsonlFramer,
+  applyRuntimeOutput,
+  applyRuntimeOutputText,
   parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,

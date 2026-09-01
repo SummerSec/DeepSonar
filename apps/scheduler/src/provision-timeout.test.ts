@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { withProvisionTimeout } from "./dispatcher.js";
 
@@ -49,4 +50,11 @@ test("late provision success is destroyed before timeout reaches the caller", as
   provision.resolve({ sandboxId: "late-sandbox" });
   await assert.rejects(result, /provision timed out/);
   assert.deepEqual(destroyed, ["late-sandbox"]);
+});
+
+test("dispatcher records provision latency by sandbox provider", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(source, /deepsonar_sandbox_provision_seconds_sum/);
+  assert.match(source, /deepsonar_sandbox_provision_failed_total/);
+  assert.match(source, /agentMode !== "real"\s*\n\s*\? "noop"\s*\n\s*: "opensandbox"/);
 });

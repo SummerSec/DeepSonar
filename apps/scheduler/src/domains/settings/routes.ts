@@ -182,7 +182,7 @@ async function validateProjectRuntimeImages(
 }
 
 async function projectRuntimeImageRefs(projectId: string, cfg: Record<string, unknown>) {
-  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return [];
+  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return [];
   const policy = parseProjectImagePolicy(cfg);
   const roles = await sql`
     SELECT r.name, rc.runtime_image_key

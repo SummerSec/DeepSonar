@@ -1,0 +1,41 @@
+# OpenSandbox Docker PoC (#162 Phase 2). Official server schema only.
+# Immutable digest pins only. Floating tags and Docker host network are rejected.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+max_sandbox_timeout_seconds = 86400
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "docker.io/opensandbox/execd@sha256:d358f23cb268779eaa71433ce0654a71cd9d016d429e57d7f245ad8f91b8ff7a"
+
+[docker]
+network_mode = "bridge"
+api_timeout = 180
+host_ip = "host.docker.internal"
+drop_capabilities = ["ALL"]
+no_new_privileges = true
+pids_limit = 4096
+
+[ingress]
+mode = "direct"
+
+[egress]
+image = "docker.io/opensandbox/egress@sha256:db7345d567b0970f384b8e3fa7a93a71b7f43d4b16bb2009de34096e9a87b3b5"
+mode = "dns"
+disable_ipv6 = true
+readiness_timeout_seconds = 30.0
+
+[storage]
+allowed_host_paths = []
+
+[store]
+type = "sqlite"
+path = "/var/lib/opensandbox/opensandbox.db"
+
+[renew_intent]
+enabled = false

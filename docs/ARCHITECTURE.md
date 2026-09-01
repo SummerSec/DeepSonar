@@ -51,7 +51,7 @@
         │ 起沙箱/跑 Agent              │ 结构化事件
 ┌───────▼──────────┐         ┌────────▼─────────┐
 │  Runtime         │         │  Canvas Service  │
-│  agentbox 沙箱    │         │  每项目一张画布   │
+│  OpenSandbox 沙箱 │         │  每项目一张画布   │
 │  + Claude Code   │         │  节点/边/事件     │
 └──────────────────┘         └──────────────────┘
 ```
@@ -125,7 +125,7 @@ pending → claimed → provisioning → running → succeeded
 **Lease 机制（防悬挂，核心纪律）：**
 
 - Job 进入 `running` 时写入 `lease_expires_at = now + LEASE_TTL`（默认 120s）
-- 调度器经沙箱控制通道（agentbox-sdk）探测存活并续 lease；进程/通道断开即停续
+- 调度器经 `RuntimeHost` / `SandboxRunner.isAlive` 探测存活并续 lease；进程/通道断开即停续。real 默认 OpenSandbox，不把本机 Docker inspect 当唯一真相
 - **Reaper**（调度器内置定时任务，默认每 30s 扫描）：
   - 发现 `status=running 且 lease_expires_at < now` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed` → 回写 Plane
   - 发现 `运行时长 > timeout_sec` → 标记 `timeout` → 同上回收
@@ -164,7 +164,7 @@ Attempt 收口为 interrupted，未确认 effect 保持 unknown，绝不跨沙�
 任务 `resume-session` 的启动中断批次与单 Job 默认沿用旧快照；任一 stale 时整批无副作用
 拒绝并返回完整 `job_ids`，由操作者逐 Job 选择 `rerun-current`。
 
-Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否的周期 desired-state 对账。Agentbox destroy 先尝试 SDK 删除，但最终必须按容器 ID 执行单次 120 秒、最多 5 次的指数退避 force remove；只有 Docker 明确返回 no-such 才是幂等成功，其他错误必须抛给调用方并计指标。启动 reconcile 和 Reaper 运行期都从 DB 的 `claimed/provisioning/running` Job 与 active Attempt 推导应保留集合，不增加清理表；容器只接受同时具有 canonical UUID `deepsonar.job` / `deepsonar.attempt` 的双标签，卷只接受严格 `deepsonar-assets-<canonical Job UUID>` 名称并复核 local driver/scope 与可选受管标签。对账防重入，失败资源留到下一轮继续重试。任何 broad prune、仅凭模糊前缀删除容器或删除非 DeepSonar 资源均被禁止。
+Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否的周期 desired-state 对账。sandbox destroy 先走 provider SDK 删除，但最终必须按容器 ID 执行单次 120 秒、最多 5 次的指数退避 force remove；只有 Docker 明确返回 no-such 才是幂等成功，其他错误必须抛给调用方并计指标。启动 reconcile 和 Reaper 运行期都从 DB 的 `claimed/provisioning/running` Job 与 active Attempt 推导应保留集合，不增加清理表；容器只接受同时具有 canonical UUID `deepsonar.job` / `deepsonar.attempt` 的双标签，卷只接受严格 `deepsonar-assets-<canonical Job UUID>` 名称并复核 local driver/scope 与可选受管标签。对账防重入，失败资源留到下一轮继续重试。任何 broad prune、仅凭模糊前缀删除容器或删除非 DeepSonar 资源均被禁止。
 
 ### 3.4 Agent 工具白名单（只提案）
 
@@ -202,7 +202,7 @@ loop:
   1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
   2. 原子 claim（DB advisory lock 串行化配额判断）→ 读取 `global_settings.effective_rules` 的全局/每项目 cap，再按“Provider → Credential → Model ID → Agent CLI”检查资源配额 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher；规则更新也会 notify，后续 claim 热生效
   3. Canvas：创建/更新 job 节点（running）
-  4. Runtime：起沙箱（agentbox-sdk），注入任务包、静态控制 Skill 与冻结 API operation allowlist
+  4. Runtime：经 `SandboxRunner` 起沙箱（real 默认 OpenSandbox），注入任务包、静态控制 Skill 与冻结 API operation allowlist
   5. 启动冻结的 Agent CLI；文本流经 Runtime Adapter 回传，语义事件经 Job 级控制 API 回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
@@ -275,7 +275,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 |------|------|------|
 | **plane-adapter** | HTTP Client | 拉 Issue、改状态、评论；字段映射 |
 | **scheduler-core** | 服务 + Postgres | jobs/events、claim、状态机、限流、Reaper、规则引擎 |
-| **runtime-adapter** | agentbox-sdk（TwillAI, MIT） | provision/run/stop/delete；timeoutMs；networkMode 网络隔离；local-docker 起步，可切 e2b/Daytona 云端 |
+| **runtime-adapter** | provider-neutral RuntimeHost（#162） | provision/run/stop/delete 与 process/file/PTY；real 默认 OpenSandbox；CLI adapter 不引用 SDK 类型 |
 | **canvas-service** | API + React Flow 渲染 | 节点边 CRUD；auto-layout；只读 WS 推送 |
 | **agent-harness** | 沙箱内包装脚本 | 读任务 JSON、调 CLI、把工具调用转成 Event API、心跳 |
 | **web-ui** | React + React Flow (@xyflow/react, MIT) | 打开某项目画布；链到 Plane |
@@ -286,7 +286,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 - DB：Postgres（`jobs` / `events` / `findings` / `canvas_nodes` / `canvas_edges`）
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ Web 端 elkjs 可见投影布局**；大投影固定列兜底，服务端 `x/y` 仅作 placement/exchange hint。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
-- 运行时：**agentbox-sdk（TwillAI，MIT）**——TS SDK，统一 API 驱动沙箱（local-docker 起步，可切 e2b/Modal/Daytona/Vercel）与 Agent（server 进程模式，`approvalMode: "auto"` 权限完全开放，沙箱即安全边界）。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。事件经 SDK 控制通道回传，**不经沙箱网络**（见 §8）。已知风险：0.1.x 早期项目，靠 runtime-adapter 接口隔离，必要时 fork
+- 运行时：**provider-neutral RuntimeHost（#162）**——Scheduler 只通过内部契约驱动沙箱生命周期、流式进程、文件与 PTY，重启后经 `ensureHost` 按持久 resource ID 重连。real 默认由 OpenSandbox 实现这些契约，绑定 `@alibaba-group/opensandbox@0.1.11`，升级只接受显式 pin。Phase 3 部署 overlay 为 Kubernetes BatchSandbox + Kata `kata-qemu`（`deploy/opensandbox/config.k8s.toml`），namespace 另有 ResourceQuota/LimitRange，kustomization 装配基础设施清单与 `gateway-service.yaml`（`deepsonar-gateway-proxy:3100`）；对 K8s server 须设 `OPEN_SANDBOX_KUBERNETES=1`，`OpenSandboxRunner` 省略 Docker 专有 ResourceName=`pids` 但仍要求冻结 `pidsLimit`；`pnpm ci:smoke:opensandbox-k8s` 真机 `kata=true leftovers=0`（官方 base，`RuntimeClass=kata-qemu`，隔离/逃逸/env/hard limits）；`pnpm ci:smoke:opensandbox-gvisor` 真机证明 gVisor+egress `compatible=false natUnsupported=true`；集群若存在 `sandboxes.agents.x-k8s.io` 则 fail closed，不按文档推断可用。Agent CLI 五类可换：**claude-code（默认）/ opencode / codex / pi / dsh**；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。语义事件只经 Job 级 Platform API 回传（`restricted` 仅放行 `deepsonar-gateway-proxy`，由路径过滤 sidecar 转发 `/gateway` 与 `/control/v1`）。OpenSandbox lifecycle / execd / API key 只留在 Scheduler 适配层。无厂商 LLM 凭据的五类 adapter 协议（初始 input、增量 steer/follow-up、stdin 关闭）、Job/Attempt 重启对账（新 runner `list`/`ensureHost`/`isAlive` 后销毁 leftover=0），以及 OpenSandbox 内 `restricted` 经调度器 `preparePlatformCapability` 在 provision 注入短期 token、worker 只读沙箱 env 提交 `emit_fact`/`emit_finding`/`mark_job_done`（无效 token 401，`provisionedEnv=true`）已在官方 base 真机验证；`dispatchOnce` 已证明 claim/provision 后 leftover=0；生产默认叠加 OpenSandbox overlay。`pnpm ci:smoke:opensandbox-prod` 渲染 prod+real+overlay 且不启动栈；`pnpm ci:smoke:opensandbox-images` 对 registry 中九个官方 key 做 contract 重验与五类 CLI 探测（本机 leftover=0）。`isAlive` 不把单次 execd 探测当唯一真相。假客户端上五类 CLI 对瞬态 `503` 均按各自契约同会话恢复，永久 `401` 不恢复；DSH 在 `initialize` 前冻结 `session-${context_id}`。SDK create 可透传 `platform={os,arch}`；本机 Docker 真机已覆盖 `arch=amd64 leftovers=0` 与官方 arm64 child + qemu `arch=arm64 leftovers=0`。Dispatcher 按 provider 记 provision 时延。厂商 E2E 入口 `pnpm ci:smoke:opensandbox-cli-control` 把长期 Provider Key 留在 Scheduler 凭据库，经 `/gateway` 转发，不注入沙箱。`pnpm ci:smoke:opensandbox-k8s` 在显式开启时要求工作负载实际使用 `RuntimeClass=kata-qemu` 且 leftover=0，并证明 Kata + egress sidecar 放行 `deepsonar-gateway-proxy`、拦住同命名空间兄弟 Service；restricted/egress 的 Kubernetes 路径走 `bindGatewayProxyToKubernetesService`，把 Scheduler 持有的 Gateway Service ClusterIP 写入沙箱 `/etc/hosts`（缺 Service / headless=`None` fail closed），不再 skip 或调用 Docker ExtraHosts；缺集群 skip，静态 overlay 不能代替。生产 overlay 发布 `127.0.0.1:18080` 并 health-gate scheduler；`pnpm ci:smoke:opensandbox-prod-up` 独占拉起 overlay server，打 `/health` 并鉴权 `list()`；完整 provision 仍由 Phase 2 server 证明。`pnpm ci:smoke:opensandbox-reconcile` 用 `reconcileOnBoot` 证明 `effect_pending`/running 崩溃 orphan 且不自动重放；K8s/Kata 真机同样 `requeued=1 orphaned=2 leftover=0 replay=0`。`pnpm ci:smoke:opensandbox-reaper` K8s/Kata 真机 `timeout=1 orphan=1 live=1 leftover=0 tokens=revoked pty=closed assets=0`（`KubernetesSharedAssetsVolumeManager` PVC）。`OPEN_SANDBOX_KUBERNETES=1` 时省略 ResourceName=`pids`，共享资产走 labeled PVC，Gateway bind 走 ClusterIP。镜像契约与共享资产原语在 `runtime-shared.ts`，OpenSandbox adapter 不再 import `agentbox.ts`。Agentbox 实现与 `agentbox-sdk` 已删除；real 只加载 OpenSandbox。Dispatcher 本机 `docker inspect` 仅限 `local-docker`；OpenSandbox 在 provision 后重验冻结 digest/contract。`SANDBOX_PROVIDER=opensandbox` 时 readiness / claim 探测 OpenSandbox server（鉴权 `list()`），缺 key 或不可达 fail closed。`pnpm ci:smoke:opensandbox-prod-stack` 用进程内 Scheduler 证明 `/readiness` 含 `OPENSANDBOX_SERVER_READY`，且 `/health.opensandbox.level=ok`。`GET /health` 在 OpenSandbox 模式下把鉴权探测写入 `opensandbox`，server 不可达则 `ready=false`。核心 CI 渲染 prod+real+overlay compose merge。这些不能代替五类 CLI 厂商模型完整 E2E。Agentbox 已删除。
 - Plane：自托管 Community + API Token
 
 暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。
@@ -487,13 +487,13 @@ Job 事件仍必须经过本摄入硬门。
 
 ## 8. Agent 任务包与事件通道
 
-调度器通过 agentbox-sdk 在一次性沙箱内以 server 进程方式拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。
+调度器通过 provider-neutral `RuntimeHost` 在一次性沙箱内以官方 CLI 协议拉起 Agent。每个 Job 都使用全新的 `/workspace`，任务内容只通过 Agent CLI 的 input 注入，不再生成 `task.json`，也不由 Scheduler 预下载或挂载代码。real 默认 OpenSandbox。
 
 系统按 Job 冻结快照动态组装：
 
 - `/workspace/AGENTS.md` 与 `/workspace/CLAUDE.md`：平台边界、角色职责、结果契约与 RoleConfig 长期指令；两份文件由同一内容生成并保持逐字一致
 - 平台内置且不可覆盖的静态 `deepsonar-control` Skill：只描述 capabilities/OpenAPI discovery、短期 Bearer Token、UUID `Idempotency-Key`、HTTP 错误处理与 API-only 规则；Skill 内容对所有 Job 相同，不携带动态权限清单
-- Provider 项目配置文件，以及 agentbox setup 下发的 plugin/skill/command/MCP/subagent
+- Provider 项目配置文件，以及运行时物化下发的 plugin/skill/command/MCP/subagent
 - 非敏感环境变量、白名单 `env_keys`、按 Job 签发的短期模型凭据，以及只在执行期注入的短期平台 API capability token；两类 token 权限域与存储表完全分离
 - 画布创建时冻结的 Finding 协议说明：模式、默认/允许 profile、CVSS 默认/接受版本和必评分 profile；运行中以协议名和来源显著标识
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
@@ -598,9 +598,9 @@ Provision admission 是数据库 claim 事务的一部分，而不是进程内 s
 
 Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目启用视图；新建任务仍只接收标题、内容和可选网络策略，不暴露镜像引用。
 
-官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。Issue #70 Slice B 的 v2 发布清单由 release workflow 以 ACR→GHCR→Docker Hub 顺序生成；每个已发布目的地必须通过真实 `docker buildx imagetools inspect` 并与 canonical digest 相等，`registry_evidence` 记录 inspect/provenance，配置目的地发布失败则清单生成 fail-closed。Slice C 将平台全局 `runtime_registry_channel`（新库默认 `aliyun-acr`）落库：`GET /runtime-images/registry` 返回 `selected_channel`，管理员通过 `PATCH /runtime-images/registry/channel`（`images:manage`）在 `github`、`dockerhub`、`aliyun-acr` 间切换；项目限定 token 被拒绝。选择严格过滤 Scheduler 宿主平台，平台元数据为空也明确 fail closed。real/local-docker 先提供 `/health` liveness，再后台准备 Base 及全局有效 Audit/Kali 集合与共享资产 helper；inspect 以冻结 digest / image Id 为准，不要求 RepoDigests 等于当前通道仓库名。选定通道 pull 因 timeout/EOF/OSS 失败时，对清单已核实的同 digest 其它通道重试一次，但不改全局 `runtime_registry_channel`、不改写历史 Job 快照；`/health.runtime_images.error` 区分通道超时兜底与 digest 缺失。就绪前不启用 Dispatcher，失败保持 live 并有界退避重试。项目策略/绑定/通道变更缺图时返回 `202 preparing/saved:false`，异步任务完成后重试才提交；通道切换遇到 in-flight 准备也返回当前 `pull-status`（202），不把 `runtime_image_preparation_busy` 当硬失败，同 digest 复用准备锁且通道切换可抢占 `admin_bulk`。通道门禁覆盖当前项目托管映射与显式 pin，成功前旧通道保持有效。省略 `version_id`（或 `null`）仍跟踪最新可信版本。显式 `selected_version_id` 是项目 pin。权威官方 catalog apply 后，已过期的官方 pin（当前通道/宿主平台不再可执行 trusted，且新 latest trusted 可用）会把 `selected_version_id` 滚到最新 trusted，并写 `runtime_image.official_pin_roll` 审计（trigger=`official_catalog_promote`）；`pin_ok` 显式旧版、第三方 pin 与 `pin_policy=hold` 不自动改写。后者过期时 readiness 与建任务仍返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin 与最新版本，并给出 PUT 升级/跟随最新），不再用笼统 `RUNTIME_IMAGE_UNAVAILABLE` 或 HTTP 500。已冻结 Job 快照不改写。Dispatcher 只 inspect 冻结 ref，缺失以 `runtime_image_not_ready` 分类计入指标和失败原因，执行期不 pull。
+官方运行时市场只从固定 HTTPS 信任边界内的 GitHub Release `latest` 清单同步。Scheduler 启动时同步一次，并按 `DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC` 定时刷新；远端不可用时回退随部署内置的清单。正式发布清单存在版本时，环境变量镜像引用仅作为无版本场景的启动兜底，不能覆盖正式最新版本。同步后每个官方镜像只有清单首个版本保持 `promoted_at`，历史版本继续保留，供项目显式固定与既有 Job 不可变快照追溯。Issue #70 Slice B 的 v2 发布清单由 release workflow 以 ACR→GHCR→Docker Hub 顺序生成；每个已发布目的地必须通过真实 `docker buildx imagetools inspect` 并与 canonical digest 相等，`registry_evidence` 记录 inspect/provenance，配置目的地发布失败则清单生成 fail-closed。Slice C 将平台全局 `runtime_registry_channel`（新库默认 `aliyun-acr`）落库：`GET /runtime-images/registry` 返回 `selected_channel`，管理员通过 `PATCH /runtime-images/registry/channel`（`images:manage`）在 `github`、`dockerhub`、`aliyun-acr` 间切换；项目限定 token 被拒绝。选择严格过滤 Scheduler 宿主平台，平台元数据为空也明确 fail closed。real/opensandbox 先提供 `/health` liveness，再后台准备 Base 及全局有效 Audit/Kali 集合与共享资产 helper；inspect 以冻结 digest / image Id 为准，不要求 RepoDigests 等于当前通道仓库名。选定通道 pull 因 timeout/EOF/OSS 失败时，对清单已核实的同 digest 其它通道重试一次，但不改全局 `runtime_registry_channel`、不改写历史 Job 快照；`/health.runtime_images.error` 区分通道超时兜底与 digest 缺失。就绪前不启用 Dispatcher，失败保持 live 并有界退避重试。项目策略/绑定/通道变更缺图时返回 `202 preparing/saved:false`，异步任务完成后重试才提交；通道切换遇到 in-flight 准备也返回当前 `pull-status`（202），不把 `runtime_image_preparation_busy` 当硬失败，同 digest 复用准备锁且通道切换可抢占 `admin_bulk`。通道门禁覆盖当前项目托管映射与显式 pin，成功前旧通道保持有效。省略 `version_id`（或 `null`）仍跟踪最新可信版本。显式 `selected_version_id` 是项目 pin。权威官方 catalog apply 后，已过期的官方 pin（当前通道/宿主平台不再可执行 trusted，且新 latest trusted 可用）会把 `selected_version_id` 滚到最新 trusted，并写 `runtime_image.official_pin_roll` 审计（trigger=`official_catalog_promote`）；`pin_ok` 显式旧版、第三方 pin 与 `pin_policy=hold` 不自动改写。后者过期时 readiness 与建任务仍返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin 与最新版本，并给出 PUT 升级/跟随最新），不再用笼统 `RUNTIME_IMAGE_UNAVAILABLE` 或 HTTP 500。已冻结 Job 快照不改写。Dispatcher 只 inspect 冻结 ref，缺失以 `runtime_image_not_ready` 分类计入指标和失败原因，执行期不 pull。
 
-本地 runtime image GC 只在 real/local-docker 且 `DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC>0` 时运行。候选必须来自 DB `runtime_image_versions` 与其 ref 账本，且 named immutable ref 的 digest 与版本 digest 一致；保护集合包含所有 `promoted_at` 版本、每产品按时间最近两版（当前 + 上一回滚版）、`project_runtime_images.selected_version_id`，以及 pending/claimed/provisioning/running/waiting_human Job 快照中的 `runtime_image_version_id`。删除前用精确 ancestor 检查全部容器，随后只执行不带 `-f` 的 `docker image rm <known-ref>`；Docker 竞态下的容器引用仍阻止删除。裸 digest、可变 tag、不一致 ref、Docker 检查失败均 fail closed；不调用 `docker image prune` / `docker system prune`，也不处理数据库目录外的服务镜像或第三方资源。
+本地 runtime image GC 只在 real OpenSandbox Docker（非 Kata）且 `DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC>0` 时运行。候选必须来自 DB `runtime_image_versions` 与其 ref 账本，且 named immutable ref 的 digest 与版本 digest 一致；保护集合包含所有 `promoted_at` 版本、每产品按时间最近两版（当前 + 上一回滚版）、`project_runtime_images.selected_version_id`，以及 pending/claimed/provisioning/running/waiting_human Job 快照中的 `runtime_image_version_id`。删除前用精确 ancestor 检查全部容器，随后只执行不带 `-f` 的 `docker image rm <known-ref>`；Docker 竞态下的容器引用仍阻止删除。裸 digest、可变 tag、不一致 ref、Docker 检查失败均 fail closed；不调用 `docker image prune` / `docker system prune`，也不处理数据库目录外的服务镜像或第三方资源。
 
 RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表示“系统沙箱”：Scheduler 使用平台治理的最小 Base 底座创建沙箱，并在 Job 快照中记录其不可变 digest，但 RoleConfig 本身保持未绑定状态。Test 与 Audit 可默认绑定专项 Kali/Audit 镜像；其余内置角色默认使用系统沙箱。该选项不允许 Agent、Hub 或任务内容提供任意镜像引用。
 
@@ -704,7 +704,7 @@ deepsonar/
     image-admission/    # 第三方镜像准入 Worker
   packages/
     plane-client/       # 可选 Plane 集成
-    runtime-sandbox/    # agentbox-sdk（local-docker / e2b / daytona）
+    runtime-sandbox/    # SandboxRunner / RuntimeHost（OpenSandbox）
     shared-types/       # zod 契约单源
   agent-harness/        # 镜像定义、指纹、冒烟
   deploy/               # Compose、一键脚本、运行时清单（见 deploy/README.md）
@@ -749,7 +749,7 @@ DEEPSONAR_HUB_ENABLED=true
 DEEPSONAR_HUB_MAX_ROUNDS=20
 DEEPSONAR_HUB_MAX_INTENTS=6
 
-SANDBOX_PROVIDER=local-docker
+SANDBOX_PROVIDER=opensandbox
 DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
 
@@ -812,7 +812,7 @@ CANVAS_LAYOUT=auto
 2. 按 §6 建表（**一次把 event_id / fingerprint / lease 字段建对**）
 3. 实现 `jobs` 状态机 + 手动 `POST /jobs` + Reaper
 4. Plane 适配器：list ready / update state
-5. runtime 适配层：agentbox-sdk local-docker 最小封装
+5. runtime 适配层：OpenSandbox SDK（`@alibaba-group/opensandbox`）最小封装
 6. 假 Agent 脚本打通 Event → DB（含幂等重试演练）
 7. 再挂真 CLI 与画布 UI
 
@@ -824,7 +824,7 @@ CANVAS_LAYOUT=auto
 |------|------|
 | 项目管理 | **Plane** |
 | 过程数据 | **每项目一张无限画布**（nodes/edges 表为真相） |
-| 执行隔离 | **agentbox-sdk 沙箱**（local-docker 起步，可切云端 provider） |
+| 执行隔离 | **SandboxRunner 沙箱**（real 默认 OpenSandbox） |
 | 调度 | **自研薄调度 + 状态机 + Lease/Reaper**（单实例） |
 | Agent 智能 | **提案式工具**；派生决策收归规则引擎 |
 | 可靠性 | **事件幂等 + finding 去重 + 崩溃可恢复** |
@@ -841,10 +841,10 @@ CANVAS_LAYOUT=auto
 - **DB 轮询而非 Webhook/Redis**：延迟秒级可接受；二期再升级
 - **画布不做多人协同编辑**：第一期只读展示 + 服务端写入；协同编辑是二期候选
 - **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
-- **运行时选 TwillAI/agentbox-sdk（MIT）**：TS SDK 统一驱动沙箱与 Agent，事件走控制通道不经沙箱网络（化解"审计沙箱断网"与"事件回调"的矛盾，沙箱内零凭据）。已知风险：0.1.x 早期项目（2026-07 仍活跃），靠 runtime-adapter 接口隔离，最坏情况 fork local-docker provider（代码薄）
+- **运行时边界是 RuntimeHost（#162）**：五类 CLI 不引用 provider SDK 类型；语义事件只经 Job 级 Platform API。real 默认 OpenSandbox；Agentbox 实现与 `agentbox-sdk` 已删除。
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
 - **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果（含缓存读/写）；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算。`GET /dashboard/usage` 按日/周/月或自定义时间把账本聚到全局/项目/任务看板，不把 Session 归档 usage 与 Gateway 行对账成同一数字
-- **不评估 Claude Agent SDK**：只用 CLI 路线（经 agentbox-sdk 的 claude-code provider）
+- **不评估 Claude Agent SDK**：只用 CLI 路线（经 Runtime Adapter 的 claude-code provider）
 - **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper、无 Plane 同步），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
 - **画布引擎选 React Flow 而非 tldraw/Excalidraw**：画布本质是结构化节点-边图而非白板；React Flow（MIT）与 nodes/edges 表 1:1 映射、节点即 React 组件（finding 卡片可交互）；tldraw 生产商用有授权费用、Excalidraw 无法嵌入 React 节点。若二期需要手绘标注/多人白板协同，再单独评估 tldraw
 - **全 TypeScript**：配合 React Flow 生态一套类型打通；若未来 CLI/沙箱层需要 Python 工具，通过容器内独立进程解决，不引入第二后端语言

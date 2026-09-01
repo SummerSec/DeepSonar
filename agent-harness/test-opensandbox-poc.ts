@@ -1,0 +1,439 @@
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  createSdkOpenSandboxClient,
+  listOfficialOpenSandboxRuntimeImages,
+  OpenSandboxRunner,
+  OPENSANDBOX_SERVER_IMAGE,
+  readOpenSandboxPin,
+  runOpenSandboxArchPoc,
+  runOpenSandboxAssetsPoc,
+  runOpenSandboxCancelPoc,
+  runOpenSandboxCliLaunchPoc,
+  runOpenSandboxRecoveryPoc,
+  runOpenSandboxContractFailPoc,
+  runOpenSandboxHostPoc,
+  runOpenSandboxImageContractPoc,
+  runOpenSandboxInfrastructurePoc,
+  runOpenSandboxOfficialImagesPoc,
+  runOpenSandboxRestrictedPoc,
+  runOpenSandboxK8sPoc,
+  runOpenSandboxK8sAssetsPoc,
+  shouldRunOpenSandboxK8sPoc,
+  shouldRunOpenSandboxK8sAssetsPoc,
+  shouldRunOpenSandboxPoc,
+} from "../packages/runtime-sandbox/src/index.ts";
+import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+if (!shouldRunOpenSandboxPoc()) {
+  console.log("skip: OpenSandbox live PoC (set OPEN_SANDBOX_POC=1 with a reachable server)");
+  process.exit(0);
+}
+
+const domain = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
+const apiKey = process.env.OPEN_SANDBOX_API_KEY?.trim();
+if (!apiKey) {
+  console.error("OPEN_SANDBOX_API_KEY is required when OPEN_SANDBOX_POC=1");
+  process.exit(1);
+}
+
+const pin = readOpenSandboxPin({
+  sdk: process.env.OPEN_SANDBOX_SDK_VERSION || undefined,
+  serverImage: process.env.OPENSANDBOX_SERVER_IMAGE || undefined,
+  execdImage: process.env.OPENSANDBOX_EXECD_IMAGE || undefined,
+  egressImage: process.env.OPENSANDBOX_EGRESS_IMAGE || undefined,
+});
+const client = createSdkOpenSandboxClient({
+  domain,
+  apiKey,
+  protocol: process.env.OPEN_SANDBOX_PROTOCOL === "https" ? "https" : "http",
+  useServerProxy: true,
+  pin,
+});
+const caseName = (() => {
+  const idx = process.argv.indexOf("--case");
+  return idx >= 0 ? (process.argv[idx + 1] ?? "") : "all";
+})();
+if (caseName !== "all" && caseName !== "arch" && caseName !== "images" && caseName !== "prod-config" && caseName !== "prod-up" && caseName !== "k8s" && caseName !== "k8s-assets") {
+  throw new Error("OpenSandbox PoC --case must be all, arch, images, prod-config, prod-up, k8s, or k8s-assets");
+}
+
+async function runArchCase(): Promise<string> {
+  const requestedArch = process.env.OPEN_SANDBOX_POC_ARCH?.trim();
+  if (requestedArch !== "amd64" && requestedArch !== "arm64") {
+    throw new Error("OPEN_SANDBOX_POC_ARCH must be amd64 or arm64");
+  }
+  const archImage = process.env.OPEN_SANDBOX_POC_ARCH_IMAGE?.trim() || process.env.OPEN_SANDBOX_POC_IMAGE;
+  const arch = await runOpenSandboxArchPoc(client, {
+    jobId: "00000000-0000-4000-8000-000000000164",
+    attemptId: "00000000-0000-4000-8000-000000000264",
+    image: archImage,
+    arch: requestedArch,
+  });
+  return `arch=${arch.arch} leftovers=${arch.leftovers}`;
+}
+
+if (caseName === "arch") {
+  const archSummary = await runArchCase();
+  console.log(`OK: OpenSandbox arch PoC ${archSummary}`);
+  process.exit(0);
+}
+
+function officialImagesFromRegistry(): ReturnType<typeof listOfficialOpenSandboxRuntimeImages> {
+  const registry = JSON.parse(readFileSync(join(repoRoot, "deploy/runtime-image-registry.json"), "utf8"));
+  const listed = listOfficialOpenSandboxRuntimeImages(registry);
+  const filter = (process.env.OPEN_SANDBOX_POC_IMAGE_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  return filter.length > 0 ? listed.filter((item) => filter.includes(item.key)) : listed;
+}
+
+async function runImagesCase(): Promise<string> {
+  const results = await runOpenSandboxOfficialImagesPoc(client, officialImagesFromRegistry());
+  return results.map((item) => `${item.key} provisionMs=${item.provisionMs} leftovers=${item.leftovers}`).join(" ");
+}
+
+function runProdConfigCase(): string {
+  const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-"));
+  const envFile = join(dir, ".env");
+  writeFileSync(envFile, [
+    "POSTGRES_PASSWORD=poc-opensandbox",
+    "BLOB_S3_ACCESS_KEY_ID=poc",
+    "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
+    "DEEPSONAR_IMAGE_TAG=0.1.45",
+    "OPEN_SANDBOX_API_KEY=poc-opensandbox",
+    "",
+  ].join("\n"));
+  try {
+    const rendered = spawnSync("sudo", [
+      "-n", "docker", "compose",
+      "--project-directory", dir,
+      "--env-file", envFile,
+      "-f", join(repoRoot, "deploy/docker-compose.prod.yml"),
+      "-f", join(repoRoot, "deploy/docker-compose.real.yml"),
+      "-f", join(repoRoot, "deploy/docker-compose.opensandbox.prod.yml"),
+      "config",
+    ], { encoding: "utf8" });
+    if (rendered.status !== 0) {
+      throw new Error(`OpenSandbox prod compose config failed: ${rendered.stderr || rendered.stdout}`);
+    }
+    if (!rendered.stdout.includes("SANDBOX_PROVIDER: opensandbox") || !rendered.stdout.includes("AGENT_MODE: real")) {
+      throw new Error("OpenSandbox prod compose missing scheduler SANDBOX_PROVIDER or AGENT_MODE=real");
+    }
+    if (!rendered.stdout.includes(OPENSANDBOX_SERVER_IMAGE)) {
+      throw new Error("OpenSandbox prod compose missing pinned server digest");
+    }
+    if (/network_mode:\s*host|:latest\b/.test(rendered.stdout)) {
+      throw new Error("OpenSandbox prod compose resolved host-network or latest");
+    }
+    if (!/published:\s*"18080"/.test(rendered.stdout)) {
+      throw new Error("OpenSandbox prod compose must publish host 18080, not collide with web 8080");
+    }
+    if (!rendered.stdout.includes("service_healthy") || !rendered.stdout.includes("/health")) {
+      throw new Error("OpenSandbox prod compose missing health-gated scheduler dependency");
+    }
+    return "merged=true provider=opensandbox pinned=true port=18080 healthy=true";
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (caseName === "images") {
+  const imagesSummary = await runImagesCase();
+  console.log(`OK: OpenSandbox official images PoC ${imagesSummary}`);
+  process.exit(0);
+}
+
+if (caseName === "prod-config") {
+  const prodSummary = runProdConfigCase();
+  console.log(`OK: OpenSandbox production overlay ${prodSummary}`);
+  process.exit(0);
+}
+
+async function runProdUpCase(): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-up-"));
+  const envFile = join(dir, ".env");
+  const hostPort = process.env.OPEN_SANDBOX_POC_PROD_HOST_PORT?.trim() || "18081";
+  const containerName = `deepsonar-opensandbox-prod-up-${process.pid}`;
+  const projectName = `os-prod-up-${process.pid}`;
+  mkdirSync(join(dir, "opensandbox"), { recursive: true });
+  writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(repoRoot, "deploy/opensandbox/config.toml")));
+  writeFileSync(envFile, [
+    "POSTGRES_PASSWORD=poc-opensandbox",
+    "BLOB_S3_ACCESS_KEY_ID=poc",
+    "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
+    "DEEPSONAR_IMAGE_TAG=0.1.45",
+    `OPEN_SANDBOX_API_KEY=${apiKey}`,
+    `OPEN_SANDBOX_HOST_PORT=${hostPort}`,
+    `OPEN_SANDBOX_CONTAINER_NAME=${containerName}`,
+    "",
+  ].join("\n"));
+  const composeArgs = [
+    "-n", "docker", "compose",
+    "--project-name", projectName,
+    "--project-directory", dir,
+    "--env-file", envFile,
+    "-f", join(repoRoot, "deploy/docker-compose.prod.yml"),
+    "-f", join(repoRoot, "deploy/docker-compose.real.yml"),
+    "-f", join(repoRoot, "deploy/docker-compose.opensandbox.prod.yml"),
+  ];
+  const down = () => spawnSync("sudo", [...composeArgs, "down", "-v", "--remove-orphans"], { encoding: "utf8" });
+  const existing = spawnSync("sudo", ["-n", "docker", "inspect", "-f", "{{.State.Running}}", "deepsonar-opensandbox"], { encoding: "utf8" });
+  const pausedExisting = existing.status === 0 && existing.stdout.trim() === "true";
+  try {
+    if (pausedExisting) {
+      const stopped = spawnSync("sudo", ["-n", "docker", "stop", "deepsonar-opensandbox"], { encoding: "utf8" });
+      if (stopped.status !== 0) throw new Error(`could not pause existing OpenSandbox for prod-up: ${stopped.stderr}`);
+    }
+    const up = spawnSync("sudo", [...composeArgs, "up", "-d", "opensandbox"], { encoding: "utf8" });
+    if (up.status !== 0) {
+      throw new Error(`OpenSandbox prod-up failed: ${up.stderr || up.stdout}`);
+    }
+    const deadline = Date.now() + 60_000;
+    let healthy = false;
+    while (Date.now() < deadline) {
+      const probe = spawnSync("curl", ["-fsS", `http://127.0.0.1:${hostPort}/health`], { encoding: "utf8" });
+      if (probe.status === 0 && probe.stdout.includes("healthy")) {
+        healthy = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!healthy) throw new Error(`OpenSandbox prod overlay never became healthy on :${hostPort}`);
+    const prodClient = createSdkOpenSandboxClient({
+      domain: `127.0.0.1:${hostPort}`,
+      apiKey,
+      protocol: "http",
+      useServerProxy: true,
+      pin,
+    });
+    const listed = await prodClient.list();
+    if (!Array.isArray(listed)) {
+      throw new Error("OpenSandbox prod overlay list() did not return an array");
+    }
+    return `up=true healthy=true listed=${listed.length} exclusive=${pausedExisting}`;
+  } finally {
+    down();
+    if (pausedExisting) {
+      spawnSync("sudo", ["-n", "docker", "start", "deepsonar-opensandbox"], { encoding: "utf8" });
+      const restoreDeadline = Date.now() + 20_000;
+      while (Date.now() < restoreDeadline) {
+        const probe = spawnSync("curl", ["-fsS", "http://127.0.0.1:8080/health"], { encoding: "utf8" });
+        if (probe.status === 0 && probe.stdout.includes("healthy")) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (caseName === "prod-up") {
+  const prodUpSummary = await runProdUpCase();
+  console.log(`OK: OpenSandbox production overlay live ${prodUpSummary}`);
+  process.exit(0);
+}
+
+if (caseName === "k8s") {
+  if (!shouldRunOpenSandboxK8sPoc()) {
+    console.log("skip: OpenSandbox Kata PoC (set OPEN_SANDBOX_POC_K8S=1 with kubectl and RuntimeClass=kata-qemu)");
+    process.exit(0);
+  }
+  const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+  if (!runtimeImage) {
+    throw new Error("OPEN_SANDBOX_POC_RUNTIME_IMAGE is required for Kata live proof");
+  }
+  const kubectlJson = async (args: string[]) => {
+    const rendered = spawnSync("kubectl", args, { encoding: "utf8" });
+    if (rendered.status !== 0) {
+      throw new Error(`kubectl ${args.join(" ")} failed: ${rendered.stderr || rendered.stdout}`);
+    }
+    const text = rendered.stdout.trim();
+    if (!text) return {};
+    return (text.startsWith("{") || text.startsWith("[")) ? JSON.parse(text) as unknown : { raw: text };
+  };
+  const k8s = await runOpenSandboxK8sPoc(client, kubectlJson, {
+    image: runtimeImage,
+    expectedContract: "deepsonar.runtime.contract/v1",
+    apiKey,
+  });
+  if (!k8s.kata || !k8s.isolated || !k8s.hostEscapeBlocked || !k8s.envClean || !k8s.hardLimits || !k8s.gatewayAllowed || !k8s.denyBlocked || k8s.agentSandbox || k8s.leftovers !== 0 || k8s.leftoverPods !== 0) {
+    throw new Error(`OpenSandbox Kata PoC unexpected result: ${JSON.stringify(k8s)}`);
+  }
+  console.log(`OK: OpenSandbox Kata live kata=true isolated=${k8s.isolated} hostEscapeBlocked=${k8s.hostEscapeBlocked} envClean=${k8s.envClean} hardLimits=${k8s.hardLimits} gatewayAllowed=${k8s.gatewayAllowed} denyBlocked=${k8s.denyBlocked} agentSandbox=false leftovers=0`);
+  process.exit(0);
+}
+
+if (caseName === "k8s-assets") {
+  if (!shouldRunOpenSandboxK8sAssetsPoc()) {
+    console.log("skip: OpenSandbox Kata shared-assets PoC (set OPEN_SANDBOX_POC_K8S=1 OPEN_SANDBOX_POC_K8S_ASSETS=1)");
+    process.exit(0);
+  }
+  const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+  if (!runtimeImage) {
+    throw new Error("OPEN_SANDBOX_POC_RUNTIME_IMAGE is required for Kata shared-assets proof");
+  }
+  const kubectlJson = async (args: string[]) => {
+    const rendered = spawnSync("kubectl", args, { encoding: "utf8" });
+    if (rendered.status !== 0) {
+      throw new Error(`kubectl ${args.join(" ")} failed: ${rendered.stderr || rendered.stdout}`);
+    }
+    const text = rendered.stdout.trim();
+    if (!text) return {};
+    return (text.startsWith("{") || text.startsWith("[")) ? JSON.parse(text) as unknown : { raw: text };
+  };
+  const assets = await runOpenSandboxK8sAssetsPoc(client, kubectlJson, {
+    image: runtimeImage,
+    expectedContract: "deepsonar.runtime.contract/v1",
+  });
+  if (!assets.kata || !assets.mounted || !assets.seedOk || !assets.readonly || assets.leftovers !== 0 || assets.leftoverPods !== 0 || assets.leftoverPvcs !== 0) {
+    throw new Error(`OpenSandbox Kata assets PoC unexpected result: ${JSON.stringify(assets)}`);
+  }
+  console.log(`OK: OpenSandbox Kata assets mounted=true seedOk=true readonly=true leftovers=0 leftoverPvcs=0`);
+  process.exit(0);
+}
+
+const result = await runOpenSandboxInfrastructurePoc(client, {
+  jobId: "00000000-0000-4000-8000-000000000162",
+  attemptId: "00000000-0000-4000-8000-000000000262",
+  image: process.env.OPEN_SANDBOX_POC_IMAGE,
+});
+if (!result.listed || result.stdout !== "poc") {
+  throw new Error(`OpenSandbox PoC unexpected result: ${JSON.stringify(result)}`);
+}
+const contract = await runOpenSandboxContractFailPoc(new OpenSandboxRunner(client), {
+  jobId: "00000000-0000-4000-8000-000000000163",
+  attemptId: "00000000-0000-4000-8000-000000000263",
+  image: process.env.OPEN_SANDBOX_POC_IMAGE,
+});
+if (!contract.rejected || contract.leftovers !== 0) {
+  throw new Error(`OpenSandbox contract PoC unexpected result: ${JSON.stringify(contract)}`);
+}
+const cancel = await runOpenSandboxCancelPoc(new OpenSandboxRunner(client), {
+  image: process.env.OPEN_SANDBOX_POC_IMAGE,
+});
+if (!cancel.cancelled || cancel.leftovers !== 0) {
+  throw new Error(`OpenSandbox cancel PoC unexpected result: ${JSON.stringify(cancel)}`);
+}
+const requestedArch = process.env.OPEN_SANDBOX_POC_ARCH?.trim();
+let archSummary = "skipped";
+if (requestedArch === "amd64" || requestedArch === "arm64") {
+  archSummary = await runArchCase();
+} else if (requestedArch) {
+  throw new Error("OPEN_SANDBOX_POC_ARCH must be amd64 or arm64");
+}
+const runtimeImage = process.env.OPEN_SANDBOX_POC_RUNTIME_IMAGE?.trim();
+const skipHost = process.env.OPEN_SANDBOX_POC_SKIP_HOST === "1";
+const skipCli = process.env.OPEN_SANDBOX_POC_SKIP_CLI === "1";
+let hostSummary = "skipped";
+if (runtimeImage && !skipHost) {
+  const host = await runOpenSandboxHostPoc(client, { image: runtimeImage, apiKey });
+  if (
+    !host.fileOk || !host.reservedRejected || !host.symlinkRejected || !host.oversizedRejected
+    || !host.pathEscapeRejected || !host.envClean || !host.incrementalOk || !host.ptyOk
+    || !host.terminalOk || !host.tabOk || !host.interruptOk || !host.closedOnDestroy
+    || !host.networkIsolated || !host.hardLimits || !host.reconnected
+  ) {
+    throw new Error(`OpenSandbox host PoC unexpected result: ${JSON.stringify(host)}`);
+  }
+  hostSummary = `sandbox=${host.sandboxId} provisionMs=${host.provisionMs} isolated=${host.networkIsolated} limits=${host.hardLimits} tab=${host.tabOk} interrupt=${host.interruptOk} closed=${host.closedOnDestroy} clis=${JSON.stringify(host.clis)}`;
+}
+let assetsSummary = "skipped";
+if (runtimeImage && !skipHost) {
+  const jobId = randomUUID();
+  const volumeName = `deepsonar-assets-${jobId}`;
+  const created = spawnSync("sudo", [
+    "docker", "volume", "create",
+    "--label", "deepsonar.shared_assets.managed=true",
+    "--label", `deepsonar.shared_assets.job=${jobId}`,
+    volumeName,
+  ], { encoding: "utf8" });
+  if (created.status === 0) {
+    try {
+      const seeded = spawnSync("sudo", [
+        "docker", "run", "--rm", "-v", `${volumeName}:/data`,
+        "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23",
+        "sh", "-c", "echo seed > /data/poc-seed.txt",
+      ], { encoding: "utf8" });
+      if (seeded.status !== 0) throw new Error(seeded.stderr || "seed volume failed");
+      const assets = await runOpenSandboxAssetsPoc(client, { image: runtimeImage, volumeName, jobId });
+      if (!assets.mounted || !assets.readonly || !assets.seedOk) {
+        throw new Error(`OpenSandbox assets PoC unexpected result: ${JSON.stringify(assets)}`);
+      }
+      assetsSummary = `mounted=${assets.mounted} readonly=${assets.readonly} seedOk=${assets.seedOk}`;
+    } finally {
+      spawnSync("sudo", ["docker", "volume", "rm", "-f", volumeName], { encoding: "utf8" });
+    }
+  }
+}
+let restrictedSummary = "skipped";
+if (runtimeImage && !skipHost) {
+  const restricted = await runOpenSandboxRestrictedPoc(client, { image: runtimeImage });
+  if (!restricted.isolated) {
+    throw new Error(`OpenSandbox restricted PoC unexpected result: ${JSON.stringify(restricted)}`);
+  }
+  restrictedSummary = `isolated=${restricted.isolated}`;
+}
+let recoverySummary = "skipped";
+if (runtimeImage) {
+  const recovery = await runOpenSandboxRecoveryPoc(client, { image: runtimeImage, expectedContract: "deepsonar.runtime.contract/v1" });
+  if (!recovery.alive || !recovery.reconnected || !recovery.aliveAfterReconnect || !recovery.deadAfterDestroy || recovery.leftovers !== 0) {
+    throw new Error(`OpenSandbox recovery PoC unexpected result: ${JSON.stringify(recovery)}`);
+  }
+  recoverySummary = `alive=${recovery.alive} reconnect=${recovery.reconnected} dead=${recovery.deadAfterDestroy} leftovers=${recovery.leftovers}`;
+}
+let cliSummary = "skipped";
+if (runtimeImage && !skipCli) {
+  const launched = await runOpenSandboxCliLaunchPoc(client, { image: runtimeImage });
+  const failed = Object.entries(launched).filter(([, item]) => !item.started || item.notFound || !item.stdinClosed || !item.inputWritten || !item.steered);
+  if (failed.length > 0) {
+    throw new Error(`OpenSandbox CLI launch PoC unexpected result: ${JSON.stringify(launched)}`);
+  }
+  const viewer: Record<string, {
+    sessionId?: string;
+    archived: boolean;
+    resumed: boolean;
+    items: number;
+    format?: string;
+    lines?: number;
+    parsed?: number;
+    skipped?: number;
+    bytes?: number;
+    preview?: string;
+  }> = {};
+  for (const [id, item] of Object.entries(launched)) {
+    const artifact = item.artifacts[0];
+    const parsed = artifact ? parseAgentSession(artifact.content, { cli: id }) : undefined;
+    viewer[id] = {
+      sessionId: item.sessionId,
+      archived: item.archived,
+      resumed: item.resumed,
+      items: parsed?.items.length ?? 0,
+      format: parsed?.format,
+      lines: parsed?.totals.lines,
+      parsed: parsed?.totals.parsed,
+      skipped: parsed?.totals.skipped,
+      bytes: artifact ? Buffer.byteLength(artifact.content) : 0,
+      preview: artifact?.content.replace(/\s+/g, " ").slice(0, 180),
+    };
+  }
+  cliSummary = JSON.stringify({ launch: Object.fromEntries(Object.entries(launched).map(([id, item]) => [id, {
+    started: item.started,
+    steered: item.steered,
+    sessionId: item.sessionId,
+    archived: item.archived,
+    archiveCount: item.archiveCount,
+    archiveError: item.archiveError,
+    resumed: item.resumed,
+  }])), viewer });
+}
+const extraImages = (process.env.OPEN_SANDBOX_POC_EXTRA_IMAGES ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+const extraSummaries: string[] = [];
+for (const image of extraImages) {
+  const extra = await runOpenSandboxImageContractPoc(client, { image });
+  extraSummaries.push(`${image.slice(-12)} provisionMs=${extra.provisionMs} clis=${JSON.stringify(extra.clis)}`);
+}
+console.log(`OK: OpenSandbox live PoC ${result.sandboxId} createMs=${result.createMs} contractFailClean=${contract.leftovers} cancelLeftovers=${cancel.leftovers} arch=${archSummary} host=${hostSummary} assets=${assetsSummary} restricted=${restrictedSummary} recovery=${recoverySummary} cli=${cliSummary} extra=${extraSummaries.join(";") || "skipped"}`);

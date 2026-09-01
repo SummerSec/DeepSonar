@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { getSharedAssetBlobStore } from "./blob-store/index.js";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import { migrate, sql } from "./db.js";
 import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
@@ -24,7 +24,7 @@ import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
 import { startRuntimeImageGc } from "./runtime-image-gc.js";
 
 async function main() {
-  // agentbox-sdk 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
+  // 运行时 SDK 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
   // 绝不能因此崩掉整个调度进程 —— 记日志即可，job 级错误由 runJob 的 try/catch 兜底
   process.on("unhandledRejection", (reason) => {
     console.error("[fatal-guard] unhandledRejection:", reason instanceof Error ? reason.message : reason);
@@ -45,8 +45,7 @@ async function main() {
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   await bootstrapOfficialRuntimeImages();
-  const managesLocalDocker = config.runtime.agentMode === "real" && config.runtime.provider === "local-docker";
-  if (managesLocalDocker) await refreshHostDiskPressure();
+  if (managesHostDockerRuntime()) await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();
 
   const app = Fastify({
@@ -77,7 +76,7 @@ async function main() {
   const stopTransfer = startTransferWorker();
   const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
   const stopRuntimeImageGc = startRuntimeImageGc();
-  const stopHostDiskMonitor = managesLocalDocker
+  const stopHostDiskMonitor = managesHostDockerRuntime()
     ? startHostDiskMonitor(() => {
         if (dispatcherRuntimeStatus().enabled) kickDispatcher();
       })
@@ -111,7 +110,8 @@ async function main() {
     console.log("[runtime-images] startup image set ready; dispatcher enabled");
   }, {
     afterPrepare: async (refs) => {
-      if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return;
+      if (config.runtime.agentMode === "fake") return;
+      if (config.runtime.provider !== "opensandbox") return;
       const base = refs.find((item) => item.image_key === "deepsonar-base") ?? refs[0];
       if (!base) return;
       await preheatManagedGateway({

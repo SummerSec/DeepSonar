@@ -1,0 +1,53 @@
+# OpenSandbox Kubernetes + Kata (#162 Phase 3). Official server schema only.
+# Namespace isolates infrastructure only; it does not replace project/Job auth.
+# Apply namespace.yaml, runtimeclass-kata.yaml, and resourcequota.yaml before
+# pointing the server at this overlay. Live Kata verification is still required.
+# gVisor + egress sidecar is live-incompatible (iptables nat / nft unsupported).
+# Product path is Kata + BatchSandbox; agent-sandbox CRD is rejected.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+max_sandbox_timeout_seconds = 86400
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "kubernetes"
+execd_image = "docker.io/opensandbox/execd@sha256:d358f23cb268779eaa71433ce0654a71cd9d016d429e57d7f245ad8f91b8ff7a"
+
+[secure_runtime]
+type = "kata"
+k8s_runtime_class = "kata-qemu"
+
+[kubernetes]
+# Unset/null uses in-cluster credentials. Out-of-cluster PoC uses config.k8s.external.toml.
+namespace = "deepsonar-opensandbox"
+workload_provider = "batchsandbox"
+image_pull_policy = "IfNotPresent"
+batchsandbox_template_file = "/etc/opensandbox/batchsandbox-template.yaml"
+informer_enabled = true
+informer_resync_seconds = 300
+informer_watch_timeout_seconds = 60
+snapshot_create_timeout_seconds = 900
+
+[ingress]
+mode = "direct"
+
+[egress]
+image = "docker.io/opensandbox/egress@sha256:db7345d567b0970f384b8e3fa7a93a71b7f43d4b16bb2009de34096e9a87b3b5"
+mode = "dns"
+disable_ipv6 = true
+readiness_timeout_seconds = 30.0
+
+[storage]
+allowed_host_paths = []
+volume_default_size = "1Gi"
+
+[store]
+type = "sqlite"
+path = "/var/lib/opensandbox/opensandbox.db"
+
+[renew_intent]
+enabled = false

@@ -39,7 +39,7 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 - 任务详情含画布 / **事实** / Finding / Job / 报告；Finding 与 Fact 均可人工裁决；Session 查看器按五类治理 Agent CLI 各自的归档格式归一化消息、reasoning、tool call/result、usage；归档中存在的画布广播以独立条目展示，并保留原始归档下载；
 - RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场与项目镜像策略可在控制台管理；
 - PostgreSQL 为业务真相；Scheduler 启动时对空库套 schema 基线，已有库只校验版本；
-- **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 Agentbox 起真实沙箱。
+- **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 OpenSandbox 起真实沙箱。
 
 ## Provider 与 Agent CLI
 
@@ -214,7 +214,7 @@ apps/
 packages/
   shared-types/     前后端共享 Zod schema
   plane-client/     Plane 可选集成
-  runtime-sandbox/  Noop / Agentbox 沙箱
+  runtime-sandbox/  Noop / OpenSandbox 沙箱
 database/           schema 基线（无 migration）
 deploy/             Compose、一键脚本、发布镜像清单
 agent-harness/      冒烟与镜像校验

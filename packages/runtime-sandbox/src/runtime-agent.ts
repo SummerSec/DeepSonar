@@ -1,1151 +1,31 @@
 /**
- * agentbox-sdk（TwillAI, MIT）真实实现 —— ARCHITECTURE §5/§8
- *
- * 要点：
- * - agentbox 只作沙箱（容器生命周期 + exec + 文件上下行）；Agent 由受治理的
- *   Runtime Adapter 通过官方结构化 CLI 协议直接在沙箱内驱动，不走 SDK daemon/relay。
- * - assistant tool_use 先只进入宿主 bounded pending 表；对应的合法非错误 tool_result
- *   （is_error 省略或为 false）后才释放语义事件，不经过沙箱目标网络，也不依赖 Agent 可写文件。
+ * Provider-neutral Agent execution. Scheduler and OpenSandbox hosts
+ * call runRealAgent(host, spec).
  */
-import { Sandbox } from "agentbox-sdk";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
+import { assertContextResume, type ContextIdentity } from "./context-contract.js";
 import type {
   AgentCommandConfig,
   AgentMcpConfig,
   AgentSkillConfig,
   AgentSubAgentConfig,
-} from "agentbox-sdk";
-import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import http from "node:http";
-import path from "node:path";
-import { promisify } from "node:util";
-import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
-import { assertContextResume, type ContextIdentity } from "./context-contract.js";
+} from "./runtime-agent-config.js";
 import {
+  applyRuntimeOutput,
   parsePiJsonlRecord,
   PiJsonlFramer,
   requireAgentCliRuntimeAdapter,
   type AgentCliRuntimeSnapshot,
   type DshProviderRuntimeConfig,
 } from "./runtime-adapters.js";
-import type { ProvisionInput, RunHandle, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
+import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
+import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 
-const execFileP = promisify(execFile);
-const CANONICAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const CONTAINER_REMOVE_MAX_ATTEMPTS = 5;
-export const CONTAINER_REMOVE_RETRY_BASE_DELAY_MS = 500;
-export const CONTAINER_REMOVE_TIMEOUT_MS = 120_000;
 
-/** docker CLI 兜底（进程重启后内存注册表丢失，按持久化 sandboxId 直查引擎） */
-async function docker(...args: string[]): Promise<string> {
-  return dockerTimed(15_000, args);
-}
-
-type DockerCommand = (...args: string[]) => Promise<string>;
-type Sleep = (delayMs: number) => Promise<void>;
-
-async function sleep(delayMs: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-}
-
-async function deleteSandboxBestEffort(sandbox: Sandbox, timeoutMs = 15_000): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      sandbox.delete(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`agentbox delete timed out after ${timeoutMs}ms`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function isNoSuchContainerError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /no such container|no container with name or id .* found|container .* (?:not found|does not exist)/i.test(message);
-}
-
-export async function removeContainerWithRetry(
-  containerId: string,
-  executeDocker: DockerCommand = (...args) => dockerTimed(CONTAINER_REMOVE_TIMEOUT_MS, args),
-  wait: Sleep = sleep,
-): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= CONTAINER_REMOVE_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      await executeDocker("rm", "-f", containerId);
-      return;
-    } catch (error) {
-      if (isNoSuchContainerError(error)) return;
-      lastError = error;
-      if (attempt < CONTAINER_REMOVE_MAX_ATTEMPTS) {
-        await wait(CONTAINER_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
-      }
-    }
-  }
-  throw lastError;
-}
-
-async function dockerTimed(timeoutMs: number, args: string[], signal?: AbortSignal): Promise<string> {
-  try {
-    const { stdout } = await execFileP("docker", args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, signal });
-    return stdout.trim();
-  } catch (error) {
-    const err = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
-    const detail = [err.stderr, err.stdout, err.message]
-      .map((part) => (typeof part === "string" ? part : part?.toString?.() ?? ""))
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .join("\n");
-    throw new Error(detail || `docker ${args.join(" ")} failed`);
-  }
-}
-
-const DEFAULT_UNIX_SOCKET = "/var/run/docker.sock";
-/** Same default dockerode / Docker Desktop use on Windows. */
-const DEFAULT_WINDOWS_PIPE = "//./pipe/docker_engine";
-
-/** Resolve the Engine socket used by the scheduler host (unix socket or Windows named pipe). */
-export function dockerSocketPath(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  const host = env.DOCKER_HOST?.trim();
-  if (host?.startsWith("unix://")) return host.slice("unix://".length) || DEFAULT_UNIX_SOCKET;
-  if (host?.startsWith("npipe://")) return host.slice("npipe://".length) || DEFAULT_WINDOWS_PIPE;
-  if (!host || host.startsWith("tcp://") || host.startsWith("http://") || host.startsWith("https://")) {
-    return platform === "win32" ? DEFAULT_WINDOWS_PIPE : DEFAULT_UNIX_SOCKET;
-  }
-  return host;
-}
-
-/**
- * Docker Engine / Podman compatibility API over the unix socket.
- *
- * Prefer this for network inspect/create: recent docker CLI fails on Podman
- * networks whose IPAM Gateway is the literal string "<nil>" with
- * `ParseAddr("<nil>"): unable to parse IP`. The HTTP API returns usable JSON.
- */
-export async function dockerApiJson(
-  pathname: string,
-  init?: { method?: string; body?: unknown; timeoutMs?: number },
-): Promise<unknown> {
-  const method = init?.method ?? "GET";
-  const body = init?.body === undefined ? undefined : JSON.stringify(init.body);
-  const timeoutMs = init?.timeoutMs ?? 15_000;
-  const socketPath = dockerSocketPath();
-  return await new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        socketPath,
-        path: pathname,
-        method,
-        headers: body
-          ? {
-              "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(body),
-            }
-          : undefined,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        res.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          const status = res.statusCode ?? 500;
-          if (status >= 400) {
-            reject(new Error(`docker API ${method} ${pathname} -> ${status}: ${text.slice(0, 400)}`));
-            return;
-          }
-          if (!text) {
-            resolve(null);
-            return;
-          }
-          try {
-            resolve(JSON.parse(text));
-          } catch {
-            resolve(text);
-          }
-        });
-      },
-    );
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`docker API ${method} ${pathname} timed out after ${timeoutMs}ms`));
-    });
-    req.on("error", reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-/** True when a network inspect payload is our managed internal bridge. */
-export function isDeepsonarRestrictedNetwork(net: Record<string, unknown> | null | undefined): boolean {
-  if (!net || typeof net !== "object") return false;
-  const internal = net.Internal ?? net.internal;
-  const driver = String(net.Driver ?? net.driver ?? "");
-  const labelsRaw = net.Labels ?? net.labels;
-  const labels = labelsRaw && typeof labelsRaw === "object" && !Array.isArray(labelsRaw)
-    ? labelsRaw as Record<string, unknown>
-    : {};
-  return internal === true && driver === "bridge" && String(labels["deepsonar.managed"] ?? "") === "true";
-}
-
-/** True when a network is the Scheduler-owned NAT bridge for real sandboxes. */
-export function isDeepsonarGatewayNetwork(net: Record<string, unknown> | null | undefined): boolean {
-  if (!net || typeof net !== "object") return false;
-  const internal = net.Internal ?? net.internal;
-  const driver = String(net.Driver ?? net.driver ?? "");
-  const labelsRaw = net.Labels ?? net.labels;
-  const labels = labelsRaw && typeof labelsRaw === "object" && !Array.isArray(labelsRaw)
-    ? labelsRaw as Record<string, unknown>
-    : {};
-  return internal !== true && driver === "bridge" && String(labels["deepsonar.managed"] ?? "") === "true";
-}
-
-// --- agentbox-sdk 0.1.501 Windows 宿主兼容性补丁 ---
-// SDK 用宿主 path.join 拼沙箱内的 POSIX 路径，Windows 上产出反斜杠，传进容器后路径全毁。
-// 运行时补丁：join 的首参数是 POSIX 绝对路径（"/" 开头）时改用 posix.join。
-// Windows 宿主路径只会以盘符或 \\ 开头，不会误判；SDK 的路径拼接全部发生在运行时。
-// TODO: 向上游提 issue，修复后移除此补丁。
-const origJoin = path.join.bind(path);
-if (process.platform === "win32") {
-  path.join = ((...args: string[]) =>
-    args[0]?.startsWith("/") ? path.posix.join(...args) : origJoin(...args)) as typeof path.join;
-}
-
-/** sandboxId → Sandbox 注册表（isAlive/destroy 用；进程重启即丢，靠 docker CLI 兜底） */
-const sandboxes = new Map<string, Sandbox>();
-const provisioningSandboxes = new Map<string, Sandbox>();
-const terminalSessions = new Map<string, Set<SandboxTerminalSession>>();
-const RESTRICTED_NETWORK = "deepsonar-restricted";
-const GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
-const GATEWAY_PROXY = "deepsonar-gateway-proxy";
-export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
-export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
-export const SHARED_ASSETS_JOB_LABEL = "deepsonar.shared_assets.job";
-const SHARED_ASSETS_VOLUME_RE = /^deepsonar-assets-[a-z0-9][a-z0-9_.-]{0,62}$/;
-let restrictedNetworkReady: Promise<void> | null = null;
-let gatewayNetworkReady: Promise<void> | null = null;
-let gatewayProxyReady: Promise<{ containerId: string; createOwner: string | null }> | null = null;
-
-type TerminalCommandProcess = {
-  write?: (input: string) => Promise<void>;
-};
-
-/** Build one explicit interactive shell command for the terminal PTY. */
-export function terminalShellCommand(shell: "bash" | "sh"): string {
-  return shell === "bash" ? "exec bash -il" : "exec /bin/sh -i";
-}
-
-/**
- * Select Bash when the governed image provides it, otherwise use the required
- * POSIX /bin/sh contract.  Both branches stay interactive so readline/tab
- * completion and control characters are handled by the shell attached to the
- * SDK PTY rather than by a non-interactive command wrapper.
- */
-export function buildTerminalShellCommand(): string {
-  return [
-    "if command -v bash >/dev/null 2>&1; then",
-    `${terminalShellCommand("bash")};`,
-    "else",
-    `${terminalShellCommand("sh")};`,
-    "fi",
-  ].join(" ");
-}
-
-/** Write terminal input without interpreting or normalizing control bytes. */
-export async function writeTerminalInput(process: TerminalCommandProcess, data: string): Promise<void> {
-  if (!process.write) throw new Error("TERMINAL_SESSION_CLOSED");
-  await process.write(data);
-}
-
-/** Build the only Docker bind accepted for shared assets; host paths are never allowed. */
-export function sharedAssetsVolumeBinds(mount: ProvisionInput["sharedAssetsMount"]): string[] {
-  if (!mount) return [];
-  if (!SHARED_ASSETS_VOLUME_RE.test(mount.volumeName)) {
-    throw new Error("shared assets volume must be a Scheduler-owned deepsonar-assets-* named volume");
-  }
-  return [`${mount.volumeName}:${SHARED_ASSETS_MOUNT_PATH}:ro`];
-}
-
-interface SharedAssetsVolumeInspection {
-  Name?: unknown;
-  Driver?: unknown;
-  Scope?: unknown;
-  Labels?: unknown;
-}
-
-interface SharedAssetsContainerInspection {
-  Mounts?: unknown;
-}
-
-/** Validate daemon-owned metadata before Docker can auto-create a typoed volume. */
-export function assertSharedAssetsVolumeOwnership(
-  inspected: SharedAssetsVolumeInspection,
-  volumeName: string,
-  jobId: string,
-): void {
-  const labels = inspected.Labels && typeof inspected.Labels === "object"
-    ? inspected.Labels as Record<string, unknown>
-    : {};
-  if (
-    inspected.Name !== volumeName ||
-    inspected.Driver !== "local" ||
-    inspected.Scope !== "local" ||
-    labels[SHARED_ASSETS_VOLUME_LABEL] !== "true" ||
-    labels[SHARED_ASSETS_JOB_LABEL] !== jobId
-  ) {
-    throw new Error("shared assets volume is not a local Scheduler-managed volume for this Job");
-  }
-}
-
-/** Validate the actual container after attach as well as after fresh provision. */
-export function assertSharedAssetsContainerMount(
-  inspected: SharedAssetsContainerInspection,
-  volumeName: string,
-): void {
-  const mounts = Array.isArray(inspected.Mounts) ? inspected.Mounts : [];
-  const targetMounts = mounts.filter((entry) => (
-    entry && typeof entry === "object" &&
-    (entry as Record<string, unknown>).Destination === SHARED_ASSETS_MOUNT_PATH
-  ));
-  const mount = targetMounts[0] as Record<string, unknown> | undefined;
-  if (
-    targetMounts.length !== 1 ||
-    mount?.Type !== "volume" ||
-    mount?.Name !== volumeName ||
-    mount?.RW !== false
-  ) {
-    throw new Error("sandbox shared assets mount does not match the frozen read-only volume");
-  }
-}
-
-async function validateSharedAssetsVolume(volumeName: string, jobId: string): Promise<void> {
-  let output: string;
-  try {
-    output = await docker("volume", "inspect", volumeName, "--format", "{{json .}}");
-  } catch {
-    throw new Error("shared assets volume must exist before sandbox provisioning");
-  }
-  let inspected: SharedAssetsVolumeInspection;
-  try {
-    inspected = JSON.parse(output) as SharedAssetsVolumeInspection;
-  } catch {
-    throw new Error("shared assets volume inspection returned invalid JSON");
-  }
-  assertSharedAssetsVolumeOwnership(inspected, volumeName, jobId);
-}
-
-async function removeAttemptContainers(jobId: string, attemptId: string): Promise<void> {
-  const raw = await docker(
-    "ps", "-aq",
-    "--filter", `label=deepsonar.job=${jobId}`,
-    "--filter", `label=deepsonar.attempt=${attemptId}`,
-  );
-  for (const id of raw.split(/\s+/).filter(Boolean)) {
-    await removeContainerWithRetry(id);
-  }
-}
-
-async function validateSharedAssetsContainer(sandbox: Sandbox, volumeName: string): Promise<void> {
-  const raw = sandbox.raw as { container?: { inspect?: () => Promise<SharedAssetsContainerInspection> } } | undefined;
-  if (!raw?.container || typeof raw.container.inspect !== "function") {
-    throw new Error("sandbox provider cannot verify the shared assets mount");
-  }
-  assertSharedAssetsContainerMount(await raw.container.inspect(), volumeName);
-}
-
-export const GATEWAY_PROXY_SCRIPT = String.raw`
-const http = require("node:http");
-const https = require("node:https");
-const upstream = new URL(process.env.DEEPSONAR_GATEWAY_UPSTREAM);
-const prefix = upstream.pathname.replace(/\/$/, "");
-const controlPrefix = "/control/v1";
-const client = upstream.protocol === "https:" ? https : http;
-const server = http.createServer((req, res) => {
-  const incoming = new URL(req.url || "/", "http://proxy.local");
-  if (incoming.pathname === "/_deepsonar_health") {
-    res.writeHead(200).end("ok");
-    return;
-  }
-  const isGatewayPath = incoming.pathname === prefix || incoming.pathname.startsWith(prefix + "/");
-  const isControlPath = incoming.pathname === controlPrefix || incoming.pathname.startsWith(controlPrefix + "/");
-  // The sidecar is intentionally a fixed-path forwarder. It exposes the
-  // existing model Gateway and the Job-scoped control API only; arbitrary
-  // proxying, CONNECT, and other Scheduler routes remain unavailable.
-  if (!isGatewayPath && !isControlPath) {
-    res.writeHead(404).end("not found");
-    return;
-  }
-  const headers = { ...req.headers, host: upstream.host };
-  delete headers.connection;
-  delete headers["proxy-authorization"];
-  const fail = () => {
-    if (res.headersSent || res.destroyed) {
-      res.destroy();
-      return;
-    }
-    res.writeHead(502).end("gateway unavailable");
-  };
-  const target = client.request({
-    protocol: upstream.protocol,
-    hostname: upstream.hostname,
-    port: upstream.port || (upstream.protocol === "https:" ? 443 : 80),
-    method: req.method,
-    path: incoming.pathname + incoming.search,
-    headers,
-  }, (reply) => {
-    res.writeHead(reply.statusCode || 502, reply.headers);
-    reply.on("error", fail);
-    reply.pipe(res);
-  });
-  target.on("error", fail);
-  const abort = () => {
-    target.destroy();
-    res.destroy();
-  };
-  req.on("error", abort);
-  req.on("aborted", abort);
-  req.pipe(target);
-});
-server.on("connect", (_req, socket) => socket.destroy());
-server.listen(3100, "0.0.0.0");
-`;
-
-export const GATEWAY_PROXY_REVISION = createHash("sha256")
-  .update(GATEWAY_PROXY_SCRIPT)
-  .digest("hex")
-  .slice(0, 16);
-
-export const DEFAULT_GATEWAY_CREATE_TIMEOUT_MS = 600_000;
-
-export function gatewayCreateTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-  fallbackMs = DEFAULT_GATEWAY_CREATE_TIMEOUT_MS,
-): number {
-  const raw = Number(env.DEEPSONAR_GATEWAY_CREATE_TIMEOUT_SEC);
-  return Number.isFinite(raw) && raw > 0 ? raw * 1000 : fallbackMs;
-}
-
-export function gatewayProxyReuseAction(input: {
-  managed: string;
-  upstreamHash: string;
-  revision: string;
-  running: string;
-  status?: string;
-}, expectedUpstreamHash: string): "reuse" | "start" | "replace" | "reject" {
-  if (input.managed !== "true") return "reject";
-  if (input.upstreamHash !== expectedUpstreamHash || input.revision !== GATEWAY_PROXY_REVISION) return "replace";
-  if (input.status === "created") return "replace";
-  return input.running === "true" ? "reuse" : "start";
-}
-
-export type GatewayLeftoverStatus = "created" | "running" | "exited" | "missing";
-
-export function shouldRemoveGatewayLeftover(input: {
-  managed: string;
-  createOwner: string;
-  expectedCreateOwner: string | null;
-  status: GatewayLeftoverStatus;
-  healthy: boolean;
-}): boolean {
-  if (input.managed !== "true" || !input.expectedCreateOwner || input.createOwner !== input.expectedCreateOwner) return false;
-  if (input.status === "missing") return false;
-  if (input.healthy && input.status === "running") return false;
-  return true;
-}
-
-export function gatewayLeftoverRemovalTarget(
-  input: Parameters<typeof shouldRemoveGatewayLeftover>[0] & { id: string },
-): string | null {
-  return input.id && shouldRemoveGatewayLeftover(input) ? input.id : null;
-}
-
-/**
- * Docker internal bridge 不做外网 NAT；模型请求由另一个固定目标 sidecar 转发。
- * 网络是宿主级共享资源，创建操作幂等，并发首次 provision 共用同一 Promise。
- *
- * Inspect/create go through the Engine HTTP API so Podman rootless works:
- * `docker network inspect --format …` dies on IPAM Gateway="<nil>" (ParseAddr).
- */
-async function ensureRestrictedNetwork(): Promise<void> {
-  restrictedNetworkReady ??= (async () => {
-    const validate = async () => {
-      const net = await dockerApiJson(`/networks/${encodeURIComponent(RESTRICTED_NETWORK)}`) as Record<string, unknown>;
-      if (!isDeepsonarRestrictedNetwork(net)) {
-        throw new Error(`Docker 网络 ${RESTRICTED_NETWORK} 存在但不是 DEEPSONAR 管理的 internal bridge`);
-      }
-    };
-    try {
-      await validate();
-      return;
-    } catch {
-      try {
-        await dockerApiJson("/networks/create", {
-          method: "POST",
-          body: {
-            Name: RESTRICTED_NETWORK,
-            Driver: "bridge",
-            Internal: true,
-            Labels: { "deepsonar.managed": "true" },
-          },
-        });
-      } catch (createError) {
-        const msg = createError instanceof Error ? createError.message : String(createError);
-        // Already exists (409) — re-validate below. Other errors: try CLI create once.
-        if (!/\b409\b|already exists|Conflict/i.test(msg)) {
-          await docker(
-            "network", "create", "--driver", "bridge", "--internal",
-            "--label", "deepsonar.managed=true", RESTRICTED_NETWORK,
-          ).catch(async (cliError) => {
-            await validate().catch(() => {
-              throw cliError instanceof Error ? cliError : createError;
-            });
-          });
-        }
-      }
-      await validate();
-    }
-  })();
-  return restrictedNetworkReady;
-}
-
-/** Create/validate the shared non-internal bridge used by egress sandboxes. */
-async function ensureGatewayNetwork(): Promise<void> {
-  gatewayNetworkReady ??= (async () => {
-    const validate = async () => {
-      const net = await dockerApiJson(`/networks/${encodeURIComponent(GATEWAY_NETWORK)}`) as Record<string, unknown>;
-      if (!isDeepsonarGatewayNetwork(net)) throw new Error(`Docker network ${GATEWAY_NETWORK} is not a managed NAT bridge`);
-    };
-    try {
-      await validate();
-      return;
-    } catch {
-      try {
-        await dockerApiJson("/networks/create", {
-          method: "POST",
-          body: { Name: GATEWAY_NETWORK, Driver: "bridge", Internal: false, Labels: { "deepsonar.managed": "true" } },
-        });
-      } catch (createError) {
-        const msg = createError instanceof Error ? createError.message : String(createError);
-        if (!/\b409\b|already exists|Conflict/i.test(msg)) {
-          await docker("network", "create", "--driver", "bridge", "--label", "deepsonar.managed=true", GATEWAY_NETWORK)
-            .catch(async (cliError) => {
-              await validate().catch(() => { throw cliError instanceof Error ? cliError : createError; });
-            });
-        }
-      }
-      await validate();
-    }
-  })();
-  return gatewayNetworkReady;
-}
-
-/**
- * internal bridge 不能直达 Docker Desktop 宿主。共享 sidecar 同时连普通 bridge 和
- * internal bridge，但代码只允许把 /gateway 路径转发到唯一上游，不提供 CONNECT 或任意目标代理。
- *
- * 返回 sidecar 在 restricted 网上的 IPv4，供沙箱 ExtraHosts 注入：rootless Podman 的
- * internal bridge 常无嵌入式 DNS，容器名 `deepsonar-gateway-proxy` 解析失败会表现为
- * Claude Code `Unable to connect to API (ENOTIMP)` / curl Could not resolve host。
- */
-async function inspectGatewayProxy(): Promise<{
-  exists: boolean;
-  id: string;
-  managed: string;
-  upstreamHash: string;
-  revision: string;
-  createOwner: string;
-  running: string;
-  status: string;
-}> {
-  const id = await docker("ps", "-a", "--filter", `name=^/${GATEWAY_PROXY}$`, "--format", "{{.ID}}");
-  if (!id) {
-    return { exists: false, id: "", managed: "", upstreamHash: "", revision: "", createOwner: "", running: "false", status: "missing" };
-  }
-  const state = await docker(
-    "inspect", "--format",
-    "{{index .Config.Labels \"deepsonar.managed\"}}|{{index .Config.Labels \"deepsonar.gateway-upstream\"}}|{{index .Config.Labels \"deepsonar.gateway-revision\"}}|{{index .Config.Labels \"deepsonar.gateway-create-owner\"}}|{{.State.Running}}|{{.State.Status}}",
-    id,
-  );
-  const [managed, configuredHash, revision, createOwner, running, status] = state.split("|");
-  return {
-    exists: true,
-    id,
-    managed: managed ?? "",
-    upstreamHash: configuredHash ?? "",
-    revision: revision ?? "",
-    createOwner: createOwner ?? "",
-    running: running ?? "false",
-    status: status ?? "",
-  };
-}
-
-function leftoverStatusOf(inspected: { exists: boolean; running: string; status: string }): GatewayLeftoverStatus {
-  if (!inspected.exists || inspected.status === "missing") return "missing";
-  if (inspected.status === "created") return "created";
-  if (inspected.running === "true" || inspected.status === "running") return "running";
-  return "exited";
-}
-
-export async function cleanupUnhealthyManagedGateway(input: { expectedCreateOwner: string | null }): Promise<void> {
-  const inspected = await inspectGatewayProxy().catch(() => ({
-    exists: false, id: "", managed: "", upstreamHash: "", revision: "", createOwner: "", running: "false", status: "missing",
-  }));
-  const removalTarget = gatewayLeftoverRemovalTarget({
-    id: inspected.id,
-    managed: inspected.managed,
-    createOwner: inspected.createOwner,
-    expectedCreateOwner: input.expectedCreateOwner,
-    status: leftoverStatusOf(inspected),
-    healthy: inspected.running === "true" && inspected.status === "running",
-  });
-  if (!removalTarget) return;
-  try {
-    await docker("rm", "-f", removalTarget);
-    gatewayProxyReady = null;
-  } catch {
-    // 下一次 ensure 会重新 inspect；删除失败时保留当前状态，避免并发重复创建。
-  }
-}
-
-async function ensureGatewayProxy(
-  upstreamUrl: string,
-  image: string,
-  options: { createTimeoutMs?: number; signal?: AbortSignal } = {},
-): Promise<{ gatewayIp: string; restrictedIp: string; createOwner: string | null }> {
-  const run = async () => {
-    await ensureGatewayNetwork();
-    await ensureRestrictedNetwork();
-    const parsed = new URL(upstreamUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error(`Gateway sidecar 不支持上游协议: ${parsed.protocol}`);
-    }
-    if (!parsed.pathname.startsWith("/gateway")) {
-      throw new Error("Gateway sidecar 上游 URL 必须以 /gateway 为路径");
-    }
-    const upstreamHash = createHash("sha256").update(upstreamUrl).digest("hex").slice(0, 16);
-    const inspected = await inspectGatewayProxy();
-    let exists = inspected.exists;
-    let containerId = inspected.id;
-    let createOwner: string | null = null;
-    if (exists) {
-      const action = gatewayProxyReuseAction({
-        managed: inspected.managed,
-        upstreamHash: inspected.upstreamHash,
-        revision: inspected.revision,
-        running: inspected.running,
-        status: inspected.status,
-      }, upstreamHash);
-      if (action === "reject") throw new Error(`${GATEWAY_PROXY} 不是 DeepSonar 受管容器，拒绝接管`);
-      if (action === "replace") {
-        await docker("rm", "-f", inspected.id);
-        exists = false;
-        containerId = "";
-      } else if (action === "start") {
-        await docker("start", inspected.id);
-      }
-    }
-    if (!exists) {
-      createOwner = randomUUID();
-      try {
-        containerId = await dockerTimed(options.createTimeoutMs ?? gatewayCreateTimeoutMs(), [
-          "run", "-d", "--name", GATEWAY_PROXY, "--restart", "unless-stopped",
-          "--network", GATEWAY_NETWORK, "--add-host", "host.docker.internal:host-gateway",
-          "--label", "deepsonar.managed=true",
-          "--label", `deepsonar.gateway-upstream=${upstreamHash}`,
-          "--label", `deepsonar.gateway-revision=${GATEWAY_PROXY_REVISION}`,
-          "--label", `deepsonar.gateway-create-owner=${createOwner}`,
-          "-e", `DEEPSONAR_GATEWAY_UPSTREAM=${upstreamUrl}`,
-          "--entrypoint", "node", image, "-e", GATEWAY_PROXY_SCRIPT,
-        ], options.signal);
-      } catch (error) {
-        await cleanupUnhealthyManagedGateway({ expectedCreateOwner: createOwner });
-        throw error;
-      }
-    }
-    const inspect = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", containerId)) as Record<string, unknown>;
-    if (!(GATEWAY_NETWORK in inspect)) {
-      await docker("network", "connect", "--alias", GATEWAY_PROXY, GATEWAY_NETWORK, containerId).catch(async () => {
-        await docker("network", "connect", GATEWAY_NETWORK, containerId).catch(() => {});
-        const refreshed = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", containerId)) as Record<string, unknown>;
-        if (!(GATEWAY_NETWORK in refreshed)) throw new Error(`${GATEWAY_PROXY} could not join ${GATEWAY_NETWORK}`);
-      });
-    }
-    if (!(RESTRICTED_NETWORK in inspect)) {
-      try {
-        await docker("network", "connect", "--alias", GATEWAY_PROXY, RESTRICTED_NETWORK, containerId);
-      } catch {
-        await docker("network", "connect", RESTRICTED_NETWORK, containerId);
-      }
-    }
-    let ready = false;
-    for (let i = 0; i < 20; i++) {
-      try {
-        await docker(
-          "exec", containerId, "node", "-e",
-          "fetch('http://127.0.0.1:3100/_deepsonar_health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        );
-        ready = true;
-        break;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    }
-    if (!ready) {
-      await cleanupUnhealthyManagedGateway({ expectedCreateOwner: createOwner });
-      throw new Error(`${GATEWAY_PROXY} 启动后未通过健康检查`);
-    }
-    return { containerId, createOwner };
-  };
-  if (!gatewayProxyReady) {
-    gatewayProxyReady = run().catch((error) => {
-      gatewayProxyReady = null;
-      throw error;
-    });
-  }
-  const readyGateway = await gatewayProxyReady;
-  const nets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", readyGateway.containerId)) as Record<
-    string,
-    { IPAddress?: string }
-  >;
-  const gatewayIp = nets[GATEWAY_NETWORK]?.IPAddress?.trim();
-  const ip = nets[RESTRICTED_NETWORK]?.IPAddress?.trim();
-  if (!gatewayIp) throw new Error(`${GATEWAY_PROXY} is not attached to ${GATEWAY_NETWORK}`);
-  if (!ip) throw new Error(`${GATEWAY_PROXY} 未接入 ${RESTRICTED_NETWORK} 或缺少 IPv4`);
-  return { gatewayIp, restrictedIp: ip, createOwner: readyGateway.createOwner };
-}
-
-export async function preheatManagedGateway(input: {
-  upstreamUrl: string;
-  image: string;
-  createTimeoutMs?: number;
-}): Promise<void> {
-  await ensureGatewayProxy(input.upstreamUrl, input.image, { createTimeoutMs: input.createTimeoutMs });
-}
-
-export function resetManagedGatewayStateForTests(): void {
-  gatewayProxyReady = null;
-}
-
-/**
- * 解析运行时 tool-manifest。部分已发布 OH 镜像在合法 JSON 后多了字面量 `\n`
- *（Dockerfile 单引号里写了 +"\\n"），严格 parse 会报
- * "Unexpected non-whitespace character after JSON"。
- */
-function parseToolManifest(raw: string): { contract?: string } {
-  const text = raw.replace(/^\uFEFF/, "").trim();
-  try {
-    return JSON.parse(text) as { contract?: string };
-  } catch (first) {
-    // 去掉尾部孤立的 \n / 多余空白后再试
-    const stripped = text.replace(/(?:\\n)+\s*$/g, "").trim();
-    if (stripped !== text) {
-      try {
-        return JSON.parse(stripped) as { contract?: string };
-      } catch {
-        /* fall through */
-      }
-    }
-    // 取第一个完整 JSON 值（从首个 { 起 brace-match）
-    const start = text.indexOf("{");
-    if (start >= 0) {
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      for (let i = start; i < text.length; i++) {
-        const ch = text[i]!;
-        if (inString) {
-          if (escape) escape = false;
-          else if (ch === "\\") escape = true;
-          else if (ch === "\"") inString = false;
-          continue;
-        }
-        if (ch === "\"") {
-          inString = true;
-          continue;
-        }
-        if (ch === "{") depth++;
-        else if (ch === "}") {
-          depth--;
-          if (depth === 0) {
-            return JSON.parse(text.slice(start, i + 1)) as { contract?: string };
-          }
-        }
-      }
-    }
-    throw first instanceof Error ? first : new Error(String(first));
-  }
-}
-
-/** dockerode createContainer 调用签名（只需要我们注入 HostConfig 的部分） */
-interface CreateContainerOptions {
-  Labels?: Record<string, string>;
-  HostConfig?: Record<string, unknown>;
-}
-
-/**
- * SEC-03 容器硬限制：agentbox-sdk 只透传 cpu/memory，PidsLimit/CapDrop/SecurityOpt
- * 需要包住 dockerode 的 createContainer 注入。按实例包装（不碰全局原型），
- * 只对带 deepsonar.job 标签的容器生效，SDK 升级也不影响其他调用方。
- * TODO(SEC-03 余项)：non-root 运行 + read_only_rootfs 需镜像侧配合（/workspace、/tmp 可写卷），留待 OPS。
- */
-function hardenCreateContainer(
-  sandbox: Sandbox,
-  limits: ProvisionInput["limits"],
-  extraHosts: string[] = [],
-  readonlyBinds: string[] = [],
-): void {
-  const adapter = (sandbox as unknown as { adapter?: { client?: {
-    createContainer: (opts: CreateContainerOptions) => Promise<unknown>;
-  } } }).adapter;
-  const client = adapter?.client;
-  if (!client || typeof client.createContainer !== "function") return; // SDK 内部结构变化时静默跳过（不阻断）
-
-  const orig = client.createContainer.bind(client);
-  const pidsLimit = limits?.pidsLimit ?? 512;
-  const capDropAll = limits?.capDropAll ?? true;
-  const noNewPrivileges = limits?.noNewPrivileges ?? true;
-  client.createContainer = (opts: CreateContainerOptions) => {
-    if (opts.Labels?.["deepsonar.job"]) {
-      const prevHosts = Array.isArray(opts.HostConfig?.ExtraHosts)
-        ? (opts.HostConfig!.ExtraHosts as string[])
-        : [];
-      const prevBinds = Array.isArray(opts.HostConfig?.Binds)
-        ? (opts.HostConfig!.Binds as string[])
-        : [];
-      opts.HostConfig = {
-        ...opts.HostConfig,
-        PidsLimit: pidsLimit,
-        ...(capDropAll ? { CapDrop: ["ALL"] } : {}),
-        ...(noNewPrivileges ? { SecurityOpt: ["no-new-privileges:true"] } : {}),
-        ...(extraHosts.length > 0
-          ? { ExtraHosts: [...new Set([...prevHosts, ...extraHosts])] }
-          : {}),
-        ...(readonlyBinds.length > 0
-          ? { Binds: [...new Set([...prevBinds, ...readonlyBinds])] }
-          : {}),
-      };
-    }
-    return orig(opts);
-  };
-}
-
-export function bindProvisionAbortSignal(
-  signal: AbortSignal | undefined,
-  onAbort: () => void,
-): () => void {
-  if (!signal) return () => {};
-  let handled = false;
-  const abort = () => {
-    if (handled) return;
-    handled = true;
-    onAbort();
-  };
-  signal.addEventListener("abort", abort, { once: true });
-  if (signal.aborted) abort();
-  return () => signal.removeEventListener("abort", abort);
-}
-
-export class AgentboxRunner implements SandboxRunner {
-  constructor(
-    private readonly removeContainer: (containerId: string) => Promise<void> = forceRemoveContainer,
-  ) {}
-
-  async provision(input: ProvisionInput): Promise<RunHandle> {
-    if (input.signal?.aborted) throw new Error("provision 已取消");
-    const provisionKey = `${input.jobId}:${input.attemptId}`;
-    const extraHosts: string[] = [];
-    const readonlyBinds = sharedAssetsVolumeBinds(input.sharedAssetsMount);
-    if (input.sharedAssetsMount) {
-      await validateSharedAssetsVolume(input.sharedAssetsMount.volumeName, input.jobId);
-    }
-    let gatewayCreateOwner: string | null = null;
-    if (input.network !== "none") {
-      if (!input.gatewayUpstreamUrl) throw new Error("real sandbox missing Gateway upstream URL");
-      const proxyIps = await ensureGatewayProxy(input.gatewayUpstreamUrl, input.image, { signal: input.signal });
-      gatewayCreateOwner = proxyIps.createOwner;
-      extraHosts.push(`${GATEWAY_PROXY}:${input.network === "restricted" ? proxyIps.restrictedIp : proxyIps.gatewayIp}`);
-    }
-    const sandbox = new Sandbox("local-docker", {
-      image: input.image,
-      workingDir: "/workspace",
-      env: input.env,
-      tags: {
-        "deepsonar.job": input.jobId,
-        "deepsonar.attempt": input.attemptId,
-        ...(input.resourceLabels ?? {}),
-      },
-      // SEC-03：CPU/内存硬限制（SDK 原生透传 NanoCpus/Memory）
-      resources: {
-        cpu: input.limits?.cpu ?? 2,
-        memoryMiB: input.limits?.memoryMiB ?? 2048,
-      },
-      provider: {
-        name: `deepsonar-${input.jobId.slice(0, 8)}`,
-        binds: readonlyBinds,
-        // restricted=无外网 NAT 的内部 bridge（仅保留 host-gateway 模型通道）；
-        // egress=普通 bridge，Worker 可按 prompt 自主取材。
-        networkMode:
-          input.network === "none" ? "none" : input.network === "restricted" ? RESTRICTED_NETWORK : GATEWAY_NETWORK,
-        autoRemove: true,
-      },
-    });
-    provisioningSandboxes.set(provisionKey, sandbox);
-    let aborted = false;
-    const unbindAbort = bindProvisionAbortSignal(input.signal, () => {
-      aborted = true;
-      void sandbox.delete().catch(() => {});
-    });
-    hardenCreateContainer(sandbox, input.limits, extraHosts, readonlyBinds);
-    try {
-      await sandbox.findOrProvision();
-      if (aborted || input.signal?.aborted) throw new Error("provision 已取消");
-    } catch (error) {
-      // Abort may arrive before the engine assigns a container id. Repeat
-      // cleanup after create settles, then sweep the immutable attempt labels.
-      await sandbox.delete().catch(() => {});
-      await removeAttemptContainers(input.jobId, input.attemptId).catch(() => {});
-      await cleanupUnhealthyManagedGateway({ expectedCreateOwner: gatewayCreateOwner }).catch(() => {});
-      throw error;
-    } finally {
-      provisioningSandboxes.delete(provisionKey);
-      unbindAbort();
-    }
-    const id = sandbox.id ?? `unknown-${input.jobId}`;
-    sandboxes.set(id, sandbox);
-    try {
-      if (input.sharedAssetsMount) {
-        await validateSharedAssetsContainer(sandbox, input.sharedAssetsMount.volumeName);
-      }
-      const contractResult = await sandbox.run(
-        `test -d /workspace && test -x /bin/sh${input.sharedAssetsMount ? ` && test -d ${SHARED_ASSETS_MOUNT_PATH}` : ""} && cat /opt/deepsonar/tool-manifest.json`,
-        { timeoutMs: 15_000 },
-      );
-      if (contractResult.exitCode !== 0) {
-        throw new RuntimeImageContractError("runtime image missing /workspace, /bin/sh, or tool manifest");
-      }
-      // 兼容历史 OH 镜像：Dockerfile 误写 +"\\n" 导致 manifest 末尾多字面量 \n，严格 JSON.parse 失败。
-      const manifest = parseToolManifest(contractResult.stdout);
-      if (input.expectedContract && manifest.contract !== input.expectedContract) {
-        throw new RuntimeImageContractError(`runtime contract mismatch: expected ${input.expectedContract}, got ${manifest.contract ?? "missing"}`);
-      }
-      if (input.expectedToolsManifestSha256) {
-        const hashResult = await sandbox.run("sha256sum /opt/deepsonar/tool-manifest.json | cut -d' ' -f1", { timeoutMs: 5_000 });
-        if (hashResult.exitCode !== 0 || hashResult.stdout.trim() !== input.expectedToolsManifestSha256.replace(/^sha256:/, "")) {
-          throw new RuntimeImageContractError("tool manifest sha256 mismatch");
-        }
-      }
-    } catch (error) {
-      sandboxes.delete(id);
-      await sandbox.delete().catch(() => {});
-      if (error instanceof RuntimeImageContractError) throw error;
-      throw new RuntimeImageContractError(error instanceof Error ? error.message : String(error));
-    }
-    return { sandboxId: id };
-  }
-
-  async cancelProvision(input: { jobId: string; attemptId: string }): Promise<void> {
-    const sandbox = provisioningSandboxes.get(`${input.jobId}:${input.attemptId}`);
-    let sdkError: unknown;
-    if (sandbox) {
-      try {
-        await deleteSandboxBestEffort(sandbox);
-      } catch (error) {
-        sdkError = error;
-      }
-    }
-    try {
-      await removeAttemptContainers(input.jobId, input.attemptId);
-    } catch (error) {
-      throw new AggregateError(
-        [...(sdkError === undefined ? [] : [sdkError]), error],
-        `provision cancellation cleanup failed: ${input.jobId}/${input.attemptId}`,
-      );
-    }
-  }
-
-  async destroy(handle: RunHandle): Promise<void> {
-    const sessions = terminalSessions.get(handle.sandboxId);
-    terminalSessions.delete(handle.sandboxId);
-    const sessionFailures: unknown[] = [];
-    if (sessions) {
-      const closed = await Promise.allSettled([...sessions].map((session) => session.close()));
-      sessionFailures.push(...closed.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => result.reason));
-    }
-    const s = sandboxes.get(handle.sandboxId);
-    sandboxes.delete(handle.sandboxId);
-    let sdkDeleteError: unknown;
-    if (s) {
-      try {
-        await deleteSandboxBestEffort(s);
-      } catch (error) {
-        sdkDeleteError = error;
-      }
-    }
-    // SDK delete/autoRemove 只是一条尝试；持久化 sandboxId 的引擎删除才是最终确认。
-    try {
-      await this.removeContainer(handle.sandboxId);
-    } catch (error) {
-      throw new AggregateError(
-        [...sessionFailures, ...(sdkDeleteError === undefined ? [] : [sdkDeleteError]), error],
-        `sandbox destroy failed: ${handle.sandboxId}`,
-      );
-    }
-    if (sessionFailures.length > 0) {
-      throw new AggregateError(sessionFailures, `sandbox session cleanup failed: ${handle.sandboxId}`);
-    }
-  }
-
-  async isAlive(handle: RunHandle): Promise<boolean> {
-    const s = sandboxes.get(handle.sandboxId);
-    if (s) {
-      try {
-        await s.run("true", { timeoutMs: 5000 });
-        return true;
-      } catch {
-        return false;
-      }
-    }
-    // 兜底：重启后按容器 id 直查引擎状态
-    try {
-      const out = await docker("inspect", "-f", "{{.State.Running}}", handle.sandboxId);
-      return out === "true";
-    } catch {
-      return false;
-    }
-  }
-
-  async openTerminal(handle: RunHandle, input: TerminalOpenInput): Promise<SandboxTerminalSession> {
-    const sandbox = sandboxes.get(handle.sandboxId);
-    if (!sandbox) throw new Error("TERMINAL_SANDBOX_NOT_OWNED");
-    if (sandbox.provider !== "local-docker") throw new Error("TERMINAL_PROVIDER_UNSUPPORTED");
-    const cols = Math.max(20, Math.min(240, Math.trunc(input.cols)));
-    const rows = Math.max(5, Math.min(100, Math.trunc(input.rows)));
-    const process = await sandbox.runAsync(buildTerminalShellCommand(), {
-      cwd: "/workspace",
-      env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
-      pty: true,
-      timeoutMs: 0,
-    });
-    let closed = false;
-    const output = (async function* () {
-      for await (const event of process) {
-        if (event.type === "stdout" || event.type === "stderr") yield event.chunk ?? "";
-      }
-    })();
-    const session: SandboxTerminalSession = {
-      id: process.id,
-      output,
-      write: async (data) => {
-        if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
-        await writeTerminalInput(process, data);
-      },
-      resize: async (nextCols, nextRows) => {
-        if (closed) throw new Error("TERMINAL_SESSION_CLOSED");
-        const exec = (process.raw as { exec?: { resize?: (size: { w: number; h: number }) => Promise<void> } } | undefined)?.exec;
-        if (!exec?.resize) throw new Error("TERMINAL_RESIZE_UNSUPPORTED");
-        await exec.resize({
-          w: Math.max(20, Math.min(240, Math.trunc(nextCols))),
-          h: Math.max(5, Math.min(100, Math.trunc(nextRows))),
-        });
-      },
-      close: async () => {
-        if (closed) return;
-        closed = true;
-        terminalSessions.get(handle.sandboxId)?.delete(session);
-        await process.kill().catch(() => undefined);
-      },
-    };
-    const sessions = terminalSessions.get(handle.sandboxId) ?? new Set<SandboxTerminalSession>();
-    if (sessions.size >= 4) {
-      await session.close();
-      throw new Error("TERMINAL_SESSION_LIMIT");
-    }
-    sessions.add(session);
-    terminalSessions.set(handle.sandboxId, sessions);
-    await session.resize(cols, rows);
-    void process.wait().catch(() => undefined).finally(() => {
-      closed = true;
-      terminalSessions.get(handle.sandboxId)?.delete(session);
-    });
-    return session;
-  }
-
-  /** 供 executor 取沙箱实例（上传种子文件 / 跑 agent / 读结果） */
-  static sandboxOf(handle: RunHandle): Sandbox | undefined {
-    return sandboxes.get(handle.sandboxId);
-  }
-}
-
-/** 调度器可据此区分供应链准入失败与普通 provision 故障。 */
-export class RuntimeImageContractError extends Error {
-  readonly code = "RUNTIME_IMAGE_CONTRACT";
-  constructor(message: string) {
-    super(message);
-    this.name = "RuntimeImageContractError";
-  }
-}
-
-// ---------- 重启 reconcile 用的引擎直查（JOB-04） ----------
-
-export interface DeepSonarContainer {
-  containerId: string;
-  jobId: string;
-  attemptId: string;
-  state: string;
-}
-
-export function parseDeepSonarContainerRows(out: string): DeepSonarContainer[] {
-  return out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [containerId = "", labels = "", state = ""] = line.split("\t");
-      const jobId = labels
-        .split(",")
-        .map((pair) => pair.trim())
-        .find((pair) => pair.startsWith("deepsonar.job="))
-        ?.slice("deepsonar.job=".length);
-      const attemptId = labels
-        .split(",")
-        .map((pair) => pair.trim())
-        .find((pair) => pair.startsWith("deepsonar.attempt="))
-        ?.slice("deepsonar.attempt=".length);
-      return {
-        containerId,
-        jobId: CANONICAL_UUID_RE.test(jobId ?? "") ? jobId!.toLowerCase() : "",
-        attemptId: CANONICAL_UUID_RE.test(attemptId ?? "") ? attemptId!.toLowerCase() : "",
-        state,
-      };
-    })
-    .filter((container) => container.containerId && container.jobId && container.attemptId);
-}
-
-/** 只枚举同时带 canonical Job/Attempt 双标签的容器（含已退出）。 */
-export async function listDeepSonarContainers(): Promise<DeepSonarContainer[]> {
-  // 注意：docker ps 的 .Labels 是字符串（非 map），不能直接 index，取回后自行解析。
-  const out = await docker(
-    "ps", "-a",
-    "--filter", "label=deepsonar.job",
-    "--filter", "label=deepsonar.attempt",
-    "--format", "{{.ID}}\t{{.Labels}}\t{{.State}}",
-  );
-  return parseDeepSonarContainerRows(out);
-}
-
-/** 强删容器（孤儿回收） */
-export async function forceRemoveContainer(containerId: string): Promise<void> {
-  await removeContainerWithRetry(containerId);
-}
-
-// ---------- 真实 Agent 运行（§8 事件通道 + 动态控制 MCP） ----------
-
-/** Superset of governed CLI-specific reasoning efforts; route validation narrows per adapter. */
 export type ReasoningEffort = string;
+export { createStdinCloseKiller, DEFAULT_STDIN_CLOSE_KILL_MS } from "./runtime-stdin-close.js";
 
 export interface RealAgentSpec {
   provider: "claude-code" | "open-code" | "codex" | "dsh" | "pi";
@@ -1220,6 +100,11 @@ export interface RealAgentSpec {
   secretValues?: readonly string[];
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
   onWarning?: (warning: { code: string; detail?: string }) => void;
+  /**
+   * closeStdin("terminal_result") 后若 CLI 仍驻留等 stdin，有界等待再 kill。
+   * 仅测试注入短超时；默认约 8s。initial_input 不会触发。
+   */
+  stdinCloseKillMs?: number;
 }
 
 export interface RealAgentResult {
@@ -1515,138 +400,15 @@ export function normalizePlainFinalOutput(
  * （首行是 tar 头里的文件名），不能当文件内容用；这里走 exec cat。
  * 文件不存在返回 null（调用方区分「尚未创建」与「读失败」）。
  */
-async function readSandboxFileText(sandbox: Sandbox, filePath: string): Promise<string | null> {
+async function readSandboxFileText(host: Pick<RuntimeHost, "run">, filePath: string): Promise<string | null> {
   const q = `'${filePath.replace(/'/g, `'\\''`)}'`;
-  const res = await sandbox.run(`if [ -f ${q} ]; then cat ${q}; else exit 44; fi`, { timeoutMs: 15000 });
+  const res = await host.run(`if [ -f ${q} ]; then cat ${q}; else exit 44; fi`, { timeoutMs: 15000 });
   if (res.exitCode === 44) return null;
   if (res.exitCode !== 0) {
     throw new Error(`读取沙箱文件失败(exit=${res.exitCode}): ${res.stderr.slice(0, 200)}`);
   }
   return res.stdout;
 }
-
-export async function readSandboxWorkspaceFile(sandbox: Sandbox, filePath: string, maxBytes: number): Promise<Buffer> {
-  const reservedRoots = [
-    "/workspace/.deepsonar",
-    "/workspace/.deepsonar-home",
-    SHARED_ASSETS_MOUNT_PATH,
-    "/workspace/.claude",
-    "/workspace/.codex",
-    "/workspace/.opencode",
-  ];
-  if (
-    !filePath.startsWith("/workspace/") ||
-    reservedRoots.some((root) => filePath === root || filePath.startsWith(`${root}/`))
-  ) {
-    throw new Error("shared_asset_source_path_forbidden");
-  }
-  const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
-  const containerId = inspected?.Id;
-  if (!containerId) throw new Error("shared_asset_container_unavailable");
-  const quoted = shellQuote(filePath);
-  const command = [
-    "set -eu",
-    `test ! -L ${quoted} || exit 44`,
-    `exec 3<${quoted}`,
-    "resolved=$(readlink -f /proc/self/fd/3)",
-    'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
-    'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
-    "test -f /proc/self/fd/3 || exit 47",
-    "size=$(stat -Lc %s /proc/self/fd/3)",
-    `test "$size" -le ${maxBytes} || exit 48`,
-    "cat <&3",
-  ].join("; ");
-  return await new Promise<Buffer>((resolve, reject) => {
-    execFile(
-      "docker",
-      ["exec", containerId, "/bin/sh", "-c", command],
-      { timeout: 15_000, encoding: "buffer", maxBuffer: maxBytes + 1 },
-      (error, stdout) => {
-        if (error) {
-          const code = (error as unknown as { code?: string | number }).code;
-          if (code === 48 || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return reject(new Error("asset_file_too_large"));
-          if (code === 45 || code === 46) return reject(new Error("shared_asset_source_path_forbidden"));
-          if (code === 44 || code === 47) return reject(new Error("shared_asset_source_not_regular_file"));
-          return reject(new Error("shared_asset_source_changed"));
-        }
-        const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
-        if (bytes.byteLength > maxBytes) return reject(new Error("asset_file_too_large"));
-        resolve(bytes);
-      },
-    );
-  });
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-export const HUMAN_INBOX_WRITER_SCRIPT = String.raw`
-import os
-import sys
-
-workspace, message_id, filename = sys.argv[1:]
-flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-fds = []
-try:
-    current = os.open(workspace, flags)
-    fds.append(current)
-    for component in (".deepsonar", "inbox", message_id):
-        try:
-            os.mkdir(component, 0o700, dir_fd=current)
-        except FileExistsError:
-            pass
-        child = os.open(component, flags, dir_fd=current)
-        fds.append(child)
-        current = child
-    output = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400, dir_fd=current)
-    try:
-        while True:
-            chunk = sys.stdin.buffer.read(65536)
-            if not chunk:
-                break
-            view = memoryview(chunk)
-            while view:
-                written = os.write(output, view)
-                view = view[written:]
-        os.fsync(output)
-    finally:
-        os.close(output)
-finally:
-    for descriptor in reversed(fds):
-        os.close(descriptor)
-`;
-
-async function execFileWithInput(file: string, args: string[], bytes: Buffer): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = execFile(file, args, { timeout: 15_000, maxBuffer: 1024 * 1024 }, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-    child.stdin?.on("error", reject);
-    child.stdin?.end(bytes);
-  });
-}
-
-/** Scheduler-owned, descriptor-relative write boundary for human-message attachments. */
-export async function writeHumanInboxWorkspaceFile(
-  sandbox: Pick<Sandbox, "raw">,
-  filePath: string,
-  bytes: Buffer,
-): Promise<void> {
-  const normalized = path.posix.normalize(filePath);
-  const match = /^\/workspace\/\.deepsonar\/inbox\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,240})$/iu.exec(filePath);
-  if (normalized !== filePath || !match) throw new Error("human_message_workspace_path_forbidden");
-  const inspected = await (sandbox.raw as { container?: { inspect?: () => Promise<{ Id?: string }> } } | undefined)?.container?.inspect?.();
-  const containerId = inspected?.Id;
-  if (!containerId) throw new Error("human_message_container_unavailable");
-  try {
-    await execFileWithInput("docker", ["exec", "-i", containerId, "python3", "-c", HUMAN_INBOX_WRITER_SCRIPT, "/workspace", match[1], match[2]], bytes);
-  } catch {
-    throw new Error("human_message_workspace_write_rejected");
-  }
-}
-
 const RUNTIME_DIR = "/workspace/.deepsonar";
 const RUNTIME_HOME = "/workspace/.deepsonar-home";
 const CLAUDE_DIR = `${RUNTIME_HOME}/.claude`;
@@ -1660,10 +422,10 @@ export function runtimeCliEnv(env: Record<string, string>): Record<string, strin
   };
 }
 
-export async function ensureRuntimeHome(sandbox: Pick<Sandbox, "run">): Promise<void> {
+export async function ensureRuntimeHome(host: Pick<RuntimeHost, "run">): Promise<void> {
   let result: { exitCode: number };
   try {
-    result = await sandbox.run(
+    result = await host.run(
       `mkdir -p -- ${shellQuote(RUNTIME_HOME)} && test -d ${shellQuote(RUNTIME_HOME)} && test -w ${shellQuote(RUNTIME_HOME)}`,
       { timeoutMs: 15_000 },
     );
@@ -1853,7 +615,7 @@ export function materializationPathCollisions(
  * Codex `.codex/skills`、OpenCode `.config/opencode/skills`、Pi `.pi/agent/skills`）；repo skills 需出网安装，尽力而为。
  */
 async function materializeAgentFiles(
-  sandbox: Sandbox,
+  host: Pick<RuntimeHost, "run" | "uploadFile">,
   spec: RealAgentSpec,
   cliEnv: Record<string, string>,
 ): Promise<void> {
@@ -1880,21 +642,21 @@ async function materializeAgentFiles(
     writes.push([subAgentMaterializationPath(sub.name), `---\n${lines.join("\n")}\n---\n\n${sub.instructions.trim()}\n`]);
   }
   for (const skill of spec.skills ?? []) {
-    if (!("files" in skill)) continue; // repo skill 走下方安装命令
+    if (!("files" in skill) || !skill.files) continue; // repo skill 走下方安装命令
     for (const [rel, content] of Object.entries(skill.files)) {
       writes.push([skillMaterializationPath(skill.name, rel, provider), content]);
     }
   }
   for (const [filePath, content] of writes) {
     const dir = path.posix.dirname(filePath);
-    await sandbox.run(`mkdir -p -- ${shellQuote(dir)}`);
-    await sandbox.uploadFile(content, filePath);
+    await host.run(`mkdir -p -- ${shellQuote(dir)}`);
+    await host.uploadFile(content, filePath);
   }
   // repo 形式 skill：需要出网，失败只告警不阻断
   for (const skill of spec.skills ?? []) {
     if ("files" in skill || !skill.repo) continue;
     const skillAgent = provider === "open-code" ? "opencode" : provider === "claude-code" ? "claude-code" : provider;
-    const res = await sandbox.run(
+    const res = await host.run(
       `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
       { timeoutMs: 120_000, env: cliEnv },
     ).catch(() => null);
@@ -2657,9 +1419,7 @@ function semanticToolNameForEvent(event: Record<string, unknown>): string {
   return map[type] ?? (type ? `control:${type}` : "control_tool");
 }
 
-export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Promise<RealAgentResult> {
-  const sandbox = AgentboxRunner.sandboxOf(handle);
-  if (!sandbox) throw new Error(`沙箱 ${handle.sandboxId} 不在注册表（可能已被回收）`);
+export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
   // 按键比较能力映射，不使用 JSON.stringify：Postgres JSONB 不保留对象键插入顺序，
@@ -2689,36 +1449,28 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   // 1. 从冻结快照生成本 Job 的完整 /workspace。目标内容不由 Scheduler 预下载，
   // Worker 根据 Hub prompt 与网络策略自行决定如何取材。
   for (const [filePath, content] of Object.entries(spec.workspaceFiles ?? {})) {
-    const normalized = path.posix.normalize(filePath);
-    if (
-      !normalized.startsWith("/workspace/") ||
-      normalized !== filePath ||
-      normalized.includes("/../") ||
-      normalized.includes("\0")
-    ) {
-      throw new Error(`拒绝写入 workspace 之外的动态文件: ${filePath}`);
-    }
+    const normalized = assertWorkspaceWritePath(filePath);
     const dir = path.posix.dirname(normalized);
-    if (dir !== "/workspace") await sandbox.run(`mkdir -p -- ${shellQuote(dir)}`);
-    await sandbox.uploadFile(content, normalized);
+    if (dir !== "/workspace") await host.run(`mkdir -p -- ${shellQuote(dir)}`);
+    await host.uploadFile(content, normalized);
   }
 
-  // 2. agentbox 只当沙箱用：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
+  // 2. 沙箱只当执行宿主：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
   //    控制 MCP 仍由宿主注册并捕获结构化 tool_use/tool_result，不经沙箱目标网络。
   const cliEnv = runtimeCliEnv(spec.env);
-  await ensureRuntimeHome(sandbox);
-  await materializeAgentFiles(sandbox, spec, cliEnv);
+  await ensureRuntimeHome(host);
+  await materializeAgentFiles(host, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
   if (spec.provider !== "pi") {
-    await sandbox.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
+    await host.uploadFile(buildMcpConfigJson(spec.mcps ?? []), mcpConfigPath);
   }
   let systemPromptPath: string | null = null;
   if (spec.systemPrompt) {
     systemPromptPath = `${RUNTIME_DIR}/system-prompt.txt`;
-    await sandbox.uploadFile(spec.systemPrompt, systemPromptPath);
+    await host.uploadFile(spec.systemPrompt, systemPromptPath);
   }
   await adapter.materialize?.({
-    sandbox,
+    host,
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -2745,7 +1497,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     }
   };
   const adapterContext = {
-    sandbox,
+    host,
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -2769,22 +1521,9 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
   };
   // CLI stdin 在 result 后会 closeStdin()；画布增量仍可能异步 sendMessage。
-  // agentbox-sdk 的 stream.write 在 ended 流上抛 ERR_STREAM_WRITE_AFTER_END 且未挂 error 监听会打崩整个 scheduler。
-  let stdinClosed = false;
   const writeEncoded = async (encoded: string) => {
     if (!encoded) return;
-    if (!exec.write) throw new Error("沙箱 exec 不支持 stdin 写入");
-    const rawStream = (exec.raw as { stream?: { destroyed?: boolean; writableEnded?: boolean; writable?: boolean } } | undefined)?.stream;
-    if (stdinClosed || rawStream?.destroyed || rawStream?.writableEnded || rawStream?.writable === false) {
-      throw new Error("agent stdin 已关闭，无法追加消息");
-    }
-    try {
-      await exec.write(encoded);
-    } catch (error) {
-      stdinClosed = true;
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`agent stdin 写入失败: ${msg}`);
-    }
+    await exec.write(encoded);
   };
   const writeInitialMessage = async (content: string) => writeEncoded(adapter.encodeInput(content, adapterState));
   const writeSteerMessage = async (content: string) => writeEncoded(
@@ -2796,8 +1535,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   if (adapter.encodeGetState) await writeEncoded(adapter.encodeGetState());
   const disposeMessageSource = await spec.onRunReady?.({
     sendMessage: writeSteerMessage,
-    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
-    writeWorkspaceFile: (filePath, bytes) => writeHumanInboxWorkspaceFile(sandbox, filePath, bytes),
+    readWorkspaceFile: (filePath, maxBytes) => host.readWorkspaceFile(filePath, maxBytes),
+    writeWorkspaceFile: (filePath, bytes) => host.writeHumanInboxFile(filePath, bytes),
   });
   try {
     // 在首条 prompt 写入 stdin 前注册 Job 级运行 handler，避免 CLI 的首次 API
@@ -2858,20 +1597,18 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   let attemptTerminalResult: TerminalProcessAttempt["terminalResult"];
   let attemptCloseReason: TerminalAttemptCloseReason | undefined;
   let attemptStderrTail = "";
-  // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin 让它退出
+  // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin；
+  // execd 没有 EOF 控制帧，terminal_result 后有界等待再 kill，避免成功路径挂到 Reaper。
+  const stdinCloseKiller = createStdinCloseKiller({
+    kill: () => { void exec.kill().catch(() => {}); },
+    graceMs: spec.stdinCloseKillMs,
+  });
   const closeStdin = (reason?: TerminalAttemptCloseReason) => {
     if (reason) attemptCloseReason = reason;
-    stdinClosed = true;
-    const raw = exec.raw as { stream?: { end?: () => void } } | undefined;
-    if (raw?.stream?.end) {
-      try {
-        raw.stream.end();
-      } catch {
-        /* already ended */
-      }
-    } else void exec.kill().catch(() => {});
+    void exec.closeStdin().catch(() => {});
+    stdinCloseKiller.afterClose(reason);
   };
-  if (!adapter.capabilities.incrementalMessages && adapter.encodeInput(spec.input)) closeStdin("initial_input");
+  if (!adapter.capabilities.incrementalMessages) closeStdin("initial_input");
   try {
     while (true) {
       let resumedExec: typeof exec | undefined;
@@ -2919,7 +1656,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
               continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
             }
             const rawParsed = parsedLine.parsed;
-            const decodedEvents = adapter.decodeOutput(rawParsed, adapterState);
+            const decodedEvents = applyRuntimeOutput(adapter, rawParsed, adapterState);
             await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
             bindObservedResumeIdentity();
             for (const parsed of decodedEvents) {
@@ -2973,7 +1710,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
                 const safeSemanticEvent = redactToolTelemetry(event, undefined, 0, secretValues) as Record<string, unknown>;
                 try {
                   await spec.onSemanticEvent?.(safeSemanticEvent, {
-                    readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFile(sandbox, filePath, maxBytes),
+                    readWorkspaceFile: (filePath, maxBytes) => host.readWorkspaceFile(filePath, maxBytes),
                   });
                 } catch (error) {
                   // Host-side control validation runs after MCP returned
@@ -3072,6 +1809,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       } catch (error) {
         processError = error;
       } finally {
+        stdinCloseKiller.cancel();
         if (piFramer) {
           try {
             piFramer.finish();
@@ -3156,7 +1894,6 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       exec = resumedExec;
       // 只有增量 CLI 通过 stream-json stdin 注入恢复消息；Codex/OpenCode
       // 已把恢复消息作为固定命令参数传入，不能再重复写入 stdin。
-      stdinClosed = !adapter.capabilities.incrementalMessages;
       stdoutBuffer = "";
       attemptFinalText = "";
       attemptExitCode = 0;
@@ -3180,6 +1917,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
       terminalOutcome = "failure";
     }
   } finally {
+    stdinCloseKiller.cancel();
     discardPendingSemanticTools(semanticToolState, (warning) => spec.onWarning?.(warning));
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
@@ -3189,7 +1927,7 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const files: Record<string, string> = {};
   for (const path of spec.resultFiles ?? []) {
     try {
-      const text = await readSandboxFileText(sandbox, path);
+      const text = await readSandboxFileText(host, path);
       if (text !== null) files[path] = redactSecretValues(text, secretValues);
     } catch {
       // 文件不存在 = agent 没写，容忍
@@ -3199,8 +1937,8 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const rawSession = sessionId
     ? await CLI_SESSION_ADAPTERS[spec.provider].exportSession(
         {
-          run: (command) => sandbox.run(command, { timeoutMs: 20_000, env: cliEnv }),
-          readText: (filePath) => readSandboxFileText(sandbox, filePath),
+          run: (command) => host.run(command, { timeoutMs: 20_000, env: cliEnv }),
+          readText: (filePath) => readSandboxFileText(host, filePath),
         },
         sessionId,
         sessionFile || undefined,
@@ -3214,13 +1952,13 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
   const session = rawSession
     ? redactRuntimeSecrets(rawSession, secretValues) as SessionBundle
     : undefined;
-  await sandbox.run(`rm -rf -- ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
+  await host.run(`rm -rf -- ${shellQuote(RUNTIME_HOME)}`).catch(() => {});
   // 结果已经进入调度器内存后立即从 Worker 工作区删除；即使后续解析失败也不遗留。
   // 每个 Job 随后还会由 dispatcher 销毁独立沙箱，这是显式清理之外的第二道保障。
   const cleanupPaths = [...(spec.resultFiles ?? [])]
     .filter((p) => p.startsWith("/workspace/"));
   if (cleanupPaths.length > 0) {
-    await sandbox.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});
+    await host.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});
   }
 
   return {
@@ -3242,3 +1980,4 @@ export async function runRealAgent(handle: RunHandle, spec: RealAgentSpec): Prom
     ...(sessionFile ? { sessionFile } : {}),
   };
 }
+

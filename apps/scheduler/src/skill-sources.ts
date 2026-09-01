@@ -1,7 +1,7 @@
 /**
  * Git 模块源（§8.2）：Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills）
  * - sync：浅克隆 → 扫描 SKILL.md / commands → 目录（含文件内容）落库
- * - 下发：RoleConfig 勾选模块，快照时展开为 agentbox embedded skills/commands
+ * - 下发：RoleConfig 勾选模块，快照时展开为沙箱 embedded skills/commands
  *   （内容在 sync 时缓存，运行 job 不再访问 Git —— 断网/私有网络也能跑）
  */
 import { execFile } from "node:child_process";
@@ -552,7 +552,7 @@ export interface SkillRevisionRef {
 
 /**
  * 展开 RoleConfig 的模块选择器（历史 module、plugin、source 三种语法）
- * → agentbox embedded skills / commands，与 RoleConfig 手写 JSON 合并去重（按 name）
+ * → 沙箱 embedded skills / commands，与 RoleConfig 手写 JSON 合并去重（按 name）
  * 非 trusted 或已禁用来源的模块一律跳过（§5.1：quarantined 未经审批不得下发）
  */
 export async function expandModules(

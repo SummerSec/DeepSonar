@@ -2280,7 +2280,7 @@ export async function resolveConfiguredRuntimeImagesForChannel(
   db: typeof sql,
   channel: RuntimeImageRegistryChannel,
 ): Promise<RuntimeImageSnapshot[]> {
-  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "local-docker") return [];
+  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return [];
   const snapshots = new Map((await resolveStartupRuntimeImages(db, channel)).map((item) => [item.image_ref, item]));
   const projects = await db`SELECT id, config_json FROM projects ORDER BY id`;
   for (const project of projects) {

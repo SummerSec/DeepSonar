@@ -7,7 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager } from "./shared-assets-volume.js";
-import { readSandboxWorkspaceFile } from "./agentbox.js";
+import { readDockerWorkspaceFile } from "./runtime-docker.js";
 
 const execFileP = promisify(execFile);
 const enabled = process.env.RUN_DOCKER_SHARED_ASSETS_TEST === "1";
@@ -51,10 +51,9 @@ test("Docker Agent publish reads one bounded regular-file descriptor", { skip: e
     ]);
     containerId = stdout.trim();
     await execFileP("docker", ["exec", containerId, "/bin/sh", "-c", "for i in $(seq 1 50); do test -f /workspace/result.txt && exit 0; sleep 0.1; done; exit 1"]);
-    const sandbox = { raw: { container: { inspect: async () => ({ Id: containerId }) } } } as never;
-    assert.equal((await readSandboxWorkspaceFile(sandbox, "/workspace/result.txt", 32)).toString("utf8"), "safe-file");
-    await assert.rejects(readSandboxWorkspaceFile(sandbox, "/workspace/large.bin", 16), /asset_file_too_large/);
-    await assert.rejects(readSandboxWorkspaceFile(sandbox, "/workspace/link.txt", 32), /shared_asset_source_not_regular_file|shared_asset_source_path_forbidden/);
+    assert.equal((await readDockerWorkspaceFile(containerId, "/workspace/result.txt", 32)).toString("utf8"), "safe-file");
+    await assert.rejects(readDockerWorkspaceFile(containerId, "/workspace/large.bin", 16), /asset_file_too_large/);
+    await assert.rejects(readDockerWorkspaceFile(containerId, "/workspace/link.txt", 32), /shared_asset_source_not_regular_file|shared_asset_source_path_forbidden/);
   } finally {
     if (containerId) await execFileP("docker", ["rm", "-f", containerId]).catch(() => undefined);
   }

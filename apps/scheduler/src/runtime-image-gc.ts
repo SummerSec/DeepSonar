@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { parseOciDigestRef } from "./runtime-images.js";
@@ -242,8 +242,7 @@ let gcRunning = false;
 export function startRuntimeImageGc(): () => void {
   if (
     config.images.gcIntervalSec === 0
-    || config.runtime.agentMode !== "real"
-    || config.runtime.provider !== "local-docker"
+    || !managesHostDockerRuntime()
   ) {
     return () => {};
   }

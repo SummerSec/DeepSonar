@@ -247,14 +247,14 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/health",
-    summary: "存活检查（含产品版本、runtime image 与 dispatcher readiness）",
+    summary: "存活检查（含产品版本、runtime image、dispatcher 与 OpenSandbox readiness）",
     scope: null,
     tags: ["Meta"],
     responses: {
       "200": {
         type: "object",
         additionalProperties: false,
-        required: ["ok", "ready", "version", "runtime_images", "dispatcher", "ts"],
+        required: ["ok", "ready", "version", "runtime_images", "dispatcher", "opensandbox", "ts"],
         properties: {
           ok: { type: "boolean" },
           ready: { type: "boolean" },
@@ -264,6 +264,16 @@ const OPS: Op[] = [
           },
           runtime_images: { type: "object", additionalProperties: true },
           dispatcher: { type: "object", additionalProperties: true },
+          opensandbox: {
+            type: "object",
+            additionalProperties: false,
+            required: ["level", "domain", "ready"],
+            properties: {
+              level: { type: "string", enum: ["ok", "error", "unconfigured", "skipped"] },
+              domain: { type: "string" },
+              ready: { type: "boolean" },
+            },
+          },
           ts: { type: "integer" },
         },
       },

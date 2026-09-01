@@ -96,13 +96,22 @@ const codexAdapter: AgentCliSessionAdapter = {
   async exportSession(runtime, sessionId) {
     const command =
       `base=\"\${CODEX_HOME:-\${HOME:-/root}/.codex}/sessions\"; ` +
-      `if [ -d \"$base\" ]; then find \"$base\" -type f -name '*.jsonl' ` +
-      `\\( -name ${sh(`*${sessionId}*.jsonl`)} -o -exec grep -l -m1 -- ${sh(sessionId)} {} \\; \\) 2>/dev/null; fi`;
-    const result = await runtime.run(command);
-    if (result.exitCode !== 0 && !result.stdout.trim()) {
-      return { cli: "codex", sessionId, artifacts: [], captureError: result.stderr.trim() || "Codex Session 扫描失败" };
+      `if [ -d \"$base\" ]; then find \"$base\" -type f -name ${sh(`*${sessionId}*.jsonl`)} -print; fi`;
+    // Codex 0.147 把 rollout JSONL 异步落到 sessions/YYYY/MM/DD/；进程刚结束时目录可能还没有。
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const result = await runtime.run(command);
+      if (result.stdout.trim()) {
+        return readDiscovered(runtime, "codex", sessionId, result.stdout.split("\n"));
+      }
+      if (attempt === 7) {
+        if (result.exitCode !== 0) {
+          return { cli: "codex", sessionId, artifacts: [], captureError: result.stderr.trim() || "Codex Session 扫描失败" };
+        }
+        return readDiscovered(runtime, "codex", sessionId, []);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    return readDiscovered(runtime, "codex", sessionId, result.stdout.split("\n"));
+    return readDiscovered(runtime, "codex", sessionId, []);
   },
 };
 

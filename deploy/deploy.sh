@@ -11,6 +11,7 @@ ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
 MASTER_KEY_FILE="$SCRIPT_DIR/master.key"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.prod.yml"
 REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
+OPENSANDBOX_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.opensandbox.prod.yml"
 
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
@@ -162,6 +163,33 @@ set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
 if [ "$MODE" = "real" ]; then
   set -- "$@" -f "$REAL_COMPOSE_FILE"
 fi
+# real 默认 OpenSandbox；显式 SANDBOX_PROVIDER= 其它值才跳过 overlay。
+if [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
+  set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
+fi
+
+# Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
+# Only `up` may touch host FORWARD; down/logs/status/check/pull must not.
+attach_opensandbox_default_bridge() {
+  [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
+  name="${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-opensandbox}"
+  echo "[deploy] attaching $name to Docker default bridge for egress sidecars"
+  if docker network connect bridge "$name"; then
+    return 0
+  fi
+  docker network inspect bridge --format '{{range .Containers}}{{.Name}} {{end}}' | grep -Fqw "$name"
+}
+
+relax_bridge_forward() {
+  [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
+  command -v sudo >/dev/null 2>&1 || return 0
+  echo "[deploy] relaxing Docker FORWARD policy for OpenSandbox bridge (up only)"
+  if sudo -n iptables-legacy -P FORWARD ACCEPT 2>/dev/null \
+    || sudo -n iptables -P FORWARD ACCEPT 2>/dev/null; then
+    return 0
+  fi
+  echo "[deploy] could not set FORWARD ACCEPT; docker0/bridge rules may still drop packets" >&2
+}
 
 cd "$REPO_ROOT"
 
@@ -275,6 +303,7 @@ case "$ACTION" in
     echo "[deploy] 服务已停止，数据库和 blob volume 已保留"
     ;;
   up)
+    relax_bridge_forward
     "$@" config --quiet
     pull_official_silo
     pull_shared_assets_helper
@@ -286,6 +315,7 @@ case "$ACTION" in
       # 不传 --build：优先使用已拉取的 image: 标签，避免强制本地构建
       "$@" up -d --pull missing
     fi
+    attach_opensandbox_default_bridge
     port=$(awk -F= '$1=="DEEPSONAR_WEB_PORT" {print $2; exit}' "$ENV_FILE")
     port=${port:-8080}
     health="http://127.0.0.1:$port/api/health"
@@ -313,6 +343,9 @@ case "$ACTION" in
       echo "[deploy] 当前为 fake 模式（仅状态机）；真实沙箱请使用：./deploy/deploy.sh up real"
     else
       echo "[deploy] 当前为 real 模式（真实沙箱）；需挂载容器 runtime socket（见 docker-compose.real.yml）"
+      if [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
+        echo "[deploy] SANDBOX_PROVIDER=opensandbox overlay enabled (docker-compose.opensandbox.prod.yml)"
+      fi
     fi
     echo "[deploy] Scheduler is live; runtime image readiness is reported by /api/health (Dispatcher waits until ready)"
     ;;

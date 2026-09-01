@@ -1,0 +1,8 @@
+# Infrastructure isolation only. Does not replace project/Job authorization.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deepsonar-opensandbox
+  labels:
+    app.kubernetes.io/name: deepsonar-opensandbox
+    deepsonar.opensandbox/isolation: infrastructure

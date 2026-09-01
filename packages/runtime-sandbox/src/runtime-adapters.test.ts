@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   PiJsonlFramer,
+  applyRuntimeOutput,
+  applyRuntimeOutputText,
   parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,
@@ -16,20 +18,23 @@ function contentType(event: Record<string, unknown> | undefined): unknown {
 }
 
 function fakeSandbox(): {
-  sandbox: never;
+  host: never;
   commands: string[];
   envs: Record<string, string>[];
+  ptys: Array<boolean | undefined>;
   runCommands: string[];
   uploads: Array<{ path: string; content: string }>;
 } {
   const commands: string[] = [];
   const envs: Record<string, string>[] = [];
+  const ptys: Array<boolean | undefined> = [];
   const runCommands: string[] = [];
   const uploads: Array<{ path: string; content: string }> = [];
-  const sandbox = {
-    runAsync: async (command: string, options: { env?: Record<string, string> }) => {
+  const host = {
+    runAsync: async (command: string, options: { env?: Record<string, string>; pty?: boolean }) => {
       commands.push(command);
       envs.push(options.env ?? {});
+      ptys.push(options.pty);
       return {} as never;
     },
     run: async (command: string) => {
@@ -40,7 +45,7 @@ function fakeSandbox(): {
       uploads.push({ path, content });
     },
   } as never;
-  return { sandbox, commands, envs, runCommands, uploads };
+  return { host, commands, envs, ptys, runCommands, uploads };
 }
 
 function testDshProvider(reasoning?: string) {
@@ -96,11 +101,43 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
 });
 
+test("applyRuntimeOutput keeps session identity from CLI JSONL", () => {
+  const claude = { sessionId: undefined as string | undefined };
+  applyRuntimeOutput(
+    AGENT_CLI_RUNTIME_ADAPTERS["claude-code"],
+    { type: "system", subtype: "init", session_id: "sess-claude" },
+    claude,
+  );
+  assert.equal(claude.sessionId, "sess-claude");
+
+  const pi = { sessionId: undefined as string | undefined, sessionFile: undefined as string | undefined };
+  applyRuntimeOutput(
+    AGENT_CLI_RUNTIME_ADAPTERS.pi,
+    {
+      type: "response",
+      command: "get_state",
+      success: true,
+      data: { sessionId: "sess-pi", sessionFile: "/workspace/.deepsonar-home/.pi/agent/sess-pi.jsonl" },
+    },
+    pi,
+  );
+  assert.equal(pi.sessionId, "sess-pi");
+  assert.equal(pi.sessionFile, "/workspace/.deepsonar-home/.pi/agent/sess-pi.jsonl");
+
+  const mixed = { sessionId: undefined as string | undefined };
+  applyRuntimeOutputText(
+    AGENT_CLI_RUNTIME_ADAPTERS.codex,
+    "noise\n{\"type\":\"thread.started\",\"thread_id\":\"sess-codex\"}\n",
+    mixed,
+  );
+  assert.equal(mixed.sessionId, "sess-codex");
+});
+
 test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const fake = fakeSandbox();
   const context = {
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "task with 'quoted' data",
@@ -129,7 +166,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
 
 test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  const state = { contextIdentity: {
+  const state = { sessionId: undefined as string | undefined, contextIdentity: {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
     adapter_id: "dsh", adapter_version: "0.1.0-rc.7", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
@@ -137,6 +174,7 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
   assert.equal(init.method, "initialize");
   assert.deepEqual(init.params, { cwd: "/workspace", provider: "xxxx", model: "gpt-5.6" });
+  assert.equal(state.sessionId, "session-ctx_0123456789abcdef0123456789abcdef");
   const initEvents = adapter.decodeOutput({ jsonrpc: "2.0", id: init.id, result: { serverInfo: { name: "deepseek-harness-sdk-runtime", version: "0.0.1" } } }, state);
   assert.equal(initEvents[0]?.type, "runtime_outbound");
   const prompt = JSON.parse(String(initEvents[0]?.content).trim()) as Record<string, unknown>;
@@ -166,7 +204,7 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const fake = fakeSandbox();
   const context = {
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "task",
@@ -249,7 +287,7 @@ test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", asy
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const fake = fakeSandbox();
   const context = {
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "initial",
@@ -273,7 +311,7 @@ test("Pi 默认关闭扩展，受治理扩展才通过显式路径加载", async
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const fake = fakeSandbox();
   const context = {
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "initial",
@@ -373,7 +411,7 @@ test("Claude enables automatic compaction by default while honoring explicit env
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
   const defaultEnv = fakeSandbox();
   const context = {
-    sandbox: defaultEnv.sandbox,
+    host: defaultEnv.host,
     env: {},
     cwd: "/workspace",
     input: "initial",
@@ -383,7 +421,7 @@ test("Claude enables automatic compaction by default while honoring explicit env
   assert.equal(defaultEnv.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "70");
 
   const explicitEnv = fakeSandbox();
-  await adapter.start({ ...context, sandbox: explicitEnv.sandbox, env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "35" } });
+  await adapter.start({ ...context, host: explicitEnv.host, env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "35" } });
   assert.equal(explicitEnv.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "35");
 });
 
@@ -391,7 +429,7 @@ test("Claude enables governed partial stream-json frames", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
   const fake = fakeSandbox();
   await adapter.start({
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "initial",
@@ -405,7 +443,7 @@ test("Claude supports same-session resume through the stream-json protocol", asy
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS["claude-code"];
   const fake = fakeSandbox();
   const context = {
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "继续",
@@ -510,7 +548,7 @@ test("Codex official reasoning summary events normalize and suppress the repeate
 test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复参数", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
   const fake = fakeSandbox();
-  const context = { sandbox: fake.sandbox, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
+  const context = { host: fake.host, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
   await adapter.start(context);
   await adapter.resume({ ...context, input: "nudge", sessionId: "codex-s1" });
   assert.doesNotMatch(fake.commands[0], /mcp_servers\.deepsonar-control|control-mcp/);
@@ -519,7 +557,15 @@ test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复�
   assert.match(fake.commands[1], /model_reasoning_effort/);
   assert.match(fake.commands[0], /gpt-5/);
   assert.match(fake.commands[1], /exec resume/);
+  assert.match(fake.commands[0], /--skip-git-repo-check/);
+  assert.match(fake.commands[0], /stdbuf -oL -eL/);
+  assert.match(fake.commands[0], / -- 'initial' < \/dev\/null$/);
+  assert.doesNotMatch(fake.commands[0], / -$/);
+  assert.match(fake.commands[1], / -- 'nudge' < \/dev\/null$/);
+  assert.equal(adapter.encodeInput("ignored"), "");
   assert.match(fake.commands[1], /codex-s1/);
+  assert.equal(fake.ptys[0], undefined);
+  assert.equal(fake.ptys[1], undefined);
   assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
   assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
 });
@@ -529,6 +575,8 @@ test("OpenCode JSON events normalize text and tool completion without scraping t
   const state = {};
   const session = adapter.decodeOutput({ type: "session.created", sessionID: "oc-s1" }, state)[0];
   assert.deepEqual(session, { type: "system", subtype: "init", session_id: "oc-s1" });
+  const liveSession = adapter.decodeOutput({ type: "step_start", sessionID: "ses_live" }, {})[0];
+  assert.deepEqual(liveSession, { type: "system", subtype: "init", session_id: "ses_live" });
   const text = adapter.decodeOutput({ type: "text", sessionID: "oc-s1", part: { type: "text", text: "structured" } }, state)[0];
   assert.equal((text?.message as { content?: Array<{ text?: unknown }> })?.content?.[0]?.text, "structured");
   const tool = adapter.decodeOutput({ type: "tool_use", sessionID: "oc-s1", part: { type: "tool", callID: "oc1", tool: "deepsonar-control_mark_job_done", state: { status: "running", input: { summary: "done" } } } }, state);
@@ -560,7 +608,7 @@ test("OpenCode reasoning parts are mapped only when the official structured part
 test("OpenCode commands pin config path and support same-session resume", async () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
   const fake = fakeSandbox();
-  const context = { sandbox: fake.sandbox, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
+  const context = { host: fake.host, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
   await adapter.start(context);
   await adapter.resume({ ...context, input: "nudge", sessionId: "oc-s1" });
   assert.match(fake.commands[0], /opencode run/);
@@ -570,6 +618,8 @@ test("OpenCode commands pin config path and support same-session resume", async 
   assert.match(fake.commands[1], /--session 'oc-s1'/);
   assert.equal(fake.envs[0].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
   assert.equal(fake.envs[1].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
+  assert.equal(fake.ptys[0], true);
+  assert.equal(fake.ptys[1], true);
   assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
   assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
 });
@@ -578,7 +628,7 @@ test("OpenCode materialization defaults compaction without discarding explicit c
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
   const fake = fakeSandbox();
   await adapter.materialize?.({
-    sandbox: fake.sandbox,
+    host: fake.host,
     env: {},
     cwd: "/workspace",
     input: "",
@@ -589,4 +639,10 @@ test("OpenCode materialization defaults compaction without discarding explicit c
   assert.match(fake.runCommands[0], /hasOwnProperty\.call\(compaction,"auto"\)/);
   assert.match(fake.runCommands[0], /compaction\.auto=true/);
   assert.match(fake.runCommands[0], /c\.compaction=compaction/);
+});
+
+test("CLI adapters do not import provider SDKs", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("./runtime-adapters.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /agentbox-sdk|@alibaba-group\/opensandbox/);
 });

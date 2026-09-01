@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
-import { config } from "./config.js";
+import { config, managesHostDockerRuntime } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
   DISPATCH_CLAIM_ADVISORY_KEY,
@@ -21,7 +21,7 @@ import { executeReal, preparePlatformCapability, type PreparedPlatformCapability
 import { inc } from "./metrics.js";
 import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { assertRuntimeImageAvailable, RuntimeImageNotReadyError } from "./runtime-images.js";
+import { assertRuntimeImageAvailable, RuntimeImageNotReadyError, shouldInspectLocalRuntimeImage } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
@@ -52,6 +52,7 @@ import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js"
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
+import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -492,7 +493,7 @@ async function graphEligibilityReasonFromDb(
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string }[]> {
-  if (config.runtime.agentMode === "real" && config.runtime.provider === "local-docker") {
+  if (managesHostDockerRuntime()) {
     const disk = await refreshHostDiskPressure();
     if (!hostDiskAllowsDispatch(disk)) {
       if (disk.level === "error") {
@@ -502,6 +503,15 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       } else {
         console.error(`[dispatcher] host disk status unknown at ${disk.path}: new claims paused`);
       }
+      return [];
+    }
+  }
+  if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+    const server = await refreshOpenSandboxServerStatus();
+    if (!openSandboxAllowsDispatch(server)) {
+      console.error(
+        `[dispatcher] OPENSANDBOX_SERVER ${server.level} at ${server.domain}: new claims paused`,
+      );
       return [];
     }
   }
@@ -754,7 +764,11 @@ async function runJob(jobId: string) {
       // Capability authentication remains disabled until `running`, but the
       // plaintext must exist before Docker creates immutable Config.Env.
       platformCapability = await preparePlatformCapability(jobId, snapshot);
-      await assertRuntimeImageAvailable(runtimeImage);
+      // OpenSandbox 由 server 拉镜像，
+      // 合同/digest 在 provision 后重验，不能把本机缺层当成 Job 不可调度。
+      if (shouldInspectLocalRuntimeImage()) {
+        await assertRuntimeImageAvailable(runtimeImage);
+      }
     }
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
@@ -834,16 +848,27 @@ async function runJob(jobId: string) {
         const provisionSec = typeof frozenProvisionSec === "number" && frozenProvisionSec > 0
           ? frozenProvisionSec
           : (await globalRules(sql)).provisionTimeoutSec;
-        handle = await withProvisionTimeout(
-          runner.provision(provisionInput),
-          provisionSec * 1000,
-          `provision 超时（${provisionSec}s）`,
-          () => interruptProvision(jobId, attemptId!),
-          (lateHandle) => runner.destroy(lateHandle).catch((error) => {
-            inc("deepsonar_sandbox_cleanup_failed_total");
-            console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
-          }),
-        );
+        const provider = config.runtime.agentMode !== "real"
+          ? "noop"
+          : "opensandbox";
+        const provisionStarted = Date.now();
+        try {
+          handle = await withProvisionTimeout(
+            runner.provision(provisionInput),
+            provisionSec * 1000,
+            `provision 超时（${provisionSec}s）`,
+            () => interruptProvision(jobId, attemptId!),
+            (lateHandle) => runner.destroy(lateHandle).catch((error) => {
+              inc("deepsonar_sandbox_cleanup_failed_total");
+              console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
+            }),
+          );
+          inc("deepsonar_sandbox_provision_seconds_sum", { provider }, Math.max(1, Math.round((Date.now() - provisionStarted) / 1000)));
+          inc("deepsonar_sandbox_provision_seconds_count", { provider });
+        } catch (error) {
+          inc("deepsonar_sandbox_provision_failed_total", { provider });
+          throw error;
+        }
       } finally {
         unregisterProvision();
       }
@@ -1016,7 +1041,7 @@ export async function withProvisionTimeout<T>(
   throw new Error(message);
 }
 
-/** 执行器路由：real 模式走 agentbox-sdk 真实 agent；否则内置假 agent（联调/演示用） */
+/** 执行器路由：real 模式走 provider-neutral RuntimeHost；否则内置假 agent（联调/演示用） */
 async function execute(jobId: string, type: string, platformCapability: PreparedPlatformCapability | null) {
   if (config.runtime.agentMode === "real" && (await isRealType(type))) {
     if (!platformCapability) throw new Error(`job ${jobId} 缺少 provision 阶段的平台 capability`);

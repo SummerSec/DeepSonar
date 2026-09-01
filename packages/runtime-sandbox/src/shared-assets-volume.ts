@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL, assertSharedAssetsVolumeOwnership } from "./agentbox.js";
+import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL, assertSharedAssetsVolumeOwnership } from "./runtime-shared.js";
 
 const execFileP = promisify(execFile);
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -77,9 +77,13 @@ export interface SharedAssetsVolumeManager {
   listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>>;
 }
 
-function volumeName(jobId: string): string {
+export function managedSharedAssetsVolumeName(jobId: string): string {
   if (!JOB_ID_RE.test(jobId)) throw new Error("invalid shared-assets Job id");
   return `deepsonar-assets-${jobId.toLowerCase()}`;
+}
+
+function volumeName(jobId: string): string {
+  return managedSharedAssetsVolumeName(jobId);
 }
 
 function jobIdFromVolumeName(name: string): string | null {

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   cleanupManagedResourcesOnce,
   resetResourceCleanupStateForTests,
+  shouldCleanupManagedResources,
   type DesiredStateCleanupDependencies,
 } from "./resource-cleanup.js";
 
@@ -29,6 +30,12 @@ function dependencies(overrides: Partial<DesiredStateCleanupDependencies> = {}):
   };
 }
 
+test("desired-state cleanup runs for any real provider, including OpenSandbox", () => {
+  assert.equal(shouldCleanupManagedResources({ agentMode: "real", provider: "opensandbox" }), true);
+  assert.equal(shouldCleanupManagedResources({ agentMode: "real", provider: "local-docker" }), true);
+  assert.equal(shouldCleanupManagedResources({ agentMode: "fake", provider: "opensandbox" }), false);
+});
+
 test("desired-state cleanup preserves only exact active Job/Attempt resources", async () => {
   resetResourceCleanupStateForTests();
   const removedContainers: string[] = [];
@@ -51,6 +58,24 @@ test("desired-state cleanup preserves only exact active Job/Attempt resources", 
     residualVolumes: 0,
     failures: 0,
   });
+});
+
+test("desired-state cleanup ignores sandboxes without dual canonical UUIDs", async () => {
+  resetResourceCleanupStateForTests();
+  const removedContainers: string[] = [];
+  const result = await cleanupManagedResourcesOnce(dependencies({
+    listContainers: async () => [
+      { containerId: "foreign", jobId: "", attemptId: "", state: "running" },
+      { containerId: "partial", jobId: terminalJob, attemptId: "not-a-uuid", state: "exited" },
+      { containerId: "managed-orphan", jobId: terminalJob, attemptId: oldAttempt, state: "exited" },
+    ],
+    listVolumes: async () => [],
+    removeContainer: async (containerId) => {
+      removedContainers.push(containerId);
+    },
+  }));
+  assert.deepEqual(removedContainers, ["managed-orphan"]);
+  assert.equal(result.removedContainers, 1);
 });
 
 test("desired-state cleanup reports residual resources and retries them next cycle", async () => {

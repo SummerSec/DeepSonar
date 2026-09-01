@@ -11,7 +11,9 @@ provider-specific CLI protocols.
 ## Contract
 
 `packages/runtime-sandbox/src/runtime-adapters.ts` is the single registry for
-real Agent CLIs. Each registered adapter declares:
+real Agent CLIs. Adapters talk only to the provider-neutral `RuntimeHost`
+(`run` / `runAsync` / `uploadFile`); they must not import Agentbox or
+OpenSandbox SDK types. Each registered adapter declares:
 
 - a stable adapter id and installed CLI version;
 - required capabilities (`streamEvents`, `completionGate`, `sessionCapture`,
@@ -89,7 +91,7 @@ be registered or admitted:
 | CLI | 归档来源/格式 | 明确边界 |
 | --- | --- | --- |
 | `claude-code` | 本次沙箱 `HOME/.claude/projects` 下匹配 `sessionId` 的 JSONL（含主会话与 `subagents`） | 发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
-| `codex` | `CODEX_HOME/sessions`（未设置时 `HOME/.codex/sessions`）的 JSONL | 仅按本次 `sessionId` 发现；发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
+| `codex` | `CODEX_HOME/sessions`（未设置时 `HOME/.codex/sessions`）下按本次 `sessionId` 匹配的 `YYYY/MM/DD/rollout-*.jsonl` | 仅按本次 `sessionId` 发现；发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
 | `open-code` | `opencode export <sessionId>` vendor export | stdout 超过 32 MiB、导出失败或空结果时显式 `captureError` |
 | `pi` | runtime 返回且位于 `/workspace/.deepsonar-home/.pi/agent/` 的受治理 `sessionFile` JSONL | 缺失/路径越界/读取错误或超过 32 MiB 时显式 `captureError` |
 | `dsh` | `/workspace/.deepsonar-home/.dsh/sessions/<project>/<sessionId>/session.jsonl` JSONL | 非法或多项目匹配、发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
@@ -183,6 +185,7 @@ request is made, `initialize` must return the official server identity, and
 at most the last 8 KiB of smoke stderr. Runtime CLI stderr is separately written
 as exact-secret-redacted `runtime.stderr` chunks in normalized evidence with a
 1 MiB total cap and explicit truncation record; the Job error remains a short
-tail summary. Full model-turn local-docker smokes still require the corresponding
+tail summary. Full model-turn OpenSandbox vendor E2E
+(`pnpm ci:smoke:opensandbox-cli-control`) still requires the corresponding
 provider credentials; credential-unavailable results must be reported
-separately from adapter or parser failures.
+separately from adapter or parser failures. Mock LLM is not a substitute.

@@ -110,7 +110,203 @@ test("real executor round-trips only controlled rate-limit details after string 
   assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
 });
 
-test("real executor passes the reserved Skill to AgentBox without putting the API token in the manifest", () => {
+// 以下 OpenSandbox 用例只核对 PoC 源文本契约，不启动 server，也不算 live smoke。
+test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () => {
+  const source = readFileSync(new URL("./opensandbox-cli-control.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /ANTHROPIC_API_KEY/);
+  assert.match(source, /ANTHROPIC_AUTH_TOKEN/);
+  assert.match(source, /ANTHROPIC_BASE_URL/);
+  assert.match(source, /ANTHROPIC_MODEL/);
+  assert.doesNotMatch(source, /air-outer|agentrouter|ai\.feei/);
+  assert.match(source, /OPENAI_API_KEY/);
+  assert.match(source, /DEEPSEEK_API_KEY/);
+  assert.match(source, /needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E/);
+  assert.match(source, /vendor CLI E2E requires all five CLIs/);
+  assert.match(source, /vendor CLI E2E incomplete/);
+  assert.match(source, /vendor CLI E2E needs host docker access for Gateway bind/);
+  assert.match(source, /assertVendorUpstreamPayload/);
+  assert.match(source, /assertVendorUpstreamStatus/);
+  assert.match(source, /assertVendorOfficialOrigin/);
+  assert.match(source, /VENDOR_OFFICIAL_ORIGINS/);
+  assert.match(source, /assertVendorPlanReachable/);
+  assert.match(source, /for \(const selectedCli of selectedClis\)/);
+  assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\[selectedCli\]/);
+  assert.match(source, /encodeSteer/);
+  assert.match(source, /CLI_SESSION_ADAPTERS\[selectedCli\]\.exportSession/);
+  assert.match(source, /parseAgentSession/);
+  assert.match(source, /adapter\.resume/);
+  assert.match(source, /steered=true archived=true viewed=true resumed=true leftover=0/);
+  assert.match(source, /clis=\$\{ran\.join\(/);
+  assert.match(source, /preparePlatformCapability/);
+  assert.match(source, /submit_hub_decision/);
+  assert.match(source, /adapter\.start/);
+  assert.match(source, /adapter\.materialize/);
+  assert.match(source, /legacySettingsConfig/);
+  assert.match(source, /routeMaterializedProviderFilesThroughGateway/);
+  assert.match(source, /qualifyPiModelRef/);
+  assert.match(source, /encodeGetState/);
+  assert.match(source, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
+  assert.match(source, /deepsonar\/\$\{plan\.model\}/);
+  assert.match(source, /network: "restricted"/);
+  assert.match(source, /DEEPSONAR_ALLOW_EGRESS: "0"/);
+  assert.doesNotMatch(source, /network: "egress"/);
+  assert.doesNotMatch(source, /mintJobCapabilityToken\(/);
+  assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
+});
+
+test("OpenSandbox reconcile PoC source-text contract orphans unknown effects", () => {
+  const source = readFileSync(new URL("./opensandbox-reconcile.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /reconcileOnBoot\(\)/);
+  assert.match(source, /effect_pending/);
+  assert.match(source, /leftover=0 replay=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.4 : 1/);
+  assert.match(source, /OPENSANDBOX_POC_DIRTY/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
+test("OpenSandbox Kata shared-assets PoC source-text contract is independent of isolation smoke", () => {
+  const source = readFileSync(new URL("../../../packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts", import.meta.url), "utf8");
+  const harness = readFileSync(new URL("../../../agent-harness/test-opensandbox-poc.ts", import.meta.url), "utf8");
+  assert.match(source, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /sharedAssetsMount/);
+  assert.match(source, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
+  assert.match(source, /leftoverPvcs/);
+  assert.match(harness, /caseName === "k8s-assets"/);
+  assert.doesNotMatch(source, /runOpenSandboxK8sPoc\(/);
+});
+
+test("OpenSandbox gVisor PoC source-text contract fail-closes a working iptables nat table", () => {
+  const source = readFileSync(new URL("./opensandbox-gvisor.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /shouldRunOpenSandboxGvisorPoc/);
+  assert.match(source, /runOpenSandboxGvisorPoc/);
+  assert.match(source, /OPEN_SANDBOX_POC_GVISOR=1/);
+  assert.match(source, /compatible=false/);
+  assert.match(source, /natUnsupported=true/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
+test("OpenSandbox reaper PoC source-text contract times out and orphans leftovers", () => {
+  const source = readFileSync(new URL("./opensandbox-reaper.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /reapOnce\(\)/);
+  assert.match(source, /isAlive/);
+  assert.match(source, /timeout=1 orphan=1/);
+  assert.match(source, /mintJobCapabilityToken/);
+  assert.match(source, /UPDATE jobs SET timeout_sec = 1/);
+  assert.match(source, /UPDATE jobs SET lease_expires_at/);
+  assert.match(source, /openTerminal/);
+  assert.match(source, /sharedAssetsVolumeManager/);
+  assert.match(source, /tokens=revoked pty=closed assets=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.3 : 1/);
+  assert.match(source, /OPENSANDBOX_POC_DIRTY/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /reaped jobs must lose shared assets volumes/);
+  assert.doesNotMatch(source, /if \(kubernetes\) return null/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
+test("OpenSandbox dispatch PoC source-text contract uses dispatcher claim/provision/cancel", () => {
+  const source = readFileSync(new URL("./opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /dispatchOnce\(\)/);
+  assert.match(source, /cancelJob\(jobId/);
+  assert.match(source, /createSharedAsset/);
+  assert.match(source, /tokens=revoked assets=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.3 : 1/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /gatewayServiceManifest/);
+  assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
+});
+
+test("OpenSandbox prod-stack PoC source-text contract hits Scheduler /readiness", () => {
+  const source = readFileSync(new URL("./opensandbox-prod-stack.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /registerSettingsRoutes/);
+  assert.match(source, /GET \/readiness/);
+  assert.match(source, /OPENSANDBOX_SERVER_READY/);
+  assert.match(source, /opensandbox\?\.level !== "ok"/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(|provision\(/);
+});
+
+test("scheduler production build excludes live OpenSandbox PoC harnesses", () => {
+  const tsconfig = JSON.parse(readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8")) as { exclude?: string[] };
+  assert.deepEqual(tsconfig.exclude, ["src/**/*.poc.ts"]);
+});
+
+test("OpenSandbox official prod PoC source-text contract uses prod+real+overlay compose", () => {
+  const source = readFileSync(new URL("./opensandbox-prod-official.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /docker-compose.prod.yml/);
+  assert.match(source, /docker-compose.real.yml/);
+  assert.match(source, /docker-compose.opensandbox.prod.yml/);
+  assert.match(source, /iptables-legacy/);
+  assert.match(source, /FORWARD/);
+  assert.match(source, /ACCEPT/);
+  assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.match(source, /runOpenSandboxInfrastructurePoc/);
+  assert.match(source, /runOpenSandboxImageContractPoc/);
+  assert.match(source, /runOpenSandboxOfficialImagesPoc/);
+  assert.match(source, /listOfficialOpenSandboxRuntimeImages/);
+  assert.match(source, /OPEN_SANDBOX_POC_RUNTIME_IMAGE/);
+  assert.match(source, /OPEN_SANDBOX_POC_IMAGE_KEYS/);
+  assert.match(source, /OPEN_SANDBOX_DOMAIN=opensandbox:8080/);
+  assert.match(source, /network", "connect", "bridge"/);
+  assert.match(source, /provision=true leftover=0/);
+  assert.match(source, /official overlay runtime CLI missing/);
+  assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
+  assert.doesNotMatch(source, /network_mode: host/);
+});
+
+test("OpenSandbox prod-compose PoC source-text contract builds against Phase 2 server", () => {
+  const source = readFileSync(new URL("./opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /docker-compose.opensandbox.host.yml/);
+  assert.match(source, /127\.0\.0\.1:8080/);
+  assert.match(source, /network_mode: host|host network/);
+  assert.match(source, /\/api\/health/);
+  assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.match(source, /BLOB_STORE=s3/);
+  assert.match(source, /silo=ready blob=s3/);
+  assert.match(source, /host\.docker\.internal:\$\{schedulerPort\}\/gateway/);
+  assert.match(source, /GATEWAY_PROXY_SCRIPT/);
+  assert.match(source, /OPEN_SANDBOX_POC_RUNTIME_IMAGE/);
+  assert.match(source, /_deepsonar_health/);
+  assert.match(source, /sidecar \/gateway forward failed/);
+  assert.match(source, /prod-compose started extra OpenSandbox/);
+  assert.doesNotMatch(source, /expected exactly one OpenSandbox container/);
+  assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
+  assert.doesNotMatch(source, /provision\(|executeReal\(/);
+  assert.doesNotMatch(source, /127\.0\.0\.1:\$\{schedulerPort\}\/gateway/);
+});
+
+test("OpenSandbox real runner source-text contract does not load Agentbox", () => {
+  const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /AgentboxRunner|runtime-sandbox\/agentbox/);
+  assert.match(source, /provider !== ["']opensandbox["']/);
+});
+
+test("OpenSandbox Platform API PoC source-text contract injects capability env at provision", () => {
+  const source = readFileSync(new URL("./opensandbox-platform-api.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /import\("\.\/runtime\.js"\)/);
+  assert.match(source, /preparePlatformCapability\(jobId, snapshot/);
+  assert.match(source, /\.\.\.capability\.env/);
+  assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
+  assert.doesNotMatch(source, /mintJobCapabilityToken/);
+  assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
+  assert.match(source, /os\.environ\["DEEPSONAR_API_TOKEN"\]/);
+  assert.match(source, /submit_hub_decision/);
+});
+
+test("real executor passes the reserved Skill to the sandbox without putting the API token in the manifest", () => {
   const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
   const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /skills:\s*runtimeSkills as never/);

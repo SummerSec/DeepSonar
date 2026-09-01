@@ -7,6 +7,7 @@ import { useAuth } from "../auth";
 import { resolveRailAuthPresentation } from "../auth-status";
 import { DeepSonarMark } from "../components/DeepSonarMark";
 import { canAccessAnyScope } from "../permissions";
+import { formatHealthOpenSandbox, healthOpenSandboxDegraded, type HealthOpenSandbox } from "../health-status";
 import { formatHealthVersion } from "../product-version";
 
 const WORKSPACE_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
@@ -83,14 +84,17 @@ function MainNav({ projectId, onNavigate }: { projectId?: string; onNavigate?: (
   return <nav className="app-nav" aria-label="主导航"><div className="nav-group-label">WORKSPACE</div>{WORKSPACE_NAV.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={17} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}{capabilityNav.length > 0 && <div className="project-nav"><div className="nav-group-label">CAPABILITY</div>{capabilityNav.map((item) => <NavLink key={item.to} to={item.to} end={item.end} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={17} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}</div>}{projectId && <div className="project-nav"><div className="nav-group-label">CURRENT PROJECT</div>{PROJECT_TABS.map((item) => <NavLink key={item.seg} to={`/projects/${projectId}/${item.seg}`} onClick={onNavigate} title={item.label} className={({ isActive }) => `nav-item compact ${isActive ? "is-active" : ""}`}><span className="nav-icon"><item.icon size={16} weight="light" /></span><span className="nav-copy"><strong>{item.label}</strong><small>{item.caption}</small></span><i aria-hidden="true" /></NavLink>)}</div>}</nav>;
 }
 
-function useSchedulerVersion() {
+function useSchedulerHealth() {
   const [version, setVersion] = useState<string | null>(null);
+  const [openSandbox, setOpenSandbox] = useState<HealthOpenSandbox | null>(null);
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
       api.health()
         .then((health) => {
-          if (!cancelled) setVersion(formatHealthVersion(health.version));
+          if (cancelled) return;
+          setVersion(formatHealthVersion(health.version));
+          setOpenSandbox(health.opensandbox ?? null);
         })
         .catch(() => {
           if (!cancelled) setVersion((current) => current);
@@ -103,14 +107,20 @@ function useSchedulerVersion() {
       window.clearInterval(timer);
     };
   }, []);
-  return version;
+  return { version, openSandbox };
 }
 
 export function AppShell() {
   const projectMatch = useMatch("/projects/:projectId/*");
   const projectId = projectMatch?.params.projectId;
-  const schedulerVersion = useSchedulerVersion();
-  const versionLabel = schedulerVersion ?? "—";
+  const schedulerHealth = useSchedulerHealth();
+  const versionLabel = schedulerHealth.version ?? "—";
+  const openSandboxLabel = formatHealthOpenSandbox(schedulerHealth.openSandbox);
+  const statusLabel = openSandboxLabel ? `${versionLabel} · ${openSandboxLabel}` : versionLabel;
+  const statusDegraded = healthOpenSandboxDegraded(schedulerHealth.openSandbox);
+  const statusTitle = schedulerHealth.openSandbox?.domain
+    ? `${statusLabel} · ${schedulerHealth.openSandbox.domain}`
+    : statusLabel;
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const menuOpenRef = useRef(menuOpen);
@@ -162,11 +172,11 @@ export function AppShell() {
         </button>
         <MainNav projectId={projectId} />
         <UserRailFooter collapsed={collapsed} />
-        <div className="rail-status">
+        <div className={`rail-status${statusDegraded ? " is-degraded" : ""}`} title={statusTitle}>
           <span className="deepsonar-live-dot" />
           <div>
             <strong>Scheduler online</strong>
-            <small>{versionLabel}</small>
+            <small>{statusLabel}</small>
           </div>
         </div>
       </div>
@@ -184,7 +194,7 @@ export function AppShell() {
     </aside>
 
     <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
-    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><UserRailFooter collapsed={false} /><div className="mobile-menu-foot"><span className="deepsonar-live-dot" /> 调度器在线 {versionLabel}</div></div>
+    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><UserRailFooter collapsed={false} /><div className={`mobile-menu-foot${statusDegraded ? " is-degraded" : ""}`} title={statusTitle}><span className="deepsonar-live-dot" /> 调度器在线 {statusLabel}</div></div>
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
     <main id="main-content" className="app-stage"><Outlet /></main>
   </div>;

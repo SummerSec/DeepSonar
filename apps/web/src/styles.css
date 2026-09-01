@@ -529,6 +529,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   background: #090b0c;
 }
 .rail-status > span, .mobile-menu-foot > span { width: 7px; height: 7px; border: 1px solid #b1ffd0; background: var(--live); animation: live-blink 2.2s var(--ease-decel) infinite; }
+.rail-status.is-degraded > span, .mobile-menu-foot.is-degraded > span { border-color: #ffd0b1; background: #e39a4a; }
 .rail-status strong { display: block; color: #b3babd; font: 500 9px/1.4 var(--font-mono); letter-spacing: .08em; }
 .rail-status small { display: block; color: #50595e; font-size: 11px; }
 .app-toast-stack {

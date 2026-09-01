@@ -1,0 +1,28 @@
+# Phase 3 out-of-cluster OpenSandbox server. Does not stop deepsonar-opensandbox.
+# Host network reaches the cluster API and pod CIDR; sandboxes still use Kata.
+# Scheduler talking to this server must set OPEN_SANDBOX_KUBERNETES=1
+# (omit Docker-only ResourceName=pids) and OPEN_SANDBOX_DOMAIN=127.0.0.1:18084.
+#   OPEN_SANDBOX_API_KEY=... OPEN_SANDBOX_KUBECONFIG=/path/to/kubeconfig \
+#     docker compose -f deploy/docker-compose.opensandbox.k8s.yml up -d
+services:
+  opensandbox-k8s:
+    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778}
+    container_name: ${OPEN_SANDBOX_K8S_CONTAINER_NAME:-deepsonar-opensandbox-k8s}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
+      OPENSANDBOX_SERVER_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
+    volumes:
+      - ./opensandbox/config.k8s.external.toml:/etc/opensandbox/config.toml:ro
+      - ./opensandbox/batchsandbox-template.yaml:/etc/opensandbox/batchsandbox-template.yaml:ro
+      - ${OPEN_SANDBOX_KUBECONFIG:?set OPEN_SANDBOX_KUBECONFIG}:/etc/opensandbox/kubeconfig:ro
+      - opensandbox-k8s-data:/var/lib/opensandbox
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18084/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  opensandbox-k8s-data:

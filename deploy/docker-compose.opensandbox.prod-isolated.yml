@@ -1,0 +1,8 @@
+# Isolate official prod+real+opensandbox resources so a smoke project cannot
+# steal or destroy the Phase 2 `deepsonar-sandbox-gateway` network.
+networks:
+  sandbox_gateway:
+    name: ${OPEN_SANDBOX_POC_GATEWAY_NET:-os-poc-sandbox-gateway}
+volumes:
+  admission_scan:
+    name: ${OPEN_SANDBOX_POC_ADMISSION_VOL:-os-poc-admission-scan}

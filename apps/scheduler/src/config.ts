@@ -194,10 +194,22 @@ export const config = {
   },
 
   runtime: {
-    provider: str("SANDBOX_PROVIDER", "local-docker"),
+    provider: str("SANDBOX_PROVIDER", "opensandbox"),
     imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
-    /** fake=内置假 agent（联调用）；real=agentbox-sdk 真实 agent */
+    /** fake=内置假 agent（联调用）；real=OpenSandbox 真实沙箱 */
     agentMode: str("AGENT_MODE", "real"),
+    openSandbox: {
+      domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:8080"),
+      apiKey: str("OPEN_SANDBOX_API_KEY", ""),
+      protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https" ? "https" : "http") as "http" | "https",
+      useServerProxy: bool("OPEN_SANDBOX_USE_SERVER_PROXY", true),
+      sdkVersion: str("OPEN_SANDBOX_SDK_VERSION", ""),
+      serverImage: str("OPENSANDBOX_SERVER_IMAGE", ""),
+      execdImage: str("OPENSANDBOX_EXECD_IMAGE", ""),
+      egressImage: str("OPENSANDBOX_EGRESS_IMAGE", ""),
+      /** Kubernetes 后端省略 Docker 专有 ResourceName=`pids`；仍要求冻结 pidsLimit。 */
+      kubernetes: bool("OPEN_SANDBOX_KUBERNETES", false),
+    },
     /** SEC-03 沙箱硬限制（可按机器规格调；0/关 仅限调试） */
     sandboxLimits: {
       cpu: int("DEEPSONAR_SANDBOX_CPU", 2),
@@ -315,3 +327,16 @@ export const config = {
     },
   },
 } as const;
+
+/** OpenSandbox Docker shares the Scheduler host engine; Kata does not. */
+export function managesHostDockerRuntime(
+  runtime: {
+    agentMode: string;
+    provider: string;
+    openSandbox?: { kubernetes?: boolean };
+  } = config.runtime,
+): boolean {
+  return runtime.agentMode === "real"
+    && runtime.provider === "opensandbox"
+    && runtime.openSandbox?.kubernetes !== true;
+}

@@ -1,5 +1,5 @@
-import type { AsyncCommandHandle, Sandbox } from "agentbox-sdk";
 import type { ContextIdentity } from "./context-contract.js";
+import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 
 export type AgentCliId = "claude-code" | "codex" | "dsh" | "open-code" | "pi";
 
@@ -29,7 +29,7 @@ export interface DshProviderRuntimeConfig {
 }
 
 export interface AdapterStartContext {
-  sandbox: Sandbox;
+  host: RuntimeHost;
   env: Record<string, string>;
   cwd: string;
   model?: string;
@@ -77,8 +77,8 @@ export interface RuntimeAdapter {
   readonly outputMode: AgentCliOutputMode;
   readonly capabilities: Readonly<AgentCliCapabilities>;
   readonly compatibleImageKeys: readonly string[];
-  start(context: AdapterStartContext): Promise<AsyncCommandHandle>;
-  resume(context: AdapterResumeContext): Promise<AsyncCommandHandle>;
+  start(context: AdapterStartContext): Promise<RuntimeProcess>;
+  resume(context: AdapterResumeContext): Promise<RuntimeProcess>;
   materialize?(context: AdapterStartContext): Promise<void>;
   encodeInput(content: string, state?: AdapterRuntimeState): string;
   /** 多消息模式运行时可选的显式 RPC 排队命令。 */
@@ -531,7 +531,7 @@ function decodeOpenCode(line: Record<string, unknown>, state: AdapterRuntimeStat
   if (contextObservation.length > 0) return contextObservation;
   const type = String(line.type ?? line.event ?? "");
   rememberSession(line, state);
-  if (type === "session.created" || type === "session.started" || type === "run.started") {
+  if (type === "session.created" || type === "session.started" || type === "run.started" || type === "step_start") {
     state.sessionId = String(line.sessionID ?? line.session_id ?? line.id ?? "");
     return [{ type: "system", subtype: "init", session_id: state.sessionId }];
   }
@@ -611,10 +611,10 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
 }
 
 function sandboxClaude(
-  sandbox: Sandbox,
+  host: RuntimeHost,
   context: AdapterStartContext,
   sessionId?: string,
-): Promise<AsyncCommandHandle> {
+): Promise<RuntimeProcess> {
   // Claude Code 恢复会话时仍接受相同的 stream-json 输入协议。恢复进程
   // 建立后由 runner 向 stdin 写入恢复消息，因此固定命令只需携带 session ID。
   let command = `claude -p`;
@@ -623,7 +623,7 @@ function sandboxClaude(
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += ` --effort ${shellQuote(context.reasoning)}`;
   if (context.systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(context.systemPromptPath)})"`;
-  return sandbox.runAsync(command, {
+  return host.runAsync(command, {
     cwd: context.cwd,
     env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...context.env },
   });
@@ -638,8 +638,8 @@ const claude = Object.freeze<RuntimeAdapter>({
   // Claude Code 2.1.231 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
   // an adapter whose pinned minimum does not support it.
-  start: (context) => sandboxClaude(context.sandbox, context),
-  resume: (context) => sandboxClaude(context.sandbox, context, context.sessionId),
+  start: (context) => sandboxClaude(context.host, context),
+  resume: (context) => sandboxClaude(context.host, context, context.sessionId),
   encodeInput: (content) => JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n",
   decodeOutput: (line, state) => {
     const contextEvents = contextEventFromLine(line, state);
@@ -654,14 +654,16 @@ function codexConfigArg(key: string, value: string): string {
   return ` -c ${shellQuote(`${key}=${value}`)}`;
 }
 
-function sandboxCodex(sandbox: Sandbox, context: AdapterStartContext, sessionId?: string): Promise<AsyncCommandHandle> {
+function sandboxCodex(host: RuntimeHost, context: AdapterStartContext, sessionId?: string): Promise<RuntimeProcess> {
   let command = sessionId
-    ? `codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox`
-    : "codex exec --json --dangerously-bypass-approvals-and-sandbox";
+    ? `stdbuf -oL -eL codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
+    : "stdbuf -oL -eL codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check";
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
-  command += sessionId ? ` -- ${promptArg(context.input)}` : " -";
-  return sandbox.runAsync(command, { cwd: context.cwd, env: context.env });
+  // OpenSandbox execd 没有 stdin EOF 帧，runAsync 会一直挂着管道。
+  // argv 提示 + `/dev/null` 与 sandbox.commands.run 真机路径一致。
+  command += ` -- ${promptArg(context.input)} < /dev/null`;
+  return host.runAsync(command, { cwd: context.cwd, env: context.env });
 }
 
 const codex = Object.freeze<RuntimeAdapter>({
@@ -670,9 +672,9 @@ const codex = Object.freeze<RuntimeAdapter>({
   outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  start: (context) => sandboxCodex(context.sandbox, context),
-  resume: (context) => sandboxCodex(context.sandbox, context, context.sessionId),
-  encodeInput: (content) => content,
+  start: (context) => sandboxCodex(context.host, context),
+  resume: (context) => sandboxCodex(context.host, context, context.sessionId),
+  encodeInput: () => "",
   decodeOutput: decodeCodex,
 });
 
@@ -682,26 +684,26 @@ const openCode = Object.freeze<RuntimeAdapter>({
   outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  start: ({ sandbox, env, cwd, model, reasoning, input }) => {
+  start: ({ host, env, cwd, model, reasoning, input }) => {
     // OpenCode's governed pin supports --thinking and emits a structured
     // `reasoning` JSON event when the selected model exposes one.
     let command = `opencode run --format json --thinking --dangerously-skip-permissions --pure`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
     command += ` -- ${promptArg(input)}`;
-    return sandbox.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" } });
+    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" }, pty: true });
   },
-  resume: ({ sandbox, env, cwd, model, reasoning, input, sessionId }) => {
+  resume: ({ host, env, cwd, model, reasoning, input, sessionId }) => {
     let command = `opencode run --session ${shellQuote(sessionId)} --format json --thinking --dangerously-skip-permissions --pure`;
     if (model) command += ` --model ${shellQuote(model)}`;
     if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
     command += ` -- ${promptArg(input)}`;
-    return sandbox.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" } });
+    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" }, pty: true });
   },
-  materialize: async ({ sandbox }) => {
+  materialize: async ({ host }) => {
     // OpenCode 使用 JSON 配置；Provider 文件上传后将 Scheduler 管理的 MCP 描述
     // 合并到单 Job 配置。自动压缩是上游有界会话策略，显式 RoleConfig 值保持不变。
-    await sandbox.run(
+    await host.run(
       "node -e 'const fs=require(\"node:fs\");const p=\"/workspace/.opencode/config.json\";let c={};try{c=JSON.parse(fs.readFileSync(p,\"utf8\"))}catch{};const compaction=c.compaction&&typeof c.compaction===\"object\"&&!Array.isArray(c.compaction)?c.compaction:{};if(!Object.prototype.hasOwnProperty.call(compaction,\"auto\"))compaction.auto=true;c.compaction=compaction;const m=JSON.parse(fs.readFileSync(\"/workspace/.deepsonar/mcp.json\",\"utf8\")).mcpServers||{};c.mcp=Object.fromEntries(Object.entries(m).map(([n,s])=>[n,s.type===\"stdio\"?{type:\"local\",command:[s.command,...(s.args||[])],environment:s.env||{}}:{type:\"remote\",url:s.url,headers:s.headers||{}}]));fs.mkdirSync(\"/workspace/.opencode\",{recursive:true});fs.writeFileSync(p,JSON.stringify(c)+\"\\n\")'",
       { cwd: "/workspace" },
     );
@@ -846,7 +848,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     : unknownRuntimeEvent();
 }
 
-function sandboxPi(sandbox: Sandbox, context: AdapterStartContext, sessionFile?: string): Promise<AsyncCommandHandle> {
+function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?: string): Promise<RuntimeProcess> {
   const extensions = (context.piExtensions ?? []).map((extension) => {
     if (!extension.startsWith("/workspace/.deepsonar-home/.pi/agent/extensions/") || extension.includes("/../") || extension.includes("\0")) {
       throw new Error("PI_EXTENSION_PATH_INVALID");
@@ -857,7 +859,7 @@ function sandboxPi(sandbox: Sandbox, context: AdapterStartContext, sessionFile?:
   if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
-  return sandbox.runAsync(command, { cwd: context.cwd, env: context.env });
+  return host.runAsync(command, { cwd: context.cwd, env: context.env });
 }
 
 const pi = Object.freeze<RuntimeAdapter>({
@@ -877,10 +879,10 @@ const pi = Object.freeze<RuntimeAdapter>({
     interactiveTerminal: true,
   }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  start: (context) => sandboxPi(context.sandbox, context),
+  start: (context) => sandboxPi(context.host, context),
   resume: (context) => {
     if (!context.sessionFile) throw new Error("PI_SESSION_FILE_MISSING");
-    return sandboxPi(context.sandbox, context, context.sessionFile);
+    return sandboxPi(context.host, context, context.sessionFile);
   },
   encodeInput: (content) => `${JSON.stringify({ type: "prompt", message: content })}\n`,
   encodeSteer: (content) => `${JSON.stringify({ type: "steer", message: content })}\n`,
@@ -889,7 +891,7 @@ const pi = Object.freeze<RuntimeAdapter>({
   decodeOutput: decodePi,
 });
 
-function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<AsyncCommandHandle> {
+function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
   if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
   const configPath = "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml";
   const packagedBin = "/usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js";
@@ -897,7 +899,7 @@ function sandboxDsh(sandbox: Sandbox, context: AdapterStartContext): Promise<Asy
     ? `DSH_SYSTEM_PROMPT="$(cat ${shellQuote(context.systemPromptPath)})" `
     : "";
   const command = `${systemPrompt}node ${packagedBin} ${configPath}`;
-  return sandbox.runAsync(command, {
+  return host.runAsync(command, {
     cwd: context.cwd,
     env: {
       ...context.env,
@@ -1005,7 +1007,7 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     maxTokens: 8192
     compactionRetries: 1
 ${codeRuntime}`;
-  await context.sandbox.uploadFile(config, `${home}/deepsonar.cordis.yml`);
+  await context.host.uploadFile(config, `${home}/deepsonar.cordis.yml`);
 }
 
 function dshSessionId(state?: AdapterRuntimeState): string {
@@ -1122,14 +1124,15 @@ const dsh = Object.freeze<RuntimeAdapter>({
     interactiveTerminal: true,
   }),
   compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
-  start: (context) => sandboxDsh(context.sandbox, context),
+  start: (context) => sandboxDsh(context.host, context),
   materialize: materializeDsh,
-  resume: (context) => sandboxDsh(context.sandbox, context),
+  resume: (context) => sandboxDsh(context.host, context),
   encodeInput: (content, state) => {
     if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
     state.dshInitialInput = content;
     state.finalText = undefined;
     if (!state.modelProvider || !state.model) throw new Error("DSH_PROVIDER_IDENTITY_MISSING");
+    dshSessionId(state);
     return dshRequest("initialize", { cwd: state.cwd ?? "/workspace", provider: state.modelProvider, model: state.model }, state);
   },
   encodeSteer: dshPrompt,
@@ -1186,3 +1189,45 @@ export function freezeAgentCliRuntime(adapter: RuntimeAdapter): {
 }
 
 export type AgentCliRuntimeSnapshot = ReturnType<typeof freezeAgentCliRuntime>;
+
+function captureSessionIdentity(item: Record<string, unknown>, state: AdapterRuntimeState): void {
+  const id = item.sessionID ?? item.session_id ?? item.thread_id;
+  if (typeof id === "string" && id) state.sessionId = id;
+  const file = item.sessionFile ?? item.session_file;
+  if (typeof file === "string" && file) state.sessionFile = file;
+  const data = item.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    if (typeof record.sessionId === "string" && record.sessionId) state.sessionId = record.sessionId;
+    if (typeof record.sessionFile === "string" && record.sessionFile) state.sessionFile = record.sessionFile;
+  }
+}
+
+/** Decode one CLI JSONL object and persist session identity onto `state`. */
+export function applyRuntimeOutput(
+  adapter: RuntimeAdapter,
+  line: Record<string, unknown>,
+  state: AdapterRuntimeState,
+): Record<string, unknown>[] {
+  const events = adapter.decodeOutput(line, state);
+  captureSessionIdentity(line, state);
+  for (const event of events) captureSessionIdentity(event, state);
+  return events;
+}
+
+/** Walk mixed CLI stdout and keep the last observed session identity. */
+export function applyRuntimeOutputText(
+  adapter: RuntimeAdapter,
+  text: string,
+  state: AdapterRuntimeState,
+): void {
+  for (const raw of text.split(/\r?\n/)) {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      applyRuntimeOutput(adapter, JSON.parse(trimmed) as Record<string, unknown>, state);
+    } catch {
+      // ignore non-JSON fragments mixed into CLI stdout
+    }
+  }
+}

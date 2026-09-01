@@ -21,34 +21,52 @@ import {
   resolveTerminalRunError,
   resolveTerminalProcessOutcome,
   parseRuntimeLine,
-  parseDeepSonarContainerRows,
   runtimeCliEnv,
-  assertSharedAssetsContainerMount,
-  assertSharedAssetsVolumeOwnership,
-  sharedAssetsVolumeBinds,
+  ensureRuntimeHome,
+  BoundedRuntimeStderrEvidence,
+  RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
+  mergeObservedSessionIdentity,
+  normalizePlainFinalOutput,
+} from "./runtime-agent.js";
+import {
+  parseDeepSonarContainerRows,
   isDeepsonarRestrictedNetwork,
   isDeepsonarGatewayNetwork,
   dockerSocketPath,
-  ensureRuntimeHome,
-  buildTerminalShellCommand,
+  CONTAINER_REMOVE_MAX_ATTEMPTS,
+  CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
+  removeContainerWithRetry,
+  writeDockerHumanInboxFile,
+} from "./runtime-docker.js";
+import {
+  assertSharedAssetsContainerMount,
+  assertSharedAssetsGuestMount,
+  assertSharedAssetsVolumeOwnership,
   bindProvisionAbortSignal,
+  buildTerminalShellCommand,
+  sharedAssetsVolumeBinds,
   terminalShellCommand,
   writeTerminalInput,
+} from "./runtime-shared.js";
+import {
   GATEWAY_PROXY_REVISION,
   GATEWAY_PROXY_SCRIPT,
   gatewayLeftoverRemovalTarget,
   gatewayCreateTimeoutMs,
   gatewayProxyReuseAction,
   shouldRemoveGatewayLeftover,
-  AgentboxRunner,
-  BoundedRuntimeStderrEvidence,
-  RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
-  CONTAINER_REMOVE_MAX_ATTEMPTS,
-  CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
-  mergeObservedSessionIdentity,
-  normalizePlainFinalOutput,
-  removeContainerWithRetry,
-} from "./agentbox.js";
+} from "./runtime-gateway.js";
+
+test("human inbox writer requires a scheduler-owned local Docker container", async () => {
+  await assert.rejects(
+    writeDockerHumanInboxFile(
+      "",
+      "/workspace/.deepsonar/inbox/11111111-1111-4111-8111-111111111111/evidence.bin",
+      Buffer.from("evidence"),
+    ),
+    /container_unavailable|path_forbidden|human_message/u,
+  );
+});
 
 test("container force removal retries exponentially and reports exhaustion", async () => {
   const calls: string[][] = [];
@@ -84,19 +102,6 @@ test("container force removal treats only explicit no-such as idempotent success
     throw new Error("Error response from daemon: No such container: gone");
   });
   assert.equal(attempts, 1);
-});
-
-test("Agentbox destroy propagates authoritative container removal failure", async () => {
-  const failure = new Error("vfs removal failed");
-  const runner = new AgentboxRunner(async () => {
-    throw failure;
-  });
-  await assert.rejects(
-    runner.destroy({ sandboxId: "leftover" }),
-    (error: unknown) =>
-      error instanceof AggregateError
-      && error.errors.includes(failure),
-  );
 });
 
 test("managed container parsing requires canonical Job and Attempt labels", () => {
@@ -237,7 +242,7 @@ test("Noop provision 遵守 Attempt 标识并响应取消信号", async () => {
     runner.provision({ jobId: "job-1", attemptId: "attempt-1", image: "image", network: "none", signal: controller.signal }),
     /provision 已取消/,
   );
-  assert.equal(typeof (new AgentboxRunner() as { cancelProvision?: unknown }).cancelProvision, "function");
+  assert.equal(typeof runner.cancelProvision, "function");
 });
 
 test("provision abort 绑定不丢失已发生的取消且只清理一次", () => {
@@ -755,6 +760,16 @@ test("warm attach accepts only the exact read-only shared assets mount", () => {
       /frozen read-only volume/,
     );
   }
+});
+
+test("guest shared-assets mount requires /proc/mounts, not just a directory", () => {
+  assert.doesNotThrow(() => assertSharedAssetsGuestMount(
+    "overlay / overlay rw 0 0\n/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n",
+  ));
+  assert.throws(
+    () => assertSharedAssetsGuestMount("overlay / overlay rw 0 0\n"),
+    /shared assets volume was not mounted/,
+  );
 });
 
 test("rate-limit error details keep only server-owned bounded metadata", () => {
@@ -1333,7 +1348,7 @@ test("Codex session discovery falls back to HOME when CODEX_HOME is unset", asyn
   await CLI_SESSION_ADAPTERS.codex.exportSession({
     async run(value) {
       command = value;
-      return { exitCode: 0, stdout: "", stderr: "" };
+      return { exitCode: 0, stdout: "/tmp/session-1.jsonl\n", stderr: "" };
     },
     async readText() {
       return null;
