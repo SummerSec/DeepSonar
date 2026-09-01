@@ -284,7 +284,7 @@ jobs:
             -f deploy/docker-compose.opensandbox.prod.yml \
             config)"
           printf '%s\n' "$rendered" | grep -F "SANDBOX_PROVIDER: opensandbox"
-          printf '%s\n' "$rendered" | grep -F 'published: "18080"'
+          printf '%s\n' "$rendered" | grep -F 'published: "18081"'
 
       - name: OpenSandbox host overlay gateway upstream
         run: |

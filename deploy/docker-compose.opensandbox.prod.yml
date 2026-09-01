@@ -1,6 +1,6 @@
 # Default real-mode overlay. Scheduler SANDBOX_PROVIDER=opensandbox.
 #   SANDBOX_PROVIDER=opensandbox OPEN_SANDBOX_API_KEY=... ./deploy/deploy.sh up real pull
-# Host port defaults to 18080 so it does not collide with DEEPSONAR_WEB_PORT=8080.
+# Host port defaults to 18081 so it does not collide with DEEPSONAR_WEB_PORT=8080.
 # Images are immutable digest pins from opensandbox-version.ts.
 services:
   opensandbox:
@@ -17,7 +17,7 @@ services:
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
       - opensandbox-data:/var/lib/opensandbox
     ports:
-      - "127.0.0.1:${OPEN_SANDBOX_HOST_PORT:-18080}:8080"
+      - "127.0.0.1:${OPEN_SANDBOX_HOST_PORT:-18081}:8080"
     healthcheck:
       test: ["CMD", "/app/.venv/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 5s
