@@ -1,5 +1,20 @@
 import type { SessionItemKind, SessionTimelineItem } from "./parseAgentSession";
 
+export type SessionArtifactMeta = {
+  name: string;
+  path: string;
+  kind: "main" | "subagent" | "vendor_export" | "stream" | "otlp";
+  bytes: number;
+};
+
+export function sessionArtifactLabel(file: Pick<SessionArtifactMeta, "kind" | "name">): string {
+  if (file.kind === "subagent") {
+    const base = file.name.split("/").filter(Boolean).pop() ?? file.name;
+    return `子代理 · ${base}`;
+  }
+  return file.kind === "vendor_export" ? "Vendor 导出" : "主会话";
+}
+
 export type SessionTokenBucket = {
   input: number;
   output: number;

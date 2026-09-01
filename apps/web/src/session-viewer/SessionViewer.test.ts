@@ -25,6 +25,13 @@ test("session viewer exposes a dedicated token usage tab", () => {
   assert.match(source, /请求明细/);
 });
 
+test("session viewer can switch among archived session artifacts", () => {
+  assert.match(source, /artifacts = \[\]/);
+  assert.match(source, /onSelectArtifact/);
+  assert.match(source, /sessionArtifactLabel/);
+  assert.match(source, /aria-label="选择 Session 归档"/);
+});
+
 test("inspector exposes Chinese source, copy, and transient feedback actions", () => {
   assert.match(source, /aria-label=\{showSource \? "渲染" : "原文"\}/);
   assert.match(source, /\{showSource \? "渲染" : "原文"\}/);

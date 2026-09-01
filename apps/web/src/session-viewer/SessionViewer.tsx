@@ -16,9 +16,11 @@ import {
   buildSessionLedger,
   buildSessionTokenUsage,
   filterSessionLedger,
+  sessionArtifactLabel,
   sessionHasTokenUsage,
   sessionLedgerTurnCount,
   sessionViewerWorkspaceMode,
+  type SessionArtifactMeta,
   type SessionGatewayUsageRow,
   type SessionLedgerRow,
   type SessionTokenUsage,
@@ -36,6 +38,9 @@ export type SessionViewerProps = {
   sourceLabel?: string | null;
   /** Job 详情返回的 Gateway `job_usage_ledger` 行；与 Session 归档 usage 分列展示。 */
   gatewayUsage?: readonly SessionGatewayUsageRow[];
+  artifacts?: readonly SessionArtifactMeta[];
+  selectedPath?: string | null;
+  onSelectArtifact?: (path: string) => void;
   onDownload?: () => void;
   downloadError?: string | null;
 };
@@ -268,6 +273,9 @@ export function SessionViewer({
   sessionId,
   sourceLabel,
   gatewayUsage = [],
+  artifacts = [],
+  selectedPath,
+  onSelectArtifact,
   onDownload,
   downloadError,
 }: SessionViewerProps) {
@@ -330,6 +338,22 @@ export function SessionViewer({
           parsed {parsed.totals.parsed}/{parsed.totals.lines}
           {parsed.totals.skipped > 0 ? ` · skipped ${parsed.totals.skipped}` : ""}
         </span>
+        {artifacts.length > 1 && onSelectArtifact && (
+          <label className="session-viewer__artifact">
+            <span>归档</span>
+            <select
+              value={selectedPath ?? artifacts[0]?.path ?? ""}
+              onChange={(event) => onSelectArtifact(event.target.value)}
+              aria-label="选择 Session 归档"
+            >
+              {artifacts.map((file) => (
+                <option key={file.path} value={file.path}>
+                  {sessionArtifactLabel(file)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {onDownload && (
           <button type="button" onClick={onDownload} className="session-viewer__download">
             <DownloadSimple size={13} /> 下载原始文件

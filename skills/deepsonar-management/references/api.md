@@ -106,8 +106,8 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
 | GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`） |
 | GET | /jobs/:id/evidence | tasks:read | 运行证据 manifest 与 transcript URI；finalized manifest 缺失但 `attempts/*/stream.ndjson` 存在时返回有界 synthetic/inflight manifest；已销毁容器中的 Session 不伪造，以 `capture_error` 明示 |
-| GET | /jobs/:id/evidence/session | tasks:read | 会话证据元数据/摘要 |
-| GET | /jobs/:id/evidence/session/download | tasks:read | NDJSON 会话附件 |
+| GET | /jobs/:id/evidence/session | tasks:read | 会话证据：默认主 Session；`artifacts` 列出 main/subagent/vendor_export；`?path=` 切换。在线预览 8 MiB |
+| GET | /jobs/:id/evidence/session/download | tasks:read | 下载所选 Session 归档全文；`?path=` 与查看接口相同 |
 | GET | /jobs/:id/evidence/stream | tasks:read | 证据流分页（`cursor/limit/tail`） |
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}`；值必须匹配 Scheduler 根据 Job 类型/Finding 严重度计算的固定 priority class，不能任意改分 |
 | POST | /jobs/:id/cancel | jobs:control | 取消（可选 `{force,reason}`；running 回收沙箱） |
