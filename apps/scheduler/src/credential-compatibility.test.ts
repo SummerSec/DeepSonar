@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   UNKNOWN_PROVIDER_ERROR,
+  planCredentialAgentCliFollow,
   projectCredentialProviderError,
   validateCredentialCompatibility,
   validateCredentialRoleConfigBinding,
@@ -119,6 +120,43 @@ test("同一凭据可服务 Provider 矩阵内的多个 CLI", () => {
     metadata: {},
     credentialAgentCli: "claude-code",
   }), null);
+});
+
+test("兼容 provider 跟随最新角色 agent_cli", () => {
+  assert.deepEqual(
+    planCredentialAgentCliFollow({
+      roleAgentCli: "pi",
+      credentialAgentCli: "claude-code",
+      provider: "anthropic",
+    }),
+    { action: "follow", from: "claude-code", to: "pi" },
+  );
+  assert.deepEqual(
+    planCredentialAgentCliFollow({
+      roleAgentCli: "pi",
+      credentialAgentCli: "pi",
+      provider: "anthropic",
+    }),
+    { action: "keep" },
+  );
+  assert.deepEqual(
+    planCredentialAgentCliFollow({
+      roleAgentCli: "pi",
+      credentialAgentCli: null,
+      provider: "openai",
+    }),
+    { action: "keep" },
+  );
+});
+
+test("不兼容 provider 仍拒绝跟随", () => {
+  const plan = planCredentialAgentCliFollow({
+    roleAgentCli: "claude-code",
+    credentialAgentCli: "codex",
+    provider: "openai",
+  });
+  assert.equal(plan.action, "reject");
+  assert.match(plan.action === "reject" ? plan.error : "", /claude-code.*anthropic.*openai/);
 });
 
 test("RoleConfig 导入绑定复用项目作用域与 provider 校验", () => {

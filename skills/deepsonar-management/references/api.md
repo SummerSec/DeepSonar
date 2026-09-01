@@ -219,11 +219,11 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | --- | --- | --- | --- |
 | GET | /role-configs/global | agents:read | 全局缺省清单（含 credentials / config_files） |
 | GET | /role-configs/bindable | agents:read | Provider 绑定选择器元数据（含 `agent_cli` / `runtime_image_key` / `can_bind`） |
-| PATCH | /role-configs/:id/agent-cli | agents:write | 仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider |
+| PATCH | /role-configs/:id/agent-cli | agents:write | 仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider，兼容则同步凭据 `agent_cli` |
 | PATCH | /role-configs/:id/runtime-image | agents:write | 仅改 `runtime_image_key`（`null`=系统底座）；不改写凭据/文件 |
-| PUT | /role-configs/global/:roleId | agents:write | 全局 upsert（version +1） |
+| PUT | /role-configs/global/:roleId | agents:write | 全局 upsert（version +1）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
 | GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none；`project_config` 返回实时完整项目覆盖 |
-| PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409） |
+| PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
 | DELETE | /projects/:id/role-configs/:roleId | agents:write | 删除覆盖，回落全局 |
 
 仓库管理 CLI 提供 `role-configs sync-builtin-prompts`：从 `database/schema.sql` 的单一基线提取内置 Prompt，读取线上全局 RoleConfig 后仅替换 `instructions_markdown`，保留模型、凭据、镜像、模块和配置文件；可先用 `--dry-run` 查看 Prompt 哈希。

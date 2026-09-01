@@ -14,9 +14,11 @@ test("RoleConfig validation and Credential PATCH share the advisory/row-lock bou
   assert.ok(roleMutationStart >= 0 && roleMutationEnd > roleMutationStart);
   const roleMutation = roleConfigRoutesSource.slice(roleMutationStart, roleMutationEnd);
   const roleLock = roleMutation.indexOf("pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))");
-  const roleValidation = roleMutation.indexOf("validateRoleConfigBody(body, projectId, role, tx)");
+  const roleValidation = roleMutation.indexOf("validateRoleConfigBody(body, projectId, role, tx");
+  const roleFollow = roleMutation.indexOf("UPDATE credentials SET agent_cli = ${follow.to}");
   assert.ok(roleLock >= 0, "RoleConfig mutation must take the dispatch advisory lock");
   assert.ok(roleValidation > roleLock, "RoleConfig must validate credentials after taking the lock");
+  assert.ok(roleFollow > roleValidation, "compatible credential agent_cli must follow after validation");
 
   const validationStart = roleConfigRoutesSource.indexOf("async function validateRoleConfigBody(");
   const validationEnd = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(", validationStart);
