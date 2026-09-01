@@ -37,6 +37,16 @@ export type CredentialProbeResult = {
   fetched_at: string;
 };
 
+/** Optional Provider /models catalog. Probe failure never throws for network/HTTP/empty responses. */
+export type ModelCatalogDiscovery = {
+  models: string[];
+  source_url?: string;
+  fetched_at: string | null;
+  available: boolean;
+  category?: CredentialHealthErrorCategory;
+  detail?: string;
+};
+
 export class CredentialProbeError extends Error {
   constructor(
     message: string,
@@ -270,49 +280,83 @@ function assertModelCatalogSupported(provider: string): void {
   }
 }
 
-async function listCredentialModelsWithSecret(
-  cred: CredentialRequestInput,
-  secret: string,
-): Promise<{ models: string[]; source_url: string; fetched_at: string }> {
-  assertModelCatalogSupported(cred.provider);
-  const result = await requestModelCandidate(modelRequest(cred, secret), 15_000);
-  if (!result.ok) {
-    const category = categoryForStatus(result.status);
-    throw new CredentialProbeError(detailForCategory(category, result.status), category);
-  }
-  const payload = await readJsonBounded(result.response);
-  const models = normalizeModelCatalog(modelRows(payload).map(modelId));
-  if (models.length === 0) throw new CredentialProbeError(detailForCategory("invalid_response"), "invalid_response");
+function catalogUnavailable(
+  category: CredentialHealthErrorCategory,
+  detail: string,
+  sourceUrl?: string,
+): ModelCatalogDiscovery {
   return {
-    models: models.slice(0, CREDENTIAL_MODEL_CATALOG_MAX).map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH)),
-    source_url: safeSourceUrl(result.url),
-    fetched_at: now(),
+    models: [],
+    fetched_at: null,
+    available: false,
+    category,
+    detail,
+    ...(sourceUrl ? { source_url: sourceUrl } : {}),
   };
 }
 
-/** 从 Provider 的只读 models 接口发现可用模型 ID；不回传响应正文或凭据。 */
-export async function listCredentialModels(cred: CredentialProbe): Promise<{
-  models: string[];
-  source_url: string;
-  fetched_at: string;
-}> {
-  assertModelCatalogSupported(cred.provider);
-  let secret: string;
+async function discoverModelCatalogWithSecret(
+  cred: CredentialRequestInput,
+  secret: string,
+): Promise<ModelCatalogDiscovery> {
+  if (!["anthropic", "openai"].includes(cred.provider)) {
+    return catalogUnavailable("configuration", "该 Provider 暂不支持模型目录");
+  }
   try {
-    secret = decryptSecret(cred);
+    const result = await requestModelCandidate(modelRequest(cred, secret), 15_000);
+    if (!result.ok) {
+      const category = categoryForStatus(result.status);
+      return catalogUnavailable(category, detailForCategory(category, result.status), safeSourceUrl(result.url));
+    }
+    const payload = await readJsonBounded(result.response);
+    const models = normalizeModelCatalog(modelRows(payload).map(modelId))
+      .slice(0, CREDENTIAL_MODEL_CATALOG_MAX)
+      .map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH));
+    return {
+      models,
+      source_url: safeSourceUrl(result.url),
+      fetched_at: now(),
+      available: true,
+    };
+  } catch (error) {
+    if (error instanceof CredentialProbeError) {
+      return catalogUnavailable(error.category, error.message);
+    }
+    const category: CredentialHealthErrorCategory = isAbortError(error)
+      ? "timeout"
+      : error instanceof CredentialMetadataError
+        ? "configuration"
+        : "network";
+    return catalogUnavailable(category, detailForCategory(category));
+  }
+}
+
+function requireCatalogSecret(cred: CredentialProbe): string {
+  assertModelCatalogSupported(cred.provider);
+  try {
+    return decryptSecret(cred);
   } catch {
     throw new CredentialProbeError("Credential 解密失败", "configuration");
   }
-  return listCredentialModelsWithSecret(cred, secret);
+}
+
+/** 从 Provider 的只读 models 接口发现可用模型 ID；探测失败软降级为空目录，不回传响应正文或凭据。 */
+export async function discoverModelCatalog(cred: CredentialProbe): Promise<ModelCatalogDiscovery> {
+  return discoverModelCatalogWithSecret(cred, requireCatalogSecret(cred));
+}
+
+export async function listCredentialModels(cred: CredentialProbe): Promise<ModelCatalogDiscovery> {
+  return discoverModelCatalog(cred);
 }
 
 /** Probe an unsaved credential without writing its secret or model catalog. */
 export async function listCredentialModelsPreview(
   cred: Omit<CredentialProbe, "ciphertext" | "nonce" | "auth_tag">,
   secret: string,
-): Promise<{ models: string[]; source_url: string; fetched_at: string }> {
+): Promise<ModelCatalogDiscovery> {
   if (!secret.trim()) throw new CredentialProbeError("Credential 缺少 API Key", "configuration");
-  return listCredentialModelsWithSecret(cred, secret);
+  assertModelCatalogSupported(cred.provider);
+  return discoverModelCatalogWithSecret(cred, secret);
 }
 
 /**

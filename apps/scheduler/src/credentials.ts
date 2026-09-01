@@ -311,11 +311,10 @@ export type CredentialHealthErrorCategory =
   | "unknown";
 
 /**
- * Scheduler-owned model catalog capability. LLM providers currently expose a
- * governed catalog endpoint, so a non-empty successful catalog is required
- * before binding. Non-LLM credentials are explicitly out of that gate; this
- * helper keeps that exception visible instead of silently treating failures as
- * an empty/unknown catalog.
+ * Scheduler-owned model catalog capability. The /models catalog is optional
+ * reference only (CC Switch style). Probe failure soft-degrades to an empty
+ * catalog and must not block credential or RoleConfig saves. Job resolution
+ * uses settings / RoleConfig model fields, not this catalog.
  */
 export type CredentialModelCatalogCapability = "required" | "unsupported";
 

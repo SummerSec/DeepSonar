@@ -144,6 +144,7 @@ test("preview discovery strips Anthropic compatibility suffix and de-duplicates 
       "http://127.0.0.1/models",
     ]);
     assert.equal(new Set(urls).size, urls.length);
+    assert.equal(result.available, true);
     assert.deepEqual(result.models, ["claude-sonnet"]);
     assert.equal(result.source_url, "http://127.0.0.1/models");
   } finally {
@@ -169,6 +170,7 @@ test("saved discovery uses the ordinary model endpoint", async () => {
       public_metadata_json: { base_url: "http://127.0.0.1" },
     });
     assert.deepEqual(urls, ["http://127.0.0.1/v1/models"]);
+    assert.equal(result.available, true);
     assert.equal(result.source_url, "http://127.0.0.1/v1/models");
   } finally {
     globalThis.fetch = originalFetch;
@@ -189,21 +191,20 @@ test("model discovery returns bounded IDs and fixed error categories", async () 
       public_metadata_json: { base_url: "http://127.0.0.1/v1" },
     });
     assert.deepEqual(result.models, ["a", "z"]);
-    assert.equal(result.source_url.includes("?"), false);
+    assert.equal(result.available, true);
+    assert.equal(result.source_url?.includes("?"), false);
     globalThis.fetch = (async () => new Response("secret upstream body", { status: 500 })) as typeof fetch;
-    await assert.rejects(
-      listCredentialModels({
-        provider: "openai",
-        kind: "llm_provider",
-        ...encrypted,
-        public_metadata_json: { base_url: "http://127.0.0.1/v1" },
-      }),
-      (error: unknown) => {
-        assert.equal((error as { category?: string }).category, "upstream");
-        assert.equal(String((error as Error).message).includes("secret upstream body"), false);
-        return true;
-      },
-    );
+    const failed = await listCredentialModels({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+    });
+    assert.equal(failed.available, false);
+    assert.deepEqual(failed.models, []);
+    assert.equal(failed.fetched_at, null);
+    assert.equal(failed.category, "upstream");
+    assert.equal(String(failed.detail ?? "").includes("secret upstream body"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -224,12 +225,14 @@ test("model discovery best-effort cancels a non-ok response body", async () => {
         cancelled += 1;
       },
     }), { status: 503 })) as typeof fetch;
-    await assert.rejects(listCredentialModels({
+    const failed = await listCredentialModels({
       provider: "openai",
       kind: "llm_provider",
       ...encrypted,
       public_metadata_json: { base_url: "http://127.0.0.1/v1" },
-    }));
+    });
+    assert.equal(failed.available, false);
+    assert.deepEqual(failed.models, []);
     assert.equal(cancelled, 1);
   } finally {
     globalThis.fetch = originalFetch;
@@ -252,11 +255,12 @@ test("model discovery rejects oversized declared and streamed provider bodies", 
       status: 200,
       headers: { "content-length": String(CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES + 1) },
     })) as typeof fetch;
-    await assert.rejects(listCredentialModels(credential), (error: unknown) => {
-      assert.equal((error as { category?: string }).category, "invalid_response");
-      assert.equal(String((error as Error).message).includes("body-secret"), false);
-      return true;
-    });
+    const declared = await listCredentialModels(credential);
+    assert.equal(declared.available, false);
+    assert.deepEqual(declared.models, []);
+    assert.equal(declared.fetched_at, null);
+    assert.equal(declared.category, "invalid_response");
+    assert.equal(String(declared.detail ?? "").includes("body-secret"), false);
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -269,11 +273,11 @@ test("model discovery rejects oversized declared and streamed provider bodies", 
       status: 200,
       headers: { "content-length": "1" },
     })) as typeof fetch;
-    await assert.rejects(listCredentialModels(credential), (error: unknown) => {
-      assert.equal((error as { category?: string }).category, "invalid_response");
-      assert.equal(String((error as Error).message).includes("body-secret"), false);
-      return true;
-    });
+    const streamed = await listCredentialModels(credential);
+    assert.equal(streamed.available, false);
+    assert.deepEqual(streamed.models, []);
+    assert.equal(streamed.category, "invalid_response");
+    assert.equal(String(streamed.detail ?? "").includes("body-secret"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -293,18 +297,51 @@ test("model discovery maps a header-then-stall AbortError to timeout", async () 
       },
     });
     globalThis.fetch = (async () => new Response(stream, { status: 200 })) as typeof fetch;
-    await assert.rejects(
-      listCredentialModels({
-        provider: "openai",
-        kind: "llm_provider",
-        ...encrypted,
-        public_metadata_json: { base_url: "http://127.0.0.1/v1" },
-      }),
-      (error: unknown) => {
-        assert.equal((error as { category?: string }).category, "timeout");
-        return true;
-      },
-    );
+    const stalled = await listCredentialModels({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+    });
+    assert.equal(stalled.available, false);
+    assert.deepEqual(stalled.models, []);
+    assert.equal(stalled.fetched_at, null);
+    assert.equal(stalled.category, "timeout");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("unreachable /models soft-degrades to an empty catalog", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { discoverModelCatalog, listCredentialModelsPreview } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => {
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8088"), { code: "ECONNREFUSED" });
+    }) as typeof fetch;
+    const refused = await discoverModelCatalog({
+      provider: "anthropic",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1:8088" },
+      settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    });
+    assert.equal(refused.available, false);
+    assert.deepEqual(refused.models, []);
+    assert.equal(refused.fetched_at, null);
+    assert.equal(refused.category, "network");
+
+    globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const missing = await listCredentialModelsPreview({
+      provider: "anthropic",
+      kind: "llm_provider",
+      public_metadata_json: { base_url: "http://127.0.0.1:8088" },
+    }, "super-secret");
+    assert.equal(missing.available, false);
+    assert.deepEqual(missing.models, []);
+    assert.equal(missing.fetched_at, null);
   } finally {
     globalThis.fetch = originalFetch;
   }
