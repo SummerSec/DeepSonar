@@ -4,9 +4,39 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-01
+
 ### 新增
 
-- 用量账本记录并展示 Gateway 缓存读/写 token（`cache_read_input_tokens` / `cache_creation_input_tokens`）。CURRENT PROJECT 增加「项目账本」`/projects/:id/usage`，任务工作台不再内嵌项目账本。全局 / 项目 / 任务账本可折叠，偏好按用户 + 页面记忆，默认展开。Schema 升至 v39。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 用量账本记录并展示 Gateway 缓存读/写 token（`cache_read_input_tokens` / `cache_creation_input_tokens`）。CURRENT PROJECT 增加「项目账本」`/projects/:id/usage`，任务工作台不再内嵌项目账本。全局 / 项目 / 任务账本可折叠，偏好按用户 + 页面记忆，默认展开。Schema 升至 v39。
+- **provider-neutral 沙箱运行时（#162 / #307）**：`RuntimeHost` / `ensureHost` 成为调度器与沙箱之间的唯一执行边界，五类 CLI adapter（claude-code / codex / open-code / pi / dsh）不再引用任何 provider SDK 类型；real 默认 `SANDBOX_PROVIDER=opensandbox`，`createRealRunner()` 只构造 `OpenSandboxRunner`。**删除 `agentbox-sdk` 与 `AgentboxRunner`**：real 模式下其它 provider 值启动即失败，不再有默认双轨。
+- **OpenSandbox Docker adapter（Phase 2）**：绑定 `@alibaba-group/opensandbox@0.1.11`，server / execd / egress 只认 `name@sha256` 不可变 digest pin（禁止 `latest`，SDK 版本与安装版本强校验）；provision 后重验运行时合同（/workspace、/bin/sh、tool-manifest 与 sha256）；硬限制（cpu / memory / pids / cap-drop-all / no-new-privileges）缺失或不安全值 fail closed；架构平台（amd64 / arm64）不匹配 fail closed。
+- **受限网络经路径过滤 Gateway sidecar**：restricted 沙箱只放行 `deepsonar-gateway-proxy`（/gateway 与 /control/v1 固定路径转发，拒绝 CONNECT 与任意代理），sidecar 容器受 DeepSonar 标签管理（非受管容器拒绝接管）；sandbox `/etc/hosts` 注入 sidecar IPv4 / K8s ClusterIP；模型请求经 Model Gateway 转发，沙箱只持短期 Job capability token，Provider 长期密钥不进沙箱。
+- **OpenSandbox server 探针**：real 模式 `GET /readiness` 与 Dispatcher claim 以鉴权 `list()` 探测 server，缺 `OPEN_SANDBOX_API_KEY` / 不可达 fail closed（不 claim）；`GET /health` 暴露 `opensandbox.level/ready`；错误消息对 API key 脱敏。
+- **Kubernetes + Kata 后端（Phase 3）**：BatchSandbox + `RuntimeClass=kata-qemu` overlay（namespace / ResourceQuota / LimitRange / Gateway Service 无 selector，ClusterIP 写入沙箱 /etc/hosts）；共享资产走 labeled PVC + seeder（`kubectl cp`，不挂 docker.sock）；`OPEN_SANDBOX_KUBERNETES=1` 时省略 Docker 专有 `pids` 资源字段但仍要求冻结 pidsLimit。
+- **共享资产卷防呆**：Docker provision 在 create 前 `inspectPreparedSharedAssetsVolume`，缺 labeled volume 或 Job 所有权不匹配 fail closed，避免引擎自动建空卷；guest `/proc/mounts` 重验只读挂载。
+- **重启对账与回收**：按持久 sandboxId `ensureHost` 重连；Reaper desired-state cleanup 覆盖任意 real provider；超时 / 孤儿回收 capability token、关闭 PTY、移除共享资产卷。
+- **Session 查看器可切换归档（#314）**：`GET /jobs/:id/evidence/session` 返回 `artifacts`（main / subagent / vendor_export），`?path=` 切换与下载，默认最后一次主 Session / vendor export（按 manifest 写入顺序）；在线预览上限提升到 8 MiB（超限 `truncated`，完整字节走 download）。
+- **Claude 会话解析改善（#314）**：跨行 `tool_use` id → name 回填工具名（`tool_result` 标题「结果 Read」）；检查器正文上限 32k；`progress` / `file-history-snapshot` / `compact` / `web_search` 归为系统行，快照只摘要文件数；Session 页多归档用 `SearchableSelect` 切换（标签带文件名与 attempt 前缀），切换请求丢弃过期响应。
+- 生产 scheduler 镜像钉 `kubectl v1.36.4`（sha256，amd64 / arm64）。
+
+### 修复
+
+- 五类 CLI 在 OpenSandbox 上的会话归档 / 恢复链路：Codex 用 argv prompt + stdin EOF（`< /dev/null`）打出 `thread.started`，按 `sessions/YYYY/MM/DD/rollout-*.jsonl` 发现归档；execd 分行 log item 用换行拼接；Claude 无换行拼接 JSON 按 brace depth 拆分；DSH 在 initialize 前冻结确定性 session id，503 瞬态失败按各自契约恢复同会话（401 不恢复）。
+- OpenSandbox destroy 对已删除沙箱幂等成功（404 / 409 / SANDBOX_NOT_FOUND / already in progress 视为已结算）；provision 取消不再空等 create 返回，迟到 session 与残留资源都会被回收。
+- Dispatcher 冷宿主不再因本机缺镜像层拒绝 Job：OpenSandbox 由 server 按不可变 digest 拉取，合同 / digest 在 provision 后重验。
+- CI：鉴权调度器（:3101）启动前停掉仍在写同一库的 :3100，避免 boot 期 `reconcileOwnedSequences` 与 INSERT 竞态（#314）。
+
+### 变更
+
+- 默认 real 沙箱从 Agentbox 切换为 OpenSandbox：生产部署默认叠加 `docker-compose.opensandbox.prod.yml`（server 发布在 `127.0.0.1:18080`）；`docker-compose.opensandbox.host.yml` / `k8s.yml` 为已有 server / Kata 集群的附加 overlay。
+- 本机镜像 digest 预检闸门随 Agentbox 删除而不再触发：OpenSandbox 模式由 server 按不可变 digest 拉取并在 provision 后重验承担；`shouldInspectLocalRuntimeImage()` 相关死代码链与文案残留待后续清理。
+
+### 部署 / 升级说明
+
+- **Breaking（0.2.x）**：`SANDBOX_PROVIDER=local-docker` 已移除，real 模式只支持 `opensandbox`。升级须部署 OpenSandbox server（`deploy/opensandbox/config.toml` + digest pin）并配置 `OPEN_SANDBOX_API_KEY`；缺 key 时 readiness / Dispatcher claim fail closed。
+- Schema 升至 v39（用量账本，见「新增」首条）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 官方运行时镜像内容未变（本版不含运行时镜像内容变更），Release 指纹未变时跳过 docker build，只打新版本 tag；scheduler 镜像因 `kubectl` 依赖会重建。
 
 ## [0.1.46] - 2026-08-31
 
@@ -475,6 +505,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
 [0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/SummerSec/DeepSonar/compare/v0.1.43...v0.1.44
