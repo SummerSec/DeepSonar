@@ -265,6 +265,11 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:credential-delete
 
+      - name: Credential catalog probe soft-degrade PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:credential-catalog
+
       - name: Runtime sandbox semantic tool unit
         run: pnpm ci:unit:runtime-sandbox
 

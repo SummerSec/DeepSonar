@@ -34,7 +34,7 @@ import {
   validateCredentialRuntimeMutation,
   type Encrypted,
 } from "../../credentials.js";
-import { CredentialProbeError, listCredentialModels, listCredentialModelsPreview, testCredential } from "../../credential-test.js";
+import { CredentialProbeError, discoverModelCatalog, listCredentialModelsPreview, testCredential } from "../../credential-test.js";
 import {
   extractBaseUrlFromSettings,
   normalizeProviderSettings,
@@ -1342,12 +1342,23 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "Credential metadata 非法" });
     }
     try {
-      return await listCredentialModelsPreview({
+      const result = await listCredentialModelsPreview({
         provider: body.provider,
         kind: "llm_provider",
         public_metadata_json: normalizedMetadata,
         settings_config_json: body.settings_config ?? {},
       }, body.secret);
+      if (!result.available && result.category === "configuration") {
+        return reply.code(400).send({ error: (result.detail ?? "模型目录预览参数非法").slice(0, 300), error_category: result.category });
+      }
+      if (!result.available) {
+        console.warn(`[credentials] model catalog preview failed (${result.category ?? "unknown"}): ${result.detail ?? ""}`);
+      }
+      return {
+        models: result.available ? result.models : [],
+        source_url: result.source_url,
+        fetched_at: result.available ? result.fetched_at : null,
+      };
     } catch (error) {
       const validCategories = new Set<CredentialHealthErrorCategory>([
         "configuration", "authentication", "authorization", "rate_limited", "timeout",
@@ -1356,7 +1367,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
       const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
       const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
-      return reply.code(502).send({ error: message, error_category: category });
+      if (category === "configuration") return reply.code(400).send({ error: message, error_category: category });
+      console.warn(`[credentials] model catalog preview failed (${category}): ${message}`);
+      return { models: [], source_url: undefined, fetched_at: null };
     }
   });
 
@@ -1446,14 +1459,26 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
     try {
-      const result = await listCredentialModels(cred as never);
+      const result = await discoverModelCatalog(cred as never);
+      const available = result.available;
+      const models = available ? normalizeModelCatalog(result.models) : [];
+      const fetchedAt = available ? result.fetched_at : null;
+      const testedAt = fetchedAt ?? new Date().toISOString();
+      const category = available ? null : (result.category ?? "unknown");
+      const detail = available
+        ? `模型目录获取成功（${models.length} 个）`
+        : (result.detail ?? "模型目录获取失败").slice(0, 300);
+      if (!available) {
+        console.warn(`[credentials] model catalog probe failed (${category}): ${detail}`);
+      }
       const [updated] = await sql`
         UPDATE credentials SET
-          last_tested_at = ${result.fetched_at}, health_status = 'ok',
-          health_error_category = NULL,
-          health_detail = ${`模型目录获取成功（${result.models.length} 个）`},
-          model_catalog_json = ${sql.json(normalizeModelCatalog(result.models) as never)},
-          model_catalog_fetched_at = ${result.fetched_at}
+          last_tested_at = ${testedAt},
+          health_status = ${available ? "ok" : "error"},
+          health_error_category = ${category},
+          health_detail = ${detail},
+          model_catalog_json = ${sql.json(models as never)},
+          model_catalog_fetched_at = ${fetchedAt}
         WHERE id = ${id}
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
@@ -1465,10 +1490,14 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         action: "credential.models_discover",
         resourceType: "credential",
         resourceId: id,
-        result: "ok",
-        after: { model_count: result.models.length },
+        result: available ? "ok" : "error",
+        ...(available ? { after: { model_count: models.length } } : { errorCode: "MODEL_DISCOVERY_FAILED" }),
       });
-      return result;
+      return {
+        models,
+        source_url: result.source_url,
+        fetched_at: fetchedAt,
+      };
     } catch (error) {
       const validCategories = new Set<CredentialHealthErrorCategory>([
         "configuration", "authentication", "authorization", "rate_limited", "timeout",
@@ -1477,11 +1506,14 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
       const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
       const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
+      console.warn(`[credentials] model catalog probe failed (${category}): ${message}`);
       const [updated] = await sql`
         UPDATE credentials SET
           last_tested_at = now(), health_status = 'error',
           health_error_category = ${category as CredentialHealthErrorCategory},
-          health_detail = ${message}
+          health_detail = ${message},
+          model_catalog_json = '[]'::jsonb,
+          model_catalog_fetched_at = NULL
         WHERE id = ${id}
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
@@ -1496,7 +1528,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         result: "error",
         errorCode: "MODEL_DISCOVERY_FAILED",
       });
-      return reply.code(502).send({ error: message, error_category: category });
+      if (category === "configuration") {
+        return reply.code(400).send({ error: message, error_category: category, models: [], fetched_at: null });
+      }
+      return { models: [], fetched_at: null };
     }
   });
 }

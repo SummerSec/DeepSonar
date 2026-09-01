@@ -22,6 +22,8 @@ test("RoleConfig validation and Credential PATCH share the advisory/row-lock bou
   const validationEnd = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(", validationStart);
   const validation = roleConfigRoutesSource.slice(validationStart, validationEnd);
   assert.match(validation, /FROM credentials WHERE id = \$\{c\.credential_id\} FOR UPDATE/);
+  assert.doesNotMatch(validation, /model_catalog/);
+  assert.doesNotMatch(validation, /discoverModelCatalog|listCredentialModels/);
 
   const credentialPatchStart = credentialRoutesSource.indexOf('app.patch("/credentials/:id"');
   const credentialPatchEnd = credentialRoutesSource.indexOf('app.post("/credentials/:id/rotate"', credentialPatchStart);

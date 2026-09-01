@@ -253,14 +253,16 @@ if (!testDatabaseUrl) {
 
       globalThis.fetch = (async () => new Response(`secret upstream body: ${secret}`, { status: 500 })) as typeof fetch;
       const modelsFailure = await request("POST", `/credentials/${credentialId}/models`, {});
-      assert.equal(modelsFailure.statusCode, 502, modelsFailure.payload);
-      assert.equal(json(modelsFailure).error_category, "upstream");
+      assert.equal(modelsFailure.statusCode, 200, modelsFailure.payload);
+      assert.deepEqual(json(modelsFailure).models, []);
+      assert.equal(json(modelsFailure).fetched_at, null);
       assertNoSecretMaterial(modelsFailure.payload);
-      const [failedModels] = await sql<{ health_status: string; health_error_category: string; health_detail: string; model_catalog_json: string }[]>`
-        SELECT health_status, health_error_category, health_detail, model_catalog_json FROM credentials WHERE id = ${credentialId}`;
+      const [failedModels] = await sql<{ health_status: string; health_error_category: string; health_detail: string; model_catalog_json: string; model_catalog_fetched_at: string | null }[]>`
+        SELECT health_status, health_error_category, health_detail, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
       assert.equal(failedModels?.health_status, "error");
       assert.equal(failedModels?.health_error_category, "upstream");
-      assert.deepEqual(jsonValue(failedModels?.model_catalog_json), ["model-a", "model-z"]);
+      assert.deepEqual(jsonValue(failedModels?.model_catalog_json), []);
+      assert.equal(failedModels?.model_catalog_fetched_at, null);
       assertNoSecretMaterial(failedModels);
 
       const auditRows = await sql`SELECT before_json, after_json, error_code FROM audit_logs WHERE resource_id = ${credentialId}`;
