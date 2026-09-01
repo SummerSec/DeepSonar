@@ -166,9 +166,18 @@ export function withRuntimeTestToolchainPolicy(
   return text;
 }
 
-/** The complete frozen runtime input consumed by Dispatcher/Executor. */
-export async function resolveAgentSnapshotForJob(
-  db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
+/** Current RoleConfig/Credential/runtime identity cannot be frozen into a Job snapshot. */
+export class SnapshotUnresolvableError extends Error {
+  readonly stale_fields = ["current_snapshot_unresolvable"] as const;
+  constructor(cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(message.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 500) || "current snapshot resolution failed");
+    this.name = "SnapshotUnresolvableError";
+  }
+}
+
+async function resolveAgentSnapshotForJobUnchecked(
+  db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
 ): Promise<RoleRuntimeSnapshotResult> {
@@ -298,6 +307,20 @@ export async function resolveAgentSnapshotForJob(
       project: parseRuntimeKnobOverride(projectCfg?.runtime_knobs_json),
     },
   };
+}
+
+/** The complete frozen runtime input consumed by Dispatcher/Executor. */
+export async function resolveAgentSnapshotForJob(
+  db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
+  projectId: string,
+  jobType: string,
+): Promise<RoleRuntimeSnapshotResult> {
+  try {
+    return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType);
+  } catch (error) {
+    if (error instanceof SnapshotUnresolvableError) throw error;
+    throw new SnapshotUnresolvableError(error);
+  }
 }
 
 export function createRoleRuntimeSnapshotApplication(): RoleRuntimeSnapshotApplication {

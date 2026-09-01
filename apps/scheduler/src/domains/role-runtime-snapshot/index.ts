@@ -1,6 +1,7 @@
 export {
   createRoleRuntimeSnapshotApplication,
   resolveAgentSnapshotForJob,
+  SnapshotUnresolvableError,
   roleIdentityForProjectPolicy,
   roleNameForJobType,
   withRuntimeTestToolchainPolicy,

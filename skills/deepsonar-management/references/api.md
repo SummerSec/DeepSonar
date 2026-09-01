@@ -64,11 +64,11 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?}`（至少一项）；同步 `canvases.title` 与 `target_json.title/content/goal` 及 root 节点。只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`。归档返回 `409 TASK_ARCHIVED` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |
-| POST | /tasks/:canvasId/resume-session | jobs:control | 继续任务且不删历史；无活动 Job 时优先把全部启动中断的 role Worker 按同 Job ID、旧冻结快照重新入队（`action=rerun_interrupted_jobs`，Dispatcher 建新 Attempt），旧 unknown/never effect 不重放；批次或单 Job 任一快照身份漂移时整次返回 `409 SNAPSHOT_STALE` + `job_ids`，应逐 Job 调用 `rerun-current` |
+| POST | /tasks/:canvasId/resume-session | jobs:control | 继续任务且不删历史；无活动 Job 时优先把全部启动中断的 role Worker 按同 Job ID、旧冻结快照重新入队（`action=rerun_interrupted_jobs`，Dispatcher 建新 Attempt），旧 unknown/never effect 不重放；批次或单 Job 任一快照身份漂移时整次返回 `409 SNAPSHOT_STALE` + `job_ids`，应逐 Job 调用 `rerun-current`；无可恢复 Job 强制唤醒 Hub 时若当前配置无法解析，同样 `409 SNAPSHOT_STALE` |
 | POST | /tasks/:canvasId/archive | tasks:write | 归档任务 |
 | POST | /tasks/:canvasId/unarchive | tasks:write | 取消归档 |
 | DELETE | /tasks/:canvasId | tasks:write | 删除任务 |
-| POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas）；compose 在清空前重验冻结种子，失效时返回 `409 COMPOSE_SEEDS_STALE` 且不清空现有数据 |
+| POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas）；compose 在清空前重验冻结种子，失效时返回 `409 COMPOSE_SEEDS_STALE` 且不清空现有数据；当前 Hub RoleConfig/Credential 无法解析时返回 `409 SNAPSHOT_STALE` 且不清空 |
 | POST | /projects/:id/events | tasks:write | 外部事件 `{source, event_id, event_type, title?, content?, data?}`，`source+event_id` 幂等 |
 | GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布）；投影 `execution_state=pausing|paused|running`、`execution_active_count` 与 `pending_count` |
 | GET | /projects/:id/canvas | tasks:read | 项目当前画布（兼容） |

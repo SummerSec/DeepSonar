@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { governedSnapshotIdentity, snapshotIdentityDrift } from "./rerun.js";
+import { SnapshotUnresolvableError } from "../role-runtime-snapshot/index.js";
+import {
+  currentSnapshotUnresolvableBody,
+  governedSnapshotIdentity,
+  isSnapshotUnresolvableError,
+  snapshotIdentityDrift,
+} from "./rerun.js";
 
 const base = {
   agent_cli: "claude-code",
@@ -75,4 +81,17 @@ test("snapshot identity detects governed CLI, model, credential, adapter, and im
 
 test("governed identity normalizes blank nullable fields", () => {
   assert.equal(governedSnapshotIdentity({ model: " " }).model, null);
+});
+
+test("unresolvable current snapshot uses the same SNAPSHOT_STALE contract as requeueJob", () => {
+  const error = new SnapshotUnresolvableError("Credential x 绑定 agent_cli=claude-code，与角色 pi 不匹配");
+  const wrapped = new Error("tx failed", { cause: error });
+  assert.equal(isSnapshotUnresolvableError(error), true);
+  assert.equal(isSnapshotUnresolvableError(wrapped), true);
+  assert.equal(isSnapshotUnresolvableError(new Error("disk full")), false);
+  const body = currentSnapshotUnresolvableBody(error);
+  assert.equal(body.error_code, "SNAPSHOT_STALE");
+  assert.equal(body.next_action, "fix-current-configuration");
+  assert.deepEqual(body.stale_fields, ["current_snapshot_unresolvable"]);
+  assert.match(body.resolution_error, /claude-code.*pi/);
 });

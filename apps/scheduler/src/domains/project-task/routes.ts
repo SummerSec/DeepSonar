@@ -23,7 +23,9 @@ import { runner } from "../../runtime.js";
 import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
 import {
   SNAPSHOT_STALE,
+  currentSnapshotUnresolvableBody,
   frozenSnapshotStaleDetail,
+  isSnapshotUnresolvableError,
   requeueJob,
   revokeOldRuntimeGrants,
   type SnapshotStaleDetail,
@@ -926,26 +928,34 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     }
 
     // 无可恢复 Job：强制唤醒一轮 Hub 继续决策
-    const convergence = await sql.begin(async (tx) => {
-      const resumedConvergence = await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
-        hub_paused: false,
-        auto_stopped: false,
-        paused_reason: undefined,
-        paused_at: undefined,
+    let convergence;
+    try {
+      convergence = await sql.begin(async (tx) => {
+        const resumedConvergence = await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
+          hub_paused: false,
+          auto_stopped: false,
+          paused_reason: undefined,
+          paused_at: undefined,
+        });
+        await maybeTriggerHub(
+          tx as unknown as typeof sql,
+          {
+            id: null,
+            project_id: projectId,
+            canvas_id: canvasId,
+            type: "manual",
+            priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+          },
+          { manual: true, force: true, trigger: { kind: "resume_session" } },
+        );
+        return resumedConvergence;
       });
-      await maybeTriggerHub(
-        tx as unknown as typeof sql,
-        {
-          id: null,
-          project_id: projectId,
-          canvas_id: canvasId,
-          type: "manual",
-          priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-        },
-        { manual: true, force: true, trigger: { kind: "resume_session" } },
-      );
-      return resumedConvergence;
-    });
+    } catch (error) {
+      if (isSnapshotUnresolvableError(error)) {
+        return reply.code(409).send(currentSnapshotUnresolvableBody(error));
+      }
+      throw error;
+    }
     const [hub] = await sql`
       SELECT id, type, status, created_at FROM jobs
       WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
@@ -1120,6 +1130,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     } catch (error) {
       if (error instanceof TaskSeedInputError) {
         return reply.code(409).send({ error: error.message, error_code: "COMPOSE_SEEDS_STALE" });
+      }
+      if (isSnapshotUnresolvableError(error)) {
+        return reply.code(409).send(currentSnapshotUnresolvableBody(error));
       }
       throw error;
     }
