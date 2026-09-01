@@ -69,7 +69,7 @@ if (!testDatabaseUrl) {
         )`;
 
       await sql`
-        UPDATE role_configs SET agent_cli = 'pi', version = version + 1
+        UPDATE role_configs SET agent_cli = 'claude-code', version = version + 1
         WHERE project_id IS NULL
           AND role_id = (SELECT id FROM agent_roles WHERE name = 'hub_reason')`;
       const [hubConfig] = await sql`
@@ -83,10 +83,10 @@ if (!testDatabaseUrl) {
           id, name, kind, provider, project_id, ciphertext, nonce, auth_tag,
           fingerprint, last4, status, agent_cli, settings_config_json
         ) VALUES (
-          ${credentialId}, 'hub stale credential', 'llm_provider', 'anthropic', ${projectId},
+          ${credentialId}, 'hub stale credential', 'llm_provider', 'openai', null,
           ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
-          ${credentialId.slice(0, 16)}, 'hubs', 'active', 'claude-code',
-          ${sql.json({ env: { ANTHROPIC_MODEL: "sonnet" } })}
+          ${credentialId.slice(0, 16)}, 'hubs', 'active', 'pi',
+          ${sql.json({ env: { OPENAI_MODEL: "gpt-5.6" } })}
         )`;
       await sql`
         INSERT INTO role_credentials (role_config_id, credential_id, purpose)
@@ -97,7 +97,7 @@ if (!testDatabaseUrl) {
       assert.equal(wake.json().error_code, "SNAPSHOT_STALE");
       assert.equal(wake.json().next_action, "fix-current-configuration");
       assert.deepEqual(wake.json().stale_fields, ["current_snapshot_unresolvable"]);
-      assert.match(String(wake.json().resolution_error), /绑定 agent_cli=claude-code，与角色 pi 不匹配/);
+      assert.match(String(wake.json().resolution_error), /agent_cli claude-code 仅兼容 anthropic，不能使用 provider openai/);
       const [wakeJob] = await sql`SELECT count(*)::int AS count FROM jobs WHERE canvas_id = ${canvasId}`;
       assert.equal(wakeJob.count, 1, "force-wake must not insert a Hub Job when the snapshot is unresolvable");
 
