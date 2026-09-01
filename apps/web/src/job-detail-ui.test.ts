@@ -67,6 +67,15 @@ test("运行详情展示有界上下文诊断，而不读取原始 prompt", () =
   assert.doesNotMatch(panel, /runtime_context\.prompt/);
 });
 
+test("Session 页可切换并下载所选归档", () => {
+  assert.match(panel, /api\.jobSession\(jobId, \{ path \}\)/);
+  assert.match(panel, /artifacts=\{session\.artifacts \?\? \[session\.meta\]\}/);
+  assert.match(panel, /onSelectArtifact=/);
+  assert.match(panel, /path: session\.meta\.path/);
+  assert.match(panel, /sessionSelectReq/);
+  assert.match(panel, /if \(req !== sessionSelectReq\.current\) return/);
+});
+
 test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => {
   assert.match(panel, /执行账本/);
   assert.match(panel, /latestAttempt/);

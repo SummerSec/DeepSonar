@@ -2,7 +2,7 @@ import { Copy, DownloadSimple } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import "./SessionViewer.css";
 import { MarkdownView } from "../MarkdownView";
-import { SearchableMultiSelect } from "../SearchableSelect";
+import { SearchableMultiSelect, SearchableSelect } from "../SearchableSelect";
 import {
   cacheHitRate,
   formatCacheHitRate,
@@ -16,9 +16,11 @@ import {
   buildSessionLedger,
   buildSessionTokenUsage,
   filterSessionLedger,
+  sessionArtifactLabel,
   sessionHasTokenUsage,
   sessionLedgerTurnCount,
   sessionViewerWorkspaceMode,
+  type SessionArtifactMeta,
   type SessionGatewayUsageRow,
   type SessionLedgerRow,
   type SessionTokenUsage,
@@ -36,6 +38,9 @@ export type SessionViewerProps = {
   sourceLabel?: string | null;
   /** Job 详情返回的 Gateway `job_usage_ledger` 行；与 Session 归档 usage 分列展示。 */
   gatewayUsage?: readonly SessionGatewayUsageRow[];
+  artifacts?: readonly SessionArtifactMeta[];
+  selectedPath?: string | null;
+  onSelectArtifact?: (path: string) => void;
   onDownload?: () => void;
   downloadError?: string | null;
 };
@@ -268,6 +273,9 @@ export function SessionViewer({
   sessionId,
   sourceLabel,
   gatewayUsage = [],
+  artifacts = [],
+  selectedPath,
+  onSelectArtifact,
   onDownload,
   downloadError,
 }: SessionViewerProps) {
@@ -330,6 +338,21 @@ export function SessionViewer({
           parsed {parsed.totals.parsed}/{parsed.totals.lines}
           {parsed.totals.skipped > 0 ? ` · skipped ${parsed.totals.skipped}` : ""}
         </span>
+        {artifacts.length > 1 && onSelectArtifact && (
+          <SearchableSelect
+            value={selectedPath ?? artifacts[0]?.path ?? ""}
+            onChange={onSelectArtifact}
+            options={artifacts.map((file) => ({
+              value: file.path,
+              label: sessionArtifactLabel(file),
+            }))}
+            placeholder="选择归档"
+            label="归档"
+            ariaLabel="选择 Session 归档"
+            clearable={false}
+            className="session-viewer__artifact"
+          />
+        )}
         {onDownload && (
           <button type="button" onClick={onDownload} className="session-viewer__download">
             <DownloadSimple size={13} /> 下载原始文件

@@ -962,8 +962,29 @@ const OPS: Op[] = [
     tags: ["Jobs"],
     responses: { "200": JobEvidenceResponseSchema },
   },
-  { method: "get", path: "/jobs/{id}/evidence/session", summary: "查看 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
-  { method: "get", path: "/jobs/{id}/evidence/session/download", summary: "下载 Agent CLI 原始 Session", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/session",
+    summary: "查看 Agent CLI 原始 Session",
+    description:
+      "默认返回主 Session / vendor export。query path 选择 manifest 中的 main / subagent / vendor_export 文件。在线预览最多 8 MiB，超限 truncated=true；完整字节走 download。artifacts 列出全部可切换归档。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      path: { type: "string", description: "manifest 中的 Session 归档相对路径" },
+    },
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/session/download",
+    summary: "下载 Agent CLI 原始 Session",
+    description: "下载所选 Session 归档全文。query path 与查看接口相同，默认主 Session。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      path: { type: "string", description: "manifest 中的 Session 归档相对路径" },
+    },
+  },
   { method: "get", path: "/jobs/{id}/evidence/stream", summary: "读取历史 normalized stream", scope: "tasks:read", tags: ["Jobs"] },
   {
     method: "patch",

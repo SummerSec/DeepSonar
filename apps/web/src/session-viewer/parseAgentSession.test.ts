@@ -6,6 +6,7 @@ import {
   formatTokenCount,
   normalizeSessionCli,
   parseAgentSession,
+  SESSION_BODY_MAX,
   sessionCliLabel,
 } from "./parseAgentSession.js";
 
@@ -71,6 +72,56 @@ test("Claude 数组块按原顺序解析且用量只累计一次", () => {
   assert.equal(result.items.filter((item) => item.tokens).length, 1);
   assert.equal(result.totals.input, 20);
   assert.equal(result.totals.output, 8);
+});
+
+test("Claude tool_result 用先前 tool_use id 回填工具名", () => {
+  const text = [
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: { path: "a.ts" } }],
+      },
+    }),
+    JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] },
+    }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  const call = result.items.find((item) => item.kind === "tool_call");
+  const output = result.items.find((item) => item.kind === "tool_result");
+  assert.equal(call?.toolName, "Read");
+  assert.equal(output?.toolName, "Read");
+  assert.equal(output?.title, "结果 Read");
+});
+
+test("Claude progress 与文件快照归为系统行且不倾倒快照正文", () => {
+  const text = [
+    JSON.stringify({ type: "progress", subtype: "hook", message: "running" }),
+    JSON.stringify({
+      type: "file-history-snapshot",
+      messageId: "m1",
+      snapshot: { trackedFileBackups: [{ path: "a.ts" }, { path: "b.ts" }], huge: "x".repeat(4000) },
+    }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "claude-code" });
+  assert.deepEqual(result.items.map((item) => [item.kind, item.title, item.body]), [
+    ["system", "进度", "running"],
+    ["system", "文件快照", "2 个文件"],
+  ]);
+  assert.ok(!result.items.some((item) => item.body?.includes("xxxx")));
+});
+
+test("工具结果正文超过旧 2000 上限仍进入检查器", () => {
+  const long = "结果".repeat(1500);
+  const result = parseAgentSession(JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "one", content: long }] },
+  }), { cli: "claude-code" });
+  const body = result.items.find((item) => item.kind === "tool_result")?.body ?? "";
+  assert.ok(body.length > 2000);
+  assert.ok(body.length <= SESSION_BODY_MAX + 1);
 });
 
 test("Claude 工具结果用户行不生成占位且混合文本不泄漏结果", () => {
@@ -234,7 +285,7 @@ test("parses archived Codex custom tool calls and results", () => {
   const result = parseAgentSession(text, { cli: "codex" });
   assert.deepEqual(result.items.map((item) => [item.kind, item.toolName, item.body]), [
     ["tool_call", "shell", "{\"cmd\":\"pwd\"}"],
-    ["tool_result", undefined, "ok"],
+    ["tool_result", "shell", "ok"],
   ]);
 });
 

@@ -723,6 +723,13 @@ export interface EvidenceFileMeta {
   inflight?: boolean;
 }
 
+export interface JobSession {
+  meta: EvidenceFileMeta;
+  artifacts?: EvidenceFileMeta[];
+  text: string;
+  truncated: boolean;
+}
+
 export interface JobEvidence {
   transcript_uri: string | null;
   manifest: {
@@ -2047,11 +2054,12 @@ export const api = {
   },
   jobEventsPage: (jobId: string, opts?: { after?: string | null; limit?: number }) =>
     get<PageEnvelope<JobEvent>>(`/jobs/${jobId}/events${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
-  jobSession: (jobId: string) => get<{ meta: EvidenceFileMeta; text: string; truncated: boolean }>(`/jobs/${jobId}/evidence/session`),
-  downloadJobSession: async (jobId: string): Promise<void> => {
+  jobSession: (jobId: string, opts?: { path?: string }) =>
+    get<JobSession>(`/jobs/${jobId}/evidence/session${qs({ path: opts?.path })}`),
+  downloadJobSession: async (jobId: string, opts?: { path?: string; filename?: string }): Promise<void> => {
     await downloadAuthenticatedFile(
-      `/jobs/${encodeURIComponent(jobId)}/evidence/session/download`,
-      safeDownloadFilename(`${jobId}.jsonl`, "session.jsonl"),
+      `/jobs/${encodeURIComponent(jobId)}/evidence/session/download${qs({ path: opts?.path })}`,
+      safeDownloadFilename(opts?.filename ?? `${jobId}.jsonl`, "session.jsonl"),
     );
   },
   jobsPage: (opts?: { project_id?: string; canvas_id?: string; status?: string; after?: string | null; limit?: number }) =>

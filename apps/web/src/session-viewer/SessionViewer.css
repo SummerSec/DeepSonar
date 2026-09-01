@@ -75,6 +75,23 @@
   transition: border-color 140ms var(--ease-decel), background 140ms var(--ease-decel), transform 140ms var(--ease-decel);
 }
 
+.session-viewer__artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 500 10px var(--font-mono);
+}
+
+.session-viewer__artifact .searchable-select-trigger {
+  min-height: 28px;
+  max-width: 16rem;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--surface-tint);
+  font: 500 10px var(--font-mono);
+}
+
 .session-viewer__download:hover {
   border-color: var(--line-strong);
   background: var(--surface-tint-strong);

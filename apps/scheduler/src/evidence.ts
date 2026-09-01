@@ -348,11 +348,42 @@ function resolveManifestFile(jobId: string, file: EvidenceFileMeta): string {
   return target;
 }
 
-export async function readMainSession(jobId: string): Promise<{ meta: EvidenceFileMeta; content: Buffer } | null> {
-  const manifest = await readEvidenceManifest(jobId);
-  const meta = [...(manifest?.files ?? [])].reverse().find((file) => file.kind === "main" || file.kind === "vendor_export");
+const SESSION_ARTIFACT_KINDS = new Set<EvidenceFileMeta["kind"]>(["main", "subagent", "vendor_export"]);
+/** 在线 Session 预览上限。完整归档仍走 download；超过此值只截前缀并标 truncated。 */
+export const SESSION_VIEW_MAX_BYTES = 8 * 1024 * 1024;
+
+export function isSessionArtifact(file: Pick<EvidenceFileMeta, "kind">): boolean {
+  return SESSION_ARTIFACT_KINDS.has(file.kind);
+}
+
+export function listSessionArtifacts(manifest: JobEvidenceManifest | null | undefined): EvidenceFileMeta[] {
+  return (manifest?.files ?? []).filter(isSessionArtifact);
+}
+
+/** 下拉展示：主会话 / vendor 在前，不改变默认选用哪一份。 */
+export function sortSessionArtifacts(artifacts: readonly EvidenceFileMeta[]): EvidenceFileMeta[] {
+  return [...artifacts].sort((left, right) => {
+    const rank = (kind: EvidenceFileMeta["kind"]) => kind === "subagent" ? 1 : 0;
+    return rank(left.kind) - rank(right.kind) || left.path.localeCompare(right.path);
+  });
+}
+
+function defaultSessionArtifact(artifacts: readonly EvidenceFileMeta[]): EvidenceFileMeta | undefined {
+  return [...artifacts].reverse().find((file) => file.kind === "main" || file.kind === "vendor_export")
+    ?? artifacts[0];
+}
+
+export async function readSessionArtifact(
+  jobId: string,
+  path?: string | null,
+): Promise<{ meta: EvidenceFileMeta; content: Buffer; artifacts: EvidenceFileMeta[] } | null> {
+  const artifacts = listSessionArtifacts(await readEvidenceManifest(jobId));
+  if (artifacts.length === 0) return null;
+  const meta = path
+    ? artifacts.find((file) => file.path === path)
+    : defaultSessionArtifact(artifacts);
   if (!meta) return null;
-  return { meta, content: await readFile(resolveManifestFile(jobId, meta)) };
+  return { meta, content: await readFile(resolveManifestFile(jobId, meta)), artifacts: sortSessionArtifacts(artifacts) };
 }
 
 const MAX_STREAM_READ_BYTES = 8 * 1024 * 1024;

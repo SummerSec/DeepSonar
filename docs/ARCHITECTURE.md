@@ -513,7 +513,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
 - CLI stderr 不参与终态或语义事件推断。Runtime 在任意 SDK chunk 边界上对短期 Job Token 做流式精确脱敏，再以 `runtime.stderr` 写入 normalized evidence；单次运行累计最多 1 MiB，达到上限写 `runtime.stderr.truncated` 后停止采集。`jobs.error` 继续只保存短尾摘要，完整有界诊断只从鉴权 evidence 端点读取。
 - 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
-- Session 归档按 CLI 方言独立读取：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限显式失败；Web 查看器分别解析五类格式并保留原始归档下载
+- Session 归档按 CLI 方言独立读取：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限显式失败；Web 查看器分别解析五类格式，默认展示主 Session，并可切换已归档的 subagent；在线预览 8 MiB，完整字节走 download
 - 启动中断导致容器先于归档销毁时，只暴露已写入的 normalized stream synthetic manifest；
   Session 显式 `capture_error`，不能用数据库中的 session identity 冒充归档，也不能跨新
   Attempt 复用已销毁沙箱。

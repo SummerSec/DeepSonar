@@ -215,7 +215,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 也不把已销毁容器中的 session identity 冒充为 Session 归档；orphan Job 通过
 `capture_error` 明确说明 CLI Session 无法跨容器恢复。
 
-**Job Session UI**：前端 `apps/web/src/session-viewer/` 按 CLI 方言将归档文本解析为消息、reasoning、tool call/result、usage 等时间线/用量/工具统计/原始视图，并保留原始文件下载。用量页分列展示 Session 归档 usage（按轮次累加、峰值上下文）与 Gateway `job_usage_ledger`（按请求/模型）；两套数字不对账、不定价。无归档但已有账本时仍可打开用量页。解析格式须覆盖当前全部 `SupportedAgentCli`（claude-code / codex / open-code / pi / dsh），不假设五类归档拥有同一 schema。只有 CLI 归档中实际持久化了平台注入文本时，查看器才显示对应画布广播条目。**新增 Agent CLI 时必须同步** Session 归档适配器（`cli-session-adapters.ts`）与 Web 解析器，清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
+**Job Session UI**：前端 `apps/web/src/session-viewer/` 按 CLI 方言将归档文本解析为消息、reasoning、tool call/result、usage 等时间线/用量/工具统计/原始视图，并保留原始文件下载。`GET /jobs/:id/evidence/session` 默认主 Session / vendor export，`artifacts` 列出全部 `main` / `subagent` / `vendor_export`，`?path=` 切换；在线预览 8 MiB，超限 `truncated`，全文走 download。用量页分列展示 Session 归档 usage（按轮次累加、峰值上下文）与 Gateway `job_usage_ledger`（按请求/模型）；两套数字不对账、不定价。无归档但已有账本时仍可打开用量页。解析格式须覆盖当前全部 `SupportedAgentCli`（claude-code / codex / open-code / pi / dsh），不假设五类归档拥有同一 schema。只有 CLI 归档中实际持久化了平台注入文本时，查看器才显示对应画布广播条目。**新增 Agent CLI 时必须同步** Session 归档适配器（`cli-session-adapters.ts`）与 Web 解析器，清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
 
 归档来源按 CLI 独立治理：Claude Code、Codex、Pi、DSH 从本次沙箱的受治理本地 session artifact 读取；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或体积超限必须显式报告归档失败；查看器对归档内不可解析行保留 `skipped` 计数，不猜测 latest 或其它 Job。
 

@@ -14,7 +14,7 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
-import { readEvidenceManifestOrInflight, readMainSession, readNormalizedStreamPage } from "../../evidence.js";
+import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { planeWriteback } from "../../plane-sync.js";
@@ -501,20 +501,36 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
 
   app.get("/jobs/:id/evidence/session", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const session = await readMainSession(id);
-    if (!session) return reply.code(404).send({ error: "该 Job 没有原始 Session" });
-    const max = 2 * 1024 * 1024;
+    const path = typeof (req.query as { path?: unknown }).path === "string"
+      ? (req.query as { path: string }).path.trim()
+      : "";
+    const session = await readSessionArtifact(id, path || null);
+    if (!session) {
+      return reply.code(404).send({
+        error: path ? "该 Job 没有这份 Session 归档" : "该 Job 没有原始 Session",
+        error_code: path ? "SESSION_ARTIFACT_NOT_FOUND" : "SESSION_MISSING",
+      });
+    }
     return {
       meta: session.meta,
-      text: session.content.subarray(0, max).toString("utf8"),
-      truncated: session.content.byteLength > max,
+      artifacts: session.artifacts,
+      text: session.content.subarray(0, SESSION_VIEW_MAX_BYTES).toString("utf8"),
+      truncated: session.content.byteLength > SESSION_VIEW_MAX_BYTES,
     };
   });
 
   app.get("/jobs/:id/evidence/session/download", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const session = await readMainSession(id);
-    if (!session) return reply.code(404).send({ error: "该 Job 没有原始 Session" });
+    const path = typeof (req.query as { path?: unknown }).path === "string"
+      ? (req.query as { path: string }).path.trim()
+      : "";
+    const session = await readSessionArtifact(id, path || null);
+    if (!session) {
+      return reply.code(404).send({
+        error: path ? "该 Job 没有这份 Session 归档" : "该 Job 没有原始 Session",
+        error_code: path ? "SESSION_ARTIFACT_NOT_FOUND" : "SESSION_MISSING",
+      });
+    }
     const safeName = session.meta.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     return reply
       .header("content-type", "application/x-ndjson; charset=utf-8")

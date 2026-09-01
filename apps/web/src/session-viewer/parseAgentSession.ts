@@ -101,8 +101,24 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function truncate(text: string, max = 2_000): string {
+/** 检查器可读正文上限；账本预览另有 CSS 行数限制。 */
+export const SESSION_BODY_MAX = 32_000;
+
+function truncate(text: string, max = SESSION_BODY_MAX): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+type ToolNameMap = Map<string, string>;
+
+function rememberToolName(tools: ToolNameMap, id: unknown, name: unknown): void {
+  const toolId = asString(id);
+  const toolName = asString(name);
+  if (toolId && toolName) tools.set(toolId, toolName);
+}
+
+function lookupToolName(tools: ToolNameMap, id: unknown, fallback?: string): string | undefined {
+  const toolId = asString(id);
+  return (toolId ? tools.get(toolId) : undefined) ?? fallback;
 }
 
 function stringifyBody(value: unknown): string | undefined {
@@ -116,7 +132,7 @@ function stringifyBody(value: unknown): string | undefined {
 }
 
 function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return truncate(content);
   if (!Array.isArray(content)) return stringifyBody(content) ?? "";
   const parts: string[] = [];
   for (const block of content) {
@@ -578,13 +594,45 @@ function claudeQueueOperation(row: Record<string, unknown>, index: number, times
   return content && isCanvasBroadcast(content) ? [canvasBroadcastItem(index, content, timestamp)] : [];
 }
 
-function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
+const CLAUDE_SYSTEM_TYPES: Record<string, string> = {
+  progress: "进度",
+  "file-history-snapshot": "文件快照",
+  compact: "压缩",
+  compaction: "压缩",
+  web_search: "网页搜索",
+  web_search_tool_result: "搜索结果",
+};
+
+function claudeSnapshotSummary(row: Record<string, unknown>): string | undefined {
+  const snapshot = asRecord(row.snapshot) ?? asRecord(asRecord(row.message)?.snapshot) ?? asRecord(row.message);
+  if (!snapshot) return asString(row.messageId) ? `message ${asString(row.messageId)}` : undefined;
+  const files = snapshot.trackedFileBackups ?? snapshot.files ?? snapshot.trackedFiles;
+  if (Array.isArray(files)) return `${files.length} 个文件`;
+  return stringifyBody({
+    messageId: row.messageId ?? snapshot.messageId,
+    isSnapshotUpdate: row.isSnapshotUpdate ?? snapshot.isSnapshotUpdate,
+  });
+}
+
+function parseClaudeRow(row: Record<string, unknown>, index: number, tools: ToolNameMap): SessionTimelineItem[] {
   const type = asString(row.type) ?? "other";
   const message = asRecord(row.message);
   const ts = asString(row.timestamp) ?? asString(row.created_at);
   const items: SessionTimelineItem[] = [];
 
   if (type === "queue-operation") return claudeQueueOperation(row, index, ts);
+  const systemTitle = CLAUDE_SYSTEM_TYPES[type];
+  if (systemTitle) {
+    return [{
+      id: String(index),
+      kind: "system",
+      title: systemTitle,
+      body: type === "file-history-snapshot"
+        ? claudeSnapshotSummary(row)
+        : asString(row.message) ?? asString(row.text) ?? asString(row.subtype),
+      timestamp: ts,
+    }];
+  }
 
   if (type === "user" || type === "assistant" || type === "system") {
     const role = asString(message?.role) ?? type;
@@ -601,6 +649,7 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
         } else if (metadata) {
           items.push(sessionMetadataItem(index, rec, metadata, ts, `metadata-${i}`));
         } else if (rec.type === "tool_use") {
+          rememberToolName(tools, rec.id ?? rec.tool_use_id, rec.name);
           items.push({
             id: `${index}-tool-${i}`,
             kind: "tool_call",
@@ -610,10 +659,12 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
             timestamp: ts,
           });
         } else if (rec.type === "tool_result") {
+          const name = lookupToolName(tools, rec.tool_use_id ?? rec.id);
           items.push({
             id: `${index}-result-${i}`,
             kind: "tool_result",
-            title: "工具结果",
+            title: name ? `结果 ${name}` : "工具结果",
+            toolName: name,
             body: contentToText(rec.content ?? rec),
             timestamp: ts,
             isError: rec.is_error === true,
@@ -657,11 +708,15 @@ function parseClaudeRow(row: Record<string, unknown>, index: number): SessionTim
   }
 
   if (type === "tool_result" || type === "tool_use") {
+    if (type === "tool_use") rememberToolName(tools, row.id ?? row.tool_use_id, row.name);
+    const name = type === "tool_use"
+      ? asString(row.name)
+      : lookupToolName(tools, row.tool_use_id ?? row.id, asString(row.name));
     return [{
       id: String(index),
       kind: type === "tool_use" ? "tool_call" : "tool_result",
-      title: type === "tool_use" ? `调用 ${String(row.name ?? "tool")}` : "工具结果",
-      toolName: asString(row.name),
+      title: type === "tool_use" ? `调用 ${name ?? "tool"}` : name ? `结果 ${name}` : "工具结果",
+      toolName: name,
       body: stringifyBody(row.input ?? row.content ?? row),
       timestamp: ts,
       isError: row.is_error === true,
@@ -753,7 +808,7 @@ function codexContentItems(
   return items;
 }
 
-function parseCodexRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
+function parseCodexRow(row: Record<string, unknown>, index: number, tools: ToolNameMap): SessionTimelineItem[] {
   const type = asString(row.type) ?? "other";
   const payload = asRecord(row.payload) ?? row;
   const ts = asString(row.timestamp) ?? asString(payload.timestamp);
@@ -775,23 +830,26 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
     }
     const itemType = asString(item.type) ?? "item";
     if (CODEX_TOOL_RESULT_TYPES.has(itemType)) {
+      const name = lookupToolName(tools, item.call_id ?? item.id ?? item.tool_use_id, asString(item.name) ?? asString(item.tool_name));
       return [{
         id: `${index}-result`,
         kind: "tool_result",
-        title: asString(item.name) ? `结果 ${String(item.name)}` : "工具结果",
-        toolName: asString(item.name) ?? asString(item.tool_name),
+        title: name ? `结果 ${name}` : "工具结果",
+        toolName: name,
         body: stringifyBody(item.output ?? item.result ?? item.error ?? item),
         timestamp: ts,
         isError: item.error != null || item.is_error === true,
       }];
     }
     if (CODEX_TOOL_CALL_TYPES.has(itemType)) {
+      rememberToolName(tools, item.call_id ?? item.id ?? item.tool_use_id, item.name ?? item.tool_name);
       if (type === "item.completed" && (item.output != null || item.result != null || item.error != null)) {
+        const name = lookupToolName(tools, item.call_id ?? item.id ?? item.tool_use_id, asString(item.name) ?? asString(item.tool_name));
         return [{
           id: `${index}-result`,
           kind: "tool_result",
-          title: asString(item.name) ? `结果 ${String(item.name)}` : "工具结果",
-          toolName: asString(item.name) ?? asString(item.tool_name),
+          title: name ? `结果 ${name}` : "工具结果",
+          toolName: name,
           body: stringifyBody(item.output ?? item.result ?? item.error ?? item),
           timestamp: ts,
           isError: item.error != null || item.is_error === true,
@@ -886,16 +944,19 @@ function parseCodexRow(row: Record<string, unknown>, index: number): SessionTime
   if (type === "response_item") {
     const itemType = asString(payload.type) ?? "response";
     if (CODEX_TOOL_RESULT_TYPES.has(itemType)) {
+      const name = lookupToolName(tools, payload.call_id ?? payload.id ?? payload.tool_use_id, asString(payload.name) ?? asString(payload.tool_name));
       return [{
         id: `${index}-result`,
         kind: "tool_result",
-        title: "工具结果",
+        title: name ? `结果 ${name}` : "工具结果",
+        toolName: name,
         body: stringifyBody(payload.output ?? payload.content ?? payload.result ?? payload),
         timestamp: ts,
         isError: payload.error != null || payload.is_error === true,
       }];
     }
     if (CODEX_TOOL_CALL_TYPES.has(itemType)) {
+      rememberToolName(tools, payload.call_id ?? payload.id ?? payload.tool_use_id, payload.name ?? payload.tool_name);
       return [{
         id: String(index),
         kind: "tool_call",
@@ -957,6 +1018,7 @@ function parsePiPersistedMessage(
   row: Record<string, unknown>,
   message: Record<string, unknown>,
   index: number,
+  tools: ToolNameMap,
 ): SessionTimelineItem[] {
   const role = asString(message.role) ?? "assistant";
   const roleKind: SessionItemKind = role === "user" ? "user" : role === "toolResult" || role === "tool_result" ? "tool_result" : "assistant";
@@ -991,6 +1053,7 @@ function parsePiPersistedMessage(
     }
     if (blockType === "toolCall" || blockType === "tool_call" || blockType === "tool_use") {
       const name = asString(block.name) ?? asString(block.toolName) ?? "tool";
+      rememberToolName(tools, block.id ?? block.toolCallId ?? block.tool_use_id, name);
       items.push({
         id: `${index}-call-${blockIndex}`,
         kind: "tool_call",
@@ -1002,12 +1065,16 @@ function parsePiPersistedMessage(
       continue;
     }
     if (blockType === "toolResult" || blockType === "tool_result") {
-      const name = asString(block.toolName) ?? asString(block.name);
+      const name = lookupToolName(
+        tools,
+        block.toolCallId ?? block.tool_use_id ?? block.id,
+        asString(block.toolName) ?? asString(block.name) ?? asString(message.toolName),
+      );
       items.push({
         id: `${index}-result-${blockIndex}`,
         kind: "tool_result",
         title: name ? `结果 ${name}` : "工具结果",
-        toolName: name ?? asString(message.toolName),
+        toolName: name,
         body: contentToText(block.content) || stringifyBody(block.result ?? block.output ?? block.content),
         timestamp,
         isError: block.isError === true || block.is_error === true,
@@ -1046,11 +1113,11 @@ function parsePiPersistedMessage(
   return items;
 }
 
-function parsePiRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
+function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolNameMap): SessionTimelineItem[] {
   const type = asString(row.type) ?? "other";
   const ts = asString(row.timestamp) ?? asString(row.time);
   const persistedMessage = asRecord(row.message);
-  if (type === "message" && persistedMessage) return parsePiPersistedMessage(row, persistedMessage, index);
+  if (type === "message" && persistedMessage) return parsePiPersistedMessage(row, persistedMessage, index, tools);
   if (
     type === "session"
     ||
@@ -1120,6 +1187,7 @@ function parsePiRow(row: Record<string, unknown>, index: number): SessionTimelin
   if (type === "tool_execution_start" || type === "tool_call" || type === "tool.use") {
     const tool = asRecord(row.toolCall) ?? row;
     const name = asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name) ?? "tool";
+    rememberToolName(tools, tool.id ?? tool.toolCallId ?? row.id, name);
     return [{
       id: String(index),
       kind: "tool_call",
@@ -1131,7 +1199,11 @@ function parsePiRow(row: Record<string, unknown>, index: number): SessionTimelin
   }
   if (type === "tool_execution_end" || type === "tool_result" || type === "tool.result") {
     const tool = asRecord(row.toolCall) ?? row;
-    const name = asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name);
+    const name = lookupToolName(
+      tools,
+      tool.id ?? tool.toolCallId ?? row.tool_use_id ?? row.id,
+      asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name),
+    );
     return [{
       id: String(index),
       kind: "tool_result",
@@ -1352,6 +1424,7 @@ function parseDshRow(
   row: Record<string, unknown>,
   index: number,
   standaloneToolCallIds: ReadonlySet<string> = new Set<string>(),
+  tools: ToolNameMap = new Map(),
 ): SessionTimelineItem[] {
   const type = asString(row.type) ?? "event";
   if (type === "session" || type === "turn/start" || type === "turn/end") {
@@ -1399,12 +1472,14 @@ function parseDshRow(
       if (block.type === "tool-call") {
         const id = dshToolCallId(block);
         const name = asString(block.name);
+        rememberToolName(tools, id, name);
         if ((id && standaloneToolCallIds.has(id)) || (name && standaloneToolCallIds.has(`name:${name}`))) continue;
         items.push({ id: `${index}-call-${blockIndex}`, kind: "tool_call", title: `调用 ${String(block.name ?? "tool")}`, toolName: asString(block.name), body: stringifyBody(block.arguments), timestamp });
         continue;
       }
       if (block.type === "tool-result") {
-        items.push({ id: `${index}-result-${blockIndex}`, kind: "tool_result", title: "工具结果", body: contentToText(block.content) || stringifyBody(block.content), timestamp, isError: block.isError === true || block.is_error === true });
+        const name = lookupToolName(tools, dshToolCallId(block) ?? block.toolCallId ?? block.tool_use_id, asString(block.name));
+        items.push({ id: `${index}-result-${blockIndex}`, kind: "tool_result", title: name ? `结果 ${name}` : "工具结果", toolName: name, body: contentToText(block.content) || stringifyBody(block.content), timestamp, isError: block.isError === true || block.is_error === true });
         continue;
       }
       if (block.type === "reasoning" && typeof block.text === "string") {
@@ -1430,14 +1505,22 @@ function parseDshRow(
     const chunkType = asString(chunk.type) ?? "";
     return [{ id: String(index), kind: "assistant", title: chunkType.includes("reasoning") ? "DSH reasoning" : "DSH", body: chunkText, timestamp }];
   }
-  if (type === "tool/call") return [{ id: String(index), kind: "tool_call", title: `调用 ${String(data.name ?? "tool")}`, toolName: asString(data.name), body: stringifyBody(data.arguments ?? data.input), timestamp }];
+  if (type === "tool/call") {
+    rememberToolName(tools, data.id ?? data.callId ?? data.toolCallId, data.name);
+    return [{ id: String(index), kind: "tool_call", title: `调用 ${String(data.name ?? "tool")}`, toolName: asString(data.name), body: stringifyBody(data.arguments ?? data.input), timestamp }];
+  }
   if (type === "tool/result") {
     const messageRecord = asRecord(data.message);
+    const name = lookupToolName(
+      tools,
+      data.id ?? data.callId ?? data.toolCallId ?? data.tool_call_id,
+      asString(data.name) ?? asString(messageRecord?.toolName),
+    );
     return [{
       id: String(index),
       kind: "tool_result",
-      title: asString(data.name) ? `结果 ${String(data.name)}` : "工具结果",
-      toolName: asString(data.name) ?? asString(messageRecord?.toolName),
+      title: name ? `结果 ${name}` : "工具结果",
+      toolName: name,
       body: dshResultBody(data),
       timestamp,
       isError: (data.error != null && !(typeof data.error === "string" && !data.error.trim()))
@@ -1455,6 +1538,7 @@ function parseObjectRows(
   const format = detectFormat(rows, preferred);
   const items: SessionTimelineItem[] = [];
   const toolMap = new Map<string, SessionToolStat>();
+  const toolNames = new Map<string, string>();
   const dshStandaloneToolCallIds = new Set<string>();
   if (format === "dsh") {
     for (const row of rows) {
@@ -1486,14 +1570,14 @@ function parseObjectRows(
     let parsed: SessionTimelineItem[] = [];
     try {
       parsed = parseSessionSpecialRow(row, index) ?? [];
-      if (parsed.length > 0) {
-        // Explicit extension/session metadata is not a user or assistant turn.
-      } else if (format === "claude-code") parsed = parseClaudeRow(row, index);
-      else if (format === "codex") parsed = parseCodexRow(row, index);
-      else if (format === "pi") parsed = parsePiRow(row, index);
-      else if (format === "open-code") parsed = parseOpenCodeRow(row, index);
-      else if (format === "dsh") parsed = parseDshRow(row, index, dshStandaloneToolCallIds);
-      else parsed = parseGenericRow(row, index);
+      if (parsed.length === 0) {
+        if (format === "claude-code") parsed = parseClaudeRow(row, index, toolNames);
+        else if (format === "codex") parsed = parseCodexRow(row, index, toolNames);
+        else if (format === "pi") parsed = parsePiRow(row, index, toolNames);
+        else if (format === "open-code") parsed = parseOpenCodeRow(row, index);
+        else if (format === "dsh") parsed = parseDshRow(row, index, dshStandaloneToolCallIds, toolNames);
+        else parsed = parseGenericRow(row, index);
+      }
     } catch {
       totals.skipped += 1;
       continue;

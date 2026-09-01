@@ -82,7 +82,7 @@ be registered or admitted:
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | **Session 归档** | `packages/runtime-sandbox/src/cli-session-adapters.ts`（`SupportedAgentCli` + `CLI_SESSION_ADAPTERS`） | 按 CLI 发现/导出原始 session（JSONL / vendor export），写入 Job evidence；`sessionCapture: true` 才启用 |
-| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 用量（归档 usage + Gateway 账本） / 工具统计 / 原始；**保留下载原始文件** |
+| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 用量（归档 usage + Gateway 账本） / 工具统计 / 原始；可切换 `main` / `subagent` 归档；**保留下载所选原始文件** |
 
 当前五类 CLI 的归档边界如下；它们是独立格式，不承诺共用 schema：
 
@@ -104,7 +104,7 @@ be registered or admitted:
 2. **runtime adapter** 声明 `sessionCapture: true`，并保证流里能捕获稳定 `sessionId`（Pi 还要 `sessionFile`），否则归档永远空。
 3. **扩展 Web 解析**：在 `parseAgentSession.ts` 增加该 CLI 的行/文档解析（或 `cli` hint 下的专用路径），更新 `normalizeSessionCli` / `sessionCliLabel`，并补 `parseAgentSession.test.ts` 样例（至少：用户消息、助手、一次 tool_call + tool_result、Token 若可得）。
 4. **不要假设**「Codex 目录结构」或「Claude JSONL」可复用；每种 CLI 的 on-disk / export 形态单独适配。参考外部 [agent-session-viewer](https://github.com/cuteribs/agent-session-viewer) 仅作 UX/格式灵感，**不 vendor 整站**。
-5. **验收**：真实或 fixture 归档经 `GET /jobs/:id/evidence/session` 可读；Job 详情 Session 标签出现时间线/统计；「下载原始文件」仍指向未改写的归档字节；解析失败时仍可看「原始」与下载。
+5. **验收**：真实或 fixture 归档经 `GET /jobs/:id/evidence/session` 可读；有 subagent 时 `artifacts` 可切换且 `?path=` 能读到对应文件；Job 详情 Session 标签出现时间线/统计；「下载原始文件」仍指向未改写的所选归档字节；解析失败时仍可看「原始」与下载。
 6. 若暂不支持归档：显式保持 `sessionCapture: false`，并在 UI/空态文案中可区分「未实现」与「运行失败」；**禁止**半吊子路径猜测冒充归档。
 
 当前已适配查看器的 CLI：`claude-code`、`codex`、`open-code`、`pi`、`dsh`（与 runtime registry 对齐）。后续每加一个 adapter，**同步 PR 应包含 session adapter + parseAgentSession + 测试**，不要拆成「先跑起来以后再做 Session」。

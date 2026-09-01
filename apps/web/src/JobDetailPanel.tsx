@@ -1,6 +1,6 @@
 import { ArrowClockwise, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type ProviderCredential } from "./api";
+import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type JobSession, type ProviderCredential } from "./api";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
@@ -181,13 +181,14 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
   const [eventsCursor, setEventsCursor] = useState<string | null>(null);
   const [eventsHasMore, setEventsHasMore] = useState(false);
-  const [session, setSession] = useState<{ text: string; truncated: boolean } | null>(null);
+  const [session, setSession] = useState<JobSession | null>(null);
   const [sessionLoad, setSessionLoad] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>("live");
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const sessionSelectReq = useRef(0);
   const [eventTypeFilter, setEventTypeFilter] = useState<string[]>([]);
   const [eventQuery, setEventQuery] = useState("");
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
@@ -271,7 +272,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
         .jobSession(jobId)
         .then((v) => {
           if (!alive) return;
-          setSession({ text: v.text, truncated: v.truncated });
+          setSession(v);
           setSessionLoad("ready");
           setSessionError(null);
         })
@@ -976,10 +977,29 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   cli={evidence?.manifest.cli}
                   sessionId={evidence?.manifest.session_id}
                   sourceLabel="CLI Session 归档"
+                  artifacts={session.artifacts ?? [session.meta]}
+                  selectedPath={session.meta.path}
                   gatewayUsage={detail.usage}
                   downloadError={downloadError}
+                  onSelectArtifact={(path) => {
+                    const req = ++sessionSelectReq.current;
+                    setDownloadError(null);
+                    api.jobSession(jobId, { path })
+                      .then((next) => {
+                        if (req !== sessionSelectReq.current) return;
+                        setSession(next);
+                        setSessionError(null);
+                      })
+                      .catch((cause) => {
+                        if (req !== sessionSelectReq.current) return;
+                        setDownloadError(String(cause));
+                      });
+                  }}
                   onDownload={() =>
-                    api.downloadJobSession(jobId).catch((e) => setDownloadError(String(e)))
+                    api.downloadJobSession(jobId, {
+                      path: session.meta.path,
+                      filename: session.meta.name,
+                    }).catch((e) => setDownloadError(String(e)))
                   }
                 />
               )}
