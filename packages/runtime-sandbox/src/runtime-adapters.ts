@@ -1,4 +1,5 @@
 import type { ContextIdentity } from "./context-contract.js";
+import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 
 export type AgentCliId = "claude-code" | "codex" | "dsh" | "open-code" | "pi";
@@ -301,6 +302,17 @@ function textFrom(value: unknown): string | undefined {
     if (typeof record[key] === "string" && record[key]) return record[key] as string;
   }
   return undefined;
+}
+
+function runtimeErrorResult(raw: string | undefined, fallback: string): Record<string, unknown> {
+  const parsed = preferInnerJsonErrorMessage(raw && raw.trim() ? raw : fallback);
+  return {
+    type: "result",
+    subtype: "error",
+    is_error: true,
+    result: parsed.message,
+    ...(parsed.detail ? { detail: parsed.detail } : {}),
+  };
 }
 
 function reasoningTextFrom(value: unknown, depth = 0): string | undefined {
@@ -808,8 +820,8 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
   if (type === "response") {
     if (line.command === "get_state" && line.success === true) piSessionState(line, state);
     if (line.success === false) {
-      const error = typeof line.error === "string" ? line.error : "Pi RPC command failed";
-      return [{ type: "result", subtype: "error", is_error: true, result: error }];
+      const error = typeof line.error === "string" ? line.error : undefined;
+      return [runtimeErrorResult(error, "Pi RPC command failed")];
     }
     return [];
   }
@@ -830,7 +842,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
   }
   if (type === "agent_end") return [{ type: "agent_end" }];
   if (type === "error" || type === "extension_error") {
-    return [{ type: "result", subtype: "error", is_error: true, result: textFrom(line.error ?? line.message) ?? "Pi runtime failed" }];
+    return [runtimeErrorResult(textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed")];
   }
   if (["tool_execution_start", "tool_execution_end"].includes(type)) {
     const tool = line.toolCall && typeof line.toolCall === "object" && !Array.isArray(line.toolCall)
@@ -1052,7 +1064,8 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
   if (Object.prototype.hasOwnProperty.call(line, "id") && !line.method) {
     if (line.error && typeof line.error === "object") {
       const error = line.error as Record<string, unknown>;
-      return [{ type: "result", subtype: "error", is_error: true, result: String(error.message ?? "DSH JSON-RPC request failed") }];
+      const raw = typeof error.message === "string" ? error.message : undefined;
+      return [runtimeErrorResult(raw, "DSH JSON-RPC request failed")];
     }
     if (line.id === state.dshInitializeRequestId) {
       const result = line.result && typeof line.result === "object" ? line.result as Record<string, unknown> : {};
