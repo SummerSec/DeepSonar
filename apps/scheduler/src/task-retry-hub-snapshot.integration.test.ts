@@ -47,7 +47,7 @@ if (!testDatabaseUrl) {
       closeApp = () => app.close();
 
       const projectId = randomUUID();
-      const canvasId = `hub-stale-${randomUUID()}`;
+      const canvasId = randomUUID();
       const succeededJobId = randomUUID();
       await sql`
         INSERT INTO projects (id, canvas_id, name, config_json)
