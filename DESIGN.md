@@ -323,7 +323,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 凭据删除不受可恢复 Job 永久锁死 | #234 | **已完成**：`DELETE /credentials/:id` 只拦 `pending_unclaimed` 与 `active_frozen`（claimed/provisioning/running/waiting_human）。`failed/timeout/orphan` 与 `succeeded/cancelled` 一样：影响投影照列，确认框可提示删除后不能按原快照 resume，但不 409。删除仍与 resume 串行加锁，不自动恢复、不改写冻结快照。 |
 | 态势普通数据看板 | #242 | **P0 已落地**：`/` 运营总览（总量/状态分布/近 7 日/活跃项目 Top N/最近活动）+ 关注队列仍为处置入口；`GET /dashboard/overview` 做轻量聚合，因 Job/Finding 列表有窗口上限。**用量账本看板已落地**：`GET /dashboard/usage` 按日/周/月或自定义时间聚合 Gateway token，项目/任务页复用同一看板。**P1 风险看板、P2 吞吐看板未做。** |
 | 用量账本缓存命中与项目 tab | #312 | **已完成**：Gateway 解析并落库 `cache_read_input_tokens` / `cache_creation_input_tokens`；全局 / 项目 / 任务账本展示缓存读/写。CURRENT PROJECT 增加「项目账本」`/projects/:id/usage`，任务工作台不再内嵌项目账本。账本可折叠并按用户+页面记忆，默认展开。 |
-| 角色 agent_cli 跟随最新配置 | #316 | **已完成**：凭据 `agent_cli` 是软提示。Provider 兼容矩阵通过时角色保存 / PATCH CLI 会同步凭据并按角色解析 Job；不兼容才拒绝。 |
+| 角色保存跟随最新 agent_cli | #316 | **已完成**：凭据 `agent_cli` 是软提示，Job 身份按角色解析。RoleConfig 保存（PUT 与 `PATCH /agent-cli`）时，绑定 LLM 凭据在 provider 兼容矩阵通过后自动跟随角色新值并写 `credential.agent_cli_follow` 审计；不兼容仍拒绝。 |
 | dsh 上游按 system 消息识别客户端 | #321 | **已完成**：DSH 在平台 system prompt 前投影英文 coding-assistant opener，对齐 pi 风格请求帧；嵌入 JSON 错误同样解析。部分网关仍可能按更严指纹拒绝。 |
 | 控制台版本号跳转 GitHub | #327 | **已完成**：侧栏版本号链接到 `SummerSec/DeepSonar` 的 `releases/tag/vX.Y.Z`；非规范版本落到 releases 首页；空版本不渲染链接。 |
 | 项目风险台 + 人工复现中 | #302 | **已落地**：`/projects/:id/findings` 为本项目全部任务 Finding 风险台（「项目风险 / 风险发现」）；`GET /projects/:id/findings/summary` 做未截断聚合。处置新增 `human_reproducing`，compose 视为未否定；不旁路 Verify，不做跨项目 P1 看板。 |

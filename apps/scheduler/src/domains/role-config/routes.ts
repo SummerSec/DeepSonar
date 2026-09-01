@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
-import { projectCredentialProvider, validateCredentialCompatibility } from "../../credentials.js";
+import { planCredentialAgentCliFollow, projectCredentialProvider } from "../../credentials.js";
 import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
@@ -29,6 +29,25 @@ const RoleBody = z.object({
   description: z.string().default(""),
 });
 const RolePatchBody = RoleBody.partial().omit({ name: true });
+
+type AgentCliFollow = { credentialId: string; from: string; to: string };
+
+async function auditCredentialAgentCliFollows(
+  req: FastifyRequest,
+  projectId: string | null,
+  follows: AgentCliFollow[],
+): Promise<void> {
+  for (const follow of follows) {
+    await audit(req, {
+      action: "credential.agent_cli_follow",
+      resourceType: "credential",
+      resourceId: follow.credentialId,
+      projectId,
+      before: { agent_cli: follow.from },
+      after: { agent_cli: follow.to },
+    });
+  }
+}
 
 export function registerRoleConfigRoutes(app: FastifyInstance): void {
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
@@ -60,6 +79,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     projectId: string | null,
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
+    follows: AgentCliFollow[] = [],
   ): Promise<string | null> {
     if (projectId && body.runtime_image_key != null) {
       return "项目 RoleConfig 不接受 runtime_image_key，请使用项目镜像策略";
@@ -129,8 +149,15 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       }
       if (!projectId && cred.project_id) return `全局 RoleConfig 只能绑定全局 Credential`;
       if (c.purpose === "llm") {
-        const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(cred.provider ?? ""));
-        if (compatibilityError) return compatibilityError;
+        const plan = planCredentialAgentCliFollow({
+          roleAgentCli: body.agent_cli,
+          credentialAgentCli: cred.agent_cli as string | null,
+          provider: String(cred.provider ?? ""),
+        });
+        if (plan.action === "reject") return plan.error;
+        if (plan.action === "follow") {
+          follows.push({ credentialId: c.credential_id, from: plan.from, to: plan.to });
+        }
       }
     }
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;
@@ -225,7 +252,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     projectId: string | null,
     body: z.infer<typeof RoleConfigPutBody>,
     role: { name: string; kind: "role" | "hub" | "system" },
-  ): Promise<{ configId: string } | { statusCode: number; error: string }> {
+  ): Promise<{ configId: string; follows: AgentCliFollow[] } | { statusCode: number; error: string }> {
     return sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
@@ -235,9 +262,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
           return { statusCode: 409, error: `角色 ${role.name} 未在本项目启用` };
         }
       }
-      const err = await validateRoleConfigBody(body, projectId, role, tx);
+      const follows: AgentCliFollow[] = [];
+      const err = await validateRoleConfigBody(body, projectId, role, tx, follows);
       if (err) return { statusCode: 400, error: err };
-      return { configId: await upsertRoleConfigInTx(tx, roleId, projectId, body) };
+      for (const follow of follows) {
+        await tx`UPDATE credentials SET agent_cli = ${follow.to} WHERE id = ${follow.credentialId}`;
+      }
+      return { configId: await upsertRoleConfigInTx(tx, roleId, projectId, body), follows };
     });
   }
 
@@ -318,7 +349,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         });
       }
     }
-    const updated = await sql.begin(async (txRaw) => {
+    const patch = await sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       const [binding] = await tx`
@@ -328,16 +359,19 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         WHERE rcb.role_config_id = ${id} AND rcb.purpose = 'llm'
         LIMIT 1
         FOR UPDATE OF c`;
+      const follows: AgentCliFollow[] = [];
       if (binding) {
-        const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(binding.provider ?? ""));
-        if (compatibilityError) {
-          return { error: compatibilityError };
+        const plan = planCredentialAgentCliFollow({
+          roleAgentCli: body.agent_cli,
+          credentialAgentCli: binding.agent_cli as string | null,
+          provider: String(binding.provider ?? ""),
+        });
+        if (plan.action === "reject") {
+          return { error: plan.error };
         }
-        if (binding.agent_cli !== body.agent_cli) {
-          await tx`
-            UPDATE credentials
-            SET agent_cli = ${body.agent_cli}
-            WHERE id = ${binding.id as string}`;
+        if (plan.action === "follow") {
+          await tx`UPDATE credentials SET agent_cli = ${plan.to} WHERE id = ${binding.id}`;
+          follows.push({ credentialId: String(binding.id), from: plan.from, to: plan.to });
         }
       }
       const [next] = await tx`
@@ -345,10 +379,10 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         SET agent_cli = ${body.agent_cli}, version = version + 1, updated_at = now()
         WHERE id = ${id}
         RETURNING id, agent_cli, version, project_id, role_id`;
-      return { row: next, synced_credential_id: binding ? String(binding.id) : null };
+      return { row: next, follows, synced_credential_id: binding ? String(binding.id) : null };
     });
-    if ("error" in updated) {
-      return reply.code(409).send({ error: updated.error, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
+    if ("error" in patch) {
+      return reply.code(409).send({ error: patch.error, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
     }
     await audit(req, {
       action: "role_config.agent_cli",
@@ -358,15 +392,16 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         agent_cli: body.agent_cli,
         role: row.role_name,
         project_id: row.project_id,
-        synced_credential_id: updated.synced_credential_id,
+        synced_credential_id: patch.synced_credential_id,
       },
     });
+    await auditCredentialAgentCliFollows(req, row.project_id ? String(row.project_id) : null, patch.follows);
     return {
-      id: updated.row.id,
-      agent_cli: updated.row.agent_cli,
-      version: updated.row.version,
-      role_id: updated.row.role_id,
-      project_id: updated.row.project_id,
+      id: patch.row.id,
+      agent_cli: patch.row.agent_cli,
+      version: patch.row.version,
+      role_id: patch.row.role_id,
+      project_id: patch.row.project_id,
     };
   });
 
@@ -518,6 +553,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       resourceId: configId,
       after: { role: role.name, scope: "global", credentials: body.credentials.length, files: body.config_files.length },
     });
+    await auditCredentialAgentCliFollows(req, null, mutation.follows);
     return roleConfigView(configId, req.actor?.projectId ?? null);
   });
 
@@ -578,6 +614,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       projectId: id,
       after: { role: role.name, scope: "project", credentials: body.credentials.length, files: body.config_files.length },
     });
+    await auditCredentialAgentCliFollows(req, id, mutation.follows);
     return roleConfigView(configId, actorProjectId);
   });
 

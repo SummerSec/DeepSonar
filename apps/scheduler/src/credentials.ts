@@ -484,6 +484,31 @@ export function validateCredentialCompatibility(agentCli: string, provider: stri
   return null;
 }
 
+export type CredentialAgentCliFollow =
+  | { action: "keep" }
+  | { action: "follow"; from: string; to: string }
+  | { action: "reject"; error: string };
+
+/**
+ * RoleConfig 保存时：凭据 `agent_cli` 跟随最新角色配置。
+ * provider 兼容则同步，不兼容才拒绝。
+ */
+export function planCredentialAgentCliFollow(input: {
+  roleAgentCli: string;
+  credentialAgentCli: string | null | undefined;
+  provider: string;
+}): CredentialAgentCliFollow {
+  const compatibilityError = validateCredentialCompatibility(input.roleAgentCli, input.provider);
+  if (compatibilityError) return { action: "reject", error: compatibilityError };
+  const current = typeof input.credentialAgentCli === "string" && input.credentialAgentCli
+    ? input.credentialAgentCli
+    : null;
+  if (current && current !== input.roleAgentCli) {
+    return { action: "follow", from: current, to: input.roleAgentCli };
+  }
+  return { action: "keep" };
+}
+
 export interface CredentialRuntimeConsumer {
   source: string;
   agentCli: string;
