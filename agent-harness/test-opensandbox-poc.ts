@@ -130,13 +130,13 @@ function runProdConfigCase(): string {
     if (/network_mode:\s*host|:latest\b/.test(rendered.stdout)) {
       throw new Error("OpenSandbox prod compose resolved host-network or latest");
     }
-    if (!/published:\s*"18080"/.test(rendered.stdout)) {
-      throw new Error("OpenSandbox prod compose must publish host 18080, not collide with web 8080");
+    if (!/published:\s*"18081"/.test(rendered.stdout)) {
+      throw new Error("OpenSandbox prod compose must publish host 18081, not collide with web 8080");
     }
     if (!rendered.stdout.includes("service_healthy") || !rendered.stdout.includes("/health")) {
       throw new Error("OpenSandbox prod compose missing health-gated scheduler dependency");
     }
-    return "merged=true provider=opensandbox pinned=true port=18080 healthy=true";
+    return "merged=true provider=opensandbox pinned=true port=18081 healthy=true";
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

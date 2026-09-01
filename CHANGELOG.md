@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 刷新治理 Agent CLI pin（#319）：Claude Code `2.1.231` → `2.1.252`，Pi Coding Agent `0.84.1` → `0.84.4`，DSH 完整 package closure `0.1.0-rc.7` → `0.1.1-rc.2`（npm `latest` 标签仍指向过期的 `0.0.1-rc.*`，不以该标签为准）。adapter、Base/Kali Dockerfile 与 runtime 清单同步更新 `dist.integrity`。本提交不重建或发布官方镜像。
+
 ## [0.2.1] - 2026-09-01
 
 ### 新增
