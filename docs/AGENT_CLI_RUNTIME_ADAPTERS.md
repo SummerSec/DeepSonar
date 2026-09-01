@@ -34,18 +34,18 @@ The current registry contains:
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.231 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
+| `claude-code` | Claude Code 2.1.252 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
 | `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
 | `open-code` | OpenCode 1.18.18 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
-| `pi` | Pi Coding Agent 0.84.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
-| `dsh` | DeepSeek Harness 0.1.0-rc.7 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（Code Mode `run_code`） | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
+| `pi` | Pi Coding Agent 0.84.4 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
+| `dsh` | DeepSeek Harness 0.1.1-rc.2 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（Code Mode `run_code`） | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
 
 五个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
 只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
 每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。DSH 的 `dsh_task_mode` 不是 JSON-RPC 初始化参数：适配器在 Job 启动前按冻结值物化 Cordis composition，`standard` 配置 `dsh-tools mode: native`，`ptc` 配置 `mode: code` 并挂载 `@deepseek-ai/dsh-code-runtime-worker-thread`。LLM composition 固定使用官方 `@deepseek-ai/dsh-llm-pi-ai`；Credential 中的 Provider YAML 按官方 `settings.yaml` 结构保存 `llm-pi-ai.providers` 与 `agent-default-model`，可声明任意安全 route 及单一 OpenAI/Anthropic 兼容 profile。DSH 默认强度只能是 Pi-AI 规范档位，模型 `reasoningEfforts` 把规范档位映射为第三方 wire value。Job 冻结 route/model/Provider-owned `reasoning` 后，运行时将 profile 强制投影到 Job Model Gateway，并以该 route/model 调用 JSON-RPC `initialize`；沙箱只得到短期 `DEEPSONAR_GATEWAY_TOKEN`。Base/Audit/Kali 镜像同时安装按 Git commit 与 tarball SHA-256 固定的 MIT 插件 `dsh-reasoning-settings@0.3.0`；生成的无 UI Cordis composition 只挂载其 host 部分，为已配置的单 route/model 提供 Subagent 按次选择和思考强度继承，不引入 Web client。相关官方 npm 包按版本与 integrity 固定。DSH 动态 Skill 物化到 `${DSH_HOME}/skills/<name>/SKILL.md`，由 `dsh-skill-filesystem` 发现并通过 `dsh-tool-skill` 按需加载；平台内置 `deepsonar-control` Skill 走同一路径。
 
 Cordis 字段必须按镜像中钉死版本的插件 Schema 生成，不能用布尔“启用”猜测配置形态。当前
-完整 DSH package closure 统一固定为 `0.1.0-rc.7`，避免 prerelease peer range 混装。`@deepseek-ai/dsh-agent-spine-demo` 的 `toolBash` 是
+完整 DSH package closure 统一固定为 `0.1.1-rc.2`，避免 prerelease peer range 混装。`@deepseek-ai/dsh-agent-spine-demo` 的 `toolBash` 是
 `false | @deepseek-ai/dsh-tool-bash.Config`；平台传入对象并只允许 spine 挂载一次 bash，
 不得生成非法的 `toolBash: true` 或再独立注册同一工具。bash executor 的 subprocess 服务由
 固定 integrity 的 `@deepseek-ai/dsh-subprocess-local` 显式提供，`timeoutMs` 归 executor 配置。
@@ -118,7 +118,7 @@ never infers or fabricates reasoning from ordinary text, tool output, or
 terminal lines. If the selected CLI/model does not emit a supported reasoning
 event, the live and archived stream simply contains no reasoning block.
 
-Claude partial frames are enabled only for the pinned 2.1.231 governed minimum
+Claude partial frames are enabled only for the pinned 2.1.252 governed minimum
 above. `content_block_delta` `thinking_delta`/`text_delta` frames are
 normalized to `reasoning.delta`/`text.delta`; the later complete assistant
 message remains accepted for compatibility but is de-duplicated against those
@@ -170,7 +170,7 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 
 项目 `.pi` 目录不会自动加载。RoleConfig 只能冻结受治理的 `.pi/agent/extensions/` 文件；
 默认保留 `--no-extensions`，批准的扩展才通过单独的 `--extension` 参数加载。运行镜像清单
-和 Dockerfile 固定 `@earendil-works/pi-coding-agent@0.84.1` 及其 integrity，构建阶段会
+和 Dockerfile 固定 `@earendil-works/pi-coding-agent@0.84.4` 及其 integrity，构建阶段会
 实际查询 npm integrity 并在不匹配时失败。
 
 ## Verification

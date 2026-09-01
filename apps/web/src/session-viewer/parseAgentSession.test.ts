@@ -401,7 +401,7 @@ test("normalizes canvas broadcasts across Pi and DSH persisted messages", () => 
   }
 });
 
-test("parses Pi 0.84.1 persisted messages in block order", () => {
+test("parses Pi 0.84.4 persisted messages in block order", () => {
   const text = [
     JSON.stringify({ type: "session", id: "pi-session" }),
     JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "prompt" }] } }),

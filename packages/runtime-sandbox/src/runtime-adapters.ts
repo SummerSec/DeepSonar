@@ -631,11 +631,11 @@ function sandboxClaude(
 
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
-  version: "2.1.231",
+  version: "2.1.252",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  // Claude Code 2.1.231 is the governed pin (npm latest). That
+  // Claude Code 2.1.252 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
   // an adapter whose pinned minimum does not support it.
   start: (context) => sandboxClaude(context.host, context),
@@ -864,7 +864,7 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
 
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
-  version: "0.84.1",
+  version: "0.84.4",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
@@ -1109,7 +1109,7 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
 
 const dsh = Object.freeze<RuntimeAdapter>({
   id: "dsh",
-  version: "0.1.0-rc.7",
+  version: "0.1.1-rc.2",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
