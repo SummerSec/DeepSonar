@@ -7,7 +7,7 @@ type SnapshotDb = ((strings: TemplateStringsArray, ...values: unknown[]) => Prom
   json?: (value: unknown) => unknown;
 };
 
-const { resolveAgentSnapshotForJob } = await import("./application.js");
+const { resolveAgentSnapshotForJob, SnapshotUnresolvableError } = await import("./application.js");
 
 function snapshotDb(input: {
   projectConfig?: unknown;
@@ -89,4 +89,50 @@ test("inherit_global leftover project RoleConfig.model does not steal snapshot m
     assert.equal(snapshot.upstream_model, "grok-4.6", `upstream_model under ${JSON.stringify(projectConfig)}`);
     assert.equal(snapshot.agent_cli, "claude-code");
   }
+});
+
+test("RoleConfig agent_cli=pi vs credential agent_cli=claude-code with settings is SnapshotUnresolvableError", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "pi",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-claude",
+    name: "claude",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: "project-1",
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "sonnet" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: { image_strategy: "project_managed" },
+        projectCfg,
+        globalCfg: undefined,
+        credential,
+      }),
+      "project-1",
+      "audit",
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      assert.match(error.message, /Credential cred-claude 绑定 agent_cli=claude-code，与角色 pi 不匹配/);
+      assert.deepEqual([...error.stale_fields], ["current_snapshot_unresolvable"]);
+      return true;
+    },
+  );
 });

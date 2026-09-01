@@ -94,6 +94,17 @@ test("normal createJob validates the frozen canvas policy before insertion", () 
   assert.ok(localGate >= 0 && localGate < insert, "createJob must inspect the frozen digest before INSERT");
 });
 
+test("resume-session Hub force-wake and retry map unresolvable snapshots to SNAPSHOT_STALE", () => {
+  const resume = projectTaskSource.slice(projectTaskSource.indexOf('app.post("/tasks/:canvasId/resume-session"'));
+  const wake = resume.slice(resume.indexOf("无可恢复 Job"));
+  assert.match(wake, /maybeTriggerHub/);
+  assert.match(wake, /isSnapshotUnresolvableError/);
+  assert.match(wake, /currentSnapshotUnresolvableBody/);
+  const retry = projectTaskSource.slice(projectTaskSource.indexOf('app.post("/tasks/:canvasId/retry"'));
+  assert.match(retry, /isSnapshotUnresolvableError/);
+  assert.match(retry, /currentSnapshotUnresolvableBody/);
+});
+
 test("retry validates the locked canvas policy before destructive reset and insertion", () => {
   const retry = projectTaskSource.slice(projectTaskSource.indexOf('app.post("/tasks/:canvasId/retry"'));
   const guard = retry.indexOf("freezeAgentSnapshotNetworkPolicy");

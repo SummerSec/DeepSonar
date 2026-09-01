@@ -886,12 +886,19 @@ const OPS: Op[] = [
     path: "/tasks/{canvasId}/resume-session",
     summary: "继续任务：优先使用旧冻结快照批量重跑启动中断 Worker（同 Job ID、新 Attempt）",
     description:
-      "画布无活动 Job 时，先将全部启动中断的 role Worker 原地重新入队；旧 Attempt 与 unknown/never effect 保留且不自动重放。批次或单 Job 中任一冻结快照相对当前受治理身份过期时返回 409 SNAPSHOT_STALE 与 job_ids，不会静默使用旧模型；调用方应逐 Job 使用 rerun-current。无中断批次时才恢复单个可恢复 Job或唤醒 Hub。",
+      "画布无活动 Job 时，先将全部启动中断的 role Worker 原地重新入队；旧 Attempt 与 unknown/never effect 保留且不自动重放。批次或单 Job 中任一冻结快照相对当前受治理身份过期时返回 409 SNAPSHOT_STALE 与 job_ids，不会静默使用旧模型；调用方应逐 Job 使用 rerun-current。无中断批次时才恢复单个可恢复 Job或唤醒 Hub。唤醒 Hub 时若当前 RoleConfig/Credential 无法解析，同样返回 409 SNAPSHOT_STALE。",
     scope: "jobs:control",
     tags: ["Tasks"],
     responses: { "200": TaskResumeResponseSchema },
   },
-  { method: "post", path: "/tasks/{canvasId}/retry", summary: "重试任务（清空历史后从意图重跑）", scope: "jobs:control", tags: ["Tasks"] },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/retry",
+    summary: "重试任务（清空历史后从意图重跑）",
+    description: "清空本画布运行数据后按当前 RoleConfig/Credential 重冻入口 Hub。当前配置无法解析时返回 409 SNAPSHOT_STALE 且不清空现有数据。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
   {
     method: "patch",
     path: "/tasks/{canvasId}",

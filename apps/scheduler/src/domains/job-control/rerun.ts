@@ -13,12 +13,14 @@ import {
 } from "../job-lifecycle/index.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
+  SnapshotUnresolvableError,
 } from "../role-runtime-snapshot/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { assertFrozenRuntimeImageLocal } from "../../runtime-images.js";
 
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 export const JOB_NOT_RESUMABLE = "JOB_NOT_RESUMABLE" as const;
+export { SnapshotUnresolvableError };
 
 type SnapshotObject = Record<string, unknown>;
 
@@ -109,6 +111,24 @@ export function snapshotIdentityDrift(oldSnapshot: unknown, currentSnapshot: unk
 function safeResolutionError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 500) || "current snapshot resolution failed";
+}
+
+export function isSnapshotUnresolvableError(error: unknown): error is SnapshotUnresolvableError {
+  for (let current: unknown = error; current; current = current instanceof Error ? current.cause : undefined) {
+    if (current instanceof SnapshotUnresolvableError) return true;
+    if (current instanceof Error && current.name === "SnapshotUnresolvableError") return true;
+  }
+  return false;
+}
+
+export function currentSnapshotUnresolvableBody(error: unknown) {
+  return {
+    error: "当前受治理运行配置无法解析；请修复 RoleConfig、Credential 或运行镜像配置后重试",
+    error_code: SNAPSHOT_STALE,
+    stale_fields: ["current_snapshot_unresolvable"],
+    resolution_error: safeResolutionError(error),
+    next_action: "fix-current-configuration" as const,
+  };
 }
 
 export async function frozenSnapshotStaleDetail(

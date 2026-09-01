@@ -28,6 +28,7 @@ import { projectContextDiagnostics } from "../context/index.js";
 import {
   JOB_NOT_RESUMABLE,
   SNAPSHOT_STALE,
+  currentSnapshotUnresolvableBody,
   requeueJob,
   type RequeueJobResult,
 } from "./rerun.js";
@@ -64,17 +65,19 @@ function sendRequeueError(
   }
   const currentUnresolvable = Boolean(result.detail.resolution_error)
     || result.detail.stale_fields.includes("current_snapshot_unresolvable");
+  if (currentUnresolvable) {
+    return reply.code(409).send({
+      ...currentSnapshotUnresolvableBody(result.detail.resolution_error ?? "current snapshot resolution failed"),
+      job_ids: [result.detail.job_id],
+      stale_fields: result.detail.stale_fields,
+    });
+  }
   return reply.code(409).send({
-    error: currentUnresolvable
-      ? "当前受治理运行配置无法解析；请修复 RoleConfig、Credential 或运行镜像配置后重试"
-      : "冻结快照已不是当前受治理运行身份；请调用 POST /jobs/:id/rerun-current 按当前配置重新执行",
+    error: "冻结快照已不是当前受治理运行身份；请调用 POST /jobs/:id/rerun-current 按当前配置重新执行",
     error_code: SNAPSHOT_STALE,
     job_ids: [result.detail.job_id],
     stale_fields: result.detail.stale_fields,
-    ...(result.detail.resolution_error ? { resolution_error: result.detail.resolution_error } : {}),
-    next_action: currentUnresolvable || mode === "rerun-current"
-      ? "fix-current-configuration"
-      : "rerun-current",
+    next_action: mode === "rerun-current" ? "fix-current-configuration" : "rerun-current",
   });
 }
 

@@ -162,7 +162,9 @@ Canvas→Job 行锁顺序，复用 `resolveAgentSnapshotForJob`、任务网络�
 payload/parent/canvas、Intent/Fact/Finding 及旧 Attempt/effect；waiting_human 的旧活动
 Attempt 收口为 interrupted，未确认 effect 保持 unknown，绝不跨沙箱续接 Session。
 任务 `resume-session` 的启动中断批次与单 Job 默认沿用旧快照；任一 stale 时整批无副作用
-拒绝并返回完整 `job_ids`，由操作者逐 Job 选择 `rerun-current`。
+拒绝并返回完整 `job_ids`，由操作者逐 Job 选择 `rerun-current`。无可恢复 Job 时强制唤醒
+Hub，以及 `POST /tasks/:id/retry` 解析当前 Hub 快照，若当前配置无法解析，同样返回
+`409 SNAPSHOT_STALE`（`next_action=fix-current-configuration`），不得 500。
 
 Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否的周期 desired-state 对账。sandbox destroy 先走 provider SDK 删除，但最终必须按容器 ID 执行单次 120 秒、最多 5 次的指数退避 force remove；只有 Docker 明确返回 no-such 才是幂等成功，其他错误必须抛给调用方并计指标。启动 reconcile 和 Reaper 运行期都从 DB 的 `claimed/provisioning/running` Job 与 active Attempt 推导应保留集合，不增加清理表；容器只接受同时具有 canonical UUID `deepsonar.job` / `deepsonar.attempt` 的双标签，卷只接受严格 `deepsonar-assets-<canonical Job UUID>` 名称并复核 local driver/scope 与可选受管标签。对账防重入，失败资源留到下一轮继续重试。任何 broad prune、仅凭模糊前缀删除容器或删除非 DeepSonar 资源均被禁止。
 
@@ -462,7 +464,7 @@ Job 事件仍必须经过本摄入硬门。
 - `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
 - `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入（未否定处置，含未确认）的 `seed_finding_ids`
 - `POST /tasks/{canvas_id}/pause` / `start`  幂等任务执行门禁（`jobs:control`）；返回 `execution_state`、收尾 `active_count`、`pending_count` 与 `changed`
-- `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据
+- `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据；当前 Hub 配置无法解析时返回 `409 SNAPSHOT_STALE` 且不清空
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
 - `PUT/DELETE /projects/{id}/integrations/plane`、`POST .../plane/sync`  Plane 绑定/解绑/手动补跑
 - `POST /projects/sync`  绑定 Plane 项目（兼容入口；画布随任务认领铸造）
