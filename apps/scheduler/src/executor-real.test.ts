@@ -121,7 +121,7 @@ test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () 
   assert.match(source, /OPENAI_API_KEY/);
   assert.match(source, /DEEPSEEK_API_KEY/);
   assert.match(source, /needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E/);
-  assert.match(source, /vendor CLI E2E requires all five CLIs/);
+  assert.match(source, /vendor CLI E2E requires all current CLIs/);
   assert.match(source, /vendor CLI E2E incomplete/);
   assert.match(source, /vendor CLI E2E needs host docker access for Gateway bind/);
   assert.match(source, /assertVendorUpstreamPayload/);
@@ -146,7 +146,8 @@ test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () 
   assert.match(source, /qualifyPiModelRef/);
   assert.match(source, /encodeGetState/);
   assert.match(source, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
-  assert.match(source, /deepsonar\/\$\{plan\.model\}/);
+  assert.match(source, /const vendorCliIds = \["claude-code", "pi", "dsh"\] as const/);
+  assert.doesNotMatch(source, /["']codex["']|["']open-code["']/);
   assert.match(source, /network: "restricted"/);
   assert.match(source, /DEEPSONAR_ALLOW_EGRESS: "0"/);
   assert.doesNotMatch(source, /network: "egress"/);
