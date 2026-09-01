@@ -24,6 +24,8 @@ test("RoleConfig validation and Credential PATCH share the advisory/row-lock bou
   assert.match(validation, /FROM credentials WHERE id = \$\{c\.credential_id\} FOR UPDATE/);
   assert.doesNotMatch(validation, /model_catalog/);
   assert.doesNotMatch(validation, /discoverModelCatalog|listCredentialModels/);
+  assert.doesNotMatch(validation, /配置文件属于/);
+  assert.match(roleConfigRoutesSource, /SET agent_cli = \$\{body\.agent_cli\}/);
 
   const credentialPatchStart = credentialRoutesSource.indexOf('app.patch("/credentials/:id"');
   const credentialPatchEnd = credentialRoutesSource.indexOf('app.post("/credentials/:id/rotate"', credentialPatchStart);

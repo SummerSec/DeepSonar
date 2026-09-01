@@ -515,9 +515,8 @@ export function validateCredentialRuntimeMutation(input: {
 }): string | null {
   if (!isProviderKnown(input.provider)) return UNKNOWN_PROVIDER_ERROR;
   for (const consumer of input.consumers) {
-    if (input.credentialAgentCli && input.credentialAgentCli !== consumer.agentCli) {
-      return `${consumer.source} 使用 ${consumer.agentCli}，不能绑定 ${input.credentialAgentCli} 配置文件`;
-    }
+    // Credential.agent_cli is a soft hint. A single Provider account may serve
+    // every CLI in the compatibility matrix; Job identity follows RoleConfig.
     const compatibilityError = validateCredentialCompatibility(consumer.agentCli, input.provider);
     if (compatibilityError) return `${consumer.source} 不兼容：${compatibilityError}`;
     if (input.projectId && consumer.projectId !== input.projectId) {

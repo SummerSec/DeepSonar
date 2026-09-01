@@ -91,7 +91,7 @@ test("inherit_global leftover project RoleConfig.model does not steal snapshot m
   }
 });
 
-test("RoleConfig agent_cli=pi vs credential agent_cli=claude-code with settings is SnapshotUnresolvableError", async () => {
+test("凭据 agent_cli 与角色不一致但 Provider 兼容时按角色解析", async () => {
   const projectCfg = {
     id: "project-hub-cfg",
     project_id: "project-1",
@@ -107,13 +107,53 @@ test("RoleConfig agent_cli=pi vs credential agent_cli=claude-code with settings 
     subagents_json: [],
   };
   const credential = {
-    id: "cred-claude",
-    name: "claude",
+    id: "cred-local",
+    name: "local",
     provider: "anthropic",
     status: "active",
-    cred_project_id: "project-1",
+    cred_project_id: null,
     agent_cli: "claude-code",
-    settings_config_json: { env: { ANTHROPIC_MODEL: "sonnet" } },
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({
+      projectConfig: { image_strategy: "project_managed" },
+      projectCfg,
+      globalCfg: undefined,
+      credential,
+    }),
+    "project-1",
+    "audit",
+  );
+  assert.equal(snapshot.agent_cli, "pi");
+  assert.equal(snapshot.credential_id, "cred-local");
+});
+
+test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "openai",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "pi",
+    settings_config_json: { env: { OPENAI_MODEL: "grok-4.6" } },
     meta_json: {},
     public_metadata_json: {},
   };
@@ -130,8 +170,7 @@ test("RoleConfig agent_cli=pi vs credential agent_cli=claude-code with settings 
     ),
     (error: unknown) => {
       assert.ok(error instanceof SnapshotUnresolvableError);
-      assert.match(error.message, /Credential cred-claude 绑定 agent_cli=claude-code，与角色 pi 不匹配/);
-      assert.deepEqual([...error.stale_fields], ["current_snapshot_unresolvable"]);
+      assert.match(error.message, /agent_cli claude-code 仅兼容 anthropic，不能使用 provider openai/);
       return true;
     },
   );

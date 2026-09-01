@@ -339,6 +339,24 @@ test("real preflight accepts a bare immutable digest from the runtime resolver",
   assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_DIGEST_INVALID"), false);
 });
 
+test("real preflight treats compatible credential CLI drift as attention, not fail", () => {
+  const result = evaluateReadiness(baseInput({
+    roles: baseInput().roles.map((role) => role.name === "audit"
+      ? { ...role, project_agent_cli: "pi" }
+      : role),
+    credentials: baseInput().credentials?.map((credential) => ({
+      ...credential,
+      agent_cli: "claude-code",
+      settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    })),
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_CLI_INCOMPATIBLE"), false);
+  const hint = result.checks.find((check) => check.code === "CREDENTIAL_CLI_HINT_DRIFT" && check.role?.name === "audit");
+  assert.ok(hint);
+  assert.equal(hint?.state, "attention");
+});
+
 test("real preflight fails closed for CLI/provider and untrusted image mismatches", () => {
   const input = baseInput({
     roles: baseInput().roles.map((role) => role.name === "audit"

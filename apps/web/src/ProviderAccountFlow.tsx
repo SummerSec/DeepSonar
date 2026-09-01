@@ -426,7 +426,6 @@ export function ProviderAccountFlow({
 
   const incompatibleRoles = selectedRoles.filter((roleConfig) => {
     if (bindingGateReason) return true;
-    if (selectedCredential?.agent_cli && roleConfig.agent_cli !== selectedCredential.agent_cli) return true;
     if (!targetCatalog || !targetCatalog.compatible_agent_cli.includes(roleConfig.agent_cli)) return true;
     return false;
   });
@@ -1391,10 +1390,8 @@ export function ProviderAccountFlow({
                     : "claude-code") as AgentCli;
                   const incompatible = Boolean(
                     selectedCredential
-                    && (
-                      (selectedCredential.agent_cli && roleCli !== selectedCredential.agent_cli)
-                      || (targetCatalog && !targetCatalog.compatible_agent_cli.includes(roleCli))
-                    ),
+                    && targetCatalog
+                    && !targetCatalog.compatible_agent_cli.includes(roleCli),
                   );
                   const boundCredential = credentials.find((credential) => credential.id === roleConfig.credential_id) ?? null;
                   const modelCredential = roleConfig.credential_id ? boundCredential : selectedCredential;
@@ -1553,16 +1550,14 @@ export function ProviderAccountFlow({
                             !roleConfig.can_bind
                               ? "全局角色配置可见，但项目操作者只能绑定本项目角色配置"
                               : incompatible
-                                ? selectedCredential?.agent_cli
-                                  ? `角色 CLI 与账号目标 CLI（${cliLabel[selectedCredential.agent_cli] ?? selectedCredential.agent_cli}）不一致，请先改 CLI 再勾选绑定`
-                                  : `请选择与 ${cliLabel[roleCli] ?? roleCli} 兼容的 Provider`
+                                ? `请选择与 ${cliLabel[roleCli] ?? roleCli} 兼容的 Provider`
                                 : boundCredentialLabel(roleConfig, selectedCredential?.id ?? null)
                           }
                         >
                           {!roleConfig.can_bind
                             ? "只读 · 项目作用域"
                             : incompatible
-                              ? "CLI 不匹配 · 可改 CLI"
+                              ? "Provider 不兼容 · 可改 CLI"
                               : boundCredentialLabel(roleConfig, selectedCredential?.id ?? null)}
                         </span>
                         <span className="provider-flow-role-model" title={roleModelLabel(roleConfig, modelCredential)}>

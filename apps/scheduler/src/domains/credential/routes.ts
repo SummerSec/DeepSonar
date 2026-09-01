@@ -582,9 +582,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         if (compatibilityError) {
           return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${compatibilityError}`, body.credential_id, "choose_model", configId);
         }
-        if (target.agent_cli && target.agent_cli !== configRow.agent_cli) {
-          return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: Credential 配置文件属于 ${target.agent_cli}，不能绑定到 ${configRow.agent_cli}`, body.credential_id, "choose_model", configId);
-        }
         let providerSnapshot: ProviderRuntimeSnapshotProjection;
         try {
           providerSnapshot = projectProviderRuntimeSnapshot({
@@ -1431,8 +1428,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       settingsConfig: cred.settings_config_json,
     });
     const compatibilityError = validateCredentialCompatibility(agentCli, String(cred.provider));
-    const profileCliError = cred.agent_cli && cred.agent_cli !== agentCli
-      ? `Credential 配置文件属于 ${cred.agent_cli}，不能绑定到 ${agentCli}`
+    const profileCliWarning = cred.agent_cli && cred.agent_cli !== agentCli
+      ? `Credential 配置文件属于 ${cred.agent_cli}，角色当前为 ${agentCli}；兼容性以 Provider 矩阵为准`
       : null;
     return {
       credential_id: id,
@@ -1441,8 +1438,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       model: requestedModel,
       upstream_model: model,
       model_source: query.model ? "role_override" : model ? "credential_settings" : "none",
-      compatible: !compatibilityError && !profileCliError,
-      error: compatibilityError ?? profileCliError,
+      compatible: !compatibilityError,
+      error: compatibilityError,
+      warning: profileCliWarning,
     };
   });
 

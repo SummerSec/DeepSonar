@@ -387,6 +387,7 @@ const ROLE_CONFIG_FIX_CODES = new Set([
   "CREDENTIAL_MISSING_FAKE",
   "CREDENTIAL_SCOPE_MISMATCH",
   "CREDENTIAL_CLI_INCOMPATIBLE",
+  "CREDENTIAL_CLI_HINT_DRIFT",
   "CREDENTIAL_KIND_INCOMPATIBLE",
 ]);
 
@@ -600,11 +601,15 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         ));
       } else {
         const compatibility = validateCredentialCompatibility(role.agentCli ?? "", String(binding.provider));
-        const profileCompatibility = binding.agent_cli && binding.agent_cli !== role.agentCli
-          ? `Credential 配置文件属于 ${binding.agent_cli}，不能绑定到 ${role.agentCli}`
-          : null;
-        if (compatibility || profileCompatibility) {
-          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility ?? profileCompatibility!, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
+        if (compatibility) {
+          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
+        } else if (binding.agent_cli && binding.agent_cli !== role.agentCli) {
+          checks.push(attention(
+            "CREDENTIAL_CLI_HINT_DRIFT",
+            `${role.name} 的 Credential 配置文件属于 ${binding.agent_cli}，角色当前为 ${role.agentCli}；解析以角色配置为准。`,
+            roleConfigFix(input.scope),
+            { role: summary, credential: credentialRef },
+          ));
         }
       }
       if (binding.status !== "active") {

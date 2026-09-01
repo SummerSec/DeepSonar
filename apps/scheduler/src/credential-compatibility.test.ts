@@ -91,7 +91,34 @@ test("Credential 配置文件 CLI 变更不能破坏已有角色绑定", () => {
       model: null,
       projectId: null,
     }],
-  }) ?? "", /RoleConfig role-1.*claude-code.*codex/);
+  }) ?? "", /RoleConfig role-1.*不兼容.*claude-code/);
+});
+
+test("同一凭据可服务 Provider 矩阵内的多个 CLI", () => {
+  assert.equal(validateCredentialRuntimeMutation({
+    provider: "anthropic",
+    projectId: null,
+    metadata: {},
+    settingsConfig: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    credentialAgentCli: "claude-code",
+    consumers: [{
+      source: "RoleConfig hub",
+      agentCli: "pi",
+      model: null,
+      projectId: null,
+    }],
+  }), null);
+  assert.equal(validateCredentialRoleConfigBinding({
+    source: "RoleConfig imported-role",
+    purpose: "llm",
+    agentCli: "pi",
+    model: null,
+    credentialProjectId: "project-1",
+    roleConfigProjectId: "project-1",
+    provider: "anthropic",
+    metadata: {},
+    credentialAgentCli: "claude-code",
+  }), null);
 });
 
 test("RoleConfig 导入绑定复用项目作用域与 provider 校验", () => {

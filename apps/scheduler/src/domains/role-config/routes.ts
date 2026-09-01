@@ -131,9 +131,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       if (c.purpose === "llm") {
         const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(cred.provider ?? ""));
         if (compatibilityError) return compatibilityError;
-        if (cred.agent_cli && cred.agent_cli !== body.agent_cli) {
-          return `Credential ${c.credential_id} 的配置文件属于 ${cred.agent_cli}，不能绑定到 ${body.agent_cli} 角色`;
-        }
       }
     }
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;
@@ -195,6 +192,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       await tx`
         INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
         ON CONFLICT DO NOTHING`;
+      if (c.purpose === "llm") {
+        await tx`
+          UPDATE credentials
+          SET agent_cli = ${body.agent_cli}
+          WHERE id = ${c.credential_id}
+            AND (agent_cli IS NULL OR agent_cli IS DISTINCT FROM ${body.agent_cli})`;
+      }
     }
     await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
     for (const f of body.config_files) {
@@ -314,35 +318,55 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         });
       }
     }
-    const [binding] = await sql`
-      SELECT c.provider, c.kind
-      FROM role_credentials rcb
-      JOIN credentials c ON c.id = rcb.credential_id
-      WHERE rcb.role_config_id = ${id} AND rcb.purpose = 'llm'
-      LIMIT 1`;
-    if (binding) {
-      const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(binding.provider ?? ""));
-      if (compatibilityError) {
-        return reply.code(409).send({ error: compatibilityError, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
+    const updated = await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      const [binding] = await tx`
+        SELECT c.id, c.provider, c.kind, c.agent_cli
+        FROM role_credentials rcb
+        JOIN credentials c ON c.id = rcb.credential_id
+        WHERE rcb.role_config_id = ${id} AND rcb.purpose = 'llm'
+        LIMIT 1
+        FOR UPDATE OF c`;
+      if (binding) {
+        const compatibilityError = validateCredentialCompatibility(body.agent_cli, String(binding.provider ?? ""));
+        if (compatibilityError) {
+          return { error: compatibilityError };
+        }
+        if (binding.agent_cli !== body.agent_cli) {
+          await tx`
+            UPDATE credentials
+            SET agent_cli = ${body.agent_cli}
+            WHERE id = ${binding.id as string}`;
+        }
       }
+      const [next] = await tx`
+        UPDATE role_configs
+        SET agent_cli = ${body.agent_cli}, version = version + 1, updated_at = now()
+        WHERE id = ${id}
+        RETURNING id, agent_cli, version, project_id, role_id`;
+      return { row: next, synced_credential_id: binding ? String(binding.id) : null };
+    });
+    if ("error" in updated) {
+      return reply.code(409).send({ error: updated.error, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
     }
-    const [updated] = await sql`
-      UPDATE role_configs
-      SET agent_cli = ${body.agent_cli}, version = version + 1, updated_at = now()
-      WHERE id = ${id}
-      RETURNING id, agent_cli, version, project_id, role_id`;
     await audit(req, {
       action: "role_config.agent_cli",
       resourceType: "role_config",
       resourceId: id,
-      after: { agent_cli: body.agent_cli, role: row.role_name, project_id: row.project_id },
+      after: {
+        agent_cli: body.agent_cli,
+        role: row.role_name,
+        project_id: row.project_id,
+        synced_credential_id: updated.synced_credential_id,
+      },
     });
     return {
-      id: updated.id,
-      agent_cli: updated.agent_cli,
-      version: updated.version,
-      role_id: updated.role_id,
-      project_id: updated.project_id,
+      id: updated.row.id,
+      agent_cli: updated.row.agent_cli,
+      version: updated.row.version,
+      role_id: updated.row.role_id,
+      project_id: updated.row.project_id,
     };
   });
 

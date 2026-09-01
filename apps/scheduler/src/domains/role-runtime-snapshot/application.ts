@@ -11,7 +11,6 @@ import {
 } from "../../credentials.js";
 import {
   hasProviderSettingsConfig,
-  isProviderAgentCli,
   projectProviderRuntimeSnapshot,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
@@ -34,6 +33,7 @@ export type ReasoningEffort = ReasoningValue;
 
 export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
 export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
+export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 
 export const PROJECT_IMAGE_STRATEGIES = ["inherit_global", "project_managed"] as const;
 export type ProjectImageStrategy = (typeof PROJECT_IMAGE_STRATEGIES)[number];
@@ -198,7 +198,9 @@ async function resolveAgentSnapshotForJobUnchecked(
   const dshTaskMode = cfg?.dsh_task_mode === "ptc" ? "ptc" : "standard";
 
   const rawModules = cfg?.modules_json;
-  if (rawModules != null && !Array.isArray(rawModules)) throw new Error("RoleConfig.modules_json 必须是字符串数组");
+  if (rawModules != null && !Array.isArray(rawModules)) {
+    throw new Error("RoleConfig.modules_json 必须是字符串数组");
+  }
   const modules = (rawModules as string[] | undefined) ?? [];
   const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
   const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
@@ -238,19 +240,22 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (llm) {
     const provider = String(llm.provider ?? "");
     if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
-    // When a full settingsConfig profile is present, agent_cli on the credential
-    // (if set) must match the RoleConfig CLI; brand compatibility still applies
-    // as a soft gate for legacy rows without settingsConfig.
-    const profileCli = llm.agent_cli;
-    if (hasSettings && isProviderAgentCli(profileCli) && profileCli !== agentCli) {
-      throw new Error(`Credential ${llm.id} 绑定 agent_cli=${profileCli}，与角色 ${agentCli} 不匹配`);
+    // Credential.agent_cli is a hint. A full settingsConfig profile may serve
+    // every CLI the provider matrix allows; Job identity follows RoleConfig.
+    const profileCli = typeof llm.agent_cli === "string" ? llm.agent_cli : null;
+    if (hasSettings && profileCli && profileCli !== agentCli) {
+      console.warn(`[role-config] Credential ${llm.id} agent_cli=${profileCli} 与角色 ${agentCli} 不一致，已按角色配置解析`);
     }
     const compatibilityError = validateCredentialCompatibility(agentCli, provider);
     if (compatibilityError) throw new Error(compatibilityError);
     const credProject = (llm.cred_project_id as string | null) ?? null;
-    if (cfg?.project_id != null && credProject && credProject !== projectId) throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
+    if (cfg?.project_id != null && credProject && credProject !== projectId) {
+      throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
+    }
     if (cfg?.project_id == null && credProject) throw new Error("全局 RoleConfig 只能绑定全局 Credential");
-    if ((llm.status as string) !== "active") throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
+    if ((llm.status as string) !== "active") {
+      throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
+    }
   }
   const roleKind = role.kind as "role" | "hub" | "system";
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});
@@ -259,7 +264,12 @@ async function resolveAgentSnapshotForJobUnchecked(
     : null;
   const runtimeImageKey = runtimeImageKeyForProjectPolicy(projectImagePolicy, roleName, globalRuntimeImageKey);
   const runtimeImage = await resolveRuntimeImageForJob(db as never, projectId, roleName, runtimeImageKey);
-  const runtimeAdapter = requireAgentCliRuntimeAdapter(agentCli, runtimeImage.image_key);
+  let runtimeAdapter;
+  try {
+    runtimeAdapter = requireAgentCliRuntimeAdapter(agentCli, runtimeImage.image_key);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error));
+  }
   const sandboxOverride = parseSandboxLimitsOverride(cfg?.sandbox_limits_json);
   if (!cfg?.project_id && Object.keys(sandboxOverride).length > 0) {
     throw new Error("global RoleConfig cannot set sandbox resource overrides");
