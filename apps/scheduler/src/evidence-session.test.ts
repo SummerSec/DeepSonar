@@ -48,3 +48,35 @@ test("session artifacts list main and subagent, default to main, and reject unkn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("default session is the last main in manifest order, not path sort", async () => {
+  const laterJob = "00000000-0000-0000-0000-000000000189";
+  const root = path.join(config.storage.blobDir, "jobs", laterJob);
+  const older = new JobEvidenceWriter(laterJob, "claude-code", "zzz-old");
+  older.setSession({
+    cli: "claude-code",
+    sessionId: "old",
+    artifacts: [
+      { name: "old.jsonl", sourcePath: "/tmp/old.jsonl", content: '{"type":"user","message":{"role":"user","content":"old"}}\n', kind: "main" },
+    ],
+  });
+  await older.finalize();
+  const newer = new JobEvidenceWriter(laterJob, "claude-code", "aaa-new");
+  newer.setSession({
+    cli: "claude-code",
+    sessionId: "new",
+    artifacts: [
+      { name: "new.jsonl", sourcePath: "/tmp/new.jsonl", content: '{"type":"user","message":{"role":"user","content":"new"}}\n', kind: "main" },
+    ],
+  });
+  try {
+    await newer.finalize();
+    const selected = await readSessionArtifact(laterJob);
+    assert.equal(selected?.meta.name, "new.jsonl");
+    assert.match(selected?.content.toString("utf8") ?? "", /"new"/);
+    assert.ok(selected?.meta.path.includes("aaa-new"));
+    assert.deepEqual(selected?.artifacts.map((file) => file.name), ["new.jsonl", "old.jsonl"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

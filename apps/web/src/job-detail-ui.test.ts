@@ -72,6 +72,8 @@ test("Session 页可切换并下载所选归档", () => {
   assert.match(panel, /artifacts=\{session\.artifacts \?\? \[session\.meta\]\}/);
   assert.match(panel, /onSelectArtifact=/);
   assert.match(panel, /path: session\.meta\.path/);
+  assert.match(panel, /sessionSelectReq/);
+  assert.match(panel, /if \(req !== sessionSelectReq\.current\) return/);
 });
 
 test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => {

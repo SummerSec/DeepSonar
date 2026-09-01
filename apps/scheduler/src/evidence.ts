@@ -357,12 +357,15 @@ export function isSessionArtifact(file: Pick<EvidenceFileMeta, "kind">): boolean
 }
 
 export function listSessionArtifacts(manifest: JobEvidenceManifest | null | undefined): EvidenceFileMeta[] {
-  return [...(manifest?.files ?? [])]
-    .filter(isSessionArtifact)
-    .sort((left, right) => {
-      const rank = (kind: EvidenceFileMeta["kind"]) => kind === "subagent" ? 1 : 0;
-      return rank(left.kind) - rank(right.kind) || left.path.localeCompare(right.path);
-    });
+  return (manifest?.files ?? []).filter(isSessionArtifact);
+}
+
+/** 下拉展示：主会话 / vendor 在前，不改变默认选用哪一份。 */
+export function sortSessionArtifacts(artifacts: readonly EvidenceFileMeta[]): EvidenceFileMeta[] {
+  return [...artifacts].sort((left, right) => {
+    const rank = (kind: EvidenceFileMeta["kind"]) => kind === "subagent" ? 1 : 0;
+    return rank(left.kind) - rank(right.kind) || left.path.localeCompare(right.path);
+  });
 }
 
 function defaultSessionArtifact(artifacts: readonly EvidenceFileMeta[]): EvidenceFileMeta | undefined {
@@ -380,7 +383,7 @@ export async function readSessionArtifact(
     ? artifacts.find((file) => file.path === path)
     : defaultSessionArtifact(artifacts);
   if (!meta) return null;
-  return { meta, content: await readFile(resolveManifestFile(jobId, meta)), artifacts };
+  return { meta, content: await readFile(resolveManifestFile(jobId, meta)), artifacts: sortSessionArtifacts(artifacts) };
 }
 
 const MAX_STREAM_READ_BYTES = 8 * 1024 * 1024;

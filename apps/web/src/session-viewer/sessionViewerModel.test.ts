@@ -98,7 +98,15 @@ test("empty session and empty gateway produce no token usage", () => {
 });
 
 test("session artifact labels distinguish main and subagent files", () => {
-  assert.equal(sessionArtifactLabel({ kind: "main", name: "abc.jsonl" }), "主会话");
+  assert.equal(sessionArtifactLabel({ kind: "main", name: "abc.jsonl" }), "主会话 · abc.jsonl");
   assert.equal(sessionArtifactLabel({ kind: "subagent", name: "subagents/child.jsonl" }), "子代理 · child.jsonl");
-  assert.equal(sessionArtifactLabel({ kind: "vendor_export", name: "export.json" }), "Vendor 导出");
+  assert.equal(sessionArtifactLabel({ kind: "vendor_export", name: "export.json" }), "Vendor 导出 · export.json");
+  assert.equal(
+    sessionArtifactLabel({
+      kind: "main",
+      name: "abc.jsonl",
+      path: "attempts/a1b2c3d4-eeee/sessions/abc.jsonl",
+    }),
+    "主会话 · abc.jsonl · a1b2c3d4",
+  );
 });

@@ -188,6 +188,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const [expandedMessageIds, setExpandedMessageIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const sessionSelectReq = useRef(0);
   const [eventTypeFilter, setEventTypeFilter] = useState<string[]>([]);
   const [eventQuery, setEventQuery] = useState("");
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
@@ -981,10 +982,18 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   gatewayUsage={detail.usage}
                   downloadError={downloadError}
                   onSelectArtifact={(path) => {
+                    const req = ++sessionSelectReq.current;
                     setDownloadError(null);
                     api.jobSession(jobId, { path })
-                      .then((next) => { setSession(next); setSessionError(null); })
-                      .catch((cause) => setDownloadError(String(cause)));
+                      .then((next) => {
+                        if (req !== sessionSelectReq.current) return;
+                        setSession(next);
+                        setSessionError(null);
+                      })
+                      .catch((cause) => {
+                        if (req !== sessionSelectReq.current) return;
+                        setDownloadError(String(cause));
+                      });
                   }}
                   onDownload={() =>
                     api.downloadJobSession(jobId, {

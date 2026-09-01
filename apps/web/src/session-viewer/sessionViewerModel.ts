@@ -7,12 +7,11 @@ export type SessionArtifactMeta = {
   bytes: number;
 };
 
-export function sessionArtifactLabel(file: Pick<SessionArtifactMeta, "kind" | "name">): string {
-  if (file.kind === "subagent") {
-    const base = file.name.split("/").filter(Boolean).pop() ?? file.name;
-    return `子代理 · ${base}`;
-  }
-  return file.kind === "vendor_export" ? "Vendor 导出" : "主会话";
+export function sessionArtifactLabel(file: Pick<SessionArtifactMeta, "kind" | "name"> & { path?: string }): string {
+  const base = file.name.split("/").filter(Boolean).pop() ?? file.name;
+  const attempt = /(?:^|\/)attempts\/([^/]+)\//.exec(file.path ?? "")?.[1];
+  const kindLabel = file.kind === "subagent" ? "子代理" : file.kind === "vendor_export" ? "Vendor 导出" : "主会话";
+  return attempt ? `${kindLabel} · ${base} · ${attempt.slice(0, 8)}` : `${kindLabel} · ${base}`;
 }
 
 export type SessionTokenBucket = {
