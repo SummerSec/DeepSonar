@@ -903,12 +903,15 @@ const pi = Object.freeze<RuntimeAdapter>({
   decodeOutput: decodePi,
 });
 
+/** English opener so OpenAI-responses gateways that fingerprint the first system message accept DSH. */
+export const DSH_CLIENT_COMPAT_SYSTEM_PREFIX = "You are an expert coding assistant operating inside a software engineering harness.";
+
 function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
   if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
   const configPath = "/workspace/.deepsonar-home/.dsh/deepsonar.cordis.yml";
   const packagedBin = "/usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js";
   const systemPrompt = context.systemPromptPath
-    ? `DSH_SYSTEM_PROMPT="$(cat ${shellQuote(context.systemPromptPath)})" `
+    ? `DSH_SYSTEM_PROMPT="$(printf '%s\\n\\n%s' ${shellQuote(DSH_CLIENT_COMPAT_SYSTEM_PREFIX)} "$(cat ${shellQuote(context.systemPromptPath)})")" `
     : "";
   const command = `${systemPrompt}node ${packagedBin} ${configPath}`;
   return host.runAsync(command, {

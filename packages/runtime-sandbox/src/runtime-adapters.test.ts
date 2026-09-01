@@ -149,7 +149,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
     dshProvider: testDshProvider("high"),
   } as const;
   await adapter.start(context);
-  assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
+  assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(printf '%s\\n\\n%s' 'You are an expert coding assistant operating inside a software engineering harness\.' "\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)"\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
   assert.equal(adapter.version, "0.1.1-rc.2");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");

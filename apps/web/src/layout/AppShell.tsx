@@ -8,7 +8,7 @@ import { resolveRailAuthPresentation } from "../auth-status";
 import { DeepSonarMark } from "../components/DeepSonarMark";
 import { canAccessAnyScope } from "../permissions";
 import { formatHealthOpenSandbox, healthOpenSandboxDegraded, type HealthOpenSandbox } from "../health-status";
-import { formatHealthVersion } from "../product-version";
+import { formatHealthVersion, githubReleaseUrlForVersion } from "../product-version";
 
 const WORKSPACE_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
   { to: "/", end: true, label: "态势", caption: "全局风险与运行", icon: ChartBar },
@@ -115,8 +115,20 @@ export function AppShell() {
   const projectId = projectMatch?.params.projectId;
   const schedulerHealth = useSchedulerHealth();
   const versionLabel = schedulerHealth.version ?? "—";
+  const versionHref = githubReleaseUrlForVersion(schedulerHealth.version);
   const openSandboxLabel = formatHealthOpenSandbox(schedulerHealth.openSandbox);
   const statusLabel = openSandboxLabel ? `${versionLabel} · ${openSandboxLabel}` : versionLabel;
+  const versionMark = versionHref ? (
+    <a
+      href={versionHref}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="rail-version-link"
+      title="在 GitHub 查看此版本"
+    >
+      {versionLabel}
+    </a>
+  ) : versionLabel;
   const statusDegraded = healthOpenSandboxDegraded(schedulerHealth.openSandbox);
   const statusTitle = schedulerHealth.openSandbox?.domain
     ? `${statusLabel} · ${schedulerHealth.openSandbox.domain}`
@@ -176,7 +188,7 @@ export function AppShell() {
           <span className="deepsonar-live-dot" />
           <div>
             <strong>Scheduler online</strong>
-            <small>{statusLabel}</small>
+            <small>{versionMark}{openSandboxLabel ? ` · ${openSandboxLabel}` : ""}</small>
           </div>
         </div>
       </div>
@@ -194,7 +206,7 @@ export function AppShell() {
     </aside>
 
     <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
-    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><UserRailFooter collapsed={false} /><div className={`mobile-menu-foot${statusDegraded ? " is-degraded" : ""}`} title={statusTitle}><span className="deepsonar-live-dot" /> 调度器在线 {statusLabel}</div></div>
+    <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><UserRailFooter collapsed={false} /><div className={`mobile-menu-foot${statusDegraded ? " is-degraded" : ""}`} title={statusTitle}><span className="deepsonar-live-dot" /> 调度器在线 {versionMark}{openSandboxLabel ? ` · ${openSandboxLabel}` : ""}</div></div>
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
     <main id="main-content" className="app-stage"><Outlet /></main>
   </div>;
