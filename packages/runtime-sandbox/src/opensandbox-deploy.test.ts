@@ -36,7 +36,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(overlay, /SANDBOX_PROVIDER: opensandbox/);
   assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
   assert.match(deploySh, /network connect bridge/);
-  assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18080/);
+  assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18081/);
   assert.match(overlay, /condition: service_healthy/);
   assert.match(overlay, /127\.0\.0\.1:8080\/health/);
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
@@ -82,7 +82,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(hostOverlay, /Dockerfile\.web/);
   assert.doesNotMatch(hostOverlay, /container_name:/);
   assert.match(ci, /OpenSandbox production compose merge/);
-  assert.match(ci, /published: "18080"/);
+  assert.match(ci, /published: "18081"/);
   assert.match(ci, /OpenSandbox host overlay gateway upstream/);
   assert.match(ci, /host\.docker\.internal:14100\/gateway/);
   assert.match(ci, /127\.0\.0\.1:13100\/gateway/);
