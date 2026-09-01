@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parse as parseToml } from "smol-toml";
 import { defaultDshPiAiSettings } from "./dsh-pi-ai-settings.js";
 import {
   extractBaseUrlFromSettings,
@@ -22,6 +21,25 @@ import {
   snapshotUpstreamModel,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
+
+function leftoverCodexSettings(input: {
+  secret?: string;
+  model?: string;
+  reasoning?: string;
+  baseUrl?: string;
+} = {}): Record<string, unknown> {
+  const lines: string[] = [];
+  if (input.model) lines.push(`model = "${input.model}"`);
+  if (input.reasoning) lines.push(`model_reasoning_effort = "${input.reasoning}"`);
+  if (input.baseUrl) {
+    lines.push("[model_providers.custom]");
+    lines.push(`base_url = "${input.baseUrl}"`);
+  }
+  return {
+    auth: { OPENAI_API_KEY: input.secret ?? "x" },
+    config: lines.length > 0 ? `${lines.join("\n")}\n` : "",
+  };
+}
 
 test("legacySettingsConfig builds Claude env dialect", () => {
   const settings = legacySettingsConfig({
@@ -69,37 +87,29 @@ test("Claude Code normalizes Provider reasoning to official effort levels", () =
   assert.throws(() => normalizeProviderSettings("claude-code", { env: {}, reasoning: "max" }), /low \| medium \| high \| xhigh/);
 });
 
-test("Codex and Pi normalize only their governed reasoning levels", () => {
-  const codex = normalizeProviderSettings("codex", { auth: {}, config: "model_reasoning_effort = \"xhigh\"\n" });
-  assert.equal(codex.reasoning, "xhigh");
+test("leftover Codex settings stay readable; Pi still normalizes current reasoning", () => {
+  const leftover = leftoverCodexSettings({ reasoning: "xhigh" });
+  assert.equal(normalizeProviderSettings("codex", leftover).reasoning, "xhigh");
   assert.throws(() => normalizeProviderSettings("codex", { reasoning: "max", config: "" }), /Codex reasoning/);
   assert.equal(normalizeProviderSettings("pi", { reasoning: "max" }).reasoning, "max");
   assert.throws(() => normalizeProviderSettings("pi", { reasoning: "thinking-v2.5" }), /Pi reasoning/);
 });
 
-test("materializeProviderSettings writes Codex auth + config with reasoning", () => {
-  const settings = legacySettingsConfig({
-    provider: "openai",
+test("leftover Codex settings cannot materialize new jobs", () => {
+  const leftover = leftoverCodexSettings({
     secret: "sk-openai",
-    metadata: { base_url: "https://api.openai.com/v1" },
-    agentCli: "codex",
     model: "gpt-5",
     reasoning: "medium",
+    baseUrl: "https://api.openai.com/v1",
   });
-  const files = materializeProviderSettings({
-    agentCli: "codex",
-    settingsConfig: settings,
-    overrides: { reasoning: "high", model: "gpt-5.2" },
-  });
-  assert.equal(files.length, 2);
-  assert.equal(files[0]?.path, ".codex/auth.json");
-  assert.equal(files[1]?.path, ".codex/config.toml");
-  const auth = JSON.parse(files[0]!.content) as { OPENAI_API_KEY: string };
-  assert.equal(auth.OPENAI_API_KEY, "sk-openai");
-  assert.match(files[1]!.content, /model = "gpt-5\.2"/);
-  assert.match(files[1]!.content, /model_reasoning_effort = "high"/);
-  assert.match(files[1]!.content, /base_url = "https:\/\/api\.openai\.com\/v1"/);
-  assert.match(files[1]!.content, /wire_api = "responses"/);
+  assert.throws(
+    () => materializeProviderSettings({
+      agentCli: "codex",
+      settingsConfig: leftover,
+      overrides: { reasoning: "high", model: "gpt-5.2" },
+    }),
+    /不再支持新配置/,
+  );
 });
 
 test("Pi models.json 支持 provider、模型解析和网关改写", () => {
@@ -144,15 +154,9 @@ test("extract model and reasoning from settings", () => {
     extractModelFromSettings("claude-code", { env: { ANTHROPIC_MODEL: "claude-sonnet-4-5" } }),
     "claude-sonnet-4-5",
   );
-  const codex = legacySettingsConfig({
-    provider: "openai",
-    secret: "x",
-    agentCli: "codex",
-    model: "gpt-5",
-    reasoning: "low",
-  });
-  assert.equal(extractModelFromSettings("codex", codex), "gpt-5");
-  assert.equal(extractReasoningFromSettings("codex", codex), "low");
+  const leftover = leftoverCodexSettings({ model: "gpt-5", reasoning: "low" });
+  assert.equal(extractModelFromSettings("codex", leftover), "gpt-5");
+  assert.equal(extractReasoningFromSettings("codex", leftover), "low");
   assert.equal(
     resolveEffectiveModel({
       roleModel: null,
@@ -222,24 +226,18 @@ test("Claude aliases preserve the CLI selector and resolve the actual upstream m
   );
 });
 
-test("OpenCode settings use a CC Switch provider fragment and materialize a full CLI config", () => {
-  const settings = legacySettingsConfig({
-    provider: "openai",
-    secret: "sk-openai",
-    metadata: { base_url: "https://api.openai.com/v1" },
-    agentCli: "open-code",
-    model: "gpt-5",
-  });
-  assert.equal(settings.npm, "@ai-sdk/openai-compatible");
-  assert.deepEqual(Object.keys(settings.models as Record<string, unknown>), ["gpt-5"]);
+test("leftover OpenCode settings stay readable but cannot materialize new jobs", () => {
+  const settings = {
+    npm: "@ai-sdk/openai-compatible",
+    options: { apiKey: "sk-openai", baseURL: "https://api.openai.com/v1" },
+    models: { "gpt-5": { name: "gpt-5" } },
+  };
   assert.equal(extractModelFromSettings("open-code", settings), "gpt-5");
   assert.equal(extractBaseUrlFromSettings(settings), "https://api.openai.com/v1");
-
-  const [file] = materializeProviderSettings({ agentCli: "open-code", settingsConfig: settings });
-  assert.equal(file?.path, ".opencode/config.json");
-  const materialized = JSON.parse(file!.content) as Record<string, unknown>;
-  assert.equal(materialized.model, "deepsonar/gpt-5");
-  assert.deepEqual(Object.keys(materialized.provider as Record<string, unknown>), ["deepsonar"]);
+  assert.throws(
+    () => materializeProviderSettings({ agentCli: "open-code", settingsConfig: settings }),
+    /不再支持新配置/,
+  );
 });
 
 test("extractBaseUrlFromSettings reads env and codex toml", () => {
@@ -247,13 +245,8 @@ test("extractBaseUrlFromSettings reads env and codex toml", () => {
     extractBaseUrlFromSettings({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1/anthropic/" } }),
     "http://127.0.0.1/anthropic",
   );
-  const codex = legacySettingsConfig({
-    provider: "openai",
-    secret: "x",
-    metadata: { base_url: "https://api.openai.com/v1" },
-    agentCli: "codex",
-  });
-  assert.equal(extractBaseUrlFromSettings(codex), "https://api.openai.com/v1");
+  const leftover = leftoverCodexSettings({ baseUrl: "https://api.openai.com/v1" });
+  assert.equal(extractBaseUrlFromSettings(leftover), "https://api.openai.com/v1");
   assert.deepEqual(
     extractModelsFromSettings({ env: { ANTHROPIC_MODEL: "claude-sonnet-4-5" } }),
     ["claude-sonnet-4-5"],
@@ -304,38 +297,19 @@ test("restricted Claude config replaces direct credentials with the Job Gateway"
   assert.doesNotMatch(routed!.content, /long-lived|provider\.example/);
 });
 
-test("restricted Codex and OpenCode configs route through the same Job Gateway", () => {
-  const gatewayBaseUrl = "http://deepsonar-gateway-proxy:3100/gateway";
-  const jobToken = "deepsonarjob_12345678_test-token-value";
-  const codex = routeMaterializedProviderFilesThroughGateway({
-    agentCli: "codex",
-    files: materializeProviderSettings({
-      agentCli: "codex",
-      settingsConfig: legacySettingsConfig({ provider: "openai", secret: "long-lived", agentCli: "codex" }),
-    }),
-    gatewayBaseUrl,
-    jobToken,
-  });
-  const auth = JSON.parse(codex.find((item) => item.path.endsWith("auth.json"))!.content) as Record<string, string>;
-  const config = parseToml(codex.find((item) => item.path.endsWith("config.toml"))!.content) as Record<string, unknown>;
-  const providers = config.model_providers as Record<string, Record<string, unknown>>;
-  assert.equal(auth.OPENAI_API_KEY, jobToken);
-  assert.equal(providers.custom?.base_url, gatewayBaseUrl);
-
-  const openCode = routeMaterializedProviderFilesThroughGateway({
-    agentCli: "open-code",
-    files: materializeProviderSettings({
+test("leftover Codex and OpenCode configs cannot route through the Job Gateway", () => {
+  const leftover = leftoverCodexSettings({ secret: "long-lived" });
+  assert.throws(
+    () => materializeProviderSettings({ agentCli: "codex", settingsConfig: leftover }),
+    /不再支持新配置/,
+  );
+  assert.throws(
+    () => materializeProviderSettings({
       agentCli: "open-code",
-      settingsConfig: legacySettingsConfig({ provider: "openai", secret: "long-lived", agentCli: "open-code" }),
+      settingsConfig: { models: { "gpt-5": { name: "gpt-5" } } },
     }),
-    gatewayBaseUrl,
-    jobToken,
-  });
-  const openCodeConfig = JSON.parse(openCode[0]!.content) as {
-    provider: { deepsonar: { options: Record<string, string> } };
-  };
-  assert.deepEqual(openCodeConfig.provider.deepsonar.options, { apiKey: jobToken, baseURL: gatewayBaseUrl });
-  assert.doesNotMatch(JSON.stringify({ codex, openCode }), /long-lived|api\.openai\.com/);
+    /不再支持新配置/,
+  );
 });
 
 test("restricted routing fails closed when the frozen CLI file is missing", () => {
@@ -380,13 +354,13 @@ test("context_window_tokens enforces bounds and RoleConfig precedence", () => {
   assert.equal(resolveContextWindowTokens({ roleContextWindowTokens: null, settingsConfig: { context_window_tokens: 64_000 } }), 64_000);
 });
 
-test("OpenCode context_window_tokens requires an existing output limit", () => {
+test("leftover OpenCode context_window_tokens cannot materialize new jobs", () => {
   assert.throws(
     () => materializeProviderSettings({
       agentCli: "open-code",
       settingsConfig: { context_window_tokens: 64_000, models: { "gpt-5": { name: "gpt-5" } } },
     }),
-    /缺少既有 limit\.output/,
+    /不再支持新配置/,
   );
 });
 
@@ -478,15 +452,24 @@ test("Job snapshot freezes DSH YAML config without treating it as TOML", () => {
 });
 
 test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
-  assert.throws(() => materializeProviderSettings({ agentCli: "codex", settingsConfig: { context_window_tokens: 1023 } }), /1024/);
+  assert.throws(
+    () => materializeProviderSettings({ agentCli: "codex", settingsConfig: { context_window_tokens: 1023 } }),
+    /不再支持新配置/,
+  );
   const settings = { context_window_tokens: 128000, config: 'model = "gpt-5"\n[model_providers.custom]\nbase_url = "http://127.0.0.1"\n', auth: { OPENAI_API_KEY: "secret" } };
   const snapshot = providerSettingsForJobSnapshot(settings);
   assert.equal(snapshot.context_window_tokens, 128000);
-  const codex = materializeProviderSettings({ agentCli: "codex", settingsConfig: snapshot });
-  assert.match(codex[1]!.content, /model_context_window = 128000/);
-  const openCode = materializeProviderSettings({ agentCli: "open-code", settingsConfig: { context_window_tokens: 64000, models: { "gpt-5": { name: "gpt-5", limit: { output: 4096 } } } } });
-  const openCodeModel = (JSON.parse(openCode[0]!.content) as { provider: { deepsonar: { models: Record<string, { limit: Record<string, number> }> } } }).provider.deepsonar.models["gpt-5"];
-  assert.deepEqual(openCodeModel.limit, { output: 4096, context: 64000 });
+  assert.throws(
+    () => materializeProviderSettings({ agentCli: "codex", settingsConfig: snapshot }),
+    /不再支持新配置/,
+  );
+  assert.throws(
+    () => materializeProviderSettings({
+      agentCli: "open-code",
+      settingsConfig: { context_window_tokens: 64000, models: { "gpt-5": { name: "gpt-5", limit: { output: 4096 } } } },
+    }),
+    /不再支持新配置/,
+  );
   const pi = materializeProviderSettings({ agentCli: "pi", settingsConfig: { context_window_tokens: 32000, provider: "openai", models: [{ id: "gpt-5" }] } });
   const piModel = (JSON.parse(pi[0]!.content) as { providers: { deepsonar: { models: Array<{ contextWindow: number }> } } }).providers.deepsonar.models[0];
   assert.equal(piModel.contextWindow, 32000);

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **Agent CLI 新配置收敛为三类（#318）**：新 RoleConfig / 新 Job 只接受 `claude-code`（默认）、`pi`、`dsh`。leftover `codex` / `open-code` 历史快照与 Session 归档只读可看，不自动改写；下次保存 leftover 配置拒绝并提示迁移。运行时注册表与新增 CLI 接入流程保留。
+
 ## [0.2.2] - 2026-09-01
 
 ### 修复

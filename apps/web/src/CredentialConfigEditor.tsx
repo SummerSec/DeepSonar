@@ -2,7 +2,7 @@
  * Shared create/edit editor for Provider credentials (CC Switch layout for Claude).
  * Create and edit use the same field set and save-as-is settingsConfig rules.
  */
-import { CLAUDE_CODE_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, DSH_REASONING_EFFORTS, PI_REASONING_EFFORTS, REASONING_VALUE_MAX_LENGTH, isClaudeCodeReasoningEffort, isCodexReasoningEffort, isDshReasoningEffort, isPiReasoningEffort, isReasoningValue } from "@deepsonar/shared-types";
+import { CLAUDE_CODE_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, DSH_REASONING_EFFORTS, PI_REASONING_EFFORTS, REASONING_VALUE_MAX_LENGTH, isClaudeCodeReasoningEffort, isCodexReasoningEffort, isCurrentAgentCli, isDshReasoningEffort, isLeftoverAgentCli, isPiReasoningEffort, isReasoningValue, type CurrentAgentCli } from "@deepsonar/shared-types";
 import { useMemo } from "react";
 import type { Project, ProviderAccountCatalogItemView } from "./api";
 import { CcSwitchClaudeFields } from "./CcSwitchClaudeFields";
@@ -13,7 +13,7 @@ import { SearchableSelect } from "./SearchableSelect";
 import { parseDocument, stringify } from "yaml";
 import { defaultCodexToml, validateTomlText } from "./toml-text";
 
-export type AgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
+export type AgentCli = "claude-code" | "pi" | "dsh" | "codex" | "open-code";
 
 export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 const SECRET_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)/iu;
@@ -561,7 +561,7 @@ export function CredentialConfigEditor({
   provider: string;
   onProviderChange: (value: string) => void;
   agentCli: AgentCli;
-  onAgentCliChange: (value: AgentCli) => void;
+  onAgentCliChange: (value: CurrentAgentCli) => void;
   projectId: string;
   onProjectIdChange: (value: string) => void;
   projects: Project[];
@@ -641,6 +641,7 @@ export function CredentialConfigEditor({
   const canSubmit = Boolean(provider && name.trim() && configValid && (mode === "edit" || secret.trim() || hasUsableConfigSecret));
 
   const switchCli = (cli: AgentCli) => {
+    if (!isCurrentAgentCli(cli)) return;
     const nextProviders = providerCatalog.filter((item) =>
       item.kind === "llm_provider" && item.compatible_agent_cli.includes(cli),
     );
@@ -650,15 +651,8 @@ export function CredentialConfigEditor({
     onAgentCliChange(cli);
     if (cli === "dsh" && reasoning && !isDshReasoningEffort(reasoning)) onReasoningChange("");
     if (cli === "claude-code" && reasoning && !isClaudeCodeReasoningEffort(reasoning)) onReasoningChange("");
-    if (cli === "codex" && reasoning && !isCodexReasoningEffort(reasoning)) onReasoningChange("");
     if (cli === "pi" && reasoning && !isPiReasoningEffort(reasoning)) onReasoningChange("");
     if (nextProvider !== provider) onProviderChange(nextProvider);
-    if (cli === "codex") {
-      onTomlTextChange(defaultCodexToml(baseUrl.trim() || "https://api.openai.com/v1"));
-      onAuthJsonChange(formatJsonObject({ OPENAI_API_KEY: secret ? MASKED_SECRET_PLACEHOLDER : "" }));
-      onSettingsJsonChange("");
-      return;
-    }
     onTomlTextChange("");
     onAuthJsonChange("");
     if (cli === "claude-code") {
@@ -677,15 +671,7 @@ export function CredentialConfigEditor({
       onSettingsJsonChange(formatJsonObject({ providers: { deepsonar: { baseUrl: baseUrl.trim(), api: providerKey, apiKey: secret ? MASKED_SECRET_PLACEHOLDER : "", models: [] } } }));
       return;
     }
-    if (cli === "dsh") {
-      onSettingsJsonChange(defaultDshProviderYaml(nextProvider, baseUrl));
-      return;
-    }
-    onSettingsJsonChange(formatJsonObject(defaultOpenCodeSettings(
-      secret ? MASKED_SECRET_PLACEHOLDER : "",
-      baseUrl,
-      nextProvider,
-    )));
+    onSettingsJsonChange(defaultDshProviderYaml(nextProvider, baseUrl));
   };
 
   return (
@@ -696,10 +682,11 @@ export function CredentialConfigEditor({
           onChange={(next) => switchCli(next as AgentCli)}
           options={[
             { value: "claude-code", label: "Claude Code（settings.json）" },
-            { value: "codex", label: "Codex（config.toml + auth.json）" },
-            { value: "open-code", label: "OpenCode（config.json）" },
             { value: "pi", label: "Pi Coding Agent（models.json）" },
             { value: "dsh", label: "DeepSeek Harness（JSON-RPC）" },
+            ...(isLeftoverAgentCli(agentCli)
+              ? [{ value: agentCli, label: `${agentCli}（已停用，请迁移到 claude-code / pi / dsh）` }]
+              : []),
           ]}
           placeholder="选择 Agent CLI…"
           ariaLabel="Agent CLI 类型"

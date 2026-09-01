@@ -212,7 +212,7 @@ test("settings builder patches or removes the top-level context budget for every
     provider: "openai",
     reasoning: "",
   };
-  for (const agentCli of ["claude-code", "open-code", "pi", "codex", "dsh"] as const) {
+  for (const agentCli of ["claude-code", "pi", "dsh"] as const) {
     const added = buildSettingsConfigFromEditor({ ...common, agentCli, contextWindowTokens: "1000000" });
     assert.equal(added.ok, true);
     if (added.ok) assert.equal(added.settings.context_window_tokens, 1_000_000);
@@ -242,15 +242,19 @@ test("Claude Code accepts only official effortLevel values", () => {
   if (!invalid.ok) assert.match(invalid.error, /Claude Code/);
 });
 
-test("Codex Pi and OpenCode use their native reasoning controls", () => {
+test("Pi uses its native reasoning controls", () => {
   const common = { settingsJson: "{}", tomlText: "model = \"gpt-5\"", authJson: "{}", secret: "secret", baseUrl: "http://127.0.0.1/v1", provider: "openai", contextWindowTokens: "" };
-  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "codex", reasoning: "xhigh" }).ok, true);
-  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "codex", reasoning: "max" }).ok, false);
   assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "max" }).ok, true);
   assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "thinking-v2.5" }).ok, false);
-  const openCode = buildSettingsConfigFromEditor({ ...common, agentCli: "open-code", reasoning: "thinking-v2.5" });
-  assert.equal(openCode.ok, true);
-  if (openCode.ok) assert.equal(openCode.settings.reasoning, "thinking-v2.5");
+});
+
+test("new RoleConfig CLI options exclude leftover CLIs", () => {
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(flow, /value: "claude-code"/);
+  assert.match(flow, /value: "pi"/);
+  assert.match(flow, /value: "dsh"/);
+  assert.doesNotMatch(flow, /AGENT_CLI_OPTIONS[\s\S]*value: "codex"/);
+  assert.doesNotMatch(flow, /AGENT_CLI_OPTIONS[\s\S]*value: "open-code"/);
 });
 
 const officialLlmPiAiYaml = `llm-pi-ai:

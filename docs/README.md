@@ -27,7 +27,7 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **as-built**（正文仍含早期 Plane 叙述，以 § 后半与 DESIGN 为准） | 威胁建模、状态机、存储、运行时；入口一句话已本地优先 |
-| [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 五类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；版本钉死见 runtime-images |
+| [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；leftover Codex/OpenCode 只读；版本钉死见 runtime-images |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70） | 官方镜像 catalog v2、通道、fail-closed |
@@ -89,7 +89,7 @@
 | #257 Chrome / 长工具 stall 误杀 | **已关**；在飞 `tool.call` + 有效 lease 不判停滞；chrome-audit/test/fuzz 有 stall 下限，全局默认仍 900s |
 | #263 配置中心 / 运行时护栏 | **Batch 1 as-built**（stall / token 上限 / audit·verify·provision 超时落库 + Web 配置中心）；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检仍走 env |
 | #267 / #266 官方镜像不预装决策扫描器 | **已关**；工具助力、扫描不决策；Semgrep / gitleaks / shellcheck 与 Chrome 固定扫描入口已从官方运行时移除；Job token / Provider 密钥仍精确 `[REDACTED]` |
-| #159 / #160 | **已关**；Fact 工作台、Agent CLI Session 时间线归一化（#160 起因是 Claude，现覆盖五类归档；画布广播仅在 CLI 归档持久化时展示） |
+| #159 / #160 | **已关**；Fact 工作台、Agent CLI Session 时间线归一化（#160 起因是 Claude，现覆盖当前三类归档 + leftover 只读；画布广播仅在 CLI 归档持久化时展示） |
 | Agent CLI 钉死版本 | 仓库已更新；**正式沙箱镜像**需 `v*` release 后才含新 CLI |
 | #34 增量 ALTER 链 | **刻意搁置**；坚持基线 + 重建库。运维可用 `pnpm db:rebuild` 备份后按列交集回填，不是启动自动升级 |
 | #281 rebuild 序列漂移 | **已关**；回填后只 reset public owned sequences，rebuild 结束与 Scheduler 启动自动 `setval` + fail closed，避免 `audit_logs_pkey` / `events_pkey` |

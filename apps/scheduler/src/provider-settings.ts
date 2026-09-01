@@ -18,6 +18,7 @@ import {
   isCodexReasoningEffort,
   isPiReasoningEffort,
   isReasoningValue,
+  rejectNonCurrentAgentCli,
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
@@ -28,12 +29,10 @@ export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel,
 /** Keep in sync with core.CONFIG_FILE_PATHS (avoid circular import via core). */
 const CONFIG_FILE_PATHS: Record<string, string> = {
   "claude-code": ".claude/settings.json",
-  codex: ".codex/config.toml",
-  "open-code": ".opencode/config.json",
   pi: ".pi/agent/models.json",
 };
 
-export type ProviderAgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
+export type ProviderAgentCli = "claude-code" | "pi" | "dsh";
 
 export interface MaterializedConfigFile {
   path: string;
@@ -67,7 +66,7 @@ export function resolveContextWindowTokens(input: {
   return parseContextWindowTokens(settings.context_window_tokens);
 }
 
-const AGENT_CLIS = new Set<string>(["claude-code", "codex", "open-code", "pi", "dsh"]);
+const AGENT_CLIS = new Set<string>(["claude-code", "pi", "dsh"]);
 
 export function isProviderAgentCli(value: unknown): value is ProviderAgentCli {
   return typeof value === "string" && AGENT_CLIS.has(value);
@@ -193,35 +192,6 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       : { ...item });
   }
 
-  if (input.agentCli === "codex") {
-    const authSource = byPath.get(".codex/auth.json");
-    const configSource = byPath.get(".codex/config.toml");
-    if (!authSource || !configSource) throw new Error("受限网络缺少冻结的 Codex auth/config 文件");
-    parseJsonObject(authSource.content, authSource.path);
-    const auth = { OPENAI_API_KEY: jobToken };
-    let config: Record<string, unknown>;
-    try {
-      config = scrubRuntimeSecretFields(parseToml(configSource.content)) as Record<string, unknown>;
-    } catch {
-      throw new Error("受限网络无法解析冻结的 Codex config.toml");
-    }
-    const providerName = typeof config.model_provider === "string" ? config.model_provider : "";
-    const providers = asObject(config.model_providers);
-    const provider = asObject(providers[providerName]);
-    if (!providerName || Object.keys(provider).length === 0) {
-      throw new Error("受限网络无法定位 Codex 当前 model_provider");
-    }
-    provider.base_url = gatewayBaseUrl;
-    provider.requires_openai_auth = true;
-    providers[providerName] = provider;
-    config.model_providers = providers;
-    return input.files.map((item) => {
-      if (item.path === authSource.path) return file(item.path, `${JSON.stringify(auth, null, 2)}\n`);
-      if (item.path === configSource.path) return file(item.path, `${stringifyToml(config)}\n`);
-      return { ...item };
-    });
-  }
-
   if (input.agentCli === "pi") {
     const source = byPath.get(".pi/agent/models.json");
     if (!source) throw new Error("受限网络缺少冻结的 Pi models.json");
@@ -254,21 +224,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     return input.files.map((item) => ({ ...item }));
   }
 
-  const source = byPath.get(".opencode/config.json");
-  if (!source) throw new Error("受限网络缺少冻结的 OpenCode config.json");
-  const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
-  const providers = asObject(settings.provider);
-  const selected = asObject(providers.deepsonar);
-  if (Object.keys(selected).length === 0) throw new Error("受限网络无法定位 OpenCode deepsonar provider");
-  const options = asObject(selected.options);
-  options.apiKey = jobToken;
-  options.baseURL = gatewayBaseUrl;
-  selected.options = options;
-  providers.deepsonar = selected;
-  settings.provider = providers;
-  return input.files.map((item) => item.path === source.path
-    ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
-    : { ...item });
+  throw new Error(`unsupported agent_cli for gateway rewrite: ${input.agentCli}`);
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -333,37 +289,6 @@ function isEmptySettings(settings: unknown): boolean {
   return Object.keys(asObject(settings)).length === 0;
 }
 
-function tomlEscape(value: string): string {
-  return JSON.stringify(value);
-}
-
-function applyCodexTomlOverrides(toml: string, overrides?: ProviderSettingsOverrides): string {
-  let next = toml;
-  if (overrides?.model?.trim()) {
-    const modelLine = `model = ${tomlEscape(overrides.model.trim())}`;
-    if (/^\s*model\s*=/m.test(next)) next = next.replace(/^\s*model\s*=.*$/m, modelLine);
-    else next = `${modelLine}\n${next}`;
-  }
-  if (overrides?.reasoning) {
-    const effortLine = `model_reasoning_effort = ${tomlEscape(overrides.reasoning)}`;
-    if (/^\s*model_reasoning_effort\s*=/m.test(next)) {
-      next = next.replace(/^\s*model_reasoning_effort\s*=.*$/m, effortLine);
-    } else {
-      next = `${effortLine}\n${next}`;
-    }
-  }
-  const contextWindowTokens = overrides?.context_window_tokens != null
-    ? parseContextWindowTokens(overrides.context_window_tokens)
-    : null;
-  if (contextWindowTokens != null) {
-    const contextLine = `model_context_window = ${contextWindowTokens}`;
-    if (/^\s*model_context_window\s*=/m.test(next)) next = next.replace(/^\s*model_context_window\s*=.*$/m, contextLine);
-    else next = `${contextLine}\n${next}`;
-  }
-  return next;
-}
-
-
 /** Build default settingsConfig from legacy brand credential fields. */
 export function legacySettingsConfig(input: {
   provider: string;
@@ -387,26 +312,6 @@ export function legacySettingsConfig(input: {
     if (input.model?.trim()) env.ANTHROPIC_MODEL = input.model.trim();
     return { env, ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}) };
   }
-  if (input.agentCli === "codex") {
-    const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
-    const model = input.model?.trim() || "gpt-5";
-    const effort = input.reasoning?.trim() || "high";
-    const config = `model_provider = "custom"
-model = ${tomlEscape(model)}
-model_reasoning_effort = ${tomlEscape(effort)}
-disable_response_storage = true
-
-[model_providers.custom]
-name = "custom"
-base_url = ${tomlEscape(endpoint)}
-wire_api = "responses"
-requires_openai_auth = true
-`;
-    return {
-      auth: { OPENAI_API_KEY: input.secret },
-      config,
-    };
-  }
   if (input.agentCli === "pi") {
     const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
     const model = input.model?.trim() || (input.provider === "anthropic" ? "claude-sonnet-4-5" : "gpt-5");
@@ -418,33 +323,15 @@ requires_openai_auth = true
       ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
     };
   }
-  if (input.agentCli === "dsh") {
-    const anthropic = input.provider === "anthropic";
-    return {
-      ...defaultDshPiAiSettings({
-        route: anthropic ? "anthropic" : "deepseek",
-        protocol: anthropic ? "anthropic-messages" : "openai-completions",
-        baseURL: baseUrl || defaultBase || (anthropic ? "https://api.anthropic.com" : "https://api.deepseek.com"),
-        model: input.model?.trim() || (anthropic ? "claude-sonnet-4-5" : "deepseek-v4-flash"),
-        contextWindow: anthropic ? 200_000 : 1_000_000,
-      }),
-      ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
-    };
-  }
-  // OpenCode stores one provider fragment. Runtime materialization wraps it in
-  // the CLI's provider map and selects the first declared model.
-  const endpoint = baseUrl || defaultBase || "https://api.openai.com/v1";
+  const anthropic = input.provider === "anthropic";
   return {
-    npm: input.provider === "anthropic"
-      ? "@ai-sdk/anthropic"
-      : "@ai-sdk/openai-compatible",
-    options: {
-      apiKey: input.secret,
-      baseURL: endpoint,
-    },
-    models: input.model?.trim()
-      ? { [input.model.trim()]: { name: input.model.trim() } }
-      : {},
+    ...defaultDshPiAiSettings({
+      route: anthropic ? "anthropic" : "deepseek",
+      protocol: anthropic ? "anthropic-messages" : "openai-completions",
+      baseURL: baseUrl || defaultBase || (anthropic ? "https://api.anthropic.com" : "https://api.deepseek.com"),
+      model: input.model?.trim() || (anthropic ? "claude-sonnet-4-5" : "deepseek-v4-flash"),
+      contextWindow: anthropic ? 200_000 : 1_000_000,
+    }),
     ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
   };
 }
@@ -458,6 +345,8 @@ export function materializeProviderSettings(input: {
   settingsConfig: unknown;
   overrides?: ProviderSettingsOverrides;
 }): MaterializedConfigFile[] {
+  const leftover = rejectNonCurrentAgentCli(input.agentCli);
+  if (leftover) throw new Error(leftover);
   if (!isProviderAgentCli(input.agentCli)) {
     throw new Error(`unsupported agent_cli for provider settings: ${input.agentCli}`);
   }
@@ -488,33 +377,6 @@ export function materializeProviderSettings(input: {
     clone.env = env;
     const content = `${JSON.stringify(clone, null, 2)}\n`;
     return [file(expectedPath, content)];
-  }
-  if (input.agentCli === "codex") {
-    const auth = asObject(settings.auth);
-    const authContent = `${JSON.stringify(Object.keys(auth).length ? auth : { OPENAI_API_KEY: "" }, null, 2)}\n`;
-    let configToml = typeof settings.config === "string" ? settings.config : "";
-    if (!configToml.trim()) {
-      configToml = `model_provider = "custom"
-model = "gpt-5"
-model_reasoning_effort = "high"
-disable_response_storage = true
-
-[model_providers.custom]
-name = "custom"
-base_url = "https://api.openai.com/v1"
-wire_api = "responses"
-requires_openai_auth = true
-`;
-    }
-    configToml = applyCodexTomlOverrides(configToml, {
-      ...input.overrides,
-      context_window_tokens: contextWindowTokens,
-    });
-    if (!configToml.endsWith("\n")) configToml += "\n";
-    return [
-      file(".codex/auth.json", authContent),
-      file(".codex/config.toml", configToml),
-    ];
   }
   if (input.agentCli === "pi") {
     const official = readOfficialLlmPiAiSettings(settings);
@@ -553,32 +415,7 @@ requires_openai_auth = true
     const content = `${JSON.stringify({ providers }, null, 2)}\n`;
     return [file(expectedPath, content)];
   }
-  // OpenCode's settingsConfig is the selected provider fragment. The schema
-  // requires both limit.context and limit.output when limit is present.
-  const providerId = "deepsonar";
-  const clone = structuredClone(settings) as Record<string, unknown>;
-  delete clone.context_window_tokens;
-  delete clone.reasoning;
-  const modelIds = Object.keys(asObject(clone.models));
-  const selectedModel = input.overrides?.model?.trim() || modelIds[0] || null;
-  if (contextWindowTokens != null && selectedModel) {
-    const models = asObject(clone.models);
-    const selected = asObject(models[selectedModel]);
-    const existingLimit = asObject(selected.limit);
-    if (typeof existingLimit.output !== "number") {
-      throw new Error(`OpenCode 模型 ${selectedModel} 缺少既有 limit.output，无法安全写入 context_window_tokens`);
-    }
-    selected.limit = { ...existingLimit, context: contextWindowTokens };
-    models[selectedModel] = selected;
-    clone.models = models;
-  }
-  const fullConfig: Record<string, unknown> = {
-    $schema: "https://opencode.ai/config.json",
-    provider: { [providerId]: clone },
-  };
-  if (selectedModel) fullConfig.model = `${providerId}/${selectedModel}`;
-  const content = `${JSON.stringify(fullConfig, null, 2)}\n`;
-  return [file(expectedPath, content)];
+  throw new Error(`unsupported agent_cli for provider settings: ${input.agentCli}`);
 }
 
 /** True when credential row carries a non-empty settingsConfig profile. */

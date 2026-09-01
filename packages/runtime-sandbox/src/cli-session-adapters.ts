@@ -6,7 +6,7 @@
  * 完整清单：docs/AGENT_CLI_RUNTIME_ADAPTERS.md「Session 归档 + Web 查看器」。
  */
 
-export type SupportedAgentCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
+export type SupportedAgentCli = "claude-code" | "pi" | "dsh";
 
 export interface SessionDiscoveryRuntime {
   run(command: string): Promise<{ exitCode: number; stdout: string; stderr: string }>;
@@ -91,59 +91,6 @@ const claudeAdapter: AgentCliSessionAdapter = {
   },
 };
 
-const codexAdapter: AgentCliSessionAdapter = {
-  cli: "codex",
-  async exportSession(runtime, sessionId) {
-    const command =
-      `base=\"\${CODEX_HOME:-\${HOME:-/root}/.codex}/sessions\"; ` +
-      `if [ -d \"$base\" ]; then find \"$base\" -type f -name ${sh(`*${sessionId}*.jsonl`)} -print; fi`;
-    // Codex 0.147 把 rollout JSONL 异步落到 sessions/YYYY/MM/DD/；进程刚结束时目录可能还没有。
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const result = await runtime.run(command);
-      if (result.stdout.trim()) {
-        return readDiscovered(runtime, "codex", sessionId, result.stdout.split("\n"));
-      }
-      if (attempt === 7) {
-        if (result.exitCode !== 0) {
-          return { cli: "codex", sessionId, artifacts: [], captureError: result.stderr.trim() || "Codex Session 扫描失败" };
-        }
-        return readDiscovered(runtime, "codex", sessionId, []);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return readDiscovered(runtime, "codex", sessionId, []);
-  },
-};
-
-const openCodeAdapter: AgentCliSessionAdapter = {
-  cli: "open-code",
-  async exportSession(runtime, sessionId) {
-    // OpenCode 官方提供按 session 导出的 JSON；不复制可能混有其它会话与凭据的共享数据库。
-    const result = await runtime.run(`opencode export ${sh(sessionId)} 2>/dev/null`);
-    if (Buffer.byteLength(result.stdout) > MAX_SESSION_BYTES) {
-      return { cli: "open-code", sessionId, artifacts: [], captureError: "OpenCode Session 导出超过 32 MiB，已停止归档" };
-    }
-    if (result.exitCode === 0 && result.stdout.trim()) {
-      return {
-        cli: "open-code",
-        sessionId,
-        artifacts: [{
-          name: `${safeName(sessionId, sessionId, 0)}.json`,
-          sourcePath: `opencode export ${sessionId}`,
-          content: result.stdout,
-          kind: "vendor_export",
-        }],
-      };
-    }
-    return {
-      cli: "open-code",
-      sessionId,
-      artifacts: [],
-      captureError: result.stderr.trim() || `opencode export ${sessionId} 未返回内容`,
-    };
-  },
-};
-
 const piAdapter: AgentCliSessionAdapter = {
   cli: "pi",
   async exportSession(runtime, sessionId, sessionFile) {
@@ -196,8 +143,6 @@ const dshAdapter: AgentCliSessionAdapter = {
 
 export const CLI_SESSION_ADAPTERS: Record<SupportedAgentCli, AgentCliSessionAdapter> = {
   "claude-code": claudeAdapter,
-  codex: codexAdapter,
-  "open-code": openCodeAdapter,
   pi: piAdapter,
   dsh: dshAdapter,
 };

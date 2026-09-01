@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { rejectNonCurrentAgentCli } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 
 /**
@@ -109,8 +110,8 @@ export const UNKNOWN_PROVIDER_ERROR = "未知 provider（固定映射表外的 p
 /** Scheduler-owned Provider catalog. Keep capability flags beside the runtime
  * mapping so API/UI choices cannot drift from credential-test behavior. */
 export const PROVIDER_CATALOG = [
-  { provider: "anthropic", label: "Anthropic Messages", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "open-code", "pi", "dsh"], supports_base_url: true },
-  { provider: "openai", label: "OpenAI-compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["codex", "open-code", "pi", "dsh"], supports_base_url: true },
+  { provider: "anthropic", label: "Anthropic Messages", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "pi", "dsh"], supports_base_url: true },
+  { provider: "openai", label: "OpenAI-compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["pi", "dsh"], supports_base_url: true },
   { provider: "plane", label: "Plane", kind: "plane", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
   { provider: "git", label: "Git repository", kind: "git", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
   { provider: "docker", label: "OCI Registry", kind: "oci_registry", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
@@ -475,10 +476,9 @@ export function projectCredentialProvider(kind: unknown, provider: unknown): Cre
 /** 校验 Agent CLI 与 Credential Provider 的已知兼容关系。返回 null 表示兼容。 */
 export function validateCredentialCompatibility(agentCli: string, provider: string): string | null {
   if (!isProviderKnown(provider)) return UNKNOWN_PROVIDER_ERROR;
-  if (!["claude-code", "codex", "open-code", "pi", "dsh"].includes(agentCli)) return "未知 agent_cli 不允许绑定 Credential";
+  const leftover = rejectNonCurrentAgentCli(agentCli);
+  if (leftover) return leftover;
   if (agentCli === "claude-code" && provider !== "anthropic") return `agent_cli claude-code 仅兼容 anthropic，不能使用 provider ${provider}`;
-  if (agentCli === "codex" && provider !== "openai") return `agent_cli codex 仅兼容 openai，不能使用 provider ${provider}`;
-  if (agentCli === "open-code" && provider !== "anthropic" && provider !== "openai") return `agent_cli open-code 仅兼容 anthropic/openai，不能使用 provider ${provider}`;
   if (agentCli === "pi" && provider !== "anthropic" && provider !== "openai") return `agent_cli pi 仅兼容 anthropic/openai，不能使用 provider ${provider}`;
   if (agentCli === "dsh" && provider !== "anthropic" && provider !== "openai") return `agent_cli dsh 仅兼容 anthropic/openai 网关协议，不能使用 provider ${provider}`;
   return null;

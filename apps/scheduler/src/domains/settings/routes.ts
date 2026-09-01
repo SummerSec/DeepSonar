@@ -37,7 +37,7 @@ const GLOBAL_ONLY_RULE_KEYS = new Set([
   "maxConcurrentByAgentCli",
   "provisionTimeoutSec",
 ]);
-const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "codex", "open-code", "pi", "dsh"]);
+const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "pi", "dsh"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
   for (const key of RULE_CONCURRENCY_KEYS) {
     if (!(key in rules)) continue;

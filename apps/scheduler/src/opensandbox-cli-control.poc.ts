@@ -44,7 +44,7 @@ type VendorPlan = {
   model: string;
   baseUrl?: string;
 };
-const vendorCliIds = ["claude-code", "codex", "open-code", "pi", "dsh"] as const;
+const vendorCliIds = ["claude-code", "pi", "dsh"] as const;
 type VendorCli = (typeof vendorCliIds)[number];
 const vendorOfficialKind = (cli: VendorCli): keyof typeof VENDOR_OFFICIAL_ORIGINS => (
   cli === "claude-code" ? "anthropic" : cli === "dsh" ? "deepseek" : "openai"
@@ -56,8 +56,6 @@ const vendorPlans: Record<VendorCli, VendorPlan> = {
     model: anthropicModel,
     baseUrl: VENDOR_OFFICIAL_ORIGINS.anthropic,
   },
-  codex: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5", baseUrl: VENDOR_OFFICIAL_ORIGINS.openai },
-  "open-code": { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5", baseUrl: VENDOR_OFFICIAL_ORIGINS.openai },
   pi: { secret: process.env.OPENAI_API_KEY?.trim(), provider: "openai", model: "gpt-5", baseUrl: VENDOR_OFFICIAL_ORIGINS.openai },
   dsh: { secret: process.env.DEEPSEEK_API_KEY?.trim(), provider: "openai", model: "deepseek-chat", baseUrl: VENDOR_OFFICIAL_ORIGINS.deepseek },
 };
@@ -79,10 +77,10 @@ if (selectedClis.length === 0) {
 if (!requestedCli && selectedClis.length !== vendorCliIds.length) {
   const missing = [
     !vendorPlans["claude-code"].secret ? "ANTHROPIC_API_KEY" : "",
-    !vendorPlans.codex.secret ? "OPENAI_API_KEY" : "",
+    !vendorPlans.pi.secret ? "OPENAI_API_KEY" : "",
     !vendorPlans.dsh.secret ? "DEEPSEEK_API_KEY" : "",
   ].filter(Boolean);
-  console.error(`vendor CLI E2E requires all five CLIs; missing ${missing.join(",")}`);
+  console.error(`vendor CLI E2E requires all current CLIs; missing ${missing.join(",")}`);
   process.exit(1);
 }
 if (anthropicBaseUrl) {
@@ -317,10 +315,7 @@ try {
       allowedModels: jobGatewayAllowedModels({
         roleModel: plan.model,
         settingsConfig,
-      }).concat([
-        ...(selectedCli === "open-code" ? [`deepsonar/${plan.model}`] : []),
-        ...(plan.model.includes("[") ? [plan.model.replace(/\[[^\]]*\]$/u, "")] : []),
-      ]),
+      }).concat(plan.model.includes("[") ? [plan.model.replace(/\[[^\]]*\]$/u, "")] : []),
       ttlSec: 3600,
     });
     const runtimeHome = "/workspace/.deepsonar-home";
@@ -381,9 +376,7 @@ try {
       for (const file of runtimeConfigFiles) {
         const targets = selectedCli === "pi" && file.path.startsWith(".pi/")
           ? [`${runtimeHome}/${file.path}`]
-          : selectedCli === "open-code"
-            ? [`/workspace/${file.path}`]
-            : [`/workspace/${file.path}`, `${runtimeHome}/${file.path}`];
+          : [`/workspace/${file.path}`, `${runtimeHome}/${file.path}`];
         for (const target of targets) {
           await host.uploadFile(file.content, target);
           uploadedTargets.push(target);
@@ -459,9 +452,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         input: prompt,
         model: selectedCli === "pi"
           ? qualifyPiModelRef(plan.model, runtimeConfigFiles) ?? plan.model
-          : selectedCli === "open-code"
-            ? `deepsonar/${plan.model}`
-            : plan.model,
+          : plan.model,
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
         systemPromptPath,
         contextIdentity: state.contextIdentity,

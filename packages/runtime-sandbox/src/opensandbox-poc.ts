@@ -20,8 +20,8 @@ import { shellQuote, type RuntimeHost } from "./runtime-host.js";
 export const OPENSANDBOX_POC_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
 export const OPENSANDBOX_POC_CONTRACT = "deepsonar.runtime.contract/v1";
-export const OPENSANDBOX_POC_CLI_IDS = ["claude", "codex", "opencode", "pi", "dsh"] as const;
-export const OPENSANDBOX_POC_ADAPTER_IDS = ["claude-code", "codex", "open-code", "pi", "dsh"] as const satisfies readonly AgentCliId[];
+export const OPENSANDBOX_POC_CLI_IDS = ["claude", "pi", "dsh"] as const;
+export const OPENSANDBOX_POC_ADAPTER_IDS = ["claude-code", "pi", "dsh"] as const satisfies readonly AgentCliId[];
 export const OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS = [
   "deepsonar-base",
   "deepsonar-audit",
@@ -108,8 +108,6 @@ export function assertVendorUpstreamStatus(status: number): void {
 }
 const OPENSANDBOX_POC_CLI_PROBES: Record<(typeof OPENSANDBOX_POC_CLI_IDS)[number], string> = {
   claude: "command -v claude",
-  codex: "command -v codex",
-  opencode: "command -v opencode",
   pi: "command -v pi",
   dsh: "test -f /usr/local/lib/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js",
 };
@@ -667,7 +665,7 @@ const POC_HOME = "/workspace/.deepsonar-home";
 const POC_MOCK_BASE = "http://127.0.0.1:8765";
 
 function pocCliModel(id: AgentCliId): string {
-  return id === "open-code" || id === "pi" ? "deepsonar/dummy" : "dummy";
+  return id === "pi" ? "deepsonar/dummy" : "dummy";
 }
 
 function pocDshProvider() {
@@ -690,41 +688,10 @@ function pocDshProvider() {
 async function materializePocProviderFiles(host: RuntimeHost): Promise<void> {
   await host.run(
     [
-      `mkdir -p ${POC_HOME}/.claude ${POC_HOME}/.codex ${POC_HOME}/.pi/agent ${POC_HOME}/.dsh /workspace/.opencode /workspace/.deepsonar`,
+      `mkdir -p ${POC_HOME}/.claude ${POC_HOME}/.pi/agent ${POC_HOME}/.dsh /workspace/.deepsonar`,
       `printf '%s\\n' '{"mcpServers":{}}' > /workspace/.deepsonar/mcp.json`,
     ].join(" && "),
     { timeoutMs: 5_000 },
-  );
-  await host.uploadFile(JSON.stringify({ OPENAI_API_KEY: "sk-mock" }, null, 2) + "\n", `${POC_HOME}/.codex/auth.json`);
-  await host.uploadFile(
-    [
-      'model_provider = "custom"',
-      'model = "dummy"',
-      "disable_response_storage = true",
-      "",
-      "[model_providers.custom]",
-      'name = "custom"',
-      `base_url = "${POC_MOCK_BASE}/v1"`,
-      'wire_api = "responses"',
-      "requires_openai_auth = true",
-      "",
-    ].join("\n"),
-    `${POC_HOME}/.codex/config.toml`,
-  );
-  await host.uploadFile(
-    JSON.stringify({
-      $schema: "https://opencode.ai/config.json",
-      model: "deepsonar/dummy",
-      provider: {
-        deepsonar: {
-          npm: "@ai-sdk/openai-compatible",
-          name: "deepsonar",
-          options: { apiKey: "sk-mock", baseURL: `${POC_MOCK_BASE}/v1` },
-          models: { dummy: { name: "dummy" } },
-        },
-      },
-    }, null, 2) + "\n",
-    "/workspace/.opencode/config.json",
   );
   await host.uploadFile(
     JSON.stringify({

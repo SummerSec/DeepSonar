@@ -43,7 +43,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 为可选集成，默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
-- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；五类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
+- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
@@ -81,7 +81,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 运行时（`packages/runtime-sandbox/`）
 
-- `SandboxRunner` + `RuntimeHost` 是调度器与沙箱之间的唯一接口：`NoopRunner`（骨架）↔ `OpenSandboxRunner`（#162，绑定 `@alibaba-group/opensandbox@0.1.11`，server/execd/egress 只认 `name@sha256`）。五类 CLI adapter 只依赖内部 process/file 契约，不引用 provider SDK 类型。real 默认 OpenSandbox。重启后续跑走 `ensureHost`。K8s overlay 为 BatchSandbox + Kata（`deploy/opensandbox/config.k8s.toml`）。升级只改显式 pin，禁止 `latest`。换 provider 只动这个包。
+- `SandboxRunner` + `RuntimeHost` 是调度器与沙箱之间的唯一接口：`NoopRunner`（骨架）↔ `OpenSandboxRunner`（#162，绑定 `@alibaba-group/opensandbox@0.1.11`，server/execd/egress 只认 `name@sha256`）。三类 CLI adapter 只依赖内部 process/file 契约，不引用 provider SDK 类型。real 默认 OpenSandbox。重启后续跑走 `ensureHost`。K8s overlay 为 BatchSandbox + Kata（`deploy/opensandbox/config.k8s.toml`）。升级只改显式 pin，禁止 `latest`。换 provider 只动这个包。
 - 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
 - **系统沙箱**：RoleConfig 的 `runtime_image_key=null` 表示不绑定市场镜像；Scheduler 仍使用受治理的最小 Base 底座，并在 Job 快照中冻结不可变 digest。Test/Audit 等专项角色才默认或显式绑定专项镜像。
 - **最新版本策略**：官方市场从 GitHub Release 的 `latest/runtime-image-registry.json` 同步并只提升最新版本；旧版本仅保留给显式 pin 与历史 Job，实际执行始终使用快照中的 digest，不使用可变 `latest`。

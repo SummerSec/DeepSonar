@@ -11,10 +11,10 @@ test("agent pack parser accepts a credential-free v1 package", () => {
     description: "独立复核模板",
     publisher: "local",
     version: "1.0.0",
-    config: { agent_cli: "codex", env_vars: {}, credentials: [], config_files: [] },
+    config: { agent_cli: "pi", env_vars: {}, credentials: [], config_files: [] },
   }));
   assert.equal(pack.name, "community_review");
-  assert.equal(pack.config.agent_cli, "codex");
+  assert.equal(pack.config.agent_cli, "pi");
   assert.deepEqual(pack.config.credentials, []);
   assert.equal(pack.config.dsh_task_mode, "standard");
 });

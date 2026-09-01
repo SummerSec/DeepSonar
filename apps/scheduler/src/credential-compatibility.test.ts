@@ -11,9 +11,9 @@ import {
 
 test("CLI 与协议 provider 严格兼容", () => {
   assert.equal(validateCredentialCompatibility("claude-code", "anthropic"), null);
-  assert.equal(validateCredentialCompatibility("open-code", "anthropic"), null);
-  assert.equal(validateCredentialCompatibility("open-code", "openai"), null);
-  assert.equal(validateCredentialCompatibility("codex", "openai"), null);
+  assert.equal(validateCredentialCompatibility("pi", "anthropic"), null);
+  assert.equal(validateCredentialCompatibility("pi", "openai"), null);
+  assert.equal(validateCredentialCompatibility("dsh", "openai"), null);
   assert.match(
     validateCredentialCompatibility("claude-code", "openai") ?? "",
     /claude-code.*anthropic.*openai/,
@@ -21,8 +21,8 @@ test("CLI 与协议 provider 严格兼容", () => {
 });
 
 test("未知 CLI/provider fail closed", () => {
-  assert.equal(validateCredentialCompatibility("open-code", "openai"), null);
-  assert.match(validateCredentialCompatibility("codex", "anthropic") ?? "", /codex.*openai/);
+  assert.match(validateCredentialCompatibility("codex", "openai") ?? "", /不再支持新配置/);
+  assert.match(validateCredentialCompatibility("open-code", "anthropic") ?? "", /不再支持新配置/);
   assert.match(validateCredentialCompatibility("custom-cli", "openai") ?? "", /未知 agent_cli/);
 });
 
@@ -85,7 +85,7 @@ test("Credential 配置文件 CLI 变更不能破坏已有角色绑定", () => {
     projectId: null,
     metadata: {},
     settingsConfig: { config: 'model = "gpt-5"' },
-    credentialAgentCli: "codex",
+    credentialAgentCli: "dsh",
     consumers: [{
       source: "RoleConfig role-1",
       agentCli: "claude-code",

@@ -14,7 +14,7 @@ import {
 function state() {
   return createContextState({
     attempt_id: "attempt-1",
-    adapter_id: "codex",
+    adapter_id: "pi",
     adapter_version: "0.1.0",
     runtime_identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     policy: "automatic",

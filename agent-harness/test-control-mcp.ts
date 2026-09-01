@@ -129,9 +129,7 @@ for (const [adapterId, adapter] of Object.entries(AGENT_CLI_RUNTIME_ADAPTERS)) {
 }
 assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), [
   "claude-code",
-  "codex",
   "dsh",
-  "open-code",
   "pi",
 ]);
 
