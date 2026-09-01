@@ -2,7 +2,7 @@ import { Copy, DownloadSimple } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import "./SessionViewer.css";
 import { MarkdownView } from "../MarkdownView";
-import { SearchableMultiSelect } from "../SearchableSelect";
+import { SearchableMultiSelect, SearchableSelect } from "../SearchableSelect";
 import {
   cacheHitRate,
   formatCacheHitRate,
@@ -339,20 +339,19 @@ export function SessionViewer({
           {parsed.totals.skipped > 0 ? ` · skipped ${parsed.totals.skipped}` : ""}
         </span>
         {artifacts.length > 1 && onSelectArtifact && (
-          <label className="session-viewer__artifact">
-            <span>归档</span>
-            <select
-              value={selectedPath ?? artifacts[0]?.path ?? ""}
-              onChange={(event) => onSelectArtifact(event.target.value)}
-              aria-label="选择 Session 归档"
-            >
-              {artifacts.map((file) => (
-                <option key={file.path} value={file.path}>
-                  {sessionArtifactLabel(file)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            value={selectedPath ?? artifacts[0]?.path ?? ""}
+            onChange={onSelectArtifact}
+            options={artifacts.map((file) => ({
+              value: file.path,
+              label: sessionArtifactLabel(file),
+            }))}
+            placeholder="选择归档"
+            label="归档"
+            ariaLabel="选择 Session 归档"
+            clearable={false}
+            className="session-viewer__artifact"
+          />
         )}
         {onDownload && (
           <button type="button" onClick={onDownload} className="session-viewer__download">

@@ -29,7 +29,9 @@ test("session viewer can switch among archived session artifacts", () => {
   assert.match(source, /artifacts = \[\]/);
   assert.match(source, /onSelectArtifact/);
   assert.match(source, /sessionArtifactLabel/);
-  assert.match(source, /aria-label="选择 Session 归档"/);
+  assert.match(source, /<SearchableSelect/);
+  assert.match(source, /ariaLabel="选择 Session 归档"/);
+  assert.doesNotMatch(source, /<select\b/);
 });
 
 test("inspector exposes Chinese source, copy, and transient feedback actions", () => {

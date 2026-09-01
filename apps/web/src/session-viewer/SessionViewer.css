@@ -83,11 +83,9 @@
   font: 500 10px var(--font-mono);
 }
 
-.session-viewer__artifact select {
+.session-viewer__artifact .searchable-select-trigger {
   min-height: 28px;
   max-width: 16rem;
-  border: 1px solid var(--line);
-  border-radius: 4px;
   padding: 0 8px;
   color: var(--text);
   background: var(--surface-tint);
