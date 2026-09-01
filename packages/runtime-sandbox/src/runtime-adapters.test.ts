@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   PiJsonlFramer,
@@ -378,6 +379,61 @@ test("Pi 空 content 且零 usage 的 message_end 按协议错误失败", () => 
     type: "message_end",
     message: { content: [], usage: { input: 0, output: 0 } },
   }, state), []);
+});
+
+const PI_ISSUE_320_SAMPLE = "OpenAI API error (401): {\"message\":\"无效的令牌 (request id: 20260901210556871436957gdfwdwZcW5EDY)\",\"type\":\"new_api_error\"}";
+
+test("preferInnerJsonErrorMessage 提取最内层 message 并在失败时回退原文", () => {
+  const sample = preferInnerJsonErrorMessage(PI_ISSUE_320_SAMPLE);
+  assert.equal(sample.message, "OpenAI API error (401): 无效的令牌 (request id: 20260901210556871436957gdfwdwZcW5EDY)");
+  assert.equal(sample.detail, PI_ISSUE_320_SAMPLE);
+  assert.equal(
+    preferInnerJsonErrorMessage("{\"error\":{\"message\":\"{\\\"message\\\":\\\"innermost\\\"}\"}}").message,
+    "innermost",
+  );
+  assert.equal(
+    preferInnerJsonErrorMessage("{\"message\":\"OpenAI API error (401): {\\\"message\\\":\\\"无效的令牌\\\"}\"}").message,
+    "OpenAI API error (401): 无效的令牌",
+  );
+  assert.equal(preferInnerJsonErrorMessage("{\"message\":\"\",\"type\":\"new_api_error\"}").message, "{\"message\":\"\",\"type\":\"new_api_error\"}");
+  assert.equal(preferInnerJsonErrorMessage("OpenAI API error (401): {not-json").message, "OpenAI API error (401): {not-json");
+  assert.equal(preferInnerJsonErrorMessage("connection refused").message, "connection refused");
+  assert.equal(preferInnerJsonErrorMessage("connection refused").detail, undefined);
+  const secret = preferInnerJsonErrorMessage("{\"message\":\"unauthorized\",\"api_key\":\"sk-secret-value\"}");
+  assert.equal(secret.message, "unauthorized");
+  assert.equal(secret.detail, undefined);
+  assert.doesNotMatch(secret.message, /sk-secret-value|api_key/);
+});
+
+test("Pi error / extension_error 优先展示嵌入 JSON 的 message", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const expected = "OpenAI API error (401): 无效的令牌 (request id: 20260901210556871436957gdfwdwZcW5EDY)";
+  assert.deepEqual(adapter.decodeOutput({ type: "error", error: PI_ISSUE_320_SAMPLE }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+  ]);
+  assert.deepEqual(adapter.decodeOutput({ type: "extension_error", message: PI_ISSUE_320_SAMPLE }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+  ]);
+  assert.deepEqual(adapter.decodeOutput({ type: "error", errorMessage: PI_ISSUE_320_SAMPLE }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+  ]);
+  assert.deepEqual(adapter.decodeOutput({ type: "error", error: "connection refused" }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: "connection refused" },
+  ]);
+  assert.deepEqual(adapter.decodeOutput({ type: "response", command: "prompt", success: false, error: PI_ISSUE_320_SAMPLE }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+  ]);
+});
+
+test("DSH JSON-RPC 错误同样提取嵌入 JSON message", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const raw = "OpenAI API error (401): {\"message\":\"unauthorized client detected\"}";
+  assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", id: "1", error: { message: raw } }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: "OpenAI API error (401): unauthorized client detected", detail: raw },
+  ]);
+  assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", id: "1", error: { code: -32000 } }, {}), [
+    { type: "result", subtype: "error", is_error: true, result: "DSH JSON-RPC request failed" },
+  ]);
 });
 
 test("Pi 只有 agent_settled 产生结算信号，agent_end 不产生成功结果", () => {
