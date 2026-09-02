@@ -836,6 +836,9 @@ const TOOLSET_TO_RUNTIME_IMAGE_KEY: Record<string, string> = {
   "chrome-audit": "deepsonar-chrome-audit",
   "chrome-test": "deepsonar-chrome-test",
   "chrome-fuzz": "deepsonar-chrome-fuzz",
+  "clickhouse-audit": "deepsonar-clickhouse-audit",
+  "clickhouse-test": "deepsonar-clickhouse-test",
+  "clickhouse-fuzz": "deepsonar-clickhouse-fuzz",
   mobile: "deepsonar-mobile",
 };
 

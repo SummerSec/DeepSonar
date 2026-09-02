@@ -396,6 +396,20 @@ test("official OpenSandbox image list requires pinned registry keys", () => {
     () => listOfficialOpenSandboxRuntimeImages({ images: [{ image_key: "deepsonar-base", versions: [{ image_ref: "latest" }] }] }),
     /OPENSANDBOX_POC_REGISTRY_UNPINNED/,
   );
+  const unpublished = listOfficialOpenSandboxRuntimeImages({
+    images: [
+      ...images,
+      { image_key: "deepsonar-clickhouse-audit", versions: [] },
+    ],
+  });
+  assert.equal(unpublished.length, OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.length);
+  assert.ok(!unpublished.some((item) => item.key === "deepsonar-clickhouse-audit"));
+  assert.throws(
+    () => listOfficialOpenSandboxRuntimeImages({
+      images: images.map((item, index) => index === 0 ? { ...item, versions: [] } : item),
+    }),
+    /OPENSANDBOX_POC_REGISTRY_MISSING/,
+  );
 });
 
 test("deploy registry lists required OpenSandbox images and extra official keys", () => {

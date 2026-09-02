@@ -1,0 +1,147 @@
+name: clickhouse-runtime
+
+on:
+  pull_request:
+    paths:
+      - "deploy/Dockerfile.agent-clickhouse-*"
+      - "deploy/clickhouse-*"
+      - "agent-harness/clickhouse-*-runtime.json"
+      - "agent-harness/clickhouse-*.mjs"
+      - "agent-harness/test-clickhouse-runtime.mjs"
+      - ".dockerignore"
+      - "agent-harness/image-build-fingerprint.mjs"
+      - "agent-harness/resolve-image-src-cache.sh"
+      - ".github/workflows/clickhouse-runtime.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/Dockerfile.agent-clickhouse-*"
+      - "deploy/clickhouse-*"
+      - "agent-harness/clickhouse-*-runtime.json"
+      - "agent-harness/clickhouse-*.mjs"
+      - "agent-harness/test-clickhouse-runtime.mjs"
+      - ".dockerignore"
+      - "agent-harness/image-build-fingerprint.mjs"
+      - "agent-harness/resolve-image-src-cache.sh"
+      - ".github/workflows/clickhouse-runtime.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: clickhouse-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ClickHouse images are project-opt-in specialists. CI builds an amd64 image
+  # so the official binary and SQL smoke run on every supported merge path;
+  # the release workflow is the authoritative linux/amd64 + linux/arm64 gate.
+  clickhouse-runtime-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolset: clickhouse-audit
+            dockerfile: deploy/Dockerfile.agent-clickhouse-audit
+            config: agent-harness/clickhouse-audit-runtime.json
+          - toolset: clickhouse-test
+            dockerfile: deploy/Dockerfile.agent-clickhouse-test
+            config: agent-harness/clickhouse-test-runtime.json
+          - toolset: clickhouse-fuzz
+            dockerfile: deploy/Dockerfile.agent-clickhouse-fuzz
+            config: agent-harness/clickhouse-fuzz-runtime.json
+    steps:
+      - uses: actions/checkout@v4
+      - id: ns
+        name: GHCR namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: base-image
+        name: Resolve immutable base image digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref=ghcr.io/summersec/deepsonar-base:latest
+          digest="$(docker buildx imagetools inspect "$base_ref" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            digest="$(docker buildx imagetools inspect "$base_ref" 2>/dev/null \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'ref=%s@%s\n' "${base_ref%:*}" "$digest" >> "$GITHUB_OUTPUT"
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms linux/amd64 \
+            --build-arg "BASE_IMAGE=${{ steps.base-image.outputs.ref }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache; pull and ClickHouse smoke will run" >> "$GITHUB_STEP_SUMMARY"
+      - name: Pull reused image for smoke
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          docker pull "${{ steps.resolve.outputs.src_ref }}"
+          docker tag "${{ steps.resolve.outputs.src_ref }}" "deepsonar-${{ matrix.toolset }}:ci"
+      - uses: docker/setup-buildx-action@v3
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+      - name: Build ClickHouse specialist runtime
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: deepsonar-${{ matrix.toolset }}:ci
+          platforms: linux/amd64
+          build-args: BASE_IMAGE=${{ steps.base-image.outputs.ref }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:${{ steps.fingerprint.outputs.src_tag }}
+            type=gha,scope=runtime-${{ matrix.toolset }}
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
+            type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
+      - name: ClickHouse runtime contract and smoke
+        run: node agent-harness/test-clickhouse-runtime.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
+      - name: Pin single-arch ClickHouse src cache
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          LOCAL_TAG: deepsonar-${{ matrix.toolset }}:ci
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_TAG" "${IMAGE_NAME}:${SRC_TAG}"
+          if docker push "${IMAGE_NAME}:${SRC_TAG}"; then
+            echo "pinned ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "pin skipped/failed for ${IMAGE_NAME}:${SRC_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          fi

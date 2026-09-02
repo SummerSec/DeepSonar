@@ -1,8 +1,19 @@
-/** Chrome 长工具镜像的 stall 下限；不抬高全局 DEEPSONAR_JOB_STALL_SEC。 */
+/** Chrome / ClickHouse 长工具镜像的 stall 下限；不抬高全局 DEEPSONAR_JOB_STALL_SEC。 */
 export const CHROME_JOB_STALL_SEC = Object.freeze({
   "deepsonar-chrome-audit": 5_400,
   "deepsonar-chrome-test": 5_400,
   "deepsonar-chrome-fuzz": 10_800,
+});
+
+export const CLICKHOUSE_JOB_STALL_SEC = Object.freeze({
+  "deepsonar-clickhouse-audit": 5_400,
+  "deepsonar-clickhouse-test": 5_400,
+  "deepsonar-clickhouse-fuzz": 10_800,
+});
+
+const SPECIALIST_JOB_STALL_SEC = Object.freeze({
+  ...CHROME_JOB_STALL_SEC,
+  ...CLICKHOUSE_JOB_STALL_SEC,
 });
 
 export const TOOL_CALL_STARTED_PREFIX = "tool.call.started";
@@ -26,7 +37,7 @@ export function runtimeImageKeyFromSnapshot(snapshot: unknown): string | null {
 export function resolveJobStallSec(imageKey: unknown, defaultStallSec: number): number {
   if (!Number.isSafeInteger(defaultStallSec) || defaultStallSec <= 0) return 0;
   const key = typeof imageKey === "string" ? imageKey : "";
-  const override = CHROME_JOB_STALL_SEC[key as keyof typeof CHROME_JOB_STALL_SEC];
+  const override = SPECIALIST_JOB_STALL_SEC[key as keyof typeof SPECIALIST_JOB_STALL_SEC];
   return override ? Math.max(defaultStallSec, override) : defaultStallSec;
 }
 

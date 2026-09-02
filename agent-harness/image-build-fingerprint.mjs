@@ -171,6 +171,40 @@ export const PRESETS = {
     ],
     platforms: "linux/amd64,linux/arm64",
   },
+  "deepsonar-clickhouse-audit": {
+    dockerfile: "deploy/Dockerfile.agent-clickhouse-audit",
+    paths: [
+      "agent-harness/clickhouse-audit-runtime.json",
+      "deploy/clickhouse-runtime-sources.json",
+      "deploy/clickhouse-audit-env.sh",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
+  "deepsonar-clickhouse-test": {
+    dockerfile: "deploy/Dockerfile.agent-clickhouse-test",
+    paths: [
+      "agent-harness/clickhouse-test-runtime.json",
+      "deploy/clickhouse-runtime-sources.json",
+      "deploy/clickhouse-install-static.sh",
+      "deploy/clickhouse-sandbox-config.sh",
+      "deploy/clickhouse-server.sh",
+      "deploy/clickhouse-test-env.sh",
+      "agent-harness/clickhouse-test-smoke.mjs",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
+  "deepsonar-clickhouse-fuzz": {
+    dockerfile: "deploy/Dockerfile.agent-clickhouse-fuzz",
+    paths: [
+      "agent-harness/clickhouse-fuzz-runtime.json",
+      "deploy/clickhouse-runtime-sources.json",
+      "deploy/clickhouse-install-static.sh",
+      "deploy/clickhouse-sandbox-config.sh",
+      "deploy/clickhouse-fuzz-env.sh",
+      "deploy/clickhouse-fuzz-smoke.sh",
+    ],
+    platforms: "linux/amd64,linux/arm64",
+  },
   "deepsonar-mobile": {
     dockerfile: "deploy/Dockerfile.agent-mobile",
     paths: [

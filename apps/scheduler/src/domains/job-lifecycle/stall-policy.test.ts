@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CHROME_JOB_STALL_SEC,
+  CLICKHOUSE_JOB_STALL_SEC,
   inflightToolFromPayload,
   resolveJobStallSec,
   runtimeImageKeyFromSnapshot,
@@ -22,7 +23,9 @@ test("chrome image keys get a stall floor; others keep the global 900s window", 
   assert.equal(resolveJobStallSec("deepsonar-chrome-audit", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"]);
   assert.equal(resolveJobStallSec("deepsonar-chrome-test", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-test"]);
   assert.equal(resolveJobStallSec("deepsonar-chrome-fuzz", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"]);
-  assert.equal(resolveJobStallSec("deepsonar-chrome-fuzz", 20_000), 20_000);
+  assert.equal(resolveJobStallSec("deepsonar-clickhouse-audit", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-audit"]);
+  assert.equal(resolveJobStallSec("deepsonar-clickhouse-test", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-test"]);
+  assert.equal(resolveJobStallSec("deepsonar-clickhouse-fuzz", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"]);
   assert.equal(resolveJobStallSec("deepsonar-chrome-audit", 0), 0);
   assert.equal(runtimeImageKeyFromSnapshot({ runtime_image: { image_key: "deepsonar-chrome-fuzz" } }), "deepsonar-chrome-fuzz");
 });

@@ -1,0 +1,83 @@
+# DeepSonar ClickHouse fuzz runtime. Project opt-in only.
+# Ships the pinned official clickhouse-local binary plus Clang/LLVM, compiler-rt
+# and AFL++. Sanitizer rebuilds may help find issues; Bugcrowd qualification
+# still requires the unmodified official binary.
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+ARG DEBIAN_SNAPSHOT=20260731T162426Z
+ARG DEBIAN_SECURITY_SNAPSHOT=20260731T162426Z
+ARG TARGETARCH
+ARG CLICKHOUSE_VERSION=26.3.28.5
+ARG CLICKHOUSE_AMD64_URL=https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.28.5-lts/clickhouse-common-static-26.3.28.5-amd64.tgz
+ARG CLICKHOUSE_ARM64_URL=https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.28.5-lts/clickhouse-common-static-26.3.28.5-arm64.tgz
+ARG CLICKHOUSE_AMD64_SHA256=63d4e4e4b72d9859f1f3ef93f37202e7428c110ea7f6ba090c564c5419b729b7
+ARG CLICKHOUSE_ARM64_SHA256=4e30ba7a669b417b89901fae4f3743cacf12d332297edcebb3cef1a1f4c65a3f
+
+USER root
+RUN set -eux; \
+  rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SECURITY_SNAPSHOT" >>/etc/apt/sources.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl file git pkg-config clang-16 lld-16 llvm-16 libclang-rt-16-dev libfuzzer-16-dev afl++ binutils ninja-build cmake python3; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  install -d -m 0755 /opt/deepsonar/bin /workspace
+
+COPY deploy/clickhouse-install-static.sh /tmp/clickhouse-install-static.sh
+RUN set -eux; \
+  chmod +x /tmp/clickhouse-install-static.sh; \
+  case "$TARGETARCH" in \
+    amd64) clickhouse_url="$CLICKHOUSE_AMD64_URL"; clickhouse_sha256="$CLICKHOUSE_AMD64_SHA256" ;; \
+    arm64) clickhouse_url="$CLICKHOUSE_ARM64_URL"; clickhouse_sha256="$CLICKHOUSE_ARM64_SHA256" ;; \
+    *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  /tmp/clickhouse-install-static.sh "$TARGETARCH" "$clickhouse_url" "$clickhouse_sha256"; \
+  /opt/deepsonar/bin/clickhouse --version | grep -F "$CLICKHOUSE_VERSION"; \
+  rm -f /tmp/clickhouse-install-static.sh
+
+COPY deploy/clickhouse-sandbox-config.sh /tmp/clickhouse-sandbox-config.sh
+COPY deploy/clickhouse-fuzz-env.sh /tmp/clickhouse-fuzz-env.sh
+COPY deploy/clickhouse-fuzz-smoke.sh /tmp/clickhouse-fuzz-smoke.sh
+RUN set -eux; \
+  install -m 0755 /tmp/clickhouse-sandbox-config.sh /opt/deepsonar/bin/clickhouse-sandbox-config.sh; \
+  install -m 0755 /tmp/clickhouse-fuzz-env.sh /opt/deepsonar/bin/clickhouse-fuzz-env.sh; \
+  install -m 0755 /tmp/clickhouse-fuzz-smoke.sh /opt/deepsonar/bin/clickhouse-fuzz-smoke.sh; \
+  rm -f /tmp/clickhouse-sandbox-config.sh /tmp/clickhouse-fuzz-env.sh /tmp/clickhouse-fuzz-smoke.sh; \
+  if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
+  if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"clickhouse-fuzz",imageKey:"deepsonar-clickhouse-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","cmake","ninja","clickhouse@26.3.28.5","clickhouse-local","node","claude"],clickhouse:{binary:"/opt/deepsonar/bin/clickhouse",official:true,version:"26.3.28.5",tag:"v26.3.28.5-lts"},fuzz:{target:"clickhouse-local",actual:true,source:"official-clickhouse-common-static",honesty:"The image fails its build smoke if the official clickhouse-local binary is unavailable; no substitute harness fallback exists."},entrypoints:{check:"/opt/deepsonar/bin/clickhouse-fuzz-env.sh",smoke:"/opt/deepsonar/bin/clickhouse-fuzz-smoke.sh",local:"/opt/deepsonar/bin/clickhouse-local"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+ENV IS_SANDBOX=1 \
+    CC=clang \
+    CXX=clang++ \
+    AFL_SKIP_CPUFREQ=1 \
+    CLICKHOUSE_BIN=/opt/deepsonar/bin/clickhouse \
+    CLICKHOUSE_WATCHDOG_ENABLE=0 \
+    PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+RUN /opt/deepsonar/bin/clickhouse-fuzz-env.sh --check
+
+FROM scratch
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="clickhouse-fuzz" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="DeepSonar ClickHouse Fuzz" \
+      org.opencontainers.image.description="Project-opt-in official ClickHouse LTS clickhouse-local plus Clang/LLVM sanitizer and AFL++ toolchain." \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1 \
+    CC=clang \
+    CXX=clang++ \
+    AFL_SKIP_CPUFREQ=1 \
+    CLICKHOUSE_BIN=/opt/deepsonar/bin/clickhouse \
+    CLICKHOUSE_WATCHDOG_ENABLE=0 \
+    PATH=/opt/deepsonar/bin:/usr/lib/llvm-16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

@@ -17,11 +17,17 @@ export interface SandboxLimitsOverride {
   pidsLimit?: number;
 }
 
-/** Runtime images whose browser process needs outbound target-network access. */
+/** Runtime images that need outbound target-network access to fetch in-scope source. */
 export const CHROME_RUNTIME_IMAGE_KEYS = new Set([
   "deepsonar-chrome-audit",
   "deepsonar-chrome-test",
   "deepsonar-chrome-fuzz",
+]);
+
+export const CLICKHOUSE_RUNTIME_IMAGE_KEYS = new Set([
+  "deepsonar-clickhouse-audit",
+  "deepsonar-clickhouse-test",
+  "deepsonar-clickhouse-fuzz",
 ]);
 
 /**
@@ -36,6 +42,9 @@ export function assertChromeRuntimeEgressAllowed(
   const key = typeof runtimeImageKey === "string" ? runtimeImageKey : "";
   if (CHROME_RUNTIME_IMAGE_KEYS.has(key) && allowEgress !== true) {
     throw new Error(`Chrome runtime ${key} requires canvas network_policy.allow_egress=true`);
+  }
+  if (CLICKHOUSE_RUNTIME_IMAGE_KEYS.has(key) && allowEgress !== true) {
+    throw new Error(`ClickHouse runtime ${key} requires canvas network_policy.allow_egress=true`);
   }
 }
 

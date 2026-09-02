@@ -4,9 +4,21 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-02
+
+### 新增
+
+- **ClickHouse audit/test/fuzz 专项运行时**：三个官方 project-opt-in 镜像对标 Chrome 三件套。Audit 提供 git / CMake / Ninja / Clang-LLVM / binutils；Test 钉死官方 LTS `clickhouse-common-static` `v26.3.28.5`，HTTP 冒烟走 `127.0.0.1`；Fuzz 装同一官方二进制加 Clang-16 / libFuzzer / AFL++，不从源码编 ClickHouse。Test server 与 Fuzz `clickhouse-local` 共用沙箱预算内 config（关 watchdog/mlock/crash report/page cache，限制线程池与 8GiB 级默认 cache）。专项 CI 在 `--network none` 下把 hostname 钉成 `localhost`，避免 ClickHouse DNSResolver 解析容器 id 时卡在 Docker DNS。三套均要求 `allow_egress=true`，stall 下限与 Chrome 相同。
+
 ### 变更
 
 - **Agent CLI 新配置收敛为三类（#318）**：新 RoleConfig / 新 Job 只接受 `claude-code`（默认）、`pi`、`dsh`。leftover `codex` / `open-code` 历史快照与 Session 归档只读可看，不自动改写；下次保存 leftover 配置拒绝并提示迁移。运行时注册表与新增 CLI 接入流程保留。
+
+### 部署 / 升级说明
+
+- 本版本无 schema 变更（仍为 v39）。
+- 首次正式发布 ClickHouse 三套专项镜像；Release 成功后会把 digest 回写 `deploy/runtime-image-registry.json`。此前 bundled catalog 的 ClickHouse 条目为 `versions: []`。
+- 新 RoleConfig / 新 Job 的 `agent_cli` 只接受 `claude-code` / `pi` / `dsh`；历史 leftover CLI 快照仍只读可看。
 
 ## [0.2.2] - 2026-09-01
 
@@ -531,6 +543,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.2.3]: https://github.com/SummerSec/DeepSonar/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/SummerSec/DeepSonar/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
 [0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46

@@ -24,6 +24,7 @@ export {
   resolveEffectiveSandboxLimits,
   SANDBOX_LIMIT_BOUNDS,
   CHROME_RUNTIME_IMAGE_KEYS,
+  CLICKHOUSE_RUNTIME_IMAGE_KEYS,
   assertChromeRuntimeEgressAllowed,
   frozenCanvasAllowEgress,
   freezeAgentSnapshotNetworkPolicy,
