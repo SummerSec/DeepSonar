@@ -40,7 +40,15 @@ The current registry contains:
 | `pi` | Pi Coding Agent 0.84.4 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
 | `dsh` | DeepSeek Harness 0.1.1-rc.2 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（Code Mode `run_code`） | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
 
-DSH 把平台 `PLATFORM_SYSTEM_PROMPT` 整段写入 `DSH_SYSTEM_PROMPT`（替换默认 persona）。部分 OpenAI-responses 兼容网关按 `input[0]` system 文本识别客户端，只放行 pi 风格英文 opener。适配器因此在 DeepSonar 纪律正文前投影 `DSH_CLIENT_COMPAT_SYSTEM_PREFIX`（expert coding assistant），避免 Job 全部 401 且只剩 `DSH turn ended: error`。上游仍可能按更严指纹拒绝；#320 会解析嵌入 JSON `message`。
+DSH 的首条 system 消息（agent-spine `persona` / `DSH_SYSTEM_PROMPT`）会进入上游
+`input[0]`。部分 OpenAI-compatible 网关按该内容识别客户端，只放行 pi 风格前缀
+（`You are an expert coding assistant operating inside pi...`），把 DeepSonar Worker
+system prompt 单独作为 `input[0]` 会 401 `unauthorized client`。适配器因此做 **pi 兼容
+请求帧投影**：`persona` 以 pi 身份行开头，平台规则追加在后面；`includeHarnessIdentity`
+保持 `false`，避免 DSH 自带头衔抢占 `input[0]`。这不改变 DSH JSON-RPC 协议、版本钉死
+或 Gateway 投影。READINESS 对 `agent_cli=dsh` 给出 `DSH_UPSTREAM_CLIENT_FINGERPRINT`
+提示；若投影后仍 401，请改用 `pi` 或更换上游。失败时 `turn/end` 会尽量抽出嵌套 JSON
+的 `message`（例如 `unauthorized client detected`），避免只剩 `DSH turn ended: error`。
 
 五个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
 只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，

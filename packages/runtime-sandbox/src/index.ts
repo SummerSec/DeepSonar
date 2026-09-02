@@ -272,6 +272,11 @@ export type {
   SupportedAgentCli,
 } from "./cli-session-adapters.js";
 export {
+  DSH_PI_COMPAT_SYSTEM_PROMPT,
+  formatDshTurnError,
+  projectDshSystemPrompt,
+} from "./dsh-request-frame.js";
+export {
   AGENT_CLI_RUNTIME_ADAPTERS,
   CONTROL_RUNTIME_CAPABILITIES,
   PiJsonlFramer,

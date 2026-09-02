@@ -127,6 +127,21 @@ test("real preflight accepts governed role, credential, evidence and image proje
   assert.equal(JSON.stringify(result).includes("ANTHROPIC_API_KEY"), false);
 });
 
+test("DSH readiness notes the upstream system-message client fingerprint", () => {
+  const result = evaluateReadiness(baseInput({
+    roles: baseInput().roles.map((role) => role.name === "hub_reason"
+      ? { ...role, global_agent_cli: "dsh" }
+      : role),
+  }));
+  assert.equal(result.ready, true);
+  const note = result.checks.find((check) => check.code === "DSH_UPSTREAM_CLIENT_FINGERPRINT");
+  assert.equal(note?.severity, "warning");
+  assert.equal(note?.state, "attention");
+  assert.match(note?.message ?? "", /pi 兼容帧/);
+  assert.match(note?.message ?? "", /unauthorized client/);
+  assert.equal(result.checks.some((check) => check.code === "DSH_UPSTREAM_CLIENT_FINGERPRINT" && check.role?.name === "audit"), false);
+});
+
 test("readiness exposes HOST_DISK_PRESSURE and blocks only at error threshold", () => {
   const warning = evaluateReadiness(baseInput({
     hostDisk: {

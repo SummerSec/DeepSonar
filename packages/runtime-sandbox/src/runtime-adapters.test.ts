@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import {
+  DSH_PI_COMPAT_SYSTEM_PROMPT,
+  formatDshTurnError,
+  projectDshSystemPrompt,
+} from "./dsh-request-frame.js";
+import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   PiJsonlFramer,
   applyRuntimeOutput,
@@ -149,7 +154,10 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
     dshProvider: testDshProvider("high"),
   } as const;
   await adapter.start(context);
-  assert.match(fake.commands[0] ?? "", /^DSH_SYSTEM_PROMPT="\$\(printf '%s\\n\\n%s' 'You are an expert coding assistant operating inside a software engineering harness\.' "\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)"\)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
+  const startCommand = fake.commands[0] ?? "";
+  assert.match(startCommand, /DSH_SYSTEM_PROMPT="\$\( \{ printf '%s\\n\\n' 'You are an expert coding assistant operating inside pi, a coding agent harness\. You help users by reading files, executing commands, editing code, and writing new files\.'; cat '\/workspace\/\.deepsonar\/system-prompt\.txt'; \} \)" node \/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh-sdk-jsonrpc-demo\/lib\/packaged-bin\.js /);
+  assert.match(startCommand, /operating inside pi/);
+  assert.doesNotMatch(startCommand, /DSH_SYSTEM_PROMPT="\$\(cat /);
   assert.equal(adapter.version, "0.1.1-rc.2");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
@@ -163,6 +171,19 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   assert.equal(adapter.capabilities.incrementalMessages, true);
   await adapter.resume({ ...context, sessionId: "session-existing" });
   assert.equal(fake.commands[1], fake.commands[0]);
+
+  const projected = fakeSandbox();
+  await adapter.start({
+    ...context,
+    host: projected.host,
+    dshProvider: {
+      ...testDshProvider("high"),
+      systemPrompt: projectDshSystemPrompt("你在 DeepSonar 的一次性 Worker 沙箱中运行。"),
+    },
+  });
+  assert.match(projected.commands[0] ?? "", /DSH_SYSTEM_PROMPT='You are an expert coding assistant operating inside pi/);
+  assert.match(projected.commands[0] ?? "", /你在 DeepSonar 的一次性 Worker 沙箱中运行/);
+  assert.doesNotMatch(projected.commands[0] ?? "", /printf '%s\\n\\n'/);
 });
 
 test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
@@ -184,6 +205,36 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const follow = JSON.parse(adapter.encodeFollowUp?.("second", state).trim() ?? "null") as Record<string, unknown>;
   assert.equal((follow.params as Record<string, unknown>).sessionId, (prompt.params as Record<string, unknown>).sessionId);
   assert.equal((JSON.parse(adapter.encodeShutdown?.(state).trim() ?? "null") as Record<string, unknown>).method, "shutdown");
+});
+
+test("DSH request frame projects a pi-compatible leading system prompt", () => {
+  const platform = "你在 DeepSonar 的一次性 Worker 沙箱中运行。";
+  const projected = projectDshSystemPrompt(platform);
+  assert.ok(projected.startsWith(DSH_PI_COMPAT_SYSTEM_PROMPT));
+  assert.match(projected, /operating inside pi/);
+  assert.ok(projected.includes(platform));
+  assert.equal(projectDshSystemPrompt(projected), projected);
+  assert.equal(projectDshSystemPrompt(""), DSH_PI_COMPAT_SYSTEM_PROMPT);
+  assert.equal(projectDshSystemPrompt(undefined), DSH_PI_COMPAT_SYSTEM_PROMPT);
+});
+
+test("DSH turn errors surface nested JSON message instead of a bare kind", () => {
+  const nested = 'OpenAI API error (401): {"message":"unauthorized client detected, contact support for assistance at https://discord.gg/HgekCyHJqB"}';
+  assert.equal(
+    formatDshTurnError({ kind: "error", message: nested }),
+    "DSH turn ended: error: OpenAI API error (401): unauthorized client detected, contact support for assistance at https://discord.gg/HgekCyHJqB",
+  );
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const state = { sessionId: "session-err", dshTurnError: undefined as string | undefined };
+  assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", method: "session.event", params: {
+    sessionId: "session-err",
+    event: { type: "turn/end", data: { reason: { kind: "error", message: nested } } },
+  } }, state), []);
+  const settled = adapter.decodeOutput({ jsonrpc: "2.0", method: "session.status", params: { sessionId: "session-err", status: "idle" } }, state);
+  assert.equal(settled[0]?.type, "result");
+  assert.equal(settled[0]?.is_error, true);
+  assert.match(String(settled[0]?.result), /unauthorized client detected/);
+  assert.doesNotMatch(String(settled[0]?.result), /^DSH turn ended: error$/);
 });
 
 test("DSH malformed tool arguments fail soft without breaking later events", () => {
@@ -239,6 +290,8 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.doesNotMatch(config, /dsh-llm-deepseek/);
   assert.doesNotMatch(config, /"reasoning"/);
   assert.match(config, /dshHome: !!js process\.env\.DSH_HOME \?\? '\/workspace\/\.deepsonar-home\/\.dsh'/);
+  assert.match(config, /operating inside pi/);
+  assert.doesNotMatch(config, /You are a software engineering agent/);
   assert.match(config, /root: !!js process\.env\.DSH_SESSION_ROOT/);
   assert.doesNotMatch(config, /dsh-(?:app-tui|app-web|web-search|ask-user|theme)|telemetry-otel/);
 

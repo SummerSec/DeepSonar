@@ -436,6 +436,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
           credentialProvider: plan.provider,
           gatewayBaseUrl: config.gateway.sandboxUrl,
           model: plan.model,
+          platformSystemPrompt: PLATFORM_SYSTEM_PROMPT,
         })
         : undefined;
       const state: AdapterRuntimeState = {
