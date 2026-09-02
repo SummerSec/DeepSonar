@@ -252,6 +252,7 @@ export {
   createSemanticToolState,
   discardPendingSemanticTools,
   materializationPathCollisions,
+  materializeAgentFiles,
   normalizeRuntimeErrorDetails,
   parseRuntimeLine,
   redactRuntimeSecrets,

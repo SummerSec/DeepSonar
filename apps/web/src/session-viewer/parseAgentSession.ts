@@ -523,7 +523,8 @@ function detectFormat(
       || type === "agent_settled"
       || type === "message_update"
       || type === "message_end"
-      || type === "tool_execution_start"
+      ||       type === "tool_execution_start"
+      || type === "tool_execution_update"
       || type === "tool_execution_end"
       || type === "turn_start"
       || type === "turn_end"
@@ -1187,7 +1188,7 @@ function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolName
   }
   if (type === "tool_execution_start" || type === "tool_call" || type === "tool.use") {
     const tool = asRecord(row.toolCall) ?? row;
-    const name = asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name) ?? "tool";
+    const name = asString(tool.name) ?? asString(tool.toolName) ?? asString(row.toolName) ?? asString(row.name) ?? "tool";
     rememberToolName(tools, tool.id ?? tool.toolCallId ?? row.toolCallId ?? row.id, name);
     return [{
       id: String(index),
@@ -1198,12 +1199,28 @@ function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolName
       timestamp: ts,
     }];
   }
+  if (type === "tool_execution_update") {
+    const tool = asRecord(row.toolCall) ?? row;
+    const name = lookupToolName(
+      tools,
+      tool.id ?? tool.toolCallId ?? row.toolCallId ?? row.id,
+      asString(tool.name) ?? asString(tool.toolName) ?? asString(row.toolName) ?? asString(row.name),
+    );
+    return [{
+      id: String(index),
+      kind: "tool_result",
+      title: name ? `进度 ${name}` : "工具进度",
+      toolName: name,
+      body: stringifyBody(tool.partialResult ?? row.partialResult ?? tool.result ?? row.result),
+      timestamp: ts,
+    }];
+  }
   if (type === "tool_execution_end" || type === "tool_result" || type === "tool.result") {
     const tool = asRecord(row.toolCall) ?? row;
     const name = lookupToolName(
       tools,
       tool.id ?? tool.toolCallId ?? row.toolCallId ?? row.tool_use_id ?? row.id,
-      asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name),
+      asString(tool.name) ?? asString(tool.toolName) ?? asString(row.toolName) ?? asString(row.name),
     );
     return [{
       id: String(index),

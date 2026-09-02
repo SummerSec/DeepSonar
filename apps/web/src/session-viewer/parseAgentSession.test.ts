@@ -525,6 +525,39 @@ test("parses OpenCode 1.18 vendor export roles, parts, tool state, and usage", (
   assert.equal(result.totals.cacheWrite, 1);
 });
 
+test("parses Pi 0.84.4 official tool events including args and partialResult", () => {
+  const text = [
+    JSON.stringify({ type: "agent_start" }),
+    JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "call_1",
+      toolName: "bash",
+      args: { command: "ls" },
+    }),
+    JSON.stringify({
+      type: "tool_execution_update",
+      toolCallId: "call_1",
+      toolName: "bash",
+      args: { command: "ls" },
+      partialResult: { content: [{ type: "text", text: "partial..." }] },
+    }),
+    JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "call_1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "ok" }] },
+      isError: false,
+    }),
+  ].join("\n");
+  const result = parseAgentSession(text, { cli: "pi" });
+  assert.equal(result.format, "pi");
+  const call = result.items.find((item) => item.kind === "tool_call");
+  assert.equal(call?.toolName, "bash");
+  assert.match(call?.body ?? "", /"command": "ls"/);
+  assert.ok(result.items.some((item) => item.kind === "tool_result" && item.title?.includes("进度") && item.body?.includes("partial")));
+  assert.ok(result.items.some((item) => item.kind === "tool_result" && item.title?.includes("结果") && item.body?.includes("ok") && item.isError !== true));
+});
+
 test("parses Pi RPC session events with cli hint", () => {
   const text = [
     JSON.stringify({ type: "agent_start" }),

@@ -394,11 +394,13 @@ test("Pi RPC tool events consume official top-level fields and expose progress",
   const progress = adapter.decodeOutput({
     type: "tool_execution_update", toolCallId: "call_1", toolName: "bash", partialResult: { content: [{ type: "text", text: "working" }] },
   }, state);
-  assert.equal(progress[0]?.type, "tool_progress");
+  assert.equal(progress[0]?.type, "tool.progress");
+  assert.equal(progress[0]?.callId, "call_1");
+  assert.equal(progress[0]?.result, "working");
   const ended = adapter.decodeOutput({
     type: "tool_execution_end", toolCallId: "call_1", toolName: "bash", result: { content: [{ type: "text", text: "ok" }] }, isError: false,
   }, state);
-  assert.deepEqual(ended, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call_1", is_error: false, content: { content: [{ type: "text", text: "ok" }] } }] } }]);
+  assert.deepEqual(ended, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call_1", is_error: false, content: "ok" }] } }]);
 });
 
 test("Pi RPC failure markers become explicit error results and settlement cannot report success", () => {
@@ -517,6 +519,84 @@ test("DSH JSON-RPC 错误同样提取嵌入 JSON message", () => {
   assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", id: "1", error: { code: -32000 } }, {}), [
     { type: "result", subtype: "error", is_error: true, result: "DSH JSON-RPC request failed" },
   ]);
+});
+
+test("Pi 0.84.4 官方 tool_execution 顶层字段可解析 start/update/end", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  const start = adapter.decodeOutput({
+    type: "tool_execution_start",
+    toolCallId: "call_abc123",
+    toolName: "bash",
+    args: { command: "ls -la" },
+  }, state);
+  assert.deepEqual(start, [{
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "call_abc123", name: "bash", input: { command: "ls -la" } }] },
+  }]);
+  const update = adapter.decodeOutput({
+    type: "tool_execution_update",
+    toolCallId: "call_abc123",
+    toolName: "bash",
+    args: { command: "ls -la" },
+    partialResult: { content: [{ type: "text", text: "partial output so far..." }] },
+  }, state);
+  assert.deepEqual(update, [{
+    type: "tool.progress",
+    callId: "call_abc123",
+    toolName: "bash",
+    result: "partial output so far...",
+  }]);
+  const ended = adapter.decodeOutput({
+    type: "tool_execution_end",
+    toolCallId: "call_abc123",
+    toolName: "bash",
+    result: { content: [{ type: "text", text: "total 48" }] },
+    isError: false,
+  }, state);
+  assert.deepEqual(ended, [{
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "call_abc123", is_error: false, content: "total 48" }] },
+  }]);
+});
+
+test("Pi 控制工具 isError=true 保留失败标记，旧嵌套字段仍可读", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const official = adapter.decodeOutput({
+    type: "tool_execution_end",
+    toolCallId: "call_fact",
+    toolName: "mcp__deepsonar-control__emit_fact",
+    result: { content: [{ type: "text", text: "rejected" }] },
+    isError: true,
+  }, {});
+  assert.equal((official[0]?.message as { content?: Array<{ is_error?: boolean; tool_use_id?: string }> })?.content?.[0]?.is_error, true);
+  assert.equal((official[0]?.message as { content?: Array<{ tool_use_id?: string }> })?.content?.[0]?.tool_use_id, "call_fact");
+  const legacy = adapter.decodeOutput({
+    type: "tool_execution_start",
+    toolCall: { id: "1", name: "bash", arguments: { cmd: "ls" } },
+  }, {});
+  assert.equal((legacy[0]?.message as { content?: Array<{ id?: string; name?: string }> })?.content?.[0]?.id, "1");
+});
+
+test("Pi stopReason/auto_retry/compaction 失败后 agent_settled 不得报成功", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  for (const [event, expected] of [
+    [{ type: "message_update", assistantMessageEvent: { type: "error", message: "upstream exploded" } }, /upstream exploded/],
+    [{ type: "message_end", message: { stopReason: "error", content: [{ type: "text", text: "aborted mid-flight" }] } }, /aborted mid-flight|Pi message error/],
+    [{ type: "message_end", message: { stopReason: "aborted", content: [] } }, /Pi message aborted/],
+    [{ type: "auto_retry_end", success: false, attempt: 3, finalError: "529 overloaded_error: Overloaded" }, /overloaded/],
+    [{ type: "compaction_end", reason: "threshold", result: null, aborted: false, errorMessage: "API quota exceeded" }, /API quota exceeded/],
+    [{ type: "compaction_end", reason: "manual", result: null, aborted: true }, /Pi compaction aborted/],
+  ] as const) {
+    const state = {};
+    const failed = adapter.decodeOutput(event, state);
+    assert.equal(failed[0]?.type, "result");
+    assert.equal(failed[0]?.is_error, true);
+    assert.match(String(failed[0]?.result), expected);
+    const settled = adapter.decodeOutput({ type: "agent_settled" }, state);
+    assert.equal(settled[0]?.type, "result");
+    assert.equal(settled[0]?.is_error, true);
+  }
 });
 
 test("Pi 只有 agent_settled 产生结算信号，agent_end 不产生成功结果", () => {

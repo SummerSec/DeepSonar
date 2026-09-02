@@ -174,7 +174,7 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 `GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list`；返回的每个获准 operation 直接携带输入 JSON Schema，后续请求由短期 Job token 和
 冻结 operation allowlist 再次鉴权。Provider 配置物化为 `.pi/agent/models.json` 与
 `.pi/agent/auth.json`，`--model` 使用 `provider/model`；模型请求统一改写到 Gateway，
-长期密钥不进入 snapshot、workspace、运行清单或 evidence。空 content / 零 usage 视为协议错误。
+长期密钥不进入 snapshot、workspace、运行清单或 evidence。`--model` 冻结 `agent-default-model.provider`，不得把裸模型 ID 插入每个 Provider 再按顺序误匹配。工具事件按 0.84.4 顶层 `toolCallId` / `args` / `isError` / `partialResult` 解析；`message_update` error、`stopReason=error|aborted`、`auto_retry_end.success=false` 与 `compaction_end.result=null` 进入失败终态，后续 `agent_settled` 不得报成功。空 content / 零 usage 视为协议错误。仓库 Skill 安装失败阻断 Job。
 
 项目 `.pi` 目录不会自动加载。RoleConfig 只能冻结受治理的 `.pi/agent/extensions/` 文件；
 默认保留 `--no-extensions`，批准的扩展才通过单独的 `--extension` 参数加载。运行镜像清单

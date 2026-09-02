@@ -608,11 +608,12 @@ export function materializationPathCollisions(
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
  * embedded skills → 当前 CLI 的标准 skills 目录（Claude `.claude/skills`、
- * Pi `.pi/agent/skills`、DSH `.dsh/skills`）；repo skills 需出网安装，尽力而为。
+ * Pi `.pi/agent/skills`、DSH `.dsh/skills`）；repo skills 需出网安装，失败则阻断 Job。
  */
-async function materializeAgentFiles(
+export async function materializeAgentFiles(
   host: Pick<RuntimeHost, "run" | "uploadFile">,
-  spec: RealAgentSpec,
+  spec: Pick<RealAgentSpec, "commands" | "subAgents" | "skills"> &
+    Partial<Pick<RealAgentSpec, "provider">>,
   cliEnv: Record<string, string>,
 ): Promise<void> {
   // Validate every component and normalize every target before the first mkdir
@@ -648,16 +649,19 @@ async function materializeAgentFiles(
     await host.run(`mkdir -p -- ${shellQuote(dir)}`);
     await host.uploadFile(content, filePath);
   }
-  // repo 形式 skill：需要出网，失败只告警不阻断
+  // repo 形式 skill：需要出网，失败则阻断 Job
   for (const skill of spec.skills ?? []) {
     if ("files" in skill || !skill.repo) continue;
-    const skillAgent = provider === "claude-code" ? "claude-code" : provider;
+    const skillAgent = spec.provider === "pi" || spec.provider === "dsh" ? spec.provider : "claude-code";
     const res = await host.run(
       `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
       { timeoutMs: 120_000, env: cliEnv },
-    ).catch(() => null);
+    ).catch((error) => {
+      throw new Error(`REPO_SKILL_INSTALL_FAILED: ${skill.name}: ${error instanceof Error ? error.message : String(error)}`);
+    });
     if (!res || res.exitCode !== 0) {
-      throw new Error(`REPO_SKILL_INSTALL_FAILED: ${skill.name}`);
+      const detail = [res?.stderr, res?.stdout].filter(Boolean).join("\n").trim();
+      throw new Error(`REPO_SKILL_INSTALL_FAILED: ${skill.name}${detail ? `: ${detail.slice(0, 400)}` : ""}`);
     }
   }
 }
@@ -1190,13 +1194,21 @@ export function mapCliEvent(
     if (typeof delta === "string" && delta) emit({ type, delta });
     return { semanticEvents, warnings };
   }
-  if (type === "tool_progress") {
-    emit({
-      type: "tool.call.progress",
-      callId: typeof line.tool_use_id === "string" ? line.tool_use_id : undefined,
-      toolName: typeof line.tool_name === "string" ? line.tool_name : undefined,
-      ...(line.content !== undefined ? { content: redactToolTelemetry(line.content, undefined, 0, secretValues) } : {}),
-    });
+  if (type === "tool.progress" || type === "tool_progress") {
+    const callId = typeof line.callId === "string" ? line.callId
+      : typeof line.tool_use_id === "string" ? line.tool_use_id : "";
+    const toolName = typeof line.toolName === "string" ? line.toolName
+      : typeof line.tool_name === "string" ? line.tool_name : "";
+    const result = typeof line.result === "string" ? line.result
+      : line.content !== undefined ? line.content : "";
+    if (callId || toolName || result !== "") {
+      emit({
+        type: "tool.call.progress",
+        ...(callId ? { callId } : {}),
+        ...(toolName ? { toolName } : {}),
+        ...(result !== "" ? { result: redactToolTelemetry(result, undefined, 0, secretValues) } : {}),
+      });
+    }
     return { semanticEvents, warnings };
   }
   if (type === "system" && line.subtype === "init") {
@@ -1361,13 +1373,15 @@ export function mapCliEvent(
   }
   if (type === "agent_settled") {
     const text = typeof line.result === "string" ? redactSecretValues(line.result, secretValues) : "";
+    const isError = line.is_error === true;
     emit({ type: "run.settled", sessionId: line.session_id, sessionFile: line.session_file });
     return {
       finalText: text,
-      isError: false,
+      isError,
+      ...(isError ? { errorDetail: text || "Pi runtime failed" } : {}),
       sessionId: typeof line.session_id === "string" ? line.session_id : undefined,
       sessionFile: typeof line.session_file === "string" ? line.session_file : undefined,
-      settled: true,
+      settled: !isError,
       semanticEvents,
       warnings,
     };
@@ -1710,7 +1724,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 }
               }, semanticToolEvents, semanticToolState, secretValues);
               for (const warning of outcome.warnings) spec.onWarning?.(warning);
-              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "agent_settled", "agent_end"].includes(String(parsed.type))) {
+              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "tool.progress", "tool_progress", "agent_settled", "agent_end"].includes(String(parsed.type))) {
                 spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
               }
               for (const event of outcome.semanticEvents) {
@@ -1773,13 +1787,17 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
               await observeSessionIdentity({ sessionId: outcome.sessionId, sessionFile: outcome.sessionFile });
               bindObservedResumeIdentity();
               if (outcome.isError !== undefined) {
-                attemptTerminalResult = {
-                  isError: outcome.isError,
-                  ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
-                };
-                terminalOutcome = outcome.isError ? "failure" : "success";
-                // 即使 Provider 省略最终文本，只要发出终态成功/失败，也覆盖上一轮结果。
-                runError = resolveTerminalRunError(outcome);
+                const keepPriorFailure = attemptTerminalResult?.isError === true && outcome.isError === false;
+                if (!keepPriorFailure) {
+                  attemptTerminalResult = {
+                    isError: outcome.isError,
+                    ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
+                  };
+                  terminalOutcome = outcome.isError ? "failure" : "success";
+                  // 即使 Provider 省略最终文本，只要发出终态成功/失败，也覆盖上一轮结果。
+                  // 已记录的上游失败不得被后续 agent_settled 成功覆盖。
+                  runError = resolveTerminalRunError(outcome);
+                }
               }
               if (outcome.finalText !== undefined) {
                 // 每次完成门尝试都有独立终态。后续成功清除临时 Provider 错误；

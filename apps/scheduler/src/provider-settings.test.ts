@@ -15,6 +15,7 @@ import {
   providerSettingsForJobSnapshot,
   projectProviderRuntimeSnapshot,
   qualifyPiModelRef,
+  resolvePiPreferredProvider,
   resolveContextWindowTokens,
   resolveEffectiveModel,
   resolveRequestedModel,
@@ -414,6 +415,44 @@ const officialLlmPiAiJson = {
   },
   "agent-default-model": { provider: "xxxx", model: "gpt-5.6" },
 };
+
+test("Pi 多 Provider 不把默认模型插入其它 Provider，并冻结 agent-default-model.provider", () => {
+  const settings = {
+    "llm-pi-ai": {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          baseURL: "http://127.0.0.1/openai",
+          models: [{ id: "gpt-5.6" }],
+        },
+        anthropic: {
+          api: "anthropic-messages",
+          baseURL: "http://127.0.0.1/anthropic",
+          models: [{ id: "claude" }],
+        },
+      },
+    },
+    "agent-default-model": { provider: "anthropic", model: "claude" },
+  };
+  assert.equal(resolvePiPreferredProvider({ settingsConfig: settings }), "anthropic");
+  const [file] = materializeProviderSettings({ agentCli: "pi", settingsConfig: settings });
+  const materialized = JSON.parse(file!.content) as {
+    providers: { openai: { models: Array<{ id: string }>; }; anthropic: { models: Array<{ id: string }>; } };
+  };
+  assert.deepEqual(materialized.providers.openai.models.map((model) => model.id), ["gpt-5.6"]);
+  assert.deepEqual(materialized.providers.anthropic.models.map((model) => model.id), ["claude"]);
+  assert.equal(qualifyPiModelRef("claude", [file!]), "anthropic/claude");
+  assert.equal(qualifyPiModelRef("claude", [file!], "anthropic"), "anthropic/claude");
+  assert.equal(qualifyPiModelRef("anthropic/claude", [file!], "openai"), "anthropic/claude");
+  const projection = projectProviderRuntimeSnapshot({
+    agentCli: "pi",
+    roleModel: null,
+    settingsConfig: settings,
+    defaultModel: null,
+  });
+  assert.equal(projection.model, "anthropic/claude");
+  assert.equal(projection.upstream_model, "claude");
+});
 
 test("Pi extracts official llm-pi-ai YAML and JSON the same way as DSH", () => {
   const wrappedYaml = { config: officialLlmPiAiYaml };

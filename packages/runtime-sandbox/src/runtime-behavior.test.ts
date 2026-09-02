@@ -17,6 +17,7 @@ import {
   discardPendingSemanticTools,
   skillMaterializationPath,
   materializationPathCollisions,
+  materializeAgentFiles,
   normalizeRuntimeErrorDetails,
   resolveTerminalRunError,
   resolveTerminalProcessOutcome,
@@ -28,6 +29,7 @@ import {
   mergeObservedSessionIdentity,
   normalizePlainFinalOutput,
 } from "./runtime-agent.js";
+import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 import {
   parseDeepSonarContainerRows,
   isDeepsonarRestrictedNetwork,
@@ -902,6 +904,65 @@ test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
   assert.doesNotMatch(JSON.stringify(events), /supersecret/);
 });
 
+test("Pi tool.progress 只发遥测，agent_settled 失败标记不得当成功", () => {
+  const events: Record<string, unknown>[] = [];
+  const progress = mapCliEvent({
+    type: "tool.progress",
+    callId: "call_1",
+    toolName: "bash",
+    result: "partial output so far...",
+  }, (event) => events.push(event));
+  assert.deepEqual(progress.semanticEvents, []);
+  assert.deepEqual(events, [{
+    type: "tool.call.progress",
+    callId: "call_1",
+    toolName: "bash",
+    result: "partial output so far...",
+  }]);
+  const settled = mapCliEvent({ type: "agent_settled", result: "upstream exploded", is_error: true }, () => {});
+  assert.equal(settled.isError, true);
+  assert.equal(settled.settled, false);
+  assert.match(settled.errorDetail ?? "", /upstream exploded/);
+});
+
+test("Pi 官方控制工具成功释放语义事件，isError=true 不释放", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const decode = (line: Record<string, unknown>) => adapter.decodeOutput(line, {});
+  const successState = createSemanticToolState();
+  const start = decode({
+    type: "tool_execution_start",
+    toolCallId: "call-fact",
+    toolName: "mcp__deepsonar-control__emit_fact",
+    args: { title: "事实", description: "证据" },
+  });
+  assert.equal(mapCliEvent(start[0]!, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, successState).semanticEvents.length, 0);
+  const released = mapCliEvent(decode({
+    type: "tool_execution_end",
+    toolCallId: "call-fact",
+    toolName: "mcp__deepsonar-control__emit_fact",
+    result: { content: [{ type: "text", text: "ok" }] },
+    isError: false,
+  })[0]!, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, successState);
+  assert.equal(released.semanticEvents.length, 1);
+  assert.equal(released.semanticEvents[0]?.type, "fact");
+
+  const failedState = createSemanticToolState();
+  mapCliEvent(decode({
+    type: "tool_execution_start",
+    toolCallId: "call-done",
+    toolName: "mcp__deepsonar-control__mark_job_done",
+    args: { summary: "done" },
+  })[0]!, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, failedState);
+  const blocked = mapCliEvent(decode({
+    type: "tool_execution_end",
+    toolCallId: "call-done",
+    toolName: "mcp__deepsonar-control__mark_job_done",
+    result: { content: [{ type: "text", text: "rejected" }] },
+    isError: true,
+  })[0]!, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, failedState);
+  assert.equal(blocked.semanticEvents.length, 0);
+});
+
 test("工具错误不会释放事件，修正后的新 callId 成功只释放一次且结果重放幂等", () => {
   const state = createSemanticToolState();
   const failedCall = {
@@ -1426,6 +1487,25 @@ test("Pi session archive rejects a sessionFile over 32 MiB", async () => {
 
   assert.deepEqual(bundle.artifacts, []);
   assert.match(bundle.captureError ?? "", /32 MiB/);
+});
+
+test("仓库 Skill 安装失败阻断 Job 而不静默继续", async () => {
+  const commands: string[] = [];
+  await assert.rejects(
+    materializeAgentFiles({
+      run: async (command) => {
+        commands.push(command);
+        if (command.includes("skills add")) return { exitCode: 1, stdout: "", stderr: "npm ERR network" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      uploadFile: async () => {},
+    }, {
+      provider: "pi",
+      skills: [{ name: "taste", repo: "https://github.com/example/skills" }],
+    }, {}),
+    /REPO_SKILL_INSTALL_FAILED: taste/,
+  );
+  assert.ok(commands.some((command) => command.includes("npx -y skills add") && command.includes("--agent 'pi'")));
 });
 
 test("组件 materialize 在同名命令/skill 路径冲突时拒绝覆盖", () => {

@@ -73,8 +73,8 @@ export interface AdapterRuntimeState {
   dshInitializeRequestId?: string;
   dshTurnError?: string;
   dshInitialInput?: string;
-  failed?: boolean;
-  errorDetail?: string;
+  /** Pi 上游失败原文；agent_settled 不得再报成功。 */
+  failure?: string;
 }
 
 export interface RuntimeAdapter {
@@ -454,17 +454,24 @@ function piTextFromMessageEvent(line: Record<string, unknown>, state: AdapterRun
     const unseen = unseenCompleteText(state, "reasoning", event.content);
     return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
   }
+  if (type === "error") {
+    return rememberPiFailure(
+      state,
+      textFrom(event.error ?? event.message ?? event.errorMessage ?? event.delta ?? line.error),
+      "Pi assistant message error",
+    );
+  }
   if (type === "toolcall_end") {
     const toolCall = event.toolCall;
-    if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
-      const record = toolCall as Record<string, unknown>;
-      const id = String(record.id ?? "");
-      const name = String(record.name ?? "");
-      const args = record.arguments ?? {};
-      return id && name
-        ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: args }] } }]
-        : [{ type: "unknown_runtime" }];
-    }
+    const record = toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)
+      ? toolCall as Record<string, unknown>
+      : event;
+    const id = String(record.id ?? record.toolCallId ?? event.id ?? "");
+    const name = String(record.name ?? record.toolName ?? event.toolName ?? "");
+    const args = record.arguments ?? record.args ?? event.args ?? {};
+    return id && name
+      ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: args }] } }]
+      : [{ type: "unknown_runtime" }];
   }
   return [];
 }
@@ -505,6 +512,48 @@ function piUsageTokens(value: unknown): { input: number; output: number } {
   };
 }
 
+function rememberPiFailure(
+  state: AdapterRuntimeState,
+  raw: string | undefined,
+  fallback: string,
+): Record<string, unknown>[] {
+  const event = runtimeErrorResult(raw, fallback);
+  state.failure = typeof event.result === "string" && event.result ? event.result : fallback;
+  return [event];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+/** Pi 0.84.4 RPC 工具字段：顶层 toolCallId/args/isError，兼容旧嵌套 toolCall。 */
+function piToolFields(line: Record<string, unknown>): {
+  id: string;
+  name: string;
+  args: unknown;
+  result: unknown;
+  isError: boolean;
+  partial: unknown;
+} {
+  const nested = asRecord(line.toolCall) ?? {};
+  return {
+    id: String(line.toolCallId ?? nested.id ?? nested.callId ?? nested.toolCallId ?? line.id ?? ""),
+    name: String(line.toolName ?? nested.name ?? nested.toolName ?? line.name ?? ""),
+    args: line.args ?? nested.arguments ?? nested.args ?? {},
+    result: line.result ?? nested.result ?? nested.output ?? "",
+    isError: line.isError === true || nested.isError === true || Boolean(nested.error ?? line.error),
+    partial: line.partialResult ?? nested.partialResult,
+  };
+}
+
+function piToolOutput(value: unknown): unknown {
+  const text = piMessageText(value);
+  if (text) return text;
+  if (typeof value === "string") return value;
+  return value ?? "";
+}
+
 function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): boolean {
   if (state.finalText || state.streamedText) return false;
   const text = piMessageText(message);
@@ -519,72 +568,75 @@ function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): b
 
 function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   const type = String(line.type ?? "");
-  if (type === "compaction_end" && line.result === null) {
-    state.failed = true;
-    state.errorDetail = "Pi context compaction failed";
-    return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail }];
+  // 失败压缩必须在 context observation 之前处理，否则会变成 compaction_unknown。
+  if (type === "compaction_end" && (line.result == null || line.aborted === true)) {
+    return rememberPiFailure(
+      state,
+      textFrom(line.errorMessage ?? line.error),
+      line.aborted === true ? "Pi compaction aborted" : "Pi compaction failed",
+    );
   }
   const contextEvents = contextEventFromLine(line, state);
   if (contextEvents.length > 0) return contextEvents;
   const contextObservation = contextObservationFromProviderLine(line);
   if (contextObservation.length > 0) return contextObservation;
-  const fail = (detail: string): Record<string, unknown>[] => {
-    state.failed = true;
-    state.errorDetail = detail;
-    return [{ type: "result", subtype: "error", is_error: true, result: detail }];
-  };
   if (type === "response") {
     if (line.command === "get_state" && line.success === true) piSessionState(line, state);
     if (line.success === false) {
       const error = typeof line.error === "string" ? line.error : undefined;
-      return [runtimeErrorResult(error, "Pi RPC command failed")];
+      return rememberPiFailure(state, error, "Pi RPC command failed");
     }
     return [];
   }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
-  if (type === "message_update") {
-    const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
-      ? line.assistantMessageEvent as Record<string, unknown>
-      : {};
-    if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed");
-    return piTextFromMessageEvent(line, state);
-  }
+  if (type === "message_update") return piTextFromMessageEvent(line, state);
   if (type === "message_end") {
-    const stopReason = String((line.message as Record<string, unknown> | undefined)?.stopReason ?? line.stopReason ?? "");
-    if (stopReason === "error" || stopReason === "aborted") return fail(`Pi message ended: ${stopReason}`);
     const message = line.message;
+    const record = asRecord(message);
+    const stopReason = typeof record?.stopReason === "string"
+      ? record.stopReason
+      : typeof line.stopReason === "string" ? line.stopReason : "";
+    if (stopReason === "error" || stopReason === "aborted") {
+      return rememberPiFailure(state, piMessageText(message), `Pi message ${stopReason}`);
+    }
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
     if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
     if (!unseen && isEmptyPiModelResponse(message, state)) {
-      return [{ type: "result", subtype: "error", is_error: true, result: "PI_EMPTY_MODEL_RESPONSE" }];
+      return rememberPiFailure(state, "PI_EMPTY_MODEL_RESPONSE", "PI_EMPTY_MODEL_RESPONSE");
     }
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }
   if (type === "agent_settled") {
-    if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed" }];
+    if (state.failure) return rememberPiFailure(state, state.failure, "Pi runtime failed");
     return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "" }];
   }
   if (type === "agent_end") return [{ type: "agent_end" }];
   if (type === "error" || type === "extension_error") {
-    return [runtimeErrorResult(textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed")];
+    return rememberPiFailure(state, textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed");
   }
-  if (["tool_execution_start", "tool_execution_update", "tool_execution_end"].includes(type)) {
-    const tool = line.toolCall && typeof line.toolCall === "object" && !Array.isArray(line.toolCall)
-      ? line.toolCall as Record<string, unknown>
-      : line;
-    const id = String(line.toolCallId ?? tool.toolCallId ?? tool.id ?? tool.callId ?? "");
-    const name = String(line.toolName ?? tool.toolName ?? tool.name ?? "");
-    if (!id || !name) return [{ type: "unknown_runtime" }];
+  if (type === "auto_retry_end" && line.success === false) {
+    return rememberPiFailure(state, textFrom(line.finalError ?? line.errorMessage ?? line.error), "Pi auto-retry exhausted");
+  }
+  if (type === "tool_execution_start" || type === "tool_execution_update" || type === "tool_execution_end") {
+    const tool = piToolFields(line);
+    if (!tool.id || !tool.name) return [{ type: "unknown_runtime" }];
     if (type === "tool_execution_start") {
-      return [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: line.args ?? tool.args ?? tool.arguments ?? {} }] } }];
+      return [{ type: "assistant", message: { content: [{ type: "tool_use", id: tool.id, name: tool.name, input: tool.args ?? {} }] } }];
     }
     if (type === "tool_execution_update") {
-      return [{ type: "tool_progress", tool_use_id: id, tool_name: name, content: line.partialResult ?? tool.partialResult ?? "" }];
+      return [{
+        type: "tool.progress",
+        callId: tool.id,
+        toolName: tool.name,
+        result: piToolOutput(tool.partial ?? tool.result),
+      }];
     }
-    return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(line.isError ?? tool.isError ?? tool.error), content: line.result ?? tool.result ?? tool.output ?? "" }] } }];
+    return [{
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: tool.id, is_error: tool.isError, content: piToolOutput(tool.result) }] },
+    }];
   }
-  if (type === "auto_retry_end" && line.success === false) return fail("Pi automatic retry exhausted");
   return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "model_select", "model_change"].includes(type)
     ? []
     : unknownRuntimeEvent();

@@ -389,8 +389,18 @@ export function materializeProviderSettings(input: {
     const providerSource = Object.keys(configuredProviders).length > 0
       ? configuredProviders
       : { deepsonar: source };
-    const selectedModelId = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
-    const selectedProviderId = official?.route;
+    const selectedRaw = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
+    const selected = splitPiModelRef(selectedRaw ?? "");
+    const selectedModelId = selected.modelId || undefined;
+    const preferredProvider = selected.provider || official?.route || null;
+    const providerIds = Object.keys(providerSource);
+    let ownerProvider = preferredProvider && providerIds.includes(preferredProvider) ? preferredProvider : undefined;
+    if (!ownerProvider && selectedModelId) {
+      const matches = providerIds.filter((id) => providerHasModelId(providerSource[id], selectedModelId));
+      if (matches.length === 1) ownerProvider = matches[0];
+    }
+    if (!ownerProvider && preferredProvider) ownerProvider = preferredProvider;
+    if (!ownerProvider && providerIds.length === 1) ownerProvider = providerIds[0];
     const providers = Object.fromEntries(Object.entries(providerSource).map(([providerId, rawProvider]) => {
       const provider = structuredClone(asObject(rawProvider));
       if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) {
@@ -405,9 +415,10 @@ export function materializeProviderSettings(input: {
       } else {
         models = [];
       }
-      if (selectedModelId && !models.some((model) => model.id === selectedModelId)
-        && (!selectedProviderId || providerId === selectedProviderId)) models.unshift({ id: selectedModelId });
-      if (contextWindowTokens != null) {
+      if (selectedModelId && providerId === ownerProvider && !models.some((model) => model.id === selectedModelId)) {
+        models.unshift({ id: selectedModelId });
+      }
+      if (contextWindowTokens != null && providerId === ownerProvider) {
         const target = models.find((model) => model.id === selectedModelId) ?? models[0];
         if (target) target.contextWindow = contextWindowTokens;
       }
@@ -490,7 +501,12 @@ export function projectProviderRuntimeSnapshot(input: {
         ?? null;
     }
   }
-  const upstreamModel = resolveEffectiveModel({ roleModel: model, agentCli: input.agentCli, settingsConfig }) ?? model;
+  const upstreamSource = input.agentCli === "pi" && model ? (splitPiModelRef(model).modelId || model) : model;
+  const upstreamModel = resolveEffectiveModel({ roleModel: upstreamSource, agentCli: input.agentCli, settingsConfig }) ?? upstreamSource;
+  if (input.agentCli === "pi" && model) {
+    const preferred = resolvePiPreferredProvider({ model, settingsConfig });
+    model = qualifyPiModelRef(model, configFiles, preferred) ?? model;
+  }
   return {
     model,
     upstream_model: upstreamModel,
@@ -570,30 +586,58 @@ export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   return found;
 }
 
+export function splitPiModelRef(model: string): { provider?: string; modelId: string } {
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) return { modelId: trimmed };
+  return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
+}
+
+function providerHasModelId(rawProvider: unknown, modelId: string): boolean {
+  const provider = asObject(rawProvider);
+  if (Array.isArray(provider.models)) {
+    return provider.models.some((raw) => asObject(raw).id === modelId);
+  }
+  return Boolean(modelId && Object.prototype.hasOwnProperty.call(asObject(provider.models), modelId));
+}
+
+/** 冻结 agent-default-model.provider，避免裸模型 ID 按 Provider 顺序误路由。 */
+export function resolvePiPreferredProvider(input: {
+  model?: string | null;
+  settingsConfig: unknown;
+}): string | null {
+  const official = readOfficialLlmPiAiSettings(input.settingsConfig);
+  const raw = input.model?.trim() || official?.defaultModel || "";
+  const split = raw ? splitPiModelRef(raw) : { modelId: "" };
+  return split.provider || official?.route || null;
+}
+
 /** Pi CLI --model 需要 provider/model；裸模型 ID 会变成 provider= 空、请求发不出去。 */
 export function qualifyPiModelRef(
   model: string | undefined,
   files: readonly MaterializedConfigFile[],
+  preferredProvider?: string | null,
 ): string | undefined {
   if (!model?.trim()) return undefined;
   const trimmed = model.trim();
   if (trimmed.includes("/")) return trimmed;
+  const preferred = preferredProvider?.trim() || undefined;
   const modelsFile = files.find((item) => item.path === ".pi/agent/models.json");
-  if (!modelsFile) return `deepsonar/${trimmed}`;
+  if (!modelsFile) return `${preferred ?? "deepsonar"}/${trimmed}`;
   let parsed: unknown;
   try {
     parsed = JSON.parse(modelsFile.content) as unknown;
   } catch {
-    return `deepsonar/${trimmed}`;
+    return `${preferred ?? "deepsonar"}/${trimmed}`;
   }
   const providers = asObject(asObject(parsed).providers);
-  for (const [providerId, rawProvider] of Object.entries(providers)) {
-    const provider = asObject(rawProvider);
-    const models = Array.isArray(provider.models) ? provider.models : [];
-    if (models.some((raw) => asObject(raw).id === trimmed)) return `${providerId}/${trimmed}`;
-  }
-  const first = Object.keys(providers)[0];
-  return first ? `${first}/${trimmed}` : trimmed;
+  if (preferred && providers[preferred]) return `${preferred}/${trimmed}`;
+  const matches = Object.entries(providers).filter(([, rawProvider]) => providerHasModelId(rawProvider, trimmed));
+  if (matches.length === 1) return `${matches[0]![0]}/${trimmed}`;
+  if (preferred) return `${preferred}/${trimmed}`;
+  const providerIds = Object.keys(providers);
+  if (providerIds.length === 1) return `${providerIds[0]}/${trimmed}`;
+  return `deepsonar/${trimmed}`;
 }
 
 /**
