@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   defaultCustomRange,
+  formatCacheHitRate,
   readUsageLedgerCollapsed,
   shanghaiYmd,
   shiftShanghaiYmd,
@@ -48,8 +49,15 @@ test("usage board source still wires cache columns and collapse toggle", () => {
   assert.match(source, /缓存读/);
   assert.match(source, /缓存写/);
   assert.match(source, /cache_read_input_tokens/);
+  assert.match(source, /缓存命中率/);
   assert.match(source, /usage-ledger__toggle/);
   assert.match(source, /readUsageLedgerCollapsed/);
+});
+
+test("cache hit rate uses billed cache reads over reads plus writes", () => {
+  assert.equal(formatCacheHitRate(75, 25), "75.0%");
+  assert.equal(formatCacheHitRate(0, 0), "—");
+  assert.equal(formatCacheHitRate(-1, 10), "0.0%");
 });
 
 test("collapse prefs default expanded and persist per user and page", () => {

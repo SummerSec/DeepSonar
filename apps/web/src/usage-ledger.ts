@@ -30,6 +30,13 @@ export function usageEmpty(usage: DashboardUsage | null): boolean {
   return !usage || usage.totals.requests === 0;
 }
 
+/** Cache hit rate for billed cache traffic: reads / (reads + writes). */
+export function formatCacheHitRate(readTokens: number, creationTokens: number): string {
+  const denominator = Math.max(0, readTokens) + Math.max(0, creationTokens);
+  if (denominator === 0) return "—";
+  return `${((Math.max(0, readTokens) / denominator) * 100).toFixed(1)}%`;
+}
+
 export const USAGE_LEDGER_PREF_PREFIX = "deepsonar:usage-ledger";
 
 export function usageLedgerPageKey(

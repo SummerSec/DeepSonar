@@ -9,6 +9,7 @@ import { formatTokenCount } from "./session-viewer/parseAgentSession";
 import {
   USAGE_PERIOD_OPTIONS,
   defaultCustomRange,
+  formatCacheHitRate,
   readUsageLedgerCollapsed,
   shanghaiYmd,
   usageEmpty,
@@ -164,6 +165,10 @@ export function UsageLedgerBoard({
                   <UsageStat label="输出" value={formatTokenCount(usage.totals.output_tokens)} raw={usage.totals.output_tokens} />
                   <UsageStat label="缓存读" value={formatTokenCount(usage.totals.cache_read_input_tokens ?? 0)} raw={usage.totals.cache_read_input_tokens ?? 0} />
                   <UsageStat label="缓存写" value={formatTokenCount(usage.totals.cache_creation_input_tokens ?? 0)} raw={usage.totals.cache_creation_input_tokens ?? 0} />
+                  <UsageStat
+                    label="缓存命中率"
+                    value={formatCacheHitRate(usage.totals.cache_read_input_tokens ?? 0, usage.totals.cache_creation_input_tokens ?? 0)}
+                  />
                   <UsageStat label="合计" value={formatTokenCount(usage.totals.total_tokens)} raw={usage.totals.total_tokens} />
                   <UsageStat label="Job" value={String(usage.totals.jobs)} />
                   {scope === "global" && <UsageStat label="项目" value={String(usage.totals.projects)} />}
