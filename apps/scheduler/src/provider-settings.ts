@@ -390,6 +390,7 @@ export function materializeProviderSettings(input: {
       ? configuredProviders
       : { deepsonar: source };
     const selectedModelId = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
+    const selectedProviderId = official?.route;
     const providers = Object.fromEntries(Object.entries(providerSource).map(([providerId, rawProvider]) => {
       const provider = structuredClone(asObject(rawProvider));
       if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) {
@@ -404,7 +405,8 @@ export function materializeProviderSettings(input: {
       } else {
         models = [];
       }
-      if (selectedModelId && !models.some((model) => model.id === selectedModelId)) models.unshift({ id: selectedModelId });
+      if (selectedModelId && !models.some((model) => model.id === selectedModelId)
+        && (!selectedProviderId || providerId === selectedProviderId)) models.unshift({ id: selectedModelId });
       if (contextWindowTokens != null) {
         const target = models.find((model) => model.id === selectedModelId) ?? models[0];
         if (target) target.contextWindow = contextWindowTokens;

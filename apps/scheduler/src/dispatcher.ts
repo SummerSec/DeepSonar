@@ -42,6 +42,34 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   }
   return { reason: "exception", message: error instanceof Error ? error.message : String(error) };
 }
+
+/** Keep provider error details that are otherwise hidden behind SDK wrappers. */
+export function formatDispatcherFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!error || typeof error !== "object") return message;
+  const value = error as Record<string, unknown>;
+  const objects: Record<string, unknown>[] = [value];
+  for (const key of ["error", "response", "responseBody", "rawResponse", "data", "body", "details", "cause"]) {
+    const nested = value[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) objects.push(nested as Record<string, unknown>);
+  }
+  const details = objects.flatMap((item) => [
+    item.code,
+    item.statusCode,
+    item.status,
+    item.message,
+    item.detail,
+  ]).filter((item) => item !== undefined && item !== null && String(item).trim() !== "").map(String);
+  const unique = [...new Set(details)].filter((item) => !message.includes(item));
+  return unique.length > 0 ? `${message} (${unique.join("; ")})` : message;
+}
+
+/** OpenSandbox container startup failures are transient on Windows hosts. */
+export function isRetryableProvisionFailure(error: unknown): boolean {
+  if (error instanceof RuntimeImageNotReadyError) return false;
+  const text = formatDispatcherFailureMessage(error);
+  return /CONTAINER_START_FAILED|Egress sidecar container failed to start|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)/i.test(text);
+}
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
 import {
@@ -67,6 +95,7 @@ export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index
 
 /** 在执行的 job（优雅退出 drain 用，§12.2） */
 const inFlight = new Set<Promise<void>>();
+const MAX_AUTOMATIC_PROVISION_RETRIES = 1;
 
 export type DispatchCandidate = {
   id?: unknown;
@@ -730,11 +759,31 @@ export async function dispatchOnce(): Promise<number> {
   return claimedJobs.length;
 }
 
+async function retryProvisioningJob(
+  jobId: string,
+  attempt: Record<string, unknown>,
+  errorMessage: string,
+  lifecycle: ReturnType<typeof createSqlJobLifecycleApplication>,
+): Promise<boolean> {
+  const attemptNo = Number(attempt.attempt_no ?? 0);
+  if (!Number.isSafeInteger(attemptNo) || attemptNo < 1 || attemptNo > MAX_AUTOMATIC_PROVISION_RETRIES) return false;
+  const retried = await lifecycle.retryProvisioning(
+    jobId,
+    errorMessage,
+    (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
+    (attempt.resource_labels_json ?? {}) as Record<string, string>,
+  );
+  if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'provision_retry')`;
+  return Boolean(retried);
+}
+
 async function runJob(jobId: string) {
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
   let attemptId: string | null = null;
   let provisionEffectId: string | null = null;
+  let provisionAttempted = false;
+  let activeAttempt: Record<string, unknown> | null = null;
   let platformCapability: PreparedPlatformCapability | null = null;
   const lifecycle = createSqlJobLifecycleApplication();
   try {
@@ -742,6 +791,7 @@ async function runJob(jobId: string) {
     if (!job) return;
     const attempt = await getActiveAttempt(sql, jobId);
     if (!attempt) throw new Error(`job ${jobId} 缺少持久 Attempt`);
+    activeAttempt = attempt;
     attemptId = String(attempt.id);
 
     // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
@@ -853,6 +903,7 @@ async function runJob(jobId: string) {
           : "opensandbox";
         const provisionStarted = Date.now();
         try {
+          provisionAttempted = true;
           handle = await withProvisionTimeout(
             runner.provision(provisionInput),
             provisionSec * 1000,
@@ -941,7 +992,7 @@ async function runJob(jobId: string) {
       // must not paint the wait gate as failed or hide the reply target.
       return;
     }
-    const rawMessage = e instanceof Error ? e.message : String(e);
+    const rawMessage = formatDispatcherFailureMessage(e);
     const details = e && typeof e === "object" && "code" in e
       ? (e as { code?: unknown; metadata?: { bucket?: unknown; retry_after_sec?: unknown; limit?: unknown } })
       : null;
@@ -953,6 +1004,17 @@ async function runJob(jobId: string) {
       : details?.code === "event_rate_limited"
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
+    if (provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)
+      && Number(activeAttempt.attempt_no ?? 0) <= MAX_AUTOMATIC_PROVISION_RETRIES) {
+      const retried = await retryProvisioningJob(jobId, activeAttempt, msg, lifecycle).catch((retryError) => {
+        console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
+        return false;
+      });
+      if (retried) {
+        inc("deepsonar_sandbox_provision_retry_total");
+        return;
+      }
+    }
     inc("deepsonar_jobs_failed_total", { reason: failureReason });
     // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
     const failedRow = await sql.begin(async (tx) => {
