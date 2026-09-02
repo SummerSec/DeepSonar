@@ -14,6 +14,8 @@ test("AppShell reads /health version instead of faking scheduler status only", (
   assert.match(shell, /formatHealthOpenSandbox/);
   assert.match(shell, /health\.opensandbox/);
   assert.match(shell, /调度器在线/);
+  assert.match(shell, /target="_blank"/);
+  assert.match(shell, /rel="noreferrer noopener"/);
 });
 
 test("settings save flash also raises a viewport-fixed toast", () => {
