@@ -23,11 +23,9 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
                 ↓
         Finding → Verify
                 ↓ confirmed
-          Hub 风险验收
+          Hub 继续 / 收敛
                 ↓
-       环境 / PoC / 动态验证
-                ↓
-          Hub 最终收敛 → Report
+          Report（调度器派生）
 ```
 
 主要能力：
@@ -126,7 +124,7 @@ done
 
 ### 对象存储
 
-生产 Compose 默认启动官方再发布的 `deepsonar-silo`（FROM 已解析的 [PGSTY Silo](https://github.com/pgsty/silo) `RELEASE.2026-08-06T00-00-00Z` digest）。下一正式 Release 前仍回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；`SILO_IMAGE` 可覆盖为其它 S3 兼容镜像。共享资产 CAS 走内部 `http://silo:9000`。API 与 Console 默认只绑定宿主机 `127.0.0.1:9000/9001`，数据保存在独立 `silo_data` volume；报告与运行证据仍写入本地 `blob_data`。切换既有对象存储时必须先迁移并校验对象，部署脚本不会删除旧卷。
+生产 Compose 默认使用 [PGSTY Silo](https://github.com/pgsty/silo) `RELEASE.2026-08-06T00-00-00Z` 不可变 pin；`SILO_IMAGE` 可覆盖为其它 S3 兼容镜像。共享资产 CAS 走内部 `http://silo:9000`。API 与 Console 默认只绑定宿主机 `127.0.0.1:9000/9001`，数据保存在独立 `silo_data` volume；报告与运行证据仍写入本地 `blob_data`。切换既有对象存储时必须先迁移并校验对象，部署脚本不会删除旧卷。
 
 ### 常用运维命令
 
@@ -162,7 +160,7 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
 ```
 
-默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 **v31**）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 **v39**）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
 
 项目镜像策略：`inherit_global`（默认，只认全局 RoleConfig 镜像与 model / 默认 CLI）或 `project_managed`（项目 `role_runtime_images` 集中绑定；项目 RoleConfig **不接受**独立 `runtime_image_key`，但可托管自己的 model）。
 
@@ -238,7 +236,7 @@ DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
 - [database/schema.sql](database/schema.sql) — 数据结构唯一基线（与 `SCHEMA_VERSION` 同步 bump）
 - [database/README.md](database/README.md) — schema 启动与重建规则
 - `/api/openapi.json` — 当前 HTTP API 契约
-- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 开放项可能很少；未完成能力以 DESIGN §11 + 代码为准（当前刻意暂缓：画布全图 `layout_revision` 权威重算 → [#148](https://github.com/SummerSec/DeepSonar/issues/148)）
+- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 开放项可能很少；未完成能力以 DESIGN §11 + 代码为准
 
 ## License
 
