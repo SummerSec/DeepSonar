@@ -549,6 +549,15 @@ test("parses Pi RPC session events with cli hint", () => {
   assert.ok(result.items.some((item) => item.kind === "tool_result" && item.toolName === "bash"));
 });
 
+test("parses Pi tool execution progress from partialResult", () => {
+  const result = parseAgentSession([
+    JSON.stringify({ type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "ls" } }),
+    JSON.stringify({ type: "tool_execution_update", toolCallId: "call_1", toolName: "bash", partialResult: { text: "working" } }),
+  ].join("\n"), { cli: "pi" });
+  assert.equal(result.format, "pi");
+  assert.ok(result.items.some((item) => item.kind === "tool_result" && item.title?.includes("进度") && item.body?.includes("working")));
+});
+
 test("cli hint forces format when content is ambiguous", () => {
   const text = JSON.stringify({ type: "message", role: "user", text: "hello" });
   const asPi = parseAgentSession(text, { cli: "pi" });

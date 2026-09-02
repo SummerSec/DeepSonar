@@ -411,6 +411,16 @@ test("Pi RPC failure markers become explicit error results and settlement cannot
   assert.equal(settled[0]?.is_error, true);
 });
 
+test("Pi RPC response failures remain failed through settlement", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  const failed = adapter.decodeOutput({ type: "response", command: "prompt", success: false, error: "upstream unavailable" }, state);
+  assert.equal(failed[0]?.is_error, true);
+  const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
+  assert.equal(settled[0]?.type, "result");
+  assert.equal(settled[0]?.is_error, true);
+});
+
 test("适配器只接受带完整身份的压缩事件，缺字段时记录未知", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const state = {

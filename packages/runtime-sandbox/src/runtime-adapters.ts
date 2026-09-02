@@ -519,25 +519,29 @@ function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): b
 
 function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   const type = String(line.type ?? "");
-  if (type === "compaction_end" && line.result === null) {
-    state.failed = true;
-    state.errorDetail = "Pi context compaction failed";
-    return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail }];
-  }
-  const contextEvents = contextEventFromLine(line, state);
-  if (contextEvents.length > 0) return contextEvents;
-  const contextObservation = contextObservationFromProviderLine(line);
-  if (contextObservation.length > 0) return contextObservation;
   const fail = (detail: string): Record<string, unknown>[] => {
     state.failed = true;
     state.errorDetail = detail;
     return [{ type: "result", subtype: "error", is_error: true, result: detail }];
   };
+  const failRuntime = (raw: string | undefined, fallback: string): Record<string, unknown>[] => {
+    const event = runtimeErrorResult(raw, fallback);
+    state.failed = true;
+    state.errorDetail = typeof event.result === "string" && event.result ? event.result : fallback;
+    return [event];
+  };
+  if (type === "compaction_end" && line.result === null) {
+    return fail("Pi context compaction failed");
+  }
+  const contextEvents = contextEventFromLine(line, state);
+  if (contextEvents.length > 0) return contextEvents;
+  const contextObservation = contextObservationFromProviderLine(line);
+  if (contextObservation.length > 0) return contextObservation;
   if (type === "response") {
     if (line.command === "get_state" && line.success === true) piSessionState(line, state);
     if (line.success === false) {
       const error = typeof line.error === "string" ? line.error : undefined;
-      return [runtimeErrorResult(error, "Pi RPC command failed")];
+      return failRuntime(error, "Pi RPC command failed");
     }
     return [];
   }

@@ -82,6 +82,7 @@ import {
   jobGatewayAllowedModels,
   materializeProviderSettings,
   qualifyPiModelRef,
+  resolvePiPreferredProvider,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
@@ -1529,7 +1530,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       provider,
       adapter: snapshot.agent_runtime,
       runtimeImageKey: snapshot.runtime_image.image_key,
-      model: provider === "pi" ? qualifyPiModelRef(model, runtimeConfigFiles) : model,
+      model: provider === "pi"
+        ? qualifyPiModelRef(model, runtimeConfigFiles, resolvePiPreferredProvider({ model, settingsConfig: snapshot.settings_config_json }))
+        : model,
       reasoning,
       dshProvider,
       dshTaskMode: snapshot.dsh_task_mode,

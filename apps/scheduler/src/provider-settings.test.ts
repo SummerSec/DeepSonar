@@ -15,6 +15,7 @@ import {
   providerSettingsForJobSnapshot,
   projectProviderRuntimeSnapshot,
   qualifyPiModelRef,
+  resolvePiPreferredProvider,
   resolveContextWindowTokens,
   resolveEffectiveModel,
   resolveRequestedModel,
@@ -153,6 +154,24 @@ test("Pi official multi-provider settings keep the default model on its declared
   const providers = JSON.parse(files[0]!.content).providers as Record<string, { models: Array<{ id: string }> }>;
   assert.deepEqual(providers.anthropic.models.map((model) => model.id), ["claude-sonnet-4-5"]);
   assert.deepEqual(providers.openai.models, []);
+});
+
+test("Pi duplicate model IDs still honor agent-default-model.provider", () => {
+  const settings = {
+    "llm-pi-ai": {
+      providers: {
+        openai: { baseURL: "http://127.0.0.1/openai", models: [{ id: "shared" }] },
+        anthropic: { baseURL: "http://127.0.0.1/anthropic", models: [{ id: "shared" }] },
+      },
+    },
+    "agent-default-model": { provider: "anthropic", model: "shared" },
+  };
+  const files = materializeProviderSettings({ agentCli: "pi", settingsConfig: settings });
+  assert.equal(resolvePiPreferredProvider({ settingsConfig: settings }), "anthropic");
+  assert.equal(qualifyPiModelRef("shared", files, "anthropic"), "anthropic/shared");
+  const projection = projectProviderRuntimeSnapshot({ agentCli: "pi", roleModel: null, settingsConfig: settings, defaultModel: null });
+  assert.equal(projection.model, "anthropic/shared");
+  assert.equal(projection.upstream_model, "shared");
 });
 
 test("materializeProviderSettings returns empty for empty settings", () => {
