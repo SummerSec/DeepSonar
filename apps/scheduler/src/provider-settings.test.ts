@@ -143,6 +143,18 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
   assert.equal(qualifyPiModelRef("deepsonar/gpt-5", routed), "deepsonar/gpt-5");
 });
 
+test("Pi official multi-provider settings keep the default model on its declared route", () => {
+  const files = materializeProviderSettings({
+    agentCli: "pi",
+    settingsConfig: {
+      config: `llm-pi-ai:\n  providers:\n    anthropic: { baseURL: https://api.anthropic.com, models: [] }\n    openai: { baseURL: https://api.openai.com/v1, models: [] }\nagent-default-model:\n  provider: anthropic\n  model: claude-sonnet-4-5\n`,
+    },
+  });
+  const providers = JSON.parse(files[0]!.content).providers as Record<string, { models: Array<{ id: string }> }>;
+  assert.deepEqual(providers.anthropic.models.map((model) => model.id), ["claude-sonnet-4-5"]);
+  assert.deepEqual(providers.openai.models, []);
+});
+
 test("materializeProviderSettings returns empty for empty settings", () => {
   assert.deepEqual(materializeProviderSettings({ agentCli: "claude-code", settingsConfig: {} }), []);
   assert.equal(hasProviderSettingsConfig({}), false);

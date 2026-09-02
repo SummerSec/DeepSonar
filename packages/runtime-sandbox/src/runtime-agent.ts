@@ -656,7 +656,9 @@ async function materializeAgentFiles(
       `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
       { timeoutMs: 120_000, env: cliEnv },
     ).catch(() => null);
-    if (!res || res.exitCode !== 0) console.warn(`[real-agent] repo skill 安装失败: ${skill.name}`);
+    if (!res || res.exitCode !== 0) {
+      throw new Error(`REPO_SKILL_INSTALL_FAILED: ${skill.name}`);
+    }
   }
 }
 
@@ -1186,6 +1188,15 @@ export function mapCliEvent(
   if (type === "text.delta" || type === "reasoning.delta") {
     const delta = line.delta;
     if (typeof delta === "string" && delta) emit({ type, delta });
+    return { semanticEvents, warnings };
+  }
+  if (type === "tool_progress") {
+    emit({
+      type: "tool.call.progress",
+      callId: typeof line.tool_use_id === "string" ? line.tool_use_id : undefined,
+      toolName: typeof line.tool_name === "string" ? line.tool_name : undefined,
+      ...(line.content !== undefined ? { content: redactToolTelemetry(line.content, undefined, 0, secretValues) } : {}),
+    });
     return { semanticEvents, warnings };
   }
   if (type === "system" && line.subtype === "init") {
@@ -1976,4 +1987,3 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     ...(sessionFile ? { sessionFile } : {}),
   };
 }
-

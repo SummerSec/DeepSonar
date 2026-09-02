@@ -73,6 +73,8 @@ export interface AdapterRuntimeState {
   dshInitializeRequestId?: string;
   dshTurnError?: string;
   dshInitialInput?: string;
+  failed?: boolean;
+  errorDetail?: string;
 }
 
 export interface RuntimeAdapter {
@@ -516,11 +518,21 @@ function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): b
 }
 
 function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const type = String(line.type ?? "");
+  if (type === "compaction_end" && line.result === null) {
+    state.failed = true;
+    state.errorDetail = "Pi context compaction failed";
+    return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail }];
+  }
   const contextEvents = contextEventFromLine(line, state);
   if (contextEvents.length > 0) return contextEvents;
   const contextObservation = contextObservationFromProviderLine(line);
   if (contextObservation.length > 0) return contextObservation;
-  const type = String(line.type ?? "");
+  const fail = (detail: string): Record<string, unknown>[] => {
+    state.failed = true;
+    state.errorDetail = detail;
+    return [{ type: "result", subtype: "error", is_error: true, result: detail }];
+  };
   if (type === "response") {
     if (line.command === "get_state" && line.success === true) piSessionState(line, state);
     if (line.success === false) {
@@ -530,8 +542,16 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return [];
   }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
-  if (type === "message_update") return piTextFromMessageEvent(line, state);
+  if (type === "message_update") {
+    const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
+      ? line.assistantMessageEvent as Record<string, unknown>
+      : {};
+    if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed");
+    return piTextFromMessageEvent(line, state);
+  }
   if (type === "message_end") {
+    const stopReason = String((line.message as Record<string, unknown> | undefined)?.stopReason ?? line.stopReason ?? "");
+    if (stopReason === "error" || stopReason === "aborted") return fail(`Pi message ended: ${stopReason}`);
     const message = line.message;
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
@@ -542,23 +562,29 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }
   if (type === "agent_settled") {
+    if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed" }];
     return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "" }];
   }
   if (type === "agent_end") return [{ type: "agent_end" }];
   if (type === "error" || type === "extension_error") {
     return [runtimeErrorResult(textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed")];
   }
-  if (["tool_execution_start", "tool_execution_end"].includes(type)) {
+  if (["tool_execution_start", "tool_execution_update", "tool_execution_end"].includes(type)) {
     const tool = line.toolCall && typeof line.toolCall === "object" && !Array.isArray(line.toolCall)
       ? line.toolCall as Record<string, unknown>
       : line;
-    const id = String(tool.id ?? tool.callId ?? "");
-    const name = String(tool.name ?? tool.toolName ?? "");
+    const id = String(line.toolCallId ?? tool.toolCallId ?? tool.id ?? tool.callId ?? "");
+    const name = String(line.toolName ?? tool.toolName ?? tool.name ?? "");
     if (!id || !name) return [{ type: "unknown_runtime" }];
-    return type === "tool_execution_start"
-      ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: tool.arguments ?? {} }] } }]
-      : [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(tool.error), content: tool.result ?? tool.output ?? "" }] } }];
+    if (type === "tool_execution_start") {
+      return [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: line.args ?? tool.args ?? tool.arguments ?? {} }] } }];
+    }
+    if (type === "tool_execution_update") {
+      return [{ type: "tool_progress", tool_use_id: id, tool_name: name, content: line.partialResult ?? tool.partialResult ?? "" }];
+    }
+    return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(line.isError ?? tool.isError ?? tool.error), content: line.result ?? tool.result ?? tool.output ?? "" }] } }];
   }
+  if (type === "auto_retry_end" && line.success === false) return fail("Pi automatic retry exhausted");
   return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "model_select", "model_change"].includes(type)
     ? []
     : unknownRuntimeEvent();
@@ -575,6 +601,7 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
   if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
+  if (context.systemPromptPath) command += ` --append-system-prompt \"$(cat ${shellQuote(context.systemPromptPath)})\"`;
   return host.runAsync(command, { cwd: context.cwd, env: context.env });
 }
 

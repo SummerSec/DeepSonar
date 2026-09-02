@@ -11,6 +11,7 @@ import type {
 } from "./ports.js";
 import {
   interruptProvision,
+  createAttempt,
   markAttemptInterrupted,
   requestAttemptCancel,
   settleAttemptTerminal,
@@ -70,6 +71,7 @@ export function createJobLifecycleApplication(
       return transitionExecutor({ jobId, ...plan });
     },
     claimPendingJob: requireOperation("claimPendingJob"),
+    retryProvisioning: requireOperation("retryProvisioning"),
     failExecution: requireOperation("failExecution"),
     reapExecutionTimeout: requireOperation("reapExecutionTimeout"),
     reapProvisionTimeout: requireOperation("reapProvisionTimeout"),
@@ -121,6 +123,29 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         WHERE id = ${jobId} AND status = 'pending'
         RETURNING id`;
       return row ? (row as JobLifecycleRow) : null;
+    },
+
+    /** Requeue a transient pre-running provision failure with a fresh Attempt. */
+    async retryProvisioning(jobId, error, snapshotIdentity, resourceLabels) {
+      return atomically(async (tx) => {
+        const [row] = await tx`
+          UPDATE jobs
+          SET status = 'pending', claimed_at = NULL, started_at = NULL,
+              finished_at = NULL, lease_expires_at = NULL, sandbox_id = NULL, error = NULL
+          WHERE id = ${jobId} AND status IN ('claimed','provisioning') AND started_at IS NULL
+          RETURNING id, status`;
+        if (!row) return null;
+        await settleAttemptTerminal(tx, jobId, "failed", {
+          reason: "provision_retry",
+          retry_scheduled: true,
+        }, error);
+        await tx`
+          UPDATE canvas_nodes SET status = 'pending', updated_at = now()
+          WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
+            AND status IN ('running', 'failed')`;
+        await createAttempt(tx, jobId, snapshotIdentity, resourceLabels);
+        return row as JobLifecycleRow;
+      });
     },
 
     /** Executor 异常：只有活动执行状态允许进入 failed。 */
