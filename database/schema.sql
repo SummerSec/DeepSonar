@@ -1405,6 +1405,9 @@ INSERT INTO runtime_images (image_key, name, description, publisher, source_url,
   ('deepsonar-chrome-audit', 'DeepSonar Chrome Audit', 'Chrome-backed official audit runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
   ('deepsonar-chrome-test', 'DeepSonar Chrome Test', 'Chrome-backed official test runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
   ('deepsonar-chrome-fuzz', 'DeepSonar Chrome Fuzz', 'Chrome-backed official fuzz runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
+  ('deepsonar-clickhouse-audit', 'DeepSonar ClickHouse Audit', 'ClickHouse-backed official audit runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
+  ('deepsonar-clickhouse-test', 'DeepSonar ClickHouse Test', 'ClickHouse-backed official test runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
+  ('deepsonar-clickhouse-fuzz', 'DeepSonar ClickHouse Fuzz', 'ClickHouse-backed official fuzz runtime; project opt-in only', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true),
   ('deepsonar-mobile', 'DeepSonar Mobile', '移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ApkCheckPack/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；project opt-in；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP', 'SummerSec', 'https://github.com/SummerSec/DeepSonar', 'official', true, true, true)
 ON CONFLICT (image_key) DO NOTHING;
 

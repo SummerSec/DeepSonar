@@ -9,6 +9,7 @@ import {
 } from "./domains/role-runtime-snapshot/index.js";
 import {
   CHROME_JOB_STALL_SEC,
+  CLICKHOUSE_JOB_STALL_SEC,
   resolveJobStallSec,
 } from "./domains/job-lifecycle/stall-policy.js";
 
@@ -27,6 +28,10 @@ test("Chrome runtime policy accepts egress, rejects false, and leaves non-Chrome
   for (const imageKey of ["deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz"]) {
     assert.doesNotThrow(() => assertChromeRuntimeEgressAllowed(imageKey, true));
     assert.throws(() => assertChromeRuntimeEgressAllowed(imageKey, false), /allow_egress=true/);
+  }
+  for (const imageKey of ["deepsonar-clickhouse-audit", "deepsonar-clickhouse-test", "deepsonar-clickhouse-fuzz"]) {
+    assert.doesNotThrow(() => assertChromeRuntimeEgressAllowed(imageKey, true));
+    assert.throws(() => assertChromeRuntimeEgressAllowed(imageKey, false), /ClickHouse runtime .*allow_egress=true/);
   }
   assert.doesNotThrow(() => assertChromeRuntimeEgressAllowed("deepsonar-audit", false));
   assert.throws(
@@ -62,6 +67,14 @@ test("Job creation freezes the canvas policy and ignores payload policy", async 
       { runtime_image: { image_key: "deepsonar-chrome-test" } },
     ),
     /Chrome runtime deepsonar-chrome-test requires canvas network_policy\.allow_egress=true/,
+  );
+  await assert.rejects(
+    () => freezeAgentSnapshotNetworkPolicy(
+      chromeDb,
+      "canvas-1",
+      { runtime_image: { image_key: "deepsonar-clickhouse-test" } },
+    ),
+    /ClickHouse runtime deepsonar-clickhouse-test requires canvas network_policy\.allow_egress=true/,
   );
 });
 
@@ -144,8 +157,11 @@ test("Chrome runtimes raise stall floors without changing the global 900s defaul
   assert.equal(resolveJobStallSec("deepsonar-chrome-audit", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"]);
   assert.equal(resolveJobStallSec("deepsonar-chrome-test", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-test"]);
   assert.equal(resolveJobStallSec("deepsonar-chrome-fuzz", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"]);
-  assert.ok(CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"] > 900);
+  assert.equal(resolveJobStallSec("deepsonar-clickhouse-audit", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-audit"]);
+  assert.equal(resolveJobStallSec("deepsonar-clickhouse-test", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-test"]);
+  assert.equal(resolveJobStallSec("deepsonar-clickhouse-fuzz", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"]);
   assert.ok(CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"] > CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"]);
+  assert.ok(CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"] > CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-audit"]);
 });
 
 test("human task create inspects the hub snapshot before opening a canvas", () => {

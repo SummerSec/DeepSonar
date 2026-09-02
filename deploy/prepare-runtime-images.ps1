@@ -170,6 +170,9 @@ function Get-ImageMap {
       "deepsonar-chrome-audit" = "deepsonar-chrome-audit:local";
       "deepsonar-chrome-test" = "deepsonar-chrome-test:local";
       "deepsonar-chrome-fuzz" = "deepsonar-chrome-fuzz:local";
+      "deepsonar-clickhouse-audit" = "deepsonar-clickhouse-audit:local";
+      "deepsonar-clickhouse-test" = "deepsonar-clickhouse-test:local";
+      "deepsonar-clickhouse-fuzz" = "deepsonar-clickhouse-fuzz:local";
     }
   }
   foreach ($spec in $LocalImage) {
@@ -216,6 +219,9 @@ function Build-LocalImages {
     "deepsonar-chrome-audit" = "deploy/Dockerfile.agent-chrome-audit";
     "deepsonar-chrome-test" = "deploy/Dockerfile.agent-chrome-test";
     "deepsonar-chrome-fuzz" = "deploy/Dockerfile.agent-chrome-fuzz";
+    "deepsonar-clickhouse-audit" = "deploy/Dockerfile.agent-clickhouse-audit";
+    "deepsonar-clickhouse-test" = "deploy/Dockerfile.agent-clickhouse-test";
+    "deepsonar-clickhouse-fuzz" = "deploy/Dockerfile.agent-clickhouse-fuzz";
   }
   $buildOrder = @(
     "deepsonar-base",
@@ -226,7 +232,10 @@ function Build-LocalImages {
     "deepsonar-openharmony-fuzz",
     "deepsonar-chrome-audit",
     "deepsonar-chrome-test",
-    "deepsonar-chrome-fuzz"
+    "deepsonar-chrome-fuzz",
+    "deepsonar-clickhouse-audit",
+    "deepsonar-clickhouse-test",
+    "deepsonar-clickhouse-fuzz"
   )
   foreach ($key in $buildOrder) {
     if (-not $ImageMap.ContainsKey($key)) { continue }
@@ -236,7 +245,7 @@ function Build-LocalImages {
     $args = @("build", "--file", $file, "--tag", [string]$ImageMap[$key])
     if ($key -eq "deepsonar-base") { $args += @("--build-arg", "TOOLSET=base") }
     if ($key -eq "deepsonar-audit") { $args += @("--build-arg", "TOOLSET=audit") }
-    if ($key -like "deepsonar-openharmony-*" -or $key -like "deepsonar-chrome-*") {
+    if ($key -like "deepsonar-openharmony-*" -or $key -like "deepsonar-chrome-*" -or $key -like "deepsonar-clickhouse-*") {
       $baseRef = if ($ImageMap.ContainsKey("deepsonar-base")) { [string]$ImageMap["deepsonar-base"] } else { "deepsonar-base:local" }
       $args += @("--build-arg", "BASE_IMAGE=$baseRef")
     }

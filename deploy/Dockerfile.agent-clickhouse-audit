@@ -1,0 +1,60 @@
+# DeepSonar ClickHouse/C++ toolchain runtime. Project opt-in only.
+# The image provides git, CMake/Ninja, Clang/LLVM and binutils. Agent decides
+# how to inspect ClickHouse source; the platform does not ship a fixed scan
+# script or rule pack.
+ARG BASE_IMAGE=deepsonar-base:local
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+ARG DEBIAN_SNAPSHOT=20260731T162426Z
+
+USER root
+RUN set -eux; \
+  rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
+  printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl git cmake ninja-build clang clang-tools clang-tidy clangd llvm binutils python3; \
+  tidy_bin="$(find /usr/lib -path '*/llvm-*/bin/clang-tidy' -type f -print -quit)"; \
+  clangd_bin="$(find /usr/lib -path '*/llvm-*/bin/clangd' -type f -print -quit)"; \
+  test -n "$tidy_bin" -a -x "$tidy_bin"; \
+  test -n "$clangd_bin" -a -x "$clangd_bin"; \
+  ln -sf "$tidy_bin" /usr/local/bin/clang-tidy; \
+  ln -sf "$clangd_bin" /usr/local/bin/clangd; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
+  install -d -m 0755 /opt/deepsonar/bin /workspace
+
+COPY deploy/clickhouse-audit-env.sh /tmp/clickhouse-audit-env.sh
+RUN set -eux; \
+  install -m 0755 /tmp/clickhouse-audit-env.sh /opt/deepsonar/bin/clickhouse-audit-env.sh; \
+  rm -f /tmp/clickhouse-audit-env.sh; \
+  if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
+  if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"clickhouse-audit",imageKey:"deepsonar-clickhouse-audit",project_opt_in:true,tools:["git","git-partial-clone","cmake","ninja","clang","clang-tidy","clangd","llvm","objdump","readelf","llvm-nm","python3","jq","node","claude"],focus:["c++-toolchain","source-inspection","clickhouse"],entrypoints:{check:"/opt/deepsonar/bin/clickhouse-audit-env.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  chown -R deepsonar:deepsonar /opt/deepsonar /workspace
+
+RUN /opt/deepsonar/bin/clickhouse-audit-env.sh --check
+
+ENV IS_SANDBOX=1 \
+    CLICKHOUSE_SOURCE_DIR=/workspace/clickhouse-source \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+
+FROM scratch
+ARG OCI_TITLE="DeepSonar ClickHouse Audit"
+ARG OCI_DESCRIPTION="Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils."
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="clickhouse-audit" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1 \
+    CLICKHOUSE_SOURCE_DIR=/workspace/clickhouse-source \
+    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+USER deepsonar
+CMD ["sleep", "infinity"]

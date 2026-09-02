@@ -2,7 +2,7 @@
 
 > **状态：运维 as-built**。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
 
-`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome 与 Mobile 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。
+`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome、ClickHouse 与 Mobile 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，ClickHouse amd64 合同冒烟在 `.github/workflows/clickhouse-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。
 
 同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` **提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json for vX.Y.Z`），用于更新内置 bundled 回退清单。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。若默认分支开启了「禁止 GITHUB_TOKEN 直推」类保护规则，需为 Actions 放行或改用可写 PAT。
 
@@ -41,7 +41,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz 与 Mobile 十项。Chrome / Mobile 条目在源码内置 bundled 清单中可以保持 `versions: []`；只有 Release 对两个平台完成真实构建、发布和 inspect 后，生成器才会写入版本与 digest。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出的真实 digest 生成，包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz、ClickHouse Audit、ClickHouse Test、ClickHouse Fuzz 与 Mobile 十三项。Chrome / ClickHouse / Mobile 条目在源码内置 bundled 清单中可以保持 `versions: []`；只有 Release 对两个平台完成真实构建、发布和 inspect 后，生成器才会写入版本与 digest。
 
 **一版本多平台**：v2 多架构发布时，每个产品在 `versions[]` 只有一条 canonical 记录，`platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限。旧 v1 清单仍按一平台一版本兼容解析；Scheduler 当前只消费 v2 的 GitHub `image_ref` 投影。
 
@@ -134,6 +134,35 @@ multi-architecture gate：Chrome Fuzz amd64 按正常目标架构构建，arm64 
 通过后才允许 `chrome-images` 组装两个子 digest 的发布 index。它使用不可变 base
 digest，发布 GHCR 以及配置的 ACR、Docker Hub 标签，检查每个目标，并且只上传
 `record-runtime-image-digest.mjs` 接受的记录。
+
+## ClickHouse specialist release contract
+
+The ClickHouse source pins are kept in `deploy/clickhouse-runtime-sources.json`
+and are consumed by the Test/Fuzz Dockerfiles and the consistency gate:
+
+- Official unmodified LTS `clickhouse-common-static` `v26.3.28.5` is installed
+  from ClickHouse GitHub Releases. The amd64 and arm64 tarball URLs, sizes, and
+  SHA-256 values are pinned separately; the installer rejects any URL that is
+  not `https://github.com/ClickHouse/ClickHouse/releases/download/*`.
+- ClickHouse Test ships `clickhouse-local` plus a governed
+  `clickhouse-server.sh` that listens only on `127.0.0.1` and keeps `--path`
+  under `/workspace/*`. HTTP smoke hits `/ping` and `SELECT 40 + 2`.
+- ClickHouse Fuzz installs the same official binary plus Clang-16 /
+  compiler-rt / libFuzzer / AFL++. It does **not** compile ClickHouse from
+  source. `clickhouse-fuzz-env.sh` and `clickhouse-fuzz-smoke.sh` refuse a
+  missing or unofficial binary; there is no toy harness fallback.
+- Audit is a C++ toolchain image (git / CMake / Ninja / Clang / binutils) with
+  no platform scan script or rule pack.
+
+The ClickHouse images are all project opt-in and have no global role defaults.
+Jobs using them require canvas `allow_egress=true` so agents can clone
+in-scope source. `clickhouse-runtime.yml` builds amd64 and runs the
+contract/smoke harness when its Dockerfiles, descriptors/scripts,
+`.dockerignore`, shared fingerprint/cache mechanism, or workflow changes.
+`release.yml` is the authoritative multi-architecture gate: every image is
+built natively on `ubuntu-latest` (amd64) and `ubuntu-24.04-arm` (arm64),
+smoked on that architecture, then assembled into a multi-arch index. Unlike
+Chrome Fuzz, there is no QEMU/cross-compile exception.
 
 ## OpenHarmony specialist CI contract
 

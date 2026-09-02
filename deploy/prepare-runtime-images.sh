@@ -152,6 +152,9 @@ const builtinKeys = new Set([
   "deepsonar-chrome-audit",
   "deepsonar-chrome-test",
   "deepsonar-chrome-fuzz",
+  "deepsonar-clickhouse-audit",
+  "deepsonar-clickhouse-test",
+  "deepsonar-clickhouse-fuzz",
   "deepsonar-mobile",
 ]);
 const keys = new Set();
@@ -354,6 +357,9 @@ prepare_builtin "openharmony-fuzz" "deepsonar-openharmony-fuzz" "deepsonar-openh
 prepare_builtin "chrome-audit" "deepsonar-chrome-audit" "deepsonar-chrome-audit:local" "$ROOT/deploy/Dockerfile.agent-chrome-audit" "" "deepsonar-base:local"
 prepare_builtin "chrome-test" "deepsonar-chrome-test" "deepsonar-chrome-test:local" "$ROOT/deploy/Dockerfile.agent-chrome-test" "" "deepsonar-base:local"
 prepare_builtin "chrome-fuzz" "deepsonar-chrome-fuzz" "deepsonar-chrome-fuzz:local" "$ROOT/deploy/Dockerfile.agent-chrome-fuzz" "" "deepsonar-base:local"
+prepare_builtin "clickhouse-audit" "deepsonar-clickhouse-audit" "deepsonar-clickhouse-audit:local" "$ROOT/deploy/Dockerfile.agent-clickhouse-audit" "" "deepsonar-base:local"
+prepare_builtin "clickhouse-test" "deepsonar-clickhouse-test" "deepsonar-clickhouse-test:local" "$ROOT/deploy/Dockerfile.agent-clickhouse-test" "" "deepsonar-base:local"
+prepare_builtin "clickhouse-fuzz" "deepsonar-clickhouse-fuzz" "deepsonar-clickhouse-fuzz:local" "$ROOT/deploy/Dockerfile.agent-clickhouse-fuzz" "" "deepsonar-base:local"
 prepare_builtin "mobile" "deepsonar-mobile" "deepsonar-mobile:local" "$ROOT/deploy/Dockerfile.agent-mobile" "" "deepsonar-base:local"
 
 log "汇总：成功/模拟 ${SUCCESS_COUNT}，跳过 ${SKIP_COUNT}，失败 ${FAILURE_COUNT}"

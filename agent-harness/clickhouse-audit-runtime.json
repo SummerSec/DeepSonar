@@ -1,0 +1,27 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "clickhouse-audit",
+  "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
+  "apt": {
+    "git": { "version": "snapshot", "capabilities": ["source-control", "partial-clone"] },
+    "cmake": { "version": "snapshot", "capabilities": ["native-build"] },
+    "ninja-build": { "version": "snapshot", "capabilities": ["native-build"] },
+    "clang": { "version": "snapshot", "capabilities": ["cpp-compiler"] },
+    "clang-tools": { "version": "snapshot", "capabilities": ["clang-extra-tools"] },
+    "clang-tidy": { "version": "snapshot", "capabilities": ["clang-tidy"] },
+    "clangd": { "version": "snapshot", "capabilities": ["clangd"] },
+    "llvm": { "version": "snapshot", "capabilities": ["llvm-analysis"] },
+    "binutils": { "version": "snapshot", "capabilities": ["binary-analysis"] }
+  },
+  "downloads": {},
+  "toolsets": {
+    "clickhouse-audit": {
+      "imageKey": "deepsonar-clickhouse-audit",
+      "description": "Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils",
+      "maxSizeMiB": 1300
+    }
+  }
+}

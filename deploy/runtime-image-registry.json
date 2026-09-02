@@ -417,6 +417,36 @@
       ]
     },
     {
+      "image_key": "deepsonar-clickhouse-audit",
+      "name": "DeepSonar ClickHouse Audit",
+      "description": "Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "audit",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-clickhouse-test",
+      "name": "DeepSonar ClickHouse Test",
+      "description": "Project-opt-in pinned official ClickHouse LTS server/client/local runtime",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "test",
+      "versions": []
+    },
+    {
+      "image_key": "deepsonar-clickhouse-fuzz",
+      "name": "DeepSonar ClickHouse Fuzz",
+      "description": "Project-opt-in official ClickHouse LTS plus Clang/LLVM sanitizer and AFL++ toolchain",
+      "publisher": "SummerSec",
+      "source_kind": "official",
+      "project_opt_in": true,
+      "default_role": "test",
+      "versions": []
+    },
+    {
       "image_key": "deepsonar-mobile",
       "name": "DeepSonar Mobile",
       "description": "移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ApkCheckPack/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；project opt-in；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP",

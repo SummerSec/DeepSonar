@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **ClickHouse audit/test/fuzz 专项运行时**：三个官方 project-opt-in 镜像对标 Chrome 三件套。Audit 提供 git / CMake / Ninja / Clang-LLVM / binutils；Test 钉死官方 LTS `clickhouse-common-static` `v26.3.28.5`，HTTP 冒烟走 `127.0.0.1`；Fuzz 装同一官方二进制加 Clang-16 / libFuzzer / AFL++，不从源码编 ClickHouse。三套均要求 `allow_egress=true`，stall 下限与 Chrome 相同。bundled catalog 在正式 `v*` 前保持 `versions: []`。
+
 ### 变更
 
 - **Agent CLI 新配置收敛为三类（#318）**：新 RoleConfig / 新 Job 只接受 `claude-code`（默认）、`pi`、`dsh`。leftover `codex` / `open-code` 历史快照与 Session 归档只读可看，不自动改写；下次保存 leftover 配置拒绝并提示迁移。运行时注册表与新增 CLI 接入流程保留。

@@ -1,0 +1,26 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "clickhouse-test",
+  "sources": "deploy/clickhouse-runtime-sources.json",
+  "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
+  "apt": {
+    "git": { "version": "snapshot", "capabilities": ["source-control"] }
+  },
+  "clickhouse": {
+    "version": "26.3.28.5",
+    "tag": "v26.3.28.5-lts",
+    "package": "clickhouse-common-static",
+    "required": true,
+    "honesty": "The image fails its build smoke if the official ClickHouse binary is unavailable; no toy harness fallback exists."
+  },
+  "toolsets": {
+    "clickhouse-test": {
+      "imageKey": "deepsonar-clickhouse-test",
+      "description": "Project-opt-in pinned official ClickHouse LTS server/client/local runtime",
+      "maxSizeMiB": 1800
+    }
+  }
+}

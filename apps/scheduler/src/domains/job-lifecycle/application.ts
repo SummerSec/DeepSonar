@@ -15,7 +15,7 @@ import {
   requestAttemptCancel,
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
-import { CHROME_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
+import { CHROME_JOB_STALL_SEC, CLICKHOUSE_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
 
 export type {
   JobLifecycleDatabase,
@@ -204,6 +204,9 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       const chromeAuditStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"];
       const chromeTestStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-test"];
       const chromeFuzzStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"];
+      const clickhouseAuditStall = CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-audit"];
+      const clickhouseTestStall = CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-test"];
+      const clickhouseFuzzStall = CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"];
       return atomically(async (tx) => {
         const result = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
@@ -227,6 +230,9 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
                   WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}::int
                   WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}::int
                   WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}::int
+                  WHEN 'deepsonar-clickhouse-fuzz' THEN ${clickhouseFuzzStall}::int
+                  WHEN 'deepsonar-clickhouse-audit' THEN ${clickhouseAuditStall}::int
+                  WHEN 'deepsonar-clickhouse-test' THEN ${clickhouseTestStall}::int
                   ELSE COALESCE(
                     (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
                     ${platformStall}::int

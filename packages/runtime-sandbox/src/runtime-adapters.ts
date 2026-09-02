@@ -240,6 +240,9 @@ const ALL_IMAGE_KEYS = Object.freeze([
   "deepsonar-chrome-audit",
   "deepsonar-chrome-test",
   "deepsonar-chrome-fuzz",
+  "deepsonar-clickhouse-audit",
+  "deepsonar-clickhouse-test",
+  "deepsonar-clickhouse-fuzz",
   "deepsonar-mobile",
 ] as const);
 
