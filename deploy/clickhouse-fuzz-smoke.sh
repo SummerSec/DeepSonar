@@ -15,6 +15,6 @@ export CLICKHOUSE_WATCHDOG_ENABLE=0
 
 result="$(clickhouse local --config-file "$work/config.xml" -q 'SELECT 40 + 2')"
 [[ "$result" == "42" ]] || { echo "clickhouse-local smoke returned ${result}, expected 42" >&2; exit 1; }
-printf 'SELECT 1\nSELECT * FROM system.one\n' >"$work/seed.sql"
+printf 'SELECT 1;\nSELECT * FROM system.one;\n' >"$work/seed.sql"
 clickhouse local --config-file "$work/config.xml" --queries-file "$work/seed.sql" >/dev/null
 printf 'ClickHouse Fuzz official clickhouse-local smoke passed: %s\n' "$version"

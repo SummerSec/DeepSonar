@@ -35,6 +35,7 @@ const child = spawn(launcher, ["--path", dataDir, "--http-port", String(httpPort
 let stderr = "";
 let stdout = "";
 let exitStatus = null;
+const closed = new Promise((resolve) => { child.once("close", resolve); });
 child.stderr.on("data", (chunk) => { stderr = appendLog(stderr, chunk); });
 child.stdout.on("data", (chunk) => { stdout = appendLog(stdout, chunk); });
 child.on("exit", (code, signal) => { exitStatus = signal ? `signal ${signal}` : `code ${code}`; });
@@ -52,7 +53,11 @@ try {
   if (value !== "42") throw new Error(`ClickHouse HTTP query returned ${value}, expected 42`);
   console.log("ClickHouse Test HTTP smoke passed: SELECT 40 + 2 = 42");
 } finally {
-  child.kill("SIGTERM");
-  await new Promise((resolve) => child.once("close", resolve));
+  if (exitStatus === null) child.kill("SIGTERM");
+  await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5000))]);
+  if (exitStatus === null) {
+    child.kill("SIGKILL");
+    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 2000))]);
+  }
   rmSync(dataDir, { recursive: true, force: true });
 }
