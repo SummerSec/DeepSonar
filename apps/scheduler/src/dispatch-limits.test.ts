@@ -247,7 +247,7 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
 test("global settings patches deep-merge CLI and provider maps", () => {
   const merged = mergeGlobalRulesPatch(
     {
-      maxConcurrentByAgentCli: { "claude-code": 4, codex: 2 },
+      maxConcurrentByAgentCli: { "claude-code": 4, dsh: 2 },
       maxConcurrentByProvider: { anthropic: 3 },
       maxGlobalJobs: 6,
       maxConcurrentProvisioning: 2,
@@ -258,7 +258,7 @@ test("global settings patches deep-merge CLI and provider maps", () => {
       maxConcurrentProvisioning: 5,
     },
   );
-  assert.deepEqual(merged.maxConcurrentByAgentCli, { "claude-code": 5, codex: 2 });
+  assert.deepEqual(merged.maxConcurrentByAgentCli, { "claude-code": 5, dsh: 2 });
   assert.deepEqual(merged.maxConcurrentByProvider, { anthropic: 3, openai: 2 });
   assert.equal(merged.maxConcurrentProvisioning, 5);
 });

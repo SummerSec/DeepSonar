@@ -25,12 +25,40 @@ export function isClaudeCodeReasoningEffort(value: unknown): value is ClaudeCode
   return typeof value === "string" && CLAUDE_CODE_REASONING_EFFORTS.some((effort) => effort === value);
 }
 
-/** Codex model_reasoning_effort values supported by the governed CLI pin. */
+/** Codex model_reasoning_effort values kept for leftover historical archives/credentials. */
 export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 export function isCodexReasoningEffort(value: unknown): value is CodexReasoningEffort {
   return typeof value === "string" && CODEX_REASONING_EFFORTS.some((effort) => effort === value);
 }
+
+/** Current write/run Agent CLIs. The adapter registry stays open for later additions. */
+export const CURRENT_AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
+export type CurrentAgentCli = (typeof CURRENT_AGENT_CLIS)[number];
+export const CURRENT_AGENT_CLI_DEFAULT = "claude-code" as const;
+/** Retired from new RoleConfig/Job writes; leftover rows and archives stay readable. */
+export const LEFTOVER_AGENT_CLIS = ["codex", "open-code"] as const;
+export type LeftoverAgentCli = (typeof LEFTOVER_AGENT_CLIS)[number];
+export const CurrentAgentCliSchema = z.enum(CURRENT_AGENT_CLIS);
+export function isCurrentAgentCli(value: unknown): value is CurrentAgentCli {
+  return typeof value === "string" && (CURRENT_AGENT_CLIS as readonly string[]).includes(value);
+}
+export function isLeftoverAgentCli(value: unknown): value is LeftoverAgentCli {
+  return typeof value === "string" && (LEFTOVER_AGENT_CLIS as readonly string[]).includes(value);
+}
+export function leftoverAgentCliMigrationHint(cli: string): string {
+  return `agent_cli=${cli} 已不再支持新配置。请迁移到 claude-code（默认）、pi 或 dsh 之一后再保存；系统不会自动改写存量配置。`;
+}
+export function rejectNonCurrentAgentCli(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return `未知 agent_cli，当前仅支持 ${CURRENT_AGENT_CLIS.join(" / ")}`;
+  if (isLeftoverAgentCli(value)) return leftoverAgentCliMigrationHint(value);
+  if (!isCurrentAgentCli(value)) return `未知 agent_cli，当前仅支持 ${CURRENT_AGENT_CLIS.join(" / ")}`;
+  return null;
+}
+export const AgentCliWriteSchema = z.string().superRefine((value, ctx) => {
+  const error = rejectNonCurrentAgentCli(value);
+  if (error) ctx.addIssue({ code: "custom", message: error });
+});
 
 /** Pi --thinking values; Pi and DSH share the same canonical vocabulary. */
 export const PI_REASONING_EFFORTS = DSH_REASONING_EFFORTS;

@@ -58,7 +58,7 @@ test("项目镜像策略按全局继承与项目托管分别选择镜像", () =>
 });
 
 test("inherit_global 忽略遗留项目 RoleConfig 的 model 与默认 CLI", () => {
-  const leftover = { model: "grok-4.5", agent_cli: "codex" };
+  const leftover = { model: "grok-4.5", agent_cli: "pi" };
   const global = { model: "grok-4.6", agent_cli: "claude-code" };
   const inherited = roleIdentityForProjectPolicy(parseProjectImagePolicy(undefined), leftover, global);
   assert.deepEqual(inherited, { model: "grok-4.6", agent_cli: "claude-code" });
@@ -71,5 +71,5 @@ test("inherit_global 忽略遗留项目 RoleConfig 的 model 与默认 CLI", () 
     leftover,
     global,
   );
-  assert.deepEqual(managed, { model: "grok-4.5", agent_cli: "codex" });
+  assert.deepEqual(managed, { model: "grok-4.5", agent_cli: "pi" });
 });

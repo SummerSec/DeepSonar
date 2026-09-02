@@ -52,13 +52,13 @@ test("snapshot identity ignores revisions and non-identity content hashes", () =
 test("snapshot identity detects governed CLI, model, credential, adapter, and image drift", () => {
   const changed = snapshotIdentityDrift(base, {
     ...base,
-    agent_cli: "codex",
+    agent_cli: "pi",
     model: "gpt-5",
     upstream_model: "gpt-5",
     credential_id: "22222222-2222-4222-8222-222222222222",
     credential_provider: "openai",
     agent_runtime: {
-      adapter_id: "codex",
+      adapter_id: "pi",
       adapter_version: "2.0.0",
       capabilities: {},
     },

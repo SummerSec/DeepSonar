@@ -21,6 +21,7 @@ import {
   type ProviderCredential,
   type RuntimeImageSummary,
 } from "./api";
+import { isCurrentAgentCli, isLeftoverAgentCli, leftoverAgentCliMigrationHint, type CurrentAgentCli } from "@deepsonar/shared-types";
 import {
   type AgentCli,
   buildSettingsConfigFromEditor,
@@ -51,16 +52,14 @@ function newBatchIdempotencyKey(): string {
 
 const cliLabel: Record<string, string> = {
   "claude-code": "Claude Code",
-  "open-code": "OpenCode",
-  codex: "Codex",
   pi: "Pi Coding Agent",
   dsh: "DeepSeek Harness",
+  "open-code": "OpenCode（已停用）",
+  codex: "Codex（已停用）",
 };
 
 const AGENT_CLI_OPTIONS: ReadonlyArray<{ value: AgentCli; label: string }> = [
   { value: "claude-code", label: "claude-code（Claude Code）" },
-  { value: "codex", label: "codex（Codex）" },
-  { value: "open-code", label: "open-code（OpenCode）" },
   { value: "pi", label: "pi（Pi Coding Agent）" },
   { value: "dsh", label: "dsh（DeepSeek Harness）" },
 ];
@@ -252,7 +251,7 @@ export function ProviderAccountFlow({
   const [createProvider, setCreateProvider] = useState("");
   const [createSecret, setCreateSecret] = useState("");
   const [createBaseUrl, setCreateBaseUrl] = useState("");
-  const [createAgentCli, setCreateAgentCli] = useState<AgentCli>("claude-code");
+  const [createAgentCli, setCreateAgentCli] = useState<CurrentAgentCli>("claude-code");
   const [createSettingsJson, setCreateSettingsJson] = useState("");
   const [createTomlText, setCreateTomlText] = useState("");
   const [createAuthJson, setCreateAuthJson] = useState("");
@@ -720,6 +719,10 @@ export function ProviderAccountFlow({
   /** Edit save uses the same settingsConfig builder as create (paste-as-is). */
   const saveEditedConfig = async () => {
     if (!editingCredential) return;
+    if (!isCurrentAgentCli(editAgentCli)) {
+      setError(leftoverAgentCliMigrationHint(editAgentCli));
+      return;
+    }
     const built = buildSettingsConfigFromEditor({
       agentCli: editAgentCli,
       settingsJson: editSettingsJson,
@@ -1329,12 +1332,12 @@ export function ProviderAccountFlow({
                   <SearchableSelect
                     value={selectedCredential?.agent_cli ?? ""}
                     onChange={(next) => {
-                      if (!selectedCredential || !next) return;
+                      if (!selectedCredential || !next || !isCurrentAgentCli(next)) return;
                       void (async () => {
                         setBusy(true);
                         setError("");
                         try {
-                          await api.updateCredential(selectedCredential.id, { agent_cli: next as AgentCli });
+                          await api.updateCredential(selectedCredential.id, { agent_cli: next });
                           setNotice(`已限制账号 CLI 为 ${cliLabel[next] ?? next}；CLI 不匹配的角色将标为不可绑定，可先改角色 CLI。`);
                           onChanged();
                         } catch (e) {
@@ -1385,7 +1388,7 @@ export function ProviderAccountFlow({
                   const isSystem = kind === "system";
                   const isHub = kind === "hub";
                   const isBuiltin = isBuiltinBindableRole(roleConfig);
-                  const roleCli = (["claude-code", "codex", "open-code", "pi", "dsh"].includes(roleConfig.agent_cli)
+                  const roleCli = (["claude-code", "pi", "dsh", "codex", "open-code"].includes(roleConfig.agent_cli)
                     ? roleConfig.agent_cli
                     : "claude-code") as AgentCli;
                   const incompatible = Boolean(
@@ -1449,15 +1452,15 @@ export function ProviderAccountFlow({
                           value={roleCli}
                           ariaLabel={`${roleConfig.role_title || roleConfig.role_name} 的 Agent CLI`}
                           onChange={(next) => {
-                            if (!next || next === roleCli) return;
+                            if (!next || next === roleCli || !isCurrentAgentCli(next)) return;
                             void (async () => {
                               setBusy(true);
                               setError("");
                               try {
-                                await api.updateRoleConfigAgentCli(roleConfig.id, next as AgentCli);
+                                await api.updateRoleConfigAgentCli(roleConfig.id, next);
                                 setRoleConfigs((current) =>
                                   current.map((item) =>
-                                    item.id === roleConfig.id ? { ...item, agent_cli: next as AgentCli } : item,
+                                    item.id === roleConfig.id ? { ...item, agent_cli: next } : item,
                                   ),
                                 );
                                 setNotice(`已将「${roleConfig.role_title || roleConfig.role_name}」CLI 改为 ${cliLabel[next] ?? next}`);
@@ -1470,7 +1473,12 @@ export function ProviderAccountFlow({
                               }
                             })();
                           }}
-                          options={AGENT_CLI_OPTIONS.map((option) => ({ ...option, label: option.value }))}
+                          options={[
+                            ...AGENT_CLI_OPTIONS.map((option) => ({ ...option, label: option.value })),
+                            ...(isLeftoverAgentCli(roleCli)
+                              ? [{ value: roleCli, label: `${roleCli}（已停用）` }]
+                              : []),
+                          ]}
                           placeholder="选择 CLI…"
                           className="w-full min-w-0 [&>button]:!min-h-[32px] [&>button]:w-full [&>button]:min-w-0"
                           clearable={false}

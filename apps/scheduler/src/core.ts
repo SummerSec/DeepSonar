@@ -5,6 +5,7 @@ import {
   FindingProtocolConfig as FindingProtocolConfigSchema,
   CANONICAL_UUID_PATTERN,
   SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
+  rejectNonCurrentAgentCli,
   type EventEnvelopeInput,
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
@@ -245,7 +246,7 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
   if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!["claude-code", "codex", "open-code", "pi", "dsh"].includes(key)) return fallback;
+    if (!["claude-code", "pi", "dsh", "codex", "open-code"].includes(key)) return fallback;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
     out[key] = value;
   }
@@ -1574,8 +1575,6 @@ export function validateEnvVars(env: Record<string, string>): string | null {
 /** 各 CLI 允许上传的 Provider 配置文件固定相对路径 */
 export const CONFIG_FILE_PATHS: Record<string, string> = {
   "claude-code": ".claude/settings.json",
-  codex: ".codex/config.toml",
-  "open-code": ".opencode/config.json",
   pi: ".pi/agent/models.json",
   dsh: ".dsh/settings.yaml",
 };
@@ -1587,6 +1586,8 @@ export function validateConfigFilePath(agentCli: string, p: string): string | nu
   if (p.startsWith("/") || /^[A-Za-z]:/.test(p)) return "不允许绝对路径";
   const norm = path.posix.normalize(p);
   if (norm !== p || norm.startsWith("..") || norm.includes("/../")) return "路径不允许 .. 或非规范形式";
+  const leftover = rejectNonCurrentAgentCli(agentCli);
+  if (leftover) return leftover;
   const allowed = CONFIG_FILE_PATHS[agentCli];
   if (!allowed) return `未知 agent_cli: ${agentCli}`;
   if (agentCli === "pi" && /^\.pi\/agent\/extensions\/[A-Za-z0-9._-]+\.(?:cjs|js|mjs|ts)$/u.test(norm)) {

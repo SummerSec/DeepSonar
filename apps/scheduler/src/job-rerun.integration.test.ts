@@ -173,7 +173,7 @@ if (!testDatabaseUrl) {
       assert.ok(modelDrift.json().stale_fields.includes("model"));
       assert.deepEqual(modelDrift.json().job_ids, [resumeJobId]);
 
-      await sql`UPDATE role_configs SET model = 'model-a', agent_cli = 'codex', version = version + 1 WHERE id = ${roleConfigId}`;
+      await sql`UPDATE role_configs SET model = 'model-a', agent_cli = 'pi', version = version + 1 WHERE id = ${roleConfigId}`;
       const cliDrift = await post(resumeJobId, "resume");
       assert.equal(cliDrift.statusCode, 409, cliDrift.payload);
       assert.equal(cliDrift.json().error_code, "SNAPSHOT_STALE");

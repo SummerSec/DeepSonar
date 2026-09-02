@@ -2,7 +2,8 @@
  * Parse Agent CLI session archives (JSONL / NDJSON / OpenCode export JSON)
  * into a timeline suitable for the Job Session viewer.
  *
- * Formats: DeepSonar SupportedAgentCli (claude-code / codex / open-code / pi / dsh).
+ * Formats: current Agent CLI (claude-code / pi / dsh) plus leftover
+ * read-only archives (codex / open-code).
  * UX inspiration only: github.com/cuteribs/agent-session-viewer (do not vendor).
  *
  * When adding a new Agent CLI:
@@ -39,8 +40,8 @@ export type SessionToolStat = {
   errors: number;
 };
 
-/** DeepSonar 支持的 Agent CLI（与 runtime-sandbox SupportedAgentCli 对齐）。 */
-export type SupportedSessionCli = "claude-code" | "codex" | "open-code" | "pi" | "dsh";
+/** Current Agent CLI plus leftover archive dialects kept for historical Job Session 只读渲染。 */
+export type SupportedSessionCli = "claude-code" | "pi" | "dsh" | "codex" | "open-code";
 
 export type SessionFormat = SupportedSessionCli | "ndjson" | "unknown";
 

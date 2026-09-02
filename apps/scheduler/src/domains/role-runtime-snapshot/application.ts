@@ -1,5 +1,6 @@
 import {
   PlatformToolName,
+  rejectNonCurrentAgentCli,
   resolvePlatformTools,
   type PlatformToolConfig,
   type ReasoningValue,
@@ -195,6 +196,8 @@ async function resolveAgentSnapshotForJobUnchecked(
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
   const identity = roleIdentityForProjectPolicy(projectImagePolicy, projectCfg, globalCfg);
   const agentCli = identity.agent_cli;
+  const leftoverCli = rejectNonCurrentAgentCli(agentCli);
+  if (leftoverCli) throw new Error(leftoverCli);
   const dshTaskMode = cfg?.dsh_task_mode === "ptc" ? "ptc" : "standard";
 
   const rawModules = cfg?.modules_json;

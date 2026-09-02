@@ -3,7 +3,7 @@ import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 
-export type AgentCliId = "claude-code" | "codex" | "dsh" | "open-code" | "pi";
+export type AgentCliId = "claude-code" | "dsh" | "pi";
 
 export type AgentCliOutputMode = "jsonl" | "plain-final";
 
@@ -291,12 +291,6 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `\'"'"'`)}'`;
 }
 
-function promptArg(value: string): string {
-  // The prompt is data, never a command template. It is quoted before being
-  // handed to the adapter's fixed, platform-owned invocation.
-  return shellQuote(value);
-}
-
 function textFrom(value: unknown): string | undefined {
   if (typeof value === "string" && value) return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -375,240 +369,6 @@ function unseenCompleteText(
   return value;
 }
 
-function itemOf(line: Record<string, unknown>): Record<string, unknown> | undefined {
-  const item = line.item ?? line.part ?? line.message;
-  return item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : undefined;
-}
-
-function toolName(item: Record<string, unknown>): string {
-  const server = typeof item.server === "string" ? item.server : "";
-  const tool = typeof item.tool === "string" ? item.tool : "";
-  const raw = String(item.name ?? item.tool_name ?? item.toolName ?? item.tool ?? "");
-  if (server && tool) return `mcp__${server}__${tool}`;
-  if (raw.startsWith("deepsonar-control_")) return `mcp__deepsonar-control__${raw.slice("deepsonar-control_".length)}`;
-  return raw;
-}
-
-function callId(item: Record<string, unknown>): string {
-  return String(item.call_id ?? item.callId ?? item.callID ?? item.id ?? item.tool_use_id ?? "");
-}
-
-function toolInput(item: Record<string, unknown>): unknown {
-  const nested = item.state && typeof item.state === "object" && !Array.isArray(item.state)
-    ? item.state as Record<string, unknown>
-    : {};
-  const value = item.input ?? item.arguments ?? item.params ?? item.parameters ?? nested.input ?? nested.arguments ?? {};
-  if (typeof value !== "string") return value;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" ? parsed : value;
-  } catch {
-    return value;
-  }
-}
-
-function toolOutput(item: Record<string, unknown>): unknown {
-  const nested = item.state && typeof item.state === "object" && !Array.isArray(item.state)
-    ? item.state as Record<string, unknown>
-    : {};
-  return item.output ?? item.result ?? item.content ?? item.error ?? nested.output ?? nested.result ?? nested.error ?? "";
-}
-
-function normalizedToolLines(item: Record<string, unknown>): Record<string, unknown>[] {
-  const id = callId(item);
-  const name = toolName(item);
-  if (!id || !name) return unknownRuntimeEvent();
-  const nested = item.state && typeof item.state === "object" && !Array.isArray(item.state)
-    ? item.state as Record<string, unknown>
-    : {};
-  const status = String(item.status ?? nested.status ?? "").toLowerCase();
-  const error = Boolean(item.error ?? nested.error) || status === "failed" || status === "error";
-  const terminal = ["completed", "complete", "success", "succeeded", "failed", "error"].includes(status);
-  const hasValue = (source: Record<string, unknown>, key: string): boolean =>
-    Object.prototype.hasOwnProperty.call(source, key) && source[key] !== null && source[key] !== undefined;
-  const hasResult = terminal || hasValue(item, "output") || hasValue(item, "result") || hasValue(item, "error") ||
-    hasValue(nested, "output") || hasValue(nested, "result") || hasValue(nested, "error");
-  return [
-    { type: "assistant", message: { content: [{ type: "tool_use", id, name, input: toolInput(item) }] } },
-    ...(hasResult
-      ? [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: error, content: toolOutput(item) }] } }]
-      : []),
-  ];
-}
-
-function normalizedToolResultLine(item: Record<string, unknown>): Record<string, unknown>[] {
-  const id = callId(item);
-  if (!id) return unknownRuntimeEvent();
-  const nested = item.state && typeof item.state === "object" && !Array.isArray(item.state)
-    ? item.state as Record<string, unknown>
-    : {};
-  const status = String(item.status ?? nested.status ?? "").toLowerCase();
-  const error = Boolean(item.error ?? nested.error) || status === "failed" || status === "error";
-  return [{
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: id, is_error: error, content: toolOutput(item) }] },
-  }];
-}
-
-const CODEX_TOOL_CALL_ITEM_TYPES = new Set([
-  "mcp_tool_call",
-  "mcp_call",
-  "function_call",
-  "custom_tool_call",
-  "tool_call",
-]);
-
-const CODEX_TOOL_RESULT_ITEM_TYPES = new Set([
-  "function_call_output",
-  "custom_tool_call_output",
-  "tool_result",
-]);
-
-function rememberSession(line: Record<string, unknown>, state: AdapterRuntimeState): void {
-  const id = line.sessionID ?? line.session_id ?? line.thread_id;
-  if (typeof id === "string" && id) state.sessionId = id;
-}
-
-function decodeCodex(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
-  const contextEvents = contextEventFromLine(line, state);
-  if (contextEvents.length > 0) return contextEvents;
-  const contextObservation = contextObservationFromProviderLine(line);
-  if (contextObservation.length > 0) return contextObservation;
-  const type = String(line.type ?? line.event ?? "");
-  rememberSession(line, state);
-  if (type === "thread.started" || type === "session.started") {
-    state.sessionId = String(line.thread_id ?? line.session_id ?? line.id ?? "");
-    return [{ type: "system", subtype: "init", session_id: state.sessionId }];
-  }
-  if (type === "response.output_text.delta" || type === "output_text.delta") {
-    const delta = textFrom(line.delta ?? line.text);
-    if (!delta) return [];
-    rememberStreamDelta(state, "text", delta);
-    state.finalText = `${state.finalText ?? ""}${delta}`;
-    return [{ type: "assistant", message: { content: [{ type: "text", text: delta }] } }];
-  }
-  if (
-    type === "response.reasoning_summary_text.delta" ||
-    type === "response.reasoning_text.delta" ||
-    type === "reasoning.delta"
-  ) {
-    const delta = reasoningTextFrom(line.delta ?? line.text ?? line.reasoning);
-    if (!delta) return [];
-    rememberStreamDelta(state, "reasoning", delta);
-    return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: delta }] } }];
-  }
-  if (
-    type === "response.reasoning_summary_text.done" ||
-    type === "response.reasoning_text.done" ||
-    type === "reasoning.done"
-  ) {
-    const text = reasoningTextFrom(line.text ?? line.reasoning ?? line.summary ?? line.result);
-    const unseen = text ? unseenCompleteText(state, "reasoning", text) : undefined;
-    return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
-  }
-  if (type === "item.started" || type === "item.completed" || type === "item.updated") {
-    const item = itemOf(line);
-    if (!item) return [];
-    const itemType = String(item.type ?? "");
-    if (itemType === "reasoning" || itemType === "reasoning_summary" || itemType === "thinking") {
-      const text = reasoningTextFrom(item);
-      const unseen = text ? unseenCompleteText(state, "reasoning", text) : undefined;
-      return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
-    }
-    if (itemType === "agent_message" || itemType === "message" || itemType === "output_text") {
-      const text = textFrom(item);
-      if (text && type !== "item.started") {
-        const unseen = unseenCompleteText(state, "text", text);
-        if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
-        return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
-      }
-      return [];
-    }
-    if (CODEX_TOOL_RESULT_ITEM_TYPES.has(itemType)) return normalizedToolResultLine(item);
-    if (CODEX_TOOL_CALL_ITEM_TYPES.has(itemType)) return normalizedToolLines(item);
-    return [];
-  }
-  if (type === "turn.completed" || type === "response.completed") {
-    const text = textFrom(line.output ?? line.result) ?? state.finalText ?? "";
-    return [{ type: "result", subtype: "success", result: text }];
-  }
-  if (type === "turn.failed" || type === "response.failed" || type === "error") {
-    const text = textFrom(line.error ?? line.message) ?? "Codex runtime failed";
-    return [{ type: "result", subtype: "error", is_error: true, result: text }];
-  }
-  return unknownRuntimeEvent();
-}
-
-function decodeOpenCode(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
-  const contextEvents = contextEventFromLine(line, state);
-  if (contextEvents.length > 0) return contextEvents;
-  const contextObservation = contextObservationFromProviderLine(line);
-  if (contextObservation.length > 0) return contextObservation;
-  const type = String(line.type ?? line.event ?? "");
-  rememberSession(line, state);
-  if (type === "session.created" || type === "session.started" || type === "run.started" || type === "step_start") {
-    state.sessionId = String(line.sessionID ?? line.session_id ?? line.id ?? "");
-    return [{ type: "system", subtype: "init", session_id: state.sessionId }];
-  }
-  const part = itemOf(line);
-  const partType = String(part?.type ?? "").toLowerCase();
-  if (
-    type === "reasoning" ||
-    type === "reasoning.delta" ||
-    type === "thinking" ||
-    partType === "reasoning" ||
-    partType === "thinking"
-  ) {
-    const text = reasoningTextFrom(line.delta ?? line.reasoning ?? line.text ?? part);
-    if (!text) return [];
-    const isDelta = type.endsWith(".delta");
-    if (isDelta) rememberStreamDelta(state, "reasoning", text);
-    const unseen = isDelta ? text : unseenCompleteText(state, "reasoning", text);
-    return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
-  }
-  if (["text", "text.delta", "message.part", "part.updated"].includes(type)) {
-    const text = textFrom(line.delta ?? line.text ?? line.part);
-    if (text) {
-      const isDelta = type === "text" || type === "text.delta";
-      if (isDelta) {
-        rememberStreamDelta(state, "text", text);
-        state.finalText = `${state.finalText ?? ""}${text}`;
-        return [{ type: "assistant", message: { content: [{ type: "text", text }] } }];
-      }
-      const unseen = unseenCompleteText(state, "text", text);
-      if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
-      return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
-    }
-    return [];
-  }
-  if (["tool_use", "tool.call", "tool.started", "tool.completed", "tool_result"].includes(type)) {
-    const item = { ...line, ...(itemOf(line) ?? {}) };
-    if (type === "tool_result") {
-      const id = callId(item);
-      const nested = item.state && typeof item.state === "object" && !Array.isArray(item.state)
-        ? item.state as Record<string, unknown>
-        : {};
-      return id ? [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(item.error ?? nested.error), content: toolOutput(item) }] } }] : [];
-    }
-    return normalizedToolLines(item);
-  }
-  if (type === "step_finish") {
-    const part = itemOf(line);
-    const reason = String(line.reason ?? part?.reason ?? "").toLowerCase();
-    if (reason === "tool-calls" || reason === "tool_calls") return [];
-    const text = textFrom(line.output ?? line.result ?? part?.output ?? part?.result) ?? state.finalText ?? "";
-    return [{ type: "result", subtype: "success", result: text }];
-  }
-  if (["run.completed", "session.completed"].includes(type)) {
-    const text = textFrom(line.output ?? line.result) ?? state.finalText ?? "";
-    return [{ type: "result", subtype: "success", result: text }];
-  }
-  if (["error", "run.failed"].includes(type)) {
-    return [{ type: "result", subtype: "error", is_error: true, result: textFrom(line.error ?? line.message) ?? "OpenCode runtime failed" }];
-  }
-  return unknownRuntimeEvent();
-}
-
 function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<AgentCliCapabilities> {
   return Object.freeze({
     streamEvents: false,
@@ -663,68 +423,6 @@ const claude = Object.freeze<RuntimeAdapter>({
     if (contextObservation.length > 0) return contextObservation;
     return [line];
   },
-});
-
-function codexConfigArg(key: string, value: string): string {
-  return ` -c ${shellQuote(`${key}=${value}`)}`;
-}
-
-function sandboxCodex(host: RuntimeHost, context: AdapterStartContext, sessionId?: string): Promise<RuntimeProcess> {
-  let command = sessionId
-    ? `stdbuf -oL -eL codex exec resume ${shellQuote(sessionId)} --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
-    : "stdbuf -oL -eL codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check";
-  if (context.model) command += ` --model ${shellQuote(context.model)}`;
-  if (context.reasoning) command += codexConfigArg("model_reasoning_effort", JSON.stringify(context.reasoning));
-  // OpenSandbox execd 没有 stdin EOF 帧，runAsync 会一直挂着管道。
-  // argv 提示 + `/dev/null` 与 sandbox.commands.run 真机路径一致。
-  command += ` -- ${promptArg(context.input)} < /dev/null`;
-  return host.runAsync(command, { cwd: context.cwd, env: context.env });
-}
-
-const codex = Object.freeze<RuntimeAdapter>({
-  id: "codex",
-  version: "0.147.0",
-  outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
-  compatibleImageKeys: ALL_IMAGE_KEYS,
-  start: (context) => sandboxCodex(context.host, context),
-  resume: (context) => sandboxCodex(context.host, context, context.sessionId),
-  encodeInput: () => "",
-  decodeOutput: decodeCodex,
-});
-
-const openCode = Object.freeze<RuntimeAdapter>({
-  id: "open-code",
-  version: "1.18.18",
-  outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
-  compatibleImageKeys: ALL_IMAGE_KEYS,
-  start: ({ host, env, cwd, model, reasoning, input }) => {
-    // OpenCode's governed pin supports --thinking and emits a structured
-    // `reasoning` JSON event when the selected model exposes one.
-    let command = `opencode run --format json --thinking --dangerously-skip-permissions --pure`;
-    if (model) command += ` --model ${shellQuote(model)}`;
-    if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
-    command += ` -- ${promptArg(input)}`;
-    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" }, pty: true });
-  },
-  resume: ({ host, env, cwd, model, reasoning, input, sessionId }) => {
-    let command = `opencode run --session ${shellQuote(sessionId)} --format json --thinking --dangerously-skip-permissions --pure`;
-    if (model) command += ` --model ${shellQuote(model)}`;
-    if (reasoning) command += ` --variant ${shellQuote(reasoning)}`;
-    command += ` -- ${promptArg(input)}`;
-    return host.runAsync(command, { cwd, env: { ...env, OPENCODE_CONFIG: "/workspace/.opencode/config.json" }, pty: true });
-  },
-  materialize: async ({ host }) => {
-    // OpenCode 使用 JSON 配置；Provider 文件上传后将 Scheduler 管理的 MCP 描述
-    // 合并到单 Job 配置。自动压缩是上游有界会话策略，显式 RoleConfig 值保持不变。
-    await host.run(
-      "node -e 'const fs=require(\"node:fs\");const p=\"/workspace/.opencode/config.json\";let c={};try{c=JSON.parse(fs.readFileSync(p,\"utf8\"))}catch{};const compaction=c.compaction&&typeof c.compaction===\"object\"&&!Array.isArray(c.compaction)?c.compaction:{};if(!Object.prototype.hasOwnProperty.call(compaction,\"auto\"))compaction.auto=true;c.compaction=compaction;const m=JSON.parse(fs.readFileSync(\"/workspace/.deepsonar/mcp.json\",\"utf8\")).mcpServers||{};c.mcp=Object.fromEntries(Object.entries(m).map(([n,s])=>[n,s.type===\"stdio\"?{type:\"local\",command:[s.command,...(s.args||[])],environment:s.env||{}}:{type:\"remote\",url:s.url,headers:s.headers||{}}]));fs.mkdirSync(\"/workspace/.opencode\",{recursive:true});fs.writeFileSync(p,JSON.stringify(c)+\"\\n\")'",
-      { cwd: "/workspace" },
-    );
-  },
-  encodeInput: () => "",
-  decodeOutput: decodeOpenCode,
 });
 
 function piTextFromMessageEvent(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
@@ -1163,9 +861,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
 
 export const AGENT_CLI_RUNTIME_ADAPTERS: Readonly<Record<AgentCliId, RuntimeAdapter>> = Object.freeze({
   "claude-code": claude,
-  codex,
   dsh,
-  "open-code": openCode,
   pi,
 });
 

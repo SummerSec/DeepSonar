@@ -408,7 +408,7 @@ test("deploy registry lists required OpenSandbox images and extra official keys"
   assert.ok(listed.length >= OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.length + 1);
 });
 
-test("official OpenSandbox image PoC requires all five CLIs", async () => {
+test("official OpenSandbox image PoC requires the current three CLIs", async () => {
   const present = hostSession();
   const originalRun = present.run.bind(present);
   present.run = async (command, options) => {
@@ -430,6 +430,8 @@ test("official OpenSandbox image PoC requires all five CLIs", async () => {
   }, [{ key: "deepsonar-base", image: "img@sha256:" + "a".repeat(64) }]);
   assert.equal(ok[0]?.leftovers, 0);
   assert.equal(ok[0]?.clis.claude, true);
+  assert.equal(ok[0]?.clis.pi, true);
+  assert.equal(ok[0]?.clis.dsh, true);
 
   await assert.rejects(
     () => runOpenSandboxOfficialImagesPoc({
@@ -515,10 +517,10 @@ test("CLI missing-binary detector ignores model-not-found text", () => {
 test("OpenSandbox CLI launch PoC materializes governed provider files under runtime HOME", () => {
   const source = readFileSync(new URL("./opensandbox-poc.ts", import.meta.url), "utf8");
   assert.match(source, /runtimeCliEnv/);
-  assert.match(source, /\.codex\/config\.toml/);
   assert.match(source, /\.pi\/agent\/models\.json/);
   assert.match(source, /openai-responses/);
-  assert.match(source, /wire_api = "responses"/);
+  assert.doesNotMatch(source, /\.codex\/config\.toml/);
+  assert.doesNotMatch(source, /\/workspace\/\.opencode\/config\.json/);
 });
 
 test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async () => {
@@ -533,7 +535,7 @@ test("OpenSandbox CLI launch PoC starts all adapters and closes stdin", async ()
       return [];
     },
   }, { image: "img@sha256:" + "a".repeat(64) });
-  for (const id of ["claude-code", "codex", "open-code", "pi", "dsh"] as const) {
+  for (const id of ["claude-code", "pi", "dsh"] as const) {
     assert.equal(result[id].started, true);
     assert.equal(result[id].notFound, false);
     assert.equal(result[id].stdinClosed, true);
@@ -628,10 +630,8 @@ test("OpenSandbox cancel PoC rejects in-flight provision and reports leftovers",
   assert.deepEqual(result, { cancelled: true, leftovers: 0 });
 });
 
-function retryCliOf(command: string): "claude-code" | "codex" | "open-code" | "pi" | "dsh" | undefined {
+function retryCliOf(command: string): "claude-code" | "pi" | "dsh" | undefined {
   if (/\bclaude\b/.test(command)) return "claude-code";
-  if (/\bcodex\b/.test(command)) return "codex";
-  if (/\bopencode\b/.test(command)) return "open-code";
   if (command.includes("pi --mode rpc")) return "pi";
   if (command.includes("dsh-sdk-jsonrpc-demo") || command.includes("packaged-bin.js")) return "dsh";
   return undefined;
@@ -649,18 +649,6 @@ function retryLines(
     return phase === "ok"
       ? [init, { type: "result", subtype: "success", result: "ok" }]
       : [init, { type: "result", subtype: "error", is_error: true, result: err }];
-  }
-  if (cli === "codex") {
-    const init = { type: "thread.started", thread_id: sessionId };
-    return phase === "ok"
-      ? [init, { type: "turn.completed", result: "ok" }]
-      : [init, { type: "error", message: err }];
-  }
-  if (cli === "open-code") {
-    const init = { type: "session.created", sessionID: sessionId };
-    return phase === "ok"
-      ? [init, { type: "run.completed", result: "ok" }]
-      : [init, { type: "run.failed", error: err }];
   }
   if (cli === "pi") {
     const state = {
@@ -723,7 +711,7 @@ function retryClient(session: OpenSandboxSession): OpenSandboxClient {
 
 test("OpenSandbox runRealAgent retries a transient 503 on the same session for every CLI", async () => {
   const image = "img@sha256:" + "a".repeat(64);
-  for (const provider of ["claude-code", "codex", "open-code", "pi", "dsh"] as const) {
+  for (const provider of ["claude-code", "pi", "dsh"] as const) {
     const session = retrySession(503);
     const result = await runOpenSandboxRetryPoc(retryClient(session), { image, provider });
     assert.equal(result.retrying, true, provider);
@@ -733,10 +721,6 @@ test("OpenSandbox runRealAgent retries a transient 503 on the same session for e
     assert.equal(result.terminalOutcome, "success", provider);
     if (provider === "claude-code") {
       assert.ok(session.commands.some((command) => command.includes("--resume 'retry-claude-code'")), provider);
-    } else if (provider === "codex") {
-      assert.ok(session.commands.some((command) => /exec resume 'retry-codex'/.test(command)), provider);
-    } else if (provider === "open-code") {
-      assert.ok(session.commands.some((command) => command.includes("--session 'retry-open-code'")), provider);
     } else if (provider === "pi") {
       assert.ok(session.commands.some((command) => command.includes("--session '/workspace/.deepsonar-home/.pi/agent/retry-pi.jsonl'")), provider);
     } else {
@@ -753,7 +737,7 @@ test("runRealAgent captures CLI session identity through applyRuntimeOutput", ()
 
 test("OpenSandbox runRealAgent does not resume a permanent 401 for any CLI", async () => {
   const image = "img@sha256:" + "a".repeat(64);
-  for (const provider of ["claude-code", "codex", "open-code", "pi", "dsh"] as const) {
+  for (const provider of ["claude-code", "pi", "dsh"] as const) {
     const session = retrySession(401);
     const result = await runOpenSandboxRetryPoc(retryClient(session), { image, provider });
     assert.equal(result.retrying, false, provider);

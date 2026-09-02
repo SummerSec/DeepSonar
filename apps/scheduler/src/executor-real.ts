@@ -648,7 +648,7 @@ export async function executeReal(
   const disabledControlToolNames = allowedControlToolNames.filter((name) => !controlToolNames.includes(name));
   const platformOperations = frozenPlatformOperations(controlToolNames);
   const cliName = snapshot.agent_cli;
-  const provider = (cliName === "opencode" ? "open-code" : cliName) as "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  const provider = cliName as "claude-code" | "pi" | "dsh";
   const adapterCapabilities = snapshot.agent_runtime?.capabilities;
   const platformApiEnabled = adapterCapabilities?.platformControlApi === true && platformOperations.length > 0;
   if (adapterCapabilities?.platformControlApi !== true) throw new Error(`job ${jobId} 的冻结 Agent adapter 不支持 Job-scoped control API`);

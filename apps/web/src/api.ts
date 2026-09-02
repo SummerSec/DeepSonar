@@ -4,6 +4,7 @@ import type {
   CanvasLifecycleRollup,
   CredentialBatchBindingImpact,
   CredentialBatchBindingRequest,
+  CurrentAgentCli,
   EffectiveFindingProtocol,
   FindingProtocolConfig,
   ProviderAccountCatalogItem,
@@ -564,7 +565,7 @@ export interface JobSummary {
   created_at: string;
   project_name?: string;
   canvas_title?: string;
-  /** 冻结快照：所用 Agent CLI（claude-code / open-code / codex…） */
+  /** 冻结快照：所用 Agent CLI（claude-code / pi / dsh，历史 leftover 可能为 codex / open-code） */
   agent_cli?: string | null;
   /** 冻结快照：所用模型 ID */
   model?: string | null;
@@ -1008,7 +1009,7 @@ export interface BindableRoleConfig {
   role_ui_color?: string | null;
   project_id: string | null;
   project_name: string | null;
-  agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
   dsh_task_mode: "standard" | "ptc";
   model: string | null;
   context_window_tokens: number | null;
@@ -1047,7 +1048,7 @@ export interface ProviderCredential {
   public_metadata_json: Record<string, unknown>;
   model_catalog_json?: string[];
   /** CC Switch-style profile: which CLI this settingsConfig targets. */
-  agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | "dsh" | null;
+  agent_cli?: "claude-code" | "pi" | "dsh" | "codex" | "open-code" | null;
   /** CLI settingsConfig projection. Secret values are returned as [已保存密钥]. */
   settings_config_json?: Record<string, unknown>;
   /** Manager-only meta (apiFormat, fullUrl, …). */
@@ -1321,7 +1322,7 @@ export interface RuntimeKnobOverride {
 }
 
 export type RoleConfigInput = {
-  agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
   dsh_task_mode?: "standard" | "ptc";
   model?: string | null;
   /** 通用客户端上下文预算；不会提升上游模型能力。 */
@@ -1353,7 +1354,7 @@ export interface RoleConfigView {
   id: string;
   role_id: string;
   project_id: string | null;
-  agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh";
+  agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
   dsh_task_mode: "standard" | "ptc";
   model: string | null;
   context_window_tokens: number | null;
@@ -2433,7 +2434,7 @@ export const api = {
   credentialProviders: () => get<ProviderAccountCatalogItemView[]>("/credentials/providers"),
   bindableRoleConfigs: () => get<BindableRoleConfig[]>("/role-configs/bindable"),
   /** Provider 绑定列表：仅改 RoleConfig.agent_cli，不整表替换 */
-  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: "claude-code" | "open-code" | "codex" | "pi" | "dsh") =>
+  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: CurrentAgentCli) =>
     send<{ id: string; agent_cli: string; version: number; role_id: string; project_id: string | null }>(
       "PATCH",
       `/role-configs/${roleConfigId}/agent-cli`,
@@ -2453,7 +2454,7 @@ export const api = {
     secret: string;
     project_id?: string | null;
     metadata?: Record<string, unknown>;
-    agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | "dsh" | null;
+    agent_cli?: CurrentAgentCli | null;
     settings_config?: Record<string, unknown>;
     meta?: Record<string, unknown>;
   }) => send<ProviderCredential>("POST", "/credentials", c),
@@ -2465,7 +2466,7 @@ export const api = {
       provider?: string;
       project_id?: string | null;
       metadata?: Record<string, unknown>;
-      agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | "dsh" | null;
+      agent_cli?: CurrentAgentCli | null;
       settings_config?: Record<string, unknown>;
       meta?: Record<string, unknown>;
     },
@@ -2484,7 +2485,7 @@ export const api = {
   credentialModels: (id: string) =>
     send<CredentialModels>("POST", `/credentials/${id}/models`),
   credentialModelsPreview: (input: {
-      agent_cli?: "claude-code" | "codex" | "open-code" | "pi" | "dsh";
+      agent_cli?: CurrentAgentCli;
     provider: string;
     secret: string;
     base_url?: string;

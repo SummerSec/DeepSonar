@@ -1343,21 +1343,6 @@ test("runtime HOME preparation fails closed when the directory is not writable",
   );
 });
 
-test("Codex session discovery falls back to HOME when CODEX_HOME is unset", async () => {
-  let command = "";
-  await CLI_SESSION_ADAPTERS.codex.exportSession({
-    async run(value) {
-      command = value;
-      return { exitCode: 0, stdout: "/tmp/session-1.jsonl\n", stderr: "" };
-    },
-    async readText() {
-      return null;
-    },
-  }, "session-1");
-
-  assert.match(command, /base="\$\{CODEX_HOME:-\$\{HOME:-\/root\}\/\.codex\}\/sessions"/);
-  });
-
 test("DSH session discovery uses the deterministic exact session directory", async () => {
   let command = "";
   const sourcePath = "/workspace/.deepsonar-home/.dsh/sessions/project/session-context-1/session.jsonl";
@@ -1394,48 +1379,6 @@ function mockedSessionDiscoveryRuntime(
     },
   };
 }
-
-test("OpenCode session export preserves the vendor JSON artifact", async () => {
-  const commands: string[] = [];
-  const content = '{"session":"session-open-code"}\n';
-  const bundle = await CLI_SESSION_ADAPTERS["open-code"].exportSession(
-    mockedSessionDiscoveryRuntime({ exitCode: 0, stdout: content, stderr: "" }, {}, commands),
-    "session-open-code",
-  );
-
-  assert.match(commands[0] ?? "", /^opencode export /);
-  assert.deepEqual(bundle.artifacts, [{
-    name: "session-open-code.json",
-    sourcePath: "opencode export session-open-code",
-    content,
-    kind: "vendor_export",
-  }]);
-  assert.equal(bundle.captureError, undefined);
-});
-
-test("OpenCode session export rejects vendor stdout over 32 MiB", async () => {
-  const bundle = await CLI_SESSION_ADAPTERS["open-code"].exportSession(
-    mockedSessionDiscoveryRuntime({
-      exitCode: 0,
-      stdout: "x".repeat(32 * 1024 * 1024 + 1),
-      stderr: "",
-    }),
-    "session-open-code-large",
-  );
-
-  assert.deepEqual(bundle.artifacts, []);
-  assert.match(bundle.captureError ?? "", /32 MiB/);
-});
-
-test("OpenCode session export reports vendor command errors", async () => {
-  const bundle = await CLI_SESSION_ADAPTERS["open-code"].exportSession(
-    mockedSessionDiscoveryRuntime({ exitCode: 1, stdout: "", stderr: "export failed" }),
-    "session-open-code-error",
-  );
-
-  assert.deepEqual(bundle.artifacts, []);
-  assert.equal(bundle.captureError, "export failed");
-});
 
 test("Pi session archive accepts only the exact governed sessionFile", async () => {
   const sessionFile = "/workspace/.deepsonar-home/.pi/agent/session.jsonl";
@@ -1517,12 +1460,8 @@ test("embedded skill 使用当前 Agent CLI 的标准目录", () => {
     "/workspace/.deepsonar-home/.claude/skills/deepsonar-control/SKILL.md",
   );
   assert.equal(
-    skillMaterializationPath("deepsonar-control", "SKILL.md", "codex"),
-    "/workspace/.deepsonar-home/.codex/skills/deepsonar-control/SKILL.md",
-  );
-  assert.equal(
-    skillMaterializationPath("deepsonar-control", "SKILL.md", "open-code"),
-    "/workspace/.deepsonar-home/.config/opencode/skills/deepsonar-control/SKILL.md",
+    skillMaterializationPath("deepsonar-control", "SKILL.md", "pi"),
+    "/workspace/.deepsonar-home/.pi/agent/skills/deepsonar-control/SKILL.md",
   );
   assert.equal(
     skillMaterializationPath("deepsonar-control", "SKILL.md", "dsh"),
@@ -1530,7 +1469,7 @@ test("embedded skill 使用当前 Agent CLI 的标准目录", () => {
   );
   assert.deepEqual(
     materializationPathCollisions({
-      provider: "codex",
+      provider: "pi",
       commands: [],
       subAgents: [],
       skills: [{ source: "embedded", name: "deepsonar-control", files: { "SKILL.md": "" } }],

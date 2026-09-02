@@ -73,7 +73,7 @@ function testDshProvider(reasoning?: string) {
 }
 
 test("内置注册表明确、不可变且能力完整", () => {
-  assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "codex", "dsh", "open-code", "pi"]);
+  assert.deepEqual(Object.keys(AGENT_CLI_RUNTIME_ADAPTERS).sort(), ["claude-code", "dsh", "pi"]);
   assert.ok(REQUIRED_RUNTIME_CAPABILITIES.includes("contextCompaction"));
   for (const id of Object.keys(AGENT_CLI_RUNTIME_ADAPTERS)) {
     const adapter = getAgentCliRuntimeAdapter(id);
@@ -89,22 +89,19 @@ test("内置注册表明确、不可变且能力完整", () => {
   }
   assert.throws(() => requireAgentCliRuntimeAdapter("user-command"), /AGENT_CLI_UNREGISTERED/);
   assert.throws(() => requireAgentCliRuntimeAdapter("__proto__"), /AGENT_CLI_UNREGISTERED/);
-  assert.throws(() => requireAgentCliRuntimeAdapter("codex", "untrusted-image"), /AGENT_CLI_IMAGE_INCOMPATIBLE/);
+  assert.throws(() => requireAgentCliRuntimeAdapter("codex"), /AGENT_CLI_UNREGISTERED/);
+  assert.throws(() => requireAgentCliRuntimeAdapter("open-code"), /AGENT_CLI_UNREGISTERED/);
+  assert.throws(() => requireAgentCliRuntimeAdapter("pi", "untrusted-image"), /AGENT_CLI_IMAGE_INCOMPATIBLE/);
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
-  assert.equal(requireAgentCliRuntimeAdapter("codex", "deepsonar-chrome-fuzz").id, "codex");
+  assert.equal(requireAgentCliRuntimeAdapter("pi", "deepsonar-chrome-fuzz").id, "pi");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-mobile").id, "claude-code");
-  for (const id of ["claude-code", "codex", "dsh", "open-code", "pi"] as const) {
+  for (const id of ["claude-code", "dsh", "pi"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
-  }
-  for (const id of ["claude-code", "codex", "open-code"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, false);
   }
-  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.capabilities.controlMcp, false);
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.outputMode, "jsonl");
-  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.controlMcp, false);
-  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.capabilities.platformControlApi, true);
-  assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.codex, "version", "tampered"), false);
+  assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.pi, "version", "tampered"), false);
 });
 
 test("applyRuntimeOutput keeps session identity from CLI JSONL", () => {
@@ -132,11 +129,11 @@ test("applyRuntimeOutput keeps session identity from CLI JSONL", () => {
 
   const mixed = { sessionId: undefined as string | undefined };
   applyRuntimeOutputText(
-    AGENT_CLI_RUNTIME_ADAPTERS.codex,
-    "noise\n{\"type\":\"thread.started\",\"thread_id\":\"sess-codex\"}\n",
+    AGENT_CLI_RUNTIME_ADAPTERS["claude-code"],
+    "noise\n{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-mixed\"}\n",
     mixed,
   );
-  assert.equal(mixed.sessionId, "sess-codex");
+  assert.equal(mixed.sessionId, "sess-mixed");
 });
 
 test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
@@ -382,12 +379,12 @@ test("Pi 默认关闭扩展，受治理扩展才通过显式路径加载", async
 });
 
 test("适配器只接受带完整身份的压缩事件，缺字段时记录未知", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const state = {
     contextIdentity: {
       context_id: "ctx_1234567890abcdef1234567890abcdef",
       context_revision: 0,
-      adapter_id: "codex",
+      adapter_id: "pi",
       adapter_version: adapter.version,
       runtime_identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       transform_chain_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -566,188 +563,6 @@ test("Claude supports same-session resume through the stream-json protocol", asy
   assert.match(fake.commands[0] ?? "", /--output-format stream-json/);
   assert.match(fake.commands[0] ?? "", /claude-sonnet-4-5/);
   assert.equal(fake.envs[0]?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "70");
-});
-
-test("Codex JSONL lifecycle normalizes MCP calls and completion", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
-  const state = {};
-  assert.deepEqual(adapter.decodeOutput({ type: "thread.started", thread_id: "codex-s1" }, state), [
-    { type: "system", subtype: "init", session_id: "codex-s1" },
-  ]);
-  const started = adapter.decodeOutput({ type: "item.started", item: { type: "mcp_tool_call", server: "deepsonar-control", tool: "mark_job_done", call_id: "c1", arguments: JSON.stringify({ summary: "done" }) } }, state);
-  assert.equal(contentType(started[0]), "tool_use");
-  assert.equal((started[0]?.message as { content?: Array<{ name?: unknown }> })?.content?.[0]?.name, "mcp__deepsonar-control__mark_job_done");
-  const completed = adapter.decodeOutput({ type: "item.completed", item: { type: "mcp_tool_call", name: "mcp__deepsonar-control__mark_job_done", call_id: "c1", status: "completed", output: "ok" } }, state);
-  assert.equal(contentType(completed.at(-1)), "tool_result");
-  assert.deepEqual(adapter.decodeOutput({ type: "item.completed", item: { type: "mcp_tool_call" } }, state), [{ type: "unknown_runtime" }]);
-  assert.equal(adapter.decodeOutput({ type: "turn.completed" }, state)[0]?.type, "result");
-});
-
-test("Codex modern function and custom tool output items normalize as tool results", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
-  const state = {};
-
-  const functionCall = adapter.decodeOutput({
-    type: "item.started",
-    item: { type: "function_call", name: "shell", call_id: "call-1", arguments: '{"cmd":"pwd"}' },
-  }, state);
-  assert.equal(contentType(functionCall[0]), "tool_use");
-
-  const functionOutput = adapter.decodeOutput({
-    type: "item.completed",
-    item: { type: "function_call_output", call_id: "call-1", output: "/workspace" },
-  }, state);
-  assert.deepEqual(functionOutput, [{
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: "call-1", is_error: false, content: "/workspace" }] },
-  }]);
-
-  const customCall = adapter.decodeOutput({
-    type: "item.started",
-    item: { type: "custom_tool_call", name: "shell", call_id: "custom-1", input: '{"cmd":"ls"}' },
-  }, state);
-  assert.equal(contentType(customCall[0]), "tool_use");
-
-  const customOutput = adapter.decodeOutput({
-    type: "item.completed",
-    item: { type: "custom_tool_call_output", call_id: "custom-1", output: "a.ts" },
-  }, state);
-  assert.deepEqual(customOutput, [{
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: "custom-1", is_error: false, content: "a.ts" }] },
-  }]);
-
-  assert.deepEqual(adapter.decodeOutput({
-    type: "item.completed",
-    item: { type: "custom_tool_call_output_extra", call_id: "custom-1", output: "must stay unknown" },
-  }, state), []);
-});
-
-test("Codex function_call with an inline output retains call then result ordering", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
-  const events = adapter.decodeOutput({
-    type: "item.completed",
-    item: {
-      type: "function_call",
-      name: "shell",
-      call_id: "call-inline",
-      arguments: '{"cmd":"pwd"}',
-      status: "completed",
-      output: "/workspace",
-    },
-  }, {});
-  assert.deepEqual(events.map(contentType), ["tool_use", "tool_result"]);
-});
-
-test("Codex official reasoning summary events normalize and suppress the repeated complete item", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
-  const state = {};
-  const delta = adapter.decodeOutput({
-    type: "response.reasoning_summary_text.delta",
-    delta: "先检查上下文",
-  }, state);
-  assert.equal(contentType(delta[0]), "thinking");
-  assert.equal((delta[0]?.message as { content?: Array<{ thinking?: unknown }> })?.content?.[0]?.thinking, "先检查上下文");
-  assert.deepEqual(adapter.decodeOutput({
-    type: "item.completed",
-    item: { type: "reasoning", summary: "先检查上下文" },
-  }, state), []);
-});
-
-test("Codex 命令仅使用 HTTP API 传输，并保留模型、推理和恢复参数", async () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.codex;
-  const fake = fakeSandbox();
-  const context = { host: fake.host, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
-  await adapter.start(context);
-  await adapter.resume({ ...context, input: "nudge", sessionId: "codex-s1" });
-  assert.doesNotMatch(fake.commands[0], /mcp_servers\.deepsonar-control|control-mcp/);
-  assert.match(fake.commands[0], /model_reasoning_effort/);
-  assert.match(fake.commands[0], /high/);
-  assert.match(fake.commands[1], /model_reasoning_effort/);
-  assert.match(fake.commands[0], /gpt-5/);
-  assert.match(fake.commands[1], /exec resume/);
-  assert.match(fake.commands[0], /--skip-git-repo-check/);
-  assert.match(fake.commands[0], /stdbuf -oL -eL/);
-  assert.match(fake.commands[0], / -- 'initial' < \/dev\/null$/);
-  assert.doesNotMatch(fake.commands[0], / -$/);
-  assert.match(fake.commands[1], / -- 'nudge' < \/dev\/null$/);
-  assert.equal(adapter.encodeInput("ignored"), "");
-  assert.match(fake.commands[1], /codex-s1/);
-  assert.equal(fake.ptys[0], undefined);
-  assert.equal(fake.ptys[1], undefined);
-  assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
-  assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
-});
-
-test("OpenCode JSON events normalize text and tool completion without scraping terminal text", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
-  const state = {};
-  const session = adapter.decodeOutput({ type: "session.created", sessionID: "oc-s1" }, state)[0];
-  assert.deepEqual(session, { type: "system", subtype: "init", session_id: "oc-s1" });
-  const liveSession = adapter.decodeOutput({ type: "step_start", sessionID: "ses_live" }, {})[0];
-  assert.deepEqual(liveSession, { type: "system", subtype: "init", session_id: "ses_live" });
-  const text = adapter.decodeOutput({ type: "text", sessionID: "oc-s1", part: { type: "text", text: "structured" } }, state)[0];
-  assert.equal((text?.message as { content?: Array<{ text?: unknown }> })?.content?.[0]?.text, "structured");
-  const tool = adapter.decodeOutput({ type: "tool_use", sessionID: "oc-s1", part: { type: "tool", callID: "oc1", tool: "deepsonar-control_mark_job_done", state: { status: "running", input: { summary: "done" } } } }, state);
-  assert.equal(contentType(tool[0]), "tool_use");
-  assert.equal((tool[0]?.message as { content?: Array<{ name?: unknown }> })?.content?.[0]?.name, "mcp__deepsonar-control__mark_job_done");
-  const result = adapter.decodeOutput({ type: "tool_use", sessionID: "oc-s1", part: { type: "tool", callID: "oc1", tool: "deepsonar-control_mark_job_done", state: { status: "completed", output: "ok" } } }, state);
-  assert.equal(contentType(result.at(-1)), "tool_result");
-  assert.deepEqual(adapter.decodeOutput({ type: "step_finish", sessionID: "oc-s1", part: { type: "step-finish", reason: "tool-calls" } }, state), []);
-  assert.equal(adapter.decodeOutput({ type: "step_finish", sessionID: "oc-s1", part: { type: "step-finish", reason: "stop" } }, state)[0]?.type, "result");
-  assert.equal(adapter.encodeInput("ignored"), "");
-  assert.deepEqual(adapter.decodeOutput({ type: "future.provider.event" }, state), [{ type: "unknown_runtime" }]);
-});
-
-test("OpenCode reasoning parts are mapped only when the official structured part is present", () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
-  const state = {};
-  const reasoning = adapter.decodeOutput({
-    type: "message.part",
-    part: { type: "reasoning", text: "检查证据" },
-  }, state);
-  assert.equal(contentType(reasoning[0]), "thinking");
-  assert.equal((reasoning[0]?.message as { content?: Array<{ thinking?: unknown }> })?.content?.[0]?.thinking, "检查证据");
-  assert.deepEqual(adapter.decodeOutput({
-    type: "part.updated",
-    part: { type: "reasoning", text: "检查证据" },
-  }, state), []);
-});
-
-test("OpenCode commands pin config path and support same-session resume", async () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
-  const fake = fakeSandbox();
-  const context = { host: fake.host, env: {}, cwd: "/workspace", input: "initial", mcpConfigPath: "/workspace/.deepsonar/mcp.json", model: "gpt-5", reasoning: "high" };
-  await adapter.start(context);
-  await adapter.resume({ ...context, input: "nudge", sessionId: "oc-s1" });
-  assert.match(fake.commands[0], /opencode run/);
-  assert.match(fake.commands[0], /--thinking/);
-  assert.match(fake.commands[0], /--variant 'high'/);
-  assert.match(fake.commands[1], /--variant 'high'/);
-  assert.match(fake.commands[1], /--session 'oc-s1'/);
-  assert.equal(fake.envs[0].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
-  assert.equal(fake.envs[1].OPENCODE_CONFIG, "/workspace/.opencode/config.json");
-  assert.equal(fake.ptys[0], true);
-  assert.equal(fake.ptys[1], true);
-  assert.equal(fake.envs[0].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
-  assert.equal(fake.envs[1].CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
-});
-
-test("OpenCode materialization defaults compaction without discarding explicit config", async () => {
-  const adapter = AGENT_CLI_RUNTIME_ADAPTERS["open-code"];
-  const fake = fakeSandbox();
-  await adapter.materialize?.({
-    host: fake.host,
-    env: {},
-    cwd: "/workspace",
-    input: "",
-    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
-  });
-  assert.equal(fake.runCommands.length, 1);
-  assert.match(fake.runCommands[0], /const compaction=c\.compaction/);
-  assert.match(fake.runCommands[0], /hasOwnProperty\.call\(compaction,"auto"\)/);
-  assert.match(fake.runCommands[0], /compaction\.auto=true/);
-  assert.match(fake.runCommands[0], /c\.compaction=compaction/);
 });
 
 test("CLI adapters do not import provider SDKs", async () => {

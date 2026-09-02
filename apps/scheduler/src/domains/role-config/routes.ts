@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
+import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
@@ -53,7 +53,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
 
   const RoleConfigPutBody = z.object({
-    agent_cli: z.enum(["claude-code", "open-code", "codex", "pi", "dsh"]).default("claude-code"),
+    agent_cli: AgentCliWriteSchema.default("claude-code"),
     dsh_task_mode: z.enum(["standard", "ptc"]).default("standard"),
     model: z.string().nullish(),
     context_window_tokens: z.unknown().optional(),
@@ -331,7 +331,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   app.patch("/role-configs/:id/agent-cli", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({
-      agent_cli: z.enum(["claude-code", "open-code", "codex", "pi", "dsh"]),
+      agent_cli: AgentCliWriteSchema,
     }).parse(req.body);
     const actorProjectId = req.actor?.projectId ?? null;
     const [row] = await sql`

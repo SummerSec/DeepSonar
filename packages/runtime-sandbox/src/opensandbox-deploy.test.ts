@@ -180,7 +180,7 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /submit_hub_decision/);
   assert.match(poc, /for \(const selectedCli of selectedClis\)/);
   assert.match(poc, /vendor CLI PoC needs 0\.0\.0\.0:3100/);
-  assert.match(poc, /vendor CLI E2E requires all five CLIs/);
+  assert.match(poc, /vendor CLI E2E requires all current CLIs/);
   assert.match(poc, /vendor CLI E2E needs host docker access for Gateway bind/);
   assert.match(poc, /assertVendorUpstreamPayload/);
   assert.match(poc, /assertVendorUpstreamStatus/);

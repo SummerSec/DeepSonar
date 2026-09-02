@@ -12,7 +12,7 @@ const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
 test("调度器上下文按真实输入顺序记录图投影和预算", () => {
   const context = createJobRuntimeContext({
     attemptId: "attempt-context-1",
-    adapterId: "codex",
+    adapterId: "pi",
     adapterVersion: "1.0.0",
     runtimeIdentity: digest("a"),
     compactionPolicy: "automatic",
@@ -35,7 +35,7 @@ test("调度器上下文按真实输入顺序记录图投影和预算", () => {
 test("压缩未知状态不增加 revision 且不暴露上下文正文", () => {
   const initial = createJobRuntimeContext({
     attemptId: null,
-    adapterId: "codex",
+    adapterId: "pi",
     adapterVersion: "1.0.0",
     runtimeIdentity: digest("a"),
     compactionPolicy: "automatic",
@@ -55,7 +55,7 @@ test("压缩未知状态不增加 revision 且不暴露上下文正文", () => {
 test("可观测压缩诊断保留有界 boundary 与 tail 摘要", () => {
   const initial = createJobRuntimeContext({
     attemptId: "attempt-context-boundary",
-    adapterId: "codex",
+    adapterId: "pi",
     adapterVersion: "1.0.0",
     runtimeIdentity: digest("a"),
     compactionPolicy: "automatic",
@@ -100,7 +100,7 @@ test("上下文持久化通过单事务写入 Job 证据", async () => {
   db.begin = async (callback) => callback(tx);
   const context = createJobRuntimeContext({
     attemptId: null,
-    adapterId: "codex",
+    adapterId: "pi",
     adapterVersion: "1.0.0",
     runtimeIdentity: digest("a"),
     compactionPolicy: "automatic",

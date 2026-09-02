@@ -28,7 +28,7 @@ export type ReasoningEffort = string;
 export { createStdinCloseKiller, DEFAULT_STDIN_CLOSE_KILL_MS } from "./runtime-stdin-close.js";
 
 export interface RealAgentSpec {
-  provider: "claude-code" | "open-code" | "codex" | "dsh" | "pi";
+  provider: "claude-code" | "dsh" | "pi";
   adapter?: AgentCliRuntimeSnapshot;
   runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
@@ -547,14 +547,10 @@ export function skillMaterializationPath(
   provider: RealAgentSpec["provider"] = "claude-code",
 ): string {
   const safeName = safeComponentName(name, "embedded skill.name");
-  const skillsRoot = provider === "codex"
-    ? `${RUNTIME_HOME}/.codex/skills`
-    : provider === "open-code"
-      ? `${RUNTIME_HOME}/.config/opencode/skills`
-      : provider === "dsh"
-        ? `${RUNTIME_HOME}/.dsh/skills`
-      : provider === "pi"
-        ? `${RUNTIME_HOME}/.pi/agent/skills`
+  const skillsRoot = provider === "dsh"
+    ? `${RUNTIME_HOME}/.dsh/skills`
+    : provider === "pi"
+      ? `${RUNTIME_HOME}/.pi/agent/skills`
       : `${CLAUDE_DIR}/skills`;
   const root = strictChildPath(
     skillsRoot,
@@ -612,7 +608,7 @@ export function materializationPathCollisions(
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
  * embedded skills → 当前 CLI 的标准 skills 目录（Claude `.claude/skills`、
- * Codex `.codex/skills`、OpenCode `.config/opencode/skills`、Pi `.pi/agent/skills`）；repo skills 需出网安装，尽力而为。
+ * Pi `.pi/agent/skills`、DSH `.dsh/skills`）；repo skills 需出网安装，尽力而为。
  */
 async function materializeAgentFiles(
   host: Pick<RuntimeHost, "run" | "uploadFile">,
@@ -655,7 +651,7 @@ async function materializeAgentFiles(
   // repo 形式 skill：需要出网，失败只告警不阻断
   for (const skill of spec.skills ?? []) {
     if ("files" in skill || !skill.repo) continue;
-    const skillAgent = provider === "open-code" ? "opencode" : provider === "claude-code" ? "claude-code" : provider;
+    const skillAgent = provider === "claude-code" ? "claude-code" : provider;
     const res = await host.run(
       `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
       { timeoutMs: 120_000, env: cliEnv },

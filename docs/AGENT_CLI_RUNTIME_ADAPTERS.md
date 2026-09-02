@@ -30,13 +30,11 @@ materialization. The host still owns sandbox lifecycle, semantic control MCP,
 event validation, completion gates, leases, and all state transitions. Output
 is consumed as structured JSON events; terminal text is never scraped.
 
-The current registry contains:
+The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLIs. Leftover `codex` / `open-code` adapters are retired from new RoleConfig/Job writes; historical snapshots and Session archives stay readable. Adding a later CLI still follows the onboarding checklist below and registers in the same table.
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-code` | Claude Code 2.1.252 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
-| `codex` | Codex CLI 0.147.0 | `codex exec --json` JSONL | no | Codex's documented built-in automatic-compaction default | `model_context_window` | Official reasoning summary/item events when emitted |
-| `open-code` | OpenCode 1.18.18 | `opencode run --format json --thinking` | no | Materialization defaults `compaction.auto` to `true`, preserving explicit values and all other compaction keys | selected model `limit.context` | Structured `reasoning`/`thinking` parts when emitted |
 | `pi` | Pi Coding Agent 0.84.4 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
 | `dsh` | DeepSeek Harness 0.1.1-rc.2 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（Code Mode `run_code`） | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
 
@@ -50,9 +48,9 @@ system prompt 单独作为 `input[0]` 会 401 `unauthorized client`。适配器�
 提示；若投影后仍 401，请改用 `pi` 或更换上游。失败时 `turn/end` 会尽量抽出嵌套 JSON
 的 `message`（例如 `unauthorized client detected`），避免只剩 `DSH turn ended: error`。
 
-五个适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
-只有上下文策略受支持时才准入。Claude Code、Codex 与 OpenCode 同时保留 `controlMcp: true`，
-每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面，MCP 仅作为待淘汰的过渡通道。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。DSH 的 `dsh_task_mode` 不是 JSON-RPC 初始化参数：适配器在 Job 启动前按冻结值物化 Cordis composition，`standard` 配置 `dsh-tools mode: native`，`ptc` 配置 `mode: code` 并挂载 `@deepseek-ai/dsh-code-runtime-worker-thread`。LLM composition 固定使用官方 `@deepseek-ai/dsh-llm-pi-ai`；Credential 中的 Provider YAML 按官方 `settings.yaml` 结构保存 `llm-pi-ai.providers` 与 `agent-default-model`，可声明任意安全 route 及单一 OpenAI/Anthropic 兼容 profile。DSH 默认强度只能是 Pi-AI 规范档位，模型 `reasoningEfforts` 把规范档位映射为第三方 wire value。Job 冻结 route/model/Provider-owned `reasoning` 后，运行时将 profile 强制投影到 Job Model Gateway，并以该 route/model 调用 JSON-RPC `initialize`；沙箱只得到短期 `DEEPSONAR_GATEWAY_TOKEN`。Base/Audit/Kali 镜像同时安装按 Git commit 与 tarball SHA-256 固定的 MIT 插件 `dsh-reasoning-settings@0.3.0`；生成的无 UI Cordis composition 只挂载其 host 部分，为已配置的单 route/model 提供 Subagent 按次选择和思考强度继承，不引入 Web client。相关官方 npm 包按版本与 integrity 固定。DSH 动态 Skill 物化到 `${DSH_HOME}/skills/<name>/SKILL.md`，由 `dsh-skill-filesystem` 发现并通过 `dsh-tool-skill` 按需加载；平台内置 `deepsonar-control` Skill 走同一路径。
+当前三类适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
+只有上下文策略受支持时才准入。Claude Code 仍保留 `controlMcp: true` 作为待淘汰过渡通道，
+每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。DSH 的 `dsh_task_mode` 不是 JSON-RPC 初始化参数：适配器在 Job 启动前按冻结值物化 Cordis composition，`standard` 配置 `dsh-tools mode: native`，`ptc` 配置 `mode: code` 并挂载 `@deepseek-ai/dsh-code-runtime-worker-thread`。LLM composition 固定使用官方 `@deepseek-ai/dsh-llm-pi-ai`；Credential 中的 Provider YAML 按官方 `settings.yaml` 结构保存 `llm-pi-ai.providers` 与 `agent-default-model`，可声明任意安全 route 及单一 OpenAI/Anthropic 兼容 profile。DSH 默认强度只能是 Pi-AI 规范档位，模型 `reasoningEfforts` 把规范档位映射为第三方 wire value。Job 冻结 route/model/Provider-owned `reasoning` 后，运行时将 profile 强制投影到 Job Model Gateway，并以该 route/model 调用 JSON-RPC `initialize`；沙箱只得到短期 `DEEPSONAR_GATEWAY_TOKEN`。Base/Audit/Kali 镜像同时安装按 Git commit 与 tarball SHA-256 固定的 MIT 插件 `dsh-reasoning-settings@0.3.0`；生成的无 UI Cordis composition 只挂载其 host 部分，为已配置的单 route/model 提供 Subagent 按次选择和思考强度继承，不引入 Web client。相关官方 npm 包按版本与 integrity 固定。DSH 动态 Skill 物化到 `${DSH_HOME}/skills/<name>/SKILL.md`，由 `dsh-skill-filesystem` 发现并通过 `dsh-tool-skill` 按需加载；平台内置 `deepsonar-control` Skill 走同一路径。
 
 Cordis 字段必须按镜像中钉死版本的插件 Schema 生成，不能用布尔“启用”猜测配置形态。当前
 完整 DSH package closure 统一固定为 `0.1.1-rc.2`，避免 prerelease peer range 混装。`@deepseek-ai/dsh-agent-spine-demo` 的 `toolBash` 是
@@ -96,19 +94,19 @@ be registered or admitted:
 | **Session 归档** | `packages/runtime-sandbox/src/cli-session-adapters.ts`（`SupportedAgentCli` + `CLI_SESSION_ADAPTERS`） | 按 CLI 发现/导出原始 session（JSONL / vendor export），写入 Job evidence；`sessionCapture: true` 才启用 |
 | **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 用量（归档 usage + Gateway 账本） / 工具统计 / 原始；可切换 `main` / `subagent` 归档；**保留下载所选原始文件** |
 
-当前五类 CLI 的归档边界如下；它们是独立格式，不承诺共用 schema：
+当前三类 CLI 的归档边界如下；它们是独立格式，不承诺共用 schema。leftover `codex` / `open-code` 归档仍由 Web 查看器只读解析，不再作为新 Job 的运行时 adapter。
 
 | CLI | 归档来源/格式 | 明确边界 |
 | --- | --- | --- |
 | `claude-code` | 本次沙箱 `HOME/.claude/projects` 下匹配 `sessionId` 的 JSONL（含主会话与 `subagents`） | 发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
-| `codex` | `CODEX_HOME/sessions`（未设置时 `HOME/.codex/sessions`）下按本次 `sessionId` 匹配的 `YYYY/MM/DD/rollout-*.jsonl` | 仅按本次 `sessionId` 发现；发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
-| `open-code` | `opencode export <sessionId>` vendor export | stdout 超过 32 MiB、导出失败或空结果时显式 `captureError` |
 | `pi` | runtime 返回且位于 `/workspace/.deepsonar-home/.pi/agent/` 的受治理 `sessionFile` JSONL | 缺失/路径越界/读取错误或超过 32 MiB 时显式 `captureError` |
 | `dsh` | `/workspace/.deepsonar-home/.dsh/sessions/<project>/<sessionId>/session.jsonl` JSONL | 非法或多项目匹配、发现/读取错误或累计超过 32 MiB 时显式 `captureError` |
+| leftover `codex`（retired） | 历史 `CODEX_HOME/sessions` rollout JSONL | 只读归档；新 RoleConfig/Job 拒绝 |
+| leftover `open-code`（retired） | 历史 `opencode export` vendor export | 只读归档；新 RoleConfig/Job 拒绝 |
 
 查看器为每种 CLI 分别归一化消息、reasoning、tool call/result、usage；仅当对应 CLI 的归档实际持久化了 DeepSonar 注入文本时，才生成 `broadcast` 条目。归档内 malformed 行不伪造结构，保留 `skipped` 计数；原始归档始终可下载。
 
-画布上的广播徽标与连线是 `canvas_broadcasts` 投递账本的派生视觉 overlay，不写入 `canvas_nodes` / `canvas_edges`；Session 页的 `broadcast` 则来自 CLI 实际持久化的注入文本，只作为账本旁证，也不是读取或 ACK 回执。`injected` 只表示 Scheduler/adapter 已成功把文本写入 Agent session 输入。当前 Codex/OpenCode 的 `incrementalMessages` 未订阅运行时广播，因此查看器不会暗示它们收到 live broadcast。
+画布上的广播徽标与连线是 `canvas_broadcasts` 投递账本的派生视觉 overlay，不写入 `canvas_nodes` / `canvas_edges`；Session 页的 `broadcast` 则来自 CLI 实际持久化的注入文本，只作为账本旁证，也不是读取或 ACK 回执。`injected` 只表示 Scheduler/adapter 已成功把文本写入 Agent session 输入。当前三类 CLI 中声明 `incrementalMessages` 的才会订阅运行时广播。
 
 接入新 CLI 的强制清单（与 compaction 并列 fail-closed 心智）：
 
@@ -119,7 +117,7 @@ be registered or admitted:
 5. **验收**：真实或 fixture 归档经 `GET /jobs/:id/evidence/session` 可读；有 subagent 时 `artifacts` 可切换且 `?path=` 能读到对应文件；Job 详情 Session 标签出现时间线/统计；「下载原始文件」仍指向未改写的所选归档字节；解析失败时仍可看「原始」与下载。
 6. 若暂不支持归档：显式保持 `sessionCapture: false`，并在 UI/空态文案中可区分「未实现」与「运行失败」；**禁止**半吊子路径猜测冒充归档。
 
-当前已适配查看器的 CLI：`claude-code`、`codex`、`open-code`、`pi`、`dsh`（与 runtime registry 对齐）。后续每加一个 adapter，**同步 PR 应包含 session adapter + parseAgentSession + 测试**，不要拆成「先跑起来以后再做 Session」。
+当前运行时注册表对齐 `claude-code`、`pi`、`dsh`。leftover `codex` / `open-code` 仅保留查看器只读解析。后续每加一个 adapter，**同步 PR 应包含 session adapter + parseAgentSession + 测试**，不要拆成「先跑起来以后再做 Session」。
 
 `reasoningEffort` is an input/configuration capability; it does not guarantee
 that a provider exposes its internal reasoning in output. The runtime only
@@ -132,8 +130,8 @@ Claude partial frames are enabled only for the pinned 2.1.252 governed minimum
 above. `content_block_delta` `thinking_delta`/`text_delta` frames are
 normalized to `reasoning.delta`/`text.delta`; the later complete assistant
 message remains accepted for compatibility but is de-duplicated against those
-frames. Codex and OpenCode complete item/part frames are likewise de-duplicated
-when they repeat an official reasoning delta.
+frames. leftover Codex/OpenCode session archives still de-duplicate complete
+item/part frames when they repeat an official reasoning delta.
 
 ## Snapshot and admission
 
@@ -186,8 +184,9 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 ## Verification
 
 Contract tests cover registry admission, capability and image rejection,
-Claude compatibility, Codex/OpenCode lifecycle normalization, tool completion,
-stdin behavior, DSH Cordis field shape, and bounded stderr evidence. Base image
+Claude/Pi/DSH lifecycle normalization, leftover Codex/OpenCode session-archive
+read paths, tool completion, stdin behavior, DSH Cordis field shape, and
+bounded stderr evidence. Base image
 CI always runs the DSH packaged-bin boot smoke, including when the immutable
 `src-*` image is reused: Docker uses `--network none`, no prompt or real model
 request is made, `initialize` must return the official server identity, and
