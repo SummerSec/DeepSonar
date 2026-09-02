@@ -23,14 +23,13 @@ RUN set -eux; \
 
 COPY deploy/clickhouse-install-static.sh /tmp/clickhouse-install-static.sh
 RUN set -eux; \
-  install -m 0755 /tmp/clickhouse-install-static.sh /tmp/clickhouse-install-static.sh; \
+  chmod +x /tmp/clickhouse-install-static.sh; \
   case "$TARGETARCH" in \
     amd64) clickhouse_url="$CLICKHOUSE_AMD64_URL"; clickhouse_sha256="$CLICKHOUSE_AMD64_SHA256" ;; \
     arm64) clickhouse_url="$CLICKHOUSE_ARM64_URL"; clickhouse_sha256="$CLICKHOUSE_ARM64_SHA256" ;; \
     *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
   esac; \
   /tmp/clickhouse-install-static.sh "$TARGETARCH" "$clickhouse_url" "$clickhouse_sha256"; \
-  test "$("/opt/deepsonar/bin/clickhouse" --version | tr -d '\n')" != ""; \
   /opt/deepsonar/bin/clickhouse --version | grep -F "$CLICKHOUSE_VERSION"; \
   rm -f /tmp/clickhouse-install-static.sh
 

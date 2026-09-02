@@ -28,6 +28,7 @@ RUN set -eux; \
 
 COPY deploy/clickhouse-install-static.sh /tmp/clickhouse-install-static.sh
 RUN set -eux; \
+  chmod +x /tmp/clickhouse-install-static.sh; \
   case "$TARGETARCH" in \
     amd64) clickhouse_url="$CLICKHOUSE_AMD64_URL"; clickhouse_sha256="$CLICKHOUSE_AMD64_SHA256" ;; \
     arm64) clickhouse_url="$CLICKHOUSE_ARM64_URL"; clickhouse_sha256="$CLICKHOUSE_ARM64_SHA256" ;; \
