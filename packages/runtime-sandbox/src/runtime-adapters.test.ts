@@ -345,6 +345,7 @@ test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", asy
     cwd: "/workspace",
     input: "initial",
     mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    systemPromptPath: "/workspace/.deepsonar/system-prompt.txt",
     model: "claude-sonnet-4-5",
     reasoning: "high",
   } as const;
@@ -355,6 +356,8 @@ test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", asy
   assert.match(fake.commands[0] ?? "", /--thinking 'high'/);
   assert.match(fake.commands[1] ?? "", /--thinking 'high'/);
   assert.match(fake.commands[1] ?? "", /--session '\/workspace\/\.deepsonar-home\/\.pi\/agent\/s\.jsonl'/);
+  assert.match(fake.commands[0] ?? "", /--append-system-prompt \"\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)\"/);
+  assert.match(fake.commands[1] ?? "", /--append-system-prompt \"\$\(cat '\/workspace\/\.deepsonar\/system-prompt\.txt'\)\"/);
   assert.equal(adapter.encodeGetState?.(), '{"type":"get_state"}\n');
   assert.equal(adapter.encodeSteer?.("即时消息"), '{"type":"steer","message":"即时消息"}\n');
   assert.equal(adapter.encodeFollowUp?.("后续消息"), '{"type":"follow_up","message":"后续消息"}\n');
@@ -373,11 +376,39 @@ test("Pi 默认关闭扩展，受治理扩展才通过显式路径加载", async
   } as const;
   await adapter.start(context);
   assert.match(fake.commands[0] ?? "", /--no-extensions/);
+  assert.doesNotMatch(fake.commands[0] ?? "", /--append-system-prompt/);
   assert.match(fake.commands[0] ?? "", /-e '\/workspace\/\.deepsonar-home\/\.pi\/agent\/extensions\/deepsonar-control\.mjs'/);
   assert.throws(
     () => adapter.start({ ...context, piExtensions: ["/workspace/.pi/extensions/project.mjs"] }),
     /PI_EXTENSION_PATH_INVALID/,
   );
+});
+
+test("Pi RPC tool events consume official top-level fields and expose progress", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  const started = adapter.decodeOutput({
+    type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "ls" },
+  }, state);
+  assert.deepEqual(started, [{ type: "assistant", message: { content: [{ type: "tool_use", id: "call_1", name: "bash", input: { command: "ls" } }] } }]);
+  const progress = adapter.decodeOutput({
+    type: "tool_execution_update", toolCallId: "call_1", toolName: "bash", partialResult: { content: [{ type: "text", text: "working" }] },
+  }, state);
+  assert.equal(progress[0]?.type, "tool_progress");
+  const ended = adapter.decodeOutput({
+    type: "tool_execution_end", toolCallId: "call_1", toolName: "bash", result: { content: [{ type: "text", text: "ok" }] }, isError: false,
+  }, state);
+  assert.deepEqual(ended, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call_1", is_error: false, content: { content: [{ type: "text", text: "ok" }] } }] } }]);
+});
+
+test("Pi RPC failure markers become explicit error results and settlement cannot report success", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  const failed = adapter.decodeOutput({ type: "message_end", message: { stopReason: "aborted" } }, state);
+  assert.equal(failed[0]?.is_error, true);
+  const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
+  assert.equal(settled[0]?.type, "result");
+  assert.equal(settled[0]?.is_error, true);
 });
 
 test("适配器只接受带完整身份的压缩事件，缺字段时记录未知", () => {

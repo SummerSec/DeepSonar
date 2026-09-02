@@ -1188,13 +1188,13 @@ function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolName
   if (type === "tool_execution_start" || type === "tool_call" || type === "tool.use") {
     const tool = asRecord(row.toolCall) ?? row;
     const name = asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name) ?? "tool";
-    rememberToolName(tools, tool.id ?? tool.toolCallId ?? row.id, name);
+    rememberToolName(tools, tool.id ?? tool.toolCallId ?? row.toolCallId ?? row.id, name);
     return [{
       id: String(index),
       kind: "tool_call",
       title: `调用 ${name}`,
       toolName: name,
-      body: stringifyBody(tool.arguments ?? tool.input ?? row.input ?? row.arguments),
+      body: stringifyBody(tool.args ?? tool.arguments ?? tool.input ?? row.args ?? row.input ?? row.arguments),
       timestamp: ts,
     }];
   }
@@ -1202,7 +1202,7 @@ function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolName
     const tool = asRecord(row.toolCall) ?? row;
     const name = lookupToolName(
       tools,
-      tool.id ?? tool.toolCallId ?? row.tool_use_id ?? row.id,
+      tool.id ?? tool.toolCallId ?? row.toolCallId ?? row.tool_use_id ?? row.id,
       asString(tool.name) ?? asString(tool.toolName) ?? asString(row.name),
     );
     return [{
@@ -1212,7 +1212,7 @@ function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolName
       toolName: name,
       body: stringifyBody(tool.result ?? tool.output ?? row.result ?? row.output ?? row.content),
       timestamp: ts,
-      isError: tool.error != null || row.isError === true || row.is_error === true,
+      isError: tool.error != null || tool.isError === true || row.isError === true || row.is_error === true,
     }];
   }
   return [{
