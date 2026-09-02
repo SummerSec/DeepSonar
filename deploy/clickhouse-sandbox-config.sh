@@ -28,7 +28,7 @@ escaped_path="$(xml_escape "$path")"
 cat >"$path/config.xml" <<EOF
 <clickhouse>
   <logger>
-    <level>warning</level>
+    <level>error</level>
     <console>true</console>
   </logger>
   <listen_host>127.0.0.1</listen_host>
@@ -55,7 +55,13 @@ cat >"$path/config.xml" <<EOF
   <query_condition_cache_size>0</query_condition_cache_size>
   <max_thread_pool_size>32</max_thread_pool_size>
   <max_thread_pool_free_size>4</max_thread_pool_free_size>
-  <background_pool_size>2</background_pool_size>
+  <background_pool_size>4</background_pool_size>
+  <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+  <merge_tree>
+    <number_of_free_entries_in_pool_to_execute_mutation>1</number_of_free_entries_in_pool_to_execute_mutation>
+    <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>1</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    <number_of_free_entries_in_pool_to_lower_max_size_of_merge>1</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+  </merge_tree>
   <background_move_pool_size>1</background_move_pool_size>
   <background_fetches_pool_size>1</background_fetches_pool_size>
   <background_common_pool_size>1</background_common_pool_size>
@@ -64,6 +70,7 @@ cat >"$path/config.xml" <<EOF
   <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
   <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
   <async_load_databases>false</async_load_databases>
+  <disable_internal_dns_cache>1</disable_internal_dns_cache>
   <send_crash_reports>
     <enabled>false</enabled>
   </send_crash_reports>

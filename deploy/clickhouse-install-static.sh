@@ -27,8 +27,12 @@ curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$url" -o /tmp/clic
 echo "$sha256  /tmp/clickhouse.tgz" | sha256sum -c -
 mkdir -p /tmp/clickhouse-extract /opt/deepsonar/bin
 tar -xzf /tmp/clickhouse.tgz -C /tmp/clickhouse-extract
-bin="$(find /tmp/clickhouse-extract -type f -name clickhouse -print -quit)"
+bin="$(find /tmp/clickhouse-extract -type f -path '*/usr/bin/clickhouse' -print -quit)"
 test -n "$bin" -a -x "$bin"
+file -Lb "$bin" | grep -E '^ELF.*(x86-64|ARM aarch64)' >/dev/null || {
+  printf 'ClickHouse tarball did not contain an ELF usr/bin/clickhouse: %s\n' "$(file -Lb "$bin" 2>/dev/null || echo missing)" >&2
+  exit 1
+}
 install -m 0755 "$bin" /opt/deepsonar/bin/clickhouse
 ln -sfn clickhouse /opt/deepsonar/bin/clickhouse-client
 ln -sfn clickhouse /opt/deepsonar/bin/clickhouse-local

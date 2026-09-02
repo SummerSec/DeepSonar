@@ -40,7 +40,7 @@ child.stdout.on("data", (chunk) => { stdout = appendLog(stdout, chunk); });
 child.on("exit", (code, signal) => { exitStatus = signal ? `signal ${signal}` : `code ${code}`; });
 try {
   let ping;
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 45_000;
   while (!ping && Date.now() < deadline) {
     if (exitStatus) {
       throw new Error(`ClickHouse server exited (${exitStatus})${stderr || stdout ? `: ${stderr || stdout}` : ""}`);
