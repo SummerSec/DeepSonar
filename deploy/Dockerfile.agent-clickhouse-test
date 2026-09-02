@@ -33,13 +33,15 @@ RUN set -eux; \
   /opt/deepsonar/bin/clickhouse --version | grep -F "$CLICKHOUSE_VERSION"; \
   rm -f /tmp/clickhouse-install-static.sh
 
+COPY deploy/clickhouse-sandbox-config.sh /tmp/clickhouse-sandbox-config.sh
 COPY deploy/clickhouse-server.sh /tmp/clickhouse-server.sh
 COPY deploy/clickhouse-test-env.sh /tmp/clickhouse-test-env.sh
 COPY agent-harness/clickhouse-test-smoke.mjs /opt/deepsonar/clickhouse-test-smoke.mjs
 RUN set -eux; \
+  install -m 0755 /tmp/clickhouse-sandbox-config.sh /opt/deepsonar/bin/clickhouse-sandbox-config.sh; \
   install -m 0755 /tmp/clickhouse-server.sh /opt/deepsonar/bin/clickhouse-server.sh; \
   install -m 0755 /tmp/clickhouse-test-env.sh /opt/deepsonar/bin/clickhouse-test-env.sh; \
-  rm -f /tmp/clickhouse-server.sh /tmp/clickhouse-test-env.sh; \
+  rm -f /tmp/clickhouse-sandbox-config.sh /tmp/clickhouse-server.sh /tmp/clickhouse-test-env.sh; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
   node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"clickhouse-test",imageKey:"deepsonar-clickhouse-test",project_opt_in:true,tools:["git","clickhouse@26.3.28.5","clickhouse-client","clickhouse-local","clickhouse-server","clickhouse-http","node","claude"],clickhouse:{binary:"/opt/deepsonar/bin/clickhouse",official:true,version:"26.3.28.5",tag:"v26.3.28.5-lts",listen:"127.0.0.1",wrapper:"/opt/deepsonar/bin/clickhouse-server.sh"},entrypoints:{check:"/opt/deepsonar/bin/clickhouse-test-env.sh",launch:"/opt/deepsonar/bin/clickhouse-server.sh",smoke:"/opt/deepsonar/clickhouse-test-smoke.mjs"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
