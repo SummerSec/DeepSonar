@@ -28,10 +28,11 @@ escaped_path="$(xml_escape "$path")"
 cat >"$path/config.xml" <<EOF
 <clickhouse>
   <logger>
-    <level>error</level>
+    <level>warning</level>
     <console>true</console>
   </logger>
   <listen_host>127.0.0.1</listen_host>
+  <listen_try>1</listen_try>
   <http_port>${http_port}</http_port>
   <tcp_port>${tcp_port}</tcp_port>
   <path>${escaped_path}/data/</path>
@@ -53,6 +54,11 @@ cat >"$path/config.xml" <<EOF
   <mmap_cache_size>1024</mmap_cache_size>
   <compiled_expression_cache_size>1048576</compiled_expression_cache_size>
   <query_condition_cache_size>0</query_condition_cache_size>
+  <page_cache_max_size>0</page_cache_max_size>
+  <async_insert_threads>0</async_insert_threads>
+  <cgroups_memory_usage_observer_wait_time>0</cgroups_memory_usage_observer_wait_time>
+  <max_io_thread_pool_size>8</max_io_thread_pool_size>
+  <max_backups_io_thread_pool_size>2</max_backups_io_thread_pool_size>
   <max_thread_pool_size>32</max_thread_pool_size>
   <max_thread_pool_free_size>4</max_thread_pool_free_size>
   <background_pool_size>4</background_pool_size>
@@ -70,6 +76,7 @@ cat >"$path/config.xml" <<EOF
   <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
   <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
   <async_load_databases>false</async_load_databases>
+  <skip_binary_checksum_checks>1</skip_binary_checksum_checks>
   <disable_internal_dns_cache>1</disable_internal_dns_cache>
   <send_crash_reports>
     <enabled>false</enabled>

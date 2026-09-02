@@ -31,27 +31,27 @@ function runContainer(label, args) {
   }
 }
 
+// --network none leaves the container id out of /etc/hosts. ClickHouse then
+// getaddrinfo()s that hostname via Docker DNS (127.0.0.11) and the HTTP smoke
+// waits out the resolver timeout. localhost is already in /etc/hosts.
+function sandboxArgs(...command) {
+  return [
+    "run", "--platform", targetPlatform, "--rm", "--hostname", "localhost",
+    "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+    "--cpus", "2", "--memory", "2g", "--pids-limit", "512", image, ...command,
+  ];
+}
+
 const commands = {
   "clickhouse-audit": ["/opt/deepsonar/bin/clickhouse-audit-env.sh", "--check"],
   "clickhouse-test": ["/opt/deepsonar/bin/clickhouse-test-env.sh", "--check"],
   "clickhouse-fuzz": ["/opt/deepsonar/bin/clickhouse-fuzz-env.sh", "--check"],
 }[toolset];
-runContainer("ClickHouse 运行时环境检查", [
-  "run", "--platform", targetPlatform, "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-  "--cpus", "2", "--memory", "2g", "--pids-limit", "512", image, ...commands,
-]);
+runContainer("ClickHouse 运行时环境检查", sandboxArgs(...commands));
 if (toolset === "clickhouse-test") {
-  runContainer("ClickHouse Test HTTP 冒烟", [
-    "run", "--platform", targetPlatform, "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-    "--cpus", "2", "--memory", "2g", "--pids-limit", "512", image,
-    "node", "/opt/deepsonar/clickhouse-test-smoke.mjs",
-  ]);
+  runContainer("ClickHouse Test HTTP 冒烟", sandboxArgs("node", "/opt/deepsonar/clickhouse-test-smoke.mjs"));
 } else if (toolset === "clickhouse-fuzz") {
-  runContainer("ClickHouse Fuzz clickhouse-local 冒烟", [
-    "run", "--platform", targetPlatform, "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-    "--cpus", "2", "--memory", "2g", "--pids-limit", "512", image,
-    "/opt/deepsonar/bin/clickhouse-fuzz-smoke.sh",
-  ]);
+  runContainer("ClickHouse Fuzz clickhouse-local 冒烟", sandboxArgs("/opt/deepsonar/bin/clickhouse-fuzz-smoke.sh"));
 }
 const budget = config.toolsets?.[toolset]?.maxSizeMiB;
 if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error(`${toolset} missing positive maxSizeMiB`);
