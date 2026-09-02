@@ -49,6 +49,7 @@ ENV IS_SANDBOX=1 \
     CLICKHOUSE_BIN=/opt/deepsonar/bin/clickhouse \
     CLICKHOUSE_HTTP_PORT=8123 \
     CLICKHOUSE_TCP_PORT=9000 \
+    CLICKHOUSE_WATCHDOG_ENABLE=0 \
     PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 RUN /opt/deepsonar/bin/clickhouse-test-env.sh --check
@@ -66,6 +67,7 @@ ENV IS_SANDBOX=1 \
     CLICKHOUSE_BIN=/opt/deepsonar/bin/clickhouse \
     CLICKHOUSE_HTTP_PORT=8123 \
     CLICKHOUSE_TCP_PORT=9000 \
+    CLICKHOUSE_WATCHDOG_ENABLE=0 \
     PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=runtime-rootfs / /
 WORKDIR /workspace

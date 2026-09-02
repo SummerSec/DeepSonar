@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
 
@@ -25,15 +24,27 @@ function getText(path) {
   });
 }
 
+function appendLog(current, chunk) {
+  return `${current}${chunk}`.slice(-65536);
+}
+
 const child = spawn(launcher, ["--path", dataDir, "--http-port", String(httpPort), "--tcp-port", "9000"], {
   stdio: ["ignore", "pipe", "pipe"],
+  env: { ...process.env, CLICKHOUSE_WATCHDOG_ENABLE: "0" },
 });
 let stderr = "";
-child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk}`.slice(-4096); });
+let stdout = "";
+let exitStatus = null;
+child.stderr.on("data", (chunk) => { stderr = appendLog(stderr, chunk); });
+child.stdout.on("data", (chunk) => { stdout = appendLog(stdout, chunk); });
+child.on("exit", (code, signal) => { exitStatus = signal ? `signal ${signal}` : `code ${code}`; });
 try {
   let ping;
   const deadline = Date.now() + 20_000;
   while (!ping && Date.now() < deadline) {
+    if (exitStatus) {
+      throw new Error(`ClickHouse server exited (${exitStatus})${stderr || stdout ? `: ${stderr || stdout}` : ""}`);
+    }
     try { ping = await getText("/ping"); } catch { await new Promise((resolve) => setTimeout(resolve, 200)); }
   }
   if (ping !== "Ok.") throw new Error(`ClickHouse HTTP endpoint did not start${stderr ? `: ${stderr}` : ""}`);

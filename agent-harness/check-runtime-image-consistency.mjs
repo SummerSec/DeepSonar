@@ -645,7 +645,8 @@ expect(!existsSync(new URL("../deploy/clickhouse-audit-rules.yml", import.meta.u
 expect(!existsSync(new URL("../deploy/clickhouse-audit-scan.sh", import.meta.url)), "ClickHouse Audit 不得提供平台固定扫描入口");
 expect(!clickhouseAuditDockerfile.includes("clickhouse-audit-rules.yml") && !clickhouseAuditDockerfile.includes("clickhouse-audit-scan.sh") && !clickhouseAuditEnv.includes("clickhouse-audit-scan.sh"), "ClickHouse Audit 不得安装固定扫描脚本或规则包");
 expect(!/semgrep|gitleaks|shellcheck/i.test(clickhouseAuditDockerfile) && clickhouseAuditEnv.includes("for command_name in semgrep gitleaks shellcheck"), "ClickHouse Audit must fail if decision scanners reappear");
-expect(clickhouseServer.includes("--listen_host 127.0.0.1") && clickhouseServer.includes("/workspace/*"), "ClickHouse Test wrapper must bind localhost and keep data under /workspace");
+expect(clickhouseServer.includes("<listen_host>127.0.0.1</listen_host>") && clickhouseServer.includes("/workspace/*"), "ClickHouse Test wrapper must bind localhost and keep data under /workspace");
+expect(clickhouseServer.includes("mlock_executable") && clickhouseServer.includes("background_schedule_pool_size") && clickhouseServer.includes("CLICKHOUSE_WATCHDOG_ENABLE=0") && clickhouseServer.includes("--config-file"), "ClickHouse Test wrapper must emit a sandbox-sized config and disable the watchdog");
 expect(clickhouseTestDockerfile.includes("git") && clickhouseTestEnv.includes("git"), "ClickHouse Test must keep git so agents can clone in-scope source");
 expect(clickhouseTestSmoke.includes("request") && clickhouseTestSmoke.includes("/ping") && clickhouseTestSmoke.includes("SELECT%2040%20%2B%202") && clickhouseTestSmoke.includes("/workspace"), "ClickHouse Test smoke must use HTTP /ping and SELECT 40+2 against a /workspace data dir");
 expect(clickhouseTestEnv.includes("26.3.28.5") && clickhouseTestDockerfile.includes("ARG CLICKHOUSE_VERSION=26.3.28.5"), "ClickHouse Test must pin official 26.3.28.5");

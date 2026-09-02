@@ -29,9 +29,6 @@ export const OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS = [
   "deepsonar-chrome-audit",
   "deepsonar-chrome-test",
   "deepsonar-chrome-fuzz",
-  "deepsonar-clickhouse-audit",
-  "deepsonar-clickhouse-test",
-  "deepsonar-clickhouse-fuzz",
   "deepsonar-openharmony-test",
   "deepsonar-openharmony-audit",
   "deepsonar-openharmony-fuzz",
@@ -50,6 +47,7 @@ export function listOfficialOpenSandboxRuntimeImages(registry: unknown): Officia
     if (!item || typeof item !== "object") throw new Error("OPENSANDBOX_POC_REGISTRY_INVALID");
     const rec = item as { image_key?: unknown; versions?: unknown };
     const key = typeof rec.image_key === "string" ? rec.image_key.trim() : "";
+    if (Array.isArray(rec.versions) && rec.versions.length === 0) continue;
     const version = Array.isArray(rec.versions) ? rec.versions[0] : undefined;
     const refs = version && typeof version === "object" ? (version as { registry_refs?: unknown; image_ref?: unknown }) : undefined;
     const channelRefs = refs?.registry_refs && typeof refs.registry_refs === "object"
