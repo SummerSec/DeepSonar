@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-02
+
+### Fixes
+
+- Hardened provider routing and runtime adapters, including nested RPC failures and session progress rendering.
+- Stabilized Pi job completion, failure reporting, and usage-ledger cache-hit display.
+
+## [0.2.5] - 2026-09-02
+
+### Fixes
+
+- Added the latest scheduler, provider, and runtime hardening changes from the 0.2.x maintenance cycle.
+
+## [0.2.4] - 2026-09-02
+
+### Fixes
+
+- Added bounded OpenSandbox provisioning retries and Pi system-prompt/session handling fixes.
+
 ## [0.2.3] - 2026-09-02
 
 ### 新增
@@ -546,6 +565,9 @@
 [0.2.3]: https://github.com/SummerSec/DeepSonar/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/SummerSec/DeepSonar/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
+[0.2.4]: https://github.com/SummerSec/DeepSonar/compare/v0.2.3...v0.2.4
+[0.2.5]: https://github.com/SummerSec/DeepSonar/compare/v0.2.4...v0.2.5
+[0.2.6]: https://github.com/SummerSec/DeepSonar/compare/v0.2.5...v0.2.6
 [0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
 [0.1.44]: https://github.com/SummerSec/DeepSonar/compare/v0.1.43...v0.1.44
