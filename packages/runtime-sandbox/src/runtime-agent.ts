@@ -17,6 +17,7 @@ import {
   parsePiJsonlRecord,
   PiJsonlFramer,
   requireAgentCliRuntimeAdapter,
+  type AdapterRuntimeState,
   type AgentCliRuntimeSnapshot,
   type DshProviderRuntimeConfig,
 } from "./runtime-adapters.js";
@@ -1532,10 +1533,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     ...(spec.piExtensions ? { piExtensions: spec.piExtensions } : {}),
   };
   let exec = await adapter.start(adapterContext);
-  const adapterState = {
+  const adapterState: AdapterRuntimeState = {
     sessionId: spec.contextIdentity?.session_id,
     sessionFile: spec.contextIdentity?.session_file,
-    finalText: undefined as string | undefined,
+    finalText: undefined,
     model: spec.dshProvider?.model ?? spec.model,
     modelProvider: spec.dshProvider?.provider,
     cwd: "/workspace",
@@ -1925,6 +1926,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       attemptTerminalResult = undefined;
       attemptCloseReason = undefined;
       attemptStderrTail = "";
+      // 同会话恢复是新进程：上一轮瞬态失败不得挡住本轮 agent_settled。
+      adapterState.failure = undefined;
       if (adapter.capabilities.incrementalMessages && resumedInput) {
         if (spec.provider === "dsh") await writeInitialMessage(resumedInput);
         else await writeFollowUpMessage(resumedInput);

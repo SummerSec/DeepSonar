@@ -747,6 +747,7 @@ test("runRealAgent captures CLI session identity through applyRuntimeOutput", ()
   const source = readFileSync(new URL("./runtime-agent.ts", import.meta.url), "utf8");
   assert.match(source, /applyRuntimeOutput\(adapter, rawParsed, adapterState\)/);
   assert.doesNotMatch(source, /const decodedEvents = adapter\.decodeOutput\(rawParsed, adapterState\)/);
+  assert.match(source, /adapterState\.failure = undefined/);
 });
 
 test("OpenSandbox runRealAgent does not resume a permanent 401 for any CLI", async () => {
