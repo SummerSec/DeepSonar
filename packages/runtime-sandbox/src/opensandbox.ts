@@ -63,9 +63,19 @@ export interface OpenSandboxExecHandle {
   [Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk>;
 }
 
+export interface OpenSandboxRunOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  stdin?: Buffer;
+  /** Provision-only. Agent-visible RuntimeHost.run never forwards uid/gid. */
+  uid?: number;
+  gid?: number;
+}
+
 export interface OpenSandboxSession {
   id: string;
-  run(command: string, options?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; stdin?: Buffer }): Promise<{
+  run(command: string, options?: OpenSandboxRunOptions): Promise<{
     exitCode: number;
     stdout: string;
     stderr: string;
@@ -87,6 +97,29 @@ export interface OpenSandboxClient {
 }
 
 export const OPENSANDBOX_ALIVE_PROBE_ATTEMPTS = 3;
+/** execd uid/gid used only to write sandbox /etc/hosts; guest USER stays unchanged. */
+export const GATEWAY_HOSTS_ROOT_UID = 0;
+export const GATEWAY_HOSTS_ROOT_GID = 0;
+
+export class GatewayHostsBindError extends Error {
+  readonly code = "OPENSANDBOX_GATEWAY_HOSTS_BIND";
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayHostsBindError";
+  }
+}
+
+export function gatewayHostsBindCommand(bind: { hostname: string; ip: string }): string {
+  return `grep -F ${shellQuote(bind.hostname)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(bind.ip)} ${shellQuote(bind.hostname)} >> /etc/hosts`;
+}
+
+export function gatewayHostsResolveCommand(hostname: string): string {
+  return `getent hosts ${shellQuote(hostname)} || grep -F ${shellQuote(hostname)} /etc/hosts`;
+}
+
+export function isGatewayHostsRootRun(options?: Pick<OpenSandboxRunOptions, "uid" | "gid">): boolean {
+  return options?.uid === GATEWAY_HOSTS_ROOT_UID && options?.gid === GATEWAY_HOSTS_ROOT_GID;
+}
 
 export async function evaluateOpenSandboxAlive(input: {
   getState: () => Promise<string>;
@@ -273,6 +306,44 @@ export type OpenSandboxGatewayBinder = (input: {
   signal?: AbortSignal;
 }) => Promise<{ hostname: string; ip: string }>;
 
+/**
+ * OpenSandbox create (0.1.11) has no ExtraHosts / hostAliases field, and the
+ * sidecar IP is only known after the sandbox network exists. Write /etc/hosts
+ * once as root via execd uid=0; do not change the image USER.
+ */
+export async function bindGatewayHostnameAsRoot(
+  session: OpenSandboxSession,
+  host: RuntimeHost,
+  input: { bind: () => Promise<{ hostname: string; ip: string }> },
+): Promise<{ hostname: string; ip: string }> {
+  let bind: { hostname: string; ip: string };
+  try {
+    bind = await input.bind();
+  } catch (error) {
+    if (error instanceof GatewayHostsBindError) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new GatewayHostsBindError(`failed to bind gateway sidecar before hosts injection: ${detail}`);
+  }
+  const hosts = await session.run(gatewayHostsBindCommand(bind), {
+    timeoutMs: 5_000,
+    uid: GATEWAY_HOSTS_ROOT_UID,
+    gid: GATEWAY_HOSTS_ROOT_GID,
+  });
+  if (hosts.exitCode !== 0) {
+    const detail = [hosts.stderr, hosts.stdout].filter(Boolean).join(" ").trim();
+    throw new GatewayHostsBindError(
+      `failed to bind gateway hostname in sandbox hosts as root (guest user is unchanged): ${bind.hostname} -> ${bind.ip}${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  const resolved = await host.run(gatewayHostsResolveCommand(bind.hostname), { timeoutMs: 5_000 });
+  if (resolved.exitCode !== 0) {
+    throw new GatewayHostsBindError(
+      `gateway hosts bind did not resolve for the guest user: ${bind.hostname} -> ${bind.ip}`,
+    );
+  }
+  return bind;
+}
+
 export interface OpenSandboxRunnerOptions {
   /**
    * Kubernetes ResourceName 不接受 Docker 专有的 `pids`。
@@ -326,8 +397,9 @@ export class OpenSandboxRunner implements SandboxRunner {
     try {
       session = await awaitProvisionSession(created, input.signal);
       if (input.signal?.aborted) throw new Error("provision 已取消");
-      this.sessions.set(session.id, session);
-      const host = createOpenSandboxRuntimeHost(session);
+      const live = session;
+      this.sessions.set(live.id, live);
+      const host = createOpenSandboxRuntimeHost(live);
       const contractResult = await host.run(
         `test -d /workspace && test -x /bin/sh${input.sharedAssetsMount ? ` && test -d ${SHARED_ASSETS_MOUNT_PATH}` : ""} && cat /opt/deepsonar/tool-manifest.json`,
         { timeoutMs: 15_000 },
@@ -351,19 +423,16 @@ export class OpenSandboxRunner implements SandboxRunner {
         }
       }
       if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl) {
-        const bind = await this.gateway.bind({
-          sandboxId: session.id,
-          upstreamUrl: input.gatewayUpstreamUrl,
-          image: input.image,
-          signal: input.signal,
+        await bindGatewayHostnameAsRoot(live, host, {
+          bind: () => this.gateway!.bind({
+            sandboxId: live.id,
+            upstreamUrl: input.gatewayUpstreamUrl!,
+            image: input.image,
+            signal: input.signal,
+          }),
         });
-        const hosts = await host.run(
-          `grep -F ${shellQuote(bind.hostname)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(bind.ip)} ${shellQuote(bind.hostname)} >> /etc/hosts`,
-          { timeoutMs: 5_000 },
-        );
-        if (hosts.exitCode !== 0) throw new Error("failed to bind deepsonar-gateway-proxy in sandbox hosts");
       }
-      return { sandboxId: session.id };
+      return { sandboxId: live.id };
     } catch (error) {
       if (session) {
         this.sessions.delete(session.id);

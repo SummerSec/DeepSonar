@@ -128,16 +128,23 @@ export type {
   AgentSubAgentConfig,
 } from "./runtime-agent-config.js";
 export {
+  GATEWAY_HOSTS_ROOT_GID,
+  GATEWAY_HOSTS_ROOT_UID,
+  GatewayHostsBindError,
   OpenSandboxRunner,
   awaitProvisionSession,
+  bindGatewayHostnameAsRoot,
   createSdkOpenSandboxClient,
   evaluateOpenSandboxAlive,
+  gatewayHostsBindCommand,
+  gatewayHostsResolveCommand,
   inspectPreparedSharedAssetsVolume,
+  isGatewayHostsRootRun,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
-export type { OpenSandboxGatewayBinder, OpenSandboxRunnerOptions } from "./opensandbox.js";
+export type { OpenSandboxGatewayBinder, OpenSandboxRunOptions, OpenSandboxRunnerOptions } from "./opensandbox.js";
 export {
   OPENSANDBOX_POC_ADAPTER_IDS,
   OPENSANDBOX_POC_CLI_IDS,

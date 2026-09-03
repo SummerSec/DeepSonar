@@ -1,31 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  GATEWAY_HOSTS_ROOT_GID,
+  GATEWAY_HOSTS_ROOT_UID,
+  GatewayHostsBindError,
   OpenSandboxRunner,
   evaluateOpenSandboxAlive,
+  gatewayHostsBindCommand,
+  isGatewayHostsRootRun,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
   type OpenSandboxClient,
   type OpenSandboxCreateInput,
+  type OpenSandboxRunOptions,
   type OpenSandboxSession,
 } from "./opensandbox.js";
+import { RuntimeImageContractError } from "./runtime-shared.js";
 import { isManagedRuntimeResource } from "./opensandbox-version.js";
 
-function fakeSession(id = "sbx-1"): OpenSandboxSession & { commands: string[]; files: Array<{ path: string; bytes: number }> } {
+function fakeSession(id = "sbx-1"): OpenSandboxSession & {
+  commands: string[];
+  runs: Array<{ command: string; options?: OpenSandboxRunOptions }>;
+  files: Array<{ path: string; bytes: number }>;
+} {
   const commands: string[] = [];
+  const runs: Array<{ command: string; options?: OpenSandboxRunOptions }> = [];
   const files: Array<{ path: string; bytes: number }> = [];
   return {
     id,
     commands,
+    runs,
     files,
-    async run(command) {
+    async run(command, options) {
       commands.push(command);
+      runs.push({ command, options });
+      if (command.includes(">>") && command.includes("/etc/hosts") && !isGatewayHostsRootRun(options)) {
+        return { exitCode: 1, stdout: "", stderr: "Permission denied" };
+      }
       if (command.includes("tool-manifest.json") && command.includes("cat ")) {
         return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
       }
       if (command.includes("sha256sum")) return { exitCode: 0, stdout: "aa".repeat(32), stderr: "" };
       if (command === "true") return { exitCode: 0, stdout: "", stderr: "" };
+      if (command.includes("getent hosts") || (command.includes("grep -F") && command.includes("/etc/hosts") && !command.includes(">>"))) {
+        return { exitCode: 0, stdout: "172.19.0.9\tdeepsonar-gateway-proxy\n", stderr: "" };
+      }
       return { exitCode: 0, stdout: "", stderr: "" };
     },
     async runAsync(command) {
@@ -174,7 +194,25 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   assert.equal(await runner.isAlive(handle), true);
 });
 
-test("OpenSandbox restricted provision binds the Gateway hostname into /etc/hosts", async () => {
+function assertRootGatewayHostsBind(
+  session: ReturnType<typeof fakeSession>,
+  bind: { hostname: string; ip: string },
+) {
+  const write = session.runs.find((run) => run.command.includes(">>") && run.command.includes("/etc/hosts"));
+  assert.ok(write);
+  assert.equal(write.command, gatewayHostsBindCommand(bind));
+  assert.equal(isGatewayHostsRootRun(write.options), true);
+  assert.equal(write.options?.uid, GATEWAY_HOSTS_ROOT_UID);
+  assert.equal(write.options?.gid, GATEWAY_HOSTS_ROOT_GID);
+  assert.equal(session.runs.some((run) => (
+    run.command.includes(">>") && run.command.includes("/etc/hosts") && !isGatewayHostsRootRun(run.options)
+  )), false);
+  assert.ok(session.commands.some((command) => (
+    command.includes("getent hosts") && command.includes(bind.hostname)
+  )));
+}
+
+test("OpenSandbox restricted provision binds the Gateway hostname into /etc/hosts as root", async () => {
   const client = fakeClient();
   const runner = new OpenSandboxRunner(client, {
     bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
@@ -192,12 +230,10 @@ test("OpenSandbox restricted provision binds the Gateway hostname into /etc/host
     client.created[0]?.networkPolicy.egress[0]?.target,
     "deepsonar-gateway-proxy",
   );
-  assert.ok(client.session.commands.some((command) => (
-    command.includes("deepsonar-gateway-proxy") && command.includes("172.19.0.9") && command.includes("/etc/hosts")
-  )));
+  assertRootGatewayHostsBind(client.session, { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" });
 });
 
-test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP", async () => {
+test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP as root", async () => {
   const client = fakeClient();
   let bound = 0;
   const runner = new OpenSandboxRunner(client, {
@@ -216,9 +252,85 @@ test("OpenSandbox Kubernetes restricted provision binds the Gateway Service Clus
     expectedContract: "deepsonar.runtime/v1",
   });
   assert.equal(bound, 1);
-  assert.ok(client.session.commands.some((command) => (
-    command.includes("deepsonar-gateway-proxy") && command.includes("10.43.0.10") && command.includes("/etc/hosts")
-  )));
+  assertRootGatewayHostsBind(client.session, { hostname: "deepsonar-gateway-proxy", ip: "10.43.0.10" });
+});
+
+test("OpenSandbox provision completes gateway hosts bind for a non-root guest", async () => {
+  const session = fakeSession();
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  });
+  for (const network of ["restricted", "egress"] as const) {
+    session.commands.length = 0;
+    session.runs.length = 0;
+    client.created.length = 0;
+    await runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network,
+      gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+    });
+    assertRootGatewayHostsBind(session, { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" });
+  }
+});
+
+test("OpenSandbox gateway sidecar bind failure is reported as hosts/gateway bind, not chromium", async () => {
+  const runner = new OpenSandboxRunner(fakeClient(), {
+    bind: async () => {
+      throw new Error("sidecar has no IPv4");
+    },
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "egress",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), (error: unknown) => {
+    assert.ok(error instanceof GatewayHostsBindError);
+    assert.match(error.message, /gateway sidecar before hosts injection/);
+    assert.doesNotMatch(error.message, /chromium/i);
+    return true;
+  });
+});
+
+test("OpenSandbox gateway hosts bind failure is not a missing-chromium contract error", async () => {
+  const session = fakeSession();
+  session.run = async (command, options) => {
+    session.commands.push(command);
+    session.runs.push({ command, options });
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command.includes(">>") && command.includes("/etc/hosts")) {
+      return { exitCode: 1, stdout: "", stderr: "Permission denied" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session), {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), (error: unknown) => {
+    assert.ok(error instanceof GatewayHostsBindError);
+    assert.equal(error instanceof RuntimeImageContractError, false);
+    assert.match(error.message, /gateway hostname in sandbox hosts/);
+    assert.doesNotMatch(error.message, /chromium/i);
+    return true;
+  });
 });
 
 test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {

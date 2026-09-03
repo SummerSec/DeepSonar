@@ -99,6 +99,7 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
         workingDirectory: options?.cwd,
         timeoutSeconds: options?.timeoutMs != null ? Math.max(1, Math.ceil(options.timeoutMs / 1000)) : undefined,
         envs: options?.env,
+        ...(options?.uid != null ? { uid: options.uid, gid: options.gid ?? 0 } : {}),
       });
       return {
         exitCode: execution.exitCode ?? (execution.error ? 1 : 0),
