@@ -1591,7 +1591,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/runtime-images/registry/channel",
     summary: "切换官方运行时镜像分发通道",
-    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图或已有 in-flight 准备任务均返回 202 preparing/saved:false 与当前 pull-status，旧通道保持有效，准备完成后重试才提交。不把 runtime_image_preparation_busy 当硬失败。绝不跨通道回退，历史 Job 快照不改写。",
+    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图时把引用加入本机拉取队列并返回 202 preparing/saved:false 与当前整队列 pull-status，旧通道保持有效，准备完成后重试才提交。与项目启用共用同一队列；通道切换仍可抢占 admin_bulk。绝不跨通道回退，历史 Job 快照不改写。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
@@ -1783,7 +1783,7 @@ const OPS: Op[] = [
   {
     method: "put",
     path: "/projects/{id}/runtime-images/{imageId}",
-    summary: "项目启用/停用可信镜像。version_id 省略或 null 表示跟随最新 trusted；显式 UUID 为 pin。官方 stale pin 在 catalog 提升时自动滚到最新 trusted；pin_policy=hold 或第三方 pin 不自动改写。",
+    summary: "项目启用/停用可信镜像。version_id 省略或 null 表示跟随最新 trusted；显式 UUID 为 pin。官方 stale pin 在 catalog 提升时自动滚到最新 trusted；pin_policy=hold 或第三方 pin 不自动改写。本机缺层时把不可变引用入队（按 digest 去重、串行拉取），返回 202 preparing/saved:false 与整队列 pull-status，不因其它产品正在拉取而 409。该项就绪后才落库；Job 执行期仍只 inspect。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {

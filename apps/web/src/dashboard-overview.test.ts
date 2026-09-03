@@ -21,7 +21,7 @@ test("empty states distinguish no projects from waiting for the first audit", ()
   assert.equal(dashboardEmptyKind({ projects: 1, tasks: 0, jobs: 3 }), "none");
 });
 
-test("create-project empty state reuses the projects quick-start intent", () => {
+test("create-project empty state opens the project form, not a task rail", () => {
   assert.equal(newProjectHref(), "/projects?intent=new-project");
   assert.equal(activityHref({ kind: "task", project_id: "p1", canvas_id: "c1" }), "/projects/p1/tasks/c1");
   assert.equal(activityHref({ kind: "finding", project_id: "p1", canvas_id: null }), "/projects/p1/findings");

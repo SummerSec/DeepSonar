@@ -23,7 +23,6 @@ import {
   runtimeImageHttpError,
   runtimeImagePreparationCovers,
   RuntimeImageNotReadyError,
-  RuntimeImagePreparationBusyError,
   RuntimeImageNotTrustedError,
   RuntimeImagePinStaleError,
   RuntimeImagePlatformUnavailableError,
@@ -989,14 +988,120 @@ test("channel switch observes a non-preemptable in-flight task instead of throwi
     if (channel.ready) return;
     assert.equal(channel.task.task_id, binding.task.task_id);
     assert.equal(channel.task.purpose, "project_binding:p:i");
-    await assert.rejects(
-      () => requestRuntimeImagePreparation(
-        [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"3".repeat(64)}` }],
-        "project_binding:p:other",
-        { inspect: async () => ({ exists: false }), prepare: async () => blocked },
-      ),
-      RuntimeImagePreparationBusyError,
+    assert.equal(channel.task.items.length, 2);
+    assert.equal(channel.task.items[1]?.image_key, "base");
+    assert.equal(channel.task.items[1]?.status, "queued");
+  } finally {
+    release();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
+});
+
+test("project enablement enqueues a second product and dedupes the same digest", async () => {
+  resetRuntimeImagePullTask();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const first = await requestRuntimeImagePreparation(
+      [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"1".repeat(64)}` }],
+      "project_binding:p:chrome",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
     );
+    assert.equal(first.ready, false);
+    if (first.ready) return;
+    const second = await requestRuntimeImagePreparation(
+      [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"3".repeat(64)}` }],
+      "project_binding:p:audit",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(second.ready, false);
+    if (second.ready) return;
+    assert.equal(second.task.task_id, first.task.task_id);
+    assert.equal(second.task.total, 2);
+    assert.equal(second.task.items[0]?.status, "running");
+    assert.equal(second.task.items[1]?.image_key, "audit");
+    assert.equal(second.task.items[1]?.status, "queued");
+    const duplicate = await requestRuntimeImagePreparation(
+      [{ image_key: "audit", image_ref: `cr.example.invalid/audit@sha256:${"3".repeat(64)}` }],
+      "project_binding:p:audit-again",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(duplicate.ready, false);
+    if (duplicate.ready) return;
+    assert.equal(duplicate.task.task_id, first.task.task_id);
+    assert.equal(duplicate.task.items.length, 2);
+  } finally {
+    release();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
+});
+
+test("a failed pull does not stop a later queued image", async () => {
+  resetRuntimeImagePullTask();
+  let failChrome!: () => void;
+  const chromeBlocked = new Promise<void>((_, reject) => { failChrome = () => reject(new Error("chrome pull failed")); });
+  let releaseAudit!: () => void;
+  const auditBlocked = new Promise<void>((resolve) => { releaseAudit = resolve; });
+  try {
+    const first = await requestRuntimeImagePreparation(
+      [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"a".repeat(64)}` }],
+      "project_binding:p:chrome",
+      { inspect: async () => ({ exists: false }), prepare: async (ref) => {
+        if (ref.includes("chrome")) return chromeBlocked;
+        return auditBlocked;
+      } },
+    );
+    assert.equal(first.ready, false);
+    if (first.ready) return;
+    const second = await requestRuntimeImagePreparation(
+      [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"b".repeat(64)}` }],
+      "project_binding:p:audit",
+      { inspect: async () => ({ exists: false }), prepare: async (ref) => {
+        if (ref.includes("chrome")) return chromeBlocked;
+        return auditBlocked;
+      } },
+    );
+    assert.equal(second.ready, false);
+    if (second.ready) return;
+    assert.equal(second.task.items.length, 2);
+    failChrome();
+    await flush();
+    assert.equal(first.task.items[0]?.status, "failed");
+    assert.equal(first.task.items[1]?.status, "running");
+    releaseAudit();
+    await flush();
+    assert.equal(first.task.items[1]?.status, "succeeded");
+    assert.equal(first.task.status, "failed");
+  } finally {
+    failChrome();
+    releaseAudit();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
+});
+
+test("a locally ready image is not blocked by an unrelated in-flight pull", async () => {
+  resetRuntimeImagePullTask();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const first = await requestRuntimeImagePreparation(
+      [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"4".repeat(64)}` }],
+      "project_binding:p:chrome",
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    );
+    assert.equal(first.ready, false);
+    if (first.ready) return;
+    const auditDigest = `sha256:${"5".repeat(64)}`;
+    const ready = await requestRuntimeImagePreparation(
+      [{ image_key: "audit", image_ref: `ghcr.io/example/audit@${auditDigest}` }],
+      "project_binding:p:audit",
+      { inspect: async () => ({ exists: true, image_id: auditDigest }), prepare: async () => blocked },
+    );
+    assert.equal(ready.ready, true);
+    assert.equal(first.task.items.length, 1);
   } finally {
     release();
     await flush();

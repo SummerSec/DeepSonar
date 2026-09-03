@@ -1291,6 +1291,8 @@ export interface RuntimeImagePullItem {
   image_ref: string;
   status: "queued" | "running" | "succeeded" | "failed";
   error: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface RuntimeImagePullTask {
