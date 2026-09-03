@@ -397,8 +397,9 @@ export class OpenSandboxRunner implements SandboxRunner {
     try {
       session = await awaitProvisionSession(created, input.signal);
       if (input.signal?.aborted) throw new Error("provision 已取消");
-      this.sessions.set(session.id, session);
-      const host = createOpenSandboxRuntimeHost(session);
+      const live = session;
+      this.sessions.set(live.id, live);
+      const host = createOpenSandboxRuntimeHost(live);
       const contractResult = await host.run(
         `test -d /workspace && test -x /bin/sh${input.sharedAssetsMount ? ` && test -d ${SHARED_ASSETS_MOUNT_PATH}` : ""} && cat /opt/deepsonar/tool-manifest.json`,
         { timeoutMs: 15_000 },
@@ -422,16 +423,16 @@ export class OpenSandboxRunner implements SandboxRunner {
         }
       }
       if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl) {
-        await bindGatewayHostnameAsRoot(session, host, {
+        await bindGatewayHostnameAsRoot(live, host, {
           bind: () => this.gateway!.bind({
-            sandboxId: session.id,
+            sandboxId: live.id,
             upstreamUrl: input.gatewayUpstreamUrl!,
             image: input.image,
             signal: input.signal,
           }),
         });
       }
-      return { sandboxId: session.id };
+      return { sandboxId: live.id };
     } catch (error) {
       if (session) {
         this.sessions.delete(session.id);
