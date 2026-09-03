@@ -5,6 +5,7 @@ import {
   formatPullElapsed,
   isRegistryChannelSwitchLocked,
   isRuntimeImagePullBusyError,
+  preferredPullItem,
   projectBindingQueuedNotice,
   projectBindingDeferredNotice,
   pullHeadline,
@@ -13,6 +14,7 @@ import {
   registryChannelBusyNotice,
   registryChannelDeferredNotice,
   registryChannelSelectValue,
+  shouldKeepPollingPullStatus,
   shortImageRef,
 } from "./runtime-image-pull";
 
@@ -26,6 +28,16 @@ test("pull purpose and item labels stay readable for project enablement", () => 
     projectBindingDeferredNotice("DeepSonar Chrome Audit"),
     "已加入拉取队列：DeepSonar Chrome Audit；绑定尚未保存，该项就绪后会自动启用",
   );
+});
+
+test("preferred pull item skips a failed digest so retry can bind", () => {
+  const failed = { image_key: "kali", status: "failed" as const };
+  const queued = { image_key: "kali", status: "queued" as const };
+  assert.equal(preferredPullItem([failed], "kali")?.status, "failed");
+  assert.equal(preferredPullItem([failed, queued], "kali")?.status, "queued");
+  assert.equal(shouldKeepPollingPullStatus("succeeded", 1), true);
+  assert.equal(shouldKeepPollingPullStatus("succeeded", 0), false);
+  assert.equal(shouldKeepPollingPullStatus("running", 0), true);
 });
 
 test("busy errors are treated as queue progress, not a hard wait", () => {
@@ -58,6 +70,8 @@ test("project runtime image page polls the shared pull-status panel", () => {
   assert.match(page, /pullHeadline\(pullStatus\)/);
   assert.match(page, /projectBindingQueuedNotice/);
   assert.match(page, /pendingProjectBinds/);
+  assert.match(page, /preferredPullItem/);
+  assert.match(page, /shouldKeepPollingPullStatus/);
   assert.doesNotMatch(page, /请等待完成后再启用/);
   assert.doesNotMatch(page, /if \(projectId\) return;\s*void api\.runtimeImagesPullStatus/);
 });
