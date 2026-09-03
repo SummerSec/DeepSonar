@@ -15,6 +15,12 @@ import {
   parseToolManifest,
 } from "./runtime-shared.js";
 import { docker } from "./runtime-docker.js";
+import { applyKubernetesSandboxHostsBind } from "./kubernetes-gateway.js";
+import {
+  applyDockerSandboxHostsBind,
+  gatewayHostsBindError,
+  sandboxGatewayHostsVerifyCommand,
+} from "./sandbox-gateway-hosts.js";
 import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 import { isManagedRuntimeResource, OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
@@ -273,6 +279,12 @@ export type OpenSandboxGatewayBinder = (input: {
   signal?: AbortSignal;
 }) => Promise<{ hostname: string; ip: string }>;
 
+export type OpenSandboxHostsBinder = (input: {
+  sandboxId: string;
+  hostname: string;
+  ip: string;
+}) => Promise<void>;
+
 export interface OpenSandboxRunnerOptions {
   /**
    * Kubernetes ResourceName 不接受 Docker 专有的 `pids`。
@@ -282,6 +294,11 @@ export interface OpenSandboxRunnerOptions {
   kubernetesResources?: boolean;
   /** Docker 路径：create 前校验 Scheduler 已准备的 labeled volume，避免引擎自动建空卷。 */
   inspectSharedAssetsVolume?: (volumeName: string, jobId: string) => Promise<void>;
+  /**
+   * Write Gateway hostname as uid 0. Default: Docker `exec -u 0` or
+   * Kubernetes `kubectl exec -u 0`. Guest execd never appends `/etc/hosts`.
+   */
+  applySandboxHostsBind?: OpenSandboxHostsBinder;
 }
 
 export async function inspectPreparedSharedAssetsVolume(volumeName: string, jobId: string): Promise<void> {
@@ -357,11 +374,13 @@ export class OpenSandboxRunner implements SandboxRunner {
           image: input.image,
           signal: input.signal,
         });
-        const hosts = await host.run(
-          `grep -F ${shellQuote(bind.hostname)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(bind.ip)} ${shellQuote(bind.hostname)} >> /etc/hosts`,
-          { timeoutMs: 5_000 },
-        );
-        if (hosts.exitCode !== 0) throw new Error("failed to bind deepsonar-gateway-proxy in sandbox hosts");
+        const applyHosts = this.options.applySandboxHostsBind
+          ?? (kubernetes ? applyKubernetesSandboxHostsBind : applyDockerSandboxHostsBind);
+        await applyHosts({ sandboxId: session.id, hostname: bind.hostname, ip: bind.ip });
+        const hosts = await host.run(sandboxGatewayHostsVerifyCommand(bind.hostname), { timeoutMs: 5_000 });
+        if (hosts.exitCode !== 0) {
+          throw gatewayHostsBindError("hostname missing after root bind");
+        }
       }
       return { sandboxId: session.id };
     } catch (error) {

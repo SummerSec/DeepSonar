@@ -210,9 +210,11 @@ async function ensureGatewayNetwork(): Promise<void> {
  * internal bridge 不能直达 Docker Desktop 宿主。共享 sidecar 同时连普通 bridge 和
  * internal bridge，但代码只允许把 /gateway 路径转发到唯一上游，不提供 CONNECT 或任意目标代理。
  *
- * 返回 sidecar 在 restricted 网上的 IPv4，供沙箱 ExtraHosts 注入：rootless Podman 的
- * internal bridge 常无嵌入式 DNS，容器名 `deepsonar-gateway-proxy` 解析失败会表现为
- * Claude Code `Unable to connect to API (ENOTIMP)` / curl Could not resolve host。
+ * 返回 sidecar 在 restricted 网上的 IPv4。OpenSandbox SDK 0.1.11 不能在
+ * create 时注入 ExtraHosts；provision 以 uid 0 写入沙箱 `/etc/hosts`（#346）。
+ * rootless Podman 的 internal bridge 常无嵌入式 DNS，容器名
+ * `deepsonar-gateway-proxy` 解析失败会表现为 Claude Code
+ * `Unable to connect to API (ENOTIMP)` / curl Could not resolve host。
  */
 async function inspectGatewayProxy(): Promise<{
   exists: boolean;

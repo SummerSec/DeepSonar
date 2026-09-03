@@ -137,7 +137,7 @@ export {
   mapOpenSandboxNetworkPolicy,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
-export type { OpenSandboxGatewayBinder, OpenSandboxRunnerOptions } from "./opensandbox.js";
+export type { OpenSandboxGatewayBinder, OpenSandboxHostsBinder, OpenSandboxRunnerOptions } from "./opensandbox.js";
 export {
   OPENSANDBOX_POC_ADAPTER_IDS,
   OPENSANDBOX_POC_CLI_IDS,
@@ -225,9 +225,18 @@ export {
 } from "./runtime-gateway.js";
 export {
   bindGatewayProxyToKubernetesService,
+  applyKubernetesSandboxHostsBind,
   gatewayServiceManifest,
+  readSandboxPodName,
   readServiceClusterIP,
 } from "./kubernetes-gateway.js";
+export {
+  GATEWAY_HOSTS_BIND_ERROR_PREFIX,
+  applyDockerSandboxHostsBind,
+  gatewayHostsBindError,
+  sandboxGatewayHostsBindCommand,
+  sandboxGatewayHostsVerifyCommand,
+} from "./sandbox-gateway-hosts.js";
 export {
   DEEPSONAR_GATEWAY_PROXY_HOST,
   HUMAN_INBOX_WRITER_SCRIPT,

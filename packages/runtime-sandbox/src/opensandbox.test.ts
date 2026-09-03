@@ -11,6 +11,11 @@ import {
   type OpenSandboxSession,
 } from "./opensandbox.js";
 import { isManagedRuntimeResource } from "./opensandbox-version.js";
+import {
+  GATEWAY_HOSTS_BIND_ERROR_PREFIX,
+  applyDockerSandboxHostsBind,
+  sandboxGatewayHostsBindCommand,
+} from "./sandbox-gateway-hosts.js";
 
 function fakeSession(id = "sbx-1"): OpenSandboxSession & { commands: string[]; files: Array<{ path: string; bytes: number }> } {
   const commands: string[] = [];
@@ -73,6 +78,16 @@ function fakeClient(session = fakeSession()): OpenSandboxClient & { created: Ope
 }
 
 const limits = { cpu: 2, memoryMiB: 2048, pidsLimit: 512, capDropAll: true, noNewPrivileges: true };
+
+function recordingHostsBind() {
+  const calls: Array<{ sandboxId: string; hostname: string; ip: string }> = [];
+  return {
+    calls,
+    apply: async (input: { sandboxId: string; hostname: string; ip: string }) => {
+      calls.push(input);
+    },
+  };
+}
 
 test("OpenSandbox mapping fail-closes on missing or insecure limits", () => {
   assert.throws(() => requireOpenSandboxLimits(undefined), /SANDBOX_LIMITS_MISSING: cpu/);
@@ -174,11 +189,12 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   assert.equal(await runner.isAlive(handle), true);
 });
 
-test("OpenSandbox restricted provision binds the Gateway hostname into /etc/hosts", async () => {
+test("OpenSandbox restricted provision binds the Gateway hostname as root", async () => {
   const client = fakeClient();
+  const hosts = recordingHostsBind();
   const runner = new OpenSandboxRunner(client, {
     bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
-  });
+  }, { applySandboxHostsBind: hosts.apply });
   await runner.provision({
     jobId: "11111111-1111-4111-8111-111111111111",
     attemptId: "22222222-2222-4222-8222-222222222222",
@@ -192,20 +208,27 @@ test("OpenSandbox restricted provision binds the Gateway hostname into /etc/host
     client.created[0]?.networkPolicy.egress[0]?.target,
     "deepsonar-gateway-proxy",
   );
+  assert.deepEqual(hosts.calls, [{
+    sandboxId: "sbx-1",
+    hostname: "deepsonar-gateway-proxy",
+    ip: "172.19.0.9",
+  }]);
   assert.ok(client.session.commands.some((command) => (
-    command.includes("deepsonar-gateway-proxy") && command.includes("172.19.0.9") && command.includes("/etc/hosts")
+    command.includes("deepsonar-gateway-proxy") && command.includes("/etc/hosts") && !command.includes(">>")
   )));
+  assert.equal(client.session.commands.some((command) => command.includes(">> /etc/hosts")), false);
 });
 
-test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP", async () => {
+test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP as root", async () => {
   const client = fakeClient();
+  const hosts = recordingHostsBind();
   let bound = 0;
   const runner = new OpenSandboxRunner(client, {
     bind: async () => {
       bound += 1;
       return { hostname: "deepsonar-gateway-proxy", ip: "10.43.0.10" };
     },
-  }, { kubernetesResources: true });
+  }, { kubernetesResources: true, applySandboxHostsBind: hosts.apply });
   await runner.provision({
     jobId: "11111111-1111-4111-8111-111111111111",
     attemptId: "22222222-2222-4222-8222-222222222222",
@@ -216,9 +239,83 @@ test("OpenSandbox Kubernetes restricted provision binds the Gateway Service Clus
     expectedContract: "deepsonar.runtime/v1",
   });
   assert.equal(bound, 1);
+  assert.deepEqual(hosts.calls, [{
+    sandboxId: "sbx-1",
+    hostname: "deepsonar-gateway-proxy",
+    ip: "10.43.0.10",
+  }]);
   assert.ok(client.session.commands.some((command) => (
-    command.includes("deepsonar-gateway-proxy") && command.includes("10.43.0.10") && command.includes("/etc/hosts")
+    command.includes("deepsonar-gateway-proxy") && command.includes("/etc/hosts") && !command.includes(">>")
   )));
+});
+
+test("OpenSandbox non-root guest still completes Gateway hosts bind", async () => {
+  const session = fakeSession();
+  session.run = async (command) => {
+    session.commands.push(command);
+    if (command.includes(">> /etc/hosts")) {
+      return { exitCode: 1, stdout: "", stderr: "Permission denied" };
+    }
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command.includes("grep -F") && command.includes("/etc/hosts") && !command.includes(">>")) {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const client = fakeClient(session);
+  const hosts = recordingHostsBind();
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, { applySandboxHostsBind: hosts.apply });
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  });
+  assert.equal(handle.sandboxId, "sbx-1");
+  assert.equal(hosts.calls.length, 1);
+  assert.equal(session.commands.some((command) => command.includes(">> /etc/hosts")), false);
+});
+
+test("OpenSandbox provision fail-closes when root Gateway hosts bind fails", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, {
+    applySandboxHostsBind: async () => {
+      throw new Error(`${GATEWAY_HOSTS_BIND_ERROR_PREFIX}: Permission denied`);
+    },
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), /as root: Permission denied/);
+});
+
+test("Docker Gateway hosts bind execs the sandbox as uid 0", async () => {
+  const argsLog: string[][] = [];
+  await applyDockerSandboxHostsBind({
+    sandboxId: "sbx-9",
+    hostname: "deepsonar-gateway-proxy",
+    ip: "172.19.0.9",
+    docker: async (...args) => {
+      argsLog.push(args);
+      return "";
+    },
+  });
+  assert.deepEqual(argsLog[0]?.slice(0, 4), ["exec", "-u", "0", "sandbox-sbx-9"]);
+  assert.match(sandboxGatewayHostsBindCommand("deepsonar-gateway-proxy", "172.19.0.9"), />> \/etc\/hosts/);
 });
 
 test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {

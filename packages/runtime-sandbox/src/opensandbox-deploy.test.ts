@@ -218,6 +218,7 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-poc.ts"), "utf8");
   const k8sGateway = readFileSync(join(root, "packages/runtime-sandbox/src/kubernetes-gateway.ts"), "utf8");
   const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
+  const hostsBind = readFileSync(join(root, "packages/runtime-sandbox/src/sandbox-gateway-hosts.ts"), "utf8");
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
   assert.match(k8sPoc, /bindGatewayProxyToKubernetesService/);
@@ -227,7 +228,11 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(k8sGateway, /port: 3100/);
   assert.match(k8sGateway, /targetPort: 3100/);
   assert.doesNotMatch(k8sGateway, /port: 80/);
-  assert.match(adapter, /\/etc\/hosts/);
+  assert.match(adapter, /sandboxGatewayHostsVerifyCommand/);
+  assert.match(adapter, /applySandboxHostsBind/);
+  assert.match(hostsBind, /\/etc\/hosts/);
+  assert.match(hostsBind, /exec[\s\S]*-u[\s\S]*0/);
+  assert.match(k8sGateway, /kubectl[\s\S]*-u[\s\S]*0/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_DENY_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);

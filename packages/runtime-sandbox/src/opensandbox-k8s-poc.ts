@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bindGatewayProxyToKubernetesService } from "./kubernetes-gateway.js";
+import { applyKubernetesSandboxHostsBind, bindGatewayProxyToKubernetesService } from "./kubernetes-gateway.js";
 import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
 import { NETWORK_ISOLATION_SCRIPT, OPENSANDBOX_POC_CONTRACT, OPENSANDBOX_POC_IMAGE } from "./opensandbox-poc.js";
 import { readAgentSandboxCrd } from "./opensandbox-gvisor-poc.js";
@@ -215,15 +215,24 @@ export async function runOpenSandboxK8sPoc(
   }
   try {
     await waitForEgressProbe(kubectl);
+    const kubectlText = async (args: string[]) => {
+      const value = await kubectl(args);
+      if (typeof value === "string") return value;
+      if (value && typeof value === "object" && "raw" in value) return String((value as { raw?: unknown }).raw ?? "");
+      return JSON.stringify(value ?? {});
+    };
     const runner = new OpenSandboxRunner(client, {
       bind: (bindInput) => bindGatewayProxyToKubernetesService({
         ...bindInput,
         namespace: OPENSANDBOX_K8S_NAMESPACE,
-        kubectl: async (args) => {
-          const value = await kubectl(args);
-          if (value && typeof value === "object" && "raw" in value) return String((value as { raw?: unknown }).raw ?? "");
-          return JSON.stringify(value ?? {});
-        },
+        kubectl: kubectlText,
+      }),
+    }, {
+      kubernetesResources: true,
+      applySandboxHostsBind: (input) => applyKubernetesSandboxHostsBind({
+        ...input,
+        namespace: OPENSANDBOX_K8S_NAMESPACE,
+        kubectl: kubectlText,
       }),
     });
     const jobId = randomUUID();

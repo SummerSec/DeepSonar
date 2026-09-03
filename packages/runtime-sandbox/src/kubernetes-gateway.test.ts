@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyKubernetesSandboxHostsBind,
   bindGatewayProxyToKubernetesService,
   gatewayServiceManifest,
+  readSandboxPodName,
   readServiceClusterIP,
 } from "./kubernetes-gateway.js";
+import { GATEWAY_HOSTS_BIND_ERROR_PREFIX } from "./sandbox-gateway-hosts.js";
 
 test("Kubernetes Gateway bind requires a real ClusterIP", () => {
   assert.equal(readServiceClusterIP({ spec: { clusterIP: "10.43.0.10" } }), "10.43.0.10");
@@ -49,4 +52,42 @@ test("Kubernetes Gateway bind returns the Service ClusterIP", async () => {
     },
   });
   assert.deepEqual(bind, { hostname: "deepsonar-gateway-proxy", ip: "10.43.0.10" });
+});
+
+test("Kubernetes Gateway hosts bind execs the sandbox pod as uid 0", async () => {
+  assert.equal(readSandboxPodName({
+    items: [{ metadata: { name: "kata-pod", labels: { sandbox: "sbx-9" } } }],
+  }, "sbx-9"), "kata-pod");
+  const argsLog: string[][] = [];
+  await applyKubernetesSandboxHostsBind({
+    sandboxId: "sbx-9",
+    hostname: "deepsonar-gateway-proxy",
+    ip: "10.43.0.10",
+    kubectl: async (args) => {
+      argsLog.push(args);
+      if (args[0] === "get" && args[1] === "pod") {
+        throw new Error("pods \"sandbox-sbx-9\" not found");
+      }
+      if (args[0] === "get" && args[1] === "pods") {
+        return JSON.stringify({ items: [{ metadata: { name: "kata-pod", labels: { sandbox: "sbx-9" } } }] });
+      }
+      return "";
+    },
+  });
+  assert.deepEqual(argsLog.at(-1)?.slice(0, 6), ["exec", "-n", "deepsonar-opensandbox", "-u", "0", "kata-pod"]);
+});
+
+test("Kubernetes Gateway hosts bind fail-closes when the sandbox pod is missing", async () => {
+  await assert.rejects(
+    () => applyKubernetesSandboxHostsBind({
+      sandboxId: "missing",
+      hostname: "deepsonar-gateway-proxy",
+      ip: "10.43.0.10",
+      kubectl: async (args) => {
+        if (args[0] === "get") throw new Error("not found");
+        throw new Error("unexpected");
+      },
+    }),
+    new RegExp(GATEWAY_HOSTS_BIND_ERROR_PREFIX),
+  );
 });
