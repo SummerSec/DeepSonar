@@ -1,6 +1,7 @@
 /**
- * Kubernetes Gateway bind (#162). Kata guests cannot use Docker ExtraHosts;
- * the Scheduler-owned Service ClusterIP is written into sandbox /etc/hosts.
+ * Kubernetes Gateway bind (#162). OpenSandbox create has no ExtraHosts/hostAliases
+ * field; Kata guests also cannot use Docker ExtraHosts. The Scheduler-owned
+ * Service ClusterIP is written into sandbox /etc/hosts as root after create (#346).
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

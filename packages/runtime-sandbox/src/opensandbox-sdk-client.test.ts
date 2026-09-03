@@ -37,6 +37,11 @@ test("OpenSandbox SDK create forwards an explicit linux/arm64 platform", () => {
   assert.match(source, /input\.platform \? \{ platform: input\.platform \}/);
 });
 
+test("OpenSandbox execd run forwards uid/gid for privileged provision writes", () => {
+  const source = readFileSync(new URL("./opensandbox-sdk-client.ts", import.meta.url), "utf8");
+  assert.match(source, /options\?\.uid != null \? \{ uid: options\.uid, gid: options\.gid \?\? 0 \}/);
+});
+
 test("Pi and DSH stay on the same OpenSandbox RuntimeHost path", () => {
   for (const id of ["pi", "dsh"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.incrementalMessages, true);

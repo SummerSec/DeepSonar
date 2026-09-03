@@ -228,6 +228,8 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(k8sGateway, /targetPort: 3100/);
   assert.doesNotMatch(k8sGateway, /port: 80/);
   assert.match(adapter, /\/etc\/hosts/);
+  assert.match(adapter, /uid: GATEWAY_HOSTS_ROOT_UID/);
+  assert.match(adapter, /GatewayHostsBindError/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_DENY_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);

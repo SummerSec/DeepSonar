@@ -345,6 +345,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | sandbox 创建失败（egress sidecar 宿主端口撞 Windows 排除区）不自动重试 | #332 | **已落地**：dispatcher 对明确的 OpenSandbox 容器启动失败（含 egress sidecar / Windows bind 错误）最多自动重试一次，重试创建新 Attempt 并通过 `pg_notify` 唤醒调度；Attempt 与最终 Job 错误保留 SDK 包装层的 code/status/nested provider message。上游 opensandbox 缺陷仍见 [opensandbox-group/OpenSandbox#1702](https://github.com/opensandbox-group/OpenSandbox/issues/1702)。 |
 | Pi Adapter 未消费 `systemPromptPath` | #334 | **已落地**：Pi 启动与 session resume 均追加 `--append-system-prompt`，并由 runtime adapter 单测覆盖有/无平台 System Prompt 两种路径。 |
 | Pi adapter RPC 工具事件、Provider 路由、失败收口与 Skill 安装缺陷 | #336 | **已落地**：按 Pi 0.84.4 顶层 `toolCallId/toolName/args/result/isError` 解析并提供增量进度；失败/重试耗尽/压缩失败进入显式错误结果；多 Provider 只在声明的默认 route 注入模型；仓库 Skill 安装失败阻断 Job；会话查看器支持 `args`。 |
+| 非 root 专项镜像 Gateway hosts bind | #346 | **已落地**：OpenSandbox 0.1.11 create 无 ExtraHosts / hostAliases，且 sidecar IP 要等沙箱网络存在后才能确定，因此 `restricted`/`egress` provision 在 bind 后用 execd `uid=0` 写一次 `/etc/hosts`，guest 保持镜像 `USER deepsonar`。失败抛 `GatewayHostsBindError`（hosts/gateway bind），与 `RuntimeImageContractError` /「镜像无 chromium」区分。不把专项镜像改回 root，不 chmod `/etc/hosts`，不向 Agent 暴露 ExtraHosts。 |
 
 ## 12. 仓库地图
 
