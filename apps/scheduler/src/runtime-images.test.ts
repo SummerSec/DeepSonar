@@ -1081,6 +1081,8 @@ test("a failed pull does not stop a later queued image", async () => {
     resetRuntimeImagePullTask();
   }
 });
+
+test("a locally ready image is not blocked by an unrelated in-flight pull", async () => {
   resetRuntimeImagePullTask();
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => { release = resolve; });
