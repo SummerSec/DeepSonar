@@ -46,6 +46,22 @@ export function isRuntimeImagePullBusyError(message: string): boolean {
   return /runtime_image_preparation_busy|already running/i.test(message);
 }
 
+export function preferredPullItem<T extends { image_key: string; status: string }>(
+  items: readonly T[],
+  imageKey: string,
+): T | undefined {
+  const matches = items.filter((row) => row.image_key === imageKey);
+  return matches.find((row) => row.status !== "failed") ?? matches[0];
+}
+
+export function shouldKeepPollingPullStatus(
+  status: RuntimeImagePullTask["status"] | undefined,
+  pendingCount: number,
+): boolean {
+  if (status === "queued" || status === "running") return true;
+  return pendingCount > 0;
+}
+
 export function projectBindingDeferredNotice(imageName: string): string {
   return `已加入拉取队列：${imageName}；绑定尚未保存，该项就绪后会自动启用`;
 }

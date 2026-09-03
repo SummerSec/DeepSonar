@@ -148,12 +148,24 @@ export function hasProjectWritePermission(status: AuthStatus | null, me: AuthMe 
   return scopes.has("admin") || scopes.has("projects:write");
 }
 
-export function hasQuickStartWritePermission(status: AuthStatus | null, me: AuthMe | null): boolean {
+export function hasTaskWritePermission(status: AuthStatus | null, me: AuthMe | null): boolean {
   if (status && !status.auth_required) return true;
   if (!me?.authenticated || !me.actor) return false;
   if (me.actor.role === "admin" || me.actor.role === "operator") return true;
   const scopes = new Set(me.actor.scopes);
-  return scopes.has("admin") || (scopes.has("projects:write") && scopes.has("tasks:write"));
+  return scopes.has("admin") || scopes.has("tasks:write");
+}
+
+export function hasQuickStartWritePermission(status: AuthStatus | null, me: AuthMe | null): boolean {
+  return hasProjectWritePermission(status, me) && hasTaskWritePermission(status, me);
+}
+
+export function hasLaunchWritePermission(
+  status: AuthStatus | null,
+  me: AuthMe | null,
+  creatingProject: boolean,
+): boolean {
+  return creatingProject ? hasQuickStartWritePermission(status, me) : hasTaskWritePermission(status, me);
 }
 
 export function isPermissionError(error: unknown): boolean {

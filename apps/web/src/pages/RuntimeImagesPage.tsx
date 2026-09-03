@@ -26,7 +26,9 @@ import {
   formatPullElapsed,
   isRegistryChannelSwitchLocked,
   isRuntimeImagePullBusyError,
+  preferredPullItem,
   projectBindingQueuedNotice,
+  shouldKeepPollingPullStatus,
   pullHeadline,
   pullItemStatusLabel,
   pullPurposeLabel,
@@ -271,6 +273,7 @@ export function RuntimeImagesPage() {
   const [showManual, setShowManual] = useState(false);
   const [manualForm, setManualForm] = useState({ image_key: "", name: "", description: "", publisher: "", image_ref: "", version: "" });
   const [pullStatus, setPullStatus] = useState<RuntimeImagePullTask | null>(null);
+  const [pendingBindEpoch, setPendingBindEpoch] = useState(0);
   const [localPanel, setLocalPanel] = useState<string | null>(null);
   const [localRefs, setLocalRefs] = useState<Record<string, string>>({});
   const [localCandidates, setLocalCandidates] = useState<Record<string, RuntimeImageLocalCandidate | null>>({});
@@ -285,6 +288,20 @@ export function RuntimeImagesPage() {
     pinPolicy?: "follow" | "hold";
   }>());
   const retryingProjectBinds = useRef(new Set<string>());
+
+  const rememberPendingBind = (
+    imageId: string,
+    pending: {
+      image: RuntimeImageSummary;
+      enabled: boolean;
+      versionId?: string | null;
+      pinPolicy?: "follow" | "hold";
+    } | null,
+  ) => {
+    if (pending) pendingProjectBinds.current.set(imageId, pending);
+    else pendingProjectBinds.current.delete(imageId);
+    setPendingBindEpoch((n) => n + 1);
+  };
 
   const canAdoptLocal = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:approve")));
   const canManageCatalog = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:manage") || me.actor?.scopes.includes("images:approve")));
@@ -372,15 +389,20 @@ export function RuntimeImagesPage() {
     };
   }, [projectId]);
   useEffect(() => {
+    pendingProjectBinds.current.clear();
+    retryingProjectBinds.current.clear();
+    setPendingBindEpoch(0);
+  }, [projectId]);
+  useEffect(() => {
     void api.runtimeImagesPullStatus().then(setPullStatus).catch((cause) => setError(cause instanceof Error ? `获取拉取状态失败：${cause.message}` : "获取拉取状态失败"));
   }, [projectId]);
   useEffect(() => {
-    if (!pullStatus || !["queued", "running"].includes(pullStatus.status)) return;
+    if (!shouldKeepPollingPullStatus(pullStatus?.status, pendingProjectBinds.current.size)) return;
     const timer = window.setInterval(() => {
       void api.runtimeImagesPullStatus().then(setPullStatus).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [pullStatus?.status]);
+  }, [pullStatus?.status, pendingBindEpoch]);
   useEffect(() => {
     const timer = setInterval(() => void reload(), 5_000);
     return () => clearInterval(timer);
@@ -665,12 +687,12 @@ export function RuntimeImagesPage() {
     try {
       const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId, pinPolicy);
       if ("saved" in result && result.saved === false) {
-        pendingProjectBinds.current.set(image.id, { image, enabled, versionId, pinPolicy });
+        rememberPendingBind(image.id, { image, enabled, versionId, pinPolicy });
         setPullStatus(result.task);
         setNotice(projectBindingQueuedNotice(image.name, result.task));
         return;
       }
-      pendingProjectBinds.current.delete(image.id);
+      rememberPendingBind(image.id, null);
       await reload();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -678,7 +700,7 @@ export function RuntimeImagesPage() {
         try {
           const task = await api.runtimeImagesPullStatus();
           setPullStatus(task);
-          pendingProjectBinds.current.set(image.id, { image, enabled, versionId, pinPolicy });
+          rememberPendingBind(image.id, { image, enabled, versionId, pinPolicy });
           setNotice(projectBindingQueuedNotice(image.name, task));
         } catch {
           setNotice(projectBindingQueuedNotice(image.name, null));
@@ -694,9 +716,9 @@ export function RuntimeImagesPage() {
   useEffect(() => {
     if (!projectId || !pullStatus) return;
     for (const [imageId, pending] of pendingProjectBinds.current) {
-      const item = pullStatus.items.find((row) => row.image_key === pending.image.image_key);
+      const item = preferredPullItem(pullStatus.items, pending.image.image_key);
       if (item?.status === "failed") {
-        pendingProjectBinds.current.delete(imageId);
+        rememberPendingBind(imageId, null);
         retryingProjectBinds.current.delete(imageId);
         setError(`${pending.image.name} 拉取失败${item.error ? `：${item.error}` : ""}`);
         continue;
@@ -706,10 +728,11 @@ export function RuntimeImagesPage() {
       void api.bindProjectRuntimeImage(projectId, pending.image.id, pending.enabled, pending.versionId, pending.pinPolicy)
         .then(async (result) => {
           if ("saved" in result && result.saved === false) {
-            setPullStatus(result.task);
+            if (result.task.task_id !== pullStatus.task_id) setPullStatus(result.task);
+            setPendingBindEpoch((n) => n + 1);
             return;
           }
-          pendingProjectBinds.current.delete(imageId);
+          rememberPendingBind(imageId, null);
           setNotice(`${pending.image.name} 已启用`);
           await reload();
         })
@@ -717,6 +740,7 @@ export function RuntimeImagesPage() {
           const message = cause instanceof Error ? cause.message : String(cause);
           if (isRuntimeImagePullBusyError(message)) {
             setNotice(projectBindingQueuedNotice(pending.image.name, pullStatus));
+            setPendingBindEpoch((n) => n + 1);
             return;
           }
           setError(message);
@@ -725,7 +749,7 @@ export function RuntimeImagesPage() {
           retryingProjectBinds.current.delete(imageId);
         });
     }
-  }, [projectId, pullStatus?.task_id, pullStatus?.completed, pullStatus?.status]);
+  }, [projectId, pullStatus]);
 
   const detectLocal = async (image: RuntimeImageSummary) => {
     const imageRef = (localRefs[image.id] ?? "").trim();
