@@ -16,7 +16,7 @@ import { useAuth } from "../auth";
 import { SearchableSelect } from "../SearchableSelect";
 import {
   errorMessage,
-  hasQuickStartWritePermission,
+  hasLaunchWritePermission,
   isPermissionError,
   LAST_PROJECT_STORAGE_KEY,
   networkOverrideLabel,
@@ -102,9 +102,9 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
   const [technicalError, setTechnicalError] = useState<string | null>(null);
   const [permissionDenied, setPermissionDenied] = useState(false);
 
-  const canStart = hasQuickStartWritePermission(status, me);
   const selectedProject = activeProjects.find((project) => project.id === selectedProjectId) ?? null;
   const isCreatingProject = selectedProjectId === NEW_PROJECT || !activeProjects.length;
+  const canStart = hasLaunchWritePermission(status, me, isCreatingProject);
   const permissionLoading = status === null && me === null;
 
   useEffect(() => {

@@ -1591,7 +1591,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/runtime-images/registry/channel",
     summary: "切换官方运行时镜像分发通道",
-    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图时把引用加入本机拉取队列并返回 202 preparing/saved:false 与当前整队列 pull-status，旧通道保持有效，准备完成后重试才提交。与项目启用共用同一队列；通道切换仍可抢占 admin_bulk。绝不跨通道回退，历史 Job 快照不改写。",
+    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图时把引用加入本机拉取队列并返回 202 preparing/saved:false 与当前整队列 pull-status，旧通道保持有效，准备完成后重试才提交。与项目启用共用同一队列，不抢占以免丢掉已入队项。绝不跨通道回退，历史 Job 快照不改写。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {

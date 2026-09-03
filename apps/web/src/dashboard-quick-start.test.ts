@@ -4,8 +4,10 @@ import type { AuthMe, AuthStatus, Project } from "./api.js";
 import {
   createProjectSpace,
   hasActiveProjects,
+  hasLaunchWritePermission,
   hasProjectWritePermission,
   hasQuickStartWritePermission,
+  hasTaskWritePermission,
   hasNewProjectIntent,
   hasQuickStartRailIntent,
   isPermissionError,
@@ -189,6 +191,9 @@ test("permission denial recognizes viewer, project-only tokens, and HTTP 403 res
   assert.equal(hasQuickStartWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:read", "tasks:read"] })), false);
   assert.equal(hasProjectWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:read"] })), false);
   assert.equal(hasProjectWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:write"] })), true);
+  assert.equal(hasTaskWritePermission(authStatus, actor({ role: "viewer", scopes: ["tasks:write"] })), true);
+  assert.equal(hasLaunchWritePermission(authStatus, actor({ role: "viewer", scopes: ["tasks:write"] }), false), true);
+  assert.equal(hasLaunchWritePermission(authStatus, actor({ role: "viewer", scopes: ["tasks:write"] }), true), false);
   assert.equal(hasQuickStartWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:write"] })), false);
   assert.equal(hasQuickStartWritePermission(authStatus, actor({ role: "operator", scopes: [] })), true);
   assert.equal(hasProjectWritePermission(authStatus, actor({ role: "operator", scopes: [] })), true);
@@ -247,6 +252,7 @@ test("legacy readiness links normalize to real settings panels", () => {
 test("IntentLaunchRail surfaces local image identity and a prepare link", async () => {
   const { readFileSync } = await import("node:fs");
   const rail = readFileSync(new URL("./components/IntentLaunchRail.tsx", import.meta.url), "utf8");
+  assert.match(rail, /hasLaunchWritePermission/);
   assert.match(rail, /RUNTIME_IMAGE_NOT_LOCAL/);
   assert.match(rail, /去市场准备/);
   assert.match(rail, /runtime_image\.digest/);

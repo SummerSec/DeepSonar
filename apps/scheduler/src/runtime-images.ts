@@ -1754,28 +1754,25 @@ export function resetRuntimeImagePullTask(): void {
   runtimeImagePullTask = null;
 }
 
+function liveRuntimeImagePreparationItems(task: Pick<RuntimeImagePullTask, "items">): RuntimeImagePullItem[] {
+  return task.items.filter((item) => item.status !== "failed");
+}
+
 export function runtimeImagePreparationCovers(
   task: Pick<RuntimeImagePullTask, "items">,
   refs: readonly { image_ref: string }[],
 ): boolean {
-  const activeRefs = new Set(task.items.map((item) => item.image_ref));
+  const live = liveRuntimeImagePreparationItems(task);
+  const activeRefs = new Set(live.map((item) => item.image_ref));
   if (refs.every((item) => activeRefs.has(item.image_ref))) return true;
   const activeDigests = new Set(
-    task.items.map((item) => immutableDigest(item.image_ref)).filter((value): value is string => Boolean(value)),
+    live.map((item) => immutableDigest(item.image_ref)).filter((value): value is string => Boolean(value)),
   );
   if (activeDigests.size === 0) return false;
   return refs.every((item) => {
     const digest = immutableDigest(item.image_ref);
     return digest !== null && activeDigests.has(digest);
   });
-}
-
-export function canPreemptRuntimeImagePreparation(currentPurpose: string | undefined, nextPurpose: string): boolean {
-  return nextPurpose.startsWith("registry_channel:") && currentPurpose === "admin_bulk";
-}
-
-export function isRegistryChannelPreparationPurpose(purpose: string): boolean {
-  return purpose.startsWith("registry_channel:");
 }
 
 export function registryChannelPreparationBusyResult(
@@ -1805,8 +1802,18 @@ export async function runRuntimeImagePreparationTask(
   try {
     task.status = "running";
     task.started_at = new Date().toISOString();
-    for (const item of task.items) {
-      if (item.status !== "queued") continue;
+    for (;;) {
+      const item = task.items.find((row) => row.status === "queued");
+      if (!item) {
+        task.status = task.items.some((row) => row.status === "failed") ? "failed" : "succeeded";
+        task.finished_at = new Date().toISOString();
+        if (task.items.some((row) => row.status === "queued")) {
+          task.status = "running";
+          task.finished_at = null;
+          continue;
+        }
+        break;
+      }
       item.status = "running";
       item.started_at = new Date().toISOString();
       try {
@@ -1819,8 +1826,6 @@ export async function runRuntimeImagePreparationTask(
       item.finished_at = new Date().toISOString();
       task.completed += 1;
     }
-    task.status = task.items.some((item) => item.status === "failed") ? "failed" : "succeeded";
-    task.finished_at = new Date().toISOString();
   } catch (error) {
     try {
       for (const item of task.items) {
@@ -1882,9 +1887,7 @@ function startRuntimeImagePreparationTask(
   const uniqueRefs = uniqueRuntimeImagePreparationRefs(refs);
   if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
     if (runtimeImagePreparationCovers(runtimeImagePullTask, uniqueRefs)) return runtimeImagePullTask;
-    if (!canPreemptRuntimeImagePreparation(runtimeImagePullTask.purpose, purpose)) {
-      return enqueueRuntimeImagePreparation(runtimeImagePullTask, uniqueRefs);
-    }
+    return enqueueRuntimeImagePreparation(runtimeImagePullTask, uniqueRefs);
   }
   const items: RuntimeImagePullItem[] = uniqueRefs.map((item) => ({
     image_key: item.image_key,

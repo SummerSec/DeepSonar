@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertRuntimeImageAvailable,
-  canPreemptRuntimeImagePreparation,
   compareRuntimeImageVersionLabels,
   createServerOwnedRuntimeImageRegistryPolicy,
   ensureRuntimeImageAvailable,
@@ -855,8 +854,15 @@ test("preparation lock reuses same digest across registry hosts", () => {
   assert.equal(runtimeImagePreparationCovers(task, [
     { image_ref: `ghcr.io/example/other@sha256:${"b".repeat(64)}` },
   ]), false);
-  assert.equal(canPreemptRuntimeImagePreparation("admin_bulk", "registry_channel:github"), true);
-  assert.equal(canPreemptRuntimeImagePreparation("project_binding:p:i", "registry_channel:github"), false);
+  assert.equal(runtimeImagePreparationCovers({
+    items: [{ image_key: "base", image_ref: `cr.example.invalid/base@${digest}`, status: "failed" as const, error: "pull failed" }],
+  }, [{ image_ref: `ghcr.io/example/base@${digest}` }]), false);
+  assert.equal(runtimeImagePreparationCovers({
+    items: [
+      { image_key: "base", image_ref: `cr.example.invalid/base@${digest}`, status: "failed" as const, error: "pull failed" },
+      { image_key: "base", image_ref: `ghcr.io/example/base@${digest}`, status: "queued" as const, error: null },
+    ],
+  }, [{ image_ref: `ghcr.io/example/base@${digest}` }]), true);
 });
 
 test("channel switch busy payload stays 202 and does not persist", () => {
@@ -935,12 +941,10 @@ test("channel switch reuses an in-flight prep for the same digest on another hos
   }
 });
 
-test("channel switch preempts a current-channel admin_bulk with different digest", async () => {
+test("channel switch enqueues onto in-flight admin_bulk instead of dropping queued project binds", async () => {
   resetRuntimeImagePullTask();
   let releaseAdmin!: () => void;
   const adminBlocked = new Promise<void>((resolve) => { releaseAdmin = resolve; });
-  let releaseChannel!: () => void;
-  const channelBlocked = new Promise<void>((resolve) => { releaseChannel = resolve; });
   try {
     const admin = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `cr.example.invalid/base@sha256:${"e".repeat(64)}` }],
@@ -949,19 +953,27 @@ test("channel switch preempts a current-channel admin_bulk with different digest
     );
     assert.equal(admin.ready, false);
     if (admin.ready) return;
+    const kali = await requestRuntimeImagePreparation(
+      [{ image_key: "kali", image_ref: `ghcr.io/example/kali@sha256:${"c".repeat(64)}` }],
+      "project_binding:p:kali",
+      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked },
+    );
+    assert.equal(kali.ready, false);
+    if (kali.ready) return;
     const channel = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `ghcr.io/example/base@sha256:${"f".repeat(64)}` }],
       "registry_channel:github",
-      { inspect: async () => ({ exists: false }), prepare: async () => channelBlocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked },
     );
     assert.equal(channel.ready, false);
     if (channel.ready) return;
-    assert.notEqual(channel.task.task_id, admin.task.task_id);
-    assert.equal(channel.task.purpose, "registry_channel:github");
-    assert.match(channel.task.status, /queued|running/);
+    assert.equal(channel.task.task_id, admin.task.task_id);
+    assert.equal(channel.task.purpose, "admin_bulk");
+    assert.equal(channel.task.items.map((item) => item.image_key).join(","), "base,kali,base");
+    assert.equal(channel.task.items[1]?.status, "queued");
+    assert.equal(channel.task.items[2]?.status, "queued");
   } finally {
     releaseAdmin();
-    releaseChannel();
     await flush();
     resetRuntimeImagePullTask();
   }
@@ -1074,6 +1086,55 @@ test("a failed pull does not stop a later queued image", async () => {
     await flush();
     assert.equal(first.task.items[1]?.status, "succeeded");
     assert.equal(first.task.status, "failed");
+  } finally {
+    failChrome();
+    releaseAudit();
+    await flush();
+    resetRuntimeImagePullTask();
+  }
+});
+
+test("a failed digest can be queued again while the task is still running", async () => {
+  resetRuntimeImagePullTask();
+  let failChrome!: () => void;
+  const chromeBlocked = new Promise<void>((_, reject) => { failChrome = () => reject(new Error("chrome pull failed")); });
+  let releaseAudit!: () => void;
+  const auditBlocked = new Promise<void>((resolve) => { releaseAudit = resolve; });
+  try {
+    const first = await requestRuntimeImagePreparation(
+      [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"a".repeat(64)}` }],
+      "project_binding:p:chrome",
+      { inspect: async () => ({ exists: false }), prepare: async (ref) => {
+        if (ref.includes("chrome")) return chromeBlocked;
+        return auditBlocked;
+      } },
+    );
+    assert.equal(first.ready, false);
+    if (first.ready) return;
+    const second = await requestRuntimeImagePreparation(
+      [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"b".repeat(64)}` }],
+      "project_binding:p:audit",
+      { inspect: async () => ({ exists: false }), prepare: async (ref) => {
+        if (ref.includes("chrome")) return chromeBlocked;
+        return auditBlocked;
+      } },
+    );
+    assert.equal(second.ready, false);
+    if (second.ready) return;
+    failChrome();
+    await flush();
+    assert.equal(first.task.items[0]?.status, "failed");
+    const retry = await requestRuntimeImagePreparation(
+      [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"a".repeat(64)}` }],
+      "project_binding:p:chrome-retry",
+      { inspect: async () => ({ exists: false }), prepare: async () => auditBlocked },
+    );
+    assert.equal(retry.ready, false);
+    if (retry.ready) return;
+    assert.equal(retry.task.task_id, first.task.task_id);
+    assert.equal(retry.task.items.length, 3);
+    assert.equal(retry.task.items[2]?.image_key, "chrome");
+    assert.equal(retry.task.items[2]?.status, "queued");
   } finally {
     failChrome();
     releaseAudit();
