@@ -11,6 +11,24 @@ import {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
+function parseTomlInt(toml: string, key: string): number | undefined {
+  const match = toml.match(new RegExp(`^${key}\\s*=\\s*(-?\\d+)\\s*$`, "m"));
+  return match ? Number(match[1]) : undefined;
+}
+
+function assertDockerHostPortPool(toml: string, label: string): void {
+  const docker = toml.match(/\[docker\]([\s\S]*?)(?=\n\[|$)/);
+  assert.ok(docker, `${label}: [docker] section must exist`);
+  const min = parseTomlInt(docker[1], "port_range_min");
+  const max = parseTomlInt(docker[1], "port_range_max");
+  assert.equal(typeof min, "number", `${label}: docker.port_range_min must be set`);
+  assert.equal(typeof max, "number", `${label}: docker.port_range_max must be set`);
+  assert.ok(min! < max!, `${label}: port_range_min must be less than port_range_max`);
+  assert.ok(max! - min! >= 100, `${label}: official schema requires a range of at least 100 ports`);
+  assert.notDeepEqual({ min, max }, { min: 40000, max: 60000 }, `${label}: must not regress to the OpenSandbox default 40000-60000 pool`);
+  assert.ok(max! <= 49000, `${label}: must stay below Windows ephemeral / Hyper-V excluded ports`);
+}
+
 test("OpenSandbox deploy pins official schema and immutable digests", () => {
   const toml = readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8");
   const compose = readFileSync(join(root, "deploy/docker-compose.opensandbox.yml"), "utf8");
@@ -26,6 +44,21 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.match(compose, /OPENSANDBOX_SERVER_API_KEY/);
   assert.match(compose, /driver: bridge/);
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
+});
+
+test("OpenSandbox Docker host port pool stays below the Windows excluded band", () => {
+  assertDockerHostPortPool(readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8"), "deploy/opensandbox/config.toml");
+});
+
+test("OpenSandbox Docker host port pool assertion rejects missing keys and the default 40000-60000 range", () => {
+  assert.throws(
+    () => assertDockerHostPortPool("[docker]\nnetwork_mode = \"bridge\"\n", "missing-keys"),
+    /port_range_min must be set/,
+  );
+  assert.throws(
+    () => assertDockerHostPortPool("[docker]\nport_range_min = 40000\nport_range_max = 60000\n", "default-pool"),
+    /must not regress to the OpenSandbox default 40000-60000 pool/,
+  );
 });
 
 test("OpenSandbox production overlay is the default real deploy path", () => {
