@@ -17,6 +17,10 @@ execd_image = "docker.io/opensandbox/execd@sha256:d358f23cb268779eaa71433ce0654a
 network_mode = "bridge"
 api_timeout = 180
 host_ip = "host.docker.internal"
+# Stay below Windows ephemeral / Hyper-V excluded ports (often 49152+).
+# OpenSandbox default 40000-60000 can bind a forbidden host port (#349).
+port_range_min = 40000
+port_range_max = 49000
 drop_capabilities = ["ALL"]
 no_new_privileges = true
 pids_limit = 4096
