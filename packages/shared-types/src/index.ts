@@ -1176,6 +1176,24 @@ export function resolvePlatformTools(
 }
 
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位
+export {
+  PI_EXTENSION_IMAGE_ROOT,
+  PI_EXTENSION_MAX_PER_ROLE,
+  PI_EXTENSION_REGISTRY,
+  PI_EXTENSION_SANDBOX_PREFIX,
+  PI_EXTENSION_WORKSPACE_DIR,
+  PiExtensionId,
+  isRegisteredPiExtensionId,
+  parsePiExtensionIds,
+  piExtensionImageEntryPath,
+  piExtensionSandboxPath,
+  piExtensionWorkspacePath,
+  registeredPiExtension,
+  validatePiExtensionIds,
+  type PiExtensionRegistration,
+  type RegisteredPiExtensionId,
+} from "./pi-extensions.js";
+
 export async function computeFingerprint(
   input: { title: string; location?: string; rule_id?: string },
   digest: (s: string) => Promise<string> | string,

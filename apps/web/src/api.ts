@@ -1349,6 +1349,8 @@ export type RoleConfigInput = {
   credentials: { credential_id: string; purpose: string }[];
   /** Provider 配置文件：路径按 CLI 固定白名单（首期每角色最多 1 个） */
   config_files: { path: string; content: string }[];
+  /** 仅 pi：已注册扩展 id，Job 创建时冻结。 */
+  pi_extensions?: string[];
 };
 
 /** RoleConfig 视图 = role_configs 行 + Credential 绑定 + 配置文件（含 sha256） */
@@ -1372,6 +1374,7 @@ export interface RoleConfigView {
   runtime_image_key: string | null;
   sandbox_limits_json: SandboxLimitsOverride;
   runtime_knobs_json?: RuntimeKnobOverride;
+  pi_extensions_json?: string[];
   version: number;
   created_at: string;
   updated_at: string;

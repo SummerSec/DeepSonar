@@ -327,6 +327,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 态势普通数据看板 | #242 | **P0 已落地**：`/` 运营总览（总量/状态分布/近 7 日/活跃项目 Top N/最近活动）+ 关注队列仍为处置入口；`GET /dashboard/overview` 做轻量聚合，因 Job/Finding 列表有窗口上限。**用量账本看板已落地**：`GET /dashboard/usage` 按日/周/月或自定义时间聚合 Gateway token，项目/任务页复用同一看板。**P1 风险看板、P2 吞吐看板未做。** |
 | 用量账本缓存命中与项目 tab | #312 | **已完成**：Gateway 解析并落库 `cache_read_input_tokens` / `cache_creation_input_tokens`；全局 / 项目 / 任务账本展示缓存读/写。CURRENT PROJECT 增加「项目账本」`/projects/:id/usage`，任务工作台不再内嵌项目账本。账本可折叠并按用户+页面记忆，默认展开。 |
 | 角色保存跟随最新 agent_cli | #316 | **已完成**：凭据 `agent_cli` 是软提示，Job 身份按角色解析。RoleConfig 保存（PUT 与 `PATCH /agent-cli`）时，绑定 LLM 凭据在 provider 兼容矩阵通过后自动跟随角色新值并写 `credential.agent_cli_follow` 审计；不兼容仍拒绝。 |
+| Pi 第三方扩展准入 | #351 | **已落地通用注册制**：`--no-extensions` 保持关闭自动加载。RoleConfig `pi_extensions` 只接受注册表 id（pilot `pi-web-access`），Job 创建冻结包名/版本/integrity/镜像入口；Executor 写平台 stub 到 `/workspace/.deepsonar-home/.pi/agent/extensions/`，适配器只对该前缀追加 `-e`。`pi-web-access` 预置在 audit / kali-minimal 的 `/opt/deepsonar/pi-extensions/node_modules/`，不进 size-gated 的 base。出网扩展服从 `allow_egress`；不向快照/工作区写长期密钥。后续扩展 = 注册表 + 镜像预置，不改启动链路。 |
 | DSH 请求帧与上游客户端识别 | #321 | **已完成**：部分 OpenAI-compatible 上游按 `input[0]` system 内容识别客户端，只放行 pi 风格前缀。DSH 将 `persona`/`DSH_SYSTEM_PROMPT` 投影为 pi 兼容首条 system（平台规则追加其后），不改 JSON-RPC 协议、不升 DSH 版本钉死。READINESS 对 `agent_cli=dsh` 给出 `DSH_UPSTREAM_CLIENT_FINGERPRINT` 提示；`turn/end` 抽出嵌套 JSON `message`，避免只显示 `DSH turn ended: error`。完整 pi 解码器改写见 #320。 |
 | 控制台版本号跳转 GitHub | #327 | **已完成**：侧栏版本号链接到 `SummerSec/DeepSonar` 的 `releases/tag/vX.Y.Z`；非规范版本落到 releases 首页；空版本不渲染链接。 |
 | Agent CLI 新配置收敛为三类 | #318 | **已完成**：新 RoleConfig / 新 Job 只接受 `claude-code`（默认）、`pi`、`dsh`。leftover `codex` / `open-code` 历史快照与 Session 归档只读可看，不改写；下次保存 leftover RoleConfig 拒绝并提示迁移。运行时仍走 `AGENT_CLI_RUNTIME_ADAPTERS` 注册表，新增 CLI 继续按 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md` 接入。 |
@@ -358,7 +359,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
 | `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v39）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v40）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

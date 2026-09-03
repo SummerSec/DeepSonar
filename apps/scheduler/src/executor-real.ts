@@ -77,6 +77,7 @@ import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/
 import { composeHubInstruction, composeScopeForPrompt, composeWorkerInstruction } from "./compose-scope.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
 import { frozenTaskSeeds } from "./task-compose.js";
+import { materializeFrozenPiExtensions, parseFrozenPiExtensions } from "./pi-extensions.js";
 import {
   hasProviderSettingsConfig,
   jobGatewayAllowedModels,
@@ -1063,6 +1064,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     composeScope: taskTarget.kind === "compose",
   });
   const mcps = snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME);
+  const piExtensionInjection = provider === "pi"
+    ? materializeFrozenPiExtensions(parseFrozenPiExtensions(snapshot.pi_extensions), allowEgress)
+    : { files: [], paths: [], injected: [], skipped: [] };
   const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
     v: 1,
@@ -1082,11 +1086,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
     subagents: { names: componentNames(snapshot.subagents), count: snapshot.subagents.length, sha256: jsonHash(snapshot.subagents) },
     provider_files: runtimeConfigFiles.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
-    pi_extensions: provider === "pi"
-      ? runtimeConfigFiles
-        .filter((f) => f.path.startsWith(".pi/agent/extensions/"))
-        .map((f) => ({ path: f.path, sha256: f.content_sha256 }))
-      : [],
+    pi_extensions: piExtensionInjection.injected,
+    pi_extensions_skipped: piExtensionInjection.skipped,
     provider_gateway_routed: runtimeGatewayRouted,
     system_tools: controlToolNames,
     disabled_system_tools: disabledControlToolNames,
@@ -1134,10 +1135,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     workspaceFiles[SHARED_ASSETS_WORKSPACE_CATALOG] = `${JSON.stringify(sharedAssetCatalog, null, 2)}\n`;
   }
   for (const file of runtimeConfigFiles) {
+    if (file.path.startsWith(".pi/agent/extensions/")) continue;
     const target = provider === "pi" && file.path.startsWith(".pi/")
       ? `/workspace/.deepsonar-home/${file.path}`
       : `/workspace/${file.path}`;
     workspaceFiles[target] = file.content;
+  }
+  for (const file of piExtensionInjection.files) {
+    workspaceFiles[`/workspace/.deepsonar-home/${file.path}`] = file.content;
   }
 
   const runtimeImage = snapshot.runtime_image?.image_ref;
@@ -1570,11 +1575,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       commands: snapshot.commands as never,
       mcps: mcps as never,
       subAgents: snapshot.subagents as never,
-      piExtensions: provider === "pi"
-        ? runtimeConfigFiles
-          .filter((file) => file.path.startsWith(".pi/agent/extensions/"))
-          .map((file) => `/workspace/.deepsonar-home/${file.path}`)
-        : [],
+      piExtensions: piExtensionInjection.paths,
       workspaceFiles,
       semanticToolEvents: {},
       onSemanticEvent,

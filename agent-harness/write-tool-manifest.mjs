@@ -34,6 +34,17 @@ for (const [name, entry] of Object.entries(config.downloads)) {
 for (const [name, entry] of Object.entries(config.managed ?? {})) {
   if (enabled(entry)) tools.push({ name, ...entry, toolsets: undefined });
 }
+for (const [name, entry] of Object.entries(config.piExtensions ?? {})) {
+  if (enabled(entry)) tools.push({
+    name,
+    source: "npm",
+    version: entry.version,
+    license: entry.license,
+    capabilities: entry.capabilities,
+    pi_extension: true,
+    compatible_image_keys: entry.compatible_image_keys,
+  });
+}
 const manifest = {
   contract: config.contract,
   image_key: config.toolsets[toolset].imageKey,

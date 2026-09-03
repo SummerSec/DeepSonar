@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
+import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools, validatePiExtensionIds } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
@@ -72,6 +72,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     runtime_knobs: z.unknown().optional(),
     credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
+    pi_extensions: z.array(z.string()).default([]),
   });
 
   async function validateRoleConfigBody(
@@ -112,6 +113,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         return `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
+    const piExtErr = validatePiExtensionIds(body.pi_extensions, body.agent_cli);
+    if (piExtErr) return piExtErr;
     if (!projectId && body.runtime_image_key) {
       const [image] = await db`
         SELECT ri.id, ri.official, ri.project_opt_in,
@@ -201,6 +204,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       platform_tools_json: body.platform_tools as never,
       sandbox_limits_json: parseSandboxLimitsOverride(body.sandbox_limits) as never,
       runtime_knobs_json: parseRuntimeKnobOverride(body.runtime_knobs) as never,
+      pi_extensions_json: body.pi_extensions as never,
       instructions_markdown: body.instructions_markdown ?? null,
       runtime_image_key: projectId ? null : body.runtime_image_key ?? null,
     };

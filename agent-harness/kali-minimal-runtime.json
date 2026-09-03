@@ -49,6 +49,18 @@
     "@deepseek-ai/dsh-code-runtime-worker-thread": { "version": "0.1.1-rc.2", "integrity": "sha512-wE+6x4yGsyg4kntVQFOcb5PiAg2Wb3gs1UNY7SHWC7WOcWCAbREZRfqaoAAxO7AZuqlFhBou7wWc6dZqtGENkw==", "license": "MIT", "capabilities": ["code-runtime", "ptc"] },
     "@deepseek-ai/dsh-compaction-basic": { "version": "0.1.1-rc.2", "integrity": "sha512-qNg4JqWlZ5NvlFmaVZtJ+RuvJUtYFgdS7xXlhhBGSHbMZi4sHgB63Mo+9Y0Rl8glLSxLjo2reMMPlECN+duUuw==", "license": "MIT", "capabilities": ["compaction"] }
   },
+  "piExtensions": {
+    "pi-web-access": {
+      "package": "pi-web-access",
+      "version": "0.27.0",
+      "integrity": "sha512-D/z7ILwbnJeDjzFPC1j3G1OvO+j2vl2H13ByYcH5FLbrJ1yBdbBwTBcl96Bbt2NEqH5vdmoZ/EpbDG8BTF9W7Q==",
+      "license": "MIT",
+      "capabilities": ["web-search", "content-extract", "url-fetch"],
+      "requires_egress": true,
+      "compatible_image_keys": ["deepsonar-kali-minimal"],
+      "entry": "index.ts"
+    }
+  },
   "downloads": {
     "node": {
       "version": "22.23.2",

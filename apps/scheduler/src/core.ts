@@ -1590,8 +1590,8 @@ export function validateConfigFilePath(agentCli: string, p: string): string | nu
   if (leftover) return leftover;
   const allowed = CONFIG_FILE_PATHS[agentCli];
   if (!allowed) return `未知 agent_cli: ${agentCli}`;
-  if (agentCli === "pi" && /^\.pi\/agent\/extensions\/[A-Za-z0-9._-]+\.(?:cjs|js|mjs|ts)$/u.test(norm)) {
-    return null;
+  if (agentCli === "pi" && /^\.pi\/agent\/extensions\//u.test(norm)) {
+    return "Pi 扩展只能通过 RoleConfig.pi_extensions 声明已注册扩展，不能上传扩展源码";
   }
   if (norm !== allowed) return `该 CLI 首期只允许固定配置文件：${allowed}`;
   return null;

@@ -18,6 +18,7 @@ const manifest = {
     ...Object.entries(config.apt).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "debian:bookworm", version: entry.version, license: entry.license, capabilities: entry.capabilities })),
     ...Object.entries(config.npm).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "npm", version: entry.version, license: entry.license, capabilities: entry.capabilities, ...(entry.agent_cli ? { agent_cli: entry.agent_cli, compatible_image_keys: entry.compatible_image_keys } : {}) })),
     ...Object.entries(config.downloads).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "download", version: entry.version, license: entry.license, capabilities: entry.capabilities, assets: entry.assets })),
+    ...Object.entries(config.piExtensions ?? {}).filter(([, entry]) => enabled(entry)).map(([name, entry]) => ({ name, source: "npm", version: entry.version, license: entry.license, capabilities: entry.capabilities, pi_extension: true, compatible_image_keys: entry.compatible_image_keys })),
   ],
 };
 manifest.sha256 = `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
@@ -35,6 +36,9 @@ export default {
   run: [
     `apt-get update && apt-get install -y --no-install-recommends ${aptPackages.join(" ")} && rm -rf /var/lib/apt/lists/*`,
     `npm install -g ${npmPackages.join(" ")} && npm cache clean --force`,
+    ...Object.entries(config.piExtensions ?? {}).filter(([, entry]) => enabled(entry)).map(([, entry]) =>
+      `mkdir -p /opt/deepsonar/pi-extensions && test "$(npm view ${entry.package}@${entry.version} dist.integrity)" = "${entry.integrity}" && npm install --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions ${entry.package}@${entry.version} && npm cache clean --force`
+    ),
     `mkdir -p /opt/deepsonar && node -e 'require("node:fs").writeFileSync("/opt/deepsonar/tool-manifest.json", Buffer.from(process.argv[1], "base64"))' '${Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`).toString("base64")}'`,
   ],
   workdir: "/workspace",

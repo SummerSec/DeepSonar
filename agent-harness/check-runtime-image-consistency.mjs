@@ -292,6 +292,22 @@ expect(dockerfile.includes("ARG PI_CODING_AGENT_VERSION=0.84.4") && dockerfile.i
 expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=0.84.4") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
 expect(dockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w==") && dockerfile.includes(piIntegrityCheck), "Pi Coding Agent integrity must be verified during the base image build");
 expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w==") && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
+const sharedPiExtensions = readFileSync(new URL("../packages/shared-types/src/pi-extensions.ts", import.meta.url), "utf8");
+const basePiWeb = config.piExtensions?.["pi-web-access"];
+const kaliPiWeb = kaliConfig.piExtensions?.["pi-web-access"];
+expect(basePiWeb?.version === "0.27.0" && kaliPiWeb?.version === "0.27.0", "pi-web-access version must stay pinned");
+expect(basePiWeb?.integrity === "sha512-D/z7ILwbnJeDjzFPC1j3G1OvO+j2vl2H13ByYcH5FLbrJ1yBdbBwTBcl96Bbt2NEqH5vdmoZ/EpbDG8BTF9W7Q==", "pi-web-access integrity drift");
+expect(basePiWeb?.integrity === kaliPiWeb?.integrity, "base/kali pi-web-access integrity must match");
+expect(Array.isArray(basePiWeb?.toolsets) && basePiWeb.toolsets.length === 1 && basePiWeb.toolsets[0] === "audit", "pi-web-access preinstall is audit-only to stay inside the base size budget");
+expect(Array.isArray(basePiWeb?.compatible_image_keys) && basePiWeb.compatible_image_keys.includes("deepsonar-audit") && !basePiWeb.compatible_image_keys.includes("deepsonar-base"), "pi-web-access stays off the size-gated base image");
+expect(Array.isArray(kaliPiWeb?.compatible_image_keys) && kaliPiWeb.compatible_image_keys.includes("deepsonar-kali-minimal"), "pi-web-access Kali compatibility missing");
+expect(dockerfile.includes('if [ "$TOOLSET" != audit ]; then exit 0; fi'), "Dockerfile.agent must skip Pi extension preinstall on TOOLSET=base");
+expect(sharedPiExtensions.includes('id: "pi-web-access"') && sharedPiExtensions.includes(basePiWeb.version) && sharedPiExtensions.includes(basePiWeb.integrity), "shared-types Pi extension registry drifted from runtime-images.json");
+expect(dockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${basePiWeb.version}`) && dockerfile.includes(`ARG PI_WEB_ACCESS_INTEGRITY=${basePiWeb.integrity}`), "Dockerfile.agent must pin pi-web-access");
+expect(kaliDockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${kaliPiWeb.version}`) && kaliDockerfile.includes(`ARG PI_WEB_ACCESS_INTEGRITY=${kaliPiWeb.integrity}`), "Kali Dockerfile must pin pi-web-access");
+expect(dockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && dockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Dockerfile.agent must integrity-check and prefix-install Pi extensions");
+expect(kaliDockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && kaliDockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Kali Dockerfile must integrity-check and prefix-install Pi extensions");
+expect(localDefinition.includes("piExtensions") && localDefinition.includes("/opt/deepsonar/pi-extensions"), "image.mjs must preinstall registered Pi extensions to the fixed prefix");
 const aptArgs = {
   git: "GIT", python3: "PYTHON", "ca-certificates": "CA_CERTIFICATES",
   curl: "CURL", ripgrep: "RIPGREP", jq: "JQ", file: "FILE", unzip: "UNZIP", "xz-utils": "XZ", binutils: "BINUTILS",
