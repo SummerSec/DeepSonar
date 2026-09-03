@@ -2729,6 +2729,12 @@ input[type="password"]::-webkit-textfield-decoration-container {
 .intent-launch-permission-icon { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid rgb(237 106 127 / .28); border-radius: 9px; color: #ed6a7f; background: rgb(237 106 127 / .07); }
 .intent-launch-permission strong { color: #ecafb8; font-size: 12px; font-weight: 600; }
 .intent-launch-permission p { max-width: 600px; margin-top: 4px; color: #a58289; font-size: 11px; line-height: 1.6; }
+.intent-launch-project-policy { position: relative; z-index: 1; display: grid; gap: 8px; margin: 14px 0 0; padding: 12px 0 0; border: 0; border-top: 1px solid #242e31; }
+.intent-launch-project-policy legend { color: #657176; font: 500 9px var(--font-mono); }
+.intent-launch-project-policy label { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid #2c373b; border-radius: 8px; cursor: pointer; }
+.intent-launch-project-policy label.is-selected { border-color: rgb(var(--accent-rgb) / .5); background: rgb(var(--accent-rgb) / .07); }
+.intent-launch-project-policy strong { display: block; color: #e3e9e8; font-size: 12px; }
+.intent-launch-project-policy small { display: block; margin-top: 3px; color: #586469; font-size: 10px; }
 .intent-launch-inline-link { margin-top: 8px; font-size: 10px; }
 .task-handoff-overlay { position: fixed; right: 24px; bottom: 24px; z-index: 45; display: flex; align-items: center; gap: 12px; width: min(460px, calc(100vw - 48px)); padding: 14px 16px; border: 1px solid rgb(var(--accent-rgb) / .34); border-radius: 10px; color: #c8d8d2; background: rgba(8, 14, 13, .96); box-shadow: 0 14px 44px rgba(0,0,0,.34), 0 0 0 3px rgb(var(--accent-rgb) / .045); pointer-events: none; animation: intent-handoff-in 360ms var(--ease-snap) both; }
 .task-handoff-mark { display: grid; width: 35px; height: 35px; flex: none; place-items: center; border: 1px solid rgb(var(--accent-rgb) / .42); border-radius: 9px; color: var(--accent); background: rgb(var(--accent-rgb) / .08); }

@@ -10,6 +10,7 @@ export const NEW_PROJECT = "__new_project__" as const;
 export const LAST_PROJECT_STORAGE_KEY = "deepsonar:last-project-id";
 export const QUICK_START_INTENT_PARAM = "intent";
 export const QUICK_START_INTENT_VALUE = "new-project";
+export const QUICK_START_RAIL_INTENT_VALUE = "quick-start";
 
 export type NetworkOverride = "inherit" | "allow" | "deny";
 
@@ -23,15 +24,25 @@ export function hasNewProjectIntent(search: string | URLSearchParams): boolean {
   return params.get(QUICK_START_INTENT_PARAM) === QUICK_START_INTENT_VALUE;
 }
 
-export function newProjectIntentSearch(search: string | URLSearchParams, enabled: boolean): string {
+function intentSearch(search: string | URLSearchParams, intent: string | null): string {
   const params = typeof search === "string" ? new URLSearchParams(search) : new URLSearchParams(search);
-  if (enabled) {
-    params.set(QUICK_START_INTENT_PARAM, QUICK_START_INTENT_VALUE);
-  } else {
-    params.delete(QUICK_START_INTENT_PARAM);
-  }
+  if (intent) params.set(QUICK_START_INTENT_PARAM, intent);
+  else params.delete(QUICK_START_INTENT_PARAM);
   const query = params.toString();
   return query ? `?${query}` : "";
+}
+
+export function newProjectIntentSearch(search: string | URLSearchParams, enabled: boolean): string {
+  return intentSearch(search, enabled ? QUICK_START_INTENT_VALUE : null);
+}
+
+export function hasQuickStartRailIntent(search: string | URLSearchParams): boolean {
+  const params = typeof search === "string" ? new URLSearchParams(search) : search;
+  return params.get(QUICK_START_INTENT_PARAM) === QUICK_START_RAIL_INTENT_VALUE;
+}
+
+export function quickStartRailIntentSearch(search: string | URLSearchParams, enabled: boolean): string {
+  return intentSearch(search, enabled ? QUICK_START_RAIL_INTENT_VALUE : null);
 }
 
 export function hasActiveProjects(projects: readonly Pick<Project, "status">[]): boolean {
@@ -50,10 +61,15 @@ export interface QuickStartVisibilityInput {
  * successful project-list response; an empty array caused by a load failure
  * must not be mistaken for an empty account.
  */
-export function shouldShowQuickStartRail(input: QuickStartVisibilityInput): boolean {
+export function shouldShowNewProjectForm(input: QuickStartVisibilityInput): boolean {
   if (input.forced) return true;
   if (!input.loaded || input.loadError) return false;
   return !hasActiveProjects(input.projects);
+}
+
+/** Quick-start is optional. It never hijacks 「新建项目」 or empty-account cold start. */
+export function shouldShowQuickStartRail(input: QuickStartVisibilityInput): boolean {
+  return input.forced;
 }
 
 export const QUICK_START_PRESETS = [
@@ -122,6 +138,14 @@ export function networkOverrideLabel(value: NetworkOverride): string {
   if (value === "allow") return "允许出网";
   if (value === "deny") return "禁止出网";
   return "继承项目默认";
+}
+
+export function hasProjectWritePermission(status: AuthStatus | null, me: AuthMe | null): boolean {
+  if (status && !status.auth_required) return true;
+  if (!me?.authenticated || !me.actor) return false;
+  if (me.actor.role === "admin" || me.actor.role === "operator") return true;
+  const scopes = new Set(me.actor.scopes);
+  return scopes.has("admin") || scopes.has("projects:write");
 }
 
 export function hasQuickStartWritePermission(status: AuthStatus | null, me: AuthMe | null): boolean {
@@ -232,6 +256,31 @@ export function quickStartTaskPayload(input: Pick<QuickStartInput, "title" | "go
     content: input.goal.trim(),
     ...(allow_egress === undefined ? {} : { allow_egress }),
   };
+}
+
+export interface CreateProjectSpaceInput {
+  name: string;
+  description?: string;
+  imageStrategy?: ProjectImageStrategy;
+}
+
+export type CreateProjectSpaceResult =
+  | { kind: "invalid"; message: string }
+  | { kind: "success"; project: Project };
+
+/** Create a project space without a canvas, Hub job, or task preflight. */
+export async function createProjectSpace(
+  input: CreateProjectSpaceInput,
+  client: Pick<QuickStartApi, "createProject">,
+): Promise<CreateProjectSpaceResult> {
+  const name = input.name.trim();
+  if (!name) return { kind: "invalid", message: "请填写项目名称。" };
+  const project = await client.createProject({
+    name,
+    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    image_strategy: input.imageStrategy ?? "inherit_global",
+  });
+  return { kind: "success", project };
 }
 
 /**

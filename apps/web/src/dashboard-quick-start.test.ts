@@ -2,17 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AuthMe, AuthStatus, Project } from "./api.js";
 import {
+  createProjectSpace,
   hasActiveProjects,
+  hasProjectWritePermission,
   hasQuickStartWritePermission,
   hasNewProjectIntent,
+  hasQuickStartRailIntent,
   isPermissionError,
   networkOverrideValue,
   newProjectIntentSearch,
+  quickStartRailIntentSearch,
   quickStartNetworkQuery,
   quickStartTaskPayload,
   resolveReadinessFix,
   readinessFailures,
   runQuickStart,
+  shouldShowNewProjectForm,
   shouldShowQuickStartRail,
   type QuickStartApi,
 } from "./dashboard-quick-start.js";
@@ -63,19 +68,39 @@ test("new-project intent query is deterministic and preserves unrelated params",
   assert.equal(hasNewProjectIntent(search), true);
   assert.equal(newProjectIntentSearch(search, false), "?source=projects");
   assert.equal(hasNewProjectIntent("?source=projects"), false);
+  assert.equal(quickStartRailIntentSearch("", true), "?intent=quick-start");
+  assert.equal(hasQuickStartRailIntent("?intent=quick-start"), true);
+  assert.equal(hasQuickStartRailIntent("?intent=new-project"), false);
 });
 
-test("quick-start rail uses the full project list: explicit intent overrides load error, implicit cold-start does not", () => {
+test("creating a project is the cold-start path; quick-start rail is only explicit", () => {
   const active = [{ status: "active" as const }];
   const archived = [{ status: "archived" as const }];
   assert.equal(hasActiveProjects(active), true);
   assert.equal(hasActiveProjects(archived), false);
-  assert.equal(shouldShowQuickStartRail({ projects: active, loaded: true, loadError: null, forced: false }), false);
-  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: true, loadError: null, forced: false }), true);
-  assert.equal(shouldShowQuickStartRail({ projects: archived, loaded: true, loadError: null, forced: false }), true);
-  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: false, loadError: null, forced: false }), false);
-  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: true, loadError: new Error("offline"), forced: false }), false);
+  assert.equal(shouldShowNewProjectForm({ projects: active, loaded: true, loadError: null, forced: false }), false);
+  assert.equal(shouldShowNewProjectForm({ projects: [], loaded: true, loadError: null, forced: false }), true);
+  assert.equal(shouldShowNewProjectForm({ projects: archived, loaded: true, loadError: null, forced: false }), true);
+  assert.equal(shouldShowNewProjectForm({ projects: [], loaded: false, loadError: null, forced: false }), false);
+  assert.equal(shouldShowNewProjectForm({ projects: [], loaded: true, loadError: new Error("offline"), forced: false }), false);
+  assert.equal(shouldShowNewProjectForm({ projects: active, loaded: true, loadError: new Error("stale"), forced: true }), true);
+  assert.equal(shouldShowQuickStartRail({ projects: [], loaded: true, loadError: null, forced: false }), false);
   assert.equal(shouldShowQuickStartRail({ projects: active, loaded: true, loadError: new Error("stale"), forced: true }), true);
+});
+
+test("empty project space creates a project without readiness or a task", async () => {
+  const calls: string[] = [];
+  const client: QuickStartApi = {
+    createProject: async (input) => { calls.push(`project:${input.name}:${input.image_strategy}`); return project; },
+    readiness: async () => { calls.push("readiness"); return readiness(true); },
+    createTask: async () => { calls.push("task"); return { canvas_id: "canvas", job: { id: "job", status: "pending" } }; },
+  };
+  const invalid = await createProjectSpace({ name: "  " }, client);
+  assert.deepEqual(invalid, { kind: "invalid", message: "请填写项目名称。" });
+  assert.deepEqual(calls, []);
+  const created = await createProjectSpace({ name: " 空项目 ", description: "边界", imageStrategy: "project_managed" }, client);
+  assert.equal(created.kind, "success");
+  assert.deepEqual(calls, ["project:空项目:project_managed"]);
 });
 
 test("empty quick-start input requires an inline project before any API call", async () => {
@@ -160,9 +185,13 @@ test("readiness failure exposes repair links and prevents task creation", async 
   assert.deepEqual(calls, ["project", "readiness"]);
 });
 
-test("permission denial recognizes viewer and HTTP 403 responses", () => {
+test("permission denial recognizes viewer, project-only tokens, and HTTP 403 responses", () => {
   assert.equal(hasQuickStartWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:read", "tasks:read"] })), false);
+  assert.equal(hasProjectWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:read"] })), false);
+  assert.equal(hasProjectWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:write"] })), true);
+  assert.equal(hasQuickStartWritePermission(authStatus, actor({ role: "viewer", scopes: ["projects:write"] })), false);
   assert.equal(hasQuickStartWritePermission(authStatus, actor({ role: "operator", scopes: [] })), true);
+  assert.equal(hasProjectWritePermission(authStatus, actor({ role: "operator", scopes: [] })), true);
   assert.equal(hasQuickStartWritePermission({ ...authStatus, auth_required: false }, null), true);
   assert.equal(isPermissionError(new Error("POST /projects -> 403: FORBIDDEN")), true);
   assert.equal(isPermissionError(new Error("GET /readiness -> 500")), false);
@@ -222,4 +251,17 @@ test("IntentLaunchRail surfaces local image identity and a prepare link", async 
   assert.match(rail, /去市场准备/);
   assert.match(rail, /runtime_image\.digest/);
   assert.match(rail, /runtime_image\.version/);
+});
+
+test("ProjectsPage creates an empty project without hijacking new-project into a task rail", async () => {
+  const { readFileSync } = await import("node:fs");
+  const page = readFileSync(new URL("./pages/ProjectsPage.tsx", import.meta.url), "utf8");
+  const form = readFileSync(new URL("./components/NewProjectForm.tsx", import.meta.url), "utf8");
+  assert.match(page, /NewProjectForm/);
+  assert.match(page, /shouldShowNewProjectForm/);
+  assert.match(page, /quickStartRailIntentSearch/);
+  assert.match(form, /createProjectSpace/);
+  assert.match(form, /navigate\(`\/projects\/\$\{result\.project\.id\}\/tasks`\)/);
+  assert.match(form, /不会创建任务、画布或 Job/);
+  assert.doesNotMatch(form, /createTask/);
 });

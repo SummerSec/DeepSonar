@@ -47,14 +47,12 @@ export function isRuntimeImagePullBusyError(message: string): boolean {
 }
 
 export function projectBindingDeferredNotice(imageName: string): string {
-  return `正在后台准备 ${imageName}；绑定尚未保存，拉完后再启用`;
+  return `已加入拉取队列：${imageName}；绑定尚未保存，该项就绪后会自动启用`;
 }
 
-export function projectBindingBusyNotice(task: RuntimeImagePullTask | null): string {
-  if (!task || task.status === "idle") {
-    return "当前已有镜像拉取任务在运行，请等待完成后再启用";
-  }
-  return `当前拉取任务未完成（${pullPurposeLabel(task.purpose)} ${task.completed}/${task.total}），请等待完成后再启用`;
+export function projectBindingQueuedNotice(imageName: string, task: RuntimeImagePullTask | null): string {
+  if (!task || task.status === "idle") return `已加入拉取队列：${imageName}`;
+  return `已加入拉取队列：${imageName}（${task.completed}/${task.total}）`;
 }
 
 export function registryChannelDeferredNotice(channelLabel: string, total: number): string {

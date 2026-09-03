@@ -26,8 +26,7 @@ import {
   formatPullElapsed,
   isRegistryChannelSwitchLocked,
   isRuntimeImagePullBusyError,
-  projectBindingBusyNotice,
-  projectBindingDeferredNotice,
+  projectBindingQueuedNotice,
   pullHeadline,
   pullItemStatusLabel,
   pullPurposeLabel,
@@ -279,6 +278,13 @@ export function RuntimeImagesPage() {
   const [projectVersionPick, setProjectVersionPick] = useState<Record<string, string>>({});
   const marketplaceRequestGeneration = useRef(0);
   const autoPersistedPullTaskId = useRef<string | null>(null);
+  const pendingProjectBinds = useRef(new Map<string, {
+    image: RuntimeImageSummary;
+    enabled: boolean;
+    versionId?: string | null;
+    pinPolicy?: "follow" | "hold";
+  }>());
+  const retryingProjectBinds = useRef(new Set<string>());
 
   const canAdoptLocal = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:approve")));
   const canManageCatalog = Boolean(me && (!me.auth_required || me.actor?.role === "admin" || me.actor?.scopes.includes("admin") || me.actor?.scopes.includes("images:manage") || me.actor?.scopes.includes("images:approve")));
@@ -659,10 +665,12 @@ export function RuntimeImagesPage() {
     try {
       const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId, pinPolicy);
       if ("saved" in result && result.saved === false) {
+        pendingProjectBinds.current.set(image.id, { image, enabled, versionId, pinPolicy });
         setPullStatus(result.task);
-        setNotice(projectBindingDeferredNotice(image.name));
+        setNotice(projectBindingQueuedNotice(image.name, result.task));
         return;
       }
+      pendingProjectBinds.current.delete(image.id);
       await reload();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -670,9 +678,10 @@ export function RuntimeImagesPage() {
         try {
           const task = await api.runtimeImagesPullStatus();
           setPullStatus(task);
-          setError(projectBindingBusyNotice(task));
+          pendingProjectBinds.current.set(image.id, { image, enabled, versionId, pinPolicy });
+          setNotice(projectBindingQueuedNotice(image.name, task));
         } catch {
-          setError(projectBindingBusyNotice(null));
+          setNotice(projectBindingQueuedNotice(image.name, null));
         }
         return;
       }
@@ -681,6 +690,42 @@ export function RuntimeImagesPage() {
       setBusy(null);
     }
   };
+
+  useEffect(() => {
+    if (!projectId || !pullStatus) return;
+    for (const [imageId, pending] of pendingProjectBinds.current) {
+      const item = pullStatus.items.find((row) => row.image_key === pending.image.image_key);
+      if (item?.status === "failed") {
+        pendingProjectBinds.current.delete(imageId);
+        retryingProjectBinds.current.delete(imageId);
+        setError(`${pending.image.name} 拉取失败${item.error ? `：${item.error}` : ""}`);
+        continue;
+      }
+      if (item?.status !== "succeeded" || retryingProjectBinds.current.has(imageId)) continue;
+      retryingProjectBinds.current.add(imageId);
+      void api.bindProjectRuntimeImage(projectId, pending.image.id, pending.enabled, pending.versionId, pending.pinPolicy)
+        .then(async (result) => {
+          if ("saved" in result && result.saved === false) {
+            setPullStatus(result.task);
+            return;
+          }
+          pendingProjectBinds.current.delete(imageId);
+          setNotice(`${pending.image.name} 已启用`);
+          await reload();
+        })
+        .catch((cause) => {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          if (isRuntimeImagePullBusyError(message)) {
+            setNotice(projectBindingQueuedNotice(pending.image.name, pullStatus));
+            return;
+          }
+          setError(message);
+        })
+        .finally(() => {
+          retryingProjectBinds.current.delete(imageId);
+        });
+    }
+  }, [projectId, pullStatus?.task_id, pullStatus?.completed, pullStatus?.status]);
 
   const detectLocal = async (image: RuntimeImageSummary) => {
     const imageRef = (localRefs[image.id] ?? "").trim();
@@ -892,7 +937,7 @@ export function RuntimeImagesPage() {
                 <div className="mt-1 text-sm text-zinc-200">{pullHeadline(pullStatus)}</div>
                 <p className="mt-1 text-[11px] leading-5 text-zinc-500">
                   {projectId
-                    ? "本机没有对应 digest 时不会写入项目绑定。拉完后再点启用。"
+                    ? "本机没有对应 digest 时不会写入项目绑定。该项就绪后会自动保存，不必等队列里其它镜像。"
                     : "全局单任务拉取；失败项会保留错误原因。"}
                   {pullStatus.purpose ? ` 来源：${pullPurposeLabel(pullStatus.purpose)}` : ""}
                   {formatPullElapsed(pullStatus.started_at, pullStatus.finished_at) ? ` · 已用 ${formatPullElapsed(pullStatus.started_at, pullStatus.finished_at)}` : ""}
@@ -909,7 +954,7 @@ export function RuntimeImagesPage() {
                   <span className={`max-w-[58%] break-words text-right ${item.status === "failed" ? "text-red-300" : item.status === "succeeded" ? "text-emerald-300" : "text-zinc-500"}`}>
                     {item.status === "failed"
                       ? (item.error || "失败：Scheduler 未返回具体原因")
-                      : pullItemStatusLabel(item.status)}
+                      : `${pullItemStatusLabel(item.status)}${formatPullElapsed(item.started_at ?? null, item.finished_at ?? null) ? ` · ${formatPullElapsed(item.started_at ?? null, item.finished_at ?? null)}` : ""}`}
                   </span>
                 </div>
               ))}

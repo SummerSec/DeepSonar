@@ -97,6 +97,8 @@ export interface RuntimeImagePullItem {
   image_ref: string;
   status: "queued" | "running" | "succeeded" | "failed";
   error: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface RuntimeImagePullTask {
@@ -548,6 +550,7 @@ export async function assertFrozenRuntimeImageLocal(
   }
 }
 
+/** Retained for route fallbacks. Project enablement and admin pull now enqueue instead of throwing. */
 export class RuntimeImagePreparationBusyError extends Error {
   readonly code = "runtime_image_preparation_busy" as const;
   readonly statusCode = 409 as const;
@@ -1803,7 +1806,9 @@ export async function runRuntimeImagePreparationTask(
     task.status = "running";
     task.started_at = new Date().toISOString();
     for (const item of task.items) {
+      if (item.status !== "queued") continue;
       item.status = "running";
+      item.started_at = new Date().toISOString();
       try {
         await prepare(item.image_ref);
         item.status = "succeeded";
@@ -1811,6 +1816,7 @@ export async function runRuntimeImagePreparationTask(
         item.status = "failed";
         item.error = sanitizeRuntimeImageError(error) || "runtime image preparation failed";
       }
+      item.finished_at = new Date().toISOString();
       task.completed += 1;
     }
     task.status = task.items.some((item) => item.status === "failed") ? "failed" : "succeeded";
@@ -1834,24 +1840,60 @@ export async function runRuntimeImagePreparationTask(
   }
 }
 
+function uniqueRuntimeImagePreparationRefs(
+  refs: readonly { image_key: string; image_ref: string }[],
+): Array<{ image_key: string; image_ref: string }> {
+  const seen = new Set<string>();
+  const unique: Array<{ image_key: string; image_ref: string }> = [];
+  for (const item of refs) {
+    const digest = immutableDigest(item.image_ref);
+    const key = digest ?? item.image_ref;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ image_key: item.image_key, image_ref: item.image_ref });
+  }
+  return unique;
+}
+
+export function enqueueRuntimeImagePreparation(
+  task: RuntimeImagePullTask,
+  refs: readonly { image_key: string; image_ref: string }[],
+): RuntimeImagePullTask {
+  for (const item of uniqueRuntimeImagePreparationRefs(refs)) {
+    if (runtimeImagePreparationCovers(task, [item])) continue;
+    task.items.push({
+      image_key: item.image_key,
+      image_ref: item.image_ref,
+      status: "queued",
+      error: null,
+      started_at: null,
+      finished_at: null,
+    });
+  }
+  task.total = task.items.length;
+  return task;
+}
+
 function startRuntimeImagePreparationTask(
   refs: readonly { image_key: string; image_ref: string }[],
   purpose: string,
   prepare: (imageRef: string) => Promise<void> = prepareRuntimeImage,
 ): RuntimeImagePullTask {
+  const uniqueRefs = uniqueRuntimeImagePreparationRefs(refs);
   if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
-    if (runtimeImagePreparationCovers(runtimeImagePullTask, refs)) return runtimeImagePullTask;
+    if (runtimeImagePreparationCovers(runtimeImagePullTask, uniqueRefs)) return runtimeImagePullTask;
     if (!canPreemptRuntimeImagePreparation(runtimeImagePullTask.purpose, purpose)) {
-      if (isRegistryChannelPreparationPurpose(purpose)) return runtimeImagePullTask;
-      throw new RuntimeImagePreparationBusyError();
+      return enqueueRuntimeImagePreparation(runtimeImagePullTask, uniqueRefs);
     }
   }
-  const items: RuntimeImagePullItem[] = [...new Map(refs.map((item) => [item.image_ref, {
+  const items: RuntimeImagePullItem[] = uniqueRefs.map((item) => ({
     image_key: item.image_key,
     image_ref: item.image_ref,
     status: "queued" as const,
     error: null,
-  }])).values()];
+    started_at: null,
+    finished_at: null,
+  }));
   const task: RuntimeImagePullTask = {
     task_id: createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24),
     purpose,

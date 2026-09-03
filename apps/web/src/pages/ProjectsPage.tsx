@@ -14,9 +14,13 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { IntentLaunchRail } from "../components/IntentLaunchRail";
+import { NewProjectForm } from "../components/NewProjectForm";
 import {
   hasNewProjectIntent,
+  hasQuickStartRailIntent,
   newProjectIntentSearch,
+  quickStartRailIntentSearch,
+  shouldShowNewProjectForm,
   shouldShowQuickStartRail,
 } from "../dashboard-quick-start";
 import {
@@ -72,26 +76,36 @@ export function ProjectsPage() {
   const activeCount = projects.filter((p) => p.status === "active").length;
   const planeCount = projects.filter((p) => p.plane_project_id).length;
   const explicitNewProject = hasNewProjectIntent(searchParams);
-  const showIntentRail = shouldShowQuickStartRail({
+  const explicitQuickStart = hasQuickStartRailIntent(searchParams);
+  const showNewProjectForm = shouldShowNewProjectForm({
     projects,
     loaded: !loading,
     loadError: error,
     forced: explicitNewProject,
+  }) && !explicitQuickStart;
+  const showIntentRail = shouldShowQuickStartRail({
+    projects,
+    loaded: !loading,
+    loadError: error,
+    forced: explicitQuickStart,
   });
 
   // Promote a successful cold-start into the same URL-backed intent used by
-  // the explicit button. This keeps the rail mounted after its first project
-  // is created, including readiness/task failures, without persisting drafts.
+  // the explicit 「新建项目」 button. Quick-start remains an optional overlay.
   useEffect(() => {
-    if (loading || error || explicitNewProject || activeCount > 0) return;
+    if (loading || error || explicitNewProject || explicitQuickStart || activeCount > 0) return;
     setSearchParams(newProjectIntentSearch(searchParams, true), { replace: true });
-  }, [activeCount, error, explicitNewProject, loading, searchParams, setSearchParams]);
+  }, [activeCount, error, explicitNewProject, explicitQuickStart, loading, searchParams, setSearchParams]);
 
   const openNewProjectIntent = () => {
     setSearchParams(newProjectIntentSearch(searchParams, true));
   };
 
-  const cancelNewProjectIntent = () => {
+  const openQuickStartIntent = () => {
+    setSearchParams(quickStartRailIntentSearch(searchParams, true));
+  };
+
+  const cancelWorkspaceIntent = () => {
     if (!activeCount) return;
     setSearchParams(newProjectIntentSearch(searchParams, false), { replace: true });
   };
@@ -123,19 +137,32 @@ export function ProjectsPage() {
         eyebrow="WORKSPACES"
         subtitle="一个项目承载稳定的代码边界、Agent 配置和长期证据；每次具体目标则作为独立任务进入同一条闭环。"
         actions={
-          <PrimaryButton onClick={openNewProjectIntent}>
-            <Plus size={15} weight="bold" />
-            新建项目
-          </PrimaryButton>
+          <div className="flex flex-wrap items-center gap-2">
+            <SecondaryButton type="button" onClick={openQuickStartIntent}>
+              <AirplaneTakeoff size={15} weight="bold" />
+              从一句目标开始
+            </SecondaryButton>
+            <PrimaryButton onClick={openNewProjectIntent}>
+              <Plus size={15} weight="bold" />
+              新建项目
+            </PrimaryButton>
+          </div>
         }
       />
 
+      {showNewProjectForm && (
+        <NewProjectForm
+          canCancel={activeCount > 0}
+          onCancel={cancelWorkspaceIntent}
+          onProjectCreated={handleProjectCreated}
+        />
+      )}
       {showIntentRail && (
         <IntentLaunchRail
           projects={projects}
-          forcedNewProject
+          forcedNewProject={false}
           canCancel={activeCount > 0}
-          onCancel={cancelNewProjectIntent}
+          onCancel={cancelWorkspaceIntent}
           onProjectCreated={handleProjectCreated}
         />
       )}
@@ -229,10 +256,10 @@ export function ProjectsPage() {
           hint={
             projects.length
               ? "试试调整搜索关键词或筛选条件。"
-              : "项目只定义长期边界；创建后你可以立即用自然语言下达第一项任务。"
+              : "项目只定义长期边界；创建后进入空的任务列表，再下达第一项任务。"
           }
           action={
-            showIntentRail ? undefined : query || statusFilter.length > 0 || sourceFilter.length > 0 ? (
+            showNewProjectForm || showIntentRail ? undefined : query || statusFilter.length > 0 || sourceFilter.length > 0 ? (
               <SecondaryButton
                 type="button"
                 onClick={() => {

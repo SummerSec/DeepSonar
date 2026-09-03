@@ -5,7 +5,7 @@ import {
   formatPullElapsed,
   isRegistryChannelSwitchLocked,
   isRuntimeImagePullBusyError,
-  projectBindingBusyNotice,
+  projectBindingQueuedNotice,
   projectBindingDeferredNotice,
   pullHeadline,
   pullItemStatusLabel,
@@ -24,22 +24,22 @@ test("pull purpose and item labels stay readable for project enablement", () => 
   assert.equal(shortImageRef("ghcr.io/summersec/deepsonar-openharmony-audit@sha256:0123456789abcdef"), "sha256:0123456789ab");
   assert.equal(
     projectBindingDeferredNotice("DeepSonar Chrome Audit"),
-    "正在后台准备 DeepSonar Chrome Audit；绑定尚未保存，拉完后再启用",
+    "已加入拉取队列：DeepSonar Chrome Audit；绑定尚未保存，该项就绪后会自动启用",
   );
 });
 
-test("busy errors point at the in-flight pull task instead of a blank 409", () => {
+test("busy errors are treated as queue progress, not a hard wait", () => {
   assert.equal(isRuntimeImagePullBusyError("PUT /projects/x/runtime-images/y -> 409: runtime_image_preparation_busy: already running"), true);
-  assert.equal(projectBindingBusyNotice({
+  assert.equal(projectBindingQueuedNotice("DeepSonar Kali", {
     task_id: "task",
     purpose: "project_binding:p:i",
     status: "running",
     started_at: "2026-08-18T16:00:00.000Z",
     finished_at: null,
-    total: 1,
+    total: 2,
     completed: 0,
     items: [],
-  }), "当前拉取任务未完成（项目启用 0/1），请等待完成后再启用");
+  }), "已加入拉取队列：DeepSonar Kali（0/2）");
   assert.equal(pullHeadline({
     task_id: "task",
     status: "running",
@@ -56,9 +56,10 @@ test("project runtime image page polls the shared pull-status panel", () => {
   const page = readFileSync(new URL("./pages/RuntimeImagesPage.tsx", import.meta.url), "utf8");
   assert.match(page, /api\.runtimeImagesPullStatus\(\)/);
   assert.match(page, /pullHeadline\(pullStatus\)/);
-  assert.match(page, /isRuntimeImagePullBusyError/);
+  assert.match(page, /projectBindingQueuedNotice/);
+  assert.match(page, /pendingProjectBinds/);
+  assert.doesNotMatch(page, /请等待完成后再启用/);
   assert.doesNotMatch(page, /if \(projectId\) return;\s*void api\.runtimeImagesPullStatus/);
-  assert.doesNotMatch(page, /!projectId && pullStatus/);
 });
 
 test("channel switch busy is progress, not a hard failure", () => {
