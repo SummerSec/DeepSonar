@@ -17,6 +17,25 @@ test("agent pack parser accepts a credential-free v1 package", () => {
   assert.equal(pack.config.agent_cli, "pi");
   assert.deepEqual(pack.config.credentials, []);
   assert.equal(pack.config.dsh_task_mode, "standard");
+  assert.deepEqual(pack.config.pi_extensions, []);
+});
+
+test("agent pack accepts registered Pi extensions and rejects unknown ids", () => {
+  const base = {
+    schema: AGENT_PACK_SCHEMA, name: "pi_web", title: "Pi web", description: "web access", publisher: "local", version: "1.0.0",
+  };
+  assert.deepEqual(
+    parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "pi", pi_extensions: ["pi-web-access"] } })).config.pi_extensions,
+    ["pi-web-access"],
+  );
+  assert.throws(
+    () => parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "pi", pi_extensions: ["not-registered"] } })),
+    /未注册/,
+  );
+  assert.throws(
+    () => parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "claude-code", pi_extensions: ["pi-web-access"] } })),
+    /仅 agent_cli=pi/,
+  );
 });
 
 test("agent pack validates DSH task mode", () => {

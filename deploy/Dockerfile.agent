@@ -32,6 +32,8 @@ ARG DSH_CODE_RUNTIME_WORKER_INTEGRITY=sha512-wE+6x4yGsyg4kntVQFOcb5PiAg2Wb3gs1UN
 ARG DSH_REASONING_SETTINGS_VERSION=0.3.0
 ARG DSH_REASONING_SETTINGS_COMMIT=5768999dbbbb5088fd27f89c85970fe2f7b2c5c6
 ARG DSH_REASONING_SETTINGS_SHA256=e583207774b2875c4f5914540a8df699b4f0f947b3e3a28722504237ba3dc6e3
+ARG PI_WEB_ACCESS_VERSION=0.27.0
+ARG PI_WEB_ACCESS_INTEGRITY=sha512-D/z7ILwbnJeDjzFPC1j3G1OvO+j2vl2H13ByYcH5FLbrJ1yBdbBwTBcl96Bbt2NEqH5vdmoZ/EpbDG8BTF9W7Q==
 
 RUN set -eu; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
@@ -90,6 +92,13 @@ RUN set -eu; \
   && npm list -g --depth=0 "dsh-reasoning-settings@${DSH_REASONING_SETTINGS_VERSION}" >/dev/null \
   && rm -f "$reasoning_archive" \
   && npm cache clean --force
+
+RUN set -eu; \
+  test "$(npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity)" = "$PI_WEB_ACCESS_INTEGRITY"; \
+  mkdir -p /opt/deepsonar/pi-extensions; \
+  npm install --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions \
+    pi-web-access@${PI_WEB_ACCESS_VERSION}; \
+  npm cache clean --force
 
 COPY agent-harness/runtime-images.json /opt/deepsonar/runtime-images.json
 COPY agent-harness/write-tool-manifest.mjs /opt/deepsonar/write-tool-manifest.mjs

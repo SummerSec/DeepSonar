@@ -2,7 +2,7 @@
  * 项目导入：预览 + create_new / merge_configuration
  */
 import { randomUUID } from "node:crypto";
-import { FactVerificationStatus, validateModuleSelectors } from "@deepsonar/shared-types";
+import { FactVerificationStatus, validateModuleSelectors, validatePiExtensionIds } from "@deepsonar/shared-types";
 import {
   projectCredentialMetadata,
   projectCredentialProvider,
@@ -375,6 +375,8 @@ async function importRoleConfigs(
     const moduleSelectors = rc.modules_json == null
       ? []
       : validateModuleSelectors(rc.modules_json, `RoleConfig ${roleName}.modules_json`);
+    const piExtErr = validatePiExtensionIds(rc.pi_extensions_json ?? [], agentCli);
+    if (piExtErr) throw new Error(`RoleConfig ${roleName}.pi_extensions_json: ${piExtErr}`);
     const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
     const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
 
@@ -398,6 +400,7 @@ async function importRoleConfigs(
         platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
         sandbox_limits_json: sandboxLimits as never,
         runtime_knobs_json: runtimeKnobs as never,
+        pi_extensions_json: ((rc.pi_extensions_json as unknown) ?? []) as never,
         instructions_markdown: (rc.instructions_markdown as string) ?? null,
         runtime_image_key: null,
         version: 1,

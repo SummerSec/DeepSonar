@@ -1,3 +1,4 @@
+import { validatePiExtensionIds } from "@deepsonar/shared-types";
 import type { AuthMe, RoleConfigInput } from "./api";
 
 export const AGENT_PACK_SCHEMA = "deepsonar.agentpack/v1";
@@ -38,11 +39,12 @@ const DEFAULT_CONFIG: RoleConfigInput = {
   runtime_knobs: {},
   credentials: [],
   config_files: [],
+  pi_extensions: [],
 };
 
 const CONFIG_KEYS = new Set([
   "agent_cli", "dsh_task_mode", "model", "context_window_tokens", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
-  "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "runtime_knobs", "credentials", "config_files",
+  "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "runtime_knobs", "credentials", "config_files", "pi_extensions",
 ]);
 const SECRET_FIELD = /^(?:api_?key|access_token|api_token|auth_token|refresh_token|client_secret|private_key|secret|password|authorization|cookie|credential(?:s|_id)?)$/i;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -171,6 +173,12 @@ export function parseAgentPack(input: string): AgentPack {
     runtime_image_key: nullableString(rawConfig.runtime_image_key, "config.runtime_image_key"),
     credentials: [],
     config_files: [],
+    pi_extensions: (() => {
+      const ids = stringArray(rawConfig.pi_extensions, "config.pi_extensions");
+      const error = validatePiExtensionIds(ids, agentCli);
+      if (error) throw new Error(error);
+      return ids;
+    })(),
   };
   return {
     schema: AGENT_PACK_SCHEMA,

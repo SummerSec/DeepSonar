@@ -21,6 +21,7 @@ import { sql } from "../../db.js";
 import { config } from "../../config.js";
 import { freezeAgentCliRuntime, requireAgentCliRuntimeAdapter } from "@deepsonar/runtime-sandbox";
 import { parseSandboxLimitsOverride, resolveEffectiveSandboxLimits } from "./sandbox-limits.js";
+import { freezePiExtensions } from "../../pi-extensions.js";
 import { parseRuntimeKnobOverride } from "../../runtime-knobs.js";
 import type {
   RoleRuntimeSnapshotApplication,
@@ -310,6 +311,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     context_window_tokens: contextWindowTokens,
     settings_config_json: snapshotSettingsConfig,
     config_files: providerSnapshot.config_files,
+    pi_extensions: freezePiExtensions(cfg?.pi_extensions_json, agentCli, runtimeImage.image_key),
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,
     runtime_image_key: runtimeImageKey,

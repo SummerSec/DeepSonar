@@ -129,6 +129,63 @@ test("凭据 agent_cli 与角色不一致但 Provider 兼容时按角色解析",
   );
   assert.equal(snapshot.agent_cli, "pi");
   assert.equal(snapshot.credential_id, "cred-local");
+  assert.deepEqual(snapshot.pi_extensions, []);
+});
+
+test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可解析", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "pi",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+    pi_extensions_json: ["pi-web-access"],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "pi",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({
+      projectConfig: { image_strategy: "project_managed" },
+      projectCfg,
+      globalCfg: undefined,
+      credential,
+    }),
+    "project-1",
+    "audit",
+  );
+  assert.equal(snapshot.pi_extensions.length, 1);
+  assert.equal(snapshot.pi_extensions[0]?.id, "pi-web-access");
+  assert.equal(snapshot.pi_extensions[0]?.workspace_path, ".pi/agent/extensions/pi-web-access.ts");
+
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: { image_strategy: "project_managed" },
+        projectCfg: { ...projectCfg, pi_extensions_json: ["not-registered"] },
+        globalCfg: undefined,
+        credential,
+      }),
+      "project-1",
+      "audit",
+    ),
+    (error: unknown) => error instanceof SnapshotUnresolvableError && /未注册/.test(error.message),
+  );
 });
 
 test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", async () => {

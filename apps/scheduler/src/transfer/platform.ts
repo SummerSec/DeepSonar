@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { validateModuleSelectors } from "@deepsonar/shared-types";
+import { validateModuleSelectors, validatePiExtensionIds } from "@deepsonar/shared-types";
 import {
   projectCredentialMetadata,
   projectCredentialProvider,
@@ -195,6 +195,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           platform_tools_json: rc.platform_tools_json,
           sandbox_limits_json: rc.sandbox_limits_json,
           runtime_knobs_json: rc.runtime_knobs_json,
+          pi_extensions_json: rc.pi_extensions_json ?? [],
           instructions_markdown: rc.instructions_markdown,
           runtime_image_key: rc.runtime_image_key,
           version: rc.version,
@@ -579,6 +580,8 @@ export async function applyPlatformImport(
         const moduleSelectors = rc.modules_json == null
           ? []
           : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
+        const piExtErr = validatePiExtensionIds(rc.pi_extensions_json ?? [], agentCli);
+        if (piExtErr) throw new Error(`全局 RoleConfig ${roleName}.pi_extensions_json: ${piExtErr}`);
         const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
         const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
         if (Object.keys(sandboxLimits).length > 0) {
@@ -606,6 +609,7 @@ export async function applyPlatformImport(
             platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
             sandbox_limits_json: sandboxLimits as never,
             runtime_knobs_json: runtimeKnobs as never,
+            pi_extensions_json: ((rc.pi_extensions_json as unknown) ?? []) as never,
             instructions_markdown: (rc.instructions_markdown as string) ?? null,
             runtime_image_key: (rc.runtime_image_key as string) ?? null,
             version: 1,

@@ -55,6 +55,17 @@ export interface RoleRuntimeSnapshotResult {
   /** Full provider settings profile frozen with the Job and materialized verbatim for the CLI. */
   settings_config_json: unknown;
   config_files: { path: string; content: string; content_sha256: string }[];
+  /** Registered Pi extensions frozen at Job create; empty for non-Pi CLIs. */
+  pi_extensions: {
+    id: string;
+    package: string;
+    version: string;
+    integrity: string;
+    entry_path: string;
+    workspace_path: string;
+    requires_egress: boolean;
+    compatible_image_keys: string[];
+  }[];
   role_config_id: string | null;
   role_config_version: number | null;
   runtime_image_key: string | null;

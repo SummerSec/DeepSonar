@@ -382,6 +382,21 @@ test("Pi 默认关闭扩展，受治理扩展才通过显式路径加载", async
     () => adapter.start({ ...context, piExtensions: ["/workspace/.pi/extensions/project.mjs"] }),
     /PI_EXTENSION_PATH_INVALID/,
   );
+  assert.throws(
+    () => adapter.start({ ...context, piExtensions: ["/opt/deepsonar/pi-extensions/node_modules/pi-web-access/index.ts"] }),
+    /PI_EXTENSION_PATH_INVALID/,
+  );
+  const web = fakeSandbox();
+  await adapter.start({
+    ...context,
+    host: web.host,
+    piExtensions: [
+      "/workspace/.deepsonar-home/.pi/agent/extensions/deepsonar-control.mjs",
+      "/workspace/.deepsonar-home/.pi/agent/extensions/pi-web-access.ts",
+    ],
+  });
+  assert.match(web.commands[0] ?? "", /--no-extensions/);
+  assert.match(web.commands[0] ?? "", /-e '\/workspace\/\.deepsonar-home\/\.pi\/agent\/extensions\/pi-web-access\.ts'/);
 });
 
 test("Pi RPC tool events consume official top-level fields and expose progress", () => {

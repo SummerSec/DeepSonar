@@ -2539,6 +2539,12 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                 },
               },
             },
+            pi_extensions: {
+              type: "array",
+              items: { type: "string", pattern: "^[a-z][a-z0-9-]{0,62}$" },
+              maxItems: 8,
+              description: "仅 agent_cli=pi：已注册的 Pi 扩展 id。Job 创建时冻结；启动仍带 --no-extensions，只对冻结路径追加 -e。未注册 id 拒绝。出网扩展服从任务 allow_egress。",
+            },
           },
         },
         ReadinessResponse: {

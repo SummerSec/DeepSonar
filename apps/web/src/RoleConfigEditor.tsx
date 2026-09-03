@@ -1,5 +1,6 @@
 import { CaretDown, Check, FloppyDisk, MagnifyingGlass, X } from "@phosphor-icons/react";
 import {
+  PI_EXTENSION_REGISTRY,
   allowedPlatformTools,
   requiredPlatformTools,
   type PlatformToolConfig,
@@ -68,6 +69,7 @@ interface ConfigForm {
   env_keys: string[];
   env_vars: Record<string, string>;
   config_files: Array<{ path: string; content: string }>;
+  pi_extensions: string[];
   instructions_markdown: string;
   runtime_image_key: string;
   sandbox_limits: {
@@ -97,6 +99,7 @@ const EMPTY: ConfigForm = {
   env_keys: [],
   env_vars: {},
   config_files: [],
+  pi_extensions: [],
   instructions_markdown: "",
   runtime_image_key: "",
   sandbox_limits: { cpu: "", memoryMiB: "", pidsLimit: "" },
@@ -121,6 +124,7 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     env_keys: cfg.env_keys ?? [],
     env_vars: cfg.env_vars_json ?? {},
     config_files: (cfg.config_files ?? []).map((file) => ({ path: file.path, content: file.content })),
+    pi_extensions: cfg.pi_extensions_json ?? [],
     instructions_markdown: cfg.instructions_markdown ?? "",
     runtime_image_key: cfg.runtime_image_key ?? "",
     sandbox_limits: {
@@ -414,6 +418,7 @@ export function RoleConfigEditor({
           ? [{ credential_id: form.credential_id, purpose: "llm" }]
           : [],
         config_files: form.config_files,
+        pi_extensions: form.agent_cli === "pi" ? form.pi_extensions : [],
       };
       setError(null);
       onSave(body);
@@ -523,6 +528,30 @@ export function RoleConfigEditor({
               })}
             </div>
           </div>
+          {form.agent_cli === "pi" && (
+            <div className="mt-4 border-t border-ink-700/60 pt-4">
+              <label className={labelCls}>
+                Pi 扩展
+                <HelpTip>
+                  仅平台已注册的扩展可声明。启动仍带 --no-extensions，Job 创建时冻结后经 -e 注入镜像预置路径。
+                  出网扩展（如 pi-web-access）服从任务 allow_egress；本路径不向沙箱写入长期密钥。
+                </HelpTip>
+              </label>
+              <SearchableMultiSelect
+                value={form.pi_extensions}
+                onChange={(pi_extensions) => setForm((current) => ({ ...current, pi_extensions }))}
+                options={Object.values(PI_EXTENSION_REGISTRY).map((ext) => ({
+                  value: ext.id,
+                  label: ext.id,
+                  hint: ext.requires_egress ? "需要任务允许出网" : undefined,
+                }))}
+                placeholder="未选择已注册扩展"
+                ariaLabel="已注册的 Pi 扩展"
+                className="block [&>button]:w-full"
+                emptyText="没有已注册的 Pi 扩展"
+              />
+            </div>
+          )}
           {form.agent_cli === "dsh" && (
             <div className="mt-4 border-t border-ink-700/60 pt-4">
               <label className={labelCls}>
