@@ -6,7 +6,7 @@
 
 ### 新增
 
-- Pi 第三方扩展走注册制准入：RoleConfig `pi_extensions` 只接受已注册 id，Job 创建冻结后经 `--no-extensions` + `-e` 注入镜像预置路径。pilot 为 `pi-web-access`（无长期密钥下发，出网服从 `allow_egress`）（#351）。
+- Pi 第三方扩展走注册制准入：RoleConfig `pi_extensions` 只接受已注册 id，Job 创建冻结后经 `--no-extensions` + `-e` 注入镜像预置路径。pilot 为 `pi-web-access`（预置 audit / kali-minimal，不进 base；无长期密钥下发，出网服从 `allow_egress`）（#351）。
 - 控制台「新建项目」只创建空项目，不铸画布、不派 Hub（#343）。快捷启动仍可一次完成「新项目 + 第一项任务」。
 - 项目启用多个运行时镜像时按 digest 入队去重、串行拉取，不再因 in-flight 准备 409（#342）。
 

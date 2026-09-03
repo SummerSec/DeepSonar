@@ -161,7 +161,7 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
   };
   const snapshot = await resolveAgentSnapshotForJob(
     snapshotDb({
-      projectConfig: { image_strategy: "project_managed" },
+      projectConfig: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
       projectCfg,
       globalCfg: undefined,
       credential,
@@ -177,6 +177,19 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
     () => resolveAgentSnapshotForJob(
       snapshotDb({
         projectConfig: { image_strategy: "project_managed" },
+        projectCfg,
+        globalCfg: undefined,
+        credential,
+      }),
+      "project-1",
+      "audit",
+    ),
+    (error: unknown) => error instanceof SnapshotUnresolvableError && /不兼容/.test(error.message),
+  );
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
         projectCfg: { ...projectCfg, pi_extensions_json: ["not-registered"] },
         globalCfg: undefined,
         credential,

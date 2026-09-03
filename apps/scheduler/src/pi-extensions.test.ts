@@ -22,7 +22,7 @@ test("RoleConfig 只接受已注册的 Pi 扩展", () => {
 });
 
 test("Job 创建冻结已注册扩展，未注册与不兼容镜像失败", () => {
-  const frozen = freezePiExtensions(["pi-web-access"], "pi", "deepsonar-base");
+  const frozen = freezePiExtensions(["pi-web-access"], "pi", "deepsonar-audit");
   assert.equal(frozen.length, 1);
   assert.equal(frozen[0]?.id, "pi-web-access");
   assert.equal(frozen[0]?.version, PI_EXTENSION_REGISTRY["pi-web-access"].version);
@@ -30,7 +30,8 @@ test("Job 创建冻结已注册扩展，未注册与不兼容镜像失败", () =
   assert.equal(frozen[0]?.workspace_path, ".pi/agent/extensions/pi-web-access.ts");
   assert.ok(frozen[0]?.entry_path.startsWith("/opt/deepsonar/pi-extensions/node_modules/"));
   assert.deepEqual(freezePiExtensions([], "claude-code", "deepsonar-base"), []);
-  assert.throws(() => freezePiExtensions(["ghost-ext"], "pi", "deepsonar-base"), /未注册/);
+  assert.throws(() => freezePiExtensions(["ghost-ext"], "pi", "deepsonar-audit"), /未注册/);
+  assert.throws(() => freezePiExtensions(["pi-web-access"], "pi", "deepsonar-base"), /不兼容/);
   assert.throws(() => freezePiExtensions(["pi-web-access"], "pi", "deepsonar-chrome-audit"), /不兼容/);
 });
 
@@ -47,7 +48,7 @@ test("冻结快照重放拒绝被改写的入口与未注册 id", () => {
 });
 
 test("物化只生成注册路径 stub，禁网时跳过出网扩展", () => {
-  const frozen = freezePiExtensions(["pi-web-access"], "pi", "deepsonar-base");
+  const frozen = freezePiExtensions(["pi-web-access"], "pi", "deepsonar-audit");
   const allowed = materializeFrozenPiExtensions(frozen, true);
   assert.equal(allowed.paths.length, 1);
   assert.ok(allowed.paths[0]?.startsWith(PI_EXTENSION_SANDBOX_PREFIX));

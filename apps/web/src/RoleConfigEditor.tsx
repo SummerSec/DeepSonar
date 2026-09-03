@@ -534,7 +534,7 @@ export function RoleConfigEditor({
                 Pi 扩展
                 <HelpTip>
                   仅平台已注册的扩展可声明。启动仍带 --no-extensions，Job 创建时冻结后经 -e 注入镜像预置路径。
-                  出网扩展（如 pi-web-access）服从任务 allow_egress；本路径不向沙箱写入长期密钥。
+                  出网扩展（如 pi-web-access）服从任务 allow_egress，且只兼容已预置的 audit / kali-minimal 镜像（base 不预装，以控制体积与曝光面）。本路径不向沙箱写入长期密钥。
                 </HelpTip>
               </label>
               <SearchableMultiSelect
@@ -543,7 +543,10 @@ export function RoleConfigEditor({
                 options={Object.values(PI_EXTENSION_REGISTRY).map((ext) => ({
                   value: ext.id,
                   label: ext.id,
-                  hint: ext.requires_egress ? "需要任务允许出网" : undefined,
+                  hint: [
+                    ext.requires_egress ? "需要任务允许出网" : null,
+                    ext.compatible_image_keys?.length ? `镜像 ${ext.compatible_image_keys.join(" / ")}` : null,
+                  ].filter(Boolean).join(" · ") || undefined,
                 }))}
                 placeholder="未选择已注册扩展"
                 ariaLabel="已注册的 Pi 扩展"

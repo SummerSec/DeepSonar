@@ -35,7 +35,7 @@ export const PI_EXTENSION_REGISTRY = {
     license: "MIT",
     capabilities: ["web-search", "content-extract", "url-fetch"],
     requires_egress: true,
-    compatible_image_keys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
+    compatible_image_keys: ["deepsonar-audit", "deepsonar-kali-minimal"],
     entry: "index.ts",
   },
 } as const satisfies Record<string, PiExtensionRegistration>;

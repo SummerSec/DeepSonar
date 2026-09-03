@@ -94,6 +94,8 @@ RUN set -eu; \
   && npm cache clean --force
 
 RUN set -eu; \
+  test "$TOOLSET" = base -o "$TOOLSET" = audit; \
+  if [ "$TOOLSET" != audit ]; then exit 0; fi; \
   test "$(npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity)" = "$PI_WEB_ACCESS_INTEGRITY"; \
   mkdir -p /opt/deepsonar/pi-extensions; \
   npm install --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions \

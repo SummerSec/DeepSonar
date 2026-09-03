@@ -181,9 +181,9 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 创建时冻结包名 / 版本 / integrity / 镜像入口。Executor 把平台生成的 stub 写到
 `/workspace/.deepsonar-home/.pi/agent/extensions/<id>.ts`，适配器仅对此外前缀追加 `-e`。
 未注册 id、用户上传的扩展源码、以及镜像目录外的 `-e` 路径一律拒绝。出网扩展服从任务
-`allow_egress`；本路径不向快照或工作区写入长期密钥。运行镜像把已注册扩展预置到
-`/opt/deepsonar/pi-extensions/node_modules/`，与 `@earendil-works/pi-coding-agent@0.84.4`
-一样按 version + integrity 校验。
+`allow_egress`；本路径不向快照或工作区写入长期密钥。已注册扩展预置到兼容镜像的
+`/opt/deepsonar/pi-extensions/node_modules/`（pilot `pi-web-access` 只进 audit / kali-minimal，
+不进 size-gated 的 base），与 `@earendil-works/pi-coding-agent@0.84.4` 一样按 version + integrity 校验。
 
 ## Verification
 
