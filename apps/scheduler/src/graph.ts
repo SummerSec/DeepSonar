@@ -595,6 +595,8 @@ export interface HubIntent {
   role: string;
   description: string;
   prompt: string;
+  /** Hub 提案的市场 image_key；省略时按项目镜像策略与 RoleConfig 缺省解析。 */
+  runtime_image_key?: string;
 }
 
 export interface HubDecision {

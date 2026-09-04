@@ -182,6 +182,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
+  options?: { runtimeImageKey?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   warnIgnoredLegacyAgentDefaults();
   const roleName = roleNameForJobType(jobType);
@@ -266,7 +267,11 @@ async function resolveAgentSnapshotForJobUnchecked(
   const globalRuntimeImageKey = typeof globalCfg?.runtime_image_key === "string" && globalCfg.runtime_image_key.trim()
     ? globalCfg.runtime_image_key.trim()
     : null;
-  const runtimeImageKey = runtimeImageKeyForProjectPolicy(projectImagePolicy, roleName, globalRuntimeImageKey);
+  // Hub 本轮提案的 image_key（已按项目可用目录校验）压过策略缺省；
+  // 项目启用 / trusted / CLI 兼容仍由下方 resolveRuntimeImageForJob 与
+  // requireAgentCliRuntimeAdapter 重验，快照只消费解析结果。
+  const runtimeImageKey = options?.runtimeImageKey
+    ?? runtimeImageKeyForProjectPolicy(projectImagePolicy, roleName, globalRuntimeImageKey);
   const runtimeImage = await resolveRuntimeImageForJob(db as never, projectId, roleName, runtimeImageKey);
   let runtimeAdapter;
   try {
@@ -329,9 +334,10 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
+  options?: { runtimeImageKey?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
-    return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType);
+    return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);
   } catch (error) {
     if (error instanceof SnapshotUnresolvableError) throw error;
     throw new SnapshotUnresolvableError(error);

@@ -19,6 +19,12 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: true,
     eventType: null,
   },
+  list_available_runtime_images: {
+    summary: "List runtime images available to the current Hub Job",
+    description: "Return the project-enabled, trusted runtime image catalog (image_key only) visible to this Hub Job.",
+    readOnly: true,
+    eventType: null,
+  },
   list_shared_assets: {
     summary: "List shared assets available to the current Job",
     description: "Return the frozen read-only shared asset catalog for this Job.",

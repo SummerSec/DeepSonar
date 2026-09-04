@@ -46,6 +46,29 @@ test("dynamic OpenAPI only projects allowlisted concrete operations", () => {
   assert.equal(paths["/control/v1/jobs/{jobId}/operations/emit_progress"].post.parameters.find((p: any) => p.name === "Idempotency-Key").required, true);
 });
 
+test("list_available_runtime_images is a registered read-only operation with a strict empty payload", () => {
+  const document = buildPlatformOpenApiDocument({
+    jobId: "00000000-0000-4000-8000-000000000001",
+    operationIds: ["list_available_runtime_images"],
+  });
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const operation = paths["/control/v1/jobs/{jobId}/operations/list_available_runtime_images"]?.post;
+  assert.ok(operation, "operation must be projectable into the Job-scoped OpenAPI");
+  assert.equal(operation.operationId, "list_available_runtime_images");
+  const schema = ControlToolInputSchemasJson.list_available_runtime_images as Record<string, unknown>;
+  assert.equal(schema.type, "object");
+  assert.equal(schema.additionalProperties, false);
+  const projection = buildCapabilitiesProjection({
+    jobId: "00000000-0000-4000-8000-000000000001",
+    projectId: "00000000-0000-4000-8000-000000000002",
+    canvasId: null,
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    operationIds: ["list_available_runtime_images"],
+  });
+  assert.equal(projection.operations[0]?.read_only, true);
+  assert.equal(projection.operations[0]?.event_type, null);
+});
+
 test("capabilities projection does not expose a token and points to same-level operation URLs", () => {
   const projection = buildCapabilitiesProjection({
     jobId: "00000000-0000-4000-8000-000000000001",

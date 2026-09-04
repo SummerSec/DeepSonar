@@ -51,6 +51,7 @@
     "ci:integration:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test --test-concurrency=1 src/dispatch-limits.integration.test.ts src/task-execution-control.integration.test.ts",
     "ci:integration:event-ingestion": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/event-ingestion.integration.test.ts",
     "ci:integration:event-authorization": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/authorization.integration.test.ts",
+    "ci:integration:hub-runtime-image": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/hub-runtime-image.integration.test.ts",
     "ci:unit:event-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/rate-limit.test.ts",
     "ci:unit:login-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/login-rate-limit.test.ts src/login-client-ip.test.ts && node --test deploy/web-server-headers.test.mjs",
     "ci:unit:deploy-ps1": "node --test deploy/deploy.ps1.test.mjs",

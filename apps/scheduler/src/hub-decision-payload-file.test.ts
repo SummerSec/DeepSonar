@@ -48,3 +48,38 @@ test("HubDecisionPayload still accepts normal intents without payload_file", () 
   });
   assert.equal(parsed.success, true);
 });
+
+test("HubIntentPayload accepts a marketplace runtime_image_key and rejects OCI references", () => {
+  const withKey = HubDecisionPayload.safeParse({
+    intents: [
+      {
+        from: [rootId],
+        role: "test",
+        description: "12345678",
+        prompt: "p".repeat(40),
+        runtime_image_key: "deepsonar-kali-minimal",
+      },
+    ],
+  });
+  assert.equal(withKey.success, true);
+  for (const bad of [
+    "ghcr.io/summersec/deepsonar-base:latest",
+    "deepsonar-base@sha256:" + "a".repeat(64),
+    "Deepsonar-Base",
+    "a",
+    "deepsonar_base",
+  ]) {
+    const parsed = HubDecisionPayload.safeParse({
+      intents: [
+        {
+          from: [rootId],
+          role: "test",
+          description: "12345678",
+          prompt: "p".repeat(40),
+          runtime_image_key: bad,
+        },
+      ],
+    });
+    assert.equal(parsed.success, false, `must reject ${bad}`);
+  }
+});

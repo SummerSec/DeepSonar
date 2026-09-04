@@ -128,8 +128,8 @@ const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplic
   findingVerification: findingVerificationApplication,
   rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
   rolesForProject: async (tx, projectId) => rolesForProject(tx as unknown as typeof sql, projectId),
-  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) =>
-    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type, findingIds),
+  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = [], options) =>
+    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type, findingIds, options),
   recordJobSharedAssets: async (tx, jobId, assets) => recordJobSharedAssets(tx as unknown as typeof sql, jobId, assets),
   fixedPriorityForJob,
   insertEdgeIfAbsent: async (tx, canvasId, fromId, toId, edgeType) =>
@@ -1624,11 +1624,13 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
+  options?: { runtimeImageKey?: string | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,
     projectId,
     jobType,
+    options,
   )) as AgentRuntimeSnapshot;
   const selection = await resolveSharedAssetSelection(db, projectId, findingIds);
   return {

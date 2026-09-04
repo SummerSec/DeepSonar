@@ -488,6 +488,9 @@ export type DonePayload = z.infer<typeof DonePayload>;
 export const ListAvailableRolesPayload = z.object({}).strict();
 export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload>;
 
+export const ListAvailableRuntimeImagesPayload = z.object({}).strict();
+export type ListAvailableRuntimeImagesPayload = z.infer<typeof ListAvailableRuntimeImagesPayload>;
+
 export const ListSharedAssetsPayload = z.object({
   scope: z.enum(["platform", "project", "finding"]).optional(),
   prefix: z.string().trim().min(1).max(120).optional(),
@@ -845,6 +848,10 @@ export const HubIntentPayload = z
     role: nonEmptyText(64),
     description: z.string().min(8).max(2_000).regex(/\S/),
     prompt: z.string().min(32).max(20_000).regex(/\S/),
+    // Hub 本轮可选的运行镜像提案：只能来自 list_available_runtime_images 返回的
+    // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
+    // 省略时 Scheduler 按项目镜像策略与 RoleConfig 缺省解析。
+    runtime_image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/).optional(),
   })
   .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
@@ -918,6 +925,7 @@ export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 
 export const ControlToolPayloadSchemas = {
   list_available_roles: ListAvailableRolesPayload,
+  list_available_runtime_images: ListAvailableRuntimeImagesPayload,
   list_shared_assets: ListSharedAssetsPayload,
   publish_shared_asset: PublishSharedAssetPayload,
   emit_progress: ProgressPayload,
@@ -1011,6 +1019,7 @@ export type EventEnvelopeInput = {
 
 export const PlatformToolName = z.enum([
   "list_available_roles",
+  "list_available_runtime_images",
   "emit_progress",
   "emit_fact",
   "emit_finding",
@@ -1137,6 +1146,7 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
  */
 export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "list_available_roles",
+  "list_available_runtime_images",
   "list_shared_assets",
   "publish_shared_asset",
   "emit_progress",

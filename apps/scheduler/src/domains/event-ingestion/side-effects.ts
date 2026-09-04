@@ -24,9 +24,10 @@ import {
   type HubDecision,
   type HubReferenceLookup,
 } from "../../graph.js";
-import { ControlInputError, invalidControlPayload, invalidRole, invalidVerification } from "../../control-input.js";
+import { ControlInputError, invalidControlPayload, invalidRole, invalidRuntimeImage, invalidVerification } from "../../control-input.js";
 import {
   assertFrozenRuntimeImageLocal,
+  listHubRuntimeImageCatalog,
   RuntimeImageNotLocalError,
   runtimeImageNotLocalCanvasBlock,
 } from "../../runtime-images.js";
@@ -125,6 +126,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
+    options?: { runtimeImageKey?: string | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -508,6 +510,30 @@ export function createEventIngestionSideEffectApplication(
     for (const [index, intent] of submittedIntents.entries()) {
       if (!enabledNames.has(intent.role)) {
         throw invalidRole(intent.role, phase === "preflight" ? `intents.${index}.role` : "intents.role");
+      }
+    }
+    // Hub 可提案本轮可选运行镜像（image_key），但只允许项目已启用且存在可信
+    // 版本的市场产品；省略时按项目镜像策略与 RoleConfig 缺省解析。preflight 与
+    // apply 都执行同一目录校验，防止两次校验之间启用状态漂移后落地。
+    const proposedImageKeys = [
+      ...new Set(
+        submittedIntents
+          .map((intent) => intent.runtime_image_key)
+          .filter((key): key is string => typeof key === "string" && key.length > 0),
+      ),
+    ];
+    let allowedImageKeys: Set<string> | null = null;
+    if (proposedImageKeys.length > 0) {
+      const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
+      allowedImageKeys = new Set(catalog.map((entry) => entry.image_key));
+      for (const [index, intent] of submittedIntents.entries()) {
+        const key = intent.runtime_image_key;
+        if (key && !allowedImageKeys.has(key)) {
+          throw invalidRuntimeImage(
+            phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key",
+            [...allowedImageKeys],
+          );
+        }
       }
     }
     if (["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")) {
@@ -1046,6 +1072,7 @@ export function createEventIngestionSideEffectApplication(
             job.project_id as string,
             role,
             snapshotFindingIds,
+            { runtimeImageKey: it.runtime_image_key ?? null },
           ),
         );
         try {

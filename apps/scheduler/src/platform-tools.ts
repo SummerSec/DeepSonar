@@ -8,6 +8,13 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 边界：结果只含 `kind=role` 且当前项目启用的角色，不含 verify、report、hub_reason 或其他 system/hub 角色。不得用记忆补充角色名。",
     "- 示例：`{}`",
   ].join("\n"),
+  list_available_runtime_images: [
+    "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且存在可信版本的市场镜像 image_key、name、description。",
+    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策被拒绝。",
+    "- 示例：`{}`",
+  ].join("\n"),
   emit_progress: [
     "### `emit_progress` — 上报过程进度",
     "- 参数：`message`（必填，当前动作或阶段结论，1-2000 字符）；`percent`（可选，0-100）。",
@@ -89,6 +96,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
+  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；不得猜测或使用未启用、未准入的镜像，不得填写 OCI 引用。",
   emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
   emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
   emit_finding: "注意：只提交有证据支撑的 Finding；suggest_verify 只是建议，验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",
