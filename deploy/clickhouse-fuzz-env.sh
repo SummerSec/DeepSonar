@@ -14,6 +14,8 @@ fail_check() {
 for command_name in clang clang++ lld llvm-symbolizer afl-fuzz afl-clang-fast clickhouse clickhouse-local objdump readelf jq node claude; do
   command -v "$command_name" >/dev/null 2>&1 || fail_check "缺少命令 $command_name"
 done
+node --version >/dev/null || fail_check "node --version 执行失败"
+claude --version >/dev/null || fail_check "claude --version 执行失败"
 
 clang --version >/dev/null || fail_check "clang --version 执行失败"
 resource_dir=""
@@ -34,7 +36,7 @@ if ! version="$(clickhouse --version 2>&1)"; then
 fi
 [[ "$version" == *26.3.28.5* ]] || fail_check "clickhouse 不是钉死的官方 26.3.28.5：${version:-无输出}"
 
-if ! jq -e '.contract == "deepsonar.runtime.contract/v1" and .imageKey == "deepsonar-clickhouse-fuzz" and .fuzz.target == "clickhouse-local" and .fuzz.actual == true and .clickhouse.official == true' /opt/deepsonar/tool-manifest.json >/dev/null 2>&1; then
+if ! jq -e '.contract == "deepsonar.runtime.contract/v1" and .imageKey == "deepsonar-clickhouse-fuzz" and (.tools | index("claude")) and .fuzz.target == "clickhouse-local" and .fuzz.actual == true and .clickhouse.official == true' /opt/deepsonar/tool-manifest.json >/dev/null 2>&1; then
   manifest_summary="$(jq -c '{contract, imageKey, fuzz, clickhouse}' /opt/deepsonar/tool-manifest.json 2>&1 || true)"
   fail_check "tool manifest contract 不匹配：${manifest_summary:-无法读取 /opt/deepsonar/tool-manifest.json}"
 fi

@@ -20,13 +20,15 @@ check_manifest() {
     (.tools | index("cmake")) and
     (.tools | index("ninja")) and
     (.tools | index("objdump")) and
-    (.tools | index("jq"))
+    (.tools | index("jq")) and
+    (.tools | index("node")) and
+    (.tools | index("claude"))
   ' /opt/deepsonar/tool-manifest.json >/dev/null
 }
 
 check_tools() {
   local command_name
-  for command_name in git clang clang++ clang-tidy clangd cmake ninja objdump readelf llvm-nm jq; do
+  for command_name in git clang clang++ clang-tidy clangd cmake ninja objdump readelf llvm-nm jq node claude; do
     command -v "$command_name" >/dev/null 2>&1 || {
       printf 'ClickHouse Audit 环境检查失败：缺少命令 %s\n' "$command_name" >&2
       return 1
@@ -40,6 +42,8 @@ check_tools() {
   ninja --version >/dev/null
   objdump --version >/dev/null
   jq --version >/dev/null
+  node --version >/dev/null
+  claude --version >/dev/null
   for command_name in semgrep gitleaks shellcheck; do
     if command -v "$command_name" >/dev/null 2>&1; then
       printf 'ClickHouse Audit 不得预装决策扫描器 %s\n' "$command_name" >&2
@@ -51,7 +55,7 @@ check_tools() {
 
 if [[ "${1:-}" == "--check" && $# -eq 1 ]]; then
   check_tools
-  printf 'ClickHouse Audit 环境检查通过：git、CMake/Ninja、Clang/LLVM、binutils 与 jq 已就绪\n'
+  printf 'ClickHouse Audit 环境检查通过：git、CMake/Ninja、Clang/LLVM、binutils、jq 与 Claude Code 已就绪\n'
   exit 0
 fi
 
