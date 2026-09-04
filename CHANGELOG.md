@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-04
+
 ### 新增
 
 - Pi 第三方扩展走注册制准入：RoleConfig `pi_extensions` 只接受已注册 id，Job 创建冻结后经 `--no-extensions` + `-e` 注入镜像预置路径。pilot 为 `pi-web-access`（预置 audit / kali-minimal，不进 base；无长期密钥下发，出网服从 `allow_egress`）（#351）。
@@ -16,8 +18,17 @@
 
 ### 修复
 
-- ClickHouse 专项镜像环境检查与鸿蒙一样校验从 Base 继承的 Claude Code（`claude --version`）；Audit 此前未检查 CLI，Test/Fuzz 只做 `command -v`。缺 CLI 时镜像构建失败。
+- 非 root 专项镜像 OpenSandbox provision 以 execd `uid=0` 写入 Gateway `/etc/hosts`，guest `USER deepsonar` 不变；失败改为 `GatewayHostsBindError`，不再报 `failed to bind deepsonar-gateway-proxy in sandbox hosts`（#346 / #355）。
 - 本机镜像准备不再抢占 `admin_bulk`；通道切换与项目启用共用同一队列，已入队项不会丢失。失败 digest 不占用去重锁，Web 在 inspect 未就绪时继续轮询后自动启用。
+- OpenSandbox Docker 宿主端口池钉在 `40000–49000`，避开 Windows Hyper-V / WinNAT 排除区（#349）。
+- ClickHouse 专项镜像环境检查与鸿蒙一样校验从 Base 继承的 Claude Code（`claude --version`）；Audit 此前未检查 CLI，Test/Fuzz 只做 `command -v`。缺 CLI 时镜像构建失败（#353）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v39 → v40。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 本版本含 #346 Gateway hosts bind 修复；仍跑 `v0.2.6` 的真实 Job 会在写沙箱 `/etc/hosts` 时于 provision 失败。升级调度器镜像后才会生效。
+- Windows Docker Desktop 部署请使用本版本钉死的 OpenSandbox `port_range`；自定义 `40000–60000` 会落回排除区。
+- ClickHouse 专项镜像指纹变化，Release 会重建；audit / kali-minimal 若含 `pi-web-access` 预置也可能重建。未改内容的镜像仍走 `src-<fingerprint>` 跳过 docker build。
 
 ## [0.2.6] - 2026-09-02
 
@@ -582,6 +593,7 @@
 [0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
 [0.2.4]: https://github.com/SummerSec/DeepSonar/compare/v0.2.3...v0.2.4
 [0.2.5]: https://github.com/SummerSec/DeepSonar/compare/v0.2.4...v0.2.5
+[0.2.7]: https://github.com/SummerSec/DeepSonar/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/SummerSec/DeepSonar/compare/v0.2.5...v0.2.6
 [0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
 [0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
