@@ -16,6 +16,7 @@
 
 ### 修复
 
+- ClickHouse 专项镜像环境检查与鸿蒙一样校验从 Base 继承的 Claude Code（`claude --version`）；Audit 此前未检查 CLI，Test/Fuzz 只做 `command -v`。缺 CLI 时镜像构建失败。
 - 本机镜像准备不再抢占 `admin_bulk`；通道切换与项目启用共用同一队列，已入队项不会丢失。失败 digest 不占用去重锁，Web 在 inspect 未就绪时继续轮询后自动启用。
 
 ## [0.2.6] - 2026-09-02
