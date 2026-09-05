@@ -192,6 +192,11 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:event-authorization
 
+      - name: Hub runtime image proposal Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:hub-runtime-image
+
       - name: Semantic event rate-limit unit
         run: pnpm ci:unit:event-rate-limit
 

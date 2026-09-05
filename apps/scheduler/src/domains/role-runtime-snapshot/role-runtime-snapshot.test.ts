@@ -245,3 +245,56 @@ test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", 
     },
   );
 });
+
+test("Hub runtime_image_key 提案压过项目策略缺省，省略时保持策略解析", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  // project_managed 缺项固定回退 deepsonar-base；Hub 提案必须能压过它。
+  const managedProject = { image_strategy: "project_managed", role_runtime_images: { audit: null } };
+  const overridden = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: managedProject, projectCfg: undefined, globalCfg, credential }),
+    "project-1",
+    "audit",
+    { runtimeImageKey: "deepsonar-kali-minimal" },
+  );
+  assert.equal(overridden.runtime_image_key, "deepsonar-kali-minimal");
+  assert.equal(overridden.runtime_image.image_key, "deepsonar-kali-minimal");
+
+  const fallback = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: managedProject, projectCfg: undefined, globalCfg, credential }),
+    "project-1",
+    "audit",
+  );
+  assert.equal(fallback.runtime_image.image_key, "deepsonar-base");
+
+  const nullOverride = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: managedProject, projectCfg: undefined, globalCfg, credential }),
+    "project-1",
+    "audit",
+    { runtimeImageKey: null },
+  );
+  assert.equal(nullOverride.runtime_image.image_key, "deepsonar-base");
+});

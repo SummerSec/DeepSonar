@@ -2369,6 +2369,55 @@ export function hostRuntimePlatform(arch: NodeJS.Architecture = process.arch): "
   throw new Error(`不支持的 Scheduler 宿主架构：${arch}`);
 }
 
+/** Hub 本轮可提案的运行镜像目录条目；只含决策摘要，不含可执行 OCI 引用或 digest。 */
+export interface HubRuntimeImageCatalogEntry {
+  image_key: string;
+  name: string;
+  description: string;
+  official: boolean;
+  project_opt_in: boolean;
+  source_kind: string;
+}
+
+/**
+ * Hub 可选镜像目录：项目已启用、存在当前通道与宿主平台可执行 trusted 版本。
+ * 与 resolveRuntimeImageForJob 的可用性口径一致；只暴露 image_key 与展示字段，
+ * digest/ref 仍只在 Job 创建时由 Scheduler 冻结。
+ */
+export async function listHubRuntimeImageCatalog(
+  db: typeof sql,
+  projectId: string,
+): Promise<HubRuntimeImageCatalogEntry[]> {
+  const selectedChannel = await readRuntimeRegistryChannel(db, "share");
+  const rows = await db`
+    SELECT ri.image_key, ri.name, ri.description, ri.official, ri.project_opt_in, ri.source_kind
+    FROM runtime_images ri
+    LEFT JOIN project_runtime_images pri
+      ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
+    WHERE ri.enabled = true
+      AND (CASE WHEN ri.official AND NOT ri.project_opt_in
+                THEN COALESCE(pri.enabled, true)
+                ELSE COALESCE(pri.enabled, false) END)
+      AND EXISTS (
+        SELECT 1 FROM runtime_image_versions v
+        LEFT JOIN runtime_image_version_refs channel_ref
+          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
+        WHERE v.runtime_image_id = ri.id
+          AND v.trust_status = 'trusted'
+          AND v.platforms_json @> ${db.json([hostRuntimePlatform()])}
+          AND (NOT ri.official OR channel_ref.id IS NOT NULL)
+      )
+    ORDER BY ri.official DESC, ri.image_key`;
+  return rows.map((row) => ({
+    image_key: String(row.image_key),
+    name: String(row.name),
+    description: String(row.description ?? ""),
+    official: row.official === true,
+    project_opt_in: row.project_opt_in === true,
+    source_kind: String(row.source_kind),
+  }));
+}
+
 export async function resolveRuntimeImageForJob(
   db: typeof sql,
   projectId: string,

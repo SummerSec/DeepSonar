@@ -607,6 +607,8 @@ Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目�
 
 RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表示“系统沙箱”：Scheduler 使用平台治理的最小 Base 底座创建沙箱，并在 Job 快照中记录其不可变 digest，但 RoleConfig 本身保持未绑定状态。Test 与 Audit 可默认绑定专项 Kali/Audit 镜像；其余内置角色默认使用系统沙箱。该选项不允许 Agent、Hub 或任务内容提供任意镜像引用。
 
+Hub 可按本轮任务需要为每个 intent 提案运行镜像（#357）：`list_available_runtime_images` 只读操作返回本项目已启用、存在当前通道与宿主平台 trusted 版本的市场镜像目录（只含 `image_key` 与展示字段，不含 OCI 引用或 digest）；intent 的可选 `runtime_image_key` 必须原样命中该目录，否则整次 `submit_hub_decision` 在 preflight 与摄入事务两处被拒绝。Scheduler 在 Job 创建时仍按提案 key 走 `resolveRuntimeImageForJob` 重验项目启用与可信版本、校验 CLI 兼容并冻结不可变 digest；省略提案时按上述策略解析角色缺省。Worker 不获得该能力，运行中 Job 不换镜像。
+
 发布清单的 `size_bytes` 来自不可变 OCI manifest/index 的压缩层描述符：分别汇总目标平台层大小，清单记录其中最大的平台大小，并保留各平台大小作为发布证据。该值不是本机解压后的 Docker 占用，避免不同构建机的本地 inspect 结果影响市场元数据。
 
 ### 8.4 Git 模块源（skill_sources）
@@ -628,7 +630,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）。Schema v31 为 Fact 增加独立 `verification_status` 定列（`unverified/verifying/verified/rejected/needs_human`），非 Fact 必须为 `NULL`；该状态不复用节点执行态，也不从证据 outcome 推断
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
 - Fact 过程真相由 `GET /canvases/{id}/facts` 提供服务端 keyset 分页及验证态、证据种类、Finding、来源 Job 筛选；`GET /canvases/{id}/facts/{nodeId}` 返回完整正文和最多一跳的有界 trace；`PATCH /canvases/{id}/facts/{nodeId}/verification` 记录人工结论与审计。结构化 Finding 证据仅在同项目、同画布、canonical Finding 和 `reviewed_by/tested_by` 边同时成立时投影，禁止解析 description 补关联
-- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 服务端 `GraphScope=hub` 投影；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
+- **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 服务端 `GraphScope=hub` 投影；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，并可用 `list_available_runtime_images` 获取本轮可选运行镜像目录后按 intent 提案 `runtime_image_key`，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
 - Hub 可下发工作角色输入 = 自包含 intent prompt + 服务端 `GraphScope=agent` 引用邻域；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
 - **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
 - 规则：`hubEnabled`（默认 true，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED` 可覆盖关闭）、`maxHubRounds`、`maxIntentsPerDecision`；`allowEgress` 同样默认 true，任务创建时可覆盖并冻结到画布

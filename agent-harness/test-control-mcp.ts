@@ -107,6 +107,7 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
 });
 assert.deepEqual(restrictedTools, [
   "list_available_roles",
+  "list_available_runtime_images",
   "list_shared_assets",
   "publish_shared_asset",
   "emit_fact",

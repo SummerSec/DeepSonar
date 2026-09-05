@@ -88,5 +88,6 @@ export interface RoleRuntimeSnapshotApplication {
     db: RoleRuntimeSnapshotTransaction,
     projectId: string,
     jobType: string,
+    options?: { runtimeImageKey?: string | null },
   ): Promise<RoleRuntimeSnapshotResult>;
 }

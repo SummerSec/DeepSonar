@@ -10,6 +10,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidNodeRef: "invalid_node_ref",
   invalidFindingRef: "invalid_finding_ref",
   invalidRole: "invalid_role",
+  invalidRuntimeImage: "invalid_runtime_image",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
   invalidDone: "invalid_done",
@@ -65,6 +66,7 @@ const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new 
   CONTROL_INPUT_ERROR_CODES.invalidNodeRef,
   CONTROL_INPUT_ERROR_CODES.invalidFindingRef,
   CONTROL_INPUT_ERROR_CODES.invalidRole,
+  CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
   CONTROL_INPUT_ERROR_CODES.invalidVerification,
   CONTROL_INPUT_ERROR_CODES.invalidProgress,
   CONTROL_INPUT_ERROR_CODES.invalidDone,
@@ -129,6 +131,19 @@ export function invalidRole(role: unknown, path = "role", allowed?: readonly str
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidRole,
     `Hub 角色必须来自本轮 list_available_roles，字段 ${path} 收到类型 ${inputShape(role)}。${allowHint}`,
+    path,
+  );
+}
+
+export function invalidRuntimeImage(path = "runtime_image_key", allowed?: readonly string[]): ControlInputError {
+  // Shape only — never echo the untrusted image token back to the sandbox.
+  const allowHint =
+    allowed && allowed.length > 0
+      ? ` 本轮可选 image_key：${allowed.join(", ")}。`
+      : " 请使用 list_available_runtime_images 返回的 image_key。";
+  return new ControlInputError(
+    CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
+    `Hub 运行镜像必须来自本轮 list_available_runtime_images 的市场 image_key（项目已启用且存在可信版本），字段 ${path} 不合法或不在可选集合。${allowHint}`,
     path,
   );
 }
