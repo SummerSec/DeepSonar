@@ -57,7 +57,7 @@
 ### 四层职责（团队共识）
 
 | 层 | 职责 | 不做 |
-|----|------|------|
+| ---- | ------ | ------ |
 | **本地库 / Web** | 多项目、任务是否该做、完成与否、负责人 | 不存攻击图细节 |
 | **Canvas** | 过程、发现、验证链、状态流转可视化 | 不负责起 Agent |
 | **Scheduler** | 领任务、限流、起沙箱、执行提案、判超时 | 不做业务推理 |
@@ -89,7 +89,7 @@ Finding  可派生  Followup Job（verify 等，由规则引擎决定）
 - 节点类型固定：
 
 | node_type | 含义 |
-|-----------|------|
+| ----------- | ------ |
 | `root` | 项目根（目标、仓库、范围） |
 | `job` | 一次运行（审计模块 / 验证…） |
 | `finding` | 可疑/确认问题 |
@@ -169,7 +169,7 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 ### 3.4 Agent 工具白名单（只提案）
 
 | 工具名 | 谁可调用 | 调度器落地动作 |
-|--------|----------|----------------|
+| -------- | ---------- | ---------------- |
 | `emit_progress` | Worker | 更新 job 节点文案/进度 |
 | `emit_fact` | Hub 可下发的非审计工作角色 | 增量建立 fact 节点与意图边 |
 | `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（可带 `suggest_verify` 建议字段） |
@@ -222,7 +222,7 @@ pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 
 2. Finding 只是待证实假设；Scheduler 按 `minVerifySeverity` 决定自动验证范围，低于阈值的不派生 Verify，且 Hub 对该 Finding 派发 review/test 会在任何 Job/节点副作用前稳定拒绝；缺失或未知 severity 保守验证，设置为 `info` 即严格全量模式
 3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
 4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
-5. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
+5. 调度器创建 verify Job，输入只冻结主体 / location / 物证引用——盲验 Phase 1（#367）不下发 maker 的 title/summary/severity 结论措辞 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文，`GraphScope=verify` 默认只投影骨架与引用
 6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 7. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
 8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
@@ -271,7 +271,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 ## 5. 模块拆分与技术选型
 
 | 模块 | 实现 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | **scheduler-core** | 服务 + Postgres | jobs/events、claim、状态机、限流、Reaper、规则引擎 |
 | **runtime-adapter** | provider-neutral RuntimeHost（#162） | provision/run/stop/delete 与 process/file/PTY；real 默认 OpenSandbox；CLI adapter 不引用 SDK 类型 |
 | **canvas-service** | API + React Flow 渲染 | 节点边 CRUD；auto-layout；只读 WS 推送 |
@@ -355,7 +355,7 @@ canvas_changes
 `findings` 表字段与 SARIF（OASIS 标准，Semgrep/CodeQL 等通用）保持映射，将来接入任何扫描器或导出报告零成本：
 
 | findings 字段 | SARIF 字段（runs[].results[]） |
-|---------------|-------------------------------|
+| --------------- | ------------------------------- |
 | `title` | `message.text` |
 | `profile` | `properties.deepsonar.profile`（通用领域/协议标识） |
 | `category` | `properties.deepsonar.category` |
@@ -375,14 +375,14 @@ canvas_changes
 
 评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
 
-schema v20 的 `0020_finding_protocol.sql` 为 `findings` 增加上述五个 JSON/文本字段、允许 `severity` 为 NULL，并建立 `(project_id, profile, category, verify_status)` 索引；fresh 基线和连续迁移保持同一结构。
+上述 Finding 协议字段（`profile` / `category` / `evidence_refs_json` / `scoring_json` / `suggest_verify`，`severity` 可空）与 `(project_id, profile, category, verify_status)` 索引均已并入唯一基线 `database/schema.sql` 的 `findings` 表（当前 v42）；仓库不保留增量迁移文件，改表 = 改基线 + bump 版本（见 §17.2）。
 
 ### 6.2 存储分层（热/冷分离）
 
 Agent 输入输出是无界数据（单次运行原始事件流可达数十 MB），**Postgres 只放可查询的语义数据**：
 
 | 数据 | 存储 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | 原始事件流（text.delta、工具调用细节） | **冷**：每 job 一个 NDJSON 文件（gzip），`transcripts/{job_id}.ndjson.gz`；jobs 表存 `transcript_uri` | 只追加、极少查；SDK 事件流经调度器缓冲合并（每 2s 或 32KB 一批）后写入 |
 | 语义事件（progress/finding/done/human） | **热**：events 表 | 小行、有索引，驱动调度与画布 |
 | 超限语义 payload（> 固定 256 KiB UTF-8 JSON） | 在暂存/入库前以可重试控制错误拒绝；大正文改走共享资产或拆分语义事件 | 防 TOAST 大行拖垮扫描，且直接参数与 `payload_file` 无绕过差异 |
@@ -522,7 +522,7 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 配置按“全局缺省 → 项目覆盖 → Job 冻结快照”生效，不存在旧 Profile 回退：
 
 | 层 | 位置 | 内容 |
-|----|------|------|
+| ---- | ------ | ------ |
 | 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | RoleConfig 保存 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关与 Credential 引用；Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结，运行时由固定提交的 `dsh-reasoning-settings` 修正 Subagent 继承；全局 RoleConfig 保存可信镜像绑定 |
 | 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Pi 冻结为 `--thinking`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；leftover Codex/OpenCode 历史快照仍可读其当时冻结的 reasoning 键，不能再物化为新 Job。字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含 CLI selector `model`、实际 `upstream_model`、Provider 配置文件与客户端上下文预算）；Executor 仅用 selector 启动 CLI，所有上游治理使用 `upstream_model ?? model`，不读取旧配置或为缺失快照降级 |
@@ -628,7 +628,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 调度器在服务端按 Job 类型生成分级图投影，不把整张过程图直接注入每个沙箱：
 
 | Scope | 默认字符硬预算 | 注入内容 |
-|-------|----------------|----------|
+| ------- | ---------------- | ---------- |
 | `hub` | 48,000 | 全 Finding `verify_status` 索引、开放意图、事实索引、近期/触发相关摘要与 hints |
 | `agent` | 16,000 | 自包含 prompt 作为独立主输入；图投影仅提供 intent 元数据、`from` 引用邻域与已确认背景 |
 | `verify` | 24,000 | 目标 Finding 与相关验证证据短字段；硬门权威仍是冻结证据快照 |
@@ -647,7 +647,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 这是审计平台与普通 AI 工作流的本质区别：
 
 | 威胁 | 对策 |
-|------|------|
+| ------ | ------ |
 | 被审计代码中埋 **prompt injection**（注释诱导 Agent 乱提案、外泄源码） | 审计沙箱默认**断外网**；工具白名单收口；followup 频次/深度护栏（§4.3）；system prompt 中声明仓库内容均为不可信数据 |
 | 目标内容或 Agent 伪造 Finding profile/评分、借未来 CVSS 版本绕过策略 | Finding 协议在画布冻结；Agent 只能调用严格 MCP 或同名 Job-scoped API operation 提案；Scheduler 重算 CVSS、按 accepted_versions 拒绝或原样留存未知版本，不能由 prompt 改写规则 |
 | **PoC 由 Agent 生成**，验证 = 在沙箱执行半不可信代码 | verify 沙箱独立隔离、一次性、跑完即毁；出网白名单 |
@@ -659,7 +659,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 ### 9.2 资源配置（MVP 默认）
 
 | 项 | 配置建议 |
-|----|----------------|
+| ---- | ---------------- |
 | 全局并发沙箱 | 4～8 |
 | 单项目并发 | 1～2（`global_settings` 可调；项目不能放宽） |
 | 默认超时 | audit 30–60min；verify 15–30min |
@@ -771,7 +771,7 @@ CANVAS_LAYOUT=auto
 ## 13. 风险与对策
 
 | 风险 | 对策 |
-|------|------|
+| ------ | ------ |
 | Agent 胡写、死循环派生 | 白名单工具 + followup 频次/深度护栏 + 超限转人工 |
 | 被审计代码 prompt injection | 见 §9.1 威胁建模（断网、白名单、payload 校验） |
 | 沙箱/调度器崩溃任务悬挂 | Lease + 心跳 + Reaper（§3.3） |
@@ -801,7 +801,7 @@ CANVAS_LAYOUT=auto
 ## 15. 结论摘要
 
 | 决策 | 选择 |
-|------|------|
+| ------ | ------ |
 | 项目管理 | **本地库 / Web** |
 | 过程数据 | **一任务一画布**（nodes/edges 表为真相） |
 | 执行隔离 | **SandboxRunner 沙箱**（real 默认 OpenSandbox） |
@@ -837,7 +837,7 @@ CANVAS_LAYOUT=auto
 ### 17.1 稳定区 vs 自由区
 
 | 稳定区（定列、加约束，几乎不变） | 自由区（JSONB 吸收变化） |
-|----------------------------------|--------------------------|
+| ---------------------------------- | -------------------------- |
 | 状态机字段（status, lease, timeout） | `jobs.payload_json`（任务参数随类型变） |
 | 幂等键（`event_id`、`fingerprint`） | `events.payload_json`（事件内容随类型变） |
 | 外键骨架（project → job → event/finding/node） | `findings.raw_json`（SARIF 原文） |
@@ -860,7 +860,7 @@ CANVAS_LAYOUT=auto
 ### 17.4 扩展场景验证（设计时已推演）
 
 | 未来场景 | 改动面 | 需要重建库 |
-|----------|--------|------------|
+| ---------- | -------- | ------------ |
 | 新增任务类型 / 节点类型 / 事件类型 | 字符串新值 + JSONB 新形状 + 应用层代码 | ❌ |
 | 自由区字段高频查询（如 CWE 编号） | 改 `schema.sql` 加列 + bump 版本 | ✅ |
 | 换沙箱 provider / 多 Scheduler 实例 | 适配层/领取逻辑，表不动 | ❌ |
