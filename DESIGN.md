@@ -74,7 +74,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 
 - **Agent 只提案**：`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
 - **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
-- **控制面默认拒绝（#57 / #135 / #152）**：所有控制操作与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）以 Job 类型/冻结角色快照重算授权，并要求 Job 仍为 `status=running`；终态、角色种类或 operation 不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。冻结 capability 只派生平台 API operation allowlist；所有治理 CLI 均由 Agent 使用自身 HTTP 工具调用 Job 级控制 API，不注入控制 MCP，也不在失败后回退其它控制通道。API 返回 `accepted` 表示 Scheduler 已接收输入，HTTP 错误始终带稳定错误码与人话。
+- **控制面默认拒绝（#57 / #135 / #152）**：所有控制操作与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）以 Job 类型/冻结角色快照重算授权，并要求 Job 仍为 `status=running`；终态、角色种类或 operation 不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。冻结 capability 只派生平台 API operation allowlist；所有治理 CLI 均由 Agent 使用自身 HTTP 工具调用 Job 级控制 API，不注入控制 MCP，也不在失败后回退其它控制通道。API 返回 `accepted` 表示 Scheduler 已接收输入，HTTP 错误始终带稳定错误码与人话。
 - **控制 payload 字节与确认边界（#166）**：Fact、Finding、Hub 的直接参数与宿主展开后的 `payload_file` 共用固定 256 KiB UTF-8 JSON 上限，超限在暂存或写事件前以可重试控制错误拒绝；`mark_job_done.summary` 上限为 8192 UTF-8 字节，接受后不再附加 Hub、Fact 或 Finding 计数文本。Hub/Human 的真实副作用仍延迟到 Agent 退出后执行，但在返回 `accepted` 前以只读权威事务预检当前 Job、画布引用、角色、Finding 绑定与完成门，最终副作用事务再次校验以防状态漂移。
 - **语义事件持久化限流（#57）**：Scheduler 在 `event-ingestion` 权威事务中以 `job_event_rate_limits` 单行 `SELECT ... FOR UPDATE` 执行有界固定窗口；进度、普通事件和终态/人工事件使用独立桶（默认每 60 秒 30/120/8），终态预算不会被 progress 消耗。幂等 `event_id` 先判重，重复投递不占额度；拒绝返回 `event_rate_limited`、`retry_after_sec` 等低基数元数据并回滚全部事件/画布副作用。计数行跨 Scheduler 进程/重启保留，禁止扫描 append-only `events`。
 - **同步 ack 边界**：CLI 使用按 Job 签发的短期 capability token 调用 `/control/v1/jobs/:jobId/operations/:operationId`；API 调用进入当前 Job 的宿主 semantic handler，不形成第二套副作用逻辑，不引入可写控制文件队列或未经治理的 socket。
@@ -268,7 +268,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 未完成点 |
 |------|-------|----------|
-| 设计债收口 | #359 | **已落地**：Plane / `CONTROL_MCP_SERVER` / `projects.canvas_id` 假身份（#363）；verify/report 转发 ports 删除、`core.ts` 只做组装（#366）；dispatcher 不再回退已删的 `projects.canvas_id`；leftover Session 类型隔离到 `legacy-session/`；`*.poc.ts` 迁出生产 `src/`；本表只留未完成项。**仍开放**：配置面减法、双轨报告合并、Fact 验证第二套状态机、`stream-bus`、DSH 方言退出内核、遗留 RoleConfig 行清扫、leftover 解析函数物理搬家。路径守卫保留 `/.codex/` `/.opencode/`。不砍沙箱、token、Zod、digest pin、Reaper、Attempt 账本。 |
+| 设计债收口 | #359 | **已落地**：Plane / `CONTROL_MCP_SERVER` / `projects.canvas_id` 假身份（#363）；verify/report 转发 ports 删除、`core.ts` 只做组装（#366）；dispatcher 不再回退已删的 `projects.canvas_id`；leftover Session 类型隔离到 `legacy-session/`；`*.poc.ts` 迁出生产 `src/`；本表只留未完成项；leftover Codex/OpenCode **解析函数**已迁出 `parseAgentSession.ts` 热路径。**仍开放**：配置面减法、双轨报告合并、Fact 验证第二套状态机、`stream-bus`、DSH 方言退出内核、遗留 RoleConfig 行清扫（解析已忽略，历史行未删）。路径守卫保留 `/.codex/` `/.opencode/`。不砍沙箱、token、Zod、digest pin、Reaper、Attempt 账本。 |
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
 | 实时流 | #38 | issue 已关；残余：stream-bus 仍单进程内存（多副本不共享） |

@@ -59,7 +59,7 @@ interface AgentCliAdapter {
 - Job 注入关联属性：`deepsonar.job.id`、`deepsonar.project.id`、`deepsonar.canvas.id`、`agent.cli`、`agent.role`、`session.id`。
 - 禁止出网的 Worker 只可通过现有 internal bridge 上的固定 sidecar 到达 Collector；不得破坏“控制事件不走目标网络”的安全边界。
 - prompt、assistant response、工具输入/输出属于敏感内容，默认只进入本地受控存储；外部 exporter 默认关闭内容字段。启用外部内容上报必须显式配置。
-- Collector 不直接改变 Job、Finding 或画布状态；语义事件仍通过本地控制 MCP 进入 Scheduler，避免形成第二个决策入口。
+- Collector 不直接改变 Job、Finding 或画布状态；语义事件仍通过 Job 级控制 API 进入 Scheduler，避免形成第二个决策入口。
 
 ### 2.4 宿主持久化布局
 

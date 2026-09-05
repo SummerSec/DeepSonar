@@ -546,7 +546,6 @@ Jobs 与 Findings 存在互相引用，必须两阶段写入，不能依赖偶�
 
 默认清理或禁用：
 
-- `plane_project_id`、`plane_issue_id`；
 - 外部事件 trigger ID；
 - 本地 `repo_path`；
 - 私有仓库 Credential；
