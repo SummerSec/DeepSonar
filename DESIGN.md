@@ -267,7 +267,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
-| 删除兼容层 / 第二套真相 / 空洞抽象 | #359 | **未落地**：对照 [ponytail](https://github.com/DietrichGebert/ponytail) 与本仓库第一性原理的交集债。P0 删除死控制 MCP 脚本、`projects.canvas_id` 假身份、leftover CLI 双轨文档；P1 拆 `verify.ts`/`report.ts` 转发 ports 与 Plane 身份列；P2 让本表只留未完成项，并收敛配置面。**双轨报告保留**：Finding confirmed 即出单条报告，不等任务收敛；Task Report 仍在 Hub complete 后汇总。不砍沙箱、token、Zod、Attempt 账本。 |
+| 删除兼容层 / 第二套真相 / 空洞抽象 | #359 | **部分落地**：对照 [ponytail](https://github.com/DietrichGebert/ponytail) 与本仓库第一性原理的交集债。Plane 身份列与整段集成已删（见本表「删除过时 Plane 集成」）。P0 仍待：死控制 MCP 脚本、`projects.canvas_id` 假身份、leftover CLI 双轨文档；P1 仍待：拆 `verify.ts`/`report.ts` 转发 ports；P2 让本表只留未完成项，并收敛配置面。**双轨报告保留**：Finding confirmed 即出单条报告，不等任务收敛；Task Report 仍在 Hub complete 后汇总。不砍沙箱、token、Zod、Attempt 账本。 |
 | Hub 按任务动态选择 Worker 运行镜像 | #357 / #360 | **已落地（#360 补洞）**：`list_available_runtime_images` 只读操作返回项目已启用、存在 trusted 版本、且至少一种治理 CLI 能跑的市场镜像目录（`image_key`、展示字段、`compatible_agent_clis`，不含 OCI/digest）；`HubIntentPayload.runtime_image_key` 可选提案压过角色缺省，preflight 与摄入事务双重校验目录成员 **并冻快照验 CLI 兼容**，非法/未启用/OCI/CLI 不兼容整单拒绝（`invalid_runtime_image` / `invalid_payload`，禁止 `HANDLER_FAILED`）。resume/`rerun-current` 把 Job 已冻结的 `runtime_image.image_key` 当作该 Job 镜像身份，不掉回角色缺省。Scheduler 仍唯一冻结 digest；Worker 无提案能力；运行中 Job 不换图；缺本机层仍走 #286 human 阻塞 |
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
 | Finding 追踪链 + 画布只看链路 | #31 | **已完成**：`GET /findings/:id` 提供结构化、限界的 `trace`；详情主路径消费 evidence/rounds/Fact-Intent flow/gaps；画布支持 `traceFinding` + `focusNode` 深链、淡化/隐藏与 Finding 节点入口 |
