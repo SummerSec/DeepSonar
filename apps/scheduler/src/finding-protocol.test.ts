@@ -172,3 +172,15 @@ test("leftover suggest_verify is gone from contract, persist, and Agent-facing c
     assert.doesNotMatch(readFileSync(source, "utf8"), /suggest_verify/);
   }
 });
+
+test("Job finding protocol only reads the frozen canvas snapshot", () => {
+  const core = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
+  const executor = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(core, /FROZEN_FINDING_PROTOCOL_MISSING/);
+  assert.match(executor, /FROZEN_FINDING_PROTOCOL_MISSING/);
+  assert.doesNotMatch(core, /Compatibility for canvases created before schema v20/);
+  assert.doesNotMatch(executor, /Compatibility for pre-v20 canvases/);
+  const fn = core.slice(core.indexOf("async function findingProtocolForJob"), core.indexOf("export async function ingestEvent"));
+  assert.match(fn, /FROZEN_FINDING_PROTOCOL_MISSING/);
+  assert.doesNotMatch(fn, /resolveFindingProtocol\(/);
+});

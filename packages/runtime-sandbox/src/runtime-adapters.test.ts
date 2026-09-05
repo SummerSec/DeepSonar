@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
@@ -14,6 +15,7 @@ import {
   applyRuntimeOutputText,
   parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
+  CONTROL_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,
   getAgentCliRuntimeAdapter,
   requireAgentCliRuntimeAdapter,
@@ -104,10 +106,15 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.deepEqual(agentCliIdsCompatibleWithImage("third-party-unlisted"), []);
   for (const id of ["claude-code", "dsh", "pi"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
-    assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, false);
+    assert.equal("controlMcp" in AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities, false);
   }
+  assert.deepEqual(CONTROL_RUNTIME_CAPABILITIES, ["platformControlApi"]);
   assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.dsh.outputMode, "jsonl");
   assert.equal(Reflect.set(AGENT_CLI_RUNTIME_ADAPTERS.pi, "version", "tampered"), false);
+  const runtimeAgent = readFileSync(new URL("./runtime-agent.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(runtimeAgent, /DEFAULT_SEMANTIC_TOOL_EVENTS/);
+  assert.doesNotMatch(runtimeAgent, /semanticToolEvents/);
+  assert.match(runtimeAgent, /key === "controlMcp" && entry !== true/);
 });
 
 test("applyRuntimeOutput keeps session identity from CLI JSONL", () => {

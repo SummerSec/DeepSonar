@@ -23,7 +23,7 @@ pnpm build            # 全 workspace tsc 构建
 pnpm typecheck        # 全 workspace 类型检查
 ```
 
-- **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:mcp`；后者文件名是历史命名，当前验证的是 Job 控制 API-only 契约。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
+- **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:control-api`。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
 - **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI，当前是 `test` 角色默认镜像且不要求项目 opt-in。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
 - **运行模式**：默认 `AGENT_MODE=real`（OpenSandbox 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。

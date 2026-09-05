@@ -126,7 +126,7 @@ fake 模式不使用也不预拉该 helper。官方 helper 由 Release 与 sched
 
 ## Security notes
 
-- Shared mounts remain **read-only** in the sandbox; Agent publish still goes through control MCP + Scheduler  
+- Shared mounts remain **read-only** in the sandbox; Agent publish still goes through the Job control API + Scheduler  
 - Blob keys are validated (`shared-assets/sha256/…` only); path traversal is rejected  
 - Do not put long-lived cloud keys into RoleConfig or Agent env; configure BlobStore only on the Scheduler host  
 

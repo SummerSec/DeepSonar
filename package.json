@@ -13,7 +13,7 @@
     "dev:web": "pnpm --filter @deepsonar/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "ci:smoke:mcp": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts",
+    "ci:smoke:control-api": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-api.ts",
     "ci:smoke:opensandbox": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts",
     "ci:smoke:opensandbox-images": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts -- --case images",
     "ci:smoke:opensandbox-prod": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-opensandbox-poc.ts -- --case prod-config",

@@ -366,7 +366,7 @@ export const FindingPayload = z
 export type FindingPayload = z.infer<typeof FindingPayload>;
 
 /** Agent-facing Finding contract.  SARIF/raw is Scheduler-owned internal data
- * and is intentionally not writable through the control MCP. */
+ * and is intentionally not writable through the Job control API. */
 export const EmitFindingDirectPayload = z
   .object({
     title: meaningfulFindingTitle,

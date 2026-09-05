@@ -12,7 +12,6 @@ export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-sum
 
 export interface AgentCliCapabilities {
   streamEvents: boolean;
-  controlMcp: boolean;
   /** 平台向该运行时提供 Job 级 HTTP 控制 API；请求由 Agent 自己的 HTTP 工具发起。 */
   platformControlApi: boolean;
   incrementalMessages: boolean;
@@ -105,7 +104,6 @@ export const REQUIRED_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities
 ];
 
 export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
-  "controlMcp",
   "platformControlApi",
 ];
 
@@ -377,7 +375,6 @@ function unseenCompleteText(
 function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<AgentCliCapabilities> {
   return Object.freeze({
     streamEvents: false,
-    controlMcp: false,
     platformControlApi: false,
     incrementalMessages: false,
     completionGate: false,
@@ -413,7 +410,7 @@ const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.252",
   outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   // Claude Code 2.1.252 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
@@ -615,7 +612,6 @@ const pi = Object.freeze<RuntimeAdapter>({
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
-    controlMcp: false,
     platformControlApi: true,
     incrementalMessages: true,
     completionGate: true,
@@ -865,7 +861,6 @@ const dsh = Object.freeze<RuntimeAdapter>({
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
-    controlMcp: false,
     platformControlApi: true,
     incrementalMessages: true,
     completionGate: true,
@@ -921,8 +916,8 @@ export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): R
   for (const capability of REQUIRED_RUNTIME_CAPABILITIES) {
     if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
   }
-  if (!adapter.capabilities.controlMcp && !adapter.capabilities.platformControlApi) {
-    throw new Error(`AGENT_CLI_CONTROL_CAPABILITY_MISSING: ${adapter.id}`);
+  for (const capability of CONTROL_RUNTIME_CAPABILITIES) {
+    if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CONTROL_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
   }
   if (adapter.capabilities.contextCompactionPolicy === "unsupported") {
     throw new Error(`AGENT_CLI_CONTEXT_COMPACTION_UNSUPPORTED: ${adapter.id}`);

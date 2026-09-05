@@ -323,7 +323,8 @@ test("real executor passes the reserved Skill to the sandbox without putting the
   assert.match(source, /from "\.\/platform-control\.js"/);
   assert.doesNotMatch(source, /control-mcp/);
   assert.match(source, /const controlTransport = "job_scoped_control_api" as const/);
-  assert.match(source, /semanticToolEvents: \{\}/);
+  assert.doesNotMatch(source, /semanticToolEvents/);
+  assert.doesNotMatch(source, /DEFAULT_SEMANTIC_TOOL_EVENTS/);
   assert.match(source, /Job-scoped control API 仍可按 deepsonar-control Skill 通过 HTTP 工具调用/);
   assert.match(source, /verify_required=false.*不得为它派 review\/test 或 request_human/);
   const manifestStart = source.indexOf("const componentManifest = {");
