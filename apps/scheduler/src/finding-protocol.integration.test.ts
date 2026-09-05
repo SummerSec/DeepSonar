@@ -174,6 +174,27 @@ if (!testDatabaseUrl) {
       assert.equal((future.scoring_json as Record<string, unknown>).status, "unsupported_version");
       assert.equal((future.scoring_json as Record<string, unknown>).base_score, null);
       assert.equal((future.scoring_json as Record<string, unknown>).reported_base_score, 10);
+
+      await sql`
+        UPDATE canvases
+        SET target_json = target_json - 'effective_finding_protocol'
+        WHERE id = ${canvasId}`;
+      await assert.rejects(
+        ingestEvent(auditJobId, {
+          v: 1,
+          event_id: randomUUID(),
+          type: "finding",
+          payload: {
+            title: "unfrozen protocol",
+            summary: "Missing frozen protocol must fail closed instead of live-resolving current config.",
+          },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /FROZEN_FINDING_PROTOCOL_MISSING/);
+          return true;
+        },
+      );
     } finally {
       await sql`UPDATE global_settings SET rules_json = ${sql.json((originalGlobal?.rules_json ?? {}) as never)}, updated_at = now() WHERE id = 'global'`;
       if (canvasId) {

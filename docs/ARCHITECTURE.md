@@ -539,7 +539,7 @@ Finding 协议是同一配置层级中的独立规则：全局存于
 `global_settings.rules_json.finding_protocol`，项目存于
 `projects.config_json.finding_protocol`，任务请求的 `finding_protocol` 写入画布
 `target_json`。`resolveFindingProtocol` 按任务 > 项目 > 全局覆盖（数组按层替换并去重），生成
-`EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。只有 v20 以前未冻结的历史画布走兼容回退。
+`EffectiveFindingProtocol` 后在新画布创建事务中冻结；后续改设置不改写既有画布或 Job。缺少冻结协议的画布 fail closed，不再现场合并当前全局/项目配置。
 
 compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目且 disposition 为 `open|accepted|human_reproducing|confirmed_vuln`（**不要求** `confirmed`），然后把内容与冻结当时的 `verify_status`/`disposition` 写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID 与 `compose_scope` 位置规则；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。compose 画布禁止未绑定种子的 explore/audit，且 `emit_finding` 必须落在种子资产范围内。
 

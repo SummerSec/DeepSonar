@@ -988,15 +988,7 @@ async function findingProtocolForJob(tx: Tx, job: Record<string, unknown>): Prom
     const frozen = parseFrozenFindingProtocol(target.effective_finding_protocol);
     if (frozen) return frozen;
   }
-
-  // Compatibility for canvases created before schema v20. New canvases always
-  // freeze this value at creation, so later config edits cannot rewrite history.
-  const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-  const [project] = await tx`SELECT config_json FROM projects WHERE id = ${job.project_id as string}`;
-  return resolveFindingProtocol(
-    parseStoredFindingProtocolConfig(((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol),
-    parseStoredFindingProtocolConfig(((project?.config_json ?? {}) as Record<string, unknown>).finding_protocol),
-  );
+  throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
 }
 
 // ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------

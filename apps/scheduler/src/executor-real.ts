@@ -12,7 +12,6 @@ import {
   EmitFindingDirectPayload,
   EffectiveFindingProtocol,
   EventEnvelope,
-  FindingProtocolConfig,
   type EventEnvelopeInput,
   FindingPayload,
   HumanPayload,
@@ -78,7 +77,6 @@ import {
 import { inc } from "./metrics.js";
 import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/canvas/human-messages.js";
 import { composeHubInstruction, composeScopeForPrompt, composeWorkerInstruction } from "./compose-scope.js";
-import { resolveFindingProtocol } from "./finding-protocol.js";
 import { frozenTaskSeeds } from "./task-compose.js";
 import { materializeFrozenPiExtensions, parseFrozenPiExtensions } from "./pi-extensions.js";
 import {
@@ -705,15 +703,7 @@ export async function executeReal(
     taskTarget.effective_finding_protocol,
   ).data;
   if (!effectiveFindingProtocol) {
-    // Compatibility for pre-v20 canvases only. New tasks are frozen by
-    // ensureCanvasForTask and must never follow later configuration changes.
-    const [globalSettings] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const [project] = await sql`SELECT config_json FROM projects WHERE id = ${job.project_id as string}`;
-    const globalValue = ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol;
-    const projectValue = ((project?.config_json ?? {}) as Record<string, unknown>).finding_protocol;
-    const globalProtocol = globalValue == null ? undefined : FindingProtocolConfig.parse(globalValue);
-    const projectProtocol = projectValue == null ? undefined : FindingProtocolConfig.parse(projectValue);
-    effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
+    throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
   }
   const findingProtocolGuide = `## 当前生效 Finding 协议（Scheduler 冻结）
 名称：${effectiveFindingProtocol.display_name}
@@ -1574,8 +1564,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       subAgents: snapshot.subagents as never,
       piExtensions: piExtensionInjection.paths,
       workspaceFiles,
-      semanticToolEvents: {},
-      onSemanticEvent,
       secretValues: [platformToken, gatewayToken].filter((value): value is string => Boolean(value)),
       onRunReady: async ({ sendMessage, readWorkspaceFile, writeWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;

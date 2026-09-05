@@ -55,13 +55,6 @@ export interface RealAgentSpec {
   workspaceFiles?: Record<string, string>;
   /** 运行后要读回的文件 */
   resultFiles?: string[];
-  /** 控制 MCP 工具名到宿主语义事件类型的映射。 */
-  semanticToolEvents?: Record<string, string>;
-  /** 每条完整语义事件到达时串行调用。 */
-  onSemanticEvent?: (
-    event: Record<string, unknown>,
-    control: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
-  ) => void | Promise<void>;
   /**
    * Run 建立后注册外部增量消息源；消息经 stdin stream-json 注入同一会话。
    * `readWorkspaceFile` 复用语义事件的安全读取边界，供 Job-scoped API
@@ -362,7 +355,6 @@ export function normalizePlainFinalOutput(
   stdout: string,
   stderr: string,
   exitCode: number,
-  _onSemanticEvent?: (event: Record<string, unknown>) => void,
   options: PlainFinalOutputOptions = {},
 ): PlainFinalOutputResult {
   if (Buffer.byteLength(stdout, "utf8") > PLAIN_FINAL_MAX_BYTES) {
@@ -662,23 +654,7 @@ async function materializeAgentFiles(
   }
 }
 
-/** claude stream-json 一行 → 规范化事件（保持 executor/前端既有形状） */
-export const DEFAULT_SEMANTIC_TOOL_EVENTS: Record<string, string> = {
-  "mcp__deepsonar-control__emit_progress": "progress",
-  "mcp__deepsonar-control__emit_fact": "fact",
-  "mcp__deepsonar-control__emit_finding": "finding",
-  "mcp__deepsonar-control__submit_hub_decision": "hub_decision",
-  "mcp__deepsonar-control__mark_job_done": "done",
-  "mcp__deepsonar-control__request_human": "human",
-};
-
-export const DEFAULT_PENDING_CONTROL_TOOL_LIMIT = 128;
 const SETTLED_CONTROL_TOOL_LIMIT = 4096;
-
-type PendingSemanticTool = {
-  toolName: string;
-  event: Record<string, unknown>;
-};
 
 type PartialAssistantMessage = {
   text: string;
@@ -687,15 +663,11 @@ type PartialAssistantMessage = {
 
 type ObservedToolKind = "control" | "other";
 
-/** Stream-local state for two-phase control tool delivery. */
+/** Stream-local state for CLI telemetry; forged control-MCP names never become semantic events. */
 export interface SemanticToolState {
-  /** Successful call ids only; failed calls are never released as events. */
-  seenToolUseIds: Set<string>;
   /** Calls that received a result (success or error), preventing replay. */
   settledToolUseIds: Set<string>;
-  /** Assistant control calls awaiting their matching user tool_result. */
-  pendingToolUses: Map<string, PendingSemanticTool>;
-  /** Bounded raw ids for control calls, which are length-validated before storage. */
+  /** Bounded raw ids for control-namespace calls, which are length-validated before storage. */
   observedToolUses: Map<string, ObservedToolKind>;
   /** Hash-only tracking for ordinary tool calls; raw ids remain telemetry-compatible. */
   observedNonControlToolUseHashes: Set<string>;
@@ -707,45 +679,22 @@ export interface SemanticToolState {
   partialAssistantMessages: Map<string, PartialAssistantMessage>;
   currentPartialAssistantMessage?: string;
   nextPartialAssistantMessage: number;
-  maxPendingToolUses: number;
 }
 
-export function createSemanticToolState(
-  maxPendingToolUses = DEFAULT_PENDING_CONTROL_TOOL_LIMIT,
-): SemanticToolState {
+export function createSemanticToolState(): SemanticToolState {
   return {
-    seenToolUseIds: new Set(),
     settledToolUseIds: new Set(),
-    pendingToolUses: new Map(),
     observedToolUses: new Map(),
     observedNonControlToolUseHashes: new Set(),
     observedNonControlToolUseNames: new Map(),
     settledNonControlToolUseHashes: new Set(),
     partialAssistantMessages: new Map(),
     nextPartialAssistantMessage: 0,
-    maxPendingToolUses,
   };
 }
 
-/** Drop unresolved control calls at run end without exposing their payloads. */
-export function discardPendingSemanticTools(
-  state: SemanticToolState,
-  onWarning?: (warning: { code: string; detail?: string }) => void,
-): void {
-  if (state.pendingToolUses.size === 0) {
-    state.observedToolUses.clear();
-    state.observedNonControlToolUseHashes.clear();
-    state.observedNonControlToolUseNames.clear();
-    state.settledNonControlToolUseHashes.clear();
-    state.partialAssistantMessages.clear();
-    state.currentPartialAssistantMessage = undefined;
-    return;
-  }
-  onWarning?.({
-    code: "control_tool_pending_discarded",
-    detail: `pending_count=${state.pendingToolUses.size}`,
-  });
-  state.pendingToolUses.clear();
+/** Drop unresolved control observations at run end without exposing their payloads. */
+export function discardPendingSemanticTools(state: SemanticToolState): void {
   state.observedToolUses.clear();
   state.observedNonControlToolUseHashes.clear();
   state.observedNonControlToolUseNames.clear();
@@ -779,20 +728,7 @@ function rememberToolHash(set: Set<string>, callId: string): void {
   if (typeof oldest === "string") set.delete(oldest);
 }
 
-function semanticEventId(callId: string): string {
-  const bytes = createHash("sha256").update(`deepsonar-control:${callId}`).digest().subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
 const MAX_CONTROL_CALL_ID_LENGTH = 256;
-
-/** Correlate control telemetry without persisting an untrusted tool id. */
-function controlTelemetryCallId(callId: string): string {
-  return `control-${createHash("sha256").update(`deepsonar-control-telemetry:${callId}`).digest("hex").slice(0, 24)}`;
-}
 
 function validControlCallId(value: unknown): boolean {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_CONTROL_CALL_ID_LENGTH;
@@ -802,16 +738,6 @@ function safeRuntimeValueKind(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   return typeof value;
-}
-
-/** Shape-only telemetry for control inputs; never include values or field names. */
-function safeControlInputShape(value: unknown): Record<string, unknown> {
-  if (value === null) return { kind: "null" };
-  if (Array.isArray(value)) return { kind: "array", count: Math.min(value.length, 1000) };
-  if (typeof value === "object") {
-    return { kind: "object", field_count: Math.min(Object.keys(value as Record<string, unknown>).length, 1000) };
-  }
-  return { kind: safeRuntimeValueKind(value) };
 }
 
 const PARTIAL_ASSISTANT_MAX = 64_000;
@@ -1158,14 +1084,13 @@ function mapClaudeStreamEvent(
     return true;
   }
   // Future content block delta types are intentionally ignored. They must not
-  // become fabricated text or control-MCP events.
+  // become fabricated text or semantic events.
   return true;
 }
 
 export function mapCliEvent(
   line: Record<string, unknown>,
   emit: (e: Record<string, unknown>) => void,
-  semanticToolEvents: Record<string, string> = DEFAULT_SEMANTIC_TOOL_EVENTS,
   state: SemanticToolState = createSemanticToolState(),
   secretValues: readonly string[] = [],
 ): {
@@ -1226,31 +1151,17 @@ export function mapCliEvent(
       } else if (block.type === "tool_use") {
         const toolName = typeof block.name === "string" ? block.name : "";
         const callId = typeof block.id === "string" ? block.id : "";
-        const eventType = Object.prototype.hasOwnProperty.call(semanticToolEvents, toolName)
-          ? semanticToolEvents[toolName]
-          : undefined;
         const isControlNamespace = toolName.startsWith("mcp__deepsonar-control__");
-        const controlEventType = isControlNamespace && typeof eventType === "string" ? eventType : undefined;
-        const canTrackControl = Boolean(
-          controlEventType &&
-          validControlCallId(callId) &&
-          !state.seenToolUseIds.has(callId) &&
-          !state.settledToolUseIds.has(callId) &&
-          !state.pendingToolUses.has(callId),
-        );
-        if (controlEventType) {
+        if (isControlNamespace) {
           if (!validControlCallId(callId)) {
             warnings.push({
               code: "malformed_control_tool_use",
               detail: callId ? `call_id_length=${callId.length}` : "call_id_missing",
             });
-          } else if (canTrackControl) {
+          } else {
             rememberObservedToolUse(state, callId, "control");
-            emit({ type: "tool.call.started", toolName, callId: controlTelemetryCallId(callId), inputShape: safeControlInputShape(block.input) });
+            warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
           }
-        } else if (isControlNamespace) {
-          if (validControlCallId(callId)) rememberObservedToolUse(state, callId, "control");
-          warnings.push({ code: "unknown_control_tool", detail: "control_namespace" });
         } else {
           emit({ type: "tool.call.started", toolName: block.name, callId: block.id, input: redactToolTelemetry(block.input, undefined, 0, secretValues) });
           if (callId) {
@@ -1261,22 +1172,6 @@ export function mapCliEvent(
               if (typeof oldest === "string") state.observedNonControlToolUseNames.delete(oldest);
             }
           }
-        }
-        if (canTrackControl) {
-          if (state.pendingToolUses.size >= state.maxPendingToolUses) {
-            rememberToolId(state.settledToolUseIds, callId);
-            warnings.push({ code: "control_tool_pending_limit", detail: `pending_count=${state.pendingToolUses.size}` });
-            continue;
-          }
-          state.pendingToolUses.set(callId, {
-            toolName,
-            event: {
-            v: 1,
-            event_id: semanticEventId(callId),
-            type: eventType,
-            payload: block.input && typeof block.input === "object" ? block.input : {},
-            },
-          });
         }
       }
     }
@@ -1296,58 +1191,29 @@ export function mapCliEvent(
         if (!callId) continue;
         const isControlSizedId = validControlCallId(callId);
         if (isControlSizedId && state.settledToolUseIds.has(callId)) continue;
-        const pending = isControlSizedId ? state.pendingToolUses.get(callId) : undefined;
-        // A result without a matching control tool_use is not control telemetry.
-        // Do not let out-of-order/unknown ids poison the bounded replay sets.
-        if (!pending) {
-          const observedKind = isControlSizedId ? state.observedToolUses.get(callId) : undefined;
-          if (observedKind === "control") {
-            state.observedToolUses.delete(callId);
-            rememberToolId(state.settledToolUseIds, callId);
-            continue;
-          }
-          const nonControlHash = telemetryToolHash(callId);
-          if (!state.observedNonControlToolUseHashes.delete(nonControlHash)) continue;
-          if (!state.settledNonControlToolUseHashes.has(nonControlHash)) {
-            rememberToolHash(state.settledNonControlToolUseHashes, callId);
-            const result = toolResultText(block, secretValues);
-            const error = block.is_error === true ? result : boundedToolText(block.error, secretValues);
-            emit({
-              type: "tool.call.completed",
-              callId,
-              toolName: state.observedNonControlToolUseNames.get(nonControlHash),
-              ...(result ? { result } : {}),
-              ...(toolExitCode(block) !== undefined ? { exit: toolExitCode(block) } : {}),
-              ...(error ? { error } : {}),
-              isError: block.is_error === true,
-            });
-          }
-          state.observedNonControlToolUseNames.delete(nonControlHash);
+        const observedKind = isControlSizedId ? state.observedToolUses.get(callId) : undefined;
+        if (observedKind === "control") {
+          state.observedToolUses.delete(callId);
+          rememberToolId(state.settledToolUseIds, callId);
           continue;
         }
-        state.pendingToolUses.delete(callId);
-        state.observedToolUses.delete(callId);
-        rememberToolId(state.settledToolUseIds, callId);
-        const hasIsError = Object.prototype.hasOwnProperty.call(block, "is_error");
-        const isErrorFlag = hasIsError ? block.is_error : undefined;
-        const validIsErrorFlag = !hasIsError || typeof isErrorFlag === "boolean";
-        const isError = !validIsErrorFlag || isErrorFlag === true;
-        if (!validIsErrorFlag) {
-          warnings.push({
-            code: "malformed_control_tool_result",
-            detail: hasIsError ? `is_error_type=${safeRuntimeValueKind(isErrorFlag)}` : "is_error_missing",
+        const nonControlHash = telemetryToolHash(callId);
+        if (!state.observedNonControlToolUseHashes.delete(nonControlHash)) continue;
+        if (!state.settledNonControlToolUseHashes.has(nonControlHash)) {
+          rememberToolHash(state.settledNonControlToolUseHashes, callId);
+          const result = toolResultText(block, secretValues);
+          const error = block.is_error === true ? result : boundedToolText(block.error, secretValues);
+          emit({
+            type: "tool.call.completed",
+            callId,
+            toolName: state.observedNonControlToolUseNames.get(nonControlHash),
+            ...(result ? { result } : {}),
+            ...(toolExitCode(block) !== undefined ? { exit: toolExitCode(block) } : {}),
+            ...(error ? { error } : {}),
+            isError: block.is_error === true,
           });
         }
-        emit({
-          type: "tool.call.completed",
-          callId: controlTelemetryCallId(callId),
-          toolName: pending.toolName,
-          isError,
-        });
-        if (!isError) {
-          rememberToolId(state.seenToolUseIds, callId);
-          semanticEvents.push(pending.event);
-        }
+        state.observedNonControlToolUseNames.delete(nonControlHash);
       }
     }
     return { semanticEvents, warnings };
@@ -1379,53 +1245,6 @@ export function mapCliEvent(
   return { semanticEvents, warnings };
 }
 
-/** Host errors that the Worker can usually fix by changing tool arguments. */
-const AGENT_CORRECTABLE_HOST_ERROR_RE =
-  /^(?:asset_|invalid_asset_|immutable_asset_key_exists$|shared_asset_source_(?:path_forbidden|not_regular_file|changed)$)/u;
-
-/** Host / infrastructure failures that must still fail the Job. */
-const FATAL_HOST_ERROR_RE =
-  /^(?:shared_asset_publish_job_not_running|shared_asset_container_unavailable)/u;
-
-/** Duck-type host control errors that the Worker can fix without ending the Job. */
-function isAgentCorrectableSemanticError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const record = error as { name?: unknown; retryable?: unknown; code?: unknown; message?: unknown };
-  if (record.retryable === true) return true;
-  if (record.retryable === false) return false;
-  if (record.name === "ControlInputError") {
-    // Prefer explicit retryable when present; otherwise treat ControlInputError as soft.
-    return record.retryable !== false;
-  }
-  const message = typeof record.message === "string" ? record.message : "";
-  if (FATAL_HOST_ERROR_RE.test(message)) return false;
-  // Cross-package / stringified host validation (assets, Zod wrappers, rate limits).
-  if (
-    /^\[(?:invalid_|unknown_field|duplicate_tool_call|tool_limit)/u.test(message) ||
-    message.includes("asset_content_type_not_allowed") ||
-    message.includes("event_rate_limited") ||
-    AGENT_CORRECTABLE_HOST_ERROR_RE.test(message)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function semanticToolNameForEvent(event: Record<string, unknown>): string {
-  const type = String(event.type ?? "");
-  const map: Record<string, string> = {
-    progress: "emit_progress",
-    fact: "emit_fact",
-    finding: "emit_finding",
-    hub_decision: "submit_hub_decision",
-    done: "mark_job_done",
-    human: "request_human",
-    shared_asset_publish: "publish_shared_asset",
-    human_message_ack: "ack_human_message",
-  };
-  return map[type] ?? (type ? `control:${type}` : "control_tool");
-}
-
 export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
@@ -1434,7 +1253,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   const capabilityValues = (value: object | undefined): Map<string, unknown> => {
     const out = new Map<string, unknown>();
     if (!value) return out;
-    for (const [key, entry] of Object.entries(value)) out.set(key, entry);
+    for (const [key, entry] of Object.entries(value)) {
+      // Leftover snapshot key from the deleted MCP control channel. `false` is
+      // equivalent to absence; `true` still mismatches and fail-closes.
+      if (key === "controlMcp" && entry !== true) continue;
+      out.set(key, entry);
+    }
     return out;
   };
   const capabilityMismatch = (left: object | undefined, right: object) => {
@@ -1463,7 +1287,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   }
 
   // 2. 沙箱只当执行宿主：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
-  //    控制 MCP 仍由宿主注册并捕获结构化 tool_use/tool_result，不经沙箱目标网络。
+  //    语义事件只接受 Job 级控制 API；CLI 流里的伪造控制 MCP tool call 只告警，不映射为事件。
   const cliEnv = runtimeCliEnv(spec.env);
   await ensureRuntimeHome(host);
   await materializeAgentFiles(host, spec, cliEnv);
@@ -1555,7 +1379,6 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   }
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
-  const semanticToolEvents = spec.semanticToolEvents ?? DEFAULT_SEMANTIC_TOOL_EVENTS;
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let progressBuffer = "";
@@ -1708,65 +1531,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 if (safeEvent.type === "text.delta" && typeof safeEvent.delta === "string") {
                   progressBuffer += safeEvent.delta as string;
                 }
-              }, semanticToolEvents, semanticToolState, secretValues);
+              }, semanticToolState, secretValues);
               for (const warning of outcome.warnings) spec.onWarning?.(warning);
               if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "agent_settled", "agent_end"].includes(String(parsed.type))) {
                 spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
-              }
-              for (const event of outcome.semanticEvents) {
-                const safeSemanticEvent = redactToolTelemetry(event, undefined, 0, secretValues) as Record<string, unknown>;
-                try {
-                  await spec.onSemanticEvent?.(safeSemanticEvent, {
-                    readWorkspaceFile: (filePath, maxBytes) => host.readWorkspaceFile(filePath, maxBytes),
-                  });
-                } catch (error) {
-                  // Host-side control validation runs after MCP returned
-                  // schema_validated. Agent-correctable failures must return as
-                  // tool/error feedback and keep the CLI session alive — never
-                  // collapse into fatal "语义事件处理失败" Job exit.
-                  if (isAgentCorrectableSemanticError(error)) {
-                    const message = redactSecretValues(error instanceof Error ? error.message : String(error), secretValues);
-                    const toolHint = semanticToolNameForEvent(safeSemanticEvent);
-                    spec.onWarning?.({
-                      code: "control_tool_host_rejected",
-                      detail: message.length > 280 ? `${message.slice(0, 280)}…` : message,
-                    });
-                    // Surface on the process stream as a failed control tool so the
-                    // live UI shows the rejection (MCP already answered success).
-                    spec.onEvent?.(redactToolTelemetry({
-                      type: "tool.call.completed",
-                      toolName: toolHint,
-                      isError: true,
-                      error: message,
-                      result: message,
-                    }, undefined, 0, secretValues) as Record<string, unknown>);
-                    const nudge =
-                      `【控制工具被平台拒绝 — 请修正后重试，本 Job 未退出】\n` +
-                      (toolHint ? `工具: ${toolHint}\n` : "") +
-                      `错误: ${message}\n` +
-                      "请根据错误修正参数并重新调用该工具（或改用 payload_file）；不要 mark_job_done，直到契约要求的提交成功。";
-                    if (adapter.capabilities.incrementalMessages) {
-                      await writeFollowUpMessage(nudge);
-                    } else if (sessionId) {
-                      // 非增量 CLI 在同一会话带错误恢复，使模型能修正而不是中途终止。
-                      try {
-                        await assertResumeIdentity();
-                        resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: nudge, sessionId, ...(sessionFile ? { sessionFile } : {}) });
-                        resumedInput = nudge;
-                      } catch (resumeError) {
-                        if (resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
-                        spec.onWarning?.({
-                          code: "control_tool_reject_resume_failed",
-                          detail: resumeError instanceof Error ? resumeError.message : String(resumeError),
-                        });
-                      }
-                    }
-                    continue;
-                  }
-                  semanticError = error instanceof Error ? error.message : String(error);
-                  semanticErrorDetails = normalizeRuntimeErrorDetails(error);
-                  throw error;
-                }
               }
               // 首次捕获后保持 session ID 不变；恢复进程只能继续原会话，不能把
               // 后续输出中的其他 ID 提升为新的恢复目标。
@@ -1789,7 +1557,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 if (outcome.isError !== true && spec.completionGate && !spec.completionGate() && nudgesLeft > 0) {
                   nudgesLeft--;
                   const nudge = spec.nudgeMessage ??
-                    "协议要求的系统工具调用还没有完成。请立即通过平台 MCP 工具提交（不要只用文本描述），然后结束本轮。";
+                    "协议要求的系统工具调用还没有完成。请立即通过 Job 控制 API 提交（不要只用文本描述），然后结束本轮。";
                   if (adapter.capabilities.incrementalMessages) {
                     await writeFollowUpMessage(nudge);
                   } else {
@@ -1830,7 +1598,6 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           stdoutBuffer,
           attemptStderrTail,
           attemptExitCode,
-          undefined,
           { adapterId: adapter.id, completionGate: spec.completionGate?.() ?? true },
         );
         for (const event of plainResult.events) spec.onEvent?.(event);
@@ -1925,7 +1692,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     }
   } finally {
     stdinCloseKiller.cancel();
-    discardPendingSemanticTools(semanticToolState, (warning) => spec.onWarning?.(warning));
+    discardPendingSemanticTools(semanticToolState);
     if (typeof disposeMessageSource === "function") await disposeMessageSource();
   }
   stderrEvidence.finish();
