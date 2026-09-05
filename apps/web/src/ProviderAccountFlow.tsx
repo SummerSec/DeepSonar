@@ -695,7 +695,6 @@ export function ProviderAccountFlow({
     try {
       const existingMeta = editingCredential.public_metadata_json ?? {};
       const metadata = { ...existingMeta };
-      delete metadata.allowed_model_ids;
       if (baseUrl) metadata.base_url = baseUrl;
       else delete metadata.base_url;
       await api.updateCredential(editingCredential.id, {
