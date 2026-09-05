@@ -877,7 +877,10 @@ export function createEventIngestionSideEffectApplication(
         location: normalized.location ?? null,
         summary: normalized.summary ?? null,
         suggest_verify: normalized.suggest_verify ?? false,
-        raw_json: (normalized.raw ?? {}) as never,
+        raw_json: {
+          ...(normalized.raw ?? {}),
+          ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
+        } as never,
       })}
       ON CONFLICT (project_id, fingerprint) DO NOTHING
       RETURNING *`;
@@ -904,6 +907,7 @@ export function createEventIngestionSideEffectApplication(
             score_version: normalized.scoring?.version ?? null,
             location: normalized.location,
             summary: normalized.summary,
+            ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
           } as never,
           x: jobNode.x + 300,
           y: jobNode.y + count * 140,
@@ -931,6 +935,7 @@ export function createEventIngestionSideEffectApplication(
         intent_node_id?: string;
         title?: string;
         description?: string;
+        quantities?: FactPayload["quantities"];
         verification?: VerificationEvidence;
       };
       if (!p.description) return;
@@ -958,7 +963,10 @@ export function createEventIngestionSideEffectApplication(
         job_id: jobId,
         node_type: "fact",
         title: (p.title ?? p.description.slice(0, 60)).slice(0, 200),
-        body_json: { description: p.description } as never,
+        body_json: {
+          description: p.description,
+          ...(p.quantities && p.quantities.length > 0 ? { quantities: p.quantities } : {}),
+        } as never,
         x: ((intentNode?.x as number) ?? 100) + 340,
         y: ((intentNode?.y as number) ?? 100) + count * 140,
         status: "open",

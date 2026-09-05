@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ControlToolInputSchemasJson,
+  EmitFactDirectPayload,
   EmitFactPayload,
+  EmitFindingDirectPayload,
   EmitFindingPayload,
   FactPayload,
   FindingPayload,
   HumanPayload,
   DonePayload,
+  QUANTITY_ANCHOR_MAX,
+  QuantityAnchor,
 } from "@deepsonar/shared-types";
 
 const fact = { title: "事实标题", description: "This fact includes enough evidence context." };
@@ -48,6 +52,41 @@ test("semantic tool payloads accept exactly one direct object or payload_file", 
   assert.equal(EmitFindingPayload.safeParse({ ...finding, payload_file: "finding.json" }).success, false);
   assert.equal(EmitFindingPayload.safeParse({ payload_file: "../finding.json" }).success, false);
   assert.equal(EmitFactPayload.safeParse({ payload_file: "C:\\tmp\\fact.json" }).success, false);
+});
+
+const quantity = {
+  value: 774,
+  unit: "Ghidra records after 37 LDDW fold",
+  basis: "811 8-byte ELF slots minus folded LDDW aliases",
+  ref: "evidence/elf-slots.json",
+};
+
+test("optional quantities accept a strict capped list on fact and finding payloads", () => {
+  const withQuantities = { ...fact, quantities: [quantity] };
+  const findingWithQuantities = { ...finding, quantities: [quantity] };
+  assert.equal(QuantityAnchor.safeParse(quantity).success, true);
+  assert.equal(FactPayload.safeParse(withQuantities).success, true);
+  assert.equal(EmitFactPayload.safeParse(withQuantities).success, true);
+  assert.equal(EmitFactDirectPayload.safeParse(withQuantities).success, true);
+  assert.equal(FindingPayload.safeParse(findingWithQuantities).success, true);
+  assert.equal(EmitFindingPayload.safeParse(findingWithQuantities).success, true);
+  assert.equal(EmitFindingDirectPayload.safeParse(findingWithQuantities).success, true);
+});
+
+test("quantities reject extra fields, missing unit/basis, and more than 20 entries", () => {
+  assert.equal(QuantityAnchor.safeParse({ value: 1, unit: "slots", extra: true }).success, false);
+  assert.equal(QuantityAnchor.safeParse({ value: 1, unit: "slots" }).success, false);
+  assert.equal(QuantityAnchor.safeParse({ value: "774", unit: "slots", basis: "raw count" }).success, false);
+  assert.equal(QuantityAnchor.safeParse({ value: Number.NaN, unit: "slots", basis: "raw count" }).success, false);
+  const tooMany = Array.from({ length: QUANTITY_ANCHOR_MAX + 1 }, () => quantity);
+  assert.equal(FactPayload.safeParse({ ...fact, quantities: tooMany }).success, false);
+  assert.equal(FindingPayload.safeParse({ ...finding, quantities: tooMany }).success, false);
+  assert.equal(FactPayload.safeParse({ ...fact, quantities: tooMany.slice(0, QUANTITY_ANCHOR_MAX) }).success, true);
+});
+
+test("undeclared quantities remain optional so prose numbers stay unprotected", () => {
+  assert.equal(FactPayload.safeParse(fact).success, true);
+  assert.equal(FindingPayload.safeParse(finding).success, true);
 });
 
 test("advertised semantic MCP schemas remain top-level objects", () => {

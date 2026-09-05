@@ -138,3 +138,22 @@ test("effective scoring policy enforces accepted and required scoring", () => {
     /not accepted/,
   );
 });
+
+test("normalizeFindingProposal keeps declared quantities", () => {
+  const protocol = resolveFindingProtocol(undefined, undefined, {
+    mode: "fixed",
+    default_profile: "general",
+    allowed_profiles: ["general"],
+  });
+  const quantities = [{
+    value: 70,
+    unit: "BPF_CALL sites",
+    basis: "raw opcode count, not helper invocations",
+  }];
+  const normalized = normalizeFindingProposal({
+    title: "BPF call inventory",
+    summary: "Counted BPF_CALL sites without folding them into helper calls.",
+    quantities,
+  }, protocol);
+  assert.deepEqual(normalized.quantities, quantities);
+});
