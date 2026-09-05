@@ -156,6 +156,12 @@ if (!testDatabaseUrl) {
       assert.equal(verifyJob.type, "verify_finding");
       assert.equal(verifyJob.priority, FIXED_PRIORITY.verifyHigh);
       assert.equal((verifyJob.payload_json as Record<string, unknown>).verification_eligibility, "eligible");
+      const frozenFinding = (verifyJob.payload_json as { finding?: Record<string, unknown> }).finding ?? {};
+      assert.deepEqual(Object.keys(frozenFinding).sort(), ["artifact_refs", "id", "location"]);
+      assert.equal(frozenFinding.id, findingId);
+      assert.equal("title" in frozenFinding, false);
+      assert.equal("summary" in frozenFinding, false);
+      assert.equal("severity" in frozenFinding, false);
 
       lowCanvasId = `verify-eligibility-low-${randomUUID()}`;
       const lowOriginJobId = randomUUID();
