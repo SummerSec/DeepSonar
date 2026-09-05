@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { config } from "./config.js";
-import { graphProjectionMarkers, humanHintProjection, parseHubDecision, serializeFindingStatusIndex } from "./graph.js";
+import { graphProjectionMarkers, humanHintProjection, parseHubDecision, projectVerifyFinding, serializeFindingStatusIndex } from "./graph.js";
 import { buildEvidenceSnapshot, findingVerificationSummaries } from "./verify.js";
 
 test("Hub Finding status index keeps all 357 entries within the 48 KB budget", () => {
@@ -79,8 +79,34 @@ test("graph projections prioritize open intents and do not repeat the Worker pro
   );
   assert.equal(agentSource.includes("options.intent?.prompt"), false);
 
+  const verifySource = graphSource.slice(graphSource.indexOf('} else if (scope === "verify")'));
+  assert.match(verifySource, /projectVerifyFinding/);
+  assert.equal(verifySource.includes('kv("title"'), false);
+  assert.equal(verifySource.includes('kv("summary"'), false);
+  assert.equal(verifySource.includes('kv("severity"'), false);
+
   const executorSource = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
   assert.match(executorSource, /findingId:\s*[\s\S]{0,400}payload\.trigger/);
+});
+
+test("verify scope projection helper keeps skeleton and refs only", () => {
+  const projected = projectVerifyFinding({
+    id: "f1",
+    node_id: "n1",
+    location: "main.rs:10",
+    verify_status: "pending",
+    artifact_refs: [{ uri: "shared://a" }],
+    verification: { eligibility: "waiting_evidence", missing_evidence: ["runtime_test"], summary: "do-not-leak" },
+  });
+  assert.deepEqual(Object.keys(projected), [
+    "id",
+    "node_id",
+    "verify_status",
+    "location",
+    "artifact_refs",
+    "verification",
+  ]);
+  assert.equal(JSON.stringify(projected).includes("do-not-leak"), false);
 });
 
 test("projection markers expose truncation and omission counts", () => {

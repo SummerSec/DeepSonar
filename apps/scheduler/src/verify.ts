@@ -82,6 +82,93 @@ const VALID_OUTCOMES = new Set(["supports", "refutes", "inconclusive"]);
 
 type EvidenceNodeRow = Record<string, unknown>;
 
+export type VerifyArtifactRef = { uri: string; sha256?: string };
+
+export function normalizeFindingArtifactRefs(finding: Record<string, unknown>): VerifyArtifactRef[] {
+  const raw = finding.evidence_refs_json ?? finding.evidence_refs ?? finding.artifact_refs;
+  if (!Array.isArray(raw)) return [];
+  const refs: VerifyArtifactRef[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && item.trim()) {
+      refs.push({ uri: item.trim() });
+      continue;
+    }
+    if (item && typeof item === "object") {
+      const uri = String((item as { uri?: unknown }).uri ?? "").trim();
+      if (!uri) continue;
+      const sha256 = String((item as { sha256?: unknown }).sha256 ?? "").trim();
+      refs.push(sha256 ? { uri, sha256 } : { uri });
+    }
+    if (refs.length >= 20) break;
+  }
+  return refs;
+}
+
+/** Blind-verify freeze: subject + location + artifact refs only; no maker conclusions. */
+export function freezeVerifyFindingSubject(finding: Record<string, unknown>): {
+  id: string;
+  location: string | null;
+  artifact_refs: VerifyArtifactRef[];
+} {
+  const location = String(finding.location ?? "").trim();
+  return {
+    id: String(finding.id ?? ""),
+    location: location || null,
+    artifact_refs: normalizeFindingArtifactRefs(finding),
+  };
+}
+
+export function isMachineCheckableEvidence(row: Record<string, unknown>): boolean {
+  const expected = typeof row.expected === "string" && row.expected.trim().length > 0;
+  const actual = typeof row.actual === "string" && row.actual.trim().length > 0;
+  return expected && actual;
+}
+
+export function hasMachineCheckableEvidence(evidence: Pick<EvidenceSnapshot, "review" | "test">): boolean {
+  return [...evidence.review, ...evidence.test].some(isMachineCheckableEvidence);
+}
+
+function supportingJobIds(evidence: Pick<EvidenceSnapshot, "review" | "test">): string[] {
+  return [...new Set(
+    [...evidence.review, ...evidence.test]
+      .filter((row) => row.outcome === "supports")
+      .map((row) => String(row.job_id ?? ""))
+      .filter(Boolean),
+  )];
+}
+
+/** Confirm hard gate: qualified evidence + expected/actual + no silent path fork. */
+export function evaluateConfirmGate(evidence: EvidenceSnapshot): { ok: boolean; missing: string[] } {
+  const missing = [...evidence.missing];
+  if (!hasMachineCheckableEvidence(evidence)) missing.push("machine_checkable_expected_actual");
+  if (supportingJobIds(evidence).length < 2) missing.push("independent_paths");
+  if (evidence.conflicting_node_ids.length > 0) missing.push("path_fork");
+  return { ok: missing.length === 0, missing: [...new Set(missing)] };
+}
+
+export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Record<string, unknown> {
+  const slim = (row: Record<string, unknown>) => ({
+    node_id: row.node_id,
+    job_id: row.job_id,
+    job_type: row.job_type,
+    outcome: row.outcome,
+    subject_revision: row.subject_revision,
+    steps: row.steps,
+    expected: row.expected,
+    actual: row.actual,
+    artifact_refs: row.artifact_refs,
+    limitations: row.limitations,
+    environment: row.environment,
+  });
+  return {
+    qualified: evidence.qualified,
+    missing: evidence.missing,
+    conflicting_node_ids: evidence.conflicting_node_ids,
+    review: evidence.review.map(slim),
+    test: evidence.test.map(slim),
+  };
+}
+
 /** Single source of truth for the review/test evidence hard gate. */
 export function buildEvidenceSnapshot(
   rows: readonly EvidenceNodeRow[],
@@ -307,13 +394,7 @@ export async function createVerifyRound(
         payload_json: {
           scheduling_purpose: "verify",
           verification_eligibility: "eligible",
-          finding: {
-            fingerprint: opts.finding.fingerprint,
-            title: opts.finding.title,
-            location: opts.finding.location,
-            summary: opts.finding.summary,
-            severity,
-          },
+          finding: freezeVerifyFindingSubject(opts.finding),
           verification_attempt: nextAttempt,
           reason: opts.reason ?? "auto",
           ...(opts.manualOverride
@@ -764,10 +845,11 @@ export async function closeVerifyRound(
   let gateFailed = false;
 
   if (proposed === "confirmed") {
-    if (!evidence.qualified) {
+    const confirm = evaluateConfirmGate(evidence);
+    if (!confirm.ok) {
       final = "rework";
       gateFailed = true;
-      missing = evidence.missing.length > 0 ? evidence.missing : ["evidence_incomplete"];
+      missing = confirm.missing.length > 0 ? confirm.missing : ["evidence_incomplete"];
     }
   } else if (proposed === "needs_human") {
     // 仅当明确阻塞时接受；否则也可回弹（本实现：直接接受 needs_human）

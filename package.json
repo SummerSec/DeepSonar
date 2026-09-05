@@ -66,7 +66,7 @@
     "ci:integration:canvas-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/canvas-lifecycle-projection.integration.test.ts",
     "ci:unit:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.test.ts src/canvas-delta.test.ts && pnpm --filter @deepsonar/web exec tsx --test src/role-colors.test.ts",
     "ci:integration:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.integration.test.ts",
-    "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts src/task-report-version.test.ts",
+    "ci:unit:verify-eligibility": "pnpm --filter @deepsonar/scheduler exec tsx --test src/verify-eligibility.test.ts src/verify-blind.test.ts src/task-report-version.test.ts",
     "ci:unit:canvas-facts": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/canvas/fact-contract.test.ts src/domains/canvas/human-messages.test.ts src/semantic-payload.test.ts src/manual-evidence-priority.test.ts",
     "ci:integration:canvas-facts": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/canvas/canvas-facts.integration.test.ts",
     "ci:unit:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test src/finding-protocol.test.ts src/domains/finding-verification/project-findings-summary.test.ts",

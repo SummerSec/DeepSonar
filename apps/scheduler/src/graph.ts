@@ -1,6 +1,6 @@
 import { sql } from "./db.js";
 import { taskTargetForPrompt } from "./task-compose.js";
-import { findingVerificationSummaries, isSeverityInVerifyScope } from "./verify.js";
+import { findingVerificationSummaries, isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
 import { config } from "./config.js";
 import {
   GraphNodeReference,
@@ -86,6 +86,34 @@ function row(value: Record<string, unknown>): string {
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+/** Verify GraphScope: skeleton + refs only; hide maker title/summary/severity. */
+export function projectVerifyFinding(input: {
+  id?: unknown;
+  node_id?: unknown;
+  location?: unknown;
+  verify_status?: unknown;
+  artifact_refs?: unknown;
+  verification?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const verification = input.verification ?? {};
+  return {
+    id: input.id ?? null,
+    node_id: input.node_id ?? null,
+    verify_status: input.verify_status ?? null,
+    location: short(input.location, 360),
+    artifact_refs: Array.isArray(input.artifact_refs) ? input.artifact_refs.slice(0, 20) : [],
+    verification: {
+      eligibility: verification.eligibility ?? null,
+      verification_attempt: verification.verification_attempt ?? 0,
+      latest_outcome: verification.latest_outcome ?? null,
+      missing_evidence: Array.isArray(verification.missing_evidence) ? verification.missing_evidence : [],
+      review_evidence_ids: Array.isArray(verification.review_evidence_ids) ? verification.review_evidence_ids : [],
+      test_evidence_ids: Array.isArray(verification.test_evidence_ids) ? verification.test_evidence_ids : [],
+      conflicting_evidence_ids: Array.isArray(verification.conflicting_evidence_ids) ? verification.conflicting_evidence_ids : [],
+    },
+  };
 }
 
 export function graphProjectionMarkers(
@@ -188,7 +216,7 @@ export async function buildGraphSnapshot(
     intentFrom.set(key, [...(intentFrom.get(key) ?? []), String(edge.from_node_id)]);
   }
   const findingRows = await sql`
-    SELECT f.id, f.node_id, f.job_id, f.title, f.severity, f.location, f.summary, f.verify_status
+    SELECT f.id, f.node_id, f.job_id, f.title, f.severity, f.location, f.summary, f.verify_status, f.evidence_refs_json
     FROM findings f
     JOIN jobs j ON j.id = f.job_id
     WHERE j.canvas_id = ${canvasId}`;
@@ -202,6 +230,7 @@ export async function buildGraphSnapshot(
     summary: unknown;
     verify_status: unknown;
     imported: boolean;
+    evidence_refs?: unknown;
   }
   const importedFindingRows: VisibleFindingRow[] = nodes
     .filter((node) => {
@@ -220,6 +249,7 @@ export async function buildGraphSnapshot(
         summary: body.summary ?? null,
         verify_status: String(body.frozen_verify_status ?? body.verify_status ?? "pending"),
         imported: true,
+        evidence_refs: body.evidence_refs ?? body.artifact_refs ?? body.evidence_refs_json,
       };
     });
   const visibleFindingRows: VisibleFindingRow[] = [
@@ -233,6 +263,7 @@ export async function buildGraphSnapshot(
       summary: finding.summary,
       verify_status: finding.verify_status,
       imported: false,
+      evidence_refs: finding.evidence_refs_json,
     })),
     ...importedFindingRows,
   ];
@@ -492,16 +523,17 @@ export async function buildGraphSnapshot(
       : undefined;
     const findingBody = (findingNode?.body_json ?? {}) as Record<string, unknown>;
     const verification = finding ? verificationSummaries.get(String(finding.id)) ?? {} : {};
-    addSection("finding", [
-      "  " + kv("id", finding?.id ?? options.findingId ?? null),
-      "  " + kv("node_id", finding?.node_id ?? null),
-      "  " + kv("title", short(finding?.title ?? findingNode?.title, 220)),
-      "  " + kv("severity", finding?.severity ?? findingBody.severity ?? null),
-      "  " + kv("verify_status", finding?.verify_status ?? null),
-      "  " + kv("location", short(finding?.location ?? findingBody.location, 360)),
-      "  " + kv("summary", short(finding?.summary ?? findingBody.summary, 1_000)),
-      "  " + kv("verification", verification),
-    ]);
+    const projected = projectVerifyFinding({
+      id: finding?.id ?? options.findingId ?? null,
+      node_id: finding?.node_id ?? null,
+      location: finding?.location ?? findingBody.location,
+      verify_status: finding?.verify_status ?? null,
+      artifact_refs: normalizeFindingArtifactRefs({
+        evidence_refs: finding?.evidence_refs ?? findingBody.evidence_refs ?? findingBody.artifact_refs,
+      }),
+      verification,
+    });
+    addSection("finding", Object.entries(projected).map(([key, value]) => "  " + kv(key, value)));
     addSection(
       "evidence",
       factNodes

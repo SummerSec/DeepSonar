@@ -716,3 +716,12 @@ test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝"
     (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
   );
 });
+
+test("verify executor input uses blind-verify prompt and frozen subject", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /buildVerifyJobPrompt/);
+  assert.match(source, /freezeVerifyFindingSubject/);
+  assert.match(source, /projectVerifyEvidenceForPrompt/);
+  const verifyBlock = source.slice(source.indexOf("} else if (isVerify)"));
+  assert.doesNotMatch(verifyBlock.slice(0, verifyBlock.indexOf("} else if (isReport)")), /finding\.title|finding\.summary|标题：|严重度：|描述：/);
+});

@@ -84,6 +84,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
 - 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
+- **盲验 Phase 1（#367）**：`verify_finding` 只冻结主体 / location / `artifact_refs`，不下发 maker 的 title/summary/severity；`GraphScope=verify` 默认只投影骨架与引用。Verify prompt 要求先独立推导再逐项 DIFF，仅 exact match 可 confirm；`confirmed` 另需至少一条带非空 `expected`+`actual` 的 `VerificationEvidence`，路径分叉必须 rework。数值保真 / 矛盾检测 / 对抗挑战留待后续 issue。
 - **验证范围（#133）**：`minVerifySeverity` 同时控制自动 Verify 与收敛集合；明确低于阈值的 Finding 保持 `pending` 并记录 `below_min_verify_severity` 策略标记，不创建 Verify Job/round、不阻塞 Hub complete/Report。缺失或未知 severity 保守地继续验证；`info` 即严格全量模式。
 - **Hub Finding 绑定（#153 / #154 / #161 / #273）**：Hub 对本轮 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。compose 的 imported seed 是例外：review/test 只把其共享资产挂到探索 Worker，不创建 verification follow-up，也不改写历史 Finding；compose 画布上 explore/audit 必须绑定至少一条 imported 种子投影，不得未绑定地全图打猎。`request_human` 也必须携带结构化 subject：Finding subject 由 Scheduler 校验同项目、同画布 canonical 关系及最低验证级别，平台阻塞则只能使用受限 kind；系统绝不解析 reason 文本推断目标。analyze 仍可引用多个来源。
 - **人工验证收口（#155）**：Finding 详情提供三种显式动作：强制新建受护栏约束的 Verify round、新建绑定 Finding 的 review/test 补证 Job，以及在同画布 Hub 处于 `waiting_human` 时把尚未 confirmed 的 Finding 收口为 `needs_human`。所有动作按 canvas-first 顺序加锁、禁止终态重开并拒绝同类活动 Job；需要恢复时在同一事务将 Hub 转回 `pending` 并通知 dispatcher。人工入口绝不开放 `confirmed`。
@@ -195,7 +196,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 ## 7. 注入与读图（as-built）
 
 - `buildGraphSnapshot(canvasId, scope?, opts?)` → YAML：goal、facts/findings 摘要、open/concluded intents、hints。
-- **GraphScope**（`hub` | `agent` | `verify` | `report`）与**整图字符预算**已在 `graph.ts` 落地（#30）；Hub/Worker/Verify 注入投影不同，仍须关注超预算截断与索引完整性。
+- **GraphScope**（`hub` | `agent` | `verify` | `report`）与**整图字符预算**已在 `graph.ts` 落地（#30）；Hub/Worker/Verify 注入投影不同，仍须关注超预算截断与索引完整性。`verify` 投影隐藏 maker 结论正文（title/summary/severity），只保留主体骨架、location 与物证引用（#367）。
 - 单字段仍有截断（description/summary 等）；`job` 类型节点**不进** YAML。
 - Worker 运行包会注入画布冻结的 Finding 协议说明（模式、允许 profile、CVSS 接受版本和必评分 profile）；真实 Agent 只能通过严格的 Job-scoped `emit_finding` API operation 提交提案，不能写 `raw` 或修改协议、验证派生和 severity/scoring 的系统归一化。fake/direct 测试路径复用同一摄入契约，不构成真实运行的第二控制通道。
 - Skill：`skill_sources` sync catalog；RoleConfig `modules` 现为 `"source_id:module_id"` / `plugin:` / `source:*` 展开为 embedded skills/commands。手写同 kind/name 配置覆盖 catalog 模块时，最终 expanded 集合/hash 只保留实际嵌入内容，并记录 `manual-override`。Job 快照同时冻结模块元数据哈希与结构化 `missing_modules`；同一 materializer 命名空间的重名模块全部排除，禁止顺序覆盖；materializer 对组件名和 skill 文件路径执行严格子树安全校验。

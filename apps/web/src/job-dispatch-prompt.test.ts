@@ -29,14 +29,22 @@ test("follow-up hub jobs reconstruct task text from canvas target", () => {
   assert.match(prompt, /画布图进度/);
 });
 
-test("verify jobs format frozen finding fields", () => {
+test("verify jobs format frozen subject fields without maker conclusions", () => {
   const prompt = extractDispatchPrompt("verify_finding", {
     verification_attempt: 2,
-    finding: { title: "SQLi", location: "login.php:42", severity: "high", summary: "拼接查询" },
+    finding: {
+      id: "00000000-0000-4000-8000-000000000099",
+      location: "login.php:42",
+      artifact_refs: [{ uri: "shared://poc.bin" }],
+      title: "SQLi",
+      summary: "拼接查询",
+    },
   });
   assert.match(prompt, /第 2 轮/);
-  assert.match(prompt, /SQLi/);
-  assert.match(prompt, /拼接查询/);
+  assert.match(prompt, /login.php:42/);
+  assert.match(prompt, /poc.bin/);
+  assert.doesNotMatch(prompt, /SQLi/);
+  assert.doesNotMatch(prompt, /拼接查询/);
 });
 
 test("operator prompt replaces graph YAML instead of dropping the job input", () => {

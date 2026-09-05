@@ -48,11 +48,11 @@ function canvasGoal(canvasTarget: unknown): string {
 
 function findingBlock(payload: Record<string, unknown>): string {
   const finding = parseJsonRecord(payload.finding);
+  const refs = Array.isArray(finding.artifact_refs) ? finding.artifact_refs : [];
   return [
-    text(finding.title) && `标题：${text(finding.title)}`,
+    text(finding.id) && `主体：${text(finding.id)}`,
     text(finding.location) && `位置：${text(finding.location)}`,
-    text(finding.severity) && `严重度：${text(finding.severity)}`,
-    text(finding.summary) && `描述：${text(finding.summary)}`,
+    refs.length > 0 && `物证引用：${JSON.stringify(refs)}`,
   ].filter(Boolean).join("\n");
 }
 

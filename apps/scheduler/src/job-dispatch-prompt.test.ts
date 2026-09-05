@@ -21,6 +21,26 @@ test("canvas title fills follow-up hub jobs when target has no goal", () => {
   assert.match(prompt, /未覆盖在册自研仓专项审计/);
 });
 
+test("verify jobs reconstruct subject and location without maker conclusions", () => {
+  const prompt = extractDispatchPrompt("verify_finding", {
+    verification_attempt: 3,
+    finding: {
+      id: "00000000-0000-4000-8000-000000000088",
+      location: "auth.ts:12",
+      artifact_refs: [{ uri: "file://trace.ndjson" }],
+      title: "Maker title must stay hidden",
+      summary: "Maker summary must stay hidden",
+      severity: "critical",
+    },
+  });
+  assert.match(prompt, /第 3 轮/);
+  assert.match(prompt, /auth.ts:12/);
+  assert.match(prompt, /trace.ndjson/);
+  assert.doesNotMatch(prompt, /Maker title/);
+  assert.doesNotMatch(prompt, /Maker summary/);
+  assert.doesNotMatch(prompt, /critical/);
+});
+
 test("operator prompt keeps instructions around injected graph YAML", () => {
   const yaml = "root_id: abc\n";
   const visible = operatorVisibleDispatchPrompt(`前置\n${yaml}\n后置`, yaml);
