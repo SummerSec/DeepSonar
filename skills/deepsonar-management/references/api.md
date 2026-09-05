@@ -263,7 +263,7 @@ DEEPSONAR_OFFICIAL_AUDIT_IMAGE=repo/image@sha256:<64hex>
 DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 ```
 
-仅 tag（无 `@sha256:`）会被忽略并打 warn。`DOCKER_IMAGE_AUDIT` 仅在其已是不可变 digest 时可作为 audit 回落。
+仅 tag（无 `@sha256:`）会被忽略并打 warn。audit 启动兜底只认 `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`。
 
 ### Skill 模块源
 

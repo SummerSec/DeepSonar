@@ -10,6 +10,7 @@
 - 删除 Finding 兼容旋钮 `suggest_verify`（schema v43）。控制契约、落库、导入导出与工具说明不再接受该字段；是否派生 Verify 只认冻结规则（#359）。
 - 删除控制 MCP 残留通道：adapter 不再声明 `controlMcp`；CLI 流中的伪造 `mcp__deepsonar-control__*` 只告警，不再默认映射为语义事件；冒烟入口改为 `ci:smoke:control-api`。缺少冻结 Finding 协议的画布 fail closed，不再现场回退当前全局/项目配置（#359）。
 - 删除无决策作用的兼容别名：`false_positive` 不再作为 Verify verdict 输入（只认 `confirmed|rework|needs_human`）；Credential 写入拒绝 leftover `allowed_model_ids`；Job/WS 实时流信封只保留 `items`；公共 `POST /jobs` 不再把 `audit_module` 映射为 `audit`。历史 Finding `verify_status=false_positive` 与导入投影仍可读（#359）。
+- 继续删除 leftover 第二真相：官方 audit 镜像不再回退 `DOCKER_IMAGE_AUDIT`；`BLOB_STORE` 只认 `fs|s3`；删除空 `docker-compose.online.yml`、空洞 verify/publish 转发函数，以及前端 `deepsonar_token` 静默迁移（#359）。
 
 ### 修复
 

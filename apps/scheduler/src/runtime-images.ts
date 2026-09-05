@@ -1159,7 +1159,7 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
 function envOfficialOverrides(): Array<{ image_key: string; image_ref: string }> {
   return [
     ["deepsonar-base", config.images.officialBaseRef],
-    ["deepsonar-audit", config.images.officialAuditRef || (immutableDigest(config.runtime.imageAudit) ? config.runtime.imageAudit : "")],
+    ["deepsonar-audit", config.images.officialAuditRef],
     ["deepsonar-kali-minimal", config.images.officialKaliMinimalRef],
   ].filter((item): item is [string, string] => Boolean(item[1]) && Boolean(immutableDigest(item[1])))
     .map(([image_key, image_ref]) => ({ image_key, image_ref }));

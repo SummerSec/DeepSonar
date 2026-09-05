@@ -248,10 +248,14 @@ test("verify scope only reads minVerifySeverity; leftover list aliases are ignor
   const { readFileSync } = await import("node:fs");
   const coreSource = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
   const configSource = readFileSync(new URL("./config.ts", import.meta.url), "utf8");
+  const runtimeImagesSource = readFileSync(new URL("./runtime-images.ts", import.meta.url), "utf8");
   assert.doesNotMatch(coreSource, /autoVerifySeverities|hubWaitSeverities|inferMinFromList/);
   assert.doesNotMatch(coreSource, /export const priorityForJob|export const resolveJobPriority|Compatibility facade/);
   assert.doesNotMatch(configSource, /AUTO_VERIFY_SEVERITIES|autoVerifySeverities/);
+  assert.doesNotMatch(configSource, /DOCKER_IMAGE_AUDIT|imageAudit/);
+  assert.doesNotMatch(runtimeImagesSource, /DOCKER_IMAGE_AUDIT|imageAudit/);
   assert.match(configSource, /MIN_VERIFY_SEVERITY/);
+  assert.match(configSource, /DEEPSONAR_OFFICIAL_AUDIT_IMAGE/);
 
   const explicit = await globalRules(
     fakeDb([{ rules_json: { autoVerifySeverities: ["info"], hubWaitSeverities: ["info"], minVerifySeverity: "critical" } }]),

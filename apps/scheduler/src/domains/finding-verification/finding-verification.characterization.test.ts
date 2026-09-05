@@ -126,3 +126,10 @@ test("leftover false_positive verdict mapping is gone from Agent-facing copy", (
   assert.doesNotMatch(tools, /兼容 `false_positive`/);
   assert.doesNotMatch(executor, /false_positive→rework|false_positive/);
 });
+
+test("unused verify compat wrappers are gone", () => {
+  const verify = readFileSync(new URL("../../verify.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(verify, /checkCareFindingsConfirmed|requireCareConfirmed|findingVerificationSummary/);
+  assert.match(verify, /export async function canvasFindingsConverged/);
+  assert.match(verify, /export async function findingVerificationSummaries/);
+});

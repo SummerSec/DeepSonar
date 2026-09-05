@@ -1177,31 +1177,6 @@ export async function careSeverityMeta(
 }
 
 /**
- * @deprecated 名称易误解。请用 canvasFindingsConverged；保留别名以免外部误用旧语义。
- */
-export async function checkCareFindingsConfirmed(
-  tx: Tx,
-  canvasId: string,
-  _projectId: string,
-): Promise<{
-  ok: boolean;
-  careSeverities: string[];
-  minVerifySeverity: string;
-  problems: FindingStatusProblem[];
-}> {
-  const conv = await canvasFindingsConverged(tx, canvasId);
-  const meta = _projectId
-    ? await careSeverityMeta(tx, _projectId)
-    : { careSeverities: [] as string[], minVerifySeverity: "high" };
-  return {
-    ok: conv.ok,
-    careSeverities: meta.careSeverities,
-    minVerifySeverity: meta.minVerifySeverity,
-    problems: conv.problems,
-  };
-}
-
-/**
  * Hub complete / Report 统一收敛门（TODO §0.3 / §4.2 / §5）：
  * 阈值范围内每条 Finding 的 verify_status ∈ {confirmed, needs_human}；
  * confirmed 须有可追溯 verification round；无未关闭 round。
@@ -1210,9 +1185,8 @@ export async function checkCareFindingsConfirmed(
 export async function canvasFindingsConverged(
   tx: Tx,
   canvasId: string,
-  opts?: { projectId?: string; requireCareConfirmed?: boolean },
+  opts?: { projectId?: string },
 ): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
-  // requireCareConfirmed 已废弃：阈值内 needs_human 仍是可报告终态。
   const projectId = opts?.projectId ?? (await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`)[0]?.project_id;
   const rules = projectId
     ? await rulesForProject(tx as unknown as typeof sql, String(projectId))
@@ -1657,24 +1631,6 @@ export async function findingVerificationSummaries(
     });
   }
   return result;
-}
-
-/** Single-Finding compatibility wrapper backed by the batch implementation. */
-export async function findingVerificationSummary(
-  tx: Tx,
-  findingId: string,
-): Promise<Record<string, unknown>> {
-  return (
-    (await findingVerificationSummaries(tx, [findingId])).get(findingId) ?? {
-      verify_status: "pending",
-      verification_attempt: 0,
-      latest_outcome: null,
-      missing_evidence: ["independent_review", "runtime_test"],
-      review_evidence_ids: [],
-      test_evidence_ids: [],
-      conflicting_evidence_ids: [],
-    }
-  );
 }
 
 void TERMINAL_JOB;

@@ -29,12 +29,13 @@ test("objectKeyFor applies optional prefix", () => {
   assert.equal(objectKeyFor("/deepsonar/blobs/", uri), `deepsonar/blobs/${uri}`);
 });
 
-test("parseBlobStoreKind accepts fs/s3 aliases", () => {
+test("parseBlobStoreKind only accepts fs|s3 and rejects leftover aliases", () => {
   assert.equal(parseBlobStoreKind(undefined), "fs");
   assert.equal(parseBlobStoreKind("fs"), "fs");
-  assert.equal(parseBlobStoreKind("local"), "fs");
   assert.equal(parseBlobStoreKind("S3"), "s3");
-  assert.equal(parseBlobStoreKind("minio"), "s3");
+  for (const leftover of ["local", "file", "filesystem", "minio", "object"]) {
+    assert.throws(() => parseBlobStoreKind(leftover), /unsupported_blob_store/);
+  }
   assert.throws(() => parseBlobStoreKind("nfs"), /unsupported_blob_store/);
 });
 

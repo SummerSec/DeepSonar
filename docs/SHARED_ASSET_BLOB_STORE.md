@@ -18,8 +18,8 @@ Job snapshots pin exact `version_id` + `content_sha256`. Switching storage backe
 
 | `BLOB_STORE` | Meaning | Multi-node Scheduler |
 |--------------|---------|----------------------|
-| `fs` (default; aliases: `local`, `file`) | Local directory under `BLOB_DIR` | Needs shared disk or sticky single writer |
-| `s3` (aliases: `minio`, `object`) | Any **S3-compatible** API | Recommended for distributed deploy |
+| `fs` (default) | Local directory under `BLOB_DIR` | Needs shared disk or sticky single writer |
+| `s3` | Any **S3-compatible** API | Recommended for distributed deploy |
 
 DeepSonar does **not** lock to MinIO or AWS. Any service that speaks S3 (`PutObject` / `GetObject` / `HeadObject`) works:
 
