@@ -96,6 +96,12 @@ test("emit_finding rejects leftover suggest_verify as an unknown field", () => {
   assert.equal(EmitFindingDirectPayload.safeParse(withSuggestion).success, false);
 });
 
+test("mark_job_done rejects leftover false_positive verdict", () => {
+  const summary = "验证结束：证据不足，需要补运行时复现。";
+  assert.equal(DonePayload.safeParse({ summary, verdict: "rework" }).success, true);
+  assert.equal(DonePayload.safeParse({ summary, verdict: "false_positive" }).success, false);
+});
+
 test("advertised semantic MCP schemas remain top-level objects", () => {
   for (const name of ["emit_fact", "emit_finding"] as const) {
     const schema = ControlToolInputSchemasJson[name] as { type?: unknown; anyOf?: unknown; oneOf?: unknown };

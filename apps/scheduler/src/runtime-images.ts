@@ -2238,10 +2238,13 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
       AND rc.runtime_image_key = 'deepsonar-base'`;
   await sql`
     UPDATE agent_roles SET
-      description = '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发',
+      description = '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、rework 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发',
       updated_at = now()
     WHERE name = 'verify' AND builtin = true AND kind = 'system'
-      AND description = '系统角色：默认在精简 Kali 多语言环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发'`;
+      AND description IN (
+        '系统角色：默认在精简 Kali 多语言环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；Hub 不可下发',
+        '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、false_positive 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发'
+      )`;
   await syncOfficialRuntimeCatalog();
 }
 

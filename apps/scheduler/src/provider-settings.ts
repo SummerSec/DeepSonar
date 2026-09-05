@@ -636,7 +636,7 @@ export function qualifyPiModelRef(
 
 /**
  * Job token 记录 settings_config 声明的模型以及 CLI 别名 / 上游 ID。
- * 模型可用性只认配置文件，不再与 Credential allowed_model_ids 求交集。
+ * 模型可用性只认配置文件，不再与 leftover Credential allowlist 求交集。
  */
 export function jobGatewayAllowedModels(input: {
   roleModel?: string | null;

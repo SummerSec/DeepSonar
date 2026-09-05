@@ -18,7 +18,6 @@ test("new Credential metadata accepts only server-owned fields and rejects secre
   assert.deepEqual(
     sanitizeCredentialMetadata({
       base_url: "http://127.0.0.1/v1///",
-      allowed_model_ids: ["model-a", "model-a"],
       model_concurrency: { "model-a": 2 },
       max_concurrent: 4,
     }, { kind: "llm_provider", provider: "openai" }),
@@ -106,12 +105,19 @@ test("legacy projection drops unsafe/unknown metadata without echoing it", () =>
   assert.equal(JSON.stringify(projected).includes(secret), false);
 });
 
-test("leftover allowed_model_ids is ignored and model_concurrency stands alone", () => {
+test("leftover allowed_model_ids is rejected on write and dropped from legacy projection", () => {
+  assert.throws(
+    () => sanitizeCredentialMetadata({
+      allowed_model_ids: ["stale-model"],
+      model_concurrency: { "GLM-5.2[1M]": 2 },
+    }, { kind: "llm_provider", provider: "anthropic" }),
+    /metadata key/,
+  );
   assert.deepEqual(
     sanitizeCredentialMetadata({
       allowed_model_ids: ["stale-model"],
       model_concurrency: { "GLM-5.2[1M]": 2 },
-    }, { kind: "llm_provider", provider: "anthropic" }),
+    }, { kind: "llm_provider", provider: "anthropic", mode: "drop" }),
     { model_concurrency: { "GLM-5.2[1M]": 2 } },
   );
 });

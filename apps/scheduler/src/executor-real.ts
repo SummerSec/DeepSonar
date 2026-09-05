@@ -353,7 +353,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
   }
 
   const verdict = state.done.verdict;
-  if (input.isVerify && !["confirmed", "rework", "needs_human", "false_positive"].includes(verdict ?? "")) {
+  if (input.isVerify && !["confirmed", "rework", "needs_human"].includes(verdict ?? "")) {
     throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
   }
   events.push({
@@ -485,7 +485,7 @@ function resultContract(
     return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images 的 image_key，且须与该角色 CLI 兼容；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image）。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
-    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human（兼容 false_positive→rework）。confirmed 仍须有独立 review + 完整 test 证据，否则调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
+    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human。confirmed 仍须有独立 review + 完整 test 证据，否则调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
   }
   if (isRole) {
     return enabled.has("emit_fact")

@@ -947,7 +947,7 @@ const OPS: Op[] = [
         type: {
           type: "string",
           description:
-            "Registered public role name. Public POST rejects scheduler-owned hub_reason, hub, verify_finding, and report (409). verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
+            "Registered public role name. Public POST rejects scheduler-owned hub_reason, hub, verify_finding, and report (409), and leftover audit_module. verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
         },
         title: { type: "string" },
         payload: { type: "object", additionalProperties: true },

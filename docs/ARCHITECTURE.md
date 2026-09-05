@@ -223,7 +223,7 @@ pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 
 3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
 4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
 5. 调度器创建 verify Job，输入只冻结主体 / location / 物证引用——盲验 Phase 1（#367）不下发 maker 的 title/summary/severity 结论措辞 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文，`GraphScope=verify` 默认只投影骨架与引用
-6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
+6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 7. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
 8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
 9. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
@@ -551,7 +551,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 每次 Gateway 请求写入 `job_usage_ledger`，通过 `attempt_id + effect_id` 幂等关联 Job Attempt；只保留 provider/model、请求序号、输入/输出/总 token、缓存读/写 token 及 `settled|unknown|not_reported`，不落 prompt、响应正文、请求头和凭据。跨 chunk 的 SSE usage 只在完整记录边界解析并去重。响应已经发给 Worker 后账本写入失败不抛出未处理异常，同时递增低基数失败指标并留下 effect 对账线索。
 
-并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。项目可在 `projects.config_json.rules.maxConcurrentJobs` 把本项目 claim 预算收到不高于 `maxJobsPerProject` 的值（`0` 暂停新领取）；未设置则继承全局每项目上限。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型可用性只认 Credential `settings_config` 声明的清单，旧 `allowed_model_ids` 字段读写均静默忽略。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。
+并发治理服从单一的调度优先级：`global_settings.rules_json` 的 effective `maxGlobalJobs`（全局硬 cap）与 `maxJobsPerProject`（每项目硬 cap）先于 Provider，Provider 先于 Credential，Credential 先于该凭据下的 Model ID，Agent CLI 全局配额最后检查。项目可在 `projects.config_json.rules.maxConcurrentJobs` 把本项目 claim 预算收到不高于 `maxJobsPerProject` 的值（`0` 暂停新领取）；未设置则继承全局每项目上限。`.env` 中的 `MAX_GLOBAL_JOBS` / `MAX_JOBS_PER_PROJECT` 仅在全局规则缺失时作为启动默认；项目规则不能放宽全局硬 cap。Provider 与 Agent CLI 上限存于全局规则；Credential 的总上限 `max_concurrent` 和逐模型上限 `model_concurrency` 存于凭据公开元数据。模型可用性只认 Credential `settings_config` 声明的清单。写入 Credential metadata 时 `allowed_model_ids` 按未知字段拒绝；导入/投影旧行仍丢弃该键。模型目录由调度器持有密钥并调用 Provider 模型列表接口获取，前端只能接收模型 ID 清单，不能读取长期密钥；Anthropic 兼容子路径按有序候选探测，仅 HTTP 404/405 允许剥离子路径后继续，鉴权、限流、网络、超时与上游错误均立即失败且不读取错误正文。
 
 Provision admission 是数据库 claim 事务的一部分，而不是进程内 semaphore：effective `global_settings.maxConcurrentProvisioning` 先检查当前 provisioning 资源占用，超额 Job 保持 `pending`，不写入或消耗 `claimed_at`；槽位释放后调度器显式唤醒 pending 队列，重新 claim 并推进到 `running`。`.env` 的 `PROVISION_CONCURRENCY=2` 只在该全局配置缺失时作为 fallback，不能绕过数据库门禁，也不改变其他全局/项目/Provider/凭据配额。
 

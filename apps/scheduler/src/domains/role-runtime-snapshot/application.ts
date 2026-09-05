@@ -161,15 +161,6 @@ export async function scrubIgnoredProjectRoleConfigIdentity(
   return { runtime_image_keys: images.length, inherit_global_models: models.length };
 }
 
-let legacyAgentDefaultsWarningEmitted = false;
-function warnIgnoredLegacyAgentDefaults(): void {
-  if (legacyAgentDefaultsWarningEmitted) return;
-  const hasLegacyValues = ["AGENT_PROVIDER", "AGENT_MODEL"].some((name) => process.env[name] !== undefined);
-  if (!hasLegacyValues) return;
-  legacyAgentDefaultsWarningEmitted = true;
-  console.warn("[role-config] legacy AGENT_PROVIDER/AGENT_MODEL are ignored; configure agent_cli/model/env_vars in RoleConfig");
-}
-
 export function roleNameForJobType(jobType: string): string {
   if (jobType === "audit_module") return "audit";
   if (jobType === "verify_finding") return "verify";
@@ -238,7 +229,6 @@ async function resolveAgentSnapshotForJobUnchecked(
   jobType: string,
   options?: { runtimeImageKey?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
-  warnIgnoredLegacyAgentDefaults();
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
   if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);

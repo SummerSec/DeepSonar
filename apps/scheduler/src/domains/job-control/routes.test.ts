@@ -13,8 +13,9 @@ test("public POST /jobs rejects an unknown ordinary role", () => {
   assert.equal(isPublicJobTypeAllowed("not-registered", enabledRoles), false);
 });
 
-test("public POST /jobs maps compatibility aliases before checking enabled roles", () => {
-  assert.equal(isPublicJobTypeAllowed("audit_module", [{ name: "audit" }]), true);
+test("public POST /jobs rejects leftover audit_module type alias", () => {
+  assert.equal(isPublicJobTypeAllowed("audit_module", [{ name: "audit" }]), false);
+  assert.equal(isPublicJobTypeAllowed("audit", [{ name: "audit" }]), true);
 });
 
 test("public POST /jobs preserves the governed verify snapshot compatibility lane", () => {
@@ -27,4 +28,10 @@ test("GET /jobs/:id returns operator-visible dispatched_prompt without runtime_c
   assert.match(source, /dispatched_prompt: dispatchedPrompt \|\| null/);
   assert.match(source, /SELECT title, target_json FROM canvases/);
   assert.doesNotMatch(source, /runtime_context\.prompt/);
+});
+
+test("job stream HTTP envelope no longer duplicates items as events", () => {
+  const source = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /events: result\.items/);
+  assert.doesNotMatch(source, /compatibility alias while `items`/);
 });

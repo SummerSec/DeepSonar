@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { buildEvidenceSnapshot, evaluateConfirmGate, freezeVerifyFindingSubject, mapProposedVerdict } from "../../verify.js";
 
-test("mapProposedVerdict keeps confirmed/needs_human and folds everything else to rework", () => {
+test("mapProposedVerdict only accepts confirmed/rework/needs_human", () => {
   assert.equal(mapProposedVerdict("confirmed"), "confirmed");
+  assert.equal(mapProposedVerdict("rework"), "rework");
   assert.equal(mapProposedVerdict("needs_human"), "needs_human");
-  assert.equal(mapProposedVerdict("false_positive"), "rework");
-  assert.equal(mapProposedVerdict("unknown"), "rework");
-  assert.equal(mapProposedVerdict(null), "rework");
+  assert.throws(() => mapProposedVerdict("false_positive"), /confirmed、rework 或 needs_human/);
+  assert.throws(() => mapProposedVerdict("unknown"), /confirmed、rework 或 needs_human/);
+  assert.throws(() => mapProposedVerdict(null), /confirmed、rework 或 needs_human/);
 });
 
 test("buildEvidenceSnapshot requires independent review and a supporting test", () => {
@@ -115,4 +116,13 @@ test("verify freeze helper is the only finding payload shape", () => {
 test("finding-verification has one implementation home and no forwarding adapter", () => {
   assert.equal(existsSync(new URL("./application.ts", import.meta.url)), false);
   assert.equal(existsSync(new URL("./ports.ts", import.meta.url)), false);
+});
+
+test("leftover false_positive verdict mapping is gone from Agent-facing copy", () => {
+  const verify = readFileSync(new URL("../../verify.ts", import.meta.url), "utf8");
+  const tools = readFileSync(new URL("../../platform-tools.ts", import.meta.url), "utf8");
+  const executor = readFileSync(new URL("../../executor-real.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(verify, /false_positive 兼容期|映射为 rework/);
+  assert.doesNotMatch(tools, /兼容 `false_positive`/);
+  assert.doesNotMatch(executor, /false_positive→rework|false_positive/);
 });

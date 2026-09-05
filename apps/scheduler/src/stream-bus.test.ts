@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   clearStreamForTests,
@@ -81,4 +82,10 @@ test("global stream cache evicts old jobs without subscribers", () => {
   assert.equal(streamBuffer("cache-job-0").length, 0);
   assert.ok(streamCacheSizeForTests() <= 256);
   clearStreamForTests();
+});
+
+test("WS stream envelope no longer duplicates items as events", () => {
+  const source = readFileSync(new URL("./domains/stream/routes.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /events: \[item\]/);
+  assert.doesNotMatch(source, /events: initial\.items/);
 });

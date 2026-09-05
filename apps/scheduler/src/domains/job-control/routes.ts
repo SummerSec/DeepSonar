@@ -11,7 +11,6 @@ import {
   rolesForProject,
   triggerHubFromHumanComment,
 } from "../../core.js";
-import { roleNameForJobType } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
@@ -84,9 +83,9 @@ export function isPublicJobTypeAllowed(
   jobType: string,
   enabledRoles: readonly { name: string }[],
 ): boolean {
-  const roleName = roleNameForJobType(jobType.trim().toLowerCase());
-  if (roleName === "verify") return true;
-  return enabledRoles.some((role) => role.name === roleName.trim().toLowerCase());
+  const type = jobType.trim().toLowerCase();
+  if (type === "verify") return true;
+  return enabledRoles.some((role) => role.name === type);
 }
 
 export function registerJobControlRoutes(app: FastifyInstance): void {
@@ -560,9 +559,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       }
       throw error;
     }
-    // `events` is retained as a compatibility alias while `items` is the
-    // canonical HTTP/WS envelope field.
-    return { ...result, events: result.items };
+    return result;
   });
 
   // 只有 pending 可调整优先级（运行中/终态改优先级无意义）
