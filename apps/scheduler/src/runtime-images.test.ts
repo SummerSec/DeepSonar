@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assertRuntimeImageAvailable,
@@ -81,6 +82,19 @@ test("Hub catalog keeps CLI-runnable market keys and drops third-party keys", ()
   assert.deepEqual(catalog.map((entry) => entry.image_key), ["deepsonar-kali-minimal", "deepsonar-chrome-fuzz"]);
   assert.deepEqual(catalog[0]?.compatible_agent_clis, ["claude-code", "dsh", "pi"]);
   assert.deepEqual(catalog[1]?.compatible_agent_clis, ["claude-code", "pi"]);
+});
+
+test("runtime-images contract path does not statically import runtime-sandbox", () => {
+  const sources = [
+    "./runtime-images.ts",
+    "./runtime-image-gc.ts",
+    "./runtime-image-registry-contract.ts",
+  ].map((relative) => readFileSync(new URL(relative, import.meta.url), "utf8"));
+  for (const source of sources) {
+    assert.doesNotMatch(source, /^\s*import\s+[\s\S]*?from\s+["']@deepsonar\/runtime-sandbox["']/m);
+  }
+  const catalog = sources[0]!.slice(sources[0]!.indexOf("export async function listHubRuntimeImageCatalog"));
+  assert.match(catalog, /await import\(["']@deepsonar\/runtime-sandbox["']\)/);
 });
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
