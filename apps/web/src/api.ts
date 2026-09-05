@@ -1635,7 +1635,6 @@ export async function downloadAuthenticatedFile(path: string, fallbackFilename: 
  * 用户会话与平台 API Token 分 key 存放，避免设置页把会话 secret 当成「可编辑本机令牌」摊开。
  * 请求优先级：会话 token > API Token。
  */
-const LEGACY_TOKEN_KEY = "deepsonar_token";
 const SESSION_TOKEN_KEY = "deepsonar_session";
 const API_TOKEN_KEY = "deepsonar_api_token";
 
@@ -1644,24 +1643,7 @@ export function isUserSessionToken(token: string): boolean {
   return token.startsWith("deepsonar_user_");
 }
 
-function migrateLegacyTokenKeys(): void {
-  try {
-    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
-    if (!legacy) return;
-    const hasSession = Boolean(localStorage.getItem(SESSION_TOKEN_KEY));
-    const hasApi = Boolean(localStorage.getItem(API_TOKEN_KEY));
-    if (!hasSession && !hasApi) {
-      if (isUserSessionToken(legacy)) localStorage.setItem(SESSION_TOKEN_KEY, legacy);
-      else localStorage.setItem(API_TOKEN_KEY, legacy);
-    }
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
-  } catch {
-    /* private mode / SSR */
-  }
-}
-
 export function getSessionToken(): string {
-  migrateLegacyTokenKeys();
   try {
     return localStorage.getItem(SESSION_TOKEN_KEY) ?? "";
   } catch {
@@ -1670,18 +1652,15 @@ export function getSessionToken(): string {
 }
 
 export function setSessionToken(token: string): void {
-  migrateLegacyTokenKeys();
   try {
     if (token) localStorage.setItem(SESSION_TOKEN_KEY, token);
     else localStorage.removeItem(SESSION_TOKEN_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch {
     /* ignore */
   }
 }
 
 export function getApiAccessToken(): string {
-  migrateLegacyTokenKeys();
   try {
     return localStorage.getItem(API_TOKEN_KEY) ?? "";
   } catch {
@@ -1690,11 +1669,9 @@ export function getApiAccessToken(): string {
 }
 
 export function setApiAccessToken(token: string): void {
-  migrateLegacyTokenKeys();
   try {
     if (token) localStorage.setItem(API_TOKEN_KEY, token);
     else localStorage.removeItem(API_TOKEN_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch {
     /* ignore */
   }

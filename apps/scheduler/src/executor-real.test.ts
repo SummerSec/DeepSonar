@@ -3,7 +3,6 @@ import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { ControlEventEnvelope, DonePayload, EventEnvelope, WORKSPACE_PAYLOAD_FILE_MAX_BYTES } from "@deepsonar/shared-types";
 import {
-  canRolePublishSharedAsset,
   ingestFactSemanticEvent,
   assertSemanticTerminalExclusivity,
   moduleEvidenceFromSnapshot,
@@ -690,11 +689,10 @@ test("tool.call.started/completed are mapped into stall-visible progress activit
   assert.match(source, /operatorVisibleDispatchPrompt\(initialInput, graph\?\.yaml/);
 });
 
-test("all role Jobs, including audit, may publish shared assets", () => {
-  // Publish is gated by frozen platform_tools, not role kind.
-  assert.equal(canRolePublishSharedAsset("role"), true);
-  assert.equal(canRolePublishSharedAsset("hub"), true);
-  assert.equal(canRolePublishSharedAsset("system"), true);
+test("shared-asset publish is gated by frozen platform_tools, not leftover role-kind helpers", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /canRolePublishSharedAsset|@deprecated 发布权限/);
+  assert.match(source, /授权只认冻结快照 platform_tools/);
 });
 
 test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝", () => {

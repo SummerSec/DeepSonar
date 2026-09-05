@@ -223,11 +223,6 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
-/** @deprecated 发布权限改由 Job 冻结的 platform_tools 决定；保留导出供旧测试兼容。 */
-export function canRolePublishSharedAsset(_roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
-  return true;
-}
-
 async function ingestSemanticEventObserved(
   jobId: string,
   event: EventEnvelopeInput,

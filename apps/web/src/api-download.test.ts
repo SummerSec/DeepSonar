@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test, { afterEach } from "node:test";
 import {
   api,
@@ -145,6 +146,16 @@ test("setLocalToken keeps session and API token precedence explicit", () => {
   installStorage();
   setLocalToken("deepsonar_user_session");
   assert.equal((globalThis as { localStorage: { getItem(key: string): string | null } }).localStorage.getItem("deepsonar_session"), "deepsonar_user_session");
+});
+
+test("leftover deepsonar_token localStorage key is not migrated", () => {
+  const source = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /LEGACY_TOKEN_KEY|deepsonar_token|migrateLegacyTokenKeys/);
+  installStorage({ deepsonar_token: "deepsonar_user_stale" });
+  setLocalToken("deepsonar_user_session");
+  const storage = (globalThis as { localStorage: { getItem(key: string): string | null } }).localStorage;
+  assert.equal(storage.getItem("deepsonar_session"), "deepsonar_user_session");
+  assert.equal(storage.getItem("deepsonar_token"), "deepsonar_user_stale");
 });
 
 test("任务报告 404 会读取服务端 availability 并保留阻塞 Finding", async () => {

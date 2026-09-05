@@ -733,7 +733,6 @@ DEEPSONAR_HUB_MAX_ROUNDS=20
 DEEPSONAR_HUB_MAX_INTENTS=6
 
 SANDBOX_PROVIDER=opensandbox
-DOCKER_IMAGE_AUDIT=deepsonar-agent:latest
 DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE=docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
 
 # Scheduler-authoritative semantic-event fixed-window budgets (Issue #57).

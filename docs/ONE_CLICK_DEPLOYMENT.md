@@ -21,7 +21,6 @@ Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000�
 |------|------|
 | `deploy/docker-compose.prod.yml` | PostgreSQL、Silo、Scheduler、Image Admission、Web、备份 |
 | `deploy/docker-compose.real.yml` | real 模式：挂载 Docker Socket |
-| `deploy/docker-compose.online.yml` | 空兼容层（旧脚本 `-f` 仍可用；推荐直接用 prod + pull） |
 | `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` / `.assets-helper` / `.silo` | 平台服务镜像 |
 | `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony/Android） |
 | `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
@@ -101,7 +100,7 @@ DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 
 CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + RoleConfig，Job 创建时冻结。`AGENT_MODE` 只表示 fake/real。
 
-官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底。`DOCKER_IMAGE_AUDIT` 为历史兼容字段，**不能**用可变 tag 越过市场信任。
+官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底，不能用可变 tag 越过市场信任。
 
 发布与多 channel 细节：[`RELEASE_RUNTIME_IMAGES.md`](./RELEASE_RUNTIME_IMAGES.md)、[`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](./RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
 
