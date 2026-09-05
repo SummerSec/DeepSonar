@@ -193,14 +193,13 @@ function isReadinessFixAction(value: unknown): value is ReadinessFixAction {
   return typeof value === "string" && READINESS_FIX_ACTIONS.has(value as ReadinessFixAction);
 }
 
-function projectIdFromLegacyHref(href: string): string | null {
+function projectIdFromHref(href: string): string | null {
   return href.match(/^\/projects\/([0-9a-f-]{36})(?:\/|$)/i)?.[1] ?? null;
 }
 
 /**
  * Resolve the Scheduler's stable repair intent to a route that exists in the
- * current web app.  The legacy href is only used when an older Scheduler did
- * not provide action metadata; known legacy settings paths are normalized too.
+ * current web app. Unknown actions keep the Scheduler-provided href.
  */
 export function resolveReadinessFix(
   fix: ReadinessCheck["fix"],
@@ -212,7 +211,7 @@ export function resolveReadinessFix(
   const targetScope = fix.scope ?? (readinessScope.project_id ? "project" : "global");
   const projectId = fix.project_id !== undefined
     ? fix.project_id
-    : readinessScope.project_id ?? fallbackProjectId ?? projectIdFromLegacyHref(fix.href);
+    : readinessScope.project_id ?? fallbackProjectId ?? projectIdFromHref(fix.href);
 
   if (action === "credentials") {
     return { href: "/settings/credentials", target: fix.target };
@@ -232,24 +231,6 @@ export function resolveReadinessFix(
   if (action === "runtime_images") {
     return {
       href: targetScope === "project" ? (projectId ? `/projects/${projectId}/images` : "/projects") : "/images",
-      target: fix.target,
-    };
-  }
-
-  // Backward compatibility for pre-action Scheduler responses.  Credentials
-  // are always managed globally; project settings only expose roles/rules.
-  if (fix.href === "/global-settings") {
-    return {
-      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/settings/platform?tab=rules",
-      target: fix.target,
-    };
-  }
-  if (fix.href.includes("tab=credentials")) {
-    return { href: "/settings/credentials", target: fix.target };
-  }
-  if (fix.target === "hub-settings" || fix.target === "task-network-policy" || fix.target === "task-material-source") {
-    return {
-      href: readinessScope.project_id ? `/projects/${readinessScope.project_id}/settings?tab=rules` : "/settings/platform?tab=rules",
       target: fix.target,
     };
   }

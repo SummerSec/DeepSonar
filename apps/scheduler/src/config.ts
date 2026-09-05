@@ -117,11 +117,8 @@ export const config = {
   },
 
   rules: {
-    /** 默认只自动验证高危；项目/全局 rules 可覆盖 */
-    autoVerifySeverities: str("AUTO_VERIFY_SEVERITIES", "critical,high")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    /** 默认只自动验证高危；项目/全局 `minVerifySeverity` 可覆盖 */
+    minVerifySeverity: str("MIN_VERIFY_SEVERITY", "high"),
   },
 
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */

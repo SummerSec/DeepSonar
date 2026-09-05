@@ -279,5 +279,6 @@ test("lock-order contract keeps Canvas-aware event ingress out of Job-first tran
   assert.match(architectureDoc, /append and semantic effects are one atomic transaction/);
   assert.match(architectureDoc, /Event-ingestion second slice/);
   assert.doesNotMatch(architectureDoc, /ingestEvent.*applySideEffects.*migration\s+debt/s);
+  assert.doesNotMatch(architectureDoc, /compatibility facade/i);
   assert.match(architectureDoc, /rejects a `patch\.status` property/);
 });

@@ -239,12 +239,9 @@ test("readiness repair actions resolve every global and project route", () => {
   assert.equal(projectSelectionWithProjectScope?.href, "/projects");
 });
 
-test("legacy readiness links normalize to real settings panels", () => {
-  const globalScope = { kind: "global" as const, project_id: null };
+test("readiness fixes without action keep the Scheduler href", () => {
   const projectScope = { kind: "project" as const, project_id: project.id };
-  assert.equal(resolveReadinessFix({ href: "/global-settings", target: "hub-settings" }, projectScope)?.href, `/projects/${project.id}/settings?tab=rules`);
-  assert.equal(resolveReadinessFix({ href: `/projects/${project.id}/settings?tab=credentials`, target: "credentials" }, projectScope)?.href, "/settings/credentials");
-  assert.equal(resolveReadinessFix({ href: "/projects", target: "task-network-policy" }, globalScope)?.href, "/settings/platform?tab=rules");
+  assert.equal(resolveReadinessFix({ href: "/settings/credentials", target: "credentials" }, projectScope)?.href, "/settings/credentials");
 });
 
 test("IntentLaunchRail surfaces local image identity and a prepare link", async () => {
