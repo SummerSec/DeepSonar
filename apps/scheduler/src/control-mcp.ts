@@ -114,7 +114,7 @@ const VERIFY_VERDICTS = ["confirmed", "rework", "needs_human", "false_positive"]
 
 const descriptions = {
   list_available_roles: "返回当前 Hub Job 可派发的数据库角色。只使用返回的 name，不得猜测或使用固定角色清单。",
-  list_available_runtime_images: "返回当前 Hub Job 可提案的运行镜像目录（仅市场 image_key 与展示字段）。只使用返回的 image_key，不得填写 OCI 地址、tag 或 digest。",
+  list_available_runtime_images: "返回当前 Hub Job 可提案的运行镜像目录（市场 image_key、展示字段与 compatible_agent_clis）。只使用返回的、且与目标角色 CLI 兼容的 image_key，不得填写 OCI 地址、tag 或 digest。",
   emit_progress: "增量上报当前动作或阶段进展。可在执行中多次调用。",
   emit_fact: "把一个新的、可验证的增量事实实时写入任务画布。直接提交时 title 至少 2 个非空白字符、description 至少 16 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
   emit_finding: "实时提交一条有证据的通用 Finding。直接提交时 title 至少 8 个非空白字符、summary 至少 32 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。profile 与可选评分须符合任务冻结协议，调度器负责校验、重算、去重和验证。可多次调用。",
@@ -129,7 +129,7 @@ const descriptions = {
 };
 const descriptionCautions = {
   list_available_roles: "Hub 派发前调用；必须原样复制返回的 name，不得猜测、缩写或使用已禁用及 system 角色。",
-  list_available_runtime_images: "Hub 派发前调用；intent 的 runtime_image_key 必须原样复制返回的 image_key，省略则按角色缺省镜像解析。仅在返回 isError 后重试。",
+  list_available_runtime_images: "Hub 派发前调用；intent 的 runtime_image_key 必须原样复制返回的 image_key，且属于该条 compatible_agent_clis。省略则按角色缺省镜像解析。仅在返回 isError 后重试。",
   emit_progress: "只用于增量进度，可按需多次调用；不得代替最终结论或 Finding，仅在返回 isError 后重试。",
   emit_fact: "每个新增可验证事实提交一次，不得重复提交或故意缩短内容；遇到 isError 或截断时，写入完整 JSON 后用 payload_file 重试。",
   emit_finding: "只提交有证据支撑的 Finding；suggest_verify 只是建议，不能当作派发决定；遇到 isError 或截断时用 payload_file 提交完整内容。",

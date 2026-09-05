@@ -15,6 +15,7 @@ import {
   REQUIRED_RUNTIME_CAPABILITIES,
   freezeAgentCliRuntime,
   getAgentCliRuntimeAdapter,
+  compatibleAgentClisForImage,
   requireAgentCliRuntimeAdapter,
 } from "./runtime-adapters.js";
 
@@ -92,6 +93,10 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.throws(() => requireAgentCliRuntimeAdapter("codex"), /AGENT_CLI_UNREGISTERED/);
   assert.throws(() => requireAgentCliRuntimeAdapter("open-code"), /AGENT_CLI_UNREGISTERED/);
   assert.throws(() => requireAgentCliRuntimeAdapter("pi", "untrusted-image"), /AGENT_CLI_IMAGE_INCOMPATIBLE/);
+  assert.throws(() => requireAgentCliRuntimeAdapter("dsh", "deepsonar-chrome-fuzz"), /AGENT_CLI_IMAGE_INCOMPATIBLE/);
+  assert.deepEqual(compatibleAgentClisForImage("deepsonar-kali-minimal"), ["claude-code", "dsh", "pi"]);
+  assert.deepEqual(compatibleAgentClisForImage("deepsonar-chrome-fuzz"), ["claude-code", "pi"]);
+  assert.deepEqual(compatibleAgentClisForImage("third-party-custom"), []);
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("pi", "deepsonar-chrome-fuzz").id, "pi");

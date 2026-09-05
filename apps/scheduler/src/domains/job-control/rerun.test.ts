@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { SnapshotUnresolvableError } from "../role-runtime-snapshot/index.js";
 import {
   currentSnapshotUnresolvableBody,
+  frozenRuntimeImageKey,
   governedSnapshotIdentity,
   isSnapshotUnresolvableError,
   snapshotIdentityDrift,
@@ -81,6 +83,23 @@ test("snapshot identity detects governed CLI, model, credential, adapter, and im
 
 test("governed identity normalizes blank nullable fields", () => {
   assert.equal(governedSnapshotIdentity({ model: " " }).model, null);
+});
+
+test("frozen runtime image key prefers snapshot.runtime_image.image_key", () => {
+  assert.equal(frozenRuntimeImageKey(base), "deepsonar-base");
+  assert.equal(frozenRuntimeImageKey({
+    runtime_image_key: "deepsonar-base",
+    runtime_image: { image_key: "deepsonar-kali-minimal" },
+  }), "deepsonar-kali-minimal");
+  assert.equal(frozenRuntimeImageKey({ runtime_image_key: "deepsonar-kali-minimal" }), "deepsonar-kali-minimal");
+  assert.equal(frozenRuntimeImageKey({}), null);
+});
+
+test("resume/rerun re-resolves the Job frozen runtime_image_key instead of the role default", () => {
+  const source = readFileSync(new URL("./rerun.ts", import.meta.url), "utf8");
+  const resolve = source.slice(source.indexOf("export async function resolveCurrentSnapshotForExistingJob"));
+  assert.match(resolve, /frozenRuntimeImageKey\(job\.agent_snapshot_json\)/);
+  assert.match(resolve, /runtimeImageKey:/);
 });
 
 test("unresolvable current snapshot uses the same SNAPSHOT_STALE contract as requeueJob", () => {

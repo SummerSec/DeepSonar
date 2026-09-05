@@ -13,6 +13,8 @@ import {
 import type { SharedAssetSelection } from "../shared-assets/index.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
+  isHubRuntimeImageUnresolvableError,
+  resolveRoleAgentCli,
   roleNameForJobType,
   type AgentRuntimeSnapshot,
 } from "../role-runtime-snapshot/index.js";
@@ -512,9 +514,9 @@ export function createEventIngestionSideEffectApplication(
         throw invalidRole(intent.role, phase === "preflight" ? `intents.${index}.role` : "intents.role");
       }
     }
-    // Hub 可提案本轮可选运行镜像（image_key），但只允许项目已启用且存在可信
-    // 版本的市场产品；省略时按项目镜像策略与 RoleConfig 缺省解析。preflight 与
-    // apply 都执行同一目录校验，防止两次校验之间启用状态漂移后落地。
+    // Hub 可提案本轮可选运行镜像（image_key），但只允许目录内且与目标角色
+    // CLI 兼容的市场产品；省略时按项目镜像策略与 RoleConfig 缺省解析。
+    // preflight 与 apply 都执行同一校验，防止启用状态漂移或 CLI 不兼容落到 500。
     const proposedImageKeys = [
       ...new Set(
         submittedIntents
@@ -522,16 +524,25 @@ export function createEventIngestionSideEffectApplication(
           .filter((key): key is string => typeof key === "string" && key.length > 0),
       ),
     ];
-    let allowedImageKeys: Set<string> | null = null;
     if (proposedImageKeys.length > 0) {
       const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
-      allowedImageKeys = new Set(catalog.map((entry) => entry.image_key));
+      const roleCliCache = new Map<string, string>();
       for (const [index, intent] of submittedIntents.entries()) {
         const key = intent.runtime_image_key;
-        if (key && !allowedImageKeys.has(key)) {
+        if (!key) continue;
+        const agentCli = roleCliCache.get(intent.role) ?? await resolveRoleAgentCli(
+          tx as never,
+          job.project_id as string,
+          intent.role,
+        );
+        roleCliCache.set(intent.role, agentCli);
+        const allowedForRole = catalog
+          .filter((entry) => entry.compatible_agent_clis.includes(agentCli))
+          .map((entry) => entry.image_key);
+        if (!allowedForRole.includes(key)) {
           throw invalidRuntimeImage(
             phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key",
-            [...allowedImageKeys],
+            allowedForRole,
           );
         }
       }
@@ -1064,17 +1075,25 @@ export function createEventIngestionSideEffectApplication(
         const snapshotFindingIds = followupFindingId
           ? [followupFindingId]
           : relatedImportedIds;
-        const snapshot = await freezeAgentSnapshotNetworkPolicy(
-          tx,
-          canvasId,
-          await ports.resolveAgentSnapshotForJob(
+        let snapshot: AgentRuntimeSnapshot;
+        try {
+          snapshot = await freezeAgentSnapshotNetworkPolicy(
             tx,
-            job.project_id as string,
-            role,
-            snapshotFindingIds,
-            { runtimeImageKey: it.runtime_image_key ?? null },
-          ),
-        );
+            canvasId,
+            await ports.resolveAgentSnapshotForJob(
+              tx,
+              job.project_id as string,
+              role,
+              snapshotFindingIds,
+              { runtimeImageKey: it.runtime_image_key ?? null },
+            ),
+          );
+        } catch (error) {
+          if (it.runtime_image_key && isHubRuntimeImageUnresolvableError(error)) {
+            throw invalidRuntimeImage("intents.runtime_image_key");
+          }
+          throw error;
+        }
         try {
           await (ports.assertFrozenRuntimeImageLocal ?? assertFrozenRuntimeImageLocal)(snapshot, { roleName: role });
         } catch (error) {

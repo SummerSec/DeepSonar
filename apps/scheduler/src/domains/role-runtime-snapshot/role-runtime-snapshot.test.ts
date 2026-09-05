@@ -7,7 +7,7 @@ type SnapshotDb = ((strings: TemplateStringsArray, ...values: unknown[]) => Prom
   json?: (value: unknown) => unknown;
 };
 
-const { resolveAgentSnapshotForJob, SnapshotUnresolvableError } = await import("./application.js");
+const { isHubRuntimeImageUnresolvableError, resolveAgentSnapshotForJob, SnapshotUnresolvableError } = await import("./application.js");
 
 function snapshotDb(input: {
   projectConfig?: unknown;
@@ -297,4 +297,47 @@ test("Hub runtime_image_key 提案压过项目策略缺省，省略时保持策�
     { runtimeImageKey: null },
   );
   assert.equal(nullOverride.runtime_image.image_key, "deepsonar-base");
+});
+
+test("CLI 不兼容的 Hub 提案镜像是 invalid_runtime_image，不是普通配置失败", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "dsh",
+    model: "grok-4.6",
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "dsh",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+      "project-1",
+      "audit",
+      { runtimeImageKey: "deepsonar-chrome-fuzz" },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      assert.equal(error.code, "invalid_runtime_image");
+      assert.match(error.message, /AGENT_CLI_IMAGE_INCOMPATIBLE/);
+      assert.equal(isHubRuntimeImageUnresolvableError(error), true);
+      return true;
+    },
+  );
 });

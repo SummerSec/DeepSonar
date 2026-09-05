@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { compatibleAgentClisForImage } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -2377,12 +2378,39 @@ export interface HubRuntimeImageCatalogEntry {
   official: boolean;
   project_opt_in: boolean;
   source_kind: string;
+  compatible_agent_clis: string[];
+}
+
+/** 只保留至少一种治理 CLI 能跑的市场图，并附上兼容 CLI 名单。 */
+export function projectHubRuntimeImageCatalog(
+  rows: ReadonlyArray<{
+    image_key: unknown;
+    name: unknown;
+    description?: unknown;
+    official?: unknown;
+    project_opt_in?: unknown;
+    source_kind: unknown;
+  }>,
+): HubRuntimeImageCatalogEntry[] {
+  return rows.flatMap((row) => {
+    const imageKey = String(row.image_key);
+    const compatibleAgentClis = compatibleAgentClisForImage(imageKey);
+    if (compatibleAgentClis.length === 0) return [];
+    return [{
+      image_key: imageKey,
+      name: String(row.name),
+      description: String(row.description ?? ""),
+      official: row.official === true,
+      project_opt_in: row.project_opt_in === true,
+      source_kind: String(row.source_kind),
+      compatible_agent_clis: compatibleAgentClis,
+    }];
+  });
 }
 
 /**
- * Hub 可选镜像目录：项目已启用、存在当前通道与宿主平台可执行 trusted 版本。
- * 与 resolveRuntimeImageForJob 的可用性口径一致；只暴露 image_key 与展示字段，
- * digest/ref 仍只在 Job 创建时由 Scheduler 冻结。
+ * Hub 可选镜像目录：项目已启用、存在当前通道与宿主平台可执行 trusted 版本，
+ * 且至少一种治理 CLI 能跑。digest/ref 仍只在 Job 创建时由 Scheduler 冻结。
  */
 export async function listHubRuntimeImageCatalog(
   db: typeof sql,
@@ -2408,14 +2436,7 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
       )
     ORDER BY ri.official DESC, ri.image_key`;
-  return rows.map((row) => ({
-    image_key: String(row.image_key),
-    name: String(row.name),
-    description: String(row.description ?? ""),
-    official: row.official === true,
-    project_opt_in: row.project_opt_in === true,
-    source_kind: String(row.source_kind),
-  }));
+  return projectHubRuntimeImageCatalog(rows);
 }
 
 export async function resolveRuntimeImageForJob(

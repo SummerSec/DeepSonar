@@ -143,7 +143,7 @@ export function invalidRuntimeImage(path = "runtime_image_key", allowed?: readon
       : " 请使用 list_available_runtime_images 返回的 image_key。";
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
-    `Hub 运行镜像必须来自本轮 list_available_runtime_images 的市场 image_key（项目已启用且存在可信版本），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    `Hub 运行镜像必须来自本轮 list_available_runtime_images 的市场 image_key（项目已启用、存在可信版本，且与目标角色 CLI 兼容），字段 ${path} 不合法或不在可选集合。${allowHint}`,
     path,
   );
 }

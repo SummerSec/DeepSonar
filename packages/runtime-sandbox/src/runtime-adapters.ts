@@ -905,6 +905,14 @@ export function getAgentCliRuntimeAdapter(id: unknown): RuntimeAdapter | undefin
     : undefined;
 }
 
+/** Governed CLIs that can execute this market image_key. Third-party keys return []. */
+export function compatibleAgentClisForImage(imageKey: string): AgentCliId[] {
+  return (Object.values(AGENT_CLI_RUNTIME_ADAPTERS) as RuntimeAdapter[])
+    .filter((adapter) => adapter.compatibleImageKeys.includes(imageKey))
+    .map((adapter) => adapter.id)
+    .sort();
+}
+
 export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): RuntimeAdapter {
   const adapter = getAgentCliRuntimeAdapter(id);
   if (!adapter) throw new Error(`AGENT_CLI_UNREGISTERED: ${String(id)}`);

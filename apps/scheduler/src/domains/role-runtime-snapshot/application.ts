@@ -171,11 +171,37 @@ export function withRuntimeTestToolchainPolicy(
 /** Current RoleConfig/Credential/runtime identity cannot be frozen into a Job snapshot. */
 export class SnapshotUnresolvableError extends Error {
   readonly stale_fields = ["current_snapshot_unresolvable"] as const;
-  constructor(cause: unknown) {
+  readonly code?: "invalid_runtime_image";
+  constructor(cause: unknown, code?: "invalid_runtime_image") {
     const message = cause instanceof Error ? cause.message : String(cause);
     super(message.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 500) || "current snapshot resolution failed");
     this.name = "SnapshotUnresolvableError";
+    this.code = code;
   }
+}
+
+export function isHubRuntimeImageUnresolvableError(error: unknown): boolean {
+  for (let current: unknown = error; current; current = current instanceof Error ? current.cause : undefined) {
+    if (current instanceof SnapshotUnresolvableError && current.code === "invalid_runtime_image") return true;
+    const message = current instanceof Error ? current.message : String(current);
+    if (message.includes("AGENT_CLI_IMAGE_INCOMPATIBLE") || message.includes("没有可用的可信运行镜像")) return true;
+  }
+  return false;
+}
+
+/** Same identity policy as snapshot freeze; used by Hub preflight before resolving a full snapshot. */
+export async function resolveRoleAgentCli(
+  db: RoleRuntimeSnapshotTransaction,
+  projectId: string,
+  jobType: string,
+): Promise<string> {
+  const roleName = roleNameForJobType(jobType);
+  const [role] = (await db`SELECT id FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
+  if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);
+  const [project] = (await db`SELECT config_json FROM projects WHERE id = ${projectId}`) as Array<Record<string, unknown>>;
+  const [projectCfg] = (await db`SELECT agent_cli FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`) as Array<Record<string, unknown>>;
+  const [globalCfg] = (await db`SELECT agent_cli FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
+  return roleIdentityForProjectPolicy(parseProjectImagePolicy(project?.config_json), projectCfg, globalCfg).agent_cli;
 }
 
 async function resolveAgentSnapshotForJobUnchecked(
@@ -277,7 +303,11 @@ async function resolveAgentSnapshotForJobUnchecked(
   try {
     runtimeAdapter = requireAgentCliRuntimeAdapter(agentCli, runtimeImage.image_key);
   } catch (error) {
-    throw new Error(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("AGENT_CLI_IMAGE_INCOMPATIBLE")) {
+      throw new SnapshotUnresolvableError(error, "invalid_runtime_image");
+    }
+    throw new Error(message);
   }
   const sandboxOverride = parseSandboxLimitsOverride(cfg?.sandbox_limits_json);
   if (!cfg?.project_id && Object.keys(sandboxOverride).length > 0) {

@@ -80,6 +80,13 @@ function nullableNumber(value: unknown): number | null {
  * intentionally excluded: they do not determine whether the old CLI/model
  * identity is still the currently selected one.
  */
+/** Job 已冻结的市场 image_key；resume/rerun 必须带上，否则会掉回角色缺省图。 */
+export function frozenRuntimeImageKey(snapshot: unknown): string | null {
+  const value = objectValue(snapshot);
+  const image = objectValue(value.runtime_image);
+  return nullableString(image.image_key ?? value.runtime_image_key);
+}
+
 export function governedSnapshotIdentity(snapshot: unknown): GovernedSnapshotIdentity {
   const value = objectValue(snapshot);
   const runtime = objectValue(value.agent_runtime);
@@ -168,6 +175,7 @@ export async function resolveCurrentSnapshotForExistingJob(
       String(job.project_id),
       String(job.type),
       findingIds,
+      { runtimeImageKey: frozenRuntimeImageKey(job.agent_snapshot_json) },
     ),
   );
 }

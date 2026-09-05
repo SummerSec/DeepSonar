@@ -11,8 +11,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且存在可信版本的市场镜像 image_key、name、description。",
-    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策被拒绝。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像。每条含 image_key、name、description 与 compatible_agent_clis。",
+    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须出现在目标角色 CLI 的 compatible_agent_clis 中；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策以 invalid_runtime_image 拒绝。本机缺层时决策仍会 accepted，但 Hub 会进入 waiting_human，不要再 mark_job_done。",
     "- 示例：`{}`",
   ].join("\n"),
   emit_progress: [
@@ -44,7 +44,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
     "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
-    '- 派发示例：`{"intents":[{"from":["<root-id>"],"role":"explore","description":"确认目标材料与版本","prompt":"定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。"}]}`',
+    "- 派发前先调用 `list_available_runtime_images`；intent 可选 `runtime_image_key` 必须原样复制返回的 image_key，且属于该条 `compatible_agent_clis` 中目标角色所用 CLI。",
+    '- 派发示例：`{"intents":[{"from":["<root-id>"],"role":"explore","description":"确认目标材料与版本","prompt":"定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。","runtime_image_key":"deepsonar-kali-minimal"}]}`',
     '- 大 payload 示例：Write `/workspace/hub_decision_payload.json` 后调用 `{"payload_file":"hub_decision_payload.json"}`',
   ].join("\n"),
   mark_job_done: [
@@ -96,7 +97,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
-  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；不得猜测或使用未启用、未准入的镜像，不得填写 OCI 引用。",
+  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；必须与目标角色 CLI 的 compatible_agent_clis 相交，不得猜测或使用未启用、未准入或不兼容的镜像，不得填写 OCI 引用。",
   emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
   emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
   emit_finding: "注意：只提交有证据支撑的 Finding；suggest_verify 只是建议，验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",

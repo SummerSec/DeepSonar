@@ -291,6 +291,7 @@ export {
   applyRuntimeOutputText,
   parsePiJsonlRecord,
   REQUIRED_RUNTIME_CAPABILITIES,
+  compatibleAgentClisForImage,
   freezeAgentCliRuntime,
   getAgentCliRuntimeAdapter,
   requireAgentCliRuntimeAdapter,

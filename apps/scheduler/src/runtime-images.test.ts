@@ -10,6 +10,7 @@ import {
   legacyProjectedRegistryDigests,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
+  projectHubRuntimeImageCatalog,
   runtimeImageRefForChannel,
   runtimeImageVersionPin,
   classifyRuntimeImagePin,
@@ -64,6 +65,17 @@ test("宿主架构映射为运行时镜像平台", () => {
   assert.equal(hostRuntimePlatform("x64"), "linux/amd64");
   assert.equal(hostRuntimePlatform("arm64"), "linux/arm64");
   assert.throws(() => hostRuntimePlatform("s390x"), /不支持的 Scheduler 宿主架构/);
+});
+
+test("Hub catalog keeps CLI-runnable market keys and drops third-party keys", () => {
+  const catalog = projectHubRuntimeImageCatalog([
+    { image_key: "deepsonar-kali-minimal", name: "Kali", description: "kali", official: true, project_opt_in: false, source_kind: "official" },
+    { image_key: "deepsonar-chrome-fuzz", name: "Chrome Fuzz", description: "chrome", official: true, project_opt_in: true, source_kind: "official" },
+    { image_key: "third-party-custom", name: "Third", description: "third", official: false, project_opt_in: true, source_kind: "third_party" },
+  ]);
+  assert.deepEqual(catalog.map((entry) => entry.image_key), ["deepsonar-kali-minimal", "deepsonar-chrome-fuzz"]);
+  assert.deepEqual(catalog[0]?.compatible_agent_clis, ["claude-code", "dsh", "pi"]);
+  assert.deepEqual(catalog[1]?.compatible_agent_clis, ["claude-code", "pi"]);
 });
 
 const DIGEST = `sha256:${"a".repeat(64)}`;

@@ -235,7 +235,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 - 人类登录暴力破解防护：`POST /auth/login` / `loginUser` 对任意密码校验（成功、错密、未知用户、禁用账号）计数。紧桶是规范化用户名 + 客户端 IP，5 次 / 5 分钟（窗口从首次计入的尝试起算）；粗桶是客户端 IP，20 次 / 5 分钟，防止跨用户名喷洒。成功登录占额且不清桶。额度在同一事务里先锁 IP 再锁 identity（`SELECT … FOR UPDATE`）；IP 已满时不插入 identity 行。过期窗口在同一事务删除。超限返回稳定 `429 LOGIN_RATE_LIMITED`（`retry_after_sec`），登录失败统一 `BAD_CREDENTIALS`，不泄露用户是否存在或是否禁用。计数落在 `login_rate_limits`，跨 Scheduler 重启保留。校验路径始终先付 scrypt 成本（未知用户走固定 dummy），再做占额/返回，避免锁定位比密码校验更便宜而成为用户名预言机。官方拓扑是浏览器 → `deploy/web-server.mjs` → Scheduler：Web 用入站 TCP peer **覆盖** `X-Forwarded-For`（不信任公网自带 XFF），Scheduler 只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS`，默认 1）。再前面加未纳入 hop 策略的代理时，IP 桶会塌缩为 Web 看到的那一跳，等于全站共享；不要把 Scheduler HTTP 暴露到公网。
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
-- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定任意镜像引用。项目按全局继承或项目托管策略得出角色缺省 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome / ClickHouse audit/test/fuzz 是官方但 project-opt-in 的专项运行时。**Hub 可按任务动态选图（#357）**：intent 可携带可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key（项目已启用、存在当前通道与宿主平台 trusted 版本），preflight 与摄入事务双重校验，非法/未启用/OCI 引用使整次决策以 `invalid_runtime_image` / `invalid_payload` 拒绝；省略时按角色缺省解析。Worker 无此提案能力，运行中 Job 不换图。
+- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定任意镜像引用。项目按全局继承或项目托管策略得出角色缺省 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome / ClickHouse audit/test/fuzz 是官方但 project-opt-in 的专项运行时。**Hub 可按任务动态选图（#357 / #360）**：intent 可携带可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key（项目已启用、存在当前通道与宿主平台 trusted 版本、且至少一种治理 CLI 能跑；条目含 `compatible_agent_clis`），preflight 与摄入事务按目标角色 CLI 再验，非法/未启用/CLI 不兼容/OCI 引用使整次决策以 `invalid_runtime_image` / `invalid_payload` 拒绝（禁止 500 `HANDLER_FAILED`）；省略时按角色缺省解析。resume/rerun 把 Job 已冻结的 `runtime_image.image_key` 当作该 Job 的镜像身份，digest 真变了才 `SNAPSHOT_STALE`。Worker 无此提案能力，运行中 Job 不换图。本机缺层仍走 #286：决策 `accepted`，Hub 变 `waiting_human`，不要再 `mark_job_done`。
 - **官方 digest 免签（#205）**：官方运行时以 GitHub Release catalog 的不可变 digest 为信任根，当前 release 不 `cosign sign`。准入 Worker 钉 Cosign 3，仅在配置了 `DEEPSONAR_COSIGN_KEY` 或 keyless identity+OIDC issuer 时验签；未配置则记录 `signature: skipped`（`unsigned_policy`），合同、SBOM、漏洞/凭据与恶意扫描仍 fail closed。禁止发出缺 identity/`--key` 的 `cosign verify`。CLI/网络/缺参记 `scanner_misconfigured`，无签名记 `unsigned`，只有 `admission policy failed` 才自动撤销官方 trusted。启用签名后须与发布流水线使用同一套 identity。
 - **Runtime image GC（#199）**：可配置周期，`0` 关闭；只对 DB `runtime_image_versions` 及其 registry ref 账本中可证明 digest 一致的 named immutable ref 调用无 `-f` 的 `docker image rm`。保护全部 promoted 版本、每产品当前/最近回滚版、项目 `selected_version_id` 显式 pin，以及 pending/active/waiting Job 快照引用。删除前查询所有容器的 ancestor，删除竞态仍由 Docker 非强制引用门保留；无安全 ref、检查失败或容器占用一律 fail closed。绝不执行 broad prune。
 - **宿主磁盘水位（#199）**：Scheduler 用 Node `statfs` 检查配置路径所在文件系统；warning 只告警，error 使 `/readiness` 返回 `HOST_DISK_PRESSURE` 并暂停 Dispatcher 新 claim，探针不可读也 fail closed；两者都不终止已运行 Job。水位恢复后监控器显式唤醒事件驱动 Dispatcher。生产 real compose 只读挂载 `DEEPSONAR_HOST_DISK_SOURCE` 到探针路径。
@@ -267,7 +267,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
-| Hub 按任务动态选择 Worker 运行镜像 | #357 | **已落地**：`list_available_runtime_images` 只读操作返回项目已启用且存在 trusted 版本的市场镜像目录（仅 `image_key` 与展示字段）；`HubIntentPayload.runtime_image_key` 可选提案压过角色缺省镜像，preflight 与摄入事务双重校验目录成员，非法/未启用/OCI 引用整单拒绝（`invalid_runtime_image` / `invalid_payload`）；Scheduler 仍唯一冻结 digest，Worker 无提案能力，运行中 Job 不换图 |
+| Hub 按任务动态选择 Worker 运行镜像 | #357 / #360 | **已落地**：`list_available_runtime_images` 只返回至少一种治理 CLI 能跑的市场图，条目带 `compatible_agent_clis`；`HubIntentPayload.runtime_image_key` 可选提案压过角色缺省镜像，preflight 与摄入事务按目录成员 + 目标角色 CLI 双重校验，非法/未启用/CLI 不兼容/OCI 引用整单拒绝（`invalid_runtime_image` / `invalid_payload`，禁止 `HANDLER_FAILED`）；resume/rerun 保留 Job 已冻结的 `runtime_image_key`，digest 真变了才 `SNAPSHOT_STALE`；Scheduler 仍唯一冻结 digest，Worker 无提案能力，运行中 Job 不换图。本机缺层仍走 #286（`accepted` + Hub `waiting_human`） |
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
 | Finding 追踪链 + 画布只看链路 | #31 | **已完成**：`GET /findings/:id` 提供结构化、限界的 `trace`；详情主路径消费 evidence/rounds/Fact-Intent flow/gaps；画布支持 `traceFinding` + `focusNode` 深链、淡化/隐藏与 Finding 节点入口 |
 | 整插件 / 整源挂载 | #33 | `modules` selector：`plugin:` / `source:*`（持续打磨挂载体验） |
@@ -387,6 +387,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 |---|---|---|
 | `list_available_roles` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
 | `list_available_runtime_images` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
+| `submit_hub_decision` 的 `runtime_image_key` | 目录之外、CLI 不兼容、适配器无法执行 | `invalid_runtime_image`（可重试，禁止 `HANDLER_FAILED`） |
 | `emit_progress` | 空白/超长 message、percent 越界或非数字 | `invalid_progress` |
 | `emit_fact` | 缺 title/description、未知字段、非法 verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
 | `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
