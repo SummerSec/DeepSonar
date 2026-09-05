@@ -472,7 +472,6 @@ async function collectTasks(
           severity: f.severity,
           location: f.location,
           summary: f.summary,
-          suggest_verify: f.suggest_verify,
           verify_status: f.verify_status,
           raw_json: f.raw_json,
           created_at: f.created_at,

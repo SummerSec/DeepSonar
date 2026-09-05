@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -60,6 +61,7 @@ test("fixed and allowed profile boundaries reject Agent overrides", () => {
   assert.equal(unscored.profile, "general");
   assert.equal(unscored.severity, undefined);
   assert.equal(unscored.scoring, undefined);
+  assert.equal("suggest_verify" in unscored, false);
 
   const hybrid = resolveFindingProtocol(undefined, undefined, {
     mode: "hybrid",
@@ -156,4 +158,17 @@ test("normalizeFindingProposal keeps declared quantities", () => {
     quantities,
   }, protocol);
   assert.deepEqual(normalized.quantities, quantities);
+});
+
+test("leftover suggest_verify is gone from contract, persist, and Agent-facing copy", () => {
+  const sources = [
+    new URL("../../../packages/shared-types/src/index.ts", import.meta.url),
+    new URL("./finding-protocol.ts", import.meta.url),
+    new URL("./domains/event-ingestion/side-effects.ts", import.meta.url),
+    new URL("./dispatcher.ts", import.meta.url),
+    new URL("./platform-tools.ts", import.meta.url),
+  ];
+  for (const source of sources) {
+    assert.doesNotMatch(readFileSync(source, "utf8"), /suggest_verify/);
+  }
 });

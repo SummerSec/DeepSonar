@@ -65,10 +65,10 @@ async function testConcurrentReverify(): Promise<void> {
     RETURNING id`;
   const [finding] = await sql`
     INSERT INTO findings (
-      project_id, job_id, node_id, fingerprint, title, severity, summary, verify_status, suggest_verify
+      project_id, job_id, node_id, fingerprint, title, severity, summary, verify_status
     ) VALUES (
       ${projectId}, ${origin.id as string}, ${findingNode.id as string},
-      ${`concurrent-${tag}`}, '并发补证 Finding', 'high', '并发收口测试', 'pending', true
+      ${`concurrent-${tag}`}, '并发补证 Finding', 'high', '并发收口测试', 'pending'
     ) RETURNING id`;
 
   const followup = {
