@@ -494,7 +494,7 @@ export type ListAvailableRuntimeImagesPayload = z.infer<typeof ListAvailableRunt
 export const ListSharedAssetsPayload = z.object({
   scope: z.enum(["platform", "project", "finding"]).optional(),
   prefix: z.string().trim().min(1).max(120).optional(),
-  // Host listSharedAssets and control-mcp both cap at 100.
+  // Host listSharedAssets caps at 100.
   limit: z.number().int().min(1).max(100).optional(),
   offset: z.number().int().min(0).max(1_000_000).optional(),
 }).strict();
@@ -882,7 +882,7 @@ export type HubDecisionPayloadFile = z.infer<typeof HubDecisionPayloadFile>;
  * skips tools whose inputSchema uses top-level anyOf/oneOf
  * ("its input schema uses top-level anyOf, which the Anthropic API does not accept").
  * Mutual exclusivity of complete vs intents vs payload_file is enforced in superRefine
- * (and again in control-mcp). `payload_file` is a temporary bypass for tool_use
+ * and again by the Job control API host. `payload_file` is a temporary bypass for tool_use
  * truncation of large multi-intent JSON: write the full decision under /workspace
  * then pass only the relative path.
  */

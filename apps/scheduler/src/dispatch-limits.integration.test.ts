@@ -123,8 +123,8 @@ if (!testDatabaseUrl) {
     try {
       for (let index = 0; index < projectIds.length; index += 1) {
         await sql`
-          INSERT INTO projects (id, canvas_id, name)
-          VALUES (${projectIds[index]}, ${canvasIds[index]}, ${`dispatch-limits-${index}-${randomUUID()}`})`;
+          INSERT INTO projects (id, name)
+          VALUES (${projectIds[index]}, ${`dispatch-limits-${index}-${randomUUID()}`})`;
         await sql`
           INSERT INTO canvases (id, project_id, title)
           VALUES (${canvasIds[index]}, ${projectIds[index]}, ${`Dispatch limits ${index}`})`;

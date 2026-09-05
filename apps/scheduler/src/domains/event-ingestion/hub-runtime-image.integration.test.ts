@@ -36,8 +36,8 @@ if (!testDatabaseUrl) {
     let chromeVersionId: string | null = null;
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, 'hub-runtime-image', ${sql.json({ rules: { hubEnabled: false } })})`;
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'hub-runtime-image', ${sql.json({ rules: { hubEnabled: false } })})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${canvasId}, ${projectId}, 'hub-runtime-image', ${sql.json({ network_policy: { allow_egress: false } })})`;

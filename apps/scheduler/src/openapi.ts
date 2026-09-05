@@ -660,7 +660,6 @@ const OPS: Op[] = [
     },
   },
   { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "get", path: "/projects/{id}/canvas", summary: "项目当前画布（兼容）", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",

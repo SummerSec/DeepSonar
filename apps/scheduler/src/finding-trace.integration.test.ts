@@ -64,7 +64,7 @@ if (!testDatabaseUrl) {
       const pendingIntentNodeId = randomUUID();
       const unrelatedFactNodeId = randomUUID();
 
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'trace project')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'trace project')`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'trace task', ${sql.json({})})`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json, created_at)

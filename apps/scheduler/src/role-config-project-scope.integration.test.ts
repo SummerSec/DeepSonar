@@ -60,9 +60,9 @@ if (!testDatabaseUrl) {
       const roleId = randomUUID();
       const roleName = `scope-role-${roleId}`;
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${ownProjectId}, ${`canvas-${ownProjectId}`}, 'scope own'),
-               (${otherProjectId}, ${`canvas-${otherProjectId}`}, 'scope other')`;
+        INSERT INTO projects (id, name)
+        VALUES (${ownProjectId}, 'scope own'),
+               (${otherProjectId}, 'scope other')`;
       await sql`
         INSERT INTO agent_roles (id, name, title, description, kind, ui_color)
         VALUES (${roleId}, ${roleName}, 'scope role', 'before', 'role', '#c084fc')`;

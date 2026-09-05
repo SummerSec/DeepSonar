@@ -54,9 +54,9 @@ if (!testDatabaseUrl) {
       const ownProjectId = randomUUID();
       const otherProjectId = randomUUID();
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${ownProjectId}, ${`canvas-${ownProjectId}`}, 'scope own'),
-               (${otherProjectId}, ${`canvas-${otherProjectId}`}, 'scope other')`;
+        INSERT INTO projects (id, name)
+        VALUES (${ownProjectId}, 'scope own'),
+               (${otherProjectId}, 'scope other')`;
 
       const roleId = randomUUID();
       await sql`

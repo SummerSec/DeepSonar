@@ -66,8 +66,8 @@ if (!testDatabaseUrl) {
       const roleConfigId = randomUUID();
       const roleName = `rerun_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, 'Job rerun integration', ${sql.json({
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'Job rerun integration', ${sql.json({
           // This fixture hosts its own model/CLI on the leftover project RoleConfig.
           // inherit_global would ignore those fields; project_managed keeps them
           // as the governed identity so resume can still 409 on drift.

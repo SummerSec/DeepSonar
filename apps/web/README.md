@@ -7,7 +7,7 @@
 | 路由 | 页面 | 说明 |
 |------|------|------|
 | `/` | 总览 | 跨项目活跃 Job、最近发现、项目卡片 |
-| `/projects` | 项目列表 | Plane 绑定项目 |
+| `/projects` | 项目列表 | 本地项目 |
 | `/projects/:id/tasks` | 任务表 | 一任务一画布，可按活跃/有发现筛选 |
 | `/projects/:id/tasks/:canvasId` | 过程画布 | 只读 React Flow + 节点详情侧栏 |
 | `/projects/:id/findings` | 项目风险 | 本项目全部任务 Finding；严重度 / 验证 / 处置汇总与来源任务筛选 |

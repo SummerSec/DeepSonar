@@ -26,9 +26,10 @@ OpenSandbox SDK types. Each registered adapter declares:
   临时上游故障导致进程退出后恢复已捕获的 session。
 
 The adapter owns only protocol translation and provider configuration
-materialization. The host still owns sandbox lifecycle, semantic control MCP,
-event validation, completion gates, leases, and all state transitions. Output
-is consumed as structured JSON events; terminal text is never scraped.
+materialization. The host still owns sandbox lifecycle, the Job-level HTTP
+control API, event validation, completion gates, leases, and all state
+transitions. Output is consumed as structured JSON events; terminal text is
+never scraped.
 
 The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLIs. Leftover `codex` / `open-code` adapters are retired from new RoleConfig/Job writes; historical snapshots and Session archives stay readable. Adding a later CLI still follows the onboarding checklist below and registers in the same table.
 
@@ -48,9 +49,9 @@ system prompt 单独作为 `input[0]` 会 401 `unauthorized client`。适配器�
 提示；若投影后仍 401，请改用 `pi` 或更换上游。失败时 `turn/end` 会尽量抽出嵌套 JSON
 的 `message`（例如 `unauthorized client detected`），避免只剩 `DSH turn ended: error`。
 
-当前三类适配器均声明 `contextCompaction: true` 和 Job 级 HTTP `platformControlApi: true`，
-只有上下文策略受支持时才准入。Claude Code 仍保留 `controlMcp: true` 作为待淘汰过渡通道，
-每次逻辑操作由 Agent 自行在 MCP 与 API 中选择一个通道，不得重复提交；HTTP API 是长期统一控制面。Pi 与 DSH 不依赖 MCP，只使用 HTTP Capability API。DSH 的 `dsh_task_mode` 不是 JSON-RPC 初始化参数：适配器在 Job 启动前按冻结值物化 Cordis composition，`standard` 配置 `dsh-tools mode: native`，`ptc` 配置 `mode: code` 并挂载 `@deepseek-ai/dsh-code-runtime-worker-thread`。LLM composition 固定使用官方 `@deepseek-ai/dsh-llm-pi-ai`；Credential 中的 Provider YAML 按官方 `settings.yaml` 结构保存 `llm-pi-ai.providers` 与 `agent-default-model`，可声明任意安全 route 及单一 OpenAI/Anthropic 兼容 profile。DSH 默认强度只能是 Pi-AI 规范档位，模型 `reasoningEfforts` 把规范档位映射为第三方 wire value。Job 冻结 route/model/Provider-owned `reasoning` 后，运行时将 profile 强制投影到 Job Model Gateway，并以该 route/model 调用 JSON-RPC `initialize`；沙箱只得到短期 `DEEPSONAR_GATEWAY_TOKEN`。Base/Audit/Kali 镜像同时安装按 Git commit 与 tarball SHA-256 固定的 MIT 插件 `dsh-reasoning-settings@0.3.0`；生成的无 UI Cordis composition 只挂载其 host 部分，为已配置的单 route/model 提供 Subagent 按次选择和思考强度继承，不引入 Web client。相关官方 npm 包按版本与 integrity 固定。DSH 动态 Skill 物化到 `${DSH_HOME}/skills/<name>/SKILL.md`，由 `dsh-skill-filesystem` 发现并通过 `dsh-tool-skill` 按需加载；平台内置 `deepsonar-control` Skill 走同一路径。
+当前三类适配器均声明 `contextCompaction: true`、`platformControlApi: true` 且
+`controlMcp: false`，只有上下文策略受支持时才准入。语义事件只走 Job 级 HTTP
+控制 API，不注入控制 MCP，也不在 MCP 与 API 之间二选一。DSH 的 `dsh_task_mode` 不是 JSON-RPC 初始化参数：适配器在 Job 启动前按冻结值物化 Cordis composition，`standard` 配置 `dsh-tools mode: native`，`ptc` 配置 `mode: code` 并挂载 `@deepseek-ai/dsh-code-runtime-worker-thread`。LLM composition 固定使用官方 `@deepseek-ai/dsh-llm-pi-ai`；Credential 中的 Provider YAML 按官方 `settings.yaml` 结构保存 `llm-pi-ai.providers` 与 `agent-default-model`，可声明任意安全 route 及单一 OpenAI/Anthropic 兼容 profile。DSH 默认强度只能是 Pi-AI 规范档位，模型 `reasoningEfforts` 把规范档位映射为第三方 wire value。Job 冻结 route/model/Provider-owned `reasoning` 后，运行时将 profile 强制投影到 Job Model Gateway，并以该 route/model 调用 JSON-RPC `initialize`；沙箱只得到短期 `DEEPSONAR_GATEWAY_TOKEN`。Base/Audit/Kali 镜像同时安装按 Git commit 与 tarball SHA-256 固定的 MIT 插件 `dsh-reasoning-settings@0.3.0`；生成的无 UI Cordis composition 只挂载其 host 部分，为已配置的单 route/model 提供 Subagent 按次选择和思考强度继承，不引入 Web client。相关官方 npm 包按版本与 integrity 固定。DSH 动态 Skill 物化到 `${DSH_HOME}/skills/<name>/SKILL.md`，由 `dsh-skill-filesystem` 发现并通过 `dsh-tool-skill` 按需加载；平台内置 `deepsonar-control` Skill 走同一路径。
 
 Cordis 字段必须按镜像中钉死版本的插件 Schema 生成，不能用布尔“启用”猜测配置形态。当前
 完整 DSH package closure 统一固定为 `0.1.1-rc.2`，避免 prerelease peer range 混装。`@deepseek-ai/dsh-agent-spine-demo` 的 `toolBash` 是

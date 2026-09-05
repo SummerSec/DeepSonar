@@ -624,21 +624,4 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const convergence = await readCanvasConvergence(sql, id);
     return { canvas_id: id, ok: true, convergence };
   });
-
-  // ---------- 画布（§7 GET /projects/{id}/canvas；§6.4 列表不含大字段） ----------
-  // @deprecated 旧的项目级画布，仅为兼容历史数据保留；新代码用 /canvases/:id
-  app.get("/projects/:id/canvas", async (req) => {
-    const { id } = req.params as { id: string };
-    const [project] = await sql`SELECT * FROM projects WHERE id = ${id}`;
-    if (!project) return { error: "project not found" };
-    const [nodes, edges] = await Promise.all([
-      sql`
-        SELECT id, node_type, title, body_json, x, y, w, h, status, job_id, updated_at
-        FROM canvas_nodes WHERE canvas_id = ${project.canvas_id} ORDER BY created_at, id`,
-      sql`
-        SELECT id, from_node_id, to_node_id, edge_type
-        FROM canvas_edges WHERE canvas_id = ${project.canvas_id} ORDER BY created_at, id`,
-    ]);
-    return { canvas_id: project.canvas_id, nodes, edges };
-  });
 }

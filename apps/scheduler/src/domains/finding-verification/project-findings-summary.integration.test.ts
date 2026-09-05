@@ -32,7 +32,7 @@ if (!testDatabaseUrl) {
     const findingB = randomUUID();
     const emptyProjectId = randomUUID();
     try {
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${randomUUID()}, 'multi-task risk')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'multi-task risk')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES
         (${canvasA}, ${projectId}, '任务 A'),
         (${canvasB}, ${projectId}, '任务 B')`;
@@ -75,7 +75,7 @@ if (!testDatabaseUrl) {
       });
       assert.equal(JSON.parse(canvasSummary.payload).total, 1);
 
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${emptyProjectId}, ${randomUUID()}, 'empty risk')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${emptyProjectId}, 'empty risk')`;
       const emptySummary = await app.inject({ method: "GET", url: `/projects/${emptyProjectId}/findings/summary` });
       assert.equal(emptySummary.statusCode, 200);
       assert.equal(JSON.parse(emptySummary.payload).total, 0);

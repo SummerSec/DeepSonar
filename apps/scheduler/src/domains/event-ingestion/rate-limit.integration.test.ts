@@ -25,8 +25,8 @@ if (!testDatabaseUrl) {
     const now = new Date("2026-08-05T00:00:12.000Z");
     const eventIds: string[] = [];
     await sql`
-      INSERT INTO projects (id, canvas_id, name, config_json)
-      VALUES (${projectId}, ${canvasId}, 'event-rate-limit', ${sql.json({ rules: { hubEnabled: false } })})`;
+      INSERT INTO projects (id, name, config_json)
+      VALUES (${projectId}, 'event-rate-limit', ${sql.json({ rules: { hubEnabled: false } })})`;
     await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
       VALUES (${canvasId}, ${projectId}, 'event-rate-limit', ${sql.json({})})`;

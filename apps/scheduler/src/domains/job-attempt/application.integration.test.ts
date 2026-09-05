@@ -29,7 +29,7 @@ if (!testDatabaseUrl) {
     const canvasId = `attempt-${randomUUID()}`;
     const jobId = randomUUID();
     try {
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'Attempt 测试')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'Attempt 测试')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'Attempt 测试')`;
       await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json) VALUES (${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json({ agent_cli: 'claude-code' } as never)})`;
       const first = await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId, { agent_cli: "claude-code" }));

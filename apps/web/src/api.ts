@@ -122,7 +122,6 @@ export interface DashboardUsage {
 
 export interface Project {
   id: string;
-  canvas_id: string;
   name: string;
   description: string;
   status: "active" | "archived";

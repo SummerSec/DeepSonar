@@ -6,7 +6,7 @@ import { sql } from "../../db.js";
 
 export function registerApiTokenRoutes(app: FastifyInstance): void {
   // ---------- 平台 API Token 管理（§6.1/§6.4：tokens:manage） ----------
-  // 与 Provider Credential（LLM/Plane/Git 密钥）严格分离；明文仅创建/轮换时返回一次
+  // 与 Provider Credential（LLM/Git 密钥）严格分离；明文仅创建/轮换时返回一次
   const TOKEN_SAFE_FIELDS = sql`id, name, subject_type, subject_id, project_id, token_prefix, scopes,
                                 expires_at, last_used_at, last_ip, revoked_at, created_at, created_by`;
 

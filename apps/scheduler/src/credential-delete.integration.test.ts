@@ -90,7 +90,7 @@ if (!testDatabaseUrl) {
       const canvasId = `credential-delete-${randomUUID()}`;
       const roleId = randomUUID();
       const roleConfigId = randomUUID();
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'credential delete')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'credential delete')`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'credential delete', ${sql.json({})})`;
       await sql`
         INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)

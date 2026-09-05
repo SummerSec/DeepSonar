@@ -71,7 +71,6 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas）；compose 在清空前重验冻结种子，失效时返回 `409 COMPOSE_SEEDS_STALE` 且不清空现有数据；当前 Hub RoleConfig/Credential 无法解析时返回 `409 SNAPSHOT_STALE` 且不清空 |
 | POST | /projects/:id/events | tasks:write | 外部事件 `{source, event_id, event_type, title?, content?, data?}`，`source+event_id` 幂等 |
 | GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布）；投影 `execution_state=pausing|paused|running`、`execution_active_count` 与 `pending_count` |
-| GET | /projects/:id/canvas | tasks:read | 项目当前画布（兼容） |
 | GET | /canvases/:id | tasks:read | 画布节点/边；`canvas` 含任务执行控制投影 |
 | GET | /canvases/:id/summary | tasks:read | 画布摘要 |
 | GET | /canvases/:id/delta | tasks:read | `?since=` 增量图数据 |
@@ -354,7 +353,7 @@ Credential 连接测试和模型目录只读取 Scheduler append-only audit evid
 | 403 | Scope 不足或项目级 Token 跨项目 |
 | 404 | 资源不存在 |
 | 409 | 冲突（同名、终态 resume、未启用角色配项目覆盖等） |
-| 502 | 上游失败（Git 同步、Plane 等） |
+| 502 | 上游失败（Git 同步等） |
 
 ## 幂等
 

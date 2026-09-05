@@ -87,7 +87,7 @@ try {
     network_policy: { allow_egress: false },
   };
   const snapshotJson = JSON.parse(JSON.stringify(snapshot));
-  await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox reconcile')`;
+  await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'OpenSandbox reconcile')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox reconcile')`;
 
   const leftovers = await sandboxRunner.listResources();

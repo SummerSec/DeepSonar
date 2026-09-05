@@ -53,7 +53,7 @@ if (!testDatabaseUrl) {
       const hubJobId = randomUUID();
       const hubNodeId = randomUUID();
       const findingNodeId = randomUUID();
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, '人工收口集成项目')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, '人工收口集成项目')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, '人工收口集成画布')`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
@@ -162,7 +162,7 @@ if (!testDatabaseUrl) {
       const otherSourceJobId = randomUUID();
       const otherFindingId = randomUUID();
       const otherHubJobId = randomUUID();
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${otherProjectId}, ${otherCanvasId}, '越权测试项目')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${otherProjectId}, '越权测试项目')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES (${otherCanvasId}, ${otherProjectId}, '越权测试画布')`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)

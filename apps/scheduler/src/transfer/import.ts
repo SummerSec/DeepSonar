@@ -252,7 +252,6 @@ async function createNewProject(
   return await sql.begin(async (tx) => {
     const [project] = await tx`
       INSERT INTO projects ${tx({
-        canvas_id: randomUUID(),
         name,
         description: (srcProject.description ?? "") + "\n\n[imported from deepsonarpack]",
         config_json: config_json as never,

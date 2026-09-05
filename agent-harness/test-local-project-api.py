@@ -34,7 +34,7 @@ def main():
     # 1. 创建项目
     p = req("POST", "/projects", {"name": f"本地项目-{tag}", "description": "阶段A验收"}, 201)
     pid = p["id"]
-    assert p["status"] == "active" and "plane_project_id" not in p, p
+    assert p["status"] == "active" and "plane_project_id" not in p and "canvas_id" not in p, p
     print("本地项目:", pid, p["status"])
 
     # 2. 列表/详情；可创建多个项目
@@ -43,7 +43,7 @@ def main():
     assert len([x for x in lst if x["id"] in {pid} or x["name"].endswith(f"-{tag}")]) >= 2, lst
     detail = req("GET", f"/projects/{pid}")
     assert detail["description"] == "阶段A验收"
-    assert "plane_project_id" not in detail, detail
+    assert "plane_project_id" not in detail and "canvas_id" not in detail, detail
     print("列表/详情 OK，项目数:", len(lst))
 
     # 3. 改名 + 描述

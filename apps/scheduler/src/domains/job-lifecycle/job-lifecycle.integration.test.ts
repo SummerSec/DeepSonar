@@ -28,8 +28,8 @@ if (!testDatabaseUrl) {
 
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${projectId}, ${canvasId}, 'job-lifecycle integration')`;
+        INSERT INTO projects (id, name)
+        VALUES (${projectId}, 'job-lifecycle integration')`;
       await sql`
         INSERT INTO canvases (id, project_id, title)
         VALUES (${canvasId}, ${projectId}, 'job-lifecycle integration')`;

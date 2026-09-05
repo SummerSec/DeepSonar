@@ -39,9 +39,8 @@ async function seedHighIdHistory(db: ReturnType<typeof postgres>): Promise<{ job
   const canvasId = randomUUID();
   const jobId = randomUUID();
   await db`
-    INSERT INTO projects (id, canvas_id, name)
-    VALUES (${projectId}::uuid, ${canvasId}, 'seq-rebuild')
-  `;
+    INSERT INTO projects (id, name)
+    VALUES (${projectId}::uuid, 'seq-rebuild')`;
   await db`
     INSERT INTO canvases (id, project_id, title)
     VALUES (${canvasId}, ${projectId}::uuid, 'seq-rebuild')

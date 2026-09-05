@@ -51,10 +51,10 @@ if (!testDatabaseUrl) {
     const canvasIds: string[] = [];
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
+        INSERT INTO projects (id, name, config_json)
         VALUES
-          (${projectId}, ${"compose-project-" + projectId}, 'compose-project', ${sql.json({ rules: { hubEnabled: false } })}),
-          (${otherProjectId}, ${"compose-other-" + otherProjectId}, 'compose-other', ${sql.json({ rules: { hubEnabled: false } })})`;
+          (${projectId}, 'compose-project', ${sql.json({ rules: { hubEnabled: false } })}),
+          (${otherProjectId}, 'compose-other', ${sql.json({ rules: { hubEnabled: false } })})`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${sourceCanvasId}, ${projectId}, 'origin task', ${sql.json({ goal: "origin" })})`;
       await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
@@ -184,8 +184,8 @@ if (!testDatabaseUrl) {
     const hubJobId = randomUUID();
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${"compose-pending-" + projectId}, 'compose-pending', ${sql.json({ rules: { hubEnabled: true } })})`;
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'compose-pending', ${sql.json({ rules: { hubEnabled: true } })})`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${sourceCanvasId}, ${projectId}, 'origin pending', ${sql.json({ goal: "origin" })})`;
       await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)

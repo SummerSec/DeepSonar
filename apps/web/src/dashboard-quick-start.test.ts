@@ -27,7 +27,6 @@ import type { ReadinessResponse } from "@deepsonar/shared-types";
 
 const project: Project = {
   id: "11111111-1111-4111-8111-111111111111",
-  canvas_id: "22222222-2222-4222-8222-222222222222",
   name: "本地项目",
   description: "",
   status: "active",

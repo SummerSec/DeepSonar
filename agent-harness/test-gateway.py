@@ -77,8 +77,8 @@ def main():
     print("credential OK:", cid[:8])
 
     # 2. SQL 造 running job + project
-    pid = psql("INSERT INTO projects (name, canvas_id) VALUES "
-               f"('gw-test-{tag}', gen_random_uuid()::text) RETURNING id;", first_line=True)
+    pid = psql(f"INSERT INTO projects (name) VALUES "
+               f"('gw-test-{tag}') RETURNING id;", first_line=True)
     jid = psql(f"INSERT INTO jobs (project_id, type, status, started_at) VALUES "
                f"('{pid}', 'audit', 'running', now()) RETURNING id;", first_line=True)
 

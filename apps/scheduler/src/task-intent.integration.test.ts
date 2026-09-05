@@ -59,8 +59,8 @@ if (!testDatabaseUrl) {
 
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${projectId}, ${`issue-251-${randomUUID()}`}, ${`issue-251-${randomUUID()}`})`;
+        INSERT INTO projects (id, name)
+        VALUES (${projectId}, ${`issue-251-${randomUUID()}`})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES

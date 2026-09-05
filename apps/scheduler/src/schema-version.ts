@@ -5,4 +5,4 @@
  * Non-empty databases must already be at this version; there is no upgrade path.
  * Schema changes: edit schema.sql, bump this constant, rebuild the database.
  */
-export const SCHEMA_VERSION = 41;
+export const SCHEMA_VERSION = 42;

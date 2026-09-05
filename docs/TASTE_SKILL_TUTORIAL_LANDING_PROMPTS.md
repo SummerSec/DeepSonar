@@ -105,7 +105,7 @@ Core discipline:
 - Real mode: AGENT_MODE=real (OpenSandbox)
 - Schema single source: database/schema.sql, applied on scheduler start
 - Web is read-mostly process surface; nodes not agent-draggable; layout server-side
-- Plane is optional integration; default path is local project/task API
+- Default path is the local project/task API
 
 Real commands (must appear accurately, do not invent alternatives):
 - pnpm db:up
@@ -120,7 +120,7 @@ Real commands (must appear accurately, do not invent alternatives):
 - Do NOT redesign the product console dashboard tables/canvas app shell as a marketing bento
 - Do NOT invent fake metrics (99.9%, 10x, etc.)
 - Do NOT invent API endpoints that do not exist
-- Do NOT use Plane as the default path; local project/task API is default
+- Do NOT invent a third-party project board as the default path; local project/task API is default
 - Do NOT add multi-tenant billing, auth marketing, or fake real-company logo walls
   (prefer skip logo wall or invented monogram marks only)
 
@@ -554,7 +554,7 @@ Truths: Local DB only truth; Canvas process truth; Sandbox execution truth;
 Scheduler only side effects. Agents propose only via emit_progress,
 emit_finding, mark_job_done, request_human. Rule engine derives verify.
 Hub fact-intent event-driven, default off. AGENT_MODE fake|real.
-Plane optional; default local project/task API.
+Default path is the local project/task API.
 Commands exact: pnpm db:up; pnpm dev; pnpm dev:web; pnpm build; pnpm typecheck;
 python agent-harness/test-local-project-api.py;
 npx agentbox image build --provider local-docker --file agent-harness/image.mjs

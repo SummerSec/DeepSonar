@@ -1,6 +1,6 @@
 ---
 name: deepsonar-management
-description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场、平台导入导出与 Plane。当需要以程序化方式操作 DeepSonar 时使用。
+description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场与平台导入导出。当需要以程序化方式操作 DeepSonar 时使用。
 ---
 
 # DeepSonar Management

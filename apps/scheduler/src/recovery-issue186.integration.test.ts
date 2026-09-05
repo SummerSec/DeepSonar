@@ -58,8 +58,8 @@ if (!testDatabaseUrl) {
     const workerIds: string[] = Array.from({ length: 5 }, () => randomUUID());
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, 'Issue 186 recovery', ${sql.json({})})`;
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'Issue 186 recovery', ${sql.json({})})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${canvasId}, ${projectId}, 'Issue 186 recovery', ${sql.json({

@@ -49,8 +49,8 @@ if (!testDatabaseUrl) {
 
       const projectId = randomUUID();
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${projectId}, ${`canvas-${projectId}`}, 'batch fixture')`;
+        INSERT INTO projects (id, name)
+        VALUES (${projectId}, 'batch fixture')`;
       const roleId = randomUUID();
       const incompatibleRoleId = randomUUID();
       await sql`

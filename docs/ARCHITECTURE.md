@@ -293,8 +293,8 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 
 ```text
 projects
-  id, canvas_id, name, config_json, created_at
-  -- canvas_id 为历史遗留（旧项目级画布），新项目画布按任务铸造（见 canvases）
+  id, name, config_json, created_at
+  -- 画布按任务铸造（见 canvases），项目不再持有画布身份列
 
 canvases                              -- 一任务一画布
   id, project_id, title, target_json, created_at
@@ -459,7 +459,6 @@ Job 事件仍必须经过本摄入硬门。
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
 - `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup、`execution_state`、收尾/待领取计数及最近一次 job 状态/优先级）
 - `GET  /canvases/{id}`  单任务画布节点/边；Canvas 元数据带同一执行控制投影
-- `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
 - `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤；未分页窗口 500 条
 - `GET /projects/{id}/findings/summary`  项目风险聚合（严重度 / verify_status / disposition / 来源任务），不受列表窗口截断
 - `PATCH /findings/{id}/disposition`  人工处置；`human_reproducing` 为复现中；`confirmed_vuln` 仍要求 `verify_status=confirmed`

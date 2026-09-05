@@ -240,7 +240,7 @@ try {
   }
   closeApp = () => app.close();
 
-  await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox CLI control')`;
+  await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'OpenSandbox CLI control')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox CLI control')`;
 
   const ran: VendorCli[] = [];

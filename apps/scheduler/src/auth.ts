@@ -82,7 +82,6 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /projects/:id/tasks": "tasks:write",
   "POST /projects/:id/events": "tasks:write",
   "GET /projects/:id/canvases": "tasks:read",
-  "GET /projects/:id/canvas": "tasks:read",
   "GET /projects/:id/settings": "agents:read",
   "PATCH /projects/:id/settings": "agents:write",
   "GET /projects/:id/roles": "agents:read",

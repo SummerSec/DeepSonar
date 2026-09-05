@@ -9,8 +9,8 @@ let unsubscribe: (() => void) | undefined;
 
 try {
   await sql`
-    INSERT INTO projects (id, canvas_id, name, description)
-    VALUES (${projectId}, ${randomUUID()}, '__deepsonar_canvas_update_smoke__', 'temporary smoke')`;
+    INSERT INTO projects (id, name, description)
+    VALUES (${projectId}, '__deepsonar_canvas_update_smoke__', 'temporary smoke')`;
   await sql`
     INSERT INTO canvases (id, project_id, title, target_json)
     VALUES (${canvasId}, ${projectId}, 'canvas update smoke', ${{ network_policy: { allow_egress: false } } as never})`;

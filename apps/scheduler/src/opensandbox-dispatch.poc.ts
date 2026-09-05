@@ -97,7 +97,7 @@ try {
     if (applied.status !== 0) throw new Error(`gateway Service apply failed: ${applied.stderr || applied.stdout}`);
   }
 
-  await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox dispatch')`;
+  await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'OpenSandbox dispatch')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox dispatch')`;
   await createSharedAsset({
     scope: "project",

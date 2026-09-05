@@ -14,11 +14,10 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 41);
+INSERT INTO schema_meta (id, version) VALUES ('global', 42);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  canvas_id text NOT NULL,
   name text NOT NULL,
   description text NOT NULL DEFAULT '',
   status text NOT NULL DEFAULT 'active',

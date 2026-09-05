@@ -187,12 +187,10 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     return withProjectJobQuota(rows as Record<string, unknown>[]);
   });
 
-  // 创建不再生成历史项目级 root 画布（deprecated canvas_id 仅占位，任务创建时才铸任务画布）
   app.post("/projects", async (req, reply) => {
     const body = CreateProjectBody.parse(req.body);
     const [project] = await sql`
       INSERT INTO projects ${sql({
-        canvas_id: crypto.randomUUID(),
         name: body.name,
         description: body.description,
         config_json: { image_strategy: body.image_strategy } as never,
@@ -239,7 +237,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     return project;
   });
 
-  // 归档 = 软删除：历史任务/事件/Finding 全保留，仅不再允许新建任务与 Plane 同步
+  // 归档 = 软删除：历史任务/事件/Finding 全保留，仅不再允许新建任务
   app.post("/projects/:id/archive", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [project] = await sql`
@@ -1186,10 +1184,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
     await sql.begin(async (tx) => {
       await wipeCanvasRuntimeData(tx, canvasId);
-      // 历史 projects.canvas_id 可能指向本画布（遗留字段）
-      await tx`
-        UPDATE projects SET canvas_id = ${`archived-${canvasId}`}
-        WHERE canvas_id = ${canvasId}`;
       await tx`DELETE FROM canvases WHERE id = ${canvasId}`;
     });
 
