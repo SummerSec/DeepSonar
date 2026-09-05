@@ -597,10 +597,15 @@ test("normalizeSessionCli and labels cover current agents plus leftover archives
   assert.equal(sessionCliLabel("pi"), "Pi");
 });
 
-test("leftover Codex/OpenCode are not first-class session CLIs", async () => {
+test("leftover Codex/OpenCode parsers live in legacy-session, not the current CLI hot path", async () => {
   const { isLegacySessionCli, LEGACY_SESSION_CLIS } = await import("./legacy-session/index.js");
-  const source = readFileSync(new URL("./parseAgentSession.ts", import.meta.url), "utf8");
-  assert.match(source, /export type SupportedSessionCli = "claude-code" \| "pi" \| "dsh"/);
+  const hotPath = readFileSync(new URL("./parseAgentSession.ts", import.meta.url), "utf8");
+  const shared = readFileSync(new URL("./parse-shared.ts", import.meta.url), "utf8");
+  const leftover = readFileSync(new URL("./legacy-session/parse.ts", import.meta.url), "utf8");
+  assert.match(shared, /export type SupportedSessionCli = "claude-code" \| "pi" \| "dsh"/);
+  assert.doesNotMatch(hotPath, /function parseCodexRow|function parseOpenCodeRow|CODEX_TOOL_CALL_TYPES/);
+  assert.match(leftover, /export function parseCodexRow/);
+  assert.match(leftover, /export function parseOpenCodeRow/);
   assert.deepEqual([...LEGACY_SESSION_CLIS], ["codex", "open-code"]);
   assert.equal(isLegacySessionCli("codex"), true);
   assert.equal(isLegacySessionCli("pi"), false);

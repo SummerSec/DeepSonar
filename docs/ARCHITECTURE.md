@@ -496,8 +496,8 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
 - CLI stderr 不参与终态或语义事件推断。Runtime 在任意 SDK chunk 边界上对短期 Job Token 做流式精确脱敏，再以 `runtime.stderr` 写入 normalized evidence；单次运行累计最多 1 MiB，达到上限写 `runtime.stderr.truncated` 后停止采集。`jobs.error` 继续只保存短尾摘要，完整有界诊断只从鉴权 evidence 端点读取。
-- 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；各 Agent CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Codex 为 `~/.codex`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
-- Session 归档按 CLI 方言独立读取：Claude Code、Codex、Pi、DSH 使用本次沙箱的受治理本地 session artifact；OpenCode 使用 `opencode export <sessionId>` vendor export，受 32 MiB 上限约束。malformed 的 session identity/path、导出/读取错误或超限显式失败；Web 查看器分别解析五类格式，默认展示主 Session，并可切换已归档的 subagent；在线预览 8 MiB，完整字节走 download
+- 每个 Job 将 `HOME` 固定为独立可写的 `/workspace/.deepsonar-home`，不信任镜像继承的 `/root`；当前三类 CLI 默认使用自身位于 `HOME`/XDG 下的标准用户目录（Claude Code 为 `~/.claude`、Pi 为 `~/.pi`、DSH 为 `~/.dsh`），只有不遵循标准目录的 CLI 才由受治理 Runtime Adapter 显式覆盖。历史 leftover Codex/OpenCode 归档仍可能落在 `~/.codex` / `~/.opencode`，路径守卫保留这些目录。原始 Session 归档复用同一 `HOME`，读回内存后立即清理，随后再销毁一次性沙箱
+- Session 归档按 CLI 方言独立读取：当前三类（Claude Code / Pi / DSH）使用本次沙箱的受治理本地 session artifact。leftover Codex/OpenCode 只读解析历史归档（Codex rollout JSONL；OpenCode `opencode export` vendor export，32 MiB 上限）。malformed 的 session identity/path、导出/读取错误或超限显式失败；Web 查看器解析当前三类 + leftover 只读格式，默认展示主 Session，并可切换已归档的 subagent；在线预览 8 MiB，完整字节走 download
 - 启动中断导致容器先于归档销毁时，只暴露已写入的 normalized stream synthetic manifest；
   Session 显式 `capture_error`，不能用数据库中的 session identity 冒充归档，也不能跨新
   Attempt 复用已销毁沙箱。
@@ -523,7 +523,7 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 | 层 | 位置 | 内容 |
 |----|------|------|
 | 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | RoleConfig 保存 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关与 Credential 引用；Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结，运行时由固定提交的 `dsh-reasoning-settings` 修正 Subagent 继承；全局 RoleConfig 保存可信镜像绑定 |
-| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Pi 冻结为 `--thinking`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；leftover Codex/OpenCode 历史快照仍可读其当时冻结的 reasoning 键，不能再物化为新 Job。字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含 CLI selector `model`、实际 `upstream_model`、Provider 配置文件与客户端上下文预算）；Executor 仅用 selector 启动 CLI，所有上游治理使用 `upstream_model ?? model`，不读取旧配置或为缺失快照降级 |
 
 项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为
@@ -544,7 +544,7 @@ compose 的种子范围同样是任务级冻结输入，但只有人工任务创
 
 Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 
-`context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
+`context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。leftover Codex/OpenCode 历史快照仍可读当时的窗口键，不能再物化为新 Job。
 
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 

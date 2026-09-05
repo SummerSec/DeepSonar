@@ -1,78 +1,67 @@
 /**
- * Parse Agent CLI session archives (JSONL / NDJSON / OpenCode export JSON)
+ * Parse Agent CLI session archives (JSONL / NDJSON / leftover OpenCode export JSON)
  * into a timeline suitable for the Job Session viewer.
  *
- * Formats: current Agent CLI (claude-code / pi / dsh). Leftover
- * Codex/OpenCode types live in `legacy-session/`; parsers stay here (shared
- * helpers) and remain read-only for historical archives.
+ * Current write/run CLIs: claude-code / pi / dsh.
+ * Leftover Codex/OpenCode types and parsers live in `legacy-session/`.
  * UX inspiration only: github.com/cuteribs/agent-session-viewer (do not vendor).
  *
  * When adding a new Agent CLI:
  * 1. packages/runtime-sandbox/src/cli-session-adapters.ts — archive discovery/export
- * 2. this file — parse + normalizeSessionCli + tests
+ * 2. this file — current-CLI parse + normalizeSessionCli + tests
  * 3. docs/AGENT_CLI_RUNTIME_ADAPTERS.md — onboarding checklist
  * Runtime adapter alone is not enough; Session UI will show empty/raw without these.
  */
 
 import {
   isLegacySessionCli,
+  isCodexSessionRow,
+  isOpenCodeSessionRow,
   legacySessionCliLabel,
   normalizeLegacySessionCli,
+  parseCodexRow,
+  parseOpenCodeRow,
   type LegacySessionCli,
 } from "./legacy-session/index.js";
+import {
+  asRecord,
+  asString,
+  attachmentItem,
+  attachmentItemsFromContent,
+  canvasBroadcastItem,
+  contentToText,
+  extractUsage,
+  isAttachmentBlock,
+  isCanvasBroadcast,
+  lookupToolName,
+  parseSessionSpecialRow,
+  pushUsage,
+  rememberToolName,
+  sessionMetadataItem,
+  sessionMetadataKind,
+  stringifyBody,
+  truncate,
+  type ParseAgentSessionOptions,
+  type SessionFormat,
+  type SessionItemKind,
+  type SessionParseResult,
+  type SessionTimelineItem,
+  type SessionToolStat,
+  type SupportedSessionCli,
+  type ToolNameMap,
+} from "./parse-shared.js";
 
-export type SessionItemKind =
-  | "user"
-  | "assistant"
-  | "tool_call"
-  | "tool_result"
-  | "broadcast"
-  | "system"
-  | "usage"
-  | "other";
-
-export type SessionTimelineItem = {
-  id: string;
-  kind: SessionItemKind;
-  title: string;
-  body?: string;
-  toolName?: string;
-  timestamp?: string;
-  tokens?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
-  isError?: boolean;
+export type {
+  LegacySessionCli,
+  ParseAgentSessionOptions,
+  SessionFormat,
+  SessionItemKind,
+  SessionParseResult,
+  SessionTimelineItem,
+  SessionToolStat,
+  SupportedSessionCli,
 };
-
-export type SessionToolStat = {
-  name: string;
-  count: number;
-  errors: number;
-};
-
-/** Current write/run Agent CLI. Leftover archive dialects are `LegacySessionCli`. */
-export type SupportedSessionCli = "claude-code" | "pi" | "dsh";
-export type { LegacySessionCli };
-
-export type SessionFormat = SupportedSessionCli | LegacySessionCli | "ndjson" | "unknown";
-
-export type SessionParseResult = {
-  format: SessionFormat;
-  items: SessionTimelineItem[];
-  tools: SessionToolStat[];
-  totals: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    lines: number;
-    parsed: number;
-    skipped: number;
-  };
-};
-
-export type ParseAgentSessionOptions = {
-  /** 来自 evidence.manifest.cli；优先于启发式格式探测 */
-  cli?: string | null;
-};
+export { SESSION_BODY_MAX } from "./parse-shared.js";
 
 const SUPPORTED_CLI = new Set<SupportedSessionCli>(["claude-code", "pi", "dsh"]);
 
@@ -96,411 +85,6 @@ export function sessionCliLabel(cli?: string | null): string {
   return cli?.trim() || "未知 CLI";
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-/** 检查器可读正文上限；账本预览另有 CSS 行数限制。 */
-export const SESSION_BODY_MAX = 32_000;
-
-function truncate(text: string, max = SESSION_BODY_MAX): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-type ToolNameMap = Map<string, string>;
-
-function rememberToolName(tools: ToolNameMap, id: unknown, name: unknown): void {
-  const toolId = asString(id);
-  const toolName = asString(name);
-  if (toolId && toolName) tools.set(toolId, toolName);
-}
-
-function lookupToolName(tools: ToolNameMap, id: unknown, fallback?: string): string | undefined {
-  const toolId = asString(id);
-  return (toolId ? tools.get(toolId) : undefined) ?? fallback;
-}
-
-function stringifyBody(value: unknown): string | undefined {
-  if (value == null) return undefined;
-  if (typeof value === "string") return truncate(value);
-  try {
-    return truncate(JSON.stringify(value, null, 2));
-  } catch {
-    return truncate(String(value));
-  }
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return truncate(content);
-  if (!Array.isArray(content)) return stringifyBody(content) ?? "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (typeof block === "string") {
-      parts.push(block);
-      continue;
-    }
-    const rec = asRecord(block);
-    if (!rec) continue;
-    if (typeof rec.text === "string") parts.push(rec.text);
-    else if (typeof rec.thinking === "string") parts.push(rec.thinking);
-    else if (typeof rec.reasoning === "string") parts.push(rec.reasoning);
-    else if (typeof rec.content === "string") parts.push(rec.content);
-    else if (rec.type === "tool_use") {
-      parts.push(`[tool_use ${String(rec.name ?? "tool")}]`);
-    } else if (rec.type === "tool_result") {
-      parts.push(`[tool_result ${String(rec.tool_use_id ?? "")}]`);
-    } else if (rec.type === "tool-result" || rec.type === "toolResult") {
-      const result = rec.content ?? rec.output ?? rec.result;
-      if (typeof result === "string") parts.push(result);
-      else if (result != null) parts.push(contentToText(result));
-    }
-  }
-  return parts.join("\n").trim();
-}
-
-/**
- * Session archives may carry file/image blocks without putting their bytes in
- * the human-readable text stream. Keep the descriptive fields, but never put
- * the binary/base64 payload into the viewer body.
- */
-const ATTACHMENT_BLOCK_TYPES = new Set([
-  "attachment",
-  "document",
-  "file",
-  "image",
-  "image_url",
-  "input_attachment",
-  "input_file",
-  "input_image",
-]);
-
-const ATTACHMENT_BINARY_KEYS = new Set([
-  "base64",
-  "base64_data",
-  "blob",
-  "bytes",
-  "bytes_data",
-  "content_base64",
-  "data_base64",
-  "data",
-  "data_url",
-  "file_data",
-  "image_data",
-  "source_data",
-]);
-
-function normalizedAttachmentKey(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-}
-
-function isBinaryAttachmentKey(key: string, value: unknown): boolean {
-  const normalizedKey = normalizedAttachmentKey(key);
-  if (normalizedKey === "data" && asRecord(value)) return false;
-  if (ATTACHMENT_BINARY_KEYS.has(normalizedKey) || normalizedKey.includes("base64")) return true;
-  return typeof value === "string" && /^data:[^,]+;base64,/iu.test(value);
-}
-
-function normalizedType(value: unknown): string | undefined {
-  const type = asString(value);
-  return type ? type.toLowerCase().replace(/[\s-]+/g, "_") : undefined;
-}
-
-function isAttachmentBlock(block: Record<string, unknown>): boolean {
-  const types = [block.type, block.customType, block.custom_type, block.event];
-  if (types.some((value) => {
-    const type = normalizedType(value);
-    return type ? ATTACHMENT_BLOCK_TYPES.has(type) : false;
-  })) return true;
-  const attachment = asRecord(block.attachment);
-  return Boolean(
-    attachment
-      && (asString(attachment.attachmentId)
-        || asString(attachment.attachment_id)
-        || asString(attachment.mediaType)
-        || asString(attachment.media_type)),
-  );
-}
-
-function sessionAttachmentRow(row: Record<string, unknown>): Record<string, unknown> | undefined {
-  const data = asRecord(row.data);
-  const payload = asRecord(row.payload);
-  const message = asRecord(row.message);
-  const nestedMessage = asRecord(data?.message) ?? asRecord(payload?.message);
-  return [row, data, payload, message, nestedMessage].find(
-    (candidate): candidate is Record<string, unknown> => Boolean(candidate && isAttachmentBlock(candidate)),
-  );
-}
-
-function safeAttachmentValue(value: unknown, depth = 0): unknown {
-  if (value == null || typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "string") return truncate(value, 500);
-  if (depth >= 5) return "[metadata omitted]";
-  if (Array.isArray(value)) return value.slice(0, 20).map((item) => safeAttachmentValue(item, depth + 1));
-  const record = asRecord(value);
-  if (!record) return String(value);
-  const result: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(record).slice(0, 80)) {
-    if (isBinaryAttachmentKey(key, child)) continue;
-    result[key] = safeAttachmentValue(child, depth + 1);
-  }
-  return result;
-}
-
-function attachmentItem(
-  index: number,
-  block: Record<string, unknown>,
-  timestamp?: string,
-  suffix = "attachment",
-): SessionTimelineItem {
-  return {
-    id: `${index}-${suffix}`,
-    kind: "system",
-    title: "附件",
-    body: stringifyBody(safeAttachmentValue(block)),
-    timestamp,
-  };
-}
-
-function attachmentItemsFromContent(
-  content: unknown,
-  index: number,
-  timestamp?: string,
-  suffix = "attachment",
-): SessionTimelineItem[] {
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((rawBlock, blockIndex) => {
-    const block = asRecord(rawBlock);
-    return block && isAttachmentBlock(block)
-      ? [attachmentItem(index, block, timestamp, `${suffix}-${blockIndex}`)]
-      : [];
-  });
-}
-
-type SessionMetadataKind = "last-prompt" | "ai-title";
-
-function metadataKind(value: unknown): SessionMetadataKind | undefined {
-  const normalized = normalizedType(value);
-  if (normalized === "last_prompt" || normalized === "lastprompt") return "last-prompt";
-  if (normalized === "ai_title" || normalized === "aititle") return "ai-title";
-  return undefined;
-}
-
-function sessionMetadataKind(row: Record<string, unknown>): SessionMetadataKind | undefined {
-  const data = asRecord(row.data);
-  const payload = asRecord(row.payload);
-  const message = asRecord(row.message);
-  const candidates = [
-    row.customType,
-    row.custom_type,
-    row.event,
-    row.type,
-    row.kind,
-    row.metadataKind,
-    row.metadata_kind,
-    row.metadataType,
-    row.metadata_type,
-    data?.customType,
-    data?.custom_type,
-    data?.event,
-    data?.type,
-    data?.kind,
-    data?.metadataKind,
-    data?.metadata_kind,
-    data?.metadataType,
-    data?.metadata_type,
-    payload?.customType,
-    payload?.custom_type,
-    payload?.event,
-    payload?.type,
-    payload?.kind,
-    payload?.metadataKind,
-    payload?.metadata_kind,
-    payload?.metadataType,
-    payload?.metadata_type,
-    message?.customType,
-    message?.custom_type,
-    message?.event,
-    message?.type,
-    message?.kind,
-    message?.metadataKind,
-    message?.metadata_kind,
-    message?.metadataType,
-    message?.metadata_type,
-  ];
-  for (const candidate of candidates) {
-    const kind = metadataKind(candidate);
-    if (kind) return kind;
-  }
-  if ("lastPrompt" in row || "last_prompt" in row) return "last-prompt";
-  if ("aiTitle" in row || "ai_title" in row) return "ai-title";
-  return row.type === "session_info" && (asString(row.name) || asString(row.title)) ? "ai-title" : undefined;
-}
-
-function metadataValueFromRecord(
-  record: Record<string, unknown>,
-  keys: readonly string[],
-  depth = 0,
-): unknown {
-  if (depth > 3) return record;
-  for (const key of keys) {
-    if (!(key in record) || record[key] == null) continue;
-    const value = record[key];
-    const nested = asRecord(value);
-    if (nested) {
-      const nestedValue = metadataValueFromRecord(nested, keys, depth + 1);
-      if (nestedValue !== nested) return nestedValue;
-    }
-    return value;
-  }
-  return record;
-}
-
-function sessionMetadataValue(row: Record<string, unknown>, kind: SessionMetadataKind): unknown {
-  const keys = kind === "last-prompt"
-    ? ["prompt", "lastPrompt", "last_prompt", "content", "text", "message", "value", "data", "payload"]
-    : ["title", "name", "aiTitle", "ai_title", "value", "content", "text", "data", "payload"];
-  const sources = [row, asRecord(row.data), asRecord(row.payload), asRecord(row.message)].filter(
-    (value): value is Record<string, unknown> => Boolean(value),
-  );
-  for (const source of sources) {
-    const value = metadataValueFromRecord(source, keys);
-    if (value !== source) return value;
-  }
-  return row;
-}
-
-function sessionMetadataItem(
-  index: number,
-  row: Record<string, unknown>,
-  kind: SessionMetadataKind,
-  timestamp?: string,
-  suffix = "metadata",
-): SessionTimelineItem {
-  const value = sessionMetadataValue(row, kind);
-  return {
-    id: `${index}-${suffix}`,
-    kind: "system",
-    title: kind === "last-prompt" ? "最后提示" : "会话标题",
-    body: contentToText(value) || stringifyBody(value),
-    timestamp,
-  };
-}
-
-function sessionRowTimestamp(row: Record<string, unknown>): string | undefined {
-  const message = asRecord(row.message);
-  const info = asRecord(row.info);
-  const value = row.timestamp ?? row.created_at ?? row.at ?? message?.timestamp ?? info?.timestamp;
-  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
-  return asString(value) ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : asString(row.time));
-}
-
-function parseSessionMetadataRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] | undefined {
-  const kind = sessionMetadataKind(row);
-  if (!kind) return undefined;
-  return [sessionMetadataItem(index, row, kind, sessionRowTimestamp(row), kind)];
-}
-
-function parseSessionSpecialRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] | undefined {
-  const attachment = sessionAttachmentRow(row);
-  if (attachment) {
-    return [attachmentItem(index, attachment, sessionRowTimestamp(row))];
-  }
-  return parseSessionMetadataRow(row, index);
-}
-
-function pushUsage(
-  totals: SessionParseResult["totals"],
-  tokens?: SessionTimelineItem["tokens"],
-): void {
-  if (!tokens) return;
-  totals.input += tokens.input ?? 0;
-  totals.output += tokens.output ?? 0;
-  totals.cacheRead += tokens.cacheRead ?? 0;
-  totals.cacheWrite += tokens.cacheWrite ?? 0;
-}
-
-/** Claude 可能把写入拆在 cache_creation.ephemeral_*，而不只顶层 cache_creation_input_tokens。 */
-function cacheWriteFromUsage(usage: Record<string, unknown>): number | undefined {
-  const top =
-    asNumber(usage.cache_creation_input_tokens)
-    ?? asNumber(usage.cacheCreationInputTokens)
-    ?? asNumber(usage.cache_write_tokens)
-    ?? asNumber(usage.cacheWriteTokens)
-    ?? asNumber(usage.cache_creation_tokens);
-  const nested = asRecord(usage.cache_creation) ?? asRecord(usage.cacheCreation);
-  if (nested) {
-    const parts = [
-      asNumber(nested.ephemeral_5m_input_tokens) ?? 0,
-      asNumber(nested.ephemeral5mInputTokens) ?? 0,
-      asNumber(nested.ephemeral_1h_input_tokens) ?? 0,
-      asNumber(nested.ephemeral1hInputTokens) ?? 0,
-      asNumber(nested.ephemeral_input_tokens) ?? 0,
-      asNumber(nested.ephemeralInputTokens) ?? 0,
-    ];
-    const nestedSum = parts.reduce((a, b) => a + b, 0);
-    if (nestedSum > 0) return (top ?? 0) > 0 ? Math.max(top ?? 0, nestedSum) : nestedSum;
-  }
-  return top;
-}
-
-function usageNumber(usage: Record<string, unknown>, ...keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = asNumber(usage[key]);
-    if (value !== undefined) return value;
-  }
-  return undefined;
-}
-
-function usageFromRecord(usage: Record<string, unknown>): SessionTimelineItem["tokens"] {
-  const cache = asRecord(usage.cache);
-  return {
-    input: usageNumber(usage, "input_tokens", "inputTokens", "input", "prompt_tokens", "promptTokens"),
-    output: usageNumber(usage, "output_tokens", "outputTokens", "output", "completion_tokens", "completionTokens"),
-    cacheRead: usageNumber(
-      usage,
-      "cache_read_input_tokens",
-      "cacheReadInputTokens",
-      "cache_read_tokens",
-      "cacheReadTokens",
-      "cacheRead",
-      "cached_input_tokens",
-      "cachedInputTokens",
-      "cached_tokens",
-      "cachedTokens",
-    ) ?? usageNumber(cache ?? {}, "read", "cacheRead", "cache_read", "cacheReadTokens"),
-    cacheWrite: cacheWriteFromUsage(usage) ?? usageNumber(usage, "cacheWrite") ?? usageNumber(cache ?? {}, "write", "cacheWrite", "cache_write", "cacheWriteTokens"),
-  };
-}
-
-function extractUsage(rec: Record<string, unknown>): SessionTimelineItem["tokens"] | undefined {
-  const usage = asRecord(rec.usage) ?? asRecord(rec.token_usage) ?? asRecord(rec.tokens);
-  if (usage) {
-    return usageFromRecord(usage);
-  }
-  if (rec.type === "token_count" || rec.type === "token_usage") {
-    return usageFromRecord(rec);
-  }
-  return undefined;
-}
-
-function extractCodexTokenCountUsage(payload: Record<string, unknown>): SessionTimelineItem["tokens"] | undefined {
-  const info = asRecord(payload.info) ?? asRecord(payload.tokenInfo);
-  const last = asRecord(info?.last_token_usage) ?? asRecord(info?.lastTokenUsage);
-  return last ? usageFromRecord(last) : extractUsage(payload);
-}
 
 function detectFormat(
   rows: Record<string, unknown>[],
@@ -508,18 +92,8 @@ function detectFormat(
 ): SessionParseResult["format"] {
   if (preferred) return preferred;
   for (const row of rows.slice(0, 40)) {
+    if (isCodexSessionRow(row)) return "codex";
     const type = asString(row.type);
-    if (type === "session_meta" || type === "event_msg" || type === "response_item" || type === "turn_context") {
-      return "codex";
-    }
-    if (
-      type === "thread.started"
-      || type === "item.completed"
-      || type === "item.started"
-      || type === "turn.completed"
-    ) {
-      return "codex";
-    }
     if (type === "user" || type === "assistant" || type === "system" || type === "progress") {
       if (asRecord(row.message) || row.sessionId || row.uuid) return "claude-code";
     }
@@ -549,30 +123,10 @@ function detectFormat(
     ) {
       return "dsh";
     }
-    if (
-      type === "step_start"
-      || type === "step_finish"
-      || type === "text"
-      || type === "text.delta"
-      || type === "tool.call"
-      || type === "tool.completed"
-      || type === "session.created"
-      || type === "session.completed"
-      || row.part
-      || row.sessionID
-    ) {
-      return "open-code";
-    }
-    if (asRecord(row.info) && Array.isArray(row.parts)) return "open-code";
+    if (isOpenCodeSessionRow(row)) return "open-code";
   }
   if (rows.length > 0) return "ndjson";
   return "unknown";
-}
-
-const CANVAS_BROADCAST_PREFIX = "[DeepSonar 画布增量通知]";
-
-function isCanvasBroadcast(value: unknown): value is string {
-  return typeof value === "string" && value.trimStart().startsWith(CANVAS_BROADCAST_PREFIX);
 }
 
 function claudeBlockText(block: Record<string, unknown>): string | undefined {
@@ -580,22 +134,6 @@ function claudeBlockText(block: Record<string, unknown>): string | undefined {
   if (typeof block.text === "string") return asString(block.text);
   if (block.type !== "tool_result" && typeof block.content === "string") return asString(block.content);
   return undefined;
-}
-
-function canvasBroadcastTitle(content: string): string {
-  const titleLine = content.split(/\r?\n/).find((line) => /^\s*title\s*:/i.test(line));
-  const title = titleLine?.replace(/^\s*title\s*:\s*/i, "").trim();
-  return title ? `广播 · ${truncate(title, 200)}` : "画布广播";
-}
-
-function canvasBroadcastItem(index: number, content: string, timestamp?: string): SessionTimelineItem {
-  return {
-    id: `${index}-broadcast`,
-    kind: "broadcast",
-    title: canvasBroadcastTitle(content),
-    body: content,
-    timestamp,
-  };
 }
 
 function claudeQueueOperation(row: Record<string, unknown>, index: number, timestamp?: string): SessionTimelineItem[] {
@@ -730,287 +268,6 @@ function parseClaudeRow(row: Record<string, unknown>, index: number, tools: Tool
       body: stringifyBody(row.input ?? row.content ?? row),
       timestamp: ts,
       isError: row.is_error === true,
-    }];
-  }
-
-  return [{
-    id: String(index),
-    kind: "other",
-    title: type,
-    body: stringifyBody(row),
-    timestamp: ts,
-    tokens: extractUsage(row),
-  }];
-}
-
-const CODEX_TOOL_CALL_TYPES = new Set([
-  "function_call",
-  "custom_tool_call",
-  "mcp_call",
-  "mcp_tool_call",
-  "tool_call",
-  "tool_use",
-  "tool",
-]);
-
-const CODEX_TOOL_RESULT_TYPES = new Set([
-  "function_call_output",
-  "custom_tool_call_output",
-  "mcp_call_output",
-  "mcp_tool_call_output",
-  "tool_result",
-  "tool_output",
-]);
-
-function codexRoleKind(role: unknown): SessionItemKind {
-  if (role === "user") return "user";
-  if (role === "system") return "system";
-  return "assistant";
-}
-
-function codexRoleTitle(kind: SessionItemKind): string {
-  if (kind === "user") return "用户";
-  if (kind === "system") return "系统";
-  return "助手";
-}
-
-function codexReasoningText(payload: Record<string, unknown>): string {
-  const humanText = (value: unknown): string => typeof value === "string" ? value : Array.isArray(value) ? contentToText(value) : "";
-  return humanText(payload.summary)
-    || asString(payload.text)
-    || humanText(payload.content)
-    || asString(payload.reasoning)
-    || "";
-}
-
-function codexContentItems(
-  content: unknown,
-  index: number,
-  timestamp: string | undefined,
-  roleKind: SessionItemKind,
-): SessionTimelineItem[] {
-  if (!Array.isArray(content)) return [];
-  const title = codexRoleTitle(roleKind);
-  const items: SessionTimelineItem[] = [];
-  for (const [blockIndex, rawBlock] of content.entries()) {
-    const block = asRecord(rawBlock);
-    if (!block) continue;
-    if (isAttachmentBlock(block)) {
-      items.push(attachmentItem(index, block, timestamp, `attachment-${blockIndex}`));
-      continue;
-    }
-    const metadata = sessionMetadataKind(block);
-    if (metadata) {
-      items.push(sessionMetadataItem(index, block, metadata, timestamp, `metadata-${blockIndex}`));
-      continue;
-    }
-    const text = asString(block.text) ?? asString(block.thinking) ?? asString(block.reasoning) ?? asString(block.content);
-    if (!text) continue;
-    const thinking = normalizedType(block.type) === "thinking" || normalizedType(block.type) === "reasoning" || block.thinking != null || block.reasoning != null;
-    items.push({
-      id: `${index}-message-${blockIndex}`,
-      kind: thinking ? "assistant" : roleKind,
-      title: thinking ? "思考" : title,
-      body: text,
-      timestamp,
-    });
-  }
-  return items;
-}
-
-function parseCodexRow(row: Record<string, unknown>, index: number, tools: ToolNameMap): SessionTimelineItem[] {
-  const type = asString(row.type) ?? "other";
-  const payload = asRecord(row.payload) ?? row;
-  const ts = asString(row.timestamp) ?? asString(payload.timestamp);
-  const item = asRecord(row.item) ?? asRecord(payload.item);
-
-  // codex exec --json runtime stream (thread/item/turn events)
-  if (type === "thread.started" || type === "session.started") {
-    return [{
-      id: String(index),
-      kind: "system",
-      title: type,
-      body: stringifyBody(row),
-      timestamp: ts,
-    }];
-  }
-  if (type === "item.started" || type === "item.completed" || type === "item.updated") {
-    if (!item) {
-      return [{ id: String(index), kind: "other", title: type, body: stringifyBody(row), timestamp: ts }];
-    }
-    const itemType = asString(item.type) ?? "item";
-    if (CODEX_TOOL_RESULT_TYPES.has(itemType)) {
-      const name = lookupToolName(tools, item.call_id ?? item.id ?? item.tool_use_id, asString(item.name) ?? asString(item.tool_name));
-      return [{
-        id: `${index}-result`,
-        kind: "tool_result",
-        title: name ? `结果 ${name}` : "工具结果",
-        toolName: name,
-        body: stringifyBody(item.output ?? item.result ?? item.error ?? item),
-        timestamp: ts,
-        isError: item.error != null || item.is_error === true,
-      }];
-    }
-    if (CODEX_TOOL_CALL_TYPES.has(itemType)) {
-      rememberToolName(tools, item.call_id ?? item.id ?? item.tool_use_id, item.name ?? item.tool_name);
-      if (type === "item.completed" && (item.output != null || item.result != null || item.error != null)) {
-        const name = lookupToolName(tools, item.call_id ?? item.id ?? item.tool_use_id, asString(item.name) ?? asString(item.tool_name));
-        return [{
-          id: `${index}-result`,
-          kind: "tool_result",
-          title: name ? `结果 ${name}` : "工具结果",
-          toolName: name,
-          body: stringifyBody(item.output ?? item.result ?? item.error ?? item),
-          timestamp: ts,
-          isError: item.error != null || item.is_error === true,
-        }];
-      }
-      return [{
-        id: String(index),
-        kind: "tool_call",
-        title: `调用 ${String(item.name ?? item.tool_name ?? "tool")}`,
-        toolName: asString(item.name) ?? asString(item.tool_name),
-        body: stringifyBody(item.arguments ?? item.input ?? item),
-        timestamp: ts,
-      }];
-    }
-    if (itemType === "agent_message" || itemType === "message" || itemType === "output_text") {
-      const kind = codexRoleKind(item.role ?? (itemType === "agent_message" ? "assistant" : undefined));
-      const blockItems = codexContentItems(item.content, index, ts, kind);
-      const text = asString(item.text) ?? contentToText(item.content);
-      if (type === "item.started") return [];
-      if (blockItems.length > 0) {
-        if (asString(item.text)) {
-          blockItems.unshift({ id: String(index), kind, title: codexRoleTitle(kind), body: asString(item.text), timestamp: ts });
-        }
-        return blockItems;
-      }
-      if (!text) return [];
-      return [{
-        id: String(index),
-        kind,
-        title: codexRoleTitle(kind),
-        body: text,
-        timestamp: ts,
-      }];
-    }
-    if (itemType === "reasoning" || itemType === "thinking" || itemType === "reasoning_summary") {
-      const text = codexReasoningText(item);
-      if (!text || type === "item.started") return [];
-      return [{ id: String(index), kind: "assistant", title: "思考", body: text, timestamp: ts }];
-    }
-    return [{
-      id: String(index),
-      kind: "other",
-      title: itemType,
-      body: stringifyBody(item),
-      timestamp: ts,
-    }];
-  }
-  if (type === "turn.completed" || type === "response.completed") {
-    return [{
-      id: String(index),
-      kind: "system",
-      title: type,
-      body: stringifyBody(row.usage ?? row),
-      timestamp: ts,
-      tokens: extractUsage(asRecord(row.usage) ?? row),
-    }];
-  }
-
-  if (type === "event_msg") {
-    const kind = asString(payload.type) ?? asString(row.msg_type) ?? "event";
-    if (kind === "token_count" || kind === "token_usage") {
-      return [{
-        id: String(index),
-        kind: "usage",
-        title: "Token 用量",
-        body: stringifyBody(payload),
-        timestamp: ts,
-        tokens: extractCodexTokenCountUsage(payload) ?? extractUsage(row),
-      }];
-    }
-    if (kind === "user_message" || kind === "agent_message" || kind === "assistant_message") {
-      const roleKind: SessionItemKind = kind.startsWith("user") ? "user" : "assistant";
-      const blockItems = codexContentItems(payload.content, index, ts, roleKind);
-      if (blockItems.length > 0) return blockItems;
-      return [{
-        id: String(index),
-        kind: roleKind,
-        title: kind.startsWith("user") ? "用户" : "助手",
-        body: asString(payload.message) ?? asString(payload.text) ?? contentToText(payload.content),
-        timestamp: ts,
-      }];
-    }
-    return [{
-      id: String(index),
-      kind: "system",
-      title: kind,
-      body: stringifyBody(payload),
-      timestamp: ts,
-    }];
-  }
-
-  if (type === "response_item") {
-    const itemType = asString(payload.type) ?? "response";
-    if (CODEX_TOOL_RESULT_TYPES.has(itemType)) {
-      const name = lookupToolName(tools, payload.call_id ?? payload.id ?? payload.tool_use_id, asString(payload.name) ?? asString(payload.tool_name));
-      return [{
-        id: `${index}-result`,
-        kind: "tool_result",
-        title: name ? `结果 ${name}` : "工具结果",
-        toolName: name,
-        body: stringifyBody(payload.output ?? payload.content ?? payload.result ?? payload),
-        timestamp: ts,
-        isError: payload.error != null || payload.is_error === true,
-      }];
-    }
-    if (CODEX_TOOL_CALL_TYPES.has(itemType)) {
-      rememberToolName(tools, payload.call_id ?? payload.id ?? payload.tool_use_id, payload.name ?? payload.tool_name);
-      return [{
-        id: String(index),
-        kind: "tool_call",
-        title: `调用 ${String(payload.name ?? payload.tool_name ?? "tool")}`,
-        toolName: asString(payload.name) ?? asString(payload.tool_name),
-        body: stringifyBody(payload.arguments ?? payload.input ?? payload),
-        timestamp: ts,
-      }];
-    }
-    if (itemType === "message") {
-      const kind = codexRoleKind(payload.role);
-      const blockItems = codexContentItems(payload.content, index, ts, kind);
-      const text = asString(payload.text) ?? contentToText(payload.content);
-      if (blockItems.length > 0) return blockItems;
-      if (!text) return [];
-      return [{
-        id: String(index),
-        kind,
-        title: codexRoleTitle(kind),
-        body: text,
-        timestamp: ts,
-      }];
-    }
-    if (itemType === "reasoning") {
-      const text = codexReasoningText(payload);
-      if (!text) return [];
-      return [{ id: String(index), kind: "assistant", title: "思考", body: text, timestamp: ts }];
-    }
-    return [{
-      id: String(index),
-      kind: "assistant",
-      title: itemType,
-      body: contentToText(payload.content) || stringifyBody(payload),
-      timestamp: ts,
-    }];
-  }
-
-  if (type === "session_meta" || type === "turn_context") {
-    return [{
-      id: String(index),
-      kind: "system",
-      title: type,
-      body: stringifyBody(payload),
-      timestamp: ts,
     }];
   }
 
@@ -1239,171 +496,6 @@ function parsePiRow(row: Record<string, unknown>, index: number, tools: ToolName
       body: stringifyBody(tool.result ?? tool.output ?? row.result ?? row.output ?? row.content),
       timestamp: ts,
       isError: tool.error != null || tool.isError === true || row.isError === true || row.is_error === true,
-    }];
-  }
-  return [{
-    id: String(index),
-    kind: "other",
-    title: type,
-    body: stringifyBody(row),
-    timestamp: ts,
-    tokens: extractUsage(row),
-  }];
-}
-
-function parseOpenCodeVendorMessage(
-  row: Record<string, unknown>,
-  info: Record<string, unknown>,
-  index: number,
-): SessionTimelineItem[] {
-  const role = asString(info.role) ?? "assistant";
-  const roleKind: SessionItemKind = role === "user" ? "user" : role === "system" ? "system" : "assistant";
-  const time = asRecord(info.time);
-  const timestamp = typeof time?.created === "number"
-    ? new Date(time.created).toISOString()
-    : asString(row.timestamp);
-  const parts = Array.isArray(row.parts) ? row.parts : [];
-  const text = contentToText(parts);
-  if (roleKind === "user" && isCanvasBroadcast(text)) {
-    const item = canvasBroadcastItem(index, text, timestamp);
-    const tokens = extractUsage(info) ?? extractUsage(row);
-    if (tokens) item.tokens = tokens;
-    return [item];
-  }
-  const items: SessionTimelineItem[] = [];
-  for (const [partIndex, rawPart] of parts.entries()) {
-    const part = asRecord(rawPart);
-    if (!part) continue;
-    const partType = asString(part.type) ?? "";
-    if (isAttachmentBlock(part)) {
-      items.push(attachmentItem(index, part, timestamp, `attachment-${partIndex}`));
-      continue;
-    }
-    const metadata = sessionMetadataKind(part);
-    if (metadata) {
-      items.push(sessionMetadataItem(index, part, metadata, timestamp, `metadata-${partIndex}`));
-      continue;
-    }
-    if (partType === "text") {
-      const value = asString(part.text);
-      if (value) items.push({ id: `${index}-text-${partIndex}`, kind: roleKind, title: roleKind === "user" ? "用户" : "助手", body: value, timestamp });
-      continue;
-    }
-    if (partType === "reasoning") {
-      const value = asString(part.text);
-      if (value) items.push({ id: `${index}-reasoning-${partIndex}`, kind: "assistant", title: "思考", body: value, timestamp });
-      continue;
-    }
-    if (partType === "tool") {
-      const state = asRecord(part.state) ?? {};
-      const name = asString(part.tool) ?? "tool";
-      items.push({
-        id: `${index}-call-${partIndex}`,
-        kind: "tool_call",
-        title: `调用 ${name}`,
-        toolName: name,
-        body: stringifyBody(state.input ?? state.raw),
-        timestamp,
-      });
-      const status = asString(state.status);
-      if (status === "completed" || status === "error") {
-        const error = state.error;
-        items.push({
-          id: `${index}-result-${partIndex}`,
-          kind: "tool_result",
-          title: `结果 ${name}`,
-          toolName: name,
-          body: stringifyBody(status === "error" ? error : state.output ?? state),
-          timestamp,
-          isError: status === "error",
-        });
-      }
-    }
-  }
-  const tokens = extractUsage(info) ?? extractUsage(row);
-  if (tokens && items.length > 0) items[0].tokens = tokens;
-  return items;
-}
-
-function parseOpenCodeRow(row: Record<string, unknown>, index: number): SessionTimelineItem[] {
-  const info = asRecord(row.info);
-  if (info && Array.isArray(row.parts) && asString(info.role)) return parseOpenCodeVendorMessage(row, info, index);
-  const type = asString(row.type) ?? asString(row.role) ?? "other";
-  const ts =
-    asString(row.time)
-    ?? asString(row.timestamp)
-    ?? (typeof row.time === "number" ? new Date(row.time).toISOString() : undefined);
-  const part = asRecord(row.part) ?? asRecord(row.delta);
-
-  if (part && isAttachmentBlock(part)) {
-    return [attachmentItem(index, part, ts)];
-  }
-  if (part) {
-    const metadata = sessionMetadataKind(part);
-    if (metadata) return [sessionMetadataItem(index, part, metadata, ts)];
-  }
-
-  if (type === "session.created" || type === "session.started" || type === "run.started" || type === "step_start") {
-    return [{ id: String(index), kind: "system", title: type, body: stringifyBody(row), timestamp: ts }];
-  }
-  if (type === "session.completed" || type === "run.completed" || type === "step_finish") {
-    return [{
-      id: String(index),
-      kind: "system",
-      title: type,
-      body: stringifyBody(row),
-      timestamp: ts,
-      tokens: extractUsage(row),
-    }];
-  }
-  if (type === "text" || type === "text.delta" || type === "message.part" || type === "part.updated") {
-    const text = asString(row.text) ?? asString(part?.text) ?? contentToText(row.part ?? row.delta);
-    if (!text) return [];
-    return [{ id: String(index), kind: "assistant", title: "助手", body: text, timestamp: ts }];
-  }
-  if (type === "reasoning" || type === "reasoning.delta" || type === "thinking") {
-    const text = asString(row.text) ?? asString(row.reasoning) ?? asString(part?.text);
-    if (!text) return [];
-    return [{ id: String(index), kind: "assistant", title: "思考", body: text, timestamp: ts }];
-  }
-  if (type === "user" || type === "assistant" || type === "system") {
-    return [{
-      id: String(index),
-      kind: type === "user" ? "user" : type === "system" ? "system" : "assistant",
-      title: type === "user" ? "用户" : type === "system" ? "系统" : "助手",
-      body: contentToText(row.parts ?? row.content ?? row.text),
-      timestamp: ts,
-      tokens: extractUsage(row),
-    }];
-  }
-  if (
-    type === "tool"
-    || type === "tool_call"
-    || type === "tool.call"
-    || type === "tool.started"
-    || type === "tool_use"
-  ) {
-    const name = asString(row.tool) ?? asString(row.name) ?? asString(part?.tool) ?? asString(part?.name) ?? "tool";
-    return [{
-      id: String(index),
-      kind: "tool_call",
-      title: `调用 ${name}`,
-      toolName: name,
-      body: stringifyBody(row.state ?? row.input ?? part?.state ?? part?.input ?? row),
-      timestamp: ts,
-      isError: row.error != null || part?.error != null,
-    }];
-  }
-  if (type === "tool.completed" || type === "tool_result") {
-    const name = asString(row.tool) ?? asString(row.name) ?? asString(part?.tool);
-    return [{
-      id: String(index),
-      kind: "tool_result",
-      title: name ? `结果 ${name}` : "工具结果",
-      toolName: name,
-      body: stringifyBody(row.output ?? row.result ?? row.content ?? part?.output ?? part?.result ?? row),
-      timestamp: ts,
-      isError: row.error != null || part?.error != null || row.is_error === true,
     }];
   }
   return [{

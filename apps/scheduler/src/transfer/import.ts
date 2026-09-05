@@ -223,7 +223,6 @@ async function createNewProject(
   const config_json: Record<string, unknown> = {
     ...(srcProject.config_json ?? {}),
   };
-  delete config_json.plane;
   if (modules.includes("rules") && rulesFile?.rules) {
     config_json.rules = rulesFile.rules;
   }

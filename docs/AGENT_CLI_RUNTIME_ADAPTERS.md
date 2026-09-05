@@ -93,7 +93,7 @@ be registered or admitted:
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | **Session 归档** | `packages/runtime-sandbox/src/cli-session-adapters.ts`（`SupportedAgentCli` + `CLI_SESSION_ADAPTERS`） | 按 CLI 发现/导出原始 session（JSONL / vendor export），写入 Job evidence；`sessionCapture: true` 才启用 |
-| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` + `SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 用量（归档 usage + Gateway 账本） / 工具统计 / 原始；可切换 `main` / `subagent` 归档；**保留下载所选原始文件** |
+| **Session 查看器** | `apps/web/src/session-viewer/`（`parseAgentSession.ts` 当前三类；`legacy-session/` leftover Codex/OpenCode；`SessionViewer.tsx`） | 客户端解析归档文本 → 时间线 / 用量（归档 usage + Gateway 账本） / 工具统计 / 原始；可切换 `main` / `subagent` 归档；**保留下载所选原始文件** |
 
 当前三类 CLI 的归档边界如下；它们是独立格式，不承诺共用 schema。leftover `codex` / `open-code` 归档仍由 Web 查看器只读解析，不再作为新 Job 的运行时 adapter。
 
@@ -111,9 +111,9 @@ be registered or admitted:
 
 接入新 CLI 的强制清单（与 compaction 并列 fail-closed 心智）：
 
-1. **扩展 `SupportedAgentCli`**，并实现 `AgentCliSessionAdapter.exportSession`：只依赖本次运行的 session identity（及 Pi 的受治理 `sessionFile`），禁止扫共享 DB / latest / 跨 Job 路径；malformed identity/path、超大体积与导出/读取错误显式 fail closed（见现有 Claude/Codex/OpenCode/Pi/DSH 适配器）。
+1. **扩展 `SupportedAgentCli`**，并实现 `AgentCliSessionAdapter.exportSession`：只依赖本次运行的 session identity（及 Pi 的受治理 `sessionFile`），禁止扫共享 DB / latest / 跨 Job 路径；malformed identity/path、超大体积与导出/读取错误显式 fail closed（见现有 Claude/Pi/DSH 适配器）。
 2. **runtime adapter** 声明 `sessionCapture: true`，并保证流里能捕获稳定 `sessionId`（Pi 还要 `sessionFile`），否则归档永远空。
-3. **扩展 Web 解析**：在 `parseAgentSession.ts` 增加该 CLI 的行/文档解析（或 `cli` hint 下的专用路径），更新 `normalizeSessionCli` / `sessionCliLabel`，并补 `parseAgentSession.test.ts` 样例（至少：用户消息、助手、一次 tool_call + tool_result、Token 若可得）。
+3. **扩展 Web 解析**：在 `parseAgentSession.ts` 增加该 CLI 的行/文档解析（或 `cli` hint 下的专用路径），更新 `normalizeSessionCli` / `sessionCliLabel`，并补 `parseAgentSession.test.ts` 样例（至少：用户消息、助手、一次 tool_call + tool_result、Token 若可得）。leftover Codex/OpenCode 只改 `legacy-session/`，不回到热路径。
 4. **不要假设**「Codex 目录结构」或「Claude JSONL」可复用；每种 CLI 的 on-disk / export 形态单独适配。参考外部 [agent-session-viewer](https://github.com/cuteribs/agent-session-viewer) 仅作 UX/格式灵感，**不 vendor 整站**。
 5. **验收**：真实或 fixture 归档经 `GET /jobs/:id/evidence/session` 可读；有 subagent 时 `artifacts` 可切换且 `?path=` 能读到对应文件；Job 详情 Session 标签出现时间线/统计；「下载原始文件」仍指向未改写的所选归档字节；解析失败时仍可看「原始」与下载。
 6. 若暂不支持归档：显式保持 `sessionCapture: false`，并在 UI/空态文案中可区分「未实现」与「运行失败」；**禁止**半吊子路径猜测冒充归档。

@@ -191,9 +191,7 @@ export async function runExport(exportId: string): Promise<void> {
 
 function stripConfigSecrets(configJson: unknown): Record<string, unknown> {
   if (!configJson || typeof configJson !== "object") return {};
-  const cfg = { ...(configJson as Record<string, unknown>) };
-  delete cfg.plane;
-  return cfg;
+  return { ...(configJson as Record<string, unknown>) };
 }
 
 async function collectRoles(

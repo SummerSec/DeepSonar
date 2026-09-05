@@ -5,3 +5,9 @@ export {
   normalizeLegacySessionCli,
   type LegacySessionCli,
 } from "./cli.js";
+export {
+  isCodexSessionRow,
+  isOpenCodeSessionRow,
+  parseCodexRow,
+  parseOpenCodeRow,
+} from "./parse.js";
