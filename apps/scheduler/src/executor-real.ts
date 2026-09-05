@@ -55,6 +55,7 @@ import { mintJobToken } from "./gateway.js";
 import { collectEvidenceSnapshot, freezeVerifyFindingSubject, projectVerifyEvidenceForPrompt } from "./verify.js";
 import { buildVerifyJobPrompt } from "./verify-prompt.js";
 import { readReportBlob } from "./report.js";
+import { REPORT_QUANTITY_VERBATIM_NOTE } from "./report-numeric-fidelity.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./platform-control.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
@@ -1007,15 +1008,17 @@ ${graph.yaml}`;
     }
     initialInput = findingScoped
       ? `根据调度器冻结的单条 Finding 数据撰写独立 Markdown 报告。不要创建新 Finding，不要改变验证结论，也不要从画布或模型常识补造证据。
+${REPORT_QUANTITY_VERBATIM_NOTE}
 
 ## 确定性单 Finding 报告输入（report-input.json）
 以下 JSON 是该报告版本的唯一权威输入。报告应覆盖标题、严重度、位置、验证轮次与证据、影响、复现、修复建议、限制和 residual risk；输入缺少某项时应明确标为未知，不得编造。
 \`\`\`json
 ${inputBlock}
 \`\`\`
-
+${graph ? `\n任务画布（YAML）：\n${graph.yaml}\n` : ""}
 在 mark_job_done.summary 中给出完整 Markdown 正文，并引用 Finding id 或标题。`
       : `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
+${REPORT_QUANTITY_VERBATIM_NOTE}
 
 任务目标：${taskGoal || "未提供"}
 统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}
@@ -1025,7 +1028,7 @@ ${inputBlock}
 \`\`\`json
 ${inputBlock}
 \`\`\`
-
+${graph ? `\n任务画布（YAML）：\n${graph.yaml}\n` : ""}
 在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」「待人工确认」与「未自动验证（严重度策略）」；策略排除项不等于误报或待人工。即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
   } else {
     initialInput = `执行 Hub 下发的安全审计任务：

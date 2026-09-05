@@ -16,6 +16,7 @@ import {
   invalidReferenceBudget,
   unknownControlField,
 } from "./control-input.js";
+import { REPORT_QUANTITY_VERBATIM_NOTE } from "./report-numeric-fidelity.js";
 
 /** Server-side bounded graph projections for Hub/Worker prompt inputs. */
 export type GraphScope = "hub" | "agent" | "verify" | "report";
@@ -601,7 +602,7 @@ export async function buildGraphSnapshot(
     addSection("report", [
       "  " + kv("report_input_authoritative", true),
       "  " + kv("finding_counts_by_verify_status", counts),
-      "  " + kv("note", "完整报告上下文来自 Scheduler 生成的 report-input.json。"),
+      "  " + kv("note", `完整报告上下文来自 Scheduler 生成的 report-input.json。${REPORT_QUANTITY_VERBATIM_NOTE}`),
     ]);
   }
 

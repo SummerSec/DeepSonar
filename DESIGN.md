@@ -269,7 +269,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 未完成点 |
 |------|-------|----------|
-| 数值保真（quantities） | #368 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 产物落地后机械核对已确认 Finding 与未拒绝 Fact 的值+口径，缺失或折叠标 `numeric_inconsistent` 并显式失败。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（本 issue 明确不做）。 |
+| 数值保真（quantities） | #368 / #374 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 机械核对已确认 Finding 与 **verified/confirmed Fact** 的值+口径（`unverified` / `verifying` / `needs_human` 不参与门禁）。Agent 覆盖足够但改写口径时回退 `defaultMarkdown`（模板逐字嵌入口径），仅回退仍失败才 `numeric_inconsistent`。Report 图注入与下发 prompt 要求原样保留 value/unit/basis。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（#368 明确不做）。 |
 | 设计债收口 | #359 | **已落地**：Plane / `CONTROL_MCP_SERVER` / `projects.canvas_id` 假身份（#363）；verify/report 转发 ports 删除、`core.ts` 只做组装（#366）；dispatcher 不再回退已删的 `projects.canvas_id`；leftover Session 类型隔离到 `legacy-session/`；`*.poc.ts` 迁出生产 `src/`；leftover Codex/OpenCode **解析函数**已迁出 `parseAgentSession.ts` 热路径；规则读取只认 `minVerifySeverity`（不再从 `autoVerifySeverities` / `hubWaitSeverities` / `AUTO_VERIFY_SEVERITIES` 推断）；态势修复入口只认 Scheduler `action`；bindable 角色只认 API `role_kind` / `role_builtin`；遗留项目 RoleConfig `model` / `runtime_image_key` 物理清扫（启动 + 写入/导入/绑定，不再保留「存着但不生效」警告层）。**双轨报告保留**（#361：不是设计债）。**仍开放**：配置面减法、Fact 验证第二套状态机、`stream-bus`、DSH 方言退出内核。路径守卫保留 `/.codex/` `/.opencode/`。不砍沙箱、token、Zod、digest pin、Reaper、Attempt 账本。 |
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |

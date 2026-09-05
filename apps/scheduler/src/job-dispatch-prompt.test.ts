@@ -41,6 +41,15 @@ test("verify jobs reconstruct subject and location without maker conclusions", (
   assert.doesNotMatch(prompt, /critical/);
 });
 
+test("report dispatch prompt tells the writer to keep quantities verbatim", () => {
+  const prompt = extractDispatchPrompt("report", {
+    kind: "task_report",
+    confirmed_count: 1,
+  }, { goal: "盘点 ELF slots" });
+  assert.match(prompt, /report-input\.json/);
+  assert.match(prompt, /原样保留 value、unit、basis/);
+});
+
 test("operator prompt keeps instructions around injected graph YAML", () => {
   const yaml = "root_id: abc\n";
   const visible = operatorVisibleDispatchPrompt(`前置\n${yaml}\n后置`, yaml);
