@@ -114,7 +114,7 @@ const VERIFY_VERDICTS = ["confirmed", "rework", "needs_human", "false_positive"]
 
 const descriptions = {
   list_available_roles: "返回当前 Hub Job 可派发的数据库角色。只使用返回的 name，不得猜测或使用固定角色清单。",
-  list_available_runtime_images: "返回当前 Hub Job 可提案的运行镜像目录（仅市场 image_key 与展示字段）。只使用返回的 image_key，不得填写 OCI 地址、tag 或 digest。",
+  list_available_runtime_images: "返回当前 Hub Job 可提案的运行镜像目录（市场 image_key、展示字段与 compatible_agent_clis）。只使用返回的 image_key，且须与该角色 CLI 兼容；不得填写 OCI 地址、tag 或 digest。",
   emit_progress: "增量上报当前动作或阶段进展。可在执行中多次调用。",
   emit_fact: "把一个新的、可验证的增量事实实时写入任务画布。直接提交时 title 至少 2 个非空白字符、description 至少 16 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。Hub 回弹补证 Job 可附带 verification 结构化证据。可多次调用。",
   emit_finding: "实时提交一条有证据的通用 Finding。直接提交时 title 至少 8 个非空白字符、summary 至少 32 个非空白字符；长内容或收到 isError/截断后，先 Write 到 /workspace 下 JSON，再只传 payload_file，禁止用故意缩短的内容重试。profile 与可选评分须符合任务冻结协议，调度器负责校验、重算、去重和验证。可多次调用。",

@@ -9,6 +9,7 @@ import {
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   PiJsonlFramer,
+  agentCliIdsCompatibleWithImage,
   applyRuntimeOutput,
   applyRuntimeOutputText,
   parsePiJsonlRecord,
@@ -98,6 +99,9 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-clickhouse-test").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("pi", "deepsonar-clickhouse-fuzz").id, "pi");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-mobile").id, "claude-code");
+  assert.deepEqual(agentCliIdsCompatibleWithImage("deepsonar-kali-minimal"), ["claude-code", "dsh", "pi"]);
+  assert.deepEqual(agentCliIdsCompatibleWithImage("deepsonar-chrome-fuzz"), ["claude-code", "pi"]);
+  assert.deepEqual(agentCliIdsCompatibleWithImage("third-party-unlisted"), []);
   for (const id of ["claude-code", "dsh", "pi"] as const) {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.controlMcp, false);

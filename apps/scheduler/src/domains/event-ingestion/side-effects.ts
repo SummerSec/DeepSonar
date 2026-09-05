@@ -24,7 +24,14 @@ import {
   type HubDecision,
   type HubReferenceLookup,
 } from "../../graph.js";
-import { ControlInputError, invalidControlPayload, invalidRole, invalidRuntimeImage, invalidVerification } from "../../control-input.js";
+import {
+  ControlInputError,
+  invalidControlPayload,
+  invalidRole,
+  invalidRuntimeImage,
+  invalidVerification,
+  isHubRuntimeImageResolutionError,
+} from "../../control-input.js";
 import {
   assertFrozenRuntimeImageLocal,
   listHubRuntimeImageCatalog,
@@ -503,6 +510,7 @@ export function createEventIngestionSideEffectApplication(
         findingByNodeId,
         ambiguousFindingNodeIds,
         composeCanvas: false,
+        allowedImageKeys: [] as string[],
       };
     }
 
@@ -512,27 +520,36 @@ export function createEventIngestionSideEffectApplication(
         throw invalidRole(intent.role, phase === "preflight" ? `intents.${index}.role` : "intents.role");
       }
     }
-    // Hub 可提案本轮可选运行镜像（image_key），但只允许项目已启用且存在可信
-    // 版本的市场产品；省略时按项目镜像策略与 RoleConfig 缺省解析。preflight 与
-    // apply 都执行同一目录校验，防止两次校验之间启用状态漂移后落地。
-    const proposedImageKeys = [
-      ...new Set(
-        submittedIntents
-          .map((intent) => intent.runtime_image_key)
-          .filter((key): key is string => typeof key === "string" && key.length > 0),
-      ),
-    ];
-    let allowedImageKeys: Set<string> | null = null;
-    if (proposedImageKeys.length > 0) {
-      const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
-      allowedImageKeys = new Set(catalog.map((entry) => entry.image_key));
-      for (const [index, intent] of submittedIntents.entries()) {
-        const key = intent.runtime_image_key;
-        if (key && !allowedImageKeys.has(key)) {
-          throw invalidRuntimeImage(
-            phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key",
-            [...allowedImageKeys],
+    // Hub 可提案本轮可选运行镜像（image_key），但只允许项目已启用、存在可信
+    // 版本、且至少一种治理 CLI 能跑的市场产品。省略时按项目镜像策略与 RoleConfig
+    // 缺省解析。preflight 与 apply 都做目录成员校验；提案了 key 时 preflight
+    // 再冻一次快照，把 CLI 不兼容收成 invalid_runtime_image，避免 apply 变成 500。
+    const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
+    const allowedImageKeys = catalog.map((entry) => entry.image_key);
+    const allowedImageKeySet = new Set(allowedImageKeys);
+    for (const [index, intent] of submittedIntents.entries()) {
+      const key = intent.runtime_image_key;
+      if (key && !allowedImageKeySet.has(key)) {
+        throw invalidRuntimeImage(
+          phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key",
+          allowedImageKeys,
+        );
+      }
+      if (phase === "preflight" && key) {
+        try {
+          await ports.resolveAgentSnapshotForJob(
+            tx,
+            job.project_id as string,
+            intent.role,
+            [],
+            { runtimeImageKey: key },
           );
+        } catch (error) {
+          if (error instanceof ControlInputError) throw error;
+          if (isHubRuntimeImageResolutionError(error)) {
+            throw invalidRuntimeImage(`intents.${index}.runtime_image_key`, allowedImageKeys);
+          }
+          throw error;
         }
       }
     }
@@ -644,6 +661,7 @@ export function createEventIngestionSideEffectApplication(
       findingByNodeId,
       ambiguousFindingNodeIds,
       composeCanvas,
+      allowedImageKeys,
     };
   }
 
@@ -956,6 +974,7 @@ export function createEventIngestionSideEffectApplication(
         findingByNodeId,
         ambiguousFindingNodeIds,
         composeCanvas,
+        allowedImageKeys,
       } = validation;
       const insertHubEdges: HubEdgeBatchInsert = async (edgeTx, edges) => {
         const uniqueEdges = dedupeCanvasEdges(edges);
@@ -1064,17 +1083,26 @@ export function createEventIngestionSideEffectApplication(
         const snapshotFindingIds = followupFindingId
           ? [followupFindingId]
           : relatedImportedIds;
-        const snapshot = await freezeAgentSnapshotNetworkPolicy(
-          tx,
-          canvasId,
-          await ports.resolveAgentSnapshotForJob(
+        let snapshot;
+        try {
+          snapshot = await freezeAgentSnapshotNetworkPolicy(
             tx,
-            job.project_id as string,
-            role,
-            snapshotFindingIds,
-            { runtimeImageKey: it.runtime_image_key ?? null },
-          ),
-        );
+            canvasId,
+            await ports.resolveAgentSnapshotForJob(
+              tx,
+              job.project_id as string,
+              role,
+              snapshotFindingIds,
+              { runtimeImageKey: it.runtime_image_key ?? null },
+            ),
+          );
+        } catch (error) {
+          if (error instanceof ControlInputError) throw error;
+          if (isHubRuntimeImageResolutionError(error)) {
+            throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);
+          }
+          throw error;
+        }
         try {
           await (ports.assertFrozenRuntimeImageLocal ?? assertFrozenRuntimeImageLocal)(snapshot, { roleName: role });
         } catch (error) {

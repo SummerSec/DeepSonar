@@ -607,7 +607,7 @@ Web 的 `/images` 是独立市场页，`/projects/:projectId/images` 是项目�
 
 RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表示“系统沙箱”：Scheduler 使用平台治理的最小 Base 底座创建沙箱，并在 Job 快照中记录其不可变 digest，但 RoleConfig 本身保持未绑定状态。Test 与 Audit 可默认绑定专项 Kali/Audit 镜像；其余内置角色默认使用系统沙箱。该选项不允许 Agent、Hub 或任务内容提供任意镜像引用。
 
-Hub 可按本轮任务需要为每个 intent 提案运行镜像（#357）：`list_available_runtime_images` 只读操作返回本项目已启用、存在当前通道与宿主平台 trusted 版本的市场镜像目录（只含 `image_key` 与展示字段，不含 OCI 引用或 digest）；intent 的可选 `runtime_image_key` 必须原样命中该目录，否则整次 `submit_hub_decision` 在 preflight 与摄入事务两处被拒绝。Scheduler 在 Job 创建时仍按提案 key 走 `resolveRuntimeImageForJob` 重验项目启用与可信版本、校验 CLI 兼容并冻结不可变 digest；省略提案时按上述策略解析角色缺省。Worker 不获得该能力，运行中 Job 不换镜像。
+Hub 可按本轮任务需要为每个 intent 提案运行镜像（#357 / #360）：`list_available_runtime_images` 只读操作返回本项目已启用、存在当前通道与宿主平台 trusted 版本、且至少一种治理 CLI 能启动的市场镜像目录（含 `image_key`、展示字段与 `compatible_agent_clis`，不含 OCI 引用或 digest）；intent 的可选 `runtime_image_key` 必须原样命中该目录且与该角色 CLI 兼容，否则整次 `submit_hub_decision` 在 preflight 与摄入事务两处以 `invalid_runtime_image` 拒绝。Scheduler 在 Job 创建时仍按提案 key 走 `resolveRuntimeImageForJob` 重验项目启用与可信版本、校验 CLI 兼容并冻结不可变 digest；省略提案时按上述策略解析角色缺省。resume / `rerun-current` 保留 Job 已冻结的 `image_key`，不把 Hub 选图当成 RoleConfig 漂移。Worker 不获得该能力，运行中 Job 不换镜像。
 
 发布清单的 `size_bytes` 来自不可变 OCI manifest/index 的压缩层描述符：分别汇总目标平台层大小，清单记录其中最大的平台大小，并保留各平台大小作为发布证据。该值不是本机解压后的 Docker 占用，避免不同构建机的本地 inspect 结果影响市场元数据。
 

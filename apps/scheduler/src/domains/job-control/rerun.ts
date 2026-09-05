@@ -17,6 +17,7 @@ import {
 } from "../role-runtime-snapshot/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { assertFrozenRuntimeImageLocal } from "../../runtime-images.js";
+import { runtimeImageKeyFromSnapshot } from "../job-lifecycle/stall-policy.js";
 
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 export const JOB_NOT_RESUMABLE = "JOB_NOT_RESUMABLE" as const;
@@ -149,6 +150,12 @@ export async function frozenSnapshotStaleDetail(
   }
 }
 
+/** Hub 冻结的 image_key 是该 Job 的镜像身份；resume/rerun 不得掉回角色缺省。 */
+export function frozenRuntimeImageOverride(snapshot: unknown): { runtimeImageKey: string } | undefined {
+  const key = runtimeImageKeyFromSnapshot(snapshot);
+  return key ? { runtimeImageKey: key } : undefined;
+}
+
 export async function resolveCurrentSnapshotForExistingJob(
   tx: typeof sql,
   job: Record<string, unknown>,
@@ -168,6 +175,7 @@ export async function resolveCurrentSnapshotForExistingJob(
       String(job.project_id),
       String(job.type),
       findingIds,
+      frozenRuntimeImageOverride(job.agent_snapshot_json),
     ),
   );
 }
