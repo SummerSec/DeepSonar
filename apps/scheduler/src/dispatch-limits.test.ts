@@ -244,6 +244,25 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   });
 });
 
+test("verify scope only reads minVerifySeverity; leftover list aliases are ignored", async () => {
+  const { readFileSync } = await import("node:fs");
+  const coreSource = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
+  const configSource = readFileSync(new URL("./config.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(coreSource, /autoVerifySeverities|hubWaitSeverities|inferMinFromList/);
+  assert.doesNotMatch(configSource, /AUTO_VERIFY_SEVERITIES|autoVerifySeverities/);
+  assert.match(configSource, /MIN_VERIFY_SEVERITY/);
+
+  const explicit = await globalRules(
+    fakeDb([{ rules_json: { autoVerifySeverities: ["info"], hubWaitSeverities: ["info"], minVerifySeverity: "critical" } }]),
+  );
+  assert.equal(explicit.minVerifySeverity, "critical");
+
+  const aliasOnly = await globalRules(
+    fakeDb([{ rules_json: { autoVerifySeverities: ["info"], hubWaitSeverities: ["low"] } }]),
+  );
+  assert.equal(aliasOnly.minVerifySeverity, "high");
+});
+
 test("leftover Codex/OpenCode CLI caps are not first-class concurrency keys", async () => {
   const rules = await globalRules(
     fakeDb([

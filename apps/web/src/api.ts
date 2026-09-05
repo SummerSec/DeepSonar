@@ -999,8 +999,8 @@ export interface BindableRoleConfig {
   role_name: string;
   role_title: string;
   /** hub | system | role — system = 调度内核系统角色 */
-  role_kind?: "hub" | "system" | "role";
-  role_builtin?: boolean;
+  role_kind: "hub" | "system" | "role";
+  role_builtin: boolean;
   role_ui_color?: string | null;
   project_id: string | null;
   project_name: string | null;

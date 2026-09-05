@@ -264,17 +264,6 @@ function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<
   return out;
 }
 
-/** env / 旧 autoVerifySeverities 列表 → 最低关注级别（取列表中最「松」的一档） */
-function inferMinFromList(list: unknown, fallback: SeverityRank): SeverityRank {
-  if (!Array.isArray(list) || list.length === 0) return fallback;
-  let maxIdx = 0;
-  for (const item of list) {
-    const i = SEVERITY_RANK.indexOf(String(item).trim().toLowerCase() as SeverityRank);
-    if (i > maxIdx) maxIdx = i;
-  }
-  return SEVERITY_RANK[maxIdx] ?? fallback;
-}
-
 /** ≥ min 的全部 severity（自动验 / Hub 等待 / 停自驱 共用） */
 export function careSeverities(min: string): string[] {
   const idx = SEVERITY_RANK.indexOf(asSeverityRank(min, "high"));
@@ -527,8 +516,7 @@ export async function normalizePendingJobPriority(jobId: string, db: typeof sql 
 }
 
 function defaultMinVerifySeverity(): SeverityRank {
-  // AUTO_VERIFY_SEVERITIES=critical,high → 推断为 high
-  return inferMinFromList(config.rules.autoVerifySeverities, "high");
+  return asSeverityRank(config.rules.minVerifySeverity, "high");
 }
 
 /** env 兜底默认值（全局规则未配置时的最终回落） */
@@ -559,11 +547,8 @@ function envDefaultRules(): ProjectRules {
 }
 
 function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): ProjectRules {
-  // 优先新字段；否则从旧 autoVerifySeverities / hubWaitSeverities 推断，保持升级兼容
   let min = base.minVerifySeverity;
   if (raw.minVerifySeverity != null) min = asSeverityRank(raw.minVerifySeverity, min);
-  else if (raw.autoVerifySeverities != null) min = inferMinFromList(raw.autoVerifySeverities, min);
-  else if (raw.hubWaitSeverities != null) min = inferMinFromList(raw.hubWaitSeverities, min);
 
   const maxVerificationRounds = Number(raw.maxVerificationRounds);
   const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);

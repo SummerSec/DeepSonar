@@ -103,7 +103,7 @@ this extraction does not change the lock-order contract.
 `apps/scheduler/src/domains/event-ingestion/application.ts` owns envelope
 validation, payload limits, event-id deduplication, and per-Job sequencing.
 `side-effects.ts` owns the semantic callback behind typed ports; `core.ts`
-remains the compatibility facade and composition root.  The application
+is the composition root and wires that callback.  The application
 performs a read-only Canvas hint preflight, then re-checks the Job row and the
 target/Job/Intent/Report node snapshots with row locks after acquiring
 locks (`Canvas → Job → nodes`) and retries once if legacy data was reassigned
@@ -157,8 +157,8 @@ Phase 0 closes when these checks are green in the repository CI gate and the
 manifest contains no unexplained route or status-writer drift.  Subsequent
 slices may then move one bounded context at a time (event-ingestion, Hub
 orchestration, Finding verification, report convergence, and role/runtime
-snapshot), keeping `core.ts` as a compatibility facade until each caller has
-an application seam.  Each slice must add characterization for its moved
+snapshot). `core.ts` stays the composition root; later slices add
+characterization for each moved path.  Each slice must add characterization for its moved
 terminal/recovery path before changing lock order or side-effect sequencing.
 
 ## Issue #37 Phase 1 — Job lifecycle callers migrated

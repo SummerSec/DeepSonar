@@ -64,34 +64,6 @@ const AGENT_CLI_OPTIONS: ReadonlyArray<{ value: AgentCli; label: string }> = [
   { value: "dsh", label: "dsh（DeepSeek Harness）" },
 ];
 
-/** Resolve hub / system / role even if bindable API omits role_kind (legacy scheduler). */
-function resolveBindableRoleKind(roleConfig: BindableRoleConfig): "hub" | "system" | "role" {
-  const kind = roleConfig.role_kind;
-  if (kind === "hub" || kind === "system" || kind === "role") return kind;
-  const name = (roleConfig.role_name ?? "").toLowerCase();
-  const title = roleConfig.role_title ?? "";
-  if (name === "hub" || name === "hub_reason" || title.includes("决策中枢") || title.toLowerCase().includes("hub")) {
-    return "hub";
-  }
-  if (
-    name === "verify"
-    || name === "report"
-    || title.includes("验证")
-    || title.includes("报告")
-    || title.includes("调度内核")
-  ) {
-    return "system";
-  }
-  return "role";
-}
-
-function isBuiltinBindableRole(roleConfig: BindableRoleConfig): boolean {
-  if (typeof roleConfig.role_builtin === "boolean") return roleConfig.role_builtin;
-  // Seed builtins when API omits the flag.
-  return ["explore", "analyze", "review", "test", "code", "audit", "hub_reason", "hub", "verify", "report"]
-    .includes((roleConfig.role_name ?? "").toLowerCase());
-}
-
 /** Models declared inside CC Switch settingsConfig (env / toml / official llm-pi-ai / open-code). */
 function modelsFromSettingsConfig(credential: Pick<ProviderCredential, "settings_config_json"> | null): string[] {
   return extractModelsFromSettingsClient(credential?.settings_config_json ?? null);
@@ -383,7 +355,7 @@ export function ProviderAccountFlow({
     const sortRoles = (items: BindableRoleConfig[]) =>
       items.slice().sort((a, b) => {
         const kindRank = (rc: BindableRoleConfig) => {
-          const kind = resolveBindableRoleKind(rc);
+          const kind = rc.role_kind;
           return kind === "system" ? 0 : kind === "hub" ? 1 : 2;
         };
         const d = kindRank(a) - kindRank(b);
@@ -1384,10 +1356,10 @@ export function ProviderAccountFlow({
               <div className="provider-flow-role-group-body">
                 {group.items.map((roleConfig) => {
                   const selected = selectedRoleIds.has(roleConfig.id);
-                  const kind = resolveBindableRoleKind(roleConfig);
+                  const kind = roleConfig.role_kind;
                   const isSystem = kind === "system";
                   const isHub = kind === "hub";
-                  const isBuiltin = isBuiltinBindableRole(roleConfig);
+                  const isBuiltin = roleConfig.role_builtin;
                   const roleCli = (["claude-code", "pi", "dsh", "codex", "open-code"].includes(roleConfig.agent_cli)
                     ? roleConfig.agent_cli
                     : "claude-code") as AgentCli;

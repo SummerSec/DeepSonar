@@ -56,7 +56,7 @@ import { collectEvidenceSnapshot, freezeVerifyFindingSubject, projectVerifyEvide
 import { buildVerifyJobPrompt } from "./verify-prompt.js";
 import { readReportBlob } from "./report.js";
 import { publishStream } from "./stream-bus.js";
-import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./control-mcp.js";
+import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./platform-control.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { platformToolGuide } from "./platform-tools.js";
 import {

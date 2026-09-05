@@ -156,6 +156,9 @@ test("Provider account flow keeps the happy path on one surface", () => {
   assert.match(flow, /setCreateSecret\(\"\"\)/);
   assert.match(flow, /(?:活跃|运行中)快照保持冻结/);
   assert.match(flow, /const canToggle = roleConfig\.can_bind && !incompatible/);
+  assert.match(flow, /roleConfig\.role_kind/);
+  assert.match(flow, /roleConfig\.role_builtin/);
+  assert.doesNotMatch(flow, /resolveBindableRoleKind|isBuiltinBindableRole/);
   assert.doesNotMatch(flow, /selectedCredential\.agent_cli && roleCli !== selectedCredential\.agent_cli/);
   assert.match(flow, /targetCatalog\s*&&\s*!targetCatalog\.compatible_agent_cli\.includes\(roleCli\)/);
   assert.match(flow, /项目作用域账号只能在本项目内创建 Provider 账号/);
