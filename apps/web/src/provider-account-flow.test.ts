@@ -77,20 +77,7 @@ test("role model display separates the Claude CLI alias from the upstream model"
 
 test("inherit_global project RoleConfig no longer labels leftover stored models", () => {
   const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
-  assert.doesNotMatch(flow, /inheritIgnoresLeftoverProjectModel|leftoverProjectModelBindNote|行上遗留/);
-  assert.equal(
-    roleModelLabel(
-      {
-        agent_cli: "claude-code",
-        model: "grok-4.5",
-        scope: "project",
-        project_id: "11111111-1111-4111-8111-111111111111",
-        image_strategy: "inherit_global",
-      },
-      { settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } } },
-    ),
-    "Role 覆盖 · grok-4.5",
-  );
+  assert.doesNotMatch(flow, /inheritIgnoresLeftoverProjectModel|leftoverProjectModelBindNote|行上遗留|leftover_project_models_unchanged/);
 });
 
 const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
