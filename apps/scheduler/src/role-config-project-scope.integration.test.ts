@@ -79,10 +79,19 @@ if (!testDatabaseUrl) {
         VALUES (${globalRoleConfigId}, ${roleId}, NULL, 'claude-code', 'claude-sonnet-4-5'),
                (${ownRoleConfigId}, ${roleId}, ${ownProjectId}, 'claude-code', 'claude-sonnet-4-5'),
                (${otherRoleConfigId}, ${roleId}, ${otherProjectId}, 'claude-code', 'claude-sonnet-4-5')`;
-      // 策略迁移后列中可能残留旧项目镜像值；API 投影与写入必须将其视为无效。
+      // 策略迁移后列中可能残留旧项目镜像/模型；清扫必须物理清空，而不是只在投影层隐藏。
       await sql`
-        UPDATE role_configs SET runtime_image_key = 'legacy-project-image'
+        UPDATE role_configs
+        SET runtime_image_key = 'legacy-project-image', model = 'legacy-project-model'
         WHERE id = ${ownRoleConfigId}`;
+      const { scrubIgnoredProjectRoleConfigIdentity } = await import("./domains/role-runtime-snapshot/application.js");
+      const scrubbed = await scrubIgnoredProjectRoleConfigIdentity(sql, ownProjectId);
+      assert.equal(scrubbed.runtime_image_keys, 1);
+      assert.equal(scrubbed.inherit_global_models, 1);
+      const [afterScrub] = await sql`
+        SELECT runtime_image_key, model FROM role_configs WHERE id = ${ownRoleConfigId}`;
+      assert.equal(afterScrub.runtime_image_key, null);
+      assert.equal(afterScrub.model, null);
 
       const createCredential = async (name: string, projectId: string | null) => {
         const id = randomUUID();
@@ -195,8 +204,9 @@ if (!testDatabaseUrl) {
       assert.equal(rejectedImagePut.statusCode, 400, rejectedImagePut.payload);
       assert.match(JSON.parse(rejectedImagePut.payload).error, /不接受 runtime_image_key/);
       const [legacyAfterRejectedPut] = await sql`
-        SELECT runtime_image_key FROM role_configs WHERE id = ${ownRoleConfigId}`;
-      assert.equal(legacyAfterRejectedPut.runtime_image_key, "legacy-project-image");
+        SELECT runtime_image_key, model FROM role_configs WHERE id = ${ownRoleConfigId}`;
+      assert.equal(legacyAfterRejectedPut.runtime_image_key, null);
+      assert.equal(legacyAfterRejectedPut.model, null);
       const rejectedImagePatch = await inject("PATCH", `/role-configs/${ownRoleConfigId}/runtime-image`, {
         runtime_image_key: "deepsonar-chrome-audit",
       });

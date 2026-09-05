@@ -91,7 +91,8 @@ function trimmedRoleField(value: unknown): string | null {
 
 /**
  * inherit_global（缺省 / 脏值）忽略遗留项目 RoleConfig 的 model 与默认 CLI；
- * 只有 project_managed 才采用项目身份字段。
+ * 只有 project_managed 才采用项目身份字段。解析层仍作纵深，历史行由
+ * `scrubIgnoredProjectRoleConfigIdentity` 物理清空。
  */
 export function roleIdentityForProjectPolicy(
   policy: ProjectImagePolicy,
@@ -105,6 +106,59 @@ export function roleIdentityForProjectPolicy(
     model: trimmedRoleField(identityCfg?.model),
     agent_cli: trimmedRoleField(identityCfg?.agent_cli) ?? PLATFORM_DEFAULT_AGENT_CLI,
   };
+}
+
+/** inherit_global 项目 RoleConfig 不落库 model；只有 project_managed 才持久化。 */
+export function persistableProjectRoleConfigModel(
+  policy: ProjectImagePolicy,
+  requestedModel: unknown,
+): string | null {
+  if (policy.image_strategy !== "project_managed") return null;
+  return trimmedRoleField(requestedModel);
+}
+
+/**
+ * 物理清空解析层已忽略的项目 RoleConfig 身份字段。
+ * 不 bump version：这些列本来就不进 inherit_global 快照。
+ */
+type RoleConfigScrubDb = (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
+
+export async function scrubIgnoredProjectRoleConfigIdentity(
+  db: RoleConfigScrubDb,
+  projectId?: string,
+): Promise<{ runtime_image_keys: number; inherit_global_models: number }> {
+  const images = await Promise.resolve(projectId
+    ? db`
+        UPDATE role_configs
+        SET runtime_image_key = NULL
+        WHERE project_id = ${projectId}
+          AND runtime_image_key IS NOT NULL
+        RETURNING id`
+    : db`
+        UPDATE role_configs
+        SET runtime_image_key = NULL
+        WHERE project_id IS NOT NULL
+          AND runtime_image_key IS NOT NULL
+        RETURNING id`) as unknown[];
+  const models = await Promise.resolve(projectId
+    ? db`
+        UPDATE role_configs rc
+        SET model = NULL
+        FROM projects p
+        WHERE rc.project_id = p.id
+          AND p.id = ${projectId}
+          AND rc.model IS NOT NULL
+          AND COALESCE(p.config_json->>'image_strategy', 'inherit_global') IS DISTINCT FROM 'project_managed'
+        RETURNING rc.id`
+    : db`
+        UPDATE role_configs rc
+        SET model = NULL
+        FROM projects p
+        WHERE rc.project_id = p.id
+          AND rc.model IS NOT NULL
+          AND COALESCE(p.config_json->>'image_strategy', 'inherit_global') IS DISTINCT FROM 'project_managed'
+        RETURNING rc.id`) as unknown[];
+  return { runtime_image_keys: images.length, inherit_global_models: models.length };
 }
 
 let legacyAgentDefaultsWarningEmitted = false;

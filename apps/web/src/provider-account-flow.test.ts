@@ -10,8 +10,6 @@ import {
 } from "./CredentialConfigEditor";
 import {
   boundCredentialLabel,
-  inheritIgnoresLeftoverProjectModel,
-  leftoverProjectModelBindNote,
   resolvedUpstreamModel,
   roleModelLabel,
   sameLast4CredentialCount,
@@ -77,37 +75,22 @@ test("role model display separates the Claude CLI alias from the upstream model"
   );
 });
 
-test("inherit_global leftover project model is labeled as stored but ignored", () => {
-  const leftover = {
-    agent_cli: "claude-code" as const,
-    model: "grok-4.5",
-    scope: "project" as const,
-    project_id: "11111111-1111-4111-8111-111111111111",
-    image_strategy: "inherit_global" as const,
-  };
-  assert.equal(inheritIgnoresLeftoverProjectModel(leftover), true);
-  assert.match(
-    roleModelLabel(leftover, { settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } } }),
-    /行上遗留.*grok-4\.5.*inherit_global 下不生效.*grok-4\.6/,
+test("inherit_global project RoleConfig no longer labels leftover stored models", () => {
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(flow, /inheritIgnoresLeftoverProjectModel|leftoverProjectModelBindNote|行上遗留/);
+  assert.equal(
+    roleModelLabel(
+      {
+        agent_cli: "claude-code",
+        model: "grok-4.5",
+        scope: "project",
+        project_id: "11111111-1111-4111-8111-111111111111",
+        image_strategy: "inherit_global",
+      },
+      { settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } } },
+    ),
+    "Role 覆盖 · grok-4.5",
   );
-  assert.equal(inheritIgnoresLeftoverProjectModel({
-    ...leftover,
-    image_strategy: "project_managed",
-  }), false);
-  const note = leftoverProjectModelBindNote({
-    leftover_project_models_unchanged: true,
-    role_configs: [{
-      role_config_id: leftover.project_id,
-      role_name: "audit",
-      scope: "project",
-      project_id: leftover.project_id,
-      model: "grok-4.5",
-      model_changed: false,
-      inherit_global_ignores_project_model: true,
-    }],
-  } as Parameters<typeof leftoverProjectModelBindNote>[0]);
-  assert.ok(note);
-  assert.match(note, /项目遗留模型未改写.*grok-4\.5.*inherit_global/);
 });
 
 const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
@@ -132,8 +115,6 @@ test("Provider account flow keeps the happy path on one surface", () => {
     "settings_config",
     "agent_cli",
     "eligibleRoleConfigs",
-    "leftoverProjectModelBindNote",
-    "inherit_global 下这些行上的 model 不会用于新 Job",
     "modelsFromSettingsConfig",
     "saveEditedConfig",
     "CredentialConfigEditor",

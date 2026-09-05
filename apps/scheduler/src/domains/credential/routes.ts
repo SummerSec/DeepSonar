@@ -47,7 +47,7 @@ import {
 } from "../../provider-settings.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
 import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../role-runtime-snapshot/index.js";
-import { parseProjectImagePolicy } from "../role-runtime-snapshot/application.js";
+import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
 import { sql } from "../../db.js";
 import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";
 import {
@@ -507,8 +507,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         return gateFailure(409, "CREDENTIAL_HEALTH_REQUIRED", "A successful latest connection test is required before binding. Test the connection and retry.", body.credential_id, "test_connection");
       }
       // Model catalog is optional reference (CC Switch style). Binding keeps each
-      // RoleConfig's own stored model; inherit_global projects ignore leftover
-      // project models at Job resolve time. Only health + CLI compatibility are hard gates.
+      // inherit_global 项目 RoleConfig 不落库 model。只有 health + CLI 兼容是硬门。
       const source = body.source_credential_id
         ? credentials.find((credential) => String(credential.id) === body.source_credential_id)
         : undefined;
@@ -566,6 +565,18 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
 
       const normalizedModel = body.model === undefined ? undefined : body.model?.trim() || null;
+      const projectIds = [...new Set(configs.map((config) => String(config.project_id ?? "")).filter(Boolean))];
+      const projectRows = projectIds.length > 0
+        ? await tx`SELECT id, config_json FROM projects WHERE id = ANY(${projectIds}::uuid[])`
+        : [];
+      const policyByProject = new Map(
+        projectRows.map((row) => [String(row.id), parseProjectImagePolicy(row.config_json)]),
+      );
+      const persistModelFor = (configRow: typeof configs[number]): string | null => {
+        const requested = normalizedModel === undefined ? configRow.model : normalizedModel;
+        const policy = configRow.project_id ? policyByProject.get(String(configRow.project_id)) : undefined;
+        return policy ? persistableProjectRoleConfigModel(policy, requested) : (typeof requested === "string" && requested.trim() ? requested.trim() : null);
+      };
       const providerSnapshotByConfig = new Map<string, ProviderRuntimeSnapshotProjection>();
       for (const configRow of configs) {
         const configId = String(configRow.id);
@@ -573,9 +584,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         if (body.mode === "migrate" && currentCredentialId !== body.source_credential_id) {
           return gateFailure(409, "ROLE_CONFIG_SOURCE_MISMATCH", `RoleConfig ${configId} is not bound to the source credential`, body.credential_id, "choose_project_role_config", configId);
         }
-        const model = normalizedModel === undefined
-          ? (typeof configRow.model === "string" && configRow.model.trim() ? configRow.model.trim() : null)
-          : normalizedModel;
+        const model = persistModelFor(configRow);
         const compatibilityError = validateCredentialCompatibility(String(configRow.agent_cli), String(target.provider));
         if (compatibilityError) {
           return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${compatibilityError}`, body.credential_id, "choose_model", configId);
@@ -599,18 +608,23 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const refreshedPending: string[] = [];
       for (const configRow of configs) {
         const configId = String(configRow.id);
-        const model = normalizedModel === undefined
-          ? (typeof configRow.model === "string" && configRow.model.trim() ? configRow.model.trim() : null)
-          : normalizedModel;
+        const model = persistModelFor(configRow);
         const nextVersion = Number(configRow.version ?? 0) + 1;
         await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
         await tx`
           INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: body.credential_id, purpose: "llm" })}
           ON CONFLICT DO NOTHING`;
-        await tx`
-          UPDATE role_configs SET
-            model = ${model}, version = ${nextVersion}, updated_at = now()
-          WHERE id = ${configId}`;
+        if (configRow.project_id) {
+          await tx`
+            UPDATE role_configs SET
+              model = ${model}, runtime_image_key = NULL, version = ${nextVersion}, updated_at = now()
+            WHERE id = ${configId}`;
+        } else {
+          await tx`
+            UPDATE role_configs SET
+              model = ${model}, version = ${nextVersion}, updated_at = now()
+            WHERE id = ${configId}`;
+        }
         if (body.effect === "refresh_pending") {
           const pending = await tx`
             SELECT id FROM jobs
@@ -649,33 +663,18 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical_job_count
         FROM jobs
         WHERE agent_snapshot_json->>'role_config_id' = ANY(${roleConfigIds}::text[])`;
-      const projectIds = [...new Set(configs.map((config) => String(config.project_id ?? "")).filter(Boolean))];
-      const projectRows = projectIds.length > 0
-        ? await tx`SELECT id, config_json FROM projects WHERE id = ANY(${projectIds}::uuid[])`
-        : [];
-      const inheritByProject = new Map(
-        projectRows.map((row) => [
-          String(row.id),
-          parseProjectImagePolicy(row.config_json).image_strategy === "inherit_global",
-        ]),
-      );
-      const modelChanged = normalizedModel !== undefined;
       const roleConfigsImpact = configs.map((config) => {
-        const scope = config.project_id ? "project" as const : "global" as const;
+        const persisted = persistModelFor(config);
+        const previous = typeof config.model === "string" && config.model.trim() ? config.model.trim() : null;
         return {
           role_config_id: config.id,
           role_name: config.role_name,
-          scope,
+          scope: config.project_id ? "project" as const : "global" as const,
           project_id: config.project_id ?? null,
-          model: normalizedModel === undefined ? config.model ?? null : normalizedModel,
-          model_changed: modelChanged,
-          inherit_global_ignores_project_model: scope === "project"
-            && inheritByProject.get(String(config.project_id)) !== false,
+          model: persisted,
+          model_changed: persisted !== previous,
         };
       });
-      const leftoverProjectModelsUnchanged = roleConfigsImpact.some((row) =>
-        row.scope === "project" && !row.model_changed && row.model,
-      );
       const impact = {
         mode: body.mode,
         effect: body.effect,
@@ -686,7 +685,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         refreshed_pending_job_count: refreshedPending.length,
         active_frozen_job_count: Number(stats?.active_frozen_job_count ?? 0),
         terminal_historical_job_count: Number(stats?.terminal_historical_job_count ?? 0),
-        leftover_project_models_unchanged: leftoverProjectModelsUnchanged,
         role_configs: roleConfigsImpact,
       };
       const impactParsed = CredentialBatchBindingImpact.parse(impact);

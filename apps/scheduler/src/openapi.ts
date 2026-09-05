@@ -2384,7 +2384,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         CredentialBatchBindingImpact: {
           type: "object",
           additionalProperties: false,
-          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "leftover_project_models_unchanged", "role_configs"],
+          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "role_configs"],
           properties: {
             mode: { type: "string", enum: ["bind", "migrate"] },
             effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"] },
@@ -2395,14 +2395,13 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             refreshed_pending_job_count: { type: "integer", minimum: 0 },
             active_frozen_job_count: { type: "integer", minimum: 0 },
             terminal_historical_job_count: { type: "integer", minimum: 0 },
-            leftover_project_models_unchanged: { type: "boolean", description: "True when bind kept stored project RoleConfig.model values" },
             role_configs: {
               type: "array",
               maxItems: 100,
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["role_config_id", "role_name", "scope", "project_id", "model", "model_changed", "inherit_global_ignores_project_model"],
+                required: ["role_config_id", "role_name", "scope", "project_id", "model", "model_changed"],
                 properties: {
                   role_config_id: { type: "string", format: "uuid" },
                   role_name: { type: "string" },
@@ -2410,7 +2409,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                   project_id: { type: "string", format: "uuid", nullable: true },
                   model: { type: "string", nullable: true },
                   model_changed: { type: "boolean" },
-                  inherit_global_ignores_project_model: { type: "boolean", description: "Project leftover model is stored but ignored for new Jobs under inherit_global" },
                 },
               },
             },

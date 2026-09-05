@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- inherit_global 项目 RoleConfig 不再保留被忽略的行上 `model` / `runtime_image_key`。启动、切换策略、写入、导入导出与批量绑定会物理清空这些字段；批量绑定 impact 去掉 leftover 警告字段（#359 / #233 / #146）。
+
 ## [0.2.7] - 2026-09-04
 
 ### 新增

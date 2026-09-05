@@ -115,25 +115,6 @@ export function resolvedUpstreamModel(
   return mapped || main || requested;
 }
 
-export function inheritIgnoresLeftoverProjectModel(
-  roleConfig: Pick<BindableRoleConfig, "model"> & Partial<Pick<BindableRoleConfig, "scope" | "project_id" | "image_strategy">>,
-): boolean {
-  return (roleConfig.scope === "project" || Boolean(roleConfig.project_id))
-    && (roleConfig.image_strategy ?? "inherit_global") !== "project_managed"
-    && Boolean(roleConfig.model?.trim());
-}
-
-export function leftoverProjectModelBindNote(impact: CredentialBatchBindingResult | null): string | null {
-  if (!impact) return null;
-  const stale = impact.role_configs.filter((row) =>
-    row.scope === "project" && row.inherit_global_ignores_project_model && !row.model_changed && row.model,
-  );
-  if (!impact.leftover_project_models_unchanged && stale.length === 0) return null;
-  const models = [...new Set(stale.map((row) => row.model).filter((model): model is string => Boolean(model)))];
-  const modelText = models.length ? `（${models.join("、")}）` : "";
-  return `项目遗留模型未改写${modelText}。inherit_global 下这些行上的 model 不会用于新 Job，新 Job 跟全局 RoleConfig + 账号主模型。`;
-}
-
 export function roleModelLabel(
   roleConfig: Pick<BindableRoleConfig, "agent_cli" | "model"> & Partial<Pick<BindableRoleConfig, "scope" | "project_id" | "image_strategy">>,
   credential: Pick<ProviderCredential, "settings_config_json"> | null,
@@ -141,11 +122,6 @@ export function roleModelLabel(
   const requested = roleConfig.model?.trim() || modelsFromSettingsConfig(credential)[0] || null;
   if (!requested) return "配置文件 · 未声明模型";
   const upstream = resolvedUpstreamModel(roleConfig.agent_cli, requested, credential?.settings_config_json);
-  if (inheritIgnoresLeftoverProjectModel(roleConfig) && roleConfig.model?.trim()) {
-    const account = modelsFromSettingsConfig(credential)[0];
-    const accountHint = account ? `；新 Job 跟账号/全局 ${account}` : "；新 Job 跟全局 RoleConfig + 账号主模型";
-    return `行上遗留 · ${roleConfig.model.trim()}（inherit_global 下不生效${accountHint}）`;
-  }
   if (upstream && upstream !== requested) {
     const aliasHint = ["fable", "sonnet", "opus", "haiku"].includes(requested.toLowerCase())
       ? "（由别名映射决定）"
@@ -264,10 +240,6 @@ export function ProviderAccountFlow({
   const selectedRoles = useMemo(
     () => roleConfigs.filter((roleConfig) => selectedRoleIds.has(roleConfig.id)),
     [roleConfigs, selectedRoleIds],
-  );
-  const leftoverInheritModels = useMemo(
-    () => selectedRoles.filter(inheritIgnoresLeftoverProjectModel),
-    [selectedRoles],
   );
   const sourceOptions = useMemo(() => {
     const ids = new Set(selectedRoles.map((roleConfig) => roleConfig.credential_id).filter((id): id is string => Boolean(id)));
@@ -1594,11 +1566,6 @@ export function ProviderAccountFlow({
             </div>
           </div>
         </div>
-        {leftoverInheritModels.length > 0 && (
-          <div className="provider-flow-warning">
-            <Warning size={14} /> 已选 {leftoverInheritModels.length} 个 inherit_global 项目 RoleConfig 仍留有行上模型。批量绑定不会改写这些值；新 Job 跟全局 RoleConfig + 账号主模型，遗留项目 model 不生效。
-          </div>
-        )}
         {incompatibleRoles.length > 0 && selectedRoleIds.size > 0 && (
           <div className="provider-flow-warning">
             <Warning size={14} /> 已选 {incompatibleRoles.length} 个角色配置与当前账号 CLI 不兼容。请更换账号或角色。
@@ -1626,14 +1593,6 @@ export function ProviderAccountFlow({
             <span><strong>{impact.active_frozen_job_count}</strong> 活跃冻结</span>
             <span><strong>{impact.terminal_historical_job_count}</strong> 终态 / 重试</span>
           </div>
-          {(() => {
-            const leftoverNote = leftoverProjectModelBindNote(impact);
-            return leftoverNote ? (
-              <div className="provider-flow-warning" style={{ marginTop: 8 }}>
-                <Warning size={14} /> {leftoverNote}
-              </div>
-            ) : null;
-          })()}
         </div>
         )}
         {step === "effect" && previewImpact && (

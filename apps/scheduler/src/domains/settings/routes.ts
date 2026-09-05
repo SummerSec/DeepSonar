@@ -19,6 +19,7 @@ import {
   parseProjectImagePolicy,
   PROJECT_IMAGE_STRATEGIES,
   runtimeImageKeyForProjectPolicy,
+  scrubIgnoredProjectRoleConfigIdentity,
 } from "../role-runtime-snapshot/application.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 
@@ -447,6 +448,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       }
     }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+    if (imagePolicy.image_strategy === "inherit_global") {
+      await scrubIgnoredProjectRoleConfigIdentity(sql, id);
+    }
     // Project rule changes can alter effective task behavior; wake dispatch so
     // pending jobs do not wait for the next unrelated enqueue event.
     await sql`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;

@@ -7,7 +7,13 @@ type SnapshotDb = ((strings: TemplateStringsArray, ...values: unknown[]) => Prom
   json?: (value: unknown) => unknown;
 };
 
-const { resolveAgentSnapshotForJob, SnapshotUnresolvableError } = await import("./application.js");
+const {
+  resolveAgentSnapshotForJob,
+  SnapshotUnresolvableError,
+  persistableProjectRoleConfigModel,
+  parseProjectImagePolicy,
+  scrubIgnoredProjectRoleConfigIdentity,
+} = await import("./application.js");
 
 function snapshotDb(input: {
   projectConfig?: unknown;
@@ -37,6 +43,27 @@ function snapshotDb(input: {
   };
   return Object.assign(query, { json: (value: unknown) => value });
 }
+
+test("scrubIgnoredProjectRoleConfigIdentity 只清空项目遗留镜像和 inherit_global model", async () => {
+  const seen: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    seen.push(sql);
+    if (sql.includes("SET runtime_image_key = NULL") && sql.includes("project_id = ?")) {
+      assert.equal(values[0], "project-1");
+      return [{ id: "cfg-image" }];
+    }
+    if (sql.includes("SET model = NULL") && sql.includes("p.id = ?")) {
+      assert.equal(values[0], "project-1");
+      return [{ id: "cfg-model" }];
+    }
+    throw new Error(`unexpected scrub sql: ${sql}`);
+  }, { json: (value: unknown) => value });
+  const result = await scrubIgnoredProjectRoleConfigIdentity(db, "project-1");
+  assert.deepEqual(result, { runtime_image_keys: 1, inherit_global_models: 1 });
+  assert.equal(seen.length, 2);
+  assert.equal(persistableProjectRoleConfigModel(parseProjectImagePolicy({}), "kept"), null);
+});
 
 test("inherit_global leftover project RoleConfig.model does not steal snapshot model", async () => {
   const leftoverProject = {

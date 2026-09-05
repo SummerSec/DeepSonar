@@ -19,7 +19,7 @@ import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../rol
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
 import { parseContextWindowTokens } from "../../provider-settings.js";
-import { parseProjectImagePolicy } from "../role-runtime-snapshot/application.js";
+import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
 import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
 import { parseRuntimeKnobOverride, validateRuntimeKnobOverride } from "../../runtime-knobs.js";
 const RoleBody = z.object({
@@ -186,12 +186,20 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const [existing] = projectId
       ? await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`
       : await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id IS NULL`;
+    const persistModel = projectId
+      ? persistableProjectRoleConfigModel(
+        parseProjectImagePolicy(
+          (await tx`SELECT config_json FROM projects WHERE id = ${projectId}`)[0]?.config_json,
+        ),
+        body.model,
+      )
+      : body.model ?? null;
     const row = {
       role_id: roleId,
       project_id: projectId,
       agent_cli: body.agent_cli,
       dsh_task_mode: body.dsh_task_mode,
-      model: body.model ?? null,
+      model: persistModel,
       context_window_tokens: parseContextWindowTokens(body.context_window_tokens),
       env_vars_json: body.env_vars as never,
       env_keys: body.env_keys as never,

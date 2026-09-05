@@ -70,12 +70,12 @@ test("batch route has server-owned health gate; model catalog is not a bind requ
   assert.match(route, /idempotency_key/);
   assert.match(route, /IDEMPOTENCY_KEY_REUSED/);
   assert.match(route, /BATCH_TRANSACTION_FAILED/);
-  assert.match(route, /leftover_project_models_unchanged/);
-  assert.match(route, /inherit_global_ignores_project_model/);
-  assert.match(route, /parseProjectImagePolicy/);
+  assert.match(route, /persistableProjectRoleConfigModel/);
+  assert.doesNotMatch(route, /leftover_project_models_unchanged/);
+  assert.doesNotMatch(route, /inherit_global_ignores_project_model/);
 });
 
-test("batch impact defaults leftover-model honesty fields for stored replays", () => {
+test("batch impact does not carry leftover-model honesty fields", () => {
   const parsed = CredentialBatchBindingImpact.parse({
     mode: "bind",
     effect: "new_jobs_only",
@@ -91,10 +91,14 @@ test("batch impact defaults leftover-model honesty fields for stored replays", (
       role_name: "audit",
       scope: "project",
       project_id: "33333333-3333-4333-8333-333333333333",
-      model: "grok-4.5",
+      model: null,
     }],
   });
-  assert.equal(parsed.leftover_project_models_unchanged, false);
+  assert.equal(parsed.role_configs[0]?.model, null);
   assert.equal(parsed.role_configs[0]?.model_changed, false);
-  assert.equal(parsed.role_configs[0]?.inherit_global_ignores_project_model, false);
+  assert.equal("leftover_project_models_unchanged" in parsed, false);
+  assert.throws(() => CredentialBatchBindingImpact.parse({
+    ...parsed,
+    leftover_project_models_unchanged: true,
+  }));
 });
