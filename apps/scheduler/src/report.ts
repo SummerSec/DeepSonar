@@ -5,6 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -21,6 +22,12 @@ import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 import { planTaskReportVersion } from "./task-report-version.js";
 import { frozenTaskSeeds } from "./task-compose.js";
+import {
+  checkReportNumericFidelity,
+  declaredQuantitiesFromPayloads,
+  formatQuantityLine,
+  numericInconsistentError,
+} from "./report-numeric-fidelity.js";
 
 type Tx = typeof sql;
 
@@ -92,6 +99,7 @@ export interface ReportInputFinding {
     eligibility: "below_min_verify_severity";
     min_verify_severity: string | null;
   } | null;
+  quantities?: QuantityAnchor[];
 }
 
 export interface ReportInput {
@@ -127,6 +135,12 @@ export interface ReportInput {
   }>;
   scope_and_coverage: Record<string, unknown>;
   evidence: unknown[];
+  facts?: Array<{
+    id: string;
+    title: string;
+    verification_status: string;
+    quantities: QuantityAnchor[];
+  }>;
 }
 
 export interface FindingReportInput {
@@ -152,6 +166,7 @@ export interface FindingReportInput {
     verify_status: "confirmed";
     source_job_id: string;
     details: Record<string, unknown>;
+    quantities?: QuantityAnchor[];
   };
   verification_rounds: Array<{
     attempt: number;
@@ -345,6 +360,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
         : null,
       location: (f.location as string) ?? null,
       summary: (f.summary as string) ?? null,
+      quantities: parseDeclaredQuantities((raw as { quantities?: unknown }).quantities),
       verify_status: f.verify_status as string,
       final_verification_round: round
         ? {
@@ -402,7 +418,32 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       effective_finding_protocol: target.effective_finding_protocol ?? null,
     },
     evidence: [],
+    facts: await loadReportFactQuantities(canvasId, db),
   };
+}
+
+async function loadReportFactQuantities(
+  canvasId: string,
+  db: typeof sql,
+): Promise<NonNullable<ReportInput["facts"]>> {
+  const rows = await db`
+    SELECT id, title, verification_status, body_json
+    FROM canvas_nodes
+    WHERE canvas_id = ${canvasId} AND node_type = 'fact'
+    ORDER BY created_at`;
+  const facts: NonNullable<ReportInput["facts"]> = [];
+  for (const row of rows) {
+    const body = (row.body_json ?? {}) as Record<string, unknown>;
+    const quantities = parseDeclaredQuantities(body.quantities);
+    if (quantities.length === 0) continue;
+    facts.push({
+      id: String(row.id),
+      title: String(row.title ?? ""),
+      verification_status: String(row.verification_status ?? "unverified"),
+      quantities,
+    });
+  }
+  return facts;
 }
 
 /** Freeze one confirmed Finding and its verification evidence for a versioned report. */
@@ -469,6 +510,7 @@ export async function buildFindingReportInput(
       verify_status: "confirmed",
       source_job_id: String(finding.job_id),
       details: allowlistedFindingDetails(finding.raw_json),
+      quantities: parseDeclaredQuantities((finding.raw_json as { quantities?: unknown } | null)?.quantities),
     },
     verification_rounds: rounds.map((round) => ({
       attempt: Number(round.attempt),
@@ -516,6 +558,7 @@ export function buildSarifFromConfirmed(input: ReportInput): object {
       scoring: f.scoring,
       verify_status: "confirmed",
       title: f.title,
+      ...(f.quantities && f.quantities.length > 0 ? { quantities: f.quantities } : {}),
     },
   }));
 
@@ -586,6 +629,9 @@ function defaultMarkdown(input: ReportInput): string {
         if (f.scoring) lines.push(`- 评分：${String(f.scoring.standard)} ${String(f.scoring.version)} · ${String(f.scoring.base_score ?? "未计算")} · ${String(f.scoring.exploitability_label ?? "未知难度")}`);
         if (f.location) lines.push(`- 位置：\`${f.location}\``);
         if (f.summary) lines.push(`- 摘要：${f.summary}`);
+        for (const quantity of f.quantities ?? []) {
+          lines.push(`- 数值口径：${formatQuantityLine(quantity)}`);
+        }
         lines.push(`- 验证轮次：${f.final_verification_round?.attempt ?? "?"}`);
         lines.push("");
       }
@@ -625,6 +671,19 @@ function defaultMarkdown(input: ReportInput): string {
       lines.push("");
     }
   }
+  const factQuantities = (input.facts ?? []).filter((fact) => fact.verification_status !== "rejected" && fact.quantities.length > 0);
+  if (factQuantities.length > 0) {
+    lines.push("## 事实数值口径");
+    lines.push("");
+    for (const fact of factQuantities) {
+      lines.push(`### ${fact.title}`);
+      lines.push("");
+      for (const quantity of fact.quantities) {
+        lines.push(`- ${formatQuantityLine(quantity)}`);
+      }
+      lines.push("");
+    }
+  }
   lines.push("## 范围与覆盖");
   lines.push("");
   lines.push("```json");
@@ -656,6 +715,12 @@ function defaultFindingMarkdown(input: FindingReportInput): string {
   }
   if (f.location) lines.push(`- Location: \`${f.location}\``);
   lines.push("", "## Summary", "", f.summary || "No summary was recorded.");
+  if ((f.quantities ?? []).length > 0) {
+    lines.push("", "## Quantities", "");
+    for (const quantity of f.quantities ?? []) {
+      lines.push(`- ${formatQuantityLine(quantity)}`);
+    }
+  }
   lines.push("", "## Verification", "");
   for (const round of input.verification_rounds) {
     lines.push(`- Round ${round.attempt}: ${round.final_outcome ?? round.status}${round.summary ? ` - ${round.summary}` : ""}`);
@@ -1128,6 +1193,16 @@ async function finalizeFindingReportJob(
     if (markdown.length < 20 || (!markdown.includes(input.finding.id) && !markdown.includes(input.finding.title))) {
       markdown = defaultFindingMarkdown(input);
     }
+    const numeric = checkReportNumericFidelity(
+      declaredQuantitiesFromPayloads([{ id: input.finding.id, verify_status: "confirmed", quantities: input.finding.quantities }]),
+      { markdown },
+    );
+    if (!numeric.ok) {
+      await tx`
+        UPDATE finding_reports SET status = 'failed', error = ${numericInconsistentError(numeric)}, updated_at = now()
+        WHERE id = ${report.id as string}`;
+      return;
+    }
     const dir = findingReportDir(input.finding.id, input.report_version);
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, "report.md"), markdown, "utf8");
@@ -1231,8 +1306,23 @@ export async function finalizeReportJob(
   }
 
   const sarif = buildSarifFromConfirmed(input);
-  const reportJsonStr = JSON.stringify(reportJson, null, 2);
   const sarifStr = JSON.stringify(sarif, null, 2);
+  const numeric = checkReportNumericFidelity(
+    declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []),
+    { markdown, sarif: sarifStr },
+  );
+  if (!numeric.ok) {
+    const error = numericInconsistentError(numeric);
+    await tx`
+      UPDATE task_reports SET status = 'failed', error = ${error}, updated_at = now()
+      WHERE report_job_id = ${jobId}`;
+    await tx`
+      UPDATE canvas_nodes SET status = 'failed', updated_at = now()
+      WHERE job_id = ${jobId} AND node_type = 'report'`;
+    console.warn(`[report] job ${jobId} ${error}`);
+    return;
+  }
+  const reportJsonStr = JSON.stringify(reportJson, null, 2);
 
   const reportJsonPath = path.join(dir, "report.json");
   const mdPath = path.join(dir, "report.md");

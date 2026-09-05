@@ -367,6 +367,7 @@ canvas_changes
 | `summary` | `markdown` 版 `message` / `fullDescription` |
 | `fingerprint` | `partialFingerprints`（SARIF 原生概念，语义一致） |
 | `raw_json` | 受治理的 SARIF/Finding 原文；Agent-facing MCP 不允许写入该内部字段 |
+| `raw_json.quantities`（#368） | `properties.quantities`：Agent 声明的 `{value, unit, basis, ref?}` 数值口径；未声明的 prose 数字不受保护 |
 | 派生规则来源 | `ruleId` → 对应 job type / audit 规则名 |
 
 `emit_finding` 的 payload 是 SARIF result 的受限子集，并扩展通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`。`profile` 缺省为

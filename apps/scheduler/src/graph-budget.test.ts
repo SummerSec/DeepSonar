@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { config } from "./config.js";
-import { graphProjectionMarkers, humanHintProjection, parseHubDecision, projectVerifyFinding, serializeFindingStatusIndex } from "./graph.js";
+import { boundGraphSection, graphProjectionMarkers, humanHintProjection, parseHubDecision, projectedQuantities, projectVerifyFinding, serializeFindingStatusIndex } from "./graph.js";
 import { buildEvidenceSnapshot, findingVerificationSummaries } from "./verify.js";
 
 test("Hub Finding status index keeps all 357 entries within the 48 KB budget", () => {
@@ -114,6 +114,34 @@ test("projection markers expose truncation and omission counts", () => {
     truncated: "truncated: true",
     omitted: 'omitted: {"facts_index":4}',
   });
+});
+
+test("quantity-bearing nodes keep truncated/omitted markers when the budget drops them", () => {
+  const quantities = projectedQuantities({
+    quantities: [{
+      value: 811,
+      unit: "8-byte ELF slots = sum(section sizes)/8",
+      basis: "raw section sizes before Ghidra fold",
+    }],
+  });
+  assert.equal(quantities?.[0]?.value, 811);
+  const rows = [{ id: "fact-1", title: "ELF slots", quantities }].map((row) => `  - ${JSON.stringify(row)}`);
+  const fitted = boundGraphSection("facts_index", rows, 24);
+  assert.equal(fitted.truncated, true);
+  assert.ok((fitted.omitted.facts_index ?? 0) >= 1);
+  assert.deepEqual(graphProjectionMarkers(fitted.truncated, fitted.omitted), {
+    truncated: "truncated: true",
+    omitted: `omitted: ${JSON.stringify(fitted.omitted)}`,
+  });
+  assert.equal(fitted.lines.includes(rows[0]!), false);
+});
+
+test("quantity-bearing rows stay visible when they fit the budget", () => {
+  const rows = [`  - ${JSON.stringify({ id: "fact-1", quantities: [{ value: 70, unit: "BPF_CALL sites", basis: "raw opcode count" }] })}`];
+  const fitted = boundGraphSection("facts_index", rows, 2_000);
+  assert.equal(fitted.truncated, false);
+  assert.deepEqual(fitted.omitted, {});
+  assert.match(fitted.lines.join("\n"), /BPF_CALL sites/);
 });
 
 test("Hub decision parser remains role-gated after graph scope changes", () => {

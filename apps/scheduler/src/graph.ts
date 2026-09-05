@@ -6,6 +6,8 @@ import {
   GraphNodeReference,
   hubReferenceBudgetViolation,
   HubDecisionPayload as HubDecisionPayloadSchema,
+  parseDeclaredQuantities,
+  type QuantityAnchor,
 } from "@deepsonar/shared-types";
 import {
   ControlInputError,
@@ -121,6 +123,32 @@ export function graphProjectionMarkers(
   omitted: Record<string, number>,
 ): { truncated: string; omitted: string } {
   return { truncated: kv("truncated", truncated), omitted: kv("omitted", omitted) };
+}
+
+export function projectedQuantities(body: Record<string, unknown> | null | undefined): QuantityAnchor[] | undefined {
+  const quantities = parseDeclaredQuantities(body?.quantities);
+  return quantities.length > 0 ? quantities : undefined;
+}
+
+/**
+ * Fit an optional YAML section under a character budget. Quantity-bearing
+ * rows use the same truncated/omitted markers as every other dropped section
+ * so a cropped view is never treated as complete.
+ */
+export function boundGraphSection(
+  section: string,
+  rows: string[],
+  maxChars: number,
+): { lines: string[]; truncated: boolean; omitted: Record<string, number> } {
+  const block = [section + ":", ...(rows.length > 0 ? rows : ["  []"])];
+  if (block.join("\n").length <= maxChars) {
+    return { lines: block, truncated: false, omitted: {} };
+  }
+  const header = [section + ":"];
+  if (header.join("\n").length <= maxChars) {
+    return { lines: header, truncated: true, omitted: { [section]: Math.max(1, rows.length) } };
+  }
+  return { lines: [], truncated: true, omitted: { [section]: Math.max(1, rows.length) } };
 }
 
 export interface FindingIndexInput {
@@ -385,11 +413,13 @@ export async function buildGraphSnapshot(
       "facts_index",
       factNodes.map((fact) => {
         const body = (fact.body_json ?? {}) as Record<string, unknown>;
+        const quantities = projectedQuantities(body);
         return row({
           id: fact.id,
           title: short(fact.title, 140),
           status: fact.status,
           location: short(body.location, 140),
+          ...(quantities ? { quantities } : {}),
         });
       }),
     );
@@ -431,12 +461,14 @@ export async function buildGraphSnapshot(
       hot.map((node) => {
         const body = (node.body_json ?? {}) as Record<string, unknown>;
         const finding = findingByNode.get(String(node.id));
+        const quantities = projectedQuantities(body);
         return row({
           id: node.id,
           kind: node.node_type,
           title: short(node.title, 160),
           status: node.status,
           summary: short(body.description ?? body.summary ?? finding?.summary, 420),
+          ...(quantities ? { quantities } : {}),
           ...(finding
             ? {
                 ...(finding.imported ? { imported: true, readonly: true } : { finding_id: finding.id }),
@@ -478,12 +510,14 @@ export async function buildGraphSnapshot(
         .map((node) => {
           const body = (node?.body_json ?? {}) as Record<string, unknown>;
           const finding = findingByNode.get(String(node?.id));
+          const quantities = projectedQuantities(body);
           return row({
             id: node?.id,
             kind: node?.node_type,
             title: short(node?.title, 160),
             status: node?.status,
             description: short(body.description ?? body.summary ?? finding?.summary, 520),
+            ...(quantities ? { quantities } : {}),
             ...(finding
               ? {
                   ...(finding.imported ? { imported: true, readonly: true } : { finding_id: finding.id }),

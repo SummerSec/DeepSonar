@@ -319,6 +319,29 @@ const meaningfulFindingSummary = meaningfulText(32, 10000);
 const meaningfulFactTitle = meaningfulText(2, 200);
 const meaningfulFactDescription = meaningfulText(16, 10000);
 
+/** Optional numeric anchors on fact/finding. Undeclared prose numbers stay unprotected. */
+export const QUANTITY_ANCHOR_MAX = 20;
+export const QuantityAnchor = z
+  .object({
+    value: z.number().finite(),
+    /** Count-basis declaration (tool + transform), not a bare unit symbol. */
+    unit: meaningfulText(2, 400),
+    /** Alternate-basis note so a folded count cannot stand alone. */
+    basis: meaningfulText(2, 400),
+    /** Recomputable evidence ref; optional. */
+    ref: nonEmptyText(2000).optional(),
+  })
+  .strict();
+export type QuantityAnchor = z.infer<typeof QuantityAnchor>;
+export const QuantityAnchors = z.array(QuantityAnchor).max(QUANTITY_ANCHOR_MAX);
+export type QuantityAnchors = z.infer<typeof QuantityAnchors>;
+export function parseDeclaredQuantities(value: unknown): QuantityAnchor[] {
+  const parsed = QuantityAnchors.safeParse(value);
+  return parsed.success ? parsed.data : [];
+}
+
+const optionalQuantities = QuantityAnchors.optional();
+
 export const FindingPayload = z
   .object({
     title: meaningfulFindingTitle,
@@ -331,6 +354,7 @@ export const FindingPayload = z
     location: z.string().max(1000).regex(/\S/).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
+    quantities: optionalQuantities,
     /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
     suggest_verify: z.boolean().default(false),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
@@ -357,6 +381,7 @@ export const EmitFindingDirectPayload = z
     location: z.string().max(1000).regex(/\S/).optional(),
     summary: meaningfulFindingSummary,
     rule_id: z.string().max(200).regex(/\S/).optional(),
+    quantities: optionalQuantities,
     suggest_verify: z.boolean().optional(),
   })
   .strict();
@@ -374,6 +399,7 @@ export const EmitFindingPayload = z
     location: z.string().max(1000).regex(/\S/).optional(),
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(),
+    quantities: optionalQuantities,
     suggest_verify: z.boolean().optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
@@ -399,6 +425,7 @@ export const FactPayload = z
   .object({
     title: meaningfulFactTitle,
     description: meaningfulFactDescription,
+    quantities: optionalQuantities,
     /** Scheduler-owned association; Agent input is ignored and overwritten. */
     intent_node_id: z.string().uuid().nullable().optional(),
     verification: VerificationEvidence.optional(),
@@ -412,6 +439,7 @@ export const EmitFactDirectPayload = z
   .object({
     title: meaningfulFactTitle,
     description: meaningfulFactDescription,
+    quantities: optionalQuantities,
     verification: VerificationEvidence.optional(),
   })
   .strict();
@@ -421,6 +449,7 @@ export const EmitFactPayload = z
   .object({
     title: meaningfulFactTitle.optional(),
     description: meaningfulFactDescription.optional(),
+    quantities: optionalQuantities,
     verification: VerificationEvidence.optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
