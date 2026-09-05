@@ -21,7 +21,8 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 40);
+  assert.equal(SCHEMA_VERSION, 41);
+  assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   assert.match(body, /CREATE TABLE login_rate_limits/i);
   assert.match(body, /login_rate_limits_window_idx/i);
   assert.match(body, /verification_status\s+text/i);
