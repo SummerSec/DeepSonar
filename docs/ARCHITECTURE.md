@@ -222,7 +222,7 @@ pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 
 2. Finding 只是待证实假设；Scheduler 按 `minVerifySeverity` 决定自动验证范围，低于阈值的不派生 Verify，且 Hub 对该 Finding 派发 review/test 会在任何 Job/节点副作用前稳定拒绝；缺失或未知 severity 保守验证，设置为 `info` 即严格全量模式
 3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
 4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
-5. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
+5. 调度器创建 verify Job，输入只冻结主体 / location / 物证引用——盲验 Phase 1（#367）不下发 maker 的 title/summary/severity 结论措辞 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文，`GraphScope=verify` 默认只投影骨架与引用
 6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 7. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
 8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
@@ -375,7 +375,7 @@ canvas_changes
 
 评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
 
-schema v20 的 `0020_finding_protocol.sql` 为 `findings` 增加上述五个 JSON/文本字段、允许 `severity` 为 NULL，并建立 `(project_id, profile, category, verify_status)` 索引；fresh 基线和连续迁移保持同一结构。
+上述 Finding 协议字段（`profile` / `category` / `evidence_refs_json` / `scoring_json` / `suggest_verify`，`severity` 可空）与 `(project_id, profile, category, verify_status)` 索引均已并入唯一基线 `database/schema.sql` 的 `findings` 表（当前 v42）；仓库不保留增量迁移文件，改表 = 改基线 + bump 版本（见 §17.2）。
 
 ### 6.2 存储分层（热/冷分离）
 
