@@ -33,7 +33,7 @@
     "ci:smoke:convergence": "pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-scheduler-convergence.ts",
     "ci:test:lifecycle": "pnpm --filter @deepsonar/web test:lifecycle",
     "ci:unit:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test src/dispatch-limits.test.ts src/task-execution-control.test.ts src/task-execution-control.contract.test.ts",
-    "ci:unit:runtime-images": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images.test.ts src/runtime-image-gc.test.ts src/runtime-image-local-gate.test.ts",
+    "ci:unit:runtime-images": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/runtime-sandbox build && pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-images.test.ts src/runtime-image-gc.test.ts src/runtime-image-local-gate.test.ts",
     "ci:unit:runtime-cleanup": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/runtime-sandbox build && pnpm --filter @deepsonar/scheduler exec tsx --test src/host-disk.test.ts src/resource-cleanup.test.ts src/readiness.test.ts src/opensandbox-health.test.ts",
     "ci:unit:startup-gate": "pnpm --filter @deepsonar/scheduler exec tsx --test src/runtime-image-warmup.test.ts src/skill-sources-boot.test.ts src/skill-source-sync.test.ts",
     "ci:unit:image-admission": "pnpm --filter @deepsonar/image-admission test:registry-ref",
