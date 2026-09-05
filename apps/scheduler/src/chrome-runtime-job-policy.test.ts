@@ -181,6 +181,11 @@ test("resume inspects the snapshot that will run, not a later catalog digest", (
   assert.match(resume.slice(inspect, inspect + 400), /mode === "rerun-current" \? currentSnapshot : job\.agent_snapshot_json/);
 });
 
+test("current snapshot resolution keeps the frozen Hub runtime image key", () => {
+  const resolveCurrent = rerunSource.slice(rerunSource.indexOf("export async function resolveCurrentSnapshotForExistingJob"));
+  assert.match(resolveCurrent, /frozenRuntimeImageOverride\(job\.agent_snapshot_json\)/);
+});
+
 test("Dispatcher and real executor provision from the frozen snapshot only", () => {
   assert.match(dispatcherSource, /requireFrozenSnapshotAllowEgress\(snapshot, jobId\)/);
   assert.match(dispatcherSource, /const allowEgress = useReal && snapshotAllowEgress/);

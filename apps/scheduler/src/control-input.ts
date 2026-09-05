@@ -143,9 +143,21 @@ export function invalidRuntimeImage(path = "runtime_image_key", allowed?: readon
       : " 请使用 list_available_runtime_images 返回的 image_key。";
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
-    `Hub 运行镜像必须来自本轮 list_available_runtime_images 的市场 image_key（项目已启用且存在可信版本），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    `Hub 运行镜像必须来自本轮 list_available_runtime_images 的市场 image_key（项目已启用、存在可信版本、且与该角色 CLI 兼容），字段 ${path} 不合法、不在可选集合或与角色 CLI 不兼容。${allowHint}`,
     path,
   );
+}
+
+const HUB_RUNTIME_IMAGE_RESOLUTION_RE =
+  /AGENT_CLI_IMAGE_INCOMPATIBLE|没有可用的可信运行镜像|runtime image binding has no matching|trusted runtime image binding has no consistent immutable/i;
+
+/** 冻快照失败里属于镜像/CLI 兼容的部分，应映射为 invalid_runtime_image 而不是 500。 */
+export function isHubRuntimeImageResolutionError(error: unknown): boolean {
+  for (let current: unknown = error; current; current = current instanceof Error ? current.cause : undefined) {
+    const message = current instanceof Error ? current.message : String(current);
+    if (HUB_RUNTIME_IMAGE_RESOLUTION_RE.test(message)) return true;
+  }
+  return false;
 }
 
 export function invalidVerification(message: string, path = "verification"): ControlInputError {

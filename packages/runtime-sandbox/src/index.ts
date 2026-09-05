@@ -287,6 +287,7 @@ export {
   AGENT_CLI_RUNTIME_ADAPTERS,
   CONTROL_RUNTIME_CAPABILITIES,
   PiJsonlFramer,
+  agentCliIdsCompatibleWithImage,
   applyRuntimeOutput,
   applyRuntimeOutputText,
   parsePiJsonlRecord,

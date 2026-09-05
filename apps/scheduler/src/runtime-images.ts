@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { agentCliIdsCompatibleWithImage } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -2377,12 +2378,29 @@ export interface HubRuntimeImageCatalogEntry {
   official: boolean;
   project_opt_in: boolean;
   source_kind: string;
+  compatible_agent_clis: string[];
+}
+
+/** 目录条目：无治理 CLI 能跑的 key（例如第三方尚未进适配器 allowlist）对 Hub 不可见。 */
+export function toHubRuntimeImageCatalogEntry(row: Record<string, unknown>): HubRuntimeImageCatalogEntry | null {
+  const image_key = String(row.image_key);
+  const compatible_agent_clis = agentCliIdsCompatibleWithImage(image_key);
+  if (compatible_agent_clis.length === 0) return null;
+  return {
+    image_key,
+    name: String(row.name),
+    description: String(row.description ?? ""),
+    official: row.official === true,
+    project_opt_in: row.project_opt_in === true,
+    source_kind: String(row.source_kind),
+    compatible_agent_clis,
+  };
 }
 
 /**
- * Hub 可选镜像目录：项目已启用、存在当前通道与宿主平台可执行 trusted 版本。
- * 与 resolveRuntimeImageForJob 的可用性口径一致；只暴露 image_key 与展示字段，
- * digest/ref 仍只在 Job 创建时由 Scheduler 冻结。
+ * Hub 可选镜像目录：项目已启用、存在当前通道与宿主平台可执行 trusted 版本，
+ * 且至少一种治理 CLI 能启动。与 resolveRuntimeImageForJob 的可用性口径一致；
+ * 只暴露 image_key、展示字段和 compatible_agent_clis，digest/ref 仍只在 Job 创建时冻结。
  */
 export async function listHubRuntimeImageCatalog(
   db: typeof sql,
@@ -2408,14 +2426,10 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
       )
     ORDER BY ri.official DESC, ri.image_key`;
-  return rows.map((row) => ({
-    image_key: String(row.image_key),
-    name: String(row.name),
-    description: String(row.description ?? ""),
-    official: row.official === true,
-    project_opt_in: row.project_opt_in === true,
-    source_kind: String(row.source_kind),
-  }));
+  return rows.flatMap((row) => {
+    const entry = toHubRuntimeImageCatalogEntry(row);
+    return entry ? [entry] : [];
+  });
 }
 
 export async function resolveRuntimeImageForJob(

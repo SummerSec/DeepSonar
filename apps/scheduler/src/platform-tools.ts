@@ -11,8 +11,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且存在可信版本的市场镜像 image_key、name、description。",
-    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策被拒绝。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像 `image_key`、`name`、`description`、`compatible_agent_clis`。",
+    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须与该 intent 角色的 CLI 兼容；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策被拒绝（`invalid_runtime_image`）。",
     "- 示例：`{}`",
   ].join("\n"),
   emit_progress: [
@@ -40,7 +40,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   submit_hub_decision: [
     "### `submit_hub_decision` — 提交 Hub 决策",
     "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
-    "- `from` 只能填写本轮画布中的 root/fact/finding id；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
+    "- `from` 只能填写本轮画布中的 root/fact/finding id；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` 只能原样选择本轮 `list_available_runtime_images` 的 image_key，且须与该角色 CLI 兼容；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
     '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
     "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',

@@ -33,6 +33,9 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   assert.match(sideEffectSource, /resolveAgentSnapshotForJob/);
   assert.match(sideEffectSource, /assertFrozenRuntimeImageLocal/);
   assert.match(sideEffectSource, /blockHubOnMissingLocalImage/);
+  assert.match(sideEffectSource, /isHubRuntimeImageResolutionError/);
+  assert.match(sideEffectSource, /phase === "preflight" && key/);
+  assert.match(sideEffectSource, /invalidRuntimeImage\(`intents\.\$\{index\}\.runtime_image_key`/);
   assert.match(
     sideEffectSource,
     /UPDATE canvas_nodes SET status = 'waiting_human'[\s\S]*node_type IN \('job', 'intent', 'report'\)/,

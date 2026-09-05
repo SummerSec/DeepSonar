@@ -21,7 +21,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   list_available_runtime_images: {
     summary: "List runtime images available to the current Hub Job",
-    description: "Return the project-enabled, trusted runtime image catalog (image_key only) visible to this Hub Job.",
+    description: "Return the project-enabled, trusted runtime image catalog (image_key, display fields, compatible_agent_clis) visible to this Hub Job.",
     readOnly: true,
     eventType: null,
   },

@@ -31,6 +31,7 @@ import {
   selectRuntimeImageRef,
   officialCatalogWriteMode,
   shouldReconcileRuntimeImagePromotions,
+  toHubRuntimeImageCatalogEntry,
   validateRuntimeImageRegistryPolicy,
   verifiedSameDigestChannelRefs,
   runRuntimeImagePreparationTask,
@@ -1168,4 +1169,37 @@ test("a locally ready image is not blocked by an unrelated in-flight pull", asyn
     await flush();
     resetRuntimeImagePullTask();
   }
+});
+
+test("Hub catalog entries require a compatible governance CLI and omit executable refs", () => {
+  const kali = toHubRuntimeImageCatalogEntry({
+    image_key: "deepsonar-kali-minimal",
+    name: "Kali",
+    description: "test",
+    official: true,
+    project_opt_in: false,
+    source_kind: "official",
+  });
+  assert.ok(kali);
+  assert.deepEqual(kali.compatible_agent_clis, ["claude-code", "dsh", "pi"]);
+  assert.equal("image_ref" in kali, false);
+  assert.equal("digest" in kali, false);
+
+  const chrome = toHubRuntimeImageCatalogEntry({
+    image_key: "deepsonar-chrome-fuzz",
+    name: "Chrome Fuzz",
+    official: true,
+    project_opt_in: true,
+    source_kind: "official",
+  });
+  assert.ok(chrome);
+  assert.deepEqual(chrome.compatible_agent_clis, ["claude-code", "pi"]);
+
+  assert.equal(toHubRuntimeImageCatalogEntry({
+    image_key: "third-party-unlisted",
+    name: "Third",
+    official: false,
+    project_opt_in: true,
+    source_kind: "admission",
+  }), null);
 });

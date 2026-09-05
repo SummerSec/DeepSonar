@@ -3,6 +3,7 @@ import test from "node:test";
 import { SnapshotUnresolvableError } from "../role-runtime-snapshot/index.js";
 import {
   currentSnapshotUnresolvableBody,
+  frozenRuntimeImageOverride,
   governedSnapshotIdentity,
   isSnapshotUnresolvableError,
   snapshotIdentityDrift,
@@ -94,4 +95,20 @@ test("unresolvable current snapshot uses the same SNAPSHOT_STALE contract as req
   assert.equal(body.next_action, "fix-current-configuration");
   assert.deepEqual(body.stale_fields, ["current_snapshot_unresolvable"]);
   assert.match(body.resolution_error, /claude-code.*pi/);
+});
+
+test("frozen Hub runtime_image_key is the override used to resolve current identity", () => {
+  assert.deepEqual(
+    frozenRuntimeImageOverride({
+      runtime_image_key: "deepsonar-base",
+      runtime_image: { image_key: "deepsonar-kali-minimal" },
+    }),
+    { runtimeImageKey: "deepsonar-kali-minimal" },
+  );
+  assert.deepEqual(
+    frozenRuntimeImageOverride({ runtime_image_key: "deepsonar-audit" }),
+    { runtimeImageKey: "deepsonar-audit" },
+  );
+  assert.equal(frozenRuntimeImageOverride({ runtime_image_key: null }), undefined);
+  assert.equal(frozenRuntimeImageOverride({}), undefined);
 });

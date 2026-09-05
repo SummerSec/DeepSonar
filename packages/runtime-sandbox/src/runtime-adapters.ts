@@ -905,6 +905,13 @@ export function getAgentCliRuntimeAdapter(id: unknown): RuntimeAdapter | undefin
     : undefined;
 }
 
+/** Hub catalog / 决策用：哪些治理 CLI 能在该市场 image_key 里启动。未知 key 返回空数组。 */
+export function agentCliIdsCompatibleWithImage(imageKey: string): AgentCliId[] {
+  return (Object.keys(AGENT_CLI_RUNTIME_ADAPTERS) as AgentCliId[])
+    .filter((id) => AGENT_CLI_RUNTIME_ADAPTERS[id].compatibleImageKeys.includes(imageKey))
+    .sort();
+}
+
 export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): RuntimeAdapter {
   const adapter = getAgentCliRuntimeAdapter(id);
   if (!adapter) throw new Error(`AGENT_CLI_UNREGISTERED: ${String(id)}`);

@@ -298,3 +298,30 @@ test("Hub runtime_image_key 提案压过项目策略缺省，省略时保持策�
   );
   assert.equal(nullOverride.runtime_image.image_key, "deepsonar-base");
 });
+
+test("dsh cannot freeze a Hub chrome-fuzz override", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "dsh",
+    model: "grok-4.6",
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg }),
+      "project-1",
+      "audit",
+      { runtimeImageKey: "deepsonar-chrome-fuzz" },
+    ),
+    (error: unknown) => error instanceof SnapshotUnresolvableError
+      && /AGENT_CLI_IMAGE_INCOMPATIBLE/.test(error.message),
+  );
+});
