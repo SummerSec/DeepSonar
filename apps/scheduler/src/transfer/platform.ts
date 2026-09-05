@@ -32,7 +32,7 @@ import {
   type Manifest,
   type PackFile,
 } from "./pack.js";
-import { filterEnvVars, parseTransferredDshTaskMode } from "./sanitize.js";
+import { filterEnvVars, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
 
 export const PLATFORM_FORMAT = "deepsonar-platform-export";
 export const PLATFORM_FORMAT_VERSION = "1.0";
@@ -565,7 +565,7 @@ export async function applyPlatformImport(
         const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
         if (!role) continue;
 
-        const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+        const agentCli = parseTransferredAgentCli(rc.agent_cli, `全局 RoleConfig ${roleName}`);
         const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `全局 RoleConfig ${roleName}`);
         const model = typeof rc.model === "string" && rc.model ? rc.model : null;
         const rawContextWindowTokens = rc.context_window_tokens ?? null;

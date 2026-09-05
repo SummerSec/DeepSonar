@@ -228,6 +228,11 @@ test("new RoleConfig CLI options exclude leftover CLIs", () => {
   assert.doesNotMatch(flow, /AGENT_CLI_OPTIONS[\s\S]*value: "open-code"/);
 });
 
+test("credential save no longer silently strips leftover allowed_model_ids", () => {
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(flow, /delete metadata\.allowed_model_ids/);
+});
+
 const officialLlmPiAiYaml = `llm-pi-ai:
   providers:
     xxxx:

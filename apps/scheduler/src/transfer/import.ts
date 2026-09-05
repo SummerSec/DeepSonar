@@ -27,7 +27,7 @@ import {
   type OpenedPack,
 } from "./pack.js";
 import { CONFIG_MODULES, isConfigOnly, type ModuleKey } from "./modules.js";
-import { archiveJobStatus, parseTransferredDshTaskMode } from "./sanitize.js";
+import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
 
 export interface PreviewResult {
   compatible: boolean;
@@ -351,7 +351,7 @@ async function importRoleConfigs(
     const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
     if (!role) continue; // 自定义角色未创建时跳过（builtin 名应存在）
 
-    const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+    const agentCli = parseTransferredAgentCli(rc.agent_cli, `RoleConfig ${roleName}`);
     const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `RoleConfig ${roleName}`);
     const model = persistableProjectRoleConfigModel(
       imagePolicy,

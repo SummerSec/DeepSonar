@@ -1,5 +1,10 @@
 /** 环境变量 / 文本 Secret 扫描（导出红线） */
-import { validateModuleSelectors } from "@deepsonar/shared-types";
+import {
+  CURRENT_AGENT_CLI_DEFAULT,
+  rejectNonCurrentAgentCli,
+  validateModuleSelectors,
+  type CurrentAgentCli,
+} from "@deepsonar/shared-types";
 import { projectCredentialProvider } from "../credentials.js";
 
 const SENSITIVE_KEY =
@@ -79,6 +84,14 @@ export function parseTransferredDshTaskMode(value: unknown, label: string): "sta
   if (value === undefined || value === null) return "standard";
   if (value === "standard" || value === "ptc") return value;
   throw new Error(`${label}.dsh_task_mode 非法`);
+}
+
+/** RoleConfig 导入是写路径：缺省当前 CLI，leftover / 未知 fail closed。历史 Job 快照不走这里。 */
+export function parseTransferredAgentCli(value: unknown, label: string): CurrentAgentCli {
+  if (value === undefined || value === null || value === "") return CURRENT_AGENT_CLI_DEFAULT;
+  const leftover = rejectNonCurrentAgentCli(value);
+  if (leftover) throw new Error(`${label}.agent_cli: ${leftover}`);
+  return value as CurrentAgentCli;
 }
 
 export const ACTIVE_JOB_STATUSES = [
