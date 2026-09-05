@@ -2436,7 +2436,14 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
       )
     ORDER BY ri.official DESC, ri.image_key`;
-  return projectHubRuntimeImageCatalog(rows);
+  return projectHubRuntimeImageCatalog(rows.map((row) => ({
+    image_key: row.image_key,
+    name: row.name,
+    description: row.description,
+    official: row.official,
+    project_opt_in: row.project_opt_in,
+    source_kind: row.source_kind,
+  })));
 }
 
 export async function resolveRuntimeImageForJob(

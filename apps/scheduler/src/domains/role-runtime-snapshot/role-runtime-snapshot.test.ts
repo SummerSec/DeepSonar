@@ -314,20 +314,9 @@ test("CLI 不兼容的 Hub 提案镜像是 invalid_runtime_image，不是普通�
     mcps_json: [],
     subagents_json: [],
   };
-  const credential = {
-    id: "cred-local",
-    name: "local",
-    provider: "anthropic",
-    status: "active",
-    cred_project_id: null,
-    agent_cli: "dsh",
-    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
-    meta_json: {},
-    public_metadata_json: {},
-  };
   await assert.rejects(
     () => resolveAgentSnapshotForJob(
-      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential: undefined }),
       "project-1",
       "audit",
       { runtimeImageKey: "deepsonar-chrome-fuzz" },
