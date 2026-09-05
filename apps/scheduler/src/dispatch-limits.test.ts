@@ -244,6 +244,19 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   });
 });
 
+test("leftover Codex/OpenCode CLI caps are not first-class concurrency keys", async () => {
+  const rules = await globalRules(
+    fakeDb([
+      {
+        rules_json: {
+          maxConcurrentByAgentCli: { "claude-code": 4, codex: 2, "open-code": 1 },
+        },
+      },
+    ]),
+  );
+  assert.deepEqual(rules.maxConcurrentByAgentCli, {});
+});
+
 test("global settings patches deep-merge CLI and provider maps", () => {
   const merged = mergeGlobalRulesPatch(
     {

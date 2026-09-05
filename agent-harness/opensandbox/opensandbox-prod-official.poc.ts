@@ -12,14 +12,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSdkOpenSandboxClient,
+  readOpenSandboxPin,
+} from "@deepsonar/runtime-sandbox";
+import {
   listOfficialOpenSandboxRuntimeImages,
   OPENSANDBOX_POC_CLI_IDS,
-  readOpenSandboxPin,
   runOpenSandboxImageContractPoc,
   runOpenSandboxInfrastructurePoc,
   runOpenSandboxOfficialImagesPoc,
   shouldRunOpenSandboxPoc,
-} from "@deepsonar/runtime-sandbox";
+} from "@deepsonar/runtime-sandbox/poc";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox official prod PoC (set OPEN_SANDBOX_POC=1)");
@@ -32,7 +34,7 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const deployDir = join(repoRoot, "deploy");
 const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-official-"));
 const projectName = `os-prod-official-${process.pid}-${randomUUID().slice(0, 8)}`;

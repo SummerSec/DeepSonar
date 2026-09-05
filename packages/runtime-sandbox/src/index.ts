@@ -146,54 +146,6 @@ export {
 } from "./opensandbox.js";
 export type { OpenSandboxGatewayBinder, OpenSandboxRunOptions, OpenSandboxRunnerOptions } from "./opensandbox.js";
 export {
-  OPENSANDBOX_POC_ADAPTER_IDS,
-  OPENSANDBOX_POC_CLI_IDS,
-  OPENSANDBOX_POC_CONTRACT,
-  OPENSANDBOX_POC_IMAGE,
-  OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS,
-  isOpenSandboxCliMissing,
-  VENDOR_OFFICIAL_ORIGINS,
-  assertVendorOfficialOrigin,
-  assertVendorUpstreamPayload,
-  assertVendorUpstreamStatus,
-  listOfficialOpenSandboxRuntimeImages,
-  runOpenSandboxArchPoc,
-  runOpenSandboxAssetsPoc,
-  runOpenSandboxCliLaunchPoc,
-  runOpenSandboxCancelPoc,
-  runOpenSandboxContractFailPoc,
-  runOpenSandboxHostPoc,
-  runOpenSandboxImageContractPoc,
-  runOpenSandboxOfficialImagesPoc,
-  runOpenSandboxInfrastructurePoc,
-  runOpenSandboxRecoveryPoc,
-  runOpenSandboxRestrictedPoc,
-  runOpenSandboxRetryPoc,
-  shouldRunOpenSandboxPoc,
-} from "./opensandbox-poc.js";
-export {
-  OPENSANDBOX_K8S_NAMESPACE,
-  OPENSANDBOX_KATA_RUNTIME_CLASS,
-  findKataWorkload,
-  probeKataCluster,
-  runOpenSandboxK8sPoc,
-  shouldRunOpenSandboxK8sPoc,
-} from "./opensandbox-k8s-poc.js";
-export {
-  runOpenSandboxK8sAssetsPoc,
-  sharedAssetsClaimName,
-  shouldRunOpenSandboxK8sAssetsPoc,
-} from "./opensandbox-k8s-assets-poc.js";
-export {
-  AGENT_SANDBOX_CRD,
-  OPENSANDBOX_GVISOR_RUNSC_URL,
-  OPENSANDBOX_GVISOR_RUNSC_VERSION,
-  readAgentSandboxCrd,
-  readGvisorNatProbe,
-  runOpenSandboxGvisorPoc,
-  shouldRunOpenSandboxGvisorPoc,
-} from "./opensandbox-gvisor-poc.js";
-export {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,
   OPENSANDBOX_PIN_SCHEMA,

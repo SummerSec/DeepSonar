@@ -14,10 +14,12 @@ import postgres from "postgres";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   freezeAgentCliRuntime,
-  shouldRunOpenSandboxPoc,
   type SandboxTerminalSession,
 } from "@deepsonar/runtime-sandbox";
-import { buildAttemptState } from "./domains/job-attempt/model.js";
+import {
+  shouldRunOpenSandboxPoc,
+} from "@deepsonar/runtime-sandbox/poc";
+import { buildAttemptState } from "../../apps/scheduler/src/domains/job-attempt/model.js";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox reaper PoC (set OPEN_SANDBOX_POC=1)");
@@ -59,8 +61,8 @@ const orphanAttemptId = randomUUID();
 const liveAttemptId = randomUUID();
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
-let runner: Awaited<typeof import("./runtime.js")>["runner"] | null = null;
-let assets: Awaited<typeof import("./runtime.js")>["sharedAssetsVolumeManager"] | null = null;
+let runner: Awaited<typeof import("../../apps/scheduler/src/runtime.js")>["runner"] | null = null;
+let assets: Awaited<typeof import("../../apps/scheduler/src/runtime.js")>["sharedAssetsVolumeManager"] | null = null;
 let staging: string | null = null;
 const provisioned: Array<{ jobId: string; sandboxId: string; terminal: SandboxTerminalSession }> = [];
 
@@ -74,10 +76,10 @@ try {
   process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
 
   const [dbModule, runtimeModule, { reapOnce }, { mintJobCapabilityToken }] = await Promise.all([
-    import("./db.js"),
-    import("./runtime.js"),
-    import("./reaper.js"),
-    import("./domains/platform-api/tokens.js"),
+    import("../../apps/scheduler/src/db.js"),
+    import("../../apps/scheduler/src/runtime.js"),
+    import("../../apps/scheduler/src/reaper.js"),
+    import("../../apps/scheduler/src/domains/platform-api/tokens.js"),
   ]);
   runner = runtimeModule.runner;
   assets = runtimeModule.sharedAssetsVolumeManager;

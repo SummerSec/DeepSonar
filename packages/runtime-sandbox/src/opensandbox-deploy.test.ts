@@ -181,7 +181,7 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(k8sCompose, /127\.0\.0\.1:18084\/health/);
   assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
   assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
-  const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-assets-poc.ts"), "utf8");
+  const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.ts"), "utf8");
   const runtime = readFileSync(join(root, "apps/scheduler/src/runtime.ts"), "utf8");
   assert.match(assetsPoc, /OPEN_SANDBOX_POC_K8S_ASSETS/);
   assert.match(assetsPoc, /KubernetesSharedAssetsVolumeManager/);
@@ -193,7 +193,7 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
 });
 
 test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () => {
-  const poc = readFileSync(join(root, "apps/scheduler/src/opensandbox-cli-control.poc.ts"), "utf8");
+  const poc = readFileSync(join(root, "agent-harness/opensandbox/opensandbox-cli-control.poc.ts"), "utf8");
   assert.match(poc, /registerGateway/);
   assert.match(poc, /mintJobToken/);
   assert.match(poc, /encryptSecret/);
@@ -248,7 +248,7 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(harness, /runOpenSandboxK8sAssetsPoc/);
   assert.match(harness, /envClean/);
   assert.match(harness, /docker-compose.real.yml/);
-  const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-k8s-poc.ts"), "utf8");
+  const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-k8s-poc.ts"), "utf8");
   const k8sGateway = readFileSync(join(root, "packages/runtime-sandbox/src/kubernetes-gateway.ts"), "utf8");
   const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
@@ -268,7 +268,7 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HARD_LIMITS/);
   assert.match(k8sPoc, /OPENSANDBOX_POC_AGENT_SANDBOX_PRESENT/);
-  const gvisorPoc = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-gvisor-poc.ts"), "utf8");
+  const gvisorPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-gvisor-poc.ts"), "utf8");
   assert.match(gvisorPoc, /OPENSANDBOX_POC_GVISOR_EGRESS_UNEXPECTED/);
   assert.match(gvisorPoc, /Failed to initialize nft/);
   assert.match(gvisorPoc, /release\/20251006\/x86_64\/runsc/);

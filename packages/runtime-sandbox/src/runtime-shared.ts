@@ -14,6 +14,7 @@ export const WORKSPACE_RESERVED_ROOTS = [
   "/workspace/.deepsonar-home",
   SHARED_ASSETS_MOUNT_PATH,
   "/workspace/.claude",
+  // leftover Codex/OpenCode historical snapshots may still materialize these homes.
   "/workspace/.codex",
   "/workspace/.opencode",
 ] as const;

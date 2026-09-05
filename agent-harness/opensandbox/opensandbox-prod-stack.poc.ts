@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
+import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox/poc";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox prod-stack PoC (set OPEN_SANDBOX_POC=1)");
@@ -31,7 +31,7 @@ targetUrl.search = "";
 let closeApp: (() => Promise<unknown>) | null = null;
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
-let runner: Awaited<typeof import("./runtime.js")>["runner"] | null = null;
+let runner: Awaited<typeof import("../../apps/scheduler/src/runtime.js")>["runner"] | null = null;
 
 try {
   await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
@@ -52,11 +52,11 @@ try {
     { resetOpenSandboxServerStatusForTests },
   ] = await Promise.all([
     import("fastify"),
-    import("./db.js"),
-    import("./domains/settings/routes.js"),
-    import("./domains/system/routes.js"),
-    import("./runtime.js"),
-    import("./opensandbox-health.js"),
+    import("../../apps/scheduler/src/db.js"),
+    import("../../apps/scheduler/src/domains/settings/routes.js"),
+    import("../../apps/scheduler/src/domains/system/routes.js"),
+    import("../../apps/scheduler/src/runtime.js"),
+    import("../../apps/scheduler/src/opensandbox-health.js"),
   ]);
   runner = runtimeModule.runner;
   if (runner.constructor.name !== "OpenSandboxRunner") {

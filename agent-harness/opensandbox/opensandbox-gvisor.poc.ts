@@ -4,7 +4,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync } from "node:fs";
-import { OPENSANDBOX_GVISOR_RUNSC_URL, runOpenSandboxGvisorPoc, shouldRunOpenSandboxGvisorPoc } from "@deepsonar/runtime-sandbox";
+import { OPENSANDBOX_GVISOR_RUNSC_URL, runOpenSandboxGvisorPoc, shouldRunOpenSandboxGvisorPoc } from "@deepsonar/runtime-sandbox/poc";
 
 if (!shouldRunOpenSandboxGvisorPoc()) {
   console.log("skip: OpenSandbox gVisor PoC (set OPEN_SANDBOX_POC=1 OPEN_SANDBOX_POC_GVISOR=1)");

@@ -17,8 +17,10 @@ import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   freezeAgentCliRuntime,
   gatewayServiceManifest,
-  shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
+import {
+  shouldRunOpenSandboxPoc,
+} from "@deepsonar/runtime-sandbox/poc";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox dispatch PoC (set OPEN_SANDBOX_POC=1)");
@@ -53,8 +55,8 @@ const jobId = randomUUID();
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
 let blobDir: string | null = null;
-let assets: Awaited<typeof import("./runtime.js")>["sharedAssetsVolumeManager"] | null = null;
-let runner: Awaited<typeof import("./runtime.js")>["runner"] | null = null;
+let assets: Awaited<typeof import("../../apps/scheduler/src/runtime.js")>["sharedAssetsVolumeManager"] | null = null;
+let runner: Awaited<typeof import("../../apps/scheduler/src/runtime.js")>["runner"] | null = null;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -79,11 +81,11 @@ try {
     { createSqlJobLifecycleApplication },
     { createSharedAsset, resolveSharedAssetSelection, recordJobSharedAssets },
   ] = await Promise.all([
-    import("./db.js"),
-    import("./runtime.js"),
-    import("./dispatcher.js"),
-    import("./domains/job-lifecycle/index.js"),
-    import("./domains/shared-assets/index.js"),
+    import("../../apps/scheduler/src/db.js"),
+    import("../../apps/scheduler/src/runtime.js"),
+    import("../../apps/scheduler/src/dispatcher.js"),
+    import("../../apps/scheduler/src/domains/job-lifecycle/index.js"),
+    import("../../apps/scheduler/src/domains/shared-assets/index.js"),
   ]);
   runner = runtimeModule.runner;
   assets = runtimeModule.sharedAssetsVolumeManager;

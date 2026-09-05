@@ -2,8 +2,9 @@
  * Parse Agent CLI session archives (JSONL / NDJSON / OpenCode export JSON)
  * into a timeline suitable for the Job Session viewer.
  *
- * Formats: current Agent CLI (claude-code / pi / dsh) plus leftover
- * read-only archives (codex / open-code).
+ * Formats: current Agent CLI (claude-code / pi / dsh). Leftover
+ * Codex/OpenCode types live in `legacy-session/`; parsers stay here (shared
+ * helpers) and remain read-only for historical archives.
  * UX inspiration only: github.com/cuteribs/agent-session-viewer (do not vendor).
  *
  * When adding a new Agent CLI:
@@ -12,6 +13,13 @@
  * 3. docs/AGENT_CLI_RUNTIME_ADAPTERS.md — onboarding checklist
  * Runtime adapter alone is not enough; Session UI will show empty/raw without these.
  */
+
+import {
+  isLegacySessionCli,
+  legacySessionCliLabel,
+  normalizeLegacySessionCli,
+  type LegacySessionCli,
+} from "./legacy-session/index.js";
 
 export type SessionItemKind =
   | "user"
@@ -40,10 +48,11 @@ export type SessionToolStat = {
   errors: number;
 };
 
-/** Current Agent CLI plus leftover archive dialects kept for historical Job Session 只读渲染。 */
-export type SupportedSessionCli = "claude-code" | "pi" | "dsh" | "codex" | "open-code";
+/** Current write/run Agent CLI. Leftover archive dialects are `LegacySessionCli`. */
+export type SupportedSessionCli = "claude-code" | "pi" | "dsh";
+export type { LegacySessionCli };
 
-export type SessionFormat = SupportedSessionCli | "ndjson" | "unknown";
+export type SessionFormat = SupportedSessionCli | LegacySessionCli | "ndjson" | "unknown";
 
 export type SessionParseResult = {
   format: SessionFormat;
@@ -65,26 +74,25 @@ export type ParseAgentSessionOptions = {
   cli?: string | null;
 };
 
-const SUPPORTED_CLI = new Set<SupportedSessionCli>(["claude-code", "codex", "open-code", "pi", "dsh"]);
+const SUPPORTED_CLI = new Set<SupportedSessionCli>(["claude-code", "pi", "dsh"]);
 
-export function normalizeSessionCli(cli?: string | null): SupportedSessionCli | undefined {
+export function normalizeSessionCli(cli?: string | null): SupportedSessionCli | LegacySessionCli | undefined {
   if (!cli) return undefined;
   const value = cli.trim().toLowerCase();
   if (value === "claude" || value === "claude-code") return "claude-code";
-  if (value === "codex") return "codex";
-  if (value === "opencode" || value === "open-code" || value === "open_code") return "open-code";
   if (value === "pi") return "pi";
   if (value === "dsh" || value === "deepseek-harness") return "dsh";
+  const leftover = normalizeLegacySessionCli(value);
+  if (leftover) return leftover;
   return SUPPORTED_CLI.has(value as SupportedSessionCli) ? (value as SupportedSessionCli) : undefined;
 }
 
 export function sessionCliLabel(cli?: string | null): string {
   const normalized = normalizeSessionCli(cli);
   if (normalized === "claude-code") return "Claude Code";
-  if (normalized === "codex") return "Codex";
-  if (normalized === "open-code") return "OpenCode";
   if (normalized === "pi") return "Pi";
   if (normalized === "dsh") return "DeepSeek Harness";
+  if (normalized && isLegacySessionCli(normalized)) return legacySessionCliLabel(normalized);
   return cli?.trim() || "未知 CLI";
 }
 
@@ -496,7 +504,7 @@ function extractCodexTokenCountUsage(payload: Record<string, unknown>): SessionT
 
 function detectFormat(
   rows: Record<string, unknown>[],
-  preferred?: SupportedSessionCli,
+  preferred?: SupportedSessionCli | LegacySessionCli,
 ): SessionParseResult["format"] {
   if (preferred) return preferred;
   for (const row of rows.slice(0, 40)) {
@@ -1552,7 +1560,7 @@ function parseDshRow(
 
 function parseObjectRows(
   rows: Record<string, unknown>[],
-  preferred?: SupportedSessionCli,
+  preferred?: SupportedSessionCli | LegacySessionCli,
 ): SessionParseResult {
   const format = detectFormat(rows, preferred);
   const items: SessionTimelineItem[] = [];

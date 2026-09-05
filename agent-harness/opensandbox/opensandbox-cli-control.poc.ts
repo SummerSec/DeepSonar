@@ -14,18 +14,20 @@ import {
   CLI_SESSION_ADAPTERS,
   DEEPSONAR_GATEWAY_PROXY_HOST,
   applyRuntimeOutputText,
+  freezeAgentCliRuntime,
+  runtimeCliEnv,
+  skillMaterializationPath,
+  type AdapterRuntimeState,
+} from "@deepsonar/runtime-sandbox";
+import {
   VENDOR_OFFICIAL_ORIGINS,
   assertVendorOfficialOrigin,
   assertVendorUpstreamPayload,
   assertVendorUpstreamStatus,
-  freezeAgentCliRuntime,
-  runtimeCliEnv,
   shouldRunOpenSandboxPoc,
-  skillMaterializationPath,
-  type AdapterRuntimeState,
-} from "@deepsonar/runtime-sandbox";
-import { parseAgentSession } from "../../web/src/session-viewer/parseAgentSession.ts";
-import { DEEPSONAR_CONTROL_SKILL } from "./platform-control-skill.js";
+} from "@deepsonar/runtime-sandbox/poc";
+import { parseAgentSession } from "../../apps/web/src/session-viewer/parseAgentSession.ts";
+import { DEEPSONAR_CONTROL_SKILL } from "../../apps/scheduler/src/platform-control-skill.js";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox CLI control PoC (set OPEN_SANDBOX_POC=1)");
@@ -215,15 +217,15 @@ try {
     { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings },
   ] = await Promise.all([
     import("fastify"),
-    import("./db.js"),
-    import("./domains/platform-api/index.js"),
-    import("./runtime.js"),
-    import("./executor-real.js"),
-    import("./config.js"),
-    import("./credentials.js"),
-    import("./gateway.js"),
-    import("./provider-settings.js"),
-    import("./dsh-pi-ai-settings.js"),
+    import("../../apps/scheduler/src/db.js"),
+    import("../../apps/scheduler/src/domains/platform-api/index.js"),
+    import("../../apps/scheduler/src/runtime.js"),
+    import("../../apps/scheduler/src/executor-real.js"),
+    import("../../apps/scheduler/src/config.js"),
+    import("../../apps/scheduler/src/credentials.js"),
+    import("../../apps/scheduler/src/gateway.js"),
+    import("../../apps/scheduler/src/provider-settings.js"),
+    import("../../apps/scheduler/src/dsh-pi-ai-settings.js"),
   ]);
   const { sql, migrate } = dbModule;
   const { activateProvisionedJobCapabilityTokens, registerPlatformControlRoutes, registerRuntimeHandler, unregisterRuntimeHandler } = platformApi;

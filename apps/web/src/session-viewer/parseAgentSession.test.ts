@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   cacheHitRate,
@@ -582,7 +583,7 @@ test("parses empty and invalid lines without throwing", () => {
   assert.ok(result.items.some((item) => item.kind === "assistant"));
 });
 
-test("normalizeSessionCli and labels cover all DeepSonar agents", () => {
+test("normalizeSessionCli and labels cover current agents plus leftover archives", () => {
   assert.equal(normalizeSessionCli("claude-code"), "claude-code");
   assert.equal(normalizeSessionCli("Claude"), "claude-code");
   assert.equal(normalizeSessionCli("codex"), "codex");
@@ -594,6 +595,15 @@ test("normalizeSessionCli and labels cover all DeepSonar agents", () => {
   assert.equal(sessionCliLabel("codex"), "Codex");
   assert.equal(sessionCliLabel("open-code"), "OpenCode");
   assert.equal(sessionCliLabel("pi"), "Pi");
+});
+
+test("leftover Codex/OpenCode are not first-class session CLIs", async () => {
+  const { isLegacySessionCli, LEGACY_SESSION_CLIS } = await import("./legacy-session/index.js");
+  const source = readFileSync(new URL("./parseAgentSession.ts", import.meta.url), "utf8");
+  assert.match(source, /export type SupportedSessionCli = "claude-code" \| "pi" \| "dsh"/);
+  assert.deepEqual([...LEGACY_SESSION_CLIS], ["codex", "open-code"]);
+  assert.equal(isLegacySessionCli("codex"), true);
+  assert.equal(isLegacySessionCli("pi"), false);
 });
 
 test("formatTokenCount uses compact units", () => {

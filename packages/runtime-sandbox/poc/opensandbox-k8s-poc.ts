@@ -9,13 +9,13 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bindGatewayProxyToKubernetesService } from "./kubernetes-gateway.js";
-import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
+import { bindGatewayProxyToKubernetesService } from "../src/kubernetes-gateway.js";
+import { OpenSandboxRunner, type OpenSandboxClient } from "../src/opensandbox.js";
 import { NETWORK_ISOLATION_SCRIPT, OPENSANDBOX_POC_CONTRACT, OPENSANDBOX_POC_IMAGE } from "./opensandbox-poc.js";
 import { readAgentSandboxCrd } from "./opensandbox-gvisor-poc.js";
-import { shellQuote } from "./runtime-host.js";
+import { shellQuote } from "../src/runtime-host.js";
 
-export { readServiceClusterIP } from "./kubernetes-gateway.js";
+export { readServiceClusterIP } from "../src/kubernetes-gateway.js";
 
 export const OPENSANDBOX_K8S_NAMESPACE = "deepsonar-opensandbox";
 export const OPENSANDBOX_KATA_RUNTIME_CLASS = "kata-qemu";
