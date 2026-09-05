@@ -55,8 +55,8 @@ if (!testDatabaseUrl) {
       const roleId = randomUUID();
       const roleName = `follow-role-${roleId.slice(0, 8)}`;
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${projectId}, ${`canvas-${projectId}`}, 'cli follow')`;
+        INSERT INTO projects (id, name)
+        VALUES (${projectId}, 'cli follow')`;
       await sql`
         INSERT INTO agent_roles (id, name, title, kind, ui_color)
         VALUES (${roleId}, ${roleName}, 'follow role', 'role', '#c084fc')`;

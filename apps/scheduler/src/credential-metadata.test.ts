@@ -9,8 +9,7 @@ import {
 
 test("provider/kind allowlist preserves supported mappings only", () => {
   assert.equal(isProviderAllowedForKind("llm_provider", "anthropic"), true);
-  assert.equal(isProviderAllowedForKind("llm_provider", "plane"), false);
-  assert.equal(isProviderAllowedForKind("plane", "plane"), true);
+  assert.equal(isProviderAllowedForKind("llm_provider", "git"), false);
   assert.equal(isProviderAllowedForKind("git", "git"), true);
   assert.equal(isProviderAllowedForKind("oci_registry", "registry.example.test"), true);
 });

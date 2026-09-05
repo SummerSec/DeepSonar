@@ -1,6 +1,6 @@
 ---
 name: deepsonar-management
-description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场、平台导入导出与 Plane。当需要以程序化方式操作 DeepSonar 时使用。
+description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场与平台导入导出。当需要以程序化方式操作 DeepSonar 时使用。
 ---
 
 # DeepSonar Management
@@ -41,7 +41,7 @@ Windows 注意：部分环境下 curl 响应带 UTF-8 BOM，用 Python 解析时
 # 健康与项目
 python scripts/deepsonar-api.py health
 python scripts/deepsonar-api.py projects list
-python scripts/deepsonar-api.py projects create --name my-audit [--description ...] [--plane-project-id <uuid>]
+python scripts/deepsonar-api.py projects create --name my-audit [--description ...]
 python scripts/deepsonar-api.py projects get <projectId>
 python scripts/deepsonar-api.py projects update <projectId> --data '{"description":"..."}'
 python scripts/deepsonar-api.py projects archive <projectId>
@@ -197,12 +197,6 @@ python scripts/deepsonar-api.py imports get <importId>
 python scripts/deepsonar-api.py imports preview <importId>
 python scripts/deepsonar-api.py imports apply <importId> --mode create_new [--project-name restored]
 python scripts/deepsonar-api.py imports cancel <importId>
-
-# Plane（可选）
-python scripts/deepsonar-api.py plane bind <projectId> --project-id <planeProjectUuid>
-python scripts/deepsonar-api.py plane unbind <projectId>
-python scripts/deepsonar-api.py plane sync <projectId>
-python scripts/deepsonar-api.py plane info
 ```
 
 ### RoleConfig 示例（Credential 绑定 + 可选 model 覆盖 + 镜像）

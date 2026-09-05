@@ -19,7 +19,6 @@ import { sql } from "./db.js";
 import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/index.js";
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
 import { inc } from "./metrics.js";
-import { planeWriteback } from "./plane-sync.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { assertRuntimeImageAvailable, RuntimeImageNotReadyError, shouldInspectLocalRuntimeImage } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
@@ -970,7 +969,7 @@ async function runJob(jobId: string) {
     });
     startLeaseRenewal(jobId, handle);
 
-    // 画布：job 节点（如不存在）——claim 时由 routes/planeSync 建 root 之外的 job 节点
+    // 画布：job 节点（如不存在）——claim 时由任务路由建 root 之外的 job 节点
     await ensureJobNode(jobId, job);
 
     await execute(jobId, job.type, platformCapability);
@@ -1069,7 +1068,6 @@ async function runJob(jobId: string) {
         console.error(`[dispatcher] 共享资产卷回收失败 ${jobId}:`, e);
       });
     }
-    await planeWriteback(jobId).catch((e) => console.error("[plane] 回写异常:", e));
   }
 }
 
@@ -1194,7 +1192,7 @@ async function executeFake(jobId: string, type: string) {
     const chooseRole = (preferred: string) => roles.find((role) => role.name === preferred) ?? roles[0];
     await emit("progress", { message: "假 hub：读图决策中", percent: 50 });
     if (canvasId) {
-      if (["user_task", "plane_issue", "external_event"].includes(trigger.kind ?? "")) {
+      if (["user_task", "external_event"].includes(trigger.kind ?? "")) {
         const selected = chooseRole("audit");
         if (!selected) return;
         const refs = await sql`

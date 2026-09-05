@@ -226,8 +226,6 @@ def _projects_create(_pos, f):
     body = {"name": need(f.get("name"), "--name")}
     if f.get("description"):
         body["description"] = f["description"]
-    if f.get("plane-project-id"):
-        body["plane_project_id"] = f["plane-project-id"]
     return call("POST", "/projects", body)
 
 
@@ -373,7 +371,7 @@ def _credentials_create(_pos, f):
         "name": need(f.get("name"), "--name"),
         "provider": need(
             f.get("provider"),
-            "--provider anthropic|openai|plane|git|<oci-registry-host>",
+            "--provider anthropic|openai|git|<oci-registry-host>",
         ),
         "secret": need(f.get("secret"), "--secret"),
     }
@@ -858,11 +856,6 @@ COMMANDS = {
 
     # ---------- 项目 ----------
     "projects.list": lambda pos, f: call("GET", "/projects"),
-    "projects.sync": lambda pos, f: call("POST", "/projects/sync", {
-        "plane_project_id": need(f.get("plane-project-id"), "--plane-project-id"),
-        "name": need(f.get("name"), "--name"),
-        "config": parse_json_arg(str(f.get("config") or "{}"), "--config"),
-    }),
     "projects.get": lambda pos, f: call("GET", f"/projects/{_p0(pos, 'projectId')}"),
     "projects.create": _projects_create,
     # 服务端仅允许 name / description / status（active|archived）
@@ -1047,14 +1040,6 @@ COMMANDS = {
     "skills.sync": lambda pos, f: call("POST", f"/skill-sources/{_p0(pos, 'sourceId')}/sync"),
     "skills.trust": _skills_trust,
     "skills.delete": lambda pos, f: call("DELETE", f"/skill-sources/{_p0(pos, 'sourceId')}"),
-
-    # ---------- Plane 集成（可选） ----------
-    "plane.bind": lambda pos, f: call(
-        "PUT", f"/projects/{_p0(pos, 'projectId')}/integrations/plane",
-        {"plane_project_id": need(f.get("project-id"), "--project-id")}),
-    "plane.unbind": lambda pos, f: call("DELETE", f"/projects/{_p0(pos, 'projectId')}/integrations/plane"),
-    "plane.sync": lambda pos, f: call("POST", f"/projects/{_p0(pos, 'projectId')}/integrations/plane/sync"),
-    "plane.info": lambda pos, f: call("GET", "/plane-info"),
 
     # ---------- Provider / OCI Credential（明文不可回读） ----------
     "credentials.list": lambda pos, f: call("GET", "/credentials"),

@@ -73,7 +73,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   const AgentCliSchema = AgentCliWriteSchema;
   const CredentialBody = z.object({
     name: z.string().trim().min(1).max(100),
-    kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]).default("llm_provider"),
+    kind: z.enum(["llm_provider", "git", "oci_registry"]).default("llm_provider"),
     provider: z.string().trim().min(1).max(50),
     secret: z.string().min(1).max(4096),
     project_id: z.string().uuid().nullable().optional(),

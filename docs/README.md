@@ -26,7 +26,7 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | **as-built**（正文仍含早期 Plane 叙述，以 § 后半与 DESIGN 为准） | 威胁建模、状态机、存储、运行时；入口一句话已本地优先 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **as-built** | 威胁建模、状态机、存储、运行时；管理真相是本地库 / Web |
 | [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；leftover Codex/OpenCode 只读；版本钉死见 runtime-images |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
@@ -64,7 +64,6 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [PLANE_NOTES.md](PLANE_NOTES.md) | **可选集成** | Plane Cloud 联调笔记；默认路径是 Web 建项目/任务 |
 | [PROJECT_REVIEW_2026-08.md](PROJECT_REVIEW_2026-08.md) | **评审快照** | 会漂移；P0 已回写 #38 完成；冲突以代码为准 |
 | [TASTE_SKILL_TUTORIAL_LANDING_PROMPTS.md](TASTE_SKILL_TUTORIAL_LANDING_PROMPTS.md) | **素材/非产品** | 对外教程页生成 prompt |
 | [brand/](brand/) | **素材** | 图标 brandkit |

@@ -1,4 +1,4 @@
-import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowSquareOut, ArrowUpRight, CaretDown, Clock, GitMerge, Pause, Play, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowUpRight, Clock, GitMerge, Pause, Play, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type CanvasSummary, type EffectiveFindingProtocol, type FindingProtocolConfig, type FindingSummary, type Project } from "../api";
@@ -15,7 +15,6 @@ import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton
 type Filter = "" | "active" | "findings" | "archived";
 /** 立即开始，或指定墙钟时间（按浏览器本地时区选择，提交为 ISO UTC）。 */
 type ScheduleMode = "immediate" | "at";
-interface PlaneInfo { enabled: boolean; web_url: string; workspace_slug: string; ready_state: string; }
 const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
 const labelCls = "mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
@@ -47,12 +46,6 @@ function formatBeijingTime(iso: string | null | undefined): string | null {
   } catch {
     return iso;
   }
-}
-
-function PlaneGuide({ project, plane }: { project: Project; plane: PlaneInfo | null }) {
-  const [open, setOpen] = useState(false);
-  const projectUrl = plane ? `${plane.web_url}/${plane.workspace_slug}/projects/${project.plane_project_id}/issues/` : null;
-  return <div className="surface-shell mb-4"><div className="surface-core overflow-hidden"><button onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-run-400/[.08] text-run-400 ring-1 ring-run-400/15"><AirplaneTakeoff size={16} weight="light" /></span><span className="min-w-0 flex-1"><strong className="block text-[12px] font-medium text-zinc-300">Plane 自动下发已启用</strong><small className="block truncate text-[10px] text-zinc-600">Issue 进入 {plane?.ready_state ?? "Ready"} 后会进入同一任务闭环</small></span><CaretDown size={14} className={`text-zinc-600 transition-transform ${open ? "rotate-180" : ""}`} /></button>{open && <div className="border-t border-white/[.045] px-5 py-4 text-[11px] leading-6 text-zinc-500"><ol className="list-decimal space-y-1 pl-4"><li>在 Plane 创建 issue，标题写结果目标，描述补充背景和约束。</li><li>把状态移到「{plane?.ready_state ?? "Ready"}」，系统会自动铸造任务画布并开始调度。</li><li>本地创建与 Plane 下发拥有完全相同的证据、验证与报告流程。</li></ol>{projectUrl && <a href={projectUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1.5 text-acc-300 hover:text-acc-200">打开 Plane 项目<ArrowSquareOut size={12} /></a>}</div>}</div></div>;
 }
 
 function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
@@ -482,7 +475,6 @@ export function TasksPage() {
   );
   const [canvases, setCanvases] = useState<CanvasSummary[]>([]);
   const [project, setProject] = useState<Project | undefined>();
-  const [plane, setPlane] = useState<PlaneInfo | null>(null);
   const [filter, setFilter] = useState<Filter>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -500,7 +492,6 @@ export function TasksPage() {
   useEffect(() => {
     if (!projectId) return;
     api.projects().then((list) => setProject(list.find((item) => item.id === projectId))).catch(() => {});
-    api.planeInfo().then(setPlane).catch(() => {});
     let stop = false;
     const status = filter === "archived" ? ("archived" as const) : ("active" as const);
     const tick = () => api.canvases(projectId, { status }).then((list) => { if (!stop) { setCanvases(list); setError(null); setLoading(false); } }).catch((e) => { if (!stop) { setError(String(e)); setLoading(false); } });
@@ -553,7 +544,6 @@ export function TasksPage() {
       {error && <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}
       {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}
       {creating && <NewTaskForm projectId={projectId} initialSeedIds={initialSeedIds} flash={flash} onCancel={() => { setCreating(false); setSearchParams({}, { replace: true }); }} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
-      {project?.plane_project_id && <PlaneGuide project={project} plane={plane} />}
 
       {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
         <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">

@@ -37,8 +37,8 @@ if (!testDatabaseUrl) {
     const snapshot = { agent_cli: "claude-code", credential_id: null, credential_provider: null, model: null };
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, ${`verify-eligibility-${projectId}`}, ${sql.json({ rules: { minVerifySeverity: "high" } })})`;
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, ${`verify-eligibility-${projectId}`}, ${sql.json({ rules: { minVerifySeverity: "high" } })})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${canvasId}, ${projectId}, 'Verify eligibility integration', ${sql.json({ network_policy: { allow_egress: false } })})`;

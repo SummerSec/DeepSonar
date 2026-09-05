@@ -15,7 +15,7 @@ import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 
 /**
- * 平台 API Token 管理（§6.4）：与 Provider Credential（LLM/Plane/Git 密钥）严格分离。
+ * 平台 API Token 管理（§6.4）：与 Provider Credential（LLM/Git 密钥）严格分离。
  * 明文只在创建/轮换响应里出现一次；列表永远只有前缀。
  * 本机鉴权：用户会话与 API Token 分存；会话优先，默认遮罩不整段明文。
  */
@@ -25,7 +25,6 @@ const SCOPE_GROUPS: { label: string; scopes: string[] }[] = [
   { label: "任务", scopes: ["tasks:read", "tasks:write", "jobs:control"] },
   { label: "发现", scopes: ["findings:read"] },
   { label: "Agent/配置", scopes: ["skills:read", "skills:write", "agents:read", "agents:write"] },
-  { label: "集成", scopes: ["integrations:read", "integrations:write"] },
   { label: "管理", scopes: ["tokens:manage", "admin"] },
 ];
 

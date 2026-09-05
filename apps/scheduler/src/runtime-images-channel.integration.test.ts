@@ -42,8 +42,8 @@ if (!testDatabaseUrl) {
       const githubRef = "ghcr.io/summersec/" + imageKey + "@" + digest;
       const dockerHubRef = "docker.io/sumsec/" + imageKey + "@" + digest;
       await sql.unsafe(
-        "INSERT INTO projects (id, canvas_id, name) VALUES (" +
-        [projectId, "canvas-" + projectId, "runtime channel fixture"].map(quote).join(", ") + ")",
+        "INSERT INTO projects (id, name) VALUES (" +
+        [projectId, "runtime channel fixture"].map(quote).join(", ") + ")",
       );
       await sql.unsafe(
         "INSERT INTO runtime_images (id, image_key, name, description, publisher, source_kind, official) VALUES (" +

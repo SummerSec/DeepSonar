@@ -35,8 +35,8 @@ if (!testDatabaseUrl) {
         })}, updated_at = now()
         WHERE id = 'global'`;
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${`finding-protocol-${projectId}`}, 'finding-protocol', ${sql.json({
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'finding-protocol', ${sql.json({
           rules: { hubEnabled: false },
           finding_protocol: {
             mode: "fixed",

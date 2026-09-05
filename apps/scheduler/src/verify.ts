@@ -300,7 +300,6 @@ export async function createVerifyRound(
         project_id: opts.projectId,
         canvas_id: opts.canvasId,
         agent_snapshot_json: snapshot as never,
-        plane_issue_id: null,
         parent_job_id: opts.parentJobId,
         finding_id: findingId,
         type: "verify_finding",

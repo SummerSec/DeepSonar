@@ -39,7 +39,7 @@ if (!testDatabaseUrl) {
 
       const projectId = randomUUID(), otherProjectId = randomUUID();
       const canvasId = randomUUID(), otherCanvasId = randomUUID(), jobId = randomUUID(), agentJobId = randomUUID(), findingId = randomUUID();
-      await sql`INSERT INTO projects (id,canvas_id,name) VALUES (${projectId},${canvasId},'assets'),(${otherProjectId},${otherCanvasId},'other')`;
+      await sql`INSERT INTO projects (id,name) VALUES (${projectId}, 'assets'), (${otherProjectId}, 'other')`;
       await sql`INSERT INTO canvases (id,project_id,title,target_json) VALUES (${canvasId},${projectId},'assets',${sql.json({ network_policy: { allow_egress: false } })}),(${otherCanvasId},${otherProjectId},'other',${sql.json({})})`;
       await sql`INSERT INTO jobs (id,project_id,canvas_id,type,status,agent_snapshot_json) VALUES
         (${jobId},${projectId},${canvasId},'audit','succeeded',${sql.json({})}),

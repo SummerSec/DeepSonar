@@ -41,12 +41,12 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 核心纪律
 
-> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 为可选集成，默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
+> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** 默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
 - **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
-- **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
+- **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 默认 0（关闭轮询）。
 - **无独立 `tasks` 表**：任务 = `canvases`；列表 `GET /projects/:id/canvases`。
 - **读图注入**：`graph.ts` `buildGraphSnapshot` 按 `GraphScope` 投影 fact/finding 等 YAML 注入 Hub/Worker，并有整图字符预算（#30）；细节见 `DESIGN.md` §7。`job` 节点不进 YAML。
 - **任务是否在跑**：以 `active_count`（活跃 Job）为准，勿用 `last_job_status=succeeded` 当作任务已完成（#46）。
@@ -56,7 +56,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper/plane-sync 三个后台循环 |
+| `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper 两个后台循环 |
 | `dispatcher.ts` | 领取 pending job（全局/每项目并发上限，原子 claim）→ provision → run |
 | `core.ts` | Scheduler composition root 与既有内部 import 的窄 facade；保留共享规则、Job 创建/终态编排，各领域实现通过 application/ports 注入 |
 | `domains/*` | Job lifecycle、event ingestion、Hub、Finding verification、Report convergence、runtime snapshot 及各 HTTP API 的领域入口；语义事件副作用归 `event-ingestion/side-effects.ts` |
@@ -93,10 +93,10 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v40，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
+- **Schema**：`database/schema.sql` 是唯一基线（当前 v42，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
-- **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布；`projects.canvas_id` 是历史遗留。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
+- **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
 - Finding schema 对齐 SARIF 2.1.0（§6.1）；events 表只放语义事件，原始事件流进冷存储 NDJSON。
 
 ### 前端（`apps/web/`，React 19 + @xyflow/react + elkjs + Tailwind 4）

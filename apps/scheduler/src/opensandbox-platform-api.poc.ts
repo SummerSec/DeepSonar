@@ -95,7 +95,7 @@ try {
     sandbox_limits: { cpu: 1, memoryMiB: 512, pidsLimit: 128, capDropAll: true, noNewPrivileges: true },
     runtime_image: { image_ref: runtimeImage, contract_version: "deepsonar.runtime.contract/v1" },
   };
-  await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'OpenSandbox Platform API')`;
+  await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'OpenSandbox Platform API')`;
   await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'OpenSandbox Platform API')`;
   await sql`
     INSERT INTO jobs (

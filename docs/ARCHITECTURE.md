@@ -5,9 +5,7 @@
 > **阅读**：产品摘要先读仓库根 `DESIGN.md`；本文件为架构细则。冲突时以 **代码 + schema + OpenAPI + DESIGN** 为准。  
 > 文档目录索引：[`docs/README.md`](README.md)。
 
-**一句话（as-built）**：以**本地库为管理真相**（Web 直接建项目/任务；Plane 为**可选**集成），以任务画布为过程真相，以一次性沙箱为执行真相，以调度器为唯一副作用执行者；多角色 Agent 只提案，系统落地与记账。
-
-> 下文部分章节仍保留早期「Plane 为主」叙述，仅作演进背景；**不要**再按「必须先接 Plane」实施。
+**一句话（as-built）**：以**本地库为管理真相**（Web 直接建项目/任务），以任务画布为过程真相，以一次性沙箱为执行真相，以调度器为唯一副作用执行者；多角色 Agent 只提案，系统落地与记账。
 
 ---
 
@@ -23,14 +21,14 @@
 
 - 不做完整商业级红队平台 / 报告中心
 - 不做全局一张超级画布
-- 不让任意 Worker 直接操作 Docker / 直接改 Plane / 直接建画布
+- 不让任意 Worker 直接操作 Docker / 直接建画布
 - 不一次接入所有 CLI（先 1 个）
 - 不做多 Scheduler 实例横向扩展（单实例 + 数据库约束即可，见 §16）
 
 ### 成功标准（MVP）
 
-1. 在 Plane 建一个审计项目 + 若干 Work Item，能被系统领取并跑完
-2. 每个项目有一张画布；运行过程在画布上形成「任务节点 → 发现节点 → 验证节点」链
+1. 在 Web 建一个审计项目 + 若干任务，能被系统领取并跑完
+2. 每个任务有一张画布；运行过程在画布上形成「任务节点 → 发现节点 → 验证节点」链
 3. 审计 Agent 产出结构化 finding 后，系统能派生验证任务并写回同一张画布
 4. 全程有并发限制、超时、失败可查；**调度器或沙箱崩溃后任务不悬挂**
 
@@ -40,18 +38,18 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Plane（项目管理真相）                                      │
-│  Project / Work Item / 状态 / 优先级 / 给人看的进度          │
+│  本地库 / Web（管理真相）                                   │
+│  Project / Canvas（任务） / 状态 / 优先级 / 给人看的进度      │
 └──────────────────────────┬──────────────────────────────┘
-                           │ Webhook 或 轮询
+                           │ HTTP / 事件
 ┌──────────────────────────▼──────────────────────────────┐
 │  Scheduler（调度与纪律）                                    │
-│  队列 · claim · 限流 · 状态机 · Reaper · 规则引擎 · 回写     │
+│  队列 · claim · 限流 · 状态机 · Reaper · 规则引擎            │
 └───────┬─────────────────────────────┬───────────────────┘
         │ 起沙箱/跑 Agent              │ 结构化事件
 ┌───────▼──────────┐         ┌────────▼─────────┐
 │  Runtime         │         │  Canvas Service  │
-│  OpenSandbox 沙箱 │         │  每项目一张画布   │
+│  OpenSandbox 沙箱 │         │  一任务一画布     │
 │  + Claude Code   │         │  节点/边/事件     │
 └──────────────────┘         └──────────────────┘
 ```
@@ -60,14 +58,14 @@
 
 | 层 | 职责 | 不做 |
 |----|------|------|
-| **Plane** | 多项目、任务是否该做、完成与否、负责人 | 不存攻击图细节 |
+| **本地库 / Web** | 多项目、任务是否该做、完成与否、负责人 | 不存攻击图细节 |
 | **Canvas** | 过程、发现、验证链、状态流转可视化 | 不负责起 Agent |
-| **Scheduler** | 领任务、限流、起沙箱、执行提案、判超时、回写 | 不做业务推理 |
+| **Scheduler** | 领任务、限流、起沙箱、执行提案、判超时 | 不做业务推理 |
 | **Agent** | 审计/验证等专业工作 + 调用白名单工具提案 | 不直接碰基建、不做派生决策 |
 
 原则：
 
-> **Plane = 管理真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。**
+> **本地库 = 管理真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。**
 
 ---
 
@@ -76,17 +74,17 @@
 ### 3.1 实体关系
 
 ```
-Plane.Project  1 ── 1  Canvas
-Plane.WorkItem 1 ── * Job（调度任务，可重试）
-Job            1 ── * Event
-Job            1 ── * Canvas.Node（或一组节点）
-Finding        * ── 1 Canvas.Node
-Finding        可派生  Followup Job（verify 等，由规则引擎决定）
+Project  1 ── * Canvas（= 任务）
+Canvas   1 ── * Job（调度任务，可重试）
+Job      1 ── * Event
+Job      1 ── * Canvas.Node（或一组节点）
+Finding  * ── 1 Canvas.Node
+Finding  可派生  Followup Job（verify 等，由规则引擎决定）
 ```
 
 ### 3.2 画布约定
 
-- **每项目一张画布**（创建 Plane Project 时一并创建）
+- **一任务一张画布**（创建任务时铸造）
 - **每次 Job** = 画布上的一个分组 / 子图，不是新画布
 - 节点类型固定：
 
@@ -127,7 +125,7 @@ pending → claimed → provisioning → running → succeeded
 - Job 进入 `running` 时写入 `lease_expires_at = now + LEASE_TTL`（默认 120s）
 - 调度器经 `RuntimeHost` / `SandboxRunner.isAlive` 探测存活并续 lease；进程/通道断开即停续。real 默认 OpenSandbox，不把本机 Docker inspect 当唯一真相
 - **Reaper**（调度器内置定时任务，默认每 30s 扫描）：
-  - 发现 `status=running 且 lease_expires_at < now` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed` → 回写 Plane
+  - 发现 `status=running 且 lease_expires_at < now` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed`
   - 发现 `运行时长 > timeout_sec` → 标记 `timeout` → 同上回收
   - 发现 `running` 且最近语义事件（或 `started_at`）超过 stall 窗口 → 标记 `failed`（产出停滞）。默认窗口 `DEEPSONAR_JOB_STALL_SEC=900`；`deepsonar-chrome-audit/test` 与 `deepsonar-clickhouse-audit/test` 下限 5400s、`deepsonar-chrome-fuzz` 与 `deepsonar-clickhouse-fuzz` 10800s。lease 心跳单独不能证明进度，但在飞 `tool.call`（`payload_json.runtime_activity.inflight_tool` 或最近一条 `tool.call.started` 进度）且 lease 仍有效时不判停滞
 - **超时与孤儿由调度器判定，不信任 Agent 自报**。harness 上报 `done/failed` 是善意路径，Reaper 是兜底路径
@@ -138,7 +136,7 @@ pending → claimed → provisioning → running → succeeded
 
 每个可能产生外部副作用的动作都在 `job_attempt_effects` 记录 effect kind/id、intent、输入摘要与 `effect_pending`，观察到结果后写 settlement；所有 effect id/kind、JSON、错误文本均由应用层执行低基数和大小校验。默认 replay policy 为 `never`，进程崩溃或响应不确定时只能收口 `unknown`，不能凭 Promise 或重启自动重放。只有明确声明幂等的销毁动作可使用 `safe`。
 
-provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消事务先提交 Job/Attempt 终态，随后通知当前进程的 provision 句柄。dispatcher 在调用 provider 前再次校验 Job 仍为 `provisioning`，runtime 在安装 abort listener 后立即重检 signal，避免取消落在句柄注册或监听安装窗口时丢失。资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告和 Plane，避免重复创建。
+provision 的 AbortSignal 和 runtime cancel 必须终止外部创建；取消事务先提交 Job/Attempt 终态，随后通知当前进程的 provision 句柄。dispatcher 在调用 provider 前再次校验 Job 仍为 `provisioning`，runtime 在安装 abort listener 后立即重检 signal，避免取消落在句柄注册或监听安装窗口时丢失。资源身份、效果 settlement 与 `jobs.sandbox_id` 在同一个数据库事务落账。Job 终态和 Attempt 终态也在同一事务提交。启动 reconcile 只将“Attempt 为 preparing 且没有效果记录”的 Job 重排；其余 provision 未知窗口标记 orphan，清理容器、共享卷、短期 Token、画布/报告，避免重复创建。
 
 启动 reconcile 对 running role Worker 采用批量恢复边界：生命周期层先把同次扫描命中的
 Worker 全部置为 `orphan` 并收口旧 Attempt，资源与 Token 仍立即销毁，但不在启动阶段逐个
@@ -183,7 +181,7 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 
 - 派生验证的**决策**：`emit_finding` 只能携带 `suggest_verify: true/false` 建议，是否派生由调度器规则引擎唯一决定（见 §4.3）
 - 画布节点坐标与布局
-- `create_canvas` / `docker.*` / `plane.set_state`（状态由调度器在 claim/finish 时统一写）
+- `create_canvas` / `docker.*`（状态由调度器在 claim/finish 时统一写）
 
 ---
 
@@ -191,22 +189,21 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 
 ### 4.1 项目初始化
 
-> **本地库为唯一真相，Plane 为可选集成。** Web 直接创建：`POST /projects`（plane_project_id 可空）→ `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
+> **本地库为唯一真相。** Web 直接创建：`POST /projects` → `POST /projects/{id}/tasks`（同事务建任务画布 + root + pending job）。
 
-1. 默认：在 Web「项目」页新建本地项目（或 `POST /projects`）
-2. 可选：在项目「设置 → Plane 集成」绑定 Plane Project；绑定后 Ready 状态的 issue 只需标题和自然语言描述即可被认领
-3. 创建任务：Web 表单、`POST /projects/{id}/tasks`、Plane Ready issue，或 `POST /projects/{id}/events` 外部事件；所有入口都先创建 `hub_reason` Job
+1. 在 Web「项目」页新建项目（或 `POST /projects`）
+2. 创建任务：Web 表单、`POST /projects/{id}/tasks`，或 `POST /projects/{id}/events` 外部事件；所有入口都先创建 `hub_reason` Job
 
 ### 4.2 调度循环（MVP）
 
 ```text
 loop:
-  1. 任务入队：人工任务、Plane Ready issue 或幂等外部事件 → hub_reason 决策中枢
+  1. 任务入队：人工任务或幂等外部事件 → hub_reason 决策中枢
   2. 原子 claim（DB advisory lock 串行化配额判断）→ 读取 `global_settings.effective_rules` 的全局/每项目 cap，再按“Provider → Credential → Model ID → Agent CLI”检查资源配额 → 写 jobs 表 → pg_notify('deepsonar_jobs') 事件唤醒 dispatcher；规则更新也会 notify，后续 claim 热生效
   3. Canvas：创建/更新 job 节点（running）
   4. Runtime：经 `SandboxRunner` 起沙箱（real 默认 OpenSandbox），注入任务包、静态控制 Skill 与冻结 API operation allowlist
   5. 启动冻结的 Agent CLI；文本流经 Runtime Adapter 回传，语义事件经 Job 级控制 API 回传，调度器维护 lease
-  6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
+  6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；Canvas 节点定格
   7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
 ```
 
@@ -256,7 +253,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 
 ### 4.5 人工介入与恢复
 
-- `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、对应 `job`/`intent`/`report` 画布节点同步该状态、Plane 标 Blocked 并建立 human 节点。同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时跳过后续终态，保住 wait gate；同 Attempt 分次提交仍互斥
+- `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、对应 `job`/`intent`/`report` 画布节点同步该状态并建立 human 节点。同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时跳过后续终态，保住 wait gate；同 Attempt 分次提交仍互斥
 - 人处理完后可调用 `POST /jobs/{id}/resume` 使用旧冻结快照重新入队；当前受治理身份漂移时返回 `SNAPSHOT_STALE`，改用 `POST /jobs/{id}/rerun-current` 按当前配置重冻。两者都是同 Job、新 Attempt，不跨已销毁沙箱恢复 CLI Session
 - Finding 详情可调用 `POST /findings/{id}/verify` 强制新建 Verify round，或调用 `POST /findings/{id}/evidence-jobs` 新建绑定该 Finding 的 review/test 补证 Job。两类动作继续受 follow-up 深度、验证轮次、活动任务唯一性与终态约束，不修改历史 Job；若同画布 Hub 正在等待人工，则在同一事务恢复为 `pending`
 - 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写
@@ -275,12 +272,11 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 
 | 模块 | 实现 | 说明 |
 |------|------|------|
-| **plane-adapter** | HTTP Client | 拉 Issue、改状态、评论；字段映射 |
 | **scheduler-core** | 服务 + Postgres | jobs/events、claim、状态机、限流、Reaper、规则引擎 |
 | **runtime-adapter** | provider-neutral RuntimeHost（#162） | provision/run/stop/delete 与 process/file/PTY；real 默认 OpenSandbox；CLI adapter 不引用 SDK 类型 |
 | **canvas-service** | API + React Flow 渲染 | 节点边 CRUD；auto-layout；只读 WS 推送 |
 | **agent-harness** | 沙箱内包装脚本 | 读任务 JSON、调 CLI、把工具调用转成 Event API、心跳 |
-| **web-ui** | React + React Flow (@xyflow/react, MIT) | 打开某项目画布；链到 Plane |
+| **web-ui** | React + React Flow (@xyflow/react, MIT) | 打开某项目画布 |
 
 ### 技术栈（已定）
 
@@ -289,9 +285,7 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 - 队列：第一期 DB 轮询（`SELECT ... FOR UPDATE SKIP LOCKED`）；量大再 Redis
 - 画布：**React Flow（@xyflow/react，MIT）+ Web 端 elkjs 可见投影布局**；大投影固定列兜底，服务端 `x/y` 仅作 placement/exchange hint。不选 tldraw（生产商用需付费授权）与 Excalidraw（canvas2d 无法嵌入 React 组件节点），理由见 §16
 - 运行时：**provider-neutral RuntimeHost（#162）**——Scheduler 只通过内部契约驱动沙箱生命周期、流式进程、文件与 PTY，重启后经 `ensureHost` 按持久 resource ID 重连。real 默认由 OpenSandbox 实现这些契约，绑定 `@alibaba-group/opensandbox@0.1.11`，升级只接受显式 pin。Phase 3 部署 overlay 为 Kubernetes BatchSandbox + Kata `kata-qemu`（`deploy/opensandbox/config.k8s.toml`），namespace 另有 ResourceQuota/LimitRange，kustomization 装配基础设施清单与 `gateway-service.yaml`（`deepsonar-gateway-proxy:3100`）；对 K8s server 须设 `OPEN_SANDBOX_KUBERNETES=1`，`OpenSandboxRunner` 省略 Docker 专有 ResourceName=`pids` 但仍要求冻结 `pidsLimit`；`pnpm ci:smoke:opensandbox-k8s` 真机 `kata=true leftovers=0`（官方 base，`RuntimeClass=kata-qemu`，隔离/逃逸/env/hard limits）；`pnpm ci:smoke:opensandbox-gvisor` 真机证明 gVisor+egress `compatible=false natUnsupported=true`；集群若存在 `sandboxes.agents.x-k8s.io` 则 fail closed，不按文档推断可用。Agent CLI 当前三类可换：**claude-code（默认）/ pi / dsh**（#318；leftover `codex` / `open-code` 只读）；CLI、model 与非敏感 env_vars 只由 RoleConfig / Agents UI/API 管理，Job 创建时冻结快照，凭据按服务端 Credential 注入。`AGENT_MODE` 仍仅表示 fake/real 基础设施运行模式。语义事件只经 Job 级 Platform API 回传（`restricted` 仅放行 `deepsonar-gateway-proxy`，由路径过滤 sidecar 转发 `/gateway` 与 `/control/v1`）。OpenSandbox lifecycle / execd / API key 只留在 Scheduler 适配层。无厂商 LLM 凭据的五类 adapter 协议（初始 input、增量 steer/follow-up、stdin 关闭）、Job/Attempt 重启对账（新 runner `list`/`ensureHost`/`isAlive` 后销毁 leftover=0），以及 OpenSandbox 内 `restricted` 经调度器 `preparePlatformCapability` 在 provision 注入短期 token、worker 只读沙箱 env 提交 `emit_fact`/`emit_finding`/`mark_job_done`（无效 token 401，`provisionedEnv=true`）已在官方 base 真机验证；`dispatchOnce` 已证明 claim/provision 后 leftover=0；生产默认叠加 OpenSandbox overlay。`pnpm ci:smoke:opensandbox-prod` 渲染 prod+real+overlay 且不启动栈；`pnpm ci:smoke:opensandbox-images` 对 registry 中九个官方 key 做 contract 重验与五类 CLI 探测（本机 leftover=0）。`isAlive` 不把单次 execd 探测当唯一真相。假客户端上五类 CLI 对瞬态 `503` 均按各自契约同会话恢复，永久 `401` 不恢复；DSH 在 `initialize` 前冻结 `session-${context_id}`。SDK create 可透传 `platform={os,arch}`；本机 Docker 真机已覆盖 `arch=amd64 leftovers=0` 与官方 arm64 child + qemu `arch=arm64 leftovers=0`。Dispatcher 按 provider 记 provision 时延。厂商 E2E 入口 `pnpm ci:smoke:opensandbox-cli-control` 把长期 Provider Key 留在 Scheduler 凭据库，经 `/gateway` 转发，不注入沙箱。`pnpm ci:smoke:opensandbox-k8s` 在显式开启时要求工作负载实际使用 `RuntimeClass=kata-qemu` 且 leftover=0，并证明 Kata + egress sidecar 放行 `deepsonar-gateway-proxy`、拦住同命名空间兄弟 Service；restricted/egress 的 Kubernetes 路径走 `bindGatewayProxyToKubernetesService`，把 Scheduler 持有的 Gateway Service ClusterIP 写入沙箱 `/etc/hosts`（缺 Service / headless=`None` fail closed），不再 skip 或调用 Docker ExtraHosts；缺集群 skip，静态 overlay 不能代替。生产 overlay 发布 `127.0.0.1:18081` 并 health-gate scheduler；`pnpm ci:smoke:opensandbox-prod-up` 独占拉起 overlay server，打 `/health` 并鉴权 `list()`；完整 provision 仍由 Phase 2 server 证明。`pnpm ci:smoke:opensandbox-reconcile` 用 `reconcileOnBoot` 证明 `effect_pending`/running 崩溃 orphan 且不自动重放；K8s/Kata 真机同样 `requeued=1 orphaned=2 leftover=0 replay=0`。`pnpm ci:smoke:opensandbox-reaper` K8s/Kata 真机 `timeout=1 orphan=1 live=1 leftover=0 tokens=revoked pty=closed assets=0`（`KubernetesSharedAssetsVolumeManager` PVC）。`OPEN_SANDBOX_KUBERNETES=1` 时省略 ResourceName=`pids`，共享资产走 labeled PVC，Gateway bind 走 ClusterIP。镜像契约与共享资产原语在 `runtime-shared.ts`，OpenSandbox adapter 不再 import `agentbox.ts`。Agentbox 实现与 `agentbox-sdk` 已删除；real 只加载 OpenSandbox。Dispatcher 本机 `docker inspect` 仅限 `local-docker`；OpenSandbox 在 provision 后重验冻结 digest/contract。`SANDBOX_PROVIDER=opensandbox` 时 readiness / claim 探测 OpenSandbox server（鉴权 `list()`），缺 key 或不可达 fail closed。`pnpm ci:smoke:opensandbox-prod-stack` 用进程内 Scheduler 证明 `/readiness` 含 `OPENSANDBOX_SERVER_READY`，且 `/health.opensandbox.level=ok`。`GET /health` 在 OpenSandbox 模式下把鉴权探测写入 `opensandbox`，server 不可达则 `ready=false`。核心 CI 渲染 prod+real+overlay compose merge。这些不能代替五类 CLI 厂商模型完整 E2E。Agentbox 已删除。
-- Plane：自托管 Community + API Token
-
-暂不引入 Multica/ClawTeam，避免与 Plane 双看板；接口预留「执行器可替换」。
+暂不引入 Multica/ClawTeam；接口预留「执行器可替换」。
 
 ---
 
@@ -299,22 +293,20 @@ Job”：同 Job ID 保留图与审计身份，但使用新 Attempt 和全新沙
 
 ```text
 projects
-  id, plane_project_id, canvas_id, name, config_json, created_at
-  -- canvas_id 为历史遗留（旧项目级画布），新项目画布按任务铸造（见 canvases）
+  id, name, config_json, created_at
+  -- 画布按任务铸造（见 canvases），项目不再持有画布身份列
 
-canvases                              -- 0002 起：一任务一画布
-  id, project_id, plane_issue_id, title, target_json, created_at
-  -- 唯一约束: (plane_issue_id) WHERE plane_issue_id IS NOT NULL
-  -- 同一 issue 重试复用同一画布；target_json 冻结任务内容、网络/Finding 协议及 kind
+canvases                              -- 一任务一画布
+  id, project_id, title, target_json, created_at
+  -- target_json 冻结任务内容、网络/Finding 协议及 kind
   -- compose 另冻结 1–8 条显式选择的 seed_findings 摘要；不增加 tasks/relations 表
 
 jobs
-  id, project_id, canvas_id, plane_issue_id, parent_job_id, finding_id,
+  id, project_id, canvas_id, parent_job_id, finding_id,
   type, status, priority, payload_json, sandbox_id,
   lease_expires_at, heartbeat_at, timeout_sec,
   followup_depth, transcript_uri,
   error, started_at, finished_at, created_at
-  -- 唯一约束: (plane_issue_id) WHERE status IN ('claimed','provisioning','running')
   -- canvas_id: 任务画布；verify job 继承父审计 job 的画布
 
 events
@@ -413,7 +405,6 @@ Agent 输入输出是无界数据（单次运行原始事件流可达数十 MB�
 **只给确定会发生的查询建索引：**
 
 ```sql
-jobs     (plane_issue_id) WHERE status IN ('claimed','provisioning','running')  -- 唯一，防双跑
 findings (project_id, fingerprint)                                               -- 唯一，去重
 events   (job_id, event_id)                                                      -- 唯一，幂等
 jobs     (project_id, status, created_at DESC)                                   -- 列表
@@ -460,17 +451,14 @@ Job 事件仍必须经过本摄入硬门。
 
 **管理**
 
-- `POST /projects`  新建本地项目（plane_project_id 可空；不再预建项目级画布）
+- `POST /projects`  新建项目（不再预建项目级画布）
 - `GET/PATCH /projects/{id}`、`POST /projects/{id}/archive`  项目详情/改名/归档（归档=软删除，历史保留）
 - `POST /projects/{id}/tasks`  创建任务（同事务建画布 + root + pending job）；`kind=standard` 禁止种子，`kind=compose` 必须提交同项目 1–8 个当前可代入（未否定处置，含未确认）的 `seed_finding_ids`
 - `POST /tasks/{canvas_id}/pause` / `start`  幂等任务执行门禁（`jobs:control`）；返回 `execution_state`、收尾 `active_count`、`pending_count` 与 `changed`
 - `POST /tasks/{canvas_id}/retry`  重试（新建 job 复用原画布）；compose 在 wipe 前重验冻结种子，stale/跨项目/已处置时返回 `COMPOSE_SEEDS_STALE` 且保留现有运行数据；当前 Hub 配置无法解析时返回 `409 SNAPSHOT_STALE` 且不清空
 - `PATCH /jobs/{id}/priority`（仅 pending 可改）
-- `PUT/DELETE /projects/{id}/integrations/plane`、`POST .../plane/sync`  Plane 绑定/解绑/手动补跑
-- `POST /projects/sync`  绑定 Plane 项目（兼容入口；画布随任务认领铸造）
 - `GET  /projects/{id}/canvases`  任务画布列表（一任务一画布，带 rollup、`execution_state`、收尾/待领取计数及最近一次 job 状态/优先级）
 - `GET  /canvases/{id}`  单任务画布节点/边；Canvas 元数据带同一执行控制投影
-- `GET  /projects/{id}/canvas`（deprecated，仅兼容历史项目级画布）
 - `GET /findings`  Finding 列表；支持 `severity`、`profile`、`category`、`verify_status`、`disposition`、`canvas_id` 过滤；未分页窗口 500 条
 - `GET /projects/{id}/findings/summary`  项目风险聚合（严重度 / verify_status / disposition / 来源任务），不受列表窗口截断
 - `PATCH /findings/{id}/disposition`  人工处置；`human_reproducing` 为复现中；`confirmed_vuln` 仍要求 `verify_status=confirmed`
@@ -478,12 +466,6 @@ Job 事件仍必须经过本摄入硬门。
 - `POST /jobs/{id}/cancel`
 - `POST /jobs/{id}/resume`  使用旧冻结快照重新执行；身份漂移时 `409 SNAPSHOT_STALE`
 - `POST /jobs/{id}/rerun-current`  按当前配置完整重冻并重新执行，保留画布
-- `POST /reconcile/run`（或定时）以 jobs 表为准修正 Plane 状态
-
-**Plane → 系统**
-
-- 轮询：`GET ready work items`（适配器实现）
-- 或 Webhook：`issue.updated` → 入队（二期）
 
 ---
 
@@ -708,7 +690,6 @@ deepsonar/
     web/                # React 工作台与画布
     image-admission/    # 第三方镜像准入 Worker
   packages/
-    plane-client/       # 可选 Plane 集成
     runtime-sandbox/    # SandboxRunner / RuntimeHost（OpenSandbox）
     shared-types/       # zod 契约单源
   agent-harness/        # 镜像定义、指纹、冒烟
@@ -724,10 +705,6 @@ deepsonar/
 ## 12. 配置项清单
 
 ```text
-PLANE_BASE_URL=
-PLANE_API_TOKEN=
-PLANE_READY_STATE=Ready
-
 MAX_GLOBAL_JOBS=20             # global_settings 未配置时的启动默认
 MAX_JOBS_PER_PROJECT=5         # global_settings 未配置时的启动默认
 PROVISION_CONCURRENCY=2        # global_settings.maxConcurrentProvisioning 缺失时的 fallback；vfs 主机在 DB 中设为 1
@@ -804,10 +781,8 @@ CANVAS_LAYOUT=auto
 | 大字段读放大 | 列表不含 payload、blob 单独端点、WS 只推引用（§6.4） |
 | 备份体积失控 | 库内无原始流，pg_dump 保持 MB 级；冷存储文件级快照 |
 | 敏感信息二次泄露（源码/密钥进 transcript 与 finding） | at-rest 加密 + 鉴权访问 + 展示前脱敏（§9.2） |
-| 与 Plane 状态不一致 | 以 jobs 表为准；定时 reconcile |
 | 画布节点爆炸 | 按 job 分组折叠；finding 按 fingerprint 合并展示 |
 | CLI 输出不稳定 | Harness 强约束 JSON schema；失败可重试 1 次 |
-| 双看板诱惑 | 明确 Plane 给人、不引入第二套 PM 直到有明确痛点 |
 
 ---
 
@@ -816,10 +791,9 @@ CANVAS_LAYOUT=auto
 1. 建仓库 + `docker-compose`（Postgres）
 2. 按 §6 建表（**一次把 event_id / fingerprint / lease 字段建对**）
 3. 实现 `jobs` 状态机 + 手动 `POST /jobs` + Reaper
-4. Plane 适配器：list ready / update state
-5. runtime 适配层：OpenSandbox SDK（`@alibaba-group/opensandbox`）最小封装
-6. 假 Agent 脚本打通 Event → DB（含幂等重试演练）
-7. 再挂真 CLI 与画布 UI
+4. runtime 适配层：OpenSandbox SDK（`@alibaba-group/opensandbox`）最小封装
+5. 假 Agent 脚本打通 Event → DB（含幂等重试演练）
+6. 再挂真 CLI 与画布 UI
 
 ---
 
@@ -827,8 +801,8 @@ CANVAS_LAYOUT=auto
 
 | 决策 | 选择 |
 |------|------|
-| 项目管理 | **Plane** |
-| 过程数据 | **每项目一张无限画布**（nodes/edges 表为真相） |
+| 项目管理 | **本地库 / Web** |
+| 过程数据 | **一任务一画布**（nodes/edges 表为真相） |
 | 执行隔离 | **SandboxRunner 沙箱**（real 默认 OpenSandbox） |
 | 调度 | **自研薄调度 + 状态机 + Lease/Reaper**（单实例） |
 | Agent 智能 | **提案式工具**；派生决策收归规则引擎 |
@@ -836,7 +810,7 @@ CANVAS_LAYOUT=auto
 | 安全 | **被审计代码视为不可信输入**，沙箱默认断网 |
 | MVP 范围 | 单 CLI、单审计类型、自动高危验证、画布可展示链条 |
 
-按 **Phase 0 → 3** 做，就有一条可演示的闭环：**Plane 下发 → 沙箱审计 → 画布记过程 → 自动验证 → 状态回写**，且崩溃不悬挂、重试不重复、注入难失控。
+按 **Phase 0 → 3** 做，就有一条可演示的闭环：**Web 下发 → 沙箱审计 → 画布记过程 → 自动验证**，且崩溃不悬挂、重试不重复、注入难失控。
 
 ---
 
@@ -850,7 +824,7 @@ CANVAS_LAYOUT=auto
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
 - **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果（含缓存读/写）；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算。`GET /dashboard/usage` 按日/周/月或自定义时间把账本聚到全局/项目/任务看板，不把 Session 归档 usage 与 Gateway 行对账成同一数字
 - **不评估 Claude Agent SDK**：只用 CLI 路线（经 Runtime Adapter 的 claude-code provider）
-- **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper、无 Plane 同步），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
+- **不引入低代码 LLM 编排平台（Flowise / Dify / n8n / Langflow）**：它们是完整产品而非可嵌入组件，无法替代沙箱调度（不管容器生命周期、无 lease/reaper），且会与 Claude Code CLI 的 agentic loop 重复、制造第二控制面；Flowise 另有默认无认证的安全记录问题（RAXE-2026-033）与被收购后的路线图不确定性。其画布 UI 底层即 React Flow，反向印证画布选型
 - **画布引擎选 React Flow 而非 tldraw/Excalidraw**：画布本质是结构化节点-边图而非白板；React Flow（MIT）与 nodes/edges 表 1:1 映射、节点即 React 组件（finding 卡片可交互）；tldraw 生产商用有授权费用、Excalidraw 无法嵌入 React 节点。若二期需要手绘标注/多人白板协同，再单独评估 tldraw
 - **全 TypeScript**：配合 React Flow 生态一套类型打通；若未来 CLI/沙箱层需要 Python 工具，通过容器内独立进程解决，不引入第二后端语言
 - **迁移工具落地为手写 SQL + 轻量 runner（约 30 行）而非 Drizzle Kit**：SKIP LOCKED / 分区 / 部分索引等裸 SQL 友好、少一层 ORM 抽象；查询层用 postgres.js。纪律不变（顺序编号、启动自动 up、禁止手改库）

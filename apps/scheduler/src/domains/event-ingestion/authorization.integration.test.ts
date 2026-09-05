@@ -39,8 +39,8 @@ if (!testDatabaseUrl) {
     };
 
     await sql`
-      INSERT INTO projects (id, canvas_id, name, config_json)
-      VALUES (${projectId}, ${canvasId}, 'event-authority', ${sql.json({ rules: { hubEnabled: false } })})`;
+      INSERT INTO projects (id, name, config_json)
+      VALUES (${projectId}, 'event-authority', ${sql.json({ rules: { hubEnabled: false } })})`;
     await sql`
       INSERT INTO canvases (id, project_id, title, target_json)
       VALUES (

@@ -23,6 +23,7 @@ test("project settings only accepts project-owned tabs and falls back safely", (
   assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "roles"), "roles");
   assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "rules"), "rules");
   assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "credentials"), "roles");
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "unknown-tab"), "roles");
   assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "missing"), "roles");
 });
 

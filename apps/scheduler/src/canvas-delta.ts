@@ -111,7 +111,6 @@ export function projectCanvasMeta(value: unknown): Record<string, unknown> | nul
     id: canvas.id,
     title: typeof canvas.title === "string" ? canvas.title : "",
     project_id: typeof canvas.project_id === "string" ? canvas.project_id : null,
-    plane_issue_id: typeof canvas.plane_issue_id === "string" ? canvas.plane_issue_id : null,
     status: typeof canvas.status === "string" ? canvas.status : "active",
     archived_at: typeof canvas.archived_at === "string" ? canvas.archived_at : null,
   };

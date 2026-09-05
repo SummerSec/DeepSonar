@@ -30,9 +30,6 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.1104.0
         version: 3.1104.0
-      '@deepsonar/plane-client':
-        specifier: workspace:*
-        version: link:../../packages/plane-client
       '@deepsonar/runtime-sandbox':
         specifier: workspace:*
         version: link:../../packages/runtime-sandbox
@@ -152,19 +149,6 @@ importers:
       vite:
         specifier: ^6.4.3
         version: 6.4.3(@types/node@26.1.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
-
-  packages/plane-client:
-    dependencies:
-      '@deepsonar/shared-types':
-        specifier: workspace:*
-        version: link:../shared-types
-    devDependencies:
-      '@types/node':
-        specifier: ^26.1.2
-        version: 26.1.2
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
 
   packages/runtime-sandbox:
     dependencies:

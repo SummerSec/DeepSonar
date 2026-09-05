@@ -50,8 +50,8 @@ if (!testDatabaseUrl) {
       const canvasId = randomUUID();
       const succeededJobId = randomUUID();
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, 'Hub snapshot stale', ${sql.json({})})`;
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'Hub snapshot stale', ${sql.json({})})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${canvasId}, ${projectId}, 'Hub snapshot stale', ${sql.json({

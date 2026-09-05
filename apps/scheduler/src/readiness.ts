@@ -68,7 +68,7 @@ export interface ReadinessCredentialRow {
   purpose: string;
   credential_id: string | null;
   name: string | null;
-  kind: "llm_provider" | "plane" | "git" | "oci_registry" | null;
+  kind: "llm_provider" | "git" | "oci_registry" | null;
   provider: string | null;
   project_id: string | null;
   status: "active" | "disabled" | "rotation_required" | null;

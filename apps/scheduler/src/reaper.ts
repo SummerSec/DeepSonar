@@ -8,7 +8,6 @@ import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
-import { planeWriteback } from "./plane-sync.js";
 import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./resource-cleanup.js";
 
 /**
@@ -91,7 +90,6 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
       }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
     }
 
-    await planeWriteback(jobId).catch(() => {});
   }
 
   return { timeouts: timedOut.length, orphans: orphaned.length, provisionStuck: provisionStuck.length, stalled: stalled.length };

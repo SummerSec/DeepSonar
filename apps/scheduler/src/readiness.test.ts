@@ -594,7 +594,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, provider: "unknown-provider" } : credential) }),
     baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, provider: "openai" } : credential) }),
     baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, status: "disabled" } : credential) }),
-    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, kind: "plane" } : credential) }),
+    baseInput({ credentials: baseInput().credentials?.map((credential) => credential.role_config_id === workerConfigId ? { ...credential, kind: "git" } : credential) }),
     baseInput({ audits: baseInput().audits?.map((audit) => audit.action === "credential.test" ? { ...audit, result: "error" } : audit) }),
     baseInput({ audits: baseInput().audits?.map((audit) => audit.action === "credential.models_discover" ? { ...audit, result: "error" } : audit) }),
     baseInput({ audits: baseInput().audits?.filter((audit) => audit.action !== "credential.models_discover") }),

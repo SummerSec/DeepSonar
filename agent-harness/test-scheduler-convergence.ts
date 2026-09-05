@@ -20,7 +20,6 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const tag = randomUUID().slice(0, 8);
-const projectCanvasId = randomUUID();
 const canvasIds: string[] = [];
 let projectId = "";
 
@@ -202,8 +201,8 @@ async function cleanup(): Promise<void> {
 try {
   await migrate();
   const [project] = await sql`
-    INSERT INTO projects (canvas_id, name, config_json)
-    VALUES (${projectCanvasId}, ${`scheduler-convergence-${tag}`}, ${sql.json({})})
+    INSERT INTO projects (name, config_json)
+    VALUES (${`scheduler-convergence-${tag}`}, ${sql.json({})})
     RETURNING id`;
   projectId = project.id as string;
 

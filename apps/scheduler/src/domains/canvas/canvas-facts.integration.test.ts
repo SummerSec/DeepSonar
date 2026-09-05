@@ -51,8 +51,8 @@ if (!testDatabaseUrl) {
       const canvasId = randomUUID();
       const otherCanvasId = randomUUID();
       await sql`
-        INSERT INTO projects (id, canvas_id, name, config_json)
-        VALUES (${projectId}, ${canvasId}, 'Fact API integration', ${sql.json({
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'Fact API integration', ${sql.json({
           rules: {
             hubEnabled: false,
             minVerifySeverity: "high",

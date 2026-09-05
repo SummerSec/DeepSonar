@@ -122,9 +122,6 @@ export interface DashboardUsage {
 
 export interface Project {
   id: string;
-  /** 可空：NULL = 纯本地项目（Plane 为可选绑定） */
-  plane_project_id: string | null;
-  canvas_id: string;
   name: string;
   description: string;
   status: "active" | "archived";
@@ -409,7 +406,6 @@ export type CanvasLifecycle = CanvasLifecycleRollup & {
 export type CanvasSummary = CanvasLifecycleRollup & {
   id: string;
   title: string;
-  plane_issue_id: string | null;
   target_json: Record<string, unknown>;
   created_at: string;
   status: "active" | "archived";
@@ -555,7 +551,6 @@ export interface JobSummary {
   id: string;
   project_id: string;
   canvas_id: string | null;
-  plane_issue_id: string | null;
   type: string;
   status: string;
   priority: number;
@@ -1041,7 +1036,7 @@ export interface ApiTokenCreated extends ApiToken {
 export interface ProviderCredential {
   id: string;
   name: string;
-  kind: "llm_provider" | "plane" | "git" | "oci_registry";
+  kind: "llm_provider" | "git" | "oci_registry";
   provider: string;
   project_id: string | null;
   key_version: number;
@@ -1837,7 +1832,7 @@ export const api = {
     canvas_id: query.canvas_id,
   })}`),
   projects: () => get<Project[]>("/projects"),
-  createProject: (p: { name: string; description?: string; plane_project_id?: string | null; image_strategy?: ProjectImageStrategy }) =>
+  createProject: (p: { name: string; description?: string; image_strategy?: ProjectImageStrategy }) =>
     send<Project>("POST", "/projects", p),
   updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
     send<Project>("PATCH", `/projects/${id}`, p),
@@ -1927,18 +1922,6 @@ export const api = {
     ),
   setJobPriority: (jobId: string, priority: number) =>
     send<{ id: string; status: string; priority: number }>("PATCH", `/jobs/${jobId}/priority`, { priority }),
-  /** Plane 集成（按项目绑定；解绑不删已导入任务） */
-  bindPlane: (projectId: string, planeProjectId: string) =>
-    send<Project>("PUT", `/projects/${projectId}/integrations/plane`, { plane_project_id: planeProjectId }),
-  unbindPlane: (projectId: string) =>
-    send<Project>("DELETE", `/projects/${projectId}/integrations/plane`),
-  syncPlane: (projectId: string) =>
-    send<{ ok: boolean; created: number }>("POST", `/projects/${projectId}/integrations/plane/sync`),
-  /** Plane 连接信息（任务页下发指引；不含 token） */
-  planeInfo: () =>
-    get<{ enabled: boolean; web_url: string; workspace_slug: string; ready_state: string }>(
-      "/plane-info",
-    ),
   canvases: (projectId: string, opts?: { status?: "active" | "archived" | "all" }) =>
     get<CanvasSummary[]>(
       `/projects/${projectId}/canvases${opts?.status ? `?status=${opts.status}` : ""}`,

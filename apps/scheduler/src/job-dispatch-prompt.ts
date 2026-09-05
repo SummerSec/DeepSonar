@@ -19,7 +19,6 @@ function text(value: unknown): string {
 
 const TRIGGER_LABEL: Record<string, string> = {
   user_task: "首次任务决策",
-  plane_issue: "Plane 议题",
   external_event: "外部事件",
   graph_progress: "画布图进度",
   canvas_idle: "画布空闲唤醒",

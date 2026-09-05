@@ -114,7 +114,7 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
       ...new Set([...(env?.env_keys ?? []), ...(env?.redacted_keys ?? [])]),
     ],
     nonportable_paths: [],
-    disabled_integrations: ["plane"],
+    disabled_integrations: [],
     estimated_database_bytes: buf.length,
     estimated_blob_bytes: 0,
   };
@@ -220,20 +220,15 @@ async function createNewProject(
 
   const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/rules.json");
   const enabledFile = readJson<{ enabled?: string[] | null }>(pack.files, "data/roles-enabled.json");
-  const integrations = readJson<{ plane?: unknown }>(pack.files, "data/integrations.json");
-
   const config_json: Record<string, unknown> = {
     ...(srcProject.config_json ?? {}),
   };
+  delete config_json.plane;
   if (modules.includes("rules") && rulesFile?.rules) {
     config_json.rules = rulesFile.rules;
   }
   if (modules.includes("roles") && enabledFile) {
     config_json.roles = { enabled: enabledFile.enabled ?? null };
-  }
-  // 禁用外部集成
-  if (config_json.plane || integrations?.plane) {
-    config_json.plane = { disabled: true, rebind_required: true };
   }
 
   const id_map: {
@@ -257,8 +252,6 @@ async function createNewProject(
   return await sql.begin(async (tx) => {
     const [project] = await tx`
       INSERT INTO projects ${tx({
-        plane_project_id: null,
-        canvas_id: randomUUID(),
         name,
         description: (srcProject.description ?? "") + "\n\n[imported from deepsonarpack]",
         config_json: config_json as never,
@@ -478,7 +471,6 @@ async function importTasks(
       INSERT INTO canvases ${tx({
         id: newId,
         project_id: projectId,
-        plane_issue_id: null,
         title: (c.title as string) ?? "imported task",
         target_json: ((c.target_json as object) ?? {}) as never,
         trigger_source: "import",
@@ -512,7 +504,6 @@ async function importTasks(
         id: newId,
         project_id: projectId,
         canvas_id: canvasId,
-        plane_issue_id: null,
         parent_job_id: null,
         finding_id: null,
         type: (j.type as string) ?? "audit",

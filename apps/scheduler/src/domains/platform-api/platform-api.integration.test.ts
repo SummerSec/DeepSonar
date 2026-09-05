@@ -58,7 +58,7 @@ if (!testDatabaseUrl) {
       closeApp = () => app.close();
 
       const snapshot = { name: "audit", platform_tools: operations };
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'Platform API 集成测试')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'Platform API 集成测试')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'Platform API 集成测试')`;
       await sql`
         INSERT INTO jobs (

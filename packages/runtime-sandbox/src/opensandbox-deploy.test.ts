@@ -87,9 +87,9 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(pkg, /ci:smoke:opensandbox-prod-stack/);
   assert.match(pkg, /ci:smoke:opensandbox-prod-compose": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-prod-official": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-reconcile": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-reaper": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar\/plane-client --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-reconcile": "pnpm --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-reaper": "pnpm --filter @deepsonar\/runtime-sandbox build/);
+  assert.match(pkg, /ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-api": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-cli-control": "pnpm --filter @deepsonar\/runtime-sandbox build/);
   assert.match(pkg, /ci:smoke:opensandbox-gvisor": "pnpm --filter @deepsonar\/runtime-sandbox build/);

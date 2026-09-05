@@ -2,7 +2,6 @@ import { isManagedRuntimeResource } from "@deepsonar/runtime-sandbox";
 import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
-import { planeWriteback } from "./plane-sync.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -72,7 +71,7 @@ export async function reconcileOnBoot(): Promise<void> {
   }
 
   // provision 外部效果未知的 Job 已由生命周期事务标记 orphan；执行与 running
-  // orphan 相同的资源、Token、画布、报告和 Plane 收口，禁止它们静默留在半终态。
+  // orphan 相同的资源、Token、画布、报告收口，禁止它们静默留在半终态。
   for (const job of provisionRecovery.orphaned) {
     const jobId = String(job.id);
     const cid = (job.sandbox_id as string | null) ?? containerByJob.get(jobId);
@@ -93,7 +92,7 @@ export async function reconcileOnBoot(): Promise<void> {
      WHERE delivery_status = 'planned'
        AND (deadline_at IS NULL OR deadline_at < now())`;
 
-  // 3. running 中断 → orphan + 销毁残留容器 + 画布节点同步 + Plane 回写
+  // 3. running 中断 → orphan + 销毁残留容器 + 画布节点同步
   const orphaned = await lifecycle.reconcileRunning();
   for (const j of orphaned) {
     const jobId = j.id as string;
@@ -191,5 +190,4 @@ async function closeOrphanJob(
       await advanceCanvasAfterTerminalJob(tx as unknown as typeof sql, job, "orphan");
     }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));
   }
-  await planeWriteback(jobId).catch(() => {});
 }

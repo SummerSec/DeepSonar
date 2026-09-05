@@ -11,7 +11,6 @@ import { registerDashboardRoutes } from "./domains/dashboard/routes.js";
 import { registerCredentialRoutes } from "./domains/credential/routes.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
 import { registerJobControlRoutes } from "./domains/job-control/routes.js";
-import { registerPlaneRoutes } from "./domains/plane/routes.js";
 import { registerProjectTaskRoutes } from "./domains/project-task/routes.js";
 import { registerReportRoutes } from "./domains/report-convergence/routes.js";
 import { registerRoleConfigRoutes } from "./domains/role-config/routes.js";
@@ -34,7 +33,7 @@ export function registerRoutes(app: FastifyInstance) {
     if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
     return reply.send(error);
   });
-  // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 与 /webhooks/plane 豁免
+  // 平台 API Token 鉴权（SEC-01）：DEEPSONAR_AUTH_REQUIRED=true 时生效；/health 豁免
   app.addHook("onRequest", authHook);
   // Central ownership guard for project-scoped tokens. Resource UUIDs are not
   // authorization: resolve their project_id server-side before any handler
@@ -168,8 +167,6 @@ export function registerRoutes(app: FastifyInstance) {
   registerCanvasRoutes(app);
 
   registerJobControlRoutes(app);
-
-  registerPlaneRoutes(app);
 
   registerApiTokenRoutes(app);
 

@@ -82,8 +82,8 @@ if (!testDatabaseUrl) {
       closeApp = () => app.close();
 
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${ownProjectId}, ${ownCanvasId}, 'report own'), (${otherProjectId}, ${otherCanvasId}, 'report other')`;
+        INSERT INTO projects (id, name)
+        VALUES (${ownProjectId}, 'report own'), (${otherProjectId}, 'report other')`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${ownCanvasId}, ${ownProjectId}, 'Own report task', ${sql.json({})}),

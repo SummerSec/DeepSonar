@@ -47,7 +47,7 @@ if (!testDatabaseUrl) {
       const canvasId = randomUUID();
       const sourceJobId = randomUUID();
       const findingId = randomUUID();
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'finding report project')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'finding report project')`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'finding report task', ${sql.json({ network_policy: { allow_egress: false } })})`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)

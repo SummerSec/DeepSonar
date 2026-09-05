@@ -11,7 +11,7 @@ import { resolveSessionToken } from "./users.js";
  * - Token 格式：deepsonar_<env>_<prefix>_<secret>；库中只存 sha256 哈希 + 前缀，明文仅创建/轮换时返回一次
  * - DEEPSONAR_AUTH_REQUIRED=true 时除豁免路由外全部要求 Bearer；DEEPSONAR_ADMIN_TOKEN 为引导管理员（不落库）
  * - scope 按路由表判定；admin 隐式拥有全部 scope；token 可限定单项目
- * - Provider Credential（LLM/Plane/Git 密钥）与 API Token 是两套东西，此处只管平台访问
+ * - Provider Credential（LLM/Git 密钥）与 API Token 是两套东西，此处只管平台访问
  */
 
 export const ALL_SCOPES = [
@@ -32,8 +32,6 @@ export const ALL_SCOPES = [
   "images:read",
   "images:manage",
   "images:approve",
-  "integrations:read",
-  "integrations:write",
   "tokens:manage",
   "exports:read",
   "exports:write",
@@ -78,20 +76,15 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /dashboard/usage": "projects:read",
   "GET /projects": "projects:read",
   "POST /projects": "projects:write",
-  "POST /projects/sync": "integrations:write",
   "GET /projects/:id": "projects:read",
   "PATCH /projects/:id": "projects:write",
   "POST /projects/:id/archive": "projects:write",
   "POST /projects/:id/tasks": "tasks:write",
   "POST /projects/:id/events": "tasks:write",
   "GET /projects/:id/canvases": "tasks:read",
-  "GET /projects/:id/canvas": "tasks:read",
   "GET /projects/:id/settings": "agents:read",
   "PATCH /projects/:id/settings": "agents:write",
   "GET /projects/:id/roles": "agents:read",
-  "PUT /projects/:id/integrations/plane": "integrations:write",
-  "DELETE /projects/:id/integrations/plane": "integrations:write",
-  "POST /projects/:id/integrations/plane/sync": "integrations:write",
   "GET /canvases/:id": "tasks:read",
   "GET /canvases/:id/broadcasts": "tasks:read",
   "GET /canvases/:id/messages": "tasks:read",
@@ -197,7 +190,6 @@ const ROUTE_SCOPES: Record<string, string> = {
   "PATCH /global-settings": "agents:write",
   "GET /readiness": "agents:read",
   "GET /projects/:id/readiness": "agents:read",
-  "GET /plane-info": "integrations:read",
   "GET /tokens": "tokens:manage",
   "POST /tokens": "tokens:manage",
   "POST /tokens/:id/revoke": "tokens:manage",
@@ -244,13 +236,12 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /imports/:id": "imports:write",
 };
 
-/** 精确豁免路径（健康检查 + 登录引导 + schema 文档 + Plane webhook） */
+/** 精确豁免路径（健康检查 + 登录引导 + schema 文档） */
 const EXEMPT = new Set([
   "/health",
   "/openapi.json",
   "/schema",
   "/schema.md",
-  "/webhooks/plane",
   "/auth/status",
   "/auth/login",
   "/auth/bootstrap",

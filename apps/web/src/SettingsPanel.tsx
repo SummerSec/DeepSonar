@@ -44,10 +44,10 @@ import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "rules" | "roles" | "sources" | "plane" | "tokens" | "credentials" | "transfer" | "users" | "account" | "assets";
+type Tab = "rules" | "roles" | "sources" | "tokens" | "credentials" | "transfer" | "users" | "account" | "assets";
 export type GlobalSettingsSection = "agents" | "modules" | "access" | "credentials" | "platform";
 
-const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "assets", "plane"];
+const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "assets"];
 const GLOBAL_TAB_KEYS: readonly Tab[] = ["roles", "sources", "rules", "assets", "account", "users", "transfer", "credentials", "tokens"];
 const GLOBAL_SECTION_TABS: Record<GlobalSettingsSection, readonly Tab[]> = {
   agents: ["roles"],
@@ -167,9 +167,6 @@ export function SettingsPanel({
   const [projConfigs, setProjConfigs] = useState<ProjectRoleConfigEntry[]>([]);
   const [configRoleId, setConfigRoleId] = useState<string | null>(null);
   const [configBusy, setConfigBusy] = useState(false);
-  const [planeBind, setPlaneBind] = useState<string | null>(null);
-  const [planeInput, setPlaneInput] = useState("");
-  const [planeBusy, setPlaneBusy] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
@@ -191,10 +188,6 @@ export function SettingsPanel({
       api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
       api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error));
       api.runtimeImages(projectId).then(setRuntimeImages).catch((error) => showAgentLoadError("运行时镜像", error));
-      api
-        .projects()
-        .then((list) => setPlaneBind(list.find((p) => p.id === projectId)?.plane_project_id ?? null))
-        .catch(() => {});
       api
         .settings(projectId)
         .then((s) => {
@@ -628,7 +621,7 @@ export function SettingsPanel({
       ? "settings-panel flex h-full w-full flex-col bg-transparent"
       : "theme-drawer deepsonar-sidebar absolute inset-y-2 right-2 z-30 flex w-[calc(100%-1rem)] max-w-[440px] flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line-strong)]";
 
-  // 全局模式：角色注册表（含运行配置）/ 模块源 / 全局规则；项目模式：规则覆盖 / 角色启用与覆盖 / Plane 集成
+  // 全局模式：角色注册表（含运行配置）/ 模块源 / 全局规则；项目模式：规则覆盖 / 角色启用与覆盖
   // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
   const globalTabList: { key: Tab; label: string }[] = [
     { key: "roles", label: "角色注册表" },
@@ -646,7 +639,6 @@ export function SettingsPanel({
         { key: "rules", label: "规则配置" },
         { key: "roles", label: "角色配置" },
         { key: "assets", label: "共享资产" },
-        { key: "plane", label: "Plane 集成" },
       ]
     : globalTabList.filter((item) => visibleGlobalTabs.includes(item.key));
   const activeTab = projectId
@@ -1191,87 +1183,6 @@ export function SettingsPanel({
         {activeTab === "users" && !projectId && <UsersPanel />}
         {activeTab === "account" && !projectId && <AccountPanel />}
         {activeTab === "transfer" && !projectId && <TransferPanel projectId={null} scope="platform" />}
-
-        {activeTab === "plane" && projectId && (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-1 text-[13px] text-zinc-400">
-              Plane 协作镜像
-              <HelpTip>
-                Plane 是可选的协作镜像：绑定后 Ready 状态的 issue（描述含 type= 标记）会被自动认领为任务；
-                本地库才是唯一状态真相，Plane 故障不影响本地任务。解绑只停止后续同步，不删除已导入的任务。
-              </HelpTip>
-            </div>
-
-            <div className="rounded-lg border border-ink-700 bg-ink-850/60 px-3 py-2.5">
-              <div className="mb-1 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                当前绑定
-              </div>
-              {planeBind ? (
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[13px] text-run-400">{planeBind}</span>
-                  <button
-                    onClick={async () => {
-                      setPlaneBusy(true);
-                      try {
-                        const r = await api.syncPlane(projectId);
-                        flash(`同步完成：新建 ${r.created} 个任务`);
-                      } catch (e) {
-                        flash(`同步失败：${e instanceof Error ? e.message : e}`);
-                      } finally {
-                        setPlaneBusy(false);
-                      }
-                    }}
-                    disabled={planeBusy}
-                    className="ml-auto flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
-                  >
-                    <ArrowsClockwise size={11} className={planeBusy ? "animate-spin" : ""} />
-                    {planeBusy ? "同步中…" : "手动同步"}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      await api.unbindPlane(projectId).catch((e) => flash(`解绑失败：${e instanceof Error ? e.message : e}`));
-                      flash("已解绑（已导入任务保留）");
-                      reload();
-                    }}
-                    className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
-                  >
-                    <Trash size={11} /> 解绑
-                  </button>
-                </div>
-              ) : (
-                <div className="font-mono text-[13px] text-zinc-600">未绑定 —— 纯本地项目</div>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-              <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                {planeBind ? "改绑其它 Plane 项目" : "绑定 Plane 项目"}
-              </span>
-              <input
-                value={planeInput}
-                onChange={(e) => setPlaneInput(e.target.value)}
-                className={inputCls}
-                placeholder="Plane project UUID"
-              />
-              <button
-                onClick={async () => {
-                  if (!planeInput.trim()) return flash("Plane project UUID 必填");
-                  try {
-                    await api.bindPlane(projectId, planeInput.trim());
-                    setPlaneInput("");
-                    flash("已绑定 —— Ready issue 会被自动认领");
-                    reload();
-                  } catch (e) {
-                    flash(`绑定失败：${e instanceof Error ? e.message : e}`);
-                  }
-                }}
-                className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
-              >
-                <FloppyDisk size={13} /> 绑定
-              </button>
-            </div>
-          </div>
-        )}
 
         {activeTab === "credentials" && !projectId && <CredentialsPanel />}
 

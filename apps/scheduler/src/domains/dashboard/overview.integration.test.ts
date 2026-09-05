@@ -27,7 +27,7 @@ if (!testDatabaseUrl) {
     const canvasId = randomUUID();
     const jobId = randomUUID();
     try {
-      await sql`INSERT INTO projects (id, canvas_id, name, status) VALUES (${projectId}, ${randomUUID()}, 'overview project', 'active')`;
+      await sql`INSERT INTO projects (id, name, status) VALUES (${projectId}, 'overview project', 'active')`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json, created_at)
         VALUES (${canvasId}, ${projectId}, 'overview task', ${sql.json({})}, ${"2026-08-19T01:00:00.000Z"})`;
       await sql`

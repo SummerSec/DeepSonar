@@ -35,7 +35,7 @@ if (!testDatabaseUrl) {
       Object.fromEntries(fields.map((field) => [field, row[field]]));
 
     try {
-      await sql`INSERT INTO projects (id, canvas_id, name) VALUES (${projectId}, ${canvasId}, 'lifecycle projection integration')`;
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'lifecycle projection integration')`;
       await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${canvasId}, ${projectId}, 'lifecycle', ${sql.json({})})`;
       const [job] = await sql`
         INSERT INTO jobs (project_id, canvas_id, type, status, agent_snapshot_json, started_at)

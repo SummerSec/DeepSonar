@@ -20,8 +20,8 @@ if (!testDatabaseUrl) {
     const nodeIds: string[] = [];
     try {
       await sql`
-        INSERT INTO projects (id, canvas_id, name)
-        VALUES (${projectId}, ${canvasId}, 'canvas change log integration')`;
+        INSERT INTO projects (id, name)
+        VALUES (${projectId}, 'canvas change log integration')`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
         VALUES (${canvasId}, ${projectId}, 'primary', ${sql.json({})}),

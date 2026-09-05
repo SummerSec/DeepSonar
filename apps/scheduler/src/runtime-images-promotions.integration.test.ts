@@ -373,8 +373,8 @@ if (!testDatabaseUrl) {
         [followLatestProjectId, "follow latest"],
       ] as const) {
         await sql`
-          INSERT INTO projects (id, canvas_id, name)
-          VALUES (${projectId}, ${`canvas-${projectId}`}, ${name})`;
+          INSERT INTO projects (id, name)
+          VALUES (${projectId}, ${name})`;
       }
       await sql`
         INSERT INTO canvases (id, project_id, title)

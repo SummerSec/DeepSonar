@@ -2,7 +2,7 @@
 
 > 当前产品与系统设计摘要（as-built + 已共识演进方向）。  
 > 本文件给 Agent / 新人**先读**；细节冲突时以代码、`database/schema.sql`、OpenAPI 与测试为准。
-> 日期：2026-08 · 与代码主路径对齐（Plane 可选、本地任务为主）。
+> 日期：2026-08 · 与代码主路径对齐（本地任务为主）。
 > **专题文档索引与 as-built 状态表**：[`docs/README.md`](docs/README.md)（历史方案稿勿当未完成清单）。
 
 ## 1. 一句话
@@ -19,7 +19,7 @@
 | **Scheduler** | 副作用唯一执行者 | claim、状态机、派生 verify/report、Reaper、注入快照 | 不做业务推理 |
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。**  
-> Plane 为可选集成，默认主路径是 Web 直接创建项目与任务。
+> 默认主路径是 Web 直接创建项目与任务。
 
 ### 2.1 设计原则
 
@@ -267,7 +267,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
-| 删除兼容层 / 第二套真相 / 空洞抽象 | #359 | **未落地**：对照 [ponytail](https://github.com/DietrichGebert/ponytail) 与本仓库第一性原理的交集债。P0 删除死控制 MCP 脚本、`projects.canvas_id` 假身份、leftover CLI 双轨文档；P1 拆 `verify.ts`/`report.ts` 转发 ports 与 Plane 身份列；P2 让本表只留未完成项，并收敛配置面。**双轨报告保留**：Finding confirmed 即出单条报告，不等任务收敛；Task Report 仍在 Hub complete 后汇总。不砍沙箱、token、Zod、Attempt 账本。 |
+| 删除兼容层 / 第二套真相 / 空洞抽象 | #359 | **部分落地**：对照 [ponytail](https://github.com/DietrichGebert/ponytail) 与本仓库第一性原理的交集债。已删：Plane 整段集成、`CONTROL_MCP_SERVER` 内嵌脚本、`projects.canvas_id` 假身份与 `GET /projects/:id/canvas` 兼容入口；控制通道文档与三类 adapter 对齐为 `controlMcp: false`。P1 仍待：拆 `verify.ts`/`report.ts` 转发 ports；P2 让本表只留未完成项，并收敛配置面。leftover Codex/OpenCode 仍只读解析历史 Session，不进新 Job。**双轨报告保留**：Finding confirmed 即出单条报告，不等任务收敛；Task Report 仍在 Hub complete 后汇总。不砍沙箱、token、Zod、Attempt 账本。 |
 | Hub 按任务动态选择 Worker 运行镜像 | #357 / #360 | **已落地（#360 补洞）**：`list_available_runtime_images` 只读操作返回项目已启用、存在 trusted 版本、且至少一种治理 CLI 能跑的市场镜像目录（`image_key`、展示字段、`compatible_agent_clis`，不含 OCI/digest）；`HubIntentPayload.runtime_image_key` 可选提案压过角色缺省，preflight 与摄入事务双重校验目录成员 **并冻快照验 CLI 兼容**，非法/未启用/OCI/CLI 不兼容整单拒绝（`invalid_runtime_image` / `invalid_payload`，禁止 `HANDLER_FAILED`）。resume/`rerun-current` 把 Job 已冻结的 `runtime_image.image_key` 当作该 Job 镜像身份，不掉回角色缺省。Scheduler 仍唯一冻结 digest；Worker 无提案能力；运行中 Job 不换图；缺本机层仍走 #286 human 阻塞 |
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
 | Finding 追踪链 + 画布只看链路 | #31 | **已完成**：`GET /findings/:id` 提供结构化、限界的 `trace`；详情主路径消费 evidence/rounds/Fact-Intent flow/gaps；画布支持 `traceFinding` + `focusNode` 深链、淡化/隐藏与 Finding 节点入口 |
@@ -325,6 +325,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | aliyun-acr warmup OSS 超时与 helper | #228 | **已完成**：startup inspect 以冻结 digest / image Id 为就绪条件，不要求 RepoDigests 等于当前通道仓库名；选定通道 `docker pull` 因 timeout/EOF/OSS `httpReadSeeker` 失败时，对清单已核实的同 digest 其它通道（dockerhub/github）重试一次，不改 `runtime_registry_channel`、不改写历史 Job 快照；`/health.runtime_images.error` 区分「channel timed out, same-digest fallback attempted」与「digest not found」；默认 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 纳入 startup warmup，fake 仍不使用 helper。Job 执行期仍只 inspect，不隐式 pull。 |
 | 通道切换不因 in-flight 准备 409 锁死 | #278 | **已完成**：`PATCH /runtime-images/registry/channel` 在已有准备任务时返回当前 `pull-status`（202），不把 busy 当硬失败；同 digest 复用准备锁。**#342** 把项目启用也改成同一本机队列，不再对第二个产品 409，也不再抢占 `admin_bulk`（抢占会丢掉已入队的项目启用项）。准备任务异常退出离开 `queued`/`running`。Web 下拉保持 pending 目标通道，完成后自动重试落库。缺图仍不落库，Job 执行期仍只 inspect。 |
 | 多镜像启用入队去重拉取 | #342 | **已完成**：本机准备任务是 Scheduler 进程内队列（多副本不共享）。`PUT /projects/:id/runtime-images/:imageId` 缺层时入队并返回 202，按 digest 去重、串行 `docker pull`；整队列经 `pull-status` 可见。该项 `succeeded` 后 Web 自动重试 PUT 落库，不必等无关镜像；inspect 未就绪时继续轮询。失败项不占用去重锁，可再次入队，且不影响后续 queued。不并行 pull、不改 Job inspect-only。 |
+| 删除过时 Plane 集成 | — | **已落地**：去掉 `plane-client`、同步/webhook、凭据 kind、身份列与 Web/API 入口；项目与任务只认本地库。 |
 | 创建项目不强制同时创建任务 | #343 | **已完成**：控制台「新建项目」只收集名称/说明/镜像策略，走 `POST /projects`，成功后进入该项目任务空态。不铸画布、不派 Hub。快捷启动（`intent=quick-start`）仍可一次做完「新项目 + 第一项任务」。`projects:write` 足以建项目；下达任务仍要 `tasks:write`。 |
 | 凭据删除不受可恢复 Job 永久锁死 | #234 | **已完成**：`DELETE /credentials/:id` 只拦 `pending_unclaimed` 与 `active_frozen`（claimed/provisioning/running/waiting_human）。`failed/timeout/orphan` 与 `succeeded/cancelled` 一样：影响投影照列，确认框可提示删除后不能按原快照 resume，但不 409。删除仍与 resume 串行加锁，不自动恢复、不改写冻结快照。 |
 | 态势普通数据看板 | #242 | **P0 已落地**：`/` 运营总览（总量/状态分布/近 7 日/活跃项目 Top N/最近活动）+ 关注队列仍为处置入口；`GET /dashboard/overview` 做轻量聚合，因 Job/Finding 列表有窗口上限。**用量账本看板已落地**：`GET /dashboard/usage` 按日/周/月或自定义时间聚合 Gateway token，项目/任务页复用同一看板。**P1 风险看板、P2 吞吐看板未做。** |
@@ -360,9 +361,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `apps/web` | React 工作台与画布 |
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
-| `packages/plane-client` | 可选 Plane 集成的类型化 API client；默认本地任务主路径不依赖 Plane |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v40）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v42）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
