@@ -4,7 +4,8 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import { isProviderKnown, projectCredentialProvider, UNKNOWN_PROVIDER_ERROR } from "../../credentials.js";
-import { globalRules, mergeGlobalRulesPatch, PLATFORM_DEFAULT_AGENT_CLI, rulesForProject } from "../../core.js";
+import { globalRules, mergeGlobalRulesPatch, rulesForProject } from "../../core.js";
+import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
 import {

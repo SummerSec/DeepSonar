@@ -6,6 +6,7 @@ export {
 export type {
   EventCanvasEdgeInput,
   EventFinalizeResult,
+  EventFindingVerification,
   EventIngestionSideEffectApplication,
   EventIngestionSideEffectPorts,
   EventProjectRules,

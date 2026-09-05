@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { sql } from "../../db.js";
-import { canTransition as coreCanTransition } from "../../core.js";
 import {
   createJobLifecycleApplication,
   createSqlJobLifecycleApplication,
@@ -52,7 +51,6 @@ test("Job lifecycle policy exposes the complete legal/illegal transition matrix"
   assert.equal(canTransition("pending", "PENDING"), false);
   assert.equal(isKnownJobStatus("running"), true);
   assert.equal(isKnownJobStatus("future_status"), false);
-  assert.equal(coreCanTransition("running", "succeeded"), true, "core facade delegates to policy");
 });
 
 test("target source guards are deterministic and reject unknown targets", () => {

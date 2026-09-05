@@ -45,11 +45,8 @@ import {
   resolveRequestedModel,
   type ProviderRuntimeSnapshotProjection,
 } from "../../provider-settings.js";
-import {
-  DISPATCH_CLAIM_ADVISORY_KEY,
-  PLATFORM_DEFAULT_AGENT_CLI,
-  PLATFORM_DEFAULT_AGENT_MODEL,
-} from "../../core.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
+import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../role-runtime-snapshot/index.js";
 import { parseProjectImagePolicy } from "../role-runtime-snapshot/application.js";
 import { sql } from "../../db.js";
 import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";

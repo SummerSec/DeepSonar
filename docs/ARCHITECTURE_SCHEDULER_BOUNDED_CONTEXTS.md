@@ -19,16 +19,16 @@ reaching through its implementation module.
 | `job-lifecycle` | Job status policy plus guarded application operations for claim, execution failure, timeout/orphan/reconcile recovery, cancel (single/bulk), resume, and runtime-image cancellation. | Canvas convergence, Finding verdicts, Report artifacts, RoleConfig/runtime resolution. |
 | `event-ingestion` | Event envelope validation, event-id deduplication, per-Job sequencing, and dispatching semantic side effects. | The policy for a Job status transition. |
 | `hub-orchestration` | Hub eligibility, intent validation, round budgets, idle/complete progression. | Direct Job status writes; it requests a lifecycle transition. |
-| `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions. `application.ts` exposes the close/evidence/gate seam; `routes.ts` owns read-only Finding and verification projections. | Dispatcher claims and Report state. |
-| `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, report failure recovery, and report/download route registration. | Agent runtime snapshots or generic Job transition rules. |
+| `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions. Implementation lives in `verify.ts`; `routes.ts` owns read-only Finding and verification projections. | Dispatcher claims and Report state. |
+| `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, report failure recovery, and report/download route registration. Implementation lives in `report.ts`. | Agent runtime snapshots or generic Job transition rules. |
 | `role-runtime-snapshot` | RoleConfig, credential/CLI compatibility, skills, and immutable runtime-image snapshots. | Canvas/Finding convergence and Job terminal decisions. |
 
 The route layer is an adapter over these application interfaces. Business
 handlers live in domain registrars; top-level `routes.ts` installs shared hooks
-and composes those registrars. `core.ts` remains the compatibility composition
-root for established internal imports. Legacy SQL implementations are injected
-through explicit ports so application seams can be tested without a database
-and transaction ownership remains visible.
+and composes those registrars. `core.ts` is the composition root: it wires
+domains and owns shared rules / Job creation / terminal orchestration. Domain
+implementations are imported from their home modules, not re-exported through
+`core.ts`.
 
 ## Lifecycle foundation and dependency direction
 
@@ -43,7 +43,7 @@ dispatcher / routes / reaper / reconcile
  job-lifecycle application seam -----> PostgreSQL adapter (`db.ts`)
                  ^
                  |
-       core.ts compatibility facade (remaining convergence writers)
+       core.ts composition root (remaining convergence writers)
                  |
                  v
        pure transition policy (no imports)
@@ -58,9 +58,9 @@ The generic transition keeps the existing linearization point:
 `UPDATE jobs ... WHERE status = ANY(...)`.  A `null` update is a lost race/no-op
 and callers must not run follow-up work.
 
-The compatibility facade deliberately exports the historical
-`core.ts` `canTransition` and `transitionJob` names.  No route, event, OpenAPI,
-schema, or external status value changes in this slice.
+`job-lifecycle` owns `canTransition`; `core.ts` still exposes `transitionJob`
+as the composed CAS wrapper.  No route, event, OpenAPI, schema, or external
+status value changes in this slice.
 
 ## Canonical lock matrix
 
@@ -185,8 +185,8 @@ milestone and does not by itself describe the later completed slices.
 
 All six execution contexts now expose explicit application/ports seams. The
 event-ingestion context owns semantic side effects, while `core.ts` composes
-Finding, Hub, runtime snapshot, shared-asset, edge, and terminal services and
-keeps narrow compatibility exports. HTTP business handlers are registered by
+Finding, Hub, runtime snapshot, shared-asset, edge, and terminal services.
+HTTP business handlers are registered by
 domain; top-level `routes.ts` contains only shared auth/project-scope hooks,
 Gateway registration, and registrar composition.
 
@@ -200,8 +200,8 @@ dependency cycle.
 
 ## Migration rules
 
-1. Add a narrow application method before moving a caller; leave a
-   `core.ts` facade until all call sites have migrated.
+1. Add a narrow application method before moving a caller; import the domain
+   home directly instead of adding a `core.ts` re-export.
 2. Keep transaction ownership explicit.  Domain policy code must remain pure;
    SQL adapters receive the transaction/connection from the caller where a
    larger transaction is required.

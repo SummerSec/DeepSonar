@@ -61,7 +61,7 @@ test("Hub application keeps no-op guards before touching the transaction", async
   assert.equal(queryCount, 0, "invalid and recursive Hub wakeups must stop before SQL");
 });
 
-test("core keeps the historical facade while delegating Hub orchestration", () => {
+test("core composition root wires Hub orchestration without owning eligibility SQL", () => {
   const source = readFileSync(new URL("../../core.ts", import.meta.url), "utf8");
   const application = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
   assert.match(source, /createHubOrchestrationApplication/);

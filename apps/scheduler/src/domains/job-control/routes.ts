@@ -8,10 +8,10 @@ import {
   ensureCanvasForTask,
   fixedPriorityForJob,
   priorityMatchesJob,
-  roleNameForJobType,
   rolesForProject,
   triggerHubFromHumanComment,
 } from "../../core.js";
+import { roleNameForJobType } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";

@@ -16,7 +16,6 @@ import {
   roleNameForJobType,
   type AgentRuntimeSnapshot,
 } from "../role-runtime-snapshot/index.js";
-import type { FindingVerificationApplication } from "../finding-verification/index.js";
 import type { EventIngestionTransaction } from "./application.js";
 import {
   assertHubDecisionCanvasReferences,
@@ -124,8 +123,45 @@ export type EventFinalizeResult = {
   verdict?: string;
 };
 
+/** Methods event-ingestion actually calls on verify.ts. */
+export interface EventFindingVerification {
+  isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean;
+  evaluateAnalysisCompleteGate(
+    tx: EventIngestionTransaction,
+    canvasId: string,
+    options?: Record<string, unknown>,
+  ): Promise<{
+    ok: boolean;
+    blockers: string[];
+    problems: Array<{
+      finding_id?: string;
+      severity?: string;
+      title?: string;
+      verify_status?: string;
+      issue?: string;
+    }>;
+  }>;
+  evaluateFollowup(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    finding: Record<string, unknown>,
+  ): Promise<void>;
+  attachVerificationEvidence(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    nodeId: string,
+    canvasId: string,
+    verification: unknown,
+  ): Promise<boolean>;
+  buildVerificationFollowupPayload(
+    trigger: Record<string, unknown> | undefined,
+    from: string[],
+    role: string,
+  ): Record<string, unknown> | null;
+}
+
 export interface EventIngestionSideEffectPorts {
-  findingVerification: FindingVerificationApplication;
+  findingVerification: EventFindingVerification;
   rulesForProject: (tx: EventIngestionTransaction, projectId: string) => Promise<EventProjectRules>;
   rolesForProject: (tx: EventIngestionTransaction, projectId: string) => Promise<readonly EventRole[]>;
   resolveAgentSnapshotForJob: (
@@ -1020,7 +1056,7 @@ export function createEventIngestionSideEffectApplication(
         workerPrompt: string;
         relatedImportedIds: string[];
         applyHubFollowup: boolean;
-        verificationFollowup: ReturnType<FindingVerificationApplication["buildVerificationFollowupPayload"]>;
+        verificationFollowup: ReturnType<EventFindingVerification["buildVerificationFollowupPayload"]>;
         followupFindingId: string | null;
         schedulingPurpose: SchedulingPurpose;
       }> = [];
