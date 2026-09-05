@@ -593,7 +593,6 @@ async function importTasks(
             severity: f.severity as string,
             location: (f.location as string) ?? null,
             summary: (f.summary as string) ?? null,
-            suggest_verify: Boolean(f.suggest_verify),
             verify_status: (f.verify_status as string) ?? "pending",
             raw_json: ((f.raw_json as object) ?? {}) as never,
           })}`;

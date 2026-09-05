@@ -765,7 +765,6 @@ export interface WsTicket {
 export interface FindingDetail {
   finding: FindingSummary & {
     raw_json: Record<string, unknown>;
-    suggest_verify: boolean;
     source_job_type: string;
     source_job_status: string;
     canvas_title?: string | null;

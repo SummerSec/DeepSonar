@@ -160,7 +160,7 @@ pnpm dev                        # Scheduler: http://127.0.0.1:3100
 pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
 ```
 
-默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 **v42**）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 为准（现为 **v43**）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
 
 项目镜像策略：`inherit_global`（默认，只认全局 RoleConfig 镜像与 model / 默认 CLI）或 `project_managed`（项目 `role_runtime_images` 集中绑定；项目 RoleConfig **不接受**独立 `runtime_image_key`，但可托管自己的 model）。
 

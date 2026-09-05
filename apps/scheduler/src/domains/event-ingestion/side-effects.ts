@@ -876,7 +876,6 @@ export function createEventIngestionSideEffectApplication(
         scoring_json: (normalized.scoring ?? {}) as never,
         location: normalized.location ?? null,
         summary: normalized.summary ?? null,
-        suggest_verify: normalized.suggest_verify ?? false,
         raw_json: {
           ...(normalized.raw ?? {}),
           ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),

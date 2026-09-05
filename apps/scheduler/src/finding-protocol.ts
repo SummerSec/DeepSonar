@@ -239,7 +239,6 @@ export function normalizeFindingProposal(
   return {
     ...rest,
     title: proposal.title,
-    suggest_verify: rest.suggest_verify ?? false,
     profile,
     ...(proposal.scoring ? { scoring: normalizeFindingScoring(profile, proposal.scoring) } : {}),
   };

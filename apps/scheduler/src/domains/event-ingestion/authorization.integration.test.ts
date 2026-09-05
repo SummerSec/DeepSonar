@@ -76,7 +76,6 @@ if (!testDatabaseUrl) {
           title: "late finding",
           summary: "late finding remains valid before authorization",
           severity: "low",
-          suggest_verify: false,
         };
         case "hub_decision": return { complete: { from: [], description: "late decision" } };
         case "human": return {

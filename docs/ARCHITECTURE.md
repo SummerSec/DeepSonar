@@ -172,14 +172,14 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 | -------- | ---------- | ---------------- |
 | `emit_progress` | Worker | 更新 job 节点文案/进度 |
 | `emit_fact` | Hub 可下发的非审计工作角色 | 增量建立 fact 节点与意图边 |
-| `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（可带 `suggest_verify` 建议字段） |
+| `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库 |
 | `submit_hub_decision` | hub_reason | 提交 complete 或 intents 提案 |
 | `mark_job_done` | Worker | 结束节点 + 摘要 |
 | `request_human` | Worker | 提交结构化 Finding 或平台阻塞 subject；Scheduler 校验后将 Job 转人工等待并建立 human 节点 |
 
 **明确不在 Agent 权限内**（v1.1 收紧）：
 
-- 派生验证的**决策**：`emit_finding` 只能携带 `suggest_verify: true/false` 建议，是否派生由调度器规则引擎唯一决定（见 §4.3）
+- 派生验证的**决策**：是否派生由调度器规则引擎唯一决定（见 §4.3）；`emit_finding` 不接受建议字段
 - 画布节点坐标与布局
 - `create_canvas` / `docker.*`（状态由调度器在 claim/finish 时统一写）
 
@@ -319,7 +319,7 @@ events
 findings
   id, project_id, job_id, node_id, fingerprint, title, profile, category,
   severity, tags_json, evidence_refs_json, scoring_json,
-  location, summary, suggest_verify, verify_status, raw_json, created_at
+  location, summary, verify_status, raw_json, created_at
   -- 唯一约束: (project_id, fingerprint)  -- fingerprint = hash(profile + title + location + rule)
   -- schema v20：通用 Finding 协议字段；severity 可空，评分由 Scheduler 规范化
 
@@ -371,11 +371,11 @@ canvas_changes
 | 派生规则来源 | `ruleId` → 对应 job type / audit 规则名 |
 
 `emit_finding` 的 payload 是 SARIF result 的受限子集，并扩展通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`。`profile` 缺省为
-`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略；缺失或未知 severity 保守进入 Verify，已知 severity 是否自动验证由 `minVerifySeverity` 决定。`suggest_verify` 仅保留兼容语义，最终由规则引擎决策。
+`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略；缺失或未知 severity 保守进入 Verify，已知 severity 是否自动验证由 `minVerifySeverity` 决定。
 
 评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
 
-上述 Finding 协议字段（`profile` / `category` / `evidence_refs_json` / `scoring_json` / `suggest_verify`，`severity` 可空）与 `(project_id, profile, category, verify_status)` 索引均已并入唯一基线 `database/schema.sql` 的 `findings` 表（当前 v42）；仓库不保留增量迁移文件，改表 = 改基线 + bump 版本（见 §17.2）。
+上述 Finding 协议字段（`profile` / `category` / `evidence_refs_json` / `scoring_json`，`severity` 可空）与 `(project_id, profile, category, verify_status)` 索引均已并入唯一基线 `database/schema.sql` 的 `findings` 表（当前 v43）；仓库不保留增量迁移文件，改表 = 改基线 + bump 版本（见 §17.2）。
 
 ### 6.2 存储分层（热/冷分离）
 

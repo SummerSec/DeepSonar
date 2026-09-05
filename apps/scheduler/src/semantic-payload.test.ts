@@ -89,6 +89,13 @@ test("undeclared quantities remain optional so prose numbers stay unprotected", 
   assert.equal(FindingPayload.safeParse(finding).success, true);
 });
 
+test("emit_finding rejects leftover suggest_verify as an unknown field", () => {
+  const withSuggestion = { ...finding, suggest_verify: true };
+  assert.equal(FindingPayload.safeParse(withSuggestion).success, false);
+  assert.equal(EmitFindingPayload.safeParse(withSuggestion).success, false);
+  assert.equal(EmitFindingDirectPayload.safeParse(withSuggestion).success, false);
+});
+
 test("advertised semantic MCP schemas remain top-level objects", () => {
   for (const name of ["emit_fact", "emit_finding"] as const) {
     const schema = ControlToolInputSchemasJson[name] as { type?: unknown; anyOf?: unknown; oneOf?: unknown };

@@ -355,8 +355,6 @@ export const FindingPayload = z
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
     quantities: optionalQuantities,
-    /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
-    suggest_verify: z.boolean().default(false),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
   })
   .strict()
@@ -382,7 +380,6 @@ export const EmitFindingDirectPayload = z
     summary: meaningfulFindingSummary,
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
-    suggest_verify: z.boolean().optional(),
   })
   .strict();
 export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
@@ -400,7 +397,6 @@ export const EmitFindingPayload = z
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
-    suggest_verify: z.boolean().optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
   .strict()

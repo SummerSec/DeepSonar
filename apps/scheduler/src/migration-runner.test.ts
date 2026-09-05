@@ -21,10 +21,13 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 42);
+  assert.equal(SCHEMA_VERSION, 43);
   assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   const transferExport = await readFile(new URL("./transfer/export.ts", import.meta.url), "utf8");
   const transferImport = await readFile(new URL("./transfer/import.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(body, /suggest_verify/);
+  assert.doesNotMatch(transferExport, /suggest_verify/);
+  assert.doesNotMatch(transferImport, /suggest_verify/);
   assert.doesNotMatch(transferExport, /delete cfg\.plane|plane_project_id|plane_issue_id/);
   assert.doesNotMatch(transferImport, /delete config_json\.plane|plane_project_id|plane_issue_id/);
   assert.match(body, /CREATE TABLE projects\s*\(\s*id uuid PRIMARY KEY/i);

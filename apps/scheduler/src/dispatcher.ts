@@ -1131,7 +1131,6 @@ async function executeFake(jobId: string, type: string) {
       location: fake?.location ?? "auth/login.php:42",
       summary: fake?.summary ?? "用户输入未经参数化处理直接拼入 SQL 查询语句，攻击者可构造恶意参数改变查询语义并读取未授权数据。",
       rule_id: "fake-sqli-001",
-      suggest_verify: true,
       raw: { source: "fake-agent", v: 1 },
     });
     await emit("progress", { message: "假 agent：审计完成", percent: 100 });
