@@ -25,8 +25,10 @@ import { frozenTaskSeeds } from "./task-compose.js";
 import {
   checkReportNumericFidelity,
   declaredQuantitiesFromPayloads,
+  factQuantityParticipatesInGate,
   formatQuantityLine,
   numericInconsistentError,
+  type NumericFidelityResult,
 } from "./report-numeric-fidelity.js";
 
 type Tx = typeof sql;
@@ -671,7 +673,9 @@ function defaultMarkdown(input: ReportInput): string {
       lines.push("");
     }
   }
-  const factQuantities = (input.facts ?? []).filter((fact) => fact.verification_status !== "rejected" && fact.quantities.length > 0);
+  const factQuantities = (input.facts ?? []).filter(
+    (fact) => factQuantityParticipatesInGate(fact.verification_status) && fact.quantities.length > 0,
+  );
   if (factQuantities.length > 0) {
     lines.push("## 事实数值口径");
     lines.push("");
@@ -693,6 +697,80 @@ function defaultMarkdown(input: ReportInput): string {
   lines.push("---");
   lines.push("_本报告由 DeepSonar 调度器在分析收敛后自动生成；SARIF 仅含 confirmed Finding。_");
   return lines.join("\n");
+}
+
+export type ReportMarkdownFallback = "coverage" | "numeric" | null;
+
+function taskReportCoverageOk(input: ReportInput, markdown: string): boolean {
+  return (
+    input.findings.length === 0 ||
+    input.findings.every(
+      (f) =>
+        markdown.includes(f.id) ||
+        markdown.includes(f.title) ||
+        (f.verify_status === "confirmed" && markdown.includes("已确认")) ||
+        (f.verify_status === "needs_human" && (markdown.includes("人工") || markdown.includes("待"))) ||
+        (f.verification_policy?.eligibility === "below_min_verify_severity" && markdown.includes("未自动验证")),
+    )
+  );
+}
+
+/**
+ * Coverage/short Agent markdown falls back to the deterministic template.
+ * Numeric fail on Agent-produced, coverage-ok markdown also falls back;
+ * only a template that still fails the gate hard-fails the report.
+ */
+export function finalizeTaskReportMarkdown(
+  input: ReportInput,
+  agentText: string,
+): {
+  markdown: string;
+  numeric: NumericFidelityResult;
+  coverageOk: boolean;
+  usedDefault: ReportMarkdownFallback;
+} {
+  let markdown = agentText.trim();
+  const coverageOk = taskReportCoverageOk(input, markdown);
+  let usedDefault: ReportMarkdownFallback = null;
+  if (markdown.length < 20 || !coverageOk) {
+    markdown = defaultMarkdown(input);
+    usedDefault = "coverage";
+  }
+  const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
+  let numeric = checkReportNumericFidelity(declared, { markdown });
+  if (!numeric.ok && usedDefault === null && coverageOk) {
+    markdown = defaultMarkdown(input);
+    usedDefault = "numeric";
+    numeric = checkReportNumericFidelity(declared, { markdown });
+  }
+  return { markdown, numeric, coverageOk, usedDefault };
+}
+
+export function finalizeFindingReportMarkdown(
+  input: FindingReportInput,
+  agentText: string,
+): {
+  markdown: string;
+  numeric: NumericFidelityResult;
+  usedDefault: ReportMarkdownFallback;
+} {
+  let markdown = agentText.trim();
+  const coverageOk = markdown.includes(input.finding.id) || markdown.includes(input.finding.title);
+  let usedDefault: ReportMarkdownFallback = null;
+  if (markdown.length < 20 || !coverageOk) {
+    markdown = defaultFindingMarkdown(input);
+    usedDefault = "coverage";
+  }
+  const declared = declaredQuantitiesFromPayloads([
+    { id: input.finding.id, verify_status: "confirmed", quantities: input.finding.quantities },
+  ]);
+  let numeric = checkReportNumericFidelity(declared, { markdown });
+  if (!numeric.ok && usedDefault === null && coverageOk) {
+    markdown = defaultFindingMarkdown(input);
+    usedDefault = "numeric";
+    numeric = checkReportNumericFidelity(declared, { markdown });
+  }
+  return { markdown, numeric, usedDefault };
 }
 
 function defaultFindingMarkdown(input: FindingReportInput): string {
@@ -1189,14 +1267,17 @@ async function finalizeFindingReportJob(
       throw new Error(`finding report ${report.id as string} input checksum mismatch`);
     }
 
-    let markdown = (opts.markdown?.trim() || opts.summary?.trim() || "").trim();
-    if (markdown.length < 20 || (!markdown.includes(input.finding.id) && !markdown.includes(input.finding.title))) {
-      markdown = defaultFindingMarkdown(input);
-    }
-    const numeric = checkReportNumericFidelity(
-      declaredQuantitiesFromPayloads([{ id: input.finding.id, verify_status: "confirmed", quantities: input.finding.quantities }]),
-      { markdown },
+    const resolved = finalizeFindingReportMarkdown(
+      input,
+      opts.markdown?.trim() || opts.summary?.trim() || "",
     );
+    const markdown = resolved.markdown;
+    const numeric = resolved.numeric;
+    if (resolved.usedDefault === "coverage") {
+      console.warn(`[report] finding job markdown 覆盖不足或过短，回退确定性模板`);
+    } else if (resolved.usedDefault === "numeric") {
+      console.warn(`[report] finding job numeric 口径未逐字保留，回退确定性模板`);
+    }
     if (!numeric.ok) {
       await tx`
         UPDATE finding_reports SET status = 'failed', error = ${numericInconsistentError(numeric)}, updated_at = now()
@@ -1286,31 +1367,23 @@ export async function finalizeReportJob(
     agent_summary: opts.summary ?? null,
     generated_at: new Date().toISOString(),
   };
-  // Agent summary 作 Markdown；覆盖不全或过短时回退确定性模板（不因文笔失败而丢报告）
-  let markdown = (opts.markdown?.trim() || opts.summary?.trim() || "").trim();
-  const coverageOk =
-    input.findings.length === 0 ||
-    input.findings.every(
-      (f) =>
-        markdown.includes(f.id) ||
-        markdown.includes(f.title) ||
-        (f.verify_status === "confirmed" && markdown.includes("已确认")) ||
-        (f.verify_status === "needs_human" && (markdown.includes("人工") || markdown.includes("待"))) ||
-        (f.verification_policy?.eligibility === "below_min_verify_severity" && markdown.includes("未自动验证")),
-    );
-  if (markdown.length < 20 || !coverageOk) {
+  // Agent summary 作 Markdown；覆盖不全、过短或口径被改写时回退确定性模板。
+  const resolved = finalizeTaskReportMarkdown(
+    input,
+    opts.markdown?.trim() || opts.summary?.trim() || "",
+  );
+  const markdown = resolved.markdown;
+  if (resolved.usedDefault === "coverage") {
     console.warn(
-      `[report] job ${jobId} markdown 覆盖不足或过短，回退确定性模板 (len=${markdown.length}, coverageOk=${coverageOk})`,
+      `[report] job ${jobId} markdown 覆盖不足或过短，回退确定性模板 (coverageOk=${resolved.coverageOk})`,
     );
-    markdown = defaultMarkdown(input);
+  } else if (resolved.usedDefault === "numeric") {
+    console.warn(`[report] job ${jobId} numeric 口径未逐字保留，回退确定性模板`);
   }
 
   const sarif = buildSarifFromConfirmed(input);
   const sarifStr = JSON.stringify(sarif, null, 2);
-  const numeric = checkReportNumericFidelity(
-    declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []),
-    { markdown, sarif: sarifStr },
-  );
+  const numeric = resolved.numeric;
   if (!numeric.ok) {
     const error = numericInconsistentError(numeric);
     await tx`

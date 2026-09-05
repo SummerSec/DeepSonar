@@ -1,10 +1,19 @@
 /**
- * Phase 1 numeric fidelity (#368): mechanical check of declared quantities.
+ * Phase 1 numeric fidelity (#368 / #374): mechanical check of declared quantities.
  * Undeclared prose numbers are unprotected by design. No NL extraction.
  */
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 
 export const NUMERIC_INCONSISTENT = "numeric_inconsistent";
+
+/** Report Agent must keep declared anchors verbatim so the mechanical gate can match. */
+export const REPORT_QUANTITY_VERBATIM_NOTE =
+  "凡 finding/fact 声明的 quantities，报告必须原样保留 value、unit、basis，不得改写措辞或折叠口径。";
+
+/** Fact statuses that may gate a report. Findings still use verify_status=confirmed. */
+export function factQuantityParticipatesInGate(status: string | undefined): boolean {
+  return status === "verified" || status === "confirmed";
+}
 
 export type QuantitySourceKind = "finding" | "fact";
 
@@ -44,7 +53,7 @@ export function declaredQuantitiesFromPayloads(
     }
   }
   for (const fact of facts) {
-    if (fact.verification_status === "rejected") continue;
+    if (!factQuantityParticipatesInGate(fact.verification_status)) continue;
     for (const quantity of parseDeclaredQuantities(fact.quantities)) {
       declared.push({ ...quantity, source: "fact", source_id: fact.id });
     }
@@ -85,27 +94,17 @@ function checkOneCorpus(
 
 /**
  * Verify each declared value+unit+basis appears in report markdown.
- * When SARIF is present, confirmed-finding anchors must also appear there
- * (facts are markdown-only; SARIF only contains confirmed findings).
+ * SARIF is not a second corpus: `buildSarifFromConfirmed` embeds `quantities`
+ * as JSON, so unit/basis would always match and the branch never failed.
  */
 export function checkReportNumericFidelity(
   declared: readonly DeclaredQuantity[],
   artifacts: { markdown: string; sarif?: string },
 ): NumericFidelityResult {
   if (declared.length === 0) return { ok: true, failures: [] };
-  const findingAnchors = declared.filter((item) => item.source === "finding");
-  const failures = [
-    ...checkOneCorpus(declared, artifacts.markdown),
-    ...(artifacts.sarif !== undefined ? checkOneCorpus(findingAnchors, artifacts.sarif) : []),
-  ];
-  const unique = new Map<string, NumericFidelityFailure>();
-  for (const failure of failures) {
-    const key = `${failure.source}:${failure.source_id}:${failure.value}:${failure.unit}:${failure.reason}`;
-    if (!unique.has(key)) unique.set(key, failure);
-  }
-  const list = [...unique.values()];
-  if (list.length === 0) return { ok: true, failures: [] };
-  return { ok: false, code: NUMERIC_INCONSISTENT, failures: list };
+  const failures = checkOneCorpus(declared, artifacts.markdown);
+  if (failures.length === 0) return { ok: true, failures: [] };
+  return { ok: false, code: NUMERIC_INCONSISTENT, failures };
 }
 
 export function numericInconsistentError(result: NumericFidelityResult): string {

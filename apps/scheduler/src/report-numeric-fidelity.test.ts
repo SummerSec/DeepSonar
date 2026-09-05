@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSarifFromConfirmed, type ReportInput, type ReportInputFinding } from "./report.js";
+import { readFileSync } from "node:fs";
+import {
+  buildSarifFromConfirmed,
+  finalizeTaskReportMarkdown,
+  type ReportInput,
+  type ReportInputFinding,
+} from "./report.js";
 import {
   checkReportNumericFidelity,
   declaredQuantitiesFromPayloads,
+  factQuantityParticipatesInGate,
   formatQuantityLine,
   NUMERIC_INCONSISTENT,
   numericInconsistentError,
+  REPORT_QUANTITY_VERBATIM_NOTE,
 } from "./report-numeric-fidelity.js";
 
 const quantity = {
@@ -73,18 +81,30 @@ function reportInput(overrides: Partial<ReportInput> = {}): ReportInput {
   };
 }
 
-test("declared quantities ignore unconfirmed findings and rejected facts", () => {
+test("declared quantities keep confirmed findings and verified facts only", () => {
   const declared = declaredQuantitiesFromPayloads(
     [
       { id: "pending", verify_status: "pending", quantities: [quantity] },
       { id: "confirmed", verify_status: "confirmed", quantities: [quantity] },
     ],
     [
-      { id: "kept", verification_status: "unverified", quantities: [quantity] },
-      { id: "dropped", verification_status: "rejected", quantities: [quantity] },
+      { id: "unverified", verification_status: "unverified", quantities: [quantity] },
+      { id: "verifying", verification_status: "verifying", quantities: [quantity] },
+      { id: "needs_human", verification_status: "needs_human", quantities: [quantity] },
+      { id: "rejected", verification_status: "rejected", quantities: [quantity] },
+      { id: "verified", verification_status: "verified", quantities: [quantity] },
+      { id: "confirmed-fact", verification_status: "confirmed", quantities: [quantity] },
     ],
   );
-  assert.deepEqual(declared.map((item) => item.source_id), ["confirmed", "kept"]);
+  assert.deepEqual(declared.map((item) => item.source_id), ["confirmed", "verified", "confirmed-fact"]);
+});
+
+test("unverified fact statuses do not participate in the report gate", () => {
+  for (const status of ["unverified", "verifying", "needs_human", "rejected", undefined]) {
+    assert.equal(factQuantityParticipatesInGate(status), false);
+  }
+  assert.equal(factQuantityParticipatesInGate("verified"), true);
+  assert.equal(factQuantityParticipatesInGate("confirmed"), true);
 });
 
 test("numeric check passes when markdown and SARIF keep value plus unit and basis", () => {
@@ -148,4 +168,74 @@ test("a 774 token does not satisfy a nearby 7740", () => {
   });
   assert.equal(result.ok, false);
   assert.equal(result.failures[0]?.reason, "missing");
+});
+
+test("unverified fact quantities do not gate a coverage-ok Agent report", () => {
+  const input = reportInput();
+  const markdown = `# 任务报告\n已确认 ${finding.title} (${finding.id})\n${formatQuantityLine(quantity)}`;
+  const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
+  assert.deepEqual(declared.map((item) => item.source_id), ["finding-1"]);
+  const result = checkReportNumericFidelity(declared, { markdown });
+  assert.equal(result.ok, true);
+});
+
+test("verified fact quantities are still enforced", () => {
+  const input = reportInput({
+    facts: [{
+      id: "fact-1",
+      title: "ELF slots",
+      verification_status: "verified",
+      quantities: [{
+        value: 12345,
+        unit: "8-byte ELF slots = sum(section sizes)/8",
+        basis: "raw section sizes before Ghidra fold",
+      }],
+    }],
+  });
+  const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
+  const result = checkReportNumericFidelity(declared, {
+    markdown: `# 任务报告\n已确认 ${finding.title}\n${formatQuantityLine(quantity)}`,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.failures[0]?.source, "fact");
+  assert.equal(result.failures[0]?.reason, "missing");
+});
+
+test("Agent rephrase with coverage falls back to the deterministic template", () => {
+  const input = reportInput({ facts: [] });
+  const agentMarkdown = [
+    `# 任务报告：${input.task.title}`,
+    "",
+    `已确认问题：${finding.title}（${finding.id}）`,
+    "Inventory counted 774 slots after ÷8 folding.",
+  ].join("\n");
+  const gate = checkReportNumericFidelity(
+    declaredQuantitiesFromPayloads(input.confirmed_findings, []),
+    { markdown: agentMarkdown },
+  );
+  assert.equal(gate.ok, false);
+  assert.equal(gate.failures[0]?.reason, "folded");
+
+  const resolved = finalizeTaskReportMarkdown(input, agentMarkdown);
+  assert.equal(resolved.coverageOk, true);
+  assert.equal(resolved.usedDefault, "numeric");
+  assert.equal(resolved.numeric.ok, true);
+  assert.match(resolved.markdown, /Ghidra records after 37 LDDW fold/);
+  assert.match(resolved.markdown, /811 8-byte ELF slots minus folded LDDW aliases/);
+});
+
+test("coverage fallback still embeds declared quantities", () => {
+  const input = reportInput({ facts: [] });
+  const resolved = finalizeTaskReportMarkdown(input, "too short");
+  assert.equal(resolved.usedDefault, "coverage");
+  assert.equal(resolved.numeric.ok, true);
+  assert.match(resolved.markdown, /Ghidra records after 37 LDDW fold/);
+});
+
+test("report prompt and graph inject require verbatim quantities", () => {
+  const graph = readFileSync(new URL("./graph.ts", import.meta.url), "utf8");
+  const executor = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(graph, /REPORT_QUANTITY_VERBATIM_NOTE/);
+  assert.match(executor, /REPORT_QUANTITY_VERBATIM_NOTE/);
+  assert.match(REPORT_QUANTITY_VERBATIM_NOTE, /value、unit、basis/);
 });
