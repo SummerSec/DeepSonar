@@ -267,6 +267,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 设计要点 |
 |------|-------|----------|
+| 删除兼容层 / 第二套真相 / 空洞抽象 | #359 | **未落地**：对照 [ponytail](https://github.com/DietrichGebert/ponytail) 与本仓库第一性原理的交集债。P0 删除死控制 MCP 脚本、`projects.canvas_id` 假身份、leftover CLI 双轨文档；P1 拆 `verify.ts`/`report.ts` 转发 ports 与 Plane 身份列；P2 让本表只留未完成项，并收敛配置/双轨报告/Fact 验证机。不砍沙箱、token、Zod、Attempt 账本。 |
 | Hub 按任务动态选择 Worker 运行镜像 | #357 | **已落地**：`list_available_runtime_images` 只读操作返回项目已启用且存在 trusted 版本的市场镜像目录（仅 `image_key` 与展示字段）；`HubIntentPayload.runtime_image_key` 可选提案压过角色缺省镜像，preflight 与摄入事务双重校验目录成员，非法/未启用/OCI 引用整单拒绝（`invalid_runtime_image` / `invalid_payload`）；Scheduler 仍唯一冻结 digest，Worker 无提案能力，运行中 Job 不换图 |
 | 读图预算 / GraphScope | #30 | **部分已落地**（scope + 字符预算）；索引层/Worker 邻域与可观测性可继续收紧 |
 | Finding 追踪链 + 画布只看链路 | #31 | **已完成**：`GET /findings/:id` 提供结构化、限界的 `trace`；详情主路径消费 evidence/rounds/Fact-Intent flow/gaps；画布支持 `traceFinding` + `focusNode` 深链、淡化/隐藏与 Finding 节点入口 |
