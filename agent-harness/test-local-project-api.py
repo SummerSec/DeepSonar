@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """阶段 A 验收：本地项目/任务 API（docs/LOCAL_PROJECT_MANAGEMENT_MIGRATION.md §11）
-覆盖：本地项目 CRUD/归档、任务创建（画布+root+pending job）、优先级、重试、Plane 绑定/解绑
+覆盖：本地项目 CRUD/归档、任务创建（画布+root+pending job）、优先级、重试
 """
 import json
 import os
@@ -38,7 +38,7 @@ def main():
     print("本地项目:", pid, p["status"])
 
     # 2. 列表/详情；可创建多个项目
-    req("POST", "/projects", {"name": f"本地项目2-{tag}"}, 201)
+    p2 = req("POST", "/projects", {"name": f"本地项目2-{tag}"}, 201)
     lst = req("GET", "/projects")
     assert len([x for x in lst if x["id"] in {pid} or x["name"].endswith(f"-{tag}")]) >= 2, lst
     detail = req("GET", f"/projects/{pid}")
