@@ -40,7 +40,7 @@ const readiness = (ready: boolean): ReadinessResponse => ({
   network_policy: { allow_egress: false, source: "project", material_source: "unspecified" },
   checks: ready
     ? [{ code: "HUB_ROLE_READY", state: "pass", severity: "info", message: "Hub 已就绪" }]
-    : [{ code: "CREDENTIAL_MISSING", state: "fail", severity: "error", message: "缺少模型凭据", fix: { href: "/settings?tab=credentials", target: "凭据设置" } }],
+    : [{ code: "CREDENTIAL_MISSING", state: "fail", severity: "error", message: "缺少模型凭据", fix: { action: "credentials", scope: "global", project_id: null, href: "/settings/credentials", target: "credentials" } }],
   summary: ready ? { errors: 0, warnings: 0, infos: 1 } : { errors: 1, warnings: 0, infos: 0 },
   generated_at: "2026-08-04T00:00:00.000Z",
 });
@@ -179,7 +179,7 @@ test("readiness failure exposes repair links and prevents task creation", async 
   assert.equal(result.kind, "readiness_failed");
   if (result.kind === "readiness_failed") {
     assert.equal(result.project.name, "本地项目");
-    assert.equal(readinessFailures(result.readiness)[0]?.fix?.href, "/settings?tab=credentials");
+    assert.equal(readinessFailures(result.readiness)[0]?.fix?.href, "/settings/credentials");
     assert.equal(resolveReadinessFix(readinessFailures(result.readiness)[0]?.fix, result.readiness.scope, result.project.id)?.href, "/settings/credentials");
   }
   assert.deepEqual(calls, ["project", "readiness"]);
