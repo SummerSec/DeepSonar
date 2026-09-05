@@ -2024,7 +2024,7 @@ export const api = {
       `/canvases/${canvasId}/convergence/stop-after-gate`,
     ),
   drainCanvasPriority: (canvasId: string) =>
-    send<{ canvas_id: string; cancelled: number; hubWaitSeverities: string[] }>(
+    send<{ canvas_id: string; cancelled: number; careSeverities: string[] }>(
       "POST",
       `/canvases/${canvasId}/convergence/drain-priority`,
     ),

@@ -3,13 +3,13 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { actorHasScope } from "../../auth.js";
 import {
+  careSeverities,
   drainNonGateVerifies,
   fixedPriorityForJob,
   maybeTriggerHub,
   parseCanvasConvergence,
   patchCanvasConvergence,
   readCanvasConvergence,
-  resolveHubWaitSeverities,
   rulesForProject,
 } from "../../core.js";
 import { sql } from "../../db.js";
@@ -482,16 +482,13 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const [canvas] = await sql`SELECT id, project_id, target_json FROM canvases WHERE id = ${id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const rules = await rulesForProject(sql, canvas.project_id as string);
-    const care = resolveHubWaitSeverities(rules);
+    const care = careSeverities(rules.minVerifySeverity);
     return {
       canvas_id: id,
       convergence: parseCanvasConvergence(canvas.target_json),
       minVerifySeverity: rules.minVerifySeverity,
       maxVerificationRounds: rules.maxVerificationRounds,
       careSeverities: care,
-      // 兼容旧前端字段名（severity 仅优先级/等待门，不再决定是否验证）
-      hubWaitSeverities: care,
-      autoVerifySeverities: care,
     };
   });
 
@@ -586,16 +583,16 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const rules = await rulesForProject(sql, canvas.project_id as string);
-    const wait = resolveHubWaitSeverities(rules);
+    const wait = careSeverities(rules.minVerifySeverity);
     const result = await drainNonGateVerifies(sql, id, wait);
     await audit(req, {
       action: "canvas.convergence_drain_priority",
       resourceType: "canvas",
       resourceId: id,
       projectId: canvas.project_id as string,
-      after: { ...result, hubWaitSeverities: wait },
+      after: { ...result, careSeverities: wait },
     });
-    return { canvas_id: id, hubWaitSeverities: wait, ...result };
+    return { canvas_id: id, careSeverities: wait, ...result };
   });
 
   app.post("/canvases/:id/convergence/run-hub-now", async (req, reply) => {

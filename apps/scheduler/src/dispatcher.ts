@@ -1421,12 +1421,8 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'pending'`;
     return;
   }
-  // 一任务一画布：优先 job 自带的任务画布；历史 job（canvas_id 为空）兜底到项目旧画布
-  let canvasId = job.canvas_id as string | null;
-  if (!canvasId) {
-    const [project] = await sql`SELECT canvas_id FROM projects WHERE id = ${job.project_id as string}`;
-    canvasId = (project?.canvas_id as string) ?? null;
-  }
+  // 一任务一画布：只认 job.canvas_id。projects.canvas_id 假身份已删，缺画布则不补节点。
+  const canvasId = (job.canvas_id as string | null) ?? null;
   if (!canvasId) return;
   const [{ next_x }] = await sql<[{ next_x: number }]>`
     SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;

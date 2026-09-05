@@ -25,8 +25,8 @@ import {
   assertVendorUpstreamPayload,
   assertVendorUpstreamStatus,
 } from "./opensandbox-poc.js";
-import { OpenSandboxRunner } from "./opensandbox.js";
-import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
+import { OpenSandboxRunner } from "../src/opensandbox.js";
+import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "../src/opensandbox.js";
 
 function fakePocClient(): OpenSandboxClient & { created: OpenSandboxCreateInput[]; killed: number } {
   const created: OpenSandboxCreateInput[] = [];
@@ -744,7 +744,7 @@ test("OpenSandbox runRealAgent retries a transient 503 on the same session for e
 });
 
 test("runRealAgent captures CLI session identity through applyRuntimeOutput", () => {
-  const source = readFileSync(new URL("./runtime-agent.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/runtime-agent.ts", import.meta.url), "utf8");
   assert.match(source, /applyRuntimeOutput\(adapter, rawParsed, adapterState\)/);
   assert.doesNotMatch(source, /const decodedEvents = adapter\.decodeOutput\(rawParsed, adapterState\)/);
 });

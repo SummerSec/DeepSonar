@@ -195,6 +195,12 @@ test("Dispatcher and real executor provision from the frozen snapshot only", () 
   assert.doesNotMatch(executorSource, /networkPolicy\.allow_egress/);
 });
 
+test("dispatcher does not fall back to deleted projects.canvas_id", () => {
+  assert.doesNotMatch(dispatcherSource, /SELECT canvas_id FROM projects/);
+  assert.doesNotMatch(dispatcherSource, /兜底到项目旧画布/);
+  assert.match(dispatcherSource, /只认 job\.canvas_id/);
+});
+
 test("real executor maps tool.call boundaries into stall-visible activity", () => {
   assert.match(executorSource, /recordToolCallActivity/);
   assert.match(executorSource, /toolCallActivityPatch/);

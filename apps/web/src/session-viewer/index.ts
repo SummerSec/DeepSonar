@@ -18,5 +18,6 @@ export {
   type SessionParseResult,
   type SessionTimelineItem,
   type SessionToolStat,
+  type LegacySessionCli,
   type SupportedSessionCli,
 } from "./parseAgentSession";

@@ -11,8 +11,10 @@ import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   DEEPSONAR_GATEWAY_PROXY_HOST,
   freezeAgentCliRuntime,
-  shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
+import {
+  shouldRunOpenSandboxPoc,
+} from "@deepsonar/runtime-sandbox/poc";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox Platform API PoC (set OPEN_SANDBOX_POC=1)");
@@ -66,11 +68,11 @@ try {
     { config },
   ] = await Promise.all([
     import("fastify"),
-    import("./db.js"),
-    import("./domains/platform-api/index.js"),
-    import("./runtime.js"),
-    import("./executor-real.js"),
-    import("./config.js"),
+    import("../../apps/scheduler/src/db.js"),
+    import("../../apps/scheduler/src/domains/platform-api/index.js"),
+    import("../../apps/scheduler/src/runtime.js"),
+    import("../../apps/scheduler/src/executor-real.js"),
+    import("../../apps/scheduler/src/config.js"),
   ]);
   const { sql, migrate } = dbModule;
   const {

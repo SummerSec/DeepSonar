@@ -3,19 +3,19 @@
  * Default CI stays skip-safe; set OPEN_SANDBOX_POC=1 only when a server is up.
  */
 import { randomUUID } from "node:crypto";
-import { runRealAgent, runtimeCliEnv } from "./runtime-agent.js";
-import { SHARED_ASSETS_MOUNT_PATH } from "./runtime-shared.js";
-import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
-import type { ProvisionInput, SandboxRunner } from "./index.js";
-import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+import { runRealAgent, runtimeCliEnv } from "../src/runtime-agent.js";
+import { SHARED_ASSETS_MOUNT_PATH } from "../src/runtime-shared.js";
+import { OpenSandboxRunner, type OpenSandboxClient } from "../src/opensandbox.js";
+import type { ProvisionInput, SandboxRunner } from "../src/index.js";
+import { CLI_SESSION_ADAPTERS } from "../src/cli-session-adapters.js";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   applyRuntimeOutputText,
   type AdapterStartContext,
   type AdapterRuntimeState,
   type AgentCliId,
-} from "./runtime-adapters.js";
-import { shellQuote, type RuntimeHost } from "./runtime-host.js";
+} from "../src/runtime-adapters.js";
+import { shellQuote, type RuntimeHost } from "../src/runtime-host.js";
 
 export const OPENSANDBOX_POC_IMAGE =
   "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";

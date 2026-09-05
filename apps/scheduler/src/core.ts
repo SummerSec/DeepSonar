@@ -209,7 +209,7 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
   if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!["claude-code", "pi", "dsh", "codex", "open-code"].includes(key)) return fallback;
+    if (!["claude-code", "pi", "dsh"].includes(key)) return fallback;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
     out[key] = value;
   }
@@ -291,11 +291,6 @@ export function isSeverityInVerifyScope(min: string, severity: unknown): boolean
   if (normalized.length === 0) return true;
   if (!(SEVERITY_RANK as readonly string[]).includes(normalized)) return true;
   return careSeverities(min).includes(normalized);
-}
-
-/** @deprecated 兼容旧调用名；语义 = careSeverities(rules.minVerifySeverity) */
-export function resolveHubWaitSeverities(rules: ProjectRules): string[] {
-  return careSeverities(rules.minVerifySeverity);
 }
 
 /**

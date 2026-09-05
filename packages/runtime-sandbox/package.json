@@ -23,6 +23,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./poc": {
+      "types": "./poc/index.ts",
+      "default": "./poc/index.ts"
     }
   }
 }

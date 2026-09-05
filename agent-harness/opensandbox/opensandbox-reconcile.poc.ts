@@ -11,9 +11,11 @@ import postgres from "postgres";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   freezeAgentCliRuntime,
-  shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox";
-import { buildAttemptState } from "./domains/job-attempt/model.js";
+import {
+  shouldRunOpenSandboxPoc,
+} from "@deepsonar/runtime-sandbox/poc";
+import { buildAttemptState } from "../../apps/scheduler/src/domains/job-attempt/model.js";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox reconcile PoC (set OPEN_SANDBOX_POC=1)");
@@ -54,7 +56,7 @@ const pendingAttemptId = randomUUID();
 const runningAttemptId = randomUUID();
 let endSql: (() => Promise<unknown>) | null = null;
 let databaseCreated = false;
-let runner: Awaited<typeof import("./runtime.js")>["runner"] | null = null;
+let runner: Awaited<typeof import("../../apps/scheduler/src/runtime.js")>["runner"] | null = null;
 const provisioned: Array<{ jobId: string; sandboxId: string }> = [];
 
 try {
@@ -67,9 +69,9 @@ try {
   process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
 
   const [dbModule, runtimeModule, { reconcileOnBoot }] = await Promise.all([
-    import("./db.js"),
-    import("./runtime.js"),
-    import("./reconcile.js"),
+    import("../../apps/scheduler/src/db.js"),
+    import("../../apps/scheduler/src/runtime.js"),
+    import("../../apps/scheduler/src/reconcile.js"),
   ]);
   runner = runtimeModule.runner;
   const sandboxRunner = runtimeModule.runner;

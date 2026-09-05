@@ -12,7 +12,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { GATEWAY_PROXY_SCRIPT, shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox";
+import { GATEWAY_PROXY_SCRIPT } from "@deepsonar/runtime-sandbox";
+import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox/poc";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox prod-compose PoC (set OPEN_SANDBOX_POC=1)");
@@ -25,7 +26,7 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const deployDir = join(repoRoot, "deploy");
 const dir = mkdtempSync(join(tmpdir(), "opensandbox-prod-compose-"));
 const projectName = `os-prod-compose-${process.pid}-${randomUUID().slice(0, 8)}`;

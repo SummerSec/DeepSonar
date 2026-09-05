@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
+import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "../src/opensandbox.js";
 import {
   findRemainingJobClaims,
   readDefaultStorageClass,

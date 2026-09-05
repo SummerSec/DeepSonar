@@ -6,10 +6,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSdkOpenSandboxClient,
-  listOfficialOpenSandboxRuntimeImages,
   OpenSandboxRunner,
   OPENSANDBOX_SERVER_IMAGE,
   readOpenSandboxPin,
+} from "../packages/runtime-sandbox/src/index.ts";
+import {
+  listOfficialOpenSandboxRuntimeImages,
   runOpenSandboxArchPoc,
   runOpenSandboxAssetsPoc,
   runOpenSandboxCancelPoc,
@@ -26,7 +28,7 @@ import {
   shouldRunOpenSandboxK8sPoc,
   shouldRunOpenSandboxK8sAssetsPoc,
   shouldRunOpenSandboxPoc,
-} from "../packages/runtime-sandbox/src/index.ts";
+} from "../packages/runtime-sandbox/poc/index.ts";
 import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");

@@ -16,7 +16,6 @@
 | **as-built** | 与当前主路径代码对齐的契约/运维说明 |
 | **as-built + 历史推演** | 主路径已落地；正文保留旧方案段落仅供对照 |
 | **运维/发布** | 部署与镜像发布流程（持续有效） |
-| **可选集成** | 默认路径不依赖；文档供联调 |
 | **进行中** | 仅部分落地，见文内分段状态 |
 | **素材/非产品** | Prompt、品牌等，不是系统契约 |
 
@@ -75,9 +74,9 @@
 | 主题 | 事实 |
 |------|------|
 | #38 实时流 WS 鉴权 | **已关**；`ws-ticket` + 运行中 stream tail，见 DESIGN §8 |
-| #39 画布 soft-load / delta | **已关**；见 DESIGN §11 |
+| #39 画布 soft-load / delta | **已关**；画布 L0 + delta，见 CHANGELOG / 代码 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
-| #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
+| #100 / #135 / #145 / #152 | **已关**；三类治理 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
 | #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
 | #244 / #284 | **#284 修订**：官方 stale pin 在 catalog 提升时自动滚到最新 trusted；`pin_ok` / 第三方 / `pin_policy=hold` 仍不自动换；过期且未滚动时 `RUNTIME_IMAGE_PIN_STALE` + 一键升级 |
 | #286 | **已完成**：任务/Job 启动前 inspect 冻结 digest；catalog ready 但本机缺层 → `RUNTIME_IMAGE_NOT_LOCAL`，不插注定失败的 Job |

@@ -7,8 +7,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { KubernetesSharedAssetsVolumeManager, readDefaultStorageClass } from "./kubernetes-shared-assets-volume.js";
-import { OpenSandboxRunner, type OpenSandboxClient } from "./opensandbox.js";
+import { KubernetesSharedAssetsVolumeManager, readDefaultStorageClass } from "../src/kubernetes-shared-assets-volume.js";
+import { OpenSandboxRunner, type OpenSandboxClient } from "../src/opensandbox.js";
 import {
   findKataWorkload,
   OPENSANDBOX_K8S_NAMESPACE,
@@ -17,8 +17,8 @@ import {
   type KubectlJson,
 } from "./opensandbox-k8s-poc.js";
 import { OPENSANDBOX_POC_CONTRACT, OPENSANDBOX_POC_IMAGE } from "./opensandbox-poc.js";
-import { SHARED_ASSETS_MOUNT_PATH } from "./runtime-shared.js";
-import { managedSharedAssetsVolumeName } from "./shared-assets-volume.js";
+import { SHARED_ASSETS_MOUNT_PATH } from "../src/runtime-shared.js";
+import { managedSharedAssetsVolumeName } from "../src/shared-assets-volume.js";
 
 const SEED_NAME = "poc-seed.txt";
 
