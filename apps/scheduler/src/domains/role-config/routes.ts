@@ -10,13 +10,12 @@ import {
   CONFIG_FILE_MAX_COUNT,
   CONFIG_FILE_MAX_TOTAL,
   DISPATCH_CLAIM_ADVISORY_KEY,
-  PLATFORM_DEFAULT_AGENT_CLI,
-  PLATFORM_DEFAULT_AGENT_MODEL,
   scanConfigContent,
   rolesForProject,
   validateConfigFilePath,
   validateEnvVars,
 } from "../../core.js";
+import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
 import { parseContextWindowTokens } from "../../provider-settings.js";

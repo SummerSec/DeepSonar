@@ -8,7 +8,7 @@ const applicationSource = readFileSync(new URL("./application.ts", import.meta.u
 
 test("event-ingestion owns semantic side effects behind explicit ports", () => {
   const facade = coreSource.match(/export async function applySideEffects\([\s\S]*?\n}\n/)?.[0];
-  assert.ok(facade, "core compatibility facade must remain available");
+  assert.ok(facade, "core composition root must keep applySideEffects wiring");
   assert.match(facade, /eventIngestionSideEffectApplication\.applySideEffects/);
   assert.ok(facade.length < 700, "core must not retain the semantic side-effect implementation");
 

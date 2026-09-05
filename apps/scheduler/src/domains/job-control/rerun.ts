@@ -2,8 +2,8 @@ import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   parseRelatedFindingIds,
   resolveAgentSnapshotForJob,
-  type AgentRuntimeSnapshot,
 } from "../../core.js";
+import type { AgentRuntimeSnapshot } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { runner } from "../../runtime.js";
 import { markAttemptInterrupted } from "../job-attempt/index.js";

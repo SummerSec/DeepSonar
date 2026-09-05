@@ -58,7 +58,7 @@ pnpm typecheck        # 全 workspace 类型检查
 |------|------|
 | `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper 两个后台循环 |
 | `dispatcher.ts` | 领取 pending job（全局/每项目并发上限，原子 claim）→ provision → run |
-| `core.ts` | Scheduler composition root 与既有内部 import 的窄 facade；保留共享规则、Job 创建/终态编排，各领域实现通过 application/ports 注入 |
+| `core.ts` | Scheduler composition root：共享规则、Job 创建/终态编排，并组装各领域；领域实现从各自模块导入，不经 core 再导出 |
 | `domains/*` | Job lifecycle、event ingestion、Hub、Finding verification、Report convergence、runtime snapshot 及各 HTTP API 的领域入口；语义事件副作用归 `event-ingestion/side-effects.ts` |
 | `executor-real.ts` | 真实 agent 执行：按 `agent_snapshot_json` 冻结快照决定 provider/model/env/prompt |
 | `reconcile.ts` | 重启对账 DB↔docker：孤儿容器强删、死在 provision 途中的 job 重置回 pending、running → orphan |

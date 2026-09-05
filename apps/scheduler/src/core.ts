@@ -21,20 +21,11 @@ import { isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import {
-  PLATFORM_DEFAULT_AGENT_CLI,
-  PLATFORM_DEFAULT_AGENT_MODEL,
-  RUNTIME_TEST_TOOLCHAIN_POLICY,
   createRoleRuntimeSnapshotApplication,
   freezeAgentSnapshotNetworkPolicy,
-  roleNameForJobType as roleNameForRuntimeType,
-  withRuntimeTestToolchainPolicy,
   type AgentRuntimeSnapshot,
-  type ReasoningEffort,
 } from "./domains/role-runtime-snapshot/index.js";
-import {
-  canTransition as canJobTransition,
-  transitionJob as applyJobTransition,
-} from "./domains/job-lifecycle/index.js";
+import { transitionJob as applyJobTransition } from "./domains/job-lifecycle/index.js";
 import {
   createEventIngestionApplication,
   createEventIngestionSideEffectApplication,
@@ -43,7 +34,6 @@ import {
 } from "./domains/event-ingestion/index.js";
 import {
   createHubOrchestrationApplication,
-  shouldWakeEvidenceHub as hubShouldWakeEvidenceHub,
   type HubHumanCommentInput,
   type HubHumanCommentResult,
   type HubJobRecord,
@@ -52,46 +42,19 @@ import {
   type HubAnalysisCompleteGate,
 } from "./domains/hub-orchestration/index.js";
 import { resolveFindingProtocol } from "./finding-protocol.js";
-import * as findingVerificationLegacy from "./verify.js";
-import * as reportConvergenceLegacy from "./report.js";
+import * as findingVerification from "./verify.js";
+import * as reportConvergence from "./report.js";
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
-import {
-  createFindingVerificationApplication,
-  type FindingVerificationLegacyPort,
-} from "./domains/finding-verification/index.js";
-import { createReportConvergenceApplication } from "./domains/report-convergence/index.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
 import { assertFrozenRuntimeImageLocal } from "./runtime-images.js";
 
-export { sha16 } from "./domains/event-ingestion/index.js";
-
-export {
-  PLATFORM_DEFAULT_AGENT_CLI,
-  PLATFORM_DEFAULT_AGENT_MODEL,
-  RUNTIME_TEST_TOOLCHAIN_POLICY,
-  withRuntimeTestToolchainPolicy,
-} from "./domains/role-runtime-snapshot/index.js";
-export const roleNameForJobType = roleNameForRuntimeType;
-export type { AgentRuntimeSnapshot, ReasoningEffort } from "./domains/role-runtime-snapshot/index.js";
-
-const findingVerificationApplication = createFindingVerificationApplication(
-  findingVerificationLegacy as unknown as FindingVerificationLegacyPort,
-);
-const reportConvergenceApplication = createReportConvergenceApplication(reportConvergenceLegacy);
 const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
-
-// ---------- Job lifecycle compatibility facade ----------
-//
-// Existing callers keep importing these names from core while the bounded
-// context owns the policy and SQL application seam.  Keep this facade narrow
-// until dispatcher/reaper/reconcile migrate explicitly in later slices.
-export const canTransition = canJobTransition;
 
 /**
  * Atomic status transition.  A null result still means a race or illegal
@@ -125,7 +88,7 @@ export async function assertJobCanPublishSharedAsset(jobId: string, sandboxId: s
 // Event-ingestion owns append/dedup/sequence ordering. Semantic event writes
 // are composed through the event-ingestion bounded context's typed ports.
 const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
-  findingVerification: findingVerificationApplication,
+  findingVerification,
   rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
   rolesForProject: async (tx, projectId) => rolesForProject(tx as unknown as typeof sql, projectId),
   resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = [], options) =>
@@ -432,7 +395,6 @@ export function priorityMatchesJob(input: SchedulingPriorityInput, priority: num
 }
 
 /** Compatibility facade; the Hub bounded context owns this edge-trigger policy. */
-export const shouldWakeEvidenceHub = hubShouldWakeEvidenceHub;
 
 const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
 
@@ -781,12 +743,6 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
   return rows.filter((r) => set.has(r.name));
 }
 
-// ---------- Role/runtime snapshot compatibility facade ----------
-//
-// The role-runtime-snapshot context owns RoleConfig resolution and immutable
-// runtime-image selection.  Keep the historical core exports while callers
-// migrate to the explicit context entrypoint.
-
 // ---------- Job 创建 ----------
 
 export interface CreateJobInput {
@@ -1081,9 +1037,7 @@ export async function ingestEventBundle(
   return eventIngestionApplication.ingestEventBundle(jobId, envelopes);
 }
 
-/** Compatibility facade for semantic event application; ownership lives in event-ingestion. */
-export type { EventSideEffectServices as CoreSideEffectServices } from "./domains/event-ingestion/index.js";
-
+/** Composition root wiring for semantic event application; ownership lives in event-ingestion. */
 export async function applySideEffects(
   tx: Tx,
   jobId: string,
@@ -1154,22 +1108,16 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
     ),
   fixedPriorityForJob: (input) => fixedPriorityForJob(input),
   insertEdgeIfAbsent,
-  settleCanvasFindingsAtGuardrail: async (tx, canvasId, reason) => {
-    return findingVerificationApplication.settleCanvasFindingsAtGuardrail(tx, canvasId, reason);
-  },
+  settleCanvasFindingsAtGuardrail: findingVerification.settleCanvasFindingsAtGuardrail,
   evaluateAnalysisCompleteGate: async (tx, canvasId, options) => {
-    return findingVerificationApplication.evaluateAnalysisCompleteGate(
+    return findingVerification.evaluateAnalysisCompleteGate(
       tx,
       canvasId,
       options,
     ) as Promise<HubAnalysisCompleteGate>;
   },
-  hasSucceededRoleWork: async (tx, canvasId) => {
-    return findingVerificationApplication.hasSucceededRoleWork(tx, canvasId);
-  },
-  maybeDispatchReport: async (tx, canvasId) => {
-    return reportConvergenceApplication.maybeDispatchReport(tx, canvasId);
-  },
+  hasSucceededRoleWork: findingVerification.hasSucceededRoleWork,
+  maybeDispatchReport: reportConvergence.maybeDispatchReport,
 });
 
 type CanvasEdgeInput = {
@@ -1338,11 +1286,11 @@ export async function finalizeJob(
   // Report Job：成功写产物并把 Root 置 succeeded；失败保持 reporting
   if (job?.type === "report") {
     if (status === "succeeded") {
-      await reportConvergenceApplication.finalizeReportJob(tx, jobId, {
+      await reportConvergence.finalizeReportJob(tx, jobId, {
         summary: result?.summary ?? null,
       });
     } else {
-      await reportConvergenceApplication.finalizeReportJob(tx, jobId, {
+      await reportConvergence.finalizeReportJob(tx, jobId, {
         failed: true,
         error: result?.error ?? "report_failed",
       });
@@ -1365,7 +1313,7 @@ export async function finalizeJob(
 
   // verify_finding：统一收口（证据硬门 + 回弹 / needs_human / confirmed）
   if (job?.type === "verify_finding" && job.finding_id) {
-    const closed = await findingVerificationApplication.closeVerifyRound(tx, jobId, {
+    const closed = await findingVerification.closeVerifyRound(tx, jobId, {
       jobStatus: status === "succeeded" ? "succeeded" : "failed",
       proposedVerdict: result?.verdict,
       summary: result?.summary,
@@ -1378,7 +1326,7 @@ export async function finalizeJob(
     }
   } else if (job && isVerificationFollowup) {
     // 补证成功或失败：等同组全部终态后再验 / 再回弹（不 force Hub）
-    await findingVerificationApplication.maybeReverifyAfterFollowup(tx, job);
+    await findingVerification.maybeReverifyAfterFollowup(tx, job);
   }
 
   // hub 循环（§8.3）：
@@ -1418,7 +1366,7 @@ export async function recoverVerifyJobTerminal(
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (!job || job.type !== "verify_finding" || !job.finding_id) return;
     if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
-    const closed = await findingVerificationApplication.closeVerifyRound(tx, jobId, {
+    const closed = await findingVerification.closeVerifyRound(tx, jobId, {
       jobStatus,
       error: error ?? null,
       summary: null,
@@ -1447,7 +1395,6 @@ export async function recoverVerifyJobTerminal(
   });
 }
 
-/** Compatibility facade for the extracted Hub orchestration application. */
 export type CanvasJobTerminalStatus = HubCanvasJobTerminalStatus;
 
 export async function advanceCanvasAfterTerminalJob(
@@ -1592,7 +1539,6 @@ export function scanConfigContent(content: string): string | null {
   return null;
 }
 
-/** Compatibility facade for the extracted role/runtime snapshot context. */
 export async function resolveAgentSnapshotForJob(
   db: typeof sql,
   projectId: string,

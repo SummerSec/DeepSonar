@@ -35,8 +35,8 @@ import {
   preflightDeferredSemanticEvent,
   rolesForProject,
   rulesForProject,
-  type AgentRuntimeSnapshot,
 } from "./core.js";
+import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";

@@ -243,7 +243,7 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 
 `event-ingestion` 先解析目标 Canvas，按 Canvas → Job → 事件历史/领域记录的顺序加锁，并在同一事务中完成 dedup、`events` append 和语义副作用；任何校验或下游 service 失败都会连同配额与副作用整体回滚。Finding/Hub/Report/runtime snapshot 变化只通过注入的显式 service ports 发起，不由 event-ingestion 直接取得其他领域的可变全局状态。
 
-`core.ts` 只保留既有调用方所需的兼容 facade、共享规则与 composition root；Hub 与事件副作用实现不再由 facade 承载。Finding verification、Report convergence 与 role/runtime snapshot 通过各自的 application/ports seam 暴露，legacy SQL adapter 仅用于保持既有数据库行为和外层事务边界。HTTP 业务 handler 已全部迁入 `domains/*/routes.ts`，顶层 `routes.ts` 仅安装共享鉴权/项目作用域 hook、Gateway，并组装各领域 registrar。route manifest 同时锁定 Fastify/OpenAPI surface，源码护栏禁止业务 handler 回流顶层。内部 cycle-dodging dynamic imports 已移除，跨域依赖通过静态 import 和显式 adapter 可审查。
+`core.ts` 是 composition root：共享规则、Job 创建与终态编排，并组装 event-ingestion / Hub / Finding / Report / runtime snapshot。Hub 与事件副作用实现不在 `core.ts`。Finding verification 与 Report convergence 的实行分别在 `verify.ts` / `report.ts`；event-ingestion 只依赖它真正调用的窄 port。HTTP 业务 handler 已全部迁入 `domains/*/routes.ts`，顶层 `routes.ts` 仅安装共享鉴权/项目作用域 hook、Gateway，并组装各领域 registrar。route manifest 同时锁定 Fastify/OpenAPI surface，源码护栏禁止业务 handler 回流顶层。内部 cycle-dodging dynamic imports 已移除，跨域依赖通过静态 import 和显式 adapter 可审查。
 
 **护栏**（同时是防注入措施，见 §9）：
 
@@ -420,7 +420,7 @@ findings GIN (title gin_trgm_ops), GIN (location gin_trgm_ops), GIN (summary gin
 `progress_count`、`standard_count` 或独立的 `terminal_count`。超过额度时抛出稳定
 `event_rate_limited`（含 `retry_after_sec`、bucket、limit），并由外层事务回滚 dedup、
 事件、节点、边和状态副作用；重复 `event_id` 直接返回 deduped，不占额度。计数行随
-数据库保留，跨 Scheduler 进程/重启仍有效，窗口回拨不会倒退。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）还会
+数据库保留，跨 Scheduler 进程/重启仍有效，窗口回拨不会倒退。`event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）还会
 按 Scheduler-owned Job 类型/冻结快照重算工具授权，并要求 Job 为 `status=running`；终态、
 角色种类或快照工具不一致时回滚当前 dedup、额度、事件和图副作用。项目数据导入/恢复是
 历史审计写入，可按 manifest 批量恢复既有 `events` 而不消耗运行时额度；恢复完成后的新
@@ -492,7 +492,7 @@ Worker 不假设目标类型或固定路径。是否需要代码、网页、制�
 - 静态 `deepsonar-control` Skill 引导 Agent 先读取 capabilities/OpenAPI，再按冻结 operation 调用 HTTP API。Pi 运行时固定为 `pi --mode rpc --no-approve --no-extensions`，通过持久 JSONL framer 处理任意字节分块；只有 `agent_settled` 作为 Agent 侧静止信号，终态仍必须经过 `mark_job_done` 完成门。第三方 Pi 扩展走注册制：RoleConfig `pi_extensions` 只接受平台注册表 id，Job 创建冻结后经 `-e` 注入 `/workspace/.deepsonar-home/.pi/agent/extensions/` 下的平台 stub（再 export 镜像预置入口）；项目/Agent 自装扩展不会自动加载。出网扩展服从任务 `allow_egress`，且必须绑到注册表声明的兼容镜像（pilot `pi-web-access` 不进 base）；长期密钥不进快照或工作区。
 - Job 进入真实执行时，Scheduler 从冻结的 `agent_snapshot_json.platform_tools` 签发独立短期 capability token，仅存 hash 并绑定 `job_id`、`project_id`、operation 列表和 TTL，通过 `DEEPSONAR_API_BASE_URL` / `DEEPSONAR_API_TOKEN` 注入 CLI 环境。它不复用 Credential/Model Gateway token，不写回 snapshot、workspace、运行清单、日志或 evidence，并在成功、失败、超时、取消或孤儿终态撤销；鉴权还要求 Job 仍在运行。
 - API operation 不直接复制 `event-ingestion`：路由调用进程内注册的当前 Job runtime handler；只读 operation 返回冻结角色/资产目录，语义写 operation 复用 `onSemanticEvent`、payload_file/共享资产宿主读取、计数和 Hub/done 延迟终态，再进入 Scheduler 权威事务。直接参数与展开后的 `payload_file` 共用固定 256 KiB UTF-8 JSON 上限。Hub/Human 的副作用仍延迟到 Agent 退出后执行，但当前 Job、画布引用、角色、Finding 绑定和完成门在返回 `accepted` 前由只读权威事务预检，最终副作用事务再次校验。API 返回 `accepted` 只表示 Scheduler 已接收通过同步校验的输入；HTTP 错误统一返回可重试稳定错误码并要求 Agent 修正请求，不允许切换控制传输。
-- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边；HTTP 响应同步返回最终接收或稳定拒绝结果。
+- 宿主先用不含 Scheduler-owned 字段的 `ControlEventEnvelope` 严格校验（Fact 不得带 `intent_node_id`，Finding 不得带 `raw`），再转换为内部 `EventEnvelope`；`event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）仍在写入前再次校验，并以 `jobs.type`/冻结快照重算工具、角色 kind，要求 Job 仍为 `running`。需要数据库的 referable/role/verification 业务约束在同一 ingest 事务中执行，失败抛稳定 `ControlInputError` 并回滚 dedup、rate-limit、event、节点和边；HTTP 响应同步返回最终接收或稳定拒绝结果。
 - `emit_finding` 只允许 Agent-facing 的严格 Finding 子集；profile/category/tags/evidence refs/scoring 由共享 Zod schema 限界，`raw`、协议修改、验证派生和最终 severity/score 均为 Scheduler-owned。Scheduler 在摄入事务中按画布快照归一化 profile、重算支持的 CVSS、保留允许的未知版本原文，再做 fingerprint 去重和自动 Verify。
 - 非 JSON/未知 runtime 行、伪造的控制 MCP tool call 和 Agent 对 `.deepsonar/control-*` 控制文件的尝试只产生固定分类告警/指标（不记录原文），跳过后继续解析后续合法行；平台控制 telemetry 仅保留 operation/调用标识与输入 shape/count，非控制工具保持既有可观测性；不恢复可写事件文件队列。
 - CLI stderr 不参与终态或语义事件推断。Runtime 在任意 SDK chunk 边界上对短期 Job Token 做流式精确脱敏，再以 `runtime.stderr` 写入 normalized evidence；单次运行累计最多 1 MiB，达到上限写 `runtime.stderr.truncated` 后停止采集。`jobs.error` 继续只保存短尾摘要，完整有界诊断只从鉴权 evidence 端点读取。
@@ -554,7 +554,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 Provision admission 是数据库 claim 事务的一部分，而不是进程内 semaphore：effective `global_settings.maxConcurrentProvisioning` 先检查当前 provisioning 资源占用，超额 Job 保持 `pending`，不写入或消耗 `claimed_at`；槽位释放后调度器显式唤醒 pending 队列，重新 claim 并推进到 `running`。`.env` 的 `PROVISION_CONCURRENCY=2` 只在该全局配置缺失时作为 fallback，不能绕过数据库门禁，也不改变其他全局/项目/Provider/凭据配额。
 
-平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 只派生 API operation allowlist；关闭项不会出现在动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。所有治理 CLI 的控制能力只走 HTTP API；冻结 adapter 缺少 `platformControlApi` 或 operation 时执行前 fail closed。Pi 恢复必须使用 `get_state` 返回的精确 `sessionFile`，不选择 latest。
+平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 只派生 API operation allowlist；关闭项不会出现在动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。所有治理 CLI 的控制能力只走 HTTP API；冻结 adapter 缺少 `platformControlApi` 或 operation 时执行前 fail closed。Pi 恢复必须使用 `get_state` 返回的精确 `sessionFile`，不选择 latest。
 
 ### 8.3 可信运行镜像与独立市场
 

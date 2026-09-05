@@ -5,8 +5,8 @@ import {
   isSeverityInVerifyScope,
   fixedPriorityForJob,
   priorityMatchesJob,
-  shouldWakeEvidenceHub,
 } from "./core.js";
+import { shouldWakeEvidenceHub } from "./domains/hub-orchestration/index.js";
 import { graphEligibilityReason, loadGraphEligibilityBatch } from "./dispatcher.js";
 import { classifyTaskReportAvailability } from "./report.js";
 import { buildVerificationFollowupPayload } from "./verify.js";

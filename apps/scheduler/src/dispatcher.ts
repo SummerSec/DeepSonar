@@ -6,13 +6,12 @@ import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   globalRules,
   ingestEvent,
-  PLATFORM_DEFAULT_AGENT_CLI,
   projectJobQuotaFromConfig,
   recoverVerifyJobTerminal,
   rolesForProject,
-  type AgentRuntimeSnapshot,
   type ProjectRules,
 } from "./core.js";
+import { PLATFORM_DEFAULT_AGENT_CLI, type AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
 import { sql } from "./db.js";

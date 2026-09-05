@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   RUNTIME_TEST_TOOLCHAIN_POLICY,
   withRuntimeTestToolchainPolicy,
-} from "../apps/scheduler/src/core.ts";
+} from "../apps/scheduler/src/domains/role-runtime-snapshot/index.ts";
 
 const custom = "operator-authored test instructions";
 
