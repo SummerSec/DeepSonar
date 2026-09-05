@@ -369,16 +369,10 @@ export function fixedPriorityForJob(input: SchedulingPriorityInput): number {
   return FIXED_PRIORITY.role;
 }
 
-/** Alias kept intentionally explicit for tests and API adapters. */
-export const priorityForJob = fixedPriorityForJob;
-export const resolveJobPriority = fixedPriorityForJob;
-
 /** A PATCH may only write the class-derived value, never an arbitrary score. */
 export function priorityMatchesJob(input: SchedulingPriorityInput, priority: number): boolean {
   return Number.isInteger(priority) && priority === fixedPriorityForJob(input);
 }
-
-/** Compatibility facade; the Hub bounded context owns this edge-trigger policy. */
 
 const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
 

@@ -249,6 +249,7 @@ test("verify scope only reads minVerifySeverity; leftover list aliases are ignor
   const coreSource = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
   const configSource = readFileSync(new URL("./config.ts", import.meta.url), "utf8");
   assert.doesNotMatch(coreSource, /autoVerifySeverities|hubWaitSeverities|inferMinFromList/);
+  assert.doesNotMatch(coreSource, /export const priorityForJob|export const resolveJobPriority|Compatibility facade/);
   assert.doesNotMatch(configSource, /AUTO_VERIFY_SEVERITIES|autoVerifySeverities/);
   assert.match(configSource, /MIN_VERIFY_SEVERITY/);
 

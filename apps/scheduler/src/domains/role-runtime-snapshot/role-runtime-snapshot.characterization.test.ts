@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -33,6 +34,8 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
     /Mobile device protocols/,
   );
   assert.equal(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit"), "custom");
+  const source = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /warnIgnoredLegacyAgentDefaults|legacy AGENT_PROVIDER/);
 });
 
 test("项目镜像策略按全局继承与项目托管分别选择镜像", () => {

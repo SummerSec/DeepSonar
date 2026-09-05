@@ -448,7 +448,7 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
     setConnected(false);
 
     const appendPage = (page: StreamPage) => {
-      const items = page.items ?? page.events ?? [];
+      const items = page.items ?? [];
       const fresh = items.filter((item) => {
         const streamItem = item as unknown as StreamItem;
         const key = `${streamItem.attempt_id ?? "legacy"}:${streamItem.seq}`;
@@ -507,7 +507,7 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         ws.onmessage = (ev) => {
           try {
             const payload = JSON.parse(String(ev.data)) as StreamPage | StreamItem;
-            if (Array.isArray((payload as StreamPage).items) || Array.isArray((payload as StreamPage).events)) {
+            if (Array.isArray((payload as StreamPage).items)) {
               appendPage(payload as StreamPage);
               return;
             }

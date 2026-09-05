@@ -126,7 +126,6 @@ export function registerStreamRoutes(app: FastifyInstance): void {
       const next = streamCursor(item);
       enqueue({
         items: [item],
-        events: [item],
         after,
         next_cursor: next,
         has_more: false,
@@ -166,7 +165,7 @@ export function registerStreamRoutes(app: FastifyInstance): void {
       return;
     }
     for (const item of initial.items) seen.add(streamItemKey(item));
-    enqueue({ ...initial, events: initial.items });
+    enqueue(initial);
     after = initial.next_cursor ?? after;
     snapshotting = false;
     for (const item of pendingItems) emitLive(item);

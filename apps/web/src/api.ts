@@ -745,7 +745,6 @@ export interface JobEvidence {
 
 export interface StreamPage {
   items: Array<Record<string, unknown>>;
-  events?: Array<Record<string, unknown>>;
   after: string | null;
   next_cursor: string | null;
   has_more: boolean;
@@ -2036,10 +2035,6 @@ export const api = {
   jobEvidence: (jobId: string) => get<JobEvidence>(`/jobs/${jobId}/evidence`),
   jobStreamPage: (jobId: string, opts?: { after?: string | null; limit?: number; tail?: boolean }) =>
     get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined, tail: opts?.tail ? "1" : undefined })}`),
-  jobStream: async (jobId: string) => {
-    const page = await get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ limit: "50" })}`);
-    return { events: page.items, ...page };
-  },
   jobEventsPage: (jobId: string, opts?: { after?: string | null; limit?: number }) =>
     get<PageEnvelope<JobEvent>>(`/jobs/${jobId}/events${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
   jobSession: (jobId: string, opts?: { path?: string }) =>

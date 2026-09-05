@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { filterStreamBlocks, recordsToStreamBlocks, reduceStreamItem, redactToolValue, streamItemKey, type StreamItem } from "./LiveStream.js";
 
@@ -60,6 +61,14 @@ test("tool search includes input, result, error, and exit fields", () => {
   assert.equal(filterStreamBlocks(blocks, "all", "needle").length, 1);
   assert.equal(filterStreamBlocks(blocks, "all", "warning").length, 1);
   assert.equal(filterStreamBlocks(blocks, "all", "7").length, 1);
+});
+
+test("live stream pages only read canonical items", () => {
+  const source = readFileSync(new URL("./LiveStream.tsx", import.meta.url), "utf8");
+  const api = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /page\.events|StreamPage\)\.events/);
+  assert.doesNotMatch(api, /events\?: Array<Record<string, unknown>>/);
+  assert.doesNotMatch(api, /jobStream:/);
 });
 
 test("display redaction removes secret-like keys and bearer values", () => {

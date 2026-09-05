@@ -217,8 +217,8 @@ export const VerifyStatus = z.enum([
 ]);
 export type VerifyStatus = z.infer<typeof VerifyStatus>;
 
-/** Verify Agent 提交的 verdict 提案；false_positive 仅兼容期，服务端映射为 rework。 */
-export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human", "false_positive"]);
+/** Verify Agent 提交的 verdict 提案。历史 Finding `verify_status=false_positive` 仍可读，不能再作为输入。 */
+export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human"]);
 export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
 
 /** 绑定到 Finding 的独立复核 / 实测证据（emit_fact 可选字段）。 */

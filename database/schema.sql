@@ -1620,7 +1620,7 @@ $instructions$),
 2. 验证触发条件、可达性、权限前提、受影响版本和实际影响；优先依据**独立复核 + 完整实测**证据，不能复现时说明缺口。
 3. **verdict 只能是**：
    - `confirmed`：你判断证据足够；Scheduler 仍会检查：至少一条合格 review、一条合格 test、来自不同 Job 且非原始 Finding Job、test 含 subject_revision/steps/expected/actual（或 artifact）、无未解释 refutes。硬门失败会被改写为 rework 并回弹 Hub。
-   - `rework`：证据不足、冲突、假设需改写；summary 写明缺失项（如 independent_review、runtime_test）。兼容旧值 `false_positive`，服务端映射为 rework，Finding 不会永久标成误报终态。
+   - `rework`：证据不足、冲突、假设需改写；summary 写明缺失项（如 independent_review、runtime_test）。否定结论走 rework，Finding 不会永久标成误报终态。
    - `needs_human`：仅当权限、安全、业务语义或环境阻塞导致无法自动闭环时使用；必须通过 `mark_job_done` 提交该 verdict，使 Finding 进入可报告终态。
 4. 不机械相信上游 Finding；不得派生 Job、改写 Finding 或直接操作 Scheduler/数据库。
 5. 遵守冻结网络边界和目标范围，不做破坏性验证；最小材料原则，不对目标做全量重审。

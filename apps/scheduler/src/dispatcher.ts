@@ -374,8 +374,7 @@ export function dispatchSkipReason(
   projectJobLimit: number,
 ): string | null {
   const projectId = String(job.project_id);
-  // Historical snapshots may omit agent_cli; use the platform default rather
-  // than the mutable AGENT_PROVIDER environment value in quota accounting.
+  // Historical snapshots may omit agent_cli; use the platform default in quota accounting.
   const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
@@ -584,8 +583,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const cliCounts = new Map<string, number>();
     for (const row of active) {
       const projectId = row.project_id as string;
-      // 历史 Job 可能缺少 agent_cli；仅使用平台常量，禁止读取可变的
-      // AGENT_PROVIDER 环境变量。
+      // 历史 Job 可能缺少 agent_cli；仅使用平台常量。
       const cli = String(row.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
       const provider = String(row.credential_provider ?? "");
       const credentialId = String(row.credential_id ?? "");

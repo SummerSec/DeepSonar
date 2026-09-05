@@ -41,10 +41,8 @@ export type RoundOutcome = "confirmed" | "rework" | "needs_human";
 
 export function mapProposedVerdict(raw: string | undefined | null): ProposedVerdict {
   const v = String(raw ?? "").toLowerCase();
-  if (v === "confirmed") return "confirmed";
-  if (v === "needs_human") return "needs_human";
-  // false_positive 兼容期统一映射为 rework
-  return "rework";
+  if (v === "confirmed" || v === "rework" || v === "needs_human") return v;
+  throw invalidVerification("verdict 只能是 confirmed、rework 或 needs_human", "verdict");
 }
 
 export interface EvidenceSnapshot {
