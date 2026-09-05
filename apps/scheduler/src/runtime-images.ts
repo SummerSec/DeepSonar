@@ -3,7 +3,6 @@ import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { compatibleAgentClisForImage } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -2391,10 +2390,11 @@ export function projectHubRuntimeImageCatalog(
     project_opt_in?: unknown;
     source_kind: unknown;
   }>,
+  compatibleAgentClisForImage: (imageKey: string) => readonly string[],
 ): HubRuntimeImageCatalogEntry[] {
   return rows.flatMap((row) => {
     const imageKey = String(row.image_key);
-    const compatibleAgentClis = compatibleAgentClisForImage(imageKey);
+    const compatibleAgentClis = [...compatibleAgentClisForImage(imageKey)];
     if (compatibleAgentClis.length === 0) return [];
     return [{
       image_key: imageKey,
@@ -2436,6 +2436,8 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
       )
     ORDER BY ri.official DESC, ri.image_key`;
+  // 延迟加载：本模块的合同单测在 workspace build 之前执行，不能顶层依赖 runtime-sandbox dist。
+  const { compatibleAgentClisForImage } = await import("@deepsonar/runtime-sandbox");
   return projectHubRuntimeImageCatalog(rows.map((row) => ({
     image_key: row.image_key,
     name: row.name,
@@ -2443,7 +2445,7 @@ export async function listHubRuntimeImageCatalog(
     official: row.official,
     project_opt_in: row.project_opt_in,
     source_kind: row.source_kind,
-  })));
+  })), compatibleAgentClisForImage);
 }
 
 export async function resolveRuntimeImageForJob(
