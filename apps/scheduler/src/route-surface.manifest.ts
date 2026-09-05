@@ -13,7 +13,6 @@ DELETE /findings/:id/comments/:commentId
 DELETE /findings/:id/links/:linkId
 DELETE /gateway/*
 DELETE /imports/:id
-DELETE /projects/:id/integrations/plane
 DELETE /projects/:id/role-configs/:roleId
 DELETE /skill-sources/:id
 DELETE /tasks/:canvasId
@@ -64,7 +63,6 @@ GET /jobs/:id/evidence/session/download
 GET /jobs/:id/evidence/stream
 GET /metrics
 GET /openapi.json
-GET /plane-info
 GET /platform/exports
 GET /platform/shared-assets
 GET /projects
@@ -161,10 +159,8 @@ POST /projects
 POST /projects/:id/archive
 POST /projects/:id/events
 POST /projects/:id/exports
-POST /projects/:id/integrations/plane/sync
 POST /projects/:id/shared-assets
 POST /projects/:id/tasks
-POST /projects/sync
 POST /runtime-images/:id([0-9a-fA-F-]{36})/adopt-local
 POST /runtime-images/:id([0-9a-fA-F-]{36})/detect-local
 POST /runtime-images/:id/official-digest
@@ -190,9 +186,7 @@ POST /tokens/:id/revoke
 POST /tokens/:id/rotate
 POST /users
 POST /users/:id/password
-POST /webhooks/plane
 PUT /gateway/*
-PUT /projects/:id/integrations/plane
 PUT /projects/:id/role-configs/:roleId
 PUT /projects/:id/runtime-images/:imageId
 PUT /role-configs/global/:roleId
@@ -201,7 +195,6 @@ PUT /role-configs/global/:roleId
 export const OPENAPI_OPERATION_SURFACE = `
 DELETE /agent-roles/{id}
 DELETE /credentials/{id}
-DELETE /projects/{id}/integrations/plane
 DELETE /projects/{id}/role-configs/{roleId}
 DELETE /skill-sources/{id}
 GET /agent-roles
@@ -241,7 +234,6 @@ GET /jobs/{id}/evidence/session/download
 GET /jobs/{id}/evidence/stream
 GET /metrics
 GET /openapi.json
-GET /plane-info
 GET /platform/shared-assets
 GET /projects
 GET /projects/{id}
@@ -313,7 +305,6 @@ POST /projects
 POST /projects/{id}/archive
 POST /projects/{id}/shared-assets
 POST /projects/{id}/events
-POST /projects/{id}/integrations/plane/sync
 POST /projects/{id}/tasks
 POST /runtime-images/{id}/adopt-local
 POST /runtime-images/{id}/detect-local
@@ -336,8 +327,6 @@ POST /tasks/{canvasId}/start
 POST /tokens
 POST /tokens/{id}/revoke
 POST /tokens/{id}/rotate
-POST /webhooks/plane
-PUT /projects/{id}/integrations/plane
 PUT /projects/{id}/role-configs/{roleId}
 PUT /projects/{id}/runtime-images/{imageId}
 PUT /role-configs/global/{roleId}

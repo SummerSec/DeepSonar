@@ -41,7 +41,7 @@ Windows 注意：部分环境下 curl 响应带 UTF-8 BOM，用 Python 解析时
 # 健康与项目
 python scripts/deepsonar-api.py health
 python scripts/deepsonar-api.py projects list
-python scripts/deepsonar-api.py projects create --name my-audit [--description ...] [--plane-project-id <uuid>]
+python scripts/deepsonar-api.py projects create --name my-audit [--description ...]
 python scripts/deepsonar-api.py projects get <projectId>
 python scripts/deepsonar-api.py projects update <projectId> --data '{"description":"..."}'
 python scripts/deepsonar-api.py projects archive <projectId>
@@ -197,12 +197,6 @@ python scripts/deepsonar-api.py imports get <importId>
 python scripts/deepsonar-api.py imports preview <importId>
 python scripts/deepsonar-api.py imports apply <importId> --mode create_new [--project-name restored]
 python scripts/deepsonar-api.py imports cancel <importId>
-
-# Plane（可选）
-python scripts/deepsonar-api.py plane bind <projectId> --project-id <planeProjectUuid>
-python scripts/deepsonar-api.py plane unbind <projectId>
-python scripts/deepsonar-api.py plane sync <projectId>
-python scripts/deepsonar-api.py plane info
 ```
 
 ### RoleConfig 示例（Credential 绑定 + 可选 model 覆盖 + 镜像）

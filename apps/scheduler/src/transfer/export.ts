@@ -120,8 +120,6 @@ export async function runExport(exportId: string): Promise<void> {
           name: project.name,
           description: project.description,
           status: project.status,
-          // 外部集成标识默认不迁移为可用绑定
-          plane_project_id: null,
           config_json: stripConfigSecrets(project.config_json),
         },
         null,
@@ -138,23 +136,6 @@ export async function runExport(exportId: string): Promise<void> {
 
     if (modules.includes("roles") || modules.includes("environment") || modules.includes("skills") || modules.includes("runtime_images")) {
       await collectRoles(projectId, modules, files, counts, credMode);
-    }
-
-    if (modules.includes("integrations")) {
-      const cfg = (project.config_json ?? {}) as Record<string, unknown>;
-      files.push({
-        path: "data/integrations.json",
-        content: JSON.stringify(
-          {
-            plane: cfg.plane
-              ? { present: true, enabled: false, note: "导入后需在目标环境重新绑定" }
-              : null,
-          },
-          null,
-          2,
-        ),
-      });
-      counts.integrations = 1;
     }
 
     if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events") || modules.includes("artifacts")) {
@@ -211,10 +192,7 @@ export async function runExport(exportId: string): Promise<void> {
 function stripConfigSecrets(configJson: unknown): Record<string, unknown> {
   if (!configJson || typeof configJson !== "object") return {};
   const cfg = { ...(configJson as Record<string, unknown>) };
-  // plane 绑定 id 不导出为可用
-  if (cfg.plane && typeof cfg.plane === "object") {
-    cfg.plane = { ...(cfg.plane as object), note: "rebind_required" };
-  }
+  delete cfg.plane;
   return cfg;
 }
 
@@ -400,7 +378,6 @@ async function collectTasks(
         source_id: c.id,
         title: c.title,
         target_json: c.target_json,
-        plane_issue_id: null,
         trigger_source: c.trigger_source,
         trigger_event_id: null,
         trigger_payload_json: {},

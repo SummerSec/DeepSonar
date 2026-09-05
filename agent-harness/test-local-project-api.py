@@ -31,20 +31,20 @@ def req(method, path, body=None, expect=200):
 def main():
     tag = uuid.uuid4().hex[:6]
 
-    # 1. 创建纯本地项目（plane_project_id = NULL）
+    # 1. 创建项目
     p = req("POST", "/projects", {"name": f"本地项目-{tag}", "description": "阶段A验收"}, 201)
     pid = p["id"]
-    assert p["plane_project_id"] is None and p["status"] == "active", p
-    print("本地项目:", pid, p["status"], p["plane_project_id"])
+    assert p["status"] == "active" and "plane_project_id" not in p, p
+    print("本地项目:", pid, p["status"])
 
-    # 2. 列表/详情带新字段；可创建多个 NULL plane 项目
-    p2 = req("POST", "/projects", {"name": f"本地项目2-{tag}"}, 201)
+    # 2. 列表/详情；可创建多个项目
+    req("POST", "/projects", {"name": f"本地项目2-{tag}"}, 201)
     lst = req("GET", "/projects")
-    null_plane = [x for x in lst if x["plane_project_id"] is None]
-    assert len(null_plane) >= 2, "多个 plane_project_id=NULL 的本地项目应共存"
+    assert len([x for x in lst if x["id"] in {pid} or x["name"].endswith(f"-{tag}")]) >= 2, lst
     detail = req("GET", f"/projects/{pid}")
     assert detail["description"] == "阶段A验收"
-    print("列表/详情 OK，NULL plane 项目数:", len(null_plane))
+    assert "plane_project_id" not in detail, detail
+    print("列表/详情 OK，项目数:", len(lst))
 
     # 3. 改名 + 描述
     req("PATCH", f"/projects/{pid}", {"name": f"改名-{tag}", "description": "d2"})
@@ -183,14 +183,7 @@ def main():
     assert event_second["job"]["id"] == event_first["job"]["id"]
     print("事件触发 OK: 首次创建，重复事件幂等复用", event_first["canvas_id"][:8])
 
-    # 9. Plane 绑定/解绑（不依赖真实 Plane 服务）
-    req("PUT", f"/projects/{pid}/integrations/plane", {"plane_project_id": f"plane-{tag}"})
-    assert req("GET", f"/projects/{pid}")["plane_project_id"] == f"plane-{tag}"
-    req("DELETE", f"/projects/{pid}/integrations/plane")
-    assert req("GET", f"/projects/{pid}")["plane_project_id"] is None
-    print("Plane 绑定/解绑 OK")
-
-    # 10. 归档：归档后不能新建任务；历史数据保留
+    # 9. 归档：归档后不能新建任务；历史数据保留
     req("POST", f"/projects/{pid}/archive", None)
     assert req("GET", f"/projects/{pid}")["status"] == "archived"
     req("POST", f"/projects/{pid}/tasks", {"title": "应被拒", "content": "项目已归档"}, expect=409)

@@ -36,7 +36,6 @@ const inputCls =
   "w-full border bg-transparent px-3 py-2.5 text-[13px] text-zinc-200 outline-none placeholder:text-zinc-700";
 
 type StatusFilter = "active" | "archived";
-type SourceFilter = "local" | "plane";
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -46,7 +45,6 @@ export function ProjectsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter[]>(["active"]);
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", description: "" });
 
@@ -74,7 +72,6 @@ export function ProjectsPage() {
 
   const archivedCount = projects.filter((p) => p.status === "archived").length;
   const activeCount = projects.filter((p) => p.status === "active").length;
-  const planeCount = projects.filter((p) => p.plane_project_id).length;
   const explicitNewProject = hasNewProjectIntent(searchParams);
   const explicitQuickStart = hasQuickStartRailIntent(searchParams);
   const showNewProjectForm = shouldShowNewProjectForm({
@@ -120,13 +117,11 @@ export function ProjectsPage() {
     const needle = query.trim().toLowerCase();
     return projects.filter((project) => {
       if (statusFilter.length > 0 && !statusFilter.includes(project.status)) return false;
-      const source: SourceFilter = project.plane_project_id ? "plane" : "local";
-      if (sourceFilter.length > 0 && !sourceFilter.includes(source)) return false;
       if (!needle) return true;
-      const haystack = `${project.name} ${project.description ?? ""} ${project.plane_project_id ?? ""}`.toLowerCase();
+      const haystack = `${project.name} ${project.description ?? ""}`.toLowerCase();
       return haystack.includes(needle);
     });
-  }, [projects, query, statusFilter, sourceFilter]);
+  }, [projects, query, statusFilter]);
 
   if (loading) return <PageSkeleton rows={3} />;
 
@@ -170,7 +165,6 @@ export function ProjectsPage() {
       <div className="mb-4 flex flex-wrap gap-2">
         {[
           { label: "进行中", value: activeCount },
-          { label: "Plane", value: planeCount },
           { label: "已归档", value: archivedCount },
           { label: "全部", value: projects.length },
         ].map((item) => (
@@ -191,7 +185,7 @@ export function ProjectsPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索项目名称、说明或 Plane ID"
+            placeholder="搜索项目名称或说明"
             aria-label="搜索项目"
           />
           {query && (
@@ -213,15 +207,6 @@ export function ProjectsPage() {
             options={[
               { value: "active", label: "进行中" },
               { value: "archived", label: "已归档" },
-            ]}
-          />
-          <SearchableMultiSelect
-            value={sourceFilter}
-            onChange={(value) => setSourceFilter(value as SourceFilter[])}
-            placeholder="全部来源"
-            options={[
-              { value: "local", label: "本地" },
-              { value: "plane", label: "Plane" },
             ]}
           />
           <span className="font-mono text-[10px] text-zinc-600">
@@ -365,21 +350,6 @@ export function ProjectsPage() {
                     </div>
 
                     <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-white/[.045] pt-2.5">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[8px] ${
-                          project.plane_project_id
-                            ? "bg-run-400/[.08] text-run-400"
-                            : "bg-white/[.03] text-zinc-600"
-                        }`}
-                      >
-                        {project.plane_project_id ? (
-                          <>
-                            <AirplaneTakeoff size={10} /> Plane
-                          </>
-                        ) : (
-                          "LOCAL"
-                        )}
-                      </span>
                       <span
                         className="font-mono text-[8px] text-zinc-700"
                         title={formatTime(project.created_at)}

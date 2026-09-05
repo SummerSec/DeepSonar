@@ -145,8 +145,8 @@ if (!testDatabaseUrl) {
 
       const nonLlm = await request("POST", "/credentials", {
         name: "non-llm-compatibility",
-        kind: "plane",
-        provider: "plane",
+        kind: "git",
+        provider: "git",
         secret,
         metadata: {},
       });

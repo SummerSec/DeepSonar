@@ -38,8 +38,6 @@ const OPERATOR_SCOPES = [
   "skills:write",
   "agents:read",
   "agents:write",
-  "integrations:read",
-  "integrations:write",
   "exports:read",
   "exports:write",
   "imports:read",
@@ -52,7 +50,6 @@ const VIEWER_SCOPES = [
   "findings:read",
   "skills:read",
   "agents:read",
-  "integrations:read",
   "exports:read",
   "imports:read",
 ];

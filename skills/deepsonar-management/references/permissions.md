@@ -19,7 +19,6 @@ assets:read / assets:write / assets:manage
 skills:read / skills:write
 agents:read / agents:write        # 角色、RoleConfig、设置、凭据
 images:read / images:manage / images:approve
-integrations:read / integrations:write
 tokens:manage
 exports:read / exports:write
 imports:read / imports:write
@@ -56,7 +55,6 @@ findings:write
 | 查看镜像市场 | `images:read` |
 | 导入镜像、重扫、项目启停/固定版本 | `images:manage` |
 | 批准、拒绝、禁用或撤销镜像版本 | `images:approve`（只给平台管理员） |
-| 绑定/同步 Plane | `integrations:read`、`integrations:write` |
 | 查看/下载项目与 Finding 共享资产 | `assets:read` |
 | 上传/归档项目与 Finding 共享资产、修改项目 opt-in | `assets:write` |
 | 管理平台共享资产 | `assets:manage`（只给平台管理员；隐含 assets read/write） |
@@ -70,7 +68,6 @@ findings:write
 /openapi.json
 /schema
 /schema.md
-/webhooks/plane
 /gateway/*
 /auth/status、/auth/login、/auth/bootstrap
 ```

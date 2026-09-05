@@ -15,7 +15,7 @@ DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语�
 ## 核心流程
 
 ```text
-人工任务 / Plane Issue / 外部事件
+人工任务 / 外部事件
                 ↓
           Hub 决策中枢
                 ↓
@@ -211,7 +211,6 @@ apps/
   web/              React 控制台与任务画布
 packages/
   shared-types/     前后端共享 Zod schema
-  plane-client/     Plane 可选集成
   runtime-sandbox/  Noop / OpenSandbox 沙箱
 database/           schema 基线（无 migration）
 deploy/             Compose、一键脚本、发布镜像清单

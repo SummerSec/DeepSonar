@@ -41,12 +41,12 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 核心纪律
 
-> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** Plane 为可选集成，默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
+> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** 默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
 - **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
-- **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 与 `PLANE_POLL_INTERVAL_SEC` 默认 0（关闭轮询，Plane 走 webhook）。
+- **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 默认 0（关闭轮询）。
 - **无独立 `tasks` 表**：任务 = `canvases`；列表 `GET /projects/:id/canvases`。
 - **读图注入**：`graph.ts` `buildGraphSnapshot` 按 `GraphScope` 投影 fact/finding 等 YAML 注入 Hub/Worker，并有整图字符预算（#30）；细节见 `DESIGN.md` §7。`job` 节点不进 YAML。
 - **任务是否在跑**：以 `active_count`（活跃 Job）为准，勿用 `last_job_status=succeeded` 当作任务已完成（#46）。
@@ -56,7 +56,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper/plane-sync 三个后台循环 |
+| `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper 两个后台循环 |
 | `dispatcher.ts` | 领取 pending job（全局/每项目并发上限，原子 claim）→ provision → run |
 | `core.ts` | Scheduler composition root 与既有内部 import 的窄 facade；保留共享规则、Job 创建/终态编排，各领域实现通过 application/ports 注入 |
 | `domains/*` | Job lifecycle、event ingestion、Hub、Finding verification、Report convergence、runtime snapshot 及各 HTTP API 的领域入口；语义事件副作用归 `event-ingestion/side-effects.ts` |

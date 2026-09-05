@@ -14,11 +14,10 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 40);
+INSERT INTO schema_meta (id, version) VALUES ('global', 41);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  plane_project_id text UNIQUE,
   canvas_id text NOT NULL,
   name text NOT NULL,
   description text NOT NULL DEFAULT '',
@@ -33,7 +32,6 @@ CREATE TABLE projects (
 CREATE TABLE canvases (
   id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   project_id uuid NOT NULL REFERENCES projects(id),
-  plane_issue_id text,
   title text NOT NULL,
   target_json jsonb NOT NULL DEFAULT '{}',
   trigger_source text,
@@ -53,8 +51,6 @@ CREATE TABLE canvases (
   CONSTRAINT canvases_change_revision_check CHECK (change_revision >= 0),
   CONSTRAINT canvases_change_floor_check CHECK (change_floor_revision >= 0 AND change_floor_revision <= change_revision)
 );
-CREATE UNIQUE INDEX canvases_issue_uniq
-  ON canvases (plane_issue_id) WHERE plane_issue_id IS NOT NULL;
 CREATE UNIQUE INDEX canvases_trigger_uniq
   ON canvases (project_id, trigger_source, trigger_event_id)
   WHERE trigger_event_id IS NOT NULL;
@@ -64,7 +60,6 @@ CREATE TABLE jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL REFERENCES projects(id),
   canvas_id text REFERENCES canvases(id),
-  plane_issue_id text,
   parent_job_id uuid REFERENCES jobs(id),
   finding_id uuid,
   type text NOT NULL,
@@ -94,8 +89,6 @@ CREATE TABLE jobs (
   CONSTRAINT jobs_timeout_check CHECK (timeout_sec > 0),
   CONSTRAINT jobs_followup_depth_check CHECK (followup_depth >= 0)
 );
-CREATE UNIQUE INDEX jobs_active_issue_uniq ON jobs (plane_issue_id)
-  WHERE status IN ('claimed', 'provisioning', 'running');
 CREATE UNIQUE INDEX jobs_ingress_key_uniq ON jobs (project_id, ingress_key)
   WHERE ingress_key IS NOT NULL;
 CREATE INDEX jobs_list_idx ON jobs (project_id, status, created_at DESC);
@@ -814,7 +807,7 @@ CREATE TABLE credentials (
   agent_cli text,
   settings_config_json jsonb NOT NULL DEFAULT '{}',
   meta_json jsonb NOT NULL DEFAULT '{}',
-  CONSTRAINT credentials_kind_check CHECK (kind IN ('llm_provider', 'plane', 'git', 'oci_registry')),
+  CONSTRAINT credentials_kind_check CHECK (kind IN ('llm_provider', 'git', 'oci_registry')),
   CONSTRAINT credentials_status_check
     CHECK (status IN ('active', 'disabled', 'rotation_required')),
   CONSTRAINT credentials_health_status_check
@@ -1308,7 +1301,6 @@ BEGIN
     'id', p_canvas.id,
     'title', left(p_canvas.title, 500),
     'project_id', p_canvas.project_id,
-    'plane_issue_id', p_canvas.plane_issue_id,
     'status', p_canvas.status,
     'archived_at', p_canvas.archived_at
   );
@@ -1389,7 +1381,7 @@ CREATE TRIGGER canvas_edges_revision_change
   FOR EACH ROW EXECUTE FUNCTION deepsonar_canvas_record_change();
 
 CREATE TRIGGER canvases_revision_meta_change
-  AFTER UPDATE OF project_id, plane_issue_id, title, target_json, trigger_source,
+  AFTER UPDATE OF project_id, title, target_json, trigger_source,
     trigger_event_id, trigger_payload_json, status, archived_at ON canvases
   FOR EACH ROW EXECUTE FUNCTION deepsonar_canvas_record_meta_change();
 

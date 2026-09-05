@@ -787,12 +787,11 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
 // runtime-image selection.  Keep the historical core exports while callers
 // migrate to the explicit context entrypoint.
 
-// ---------- Job 创建（含 Plane issue 防双跑唯一约束） ----------
+// ---------- Job 创建 ----------
 
 export interface CreateJobInput {
   projectId: string;
   canvasId?: string;
-  planeIssueId?: string;
   parentJobId?: string;
   findingId?: string;
   type: string;
@@ -899,7 +898,6 @@ export async function createJob(input: CreateJobInput) {
         INSERT INTO jobs ${tx({
           project_id: input.projectId,
           canvas_id: input.canvasId ?? null,
-          plane_issue_id: input.planeIssueId ?? null,
           agent_snapshot_json: snapshotWithKnobs as never,
           parent_job_id: input.parentJobId ?? null,
           finding_id: input.findingId ?? null,
@@ -917,7 +915,7 @@ export async function createJob(input: CreateJobInput) {
     inc("deepsonar_jobs_created_total", { type: input.type });
     return { job, duplicated: false };
   } catch (e: unknown) {
-    // jobs_active_issue_uniq：已有活动 job 占用同一 issue
+    // ingress_key / 活跃 Verify 等唯一约束：已有冲突 Job
     if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
       return { job: null, duplicated: true };
     }
@@ -929,7 +927,6 @@ export async function createJob(input: CreateJobInput) {
 
 export interface EnsureCanvasInput {
   projectId: string;
-  planeIssueId?: string;
   title: string;
   target: Record<string, unknown>;
   triggerSource?: string;
@@ -950,9 +947,8 @@ function parseFrozenFindingProtocol(value: unknown): EffectiveFindingProtocol | 
 }
 
 /**
- * 为任务确保一个画布：同一 plane_issue_id 复用（重试算同一任务的历史），
- * 否则新建；新建时同事物写 root 节点（body_json 带目标）。
- * 返回 canvas_id。
+ * 为任务确保一个画布：同一 trigger 复用，否则新建；
+ * 新建时同事务写 root 节点（body_json 带目标）。返回 canvas_id。
  */
 export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
   return sql.begin(async (tx) => {
@@ -985,30 +981,10 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
     let canvasId: string | null = null;
     let created = false;
 
-    if (input.planeIssueId) {
-      // 部分唯一索引 canvases_issue_uniq：ON CONFLICT 需带相同谓词
+    if (input.triggerSource && input.triggerEventId) {
       const inserted = await tx`
         INSERT INTO canvases ${tx({
           project_id: input.projectId,
-          plane_issue_id: input.planeIssueId,
-          title: input.title,
-          target_json: target as never,
-        })}
-        ON CONFLICT (plane_issue_id) WHERE plane_issue_id IS NOT NULL DO NOTHING
-        RETURNING id`;
-      if (inserted.length > 0) {
-        canvasId = inserted[0].id as string;
-        created = true;
-      } else {
-        const [existing] = await tx`
-          SELECT id FROM canvases WHERE plane_issue_id = ${input.planeIssueId}`;
-        canvasId = existing.id as string;
-      }
-    } else if (input.triggerSource && input.triggerEventId) {
-      const inserted = await tx`
-        INSERT INTO canvases ${tx({
-          project_id: input.projectId,
-          plane_issue_id: null,
           title: input.title,
           target_json: target as never,
           trigger_source: input.triggerSource,
@@ -1030,11 +1006,9 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
         canvasId = existing.id as string;
       }
     } else {
-      // ad-hoc 任务（手动 POST /jobs 无 issue）：每次一个新画布
       const [row] = await tx`
         INSERT INTO canvases ${tx({
           project_id: input.projectId,
-          plane_issue_id: null,
           title: input.title,
           target_json: target as never,
         })}

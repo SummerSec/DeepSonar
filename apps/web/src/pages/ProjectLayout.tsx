@@ -39,7 +39,7 @@ export function ProjectLayout() {
               {project?.name ?? "加载中…"}
             </div>
           </div>
-          {project && <span className="hidden rounded-full bg-white/[.03] px-2 py-1 font-mono text-[8px] text-zinc-600 md:inline">{project.plane_project_id ? "PLANE CONNECTED" : "LOCAL"}{project.status === "archived" ? " · ARCHIVED" : ""}</span>}
+          {project?.status === "archived" && <span className="hidden rounded-full bg-white/[.03] px-2 py-1 font-mono text-[8px] text-zinc-600 md:inline">ARCHIVED</span>}
           <nav className="theme-surface -mx-1 flex max-w-full items-center gap-1 overflow-x-auto rounded-full p-1 [scrollbar-width:none] sm:mx-0 sm:ml-auto">
             {TABS.map((t) => (
               <NavLink

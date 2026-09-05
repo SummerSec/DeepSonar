@@ -25,7 +25,6 @@ const SCOPE_GROUPS: { label: string; scopes: string[] }[] = [
   { label: "任务", scopes: ["tasks:read", "tasks:write", "jobs:control"] },
   { label: "发现", scopes: ["findings:read"] },
   { label: "Agent/配置", scopes: ["skills:read", "skills:write", "agents:read", "agents:write"] },
-  { label: "集成", scopes: ["integrations:read", "integrations:write"] },
   { label: "管理", scopes: ["tokens:manage", "admin"] },
 ];
 

@@ -20,7 +20,6 @@ COPY apps/scheduler/package.json apps/scheduler/package.json
 COPY apps/image-admission/package.json apps/image-admission/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json
-COPY packages/plane-client/package.json packages/plane-client/package.json
 COPY packages/runtime-sandbox/package.json packages/runtime-sandbox/package.json
 
 RUN pnpm install --frozen-lockfile --filter @deepsonar/scheduler...
@@ -32,7 +31,7 @@ COPY agent-harness/demo-repo agent-harness/demo-repo
 COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
 
 # 生产制品（§12.1）：workspace 包 main/exports 指向 dist，scheduler 跑 node dist/index.js（不用 tsx）
-RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/plane-client --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build
+RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build
 
 ENV NODE_ENV=production
 # Content-addressed blobs (shared assets, evidence) must live on the mounted volume.

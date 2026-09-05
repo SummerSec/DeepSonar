@@ -559,7 +559,7 @@ export type ReadinessRoleSummary = z.infer<typeof ReadinessRoleSummary>;
 export const ReadinessCredentialSummary = z.object({
   credential_id: z.string().uuid(),
   name: z.string(),
-  kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]),
+  kind: z.enum(["llm_provider", "git", "oci_registry"]),
   provider: z.string(),
   provider_valid: z.boolean(),
   project_id: z.string().uuid().nullable(),
@@ -572,7 +572,7 @@ export type ReadinessCredentialSummary = z.infer<typeof ReadinessCredentialSumma
 export const ProviderAccountCatalogItem = z.object({
   provider: z.string().min(1).max(50),
   label: z.string().min(1).max(120),
-  kind: z.enum(["llm_provider", "plane", "git", "oci_registry"]),
+  kind: z.enum(["llm_provider", "git", "oci_registry"]),
   auth_methods: z.array(z.enum(["api_key", "oauth", "cli_login"])).min(1),
   compatible_agent_cli: z.array(z.string().min(1).max(50)),
   supports_base_url: z.boolean(),

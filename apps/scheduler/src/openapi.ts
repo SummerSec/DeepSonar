@@ -555,7 +555,6 @@ const OPS: Op[] = [
       properties: {
         name: { type: "string" },
         description: { type: "string" },
-        plane_project_id: { type: "string", nullable: true },
         image_strategy: { type: "string", enum: ["inherit_global", "project_managed"], default: "inherit_global" },
       },
     },
@@ -1874,7 +1873,7 @@ const OPS: Op[] = [
       required: ["name", "provider", "secret"],
       properties: {
         name: { type: "string" },
-        kind: { type: "string", enum: ["llm_provider", "plane", "git", "oci_registry"] },
+        kind: { type: "string", enum: ["llm_provider", "git", "oci_registry"] },
         provider: { type: "string", description: "LLM 仅允许协议 ID anthropic（Anthropic Messages）或 openai（OpenAI Responses）；OCI 使用 registry host" },
         secret: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
@@ -2078,20 +2077,6 @@ const OPS: Op[] = [
   { method: "post", path: "/tokens/{id}/revoke", summary: "吊销 Token", scope: "tokens:manage", tags: ["Tokens"] },
   { method: "post", path: "/tokens/{id}/rotate", summary: "轮换 Token", scope: "tokens:manage", tags: ["Tokens"] },
 
-  // plane
-  {
-    method: "put",
-    path: "/projects/{id}/integrations/plane",
-    summary: "绑定 Plane 项目",
-    scope: "integrations:write",
-    tags: ["Plane"],
-    body: { type: "object", required: ["plane_project_id"], properties: { plane_project_id: { type: "string" } } },
-  },
-  { method: "delete", path: "/projects/{id}/integrations/plane", summary: "解绑 Plane", scope: "integrations:write", tags: ["Plane"] },
-  { method: "post", path: "/projects/{id}/integrations/plane/sync", summary: "手动同步 Plane", scope: "integrations:write", tags: ["Plane"] },
-  { method: "get", path: "/plane-info", summary: "Plane 连接信息", scope: "integrations:read", tags: ["Plane"] },
-  { method: "post", path: "/webhooks/plane", summary: "Plane webhook 入口", scope: null, tags: ["Plane"] },
-
   // audit
   { method: "get", path: "/audit-logs", summary: "审计日志", scope: "admin", tags: ["Admin"] },
 ];
@@ -2207,7 +2192,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       { name: "Skills" },
       { name: "Credentials" },
       { name: "Tokens" },
-      { name: "Plane" },
       { name: "Profiles" },
       { name: "Admin" },
     ],
@@ -2339,7 +2323,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           properties: {
             provider: { type: "string", maxLength: 50 },
             label: { type: "string" },
-            kind: { type: "string", enum: ["llm_provider", "plane", "git", "oci_registry"] },
+            kind: { type: "string", enum: ["llm_provider", "git", "oci_registry"] },
             auth_methods: { type: "array", items: { type: "string", enum: ["api_key", "oauth", "cli_login"] } },
             compatible_agent_cli: { type: "array", items: { type: "string" } },
             supports_base_url: { type: "boolean" },
@@ -2627,7 +2611,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       "/auth/status",
       "/auth/login",
       "/auth/bootstrap",
-      "/webhooks/plane",
       "/gateway/*",
     ],
   };
@@ -2651,7 +2634,6 @@ export function buildSchemaSummary(): Record<string, unknown> {
         "/auth/status",
         "/auth/login",
         "/auth/bootstrap",
-        "/webhooks/plane",
         "/gateway/*",
       ],
     },
@@ -2674,7 +2656,7 @@ export function buildSchemaSummary(): Record<string, unknown> {
       "403": "Scope 不足",
       "404": "资源不存在",
       "409": "冲突",
-      "502": "上游失败（Git/Plane 等）",
+      "502": "上游失败（Git 等）",
     },
   };
 }

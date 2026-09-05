@@ -17,7 +17,6 @@ import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
-import { planeWriteback } from "../../plane-sync.js";
 import { runner } from "../../runtime.js";
 import { TaskSeedInputError } from "../../task-compose.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
@@ -35,7 +34,6 @@ import {
 
 const CreateJobBody = z.object({
   project_id: z.string().uuid(),
-  plane_issue_id: z.string().optional(),
   title: z.string().optional(),
   type: z.string().min(1),
   payload: z.record(z.string(), z.unknown()).default({}),
@@ -129,12 +127,10 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         expected_priority: expectedPriority,
       });
     }
-    // 一任务一画布：有 issue 复用（重试），无 issue 每次新建 ad-hoc 画布
     let canvasId: string;
     try {
       canvasId = await ensureCanvasForTask({
         projectId: body.project_id,
-        planeIssueId: body.plane_issue_id,
         title: body.title ?? `${body.type} 任务`,
         target: { type: body.type, ...payload },
       });
@@ -147,7 +143,6 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const { job, duplicated } = await createJob({
       projectId: body.project_id,
       canvasId,
-      planeIssueId: body.plane_issue_id,
       type: body.type,
       payload,
       priority: body.priority,
@@ -155,7 +150,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       stallSec: body.stall_sec,
       maxRequests: body.max_requests,
     });
-    if (duplicated) return reply.code(409).send({ error: "同一 issue 已有活动 job" });
+    if (duplicated) return reply.code(409).send({ error: "冲突的活动 Job 已存在" });
     return reply.code(201).send(job);
   });
 
@@ -174,7 +169,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     }
     const limit = paginated ? pageLimit(q.limit) : 200;
     const rows = await sql`
-      SELECT j.id, j.project_id, j.canvas_id, j.plane_issue_id, j.type, j.status, j.priority, j.error,
+      SELECT j.id, j.project_id, j.canvas_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
              p.name AS project_name, c.title AS canvas_title,
              j.agent_snapshot_json->>'agent_cli' AS agent_cli,
@@ -636,7 +631,6 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     await recoverCancelledDerivedJob(job, reason).catch((e) =>
       console.error(`[cancel] derived job recovery failed:`, e),
     );
-    await planeWriteback(id).catch(() => {});
     await audit(req, {
       action: body.force ? "job.force_cancel" : "job.cancel",
       resourceType: "job",
@@ -671,7 +665,6 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
       await recoverCancelledDerivedJob(job, reason).catch(() => {});
-      await planeWriteback(jobId).catch(() => {});
     }
     await audit(req, {
       action: "canvas.force_cancel_active",

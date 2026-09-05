@@ -93,27 +93,6 @@ export const config = {
     masterKey: str("DEEPSONAR_MASTER_KEY"),
   },
 
-  plane: {
-    baseUrl: str("PLANE_BASE_URL", "https://api.plane.so"),
-    token: str("PLANE_API_TOKEN"),
-    workspaceSlug: str("PLANE_WORKSPACE_SLUG"),
-    readyState: str("PLANE_READY_STATE", "Ready"),
-    inProgressState: str("PLANE_IN_PROGRESS_STATE", "In Progress"),
-    doneState: str("PLANE_DONE_STATE", "Done"),
-    webhookSecret: str("PLANE_WEBHOOK_SECRET"),
-    get enabled() {
-      return Boolean(this.token && this.workspaceSlug);
-    },
-    /** Plane 前端地址（任务指引里给用户点的链接）；默认从 API 地址推导 */
-    get webUrl() {
-      const explicit = str("PLANE_WEB_URL");
-      if (explicit) return explicit;
-      return this.baseUrl.includes("api.plane.so")
-        ? this.baseUrl.replace("api.plane.so", "app.plane.so")
-        : this.baseUrl;
-    },
-  },
-
   limits: {
     maxGlobalJobs: int("MAX_GLOBAL_JOBS", 20),
     maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 5),
@@ -135,8 +114,6 @@ export const config = {
     stallSec: Number(process.env.DEEPSONAR_JOB_STALL_SEC) === 0 ? 0 : int("DEEPSONAR_JOB_STALL_SEC", 900),
     /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
     dispatchPollSec: int("DEEPSONAR_DISPATCH_POLL_SEC", 0),
-    /** Plane 轮询（默认 0=关闭，走 /webhooks/plane 事件；未配 webhook 时须显式开启） */
-    planePollSec: int("PLANE_POLL_INTERVAL_SEC", 0),
   },
 
   rules: {

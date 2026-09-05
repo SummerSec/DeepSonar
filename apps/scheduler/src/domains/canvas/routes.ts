@@ -33,7 +33,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const statusFilter =
       q.status === "all" ? null : q.status === "archived" ? "archived" : "active";
     const rows = await sql`
-      SELECT c.id, c.title, c.plane_issue_id, c.target_json, c.created_at,
+      SELECT c.id, c.title, c.target_json, c.created_at,
         c.status, c.archived_at,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id

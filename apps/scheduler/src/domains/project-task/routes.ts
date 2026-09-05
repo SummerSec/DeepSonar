@@ -18,7 +18,6 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { revokeJobTokens } from "../../gateway.js";
-import { planePollProject } from "../../plane-sync.js";
 import { runner } from "../../runtime.js";
 import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
 import {
@@ -64,15 +63,9 @@ import {
   validateFrozenTaskSeedsForRetry,
 } from "../../task-compose.js";
 
-const SyncProjectBody = z.object({
-  plane_project_id: z.string().min(1),
-  name: z.string().min(1),
-  config: z.record(z.string(), z.unknown()).default({}),
-});
 const CreateProjectBody = z.object({
   name: z.string().min(1),
   description: z.string().default(""),
-  plane_project_id: z.string().nullish(),
   image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).default("inherit_global"),
 });
 const PatchProjectBody = z.object({
@@ -100,8 +93,6 @@ const TriggerTaskBody = z.object({
   content: z.string().trim().min(1).max(20_000).optional(),
   data: z.record(z.string(), z.unknown()).default({}),
 });
-const PlaneBindBody = z.object({ plane_project_id: z.string().min(1) });
-
 /** 清空任务画布上的运行数据（jobs / findings / 图节点等），保留 canvas 行本身。 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
@@ -187,35 +178,6 @@ async function withProjectJobQuota<T extends Record<string, unknown>>(
 }
 
 export function registerProjectTaskRoutes(app: FastifyInstance): void {
-  // ---------- 项目绑定（§7 POST /projects/sync） ----------
-  app.post("/projects/sync", async (req, reply) => {
-    const body = SyncProjectBody.parse(req.body);
-    const [project] = await sql`
-      INSERT INTO projects ${sql({
-        plane_project_id: body.plane_project_id,
-        canvas_id: crypto.randomUUID(),
-        name: body.name,
-        config_json: body.config as never,
-      })}
-      ON CONFLICT (plane_project_id) DO UPDATE SET name = EXCLUDED.name
-      RETURNING *`;
-    // root 节点（幂等：每 canvas 只建一次）
-    await sql`
-      INSERT INTO canvas_nodes ${sql({
-        canvas_id: project.canvas_id,
-        node_type: "root",
-        title: body.name,
-        body_json: { plane_project_id: body.plane_project_id } as never,
-        x: 100,
-        y: 100,
-        w: 320,
-        h: 160,
-        status: "active",
-      })}
-      ON CONFLICT DO NOTHING`;
-    return project;
-  });
-
   app.get("/projects", async (req) => {
     const actorProjectId = req.actor?.projectId ?? null;
     const rows = await sql`
@@ -225,34 +187,25 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     return withProjectJobQuota(rows as Record<string, unknown>[]);
   });
 
-  // ---------- 本地项目 CRUD（阶段 A：Plane 可选化，本地库为唯一真相） ----------
   // 创建不再生成历史项目级 root 画布（deprecated canvas_id 仅占位，任务创建时才铸任务画布）
   app.post("/projects", async (req, reply) => {
     const body = CreateProjectBody.parse(req.body);
-    try {
-      const [project] = await sql`
-        INSERT INTO projects ${sql({
-          plane_project_id: body.plane_project_id ?? null,
-          canvas_id: crypto.randomUUID(),
-          name: body.name,
-          description: body.description,
-          config_json: { image_strategy: body.image_strategy } as never,
-        })}
-        RETURNING *`;
-      await audit(req, {
-        action: "project.create",
-        resourceType: "project",
-        resourceId: project.id as string,
-        projectId: project.id as string,
-        after: { name: project.name },
-      });
-      return reply.code(201).send(project);
-    } catch (e) {
-      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
-        return reply.code(409).send({ error: "该 Plane 项目已绑定到其它本地项目" });
-      }
-      throw e;
-    }
+    const [project] = await sql`
+      INSERT INTO projects ${sql({
+        canvas_id: crypto.randomUUID(),
+        name: body.name,
+        description: body.description,
+        config_json: { image_strategy: body.image_strategy } as never,
+      })}
+      RETURNING *`;
+    await audit(req, {
+      action: "project.create",
+      resourceType: "project",
+      resourceId: project.id as string,
+      projectId: project.id as string,
+      after: { name: project.name },
+    });
+    return reply.code(201).send(project);
   });
 
   app.get("/projects/:id", async (req, reply) => {
@@ -1088,7 +1041,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         INSERT INTO jobs ${tx({
           project_id: projectId,
           canvas_id: canvasId,
-          plane_issue_id: (canvas.plane_issue_id as string) ?? null,
           agent_snapshot_json: snapshot as never,
           type: "hub_reason",
           priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
@@ -1259,59 +1211,4 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       cancelled_jobs: cancelled,
     });
   });
-
-  // ---------- Plane 集成（按项目绑定；解绑不删除已导入任务） ----------
-  app.put("/projects/:id/integrations/plane", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const body = PlaneBindBody.parse(req.body);
-    try {
-      const [project] = await sql`
-        UPDATE projects SET plane_project_id = ${body.plane_project_id}, updated_at = now()
-        WHERE id = ${id} RETURNING id, name, plane_project_id`;
-      if (!project) return reply.code(404).send({ error: "project not found" });
-      await audit(req, {
-        action: "plane.bind",
-        resourceType: "project",
-        resourceId: id,
-        projectId: id,
-        after: { plane_project_id: body.plane_project_id },
-      });
-      return project;
-    } catch (e) {
-      if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
-        return reply.code(409).send({ error: "该 Plane 项目已绑定到其它本地项目" });
-      }
-      throw e;
-    }
-  });
-
-  app.delete("/projects/:id/integrations/plane", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const [project] = await sql`
-      UPDATE projects SET plane_project_id = NULL, updated_at = now()
-      WHERE id = ${id} RETURNING id, name, plane_project_id`;
-    if (!project) return reply.code(404).send({ error: "project not found" });
-    await audit(req, { action: "plane.unbind", resourceType: "project", resourceId: id, projectId: id });
-    return project;
-  });
-
-  // 手动触发一次该项目的 Ready issue 导入（事件驱动之外的补跑入口）
-  app.post("/projects/:id/integrations/plane/sync", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    try {
-      const created = await planePollProject(id);
-      return { ok: true, created };
-    } catch (e) {
-      return reply.code(502).send({ error: e instanceof Error ? e.message : String(e) });
-    }
-  });
-
-  /** Plane 连接信息（任务页「去 Plane 下发任务」指引用；不含 token） */
-  app.get("/plane-info", async () => ({
-    enabled: config.plane.enabled,
-    web_url: config.plane.webUrl,
-    workspace_slug: config.plane.workspaceSlug,
-    ready_state: config.plane.readyState,
-  }));
-
 }

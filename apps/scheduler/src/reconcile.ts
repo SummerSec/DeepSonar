@@ -2,7 +2,6 @@ import { isManagedRuntimeResource } from "@deepsonar/runtime-sandbox";
 import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
-import { planeWriteback } from "./plane-sync.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -191,5 +190,4 @@ async function closeOrphanJob(
       await advanceCanvasAfterTerminalJob(tx as unknown as typeof sql, job, "orphan");
     }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));
   }
-  await planeWriteback(jobId).catch(() => {});
 }

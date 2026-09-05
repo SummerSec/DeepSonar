@@ -83,7 +83,7 @@ export function last4Of(plaintext: string): string {
  * registry account names are user data and must not be filtered by token-like
  * heuristics.
  */
-export type CredentialKind = "llm_provider" | "plane" | "git" | "oci_registry";
+export type CredentialKind = "llm_provider" | "git" | "oci_registry";
 export type CredentialMetadataMode = "reject" | "drop";
 
 export const CREDENTIAL_MODEL_CATALOG_MAX = 200;
@@ -112,7 +112,6 @@ export const UNKNOWN_PROVIDER_ERROR = "未知 provider（固定映射表外的 p
 export const PROVIDER_CATALOG = [
   { provider: "anthropic", label: "Anthropic Messages", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["claude-code", "pi", "dsh"], supports_base_url: true },
   { provider: "openai", label: "OpenAI-compatible", kind: "llm_provider", auth_methods: ["api_key"], compatible_agent_cli: ["pi", "dsh"], supports_base_url: true },
-  { provider: "plane", label: "Plane", kind: "plane", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
   { provider: "git", label: "Git repository", kind: "git", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
   { provider: "docker", label: "OCI Registry", kind: "oci_registry", auth_methods: ["api_key"], compatible_agent_cli: [], supports_base_url: false },
 ] as const;
@@ -131,7 +130,7 @@ export function credentialMetadataKeys(kind: string, provider: string): Readonly
     return providerSupportsBaseUrl(kind, provider) ? LLM_METADATA_KEYS : LLM_METADATA_KEYS_NO_BASE_URL;
   }
   if (kind === "oci_registry") return OCI_METADATA_KEYS;
-  // Plane/Git credentials currently carry no provider-specific public fields.
+  // Git credentials currently carry no provider-specific public fields.
   // Keeping the set explicit means future fields must be reviewed here first.
   return new Set<string>();
 }
@@ -139,7 +138,6 @@ export function credentialMetadataKeys(kind: string, provider: string): Readonly
 /** Provider/kind pairs accepted by Credential routes. */
 export function isProviderAllowedForKind(kind: string, provider: string): boolean {
   if (kind === "llm_provider") return providerCatalogEntry(kind, provider) !== null;
-  if (kind === "plane") return provider === "plane";
   if (kind === "git") return provider === "git";
   // OCI provider is the registry host itself and is checked against the
   // configured registry allowlist by the route.
@@ -371,7 +369,6 @@ export const PROVIDER_ENV_MAP: Record<string, { secretKeys: string[]; baseUrlKey
     defaultBaseUrl: "https://api.anthropic.com",
   },
   openai: { secretKeys: ["OPENAI_API_KEY"], baseUrlKey: "OPENAI_BASE_URL", defaultBaseUrl: "https://api.openai.com" },
-  plane: { secretKeys: ["PLANE_API_TOKEN"] },
   git: { secretKeys: ["GIT_TOKEN"] },
 };
 

@@ -8,7 +8,7 @@
 Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
 认证：`Authorization: Bearer <deepsonar_token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
-**普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/webhooks/plane`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
+**普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 
 Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出的写操作默认 `admin`，读操作只需已认证。
 
@@ -51,7 +51,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /dashboard/overview | projects:read | 态势 P0 运营总览聚合：项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动；项目级 token 只看到本项目 |
 | GET | /dashboard/usage | projects:read | 用量账本：聚合 `job_usage_ledger`（含缓存读/写）。`period=day\|week\|month` 为上海日历滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的 `YYYY-MM-DD` 或 ISO 时刻，最长 366 天。可选 `project_id`/`canvas_id`；不定价；项目级 token 只看到本项目 |
 | GET | /projects | projects:read | 项目列表 |
-| POST | /projects | projects:write | 创建 `{name, description?, plane_project_id?}` |
+| POST | /projects | projects:write | 创建 `{name, description?}` |
 | GET | /projects/:id | projects:read | 项目详情 |
 | PATCH | /projects/:id | projects:write | `{name?, description?, status?: active\|archived}` |
 | POST | /projects/:id/archive | projects:write | 归档项目 |
@@ -300,16 +300,6 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | POST | /credentials/batch-bind | agents:write | `{credential_id, role_config_ids[], mode: bind|migrate, source_credential_id?, model?, effect: new_jobs_only|refresh_pending, idempotency_key}`；运行中 Job 不会被改写 |
 
 LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json.reasoning` 由 Provider/模型拥有；Claude Code 只接受 `low | medium | high | xhigh` 并物化为 `effortLevel`；Pi 只接受 `off | minimal | low | medium | high | xhigh | max`；DSH 只接受 `off | minimal | low | medium | high | xhigh | max`，第三方 wire value 必须配置在模型 `reasoningEfforts` 映射。leftover Codex/OpenCode 凭据仍可读历史 reasoning，但不能再保存为新配置。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai` 与固定提交的 `dsh-reasoning-settings@0.3.0`，`settings_config_json.config` 保存官方 `settings.yaml` 形状的 YAML（`llm-pi-ai.providers` + `agent-default-model`）；route 可自定义，`api` 必须与 Credential wire protocol 兼容。Job 只冻结一个 route，并把 endpoint/credential 强制替换为 Model Gateway 与短期 Job token。其它 CLI 的 `settings_config_json` 在 Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。旧 `allowed_model_ids` 读写静默忽略，模型可用性只认 `settings_config`。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
-
-### Plane 集成（可选）
-
-| 方法 | 路径 | Scope | 说明 |
-| --- | --- | --- | --- |
-| PUT | /projects/:id/integrations/plane | integrations:write | `{plane_project_id}` |
-| DELETE | /projects/:id/integrations/plane | integrations:write | 解绑 |
-| POST | /projects/:id/integrations/plane/sync | integrations:write | 手动同步 |
-| GET | /plane-info | integrations:read | 连接信息 |
-| POST | /webhooks/plane | 豁免 | Webhook 入口（签名校验） |
 
 ### 平台导入导出（.deepsonarpack）
 

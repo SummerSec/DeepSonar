@@ -17,7 +17,6 @@ export type ModuleKey =
   | "skills"
   | "runtime_images"
   | "environment"
-  | "integrations"
   | "tasks"
   | "events"
   | "findings"
@@ -35,7 +34,6 @@ export const MODULE_DEPS: Record<ModuleKey, ModuleKey[]> = {
   skills: ["roles"],
   runtime_images: ["roles"],
   environment: ["roles"],
-  integrations: ["project"],
   tasks: ["project"],
   events: ["tasks"],
   findings: ["tasks"],
@@ -46,7 +44,7 @@ export const MODULE_DEPS: Record<ModuleKey, ModuleKey[]> = {
 };
 
 const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
-  configuration: ["project", "rules", "roles", "skills", "runtime_images", "environment", "integrations", "credentials"],
+  configuration: ["project", "rules", "roles", "skills", "runtime_images", "environment", "credentials"],
   project_full: [
     "project",
     "rules",
@@ -54,7 +52,6 @@ const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
     "skills",
     "runtime_images",
     "environment",
-    "integrations",
     "credentials",
     "tasks",
     "events",
@@ -102,7 +99,6 @@ export const CONFIG_MODULES = new Set<ModuleKey>([
   "skills",
   "runtime_images",
   "environment",
-  "integrations",
   "credentials",
 ]);
 

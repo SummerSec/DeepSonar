@@ -7,7 +7,6 @@ import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js"
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
 import { registerRoutes } from "./routes.js";
-import { startPlaneSync } from "./plane-sync.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import {
   bootstrapOfficialRuntimeImages,
@@ -72,7 +71,6 @@ async function main() {
   let stopDispatcher = () => {};
   let stopRuntimeImageWarmup = () => {};
   const stopReaper = startReaper();
-  const stopPlane = startPlaneSync();
   const stopTransfer = startTransferWorker();
   const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
   const stopRuntimeImageGc = startRuntimeImageGc();
@@ -87,7 +85,6 @@ async function main() {
     markDispatcherEnabled(false);
     stopRuntimeImageWarmup();
     stopReaper();
-    stopPlane();
     stopTransfer();
     stopRuntimeImageRegistrySync();
     stopRuntimeImageGc();
