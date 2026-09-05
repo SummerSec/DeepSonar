@@ -233,7 +233,7 @@ export function ProjectsPage() {
         <EmptyState
           title={
             projects.length
-              ? query || statusFilter.length !== 1 || statusFilter[0] !== "active" || sourceFilter.length > 0
+              ? query || statusFilter.length !== 1 || statusFilter[0] !== "active"
                 ? "没有匹配的项目"
                 : "没有进行中的项目"
               : "创建你的第一个项目空间"
@@ -244,13 +244,12 @@ export function ProjectsPage() {
               : "项目只定义长期边界；创建后进入空的任务列表，再下达第一项任务。"
           }
           action={
-            showNewProjectForm || showIntentRail ? undefined : query || statusFilter.length > 0 || sourceFilter.length > 0 ? (
+            showNewProjectForm || showIntentRail ? undefined : query || statusFilter.length > 0 ? (
               <SecondaryButton
                 type="button"
                 onClick={() => {
                   setQuery("");
                   setStatusFilter([]);
-                  setSourceFilter([]);
                 }}
               >
                 清除筛选
