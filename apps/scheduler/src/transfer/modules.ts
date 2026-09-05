@@ -1,5 +1,5 @@
 /**
- * 项目数据包模块定义（docs/TODO_DATABASE_IMPORT_EXPORT_PLAN.md §4）
+ * 项目数据包模块定义（模块/预设见本文件与 DESIGN.md「transfer」段）
  */
 
 export const FORMAT = "deepsonar-project-export";

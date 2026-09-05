@@ -37,20 +37,6 @@
 
 ---
 
-## 历史方案稿（主路径已落地）
-
-正文可能仍写「问题/分期」；**以文首状态与 DESIGN 为准**。
-
-| 文档 | 状态 | 已落地要点 |
-|------|------|------------|
-| [TODO_DATABASE_IMPORT_EXPORT_PLAN.md](TODO_DATABASE_IMPORT_EXPORT_PLAN.md) | **as-built** | `.deepsonarpack`、项目/平台导入导出；Secret 仅元数据 |
-| [HUB_ORCHESTRATION_AND_EVENT_TRIGGER_IMPLEMENTATION_PLAN.md](HUB_ORCHESTRATION_AND_EVENT_TRIGGER_IMPLEMENTATION_PLAN.md) | **as-built + 历史推演** | Hub 唯一决策入口、本地建任务为主 |
-| [ROLE_CONFIG_AND_REPORT_PLAN.md](ROLE_CONFIG_AND_REPORT_PLAN.md) | **as-built + 历史推演** | RoleConfig 三层、双轨 Report |
-| [RUNTIME_EVIDENCE_AND_GRAPH_OPERABILITY_PLAN.md](RUNTIME_EVIDENCE_AND_GRAPH_OPERABILITY_PLAN.md) | **as-built + 历史推演** | Session 归档、过程流、Job 详情、WS ticket（#38） |
-| [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built** | 见上 |
-
----
-
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |
@@ -101,5 +87,5 @@
 ## 维护纪律
 
 1. 功能落地后：改 `DESIGN.md`，并更新本索引与对应专题文首 **状态** 行。  
-2. 历史方案稿**不要删正文推演**（可当设计考古），但必须在顶部写清 as-built。  
+2. 历史方案稿：主路径落地后若仍被引用或承载未完成项则保留并标 as-built/进行中；**纯考古且无引用的一律删除**（2026-09 已清理 superpowers 草稿与 4 份 PLAN/TODO 稿；唯一保留 TODO_CANVAS_PROCESS_TRUTH → #148）。
 3. 禁止在文首写「待实现」而代码已交付超过一版。  
