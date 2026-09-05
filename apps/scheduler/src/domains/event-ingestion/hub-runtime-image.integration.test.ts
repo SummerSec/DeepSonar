@@ -180,9 +180,11 @@ if (!testDatabaseUrl) {
       await sql`
         UPDATE projects SET config_json = config_json || ${sql.json({ image_strategy: "project_managed" })}
         WHERE id = ${projectId}`;
+      // project_managed 采用项目 RoleConfig 的 CLI。给 model 以免冻快照在
+      // 镜像/CLI 门之前就被「DSH Provider 配置 YAML 必填」拦住。
       await sql`
-        INSERT INTO role_configs (role_id, project_id, agent_cli, instructions_markdown)
-        SELECT id, ${projectId}, 'dsh', 'fixture dsh review'
+        INSERT INTO role_configs (role_id, project_id, agent_cli, model, instructions_markdown)
+        SELECT id, ${projectId}, 'dsh', 'grok-4.6', 'fixture dsh review'
         FROM agent_roles WHERE name = 'review'`;
       const catalogWithChrome = await listHubRuntimeImageCatalog(sql, projectId);
       assert.ok(
