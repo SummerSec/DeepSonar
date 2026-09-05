@@ -17,6 +17,7 @@ import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
 import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status.js";
 import { normalizePendingJobPriorities } from "./core.js";
+import { scrubIgnoredProjectRoleConfigIdentity } from "./domains/role-runtime-snapshot/index.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
 import { ensureDefaultAdmin } from "./users.js";
 import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
@@ -43,6 +44,12 @@ async function main() {
   else console.log("[boot] schema 已就绪");
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
+  const scrubbed = await scrubIgnoredProjectRoleConfigIdentity(sql);
+  if (scrubbed.runtime_image_keys > 0 || scrubbed.inherit_global_models > 0) {
+    console.warn(
+      `[boot] scrubbed leftover project RoleConfig identity: images=${scrubbed.runtime_image_keys}, inherit_global_models=${scrubbed.inherit_global_models}`,
+    );
+  }
   await bootstrapOfficialRuntimeImages();
   if (managesHostDockerRuntime()) await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();

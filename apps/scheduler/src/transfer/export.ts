@@ -22,6 +22,7 @@ import {
   type PackFile,
 } from "./pack.js";
 import { FORMAT, FORMAT_VERSION, moduleVersion, resolveModules, type ModuleKey, type Preset } from "./modules.js";
+import { persistableProjectRoleConfigModel, parseProjectImagePolicy } from "../domains/role-runtime-snapshot/application.js";
 import { ACTIVE_JOB_STATUSES, filterEnvVars, sanitizeAgentSnapshot } from "./sanitize.js";
 
 function sha256Hex(s: string): string {
@@ -223,6 +224,7 @@ async function collectRoles(
     FROM role_configs rc
     JOIN agent_roles ar ON ar.id = rc.role_id
     WHERE rc.project_id = ${projectId}`;
+  const imagePolicy = parseProjectImagePolicy(enabled[0]?.config_json);
 
   const configOut = [];
   const envKeysAll = new Set<string>();
@@ -281,7 +283,7 @@ async function collectRoles(
       role_name: rc.role_name,
       agent_cli: rc.agent_cli,
       dsh_task_mode: rc.dsh_task_mode,
-      model: rc.model,
+      model: persistableProjectRoleConfigModel(imagePolicy, rc.model),
       context_window_tokens: rc.context_window_tokens == null ? null : Number(rc.context_window_tokens),
       env_keys: rc.env_keys,
       env_vars: safe,

@@ -640,7 +640,6 @@ export const CredentialBatchBindingImpact = z.object({
   refreshed_pending_job_count: z.number().int().nonnegative(),
   active_frozen_job_count: z.number().int().nonnegative(),
   terminal_historical_job_count: z.number().int().nonnegative(),
-  leftover_project_models_unchanged: z.boolean().default(false),
   role_configs: z.array(z.object({
     role_config_id: z.string().uuid(),
     role_name: z.string(),
@@ -648,7 +647,6 @@ export const CredentialBatchBindingImpact = z.object({
     project_id: z.string().uuid().nullable(),
     model: z.string().nullable(),
     model_changed: z.boolean().default(false),
-    inherit_global_ignores_project_model: z.boolean().default(false),
   })).max(100),
 }).strict();
 export type CredentialBatchBindingImpact = z.infer<typeof CredentialBatchBindingImpact>;

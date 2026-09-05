@@ -61,6 +61,7 @@ test("项目 RoleConfig 镜像字段由项目策略统一管理", () => {
   assert.match(roleConfigRoutesSource, /runtime_image_key: projectId \? null : body\.runtime_image_key \?\? null/);
   assert.match(roleConfigRoutesSource, /runtime_image_key: cfg\.project_id \? null : cfg\.runtime_image_key \?\? null/);
   assert.match(roleConfigRoutesSource, /runtime_image_key: row\.runtime_image_key \?\? null/);
+  assert.match(roleConfigRoutesSource, /persistableProjectRoleConfigModel/);
 
   const runtimePatchStart = roleConfigRoutesSource.indexOf('app.patch("/role-configs/:id/runtime-image"');
   const runtimePatchEnd = roleConfigRoutesSource.indexOf('app.get("/role-configs/bindable"', runtimePatchStart);
@@ -73,4 +74,11 @@ test("项目 RoleConfig 镜像字段由项目策略统一管理", () => {
 test("项目 RoleConfig 导入导出不会把遗留镜像列当作项目策略", () => {
   assert.match(projectExportSource, /runtime_image_key: null/);
   assert.match(projectImportSource, /runtime_image_key: null/);
+  assert.match(projectExportSource, /persistableProjectRoleConfigModel/);
+  assert.match(projectImportSource, /persistableProjectRoleConfigModel/);
+});
+
+test("scheduler boot scrubs leftover project RoleConfig identity", () => {
+  const boot = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(boot, /scrubIgnoredProjectRoleConfigIdentity\(sql\)/);
 });

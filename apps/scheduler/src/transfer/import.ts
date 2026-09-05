@@ -11,6 +11,11 @@ import {
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
 import { sql } from "../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
+import {
+  parseProjectImagePolicy,
+  persistableProjectRoleConfigModel,
+  type ProjectImagePolicy,
+} from "../domains/role-runtime-snapshot/application.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
@@ -260,7 +265,7 @@ async function createNewProject(
     id_map.projects[pack.manifest.source.project_id] = projectId;
 
     if (modules.includes("roles") || modules.includes("environment")) {
-      await importRoleConfigs(tx as Tx, projectId, pack, id_map);
+      await importRoleConfigs(tx as Tx, projectId, pack, id_map, false, parseProjectImagePolicy(config_json));
     }
 
     if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
@@ -311,6 +316,7 @@ async function mergeConfiguration(
           credentials: (id_map.credentials as Record<string, string>) ?? {},
         },
         policy === "keep_target",
+        parseProjectImagePolicy(cfg),
       );
     }
 
@@ -332,6 +338,7 @@ async function importRoleConfigs(
     credentials: Record<string, string>;
   },
   skipExisting = false,
+  imagePolicy: ProjectImagePolicy = parseProjectImagePolicy(undefined),
 ) {
   // Keep imported RoleConfig bindings in the same critical section as the
   // Credential provider/project/metadata mutation path.  Credential PATCH
@@ -346,7 +353,10 @@ async function importRoleConfigs(
 
     const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
     const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `RoleConfig ${roleName}`);
-    const model = typeof rc.model === "string" && rc.model ? rc.model : null;
+    const model = persistableProjectRoleConfigModel(
+      imagePolicy,
+      typeof rc.model === "string" && rc.model ? rc.model : null,
+    );
     const rawContextWindowTokens = rc.context_window_tokens ?? null;
     if (rawContextWindowTokens !== null && (
       typeof rawContextWindowTokens !== "number"

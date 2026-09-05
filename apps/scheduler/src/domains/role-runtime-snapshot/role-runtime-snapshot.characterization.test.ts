@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   PLATFORM_DEFAULT_AGENT_CLI,
   parseProjectImagePolicy,
+  persistableProjectRoleConfigModel,
   roleIdentityForProjectPolicy,
   roleNameForJobType,
   runtimeImageKeyForProjectPolicy,
@@ -72,4 +73,27 @@ test("inherit_global 忽略遗留项目 RoleConfig 的 model 与默认 CLI", () 
     global,
   );
   assert.deepEqual(managed, { model: "grok-4.5", agent_cli: "pi" });
+});
+
+test("inherit_global 项目 RoleConfig 不落库 model，project_managed 才持久化", () => {
+  assert.equal(
+    persistableProjectRoleConfigModel(parseProjectImagePolicy(undefined), "grok-4.5"),
+    null,
+  );
+  assert.equal(
+    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "dirty" }), "grok-4.5"),
+    null,
+  );
+  assert.equal(
+    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "inherit_global" }), "grok-4.5"),
+    null,
+  );
+  assert.equal(
+    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "project_managed" }), "grok-4.5"),
+    "grok-4.5",
+  );
+  assert.equal(
+    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "project_managed" }), "  "),
+    null,
+  );
 });
