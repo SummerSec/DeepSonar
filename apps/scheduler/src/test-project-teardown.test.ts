@@ -14,6 +14,8 @@ function collectTs(dir: string): string[] {
   });
 }
 
+const harnessRoot = join(here, "../../../agent-harness");
+
 test("project teardown skips rows referenced by append-only audit_logs", () => {
   const source = readFileSync(new URL("./test-project-teardown.ts", import.meta.url), "utf8");
   assert.match(source, /NOT EXISTS \(SELECT 1 FROM audit_logs/);
@@ -21,7 +23,7 @@ test("project teardown skips rows referenced by append-only audit_logs", () => {
 });
 
 test("integration tests do not hard-delete projects that audit_logs may reference", () => {
-  const offenders = collectTs(here).filter((path) => {
+  const offenders = [...collectTs(here), ...collectTs(harnessRoot)].filter((path) => {
     if (path.includes("test-project-teardown")) return false;
     return /DELETE FROM projects/.test(readFileSync(path, "utf8"));
   });
