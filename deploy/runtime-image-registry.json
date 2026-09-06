@@ -12,7 +12,7 @@
       "default_role": "base",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:76ace6377daf2d27d5c29e6665f49edc5445905303de058e58ce2bb7e1b877be",
           "platforms": [
             "linux/amd64",
@@ -58,7 +58,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:da0c6841d7597963da8f08bb969df60327d38f15d65ed3d8f8c39f7f5438332e",
           "platforms": [
             "linux/amd64",
@@ -104,7 +104,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:2898166e198f888ac878cb9fed0ca8db941f7da68e2f084988239a7d02f54bb9",
           "platforms": [
             "linux/amd64",
@@ -150,7 +150,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:b7ce0aaff8025cb43ff8cec67e2281e3669b5f19fea117d43bdcda392fa41608",
           "platforms": [
             "linux/amd64",
@@ -196,7 +196,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:9680ed341b8dcbedbccbbd26a9c4831886f503621f52dca73e242554a6be980e",
           "platforms": [
             "linux/amd64",
@@ -242,7 +242,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:661a07a585143e1342c5d88c366757a7e5ace086c5f9ed3b64d0607f0f95a361",
           "platforms": [
             "linux/amd64",
@@ -288,7 +288,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:bc81f5c7c3c4cabeb89841f97b151126f5864d8c9a0c144ace71fe746b3785b0",
           "platforms": [
             "linux/amd64",
@@ -334,7 +334,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:db2329b5e103805ad5c1b289f32e51fa61fae48f995fbf15b8d2ea03fe2fd70a",
           "platforms": [
             "linux/amd64",
@@ -380,7 +380,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:e6f16fb2b9b84115eb69aab595464c0cb34bb89c50871850702bbb0482b7594a",
           "platforms": [
             "linux/amd64",
@@ -426,7 +426,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:a616c86b34bdfb11d148fa0e2e88307cb4de31f5c0f7b04af72c7b30f6418c63",
           "platforms": [
             "linux/amd64",
@@ -472,7 +472,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:3b1ad82881841d23dd6e727fbeb239ad7edcf1706c9be9f7b47efe938ea654ca",
           "platforms": [
             "linux/amd64",
@@ -518,7 +518,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:512bcde48a9fbf62634b23bdf1d17ad6d7f924f9e4b80bfff25e9dcff9ba4736",
           "platforms": [
             "linux/amd64",
@@ -565,7 +565,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.2.8",
+          "version": "0.2.9",
           "digest": "sha256:d39b4b83a74e6232a4a3f9e164dad1077dd782634a8597e36d9c7b94c7552e79",
           "platforms": [
             "linux/amd64",
