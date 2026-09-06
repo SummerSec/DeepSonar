@@ -25,6 +25,8 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
     "running guard must use ingest lock-time status so same-turn follow-ups do not roll back a close",
   );
   assert.match(applicationSource, /orderSemanticIngestBundle/);
+  assert.match(applicationSource, /attempt_id: ingest\.attemptId/);
+  assert.match(applicationSource, /status = 'active'/);
   assert.match(applicationSource, /finalizedInThisIngest && envelope\.type === "done"/);
   assert.match(applicationSource, /shouldSkipTerminalAfterAcceptedHuman/);
   assert.match(applicationSource, /acceptedHumanInThisIngest/);

@@ -25,6 +25,8 @@ export interface EventIngestionResult {
 export interface EventIngestContext {
   /** `jobs.status` when this ingest transaction locked the row. */
   jobStatusAtLock: string;
+  /** Active Attempt at lock time; null when tests/recovery have no Attempt. */
+  attemptId: string | null;
 }
 
 /**
@@ -265,7 +267,15 @@ async function appendAndApplyBundle(
     const [job] = await tx<{ id: string; canvas_id: string | null; status: string }[]>`
       SELECT id, canvas_id, status FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) throw new Error(`job ${jobId} does not exist`);
-    const ingest: EventIngestContext = { jobStatusAtLock: String(job.status) };
+    const [attempt] = await tx<{ id: string }[]>`
+      SELECT id FROM job_attempts
+      WHERE job_id = ${jobId} AND status = 'active'
+      ORDER BY attempt_no DESC
+      LIMIT 1`;
+    const ingest: EventIngestContext = {
+      jobStatusAtLock: String(job.status),
+      attemptId: attempt ? String(attempt.id) : null,
+    };
 
     const actualJobCanvasId = (job.canvas_id as string | null) ?? null;
     if (actualJobCanvasId !== hint.jobCanvasId) {
@@ -327,6 +337,7 @@ async function appendAndApplyBundle(
           job_id: jobId,
           event_id: envelope.event_id,
           job_seq: next,
+          attempt_id: ingest.attemptId,
           type: envelope.type,
           payload_json: (envelope.payload ?? {}) as never,
         })}`;

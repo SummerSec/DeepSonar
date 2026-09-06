@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
+import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
+
+test("active imported Jobs archive to cancelled and keep original_status", () => {
+  assert.deepEqual(archiveJobStatus("running"), { status: "cancelled", original_status: "running" });
+  assert.deepEqual(archiveJobStatus("waiting_human"), { status: "cancelled", original_status: "waiting_human" });
+  assert.deepEqual(archiveJobStatus("failed"), { status: "failed", original_status: "failed" });
+});
 
 test("transfer preserves valid DSH task modes and defaults legacy packs", () => {
   assert.equal(parseTransferredDshTaskMode(undefined, "role"), "standard");

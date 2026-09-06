@@ -80,6 +80,71 @@ export interface DashboardOverview {
   recent_activity: DashboardActivityItem[];
 }
 
+/** `GET /dashboard/ops` — P1/P2 服务端运营指标，不替代 overview。 */
+export interface DashboardOpsHighRiskItem {
+  id: string;
+  title: string;
+  severity: string;
+  verify_status: string;
+  disposition: string;
+  project_id: string;
+  project_name: string;
+  canvas_id: string | null;
+  created_at: string;
+}
+
+export interface DashboardOps {
+  generated_at: string;
+  calendar_timezone: string;
+  query_planes: { snapshot: "current"; throughput: "history" };
+  totals: DashboardOverview["totals"];
+  findings: {
+    severity: DashboardStatusBucket[];
+    disposition: DashboardStatusBucket[];
+    verify_status: DashboardStatusBucket[];
+    open_high_risk: {
+      total: number;
+      truncated: boolean;
+      limit: number;
+      items: DashboardOpsHighRiskItem[];
+    };
+    coverage: {
+      projects_with_findings: number;
+      projects: number;
+      tasks_with_findings: number;
+      tasks: number;
+    };
+  };
+  jobs: {
+    statuses: DashboardStatusBucket[];
+    throughput: {
+      window: "last_7d";
+      timezone: string;
+      finished: number;
+      succeeded: number;
+      failed: number;
+      cancelled: number;
+      success_rate: number | null;
+    };
+    duration: { count: number; avg_ms: number | null; p50_ms: number | null; p95_ms: number | null };
+    by_role: Array<{
+      key: string;
+      finished: number;
+      succeeded: number;
+      failed: number;
+      cancelled: number;
+      avg_duration_ms: number | null;
+    }>;
+    concurrency: {
+      active: number;
+      waiting_human: number;
+      global_cap: number;
+      utilization: number | null;
+    };
+    failure_reasons: DashboardStatusBucket[];
+  };
+}
+
 export type UsagePeriod = "day" | "week" | "month" | "custom";
 
 export interface UsageTokenTotals {
@@ -1817,6 +1882,7 @@ function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
 
 export const api = {
   dashboardOverview: () => get<DashboardOverview>("/dashboard/overview"),
+  dashboardOps: () => get<DashboardOps>("/dashboard/ops"),
   dashboardUsage: (query: {
     period?: UsagePeriod;
     from?: string;

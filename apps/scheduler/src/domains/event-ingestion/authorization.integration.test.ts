@@ -117,7 +117,7 @@ if (!testDatabaseUrl) {
     };
 
     try {
-      const staleJobs = ["succeeded", "waiting_human", "cancelled"].map(async (status) => ({
+      const staleJobs = ["succeeded", "waiting_human", "cancelled", "timeout", "orphan"].map(async (status) => ({
         status,
         jobId: await makeJob("review", status, workerSnapshot),
       }));

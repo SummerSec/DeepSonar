@@ -88,7 +88,12 @@ export class ControlInputError extends Error {
    */
   readonly retryable: boolean;
 
-  constructor(code: ControlInputErrorCode, message: string, path?: string, details?: Record<string, unknown>) {
+  constructor(
+    code: ControlInputErrorCode,
+    message: string,
+    path?: string,
+    details?: Record<string, unknown>,
+  ) {
     super(`[${code}] ${message}`);
     this.name = "ControlInputError";
     this.code = code;

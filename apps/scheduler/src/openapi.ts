@@ -522,6 +522,55 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/dashboard/ops",
+    summary: "态势运营指标（P1/P2 服务端契约）",
+    description:
+      "只读运营聚合，不替代 GET /dashboard/overview。snapshot 走 current 平面（Finding severity/disposition/verify 分布、高风险未闭环、项目/任务覆盖、并发水位）；throughput 走 history 平面（近 7 日 Asia/Shanghai 终态成功率、耗时、角色对比、失败原因）。成功率分母为 succeeded|failed|timeout|orphan|cancelled；waiting_human 不算失败。confirmed_vuln 不是高风险未闭环。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": {
+        description: "运营指标",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["generated_at", "calendar_timezone", "query_planes", "totals", "findings", "jobs"],
+              properties: {
+                generated_at: { type: "string", format: "date-time" },
+                calendar_timezone: { type: "string", enum: ["Asia/Shanghai"] },
+                query_planes: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["snapshot", "throughput"],
+                  properties: {
+                    snapshot: { type: "string", enum: ["current"] },
+                    throughput: { type: "string", enum: ["history"] },
+                  },
+                },
+                totals: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "integer", minimum: 0 },
+                    tasks: { type: "integer", minimum: 0 },
+                    jobs: { type: "integer", minimum: 0 },
+                    findings: { type: "integer", minimum: 0 },
+                  },
+                },
+                findings: { type: "object" },
+                jobs: { type: "object" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
     path: "/dashboard/usage",
     summary: "用量账本看板",
     description:
@@ -992,7 +1041,29 @@ const OPS: Op[] = [
     tags: ["Jobs"],
     query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
   },
-  { method: "get", path: "/jobs/{id}", summary: "Job 详情（含事件）", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}",
+    summary: "Job 详情（含事件）",
+    description:
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/events",
+    summary: "Job 语义事件分页",
+    description:
+      "history 平面：accepted 语义事件按 (created_at, id) 追加分页；含 attempt_id（导入历史可空）。迟到事件不入账本。不是 live 旁路，不能当作实时流。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      cursor: { type: "string" },
+      after: { type: "string" },
+      limit: { type: "integer", minimum: 1 },
+    },
+  },
   {
     method: "get",
     path: "/jobs/{id}/evidence",
@@ -1045,7 +1116,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}/resume",
     summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",
     description:
-      "仅 failed/timeout/orphan/waiting_human。先按当前 RoleConfig/Credential/项目策略解析受治理运行身份；agent_cli/model/upstream_model/credential/runtime adapter/image digest 等身份漂移或当前配置无法解析时返回 409 SNAPSHOT_STALE，并提示调用 rerun-current。成功时保留画布和旧 Attempt/effect，清理执行元数据并原子转 pending。",
+      "仅 failed/timeout/orphan/waiting_human。导入时由活动状态归档的 cancelled Job 返回 409 JOB_IMPORTED_READONLY，不可续跑。可恢复的导入 Job 仍须过当前治理 admission；身份漂移或当前配置无法解析时返回 409 SNAPSHOT_STALE，并提示调用 rerun-current。成功时保留画布和旧 Attempt/effect，清理执行元数据并原子转 pending。响应含 provenance。",
     scope: "jobs:control",
     tags: ["Jobs"],
   },
@@ -1054,7 +1125,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}/rerun-current",
     summary: "按当前配置重新执行（同 Job、新 Attempt、保留画布）",
     description:
-      "仅 failed/timeout/orphan/waiting_human。持有 Dispatcher admission lock，并按 Canvas→Job 加锁；复用当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻 agent_snapshot_json，再原子转 pending。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。",
+      "仅 failed/timeout/orphan/waiting_human。导入 cancelled（活动归档）返回 409 JOB_IMPORTED_READONLY。可恢复的导入 Job 按当前治理完整重冻后再入队，不恢复历史 token/沙箱/密钥。持有 Dispatcher admission lock，并按 Canvas→Job 加锁。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。响应含 provenance。",
     scope: "jobs:control",
     tags: ["Jobs"],
   },

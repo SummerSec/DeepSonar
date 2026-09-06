@@ -31,6 +31,7 @@ import {
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
+import { jobNotRunningError } from "../../event-attribution.js";
 import {
   assertHubRuntimeImageReady,
   defaultRuntimeImageKey,
@@ -53,6 +54,7 @@ export interface EventSideEffectServices {
    * status to fail-and-rollback the close.
    */
   jobStatusAtLock?: string;
+  attemptId?: string | null;
 }
 
 export interface EventIngestionSideEffectApplication {
@@ -375,7 +377,15 @@ export function createEventIngestionSideEffectApplication(
     if (!SEMANTIC_TOOL_BY_EVENT[type]) return;
     const statusAtIngest = services.jobStatusAtLock ?? job.status;
     if (statusAtIngest !== "running") {
-      throw new ControlInputError("job_not_running", "语义事件只能提交给 status=running 的 Job。", "status");
+      throw jobNotRunningError({
+        job_id: String(job.id ?? ""),
+        job_status: String(statusAtIngest ?? ""),
+        attempt_id: services.attemptId ?? null,
+        job_seq: null,
+        linearization: "job_status_at_lock",
+        accepted: false,
+        canvas_mutated: false,
+      });
     }
   }
 
@@ -671,7 +681,7 @@ export function createEventIngestionSideEffectApplication(
   ): Promise<void> {
     const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
     if (!job) throw new ControlInputError("job_not_running", "Job 不存在或已不可接受控制输入。", "status");
-    assertSemanticJobRunning(job as Record<string, unknown>, type);
+    assertSemanticJobRunning(job as Record<string, unknown>, type, services);
     assertSemanticToolAuthority(job as Record<string, unknown>, type);
     await assertTerminalEventHistory(tx, jobId, type);
     if (type === "human") {

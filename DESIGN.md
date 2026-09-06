@@ -227,6 +227,14 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 **画布广播**：真注入路径见 §4.2；账本为唯一投递真相，Session 文本仅作旁证。
 
+**查询平面（#400）**：读 API 分 `current`（可变行快照）、`history`（追加账本/冷存储）与 `live`（进程内 stream-bus）。只有 current/history 是审计源；live 重启或换副本即空，不能替代 events/evidence。分页信封可带 `query_plane`。
+
+**运营指标（#400）**：`GET /dashboard/ops` 提供 P1/P2 **服务端**契约——Finding severity/disposition/verify 分布、高风险未闭环（critical/high 且 disposition ∈ open/accepted/human_reproducing，不含 confirmed_vuln）、项目/任务覆盖、近 7 日（Asia/Shanghai）终态成功率/耗时/角色对比、并发水位与失败原因。分母为 `succeeded|failed|timeout|orphan|cancelled`；`waiting_human` 不算失败。不重建 #242 已交付的 Dashboard UI。
+
+**语义事件归属（#400）**：线性化点是摄入事务锁到的 `jobs.status`。仅 `running` 接受事件并写 `events.attempt_id`；取消/超时/孤儿/其它非 running 状态用稳定码 `job_not_running`，`details` 说明 job_id/status/attempt_id/accepted/canvas_mutated，不入图、不推进画布。
+
+**导入 provenance（#400）**：导入 Job 在 `payload_json.import_origin` 标记 historical/readonly。活动 Job 导入时归档为 `cancelled`，resume/rerun 返回 `409 JOB_IMPORTED_READONLY`；failed/timeout/orphan 导入仍可续跑，但必须过当前治理 admission。
+
 **宿主资源清理指标（#199）**：`/metrics` 暴露 desired-state 清理残留容器/卷、连续失败轮次和按资源分类失败 counter；安全 runtime image GC 暴露候选、删除、容器占用保留与失败；Node `statfs` 宿主文件系统探针暴露使用率和 `ok/warning/error` 水位。指标抓取路径只读进程内结果，不在抓取时调用 Docker。
 
 **鉴权（HTTP + WS，#38 已关）**：
@@ -255,7 +263,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 - 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。进入项目后，**项目账本**（`/projects/:id/usage`）看本项目 Gateway 用量；**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
 - Finding 人工处置含 `human_reproducing`（人工复现中）：人已接手手工复现 / 打 PoC，尚未标「漏洞存在」或「拒绝误报」。**不是**技术 `verify_status=confirmed`，不能旁路 `confirmed_vuln` 的 Verify 门。compose 种子视为未否定处置。
-- **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1 风险分布与 P2 吞吐看板未做。
+- **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1/P2 **服务端**契约由 `GET /dashboard/ops` 提供（#400）；已交付 Dashboard UI 不再重建。
 - **用量账本看板**：`GET /dashboard/usage` 聚合 `job_usage_ledger`（不定价，含 `cache_read_input_tokens` / `cache_creation_input_tokens`）。预设 `day` / `week` / `month` 为 Asia/Shanghai 滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的上海日历日或 ISO 时刻，跨度最长 366 天。可选 `project_id` / `canvas_id`。态势页看全局（项目/任务/模型 Top 8），CURRENT PROJECT「项目账本」tab（`/projects/:id/usage`）看本项目，任务工作台「本次运行」看本画布。任务工作台列表不再内嵌项目账本。看板可折叠，偏好按用户 + 页面写入 `localStorage`（`deepsonar:usage-ledger:<user>:<page>`），默认展开。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
@@ -280,7 +288,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
 | 实时流 | #38 | issue 已关；残余：stream-bus 仍单进程内存（多副本不共享） |
-| 态势看板 | #242 | P0 运营总览与用量账本已落地；P1 风险看板、P2 吞吐看板未做 |
+| 态势看板 | #242 | P0 运营总览与用量账本已落地；P1/P2 服务端契约见 `GET /dashboard/ops`（#400）。不重建已交付 Dashboard UI |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
 | DSH/Pi 解码范围 | #389 | 当前仅为 input[0] 指纹兼容；完整解码范围与产品缺口由 #389 澄清（旧稿误写 #320） |
 
@@ -293,7 +301,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v44）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v45）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

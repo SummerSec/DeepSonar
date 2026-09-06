@@ -167,10 +167,13 @@ test("leftover suggest_verify is gone from contract, persist, and Agent-facing c
     new URL("./domains/event-ingestion/side-effects.ts", import.meta.url),
     new URL("./dispatcher.ts", import.meta.url),
     new URL("./platform-tools.ts", import.meta.url),
+    new URL("../../../docs/ARCHITECTURE.md", import.meta.url),
   ];
   for (const source of sources) {
     assert.doesNotMatch(readFileSync(source, "utf8"), /suggest_verify/);
   }
+  const architecture = readFileSync(new URL("../../../docs/ARCHITECTURE.md", import.meta.url), "utf8");
+  assert.doesNotMatch(architecture, /0020_finding_protocol\.sql/);
 });
 
 test("Job finding protocol only reads the frozen canvas snapshot", () => {
