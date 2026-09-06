@@ -103,8 +103,7 @@ test("normal createJob validates the frozen canvas policy before insertion", () 
   assert.ok(insert > guard, "createJob must validate before inserting the Job");
   assert.match(createJob.slice(0, insert), /resolveAgentSnapshotForJob/);
   assert.match(createJob.slice(0, insert), /freezeAgentSnapshotNetworkPolicy[\s\S]*input\.canvasId/);
-  const localGate = createJob.indexOf("assertFrozenRuntimeImageLocal");
-  assert.ok(localGate >= 0 && localGate < insert, "createJob must inspect the frozen digest before INSERT");
+  assert.equal(createJob.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
 
 test("resume-session Hub force-wake and retry map unresolvable snapshots to SNAPSHOT_STALE", () => {
@@ -128,8 +127,7 @@ test("retry validates the locked canvas policy before destructive reset and inse
   assert.ok(insert > guard, "retry must validate before inserting the Hub Job");
   assert.match(retry.slice(0, guard), /SELECT id, status, target_json FROM canvases/);
   assert.match(retry.slice(0, insert), /resolveAgentSnapshotForJob/);
-  const localGate = retry.indexOf("assertFrozenRuntimeImageLocal");
-  assert.ok(localGate >= 0 && localGate < wipe, "retry must inspect the frozen digest before wiping the canvas");
+  assert.equal(retry.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
 
 test("all direct Job creation paths freeze policy before INSERT", () => {
@@ -146,9 +144,7 @@ test("all direct Job creation paths freeze policy before INSERT", () => {
     const insert = source.indexOf("INSERT INTO jobs");
     assert.ok(freeze >= 0, `${name} must freeze network policy`);
     assert.ok(insert > freeze, `${name} must freeze before inserting a Job`);
-    if (name === "transfer history import") continue;
-    const localGate = source.indexOf("assertFrozenRuntimeImageLocal");
-    assert.ok(localGate >= 0 && localGate < insert, `${name} must inspect the frozen digest before INSERT`);
+    assert.equal(source.indexOf("assertFrozenRuntimeImageLocal"), -1, `${name} must not keep the leftover local-docker inspect gate`);
   }
 });
 
@@ -164,21 +160,21 @@ test("Chrome runtimes raise stall floors without changing the global 900s defaul
   assert.ok(CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"] > CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-audit"]);
 });
 
-test("human task create inspects the hub snapshot before opening a canvas", () => {
+test("human task create resolves the hub snapshot before opening a canvas", () => {
   const createTask = projectTaskSource.slice(projectTaskSource.indexOf('app.post("/projects/:id/tasks"'));
   const resolve = createTask.indexOf("resolveAgentSnapshotForJob");
-  const inspect = createTask.indexOf("assertFrozenRuntimeImageLocal");
   const canvas = createTask.indexOf("ensureCanvasForTask");
-  assert.ok(resolve >= 0 && inspect > resolve && canvas > inspect, "POST /tasks must inspect before ensureCanvasForTask");
+  assert.ok(resolve >= 0 && canvas > resolve, "POST /tasks must resolve the snapshot before ensureCanvasForTask");
+  assert.equal(createTask.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
 
-test("resume inspects the snapshot that will run, not a later catalog digest", () => {
+test("resume requeues the snapshot that will run, not a later catalog digest", () => {
   const resume = rerunSource.slice(rerunSource.indexOf("export async function requeueJob"));
   const stale = resume.indexOf('mode === "resume-frozen" && staleFields.length > 0');
-  const inspect = resume.indexOf("assertFrozenRuntimeImageLocal");
   const transition = resume.indexOf("transitionJob");
-  assert.ok(stale >= 0 && inspect > stale && transition > inspect);
-  assert.match(resume.slice(inspect, inspect + 400), /mode === "rerun-current" \? currentSnapshot : job\.agent_snapshot_json/);
+  assert.ok(stale >= 0 && transition > stale);
+  assert.equal(resume.indexOf("assertFrozenRuntimeImageLocal"), -1);
+  assert.match(resume, /mode === "rerun-current" \? currentSnapshot : job\.agent_snapshot_json/);
 });
 
 test("current snapshot resolution keeps the frozen Hub runtime image key", () => {

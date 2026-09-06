@@ -30,9 +30,8 @@ function dependencies(overrides: Partial<DesiredStateCleanupDependencies> = {}):
   };
 }
 
-test("desired-state cleanup runs for any real provider, including OpenSandbox", () => {
+test("desired-state cleanup runs for real OpenSandbox and skips fake", () => {
   assert.equal(shouldCleanupManagedResources({ agentMode: "real", provider: "opensandbox" }), true);
-  assert.equal(shouldCleanupManagedResources({ agentMode: "real", provider: "local-docker" }), true);
   assert.equal(shouldCleanupManagedResources({ agentMode: "fake", provider: "opensandbox" }), false);
 });
 

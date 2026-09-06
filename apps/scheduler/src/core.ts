@@ -50,7 +50,6 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
-import { assertFrozenRuntimeImageLocal } from "./runtime-images.js";
 
 const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
 
@@ -890,7 +889,6 @@ export async function createJob(input: CreateJobInput) {
       const frozenKnobs = freezeRuntimeKnobs(resolvedKnobs);
       const { role_runtime_knobs: _roleKnobs, ...snapshotBase } = snapshot;
       const snapshotWithKnobs = { ...snapshotBase, runtime_knobs: frozenKnobs };
-      await assertFrozenRuntimeImageLocal(snapshotWithKnobs);
       const [created] = await tx`
         INSERT INTO jobs ${tx({
           project_id: input.projectId,

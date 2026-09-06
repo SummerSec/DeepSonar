@@ -31,12 +31,7 @@ import {
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
-import {
-  assertFrozenRuntimeImageLocal,
-  listHubRuntimeImageCatalog,
-  RuntimeImageNotLocalError,
-  runtimeImageNotLocalCanvasBlock,
-} from "../../runtime-images.js";
+import { listHubRuntimeImageCatalog } from "../../runtime-images.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
 import {
   assertComposeFindingInScope,
@@ -195,10 +190,6 @@ export interface EventIngestionSideEffectPorts {
     status: "succeeded" | "failed",
     result?: EventFinalizeResult,
   ) => Promise<unknown>;
-  assertFrozenRuntimeImageLocal?: (
-    snapshot: AgentRuntimeSnapshot,
-    options?: { roleName?: string | null },
-  ) => Promise<void>;
 }
 
 export type EventCanvasEdgeInput = {
@@ -235,29 +226,6 @@ async function markJobWaitingHuman(tx: EventIngestionTransaction, jobId: string)
   await tx`
     UPDATE canvas_nodes SET status = 'waiting_human', updated_at = now()
     WHERE job_id = ${jobId} AND node_type IN ('job', 'intent', 'report')`;
-}
-
-async function blockHubOnMissingLocalImage(
-  tx: EventIngestionTransaction,
-  jobId: string,
-  canvasId: string,
-  error: RuntimeImageNotLocalError,
-): Promise<void> {
-  const block = runtimeImageNotLocalCanvasBlock(error.details);
-  await markJobWaitingHuman(tx, jobId);
-  const [jobNode] = await tx`
-    SELECT id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
-  await tx`
-    INSERT INTO canvas_nodes ${tx({
-      canvas_id: canvasId,
-      job_id: jobId,
-      node_type: "human",
-      title: block.title,
-      body_json: block as never,
-      x: jobNode ? Number(jobNode.x) + 150 : 200,
-      y: jobNode ? Number(jobNode.y) - 160 : 200,
-      status: "open",
-    })}`;
 }
 
 export function createEventIngestionSideEffectApplication(
@@ -1143,15 +1111,6 @@ export function createEventIngestionSideEffectApplication(
           if (error instanceof ControlInputError) throw error;
           if (isHubRuntimeImageResolutionError(error)) {
             throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);
-          }
-          throw error;
-        }
-        try {
-          await (ports.assertFrozenRuntimeImageLocal ?? assertFrozenRuntimeImageLocal)(snapshot, { roleName: role });
-        } catch (error) {
-          if (error instanceof RuntimeImageNotLocalError) {
-            await blockHubOnMissingLocalImage(tx, jobId, canvasId, error);
-            return;
           }
           throw error;
         }

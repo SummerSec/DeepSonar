@@ -14,7 +14,6 @@ import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from
 import { isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
 import { getAgentCliRuntimeAdapter, REQUIRED_RUNTIME_CAPABILITIES } from "@deepsonar/runtime-sandbox";
 import {
-  assertRuntimeImageAvailable,
   classifyRuntimeImagePin,
   defaultRuntimeImageKey,
   hostRuntimePlatform,
@@ -22,8 +21,6 @@ import {
   localImageDigest,
   readRuntimeRegistryChannel,
   runtimeImagePinStaleMessage,
-  shortRuntimeImageDigest,
-  shouldInspectLocalRuntimeImage,
 } from "./runtime-images.js";
 import {
   parseProjectImagePolicy,
@@ -128,8 +125,6 @@ export interface ReadinessEvaluationInput {
   hostDisk?: HostDiskPressureStatus;
   /** OpenSandbox server probe. Omitted = skip (unit tests / non-opensandbox). */
   openSandboxServer?: OpenSandboxServerStatus;
-  /** digest → local inspect result. Omitted = skip host-layer check (unit tests). */
-  localImagePresence?: Record<string, boolean>;
 }
 
 type EffectiveRole = ReadinessRoleRow & {
@@ -741,20 +736,6 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && image.admission_bypassed) {
       checks.push(attention("RUNTIME_IMAGE_ADMISSION_BYPASSED", `${role.name} 使用了运维显式登记的 immutable digest；该版本标记为跳过准入扫描，请确认登记来源。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary, evidence: { kind: "none", status: "missing", at: null, age_seconds: null, model_count: null, source: "not_recorded" } }));
-    } else if (
-      input.executionMode === "real"
-      && input.localImagePresence
-      && image.digest
-      && input.localImagePresence[image.digest] !== true
-    ) {
-      const versionLabel = image.version ?? image.selected_version;
-      const digestLabel = shortRuntimeImageDigest(image.digest) || image.digest;
-      checks.push(fail(
-        "RUNTIME_IMAGE_NOT_LOCAL",
-        `${role.name} 所需 runtime image ${imageKey}${versionLabel ? ` ${versionLabel}` : ""}（${digestLabel}）不在本机；请先在镜像市场准备该 digest，不要在 Job 执行期隐式拉取。`,
-        runtimeImagesFix(input.scope),
-        { role: summary, runtime_image: runtimeSummary },
-      ));
     } else {
       checks.push(pass("RUNTIME_IMAGE_READY", `${role.name} 已解析到 Scheduler 信任的不可变 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     }
@@ -967,26 +948,5 @@ export async function loadReadiness(
     audits: audits as unknown as ReadinessAuditRow[],
     hostDisk,
     openSandboxServer,
-    localImagePresence: await inspectLocalRuntimeImagePresence(images as unknown as ReadinessRuntimeImageRow[]),
   });
-}
-
-async function inspectLocalRuntimeImagePresence(
-  images: ReadinessRuntimeImageRow[],
-): Promise<Record<string, boolean> | undefined> {
-  if (!shouldInspectLocalRuntimeImage()) return undefined;
-  const presence: Record<string, boolean> = {};
-  for (const row of images) {
-    const digest = row.digest && /^sha256:[0-9a-f]{64}$/i.test(row.digest) ? row.digest.toLowerCase() : null;
-    const imageRef = row.resolved_ref?.trim() ?? "";
-    if (!digest || !imageRef || presence[digest] !== undefined) continue;
-    try {
-      await assertRuntimeImageAvailable(imageRef);
-      presence[digest] = true;
-    } catch (error) {
-      void error;
-      presence[digest] = false;
-    }
-  }
-  return presence;
 }

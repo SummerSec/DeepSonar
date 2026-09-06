@@ -17,7 +17,6 @@ import {
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
-import { assertFrozenRuntimeImageLocal, RuntimeImageNotLocalError } from "./runtime-images.js";
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 import { planTaskReportVersion } from "./task-report-version.js";
@@ -875,14 +874,6 @@ export async function maybeDispatchFindingReport(
     canvasId,
     await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report", [findingId]),
   );
-  try {
-    await assertFrozenRuntimeImageLocal(snapshot, { roleName: "report" });
-  } catch (error) {
-    if (error instanceof RuntimeImageNotLocalError) {
-      return { dispatched: false, reason: "runtime_image_not_local" };
-    }
-    throw error;
-  }
   const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
   const inputJson = JSON.stringify(input);
@@ -1128,15 +1119,6 @@ export async function maybeDispatchReport(
     canvasId,
     resolvedSnapshot,
   );
-  try {
-    await assertFrozenRuntimeImageLocal(snapshot, { roleName: "report" });
-  } catch (error) {
-    if (error instanceof RuntimeImageNotLocalError) {
-      return { dispatched: false, reason: "runtime_image_not_local" };
-    }
-    throw error;
-  }
-
   // 显式创建可运行 Report Job：持有 ingress 的旧终态 Job 先 retire，再 INSERT（不用 ON CONFLICT DO NOTHING 绑回 failed Job）
   const ingressKey = `report:${canvasId}`;
   const [held] = await tx`
