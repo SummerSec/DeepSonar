@@ -1690,7 +1690,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/sync",
     summary: "同步当前部署内置镜像市场文件",
-    description: "重新读取并校验当前部署内的注册表文件与环境变量覆盖，幂等同步官方产品和版本到本地数据库；不会联网获取任意 URL。",
+    description: "重新读取并校验当前部署内的注册表文件与环境变量覆盖，幂等同步官方产品和版本到本地数据库；不会联网获取任意 URL。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
   },
@@ -1698,7 +1698,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/pull",
     summary: "异步拉取同步后的远程不可变镜像",
-    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；默认每个官方产品只拉最新一条可用版本（历史 trusted digest 保留给 pin/Job 快照，不批量预热）。缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。",
+    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；默认每个官方产品只拉最新一条可用版本（历史 trusted digest 保留给 pin/Job 快照，不批量预热）。缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     responses: {
@@ -1813,6 +1813,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/import",
     summary: "导入第三方 OCI 镜像到隔离区",
+    description: "平台级目录写入。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
@@ -1851,7 +1852,14 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "post", path: "/runtime-image-versions/{id}/rescan", summary: "将镜像版本重新送入准入扫描", scope: "images:manage", tags: ["Runtime Images"] },
+  {
+    method: "post",
+    path: "/runtime-image-versions/{id}/rescan",
+    summary: "将镜像版本重新送入准入扫描",
+    description: "平台级准入操作。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+  },
   {
     method: "post",
     path: "/runtime-image-versions/{id}/status",
@@ -1867,7 +1875,14 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/runtime-image-versions/{id}/usage", summary: "反向查询使用该镜像版本的 Job、项目与 Finding 数量", scope: "images:read", tags: ["Runtime Images"] },
+  {
+    method: "get",
+    path: "/runtime-image-versions/{id}/usage",
+    summary: "反向查询使用该镜像版本的 Job、项目与 Finding 数量",
+    description: "平台管理员看全局 usage；项目限定 actor 只返回自身项目的 Job/项目/Finding 元数据。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+  },
   {
     method: "put",
     path: "/projects/{id}/runtime-images/{imageId}",
@@ -2145,11 +2160,19 @@ const OPS: Op[] = [
   },
 
   // tokens
-  { method: "get", path: "/tokens", summary: "API Token 列表", scope: "tokens:manage", tags: ["Tokens"] },
+  {
+    method: "get",
+    path: "/tokens",
+    summary: "API Token 列表",
+    description: "仅返回调用者可以管理的 Token。项目限定 actor 只看见本项目且 scopes 不超过自身的 Token。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
   {
     method: "post",
     path: "/tokens",
     summary: "创建 API Token（明文仅返回一次）",
+    description: "scopes 必须是调用者有效 scopes 的子集；非管理员不能授予 admin。项目限定 actor 只能创建本项目 Token，忽略或拒绝空/跨项目 project_id（403 SCOPE_EXCEEDS_ACTOR / PROJECT_MISMATCH）。",
     scope: "tokens:manage",
     tags: ["Tokens"],
     body: {
@@ -2163,8 +2186,22 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "post", path: "/tokens/{id}/revoke", summary: "吊销 Token", scope: "tokens:manage", tags: ["Tokens"] },
-  { method: "post", path: "/tokens/{id}/rotate", summary: "轮换 Token", scope: "tokens:manage", tags: ["Tokens"] },
+  {
+    method: "post",
+    path: "/tokens/{id}/revoke",
+    summary: "吊销 Token",
+    description: "按项目归属与 scope 子集过滤；跨项目 403 PROJECT_MISMATCH，超出调用者权限 403 SCOPE_EXCEEDS_ACTOR。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
+  {
+    method: "post",
+    path: "/tokens/{id}/rotate",
+    summary: "轮换 Token",
+    description: "沿用旧 Token 的 scope/project，权限不会扩大。跨项目或超出调用者权限分别返回 PROJECT_MISMATCH / SCOPE_EXCEEDS_ACTOR。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
 
   // audit
   { method: "get", path: "/audit-logs", summary: "审计日志", scope: "admin", tags: ["Admin"] },

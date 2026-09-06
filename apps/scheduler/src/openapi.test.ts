@@ -103,7 +103,10 @@ test("runtime registry channel OpenAPI is strict and project-scope aware", () =>
   assert.equal(channel.responses["202"].content["application/json"].schema.properties.saved.enum[0], false);
   assert.match(String(channel.responses["403"].content["application/json"].schema.properties.error_code.enum), /PROJECT_SCOPE_FORBIDDEN/);
   assert.match(String(channel.responses["500"].content["application/json"].schema.properties.error_code.enum), /RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED/);
+  assert.match(String(pull.description), /PROJECT_SCOPE_FORBIDDEN/);
   assert.match(String(pull.description), /RUNTIME_IMAGE_CHANNEL_UNAVAILABLE/);
+  assert.match(String(paths["/tokens"]?.post?.description), /SCOPE_EXCEEDS_ACTOR|PROJECT_MISMATCH/);
+  assert.match(String(paths["/runtime-image-versions/{id}/usage"]?.get?.description), /自身项目/);
   assert.deepEqual(
     pull.responses["409"].content["application/json"].schema.properties.error_code.enum,
     ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"],

@@ -87,6 +87,8 @@ findings:write
 ## 其它约束
 
 - 绑定到**单个项目**（`project_id`）时 Token 只能操作该项目，推荐做法；
+- `POST /tokens` 的 scopes 必须是调用者有效 scopes 的子集；非管理员不能授予 `admin`。项目 Token 不能创建全局 Token 或其它项目 Token，list/revoke/rotate 同样按项目归属与子集过滤。
+- 项目 Token 不能改全局 runtime-image 目录（sync/apply/pull/import/digest/rescan/status），也不能把导入 apply 到其它项目或 `create_new` 出新项目。
 - Token 只在创建时展示一次；泄露立即吊销并轮换；
 - 建议 `expires_in_days`（如 30/90 天）。
 
