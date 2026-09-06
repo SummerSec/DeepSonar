@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "@deepsonar/runtime-sandbox";
-import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "./dsh-request-frame.js";
+import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
+import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai.js";
 
 const thirdPartySettings = {
   reasoning: "high",
@@ -96,6 +97,22 @@ test("DSH rejects secret-bearing or multi-route Provider YAML", () => {
   assert.throws(() => parseDshPiAiSettings({ ...thirdPartySettings, config: thirdPartySettings.config.replace("api: openai-responses", "api: openai-responses\n      apiKeyEnv: OPENAI_API_KEY") }, "openai"), /禁止字段 apiKeyEnv/);
   assert.throws(() => parseDshPiAiSettings({ ...thirdPartySettings, config: thirdPartySettings.config.replace("      models:", "      compat:\n        headers:\n          Authorization: secret\n      models:") }, "openai"), /禁止字段 headers/);
   assert.throws(() => parseDshPiAiSettings({ ...thirdPartySettings, config: thirdPartySettings.config.replace("    xxxx:", "    second:\n      api: openai-responses\n      baseURL: http://10.0.0.2/v1\n      models: [{ id: other }]\n    xxxx:") }, "openai"), /必须且只能声明/);
+});
+
+test("DSH adapter owns Gateway projection; other CLIs do not", () => {
+  assert.equal(typeof AGENT_CLI_RUNTIME_ADAPTERS.dsh.projectRuntime, "function");
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS.pi.projectRuntime, undefined);
+  assert.equal(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"].projectRuntime, undefined);
+  const runtime = AGENT_CLI_RUNTIME_ADAPTERS.dsh.projectRuntime!({
+    settingsConfig: thirdPartySettings,
+    credentialProvider: "openai",
+    gatewayBaseUrl: "http://deepsonar-gateway:3100/gateway",
+    model: "gpt-5.6",
+    reasoning: "max",
+  });
+  assert.equal(runtime.config.providers.xxxx?.baseURL, "http://deepsonar-gateway:3100/gateway");
+  assert.equal(runtime.config.providers.xxxx?.apiKeyEnv, "DEEPSONAR_GATEWAY_TOKEN");
+  assert.equal(JSON.stringify(runtime.config).includes("127.0.0.1"), false);
 });
 
 test("DSH defaults mirror settings.yaml llm-pi-ai sections", () => {

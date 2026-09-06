@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultDshPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { defaultDshPiAiSettings } from "@deepsonar/runtime-sandbox";
 import {
   extractBaseUrlFromSettings,
   extractModelFromSettings,
