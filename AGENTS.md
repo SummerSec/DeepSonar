@@ -43,7 +43,8 @@ pnpm typecheck        # 全 workspace 类型检查
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** 默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
-- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
+- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 `verify_finding`/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
+- **Fact-first `verify_finding`（#367 follow-up / #399）**：review/test/worker 只能提交结构化 Fact；Scheduler 必须校验 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual`、`outcome` 及相互冲突。`verify_finding` 只消费通过校验的 Fact 集合，不重读 maker 结论或原始 artifacts；足够且一致的 Fact 可直接收口/确认，证据不足、冲突或版本不匹配则保持未确认并回弹 Hub 补证。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 默认 0（关闭轮询）。
@@ -77,7 +78,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### Hub 循环（Cairn 式图语义，§8.3）
 
-画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify` 与 `report` 是调度器专用系统角色，Hub 不可下发。**Hub 轮次由事件触发，不靠定时轮询**（任务本身可设置 `scheduled_start_at`），单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
+画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify_finding` 与 `report` 是调度器专用系统角色，Hub 不可下发。**Hub 轮次由事件触发，不靠定时轮询**（任务本身可设置 `scheduled_start_at`），单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
 
 ### 运行时（`packages/runtime-sandbox/`）
 

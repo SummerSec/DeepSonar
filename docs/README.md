@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+> **当前同步状态（2026-09-06）**：根 README 与架构入口已按本地库/Web 主路径校正；Plane 仅为可选集成。#359 的剩余工作拆为 #386–#390，未完成项以这些 Issue 和 DESIGN.md §11 为准。
+
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
 > 2. [`ARCHITECTURE.md`](ARCHITECTURE.md) — 架构细则（与 DESIGN 冲突时以 **代码 + DESIGN + schema + OpenAPI** 为准，并回写 DESIGN）  
@@ -16,6 +18,7 @@
 | **as-built** | 与当前主路径代码对齐的契约/运维说明 |
 | **as-built + 历史推演** | 主路径已落地；正文保留旧方案段落仅供对照 |
 | **运维/发布** | 部署与镜像发布流程（持续有效） |
+| **可选集成** | 默认路径不依赖；文档供联调 |
 | **进行中** | 仅部分落地，见文内分段状态 |
 | **素材/非产品** | Prompt、品牌等，不是系统契约 |
 
@@ -25,7 +28,7 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | **as-built** | 威胁建模、状态机、存储、运行时；管理真相是本地库 / Web |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **as-built** | 威胁建模、状态机、存储、运行时；本地库/Web 是管理真相，Plane 仅为可选集成 |
 | [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；leftover Codex/OpenCode 只读；版本钉死见 runtime-images |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
@@ -37,11 +40,35 @@
 
 ---
 
+## 历史方案稿（主路径已落地）
+
+正文可能仍写「问题/分期」；**以文首状态与 DESIGN 为准**。
+
+| 文档 | 状态 | 已落地要点 |
+|------|------|------------|
+| [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built** | 见上 |
+
+---
+
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [TODO_CANVAS_PROCESS_TRUTH.md](TODO_CANVAS_PROCESS_TRUTH.md) | **A as-built · B 主路径可用** | 广播已交付；服务端 `x/y` 是 placement/exchange hint，Web 对当前可见投影布局（≤200 节点由 ELK 排主 DAG 节点/边，root 完成反馈走共享 rail；超阈值固定列）。**全图 `layout_revision` 权威重算暂缓 → #148** |
+
+## 当前开放演进（#359）
+
+[#359](https://github.com/SummerSec/DeepSonar/issues/359) 是设计债总追踪单，当前仍开放；下面五个子任务是现行范围。它们是待验证的整改项，不代表对应能力已经完成。
+
+| Issue | 优先级 | 范围 |
+|------|--------|------|
+| [#390](https://github.com/SummerSec/DeepSonar/issues/390) | P1 | 将 DSH 方言处理归位到适配边界 |
+| [#386](https://github.com/SummerSec/DeepSonar/issues/386) | P2 | 收敛通用配置面，清除无决策作用的重复配置 |
+| [#387](https://github.com/SummerSec/DeepSonar/issues/387) | P2 | 评估并收敛 Fact 验证生命周期 |
+| [#388](https://github.com/SummerSec/DeepSonar/issues/388) | P2 | 明确实时流持久化边界，解决重启与跨副本缺口 |
+| [#389](https://github.com/SummerSec/DeepSonar/issues/389) | P2 | 明确并补齐 DSH/Pi 解码范围 |
+
+关闭 #359 前，需要逐项完成这些子任务的验收，或记录有产品、代码和验证证据支持的保留结论，并同步回写 DESIGN.md 与相关契约文档。
 
 ---
 
@@ -60,12 +87,12 @@
 | 主题 | 事实 |
 |------|------|
 | #38 实时流 WS 鉴权 | **已关**；`ws-ticket` + 运行中 stream tail，见 DESIGN §8 |
-| #39 画布 soft-load / delta | **已关**；画布 L0 + delta，见 CHANGELOG / 代码 |
+| #39 画布 soft-load / delta | **已关**；见 DESIGN §11 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
-| #100 / #135 / #145 / #152 | **已关**；三类治理 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
+| #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
 | #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
 | #244 / #284 | **#284 修订**：官方 stale pin 在 catalog 提升时自动滚到最新 trusted；`pin_ok` / 第三方 / `pin_policy=hold` 仍不自动换；过期且未滚动时 `RUNTIME_IMAGE_PIN_STALE` + 一键升级 |
-| #286 | **已完成，后经 #359 收口**：Agentbox 时代的本机 inspect 闸门已删除；OpenSandbox 按冻结 digest 拉取并在 provision 后重验 |
+| #286 | **已完成**：任务/Job 启动前 inspect 冻结 digest；catalog ready 但本机缺层 → `RUNTIME_IMAGE_NOT_LOCAL`，不插注定失败的 Job |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |
 | #157 / #158 | **已关**；共享资产孤儿卷回收、官方 `deepsonar-assets-helper` 发布与 busybox pin 回退、provision admission |
 | #243 Windows deploy.ps1 | **已关**；UTF-8 BOM + ASCII，避免 PS 5.1 代码页 ParserError；pull/up 与 `deploy.sh` 对齐 |
@@ -87,5 +114,5 @@
 ## 维护纪律
 
 1. 功能落地后：改 `DESIGN.md`，并更新本索引与对应专题文首 **状态** 行。  
-2. 历史方案稿：主路径落地后若仍被引用或承载未完成项则保留并标 as-built/进行中；**纯考古且无引用的一律删除**（2026-09 已清理 superpowers 草稿与 4 份 PLAN/TODO 稿；唯一保留 TODO_CANVAS_PROCESS_TRUTH → #148）。
+2. 历史方案稿**不要删正文推演**（可当设计考古），但必须在顶部写清 as-built。  
 3. 禁止在文首写「待实现」而代码已交付超过一版。  
