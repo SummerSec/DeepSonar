@@ -13,8 +13,9 @@ test("public POST /jobs rejects an unknown ordinary role", () => {
   assert.equal(isPublicJobTypeAllowed("not-registered", enabledRoles), false);
 });
 
-test("public POST /jobs rejects leftover audit_module type alias", () => {
+test("public POST /jobs rejects leftover audit_module and hub type aliases", () => {
   assert.equal(isPublicJobTypeAllowed("audit_module", [{ name: "audit" }]), false);
+  assert.equal(isPublicJobTypeAllowed("hub", [{ name: "hub_reason" }]), false);
   assert.equal(isPublicJobTypeAllowed("audit", [{ name: "audit" }]), true);
 });
 

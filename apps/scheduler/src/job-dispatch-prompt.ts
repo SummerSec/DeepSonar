@@ -98,7 +98,7 @@ export function extractDispatchPrompt(
         : "",
     ].filter(Boolean).join("\n");
   }
-  if (jobType === "hub_reason" || jobType === "hub") {
+  if (jobType === "hub_reason") {
     const parts = [goal ? `任务内容：\n${goal}` : "", trigger].filter(Boolean);
     if (parts.length) return parts.join("\n\n");
   }

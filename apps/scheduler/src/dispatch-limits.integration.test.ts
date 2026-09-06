@@ -46,7 +46,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, priority, agent_snapshot_json, created_at
         ) VALUES (
-          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit_module',
+          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit',
           ${options.status ?? "pending"}, ${options.priority ?? 0}, ${sql.json(snapshot as never)},
           ${options.createdAt ?? new Date()}
         )`;
@@ -67,7 +67,7 @@ if (!testDatabaseUrl) {
           ? sql`statement_timestamp() - interval '120 seconds'`
           : sql`${new Date(firstCreatedAt.getTime() + index)}`;
         return sql`(
-          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit_module', 'pending', 0,
+          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit', 'pending', 0,
           ${sql.json(snapshot as never)}, ${createdAt}
         )`;
       });

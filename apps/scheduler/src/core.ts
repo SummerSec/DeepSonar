@@ -366,7 +366,7 @@ export interface SchedulingPriorityInput {
 /** Resolve a Job's immutable semantic purpose from its type/payload. */
 export function schedulingPurposeForJob(input: SchedulingPriorityInput): SchedulingPurpose {
   const type = String(input.type ?? "").toLowerCase();
-  if (type === "hub_reason" || type === "hub") return "hub";
+  if (type === "hub_reason") return "hub";
   if (type === "verify_finding" || type === "verify") return "verify";
   if (type === "report") return "report";
   const explicit = input.purpose ?? input.payload?.scheduling_purpose;
@@ -411,7 +411,7 @@ export function priorityMatchesJob(input: SchedulingPriorityInput, priority: num
   return Number.isInteger(priority) && priority === fixedPriorityForJob(input);
 }
 
-const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
+const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "verify_finding", "verify", "report"]);
 
 export function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
   const followup = payload.verification_followup;

@@ -47,8 +47,8 @@ if (!testDatabaseUrl) {
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, priority, payload_json, agent_snapshot_json)
-        VALUES (${originJobId}, ${projectId}, ${canvasId}, 'audit_module', 'succeeded',
-          ${fixedPriorityForJob({ type: 'audit_module', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
+        VALUES (${originJobId}, ${projectId}, ${canvasId}, 'audit', 'succeeded',
+          ${fixedPriorityForJob({ type: 'audit', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
       const [findingNode] = await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'finding', 'missing evidence finding', 'pending', ${sql.json({})})
@@ -80,8 +80,8 @@ if (!testDatabaseUrl) {
         id: originJobId,
         project_id: projectId,
         canvas_id: canvasId,
-        type: "audit_module",
-        priority: fixedPriorityForJob({ type: "audit_module", purpose: "discovery" }),
+        type: "audit",
+        priority: fixedPriorityForJob({ type: "audit", purpose: "discovery" }),
       };
       await sql.begin(async (tx) => maybeTriggerHub(tx as unknown as typeof sql, dummyJob));
       const [{ first_hub_count }] = await sql`
@@ -178,8 +178,8 @@ if (!testDatabaseUrl) {
         VALUES (${lowCanvasId}, 'root', 'root', 'active', ${sql.json({})})`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, priority, payload_json, agent_snapshot_json)
-        VALUES (${lowOriginJobId}, ${projectId}, ${lowCanvasId}, 'audit_module', 'succeeded',
-          ${fixedPriorityForJob({ type: 'audit_module', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
+        VALUES (${lowOriginJobId}, ${projectId}, ${lowCanvasId}, 'audit', 'succeeded',
+          ${fixedPriorityForJob({ type: 'audit', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
       const [lowFindingNode] = await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${lowCanvasId}, 'finding', 'below threshold finding', 'open', ${sql.json({})})
@@ -226,9 +226,9 @@ if (!testDatabaseUrl) {
         id: lowOriginJobId,
         project_id: projectId,
         canvas_id: lowCanvasId,
-        type: "audit_module",
+        type: "audit",
         followup_depth: 999,
-        priority: fixedPriorityForJob({ type: "audit_module", purpose: "discovery" }),
+        priority: fixedPriorityForJob({ type: "audit", purpose: "discovery" }),
       }, lowFinding as Record<string, unknown>);
       assert.deepEqual(
         await settleCanvasFindingsAtGuardrail(sql, lowCanvasId, "max_hub_rounds"),

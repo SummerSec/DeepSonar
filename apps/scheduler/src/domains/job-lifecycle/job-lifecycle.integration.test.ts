@@ -39,7 +39,7 @@ if (!testDatabaseUrl) {
         jobIds.push(id);
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
-          VALUES (${id}, ${projectId}, ${canvasId}, 'audit_module', ${status}, ${sql.json(snapshot as never)})`;
+          VALUES (${id}, ${projectId}, ${canvasId}, 'audit', ${status}, ${sql.json(snapshot as never)})`;
         return id;
       };
 
@@ -145,7 +145,7 @@ if (!testDatabaseUrl) {
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, started_at, lease_expires_at, agent_snapshot_json, payload_json)
           VALUES (
-            ${id}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+            ${id}, ${projectId}, ${canvasId}, 'audit', 'running',
             now() - interval '1000 seconds', now() + interval '60 seconds',
             ${sql.json({
               ...snapshot,

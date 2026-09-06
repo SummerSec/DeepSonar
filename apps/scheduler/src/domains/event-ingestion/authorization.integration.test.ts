@@ -128,7 +128,7 @@ if (!testDatabaseUrl) {
         }
       }
 
-      const auditJob = await makeJob("audit_module", "running", auditSnapshot);
+      const auditJob = await makeJob("audit", "running", auditSnapshot);
       await assertRejectedWithoutWrites(auditJob, "fact", "tool_not_allowed");
       const workerJob = await makeJob("review", "running", workerSnapshot);
       await assertRejectedWithoutWrites(workerJob, "finding", "tool_not_allowed");
@@ -145,13 +145,7 @@ if (!testDatabaseUrl) {
         credential_id: null,
         model: null,
       });
-      const legacyAccepted = await ingestEvent(legacyAuditJob, {
-        v: 1,
-        event_id: randomUUID(),
-        type: "progress",
-        payload: { message: "legacy snapshot canonicalized" },
-      });
-      assert.equal(legacyAccepted.deduped, false);
+      await assertRejectedWithoutWrites(legacyAuditJob, "progress", "tool_not_allowed");
 
       const customJob = await makeJob("explore", "running", {
         agent_cli: "claude-code",
@@ -169,7 +163,7 @@ if (!testDatabaseUrl) {
       for (const [type, snapshot] of [
         ["verify_finding", { name: "verify", role_kind: "role" }],
         ["hub_reason", { name: "hub_reason", role_kind: "role" }],
-        ["audit_module", { name: "audit_module", role_kind: "hub" }],
+        ["audit", { name: "audit", role_kind: "hub" }],
       ] as const) {
         const malformedJob = await makeJob(type, "running", snapshot);
         const eventType = type === "verify_finding" ? "progress" : type === "hub_reason" ? "hub_decision" : "progress";
@@ -177,7 +171,7 @@ if (!testDatabaseUrl) {
       }
       const reviewAsAuditJob = await makeJob("review", "running", { name: "audit", role_kind: "role" });
       await assertRejectedWithoutWrites(reviewAsAuditJob, "finding", "tool_not_allowed");
-      const auditAsReviewJob = await makeJob("audit_module", "running", { name: "review", role_kind: "role" });
+      const auditAsReviewJob = await makeJob("audit", "running", { name: "review", role_kind: "role" });
       await assertRejectedWithoutWrites(auditAsReviewJob, "progress", "tool_not_allowed");
       const hubNameMismatchJob = await makeJob("hub_reason", "running", { name: "review", role_kind: "hub" });
       await assertRejectedWithoutWrites(hubNameMismatchJob, "hub_decision", "tool_not_allowed");
@@ -249,7 +243,7 @@ if (!testDatabaseUrl) {
 
       const hubJob = await makeJob("hub_reason", "running", {
         ...hubSnapshot,
-        name: "hub",
+        name: "hub_reason",
       });
       const hubDecisionEventId = randomUUID();
       const hubDecision = await ingestEvent(hubJob, {
@@ -350,7 +344,7 @@ if (!testDatabaseUrl) {
 
       const sameIngestHubJob = await makeJob("hub_reason", "running", {
         ...hubSnapshot,
-        name: "hub",
+        name: "hub_reason",
         platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
       });
       await createAttempt(sql, sameIngestHubJob, { agent_cli: "claude-code" });
@@ -394,7 +388,7 @@ if (!testDatabaseUrl) {
           AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
       const hubResumeSnapshot = {
         ...hubSnapshot,
-        name: "hub",
+        name: "hub_reason",
         platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
       };
       const resumedHubJob = await makeJob("hub_reason", "running", hubResumeSnapshot);
@@ -420,7 +414,7 @@ if (!testDatabaseUrl) {
           AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
       const humanCloseSnapshot = {
         ...hubSnapshot,
-        name: "hub",
+        name: "hub_reason",
         platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
       };
       const sameTurnCloseJob = await makeJob("hub_reason", "running", humanCloseSnapshot);
