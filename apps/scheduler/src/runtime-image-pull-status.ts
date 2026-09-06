@@ -28,17 +28,21 @@ export interface RuntimeImagePullTask {
   items: RuntimeImagePullItem[];
 }
 
-export interface RuntimeImagePullStatusView extends RuntimeImagePullTask {
+export interface RuntimeImagePullStatusView {
   task_id: string | null;
   purpose: string;
   status: RuntimeImagePullTaskStatus | "idle";
   phase: string;
+  started_at: string | null;
+  finished_at: string | null;
   interrupted_at: string | null;
   interrupt_reason: string | null;
   error_code: string | null;
   error: string | null;
-  checked_at: string;
+  total: number;
+  completed: number;
   items: Array<RuntimeImagePullItem & { phase: string; error_code: string | null }>;
+  checked_at: string;
 }
 
 export interface RuntimeImagePullTaskStore {
@@ -143,7 +147,7 @@ export function createSqlRuntimeImagePullTaskStore(
           ${task.error ?? null},
           ${task.total},
           ${task.completed},
-          ${db.json(task.items)},
+          ${db.json(task.items as never)},
           now()
         )
         ON CONFLICT (task_id) DO UPDATE SET
