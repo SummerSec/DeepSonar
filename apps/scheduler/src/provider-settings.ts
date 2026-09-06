@@ -22,7 +22,7 @@ import {
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
-import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
 import { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 

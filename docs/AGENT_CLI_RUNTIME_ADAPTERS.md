@@ -31,6 +31,15 @@ control API, event validation, completion gates, leases, and all state
 transitions. Output is consumed as structured JSON events; terminal text is
 never scraped.
 
+DSH vendor dialect (official `settings.yaml` parse, secret-key reject, single
+route/profile rewrite onto the Job Gateway, pi-compatible `input[0]` frame, and
+Cordis composition) lives in `packages/runtime-sandbox/src/dsh-pi-ai.ts` plus
+the DSH adapter. Scheduler management APIs call that parse/project for write
+validation and snapshot freeze; `executor-real` only calls
+`adapter.projectRuntime`. Generic dispatcher / Hub / job-lifecycle code must
+not import DSH wire schema. Full DSH/Pi decode scope is #389, not this
+boundary.
+
 The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLIs. Leftover `codex` / `open-code` adapters are retired from new RoleConfig/Job writes; historical snapshots and Session archives stay readable. Official images no longer install leftover `@openai/codex` / `opencode-ai`. Adding a later CLI still follows the onboarding checklist below and registers in the same table.
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |

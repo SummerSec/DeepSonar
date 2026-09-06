@@ -1,4 +1,5 @@
 import type { ContextIdentity } from "./context-contract.js";
+import { buildDshPiAiRuntimeProjection, type DshPiAiRuntimeProjection } from "./dsh-pi-ai.js";
 import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt } from "./dsh-request-frame.js";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
@@ -29,6 +30,17 @@ export interface DshProviderRuntimeConfig {
   config: { providers: Record<string, Record<string, unknown>> };
   /** Optional already-projected first system message. Adapter still enforces the pi-compatible prefix. */
   systemPrompt?: string;
+}
+
+/** Scheduler-owned Gateway/token inputs; adapter owns vendor YAML and profile rewrite. */
+export interface AgentRuntimeProjectionInput {
+  settingsConfig: unknown;
+  credentialProvider: string;
+  gatewayBaseUrl: string;
+  model?: string | null;
+  contextWindowTokens?: number | null;
+  reasoning?: string | null;
+  platformSystemPrompt?: string | null;
 }
 
 export interface AdapterStartContext {
@@ -85,6 +97,8 @@ export interface RuntimeAdapter {
   start(context: AdapterStartContext): Promise<RuntimeProcess>;
   resume(context: AdapterResumeContext): Promise<RuntimeProcess>;
   materialize?(context: AdapterStartContext): Promise<void>;
+  /** Vendor dialect → frozen runtime config. Only DSH implements this today. */
+  projectRuntime?(input: AgentRuntimeProjectionInput): DshPiAiRuntimeProjection;
   encodeInput(content: string, state?: AdapterRuntimeState): string;
   /** 多消息模式运行时可选的显式 RPC 排队命令。 */
   encodeSteer?(content: string, state?: AdapterRuntimeState): string;
@@ -873,6 +887,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
   compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
   start: (context) => sandboxDsh(context.host, context),
   materialize: materializeDsh,
+  projectRuntime: buildDshPiAiRuntimeProjection,
   resume: (context) => sandboxDsh(context.host, context),
   encodeInput: (content, state) => {
     if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");

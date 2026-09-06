@@ -1,6 +1,6 @@
 import { CONTEXT_WINDOW_TOKENS_MAX, CONTEXT_WINDOW_TOKENS_MIN, DSH_REASONING_EFFORTS, isDshReasoningEffort } from "@deepsonar/shared-types";
-import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "@deepsonar/runtime-sandbox";
 import { parseDocument, stringify } from "yaml";
+import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "./dsh-request-frame.js";
 
 export { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt };
 

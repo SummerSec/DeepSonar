@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   contextIdentity,
   normalizeRuntimeErrorDetails,
+  requireAgentCliRuntimeAdapter,
   runRealAgent,
   type ContextState,
 } from "@deepsonar/runtime-sandbox";
@@ -26,7 +27,6 @@ import {
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { runner } from "./runtime.js";
-import { buildDshPiAiRuntimeProjection } from "./dsh-pi-ai-settings.js";
 import {
   assertJobCanPublishSharedAsset,
   ingestEvent,
@@ -1496,17 +1496,17 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
 
   if (provider === "dsh" && !activeCredentialProvider) throw new Error("DSH_CREDENTIAL_PROVIDER_MISSING");
-  const dshProvider = provider === "dsh"
-    ? buildDshPiAiRuntimeProjection({
-        settingsConfig: snapshot.settings_config_json,
-        credentialProvider: activeCredentialProvider!,
-        gatewayBaseUrl: config.gateway.sandboxUrl,
-        model,
-        contextWindowTokens: snapshot.context_window_tokens,
-        reasoning,
-        platformSystemPrompt: PLATFORM_SYSTEM_PROMPT,
-      })
-    : undefined;
+  const runtimeAdapter = requireAgentCliRuntimeAdapter(provider);
+  const dshProvider = runtimeAdapter.projectRuntime?.({
+    settingsConfig: snapshot.settings_config_json,
+    credentialProvider: activeCredentialProvider ?? "",
+    gatewayBaseUrl: config.gateway.sandboxUrl,
+    model,
+    contextWindowTokens: snapshot.context_window_tokens,
+    reasoning,
+    platformSystemPrompt: PLATFORM_SYSTEM_PROMPT,
+  });
+  if (provider === "dsh" && !dshProvider) throw new Error("DSH_RUNTIME_PROJECTION_UNSUPPORTED");
 
   let result: Awaited<ReturnType<typeof runRealAgent>>;
   try {
