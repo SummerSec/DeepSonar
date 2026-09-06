@@ -42,6 +42,7 @@ GET /credentials/:id/compatibility
 GET /credentials/:id/impact
 GET /credentials/:id/models
 GET /credentials/providers
+GET /dashboard/ops
 GET /dashboard/overview
 GET /dashboard/usage
 GET /exports/:id
@@ -216,6 +217,7 @@ GET /credentials/{id}/compatibility
 GET /credentials/{id}/impact
 GET /credentials/{id}/models
 GET /credentials/providers
+GET /dashboard/ops
 GET /dashboard/overview
 GET /dashboard/usage
 GET /findings
@@ -227,6 +229,7 @@ GET /global-settings
 GET /health
 GET /jobs
 GET /jobs/{id}
+GET /jobs/{id}/events
 GET /jobs/{id}/evidence
 GET /jobs/{id}/evidence/session
 GET /jobs/{id}/evidence/session/download

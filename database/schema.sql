@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 44);
+INSERT INTO schema_meta (id, version) VALUES ('global', 45);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -190,6 +190,7 @@ CREATE TABLE events (
   job_id uuid NOT NULL REFERENCES jobs(id),
   event_id text NOT NULL,
   job_seq int NOT NULL,
+  attempt_id uuid REFERENCES job_attempts(id),
   type text NOT NULL,
   payload_json jsonb NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -197,6 +198,7 @@ CREATE TABLE events (
   CONSTRAINT events_job_event_uniq UNIQUE (job_id, event_id)
 );
 CREATE INDEX events_job_idx ON events (job_id, id);
+CREATE INDEX events_attempt_idx ON events (attempt_id, job_seq);
 
 -- Durable per-Job fixed-window semantic-event budgets.  Scheduler ingestion
 -- locks one row instead of scanning events; progress and terminal/control

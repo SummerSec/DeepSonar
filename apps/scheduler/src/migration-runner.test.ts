@@ -21,7 +21,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 44);
+  assert.equal(SCHEMA_VERSION, 45);
   assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   const transferExport = await readFile(new URL("./transfer/export.ts", import.meta.url), "utf8");
   const transferImport = await readFile(new URL("./transfer/import.ts", import.meta.url), "utf8");
@@ -59,6 +59,8 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.match(body, /CREATE TABLE job_capability_tokens\s*\(/i);
   assert.match(body, /CREATE TABLE job_attempts\s*\(/i);
   assert.match(body, /CREATE TABLE job_attempt_effects\s*\(/i);
+  assert.match(body, /CREATE TABLE events[\s\S]*attempt_id uuid REFERENCES job_attempts\(id\)/i);
+  assert.match(body, /CREATE INDEX events_attempt_idx/i);
   assert.match(body, /CREATE TABLE canvas_broadcasts\s*\(/i);
   assert.match(body, /delivery_status IN \('planned', 'injected', 'failed', 'unknown'\)/i);
   assert.match(body, /CREATE TABLE human_messages\s*\(/i);

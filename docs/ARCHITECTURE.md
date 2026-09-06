@@ -185,14 +185,14 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 |--------|----------|----------------|
 | `emit_progress` | Worker | 更新 job 节点文案/进度 |
 | `emit_fact` | Hub 可下发的非审计工作角色 | 增量建立 fact 节点与意图边 |
-| `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（可带 `suggest_verify` 建议字段） |
+| `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（结构化 Finding；不含是否 Verify 的提案字段） |
 | `submit_hub_decision` | hub_reason | 提交 complete 或 intents 提案 |
 | `mark_job_done` | Worker | 结束节点 + 摘要 |
 | `request_human` | Worker | 提交结构化 Finding 或平台阻塞 subject；Scheduler 校验后将 Job 转人工等待并建立 human 节点 |
 
 **明确不在 Agent 权限内**（v1.1 收紧）：
 
-- 派生验证的**决策**：`emit_finding` 只能携带 `suggest_verify: true/false` 建议，是否派生由调度器规则引擎唯一决定（见 §4.3）
+- 派生验证的**决策**：`emit_finding` 不携带是否 Verify 的建议字段；是否派生 `verify_finding` 只认任务冻结的 `minVerifySeverity`，由调度器唯一决定（见 §4.3）
 - 画布节点坐标与布局
 - `create_canvas` / `docker.*` / `plane.set_state`（状态由调度器在 claim/finish 时统一写）
 
@@ -237,7 +237,7 @@ pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 
 3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
 4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
 5. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
-6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（兼容输入 `false_positive` 映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
+6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（`false_positive` 不是合法 verdict，也不再映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
 7. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
 8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
 9. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
@@ -329,18 +329,19 @@ jobs
   -- canvas_id: 任务画布；verify job 继承父审计 job 的画布
 
 events
-  id, job_id, event_id, job_seq, type, payload_json, created_at
+  id, job_id, event_id, job_seq, attempt_id, type, payload_json, created_at
   -- 唯一约束: (job_id, event_id)  -- 幂等去重，重试/重连重放不产生重复副作用
   -- 排序: 自增 id = 全局序；job_seq = 调度器侧每 job 单调递增局部序（不信 created_at，时钟有偏差）
+  -- attempt_id：摄入锁时的 active Attempt（可空；导入历史可不恢复 Attempt）
   -- 只放语义事件（progress/finding/done/human），原始事件流不进此表（见 §6.2）
   -- 按月原生分区，到期 DROP PARTITION（不 DELETE，避免死元组）
 
 findings
   id, project_id, job_id, node_id, fingerprint, title, profile, category,
   severity, tags_json, evidence_refs_json, scoring_json,
-  location, summary, suggest_verify, verify_status, raw_json, created_at
+  location, summary, verify_status, raw_json, created_at
   -- 唯一约束: (project_id, fingerprint)  -- fingerprint = hash(profile + title + location + rule)
-  -- schema v20：通用 Finding 协议字段；severity 可空，评分由 Scheduler 规范化
+  -- 通用 Finding 协议字段在当前 schema 基线；severity 可空，评分由 Scheduler 规范化
 
 canvas_nodes
   id, canvas_id, job_id, node_type, title, body_json,
@@ -389,11 +390,11 @@ canvas_changes
 | 派生规则来源 | `ruleId` → 对应 job type / audit 规则名 |
 
 `emit_finding` 的 payload 是 SARIF result 的受限子集，并扩展通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`。`profile` 缺省为
-`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略；缺失或未知 severity 保守进入 Verify，已知 severity 是否自动验证由 `minVerifySeverity` 决定。`suggest_verify` 仅保留兼容语义，最终由规则引擎决策。
+`security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略；缺失或未知 severity 保守进入 Verify，已知 severity 是否自动验证只认冻结 `minVerifySeverity`。`verify_finding` 由调度器派生与收口，Agent 不能提案是否 Verify。
 
 评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
 
-schema v20 的 `0020_finding_protocol.sql` 为 `findings` 增加上述五个 JSON/文本字段、允许 `severity` 为 NULL，并建立 `(project_id, profile, category, verify_status)` 索引；fresh 基线和连续迁移保持同一结构。
+当前 schema 基线直接包含上述 JSON/文本字段、可空 `severity` 与 `(project_id, profile, category, verify_status)` 索引。改表只改 `database/schema.sql` 并 bump `SCHEMA_VERSION` 后重建，不写增量 ALTER。
 
 ### 6.2 存储分层（热/冷分离）
 

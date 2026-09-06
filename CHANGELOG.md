@@ -7,6 +7,11 @@
 ### 新增
 
 - Runtime image readiness 与拉取任务持久化：Hub 目录/`list_available_runtime_images` 返回 `readiness`（ready/preparing/unavailable/error）且不泄露 OCI/digest；`GET /runtime-images/registry` 附 `image_status`，`GET /runtime-images/registry/pull-status` 返回可关联 image_key 的结构化阶段。拉取任务落 `runtime_image_pull_tasks`（schema v44）；Scheduler 重启把 in-flight 标为 `interrupted`（`scheduler_restarted`），不自动 resume。Hub 提交未就绪镜像返回可重试 `runtime_image_not_ready` 且不创建 Job；管理 API 映射为 409 并可轮询 pull-status（#398）。
+- `GET /dashboard/ops` 提供态势 P1/P2 服务端运营指标：Finding 分布与高风险未闭环、项目/任务覆盖、近 7 日成功率/耗时/角色对比、并发水位与失败原因；snapshot=current、throughput=history（#400 / #242 数据契约）。
+- 读 API 标明查询平面：`current` / `history` / `live`；live 不是审计源。Job 详情与事件分页返回 `query_plane` 与导入 `provenance`（#400）。
+- Finding 处置矩阵：`confirmed_vuln` 必须 `verify_status=confirmed`；高风险未闭环不含已确认漏洞（#400）。
+- 取消/超时/孤儿后的迟到语义事件仍用 `job_not_running`，并附归属 `details`；`events.attempt_id` 记录摄入锁时的 Attempt（schema v45）（#400）。
+- 导入 Job 默认 historical/readonly；导入时活动归档为 cancelled 的 Job 续跑返回 `409 JOB_IMPORTED_READONLY`（#400）。
 
 ### 变更
 
