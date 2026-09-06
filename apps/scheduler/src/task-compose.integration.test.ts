@@ -22,7 +22,11 @@ async function wipeProjectComposeFixtures(db: SchedulerSql, projectIds: readonly
   await db`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ANY(${ids}::uuid[])`;
   await db`DELETE FROM jobs WHERE project_id = ANY(${ids}::uuid[])`;
   await db`DELETE FROM canvases WHERE project_id = ANY(${ids}::uuid[])`;
-  await db`DELETE FROM projects WHERE id = ANY(${ids}::uuid[])`;
+  // Finding 摄入会写 append-only audit_logs(project_id)；有引用时留下项目壳。
+  await db`
+    DELETE FROM projects p
+    WHERE p.id = ANY(${ids}::uuid[])
+      AND NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.project_id = p.id)`;
 }
 
 if (!testDatabaseUrl) {

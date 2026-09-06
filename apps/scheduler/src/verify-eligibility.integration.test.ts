@@ -329,7 +329,7 @@ if (!testDatabaseUrl) {
         await tx`UPDATE jobs SET parent_job_id = NULL WHERE canvas_id = ${canvasId}`;
         await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
         await tx`DELETE FROM canvases WHERE id = ${canvasId}`;
-        await tx`DELETE FROM projects WHERE id = ${projectId}`;
+        // createVerifyRound 写 append-only finding.verify_gate 审计，项目壳必须保留。
       });
     }
     await sql.end({ timeout: 5 });
