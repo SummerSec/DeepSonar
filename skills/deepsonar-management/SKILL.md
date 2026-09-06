@@ -154,7 +154,7 @@ python scripts/deepsonar-api.py credentials providers
 python scripts/deepsonar-api.py credentials get <id>
 python scripts/deepsonar-api.py credentials impact <id>
 python scripts/deepsonar-api.py credentials create --name claude-proxy --provider anthropic --agent-cli claude-code --secret '...' --settings-config @claude-settings.json [--base-url 'https://...']
-python scripts/deepsonar-api.py credentials create --name codex-proxy --provider openai --agent-cli codex --secret '...' --settings-config @codex-settings.json [--base-url 'https://...']
+python scripts/deepsonar-api.py credentials create --name pi-proxy --provider openai --agent-cli pi --secret '...' --settings-config @pi-settings.json [--base-url 'https://...']
 python scripts/deepsonar-api.py credentials models-preview --provider anthropic --agent-cli claude-code --secret '...' --base-url 'https://...' --settings-config @claude-settings.json
 python scripts/deepsonar-api.py credentials update <id> --data '{"metadata":{"base_url":"http://127.0.0.1/v1"}}'
 python scripts/deepsonar-api.py credentials rotate <id> --secret '...'

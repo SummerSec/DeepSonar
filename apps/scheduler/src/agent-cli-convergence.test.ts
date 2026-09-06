@@ -41,6 +41,14 @@ test("runtime adapter registry stays open but currently lists only three CLIs", 
   assert.doesNotMatch(adaptersDoc, /^\| `open-code` \| OpenCode /m);
 });
 
+test("management skill no longer teaches leftover CLI credential create", () => {
+  const skill = readFileSync(new URL("../../../skills/deepsonar-management/SKILL.md", import.meta.url), "utf8");
+  assert.match(skill, /--agent-cli claude-code/);
+  assert.match(skill, /--agent-cli pi/);
+  assert.doesNotMatch(skill, /--agent-cli codex/);
+  assert.doesNotMatch(skill, /--agent-cli open-code/);
+});
+
 test("leftover CLIs cannot materialize or bind new credentials", () => {
   assert.equal(isProviderAgentCli("codex"), false);
   assert.equal(isProviderAgentCli("open-code"), false);
