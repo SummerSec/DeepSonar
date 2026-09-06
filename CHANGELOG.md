@@ -25,6 +25,7 @@
 ### 修复
 
 - 报告数值保真门禁不再因 Agent 改写口径或未确认 Fact 误炸：只核对 verified/confirmed Fact 与 confirmed Finding；覆盖足够的 Agent 稿数值失败时回退确定性模板，并明确要求报告原样保留 value/unit/basis（#374）。
+- 明确 DSH/Pi「解码」为三类契约（请求兼容投影 / 运行事件解码 / Session 归档与查看器），修正 DESIGN 误把 #320 当作完整解码的引用。DSH 未知 JSON-RPC 帧改为可诊断的 `unknown_runtime`，并解码独立 `tool/call` / `tool/result`；钉死 Pi `0.84.4` / DSH `0.1.1-rc.2` 脱敏夹具覆盖文本、工具、错误、usage、Session 身份与损坏帧。普通输出或伪造工具调用仍不变成控制语义事件（#389 / #359）。
 
 ## [0.2.7] - 2026-09-04
 

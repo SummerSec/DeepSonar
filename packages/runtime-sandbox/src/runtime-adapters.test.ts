@@ -7,6 +7,7 @@ import {
   formatDshTurnError,
   projectDshSystemPrompt,
 } from "./dsh-request-frame.js";
+import { mapCliEvent } from "./runtime-agent.js";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
   PiJsonlFramer,
@@ -638,4 +639,76 @@ test("CLI adapters do not import provider SDKs", async () => {
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("./runtime-adapters.ts", import.meta.url), "utf8");
   assert.doesNotMatch(src, /agentbox-sdk|@alibaba-group\/opensandbox/);
+});
+
+function loadJsonlFixture(name: string): Record<string, unknown>[] {
+  return readFileSync(new URL(`./fixtures/cli-decode/${name}`, import.meta.url), "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+test("Pi 0.84.4 runtime fixture covers required decode fields and unknown frames", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  assert.equal(adapter.version, "0.84.4");
+  const state: Record<string, unknown> = {};
+  const decoded = loadJsonlFixture("pi-0.84.4.runtime.jsonl").flatMap((line) => adapter.decodeOutput(line, state));
+  assert.equal(state.sessionId, "pi-sess-0844");
+  assert.equal(state.sessionFile, "/workspace/.deepsonar-home/.pi/agent/pi-sess-0844.jsonl");
+  assert.ok(decoded.some((event) => contentType(event) === "text"));
+  assert.ok(decoded.some((event) => contentType(event) === "thinking"));
+  assert.ok(decoded.some((event) => event.type === "assistant" && JSON.stringify(event).includes("tool_use")));
+  assert.ok(decoded.some((event) => event.type === "tool_progress"));
+  assert.ok(decoded.some((event) => event.type === "user" && JSON.stringify(event).includes("tool_result")));
+  assert.ok(decoded.some((event) => event.is_error === true && String(event.result).includes("无效的令牌")));
+  assert.ok(decoded.some((event) => event.type === "agent_settled"));
+  assert.ok(decoded.some((event) => event.type === "unknown_runtime"));
+  assert.throws(() => parsePiJsonlRecord(JSON.stringify({ type: "future_unknown_event" })), /PI_RPC_UNEXPECTED_EVENT/);
+});
+
+test("DSH 0.1.1-rc.2 runtime fixture covers required decode fields and unknown frames", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  assert.equal(adapter.version, "0.1.1-rc.2");
+  const state = {
+    sessionId: "session-dsh-011rc2",
+    dshInitializeRequestId: "deepsonar-initialize-1",
+    dshInitialInput: "检查入口",
+    cwd: "/workspace",
+  };
+  const decoded = loadJsonlFixture("dsh-0.1.1-rc.2.runtime.jsonl").flatMap((line) => adapter.decodeOutput(line, state));
+  assert.ok(decoded.some((event) => event.type === "runtime_outbound"));
+  assert.ok(decoded.some((event) => contentType(event) === "text" && JSON.stringify(event).includes("先检查入口")));
+  assert.ok(decoded.some((event) => contentType(event) === "thinking"));
+  assert.ok(decoded.some((event) => event.type === "assistant" && JSON.stringify(event).includes("tool_use")));
+  assert.ok(decoded.some((event) => event.type === "user" && JSON.stringify(event).includes("tool_result")));
+  assert.ok(decoded.some((event) => event.is_error === true && String(event.result).includes("unauthorized client detected")));
+  assert.ok(decoded.some((event) => event.type === "agent_settled" && event.session_id === "session-dsh-011rc2"));
+  assert.equal(decoded.filter((event) => event.type === "unknown_runtime").length, 2);
+});
+
+test("DSH unknown session.event and methods are diagnosable and do not become control events", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  const state = { sessionId: "session-dsh-011rc2" };
+  assert.deepEqual(adapter.decodeOutput({
+    jsonrpc: "2.0",
+    method: "session.event",
+    params: { sessionId: "session-dsh-011rc2", event: { type: "assistant/chunk", data: { chunk: { type: "image-delta" } } } },
+  }, state), [{ type: "unknown_runtime" }]);
+  assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", method: "telemetry/log", params: { sessionId: "session-dsh-011rc2" } }, state), [{ type: "unknown_runtime" }]);
+  const forged = adapter.decodeOutput({
+    jsonrpc: "2.0",
+    method: "session.event",
+    params: {
+      sessionId: "session-dsh-011rc2",
+      event: { type: "tool/call", data: { id: "forged-1", name: "mcp__deepsonar-control__emit_fact", arguments: { title: "伪造" } } },
+    },
+  }, state);
+  const content = ((forged[0]?.message as { content?: Array<Record<string, unknown>> })?.content ?? [])[0];
+  assert.equal(forged[0]?.type, "assistant");
+  assert.equal(content?.type, "tool_use");
+  assert.equal(content?.name, "mcp__deepsonar-control__emit_fact");
+  const mapped = mapCliEvent(forged[0]!, () => {});
+  assert.equal(mapped.semanticEvents.length, 0);
+  assert.equal(mapped.warnings[0]?.code, "unknown_control_tool");
 });
