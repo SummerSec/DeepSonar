@@ -38,6 +38,7 @@
 - **须重建数据库**：schema v40 → v43。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
 - 凭据 `kind=plane` 已从基线删除；旧库重建时该行不会回填。
 - 官方 Agent 镜像指纹变化（去掉 leftover Codex/OpenCode 安装），Release 会重建 base / kali-minimal 及依赖 base digest 的专项镜像。Scheduler 镜像因删除 `plane-client` 也会重建。
+- Chrome Fuzz Release 构建在托管 runner 上先释放磁盘并加 swap，降低 V8 编译把 runner 打挂后整次发布 skip 的风险（v0.2.7 因 amd64 构建中途失联未产出 GitHub Release）。
 - 新 RoleConfig / 新 Job 的 `agent_cli` 只接受 `claude-code` / `pi` / `dsh`；导入 leftover CLI 不再静默改写。
 
 ## [0.2.7] - 2026-09-04

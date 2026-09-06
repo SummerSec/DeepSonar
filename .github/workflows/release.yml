@@ -696,6 +696,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.base-image.outputs.checkout_ref }}
+      # V8 ASan compile can starve the hosted runner (v0.2.7 chrome-fuzz amd64
+      # lost communication mid build-push). Free unused host images and add
+      # swap so the agent can still heartbeat; do not touch hostedtoolcache/Node.
+      - name: Free disk and add swap for V8 compile
+        if: ${{ matrix.name == 'chrome-fuzz' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/az \
+            /usr/share/swift \
+            /usr/share/miniconda \
+            /usr/local/share/powershell \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/go \
+            /opt/hostedtoolcache/PyPy \
+            /opt/hostedtoolcache/Ruby \
+            /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk \
+            || true
+          sudo apt-get -y autoremove >/dev/null 2>&1 || true
+          sudo apt-get clean >/dev/null 2>&1 || true
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo sysctl -w vm.swappiness=10
+          df -h
+          free -h
       - id: release
         name: Resolve registry namespace
         shell: bash
