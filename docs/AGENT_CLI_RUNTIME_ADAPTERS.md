@@ -31,7 +31,7 @@ control API, event validation, completion gates, leases, and all state
 transitions. Output is consumed as structured JSON events; terminal text is
 never scraped.
 
-The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLIs. Leftover `codex` / `open-code` adapters are retired from new RoleConfig/Job writes; historical snapshots and Session archives stay readable. Adding a later CLI still follows the onboarding checklist below and registers in the same table.
+The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLIs. Leftover `codex` / `open-code` adapters are retired from new RoleConfig/Job writes; historical snapshots and Session archives stay readable. Official images no longer install leftover `@openai/codex` / `opencode-ai`. Adding a later CLI still follows the onboarding checklist below and registers in the same table.
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -14,6 +14,7 @@
 - 导入 RoleConfig 不再静默写入 leftover `agent_cli`（缺省仍 `claude-code`，`codex`/`open-code`/未知 fail closed）；前端凭据保存不再静默剥离 leftover `allowed_model_ids`（#359）。
 - 规则 JSON 物理清扫已删除的 `autoVerifySeverities` / `hubWaitSeverities` / leftover CLI 并发键；PATCH 拒绝这些别名，`asCliLimits` 只忽略 leftover 键而不整表作废；路由 registrar 不再转发领域 schema（#359）。
 - 删除 leftover 本机 Docker inspect 调度闸门：建 Job / Hub / Verify / Report / resume 不再因 Scheduler 本机缺层拒绝；readiness 不再报 `RUNTIME_IMAGE_NOT_LOCAL`。OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验（#359 / #286）。
+- 官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`。新 Job 只认 `claude-code` / `pi` / `dsh`；历史 leftover Session 归档仍只读解析，路径守卫保留 `/.codex/` `/.opencode/`（#359 / #318）。
 
 ### 修复
 

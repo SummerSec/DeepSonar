@@ -60,3 +60,15 @@ test("leftover CLIs cannot materialize or bind new credentials", () => {
     /不再支持新配置/,
   );
 });
+
+test("official images no longer install leftover Codex/OpenCode packages", () => {
+  const manifests = [
+    readFileSync(new URL("../../../agent-harness/runtime-images.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../agent-harness/kali-minimal-runtime.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../deploy/Dockerfile.agent", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8"),
+  ];
+  for (const source of manifests) {
+    assert.doesNotMatch(source, /@openai\/codex|opencode-ai|CODEX_VERSION|OPENCODE_VERSION/);
+  }
+});
