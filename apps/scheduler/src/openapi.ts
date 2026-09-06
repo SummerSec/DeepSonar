@@ -957,6 +957,32 @@ const OPS: Op[] = [
         max_requests: { type: "integer", minimum: 0, description: "本 Job Token 请求上限；0 不限制。" },
       },
     },
+    responses: {
+      "409": {
+        description: "运行镜像尚未准备完成时返回稳定 runtime_image_not_ready，可轮询 pull-status；不是 500 HANDLER_FAILED",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["error", "error_code"],
+              properties: {
+                error: { type: "string" },
+                error_code: { type: "string", enum: ["runtime_image_not_ready"] },
+                image_key: { type: "string", nullable: true },
+                readiness: { type: "string", enum: ["ready", "preparing", "unavailable", "error"] },
+                preparing: { type: "boolean" },
+                task_id: { type: "string", nullable: true },
+                checked_at: { type: "string", format: "date-time" },
+                poll: {
+                  type: "object",
+                  properties: { path: { type: "string", enum: ["/runtime-images/registry/pull-status"] } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   {
     method: "get",
@@ -1560,7 +1586,7 @@ const OPS: Op[] = [
     summary: "获取静态注册表及官方环境覆盖的最新清单",
     scope: "images:read",
     tags: ["Runtime Images"],
-    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 selected_channel=github|dockerhub|aliyun-acr、source=remote|bundled、fallback、error（脱敏）和 checked_at 元数据。selected_channel 由平台全局设置决定，不接受 query、env 或请求体覆盖。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
+    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 selected_channel=github|dockerhub|aliyun-acr、source=remote|bundled、fallback、error（脱敏）、checked_at 与按 image_key 关联的 image_status（readiness/preparing/error_code/task_id/phase，操作员可见 immutable_ref）。selected_channel 由平台全局设置决定，不接受 query、env 或请求体覆盖。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
     responses: {
       "200": {
         description: "注册表清单与平台选中的官方分发通道",
@@ -1578,6 +1604,25 @@ const OPS: Op[] = [
                 fallback: { type: "boolean" },
                 error: { type: "string", nullable: true },
                 checked_at: { type: "string", format: "date-time" },
+                image_status: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["image_key", "readiness", "preparing", "checked_at", "phase"],
+                    properties: {
+                      image_key: { type: "string" },
+                      immutable_ref: { type: "string", nullable: true },
+                      readiness: { type: "string", enum: ["ready", "preparing", "unavailable", "error"] },
+                      preparing: { type: "boolean" },
+                      error_code: { type: "string", nullable: true },
+                      error: { type: "string", nullable: true },
+                      checked_at: { type: "string", format: "date-time" },
+                      task_id: { type: "string", nullable: true },
+                      phase: { type: "string" },
+                    },
+                  },
+                },
               },
             },
           },
@@ -1667,9 +1712,54 @@ const OPS: Op[] = [
     method: "get",
     path: "/runtime-images/registry/pull-status",
     summary: "查询运行时镜像异步拉取状态",
-    description: "返回当前 Scheduler 单实例内存任务；服务重启后返回 idle，不持久化任务。",
+    description: "返回当前或最近一次持久化的拉取任务（queued/running/succeeded/failed/interrupted）。Scheduler 重启把 in-flight 标为 interrupted（error_code=scheduler_restarted），不自动 resume；无历史时返回 idle。条目可按 image_key / immutable ref、task_id、phase、error_code 与时间戳关联。",
     scope: "images:read",
     tags: ["Runtime Images"],
+    responses: {
+      "200": {
+        description: "当前或最近一次拉取任务；无历史时为 idle",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["task_id", "status", "phase", "total", "completed", "items", "checked_at"],
+              properties: {
+                task_id: { type: "string", nullable: true },
+                purpose: { type: "string" },
+                status: { type: "string", enum: ["idle", "queued", "running", "succeeded", "failed", "interrupted"] },
+                phase: { type: "string" },
+                started_at: { type: "string", format: "date-time", nullable: true },
+                finished_at: { type: "string", format: "date-time", nullable: true },
+                interrupted_at: { type: "string", format: "date-time", nullable: true },
+                interrupt_reason: { type: "string", nullable: true },
+                error_code: { type: "string", nullable: true },
+                error: { type: "string", nullable: true },
+                total: { type: "integer" },
+                completed: { type: "integer" },
+                checked_at: { type: "string", format: "date-time" },
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["image_key", "image_ref", "status"],
+                    properties: {
+                      image_key: { type: "string" },
+                      image_ref: { type: "string" },
+                      status: { type: "string", enum: ["queued", "running", "succeeded", "failed"] },
+                      phase: { type: "string" },
+                      error: { type: "string", nullable: true },
+                      error_code: { type: "string", nullable: true },
+                      started_at: { type: "string", format: "date-time", nullable: true },
+                      finished_at: { type: "string", format: "date-time", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   {
     method: "post",

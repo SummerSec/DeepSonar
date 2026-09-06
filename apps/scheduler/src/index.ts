@@ -10,8 +10,10 @@ import { registerRoutes } from "./routes.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import {
   bootstrapOfficialRuntimeImages,
+  reconcileRuntimeImagePullTasksOnBoot,
   startRuntimeImageRegistrySync,
 } from "./runtime-images.js";
+import { useSqlRuntimeImagePullTaskStore } from "./runtime-image-pull-status.js";
 import { preheatManagedGateway } from "@deepsonar/runtime-sandbox";
 import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
@@ -56,6 +58,8 @@ async function main() {
       `[boot] scrubbed leftover rules_json keys: global=${scrubbedRules.global}, projects=${scrubbedRules.projects}`,
     );
   }
+  useSqlRuntimeImagePullTaskStore();
+  await reconcileRuntimeImagePullTasksOnBoot();
   await bootstrapOfficialRuntimeImages();
   if (managesHostDockerRuntime()) await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();

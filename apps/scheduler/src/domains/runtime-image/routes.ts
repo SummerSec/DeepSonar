@@ -18,6 +18,7 @@ import {
   requestRuntimeImagePreparation,
   resolveConfiguredRuntimeImagesForChannel,
   resolveRuntimeImageForProjectBinding,
+  listOfficialRuntimeImageStatus,
   runtimeImagePullStatus,
   runtimeImagePinPolicy,
   runtimeImageVersionPin,
@@ -30,6 +31,7 @@ import {
   sanitizeRuntimeImageError,
   startRuntimeImagePull,
   syncOfficialRuntimeCatalog,
+  toRuntimeImagePullStatusView,
   updateRuntimeRegistryChannel,
   RUNTIME_IMAGE_REGISTRY_CHANNELS,
   type RuntimeImageRegistryChannel,
@@ -153,7 +155,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       runtimeImageRegistryWithOverrides(),
       readRuntimeRegistryChannel(sql),
     ]);
-    return { ...registry, selected_channel: selectedChannel };
+    const image_status = await listOfficialRuntimeImageStatus(registry, selectedChannel);
+    return { ...registry, selected_channel: selectedChannel, image_status };
   });
 
   app.patch("/runtime-images/registry/channel", async (req, reply) => {
@@ -301,15 +304,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.get("/runtime-images/registry/pull-status", async (_req, reply) => {
-    return reply.send(runtimeImagePullStatus() ?? {
-      task_id: null,
-      status: "idle",
-      started_at: null,
-      finished_at: null,
-      total: 0,
-      completed: 0,
-      items: [],
-    });
+    return reply.send(toRuntimeImagePullStatusView(runtimeImagePullStatus()));
   });
 
   const inspectLocalRuntimeImageForProduct = async (productId: string, imageRef: string) => {

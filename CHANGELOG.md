@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- Runtime image readiness 与拉取任务持久化：Hub 目录/`list_available_runtime_images` 返回 `readiness`（ready/preparing/unavailable/error）且不泄露 OCI/digest；`GET /runtime-images/registry` 附 `image_status`，`GET /runtime-images/registry/pull-status` 返回可关联 image_key 的结构化阶段。拉取任务落 `runtime_image_pull_tasks`（schema v44）；Scheduler 重启把 in-flight 标为 `interrupted`（`scheduler_restarted`），不自动 resume。Hub 提交未就绪镜像返回可重试 `runtime_image_not_ready` 且不创建 Job；管理 API 映射为 409 并可轮询 pull-status（#398）。
+
 ### 变更
 
 - inherit_global 项目 RoleConfig 不再保留被忽略的行上 `model` / `runtime_image_key`。启动、切换策略、写入、导入导出与批量绑定会物理清空这些字段；批量绑定 impact 去掉 leftover 警告字段（#359 / #233 / #146）。

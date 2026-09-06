@@ -240,7 +240,7 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | POST | /runtime-images/registry/sync | images:manage | 刷新官方/内置 catalog；所选 channel 用于后续镜像引用解析与 pull，不决定 catalog 来源 |
 | POST | /runtime-images/registry/apply | admin | 直接提交 registry 对象或 `{registry: ...}`；该内部运维入口未分配 `images:manage` scope |
 | POST | /runtime-images/registry/pull | images:manage | 启动异步拉取任务，返回 202/task |
-| GET | /runtime-images/registry/pull-status | images:read | 拉取任务状态、进度与错误 |
+| GET | /runtime-images/registry/pull-status | images:read | 持久化拉取任务状态、阶段、error_code 与时间戳；重启后 in-flight 为 interrupted |
 | POST | /runtime-images/:id/detect-local | images:read | `{image_ref}`；读取本机 Docker 元数据并返回候选（不会改变信任状态） |
 | POST | /runtime-images/:id/adopt-local | images:approve | `{image_ref, expected_image_id}`；仅官方产品的 adoptable 候选可由管理员二次确认采用；第三方仍走准入扫描 |
 | POST | /runtime-images/import | images:manage | `{image_key,name,publisher,image_ref,description?,source_url?,version?,registry_credential_id?}`；返回 202 |

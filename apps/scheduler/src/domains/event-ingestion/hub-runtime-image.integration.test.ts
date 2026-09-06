@@ -105,6 +105,9 @@ if (!testDatabaseUrl) {
       const catalog = await listHubRuntimeImageCatalog(sql, projectId);
       const kaliEntry = catalog.find((entry) => entry.image_key === "deepsonar-kali-minimal");
       assert.ok(kaliEntry?.compatible_agent_clis.includes("dsh"));
+      assert.equal(kaliEntry?.readiness, "ready");
+      assert.equal("image_ref" in (kaliEntry ?? {}), false);
+      assert.equal("digest" in (kaliEntry ?? {}), false);
       assert.equal(catalog.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"), false);
 
       // 2) Omitting the key keeps the role default resolution (review -> deepsonar-base).

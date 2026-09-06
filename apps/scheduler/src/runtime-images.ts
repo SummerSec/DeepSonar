@@ -7,6 +7,22 @@ import { agentCliIdsCompatibleWithImage } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
+  interruptInFlightRuntimeImagePullTasks,
+  loadLatestRuntimeImagePullTask,
+  persistRuntimeImagePullTask,
+  resetRuntimeImagePullTaskStore,
+  type RuntimeImagePullItem,
+  type RuntimeImagePullTask,
+} from "./runtime-image-pull-status.js";
+import {
+  classifyRuntimeImageReadinessFromState,
+  hostManagesRuntimeImageLayers,
+  toRuntimeImageStatusEntry,
+  type RuntimeImageReadiness,
+  type RuntimeImageReadinessView,
+  type RuntimeImageStatusEntry,
+} from "./runtime-image-readiness.js";
+import {
   parseOciDigestRef,
   parseRuntimeImageRegistry,
   RUNTIME_IMAGE_REGISTRY_CHANNELS,
@@ -93,25 +109,22 @@ export function runtimeImageRegistryNextSyncDelayMs(syncIntervalMs: number, fall
   return fallback ? Math.min(syncIntervalMs, RUNTIME_IMAGE_REGISTRY_RETRY_MS) : syncIntervalMs;
 }
 
-export interface RuntimeImagePullItem {
-  image_key: string;
-  image_ref: string;
-  status: "queued" | "running" | "succeeded" | "failed";
-  error: string | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-}
-
-export interface RuntimeImagePullTask {
-  task_id: string;
-  purpose?: string;
-  status: "queued" | "running" | "succeeded" | "failed";
-  started_at: string | null;
-  finished_at: string | null;
-  total: number;
-  completed: number;
-  items: RuntimeImagePullItem[];
-}
+export type {
+  RuntimeImagePullItem,
+  RuntimeImagePullStatusView,
+  RuntimeImagePullTask,
+  RuntimeImagePullTaskStatus,
+} from "./runtime-image-pull-status.js";
+export {
+  idleRuntimeImagePullStatus,
+  toRuntimeImagePullStatusView,
+} from "./runtime-image-pull-status.js";
+export type {
+  RuntimeImageReadiness,
+  RuntimeImageReadinessView,
+  RuntimeImageStatusEntry,
+} from "./runtime-image-readiness.js";
+export { assertHubRuntimeImageReady } from "./runtime-image-readiness.js";
 
 let runtimeImagePullTask: RuntimeImagePullTask | null = null;
 let remoteRegistryCache: { registry: RuntimeImageRegistry | null; checked_at: number; error: string | null } | null = null;
@@ -376,15 +389,49 @@ export function runtimeImageHttpError(error: unknown): { statusCode: number; bod
       },
     };
   }
+  if (error instanceof RuntimeImageNotReadyError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: error.imageKey
+          ? `运行镜像尚未准备完成：${error.imageKey}`
+          : "运行镜像尚未准备完成。",
+        error_code: error.code,
+        image_key: error.imageKey,
+        readiness: error.readiness,
+        preparing: error.preparing,
+        task_id: error.taskId,
+        checked_at: error.checkedAt,
+        poll: { path: "/runtime-images/registry/pull-status" },
+      },
+    };
+  }
   return null;
 }
 
 export class RuntimeImageNotReadyError extends Error {
   readonly code = "runtime_image_not_ready" as const;
+  readonly imageKey: string | null;
+  readonly readiness: RuntimeImageReadiness;
+  readonly preparing: boolean;
+  readonly taskId: string | null;
+  readonly checkedAt: string;
 
-  constructor(readonly imageRef: string) {
-    super(`runtime_image_not_ready: runtime image is not prepared locally: ${imageRef}`);
+  constructor(readonly imageRef: string, extras?: {
+    imageKey?: string | null;
+    readiness?: RuntimeImageReadiness;
+    preparing?: boolean;
+    taskId?: string | null;
+    checkedAt?: string;
+    message?: string;
+  }) {
+    super(extras?.message ?? `runtime_image_not_ready: runtime image is not prepared locally: ${imageRef}`);
     this.name = "RuntimeImageNotReadyError";
+    this.imageKey = extras?.imageKey ?? null;
+    this.readiness = extras?.readiness ?? "unavailable";
+    this.preparing = extras?.preparing ?? false;
+    this.taskId = extras?.taskId ?? null;
+    this.checkedAt = extras?.checkedAt ?? new Date().toISOString();
   }
 }
 
@@ -1590,6 +1637,18 @@ export function runtimeImagePullStatus(): RuntimeImagePullTask | null {
 /** Test-only: drop the process-wide pull pointer. In-flight IIFEs keep mutating their own task object. */
 export function resetRuntimeImagePullTask(): void {
   runtimeImagePullTask = null;
+  resetRuntimeImagePullTaskStore();
+}
+
+export async function reconcileRuntimeImagePullTasksOnBoot(): Promise<void> {
+  const interrupted = await interruptInFlightRuntimeImagePullTasks({
+    interruptedAt: new Date().toISOString(),
+    reason: "scheduler_restarted",
+  });
+  runtimeImagePullTask = interrupted ?? await loadLatestRuntimeImagePullTask();
+  if (runtimeImagePullTask?.status === "interrupted") {
+    console.warn(`[runtime-images] in-flight pull task ${runtimeImagePullTask.task_id} marked interrupted after Scheduler restart`);
+  }
 }
 
 function liveRuntimeImagePreparationItems(task: Pick<RuntimeImagePullTask, "items">): RuntimeImagePullItem[] {
@@ -1640,6 +1699,7 @@ export async function runRuntimeImagePreparationTask(
   try {
     task.status = "running";
     task.started_at = new Date().toISOString();
+    await persistRuntimeImagePullTask(task);
     for (;;) {
       const item = task.items.find((row) => row.status === "queued");
       if (!item) {
@@ -1654,15 +1714,18 @@ export async function runRuntimeImagePreparationTask(
       }
       item.status = "running";
       item.started_at = new Date().toISOString();
+      await persistRuntimeImagePullTask(task);
       try {
         await prepare(item.image_ref);
         item.status = "succeeded";
       } catch (error) {
         item.status = "failed";
         item.error = sanitizeRuntimeImageError(error) || "runtime image preparation failed";
+        item.error_code = "pull_failed";
       }
       item.finished_at = new Date().toISOString();
       task.completed += 1;
+      await persistRuntimeImagePullTask(task);
     }
   } catch (error) {
     try {
@@ -1670,6 +1733,7 @@ export async function runRuntimeImagePreparationTask(
         if (item.status === "queued" || item.status === "running") {
           item.status = "failed";
           item.error = item.error ?? (sanitizeRuntimeImageError(error) || "runtime image preparation failed");
+          item.error_code = item.error_code ?? "pull_failed";
         }
       }
     } catch {
@@ -1680,6 +1744,7 @@ export async function runRuntimeImagePreparationTask(
       task.status = "failed";
       task.finished_at = new Date().toISOString();
     }
+    await persistRuntimeImagePullTask(task);
   }
 }
 
@@ -1714,6 +1779,7 @@ export function enqueueRuntimeImagePreparation(
     });
   }
   task.total = task.items.length;
+  void persistRuntimeImagePullTask(task);
   return task;
 }
 
@@ -1741,6 +1807,7 @@ function startRuntimeImagePreparationTask(
     status: "queued", started_at: null, finished_at: null, total: items.length, completed: 0, items,
   };
   runtimeImagePullTask = task;
+  void persistRuntimeImagePullTask(task);
   void runRuntimeImagePreparationTask(task, prepare);
   return task;
 }
@@ -2219,6 +2286,23 @@ export interface HubRuntimeImageCatalogEntry {
   project_opt_in: boolean;
   source_kind: string;
   compatible_agent_clis: string[];
+  readiness: RuntimeImageReadiness;
+  preparing: boolean;
+  error_code: string | null;
+  error: string | null;
+  checked_at: string;
+  task_id: string | null;
+}
+
+function defaultHubRuntimeImageReadiness(): RuntimeImageReadinessView {
+  return {
+    readiness: "ready",
+    preparing: false,
+    error_code: null,
+    error: null,
+    checked_at: new Date().toISOString(),
+    task_id: null,
+  };
 }
 
 /** 目录条目：无治理 CLI 能跑的 key（例如第三方尚未进适配器 allowlist）对 Hub 不可见。 */
@@ -2234,7 +2318,76 @@ export function toHubRuntimeImageCatalogEntry(row: Record<string, unknown>): Hub
     project_opt_in: row.project_opt_in === true,
     source_kind: String(row.source_kind),
     compatible_agent_clis,
+    ...defaultHubRuntimeImageReadiness(),
   };
+}
+
+export async function classifyRuntimeImageReadiness(opts: {
+  imageKey: string;
+  imageRef: string | null;
+  pull?: RuntimeImagePullTask | null;
+}): Promise<RuntimeImageReadinessView> {
+  const pull = opts.pull === undefined ? runtimeImagePullStatus() : opts.pull;
+  let localAvailable: boolean | null = null;
+  const hostManaged = hostManagesRuntimeImageLayers();
+  if (hostManaged && opts.imageRef) {
+    try {
+      await assertRuntimeImageAvailable(opts.imageRef);
+      localAvailable = true;
+    } catch (error) {
+      localAvailable = error instanceof RuntimeImageNotReadyError ? false : false;
+    }
+  }
+  return classifyRuntimeImageReadinessFromState({
+    imageKey: opts.imageKey,
+    imageRef: opts.imageRef,
+    pull,
+    localAvailable,
+    hostManaged,
+  });
+}
+
+export async function listRuntimeImageStatus(
+  images: readonly { image_key: string; image_ref: string | null }[],
+  pull: RuntimeImagePullTask | null = runtimeImagePullStatus(),
+): Promise<RuntimeImageStatusEntry[]> {
+  return Promise.all(images.map(async (image) => (
+    toRuntimeImageStatusEntry(
+      image.image_key,
+      image.image_ref,
+      await classifyRuntimeImageReadiness({ imageKey: image.image_key, imageRef: image.image_ref, pull }),
+    )
+  )));
+}
+
+function latestRegistryImageRefs(
+  images: RuntimeImageRegistry["images"],
+  channel: RuntimeImageRegistryChannel,
+): Array<{ image_key: string; image_ref: string }> {
+  const refs: Array<{ image_key: string; image_ref: string }> = [];
+  for (const image of images) {
+    try {
+      refs.push(...selectLatestRuntimeImagePullItems([image], channel));
+    } catch {
+      // Channel/platform gaps stay visible as unavailable via classify, not 500.
+    }
+  }
+  return refs;
+}
+
+export async function listOfficialRuntimeImageStatus(
+  registry: RuntimeImageRegistry,
+  channel: RuntimeImageRegistryChannel,
+): Promise<RuntimeImageStatusEntry[]> {
+  const refs = new Map(
+    latestRegistryImageRefs(registry.images, channel).map((item) => [item.image_key, item.image_ref]),
+  );
+  return listRuntimeImageStatus(
+    registry.images.map((image) => ({
+      image_key: image.image_key,
+      image_ref: refs.get(image.image_key) ?? null,
+    })),
+  );
 }
 
 /**
@@ -2247,8 +2400,21 @@ export async function listHubRuntimeImageCatalog(
   projectId: string,
 ): Promise<HubRuntimeImageCatalogEntry[]> {
   const selectedChannel = await readRuntimeRegistryChannel(db, "share");
+  const pull = runtimeImagePullStatus();
   const rows = await db`
-    SELECT ri.image_key, ri.name, ri.description, ri.official, ri.project_opt_in, ri.source_kind
+    SELECT ri.image_key, ri.name, ri.description, ri.official, ri.project_opt_in, ri.source_kind,
+      (
+        SELECT CASE WHEN ri.official THEN channel_ref.resolved_ref ELSE v.resolved_ref END
+        FROM runtime_image_versions v
+        LEFT JOIN runtime_image_version_refs channel_ref
+          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
+        WHERE v.runtime_image_id = ri.id
+          AND v.trust_status = 'trusted'
+          AND v.platforms_json @> ${db.json([hostRuntimePlatform()])}
+          AND (NOT ri.official OR channel_ref.id IS NOT NULL)
+        ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC
+        LIMIT 1
+      ) AS resolved_ref
     FROM runtime_images ri
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
@@ -2266,10 +2432,17 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
       )
     ORDER BY ri.official DESC, ri.image_key`;
-  return rows.flatMap((row) => {
+  const entries = await Promise.all(rows.map(async (row) => {
     const entry = toHubRuntimeImageCatalogEntry(row);
-    return entry ? [entry] : [];
-  });
+    if (!entry) return null;
+    const readiness = await classifyRuntimeImageReadiness({
+      imageKey: entry.image_key,
+      imageRef: typeof row.resolved_ref === "string" ? row.resolved_ref : null,
+      pull,
+    });
+    return { ...entry, ...readiness };
+  }));
+  return entries.filter((entry): entry is HubRuntimeImageCatalogEntry => entry !== null);
 }
 
 export async function resolveRuntimeImageForJob(

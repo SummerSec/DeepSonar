@@ -31,7 +31,11 @@ import {
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
-import { listHubRuntimeImageCatalog } from "../../runtime-images.js";
+import {
+  assertHubRuntimeImageReady,
+  defaultRuntimeImageKey,
+  listHubRuntimeImageCatalog,
+} from "../../runtime-images.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
 import {
   assertComposeFindingInScope,
@@ -519,14 +523,15 @@ export function createEventIngestionSideEffectApplication(
     const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
     const allowedImageKeys = catalog.map((entry) => entry.image_key);
     const allowedImageKeySet = new Set(allowedImageKeys);
+    const catalogByKey = new Map(catalog.map((entry) => [entry.image_key, entry]));
     for (const [index, intent] of submittedIntents.entries()) {
       const key = intent.runtime_image_key;
+      const path = phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key";
       if (key && !allowedImageKeySet.has(key)) {
-        throw invalidRuntimeImage(
-          phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key",
-          allowedImageKeys,
-        );
+        throw invalidRuntimeImage(path, allowedImageKeys);
       }
+      const selected = catalogByKey.get(key ?? defaultRuntimeImageKey(intent.role));
+      if (selected) assertHubRuntimeImageReady(selected, path);
       if (phase === "preflight" && key) {
         try {
           await ports.resolveAgentSnapshotForJob(

@@ -11,8 +11,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像 `image_key`、`name`、`description`、`compatible_agent_clis`。",
-    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须与该 intent 角色的 CLI 兼容；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策被拒绝（`invalid_runtime_image`）。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像 `image_key`、`name`、`description`、`compatible_agent_clis`，以及实时 `readiness`（ready/preparing/unavailable/error）、`preparing`、`error_code`、脱敏 `error`、`checked_at`。",
+    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须与该 intent 角色的 CLI 兼容；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key（`invalid_runtime_image`）。`readiness` 不是 ready 时整次决策被拒绝（`runtime_image_not_ready`，可重试），不会创建 Worker Job。目录不包含可执行 OCI 引用或 digest。",
     "- 示例：`{}`",
   ].join("\n"),
   emit_progress: [
@@ -96,7 +96,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
-  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；不得猜测或使用未启用、未准入的镜像，不得填写 OCI 引用。",
+  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；只提案 readiness=ready 的条目；不得猜测或使用未启用、未准入、正在准备或不可用的镜像，不得填写 OCI 引用。",
   emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
   emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
   emit_finding: "注意：只提交有证据支撑的 Finding；验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",

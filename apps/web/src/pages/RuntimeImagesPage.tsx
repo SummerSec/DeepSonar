@@ -32,6 +32,7 @@ import {
   pullHeadline,
   pullItemStatusLabel,
   pullPurposeLabel,
+  readinessLabel,
   registryChannelBusyNotice,
   registryChannelDeferredNotice,
   registryChannelSelectValue,
@@ -902,6 +903,19 @@ export function RuntimeImagesPage() {
                 {registry?.fallback ? <span className="text-amber-300">当前为内置回退清单</span> : registry ? <span className="text-emerald-300">当前为受信目录</span> : registryLoadError ? <span className="text-red-300">{registryLoadError}</span> : <span>等待清单响应</span>}
                 {registry?.error && <span className="ml-2 text-amber-200/80">诊断：{registry.error}</span>}
               </div>
+              {registry?.image_status && registry.image_status.length > 0 && (
+                <div className="mt-3 space-y-1 text-[11px] text-zinc-500">
+                  {registry.image_status.map((item) => (
+                    <div key={item.image_key} className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-[10px] text-zinc-400">{item.image_key}</span>
+                      <span className={item.readiness === "ready" ? "text-emerald-300" : item.readiness === "error" ? "text-red-300" : "text-amber-200"}>
+                        {readinessLabel(item.readiness)}
+                        {item.error_code ? ` · ${item.error_code}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {(registry?.checked_at || (registry?.metadata && typeof registry.metadata.fetched_at === "string" && registry.metadata.fetched_at)) && (
                 <span className="mt-2 block font-mono text-[10px] text-zinc-700">checked {registry.checked_at ?? String(registry.metadata?.fetched_at)}</span>
               )}
@@ -965,6 +979,8 @@ export function RuntimeImagesPage() {
                     : "全局单任务拉取；失败项会保留错误原因。"}
                   {pullStatus.purpose ? ` 来源：${pullPurposeLabel(pullStatus.purpose)}` : ""}
                   {formatPullElapsed(pullStatus.started_at, pullStatus.finished_at) ? ` · 已用 ${formatPullElapsed(pullStatus.started_at, pullStatus.finished_at)}` : ""}
+                  {pullStatus.status === "interrupted" ? " · 重启后不会自动继续，请重新拉取。" : ""}
+                  {pullStatus.error_code ? ` · ${pullStatus.error_code}` : ""}
                 </p>
               </div>
               <span className="font-mono text-xs text-zinc-400">{pullStatus.completed}/{pullStatus.total}</span>
@@ -977,7 +993,7 @@ export function RuntimeImagesPage() {
                   </span>
                   <span className={`max-w-[58%] break-words text-right ${item.status === "failed" ? "text-red-300" : item.status === "succeeded" ? "text-emerald-300" : "text-zinc-500"}`}>
                     {item.status === "failed"
-                      ? (item.error || "失败：Scheduler 未返回具体原因")
+                      ? `${item.error_code ? `${item.error_code} · ` : ""}${item.error || "失败：Scheduler 未返回具体原因"}`
                       : `${pullItemStatusLabel(item.status)}${formatPullElapsed(item.started_at ?? null, item.finished_at ?? null) ? ` · ${formatPullElapsed(item.started_at ?? null, item.finished_at ?? null)}` : ""}`}
                   </span>
                 </div>
@@ -1148,6 +1164,11 @@ export function RuntimeImagesPage() {
                         </span>
                       )}
                       <TrustBadge status={image.trust_status} />
+                      {registry?.image_status?.find((item) => item.image_key === image.image_key) && (
+                        <span className="rounded-full border border-zinc-500/30 px-2 py-1 font-mono text-[9px] uppercase tracking-[.12em] text-zinc-400">
+                          {readinessLabel(registry.image_status.find((item) => item.image_key === image.image_key)?.readiness)}
+                        </span>
+                      )}
                     </div>
                     <p className="mt-1 font-mono text-[9px] text-zinc-600">{image.image_key}</p>
                     {isSystemBaseRuntime(image) && (
