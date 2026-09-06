@@ -73,6 +73,20 @@ test("运行时护栏 PATCH 拒绝非法值，项目不能写 provisionTimeoutSe
   await app.close();
 });
 
+test("全局规则 PATCH 拒绝已删除的验证别名", async () => {
+  const app = Fastify({ logger: false });
+  registerSettingsRoutes(app);
+
+  const leftover = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { autoVerifySeverities: ["info"], minVerifySeverity: "high" } },
+  });
+  assert.equal(leftover.statusCode, 400);
+  assert.match(leftover.json<{ error: string }>().error, /invalid global settings rules/);
+  await app.close();
+});
+
 test("全局上限降低后允许原项目配额随其他规则保存", () => {
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, 4, 2), false);
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, 5, 2), true);

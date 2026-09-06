@@ -6,6 +6,7 @@ import {
   CANONICAL_UUID_PATTERN,
   SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
   rejectNonCurrentAgentCli,
+  isCurrentAgentCli,
   type EventEnvelopeInput,
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
@@ -205,11 +206,48 @@ function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
   return (SEVERITY_RANK as readonly string[]).includes(s) ? (s as SeverityRank) : fallback;
 }
 
+export const LEFTOVER_RULE_ALIAS_KEYS = [
+  "autoVerifySeverities",
+  "hubWaitSeverities",
+  "AUTO_VERIFY_SEVERITIES",
+] as const;
+
+/** 物理删除已停用的规则别名，以及 leftover CLI 并发键；当前 CLI 配额保留。 */
+export function scrubLeftoverRulesJson(rules: unknown): {
+  rules: Record<string, unknown>;
+  removedKeys: string[];
+} {
+  const source = rules && typeof rules === "object" && !Array.isArray(rules)
+    ? (rules as Record<string, unknown>)
+    : {};
+  const out: Record<string, unknown> = { ...source };
+  const removedKeys: string[] = [];
+  for (const key of LEFTOVER_RULE_ALIAS_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
+    delete out[key];
+    removedKeys.push(key);
+  }
+  const cli = out.maxConcurrentByAgentCli;
+  if (cli && typeof cli === "object" && !Array.isArray(cli)) {
+    const next: Record<string, unknown> = {};
+    let stripped = false;
+    for (const [key, value] of Object.entries(cli as Record<string, unknown>)) {
+      if (isCurrentAgentCli(key)) next[key] = value;
+      else {
+        stripped = true;
+        removedKeys.push(`maxConcurrentByAgentCli.${key}`);
+      }
+    }
+    if (stripped) out.maxConcurrentByAgentCli = next;
+  }
+  return { rules: out, removedKeys };
+}
+
 function asCliLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!["claude-code", "pi", "dsh"].includes(key)) return fallback;
+    if (!isCurrentAgentCli(key)) continue;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
     out[key] = value;
   }
@@ -604,7 +642,36 @@ export function mergeGlobalRulesPatch(
       previous && typeof previous === "object" && !Array.isArray(previous) ? (previous as Record<string, unknown>) : {};
     merged[key] = { ...previousMap, ...(incoming as Record<string, unknown>) };
   }
-  return merged;
+  return scrubLeftoverRulesJson(merged).rules;
+}
+
+/** 启动 / 写入前物理清扫已停用规则键，不再保留「存着但不生效」的第二真相。 */
+export async function scrubLeftoverStoredRules(
+  db: typeof sql,
+): Promise<{ global: number; projects: number }> {
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  let global = 0;
+  const globalScrub = scrubLeftoverRulesJson(g?.rules_json ?? {});
+  if (globalScrub.removedKeys.length > 0) {
+    await db`UPDATE global_settings SET rules_json = ${db.json(globalScrub.rules as never)}, updated_at = now() WHERE id = 'global'`;
+    global = 1;
+  }
+
+  const projects = await db`SELECT id, config_json FROM projects` as { id: string; config_json?: unknown }[];
+  let projectCount = 0;
+  for (const project of projects ?? []) {
+    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
+    const rules = cfg.rules && typeof cfg.rules === "object" && !Array.isArray(cfg.rules)
+      ? (cfg.rules as Record<string, unknown>)
+      : null;
+    if (!rules) continue;
+    const next = scrubLeftoverRulesJson(rules);
+    if (next.removedKeys.length === 0) continue;
+    cfg.rules = next.rules;
+    await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
+    projectCount += 1;
+  }
+  return { global, projects: projectCount };
 }
 
 /** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */

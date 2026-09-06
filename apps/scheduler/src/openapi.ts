@@ -2620,7 +2620,7 @@ export function buildSchemaSummary(): Record<string, unknown> {
     version: "0.0.1",
     base_url: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
     auth: {
-      header: "Authorization: Bearer <deepsonar_token>",
+      header: "Authorization: Bearer <session or API Token>",
       required_when: "DEEPSONAR_AUTH_REQUIRED=true",
       scopes: [...ALL_SCOPES],
       exempt: [

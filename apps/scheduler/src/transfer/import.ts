@@ -8,7 +8,7 @@ import {
   projectCredentialProvider,
   validateCredentialRoleConfigBinding,
 } from "../credentials.js";
-import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson } from "../core.js";
 import { sql } from "../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
 import {
@@ -295,10 +295,10 @@ async function mergeConfiguration(
     if (modules.includes("rules")) {
       const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/rules.json");
       if (rulesFile?.rules) {
-        if (policy === "use_source") cfg.rules = { ...((cfg.rules as object) ?? {}), ...rulesFile.rules };
+        if (policy === "use_source") cfg.rules = scrubLeftoverRulesJson({ ...((cfg.rules as object) ?? {}), ...rulesFile.rules }).rules;
         else if (policy === "keep_target") {
-          /* keep */
-        } else cfg.rules = { ...rulesFile.rules, ...((cfg.rules as object) ?? {}) };
+          if (cfg.rules) cfg.rules = scrubLeftoverRulesJson(cfg.rules).rules;
+        } else cfg.rules = scrubLeftoverRulesJson({ ...rulesFile.rules, ...((cfg.rules as object) ?? {}) }).rules;
       }
     }
 

@@ -10,7 +10,7 @@ import {
   projectCredentialProvider,
   validateCredentialRoleConfigBinding,
 } from "../credentials.js";
-import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson } from "../core.js";
 import {
   ROLE_COLOR_ADVISORY_KEY,
   normalizeRoleUiColor,
@@ -442,10 +442,11 @@ export async function applyPlatformImport(
       if (rulesFile?.rules) {
         const [g] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
         const current = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
-        const merged =
+        const merged = scrubLeftoverRulesJson(
           policy === "keep_target"
             ? { ...rulesFile.rules, ...current }
-            : { ...current, ...rulesFile.rules };
+            : { ...current, ...rulesFile.rules },
+        ).rules;
         await tx`UPDATE global_settings SET rules_json = ${tx.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
         summary.global_rules = 1;
       }

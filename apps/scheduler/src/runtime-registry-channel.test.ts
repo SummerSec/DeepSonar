@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { requiredScopeForRoute } from "./auth.js";
 import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
-import { RuntimeImageRegistryChannelBody } from "./routes.js";
+import { RuntimeImageRegistryChannelBody } from "./domains/runtime-image/routes.js";
 
 test("runtime registry channel route requires the management scope", () => {
   assert.equal(requiredScopeForRoute("PATCH", "/runtime-images/registry/channel"), "images:manage");
