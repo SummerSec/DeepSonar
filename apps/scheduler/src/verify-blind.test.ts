@@ -98,7 +98,7 @@ test("verify GraphScope projection hides maker conclusion body", () => {
   assert.equal("summary" in verification, false);
 });
 
-test("confirm gate requires machine-checkable expected+actual and two supporting paths", () => {
+test("confirm gate is Fact-first and does not require a second review path", () => {
   const qualified = buildEvidenceSnapshot([reviewRow(), testRow()], "origin-job");
   assert.equal(qualified.qualified, true);
   assert.equal(hasMachineCheckableEvidence(qualified), true);
@@ -126,7 +126,7 @@ test("confirm gate requires machine-checkable expected+actual and two supporting
   assert.equal(hasMachineCheckableEvidence(artifactOnly), false);
   const blocked = evaluateConfirmGate(artifactOnly);
   assert.equal(blocked.ok, false);
-  assert.ok(blocked.missing.includes("machine_checkable_expected_actual"));
+  assert.ok(blocked.missing.includes("structured_supporting_fact") || blocked.missing.includes("machine_checkable_expected_actual"));
 
   const forked = buildEvidenceSnapshot(
     [
@@ -143,7 +143,7 @@ test("confirm gate requires machine-checkable expected+actual and two supporting
   assert.ok(forkGate.missing.includes("unresolved_conflict"));
 });
 
-test("verify prompt is derive-first and does not echo maker conclusions", () => {
+test("verify prompt is Fact-only close proposal and does not ask for a second review", () => {
   const prompt = buildVerifyJobPrompt({
     attempt: 1,
     subject: {
@@ -155,12 +155,12 @@ test("verify prompt is derive-first and does not echo maker conclusions", () => 
     taskGoal: "审计目标二进制",
     graphYaml: "scope: verify\nfinding:\n  id: x",
   });
-  assert.match(prompt, /独立推导/);
-  assert.match(prompt, /DIFF/);
-  assert.match(prompt, /exact match/);
-  assert.match(prompt, /machine_checkable|expected 与 actual|非空 expected/);
-  assert.match(prompt, /路径分叉/);
+  assert.match(prompt, /结构化 Fact/);
+  assert.match(prompt, /收口提案/);
+  assert.match(prompt, /expected\/actual/);
+  assert.match(prompt, /outcome=supports/);
   assert.match(prompt, /cmd.c:8/);
+  assert.doesNotMatch(prompt, /先对原始物证独立推导/);
   assert.doesNotMatch(prompt, /标题：/);
   assert.doesNotMatch(prompt, /严重度：/);
   assert.doesNotMatch(prompt, /描述：/);

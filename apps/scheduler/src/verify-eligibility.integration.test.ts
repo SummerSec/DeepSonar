@@ -16,7 +16,7 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("./db.js");
-    const { FIXED_PRIORITY, fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
+    const { fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
     const { buildReportInput, maybeDispatchReport, refreshTaskReport } = await import("./report.js");
     const {
       canvasFindingsConverged,
@@ -147,21 +147,25 @@ if (!testDatabaseUrl) {
         followupDepth: 2,
         priorityBase: 0,
       });
-      assert.ok(qualified?.jobId);
-      const [eligible] = await sql`
-        SELECT verify_job_id, requirements_json FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
-      assert.equal(eligible.verify_job_id, qualified?.jobId);
-      assert.equal((eligible.requirements_json as Record<string, unknown>).eligibility, "eligible");
-      const [verifyJob] = await sql`SELECT type, priority, payload_json FROM jobs WHERE id = ${qualified?.jobId}`;
-      assert.equal(verifyJob.type, "verify_finding");
-      assert.equal(verifyJob.priority, FIXED_PRIORITY.verifyHigh);
-      assert.equal((verifyJob.payload_json as Record<string, unknown>).verification_eligibility, "eligible");
-      const frozenFinding = (verifyJob.payload_json as { finding?: Record<string, unknown> }).finding ?? {};
-      assert.deepEqual(Object.keys(frozenFinding).sort(), ["artifact_refs", "id", "location"]);
-      assert.equal(frozenFinding.id, findingId);
-      assert.equal("title" in frozenFinding, false);
-      assert.equal("summary" in frozenFinding, false);
-      assert.equal("severity" in frozenFinding, false);
+      assert.equal(qualified, null);
+      const [closed] = await sql`
+        SELECT verify_job_id, status, final_outcome, requirements_json
+        FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
+      assert.equal(closed.verify_job_id, null);
+      assert.equal(closed.status, "confirmed");
+      assert.equal(closed.final_outcome, "confirmed");
+      assert.equal((closed.requirements_json as Record<string, unknown>).close_path, "fact_first");
+      const [confirmedFinding] = await sql`SELECT verify_status, raw_json FROM findings WHERE id = ${findingId}`;
+      assert.equal(confirmedFinding.verify_status, "confirmed");
+      const gate = ((confirmedFinding.raw_json as Record<string, unknown>).verification_state as Record<string, unknown>).gate as Record<string, unknown>;
+      assert.equal(gate.result, "passed");
+      assert.equal((await sql`SELECT COUNT(*)::int AS n FROM jobs WHERE finding_id = ${findingId} AND type = 'verify_finding'`)[0].n, 0);
+      const [audit] = await sql`
+        SELECT action, result, after_json FROM audit_logs
+        WHERE resource_id = ${findingId} AND action = 'finding.verify_gate'
+        ORDER BY id DESC LIMIT 1`;
+      assert.equal(audit.result, "ok");
+      assert.equal((audit.after_json as Record<string, unknown>).result, "passed");
 
       lowCanvasId = `verify-eligibility-low-${randomUUID()}`;
       const lowOriginJobId = randomUUID();
