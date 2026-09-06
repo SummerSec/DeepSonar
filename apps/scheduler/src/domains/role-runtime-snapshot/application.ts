@@ -162,7 +162,6 @@ export async function scrubIgnoredProjectRoleConfigIdentity(
 }
 
 export function roleNameForJobType(jobType: string): string {
-  if (jobType === "audit_module") return "audit";
   if (jobType === "verify_finding") return "verify";
   if (jobType === "report") return "report";
   return jobType;

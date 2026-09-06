@@ -243,16 +243,15 @@ export function createEventIngestionSideEffectApplication(
   type SemanticRoleKind = "role" | "hub" | "system";
 
   const RESERVED_SNAPSHOT_NAMES: Readonly<Record<string, SemanticRoleKind>> = {
-    hub: "hub",
     hub_reason: "hub",
     verify: "system",
     verify_finding: "system",
     report: "system",
   };
 
-  // Older/imported snapshots may omit `name` for these built-in and historical
-  // Job types. Unknown/custom roles must carry their frozen canonical name; a
-  // missing name cannot be inferred safely from arbitrary DB content.
+  // Current built-in Job types may omit `name` and infer it from type.
+  // Leftover aliases (`audit_module`, `hub`) are not current identities.
+  // Unknown/custom roles must carry their frozen canonical name.
   const SNAPSHOT_NAME_FALLBACK_TYPES = new Set([
     "explore",
     "analyze",
@@ -260,25 +259,11 @@ export function createEventIngestionSideEffectApplication(
     "test",
     "code",
     "audit",
-    "audit_module",
     "hub_reason",
-    "hub",
     "verify",
     "verify_finding",
     "report",
   ]);
-
-  function semanticRoleNamesEquivalent(typeName: string, snapshotName: string): boolean {
-    // Hub snapshots emitted by older/runtime adapters used `hub` while the
-    // persisted system Job type is `hub_reason`, and vice versa.
-    if (
-      (typeName === "hub_reason" && snapshotName === "hub") ||
-      (typeName === "hub" && snapshotName === "hub_reason")
-    ) {
-      return true;
-    }
-    return typeName === snapshotName;
-  }
 
   function isSemanticRoleKind(value: unknown): value is SemanticRoleKind {
     return value === "role" || value === "hub" || value === "system";
@@ -299,6 +284,9 @@ export function createEventIngestionSideEffectApplication(
       .toLowerCase();
     if (!jobType) {
       throw new ControlInputError("tool_not_allowed", "Job type 不能为空。", "type");
+    }
+    if (jobType === "audit_module" || jobType === "hub") {
+      throw new ControlInputError("tool_not_allowed", "leftover Job type 已停用，不再映射为当前身份。", "type");
     }
     const typeName = roleNameForJobType(jobType);
     // The persisted Job type is the Scheduler's authority for the role kind.
@@ -324,7 +312,7 @@ export function createEventIngestionSideEffectApplication(
         "platform_tools",
       );
     }
-    if (rawName && !semanticRoleNamesEquivalent(typeName, rawName)) {
+    if (rawName && rawName !== typeName) {
       throw new ControlInputError("tool_not_allowed", "Job 快照角色名称与 Scheduler Job 类型不一致。", "name");
     }
     const snapshotReservedKind = rawName ? RESERVED_SNAPSHOT_NAMES[rawName] : undefined;

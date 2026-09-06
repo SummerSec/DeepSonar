@@ -100,7 +100,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；`type` 必须是当前角色名；公共入口对 `hub_reason` / `hub` / `verify_finding` / `report` 返回 409；leftover `audit_module` 不再映射为 `audit`；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
+| POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；`type` 必须是当前角色名；公共入口对 `hub_reason` / `verify_finding` / `report` 返回 409；leftover `audit_module` / `hub` 不再映射为当前身份；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件） |
 | GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`） |

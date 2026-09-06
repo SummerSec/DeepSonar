@@ -38,7 +38,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
         ) VALUES (
-          ${id}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+          ${id}, ${projectId}, ${canvasId}, 'audit', 'running',
           ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
         )`;
       await sql`

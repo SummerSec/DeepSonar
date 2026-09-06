@@ -15,6 +15,7 @@
 - 规则 JSON 物理清扫已删除的 `autoVerifySeverities` / `hubWaitSeverities` / leftover CLI 并发键；PATCH 拒绝这些别名，`asCliLimits` 只忽略 leftover 键而不整表作废；路由 registrar 不再转发领域 schema（#359）。
 - 删除 leftover 本机 Docker inspect 调度闸门：建 Job / Hub / Verify / Report / resume 不再因 Scheduler 本机缺层拒绝；readiness 不再报 `RUNTIME_IMAGE_NOT_LOCAL`。OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验（#359 / #286）。
 - 官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`。新 Job 只认 `claude-code` / `pi` / `dsh`；历史 leftover Session 归档仍只读解析，路径守卫保留 `/.codex/` `/.opencode/`（#359 / #318）。
+- leftover Job 身份别名不再映射为当前类型：`audit_module` 不再当作 `audit`，`hub` 不再当作 `hub_reason`。事件摄入 fail closed；测试夹具改用当前类型。`verify` 仍是 runtime-image smoke 通道（#359）。
 
 ### 修复
 

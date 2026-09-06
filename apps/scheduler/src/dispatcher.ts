@@ -417,7 +417,7 @@ export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
 }
 
 /** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
-const REAL_BASE_TYPES = new Set(["audit_module", "verify_finding", "hub_reason", "report"]);
+const REAL_BASE_TYPES = new Set(["verify_finding", "hub_reason", "report"]);
 
 async function isRealType(type: string): Promise<boolean> {
   if (REAL_BASE_TYPES.has(type)) return true;
@@ -1108,7 +1108,7 @@ async function executeFake(jobId: string, type: string) {
   const emit = (t: string, payload: unknown) =>
     ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
 
-  if (type === "audit_module" || type === "audit") {
+  if (type === "audit") {
     const [job] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
     const fake = (job?.payload_json?.fake_finding ?? null) as {
       title?: string;

@@ -73,7 +73,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${foreignOriginJobId}, ${foreignProjectId}, ${foreignCanvasId}, 'audit_module', 'succeeded',
+        ${foreignOriginJobId}, ${foreignProjectId}, ${foreignCanvasId}, 'audit', 'succeeded',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -87,14 +87,14 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${jobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${jobId}, ${projectId}, ${canvasId}, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${legacyJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${legacyJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -104,7 +104,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${repointJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${repointJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     const [repointNode] = await sql<{ id: string }[]>`
@@ -152,7 +152,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${multiCanvasJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${multiCanvasJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -164,7 +164,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${conflictingCanvasJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${conflictingCanvasJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -174,7 +174,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${reportOnlyJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${reportOnlyJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -184,7 +184,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${reportConflictJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${reportConflictJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -657,7 +657,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
         ) VALUES (
-          ${terminalJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+          ${terminalJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
           ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
         )`;
       const terminalEventId = randomUUID();

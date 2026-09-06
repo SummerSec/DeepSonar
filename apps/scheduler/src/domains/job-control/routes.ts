@@ -96,7 +96,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     // to inspect the governed Verify snapshot. It is still scheduler-owned
     // for priority/purpose, but unlike `verify_finding` it has no Finding
     // lifecycle and cannot confirm anything on its own.
-    const systemJobTypes = new Set(["hub_reason", "hub", "verify_finding", "report"]);
+    const systemJobTypes = new Set(["hub_reason", "verify_finding", "report"]);
     if (systemJobTypes.has(body.type.trim().toLowerCase())) {
       return reply.code(409).send({ error: "scheduler-owned system Job types cannot be created through the public endpoint" });
     }
