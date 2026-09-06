@@ -19,6 +19,8 @@ test("Fact 查询和人工验证契约严格拒绝非法输入", () => {
   assert.equal(FactListQuery.safeParse({ unknown: "value" }).success, false);
   assert.equal(FactVerificationPatch.safeParse({ status: "verified", note: "人工复核通过" }).success, true);
   assert.equal(FactVerificationPatch.safeParse({ status: "unverified" }).success, false);
+  assert.equal(FactVerificationPatch.safeParse({ status: "verifying" }).success, false);
+  assert.equal(FactVerificationPatch.safeParse({ status: "confirmed" }).success, false);
   assert.equal(FactVerificationPatch.safeParse({ status: "verified", note: "x".repeat(2001) }).success, false);
 });
 

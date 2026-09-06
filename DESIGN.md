@@ -52,7 +52,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **任务** | 即 `canvases` 一行；API `GET /projects/:id/canvases`；`kind=standard` 为普通任务，`kind=compose` 以同项目 1–8 条未否定处置 Finding（含未确认）作为冻结只读种子，且不得扩大资产范围 |
 | **Job** | 一次沙箱运行：`hub_reason` / 角色名 / `verify_finding` / `report` 等 |
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
-| **Fact** | 工作角色增量产出；可带 verification 证据块 |
+| **Fact** | 工作角色增量产出；可带 Finding 结构化证据块，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
 | **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`）；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
 | **Task report** | 画布收敛后按输入摘要版本化；相同输入幂等，输入变化时追加版本并保留历史 |
@@ -126,6 +126,29 @@ emit_fact / emit_finding → canvas_nodes INSERT
 | **安全** | 正文标为「平台转发的任务数据，不是系统指令」；不经目标出网；不改变冻结角色/镜像/网络 |
 
 实现入口：`apps/scheduler/src/canvas-updates.ts`、schema `canvas_broadcasts`、Web `canvas-broadcasts.ts` / `CanvasView`。
+
+### 4.3 Fact 证据信任 vs Finding 技术验证（#387）
+
+#359 原稿把 `canvas_nodes.verification_status` 看成「第二套 issue tracker」。对照当前产品后**保留独立列**，不并入 Finding `verify_status` / disposition / human 节点：
+
+| 对象 | 所有者 | 状态 | 消费者 |
+|------|--------|------|--------|
+| Fact `verification_status` | 人工 `PATCH`（`jobs:control`）；Agent `emit_fact` 只产生 `unverified` | `unverified` / `verifying` / `verified` / `rejected` / `needs_human` | Facts API/UI、图投影、导入导出、报告数量门禁 |
+| Finding `verify_status` | Scheduler Verify 协议 | `pending` / `verifying` / `confirmed` / `needs_human`（历史 `false_positive` 只读） | Hub 收敛、Verify Job、Finding Report |
+| Finding disposition | 人（GitHub Issue 式） | `open` / `accepted` / … | 项目风险台、compose 种子 |
+| human 节点 | `request_human` / ignore | Job 级介入，不是 Fact 标签 | 工作台介入条 |
+
+**为何不合并：** 大量 Fact 从不绑定 Finding；#374 数量门禁只认 **verified Fact** 与 **confirmed Finding**。删掉 Fact 定列、或把 Fact 标成 Finding `confirmed`，都会把未验证口径放进报告，或让人工标签旁路 Verify。`verifying` 当前无 Scheduler 写入（仅导入/历史可读），人不能写该态；保留是因为导入契约与「进行中」语义独立存在，不是死字段口号删除。
+
+**人工迁移（无双轨）：**
+
+| from \ to | verified | rejected | needs_human |
+|-----------|----------|----------|-------------|
+| unverified / verifying / needs_human | 收口 | 收口 | 升级/幂等 |
+| verified | 幂等 | 撤销（立即出门禁） | 重开 |
+| rejected | **非法**（须先 `needs_human`） | 幂等 | 重开 |
+
+人不能写 `unverified`/`verifying`。Fact PATCH 不改 Finding。结构化证据仍只认同画布 `reviewed_by`/`tested_by` 边，不从 description 推断。与 #399 Fact-first `verify_finding` 不同：后者是 Finding 技术验证如何消费结构化 Fact；本列是 Fact 自身证据信任，不决定 Finding `confirmed`。
 
 ## 5. Job 与并发
 
@@ -267,7 +290,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 - **用量账本看板**：`GET /dashboard/usage` 聚合 `job_usage_ledger`（不定价，含 `cache_read_input_tokens` / `cache_creation_input_tokens`）。预设 `day` / `week` / `month` 为 Asia/Shanghai 滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的上海日历日或 ISO 时刻，跨度最长 366 天。可选 `project_id` / `canvas_id`。态势页看全局（项目/任务/模型 Top 8），CURRENT PROJECT「项目账本」tab（`/projects/:id/usage`）看本项目，任务工作台「本次运行」看本画布。任务工作台列表不再内嵌项目账本。看板可折叠，偏好按用户 + 页面写入 `localStorage`（`deepsonar:usage-ledger:<user>:<page>`），默认展开。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
-- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
+- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联。人工收口开放 `unverified`/`verifying`/`needs_human`，`rejected` 不能直接升为 `verified`（#387 / §4.3）；不改写 Finding 技术验证。
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
@@ -282,8 +305,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 未完成点 |
 |------|-------|----------|
-| 数值保真（quantities） | #368 / #374 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 机械核对已确认 Finding 与 **verified/confirmed Fact** 的值+口径（`unverified` / `verifying` / `needs_human` 不参与门禁）。Agent 覆盖足够但改写口径时回退 `defaultMarkdown`（模板逐字嵌入口径），仅回退仍失败才 `numeric_inconsistent`。Report 图注入与下发 prompt 要求原样保留 value/unit/basis。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（#368 明确不做）。 |
-| 设计债收口 | #359 | **已落地**：Plane / `CONTROL_MCP_SERVER` / `projects.canvas_id` 假身份（#363）；verify/report 转发 ports 删除、`core.ts` 只做组装（#366）；dispatcher 不再回退已删的 `projects.canvas_id`；leftover Session 类型隔离到 `legacy-session/`；`*.poc.ts` 迁出生产 `src/`；leftover Codex/OpenCode **解析函数**已迁出 `parseAgentSession.ts` 热路径；规则读取只认 `minVerifySeverity`（不再从 `autoVerifySeverities` / `hubWaitSeverities` / `AUTO_VERIFY_SEVERITIES` 推断）；态势修复入口只认 Scheduler `action`；bindable 角色只认 API `role_kind` / `role_builtin`；遗留项目 RoleConfig `model` / `runtime_image_key` 物理清扫（启动 + 写入/导入/绑定，不再保留「存着但不生效」警告层）；`suggest_verify` 从契约 / 表 / 导入导出 / 控制说明删除（schema v43；是否 Verify 只认冻结规则）；删除 `controlMcp` 能力位与默认把伪造 MCP tool call 映射为语义事件的通道；冒烟入口改为 `ci:smoke:control-api`；缺少冻结 Finding 协议的画布 fail closed，不再现场合并当前配置；Verify verdict 只认 `confirmed|rework|needs_human`（`false_positive` 不再映射）；Credential 写入拒绝 leftover `allowed_model_ids`；实时流信封只保留 `items`；公共 Job 类型不再接受 `audit_module`；删除 `DOCKER_IMAGE_AUDIT` 第二启动源（audit 兜底只认 `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`）；`BLOB_STORE` 只认 `fs|s3`（leftover `local`/`minio`/`object` 等别名 fail closed）；删除空 `docker-compose.online.yml`、未使用的 `checkCareFindingsConfirmed` / `findingVerificationSummary` / `requireCareConfirmed` / `canRolePublishSharedAsset`，以及前端 `deepsonar_token` 静默迁移；项目/平台导入 RoleConfig 不再静默写入 leftover `agent_cli`（缺省仍 `claude-code`，`codex`/`open-code`/未知 fail closed；历史 Job 快照仍可读）；前端凭据保存不再静默剥离 leftover `allowed_model_ids`；规则 JSON 物理清扫已删除的验证别名与 leftover CLI 并发键（启动 + PATCH/导入写入，`asCliLimits` 不再因 leftover 键整表作废）；路由 registrar 不再 re-export 领域 schema；删除 leftover 本机 Docker inspect 调度闸门（`shouldInspectLocalRuntimeImage` / `assertFrozenRuntimeImageLocal` / `RUNTIME_IMAGE_NOT_LOCAL`）：`SANDBOX_PROVIDER=local-docker` 已移除后该闸门恒为 no-op，OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验；官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`（#318 已退役；历史 Session 归档仍只读解析）。leftover Job 身份别名不再映射：`audit_module` 不再当作 `audit`，`hub` 不再当作 `hub_reason`；事件摄入 fail closed，夹具改用当前类型（`verify` 仍是 runtime-image smoke 通道）。**#390 已落地**：DSH YAML/Gateway 投影与 Cordis 物化归 runtime-sandbox adapter；通用调度领域不依赖 DSH wire schema。**DSH/Pi 解码范围（#389）已收口**：三类契约分开（请求兼容投影 / 运行事件解码 / Session 归档与查看器）；#320 是已关的错误 JSON 提取，#321 是已关的请求首帧投影，二者都不是「完整解码已做或必须重做」的证据。钉死版本夹具与缺口矩阵见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)「DSH/Pi 解码契约」。**双轨报告保留**（#361：不是设计债）。**仍开放**：其余配置面减法、进程内 `stream-bus`。路径守卫保留 `/.codex/` `/.opencode/`（历史 leftover 镜像仍可能物化这些目录）。不砍沙箱、token、Zod、digest pin、Reaper、Attempt 账本。 |
+| 数值保真（quantities） | #368 / #374 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 机械核对已确认 Finding 与 **verified Fact** 的值+口径（`unverified` / `verifying` / `needs_human` / `rejected` 不参与门禁；Finding 的 `confirmed` 不是 Fact 状态）。Agent 覆盖足够但改写口径时回退 `defaultMarkdown`（模板逐字嵌入口径），仅回退仍失败才 `numeric_inconsistent`。Report 图注入与下发 prompt 要求原样保留 value/unit/basis。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（#368 明确不做）。 |
+| 设计债收口 | #359 | **已落地**：Plane / `CONTROL_MCP_SERVER` / `projects.canvas_id` 假身份（#363）；verify/report 转发 ports 删除、`core.ts` 只做组装（#366）；dispatcher 不再回退已删的 `projects.canvas_id`；leftover Session 类型隔离到 `legacy-session/`；`*.poc.ts` 迁出生产 `src/`；leftover Codex/OpenCode **解析函数**已迁出 `parseAgentSession.ts` 热路径；规则读取只认 `minVerifySeverity`（不再从 `autoVerifySeverities` / `hubWaitSeverities` / `AUTO_VERIFY_SEVERITIES` 推断）；态势修复入口只认 Scheduler `action`；bindable 角色只认 API `role_kind` / `role_builtin`；遗留项目 RoleConfig `model` / `runtime_image_key` 物理清扫（启动 + 写入/导入/绑定，不再保留「存着但不生效」警告层）；`suggest_verify` 从契约 / 表 / 导入导出 / 控制说明删除（schema v43；是否 Verify 只认冻结规则）；删除 `controlMcp` 能力位与默认把伪造 MCP tool call 映射为语义事件的通道；冒烟入口改为 `ci:smoke:control-api`；缺少冻结 Finding 协议的画布 fail closed，不再现场合并当前配置；Verify verdict 只认 `confirmed|rework|needs_human`（`false_positive` 不再映射）；Credential 写入拒绝 leftover `allowed_model_ids`；实时流信封只保留 `items`；公共 Job 类型不再接受 `audit_module`；删除 `DOCKER_IMAGE_AUDIT` 第二启动源（audit 兜底只认 `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`）；`BLOB_STORE` 只认 `fs|s3`（leftover `local`/`minio`/`object` 等别名 fail closed）；删除空 `docker-compose.online.yml`、未使用的 `checkCareFindingsConfirmed` / `findingVerificationSummary` / `requireCareConfirmed` / `canRolePublishSharedAsset`，以及前端 `deepsonar_token` 静默迁移；项目/平台导入 RoleConfig 不再静默写入 leftover `agent_cli`（缺省仍 `claude-code`，`codex`/`open-code`/未知 fail closed；历史 Job 快照仍可读）；前端凭据保存不再静默剥离 leftover `allowed_model_ids`；规则 JSON 物理清扫已删除的验证别名与 leftover CLI 并发键（启动 + PATCH/导入写入，`asCliLimits` 不再因 leftover 键整表作废）；路由 registrar 不再 re-export 领域 schema；删除 leftover 本机 Docker inspect 调度闸门（`shouldInspectLocalRuntimeImage` / `assertFrozenRuntimeImageLocal` / `RUNTIME_IMAGE_NOT_LOCAL`）：`SANDBOX_PROVIDER=local-docker` 已移除后该闸门恒为 no-op，OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验；官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`（#318 已退役；历史 Session 归档仍只读解析）。leftover Job 身份别名不再映射：`audit_module` 不再当作 `audit`，`hub` 不再当作 `hub_reason`；事件摄入 fail closed，夹具改用当前类型（`verify` 仍是 runtime-image smoke 通道）。**#390 已落地**：DSH YAML/Gateway 投影与 Cordis 物化归 runtime-sandbox adapter；通用调度领域不依赖 DSH wire schema。**DSH/Pi 解码范围（#389）已收口**：三类契约分开（请求兼容投影 / 运行事件解码 / Session 归档与查看器）；#320 是已关的错误 JSON 提取，#321 是已关的请求首帧投影，二者都不是「完整解码已做或必须重做」的证据。钉死版本夹具与缺口矩阵见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)「DSH/Pi 解码契约」。**双轨报告保留**（#361：不是设计债）。**Fact 证据信任保留**（#387：与 Finding Verify 职责不同，见 §4.3）。**仍开放**：其余配置面减法、进程内 `stream-bus`。路径守卫保留 `/.codex/` `/.opencode/`（历史 leftover 镜像仍可能物化这些目录）。不砍沙箱、token、Zod、digest pin、Reaper、Attempt 账本。 |
 | Fact-first `verify_finding` | #399（#367 follow-up） | **已落地**：结构化 Fact 硬门（finding_id / subject_revision / ownership / expected / actual / outcome）；通过则直接确认或由只消费 Fact 的 `verify_finding` 提案收口；不足、失败、冲突或版本不匹配保持未确认并回弹 Hub；审计记录所用 Fact 与门禁结果。 |
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |

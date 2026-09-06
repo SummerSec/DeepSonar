@@ -126,6 +126,11 @@ export function graphProjectionMarkers(
   return { truncated: kv("truncated", truncated), omitted: kv("omitted", omitted) };
 }
 
+function factTrustStatus(node: { node_type?: unknown; verification_status?: unknown }): string | undefined {
+  if (node.node_type !== "fact") return undefined;
+  return typeof node.verification_status === "string" ? node.verification_status : "unverified";
+}
+
 export function projectedQuantities(body: Record<string, unknown> | null | undefined): QuantityAnchor[] | undefined {
   const quantities = parseDeclaredQuantities(body?.quantities);
   return quantities.length > 0 ? quantities : undefined;
@@ -221,7 +226,7 @@ export async function buildGraphSnapshot(
   const [canvas] = await sql`
     SELECT title, target_json FROM canvases WHERE id = ${canvasId}`;
   const nodes = await sql`
-    SELECT id, node_type, title, body_json, status, job_id, created_at
+    SELECT id, node_type, title, body_json, status, verification_status, job_id, created_at
     FROM canvas_nodes WHERE canvas_id = ${canvasId}
     ORDER BY created_at`;
   const edges = await sql`
@@ -419,6 +424,7 @@ export async function buildGraphSnapshot(
           id: fact.id,
           title: short(fact.title, 140),
           status: fact.status,
+          verification_status: factTrustStatus(fact),
           location: short(body.location, 140),
           ...(quantities ? { quantities } : {}),
         });
@@ -463,11 +469,13 @@ export async function buildGraphSnapshot(
         const body = (node.body_json ?? {}) as Record<string, unknown>;
         const finding = findingByNode.get(String(node.id));
         const quantities = projectedQuantities(body);
+        const verificationStatus = factTrustStatus(node);
         return row({
           id: node.id,
           kind: node.node_type,
           title: short(node.title, 160),
           status: node.status,
+          ...(verificationStatus ? { verification_status: verificationStatus } : {}),
           summary: short(body.description ?? body.summary ?? finding?.summary, 420),
           ...(quantities ? { quantities } : {}),
           ...(finding
@@ -512,11 +520,13 @@ export async function buildGraphSnapshot(
           const body = (node?.body_json ?? {}) as Record<string, unknown>;
           const finding = findingByNode.get(String(node?.id));
           const quantities = projectedQuantities(body);
+          const verificationStatus = node ? factTrustStatus(node) : undefined;
           return row({
             id: node?.id,
             kind: node?.node_type,
             title: short(node?.title, 160),
             status: node?.status,
+            ...(verificationStatus ? { verification_status: verificationStatus } : {}),
             description: short(body.description ?? body.summary ?? finding?.summary, 520),
             ...(quantities ? { quantities } : {}),
             ...(finding
@@ -582,6 +592,7 @@ export async function buildGraphSnapshot(
           return row({
             id: node.id,
             title: short(node.title, 160),
+            verification_status: factTrustStatus(node),
             evidence_kind: evidence.evidence_kind,
             outcome: evidence.outcome,
             subject_revision: short(evidence.subject_revision, 220),
@@ -599,9 +610,16 @@ export async function buildGraphSnapshot(
       const status = String(finding.verify_status ?? "unknown");
       counts[status] = (counts[status] ?? 0) + 1;
     }
+    const factCounts: Record<string, number> = {};
+    for (const fact of factNodes) {
+      const status = factTrustStatus(fact) ?? "unverified";
+      factCounts[status] = (factCounts[status] ?? 0) + 1;
+    }
     addSection("report", [
       "  " + kv("report_input_authoritative", true),
       "  " + kv("finding_counts_by_verify_status", counts),
+      "  " + kv("fact_counts_by_verification_status", factCounts),
+      "  " + kv("fact_quantity_gate", "verified"),
       "  " + kv("note", `完整报告上下文来自 Scheduler 生成的 report-input.json。${REPORT_QUANTITY_VERBATIM_NOTE}`),
     ]);
   }

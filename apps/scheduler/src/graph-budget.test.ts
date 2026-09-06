@@ -72,6 +72,9 @@ test("graph projections prioritize open intents and do not repeat the Worker pro
     graphSource.indexOf('} else if (scope === "agent")'),
   );
   assert.ok(hubSource.indexOf('"open_intents"') < hubSource.indexOf('"facts_index"'));
+  assert.match(hubSource, /verification_status: factTrustStatus\(fact\)/);
+  assert.match(graphSource, /fact_counts_by_verification_status/);
+  assert.match(graphSource, /fact_quantity_gate", "verified"/);
 
   const agentSource = graphSource.slice(
     graphSource.indexOf('} else if (scope === "agent")'),

@@ -637,7 +637,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；**hub agent 读整张图做决策**。
 
-- 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）。Schema v31 为 Fact 增加独立 `verification_status` 定列（`unverified/verifying/verified/rejected/needs_human`），非 Fact 必须为 `NULL`；该状态不复用节点执行态，也不从证据 outcome 推断
+- 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）。Schema v31 为 Fact 增加独立 `verification_status` 定列（`unverified/verifying/verified/rejected/needs_human`），非 Fact 必须为 `NULL`；该状态是 Fact 证据信任（#387），不复用节点执行态，不从证据 outcome 推断，也不与 Finding `verify_status`/disposition 合并。人可写 `verified|rejected|needs_human`（`rejected→verified` 须先 reopen）；报告数量门禁只认 `verified`，Finding `confirmed` 不是 Fact 状态。
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
 - Fact 过程真相由 `GET /canvases/{id}/facts` 提供服务端 keyset 分页及验证态、证据种类、Finding、来源 Job 筛选；`GET /canvases/{id}/facts/{nodeId}` 返回完整正文和最多一跳的有界 trace；`PATCH /canvases/{id}/facts/{nodeId}/verification` 记录人工结论与审计。结构化 Finding 证据仅在同项目、同画布、canonical Finding 和 `reviewed_by/tested_by` 边同时成立时投影，禁止解析 description 补关联
 - **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 服务端 `GraphScope=hub` 投影；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成

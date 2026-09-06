@@ -1,6 +1,7 @@
-import { ArrowSquareOut, Briefcase, FileText, Link as LinkIcon, Prohibit, SealCheck, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Briefcase, FileText, Link as LinkIcon, Prohibit, SealCheck, Warning, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type FactDetail } from "./api";
+import { factHumanActions, type HumanFactVerificationStatus } from "./fact-verification";
 import { MarkdownView } from "./MarkdownView";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { useConfirmDialog } from "./components/ConfirmDialog";
@@ -35,7 +36,7 @@ export function FactDetailPanel({
   const [detail, setDetail] = useState<FactDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [verificationAction, setVerificationAction] = useState<"verified" | "rejected" | null>(null);
+  const [verificationAction, setVerificationAction] = useState<HumanFactVerificationStatus | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   const load = useCallback(async () => {
@@ -70,17 +71,30 @@ export function FactDetailPanel({
   const fact = detail?.fact;
   const finding = detail?.finding ?? null;
   const job = detail?.job ?? null;
+  const humanActions = fact ? factHumanActions(fact.verification_status) : [];
 
-  const resolveFact = async (status: "verified" | "rejected") => {
-    const verified = status === "verified";
-    if (!await confirm({
-      title: verified ? "确认该事实？" : "排除该事实？",
-      description: verified
-        ? "确认后该 Fact 将标记为已验证，并继续由 Scheduler 推进收敛。"
-        : "排除后该 Fact 将标记为 rejected；此操作不会把关联 Finding 技术确认为 confirmed。",
-      confirmLabel: verified ? "确认事实" : "排除事实",
-      tone: verified ? undefined : "danger",
-    })) return;
+  const resolveFact = async (status: HumanFactVerificationStatus) => {
+    const copy = {
+      verified: {
+        title: "确认该事实？",
+        description: "确认后该 Fact 成为 verified 证据；数量口径可进入报告门禁。此操作不会把关联 Finding 标为 confirmed。",
+        confirmLabel: "确认事实",
+        tone: undefined as "danger" | undefined,
+      },
+      rejected: {
+        title: "排除该事实？",
+        description: "排除后该 Fact 不再参与报告数量门禁；此操作不会改写关联 Finding 的技术验证状态。",
+        confirmLabel: "排除事实",
+        tone: "danger" as const,
+      },
+      needs_human: {
+        title: "标记为待人工？",
+        description: "Fact 进入 needs_human，等待再次确认或排除。不会改写 Finding verify_status。",
+        confirmLabel: "标记待人工",
+        tone: undefined as "danger" | undefined,
+      },
+    }[status];
+    if (!await confirm(copy)) return;
     setVerificationAction(status);
     setActionError(null);
     try {
@@ -118,24 +132,38 @@ export function FactDetailPanel({
                   创建于 {formatTime(fact.created_at)} · 更新于 {formatTime(fact.updated_at)}
                 </p>
               )}
-              {fact?.verification_status === "needs_human" && (
+              {humanActions.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    disabled={verificationAction !== null}
-                    onClick={() => void resolveFact("verified")}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[11px] font-medium text-ink-950 disabled:opacity-40"
-                  >
-                    <SealCheck size={13} /> {verificationAction === "verified" ? "处理中…" : "确认事实"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={verificationAction !== null}
-                    onClick={() => void resolveFact("rejected")}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-red-950/40 px-3 py-1.5 text-[11px] text-red-300 ring-1 ring-red-400/25 disabled:opacity-40"
-                  >
-                    <Prohibit size={13} /> {verificationAction === "rejected" ? "处理中…" : "排除事实"}
-                  </button>
+                  {humanActions.includes("verified") && (
+                    <button
+                      type="button"
+                      disabled={verificationAction !== null}
+                      onClick={() => void resolveFact("verified")}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[11px] font-medium text-ink-950 disabled:opacity-40"
+                    >
+                      <SealCheck size={13} /> {verificationAction === "verified" ? "处理中…" : "确认事实"}
+                    </button>
+                  )}
+                  {humanActions.includes("rejected") && (
+                    <button
+                      type="button"
+                      disabled={verificationAction !== null}
+                      onClick={() => void resolveFact("rejected")}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-red-950/40 px-3 py-1.5 text-[11px] text-red-300 ring-1 ring-red-400/25 disabled:opacity-40"
+                    >
+                      <Prohibit size={13} /> {verificationAction === "rejected" ? "处理中…" : "排除事实"}
+                    </button>
+                  )}
+                  {humanActions.includes("needs_human") && (
+                    <button
+                      type="button"
+                      disabled={verificationAction !== null}
+                      onClick={() => void resolveFact("needs_human")}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-amber-950/40 px-3 py-1.5 text-[11px] text-amber-200 ring-1 ring-amber-400/25 disabled:opacity-40"
+                    >
+                      <Warning size={13} /> {verificationAction === "needs_human" ? "处理中…" : "标记待人工"}
+                    </button>
+                  )}
                 </div>
               )}
               {actionError && <p className="mt-3 break-words text-[12px] text-red-300">操作失败：{actionError}</p>}
