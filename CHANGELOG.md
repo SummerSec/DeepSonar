@@ -4,10 +4,20 @@
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-09-06
+
+### 新增
+
+- Hub 可按任务动态选择 Worker 运行镜像：intent 可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key；非法/未启用/CLI 不兼容使整次决策以 `invalid_runtime_image` 拒绝。省略时按角色缺省解析（#357）。
+- Verify 盲验 Phase 1：`verify_finding` 只冻结主体 / location / `artifact_refs`，不下发 maker 的 title/summary/severity；Verify 先独立推导再逐项 DIFF，仅 exact match 可 confirm（#371）。
+- Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20）。报告阶段机械核对已确认 Finding 与 verified/confirmed Fact 的值+口径（#368）。
+
 ### 变更
 
+- Schema 升至 v43。v42 删除 Plane 列与 `credentials.kind=plane`；v43 删除 `findings.suggest_verify`。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
 - inherit_global 项目 RoleConfig 不再保留被忽略的行上 `model` / `runtime_image_key`。启动、切换策略、写入、导入导出与批量绑定会物理清空这些字段；批量绑定 impact 去掉 leftover 警告字段（#359 / #233 / #146）。
-- 删除 Finding 兼容旋钮 `suggest_verify`（schema v43）。控制契约、落库、导入导出与工具说明不再接受该字段；是否派生 Verify 只认冻结规则（#359）。
+- 删除 Finding 兼容旋钮 `suggest_verify`。控制契约、落库、导入导出与工具说明不再接受该字段；是否派生 Verify 只认冻结规则（#359）。
+- 删除过时 Plane 集成与假身份：`plane_project_id` / `plane_issue_id` / `projects.canvas_id` 回退、`CONTROL_MCP_SERVER` 与 `plane-client` 包一并删除（#359 / #363）。
 - 删除控制 MCP 残留通道：adapter 不再声明 `controlMcp`；CLI 流中的伪造 `mcp__deepsonar-control__*` 只告警，不再默认映射为语义事件；冒烟入口改为 `ci:smoke:control-api`。缺少冻结 Finding 协议的画布 fail closed，不再现场回退当前全局/项目配置（#359）。
 - 删除无决策作用的兼容别名：`false_positive` 不再作为 Verify verdict 输入（只认 `confirmed|rework|needs_human`）；Credential 写入拒绝 leftover `allowed_model_ids`；Job/WS 实时流信封只保留 `items`；公共 `POST /jobs` 不再把 `audit_module` 映射为 `audit`。历史 Finding `verify_status=false_positive` 与导入投影仍可读（#359）。
 - 继续删除 leftover 第二真相：官方 audit 镜像不再回退 `DOCKER_IMAGE_AUDIT`；`BLOB_STORE` 只认 `fs|s3`；删除空 `docker-compose.online.yml`、空洞 verify/publish 转发函数，以及前端 `deepsonar_token` 静默迁移（#359）。
@@ -16,10 +26,19 @@
 - 删除 leftover 本机 Docker inspect 调度闸门：建 Job / Hub / Verify / Report / resume 不再因 Scheduler 本机缺层拒绝；readiness 不再报 `RUNTIME_IMAGE_NOT_LOCAL`。OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验（#359 / #286）。
 - 官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`。新 Job 只认 `claude-code` / `pi` / `dsh`；历史 leftover Session 归档仍只读解析，路径守卫保留 `/.codex/` `/.opencode/`（#359 / #318）。
 - leftover Job 身份别名不再映射为当前类型：`audit_module` 不再当作 `audit`，`hub` 不再当作 `hub_reason`。事件摄入 fail closed；测试夹具改用当前类型。`verify` 仍是 runtime-image smoke 通道（#359）。
+- leftover Codex/OpenCode Session 解析函数迁出热路径；`*.poc.ts` 迁出生产 `src/`；verify/report 转发层删除，`core.ts` 只做组装（#359 / #366 / #369）。
 
 ### 修复
 
+- Hub 选图后 resume / rerun 保留 Job 已冻结的 runtime image；CLI 不兼容改为 `invalid_runtime_image`，不再 500（#360）。
 - 报告数值保真门禁不再因 Agent 改写口径或未确认 Fact 误炸：只核对 verified/confirmed Fact 与 confirmed Finding；覆盖足够的 Agent 稿数值失败时回退确定性模板，并明确要求报告原样保留 value/unit/basis（#374）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v40 → v43。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 凭据 `kind=plane` 已从基线删除；旧库重建时该行不会回填。
+- 官方 Agent 镜像指纹变化（去掉 leftover Codex/OpenCode 安装），Release 会重建 base / kali-minimal 及依赖 base digest 的专项镜像。Scheduler 镜像因删除 `plane-client` 也会重建。
+- 新 RoleConfig / 新 Job 的 `agent_cli` 只接受 `claude-code` / `pi` / `dsh`；导入 leftover CLI 不再静默改写。
 
 ## [0.2.7] - 2026-09-04
 
@@ -610,6 +629,7 @@
 [0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
 [0.2.4]: https://github.com/SummerSec/DeepSonar/compare/v0.2.3...v0.2.4
 [0.2.5]: https://github.com/SummerSec/DeepSonar/compare/v0.2.4...v0.2.5
+[0.2.8]: https://github.com/SummerSec/DeepSonar/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/SummerSec/DeepSonar/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/SummerSec/DeepSonar/compare/v0.2.5...v0.2.6
 [0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
