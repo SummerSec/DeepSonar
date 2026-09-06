@@ -4,10 +4,9 @@ import { api, type StreamPage } from "./api";
 import { MarkdownView } from "./MarkdownView";
 
 /**
- * Agent 实时流视图（§6.2：原始流只过 WS 过手，不落 DB）
- * - 连接 /api/ws?job_id=...，先收环形缓冲补发，随后实时推送
- * - text.delta 合并为流式段落；tool.call.* 渲染为动作卡片；reasoning 暗色斜体
- * - 支持按类型筛选 + 关键词过滤（与运行详情过程视图一致）
+ * Agent 过程流视图：HTTP 补读只认 evidence，WS 只投递已落盘帧。
+ * - 先 GET /jobs/:id/evidence/stream，再订 /api/ws
+ * - 终态 4409 后再补一次归档；未落盘/跨副本不可见要显式报告
  */
 
 export interface StreamItem {
@@ -52,6 +51,18 @@ export type StreamKindFilter = "all" | "text" | "reasoning" | "tool" | "meta";
 
 export function streamItemKey(item: Pick<StreamItem, "attempt_id" | "seq">): string {
   return `${item.attempt_id ?? "legacy"}:${item.seq}`;
+}
+
+export function describeProcessStreamPage(
+  page: Pick<StreamPage, "visibility" | "unpersisted" | "truncated" | "gap">,
+): string | null {
+  if (page.visibility === "unavailable") {
+    return "本副本看不到已确认的过程证据（未共享 BLOB_DIR，或 Job 在其他 Scheduler）";
+  }
+  if (page.unpersisted) return "仍有未落盘窗口，不保证零丢失";
+  if (page.gap) return "实时流存在 CURSOR_GAP，请从归档首帧重新加载";
+  if (page.truncated) return "实时流归档已截断，较早帧可能存在 CURSOR_GAP";
+  return null;
 }
 
 export function reduceStreamItem(blocks: StreamBlock[], item: StreamItem): StreamBlock[] {
@@ -458,9 +469,8 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
       });
       setBlocks((before) => fresh.reduce((next, item) => reduceStreamItem(next, item as unknown as StreamItem), before));
       if (page.next_cursor) cursor = page.next_cursor;
-      if (page.truncated || page.gap) {
-        setStatus(page.gap ? "实时流存在 CURSOR_GAP，请从归档首帧重新加载" : "实时流归档已截断，较早帧可能存在 CURSOR_GAP");
-      }
+      const notice = describeProcessStreamPage(page);
+      if (notice) setStatus(notice);
     };
 
     const connect = async () => {
@@ -495,9 +505,18 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
           else if (event.code === 4410) setStatus("实时流游标 CURSOR_GAP，请刷新归档");
           else if (event.code === 4401) setStatus("实时流鉴权失败，请重新登录");
           else if (event.code === 4404) setStatus("Job 不存在，无法读取实时流");
-          else if (event.code === 4409) setStatus("Job 已结束，实时流已关闭；可查看归档过程");
           else if (event.code === 1013) setStatus("实时流背压，正在通过 HTTP 补齐…");
-          else setStatus("实时流已断开，正在重连…");
+          else if (event.code !== 4409) setStatus("实时流已断开，正在重连…");
+          if (event.code === 4409) {
+            void api.jobStreamPage(jobId, { after: cursor, limit: 50 }).then((last) => {
+              if (!alive) return;
+              appendPage(last);
+              setStatus(describeProcessStreamPage(last) ?? "Job 已结束，实时流已关闭；可查看归档过程");
+            }).catch(() => {
+              if (alive) setStatus("Job 已结束，实时流已关闭；可查看归档过程");
+            });
+            return;
+          }
           if (terminal) return;
           retryTimer = window.setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
         };

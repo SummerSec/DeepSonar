@@ -88,7 +88,7 @@ DeepSonar 在多智能体编排里把纪律做硬：四层真相、Agent 只提�
 |---|---|---|
 | P0 | ~~#38 WS 鉴权~~ **已完成** | ticket + `/ws`；见 `DESIGN.md` §8 |
 | P1 | 文档/CI 与 as-built 对齐、测试统一入口 | 减少「DESIGN 写缺口、issue 已关」类漂移 |
-| P1 | 多副本 stream-bus / 广播进实时流（可选） | #38 残余；单实例已正确 |
+| P1 | 多副本 stream-bus / 广播进实时流（可选） | #388：补读只认本机 BLOB_DIR；未共享卷的副本报告 unavailable |
 | P2 | Pi 扩展治理下发 + 预置杀手审计工作流 | 能力与冷启动 |
 | P2 | 画布布局第一性（过程真相 B） | 见 `TODO_CANVAS_PROCESS_TRUTH.md` |
 | P3 | 开源策略 | 审计导向 + 中国区可部署 |

@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { sql } from "../../db.js";
-import { readNormalizedStreamPage } from "../../evidence.js";
 import { CursorError, pageLimit } from "../../pagination.js";
+import { subscribeThenCatchUp, processStreamItemKey } from "../../process-stream-live.js";
 import { isUuid } from "../../project-scope.js";
-import { streamCursor, streamItemKey, streamWindow, subscribeStream, STREAM_SUBSCRIBER_QUEUE_MAX } from "../../stream-bus.js";
+import { streamCursor, STREAM_SUBSCRIBER_QUEUE_MAX } from "../../stream-bus.js";
 import { consumeWsTicket } from "../../ws-tickets.js";
 import { WsSendQueue } from "../../ws-send-queue.js";
 import { installWsCloseGuard } from "../../ws-early-close.js";
@@ -69,21 +69,6 @@ export function registerStreamRoutes(app: FastifyInstance): void {
       return;
     }
 
-    // Validate an opaque cursor against durable/active evidence before the
-    // in-memory bus snapshot.  A bus restart is allowed to have no matching
-    // frame, but an evidence gap must be explicit rather than a silent reset.
-    if (q.after) {
-      try {
-        await readNormalizedStreamPage(jobId, { after: q.after, limit: 1, live: true });
-      } catch (error) {
-        const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
-        closeGuard.dispose();
-        socket.close(code === "CURSOR_GAP" ? 4410 : 4400, code);
-        return;
-      }
-      if (abortIfClosed()) return;
-    }
-
     let closed = false;
     let unsub = () => {};
     let queue: WsSendQueue;
@@ -112,18 +97,21 @@ export function registerStreamRoutes(app: FastifyInstance): void {
 
     if (abortIfClosed()) return;
 
-    // Subscribe before taking the snapshot.  Anything published during the
-    // synchronous snapshot is held in this pending list and drained after the
-    // initial page, preventing the classic snapshot/subscribe race.
-    const pendingItems: ReturnType<typeof streamWindow>["items"] = [];
-    let snapshotting = true;
+    // Subscribe before the durable evidence snapshot.  The bus is delivery
+    // only; catch-up always reads local BLOB_DIR.  A replica that cannot see
+    // those files reports visibility=unavailable instead of inventing a gap.
     let after = q.after ?? null;
     const seen = new Set<string>();
-    const emitLive = (item: (typeof pendingItems)[number]) => {
-      const key = streamItemKey(item);
+    const emitLive = (item: { attempt_id?: unknown; seq?: unknown; cursor?: unknown }) => {
+      const key = processStreamItemKey(item);
       if (seen.has(key)) return;
       seen.add(key);
-      const next = streamCursor(item);
+      const next = typeof item.cursor === "string"
+        ? item.cursor
+        : streamCursor({
+          attempt_id: typeof item.attempt_id === "string" ? item.attempt_id : "",
+          seq: Number(item.seq),
+        });
       enqueue({
         items: [item],
         after,
@@ -131,44 +119,30 @@ export function registerStreamRoutes(app: FastifyInstance): void {
         has_more: false,
         watermark: next,
         live: true,
+        source: "evidence",
       });
       after = next;
     };
-    unsub = subscribeStream(jobId, (item) => {
-      if (snapshotting) pendingItems.push(item);
-      else emitLive(item);
-    });
-    // Check again immediately after subscribing.  No await occurs between
-    // this check and subscribe, but a close event may already have been
-    // observed by the early guard while setup was finishing.
-    if (abortIfClosed()) {
-      cleanup();
-      return;
-    }
-    let initial;
     try {
-      // The HTTP evidence endpoint validates a durable cursor before opening
-      // this connection.  A valid cursor may still be absent after a restart
-      // because the in-memory bus is best effort, so allow that case here.
-      initial = streamWindow(jobId, {
+      const opened = await subscribeThenCatchUp(jobId, {
         after: q.after ?? null,
         limit: pageLimit(q.limit),
-        allowMissingCursor: Boolean(q.after),
+        live: true,
+        expectLocal: true,
       });
+      unsub = opened.unsubscribe;
+      if (abortIfClosed()) {
+        cleanup();
+        return;
+      }
+      for (const item of opened.snapshot.items) seen.add(processStreamItemKey(item));
+      enqueue(opened.snapshot);
+      after = opened.snapshot.next_cursor ?? after;
+      opened.startLive(emitLive);
     } catch (error) {
       const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";
       closeStream(code === "CURSOR_GAP" ? 4410 : 4400, code);
-      return;
     }
-    if (abortIfClosed()) {
-      cleanup();
-      return;
-    }
-    for (const item of initial.items) seen.add(streamItemKey(item));
-    enqueue(initial);
-    after = initial.next_cursor ?? after;
-    snapshotting = false;
-    for (const item of pendingItems) emitLive(item);
   });
 
   // ---------- Governed interactive PTY (/terminal-ws) ----------

@@ -388,6 +388,10 @@ export interface PageEnvelope<T> {
   live: boolean;
   truncated?: boolean;
   gap?: boolean;
+  query_plane?: "current" | "history" | "live";
+  source?: "evidence";
+  visibility?: "local" | "unavailable";
+  unpersisted?: boolean;
 }
 
 export type FactVerificationStatus = "unverified" | "verifying" | "verified" | "rejected" | "needs_human";
@@ -817,6 +821,9 @@ export interface StreamPage {
   live: boolean;
   truncated?: boolean;
   gap?: boolean;
+  source?: "evidence";
+  visibility?: "local" | "unavailable";
+  unpersisted?: boolean;
 }
 
 export interface WsTicket {

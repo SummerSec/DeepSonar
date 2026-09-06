@@ -16,6 +16,8 @@
 ### 变更
 
 - Finding 确认改为 Fact-first 硬门：只认图上结构化 Fact（`finding_id` / `subject_revision` / ownership / `expected` / `actual` / `outcome`）。门禁通过则直接确认，或由只消费 Fact 的 `verify_finding` 提交收口提案；不再二次复核源码、原始制品或 maker 结论。不足、失败、冲突或版本不匹配保持未确认并回弹 Hub；审计记录所用 Fact 与门禁结果（#399）。
+- 明确过程流三职责并收口补读（#388 / #359）：`events` 仍是语义账本，evidence NDJSON/manifest 是过程证据，`stream-bus` 只作非权威投递。HTTP/WS 补读只认本机 `BLOB_DIR`；未落盘标 `unpersisted`，本副本看不到文件标 `visibility=unavailable`。不从过程流重放控制副作用，不承诺零丢失。
+
 - inherit_global 项目 RoleConfig 不再保留被忽略的行上 `model` / `runtime_image_key`。启动、切换策略、写入、导入导出与批量绑定会物理清空这些字段；批量绑定 impact 去掉 leftover 警告字段（#359 / #233 / #146）。
 - 删除 Finding 兼容旋钮 `suggest_verify`（schema v43）。控制契约、落库、导入导出与工具说明不再接受该字段；是否派生 Verify 只认冻结规则（#359）。
 - 删除控制 MCP 残留通道：adapter 不再声明 `controlMcp`；CLI 流中的伪造 `mcp__deepsonar-control__*` 只告警，不再默认映射为语义事件；冒烟入口改为 `ci:smoke:control-api`。缺少冻结 Finding 协议的画布 fail closed，不再现场回退当前全局/项目配置（#359）。

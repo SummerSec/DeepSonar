@@ -4,10 +4,10 @@ import { encodeCursor, page, pageLimit, parseCursor, CursorError, type PageEnvel
 /**
  * Agent realtime stream bus (in-memory only).
  *
- * The bus is a bounded observation cache, not a source of durable evidence:
- * restart, eviction, or subscriber backpressure can lose frames.  The HTTP
- * evidence endpoint tails the per-attempt NDJSON archive when a client needs a
- * reliable backfill.
+ * Delivery cache, not a truth: events remain the semantic ledger, evidence
+ * NDJSON/manifest is process evidence, and this bus only pushes already
+ * persisted frames. Restart, eviction, another replica, or subscriber
+ * backpressure can lose bus frames. Catch-up always reads local BLOB_DIR.
  */
 
 export interface StreamItem {

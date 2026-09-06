@@ -142,6 +142,7 @@ export class JobEvidenceWriter {
   private queue: Promise<void> = Promise.resolve();
   private session: SessionBundle | undefined;
   private sequence = 0;
+  private pending = 0;
   private readonly safeAttemptId: string;
 
   constructor(private readonly jobId: string, private readonly cli: string, attemptId: string) {
@@ -152,6 +153,11 @@ export class JobEvidenceWriter {
     this.attemptRoot = path.join(this.root, "attempts", safeAttempt);
     this.streamPath = path.join(this.attemptRoot, "stream.ndjson");
     otlpPaths.set(jobId, path.join(this.attemptRoot, "otlp.ndjson"));
+    activeWriters.set(jobId, this);
+  }
+
+  get unpersisted(): boolean {
+    return this.pending > 0;
   }
 
   /** Resolve only after this event's line is persisted. Stream publication
@@ -160,10 +166,15 @@ export class JobEvidenceWriter {
     const seq = ++this.sequence;
     const safeEvent = redactEvidenceValue(event, exactSecrets(this.jobId)) as Record<string, unknown>;
     const line = JSON.stringify({ ...safeEvent, at: Date.now(), attempt_id: this.safeAttemptId, seq }) + "\n";
+    this.pending += 1;
     this.queue = this.queue.then(async () => {
-      // stream.ndjson 在 attempts/<id>/ 下，必须建 attempt 目录而不是仅 job 根目录
-      await mkdir(this.attemptRoot, { recursive: true });
-      await appendFile(this.streamPath, line, "utf8");
+      try {
+        // stream.ndjson 在 attempts/<id>/ 下，必须建 attempt 目录而不是仅 job 根目录
+        await mkdir(this.attemptRoot, { recursive: true });
+        await appendFile(this.streamPath, line, "utf8");
+      } finally {
+        this.pending -= 1;
+      }
     });
     return this.queue.then(() => seq);
   }
@@ -227,8 +238,20 @@ export class JobEvidenceWriter {
     await atomicWrite(path.join(this.root, "manifest.json"), JSON.stringify(manifest, null, 2));
     otlpQueues.delete(this.jobId);
     if (otlpPaths.get(this.jobId) === otlpPath) otlpPaths.delete(this.jobId);
+    if (activeWriters.get(this.jobId) === this) activeWriters.delete(this.jobId);
     return { uri: manifestRel(this.jobId), manifest };
   }
+}
+
+const activeWriters = new Map<string, JobEvidenceWriter>();
+
+export function inspectProcessStreamWriter(jobId: string): { active: boolean; unpersisted: boolean } {
+  const writer = activeWriters.get(jobId);
+  return { active: Boolean(writer), unpersisted: writer?.unpersisted === true };
+}
+
+export function clearJobEvidenceWritersForTests(): void {
+  activeWriters.clear();
 }
 
 /** 接收 CLI 原生 OTLP/HTTP 信号；原始 payload 只落本地 Job 证据，不进入语义状态机。 */
@@ -590,11 +613,13 @@ async function evidenceStreamRecords(
   records: Record<string, unknown>[];
   live: boolean;
   truncated: boolean;
+  hasLocalFiles: boolean;
 }> {
   const manifest = await readEvidenceManifest(jobId);
   const records: Record<string, unknown>[] = [];
   const parsedPaths = new Set<string>();
   let hasRaw = false;
+  let hasLocalFiles = false;
   let truncated = false;
   let retainedBytes = 0;
   let decompressedBytes = 0;
@@ -609,6 +634,7 @@ async function evidenceStreamRecords(
     parsedPaths.add(filePath);
     try {
       const parsed = await parseStreamFile(filePath, attempt, compressed);
+      hasLocalFiles = true;
       decompressedBytes += parsed.decompressedBytes;
       truncated ||= parsed.truncated;
       if (decompressedBytes > MAX_STREAM_DECOMPRESSED_TOTAL) truncated = true;
@@ -740,26 +766,55 @@ async function evidenceStreamRecords(
     if (at !== 0) return at;
     return Number(a.seq ?? 0) - Number(b.seq ?? 0);
   });
-  return { records, live: hasRaw || !(refreshedManifest ?? manifest), truncated };
+  return {
+    records,
+    live: hasRaw || !(refreshedManifest ?? manifest),
+    truncated,
+    hasLocalFiles: hasLocalFiles || hasRaw,
+  };
 }
 
 /**
- * Read a bounded process page.  Running attempts tail the raw NDJSON file and
- * report live=true; finalized attempts use the manifest archive.  The in-memory
- * stream bus remains best-effort and this endpoint makes no durability promise
- * until the writer has finalized the archive.
+ * Read a bounded process page from local BLOB_DIR evidence.
+ * The in-memory bus is not a catch-up source. Missing local files on a
+ * replica that expected them are `visibility=unavailable`, not a silent empty
+ * page and not a CURSOR_GAP.
  */
 export async function readNormalizedStreamPage(
   jobId: string,
-  options: { after?: string | null; limit?: number; live?: boolean; tail?: boolean } = {},
+  options: {
+    after?: string | null;
+    limit?: number;
+    live?: boolean;
+    tail?: boolean;
+    expectLocal?: boolean;
+  } = {},
 ): Promise<PageEnvelope<Record<string, unknown>>> {
   const limit = pageLimit(options.limit, 50);
   const after = options.after ?? null;
   const cursor = parseCursor(after, "stream");
-  const { records, live: detectedLive, truncated } = await evidenceStreamRecords(jobId, {
+  const writer = inspectProcessStreamWriter(jobId);
+  const { records, live: detectedLive, truncated, hasLocalFiles } = await evidenceStreamRecords(jobId, {
     tail: options.tail,
     cursor,
   });
+  const hasLocalSource = hasLocalFiles || writer.active;
+  const visibility = (options.expectLocal && !hasLocalSource ? "unavailable" : "local") as "local" | "unavailable";
+  const envelope = {
+    source: "evidence" as const,
+    visibility,
+    unpersisted: writer.unpersisted,
+    live: options.live ?? detectedLive,
+  };
+  if (cursor?.attempt_id && Number.isSafeInteger(cursor.seq) && !hasLocalSource) {
+    return page([], {
+      after,
+      nextCursor: null,
+      hasMore: false,
+      watermark: new Date().toISOString(),
+      ...envelope,
+    });
+  }
   let start = options.tail && !cursor ? Math.max(0, records.length - limit) : 0;
   if (cursor?.attempt_id && Number.isSafeInteger(cursor.seq)) {
     const found = records.findIndex(
@@ -768,17 +823,20 @@ export async function readNormalizedStreamPage(
     if (found < 0) throw new CursorError("CURSOR_GAP");
     start = found + 1;
   }
-  const selected = records.slice(start, start + limit);
+  const selected = records.slice(start, start + limit).map((record) => {
+    const cursorValue = streamCursor(record);
+    return cursorValue ? { ...record, cursor: cursorValue } : record;
+  });
   const next = selected.at(-1);
   const nextCursor = next ? streamCursor(next) : null;
   return page(selected, {
     after,
     nextCursor,
     hasMore: start + selected.length < records.length,
-    live: options.live ?? detectedLive,
     watermark: nextCursor ?? new Date().toISOString(),
     truncated,
     gap: truncated,
+    ...envelope,
   });
 }
 
