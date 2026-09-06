@@ -273,15 +273,12 @@ for (const [packageName, entry] of Object.entries(config.npm)) {
   expect(Array.isArray(entry.compatible_image_keys) && entry.compatible_image_keys.includes("deepsonar-base"), `${packageName} base compatibility missing`);
   expect(Array.isArray(kaliConfig.npm[packageName]?.compatible_image_keys) && kaliConfig.npm[packageName].compatible_image_keys.includes("deepsonar-kali-minimal"), `${packageName} Kali compatibility missing`);
 }
-for (const [packageName, argName] of [["@openai/codex", "CODEX"], ["opencode-ai", "OPENCODE"]]) {
-  expect(config.npm[packageName], `${packageName} runtime package missing from manifest`);
-  if (config.npm[packageName]) {
-    expect(dockerfile.includes(`ARG ${argName}_VERSION=${config.npm[packageName].version}`), `${packageName} version drift`);
-    expect(dockerfile.includes(`${packageName}@\${${argName}_VERSION}`), `${packageName} must be installed from the pinned Docker ARG`);
-    expect(kaliDockerfile.includes(`ARG ${argName}_VERSION=${kaliConfig.npm[packageName].version}`), `Kali ${packageName} version drift`);
-    expect(kaliDockerfile.includes(`${packageName}@\${${argName}_VERSION}`), `Kali ${packageName} must be installed from the pinned Docker ARG`);
-  }
+for (const leftover of ["@openai/codex", "opencode-ai"]) {
+  expect(!config.npm[leftover], `${leftover} leftover CLI must not remain in official base/audit manifest`);
+  expect(!kaliConfig.npm[leftover], `${leftover} leftover CLI must not remain in official Kali manifest`);
 }
+expect(!dockerfile.includes("CODEX_VERSION") && !dockerfile.includes("@openai/codex") && !dockerfile.includes("opencode-ai"), "Dockerfile.agent must not install leftover Codex/OpenCode");
+expect(!kaliDockerfile.includes("CODEX_VERSION") && !kaliDockerfile.includes("@openai/codex") && !kaliDockerfile.includes("opencode-ai"), "Dockerfile.agent-kali-minimal must not install leftover Codex/OpenCode");
 const piPackage = "@earendil-works/pi-coding-agent";
 const piManifest = config.npm[piPackage];
 expect(piManifest?.version === "0.84.4", "Pi Coding Agent version must remain pinned");
