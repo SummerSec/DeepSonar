@@ -1212,6 +1212,21 @@ export interface RuntimeImageRegistry {
   error?: string | null;
   checked_at?: string;
   selected_channel: RuntimeImageRegistryChannel;
+  image_status?: RuntimeImageStatusEntry[];
+}
+
+export type RuntimeImageReadiness = "ready" | "preparing" | "unavailable" | "error";
+
+export interface RuntimeImageStatusEntry {
+  image_key: string;
+  immutable_ref?: string | null;
+  readiness: RuntimeImageReadiness;
+  preparing: boolean;
+  error_code?: string | null;
+  error?: string | null;
+  checked_at: string;
+  task_id?: string | null;
+  phase: string;
 }
 
 export interface RuntimeImageRegistryChannelUpdate {
@@ -1229,7 +1244,7 @@ export interface RuntimeImagePreparingResponse {
 
 export type RuntimeImageRegistryCatalog = Omit<
   RuntimeImageRegistry,
-  "metadata" | "fallback" | "error" | "checked_at" | "selected_channel"
+  "metadata" | "fallback" | "error" | "checked_at" | "selected_channel" | "image_status"
 >;
 
 /** Project a GET response back to the strict catalog payload accepted by apply. */
@@ -1240,6 +1255,7 @@ export function runtimeImageRegistryCatalog(registry: RuntimeImageRegistry): Run
     error: _error,
     checked_at: _checkedAt,
     selected_channel: _selectedChannel,
+    image_status: _imageStatus,
     ...catalog
   } = registry;
   return catalog;
@@ -1283,7 +1299,9 @@ export interface RuntimeImagePullItem {
   image_key: string;
   image_ref: string;
   status: "queued" | "running" | "succeeded" | "failed";
+  phase?: string;
   error: string | null;
+  error_code?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
 }
@@ -1291,12 +1309,18 @@ export interface RuntimeImagePullItem {
 export interface RuntimeImagePullTask {
   task_id: string | null;
   purpose?: string;
-  status: "idle" | "queued" | "running" | "succeeded" | "failed";
+  status: "idle" | "queued" | "running" | "succeeded" | "failed" | "interrupted";
+  phase?: string;
   started_at: string | null;
   finished_at: string | null;
+  interrupted_at?: string | null;
+  interrupt_reason?: string | null;
+  error_code?: string | null;
+  error?: string | null;
   total: number;
   completed: number;
   items: RuntimeImagePullItem[];
+  checked_at?: string;
 }
 
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------

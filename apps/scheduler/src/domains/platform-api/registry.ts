@@ -32,6 +32,7 @@ export interface PlatformOperationRejection {
   errorCode: string;
   retryable: boolean;
   path?: string;
+  details?: Record<string, unknown>;
 }
 
 export class PlatformRuntimeHandlerError extends Error {

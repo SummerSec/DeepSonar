@@ -11,6 +11,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidFindingRef: "invalid_finding_ref",
   invalidRole: "invalid_role",
   invalidRuntimeImage: "invalid_runtime_image",
+  runtimeImageNotReady: "runtime_image_not_ready",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
   invalidDone: "invalid_done",
@@ -67,6 +68,7 @@ const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new 
   CONTROL_INPUT_ERROR_CODES.invalidFindingRef,
   CONTROL_INPUT_ERROR_CODES.invalidRole,
   CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
+  CONTROL_INPUT_ERROR_CODES.runtimeImageNotReady,
   CONTROL_INPUT_ERROR_CODES.invalidVerification,
   CONTROL_INPUT_ERROR_CODES.invalidProgress,
   CONTROL_INPUT_ERROR_CODES.invalidDone,
@@ -77,6 +79,7 @@ const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new 
 export class ControlInputError extends Error {
   readonly code: ControlInputErrorCode;
   readonly path?: string;
+  readonly details?: Record<string, unknown>;
   /**
    * When true, the real-agent driver must surface the message to the Worker and
    * continue the run (do not convert into fatal "语义事件处理失败").
@@ -85,11 +88,12 @@ export class ControlInputError extends Error {
    */
   readonly retryable: boolean;
 
-  constructor(code: ControlInputErrorCode, message: string, path?: string) {
+  constructor(code: ControlInputErrorCode, message: string, path?: string, details?: Record<string, unknown>) {
     super(`[${code}] ${message}`);
     this.name = "ControlInputError";
     this.code = code;
     this.path = path;
+    this.details = details;
     this.retryable = AGENT_CORRECTABLE_CONTROL_CODES.has(code);
   }
 }
@@ -132,6 +136,29 @@ export function invalidRole(role: unknown, path = "role", allowed?: readonly str
     CONTROL_INPUT_ERROR_CODES.invalidRole,
     `Hub 角色必须来自本轮 list_available_roles，字段 ${path} 收到类型 ${inputShape(role)}。${allowHint}`,
     path,
+  );
+}
+
+export function runtimeImageNotReady(
+  path: string,
+  details: {
+    image_key: string;
+    readiness: "preparing" | "unavailable" | "error";
+    preparing: boolean;
+    error_code: string | null;
+    error: string | null;
+    task_id: string | null;
+    checked_at: string;
+  },
+): ControlInputError {
+  const message = details.readiness === "preparing"
+    ? `运行镜像正在准备，请稍后重试：${details.image_key}`
+    : `运行镜像当前不可用：${details.image_key}`;
+  return new ControlInputError(
+    CONTROL_INPUT_ERROR_CODES.runtimeImageNotReady,
+    message,
+    path,
+    details,
   );
 }
 

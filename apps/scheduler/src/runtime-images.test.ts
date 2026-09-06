@@ -792,6 +792,22 @@ test("stale pin HTTP mapping is 409 with an upgrade action, not a generic 500", 
     follow_latest_body: { enabled: true, version_id: null },
   });
   assert.equal(runtimeImageHttpError(new Error("runtime image binding has no matching trusted version")), null);
+
+  const notReady = new RuntimeImageNotReadyError("ghcr.io/example/base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {
+    imageKey: "deepsonar-base",
+    readiness: "unavailable",
+    preparing: false,
+    taskId: "task-1",
+    checkedAt: "2026-09-06T00:00:00.000Z",
+  });
+  const mappedNotReady = runtimeImageHttpError(notReady);
+  assert.equal(mappedNotReady?.statusCode, 409);
+  assert.equal(mappedNotReady?.body.error_code, "runtime_image_not_ready");
+  assert.equal(mappedNotReady?.body.image_key, "deepsonar-base");
+  assert.equal(mappedNotReady?.body.readiness, "unavailable");
+  assert.deepEqual(mappedNotReady?.body.poll, { path: "/runtime-images/registry/pull-status" });
+  assert.equal(JSON.stringify(mappedNotReady?.body).includes("ghcr.io"), false);
+  assert.equal(JSON.stringify(mappedNotReady?.body).includes("sha256:aaaaaaaa"), false);
 });
 
 test("selector diagnosis distinguishes revoked official versions from missing platforms", () => {
@@ -1184,6 +1200,9 @@ test("Hub catalog entries require a compatible governance CLI and omit executabl
   assert.deepEqual(kali.compatible_agent_clis, ["claude-code", "dsh", "pi"]);
   assert.equal("image_ref" in kali, false);
   assert.equal("digest" in kali, false);
+  assert.equal("immutable_ref" in kali, false);
+  assert.equal(kali.readiness, "ready");
+  assert.equal(kali.preparing, false);
 
   const chrome = toHubRuntimeImageCatalogEntry({
     image_key: "deepsonar-chrome-fuzz",

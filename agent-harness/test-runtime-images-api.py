@@ -45,6 +45,18 @@ def main() -> None:
     project = req("POST", "/projects", {"name": f"images-ci-{suffix}"}, 201)
     project_id = project["id"]
 
+    registry = req("GET", "/runtime-images/registry")
+    assert isinstance(registry.get("image_status"), list), registry
+    for item in registry["image_status"]:
+        assert item.get("image_key"), item
+        assert item.get("readiness") in {"ready", "preparing", "unavailable", "error"}, item
+        assert "preparing" in item and "checked_at" in item and "phase" in item, item
+        assert "digest" not in item, item
+    pull_status = req("GET", "/runtime-images/registry/pull-status")
+    assert pull_status.get("status") in {"idle", "queued", "running", "succeeded", "failed", "interrupted"}, pull_status
+    assert "phase" in pull_status and "checked_at" in pull_status and "items" in pull_status, pull_status
+    assert "task_id" in pull_status, pull_status
+
     market = req("GET", "/runtime-images")
     by_key = {image["image_key"]: image for image in market}
     official_keys = ("deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal")
