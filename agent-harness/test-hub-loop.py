@@ -2,8 +2,8 @@
 """Hub 最小循环 E2E（fake 模式，自举项目，可 CI）。
 
 主路径（必须 confirmed，不得靠 maxHubRounds 护栏假绿）：
-task → hub → audit → finding → verify(rework) → hub 补证(review+test) →
-verify(confirmed) → hub complete → report → root succeeded
+task → hub → audit → finding → hub 补证(review+test 写结构化 Fact) →
+finding confirmed（Fact-first，默认不建 verify_finding） → hub complete → report → root succeeded
 """
 from __future__ import annotations
 
@@ -103,21 +103,25 @@ def main() -> None:
         f"假绿：Root 结论为护栏降级路径：{conclusion!r}"
     )
 
-    # 边断言：至少形成 Hub→Audit→Finding→Verify 链
+    # 边断言：Hub→Audit→Finding，补证后 Fact-first 直接确认（默认不建 verify_finding）
     data = req("GET", f"/canvases/{cid}")
     nodes, edges = data["nodes"], data["edges"]
     hubs = [n for n in nodes if n["node_type"] == "job" and (n.get("body_json") or {}).get("type") == "hub_reason"]
     audits = [n for n in nodes if n["node_type"] == "intent" and (n.get("body_json") or {}).get("role") == "audit"]
+    reviews = [n for n in nodes if n["node_type"] == "intent" and (n.get("body_json") or {}).get("role") == "review"]
+    tests = [n for n in nodes if n["node_type"] == "intent" and (n.get("body_json") or {}).get("role") == "test"]
     findings = [n for n in nodes if n["node_type"] == "finding"]
     verifies = [n for n in nodes if n["node_type"] == "job" and (n.get("body_json") or {}).get("type") == "verify_finding"]
     assert hubs, "缺少 hub 节点"
     assert audits, "缺少 audit intent"
     assert findings, "缺少 finding"
-    assert verifies, "缺少 verify job"
+    assert reviews, "缺少 review 补证"
+    assert tests, "缺少 test 补证"
+    assert not verifies, "Fact-first 默认路径不应再派 verify_finding"
     pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
     assert any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings), "缺少 produces 边"
-    assert any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies), "缺少 verifies 边"
-    print("链 OK: Hub → Audit → Finding → Verify → … → complete → report")
+    assert any(e["from_node_id"] in {f["id"] for f in findings} and e["edge_type"] == "next" for e in edges), "缺少 Finding→补证 next 边"
+    print("链 OK: Hub → Audit → Finding → 补证 Fact → confirmed → complete → report")
 
     # Finding 必须 confirmed（主路径），不得以 needs_human 护栏冒充
     flist = req("GET", f"/findings?project_id={pid}&canvas_id={cid}")

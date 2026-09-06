@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { subscribeCanvasUpdates } from "../apps/scheduler/src/canvas-updates.js";
 import { sql } from "../apps/scheduler/src/db.js";
+import { deleteProjectsLeavingAuditShells } from "../apps/scheduler/src/test-project-teardown.js";
 
 const projectId = randomUUID();
 const canvasId = randomUUID();
@@ -39,6 +40,6 @@ try {
   unsubscribe?.();
   await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`.catch(() => {});
   await sql`DELETE FROM canvases WHERE id = ${canvasId}`.catch(() => {});
-  await sql`DELETE FROM projects WHERE id = ${projectId}`.catch(() => {});
+  await deleteProjectsLeavingAuditShells(sql, [projectId]).catch(() => {});
   await sql.end({ timeout: 1 });
 }

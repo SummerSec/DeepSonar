@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { HUB_REFERENCE_LIMITS } from "@deepsonar/shared-types";
 import { ControlInputError } from "./control-input.js";
+import { deleteProjectsLeavingAuditShells } from "./test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -274,7 +275,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE parent_job_id = ${jobId}`;
       await sql`DELETE FROM jobs WHERE id = ${jobId}`;
       await sql`DELETE FROM canvases WHERE id IN (${canvasId}, ${otherCanvasId})`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 });
     }
   });

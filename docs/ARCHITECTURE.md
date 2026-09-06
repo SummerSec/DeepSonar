@@ -236,9 +236,9 @@ pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 
 2. Finding 只是待证实假设；Scheduler 按 `minVerifySeverity` 决定自动验证范围，低于阈值的不派生 Verify，且 Hub 对该 Finding 派发 review/test 会在任何 Job/节点副作用前稳定拒绝；缺失或未知 severity 保守验证，设置为 `info` 即严格全量模式
 3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
 4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
-5. 调度器创建 verify Job，输入 = Finding 快照 + 与硬门同源的冻结 review/test 证据快照；画布只作辅助上下文
-6. Verify Worker 只提交 `confirmed` / `rework` / `needs_human` 提案（`false_positive` 不是合法 verdict，也不再映射为 rework）；Scheduler 检查独立 review、完整 test、来源 Job 与冲突后才可写 confirmed
-7. `rework` 或 Verify 失败强制回弹 Hub，且补证只派发 review/test；`confirmed` 可触发影响验收。
+5. Scheduler 以图上结构化 Fact 做 Fact-first 硬门：校验 `finding_id`、来源 Job/角色、当前 `subject_revision`、`outcome` 与结构化 `expected`/`actual`。普通文本 verdict 不计。门禁通过时可直接确认收口，或创建只消费 Fact 投影的 `verify_finding` 提交收口提案；两条路径都不重读源代码、原始制品或 maker 结论。`GraphScope=verify` 仍只投影身份骨架与引用
+6. `verify_finding` 若仍运行，只提交 `confirmed` / `rework` / `needs_human` 提案；Scheduler 再次执行同一 Fact-first 门禁后才可写 confirmed。审计记录所用 Fact、门禁结果与失败原因
+7. Fact 不足、失败、冲突或 revision/`finding_id` 不匹配时 Finding 保持未确认并回弹 Hub 补证；`confirmed` 可触发影响验收。
 8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
 9. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
@@ -917,5 +917,6 @@ round/Job，也不阻塞 complete/Report。缺失或未知 severity 保守进入
 证据不足时，`finding_verification_rounds.requirements_json` 写入
 `eligibility = "waiting_evidence"`，Finding 的 `raw_json.verification_state`
 同步记录同一资格；此时不创建可运行的 `verify_finding` Job。补证 Hub
-在无活跃 Hub、普通角色或 `waiting_human` Job 后按证据快照至多唤醒一次，
-证据齐全后复用该 round 绑定 Verify Job。
+在无活跃 Hub、普通角色或 `waiting_human` Job 后按证据快照至多唤醒一次。
+结构化 Fact 门禁通过后直接确认收口，或由只消费 Fact 的 `verify_finding`
+提交提案；不足、失败、冲突或版本不匹配保持未确认并回弹 Hub。

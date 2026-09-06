@@ -69,7 +69,7 @@ export function isRetryableProvisionFailure(error: unknown): boolean {
   return /CONTAINER_START_FAILED|Egress sidecar container failed to start|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)/i.test(text);
 }
 import { finalizeReportJob } from "./report.js";
-import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
+import { canvasFindingsConverged, collectEvidenceSnapshot, evaluateConfirmGate, resolveFindingSubjectRevision } from "./verify.js";
 import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
@@ -1132,14 +1132,19 @@ async function executeFake(jobId: string, type: string) {
 
   if (type === "verify_finding") {
     await emit("progress", { message: "假 agent：验证中（证据硬门）", percent: 50 });
-    // 有合格 review+test 才 confirmed；否则 rework 回弹 Hub
+    // Fact-first 门禁通过才 confirmed；否则 rework 回弹 Hub
     const [vjob] = await sql`SELECT finding_id, payload_json FROM jobs WHERE id = ${jobId}`;
     const findingId = vjob?.finding_id as string | null;
     let canConfirm = false;
     if (findingId) {
-      const [f] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
-      const snap = await collectEvidenceSnapshot(sql, findingId, (f?.job_id as string) ?? null);
-      canConfirm = snap.qualified;
+      const [f] = await sql`SELECT job_id, raw_json FROM findings WHERE id = ${findingId}`;
+      const originJobId = (f?.job_id as string) ?? null;
+      const snap = await collectEvidenceSnapshot(sql, findingId, originJobId);
+      canConfirm = evaluateConfirmGate(snap, {
+        findingId,
+        subjectRevision: resolveFindingSubjectRevision((f ?? {}) as Record<string, unknown>, snap.facts),
+        originJobId,
+      }).ok;
     }
     await ingestEvent(jobId, {
       v: 1,

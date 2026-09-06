@@ -209,7 +209,8 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      // ingestEvent(finding) 会走 Verify 门禁并写 append-only audit_logs(project_id)。
+      // 不能删审计行，因此只清可调度数据，留下被引用的项目壳。
       await sql.end({ timeout: 5 });
     }
   });

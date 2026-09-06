@@ -99,7 +99,7 @@ test("confirm gate rejects subjective-only support even when review exists", () 
   assert.equal(subjective.qualified, true);
   const gate = evaluateConfirmGate(subjective);
   assert.equal(gate.ok, false);
-  assert.ok(gate.missing.includes("machine_checkable_expected_actual"));
+  assert.ok(gate.missing.includes("structured_supporting_fact") || gate.missing.includes("machine_checkable_expected_actual"));
 });
 
 test("verify freeze helper is the only finding payload shape", () => {

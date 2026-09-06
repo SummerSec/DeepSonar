@@ -117,22 +117,23 @@ def main():
         hubs = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "hub_reason"]
         audits = [n for n in nodes if n["node_type"] == "intent" and n["body_json"].get("role") == "audit"]
         findings = [n for n in nodes if n["node_type"] == "finding"]
+        reviews = [n for n in nodes if n["node_type"] == "intent" and n["body_json"].get("role") == "review"]
+        tests = [n for n in nodes if n["node_type"] == "intent" and n["body_json"].get("role") == "test"]
         verifies = [n for n in nodes if n["node_type"] == "job" and n["body_json"].get("type") == "verify_finding"]
-        if not (roots and len(hubs) >= 2 and audits and findings and verifies):
+        if verifies or not (roots and len(hubs) >= 2 and audits and findings and reviews and tests):
             return False
         pairs = {(e["from_node_id"], e["to_node_id"], e["edge_type"]) for e in edges}
         return (
             (roots[0]["id"], hubs[0]["id"], "child") in pairs
             and any((a["id"], f["id"], "produces") in pairs for a in audits for f in findings)
-            and any((f["id"], v["id"], "verifies") in pairs for f in findings for v in verifies)
             and any(e["from_node_id"] in {f["id"] for f in findings} and e["edge_type"] == "next" for e in edges)
         )
 
     chain_deadline = time.time() + 120
     while not hub_chain_ok():
-        assert time.time() < chain_deadline, "Hub→Audit→Finding→Verify→Hub 节点/边链 120s 内未成形"
+        assert time.time() < chain_deadline, "Hub→Audit→Finding→补证 Fact→Hub 节点/边链 120s 内未成形"
         time.sleep(3)
-    print("Hub 编排链 OK: Root → Hub → Audit → Finding → Verify → Hub")
+    print("Hub 编排链 OK: Root → Hub → Audit → Finding → 补证 Fact → Hub")
 
     # root succeeded ≠ 链上没有活动 job（验收轮可能仍在跑）；retry 要求画布无活动 job，等彻底收敛
     ACTIVE = {"pending", "claimed", "provisioning", "running", "waiting_human"}

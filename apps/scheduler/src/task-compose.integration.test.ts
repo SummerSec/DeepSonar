@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "./test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -22,7 +23,7 @@ async function wipeProjectComposeFixtures(db: SchedulerSql, projectIds: readonly
   await db`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ANY(${ids}::uuid[])`;
   await db`DELETE FROM jobs WHERE project_id = ANY(${ids}::uuid[])`;
   await db`DELETE FROM canvases WHERE project_id = ANY(${ids}::uuid[])`;
-  await db`DELETE FROM projects WHERE id = ANY(${ids}::uuid[])`;
+  await deleteProjectsLeavingAuditShells(db, ids);
 }
 
 if (!testDatabaseUrl) {
