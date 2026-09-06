@@ -809,6 +809,28 @@ function dshToolInput(value: unknown): unknown {
   }
 }
 
+const DSH_SILENT_SESSION_EVENTS = new Set(["turn/start", "turn/end"]);
+
+function dshToolCallId(data: Record<string, unknown>): string {
+  for (const key of ["id", "callId", "callID", "toolCallId", "toolCallID", "call_id", "tool_call_id"]) {
+    const value = data[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return "";
+}
+
+function dshToolResultContent(data: Record<string, unknown>): unknown {
+  const message = data.message && typeof data.message === "object" && !Array.isArray(data.message)
+    ? data.message as Record<string, unknown>
+    : undefined;
+  if (message) {
+    if (typeof message.text === "string") return message.text;
+    if (message.content !== undefined) return message.content;
+  }
+  if (typeof data.message === "string") return data.message;
+  return data.content ?? data.result ?? "";
+}
+
 function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   if (Object.prototype.hasOwnProperty.call(line, "id") && !line.method) {
     if (line.error && typeof line.error === "object") {
@@ -840,7 +862,7 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
       const chunk = data.chunk && typeof data.chunk === "object" && !Array.isArray(data.chunk) ? data.chunk as Record<string, unknown> : {};
       if (chunk.type === "text-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "text", text: chunk.text }] } }];
       if (chunk.type === "reasoning-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: chunk.text }] } }];
-      return [];
+      return chunk.type ? unknownRuntimeEvent() : [];
     }
     if (event.type === "assistant/message" || event.type === "user/message") {
       const message = data.message && typeof data.message === "object" && !Array.isArray(data.message) ? data.message as Record<string, unknown> : {};
@@ -856,17 +878,35 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
       }
       return [{ type: "user", message: { id: message.id, content } }];
     }
+    if (event.type === "tool/call") {
+      const id = dshToolCallId(data);
+      const name = String(data.name ?? data.toolName ?? "");
+      return id && name
+        ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: dshToolInput(data.arguments ?? data.input) }] } }]
+        : unknownRuntimeEvent();
+    }
+    if (event.type === "tool/result") {
+      const id = dshToolCallId(data);
+      if (!id) return unknownRuntimeEvent();
+      const isError = (data.error != null && !(typeof data.error === "string" && !data.error.trim()))
+        || data.isError === true
+        || data.is_error === true;
+      return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: dshToolResultContent(data) }] } }];
+    }
     if (event.type === "turn/end") {
       const reason = data.reason && typeof data.reason === "object" && !Array.isArray(data.reason) ? data.reason as Record<string, unknown> : {};
       if (reason.kind !== "completed" && reason.kind !== "max-tokens") state.dshTurnError = formatDshTurnError(reason);
     }
+    return DSH_SILENT_SESSION_EVENTS.has(String(event.type ?? "")) ? [] : unknownRuntimeEvent();
+  }
+  if (method === "session.status") {
+    if (params.status === "idle") {
+      if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
+      return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
+    }
     return [];
   }
-  if (method === "session.status" && params.status === "idle") {
-    if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
-    return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
-  }
-  return [];
+  return unknownRuntimeEvent();
 }
 
 const dsh = Object.freeze<RuntimeAdapter>({

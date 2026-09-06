@@ -37,8 +37,9 @@ Cordis composition) lives in `packages/runtime-sandbox/src/dsh-pi-ai.ts` plus
 the DSH adapter. Scheduler management APIs call that parse/project for write
 validation and snapshot freeze; `executor-real` only calls
 `adapter.projectRuntime`. Generic dispatcher / Hub / job-lifecycle code must
-not import DSH wire schema. Full DSH/Pi decode scope is #389, not this
-boundary.
+not import DSH wire schema. DSH/Pi decode contracts (#389) live in
+`decodePi` / `decodeDsh`, session adapters, and the Web session-viewer;
+they do not re-parse vendor YAML.
 
 The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLIs. Leftover `codex` / `open-code` adapters are retired from new RoleConfig/Job writes; historical snapshots and Session archives stay readable. Official images no longer install leftover `@openai/codex` / `opencode-ai`. Adding a later CLI still follows the onboarding checklist below and registers in the same table.
 
@@ -212,3 +213,34 @@ tail summary. Full model-turn OpenSandbox vendor E2E
 (`pnpm ci:smoke:opensandbox-cli-control`) still requires the corresponding
 provider credentials; credential-unavailable results must be reported
 separately from adapter or parser failures. Mock LLM is not a substitute.
+
+## DSH/Pi 解码契约（#389）
+
+「解码」不是一件事。下列三类契约分开，互不替代；#320 / #321 已关，不能当作完整解码已实现或必须重做的证据。#390 已把 DSH YAML/Gateway/Cordis 归到 `dsh-pi-ai.ts` + adapter；本文件只记录解码范围，不另写第二份解析器。
+
+| 契约 | 输入 | 输出 | 家 | 钉死版本 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| 请求兼容投影 | 平台 system prompt | 进入上游 `input[0]` 的 pi 风格首帧 | `dsh-request-frame.ts` | DSH `0.1.1-rc.2` | **已完整**（#321）。证据：`projectDshSystemPrompt` + `runtime-adapters.test.ts`「DSH request frame」 |
+| 运行事件解码 | CLI 结构化 stdout（Pi RPC JSONL / DSH JSON-RPC） | 宿主归一化事件（`assistant` / `user` / `result` / `unknown_runtime` / `agent_settled`） | `runtime-adapters.ts` `decodePi` / `decodeDsh` | Pi `0.84.4` · DSH `0.1.1-rc.2` | **产品字段已齐**。#320 只补错误串内嵌 JSON 的 `message` 提取，不是整解码器。#389 补的是 DSH 未知/损坏帧可诊断，以及独立 `tool/call` / `tool/result` |
+| Session 归档 / 查看器 | 沙箱内本次 session artifact | 时间线 / usage / 工具统计 / 原始下载 | `cli-session-adapters.ts` + `apps/web/src/session-viewer/` | 同上 | **已完整**。归档失败显式 `captureError`；查看器 `skipped` + `other` 诊断未知/损坏行；「下载原始文件」不改写字节 |
+
+产品必需字段与真实缺口（只填缺口，已齐层不重写）：
+
+| 字段 | 运行解码 Pi | 运行解码 DSH | Session 查看器 Pi | Session 查看器 DSH |
+| --- | --- | --- | --- | --- |
+| 文本 / 增量 | `message_update` text_delta · **已齐** | `assistant/chunk` text-delta · **已齐** | persisted `message` / RPC · **已齐** | `user/message` `assistant/message` `assistant/chunk` · **已齐** |
+| 思考 | thinking/reasoning_delta · **已齐** | reasoning-delta · **已齐** | thinking/reasoning 块 · **已齐** | `reasoning` 块 · **已齐** |
+| 工具调用 / 结果 | `tool_execution_*` · **已齐** | 消息内 `tool-call`/`tool-result`，以及独立 `tool/call`/`tool/result` · **#389 补独立事件** | toolCall / tool_execution_* · **已齐** | 独立 `tool/call` + 消息内嵌去重 · **已齐** |
+| 错误 | `error` / `extension_error` 抽内层 JSON · **#320 已齐** | JSON-RPC error + `turn/end` · **#320/#321 已齐** | `error` 行进 `other`，不丢后续行 · **已齐** | `turn/end` 进 system/`other` · **已齐** |
+| usage | 运行流不记账；Gateway ledger 才是用量真相 · **不做第二套** | 同左 · **不做第二套** | persisted usage · **已齐** | message usage · **已齐** |
+| Session 身份 | `get_state` → `sessionId`/`sessionFile` · **已齐** | 冻结 `session-${context_id}`，错 ID fail closed · **已齐** | session 行 · **已齐** | session 行 · **已齐** |
+| 未知 / 损坏帧 | 未知类型 `unknown_runtime`；非法 JSONL fail closed · **已齐** | 未知 method/event → `unknown_runtime`（#389 前静默丢弃）· **已齐** | `skipped` + `other` · **已齐** | `skipped` + `other` · **已齐** |
+
+版本锁定脱敏夹具：
+
+- 运行事件：`packages/runtime-sandbox/src/fixtures/cli-decode/pi-0.84.4.runtime.jsonl`、`dsh-0.1.1-rc.2.runtime.jsonl`
+- Session 归档：`apps/web/src/session-viewer/fixtures/cli-decode/pi-0.84.4.session.jsonl`、`dsh-0.1.1-rc.2.session.jsonl`
+
+夹具覆盖文本/增量、工具调用结果、错误、usage、Session 身份、未知/损坏帧，以及伪造 `mcp__deepsonar-control__*` 工具名。普通输出或伪造 tool call **不会**变成控制语义事件；语义写入只走 Job 级 HTTP API。不承诺识别任意上游私有客户端策略。
+
+运行时 smoke：`pnpm ci:smoke:opensandbox-cli-control` 需要对应 Provider 凭据。本环境无凭据，**未验证**真实模型回合；adapter/viewer 夹具测试与 DSH packaged-bin 断网 `initialize`/`shutdown` 启动门禁仍独立有效。
