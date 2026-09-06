@@ -228,7 +228,7 @@ python scripts/deepsonar-api.py imports cancel <importId>
 - `platform_tools`：每个 Agent **全量可选**；未声明 = 全开；仅 **`mark_job_done` 不可关**。
 - `purpose` 必须是 **`llm`**（调度器只认这个 purpose 注入模型通道）。
 - `model: null` 表示使用 Credential 的 CLI 配置文件；仅高级场景才在 RoleConfig 填覆盖模型。
-- Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0）；UI 只暴露模式 hybrid/fixed/agent_choice。
+- Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0）；UI 只暴露模式 `hybrid` / `fixed`。`finding_protocol` 走设置顶层字段，不要写进 `rules`。
 
 ## 推荐工作流：清库 → 配多模型 → 下发全量审计
 

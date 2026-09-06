@@ -11,7 +11,6 @@ import {
   ControlEventEnvelope,
   EmitFactDirectPayload,
   EmitFindingDirectPayload,
-  EffectiveFindingProtocol,
   EventEnvelope,
   type EventEnvelopeInput,
   FindingPayload,
@@ -38,6 +37,7 @@ import {
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
+import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import {
   PROVIDER_ENV_MAP,
@@ -694,9 +694,7 @@ export async function executeReal(
     ? await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`
     : [undefined];
   const taskTarget = ((canvas?.target_json ?? {}) as Record<string, unknown>);
-  let effectiveFindingProtocol = EffectiveFindingProtocol.safeParse(
-    taskTarget.effective_finding_protocol,
-  ).data;
+  const effectiveFindingProtocol = parseFrozenFindingProtocol(taskTarget.effective_finding_protocol);
   if (!effectiveFindingProtocol) {
     throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
   }
@@ -1210,7 +1208,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     component_manifest_sha256: jsonHash(componentManifest),
     provider_config_files: componentManifest.provider_files,
     allow_egress: allowEgress,
-    effective_finding_protocol: effectiveFindingProtocol,
     module_selectors: moduleEvidence.module_selectors,
     missing_modules: moduleEvidence.missing_modules,
     module_content_hash: moduleEvidence.module_content_hash,

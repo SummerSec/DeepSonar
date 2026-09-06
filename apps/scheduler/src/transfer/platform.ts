@@ -18,6 +18,7 @@ import {
 } from "../role-colors.js";
 import { sql } from "../db.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import { rewriteFindingProtocolMode } from "../finding-protocol.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
   buildManifestSource,
@@ -447,6 +448,8 @@ export async function applyPlatformImport(
             ? { ...rulesFile.rules, ...current }
             : { ...current, ...rulesFile.rules },
         ).rules;
+        const protocol = rewriteFindingProtocolMode(merged.finding_protocol);
+        if (protocol.changed) merged.finding_protocol = protocol.next;
         await tx`UPDATE global_settings SET rules_json = ${tx.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
         summary.global_rules = 1;
       }

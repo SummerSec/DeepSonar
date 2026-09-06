@@ -141,7 +141,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /global-settings | agents:read | `{rules, effective_rules, active_by_agent_cli, active_by_provider}`；`effective_rules` 含 `maxGlobalJobs` / `maxJobsPerProject` / `maxConcurrentByAgentCli` |
-| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；claim 读 effective 并由 `pg_notify` 唤醒。并发默认 **20 / 5**（env/代码）；库 `rules_json` 优先。Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0），模式 hybrid/fixed/agent_choice |
+| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；`finding_protocol` 只能走顶层字段。claim 读 effective 并由 `pg_notify` 唤醒。并发默认 **20 / 5**（env/代码）；库 `rules_json` 优先。Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0），模式 hybrid/fixed |
 | GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 + `effective_rules.maxConcurrentJobs` / `maxConcurrentJobsSource` + `active_jobs` |
 | PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}, finding_protocol?}`；`rules.maxConcurrentJobs` 为 `0–1000` 或 `null`（清除继承全局）；`enabled: null` 恢复默认 |
 

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
-  EffectiveFindingProtocol as EffectiveFindingProtocolSchema,
   FindingProtocolConfig as FindingProtocolConfigSchema,
   CANONICAL_UUID_PATTERN,
   SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
@@ -24,6 +23,7 @@ import { inc } from "./metrics.js";
 import {
   createRoleRuntimeSnapshotApplication,
   freezeAgentSnapshotNetworkPolicy,
+  scrubStoredProjectImagePolicy,
   type AgentRuntimeSnapshot,
 } from "./domains/role-runtime-snapshot/index.js";
 import { transitionJob as applyJobTransition } from "./domains/job-lifecycle/index.js";
@@ -42,7 +42,8 @@ import {
   type HubCanvasJobTerminalStatus,
   type HubAnalysisCompleteGate,
 } from "./domains/hub-orchestration/index.js";
-import { resolveFindingProtocol } from "./finding-protocol.js";
+import { parseFrozenFindingProtocol, resolveFindingProtocol, rewriteFindingProtocolMode } from "./finding-protocol.js";
+import { canonicalizeRoleRuntimeKnobsJson } from "./runtime-knobs.js";
 import * as findingVerification from "./verify.js";
 import * as reportConvergence from "./report.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -666,12 +667,72 @@ export async function scrubLeftoverStoredRules(
       : null;
     if (!rules) continue;
     const next = scrubLeftoverRulesJson(rules);
-    if (next.removedKeys.length === 0) continue;
-    cfg.rules = next.rules;
+    const stripped = stripFindingProtocolFromRules(next.rules);
+    const removedProtocol = Object.keys(stripped).length !== Object.keys(next.rules).length;
+    if (next.removedKeys.length === 0 && !removedProtocol) continue;
+    cfg.rules = stripped;
     await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
     projectCount += 1;
   }
   return { global, projects: projectCount };
+}
+
+/** 物理清扫已删除的配置别名：agent_choice、rules 内协议投影残留、脏 image_strategy、RoleConfig knobs snake_case。 */
+export async function scrubRedundantConfigSurface(
+  db: typeof sql,
+): Promise<{ protocols: number; imagePolicies: number; roleKnobs: number }> {
+  let protocols = 0;
+  let imagePolicies = 0;
+  let roleKnobs = 0;
+
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const globalRules = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>) };
+  const globalProtocol = rewriteFindingProtocolMode(globalRules.finding_protocol);
+  if (globalProtocol.changed) {
+    globalRules.finding_protocol = globalProtocol.next;
+    await db`UPDATE global_settings SET rules_json = ${db.json(globalRules as never)}, updated_at = now() WHERE id = 'global'`;
+    protocols += 1;
+  }
+
+  const projects = await db`SELECT id, config_json FROM projects` as { id: string; config_json?: unknown }[];
+  for (const project of projects ?? []) {
+    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
+    let changed = false;
+    const protocol = rewriteFindingProtocolMode(cfg.finding_protocol);
+    if (protocol.changed) {
+      cfg.finding_protocol = protocol.next;
+      changed = true;
+      protocols += 1;
+    }
+    if (scrubStoredProjectImagePolicy(cfg)) {
+      changed = true;
+      imagePolicies += 1;
+    }
+    if (changed) await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
+  }
+
+  const canvases = await db`
+    SELECT id, target_json FROM canvases
+    WHERE target_json ? 'effective_finding_protocol'` as { id: string; target_json?: unknown }[];
+  for (const canvas of canvases ?? []) {
+    const target = { ...((canvas.target_json ?? {}) as Record<string, unknown>) };
+    const protocol = rewriteFindingProtocolMode(target.effective_finding_protocol);
+    if (!protocol.changed) continue;
+    target.effective_finding_protocol = protocol.next;
+    await db`UPDATE canvases SET target_json = ${db.json(target as never)} WHERE id = ${canvas.id}`;
+    protocols += 1;
+  }
+
+  const roleConfigs = await db`
+    SELECT id, runtime_knobs_json FROM role_configs` as { id: string; runtime_knobs_json?: unknown }[];
+  for (const row of roleConfigs ?? []) {
+    const knobs = canonicalizeRoleRuntimeKnobsJson(row.runtime_knobs_json);
+    if (!knobs.changed) continue;
+    await db`UPDATE role_configs SET runtime_knobs_json = ${db.json(knobs.next as never)} WHERE id = ${row.id}`;
+    roleKnobs += 1;
+  }
+
+  return { protocols, imagePolicies, roleKnobs };
 }
 
 /** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */
@@ -937,9 +998,10 @@ function parseStoredFindingProtocolConfig(value: unknown) {
   return FindingProtocolConfigSchema.parse(value);
 }
 
-function parseFrozenFindingProtocol(value: unknown): EffectiveFindingProtocol | undefined {
-  if (value === undefined || value === null) return undefined;
-  return EffectiveFindingProtocolSchema.parse(value);
+export function stripFindingProtocolFromRules(rules: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(rules, "finding_protocol")) return rules;
+  const { finding_protocol: _protocol, ...rest } = rules;
+  return rest;
 }
 
 /**

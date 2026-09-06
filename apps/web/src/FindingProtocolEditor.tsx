@@ -13,10 +13,6 @@ const MODE_META: Record<
     label: "混合",
     help: "默认使用默认 profile；Agent 可在允许列表内改选其它 profile（推荐）。",
   },
-  agent_choice: {
-    label: "Agent 自选",
-    help: "Agent 在允许列表内自由选择 profile；未指定时回落默认 profile。",
-  },
 };
 
 export function FindingProtocolEditor({
@@ -72,12 +68,10 @@ export function FindingProtocolEditor({
               <strong>固定</strong>：只用默认 profile。
               {" "}
               <strong>混合</strong>：默认 profile，Agent 可在允许列表内改选（推荐）。
-              {" "}
-              <strong>Agent 自选</strong>：Agent 在允许列表内自由选择。
             </HelpTip>
           </div>
-          <div className="theme-surface grid grid-cols-3 gap-1 rounded-md p-1 ring-1">
-            {(["hybrid", "fixed", "agent_choice"] as const).map((next) => {
+          <div className="theme-surface grid grid-cols-2 gap-1 rounded-md p-1 ring-1">
+            {(["hybrid", "fixed"] as const).map((next) => {
               const meta = MODE_META[next];
               const active = mode === next;
               return (

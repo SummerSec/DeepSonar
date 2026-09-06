@@ -27,7 +27,7 @@ if (!testDatabaseUrl) {
         UPDATE global_settings
         SET rules_json = rules_json || ${sql.json({
           finding_protocol: {
-            mode: "agent_choice",
+            mode: "hybrid",
             default_profile: "general",
             allowed_profiles: ["general", "security.vulnerability"],
             display_name: "global-general",

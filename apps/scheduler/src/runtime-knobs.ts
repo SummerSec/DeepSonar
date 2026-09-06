@@ -84,9 +84,9 @@ export function parseOptionalBoundedInt(
 export function parseRuntimeKnobLayer(value: unknown): RuntimeKnobLayer {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const raw = value as Record<string, unknown>;
-  const stallSec = parseOptionalBoundedInt(raw.stallSec ?? raw.stall_sec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max);
+  const stallSec = parseOptionalBoundedInt(raw.stallSec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max);
   const jobTokenMaxRequests = parseOptionalBoundedInt(
-    raw.jobTokenMaxRequests ?? raw.job_token_max_requests,
+    raw.jobTokenMaxRequests,
     RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.min,
     RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.max,
   );
@@ -106,21 +106,20 @@ export function parseRuntimeKnobLayer(value: unknown): RuntimeKnobLayer {
   };
 }
 
-const ROLE_KNOB_KEYS = new Set([
-  "stallSec",
-  "stall_sec",
-  "jobTokenMaxRequests",
-  "job_token_max_requests",
-  "timeoutSec",
-  "timeout_sec",
-]);
+const ROLE_KNOB_WRITE_KEYS = new Set(["stallSec", "jobTokenMaxRequests", "timeoutSec"]);
+const ROLE_KNOB_SNAKE_KEYS: Record<string, keyof RuntimeKnobOverride> = {
+  stall_sec: "stallSec",
+  job_token_max_requests: "jobTokenMaxRequests",
+  timeout_sec: "timeoutSec",
+};
 
 export function validateRuntimeKnobOverride(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value)) return "runtime_knobs 必须是对象";
   const raw = value as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
-    if (!ROLE_KNOB_KEYS.has(key)) return `runtime_knobs 包含不支持的字段: ${key}`;
+    if (key in ROLE_KNOB_SNAKE_KEYS) return `runtime_knobs 已删除 snake_case 别名 ${key}，请使用 ${ROLE_KNOB_SNAKE_KEYS[key]}`;
+    if (!ROLE_KNOB_WRITE_KEYS.has(key)) return `runtime_knobs 包含不支持的字段: ${key}`;
   }
   const parsed = parseRuntimeKnobOverride(raw);
   if (hasInvalidOptionalInt(raw, ["stallSec", "stall_sec"], parsed.stallSec)) {
@@ -141,20 +140,37 @@ function hasInvalidOptionalInt(raw: Record<string, unknown>, keys: string[], par
   return raw[present] !== null && parsed === undefined;
 }
 
+export function canonicalizeRoleRuntimeKnobsJson(value: unknown): { next: Record<string, unknown>; changed: boolean } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { next: {}, changed: Boolean(value) };
+  const raw = value as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  let changed = false;
+  for (const [key, item] of Object.entries(raw)) {
+    const canonical = ROLE_KNOB_SNAKE_KEYS[key] ?? (ROLE_KNOB_WRITE_KEYS.has(key) ? key : null);
+    if (!canonical) {
+      changed = true;
+      continue;
+    }
+    if (canonical !== key) changed = true;
+    if (next[canonical] === undefined) next[canonical] = item;
+  }
+  return { next, changed };
+}
+
 export function parseRuntimeKnobOverride(
   value: unknown,
   timeoutBounds: { min: number; max: number } = RUNTIME_KNOB_BOUNDS.timeoutSec,
 ): RuntimeKnobOverride {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const raw = value as Record<string, unknown>;
-  const stallSec = parseOptionalBoundedInt(raw.stallSec ?? raw.stall_sec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max);
+  const raw = canonicalizeRoleRuntimeKnobsJson(value).next;
+  const stallSec = parseOptionalBoundedInt(raw.stallSec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max);
   const jobTokenMaxRequests = parseOptionalBoundedInt(
-    raw.jobTokenMaxRequests ?? raw.job_token_max_requests,
+    raw.jobTokenMaxRequests,
     RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.min,
     RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.max,
   );
   const timeoutSec = parseOptionalBoundedInt(
-    raw.timeoutSec ?? raw.timeout_sec,
+    raw.timeoutSec,
     timeoutBounds.min,
     timeoutBounds.max,
   );

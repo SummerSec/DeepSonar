@@ -8,15 +8,17 @@ import {
   projectCredentialProvider,
   validateCredentialRoleConfigBinding,
 } from "../credentials.js";
-import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson } from "../core.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson, stripFindingProtocolFromRules } from "../core.js";
 import { sql } from "../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
 import {
   parseProjectImagePolicy,
   persistableProjectRoleConfigModel,
+  scrubStoredProjectImagePolicy,
   type ProjectImagePolicy,
 } from "../domains/role-runtime-snapshot/application.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import { rewriteFindingProtocolMode } from "../finding-protocol.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
   loadPackFile,
@@ -28,6 +30,24 @@ import {
 } from "./pack.js";
 import { CONFIG_MODULES, isConfigOnly, type ModuleKey } from "./modules.js";
 import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
+
+function sanitizeImportedProjectConfig(cfg: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...cfg };
+  const protocol = rewriteFindingProtocolMode(next.finding_protocol);
+  if (protocol.changed) next.finding_protocol = protocol.next;
+  if (next.rules && typeof next.rules === "object" && !Array.isArray(next.rules)) {
+    next.rules = stripFindingProtocolFromRules(scrubLeftoverRulesJson(next.rules).rules);
+  }
+  scrubStoredProjectImagePolicy(next);
+  return next;
+}
+
+function sanitizeImportedTarget(target: unknown): Record<string, unknown> {
+  const next = { ...((target && typeof target === "object" && !Array.isArray(target) ? target : {}) as Record<string, unknown>) };
+  const protocol = rewriteFindingProtocolMode(next.effective_finding_protocol);
+  if (protocol.changed) next.effective_finding_protocol = protocol.next;
+  return next;
+}
 
 export interface PreviewResult {
   compatible: boolean;
@@ -225,9 +245,9 @@ async function createNewProject(
 
   const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/rules.json");
   const enabledFile = readJson<{ enabled?: string[] | null }>(pack.files, "data/roles-enabled.json");
-  const config_json: Record<string, unknown> = {
+  const config_json: Record<string, unknown> = sanitizeImportedProjectConfig({
     ...(srcProject.config_json ?? {}),
-  };
+  });
   if (modules.includes("rules") && rulesFile?.rules) {
     config_json.rules = rulesFile.rules;
   }
@@ -320,7 +340,8 @@ async function mergeConfiguration(
       );
     }
 
-    await tx`UPDATE projects SET config_json = ${tx.json(cfg as never)}, updated_at = now() WHERE id = ${targetProjectId}`;
+    const sanitized = sanitizeImportedProjectConfig(cfg);
+    await tx`UPDATE projects SET config_json = ${tx.json(sanitized as never)}, updated_at = now() WHERE id = ${targetProjectId}`;
     return id_map;
   });
 }
@@ -481,7 +502,7 @@ async function importTasks(
         id: newId,
         project_id: projectId,
         title: (c.title as string) ?? "imported task",
-        target_json: ((c.target_json as object) ?? {}) as never,
+        target_json: sanitizeImportedTarget(c.target_json) as never,
         trigger_source: "import",
         trigger_event_id: null,
         trigger_payload_json: { import_origin: c.source_id } as never,
