@@ -891,6 +891,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/canvases/{id}/facts/{nodeId}/verification",
     summary: "人工更新 Fact 验证态",
+    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。",
     scope: "jobs:control",
     tags: ["Tasks"],
     body: {
@@ -908,6 +909,10 @@ const OPS: Op[] = [
         additionalProperties: false,
         required: ["fact"],
         properties: { fact: FactSummarySchema },
+      },
+      "409": {
+        description: "非 Fact 节点或非法迁移（如 rejected→verified）",
+        content: { "application/json": { schema: ErrorSchema } },
       },
     },
   },

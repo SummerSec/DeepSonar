@@ -96,15 +96,14 @@ test("declared quantities keep confirmed findings and verified facts only", () =
       { id: "confirmed-fact", verification_status: "confirmed", quantities: [quantity] },
     ],
   );
-  assert.deepEqual(declared.map((item) => item.source_id), ["confirmed", "verified", "confirmed-fact"]);
+  assert.deepEqual(declared.map((item) => item.source_id), ["confirmed", "verified"]);
 });
 
 test("unverified fact statuses do not participate in the report gate", () => {
-  for (const status of ["unverified", "verifying", "needs_human", "rejected", undefined]) {
+  for (const status of ["unverified", "verifying", "needs_human", "rejected", "confirmed", undefined]) {
     assert.equal(factQuantityParticipatesInGate(status), false);
   }
   assert.equal(factQuantityParticipatesInGate("verified"), true);
-  assert.equal(factQuantityParticipatesInGate("confirmed"), true);
 });
 
 test("numeric check passes when markdown and SARIF keep value plus unit and basis", () => {

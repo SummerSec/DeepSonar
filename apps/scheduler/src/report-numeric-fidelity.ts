@@ -3,17 +3,15 @@
  * Undeclared prose numbers are unprotected by design. No NL extraction.
  */
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
+import { factQuantityParticipatesInGate } from "./domains/canvas/fact-verification.js";
+
+export { factQuantityParticipatesInGate };
 
 export const NUMERIC_INCONSISTENT = "numeric_inconsistent";
 
 /** Report Agent must keep declared anchors verbatim so the mechanical gate can match. */
 export const REPORT_QUANTITY_VERBATIM_NOTE =
   "凡 finding/fact 声明的 quantities，报告必须原样保留 value、unit、basis，不得改写措辞或折叠口径。";
-
-/** Fact statuses that may gate a report. Findings still use verify_status=confirmed. */
-export function factQuantityParticipatesInGate(status: string | undefined): boolean {
-  return status === "verified" || status === "confirmed";
-}
 
 export type QuantitySourceKind = "finding" | "fact";
 

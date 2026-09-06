@@ -251,7 +251,11 @@ export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
 export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
 export type NodeType = z.infer<typeof NodeType>;
 
-/** 画布 Fact 的人工验证态；与 Finding 技术验证状态相互独立。 */
+/**
+ * 画布 Fact 的证据信任态（#387）。Owner 是人工收口，不是 Finding Verify。
+ * 与 `findings.verify_status` / disposition / human 节点相互独立：不共用迁移，也不从证据 outcome 推断。
+ * 报告数量门禁只认 `verified`；`confirmed` 不是 Fact 状态。
+ */
 export const FactVerificationStatus = z.enum([
   "unverified",
   "verifying",

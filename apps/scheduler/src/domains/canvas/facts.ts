@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { cursorForRow, decodeCursor, page } from "../../pagination.js";
+import { evaluateFactVerificationTransition } from "./fact-verification.js";
 import { FactListQuery, FactVerificationPatch } from "./fact-contract.js";
 
 type FactDatabase = typeof sql;
@@ -258,6 +259,18 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         FOR UPDATE`;
       if (!node) return { kind: "not_found" as const };
       if (node.node_type !== "fact") return { kind: "not_fact" as const };
+      const beforeStatus = String(node.verification_status);
+      const decision = evaluateFactVerificationTransition(beforeStatus, parsed.data.status);
+      if (!decision.ok) return { kind: "illegal" as const, error: decision.error, error_code: decision.error_code };
+      if (decision.idempotent) {
+        return {
+          kind: "ok" as const,
+          fact: await loadFactSummary(tx, id, nodeId),
+          projectId: String(node.project_id),
+          beforeStatus,
+          idempotent: true,
+        };
+      }
       const manualVerification = {
         note: parsed.data.note ?? null,
         actor,
@@ -273,7 +286,8 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         kind: "ok" as const,
         fact: await loadFactSummary(tx, id, nodeId),
         projectId: String(node.project_id),
-        beforeStatus: String(node.verification_status),
+        beforeStatus,
+        idempotent: false,
       };
     });
     if (result.kind === "not_found") {
@@ -282,14 +296,19 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
     if (result.kind === "not_fact") {
       return reply.code(409).send({ error: "仅 Fact 节点可人工验证", error_code: "FACT_NODE_REQUIRED" });
     }
-    await audit(req, {
-      action: "canvas.fact.verification",
-      projectId: result.projectId,
-      resourceType: "canvas_fact",
-      resourceId: nodeId,
-      before: { status: result.beforeStatus },
-      after: { status: parsed.data.status, note_present: parsed.data.note !== undefined },
-    });
+    if (result.kind === "illegal") {
+      return reply.code(409).send({ error: result.error, error_code: result.error_code });
+    }
+    if (!result.idempotent) {
+      await audit(req, {
+        action: "canvas.fact.verification",
+        projectId: result.projectId,
+        resourceType: "canvas_fact",
+        resourceId: nodeId,
+        before: { status: result.beforeStatus },
+        after: { status: parsed.data.status, note_present: parsed.data.note !== undefined },
+      });
+    }
     return { fact: result.fact };
   });
 }
