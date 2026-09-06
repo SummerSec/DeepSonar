@@ -13,6 +13,7 @@ const {
   persistableProjectRoleConfigModel,
   parseProjectImagePolicy,
   scrubIgnoredProjectRoleConfigIdentity,
+  scrubStoredProjectImagePolicy,
 } = await import("./application.js");
 
 function snapshotDb(input: {
@@ -63,6 +64,21 @@ test("scrubIgnoredProjectRoleConfigIdentity 只清空项目遗留镜像和 inher
   assert.deepEqual(result, { runtime_image_keys: 1, inherit_global_models: 1 });
   assert.equal(seen.length, 2);
   assert.equal(persistableProjectRoleConfigModel(parseProjectImagePolicy({}), "kept"), null);
+});
+
+test("dirty image_strategy and inherit_global role_runtime_images are physically removed", () => {
+  const dirty = { image_strategy: "whatever", role_runtime_images: { audit: "deepsonar-audit" }, rules: { hubEnabled: true } };
+  assert.equal(scrubStoredProjectImagePolicy(dirty), true);
+  assert.deepEqual(dirty, { rules: { hubEnabled: true } });
+  assert.equal(parseProjectImagePolicy(dirty).image_strategy, "inherit_global");
+
+  const inherit = { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-audit" } };
+  assert.equal(scrubStoredProjectImagePolicy(inherit), true);
+  assert.deepEqual(inherit, { image_strategy: "inherit_global" });
+
+  const managed = { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } };
+  assert.equal(scrubStoredProjectImagePolicy(managed), false);
+  assert.deepEqual(managed.role_runtime_images, { audit: "deepsonar-audit" });
 });
 
 test("inherit_global leftover project RoleConfig.model does not steal snapshot model", async () => {

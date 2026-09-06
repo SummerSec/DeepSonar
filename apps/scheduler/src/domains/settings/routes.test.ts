@@ -73,6 +73,27 @@ test("运行时护栏 PATCH 拒绝非法值，项目不能写 provisionTimeoutSe
   await app.close();
 });
 
+test("全局规则 PATCH 拒绝把 finding_protocol 写进 rules", async () => {
+  const app = Fastify({ logger: false });
+  registerSettingsRoutes(app);
+
+  const nested = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { finding_protocol: { mode: "hybrid" } } },
+  });
+  assert.equal(nested.statusCode, 400);
+  assert.match(nested.json<{ error: string }>().error, /invalid global settings rules/);
+
+  const leftoverMode = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { finding_protocol: { mode: "agent_choice" } },
+  });
+  assert.equal(leftoverMode.statusCode, 400);
+  await app.close();
+});
+
 test("全局规则 PATCH 拒绝已删除的验证别名", async () => {
   const app = Fastify({ logger: false });
   registerSettingsRoutes(app);

@@ -82,4 +82,5 @@ test("scheduler boot scrubs leftover project RoleConfig identity", () => {
   const boot = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(boot, /scrubIgnoredProjectRoleConfigIdentity\(sql\)/);
   assert.match(boot, /scrubLeftoverStoredRules\(sql\)/);
+  assert.match(boot, /scrubRedundantConfigSurface\(sql\)/);
 });

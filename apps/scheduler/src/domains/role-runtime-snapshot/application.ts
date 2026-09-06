@@ -46,7 +46,7 @@ export interface ProjectImagePolicy {
 
 const RUNTIME_IMAGE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,62}$/;
 
-/** 读取项目 JSON 中的镜像策略；缺省或脏值均安全回到全局继承。 */
+/** 读取项目 JSON 中的镜像策略；缺省 inherit_global。脏值由启动清扫删除，解析层暂按 inherit_global 以免中断已排队 Job。 */
 export function parseProjectImagePolicy(value: unknown): ProjectImagePolicy {
   const configValue = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -69,6 +69,24 @@ export function parseProjectImagePolicy(value: unknown): ProjectImagePolicy {
     }
   }
   return { image_strategy: strategy, role_runtime_images: Object.fromEntries(images) };
+}
+
+/** inherit_global 不保留 role_runtime_images；未知 image_strategy 物理删除。 */
+export function scrubStoredProjectImagePolicy(cfg: Record<string, unknown>): boolean {
+  let changed = false;
+  if (
+    Object.prototype.hasOwnProperty.call(cfg, "image_strategy")
+    && !PROJECT_IMAGE_STRATEGIES.includes(cfg.image_strategy as ProjectImageStrategy)
+  ) {
+    delete cfg.image_strategy;
+    changed = true;
+  }
+  const strategy = cfg.image_strategy === "project_managed" ? "project_managed" : "inherit_global";
+  if (strategy === "inherit_global" && Object.prototype.hasOwnProperty.call(cfg, "role_runtime_images")) {
+    delete cfg.role_runtime_images;
+    changed = true;
+  }
+  return changed;
 }
 
 /** 选择 Job 实际使用的镜像 key；项目托管缺省固定为系统 Base。 */

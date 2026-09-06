@@ -9,6 +9,8 @@ import {
   rulesForProject,
   scrubLeftoverRulesJson,
   scrubLeftoverStoredRules,
+  scrubRedundantConfigSurface,
+  stripFindingProtocolFromRules,
 } from "./core.js";
 import {
   dispatchSkipReason,
@@ -253,6 +255,7 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   assert.throws(() => parseConcurrencyRulesPatch({ autoVerifySeverities: ["info"] }), /minVerifySeverity/);
   assert.throws(() => parseConcurrencyRulesPatch({ hubWaitSeverities: ["low"] }), /minVerifySeverity/);
   assert.throws(() => parseConcurrencyRulesPatch({ AUTO_VERIFY_SEVERITIES: ["info"] }), /minVerifySeverity/);
+  assert.throws(() => parseConcurrencyRulesPatch({ finding_protocol: { mode: "hybrid" } }), /finding_protocol/);
 });
 
 test("verify scope only reads minVerifySeverity; leftover list aliases are ignored", async () => {
@@ -367,6 +370,66 @@ test("scrubLeftoverStoredRules updates global and project leftover rules", async
   assert.deepEqual(updates, ["global", "project:p1"]);
 });
 
+test("API rules projection strips finding_protocol", () => {
+  assert.deepEqual(
+    stripFindingProtocolFromRules({
+      minVerifySeverity: "high",
+      finding_protocol: { mode: "hybrid" },
+    }),
+    { minVerifySeverity: "high" },
+  );
+});
+
+test("scrubRedundantConfigSurface rewrites deleted aliases", async () => {
+  const updates: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM global_settings")) {
+      return [{ rules_json: { finding_protocol: { mode: "agent_choice" }, stallSec: 900 } }];
+    }
+    if (sql.includes("FROM projects")) {
+      return [{
+        id: "p1",
+        config_json: {
+          finding_protocol: { mode: "agent_choice" },
+          image_strategy: "whatever",
+          role_runtime_images: { audit: "deepsonar-audit" },
+        },
+      }];
+    }
+    if (sql.includes("FROM canvases")) {
+      return [{ id: "c1", target_json: { effective_finding_protocol: { mode: "agent_choice", source: "task" } } }];
+    }
+    if (sql.includes("FROM role_configs")) {
+      return [{ id: "rc1", runtime_knobs_json: { stall_sec: 1_200, jobTokenMaxRequests: 8 } }];
+    }
+    if (sql.includes("UPDATE global_settings")) {
+      updates.push("global");
+      assert.deepEqual(values[0], { finding_protocol: { mode: "hybrid" }, stallSec: 900 });
+      return [];
+    }
+    if (sql.includes("UPDATE projects")) {
+      updates.push("project");
+      assert.deepEqual(values[0], { finding_protocol: { mode: "hybrid" } });
+      return [];
+    }
+    if (sql.includes("UPDATE canvases")) {
+      updates.push("canvas");
+      assert.deepEqual(values[0], { effective_finding_protocol: { mode: "hybrid", source: "task" } });
+      return [];
+    }
+    if (sql.includes("UPDATE role_configs")) {
+      updates.push("role");
+      assert.deepEqual(values[0], { stallSec: 1_200, jobTokenMaxRequests: 8 });
+      return [];
+    }
+    throw new Error(`unexpected sql: ${sql}`);
+  }, { json: (value: unknown) => value });
+  const result = await scrubRedundantConfigSurface(db as never);
+  assert.deepEqual(result, { protocols: 3, imagePolicies: 1, roleKnobs: 1 });
+  assert.deepEqual(updates, ["global", "project", "canvas", "role"]);
+});
+
 test("scheduler boot and transfer persist leftover rules scrub", async () => {
   const { readFileSync } = await import("node:fs");
   const boot = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
@@ -375,8 +438,11 @@ test("scheduler boot and transfer persist leftover rules scrub", async () => {
   const settingsSource = readFileSync(new URL("./domains/settings/routes.ts", import.meta.url), "utf8");
   const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
   assert.match(boot, /scrubLeftoverStoredRules\(sql\)/);
+  assert.match(boot, /scrubRedundantConfigSurface\(sql\)/);
   assert.match(importSource, /scrubLeftoverRulesJson/);
+  assert.match(importSource, /rewriteFindingProtocolMode/);
   assert.match(platformSource, /scrubLeftoverRulesJson/);
+  assert.match(platformSource, /rewriteFindingProtocolMode/);
   assert.match(settingsSource, /LEFTOVER_RULE_ALIAS_KEYS/);
   assert.doesNotMatch(routesSource, /export \{ parseConcurrencyRulesPatch \}/);
   assert.doesNotMatch(routesSource, /export \{ RuntimeImageRegistryChannelBody \}/);

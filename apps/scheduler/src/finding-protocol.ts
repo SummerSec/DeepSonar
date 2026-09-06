@@ -1,10 +1,11 @@
-import type {
-  EffectiveFindingProtocol,
-  EmitFindingPayload,
-  FindingPayload,
-  FindingProtocolConfig,
-  FindingScoringProposal,
-  Severity,
+import {
+  EffectiveFindingProtocol as EffectiveFindingProtocolSchema,
+  type EffectiveFindingProtocol,
+  type EmitFindingPayload,
+  type FindingPayload,
+  type FindingProtocolConfig,
+  type FindingScoringProposal,
+  type Severity,
 } from "@deepsonar/shared-types";
 import type { Cvss3P1, Cvss4P0 } from "ae-cvss-calculator";
 import { createRequire } from "node:module";
@@ -63,6 +64,29 @@ export interface NormalizedFindingScoring {
 export interface NormalizedFindingProposal extends Omit<FindingPayload, "profile" | "scoring"> {
   profile: string;
   scoring?: NormalizedFindingScoring;
+}
+
+/** Historical `agent_choice` had the same decision as `hybrid`; frozen canvases still normalize. */
+export function canonicalizeFindingProtocolMode(mode: unknown): EffectiveFindingProtocol["mode"] | undefined {
+  if (mode === "fixed" || mode === "hybrid") return mode;
+  if (mode === "agent_choice") return "hybrid";
+  return undefined;
+}
+
+export function rewriteFindingProtocolMode(value: unknown): { next: unknown; changed: boolean } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { next: value, changed: false };
+  const raw = value as Record<string, unknown>;
+  if (raw.mode !== "agent_choice") return { next: value, changed: false };
+  return { next: { ...raw, mode: "hybrid" }, changed: true };
+}
+
+export function parseFrozenFindingProtocol(value: unknown): EffectiveFindingProtocol | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return undefined;
+  const mode = canonicalizeFindingProtocolMode((value as Record<string, unknown>).mode);
+  if (!mode) return undefined;
+  const parsed = EffectiveFindingProtocolSchema.safeParse({ ...(value as Record<string, unknown>), mode });
+  return parsed.success ? parsed.data : undefined;
 }
 
 function layerHasValues(layer: FindingProtocolConfig | undefined): boolean {

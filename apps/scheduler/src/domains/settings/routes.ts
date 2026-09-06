@@ -10,6 +10,7 @@ import {
   mergeGlobalRulesPatch,
   rulesForProject,
   scrubLeftoverRulesJson,
+  stripFindingProtocolFromRules,
 } from "../../core.js";
 import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
@@ -26,6 +27,7 @@ import {
   PROJECT_IMAGE_STRATEGIES,
   runtimeImageKeyForProjectPolicy,
   scrubIgnoredProjectRoleConfigIdentity,
+  scrubStoredProjectImagePolicy,
 } from "../role-runtime-snapshot/application.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 
@@ -55,6 +57,13 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
         message: `${key} 已删除，验证范围只认 minVerifySeverity`,
       });
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(rules, "finding_protocol")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["finding_protocol"],
+      message: "finding_protocol 不是规则字段，请使用顶层 finding_protocol",
+    });
   }
   for (const key of RULE_CONCURRENCY_KEYS) {
     if (!(key in rules)) continue;
@@ -236,13 +245,14 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const storedRules = scrubLeftoverRulesJson(((g?.rules_json ?? {}) ?? {})).rules;
     const findingProtocol = parseStoredFindingProtocolConfig(storedRules.finding_protocol);
+    const rules = stripFindingProtocolFromRules(storedRules);
     const activeRows = await sql`
       SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
              agent_snapshot_json->>'credential_provider' AS provider,
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;
     return {
-      rules: storedRules,
+      rules,
       effective_rules: await globalRules(sql),
       finding_protocol: findingProtocol ?? null,
       effective_finding_protocol: resolveFindingProtocol(findingProtocol),
@@ -295,7 +305,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
              COUNT(*)::int AS count
       FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY 1, 2`;
     return {
-      rules: merged,
+      rules: stripFindingProtocolFromRules(merged),
       effective_rules: await globalRules(sql),
       finding_protocol: parseStoredFindingProtocolConfig(merged.finding_protocol) ?? null,
       effective_finding_protocol: effectiveFindingProtocol,
@@ -363,7 +373,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
-      rules: scrubLeftoverRulesJson(cfg.rules ?? {}).rules,
+      rules: stripFindingProtocolFromRules(scrubLeftoverRulesJson(cfg.rules ?? {}).rules),
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
@@ -417,7 +427,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
           }
         }
       }
-      cfg.rules = scrubLeftoverRulesJson(nextRules).rules;
+      cfg.rules = stripFindingProtocolFromRules(scrubLeftoverRulesJson(nextRules).rules);
     }
     if (body.roles) {
       const roles = { ...((cfg.roles as Record<string, unknown>) ?? {}) };
@@ -434,6 +444,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       if (body.image_strategy === "inherit_global") delete cfg.role_runtime_images;
     }
     if (body.role_runtime_images !== undefined) cfg.role_runtime_images = body.role_runtime_images;
+    scrubStoredProjectImagePolicy(cfg);
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
@@ -488,7 +499,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
-      rules: scrubLeftoverRulesJson(cfg.rules ?? {}).rules,
+      rules: stripFindingProtocolFromRules(scrubLeftoverRulesJson(cfg.rules ?? {}).rules),
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,

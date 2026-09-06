@@ -6,6 +6,7 @@ export {
   roleIdentityForProjectPolicy,
   roleNameForJobType,
   scrubIgnoredProjectRoleConfigIdentity,
+  scrubStoredProjectImagePolicy,
   withRuntimeTestToolchainPolicy,
   PLATFORM_DEFAULT_AGENT_CLI,
   PLATFORM_DEFAULT_AGENT_MODEL,
