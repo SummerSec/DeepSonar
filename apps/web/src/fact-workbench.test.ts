@@ -205,9 +205,7 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   assert.match(banner, /已回复/);
   assert.match(banner, /hiddenIds/);
   assert.match(banner, /取消隐藏/);
-  assert.match(banner, /runtimeImageNotLocalIntervention/);
-  assert.match(banner, /去市场准备/);
-  assert.match(page, /imagesHref/);
+  assert.doesNotMatch(banner, /runtimeImageNotLocalIntervention|去市场准备|imagesHref/);
   assert.match(banner, /hideProcessed: isHidden \? prefs\.hideProcessed : true/);
   assert.match(banner, /aria-expanded/);
   const composer = source("HumanMessageComposer.tsx");

@@ -2,11 +2,6 @@ import { sql } from "../../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
 import {
-  assertFrozenRuntimeImageLocal,
-  RuntimeImageNotLocalError,
-  runtimeImageNotLocalCanvasBlock,
-} from "../../runtime-images.js";
-import {
   isHubRoundWithinBudget,
   shouldConsiderHubTrigger,
   shouldWakeEvidenceHub,
@@ -343,31 +338,6 @@ export function createHubOrchestrationApplication(
       canvasId,
       await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
     );
-    try {
-      await assertFrozenRuntimeImageLocal(snapshot as { runtime_image?: { image_ref?: string | null } }, {
-        roleName: "hub_reason",
-      });
-    } catch (error) {
-      if (error instanceof RuntimeImageNotLocalError) {
-        const block = runtimeImageNotLocalCanvasBlock(error.details);
-        const [{ next_x }] = await tx<[{ next_x: number }]>`
-          SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
-          WHERE canvas_id = ${canvasId}`;
-        await tx`
-          INSERT INTO canvas_nodes ${tx({
-            canvas_id: canvasId,
-            job_id: null,
-            node_type: "human",
-            title: block.title,
-            body_json: block as never,
-            x: next_x,
-            y: 300,
-            status: "open",
-          })}`;
-        return;
-      }
-      throw error;
-    }
     const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
     const hubPayload = { trigger, scheduling_purpose: "hub" };
     const [hubJob] = await tx`

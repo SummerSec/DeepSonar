@@ -244,14 +244,11 @@ test("readiness fixes without action keep the Scheduler href", () => {
   assert.equal(resolveReadinessFix({ href: "/settings/credentials", target: "credentials" }, projectScope)?.href, "/settings/credentials");
 });
 
-test("IntentLaunchRail surfaces local image identity and a prepare link", async () => {
+test("IntentLaunchRail no longer special-cases leftover local inspect failures", async () => {
   const { readFileSync } = await import("node:fs");
   const rail = readFileSync(new URL("./components/IntentLaunchRail.tsx", import.meta.url), "utf8");
   assert.match(rail, /hasLaunchWritePermission/);
-  assert.match(rail, /RUNTIME_IMAGE_NOT_LOCAL/);
-  assert.match(rail, /去市场准备/);
-  assert.match(rail, /runtime_image\.digest/);
-  assert.match(rail, /runtime_image\.version/);
+  assert.doesNotMatch(rail, /RUNTIME_IMAGE_NOT_LOCAL|去市场准备/);
 });
 
 test("ProjectsPage creates an empty project without hijacking new-project into a task rail", async () => {

@@ -34,7 +34,7 @@ import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
-import { assertFrozenRuntimeImageLocal, runtimeImageHttpError } from "../../runtime-images.js";
+import { runtimeImageHttpError } from "../../runtime-images.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
@@ -267,13 +267,12 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     }
 
     try {
-      const snapshot = await resolveAgentSnapshotForJob(
+      await resolveAgentSnapshotForJob(
         sql,
         id,
         "hub_reason",
         body.kind === "compose" ? body.seed_finding_ids ?? [] : [],
       );
-      await assertFrozenRuntimeImageLocal(snapshot);
     } catch (error) {
       const mapped = runtimeImageHttpError(error);
       if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
@@ -739,7 +738,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           stale.push(detail);
           continue;
         }
-        await assertFrozenRuntimeImageLocal(worker.agent_snapshot_json as Record<string, unknown>);
       }
       if (stale.length > 0) {
         return {
@@ -1007,7 +1005,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           seedFindings.map((seed) => seed.id),
         ),
       );
-      await assertFrozenRuntimeImageLocal(snapshot);
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态与定时门，保留用户任务内容

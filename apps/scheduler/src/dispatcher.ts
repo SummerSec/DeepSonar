@@ -19,7 +19,7 @@ import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_R
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { assertRuntimeImageAvailable, RuntimeImageNotReadyError, shouldInspectLocalRuntimeImage } from "./runtime-images.js";
+import { RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
@@ -810,11 +810,6 @@ async function runJob(jobId: string) {
       // Capability authentication remains disabled until `running`, but the
       // plaintext must exist before Docker creates immutable Config.Env.
       platformCapability = await preparePlatformCapability(jobId, snapshot);
-      // OpenSandbox 由 server 拉镜像，
-      // 合同/digest 在 provision 后重验，不能把本机缺层当成 Job 不可调度。
-      if (shouldInspectLocalRuntimeImage()) {
-        await assertRuntimeImageAvailable(runtimeImage);
-      }
     }
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
