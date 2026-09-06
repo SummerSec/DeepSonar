@@ -22,6 +22,14 @@ test("RoleConfig import rejects leftover and unknown agent_cli", () => {
   assert.throws(() => parseTransferredAgentCli("custom-cli", "RoleConfig review"), /未知 agent_cli/);
 });
 
+test("project and platform rules import physically scrub leftover keys", () => {
+  const importSource = readFileSync(new URL("./import.ts", import.meta.url), "utf8");
+  const platformSource = readFileSync(new URL("./platform.ts", import.meta.url), "utf8");
+  assert.match(importSource, /scrubLeftoverRulesJson/);
+  assert.match(platformSource, /scrubLeftoverRulesJson/);
+  assert.doesNotMatch(importSource, /cfg\.rules = \{ \.\.\.\(\(cfg\.rules as object\) \?\? \{\}\), \.\.\.rulesFile\.rules \}/);
+});
+
 test("project and platform RoleConfig import share the fail-closed CLI parser", () => {
   const importSource = readFileSync(new URL("./import.ts", import.meta.url), "utf8");
   const platformSource = readFileSync(new URL("./platform.ts", import.meta.url), "utf8");

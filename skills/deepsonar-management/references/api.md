@@ -6,7 +6,7 @@
 > - `GET /schema.md` — 本文件（仓库内副本）或运行时生成摘要
 
 Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
-认证：`Authorization: Bearer <deepsonar_token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
+认证：`Authorization: Bearer <session or API Token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
 **普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 

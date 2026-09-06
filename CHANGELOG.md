@@ -12,6 +12,7 @@
 - 删除无决策作用的兼容别名：`false_positive` 不再作为 Verify verdict 输入（只认 `confirmed|rework|needs_human`）；Credential 写入拒绝 leftover `allowed_model_ids`；Job/WS 实时流信封只保留 `items`；公共 `POST /jobs` 不再把 `audit_module` 映射为 `audit`。历史 Finding `verify_status=false_positive` 与导入投影仍可读（#359）。
 - 继续删除 leftover 第二真相：官方 audit 镜像不再回退 `DOCKER_IMAGE_AUDIT`；`BLOB_STORE` 只认 `fs|s3`；删除空 `docker-compose.online.yml`、空洞 verify/publish 转发函数，以及前端 `deepsonar_token` 静默迁移（#359）。
 - 导入 RoleConfig 不再静默写入 leftover `agent_cli`（缺省仍 `claude-code`，`codex`/`open-code`/未知 fail closed）；前端凭据保存不再静默剥离 leftover `allowed_model_ids`（#359）。
+- 规则 JSON 物理清扫已删除的 `autoVerifySeverities` / `hubWaitSeverities` / leftover CLI 并发键；PATCH 拒绝这些别名，`asCliLimits` 只忽略 leftover 键而不整表作废；路由 registrar 不再转发领域 schema（#359）。
 
 ### 修复
 

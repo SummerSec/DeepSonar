@@ -16,7 +16,7 @@ import { preheatManagedGateway } from "@deepsonar/runtime-sandbox";
 import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
 import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status.js";
-import { normalizePendingJobPriorities } from "./core.js";
+import { normalizePendingJobPriorities, scrubLeftoverStoredRules } from "./core.js";
 import { scrubIgnoredProjectRoleConfigIdentity } from "./domains/role-runtime-snapshot/index.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
 import { ensureDefaultAdmin } from "./users.js";
@@ -48,6 +48,12 @@ async function main() {
   if (scrubbed.runtime_image_keys > 0 || scrubbed.inherit_global_models > 0) {
     console.warn(
       `[boot] scrubbed leftover project RoleConfig identity: images=${scrubbed.runtime_image_keys}, inherit_global_models=${scrubbed.inherit_global_models}`,
+    );
+  }
+  const scrubbedRules = await scrubLeftoverStoredRules(sql);
+  if (scrubbedRules.global > 0 || scrubbedRules.projects > 0) {
+    console.warn(
+      `[boot] scrubbed leftover rules_json keys: global=${scrubbedRules.global}, projects=${scrubbedRules.projects}`,
     );
   }
   await bootstrapOfficialRuntimeImages();

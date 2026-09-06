@@ -24,9 +24,6 @@ import { registerTransferRoutes } from "./domains/transfer/routes.js";
 import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js";
 import { runtimeImageHttpError } from "./runtime-images.js";
 
-export { parseConcurrencyRulesPatch } from "./domains/settings/routes.js";
-export { RuntimeImageRegistryChannelBody } from "./domains/runtime-image/routes.js";
-
 export function registerRoutes(app: FastifyInstance) {
   app.setErrorHandler((error, _req, reply) => {
     const mapped = runtimeImageHttpError(error);

@@ -4,7 +4,13 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import { isProviderKnown, projectCredentialProvider, UNKNOWN_PROVIDER_ERROR } from "../../credentials.js";
-import { globalRules, mergeGlobalRulesPatch, rulesForProject } from "../../core.js";
+import {
+  globalRules,
+  LEFTOVER_RULE_ALIAS_KEYS,
+  mergeGlobalRulesPatch,
+  rulesForProject,
+  scrubLeftoverRulesJson,
+} from "../../core.js";
 import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
@@ -41,6 +47,15 @@ const GLOBAL_ONLY_RULE_KEYS = new Set([
 ]);
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "pi", "dsh"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
+  for (const key of LEFTOVER_RULE_ALIAS_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(rules, key)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [key],
+        message: `${key} 已删除，验证范围只认 minVerifySeverity`,
+      });
+    }
+  }
   for (const key of RULE_CONCURRENCY_KEYS) {
     if (!(key in rules)) continue;
     const value = rules[key];
@@ -219,7 +234,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
 
   app.get("/global-settings", async () => {
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const storedRules = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+    const storedRules = scrubLeftoverRulesJson(((g?.rules_json ?? {}) ?? {})).rules;
     const findingProtocol = parseStoredFindingProtocolConfig(storedRules.finding_protocol);
     const activeRows = await sql`
       SELECT COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
@@ -348,7 +363,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
-      rules: (cfg.rules ?? {}) as Record<string, unknown>,
+      rules: scrubLeftoverRulesJson(cfg.rules ?? {}).rules,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
@@ -402,7 +417,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
           }
         }
       }
-      cfg.rules = nextRules;
+      cfg.rules = scrubLeftoverRulesJson(nextRules).rules;
     }
     if (body.roles) {
       const roles = { ...((cfg.roles as Record<string, unknown>) ?? {}) };
@@ -473,7 +488,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
-      rules: (cfg.rules ?? {}) as Record<string, unknown>,
+      rules: scrubLeftoverRulesJson(cfg.rules ?? {}).rules,
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,

@@ -81,4 +81,5 @@ test("项目 RoleConfig 导入导出不会把遗留镜像列当作项目策略",
 test("scheduler boot scrubs leftover project RoleConfig identity", () => {
   const boot = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(boot, /scrubIgnoredProjectRoleConfigIdentity\(sql\)/);
+  assert.match(boot, /scrubLeftoverStoredRules\(sql\)/);
 });
