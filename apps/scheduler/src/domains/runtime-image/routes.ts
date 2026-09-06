@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config, managesHostDockerRuntime } from "../../config.js";
+import { isProjectScopedActor, PROJECT_SCOPE_FORBIDDEN } from "../../project-scope.js";
 import { projectCredentialMetadata } from "../../credentials.js";
 import { sql } from "../../db.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
@@ -81,8 +82,20 @@ const ProjectRuntimeImageBody = z.object({
   pin_policy: z.enum(["follow", "hold"]).optional(),
 });
 
+function denyProjectScopedCatalog(
+  req: { actor?: { projectId?: string | null } },
+  reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+  error = "project-scoped actors may not change the global runtime image catalog",
+): unknown | null {
+  if (!isProjectScopedActor(req.actor?.projectId)) return null;
+  return reply.code(403).send({ error, error_code: PROJECT_SCOPE_FORBIDDEN });
+}
+
 export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   // ---------- 可信运行时镜像目录 / 市场（P1-P3） ----------
+  // Platform-only mutations: catalog sync/apply/pull, import, digest, rescan,
+  // trust status, adopt-local. Project actors may only bind images on
+  // PUT /projects/:id/runtime-images/:imageId and read filtered usage.
 
   app.get("/runtime-images", async (req, reply) => {
     const query = req.query as { project_id?: string; search?: string };
@@ -157,12 +170,12 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.patch("/runtime-images/registry/channel", async (req, reply) => {
-    if (req.actor?.projectId) {
-      return reply.code(403).send({
-        error: "project-scoped actors may not modify the global runtime registry channel",
-        error_code: "PROJECT_SCOPE_FORBIDDEN",
-      });
-    }
+    const denied = denyProjectScopedCatalog(
+      req,
+      reply,
+      "project-scoped actors may not modify the global runtime registry channel",
+    );
+    if (denied) return denied;
     const parsed = RuntimeImageRegistryChannelBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({
@@ -228,6 +241,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.post("/runtime-images/registry/sync", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     try {
       const result = await syncOfficialRuntimeCatalog();
       await audit(req, {
@@ -248,6 +263,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
 
   /** 运维手动上传 runtime-image-registry.json，校验后写入市场（不依赖 GitHub 可达性） */
   app.post("/runtime-images/registry/apply", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     try {
       const body = req.body;
       // 允许直接贴清单对象，或包一层 { registry: ... }
@@ -276,6 +293,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.post("/runtime-images/registry/pull", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     try {
       const task = await startRuntimeImagePull();
       await audit(req, {
@@ -363,6 +382,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
    * fresh Docker ID before a trusted local-only version is written.
    */
   app.post("/runtime-images/:id([0-9a-fA-F-]{36})/adopt-local", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const body = LocalRuntimeImageAdoptBody.parse(req.body);
     if (config.runtime.openSandbox.kubernetes) {
@@ -518,6 +539,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
    * 此接口与启动 bootstrap 相同：只接受 @sha256 不可变引用，直接 trusted。
    */
   app.post("/runtime-images/:id/official-digest", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const body = OfficialRuntimeImageDigestBody.parse(req.body);
     const [image] = await sql`SELECT * FROM runtime_images WHERE id = ${id}`;
@@ -608,6 +631,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.post("/runtime-images/manual-digest", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     const body = ManualRuntimeImageDigestBody.parse(req.body);
     const digest = immutableDigest(body.image_ref);
     if (!digest) return reply.code(400).send({ error: "必须使用不可变引用 name@sha256:64hex" });
@@ -657,6 +682,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.post("/runtime-images/import", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     const body = RuntimeImageImportBody.parse(req.body);
     if (!config.images.isRegistryAllowed(body.image_ref)) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
@@ -724,6 +751,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.post("/runtime-image-versions/:id/rescan", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const [version] = await sql`
       UPDATE runtime_image_versions SET
@@ -738,6 +767,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.post("/runtime-image-versions/:id/status", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
     const { id } = req.params as { id: string };
     const body = RuntimeImageStatusBody.parse(req.body);
     if ((body.status === "rejected" || body.status === "revoked") && !body.reason) {
@@ -790,6 +821,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const [version] = await sql`SELECT id FROM runtime_image_versions WHERE id = ${id}`;
     if (!version) return reply.code(404).send({ error: "version not found" });
+    const actorProjectId = req.actor?.projectId ?? null;
     const jobs = await sql`
       SELECT j.id, j.project_id, p.name AS project_name, j.canvas_id, c.title AS canvas_title,
              j.type, j.status, j.created_at, j.finished_at,
@@ -798,16 +830,19 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       JOIN projects p ON p.id = j.project_id
       LEFT JOIN canvases c ON c.id = j.canvas_id
       WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
       ORDER BY j.created_at DESC LIMIT 1000`;
     const projects = await sql`
       SELECT DISTINCT p.id, p.name
       FROM jobs j JOIN projects p ON p.id = j.project_id
       WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR j.project_id = ${actorProjectId})
       ORDER BY p.name`;
     const findings = await sql`
       SELECT f.id, f.project_id, j.canvas_id, f.job_id, f.title, f.severity, f.verify_status, f.created_at
       FROM findings f JOIN jobs j ON j.id = f.job_id
       WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = ${id}
+        AND (${actorProjectId}::uuid IS NULL OR f.project_id = ${actorProjectId})
       ORDER BY f.created_at DESC LIMIT 1000`;
     return { version_id: id, projects, jobs, findings };
   });

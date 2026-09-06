@@ -230,6 +230,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 **鉴权（HTTP + WS，#38 已关）**：
 
 - `DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer（用户会话或 API Token + scope）。
+- **Token 生命周期不得提权（#403）**：`tokens:manage` 只能签发/列出/吊销/轮换调用者有效 scopes 的子集；非 `admin` 不能授予 `admin`。项目限定 actor 只能管理本项目 Token，不能把 `project_id` 置空或指向其他项目。
+- **项目 actor 写路径不信任 body/query 中的项目 UUID（#403）**：`POST /jobs` 的 `project_id` 必须等于 actor 项目，否则稳定 `PROJECT_MISMATCH` 且不建 Job/Canvas。全局 runtime-image catalog（sync/apply/pull/import/digest/rescan/status/adopt-local/channel）对项目 actor 一律 `PROJECT_SCOPE_FORBIDDEN`；`usage` 只返回本项目 Job/Finding。Transfer 的 `/exports/:id`、`/imports/:id` 先解析服务端归属；项目 actor 不能碰平台包，也不能 `create_new` / `merge_platform` 或把 `target_project_id` 指到其他项目。
 - 浏览器 WebSocket **不能**设自定义 Header：先 `POST /auth/ws-ticket`（`tasks:read`，绑定单 Job、短 TTL、一次性），再连 `/ws?job_id=&ticket=`（终端为 `/terminal-ws` + purpose `terminal`）。失败用 close code 区分 4401 鉴权 / 4403 权限 / 4409 已终态等；前端展示明确错误而非无限「等待事件」。
 - 实时流先 HTTP 补 `GET /jobs/:id/evidence/stream`（含运行中 tail），再订 WS；**禁止**把长期 token 打进 WS 查询日志。
 

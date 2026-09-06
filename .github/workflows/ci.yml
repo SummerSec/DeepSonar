@@ -323,6 +323,14 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:platform-api
 
+      - name: Authorization boundary unit
+        run: pnpm ci:unit:authz
+
+      - name: Token, job, image, and transfer authorization Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:authz-boundaries
+
       - name: Default human admin and account integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}

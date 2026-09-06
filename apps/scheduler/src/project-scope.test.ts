@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canvasScopeDecision, isUuid, projectScopeAllows } from "./project-scope.js";
+import {
+  canvasScopeDecision,
+  isProjectScopedActor,
+  isUuid,
+  PROJECT_MISMATCH,
+  projectScopeAllows,
+  resolveActorProjectId,
+} from "./project-scope.js";
 
 test("project scope allows same project and internal actors only", () => {
   assert.equal(projectScopeAllows(null, "project-a"), true);
   assert.equal(projectScopeAllows("project-a", "project-a"), true);
   assert.equal(projectScopeAllows("project-a", "project-b"), false);
+});
+
+test("project actors cannot aim a write at another project id", () => {
+  assert.equal(isProjectScopedActor("project-a"), true);
+  assert.equal(isProjectScopedActor(null), false);
+  assert.deepEqual(resolveActorProjectId("project-a", undefined), { ok: true, projectId: "project-a" });
+  assert.deepEqual(resolveActorProjectId("project-a", "project-a"), { ok: true, projectId: "project-a" });
+  assert.deepEqual(resolveActorProjectId("project-a", "project-b"), { ok: false, error_code: PROJECT_MISMATCH });
+  assert.deepEqual(resolveActorProjectId(null, "project-b"), { ok: true, projectId: "project-b" });
 });
 
 test("resource UUID validation rejects malformed route ids before SQL", () => {

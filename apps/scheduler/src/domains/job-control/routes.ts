@@ -17,6 +17,7 @@ import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionAr
 import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { runner } from "../../runtime.js";
+import { PROJECT_MISMATCH, resolveActorProjectId } from "../../project-scope.js";
 import { TaskSeedInputError } from "../../task-compose.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recoverCancelledDerivedJob } from "./recovery.js";
@@ -92,6 +93,14 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);
+    const scoped = resolveActorProjectId(req.actor?.projectId, body.project_id);
+    if (!scoped.ok) {
+      return reply.code(403).send({
+        error: `token 仅限项目 ${req.actor?.projectId}`,
+        error_code: PROJECT_MISMATCH,
+      });
+    }
+    const projectId = scoped.projectId ?? body.project_id;
     // `verify` remains a compatibility alias used by the runtime-image smoke
     // to inspect the governed Verify snapshot. It is still scheduler-owned
     // for priority/purpose, but unlike `verify_finding` it has no Finding
@@ -100,7 +109,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     if (systemJobTypes.has(body.type.trim().toLowerCase())) {
       return reply.code(409).send({ error: "scheduler-owned system Job types cannot be created through the public endpoint" });
     }
-    if (!isPublicJobTypeAllowed(body.type, await rolesForProject(sql, body.project_id))) {
+    if (!isPublicJobTypeAllowed(body.type, await rolesForProject(sql, projectId))) {
       return reply.code(409).send({ error: "role is not enabled for project" });
     }
     // Scheduling lanes are scheduler-owned.  A public caller may include
@@ -129,7 +138,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     let canvasId: string;
     try {
       canvasId = await ensureCanvasForTask({
-        projectId: body.project_id,
+        projectId,
         title: body.title ?? `${body.type} 任务`,
         target: { type: body.type, ...payload },
       });
@@ -140,7 +149,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       throw error;
     }
     const { job, duplicated } = await createJob({
-      projectId: body.project_id,
+      projectId,
       canvasId,
       type: body.type,
       payload,

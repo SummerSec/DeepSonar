@@ -171,6 +171,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /runtime-images/registry": "images:read",
   "PATCH /runtime-images/registry/channel": "images:manage",
   "POST /runtime-images/registry/sync": "images:manage",
+  "POST /runtime-images/registry/apply": "images:manage",
   "POST /runtime-images/registry/pull": "images:manage",
   "GET /runtime-images/registry/pull-status": "images:read",
   "POST /runtime-images/:id/detect-local": "images:read",
