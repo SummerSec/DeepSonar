@@ -189,8 +189,8 @@ if (!testDatabaseUrl) {
 
       // ----- P1 POST /jobs + existing /projects/:id compose/event hooks -----
       {
-        const jobsBefore = await sql`SELECT count(*)::int AS n FROM jobs`;
-        const canvasesBefore = await sql`SELECT count(*)::int AS n FROM canvases`;
+        const [jobsBefore] = await sql`SELECT count(*)::int AS n FROM jobs`;
+        const [canvasesBefore] = await sql`SELECT count(*)::int AS n FROM canvases`;
         const crossJob = await inject("POST", "/jobs", projectTok.headers, {
           project_id: otherProjectId,
           type: "explore",
@@ -198,8 +198,8 @@ if (!testDatabaseUrl) {
         });
         assert.equal(crossJob.statusCode, 403, crossJob.payload);
         assert.equal(JSON.parse(crossJob.payload).error_code, "PROJECT_MISMATCH");
-        const jobsAfter = await sql`SELECT count(*)::int AS n FROM jobs`;
-        const canvasesAfter = await sql`SELECT count(*)::int AS n FROM canvases`;
+        const [jobsAfter] = await sql`SELECT count(*)::int AS n FROM jobs`;
+        const [canvasesAfter] = await sql`SELECT count(*)::int AS n FROM canvases`;
         assert.equal(jobsAfter.n, jobsBefore.n);
         assert.equal(canvasesAfter.n, canvasesBefore.n);
 

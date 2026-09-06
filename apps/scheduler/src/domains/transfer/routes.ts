@@ -286,13 +286,14 @@ export function registerTransferRoutes(app: FastifyInstance): void {
               error_code: PROJECT_SCOPE_FORBIDDEN,
             });
           }
-          if (body.target_project_id && body.target_project_id !== req.actor!.projectId) {
+          const actorProjectId = req.actor!.projectId!;
+          if (body.target_project_id && body.target_project_id !== actorProjectId) {
             return reply.code(403).send({
-              error: `token 仅限项目 ${req.actor!.projectId}`,
+              error: `token 仅限项目 ${actorProjectId}`,
               error_code: PROJECT_MISMATCH,
             });
           }
-          body.target_project_id = req.actor!.projectId;
+          body.target_project_id = actorProjectId;
         }
 
         if (scope === "platform" || body.mode === "merge_platform") {
