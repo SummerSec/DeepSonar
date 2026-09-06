@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -712,7 +713,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql`DELETE FROM canvas_edges WHERE canvas_id = ${foreignCanvasId}`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${foreignCanvasId}`;
       await sql`DELETE FROM task_reports WHERE project_id = ${foreignProjectId}`;
@@ -721,7 +722,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${foreignProjectId}`;
-      await sql`DELETE FROM projects WHERE id = ${foreignProjectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [foreignProjectId]);
       await sql.end();
     }
   });

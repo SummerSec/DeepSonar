@@ -26,6 +26,7 @@ test("compose integration teardown deletes events before jobs", () => {
   assert.match(helper, /parent_job_id = NULL/);
   assert.match(helper, /finding_verification_rounds/);
   assert.ok(eventsAt >= 0 && eventsAt < jobsAt);
+  assert.match(helper, /deleteProjectsLeavingAuditShells/);
   assert.equal(source.split("wipeProjectComposeFixtures(").length - 1, 3);
 });
 
