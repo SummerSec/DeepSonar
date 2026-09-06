@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { filterStreamBlocks, recordsToStreamBlocks, reduceStreamItem, redactToolValue, streamItemKey, type StreamItem } from "./LiveStream.js";
+import { describeProcessStreamPage, filterStreamBlocks, recordsToStreamBlocks, reduceStreamItem, redactToolValue, streamItemKey, type StreamItem } from "./LiveStream.js";
 
 const item = (attempt_id: string, seq: number, delta: string): StreamItem => ({
   attempt_id,
@@ -61,6 +61,23 @@ test("tool search includes input, result, error, and exit fields", () => {
   assert.equal(filterStreamBlocks(blocks, "all", "needle").length, 1);
   assert.equal(filterStreamBlocks(blocks, "all", "warning").length, 1);
   assert.equal(filterStreamBlocks(blocks, "all", "7").length, 1);
+});
+
+test("process stream notices report unavailable and unpersisted windows", () => {
+  assert.equal(
+    describeProcessStreamPage({ visibility: "unavailable" }),
+    "本副本看不到已确认的过程证据（未共享 BLOB_DIR，或 Job 在其他 Scheduler）",
+  );
+  assert.equal(describeProcessStreamPage({ unpersisted: true }), "仍有未落盘窗口，不保证零丢失");
+  assert.equal(describeProcessStreamPage({}), null);
+});
+
+test("live reconnect catch-up and 4409 archive handoff stay on evidence HTTP", () => {
+  const source = readFileSync(new URL("./LiveStream.tsx", import.meta.url), "utf8");
+  assert.match(source, /api\.jobStreamPage\(jobId/);
+  assert.match(source, /event\.code === 4409/);
+  assert.match(source, /jobStreamPage\(jobId, \{ after: cursor, limit: 50 \}\)/);
+  assert.match(source, /describeProcessStreamPage/);
 });
 
 test("live stream pages only read canonical items", () => {

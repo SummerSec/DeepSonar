@@ -260,7 +260,9 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
         setStreamCursor(v.next_cursor);
         streamCursorRef.current = v.next_cursor;
         setStreamHasMore(v.has_more);
-        setStreamTruncated(Boolean(v.truncated || v.gap));
+        setStreamTruncated(Boolean(v.truncated || v.gap || v.visibility === "unavailable" || v.unpersisted));
+        if (v.visibility === "unavailable") setStreamError("本副本看不到已确认的过程证据（未共享 BLOB_DIR，或 Job 在其他 Scheduler）");
+        else if (v.unpersisted) setStreamError("仍有未落盘窗口，不保证零丢失");
       }).catch((e) => alive && setStreamError(String(e)));
       api.jobEventsPage(jobId, { limit: 50 }).then((v) => {
         if (!alive) return;
@@ -325,7 +327,9 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                 setStreamCursor(s.next_cursor);
               }
               setStreamHasMore(s.has_more);
-              setStreamTruncated((before) => before || Boolean(s.truncated || s.gap));
+              setStreamTruncated((before) => before || Boolean(s.truncated || s.gap || s.visibility === "unavailable" || s.unpersisted));
+              if (s.visibility === "unavailable") setStreamError("本副本看不到已确认的过程证据（未共享 BLOB_DIR，或 Job 在其他 Scheduler）");
+              else if (s.unpersisted) setStreamError("仍有未落盘窗口，不保证零丢失");
             }).catch((e) => alive && setStreamError(String(e)));
             api.jobEventsPage(jobId, { limit: 50 }).then((s) => alive && setJobEvents((before) => mergeRefreshedPage(s.items, before))).catch(() => {});
           }
@@ -358,8 +362,14 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
       setStreamCursor(next.next_cursor);
       streamCursorRef.current = next.next_cursor;
       setStreamHasMore(next.has_more);
-      setStreamTruncated((before) => before || Boolean(next.truncated || next.gap));
-      setStreamError(null);
+      setStreamTruncated((before) => before || Boolean(next.truncated || next.gap || next.visibility === "unavailable" || next.unpersisted));
+      setStreamError(
+        next.visibility === "unavailable"
+          ? "本副本看不到已确认的过程证据（未共享 BLOB_DIR，或 Job 在其他 Scheduler）"
+          : next.unpersisted
+            ? "仍有未落盘窗口，不保证零丢失"
+            : null,
+      );
     } catch (e) {
       setStreamError(String(e));
     }

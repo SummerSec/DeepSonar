@@ -1102,7 +1102,15 @@ const OPS: Op[] = [
       path: { type: "string", description: "manifest 中的 Session 归档相对路径" },
     },
   },
-  { method: "get", path: "/jobs/{id}/evidence/stream", summary: "读取历史 normalized stream", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/stream",
+    summary: "读取已确认的过程流",
+    description:
+      "只读本机 BLOB_DIR 上的 evidence NDJSON/manifest。信封为 items；source 恒为 evidence。本副本看不到文件时 visibility=unavailable，不把空页当成零丢失。未落盘窗口标 unpersisted。stream-bus 不是补读源，也不从过程流重放控制副作用。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+  },
   {
     method: "patch",
     path: "/jobs/{id}/priority",

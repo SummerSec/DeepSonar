@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **当前同步状态（2026-09-06）**：根 README 与架构入口已按本地库/Web 主路径校正；Plane 仅为可选集成。#400 补齐运营指标、查询平面、事件归属与导入续跑契约；#359 的剩余工作拆为 #386–#390，未完成项以这些 Issue 和 DESIGN.md §11 为准。
+> **当前同步状态（2026-09-06）**：根 README 与架构入口已按本地库/Web 主路径校正；Plane 仅为可选集成。#400 补齐运营指标、查询平面、事件归属与导入续跑契约；#387 / #389 / #390 / #399 已合入 main。#359 的剩余工作拆为 #386–#390，未完成项以这些 Issue 和 DESIGN.md §11 为准。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
@@ -58,15 +58,15 @@
 
 ## 当前开放演进（#359）
 
-[#359](https://github.com/SummerSec/DeepSonar/issues/359) 是设计债总追踪单，当前仍开放；下面五个子任务是现行范围。它们是待验证的整改项，不代表对应能力已经完成。
+[#359](https://github.com/SummerSec/DeepSonar/issues/359) 是设计债总追踪单，当前仍开放。#387、#389 与 #390 已合入 main。其余子任务是待验证的整改项，不代表对应能力已经完成。
 
 | Issue | 优先级 | 范围 |
 |------|--------|------|
-| [#390](https://github.com/SummerSec/DeepSonar/issues/390) | P1 | 将 DSH 方言处理归位到适配边界 |
+| [#390](https://github.com/SummerSec/DeepSonar/issues/390) | P1 | **已合入**：DSH 方言归位到适配边界 |
+| [#389](https://github.com/SummerSec/DeepSonar/issues/389) | P2 | **已合入**：DSH/Pi 解码三类契约与钉死版本夹具 |
+| [#387](https://github.com/SummerSec/DeepSonar/issues/387) | P2 | **已合入**：保留 Fact 证据信任态并收口与 Finding 的边界 |
 | [#386](https://github.com/SummerSec/DeepSonar/issues/386) | P2 | 收敛通用配置面，清除无决策作用的重复配置 |
-| [#387](https://github.com/SummerSec/DeepSonar/issues/387) | P2 | 评估并收敛 Fact 验证生命周期 |
 | [#388](https://github.com/SummerSec/DeepSonar/issues/388) | P2 | 明确实时流持久化边界，解决重启与跨副本缺口 |
-| [#389](https://github.com/SummerSec/DeepSonar/issues/389) | P2 | 明确并补齐 DSH/Pi 解码范围 |
 
 关闭 #359 前，需要逐项完成这些子任务的验收，或记录有产品、代码和验证证据支持的保留结论，并同步回写 DESIGN.md 与相关契约文档。
 
@@ -86,7 +86,7 @@
 
 | 主题 | 事实 |
 |------|------|
-| #38 实时流 WS 鉴权 | **已关**；`ws-ticket` + 运行中 stream tail，见 DESIGN §8 |
+| #38 实时流 WS 鉴权 | **已关**；`ws-ticket` + 运行中 stream tail。#388 收口补读边界，见 DESIGN §8 |
 | #39 画布 soft-load / delta | **已关**；见 DESIGN §11 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |

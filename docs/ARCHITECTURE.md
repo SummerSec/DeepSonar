@@ -419,6 +419,10 @@ Agent 输入输出是无界数据（单次运行原始事件流可达数十 MB�
   文件的 `sha256=null`，`finalized_at=null`，stream 端点仍按既有读取/解压/记录总预算提供
   过程证据。若沙箱已销毁，manifest 的 `capture_error` 明示 Session 归档不可恢复，
   `session_id=null`，不根据 Attempt 身份伪造文件。
+- 过程流三职责（#388）：`events` 是语义账本，evidence 是过程证据，`stream-bus` 是非权威
+  投递缓存。补读只认本机 `BLOB_DIR`（`BLOB_STORE=s3` 不存过程证据）。本副本看不到文件时
+  `visibility=unavailable`；未落盘窗口标 `unpersisted`。不从过程流重放控制副作用，也不把
+  空页当成零丢失。跨副本 file-tail 未做。
 
 ### 6.3 索引与搜索策略
 

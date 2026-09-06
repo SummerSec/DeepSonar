@@ -558,16 +558,18 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
   app.get("/jobs/:id/evidence/stream", async (req, reply) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cursor?: string; after?: string; limit?: string; tail?: string };
-    const [job] = await sql`SELECT id, status FROM jobs WHERE id = ${id}`;
+    const [job] = await sql`SELECT id, status, transcript_uri FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "job not found" });
     const after = q.cursor ?? q.after ?? null;
+    const streamable = STREAMABLE_JOB_STATUSES.has(String(job.status));
     let result;
     try {
       result = await readNormalizedStreamPage(id, {
         after,
         limit: pageLimit(q.limit),
         tail: q.tail === "1" || q.tail === "true",
-        live: STREAMABLE_JOB_STATUSES.has(String(job.status)),
+        live: streamable,
+        expectLocal: streamable || Boolean(job.transcript_uri),
       });
     } catch (error) {
       if (error instanceof CursorError) {
