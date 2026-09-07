@@ -36,6 +36,7 @@ export const QUERY_PLANE_CONTRACTS: readonly QueryPlaneContract[] = [
       "GET /canvases/:id",
       "GET /findings/:id",
       "GET /projects/:id/findings/summary",
+      "GET /projects/:id/reports",
     ],
     lifecycle: "mutable snapshot of the latest committed row",
     append_only: false,

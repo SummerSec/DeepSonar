@@ -1593,6 +1593,30 @@ export interface FindingReport {
   updated_at: string;
 }
 
+export interface ProjectFindingReportItem {
+  finding_id: string;
+  title: string;
+  severity: string | null;
+  verify_status: string;
+  report: FindingReport | null;
+}
+
+export interface ProjectReportTaskGroup {
+  canvas_id: string;
+  title: string;
+  kind: "standard" | "compose";
+  status: string;
+  created_at: string;
+  archived_at: string | null;
+  task_reports: TaskReport[];
+  finding_reports: ProjectFindingReportItem[];
+}
+
+export interface ProjectReportAggregation {
+  project_id: string;
+  tasks: ProjectReportTaskGroup[];
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: authHeaders() });
   if (!res.ok) {
@@ -2280,6 +2304,8 @@ export const api = {
   /** 任务报告（§8）：404 返回服务端完成门阻塞原因 */
   canvasReport: (canvasId: string) => getTaskReport(`/canvases/${canvasId}/report`),
   canvasReports: (canvasId: string) => get<TaskReport[]>(`/canvases/${canvasId}/reports`),
+  projectReports: (projectId: string, opts?: { canvas_id?: string }) =>
+    get<ProjectReportAggregation>(`/projects/${projectId}/reports${qs({ canvas_id: opts?.canvas_id })}`),
   canvasReportAvailability: (canvasId: string) =>
     get<TaskReportAvailability>(`/canvases/${canvasId}/report/availability`),
   retryReport: (canvasId: string) =>

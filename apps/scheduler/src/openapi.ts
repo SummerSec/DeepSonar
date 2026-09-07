@@ -621,6 +621,17 @@ const OPS: Op[] = [
     },
   },
   {
+    method: "get",
+    path: "/projects/{id}/reports",
+    summary: "项目报告聚合（任务总报告版本 + 各 confirmed Finding 独立报告）",
+    description: "只读编组已有 task_reports 与 finding_reports；不派发、不改版本。可选 canvas_id 收窄到单个任务。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    query: {
+      canvas_id: { type: "string", format: "uuid", description: "只返回该任务画布的报告编组" },
+    },
+  },
+  {
     method: "patch",
     path: "/projects/{id}",
     summary: "更新项目",
