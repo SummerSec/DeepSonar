@@ -472,7 +472,6 @@ async function collectTasks(
           severity: f.severity,
           location: f.location,
           summary: f.summary,
-          suggest_verify: f.suggest_verify,
           verify_status: f.verify_status,
           raw_json: f.raw_json,
           created_at: f.created_at,
@@ -486,7 +485,7 @@ async function collectTasks(
     const jobIds = jobs.map((j) => j.id as string);
     // 限制事件量
     const events = await sql`
-      SELECT job_id, event_id, job_seq, type, payload_json, created_at
+      SELECT job_id, event_id, job_seq, attempt_id, type, payload_json, created_at
       FROM events WHERE job_id = ANY(${jobIds})
       ORDER BY id LIMIT 100000`;
     files.push({
@@ -496,6 +495,7 @@ async function collectTasks(
           source_job_id: e.job_id,
           event_id: e.event_id,
           job_seq: e.job_seq,
+          attempt_id: e.attempt_id ?? null,
           type: e.type,
           payload_json: projectJobEventPayload(e.payload_json),
           created_at: e.created_at,

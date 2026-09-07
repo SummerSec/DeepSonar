@@ -16,7 +16,7 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("./db.js");
-    const { FIXED_PRIORITY, fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
+    const { fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
     const { buildReportInput, maybeDispatchReport, refreshTaskReport } = await import("./report.js");
     const {
       canvasFindingsConverged,
@@ -47,8 +47,8 @@ if (!testDatabaseUrl) {
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, priority, payload_json, agent_snapshot_json)
-        VALUES (${originJobId}, ${projectId}, ${canvasId}, 'audit_module', 'succeeded',
-          ${fixedPriorityForJob({ type: 'audit_module', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
+        VALUES (${originJobId}, ${projectId}, ${canvasId}, 'audit', 'succeeded',
+          ${fixedPriorityForJob({ type: 'audit', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
       const [findingNode] = await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'finding', 'missing evidence finding', 'pending', ${sql.json({})})
@@ -80,8 +80,8 @@ if (!testDatabaseUrl) {
         id: originJobId,
         project_id: projectId,
         canvas_id: canvasId,
-        type: "audit_module",
-        priority: fixedPriorityForJob({ type: "audit_module", purpose: "discovery" }),
+        type: "audit",
+        priority: fixedPriorityForJob({ type: "audit", purpose: "discovery" }),
       };
       await sql.begin(async (tx) => maybeTriggerHub(tx as unknown as typeof sql, dummyJob));
       const [{ first_hub_count }] = await sql`
@@ -147,21 +147,25 @@ if (!testDatabaseUrl) {
         followupDepth: 2,
         priorityBase: 0,
       });
-      assert.ok(qualified?.jobId);
-      const [eligible] = await sql`
-        SELECT verify_job_id, requirements_json FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
-      assert.equal(eligible.verify_job_id, qualified?.jobId);
-      assert.equal((eligible.requirements_json as Record<string, unknown>).eligibility, "eligible");
-      const [verifyJob] = await sql`SELECT type, priority, payload_json FROM jobs WHERE id = ${qualified?.jobId}`;
-      assert.equal(verifyJob.type, "verify_finding");
-      assert.equal(verifyJob.priority, FIXED_PRIORITY.verifyHigh);
-      assert.equal((verifyJob.payload_json as Record<string, unknown>).verification_eligibility, "eligible");
-      const frozenFinding = (verifyJob.payload_json as { finding?: Record<string, unknown> }).finding ?? {};
-      assert.deepEqual(Object.keys(frozenFinding).sort(), ["artifact_refs", "id", "location"]);
-      assert.equal(frozenFinding.id, findingId);
-      assert.equal("title" in frozenFinding, false);
-      assert.equal("summary" in frozenFinding, false);
-      assert.equal("severity" in frozenFinding, false);
+      assert.equal(qualified, null);
+      const [closed] = await sql`
+        SELECT verify_job_id, status, final_outcome, requirements_json
+        FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
+      assert.equal(closed.verify_job_id, null);
+      assert.equal(closed.status, "confirmed");
+      assert.equal(closed.final_outcome, "confirmed");
+      assert.equal((closed.requirements_json as Record<string, unknown>).close_path, "fact_first");
+      const [confirmedFinding] = await sql`SELECT verify_status, raw_json FROM findings WHERE id = ${findingId}`;
+      assert.equal(confirmedFinding.verify_status, "confirmed");
+      const gate = ((confirmedFinding.raw_json as Record<string, unknown>).verification_state as Record<string, unknown>).gate as Record<string, unknown>;
+      assert.equal(gate.result, "passed");
+      assert.equal((await sql`SELECT COUNT(*)::int AS n FROM jobs WHERE finding_id = ${findingId} AND type = 'verify_finding'`)[0].n, 0);
+      const [audit] = await sql`
+        SELECT action, result, after_json FROM audit_logs
+        WHERE resource_id = ${findingId} AND action = 'finding.verify_gate'
+        ORDER BY id DESC LIMIT 1`;
+      assert.equal(audit.result, "ok");
+      assert.equal((audit.after_json as Record<string, unknown>).result, "passed");
 
       lowCanvasId = `verify-eligibility-low-${randomUUID()}`;
       const lowOriginJobId = randomUUID();
@@ -178,8 +182,8 @@ if (!testDatabaseUrl) {
         VALUES (${lowCanvasId}, 'root', 'root', 'active', ${sql.json({})})`;
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, priority, payload_json, agent_snapshot_json)
-        VALUES (${lowOriginJobId}, ${projectId}, ${lowCanvasId}, 'audit_module', 'succeeded',
-          ${fixedPriorityForJob({ type: 'audit_module', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
+        VALUES (${lowOriginJobId}, ${projectId}, ${lowCanvasId}, 'audit', 'succeeded',
+          ${fixedPriorityForJob({ type: 'audit', purpose: 'discovery' })}, ${sql.json({})}, ${sql.json(snapshot)})`;
       const [lowFindingNode] = await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${lowCanvasId}, 'finding', 'below threshold finding', 'open', ${sql.json({})})
@@ -226,9 +230,9 @@ if (!testDatabaseUrl) {
         id: lowOriginJobId,
         project_id: projectId,
         canvas_id: lowCanvasId,
-        type: "audit_module",
+        type: "audit",
         followup_depth: 999,
-        priority: fixedPriorityForJob({ type: "audit_module", purpose: "discovery" }),
+        priority: fixedPriorityForJob({ type: "audit", purpose: "discovery" }),
       }, lowFinding as Record<string, unknown>);
       assert.deepEqual(
         await settleCanvasFindingsAtGuardrail(sql, lowCanvasId, "max_hub_rounds"),
@@ -325,7 +329,7 @@ if (!testDatabaseUrl) {
         await tx`UPDATE jobs SET parent_job_id = NULL WHERE canvas_id = ${canvasId}`;
         await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
         await tx`DELETE FROM canvases WHERE id = ${canvasId}`;
-        await tx`DELETE FROM projects WHERE id = ${projectId}`;
+        // createVerifyRound 写 append-only finding.verify_gate 审计，项目壳必须保留。
       });
     }
     await sql.end({ timeout: 5 });

@@ -18,8 +18,8 @@ Job snapshots pin exact `version_id` + `content_sha256`. Switching storage backe
 
 | `BLOB_STORE` | Meaning | Multi-node Scheduler |
 |--------------|---------|----------------------|
-| `fs` (default; aliases: `local`, `file`) | Local directory under `BLOB_DIR` | Needs shared disk or sticky single writer |
-| `s3` (aliases: `minio`, `object`) | Any **S3-compatible** API | Recommended for distributed deploy |
+| `fs` (default) | Local directory under `BLOB_DIR` | Needs shared disk or sticky single writer |
+| `s3` | Any **S3-compatible** API | Recommended for distributed deploy |
 
 DeepSonar does **not** lock to MinIO or AWS. Any service that speaks S3 (`PutObject` / `GetObject` / `HeadObject`) works:
 
@@ -126,7 +126,7 @@ fake 模式不使用也不预拉该 helper。官方 helper 由 Release 与 sched
 
 ## Security notes
 
-- Shared mounts remain **read-only** in the sandbox; Agent publish still goes through control MCP + Scheduler  
+- Shared mounts remain **read-only** in the sandbox; Agent publish still goes through the Job control API + Scheduler  
 - Blob keys are validated (`shared-assets/sha256/…` only); path traversal is rejected  
 - Do not put long-lived cloud keys into RoleConfig or Agent env; configure BlobStore only on the Scheduler host  
 

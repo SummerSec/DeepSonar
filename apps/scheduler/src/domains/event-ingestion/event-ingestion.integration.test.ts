@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -73,7 +74,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${foreignOriginJobId}, ${foreignProjectId}, ${foreignCanvasId}, 'audit_module', 'succeeded',
+        ${foreignOriginJobId}, ${foreignProjectId}, ${foreignCanvasId}, 'audit', 'succeeded',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -87,14 +88,14 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${jobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${jobId}, ${projectId}, ${canvasId}, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${legacyJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${legacyJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -104,7 +105,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${repointJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${repointJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     const [repointNode] = await sql<{ id: string }[]>`
@@ -152,7 +153,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${multiCanvasJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${multiCanvasJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -164,7 +165,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${conflictingCanvasJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${conflictingCanvasJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -174,7 +175,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${reportOnlyJobId}, ${projectId}, NULL, 'audit_module', 'running',
+        ${reportOnlyJobId}, ${projectId}, NULL, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -184,7 +185,7 @@ if (!testDatabaseUrl) {
       INSERT INTO jobs (
         id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
       ) VALUES (
-        ${reportConflictJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+        ${reportConflictJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
         ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
       )`;
     await sql`
@@ -657,7 +658,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
         ) VALUES (
-          ${terminalJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+          ${terminalJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
           ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
         )`;
       const terminalEventId = randomUUID();
@@ -712,7 +713,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql`DELETE FROM canvas_edges WHERE canvas_id = ${foreignCanvasId}`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${foreignCanvasId}`;
       await sql`DELETE FROM task_reports WHERE project_id = ${foreignProjectId}`;
@@ -721,7 +722,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${foreignProjectId}`;
-      await sql`DELETE FROM projects WHERE id = ${foreignProjectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [foreignProjectId]);
       await sql.end();
     }
   });

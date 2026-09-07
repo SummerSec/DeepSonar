@@ -55,7 +55,6 @@ Scheduler 的 `/host-disk`，仅供 Node `statfs` 水位检查。rootless Docker
 | `docker-compose.real.yml` | real：挂载 docker.sock |
 | `docker-compose.yml` | 独立开发库（`pnpm db:up`） |
 | `ensure-postgres.mjs` | `pnpm db:up:deploy`：开发态改连 prod Postgres |
-| `docker-compose.online.yml` | 空兼容层，勿依赖 |
 | `Dockerfile.*` | 平台服务与 Agent 运行时 |
 | `runtime-image-registry.json` | 官方 Agent 镜像清单（Release 回写） |
 | `.env.example` | 环境变量模板（勿提交真实 `.env` / `master.key`） |

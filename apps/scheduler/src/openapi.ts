@@ -522,6 +522,55 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/dashboard/ops",
+    summary: "态势运营指标（P1/P2 服务端契约）",
+    description:
+      "只读运营聚合，不替代 GET /dashboard/overview。snapshot 走 current 平面（Finding severity/disposition/verify 分布、高风险未闭环、项目/任务覆盖、并发水位）；throughput 走 history 平面（近 7 日 Asia/Shanghai 终态成功率、耗时、角色对比、失败原因）。成功率分母为 succeeded|failed|timeout|orphan|cancelled；waiting_human 不算失败。confirmed_vuln 不是高风险未闭环。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": {
+        description: "运营指标",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["generated_at", "calendar_timezone", "query_planes", "totals", "findings", "jobs"],
+              properties: {
+                generated_at: { type: "string", format: "date-time" },
+                calendar_timezone: { type: "string", enum: ["Asia/Shanghai"] },
+                query_planes: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["snapshot", "throughput"],
+                  properties: {
+                    snapshot: { type: "string", enum: ["current"] },
+                    throughput: { type: "string", enum: ["history"] },
+                  },
+                },
+                totals: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "integer", minimum: 0 },
+                    tasks: { type: "integer", minimum: 0 },
+                    jobs: { type: "integer", minimum: 0 },
+                    findings: { type: "integer", minimum: 0 },
+                  },
+                },
+                findings: { type: "object" },
+                jobs: { type: "object" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
     path: "/dashboard/usage",
     summary: "用量账本看板",
     description:
@@ -569,6 +618,17 @@ const OPS: Op[] = [
     tags: ["Findings"],
     query: {
       canvas_id: { type: "string", description: "逗号分隔的来源画布 UUID，收窄聚合范围" },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/reports",
+    summary: "项目报告聚合（任务总报告版本 + 各 confirmed Finding 独立报告）",
+    description: "只读编组已有 task_reports 与 finding_reports；不派发、不改版本。可选 canvas_id 收窄到单个任务。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    query: {
+      canvas_id: { type: "string", format: "uuid", description: "只返回该任务画布的报告编组" },
     },
   },
   {
@@ -842,6 +902,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/canvases/{id}/facts/{nodeId}/verification",
     summary: "人工更新 Fact 验证态",
+    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。",
     scope: "jobs:control",
     tags: ["Tasks"],
     body: {
@@ -859,6 +920,10 @@ const OPS: Op[] = [
         additionalProperties: false,
         required: ["fact"],
         properties: { fact: FactSummarySchema },
+      },
+      "409": {
+        description: "非 Fact 节点或非法迁移（如 rejected→verified）",
+        content: { "application/json": { schema: ErrorSchema } },
       },
     },
   },
@@ -947,7 +1012,7 @@ const OPS: Op[] = [
         type: {
           type: "string",
           description:
-            "Registered public role name. Public POST rejects scheduler-owned hub_reason, hub, verify_finding, and report (409). verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
+            "Registered public role name. Public POST rejects scheduler-owned hub_reason, verify_finding, and report (409). leftover audit_module / hub aliases are not current identities. verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
         },
         title: { type: "string" },
         payload: { type: "object", additionalProperties: true },
@@ -955,6 +1020,32 @@ const OPS: Op[] = [
         timeout_sec: { type: "integer" },
         stall_sec: { type: "integer", minimum: 0, description: "本 Job 产出停滞窗口；0 关闭。优先于角色/项目/平台。" },
         max_requests: { type: "integer", minimum: 0, description: "本 Job Token 请求上限；0 不限制。" },
+      },
+    },
+    responses: {
+      "409": {
+        description: "运行镜像尚未准备完成时返回稳定 runtime_image_not_ready，可轮询 pull-status；不是 500 HANDLER_FAILED",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["error", "error_code"],
+              properties: {
+                error: { type: "string" },
+                error_code: { type: "string", enum: ["runtime_image_not_ready"] },
+                image_key: { type: "string", nullable: true },
+                readiness: { type: "string", enum: ["ready", "preparing", "unavailable", "error"] },
+                preparing: { type: "boolean" },
+                task_id: { type: "string", nullable: true },
+                checked_at: { type: "string", format: "date-time" },
+                poll: {
+                  type: "object",
+                  properties: { path: { type: "string", enum: ["/runtime-images/registry/pull-status"] } },
+                },
+              },
+            },
+          },
+        },
       },
     },
   },
@@ -966,7 +1057,29 @@ const OPS: Op[] = [
     tags: ["Jobs"],
     query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
   },
-  { method: "get", path: "/jobs/{id}", summary: "Job 详情（含事件）", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}",
+    summary: "Job 详情（含事件）",
+    description:
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/events",
+    summary: "Job 语义事件分页",
+    description:
+      "history 平面：accepted 语义事件按 (created_at, id) 追加分页；含 attempt_id（导入历史可空）。迟到事件不入账本。不是 live 旁路，不能当作实时流。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      cursor: { type: "string" },
+      after: { type: "string" },
+      limit: { type: "integer", minimum: 1 },
+    },
+  },
   {
     method: "get",
     path: "/jobs/{id}/evidence",
@@ -1000,7 +1113,15 @@ const OPS: Op[] = [
       path: { type: "string", description: "manifest 中的 Session 归档相对路径" },
     },
   },
-  { method: "get", path: "/jobs/{id}/evidence/stream", summary: "读取历史 normalized stream", scope: "tasks:read", tags: ["Jobs"] },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/stream",
+    summary: "读取已确认的过程流",
+    description:
+      "只读本机 BLOB_DIR 上的 evidence NDJSON/manifest。信封为 items；source 恒为 evidence。本副本看不到文件时 visibility=unavailable，不把空页当成零丢失。未落盘窗口标 unpersisted。stream-bus 不是补读源，也不从过程流重放控制副作用。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+  },
   {
     method: "patch",
     path: "/jobs/{id}/priority",
@@ -1019,7 +1140,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}/resume",
     summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",
     description:
-      "仅 failed/timeout/orphan/waiting_human。先按当前 RoleConfig/Credential/项目策略解析受治理运行身份；agent_cli/model/upstream_model/credential/runtime adapter/image digest 等身份漂移或当前配置无法解析时返回 409 SNAPSHOT_STALE，并提示调用 rerun-current。成功时保留画布和旧 Attempt/effect，清理执行元数据并原子转 pending。",
+      "仅 failed/timeout/orphan/waiting_human。导入时由活动状态归档的 cancelled Job 返回 409 JOB_IMPORTED_READONLY，不可续跑。可恢复的导入 Job 仍须过当前治理 admission；身份漂移或当前配置无法解析时返回 409 SNAPSHOT_STALE，并提示调用 rerun-current。成功时保留画布和旧 Attempt/effect，清理执行元数据并原子转 pending。响应含 provenance。",
     scope: "jobs:control",
     tags: ["Jobs"],
   },
@@ -1028,7 +1149,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}/rerun-current",
     summary: "按当前配置重新执行（同 Job、新 Attempt、保留画布）",
     description:
-      "仅 failed/timeout/orphan/waiting_human。持有 Dispatcher admission lock，并按 Canvas→Job 加锁；复用当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻 agent_snapshot_json，再原子转 pending。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。",
+      "仅 failed/timeout/orphan/waiting_human。导入 cancelled（活动归档）返回 409 JOB_IMPORTED_READONLY。可恢复的导入 Job 按当前治理完整重冻后再入队，不恢复历史 token/沙箱/密钥。持有 Dispatcher admission lock，并按 Canvas→Job 加锁。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。响应含 provenance。",
     scope: "jobs:control",
     tags: ["Jobs"],
   },
@@ -1560,7 +1681,7 @@ const OPS: Op[] = [
     summary: "获取静态注册表及官方环境覆盖的最新清单",
     scope: "images:read",
     tags: ["Runtime Images"],
-    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 selected_channel=github|dockerhub|aliyun-acr、source=remote|bundled、fallback、error（脱敏）和 checked_at 元数据。selected_channel 由平台全局设置决定，不接受 query、env 或请求体覆盖。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
+    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 selected_channel=github|dockerhub|aliyun-acr、source=remote|bundled、fallback、error（脱敏）、checked_at 与按 image_key 关联的 image_status（readiness/preparing/error_code/task_id/phase，操作员可见 immutable_ref）。selected_channel 由平台全局设置决定，不接受 query、env 或请求体覆盖。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
     responses: {
       "200": {
         description: "注册表清单与平台选中的官方分发通道",
@@ -1578,6 +1699,25 @@ const OPS: Op[] = [
                 fallback: { type: "boolean" },
                 error: { type: "string", nullable: true },
                 checked_at: { type: "string", format: "date-time" },
+                image_status: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["image_key", "readiness", "preparing", "checked_at", "phase"],
+                    properties: {
+                      image_key: { type: "string" },
+                      immutable_ref: { type: "string", nullable: true },
+                      readiness: { type: "string", enum: ["ready", "preparing", "unavailable", "error"] },
+                      preparing: { type: "boolean" },
+                      error_code: { type: "string", nullable: true },
+                      error: { type: "string", nullable: true },
+                      checked_at: { type: "string", format: "date-time" },
+                      task_id: { type: "string", nullable: true },
+                      phase: { type: "string" },
+                    },
+                  },
+                },
               },
             },
           },
@@ -1645,7 +1785,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/sync",
     summary: "同步当前部署内置镜像市场文件",
-    description: "重新读取并校验当前部署内的注册表文件与环境变量覆盖，幂等同步官方产品和版本到本地数据库；不会联网获取任意 URL。",
+    description: "重新读取并校验当前部署内的注册表文件与环境变量覆盖，幂等同步官方产品和版本到本地数据库；不会联网获取任意 URL。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
   },
@@ -1653,7 +1793,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/pull",
     summary: "异步拉取同步后的远程不可变镜像",
-    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；默认每个官方产品只拉最新一条可用版本（历史 trusted digest 保留给 pin/Job 快照，不批量预热）。缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。",
+    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；默认每个官方产品只拉最新一条可用版本（历史 trusted digest 保留给 pin/Job 快照，不批量预热）。缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     responses: {
@@ -1667,9 +1807,54 @@ const OPS: Op[] = [
     method: "get",
     path: "/runtime-images/registry/pull-status",
     summary: "查询运行时镜像异步拉取状态",
-    description: "返回当前 Scheduler 单实例内存任务；服务重启后返回 idle，不持久化任务。",
+    description: "返回当前或最近一次持久化的拉取任务（queued/running/succeeded/failed/interrupted）。Scheduler 重启把 in-flight 标为 interrupted（error_code=scheduler_restarted），不自动 resume；无历史时返回 idle。条目可按 image_key / immutable ref、task_id、phase、error_code 与时间戳关联。",
     scope: "images:read",
     tags: ["Runtime Images"],
+    responses: {
+      "200": {
+        description: "当前或最近一次拉取任务；无历史时为 idle",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["task_id", "status", "phase", "total", "completed", "items", "checked_at"],
+              properties: {
+                task_id: { type: "string", nullable: true },
+                purpose: { type: "string" },
+                status: { type: "string", enum: ["idle", "queued", "running", "succeeded", "failed", "interrupted"] },
+                phase: { type: "string" },
+                started_at: { type: "string", format: "date-time", nullable: true },
+                finished_at: { type: "string", format: "date-time", nullable: true },
+                interrupted_at: { type: "string", format: "date-time", nullable: true },
+                interrupt_reason: { type: "string", nullable: true },
+                error_code: { type: "string", nullable: true },
+                error: { type: "string", nullable: true },
+                total: { type: "integer" },
+                completed: { type: "integer" },
+                checked_at: { type: "string", format: "date-time" },
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["image_key", "image_ref", "status"],
+                    properties: {
+                      image_key: { type: "string" },
+                      image_ref: { type: "string" },
+                      status: { type: "string", enum: ["queued", "running", "succeeded", "failed"] },
+                      phase: { type: "string" },
+                      error: { type: "string", nullable: true },
+                      error_code: { type: "string", nullable: true },
+                      started_at: { type: "string", format: "date-time", nullable: true },
+                      finished_at: { type: "string", format: "date-time", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   {
     method: "post",
@@ -1723,6 +1908,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/import",
     summary: "导入第三方 OCI 镜像到隔离区",
+    description: "平台级目录写入。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
@@ -1761,7 +1947,14 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "post", path: "/runtime-image-versions/{id}/rescan", summary: "将镜像版本重新送入准入扫描", scope: "images:manage", tags: ["Runtime Images"] },
+  {
+    method: "post",
+    path: "/runtime-image-versions/{id}/rescan",
+    summary: "将镜像版本重新送入准入扫描",
+    description: "平台级准入操作。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+  },
   {
     method: "post",
     path: "/runtime-image-versions/{id}/status",
@@ -1777,7 +1970,14 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/runtime-image-versions/{id}/usage", summary: "反向查询使用该镜像版本的 Job、项目与 Finding 数量", scope: "images:read", tags: ["Runtime Images"] },
+  {
+    method: "get",
+    path: "/runtime-image-versions/{id}/usage",
+    summary: "反向查询使用该镜像版本的 Job、项目与 Finding 数量",
+    description: "平台管理员看全局 usage；项目限定 actor 只返回自身项目的 Job/项目/Finding 元数据。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+  },
   {
     method: "put",
     path: "/projects/{id}/runtime-images/{imageId}",
@@ -2055,11 +2255,19 @@ const OPS: Op[] = [
   },
 
   // tokens
-  { method: "get", path: "/tokens", summary: "API Token 列表", scope: "tokens:manage", tags: ["Tokens"] },
+  {
+    method: "get",
+    path: "/tokens",
+    summary: "API Token 列表",
+    description: "仅返回调用者可以管理的 Token。项目限定 actor 只看见本项目且 scopes 不超过自身的 Token。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
   {
     method: "post",
     path: "/tokens",
     summary: "创建 API Token（明文仅返回一次）",
+    description: "scopes 必须是调用者有效 scopes 的子集；非管理员不能授予 admin。项目限定 actor 只能创建本项目 Token，忽略或拒绝空/跨项目 project_id（403 SCOPE_EXCEEDS_ACTOR / PROJECT_MISMATCH）。",
     scope: "tokens:manage",
     tags: ["Tokens"],
     body: {
@@ -2073,8 +2281,22 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "post", path: "/tokens/{id}/revoke", summary: "吊销 Token", scope: "tokens:manage", tags: ["Tokens"] },
-  { method: "post", path: "/tokens/{id}/rotate", summary: "轮换 Token", scope: "tokens:manage", tags: ["Tokens"] },
+  {
+    method: "post",
+    path: "/tokens/{id}/revoke",
+    summary: "吊销 Token",
+    description: "按项目归属与 scope 子集过滤；跨项目 403 PROJECT_MISMATCH，超出调用者权限 403 SCOPE_EXCEEDS_ACTOR。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
+  {
+    method: "post",
+    path: "/tokens/{id}/rotate",
+    summary: "轮换 Token",
+    description: "沿用旧 Token 的 scope/project，权限不会扩大。跨项目或超出调用者权限分别返回 PROJECT_MISMATCH / SCOPE_EXCEEDS_ACTOR。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
 
   // audit
   { method: "get", path: "/audit-logs", summary: "审计日志", scope: "admin", tags: ["Admin"] },
@@ -2620,7 +2842,7 @@ export function buildSchemaSummary(): Record<string, unknown> {
     version: "0.0.1",
     base_url: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
     auth: {
-      header: "Authorization: Bearer <deepsonar_token>",
+      header: "Authorization: Bearer <session or API Token>",
       required_when: "DEEPSONAR_AUTH_REQUIRED=true",
       scopes: [...ALL_SCOPES],
       exempt: [

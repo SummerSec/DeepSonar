@@ -10,7 +10,7 @@ import {
   projectCredentialProvider,
   validateCredentialRoleConfigBinding,
 } from "../credentials.js";
-import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson } from "../core.js";
 import {
   ROLE_COLOR_ADVISORY_KEY,
   normalizeRoleUiColor,
@@ -18,6 +18,7 @@ import {
 } from "../role-colors.js";
 import { sql } from "../db.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import { rewriteFindingProtocolMode } from "../finding-protocol.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
   buildManifestSource,
@@ -32,7 +33,7 @@ import {
   type Manifest,
   type PackFile,
 } from "./pack.js";
-import { filterEnvVars, parseTransferredDshTaskMode } from "./sanitize.js";
+import { filterEnvVars, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
 
 export const PLATFORM_FORMAT = "deepsonar-platform-export";
 export const PLATFORM_FORMAT_VERSION = "1.0";
@@ -442,10 +443,13 @@ export async function applyPlatformImport(
       if (rulesFile?.rules) {
         const [g] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
         const current = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
-        const merged =
+        const merged = scrubLeftoverRulesJson(
           policy === "keep_target"
             ? { ...rulesFile.rules, ...current }
-            : { ...current, ...rulesFile.rules };
+            : { ...current, ...rulesFile.rules },
+        ).rules;
+        const protocol = rewriteFindingProtocolMode(merged.finding_protocol);
+        if (protocol.changed) merged.finding_protocol = protocol.next;
         await tx`UPDATE global_settings SET rules_json = ${tx.json(merged as never)}, updated_at = now() WHERE id = 'global'`;
         summary.global_rules = 1;
       }
@@ -565,7 +569,7 @@ export async function applyPlatformImport(
         const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
         if (!role) continue;
 
-        const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+        const agentCli = parseTransferredAgentCli(rc.agent_cli, `全局 RoleConfig ${roleName}`);
         const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `全局 RoleConfig ${roleName}`);
         const model = typeof rc.model === "string" && rc.model ? rc.model : null;
         const rawContextWindowTokens = rc.context_window_tokens ?? null;

@@ -56,7 +56,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控
 
 同一画布产生新 Fact/Finding 时，数据库 `NOTIFY` 唤醒调度器；调度器使用 `Agent.attach(...).sendMessage(...)` 给仍在运行的其他 Agent CLI 追加一条增量通知。首次 prompt 仍是完整任务，追加消息只携带提交后的新画布数据。
 
-Job 控制 API-only 契约冒烟（文件名保留历史命名）：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts`。
+Job 控制 API-only 契约冒烟：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-api.ts`。
 画布增量消息冒烟（需本地 PostgreSQL）：`pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-canvas-updates.ts`。
 
 ## CI P0 门禁（`.github/workflows/ci.yml`）
@@ -67,7 +67,7 @@ Chrome/OpenHarmony 专项镜像检查不在核心 workflow 中：分别由 `.git
 
 | 脚本 | 覆盖 |
 |---|---|
-| `test-control-mcp.ts` | Job 控制 API-only 契约、静态 Skill、冻结权限与 OpenAPI 投影 |
+| `test-control-api.ts` | Job 控制 API-only 契约、静态 Skill、冻结权限与 OpenAPI 投影 |
 | `test-roles-api.py` | 角色注册表 / RoleConfig |
 | `test-hub-loop.py` | Hub→Audit→Finding→Verify→complete |
 | `test-local-project-api.py` | 项目/任务/事件/重试/归档 |
@@ -75,4 +75,4 @@ Chrome/OpenHarmony 专项镜像检查不在核心 workflow 中：分别由 `.git
 | `test-runtime-images-api.py` | 镜像目录、隔离导入、审批门禁、项目启用与 Job digest 冻结 |
 
 环境变量：`DEEPSONAR_BASE`（默认 `http://127.0.0.1:3100`）、`DEEPSONAR_ADMIN_TOKEN`、`DEEPSONAR_HUB_SMOKE_TIMEOUT`。
-本地快捷：`pnpm ci:smoke:mcp`（历史命令名，现验证 Job 控制 API-only 契约） / `ci:smoke:roles` / `ci:smoke:hub` / `ci:smoke:projects` / `ci:smoke:auth`。
+本地快捷：`pnpm ci:smoke:control-api` / `ci:smoke:roles` / `ci:smoke:hub` / `ci:smoke:projects` / `ci:smoke:auth`。

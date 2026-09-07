@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   PLATFORM_DEFAULT_AGENT_CLI,
@@ -11,7 +12,9 @@ import {
 } from "./application.js";
 
 test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain policy", () => {
-  assert.equal(roleNameForJobType("audit_module"), "audit");
+  assert.equal(roleNameForJobType("audit_module"), "audit_module");
+  assert.equal(roleNameForJobType("hub"), "hub");
+  assert.equal(roleNameForJobType("hub_reason"), "hub_reason");
   assert.equal(roleNameForJobType("verify_finding"), "verify");
   assert.equal(roleNameForJobType("report"), "report");
   assert.equal(PLATFORM_DEFAULT_AGENT_CLI, "claude-code");
@@ -33,6 +36,9 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
     /Mobile device protocols/,
   );
   assert.equal(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit"), "custom");
+  const source = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /warnIgnoredLegacyAgentDefaults|legacy AGENT_PROVIDER/);
+  assert.doesNotMatch(source, /jobType === "audit_module"\) return "audit"/);
 });
 
 test("项目镜像策略按全局继承与项目托管分别选择镜像", () => {

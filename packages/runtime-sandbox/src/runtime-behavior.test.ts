@@ -7,14 +7,12 @@ import {
   mapCliEvent,
   redactToolTelemetry,
   redactRuntimeSecrets,
-  DEFAULT_SEMANTIC_TOOL_EVENTS,
   CLI_SESSION_RESUME_MAX_ATTEMPTS,
   CLI_SESSION_RESUME_BASE_DELAY_MS,
   CLI_SESSION_RESUME_MAX_DELAY_MS,
   classifyCliSessionResumeError,
   cliSessionResumeDelayMs,
   createSemanticToolState,
-  discardPendingSemanticTools,
   skillMaterializationPath,
   materializationPathCollisions,
   normalizeRuntimeErrorDetails,
@@ -347,12 +345,10 @@ test("a clean process exit without a structured terminal result is a runner fail
 });
 
 test("plain-final output synthesizes only a normalized successful result", () => {
-  const observedSemanticEvents: Record<string, unknown>[] = [];
   const result = normalizePlainFinalOutput(
     "  final answer from dsh\r\n",
     "provider warning\n",
     0,
-    (event) => observedSemanticEvents.push(event),
   );
   assert.equal(result.text, "final answer from dsh");
   assert.equal(result.stderr, "provider warning\n");
@@ -361,7 +357,6 @@ test("plain-final output synthesizes only a normalized successful result", () =>
     { type: "run.completed", text: "final answer from dsh" },
     { type: "run.settled" },
   ]);
-  assert.deepEqual(observedSemanticEvents, []);
 });
 
 test("plain-final output fails closed when the completion gate is unsatisfied", () => {
@@ -369,7 +364,6 @@ test("plain-final output fails closed when the completion gate is unsatisfied", 
     "final answer from dsh",
     "",
     0,
-    undefined,
     { adapterId: "dsh", completionGate: false },
   );
   assert.equal(result.error, "AGENT_CLI_COMPLETION_GATE_UNSATISFIED: dsh");
@@ -384,7 +378,6 @@ test("plain-final output rejects an empty successful stdout", () => {
     " \r\n",
     "provider diagnostic",
     0,
-    undefined,
     { adapterId: "dsh", completionGate: true },
   );
   assert.equal(result.error, "AGENT_CLI_PLAIN_OUTPUT_EMPTY: dsh");
@@ -396,10 +389,10 @@ test("plain-final output rejects an empty successful stdout", () => {
 
 test("plain-final output is bounded at 1 MiB and preserves stderr on failure", () => {
   assert.throws(
-    () => normalizePlainFinalOutput("x".repeat(1024 * 1024 + 1), "diagnostic", 0, () => {}),
+    () => normalizePlainFinalOutput("x".repeat(1024 * 1024 + 1), "diagnostic", 0),
     /AGENT_CLI_PLAIN_OUTPUT_TOO_LARGE/u,
   );
-  const failed = normalizePlainFinalOutput("partial", "fatal diagnostic", 17, () => {});
+  const failed = normalizePlainFinalOutput("partial", "fatal diagnostic", 17);
   assert.equal(failed.text, "partial");
   assert.equal(failed.stderr, "fatal diagnostic");
   assert.equal(failed.events.at(-1)?.type, "run.failed");
@@ -474,7 +467,8 @@ test("CLI 同会话恢复退避有界且最多三次", () => {
   assert.deepEqual([1, 2, 3, 4, 99].map(cliSessionResumeDelayMs), [1_000, 2_000, 4_000, 4_000, 4_000]);
 });
 
-test("an incomplete control tool call never releases deferred semantic state", () => {
+test("forged control MCP tool calls never become semantic events", () => {
+  const events: Record<string, unknown>[] = [];
   const state = createSemanticToolState();
   const started = mapCliEvent({
     type: "assistant",
@@ -486,13 +480,19 @@ test("an incomplete control tool call never releases deferred semantic state", (
         input: { summary: "terminal proposal" },
       }],
     },
-  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   assert.deepEqual(started.semanticEvents, []);
-  assert.equal(state.pendingToolUses.size, 1);
+  assert.equal(started.warnings[0]?.code, "unknown_control_tool");
+  assert.equal(events.length, 0);
 
-  const terminal = mapCliEvent({ type: "result", subtype: "success", result: "ordinary text" }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  const released = mapCliEvent({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "incomplete-done", is_error: false, content: "ok" }] },
+  }, (event) => events.push(event), state);
+  assert.deepEqual(released.semanticEvents, []);
+  const terminal = mapCliEvent({ type: "result", subtype: "success", result: "ordinary text" }, () => {}, state);
   assert.deepEqual(terminal.semanticEvents, []);
-  assert.equal(state.pendingToolUses.size, 1);
+  assert.doesNotMatch(JSON.stringify({ started, released, events }), /terminal proposal/);
 });
 
 test("restricted network ownership accepts Docker and Podman inspect shapes", () => {
@@ -803,15 +803,15 @@ test("Claude partial stream thinking and text deltas normalize without duplicati
   mapCliEvent({
     type: "stream_event",
     event: { type: "message_start", message: { id: "message-1" } },
-  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, emit, state);
   mapCliEvent({
     type: "stream_event",
     event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "先看证据" } },
-  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, emit, state);
   mapCliEvent({
     type: "stream_event",
     event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "结论" } },
-  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, emit, state);
   const full = mapCliEvent({
     type: "assistant",
     message: {
@@ -821,7 +821,7 @@ test("Claude partial stream thinking and text deltas normalize without duplicati
         { type: "text", text: "结论" },
       ],
     },
-  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, emit, state);
   assert.deepEqual(full.semanticEvents, []);
   assert.deepEqual(events, [
     { type: "reasoning.delta", delta: "先看证据" },
@@ -836,7 +836,7 @@ test("complete thinking blocks remain compatible and absent/malformed stream thi
   mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "thinking", thinking: "完整思考" }, { type: "text", text: "回答" }] },
-  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, emit, state);
   assert.deepEqual(events, [
     { type: "reasoning.delta", delta: "完整思考" },
     { type: "text.delta", delta: "回答" },
@@ -846,20 +846,20 @@ test("complete thinking blocks remain compatible and absent/malformed stream thi
   const noThinking = mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "text", text: "只有回答" }] },
-  }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, createSemanticToolState());
+  }, emit, createSemanticToolState());
   assert.deepEqual(noThinking.warnings, []);
   assert.deepEqual(events, [{ type: "text.delta", delta: "只有回答" }]);
 
-  const malformed = mapCliEvent({ type: "stream_event", event: { type: "content_block_delta", delta: null } }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  const malformed = mapCliEvent({ type: "stream_event", event: { type: "content_block_delta", delta: null } }, emit, state);
   assert.deepEqual(malformed.semanticEvents, []);
   assert.equal(malformed.warnings[0]?.code, "malformed_runtime_event");
-  const unknown = mapCliEvent({ type: "stream_event", event: { type: "future_delta", thinking: "do not fabricate" } }, emit, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  const unknown = mapCliEvent({ type: "stream_event", event: { type: "future_delta", thinking: "do not fabricate" } }, emit, state);
   assert.deepEqual(unknown.semanticEvents, []);
   assert.equal(unknown.warnings[0]?.code, "unknown_runtime_event");
   assert.doesNotMatch(JSON.stringify(events), /do not fabricate/);
 });
 
-test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
+test("伪造控制 MCP 成功或失败都不释放语义事件，也不泄露输入", () => {
   const events: Record<string, unknown>[] = [];
   const state = createSemanticToolState();
   const pending = mapCliEvent({
@@ -872,136 +872,26 @@ test("控制 tool_use 仅在成功 tool_result 后释放语义事件", () => {
         input: { title: "事实", description: "Bearer supersecret" },
       }],
     },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   assert.equal(pending.semanticEvents.length, 0);
+  assert.equal(pending.warnings[0]?.code, "unknown_control_tool");
   const released = mapCliEvent({
     type: "user",
     message: { content: [{ type: "tool_result", tool_use_id: "call-1", is_error: false, content: "ok" }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.equal(released.semanticEvents.length, 1);
-  assert.deepEqual(released.semanticEvents[0], {
-    v: 1,
-    event_id: released.semanticEvents[0]?.event_id,
-    type: "fact",
-    payload: { title: "事实", description: "Bearer supersecret" },
-  });
-  assert.match(String(released.semanticEvents[0]?.event_id), /^[0-9a-f-]{36}$/);
-  assert.deepEqual(events[0], {
-    type: "tool.call.started",
-    toolName: "mcp__deepsonar-control__emit_fact",
-    callId: events[0]?.callId,
-    inputShape: { kind: "object", field_count: 2 },
-  });
-  assert.match(String(events[0]?.callId), /^control-[0-9a-f]{24}$/);
-  assert.deepEqual(events[1], {
-    type: "tool.call.completed",
-    callId: events[0]?.callId,
-    toolName: "mcp__deepsonar-control__emit_fact",
-    isError: false,
-  });
-  assert.doesNotMatch(JSON.stringify(events), /supersecret/);
-});
+  }, (event) => events.push(event), state);
+  assert.equal(released.semanticEvents.length, 0);
+  assert.deepEqual(events, []);
+  assert.doesNotMatch(JSON.stringify({ pending, released }), /supersecret/);
 
-test("工具错误不会释放事件，修正后的新 callId 成功只释放一次且结果重放幂等", () => {
-  const state = createSemanticToolState();
-  const failedCall = {
+  const failed = mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: "failed-call", name: "mcp__deepsonar-control__emit_progress", input: { message: "bad" } }] },
-  };
-  assert.equal(mapCliEvent(failedCall, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
-  const failedResult = {
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: "failed-call", is_error: true, content: "invalid" }] },
-  };
-  assert.equal(mapCliEvent(failedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
-  assert.equal(mapCliEvent(failedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
-
-  const correctedCall = {
-    type: "assistant",
-    message: { content: [{ type: "tool_use", id: "corrected-call", name: "mcp__deepsonar-control__emit_progress", input: { message: "good" } }] },
-  };
-  assert.equal(mapCliEvent(correctedCall, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
-  const correctedResult = {
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: "corrected-call", is_error: false, content: "ok" }] },
-  };
-  const released = mapCliEvent(correctedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.equal(released.semanticEvents.length, 1);
-  assert.equal(released.semanticEvents[0]?.type, "progress");
-  assert.equal(mapCliEvent(correctedResult, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state).semanticEvents.length, 0);
-  assert.equal(state.pendingToolUses.size, 0);
+  }, () => {}, createSemanticToolState());
+  assert.equal(failed.semanticEvents.length, 0);
+  assert.equal(failed.warnings[0]?.code, "unknown_control_tool");
 });
 
-test("tool_result 缺省 is_error 视为成功，畸形标记 fail-closed 并告警", () => {
-  const missingState = createSemanticToolState();
-  mapCliEvent({
-    type: "assistant",
-    message: { content: [{ type: "tool_use", id: "missing-flag", name: "mcp__deepsonar-control__emit_progress", input: { message: "ok" } }] },
-  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, missingState);
-  const missingResult = mapCliEvent({
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: "missing-flag" }] },
-  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, missingState);
-  assert.equal(missingResult.semanticEvents.length, 1);
-  assert.deepEqual(missingResult.warnings, []);
-
-  for (const [index, is_error] of ["false", null, 0].entries()) {
-    const id = `malformed-flag-${index}`;
-    const state = createSemanticToolState();
-    mapCliEvent({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", id, name: "mcp__deepsonar-control__emit_progress", input: { message: "ok" } }] },
-    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-    const malformed = mapCliEvent({
-      type: "user",
-      message: { content: [{ type: "tool_result", tool_use_id: id, is_error }] },
-    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-    assert.equal(malformed.semanticEvents.length, 0);
-    assert.equal(malformed.warnings[0]?.code, "malformed_control_tool_result");
-    assert.doesNotMatch(JSON.stringify(malformed.warnings), /secret|Bearer/);
-  }
-});
-
-test("pending 控制调用有上限且终态清理告警不包含输入内容", () => {
-  const state = createSemanticToolState(1);
-  const first = mapCliEvent({
-    type: "assistant",
-    message: { content: [{ type: "tool_use", id: "pending-one", name: "mcp__deepsonar-control__emit_fact", input: { description: "Bearer supersecret" } }] },
-  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.equal(first.semanticEvents.length, 0);
-  const overflow = mapCliEvent({
-    type: "assistant",
-    message: { content: [{ type: "tool_use", id: "pending-two", name: "mcp__deepsonar-control__emit_fact", input: { description: "another-secret" } }] },
-  }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.equal(overflow.semanticEvents.length, 0);
-  assert.equal(overflow.warnings[0]?.code, "control_tool_pending_limit");
-  assert.doesNotMatch(JSON.stringify(overflow.warnings), /supersecret|another-secret/);
-  const warnings: Array<{ code: string; detail?: string }> = [];
-  discardPendingSemanticTools(state, (warning) => warnings.push(warning));
-  assert.equal(state.pendingToolUses.size, 0);
-  assert.equal(warnings[0]?.code, "control_tool_pending_discarded");
-  assert.doesNotMatch(JSON.stringify(warnings), /supersecret|another-secret/);
-});
-
-test("流重放时同一成功 callId 派生相同 event_id", () => {
-  const line = {
-    type: "assistant",
-    message: { content: [{ type: "tool_use", id: "replayed-call", name: "mcp__deepsonar-control__emit_fact", input: { title: "事实", description: "证据" } }] },
-  };
-  const firstState = createSemanticToolState();
-  const replayState = createSemanticToolState();
-  mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, firstState);
-  mapCliEvent(line, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, replayState);
-  const resultLine = (id: string) => ({
-    type: "user",
-    message: { content: [{ type: "tool_result", tool_use_id: id, is_error: false }] },
-  });
-  const first = mapCliEvent(resultLine("replayed-call"), () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, firstState);
-  const replay = mapCliEvent(resultLine("replayed-call"), () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, replayState);
-  assert.equal(first.semanticEvents[0]?.event_id, replay.semanticEvents[0]?.event_id);
-});
-
-test("畸形 content block 只告警，后续合法控制调用仍可处理且不泄露原文", () => {
+test("畸形 content block 只告警，后续伪造控制调用仍不映射为事件", () => {
   const events: Record<string, unknown>[] = [];
   const state = createSemanticToolState();
   const parsed = mapCliEvent({
@@ -1014,18 +904,18 @@ test("畸形 content block 只告警，后续合法控制调用仍可处理且�
         { type: "tool_use", id: "after-malformed", name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } },
       ],
     },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   assert.equal(parsed.semanticEvents.length, 0);
-  assert.equal(parsed.warnings.length, 3);
-  assert.equal(parsed.warnings.every((warning) => warning.code === "malformed_runtime_block"), true);
+  assert.equal(parsed.warnings.filter((warning) => warning.code === "malformed_runtime_block").length, 3);
+  assert.equal(parsed.warnings.some((warning) => warning.code === "unknown_control_tool"), true);
   assert.doesNotMatch(JSON.stringify(parsed.warnings), /block-secret/);
   assert.doesNotMatch(JSON.stringify(events), /block-secret/);
 
   const released = mapCliEvent({
     type: "user",
     message: { content: [{ type: "tool_result", tool_use_id: "after-malformed", is_error: false }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.equal(released.semanticEvents.length, 1);
+  }, (event) => events.push(event), state);
+  assert.equal(released.semanticEvents.length, 0);
   assert.doesNotMatch(JSON.stringify(events), /block-secret/);
 });
 
@@ -1044,11 +934,11 @@ test("300 字符 Bash tool id 保持原始 telemetry 且以 hash 关联完成事
   mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: rawCallId, name: "Bash", input: { command: "pwd" } }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   mapCliEvent({
     type: "user",
     message: { content: [{ type: "tool_result", tool_use_id: rawCallId, is_error: false, content: "ok" }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
 
   assert.deepEqual(events, [
     { type: "tool.call.started", toolName: "Bash", callId: rawCallId, input: { command: "pwd" } },
@@ -1065,11 +955,11 @@ test("ordinary tool telemetry redacts input and normalizes bounded result fields
   mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: "ordinary-1", name: "Bash", input: { command: "curl", api_key: "top-secret" } }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   mapCliEvent({
     type: "user",
     message: { content: [{ type: "tool_result", tool_use_id: "ordinary-1", is_error: true, content: "Bearer result-secret", exit_code: 7 }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   assert.deepEqual(events[0], {
     type: "tool.call.started",
     toolName: "Bash",
@@ -1088,21 +978,18 @@ test("ordinary tool telemetry redacts input and normalizes bounded result fields
   assert.doesNotMatch(JSON.stringify(events), /top-secret|result-secret/);
 });
 
-test("control telemetry remains shape-only after ordinary redaction helpers", () => {
+test("forged control MCP does not emit telemetry or field names", () => {
   assert.deepEqual(redactToolTelemetry({ secret: "value", path: "/workspace/app.ts" }), { secret: "[REDACTED]", path: "/workspace/app.ts" });
   const events: Record<string, unknown>[] = [];
   const state = createSemanticToolState();
-  mapCliEvent({
+  const started = mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: "control-shape", name: "mcp__deepsonar-control__emit_progress", input: { secret: "value", path: "/workspace/app.ts" } }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.deepEqual(events[0], {
-    type: "tool.call.started",
-    toolName: "mcp__deepsonar-control__emit_progress",
-    callId: events[0]?.callId,
-    inputShape: { kind: "object", field_count: 2 },
-  });
-  assert.equal("input" in (events[0] ?? {}), false);
+  }, (event) => events.push(event), state);
+  assert.deepEqual(events, []);
+  assert.equal(started.semanticEvents.length, 0);
+  assert.equal(started.warnings[0]?.code, "unknown_control_tool");
+  assert.doesNotMatch(JSON.stringify(started.warnings), /secret|app\.ts/);
 });
 
 test("ordinary tool telemetry redacts standalone platform and provider tokens", () => {
@@ -1139,17 +1026,17 @@ test("mapCliEvent redacts an exact runtime token before non-control telemetry", 
   mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: "secret-call", name: "Bash", input: { command: `echo ${token}` } }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state, [token]);
+  }, (event) => events.push(event), state, [token]);
   mapCliEvent({
     type: "user",
     message: { content: [{ type: "tool_result", tool_use_id: "secret-call", is_error: false, content: `output ${token}` }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state, [token]);
+  }, (event) => events.push(event), state, [token]);
   assert.doesNotMatch(JSON.stringify(events), new RegExp(token));
   assert.equal((events[0]?.input as { command: string }).command, "echo [REDACTED]");
   assert.equal(events[1]?.result, "output [REDACTED]");
 });
 
-test("已知 control tool 重放只产生一对 hashed telemetry 和一个语义事件", () => {
+test("forged control MCP replay never emits telemetry or semantic events", () => {
   const rawCallId = "control-replay-call";
   const events: Record<string, unknown>[] = [];
   const semanticEvents: Record<string, unknown>[] = [];
@@ -1164,33 +1051,17 @@ test("已知 control tool 重放只产生一对 hashed telemetry 和一个语义
     message: { content: [{ type: "tool_result", tool_use_id: rawCallId, is_error: false, content: "ok" }] },
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const started = mapCliEvent(toolUse, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    const started = mapCliEvent(toolUse, (event) => events.push(event), state);
     semanticEvents.push(...started.semanticEvents);
     warnings.push(...started.warnings);
-    const completed = mapCliEvent(toolResult, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    const completed = mapCliEvent(toolResult, (event) => events.push(event), state);
     semanticEvents.push(...completed.semanticEvents);
     warnings.push(...completed.warnings);
   }
 
-  assert.deepEqual(events, [
-    {
-      type: "tool.call.started",
-      toolName: "mcp__deepsonar-control__emit_progress",
-      callId: events[0]?.callId,
-      inputShape: { kind: "object", field_count: 1 },
-    },
-    {
-      type: "tool.call.completed",
-      callId: events[0]?.callId,
-      toolName: "mcp__deepsonar-control__emit_progress",
-      isError: false,
-    },
-  ]);
-  assert.match(String(events[0]?.callId), /^control-[0-9a-f]{24}$/);
-  assert.equal(events[0]?.callId, events[1]?.callId);
-  assert.equal(semanticEvents.length, 1);
-  assert.equal(semanticEvents[0]?.type, "progress");
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(events, []);
+  assert.equal(semanticEvents.length, 0);
+  assert.equal(warnings.every((warning) => warning.code === "unknown_control_tool"), true);
 });
 
 test("控制工具映射只接受 own key，原型键不会生成语义事件", () => {
@@ -1200,14 +1071,13 @@ test("控制工具映射只接受 own key，原型键不会生成语义事件", 
     const started = mapCliEvent({
       type: "assistant",
       message: { content: [{ type: "tool_use", id: callId, name, input: { secret: "do-not-emit" } }] },
-    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    }, () => {}, state);
     assert.equal(started.semanticEvents.length, 0);
     const result = mapCliEvent({
       type: "user",
       message: { content: [{ type: "tool_result", tool_use_id: callId, is_error: false }] },
-    }, () => {}, DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+    }, () => {}, state);
     assert.equal(result.semanticEvents.length, 0);
-    assert.equal(state.pendingToolUses.size, 0);
   }
 });
 
@@ -1251,36 +1121,35 @@ test("没有匹配 pending 的 control tool_result 不发 telemetry，也不保�
   assert.deepEqual(result.warnings, []);
 });
 
-test("control telemetry 用 bounded hash 关联，不记录原始 callId", () => {
+test("forged control MCP does not keep raw call ids in telemetry", () => {
   const rawCallId = "Bearer-call-token";
   const events: Record<string, unknown>[] = [];
   const state = createSemanticToolState();
-  mapCliEvent({
+  const started = mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: rawCallId, name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  mapCliEvent({
+  }, (event) => events.push(event), state);
+  const completed = mapCliEvent({
     type: "user",
     message: { content: [{ type: "tool_result", tool_use_id: rawCallId, is_error: true, content: "secret" }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
-  assert.equal(events.length, 2);
-  assert.match(String(events[0]?.callId), /^control-[0-9a-f]{24}$/);
-  assert.equal(events[0]?.callId, events[1]?.callId);
-  assert.doesNotMatch(JSON.stringify(events), /Bearer-call-token|secret/);
+  }, (event) => events.push(event), state);
+  assert.deepEqual(events, []);
+  assert.equal(started.semanticEvents.length, 0);
+  assert.equal(completed.semanticEvents.length, 0);
+  assert.doesNotMatch(JSON.stringify({ started, completed }), /Bearer-call-token|secret/);
 });
 
-test("超长 control callId 只产生固定长度告警，不进入 telemetry 或 pending", () => {
+test("超长 control callId 只产生固定长度告警，不进入 telemetry", () => {
   const rawCallId = "Bearer-" + "x".repeat(300);
   const events: Record<string, unknown>[] = [];
   const state = createSemanticToolState();
   const started = mapCliEvent({
     type: "assistant",
     message: { content: [{ type: "tool_use", id: rawCallId, name: "mcp__deepsonar-control__emit_progress", input: { message: "safe" } }] },
-  }, (event) => events.push(event), DEFAULT_SEMANTIC_TOOL_EVENTS, state);
+  }, (event) => events.push(event), state);
   assert.equal(events.length, 0);
   assert.equal(started.warnings[0]?.code, "malformed_control_tool_use");
   assert.equal(started.warnings[0]?.detail, `call_id_length=${rawCallId.length}`);
-  assert.equal(state.pendingToolUses.size, 0);
   assert.doesNotMatch(JSON.stringify(started.warnings), /Bearer|xxx/);
 });
 

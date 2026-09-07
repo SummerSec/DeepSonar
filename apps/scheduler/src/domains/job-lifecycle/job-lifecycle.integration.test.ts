@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -39,7 +40,7 @@ if (!testDatabaseUrl) {
         jobIds.push(id);
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
-          VALUES (${id}, ${projectId}, ${canvasId}, 'audit_module', ${status}, ${sql.json(snapshot as never)})`;
+          VALUES (${id}, ${projectId}, ${canvasId}, 'audit', ${status}, ${sql.json(snapshot as never)})`;
         return id;
       };
 
@@ -145,7 +146,7 @@ if (!testDatabaseUrl) {
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, started_at, lease_expires_at, agent_snapshot_json, payload_json)
           VALUES (
-            ${id}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+            ${id}, ${projectId}, ${canvasId}, 'audit', 'running',
             now() - interval '1000 seconds', now() + interval '60 seconds',
             ${sql.json({
               ...snapshot,
@@ -188,7 +189,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM events WHERE job_id = ANY(${jobIds})`;
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds})`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 }).catch(() => {});
     }
   });

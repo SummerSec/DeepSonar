@@ -13,16 +13,26 @@ export function pullItemStatusLabel(status: RuntimeImagePullItem["status"] | Run
   if (status === "running") return "拉取中";
   if (status === "succeeded") return "成功";
   if (status === "failed") return "失败";
+  if (status === "interrupted") return "已中断";
   return "空闲";
 }
 
 export function pullHeadline(task: RuntimeImagePullTask): string {
   if (task.status === "succeeded") return "拉取完成，可再次启用";
   if (task.status === "failed") return "拉取完成，但有失败项";
+  if (task.status === "interrupted") return "拉取被 Scheduler 重启中断，可重新拉取";
   if (task.status === "queued" || task.status === "running") {
     return `拉取进度 ${task.completed}/${task.total}`;
   }
   return "暂无拉取任务";
+}
+
+export function readinessLabel(readiness: string | undefined): string {
+  if (readiness === "ready") return "就绪";
+  if (readiness === "preparing") return "准备中";
+  if (readiness === "unavailable") return "未就绪";
+  if (readiness === "error") return "失败";
+  return "未知";
 }
 
 export function shortImageRef(ref: string): string {

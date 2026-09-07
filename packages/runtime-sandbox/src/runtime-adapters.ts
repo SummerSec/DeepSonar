@@ -1,4 +1,5 @@
 import type { ContextIdentity } from "./context-contract.js";
+import { buildDshPiAiRuntimeProjection, type DshPiAiRuntimeProjection } from "./dsh-pi-ai.js";
 import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt } from "./dsh-request-frame.js";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
@@ -12,7 +13,6 @@ export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-sum
 
 export interface AgentCliCapabilities {
   streamEvents: boolean;
-  controlMcp: boolean;
   /** 平台向该运行时提供 Job 级 HTTP 控制 API；请求由 Agent 自己的 HTTP 工具发起。 */
   platformControlApi: boolean;
   incrementalMessages: boolean;
@@ -30,6 +30,17 @@ export interface DshProviderRuntimeConfig {
   config: { providers: Record<string, Record<string, unknown>> };
   /** Optional already-projected first system message. Adapter still enforces the pi-compatible prefix. */
   systemPrompt?: string;
+}
+
+/** Scheduler-owned Gateway/token inputs; adapter owns vendor YAML and profile rewrite. */
+export interface AgentRuntimeProjectionInput {
+  settingsConfig: unknown;
+  credentialProvider: string;
+  gatewayBaseUrl: string;
+  model?: string | null;
+  contextWindowTokens?: number | null;
+  reasoning?: string | null;
+  platformSystemPrompt?: string | null;
 }
 
 export interface AdapterStartContext {
@@ -86,6 +97,8 @@ export interface RuntimeAdapter {
   start(context: AdapterStartContext): Promise<RuntimeProcess>;
   resume(context: AdapterResumeContext): Promise<RuntimeProcess>;
   materialize?(context: AdapterStartContext): Promise<void>;
+  /** Vendor dialect → frozen runtime config. Only DSH implements this today. */
+  projectRuntime?(input: AgentRuntimeProjectionInput): DshPiAiRuntimeProjection;
   encodeInput(content: string, state?: AdapterRuntimeState): string;
   /** 多消息模式运行时可选的显式 RPC 排队命令。 */
   encodeSteer?(content: string, state?: AdapterRuntimeState): string;
@@ -105,7 +118,6 @@ export const REQUIRED_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities
 ];
 
 export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
-  "controlMcp",
   "platformControlApi",
 ];
 
@@ -377,7 +389,6 @@ function unseenCompleteText(
 function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<AgentCliCapabilities> {
   return Object.freeze({
     streamEvents: false,
-    controlMcp: false,
     platformControlApi: false,
     incrementalMessages: false,
     completionGate: false,
@@ -413,7 +424,7 @@ const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
   version: "2.1.252",
   outputMode: "jsonl",
-  capabilities: fixedCapabilities({ streamEvents: true, controlMcp: false, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  capabilities: fixedCapabilities({ streamEvents: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
   // Claude Code 2.1.252 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
@@ -615,7 +626,6 @@ const pi = Object.freeze<RuntimeAdapter>({
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
-    controlMcp: false,
     platformControlApi: true,
     incrementalMessages: true,
     completionGate: true,
@@ -799,6 +809,28 @@ function dshToolInput(value: unknown): unknown {
   }
 }
 
+const DSH_SILENT_SESSION_EVENTS = new Set(["turn/start", "turn/end"]);
+
+function dshToolCallId(data: Record<string, unknown>): string {
+  for (const key of ["id", "callId", "callID", "toolCallId", "toolCallID", "call_id", "tool_call_id"]) {
+    const value = data[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return "";
+}
+
+function dshToolResultContent(data: Record<string, unknown>): unknown {
+  const message = data.message && typeof data.message === "object" && !Array.isArray(data.message)
+    ? data.message as Record<string, unknown>
+    : undefined;
+  if (message) {
+    if (typeof message.text === "string") return message.text;
+    if (message.content !== undefined) return message.content;
+  }
+  if (typeof data.message === "string") return data.message;
+  return data.content ?? data.result ?? "";
+}
+
 function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   if (Object.prototype.hasOwnProperty.call(line, "id") && !line.method) {
     if (line.error && typeof line.error === "object") {
@@ -830,7 +862,7 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
       const chunk = data.chunk && typeof data.chunk === "object" && !Array.isArray(data.chunk) ? data.chunk as Record<string, unknown> : {};
       if (chunk.type === "text-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "text", text: chunk.text }] } }];
       if (chunk.type === "reasoning-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: chunk.text }] } }];
-      return [];
+      return chunk.type ? unknownRuntimeEvent() : [];
     }
     if (event.type === "assistant/message" || event.type === "user/message") {
       const message = data.message && typeof data.message === "object" && !Array.isArray(data.message) ? data.message as Record<string, unknown> : {};
@@ -846,17 +878,35 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
       }
       return [{ type: "user", message: { id: message.id, content } }];
     }
+    if (event.type === "tool/call") {
+      const id = dshToolCallId(data);
+      const name = String(data.name ?? data.toolName ?? "");
+      return id && name
+        ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: dshToolInput(data.arguments ?? data.input) }] } }]
+        : unknownRuntimeEvent();
+    }
+    if (event.type === "tool/result") {
+      const id = dshToolCallId(data);
+      if (!id) return unknownRuntimeEvent();
+      const isError = (data.error != null && !(typeof data.error === "string" && !data.error.trim()))
+        || data.isError === true
+        || data.is_error === true;
+      return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: dshToolResultContent(data) }] } }];
+    }
     if (event.type === "turn/end") {
       const reason = data.reason && typeof data.reason === "object" && !Array.isArray(data.reason) ? data.reason as Record<string, unknown> : {};
       if (reason.kind !== "completed" && reason.kind !== "max-tokens") state.dshTurnError = formatDshTurnError(reason);
     }
+    return DSH_SILENT_SESSION_EVENTS.has(String(event.type ?? "")) ? [] : unknownRuntimeEvent();
+  }
+  if (method === "session.status") {
+    if (params.status === "idle") {
+      if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
+      return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
+    }
     return [];
   }
-  if (method === "session.status" && params.status === "idle") {
-    if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
-    return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
-  }
-  return [];
+  return unknownRuntimeEvent();
 }
 
 const dsh = Object.freeze<RuntimeAdapter>({
@@ -865,7 +915,6 @@ const dsh = Object.freeze<RuntimeAdapter>({
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
-    controlMcp: false,
     platformControlApi: true,
     incrementalMessages: true,
     completionGate: true,
@@ -878,6 +927,7 @@ const dsh = Object.freeze<RuntimeAdapter>({
   compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
   start: (context) => sandboxDsh(context.host, context),
   materialize: materializeDsh,
+  projectRuntime: buildDshPiAiRuntimeProjection,
   resume: (context) => sandboxDsh(context.host, context),
   encodeInput: (content, state) => {
     if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
@@ -921,8 +971,8 @@ export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): R
   for (const capability of REQUIRED_RUNTIME_CAPABILITIES) {
     if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
   }
-  if (!adapter.capabilities.controlMcp && !adapter.capabilities.platformControlApi) {
-    throw new Error(`AGENT_CLI_CONTROL_CAPABILITY_MISSING: ${adapter.id}`);
+  for (const capability of CONTROL_RUNTIME_CAPABILITIES) {
+    if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CONTROL_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
   }
   if (adapter.capabilities.contextCompactionPolicy === "unsupported") {
     throw new Error(`AGENT_CLI_CONTEXT_COMPACTION_UNSUPPORTED: ${adapter.id}`);

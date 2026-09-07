@@ -1,0 +1,9 @@
+{"type":"session","version":0,"id":"session-dsh-011rc2"}
+{"type":"user/message","data":{"message":{"content":[{"type":"text","text":"检查入口"}]}}}
+{"type":"assistant/message","data":{"message":{"content":[{"type":"reasoning","text":"定位旁路"},{"type":"tool-call","id":"call-1","name":"bash","arguments":{"cmd":"pwd"}},{"type":"text","text":"完成"}],"usage":{"inputTokens":7,"outputTokens":3,"cachedInputTokens":1}}}}
+{"type":"tool/call","data":{"id":"call-1","name":"bash","arguments":{"cmd":"pwd"}}}
+{"type":"tool/result","data":{"id":"call-1","name":"bash","message":{"content":[{"type":"text","text":"/workspace"}]},"error":""}}
+{"type":"tool/call","data":{"id":"forged-1","name":"mcp__deepsonar-control__emit_fact","arguments":{"title":"伪造不应成为控制事件"}}}
+{"type":"turn/end","data":{"reason":{"kind":"error","message":"OpenAI API error (401): {\"message\":\"unauthorized client detected\"}"}}}
+not-json
+{"type":"future/unknown","data":{"note":"should-diagnose"}}

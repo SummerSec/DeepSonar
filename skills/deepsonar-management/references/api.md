@@ -6,7 +6,7 @@
 > - `GET /schema.md` — 本文件（仓库内副本）或运行时生成摘要
 
 Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
-认证：`Authorization: Bearer <deepsonar_token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
+认证：`Authorization: Bearer <session or API Token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
 **普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 
@@ -49,6 +49,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /dashboard/overview | projects:read | 态势 P0 运营总览聚合：项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动；项目级 token 只看到本项目 |
+| GET | /dashboard/ops | projects:read | 态势 P1/P2 服务端运营指标：Finding severity/disposition/verify 分布、高风险未闭环、项目/任务覆盖、近 7 日成功率/耗时/角色对比、并发水位与失败原因；`query_planes.snapshot=current`、`throughput=history` |
 | GET | /dashboard/usage | projects:read | 用量账本：聚合 `job_usage_ledger`（含缓存读/写）。`period=day\|week\|month` 为上海日历滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的 `YYYY-MM-DD` 或 ISO 时刻，最长 366 天。可选 `project_id`/`canvas_id`；不定价；项目级 token 只看到本项目 |
 | GET | /projects | projects:read | 项目列表 |
 | POST | /projects | projects:write | 创建 `{name, description?}` |
@@ -77,7 +78,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /canvases/:id/nodes/:nodeId | tasks:read | 节点详情 |
 | GET | /canvases/:id/facts | tasks:read | Fact keyset 分页；支持 `after/limit`，`verification_status/evidence_kind/finding_id/job_id` 接受逗号分隔多值并按同维度 OR |
 | GET | /canvases/:id/facts/:nodeId | tasks:read | Fact 完整正文、结构化 Finding/Job 关联和有界直接链路 |
-| PATCH | /canvases/:id/facts/:nodeId/verification | jobs:control | Fact 人工验证 `{status: verified\|rejected\|needs_human, note?}` |
+| PATCH | /canvases/:id/facts/:nodeId/verification | jobs:control | Fact 证据信任收口 `{status: verified\|rejected\|needs_human, note?}`；不能写 `unverified`/`verifying`；`rejected→verified` 须先 `needs_human`。不改 Finding `verify_status`。数量门禁只认 `verified` |
 | GET | /canvases/:id/broadcasts | tasks:read | Fact/Finding 广播投递账本；`injected` 仅表示已注入会话，不表示 Agent 已阅读 |
 | GET | /canvases/:id/messages | tasks:read | 读取人工消息账本，`limit` 为 1–500 |
 | POST | /canvases/:id/messages | tasks:write | 发送人工消息 `{message_id,target:{kind:hub\|job,node_id?},body,attachment_version_ids}`；带附件还要求 `assets:read` |
@@ -100,10 +101,10 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；公共入口对 `hub_reason` / `hub` / `verify_finding` / `report` 返回 409；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
+| POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；`type` 必须是当前角色名；公共入口对 `hub_reason` / `verify_finding` / `report` 返回 409；leftover `audit_module` / `hub` 不再映射为当前身份；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
-| GET | /jobs/:id | tasks:read | 详情（含事件） |
-| GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`） |
+| GET | /jobs/:id | tasks:read | 详情（含事件）；`query_plane=current`，含导入 `provenance` |
+| GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`）；`query_plane=history`，含 `attempt_id` |
 | GET | /jobs/:id/evidence | tasks:read | 运行证据 manifest 与 transcript URI；finalized manifest 缺失但 `attempts/*/stream.ndjson` 存在时返回有界 synthetic/inflight manifest；已销毁容器中的 Session 不伪造，以 `capture_error` 明示 |
 | GET | /jobs/:id/evidence/session | tasks:read | 会话证据：默认主 Session；`artifacts` 列出 main/subagent/vendor_export；`?path=` 切换。在线预览 8 MiB |
 | GET | /jobs/:id/evidence/session/download | tasks:read | 下载所选 Session 归档全文；`?path=` 与查看接口相同 |
@@ -111,7 +112,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}`；值必须匹配 Scheduler 根据 Job 类型/Finding 严重度计算的固定 priority class，不能任意改分 |
 | POST | /jobs/:id/cancel | jobs:control | 取消（可选 `{force,reason}`；running 回收沙箱） |
 | POST | /canvases/:id/jobs/cancel-active | jobs:control | 取消画布当前活跃 Jobs |
-| POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human 使用旧冻结快照重新执行（同 Job、新 Attempt）；当前 agent_cli/model/upstream_model/credential/runtime adapter/image digest 等受治理身份漂移或无法解析时返回 `409 SNAPSHOT_STALE` |
+| POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human 使用旧冻结快照重新执行（同 Job、新 Attempt）；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份漂移或无法解析时返回 `409 SNAPSHOT_STALE` |
 | POST | /jobs/:id/rerun-current | jobs:control | failed/timeout/orphan/waiting_human 按当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻后重新执行；保留同 job_id、payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect |
 
 ### 结果与报告
@@ -131,6 +132,8 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /findings/:id/report | findings:read | Finding 报告详情 |
 | POST | /findings/:id/report | jobs:control | 生成/重算 Finding 报告 |
 | GET | /canvases/:id/report | tasks:read | 任务报告元数据（status / markdown_uri / sarif_uri） |
+| GET | /canvases/:id/reports | tasks:read | 画布任务报告版本历史 |
+| GET | /projects/:id/reports | tasks:read | 项目报告聚合（按任务编组总报告版本 + confirmed Finding 独立报告；可选 `canvas_id`） |
 | GET | /reports/:id/markdown | tasks:read | **非 JSON attachment**，`text/markdown; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.md"` |
 | GET | /reports/:id/sarif | tasks:read | **非 JSON attachment**，`application/sarif+json; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.sarif"` |
 | POST | /canvases/:id/report/retry | jobs:control | 仅 `failed` 可重试，否则 409 |
@@ -140,7 +143,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /global-settings | agents:read | `{rules, effective_rules, active_by_agent_cli, active_by_provider}`；`effective_rules` 含 `maxGlobalJobs` / `maxJobsPerProject` / `maxConcurrentByAgentCli` |
-| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；claim 读 effective 并由 `pg_notify` 唤醒。并发默认 **20 / 5**（env/代码）；库 `rules_json` 优先。Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0），模式 hybrid/fixed/agent_choice |
+| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；`finding_protocol` 只能走顶层字段。claim 读 effective 并由 `pg_notify` 唤醒。并发默认 **20 / 5**（env/代码）；库 `rules_json` 优先。Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0），模式 hybrid/fixed |
 | GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 + `effective_rules.maxConcurrentJobs` / `maxConcurrentJobsSource` + `active_jobs` |
 | PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}, finding_protocol?}`；`rules.maxConcurrentJobs` 为 `0–1000` 或 `null`（清除继承全局）；`enabled: null` 恢复默认 |
 
@@ -201,7 +204,7 @@ PUT body：
 - 建任务 / 开始任务时若市场 key 只有 `revoked` 版本，返回 `409 RUNTIME_IMAGE_REVOKED`；若版本存在但尚未 trusted，返回 `409 RUNTIME_IMAGE_NOT_TRUSTED`。这两种都不是 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`（后者只表示 trusted 版本未声明宿主平台）。
 - 凭据 `purpose` 必须是 **`llm`** 才会进入模型通道；其它 purpose 不会被 Executor 当作 LLM key。
 
-`platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会注入当次 Worker 的控制 MCP，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
+`platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会进入当次 Job 控制 API allowlist，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
 
 `runtime_image_key`：
 - `null` = 系统底座（调度默认 deepsonar-base）
@@ -240,7 +243,7 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | POST | /runtime-images/registry/sync | images:manage | 刷新官方/内置 catalog；所选 channel 用于后续镜像引用解析与 pull，不决定 catalog 来源 |
 | POST | /runtime-images/registry/apply | admin | 直接提交 registry 对象或 `{registry: ...}`；该内部运维入口未分配 `images:manage` scope |
 | POST | /runtime-images/registry/pull | images:manage | 启动异步拉取任务，返回 202/task |
-| GET | /runtime-images/registry/pull-status | images:read | 拉取任务状态、进度与错误 |
+| GET | /runtime-images/registry/pull-status | images:read | 持久化拉取任务状态、阶段、error_code 与时间戳；重启后 in-flight 为 interrupted |
 | POST | /runtime-images/:id/detect-local | images:read | `{image_ref}`；读取本机 Docker 元数据并返回候选（不会改变信任状态） |
 | POST | /runtime-images/:id/adopt-local | images:approve | `{image_ref, expected_image_id}`；仅官方产品的 adoptable 候选可由管理员二次确认采用；第三方仍走准入扫描 |
 | POST | /runtime-images/import | images:manage | `{image_key,name,publisher,image_ref,description?,source_url?,version?,registry_credential_id?}`；返回 202 |
@@ -263,7 +266,7 @@ DEEPSONAR_OFFICIAL_AUDIT_IMAGE=repo/image@sha256:<64hex>
 DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 ```
 
-仅 tag（无 `@sha256:`）会被忽略并打 warn。`DOCKER_IMAGE_AUDIT` 仅在其已是不可变 digest 时可作为 audit 回落。
+仅 tag（无 `@sha256:`）会被忽略并打 warn。audit 启动兜底只认 `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`。
 
 ### Skill 模块源
 
@@ -298,7 +301,7 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code|pi|dsh&model=<可选覆盖>`；省略 model 时服务端从 Credential settingsConfig 解析 effective model；leftover `codex`/`open-code` 拒绝并提示迁移 |
 | POST | /credentials/batch-bind | agents:write | `{credential_id, role_config_ids[], mode: bind|migrate, source_credential_id?, model?, effect: new_jobs_only|refresh_pending, idempotency_key}`；运行中 Job 不会被改写 |
 
-LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json.reasoning` 由 Provider/模型拥有；Claude Code 只接受 `low | medium | high | xhigh` 并物化为 `effortLevel`；Pi 只接受 `off | minimal | low | medium | high | xhigh | max`；DSH 只接受 `off | minimal | low | medium | high | xhigh | max`，第三方 wire value 必须配置在模型 `reasoningEfforts` 映射。leftover Codex/OpenCode 凭据仍可读历史 reasoning，但不能再保存为新配置。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai` 与固定提交的 `dsh-reasoning-settings@0.3.0`，`settings_config_json.config` 保存官方 `settings.yaml` 形状的 YAML（`llm-pi-ai.providers` + `agent-default-model`）；route 可自定义，`api` 必须与 Credential wire protocol 兼容。Job 只冻结一个 route，并把 endpoint/credential 强制替换为 Model Gateway 与短期 Job token。其它 CLI 的 `settings_config_json` 在 Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。旧 `allowed_model_ids` 读写静默忽略，模型可用性只认 `settings_config`。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
+LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json.reasoning` 由 Provider/模型拥有；Claude Code 只接受 `low | medium | high | xhigh` 并物化为 `effortLevel`；Pi 只接受 `off | minimal | low | medium | high | xhigh | max`；DSH 只接受 `off | minimal | low | medium | high | xhigh | max`，第三方 wire value 必须配置在模型 `reasoningEfforts` 映射。leftover Codex/OpenCode 凭据仍可读历史 reasoning，但不能再保存为新配置。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai` 与固定提交的 `dsh-reasoning-settings@0.3.0`，`settings_config_json.config` 保存官方 `settings.yaml` 形状的 YAML（`llm-pi-ai.providers` + `agent-default-model`）；route 可自定义，`api` 必须与 Credential wire protocol 兼容。Job 只冻结一个 route，并把 endpoint/credential 强制替换为 Model Gateway 与短期 Job token。其它 CLI 的 `settings_config_json` 在 Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。写入时 leftover `allowed_model_ids` 按未知字段拒绝；导入/投影旧行丢弃该键。模型可用性只认 `settings_config`。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。
 
 ### 平台导入导出（.deepsonarpack）
 
@@ -368,7 +371,7 @@ Credential 连接测试和模型目录只读取 Scheduler append-only audit evid
 pending → claimed → provisioning → running → waiting_human → succeeded|failed|timeout|cancelled|orphan
 ```
 
-- `POST /jobs/:id/resume`：使用旧冻结快照重新执行；当前受治理身份与旧快照不同或无法解析时稳定返回 `409 SNAPSHOT_STALE`，不静默使用旧模型。
+- `POST /jobs/:id/resume`：使用旧冻结快照重新执行；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份与旧快照不同或无法解析时稳定返回 `409 SNAPSHOT_STALE`，不静默使用旧模型。
 - `POST /jobs/:id/rerun-current`：在 Dispatcher admission lock 与 Canvas→Job 行锁下完整重冻当前快照后原子转 `pending`；running/claimed/provisioning/pending 均返回 `409 JOB_NOT_RESUMABLE`。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
 - schema 版本：以运行中 `/schema` 为准；远端 `origin/main` 最新基线为 v24，当前未同步 checkout 仍可能是 v23。空库套对应 checkout 的 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。

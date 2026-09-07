@@ -22,7 +22,7 @@ import {
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
-import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
 import { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 
@@ -636,7 +636,7 @@ export function qualifyPiModelRef(
 
 /**
  * Job token 记录 settings_config 声明的模型以及 CLI 别名 / 上游 ID。
- * 模型可用性只认配置文件，不再与 Credential allowed_model_ids 求交集。
+ * 模型可用性只认配置文件，不再与 leftover Credential allowlist 求交集。
  */
 export function jobGatewayAllowedModels(input: {
   roleModel?: string | null;

@@ -137,8 +137,8 @@ export function periodHint(today: number, week: number): string {
   return `今日 ${today} · 近 7 日 ${week}`;
 }
 
-/** P1 风险看板（severity / disposition / 未闭环）与 P2 吞吐看板（成功率 / 耗时 / 并发）另开 follow-up。 */
+/** P1/P2 服务端契约已由 GET /dashboard/ops 提供（#400）；已交付 Dashboard UI 不重建。 */
 export const DASHBOARD_FOLLOW_UPS = {
-  p1: "TODO(#242 P1): Finding severity/disposition 分布、未闭环高风险列表、按项目/资产仓覆盖",
-  p2: "TODO(#242 P2): Job 成功率与耗时、角色对比、并发水位、失败原因摘要",
+  p1: "GET /dashboard/ops findings.* — severity/disposition/verify、open_high_risk、coverage",
+  p2: "GET /dashboard/ops jobs.* — throughput/duration/by_role/concurrency/failure_reasons",
 } as const;

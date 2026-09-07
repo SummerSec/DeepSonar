@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "./test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -153,7 +154,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM canvas_nodes WHERE canvas_id IN (${canvasId}, ${otherCanvasId})`;
       await sql`DELETE FROM canvas_changes WHERE canvas_id IN (${canvasId}, ${otherCanvasId})`;
       await sql`DELETE FROM canvases WHERE id IN (${canvasId}, ${otherCanvasId})`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 });
     }
   });

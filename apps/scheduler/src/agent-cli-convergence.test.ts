@@ -41,6 +41,14 @@ test("runtime adapter registry stays open but currently lists only three CLIs", 
   assert.doesNotMatch(adaptersDoc, /^\| `open-code` \| OpenCode /m);
 });
 
+test("management skill no longer teaches leftover CLI credential create", () => {
+  const skill = readFileSync(new URL("../../../skills/deepsonar-management/SKILL.md", import.meta.url), "utf8");
+  assert.match(skill, /--agent-cli claude-code/);
+  assert.match(skill, /--agent-cli pi/);
+  assert.doesNotMatch(skill, /--agent-cli codex/);
+  assert.doesNotMatch(skill, /--agent-cli open-code/);
+});
+
 test("leftover CLIs cannot materialize or bind new credentials", () => {
   assert.equal(isProviderAgentCli("codex"), false);
   assert.equal(isProviderAgentCli("open-code"), false);
@@ -51,4 +59,16 @@ test("leftover CLIs cannot materialize or bind new credentials", () => {
     () => materializeProviderSettings({ agentCli: "codex", settingsConfig: { auth: { OPENAI_API_KEY: "x" } } }),
     /不再支持新配置/,
   );
+});
+
+test("official images no longer install leftover Codex/OpenCode packages", () => {
+  const manifests = [
+    readFileSync(new URL("../../../agent-harness/runtime-images.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../agent-harness/kali-minimal-runtime.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../deploy/Dockerfile.agent", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8"),
+  ];
+  for (const source of manifests) {
+    assert.doesNotMatch(source, /@openai\/codex|opencode-ai|CODEX_VERSION|OPENCODE_VERSION/);
+  }
 });

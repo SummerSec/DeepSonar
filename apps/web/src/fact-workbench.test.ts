@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { api } from "./api";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage } from "./canvas-page-sync";
+import { factHumanActions } from "./fact-verification";
 import { factPageFilterKey, readFactPageFilters, updateFactPageQuery } from "./fact-page-state";
 
 const sourceRoot = path.resolve(import.meta.dirname);
@@ -145,6 +146,14 @@ test("Canvas Fact 点击交给深链面板，不再同时打开通用 Sidebar", 
   assert.match(canvas, /onOpenFact\?: \(factId: string\) => void/);
 });
 
+test("Fact 人工动作按证据信任态开放，rejected 不能直接升为 verified", () => {
+  assert.deepEqual(factHumanActions("unverified"), ["verified", "rejected", "needs_human"]);
+  assert.deepEqual(factHumanActions("verifying"), ["verified", "rejected", "needs_human"]);
+  assert.deepEqual(factHumanActions("needs_human"), ["verified", "rejected"]);
+  assert.deepEqual(factHumanActions("verified"), ["rejected", "needs_human"]);
+  assert.deepEqual(factHumanActions("rejected"), ["needs_human"]);
+});
+
 test("Fact 详情覆盖三段内容、关闭状态与待人工裁决", () => {
   const panel = source("FactDetailPanel.tsx");
   assert.match(panel, /aria-label="Fact 详情"/);
@@ -154,9 +163,10 @@ test("Fact 详情覆盖三段内容、关闭状态与待人工裁决", () => {
   assert.match(panel, />详情</);
   assert.match(panel, />结构化证据</);
   assert.match(panel, />证据链路</);
-  assert.match(panel, /verification_status === "needs_human"/);
+  assert.match(panel, /factHumanActions\(fact\.verification_status\)/);
   assert.match(panel, /resolveFact\("verified"\)/);
   assert.match(panel, /resolveFact\("rejected"\)/);
+  assert.match(panel, /resolveFact\("needs_human"\)/);
   assert.match(panel, /onOpenFinding\(finding\.id\)/);
   assert.match(panel, /onOpenJob\(job\.id\)/);
 });
@@ -205,9 +215,7 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   assert.match(banner, /已回复/);
   assert.match(banner, /hiddenIds/);
   assert.match(banner, /取消隐藏/);
-  assert.match(banner, /runtimeImageNotLocalIntervention/);
-  assert.match(banner, /去市场准备/);
-  assert.match(page, /imagesHref/);
+  assert.doesNotMatch(banner, /runtimeImageNotLocalIntervention|去市场准备|imagesHref/);
   assert.match(banner, /hideProcessed: isHidden \? prefs\.hideProcessed : true/);
   assert.match(banner, /aria-expanded/);
   const composer = source("HumanMessageComposer.tsx");

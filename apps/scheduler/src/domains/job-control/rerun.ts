@@ -16,8 +16,8 @@ import {
   SnapshotUnresolvableError,
 } from "../role-runtime-snapshot/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
-import { assertFrozenRuntimeImageLocal } from "../../runtime-images.js";
 import { runtimeImageKeyFromSnapshot } from "../job-lifecycle/stall-policy.js";
+import { importedResumeBlockedReason, jobProvenance, type JobProvenance } from "../../import-provenance.js";
 
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 export const JOB_NOT_RESUMABLE = "JOB_NOT_RESUMABLE" as const;
@@ -54,10 +54,11 @@ export type RequeueJobResult =
       from_status: string;
       snapshot_refreshed: boolean;
       previous_sandbox_id: string | null;
+      provenance: JobProvenance;
     }
   | { kind: "not_found" }
-  | { kind: "not_resumable"; status: string }
-  | { kind: "snapshot_stale"; detail: SnapshotStaleDetail };
+  | { kind: "not_resumable"; status: string; reason?: string; error_code?: string; provenance?: JobProvenance }
+  | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
 const resumableStatuses = new Set<string>(RESUMABLE_JOB_STATUSES);
 
@@ -248,8 +249,21 @@ export async function requeueJob(
       FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) return { kind: "not_found" as const };
     const status = String(job.status);
+    const provenance = jobProvenance(status, job.payload_json);
+    const importedBlock = importedResumeBlockedReason(provenance, status);
+    if (importedBlock) {
+      return {
+        kind: "not_resumable" as const,
+        status,
+        reason: importedBlock,
+        error_code: status === "cancelled" && provenance.source === "import"
+          ? "JOB_IMPORTED_READONLY"
+          : JOB_NOT_RESUMABLE,
+        provenance,
+      };
+    }
     if (!resumableStatuses.has(status)) {
-      return { kind: "not_resumable" as const, status };
+      return { kind: "not_resumable" as const, status, provenance };
     }
 
     let currentSnapshot: AgentRuntimeSnapshot;
@@ -263,6 +277,7 @@ export async function requeueJob(
           stale_fields: ["current_snapshot_unresolvable"],
           resolution_error: safeResolutionError(error),
         },
+        provenance,
       };
     }
 
@@ -271,12 +286,9 @@ export async function requeueJob(
       return {
         kind: "snapshot_stale" as const,
         detail: { job_id: jobId, stale_fields: staleFields },
+        provenance,
       };
     }
-
-    await assertFrozenRuntimeImageLocal(
-      (mode === "rerun-current" ? currentSnapshot : job.agent_snapshot_json) as Record<string, unknown>,
-    );
 
     // waiting_human may still own the previous active Attempt. Close it as an
     // interrupted execution and preserve every settled/unknown effect; the
@@ -305,7 +317,7 @@ export async function requeueJob(
       finished_at: null,
       heartbeat_at: null,
     });
-    if (!transitioned) return { kind: "not_resumable" as const, status };
+    if (!transitioned) return { kind: "not_resumable" as const, status, provenance };
     const updated = {
       id: job.id,
       project_id: job.project_id,
@@ -327,6 +339,7 @@ export async function requeueJob(
       from_status: status,
       snapshot_refreshed: mode === "rerun-current",
       previous_sandbox_id: nullableString(job.sandbox_id),
+      provenance,
     };
   });
   if (result.kind === "ok" && result.previous_sandbox_id) {

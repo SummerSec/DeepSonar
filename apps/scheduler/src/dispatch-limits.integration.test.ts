@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "./test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -46,7 +47,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, priority, agent_snapshot_json, created_at
         ) VALUES (
-          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit_module',
+          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit',
           ${options.status ?? "pending"}, ${options.priority ?? 0}, ${sql.json(snapshot as never)},
           ${options.createdAt ?? new Date()}
         )`;
@@ -67,7 +68,7 @@ if (!testDatabaseUrl) {
           ? sql`statement_timestamp() - interval '120 seconds'`
           : sql`${new Date(firstCreatedAt.getTime() + index)}`;
         return sql`(
-          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit_module', 'pending', 0,
+          ${id}, ${projectId}, ${canvasIds[projectIds.indexOf(projectId)]}, 'audit', 'pending', 0,
           ${sql.json(snapshot as never)}, ${createdAt}
         )`;
       });
@@ -281,7 +282,7 @@ if (!testDatabaseUrl) {
         }
         await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
         await sql`DELETE FROM canvases WHERE id = ANY(${canvasIds})`;
-        await sql`DELETE FROM projects WHERE id = ANY(${projectIds}::uuid[])`;
+        await deleteProjectsLeavingAuditShells(sql, projectIds);
         await sql.end({ timeout: 5 });
       }
     }

@@ -744,3 +744,41 @@ test("keeps structured custom attachment metadata while removing its binary data
   assert.match(result.items[0]?.body ?? "", /image\/png/);
   assert.doesNotMatch(result.items[0]?.body ?? "", /SECRET_BASE64/);
 });
+
+function loadSessionFixture(name: string): string {
+  return readFileSync(new URL(`./fixtures/cli-decode/${name}`, import.meta.url), "utf8");
+}
+
+test("Pi 0.84.4 session fixture covers product fields, unknown frames, and forged tools", () => {
+  const result = parseAgentSession(loadSessionFixture("pi-0.84.4.session.jsonl"), { cli: "pi" });
+  assert.equal(result.format, "pi");
+  assert.ok(result.items.some((item) => item.kind === "system" && item.body?.includes("pi-sess-0844")));
+  assert.ok(result.items.some((item) => item.kind === "user" && item.body?.includes("检查入口")));
+  assert.ok(result.items.some((item) => item.kind === "assistant" && item.body?.includes("先看认证")));
+  assert.ok(result.items.some((item) => item.kind === "assistant" && item.title === "思考"));
+  assert.ok(result.items.some((item) => item.kind === "tool_call" && item.toolName === "bash"));
+  assert.ok(result.items.some((item) => item.kind === "tool_result" && item.body?.includes("/workspace")));
+  assert.equal(result.totals.input, 11);
+  assert.equal(result.totals.output, 5);
+  assert.ok(result.totals.skipped >= 1);
+  assert.ok(result.items.some((item) => item.kind === "other" && item.title === "future_unknown_event"));
+  const forged = result.items.find((item) => item.toolName === "mcp__deepsonar-control__emit_fact");
+  assert.equal(forged?.kind, "tool_call");
+  assert.ok(!result.items.some((item) => item.kind === "broadcast" && item.body?.includes("伪造")));
+});
+
+test("DSH 0.1.1-rc.2 session fixture covers product fields, unknown frames, and forged tools", () => {
+  const result = parseAgentSession(loadSessionFixture("dsh-0.1.1-rc.2.session.jsonl"), { cli: "dsh" });
+  assert.equal(result.format, "dsh");
+  assert.ok(result.items.some((item) => item.kind === "system" && item.body?.includes("session-dsh-011rc2")));
+  assert.ok(result.items.some((item) => item.kind === "user" && item.body?.includes("检查入口")));
+  assert.ok(result.items.some((item) => item.kind === "assistant" && item.body?.includes("定位旁路")));
+  assert.ok(result.items.some((item) => item.kind === "tool_call" && item.toolName === "bash"));
+  assert.ok(result.items.some((item) => item.kind === "tool_result" && item.body?.includes("/workspace")));
+  assert.equal(result.totals.input, 7);
+  assert.equal(result.totals.output, 3);
+  assert.ok(result.totals.skipped >= 1);
+  assert.ok(result.items.some((item) => item.kind === "other" && item.title === "future/unknown"));
+  const forged = result.items.find((item) => item.toolName === "mcp__deepsonar-control__emit_fact");
+  assert.equal(forged?.kind, "tool_call");
+});

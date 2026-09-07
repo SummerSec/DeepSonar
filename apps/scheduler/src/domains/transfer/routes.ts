@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
+import { isProjectScopedActor, PROJECT_MISMATCH, PROJECT_SCOPE_FORBIDDEN } from "../../project-scope.js";
 import { resolveModules } from "../../transfer/modules.js";
 import { buildPreview, applyImport } from "../../transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "../../transfer/pack.js";
@@ -66,6 +67,12 @@ export function registerTransferRoutes(app: FastifyInstance): void {
 
     // ---------- 平台配置导出 ----------
     app.post("/platform/exports", async (req, reply) => {
+      if (isProjectScopedActor(req.actor?.projectId)) {
+        return reply.code(403).send({
+          error: "project-scoped actors may not create platform exports",
+          error_code: PROJECT_SCOPE_FORBIDDEN,
+        });
+      }
       const body = z
         .object({
           preset: z.enum(["platform_full", "custom"]).default("platform_full"),
@@ -97,7 +104,13 @@ export function registerTransferRoutes(app: FastifyInstance): void {
       return reply.code(201).send(row);
     });
 
-    app.get("/platform/exports", async () => {
+    app.get("/platform/exports", async (req, reply) => {
+      if (isProjectScopedActor(req.actor?.projectId)) {
+        return reply.code(403).send({
+          error: "project-scoped actors may not list platform exports",
+          error_code: PROJECT_SCOPE_FORBIDDEN,
+        });
+      }
       return sql`
         SELECT id, project_id, scope, preset, modules_json, status, artifact_sha256, artifact_size,
                expires_at, error_code, error, created_by, created_at, started_at, finished_at
@@ -172,12 +185,21 @@ export function registerTransferRoutes(app: FastifyInstance): void {
       } catch {
         /* preview 阶段再报错 */
       }
+      if (scope === "platform" && isProjectScopedActor(req.actor?.projectId)) {
+        await removeFileSafe(uri);
+        return reply.code(403).send({
+          error: "project-scoped actors may not upload platform packs",
+          error_code: PROJECT_SCOPE_FORBIDDEN,
+        });
+      }
+      const targetProjectId = req.actor?.projectId ?? null;
       const [row] = await sql`
         INSERT INTO data_imports ${sql({
           id,
           source_artifact_uri: uri,
           source_sha256: sha,
           scope,
+          target_project_id: targetProjectId,
           status: "uploaded",
           created_by: req.actor?.name ?? null,
         })}
@@ -255,6 +277,23 @@ export function registerTransferRoutes(app: FastifyInstance): void {
           if (pack.manifest.format === PLATFORM_FORMAT) scope = "platform";
         } catch {
           /* use stored scope */
+        }
+
+        if (isProjectScopedActor(req.actor?.projectId)) {
+          if (scope === "platform" || body.mode === "merge_platform" || body.mode === "create_new" || !body.mode) {
+            return reply.code(403).send({
+              error: "project-scoped actors may only merge configuration into their own project",
+              error_code: PROJECT_SCOPE_FORBIDDEN,
+            });
+          }
+          const actorProjectId = req.actor!.projectId!;
+          if (body.target_project_id && body.target_project_id !== actorProjectId) {
+            return reply.code(403).send({
+              error: `token 仅限项目 ${actorProjectId}`,
+              error_code: PROJECT_MISMATCH,
+            });
+          }
+          body.target_project_id = actorProjectId;
         }
 
         if (scope === "platform" || body.mode === "merge_platform") {

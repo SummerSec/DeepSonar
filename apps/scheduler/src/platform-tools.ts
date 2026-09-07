@@ -11,8 +11,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像 `image_key`、`name`、`description`、`compatible_agent_clis`。",
-    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须与该 intent 角色的 CLI 兼容；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key，否则整次决策被拒绝（`invalid_runtime_image`）。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像 `image_key`、`name`、`description`、`compatible_agent_clis`，以及实时 `readiness`（ready/preparing/unavailable/error）、`preparing`、`error_code`、脱敏 `error`、`checked_at`。",
+    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须与该 intent 角色的 CLI 兼容；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key（`invalid_runtime_image`）。`readiness` 不是 ready 时整次决策被拒绝（`runtime_image_not_ready`，可重试），不会创建 Worker Job。目录不包含可执行 OCI 引用或 digest。",
     "- 示例：`{}`",
   ].join("\n"),
   emit_progress: [
@@ -32,10 +32,10 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_finding: [
     "### `emit_finding` — 增量提交通用 Finding",
-    "- 直接参数：`title` 至少 8 个非空白字符、`summary` 至少 32 个非空白字符；severity 只能是 `low|medium|high|critical`。`location`、`rule_id`、`quantities`（可选数值口径）、`suggest_verify` 可选。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
+    "- 直接参数：`title` 至少 8 个非空白字符、`summary` 至少 32 个非空白字符；severity 只能是 `low|medium|high|critical`。`location`、`rule_id`、`quantities`（可选数值口径）可选。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
     "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
-    "- 时机：有具体位置、触发路径和证据的安全问题一经确认就调用；单 Job 最多 20 条。一般建议验证时设 `suggest_verify: true`，是否派生由调度器决定。",
-    '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置后令牌未失效，可再次修改密码。","rule_id":"AUTH-RESET-REPLAY","suggest_verify":true}`',
+    "- 时机：有具体位置、触发路径和证据的安全问题一经确认就调用；单 Job 最多 20 条。是否派生 verify 由调度器按冻结规则决定，请求里不要带建议字段。",
+    '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置后令牌未失效，可再次修改密码。","rule_id":"AUTH-RESET-REPLAY"}`',
   ].join("\n"),
   submit_hub_decision: [
     "### `submit_hub_decision` — 提交 Hub 决策",
@@ -50,8 +50,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   mark_job_done: [
     "### `mark_job_done` — 正常结束 Job",
     "- 普通 Worker 参数：`summary`（必填，至少 8 个非空白字符，最多 10000）；不得传 `verdict`。",
-    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|rework|needs_human`（兼容 `false_positive`，服务端映射为 rework）。",
-    "- `confirmed` 仍须通过 Scheduler 证据硬门（独立 review + 完整 test）；不满足时会记为 rework 并回弹 Hub。",
+    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|rework|needs_human`。",
+    "- `confirmed` 仍须通过 Scheduler Fact-first 硬门（finding_id / subject_revision / ownership / expected / actual / outcome）；普通文本不算验证。不满足时会记为 rework 并回弹 Hub。",
     "- `rework` 时建议在 summary 中写明缺失证据；可选 `missing_evidence` 字符串数组。",
     "- 时机：所有增量 fact/finding 已提交且任务确实收尾后只调用一次。Hub 必须先调用 `submit_hub_decision`。",
     '- 普通示例：`{"summary":"完成入口梳理并提交 3 条新增事实；未覆盖移动端客户端。"}`',
@@ -96,10 +96,10 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
-  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；不得猜测或使用未启用、未准入的镜像，不得填写 OCI 引用。",
+  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；只提案 readiness=ready 的条目；不得猜测或使用未启用、未准入、正在准备或不可用的镜像，不得填写 OCI 引用。",
   emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
   emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
-  emit_finding: "注意：只提交有证据支撑的 Finding；suggest_verify 只是建议，验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",
+  emit_finding: "注意：只提交有证据支撑的 Finding；验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",
   submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；成功后只允许一次，仅在 HTTP 请求失败或参数校验失败后重试。",
   mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
   request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done 或 submit_hub_decision，仅在 HTTP 请求失败或参数校验失败后重试。",

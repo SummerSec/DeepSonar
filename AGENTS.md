@@ -23,7 +23,7 @@ pnpm build            # 全 workspace tsc 构建
 pnpm typecheck        # 全 workspace 类型检查
 ```
 
-- **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:mcp`；后者文件名是历史命名，当前验证的是 Job 控制 API-only 契约。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
+- **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:control-api`。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
 - **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI，当前是 `test` 角色默认镜像且不要求项目 opt-in。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
 - **运行模式**：默认 `AGENT_MODE=real`（OpenSandbox 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
 - `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
@@ -43,7 +43,8 @@ pnpm typecheck        # 全 workspace 类型检查
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** 默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
-- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 verify/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
+- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 `verify_finding`/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
+- **Fact-first `verify_finding`（#367 follow-up / #399）**：review/test/worker 只能提交结构化 Fact；Scheduler 必须校验 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual`、`outcome` 及相互冲突。`verify_finding` 只消费通过校验的 Fact 集合，不重读 maker 结论或原始 artifacts；足够且一致的 Fact 可直接收口/确认，证据不足、冲突或版本不匹配则保持未确认并回弹 Hub 补证。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
 - **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 默认 0（关闭轮询）。
@@ -77,7 +78,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### Hub 循环（Cairn 式图语义，§8.3）
 
-画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify` 与 `report` 是调度器专用系统角色，Hub 不可下发。**Hub 轮次由事件触发，不靠定时轮询**（任务本身可设置 `scheduled_start_at`），单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
+画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify_finding` 与 `report` 是调度器专用系统角色，Hub 不可下发。**Hub 轮次由事件触发，不靠定时轮询**（任务本身可设置 `scheduled_start_at`），单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
 
 ### 运行时（`packages/runtime-sandbox/`）
 
@@ -93,7 +94,7 @@ pnpm typecheck        # 全 workspace 类型检查
 
 ### 数据与迁移
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v42，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
+- **Schema**：`database/schema.sql` 是唯一基线（当前 v45，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
 - **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
 - **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
 - **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
@@ -115,7 +116,7 @@ pnpm typecheck        # 全 workspace 类型检查
 - 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
 - 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
 - RoleConfig `modules` 支持三类规范 selector：单模块 `"<source_id>:<module_id>"`、整插件 `"<source_id>:plugin:<plugin>"`、整来源 `"<source_id>:source:*"`；展开、冲突排除与最终内容 hash 由服务端 materializer 统一处理。
-- 实时流：`stream-bus` + 短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）；运行中可读 inflight `stream.ndjson`；多 Scheduler 副本不共享内存 bus。
+- 实时流：`stream-bus` 只作非权威投递；短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）。补读只认本机 inflight `stream.ndjson` / evidence；未落盘或另一副本看不到文件须显式报告。多 Scheduler 副本不共享内存 bus。
 - Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
 - **硬编码链接**：禁止在源码、测试、文档示例中写死公网第三方/中转/个人域名（如 `ai.feei.cn`、`agentrouter.org`）。需要可运行的 URL 夹具时只用 `127.0.0.1` 或内网地址（RFC1918、Docker 内部主机名）；不要用公网域名冒充上游。产品内置的官方厂商默认端点（OpenAI / Anthropic / DeepSeek）与官方发行/包管理源除外。`CLAUDE.md` 与本文件同步（符号链接）。
 

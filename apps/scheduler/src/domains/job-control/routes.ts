@@ -11,13 +11,15 @@ import {
   rolesForProject,
   triggerHubFromHumanComment,
 } from "../../core.js";
-import { roleNameForJobType } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
+import { dispositionAllowed } from "../../finding-state-matrix.js";
+import { jobProvenance } from "../../import-provenance.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { runner } from "../../runtime.js";
+import { PROJECT_MISMATCH, resolveActorProjectId } from "../../project-scope.js";
 import { TaskSeedInputError } from "../../task-compose.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recoverCancelledDerivedJob } from "./recovery.js";
@@ -56,9 +58,11 @@ function sendRequeueError(
   }
   if (result.kind === "not_resumable") {
     return reply.code(409).send({
-      error: `Job 状态 ${result.status} 不允许重新入队；仅 failed/timeout/orphan/waiting_human 可操作`,
-      error_code: JOB_NOT_RESUMABLE,
+      error: result.reason
+        ?? `Job 状态 ${result.status} 不允许重新入队；仅 failed/timeout/orphan/waiting_human 可操作`,
+      error_code: result.error_code ?? JOB_NOT_RESUMABLE,
       status: result.status,
+      ...(result.provenance ? { provenance: result.provenance } : {}),
     });
   }
   const currentUnresolvable = Boolean(result.detail.resolution_error)
@@ -68,6 +72,7 @@ function sendRequeueError(
       ...currentSnapshotUnresolvableBody(result.detail.resolution_error ?? "current snapshot resolution failed"),
       job_ids: [result.detail.job_id],
       stale_fields: result.detail.stale_fields,
+      ...(result.provenance ? { provenance: result.provenance } : {}),
     });
   }
   return reply.code(409).send({
@@ -76,6 +81,7 @@ function sendRequeueError(
     job_ids: [result.detail.job_id],
     stale_fields: result.detail.stale_fields,
     next_action: mode === "rerun-current" ? "fix-current-configuration" : "rerun-current",
+    ...(result.provenance ? { provenance: result.provenance } : {}),
   });
 }
 
@@ -84,24 +90,32 @@ export function isPublicJobTypeAllowed(
   jobType: string,
   enabledRoles: readonly { name: string }[],
 ): boolean {
-  const roleName = roleNameForJobType(jobType.trim().toLowerCase());
-  if (roleName === "verify") return true;
-  return enabledRoles.some((role) => role.name === roleName.trim().toLowerCase());
+  const type = jobType.trim().toLowerCase();
+  if (type === "verify") return true;
+  return enabledRoles.some((role) => role.name === type);
 }
 
 export function registerJobControlRoutes(app: FastifyInstance): void {
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);
+    const scoped = resolveActorProjectId(req.actor?.projectId, body.project_id);
+    if (!scoped.ok) {
+      return reply.code(403).send({
+        error: `token 仅限项目 ${req.actor?.projectId}`,
+        error_code: PROJECT_MISMATCH,
+      });
+    }
+    const projectId = scoped.projectId ?? body.project_id;
     // `verify` remains a compatibility alias used by the runtime-image smoke
     // to inspect the governed Verify snapshot. It is still scheduler-owned
     // for priority/purpose, but unlike `verify_finding` it has no Finding
     // lifecycle and cannot confirm anything on its own.
-    const systemJobTypes = new Set(["hub_reason", "hub", "verify_finding", "report"]);
+    const systemJobTypes = new Set(["hub_reason", "verify_finding", "report"]);
     if (systemJobTypes.has(body.type.trim().toLowerCase())) {
       return reply.code(409).send({ error: "scheduler-owned system Job types cannot be created through the public endpoint" });
     }
-    if (!isPublicJobTypeAllowed(body.type, await rolesForProject(sql, body.project_id))) {
+    if (!isPublicJobTypeAllowed(body.type, await rolesForProject(sql, projectId))) {
       return reply.code(409).send({ error: "role is not enabled for project" });
     }
     // Scheduling lanes are scheduler-owned.  A public caller may include
@@ -130,7 +144,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     let canvasId: string;
     try {
       canvasId = await ensureCanvasForTask({
-        projectId: body.project_id,
+        projectId,
         title: body.title ?? `${body.type} 任务`,
         target: { type: body.type, ...payload },
       });
@@ -141,7 +155,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       throw error;
     }
     const { job, duplicated } = await createJob({
-      projectId: body.project_id,
+      projectId,
       canvasId,
       type: body.type,
       payload,
@@ -198,6 +212,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       nextCursor: hasMore && last ? cursorForRow("jobs", last) : null,
       hasMore,
       live: false,
+      query_plane: "current",
     });
   });
 
@@ -214,9 +229,10 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const [cur] = await sql`SELECT id, disposition, verify_status, project_id FROM findings WHERE id = ${id}`;
     if (!cur) return reply.code(404).send({ error: "finding not found" });
     // 技术 confirmed 唯一入口是系统 Verify；人工 disposition 不得旁路
-    if (body.disposition === "confirmed_vuln" && cur.verify_status !== "confirmed") {
+    const allowed = dispositionAllowed(String(cur.verify_status), body.disposition);
+    if (!allowed.ok) {
       return reply.code(409).send({
-        error: "confirmed_vuln_requires_verify",
+        error: allowed.error_code,
         message: "仅当系统 Verify 已将 verify_status 置为 confirmed 后，才允许 disposition=confirmed_vuln",
         verify_status: cur.verify_status,
       });
@@ -367,7 +383,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "not found" });
     const [events, findings, attempts, effects, broadcasts, usage, canvases] = await Promise.all([
-      sql`SELECT id, job_seq, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 50`,
+      sql`SELECT id, job_seq, attempt_id, type, payload_json, created_at FROM events WHERE job_id = ${id} ORDER BY id LIMIT 50`,
       sql`SELECT id, fingerprint, title, severity, location, verify_status FROM findings WHERE job_id = ${id}`,
       sql`SELECT id, attempt_no, status, phase, replay_policy, cancel_requested, cancel_requested_at,
                  snapshot_identity_json, state_json, sandbox_id, session_id, outcome_json, error,
@@ -428,6 +444,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         : undefined,
     );
     return {
+      query_plane: "current",
+      provenance: jobProvenance(String(job.status), job.payload_json),
       job: safeJob,
       dispatched_prompt: dispatchedPrompt || null,
       events: events.map((event) => ({
@@ -457,7 +475,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     }
     const limit = pageLimit(q.limit);
     const rows = await sql`
-      SELECT id, job_seq, type, payload_json, created_at
+      SELECT id, job_seq, attempt_id, type, payload_json, created_at
       FROM events WHERE job_id = ${id}
         AND (${cursor?.created_at ?? null}::timestamptz IS NULL
           OR created_at > ${cursor?.created_at ?? null}::timestamptz
@@ -474,6 +492,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       nextCursor: rows.length > limit && last ? cursorForRow("events", last) : null,
       hasMore: rows.length > limit,
       live: false,
+      query_plane: "history",
     });
   });
 
@@ -539,16 +558,18 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
   app.get("/jobs/:id/evidence/stream", async (req, reply) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cursor?: string; after?: string; limit?: string; tail?: string };
-    const [job] = await sql`SELECT id, status FROM jobs WHERE id = ${id}`;
+    const [job] = await sql`SELECT id, status, transcript_uri FROM jobs WHERE id = ${id}`;
     if (!job) return reply.code(404).send({ error: "job not found" });
     const after = q.cursor ?? q.after ?? null;
+    const streamable = STREAMABLE_JOB_STATUSES.has(String(job.status));
     let result;
     try {
       result = await readNormalizedStreamPage(id, {
         after,
         limit: pageLimit(q.limit),
         tail: q.tail === "1" || q.tail === "true",
-        live: STREAMABLE_JOB_STATUSES.has(String(job.status)),
+        live: streamable,
+        expectLocal: streamable || Boolean(job.transcript_uri),
       });
     } catch (error) {
       if (error instanceof CursorError) {
@@ -560,9 +581,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       }
       throw error;
     }
-    // `events` is retained as a compatibility alias while `items` is the
-    // canonical HTTP/WS envelope field.
-    return { ...result, events: result.items };
+    return result;
   });
 
   // 只有 pending 可调整优先级（运行中/终态改优先级无意义）
@@ -699,6 +718,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       ...result.job,
       execution: "frozen_snapshot",
       snapshot_refreshed: false,
+      provenance: result.provenance,
       message: "已使用旧冻结快照重新入队；Dispatcher 将为同一 Job 创建新 Attempt",
     };
   });
@@ -724,6 +744,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       ...result.job,
       execution: "current_snapshot",
       snapshot_refreshed: true,
+      provenance: result.provenance,
       message: "已按当前配置重冻快照并重新入队；画布与历史 Attempt/effect 保持不变",
     };
   });

@@ -1,11 +1,11 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
-  EffectiveFindingProtocol as EffectiveFindingProtocolSchema,
   FindingProtocolConfig as FindingProtocolConfigSchema,
   CANONICAL_UUID_PATTERN,
   SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
   rejectNonCurrentAgentCli,
+  isCurrentAgentCli,
   type EventEnvelopeInput,
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
@@ -23,6 +23,7 @@ import { inc } from "./metrics.js";
 import {
   createRoleRuntimeSnapshotApplication,
   freezeAgentSnapshotNetworkPolicy,
+  scrubStoredProjectImagePolicy,
   type AgentRuntimeSnapshot,
 } from "./domains/role-runtime-snapshot/index.js";
 import { transitionJob as applyJobTransition } from "./domains/job-lifecycle/index.js";
@@ -41,7 +42,8 @@ import {
   type HubCanvasJobTerminalStatus,
   type HubAnalysisCompleteGate,
 } from "./domains/hub-orchestration/index.js";
-import { resolveFindingProtocol } from "./finding-protocol.js";
+import { parseFrozenFindingProtocol, resolveFindingProtocol, rewriteFindingProtocolMode } from "./finding-protocol.js";
+import { canonicalizeRoleRuntimeKnobsJson } from "./runtime-knobs.js";
 import * as findingVerification from "./verify.js";
 import * as reportConvergence from "./report.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -49,7 +51,6 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
-import { assertFrozenRuntimeImageLocal } from "./runtime-images.js";
 
 const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
 
@@ -107,6 +108,7 @@ const eventIngestionApplication = createEventIngestionApplication(
   async (tx, jobId, envelope, ingest) => {
     await eventIngestionSideEffectApplication.applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload, {
       jobStatusAtLock: ingest?.jobStatusAtLock,
+      attemptId: ingest?.attemptId,
     });
   },
   {
@@ -205,11 +207,48 @@ function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
   return (SEVERITY_RANK as readonly string[]).includes(s) ? (s as SeverityRank) : fallback;
 }
 
+export const LEFTOVER_RULE_ALIAS_KEYS = [
+  "autoVerifySeverities",
+  "hubWaitSeverities",
+  "AUTO_VERIFY_SEVERITIES",
+] as const;
+
+/** 物理删除已停用的规则别名，以及 leftover CLI 并发键；当前 CLI 配额保留。 */
+export function scrubLeftoverRulesJson(rules: unknown): {
+  rules: Record<string, unknown>;
+  removedKeys: string[];
+} {
+  const source = rules && typeof rules === "object" && !Array.isArray(rules)
+    ? (rules as Record<string, unknown>)
+    : {};
+  const out: Record<string, unknown> = { ...source };
+  const removedKeys: string[] = [];
+  for (const key of LEFTOVER_RULE_ALIAS_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
+    delete out[key];
+    removedKeys.push(key);
+  }
+  const cli = out.maxConcurrentByAgentCli;
+  if (cli && typeof cli === "object" && !Array.isArray(cli)) {
+    const next: Record<string, unknown> = {};
+    let stripped = false;
+    for (const [key, value] of Object.entries(cli as Record<string, unknown>)) {
+      if (isCurrentAgentCli(key)) next[key] = value;
+      else {
+        stripped = true;
+        removedKeys.push(`maxConcurrentByAgentCli.${key}`);
+      }
+    }
+    if (stripped) out.maxConcurrentByAgentCli = next;
+  }
+  return { rules: out, removedKeys };
+}
+
 function asCliLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!["claude-code", "pi", "dsh"].includes(key)) return fallback;
+    if (!isCurrentAgentCli(key)) continue;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
     out[key] = value;
   }
@@ -329,7 +368,7 @@ export interface SchedulingPriorityInput {
 /** Resolve a Job's immutable semantic purpose from its type/payload. */
 export function schedulingPurposeForJob(input: SchedulingPriorityInput): SchedulingPurpose {
   const type = String(input.type ?? "").toLowerCase();
-  if (type === "hub_reason" || type === "hub") return "hub";
+  if (type === "hub_reason") return "hub";
   if (type === "verify_finding" || type === "verify") return "verify";
   if (type === "report") return "report";
   const explicit = input.purpose ?? input.payload?.scheduling_purpose;
@@ -369,18 +408,12 @@ export function fixedPriorityForJob(input: SchedulingPriorityInput): number {
   return FIXED_PRIORITY.role;
 }
 
-/** Alias kept intentionally explicit for tests and API adapters. */
-export const priorityForJob = fixedPriorityForJob;
-export const resolveJobPriority = fixedPriorityForJob;
-
 /** A PATCH may only write the class-derived value, never an arbitrary score. */
 export function priorityMatchesJob(input: SchedulingPriorityInput, priority: number): boolean {
   return Number.isInteger(priority) && priority === fixedPriorityForJob(input);
 }
 
-/** Compatibility facade; the Hub bounded context owns this edge-trigger policy. */
-
-const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "hub", "verify_finding", "verify", "report"]);
+const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "verify_finding", "verify", "report"]);
 
 export function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
   const followup = payload.verification_followup;
@@ -610,7 +643,96 @@ export function mergeGlobalRulesPatch(
       previous && typeof previous === "object" && !Array.isArray(previous) ? (previous as Record<string, unknown>) : {};
     merged[key] = { ...previousMap, ...(incoming as Record<string, unknown>) };
   }
-  return merged;
+  return scrubLeftoverRulesJson(merged).rules;
+}
+
+/** 启动 / 写入前物理清扫已停用规则键，不再保留「存着但不生效」的第二真相。 */
+export async function scrubLeftoverStoredRules(
+  db: typeof sql,
+): Promise<{ global: number; projects: number }> {
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  let global = 0;
+  const globalScrub = scrubLeftoverRulesJson(g?.rules_json ?? {});
+  if (globalScrub.removedKeys.length > 0) {
+    await db`UPDATE global_settings SET rules_json = ${db.json(globalScrub.rules as never)}, updated_at = now() WHERE id = 'global'`;
+    global = 1;
+  }
+
+  const projects = await db`SELECT id, config_json FROM projects` as { id: string; config_json?: unknown }[];
+  let projectCount = 0;
+  for (const project of projects ?? []) {
+    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
+    const rules = cfg.rules && typeof cfg.rules === "object" && !Array.isArray(cfg.rules)
+      ? (cfg.rules as Record<string, unknown>)
+      : null;
+    if (!rules) continue;
+    const next = scrubLeftoverRulesJson(rules);
+    const stripped = stripFindingProtocolFromRules(next.rules);
+    const removedProtocol = Object.keys(stripped).length !== Object.keys(next.rules).length;
+    if (next.removedKeys.length === 0 && !removedProtocol) continue;
+    cfg.rules = stripped;
+    await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
+    projectCount += 1;
+  }
+  return { global, projects: projectCount };
+}
+
+/** 物理清扫已删除的配置别名：agent_choice、rules 内协议投影残留、脏 image_strategy、RoleConfig knobs snake_case。 */
+export async function scrubRedundantConfigSurface(
+  db: typeof sql,
+): Promise<{ protocols: number; imagePolicies: number; roleKnobs: number }> {
+  let protocols = 0;
+  let imagePolicies = 0;
+  let roleKnobs = 0;
+
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const globalRules = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>) };
+  const globalProtocol = rewriteFindingProtocolMode(globalRules.finding_protocol);
+  if (globalProtocol.changed) {
+    globalRules.finding_protocol = globalProtocol.next;
+    await db`UPDATE global_settings SET rules_json = ${db.json(globalRules as never)}, updated_at = now() WHERE id = 'global'`;
+    protocols += 1;
+  }
+
+  const projects = await db`SELECT id, config_json FROM projects` as { id: string; config_json?: unknown }[];
+  for (const project of projects ?? []) {
+    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
+    let changed = false;
+    const protocol = rewriteFindingProtocolMode(cfg.finding_protocol);
+    if (protocol.changed) {
+      cfg.finding_protocol = protocol.next;
+      changed = true;
+      protocols += 1;
+    }
+    if (scrubStoredProjectImagePolicy(cfg)) {
+      changed = true;
+      imagePolicies += 1;
+    }
+    if (changed) await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
+  }
+
+  const canvases = await db`
+    SELECT id, target_json FROM canvases
+    WHERE target_json ? 'effective_finding_protocol'` as { id: string; target_json?: unknown }[];
+  for (const canvas of canvases ?? []) {
+    const target = { ...((canvas.target_json ?? {}) as Record<string, unknown>) };
+    const protocol = rewriteFindingProtocolMode(target.effective_finding_protocol);
+    if (!protocol.changed) continue;
+    target.effective_finding_protocol = protocol.next;
+    await db`UPDATE canvases SET target_json = ${db.json(target as never)} WHERE id = ${canvas.id}`;
+    protocols += 1;
+  }
+
+  const roleConfigs = await db`
+    SELECT id, runtime_knobs_json FROM role_configs` as { id: string; runtime_knobs_json?: unknown }[];
+  for (const row of roleConfigs ?? []) {
+    const knobs = canonicalizeRoleRuntimeKnobsJson(row.runtime_knobs_json);
+    if (!knobs.changed) continue;
+    await db`UPDATE role_configs SET runtime_knobs_json = ${db.json(knobs.next as never)} WHERE id = ${row.id}`;
+    roleKnobs += 1;
+  }
+
+  return { protocols, imagePolicies, roleKnobs };
 }
 
 /** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */
@@ -829,7 +951,6 @@ export async function createJob(input: CreateJobInput) {
       const frozenKnobs = freezeRuntimeKnobs(resolvedKnobs);
       const { role_runtime_knobs: _roleKnobs, ...snapshotBase } = snapshot;
       const snapshotWithKnobs = { ...snapshotBase, runtime_knobs: frozenKnobs };
-      await assertFrozenRuntimeImageLocal(snapshotWithKnobs);
       const [created] = await tx`
         INSERT INTO jobs ${tx({
           project_id: input.projectId,
@@ -877,9 +998,10 @@ function parseStoredFindingProtocolConfig(value: unknown) {
   return FindingProtocolConfigSchema.parse(value);
 }
 
-function parseFrozenFindingProtocol(value: unknown): EffectiveFindingProtocol | undefined {
-  if (value === undefined || value === null) return undefined;
-  return EffectiveFindingProtocolSchema.parse(value);
+export function stripFindingProtocolFromRules(rules: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(rules, "finding_protocol")) return rules;
+  const { finding_protocol: _protocol, ...rest } = rules;
+  return rest;
 }
 
 /**
@@ -988,15 +1110,7 @@ async function findingProtocolForJob(tx: Tx, job: Record<string, unknown>): Prom
     const frozen = parseFrozenFindingProtocol(target.effective_finding_protocol);
     if (frozen) return frozen;
   }
-
-  // Compatibility for canvases created before schema v20. New canvases always
-  // freeze this value at creation, so later config edits cannot rewrite history.
-  const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-  const [project] = await tx`SELECT config_json FROM projects WHERE id = ${job.project_id as string}`;
-  return resolveFindingProtocol(
-    parseStoredFindingProtocolConfig(((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol),
-    parseStoredFindingProtocolConfig(((project?.config_json ?? {}) as Record<string, unknown>).finding_protocol),
-  );
+  throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
 }
 
 // ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------

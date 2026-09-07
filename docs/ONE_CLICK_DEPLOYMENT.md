@@ -21,7 +21,6 @@ Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000�
 |------|------|
 | `deploy/docker-compose.prod.yml` | PostgreSQL、Silo、Scheduler、Image Admission、Web、备份 |
 | `deploy/docker-compose.real.yml` | real 模式：挂载 Docker Socket |
-| `deploy/docker-compose.online.yml` | 空兼容层（旧脚本 `-f` 仍可用；推荐直接用 prod + pull） |
 | `deploy/Dockerfile.scheduler` / `.web` / `.image-admission` / `.assets-helper` / `.silo` | 平台服务镜像 |
 | `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony/Android） |
 | `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
@@ -101,7 +100,7 @@ DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 
 CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + RoleConfig，Job 创建时冻结。`AGENT_MODE` 只表示 fake/real。
 
-官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底。`DOCKER_IMAGE_AUDIT` 为历史兼容字段，**不能**用可变 tag 越过市场信任。
+官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底，不能用可变 tag 越过市场信任。
 
 发布与多 channel 细节：[`RELEASE_RUNTIME_IMAGES.md`](./RELEASE_RUNTIME_IMAGES.md)、[`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](./RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
 
@@ -167,8 +166,8 @@ Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_T
 `DEEPSONAR_RUNTIME_REGISTRY_CHANNEL`（缺省 `aliyun-acr`）。它只选择宿主平台上每个产品的最新版本，
 所选通道或平台缺失时直接失败，不跨 registry 回退。项目保存 `project_managed` 映射或启用/固定项目镜像时，
 Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准备；配置不落库，完成后需显式重试。
-建任务 / Hub 派生 / resume 在冻结 digest 落库前也会做同一套 inspect-only 检查，本机缺层返回 `RUNTIME_IMAGE_NOT_LOCAL` 且不插入注定失败的 Job。
-Dispatcher claim 仍只 inspect，缺失时以 `runtime_image_not_ready` 失败，不会临时触发网络拉取。
+建任务 / Hub 派生 / resume 只冻结不可变 digest，不再因 Scheduler 本机缺层拒绝。
+OpenSandbox server 按冻结 digest 拉取，并在 provision 后重验合同；Scheduler 不会在 Job 执行期隐式 `docker pull`。
 
 本机 tag 的 `detect-local` / `adopt-local` 见 `prepare-runtime-images.*`：检测只读，adopt 须管理员显式确认，不进入导出清单。
 

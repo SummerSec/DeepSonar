@@ -42,6 +42,7 @@ GET /credentials/:id/compatibility
 GET /credentials/:id/impact
 GET /credentials/:id/models
 GET /credentials/providers
+GET /dashboard/ops
 GET /dashboard/overview
 GET /dashboard/usage
 GET /exports/:id
@@ -68,6 +69,7 @@ GET /platform/shared-assets
 GET /projects
 GET /projects/:id
 GET /projects/:id/findings/summary
+GET /projects/:id/reports
 GET /projects/:id/canvases
 GET /projects/:id/exports
 GET /projects/:id/readiness
@@ -216,6 +218,7 @@ GET /credentials/{id}/compatibility
 GET /credentials/{id}/impact
 GET /credentials/{id}/models
 GET /credentials/providers
+GET /dashboard/ops
 GET /dashboard/overview
 GET /dashboard/usage
 GET /findings
@@ -227,6 +230,7 @@ GET /global-settings
 GET /health
 GET /jobs
 GET /jobs/{id}
+GET /jobs/{id}/events
 GET /jobs/{id}/evidence
 GET /jobs/{id}/evidence/session
 GET /jobs/{id}/evidence/session/download
@@ -237,6 +241,7 @@ GET /platform/shared-assets
 GET /projects
 GET /projects/{id}
 GET /projects/{id}/findings/summary
+GET /projects/{id}/reports
 GET /projects/{id}/canvases
 GET /projects/{id}/readiness
 GET /projects/{id}/role-configs

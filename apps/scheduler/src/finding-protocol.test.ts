@@ -1,16 +1,20 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { FindingProtocolConfig } from "@deepsonar/shared-types";
 import {
   CVSS_CALCULATOR,
+  canonicalizeFindingProtocolMode,
   normalizeFindingProposal,
   normalizeFindingScoring,
+  parseFrozenFindingProtocol,
   resolveFindingProtocol,
 } from "./finding-protocol.js";
 
 test("finding protocol resolves task over project over global and replaces lists", () => {
   const effective = resolveFindingProtocol(
     {
-      mode: "agent_choice",
+      mode: "hybrid",
       allowed_profiles: ["general", "quality.bug"],
       display_name: "global",
       scoring: { accepted_versions: ["4.0", "3.1"] },
@@ -46,7 +50,7 @@ test("fixed and allowed profile boundaries reject Agent overrides", () => {
   assert.equal(normalizeFindingProposal({ title: "x" }, fixed).profile, "general");
 
   const choice = resolveFindingProtocol(undefined, undefined, {
-    mode: "agent_choice",
+    mode: "hybrid",
     default_profile: "general",
     allowed_profiles: ["general", "quality.bug"],
   });
@@ -60,6 +64,7 @@ test("fixed and allowed profile boundaries reject Agent overrides", () => {
   assert.equal(unscored.profile, "general");
   assert.equal(unscored.severity, undefined);
   assert.equal(unscored.scoring, undefined);
+  assert.equal("suggest_verify" in unscored, false);
 
   const hybrid = resolveFindingProtocol(undefined, undefined, {
     mode: "hybrid",
@@ -156,4 +161,60 @@ test("normalizeFindingProposal keeps declared quantities", () => {
     quantities,
   }, protocol);
   assert.deepEqual(normalized.quantities, quantities);
+});
+
+test("leftover suggest_verify is gone from contract, persist, and Agent-facing copy", () => {
+  const sources = [
+    new URL("../../../packages/shared-types/src/index.ts", import.meta.url),
+    new URL("./finding-protocol.ts", import.meta.url),
+    new URL("./domains/event-ingestion/side-effects.ts", import.meta.url),
+    new URL("./dispatcher.ts", import.meta.url),
+    new URL("./platform-tools.ts", import.meta.url),
+    new URL("../../../docs/ARCHITECTURE.md", import.meta.url),
+  ];
+  for (const source of sources) {
+    assert.doesNotMatch(readFileSync(source, "utf8"), /suggest_verify/);
+  }
+  const architecture = readFileSync(new URL("../../../docs/ARCHITECTURE.md", import.meta.url), "utf8");
+  assert.doesNotMatch(architecture, /0020_finding_protocol\.sql/);
+});
+
+test("agent_choice is deleted as a writable mode and equals hybrid for frozen reads", () => {
+  const shared = readFileSync(new URL("../../../packages/shared-types/src/index.ts", import.meta.url), "utf8");
+  const editor = readFileSync(new URL("../../web/src/FindingProtocolEditor.tsx", import.meta.url), "utf8");
+  assert.match(shared, /FindingProtocolMode = z\.enum\(\["fixed", "hybrid"\]\)/);
+  assert.doesNotMatch(editor, /agent_choice/);
+  assert.throws(() => FindingProtocolConfig.parse({ mode: "agent_choice" }), /invalid_enum|Invalid option|agent_choice/);
+  assert.equal(canonicalizeFindingProtocolMode("agent_choice"), "hybrid");
+  assert.equal(canonicalizeFindingProtocolMode("hybrid"), "hybrid");
+  assert.equal(canonicalizeFindingProtocolMode("fixed"), "fixed");
+  const frozen = parseFrozenFindingProtocol({
+    mode: "agent_choice",
+    default_profile: "general",
+    allowed_profiles: ["general", "quality.bug"],
+    scoring: {
+      default_standard: "CVSS",
+      default_version: "3.1",
+      accepted_versions: ["3.1", "4.0"],
+      require_scoring_for_profiles: [],
+    },
+    display_name: "legacy",
+    source: "task",
+  });
+  assert.equal(frozen?.mode, "hybrid");
+  assert.equal(normalizeFindingProposal({ title: "x", profile: "quality.bug" }, frozen!).profile, "quality.bug");
+});
+
+test("Job finding protocol only reads the frozen canvas snapshot", () => {
+  const core = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
+  const executor = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(core, /FROZEN_FINDING_PROTOCOL_MISSING/);
+  assert.match(executor, /FROZEN_FINDING_PROTOCOL_MISSING/);
+  assert.doesNotMatch(core, /Compatibility for canvases created before schema v20/);
+  assert.doesNotMatch(executor, /Compatibility for pre-v20 canvases/);
+  const fn = core.slice(core.indexOf("async function findingProtocolForJob"), core.indexOf("export async function ingestEvent"));
+  assert.match(fn, /FROZEN_FINDING_PROTOCOL_MISSING/);
+  assert.doesNotMatch(fn, /resolveFindingProtocol\(/);
+  assert.match(executor, /parseFrozenFindingProtocol/);
+  assert.doesNotMatch(executor, /effective_finding_protocol: effectiveFindingProtocol/);
 });

@@ -8,15 +8,17 @@ import {
   projectCredentialProvider,
   validateCredentialRoleConfigBinding,
 } from "../credentials.js";
-import { DISPATCH_CLAIM_ADVISORY_KEY } from "../core.js";
+import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson, stripFindingProtocolFromRules } from "../core.js";
 import { sql } from "../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
 import {
   parseProjectImagePolicy,
   persistableProjectRoleConfigModel,
+  scrubStoredProjectImagePolicy,
   type ProjectImagePolicy,
 } from "../domains/role-runtime-snapshot/application.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import { rewriteFindingProtocolMode } from "../finding-protocol.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
 import {
   loadPackFile,
@@ -27,7 +29,25 @@ import {
   type OpenedPack,
 } from "./pack.js";
 import { CONFIG_MODULES, isConfigOnly, type ModuleKey } from "./modules.js";
-import { archiveJobStatus, parseTransferredDshTaskMode } from "./sanitize.js";
+import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
+
+function sanitizeImportedProjectConfig(cfg: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...cfg };
+  const protocol = rewriteFindingProtocolMode(next.finding_protocol);
+  if (protocol.changed) next.finding_protocol = protocol.next;
+  if (next.rules && typeof next.rules === "object" && !Array.isArray(next.rules)) {
+    next.rules = stripFindingProtocolFromRules(scrubLeftoverRulesJson(next.rules).rules);
+  }
+  scrubStoredProjectImagePolicy(next);
+  return next;
+}
+
+function sanitizeImportedTarget(target: unknown): Record<string, unknown> {
+  const next = { ...((target && typeof target === "object" && !Array.isArray(target) ? target : {}) as Record<string, unknown>) };
+  const protocol = rewriteFindingProtocolMode(next.effective_finding_protocol);
+  if (protocol.changed) next.effective_finding_protocol = protocol.next;
+  return next;
+}
 
 export interface PreviewResult {
   compatible: boolean;
@@ -225,9 +245,9 @@ async function createNewProject(
 
   const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/rules.json");
   const enabledFile = readJson<{ enabled?: string[] | null }>(pack.files, "data/roles-enabled.json");
-  const config_json: Record<string, unknown> = {
+  const config_json: Record<string, unknown> = sanitizeImportedProjectConfig({
     ...(srcProject.config_json ?? {}),
-  };
+  });
   if (modules.includes("rules") && rulesFile?.rules) {
     config_json.rules = rulesFile.rules;
   }
@@ -295,10 +315,10 @@ async function mergeConfiguration(
     if (modules.includes("rules")) {
       const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/rules.json");
       if (rulesFile?.rules) {
-        if (policy === "use_source") cfg.rules = { ...((cfg.rules as object) ?? {}), ...rulesFile.rules };
+        if (policy === "use_source") cfg.rules = scrubLeftoverRulesJson({ ...((cfg.rules as object) ?? {}), ...rulesFile.rules }).rules;
         else if (policy === "keep_target") {
-          /* keep */
-        } else cfg.rules = { ...rulesFile.rules, ...((cfg.rules as object) ?? {}) };
+          if (cfg.rules) cfg.rules = scrubLeftoverRulesJson(cfg.rules).rules;
+        } else cfg.rules = scrubLeftoverRulesJson({ ...rulesFile.rules, ...((cfg.rules as object) ?? {}) }).rules;
       }
     }
 
@@ -320,7 +340,8 @@ async function mergeConfiguration(
       );
     }
 
-    await tx`UPDATE projects SET config_json = ${tx.json(cfg as never)}, updated_at = now() WHERE id = ${targetProjectId}`;
+    const sanitized = sanitizeImportedProjectConfig(cfg);
+    await tx`UPDATE projects SET config_json = ${tx.json(sanitized as never)}, updated_at = now() WHERE id = ${targetProjectId}`;
     return id_map;
   });
 }
@@ -351,7 +372,7 @@ async function importRoleConfigs(
     const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
     if (!role) continue; // 自定义角色未创建时跳过（builtin 名应存在）
 
-    const agentCli = typeof rc.agent_cli === "string" && rc.agent_cli ? rc.agent_cli : "claude-code";
+    const agentCli = parseTransferredAgentCli(rc.agent_cli, `RoleConfig ${roleName}`);
     const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `RoleConfig ${roleName}`);
     const model = persistableProjectRoleConfigModel(
       imagePolicy,
@@ -481,7 +502,7 @@ async function importTasks(
         id: newId,
         project_id: projectId,
         title: (c.title as string) ?? "imported task",
-        target_json: ((c.target_json as object) ?? {}) as never,
+        target_json: sanitizeImportedTarget(c.target_json) as never,
         trigger_source: "import",
         trigger_event_id: null,
         trigger_payload_json: { import_origin: c.source_id } as never,
@@ -593,7 +614,6 @@ async function importTasks(
             severity: f.severity as string,
             location: (f.location as string) ?? null,
             summary: (f.summary as string) ?? null,
-            suggest_verify: Boolean(f.suggest_verify),
             verify_status: (f.verify_status as string) ?? "pending",
             raw_json: ((f.raw_json as object) ?? {}) as never,
           })}`;

@@ -1,7 +1,7 @@
 name: ci
 
 # P0 门禁：typecheck + build + dist 启动 + fake 模式业务冒烟
-# - control MCP 协议（无服务）
+# - Job 控制 API-only 契约（无服务）
 # - roles / hub-loop / local-project API
 # - auth（独立 3101 进程，AUTH_REQUIRED=true）
 #
@@ -323,6 +323,14 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:platform-api
 
+      - name: Authorization boundary unit
+        run: pnpm ci:unit:authz
+
+      - name: Token, job, image, and transfer authorization Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:authz-boundaries
+
       - name: Default human admin and account integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -346,7 +354,7 @@ jobs:
         run: pnpm ci:integration:verify-eligibility
 
       - name: Job 控制 API-only 契约冒烟
-        run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-mcp.ts
+        run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-api.ts
 
       - name: Runtime test policy smoke
         run: pnpm ci:smoke:runtime-policy

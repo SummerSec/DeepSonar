@@ -19,7 +19,7 @@ import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_R
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { assertRuntimeImageAvailable, RuntimeImageNotReadyError, shouldInspectLocalRuntimeImage } from "./runtime-images.js";
+import { RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
@@ -69,7 +69,7 @@ export function isRetryableProvisionFailure(error: unknown): boolean {
   return /CONTAINER_START_FAILED|Egress sidecar container failed to start|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)/i.test(text);
 }
 import { finalizeReportJob } from "./report.js";
-import { canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
+import { canvasFindingsConverged, collectEvidenceSnapshot, evaluateConfirmGate, resolveFindingSubjectRevision } from "./verify.js";
 import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
@@ -374,8 +374,7 @@ export function dispatchSkipReason(
   projectJobLimit: number,
 ): string | null {
   const projectId = String(job.project_id);
-  // Historical snapshots may omit agent_cli; use the platform default rather
-  // than the mutable AGENT_PROVIDER environment value in quota accounting.
+  // Historical snapshots may omit agent_cli; use the platform default in quota accounting.
   const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
@@ -418,7 +417,7 @@ export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
 }
 
 /** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
-const REAL_BASE_TYPES = new Set(["audit_module", "verify_finding", "hub_reason", "report"]);
+const REAL_BASE_TYPES = new Set(["verify_finding", "hub_reason", "report"]);
 
 async function isRealType(type: string): Promise<boolean> {
   if (REAL_BASE_TYPES.has(type)) return true;
@@ -584,8 +583,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const cliCounts = new Map<string, number>();
     for (const row of active) {
       const projectId = row.project_id as string;
-      // 历史 Job 可能缺少 agent_cli；仅使用平台常量，禁止读取可变的
-      // AGENT_PROVIDER 环境变量。
+      // 历史 Job 可能缺少 agent_cli；仅使用平台常量。
       const cli = String(row.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
       const provider = String(row.credential_provider ?? "");
       const credentialId = String(row.credential_id ?? "");
@@ -812,11 +810,6 @@ async function runJob(jobId: string) {
       // Capability authentication remains disabled until `running`, but the
       // plaintext must exist before Docker creates immutable Config.Env.
       platformCapability = await preparePlatformCapability(jobId, snapshot);
-      // OpenSandbox 由 server 拉镜像，
-      // 合同/digest 在 provision 后重验，不能把本机缺层当成 Job 不可调度。
-      if (shouldInspectLocalRuntimeImage()) {
-        await assertRuntimeImageAvailable(runtimeImage);
-      }
     }
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
@@ -1115,7 +1108,7 @@ async function executeFake(jobId: string, type: string) {
   const emit = (t: string, payload: unknown) =>
     ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: t as never, payload });
 
-  if (type === "audit_module" || type === "audit") {
+  if (type === "audit") {
     const [job] = await sql`SELECT payload_json FROM jobs WHERE id = ${jobId}`;
     const fake = (job?.payload_json?.fake_finding ?? null) as {
       title?: string;
@@ -1131,7 +1124,6 @@ async function executeFake(jobId: string, type: string) {
       location: fake?.location ?? "auth/login.php:42",
       summary: fake?.summary ?? "用户输入未经参数化处理直接拼入 SQL 查询语句，攻击者可构造恶意参数改变查询语义并读取未授权数据。",
       rule_id: "fake-sqli-001",
-      suggest_verify: true,
       raw: { source: "fake-agent", v: 1 },
     });
     await emit("progress", { message: "假 agent：审计完成", percent: 100 });
@@ -1140,14 +1132,19 @@ async function executeFake(jobId: string, type: string) {
 
   if (type === "verify_finding") {
     await emit("progress", { message: "假 agent：验证中（证据硬门）", percent: 50 });
-    // 有合格 review+test 才 confirmed；否则 rework 回弹 Hub
+    // Fact-first 门禁通过才 confirmed；否则 rework 回弹 Hub
     const [vjob] = await sql`SELECT finding_id, payload_json FROM jobs WHERE id = ${jobId}`;
     const findingId = vjob?.finding_id as string | null;
     let canConfirm = false;
     if (findingId) {
-      const [f] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
-      const snap = await collectEvidenceSnapshot(sql, findingId, (f?.job_id as string) ?? null);
-      canConfirm = snap.qualified;
+      const [f] = await sql`SELECT job_id, raw_json FROM findings WHERE id = ${findingId}`;
+      const originJobId = (f?.job_id as string) ?? null;
+      const snap = await collectEvidenceSnapshot(sql, findingId, originJobId);
+      canConfirm = evaluateConfirmGate(snap, {
+        findingId,
+        subjectRevision: resolveFindingSubjectRevision((f ?? {}) as Record<string, unknown>, snap.facts),
+        originJobId,
+      }).ok;
     }
     await ingestEvent(jobId, {
       v: 1,

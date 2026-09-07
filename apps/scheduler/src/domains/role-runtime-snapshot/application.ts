@@ -46,7 +46,7 @@ export interface ProjectImagePolicy {
 
 const RUNTIME_IMAGE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,62}$/;
 
-/** 读取项目 JSON 中的镜像策略；缺省或脏值均安全回到全局继承。 */
+/** 读取项目 JSON 中的镜像策略；缺省 inherit_global。脏值由启动清扫删除，解析层暂按 inherit_global 以免中断已排队 Job。 */
 export function parseProjectImagePolicy(value: unknown): ProjectImagePolicy {
   const configValue = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -69,6 +69,24 @@ export function parseProjectImagePolicy(value: unknown): ProjectImagePolicy {
     }
   }
   return { image_strategy: strategy, role_runtime_images: Object.fromEntries(images) };
+}
+
+/** inherit_global 不保留 role_runtime_images；未知 image_strategy 物理删除。 */
+export function scrubStoredProjectImagePolicy(cfg: Record<string, unknown>): boolean {
+  let changed = false;
+  if (
+    Object.prototype.hasOwnProperty.call(cfg, "image_strategy")
+    && !PROJECT_IMAGE_STRATEGIES.includes(cfg.image_strategy as ProjectImageStrategy)
+  ) {
+    delete cfg.image_strategy;
+    changed = true;
+  }
+  const strategy = cfg.image_strategy === "project_managed" ? "project_managed" : "inherit_global";
+  if (strategy === "inherit_global" && Object.prototype.hasOwnProperty.call(cfg, "role_runtime_images")) {
+    delete cfg.role_runtime_images;
+    changed = true;
+  }
+  return changed;
 }
 
 /** 选择 Job 实际使用的镜像 key；项目托管缺省固定为系统 Base。 */
@@ -161,17 +179,7 @@ export async function scrubIgnoredProjectRoleConfigIdentity(
   return { runtime_image_keys: images.length, inherit_global_models: models.length };
 }
 
-let legacyAgentDefaultsWarningEmitted = false;
-function warnIgnoredLegacyAgentDefaults(): void {
-  if (legacyAgentDefaultsWarningEmitted) return;
-  const hasLegacyValues = ["AGENT_PROVIDER", "AGENT_MODEL"].some((name) => process.env[name] !== undefined);
-  if (!hasLegacyValues) return;
-  legacyAgentDefaultsWarningEmitted = true;
-  console.warn("[role-config] legacy AGENT_PROVIDER/AGENT_MODEL are ignored; configure agent_cli/model/env_vars in RoleConfig");
-}
-
 export function roleNameForJobType(jobType: string): string {
-  if (jobType === "audit_module") return "audit";
   if (jobType === "verify_finding") return "verify";
   if (jobType === "report") return "report";
   return jobType;
@@ -238,7 +246,6 @@ async function resolveAgentSnapshotForJobUnchecked(
   jobType: string,
   options?: { runtimeImageKey?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
-  warnIgnoredLegacyAgentDefaults();
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
   if (!role) throw new Error(`未注册的 Agent 角色: ${roleName}`);

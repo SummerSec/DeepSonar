@@ -169,7 +169,6 @@ export const config = {
 
   runtime: {
     provider: str("SANDBOX_PROVIDER", "opensandbox"),
-    imageAudit: str("DOCKER_IMAGE_AUDIT", "deepsonar-agent:latest"),
     /** fake=内置假 agent（联调用）；real=OpenSandbox 真实沙箱 */
     agentMode: str("AGENT_MODE", "real"),
     openSandbox: {
@@ -226,7 +225,7 @@ export const config = {
     blobDir: path.resolve(process.cwd(), str("BLOB_DIR", "./data/blobs")),
     /**
      * Shared-asset backend: `fs` (default, local disk under BLOB_DIR) or `s3`
-     * (S3-compatible object store). Aliases: local→fs, minio/object→s3.
+     * (S3-compatible object store). Only `fs` and `s3` are accepted.
      */
     blobStore: str("BLOB_STORE", "fs").toLowerCase() || "fs",
     transcriptRetentionDays: int("TRANSCRIPT_RETENTION_DAYS", 90),

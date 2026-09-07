@@ -225,7 +225,7 @@ try {
     import("../../apps/scheduler/src/credentials.js"),
     import("../../apps/scheduler/src/gateway.js"),
     import("../../apps/scheduler/src/provider-settings.js"),
-    import("../../apps/scheduler/src/dsh-pi-ai-settings.js"),
+    import("@deepsonar/runtime-sandbox"),
   ]);
   const { sql, migrate } = dbModule;
   const { activateProvisionedJobCapabilityTokens, registerPlatformControlRoutes, registerRuntimeHandler, unregisterRuntimeHandler } = platformApi;

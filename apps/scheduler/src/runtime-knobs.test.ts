@@ -9,6 +9,7 @@ import {
   mergeRoleRuntimeKnobOverrides,
   parseRuntimeKnobOverride,
   resolveRuntimeKnobs,
+  validateRuntimeKnobOverride,
 } from "./runtime-knobs.js";
 
 const env = {
@@ -97,7 +98,13 @@ test("role knobs merge project over global and ignore invalid values", () => {
     mergeRoleRuntimeKnobOverrides({ stallSec: 1_200, jobTokenMaxRequests: 80 }, { stallSec: 4_000 }),
     { stallSec: 4_000, jobTokenMaxRequests: 80, timeoutSec: undefined },
   );
-  assert.deepEqual(parseRuntimeKnobOverride({ stallSec: -1, job_token_max_requests: 12 }), { jobTokenMaxRequests: 12 });
+  assert.deepEqual(parseRuntimeKnobOverride({ stallSec: -1, jobTokenMaxRequests: 12 }), { jobTokenMaxRequests: 12 });
+});
+
+test("RoleConfig runtime_knobs reject snake_case aliases on write", () => {
+  assert.match(validateRuntimeKnobOverride({ stall_sec: 900 }) ?? "", /stallSec/);
+  assert.match(validateRuntimeKnobOverride({ job_token_max_requests: 12 }) ?? "", /jobTokenMaxRequests/);
+  assert.equal(validateRuntimeKnobOverride({ stallSec: 900 }), null);
 });
 
 test("frozen snapshot knobs round-trip and reject partial blobs", () => {

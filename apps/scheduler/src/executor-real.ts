@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   contextIdentity,
   normalizeRuntimeErrorDetails,
+  requireAgentCliRuntimeAdapter,
   runRealAgent,
   type ContextState,
 } from "@deepsonar/runtime-sandbox";
@@ -10,9 +11,7 @@ import {
   ControlEventEnvelope,
   EmitFactDirectPayload,
   EmitFindingDirectPayload,
-  EffectiveFindingProtocol,
   EventEnvelope,
-  FindingProtocolConfig,
   type EventEnvelopeInput,
   FindingPayload,
   HumanPayload,
@@ -27,7 +26,6 @@ import {
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { runner } from "./runtime.js";
-import { buildDshPiAiRuntimeProjection } from "./dsh-pi-ai-settings.js";
 import {
   assertJobCanPublishSharedAsset,
   ingestEvent,
@@ -39,6 +37,7 @@ import {
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
+import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import {
   PROVIDER_ENV_MAP,
@@ -55,6 +54,7 @@ import { mintJobToken } from "./gateway.js";
 import { collectEvidenceSnapshot, freezeVerifyFindingSubject, projectVerifyEvidenceForPrompt } from "./verify.js";
 import { buildVerifyJobPrompt } from "./verify-prompt.js";
 import { readReportBlob } from "./report.js";
+import { REPORT_QUANTITY_VERBATIM_NOTE } from "./report-numeric-fidelity.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./platform-control.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
@@ -77,7 +77,6 @@ import {
 import { inc } from "./metrics.js";
 import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/canvas/human-messages.js";
 import { composeHubInstruction, composeScopeForPrompt, composeWorkerInstruction } from "./compose-scope.js";
-import { resolveFindingProtocol } from "./finding-protocol.js";
 import { frozenTaskSeeds } from "./task-compose.js";
 import { materializeFrozenPiExtensions, parseFrozenPiExtensions } from "./pi-extensions.js";
 import {
@@ -224,11 +223,6 @@ function toolBoundaryError(code: "toolNotAllowed" | "duplicateToolCall" | "toolL
   return new ControlInputError(CONTROL_INPUT_ERROR_CODES[code], message);
 }
 
-/** @deprecated 发布权限改由 Job 冻结的 platform_tools 决定；保留导出供旧测试兼容。 */
-export function canRolePublishSharedAsset(_roleKind: AgentRuntimeSnapshot["role_kind"]): boolean {
-  return true;
-}
-
 async function ingestSemanticEventObserved(
   jobId: string,
   event: EventEnvelopeInput,
@@ -354,7 +348,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
   }
 
   const verdict = state.done.verdict;
-  if (input.isVerify && !["confirmed", "rework", "needs_human", "false_positive"].includes(verdict ?? "")) {
+  if (input.isVerify && !["confirmed", "rework", "needs_human"].includes(verdict ?? "")) {
     throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
   }
   events.push({
@@ -483,10 +477,10 @@ function resultContract(
 ): string {
   const enabled = new Set(toolNames);
   if (isHub) {
-    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images 的 image_key，且须与该角色 CLI 兼容；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image）。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
+    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images 的 image_key，且须与该角色 CLI 兼容、readiness=ready；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image），未就绪镜像拒绝（runtime_image_not_ready）且不创建 Worker。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
-    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human（兼容 false_positive→rework）。confirmed 仍须有独立 review + 完整 test 证据，否则调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
+    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human。confirmed 只认图上结构化 Fact（finding_id / subject_revision / ownership / expected / actual / outcome），不要重读源码、制品或 maker 结论做第二次复核；门禁失败时调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
   }
   if (isRole) {
     return enabled.has("emit_fact")
@@ -700,19 +694,9 @@ export async function executeReal(
     ? await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`
     : [undefined];
   const taskTarget = ((canvas?.target_json ?? {}) as Record<string, unknown>);
-  let effectiveFindingProtocol = EffectiveFindingProtocol.safeParse(
-    taskTarget.effective_finding_protocol,
-  ).data;
+  const effectiveFindingProtocol = parseFrozenFindingProtocol(taskTarget.effective_finding_protocol);
   if (!effectiveFindingProtocol) {
-    // Compatibility for pre-v20 canvases only. New tasks are frozen by
-    // ensureCanvasForTask and must never follow later configuration changes.
-    const [globalSettings] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const [project] = await sql`SELECT config_json FROM projects WHERE id = ${job.project_id as string}`;
-    const globalValue = ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol;
-    const projectValue = ((project?.config_json ?? {}) as Record<string, unknown>).finding_protocol;
-    const globalProtocol = globalValue == null ? undefined : FindingProtocolConfig.parse(globalValue);
-    const projectProtocol = projectValue == null ? undefined : FindingProtocolConfig.parse(projectValue);
-    effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
+    throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
   }
   const findingProtocolGuide = `## 当前生效 Finding 协议（Scheduler 冻结）
 名称：${effectiveFindingProtocol.display_name}
@@ -869,14 +853,14 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
 ${taskGoal}
 
 读取下面的任务画布，判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。
-每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：先调用 list_available_runtime_images 查询本项目已启用且可信的镜像目录，原样使用返回的 image_key，并核对该条目的 compatible_agent_clis 覆盖本轮角色 CLI（例如需要动态复现选 Kali 类、移动端目标选 mobile 类）；省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest。
+每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：先调用 list_available_runtime_images 查询本项目已启用且可信的镜像目录，原样使用返回的 image_key，并核对该条目的 compatible_agent_clis 覆盖本轮角色 CLI、readiness=ready（例如需要动态复现选 Kali 类、移动端目标选 mobile 类）；省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
 
 画布（YAML）：
 ${graph.yaml}
 
   约束：最多 ${rules.maxIntentsPerDecision} 个意图；不要重复开放或已完成意图；from 只能引用当前 YAML 中 root_id/fact/finding 对应的 UUID 值（不要填写字段名 root_id、别名或占位符）。
 role 只能原样使用 list_available_roles 本轮返回的 name；不得使用记忆、固定清单或猜测的角色，不得派发 system/hub 角色。
-runtime_image_key 只能原样使用 list_available_runtime_images 本轮返回的 image_key，且须与该角色 CLI 兼容；目录之外或 CLI 不兼容的值会使整次决策被拒绝。
+runtime_image_key 只能原样使用 list_available_runtime_images 本轮返回且 readiness=ready 的 image_key，且须与该角色 CLI 兼容；目录之外或 CLI 不兼容会 invalid_runtime_image，未就绪会 runtime_image_not_ready。
 任务出网策略：${allowEgress ? "本任务允许访问外部网络（Hub 与 Worker 相同）" : "本任务禁止访问模型网关之外的网络（Hub 与 Worker 相同）"}。
 Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
     if (taskTarget.kind === "compose") {
@@ -1007,15 +991,17 @@ ${graph.yaml}`;
     }
     initialInput = findingScoped
       ? `根据调度器冻结的单条 Finding 数据撰写独立 Markdown 报告。不要创建新 Finding，不要改变验证结论，也不要从画布或模型常识补造证据。
+${REPORT_QUANTITY_VERBATIM_NOTE}
 
 ## 确定性单 Finding 报告输入（report-input.json）
 以下 JSON 是该报告版本的唯一权威输入。报告应覆盖标题、严重度、位置、验证轮次与证据、影响、复现、修复建议、限制和 residual risk；输入缺少某项时应明确标为未知，不得编造。
 \`\`\`json
 ${inputBlock}
 \`\`\`
-
+${graph ? `\n任务画布（YAML）：\n${graph.yaml}\n` : ""}
 在 mark_job_done.summary 中给出完整 Markdown 正文，并引用 Finding id 或标题。`
       : `根据调度器提供的确定性任务数据撰写最终报告。不要创建新 Finding，不要改变验证结论。
+${REPORT_QUANTITY_VERBATIM_NOTE}
 
 任务目标：${taskGoal || "未提供"}
 统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}
@@ -1025,7 +1011,7 @@ ${inputBlock}
 \`\`\`json
 ${inputBlock}
 \`\`\`
-
+${graph ? `\n任务画布（YAML）：\n${graph.yaml}\n` : ""}
 在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」「待人工确认」与「未自动验证（严重度策略）」；策略排除项不等于误报或待人工。即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
   } else {
     initialInput = `执行 Hub 下发的安全审计任务：
@@ -1222,7 +1208,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     component_manifest_sha256: jsonHash(componentManifest),
     provider_config_files: componentManifest.provider_files,
     allow_egress: allowEgress,
-    effective_finding_protocol: effectiveFindingProtocol,
     module_selectors: moduleEvidence.module_selectors,
     missing_modules: moduleEvidence.missing_modules,
     module_content_hash: moduleEvidence.module_content_hash,
@@ -1457,7 +1442,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return { accepted: true, operation, roles: availableHubRoleCatalog };
     }
     if (operation === "list_available_runtime_images") {
-      return { accepted: true, operation, images: availableRuntimeImageCatalog };
+      const images = await listHubRuntimeImageCatalog(sql, job.project_id as string);
+      return { accepted: true, operation, images };
     }
     if (operation === "list_shared_assets") {
       const input = context.input && typeof context.input === "object" && !Array.isArray(context.input)
@@ -1493,6 +1479,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             errorCode: error.code,
             retryable: error.retryable,
             ...(error.path ? { path: error.path } : {}),
+            ...(error.details ? { details: error.details } : {}),
           },
         );
       }
@@ -1508,17 +1495,17 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
 
   if (provider === "dsh" && !activeCredentialProvider) throw new Error("DSH_CREDENTIAL_PROVIDER_MISSING");
-  const dshProvider = provider === "dsh"
-    ? buildDshPiAiRuntimeProjection({
-        settingsConfig: snapshot.settings_config_json,
-        credentialProvider: activeCredentialProvider!,
-        gatewayBaseUrl: config.gateway.sandboxUrl,
-        model,
-        contextWindowTokens: snapshot.context_window_tokens,
-        reasoning,
-        platformSystemPrompt: PLATFORM_SYSTEM_PROMPT,
-      })
-    : undefined;
+  const runtimeAdapter = requireAgentCliRuntimeAdapter(provider);
+  const dshProvider = runtimeAdapter.projectRuntime?.({
+    settingsConfig: snapshot.settings_config_json,
+    credentialProvider: activeCredentialProvider ?? "",
+    gatewayBaseUrl: config.gateway.sandboxUrl,
+    model,
+    contextWindowTokens: snapshot.context_window_tokens,
+    reasoning,
+    platformSystemPrompt: PLATFORM_SYSTEM_PROMPT,
+  });
+  if (provider === "dsh" && !dshProvider) throw new Error("DSH_RUNTIME_PROJECTION_UNSUPPORTED");
 
   let result: Awaited<ReturnType<typeof runRealAgent>>;
   try {
@@ -1571,8 +1558,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       subAgents: snapshot.subagents as never,
       piExtensions: piExtensionInjection.paths,
       workspaceFiles,
-      semanticToolEvents: {},
-      onSemanticEvent,
       secretValues: [platformToken, gatewayToken].filter((value): value is string => Boolean(value)),
       onRunReady: async ({ sendMessage, readWorkspaceFile, writeWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;

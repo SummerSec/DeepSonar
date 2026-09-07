@@ -1,10 +1,14 @@
 import type { FastifyInstance } from "fastify";
+import { loadDashboardOps } from "./ops.js";
 import { loadDashboardOverview } from "./overview.js";
 import { loadDashboardUsage, resolveUsageWindow } from "./usage.js";
 
 export function registerDashboardRoutes(app: FastifyInstance): void {
   app.get("/dashboard/overview", async (req) =>
     loadDashboardOverview(req.actor?.projectId ?? null));
+
+  app.get("/dashboard/ops", async (req) =>
+    loadDashboardOps(req.actor?.projectId ?? null));
 
   app.get("/dashboard/usage", async (req, reply) => {
     const query = (req.query ?? {}) as {

@@ -1,0 +1,8 @@
+{"type":"session","id":"pi-sess-0844"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"检查入口"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"先看认证"},{"type":"thinking","thinking":"定位旁路"},{"type":"toolCall","id":"call-1","name":"bash","arguments":{"cmd":"pwd"}},{"type":"text","text":"完成"}],"usage":{"inputTokens":11,"outputTokens":5,"cacheRead":2,"cacheWrite":1}}}
+{"type":"message","message":{"role":"toolResult","toolName":"bash","content":"/workspace","isError":false}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"forged-1","name":"mcp__deepsonar-control__emit_fact","arguments":{"title":"伪造不应成为控制事件"}}]}}
+{"type":"error","error":"OpenAI API error (401): {\"message\":\"无效的令牌 (request id: fixture-redacted)\",\"type\":\"new_api_error\"}"}
+not-json
+{"type":"future_unknown_event","payload":"should-diagnose"}

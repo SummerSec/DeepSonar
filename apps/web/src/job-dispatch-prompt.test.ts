@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { extractDispatchPrompt, operatorVisibleDispatchPrompt } from "./job-dispatch-prompt.js";
 
+test("report dispatch prompt tells the writer to keep quantities verbatim", () => {
+  const prompt = extractDispatchPrompt("report", { kind: "task_report", confirmed_count: 1 }, { goal: "盘点 ELF slots" });
+  assert.match(prompt, /原样保留 value、unit、basis/);
+});
+
 test("worker jobs keep Hub intent.prompt", () => {
   assert.equal(
     extractDispatchPrompt("explore", { intent: { prompt: "  只审计登录入口  " } }),

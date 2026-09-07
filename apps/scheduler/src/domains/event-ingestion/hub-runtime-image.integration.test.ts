@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -105,6 +106,9 @@ if (!testDatabaseUrl) {
       const catalog = await listHubRuntimeImageCatalog(sql, projectId);
       const kaliEntry = catalog.find((entry) => entry.image_key === "deepsonar-kali-minimal");
       assert.ok(kaliEntry?.compatible_agent_clis.includes("dsh"));
+      assert.equal(kaliEntry?.readiness, "ready");
+      assert.equal("image_ref" in (kaliEntry ?? {}), false);
+      assert.equal("digest" in (kaliEntry ?? {}), false);
       assert.equal(catalog.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"), false);
 
       // 2) Omitting the key keeps the role default resolution (review -> deepsonar-base).
@@ -235,7 +239,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 });
     }
   });

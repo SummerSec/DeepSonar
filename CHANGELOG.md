@@ -4,9 +4,76 @@
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-09-06
+
+### 新增
+
+- Runtime image readiness 与拉取任务持久化：Hub 目录/`list_available_runtime_images` 返回 `readiness`（ready/preparing/unavailable/error）且不泄露 OCI/digest；`GET /runtime-images/registry` 附 `image_status`，`GET /runtime-images/registry/pull-status` 返回可关联 image_key 的结构化阶段。拉取任务落 `runtime_image_pull_tasks`（schema v44）；Scheduler 重启把 in-flight 标为 `interrupted`（`scheduler_restarted`），不自动 resume。Hub 提交未就绪镜像返回可重试 `runtime_image_not_ready` 且不创建 Job；管理 API 映射为 409 并可轮询 pull-status（#398）。
+- `GET /dashboard/ops` 提供态势 P1/P2 服务端运营指标：Finding 分布与高风险未闭环、项目/任务覆盖、近 7 日成功率/耗时/角色对比、并发水位与失败原因；snapshot=current、throughput=history（#400 / #242 数据契约）。
+- 读 API 标明查询平面：`current` / `history` / `live`；live 不是审计源。Job 详情与事件分页返回 `query_plane` 与导入 `provenance`（#400）。
+- Finding 处置矩阵：`confirmed_vuln` 必须 `verify_status=confirmed`；高风险未闭环不含已确认漏洞（#400）。
+- 取消/超时/孤儿后的迟到语义事件仍用 `job_not_running`，并附归属 `details`；`events.attempt_id` 记录摄入锁时的 Attempt（schema v45）（#400）。
+- 导入 Job 默认 historical/readonly；导入时活动归档为 cancelled 的 Job 续跑返回 `409 JOB_IMPORTED_READONLY`（#400）。
+
 ### 变更
 
+- Finding 确认改为 Fact-first 硬门：只认图上结构化 Fact（`finding_id` / `subject_revision` / ownership / `expected` / `actual` / `outcome`）。门禁通过则直接确认，或由只消费 Fact 的 `verify_finding` 提交收口提案；不再二次复核源码、原始制品或 maker 结论。不足、失败、冲突或版本不匹配保持未确认并回弹 Hub；审计记录所用 Fact 与门禁结果（#399）。
+- 保留 Fact 证据信任态 `verification_status`，与 Finding `verify_status` 分界；报告数值门禁只认 verified Fact（#391 / #387）。
+- 明确过程流三职责并收口补读（#388 / #359）：`events` 仍是语义账本，evidence NDJSON/manifest 是过程证据，`stream-bus` 只作非权威投递。HTTP/WS 补读只认本机 `BLOB_DIR`；未落盘标 `unpersisted`，本副本看不到文件标 `visibility=unavailable`。不从过程流重放控制副作用，不承诺零丢失。
+- 收敛通用配置面（#386 / #359）：删除无决策作用的 Finding 协议模式 `agent_choice`（并入 `hybrid`）、`rules.finding_protocol` 双写，以及 RoleConfig `runtime_knobs` 的 snake_case 别名。三层协议合并、`runtime_knobs` 四层、`image_strategy` 与 `pin_policy` 保留；Job 仍只认冻结快照。启动/导入物理改写历史别名，新写入拒绝。
+- DSH YAML 解析与 Gateway 运行时投影迁到 `@deepsonar/runtime-sandbox` adapter；Scheduler 管理面调用该 API 校验/冻结，executor 只经 `adapter.projectRuntime`。通用状态机不再持有 DSH wire schema（#390 / #359）。
+
+### 修复
+
+- 明确 DSH/Pi「解码」为三类契约（请求兼容投影 / 运行事件解码 / Session 归档与查看器），修正 DESIGN 误把 #320 当作完整解码的引用。DSH 未知 JSON-RPC 帧改为可诊断的 `unknown_runtime`，并解码独立 `tool/call` / `tool/result`；钉死 Pi `0.84.4` / DSH `0.1.1-rc.2` 脱敏夹具覆盖文本、工具、错误、usage、Session 身份与损坏帧。普通输出或伪造工具调用仍不变成控制语义事件（#389 / #359）。
+
+### 安全
+
+- 收紧 Token 提权与项目 / Transfer / 镜像治理：新 Token 的 scopes 必须是调用者有效 scopes 的子集，非 admin 不能授予 `admin`；项目 actor 只能管理本项目且不超过自身权限的 Token。`POST /jobs` 跨项目返回稳定 `PROJECT_MISMATCH` 且不建 Job。平台镜像治理（registry sync/apply/pull、digest、rescan 等）与平台 Transfer 对项目 actor 一律 `PROJECT_SCOPE_FORBIDDEN`；项目 Transfer 不能 `create_new` / `merge_platform`（#403）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v43 → v45。v44 新增 `runtime_image_pull_tasks`；v45 为 `events.attempt_id`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- Finding 确认已改为 Fact-first：旧的二次盲复核 / maker 结论路径不再存在。已有未确认 Finding 需按图上结构化 Fact 重新收口。
+- Token / 项目边界收紧后，原先能创建全局或跨项目 Token、跨项目建 Job、或用项目 Token 做平台镜像治理 / 平台 Transfer 的调用会失败。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，digest 可复用 v0.2.8。
+
+## [0.2.8] - 2026-09-06
+
+### 新增
+
+- Hub 可按任务动态选择 Worker 运行镜像：intent 可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key；非法/未启用/CLI 不兼容使整次决策以 `invalid_runtime_image` 拒绝。省略时按角色缺省解析（#357）。
+- Verify 盲验 Phase 1：`verify_finding` 只冻结主体 / location / `artifact_refs`，不下发 maker 的 title/summary/severity；Verify 先独立推导再逐项 DIFF，仅 exact match 可 confirm（#371）。
+- Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20）。报告阶段机械核对已确认 Finding 与 verified/confirmed Fact 的值+口径（#368）。
+
+### 变更
+
+- Schema 升至 v43。v42 删除 Plane 列与 `credentials.kind=plane`；v43 删除 `findings.suggest_verify`。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
 - inherit_global 项目 RoleConfig 不再保留被忽略的行上 `model` / `runtime_image_key`。启动、切换策略、写入、导入导出与批量绑定会物理清空这些字段；批量绑定 impact 去掉 leftover 警告字段（#359 / #233 / #146）。
+- 删除 Finding 兼容旋钮 `suggest_verify`。控制契约、落库、导入导出与工具说明不再接受该字段；是否派生 Verify 只认冻结规则（#359）。
+- 删除过时 Plane 集成与假身份：`plane_project_id` / `plane_issue_id` / `projects.canvas_id` 回退、`CONTROL_MCP_SERVER` 与 `plane-client` 包一并删除（#359 / #363）。
+- 删除控制 MCP 残留通道：adapter 不再声明 `controlMcp`；CLI 流中的伪造 `mcp__deepsonar-control__*` 只告警，不再默认映射为语义事件；冒烟入口改为 `ci:smoke:control-api`。缺少冻结 Finding 协议的画布 fail closed，不再现场回退当前全局/项目配置（#359）。
+- 删除无决策作用的兼容别名：`false_positive` 不再作为 Verify verdict 输入（只认 `confirmed|rework|needs_human`）；Credential 写入拒绝 leftover `allowed_model_ids`；Job/WS 实时流信封只保留 `items`；公共 `POST /jobs` 不再把 `audit_module` 映射为 `audit`。历史 Finding `verify_status=false_positive` 与导入投影仍可读（#359）。
+- 继续删除 leftover 第二真相：官方 audit 镜像不再回退 `DOCKER_IMAGE_AUDIT`；`BLOB_STORE` 只认 `fs|s3`；删除空 `docker-compose.online.yml`、空洞 verify/publish 转发函数，以及前端 `deepsonar_token` 静默迁移（#359）。
+- 导入 RoleConfig 不再静默写入 leftover `agent_cli`（缺省仍 `claude-code`，`codex`/`open-code`/未知 fail closed）；前端凭据保存不再静默剥离 leftover `allowed_model_ids`（#359）。
+- 规则 JSON 物理清扫已删除的 `autoVerifySeverities` / `hubWaitSeverities` / leftover CLI 并发键；PATCH 拒绝这些别名，`asCliLimits` 只忽略 leftover 键而不整表作废；路由 registrar 不再转发领域 schema（#359）。
+- 删除 leftover 本机 Docker inspect 调度闸门：建 Job / Hub / Verify / Report / resume 不再因 Scheduler 本机缺层拒绝；readiness 不再报 `RUNTIME_IMAGE_NOT_LOCAL`。OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验（#359 / #286）。
+- 官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`。新 Job 只认 `claude-code` / `pi` / `dsh`；历史 leftover Session 归档仍只读解析，路径守卫保留 `/.codex/` `/.opencode/`（#359 / #318）。
+- leftover Job 身份别名不再映射为当前类型：`audit_module` 不再当作 `audit`，`hub` 不再当作 `hub_reason`。事件摄入 fail closed；测试夹具改用当前类型。`verify` 仍是 runtime-image smoke 通道（#359）。
+- leftover Codex/OpenCode Session 解析函数迁出热路径；`*.poc.ts` 迁出生产 `src/`；verify/report 转发层删除，`core.ts` 只做组装（#359 / #366 / #369）。
+
+### 修复
+
+- Hub 选图后 resume / rerun 保留 Job 已冻结的 runtime image；CLI 不兼容改为 `invalid_runtime_image`，不再 500（#360）。
+- 报告数值保真门禁不再因 Agent 改写口径或未确认 Fact 误炸：只核对 verified/confirmed Fact 与 confirmed Finding；覆盖足够的 Agent 稿数值失败时回退确定性模板，并明确要求报告原样保留 value/unit/basis（#374）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v40 → v43。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 凭据 `kind=plane` 已从基线删除；旧库重建时该行不会回填。
+- 官方 Agent 镜像指纹变化（去掉 leftover Codex/OpenCode 安装），Release 会重建 base / kali-minimal 及依赖 base digest 的专项镜像。Scheduler 镜像因删除 `plane-client` 也会重建。
+- Chrome Fuzz Release 构建在托管 runner 上先释放磁盘并加 swap，降低 V8 编译把 runner 打挂后整次发布 skip 的风险（v0.2.7 因 amd64 构建中途失联未产出 GitHub Release）。
+- 新 RoleConfig / 新 Job 的 `agent_cli` 只接受 `claude-code` / `pi` / `dsh`；导入 leftover CLI 不再静默改写。
 
 ## [0.2.7] - 2026-09-04
 
@@ -592,6 +659,8 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.2.9]: https://github.com/SummerSec/DeepSonar/compare/v0.2.8...v0.2.9
+[0.2.8]: https://github.com/SummerSec/DeepSonar/compare/v0.2.7...v0.2.8
 [0.2.3]: https://github.com/SummerSec/DeepSonar/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/SummerSec/DeepSonar/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1

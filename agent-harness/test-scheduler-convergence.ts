@@ -11,6 +11,7 @@ import path from "node:path";
 import { config } from "../apps/scheduler/src/config.js";
 import { advanceCanvasAfterTerminalJob, finalizeJob } from "../apps/scheduler/src/core.js";
 import { migrate, sql } from "../apps/scheduler/src/db.js";
+import { deleteProjectsLeavingAuditShells } from "../apps/scheduler/src/test-project-teardown.js";
 import { maybeReverifyAfterFollowup } from "../apps/scheduler/src/verify.js";
 
 type DbRow = Record<string, unknown>;
@@ -65,10 +66,10 @@ async function testConcurrentReverify(): Promise<void> {
     RETURNING id`;
   const [finding] = await sql`
     INSERT INTO findings (
-      project_id, job_id, node_id, fingerprint, title, severity, summary, verify_status, suggest_verify
+      project_id, job_id, node_id, fingerprint, title, severity, summary, verify_status
     ) VALUES (
       ${projectId}, ${origin.id as string}, ${findingNode.id as string},
-      ${`concurrent-${tag}`}, '并发补证 Finding', 'high', '并发收口测试', 'pending', true
+      ${`concurrent-${tag}`}, '并发补证 Finding', 'high', '并发收口测试', 'pending'
     ) RETURNING id`;
 
   const followup = {
@@ -141,9 +142,13 @@ async function testConcurrentReverify(): Promise<void> {
     SELECT id, status FROM jobs
     WHERE finding_id = ${finding.id as string} AND type = 'verify_finding'`;
   const rounds = await sql`
-    SELECT id, attempt FROM finding_verification_rounds WHERE finding_id = ${finding.id as string}`;
-  assert(verifyJobs.length === 1, `并发补证后 Verify 数量应为 1，实际 ${verifyJobs.length}`);
+    SELECT id, attempt, status, final_outcome FROM finding_verification_rounds WHERE finding_id = ${finding.id as string}`;
+  const [confirmed] = await sql`
+    SELECT verify_status FROM findings WHERE id = ${finding.id as string}`;
+  assert(verifyJobs.length === 0, `Fact-first 门禁通过后不应再派 verify_finding，实际 ${verifyJobs.length}`);
   assert(rounds.length === 1, `并发补证后 round 数量应为 1，实际 ${rounds.length}`);
+  assert(rounds[0]?.status === "confirmed" && rounds[0]?.final_outcome === "confirmed", "并发补证后应只确认一轮");
+  assert(confirmed?.verify_status === "confirmed", `并发补证后 Finding 应为 confirmed，实际 ${String(confirmed?.verify_status)}`);
 }
 
 async function testTerminalReportRecovery(status: "failed" | "timeout" | "orphan"): Promise<void> {
@@ -189,7 +194,7 @@ async function cleanup(): Promise<void> {
     await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
     await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
     await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-    await sql`DELETE FROM projects WHERE id = ${projectId}`;
+    await deleteProjectsLeavingAuditShells(sql, [projectId]);
   }
   await Promise.all(
     canvasIds.map((canvasId) =>

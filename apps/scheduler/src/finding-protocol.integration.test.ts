@@ -27,7 +27,7 @@ if (!testDatabaseUrl) {
         UPDATE global_settings
         SET rules_json = rules_json || ${sql.json({
           finding_protocol: {
-            mode: "agent_choice",
+            mode: "hybrid",
             default_profile: "general",
             allowed_profiles: ["general", "security.vulnerability"],
             display_name: "global-general",
@@ -174,6 +174,27 @@ if (!testDatabaseUrl) {
       assert.equal((future.scoring_json as Record<string, unknown>).status, "unsupported_version");
       assert.equal((future.scoring_json as Record<string, unknown>).base_score, null);
       assert.equal((future.scoring_json as Record<string, unknown>).reported_base_score, 10);
+
+      await sql`
+        UPDATE canvases
+        SET target_json = target_json - 'effective_finding_protocol'
+        WHERE id = ${canvasId}`;
+      await assert.rejects(
+        ingestEvent(auditJobId, {
+          v: 1,
+          event_id: randomUUID(),
+          type: "finding",
+          payload: {
+            title: "unfrozen protocol",
+            summary: "Missing frozen protocol must fail closed instead of live-resolving current config.",
+          },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /FROZEN_FINDING_PROTOCOL_MISSING/);
+          return true;
+        },
+      );
     } finally {
       await sql`UPDATE global_settings SET rules_json = ${sql.json((originalGlobal?.rules_json ?? {}) as never)}, updated_at = now() WHERE id = 'global'`;
       if (canvasId) {
@@ -188,7 +209,8 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      // ingestEvent(finding) 会走 Verify 门禁并写 append-only audit_logs(project_id)。
+      // 不能删审计行，因此只清可调度数据，留下被引用的项目壳。
       await sql.end({ timeout: 5 });
     }
   });

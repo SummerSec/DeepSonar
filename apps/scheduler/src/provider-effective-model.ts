@@ -1,4 +1,4 @@
-import { parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai-settings.js";
+import { parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};

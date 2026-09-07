@@ -123,7 +123,7 @@ assert.match(restrictedGuide, /只能使用静态 `deepsonar-control` Skill 所�
 
 for (const [adapterId, adapter] of Object.entries(AGENT_CLI_RUNTIME_ADAPTERS)) {
   assert.equal(adapter.capabilities.platformControlApi, true, `${adapterId} 未声明 Job 控制 API`);
-  assert.equal(adapter.capabilities.controlMcp, false, `${adapterId} 仍声明控制 MCP`);
+  assert.equal("controlMcp" in adapter.capabilities, false, `${adapterId} 仍声明控制 MCP`);
   for (const capability of REQUIRED_RUNTIME_CAPABILITIES) {
     assert.equal(adapter.capabilities[capability], true, `${adapterId} 缺少运行能力 ${capability}`);
   }

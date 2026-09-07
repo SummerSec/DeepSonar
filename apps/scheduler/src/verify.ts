@@ -22,7 +22,12 @@ import {
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
-import { assertFrozenRuntimeImageLocal, RuntimeImageNotLocalError } from "./runtime-images.js";
+import {
+  evaluateFactFirstConfirmGate,
+  factFirstAuditAfter,
+  type FactFirstGateResult,
+  type FactFirstRecord,
+} from "./verify-fact-gate.js";
 
 export function isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean {
   return coreIsSeverityInVerifyScope(minSeverity, severity);
@@ -41,19 +46,19 @@ export type RoundOutcome = "confirmed" | "rework" | "needs_human";
 
 export function mapProposedVerdict(raw: string | undefined | null): ProposedVerdict {
   const v = String(raw ?? "").toLowerCase();
-  if (v === "confirmed") return "confirmed";
-  if (v === "needs_human") return "needs_human";
-  // false_positive 兼容期统一映射为 rework
-  return "rework";
+  if (v === "confirmed" || v === "rework" || v === "needs_human") return v;
+  throw invalidVerification("verdict 只能是 confirmed、rework 或 needs_human", "verdict");
 }
 
 export interface EvidenceSnapshot {
   review: Array<Record<string, unknown>>;
   test: Array<Record<string, unknown>>;
+  facts: FactFirstRecord[];
   missing: string[];
   conflicting_node_ids: string[];
   qualified: boolean;
   reason?: string;
+  gate?: FactFirstGateResult;
 }
 
 export type VerificationEligibility = "eligible" | "waiting_evidence" | "blocked" | "below_min_verify_severity";
@@ -128,22 +133,75 @@ export function hasMachineCheckableEvidence(evidence: Pick<EvidenceSnapshot, "re
   return [...evidence.review, ...evidence.test].some(isMachineCheckableEvidence);
 }
 
-function supportingJobIds(evidence: Pick<EvidenceSnapshot, "review" | "test">): string[] {
-  return [...new Set(
-    [...evidence.review, ...evidence.test]
-      .filter((row) => row.outcome === "supports")
-      .map((row) => String(row.job_id ?? ""))
-      .filter(Boolean),
-  )];
+export function factFirstRecordsFromSnapshot(evidence: Pick<EvidenceSnapshot, "review" | "test" | "facts">): FactFirstRecord[] {
+  if (Array.isArray(evidence.facts) && evidence.facts.length > 0) return evidence.facts;
+  return [...evidence.review, ...evidence.test].map((row) => factFirstRecordFromEvidenceRow(row));
 }
 
-/** Confirm hard gate: qualified evidence + expected/actual + no silent path fork. */
-export function evaluateConfirmGate(evidence: EvidenceSnapshot): { ok: boolean; missing: string[] } {
-  const missing = [...evidence.missing];
-  if (!hasMachineCheckableEvidence(evidence)) missing.push("machine_checkable_expected_actual");
-  if (supportingJobIds(evidence).length < 2) missing.push("independent_paths");
-  if (evidence.conflicting_node_ids.length > 0) missing.push("path_fork");
-  return { ok: missing.length === 0, missing: [...new Set(missing)] };
+export function factFirstRecordFromEvidenceRow(row: Record<string, unknown>): FactFirstRecord {
+  return {
+    node_id: String(row.node_id ?? row.id ?? ""),
+    finding_id: (row.finding_id as string | null | undefined) ?? null,
+    job_id: (row.job_id as string | null | undefined) ?? null,
+    job_type: (row.job_type as string | null | undefined) ?? null,
+    job_status: (row.job_status as string | null | undefined) ?? null,
+    source_job_id: (row.source_job_id as string | null | undefined) ?? (row.job_id as string | null | undefined) ?? null,
+    source_role: (row.source_role as string | null | undefined) ?? (row.job_type as string | null | undefined) ?? null,
+    outcome: (row.outcome as string | null | undefined) ?? null,
+    subject_revision: (row.subject_revision as string | null | undefined) ?? null,
+    expected: (row.expected as string | null | undefined) ?? null,
+    actual: (row.actual as string | null | undefined) ?? null,
+    limitations: row.limitations,
+  };
+}
+
+export function factFirstRecordsFromNodes(rows: readonly EvidenceNodeRow[]): FactFirstRecord[] {
+  return rows.map((row) => {
+    const body = (row.body_json ?? {}) as Record<string, unknown>;
+    const verification = (body.verification ?? {}) as Record<string, unknown>;
+    return {
+      node_id: String(row.id ?? ""),
+      finding_id: typeof verification.finding_id === "string" ? verification.finding_id : null,
+      job_id: (row.job_id as string | null) ?? null,
+      job_type: (row.job_type as string | null) ?? null,
+      job_status: String(row.job_status ?? ""),
+      source_job_id: typeof verification.source_job_id === "string" ? verification.source_job_id : (row.job_id as string | null) ?? null,
+      source_role: typeof verification.source_role === "string" ? verification.source_role : (row.job_type as string | null) ?? null,
+      outcome: typeof verification.outcome === "string" ? verification.outcome : null,
+      subject_revision: typeof verification.subject_revision === "string" ? verification.subject_revision : null,
+      expected: typeof verification.expected === "string" ? verification.expected : null,
+      actual: typeof verification.actual === "string" ? verification.actual : null,
+      limitations: verification.limitations,
+    };
+  });
+}
+
+export function resolveFindingSubjectRevision(
+  finding: Record<string, unknown>,
+  facts: readonly FactFirstRecord[],
+): string | null {
+  const raw = (finding.raw_json ?? {}) as Record<string, unknown>;
+  const state = (raw.verification_state ?? {}) as Record<string, unknown>;
+  const frozen = typeof state.subject_revision === "string" ? state.subject_revision.trim() : "";
+  if (frozen) return frozen;
+  const revisions = [...new Set(facts.map((fact) => String(fact.subject_revision ?? "").trim()).filter(Boolean))];
+  return revisions.length === 1 ? revisions[0] : null;
+}
+
+/** Confirm hard gate: Fact-first structured expected/actual; no second-pass review. */
+export function evaluateConfirmGate(
+  evidence: EvidenceSnapshot,
+  opts?: { findingId?: string | null; subjectRevision?: string | null; originJobId?: string | null },
+): { ok: boolean; missing: string[]; gate: FactFirstGateResult } {
+  const facts = factFirstRecordsFromSnapshot(evidence);
+  const gate = evaluateFactFirstConfirmGate(facts, {
+    findingId: opts?.findingId ?? "",
+    subjectRevision: opts?.subjectRevision,
+    originJobId: opts?.originJobId,
+  });
+  const missing = gate.ok ? [] : [...gate.missing, ...evidence.missing];
+  if (!gate.ok && evidence.conflicting_node_ids.length > 0) missing.push("path_fork");
+  return { ok: gate.ok, missing: [...new Set(missing)], gate };
 }
 
 export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Record<string, unknown> {
@@ -151,6 +209,9 @@ export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Reco
     node_id: row.node_id,
     job_id: row.job_id,
     job_type: row.job_type,
+    finding_id: row.finding_id,
+    source_job_id: row.source_job_id,
+    source_role: row.source_role,
     outcome: row.outcome,
     subject_revision: row.subject_revision,
     steps: row.steps,
@@ -164,6 +225,7 @@ export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Reco
     qualified: evidence.qualified,
     missing: evidence.missing,
     conflicting_node_ids: evidence.conflicting_node_ids,
+    gate: evidence.gate ? factFirstAuditAfter(evidence.gate) : undefined,
     review: evidence.review.map(slim),
     test: evidence.test.map(slim),
   };
@@ -185,11 +247,15 @@ export function buildEvidenceSnapshot(
     const jobId = (row.job_id as string | null) ?? null;
     if (!jobId || (originJobId && jobId === originJobId)) continue;
     if (!VALID_OUTCOMES.has(outcome)) continue;
+    if (String(row.job_status ?? "") !== "succeeded") continue;
     const base = {
       node_id: row.id as string,
+      finding_id: typeof verification.finding_id === "string" ? verification.finding_id : null,
       job_id: jobId,
       job_type: row.job_type as string | null,
       job_status: row.job_status as string,
+      source_job_id: typeof verification.source_job_id === "string" ? verification.source_job_id : jobId,
+      source_role: typeof verification.source_role === "string" ? verification.source_role : (row.job_type as string | null),
       outcome,
       subject_revision: verification.subject_revision ?? null,
       steps: verification.steps ?? null,
@@ -230,9 +296,11 @@ export function buildEvidenceSnapshot(
   if (test.length > 0 && !supportsTest) missing.push("supporting_test");
   if (conflicting.length > 0) missing.push("unresolved_conflict");
   const qualified = missing.length === 0 && independent && supportsTest && conflicting.length === 0;
+  const facts = factFirstRecordsFromNodes(rows);
   return {
     review,
     test,
+    facts,
     missing,
     conflicting_node_ids: conflicting,
     qualified,
@@ -258,9 +326,132 @@ export async function collectEvidenceSnapshot(
     WHERE n.node_type = 'fact'
       AND n.body_json ? 'verification'
       AND n.body_json->'verification'->>'finding_id' = ${findingId}
-      AND j.status = 'succeeded'`;
+      AND j.status = ANY(${["succeeded", "failed", "timeout", "orphan", "cancelled"] as unknown as string[]})`;
 
-  return buildEvidenceSnapshot(nodes as unknown as EvidenceNodeRow[], originJobId);
+  const snapshot = buildEvidenceSnapshot(nodes as unknown as EvidenceNodeRow[], originJobId);
+  snapshot.facts = factFirstRecordsFromNodes(nodes as unknown as EvidenceNodeRow[]);
+  return snapshot;
+}
+
+async function recordVerifyGateAudit(
+  tx: Tx,
+  opts: {
+    projectId: string;
+    findingId: string;
+    gate: FactFirstGateResult;
+    subjectRevision: string | null;
+  },
+): Promise<void> {
+  try {
+    await tx`
+      INSERT INTO audit_logs ${tx({
+        actor_type: "system",
+        actor_id: "scheduler",
+        action: "finding.verify_gate",
+        project_id: opts.projectId,
+        resource_type: "finding",
+        resource_id: opts.findingId,
+        request_id: null,
+        ip: null,
+        user_agent: null,
+        before_json: null,
+        after_json: tx.json({
+          ...factFirstAuditAfter(opts.gate),
+          subject_revision: opts.subjectRevision,
+        } as never),
+        result: opts.gate.ok ? "ok" : "denied",
+        error_code: opts.gate.ok ? null : opts.gate.result,
+      })}`;
+  } catch (error) {
+    console.error("[audit] 系统写入失败 finding.verify_gate:", error instanceof Error ? error.message : error);
+  }
+}
+
+function evaluateFindingFactGate(
+  finding: Record<string, unknown>,
+  evidence: EvidenceSnapshot,
+  originJobId: string | null,
+): { gate: FactFirstGateResult; subjectRevision: string | null } {
+  const facts = factFirstRecordsFromSnapshot(evidence);
+  const subjectRevision = resolveFindingSubjectRevision(finding, facts);
+  const gate = evaluateFactFirstConfirmGate(facts, {
+    findingId: String(finding.id ?? ""),
+    subjectRevision,
+    originJobId,
+  });
+  evidence.gate = gate;
+  return { gate, subjectRevision };
+}
+
+async function confirmFindingFromFacts(
+  tx: Tx,
+  opts: {
+    finding: Record<string, unknown>;
+    evidence: EvidenceSnapshot;
+    gate: FactFirstGateResult;
+    reason: string;
+    openRound?: Record<string, unknown> | null;
+    nextAttempt: number;
+  },
+): Promise<void> {
+  const findingId = opts.finding.id as string;
+  const snapshot = { ...opts.evidence, gate: opts.gate };
+  const requirements = {
+    eligibility: "eligible",
+    missing: [],
+    evidence_signature: evidenceSignature(opts.evidence),
+    gate: factFirstAuditAfter(opts.gate),
+    close_path: "fact_first",
+    reason: opts.reason,
+  };
+  if (opts.openRound) {
+    await tx`
+      UPDATE finding_verification_rounds SET
+        status = 'confirmed', final_outcome = 'confirmed',
+        proposed_verdict = 'confirmed',
+        requirements_json = ${tx.json(requirements as never)},
+        evidence_snapshot_json = ${tx.json(snapshot as never)},
+        summary = ${opts.reason},
+        error = NULL,
+        finished_at = now()
+      WHERE id = ${opts.openRound.id as string}`;
+  } else {
+    await tx`
+      INSERT INTO finding_verification_rounds ${tx({
+        finding_id: findingId,
+        attempt: opts.nextAttempt,
+        verify_job_id: null,
+        status: "confirmed",
+        proposed_verdict: "confirmed",
+        final_outcome: "confirmed",
+        requirements_json: requirements as never,
+        evidence_snapshot_json: snapshot as never,
+        summary: opts.reason,
+      })}`;
+  }
+  const state = {
+    ...verificationState("eligible", opts.evidence),
+    gate: factFirstAuditAfter(opts.gate),
+    used_fact_ids: opts.gate.used_fact_ids,
+    close_path: "fact_first",
+    subject_revision: resolveFindingSubjectRevision(opts.finding, factFirstRecordsFromSnapshot(opts.evidence)),
+  };
+  await tx`
+    UPDATE findings SET
+      verify_status = 'confirmed',
+      raw_json = raw_json || ${tx.json({ verification_state: state } as never)},
+      updated_at = now()
+    WHERE id = ${findingId}`;
+  if (opts.finding.node_id) {
+    await tx`
+      UPDATE canvas_nodes SET status = 'confirmed', updated_at = now()
+      WHERE id = ${opts.finding.node_id as string}`;
+  }
+  try {
+    await (tx as SavepointTx).savepoint((reportTx) => maybeDispatchFindingReport(reportTx, findingId));
+  } catch (error) {
+    console.error(`[verify] finding ${findingId} report dispatch failed:`, error);
+  }
 }
 
 /** 创建下一轮 verify_finding（幂等：已有活跃 verify 则跳过）。 */
@@ -318,20 +509,40 @@ export async function createVerifyRound(
   // be reclassified from current evidence. This also repairs legacy rows with
   // a stale/missing eligibility marker instead of leaving them invisible.
   const existingRoundIsWaiting = Boolean(openRound) && !openRound?.verify_job_id;
+  const originJobId = (opts.finding.job_id as string) ?? null;
+  const { gate, subjectRevision } = evaluateFindingFactGate(opts.finding, evidence, originJobId);
+  await recordVerifyGateAudit(tx, {
+    projectId: opts.projectId,
+    findingId,
+    gate,
+    subjectRevision,
+  });
+  if (gate.ok && !opts.manualOverride) {
+    await confirmFindingFromFacts(tx, {
+      finding: opts.finding,
+      evidence,
+      gate,
+      reason: opts.reason ?? "fact_first_confirm",
+      openRound: existingRoundIsWaiting ? (openRound as Record<string, unknown>) : null,
+      nextAttempt,
+    });
+    return null;
+  }
 
   // An in-scope Finding enters the Verify lifecycle, but a round with missing
   // independent evidence is represented explicitly and has no runnable Job.
   // This avoids a pending verify spinning through rework while Hub is waiting
   // for review/test evidence.
-  if (!opts.manualOverride && !evidence.qualified && (!openRound || existingRoundIsWaiting)) {
+  if (!opts.manualOverride && !gate.ok && (!openRound || existingRoundIsWaiting)) {
     const requirements = {
       ...existingRequirements,
       need_review: true,
       need_test: true,
       eligibility: "waiting_evidence" as VerificationEligibility,
-      missing: evidence.missing,
+      missing: [...new Set([...evidence.missing, ...gate.missing])],
       evidence_signature: signature,
       hub_evidence_signature: existingRequirements.hub_evidence_signature ?? null,
+      gate: factFirstAuditAfter(gate),
     };
     if (openRound) {
       await tx`
@@ -354,7 +565,13 @@ export async function createVerifyRound(
     await tx`
       UPDATE findings SET
         verify_status = 'pending',
-        raw_json = raw_json || ${tx.json({ verification_state: verificationState("waiting_evidence", evidence) } as never)},
+        raw_json = raw_json || ${tx.json({
+          verification_state: {
+            ...verificationState("waiting_evidence", evidence),
+            gate: factFirstAuditAfter(gate),
+            subject_revision: subjectRevision,
+          },
+        } as never)},
         updated_at = now()
       WHERE id = ${findingId}`;
     if (opts.finding.node_id) {
@@ -372,12 +589,6 @@ export async function createVerifyRound(
     opts.canvasId,
     await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding", [findingId]),
   );
-  try {
-    await assertFrozenRuntimeImageLocal(snapshot, { roleName: "verify" });
-  } catch (error) {
-    if (error instanceof RuntimeImageNotLocalError) return null;
-    throw error;
-  }
   const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };
@@ -783,6 +994,13 @@ export async function closeVerifyRound(
 
   const originJobId = (finding.job_id as string) ?? null;
   const evidence = await collectEvidenceSnapshot(tx, findingId, originJobId);
+  const { gate, subjectRevision } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, originJobId);
+  await recordVerifyGateAudit(tx, {
+    projectId: job.project_id as string,
+    findingId,
+    gate,
+    subjectRevision,
+  });
   const canvasId = (job.canvas_id as string) ?? null;
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
@@ -845,7 +1063,11 @@ export async function closeVerifyRound(
   let gateFailed = false;
 
   if (proposed === "confirmed") {
-    const confirm = evaluateConfirmGate(evidence);
+    const confirm = evaluateConfirmGate(evidence, {
+      findingId,
+      subjectRevision,
+      originJobId,
+    });
     if (!confirm.ok) {
       final = "rework";
       gateFailed = true;
@@ -869,10 +1091,23 @@ export async function closeVerifyRound(
     final,
     evidence,
     summary: opts.summary ?? null,
-    error: gateFailed ? evidence.reason ?? "evidence_hard_gate_failed" : null,
+    error: gateFailed ? gate.reasons.join(";") || evidence.reason || "fact_first_gate_failed" : null,
   });
 
   if (final === "confirmed") {
+    await tx`
+      UPDATE findings SET
+        raw_json = raw_json || ${tx.json({
+          verification_state: {
+            ...verificationState("eligible", evidence),
+            gate: factFirstAuditAfter(gate),
+            used_fact_ids: gate.used_fact_ids,
+            close_path: "verify_finding_proposal",
+            subject_revision: subjectRevision,
+          },
+        } as never)},
+        updated_at = now()
+      WHERE id = ${findingId}`;
     await setFindingStatus(tx, findingId, "confirmed", finding.node_id as string | null, "confirmed");
     // A report is a read-only derivative. Dispatch failures must never roll
     // back the technical confirmation or block the Verify state machine.
@@ -976,6 +1211,30 @@ export async function maybeReverifyAfterFollowup(
 
   const originJobId = (finding.job_id as string) ?? null;
   const evidence = await collectEvidenceSnapshot(tx, findingId, originJobId);
+  const { gate, subjectRevision } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, originJobId);
+  await recordVerifyGateAudit(tx, {
+    projectId: job.project_id as string,
+    findingId,
+    gate,
+    subjectRevision,
+  });
+  if (gate.ok) {
+    const [openRound] = await tx`
+      SELECT * FROM finding_verification_rounds
+      WHERE finding_id = ${findingId} AND status IN ('pending','running')
+      ORDER BY attempt DESC LIMIT 1`;
+    const [{ max_attempt }] = await tx<[{ max_attempt: number | null }]>`
+      SELECT MAX(attempt) AS max_attempt FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
+    await confirmFindingFromFacts(tx, {
+      finding: finding as Record<string, unknown>,
+      evidence,
+      gate,
+      reason: "followup_fact_first_confirm",
+      openRound: openRound && !openRound.verify_job_id ? (openRound as Record<string, unknown>) : null,
+      nextAttempt: Number(openRound?.attempt ?? ((max_attempt ?? 0) + 1)),
+    });
+    return;
+  }
 
   // 对比上一轮证据快照哈希：无增量则回弹 Hub 说明无新证据
   const [prev] = await tx`
@@ -1070,22 +1329,25 @@ export async function attachVerificationEvidence(
   }
   const ver: VerificationEvidenceType = parsed.data;
 
-  // built-in 补证职责不可由 Agent 自报冒充：review 只能提交 review，test 只能提交 test。
-  // Hub 的 verify_rework/verify_failed 路径也只允许创建这两类 Job。
-  if (String(job.type ?? "") !== ver.evidence_kind) {
-    throw invalidVerification(
-      `verification.evidence_kind=${ver.evidence_kind} 与当前角色 ${String(job.type)} 不匹配。`,
-      "verification.evidence_kind",
-    );
-  }
-
+  // 补证 Job 仍要求角色与 evidence_kind 一致；其它工作角色可提交结构化 verification Fact。
+  const jobType = String(job.type ?? "");
   const payload = (job.payload_json ?? {}) as Record<string, unknown>;
   const vf = payload.verification_followup as { finding_id?: string } | undefined;
-  if (!vf?.finding_id || vf.finding_id !== ver.finding_id) {
-    throw invalidVerification(
-      "verification.finding_id 必须匹配当前 Scheduler 绑定的补证 Finding。",
-      "verification.finding_id",
-    );
+  if (vf?.finding_id) {
+    if (jobType !== ver.evidence_kind) {
+      throw invalidVerification(
+        `verification.evidence_kind=${ver.evidence_kind} 与当前角色 ${jobType} 不匹配。`,
+        "verification.evidence_kind",
+      );
+    }
+    if (vf.finding_id !== ver.finding_id) {
+      throw invalidVerification(
+        "verification.finding_id 必须匹配当前 Scheduler 绑定的补证 Finding。",
+        "verification.finding_id",
+      );
+    }
+  } else if (["hub_reason", "verify_finding", "verify", "report"].includes(jobType)) {
+    throw invalidVerification("系统 Job 不能提交 Finding 验证 Fact。", "verification");
   }
 
   const [finding] = await tx`
@@ -1150,6 +1412,17 @@ export async function attachVerificationEvidence(
   if (updated.length === 0) throw invalidVerification("验证事实节点不存在，证据未附着。", "verification");
 
   await insertEdgeIfAbsent(tx, canvasId, finding.node_id as string, nodeId, edgeType);
+  const [findingState] = await tx`SELECT raw_json FROM findings WHERE id = ${ver.finding_id}`;
+  const state = ((findingState?.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined) ?? {};
+  if (typeof state.subject_revision !== "string" || !state.subject_revision.trim()) {
+    await tx`
+      UPDATE findings SET
+        raw_json = raw_json || ${tx.json({
+          verification_state: { ...state, subject_revision: ver.subject_revision },
+        } as never)},
+        updated_at = now()
+      WHERE id = ${ver.finding_id}`;
+  }
   return true;
 }
 
@@ -1179,31 +1452,6 @@ export async function careSeverityMeta(
 }
 
 /**
- * @deprecated 名称易误解。请用 canvasFindingsConverged；保留别名以免外部误用旧语义。
- */
-export async function checkCareFindingsConfirmed(
-  tx: Tx,
-  canvasId: string,
-  _projectId: string,
-): Promise<{
-  ok: boolean;
-  careSeverities: string[];
-  minVerifySeverity: string;
-  problems: FindingStatusProblem[];
-}> {
-  const conv = await canvasFindingsConverged(tx, canvasId);
-  const meta = _projectId
-    ? await careSeverityMeta(tx, _projectId)
-    : { careSeverities: [] as string[], minVerifySeverity: "high" };
-  return {
-    ok: conv.ok,
-    careSeverities: meta.careSeverities,
-    minVerifySeverity: meta.minVerifySeverity,
-    problems: conv.problems,
-  };
-}
-
-/**
  * Hub complete / Report 统一收敛门（TODO §0.3 / §4.2 / §5）：
  * 阈值范围内每条 Finding 的 verify_status ∈ {confirmed, needs_human}；
  * confirmed 须有可追溯 verification round；无未关闭 round。
@@ -1212,9 +1460,8 @@ export async function checkCareFindingsConfirmed(
 export async function canvasFindingsConverged(
   tx: Tx,
   canvasId: string,
-  opts?: { projectId?: string; requireCareConfirmed?: boolean },
+  opts?: { projectId?: string },
 ): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
-  // requireCareConfirmed 已废弃：阈值内 needs_human 仍是可报告终态。
   const projectId = opts?.projectId ?? (await tx`SELECT project_id FROM canvases WHERE id = ${canvasId}`)[0]?.project_id;
   const rules = projectId
     ? await rulesForProject(tx as unknown as typeof sql, String(projectId))
@@ -1627,7 +1874,7 @@ export async function findingVerificationSummaries(
     WHERE n.node_type = 'fact'
       AND n.body_json ? 'verification'
       AND n.body_json->'verification'->>'finding_id' = ANY(${ids as unknown as string[]}::text[])
-      AND j.status = 'succeeded'`;
+      AND j.status = ANY(${["succeeded", "failed", "timeout", "orphan", "cancelled"] as unknown as string[]})`;
   const roundByFinding = new Map(rounds.map((row) => [String(row.finding_id), row]));
   const evidenceByFinding = new Map<string, EvidenceNodeRow[]>();
   for (const row of evidenceRows) {
@@ -1642,6 +1889,7 @@ export async function findingVerificationSummaries(
     const findingId = String(finding.id);
     const round = roundByFinding.get(findingId);
     const evidence = buildEvidenceSnapshot(evidenceByFinding.get(findingId) ?? [], (finding.job_id as string) ?? null);
+    const { gate } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, (finding.job_id as string) ?? null);
     const state = ((finding.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined) ?? {};
     const requirements = (round?.requirements_json as Record<string, unknown> | undefined) ?? {};
     result.set(findingId, {
@@ -1654,29 +1902,13 @@ export async function findingVerificationSummaries(
       review_evidence_ids: evidence.review.map((item) => item.node_id),
       test_evidence_ids: evidence.test.map((item) => item.node_id),
       conflicting_evidence_ids: evidence.conflicting_node_ids,
+      used_fact_ids: gate.used_fact_ids,
+      gate_result: gate.result,
       summary: round?.summary ?? null,
       error: round?.error ?? null,
     });
   }
   return result;
-}
-
-/** Single-Finding compatibility wrapper backed by the batch implementation. */
-export async function findingVerificationSummary(
-  tx: Tx,
-  findingId: string,
-): Promise<Record<string, unknown>> {
-  return (
-    (await findingVerificationSummaries(tx, [findingId])).get(findingId) ?? {
-      verify_status: "pending",
-      verification_attempt: 0,
-      latest_outcome: null,
-      missing_evidence: ["independent_review", "runtime_test"],
-      review_evidence_ids: [],
-      test_evidence_ids: [],
-      conflicting_evidence_ids: [],
-    }
-  );
 }
 
 void TERMINAL_JOB;

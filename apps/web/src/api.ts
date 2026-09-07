@@ -80,6 +80,71 @@ export interface DashboardOverview {
   recent_activity: DashboardActivityItem[];
 }
 
+/** `GET /dashboard/ops` — P1/P2 服务端运营指标，不替代 overview。 */
+export interface DashboardOpsHighRiskItem {
+  id: string;
+  title: string;
+  severity: string;
+  verify_status: string;
+  disposition: string;
+  project_id: string;
+  project_name: string;
+  canvas_id: string | null;
+  created_at: string;
+}
+
+export interface DashboardOps {
+  generated_at: string;
+  calendar_timezone: string;
+  query_planes: { snapshot: "current"; throughput: "history" };
+  totals: DashboardOverview["totals"];
+  findings: {
+    severity: DashboardStatusBucket[];
+    disposition: DashboardStatusBucket[];
+    verify_status: DashboardStatusBucket[];
+    open_high_risk: {
+      total: number;
+      truncated: boolean;
+      limit: number;
+      items: DashboardOpsHighRiskItem[];
+    };
+    coverage: {
+      projects_with_findings: number;
+      projects: number;
+      tasks_with_findings: number;
+      tasks: number;
+    };
+  };
+  jobs: {
+    statuses: DashboardStatusBucket[];
+    throughput: {
+      window: "last_7d";
+      timezone: string;
+      finished: number;
+      succeeded: number;
+      failed: number;
+      cancelled: number;
+      success_rate: number | null;
+    };
+    duration: { count: number; avg_ms: number | null; p50_ms: number | null; p95_ms: number | null };
+    by_role: Array<{
+      key: string;
+      finished: number;
+      succeeded: number;
+      failed: number;
+      cancelled: number;
+      avg_duration_ms: number | null;
+    }>;
+    concurrency: {
+      active: number;
+      waiting_human: number;
+      global_cap: number;
+      utilization: number | null;
+    };
+    failure_reasons: DashboardStatusBucket[];
+  };
+}
+
 export type UsagePeriod = "day" | "week" | "month" | "custom";
 
 export interface UsageTokenTotals {
@@ -323,6 +388,10 @@ export interface PageEnvelope<T> {
   live: boolean;
   truncated?: boolean;
   gap?: boolean;
+  query_plane?: "current" | "history" | "live";
+  source?: "evidence";
+  visibility?: "local" | "unavailable";
+  unpersisted?: boolean;
 }
 
 export type FactVerificationStatus = "unverified" | "verifying" | "verified" | "rejected" | "needs_human";
@@ -745,7 +814,6 @@ export interface JobEvidence {
 
 export interface StreamPage {
   items: Array<Record<string, unknown>>;
-  events?: Array<Record<string, unknown>>;
   after: string | null;
   next_cursor: string | null;
   has_more: boolean;
@@ -753,6 +821,9 @@ export interface StreamPage {
   live: boolean;
   truncated?: boolean;
   gap?: boolean;
+  source?: "evidence";
+  visibility?: "local" | "unavailable";
+  unpersisted?: boolean;
 }
 
 export interface WsTicket {
@@ -765,7 +836,6 @@ export interface WsTicket {
 export interface FindingDetail {
   finding: FindingSummary & {
     raw_json: Record<string, unknown>;
-    suggest_verify: boolean;
     source_job_type: string;
     source_job_status: string;
     canvas_title?: string | null;
@@ -1214,6 +1284,21 @@ export interface RuntimeImageRegistry {
   error?: string | null;
   checked_at?: string;
   selected_channel: RuntimeImageRegistryChannel;
+  image_status?: RuntimeImageStatusEntry[];
+}
+
+export type RuntimeImageReadiness = "ready" | "preparing" | "unavailable" | "error";
+
+export interface RuntimeImageStatusEntry {
+  image_key: string;
+  immutable_ref?: string | null;
+  readiness: RuntimeImageReadiness;
+  preparing: boolean;
+  error_code?: string | null;
+  error?: string | null;
+  checked_at: string;
+  task_id?: string | null;
+  phase: string;
 }
 
 export interface RuntimeImageRegistryChannelUpdate {
@@ -1231,7 +1316,7 @@ export interface RuntimeImagePreparingResponse {
 
 export type RuntimeImageRegistryCatalog = Omit<
   RuntimeImageRegistry,
-  "metadata" | "fallback" | "error" | "checked_at" | "selected_channel"
+  "metadata" | "fallback" | "error" | "checked_at" | "selected_channel" | "image_status"
 >;
 
 /** Project a GET response back to the strict catalog payload accepted by apply. */
@@ -1242,6 +1327,7 @@ export function runtimeImageRegistryCatalog(registry: RuntimeImageRegistry): Run
     error: _error,
     checked_at: _checkedAt,
     selected_channel: _selectedChannel,
+    image_status: _imageStatus,
     ...catalog
   } = registry;
   return catalog;
@@ -1285,7 +1371,9 @@ export interface RuntimeImagePullItem {
   image_key: string;
   image_ref: string;
   status: "queued" | "running" | "succeeded" | "failed";
+  phase?: string;
   error: string | null;
+  error_code?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
 }
@@ -1293,12 +1381,18 @@ export interface RuntimeImagePullItem {
 export interface RuntimeImagePullTask {
   task_id: string | null;
   purpose?: string;
-  status: "idle" | "queued" | "running" | "succeeded" | "failed";
+  status: "idle" | "queued" | "running" | "succeeded" | "failed" | "interrupted";
+  phase?: string;
   started_at: string | null;
   finished_at: string | null;
+  interrupted_at?: string | null;
+  interrupt_reason?: string | null;
+  error_code?: string | null;
+  error?: string | null;
   total: number;
   completed: number;
   items: RuntimeImagePullItem[];
+  checked_at?: string;
 }
 
 // ---------- 角色即配置（RoleConfig，migration 0017）：全局缺省 + 项目覆盖 ----------
@@ -1499,6 +1593,30 @@ export interface FindingReport {
   updated_at: string;
 }
 
+export interface ProjectFindingReportItem {
+  finding_id: string;
+  title: string;
+  severity: string | null;
+  verify_status: string;
+  report: FindingReport | null;
+}
+
+export interface ProjectReportTaskGroup {
+  canvas_id: string;
+  title: string;
+  kind: "standard" | "compose";
+  status: string;
+  created_at: string;
+  archived_at: string | null;
+  task_reports: TaskReport[];
+  finding_reports: ProjectFindingReportItem[];
+}
+
+export interface ProjectReportAggregation {
+  project_id: string;
+  tasks: ProjectReportTaskGroup[];
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: authHeaders() });
   if (!res.ok) {
@@ -1637,7 +1755,6 @@ export async function downloadAuthenticatedFile(path: string, fallbackFilename: 
  * 用户会话与平台 API Token 分 key 存放，避免设置页把会话 secret 当成「可编辑本机令牌」摊开。
  * 请求优先级：会话 token > API Token。
  */
-const LEGACY_TOKEN_KEY = "deepsonar_token";
 const SESSION_TOKEN_KEY = "deepsonar_session";
 const API_TOKEN_KEY = "deepsonar_api_token";
 
@@ -1646,24 +1763,7 @@ export function isUserSessionToken(token: string): boolean {
   return token.startsWith("deepsonar_user_");
 }
 
-function migrateLegacyTokenKeys(): void {
-  try {
-    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
-    if (!legacy) return;
-    const hasSession = Boolean(localStorage.getItem(SESSION_TOKEN_KEY));
-    const hasApi = Boolean(localStorage.getItem(API_TOKEN_KEY));
-    if (!hasSession && !hasApi) {
-      if (isUserSessionToken(legacy)) localStorage.setItem(SESSION_TOKEN_KEY, legacy);
-      else localStorage.setItem(API_TOKEN_KEY, legacy);
-    }
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
-  } catch {
-    /* private mode / SSR */
-  }
-}
-
 export function getSessionToken(): string {
-  migrateLegacyTokenKeys();
   try {
     return localStorage.getItem(SESSION_TOKEN_KEY) ?? "";
   } catch {
@@ -1672,18 +1772,15 @@ export function getSessionToken(): string {
 }
 
 export function setSessionToken(token: string): void {
-  migrateLegacyTokenKeys();
   try {
     if (token) localStorage.setItem(SESSION_TOKEN_KEY, token);
     else localStorage.removeItem(SESSION_TOKEN_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch {
     /* ignore */
   }
 }
 
 export function getApiAccessToken(): string {
-  migrateLegacyTokenKeys();
   try {
     return localStorage.getItem(API_TOKEN_KEY) ?? "";
   } catch {
@@ -1692,11 +1789,9 @@ export function getApiAccessToken(): string {
 }
 
 export function setApiAccessToken(token: string): void {
-  migrateLegacyTokenKeys();
   try {
     if (token) localStorage.setItem(API_TOKEN_KEY, token);
     else localStorage.removeItem(API_TOKEN_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch {
     /* ignore */
   }
@@ -1818,6 +1913,7 @@ function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
 
 export const api = {
   dashboardOverview: () => get<DashboardOverview>("/dashboard/overview"),
+  dashboardOps: () => get<DashboardOps>("/dashboard/ops"),
   dashboardUsage: (query: {
     period?: UsagePeriod;
     from?: string;
@@ -2037,10 +2133,6 @@ export const api = {
   jobEvidence: (jobId: string) => get<JobEvidence>(`/jobs/${jobId}/evidence`),
   jobStreamPage: (jobId: string, opts?: { after?: string | null; limit?: number; tail?: boolean }) =>
     get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined, tail: opts?.tail ? "1" : undefined })}`),
-  jobStream: async (jobId: string) => {
-    const page = await get<StreamPage>(`/jobs/${jobId}/evidence/stream${qs({ limit: "50" })}`);
-    return { events: page.items, ...page };
-  },
   jobEventsPage: (jobId: string, opts?: { after?: string | null; limit?: number }) =>
     get<PageEnvelope<JobEvent>>(`/jobs/${jobId}/events${qs({ after: opts?.after, limit: opts?.limit ? String(opts.limit) : undefined })}`),
   jobSession: (jobId: string, opts?: { path?: string }) =>
@@ -2212,6 +2304,8 @@ export const api = {
   /** 任务报告（§8）：404 返回服务端完成门阻塞原因 */
   canvasReport: (canvasId: string) => getTaskReport(`/canvases/${canvasId}/report`),
   canvasReports: (canvasId: string) => get<TaskReport[]>(`/canvases/${canvasId}/reports`),
+  projectReports: (projectId: string, opts?: { canvas_id?: string }) =>
+    get<ProjectReportAggregation>(`/projects/${projectId}/reports${qs({ canvas_id: opts?.canvas_id })}`),
   canvasReportAvailability: (canvasId: string) =>
     get<TaskReportAvailability>(`/canvases/${canvasId}/report/availability`),
   retryReport: (canvasId: string) =>

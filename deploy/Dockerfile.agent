@@ -14,8 +14,6 @@ ARG UNZIP_VERSION=6.0-28
 ARG XZ_VERSION=5.4.1-1
 ARG BINUTILS_VERSION=2.40-2
 ARG CLAUDE_CODE_VERSION=2.1.252
-ARG CODEX_VERSION=0.147.0
-ARG OPENCODE_VERSION=1.18.18
 ARG PI_CODING_AGENT_VERSION=0.84.4
 ARG PI_CODING_AGENT_INTEGRITY=sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w==
 ARG DSH_VERSION=0.1.1-rc.2
@@ -64,8 +62,6 @@ RUN set -eu; \
   echo "$DSH_REASONING_SETTINGS_SHA256  $reasoning_archive" | sha256sum -c -; \
   npm install -g --omit=dev --no-audit --no-fund \
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-  @openai/codex@${CODEX_VERSION} \
-  opencode-ai@${OPENCODE_VERSION} \
   @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} \
   @deepseek-ai/dsh-sdk-jsonrpc-demo@${DSH_VERSION} \
   @deepseek-ai/dsh-sdk-jsonrpc-server@${DSH_VERSION} \

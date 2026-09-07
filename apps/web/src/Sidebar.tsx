@@ -1,6 +1,7 @@
 import { PaperPlaneTilt, Prohibit, SealCheck, Stop, TreeStructure, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api, type CanvasBroadcastItem, type CanvasHumanMessage, type CanvasNode, type JobDetail } from "./api";
+import { factHumanActions } from "./fact-verification";
 import { broadcastStatusLabel, BROADCAST_STATUS_COLOR } from "./canvas-broadcasts";
 import { LiveStream } from "./LiveStream";
 import { useConfirmDialog } from "./components/ConfirmDialog";
@@ -238,10 +239,10 @@ export function Sidebar({
           {tab === "overview" && (
             <>
               {/* 待人工处理事实：人工确认 / 明确排除（§5.2-6；处理后调度器会尝试推进报告） */}
-              {node.node_type === "fact" && node.verification_status === "needs_human" && (
+              {node.node_type === "fact" && node.verification_status && factHumanActions(node.verification_status).includes("verified") && (
                 <div className="mb-3 rounded-lg border border-amber-800/50 bg-amber-950/20 px-3 py-2.5">
                   <div className="text-[13px] leading-relaxed text-amber-200/90">
-                    该事实无法自动裁决，需要人工确认或明确排除。
+                    该事实的证据信任态需要人工收口；确认或排除不会改写 Finding 技术验证。
                   </div>
                   <div className="mt-2 flex gap-2">
                     <button

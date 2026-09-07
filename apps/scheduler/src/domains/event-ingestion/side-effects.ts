@@ -31,11 +31,11 @@ import {
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
+import { jobNotRunningError } from "../../event-attribution.js";
 import {
-  assertFrozenRuntimeImageLocal,
+  assertHubRuntimeImageReady,
+  defaultRuntimeImageKey,
   listHubRuntimeImageCatalog,
-  RuntimeImageNotLocalError,
-  runtimeImageNotLocalCanvasBlock,
 } from "../../runtime-images.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
 import {
@@ -54,6 +54,7 @@ export interface EventSideEffectServices {
    * status to fail-and-rollback the close.
    */
   jobStatusAtLock?: string;
+  attemptId?: string | null;
 }
 
 export interface EventIngestionSideEffectApplication {
@@ -195,10 +196,6 @@ export interface EventIngestionSideEffectPorts {
     status: "succeeded" | "failed",
     result?: EventFinalizeResult,
   ) => Promise<unknown>;
-  assertFrozenRuntimeImageLocal?: (
-    snapshot: AgentRuntimeSnapshot,
-    options?: { roleName?: string | null },
-  ) => Promise<void>;
 }
 
 export type EventCanvasEdgeInput = {
@@ -237,29 +234,6 @@ async function markJobWaitingHuman(tx: EventIngestionTransaction, jobId: string)
     WHERE job_id = ${jobId} AND node_type IN ('job', 'intent', 'report')`;
 }
 
-async function blockHubOnMissingLocalImage(
-  tx: EventIngestionTransaction,
-  jobId: string,
-  canvasId: string,
-  error: RuntimeImageNotLocalError,
-): Promise<void> {
-  const block = runtimeImageNotLocalCanvasBlock(error.details);
-  await markJobWaitingHuman(tx, jobId);
-  const [jobNode] = await tx`
-    SELECT id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
-  await tx`
-    INSERT INTO canvas_nodes ${tx({
-      canvas_id: canvasId,
-      job_id: jobId,
-      node_type: "human",
-      title: block.title,
-      body_json: block as never,
-      x: jobNode ? Number(jobNode.x) + 150 : 200,
-      y: jobNode ? Number(jobNode.y) - 160 : 200,
-      status: "open",
-    })}`;
-}
-
 export function createEventIngestionSideEffectApplication(
   ports: EventIngestionSideEffectPorts,
 ): EventIngestionSideEffectApplication {
@@ -275,16 +249,15 @@ export function createEventIngestionSideEffectApplication(
   type SemanticRoleKind = "role" | "hub" | "system";
 
   const RESERVED_SNAPSHOT_NAMES: Readonly<Record<string, SemanticRoleKind>> = {
-    hub: "hub",
     hub_reason: "hub",
     verify: "system",
     verify_finding: "system",
     report: "system",
   };
 
-  // Older/imported snapshots may omit `name` for these built-in and historical
-  // Job types. Unknown/custom roles must carry their frozen canonical name; a
-  // missing name cannot be inferred safely from arbitrary DB content.
+  // Current built-in Job types may omit `name` and infer it from type.
+  // Leftover aliases (`audit_module`, `hub`) are not current identities.
+  // Unknown/custom roles must carry their frozen canonical name.
   const SNAPSHOT_NAME_FALLBACK_TYPES = new Set([
     "explore",
     "analyze",
@@ -292,25 +265,11 @@ export function createEventIngestionSideEffectApplication(
     "test",
     "code",
     "audit",
-    "audit_module",
     "hub_reason",
-    "hub",
     "verify",
     "verify_finding",
     "report",
   ]);
-
-  function semanticRoleNamesEquivalent(typeName: string, snapshotName: string): boolean {
-    // Hub snapshots emitted by older/runtime adapters used `hub` while the
-    // persisted system Job type is `hub_reason`, and vice versa.
-    if (
-      (typeName === "hub_reason" && snapshotName === "hub") ||
-      (typeName === "hub" && snapshotName === "hub_reason")
-    ) {
-      return true;
-    }
-    return typeName === snapshotName;
-  }
 
   function isSemanticRoleKind(value: unknown): value is SemanticRoleKind {
     return value === "role" || value === "hub" || value === "system";
@@ -331,6 +290,9 @@ export function createEventIngestionSideEffectApplication(
       .toLowerCase();
     if (!jobType) {
       throw new ControlInputError("tool_not_allowed", "Job type 不能为空。", "type");
+    }
+    if (jobType === "audit_module" || jobType === "hub") {
+      throw new ControlInputError("tool_not_allowed", "leftover Job type 已停用，不再映射为当前身份。", "type");
     }
     const typeName = roleNameForJobType(jobType);
     // The persisted Job type is the Scheduler's authority for the role kind.
@@ -356,7 +318,7 @@ export function createEventIngestionSideEffectApplication(
         "platform_tools",
       );
     }
-    if (rawName && !semanticRoleNamesEquivalent(typeName, rawName)) {
+    if (rawName && rawName !== typeName) {
       throw new ControlInputError("tool_not_allowed", "Job 快照角色名称与 Scheduler Job 类型不一致。", "name");
     }
     const snapshotReservedKind = rawName ? RESERVED_SNAPSHOT_NAMES[rawName] : undefined;
@@ -415,7 +377,15 @@ export function createEventIngestionSideEffectApplication(
     if (!SEMANTIC_TOOL_BY_EVENT[type]) return;
     const statusAtIngest = services.jobStatusAtLock ?? job.status;
     if (statusAtIngest !== "running") {
-      throw new ControlInputError("job_not_running", "语义事件只能提交给 status=running 的 Job。", "status");
+      throw jobNotRunningError({
+        job_id: String(job.id ?? ""),
+        job_status: String(statusAtIngest ?? ""),
+        attempt_id: services.attemptId ?? null,
+        job_seq: null,
+        linearization: "job_status_at_lock",
+        accepted: false,
+        canvas_mutated: false,
+      });
     }
   }
 
@@ -563,14 +533,15 @@ export function createEventIngestionSideEffectApplication(
     const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
     const allowedImageKeys = catalog.map((entry) => entry.image_key);
     const allowedImageKeySet = new Set(allowedImageKeys);
+    const catalogByKey = new Map(catalog.map((entry) => [entry.image_key, entry]));
     for (const [index, intent] of submittedIntents.entries()) {
       const key = intent.runtime_image_key;
+      const path = phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key";
       if (key && !allowedImageKeySet.has(key)) {
-        throw invalidRuntimeImage(
-          phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key",
-          allowedImageKeys,
-        );
+        throw invalidRuntimeImage(path, allowedImageKeys);
       }
+      const selected = catalogByKey.get(key ?? defaultRuntimeImageKey(intent.role));
+      if (selected) assertHubRuntimeImageReady(selected, path);
       if (phase === "preflight" && key) {
         try {
           await ports.resolveAgentSnapshotForJob(
@@ -710,7 +681,7 @@ export function createEventIngestionSideEffectApplication(
   ): Promise<void> {
     const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
     if (!job) throw new ControlInputError("job_not_running", "Job 不存在或已不可接受控制输入。", "status");
-    assertSemanticJobRunning(job as Record<string, unknown>, type);
+    assertSemanticJobRunning(job as Record<string, unknown>, type, services);
     assertSemanticToolAuthority(job as Record<string, unknown>, type);
     await assertTerminalEventHistory(tx, jobId, type);
     if (type === "human") {
@@ -876,7 +847,6 @@ export function createEventIngestionSideEffectApplication(
         scoring_json: (normalized.scoring ?? {}) as never,
         location: normalized.location ?? null,
         summary: normalized.summary ?? null,
-        suggest_verify: normalized.suggest_verify ?? false,
         raw_json: {
           ...(normalized.raw ?? {}),
           ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
@@ -1144,15 +1114,6 @@ export function createEventIngestionSideEffectApplication(
           if (error instanceof ControlInputError) throw error;
           if (isHubRuntimeImageResolutionError(error)) {
             throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);
-          }
-          throw error;
-        }
-        try {
-          await (ports.assertFrozenRuntimeImageLocal ?? assertFrozenRuntimeImageLocal)(snapshot, { roleName: role });
-        } catch (error) {
-          if (error instanceof RuntimeImageNotLocalError) {
-            await blockHubOnMissingLocalImage(tx, jobId, canvasId, error);
-            return;
           }
           throw error;
         }

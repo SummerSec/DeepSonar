@@ -12,8 +12,8 @@ let sharedAssetStore: BlobStore | null = null;
 
 export function parseBlobStoreKind(raw: string | undefined): BlobStoreKind {
   const value = (raw ?? "fs").trim().toLowerCase();
-  if (value === "fs" || value === "local" || value === "file" || value === "filesystem") return "fs";
-  if (value === "s3" || value === "minio" || value === "object") return "s3";
+  if (value === "fs") return "fs";
+  if (value === "s3") return "s3";
   throw new Error(`unsupported_blob_store: ${raw ?? ""} (expected fs|s3)`);
 }
 

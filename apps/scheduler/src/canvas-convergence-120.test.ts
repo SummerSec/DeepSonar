@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
+import { deleteProjectsLeavingAuditShells } from "./test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -89,12 +90,12 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json, started_at, finished_at)
         VALUES (
-          ${sourceJobId}, ${projectId}, ${canvasId}, 'audit_module', 'succeeded',
+          ${sourceJobId}, ${projectId}, ${canvasId}, 'audit', 'succeeded',
           ${sql.json(roleSnapshot)}, ${sql.json({})}, now() - interval '2 minutes', now() - interval '1 minute'
         )`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
-        VALUES (${canvasId}, ${sourceJobId}, 'job', 'completed source role', 'succeeded', ${sql.json({ type: 'audit_module' })})`;
+        VALUES (${canvasId}, ${sourceJobId}, 'job', 'completed source role', 'succeeded', ${sql.json({ type: 'audit' })})`;
 
       const [findingNode] = await sql<{ id: string }[]>`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
@@ -370,7 +371,7 @@ if (!testDatabaseUrl) {
       // Keep the last failed retry authoritative at the actual Job boundary.
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json, started_at)
-        VALUES (${failedJobId}, ${projectId}, ${canvasId}, 'audit_module', 'running', ${sql.json(roleSnapshot)}, ${sql.json({})}, now())`;
+        VALUES (${failedJobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(roleSnapshot)}, ${sql.json({})}, now())`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
         VALUES (${canvasId}, ${failedJobId}, 'job', 'failed retry', 'running', ${sql.json({})})`;
@@ -402,7 +403,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 });
       await rm(blobDir, { recursive: true, force: true });
     }

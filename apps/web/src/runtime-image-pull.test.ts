@@ -10,6 +10,7 @@ import {
   projectBindingDeferredNotice,
   pullHeadline,
   pullItemStatusLabel,
+  readinessLabel,
   pullPurposeLabel,
   registryChannelBusyNotice,
   registryChannelDeferredNotice,
@@ -23,6 +24,7 @@ test("pull purpose and item labels stay readable for project enablement", () => 
   assert.equal(pullPurposeLabel("admin_bulk"), "注册表预热");
   assert.equal(pullPurposeLabel("registry_channel:github"), "仓库通道切换");
   assert.equal(pullItemStatusLabel("running"), "拉取中");
+  assert.equal(pullItemStatusLabel("interrupted"), "已中断");
   assert.equal(shortImageRef("ghcr.io/summersec/deepsonar-openharmony-audit@sha256:0123456789abcdef"), "sha256:0123456789ab");
   assert.equal(
     projectBindingDeferredNotice("DeepSonar Chrome Audit"),
@@ -62,6 +64,17 @@ test("busy errors are treated as queue progress, not a hard wait", () => {
     items: [],
   }), "拉取进度 1/2");
   assert.equal(formatPullElapsed("2026-08-18T16:00:00.000Z", "2026-08-18T16:01:05.000Z"), "1m 5s");
+  assert.equal(pullHeadline({
+    task_id: "task",
+    status: "interrupted",
+    started_at: null,
+    finished_at: "2026-09-06T00:01:00.000Z",
+    total: 1,
+    completed: 0,
+    items: [],
+  }), "拉取被 Scheduler 重启中断，可重新拉取");
+  assert.equal(shouldKeepPollingPullStatus("interrupted", 0), false);
+  assert.equal(readinessLabel("preparing"), "准备中");
 });
 
 test("project runtime image page polls the shared pull-status panel", () => {
@@ -72,6 +85,8 @@ test("project runtime image page polls the shared pull-status panel", () => {
   assert.match(page, /pendingProjectBinds/);
   assert.match(page, /preferredPullItem/);
   assert.match(page, /shouldKeepPollingPullStatus/);
+  assert.match(page, /readinessLabel/);
+  assert.match(page, /image_status/);
   assert.doesNotMatch(page, /请等待完成后再启用/);
   assert.doesNotMatch(page, /if \(projectId\) return;\s*void api\.runtimeImagesPullStatus/);
 });

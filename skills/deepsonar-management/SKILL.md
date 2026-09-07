@@ -154,7 +154,7 @@ python scripts/deepsonar-api.py credentials providers
 python scripts/deepsonar-api.py credentials get <id>
 python scripts/deepsonar-api.py credentials impact <id>
 python scripts/deepsonar-api.py credentials create --name claude-proxy --provider anthropic --agent-cli claude-code --secret '...' --settings-config @claude-settings.json [--base-url 'https://...']
-python scripts/deepsonar-api.py credentials create --name codex-proxy --provider openai --agent-cli codex --secret '...' --settings-config @codex-settings.json [--base-url 'https://...']
+python scripts/deepsonar-api.py credentials create --name pi-proxy --provider openai --agent-cli pi --secret '...' --settings-config @pi-settings.json [--base-url 'https://...']
 python scripts/deepsonar-api.py credentials models-preview --provider anthropic --agent-cli claude-code --secret '...' --base-url 'https://...' --settings-config @claude-settings.json
 python scripts/deepsonar-api.py credentials update <id> --data '{"metadata":{"base_url":"http://127.0.0.1/v1"}}'
 python scripts/deepsonar-api.py credentials rotate <id> --secret '...'
@@ -228,7 +228,7 @@ python scripts/deepsonar-api.py imports cancel <importId>
 - `platform_tools`：每个 Agent **全量可选**；未声明 = 全开；仅 **`mark_job_done` 不可关**。
 - `purpose` 必须是 **`llm`**（调度器只认这个 purpose 注入模型通道）。
 - `model: null` 表示使用 Credential 的 CLI 配置文件；仅高级场景才在 RoleConfig 填覆盖模型。
-- Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0）；UI 只暴露模式 hybrid/fixed/agent_choice。
+- Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0）；UI 只暴露模式 `hybrid` / `fixed`。`finding_protocol` 走设置顶层字段，不要写进 `rules`。
 
 ## 推荐工作流：清库 → 配多模型 → 下发全量审计
 

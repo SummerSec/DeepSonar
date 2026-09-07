@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
+import { isUuid } from "../../project-scope.js";
+import { listProjectReports } from "../../project-reports.js";
 import {
   createFindingReport,
   getFindingReport,
@@ -21,6 +23,23 @@ function reportDownloadFilename(reportId: string, extension: "md" | "sarif"): st
 
 /** Report route adapter; shared auth/ownership hooks remain on the parent app. */
 export function registerReportRoutes(app: FastifyInstance): void {
+  app.get("/projects/:id/reports", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
+    const canvasId = String((req.query as { canvas_id?: string }).canvas_id ?? "").trim() || undefined;
+    if (canvasId && !isUuid(canvasId)) {
+      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
+    }
+    const result = await listProjectReports(id, { canvasId });
+    if (!result.ok) {
+      return reply.code(404).send({
+        error: result.error === "canvas_not_found" ? "canvas not found" : "project not found",
+        error_code: "NOT_FOUND",
+      });
+    }
+    return result.data;
+  });
+
   app.get("/canvases/:id/reports", async (req) => {
     const { id } = req.params as { id: string };
     return listTaskReports(id);

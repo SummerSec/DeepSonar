@@ -73,6 +73,7 @@ export function generateToken(): { plaintext: string; prefix: string; hash: stri
 /** 路由 → 所需 scope（§6.1 scope 表）；未列出的写操作默认 admin，读操作只需已认证 */
 const ROUTE_SCOPES: Record<string, string> = {
   "GET /dashboard/overview": "projects:read",
+  "GET /dashboard/ops": "projects:read",
   "GET /dashboard/usage": "projects:read",
   "GET /projects": "projects:read",
   "POST /projects": "projects:write",
@@ -99,6 +100,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/report": "tasks:read",
   "GET /canvases/:id/report/availability": "tasks:read",
   "GET /canvases/:id/reports": "tasks:read",
+  "GET /projects/:id/reports": "tasks:read",
   "GET /findings/:id/report": "findings:read",
   "POST /findings/:id/report": "jobs:control",
   // Internal resolver marker: authHook maps it to tasks:read or findings:read
@@ -171,6 +173,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /runtime-images/registry": "images:read",
   "PATCH /runtime-images/registry/channel": "images:manage",
   "POST /runtime-images/registry/sync": "images:manage",
+  "POST /runtime-images/registry/apply": "images:manage",
   "POST /runtime-images/registry/pull": "images:manage",
   "GET /runtime-images/registry/pull-status": "images:read",
   "POST /runtime-images/:id/detect-local": "images:read",

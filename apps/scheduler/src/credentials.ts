@@ -209,8 +209,6 @@ export function sanitizeCredentialMetadata(
   const output: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(record)) {
-    // Leftover model allowlists are ignored; availability is owned by settings_config.
-    if (key === "allowed_model_ids") continue;
     if (SECRET_LIKE_METADATA_KEY.test(key) || !allowed.has(key)) {
       if (mode === "reject") {
         // Do not echo attacker-controlled key text in an API error: callers

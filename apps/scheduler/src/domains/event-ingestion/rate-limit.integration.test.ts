@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -38,7 +39,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
         ) VALUES (
-          ${id}, ${projectId}, ${canvasId}, 'audit_module', 'running',
+          ${id}, ${projectId}, ${canvasId}, 'audit', 'running',
           ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
         )`;
       await sql`
@@ -157,7 +158,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end();
     }
   });

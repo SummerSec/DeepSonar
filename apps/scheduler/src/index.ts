@@ -10,13 +10,15 @@ import { registerRoutes } from "./routes.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import {
   bootstrapOfficialRuntimeImages,
+  reconcileRuntimeImagePullTasksOnBoot,
   startRuntimeImageRegistrySync,
 } from "./runtime-images.js";
+import { useSqlRuntimeImagePullTaskStore } from "./runtime-image-pull-status.js";
 import { preheatManagedGateway } from "@deepsonar/runtime-sandbox";
 import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
 import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status.js";
-import { normalizePendingJobPriorities } from "./core.js";
+import { normalizePendingJobPriorities, scrubLeftoverStoredRules, scrubRedundantConfigSurface } from "./core.js";
 import { scrubIgnoredProjectRoleConfigIdentity } from "./domains/role-runtime-snapshot/index.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
 import { ensureDefaultAdmin } from "./users.js";
@@ -50,6 +52,20 @@ async function main() {
       `[boot] scrubbed leftover project RoleConfig identity: images=${scrubbed.runtime_image_keys}, inherit_global_models=${scrubbed.inherit_global_models}`,
     );
   }
+  const scrubbedRules = await scrubLeftoverStoredRules(sql);
+  if (scrubbedRules.global > 0 || scrubbedRules.projects > 0) {
+    console.warn(
+      `[boot] scrubbed leftover rules_json keys: global=${scrubbedRules.global}, projects=${scrubbedRules.projects}`,
+    );
+  }
+  const scrubbedConfig = await scrubRedundantConfigSurface(sql);
+  if (scrubbedConfig.protocols > 0 || scrubbedConfig.imagePolicies > 0 || scrubbedConfig.roleKnobs > 0) {
+    console.warn(
+      `[boot] scrubbed redundant config surface: protocols=${scrubbedConfig.protocols}, imagePolicies=${scrubbedConfig.imagePolicies}, roleKnobs=${scrubbedConfig.roleKnobs}`,
+    );
+  }
+  useSqlRuntimeImagePullTaskStore();
+  await reconcileRuntimeImagePullTasksOnBoot();
   await bootstrapOfficialRuntimeImages();
   if (managesHostDockerRuntime()) await refreshHostDiskPressure();
   const stopSkillSourceBootSync = startSkillSourceBootSync();

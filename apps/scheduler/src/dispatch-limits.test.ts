@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { config } from "./config.js";
-import { asConcurrencyLimit, effectiveProjectJobLimit, globalRules, mergeGlobalRulesPatch, rulesForProject } from "./core.js";
+import {
+  asConcurrencyLimit,
+  effectiveProjectJobLimit,
+  globalRules,
+  mergeGlobalRulesPatch,
+  rulesForProject,
+  scrubLeftoverRulesJson,
+  scrubLeftoverStoredRules,
+  scrubRedundantConfigSurface,
+  stripFindingProtocolFromRules,
+} from "./core.js";
 import {
   dispatchSkipReason,
   dispatchSlots,
@@ -11,7 +21,7 @@ import {
   type DispatchCounts,
 } from "./dispatcher.js";
 import { sql } from "./db.js";
-import { parseConcurrencyRulesPatch } from "./routes.js";
+import { parseConcurrencyRulesPatch } from "./domains/settings/routes.js";
 
 function emptyCounts(): DispatchCounts {
   return {
@@ -242,15 +252,25 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
     maxConcurrentProvisioning: 3,
     maxConcurrentByAgentCli: { "claude-code": 4 },
   });
+  assert.throws(() => parseConcurrencyRulesPatch({ autoVerifySeverities: ["info"] }), /minVerifySeverity/);
+  assert.throws(() => parseConcurrencyRulesPatch({ hubWaitSeverities: ["low"] }), /minVerifySeverity/);
+  assert.throws(() => parseConcurrencyRulesPatch({ AUTO_VERIFY_SEVERITIES: ["info"] }), /minVerifySeverity/);
+  assert.throws(() => parseConcurrencyRulesPatch({ finding_protocol: { mode: "hybrid" } }), /finding_protocol/);
 });
 
 test("verify scope only reads minVerifySeverity; leftover list aliases are ignored", async () => {
   const { readFileSync } = await import("node:fs");
   const coreSource = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
   const configSource = readFileSync(new URL("./config.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(coreSource, /autoVerifySeverities|hubWaitSeverities|inferMinFromList/);
+  const runtimeImagesSource = readFileSync(new URL("./runtime-images.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(coreSource, /inferMinFromList|raw\.autoVerifySeverities|raw\.hubWaitSeverities/);
+  assert.match(coreSource, /LEFTOVER_RULE_ALIAS_KEYS/);
+  assert.doesNotMatch(coreSource, /export const priorityForJob|export const resolveJobPriority|Compatibility facade/);
   assert.doesNotMatch(configSource, /AUTO_VERIFY_SEVERITIES|autoVerifySeverities/);
+  assert.doesNotMatch(configSource, /DOCKER_IMAGE_AUDIT|imageAudit/);
+  assert.doesNotMatch(runtimeImagesSource, /DOCKER_IMAGE_AUDIT|imageAudit/);
   assert.match(configSource, /MIN_VERIFY_SEVERITY/);
+  assert.match(configSource, /DEEPSONAR_OFFICIAL_AUDIT_IMAGE/);
 
   const explicit = await globalRules(
     fakeDb([{ rules_json: { autoVerifySeverities: ["info"], hubWaitSeverities: ["info"], minVerifySeverity: "critical" } }]),
@@ -273,7 +293,159 @@ test("leftover Codex/OpenCode CLI caps are not first-class concurrency keys", as
       },
     ]),
   );
-  assert.deepEqual(rules.maxConcurrentByAgentCli, {});
+  assert.deepEqual(rules.maxConcurrentByAgentCli, { "claude-code": 4 });
+});
+
+test("scrubLeftoverRulesJson deletes leftover aliases and leftover CLI caps", () => {
+  const { rules, removedKeys } = scrubLeftoverRulesJson({
+    minVerifySeverity: "high",
+    autoVerifySeverities: ["info"],
+    hubWaitSeverities: ["low"],
+    AUTO_VERIFY_SEVERITIES: ["info"],
+    maxConcurrentByAgentCli: { "claude-code": 4, codex: 2, "open-code": 1 },
+    finding_protocol: { profiles: [] },
+  });
+  assert.deepEqual(rules, {
+    minVerifySeverity: "high",
+    maxConcurrentByAgentCli: { "claude-code": 4 },
+    finding_protocol: { profiles: [] },
+  });
+  assert.deepEqual(removedKeys, [
+    "autoVerifySeverities",
+    "hubWaitSeverities",
+    "AUTO_VERIFY_SEVERITIES",
+    "maxConcurrentByAgentCli.codex",
+    "maxConcurrentByAgentCli.open-code",
+  ]);
+});
+
+test("mergeGlobalRulesPatch physically drops leftover keys instead of keeping them", () => {
+  const merged = mergeGlobalRulesPatch(
+    {
+      autoVerifySeverities: ["info"],
+      maxConcurrentByAgentCli: { "claude-code": 4, codex: 2 },
+      maxGlobalJobs: 6,
+    },
+    { maxGlobalJobs: 8, maxConcurrentByAgentCli: { dsh: 1 } },
+  );
+  assert.equal(merged.maxGlobalJobs, 8);
+  assert.deepEqual(merged.maxConcurrentByAgentCli, { "claude-code": 4, dsh: 1 });
+  assert.equal(Object.prototype.hasOwnProperty.call(merged, "autoVerifySeverities"), false);
+});
+
+test("scrubLeftoverStoredRules updates global and project leftover rules", async () => {
+  const updates: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM global_settings")) {
+      return [{
+        rules_json: {
+          autoVerifySeverities: ["info"],
+          maxConcurrentByAgentCli: { "claude-code": 3, codex: 9 },
+        },
+      }];
+    }
+    if (sql.includes("FROM projects")) {
+      return [
+        { id: "p1", config_json: { rules: { hubWaitSeverities: ["low"], minVerifySeverity: "medium" } } },
+        { id: "p2", config_json: { rules: { minVerifySeverity: "high" } } },
+      ];
+    }
+    if (sql.includes("UPDATE global_settings")) {
+      updates.push("global");
+      const payload = values[0];
+      assert.deepEqual(payload, { maxConcurrentByAgentCli: { "claude-code": 3 } });
+      return [];
+    }
+    if (sql.includes("UPDATE projects")) {
+      updates.push(`project:${values[1]}`);
+      const cfg = values[0] as { rules: Record<string, unknown> };
+      assert.deepEqual(cfg.rules, { minVerifySeverity: "medium" });
+      return [];
+    }
+    throw new Error(`unexpected sql: ${sql}`);
+  }, { json: (value: unknown) => value });
+  const result = await scrubLeftoverStoredRules(db as never);
+  assert.deepEqual(result, { global: 1, projects: 1 });
+  assert.deepEqual(updates, ["global", "project:p1"]);
+});
+
+test("API rules projection strips finding_protocol", () => {
+  assert.deepEqual(
+    stripFindingProtocolFromRules({
+      minVerifySeverity: "high",
+      finding_protocol: { mode: "hybrid" },
+    }),
+    { minVerifySeverity: "high" },
+  );
+});
+
+test("scrubRedundantConfigSurface rewrites deleted aliases", async () => {
+  const updates: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM global_settings")) {
+      return [{ rules_json: { finding_protocol: { mode: "agent_choice" }, stallSec: 900 } }];
+    }
+    if (sql.includes("FROM projects")) {
+      return [{
+        id: "p1",
+        config_json: {
+          finding_protocol: { mode: "agent_choice" },
+          image_strategy: "whatever",
+          role_runtime_images: { audit: "deepsonar-audit" },
+        },
+      }];
+    }
+    if (sql.includes("FROM canvases")) {
+      return [{ id: "c1", target_json: { effective_finding_protocol: { mode: "agent_choice", source: "task" } } }];
+    }
+    if (sql.includes("FROM role_configs")) {
+      return [{ id: "rc1", runtime_knobs_json: { stall_sec: 1_200, jobTokenMaxRequests: 8 } }];
+    }
+    if (sql.includes("UPDATE global_settings")) {
+      updates.push("global");
+      assert.deepEqual(values[0], { finding_protocol: { mode: "hybrid" }, stallSec: 900 });
+      return [];
+    }
+    if (sql.includes("UPDATE projects")) {
+      updates.push("project");
+      assert.deepEqual(values[0], { finding_protocol: { mode: "hybrid" } });
+      return [];
+    }
+    if (sql.includes("UPDATE canvases")) {
+      updates.push("canvas");
+      assert.deepEqual(values[0], { effective_finding_protocol: { mode: "hybrid", source: "task" } });
+      return [];
+    }
+    if (sql.includes("UPDATE role_configs")) {
+      updates.push("role");
+      assert.deepEqual(values[0], { stallSec: 1_200, jobTokenMaxRequests: 8 });
+      return [];
+    }
+    throw new Error(`unexpected sql: ${sql}`);
+  }, { json: (value: unknown) => value });
+  const result = await scrubRedundantConfigSurface(db as never);
+  assert.deepEqual(result, { protocols: 3, imagePolicies: 1, roleKnobs: 1 });
+  assert.deepEqual(updates, ["global", "project", "canvas", "role"]);
+});
+
+test("scheduler boot and transfer persist leftover rules scrub", async () => {
+  const { readFileSync } = await import("node:fs");
+  const boot = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const importSource = readFileSync(new URL("./transfer/import.ts", import.meta.url), "utf8");
+  const platformSource = readFileSync(new URL("./transfer/platform.ts", import.meta.url), "utf8");
+  const settingsSource = readFileSync(new URL("./domains/settings/routes.ts", import.meta.url), "utf8");
+  const routesSource = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  assert.match(boot, /scrubLeftoverStoredRules\(sql\)/);
+  assert.match(boot, /scrubRedundantConfigSurface\(sql\)/);
+  assert.match(importSource, /scrubLeftoverRulesJson/);
+  assert.match(importSource, /rewriteFindingProtocolMode/);
+  assert.match(platformSource, /scrubLeftoverRulesJson/);
+  assert.match(platformSource, /rewriteFindingProtocolMode/);
+  assert.match(settingsSource, /LEFTOVER_RULE_ALIAS_KEYS/);
+  assert.doesNotMatch(routesSource, /export \{ parseConcurrencyRulesPatch \}/);
+  assert.doesNotMatch(routesSource, /export \{ RuntimeImageRegistryChannelBody \}/);
 });
 
 test("global settings patches deep-merge CLI and provider maps", () => {

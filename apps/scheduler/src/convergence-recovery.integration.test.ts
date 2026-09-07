@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "./test-project-teardown.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -91,7 +92,7 @@ if (!testDatabaseUrl) {
       const publicPurposeAttempt = await createJob({
         projectId,
         canvasId,
-        type: "audit_module",
+        type: "audit",
         payload: {
           scheduling_purpose: "convergence_evidence",
           verification_followup: {
@@ -123,7 +124,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${publicPurposeAttempt.job.id as string}`;
 
       const originJobId = await insertJob({
-        type: "audit_module",
+        type: "audit",
         projectId,
         canvasId,
         status: "succeeded",
@@ -220,7 +221,7 @@ if (!testDatabaseUrl) {
       // Resume normalization must apply the same scheduler-owned rule as
       // boot repair; a historical public lane cannot regain 220 on resume.
       const resumeLegacyId = await insertJob({
-        type: "audit_module",
+        type: "audit",
         projectId,
         canvasId,
         priority: 999,
@@ -251,7 +252,7 @@ if (!testDatabaseUrl) {
       const concurrentOrigin = await insertJob({
         projectId: secondProjectId,
         canvasId: secondCanvasId,
-        type: "audit_module",
+        type: "audit",
         status: "succeeded",
         priority: FIXED_PRIORITY.role,
       });
@@ -261,7 +262,7 @@ if (!testDatabaseUrl) {
             id: concurrentOrigin,
             project_id: secondProjectId,
             canvas_id: secondCanvasId,
-            type: "audit_module",
+            type: "audit",
           }),
         );
       await Promise.all([trigger(), trigger()]);
@@ -335,7 +336,7 @@ if (!testDatabaseUrl) {
       await insertJob({
         projectId: secondProjectId,
         canvasId: secondCanvasId,
-        type: "audit_module",
+        type: "audit",
         status: "succeeded",
         priority: FIXED_PRIORITY.role,
       });
@@ -347,7 +348,7 @@ if (!testDatabaseUrl) {
       const deadlockOriginId = await insertJob({
         projectId: secondProjectId,
         canvasId: secondCanvasId,
-        type: "audit_module",
+        type: "audit",
         status: "succeeded",
         priority: FIXED_PRIORITY.role,
       });
@@ -382,7 +383,7 @@ if (!testDatabaseUrl) {
           await tx`SET LOCAL lock_timeout = '2s'`;
           await advanceCanvasAfterTerminalJob(
             tx as unknown as typeof sql,
-            { id: deadlockOriginId, project_id: secondProjectId, canvas_id: secondCanvasId, type: "audit_module" },
+            { id: deadlockOriginId, project_id: secondProjectId, canvas_id: secondCanvasId, type: "audit" },
             "failed",
           );
         }),
@@ -507,7 +508,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE canvas_id = ANY(${[canvasId, secondCanvasId]})`;
       await sql`DELETE FROM jobs WHERE canvas_id = ANY(${[canvasId, secondCanvasId]})`;
       await sql`DELETE FROM canvases WHERE id = ANY(${[canvasId, secondCanvasId]})`;
-      await sql`DELETE FROM projects WHERE id = ANY(${[projectId, secondProjectId]}::uuid[])`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId, secondProjectId]);
       await sql.end({ timeout: 5 });
     }
   });

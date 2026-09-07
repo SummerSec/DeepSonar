@@ -32,6 +32,17 @@ export interface PageEnvelope<T> {
   truncated?: boolean;
   /** True when the requested cursor crossed a bounded retention gap. */
   gap?: boolean;
+  /** current = mutable snapshot; history = append-only ledger; live = process-local tail. */
+  query_plane?: "current" | "history" | "live";
+  /** Process-stream pages name the durable source. Bus frames never use this. */
+  source?: "evidence";
+  /**
+   * `local` = this Scheduler can see BLOB_DIR for the Job.
+   * `unavailable` = expected process evidence is not on this replica.
+   */
+  visibility?: "local" | "unavailable";
+  /** True when a local writer still has queued lines that are not on disk. */
+  unpersisted?: boolean;
 }
 
 export type CursorErrorCode = "INVALID_CURSOR" | "CURSOR_GAP";
@@ -154,6 +165,10 @@ export function page<T>(
     watermark?: string;
     truncated?: boolean;
     gap?: boolean;
+    query_plane?: "current" | "history" | "live";
+    source?: "evidence";
+    visibility?: "local" | "unavailable";
+    unpersisted?: boolean;
   },
 ): PageEnvelope<T> {
   return {
@@ -163,8 +178,12 @@ export function page<T>(
     has_more: options.hasMore ?? false,
     watermark: options.watermark ?? new Date().toISOString(),
     live: options.live ?? false,
+    ...(options.query_plane ? { query_plane: options.query_plane } : {}),
     ...(options.truncated ? { truncated: true } : {}),
     ...(options.gap ? { gap: true } : {}),
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.visibility ? { visibility: options.visibility } : {}),
+    ...(options.unpersisted ? { unpersisted: true } : {}),
   };
 }
 

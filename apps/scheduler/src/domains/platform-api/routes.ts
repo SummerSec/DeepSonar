@@ -229,6 +229,8 @@ async function executeInvocation(
             error_code: error.rejection.errorCode,
             retryable: error.rejection.retryable,
             ...(error.rejection.path ? { path: error.rejection.path } : {}),
+            ...(error.rejection.details ?? {}),
+            ...(error.rejection.details ? { details: error.rejection.details } : {}),
           },
           // Rate-limit rejection happens before the durable event write and
           // may be retried later with the same Job-scoped idempotency key.

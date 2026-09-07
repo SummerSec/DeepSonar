@@ -52,7 +52,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **任务** | 即 `canvases` 一行；API `GET /projects/:id/canvases`；`kind=standard` 为普通任务，`kind=compose` 以同项目 1–8 条未否定处置 Finding（含未确认）作为冻结只读种子，且不得扩大资产范围 |
 | **Job** | 一次沙箱运行：`hub_reason` / 角色名 / `verify_finding` / `report` 等 |
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
-| **Fact** | 工作角色增量产出；可带 verification 证据块 |
+| **Fact** | 工作角色增量产出；可带 Finding 结构化证据块，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
 | **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`）；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
 | **Task report** | 画布收敛后按输入摘要版本化；相同输入幂等，输入变化时追加版本并保留历史 |
@@ -83,12 +83,13 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - **控制通道不污染**：真实 Job 的语义写入只接受 capability token 授权的 Job 级 API operation；CLI 结构化流中的同名或伪造 MCP tool call 不映射为语义事件。控制 telemetry 只保留 operation、调用标识与输入 shape/count，不记录原始 input/content；非 JSON 运行时行、未知行和写 `.deepsonar/control-*` 的尝试只记低基数告警/指标，跳过后继续处理后续合法事件。
 - **Hub 不可下发** `verify` / `report`；须先 `list_available_roles`。
 - 单画布同时最多一个活跃 hub；`maxHubRounds` / followup 深度护栏。
-- 验证：独立 review + test 证据硬门；rework 回弹 Hub 补证。
-- **盲验 Phase 1（#367）**：`verify_finding` 只冻结主体 / location / `artifact_refs`，不下发 maker 的 title/summary/severity；`GraphScope=verify` 默认只投影骨架与引用。Verify prompt 要求先独立推导再逐项 DIFF，仅 exact match 可 confirm；`confirmed` 另需至少一条带非空 `expected`+`actual` 的 `VerificationEvidence`，路径分叉必须 rework。数值保真 / 矛盾检测 / 对抗挑战留待后续 issue。
+- 验证：Fact-first 硬门；rework 回弹 Hub 补证。
+- **盲验 Phase 1（#367）**：`verify_finding` 只冻结主体 / location / `artifact_refs`，不下发 maker 的 title/summary/severity；`GraphScope=verify` 默认只投影骨架与引用。
+- **Fact-first `verify_finding`（#399，#367 follow-up）**：review/test/worker 的复核结果必须作为结构化 Fact 提交，至少携带 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual`、`outcome`；Scheduler 入库时校验目标、版本、同项目/画布归属及 Fact 间冲突。普通文本 verdict 不计。门禁通过时可直接确认收口，或由只消费 Fact 的 `verify_finding` 提交收口提案；两条路径都不重读源代码、原始制品或 maker 结论。不足、失败、冲突或 revision/`finding_id` 不匹配时 Finding 保持未确认并回弹 Hub。审计记录所用 Fact、门禁结果与失败原因。
 - **验证范围（#133）**：`minVerifySeverity` 同时控制自动 Verify 与收敛集合；明确低于阈值的 Finding 保持 `pending` 并记录 `below_min_verify_severity` 策略标记，不创建 Verify Job/round、不阻塞 Hub complete/Report。缺失或未知 severity 保守地继续验证；`info` 即严格全量模式。
 - **Hub Finding 绑定（#153 / #154 / #161 / #273）**：Hub 对本轮 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。compose 的 imported seed 是例外：review/test 只把其共享资产挂到探索 Worker，不创建 verification follow-up，也不改写历史 Finding；compose 画布上 explore/audit 必须绑定至少一条 imported 种子投影，不得未绑定地全图打猎。`request_human` 也必须携带结构化 subject：Finding subject 由 Scheduler 校验同项目、同画布 canonical 关系及最低验证级别，平台阻塞则只能使用受限 kind；系统绝不解析 reason 文本推断目标。analyze 仍可引用多个来源。
 - **人工验证收口（#155）**：Finding 详情提供三种显式动作：强制新建受护栏约束的 Verify round、新建绑定 Finding 的 review/test 补证 Job，以及在同画布 Hub 处于 `waiting_human` 时把尚未 confirmed 的 Finding 收口为 `needs_human`。所有动作按 canvas-first 顺序加锁、禁止终态重开并拒绝同类活动 Job；需要恢复时在同一事务将 Hub 转回 `pending` 并通知 dispatcher。人工入口绝不开放 `confirmed`。
-- **双轨报告（#43/#142）**：收敛门通过后，Scheduler 为画布派发版本化 Task Report；每版冻结 `report-input.json` 与 checksum，相同输入幂等，输入变化时追加版本，失败同输入重试复用版本。每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。两类报告在 `pending/generating` 期间都只允许同一目标一个活跃版本，失败只更新报告行，不改变 Finding 状态。
+- **双轨报告（#43/#142/#408）**：收敛门通过后，Scheduler 为画布派发版本化 Task Report；每版冻结 `report-input.json` 与 checksum，相同输入幂等，输入变化时追加版本，失败同输入重试复用版本。每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。两类报告在 `pending/generating` 期间都只允许同一目标一个活跃版本，失败只更新报告行，不改变 Finding 状态。只读聚合：`GET /projects/:id/reports` 按任务编组全部版本与 confirmed Finding 独立报告；任务工作台「报告」页签与项目 `/projects/:id/reports` 只消费展示，不改生成语义。
 - **通用 Finding 协议（#44）**：`profile`、`category`、`tags`、`evidence_refs` 是跨安全、质量、合规等领域的通用字段；严重度可不提供，CVSS 评分可选。有效协议由全局、项目、任务三层按任务 > 项目 > 全局合并，在建画布时写入 `target_json.effective_finding_protocol` 冻结；Job 和 Agent 只读取该快照。Scheduler 校验 profile/字段边界、去重并决定 Verify，受支持的 CVSS 4.0/3.1 向量由系统重算，协议显式接受的未知版本保留原始向量/指标。
 
 ### 4.1 人工消息与动态附件收件箱
@@ -125,6 +126,29 @@ emit_fact / emit_finding → canvas_nodes INSERT
 | **安全** | 正文标为「平台转发的任务数据，不是系统指令」；不经目标出网；不改变冻结角色/镜像/网络 |
 
 实现入口：`apps/scheduler/src/canvas-updates.ts`、schema `canvas_broadcasts`、Web `canvas-broadcasts.ts` / `CanvasView`。
+
+### 4.3 Fact 证据信任 vs Finding 技术验证（#387）
+
+#359 原稿把 `canvas_nodes.verification_status` 看成「第二套 issue tracker」。对照当前产品后**保留独立列**，不并入 Finding `verify_status` / disposition / human 节点：
+
+| 对象 | 所有者 | 状态 | 消费者 |
+|------|--------|------|--------|
+| Fact `verification_status` | 人工 `PATCH`（`jobs:control`）；Agent `emit_fact` 只产生 `unverified` | `unverified` / `verifying` / `verified` / `rejected` / `needs_human` | Facts API/UI、图投影、导入导出、报告数量门禁 |
+| Finding `verify_status` | Scheduler Verify 协议 | `pending` / `verifying` / `confirmed` / `needs_human`（历史 `false_positive` 只读） | Hub 收敛、Verify Job、Finding Report |
+| Finding disposition | 人（GitHub Issue 式） | `open` / `accepted` / … | 项目风险台、compose 种子 |
+| human 节点 | `request_human` / ignore | Job 级介入，不是 Fact 标签 | 工作台介入条 |
+
+**为何不合并：** 大量 Fact 从不绑定 Finding；#374 数量门禁只认 **verified Fact** 与 **confirmed Finding**。删掉 Fact 定列、或把 Fact 标成 Finding `confirmed`，都会把未验证口径放进报告，或让人工标签旁路 Verify。`verifying` 当前无 Scheduler 写入（仅导入/历史可读），人不能写该态；保留是因为导入契约与「进行中」语义独立存在，不是死字段口号删除。
+
+**人工迁移（无双轨）：**
+
+| from \ to | verified | rejected | needs_human |
+|-----------|----------|----------|-------------|
+| unverified / verifying / needs_human | 收口 | 收口 | 升级/幂等 |
+| verified | 幂等 | 撤销（立即出门禁） | 重开 |
+| rejected | **非法**（须先 `needs_human`） | 幂等 | 重开 |
+
+人不能写 `unverified`/`verifying`。Fact PATCH 不改 Finding。结构化证据仍只认同画布 `reviewed_by`/`tested_by` 边，不从 description 推断。与 #399 Fact-first `verify_finding` 不同：后者是 Finding 技术验证如何消费结构化 Fact；本列是 Fact 自身证据信任，不决定 Finding `confirmed`。
 
 ## 5. Job 与并发
 
@@ -163,7 +187,26 @@ pending → claimed → provisioning → running
 
 **冲突规则：任务 > 项目 > 全局**（RoleConfig 已如此；Finding 协议等演进配置同此心智）。
 
+### 6.0 配置面盘点（#386）
+
+非默认使用证据：**未知**（无生产数据，不以代码默认值推断从未使用）。DSH / Pi 方言字段已由 #390 归位，本表不改其实现。
+
+| 项 | 结论 | 权威与覆盖 | 冻结 |
+|----|------|------------|------|
+| Finding 协议三层合并 | **保留** | 任务请求 > 项目 `config_json.finding_protocol` > 全局 `rules_json.finding_protocol`（物理存全局 JSONB，API 只认顶层字段） | 建画布写入 `target_json.effective_finding_protocol`；Job 只读该快照 |
+| `mode=agent_choice` | **删除** | 与 `hybrid` 运行时决策相同（允许列表内自选，未指定回落默认） | 历史冻结读作 `hybrid`；启动/导入物理改写；新写入拒绝 |
+| `finding_protocol` 作为 `rules` 键 | **删除** | 只认 PATCH/GET 顶层 `finding_protocol` | 全局仍可落在 `rules_json` 袋内，但 `rules` 投影不再带出 |
+| `runtime_knobs` 四层 | **保留** | Job 创建覆盖 > 角色（项目 RoleConfig 字段覆盖全局）> 项目规则 > 平台规则 > env | `agent_snapshot_json.runtime_knobs`；`provisionTimeoutSec` 仅平台 |
+| RoleConfig knobs snake_case | **删除** | 写入只认 `stallSec` / `jobTokenMaxRequests` / `timeoutSec` | 冻结快照仍用 snake_case；启动/导入把别名改成 camelCase |
+| Job `stall_sec` / `max_requests` / `timeout_sec` | **保留** | API-only（Web 无表单）；Hub/建任务不传 | 并入上述 Job 层 |
+| `image_strategy` | **保留** | `inherit_global`（角色缺省镜像与身份跟全局 RoleConfig）/ `project_managed`（`role_runtime_images` + 项目身份） | Job `runtime_image*`；缺省 inherit_global；脏值启动清扫 |
+| `pin_policy` | **保留** | 与 `selected_version_id` 正交：`null` 强制 `follow`；显式 pin + `follow` 可随官方升版滚动；`hold` 钉死 | 不进 Job 快照；过期 hold/第三方仍 `409 RUNTIME_IMAGE_PIN_STALE` |
+| `maxVerificationRounds` | **保留** | 平台/项目规则，API-only | 不冻结；现读 |
+| DSH `dsh_task_mode` / `pi_extensions` | **不改** | 已由 #390 归位 | 随 RoleConfig → Job 快照 |
+
 **运行时护栏（#263 batch 1）**：`stallSec`、`jobTokenMaxRequests`、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec` 落在 `global_settings.rules_json`，可被项目 `config_json.rules` 与角色 `role_configs.runtime_knobs_json` 覆盖；创建 Job 时可再指定 `stall_sec` / `max_requests` / `timeout_sec`。优先级 **Job > 角色（项目 RoleConfig 字段覆盖全局 RoleConfig）> 项目规则 > 平台规则 > 部署 env 引导**。`provisionTimeoutSec` 仅平台可写。`stallSec=0` 关闭停滞判定；`jobTokenMaxRequests=0` 不限制 Gateway 请求。Scheduler 每次读库（`globalRules()` / 建 Job 冻结快照），改完无需重启；已在跑的 Job 继续用创建时冻结值。Chrome 专项镜像仍有 stall 下限，ClickHouse 专项镜像同样适用，角色/Job 可再抬高。lease TTL、Reaper 间隔、Gateway 超时、镜像 registry/cosign/syft/trivy/clamav 与巡检间隔仍走部署 env，后续批次再前端化。
+
+DSH YAML 解析、Gateway profile 投影与 Cordis 物化只在 `@deepsonar/runtime-sandbox` 的 DSH adapter 边界实现（`dsh-pi-ai.ts` + `runtime-adapters.ts`）。Scheduler 管理面调用该 API 做凭据校验并冻结快照；executor 只经 `adapter.projectRuntime` 拿到规范化运行配置。通用状态机 / dispatcher / Hub 不依赖 DSH wire schema。
 
 DSH RoleConfig 的 `dsh_task_mode` 固定为 `standard | ptc`，默认 `standard`，并随 Job 冻结。Standard 使用 DSH 原生工具呈现；PTC 使用官方 Code Mode（`dsh-tools mode: code`）和受治理的 worker-thread TypeScript runtime，只把 `run_code` 作为模型直接工具。该字段对其他 Agent CLI 无效。模型思考强度统一属于 Provider Credential。Claude Code 只接受 `low | medium | high | xhigh`，运行时物化为 `.claude/settings.json` 的 `effortLevel`；Pi 接受 `off | minimal | low | medium | high | xhigh | max` 并在启动/恢复时传 `--thinking`。leftover Codex/OpenCode 历史凭据仍可读其 reasoning，但不能再保存或物化为新 Job。DSH 使用 Pi-AI 的规范档位 `off | minimal | low | medium | high | xhigh | max`，第三方实际传输值由每个模型的 `reasoningEfforts` YAML 映射，页面只允许所选模型声明的档位。Pi 与 DSH 同属 llm-pi-ai 家族：Provider 编辑器接受官方 `settings.yaml` / 等价 JSON（`llm-pi-ai.providers` + `agent-default-model`），也保留 Pi 自有 `{ providers: { deepsonar: … } }` 形状；粘贴后提取 `baseURL` / 默认模型 / 若存在的 `apiKey`，POST/PATCH Credential 写入 `public_metadata.base_url`。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai`，按同一官方 YAML 保存并做严格校验，可声明任意安全 route 及其 OpenAI/Anthropic 兼容 profile；Job 创建时冻结所选 route/model/reasoning，运行时强制把 `baseURL` 与 `apiKeyEnv` 投影到 Job Model Gateway，并把首条 system 消息投影为 pi 兼容帧（#321：部分上游按 `input[0]` 识别客户端），同时挂载固定 commit 与 SHA-256 的 MIT 插件 `dsh-reasoning-settings@0.3.0`，为 `subagent` / `subagent_fork` 提供受已配置 route/model 限制的按次档位和继承修正。Pi 将官方 profile 物化为 `.pi/agent/models.json`。长期密钥不进入 Cordis 配置或沙箱。
 
@@ -204,13 +247,17 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 
 ## 8. 观测与证据
 
-| 通道 | 内容 | 持久化 |
+| 通道 | 职责 | 持久化 |
 |------|------|--------|
-| 语义 events | progress / finding / done / human | Postgres |
+| 语义 events | **语义账本**（progress / finding / done / human）；唯一可触发控制副作用 | Postgres |
 | 画布广播 | Fact/Finding 向并发 Worker 的投递 | `canvas_broadcasts`（`planned`/`injected`/`unknown`…） |
-| 实时流 | text.delta / tool.call.* | 进程内 `stream-bus` + 短时 ticket 的 WS `/ws`；环形缓冲（单进程；多副本不共享 bus） |
-| 过程流 | normalized NDJSON | Job 目录；**运行中**可读 inflight `stream.ndjson` tail，**终态**读 manifest gzip；CLI stderr 按 chunk 精确脱敏后保留，单次运行总计最多 1 MiB 并显式记录截断，Job `error` 仍只存短摘要 |
+| 过程流 | **过程证据**（text.delta / tool.call.*） | 本机 `BLOB_DIR`：`attempts/*/stream.ndjson`；运行中 tail 原文件，终态读 manifest gzip。`BLOB_STORE=s3` **不**存过程证据 |
+| 实时流 | **非权威投递/缓存** | 进程内 `stream-bus` + 短时 ticket 的 WS `/ws`。只推已 `appendNormalized` 的帧；重启/逐出/另一副本/慢消费者都可丢 bus 帧 |
 | Session / OTLP | CLI 原始 | 冷存储 blob |
+
+三者不是三份真相。补读与重连只认本机已确认的 evidence；未落盘窗口标 `unpersisted`；本副本看不到 `BLOB_DIR` 时标 `visibility=unavailable`，不承诺无法证明的零丢失。官方拓扑是单 Scheduler + `blob_data` 卷；多副本只有共享同一 `BLOB_DIR` 文件系统才能互相补读。跨副本 file-tail 未做：不能假设另一副本可读本机文件。
+
+CLI stderr 按 chunk 精确脱敏后保留，单次运行总计最多 1 MiB 并显式记录截断，Job `error` 仍只存短摘要。
 
 Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` 会从
 `attempts/*/stream.ndjson` 生成最多 32 个文件条目的 synthetic/inflight manifest，
@@ -224,20 +271,30 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 **画布广播**：真注入路径见 §4.2；账本为唯一投递真相，Session 文本仅作旁证。
 
+**查询平面（#400）**：读 API 分 `current`（可变行快照）、`history`（追加账本/冷存储）与 `live`（进程内 stream-bus）。只有 current/history 是审计源；live 重启或换副本即空，不能替代 events/evidence。分页信封可带 `query_plane`。
+
+**运营指标（#400）**：`GET /dashboard/ops` 提供 P1/P2 **服务端**契约——Finding severity/disposition/verify 分布、高风险未闭环（critical/high 且 disposition ∈ open/accepted/human_reproducing，不含 confirmed_vuln）、项目/任务覆盖、近 7 日（Asia/Shanghai）终态成功率/耗时/角色对比、并发水位与失败原因。分母为 `succeeded|failed|timeout|orphan|cancelled`；`waiting_human` 不算失败。不重建 #242 已交付的 Dashboard UI。
+
+**语义事件归属（#400）**：线性化点是摄入事务锁到的 `jobs.status`。仅 `running` 接受事件并写 `events.attempt_id`；取消/超时/孤儿/其它非 running 状态用稳定码 `job_not_running`，`details` 说明 job_id/status/attempt_id/accepted/canvas_mutated，不入图、不推进画布。
+
+**导入 provenance（#400）**：导入 Job 在 `payload_json.import_origin` 标记 historical/readonly。活动 Job 导入时归档为 `cancelled`，resume/rerun 返回 `409 JOB_IMPORTED_READONLY`；failed/timeout/orphan 导入仍可续跑，但必须过当前治理 admission。
+
 **宿主资源清理指标（#199）**：`/metrics` 暴露 desired-state 清理残留容器/卷、连续失败轮次和按资源分类失败 counter；安全 runtime image GC 暴露候选、删除、容器占用保留与失败；Node `statfs` 宿主文件系统探针暴露使用率和 `ok/warning/error` 水位。指标抓取路径只读进程内结果，不在抓取时调用 Docker。
 
 **鉴权（HTTP + WS，#38 已关）**：
 
 - `DEEPSONAR_AUTH_REQUIRED=true` 时 HTTP 需 Bearer（用户会话或 API Token + scope）。
+- **Token 生命周期不得提权（#403）**：`tokens:manage` 只能签发/列出/吊销/轮换调用者有效 scopes 的子集；非 `admin` 不能授予 `admin`。项目限定 actor 只能管理本项目 Token，不能把 `project_id` 置空或指向其他项目。
+- **项目 actor 写路径不信任 body/query 中的项目 UUID（#403）**：`POST /jobs` 的 `project_id` 必须等于 actor 项目，否则稳定 `PROJECT_MISMATCH` 且不建 Job/Canvas。全局 runtime-image catalog（sync/apply/pull/import/digest/rescan/status/adopt-local/channel）对项目 actor 一律 `PROJECT_SCOPE_FORBIDDEN`；`usage` 只返回本项目 Job/Finding。Transfer 的 `/exports/:id`、`/imports/:id` 先解析服务端归属；项目 actor 不能碰平台包，也不能 `create_new` / `merge_platform` 或把 `target_project_id` 指到其他项目。
 - 浏览器 WebSocket **不能**设自定义 Header：先 `POST /auth/ws-ticket`（`tasks:read`，绑定单 Job、短 TTL、一次性），再连 `/ws?job_id=&ticket=`（终端为 `/terminal-ws` + purpose `terminal`）。失败用 close code 区分 4401 鉴权 / 4403 权限 / 4409 已终态等；前端展示明确错误而非无限「等待事件」。
-- 实时流先 HTTP 补 `GET /jobs/:id/evidence/stream`（含运行中 tail），再订 WS；**禁止**把长期 token 打进 WS 查询日志。
+- 实时流先 HTTP 补 `GET /jobs/:id/evidence/stream`（含运行中 tail），再订 WS；WS 快照同样读 evidence，bus 只投递后续帧。Job 终态 WS `4409` 后再 HTTP 补一次归档。**禁止**把长期 token 打进 WS 查询日志。过程流不回放控制副作用。
 
 ## 9. 安全边界
 
 - 人类登录暴力破解防护：`POST /auth/login` / `loginUser` 对任意密码校验（成功、错密、未知用户、禁用账号）计数。紧桶是规范化用户名 + 客户端 IP，5 次 / 5 分钟（窗口从首次计入的尝试起算）；粗桶是客户端 IP，20 次 / 5 分钟，防止跨用户名喷洒。成功登录占额且不清桶。额度在同一事务里先锁 IP 再锁 identity（`SELECT … FOR UPDATE`）；IP 已满时不插入 identity 行。过期窗口在同一事务删除。超限返回稳定 `429 LOGIN_RATE_LIMITED`（`retry_after_sec`），登录失败统一 `BAD_CREDENTIALS`，不泄露用户是否存在或是否禁用。计数落在 `login_rate_limits`，跨 Scheduler 重启保留。校验路径始终先付 scrypt 成本（未知用户走固定 dummy），再做占额/返回，避免锁定位比密码校验更便宜而成为用户名预言机。官方拓扑是浏览器 → `deploy/web-server.mjs` → Scheduler：Web 用入站 TCP peer **覆盖** `X-Forwarded-For`（不信任公网自带 XFF），Scheduler 只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS`，默认 1）。再前面加未纳入 hop 策略的代理时，IP 桶会塌缩为 Web 看到的那一跳，等于全站共享；不要把 Scheduler HTTP 暴露到公网。
 - 被审计目标 = 不可信输入（prompt injection）。
 - `settings_config_json` 是 CLI 连接真相，但 Job 只冻结去除长期密钥后的配置结构；每次执行把 CLI endpoint 改写到 Model Gateway，并只注入短期单 Job token。管理 API/Web 同样只返回脱敏投影，长期 Provider 密钥不进入 Job 快照或工作区。
-- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定任意镜像引用。项目按全局继承或项目托管策略得出角色缺省 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome / ClickHouse audit/test/fuzz 是官方但 project-opt-in 的专项运行时。**Hub 可按任务动态选图（#357 / #360）**：intent 可携带可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key（项目已启用、存在当前通道与宿主平台 trusted 版本、至少一种治理 CLI 能跑），preflight 与摄入事务双重校验目录成员并冻快照验 CLI 兼容，非法/未启用/OCI/CLI 不兼容使整次决策以 `invalid_runtime_image` / `invalid_payload` 拒绝（不得变成 `HANDLER_FAILED`）；省略时按角色缺省解析。resume/`rerun-current` 保留 Job 已冻结的 `image_key`。Worker 无此提案能力，运行中 Job 不换图。
+- 镜像：市场 digest 冻结；第三方须 image-admission；Agent 不能指定任意镜像引用。项目按全局继承或项目托管策略得出角色缺省 runtime key，Job 创建时连同兼容 CLI 与工具清单一起冻结。Chrome / ClickHouse audit/test/fuzz 是官方但 project-opt-in 的专项运行时。**Hub 可按任务动态选图（#357 / #360 / #398）**：intent 可携带可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key（项目已启用、存在当前通道与宿主平台 trusted 版本、至少一种治理 CLI 能跑），目录实时附带 `readiness`（ready/preparing/unavailable/error）且不泄露可执行 OCI/digest。preflight 与摄入事务双重校验目录成员并冻快照验 CLI 兼容；非法/未启用/OCI/CLI 不兼容以 `invalid_runtime_image` / `invalid_payload` 拒绝，`readiness` 非 ready 以可重试 `runtime_image_not_ready` 拒绝且不创建 Worker Job（不得变成 `HANDLER_FAILED`）。省略时按角色缺省解析，缺省 key 若在目录中同样受 readiness 约束。默认 Web/API 建 Job 仍不因本机缺层拒绝（#359）；OpenSandbox 按冻结 digest 在 provision 拉取并重验。resume/`rerun-current` 保留 Job 已冻结的 `image_key`。Worker 无此提案能力，运行中 Job 不换图。拉取任务落 `runtime_image_pull_tasks`；Scheduler 重启把 queued/running 标为 `interrupted`（`error_code=scheduler_restarted`），不自动 resume，状态可经 `GET /runtime-images/registry/pull-status` 查询。
 - **官方 digest 免签（#205）**：官方运行时以 GitHub Release catalog 的不可变 digest 为信任根，当前 release 不 `cosign sign`。准入 Worker 钉 Cosign 3，仅在配置了 `DEEPSONAR_COSIGN_KEY` 或 keyless identity+OIDC issuer 时验签；未配置则记录 `signature: skipped`（`unsigned_policy`），合同、SBOM、漏洞/凭据与恶意扫描仍 fail closed。禁止发出缺 identity/`--key` 的 `cosign verify`。CLI/网络/缺参记 `scanner_misconfigured`，无签名记 `unsigned`，只有 `admission policy failed` 才自动撤销官方 trusted。启用签名后须与发布流水线使用同一套 identity。
 - **Runtime image GC（#199）**：可配置周期，`0` 关闭；只对 DB `runtime_image_versions` 及其 registry ref 账本中可证明 digest 一致的 named immutable ref 调用无 `-f` 的 `docker image rm`。保护全部 promoted 版本、每产品当前/最近回滚版、项目 `selected_version_id` 显式 pin，以及 pending/active/waiting Job 快照引用。删除前查询所有容器的 ancestor，删除竞态仍由 Docker 非强制引用门保留；无安全 ref、检查失败或容器占用一律 fail closed。绝不执行 broad prune。
 - **宿主磁盘水位（#199）**：Scheduler 用 Node `statfs` 检查配置路径所在文件系统；warning 只告警，error 使 `/readiness` 返回 `HOST_DISK_PRESSURE` 并暂停 Dispatcher 新 claim，探针不可读也 fail closed；两者都不终止已运行 Job。水位恢复后监控器显式唤醒事件驱动 Dispatcher。生产 real compose 只读挂载 `DEEPSONAR_HOST_DISK_SOURCE` 到探针路径。
@@ -250,11 +307,11 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 - 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。进入项目后，**项目账本**（`/projects/:id/usage`）看本项目 Gateway 用量；**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
 - Finding 人工处置含 `human_reproducing`（人工复现中）：人已接手手工复现 / 打 PoC，尚未标「漏洞存在」或「拒绝误报」。**不是**技术 `verify_status=confirmed`，不能旁路 `confirmed_vuln` 的 Verify 门。compose 种子视为未否定处置。
-- **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1 风险分布与 P2 吞吐看板未做。
+- **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1/P2 **服务端**契约由 `GET /dashboard/ops` 提供（#400）；已交付 Dashboard UI 不再重建。
 - **用量账本看板**：`GET /dashboard/usage` 聚合 `job_usage_ledger`（不定价，含 `cache_read_input_tokens` / `cache_creation_input_tokens`）。预设 `day` / `week` / `month` 为 Asia/Shanghai 滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的上海日历日或 ISO 时刻，跨度最长 366 天。可选 `project_id` / `canvas_id`。态势页看全局（项目/任务/模型 Top 8），CURRENT PROJECT「项目账本」tab（`/projects/:id/usage`）看本项目，任务工作台「本次运行」看本画布。任务工作台列表不再内嵌项目账本。看板可折叠，偏好按用户 + 页面写入 `localStorage`（`deepsonar:usage-ledger:<user>:<page>`），默认展开。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
-- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联，并提供人工 `verified` / `rejected` / `needs_human` 收口。
+- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联。人工收口开放 `unverified`/`verifying`/`needs_human`，`rejected` 不能直接升为 `verified`（#387 / §4.3）；不改写 Finding 技术验证。
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
@@ -265,19 +322,15 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 ## 11. 开放演进（仅未完成）
 
-已关闭 Issue 与 as-built 实施日记见 [`CHANGELOG.md`](CHANGELOG.md) 与 Git 历史，不再堆进本表。
+已关闭 Issue 与 as-built 实施日记见 [`CHANGELOG.md`](CHANGELOG.md) 与 Git 历史，不再堆进本表。**#359 设计债总单已收口**（#390 / #386 / #387 / #388 / #389）：配置面见 §6.0，Fact 证据信任见 §4.3，过程流三职责见 §8，DSH 适配与解码见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。#320 只是已关的错误 JSON 提取，#321 只是已关的请求首帧投影，二者都不是完整解码证据。
 
 | 主题 | Issue | 未完成点 |
 |------|-------|----------|
-| 数值保真（quantities） | #368 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 产物落地后机械核对已确认 Finding 与未拒绝 Fact 的值+口径，缺失或折叠标 `numeric_inconsistent` 并显式失败。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（本 issue 明确不做）。 |
-| 设计债收口 | #359 | **已落地**：Plane / `CONTROL_MCP_SERVER` / `projects.canvas_id` 假身份（#363）；verify/report 转发 ports 删除、`core.ts` 只做组装（#366）；dispatcher 不再回退已删的 `projects.canvas_id`；leftover Session 类型隔离到 `legacy-session/`；`*.poc.ts` 迁出生产 `src/`；leftover Codex/OpenCode **解析函数**已迁出 `parseAgentSession.ts` 热路径；规则读取只认 `minVerifySeverity`（不再从 `autoVerifySeverities` / `hubWaitSeverities` / `AUTO_VERIFY_SEVERITIES` 推断）；态势修复入口只认 Scheduler `action`；bindable 角色只认 API `role_kind` / `role_builtin`；遗留项目 RoleConfig `model` / `runtime_image_key` 物理清扫（启动 + 写入/导入/绑定，不再保留「存着但不生效」警告层）。**双轨报告保留**（#361：不是设计债）。**仍开放**：配置面减法、Fact 验证第二套状态机、`stream-bus`、DSH 方言退出内核。路径守卫保留 `/.codex/` `/.opencode/`。不砍沙箱、token、Zod、digest pin、Reaper、Attempt 账本。 |
+| 数值保真（quantities） | #368 / #374 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 机械核对已确认 Finding 与 **verified Fact** 的值+口径（`unverified` / `verifying` / `needs_human` / `rejected` 不参与门禁；Finding 的 `confirmed` 不是 Fact 状态）。Agent 覆盖足够但改写口径时回退 `defaultMarkdown`（模板逐字嵌入口径），仅回退仍失败才 `numeric_inconsistent`。Report 图注入与下发 prompt 要求原样保留 value/unit/basis。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（#368 明确不做）。 |
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
-| 实时流 | #38 | issue 已关；残余：stream-bus 仍单进程内存（多副本不共享） |
-| 态势看板 | #242 | P0 运营总览与用量账本已落地；P1 风险看板、P2 吞吐看板未做 |
+| 态势看板 | #242 | P0 运营总览与用量账本已落地；P1/P2 服务端契约见 `GET /dashboard/ops`（#400）。不重建已交付 Dashboard UI |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
-| DSH 完整 pi 解码 | #320 | 当前仅为 input[0] 指纹兼容；完整解码器未做 |
-| 报告按层级分多视图（任务级/项目级） | #408 | 双轨报告生成已具备（#43），但报告入口只见任务级总报告（`ReportPanel.tsx`），Finding 独立报告只散落在各 Finding 详情「独立报告」区块（`FindingDetailPanel.tsx`）。目标：拆多级视图——任务级聚合（任务总报告各版本 + 本任务各 confirmed Finding 独立报告）与项目级聚合（该项目全部任务的两种报告，`task_reports`/`finding_reports` 均有 `project_id` 索引可支撑，只缺只读列表端点）。不改双轨生成语义，仅补展示/导航/聚合端点 |
 
 ## 12. 仓库地图
 
@@ -288,7 +341,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v42）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v45）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
@@ -317,7 +370,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `emit_progress` | 空白/超长 message、percent 越界或非数字 | `invalid_progress` |
 | `emit_fact` | 缺 title/description、未知字段、非法 verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
 | `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
-| `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` |
+| `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算、未就绪镜像 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` / `invalid_runtime_image` / `runtime_image_not_ready` |
 | `mark_job_done` | 空白或超过 8192 UTF-8 字节的 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |
 | `request_human` | 空白/超长 reason、缺失或非法 subject、跨画布 Finding、低于验证阈值的 Finding、未授权角色 | `invalid_human` / `tool_not_allowed` |
 

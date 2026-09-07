@@ -158,7 +158,7 @@ const findingProfileName = z
   .max(100)
   .regex(/^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$/);
 
-export const FindingProtocolMode = z.enum(["fixed", "agent_choice", "hybrid"]);
+export const FindingProtocolMode = z.enum(["fixed", "hybrid"]);
 export type FindingProtocolMode = z.infer<typeof FindingProtocolMode>;
 
 export const FindingScoringPolicy = z
@@ -166,7 +166,7 @@ export const FindingScoringPolicy = z
     default_standard: z.literal("CVSS").default("CVSS"),
     default_version: z.string().min(1).max(20).default("3.1"),
     accepted_versions: z.array(z.string().min(1).max(20)).min(1).max(10).default(["3.1", "4.0"]),
-    require_scoring_for_profiles: z.array(findingProfileName).max(50).default(["security.vulnerability"]),
+    require_scoring_for_profiles: z.array(findingProfileName).max(50).default([]),
   })
   .strict();
 export type FindingScoringPolicy = z.infer<typeof FindingScoringPolicy>;
@@ -217,8 +217,8 @@ export const VerifyStatus = z.enum([
 ]);
 export type VerifyStatus = z.infer<typeof VerifyStatus>;
 
-/** Verify Agent 提交的 verdict 提案；false_positive 仅兼容期，服务端映射为 rework。 */
-export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human", "false_positive"]);
+/** Verify Agent 提交的 verdict 提案。历史 Finding `verify_status=false_positive` 仍可读，不能再作为输入。 */
+export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human"]);
 export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
 
 /** 绑定到 Finding 的独立复核 / 实测证据（emit_fact 可选字段）。 */
@@ -251,7 +251,11 @@ export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
 export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
 export type NodeType = z.infer<typeof NodeType>;
 
-/** 画布 Fact 的人工验证态；与 Finding 技术验证状态相互独立。 */
+/**
+ * 画布 Fact 的证据信任态（#387）。Owner 是人工收口，不是 Finding Verify。
+ * 与 `findings.verify_status` / disposition / human 节点相互独立：不共用迁移，也不从证据 outcome 推断。
+ * 报告数量门禁只认 `verified`；`confirmed` 不是 Fact 状态。
+ */
 export const FactVerificationStatus = z.enum([
   "unverified",
   "verifying",
@@ -355,8 +359,6 @@ export const FindingPayload = z
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
     quantities: optionalQuantities,
-    /** 兼容字段：是否验证由调度器决定，不再影响派生。 */
-    suggest_verify: z.boolean().default(false),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
   })
   .strict()
@@ -368,7 +370,7 @@ export const FindingPayload = z
 export type FindingPayload = z.infer<typeof FindingPayload>;
 
 /** Agent-facing Finding contract.  SARIF/raw is Scheduler-owned internal data
- * and is intentionally not writable through the control MCP. */
+ * and is intentionally not writable through the Job control API. */
 export const EmitFindingDirectPayload = z
   .object({
     title: meaningfulFindingTitle,
@@ -382,7 +384,6 @@ export const EmitFindingDirectPayload = z
     summary: meaningfulFindingSummary,
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
-    suggest_verify: z.boolean().optional(),
   })
   .strict();
 export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
@@ -400,7 +401,6 @@ export const EmitFindingPayload = z
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
-    suggest_verify: z.boolean().optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
   .strict()

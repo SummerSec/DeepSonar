@@ -236,6 +236,22 @@ export {
   projectDshSystemPrompt,
 } from "./dsh-request-frame.js";
 export {
+  DSH_GATEWAY_KEY_ENV,
+  DSH_PI_AI_PLUGIN,
+  DSH_PI_AI_PROTOCOLS,
+  buildDshPiAiRuntimeProjection,
+  defaultDshPiAiSettings,
+  parseDshPiAiSettings,
+  readOfficialLlmPiAiDocument,
+  readOfficialLlmPiAiSettings,
+} from "./dsh-pi-ai.js";
+export type {
+  DshPiAiProtocol,
+  DshPiAiRuntimeProjection,
+  DshPiAiSettings,
+  OfficialLlmPiAiProfile,
+} from "./dsh-pi-ai.js";
+export {
   AGENT_CLI_RUNTIME_ADAPTERS,
   CONTROL_RUNTIME_CAPABILITIES,
   PiJsonlFramer,
@@ -252,9 +268,11 @@ export type {
   AgentCliCapabilities,
   AgentCliId,
   AgentCliRuntimeSnapshot,
+  AgentRuntimeProjectionInput,
   AdapterRuntimeState,
   AdapterResumeContext,
   AdapterStartContext,
+  DshProviderRuntimeConfig,
   RuntimeAdapter,
 } from "./runtime-adapters.js";
 export {
