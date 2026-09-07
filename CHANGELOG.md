@@ -665,6 +665,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.2.10]: https://github.com/SummerSec/DeepSonar/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/SummerSec/DeepSonar/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/SummerSec/DeepSonar/compare/v0.2.7...v0.2.8
 [0.2.3]: https://github.com/SummerSec/DeepSonar/compare/v0.2.2...v0.2.3
