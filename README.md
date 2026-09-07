@@ -1,7 +1,5 @@
 # DeepSonar
 
-> **Current as-built note (2026-09-06):** The local PostgreSQL database and Web API are the management source of truth. Plane is an optional integration and is not required to create projects or tasks. The checked-out schema baseline is v39; verify `apps/scheduler/src/schema-version.ts` before changing this value.
-
 > 深流循迹 · 让复杂执行持续收敛
 >
 > Every loop converges.

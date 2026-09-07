@@ -25,7 +25,11 @@ export type ModuleKey =
   | "audit_archive"
   | "credentials";
 
-export type Preset = "configuration" | "project_full" | "evidence_archive" | "custom";
+export type Preset =
+  | "configuration"
+  | "project_full"
+  | "evidence_archive"
+  | "custom";
 
 export const MODULE_DEPS: Record<ModuleKey, ModuleKey[]> = {
   project: [],
@@ -44,7 +48,15 @@ export const MODULE_DEPS: Record<ModuleKey, ModuleKey[]> = {
 };
 
 const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
-  configuration: ["project", "rules", "roles", "skills", "runtime_images", "environment", "credentials"],
+  configuration: [
+    "project",
+    "rules",
+    "roles",
+    "skills",
+    "runtime_images",
+    "environment",
+    "credentials",
+  ],
   project_full: [
     "project",
     "rules",
@@ -59,10 +71,20 @@ const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
     "artifacts",
     "audit_archive",
   ],
-  evidence_archive: ["project", "tasks", "findings", "events", "artifacts", "audit_archive"],
+  evidence_archive: [
+    "project",
+    "tasks",
+    "findings",
+    "events",
+    "artifacts",
+    "audit_archive",
+  ],
 };
 
-export function resolveModules(preset: Preset, modules?: string[]): { modules: ModuleKey[]; autoAdded: ModuleKey[] } {
+export function resolveModules(
+  preset: Preset,
+  modules?: string[],
+): { modules: ModuleKey[]; autoAdded: ModuleKey[] } {
   let selected: ModuleKey[];
   if (preset === "custom") {
     selected = (modules ?? []).filter((m): m is ModuleKey => m in MODULE_DEPS);
@@ -88,7 +110,10 @@ export function resolveModules(preset: Preset, modules?: string[]): { modules: M
   }
   // 稳定顺序
   const order = Object.keys(MODULE_DEPS) as ModuleKey[];
-  return { modules: order.filter((m) => set.has(m)), autoAdded: [...new Set(autoAdded)] };
+  return {
+    modules: order.filter((m) => set.has(m)),
+    autoAdded: [...new Set(autoAdded)],
+  };
 }
 
 /** 配置类模块（允许 merge_configuration） */
