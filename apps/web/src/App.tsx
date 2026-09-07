@@ -14,6 +14,7 @@ const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => 
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const ProjectDataPage = lazy(() => import("./pages/ProjectDataPage").then((module) => ({ default: module.ProjectDataPage })));
 const ProjectUsagePage = lazy(() => import("./pages/ProjectUsagePage").then((module) => ({ default: module.ProjectUsagePage })));
+const ProjectReportsPage = lazy(() => import("./pages/ProjectReportsPage").then((module) => ({ default: module.ProjectReportsPage })));
 const TaskCanvasRoute = lazy(() => import("./pages/TaskCanvasRoute").then((module) => ({ default: module.TaskCanvasRoute })));
 const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
@@ -138,6 +139,14 @@ export default function App() {
             element={
               <Deferred>
                 <FindingsPage scope="project" />
+              </Deferred>
+            }
+          />
+          <Route
+            path="reports"
+            element={
+              <Deferred>
+                <ProjectReportsPage />
               </Deferred>
             }
           />

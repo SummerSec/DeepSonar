@@ -1176,7 +1176,7 @@ export function TaskCanvasPage() {
 
         {tab === "report" && (
           <div className={`${taskWorkbenchListPaneClass()} min-h-0 overflow-hidden`}>
-            <ReportPanel canvasId={canvasId} />
+            <ReportPanel canvasId={canvasId} projectId={projectId} onOpenFinding={(findingId) => setQuery("finding", findingId)} />
           </div>
         )}
 

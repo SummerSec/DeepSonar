@@ -132,6 +132,8 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /findings/:id/report | findings:read | Finding 报告详情 |
 | POST | /findings/:id/report | jobs:control | 生成/重算 Finding 报告 |
 | GET | /canvases/:id/report | tasks:read | 任务报告元数据（status / markdown_uri / sarif_uri） |
+| GET | /canvases/:id/reports | tasks:read | 画布任务报告版本历史 |
+| GET | /projects/:id/reports | tasks:read | 项目报告聚合（按任务编组总报告版本 + confirmed Finding 独立报告；可选 `canvas_id`） |
 | GET | /reports/:id/markdown | tasks:read | **非 JSON attachment**，`text/markdown; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.md"` |
 | GET | /reports/:id/sarif | tasks:read | **非 JSON attachment**，`application/sarif+json; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.sarif"` |
 | POST | /canvases/:id/report/retry | jobs:control | 仅 `failed` 可重试，否则 409 |

@@ -10,6 +10,7 @@ test("report download OpenAPI advertises scopes, attachment headers, and binary 
   const sarif = document.paths["/reports/{id}/sarif"].get;
   const retry = document.paths["/canvases/{id}/report/retry"].post;
   const findingReport = document.paths["/findings/{id}/report"];
+  const projectReports = document.paths["/projects/{id}/reports"].get;
   assert.equal(markdown["x-deepsonar-scope"], "tasks:read | findings:read");
   assert.ok(markdown.responses["200"].content["text/markdown"]);
   assert.ok(markdown.responses["200"].headers["Content-Disposition"]);
@@ -19,6 +20,8 @@ test("report download OpenAPI advertises scopes, attachment headers, and binary 
   assert.equal(retry["x-deepsonar-scope"], "jobs:control");
   assert.equal(findingReport.get["x-deepsonar-scope"], "findings:read");
   assert.equal(findingReport.post["x-deepsonar-scope"], "jobs:control");
+  assert.equal(projectReports["x-deepsonar-scope"], "tasks:read");
+  assert.ok(projectReports.parameters?.some((parameter: { name?: string }) => parameter.name === "canvas_id"));
 });
 
 test("schema responses remain JSON schemas instead of being mistaken for response objects", () => {

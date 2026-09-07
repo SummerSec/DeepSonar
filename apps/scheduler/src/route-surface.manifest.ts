@@ -69,6 +69,7 @@ GET /platform/shared-assets
 GET /projects
 GET /projects/:id
 GET /projects/:id/findings/summary
+GET /projects/:id/reports
 GET /projects/:id/canvases
 GET /projects/:id/exports
 GET /projects/:id/readiness
@@ -240,6 +241,7 @@ GET /platform/shared-assets
 GET /projects
 GET /projects/{id}
 GET /projects/{id}/findings/summary
+GET /projects/{id}/reports
 GET /projects/{id}/canvases
 GET /projects/{id}/readiness
 GET /projects/{id}/role-configs
