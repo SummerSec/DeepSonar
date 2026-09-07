@@ -277,7 +277,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 态势看板 | #242 | P0 运营总览与用量账本已落地；P1 风险看板、P2 吞吐看板未做 |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
 | DSH 完整 pi 解码 | #320 | 当前仅为 input[0] 指纹兼容；完整解码器未做 |
-| 报告视图区分与聚合 | #408 | 双轨报告生成已具备（#43），但报告入口只见任务级总报告（`ReportPanel.tsx`），Finding 独立报告只散落在各 Finding 详情「独立报告」区块（`FindingDetailPanel.tsx`），无按类型/按任务的报告清单与聚合入口。本期：报告入口区分 `task_report`/`finding_report` 两类并列出版本/状态/下载；若需跨任务聚合则补项目级报告视图。仅补展示与导航，不改双轨生成语义 |
+| 报告按层级分多视图（任务级/项目级） | #408 | 双轨报告生成已具备（#43），但报告入口只见任务级总报告（`ReportPanel.tsx`），Finding 独立报告只散落在各 Finding 详情「独立报告」区块（`FindingDetailPanel.tsx`）。目标：拆多级视图——任务级聚合（任务总报告各版本 + 本任务各 confirmed Finding 独立报告）与项目级聚合（该项目全部任务的两种报告，`task_reports`/`finding_reports` 均有 `project_id` 索引可支撑，只缺只读列表端点）。不改双轨生成语义，仅补展示/导航/聚合端点 |
 
 ## 12. 仓库地图
 
