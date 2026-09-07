@@ -386,7 +386,9 @@ export function ReportPanel({
         </section>
         <section className="min-w-0" aria-label="Finding 独立报告">
           <h2 className="mb-3 text-[15px] font-medium text-zinc-200">本任务 Finding 独立报告</h2>
-          <FindingReportList items={findingReports} onOpenFinding={onOpenFinding} />
+          {loading
+            ? <EmptyState title="正在读取 Finding 报告" />
+            : <FindingReportList items={findingReports} onOpenFinding={onOpenFinding} />}
         </section>
       </div>
     </div>
