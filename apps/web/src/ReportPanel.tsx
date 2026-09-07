@@ -6,6 +6,7 @@ import { MarkdownView } from "./MarkdownView";
 import { ReportPanelAsyncGuard, resetReportPanelState, taskReportAvailabilityLabel } from "./report-panel-state";
 import { resolveSelectedTaskReport } from "./report-views";
 import { SEVERITY_COLOR } from "./semantics";
+import { SearchableSelect } from "./SearchableSelect";
 import { EmptyState, formatTime } from "./ui";
 
 /**
@@ -143,20 +144,16 @@ export function ReportPanel({
   };
 
   const versionSwitcher = versions.length > 0 && (
-    <label className="flex min-w-0 items-center gap-2 font-mono text-[12px] text-zinc-500">
-      <span className="shrink-0">版本</span>
-      <select
-        value={report?.id ?? ""}
-        onChange={(event) => setSelectedVersionId(event.target.value || null)}
-        className="theme-input-surface max-w-full rounded-md px-2 py-1 text-[12px] text-zinc-200"
-      >
-        {versions.map((item) => (
-          <option key={item.id} value={item.id}>
-            v{item.version} · {item.status}
-          </option>
-        ))}
-      </select>
-    </label>
+    <SearchableSelect
+      label="版本"
+      ariaLabel="任务报告版本"
+      value={report?.id ?? ""}
+      onChange={(value) => setSelectedVersionId(value || null)}
+      options={versions.map((item) => ({ value: item.id, label: `v${item.version} · ${item.status}` }))}
+      placeholder="选择版本"
+      clearable={false}
+      className="min-w-[12rem]"
+    />
   );
 
   const taskSection = () => {
