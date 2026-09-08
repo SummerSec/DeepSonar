@@ -64,7 +64,7 @@ writeFileSync(envFile, [
   "DEEPSONAR_VERSION=0.1.46-os-compose",
   "DEEPSONAR_ADMIN_TOKEN=poc-admin-token",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
-  "OPEN_SANDBOX_DOMAIN=127.0.0.1:8080",
+  "OPEN_SANDBOX_DOMAIN=127.0.0.1:18081",
   "OPEN_SANDBOX_PROTOCOL=http",
   `OPEN_SANDBOX_POC_MASTER_KEY=${masterKeyFile}`,
   `SCHEDULER_HOST_PORT=${schedulerPort}`,
@@ -104,7 +104,7 @@ try {
     const logs = run([...composeArgs, "logs", "--tail=80", "scheduler", "web"], 30_000);
     throw new Error(`prod-compose health not ready: scheduler=${JSON.stringify(schedulerHealth)} web=${JSON.stringify(webHealth)}\n${logs.stdout}`);
   }
-  if (schedulerHealth.opensandbox?.domain && !schedulerHealth.opensandbox.domain.includes("8080")) {
+  if (schedulerHealth.opensandbox?.domain && !schedulerHealth.opensandbox.domain.includes("18081")) {
     throw new Error(`unexpected OpenSandbox domain ${schedulerHealth.opensandbox.domain}`);
   }
   if (JSON.stringify({ schedulerHealth, webHealth }).includes(apiKey)) {

@@ -172,7 +172,7 @@ export const config = {
     /** fake=内置假 agent（联调用）；real=OpenSandbox 真实沙箱 */
     agentMode: str("AGENT_MODE", "real"),
     openSandbox: {
-      domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:8080"),
+      domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"),
       apiKey: str("OPEN_SANDBOX_API_KEY", ""),
       protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https" ? "https" : "http") as "http" | "https",
       useServerProxy: bool("OPEN_SANDBOX_USE_SERVER_PROXY", true),

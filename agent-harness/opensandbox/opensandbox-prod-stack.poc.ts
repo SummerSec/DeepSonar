@@ -40,7 +40,7 @@ try {
   process.env.AGENT_MODE = "real";
   process.env.SANDBOX_PROVIDER = "opensandbox";
   process.env.OPEN_SANDBOX_API_KEY = apiKey;
-  process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
+  process.env.OPEN_SANDBOX_DOMAIN = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:18081";
   process.env.DEEPSONAR_AUTH_REQUIRED = "false";
 
   const [
