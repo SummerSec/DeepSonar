@@ -127,6 +127,47 @@ export const CONFIG_MODULES = new Set<ModuleKey>([
   "credentials",
 ]);
 
+/**
+ * 自定义导出可选模块。`reports` / `artifacts` 已在 MODULE_DEPS 声明但尚未收集，不进 UI。
+ */
+export const CUSTOM_EXPORT_MODULES = [
+  "rules",
+  "roles",
+  "skills",
+  "runtime_images",
+  "environment",
+  "credentials",
+  "tasks",
+  "findings",
+  "events",
+  "audit_archive",
+] as const satisfies readonly ModuleKey[];
+
+/**
+ * 运行中 Job 会持续追加的模块。导出它们等于把进行中会话当成一致快照。
+ * findings / 已提交画布与 Job 行是落库只读数据；Job 运行态字段在收集时已剥掉。
+ */
+export const LIVE_STREAM_MODULES: ReadonlySet<ModuleKey> = new Set(["events"]);
+
 export function isConfigOnly(modules: ModuleKey[]): boolean {
   return modules.every((m) => CONFIG_MODULES.has(m));
+}
+
+/** 完整一致性拷贝，或含进行中事件流时，默认要求项目没有活动 Job。 */
+export function exportRequiresQuietProject(
+  preset: Preset,
+  modules: readonly ModuleKey[],
+  allowActiveJobs = false,
+): boolean {
+  if (allowActiveJobs) return false;
+  if (preset === "project_full") return true;
+  return modules.some((m) => LIVE_STREAM_MODULES.has(m));
+}
+
+export function activeJobsErrorMessage(activeCount: number): string {
+  return (
+    `项目存在 ${activeCount} 个活动 Job。完整项目导出需要任务全部结束后才能保证一致性。` +
+    "可改用：配置模板（无任务数据）、证据归档（允许活动 Job，含任务/Finding/事件）、" +
+    "或自定义模块导出已提交的 Finding/任务结果；也可等待结束或取消活动任务。"
+  );
 }
