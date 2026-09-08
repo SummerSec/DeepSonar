@@ -42,6 +42,8 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(compose, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(compose, /OPENSANDBOX_SERVER_API_KEY/);
+  assert.match(compose, /127\.0\.0\.1:18081:8080/);
+  assert.doesNotMatch(compose, /127\.0\.0\.1:8080:8080/);
   assert.match(compose, /driver: bridge/);
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
 });
@@ -103,7 +105,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.doesNotMatch(hostOverlay, /127\.0\.0\.1:13100\/gateway/);
   assert.match(hostOverlay, /DEEPSONAR_ADMIN_TOKEN: \$\{DEEPSONAR_ADMIN_TOKEN:\?set DEEPSONAR_ADMIN_TOKEN\}/);
   assert.doesNotMatch(hostOverlay, /poc-admin-token/);
-  assert.match(hostOverlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-127\.0\.0\.1:8080\}/);
+  assert.match(hostOverlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-127\.0\.0\.1:18081\}/);
   assert.match(hostOverlay, /network_mode: host/);
   assert.match(hostOverlay, /host\.docker\.internal:host-gateway/);
   assert.match(hostOverlay, /BLOB_STORE: s3/);
@@ -322,5 +324,6 @@ test("real runner is OpenSandbox only and Agentbox is deleted", () => {
   assert.match(runtime, /bindGatewayProxyToKubernetesService/);
   const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
   assert.match(config, /SANDBOX_PROVIDER", "opensandbox"/);
+  assert.match(config, /OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"/);
   assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
 });

@@ -193,7 +193,7 @@ try {
     process.env.OPEN_SANDBOX_KUBERNETES = "1";
   } else {
     delete process.env.OPEN_SANDBOX_KUBERNETES;
-    process.env.OPEN_SANDBOX_DOMAIN = "127.0.0.1:8080";
+    process.env.OPEN_SANDBOX_DOMAIN = "127.0.0.1:18081";
   }
   process.env.DEEPSONAR_API_SANDBOX_URL = `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1`;
   process.env.DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL = "http://host.docker.internal:3100/gateway";

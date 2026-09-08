@@ -38,7 +38,7 @@ if (!shouldRunOpenSandboxPoc()) {
   process.exit(0);
 }
 
-const domain = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:8080";
+const domain = process.env.OPEN_SANDBOX_DOMAIN?.trim() || "127.0.0.1:18081";
 const apiKey = process.env.OPEN_SANDBOX_API_KEY?.trim();
 if (!apiKey) {
   console.error("OPEN_SANDBOX_API_KEY is required when OPEN_SANDBOX_POC=1");
@@ -224,7 +224,7 @@ async function runProdUpCase(): Promise<string> {
       spawnSync("sudo", ["-n", "docker", "start", "deepsonar-opensandbox"], { encoding: "utf8" });
       const restoreDeadline = Date.now() + 20_000;
       while (Date.now() < restoreDeadline) {
-        const probe = spawnSync("curl", ["-fsS", "http://127.0.0.1:8080/health"], { encoding: "utf8" });
+        const probe = spawnSync("curl", ["-fsS", "http://127.0.0.1:18081/health"], { encoding: "utf8" });
         if (probe.status === 0 && probe.stdout.includes("healthy")) break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
