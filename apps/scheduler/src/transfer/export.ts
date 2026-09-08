@@ -21,7 +21,16 @@ import {
   type Manifest,
   type PackFile,
 } from "./pack.js";
-import { FORMAT, FORMAT_VERSION, moduleVersion, resolveModules, type ModuleKey, type Preset } from "./modules.js";
+import {
+  FORMAT,
+  FORMAT_VERSION,
+  activeJobsErrorMessage,
+  exportRequiresQuietProject,
+  moduleVersion,
+  resolveModules,
+  type ModuleKey,
+  type Preset,
+} from "./modules.js";
 import { persistableProjectRoleConfigModel, parseProjectImagePolicy } from "../domains/role-runtime-snapshot/application.js";
 import { ACTIVE_JOB_STATUSES, filterEnvVars, sanitizeAgentSnapshot } from "./sanitize.js";
 
@@ -93,16 +102,14 @@ export async function runExport(exportId: string): Promise<void> {
     const [project] = await sql`SELECT * FROM projects WHERE id = ${projectId}`;
     if (!project) throw Object.assign(new Error("project not found"), { code: "PROJECT_NOT_FOUND" });
 
-    const hasTasks = modules.includes("tasks") || modules.includes("findings") || modules.includes("events");
-    if (hasTasks && !options.allow_active_jobs) {
+    if (exportRequiresQuietProject(preset, modules, options.allow_active_jobs === true)) {
       const active = await sql`
         SELECT COUNT(*)::int AS n FROM jobs
         WHERE project_id = ${projectId} AND status = ANY(${ACTIVE_JOB_STATUSES as unknown as string[]})`;
       if ((active[0]?.n as number) > 0) {
-        throw Object.assign(
-          new Error(`项目存在 ${(active[0] as { n: number }).n} 个活动 Job，请等待结束、取消任务或仅导出配置`),
-          { code: "ACTIVE_JOBS" },
-        );
+        throw Object.assign(new Error(activeJobsErrorMessage((active[0] as { n: number }).n)), {
+          code: "ACTIVE_JOBS",
+        });
       }
     }
 
