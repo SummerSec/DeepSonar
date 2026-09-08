@@ -14,6 +14,7 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("../db.js");
+    const { deleteProjectsLeavingAuditShells } = await import("../test-project-teardown.js");
     const { runExport } = await import("./export.js");
     const { loadPackFile, openDeepsonarPack, readJsonl, removeFileSafe } = await import("./pack.js");
     const { activeJobsErrorMessage, resolveModules } = await import("./modules.js");
@@ -103,7 +104,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
     }
   });
 }
