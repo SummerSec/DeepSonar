@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isRuntimeImagePinStale, runtimeImageKindHint, runtimeImageOptionLabel, runtimeImagePinLabel, runtimeImageSelectOption } from "./runtime-image-option";
+import { isRuntimeImageBelowPlatformMin, isRuntimeImagePinStale, runtimeImageKindHint, runtimeImageOptionLabel, runtimeImagePinLabel, runtimeImageSelectOption } from "./runtime-image-option";
 import { optionTitle } from "./searchable-select-model";
 
 const openharmony = {
@@ -62,6 +62,12 @@ test("stale project pin label is distinct from follow-latest and a still-valid p
     official: true,
     pin_policy: "hold",
   }), "固定 0.1.41 · 保持 · 已过期");
+});
+
+test("below-platform-min flag is an explicit boolean from the scheduler row", () => {
+  assert.equal(isRuntimeImageBelowPlatformMin({ below_platform_min: true }), true);
+  assert.equal(isRuntimeImageBelowPlatformMin({ below_platform_min: false }), false);
+  assert.equal(isRuntimeImageBelowPlatformMin({}), false);
 });
 
 test("runtime image kind hint distinguishes specialty opt-in from base", () => {
