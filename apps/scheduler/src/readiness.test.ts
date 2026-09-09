@@ -538,6 +538,34 @@ test("trusted runtime fallback wins over untrusted preferred-platform candidate"
   assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_NOT_TRUSTED" && check.role?.name === "audit"), false);
 });
 
+test("official runtime image below the platform min fails closed before READY", () => {
+  const result = evaluateReadiness(baseInput({
+    minRuntimeImage: { version: "0.2.7" },
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, version: "0.2.6", official: true, source_kind: "official" }
+      : image),
+  }));
+  assert.equal(result.ready, false);
+  const check = result.checks.find((item) => item.code === "RUNTIME_IMAGE_BELOW_PLATFORM_MIN");
+  assert.ok(check);
+  assert.equal(check?.severity, "error");
+  assert.match(check?.message ?? "", /0\.2\.6/);
+  assert.match(check?.message ?? "", /0\.2\.7/);
+  assert.equal(result.checks.some((item) => item.code === "RUNTIME_IMAGE_READY" && item.role?.name === "hub_reason"), false);
+});
+
+test("official runtime image meeting the platform min stays READY", () => {
+  const result = evaluateReadiness(baseInput({
+    minRuntimeImage: { version: "0.2.7" },
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, version: "0.2.7", official: true, source_kind: "official" }
+      : image),
+  }));
+  assert.equal(result.ready, true);
+  assert.ok(result.checks.some((item) => item.code === "RUNTIME_IMAGE_READY" && item.role?.name === "hub_reason"));
+  assert.equal(result.checks.some((item) => item.code === "RUNTIME_IMAGE_BELOW_PLATFORM_MIN"), false);
+});
+
 test("archived projects fail preflight before task creation", () => {
   const result = evaluateReadiness(baseInput({ projectStatus: "archived" }));
   assert.equal(result.ready, false);
@@ -604,6 +632,12 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     baseInput({ allowEgress: false, materialSource: "external_or_workspace" }),
     baseInput({ materialSource: "unspecified" }),
     baseInput({ projectStatus: "archived" }),
+    baseInput({
+      minRuntimeImage: { version: "0.2.7" },
+      runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+        ? { ...image, version: "0.2.6", official: true, source_kind: "official" }
+        : image),
+    }),
   ];
   const globalVariant = baseInput({
     scope: { kind: "global", projectId: null },
@@ -648,6 +682,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     MODEL_DISCOVERY_EVIDENCE_STALE: "credentials",
     RUNTIME_IMAGE_UNAVAILABLE: "runtime_images",
     RUNTIME_IMAGE_PIN_STALE: "runtime_images",
+    RUNTIME_IMAGE_BELOW_PLATFORM_MIN: "runtime_images",
     RUNTIME_IMAGE_DISABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_NOT_ENABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED: "runtime_images",
@@ -696,6 +731,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     "MODEL_DISCOVERY_EVIDENCE_STALE",
     "RUNTIME_IMAGE_UNAVAILABLE",
     "RUNTIME_IMAGE_PIN_STALE",
+    "RUNTIME_IMAGE_BELOW_PLATFORM_MIN",
     "RUNTIME_IMAGE_DISABLED",
     "RUNTIME_IMAGE_PROJECT_NOT_ENABLED",
     "RUNTIME_IMAGE_NOT_TRUSTED",

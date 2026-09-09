@@ -224,6 +224,7 @@ Finding 协议存于全局 `global_settings.rules_json.finding_protocol`、项�
 `null` 使用系统 `deepsonar-base`，并允许项目 RoleConfig 托管自己的 model / 默认 CLI。
 项目 RoleConfig 的 `runtime_image_key` 不再作为项目镜像来源。
 以上策略解析的是**角色缺省镜像**；Hub 还可在每个 intent 上提案本轮 `runtime_image_key` 压过缺省（见 §9 镜像条目与 #357 / #360）。
+平台版本（GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission）与 Agent 运行时镜像版本拆开（#417）：指纹未变不新增 catalog version、不打新的平台 version tag。清单声明 `min_runtime_image`（全局下限 + 可选 per-key）；选中官方 trusted 低于下限时预检/建任务/Job 冻结前 `409 RUNTIME_IMAGE_BELOW_PLATFORM_MIN`，已冻结 Job 快照不改写。
 项目对市场版本的绑定：`project_runtime_images.selected_version_id=null` 跟随最新 trusted，不必再写 UUID。显式 UUID 为 pin。官方 catalog 提升 / registry sync 成功后，只把**官方**且已过期（当前通道/宿主平台不再是可执行 trusted，同时新 latest trusted 可用）的项目 pin 滚到 `latest_version_id`；只改 `project_runtime_images.selected_version_id`，已冻结 Job 快照与历史 Attempt 不动。`pin_ok` 的显式旧版（仍 trusted 可执行）不改。第三方 pin 仍 fail closed，不自动换 digest。需要钉死旧官方版本的项目设 `pin_policy=hold`；默认 `follow`。每次自动滚动写 `audit_logs`（`runtime_image.official_pin_roll`，trigger=`official_catalog_promote`）。hold / 第三方过期 pin 仍返回 `409 RUNTIME_IMAGE_PIN_STALE`（含一键升级）。空壳画布（已提交但无 Job）可在 pin 滚动后 `POST /tasks/:id/retry` 补入口 Hub。
 
 ### 6.1 Compose 任务的冻结种子

@@ -77,6 +77,8 @@ try {
     assert.equal(version.registry_evidence.github.inspect_digest, digest);
   }
   execFileSync(process.execPath, [generator, "--check", outputPath], { stdio: "pipe" });
+  assert.equal(generated.platform_version, "0.1.0");
+  assert.equal(generated.min_runtime_image.version, "0.2.7");
 
   // Every descriptor carries all three channel outcomes. Missing optional
   // credentials are explicit unavailable records, never silent omission.
@@ -183,6 +185,41 @@ try {
   duplicateMissingPlatform.images[0].versions.push({ version: "0.1.1", image_ref: duplicateMissingPlatform.images[0].versions[0].image_ref });
   writeFileSync(duplicateMissingPlatformPath, JSON.stringify(duplicateMissingPlatform));
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateMissingPlatformPath], { stdio: "pipe" }), /duplicate/i);
+
+  // Unchanged digest reuses the previous version row; only changed products bump.
+  const previousPath = path.join(tempRoot, "previous-registry.json");
+  writeDescriptors();
+  runGenerator({ VERSION: "0.1.0" });
+  const first = JSON.parse(readFileSync(outputPath, "utf8"));
+  writeFileSync(previousPath, `${JSON.stringify(first, null, 2)}\n`);
+  runGenerator({ VERSION: "0.2.0", PREVIOUS_REGISTRY: previousPath });
+  const reused = JSON.parse(readFileSync(outputPath, "utf8"));
+  assert.equal(reused.platform_version, "0.2.0");
+  for (const image of reused.images) {
+    assert.equal(image.versions.length, 1);
+    assert.equal(image.versions[0].version, "0.1.0");
+    assert.equal(image.versions[0].digest, digest);
+  }
+  const changedDigest = `sha256:${"b".repeat(64)}`;
+  writeDescriptors({
+    mutate(descriptor, imageKey) {
+      if (imageKey !== "deepsonar-base") return;
+      descriptor.digest = changedDigest;
+      for (const channel of Object.keys(descriptor.registry_records)) {
+        const record = descriptor.registry_records[channel];
+        if (!record.available) continue;
+        record.inspect_digest = changedDigest;
+        record.ref = record.ref.replace(digest, changedDigest);
+      }
+    },
+  });
+  runGenerator({ VERSION: "0.2.0", PREVIOUS_REGISTRY: previousPath });
+  const mixed = JSON.parse(readFileSync(outputPath, "utf8"));
+  const byKey = Object.fromEntries(mixed.images.map((image) => [image.image_key, image.versions[0]]));
+  assert.equal(byKey["deepsonar-base"].version, "0.2.0");
+  assert.equal(byKey["deepsonar-base"].digest, changedDigest);
+  assert.equal(byKey["deepsonar-audit"].version, "0.1.0");
+  assert.equal(byKey["deepsonar-audit"].digest, digest);
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -38,6 +38,12 @@ test("deploy.ps1 stays ASCII-only (no smart quotes or fullwidth punctuation)", (
   assert.equal(hit, null, hit ? `fragile punctuation at index ${hit.index}: ${JSON.stringify(hit[0])}` : "");
 });
 
+test("deploy.ps1 resolves the platform image tag from catalog platform_version", () => {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(3));
+  assert.match(text, /\$registry\.platform_version/);
+  assert.doesNotMatch(text, /images\[0\]\.versions\[0\]\.version/);
+});
+
 test("deploy.ps1 pull/up matches deploy.sh app-image and official-image semantics", () => {
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(3));
   assert.match(text, /\$Mode = "real"/);

@@ -18,9 +18,13 @@ import {
   defaultRuntimeImageKey,
   hostRuntimePlatform,
   immutableDigest,
+  isRuntimeImageBelowPlatformMin,
   localImageDigest,
+  platformMinRuntimeImage,
   readRuntimeRegistryChannel,
+  runtimeImageBelowPlatformMinMessage,
   runtimeImagePinStaleMessage,
+  type MinRuntimeImageRequirement,
 } from "./runtime-images.js";
 import {
   parseProjectImagePolicy,
@@ -125,6 +129,8 @@ export interface ReadinessEvaluationInput {
   hostDisk?: HostDiskPressureStatus;
   /** OpenSandbox server probe. Omitted = skip (unit tests / non-opensandbox). */
   openSandboxServer?: OpenSandboxServerStatus;
+  /** Platform floor for official runtime images. Omitted = no min gate. */
+  minRuntimeImage?: MinRuntimeImageRequirement | null;
 }
 
 type EffectiveRole = ReadinessRoleRow & {
@@ -166,7 +172,11 @@ function credentialSummary(row: ReadinessCredentialRow): ReadinessCredentialSumm
   };
 }
 
-function imageSummary(row: ReadinessRuntimeImageRow | undefined, imageKey: string): ReadinessRuntimeImageSummary {
+function imageSummary(
+  row: ReadinessRuntimeImageRow | undefined,
+  imageKey: string,
+  minRuntimeImage?: MinRuntimeImageRequirement | null,
+): ReadinessRuntimeImageSummary {
   const selectedVersionId = row?.selected_version_id ?? null;
   const latestVersionId = row?.latest_version_id ?? null;
   const pinStale = classifyRuntimeImagePin({
@@ -191,6 +201,12 @@ function imageSummary(row: ReadinessRuntimeImageRow | undefined, imageKey: strin
     pin_stale: pinStale,
     image_ref: row?.resolved_ref && resolvedRuntimeImageDigest(row.resolved_ref) ? row.resolved_ref : null,
     version: row?.version ?? row?.selected_version ?? null,
+    below_platform_min: isRuntimeImageBelowPlatformMin({
+      official: row?.official === true,
+      version: row?.version ?? row?.selected_version ?? row?.latest_version,
+      imageKey,
+      min: minRuntimeImage,
+    }),
   };
 }
 
@@ -656,7 +672,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
 
     const imageKey = role.runtimeImageKey || defaultRuntimeImageKey(role.name);
     const image = imageByKey.get(imageKey);
-    const runtimeSummary = imageSummary(image, imageKey);
+    const runtimeSummary = imageSummary(image, imageKey, input.minRuntimeImage);
     if (input.executionMode === "real") {
       const adapter = getAgentCliRuntimeAdapter(role.agentCli);
       if (!adapter) {
@@ -736,6 +752,20 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail("RUNTIME_IMAGE_ADMISSION_INCOMPLETE", `${role.name} 的第三方 runtime image 尚未完成准入扫描。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
     } else if (image.source_kind === "third_party" && !image.admission_scan_id && image.admission_bypassed) {
       checks.push(attention("RUNTIME_IMAGE_ADMISSION_BYPASSED", `${role.name} 使用了运维显式登记的 immutable digest；该版本标记为跳过准入扫描，请确认登记来源。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary, evidence: { kind: "none", status: "missing", at: null, age_seconds: null, model_count: null, source: "not_recorded" } }));
+    } else if (isRuntimeImageBelowPlatformMin({
+      official: image.official === true,
+      version: image.version ?? image.selected_version ?? image.latest_version,
+      imageKey,
+      min: input.minRuntimeImage,
+    })) {
+      const selectedVersion = image.version ?? image.selected_version ?? image.latest_version ?? "";
+      const minVersion = input.minRuntimeImage?.by_image_key?.[imageKey] ?? input.minRuntimeImage?.version ?? "";
+      checks.push(fail(
+        "RUNTIME_IMAGE_BELOW_PLATFORM_MIN",
+        runtimeImageBelowPlatformMinMessage({ roleName: role.name, imageKey, version: selectedVersion, minVersion }),
+        runtimeImagesFix(input.scope),
+        { role: summary, runtime_image: runtimeSummary },
+      ));
     } else {
       checks.push(pass("RUNTIME_IMAGE_READY", `${role.name} 已解析到 Scheduler 信任的不可变 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     }
@@ -948,5 +978,6 @@ export async function loadReadiness(
     audits: audits as unknown as ReadinessAuditRow[],
     hostDisk,
     openSandboxServer,
+    minRuntimeImage: platformMinRuntimeImage(),
   });
 }

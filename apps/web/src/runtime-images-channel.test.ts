@@ -12,6 +12,8 @@ test("runtime registry export removes every Scheduler-owned response field", () 
   const catalog = runtimeImageRegistryCatalog({
     schema: "deepsonar.registry/v2",
     schema_version: 2,
+    platform_version: "0.2.10",
+    min_runtime_image: { version: "0.2.7", by_image_key: {} },
     images: [],
     source: { kind: "remote" },
     metadata: { fetched_at: "2026-08-05T00:00:00.000Z" },
@@ -24,6 +26,8 @@ test("runtime registry export removes every Scheduler-owned response field", () 
   assert.deepEqual(catalog, {
     schema: "deepsonar.registry/v2",
     schema_version: 2,
+    platform_version: "0.2.10",
+    min_runtime_image: { version: "0.2.7", by_image_key: {} },
     images: [],
     source: { kind: "remote" },
   });

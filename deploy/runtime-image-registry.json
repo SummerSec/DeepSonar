@@ -1,6 +1,11 @@
 {
   "schema": "deepsonar.registry/v2",
   "schema_version": 2,
+  "platform_version": "0.2.10",
+  "min_runtime_image": {
+    "version": "0.2.7",
+    "by_image_key": {}
+  },
   "images": [
     {
       "image_key": "deepsonar-base",

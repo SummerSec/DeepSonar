@@ -105,6 +105,7 @@ const openHarmonyFuzzBuild = readFileSync(new URL("../deploy/openharmony-fuzz-bu
 const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
 const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+const deploySh = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
 const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", import.meta.url), "utf8");
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
@@ -972,6 +973,18 @@ expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow ä
 // Issue #70 Slice B release/catalog gates.  Keep these checks static and
 // credential-free so CI can prove the workflow cannot publish unchecked refs.
 expect(openHarmonyRegistry.schema === "deepsonar.registry/v2" && openHarmonyRegistry.schema_version === 2, "bundled runtime catalog must be v2");
+expect(typeof openHarmonyRegistry.platform_version === "string" && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.platform_version), "bundled catalog must declare platform_version");
+expect(openHarmonyRegistry.min_runtime_image?.version && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.min_runtime_image.version), "bundled catalog must declare min_runtime_image.version");
+expect(registryScript.includes("image build unchanged; version kept"), "generator must reuse unchanged fingerprint versions");
+expect(registryScript.includes("platform_version") && registryScript.includes("min_runtime_image"), "generator must emit split platform/runtime version axes");
+expect(releaseWorkflow.includes("maybe-skip-runtime-version-tags.sh"), "unchanged runtime products must skip new platform-version tags");
+expect(releaseWorkflow.includes("write-release-runtime-descriptor.sh"), "unchanged runtime products must reuse the previous catalog descriptor");
+expect(!releaseWorkflow.includes("release still republishes and inspects every configured channel"), "unchanged runtime products must not republish platform-version tags");
+expect(!releaseWorkflow.includes("Kali build unchanged; retag"), "unchanged Kali must keep its existing version instead of retagging");
+expect(schedulerRegistryContract.includes("min_runtime_image") && schedulerRegistryContract.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN") === false, "catalog parser owns min_runtime_image; HTTP error code lives in runtime-images");
+expect(schedulerRuntimeImages.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN"), "Scheduler must fail closed with RUNTIME_IMAGE_BELOW_PLATFORM_MIN");
+expect(deploySh.includes('"platform_version"'), "deploy.sh must resolve DEEPSONAR_IMAGE_TAG from catalog platform_version");
+expect(!deploySh.includes('/"version"[[:space:]]*:/'), "deploy.sh must not take the first catalog version as the platform tag");
 expect(openHarmonyRegistry.images.every((image) => image.versions.every((version) => Array.isArray(version.platforms) && version.platforms.length >= 2 || image.versions.length === 0)), "bundled v2 catalog must consolidate platforms");
 expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");
 expect(registryScript.includes("registry_records must include ${channel} evidence"), "every release descriptor must carry all three channel outcomes");

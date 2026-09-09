@@ -29,7 +29,7 @@ env:
   REGISTRY: ghcr.io
   DOCKERHUB_IMAGE: docker.io/sumsec/deepsonar
 
-# Slice B release evidence: record-runtime-image-digest writes canonical
+# Slice B release evidence: record-runtime-image-digest.mjs writes canonical
 # `registry_records` only after inspecting each available channel.  The
 # DOCKERHUB_CONFIGURED/ACR_CONFIGURED flags and *_UNAVAILABLE_REASON values
 # make skipped optional channels explicit; an available-channel publish
@@ -296,6 +296,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -303,6 +304,7 @@ jobs:
           PLATFORMS: linux/amd64,linux/arm64
         run: |
           set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
@@ -363,9 +365,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
-          node agent-harness/record-runtime-image-digest.mjs release-digests/base.json
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/base.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-base
@@ -545,6 +548,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ matrix.name == 'audit' && steps.resolve.outputs.skip == 'true' }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -552,6 +556,7 @@ jobs:
           PLATFORMS: ${{ matrix.platforms }}
         run: |
           set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
@@ -612,9 +617,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ matrix.name == 'audit' && steps.resolve.outputs.skip == 'true' }}
         run: |
           set -euo pipefail
-          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-${{ matrix.name }}
@@ -798,7 +804,7 @@ jobs:
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         run: |
           set -euo pipefail
-          echo "${{ matrix.name }} build unchanged: reused immutable src cache; release still republishes and inspects every configured channel" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; version kept" >> "$GITHUB_STEP_SUMMARY"
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
@@ -852,11 +858,12 @@ jobs:
       - name: Save native Chrome child digest
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
           mkdir -p chrome-arch
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; fs.writeFileSync("chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest})+"\n")'
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; const unchanged=process.env.SKIP==="true"; fs.writeFileSync("chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest,unchanged})+"\n")'
       - uses: actions/upload-artifact@v4
         with:
           name: chrome-arch-${{ matrix.name }}-${{ matrix.arch }}
@@ -1031,6 +1038,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          amd64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            echo "image build unchanged; version kept" >> "$GITHUB_STEP_SUMMARY"
+            node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              --out "release-digests/${{ matrix.name }}.json"
+            digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+            printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           amd64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-amd64.json")"
           arm64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-arm64.json")"
           [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -1098,9 +1118,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.image.outputs.unchanged }}
         run: |
           set -euo pipefail
-          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-${{ matrix.name }}
@@ -1282,7 +1303,7 @@ jobs:
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         run: |
           set -euo pipefail
-          echo "${{ matrix.name }} build unchanged: reused immutable src cache; release still republishes and inspects every configured channel" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; version kept" >> "$GITHUB_STEP_SUMMARY"
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
@@ -1335,11 +1356,12 @@ jobs:
       - name: Save native ClickHouse child digest
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
           mkdir -p clickhouse-arch
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; fs.writeFileSync("clickhouse-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest})+"\n")'
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; const unchanged=process.env.SKIP==="true"; fs.writeFileSync("clickhouse-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest,unchanged})+"\n")'
       - uses: actions/upload-artifact@v4
         with:
           name: clickhouse-arch-${{ matrix.name }}-${{ matrix.arch }}
@@ -1471,6 +1493,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          amd64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            echo "image build unchanged; version kept" >> "$GITHUB_STEP_SUMMARY"
+            node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              --out "release-digests/${{ matrix.name }}.json"
+            digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+            printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           amd64_digest="$(jq -r '.digest' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
           arm64_digest="$(jq -r '.digest' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
           [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -1538,9 +1573,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.image.outputs.unchanged }}
         run: |
           set -euo pipefail
-          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs "release-digests/${{ matrix.name }}.json"
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-${{ matrix.name }}
@@ -1723,6 +1759,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ steps.release.outputs.image_name }}
           SKIP: ${{ steps.resolve.outputs.skip }}
+          SOURCE_DIGEST: ${{ steps.resolve.outputs.digest }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
           SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
@@ -1805,8 +1842,9 @@ jobs:
           }
 
           if [[ "$SKIP" == "true" ]]; then
-            echo "Kali build unchanged; retag ${REUSE_DIGEST} across registries" >> "$GITHUB_STEP_SUMMARY"
-            publish_from_source "${IMAGE_NAME}@${REUSE_DIGEST}"
+            echo "image build unchanged; version kept" >> "$GITHUB_STEP_SUMMARY"
+            printf 'digest=%s\n' "$REUSE_DIGEST" >> "$GITHUB_OUTPUT"
+            exit 0
           else
             source_refs=(
               "${IMAGE_NAME}@${AMD64_DIGEST}"
@@ -1878,9 +1916,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
-          VERSION="${VERSION#v}" node agent-harness/record-runtime-image-digest.mjs release-digests/kali-minimal.json
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh release-digests/kali-minimal.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-kali-minimal
@@ -2044,6 +2083,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -2051,6 +2091,7 @@ jobs:
           PLATFORMS: linux/amd64,linux/arm64
         run: |
           set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
@@ -2111,9 +2152,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
-          node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-test.json
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-test.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-openharmony-test
@@ -2277,6 +2319,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -2284,6 +2327,7 @@ jobs:
           PLATFORMS: linux/amd64,linux/arm64
         run: |
           set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
@@ -2344,9 +2388,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
-          node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-audit.json
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-audit.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-openharmony-audit
@@ -2510,6 +2555,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -2517,6 +2563,7 @@ jobs:
           PLATFORMS: linux/amd64,linux/arm64
         run: |
           set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
@@ -2577,9 +2624,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
-          node agent-harness/record-runtime-image-digest.mjs release-digests/openharmony-fuzz.json
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-fuzz.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-openharmony-fuzz
@@ -2744,6 +2792,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -2751,6 +2800,7 @@ jobs:
           PLATFORMS: linux/amd64,linux/arm64
         run: |
           set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
           retry_imagetools_create() {
             local attempt=1 max_attempts=4 delay_seconds=5
             while true; do
@@ -2811,9 +2861,10 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
         run: |
           set -euo pipefail
-          node agent-harness/record-runtime-image-digest.mjs release-digests/mobile.json
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/mobile.json
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-image-digest-mobile
