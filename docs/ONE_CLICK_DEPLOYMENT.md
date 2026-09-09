@@ -25,7 +25,8 @@ Image Admission       PGSTY Silo（共享资产 S3 API，默认 127.0.0.1:9000�
 | `deploy/Dockerfile.agent*` | Agent 运行时（base/audit/Kali/Chrome/OpenHarmony/Android） |
 | `deploy/.env.example` | 环境变量模板（Release 会同步版本号） |
 | `deploy/runtime-image-registry.json` | 官方运行时清单（bundled fallback） |
-| `deploy/deploy.sh` / `deploy.ps1` | 一键脚本 |
+| `deploy/deploy.sh` / `deploy.ps1` | 一键脚本（`up real` 单机；`up worker-join` 远程执行面） |
+| `deploy/docker-compose.worker.yml` | 远程 worker：OpenSandbox + 注册/心跳 agent |
 | `deploy/pull-runtime-images.sh` | 按清单批量 pull Agent 镜像 |
 | `deploy/prepare-runtime-images.sh` / `.ps1` | 本地检测/可选 adopt 本机镜像 |
 
@@ -99,6 +100,17 @@ DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 | `real`（默认） | 真实 Agent 执行 | 挂载 docker.sock；Job 只认目录内不可变 digest |
 
 CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + RoleConfig，Job 创建时冻结。`AGENT_MODE` 只表示 fake/real。
+
+### 4.0 远程执行面 worker-join（#415 P0）
+
+单机 `up real` 不变：Scheduler 启动时把 `OPEN_SANDBOX_DOMAIN` 种子为 `local` worker。要在另一台机器加执行容量：
+
+1. 控制面 `deploy/.env` 记下 `DEEPSONAR_WORKER_BOOTSTRAP_TOKEN`（`up real` 会生成）。
+2. 在 worker 宿主机复制同一 token，并设置该节点 OpenSandbox 对控制面可达的 `host:port`。
+3. `DEEPSONAR_CONTROL_PLANE` 指向 Scheduler 基址。官方路径经 Web 反代时用 `http://<control-host>:8080/api`。
+4. `./deploy/deploy.sh up worker-join --control-plane http://<control-host>:8080/api`
+
+沙箱 create/exec/PTY 仍走 `OPEN_SANDBOX_USE_SERVER_PROXY`，不组 overlay。受限网络 / 共享资产卷的 Job 仍只派到 `local` worker（gateway sidecar 仍在控制面 Docker 引擎上）。心跳超时只停止新派发，不自动开新 attempt。
 
 官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底，不能用可变 tag 越过市场信任。
 

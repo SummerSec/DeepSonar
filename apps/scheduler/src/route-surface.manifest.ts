@@ -98,6 +98,7 @@ GET /skill-sources/:id
 GET /terminal-ws
 GET /tokens
 GET /users
+GET /workers
 GET /ws
 PATCH /agent-roles/:id
 PATCH /canvases/:id/facts/:nodeId/verification
@@ -187,6 +188,8 @@ POST /tokens/:id/revoke
 POST /tokens/:id/rotate
 POST /users
 POST /users/:id/password
+POST /workers/heartbeat
+POST /workers/register
 PUT /gateway/*
 PUT /projects/:id/role-configs/:roleId
 PUT /projects/:id/runtime-images/:imageId
@@ -267,6 +270,7 @@ GET /shared-assets/{id}/content
 GET /skill-sources
 GET /skill-sources/{id}
 GET /tokens
+GET /workers
 PATCH /agent-roles/{id}
 PATCH /canvases/{id}/facts/{nodeId}/verification
 PATCH /credentials/{id}
@@ -330,6 +334,8 @@ POST /tasks/{canvasId}/start
 POST /tokens
 POST /tokens/{id}/revoke
 POST /tokens/{id}/rotate
+POST /workers/heartbeat
+POST /workers/register
 PUT /projects/{id}/role-configs/{roleId}
 PUT /projects/{id}/runtime-images/{imageId}
 PUT /role-configs/global/{roleId}

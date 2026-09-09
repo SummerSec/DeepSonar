@@ -3,6 +3,8 @@ import {
   readOpenSandboxPin,
 } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
+import { workerIsDispatchable } from "./domains/worker-nodes/model.js";
+import { listWorkerNodes, workerStaleAfterMs } from "./domains/worker-nodes/registry.js";
 
 export type OpenSandboxServerLevel = "ok" | "error" | "unconfigured" | "skipped";
 
@@ -107,6 +109,26 @@ export async function refreshOpenSandboxServerStatus(
   }
   refreshRunning = (async () => {
     const checkedAt = new Date().toISOString();
+    if (probe === defaultProbe && runtime.provider === "opensandbox" && !config.runtime.openSandbox.kubernetes) {
+      try {
+        const now = Date.now();
+        const staleAfterMs = workerStaleAfterMs();
+        const ready = (await listWorkerNodes()).filter((node) => workerIsDispatchable(node, now, staleAfterMs));
+        const remotes = ready.filter((node) => node.kind === "remote");
+        if (remotes.length > 0) {
+          current = {
+            level: "ok",
+            domain: remotes.length === 1 ? remotes[0]!.endpoint : "registry",
+            checkedAt,
+            error: null,
+          };
+          checkedAtMs = Date.now();
+          return { ...current };
+        }
+      } catch {
+        /* fall through to the single-endpoint probe */
+      }
+    }
     if (!runtime.apiKey.trim()) {
       current = {
         level: "unconfigured",

@@ -171,6 +171,15 @@ export const config = {
     provider: str("SANDBOX_PROVIDER", "opensandbox"),
     /** fake=内置假 agent（联调用）；real=OpenSandbox 真实沙箱 */
     agentMode: str("AGENT_MODE", "real"),
+    workerNodes: {
+      bootstrapToken: str("DEEPSONAR_WORKER_BOOTSTRAP_TOKEN"),
+      seedLocal: bool("DEEPSONAR_WORKER_SEED_LOCAL", true),
+      localNodeId: str("DEEPSONAR_WORKER_LOCAL_ID", "local"),
+      staleAfterSec: boundedInt("DEEPSONAR_WORKER_STALE_SEC", 45, 3600),
+      maxSandboxes: int("DEEPSONAR_WORKER_MAX_SANDBOXES", 8),
+      memoryMib: int("DEEPSONAR_WORKER_MEMORY_MIB", 16_384),
+      cpu: int("DEEPSONAR_WORKER_CPU", 8),
+    },
     openSandbox: {
       domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"),
       apiKey: str("OPEN_SANDBOX_API_KEY", ""),

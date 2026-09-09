@@ -21,7 +21,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 45);
+  assert.equal(SCHEMA_VERSION, 46);
   assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   const transferExport = await readFile(new URL("./transfer/export.ts", import.meta.url), "utf8");
   const transferImport = await readFile(new URL("./transfer/import.ts", import.meta.url), "utf8");
@@ -36,6 +36,8 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
     /\bcanvas_id\b/,
   );
   assert.match(body, /CREATE TABLE login_rate_limits/i);
+  assert.match(body, /CREATE TABLE worker_nodes/i);
+  assert.match(body, /CREATE TABLE worker_sandbox_leases/i);
   assert.match(body, /login_rate_limits_window_idx/i);
   assert.match(body, /verification_status\s+text/i);
   assert.match(body, /canvas_nodes_facts_keyset_idx[\s\S]+WHERE\s+node_type\s*=\s*'fact'/i);

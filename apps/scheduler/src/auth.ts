@@ -221,6 +221,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /credentials/:id/models": "agents:write",
   "POST /credentials/models/preview": "agents:write",
   "DELETE /credentials/:id": "agents:write",
+  "GET /workers": "admin",
   "GET /ws": "tasks:read",
   "GET /terminal-ws": "jobs:control",
   "POST /projects/:id/exports": "exports:write",
@@ -248,6 +249,8 @@ const EXEMPT = new Set([
   "/auth/status",
   "/auth/login",
   "/auth/bootstrap",
+  "/workers/register",
+  "/workers/heartbeat",
   // Browser WebSocket upgrades cannot reliably carry an Authorization header;
   // the route consumes a short-lived one-use ticket in its handler instead.
   "/ws",

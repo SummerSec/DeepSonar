@@ -24,6 +24,7 @@ import { normalizePendingVerificationRounds } from "./verify.js";
 import { ensureDefaultAdmin } from "./users.js";
 import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
 import { startRuntimeImageGc } from "./runtime-image-gc.js";
+import { seedLocalWorkerNode } from "./domains/worker-nodes/index.js";
 
 async function main() {
   // 运行时 SDK 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
@@ -43,7 +44,11 @@ async function main() {
   console.log("[boot] 校验 / 引导数据库 schema…");
   const applied = await migrate();
   if (applied.length > 0) console.log(`[boot] 已应用: ${applied.join(", ")}`);
-  else console.log("[boot] schema 已就绪");
+  else   console.log("[boot] schema 已就绪");
+  const localWorker = await seedLocalWorkerNode();
+  if (localWorker) {
+    console.log(`[boot] execution-plane local worker ${localWorker.id} @ ${localWorker.endpoint}`);
+  }
   const defaultAdmin = await ensureDefaultAdmin();
   if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   const scrubbed = await scrubIgnoredProjectRoleConfigIdentity(sql);
