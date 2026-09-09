@@ -52,7 +52,7 @@ DEFAULT_SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
 REGISTRY_FILE="$SCRIPT_DIR/runtime-image-registry.json"
 DEFAULT_IMAGE_TAG=""
 if [ -f "$REGISTRY_FILE" ]; then
-  DEFAULT_IMAGE_TAG=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$REGISTRY_FILE")
+  DEFAULT_IMAGE_TAG=$(awk -F'"' '/"platform_version"[[:space:]]*:/ {print $4; exit}' "$REGISTRY_FILE")
 fi
 if [ -z "$DEFAULT_IMAGE_TAG" ] && [ -f "$ENV_EXAMPLE" ]; then
   DEFAULT_IMAGE_TAG=$(awk -F= '$1=="DEEPSONAR_IMAGE_TAG" {print $2; exit}' "$ENV_EXAMPLE")

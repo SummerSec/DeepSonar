@@ -63,7 +63,7 @@ function Get-DefaultImageTag {
   if (Test-Path -LiteralPath $registryFile) {
     try {
       $registry = [IO.File]::ReadAllText($registryFile, $Utf8NoBom) | ConvertFrom-Json
-      $version = [string]$registry.images[0].versions[0].version
+      $version = [string]$registry.platform_version
       if ($version -match "^[0-9]") { return $version }
     } catch {}
   }

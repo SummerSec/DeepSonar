@@ -1165,6 +1165,7 @@ export interface RuntimeImageSummary {
   selected_version: string | null;
   selected_trust_status: RuntimeImageTrustStatus | null;
   pin_stale: boolean;
+  below_platform_min?: boolean;
   pin_policy?: "follow" | "hold" | null;
   latest_version_id: string | null;
   latest_version: string | null;
@@ -1266,6 +1267,8 @@ export interface RuntimeImageRegistryVersion {
 export interface RuntimeImageRegistry {
   schema: "deepsonar.registry/v1" | "deepsonar.registry/v2";
   schema_version?: 1 | 2;
+  platform_version?: string;
+  min_runtime_image?: { version: string; by_image_key?: Record<string, string> };
   images: Array<{
     image_key: string;
     name: string;

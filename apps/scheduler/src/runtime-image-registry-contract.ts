@@ -98,10 +98,21 @@ export interface RuntimeImageRegistryImage {
   versions: RuntimeImageRegistryVersion[];
 }
 
+export interface MinRuntimeImageRequirement {
+  /** Global floor as X.Y.Z. Official selected versions below this fail closed. */
+  version: string;
+  /** Optional per-product floors; a missing key uses `version`. */
+  by_image_key?: Record<string, string>;
+}
+
 export interface RuntimeImageRegistry {
   schema: RuntimeImageRegistrySchema;
   /** Present for v2 payloads and for callers that use numeric schema versions. */
   schema_version?: 1 | 2;
+  /** Platform Release version (scheduler/web/admission). Independent of image versions. */
+  platform_version?: string;
+  /** Platform-declared minimum official runtime-image version. */
+  min_runtime_image?: MinRuntimeImageRequirement;
   images: RuntimeImageRegistryImage[];
   /** Scheduler-owned provenance metadata; never an OCI channel selector. */
   source?: RuntimeImageRegistryMetadataSource;
@@ -120,6 +131,8 @@ const PATH_SEGMENT_RE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const PLATFORM_RE = /^[a-z0-9]+\/[a-z0-9][a-z0-9._-]*$/;
 const IMAGE_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/;
 const UNAVAILABLE_REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SEMVER_CORE_RE = /^\d+\.\d+\.\d+$/;
+const VERSION_CORE_PREFIX_RE = /^v?(\d+\.\d+\.\d+)/;
 
 function invalid(message: string): never {
   throw new Error(`runtime image registry contract: ${message}`);
@@ -288,6 +301,79 @@ function parseMetadataSource(value: unknown): RuntimeImageRegistryMetadataSource
     invalid("metadata source must be remote, bundled, or upload (OCI channel is separate)");
   }
   return value as RuntimeImageRegistryMetadataSource;
+}
+
+function parseSemverCore(value: unknown, label: string): string {
+  if (typeof value !== "string" || !SEMVER_CORE_RE.test(value)) invalid(`${label} must be X.Y.Z`);
+  return value;
+}
+
+function parsePlatformVersion(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  return parseSemverCore(value, "platform_version");
+}
+
+function parseMinRuntimeImage(value: unknown): MinRuntimeImageRequirement | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid("min_runtime_image must be an object");
+  const raw = value as Record<string, unknown>;
+  assertKnownKeys(raw, ["version", "by_image_key"], "min_runtime_image");
+  const version = parseSemverCore(raw.version, "min_runtime_image.version");
+  if (raw.by_image_key === undefined) return { version };
+  if (!raw.by_image_key || typeof raw.by_image_key !== "object" || Array.isArray(raw.by_image_key)) {
+    invalid("min_runtime_image.by_image_key must be an object");
+  }
+  const byImageKey: Record<string, string> = {};
+  for (const [imageKey, rawVersion] of Object.entries(raw.by_image_key as Record<string, unknown>)) {
+    if (!IMAGE_KEY_RE.test(imageKey)) invalid(`min_runtime_image.by_image_key contains an invalid image_key`);
+    byImageKey[imageKey] = parseSemverCore(rawVersion, `min_runtime_image.by_image_key.${imageKey}`);
+  }
+  return { version, by_image_key: byImageKey };
+}
+
+/** Leading X.Y.Z from a catalog or pin label (`0.2.6-linux-amd64` → `0.2.6`). */
+export function runtimeImageVersionCore(version: string): string | null {
+  const match = version.trim().toLowerCase().match(VERSION_CORE_PREFIX_RE);
+  return match?.[1] ?? null;
+}
+
+export function effectiveMinRuntimeImageVersion(
+  min: MinRuntimeImageRequirement | null | undefined,
+  imageKey: string,
+): string | null {
+  if (!min) return null;
+  const override = min.by_image_key?.[imageKey];
+  return override ?? min.version;
+}
+
+/**
+ * Official catalog versions below the platform floor fail closed.
+ * Third-party images, missing floors, and unparseable labels are not compared.
+ */
+export function isRuntimeImageBelowPlatformMin(input: {
+  official: boolean;
+  version: string | null | undefined;
+  imageKey: string;
+  min: MinRuntimeImageRequirement | null | undefined;
+}): boolean {
+  if (!input.official) return false;
+  const floor = effectiveMinRuntimeImageVersion(input.min, input.imageKey);
+  const core = typeof input.version === "string" ? runtimeImageVersionCore(input.version) : null;
+  if (!floor || !core) return false;
+  return compareSemverCore(core, floor) < 0;
+}
+
+function compareSemverCore(left: string, right: string): number {
+  const parse = (value: string): [number, number, number] => {
+    const [major, minor, patch] = value.split(".").map((part) => Number(part));
+    return [major ?? 0, minor ?? 0, patch ?? 0];
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i]! !== b[i]!) return a[i]! < b[i]! ? -1 : 1;
+  }
+  return 0;
 }
 
 function parseImageBase(image: Record<string, unknown>, imageIndex: number): Omit<RuntimeImageRegistryImage, "versions"> {
@@ -492,10 +578,12 @@ export function parseRuntimeImageRegistry(
   const validatedPolicy = validateRuntimeImageRegistryPolicy(policy);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalid("registry must be an object");
   const value = raw as Record<string, unknown>;
-  assertKnownKeys(value, ["schema", "schema_version", "images", "source"], "registry");
+  assertKnownKeys(value, ["schema", "schema_version", "images", "source", "platform_version", "min_runtime_image"], "registry");
   const schemaVersion = detectSchema(value);
   if (!Array.isArray(value.images)) invalid("registry images must be an array");
   const source = parseMetadataSource(value.source);
+  const platformVersion = parsePlatformVersion(value.platform_version);
+  const minRuntimeImage = parseMinRuntimeImage(value.min_runtime_image);
   const seenImages = new Set<string>();
   const seenNormalizedRefs = new Map<string, {
     schemaVersion: 1 | 2;
@@ -546,6 +634,8 @@ export function parseRuntimeImageRegistry(
   return {
     schema: schemaVersion === 1 ? RUNTIME_IMAGE_REGISTRY_SCHEMA_V1 : RUNTIME_IMAGE_REGISTRY_SCHEMA_V2,
     ...(schemaVersion === 2 ? { schema_version: 2 as const } : {}),
+    ...(platformVersion ? { platform_version: platformVersion } : {}),
+    ...(minRuntimeImage ? { min_runtime_image: minRuntimeImage } : {}),
     images,
     ...(source ? { source } : {}),
   };

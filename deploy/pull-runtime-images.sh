@@ -2,12 +2,11 @@
 set -euo pipefail
 
 registry_file="deploy/runtime-image-registry.json"
-# Chrome / ClickHouse specialist keys are intentionally handled by this same
-# immutable digest-only path. Their bundled entries stay empty until Release
-# records a real amd64/arm64 artifact; no moving browser, d8, or ClickHouse
-# tag is pulled here: deepsonar-chrome-audit, deepsonar-chrome-test,
-# deepsonar-chrome-fuzz, deepsonar-clickhouse-audit, deepsonar-clickhouse-test,
-# deepsonar-clickhouse-fuzz.
+# Pull by each product's catalog version/digest, never by DEEPSONAR_IMAGE_TAG.
+# Platform 0.2.10 does not imply kali:0.2.10 when that product's fingerprint
+# was unchanged. Chrome / ClickHouse specialist keys use the same
+# immutable digest-only path. Empty bundled versions stay skipped until
+# Release records a real amd64/arm64 artifact.
 temp_file=""
 success_count=0
 failure_count=0

@@ -372,14 +372,49 @@ function assertV2Registry(registry) {
   if (EXPECTED_KEYS.some((key) => !seenImages.has(key))) fail("v2 registry must contain exactly the official image keys");
 }
 
+function assertSemverCore(value, label) {
+  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) fail(`${label} 必须是 X.Y.Z`);
+  return value;
+}
+
+function assertMinRuntimeImage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("min_runtime_image 必须是对象");
+  assertKnownKeys(value, ["version", "by_image_key"], "min_runtime_image");
+  assertSemverCore(value.version, "min_runtime_image.version");
+  if (value.by_image_key === undefined) return { version: value.version, by_image_key: {} };
+  if (!value.by_image_key || typeof value.by_image_key !== "object" || Array.isArray(value.by_image_key)) {
+    fail("min_runtime_image.by_image_key 必须是对象");
+  }
+  const byImageKey = {};
+  for (const [imageKey, version] of Object.entries(value.by_image_key)) {
+    if (!IMAGE_KEY_RE.test(imageKey)) fail("min_runtime_image.by_image_key 含无效 image_key");
+    byImageKey[imageKey] = assertSemverCore(version, `min_runtime_image.by_image_key.${imageKey}`);
+  }
+  return { version: value.version, by_image_key: byImageKey };
+}
+
+export function versionsForUnchangedDigest(previousVersions, nextVersion) {
+  const previous = Array.isArray(previousVersions) ? previousVersions : [];
+  if (nextVersion && previous.some((version) => version.digest === nextVersion.digest)) {
+    return previous;
+  }
+  return nextVersion ? [nextVersion] : previous;
+}
+
 export function assertRegistry(registry) {
   if (!registry || typeof registry !== "object" || Array.isArray(registry)) fail("registry 必须是对象");
-  assertKnownKeys(registry, ["schema", "schema_version", "images", "source"], "registry");
+  assertKnownKeys(registry, ["schema", "schema_version", "images", "source", "platform_version", "min_runtime_image"], "registry");
   const schema = registry.schema;
   const schemaVersion = registry.schema_version;
   const isV1 = schema === "deepsonar.registry/v1" || schemaVersion === 1;
   const isV2 = schema === "deepsonar.registry/v2" || schemaVersion === 2;
   if ((isV1 && isV2) || (!isV1 && !isV2)) fail("registry schema 未知或 schema/schema_version 冲突");
+  if (isV2) {
+    if (!registry.platform_version) fail("v2 registry 必须声明 platform_version");
+    assertSemverCore(registry.platform_version, "platform_version");
+    if (!registry.min_runtime_image) fail("v2 registry 必须声明 min_runtime_image");
+    assertMinRuntimeImage(registry.min_runtime_image);
+  }
   if (isV1) assertV1Registry(registry);
   else assertV2Registry(registry);
   return true;
@@ -390,6 +425,20 @@ function expectedImagesFromTemplate(template) {
   const images = new Map(template.images.map((image) => [image.image_key, image]));
   if (images.size !== EXPECTED_KEYS.length || EXPECTED_KEYS.some((key) => !images.has(key))) fail("bundled template 必须包含全部官方运行时镜像");
   return images;
+}
+
+function loadMinRuntimeImage() {
+  if (process.env.MIN_RUNTIME_IMAGE) {
+    return assertMinRuntimeImage(JSON.parse(process.env.MIN_RUNTIME_IMAGE));
+  }
+  const minPath = process.env.MIN_RUNTIME_IMAGE_FILE
+    ?? fileURLToPath(new URL("./min-runtime-image.json", import.meta.url));
+  return assertMinRuntimeImage(parse(minPath));
+}
+
+function previousRegistryPath() {
+  return process.env.PREVIOUS_REGISTRY
+    ?? fileURLToPath(new URL("../deploy/runtime-image-registry.json", import.meta.url));
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -403,7 +452,7 @@ function main(argv = process.argv.slice(2)) {
   const descriptorDir = argv[0];
   const outputPath = argv[1];
   if (!descriptorDir || !outputPath) fail("用法：<清单目录> <输出文件>；校验用 --check <清单文件>");
-  const template = parse(new URL("../deploy/runtime-image-registry.json", import.meta.url));
+  const template = parse(previousRegistryPath());
   const templateImages = expectedImagesFromTemplate(template);
   const descriptors = new Map();
   for (const key of EXPECTED_KEYS) {
@@ -414,21 +463,30 @@ function main(argv = process.argv.slice(2)) {
   if (!releaseVersionRaw) fail("缺少环境变量 VERSION");
   const releaseVersion = releaseVersionRaw.replace(/^v/, "");
   assertVersion(releaseVersion, "VERSION");
+  const platformVersion = releaseVersion.replace(/^v/, "");
+  assertSemverCore(platformVersion, "VERSION");
+  const minRuntimeImage = loadMinRuntimeImage();
   const images = EXPECTED_KEYS.map((key) => {
     const templateImage = templateImages.get(key);
     const { descriptor, records } = descriptors.get(key);
-    const version = buildV2Version(descriptor, records, releaseVersion);
-    return { ...templateImage, versions: [version] };
+    const nextVersion = buildV2Version(descriptor, records, releaseVersion);
+    const versions = versionsForUnchangedDigest(templateImage.versions, nextVersion);
+    if (versions[0] && versions[0].digest === nextVersion.digest && versions[0].version !== releaseVersion) {
+      console.log(`image build unchanged; version kept: ${key} ${versions[0].version}`);
+    }
+    return { ...templateImage, versions };
   });
   const registry = {
     schema: "deepsonar.registry/v2",
     schema_version: 2,
+    platform_version: platformVersion,
+    min_runtime_image: minRuntimeImage,
     images,
     source: "remote",
   };
   assertRegistry(registry);
   writeFileSync(outputPath, `${JSON.stringify(registry, null, 2)}\n`);
-  console.log(`已生成发布清单：${outputPath}（v2 canonical multi-channel refs）`);
+  console.log(`已生成发布清单：${outputPath}（v2 canonical multi-channel refs；platform ${platformVersion}）`);
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

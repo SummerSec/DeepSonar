@@ -1164,6 +1164,11 @@ export function RuntimeImagesPage() {
                         </span>
                       )}
                       <TrustBadge status={image.trust_status} />
+                      {image.below_platform_min && (
+                        <span className="rounded-full bg-rose-400/[.12] px-2 py-1 font-mono text-[8px] tracking-[.12em] text-rose-300">
+                          低于本平台要求
+                        </span>
+                      )}
                       {registry?.image_status?.find((item) => item.image_key === image.image_key) && (
                         <span className="rounded-full border border-zinc-500/30 px-2 py-1 font-mono text-[9px] uppercase tracking-[.12em] text-zinc-400">
                           {readinessLabel(registry.image_status.find((item) => item.image_key === image.image_key)?.readiness)}
@@ -1179,6 +1184,11 @@ export function RuntimeImagesPage() {
                     {projectId && isRuntimeImagePinStale(image) && (
                       <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/[.08] px-2 py-1.5 text-[11px] leading-5 text-amber-200">
                         项目仍固定在 {image.selected_version ?? image.selected_version_id}，该 pin 当前不是可执行的 trusted；市场最新 trusted 为 {image.latest_version ?? "新版本"}。
+                      </p>
+                    )}
+                    {image.below_platform_min && (
+                      <p className="mt-2 rounded-lg border border-rose-400/25 bg-rose-400/[.08] px-2 py-1.5 text-[11px] leading-5 text-rose-200">
+                        当前选中版本低于本平台最低运行时要求，预检与建任务会拒绝冻结。
                       </p>
                     )}
                   </div>

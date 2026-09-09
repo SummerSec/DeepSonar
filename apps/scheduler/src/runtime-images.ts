@@ -28,6 +28,9 @@ import {
   RUNTIME_IMAGE_REGISTRY_CHANNELS,
   RUNTIME_IMAGE_REGISTRY_SCHEMA_V1,
   SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+  effectiveMinRuntimeImageVersion,
+  isRuntimeImageBelowPlatformMin,
+  type MinRuntimeImageRequirement,
   type RuntimeImageRegistry as RuntimeImageRegistryContract,
   type RuntimeImageRegistryChannel,
   type RuntimeImageRegistryChannelEvidence,
@@ -37,9 +40,12 @@ import {
 
 export {
   createServerOwnedRuntimeImageRegistryPolicy,
+  effectiveMinRuntimeImageVersion,
+  isRuntimeImageBelowPlatformMin,
   legacyRuntimeImageRef,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
+  runtimeImageVersionCore,
   RUNTIME_IMAGE_REGISTRY_CHANNELS,
   RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES,
   RUNTIME_IMAGE_REGISTRY_SCHEMA_V1,
@@ -48,6 +54,7 @@ export {
   validateRuntimeImageRegistryPolicy,
 } from "./runtime-image-registry-contract.js";
 export type {
+  MinRuntimeImageRequirement,
   ParsedOciDigestRef,
   RuntimeImageRegistryChannel,
   RuntimeImageRegistryChannelPolicy,
@@ -308,6 +315,55 @@ export function runtimeImagePinStaleMessage(input: {
   return `${subject} 仍固定在 ${pinned}，该 pin 当前不是可执行的 trusted 版本；最新 trusted 为 ${latest}。请一键升级项目 pin，或改为跟随最新（version_id=null）。`;
 }
 
+export function runtimeImageBelowPlatformMinMessage(input: {
+  roleName?: string;
+  imageKey: string;
+  version: string;
+  minVersion: string;
+}): string {
+  const subject = input.roleName
+    ? `${input.roleName} 所需 runtime image ${input.imageKey}`
+    : `runtime image ${input.imageKey}`;
+  return `${subject} 版本 ${input.version} 低于本平台最低要求 ${input.minVersion}。请升级市场 trusted 版本或改选满足下限的 pin。`;
+}
+
+export class RuntimeImageBelowPlatformMinError extends Error {
+  readonly code = "RUNTIME_IMAGE_BELOW_PLATFORM_MIN" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(
+    readonly imageKey: string,
+    readonly version: string,
+    readonly minVersion: string,
+    readonly imageId?: string | null,
+    readonly projectId?: string | null,
+  ) {
+    super(runtimeImageBelowPlatformMinMessage({ imageKey, version, minVersion }));
+    this.name = "RuntimeImageBelowPlatformMinError";
+  }
+}
+
+let appliedMinRuntimeImage: MinRuntimeImageRequirement | null = null;
+
+export function rememberAppliedMinRuntimeImage(min: MinRuntimeImageRequirement | null | undefined): void {
+  appliedMinRuntimeImage = min ?? null;
+}
+
+export function platformMinRuntimeImage(): MinRuntimeImageRequirement | null {
+  return appliedMinRuntimeImage;
+}
+
+export function resetAppliedMinRuntimeImage(): void {
+  appliedMinRuntimeImage = null;
+}
+
+export function resolveMinRuntimeImage(
+  registry: RuntimeImageRegistry | null | undefined,
+  bundled?: RuntimeImageRegistry | null,
+): MinRuntimeImageRequirement | null {
+  return registry?.min_runtime_image ?? bundled?.min_runtime_image ?? null;
+}
+
 export class RuntimeImagePinStaleError extends Error {
   readonly code = "RUNTIME_IMAGE_PIN_STALE" as const;
   readonly statusCode = 409 as const;
@@ -333,6 +389,20 @@ export class RuntimeImagePinStaleError extends Error {
 }
 
 export function runtimeImageHttpError(error: unknown): { statusCode: number; body: Record<string, unknown> } | null {
+  if (error instanceof RuntimeImageBelowPlatformMinError) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        error: error.message,
+        error_code: error.code,
+        image_key: error.imageKey,
+        selected_version: error.version,
+        min_version: error.minVersion,
+        ...(error.imageId ? { image_id: error.imageId } : {}),
+        ...(error.projectId ? { project_id: error.projectId } : {}),
+      },
+    };
+  }
   if (error instanceof RuntimeImagePinStaleError) {
     return {
       statusCode: error.statusCode,
@@ -1022,15 +1092,20 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
       ...bundled.images.map((image) => remoteByKey.get(image.image_key) ?? image),
       ...remote.images.filter((image) => !bundledKeys.has(image.image_key)),
     ];
-    return {
+    const merged = {
       ...remote,
+      min_runtime_image: resolveMinRuntimeImage(remote, bundled) ?? undefined,
+      platform_version: remote.platform_version ?? bundled.platform_version,
       images,
-      source: "remote",
+      source: "remote" as const,
       fallback: false,
       error: null,
       checked_at: checkedAt,
     };
+    rememberAppliedMinRuntimeImage(merged.min_runtime_image ?? null);
+    return merged;
   }
+  rememberAppliedMinRuntimeImage(bundled.min_runtime_image ?? null);
   return {
     ...bundled,
     source: "bundled",
@@ -1319,6 +1394,7 @@ export async function applyOfficialRuntimeCatalog(
   loadedRegistry: RuntimeImageRegistry,
   options: { applyEnvOverrides?: boolean } = {},
 ): Promise<RuntimeImageCatalogSyncResult> {
+  rememberAppliedMinRuntimeImage(resolveMinRuntimeImage(loadedRegistry));
   const writeMode = officialCatalogWriteMode(loadedRegistry);
   const insertOnly = writeMode === "insert-only";
   const reconcilePromotions = shouldReconcileRuntimeImagePromotions(loadedRegistry);
@@ -2414,7 +2490,19 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
         ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC
         LIMIT 1
-      ) AS resolved_ref
+      ) AS resolved_ref,
+      (
+        SELECT v.version
+        FROM runtime_image_versions v
+        LEFT JOIN runtime_image_version_refs channel_ref
+          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
+        WHERE v.runtime_image_id = ri.id
+          AND v.trust_status = 'trusted'
+          AND v.platforms_json @> ${db.json([hostRuntimePlatform()])}
+          AND (NOT ri.official OR channel_ref.id IS NOT NULL)
+        ORDER BY v.promoted_at DESC NULLS LAST, v.created_at DESC
+        LIMIT 1
+      ) AS version
     FROM runtime_images ri
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
@@ -2432,9 +2520,18 @@ export async function listHubRuntimeImageCatalog(
           AND (NOT ri.official OR channel_ref.id IS NOT NULL)
       )
     ORDER BY ri.official DESC, ri.image_key`;
+  const minRuntimeImage = platformMinRuntimeImage();
   const entries = await Promise.all(rows.map(async (row) => {
     const entry = toHubRuntimeImageCatalogEntry(row);
     if (!entry) return null;
+    if (isRuntimeImageBelowPlatformMin({
+      official: entry.official,
+      version: typeof row.version === "string" ? row.version : null,
+      imageKey: entry.image_key,
+      min: minRuntimeImage,
+    })) {
+      return null;
+    }
     const readiness = await classifyRuntimeImageReadiness({
       imageKey: entry.image_key,
       imageRef: typeof row.resolved_ref === "string" ? row.resolved_ref : null,
@@ -2567,6 +2664,22 @@ async function selectRuntimeImageSnapshot(
   const digest = row.digest as string | null;
   if (!resolvedRef || !digest || immutableDigest(resolvedRef) !== digest) {
     throw new Error(`trusted runtime image binding has no consistent immutable reference (key=${row.image_key})`);
+  }
+  const selectedVersion = row.version ? String(row.version) : "";
+  const minVersion = effectiveMinRuntimeImageVersion(platformMinRuntimeImage(), String(row.image_key));
+  if (row.official === true && isRuntimeImageBelowPlatformMin({
+    official: true,
+    version: selectedVersion,
+    imageKey: String(row.image_key),
+    min: platformMinRuntimeImage(),
+  })) {
+    throw new RuntimeImageBelowPlatformMinError(
+      String(row.image_key),
+      selectedVersion,
+      minVersion ?? "",
+      imageId,
+      projectId,
+    );
   }
   return {
     runtime_image_id: String(row.runtime_image_id),

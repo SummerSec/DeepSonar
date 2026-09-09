@@ -12,7 +12,25 @@ Hub, ACR, or GitHub reference from another channel.
 ## v2 shape
 
 The payload uses `schema: "deepsonar.registry/v2"` (or
-`schema_version: 2`) and keeps one canonical version record:
+`schema_version: 2`) and keeps one canonical version record. Top-level
+`platform_version` is the GitHub Release / scheduler / web / admission tag
+and is independent of each product's `versions[].version`.
+`min_runtime_image` is the platform floor (`version` plus optional
+`by_image_key` overrides). Official selected versions below that floor fail
+closed with `RUNTIME_IMAGE_BELOW_PLATFORM_MIN` before a task or Job snapshot
+is frozen. Unchanged fingerprints reuse the previous version row and digest;
+they do not invent a new catalog version equal to `platform_version`.
+
+```json
+{
+  "schema": "deepsonar.registry/v2",
+  "schema_version": 2,
+  "platform_version": "0.2.10",
+  "min_runtime_image": { "version": "0.2.7", "by_image_key": {} }
+}
+```
+
+Each product still keeps one canonical version record:
 
 ```json
 {

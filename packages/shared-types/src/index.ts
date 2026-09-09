@@ -715,6 +715,8 @@ export const ReadinessRuntimeImageSummary = z.object({
   image_ref: z.string().nullable().optional(),
   /** Executable catalog version label (not necessarily the project pin). */
   version: z.string().nullable().optional(),
+  /** Official selected version is below the platform min_runtime_image floor. */
+  below_platform_min: z.boolean().optional(),
 });
 export type ReadinessRuntimeImageSummary = z.infer<typeof ReadinessRuntimeImageSummary>;
 

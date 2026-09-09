@@ -8,6 +8,12 @@
 
 - 沙箱执行面节点化 P0（#415）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
 
+### 变更
+
+- 拆开平台版本与 Agent 运行时镜像版本（#417）：GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission 仍跟 `vX.Y.Z`；运行时产品只在指纹输入变化时升版本。指纹未变不新增 catalog version 行，也不对 ACR/GHCR/Docker Hub 打新的平台 version tag，继续指向已有不可变 digest。
+- 平台清单声明 `min_runtime_image`（全局下限 + 可选 per-key）。选中的官方 trusted 版本低于下限时，预检 / 建任务 / Job 冻结前 fail closed，稳定错误码 `RUNTIME_IMAGE_BELOW_PLATFORM_MIN`；已冻结 Job 快照不改写。
+- `deploy` 的平台镜像仍拉 `*:$IMAGE_TAG`（来自 catalog `platform_version`）；运行时镜像按 catalog 真实 version/digest 拉取，不再假设平台 `0.2.10` 等于 `kali:0.2.10`。
+
 ## [0.2.10] - 2026-09-07
 
 ### 新增

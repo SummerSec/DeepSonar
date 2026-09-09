@@ -14,6 +14,8 @@ import {
   applyUploadedRuntimeCatalog,
   hostRuntimePlatform,
   immutableDigest,
+  isRuntimeImageBelowPlatformMin,
+  platformMinRuntimeImage,
   inspectLocalRuntimeImage,
   localImageDigest,
   requestRuntimeImagePreparation,
@@ -108,7 +110,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const search = query.search?.trim() ? `%${query.search.trim()}%` : null;
     const hostPlatform = hostRuntimePlatform();
     const selectedChannel = await readRuntimeRegistryChannel(sql);
-    return sql`
+    const minRuntimeImage = platformMinRuntimeImage();
+    const rows = await sql`
       SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
              ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
              pri.enabled AS project_enabled, pri.selected_version_id,
@@ -161,6 +164,17 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       WHERE (${search}::text IS NULL OR ri.name ILIKE ${search} OR ri.image_key ILIKE ${search}
              OR ri.publisher ILIKE ${search})
       ORDER BY ri.official DESC, ri.name`;
+    return rows.map((row) => ({
+      ...row,
+      below_platform_min: isRuntimeImageBelowPlatformMin({
+        official: row.official === true,
+        version: row.selected_version_id
+          ? (row.selected_version as string | null)
+          : (row.latest_version as string | null),
+        imageKey: String(row.image_key),
+        min: minRuntimeImage,
+      }),
+    }));
   });
 
   app.get("/runtime-images/registry", async () => {

@@ -33,6 +33,12 @@ export function isRuntimeImagePinStale(
   return Boolean(image.pin_stale && image.selected_version_id);
 }
 
+export function isRuntimeImageBelowPlatformMin(
+  image: Pick<RuntimeImageSummary, "below_platform_min">,
+): boolean {
+  return image.below_platform_min === true;
+}
+
 export function runtimeImagePinLabel(
   image: Pick<RuntimeImageSummary, "selected_version_id" | "selected_version" | "latest_version" | "pin_stale"> &
     Partial<Pick<RuntimeImageSummary, "official" | "pin_policy">>,
