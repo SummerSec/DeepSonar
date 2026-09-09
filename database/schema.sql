@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 45);
+INSERT INTO schema_meta (id, version) VALUES ('global', 46);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1829,5 +1829,47 @@ CREATE TABLE login_rate_limits (
   CONSTRAINT login_rate_limits_key_len CHECK (char_length(key) BETWEEN 1 AND 128)
 );
 CREATE INDEX login_rate_limits_window_idx ON login_rate_limits (window_started_at);
+
+-- Execution-plane worker registry (#415 P0). Postgres is the node catalog;
+-- no etcd. OpenSandbox API keys stay in Scheduler memory and are refreshed
+-- by heartbeat; only the fingerprint is persisted.
+CREATE TABLE worker_nodes (
+  id text PRIMARY KEY,
+  endpoint text NOT NULL,
+  protocol text NOT NULL DEFAULT 'http',
+  kind text NOT NULL DEFAULT 'remote',
+  status text NOT NULL DEFAULT 'online',
+  api_key_fingerprint text NOT NULL,
+  node_token_hash text NOT NULL,
+  node_token_prefix text NOT NULL,
+  capacity_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  labels_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  last_heartbeat_at timestamptz NOT NULL DEFAULT now(),
+  last_dispatch_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT worker_nodes_id_check CHECK (id ~ '^[a-zA-Z0-9._:-]{1,64}$'),
+  CONSTRAINT worker_nodes_endpoint_check CHECK (
+    char_length(endpoint) BETWEEN 1 AND 256
+    AND endpoint NOT LIKE '%://%'
+    AND endpoint NOT LIKE '%/%'
+  ),
+  CONSTRAINT worker_nodes_protocol_check CHECK (protocol IN ('http', 'https')),
+  CONSTRAINT worker_nodes_kind_check CHECK (kind IN ('local', 'remote')),
+  CONSTRAINT worker_nodes_status_check CHECK (status IN ('online', 'stale', 'unavailable'))
+);
+CREATE INDEX worker_nodes_dispatch_idx
+  ON worker_nodes (status, last_dispatch_at NULLS FIRST, id);
+CREATE INDEX worker_nodes_heartbeat_idx
+  ON worker_nodes (last_heartbeat_at DESC);
+
+CREATE TABLE worker_sandbox_leases (
+  sandbox_id text PRIMARY KEY,
+  worker_id text NOT NULL REFERENCES worker_nodes(id) ON DELETE CASCADE,
+  job_id text,
+  attempt_id text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX worker_sandbox_leases_worker_idx ON worker_sandbox_leases (worker_id);
 
 COMMIT;

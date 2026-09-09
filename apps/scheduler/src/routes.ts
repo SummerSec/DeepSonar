@@ -19,6 +19,7 @@ import { registerSharedAssetRoutes } from "./domains/shared-assets/routes.js";
 import { registerSkillSourceRoutes } from "./domains/skill-source/routes.js";
 import { registerStreamRoutes } from "./domains/stream/routes.js";
 import { registerSystemRoutes } from "./domains/system/routes.js";
+import { registerWorkerNodeRoutes } from "./domains/worker-nodes/index.js";
 import { registerTransferRoutes } from "./domains/transfer/routes.js";
 import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js";
 import { runtimeImageHttpError } from "./runtime-images.js";
@@ -71,4 +72,5 @@ export function registerRoutes(app: FastifyInstance) {
   registerAuditRoutes(app);
   registerTransferRoutes(app);
   registerSystemRoutes(app);
+  registerWorkerNodeRoutes(app);
 }

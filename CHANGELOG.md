@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 沙箱执行面节点化 P0（#415）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
+
 ## [0.2.10] - 2026-09-07
 
 ### 新增

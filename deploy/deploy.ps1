@@ -8,12 +8,14 @@ param(
   [string]$Action = "up",
 
   [Parameter(Position = 1)]
-  [ValidateSet("fake", "real")]
+  [ValidateSet("fake", "real", "worker-join")]
   [string]$Mode = "real",
 
   [Parameter(Position = 2)]
   [ValidateSet("pull", "build")]
   [string]$Source = "pull",
+
+  [string]$ControlPlane = $env:DEEPSONAR_CONTROL_PLANE,
 
   [switch]$NoBuild
 )
@@ -29,6 +31,7 @@ $MasterKeyFile = Join-Path $DeployDir "master.key"
 $ComposeFile = Join-Path $DeployDir "docker-compose.prod.yml"
 $RealComposeFile = Join-Path $DeployDir "docker-compose.real.yml"
 $OpenSandboxComposeFile = Join-Path $DeployDir "docker-compose.opensandbox.prod.yml"
+$WorkerComposeFile = Join-Path $DeployDir "docker-compose.worker.yml"
 $DefaultImageRegistry = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
 $AcrHost = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"
 $DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
@@ -140,6 +143,9 @@ function Initialize-Env {
 
   Ensure-EnvSecret "BLOB_S3_ACCESS_KEY_ID" (New-HexSecret 1)
   Ensure-EnvSecret "BLOB_S3_SECRET_ACCESS_KEY" (New-HexSecret 2)
+  if ($Mode -ne "worker-join") {
+    Ensure-EnvSecret "DEEPSONAR_WORKER_BOOTSTRAP_TOKEN" (New-HexSecret 2)
+  }
   $raw = Read-EnvFileRaw
   if ($raw -match "change-me-") {
     throw "deploy/.env still contains change-me placeholders"
@@ -263,6 +269,17 @@ Assert-Command "docker"
 & docker compose version | Out-Null
 Initialize-Env
 
+if ($Mode -eq "worker-join") {
+  if ([string]::IsNullOrWhiteSpace($ControlPlane)) {
+    throw "worker-join requires -ControlPlane or DEEPSONAR_CONTROL_PLANE"
+  }
+  Ensure-EnvValue "DEEPSONAR_CONTROL_PLANE" $ControlPlane
+  $bootstrap = Read-EnvValue "DEEPSONAR_WORKER_BOOTSTRAP_TOKEN" ""
+  if ([string]::IsNullOrWhiteSpace($bootstrap)) {
+    throw "worker-join requires DEEPSONAR_WORKER_BOOTSTRAP_TOKEN to match the control plane"
+  }
+  $ComposeArgs = @("compose", "-p", "deepsonar-worker", "--env-file", $EnvFile, "-f", $WorkerComposeFile)
+} else {
 $ComposeArgs = @("compose", "-p", "deepsonar", "--env-file", $EnvFile, "-f", $ComposeFile)
 if ($Mode -eq "real") {
   $ComposeArgs += @("-f", $RealComposeFile)
@@ -271,6 +288,7 @@ if ($Mode -eq "real") {
 $sandboxProvider = if ([string]::IsNullOrWhiteSpace($env:SANDBOX_PROVIDER)) { "opensandbox" } else { $env:SANDBOX_PROVIDER }
 if ($Mode -eq "real" -and $sandboxProvider -eq "opensandbox") {
   $ComposeArgs += @("-f", $OpenSandboxComposeFile)
+}
 }
 
 Push-Location $RepoRoot
@@ -303,6 +321,17 @@ try {
     "up" {
       & docker @ComposeArgs config --quiet
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
+      if ($Mode -eq "worker-join") {
+        if ($Source -eq "build") {
+          & docker @ComposeArgs up -d --build
+        } else {
+          & docker @ComposeArgs up -d --pull missing
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Failed to start worker-join services" }
+        Write-Host "[deploy] worker-join started (compose project=deepsonar-worker)"
+        Write-Host "[deploy] control-plane=$ControlPlane"
+        break
+      }
       Pull-OfficialSilo
       Pull-SharedAssetsHelper
 

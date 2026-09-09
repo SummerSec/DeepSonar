@@ -8,7 +8,7 @@
 Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
 认证：`Authorization: Bearer <session or API Token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
-**普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
+**普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/workers/register`、`/workers/heartbeat`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/workers/register` 使用 `DEEPSONAR_WORKER_BOOTSTRAP_TOKEN`，`/workers/heartbeat` 使用注册返回的节点 token；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 
 Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出的写操作默认 `admin`，读操作只需已认证。
 
@@ -43,6 +43,9 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /schema | 豁免 | `?format=openapi`（默认）/ `summary` / `markdown` |
 | GET | /schema.md | 豁免 | Markdown 契约（本文件） |
 | GET | /metrics | admin | Prometheus 文本 |
+| GET | /workers | admin | 执行面 worker 注册表（无凭据） |
+| POST | /workers/register | 豁免（bootstrap token） | `{node_id,endpoint,opensandbox_api_key,capacity}`；返回一次性 `node_token` |
+| POST | /workers/heartbeat | 豁免（node token） | 刷新在线状态；超时节点不再接收新沙箱 |
 
 ### 项目
 

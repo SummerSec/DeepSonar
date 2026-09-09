@@ -283,6 +283,49 @@ const OPS: Op[] = [
   { method: "get", path: "/schema", summary: "API schema（默认 OpenAPI JSON；?format=markdown 返回 Markdown）", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema.md", summary: "API Markdown 文档", scope: null, tags: ["Meta"] },
   { method: "get", path: "/metrics", summary: "Prometheus 指标文本", scope: "admin", tags: ["Meta"] },
+  {
+    method: "get",
+    path: "/workers",
+    summary: "执行面 worker 节点注册表（不含凭据）",
+    scope: "admin",
+    tags: ["Runtime"],
+  },
+  {
+    method: "post",
+    path: "/workers/register",
+    summary: "Worker 持 bootstrap token 注册并领取节点 token",
+    scope: null,
+    tags: ["Runtime"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["node_id", "endpoint", "opensandbox_api_key", "capacity"],
+      properties: {
+        node_id: { type: "string" },
+        endpoint: { type: "string", description: "host:port，无 scheme" },
+        protocol: { type: "string", enum: ["http", "https"] },
+        opensandbox_api_key: { type: "string" },
+        capacity: {
+          type: "object",
+          additionalProperties: false,
+          required: ["max_sandboxes", "memory_mib", "cpu"],
+          properties: {
+            max_sandboxes: { type: "integer", minimum: 1 },
+            memory_mib: { type: "integer", minimum: 256 },
+            cpu: { type: "integer", minimum: 1 },
+          },
+        },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/workers/heartbeat",
+    summary: "Worker 持节点 token 心跳；超时节点不再接收新沙箱",
+    scope: null,
+    tags: ["Runtime"],
+  },
 
   // human authentication (API Token auth remains separate)
   {
@@ -2830,6 +2873,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       "/auth/status",
       "/auth/login",
       "/auth/bootstrap",
+      "/workers/register",
+      "/workers/heartbeat",
       "/gateway/*",
     ],
   };
@@ -2853,6 +2898,8 @@ export function buildSchemaSummary(): Record<string, unknown> {
         "/auth/status",
         "/auth/login",
         "/auth/bootstrap",
+        "/workers/register",
+        "/workers/heartbeat",
         "/gateway/*",
       ],
     },

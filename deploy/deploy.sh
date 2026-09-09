@@ -4,6 +4,7 @@ set -eu
 ACTION="${1:-up}"
 MODE="${2:-real}"
 SOURCE="${3:-pull}"
+CONTROL_PLANE="${DEEPSONAR_CONTROL_PLANE:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 ENV_FILE="$SCRIPT_DIR/.env"
@@ -12,6 +13,37 @@ MASTER_KEY_FILE="$SCRIPT_DIR/master.key"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.prod.yml"
 REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 OPENSANDBOX_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.opensandbox.prod.yml"
+WORKER_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.worker.yml"
+
+if [ "$MODE" = "worker-join" ]; then
+  SOURCE="pull"
+  if [ "${3:-}" = "pull" ] || [ "${3:-}" = "build" ]; then
+    SOURCE="$3"
+    shift 3
+  else
+    shift 2
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --control-plane)
+        CONTROL_PLANE="${2:-}"
+        shift 2
+        ;;
+      --control-plane=*)
+        CONTROL_PLANE="${1#*=}"
+        shift
+        ;;
+      pull|build)
+        SOURCE="$1"
+        shift
+        ;;
+      *)
+        echo "未知参数: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+fi
 
 # 默认阿里云 ACR；可用 deploy/.env 覆盖
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
@@ -32,14 +64,19 @@ if [ -z "$DEFAULT_IMAGE_TAG" ]; then
 fi
 
 case "$ACTION" in up|down|status|logs|check|pull) ;; *)
-  echo "用法: $0 [up|down|status|logs|check|pull] [real|fake] [pull|build]" >&2
+  echo "用法: $0 [up|down|status|logs|check|pull] [real|fake|worker-join] [pull|build]" >&2
   echo "  默认: up real pull  — 从阿里云 ACR 拉取 deepsonar-* 镜像后以真实沙箱启动" >&2
   echo "  仅状态机: $0 up fake pull" >&2
   echo "  本地构建: $0 up real build" >&2
+  echo "  执行面扩容: $0 up worker-join --control-plane https://scheduler.example:3100" >&2
   exit 2
   ;;
 esac
-case "$MODE" in fake|real) ;; *) echo "模式只能是 fake 或 real" >&2; exit 2 ;; esac
+case "$MODE" in fake|real|worker-join) ;; *) echo "模式只能是 fake、real 或 worker-join" >&2; exit 2 ;; esac
+if [ "$MODE" = "worker-join" ] && [ -z "$CONTROL_PLANE" ]; then
+  echo "worker-join 需要 --control-plane URL 或 DEEPSONAR_CONTROL_PLANE" >&2
+  exit 2
+fi
 case "$SOURCE" in pull|build) ;; *) echo "镜像来源只能是 pull（阿里云）或 build（本地 Dockerfile）" >&2; exit 2 ;; esac
 
 command -v docker >/dev/null 2>&1 || { echo "缺少 docker" >&2; exit 1; }
@@ -105,6 +142,9 @@ fi
 # Silo credentials are generated for both new and existing deployments. Values are never printed.
 ensure_env_secret "BLOB_S3_ACCESS_KEY_ID" "$(random_hex 12)"
 ensure_env_secret "BLOB_S3_SECRET_ACCESS_KEY" "$(random_hex 32)"
+if [ "$MODE" != "worker-join" ]; then
+  ensure_env_secret "DEEPSONAR_WORKER_BOOTSTRAP_TOKEN" "$(random_hex 24)"
+fi
 
 if grep -q 'change-me-' "$ENV_FILE"; then
   echo "deploy/.env 仍包含 change-me 占位符，请先设置安全值" >&2
@@ -159,20 +199,35 @@ IMAGE_REGISTRY=${IMAGE_REGISTRY:-$DEFAULT_IMAGE_REGISTRY}
 IMAGE_TAG=${IMAGE_TAG:-$DEFAULT_IMAGE_TAG}
 SILO_IMAGE=${SILO_IMAGE:-$DEFAULT_SILO_IMAGE}
 
-set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
-if [ "$MODE" = "real" ]; then
-  set -- "$@" -f "$REAL_COMPOSE_FILE"
-fi
-# real 默认 OpenSandbox；显式 SANDBOX_PROVIDER= 其它值才跳过 overlay。
-if [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
-  set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
+if [ "$MODE" = "worker-join" ]; then
+  set_env_kv "DEEPSONAR_CONTROL_PLANE" "$CONTROL_PLANE"
+  export DEEPSONAR_CONTROL_PLANE="$CONTROL_PLANE"
+  if ! grep -q '^DEEPSONAR_WORKER_BOOTSTRAP_TOKEN=.\+' "$ENV_FILE" 2>/dev/null; then
+    echo "worker-join 需要与控制面相同的 DEEPSONAR_WORKER_BOOTSTRAP_TOKEN（写在 deploy/.env）" >&2
+    exit 2
+  fi
+  set -- docker compose -p deepsonar-worker --env-file "$ENV_FILE" -f "$WORKER_COMPOSE_FILE"
+else
+  set -- docker compose -p deepsonar --env-file "$ENV_FILE" -f "$COMPOSE_FILE"
+  if [ "$MODE" = "real" ]; then
+    set -- "$@" -f "$REAL_COMPOSE_FILE"
+  fi
+  # real 默认 OpenSandbox；显式 SANDBOX_PROVIDER= 其它值才跳过 overlay。
+  if [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
+    set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
+  fi
 fi
 
 # Docker bridge + iptables-legacy FORWARD=DROP blackholes OpenSandbox/gateway.
 # Only `up` may touch host FORWARD; down/logs/status/check/pull must not.
 attach_opensandbox_default_bridge() {
-  [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
-  name="${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-opensandbox}"
+  { [ "$MODE" = "real" ] || [ "$MODE" = "worker-join" ]; } || return 0
+  [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
+  if [ "$MODE" = "worker-join" ]; then
+    name="${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-worker-opensandbox}"
+  else
+    name="${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-opensandbox}"
+  fi
   echo "[deploy] attaching $name to Docker default bridge for egress sidecars"
   if docker network connect bridge "$name"; then
     return 0
@@ -181,7 +236,8 @@ attach_opensandbox_default_bridge() {
 }
 
 relax_bridge_forward() {
-  [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
+  { [ "$MODE" = "real" ] || [ "$MODE" = "worker-join" ]; } || return 0
+  [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ] || return 0
   command -v sudo >/dev/null 2>&1 || return 0
   echo "[deploy] relaxing Docker FORWARD policy for OpenSandbox bridge (up only)"
   if sudo -n iptables-legacy -P FORWARD ACCEPT 2>/dev/null \
@@ -305,6 +361,19 @@ case "$ACTION" in
   up)
     relax_bridge_forward
     "$@" config --quiet
+    if [ "$MODE" = "worker-join" ]; then
+      if [ "$SOURCE" = "build" ]; then
+        "$@" up -d --build
+      else
+        "$@" up -d --pull missing
+      fi
+      attach_opensandbox_default_bridge
+      echo "[deploy] worker-join 已启动（compose project=deepsonar-worker）"
+      echo "[deploy] control-plane=$CONTROL_PLANE endpoint=\${DEEPSONAR_WORKER_ENDPOINT:-unset}"
+      echo "[deploy] 单机控制面仍用 ./deploy/deploy.sh up real；同宿主即一个 local worker"
+      break_worker=1
+    fi
+    if [ "${break_worker:-}" != "1" ]; then
     pull_official_silo
     pull_shared_assets_helper
     if [ "$SOURCE" = "build" ]; then
@@ -348,5 +417,6 @@ case "$ACTION" in
       fi
     fi
     echo "[deploy] Scheduler is live; runtime image readiness is reported by /api/health (Dispatcher waits until ready)"
+    fi
     ;;
 esac

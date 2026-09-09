@@ -8,10 +8,12 @@ import {
   bindGatewayProxyToOpenSandboxNetwork,
   createSdkOpenSandboxClient,
   readOpenSandboxPin,
+  type OpenSandboxClient,
   type SandboxRunner,
   type SharedAssetsVolumeManager,
 } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
+import { createWorkerPlaneOpenSandboxClient } from "./domains/worker-nodes/index.js";
 
 function kubernetesSharedAssetsManager(): SharedAssetsVolumeManager {
   const kubeconfig = process.env.OPEN_SANDBOX_KUBECONFIG?.trim() || process.env.KUBECONFIG?.trim();
@@ -35,13 +37,22 @@ async function createRealRunner(): Promise<SandboxRunner> {
     execdImage: config.runtime.openSandbox.execdImage || undefined,
     egressImage: config.runtime.openSandbox.egressImage || undefined,
   });
-  return new OpenSandboxRunner(createSdkOpenSandboxClient({
-    domain: config.runtime.openSandbox.domain,
-    apiKey: config.runtime.openSandbox.apiKey,
-    protocol: config.runtime.openSandbox.protocol,
-    useServerProxy: config.runtime.openSandbox.useServerProxy,
-    pin,
-  }), {
+  const client: OpenSandboxClient = config.runtime.openSandbox.kubernetes
+    ? createSdkOpenSandboxClient({
+      domain: config.runtime.openSandbox.domain,
+      apiKey: config.runtime.openSandbox.apiKey,
+      protocol: config.runtime.openSandbox.protocol,
+      useServerProxy: true,
+      pin,
+    })
+    : createWorkerPlaneOpenSandboxClient({
+      createClient: (connection) => createSdkOpenSandboxClient({
+        ...connection,
+        useServerProxy: true,
+        pin,
+      }),
+    });
+  return new OpenSandboxRunner(client, {
     bind: config.runtime.openSandbox.kubernetes
       ? bindGatewayProxyToKubernetesService
       : bindGatewayProxyToOpenSandboxNetwork,

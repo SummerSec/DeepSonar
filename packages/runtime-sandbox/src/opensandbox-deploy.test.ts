@@ -326,4 +326,24 @@ test("real runner is OpenSandbox only and Agentbox is deleted", () => {
   assert.match(config, /SANDBOX_PROVIDER", "opensandbox"/);
   assert.match(config, /OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"/);
   assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
+  assert.match(runtime, /createWorkerPlaneOpenSandboxClient/);
+});
+
+test("worker-join compose keeps server-proxy and does not change single-host prod overlay", () => {
+  const worker = readFileSync(join(root, "deploy/docker-compose.worker.yml"), "utf8");
+  const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
+  const deployPs1 = readFileSync(join(root, "deploy/deploy.ps1"), "utf8");
+  const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+  assert.match(worker, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(worker, /worker-register\.mjs/);
+  assert.match(worker, /DEEPSONAR_CONTROL_PLANE/);
+  assert.match(worker, /DEEPSONAR_WORKER_BOOTSTRAP_TOKEN/);
+  assert.match(worker, /DEEPSONAR_WORKER_ENDPOINT/);
+  assert.doesNotMatch(worker, /:latest|network_mode:\s*host/);
+  assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
+  assert.match(deploySh, /worker-join/);
+  assert.match(deploySh, /docker-compose.worker.yml/);
+  assert.match(deploySh, /--control-plane/);
+  assert.match(deployPs1, /worker-join/);
+  assert.match(deployPs1, /docker-compose.worker.yml/);
 });

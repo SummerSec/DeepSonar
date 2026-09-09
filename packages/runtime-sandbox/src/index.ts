@@ -157,7 +157,7 @@ export {
   readOpenSandboxPin,
 } from "./opensandbox-version.js";
 export type { OpenSandboxPin } from "./opensandbox-version.js";
-export type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxSession } from "./opensandbox.js";
+export type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxCreateInput, OpenSandboxSession } from "./opensandbox.js";
 export {
   CONTAINER_REMOVE_MAX_ATTEMPTS,
   CONTAINER_REMOVE_RETRY_BASE_DELAY_MS,
