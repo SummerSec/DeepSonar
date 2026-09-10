@@ -62,7 +62,6 @@ import {
   EmptyState,
   SeverityBadge,
   StatusBadge,
-  formatDate,
   formatElapsed,
   formatTime,
   relativeTime,
@@ -863,7 +862,7 @@ export function TaskCanvasPage() {
           )}
           {meta && (
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-4">
-              <LifecycleDatum label="创建" value={formatDate(meta.created_at)} title={formatTime(meta.created_at)} />
+              <LifecycleDatum label="创建" value={relativeTime(meta.created_at)} title={formatTime(meta.created_at)} />
               <LifecycleDatum
                 label="开始执行"
                 value={startExecValue}
