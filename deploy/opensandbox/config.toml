@@ -16,6 +16,8 @@ execd_image = "docker.io/opensandbox/execd@sha256:d358f23cb268779eaa71433ce0654a
 [docker]
 network_mode = "bridge"
 api_timeout = 180
+# Compose mounts deploy/opensandbox/dockerenv at /.dockerenv so Podman
+# is detected as in-container and this host_ip is used (#422).
 host_ip = "host.docker.internal"
 # Stay below Windows ephemeral / Hyper-V excluded ports (often 49152+).
 # OpenSandbox default 40000-60000 can bind a forbidden host port (#349).

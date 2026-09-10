@@ -48,6 +48,20 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
 });
 
+test("OpenSandbox compose mounts /.dockerenv so Podman in-container detection matches Docker", () => {
+  const files = [
+    "deploy/docker-compose.opensandbox.yml",
+    "deploy/docker-compose.opensandbox.prod.yml",
+    "deploy/docker-compose.worker.yml",
+  ];
+  for (const file of files) {
+    const compose = readFileSync(join(root, file), "utf8");
+    assert.match(compose, /opensandbox\/dockerenv:\/\.dockerenv:ro/, file);
+  }
+  const marker = readFileSync(join(root, "deploy/opensandbox/dockerenv"), "utf8");
+  assert.match(marker, /#422/);
+});
+
 test("OpenSandbox Docker host port pool stays below the Windows excluded band", () => {
   assertDockerHostPortPool(readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8"), "deploy/opensandbox/config.toml");
 });

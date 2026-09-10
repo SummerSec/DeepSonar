@@ -13,6 +13,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
+      # Official server only checks /.dockerenv; Podman needs this marker (#422).
+      - ./opensandbox/dockerenv:/.dockerenv:ro
       - opensandbox-data:/var/lib/opensandbox
     ports:
       - "127.0.0.1:18081:8080"

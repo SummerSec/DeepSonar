@@ -21,6 +21,8 @@ services:
     volumes:
       - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
+      # Official server only checks /.dockerenv; Podman needs this marker (#422).
+      - ./opensandbox/dockerenv:/.dockerenv:ro
       - opensandbox-data:/var/lib/opensandbox
     ports:
       - "${OPEN_SANDBOX_BIND:-0.0.0.0}:${OPEN_SANDBOX_HOST_PORT:-18081}:8080"
