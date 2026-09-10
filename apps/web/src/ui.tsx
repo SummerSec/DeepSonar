@@ -393,17 +393,6 @@ export function formatTime(iso: string | null | undefined): string {
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
 
-/** Local calendar day as `YYYY-MM-DD` for archival stamps; keep clock time in tooltips. */
-export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 export function relativeTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();

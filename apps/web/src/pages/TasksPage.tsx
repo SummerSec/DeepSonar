@@ -10,7 +10,7 @@ import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
 import { composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
-import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatDate, formatElapsed, formatTime, relativeTime } from "../ui";
+import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived";
 /** 立即开始，或指定墙钟时间（按浏览器本地时区选择，提交为 ISO UTC）。 */
@@ -649,7 +649,7 @@ export function TasksPage() {
                     <Metric label="已确认" value={canvas.confirmed_count} tone={canvas.confirmed_count ? "#65e6b4" : undefined} />
                   </div>
                   <div className="grid grid-cols-3 gap-x-2 gap-y-1 border-t border-white/[.045] pt-2">
-                    <LifecycleValue label="创建" value={formatDate(canvas.created_at)} title={formatTime(canvas.created_at)} />
+                    <LifecycleValue label="创建" value={relativeTime(canvas.created_at)} title={formatTime(canvas.created_at)} />
                     <LifecycleValue
                       label="开始执行"
                       value={startExecValue}
