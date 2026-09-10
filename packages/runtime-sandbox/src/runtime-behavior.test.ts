@@ -100,6 +100,12 @@ test("container force removal treats only explicit no-such as idempotent success
     throw new Error("Error response from daemon: No such container: gone");
   });
   assert.equal(attempts, 1);
+  attempts = 0;
+  await removeContainerWithRetry("gone", async () => {
+    attempts += 1;
+    throw new Error("Error: No such object: gone");
+  });
+  assert.equal(attempts, 1);
 });
 
 test("managed container parsing requires canonical Job and Attempt labels", () => {
