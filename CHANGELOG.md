@@ -11,6 +11,7 @@
 ### 修复
 
 - OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
+- Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426）。
 
 ### 变更
 

@@ -5,12 +5,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DEEPSONAR_GATEWAY_PROXY_HOST } from "./runtime-shared.js";
 import {
-  docker,
-  dockerApiJson,
-  dockerTimed,
+  docker as defaultDocker,
+  dockerApiJson as defaultDockerApiJson,
+  dockerTimed as defaultDockerTimed,
   isDeepsonarGatewayNetwork,
   isDeepsonarRestrictedNetwork,
+  isNoSuchContainerError,
 } from "./runtime-docker.js";
+
+type DockerCli = typeof defaultDocker;
+type DockerTimedCli = typeof defaultDockerTimed;
+type DockerApiCli = typeof defaultDockerApiJson;
+
+let docker: DockerCli = defaultDocker;
+let dockerTimed: DockerTimedCli = defaultDockerTimed;
+let dockerApiJson: DockerApiCli = defaultDockerApiJson;
 
 export const DEEPSONAR_RESTRICTED_NETWORK = "deepsonar-restricted";
 export const DEEPSONAR_GATEWAY_NETWORK = "deepsonar-sandbox-gateway";
@@ -364,22 +373,34 @@ export async function ensureGatewayProxy(
     }
     return { containerId, createOwner };
   };
-  if (!gatewayProxyReady) {
-    gatewayProxyReady = run().catch((error) => {
-      gatewayProxyReady = null;
-      throw error;
-    });
+  const startReady = () => {
+    if (!gatewayProxyReady) {
+      gatewayProxyReady = run().catch((error) => {
+        gatewayProxyReady = null;
+        throw error;
+      });
+    }
+    return gatewayProxyReady;
+  };
+  const readCachedIps = async (readyGateway: { containerId: string; createOwner: string | null }) => {
+    const nets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", readyGateway.containerId)) as Record<
+      string,
+      { IPAddress?: string }
+    >;
+    const gatewayIp = nets[GATEWAY_NETWORK]?.IPAddress?.trim();
+    const ip = nets[RESTRICTED_NETWORK]?.IPAddress?.trim();
+    if (!gatewayIp) throw new Error(`${GATEWAY_PROXY} is not attached to ${GATEWAY_NETWORK}`);
+    if (!ip) throw new Error(`${GATEWAY_PROXY} 未接入 ${RESTRICTED_NETWORK} 或缺少 IPv4`);
+    return { gatewayIp, restrictedIp: ip, createOwner: readyGateway.createOwner };
+  };
+  const cached = startReady();
+  try {
+    return await readCachedIps(await cached);
+  } catch (error) {
+    if (!isNoSuchContainerError(error)) throw error;
+    if (gatewayProxyReady === cached) gatewayProxyReady = null;
+    return await readCachedIps(await startReady());
   }
-  const readyGateway = await gatewayProxyReady;
-  const nets = JSON.parse(await docker("inspect", "--format", "{{json .NetworkSettings.Networks}}", readyGateway.containerId)) as Record<
-    string,
-    { IPAddress?: string }
-  >;
-  const gatewayIp = nets[GATEWAY_NETWORK]?.IPAddress?.trim();
-  const ip = nets[RESTRICTED_NETWORK]?.IPAddress?.trim();
-  if (!gatewayIp) throw new Error(`${GATEWAY_PROXY} is not attached to ${GATEWAY_NETWORK}`);
-  if (!ip) throw new Error(`${GATEWAY_PROXY} 未接入 ${RESTRICTED_NETWORK} 或缺少 IPv4`);
-  return { gatewayIp, restrictedIp: ip, createOwner: readyGateway.createOwner };
 }
 
 export async function preheatManagedGateway(input: {
@@ -434,6 +455,19 @@ export async function bindGatewayProxyToOpenSandboxNetwork(input: {
   return { hostname: GATEWAY_PROXY, ip };
 }
 
+export function setGatewayDockerForTests(next: {
+  docker?: DockerCli;
+  dockerTimed?: DockerTimedCli;
+  dockerApiJson?: DockerApiCli;
+} | null = null): void {
+  docker = next?.docker ?? defaultDocker;
+  dockerTimed = next?.dockerTimed ?? defaultDockerTimed;
+  dockerApiJson = next?.dockerApiJson ?? defaultDockerApiJson;
+}
+
 export function resetManagedGatewayStateForTests(): void {
   gatewayProxyReady = null;
+  restrictedNetworkReady = null;
+  gatewayNetworkReady = null;
+  setGatewayDockerForTests();
 }

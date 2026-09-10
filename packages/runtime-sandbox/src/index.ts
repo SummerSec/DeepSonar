@@ -180,6 +180,7 @@ export {
   listDeepSonarContainers,
   parseDeepSonarContainerRows,
   readDockerWorkspaceFile,
+  isNoSuchContainerError,
   removeContainerWithRetry,
   writeDockerHumanInboxFile,
   isDeepsonarGatewayNetwork,
@@ -194,6 +195,7 @@ export {
   bindGatewayProxyToOpenSandboxNetwork,
   preheatManagedGateway,
   resetManagedGatewayStateForTests,
+  setGatewayDockerForTests,
   shouldRemoveGatewayLeftover,
 } from "./runtime-gateway.js";
 export {

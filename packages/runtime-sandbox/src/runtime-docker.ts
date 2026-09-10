@@ -23,9 +23,9 @@ type Sleep = (delayMs: number) => Promise<void>;
 async function sleep(delayMs: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
-function isNoSuchContainerError(error: unknown): boolean {
+export function isNoSuchContainerError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /no such container|no container with name or id .* found|container .* (?:not found|does not exist)/i.test(message);
+  return /no such (?:object|container)|no container with name or id .* found|container .* (?:not found|does not exist)/i.test(message);
 }
 
 export async function removeContainerWithRetry(
