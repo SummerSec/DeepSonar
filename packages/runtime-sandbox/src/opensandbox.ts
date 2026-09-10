@@ -36,6 +36,24 @@ export interface OpenSandboxConnection {
   pin?: OpenSandboxPin;
 }
 
+/** OpenSandbox grants CAP_SYS_ADMIN + unconfined seccomp/apparmor only when this create extension is present. */
+export const OPENSANDBOX_EXECD_ISOLATION_KEY = "bootstrap.execd.isolation";
+export const OPENSANDBOX_EXECD_ISOLATION_ENABLE = "enable";
+
+/**
+ * Always request execd isolation on Sandbox.create.
+ * Required for session.run({uid,gid}) / Kubernetes hosts inject (bwrap gate).
+ * Create-time protocol field only — not frozen on Job snapshots.
+ */
+export function openSandboxCreateExtensions(
+  extra?: Record<string, string>,
+): Record<string, string> {
+  return {
+    ...extra,
+    [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  };
+}
+
 export interface OpenSandboxCreateInput {
   image: string;
   env: Record<string, string>;
@@ -51,6 +69,11 @@ export interface OpenSandboxCreateInput {
   }>;
   /** Scheduler/PoC only. Agent and Hub cannot choose the sandbox architecture. */
   platform?: { os: "linux"; arch: "amd64" | "arm64" };
+  /**
+   * Opaque OpenSandbox create extensions (`Record<string, string>`).
+   * Mapping and the live SDK client always set bootstrap.execd.isolation=enable.
+   */
+  extensions?: Record<string, string>;
   signal?: AbortSignal;
 }
 
@@ -97,7 +120,7 @@ export interface OpenSandboxClient {
 }
 
 export const OPENSANDBOX_ALIVE_PROBE_ATTEMPTS = 3;
-/** execd uid/gid used only to write sandbox /etc/hosts; guest USER stays unchanged. */
+/** execd uid/gid used only to write sandbox /etc/hosts; guest USER stays unchanged. Requires create isolation (#427). */
 export const GATEWAY_HOSTS_ROOT_UID = 0;
 export const GATEWAY_HOSTS_ROOT_GID = 0;
 
@@ -232,6 +255,7 @@ export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCre
     },
     timeoutSeconds: null,
     networkPolicy: mapOpenSandboxNetworkPolicy(input.network, input.gatewayUpstreamUrl),
+    extensions: openSandboxCreateExtensions(),
     volumes: input.sharedAssetsMount
       ? [{
           name: input.sharedAssetsMount.volumeName,
@@ -426,7 +450,8 @@ export async function injectGatewayHostsViaExecd(
  * sidecar IP is only known after the sandbox network exists. Docker writes
  * /etc/hosts through the Engine (`docker exec -u 0`); execd/bwrap cannot
  * mutate the Docker-injected file on Windows Desktop. Kubernetes/Kata still
- * uses execd uid=0. Do not change the image USER.
+ * uses execd uid=0 and therefore requires bootstrap.execd.isolation=enable on
+ * create (#427). Do not change the image USER.
  */
 export async function bindGatewayHostnameAsRoot(
   session: OpenSandboxSession,

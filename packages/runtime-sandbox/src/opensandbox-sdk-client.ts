@@ -151,6 +151,12 @@ export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): O
         networkPolicy: input.networkPolicy,
         volumes: input.volumes,
         ...(input.platform ? { platform: input.platform } : {}),
+        // SDK Sandbox.create extensions: Record<string, string>. Isolation must
+        // stay last so callers cannot turn off the execd uid/gid bwrap gate.
+        extensions: {
+          ...input.extensions,
+          "bootstrap.execd.isolation": "enable",
+        },
         skipHealthCheck: false,
       });
       if (input.signal?.aborted) {

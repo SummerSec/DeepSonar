@@ -278,6 +278,8 @@ test("OpenSandbox live harness pins arch image separately from contract-fail bus
   assert.doesNotMatch(k8sGateway, /port: 80/);
   assert.match(adapter, /\/etc\/hosts/);
   assert.match(adapter, /uid: GATEWAY_HOSTS_ROOT_UID/);
+  assert.match(adapter, /bootstrap\.execd\.isolation/);
+  assert.match(adapter, /openSandboxCreateExtensions/);
   assert.match(adapter, /injectGatewayHostsViaDockerExec/);
   assert.match(adapter, /method=docker-exec|docker-exec/);
   assert.match(adapter, /GatewayHostsBindError/);
