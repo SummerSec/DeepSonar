@@ -136,15 +136,26 @@ export {
   bindGatewayHostnameAsRoot,
   createSdkOpenSandboxClient,
   evaluateOpenSandboxAlive,
+  formatGatewayHostsBindFailure,
   gatewayHostsBindCommand,
+  gatewayHostsDockerExecArgs,
   gatewayHostsResolveCommand,
+  injectGatewayHostsViaDockerExec,
+  injectGatewayHostsViaExecd,
   inspectPreparedSharedAssetsVolume,
   isGatewayHostsRootRun,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
+  openSandboxDockerContainerName,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
-export type { OpenSandboxGatewayBinder, OpenSandboxRunOptions, OpenSandboxRunnerOptions } from "./opensandbox.js";
+export type {
+  GatewayHostsInjectResult,
+  GatewayHostsInjector,
+  OpenSandboxGatewayBinder,
+  OpenSandboxRunOptions,
+  OpenSandboxRunnerOptions,
+} from "./opensandbox.js";
 export {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,

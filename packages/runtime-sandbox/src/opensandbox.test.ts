@@ -6,11 +6,16 @@ import {
   GatewayHostsBindError,
   OpenSandboxRunner,
   evaluateOpenSandboxAlive,
+  formatGatewayHostsBindFailure,
   gatewayHostsBindCommand,
+  gatewayHostsDockerExecArgs,
+  injectGatewayHostsViaDockerExec,
   isGatewayHostsRootRun,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
+  openSandboxDockerContainerName,
   requireOpenSandboxLimits,
+  type GatewayHostsInjectResult,
   type OpenSandboxClient,
   type OpenSandboxCreateInput,
   type OpenSandboxRunOptions,
@@ -194,6 +199,29 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   assert.equal(await runner.isAlive(handle), true);
 });
 
+function okDockerInject(): GatewayHostsInjectResult {
+  return {
+    method: "docker-exec",
+    exitCode: 0,
+    uid: GATEWAY_HOSTS_ROOT_UID,
+    gid: GATEWAY_HOSTS_ROOT_GID,
+    stdout: "",
+    stderr: "",
+  };
+}
+
+function assertNoExecdHostsWrite(session: ReturnType<typeof fakeSession>) {
+  assert.equal(session.runs.some((run) => (
+    run.command.includes(">>") && run.command.includes("/etc/hosts")
+  )), false);
+}
+
+function assertGuestGatewayResolve(session: ReturnType<typeof fakeSession>, hostname: string) {
+  assert.ok(session.commands.some((command) => (
+    command.includes("getent hosts") && command.includes(hostname)
+  )));
+}
+
 function assertRootGatewayHostsBind(
   session: ReturnType<typeof fakeSession>,
   bind: { hostname: string; ip: string },
@@ -207,15 +235,19 @@ function assertRootGatewayHostsBind(
   assert.equal(session.runs.some((run) => (
     run.command.includes(">>") && run.command.includes("/etc/hosts") && !isGatewayHostsRootRun(run.options)
   )), false);
-  assert.ok(session.commands.some((command) => (
-    command.includes("getent hosts") && command.includes(bind.hostname)
-  )));
+  assertGuestGatewayResolve(session, bind.hostname);
 }
 
-test("OpenSandbox restricted provision binds the Gateway hostname into /etc/hosts as root", async () => {
+test("OpenSandbox restricted provision binds the Gateway hostname via docker exec, not execd", async () => {
   const client = fakeClient();
+  const injected: Array<{ sandboxId: string; bind: { hostname: string; ip: string } }> = [];
   const runner = new OpenSandboxRunner(client, {
     bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, {
+    injectGatewayHosts: async (input) => {
+      injected.push(input);
+      return okDockerInject();
+    },
   });
   await runner.provision({
     jobId: "11111111-1111-4111-8111-111111111111",
@@ -230,7 +262,12 @@ test("OpenSandbox restricted provision binds the Gateway hostname into /etc/host
     client.created[0]?.networkPolicy.egress[0]?.target,
     "deepsonar-gateway-proxy",
   );
-  assertRootGatewayHostsBind(client.session, { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" });
+  assert.deepEqual(injected, [{
+    sandboxId: "sbx-1",
+    bind: { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" },
+  }]);
+  assertNoExecdHostsWrite(client.session);
+  assertGuestGatewayResolve(client.session, "deepsonar-gateway-proxy");
 });
 
 test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP as root", async () => {
@@ -258,8 +295,14 @@ test("OpenSandbox Kubernetes restricted provision binds the Gateway Service Clus
 test("OpenSandbox provision completes gateway hosts bind for a non-root guest", async () => {
   const session = fakeSession();
   const client = fakeClient(session);
+  const injected: string[] = [];
   const runner = new OpenSandboxRunner(client, {
     bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, {
+    injectGatewayHosts: async () => {
+      injected.push("docker-exec");
+      return okDockerInject();
+    },
   });
   for (const network of ["restricted", "egress"] as const) {
     session.commands.length = 0;
@@ -274,8 +317,10 @@ test("OpenSandbox provision completes gateway hosts bind for a non-root guest", 
       limits,
       expectedContract: "deepsonar.runtime/v1",
     });
-    assertRootGatewayHostsBind(session, { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" });
+    assertNoExecdHostsWrite(session);
+    assertGuestGatewayResolve(session, "deepsonar-gateway-proxy");
   }
+  assert.deepEqual(injected, ["docker-exec", "docker-exec"]);
 });
 
 test("OpenSandbox gateway sidecar bind failure is reported as hosts/gateway bind, not chromium", async () => {
@@ -309,13 +354,13 @@ test("OpenSandbox gateway hosts bind failure is not a missing-chromium contract 
       return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
     }
     if (command.includes(">>") && command.includes("/etc/hosts")) {
-      return { exitCode: 1, stdout: "", stderr: "Permission denied" };
+      return { exitCode: 1, stdout: "", stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
   };
   const runner = new OpenSandboxRunner(fakeClient(session), {
     bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
-  });
+  }, { kubernetesResources: true });
   await assert.rejects(runner.provision({
     jobId: "11111111-1111-4111-8111-111111111111",
     attemptId: "22222222-2222-4222-8222-222222222222",
@@ -328,9 +373,83 @@ test("OpenSandbox gateway hosts bind failure is not a missing-chromium contract 
     assert.ok(error instanceof GatewayHostsBindError);
     assert.equal(error instanceof RuntimeImageContractError, false);
     assert.match(error.message, /gateway hostname in sandbox hosts/);
+    assert.match(error.message, /method=execd exit=1 uid=0 gid=0/);
+    assert.equal(error.method, "execd");
+    assert.equal(error.exitCode, 1);
+    assert.equal(error.uid, 0);
     assert.doesNotMatch(error.message, /chromium/i);
     return true;
   });
+});
+
+test("Docker gateway hosts bind failure includes method/exit/uid when streams are empty", async () => {
+  const runner = new OpenSandboxRunner(fakeClient(), {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.17.0.2" }),
+  }, {
+    injectGatewayHosts: async () => ({
+      method: "docker-exec",
+      exitCode: 1,
+      uid: 0,
+      gid: 0,
+      stdout: "",
+      stderr: "",
+    }),
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "egress",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), (error: unknown) => {
+    assert.ok(error instanceof GatewayHostsBindError);
+    assert.equal(error.code, "OPENSANDBOX_GATEWAY_HOSTS_BIND");
+    assert.match(error.message, /172\.17\.0\.2/);
+    assert.match(error.message, /method=docker-exec exit=1 uid=0 gid=0/);
+    assert.equal(error.method, "docker-exec");
+    assert.equal(error.exitCode, 1);
+    return true;
+  });
+});
+
+test("docker exec hosts injection uses Engine uid=0 and keeps the bind command", async () => {
+  const bind = { hostname: "deepsonar-gateway-proxy", ip: "172.17.0.2" };
+  const args = gatewayHostsDockerExecArgs("sandbox-sbx-1", bind);
+  assert.deepEqual(args.slice(0, 6), ["exec", "-u", "0:0", "sandbox-sbx-1", "sh", "-c"]);
+  assert.equal(args[6], gatewayHostsBindCommand(bind));
+  assert.equal(openSandboxDockerContainerName("sbx-1"), "sandbox-sbx-1");
+  const calls: string[][] = [];
+  const ok = await injectGatewayHostsViaDockerExec({
+    sandboxId: "sbx-1",
+    bind,
+    exec: async (...next) => {
+      calls.push(next);
+      return "";
+    },
+  });
+  assert.equal(ok.method, "docker-exec");
+  assert.equal(ok.exitCode, 0);
+  assert.deepEqual(calls[0], args);
+  const failed = await injectGatewayHostsViaDockerExec({
+    sandboxId: "sbx-1",
+    bind,
+    exec: async () => {
+      throw new Error("permission denied");
+    },
+  });
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.stderr, /permission denied/);
+  assert.match(formatGatewayHostsBindFailure({
+    headline: "failed to bind gateway hostname in sandbox hosts as root (guest user is unchanged)",
+    hostname: bind.hostname,
+    ip: bind.ip,
+    method: "docker-exec",
+    exitCode: 1,
+    uid: 0,
+    gid: 0,
+  }), /method=docker-exec exit=1 uid=0 gid=0/);
 });
 
 test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {

@@ -103,14 +103,57 @@ export const GATEWAY_HOSTS_ROOT_GID = 0;
 
 export class GatewayHostsBindError extends Error {
   readonly code = "OPENSANDBOX_GATEWAY_HOSTS_BIND";
-  constructor(message: string) {
+  readonly method?: string;
+  readonly exitCode?: number;
+  readonly uid?: number;
+  readonly gid?: number;
+  constructor(message: string, details?: {
+    method?: string;
+    exitCode?: number;
+    uid?: number;
+    gid?: number;
+  }) {
     super(message);
     this.name = "GatewayHostsBindError";
+    this.method = details?.method;
+    this.exitCode = details?.exitCode;
+    this.uid = details?.uid;
+    this.gid = details?.gid;
   }
 }
 
+export type GatewayHostsInjectResult = {
+  method: string;
+  exitCode: number;
+  uid: number;
+  gid: number;
+  stdout: string;
+  stderr: string;
+};
+
+export type GatewayHostsInjector = (bind: {
+  hostname: string;
+  ip: string;
+}) => Promise<GatewayHostsInjectResult>;
+
 export function gatewayHostsBindCommand(bind: { hostname: string; ip: string }): string {
   return `grep -F ${shellQuote(bind.hostname)} /etc/hosts >/dev/null || printf '%s %s\\n' ${shellQuote(bind.ip)} ${shellQuote(bind.hostname)} >> /etc/hosts`;
+}
+
+/** Always include method/exit/uid/gid so empty execd streams cannot hide the failure. */
+export function formatGatewayHostsBindFailure(input: {
+  headline: string;
+  hostname: string;
+  ip: string;
+  method: string;
+  exitCode: number;
+  uid: number;
+  gid: number;
+  stderr?: string;
+  stdout?: string;
+}): string {
+  const streams = [input.stderr, input.stdout].map((part) => part?.trim()).filter(Boolean).join(" ");
+  return `${input.headline}: ${input.hostname} -> ${input.ip} (method=${input.method} exit=${input.exitCode} uid=${input.uid} gid=${input.gid}${streams ? ` ${streams}` : ""})`;
 }
 
 export function gatewayHostsResolveCommand(hostname: string): string {
@@ -306,15 +349,92 @@ export type OpenSandboxGatewayBinder = (input: {
   signal?: AbortSignal;
 }) => Promise<{ hostname: string; ip: string }>;
 
+export function openSandboxDockerContainerName(sandboxId: string): string {
+  return `sandbox-${sandboxId}`;
+}
+
+export function gatewayHostsDockerExecArgs(
+  container: string,
+  bind: { hostname: string; ip: string },
+): string[] {
+  return [
+    "exec",
+    "-u",
+    `${GATEWAY_HOSTS_ROOT_UID}:${GATEWAY_HOSTS_ROOT_GID}`,
+    container,
+    "sh",
+    "-c",
+    gatewayHostsBindCommand(bind),
+  ];
+}
+
+/**
+ * ExtraHosts equivalent on Docker: write through the Engine. execd/bwrap
+ * cannot mutate the Docker-injected /etc/hosts file on Windows Desktop.
+ */
+export async function injectGatewayHostsViaDockerExec(input: {
+  sandboxId: string;
+  bind: { hostname: string; ip: string };
+  exec?: (...args: string[]) => Promise<string>;
+}): Promise<GatewayHostsInjectResult> {
+  const container = openSandboxDockerContainerName(input.sandboxId);
+  const run = input.exec ?? docker;
+  try {
+    const stdout = await run(...gatewayHostsDockerExecArgs(container, input.bind));
+    return {
+      method: "docker-exec",
+      exitCode: 0,
+      uid: GATEWAY_HOSTS_ROOT_UID,
+      gid: GATEWAY_HOSTS_ROOT_GID,
+      stdout,
+      stderr: "",
+    };
+  } catch (error) {
+    const stderr = error instanceof Error ? error.message : String(error);
+    return {
+      method: "docker-exec",
+      exitCode: 1,
+      uid: GATEWAY_HOSTS_ROOT_UID,
+      gid: GATEWAY_HOSTS_ROOT_GID,
+      stdout: "",
+      stderr,
+    };
+  }
+}
+
+export async function injectGatewayHostsViaExecd(
+  session: OpenSandboxSession,
+  bind: { hostname: string; ip: string },
+): Promise<GatewayHostsInjectResult> {
+  const hosts = await session.run(gatewayHostsBindCommand(bind), {
+    timeoutMs: 5_000,
+    uid: GATEWAY_HOSTS_ROOT_UID,
+    gid: GATEWAY_HOSTS_ROOT_GID,
+  });
+  return {
+    method: "execd",
+    exitCode: hosts.exitCode,
+    uid: GATEWAY_HOSTS_ROOT_UID,
+    gid: GATEWAY_HOSTS_ROOT_GID,
+    stdout: hosts.stdout,
+    stderr: hosts.stderr,
+  };
+}
+
 /**
  * OpenSandbox create (0.1.11) has no ExtraHosts / hostAliases field, and the
- * sidecar IP is only known after the sandbox network exists. Write /etc/hosts
- * once as root via execd uid=0; do not change the image USER.
+ * sidecar IP is only known after the sandbox network exists. Docker writes
+ * /etc/hosts through the Engine (`docker exec -u 0`); execd/bwrap cannot
+ * mutate the Docker-injected file on Windows Desktop. Kubernetes/Kata still
+ * uses execd uid=0. Do not change the image USER.
  */
 export async function bindGatewayHostnameAsRoot(
   session: OpenSandboxSession,
   host: RuntimeHost,
-  input: { bind: () => Promise<{ hostname: string; ip: string }> },
+  input: {
+    bind: () => Promise<{ hostname: string; ip: string }>;
+    injectHosts?: GatewayHostsInjector;
+  },
 ): Promise<{ hostname: string; ip: string }> {
   let bind: { hostname: string; ip: string };
   try {
@@ -324,22 +444,35 @@ export async function bindGatewayHostnameAsRoot(
     const detail = error instanceof Error ? error.message : String(error);
     throw new GatewayHostsBindError(`failed to bind gateway sidecar before hosts injection: ${detail}`);
   }
-  const hosts = await session.run(gatewayHostsBindCommand(bind), {
-    timeoutMs: 5_000,
-    uid: GATEWAY_HOSTS_ROOT_UID,
-    gid: GATEWAY_HOSTS_ROOT_GID,
-  });
-  if (hosts.exitCode !== 0) {
-    const detail = [hosts.stderr, hosts.stdout].filter(Boolean).join(" ").trim();
-    throw new GatewayHostsBindError(
-      `failed to bind gateway hostname in sandbox hosts as root (guest user is unchanged): ${bind.hostname} -> ${bind.ip}${detail ? `: ${detail}` : ""}`,
-    );
+  const injected = input.injectHosts
+    ? await input.injectHosts(bind)
+    : await injectGatewayHostsViaExecd(session, bind);
+  if (injected.exitCode !== 0) {
+    throw new GatewayHostsBindError(formatGatewayHostsBindFailure({
+      headline: "failed to bind gateway hostname in sandbox hosts as root (guest user is unchanged)",
+      hostname: bind.hostname,
+      ip: bind.ip,
+      ...injected,
+    }), injected);
   }
   const resolved = await host.run(gatewayHostsResolveCommand(bind.hostname), { timeoutMs: 5_000 });
   if (resolved.exitCode !== 0) {
-    throw new GatewayHostsBindError(
-      `gateway hosts bind did not resolve for the guest user: ${bind.hostname} -> ${bind.ip}`,
-    );
+    throw new GatewayHostsBindError(formatGatewayHostsBindFailure({
+      headline: "gateway hosts bind did not resolve for the guest user",
+      hostname: bind.hostname,
+      ip: bind.ip,
+      method: "guest-resolve",
+      exitCode: resolved.exitCode,
+      uid: injected.uid,
+      gid: injected.gid,
+      stderr: resolved.stderr,
+      stdout: resolved.stdout,
+    }), {
+      method: "guest-resolve",
+      exitCode: resolved.exitCode,
+      uid: injected.uid,
+      gid: injected.gid,
+    });
   }
   return bind;
 }
@@ -353,6 +486,14 @@ export interface OpenSandboxRunnerOptions {
   kubernetesResources?: boolean;
   /** Docker 路径：create 前校验 Scheduler 已准备的 labeled volume，避免引擎自动建空卷。 */
   inspectSharedAssetsVolume?: (volumeName: string, jobId: string) => Promise<void>;
+  /**
+   * Docker 路径默认走 Engine `docker exec -u 0` 写 /etc/hosts。
+   * 单测可替换；Kubernetes 忽略此项，仍用 execd uid=0。
+   */
+  injectGatewayHosts?: (input: {
+    sandboxId: string;
+    bind: { hostname: string; ip: string };
+  }) => Promise<GatewayHostsInjectResult>;
 }
 
 export async function inspectPreparedSharedAssetsVolume(volumeName: string, jobId: string): Promise<void> {
@@ -430,6 +571,11 @@ export class OpenSandboxRunner implements SandboxRunner {
             image: input.image,
             signal: input.signal,
           }),
+          injectHosts: kubernetes
+            ? undefined
+            : (bind) => this.options.injectGatewayHosts
+              ? this.options.injectGatewayHosts({ sandboxId: live.id, bind })
+              : injectGatewayHostsViaDockerExec({ sandboxId: live.id, bind }),
         });
       }
       return { sandboxId: live.id };
