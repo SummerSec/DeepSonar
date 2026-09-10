@@ -8,6 +8,10 @@
 
 - 沙箱执行面节点化 P0（#415）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
 
+### 修复
+
+- OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
+
 ### 变更
 
 - Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。

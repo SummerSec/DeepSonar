@@ -1,0 +1,2 @@
+# Marker mounted at /.dockerenv so the pinned OpenSandbox server
+# honors [docker].host_ip on Podman, which does not create /.dockerenv (#422).
