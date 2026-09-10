@@ -131,6 +131,8 @@ export {
   GATEWAY_HOSTS_ROOT_GID,
   GATEWAY_HOSTS_ROOT_UID,
   GatewayHostsBindError,
+  OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  OPENSANDBOX_EXECD_ISOLATION_KEY,
   OpenSandboxRunner,
   awaitProvisionSession,
   bindGatewayHostnameAsRoot,
@@ -146,6 +148,7 @@ export {
   isGatewayHostsRootRun,
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
+  openSandboxCreateExtensions,
   openSandboxDockerContainerName,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";

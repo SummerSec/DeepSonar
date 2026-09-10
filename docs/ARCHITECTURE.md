@@ -518,7 +518,7 @@ Job 事件仍必须经过本摄入硬门。
 - Hub 生成的完整、自包含 Worker prompt，等价于 CLI 的非交互 `-p "prompt"` / input
 - 已准入的不可变运行镜像快照：产品/版本 ID、`name@sha256:digest`、工具清单哈希和准入扫描 ID
 
-Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结，Hub 与 Worker 共用。该开关只控制目标网络能力；模型通道始终经 Scheduler Model Gateway 和 Scheduler-owned gateway proxy。允许出网时沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge。proxy 同时加入两网，但只转发固定 Scheduler 上游的 `/gateway` 与 `/control/v1/`，拒绝 CONNECT、任意目标和其他路径。OpenSandbox create 无 ExtraHosts：Docker 路径用引擎 `docker exec -u 0` 把 sidecar IPv4 写入沙箱 `/etc/hosts`（#423）；Kubernetes/Kata 仍用 execd uid=0。guest USER 不变。
+Worker 不假设目标类型或固定路径。是否需要代码、网页、制品或其他材料，以及是否使用 git、curl、浏览器或已有文件，由 Worker 根据 prompt 自行决定。平台只控制项目默认/任务覆盖的 `allow_egress`；最终布尔值在创建画布时冻结，Hub 与 Worker 共用。该开关只控制目标网络能力；模型通道始终经 Scheduler Model Gateway 和 Scheduler-owned gateway proxy。允许出网时沙箱加入 `deepsonar-sandbox-gateway` NAT bridge；禁出网时只加入 `deepsonar-restricted` internal bridge。proxy 同时加入两网，但只转发固定 Scheduler 上游的 `/gateway` 与 `/control/v1/`，拒绝 CONNECT、任意目标和其他路径。OpenSandbox create 无 ExtraHosts：Docker 路径用引擎 `docker exec -u 0` 把 sidecar IPv4 写入沙箱 `/etc/hosts`（#423）；Kubernetes/Kata 仍用 execd uid=0。create 始终请求 `bootstrap.execd.isolation=enable`，OpenSandbox 才会 grant `CAP_SYS_ADMIN` 给 execd bwrap gate（#427）；不进 Job 快照。guest USER 不变。
 
 **平台控制 API-only**：所有治理 CLI 都由 Agent 使用自身 HTTP 工具调用 Job 级控制 API；Runtime Adapter 只驱动 CLI 协议，不代发 HTTP，也不注入或回退控制 MCP。调用最终汇入同一个运行中 Job semantic handler：
 

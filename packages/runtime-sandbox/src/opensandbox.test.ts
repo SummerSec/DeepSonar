@@ -4,7 +4,10 @@ import {
   GATEWAY_HOSTS_ROOT_GID,
   GATEWAY_HOSTS_ROOT_UID,
   GatewayHostsBindError,
+  OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  OPENSANDBOX_EXECD_ISOLATION_KEY,
   OpenSandboxRunner,
+  openSandboxCreateExtensions,
   evaluateOpenSandboxAlive,
   formatGatewayHostsBindFailure,
   gatewayHostsBindCommand,
@@ -153,6 +156,18 @@ test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", 
   assert.equal(input.volumes[0]?.pvc.createIfNotExists, false);
   assert.ok(!Object.values(input.env).some((value) => /api[_-]?key/i.test(value)));
   assert.equal(input.platform, undefined);
+  assert.deepEqual(input.extensions, openSandboxCreateExtensions());
+  assert.equal(input.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+});
+
+test("OpenSandbox create extensions always request execd isolation", () => {
+  assert.deepEqual(openSandboxCreateExtensions(), {
+    [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  });
+  assert.deepEqual(
+    openSandboxCreateExtensions({ other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: "off" }),
+    { other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE },
+  );
 });
 
 test("OpenSandbox runner constructor omits pids when kubernetesResources is set", async () => {
@@ -176,6 +191,8 @@ test("OpenSandbox runner constructor omits pids when kubernetesResources is set"
     limits,
   });
   assert.deepEqual(docker.created[0]?.resource, { cpu: "2", memory: "2048Mi", pids: "512" });
+  assert.equal(client.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.equal(docker.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
 });
 
 test("OpenSandbox runner provisions, exposes host, and verifies contract", async () => {
