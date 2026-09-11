@@ -16,6 +16,7 @@
 - OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
 - Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426 / #429）。
 - OpenSandbox 创建沙箱时始终带 `extensions["bootstrap.execd.isolation"]=enable`（#427）：execd 指定 uid/gid（含 Kubernetes Gateway `/etc/hosts` 注入）才能通过 bwrap gate；不再依赖 Job 快照或新的平台开关。
+- Release 指纹未变时复用上一版 catalog 记录，不再拿 `src-*` 缓存 digest 去对已发布 index digest（build-push+provenance 的 index 与 imagetools 选出的干净 index 不同）。
 - Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423 / #424）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。
 
 ### 变更

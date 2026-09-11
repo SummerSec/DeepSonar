@@ -44,6 +44,10 @@ assert.throws(() => reuseCatalogDescriptor({
   digest: `sha256:${"b".repeat(64)}`,
 }), /no version with digest/i);
 
+const latest = reuseCatalogDescriptor({ catalog, imageKey: "deepsonar-base" });
+assert.equal(latest.version, "0.1.8");
+assert.equal(latest.digest, digest);
+
 const temp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-reuse-descriptor-"));
 try {
   const catalogPath = path.join(temp, "catalog.json");
@@ -58,6 +62,27 @@ try {
   ], { encoding: "utf8" });
   const written = JSON.parse(readFileSync(out, "utf8"));
   assert.equal(written.version, "0.1.8");
+
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const skipOut = path.join(temp, "skip.json");
+  execFileSync("bash", [
+    fileURLToPath(new URL("./write-release-runtime-descriptor.sh", import.meta.url)),
+    skipOut,
+  ], {
+    encoding: "utf8",
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      SKIP: "true",
+      IMAGE_KEY: "deepsonar-base",
+      DIGEST: `sha256:${"b".repeat(64)}`,
+      PREVIOUS_REGISTRY: catalogPath,
+      GITHUB_STEP_SUMMARY: path.join(temp, "summary.md"),
+    },
+  });
+  const skipped = JSON.parse(readFileSync(skipOut, "utf8"));
+  assert.equal(skipped.version, "0.1.8");
+  assert.equal(skipped.digest, digest);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
