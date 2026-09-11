@@ -8,6 +8,8 @@ export const CONTROL_SEMANTIC_EVENT_TYPES = {
   emit_fact: "fact",
   emit_finding: "finding",
   submit_hub_decision: "hub_decision",
+  submit_plan: "plan",
+  submit_plan_result: "plan_result",
   mark_job_done: "done",
   request_human: "human",
   publish_shared_asset: "shared_asset_publish",

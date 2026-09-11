@@ -120,6 +120,8 @@ assert.deepEqual(restrictedTools, [
   "emit_fact",
   "emit_finding",
   "submit_hub_decision",
+  "submit_plan",
+  "submit_plan_result",
   "mark_job_done",
   "ack_human_message",
 ]);

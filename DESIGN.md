@@ -77,7 +77,8 @@ Finding 1 ── 0..1 finding_research
 
 纪律：
 
-- **Agent 只提案**：`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
+- **Agent 只提案**：`emit_*` / `submit_hub_decision` / `submit_plan` / `submit_plan_result` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
+- **Plan 协议 Phase 1（#443）**：`packages/shared-types` 提供版本化 `Plan` / `PlanTask` / `CompletionPolicy` / `PlanResult`。`submit_plan` / `submit_plan_result`（`continue|complete|blocked|needs_human`）走既有 capability API 与事件事务；Scheduler 把原文、裁剪结果、执行结果和终止原因写入 `jobs.payload_json.plan_protocol`。本阶段不派发 Worker、不改 Hub 收敛门。Hub `intents[]` 自动适配为 Plan（每个 Intent → 一个 PlanTask），`complete` 适配为 `PlanResult`。
 - **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
 - **控制面默认拒绝（#57 / #135 / #152 / #446 Phase 1）**：所有控制操作与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）以 Job 类型/冻结角色快照重算授权，并要求 Job 仍为 `status=running`；终态、角色种类或 operation 不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。冻结 capability 只派生平台 API operation allowlist；所有治理 CLI 均由 Agent 使用自身 HTTP 工具调用 Job 级控制 API，不注入控制 MCP，也不在失败后回退其它控制通道。API 返回 `accepted` 表示 Scheduler 已接收输入；可修正的 HTTP 错误保留稳定 `error_code`，并附带脱敏 `repair`（`RepairFeedback`：category / expected / observed_shape / remaining_budget / next_action）。
 - **控制 payload 字节与确认边界（#166）**：Fact、Finding、Hub 的直接参数与宿主展开后的 `payload_file` 共用固定 256 KiB UTF-8 JSON 上限，超限在暂存或写事件前以可重试控制错误拒绝；`mark_job_done.summary` 上限为 8192 UTF-8 字节，接受后不再附加 Hub、Fact 或 Finding 计数文本。Hub/Human 的真实副作用仍延迟到 Agent 退出后执行，但在返回 `accepted` 前以只读权威事务预检当前 Job、画布引用、角色、Finding 绑定与完成门，最终副作用事务再次校验以防状态漂移。
@@ -346,6 +347,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
 | 任务工作台 / 研究地图 | #449 / #451 | **Phase 1 已落地**：共享 Header、六个一级视图、默认总览、前端 `TaskOutcomeSummary` / `TaskAction` / `TaskTraceEntry` 投影。**仍开放**：研究地图投影、统一详情抽屉、RepairFeedback、视觉重设计 |
 | 执行面多 worker | #415 / #431 / #433 / #434 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。派发 claim 在同一事务里 `SELECT … FOR UPDATE` 选节点、预留 `worker_sandbox_leases` 占位并写 `last_dispatch_at`；远端 create 失败释放占位，成功则把占位改成真实 sandbox id。无容量时直接 `WORKER_PLANE_NO_CAPACITY`，不再无记账重选。destroy / `destroyResource` 释放租约（含 sessions 缓存路径）；reaper 与启动 reconcile 回收终态/缺失 Job 的孤儿租约（#431）。**#433**：保留 `local`、同名须显式 forget/reclaim、远程 endpoint 拒绝 loopback/link-local/metadata/不可路由地址、注册/心跳审计+限流、心跳不改 kind/所有权。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
+| 模型主导执行协议 | #443 | **Phase 1 已落地**：版本化 Plan / PlanTask / CompletionPolicy / PlanResult；`submit_plan` / `submit_plan_result`；原文/裁剪/结果/终止原因审计；Intent → PlanTask 兼容层。Hub 派发与收敛门不变。**未做**：Phase 2 能力包、Phase 3 模型主导收敛、Phase 4 Graph Query API |
 | 可信执行内核与插件组合工作流 | #446 | **Phase 1 脚手架已落地**：`packages/shared-types` 版本化 `RepairFeedback`（四类失败 + expected / observed_shape / remaining_budget / next_action）；Control API 的 schema 截断/校验、256 KiB payload 超限，以及 handler `503/500` 平台失败返回字段级 `repair`。鉴权/权限错误仍保持裸永久错误。未完成：Completion Gate 按拒绝生成 nudge、durable proposal/receipt/settlement、Plan/Capability Pack、Artifact-first 投影、插件失败修复准入与跨任务经验闭环。长期设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md) |
 | Capability Pack | #447 | **第一刀已落地**：Manifest 契约、内置/模块/RoleConfig 只读投影、Job 级 list/search/describe/validate/preview、Job 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`（政策类映射到 `permanent_failure` / 可修正映射到 `model_correctable`），不另建 envelope。**未做**：task/session Pack 持久化生命周期、评估/晋升、跨任务经验推荐；不拆 Agent 市场 |
 
@@ -400,6 +402,8 @@ Phase 1 已把 `RepairFeedback` 契约接到 Control API 的 schema/字节约束
 | `emit_fact` | 缺 title/description、未知字段、非法 Artifact/verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
 | `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
 | `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算、未就绪镜像 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` / `invalid_runtime_image` / `runtime_image_not_ready` |
+| `submit_plan` | 缺 goal/tasks、任务 id 重复、依赖成环或指向未知 id、未知字段 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
+| `submit_plan_result` | 无既有计划、非法 outcome、非 continue 缺 termination_reason | `invalid_payload` / `tool_not_allowed` |
 | `mark_job_done` | 空白或超过 8192 UTF-8 字节的 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |
 | `request_human` | 空白/超长 reason、缺失或非法 subject、跨画布 Finding、低于验证阈值的 Finding、未授权角色 | `invalid_human` / `tool_not_allowed` |
 

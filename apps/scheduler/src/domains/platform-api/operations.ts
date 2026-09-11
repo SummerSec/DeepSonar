@@ -91,6 +91,18 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: false,
     eventType: "hub_decision",
   },
+  submit_plan: {
+    summary: "Submit a versioned execution plan",
+    description: "Submit a Plan (goal, tasks, dependencies, completion policy, budget). Scheduler stores the raw plan and a trimmed copy. Phase 1 does not dispatch workers from this operation.",
+    readOnly: false,
+    eventType: "plan",
+  },
+  submit_plan_result: {
+    summary: "Submit a plan execution result",
+    description: "Submit a PlanResult outcome: continue, complete, blocked, or needs_human. Scheduler records execution and termination_reason. Phase 1 does not change Hub convergence.",
+    readOnly: false,
+    eventType: "plan_result",
+  },
   mark_job_done: {
     summary: "Mark the current Job done",
     description: "Submit the final Job summary and optional verification verdict.",

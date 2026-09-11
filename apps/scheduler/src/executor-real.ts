@@ -1266,6 +1266,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       fact: "emit_fact",
       finding: "emit_finding",
       hub_decision: "submit_hub_decision",
+      plan: "submit_plan",
+      plan_result: "submit_plan_result",
       done: "mark_job_done",
       human: "request_human",
       shared_asset_publish: "publish_shared_asset",
@@ -1344,6 +1346,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if (findingCount >= 20) throw toolBoundaryError("toolLimit", "单 Job Finding 超过 20 条上限");
       await ingestSemanticEventObserved(jobId, { ...event, payload: FindingPayload.parse(event.payload) });
       findingCount++;
+      return;
+    }
+    if (event.type === "plan" || event.type === "plan_result") {
+      await ingestSemanticEventObserved(jobId, { ...event, payload: event.payload });
       return;
     }
     if (event.type === "hub_decision") {
