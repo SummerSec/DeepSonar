@@ -725,7 +725,8 @@ export function TaskCanvasPage() {
         created_at: taskReport.created_at,
       }
       : null,
-  }), [facts, findingsForProjection, meta?.target_json, meta?.title, taskLifecycle, taskReport]);
+    canvasUpdatedAt: meta?.created_at ?? null,
+  }), [facts, findingsForProjection, meta?.created_at, meta?.target_json, meta?.title, taskLifecycle, taskReport]);
   const statusLines = useMemo(() => {
     const refutedCount = findingsForProjection.filter((finding) => (
       finding.verify_status === "false_positive" || finding.verify_status === "rejected"

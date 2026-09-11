@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "test:quick-start": "tsx --test src/dashboard-quick-start.test.ts src/dashboard-overview.test.ts",
-    "test:lifecycle": "tsx --test src/task-lifecycle.test.ts && tsx ../../agent-harness/test-task-lifecycle.ts",
+    "test:lifecycle": "tsx --test src/task-lifecycle.test.ts src/task-workbench/task-outcome.test.ts src/task-workbench/task-actions.test.ts src/task-workbench/repair-feedback.test.ts src/task-workbench/finding-verification-result.test.ts src/task-workbench/task-overview-wiring.test.ts src/task-workbench/task-workbench-tabs.test.ts && tsx ../../agent-harness/test-task-lifecycle.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "preview": "vite preview"
   },

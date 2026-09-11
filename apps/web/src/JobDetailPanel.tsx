@@ -11,6 +11,9 @@ import { HumanMessageList } from "./HumanMessageList";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SessionViewer } from "./session-viewer/SessionViewer";
 import { extractDispatchPrompt } from "./job-dispatch-prompt";
+import { RepairFeedbackPanel } from "./task-workbench/RepairFeedbackPanel";
+import { TaskActionCard } from "./task-workbench/TaskActionCard";
+import { projectJobActions } from "./task-workbench/task-actions";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 /**
@@ -344,6 +347,20 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   }, [jobId]);
 
   const active = detail ? ACTIVE.has(detail.job.status) : false;
+  const jobProjection = detail
+    ? projectJobActions({
+      job: {
+        id: jobId,
+        type: detail.job.type,
+        status: detail.job.status,
+        error: detail.job.error,
+        project_id: "",
+        canvas_id: null,
+      },
+      effects: detail.effects,
+    })
+    : { actions: [], repair: null };
+  const allowJobRetry = !jobProjection.repair || jobProjection.repair.category !== "unknown_external_effect";
   const archivedBlocks = useMemo(() => recordsToStreamBlocks(stream), [stream]);
 
   const loadMoreStream = async () => {
@@ -576,7 +593,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
             )}
           </div>
           <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
-            {detail && RESUMABLE.has(detail.job.status) && (
+            {detail && RESUMABLE.has(detail.job.status) && allowJobRetry && (
               <>
                 <button
                   type="button"
@@ -694,24 +711,29 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
             <div className="p-8 font-mono text-sm text-zinc-600">正在读取运行账本…</div>
           )}
           {/* 非「结果」页：顶栏展示一次 Job 终态错误；结果页内已有带标题的错误卡片，避免双份 */}
-          {detail?.job.error && tab !== "result" && (
-            <div className="m-4 rounded-xl bg-red-950/20 px-4 py-3 text-red-300 ring-1 ring-red-400/15">
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
-                错误
-              </div>
-              <MarkdownView markdown={detail.job.error} scrollable={false} />
+          {detail && (jobProjection.actions.length > 0 || jobProjection.repair) && tab !== "result" && (
+            <div className="m-4 space-y-2">
+              {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+              {jobProjection.repair && <RepairFeedbackPanel feedback={jobProjection.repair} />}
             </div>
           )}
 
           {/* 结果：下发 prompt + 已运行输出摘要 + 产出发现 */}
           {detail && tab === "result" && (
             <div className="min-h-full min-w-0 space-y-4 p-4">
-              {detail.job.error && (
-                <div className="rounded-xl bg-red-950/25 px-4 py-3 text-red-300 ring-1 ring-red-400/20">
-                  <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
-                    错误
-                  </div>
-                  <MarkdownView markdown={detail.job.error} scrollable={false} />
+              {(jobProjection.actions.length > 0 || jobProjection.repair || detail.job.error) && (
+                <div className="space-y-2">
+                  {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+                  {jobProjection.repair
+                    ? <RepairFeedbackPanel feedback={jobProjection.repair} />
+                    : detail.job.error && (
+                      <div className="rounded-xl bg-red-950/25 px-4 py-3 text-red-300 ring-1 ring-red-400/20">
+                        <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">
+                          错误
+                        </div>
+                        <MarkdownView markdown={detail.job.error} scrollable={false} />
+                      </div>
+                    )}
                 </div>
               )}
 

@@ -3,6 +3,9 @@ import test from "node:test";
 import {
   dedupeTaskActions,
   isInterruptedJobReplaySafe,
+  projectDashboardActions,
+  projectFindingActions,
+  projectJobActions,
   projectTaskActions,
   projectTaskNextSteps,
   projectUnknownEffectAction,
@@ -56,6 +59,7 @@ test("actions classify conflict, human, repair, retry and unknown effect", () =>
   assert.equal(unknown.kind, "unknown_effect");
   assert.equal(unknown.reversible, false);
   assert.equal(unknown.recommended_action, "confirm_unknown_effect");
+  assert.equal(unknown.next_state, "needs_confirmation");
   assert.doesNotMatch(unknown.title, /失败/);
 });
 
@@ -97,6 +101,37 @@ test("timeout or orphan without a proven effect ledger needs confirmation, not r
   });
   assert.equal(proven[0]?.kind, "transient_retry");
   assert.equal(proven[0]?.recommended_action, "retry_same_session");
+});
+
+test("dashboard and job projectors keep unproven timeout in needs_confirmation", () => {
+  const dashboard = projectDashboardActions({
+    jobs: [{ id: "j5", project_id: "p1", canvas_id: "c1", type: "test", status: "orphan" }],
+    findings: [],
+  });
+  assert.equal(dashboard[0]?.kind, "unknown_effect");
+  assert.equal(dashboard[0]?.recommended_action, "needs_confirmation");
+  assert.equal(dashboard[0]?.href, "/projects/p1/tasks/c1?tab=jobs&job=j5");
+
+  const job = projectJobActions({
+    job: { id: "j6", type: "test", status: "timeout", error: "gateway timeout" },
+    effects: [{ effect_id: "eff", effect_kind: "egress", status: "unknown" }],
+  });
+  assert.equal(job.repair?.category, "unknown_external_effect");
+  assert.equal(job.actions[0]?.next_state, "needs_confirmation");
+  assert.equal(job.actions[0]?.recommended_action, "needs_confirmation");
+
+  const provenJob = projectJobActions({
+    job: { id: "j7", type: "test", status: "timeout" },
+    effects: [],
+  });
+  assert.equal(provenJob.repair?.category, "transient_retryable");
+  assert.equal(provenJob.actions[0]?.recommended_action, "retry_same_session");
+
+  assert.equal(projectFindingActions({
+    finding: { id: "f9", title: "旧失败", verify_status: "pending" },
+    jobError: "old boom",
+    jobStatus: "failed",
+  })[0]?.kind, "human_decision");
 });
 
 test("sort and dedupe keep a single highest-priority action per evidence", () => {

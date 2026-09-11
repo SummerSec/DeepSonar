@@ -26,6 +26,14 @@ import { SearchableSelect } from "./SearchableSelect";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
 import { useConfirmDialog } from "./components/ConfirmDialog";
+import { RepairFeedbackPanel } from "./task-workbench/RepairFeedbackPanel";
+import { TaskActionCard } from "./task-workbench/TaskActionCard";
+import {
+  selectLatestVerificationRepairJob,
+  selectLatestVerificationRound,
+} from "./task-workbench/finding-verification-result";
+import { projectFindingActions } from "./task-workbench/task-actions";
+import { projectRepairFeedback } from "./task-workbench/repair-feedback";
 
 const LINK_TYPES: { value: FindingLink["link_type"]; label: string }[] = [
   { value: "related", label: "相关" },
@@ -426,6 +434,24 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
               {/* ── Main: body + activity ── */}
               <div className="theme-divider min-w-0 px-5 py-5 sm:px-6 lg:border-r">
+                {(() => {
+                  const latestRound = selectLatestVerificationRound(detail.verification_rounds);
+                  const failedVerify = selectLatestVerificationRepairJob(detail.verification_jobs);
+                  const findingActions = projectFindingActions({
+                    finding: f,
+                    missing: latestRound?.missing,
+                    jobError: failedVerify?.error,
+                    jobStatus: failedVerify?.status,
+                  });
+                  const repair = failedVerify ? projectRepairFeedback({ status: failedVerify.status, error: failedVerify.error }) : null;
+                  if (findingActions.length === 0 && !repair) return null;
+                  return (
+                    <section className="mb-4 space-y-2" aria-label="需要处理">
+                      {findingActions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+                      {repair && <RepairFeedbackPanel feedback={repair} />}
+                    </section>
+                  );
+                })()}
                 {/* Description */}
                 <section className="theme-surface rounded-xl ring-1">
                   <div className="theme-divider flex items-center gap-2 border-b px-4 py-2.5">

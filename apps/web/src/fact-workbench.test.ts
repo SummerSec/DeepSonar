@@ -183,6 +183,9 @@ test("Finding 待人工区提供强制验证与两类结构化证据 Job", () =>
   assert.match(panel, /派发运行测试/);
   assert.match(panel, /\{f\.has_waiting_human && \(/);
   assert.match(panel, /技术 confirmed 只能由 Scheduler Verify/);
+  assert.match(panel, /projectFindingActions/);
+  assert.match(panel, /RepairFeedbackPanel/);
+  assert.match(panel, /TaskActionCard/);
 });
 
 test("人工介入只读取 human 节点结构化关联且有界展示", () => {

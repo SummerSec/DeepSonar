@@ -76,6 +76,13 @@ test("Session 页可切换并下载所选归档", () => {
   assert.match(panel, /if \(req !== sessionSelectReq\.current\) return/);
 });
 
+test("运行详情把错误投影为 RepairFeedback，未知效果不提供无条件重试", () => {
+  assert.match(panel, /RepairFeedbackPanel/);
+  assert.match(panel, /projectJobActions/);
+  assert.match(panel, /allowJobRetry/);
+  assert.match(panel, /unknown_external_effect/);
+});
+
 test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => {
   assert.match(panel, /执行账本/);
   assert.match(panel, /latestAttempt/);

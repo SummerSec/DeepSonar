@@ -61,6 +61,8 @@ export interface TaskLifecycleProjection {
   status: TaskLifecycleStatus;
   label: string;
   color: string;
+  /** Why this status won; used by the decision overview, not a second state machine. */
+  reason: string;
   isActive: boolean;
   activeCount: number;
   hasJobs: boolean;
@@ -171,6 +173,7 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
     activeCount > 0;
   const executionState = normalized(input.executionState);
 
+  const waitingHuman = jobs.some((job) => normalized(job.status) === "waiting_human");
   let status: TaskLifecycleStatus;
   if (archived) status = "archived";
   else if (waitingOnSchedule) status = "scheduled";
@@ -186,6 +189,14 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
   return {
     status,
     ...TASK_LIFECYCLE_META[status],
+    reason: taskLifecycleReason({
+      status,
+      activeCount,
+      waitingHuman,
+      executionActiveCount: count(input.executionActiveCount),
+      scheduledStartAt: input.scheduledStartAt ?? null,
+      neverStartedTerminal,
+    }),
     // Scheduled tasks still occupy the active queue (pending Jobs) so list
     // filters that look at isActive continue to surface them.
     isActive: status === "running" || status === "scheduled" || status === "pausing",
@@ -193,4 +204,45 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
     hasJobs,
     endedAt: input.endedAt ?? null,
   };
+}
+
+export function taskLifecycleReason(input: {
+  status: TaskLifecycleStatus;
+  activeCount: number;
+  waitingHuman?: boolean;
+  executionActiveCount?: number;
+  scheduledStartAt?: string | null;
+  neverStartedTerminal?: boolean;
+}): string {
+  switch (input.status) {
+    case "archived":
+      return "任务已归档，不再调度新的运行。";
+    case "scheduled":
+      return input.scheduledStartAt
+        ? `计划开始时间尚未到达（${input.scheduledStartAt}），任务仍在排队。`
+        : "计划开始时间尚未到达，任务仍在排队。";
+    case "pausing":
+      return input.executionActiveCount
+        ? `已请求暂停，仍有 ${input.executionActiveCount} 个运行在安全收尾。`
+        : "已请求暂停，正在等待活动运行安全收尾。";
+    case "paused":
+      return "任务执行门禁已暂停，不会领取新的运行。";
+    case "running":
+      if (input.waitingHuman) return "有运行正在等待人工回复，任务仍算进行中。";
+      return input.activeCount > 0
+        ? `当前有 ${input.activeCount} 个活动运行。`
+        : "任务仍有活动工作。";
+    case "failed":
+      return input.neverStartedTerminal
+        ? "运行在真正开始前就已终态失败，不能当成任务完成。"
+        : "存在失败、超时或失联的运行，任务未收口。";
+    case "reporting":
+      return "分析已完成，正在生成报告。";
+    case "analysis_complete":
+      return "分析已完成，等待报告生成。";
+    case "completed":
+      return "已有实际执行，且根节点或报告已成功收口。";
+    case "idle":
+      return "还没有活动运行，也尚未进入完成或失败。";
+  }
 }
