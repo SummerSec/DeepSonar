@@ -146,7 +146,7 @@ export async function runExport(exportId: string): Promise<void> {
       await collectRoles(projectId, modules, files, counts, credMode);
     }
 
-    if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events") || modules.includes("artifacts")) {
+    if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
       await collectTasks(projectId, modules, files, counts);
     }
 

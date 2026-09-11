@@ -4,6 +4,7 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { isProjectScopedActor, PROJECT_MISMATCH, PROJECT_SCOPE_FORBIDDEN } from "../../project-scope.js";
+import { parseProjectExportRequest } from "../../transfer/export-request.js";
 import { resolveModules } from "../../transfer/modules.js";
 import { buildPreview, applyImport } from "../../transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "../../transfer/pack.js";
@@ -21,15 +22,9 @@ export function registerTransferRoutes(app: FastifyInstance): void {
 
     app.post("/projects/:id/exports", async (req, reply) => {
       const { id } = req.params as { id: string };
-      const body = z
-        .object({
-          preset: z.enum(["configuration", "project_full", "evidence_archive", "custom"]).default("configuration"),
-          modules: z.array(z.string()).optional(),
-          include_blobs: z.boolean().optional(),
-          allow_active_jobs: z.boolean().optional(),
-          credentials: z.object({ mode: z.enum(["excluded", "metadata"]).optional() }).optional(),
-        })
-        .parse(req.body ?? {});
+      const parsed = parseProjectExportRequest(req.body);
+      if (!parsed.ok) return reply.code(parsed.status).send(parsed.body);
+      const body = parsed.body;
       const [project] = await sql`SELECT id, name FROM projects WHERE id = ${id}`;
       if (!project) return reply.code(404).send({ error: "project not found" });
       const { modules } = resolveModules(body.preset, body.modules);

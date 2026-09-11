@@ -1,7 +1,6 @@
 /**
  * 项目数据包导出：preset / 自定义模块与后端 transfer 契约对齐。
- * 可选模块与 `apps/scheduler/src/transfer/modules.ts` 的 CUSTOM_EXPORT_MODULES 同步；
- * `reports` / `artifacts` 已声明但尚未收集，不进 UI。
+ * 可选模块与 `apps/scheduler/src/transfer/modules.ts` 的 CUSTOM_EXPORT_MODULES 同步。
  */
 export const PROJECT_PRESETS = [
   { id: "configuration" as const, label: "配置模板", hint: "规则 / 角色 / Skill / 环境（无任务历史）" },

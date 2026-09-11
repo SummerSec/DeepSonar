@@ -20,8 +20,6 @@ export type ModuleKey =
   | "tasks"
   | "events"
   | "findings"
-  | "reports"
-  | "artifacts"
   | "audit_archive"
   | "credentials";
 
@@ -41,8 +39,6 @@ export const MODULE_DEPS: Record<ModuleKey, ModuleKey[]> = {
   tasks: ["project"],
   events: ["tasks"],
   findings: ["tasks"],
-  reports: ["tasks", "findings"],
-  artifacts: ["tasks"],
   audit_archive: ["project"],
   credentials: ["roles"],
 };
@@ -68,7 +64,6 @@ const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
     "tasks",
     "events",
     "findings",
-    "artifacts",
     "audit_archive",
   ],
   evidence_archive: [
@@ -76,10 +71,64 @@ const PRESETS: Record<Exclude<Preset, "custom">, ModuleKey[]> = {
     "tasks",
     "findings",
     "events",
-    "artifacts",
     "audit_archive",
   ],
 };
+
+/**
+ * 自定义导出可选模块。只含已实现 collect+import 的模块；`project` 由 resolveModules 自动补齐。
+ */
+export const CUSTOM_EXPORT_MODULES = [
+  "rules",
+  "roles",
+  "skills",
+  "runtime_images",
+  "environment",
+  "credentials",
+  "tasks",
+  "findings",
+  "events",
+  "audit_archive",
+] as const satisfies readonly ModuleKey[];
+
+const CUSTOM_EXPORT_MODULE_SET: ReadonlySet<string> = new Set(CUSTOM_EXPORT_MODULES);
+
+/** 自定义导出中不在白名单的 selector（保序去重）。 */
+export function rejectedCustomExportModules(modules: readonly string[] | undefined): string[] {
+  const rejected: string[] = [];
+  const seen = new Set<string>();
+  for (const value of modules ?? []) {
+    if (CUSTOM_EXPORT_MODULE_SET.has(value) || seen.has(value)) continue;
+    seen.add(value);
+    rejected.push(value);
+  }
+  return rejected;
+}
+
+export function unknownExportModulesError(rejected: readonly string[]): {
+  error: string;
+  error_code: "UNKNOWN_EXPORT_MODULES";
+  rejected: string[];
+} {
+  return {
+    error: `不接受的导出模块: ${rejected.join(", ")}`,
+    error_code: "UNKNOWN_EXPORT_MODULES",
+    rejected: [...rejected],
+  };
+}
+
+/** 自定义导出或显式 modules 含白名单外 selector 时返回 400 载荷。 */
+export function rejectUnknownProjectExportModules(
+  preset: unknown,
+  modules: unknown,
+): ReturnType<typeof unknownExportModulesError> | null {
+  const requested = Array.isArray(modules)
+    ? modules.filter((value): value is string => typeof value === "string")
+    : undefined;
+  if (preset !== "custom" && !requested) return null;
+  const rejected = rejectedCustomExportModules(requested);
+  return rejected.length ? unknownExportModulesError(rejected) : null;
+}
 
 export function resolveModules(
   preset: Preset,
@@ -87,7 +136,7 @@ export function resolveModules(
 ): { modules: ModuleKey[]; autoAdded: ModuleKey[] } {
   let selected: ModuleKey[];
   if (preset === "custom") {
-    selected = (modules ?? []).filter((m): m is ModuleKey => m in MODULE_DEPS);
+    selected = (modules ?? []).filter((m): m is ModuleKey => CUSTOM_EXPORT_MODULE_SET.has(m));
   } else {
     selected = [...PRESETS[preset]];
   }
@@ -99,6 +148,7 @@ export function resolveModules(
   while (changed) {
     changed = false;
     for (const m of [...set]) {
+      if (!Object.hasOwn(MODULE_DEPS, m)) continue;
       for (const d of MODULE_DEPS[m]) {
         if (!set.has(d)) {
           set.add(d);
@@ -126,22 +176,6 @@ export const CONFIG_MODULES = new Set<ModuleKey>([
   "environment",
   "credentials",
 ]);
-
-/**
- * 自定义导出可选模块。`reports` / `artifacts` 已在 MODULE_DEPS 声明但尚未收集，不进 UI。
- */
-export const CUSTOM_EXPORT_MODULES = [
-  "rules",
-  "roles",
-  "skills",
-  "runtime_images",
-  "environment",
-  "credentials",
-  "tasks",
-  "findings",
-  "events",
-  "audit_archive",
-] as const satisfies readonly ModuleKey[];
 
 /**
  * 运行中 Job 会持续追加的模块。导出它们等于把进行中会话当成一致快照。
