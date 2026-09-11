@@ -44,6 +44,14 @@ test("dynamic OpenAPI only projects allowlisted concrete operations", () => {
     ControlToolInputSchemasJson.emit_progress,
   );
   assert.equal(paths["/control/v1/jobs/{jobId}/operations/emit_progress"].post.parameters.find((p: any) => p.name === "Idempotency-Key").required, true);
+  const rejected = paths["/control/v1/jobs/{jobId}/operations/emit_progress"].post.responses["422"].content["application/json"].schema;
+  assert.ok(rejected.properties.repair);
+  assert.deepEqual(rejected.properties.repair.properties.category.enum, [
+    "model_correctable",
+    "transient_retryable",
+    "unknown_external_effect",
+    "permanent_failure",
+  ]);
 });
 
 test("list_available_runtime_images is a registered read-only operation with a strict empty payload", () => {

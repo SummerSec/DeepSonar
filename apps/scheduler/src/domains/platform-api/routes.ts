@@ -18,6 +18,7 @@ import {
   type PlatformRuntimeHandlerContext,
 } from "./registry.js";
 import { controlInputCodeForOperation } from "../../control-input.js";
+import { controlRuntimeRejection, controlSchemaRejection } from "./repair.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -123,7 +124,7 @@ function operationDescription(definition: PlatformOperationDefinition): Record<s
 function parseOperationInput(req: CapabilityRequest, definition: PlatformOperationDefinition, fallbackEventId?: string): {
   input: unknown;
   eventId: string;
-  error?: { statusCode: number; errorCode: string; message: string; retryable?: boolean; path?: string };
+  error?: { statusCode: number; errorCode: string; message: string; retryable?: boolean; path?: string; body?: unknown };
 } {
   const raw = req.body;
   let input: unknown = raw === undefined ? {} : raw;
@@ -154,16 +155,23 @@ function parseOperationInput(req: CapabilityRequest, definition: PlatformOperati
   }
   const parsed = schema.safeParse(input);
   if (!parsed.success) {
-    const firstPath = parsed.error.issues[0]?.path[0];
+    const body = controlSchemaRejection({
+      operation: definition.operationId,
+      code: controlInputCodeForOperation(definition.operationId),
+      issues: parsed.error.issues,
+      rawInput: input,
+      idempotencyKey: fallbackEventId,
+    });
     return {
       input,
       eventId,
       error: {
         statusCode: 422,
-        errorCode: controlInputCodeForOperation(definition.operationId),
-        message: "Platform operation was rejected",
+        errorCode: body.error_code,
+        message: body.error,
         retryable: true,
-        ...(typeof firstPath === "string" ? { path: firstPath } : {}),
+        ...(body.path ? { path: body.path } : {}),
+        body,
       },
     };
   }
@@ -221,14 +229,21 @@ async function executeInvocation(
         return { statusCode: 503, body: { error: "Runtime handler is not registered", error_code: "HANDLER_UNAVAILABLE" }, cacheable: false };
       }
       if (error.code === "OPERATION_REJECTED" && error.rejection) {
+        const body = controlRuntimeRejection({
+          operation: operationId,
+          code: error.rejection.errorCode,
+          message: error.message,
+          retryable: error.rejection.retryable,
+          statusCode: error.rejection.statusCode,
+          path: error.rejection.path,
+          details: error.rejection.details,
+          rawInput: input,
+          idempotencyKey: key,
+        });
         return {
           statusCode: error.rejection.statusCode,
           body: {
-            accepted: false,
-            error: "Platform operation was rejected",
-            error_code: error.rejection.errorCode,
-            retryable: error.rejection.retryable,
-            ...(error.rejection.path ? { path: error.rejection.path } : {}),
+            ...body,
             ...(error.rejection.details ?? {}),
             ...(error.rejection.details ? { details: error.rejection.details } : {}),
           },
@@ -255,7 +270,7 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   const parsed = parseOperationInput(req, definition, key);
   if (parsed.error) {
     if (parsed.error.retryable) {
-      return reply.code(parsed.error.statusCode).send({
+      return reply.code(parsed.error.statusCode).send(parsed.error.body ?? {
         accepted: false,
         error: parsed.error.message,
         error_code: parsed.error.errorCode,

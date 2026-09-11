@@ -42,6 +42,13 @@ Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、p
 429/502/503/504 重试保持相同 key 和完全相同的 payload。不要重试参数、鉴权、重复、终态
 或策略错误，也不要用新 key 代替未确定结果的原请求。
 
+## 失败与修复
+
+可修正错误返回 HTTP 4xx 且 \`accepted=false\`。读取 \`repair\`：\`category\`、\`code\`、\`path\`、
+\`expected\`、\`observed_shape\`、\`remaining_budget\` 与 \`next_action\`。\`model_correctable\`
+按反馈修正后使用新的 Idempotency-Key 重提；\`transient_retryable\` 等待后用同一 key 重试；
+\`unknown_external_effect\` 与 \`permanent_failure\` 不要猜测重放。
+
 ## 操作与完成
 
 只能调用能力发现和本 Job 冻结的 \`platform_tools\` 操作，遵守返回的参数 Schema、相对

@@ -1325,6 +1325,22 @@ export {
   type PiExtensionRegistration,
   type RegisteredPiExtensionId,
 } from "./pi-extensions.js";
+export {
+  DEFAULT_MODEL_REPAIR_ATTEMPT_BUDGET,
+  REPAIR_FEEDBACK_CATEGORIES,
+  REPAIR_FEEDBACK_SCHEMA_VERSION,
+  RepairFeedback,
+  RepairFeedbackAcceptedEffect,
+  RepairFeedbackJsonSchema,
+  RepairFeedbackRemainingBudget,
+  buildRepairFeedback,
+  describeObservedShape,
+  repairCategoryForControlFailure,
+  repairFeedbackFromControlRejection,
+  repairFeedbackFromZodIssues,
+  type RepairFeedbackCategory,
+  type RepairFeedbackInput,
+} from "./repair-feedback.js";
 
 export async function computeFingerprint(
   input: { title: string; location?: string; rule_id?: string },

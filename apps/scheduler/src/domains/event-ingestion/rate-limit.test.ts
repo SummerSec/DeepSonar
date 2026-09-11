@@ -82,7 +82,11 @@ test("schema-valid oversized Fact, Finding, and Hub payloads get stable retryabl
     assert.ok(Buffer.byteLength(JSON.stringify(value), "utf8") > SEMANTIC_EVENT_PAYLOAD_MAX_BYTES);
     assert.throws(
       () => assertSemanticEventPayloadSize(type, value),
-      (error: unknown) => error instanceof ControlInputError && error.retryable && error.code === "invalid_payload",
+      (error: unknown) => error instanceof ControlInputError
+        && error.retryable
+        && error.code === "invalid_payload"
+        && (error.details?.expected as { kind?: string } | undefined)?.kind === "utf8_bytes_max"
+        && Number((error.details?.observed_shape as { utf8_bytes?: number } | undefined)?.utf8_bytes) > SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
     );
   }
   assert.doesNotThrow(() => assertSemanticEventPayloadSize("fact", { title: "fact", description: "界".repeat(1000) }));

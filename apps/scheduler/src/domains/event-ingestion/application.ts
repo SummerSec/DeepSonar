@@ -93,6 +93,10 @@ export function assertSemanticEventPayloadSize(
       payloadErrorCode(type),
       `语义事件参数超过 ${maxBytes} UTF-8 字节限制；请减少字段或条目后重试。`,
       "payload",
+      {
+        expected: { kind: "utf8_bytes_max", max: maxBytes },
+        observed_shape: { type: "json", utf8_bytes: payloadSize },
+      },
     );
   }
 }

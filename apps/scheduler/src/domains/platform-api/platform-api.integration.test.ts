@@ -104,13 +104,19 @@ if (!testDatabaseUrl) {
         summary: `${"界".repeat(2730)}ab界`,
       });
       assert.equal(oversizedDone.statusCode, 422, oversizedDone.payload);
-      assert.deepEqual(oversizedDone.json(), {
-        accepted: false,
-        error: "Platform operation was rejected",
-        error_code: "invalid_done",
-        retryable: true,
-        path: "summary",
-      });
+      const oversizedBody = oversizedDone.json();
+      assert.equal(oversizedBody.accepted, false);
+      assert.equal(oversizedBody.error_code, "invalid_done");
+      assert.equal(oversizedBody.retryable, true);
+      assert.equal(oversizedBody.path, "summary");
+      assert.notEqual(oversizedBody.error, "Platform operation was rejected");
+      assert.equal(oversizedBody.repair.category, "model_correctable");
+      assert.equal(oversizedBody.repair.operation, "mark_job_done");
+      assert.deepEqual(oversizedBody.repair.expected, { kind: "utf8_bytes_max", max: 8192 });
+      assert.equal(oversizedBody.repair.observed_shape.type, "string");
+      assert.ok(oversizedBody.repair.observed_shape.utf8_bytes > 8192);
+      assert.match(String(oversizedBody.repair.next_action), /Idempotency-Key/);
+      assert.equal(JSON.stringify(oversizedBody).includes("界".repeat(8)), false);
       assert.equal(calls.length, 0, "oversized done must be rejected before the runtime handler");
       const [stillRunning] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
       assert.equal(stillRunning?.status, "running");

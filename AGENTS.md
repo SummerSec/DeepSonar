@@ -56,7 +56,7 @@ pnpm typecheck        # 全 workspace 类型检查
 - **任务是否在跑**：以 `active_count`（活跃 Job）为准，勿用 `last_job_status=succeeded` 当作任务已完成（#46）。
 - **配置覆盖**：**Job > 角色/项目 > 平台 > env 引导**；Job 只认创建时冻结的 `agent_snapshot_json`。
 - **长期插件化方向（#446）**：阅读 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。可信内核永久拥有沙箱、capability、租约、资源、幂等、证据来源、Proposal/Receipt/Settlement、审计与未知外部效果处理；模型通过插件组合 `Plan / Capability / Artifact / Evidence / Evaluation / Projection`。插件化不得建立第二控制通道或绕过现有 Job/Attempt/effect 边界。
-- **统一失败修复契约**：插件和平台操作必须能区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`。可修正错误返回脱敏、字段级 `RepairFeedback`，让同一 Session 在 repair budget 内修正并重试；`accepted` 必须对应 durable receipt，未知效果不得自动重放，预算耗尽必须落为 `blocked` / `needs_human`。
+- **统一失败修复契约**：插件和平台操作必须能区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`。可修正错误返回脱敏、字段级 `RepairFeedback`（`packages/shared-types`；Control API 的 schema/字节超限路径已接线），让同一 Session 在 repair budget 内修正并重试；`accepted` 必须对应 durable receipt，未知效果不得自动重放，预算耗尽必须落为 `blocked` / `needs_human`。
 
 ### 调度器（`apps/scheduler/src/`，Fastify + postgres.js）
 

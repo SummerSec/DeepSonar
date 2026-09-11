@@ -1,4 +1,4 @@
-import { ControlToolInputSchemasJson } from "@deepsonar/shared-types";
+import { ControlToolInputSchemasJson, RepairFeedbackJsonSchema } from "@deepsonar/shared-types";
 
 /** JSON Schema shape used by the dynamic Job-scoped OpenAPI projection. */
 export type ControlJsonSchema = Record<string, unknown>;
@@ -169,13 +169,14 @@ const OPENAPI_PATH = `${JOB_PATH}/openapi.json`;
 function errorSchema() {
   return {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true,
     properties: {
       accepted: { type: "boolean" },
       error: { type: "string" },
       error_code: { type: "string" },
       retryable: { type: "boolean" },
       path: { type: "string" },
+      repair: RepairFeedbackJsonSchema,
     },
     required: ["error"],
   };

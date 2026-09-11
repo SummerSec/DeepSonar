@@ -1468,14 +1468,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if (error instanceof EventRateLimitError) {
         throw new PlatformRuntimeHandlerError(
           "OPERATION_REJECTED",
-          "platform operation was rate limited",
-          { statusCode: 429, errorCode: error.code, retryable: true },
+          error.message,
+          { statusCode: 429, errorCode: error.code, retryable: true, details: { ...error.metadata } },
         );
       }
       if (error instanceof ControlInputError) {
         throw new PlatformRuntimeHandlerError(
           "OPERATION_REJECTED",
-          "platform operation was rejected",
+          error.message,
           {
             statusCode: error.retryable ? 422 : 409,
             errorCode: error.code,
