@@ -9,6 +9,7 @@ import { DeepSonarMark } from "../components/DeepSonarMark";
 import { canAccessAnyScope } from "../permissions";
 import { formatHealthOpenSandbox, healthOpenSandboxDegraded, type HealthOpenSandbox } from "../health-status";
 import { formatHealthVersion, githubReleaseUrlForVersion } from "../product-version";
+import { ACCENT_THEME_STORAGE_KEY, ACCENT_THEMES, accentThemeById, resolveAccentTheme, type AccentTheme } from "../accent-themes";
 
 const WORKSPACE_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
   { to: "/", end: true, label: "态势", caption: "全局风险与运行", icon: ChartBar },
@@ -38,19 +39,8 @@ const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[
   { seg: "images", label: "项目镜像", caption: "启用与版本固定", icon: Cube },
 ];
 
-const ACCENT_THEMES = [
-  { id: "mint", label: "翡翠夜幕", caption: "默认深色精密仪器", color: "#65e6b4", surface: "#0b0e10", scheme: "dark" },
-  { id: "arctic", label: "极地蓝", caption: "冷静深色技术界面", color: "#78bfff", surface: "#0b0e10", scheme: "dark" },
-  { id: "lime", label: "荧光青柠", caption: "高对比深色作业台", color: "#b8df68", surface: "#0b0e10", scheme: "dark" },
-  { id: "titanium", label: "钛金属", caption: "低彩度深色专注模式", color: "#c6d0d5", surface: "#0b0e10", scheme: "dark" },
-  { id: "porcelain", label: "瓷白日光", caption: "暖白亮色工作台", color: "#087a63", surface: "#f3f1ec", scheme: "light" },
-  { id: "mist", label: "雾白纸台", caption: "略沉冷白 · 比瓷白更收敛", color: "#3d6b8a", surface: "#e4e7ec", scheme: "light" },
-] as const;
-type AccentTheme = (typeof ACCENT_THEMES)[number]["id"];
-
 function initialAccentTheme(): AccentTheme {
-  const stored = localStorage.getItem("deepsonar:accent-theme");
-  return ACCENT_THEMES.some((theme) => theme.id === stored) ? stored as AccentTheme : "mint";
+  return resolveAccentTheme(localStorage.getItem(ACCENT_THEME_STORAGE_KEY));
 }
 
 type EscapeEventLike = {
@@ -147,10 +137,10 @@ export function AppShell() {
   useEffect(() => setMenuOpen(false), [location.pathname]);
   useEffect(() => { localStorage.setItem("deepsonar:rail", collapsed ? "collapsed" : "expanded"); }, [collapsed]);
   useEffect(() => {
-    const selected = ACCENT_THEMES.find((theme) => theme.id === accentTheme) ?? ACCENT_THEMES[0];
+    const selected = accentThemeById(accentTheme);
     document.documentElement.dataset.accentTheme = accentTheme;
     document.documentElement.dataset.colorScheme = selected.scheme;
-    localStorage.setItem("deepsonar:accent-theme", accentTheme);
+    localStorage.setItem(ACCENT_THEME_STORAGE_KEY, accentTheme);
   }, [accentTheme]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -267,7 +257,7 @@ function UserRailFooter({ collapsed }: { collapsed: boolean }) {
 function ThemePicker({ value, collapsed, onChange }: { value: AccentTheme; collapsed: boolean; onChange: (theme: AccentTheme) => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const selected = ACCENT_THEMES.find((theme) => theme.id === value) ?? ACCENT_THEMES[0];
+  const selected = accentThemeById(value);
   useEffect(() => {
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
