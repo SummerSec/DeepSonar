@@ -11,6 +11,8 @@ DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度�
 3. **`docs/README.md`** — 专题文档索引与 **as-built / 历史方案 / 进行中** 状态表（大量 `*_PLAN.md` / `TODO_*.md` 主路径已落地，勿当未实现清单）。
 4. 开放演进以 `DESIGN.md` §11 与代码为准（GitHub Issues 可能为空）。
 
+长期演进设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。当前方向是“最小可信执行内核 + 可组合插件”：模型可以动态组合 Plan、Capability、Artifact、Evidence 和 Projection，但沙箱、权限、资源预算、Job/Attempt、幂等、effect settlement、审计和未知外部效果仍由内核掌握。插件上线前必须验证“错误反馈 → 模型修正 → 重新验证 → durable acceptance”，不能只验证插件能启动。
+
 ## 常用命令
 
 ```bash
@@ -43,7 +45,8 @@ pnpm typecheck        # 全 workspace 类型检查
 
 > **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** 默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
 
-- **Agent 只提案，不决策**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。操作包括 `emit_progress / emit_fact / emit_finding / submit_hub_decision / mark_job_done / request_human` 的角色子集；是否派生 `verify_finding`/report 与所有状态副作用仍由调度器唯一决定，并受深度、频次和收敛护栏约束。
+- **Agent 只提案，不直接产生副作用**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。长期方向允许模型通过受治理插件动态组合 Plan、Capability、Artifact、Evidence 和 Projection，但所有权限、预算、幂等、effect settlement、审计与未知外部效果仍由可信内核掌握；是否派生 `verify_finding`/report 与最终状态副作用仍须经过内核契约。
+- **可修正失败必须回到模型闭环**：控制输入、插件调用和计划提交的 schema/引用/状态错误应返回稳定错误码、字段路径、expected shape、脱敏 observed shape、当前状态引用、已接受效果、修复次数/剩余预算与下一步动作；模型可在同一会话修正并重新提交。瞬态 provider/网络/容器错误走有界恢复，未知外部效果禁止自动重放，权限/凭据/快照/版本错误 fail closed。`accepted` 必须表示 durable receipt，不得只表示进程内存暂存。
 - **Fact-first `verify_finding`（#367 follow-up / #399）**：review/test/worker 只能提交结构化 Fact；Scheduler 必须校验 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual`、`outcome` 及相互冲突。`verify_finding` 只消费通过校验的 Fact 集合，不重读 maker 结论或原始 artifacts；足够且一致的 Fact 可直接收口/确认，证据不足、冲突或版本不匹配则保持未确认并回弹 Hub 补证。
 - **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
 - **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
@@ -52,6 +55,8 @@ pnpm typecheck        # 全 workspace 类型检查
 - **读图注入**：`graph.ts` `buildGraphSnapshot` 按 `GraphScope` 投影 fact/finding 等 YAML 注入 Hub/Worker，并有整图字符预算（#30）；细节见 `DESIGN.md` §7。`job` 节点不进 YAML。
 - **任务是否在跑**：以 `active_count`（活跃 Job）为准，勿用 `last_job_status=succeeded` 当作任务已完成（#46）。
 - **配置覆盖**：**Job > 角色/项目 > 平台 > env 引导**；Job 只认创建时冻结的 `agent_snapshot_json`。
+- **长期插件化方向（#446）**：阅读 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。可信内核永久拥有沙箱、capability、租约、资源、幂等、证据来源、Proposal/Receipt/Settlement、审计与未知外部效果处理；模型通过插件组合 `Plan / Capability / Artifact / Evidence / Evaluation / Projection`。插件化不得建立第二控制通道或绕过现有 Job/Attempt/effect 边界。
+- **统一失败修复契约**：插件和平台操作必须能区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`。可修正错误返回脱敏、字段级 `RepairFeedback`，让同一 Session 在 repair budget 内修正并重试；`accepted` 必须对应 durable receipt，未知效果不得自动重放，预算耗尽必须落为 `blocked` / `needs_human`。
 
 ### 调度器（`apps/scheduler/src/`，Fastify + postgres.js）
 

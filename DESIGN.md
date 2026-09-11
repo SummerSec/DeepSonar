@@ -7,7 +7,7 @@
 
 ## 1. 一句话
 
-**DeepSonar（深流循迹）**：以本地库为唯一管理真相，以任务画布为过程真相，以一次性沙箱为执行真相；多角色 Agent 只提案，调度器唯一落地副作用，通过 fact–intent 二分图与 Hub 循环把探索 → 验证 → 报告收敛。
+**DeepSonar（深流循迹）**：以本地库为唯一管理真相，以任务画布为过程真相，以一次性沙箱为执行真相；多角色 Agent 只提案，调度器唯一落地副作用，通过 fact–intent 二分图与 Hub 循环把探索 → 验证 → 报告收敛。长期演进方向是**最小可信执行内核 + 可组合插件**：模型动态组合计划、能力、Artifact、验证和投影，内核固定掌握权限、资源、账本、证据完整性与未知副作用恢复。详见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
 
 ## 2. 四层真相
 
@@ -335,6 +335,15 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 态势看板 | #242 | P0 运营总览与用量账本已落地；P1/P2 服务端契约见 `GET /dashboard/ops`（#400）。不重建已交付 Dashboard UI |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
 | 执行面多 worker | #415 / #431 / #433 / #434 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。派发 claim 在同一事务里 `SELECT … FOR UPDATE` 选节点、预留 `worker_sandbox_leases` 占位并写 `last_dispatch_at`；远端 create 失败释放占位，成功则把占位改成真实 sandbox id。无容量时直接 `WORKER_PLANE_NO_CAPACITY`，不再无记账重选。destroy / `destroyResource` 释放租约（含 sessions 缓存路径）；reaper 与启动 reconcile 回收终态/缺失 Job 的孤儿租约（#431）。**#433**：保留 `local`、同名须显式 forget/reclaim、远程 endpoint 拒绝 loopback/link-local/metadata/不可路由地址、注册/心跳审计+限流、心跳不改 kind/所有权。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
+| 可信执行内核与插件组合工作流 | #446 | 长期设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。未完成：统一 `RepairFeedback`、durable proposal/receipt/settlement、Plan/Capability Pack、Artifact-first 投影、插件失败修复准入与跨任务经验闭环；现有 Job/Attempt/effect、控制 API 和 Runtime Adapter 继续作为迁移基础 |
+
+### 11.1 长期方向：可信执行内核与插件组合工作流（#446）
+
+长期目标不是把安全边界也做成插件，而是以最小可信内核承载沙箱、权限、Job/Attempt、资源预算、幂等、Evidence 来源、Proposal/Receipt/Settlement、审计和未知外部效果处理；模型通过受治理插件组合 Plan、Capability、Artifact、Evaluation 和 Projection。现有角色只是内置 capability pack 的默认组合，#443/#444/#445 分别推进模型主导计划、Artifact-first 和经验/评估/成本闭环。
+
+所有插件提案、Plan、Artifact 与验证操作都必须统一区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`。可修正错误必须返回脱敏、字段级 `RepairFeedback`，在同一 Session 内允许模型依据 expected、当前状态、已接受 effects 和剩余预算修正；预算耗尽后显式进入 `blocked` / `needs_human`。`accepted` 必须有 durable receipt；现有 `job_attempt_effects` 的 `effect_pending`、`unknown` 与 `replay_policy=never` 仍是未知副作用的权威边界，禁止自动猜测重放。
+
+详细协议、插件准入、失败→修复→接受闭环、crash matrix 和分阶段迁移见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。本文是长期设计方向，未改变当前 as-built 的固定 Job 状态机、Finding/SARIF 写入路径或 schema。
 
 ## 12. 仓库地图
 
