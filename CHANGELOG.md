@@ -7,6 +7,7 @@
 ### 新增
 
 - 质量指标与 Hub 回放基线（#445 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。不改变 Hub 决策，不写入经验。
+- Artifact 成为内部写入真相（#444 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。
 - 沙箱执行面节点化 P0（#415）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
 
 ### 修复

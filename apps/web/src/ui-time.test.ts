@@ -21,8 +21,10 @@ test("formatDate does not include clock time or relative phrasing", () => {
 test("task workbench creation stamp uses calendar date, not relative time", () => {
   const tasks = readFileSync(new URL("./pages/TasksPage.tsx", import.meta.url), "utf8");
   const canvas = readFileSync(new URL("./pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
+  const header = readFileSync(new URL("./task-workbench/TaskWorkbenchHeader.tsx", import.meta.url), "utf8");
   assert.match(tasks, /label="创建" value=\{formatDate\(canvas\.created_at\)\}/);
-  assert.match(canvas, /label="创建" value=\{formatDate\(meta\.created_at\)\}/);
+  assert.match(canvas, /createdAt=\{meta\?\.created_at\}/);
+  assert.match(header, /label="创建" value=\{formatDate\(createdAt\)\}/);
   assert.doesNotMatch(tasks, /label="创建" value=\{relativeTime\(canvas\.created_at\)\}/);
-  assert.doesNotMatch(canvas, /label="创建" value=\{relativeTime\(meta\.created_at\)\}/);
+  assert.doesNotMatch(header, /label="创建" value=\{relativeTime\(/);
 });

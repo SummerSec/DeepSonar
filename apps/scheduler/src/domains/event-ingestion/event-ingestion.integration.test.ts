@@ -710,6 +710,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM task_reports WHERE project_id = ${projectId}`;
       await sql`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ${projectId})`;
       await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM artifacts WHERE project_id = ${projectId}`;
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
@@ -719,6 +720,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM task_reports WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ${foreignProjectId})`;
       await sql`DELETE FROM findings WHERE project_id = ${foreignProjectId}`;
+      await sql`DELETE FROM artifacts WHERE project_id = ${foreignProjectId}`;
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM jobs WHERE project_id = ${foreignProjectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${foreignProjectId}`;

@@ -87,7 +87,9 @@ Canvas         0..1 ── 1 Plane.Issue（可选外部输入）
 Canvas         1 ── * Job（调度任务，可重试）
 Job            1 ── * Event
 Job            1 ── * Canvas.Node（或一组节点）
+Job            1 ── * Artifact（版本化写入真相；claims / evidence / relations）
 Finding        * ── 1 Canvas.Node
+Finding        0..1 ── 1 Artifact（投影缓存，#444 Phase 1）
 Finding        可派生  Followup Job（verify 等，由规则引擎决定）
 ```
 
@@ -337,11 +339,20 @@ events
   -- 只放语义事件（progress/finding/done/human），原始事件流不进此表（见 §6.2）
   -- 按月原生分区，到期 DROP PARTITION（不 DELETE，避免死元组）
 
+artifacts
+  id, project_id, canvas_id, job_id, node_id, artifact_key, revision,
+  kind, schema_version, status, source_event_id, source_operation,
+  extensions_json, body_json, created_at, superseded_at
+  -- 唯一约束: (project_id, artifact_key, revision)
+  -- 当前行: UNIQUE (project_id, artifact_key) WHERE superseded_at IS NULL
+  -- 子表: artifact_claims / artifact_evidence / artifact_relations
+
 findings
-  id, project_id, job_id, node_id, fingerprint, title, profile, category,
+  id, project_id, job_id, artifact_id, node_id, fingerprint, title, profile, category,
   severity, tags_json, evidence_refs_json, scoring_json,
   location, summary, verify_status, raw_json, created_at
   -- 唯一约束: (project_id, fingerprint)  -- fingerprint = hash(profile + title + location + rule)
+  -- Phase 1 起 Finding 是 Artifact 投影缓存；artifact_id 可空以兼容历史行
   -- 通用 Finding 协议字段在当前 schema 基线；severity 可空，评分由 Scheduler 规范化
 
 canvas_nodes
@@ -390,7 +401,7 @@ canvas_changes
 | `raw_json` | 受治理的 SARIF/Finding 原文；Agent-facing MCP 不允许写入该内部字段 |
 | 派生规则来源 | `ruleId` → 对应 job type / audit 规则名 |
 
-`emit_finding` 的 payload 是 SARIF result 的受限子集，并扩展通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`。`profile` 缺省为
+`emit_finding` 仍接受 SARIF result 的受限子集（通用 `profile`、`category`、`tags`、`evidence_refs` 和可选 `scoring`），但 Phase 1 写入先转换成 Artifact，再投影 `findings`。`profile` 缺省为
 `security.vulnerability`，由任务冻结协议的 `allowed_profiles`/`mode` 约束；category、tags、evidence refs 均有长度和数量上限。`severity` 可省略；缺失或未知 severity 保守进入 Verify，已知 severity 是否自动验证只认冻结 `minVerifySeverity`。`verify_finding` 由调度器派生与收口，Agent 不能提案是否 Verify。
 
 评分标准目前固定为 CVSS。Scheduler 对协议接受的 4.0 和 3.1 向量调用固定版本计算器（当前 `ae-cvss-calculator@1.0.13`）重算基础分、定性严重度和利用难度，忽略 Agent 报告分数对系统结果的覆盖（可保留作对比）。协议显式接受的未知未来版本不计算，保留版本、向量、metrics 和可选 reported score，标记 `unsupported_version`；未列入 `accepted_versions` 的版本直接拒绝。`scoring_json` 因而既是报告/筛选输入，也是未来版本兼容的原始承载。
@@ -882,7 +893,7 @@ CANVAS_LAYOUT=auto
 |----------------------------------|--------------------------|
 | 状态机字段（status, lease, timeout） | `jobs.payload_json`（任务参数随类型变） |
 | 幂等键（`event_id`、`fingerprint`） | `events.payload_json`（事件内容随类型变） |
-| 外键骨架（project → job → event/finding/node） | `findings.raw_json`（SARIF 原文） |
+| 外键骨架（project → job → event/artifact/finding/node） | `findings.raw_json`（SARIF 原文）；`artifacts.extensions_json` / `body_json` |
 | 时间戳、error | `canvas_nodes.body_json`、`projects.config_json` |
 
 判断标准：状态机/去重/限流逻辑依赖的字段进列；"内容是什么"的字段进 JSONB。类型字段（`jobs.type`、`node_type`、`status`）一律用**字符串**，不用 Postgres enum——新增类型零迁移。

@@ -9,7 +9,7 @@
 | `/` | 总览 | 跨项目活跃 Job、最近发现、项目卡片 |
 | `/projects` | 项目列表 | 本地项目 |
 | `/projects/:id/tasks` | 任务表 | 一任务一画布，可按活跃/有发现筛选 |
-| `/projects/:id/tasks/:canvasId` | 过程画布 | 只读 React Flow + 节点详情侧栏 |
+| `/projects/:id/tasks/:canvasId` | 任务工作台 | 默认总览；研究地图 / 事实 / 发现 / 运行 / 报告为一级视图，`tab` 写入 URL |
 | `/projects/:id/findings` | 项目风险 | 本项目全部任务 Finding；严重度 / 验证 / 处置汇总与来源任务筛选 |
 | `/projects/:id/settings` | 项目设置 | Agent profile / 规则 / 模块源 |
 | `/jobs` | 调度队列 | 全局 Job，支持取消 / 恢复 |

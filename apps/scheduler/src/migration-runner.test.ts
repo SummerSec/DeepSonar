@@ -21,7 +21,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 46);
+  assert.equal(SCHEMA_VERSION, 47);
   assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   const transferExport = await readFile(new URL("./transfer/export.ts", import.meta.url), "utf8");
   const transferImport = await readFile(new URL("./transfer/import.ts", import.meta.url), "utf8");
@@ -71,6 +71,11 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.match(body, /human_messages_status_check[\s\S]+planned[\s\S]+injected[\s\S]+acknowledged[\s\S]+unknown[\s\S]+failed/i);
   assert.match(body, /version_id\s+uuid\s+NOT\s+NULL\s+REFERENCES\s+shared_asset_versions\(id\)/i);
   assert.match(body, /workspace_path\s+LIKE\s+'\/workspace\/\.deepsonar\/inbox\/%'/i);
+  assert.match(body, /CREATE TABLE artifacts\s*\(/i);
+  assert.match(body, /CREATE TABLE artifact_claims\s*\(/i);
+  assert.match(body, /CREATE TABLE artifact_evidence\s*\(/i);
+  assert.match(body, /CREATE TABLE artifact_relations\s*\(/i);
+  assert.match(body, /artifact_id\s+uuid\s+REFERENCES\s+artifacts\(id\)/i);
   assert.match(body, /CREATE TABLE job_usage_ledger\s*\(/i);
   assert.match(body, /job_capability_tokens[\s\S]+operation_ids\s+text\[\]/i);
   assert.match(body, /job_capability_tokens[\s\S]+expires_at\s+timestamptz/i);

@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 46);
+INSERT INTO schema_meta (id, version) VALUES ('global', 47);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -215,10 +215,119 @@ CREATE TABLE job_event_rate_limits (
   )
 );
 
+-- Versioned Artifact write truth (#444 Phase 1). Finding / SARIF remain
+-- projections; emit_finding converts into these tables before the cache row.
+CREATE TABLE artifacts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  canvas_id text REFERENCES canvases(id) ON DELETE SET NULL,
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  node_id uuid,
+  artifact_key text NOT NULL,
+  revision int NOT NULL DEFAULT 1,
+  kind text NOT NULL,
+  schema_version text NOT NULL DEFAULT '1',
+  status text NOT NULL DEFAULT 'submitted',
+  source_event_id text,
+  source_operation text NOT NULL,
+  extensions_json jsonb NOT NULL DEFAULT '{}',
+  body_json jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  superseded_at timestamptz,
+  CONSTRAINT artifacts_revision_check CHECK (revision >= 1),
+  CONSTRAINT artifacts_status_check CHECK (status IN ('submitted', 'superseded')),
+  CONSTRAINT artifacts_kind_check CHECK (
+    kind ~ '^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$'
+    AND char_length(kind) BETWEEN 1 AND 100
+  ),
+  CONSTRAINT artifacts_schema_version_check CHECK (
+    schema_version ~ '^[0-9]+(?:\.[0-9]+)*$'
+    AND char_length(schema_version) BETWEEN 1 AND 20
+  ),
+  CONSTRAINT artifacts_key_check CHECK (
+    artifact_key ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$'
+  ),
+  CONSTRAINT artifacts_source_operation_check CHECK (
+    source_operation IN ('emit_fact', 'emit_finding')
+  ),
+  CONSTRAINT artifacts_superseded_check CHECK (
+    (status = 'superseded' AND superseded_at IS NOT NULL)
+    OR (status = 'submitted' AND superseded_at IS NULL)
+  ),
+  UNIQUE (project_id, artifact_key, revision)
+);
+CREATE UNIQUE INDEX artifacts_current_key_uniq
+  ON artifacts (project_id, artifact_key) WHERE superseded_at IS NULL;
+CREATE INDEX artifacts_project_idx ON artifacts (project_id, created_at DESC);
+CREATE INDEX artifacts_job_idx ON artifacts (job_id, created_at);
+CREATE INDEX artifacts_kind_idx ON artifacts (project_id, kind, status);
+
+CREATE TABLE artifact_claims (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_id uuid NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  ordinal int NOT NULL DEFAULT 1,
+  statement text NOT NULL,
+  subject_json jsonb NOT NULL DEFAULT '{}',
+  expected text,
+  actual text,
+  status text NOT NULL DEFAULT 'unknown',
+  evidence_refs_json jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT artifact_claims_ordinal_check CHECK (ordinal >= 1),
+  CONSTRAINT artifact_claims_status_check CHECK (status IN ('supported', 'contradicted', 'unknown')),
+  CONSTRAINT artifact_claims_statement_len CHECK (char_length(statement) BETWEEN 1 AND 10000),
+  UNIQUE (artifact_id, ordinal)
+);
+CREATE INDEX artifact_claims_artifact_idx ON artifact_claims (artifact_id, ordinal);
+
+CREATE TABLE artifact_evidence (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_id uuid NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  ordinal int NOT NULL DEFAULT 1,
+  kind text NOT NULL DEFAULT 'observation',
+  statement text NOT NULL,
+  polarity text NOT NULL DEFAULT 'unknown',
+  uri text,
+  sha256 text,
+  payload_json jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT artifact_evidence_ordinal_check CHECK (ordinal >= 1),
+  CONSTRAINT artifact_evidence_kind_check CHECK (
+    kind ~ '^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$'
+    AND char_length(kind) BETWEEN 1 AND 100
+  ),
+  CONSTRAINT artifact_evidence_polarity_check CHECK (polarity IN ('supports', 'contradicts', 'unknown')),
+  CONSTRAINT artifact_evidence_statement_len CHECK (char_length(statement) BETWEEN 1 AND 10000),
+  CONSTRAINT artifact_evidence_uri_len CHECK (uri IS NULL OR char_length(uri) BETWEEN 1 AND 2000),
+  CONSTRAINT artifact_evidence_sha_len CHECK (sha256 IS NULL OR char_length(sha256) BETWEEN 1 AND 128),
+  UNIQUE (artifact_id, ordinal)
+);
+CREATE INDEX artifact_evidence_artifact_idx ON artifact_evidence (artifact_id, ordinal);
+
+CREATE TABLE artifact_relations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_artifact_id uuid NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  to_artifact_id uuid NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  relation_type text NOT NULL,
+  status text NOT NULL DEFAULT 'asserted',
+  payload_json jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT artifact_relations_type_check CHECK (
+    relation_type IN ('supports', 'contradicts', 'depends_on', 'derived_from', 'related', 'hypothesis_of')
+  ),
+  CONSTRAINT artifact_relations_status_check CHECK (status IN ('asserted', 'unknown')),
+  CONSTRAINT artifact_relations_not_self CHECK (from_artifact_id <> to_artifact_id),
+  UNIQUE (from_artifact_id, to_artifact_id, relation_type)
+);
+CREATE INDEX artifact_relations_from_idx ON artifact_relations (from_artifact_id, relation_type);
+CREATE INDEX artifact_relations_to_idx ON artifact_relations (to_artifact_id, relation_type);
+
 CREATE TABLE findings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL REFERENCES projects(id),
   job_id uuid NOT NULL REFERENCES jobs(id),
+  artifact_id uuid REFERENCES artifacts(id) ON DELETE SET NULL,
   node_id uuid,
   fingerprint text NOT NULL,
   title text NOT NULL,
@@ -249,6 +358,7 @@ CREATE TABLE findings (
     disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
   )
 );
+CREATE INDEX findings_artifact_idx ON findings (artifact_id) WHERE artifact_id IS NOT NULL;
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);
 CREATE INDEX findings_profile_category_idx ON findings (project_id, profile, category, verify_status);
 CREATE INDEX findings_disposition_idx ON findings (project_id, disposition, updated_at DESC);

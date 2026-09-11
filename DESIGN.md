@@ -41,7 +41,8 @@ Canvas  1 ── * canvas_nodes / canvas_edges
 Canvas  1 ── * canvas_broadcasts（Fact/Finding 向并发 Worker 的投递账本）
 Job     1 ── * events（语义）
 Job     1 ──  transcript / evidence（冷存储）
-Finding * ── 1 project + job + optional node
+Job     1 ── * artifacts（版本化内部写入真相；claims / evidence / relations）
+Finding * ── 1 project + job + optional node + optional artifact（投影缓存）
 Finding 1 ── * finding_verification_rounds
 Canvas  1 ── * task_reports（版本化任务总报告）
 Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
@@ -52,8 +53,9 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **任务** | 即 `canvases` 一行；API `GET /projects/:id/canvases`；`kind=standard` 为普通任务，`kind=compose` 以同项目 1–8 条未否定处置 Finding（含未确认）作为冻结只读种子，且不得扩大资产范围 |
 | **Job** | 一次沙箱运行：`hub_reason` / 角色名 / `verify_finding` / `report` 等 |
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
-| **Fact** | 工作角色增量产出；可带 Finding 结构化证据块，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
-| **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`）；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
+| **Artifact** | 内部写入真相（#444 Phase 1）：版本化 `kind` / `schema_version` / claims / evidence / relations / namespaced extensions；`emit_fact` 可直接提交，`emit_finding` 先转换成 Artifact 再投影 Finding |
+| **Fact** | 工作角色增量产出；可带 Finding 结构化证据块与可选 Artifact 输入，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
+| **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`），现为 Artifact 的安全投影缓存；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
 | **Task report** | 画布收敛后按输入摘要版本化；相同输入幂等，输入变化时追加版本并保留历史 |
 | **Root** | 画布根；阶段如 `analysis_complete` / `reporting` / `succeeded` |
@@ -308,14 +310,14 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 ## 10. 前端信息架构
 
-- 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。进入项目后，**项目账本**（`/projects/:id/usage`）看本项目 Gateway 用量；**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
+- 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 总览/研究地图/发现/运行/报告完成。进入项目后，**项目账本**（`/projects/:id/usage`）看本项目 Gateway 用量；**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
 - Finding 人工处置含 `human_reproducing`（人工复现中）：人已接手手工复现 / 打 PoC，尚未标「漏洞存在」或「拒绝误报」。**不是**技术 `verify_status=confirmed`，不能旁路 `confirmed_vuln` 的 Verify 门。compose 种子视为未否定处置。
 - **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1/P2 **服务端**契约由 `GET /dashboard/ops` 提供（#400）；已交付 Dashboard UI 不再重建。
 - **用量账本看板**：`GET /dashboard/usage` 聚合 `job_usage_ledger`（不定价，含 `cache_read_input_tokens` / `cache_creation_input_tokens`）。预设 `day` / `week` / `month` 为 Asia/Shanghai 滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的上海日历日或 ISO 时刻，跨度最长 366 天。可选 `project_id` / `canvas_id`。态势页看全局（项目/任务/模型 Top 8），CURRENT PROJECT「项目账本」tab（`/projects/:id/usage`）看本项目，任务工作台「本次运行」看本画布。任务工作台列表不再内嵌项目账本。看板可折叠，偏好按用户 + 页面写入 `localStorage`（`deepsonar:usage-ledger:<user>:<page>`），默认展开。
 - **质量指标与 Hub 回放基线（#445 Phase 1）**：`GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 只读派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding token/时间成本（Job / Finding / Verify / Usage Ledger）。`GET …/quality/replay` 按冻结 `hub_replay` schema_version=1 回放每轮 Hub 的输入、计划、执行、终止原因、最终质量与成本；`recalled_experiences` 恒为空。不改变 Hub 决策，不写入经验，不定价。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
-- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联。人工收口开放 `unverified`/`verifying`/`needs_human`，`rejected` 不能直接升为 `verified`（#387 / §4.3）；不改写 Finding 技术验证。
+- 任务列表 / 任务工作台（#451 Phase 1）：默认 **总览**，另有研究地图、事实证据、任务发现、任务运行、报告六个一级视图；选中视图写入 URL `tab`，后台刷新不切换视图。Canvas / Job 仍是高级审计入口。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联。人工收口开放 `unverified`/`verifying`/`needs_human`，`rejected` 不能直接升为 `verified`（#387 / §4.3）；不改写 Finding 技术验证。
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
@@ -330,12 +332,14 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 未完成点 |
 |------|-------|----------|
+| Artifact 内部真相 | #444 | **Phase 1 已落地**：`artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选 Artifact 输入；`emit_finding` 先落 Artifact 再投影 `findings`（缓存 + 原 UUID）。**仍开放**：Phase 2 Verify 改读 Artifact/Claim/Evidence；Phase 3 报告/SARIF adapter；Phase 4 收敛旧 Finding 写入路径 |
 | 数值保真（quantities） | #368 / #374 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 机械核对已确认 Finding 与 **verified Fact** 的值+口径（`unverified` / `verifying` / `needs_human` / `rejected` 不参与门禁；Finding 的 `confirmed` 不是 Fact 状态）。Agent 覆盖足够但改写口径时回退 `defaultMarkdown`（模板逐字嵌入口径），仅回退仍失败才 `numeric_inconsistent`。Report 图注入与下发 prompt 要求原样保留 value/unit/basis。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（#368 明确不做）。 |
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
 | 态势看板 | #242 | P0 运营总览与用量账本已落地；P1/P2 服务端契约见 `GET /dashboard/ops`（#400）。不重建已交付 Dashboard UI |
 | 跨任务经验 / 质量 / 成本感知 Hub | #445 | **Phase 1 已落地**：只读质量指标与固定 `hub_replay` v1 回放基线（确认率、误报率、Verify 分歧、人工介入、单 Finding 成本；全局/项目/任务查询）。**未做**：Experience 存储与人工确认（P2）、Hub 召回（P3）、成本感知决策（P4）、自动评估改策略（P5）。不改变现有 Hub 决策 |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
+| 任务工作台 / 研究地图 | #449 / #451 | **Phase 1 已落地**：共享 Header、六个一级视图、默认总览、前端 `TaskOutcomeSummary` / `TaskAction` / `TaskTraceEntry` 投影。**仍开放**：研究地图投影、统一详情抽屉、RepairFeedback、视觉重设计 |
 | 执行面多 worker | #415 / #431 / #433 / #434 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。派发 claim 在同一事务里 `SELECT … FOR UPDATE` 选节点、预留 `worker_sandbox_leases` 占位并写 `last_dispatch_at`；远端 create 失败释放占位，成功则把占位改成真实 sandbox id。无容量时直接 `WORKER_PLANE_NO_CAPACITY`，不再无记账重选。destroy / `destroyResource` 释放租约（含 sessions 缓存路径）；reaper 与启动 reconcile 回收终态/缺失 Job 的孤儿租约（#431）。**#433**：保留 `local`、同名须显式 forget/reclaim、远程 endpoint 拒绝 loopback/link-local/metadata/不可路由地址、注册/心跳审计+限流、心跳不改 kind/所有权。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
 | 可信执行内核与插件组合工作流 | #446 | 长期设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。未完成：统一 `RepairFeedback`、durable proposal/receipt/settlement、Plan/Capability Pack、Artifact-first 投影、插件失败修复准入与跨任务经验闭环；现有 Job/Attempt/effect、控制 API 和 Runtime Adapter 继续作为迁移基础 |
 
@@ -356,7 +360,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v46）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v47）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
@@ -383,7 +387,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `list_available_roles` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
 | `list_available_runtime_images` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
 | `emit_progress` | 空白/超长 message、percent 越界或非数字 | `invalid_progress` |
-| `emit_fact` | 缺 title/description、未知字段、非法 verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
+| `emit_fact` | 缺 title/description、未知字段、非法 Artifact/verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
 | `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
 | `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算、未就绪镜像 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` / `invalid_runtime_image` / `runtime_image_not_ready` |
 | `mark_job_done` | 空白或超过 8192 UTF-8 字节的 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |

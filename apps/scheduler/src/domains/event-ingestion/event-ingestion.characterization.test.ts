@@ -31,6 +31,9 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   assert.match(applicationSource, /shouldSkipTerminalAfterAcceptedHuman/);
   assert.match(applicationSource, /acceptedHumanInThisIngest/);
   assert.match(sideEffectSource, /createEventIngestionSideEffectApplication/);
+  assert.match(sideEffectSource, /persistArtifact/);
+  assert.match(sideEffectSource, /findingProposalToArtifact/);
+  assert.match(sideEffectSource, /factProposalToArtifact/);
   assert.match(sideEffectSource, /findingVerification/);
   assert.match(sideEffectSource, /resolveAgentSnapshotForJob/);
   assert.doesNotMatch(sideEffectSource, /assertFrozenRuntimeImageLocal|blockHubOnMissingLocalImage/);
