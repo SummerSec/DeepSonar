@@ -2,6 +2,7 @@ export { registerWorkerNodeRoutes } from "./routes.js";
 export { createWorkerPlaneOpenSandboxClient } from "./multiplex-client.js";
 export {
   clearWorkerApiKeysForTests,
+  forgetWorkerNode,
   listWorkerNodes,
   releaseOrphanSandboxLeases,
   seedLocalWorkerNode,
@@ -12,4 +13,8 @@ export {
   workerIsDispatchable,
   localWorkerFromEnv,
   effectiveWorkerStatus,
+  isReservedWorkerNodeId,
+  WorkerNodeError,
 } from "./model.js";
+export { parseRemoteWorkerEndpoint } from "./endpoint.js";
+export { workerNodeHttpError } from "./routes.js";

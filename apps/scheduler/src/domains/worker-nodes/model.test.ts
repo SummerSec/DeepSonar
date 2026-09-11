@@ -5,15 +5,19 @@ import {
   fingerprintApiKey,
   generateWorkerNodeToken,
   hashWorkerToken,
+  isReservedWorkerNodeId,
   localWorkerFromEnv,
   parseWorkerCapacity,
   parseWorkerEndpoint,
   parseWorkerNodeId,
   pickRoundRobinWorker,
+  shouldReuseLocalWorkerToken,
+  WorkerNodeError,
   workerIsDispatchable,
   workerTokensEqual,
   type DispatchableWorker,
 } from "./model.js";
+import { parseRemoteWorkerEndpoint, parseWorkerCidr } from "./endpoint.js";
 
 function worker(partial: Partial<DispatchableWorker> & Pick<DispatchableWorker, "id">): DispatchableWorker {
   return {
@@ -38,8 +42,10 @@ function worker(partial: Partial<DispatchableWorker> & Pick<DispatchableWorker, 
 
 test("worker endpoint and capacity reject unsafe values", () => {
   assert.equal(parseWorkerEndpoint("10.0.0.8:18081"), "10.0.0.8:18081");
+  assert.equal(parseWorkerEndpoint("[fd00::1]:18081"), "[fd00::1]:18081");
   assert.throws(() => parseWorkerEndpoint("http://10.0.0.8:18081"), /invalid worker endpoint/);
   assert.throws(() => parseWorkerEndpoint("10.0.0.8:18081/v1"), /invalid worker endpoint/);
+  assert.throws(() => parseWorkerEndpoint("10.0.0.8"), /invalid worker endpoint/);
   assert.throws(() => parseWorkerNodeId("bad id"), /invalid worker node id/);
   assert.deepEqual(parseWorkerCapacity({ maxSandboxes: 3, memoryMib: 1024, cpu: 2 }), {
     maxSandboxes: 3,
@@ -47,6 +53,54 @@ test("worker endpoint and capacity reject unsafe values", () => {
     cpu: 2,
   });
   assert.throws(() => parseWorkerCapacity({ maxSandboxes: 0 }), /invalid worker max_sandboxes/);
+});
+
+test("remote register rejects reserved local ids and hijack-friendly endpoints", () => {
+  assert.equal(isReservedWorkerNodeId("local"), true);
+  assert.equal(isReservedWorkerNodeId("LOCAL"), true);
+  assert.equal(isReservedWorkerNodeId("box-1", ["box-1"]), true);
+  assert.equal(isReservedWorkerNodeId("worker-a"), false);
+  assert.equal(parseRemoteWorkerEndpoint("10.0.0.8:18081"), "10.0.0.8:18081");
+  assert.equal(parseRemoteWorkerEndpoint("192.168.1.9:18081"), "192.168.1.9:18081");
+  for (const endpoint of [
+    "127.0.0.1:3100",
+    "127.0.0.1:18081",
+    "169.254.169.254:80",
+    "169.254.1.1:8080",
+    "0.0.0.0:8080",
+    "255.255.255.255:80",
+    "224.0.0.1:80",
+    "[::1]:8080",
+    "[fe80::1]:8080",
+    "localhost:8080",
+    "metadata.google.internal:80",
+    "worker.local:8080",
+    "[::ffff:127.0.0.1]:80",
+  ]) {
+    assert.throws(
+      () => parseRemoteWorkerEndpoint(endpoint),
+      (error: unknown) => error instanceof WorkerNodeError && (
+        error.code === "WORKER_ENDPOINT_FORBIDDEN" || error.code === "WORKER_ENDPOINT_INVALID"
+      ),
+      endpoint,
+    );
+  }
+});
+
+test("optional CIDR/hostname allowlist is fail-closed for remotes", () => {
+  const policy = { allowlistConfigured: true, allowCidrs: ["10.0.0.0/8"], allowHosts: ["worker.internal"] };
+  assert.equal(parseRemoteWorkerEndpoint("10.1.2.3:18081", policy), "10.1.2.3:18081");
+  assert.equal(parseRemoteWorkerEndpoint("worker.internal:18081", policy), "worker.internal:18081");
+  assert.throws(() => parseRemoteWorkerEndpoint("192.168.1.9:18081", policy), /not allowed/);
+  assert.throws(() => parseRemoteWorkerEndpoint("other.internal:18081", policy), /not allowed/);
+  assert.deepEqual(parseWorkerCidr("10.0.0.0/8"), { ip: "10.0.0.0", bits: 8, kind: "ipv4" });
+});
+
+test("local seed reuses a token only when kind and endpoint still belong to the scheduler", () => {
+  assert.equal(shouldReuseLocalWorkerToken(null, "opensandbox:8080"), false);
+  assert.equal(shouldReuseLocalWorkerToken({ kind: "remote", endpoint: "10.0.0.8:18081" }, "opensandbox:8080"), false);
+  assert.equal(shouldReuseLocalWorkerToken({ kind: "local", endpoint: "10.0.0.8:18081" }, "opensandbox:8080"), false);
+  assert.equal(shouldReuseLocalWorkerToken({ kind: "local", endpoint: "opensandbox:8080" }, "opensandbox:8080"), true);
 });
 
 test("node tokens hash and compare without leaking length mismatches", () => {

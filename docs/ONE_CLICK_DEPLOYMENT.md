@@ -110,6 +110,8 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 3. `DEEPSONAR_CONTROL_PLANE` 指向 Scheduler 基址。官方路径经 Web 反代时用 `http://<control-host>:8080/api`。
 4. `./deploy/deploy.sh up worker-join --control-plane http://<control-host>:8080/api`
 
+`endpoint` 必须是控制面可达的 `host:port`，不能是 loopback、link-local、`169.254.0.0/16` 或其它不可路由地址。同名节点不能靠再次 register 接管；worker-agent 会把 `node_token` 存在 `worker-agent-state` 卷。要换机器或轮换身份，先在控制面 `DELETE /workers/:id`。可选 `DEEPSONAR_WORKER_ENDPOINT_CIDRS` / `DEEPSONAR_WORKER_ENDPOINT_HOSTS` 收紧允许的远端。
+
 沙箱 create/exec/PTY 仍走 `OPEN_SANDBOX_USE_SERVER_PROXY`，不组 overlay。受限网络 / 共享资产卷的 Job 仍只派到 `local` worker（gateway sidecar 仍在控制面 Docker 引擎上）。心跳超时只停止新派发，不自动开新 attempt。
 
 官方 Agent 镜像 digest 优先来自 GitHub Release / 内置 `runtime-image-registry.json`；`DEEPSONAR_OFFICIAL_*_IMAGE` 仅作清单尚无版本时的启动兜底，不能用可变 tag 越过市场信任。

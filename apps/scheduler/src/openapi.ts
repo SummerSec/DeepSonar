@@ -293,7 +293,7 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/workers/register",
-    summary: "Worker 持 bootstrap token 注册并领取节点 token",
+    summary: "Worker 持 bootstrap token 注册并领取节点 token；不能占用 local 或接管已有 node_id",
     scope: null,
     tags: ["Runtime"],
     body: {
@@ -301,8 +301,11 @@ const OPS: Op[] = [
       additionalProperties: false,
       required: ["node_id", "endpoint", "opensandbox_api_key", "capacity"],
       properties: {
-        node_id: { type: "string" },
-        endpoint: { type: "string", description: "host:port，无 scheme" },
+        node_id: { type: "string", description: "非保留 id；已存在节点须先 DELETE /workers/:id" },
+        endpoint: {
+          type: "string",
+          description: "host:port，无 scheme。拒绝 loopback / link-local / 169.254.0.0/16 / 不可路由地址；可选 CIDR/hostname allowlist",
+        },
         protocol: { type: "string", enum: ["http", "https"] },
         opensandbox_api_key: { type: "string" },
         capacity: {
@@ -322,8 +325,15 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/workers/heartbeat",
-    summary: "Worker 持节点 token 心跳；超时节点不再接收新沙箱",
+    summary: "Worker 持节点 token 心跳；不能改写 endpoint/kind/所有权",
     scope: null,
+    tags: ["Runtime"],
+  },
+  {
+    method: "delete",
+    path: "/workers/{id}",
+    summary: "管理员显式 forget 节点，之后才能用同一 node_id 重新注册",
+    scope: "admin",
     tags: ["Runtime"],
   },
 
@@ -2922,6 +2932,7 @@ export function buildSchemaSummary(): Record<string, unknown> {
       "403": "Scope 不足",
       "404": "资源不存在",
       "409": "冲突",
+      "429": "限流",
       "502": "上游失败（Git 等）",
     },
   };

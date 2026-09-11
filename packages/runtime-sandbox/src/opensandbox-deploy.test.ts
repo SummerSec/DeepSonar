@@ -357,6 +357,14 @@ test("worker-join compose keeps server-proxy and does not change single-host pro
   assert.match(worker, /DEEPSONAR_CONTROL_PLANE/);
   assert.match(worker, /DEEPSONAR_WORKER_BOOTSTRAP_TOKEN/);
   assert.match(worker, /DEEPSONAR_WORKER_ENDPOINT/);
+  assert.match(worker, /worker-agent-state/);
+  const register = readFileSync(join(root, "deploy/worker-register.mjs"), "utf8");
+  assert.match(register, /DEEPSONAR_WORKER_TOKEN_FILE/);
+  assert.match(register, /WORKER_NODE_EXISTS/);
+  assert.match(register, /DELETE \/workers\//);
+  const heartbeatFn = register.match(/async function heartbeat\([\s\S]*?\n\}/);
+  assert.ok(heartbeatFn);
+  assert.doesNotMatch(heartbeatFn[0], /\bendpoint\b/);
   assert.doesNotMatch(worker, /:latest|network_mode:\s*host/);
   assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
   assert.match(deploySh, /worker-join/);

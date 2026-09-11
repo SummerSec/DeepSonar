@@ -16,6 +16,7 @@ DELETE /imports/:id
 DELETE /projects/:id/role-configs/:roleId
 DELETE /skill-sources/:id
 DELETE /tasks/:canvasId
+DELETE /workers/:id
 GET /agent-roles
 GET /audit-logs
 GET /auth/me
@@ -201,6 +202,7 @@ DELETE /agent-roles/{id}
 DELETE /credentials/{id}
 DELETE /projects/{id}/role-configs/{roleId}
 DELETE /skill-sources/{id}
+DELETE /workers/{id}
 GET /agent-roles
 GET /audit-logs
 GET /auth/me

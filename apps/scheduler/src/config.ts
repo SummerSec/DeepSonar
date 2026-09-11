@@ -47,6 +47,12 @@ function bool(name: string, dflt: boolean): boolean {
   if (v === undefined || v === "") return dflt;
   return ["1", "true", "yes", "on"].includes(v.toLowerCase());
 }
+/** Comma-separated allowlist. Empty/missing means "not configured". */
+function csv(name: string): { configured: boolean; values: string[] } {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return { configured: false, values: [] };
+  return { configured: true, values: raw.split(",").map((s) => s.trim()).filter(Boolean) };
+}
 /** Hop count for Fastify trustProxy; 0 disables. Invalid values use the default. */
 function trustProxyHops(name: string, dflt: number): number {
   const raw = process.env[name];
@@ -179,6 +185,11 @@ export const config = {
       maxSandboxes: int("DEEPSONAR_WORKER_MAX_SANDBOXES", 8),
       memoryMib: int("DEEPSONAR_WORKER_MEMORY_MIB", 16_384),
       cpu: int("DEEPSONAR_WORKER_CPU", 8),
+      endpointAllowCidrs: csv("DEEPSONAR_WORKER_ENDPOINT_CIDRS"),
+      endpointAllowHosts: csv("DEEPSONAR_WORKER_ENDPOINT_HOSTS"),
+      registerLimitPerWindow: boundedInt("DEEPSONAR_WORKER_REGISTER_LIMIT", 10, 1_000),
+      heartbeatLimitPerWindow: boundedInt("DEEPSONAR_WORKER_HEARTBEAT_LIMIT", 120, 10_000),
+      rateLimitWindowSec: boundedInt("DEEPSONAR_WORKER_RATE_WINDOW_SEC", 60, 3_600),
     },
     openSandbox: {
       domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"),
