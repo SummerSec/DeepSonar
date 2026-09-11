@@ -45,7 +45,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 **一版本多平台**：v2 多架构发布时，每个产品在 `versions[]` 只有一条 canonical 记录，`platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限。旧 v1 清单仍按一平台一版本兼容解析；Scheduler 当前只消费 v2 的 GitHub `image_ref` 投影。
 
-**版本轴拆开（#417）**：`vX.Y.Z` 是平台 Release 版本（changelog、`DEEPSONAR_IMAGE_TAG`、scheduler/web/image-admission）。运行时产品只在该产品的指纹输入变化时升 `versions[].version`；指纹未变则 catalog 复用上一版 version+digest，summary 写 `image build unchanged; version kept`，且不对 ACR/GHCR/Docker Hub 打新的平台 version tag。平台清单同时写出 `platform_version` 与 `min_runtime_image`（默认下限来自 `agent-harness/min-runtime-image.json`）。
+**版本轴拆开（#417）**：`vX.Y.Z` 是平台 Release 版本（changelog、`DEEPSONAR_IMAGE_TAG`、scheduler/web/image-admission）。运行时产品只在该产品的指纹输入变化时升 `versions[].version`；指纹未变且上一份 catalog 已有该 digest 时，复用上一版 version+digest，summary 写 `image build unchanged; version kept`，且不对 ACR/GHCR/Docker Hub 打新的平台 version tag。若 GHCR `src-<fingerprint>` 命中的 digest 从未写入 catalog（例如先前只 pin 了缓存），则仍发布 version tag，并由 `record-runtime-image-digest.mjs` 对已发布通道做真实 inspect 补记一行，不编造 `registry_evidence`。平台清单同时写出 `platform_version` 与 `min_runtime_image`（默认下限来自 `agent-harness/min-runtime-image.json`）。
 
 **真实 digest 只来自本次 Release 的构建输出**，不会手写伪造。发布成功后：
 
