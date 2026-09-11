@@ -74,7 +74,7 @@ export function applyEventsExportLimit<T>(
 }
 
 export function projectRoleConfigCredentials(
-  binds: Array<{ id: unknown; purpose: unknown; name: unknown; kind: unknown; provider: unknown }>,
+  binds: ReadonlyArray<{ id?: unknown; purpose?: unknown; name?: unknown; kind?: unknown; provider?: unknown }>,
   credMode: "excluded" | "metadata",
 ): Array<Record<string, unknown>> {
   if (credMode === "excluded") return [];
@@ -349,7 +349,10 @@ async function collectRoles(
       runtime_image_key: null,
       version: rc.version,
       files: filesRows,
-      credentials: projectRoleConfigCredentials(binds, credMode),
+      credentials: projectRoleConfigCredentials(
+        binds as Array<{ id?: unknown; purpose?: unknown; name?: unknown; kind?: unknown; provider?: unknown }>,
+        credMode,
+      ),
     });
   }
 

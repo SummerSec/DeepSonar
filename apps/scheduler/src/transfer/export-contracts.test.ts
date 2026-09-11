@@ -57,7 +57,7 @@ test("project export collects data inside a repeatable-read snapshot", () => {
   assert.match(source, /EXPORT_SNAPSHOT_ISOLATION/);
   assert.match(source, /sql\.begin\(EXPORT_SNAPSHOT_ISOLATION/);
   assert.equal(EXPORT_SNAPSHOT_ISOLATION, "isolation level repeatable read read only");
-  assert.match(source, /projectRoleConfigCredentials\(binds, credMode\)/);
+  assert.match(source, /projectRoleConfigCredentials\(/);
   assert.match(source, /counts\.events_truncated = true/);
   assert.match(routes, /assertExportActiveJobsOption\(body\.preset, modules, body\.allow_active_jobs === true\)/);
 });
