@@ -1,251 +1,179 @@
 # DeepSonar
 
-> 深流循迹 · 让复杂执行持续收敛
->
-> Every loop converges.
+> 深流循迹：让复杂的 AI 执行持续收敛。
 
-DeepSonar 是一套 Loop Graph 工程平台：人提供任务标题与自然语言目标，`hub_reason` 读画布后派发 Audit / Explore / Analyze / Review / Test / Code 等角色；调度器负责状态机、幂等、沙箱、验证与过程记账，让多项目 Agent 编排可收敛、可审计。
+DeepSonar 是一个面向安全研究与工程任务的 AI-native 执行平台。它把模型放在“提出计划、组合能力、读取证据、修正失败、判断是否继续”的位置，把沙箱、权限、资源、幂等、副作用记账和审计放在一个可信执行内核里。
 
-当前设计摘要见根目录 [DESIGN.md](DESIGN.md)；行为以代码、`database/schema.sql`、OpenAPI 与测试为准。
+当前可运行主路径仍是 Loop Graph：用户创建项目和任务，Hub 根据画布状态提出下一步 Intent，Worker 在一次性沙箱中执行，Fact/Artifact/Finding 写回画布，验证与报告由调度器收敛。`explore`、`analyze`、`review`、`test`、`code`、`audit` 是现有内置 capability pack 的默认组合；它们是可替换的工作能力，不是模型必须服从的永久岗位分类。
 
-## 发布记录与版本规则
+设计入口是 [DESIGN.md](DESIGN.md)。长期演进的协议边界见 [docs/AI_NATIVE_TRUSTED_KERNEL.md](docs/AI_NATIVE_TRUSTED_KERNEL.md)。行为以代码、[database/schema.sql](database/schema.sql)、OpenAPI 和测试为准。
 
-完整的生产变更记录见 [CHANGELOG.md](CHANGELOG.md)。产品版本以不可变的 `vX.Y.Z` Git tag 为准；根目录和第一方 workspace 的私有 package 版本（当前为 `0.1.11`）只是内部包元数据，不代表产品 Release 版本。运行时镜像标签对应同一版本但省略 `v` 前缀。
-
-## 核心流程
+## 核心模型
 
 ```text
-本地 Web 任务 / 外部事件
-          │
-          ├──────────────┐
-          │              │
-          │     （可选）Plane Ready Issue
-          │              │
-          └──────┬───────┘
-                 ↓
-           Hub 决策中枢
-                 ↓
-        Audit / Explore / Test ...
-                 ↓
-         Finding → Verify
-                 ↓ confirmed
-           Hub 继续 / 收敛
-                 ↓
-           Report（调度器派生）
+人类目标 / 外部事件
+        │
+        ▼
+  Canvas（任务与过程真相）
+        │
+        ▼
+  Hub / Plan：模型选择能力与下一步工作
+        │
+        ▼
+  Capability Pack → Intent → Job → Attempt → Sandbox
+        │                              │
+        │                              └─ RepairFeedback → 同会话修正
+        ▼
+  Artifact / Fact / Finding / Evidence
+        │
+        ├─ Verify：独立证据硬门
+        ├─ Research：语义去重与相对优先级
+        └─ Projection：Finding Report / Task Report / SARIF
 ```
 
-主要能力：
+系统遵守四个真相边界：
 
-- **一任务一画布**（`canvases`，无独立 tasks 表），完整展示决策与执行过程；
-- 新建任务只填标题和内容；Hub / 事件 / 人工评论统一进入调度闭环；
-- Finding 按任务 `minVerifySeverity` 进入自动验证（低于阈值的保留但不占 Verify）；`confirmed` 后生成 Finding 报告，画布收敛后生成任务级报告；
-- **Agent 只提案**：真实 Job 经短期 capability token 调用 Job 级控制 API（`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human` 等）；不注入控制 MCP、失败不回退 MCP；调度器是唯一副作用执行者；
-- 任务详情含画布 / **事实** / Finding / Job / 报告；Finding 与 Fact 均可人工裁决；Session 查看器按当前三类治理 Agent CLI 的归档格式归一化消息、reasoning、tool call/result、usage，leftover Codex/OpenCode 归档仍只读可看；归档中存在的画布广播以独立条目展示，并保留原始归档下载；
-- RoleConfig、Skill 源、Provider 凭据、API Token、镜像市场与项目镜像策略可在控制台管理；
-- PostgreSQL 为业务真相；Scheduler 启动时对空库套 schema 基线，已有库只校验版本；
-- **fake** 模式无模型凭据即可跑通状态机；**real** 模式经 OpenSandbox 起真实沙箱。
+| 层 | 真相 | 负责的事情 |
+| --- | --- | --- |
+| PostgreSQL / API | 管理真相 | 项目、任务、配置、权限、状态、账本 |
+| Canvas | 过程真相 | 目标、Intent、Fact、Artifact、Finding、Job 及其关系 |
+| Sandbox / Evidence | 执行真相 | 进程、工具调用、会话、运行产物和原始证据 |
+| Scheduler | 副作用唯一执行者 | 调度、状态迁移、验证/报告派生、资源清理和审计 |
 
-## Provider 与 Agent CLI
+模型可以提出业务计划和能力组合，但不能直接修改数据库、容器、凭据、镜像准入、Job 快照或最终状态。所有真实 Job 通过短期 Job capability token 调用 Job 级 HTTP Control API；平台不从普通文本、伪造 MCP 调用或控制文件推断语义事件。
 
-- `provider` 表示上游协议，仅支持 **Anthropic Messages** 与 **OpenAI-compatible**；不内置 Anthropic、Kimi 等厂商预设。
-- `agent_cli` 表示运行时方言，新配置只支持 **Claude Code（默认）、Pi、DSH**（能力与兼容镜像在创建 Job 时校验并冻结到 `agent_snapshot_json`）。leftover Codex/OpenCode 历史快照与 Session 归档只读可看，下次保存拒绝并提示迁移。Credential 保存完整 `settings_config_json`；Job 只冻结无密钥结构，运行时经 Model Gateway 注入短期 Job token。
-- 当前三类 CLI 均走 **Job 级 HTTP 控制 API**（`platformControlApi`）；平台注入静态 `deepsonar-control` Skill，说明能力发现与鉴权，不授予额外权限。
-- 设置页可在保存前一键读取模型列表；模型可用性只认 Credential `settings_config` 声明的清单，不再使用 `allowed_model_ids` 白名单。
-- 用户密码、Provider API Key 和完整 CLI 配置不会由管理 API 或 Web 明文回显；已保存密钥仅显示占位状态。
-- 适配器契约与 Session 归档清单见 [`docs/AGENT_CLI_RUNTIME_ADAPTERS.md`](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)。
-- Session 归档按 CLI 方言独立处理：当前 Claude Code、Pi、DSH 使用本次沙箱的受治理本地 session artifact；leftover Codex/OpenCode 历史归档仍由查看器只读解析。malformed 的 session identity/path、导出/读取错误或超限会显式报告，不把各类归档当作同一 schema。
+## 当前已经落地的 AI-native 基础
 
-## 一键部署（推荐：拉取已发布镜像）
+- **Artifact-first 写入**：Artifact 是版本化的内部写入真相，包含 claims、evidence、relations 和 provenance；Finding 是安全、可查询的投影，报告是更下游的投影。
+- **统一失败修复**：严格契约、引用、权限和状态错误返回版本化 `RepairFeedback`，包括 `error_code`、字段路径、expected、脱敏 observed shape、当前状态、已接受效果、剩余预算和下一步动作。模型可以在同一 Session 修正并重新提交。
+- **Capability Pack 契约**：`deepsonar.capability-pack/v1` Manifest 声明 inputs、outputs、权限、预算、失败策略和 digest。Job 级只读发现操作包括 `list_capabilities`、`search_capabilities`、`describe_capability`、`validate_composition` 和 `preview_materialization`。
+- **Job 快照冻结**：创建 Job 时冻结 CLI、Provider、模型、镜像 digest、工具清单、能力 selector/digest、Finding 协议和运行参数；运行时只能使用这份快照。能力发现是只读目录提示，不能单独授予权限，组合和物化必须受快照上限约束。
+- **Finding 研究与验证分离**：Research 层维护语义去重 cluster、canonical anchor 和相对 `priority_score`，用于安排注意力；它不修改 `verify_status`、severity、Fact 证据门或报告收敛门。
+- **任务工作台**：任务详情默认进入总览，并提供研究地图、事实证据、任务发现、任务运行和报告视图。过程画布、Finding、Job、Session、广播账本与报告各自展示真实状态，不把“已注入”冒充“模型已读”。
+- **质量与回放**：只读质量指标和 Hub replay 可查看确认率、误报率、Verify 分歧、人工介入、token/时间成本以及每轮决策输入和结果；经验召回层仍在后续阶段。
 
-要求：Docker 24+、Docker Compose v2。
+## 可信内核与插件边界
 
-**默认从阿里云 ACR 拉取平台镜像并启动**（real 模式），无需本地 `docker build` 源码。
+内核永久拥有沙箱、网络、凭据、镜像 digest、Job/Attempt 生命周期、租约、并发和预算、幂等、Evidence 来源、Proposal/Receipt/Settlement、未知外部效果处理、审计和资源清理。插件可以提出以下内容：
 
-### Linux / macOS
+- Plan、子任务、依赖、完成理由和验证路径；
+- Capability、工具、运行时和 Artifact 输入需求；
+- Claim、Evidence 引用、关系、Evaluation 和 Projection 请求；
+- 继续、收敛、阻塞或请求人工的业务判断。
 
-```bash
-chmod +x deploy/deploy.sh
-./deploy/deploy.sh up              # 等价：up real pull
-# 仅状态机：
-./deploy/deploy.sh up fake pull
-# 必须本地构建时：
-./deploy/deploy.sh up real build
-```
+插件准入的标准不是“能启动”，而是能完成“错误反馈 → 模型修正 → 重新验证 → durable acceptance”。失败必须归类为：
 
-### Windows
+| 分类 | 行为 |
+| --- | --- |
+| `model_correctable` | 返回字段级反馈，在预算内同会话修正 |
+| `transient_retryable` | 有界退避或恢复，保留幂等语义 |
+| `unknown_external_effect` | 停止自动重放，交给对账、orphan 或人工处理 |
+| `permanent_failure` | fail closed，给出权限、配置、版本或快照修复方向 |
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-# 推荐 pwsh。脚本为 UTF-8 with BOM + ASCII，Windows PowerShell 5.1 也可解析。
-# 默认与 Linux 相同：up real pull（拉取 ACR 应用镜像，不本地 --build）
-pwsh -NoProfile -File .\deploy\deploy.ps1
-.\deploy\deploy.ps1 -Action up -Mode real -Source pull
-# 仅状态机：
-.\deploy\deploy.ps1 -Action up -Mode fake -Source pull
-```
+`accepted` 只表示可查询的 durable receipt。它不表示模型已经完成，也不允许绕过 `job_attempt_effects` 的 `effect_pending`、`unknown` 和 `replay_policy=never` 边界。
 
-脚本会：
+## 控制闭环与证据口径
 
-1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo S3 凭据）；
-2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交 Git）；
-3. 使用当前 Release 的无 `v` 版本号拉取 `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；再优先解析同 tag 的 `deepsonar-silo`（缺失则回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`）。real 模式另优先解析 `deepsonar-assets-helper`（缺失则回退 busybox pin）；
-4. 启动 PostgreSQL、PGSTY Silo、Scheduler、Image Admission、Web Gateway；
-5. 健康检查通过后输出访问地址。
+当前 Hub 主路径为：
 
-启动后访问：**http://127.0.0.1:8080**（不是开发态的 5173）。
+1. 创建标准任务或带冻结 Finding 种子的 compose 任务；
+2. Hub 读取有预算的图投影，提出带完整 prompt 的 Intent；
+3. Scheduler 校验 canonical UUID、角色/能力、权限、预算、项目范围和镜像 readiness 后创建 Job；
+4. Worker 在全新 `/workspace` 沙箱中通过 Control API 提交 Fact、Artifact、Finding、进度和完成提案；
+5. Job 结束后，Scheduler 触发 Verify、Research、下一轮 Hub 或 Report；
+6. 所有证据不足、冲突、版本不匹配和可修正错误回到模型或人工入口，未知外部效果进入对账路径。
 
-### 登录（鉴权开启时）
+Finding 的技术确认使用 Fact-first 硬门：review/test/worker 只能提交带 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual` 和 `outcome` 的结构化 Fact。Finding 的 `verify_status`、Fact 的 `verification_status` 和人的 `disposition` 是三个不同维度，不能互相代写。
 
-新库首次启动会创建默认人类管理员：
+任务状态以活跃 Job、根节点和报告状态综合判断；不能用 `last_job_status=succeeded` 单独推断任务完成。Job 状态由 Scheduler 判定：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`，并由 Lease、Reaper 和启动对账处理悬挂、超时与孤儿。
 
-| 字段 | 值 |
-|------|-----|
-| 用户名 | `admin` |
-| 密码 | `Deep@Sonar66` |
+## 用户界面
 
-该口令仅用于本地/演示开箱，**不会在重启时重置**；生产或公网部署后请立即改密（并建议改登录名）。人类会话与 API Token 服务账号相互独立。
+日常路径是“项目 → 任务 → 工作台”：
 
-### 镜像标签注意
+- Dashboard 查看项目、任务、Finding、Job、质量和用量概览；
+- Project 查看任务、项目风险、项目账本、报告和数据导入导出；
+- Task Workbench 查看总览、研究地图、事实证据、任务发现、任务运行和报告；
+- Canvas 作为高级过程审计入口，保持只读布局，节点位置由服务端布局生成；
+- Finding 详情按 Issue 风格管理 disposition、评论、验证追踪和证据链；
+- Job 详情查看 Attempt、运行流、Session、工具调用、用量账本、人工消息和广播投递状态；
+- Agent Marketplace 管理 `deepsonar.agentpack/v1` 角色包，Runtime Images 管理已准入镜像；凭据、Token、全局 RoleConfig 和平台规则分开管理。
 
-- 平台镜像使用 **Release 版本号**，阿里云 ACR 标签不带 Git tag 的 `v` 前缀，也不发布 `latest`。
-- Release workflow 会把发布版本自动同步到 `deploy/.env.example`；部署脚本也会把旧的 `latest` 配置改为当前清单版本。需要固定旧版本时再在 `deploy/.env` 显式设置：
-
-```dotenv
-DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-DEEPSONAR_IMAGE_TAG=<release-version-without-v>
-```
-
-- 版本值与 [GitHub Release](https://github.com/SummerSec/DeepSonar/releases) 的 `vX.Y.Z` 对应，但 ACR 拉取使用 `X.Y.Z`。
-
-手工拉取示例：
-
-```bash
-REG=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-VER=<release-version-without-v>
-
-for img in deepsonar-scheduler deepsonar-web deepsonar-image-admission deepsonar-assets-helper deepsonar-silo; do
-  docker pull "$REG/$img:$VER"
-done
-```
-
-### 对象存储
-
-生产 Compose 默认使用 [PGSTY Silo](https://github.com/pgsty/silo) `RELEASE.2026-08-06T00-00-00Z` 不可变 pin；`SILO_IMAGE` 可覆盖为其它 S3 兼容镜像。共享资产 CAS 走内部 `http://silo:9000`。API 与 Console 默认只绑定宿主机 `127.0.0.1:9000/9001`，数据保存在独立 `silo_data` volume；报告与运行证据仍写入本地 `blob_data`。切换既有对象存储时必须先迁移并校验对象，部署脚本不会删除旧卷。
-
-### 常用运维命令
-
-```bash
-./deploy/deploy.sh status
-./deploy/deploy.sh logs
-./deploy/deploy.sh down          # 保留 postgres / blob / silo volume
-./deploy/deploy.sh pull          # 仅拉取应用镜像
-```
-
-```powershell
-.\deploy\deploy.ps1 status
-.\deploy\deploy.ps1 logs
-.\deploy\deploy.ps1 pull
-.\deploy\deploy.ps1 down
-```
-
-部署行为以 `deploy/deploy.sh`、`deploy/deploy.ps1` 与 `deploy/docker-compose.prod.yml` 为准。  
-更完整的部署说明见 [`docs/ONE_CLICK_DEPLOYMENT.md`](docs/ONE_CLICK_DEPLOYMENT.md) 与 [`deploy/README.md`](deploy/README.md)。
+`planned`、`injected`、`acknowledged`、`unknown`、`failed` 都是可观测状态。`injected` 仅表示平台把消息写入 Agent 输入通道，不代表模型已经读取或处理。
 
 ## 本地开发
 
-要求：Node.js 20+、pnpm、Docker（Postgres）。
+要求 Node.js 20+、pnpm、Docker 和 PostgreSQL（推荐使用仓库 Compose）。
 
 ```bash
 corepack enable
 pnpm install
-cp .env.example .env            # PowerShell: Copy-Item .env.example .env
-pnpm db:up                      # 独立开发库：deepsonar/deepsonar@localhost:5432
-# 若要改连一键部署那份库（与 db:up 互斥）：pnpm db:up:deploy
-# Windows 若 predev 报找不到 tsc，先把 node_modules/.bin 加入 PATH
-pnpm dev                        # Scheduler: http://127.0.0.1:3100
-pnpm dev:web                    # Web: http://127.0.0.1:5173 ，/api 代理到 3100
+cp .env.example .env                 # PowerShell: Copy-Item .env.example .env
+pnpm db:up                           # 独立开发 PostgreSQL
+pnpm dev                             # Scheduler: http://127.0.0.1:3100
+pnpm dev:web                         # Web: http://127.0.0.1:5173
 ```
 
-默认 `.env` 中 `AGENT_MODE=fake` 即可联调状态机。Web 的 `/images` 为镜像市场；schema 新库默认选择阿里云 ACR 通道（历史自 v23 起），管理员仍可在市场切换 GHCR / Docker Hub / ACR。当前基线版本以 `apps/scheduler/src/schema-version.ts` 与 `database/schema.sql` 为准（本地 checkout 当前为 **v39**）。项目内 `/projects/:projectId/images` 用于启用第三方已准入镜像。
+本地状态机联调可以将 `.env` 设为 `AGENT_MODE=fake`；真实执行使用 `AGENT_MODE=real` 和 OpenSandbox。`pnpm db:up` 与 `pnpm db:up:deploy` 使用不同 Compose 数据库，不能同时占用同一个端口。
 
-项目镜像策略：`inherit_global`（默认，只认全局 RoleConfig 镜像与 model / 默认 CLI）或 `project_managed`（项目 `role_runtime_images` 集中绑定；项目 RoleConfig **不接受**独立 `runtime_image_key`，但可托管自己的 model）。
-
-基本验证：
+常用验证：
 
 ```bash
 pnpm typecheck
 pnpm build
+pnpm ci:unit:capability-pack
+pnpm ci:unit:finding-research
+pnpm ci:unit:web-facts
 pnpm ci:images
 ```
 
-## 数据库
+按改动范围选择单元、集成或 `agent-harness` 冒烟测试；只跑 typecheck 不能替代行为验证。当前 schema 版本以 `apps/scheduler/src/schema-version.ts` 和 `database/schema.sql` 为准（主线当前为 v48）。
 
-- 完整建库入口：[database/schema.sql](database/schema.sql)
-- 说明：[database/README.md](database/README.md)
-- Scheduler 启动时对空库套基线；已有库只校验版本与结构，不符则 fail closed（无增量 ALTER 链）
-- 已有数据升级：`pnpm db:rebuild -- --plan` 后 `pnpm db:rebuild -- --apply`（备份 + 套最新 `schema.sql` + 列交集回填）
-- 升级前请 `pg_dump -Fc` 并在隔离实例演练恢复
+改表时直接修改 `database/schema.sql`、同步 bump `SCHEMA_VERSION`，再用 `pnpm db:rebuild -- --plan` / `--apply` 重建并回填交集列。Scheduler 不执行增量 ALTER，也不会在启动时静默升级非空库。
 
-```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
-```
+## 一键部署
 
-## 外部事件触发
-
-事件与人工任务共用 Hub 入口；`project + source + event_id` 幂等，重复投递不重复执行。
+生产 Compose 和镜像清单位于 `deploy/`。默认使用已发布、不可变 digest 的平台镜像；需要本地构建时显式选择 build。
 
 ```bash
-curl -X POST "http://127.0.0.1:8080/api/projects/<project-id>/events" \
-  -H "Authorization: Bearer <api-token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "event_id":"alert-20260801-001",
-    "source":"ci",
-    "event_type":"security_scan_failed",
-    "data":{"repository":"demo","branch":"main"}
-  }'
+./deploy/deploy.sh up real pull
+./deploy/deploy.sh status
+./deploy/deploy.sh logs
+./deploy/deploy.sh down
 ```
 
-Token 至少需要 `tasks:write`，并建议绑定到目标项目。
+Windows：
 
-## 项目结构
+```powershell
+pwsh -NoProfile -File .\deploy\deploy.ps1 -Action up -Mode real -Source pull
+.\deploy\deploy.ps1 status
+```
+
+详细部署、对象存储、镜像发布和回滚规则见 [docs/ONE_CLICK_DEPLOYMENT.md](docs/ONE_CLICK_DEPLOYMENT.md)、[deploy/README.md](deploy/README.md) 和 [docs/RELEASE_RUNTIME_IMAGES.md](docs/RELEASE_RUNTIME_IMAGES.md)。不要在仓库文档、Issue 或配置示例中写入真实凭据、长期 Token 或可变 `latest` 镜像。
+
+## 仓库地图
 
 ```text
-apps/
-  scheduler/        Fastify 调度器、Hub、验证、报告、API
-  image-admission/  第三方 OCI 镜像准入 Worker
-  web/              React 控制台与任务画布
-packages/
-  shared-types/     前后端共享 Zod schema
-  plane-client/     Plane 可选集成
-  runtime-sandbox/  Noop / OpenSandbox 沙箱
-database/           schema 基线（无 migration）
-deploy/             Compose、一键脚本、发布镜像清单
-agent-harness/      冒烟与镜像校验
-DESIGN.md           当前 as-built 设计摘要（Agent / 贡献者先读）
+apps/scheduler/       Fastify API、Hub、Dispatcher、Verify、Research、Report、Gateway
+apps/web/              React 控制台、任务工作台、过程画布和 Session 查看器
+apps/image-admission/  第三方 OCI 镜像准入与扫描
+packages/shared-types/ 前后端共享 Zod 契约、Capability Pack、RepairFeedback
+packages/runtime-sandbox/  Noop/OpenSandbox、CLI adapter、Session 归档
+database/schema.sql    唯一 schema 基线
+agent-harness/         API 冒烟、运行时和镜像校验
+deploy/                Compose、生产脚本、镜像与发布流程
+docs/                  架构、契约、AI-native 长期设计和专题索引
 ```
 
-## 设计约束
+进一步阅读：
 
-- 本地库 = 唯一业务真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者；
-- Agent 只提案；控制面默认拒绝（严格 Zod 契约 + Job 状态/角色授权）；图引用 id 必须是画布 UUID，禁止字段名泄漏（如字面量 `root_id`）；
-- 被审计代码与外部事件均为不可信输入；
-- API Token、Job capability token 与模型凭据分离；Job 使用创建时冻结的 snapshot / 镜像 digest；
-- 共享资产经 CAS + 只读 named volume 注入；helper 使用不可变 digest（官方 `deepsonar-assets-helper`，未发布前回退 busybox pin），不把业务运行时镜像当拷贝工具；
-- real 模式挂载 Docker Socket，仅限受控主机。
-
-## 当前事实入口
-
-- [DESIGN.md](DESIGN.md) — as-built 设计摘要与演进索引（§11 含已完成能力表）
-- [docs/README.md](docs/README.md) — 专题文档索引（哪些已 as-built、哪些是历史方案）
-- [CHANGELOG.md](CHANGELOG.md) — 生产变更记录
-- [database/schema.sql](database/schema.sql) — 数据结构唯一基线（与 `SCHEMA_VERSION` 同步 bump）
-- [database/README.md](database/README.md) — schema 启动与重建规则
-- `/api/openapi.json` — 当前 HTTP API 契约
-- [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) — 开放项可能很少；未完成能力以 DESIGN §11 + 代码为准
+- [DESIGN.md](DESIGN.md)：当前 as-built 设计、数据模型、状态机、UI 和实现硬约束；
+- [docs/README.md](docs/README.md)：专题文档与状态索引；
+- [docs/AI_NATIVE_TRUSTED_KERNEL.md](docs/AI_NATIVE_TRUSTED_KERNEL.md)：内核、插件、RepairFeedback、Receipt 和分阶段路线；
+- [docs/AGENT_CLI_RUNTIME_ADAPTERS.md](docs/AGENT_CLI_RUNTIME_ADAPTERS.md)：Agent CLI、运行时和 Session 归档契约；
+- [CHANGELOG.md](CHANGELOG.md)：已发布变更；
+- `/api/openapi.json`：当前 HTTP 契约。
 
 ## License
 
-DeepSonar 当前版本为 **专有源码**。使用、复制、修改、分发、再许可或销售前，须取得 SummerSec 事先书面授权；可通过 [GitHub Issues](https://github.com/SummerSec/DeepSonar/issues) 申请。
-
-本声明适用于包含当前 `LICENSE` 的仓库版本，**不追溯**改变此前已按 MIT 发布的历史版本。第三方组件适用各自许可证。详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+当前仓库版本为专有源码。使用、复制、修改、分发、再许可或销售前，请取得 SummerSec 书面授权。第三方组件适用各自许可证，详见 [LICENSE](LICENSE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
