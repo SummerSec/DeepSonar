@@ -48,6 +48,7 @@ if (!testDatabaseUrl) {
         registerPlatformControlRoutes,
         registerRuntimeHandler,
         unregisterRuntimeHandler,
+        PlatformRuntimeHandlerError,
       } = platformApi;
       endSql = () => sql.end({ timeout: 5 });
       await migrate();
@@ -104,13 +105,19 @@ if (!testDatabaseUrl) {
         summary: `${"界".repeat(2730)}ab界`,
       });
       assert.equal(oversizedDone.statusCode, 422, oversizedDone.payload);
-      assert.deepEqual(oversizedDone.json(), {
-        accepted: false,
-        error: "Platform operation was rejected",
-        error_code: "invalid_done",
-        retryable: true,
-        path: "summary",
-      });
+      const oversizedBody = oversizedDone.json();
+      assert.equal(oversizedBody.accepted, false);
+      assert.equal(oversizedBody.error_code, "invalid_done");
+      assert.equal(oversizedBody.retryable, true);
+      assert.equal(oversizedBody.path, "summary");
+      assert.notEqual(oversizedBody.error, "Platform operation was rejected");
+      assert.equal(oversizedBody.repair.category, "model_correctable");
+      assert.equal(oversizedBody.repair.operation, "mark_job_done");
+      assert.deepEqual(oversizedBody.repair.expected, { kind: "utf8_bytes_max", max: 8192 });
+      assert.equal(oversizedBody.repair.observed_shape.type, "string");
+      assert.ok(oversizedBody.repair.observed_shape.utf8_bytes > 8192);
+      assert.match(String(oversizedBody.repair.next_action), /Idempotency-Key/);
+      assert.equal(JSON.stringify(oversizedBody).includes("界".repeat(8)), false);
       assert.equal(calls.length, 0, "oversized done must be rejected before the runtime handler");
       const [stillRunning] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
       assert.equal(stillRunning?.status, "running");
@@ -149,6 +156,41 @@ if (!testDatabaseUrl) {
       const unavailable = await invoke("emit_finding", findingKey, finding);
       assert.equal(unavailable.statusCode, 503, unavailable.payload);
       assert.equal(unavailable.json().error_code, "HANDLER_UNAVAILABLE");
+      assert.equal(unavailable.json().accepted, false);
+      assert.equal(unavailable.json().retryable, true);
+      assert.equal(unavailable.json().repair.category, "transient_retryable");
+      assert.equal(unavailable.json().repair.operation, "emit_finding");
+      assert.match(String(unavailable.json().repair.next_action), /Idempotency-Key/);
+      registerRuntimeHandler(jobId, async () => {
+        throw new Error("secret-handler-boom");
+      }, ["emit_progress"]);
+      const crashed = await invoke("emit_progress", randomUUID(), { message: "handler crash probe" });
+      assert.equal(crashed.statusCode, 500, crashed.payload);
+      assert.equal(crashed.json().error_code, "HANDLER_FAILED");
+      assert.equal(crashed.json().repair.category, "transient_retryable");
+      assert.equal(JSON.stringify(crashed.json()).includes("secret-handler-boom"), false);
+      registerRuntimeHandler(jobId, async () => {
+        throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "字段不符合契约。", {
+          statusCode: 422,
+          errorCode: "invalid_payload",
+          retryable: true,
+          details: {
+            error_code: "provider_internal",
+            error: "sk-live-should-not-leak",
+            retryable: false,
+            accepted: true,
+            repair: { category: "permanent_failure" },
+          },
+        });
+      }, operations);
+      const hostile = await invoke("emit_progress", randomUUID(), { message: "hostile details probe" });
+      assert.equal(hostile.statusCode, 422, hostile.payload);
+      assert.equal(hostile.json().error_code, "invalid_payload");
+      assert.equal(hostile.json().retryable, true);
+      assert.equal(hostile.json().accepted, false);
+      assert.equal(hostile.json().repair.category, "model_correctable");
+      assert.equal(hostile.json().details?.error_code, undefined);
+      assert.equal(JSON.stringify(hostile.json()).includes("sk-live-should-not-leak"), false);
       registerRuntimeHandler(jobId, handler, operations);
       assert.equal((await invoke("emit_finding", findingKey, finding)).statusCode, 200, "503 不得污染幂等缓存");
 

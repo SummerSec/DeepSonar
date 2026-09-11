@@ -76,7 +76,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 
 - **Agent 只提案**：`emit_*` / `submit_hub_decision` / `mark_job_done` / `request_human`；是否 verify、是否 report 由调度器决定。
 - **图引用硬约束**：Hub 的 `intents[].from` / `complete.from` 必须使用同画布 `root`/`fact`/`finding` 节点的 canonical UUID（YAML `root_id` 的值）；字段名、别名、占位符或跨画布 ID 会使整次决策被拒绝。
-- **控制面默认拒绝（#57 / #135 / #152）**：所有控制操作与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）以 Job 类型/冻结角色快照重算授权，并要求 Job 仍为 `status=running`；终态、角色种类或 operation 不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。冻结 capability 只派生平台 API operation allowlist；所有治理 CLI 均由 Agent 使用自身 HTTP 工具调用 Job 级控制 API，不注入控制 MCP，也不在失败后回退其它控制通道。API 返回 `accepted` 表示 Scheduler 已接收输入，HTTP 错误始终带稳定错误码与人话。
+- **控制面默认拒绝（#57 / #135 / #152 / #446 Phase 1）**：所有控制操作与语义事件先经 `packages/shared-types` 严格 Zod 契约（未知字段、空白文本、类型、枚举、UUID、长度、范围、预算均拒绝），再由宿主重验，最后在同一事件事务执行图/状态副作用。Scheduler 的 `event-ingestion` side-effect application（`core.applySideEffects` 是 composition root 接线）以 Job 类型/冻结角色快照重算授权，并要求 Job 仍为 `status=running`；终态、角色种类或 operation 不一致均以稳定 `ControlInputError` 拒绝并回滚 dedup、额度、事件及图副作用。冻结 capability 只派生平台 API operation allowlist；所有治理 CLI 均由 Agent 使用自身 HTTP 工具调用 Job 级控制 API，不注入控制 MCP，也不在失败后回退其它控制通道。API 返回 `accepted` 表示 Scheduler 已接收输入；可修正的 HTTP 错误保留稳定 `error_code`，并附带脱敏 `repair`（`RepairFeedback`：category / expected / observed_shape / remaining_budget / next_action）。
 - **控制 payload 字节与确认边界（#166）**：Fact、Finding、Hub 的直接参数与宿主展开后的 `payload_file` 共用固定 256 KiB UTF-8 JSON 上限，超限在暂存或写事件前以可重试控制错误拒绝；`mark_job_done.summary` 上限为 8192 UTF-8 字节，接受后不再附加 Hub、Fact 或 Finding 计数文本。Hub/Human 的真实副作用仍延迟到 Agent 退出后执行，但在返回 `accepted` 前以只读权威事务预检当前 Job、画布引用、角色、Finding 绑定与完成门，最终副作用事务再次校验以防状态漂移。
 - **语义事件持久化限流（#57）**：Scheduler 在 `event-ingestion` 权威事务中以 `job_event_rate_limits` 单行 `SELECT ... FOR UPDATE` 执行有界固定窗口；进度、普通事件和终态/人工事件使用独立桶（默认每 60 秒 30/120/8），终态预算不会被 progress 消耗。幂等 `event_id` 先判重，重复投递不占额度；拒绝返回 `event_rate_limited`、`retry_after_sec` 等低基数元数据并回滚全部事件/画布副作用。计数行跨 Scheduler 进程/重启保留，禁止扫描 append-only `events`。
 - **同步 ack 边界**：CLI 使用按 Job 签发的短期 capability token 调用 `/control/v1/jobs/:jobId/operations/:operationId`；API 调用进入当前 Job 的宿主 semantic handler，不形成第二套副作用逻辑，不引入可写控制文件队列或未经治理的 socket。
@@ -339,7 +339,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
 | 任务工作台 / 研究地图 | #449 / #451 | **Phase 1 已落地**：共享 Header、六个一级视图、默认总览、前端 `TaskOutcomeSummary` / `TaskAction` / `TaskTraceEntry` 投影。**仍开放**：研究地图投影、统一详情抽屉、RepairFeedback、视觉重设计 |
 | 执行面多 worker | #415 / #431 / #433 / #434 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。派发 claim 在同一事务里 `SELECT … FOR UPDATE` 选节点、预留 `worker_sandbox_leases` 占位并写 `last_dispatch_at`；远端 create 失败释放占位，成功则把占位改成真实 sandbox id。无容量时直接 `WORKER_PLANE_NO_CAPACITY`，不再无记账重选。destroy / `destroyResource` 释放租约（含 sessions 缓存路径）；reaper 与启动 reconcile 回收终态/缺失 Job 的孤儿租约（#431）。**#433**：保留 `local`、同名须显式 forget/reclaim、远程 endpoint 拒绝 loopback/link-local/metadata/不可路由地址、注册/心跳审计+限流、心跳不改 kind/所有权。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
-| 可信执行内核与插件组合工作流 | #446 | 长期设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。未完成：统一 `RepairFeedback`、durable proposal/receipt/settlement、Plan/Capability Pack、Artifact-first 投影、插件失败修复准入与跨任务经验闭环；现有 Job/Attempt/effect、控制 API 和 Runtime Adapter 继续作为迁移基础 |
+| 可信执行内核与插件组合工作流 | #446 | **Phase 1 脚手架已落地**：`packages/shared-types` 版本化 `RepairFeedback`（四类失败 + expected / observed_shape / remaining_budget / next_action）；Control API 的 schema 截断/校验、256 KiB payload 超限，以及 handler `503/500` 平台失败返回字段级 `repair`。鉴权/权限错误仍保持裸永久错误。未完成：Completion Gate 按拒绝生成 nudge、durable proposal/receipt/settlement、Plan/Capability Pack、Artifact-first 投影、插件失败修复准入与跨任务经验闭环。长期设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md) |
 
 ### 11.1 长期方向：可信执行内核与插件组合工作流（#446）
 
@@ -347,7 +347,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 所有插件提案、Plan、Artifact 与验证操作都必须统一区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`。可修正错误必须返回脱敏、字段级 `RepairFeedback`，在同一 Session 内允许模型依据 expected、当前状态、已接受 effects 和剩余预算修正；预算耗尽后显式进入 `blocked` / `needs_human`。`accepted` 必须有 durable receipt；现有 `job_attempt_effects` 的 `effect_pending`、`unknown` 与 `replay_policy=never` 仍是未知副作用的权威边界，禁止自动猜测重放。
 
-详细协议、插件准入、失败→修复→接受闭环、crash matrix 和分阶段迁移见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。本文是长期设计方向，未改变当前 as-built 的固定 Job 状态机、Finding/SARIF 写入路径或 schema。
+Phase 1 已把 `RepairFeedback` 契约接到 Control API 的 schema/字节约束路径；Hub Plan、Verify、Runtime Adapter Completion Gate 与 durable receipt 仍按后继阶段推进。详细协议、插件准入、失败→修复→接受闭环、crash matrix 和分阶段迁移见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。本文未改变当前 as-built 的固定 Job 状态机、Finding/SARIF 写入路径或 schema。
 
 ## 12. 仓库地图
 
@@ -368,7 +368,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 1. **D1 默认拒绝**：每个工具 `additionalProperties: false`；未知字段返回 `unknown_field`，不得 strip 后部分落库。
 2. **D2 标识符标准形态**：节点/边只认当前画布 `referableIds` 中的 canonical UUID；Finding 绑定只认数据库 Finding UUID；角色只认本轮 `list_available_roles`；运行镜像只认本轮 `list_available_runtime_images` 的市场 `image_key`；未来路径工具只认白名单前缀。
 3. **D3 通道不可污染**：语义事件只能由按 Job 授权的平台 API 结构化提交；Agent 不能用 shell 或 `.deepsonar/control-*` 文件模拟队列，也不能猜测管理 API；脏行告警后不得丢弃后续合法事件。
-4. **D4 错误形态**：拒绝返回稳定 `error_code` + 可读消息；禁止把 PostgreSQL/`JSON.parse` 堆栈作为唯一结果；禁止 API 先报成功、Scheduler 后静默失败。
+4. **D4 错误形态**：拒绝返回稳定 `error_code` + 可读消息 + 可修正时的 `RepairFeedback`；禁止把 PostgreSQL/`JSON.parse` 堆栈作为唯一结果；禁止 API 先报成功、Scheduler 后静默失败。`observed_shape` 只保留类型/长度/计数，不得回显凭据或不可信原文。Handler `details` 只允许白名单字段，且必须在规范信封之前合并，不得覆盖 `error` / `error_code` / `retryable` / `repair`。
 5. **D5 单源契约**：`shared-types` Zod schema 生成平台 operation 输入契约；每个 operation 必须有合法/非法夹具、宿主重验和业务前置条件测试。
 6. **D6 纵深校验**：API 同源 schema → runtime handler → ingest/apply transaction 三层均须拒绝；任何层缺失都不算完成。
 

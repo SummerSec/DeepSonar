@@ -1,4 +1,4 @@
-import { ControlToolInputSchemasJson } from "@deepsonar/shared-types";
+import { ControlToolInputSchemasJson, RepairFeedbackJsonSchema } from "@deepsonar/shared-types";
 
 /** JSON Schema shape used by the dynamic Job-scoped OpenAPI projection. */
 export type ControlJsonSchema = Record<string, unknown>;
@@ -169,13 +169,14 @@ const OPENAPI_PATH = `${JOB_PATH}/openapi.json`;
 function errorSchema() {
   return {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true,
     properties: {
       accepted: { type: "boolean" },
       error: { type: "string" },
       error_code: { type: "string" },
       retryable: { type: "boolean" },
       path: { type: "string" },
+      repair: RepairFeedbackJsonSchema,
     },
     required: ["error"],
   };
@@ -345,6 +346,7 @@ export function buildPlatformOpenApiDocument(input: {
           "409": { description: "Idempotency key conflicts or Job is no longer active", content: { "application/json": { schema: errorSchema() } } },
           "422": { description: "Scheduler semantic validation rejected the operation", content: { "application/json": { schema: errorSchema() } } },
           "429": { description: "Scheduler semantic-event budget is temporarily exhausted", content: { "application/json": { schema: errorSchema() } } },
+          "500": { description: "Runtime handler failed without a business rejection", content: { "application/json": { schema: errorSchema() } } },
           "503": { description: "Runtime handler is not registered", content: { "application/json": { schema: errorSchema() } } },
         },
       },
