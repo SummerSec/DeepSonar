@@ -4,39 +4,76 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-12
+
 ### 新增
 
-- 语义去重与相对优先级与漏洞确认分离（#448）：报告前有界批次聚类、canonical anchor 增量比较、canonical 集合 `priority_score`；写入 `finding_research*`（schema v48），不改 `verify_status` / severity / 报告门禁。失败显式记 run 并保留候选。只读 `GET /canvases/:id/finding-research`，列表/详情分列展示验证、严重度、重复关系与研究优先级。
-- Capability Pack 第一刀（#447）：`deepsonar.capability-pack/v1` Manifest、Job 级 list/search/describe/validate/preview，以及 RoleConfig 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`，不另建 envelope。
-- 质量指标与 Hub 回放基线（#445 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。项目级 token 必须匹配路径 `:id`，跨项目读 quality/replay 返回 `PROJECT_MISMATCH`。不改变 Hub 决策，不写入经验。
-- Artifact 成为内部写入真相（#444 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。
-- #446 Phase 1：`packages/shared-types` 增加版本化 `RepairFeedback`（`model_correctable` / `transient_retryable` / `unknown_external_effect` / `permanent_failure`）。Control API 对 schema 截断/校验与 256 KiB 语义 payload 超限返回字段级 `repair`（expected / observed_shape / remaining_budget / next_action），不再只回 `Platform operation was rejected`。Handler `details` 只保留白名单字段，且不得覆盖 `error` / `error_code` / `retryable` / `repair`。
-- 模型主导执行协议 Phase 1（#443）：`packages/shared-types` 增加版本化 `Plan` / `PlanTask` / `CompletionPolicy` / `PlanResult`。Job 控制 API 新增 `submit_plan` / `submit_plan_result`（`continue|complete|blocked|needs_human`），经既有 capability token 与事件事务落库。Scheduler 在 `jobs.payload_json.plan_protocol` 审计计划原文、裁剪结果、执行结果和终止原因。Hub 行为不变；每个 Intent 适配为一个 PlanTask。本阶段不派发 Worker，也不改收敛门。
-- 沙箱执行面节点化 P0（#415）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
+- 模型主导执行协议 Phase 1（#443 / #458）：`packages/shared-types` 增加版本化 `Plan` / `PlanTask` / `CompletionPolicy` / `PlanResult`。Job 控制 API 新增 `submit_plan` / `submit_plan_result`（`continue|complete|blocked|needs_human`），经既有 capability token 与事件事务落库。Scheduler 在 `jobs.payload_json.plan_protocol` 审计计划原文、裁剪结果、执行结果和终止原因。Hub 行为不变；每个 Intent 适配为一个 PlanTask。本阶段不派发 Worker，也不改收敛门。
+- Artifact 成为内部写入真相（#444 / #455 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`（schema v47）；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。
+- 质量指标与 Hub 回放基线（#445 / #456 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。项目级 token 必须匹配路径 `:id`，跨项目读 quality/replay 返回 `PROJECT_MISMATCH`。不改变 Hub 决策，不写入经验。
+- RepairFeedback 协议脚手架（#446 / #453 Phase 1）：`packages/shared-types` 增加版本化 `RepairFeedback`（`model_correctable` / `transient_retryable` / `unknown_external_effect` / `permanent_failure`）。Control API 对 schema 截断/校验与 256 KiB 语义 payload 超限返回字段级 `repair`（expected / observed_shape / remaining_budget / next_action），不再只回 `Platform operation was rejected`。Handler `details` 只保留白名单字段，且不得覆盖 `error` / `error_code` / `retryable` / `repair`。
+- Capability Pack 第一刀（#447 / #459）：`deepsonar.capability-pack/v1` Manifest、Job 级 list/search/describe/validate/preview，以及 RoleConfig 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`，不另建 envelope。
+- 语义去重与相对优先级与漏洞确认分离（#448 / #460）：报告前有界批次聚类、canonical anchor 增量比较、canonical 集合 `priority_score`；写入 `finding_research*`（schema v48），不改 `verify_status` / severity / 报告门禁。失败显式记 run 并保留候选。只读 `GET /canvases/:id/finding-research`，列表/详情分列展示验证、严重度、重复关系与研究优先级。
+- 任务工作台默认决策总览（#449 / #451 / #454 / #457）：任务详情从默认过程画布改为统一工作台壳层，六个一级视图（总览、研究地图、事实证据、任务发现、任务运行、报告），首次打开默认「总览」。Header 展示执行 / 认知 / 交付状态线；总览从前端投影结论、证据缺口、待决事项与下一步 Action。Job / Finding 错误串投影为只读 `RepairFeedback` 四类；过程画布保留为高级审计入口。
+- 新增可持久化的 `open-kritt` 亮色主题（#450 / #452）：暖白画布 + 珊瑚橙强调色，写入 `localStorage`；沿用现有主题选择器与 CSS token，不改其他主题。Finding / Job 严重性与运行状态继续用独立语义色。
 
 ### 修复
 
-- Capability Pack 发现以上界为 Job 冻结 selector + content hash；源目录在 Job 创建后变更不能扩大或改写可见集合。过长 selector 不再写入 `RepairFeedback.path`（#447 follow-up）。
+- Capability Pack 发现以上界为 Job 冻结 selector + content hash；源目录在 Job 创建后变更不能扩大或改写可见集合。过长 selector 不再写入 `RepairFeedback.path`（#447 / #462）。
 - Finding research 的 emit/report 挂钩用 savepoint 隔离持久化失败：研究 SQL 或失败账本写入出错只回滚 savepoint，外层 Finding / 报告事务继续提交（#448）。
-- Worker 派发 claim 改为单事务选节点 + 预留 `worker_sandbox_leases` 占位，并写入 `last_dispatch_at`；并发 provision 不能超过节点 `max_sandboxes`。远端 create 失败释放占位，成功则把占位改成真实 sandbox id。去掉 claim 失败后再 `pickRoundRobinWorker` 且不记账的 fallback（#434）。
-- Worker 沙箱租约在正常 destroy 时也会释放（#431 / #416 回归）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。
-- Worker 注册/心跳不再允许 bootstrap token 静默改写 endpoint 或抢占已有 `node_id`（含保留的 `local`）：远程注册拒绝保留 id 与同名接管，须管理员 `DELETE /workers/:id` 后才能 reclaim；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址，并可选用 CIDR/hostname allowlist；注册与拒绝的心跳写入审计并按 IP 限流；心跳不能改 kind/所有权。本地 seed 在 kind/endpoint 被改写后轮换 node token，劫持无法跨 Scheduler 重启存活（#433）。
-- 项目导出在活动 Job 下不再撕裂快照（#436）：数据收集走 `REPEATABLE READ` 只读事务；`project_full` 拒绝 `allow_active_jobs`，仅证据归档 / 自定义事件模块可显式允许；`credentials.mode=excluded` 不再把凭据身份写入 role-configs；events 达上限时标记 `counts.events_truncated` 与 manifest warning；导入对缺少 Job 的 Finding 记 warning。
-- 自定义项目导出模块校验：未知 / 原型链 selector（`constructor`/`toString` 等）返回 400 并列明 `rejected`，不再静默丢弃或 500；`reports`/`artifacts` 从未实现收集，已从导出契约移除（#435）。
-- OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
-- Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426）。
+- timeout / orphan 在没有效果账本、或账本仍有 `unknown` / `effect_pending` 时不再标成可安全重试：工作台投影为 `unknown_effect`，须确认；仅显式 `replay_safe: true` 且无未决效果才允许 `retry_same_session`（#461）。
+- Worker 派发 claim 改为单事务选节点 + 预留 `worker_sandbox_leases` 占位，并写入 `last_dispatch_at`；并发 provision 不能超过节点 `max_sandboxes`。远端 create 失败释放占位，成功则把占位改成真实 sandbox id。去掉 claim 失败后再 `pickRoundRobinWorker` 且不记账的 fallback（#434 / #442）。
+- Worker 沙箱租约在正常 destroy 时也会释放（#431 / #440）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。
+- 项目导出在活动 Job 下不再撕裂快照（#436 / #439）：数据收集走 `REPEATABLE READ` 只读事务；`project_full` 拒绝 `allow_active_jobs`，仅证据归档 / 自定义事件模块可显式允许；`credentials.mode=excluded` 不再把凭据身份写入 role-configs；events 达上限时标记 `counts.events_truncated` 与 manifest warning；导入对缺少 Job 的 Finding 记 warning。
+- 自定义项目导出模块校验：未知 / 原型链 selector（`constructor`/`toString` 等）返回 400 并列明 `rejected`，不再静默丢弃或 500；`reports`/`artifacts` 从未实现收集，已从导出契约移除（#435 / #438）。
+
+### 安全
+
+- Worker 注册/心跳不再允许 bootstrap token 静默改写 endpoint 或抢占已有 `node_id`（含保留的 `local`）：远程注册拒绝保留 id 与同名接管，须管理员 `DELETE /workers/:id` 后才能 reclaim；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址，并可选用 CIDR/hostname allowlist；注册与拒绝的心跳写入审计并按 IP 限流；心跳不能改 kind/所有权。本地 seed 在 kind/endpoint 被改写后轮换 node token，劫持无法跨 Scheduler 重启存活（#433 / #441）。
+- OpenSandbox 仅在 Kubernetes create 请求 `extensions["bootstrap.execd.isolation"]=enable`（#427 / #432 / #437）：Docker 不带该 extension，避免主沙箱容器被授予 `CAP_SYS_ADMIN` 与 unconfined seccomp/apparmor；K8s/Kata 仍需 execd uid gate 才能写 `/etc/hosts`。SDK client 不再强制覆盖该字段。相对 v0.2.11「始终带 isolation」收紧。
 
 ### 变更
 
-- Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。
+- 回写 as-built 架构与 Agent 指南（#463）：`DESIGN.md` / `docs/ARCHITECTURE.md` / `AGENTS.md` 对齐 Plan、Artifact、质量指标、RepairFeedback、Capability Pack 与任务工作台；长期插件化方向见 `docs/AI_NATIVE_TRUSTED_KERNEL.md`（#446）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v46 → v48。v47 新增 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations` 与 `findings.artifact_id`；v48 新增 `finding_research_runs` / `finding_dedupe_clusters` / `finding_research`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- Plan / Capability Pack / 质量指标 / RepairFeedback 均为 Phase 1：不改 Hub 收敛门，也不自动派发新 Worker。
+- 任务工作台 timeout/orphan 默认须确认后再重试；无效果账本时不再给出无条件 `retry_same_session`。
+- 相对 v0.2.11：Docker 路径不再请求 execd isolation；仅 Kubernetes/Kata 需要该 extension。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，运行时 catalog 可复用已有不可变 digest，平台镜像仍打 `0.3.1` tag。
+
+## [0.2.11] - 2026-09-11
+
+### 新增
+
+- 沙箱执行面节点化 P0（#415 / #416）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
+- 项目导出支持自定义模块（#411 / #412）：可按模块组合导出；`ACTIVE_JOBS` 门槛收紧到真正需要一致性的路径（`project_full` / 含 events 的自定义），findings/tasks 等允许在活动 Job 下导出。
 
 ### 修复
 
-- OpenSandbox 仅在 Kubernetes create 请求 `extensions["bootstrap.execd.isolation"]=enable`（#427 / #432）：Docker 不带该 extension，避免主沙箱容器被授予 `CAP_SYS_ADMIN` 与 unconfined seccomp/apparmor；K8s/Kata 仍需 execd uid gate 才能写 `/etc/hosts`。SDK client 不再强制覆盖该字段。
-- 拆开平台版本与 Agent 运行时镜像版本（#417）：GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission 仍跟 `vX.Y.Z`；运行时产品只在指纹输入变化时升版本。指纹未变不新增 catalog version 行，也不对 ACR/GHCR/Docker Hub 打新的平台 version tag，继续指向已有不可变 digest。
+- OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
+- Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426 / #429）。
+- OpenSandbox 创建沙箱时始终带 `extensions["bootstrap.execd.isolation"]=enable`（#427）：execd 指定 uid/gid（含 Kubernetes Gateway `/etc/hosts` 注入）才能通过 bwrap gate；不再依赖 Job 快照或新的平台开关。
+- Release 指纹未变时复用上一版 catalog 记录，不再拿 `src-*` 缓存 digest 去对已发布 index digest（build-push+provenance 的 index 与 imagetools 选出的干净 index 不同）。
+- Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423 / #424）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。
+
+### 变更
+
+- 拆开平台版本与 Agent 运行时镜像版本（#417 / #418）：GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission 仍跟 `vX.Y.Z`；运行时产品只在指纹输入变化时升版本。指纹未变不新增 catalog version 行，也不对 ACR/GHCR/Docker Hub 打新的平台 version tag，继续指向已有不可变 digest。
 - 平台清单声明 `min_runtime_image`（全局下限 + 可选 per-key）。选中的官方 trusted 版本低于下限时，预检 / 建任务 / Job 冻结前 fail closed，稳定错误码 `RUNTIME_IMAGE_BELOW_PLATFORM_MIN`；已冻结 Job 快照不改写。
 - `deploy` 的平台镜像仍拉 `*:$IMAGE_TAG`（来自 catalog `platform_version`）；运行时镜像按 catalog 真实 version/digest 拉取，不再假设平台 `0.2.10` 等于 `kali:0.2.10`。
-- 任务工作台「创建」改为本地日历日 `YYYY-MM-DD`，不再显示「N 分钟/天前」；完整时刻仍在 tooltip（#419）。
+- 任务工作台「创建」改为本地日历日 `YYYY-MM-DD`，不再显示「N 分钟/天前」；完整时刻仍在 tooltip（#419 / #421）。
+- 统一 OpenSandbox 宿主端点缺省为 `127.0.0.1:18081`（#413 / #414），与标准部署宿主端口一致；同步 `.env.example`、compose 映射与相关测试。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v45 → v46。v46 新增 `worker_nodes` 与 `worker_sandbox_leases`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 仍跑 `v0.2.10` 的调度器在 Windows Docker Desktop、Podman egress sidecar、gateway sidecar 重建后、以及 execd uid gate 上会继续踩上述 provision 失败。升级调度器 / web / image-admission 镜像后才会生效。
+- OpenSandbox 宿主直连缺省端口从 `8080` 改为 `18081`。已有 `deploy/.env` 若仍写旧端口，需与 compose 映射一并改掉。
+- 单机 `up real` 仍种子 `local` worker；远程执行面用 `./deploy/deploy.sh up worker-join --control-plane …`。心跳超时只停止新派发，不自动开新 attempt。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，运行时 catalog 可复用已有不可变 digest，平台镜像仍打 `0.2.11` tag。
 
 ## [0.2.10] - 2026-09-07
 
@@ -699,6 +736,8 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.3.1]: https://github.com/SummerSec/DeepSonar/compare/v0.2.11...v0.3.1
+[0.2.11]: https://github.com/SummerSec/DeepSonar/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/SummerSec/DeepSonar/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/SummerSec/DeepSonar/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/SummerSec/DeepSonar/compare/v0.2.7...v0.2.8
