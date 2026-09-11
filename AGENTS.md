@@ -1,139 +1,178 @@
 # AGENTS.md
 
-本文件是仓库内编码 Agent 的工作说明。所有 Agent 均应先按下列顺序核对设计与代码事实，不依赖特定 CLI 或模型。
+本文件是 DeepSonar 仓库内编码 Agent 的工作说明。它描述协作方式、事实入口和不可绕过的工程边界；细节冲突时以代码、`database/schema.sql`、OpenAPI 和测试为准。
 
-DeepSonar（深流循迹）：完整的 Loop Graph 工程平台。沙箱调度层安全执行多类 Agent（探索 → 分析 → 验证 → 反馈），Agent 只提「提案」，系统负责真正下发与记账，让复杂执行持续收敛。
+## 角色分工
 
-**设计入口（必读顺序）**
+主 Agent（Sol）负责理解目标、拆解任务、架构取舍、验收、合并结果和最终答复。具体、清晰、可重复的执行任务默认交给 `luna_worker`（`~/.codex/agents/luna-worker.toml`，`gpt-5.6-luna`，reasoning `max`）。
 
-1. **`DESIGN.md`（仓库根）** — 当前 as-built 设计摘要、实体模型、Hub 闭环、配置覆盖、已知演进（Issues）；**改功能/提方案先读它**。
-2. **`docs/ARCHITECTURE.md`** — 完整架构、威胁建模、存储与状态机细则；与 `DESIGN.md` 冲突时以代码 + `DESIGN.md` 为准，并应回写 `DESIGN.md`。
-3. **`docs/README.md`** — 专题文档索引与 **as-built / 历史方案 / 进行中** 状态表（大量 `*_PLAN.md` / `TODO_*.md` 主路径已落地，勿当未实现清单）。
-4. 开放演进以 `DESIGN.md` §11 与代码为准（GitHub Issues 可能为空）。
+委派任务必须自包含，写明：
 
-长期演进设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。当前方向是“最小可信执行内核 + 可组合插件”：模型可以动态组合 Plan、Capability、Artifact、Evidence 和 Projection，但沙箱、权限、资源预算、Job/Attempt、幂等、effect settlement、审计和未知外部效果仍由内核掌握。插件上线前必须验证“错误反馈 → 模型修正 → 重新验证 → durable acceptance”，不能只验证插件能启动。
+1. 一句话目标；
+2. 范围内与范围外路径；
+3. 相关符号或入口；
+4. 风格、测试和不可修改区域；
+5. 期望的文件、摘要和验证结果。
+
+子 Agent 返回后不能盲信摘要。主 Agent 必须检查目标是否完成、抽查关键 diff、运行适合的验证，并在必要时重新派发更窄的任务。不同 Agent 不得同时编辑同一组文件。破坏性操作、生产凭据和不可逆外部操作留在主线程；秘密不得进入 prompt、日志或 commit。
+
+## 设计事实入口
+
+开始改动前按以下顺序阅读：
+
+1. [`DESIGN.md`](DESIGN.md)：当前 as-built 模型、内核边界、Hub、Capability Pack、Job、Verify、Research、Report、UI 和实现硬约束；
+2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：完整架构、威胁模型、存储和状态机细节；
+3. [`docs/README.md`](docs/README.md)：专题文档的 as-built / 历史 / 进行中状态；
+4. [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)：长期 AI-native 可信内核、插件准入、RepairFeedback、Receipt 和 Crash Matrix；
+5. 代码、`database/schema.sql`、OpenAPI 和测试。
+
+历史 `*_PLAN.md`、旧 Issue 或角色名称都不能单独证明能力尚未落地。改完结构性设计或安全边界，必须同步更新 `DESIGN.md`、相关专题文档和状态索引。`CLAUDE.md` 应与本文件保持同步。
 
 ## 常用命令
 
 ```bash
-pnpm db:up            # 起独立开发库（deploy/docker-compose.yml，deepsonar/deepsonar@localhost:5432）
-pnpm db:up:deploy     # 改连 deploy 栈同一份 Postgres（deepsonar-postgres-1；与 db:up 互斥，都占 5432）
-pnpm db:rebuild       # 备份后按当前 schema.sql 重建并回填交集列（先 --plan，再 --apply）
-pnpm dev              # 调度器（tsx watch，端口 3100；空库自动套用 schema.sql 基线，版本不符拒绝启动）
-pnpm dev:web          # 前端（vite，5173；/api 代理到 3100）
-pnpm build            # 全 workspace tsc 构建
-pnpm typecheck        # 全 workspace 类型检查
+pnpm db:up
+pnpm db:up:deploy              # 与 db:up 互斥
+pnpm db:rebuild -- --plan
+pnpm db:rebuild -- --apply
+pnpm dev                       # Scheduler: http://127.0.0.1:3100
+pnpm dev:web                   # Web: http://127.0.0.1:5173
+pnpm build
+pnpm typecheck
 ```
 
-- **测试**：单元与集成测试主要使用 Node.js `node:test`，由 `tsx --test` 执行；根 `package.json` 的 `ci:unit:*`、`ci:integration:*`、`ci:test:*` 是当前可运行入口。`agent-harness/test-*` 还包含需调度器运行的 API 冒烟脚本，常用入口有 `ci:smoke:projects`、`ci:smoke:roles`、`ci:smoke:hub`、`ci:smoke:auth`、`ci:smoke:images` 和 `ci:smoke:control-api`。改动应按影响面选择脚本，不要只跑 `typecheck` 代替行为测试。
-- **沙箱镜像**：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`；Kali 专项镜像用 `deploy/Dockerfile.agent-kali-minimal`。镜像体积是 CI 硬门槛：base 使用 Node 22 Debian slim（匹配 Claude Code 的 Node 要求），重型工具只进专项镜像；Kali 版本无 metapackage/GUI，当前是 `test` 角色默认镜像且不要求项目 opt-in。`runtime-images.json` / `kali-minimal-runtime.json` 是版本、来源、SHA256 与大小预算定义，`pnpm ci:images` 检查漂移。
-- **运行模式**：默认 `AGENT_MODE=real`（OpenSandbox 真实沙箱）。仅验证状态机时设 `AGENT_MODE=fake`（NoopRunner）。生产部署默认 `./deploy/deploy.sh up real pull`。
-- `.env` 放仓库根目录，调度器会自动加载（config.ts 内置无依赖解析器）。
-- **生产部署**：`deploy/` 含 scheduler/web/agent/image-admission/assets-helper/silo 等 Dockerfile、`docker-compose.prod.yml`（含备份与独立镜像准入 Worker）与 `deploy.sh`/`deploy.ps1`；`docker-compose.real.yml` 是本地真实沙箱联调覆盖层（`AGENT_MODE=real` + 挂 docker.sock）。核心 CI 在 `.github/workflows/ci.yml`（**PR 与 main 合并后**触发，功能分支每次 push 不再跑；main 上纯 `*.md`/`docs/`/`skills/` 跳过；可 `workflow_dispatch` 手动补跑；同 ref 并发会取消旧 run）；Chrome、ClickHouse、OpenHarmony 与 Mobile 专项 CI 分别在 `.github/workflows/chrome-runtime.yml` / `.github/workflows/clickhouse-runtime.yml` / `.github/workflows/openharmony-runtime.yml` / `.github/workflows/mobile-runtime.yml`，按自身 Dockerfile、配置/脚本、`.dockerignore`、共享 fingerprint/cache 机制或 workflow 变更触发；GHCR 制品发布在 `release.yml`。
-- **镜像发布 / 如何更新镜像**（`release.yml` + `agent-harness/image-build-fingerprint.mjs`）：
- 1. **改内容才会重建**：指纹 = schema version + Dockerfile + `.dockerignore` + 依赖路径 + build-args + platforms。GHCR 上存在 `src-<fingerprint>` 则 **跳过 docker build**。运行时产品（base/audit/kali/专项）指纹未变时 **不** 打新的平台 version tag、**不** 新增 catalog version 行，继续指向已有不可变 digest；scheduler/web/image-admission 仍打本次平台 version tag。
- 2. **常规更新步骤**：改对应 Dockerfile / `agent-harness/*-runtime.json` / OpenHarmony 脚本等 → 专项 workflow 先按路径过滤运行并通过 → 合并 main 且核心 CI 绿 → 推新 `v*` tag **或** Actions → `release` → Run workflow（`version`/`ref` 可留空：版本=最新 `v*`，源码=所选分支 HEAD）→ 看 job summary：`image build unchanged; version kept` = 未重建且运行时版本保持；否则全量构建并 pin 新 `src-*`。
- 3. **只升平台版本、运行时内容未变**：仍会出新 GitHub Release 与平台镜像 tag，但 Kali 等运行时产品保持原 version+digest（预期行为）。
-  4. **强制重建**（内容未变也要重编）：删除 GHCR 上该镜像的 `src-<fp>` 标签后再跑 release；或改任一指纹输入（Dockerfile 注释/`.dockerignore`/依赖文件）使 fingerprint 变化；算法语义变化时 bump `FINGERPRINT_SCHEMA_VERSION`。本地可先算指纹：`node agent-harness/image-build-fingerprint.mjs --preset deepsonar-kali-minimal`。
-  5. **改谁重建谁**（preset 见 `image-build-fingerprint.mjs`）：`deepsonar-base`/`audit` ← `Dockerfile.agent` + runtime-images；`kali-minimal` ← Kali Dockerfile + kali-minimal-runtime；`scheduler`/`web`/`image-admission` ← 各自 Dockerfile 与 COPY 进镜像的源码；`assets-helper` ← `Dockerfile.assets-helper`；`silo` ← `Dockerfile.silo`；`openharmony-*` / `chrome-*` / `clickhouse-*` / `mobile` ← 对应 Dockerfile/配置/脚本 + **base 的 digest**（base 变了专项镜像会跟着重编）。
-  6. **发布通道**：ACR → GHCR → Docker Hub 分仓 `imagetools`（禁止一次混仓）；Docker Hub 仅当 `DOCKERHUB_USERNAME`+`DOCKERHUB_TOKEN` 齐全；缺凭据跳过该通道并记 unavailable，已配置却失败则 fail closed。多架构 index 须写镜像专属 annotations。
-  7. **发布纪律**：main CI 全绿后再打新 `v*`；禁止覆盖旧 tag / 改已发布 digest 的说明；清单 `runtime-image-registry.json` 随 Release 回写默认分支。细节见 `docs/RELEASE_RUNTIME_IMAGES.md`。
+`.env` 放在仓库根目录并由 Scheduler 加载。`AGENT_MODE=fake` 用于无模型凭据的状态机联调；`AGENT_MODE=real` 使用 OpenSandbox。生产 Compose 通过 `deploy/deploy.sh` 或 `deploy/deploy.ps1` 管理，默认使用已发布的不可变镜像。
 
-## 架构要点（跨文件才能看懂的部分）
+测试入口按改动范围选择，不能以 typecheck 代替行为测试：
 
-### 核心纪律
+```bash
+pnpm ci:unit:capability-pack
+pnpm ci:unit:finding-research
+pnpm ci:unit:canvas-facts
+pnpm ci:unit:web-facts
+pnpm ci:integration:finding-research
+pnpm ci:integration:platform-api
+pnpm ci:smoke:control-api
+pnpm ci:smoke:hub
+pnpm ci:images
+```
 
-> **本地库 = 唯一真相；画布 = 过程真相；沙箱 = 执行真相；调度器 = 唯一有副作用的执行者。** 默认路径是 Web 直接建项目/任务。设计总览见根目录 **`DESIGN.md`**。
+全量脚本见根目录 `package.json`。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
 
-- **Agent 只提案，不直接产生副作用**：真实 Job 注入静态 `deepsonar-control` Skill，Agent 使用短期 capability token 调用按冻结 operation allowlist 投影的 Job 级 HTTP API；三类治理 CLI 均不注入控制 MCP，也不在失败后回退其它控制通道。长期方向允许模型通过受治理插件动态组合 Plan、Capability、Artifact、Evidence 和 Projection，但所有权限、预算、幂等、effect settlement、审计与未知外部效果仍由可信内核掌握；是否派生 `verify_finding`/report 与最终状态副作用仍须经过内核契约。
-- **可修正失败必须回到模型闭环**：控制输入、插件调用和计划提交的 schema/引用/状态错误应返回稳定错误码、字段路径、expected shape、脱敏 observed shape、当前状态引用、已接受效果、修复次数/剩余预算与下一步动作；模型可在同一会话修正并重新提交。瞬态 provider/网络/容器错误走有界恢复，未知外部效果禁止自动重放，权限/凭据/快照/版本错误 fail closed。`accepted` 必须表示 durable receipt，不得只表示进程内存暂存。
-- **Fact-first `verify_finding`（#367 follow-up / #399）**：review/test/worker 只能提交结构化 Fact；Scheduler 必须校验 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual`、`outcome` 及相互冲突。`verify_finding` 只消费通过校验的 Fact 集合，不重读 maker 结论或原始 artifacts；足够且一致的 Fact 可直接收口/确认，证据不足、冲突或版本不匹配则保持未确认并回弹 Hub 补证。
-- **Job 状态机**：`pending → claimed → provisioning → running → succeeded/failed/timeout/cancelled/orphan`。Lease + Reaper（`reaper.ts`）兜底防悬挂——超时与孤儿由调度器判定，**不信任 Agent 自报**。状态迁移统一走 `core.ts` 的 `transitionJob`。
-- **幂等**：`events (job_id, event_id)` 唯一约束；`findings (project_id, fingerprint)` 唯一约束用于派生去重；事件处理重复重放无副作用。
-- **调度唤醒是事件驱动**：建 job 后 `pg_notify('deepsonar_jobs')` 唤醒 dispatcher；`DEEPSONAR_DISPATCH_POLL_SEC` 默认 0（关闭轮询）。
-- **无独立 `tasks` 表**：任务 = `canvases`；列表 `GET /projects/:id/canvases`。
-- **读图注入**：`graph.ts` `buildGraphSnapshot` 按 `GraphScope` 投影 fact/finding 等 YAML 注入 Hub/Worker，并有整图字符预算（#30）；细节见 `DESIGN.md` §7。`job` 节点不进 YAML。
-- **任务是否在跑**：以 `active_count`（活跃 Job）为准，勿用 `last_job_status=succeeded` 当作任务已完成（#46）。
-- **配置覆盖**：**Job > 角色/项目 > 平台 > env 引导**；Job 只认创建时冻结的 `agent_snapshot_json`。
-- **长期插件化方向（#446）**：阅读 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。可信内核永久拥有沙箱、capability、租约、资源、幂等、证据来源、Proposal/Receipt/Settlement、审计与未知外部效果处理；模型通过插件组合 `Plan / Capability / Artifact / Evidence / Evaluation / Projection`。插件化不得建立第二控制通道或绕过现有 Job/Attempt/effect 边界。
-- **统一失败修复契约**：插件和平台操作必须能区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`。可修正错误返回脱敏、字段级 `RepairFeedback`（`packages/shared-types`；Control API 的 schema/字节超限路径已接线），让同一 Session 在 repair budget 内修正并重试；`accepted` 必须对应 durable receipt，未知效果不得自动重放，预算耗尽必须落为 `blocked` / `needs_human`。
+## 总体架构纪律
 
-### 调度器（`apps/scheduler/src/`，Fastify + postgres.js）
+DeepSonar 是“最小可信执行内核 + 可组合能力”：
 
-| 文件 | 职责 |
-|------|------|
-| `index.ts` | 启动：migrate（空库套基线）→ `reconcileOnBoot` → 路由 → dispatcher/reaper 两个后台循环 |
-| `dispatcher.ts` | 领取 pending job（全局/每项目并发上限，原子 claim）→ provision → run |
-| `core.ts` | Scheduler composition root：共享规则、Job 创建/终态编排，并组装各领域；领域实现从各自模块导入，不经 core 再导出 |
-| `domains/*` | Job lifecycle、event ingestion、Hub、Finding verification、Report convergence、runtime snapshot 及各 HTTP API 的领域入口；语义事件副作用归 `event-ingestion/side-effects.ts` |
-| `executor-real.ts` | 真实 agent 执行：按 `agent_snapshot_json` 冻结快照决定 provider/model/env/prompt |
-| `reconcile.ts` | 重启对账 DB↔docker：孤儿容器强删、死在 provision 途中的 job 重置回 pending、running → orphan |
-| `graph.ts` | fact-intent 二分图 → hub prompt 用 YAML；agent 输出结构化解析 |
-| `routes.ts` | 只安装共享 auth/project-scope hook、Gateway，并组装 `domains/*/routes.ts` registrar；不承载业务 handler |
-| `auth.ts` / `users.ts` | 双轨鉴权：服务/自动化用 API Token（库中只存 sha256），人用用户名密码 + 会话 Token（scrypt，角色 admin/operator/viewer，无用户时 `/auth/bootstrap` 引导）；跨回环部署须 `DEEPSONAR_AUTH_REQUIRED=true` |
-| `credentials.ts` / `audit.ts` / `credential-test.ts` | Provider 凭据库 / append-only 审计（凭据明文永不入审计）/ 凭据连通性测试 |
-| `gateway.ts` | Model Gateway（§6.3）：沙箱持短期单 Job token 经 `/gateway` 访问上游 LLM，不持长期 Provider Key |
-| `domains/platform-api/` | Job 级控制 API、短期 capability token、按冻结权限投影的 capabilities/OpenAPI；真实 Job 的唯一控制入口 |
-| `skill-sources.ts` | Git 托管 skill/command 仓库的浅克隆同步与 catalog 缓存 |
-| `stream-bus.ts` | WS 实时流（前端 `/api` 代理 ws） |
-| `evidence.ts` | 运行证据冷存储：OTLP/NDJSON 按 job 队列化写盘 + gzip |
-| `platform-tools.ts` | 注入 Hub/Worker 的平台工具 usage 文本（`list_available_roles` 等，工具说明的单源） |
-| `transfer/` | `.deepsonarpack` 项目数据导入导出：ZIP + manifest + checksums.sha256，按模块/预设选择，worker 异步执行，导入前 sanitize |
-| `openapi.ts` / `metrics.ts` | OpenAPI 文档 / Prometheus 指标 |
+> PostgreSQL 是管理真相，Canvas 是过程真相，Sandbox/Evidence 是执行真相，Scheduler 是唯一有副作用的执行者。
 
-### Hub 循环（Cairn 式图语义，§8.3）
+### 内核拥有的边界
 
-画布是 **fact-intent 二分图**：Hub 可下发的角色 agent（explore/analyze/review/test/code/audit）只把发现写成 fact 或 Finding 节点；角色 job `done` → `finalizeJob` 同事务触发 `hub_reason` job 读整图 YAML 决策下一步 intent。Hub 的 intent 必须携带完整 `prompt`，直接作为 Worker CLI 的 input 注入。`verify_finding` 与 `report` 是调度器专用系统角色，Hub 不可下发。**Hub 轮次由事件触发，不靠定时轮询**（任务本身可设置 `scheduled_start_at`），单画布同一时间最多一个活跃 hub，`maxHubRounds` 防失控。角色注册表在 `agent_roles`，运行配置在全局/项目 `role_configs`。
+内核永久拥有沙箱、网络、凭据、镜像 digest、Job/Attempt 生命周期、lease、并发和资源预算、capability token、幂等、Evidence 来源、Proposal/Receipt/Settlement、审计、Reaper、未知外部效果和资源清理。模型和插件不能直接修改数据库、容器、凭据、Job 快照、镜像准入、权限或终态。
 
-### 运行时（`packages/runtime-sandbox/`）
+现有 `explore`、`analyze`、`review`、`test`、`code`、`audit` 是内置 capability pack 的默认组合。新增业务能力优先做 Pack，不增加新的固定角色分支；Pack 必须使用现有 Job/Attempt/effect、Control API、沙箱和审计，不能建立第二执行通道。
 
-- `SandboxRunner` + `RuntimeHost` 是调度器与沙箱之间的唯一接口：`NoopRunner`（骨架）↔ `OpenSandboxRunner`（#162，绑定 `@alibaba-group/opensandbox@0.1.11`，server/execd/egress 只认 `name@sha256`）。三类 CLI adapter 只依赖内部 process/file 契约，不引用 provider SDK 类型。real 默认 OpenSandbox。重启后续跑走 `ensureHost`。K8s overlay 为 BatchSandbox + Kata（`deploy/opensandbox/config.k8s.toml`）。升级只改显式 pin，禁止 `latest`。换 provider 只动这个包。
-- 每个 Job 是全新沙箱，cwd 固定 `/workspace`。系统按冻结快照动态生成 `AGENTS.md` / `CLAUDE.md`、CLI 配置、plugin/skill/command/MCP/subagent 和环境变量；不预下载代码，Worker 自行决定如何获取目标。
-- **系统沙箱**：RoleConfig 的 `runtime_image_key=null` 表示不绑定市场镜像；Scheduler 仍使用受治理的最小 Base 底座，并在 Job 快照中冻结不可变 digest。Test/Audit 等专项角色才默认或显式绑定专项镜像。
-- **最新版本策略**：官方市场从 GitHub Release 的 `latest/runtime-image-registry.json` 同步并只提升最新版本；旧版本仅保留给显式 pin 与历史 Job，实际执行始终使用快照中的 digest，不使用可变 `latest`。
-- 运行镜像由 RoleConfig 的市场 key 选择，Job 创建时冻结已准入的 `name@sha256:digest`、工具清单哈希和扫描 ID；Dispatcher 不重新解析 tag。第三方镜像只能经 `apps/image-admission` 扫描、管理员批准、项目启用后执行，Agent/Hub/任务内容都不能指定镜像引用。
-- 项目只设定 Worker 默认是否出网，任务可覆盖；画布冻结最终 `allow_egress`。禁止出网时使用 Docker internal bridge，模型请求只能经 `deepsonar-gateway-proxy` 固定目标 sidecar 转发到调度器 `/gateway`。
-- 语义事件由短期 capability token 授权的 Job 级 HTTP API 提交，经共享 Zod 契约、宿主重验和摄入事务落库；**不落 Worker 可写控制文件，也不从普通 CLI 文本或伪造 MCP tool call 推断事件**。同一画布的新 Fact/Finding 仅对声明 `incrementalMessages` 的 CLI 通过 `Agent.attach(...).sendMessage(...)` 追加；终态后撤销 token 并销毁沙箱。
-- `env_keys` 白名单（`DEEPSONAR_ALLOWED_ENV_KEYS`，支持前缀通配）过滤 RoleConfig 下发变量；长期密钥不进快照或工作区。
-- 沙箱硬限制（cpu/memory/pids/cap-drop-all/no-new-privileges）在 config 的 `sandboxLimits`，0 仅限调试。
+### Capability Pack
 
-### 数据与迁移
+机器契约是 `deepsonar.capability-pack/v1`，源文件为 `packages/shared-types/src/capability-pack.ts`。Manifest 声明 id/version/scope/digest、inputs/outputs、`platform_tools`、网络权限、预算、失败策略和可选 evaluator。
 
-- **Schema**：`database/schema.sql` 是唯一基线（当前 v48，与 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 一致）。空库启动时套用基线；非空库只校验 `schema_meta.version == SCHEMA_VERSION` 与表结构，版本不符 fail closed。**无增量 ALTER 链**，改表 = 改基线 + bump 版本 + 重建库。已有数据用 `pnpm db:rebuild -- --apply`（备份 + 套最新基线 + 列交集回填），不走 Scheduler 启动自动升级。
-- **稳定区 vs 自由区**（§17.1）：状态机/幂等键/外键骨架进定列；"内容是什么"进 JSONB（`payload_json`、`config_json`、`body_json`、`raw_json`）。类型字段一律字符串，不用 Postgres enum。
-- **配置全落库**：角色运行配置三层为全局 `role_configs` → 项目 `role_configs` 覆盖 → `jobs.agent_snapshot_json` 建 Job 时冻结；无 RoleConfig 时也冻结平台缺省，Executor 不做其他回退。
-- **一任务一画布**：`canvases` 表按任务铸造，verify job 继承父审计 job 的画布。任务 `kind` 为 `standard` 或 `compose`：后者只能选择同项目 1–8 条当前已确认且 disposition 合法的 Finding，创建时冻结摘要并投影为只读种子节点；重试会重新校验源 Finding，失败则拒绝清空旧运行数据。
-- Finding schema 对齐 SARIF 2.1.0（§6.1）；events 表只放语义事件，原始事件流进冷存储 NDJSON。
+当前已落地的 Job 级只读发现 operation：
 
-### 前端（`apps/web/`，React 19 + @xyflow/react + elkjs + Tailwind 4）
+- `list_capabilities`
+- `search_capabilities`
+- `describe_capability`
+- `validate_composition`
+- `preview_materialization`
 
-- 只读渲染（`nodesDraggable=false`）；节点坐标由服务端 elkjs 布局算好落库，Agent 不能提案坐标。
-- 页面（`src/pages/`）：Dashboard、Projects、Tasks、TaskCanvas、Jobs、Findings、Agents、AgentMarketplace、RuntimeImages、PlatformSettings、ProjectData（导入导出）、ProjectUsage（项目账本）与 Login，经 `/api` 代理访问调度器。
-- Findings 按 GitHub Issues 范式管理：disposition 状态流转 + 评论，评论可触发 hub 继续分析。
+发现不是授权。Scheduler 必须用冻结 Job snapshot、项目 scope、当前 operation allowlist、镜像兼容性和网络策略重新校验。Pack 不能扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。Job 创建时冻结 selector、digest、模块内容 hash 和 missing modules；运行时物化不能把 Job 创建后的 source sync 当成新权限。当前发现接口会读取已信任 catalog，因此任何组合/物化改动都必须显式以冻结 selector/digest 为上限，直到这条边界完全由实现强制前，不得把目录结果直接当授权。
 
-## 开发时的注意事项
+任务级/会话级 Pack 生命周期、评估晋升和跨任务经验推荐属于后续阶段，不能在实现或文档中冒充 as-built。
 
-- **设计变更**：先对齐 `DESIGN.md`；结构性/安全相关再改 `docs/ARCHITECTURE.md`，并更新 `DESIGN.md` §11 与相关 Issue。
-- 全仓库 TypeScript ESM；`shared-types`（zod schema）是前后端/事件 payload 单源，改 schema 从这里改。
-- 新增 job 类型 = 字符串新值 +（如需真实执行）在 `agent_roles` 注册，无需迁移；dispatcher 的 `isRealType` 自动识别。
-- **新增 Agent CLI**：除 runtime adapter（`runtime-adapters.ts`）外，必须同步 **Session 归档**（`cli-session-adapters.ts`）与 **Job Session 查看器**（`apps/web/src/session-viewer/parseAgentSession.ts` + 测试）；保留下载原始文件。清单见 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md`「Session 归档 + Web 查看器」。
-- 改表 = 直接改 `database/schema.sql` + bump `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`，然后重建数据库；不写增量 ALTER、不留旧结构 fallback。已有库用 `pnpm db:rebuild`。
-- 被审计代码视为不可信输入（§9.1 威胁建模）：新增 Agent 可见的工具或下发内容时，检查 prompt injection 面与凭据边界。
-- 需要以程序化方式操作本平台（建项目/任务、查 Job/Finding、改 RoleConfig）时，用仓库自带 skill `skills/deepsonar-management/`（API Token + OpenAPI 驱动），不要手写 curl 猜接口。
-- RoleConfig `modules` 支持三类规范 selector：单模块 `"<source_id>:<module_id>"`、整插件 `"<source_id>:plugin:<plugin>"`、整来源 `"<source_id>:source:*"`；展开、冲突排除与最终内容 hash 由服务端 materializer 统一处理。
-- 实时流：`stream-bus` 只作非权威投递；短时 `POST /auth/ws-ticket` → `/ws?ticket=`（#38 已关）。补读只认本机 inflight `stream.ndjson` / evidence；未落盘或另一副本看不到文件须显式报告。多 Scheduler 副本不共享内存 bus。
-- Windows 探库：避免 PowerShell 弄坏 `node -e` 模板字符串；临时 `apps/scheduler/*.mjs` 跑完即删。
-- **硬编码链接**：禁止在源码、测试、文档示例中写死公网第三方/中转/个人域名（如 `ai.feei.cn`、`agentrouter.org`）。需要可运行的 URL 夹具时只用 `127.0.0.1` 或内网地址（RFC1918、Docker 内部主机名）；不要用公网域名冒充上游。产品内置的官方厂商默认端点（OpenAI / Anthropic / DeepSeek）与官方发行/包管理源除外。`CLAUDE.md` 与本文件同步（符号链接）。
+### Agent 只提案
+
+真实 Job 注入不可由 RoleConfig 同名覆盖的 `deepsonar-control` Skill。Agent 使用短期 Job capability token，通过 Job 级 HTTP API 提交 `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human` 和能力发现等 operation。语义事件不得来自普通文本、CLI 输出、伪造 MCP tool call、Shell 控制文件或管理 API 猜测；失败不得回退到另一套控制通道。
+
+Control API 必须经过 shared Zod schema、宿主 handler、event-ingestion/application transaction 三层校验。未知字段默认拒绝；错误要保持稳定 `error_code` 和人类可读消息。`accepted` 只能表示 Scheduler 已接收并建立可查询的 durable receipt 语义，不能表示模型已完成。
+
+### RepairFeedback
+
+可修正的 schema、引用、权限、状态和字节限制错误必须返回版本化 `RepairFeedback`。至少包括：
+
+- `category`：`model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`；
+- `code`、`operation`、字段 `path`、脱敏 `message`；
+- `expected`、类型/长度/计数形式的 `observed_shape`；
+- `current_state_ref`、`accepted_effects`、`idempotency_key`；
+- `proposal_revision`、`repair_attempt`、`remaining_budget`、`next_action`。
+
+反馈不能回显凭据、Provider 原文、完整不可信输入或内部堆栈。模型收到 `model_correctable` 后应重新读取能力目录或当前状态，用新的 revision/Idempotency-Key 修正；预算耗尽要明确进入 `blocked` 或 `needs_human`。瞬态错误有界恢复，权限/版本/快照错误 fail closed，未知外部效果禁止自动重放。
+
+### Artifact、Finding、Research 与 Report
+
+- Artifact 是版本化内部写入真相，保存 claims、evidence、relations 和 provenance；`emit_finding` 进入 Artifact 再投影 Finding。
+- Fact 是观察或验证证据，有自己的 `verification_status`；Finding 的 `verify_status` 和人的 `disposition` 是独立状态机。
+- Verify 只消费结构化 Fact、Artifact、Evidence 和独立 Evaluation，不从 maker 文本推断结论。
+- Finding Research 只做语义 cluster、canonical anchor、重复理由和相对 priority；不改 severity、verify 门、Fact 状态或报告收敛。Research 写失败必须显式记录，savepoint 不能回滚主 Finding/Report 写入。
+- Task/Finding Report 是冻结输入后的 Projection；相同输入幂等，输入变化追加版本；Projection 失败不能改写内部事实。
+
+### Job、Attempt 与恢复
+
+Job 状态由 Scheduler 判定：
+
+```text
+pending → claimed → provisioning → running
+                         ├→ waiting_human → pending
+                         └→ succeeded / failed / timeout / cancelled / orphan
+```
+
+每个 Job 领取创建 Scheduler-owned Attempt。外部效果先写 `job_attempt_effects` 的 `effect_pending`，之后写 settlement；`unknown` 或 `replay_policy=never` 不得自动重放。启动 reconcile 只有在“尚未开始且无效果”的准备阶段才可回到 pending；未知效果进入 orphan/对账路径。Lease、Reaper、取消、超时、迟到回调和容器清理必须幂等。
+
+### 配置、运行时和快照
+
+覆盖优先级固定为 **Job > 角色/项目 > 平台 > env 引导**。Job 只认创建期 `agent_snapshot_json`，Dispatcher 不在运行时回退最新 RoleConfig。快照冻结 CLI、Provider/model、运行时镜像 digest、工具清单、能力 selector/digest、Finding protocol、网络和 runtime knobs。
+
+当前新 Job 的治理 CLI 为 Claude Code、Pi、DSH；历史 Codex/OpenCode 只读归档不能作为新运行时默认。新增 CLI 必须同时实现 runtime adapter、Session archive adapter、Web viewer parser、测试和原始归档下载。
+
+镜像必须来自准入市场；第三方镜像先由 `apps/image-admission` 扫描、批准、启用并以不可变 digest 执行。Agent/Hub/任务内容不能提交任意 OCI 地址。真实模型请求经 Scheduler-owned Model Gateway，长期密钥不进入快照、沙箱或 evidence。
+
+## 数据库与迁移纪律
+
+- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v48）。
+- 空库启动时套用基线；非空库版本或结构不匹配时 fail closed。没有增量 ALTER 链。
+- 改表只能修改 schema 基线、bump `SCHEMA_VERSION`，再运行 `pnpm db:rebuild -- --plan` / `--apply` 并验证备份和列交集回填。
+- 稳定状态、幂等键、外键和权限骨架进定列；开放内容进 JSONB。类型字段使用字符串，不用 Postgres enum 锁死演进。
+- `events` 只保存语义事件；原始运行流进 evidence 冷存储；`stream-bus` 只作非权威实时投递。
+- API Token、Job token、Provider secret、Session artifact 和 `.deepsonarpack` 导入导出必须遵守各自的脱敏、权限和 provenance 规则。
+
+## Web 与交互事实
+
+前端是 React 19、`@xyflow/react`、elkjs、Tailwind 4。任务工作台固定提供总览、研究地图、事实证据、任务发现、任务运行和报告六个一级视图；URL 的 `tab` 是当前视图真相，后台刷新不能强制切换。
+
+Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue 风格展示 disposition、评论、验证追踪和证据链。Job 详情展示 Attempt、Session、过程流、工具调用、广播账本、人工消息和用量。`injected` 只表示写入 Agent 输入，不代表模型已读；ACK 必须来自显式受治理 operation。
+
+## 开发与变更检查清单
+
+提交实现前：
+
+1. 先确认 DESIGN、ARCHITECTURE、schema、OpenAPI 和现有测试的事实；
+2. 复用已有领域、shared-types、runtime sandbox 和成熟依赖；
+3. 设计权限、项目 scope、快照、幂等、失败反馈和未知效果路径；
+4. 若涉及结构性边界，更新 DESIGN、专题文档和状态表；
+5. 为合法、非法、重复、冲突、超时、取消、重启和跨项目输入补测试。
+
+提交验证后：
+
+- `git diff --check`；
+- 与改动面匹配的 `ci:unit:*` / `ci:integration:*` / `ci:smoke:*`；
+- 运行时/镜像改动执行 `pnpm ci:images` 和相应 sandbox smoke；
+- UI 改动执行对应 Web tests，并核对 URL、空态、错误态、刷新和权限边界；
+- 文档中的路径、命令、schema 版本、状态和链接重新检查。
 
 ## 工程原则
 
-1. **不保留向后兼容。** 过时实现直接删除，不加兼容层、不写增量 migration、不留双轨 fallback。
-2. **极简优先。** 选择满足当前需求的最小方案，尽量少引入概念、状态、配置、依赖和长期维护面；能删除就不新增一层。
-3. **先跑通最小端到端闭环。** 再按真实瓶颈扩展，不为假设中的未来做预防性抽象，也不为未完成的复杂度拆掉可运行主路径。
-4. **模块化且边界清楚。** 关注点分离，但不把简单流程切成只增加跳转成本的薄层。
-5. **不要让单文件无限膨胀。** 文件应围绕一个稳定职责组织；当一个文件出现多个变化原因、跨领域逻辑或持续增长的分支时，按领域与层次拆成可独立理解、测试和替换的模块。入口、composition root 和 route registrar 只负责组装，不堆业务实现；是否拆分看职责，不机械按行数切文件。
-6. **成熟开源产品优先。** 协议、解析、布局、鉴权、沙箱、存储等通用问题，默认选经过生产验证且仍有人维护的开源项目；站在巨人的肩膀上，不以自研替代品为目标。
-7. **复用顺序固定。** 先检查仓库现有依赖与平台能力，再调研成熟产品和标准方案，最后才考虑新增包或自行实现。自行实现必须说明现成方案在哪个明确约束上不适用。
-8. **引入依赖要看全生命周期。** 至少核对维护活跃度、许可证、安全记录、生态采用、可替换性和运维成本；不要只因 API 顺手就引入。
-9. **架构决策面向长期。** 核心边界、数据所有权和安全模型不接受“先这样以后再换”的临时方案；局部实现仍保持可删除、可替换。
-10. **参考成熟产品的交互与运维模式。** 优先采用用户已经理解、社区已经验证的做法，不从零发明术语、协议或工作流。
+1. 删除优先，避免无需求的抽象、状态、配置、依赖和兼容层。
+2. 先跑通最小端到端闭环，再按真实瓶颈扩展。
+3. 领域边界清楚；入口只组装，领域模块负责规则，基础设施负责外部效果。
+4. 优先成熟开源协议和产品；引入依赖前检查维护、许可证、安全记录、生态和可替换性。
+5. 设计长期稳定的所有权、安全和副作用边界，局部实现保持可删除、可替换。
+6. 参考用户已理解的成熟交互和运维模式，不凭空创造第二套术语或工作流。
+7. Windows 下避免 PowerShell 破坏 `node -e` 模板字符串；临时检查脚本放在仓库临时文件并在任务结束清理。
+8. 不在代码、测试或文档示例中写死真实凭据、长期 Token、个人域名、中转地址或可变 `latest`；可运行 URL 夹具使用 `127.0.0.1`、RFC1918 或 Docker 内部主机名。
