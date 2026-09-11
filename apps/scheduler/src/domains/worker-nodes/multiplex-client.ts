@@ -108,18 +108,21 @@ export function createWorkerPlaneOpenSandboxClient(options: WorkerPlaneDeps): Op
       return undefined;
     },
     async destroy(id) {
-      const workerId = await lookupLease(id);
-      const nodes = await listWorkers();
-      const node = workerId ? nodes.find((item) => item.id === workerId) : undefined;
-      const client = node ? clientFor(node) : null;
-      if (client?.destroy) await client.destroy(id);
-      else {
-        for (const candidate of nodes) {
-          const next = clientFor(candidate);
-          if (next?.destroy) await next.destroy(id).catch(() => {});
+      try {
+        const workerId = await lookupLease(id);
+        const nodes = await listWorkers();
+        const node = workerId ? nodes.find((item) => item.id === workerId) : undefined;
+        const client = node ? clientFor(node) : null;
+        if (client?.destroy) await client.destroy(id);
+        else {
+          for (const candidate of nodes) {
+            const next = clientFor(candidate);
+            if (next?.destroy) await next.destroy(id).catch(() => {});
+          }
         }
+      } finally {
+        await releaseLease(id);
       }
-      await releaseLease(id);
     },
     async list(filter) {
       const items = [];

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OpenSandboxClient, OpenSandboxCreateInput, OpenSandboxSession } from "@deepsonar/runtime-sandbox";
+import {
+  OpenSandboxRunner,
+  type OpenSandboxClient,
+  type OpenSandboxCreateInput,
+  type OpenSandboxSession,
+} from "@deepsonar/runtime-sandbox";
 import { createNeedsLocalWorker, createWorkerPlaneOpenSandboxClient } from "./multiplex-client.js";
 import type { DispatchableWorker } from "./model.js";
 
@@ -137,4 +142,96 @@ test("no dispatchable worker fails closed", async () => {
     apiKeyOf: () => undefined,
   });
   await assert.rejects(() => client.create(emptyCreate()), /WORKER_PLANE_NO_CAPACITY/);
+});
+
+test("worker plane destroy releases the lease even if the node destroy throws", async () => {
+  const local = worker("local");
+  const leases = new Map<string, string>();
+  const client = createWorkerPlaneOpenSandboxClient({
+    createClient() {
+      return {
+        create: async () => fakeSession("boom-sb"),
+        connect: async () => fakeSession("boom-sb"),
+        list: async () => [],
+        destroy: async () => {
+          throw new Error("node destroy failed");
+        },
+      };
+    },
+    listWorkers: async () => [local],
+    claimWorker: async () => local,
+    recordLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
+    lookupLease: async (sandboxId) => leases.get(sandboxId) ?? null,
+    releaseLease: async (sandboxId) => { leases.delete(sandboxId); },
+    apiKeyOf: () => "local-key",
+  });
+  const session = await client.create(emptyCreate());
+  assert.equal(leases.size, 1);
+  await assert.rejects(() => client.destroy!(session.id), /node destroy failed/);
+  assert.equal(leases.size, 0);
+});
+
+function contractSession(id: string): OpenSandboxSession {
+  return {
+    ...fakeSession(id),
+    async run(command) {
+      if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+        return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+      }
+      if (command.includes("sha256sum")) return { exitCode: 0, stdout: "aa".repeat(32), stderr: "" };
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+}
+
+test("OpenSandboxRunner provision then destroy returns worker-plane lease count to zero", async () => {
+  const local = worker("local", { capacity: { maxSandboxes: 1, memoryMib: 1024, cpu: 1 } });
+  const leases = new Map<string, string>();
+  let present = false;
+  const plane = createWorkerPlaneOpenSandboxClient({
+    createClient() {
+      const session = contractSession("local-sb");
+      return {
+        create: async () => {
+          present = true;
+          return session;
+        },
+        connect: async (id) => (id === session.id ? session : undefined),
+        list: async () => (present
+          ? [{ resourceId: session.id, jobId: "11111111-1111-4111-8111-111111111111", attemptId: "22222222-2222-4222-8222-222222222222", state: "running" }]
+          : []),
+        destroy: async () => {
+          present = false;
+        },
+      };
+    },
+    listWorkers: async () => [{ ...local, activeSandboxes: leases.size }],
+    claimWorker: async () => (leases.size >= local.capacity.maxSandboxes ? null : local),
+    recordLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
+    lookupLease: async (sandboxId) => leases.get(sandboxId) ?? null,
+    releaseLease: async (sandboxId) => { leases.delete(sandboxId); },
+    apiKeyOf: () => "local-key",
+  });
+
+  const runner = new OpenSandboxRunner(plane);
+  const input = {
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none" as const,
+    limits: { cpu: 1, memoryMiB: 512, pidsLimit: 64, capDropAll: true, noNewPrivileges: true },
+  };
+
+  const first = await runner.provision(input);
+  assert.equal(first.sandboxId, "local-sb");
+  assert.equal(leases.size, 1);
+  await assert.rejects(() => plane.create(emptyCreate()), /WORKER_PLANE_NO_CAPACITY/);
+
+  await runner.destroy(first);
+  assert.equal(leases.size, 0, "destroyResource cache path must release the worker-plane lease");
+
+  const second = await runner.provision(input);
+  assert.equal(leases.size, 1);
+  await runner.destroy(second);
+  assert.equal(leases.size, 0);
 });

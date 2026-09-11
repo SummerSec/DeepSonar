@@ -615,15 +615,12 @@ export class OpenSandboxRunner implements SandboxRunner {
       return { sandboxId: live.id };
     } catch (error) {
       if (session) {
-        this.sessions.delete(session.id);
-        await session.kill().catch(() => {});
-        await session.close().catch(() => {});
+        await this.destroyResource({ resourceId: session.id, jobId: input.jobId, attemptId: input.attemptId }).catch(() => {});
       }
       await this.destroyByLabels(input.jobId, input.attemptId).catch(() => {});
       void created.then(async (late) => {
-        this.sessions.delete(late.id);
-        await late.kill().catch(() => {});
-        await late.close().catch(() => {});
+        if (late.id === session?.id) return;
+        await this.destroyResource({ resourceId: late.id, jobId: input.jobId, attemptId: input.attemptId }).catch(() => {});
       }).catch(() => {});
       throw error;
     } finally {
@@ -636,9 +633,7 @@ export class OpenSandboxRunner implements SandboxRunner {
     if (pending) {
       const session = await pending.catch(() => undefined);
       if (session) {
-        this.sessions.delete(session.id);
-        await session.kill().catch(() => {});
-        await session.close().catch(() => {});
+        await this.destroyResource({ resourceId: session.id, jobId: input.jobId, attemptId: input.attemptId }).catch(() => {});
       }
     }
     await this.destroyByLabels(input.jobId, input.attemptId);
@@ -732,8 +727,9 @@ export class OpenSandboxRunner implements SandboxRunner {
     if (cached) {
       await cached.kill().catch(() => {});
       await cached.close().catch(() => {});
-      return;
     }
+    // Always invoke client.destroy when present. Worker-plane leases are
+    // released only there; returning after a sessions-cache hit leaked them.
     if (this.client.destroy) {
       await this.client.destroy(resource.resourceId);
       return;

@@ -752,3 +752,59 @@ test("OpenSandbox destroy waits until the sandbox disappears from list", async (
   await runner.destroy({ sandboxId: "sbx-1" });
   assert.equal(present, 0);
 });
+
+test("OpenSandbox provision then destroy still calls client.destroy after a sessions-cache hit", async () => {
+  const client = fakeClient();
+  let destroyed = 0;
+  let present = true;
+  client.destroy = async () => {
+    destroyed += 1;
+    present = false;
+  };
+  client.list = async () => (present
+    ? [{
+        resourceId: "sbx-1",
+        jobId: "11111111-1111-4111-8111-111111111111",
+        attemptId: "22222222-2222-4222-8222-222222222222",
+        state: "Running",
+      }]
+    : []);
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.ok(runner.hostOf(handle));
+  await runner.destroy(handle);
+  assert.ok(destroyed >= 1, "cached destroyResource must call client.destroy so worker-plane leases release");
+  assert.equal(present, false);
+  assert.equal(runner.hostOf(handle), undefined);
+});
+
+test("OpenSandbox contract mismatch still calls client.destroy", async () => {
+  const session = fakeSession();
+  const client = fakeClient(session);
+  let destroyed = 0;
+  client.destroy = async () => {
+    destroyed += 1;
+  };
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "wrong" }), stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(client);
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), /contract mismatch/);
+  assert.ok(destroyed >= 1);
+});
