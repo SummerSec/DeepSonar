@@ -18,6 +18,7 @@ import {
 import {
   BUILTIN_CAPABILITY_PACKS,
   availableCatalogIds,
+  expandedFromFrozen,
   filterCatalog,
   findCatalogRecord,
   freezeTaskCapabilityPack,
@@ -25,9 +26,12 @@ import {
   manifestFromRoleConfig,
   manifestFromSkillModule,
   parseCompositionSelectors,
+  projectFrozenSkillModules,
   repairCapabilityNotFound,
   repairFromMissingModule,
   repairPermissionEscalation,
+  repairSelectorNotFrozen,
+  resolveFrozenModulesForSelectors,
   summarizeCapability,
   type CapabilityCatalogRecord,
   type FrozenCapabilityPack,
@@ -77,15 +81,19 @@ export function buildCapabilityCatalog(input: {
   job?: CapabilityJobEnvelope;
 }): CapabilityCatalogRecord[] {
   const records: CapabilityCatalogRecord[] = [...BUILTIN_CAPABILITY_PACKS];
-  for (const source of input.sources ?? []) {
-    if (source.trust_status !== "trusted" || !source.enabled) continue;
-    for (const module of source.catalog) {
-      records.push(manifestFromSkillModule({
-        sourceId: source.id,
-        module,
-        commitSha: source.last_commit_sha,
-        contentHash: source.last_content_hash ?? contentHashOf([module]),
-      }));
+  if (input.job?.frozen) {
+    records.push(...projectFrozenSkillModules(input.job.frozen));
+  } else {
+    for (const source of input.sources ?? []) {
+      if (source.trust_status !== "trusted" || !source.enabled) continue;
+      for (const module of source.catalog) {
+        records.push(manifestFromSkillModule({
+          sourceId: source.id,
+          module,
+          commitSha: source.last_commit_sha,
+          contentHash: source.last_content_hash ?? contentHashOf([module]),
+        }));
+      }
     }
   }
   if (input.job) {
@@ -214,7 +222,21 @@ const CAPABILITY_TOKEN_LIST = [
 export function resolveCompositionSelectors(
   selectors: readonly string[],
   sources: readonly TrustedSkillSourceCatalog[],
+  frozen?: FrozenCapabilityPack | null,
 ): { resolved: ExpandedModuleSnapshot[]; missing: MissingModule[]; repair: RepairFeedback[] } {
+  if (frozen) {
+    const allowed = new Set(frozen.selectors);
+    const repair = [
+      ...parseCompositionSelectors(selectors).repair,
+      ...selectors.filter((selector) => !allowed.has(selector)).map((selector) => repairSelectorNotFrozen(selector, frozen.selectors)),
+    ];
+    const inbound = selectors.filter((selector) => allowed.has(selector));
+    return {
+      resolved: resolveFrozenModulesForSelectors(frozen, inbound).map(expandedFromFrozen),
+      missing: [],
+      repair,
+    };
+  }
   const available = sources.flatMap((source) => source.catalog.map((module) => `${source.id}:${module.id}`));
   const { parsed, repair } = parseCompositionSelectors(selectors);
   const missing: MissingModule[] = [];
@@ -272,7 +294,7 @@ export function validateComposition(
   selectors: string[];
 } {
   const selectors = input.selectors ?? [];
-  const resolved = resolveCompositionSelectors(selectors, sources);
+  const resolved = resolveCompositionSelectors(selectors, sources, job.frozen);
   const repair = [
     ...checkPackCapabilities(input.pack_manifest, records),
     ...checkPackPermissions(input.pack_manifest, job),
@@ -285,7 +307,7 @@ export function validateComposition(
     allowEgress: input.pack_manifest.permissions.allow_egress,
     selectors,
     resolvedModules: resolved.resolved,
-    moduleContentHash: job.moduleContentHash ?? "",
+    moduleContentHash: job.frozen?.module_content_hash ?? job.moduleContentHash ?? "",
   });
   return {
     ok: repair.length === 0,
@@ -309,7 +331,7 @@ export function previewMaterialization(
   repair: RepairFeedback[];
 } {
   const selectors = input.selectors ?? [];
-  const resolved = resolveCompositionSelectors(selectors, sources);
+  const resolved = resolveCompositionSelectors(selectors, sources, job.frozen);
   const repair = [
     ...checkPackCapabilities(input.pack_manifest, records),
     ...checkPackPermissions(input.pack_manifest, job),
@@ -322,7 +344,7 @@ export function previewMaterialization(
     allowEgress: input.pack_manifest.permissions.allow_egress,
     selectors,
     resolvedModules: resolved.resolved,
-    moduleContentHash: job.moduleContentHash ?? "",
+    moduleContentHash: job.frozen?.module_content_hash ?? job.moduleContentHash ?? "",
   });
   return {
     ok: repair.length === 0,

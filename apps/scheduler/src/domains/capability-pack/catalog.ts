@@ -238,6 +238,89 @@ export function manifestFromRoleConfig(input: {
   return { manifest, source_kind: "role_config", role: input.roleName };
 }
 
+export function projectFrozenSkillModules(frozen: FrozenCapabilityPack): CapabilityCatalogRecord[] {
+  return frozen.resolved_modules.map((module) => {
+    const slash = module.module_id.indexOf("/");
+    return manifestFromSkillModule({
+      sourceId: module.source_id,
+      module: {
+        id: module.module_id,
+        kind: "skill",
+        plugin: slash > 0 ? module.module_id.slice(0, slash) : "frozen",
+        name: module.module_id,
+        description: "frozen job capability module",
+        files: {},
+      },
+      contentHash: module.content_hash,
+    });
+  });
+}
+
+function frozenModuleMatchesSelector(
+  module: FrozenCapabilityPack["resolved_modules"][number],
+  selector: ReturnType<typeof parseModuleSelector>,
+): boolean {
+  if (module.source_id !== selector.source_id) return false;
+  if (selector.kind === "source") return true;
+  if (selector.kind === "module") return module.module_id === selector.module_id;
+  return Boolean(selector.plugin && (module.module_id === selector.plugin || module.module_id.startsWith(`${selector.plugin}/`)));
+}
+
+export function resolveFrozenModulesForSelectors(
+  frozen: FrozenCapabilityPack,
+  selectors: readonly string[],
+): FrozenCapabilityPack["resolved_modules"] {
+  if (selectors.length === 0) return [];
+  const parsed = selectors.flatMap((selector) => {
+    try {
+      return [parseModuleSelector(selector)];
+    } catch {
+      return [];
+    }
+  });
+  return frozen.resolved_modules.filter((module) => parsed.some((selector) => frozenModuleMatchesSelector(module, selector)));
+}
+
+export function expandedFromFrozen(module: FrozenCapabilityPack["resolved_modules"][number]): ExpandedModuleSnapshot {
+  const slash = module.module_id.indexOf("/");
+  return {
+    source_id: module.source_id,
+    module_id: module.module_id,
+    kind: "skill",
+    plugin: slash > 0 ? module.module_id.slice(0, slash) : "frozen",
+    name: module.module_id,
+    description: "",
+    content_hash: module.content_hash,
+  };
+}
+
+const REPAIR_PATH_MAX = 240;
+
+export function selectorFingerprint(selector: string): string {
+  return createHash("sha256").update(selector).digest("hex").slice(0, 16);
+}
+
+export function boundRepairPath(path: string): string {
+  if (path.length <= REPAIR_PATH_MAX) return path;
+  const digest = selectorFingerprint(path);
+  return `path.sha256:${digest}`;
+}
+
+export function selectorRepairPath(selector: string): string {
+  return boundRepairPath(`selectors.sha256:${selectorFingerprint(selector)}`);
+}
+
+export function redactedSelectorShape(selector: string): Record<string, unknown> {
+  return {
+    ...describeObservedShape(selector),
+    sha256: selectorFingerprint(selector),
+  };
+}
+
+function redactSelectorList(available: readonly string[]): string[] {
+  return available.map((item) => (item.length <= 80 ? item : `sha256:${selectorFingerprint(item)}`));
+}
+
 export function freezeTaskCapabilityPack(input: {
   roleName: string;
   summary: string;
@@ -307,11 +390,13 @@ function packRepair(input: {
     category: input.category,
     code: input.code,
     operation: input.operation,
-    path: input.path,
+    path: boundRepairPath(input.path),
     message: input.message,
     expected: input.expected,
-    observed_shape: describeObservedShape(input.observed),
-    current_state_ref: input.current_state_ref,
+    observed_shape: input.observed && typeof input.observed === "object"
+      ? input.observed
+      : describeObservedShape(input.observed),
+    current_state_ref: input.current_state_ref ? boundRepairPath(input.current_state_ref) : undefined,
     next_action: input.next_action,
   });
 }
@@ -321,8 +406,9 @@ export function repairFromMissingModule(
   available: string[],
   operation = "validate_composition",
 ): RepairFeedback {
-  const path = `selectors[${missing.selector}]`;
+  const path = selectorRepairPath(missing.selector);
   const current_state_ref = `skill_sources:${missing.source_id}`;
+  const availableSafe = redactSelectorList(available);
   if (missing.reason === "source-not-trusted") {
     return packRepair({
       category: "permanent_failure",
@@ -330,8 +416,8 @@ export function repairFromMissingModule(
       operation,
       path,
       message: "模块来源未信任或未启用，Job 不能自行放宽来源策略。",
-      expected: { kind: "trusted_enabled_source", available },
-      observed: missing.reason,
+      expected: { kind: "trusted_enabled_source", available: availableSafe },
+      observed: { ...redactedSelectorShape(missing.selector), reason: missing.reason },
       current_state_ref,
       next_action: "replace_with_trusted_source_or_ask_admin_to_trust",
     });
@@ -344,7 +430,7 @@ export function repairFromMissingModule(
       path,
       message: "模块名称与已挂载 skill/command 冲突。",
       expected: { kind: "unique_skill_or_command_name", conflicts_with: missing.conflicts_with ?? [] },
-      observed: missing.reason,
+      observed: { ...redactedSelectorShape(missing.selector), reason: missing.reason },
       current_state_ref,
       next_action: "choose_one_conflicting_module_and_resubmit",
     });
@@ -357,7 +443,7 @@ export function repairFromMissingModule(
       path,
       message: "目录模块被 RoleConfig 手工 skill/command 覆盖。",
       expected: { kind: "catalog_module_not_shadowed" },
-      observed: missing.reason,
+      observed: { ...redactedSelectorShape(missing.selector), reason: missing.reason },
       current_state_ref,
       next_action: "remove_manual_skill_or_command_override_and_resubmit",
     });
@@ -368,8 +454,8 @@ export function repairFromMissingModule(
     operation,
     path,
     message: "找不到对应的已信任模块或 Capability Pack。",
-    expected: { kind: "trusted_capability_or_module_selector", available },
-    observed: missing.reason,
+    expected: { kind: "trusted_capability_or_module_selector", available: availableSafe },
+    observed: { ...redactedSelectorShape(missing.selector), reason: missing.reason },
     current_state_ref,
     next_action: "replace_with_available_capability_and_resubmit",
   });
@@ -387,7 +473,7 @@ export function repairCapabilityNotFound(
     operation,
     path,
     message: "请求的 Capability Pack 或 capability token 不在本 Job 可见目录中。",
-    expected: { kind: "catalog_capability_id", available },
+    expected: { kind: "catalog_capability_id", available: redactSelectorList(available) },
     observed: id,
     current_state_ref: `capability:${id}`,
     next_action: "replace_with_available_capability_and_resubmit",
@@ -425,10 +511,28 @@ export function repairInvalidSelector(
     operation,
     path: "selectors",
     message: "模块 selector 无法解析。",
-    expected: { kind: "module_selector", format: "source_uuid:module|plugin:path|source:*", available },
-    observed: message,
-    current_state_ref: `selector:${selector.slice(0, 200)}`,
+    expected: { kind: "module_selector", format: "source_uuid:module|plugin:path|source:*", available: redactSelectorList(available) },
+    observed: { ...redactedSelectorShape(selector), reason: message },
+    current_state_ref: selectorRepairPath(selector),
     next_action: "replace_with_available_capability_and_resubmit",
+  });
+}
+
+export function repairSelectorNotFrozen(
+  selector: string,
+  frozenSelectors: readonly string[],
+  operation = "validate_composition",
+): RepairFeedback {
+  return packRepair({
+    category: "permanent_failure",
+    code: "SELECTOR_NOT_FROZEN",
+    operation,
+    path: selectorRepairPath(selector),
+    message: "组合不能引用冻结 Job Capability Pack 之外的 selector。",
+    expected: { kind: "frozen_selectors", allowed: redactSelectorList(frozenSelectors) },
+    observed: redactedSelectorShape(selector),
+    current_state_ref: "job.agent_snapshot.capability_pack.selectors",
+    next_action: "replace_with_frozen_selector_or_keep_the_job_pack",
   });
 }
 

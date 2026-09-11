@@ -15,6 +15,7 @@
 
 ### 修复
 
+- Capability Pack 发现以上界为 Job 冻结 selector + content hash；源目录在 Job 创建后变更不能扩大或改写可见集合。过长 selector 不再写入 `RepairFeedback.path`（#447 follow-up）。
 - Finding research 的 emit/report 挂钩用 savepoint 隔离持久化失败：研究 SQL 或失败账本写入出错只回滚 savepoint，外层 Finding / 报告事务继续提交（#448）。
 - Worker 派发 claim 改为单事务选节点 + 预留 `worker_sandbox_leases` 占位，并写入 `last_dispatch_at`；并发 provision 不能超过节点 `max_sandboxes`。远端 create 失败释放占位，成功则把占位改成真实 sandbox id。去掉 claim 失败后再 `pickRoundRobinWorker` 且不记账的 fallback（#434）。
 - Worker 沙箱租约在正常 destroy 时也会释放（#431 / #416 回归）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。

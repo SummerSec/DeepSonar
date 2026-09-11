@@ -20,7 +20,10 @@ import {
   freezeTaskCapabilityPack,
   manifestFromRoleConfig,
   manifestFromSkillModule,
+  moduleCapabilityId,
+  redactedSelectorShape,
   repairFromMissingModule,
+  selectorRepairPath,
 } from "./catalog.js";
 import {
   buildCapabilityCatalog,
@@ -145,7 +148,8 @@ test("missing modules become structured RepairFeedback", () => {
   assert.equal(missing.operation, "validate_composition");
   assert.equal(missing.next_action, "replace_with_available_capability_and_resubmit");
   assert.deepEqual(missing.expected, { kind: "trusted_capability_or_module_selector", available });
-  assert.deepEqual(missing.observed_shape, describeObservedShape("module-not-found"));
+  assert.deepEqual(missing.observed_shape, { ...redactedSelectorShape(`${SOURCE}:missing`), reason: "module-not-found" });
+  assert.equal(missing.path, selectorRepairPath(`${SOURCE}:missing`));
   assert.equal(missing.remaining_budget.attempts, DEFAULT_MODEL_REPAIR_ATTEMPT_BUDGET);
 
   const untrusted = repairFromMissingModule({
@@ -291,6 +295,99 @@ test("task pack freeze digest covers selectors and resolved modules", () => {
   assert.notEqual(first.digest, drifted.digest);
   assert.deepEqual(first.selectors, [`${SOURCE}:whitebox/authz`]);
   assert.equal(first.scope, "task");
+});
+
+test("frozen Job pack is the discovery upper bound after the live source mutates", () => {
+  const original = moduleOf("whitebox/authz");
+  const frozen = freezeTaskCapabilityPack({
+    roleName: "audit",
+    summary: "audit RoleConfig",
+    platformTools: ["emit_finding", "mark_job_done", "list_capabilities"],
+    selectors: [`${SOURCE}:whitebox/authz`],
+    resolvedModules: [{
+      source_id: SOURCE,
+      module_id: "whitebox/authz",
+      kind: "skill",
+      plugin: "whitebox",
+      name: "authz",
+      description: original.description,
+      content_hash: contentHashOf([original]),
+    }],
+    moduleContentHash: contentHashOf([original]),
+  });
+  const frozenJob = job({
+    platformTools: ["emit_finding", "mark_job_done", "list_capabilities"],
+    selectors: frozen.selectors,
+    moduleContentHash: frozen.module_content_hash,
+    frozen,
+  });
+  const originalSources = [{
+    id: SOURCE,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: "abc",
+    catalog: [original],
+  }];
+  const mutatedSources = [{
+    id: SOURCE,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: "def",
+    catalog: [
+      moduleOf("whitebox/authz", { files: { "SKILL.md": "# mutated after freeze" } }),
+      moduleOf("whitebox/new-gadget"),
+    ],
+  }];
+
+  const before = buildCapabilityCatalog({ sources: originalSources, job: frozenJob });
+  const after = buildCapabilityCatalog({ sources: mutatedSources, job: frozenJob });
+  const beforeIds = listCapabilities(before, {}).capabilities.map((item) => item.id).sort();
+  const afterIds = listCapabilities(after, {}).capabilities.map((item) => item.id).sort();
+  assert.deepEqual(afterIds, beforeIds);
+  assert.ok(beforeIds.includes(moduleCapabilityId(SOURCE, "whitebox/authz")));
+  assert.equal(afterIds.includes(moduleCapabilityId(SOURCE, "whitebox/new-gadget")), false);
+  assert.equal(
+    describeCapability(after, { id: moduleCapabilityId(SOURCE, "whitebox/authz") }).capability?.digest,
+    describeCapability(before, { id: moduleCapabilityId(SOURCE, "whitebox/authz") }).capability?.digest,
+  );
+
+  const preview = previewMaterialization(
+    after,
+    frozenJob,
+    { pack_manifest: draft({ capabilities: ["repository.surface_map"], permissions: { platform_tools: ["emit_finding"], allow_egress: false } }), selectors: frozen.selectors },
+    mutatedSources,
+  );
+  assert.equal(preview.ok, true);
+  assert.deepEqual(preview.resolved_modules.map((module) => module.content_hash), frozen.resolved_modules.map((module) => module.content_hash));
+  assert.equal(preview.resolved_modules[0]?.content_hash, contentHashOf([original]));
+  assert.notEqual(preview.resolved_modules[0]?.content_hash, contentHashOf([mutatedSources[0]!.catalog[0]!]));
+
+  const expanded = validateComposition(
+    after,
+    frozenJob,
+    { pack_manifest: draft({ capabilities: ["repository.surface_map"] }), selectors: [`${SOURCE}:whitebox/new-gadget`] },
+    mutatedSources,
+  );
+  assert.equal(expanded.ok, false);
+  assert.ok(expanded.repair.some((item) => item.code === "SELECTOR_NOT_FROZEN" && item.category === "permanent_failure"));
+});
+
+test("long missing selectors stay inside RepairFeedback.path and do not leak raw text", () => {
+  const longSelector = `${SOURCE}:whitebox/${"n".repeat(900)}`;
+  assert.ok(longSelector.length > 240);
+  assert.ok(longSelector.length <= 1024);
+  const feedback = repairFromMissingModule({
+    selector: longSelector,
+    source_id: SOURCE,
+    reason: "module-not-found",
+  }, [longSelector]);
+  assert.equal(RepairFeedback.safeParse(feedback).success, true);
+  assert.ok((feedback.path?.length ?? 0) <= 240);
+  assert.equal(feedback.path, selectorRepairPath(longSelector));
+  const serialized = JSON.stringify(feedback);
+  assert.equal(serialized.includes(longSelector), false);
+  assert.equal(serialized.includes("n".repeat(80)), false);
+  assert.deepEqual(feedback.observed_shape, { ...redactedSelectorShape(longSelector), reason: "module-not-found" });
 });
 
 type KernelRepairCategory = "model_correctable" | "transient_retryable" | "unknown_external_effect" | "permanent_failure";
