@@ -25,6 +25,36 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: true,
     eventType: null,
   },
+  list_capabilities: {
+    summary: "List Capability Packs visible to the current Job",
+    description: "Return summaries of builtin, trusted-module, and RoleConfig-projected Capability Packs. Results are id/version/digest/scope/summary only; call describe_capability for the full machine contract.",
+    readOnly: true,
+    eventType: null,
+  },
+  search_capabilities: {
+    summary: "Search Capability Packs visible to the current Job",
+    description: "Return Capability Pack summaries matching a query against id, summary, capabilities, or selector. Does not inject SKILL.md bodies.",
+    readOnly: true,
+    eventType: null,
+  },
+  describe_capability: {
+    summary: "Describe one Capability Pack machine contract",
+    description: "Return the frozen Capability Pack manifest for an id, optionally pinned by version or digest. Unknown ids return RepairFeedback instead of a contract.",
+    readOnly: true,
+    eventType: null,
+  },
+  validate_composition: {
+    summary: "Validate a Capability Pack composition",
+    description: "Lint a pack_manifest and optional module selectors against the current Job freeze. Rejects permission or egress expansion and returns RepairFeedback for missing, conflicting, or untrusted modules.",
+    readOnly: true,
+    eventType: null,
+  },
+  preview_materialization: {
+    summary: "Preview Capability Pack materialization",
+    description: "Resolve selectors, compute the frozen digest, and project permissions without activating a pack or changing RoleConfig.",
+    readOnly: true,
+    eventType: null,
+  },
   list_shared_assets: {
     summary: "List shared assets available to the current Job",
     description: "Return the frozen read-only shared asset catalog for this Job.",

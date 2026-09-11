@@ -110,6 +110,11 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
 assert.deepEqual(restrictedTools, [
   "list_available_roles",
   "list_available_runtime_images",
+  "list_capabilities",
+  "search_capabilities",
+  "describe_capability",
+  "validate_composition",
+  "preview_materialization",
   "list_shared_assets",
   "publish_shared_asset",
   "emit_fact",

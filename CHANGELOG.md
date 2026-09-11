@@ -6,6 +6,7 @@
 
 ### 新增
 
+- Capability Pack 第一刀（#447）：`deepsonar.capability-pack/v1` Manifest、Job 级 list/search/describe/validate/preview，以及 RoleConfig 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`，不另建 envelope。
 - 质量指标与 Hub 回放基线（#445 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。项目级 token 必须匹配路径 `:id`，跨项目读 quality/replay 返回 `PROJECT_MISMATCH`。不改变 Hub 决策，不写入经验。
 - Artifact 成为内部写入真相（#444 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。
 - #446 Phase 1：`packages/shared-types` 增加版本化 `RepairFeedback`（`model_correctable` / `transient_retryable` / `unknown_external_effect` / `permanent_failure`）。Control API 对 schema 截断/校验与 256 KiB 语义 payload 超限返回字段级 `repair`（expected / observed_shape / remaining_budget / next_action），不再只回 `Platform operation was rejected`。Handler `details` 只保留白名单字段，且不得覆盖 `error` / `error_code` / `retryable` / `repair`。

@@ -1,5 +1,6 @@
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
+import type { FrozenCapabilityPack } from "../capability-pack/catalog.js";
 import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
@@ -42,6 +43,8 @@ export interface RoleRuntimeSnapshotResult {
   }[];
   missing_modules: MissingModule[];
   module_content_hash: string;
+  /** Frozen Capability Pack envelope for this Job; selectors/digest do not follow later source sync. */
+  capability_pack?: FrozenCapabilityPack;
   skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
   skills: unknown[];
   commands: unknown[];
