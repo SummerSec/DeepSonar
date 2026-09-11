@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 语义去重与相对优先级与漏洞确认分离（#448）：报告前有界批次聚类、canonical anchor 增量比较、canonical 集合 `priority_score`；写入 `finding_research*`（schema v48），不改 `verify_status` / severity / 报告门禁。失败显式记 run 并保留候选。只读 `GET /canvases/:id/finding-research`，列表/详情分列展示验证、严重度、重复关系与研究优先级。
 - Capability Pack 第一刀（#447）：`deepsonar.capability-pack/v1` Manifest、Job 级 list/search/describe/validate/preview，以及 RoleConfig 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`，不另建 envelope。
 - 质量指标与 Hub 回放基线（#445 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。项目级 token 必须匹配路径 `:id`，跨项目读 quality/replay 返回 `PROJECT_MISMATCH`。不改变 Hub 决策，不写入经验。
 - Artifact 成为内部写入真相（#444 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。

@@ -103,6 +103,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/nodes/:nodeId": "tasks:read",
   "GET /canvases/:id/facts": "tasks:read",
   "GET /canvases/:id/facts/:nodeId": "tasks:read",
+  "GET /canvases/:id/finding-research": "findings:read",
   "PATCH /canvases/:id/facts/:nodeId/verification": "jobs:control",
   "GET /canvases/:id/report": "tasks:read",
   "GET /canvases/:id/report/availability": "tasks:read",

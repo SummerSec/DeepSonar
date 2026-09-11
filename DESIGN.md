@@ -46,6 +46,8 @@ Finding * ── 1 project + job + optional node + optional artifact（投影缓
 Finding 1 ── * finding_verification_rounds
 Canvas  1 ── * task_reports（版本化任务总报告）
 Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
+Canvas  1 ── * finding_research_runs / finding_dedupe_clusters（语义去重与相对优先级，#448）
+Finding 1 ── 0..1 finding_research
 ```
 
 | 概念 | 说明 |
@@ -57,6 +59,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **Fact** | 工作角色增量产出；可带 Finding 结构化证据块与可选 Artifact 输入，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
 | **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`），现为 Artifact 的安全投影缓存；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
+| **Finding research** | 语义去重 cluster + canonical anchor + 相对 `priority_score`（#448）；与 Verify / 报告门禁隔离 |
 | **Task report** | 画布收敛后按输入摘要版本化；相同输入幂等，输入变化时追加版本并保留历史 |
 | **Root** | 画布根；阶段如 `analysis_complete` / `reporting` / `succeeded` |
 
@@ -92,6 +95,7 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 - **验证范围（#133）**：`minVerifySeverity` 同时控制自动 Verify 与收敛集合；明确低于阈值的 Finding 保持 `pending` 并记录 `below_min_verify_severity` 策略标记，不创建 Verify Job/round、不阻塞 Hub complete/Report。缺失或未知 severity 保守地继续验证；`info` 即严格全量模式。
 - **Hub Finding 绑定（#153 / #154 / #161 / #273）**：Hub 对本轮 canonical Finding 节点派发 review/test 时，Scheduler 在派生前解析并冻结唯一 `finding_id` 与 `verification_followup`；多 Finding、映射歧义、Verify trigger 不一致或低于 `minVerifySeverity` 的目标使整次决策稳定拒绝。compose 的 imported seed 是例外：review/test 只把其共享资产挂到探索 Worker，不创建 verification follow-up，也不改写历史 Finding；compose 画布上 explore/audit 必须绑定至少一条 imported 种子投影，不得未绑定地全图打猎。`request_human` 也必须携带结构化 subject：Finding subject 由 Scheduler 校验同项目、同画布 canonical 关系及最低验证级别，平台阻塞则只能使用受限 kind；系统绝不解析 reason 文本推断目标。analyze 仍可引用多个来源。
 - **人工验证收口（#155）**：Finding 详情提供三种显式动作：强制新建受护栏约束的 Verify round、新建绑定 Finding 的 review/test 补证 Job，以及在同画布 Hub 处于 `waiting_human` 时把尚未 confirmed 的 Finding 收口为 `needs_human`。所有动作按 canvas-first 顺序加锁、禁止终态重开并拒绝同类活动 Job；需要恢复时在同一事务将 Hub 转回 `pending` 并通知 dispatcher。人工入口绝不开放 `confirmed`。
+- **语义去重与相对优先级（#448）**：最终报告前，Scheduler 以有界批次对画布 Finding 做语义聚类并维护 canonical anchor；新候选只与当前 anchor 增量比较。重复项保留来源 Finding、证据与 `dedupe_reason`。再对 canonical 集合做相对 `priority_score`（注意力分配，不是严重度）。流水线写入 `finding_research*`，**不**改 `verify_status`、Fact 门禁、`severity` 或报告收敛门；未确认的高优先级 Finding 仍走 Fact-first Verify。模型 / prompt revision / 批次边界写入 run 账本；失败显式记 `failed` 并保留候选，不得静默删除或自动确认。只读：`GET /canvases/:id/finding-research`，列表/详情投影 cluster 与 priority。
 - **双轨报告（#43/#142/#408）**：收敛门通过后，Scheduler 为画布派发版本化 Task Report；每版冻结 `report-input.json` 与 checksum，相同输入幂等，输入变化时追加版本，失败同输入重试复用版本。每条 Finding 变为 `confirmed` 时独立派发版本化 Finding Report。两类报告在 `pending/generating` 期间都只允许同一目标一个活跃版本，失败只更新报告行，不改变 Finding 状态。只读聚合：`GET /projects/:id/reports` 按任务编组全部版本与 confirmed Finding 独立报告；任务工作台「报告」页签与项目 `/projects/:id/reports` 只消费展示，不改生成语义。
 - **通用 Finding 协议（#44）**：`profile`、`category`、`tags`、`evidence_refs` 是跨安全、质量、合规等领域的通用字段；严重度可不提供，CVSS 评分可选。有效协议由全局、项目、任务三层按任务 > 项目 > 全局合并，在建画布时写入 `target_json.effective_finding_protocol` 冻结；Job 和 Agent 只读取该快照。Scheduler 校验 profile/字段边界、去重并决定 Verify，受支持的 CVSS 4.0/3.1 向量由系统重算，协议显式接受的未知版本保留原始向量/指标。
 
@@ -362,7 +366,7 @@ Phase 1 已把 `RepairFeedback` 契约接到 Control API 的 schema/字节约束
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v47）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v48）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束

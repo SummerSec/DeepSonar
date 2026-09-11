@@ -32,6 +32,7 @@ GET /control/v1/jobs/:jobId/operations/:operationId
 GET /canvases/:id/delta
 GET /canvases/:id/facts
 GET /canvases/:id/facts/:nodeId
+GET /canvases/:id/finding-research
 GET /canvases/:id/nodes/:nodeId
 GET /canvases/:id/quality
 GET /canvases/:id/quality/replay
@@ -218,6 +219,7 @@ GET /canvases/{id}/broadcasts
 GET /canvases/{id}/delta
 GET /canvases/{id}/facts
 GET /canvases/{id}/facts/{nodeId}
+GET /canvases/{id}/finding-research
 GET /canvases/{id}/nodes/{nodeId}
 GET /canvases/{id}/quality
 GET /canvases/{id}/quality/replay

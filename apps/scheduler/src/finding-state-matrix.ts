@@ -1,8 +1,9 @@
 /**
- * Finding / human / verify / disposition semantic matrix (#400).
+ * Finding / human / verify / disposition / research semantic matrix (#400 / #448).
  *
- * These four dimensions are independent. UI and reports must not infer one
+ * These dimensions are independent. UI and reports must not infer one
  * from another. Scheduler is the only writer of illegal-combination checks.
+ * Research ranking never writes verify_status or severity.
  */
 
 import type { FindingDisposition } from "./finding-disposition.js";
@@ -28,7 +29,9 @@ export type FindingStateDimension =
   | "verify_status"
   | "disposition"
   | "job_waiting_human"
-  | "fact_verification_status";
+  | "fact_verification_status"
+  | "research_dedupe"
+  | "research_priority";
 
 export interface FindingStateRow {
   dimension: FindingStateDimension;
@@ -156,6 +159,24 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     writer: "request_human",
     meaning: "当前 Job Attempt 暂停等人；不是 Finding 技术验证或处置",
     report: "任务阻塞，不改变 Finding 状态",
+    terminal: false,
+  },
+  {
+    dimension: "research_dedupe",
+    value: "canonical|duplicate",
+    owner: "Scheduler research pipeline",
+    writer: "finding-research 有界批次 / 增量 anchor 比较",
+    meaning: "语义重复关系；保留全部来源 Finding、证据与归并原因",
+    report: "不进入 Verify 门禁；不删除候选",
+    terminal: false,
+  },
+  {
+    dimension: "research_priority",
+    value: "priority_score",
+    owner: "Scheduler research pipeline",
+    writer: "canonical 集合相对排序",
+    meaning: "研究员注意力分配；不是严重度，也不是漏洞是否成立",
+    report: "不改 verify_status / severity / 报告收敛门",
     terminal: false,
   },
 ] as const;

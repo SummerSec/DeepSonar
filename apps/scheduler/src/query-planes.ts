@@ -38,6 +38,7 @@ export const QUERY_PLANE_CONTRACTS: readonly QueryPlaneContract[] = [
       "GET /jobs/:id",
       "GET /canvases/:id",
       "GET /findings/:id",
+      "GET /canvases/:id/finding-research",
       "GET /projects/:id/findings/summary",
       "GET /projects/:id/reports",
     ],

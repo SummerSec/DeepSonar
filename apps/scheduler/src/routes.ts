@@ -8,6 +8,7 @@ import { registerAuthRoutes } from "./domains/auth/routes.js";
 import { registerCanvasRoutes } from "./domains/canvas/routes.js";
 import { registerDashboardRoutes } from "./domains/dashboard/routes.js";
 import { registerCredentialRoutes } from "./domains/credential/routes.js";
+import { registerFindingResearchRoutes } from "./domains/finding-research/index.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
 import { registerJobControlRoutes } from "./domains/job-control/routes.js";
 import { registerProjectTaskRoutes } from "./domains/project-task/routes.js";
@@ -38,6 +39,7 @@ export function registerRoutes(app: FastifyInstance) {
   // scope hooks above are installed before it, preserving legacy behavior.
   registerReportRoutes(app);
   registerFindingVerificationRoutes(app);
+  registerFindingResearchRoutes(app);
   registerSharedAssetRoutes(app);
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）

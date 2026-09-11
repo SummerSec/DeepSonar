@@ -107,6 +107,9 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
       WHERE j.canvas_id = ${canvasId}
     )
     OR verify_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
+  await tx`DELETE FROM finding_research WHERE canvas_id = ${canvasId}`;
+  await tx`DELETE FROM finding_dedupe_clusters WHERE canvas_id = ${canvasId}`;
+  await tx`DELETE FROM finding_research_runs WHERE canvas_id = ${canvasId}`;
   await tx`DELETE FROM task_reports WHERE canvas_id = ${canvasId}`;
   await tx`
     DELETE FROM findings WHERE job_id IN (

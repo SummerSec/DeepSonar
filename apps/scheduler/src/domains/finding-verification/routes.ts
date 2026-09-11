@@ -16,6 +16,7 @@ import { isUuid } from "../../project-scope.js";
 import { decodeCursor, cursorForRow, page, pageLimit } from "../../pagination.js";
 import { createVerifyRound, markFindingNeedsHuman } from "../../verify.js";
 import { loadProjectFindingsSummary } from "./project-findings-summary.js";
+import { projectFindingResearch } from "../finding-research/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
@@ -110,6 +111,9 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
              f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
              f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
              p.name AS project_name, j.canvas_id, c.title AS canvas_title,
+             r.dedupe_cluster_id, r.canonical_finding_id, r.is_canonical, r.dedupe_reason,
+             r.priority_score, r.priority_reason, r.priority_model, r.priority_prompt_revision,
+             r.last_run_id,
              EXISTS (
                SELECT 1 FROM jobs waiting_job
                WHERE waiting_job.canvas_id = j.canvas_id
@@ -120,6 +124,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       JOIN projects p ON p.id = f.project_id
       JOIN jobs j ON j.id = f.job_id
       JOIN canvases c ON c.id = j.canvas_id
+      LEFT JOIN finding_research r ON r.finding_id = f.id
       WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
         AND (${severity}::text IS NULL OR f.severity = ${severity})
         AND (${profile}::text IS NULL OR f.profile = ${profile})
@@ -132,7 +137,10 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
           OR (f.created_at = ${cursor?.created_at ?? null}::timestamptz AND f.id < ${cursor?.id ?? null}::uuid))
       ORDER BY f.created_at DESC, f.id DESC
       LIMIT ${paginated ? limit + 1 : limit}`;
-    const items = rows.slice(0, limit);
+    const items = rows.slice(0, limit).map((row) => ({
+      ...row,
+      research: projectFindingResearch(row as Record<string, unknown>),
+    }));
     if (!paginated) return items;
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     const hasMore = rows.length > limit;
@@ -569,7 +577,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       LEFT JOIN canvases c ON c.id = j.canvas_id
       WHERE f.id = ${id}`;
     if (!finding) return reply.code(404).send({ error: "finding not found" });
-    const [verification_jobs, source_events, comments, links, verification_rounds] = await Promise.all([
+    const [verification_jobs, source_events, comments, links, verification_rounds, researchRow] = await Promise.all([
       sql`SELECT id, type, status, error, started_at, finished_at, created_at, payload_json
           FROM jobs WHERE finding_id = ${id} ORDER BY created_at`,
       sql`SELECT id, job_seq, type, payload_json, created_at
@@ -581,10 +589,32 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       sql`SELECT id, attempt, verify_job_id, status, proposed_verdict, final_outcome,
                  requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
           FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt LIMIT 1001`,
+      sql`
+        SELECT dedupe_cluster_id, canonical_finding_id, is_canonical, dedupe_reason,
+               priority_score, priority_reason, priority_model, priority_prompt_revision, last_run_id
+        FROM finding_research WHERE finding_id = ${id}`,
     ]);
+    const research = projectFindingResearch((researchRow[0] ?? {}) as Record<string, unknown>);
+    const clusterMembers = research?.dedupe_cluster_id
+      ? await sql`
+          SELECT r.finding_id, r.is_canonical, r.canonical_finding_id, r.dedupe_reason,
+                 r.priority_score, f.title, f.verify_status, f.severity, f.job_id
+          FROM finding_research r
+          JOIN findings f ON f.id = r.finding_id
+          WHERE r.dedupe_cluster_id = ${research.dedupe_cluster_id}
+          ORDER BY r.is_canonical DESC, f.created_at`
+      : [];
+    const [lastRun] = research?.last_run_id
+      ? await sql`
+          SELECT id, kind, status, model, prompt_revision, error, created_at, finished_at
+          FROM finding_research_runs WHERE id = ${research.last_run_id}`
+      : [];
     const trace = await loadFindingTrace(sql, finding, verification_rounds);
     return {
-      finding,
+      finding: { ...finding, ...research },
+      research,
+      cluster_members: clusterMembers,
+      last_research_run: lastRun ?? null,
       verification_jobs: verification_jobs.map((verificationJob) => ({
         ...verificationJob,
         error: projectCredentialProviderError(verificationJob.error),

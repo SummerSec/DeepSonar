@@ -9,6 +9,8 @@ import {
   findingsListTruncated,
   PROJECT_RISK_CAPTION,
   PROJECT_RISK_TITLE,
+  researchDedupeLabel,
+  researchPriorityLabel,
 } from "./findings-risk-desk";
 
 function finding(overrides: Partial<FindingSummary> = {}): FindingSummary {
@@ -79,4 +81,18 @@ test("risk desk totals prefer the project aggregate when the list window truncat
   assert.equal(canvasScopedTotal(summary, []), 512);
   assert.equal(canvasScopedTotal(summary, ["canvas-b"]), 112);
   assert.match(dispositionBadgeTone("human_reproducing"), /violet/);
+});
+
+test("research badges stay independent from verify and severity", () => {
+  assert.equal(researchPriorityLabel(80), "优先 80");
+  assert.equal(researchPriorityLabel(null), null);
+  assert.equal(researchDedupeLabel({ is_canonical: false, canonical_finding_id: "abc" }), "语义重复");
+  assert.equal(researchDedupeLabel({ is_canonical: true, dedupe_cluster_id: "c1" }), "canonical");
+  assert.equal(researchDedupeLabel({ verify_status: "pending" } as FindingSummary), null);
+  const page = readFileSync(new URL("./pages/FindingsPage.tsx", import.meta.url), "utf8");
+  const panel = readFileSync(new URL("./FindingDetailPanel.tsx", import.meta.url), "utf8");
+  assert.match(page, /researchPriorityLabel/);
+  assert.match(page, /researchDedupeLabel/);
+  assert.match(panel, /研究排序不改写技术验证、严重度或报告门禁/);
+  assert.match(panel, /aria-label="语义去重与研究优先级"/);
 });

@@ -482,6 +482,30 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   )}
                 </section>
 
+                {(detail.cluster_members?.length || detail.last_research_run) && (
+                  <section className="theme-surface mt-4 rounded-xl px-4 py-4 ring-1" aria-label="语义去重与研究优先级">
+                    <h2 className="text-[14px] font-medium text-zinc-200">语义去重</h2>
+                    <p className="mt-1 text-[12px] leading-5 text-zinc-500">
+                      来源 Finding 与证据均保留。模型 {detail.last_research_run?.model ?? f.priority_model ?? "—"} · prompt {detail.last_research_run?.prompt_revision ?? f.priority_prompt_revision ?? "—"}
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {(detail.cluster_members ?? []).map((member) => (
+                        <div key={member.finding_id} className="theme-input-surface rounded-lg border px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[13px] text-zinc-200">{member.title}</span>
+                            <span className="font-mono text-[10px] text-zinc-500">{member.is_canonical ? "canonical" : "duplicate"}</span>
+                            <StatusBadge status={member.verify_status} />
+                            <SeverityBadge severity={member.severity} />
+                          </div>
+                          {member.dedupe_reason && (
+                            <p className="mt-1 text-[11px] leading-4 text-zinc-500">{member.dedupe_reason}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
                 {reportEligible && (
                   <section className="theme-surface mt-6 rounded-xl ring-1" aria-label="Finding 报告">
                     <div className="theme-divider flex flex-wrap items-center gap-2 border-b px-4 py-3">
@@ -934,6 +958,29 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
 
                 <SidebarField label="严重度">
                   <SeverityBadge severity={f.severity} />
+                </SidebarField>
+
+                <SidebarField label="研究排序">
+                  <div className="space-y-1.5 text-[12px] leading-5 text-zinc-300">
+                    <div>优先级 {f.priority_score == null ? "未排序" : Math.round(Number(f.priority_score))}</div>
+                    <div className="text-[11px] text-zinc-500">
+                      {f.is_canonical === false
+                        ? `语义重复 → ${(f.canonical_finding_id ?? "").slice(0, 8)}`
+                        : f.dedupe_cluster_id
+                          ? "canonical Finding"
+                          : "尚未聚类"}
+                    </div>
+                    {f.priority_reason && <p className="text-[11px] leading-4 text-zinc-500">{f.priority_reason}</p>}
+                    {f.dedupe_reason && <p className="text-[11px] leading-4 text-zinc-500">{f.dedupe_reason}</p>}
+                    {detail.last_research_run?.status === "failed" && (
+                      <p className="text-[11px] text-red-300">
+                        研究失败：{detail.last_research_run.error || "已保留候选，未自动确认"}
+                      </p>
+                    )}
+                    <p className="text-[11px] leading-4 text-zinc-600">
+                      研究排序不改写技术验证、严重度或报告门禁。
+                    </p>
+                  </div>
                 </SidebarField>
 
                 <SidebarField label="项目">

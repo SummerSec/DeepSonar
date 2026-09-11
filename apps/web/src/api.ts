@@ -676,6 +676,18 @@ export interface ProjectFindingsSummary {
   canvases: Array<{ id: string; title: string; count: number }>;
 }
 
+export interface FindingResearch {
+  dedupe_cluster_id: string | null;
+  canonical_finding_id: string | null;
+  is_canonical: boolean | null;
+  dedupe_reason: string | null;
+  priority_score: number | null;
+  priority_reason: string | null;
+  priority_model: string | null;
+  priority_prompt_revision: string | null;
+  last_run_id: string | null;
+}
+
 /** 发现清单 */
 export interface FindingSummary {
   id: string;
@@ -703,6 +715,16 @@ export interface FindingSummary {
   canvas_id?: string | null;
   canvas_title?: string | null;
   has_waiting_human?: boolean;
+  dedupe_cluster_id?: string | null;
+  canonical_finding_id?: string | null;
+  is_canonical?: boolean | null;
+  dedupe_reason?: string | null;
+  priority_score?: number | null;
+  priority_reason?: string | null;
+  priority_model?: string | null;
+  priority_prompt_revision?: string | null;
+  last_run_id?: string | null;
+  research?: FindingResearch | null;
 }
 
 export interface FindingComment {
@@ -865,6 +887,28 @@ export interface FindingDetail {
   trace: FindingTrace;
   comments?: FindingComment[];
   links?: FindingLink[];
+  research?: FindingResearch | null;
+  cluster_members?: Array<{
+    finding_id: string;
+    is_canonical: boolean;
+    canonical_finding_id: string | null;
+    dedupe_reason: string | null;
+    priority_score: number | null;
+    title: string;
+    verify_status: string;
+    severity: string | null;
+    job_id: string;
+  }>;
+  last_research_run?: {
+    id: string;
+    kind: string;
+    status: string;
+    model: string | null;
+    prompt_revision: string | null;
+    error: string | null;
+    created_at: string;
+    finished_at: string | null;
+  } | null;
 }
 
 export interface FindingTraceEvidence {
