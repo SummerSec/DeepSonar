@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   CaretDown,
   DotsThree,
   FileText,
@@ -11,10 +10,11 @@ import {
   Play,
   SealCheck,
   Prohibit,
+  SquaresFour,
   Target,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   api,
   type CanvasConvergence,
@@ -25,6 +25,7 @@ import {
   type FindingSummary,
   type EffectiveFindingProtocol,
   type JobSummary,
+  type TaskReport,
 } from "../api";
 import { useAuth } from "../auth";
 import { canEditTaskIntent, taskIntentContentFromTarget } from "../task-intent";
@@ -56,21 +57,30 @@ import { ReportPanel } from "../ReportPanel";
 import { taskWorkbenchCanvasLayerClass, taskWorkbenchListPaneClass } from "../task-workbench-layers";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
+import { TaskOverview } from "../task-workbench/TaskOverview";
+import { TaskWorkbenchHeader } from "../task-workbench/TaskWorkbenchHeader";
+import { TaskWorkbenchShell } from "../task-workbench/TaskWorkbenchShell";
+import { projectTaskActions, projectTaskNextSteps } from "../task-workbench/task-actions";
+import {
+  projectCognitionStatus,
+  projectDeliveryStatus,
+  projectTaskOutcomeSummary,
+  projectTaskStatusLines,
+} from "../task-workbench/task-outcome";
+import { projectTaskTrace } from "../task-workbench/task-trace";
+import { readTaskWorkbenchView, writeTaskWorkbenchView, type TaskWorkbenchView } from "../task-workbench/task-workbench-tabs";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import {
   DataTable,
   EmptyState,
   SeverityBadge,
   StatusBadge,
-  formatDate,
   formatElapsed,
   formatTime,
   relativeTime,
   tdCls,
   thCls,
 } from "../ui";
-
-type Tab = "canvas" | "facts" | "findings" | "jobs" | "report";
 
 // Human-gated work is still active; current running elapsed therefore continues
 // from the first actual start while a Job is waiting_human.
@@ -149,7 +159,7 @@ export function TaskCanvasPage() {
   const { me } = useAuth();
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = (searchParams.get("tab") as Tab) || "canvas";
+  const tab = readTaskWorkbenchView(searchParams);
   const severities = readMultiSearchParam(searchParams, "severity");
   const profiles = readMultiSearchParam(searchParams, "profile");
   const verifyStatuses = readMultiSearchParam(searchParams, "verify");
@@ -201,6 +211,7 @@ export function TaskCanvasPage() {
   const [intentSaving, setIntentSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [taskReport, setTaskReport] = useState<TaskReport | null>(null);
   const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerNode, setComposerNode] = useState<CanvasNode | null>(null);
@@ -230,6 +241,7 @@ export function TaskCanvasPage() {
     paginationRef.current = { findings: null, jobs: null, facts: null };
     setMeta(null);
     setNodes([]);
+    setTaskReport(null);
     setConvergence(null);
     setError(null);
     setComposerOpen(false);
@@ -275,6 +287,26 @@ export function TaskCanvasPage() {
       clearInterval(t);
     };
   }, [canvasId, projectId, prefUserKey]);
+
+  useEffect(() => {
+    if (!projectId || !canvasId) return;
+    let stop = false;
+    const tick = () => {
+      api.projectReports(projectId, { canvas_id: canvasId })
+        .then((aggregation) => {
+          if (!stop) setTaskReport(aggregation.tasks[0]?.task_reports[0] ?? null);
+        })
+        .catch(() => {
+          if (!stop) setTaskReport(null);
+        });
+    };
+    tick();
+    const timer = window.setInterval(tick, 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [projectId, canvasId]);
 
   useEffect(() => {
     if (!canvasId) return;
@@ -678,11 +710,65 @@ export function TaskCanvasPage() {
     return "自驱中";
   }, [convergence]);
 
-  const setTab = (next: Tab) => {
-    const sp = new URLSearchParams(searchParams);
-    if (next === "canvas") sp.delete("tab");
-    else sp.set("tab", next);
-    setSearchParams(sp, { replace: true });
+  const findingsForProjection = findingIndex.length ? findingIndex : findings;
+  const outcome = useMemo(() => projectTaskOutcomeSummary({
+    objective: taskIntentContentFromTarget(meta?.target_json) || meta?.title || "",
+    lifecycle: taskLifecycle,
+    findings: findingsForProjection,
+    facts,
+    report: taskReport
+      ? {
+        version: taskReport.version,
+        status: taskReport.status,
+        generated_at: taskReport.summary_json?.generated_at ?? null,
+        updated_at: taskReport.updated_at,
+        created_at: taskReport.created_at,
+      }
+      : null,
+  }), [facts, findingsForProjection, meta?.target_json, meta?.title, taskLifecycle, taskReport]);
+  const statusLines = useMemo(() => {
+    const refutedCount = findingsForProjection.filter((finding) => (
+      finding.verify_status === "false_positive" || finding.verify_status === "rejected"
+    )).length;
+    return projectTaskStatusLines(
+      outcome.lifecycle,
+      projectCognitionStatus({
+        confirmed_count: outcome.confirmed_count,
+        pending_verification_count: outcome.pending_verification_count,
+        needs_human_count: outcome.needs_human_count,
+        conflict_count: outcome.conflict_count,
+        refuted_count: refutedCount,
+      }),
+      projectDeliveryStatus(taskReport, outcome.report_stale),
+    );
+  }, [findingsForProjection, outcome, taskReport]);
+  const pendingActions = useMemo(() => projectTaskActions({
+    findings: findingsForProjection,
+    facts,
+    jobs,
+    interventions: listHumanInterventions(nodes).map((item) => ({
+      id: item.node.id,
+      reason: item.reason,
+      findingId: item.findingId,
+      jobId: item.jobId,
+      pending: item.pending,
+    })),
+    reportStale: outcome.report_stale,
+  }), [facts, findingsForProjection, jobs, nodes, outcome.report_stale]);
+  const nextSteps = useMemo(() => projectTaskNextSteps(pendingActions), [pendingActions]);
+  const trace = useMemo(() => projectTaskTrace({
+    objective: outcome.objective,
+    createdAt: meta?.created_at ?? outcome.last_updated_at,
+    jobs,
+    facts,
+    findings: findingsForProjection,
+    report: taskReport,
+    lifecycleLabel: taskLifecycle.label,
+    lifecycleReason: outcome.lifecycle_reason,
+  }), [facts, findingsForProjection, jobs, meta?.created_at, outcome.last_updated_at, outcome.lifecycle_reason, outcome.objective, taskLifecycle.label, taskReport]);
+
+  const setTab = (next: TaskWorkbenchView) => {
+    setSearchParams(writeTaskWorkbenchView(searchParams, next), { replace: true });
   };
 
   const setQuery = (key: "finding" | "job" | "traceFinding" | "focusNode", value: string | null) => {
@@ -714,8 +800,7 @@ export function TaskCanvasPage() {
   };
 
   const focusFindingTrace = (findingId: string) => {
-    const sp = new URLSearchParams(searchParams);
-    sp.delete("tab");
+    const sp = writeTaskWorkbenchView(searchParams, "canvas");
     sp.delete("finding");
     sp.delete("focusNode");
     sp.set("traceFinding", findingId);
@@ -738,6 +823,22 @@ export function TaskCanvasPage() {
     setComposerNode(target);
     setComposerInterventionId(openHumanInterventionForJob(nodes, targetJobId)?.id ?? null);
     setComposerOpen(true);
+  };
+  const openAction = (action: { recommended_action: string; evidence_refs: string[] }) => {
+    if (action.recommended_action === "review_report") {
+      setTab("report");
+      return;
+    }
+    const findingId = action.evidence_refs.find((ref) => ref.startsWith("finding:"))?.slice("finding:".length);
+    const jobId = action.evidence_refs.find((ref) => ref.startsWith("job:"))?.slice("job:".length);
+    const factId = action.evidence_refs.find((ref) => ref.startsWith("fact:"))?.slice("fact:".length);
+    if (action.recommended_action === "reply_to_agent" && jobId) {
+      openHumanReply(humanMessageTargetNodeForJobId(jobId, nodes, jobs));
+      return;
+    }
+    if (findingId) setQuery("finding", findingId);
+    else if (factId) setFactQuery("fact", factId);
+    else if (jobId) setQuery("job", jobId);
   };
   const ignoreIntervention = async (item: HumanInterventionItem) => {
     if (!canvasId) return;
@@ -811,85 +912,40 @@ export function TaskCanvasPage() {
     return formatElapsed(job.started_at, job.finished_at, clock);
   };
 
-  const tabs: { key: Tab; label: string; count?: number; icon: typeof Graph }[] = [
-    { key: "canvas", label: "过程画布", icon: Graph },
-    { key: "facts", label: "事实", count: facts.length, icon: Note },
-    { key: "findings", label: "本次发现", count: findings.length, icon: ListBullets },
-    { key: "jobs", label: "本次运行", count: jobs.length, icon: Target },
-    { key: "report", label: "报告", icon: FileText },
+  const tabs: { key: TaskWorkbenchView; count?: number; icon: typeof Graph }[] = [
+    { key: "overview", icon: SquaresFour },
+    { key: "canvas", icon: Graph },
+    { key: "facts", count: facts.length, icon: Note },
+    { key: "findings", count: findings.length, icon: ListBullets },
+    { key: "jobs", count: jobs.length, icon: Target },
+    { key: "report", icon: FileText },
   ];
 
   return (
-    <div className="task-workbench flex h-full min-h-0 flex-col bg-[var(--bg)]">
-      {/* 工作台上下文：返回、任务标题与状态 */}
-      <div className="task-workbench-header mx-3 mt-3 flex min-h-14 shrink-0 flex-wrap items-start gap-3 rounded-[20px] bg-white/[.03] px-3 py-2 ring-1 ring-white/[.06] sm:items-center">
-        <Link
-          to={`/projects/${projectId}/tasks`}
-          className="order-1 flex items-center gap-1.5 rounded-full theme-surface px-3 py-2 text-[10px] text-zinc-500 transition-colors hover:bg-[var(--surface-tint-strong)] hover:text-zinc-200 sm:order-none"
-        >
-          <ArrowLeft size={14} weight="light" /> 任务列表
-        </Link>
-        <div className="order-3 min-w-0 w-full flex-none sm:order-none sm:w-auto sm:flex-1">
-          <span className="block break-words text-[13px] font-medium text-zinc-200 sm:truncate">
-            {meta?.title ?? "加载任务…"}
-          </span>
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-            <span className="inline-flex rounded-full px-2 py-0.5 font-mono text-[9px] ring-1" style={{ color: taskLifecycle.color, background: `${taskLifecycle.color}18`, borderColor: `${taskLifecycle.color}35` }}>
-              {taskLifecycle.label}
-            </span>
-            {findingProtocol && (
-              <span
-                className="inline-flex min-w-0 max-w-full items-center break-words rounded-full bg-acc-500/[.08] px-2 py-0.5 font-mono text-[9px] leading-relaxed text-acc-300 ring-1 ring-acc-400/20"
-                title={`允许 ${findingProtocol.allowed_profiles.join(", ")}`}
-              >
-                Finding 协议：{findingProtocol.display_name} · {findingProtocol.source === "task" ? "任务配置" : findingProtocol.source === "project" ? "继承项目" : "继承全局"}
-              </span>
-            )}
-          </div>
-          <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
-            {[
-              decisionLabel,
-              `${findings.length} findings`,
-              `${jobs.length} runs`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-            {msg ? ` · ${msg}` : ""}
-          </span>
-          {!taskArchived && (
-            <span className="mt-1 block text-[10px] leading-4 text-zinc-600">
-              暂停会阻止该任务领取和派生新 Job；已运行 Job 会安全收尾，不会强制中断。
-            </span>
-          )}
-          {meta && (
-            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-4">
-              <LifecycleDatum label="创建" value={formatDate(meta.created_at)} title={formatTime(meta.created_at)} />
-              <LifecycleDatum
-                label="开始执行"
-                value={startExecValue}
-                title={startExecTitle}
-                active={Boolean(meta.started_at) && lifecycleActive}
-              />
-              <LifecycleDatum
-                label="生命周期"
-                value={executionElapsed}
-                title={
-                  meta.started_at
-                    ? (lifecycleActive ? "从实际开始执行到现在" : "从实际开始执行到终态结束")
-                    : "生命周期从实际开始执行起算；尚未开始"
-                }
-                active={Boolean(meta.started_at) && lifecycleActive}
-              />
-              <LifecycleDatum
-                label="结束"
-                value={isScheduled ? "定时等待" : lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"}
-                title={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined}
-              />
-            </div>
-          )}
-        </div>
-        {/* Canvas 执行门禁是主操作；Hub 收敛控制收进 ⋯。 */}
-        <div className="order-2 ml-auto flex shrink-0 items-center gap-1.5 sm:order-none sm:ml-0">
+    <TaskWorkbenchShell
+      view={tab}
+      tabs={tabs}
+      onViewChange={setTab}
+      header={(
+        <TaskWorkbenchHeader
+          projectId={projectId}
+          title={meta?.title ?? "加载任务…"}
+          outcome={outcome}
+          statusLines={statusLines}
+          findingProtocol={findingProtocol}
+          decisionLabel={decisionLabel}
+          message={msg}
+          taskArchived={taskArchived}
+          createdAt={meta?.created_at}
+          startExecValue={startExecValue}
+          startExecTitle={startExecTitle}
+          lifecycleActive={lifecycleActive}
+          executionElapsed={executionElapsed}
+          startedAt={meta?.started_at}
+          endValue={isScheduled ? "定时等待" : lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"}
+          endTitle={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined}
+          actions={(
+            <>
           {!taskArchived && (
             <button
               type="button"
@@ -993,11 +1049,11 @@ export function TaskCanvasPage() {
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* 任务只展示自然语言内容；默认可折叠，避免挤占工作台。 */}
-      {(scopeEntries.length > 0 || canEditIntent) && (
+            </>
+          )}
+        />
+      )}
+      belowHeader={(scopeEntries.length > 0 || canEditIntent) ? (
         <div className="task-workbench-scope mx-3 mt-2 shrink-0 rounded-2xl bg-white/[.018] ring-1 ring-white/[.04]">
           <button
             type="button"
@@ -1097,29 +1153,9 @@ export function TaskCanvasPage() {
             </div>
           )}
         </div>
-      )}
-
-      {/* 子 Tab：画布 / 本次发现 / 本次运行 */}
-      <div className="task-workbench-tabs mx-3 my-2 flex shrink-0 gap-1 overflow-x-auto rounded-full bg-white/[.018] p-1 ring-1 ring-white/[.045]">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-[10px] transition-colors ${
-              tab === t.key
-                ? "bg-white/[.08] text-zinc-100"
-                : "text-zinc-600 hover:bg-white/[.04] hover:text-zinc-300"
-            }`}
-          >
-            <t.icon size={15} />
-            {t.label}
-            {typeof t.count === "number" && (
-              <span className="font-mono text-[9px] text-zinc-600">{t.count}</span>
-            )}
-          </button>
-        ))}
-      </div>
-
+      ) : null}
+      notices={(
+        <>
       {error && (
         <div className="mx-3 mb-2 rounded-2xl bg-red-950/25 px-4 py-3 text-[11px] text-red-300 ring-1 ring-red-400/20">
           {error}
@@ -1143,8 +1179,9 @@ export function TaskCanvasPage() {
           onOpenJob={(jobId) => setQuery("job", jobId)}
         />
       )}
-
-      <div className="task-workbench-content theme-drawer relative mx-3 mb-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] ring-1 ring-[var(--line)]">
+        </>
+      )}
+    >
         <div
           className={taskWorkbenchCanvasLayerClass(tab === "canvas")}
           aria-hidden={tab !== "canvas"}
@@ -1174,6 +1211,21 @@ export function TaskCanvasPage() {
             />
           </div>
         </div>
+
+        {tab === "overview" && (
+          <div className={`${taskWorkbenchListPaneClass()} min-h-0 overflow-hidden`}>
+            <TaskOverview
+              outcome={outcome}
+              actions={pendingActions}
+              nextSteps={nextSteps}
+              trace={trace}
+              confirmedFindings={findingsForProjection.filter((finding) => finding.verify_status === "confirmed")}
+              onOpenFinding={(findingId) => setQuery("finding", findingId)}
+              onOpenAction={openAction}
+              onOpenView={setTab}
+            />
+          </div>
+        )}
 
         {tab === "report" && (
           <div className={`${taskWorkbenchListPaneClass()} min-h-0 overflow-hidden`}>
@@ -1530,7 +1582,6 @@ export function TaskCanvasPage() {
             )}
           </div>
         )}
-      </div>
       {selectedFact && (
         <FactDetailPanel
           canvasId={canvasId}
@@ -1570,10 +1621,6 @@ export function TaskCanvasPage() {
           }}
         />
       )}
-    </div>
+    </TaskWorkbenchShell>
   );
-}
-
-function LifecycleDatum({ label, value, title, active = false }: { label: string; value: string; title?: string; active?: boolean }) {
-  return <span className="min-w-0 truncate" title={title}><span className="text-zinc-700">{label} </span><strong className={active ? "font-medium text-run-400" : "font-medium text-zinc-400"}>{value}</strong></span>;
 }
