@@ -28,7 +28,7 @@ import {
   type Manifest,
   type OpenedPack,
 } from "./pack.js";
-import { CONFIG_MODULES, isConfigOnly, type ModuleKey } from "./modules.js";
+import { CONFIG_MODULES, MODULE_DEPS, isConfigOnly, type ModuleKey } from "./modules.js";
 import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
 
 function sanitizeImportedProjectConfig(cfg: Record<string, unknown>): Record<string, unknown> {
@@ -95,7 +95,7 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
   }
 
   for (const m of modules) {
-    if (!CONFIG_MODULES.has(m) && m !== "tasks" && m !== "findings" && m !== "events" && m !== "artifacts" && m !== "audit_archive") {
+    if (!Object.hasOwn(MODULE_DEPS, m)) {
       warnings.push(`模块 ${m} 当前版本支持有限，可能被跳过`);
     }
   }
