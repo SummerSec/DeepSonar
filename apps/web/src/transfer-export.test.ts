@@ -25,7 +25,7 @@ test("custom project modules skip unimplemented reports and artifacts", () => {
   assert.ok(ids.includes("events"));
 });
 
-test("custom export sends modules and does not waive the live-stream gate", () => {
+test("custom findings export does not waive the snapshot gate", () => {
   const body = buildProjectExportRequest("custom", new Set(["findings", "tasks"]));
   assert.deepEqual(body, {
     preset: "custom",
@@ -35,17 +35,22 @@ test("custom export sends modules and does not waive the live-stream gate", () =
   });
 });
 
-test("project_full stays blocked while evidence_archive still allows active jobs", () => {
+test("only evidence_archive and custom events send allow_active_jobs", () => {
   assert.equal(projectExportAllowsActiveJobs("project_full"), false);
   assert.equal(projectExportAllowsActiveJobs("custom"), false);
+  assert.equal(projectExportAllowsActiveJobs("custom", new Set(["findings"])), false);
+  assert.equal(projectExportAllowsActiveJobs("custom", new Set(["events"])), true);
   assert.equal(projectExportAllowsActiveJobs("evidence_archive"), true);
-  assert.equal(projectExportAllowsActiveJobs("configuration"), true);
+  assert.equal(projectExportAllowsActiveJobs("configuration"), false);
   assert.equal(buildProjectExportRequest("project_full", new Set()).allow_active_jobs, false);
+  assert.equal(buildProjectExportRequest("configuration", new Set()).allow_active_jobs, false);
   assert.equal(buildProjectExportRequest("evidence_archive", new Set()).allow_active_jobs, true);
+  assert.equal(buildProjectExportRequest("custom", new Set(["events"])).allow_active_jobs, true);
 });
 
-test("default custom selection is findings so an active-job project has a one-click data path", () => {
+test("default custom selection is findings and still requires a quiet project", () => {
   assert.deepEqual([...defaultProjectExportModules()], ["findings"]);
+  assert.equal(buildProjectExportRequest("custom", defaultProjectExportModules()).allow_active_jobs, false);
 });
 
 test("TransferPanel wires custom module picker and shared ModulePicker", () => {
@@ -55,4 +60,5 @@ test("TransferPanel wires custom module picker and shared ModulePicker", () => {
   assert.match(source, /PROJECT_EXPORT_MODULES/);
   assert.match(source, /function ModulePicker/);
   assert.doesNotMatch(source, /allow_active_jobs: preset !== "project_full"/);
+  assert.doesNotMatch(source, /可用自定义模块导出已提交 Finding/);
 });

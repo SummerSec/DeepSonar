@@ -49,12 +49,32 @@ function sanitizeImportedTarget(target: unknown): Record<string, unknown> {
   return next;
 }
 
+export function missingFindingJobWarning(sourceId: unknown, sourceJobId: unknown): string {
+  return `Finding ${String(sourceId ?? "∅")} 缺少对应 Job（source_job_id=${String(sourceJobId ?? "∅")}），已跳过`;
+}
+
+export function warningsForOrphanedFindings(
+  findings: Array<{ source_id?: unknown; source_job_id?: unknown }>,
+  jobs: Array<{ source_id?: unknown }>,
+): string[] {
+  const jobIds = new Set(jobs.map((job) => String(job.source_id ?? "")));
+  jobIds.delete("");
+  const warnings: string[] = [];
+  for (const finding of findings) {
+    const jobKey = String(finding.source_job_id ?? "");
+    if (!jobKey || !jobIds.has(jobKey)) {
+      warnings.push(missingFindingJobWarning(finding.source_id, finding.source_job_id));
+    }
+  }
+  return warnings;
+}
+
 export interface PreviewResult {
   compatible: boolean;
   source: Manifest["source"];
   selected_modules: ModuleKey[];
   auto_added_dependencies: string[];
-  counts: Record<string, number>;
+  counts: Record<string, number | boolean>;
   conflicts: { module: string; key: string; message: string }[];
   warnings: string[];
   credential_mappings_required: { source_id: string; name: string; provider: string; provider_valid?: boolean }[];
@@ -103,6 +123,17 @@ export async function buildPreview(importId: string): Promise<PreviewResult> {
   warnings.push("导入默认创建新项目并重映射 ID；外部集成与 Credential 需在目标环境重新绑定");
   if (modules.includes("tasks")) {
     warnings.push("活动 Job 将归档为 cancelled，不会自动继续执行");
+  }
+  if (modules.includes("findings")) {
+    warnings.push(
+      ...warningsForOrphanedFindings(
+        readJsonl(pack.files, "data/findings.jsonl"),
+        readJsonl(pack.files, "data/jobs.jsonl"),
+      ),
+    );
+  }
+  if (pack.manifest.warnings?.length) {
+    warnings.push(...pack.manifest.warnings);
   }
 
   // Credential metadata in an old package is untrusted input.  It is not
@@ -165,13 +196,18 @@ export interface ApplyBody {
   credential_mappings?: Record<string, string>;
 }
 
-export async function applyImport(importId: string, body: ApplyBody): Promise<{ project_id: string; id_map: Record<string, unknown> }> {
+export async function applyImport(importId: string, body: ApplyBody): Promise<{
+  project_id: string;
+  id_map: Record<string, unknown>;
+  warnings: string[];
+}> {
   const [row] = await sql`SELECT * FROM data_imports WHERE id = ${importId}`;
   if (!row) throw Object.assign(new Error("import not found"), { code: "NOT_FOUND" });
   if (row.status === "succeeded") {
     return {
       project_id: row.target_project_id as string,
       id_map: (row.id_map_json as Record<string, unknown>) ?? {},
+      warnings: ((row.preview_json as PreviewResult | null)?.warnings ?? []),
     };
   }
   if (!["preview_ready", "uploaded", "failed"].includes(row.status as string)) {
@@ -207,14 +243,20 @@ export async function applyImport(importId: string, body: ApplyBody): Promise<{ 
         UPDATE data_imports SET status = 'succeeded', target_project_id = ${body.target_project_id},
           id_map_json = ${sql.json(idMap as never)}, finished_at = now(), error = null
         WHERE id = ${importId}`;
-      return { project_id: body.target_project_id, id_map: idMap };
+      return { project_id: body.target_project_id, id_map: idMap, warnings: [] };
     }
 
     // create_new
     const result = await createNewProject(pack, modules, body);
+    const preview = (row.preview_json as PreviewResult | null) ?? null;
+    const previewWarnings = [
+      ...new Set([...(preview?.warnings ?? []), ...result.warnings]),
+    ];
     await sql`
       UPDATE data_imports SET status = 'succeeded', target_project_id = ${result.project_id},
-        id_map_json = ${sql.json(result.id_map as never)}, finished_at = now(), error = null
+        id_map_json = ${sql.json(result.id_map as never)},
+        preview_json = ${sql.json({ ...(preview ?? {}), warnings: previewWarnings } as never)},
+        finished_at = now(), error = null
       WHERE id = ${importId}`;
     return result;
   } catch (e) {
@@ -231,7 +273,7 @@ async function createNewProject(
   pack: OpenedPack,
   modules: ModuleKey[],
   body: ApplyBody,
-): Promise<{ project_id: string; id_map: Record<string, unknown> }> {
+): Promise<{ project_id: string; id_map: Record<string, unknown>; warnings: string[] }> {
   const srcProject = readJson<{
     name?: string;
     description?: string;
@@ -288,12 +330,13 @@ async function createNewProject(
       await importRoleConfigs(tx as Tx, projectId, pack, id_map, false, parseProjectImagePolicy(config_json));
     }
 
+    const warnings: string[] = [];
     if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
-      await importTasks(tx as Tx, projectId, pack, modules, id_map);
+      await importTasks(tx as Tx, projectId, pack, modules, id_map, warnings);
     }
 
     // 来源审计只作为 provenance，不写入 audit_logs 业务行（由路由写 project.import）
-    return { project_id: projectId, id_map };
+    return { project_id: projectId, id_map, warnings };
   });
 }
 
@@ -492,6 +535,7 @@ async function importTasks(
     nodes: Record<string, string>;
     findings: Record<string, string>;
   },
+  warnings: string[],
 ) {
   const canvases = readJsonl(pack.files, "data/canvases.jsonl");
   for (const c of canvases) {
@@ -598,7 +642,10 @@ async function importTasks(
     const findings = readJsonl(pack.files, "data/findings.jsonl");
     for (const f of findings) {
       const jobId = id_map.jobs[String(f.source_job_id)];
-      if (!jobId) continue;
+      if (!jobId) {
+        warnings.push(missingFindingJobWarning(f.source_id, f.source_job_id));
+        continue;
+      }
       const newId = randomUUID();
       id_map.findings[String(f.source_id)] = newId;
       const nodeId = f.source_node_id ? id_map.nodes[String(f.source_node_id)] ?? null : null;

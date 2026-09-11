@@ -296,7 +296,7 @@ export function TransferPanel({
             ) : (
               <>
                 生成 <code>.deepsonarpack</code>。默认不含 Secret 明文、API Token 与 Job Token。
-                有活动 Job 时可用自定义模块导出已提交 Finding/任务结果，或改用证据归档；完整项目需等待任务结束。
+                有活动 Job 时请用证据归档，或自定义勾选事件并显式允许；完整项目与任务/Finding 快照需等待任务结束。
               </>
             )}
           </HelpTip>

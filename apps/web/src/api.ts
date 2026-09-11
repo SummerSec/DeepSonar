@@ -1015,7 +1015,7 @@ export interface ImportPreview {
   kind?: "platform" | string;
   source: { project_name?: string; project_id?: string; app_version?: string };
   selected_modules: string[];
-  counts: Record<string, number>;
+  counts: Record<string, number | boolean>;
   conflicts: { module: string; key: string; message: string }[];
   warnings: string[];
   credential_mappings_required: { source_id: string; name: string; provider: string }[];
@@ -2388,7 +2388,13 @@ export const api = {
       credential_mappings?: Record<string, string>;
     },
   ) =>
-    send<{ project_id?: string; id_map?: Record<string, unknown>; ok?: boolean; summary?: Record<string, number> }>(
+    send<{
+      project_id?: string;
+      id_map?: Record<string, unknown>;
+      warnings?: string[];
+      ok?: boolean;
+      summary?: Record<string, number>;
+    }>(
       "POST",
       `/imports/${id}/apply`,
       body,

@@ -25,6 +25,7 @@ import {
   FORMAT,
   FORMAT_VERSION,
   activeJobsErrorMessage,
+  assertExportActiveJobsOption,
   exportRequiresQuietProject,
   moduleVersion,
   resolveModules,
@@ -52,9 +53,37 @@ export interface ProjectManifestOptions {
   projectName: string;
   preset: Preset;
   modules: ModuleKey[];
-  counts: Record<string, number>;
+  counts: Record<string, number | boolean>;
   credentialsMode: "excluded" | "metadata";
   instanceId: string;
+  warnings?: string[];
+}
+
+export const EVENTS_EXPORT_LIMIT = 100_000;
+export const EXPORT_SNAPSHOT_ISOLATION = "isolation level repeatable read read only";
+export const EVENTS_TRUNCATED_WARNING = `events 达到导出上限 ${EVENTS_EXPORT_LIMIT}，结果已截断`;
+
+export function applyEventsExportLimit<T>(
+  rows: T[],
+  limit = EVENTS_EXPORT_LIMIT,
+): { rows: T[]; truncated: boolean; warning?: string } {
+  if (rows.length > limit) {
+    return { rows: rows.slice(0, limit), truncated: true, warning: EVENTS_TRUNCATED_WARNING };
+  }
+  return { rows, truncated: false };
+}
+
+export function projectRoleConfigCredentials(
+  binds: ReadonlyArray<{ id?: unknown; purpose?: unknown; name?: unknown; kind?: unknown; provider?: unknown }>,
+  credMode: "excluded" | "metadata",
+): Array<Record<string, unknown>> {
+  if (credMode === "excluded") return [];
+  return binds.map((b) => ({
+    source_credential_id: b.id,
+    purpose: b.purpose,
+    name: b.name,
+    ...projectCredentialProvider(b.kind, b.provider),
+  }));
 }
 
 /** Build the project export manifest with the current Scheduler schema baseline. */
@@ -78,6 +107,7 @@ export function buildProjectManifest(options: ProjectManifestOptions): Manifest 
     },
     secrets: { mode: options.credentialsMode === "excluded" ? "excluded" : "metadata", algorithm: null },
     signature: null,
+    ...(options.warnings?.length ? { warnings: options.warnings } : {}),
   };
 }
 
@@ -97,77 +127,85 @@ export async function runExport(exportId: string): Promise<void> {
   const options = (claim[0].options_json ?? {}) as ExportOptions;
   const preset = (claim[0].preset as Preset) || options.preset || "configuration";
   const { modules } = resolveModules(preset, (claim[0].modules_json as string[]) ?? options.modules);
+  const allowActiveJobs = options.allow_active_jobs === true;
 
   try {
-    const [project] = await sql`SELECT * FROM projects WHERE id = ${projectId}`;
-    if (!project) throw Object.assign(new Error("project not found"), { code: "PROJECT_NOT_FOUND" });
-
-    if (exportRequiresQuietProject(preset, modules, options.allow_active_jobs === true)) {
-      const active = await sql`
-        SELECT COUNT(*)::int AS n FROM jobs
-        WHERE project_id = ${projectId} AND status = ANY(${ACTIVE_JOB_STATUSES as unknown as string[]})`;
-      if ((active[0]?.n as number) > 0) {
-        throw Object.assign(new Error(activeJobsErrorMessage((active[0] as { n: number }).n)), {
-          code: "ACTIVE_JOBS",
-        });
-      }
-    }
+    assertExportActiveJobsOption(preset, modules, allowActiveJobs);
 
     await sql`UPDATE data_exports SET status = 'packaging', heartbeat_at = now() WHERE id = ${exportId}`;
 
     const files: PackFile[] = [];
-    const counts: Record<string, number> = {};
+    const counts: Record<string, number | boolean> = {};
+    const warnings: string[] = [];
     const credMode = options.credentials?.mode ?? "metadata";
+    let projectName = "";
 
-    // project
-    files.push({
-      path: "data/project.json",
-      content: JSON.stringify(
-        {
-          source_id: project.id,
-          name: project.name,
-          description: project.description,
-          status: project.status,
-          config_json: stripConfigSecrets(project.config_json),
-        },
-        null,
-        2,
-      ),
+    await sql.begin(EXPORT_SNAPSHOT_ISOLATION, async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      if (exportRequiresQuietProject(preset, modules, allowActiveJobs)) {
+        const active = await tx`
+          SELECT COUNT(*)::int AS n FROM jobs
+          WHERE project_id = ${projectId} AND status = ANY(${ACTIVE_JOB_STATUSES as unknown as string[]})`;
+        if ((active[0]?.n as number) > 0) {
+          throw Object.assign(new Error(activeJobsErrorMessage((active[0] as { n: number }).n)), {
+            code: "ACTIVE_JOBS",
+          });
+        }
+      }
+
+      const [project] = await tx`SELECT * FROM projects WHERE id = ${projectId}`;
+      if (!project) throw Object.assign(new Error("project not found"), { code: "PROJECT_NOT_FOUND" });
+      projectName = project.name as string;
+
+      files.push({
+        path: "data/project.json",
+        content: JSON.stringify(
+          {
+            source_id: project.id,
+            name: project.name,
+            description: project.description,
+            status: project.status,
+            config_json: stripConfigSecrets(project.config_json),
+          },
+          null,
+          2,
+        ),
+      });
+      counts.project = 1;
+
+      if (modules.includes("rules")) {
+        const rules = ((project.config_json as Record<string, unknown>)?.rules ?? {}) as Record<string, unknown>;
+        files.push({ path: "data/rules.json", content: JSON.stringify({ rules }, null, 2) });
+        counts.rules = 1;
+      }
+
+      if (modules.includes("roles") || modules.includes("environment") || modules.includes("skills") || modules.includes("runtime_images")) {
+        await collectRoles(tx, projectId, modules, files, counts, credMode);
+      }
+
+      if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
+        await collectTasks(tx, projectId, modules, files, counts, warnings);
+      }
+
+      if (modules.includes("audit_archive")) {
+        const logs = await tx`
+          SELECT at, actor_type, actor_id, action, resource_type, resource_id, result, error_code, after_json
+          FROM audit_logs WHERE project_id = ${projectId} ORDER BY at LIMIT 5000`;
+        files.push({ path: "evidence/audit-logs.jsonl", content: toJsonl(logs) });
+        counts.audit_logs = logs.length;
+      }
     });
-    counts.project = 1;
-
-    if (modules.includes("rules")) {
-      const rules = ((project.config_json as Record<string, unknown>)?.rules ?? {}) as Record<string, unknown>;
-      files.push({ path: "data/rules.json", content: JSON.stringify({ rules }, null, 2) });
-      counts.rules = 1;
-    }
-
-    if (modules.includes("roles") || modules.includes("environment") || modules.includes("skills") || modules.includes("runtime_images")) {
-      await collectRoles(projectId, modules, files, counts, credMode);
-    }
-
-    if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
-      await collectTasks(projectId, modules, files, counts);
-    }
-
-    if (modules.includes("audit_archive")) {
-      const logs = await sql`
-        SELECT at, actor_type, actor_id, action, resource_type, resource_id, result, error_code, after_json
-        FROM audit_logs WHERE project_id = ${projectId} ORDER BY at LIMIT 5000`;
-      // 脱敏：不导出 ip/user_agent
-      files.push({ path: "evidence/audit-logs.jsonl", content: toJsonl(logs) });
-      counts.audit_logs = logs.length;
-    }
 
     const instanceId = sha256Hex(`deepsonar:${process.env.COMPUTERNAME ?? process.env.HOSTNAME ?? "local"}`);
     const manifest = buildProjectManifest({
       projectId,
-      projectName: project.name as string,
+      projectName,
       preset,
       modules,
       counts,
       credentialsMode: credMode,
       instanceId,
+      warnings,
     });
 
     await ensureTransferDirs();
@@ -203,20 +241,21 @@ function stripConfigSecrets(configJson: unknown): Record<string, unknown> {
 }
 
 async function collectRoles(
+  db: typeof sql,
   projectId: string,
   modules: ModuleKey[],
   files: PackFile[],
-  counts: Record<string, number>,
+  counts: Record<string, number | boolean>,
   credMode: "excluded" | "metadata",
 ) {
-  const enabled = await sql`
+  const enabled = await db`
     SELECT config_json FROM projects WHERE id = ${projectId}`;
   const rolesCfg = (((enabled[0]?.config_json as Record<string, unknown>)?.roles ?? {}) ?? {}) as Record<
     string,
     unknown
   >;
 
-  const roleRows = await sql`
+  const roleRows = await db`
     SELECT r.id, r.name, r.title, r.description, r.builtin, r.kind, r.ui_color
     FROM agent_roles r
     WHERE r.kind = 'role' OR r.name IN (
@@ -226,7 +265,7 @@ async function collectRoles(
   files.push({ path: "data/roles.jsonl", content: toJsonl(roleRows) });
   counts.roles = roleRows.length;
 
-  const configs = await sql`
+  const configs = await db`
     SELECT rc.*, ar.name AS role_name
     FROM role_configs rc
     JOIN agent_roles ar ON ar.id = rc.role_id
@@ -260,9 +299,11 @@ async function collectRoles(
     }
     // 项目 RoleConfig 的 runtime_image_key 是遗留字段，不进入项目镜像策略导出。
 
-    const filesRows = await sql`
+    const filesRows = await db`
       SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${rc.id as string}`;
-    const binds = await sql`
+    const binds = credMode === "excluded"
+      ? []
+      : await db`
       SELECT c.id, c.name, c.kind, c.provider, c.fingerprint, c.last4, c.public_metadata_json, rc2.purpose
       FROM role_credentials rc2
       JOIN credentials c ON c.id = rc2.credential_id
@@ -308,12 +349,10 @@ async function collectRoles(
       runtime_image_key: null,
       version: rc.version,
       files: filesRows,
-      credentials: binds.map((b) => ({
-        source_credential_id: b.id,
-        purpose: b.purpose,
-        name: b.name,
-        ...projectCredentialProvider(b.kind, b.provider),
-      })),
+      credentials: projectRoleConfigCredentials(
+        binds as Array<{ id?: unknown; purpose?: unknown; name?: unknown; kind?: unknown; provider?: unknown }>,
+        credMode,
+      ),
     });
   }
 
@@ -344,7 +383,7 @@ async function collectRoles(
 
   if (modules.includes("skills")) {
     // 引用 skill_sources 元数据（不含 catalog 全文大字段可截断）
-    const sources = await sql`
+    const sources = await db`
       SELECT id, name, repo_url, branch, trust_status, enabled FROM skill_sources`;
     files.push({
       path: "data/skills.jsonl",
@@ -372,12 +411,14 @@ async function collectRoles(
 }
 
 async function collectTasks(
+  db: typeof sql,
   projectId: string,
   modules: ModuleKey[],
   files: PackFile[],
-  counts: Record<string, number>,
+  counts: Record<string, number | boolean>,
+  warnings: string[],
 ) {
-  const canvases = await sql`SELECT * FROM canvases WHERE project_id = ${projectId} ORDER BY created_at`;
+  const canvases = await db`SELECT * FROM canvases WHERE project_id = ${projectId} ORDER BY created_at`;
   files.push({
     path: "data/canvases.jsonl",
     content: toJsonl(
@@ -394,7 +435,7 @@ async function collectTasks(
   });
   counts.canvases = canvases.length;
 
-  const jobs = await sql`SELECT * FROM jobs WHERE project_id = ${projectId} ORDER BY created_at`;
+  const jobs = await db`SELECT * FROM jobs WHERE project_id = ${projectId} ORDER BY created_at`;
   files.push({
     path: "data/jobs.jsonl",
     content: toJsonl(
@@ -427,7 +468,7 @@ async function collectTasks(
 
   if (canvases.length) {
     const canvasIds = canvases.map((c) => c.id as string);
-    const nodes = await sql`SELECT * FROM canvas_nodes WHERE canvas_id = ANY(${canvasIds}) ORDER BY created_at`;
+    const nodes = await db`SELECT * FROM canvas_nodes WHERE canvas_id = ANY(${canvasIds}) ORDER BY created_at`;
     files.push({
       path: "data/nodes.jsonl",
       content: toJsonl(
@@ -449,7 +490,7 @@ async function collectTasks(
     });
     counts.nodes = nodes.length;
 
-    const edges = await sql`SELECT * FROM canvas_edges WHERE canvas_id = ANY(${canvasIds}) ORDER BY created_at`;
+    const edges = await db`SELECT * FROM canvas_edges WHERE canvas_id = ANY(${canvasIds}) ORDER BY created_at`;
     files.push({
       path: "data/edges.jsonl",
       content: toJsonl(
@@ -466,7 +507,7 @@ async function collectTasks(
   }
 
   if (modules.includes("findings")) {
-    const findings = await sql`SELECT * FROM findings WHERE project_id = ${projectId} ORDER BY created_at`;
+    const findings = await db`SELECT * FROM findings WHERE project_id = ${projectId} ORDER BY created_at`;
     files.push({
       path: "data/findings.jsonl",
       content: toJsonl(
@@ -491,14 +532,15 @@ async function collectTasks(
   if (modules.includes("events") && jobs.length) {
     const jobIds = jobs.map((j) => j.id as string);
     // 限制事件量
-    const events = await sql`
+    const events = await db`
       SELECT job_id, event_id, job_seq, attempt_id, type, payload_json, created_at
       FROM events WHERE job_id = ANY(${jobIds})
-      ORDER BY id LIMIT 100000`;
+      ORDER BY id LIMIT ${EVENTS_EXPORT_LIMIT + 1}`;
+    const limited = applyEventsExportLimit(events);
     files.push({
       path: "data/events.jsonl",
       content: toJsonl(
-        events.map((e) => ({
+        limited.rows.map((e) => ({
           source_job_id: e.job_id,
           event_id: e.event_id,
           job_seq: e.job_seq,
@@ -509,6 +551,10 @@ async function collectTasks(
         })),
       ),
     });
-    counts.events = events.length;
+    counts.events = limited.rows.length;
+    if (limited.truncated) {
+      counts.events_truncated = true;
+      if (limited.warning) warnings.push(limited.warning);
+    }
   }
 }

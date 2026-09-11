@@ -10,6 +10,7 @@
 
 ### 修复
 
+- 项目导出在活动 Job 下不再撕裂快照（#436）：数据收集走 `REPEATABLE READ` 只读事务；`project_full` 拒绝 `allow_active_jobs`，仅证据归档 / 自定义事件模块可显式允许；`credentials.mode=excluded` 不再把凭据身份写入 role-configs；events 达上限时标记 `counts.events_truncated` 与 manifest warning；导入对缺少 Job 的 Finding 记 warning。
 - 自定义项目导出模块校验：未知 / 原型链 selector（`constructor`/`toString` 等）返回 400 并列明 `rejected`，不再静默丢弃或 500；`reports`/`artifacts` 从未实现收集，已从导出契约移除（#435）。
 - OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
 - Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426）。

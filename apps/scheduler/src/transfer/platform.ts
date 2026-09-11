@@ -301,7 +301,7 @@ export interface PlatformPreview {
   kind: "platform";
   source: Manifest["source"];
   selected_modules: PlatformModule[];
-  counts: Record<string, number>;
+  counts: Record<string, number | boolean>;
   warnings: string[];
   conflicts: { module: string; key: string; message: string }[];
   credential_mappings_required: { source_id: string; name: string; provider: string; provider_valid?: boolean }[];
