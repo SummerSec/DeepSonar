@@ -642,6 +642,93 @@ const OPS: Op[] = [
       "400": { description: "自定义时间非法、倒序、超长或缺失" },
     },
   },
+  {
+    method: "get",
+    path: "/dashboard/quality",
+    summary: "质量指标（#445 Phase 1）",
+    description:
+      "只读派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本信号。从 Job / Finding / Verify / Usage Ledger 聚合，不改变 Hub 决策。可选 project_id / canvas_id 收窄到项目或任务；项目级 token 只看到本项目。query_plane=current。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      project_id: { type: "string", format: "uuid" },
+      canvas_id: { type: "string", format: "uuid" },
+    },
+    responses: {
+      "200": { description: "质量指标快照" },
+    },
+  },
+  {
+    method: "get",
+    path: "/dashboard/quality/replay",
+    summary: "Hub 回放基线（#445 Phase 1）",
+    description:
+      "按固定 hub_replay schema_version=1 从现有 hub_reason Job / hub_decision 事件派生回放记录。recalled_experiences 在 Phase 1 恒为空。不改变 Hub 决策。可选 project_id / canvas_id / limit（默认 50，最大 200）。query_plane=history。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      project_id: { type: "string", format: "uuid" },
+      canvas_id: { type: "string", format: "uuid" },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    responses: {
+      "200": { description: "Hub 回放基线" },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/quality",
+    summary: "项目质量指标",
+    description: "与 GET /dashboard/quality?project_id= 相同的只读质量快照，固定项目范围。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": { description: "项目质量指标" },
+      "404": { description: "项目不存在" },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/quality/replay",
+    summary: "项目 Hub 回放基线",
+    description: "与 GET /dashboard/quality/replay?project_id= 相同的固定格式回放记录。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    responses: {
+      "200": { description: "项目 Hub 回放基线" },
+      "404": { description: "项目不存在" },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/quality",
+    summary: "任务质量指标",
+    description: "与 GET /dashboard/quality?canvas_id= 相同的只读质量快照，固定任务画布范围。",
+    scope: "tasks:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": { description: "任务质量指标" },
+      "404": { description: "画布不存在" },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/quality/replay",
+    summary: "任务 Hub 回放基线",
+    description: "与 GET /dashboard/quality/replay?canvas_id= 相同的固定格式回放记录。",
+    scope: "tasks:read",
+    tags: ["Dashboard"],
+    query: {
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    responses: {
+      "200": { description: "任务 Hub 回放基线" },
+      "404": { description: "画布不存在" },
+    },
+  },
 
   // projects
   { method: "get", path: "/projects", summary: "项目列表", scope: "projects:read", tags: ["Projects"] },

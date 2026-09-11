@@ -4,6 +4,7 @@ import { audit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
+import { PROJECT_MISMATCH } from "./project-scope.js";
 import { resolveSessionToken } from "./users.js";
 
 /**
@@ -75,6 +76,12 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /dashboard/overview": "projects:read",
   "GET /dashboard/ops": "projects:read",
   "GET /dashboard/usage": "projects:read",
+  "GET /dashboard/quality": "projects:read",
+  "GET /dashboard/quality/replay": "projects:read",
+  "GET /projects/:id/quality": "projects:read",
+  "GET /projects/:id/quality/replay": "projects:read",
+  "GET /canvases/:id/quality": "tasks:read",
+  "GET /canvases/:id/quality/replay": "tasks:read",
   "GET /projects": "projects:read",
   "POST /projects": "projects:write",
   "GET /projects/:id": "projects:read",
@@ -401,11 +408,27 @@ export async function authHook(req: FastifyRequest, reply: FastifyReply): Promis
     return denyAudited(403, `scope 不足：需要 ${scope ?? "认证"}`, "insufficient_scope");
   }
 
-  // 项目限定 token：项目路由的 :id 必须匹配（列表类路由在 handler 侧各自过滤，Level A 从简）
-  if (actor.projectId && routeUrl.startsWith("/projects/:id")) {
-    const pid = (req.params as { id?: string } | undefined)?.id;
+  // 项目限定 token：/projects/:id 必须匹配。onRequest 可能尚未填 params，
+  // 或 routeOptions.url 回退成真实路径，因此同时认 params 与 raw path。
+  if (actor.projectId) {
+    const fromParams = routeUrl.startsWith("/projects/:id")
+      ? (req.params as { id?: string } | undefined)?.id
+      : undefined;
+    const fromPath = rawPath.match(/^\/projects\/([^/]+)/)?.[1];
+    const pid = fromParams ?? fromPath;
     if (pid && pid !== actor.projectId) {
-      return denyAudited(403, "token 仅限项目 " + actor.projectId, "project_mismatch");
+      inc("deepsonar_api_auth_failed_total", { reason: "project_mismatch" });
+      void audit(req, {
+        action: "auth.denied",
+        resourceType: "route",
+        resourceId: `${req.method} ${routeUrl}`,
+        result: "denied",
+        errorCode: "project_mismatch",
+      });
+      return reply.code(403).send({
+        error: "token 仅限项目 " + actor.projectId,
+        error_code: PROJECT_MISMATCH,
+      });
     }
   }
 

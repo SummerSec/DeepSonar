@@ -33,6 +33,8 @@ GET /canvases/:id/delta
 GET /canvases/:id/facts
 GET /canvases/:id/facts/:nodeId
 GET /canvases/:id/nodes/:nodeId
+GET /canvases/:id/quality
+GET /canvases/:id/quality/replay
 GET /canvases/:id/report
 GET /canvases/:id/report/availability
 GET /canvases/:id/reports
@@ -45,6 +47,8 @@ GET /credentials/:id/models
 GET /credentials/providers
 GET /dashboard/ops
 GET /dashboard/overview
+GET /dashboard/quality
+GET /dashboard/quality/replay
 GET /dashboard/usage
 GET /exports/:id
 GET /exports/:id/download
@@ -70,6 +74,8 @@ GET /platform/shared-assets
 GET /projects
 GET /projects/:id
 GET /projects/:id/findings/summary
+GET /projects/:id/quality
+GET /projects/:id/quality/replay
 GET /projects/:id/reports
 GET /projects/:id/canvases
 GET /projects/:id/exports
@@ -213,6 +219,8 @@ GET /canvases/{id}/delta
 GET /canvases/{id}/facts
 GET /canvases/{id}/facts/{nodeId}
 GET /canvases/{id}/nodes/{nodeId}
+GET /canvases/{id}/quality
+GET /canvases/{id}/quality/replay
 GET /canvases/{id}/report
 GET /canvases/{id}/report/availability
 GET /canvases/{id}/reports
@@ -225,6 +233,8 @@ GET /credentials/{id}/models
 GET /credentials/providers
 GET /dashboard/ops
 GET /dashboard/overview
+GET /dashboard/quality
+GET /dashboard/quality/replay
 GET /dashboard/usage
 GET /findings
 GET /canvases/{id}/messages
@@ -246,6 +256,8 @@ GET /platform/shared-assets
 GET /projects
 GET /projects/{id}
 GET /projects/{id}/findings/summary
+GET /projects/{id}/quality
+GET /projects/{id}/quality/replay
 GET /projects/{id}/reports
 GET /projects/{id}/canvases
 GET /projects/{id}/readiness
