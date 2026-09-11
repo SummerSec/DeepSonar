@@ -15,12 +15,21 @@ const KIND_RANK: Record<TaskActionKind, number> = {
   transient_retry: 3,
 };
 
+export type ActionJobEffect = {
+  effect_id: string;
+  effect_kind?: string | null;
+  status?: string | null;
+};
+
 export type ActionJob = {
   id: string;
   type?: string | null;
   status?: string | null;
   error?: string | null;
   role_name?: string | null;
+  /** Only true when an effect ledger proves every effect is settled. Missing means unproven. */
+  replay_safe?: boolean;
+  unknown_effects?: readonly ActionJobEffect[];
 };
 
 export type ActionIntervention = {
@@ -83,6 +92,52 @@ export function projectUnknownEffectAction(input: {
 
 function findingRef(id: string): string {
   return `finding:${id}`;
+}
+
+function isUnknownEffect(effect: ActionJobEffect): boolean {
+  return effect.status === "unknown" || effect.status === "effect_pending";
+}
+
+/** Replay is allowed only when a ledger exists and proves no unknown/pending effects. */
+export function isInterruptedJobReplaySafe(job: ActionJob): boolean {
+  if (job.replay_safe !== true) return false;
+  return !(job.unknown_effects ?? []).some(isUnknownEffect);
+}
+
+function interruptedJobLabel(job: ActionJob): string {
+  return job.role_name || job.type || "运行";
+}
+
+function projectInterruptedJobAction(job: ActionJob, status: "timeout" | "orphan"): TaskAction {
+  const unknown = (job.unknown_effects ?? []).filter(isUnknownEffect);
+  if (!isInterruptedJobReplaySafe(job)) {
+    return {
+      id: `job:${job.id}:${status}`,
+      kind: "unknown_effect",
+      title: `「${interruptedJobLabel(job)}」需要确认后才能继续`,
+      reason: unknown.length
+        ? `${status === "timeout" ? "运行超时" : "运行失联"}，并留下了未决外部效果`
+        : `${status === "timeout" ? "运行超时" : "运行失联"}，没有效果账本证明可以安全重放`,
+      impact: "无条件重试可能重复产生外部副作用",
+      evidence_refs: [`job:${job.id}`, ...unknown.map((effect) => `effect:${effect.effect_id}`)],
+      recommended_action: "needs_confirmation",
+      reversible: false,
+      next_state: "needs_confirmation",
+      priority: "high",
+    };
+  }
+  return {
+    id: `job:${job.id}:${status}`,
+    kind: "transient_retry",
+    title: `「${interruptedJobLabel(job)}」可安全重试`,
+    reason: status === "timeout" ? "运行超时，效果账本证明没有未决外部效果" : "运行失联，效果账本证明没有未决外部效果",
+    impact: "不处理则该分支不会继续产出证据",
+    evidence_refs: [`job:${job.id}`],
+    recommended_action: "retry_same_session",
+    reversible: true,
+    next_state: "running",
+    priority: "normal",
+  };
 }
 
 export function projectTaskActions(input: TaskActionInput): TaskAction[] {
@@ -178,18 +233,7 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       continue;
     }
     if (status === "timeout" || status === "orphan") {
-      actions.push({
-        id: `job:${job.id}:${status}`,
-        kind: "transient_retry",
-        title: `「${job.role_name || job.type || "运行"}」可安全重试`,
-        reason: status === "timeout" ? "运行超时，尚未看到不可逆外部效果" : "运行失联，可按旧快照恢复",
-        impact: "不处理则该分支不会继续产出证据",
-        evidence_refs: [`job:${job.id}`],
-        recommended_action: "retry_same_session",
-        reversible: true,
-        next_state: "running",
-        priority: "normal",
-      });
+      actions.push(projectInterruptedJobAction(job, status));
       continue;
     }
     if (status === "failed") {

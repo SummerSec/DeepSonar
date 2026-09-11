@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   dedupeTaskActions,
+  isInterruptedJobReplaySafe,
   projectTaskActions,
   projectTaskNextSteps,
   projectUnknownEffectAction,
@@ -36,7 +37,7 @@ test("actions classify conflict, human, repair, retry and unknown effect", () =>
     jobs: [
       { id: "j1", type: "review", status: "waiting_human" },
       { id: "j2", type: "test", status: "failed", error: "schema mismatch" },
-      { id: "j3", type: "explore", status: "timeout" },
+      { id: "j3", type: "explore", status: "timeout", replay_safe: true },
     ],
     interventions: [{ id: "h1", reason: "请确认复现步骤", findingId: "f2", jobId: "j1", pending: true }],
     reportStale: true,
@@ -56,6 +57,46 @@ test("actions classify conflict, human, repair, retry and unknown effect", () =>
   assert.equal(unknown.reversible, false);
   assert.equal(unknown.recommended_action, "confirm_unknown_effect");
   assert.doesNotMatch(unknown.title, /失败/);
+});
+
+test("timeout or orphan without a proven effect ledger needs confirmation, not retry", () => {
+  assert.equal(isInterruptedJobReplaySafe({ id: "j", status: "timeout" }), false);
+  assert.equal(isInterruptedJobReplaySafe({
+    id: "j",
+    status: "timeout",
+    replay_safe: true,
+    unknown_effects: [{ effect_id: "e1", status: "unknown" }],
+  }), false);
+  assert.equal(isInterruptedJobReplaySafe({ id: "j", status: "orphan", replay_safe: true }), true);
+
+  const unproven = projectTaskActions({
+    jobs: [
+      { id: "t1", type: "explore", status: "timeout" },
+      { id: "o1", type: "review", status: "orphan" },
+      {
+        id: "t2",
+        type: "test",
+        status: "timeout",
+        unknown_effects: [{ effect_id: "e9", effect_kind: "http_request", status: "effect_pending" }],
+      },
+    ],
+  });
+  assert.equal(unproven.length, 3);
+  for (const row of unproven) {
+    assert.equal(row.kind, "unknown_effect");
+    assert.equal(row.recommended_action, "needs_confirmation");
+    assert.equal(row.next_state, "needs_confirmation");
+    assert.equal(row.reversible, false);
+    assert.notEqual(row.recommended_action, "retry_same_session");
+    assert.doesNotMatch(row.title, /可安全重试/);
+  }
+  assert.ok(unproven.some((row) => row.evidence_refs.includes("effect:e9")));
+
+  const proven = projectTaskActions({
+    jobs: [{ id: "t3", type: "explore", status: "timeout", replay_safe: true }],
+  });
+  assert.equal(proven[0]?.kind, "transient_retry");
+  assert.equal(proven[0]?.recommended_action, "retry_same_session");
 });
 
 test("sort and dedupe keep a single highest-priority action per evidence", () => {
