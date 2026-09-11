@@ -14,6 +14,7 @@ if (!testDatabaseUrl) {
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("../../db.js");
+    const { deleteProjectsLeavingAuditShells } = await import("../../test-project-teardown.js");
     const {
       claimWorkerForDispatch,
       clearWorkerApiKeysForTests,
@@ -73,7 +74,7 @@ if (!testDatabaseUrl) {
     } finally {
       await sql`DELETE FROM jobs WHERE id = ANY(${[liveJobId, deadJobId]}::uuid[])`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
-      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql`DELETE FROM worker_nodes WHERE id LIKE ${`${prefix}%`}`;
       clearWorkerApiKeysForTests();
     }
