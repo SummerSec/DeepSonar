@@ -4,26 +4,35 @@
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-09-11
+
 ### 新增
 
-- 沙箱执行面节点化 P0（#415）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
+- 沙箱执行面节点化 P0（#415 / #416）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
+- 项目导出支持自定义模块（#411 / #412）：可按模块组合导出；`ACTIVE_JOBS` 门槛收紧到真正需要一致性的路径（`project_full` / 含 events 的自定义），findings/tasks 等允许在活动 Job 下导出。
 
 ### 修复
 
 - OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
-- Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426）。
+- Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426 / #429）。
+- OpenSandbox 创建沙箱时始终带 `extensions["bootstrap.execd.isolation"]=enable`（#427）：execd 指定 uid/gid（含 Kubernetes Gateway `/etc/hosts` 注入）才能通过 bwrap gate；不再依赖 Job 快照或新的平台开关。
+- Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423 / #424）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。
 
 ### 变更
 
-- Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。
-
-### 修复
-
-- OpenSandbox 创建沙箱时始终带 `extensions["bootstrap.execd.isolation"]=enable`（#427）：execd 指定 uid/gid（含 Kubernetes Gateway `/etc/hosts` 注入）才能通过 bwrap gate；不再依赖 Job 快照或新的平台开关。
-- 拆开平台版本与 Agent 运行时镜像版本（#417）：GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission 仍跟 `vX.Y.Z`；运行时产品只在指纹输入变化时升版本。指纹未变不新增 catalog version 行，也不对 ACR/GHCR/Docker Hub 打新的平台 version tag，继续指向已有不可变 digest。
+- 拆开平台版本与 Agent 运行时镜像版本（#417 / #418）：GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission 仍跟 `vX.Y.Z`；运行时产品只在指纹输入变化时升版本。指纹未变不新增 catalog version 行，也不对 ACR/GHCR/Docker Hub 打新的平台 version tag，继续指向已有不可变 digest。
 - 平台清单声明 `min_runtime_image`（全局下限 + 可选 per-key）。选中的官方 trusted 版本低于下限时，预检 / 建任务 / Job 冻结前 fail closed，稳定错误码 `RUNTIME_IMAGE_BELOW_PLATFORM_MIN`；已冻结 Job 快照不改写。
 - `deploy` 的平台镜像仍拉 `*:$IMAGE_TAG`（来自 catalog `platform_version`）；运行时镜像按 catalog 真实 version/digest 拉取，不再假设平台 `0.2.10` 等于 `kali:0.2.10`。
-- 任务工作台「创建」改为本地日历日 `YYYY-MM-DD`，不再显示「N 分钟/天前」；完整时刻仍在 tooltip（#419）。
+- 任务工作台「创建」改为本地日历日 `YYYY-MM-DD`，不再显示「N 分钟/天前」；完整时刻仍在 tooltip（#419 / #421）。
+- 统一 OpenSandbox 宿主端点缺省为 `127.0.0.1:18081`（#413 / #414），与标准部署宿主端口一致；同步 `.env.example`、compose 映射与相关测试。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v45 → v46。v46 新增 `worker_nodes` 与 `worker_sandbox_leases`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 仍跑 `v0.2.10` 的调度器在 Windows Docker Desktop、Podman egress sidecar、gateway sidecar 重建后、以及 execd uid gate 上会继续踩上述 provision 失败。升级调度器 / web / image-admission 镜像后才会生效。
+- OpenSandbox 宿主直连缺省端口从 `8080` 改为 `18081`。已有 `deploy/.env` 若仍写旧端口，需与 compose 映射一并改掉。
+- 单机 `up real` 仍种子 `local` worker；远程执行面用 `./deploy/deploy.sh up worker-join --control-plane …`。心跳超时只停止新派发，不自动开新 attempt。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，运行时 catalog 可复用已有不可变 digest，平台镜像仍打 `0.2.11` tag。
 
 ## [0.2.10] - 2026-09-07
 
@@ -686,6 +695,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.2.11]: https://github.com/SummerSec/DeepSonar/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/SummerSec/DeepSonar/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/SummerSec/DeepSonar/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/SummerSec/DeepSonar/compare/v0.2.7...v0.2.8
