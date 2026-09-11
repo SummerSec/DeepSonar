@@ -96,6 +96,7 @@ try {
   }
 
   const reusedOut = path.join(temp, "reused.json");
+  const reusedSummary = path.join(temp, "summary-reused");
   execFileSync("bash", [writeScript, reusedOut], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -105,11 +106,14 @@ try {
       IMAGE_KEY: "deepsonar-base",
       DIGEST: digest,
       PREVIOUS_REGISTRY: catalogPath,
+      GITHUB_STEP_SUMMARY: reusedSummary,
     },
   });
   assert.equal(JSON.parse(readFileSync(reusedOut, "utf8")).version, "0.1.8");
+  assert.match(readFileSync(reusedSummary, "utf8"), /version kept/);
 
   const fallbackOut = path.join(temp, "fallback.json");
+  const fallbackSummary = path.join(temp, "summary-fallback");
   try {
     execFileSync("bash", [writeScript, fallbackOut], {
       cwd: repoRoot,
@@ -120,14 +124,14 @@ try {
         IMAGE_KEY: "deepsonar-base",
         DIGEST: missingDigest,
         PREVIOUS_REGISTRY: catalogPath,
+        GITHUB_STEP_SUMMARY: fallbackSummary,
       },
     });
     assert.fail("write script must reach record-runtime-image-digest when reuse misses");
   } catch (error) {
     assert.notEqual(error.status, CATALOG_REUSE_MISS_EXIT);
-    const logs = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
-    assert.match(logs, /inspecting published channels/i);
-    assert.match(logs, /Missing environment variable/i);
+    assert.match(readFileSync(fallbackSummary, "utf8"), /inspecting published channels/i);
+    assert.match(`${error.stdout ?? ""}\n${error.stderr ?? ""}`, /Missing environment variable/i);
     assert.equal(existsSync(fallbackOut), false);
   }
 
