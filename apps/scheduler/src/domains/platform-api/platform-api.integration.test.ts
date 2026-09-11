@@ -155,6 +155,19 @@ if (!testDatabaseUrl) {
       const unavailable = await invoke("emit_finding", findingKey, finding);
       assert.equal(unavailable.statusCode, 503, unavailable.payload);
       assert.equal(unavailable.json().error_code, "HANDLER_UNAVAILABLE");
+      assert.equal(unavailable.json().accepted, false);
+      assert.equal(unavailable.json().retryable, true);
+      assert.equal(unavailable.json().repair.category, "transient_retryable");
+      assert.equal(unavailable.json().repair.operation, "emit_finding");
+      assert.match(String(unavailable.json().repair.next_action), /Idempotency-Key/);
+      registerRuntimeHandler(jobId, async () => {
+        throw new Error("secret-handler-boom");
+      }, ["emit_progress"]);
+      const crashed = await invoke("emit_progress", randomUUID(), { message: "handler crash probe" });
+      assert.equal(crashed.statusCode, 500, crashed.payload);
+      assert.equal(crashed.json().error_code, "HANDLER_FAILED");
+      assert.equal(crashed.json().repair.category, "transient_retryable");
+      assert.equal(JSON.stringify(crashed.json()).includes("secret-handler-boom"), false);
       registerRuntimeHandler(jobId, handler, operations);
       assert.equal((await invoke("emit_finding", findingKey, finding)).statusCode, 200, "503 不得污染幂等缓存");
 

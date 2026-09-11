@@ -55,6 +55,22 @@ export function controlRuntimeRejection(input: {
   return rejectionBody(repair, input.retryable);
 }
 
+export function controlPlatformFailure(input: {
+  operation: string;
+  code: "HANDLER_UNAVAILABLE" | "HANDLER_FAILED";
+  message: string;
+  idempotencyKey?: string | null;
+}): ControlOperationRejectionBody {
+  return controlRuntimeRejection({
+    operation: input.operation,
+    code: input.code,
+    message: input.message,
+    retryable: true,
+    statusCode: input.code === "HANDLER_UNAVAILABLE" ? 503 : 500,
+    idempotencyKey: input.idempotencyKey,
+  });
+}
+
 function rejectionBody(repair: RepairFeedback, retryable: boolean): ControlOperationRejectionBody {
   return {
     accepted: false,

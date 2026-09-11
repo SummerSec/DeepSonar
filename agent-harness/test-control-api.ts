@@ -186,6 +186,8 @@ assert.deepEqual(
 );
 assert.equal(progressPath.post.parameters.find((parameter: { name?: string }) => parameter.name === "Idempotency-Key").required, true);
 const rejectedSchema = progressPath.post.responses["422"].content["application/json"].schema;
+assert.ok(progressPath.post.responses["500"]);
+assert.ok(progressPath.post.responses["503"]);
 assert.ok(rejectedSchema.properties.repair);
 assert.deepEqual(rejectedSchema.properties.repair.properties.category.enum, [
   "model_correctable",

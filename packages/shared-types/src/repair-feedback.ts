@@ -103,12 +103,25 @@ export function describeObservedShape(value: unknown): Record<string, unknown> {
   }
 }
 
+const TRANSIENT_CONTROL_CODES = new Set([
+  "event_rate_limited",
+  "HANDLER_UNAVAILABLE",
+  "HANDLER_FAILED",
+]);
+
 export function repairCategoryForControlFailure(input: {
   code: string;
   retryable?: boolean;
   statusCode?: number;
 }): RepairFeedbackCategory {
-  if (input.statusCode === 429 || input.code === "event_rate_limited") return "transient_retryable";
+  if (
+    TRANSIENT_CONTROL_CODES.has(input.code)
+    || input.statusCode === 429
+    || input.statusCode === 503
+    || input.statusCode === 500
+  ) {
+    return "transient_retryable";
+  }
   if (PERMANENT_CONTROL_CODES.has(input.code) || input.retryable === false) return "permanent_failure";
   return "model_correctable";
 }
@@ -199,9 +212,16 @@ const INVALID_CONTROL_CONTRACT = "控制工具参数不符合严格契约；";
 
 function nextActionFor(input: {
   category: RepairFeedbackCategory;
+  code?: string;
   path?: string;
   expected?: unknown;
 }): string {
+  if (input.code === "HANDLER_UNAVAILABLE") {
+    return "平台运行时 handler 暂时不可用；使用同一 Idempotency-Key 重试，不要改写 payload。";
+  }
+  if (input.code === "HANDLER_FAILED") {
+    return "平台执行失败且未返回业务拒绝；使用同一 Idempotency-Key 重试，不要改写 payload。";
+  }
   if (input.category === "transient_retryable") {
     return "等待 advertised retry_after_sec 后，使用同一 Idempotency-Key 重试。";
   }
@@ -238,7 +258,7 @@ export function repairFeedbackFromZodIssues(input: {
     expected,
     observed_shape: describeObservedShape(valueAtPath(input.rawInput, path)),
     idempotency_key: input.idempotency_key,
-    next_action: nextActionFor({ category: "model_correctable", path, expected }),
+    next_action: nextActionFor({ category: "model_correctable", code: input.code, path, expected }),
   });
 }
 
@@ -273,7 +293,7 @@ export function repairFeedbackFromControlRejection(input: {
     expected,
     observed_shape: observed,
     idempotency_key: input.idempotency_key,
-    next_action: nextActionFor({ category, path: input.path, expected }),
+    next_action: nextActionFor({ category, code: input.code, path: input.path, expected }),
   });
 }
 

@@ -15,7 +15,7 @@ import {
 } from "@deepsonar/shared-types";
 import { ControlInputError } from "./control-input.js";
 import { assertSemanticEventPayloadSize } from "./domains/event-ingestion/application.js";
-import { controlRuntimeRejection, controlSchemaRejection } from "./domains/platform-api/repair.js";
+import { controlPlatformFailure, controlRuntimeRejection, controlSchemaRejection } from "./domains/platform-api/repair.js";
 
 test("RepairFeedback accepts the four kernel categories and rejects unknown ones", () => {
   for (const category of REPAIR_FEEDBACK_CATEGORIES) {
@@ -144,4 +144,32 @@ test("rate-limit and fail-closed control codes map to the remaining kernel categ
   });
   assert.equal(unknown.category, "unknown_external_effect");
   assert.equal(unknown.accepted_effects?.[0]?.status, "unknown");
+});
+
+test("handler unavailable and failed use the same transient RepairFeedback contract", () => {
+  const key = "00000000-0000-4000-8000-000000000024";
+  const unavailable = controlPlatformFailure({
+    operation: "emit_finding",
+    code: "HANDLER_UNAVAILABLE",
+    message: "Runtime handler is not registered",
+    idempotencyKey: key,
+  });
+  const failed = controlPlatformFailure({
+    operation: "emit_finding",
+    code: "HANDLER_FAILED",
+    message: "Platform operation failed",
+    idempotencyKey: key,
+  });
+  for (const body of [unavailable, failed]) {
+    assert.equal(body.accepted, false);
+    assert.equal(body.retryable, true);
+    assert.equal(body.repair.category, "transient_retryable");
+    assert.equal(body.repair.operation, "emit_finding");
+    assert.equal(body.repair.idempotency_key, key);
+    assert.match(body.repair.next_action ?? "", /同一 Idempotency-Key/);
+  }
+  assert.equal(unavailable.error_code, "HANDLER_UNAVAILABLE");
+  assert.equal(failed.error_code, "HANDLER_FAILED");
+  assert.equal(repairCategoryForControlFailure({ code: "HANDLER_UNAVAILABLE", statusCode: 503 }), "transient_retryable");
+  assert.equal(repairCategoryForControlFailure({ code: "HANDLER_FAILED", statusCode: 500 }), "transient_retryable");
 });

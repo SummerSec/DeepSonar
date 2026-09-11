@@ -18,7 +18,7 @@ import {
   type PlatformRuntimeHandlerContext,
 } from "./registry.js";
 import { controlInputCodeForOperation } from "../../control-input.js";
-import { controlRuntimeRejection, controlSchemaRejection } from "./repair.js";
+import { controlPlatformFailure, controlRuntimeRejection, controlSchemaRejection } from "./repair.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -226,7 +226,16 @@ async function executeInvocation(
   } catch (error) {
     if (error instanceof PlatformRuntimeHandlerError) {
       if (error.code === "HANDLER_NOT_REGISTERED" || error.code === "OPERATION_HANDLER_NOT_REGISTERED") {
-        return { statusCode: 503, body: { error: "Runtime handler is not registered", error_code: "HANDLER_UNAVAILABLE" }, cacheable: false };
+        return {
+          statusCode: 503,
+          body: controlPlatformFailure({
+            operation: operationId,
+            code: "HANDLER_UNAVAILABLE",
+            message: "Runtime handler is not registered",
+            idempotencyKey: key,
+          }),
+          cacheable: false,
+        };
       }
       if (error.code === "OPERATION_REJECTED" && error.rejection) {
         const body = controlRuntimeRejection({
@@ -255,7 +264,16 @@ async function executeInvocation(
     }
     // Do not return handler messages: they may contain input, credentials, or
     // a capability token accidentally included by a downstream adapter.
-    return { statusCode: 500, body: { error: "Platform operation failed", error_code: "HANDLER_FAILED" }, cacheable: true };
+    return {
+      statusCode: 500,
+      body: controlPlatformFailure({
+        operation: operationId,
+        code: "HANDLER_FAILED",
+        message: "Platform operation failed",
+        idempotencyKey: key,
+      }),
+      cacheable: false,
+    };
   }
 }
 

@@ -346,6 +346,7 @@ export function buildPlatformOpenApiDocument(input: {
           "409": { description: "Idempotency key conflicts or Job is no longer active", content: { "application/json": { schema: errorSchema() } } },
           "422": { description: "Scheduler semantic validation rejected the operation", content: { "application/json": { schema: errorSchema() } } },
           "429": { description: "Scheduler semantic-event budget is temporarily exhausted", content: { "application/json": { schema: errorSchema() } } },
+          "500": { description: "Runtime handler failed without a business rejection", content: { "application/json": { schema: errorSchema() } } },
           "503": { description: "Runtime handler is not registered", content: { "application/json": { schema: errorSchema() } } },
         },
       },
