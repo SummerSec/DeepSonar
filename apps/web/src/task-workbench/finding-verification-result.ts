@@ -53,10 +53,5 @@ export function selectLatestVerificationRepairJob<T extends VerificationJobLike>
 export function selectLatestVerificationRound<T extends VerificationRoundLike>(
   rounds: readonly T[],
 ): T | undefined {
-  const latest = latestByTimestamp(rounds, verificationResultTimestamp);
-  const latestMissing = latestByTimestamp(
-    rounds.filter((round) => (round.missing?.length ?? 0) > 0),
-    verificationResultTimestamp,
-  );
-  return latestMissing ?? latest;
+  return latestByTimestamp(rounds, verificationResultTimestamp);
 }

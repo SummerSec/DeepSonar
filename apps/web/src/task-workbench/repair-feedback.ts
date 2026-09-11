@@ -95,8 +95,8 @@ export function projectRepairFeedback(input: {
   status?: string | null;
   error?: string | null;
   stage?: string | null;
-  unknownEffects?: readonly { effect_kind?: string; effect_id?: string; status?: string }[];
-  acceptedEffects?: readonly { effect_kind?: string; effect_id?: string; status?: string }[];
+  unknownEffects?: readonly { effect_kind?: string | null; effect_id?: string | null; status?: string | null }[];
+  acceptedEffects?: readonly { effect_kind?: string | null; effect_id?: string | null; status?: string | null }[];
   remainingBudget?: string | null;
   hasEffectLedger?: boolean;
 }): RepairFeedback {
