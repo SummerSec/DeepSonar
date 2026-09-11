@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { PlanResult, SubmitPlanPayload } from "@deepsonar/shared-types";
 import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
 import { readPlanAudit } from "../plan-protocol/index.js";
 
@@ -104,38 +105,43 @@ if (!testDatabaseUrl) {
           type: "plan_result",
           payload: { v: 1, outcome: "continue", summary: "还没有可用的计划原文" },
         }),
-        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_payload",
+        (error: unknown) => {
+          assert.ok(error instanceof ControlInputError, `expected ControlInputError, got ${String(error)}`);
+          assert.equal(error.code, "invalid_payload", `${error.code}: ${error.message}`);
+          return true;
+        },
       );
 
       const planEventId = randomUUID();
+      const acceptedPlan = SubmitPlanPayload.parse({
+        plan: {
+          v: 1,
+          goal: "确认认证入口与会话校验",
+          tasks: [
+            {
+              id: "explore-auth",
+              title: "梳理登录与会话入口",
+              role: "explore",
+              description: "定位登录与会话校验链路",
+              prompt: PROMPT,
+            },
+            {
+              id: "analyze-auth",
+              title: "分析会话绑定边界",
+              role: "analyze",
+              description: "分析会话绑定与失效范围",
+              prompt: PROMPT,
+              depends_on: ["explore-auth"],
+            },
+          ],
+          completion: { mode: "explicit_result", description: "由后续结果声明是否继续" },
+        },
+      });
       const accepted = await ingestEvent(planJobId, {
         v: 1,
         event_id: planEventId,
         type: "plan",
-        payload: {
-          plan: {
-            v: 1,
-            goal: "确认认证入口与会话校验",
-            tasks: [
-              {
-                id: "explore-auth",
-                title: "梳理登录与会话入口",
-                role: "explore",
-                description: "定位登录与会话校验链路",
-                prompt: PROMPT,
-              },
-              {
-                id: "analyze-auth",
-                title: "分析会话绑定边界",
-                role: "analyze",
-                description: "分析会话绑定与失效范围",
-                prompt: PROMPT,
-                depends_on: ["explore-auth"],
-              },
-            ],
-            completion: { mode: "explicit_result", description: "由后续结果声明是否继续" },
-          },
-        },
+        payload: acceptedPlan,
       });
       assert.equal(accepted.deduped, false);
 
@@ -166,12 +172,12 @@ if (!testDatabaseUrl) {
         v: 1,
         event_id: randomUUID(),
         type: "plan_result",
-        payload: {
+        payload: PlanResult.parse({
           v: 1,
           outcome: "continue",
           summary: "入口已定位，下一步需要动态验证",
           execution: [{ task_id: "explore-auth", status: "done" }],
-        },
+        }),
       });
       const [afterResult] = await sql<{ payload_json: unknown; status: string }[]>`
         SELECT payload_json, status FROM jobs WHERE id = ${planJobId}`;
@@ -211,7 +217,7 @@ if (!testDatabaseUrl) {
           v: 1,
           event_id: randomUUID(),
           type: "plan",
-          payload: {
+          payload: SubmitPlanPayload.parse({
             plan: {
               v: 1,
               goal: "worker should not submit plans",
@@ -224,9 +230,13 @@ if (!testDatabaseUrl) {
               }],
               completion: { mode: "explicit_result", description: "该提交不应被接受" },
             },
-          },
+          }),
         }),
-        (error: unknown) => error instanceof ControlInputError && error.code === "tool_not_allowed",
+        (error: unknown) => {
+          assert.ok(error instanceof ControlInputError, `expected ControlInputError, got ${String(error)}`);
+          assert.equal(error.code, "tool_not_allowed", `${error.code}: ${error.message}`);
+          return true;
+        },
       );
     } finally {
       const canvasIds = [canvasId, hubCanvasId];

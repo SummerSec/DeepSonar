@@ -167,6 +167,59 @@ test("plan audit merge keeps raw/trim/result/termination on one record", () => {
   assert.equal(merged.termination_reason, "missing_credential");
 });
 
+test("integration fixtures stay valid after schema changes", () => {
+  const prompt = "定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。";
+  assert.equal(SubmitPlanPayload.safeParse({
+    plan: {
+      v: 1,
+      goal: "确认认证入口与会话校验",
+      tasks: [
+        {
+          id: "explore-auth",
+          title: "梳理登录与会话入口",
+          role: "explore",
+          description: "定位登录与会话校验链路",
+          prompt,
+        },
+        {
+          id: "analyze-auth",
+          title: "分析会话绑定边界",
+          role: "analyze",
+          description: "分析会话绑定与失效范围",
+          prompt,
+          depends_on: ["explore-auth"],
+        },
+      ],
+      completion: { mode: "explicit_result", description: "由后续结果声明是否继续" },
+    },
+  }).success, true);
+  assert.equal(PlanResult.safeParse({
+    v: 1,
+    outcome: "continue",
+    summary: "还没有可用的计划原文",
+  }).success, true);
+  assert.equal(PlanResult.safeParse({
+    v: 1,
+    outcome: "continue",
+    summary: "入口已定位，下一步需要动态验证",
+    execution: [{ task_id: "explore-auth", status: "done" }],
+  }).success, true);
+  assert.equal(SubmitPlanPayload.safeParse({
+    plan: {
+      v: 1,
+      goal: "worker should not submit plans",
+      tasks: [{
+        id: "worker-task",
+        title: "未授权的计划任务项",
+        role: "explore",
+        description: "工人角色未启用该计划工具",
+        prompt,
+      }],
+      completion: { mode: "explicit_result", description: "该提交不应被接受" },
+    },
+  }).success, true);
+});
+
 test("Control and ingest envelopes accept plan and plan_result", () => {
   const planPayload = { plan: samplePlan() };
   const resultPayload = {
