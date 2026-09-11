@@ -36,22 +36,29 @@ export interface OpenSandboxConnection {
   pin?: OpenSandboxPin;
 }
 
-/** OpenSandbox grants CAP_SYS_ADMIN + unconfined seccomp/apparmor only when this create extension is present. */
+/**
+ * OpenSandbox grants the *main sandbox container* CAP_SYS_ADMIN + unconfined
+ * seccomp/apparmor when this create extension is present. Docker must omit it.
+ */
 export const OPENSANDBOX_EXECD_ISOLATION_KEY = "bootstrap.execd.isolation";
 export const OPENSANDBOX_EXECD_ISOLATION_ENABLE = "enable";
 
 /**
- * Always request execd isolation on Sandbox.create.
- * Required for session.run({uid,gid}) / Kubernetes hosts inject (bwrap gate).
- * Create-time protocol field only — not frozen on Job snapshots.
+ * Request execd isolation only when Kubernetes/Kata still needs the uid/gid
+ * bwrap gate. Docker hosts inject via Engine `docker exec` and must keep
+ * drop_all + confined seccomp/apparmor. Create-time only — not frozen on Jobs.
  */
 export function openSandboxCreateExtensions(
   extra?: Record<string, string>,
-): Record<string, string> {
-  return {
-    ...extra,
-    [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
-  };
+  options?: { kubernetes?: boolean },
+): Record<string, string> | undefined {
+  const extensions = { ...extra };
+  if (options?.kubernetes) {
+    extensions[OPENSANDBOX_EXECD_ISOLATION_KEY] = OPENSANDBOX_EXECD_ISOLATION_ENABLE;
+  } else {
+    delete extensions[OPENSANDBOX_EXECD_ISOLATION_KEY];
+  }
+  return Object.keys(extensions).length > 0 ? extensions : undefined;
 }
 
 export interface OpenSandboxCreateInput {
@@ -71,7 +78,8 @@ export interface OpenSandboxCreateInput {
   platform?: { os: "linux"; arch: "amd64" | "arm64" };
   /**
    * Opaque OpenSandbox create extensions (`Record<string, string>`).
-   * Mapping and the live SDK client always set bootstrap.execd.isolation=enable.
+   * Mapping sets bootstrap.execd.isolation=enable only when kubernetesResources
+   * is set. The live SDK client forwards this map and does not force the key.
    */
   extensions?: Record<string, string>;
   signal?: AbortSignal;
@@ -120,7 +128,7 @@ export interface OpenSandboxClient {
 }
 
 export const OPENSANDBOX_ALIVE_PROBE_ATTEMPTS = 3;
-/** execd uid/gid used only to write sandbox /etc/hosts; guest USER stays unchanged. Requires create isolation (#427). */
+/** execd uid/gid used only to write sandbox /etc/hosts; guest USER stays unchanged. Kubernetes create isolation (#427 / #432). */
 export const GATEWAY_HOSTS_ROOT_UID = 0;
 export const GATEWAY_HOSTS_ROOT_GID = 0;
 
@@ -238,6 +246,7 @@ export function mapOpenSandboxNetworkPolicy(
 
 export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCreateInput {
   const limits = requireOpenSandboxLimits(input.limits);
+  const extensions = openSandboxCreateExtensions(undefined, { kubernetes: Boolean(input.kubernetesResources) });
   return {
     image: input.image,
     env: input.env ?? {},
@@ -255,7 +264,7 @@ export function mapOpenSandboxCreateInput(input: ProvisionInput): OpenSandboxCre
     },
     timeoutSeconds: null,
     networkPolicy: mapOpenSandboxNetworkPolicy(input.network, input.gatewayUpstreamUrl),
-    extensions: openSandboxCreateExtensions(),
+    ...(extensions ? { extensions } : {}),
     volumes: input.sharedAssetsMount
       ? [{
           name: input.sharedAssetsMount.volumeName,
@@ -450,8 +459,8 @@ export async function injectGatewayHostsViaExecd(
  * sidecar IP is only known after the sandbox network exists. Docker writes
  * /etc/hosts through the Engine (`docker exec -u 0`); execd/bwrap cannot
  * mutate the Docker-injected file on Windows Desktop. Kubernetes/Kata still
- * uses execd uid=0 and therefore requires bootstrap.execd.isolation=enable on
- * create (#427). Do not change the image USER.
+ * uses execd uid=0 and therefore requests bootstrap.execd.isolation=enable on
+ * create only for that path (#427 / #432). Do not change the image USER.
  */
 export async function bindGatewayHostnameAsRoot(
   session: OpenSandboxSession,
