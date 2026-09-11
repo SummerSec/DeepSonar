@@ -46,6 +46,21 @@ export function filterProjectFindings(
   });
 }
 
+export function researchPriorityLabel(score: number | null | undefined): string | null {
+  if (score == null || Number.isNaN(Number(score))) return null;
+  return `优先 ${Math.round(Number(score))}`;
+}
+
+export function researchDedupeLabel(finding: {
+  is_canonical?: boolean | null;
+  canonical_finding_id?: string | null;
+  dedupe_cluster_id?: string | null;
+}): string | null {
+  if (finding.is_canonical === false && finding.canonical_finding_id) return "语义重复";
+  if (finding.is_canonical && finding.dedupe_cluster_id) return "canonical";
+  return null;
+}
+
 export function dispositionBadgeTone(disposition: string): string {
   if (disposition === "confirmed_vuln") return "border-red-400/25 bg-red-400/[.08] text-red-300";
   if (disposition === "open") return "border-amber-400/25 bg-amber-400/[.08] text-amber-300";

@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 47);
+INSERT INTO schema_meta (id, version) VALUES ('global', 48);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -483,6 +483,65 @@ CREATE INDEX finding_reports_finding_idx ON finding_reports (finding_id, version
 CREATE INDEX finding_reports_project_idx ON finding_reports (project_id, created_at DESC);
 CREATE UNIQUE INDEX finding_reports_one_active_idx
   ON finding_reports (finding_id) WHERE status IN ('pending', 'generating');
+
+-- 语义去重 / 相对优先级（#448）：与 verify_status / severity / 报告门禁隔离。
+-- 失败只记 run，不删除候选、不自动确认、不改写 findings 定列。
+CREATE TABLE finding_research_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id),
+  kind text NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  batch_limit integer NOT NULL,
+  model text,
+  prompt_revision text NOT NULL,
+  input_json jsonb NOT NULL DEFAULT '{}',
+  result_json jsonb NOT NULL DEFAULT '{}',
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz,
+  CONSTRAINT finding_research_runs_kind_check
+    CHECK (kind IN ('dedupe', 'priority', 'pipeline')),
+  CONSTRAINT finding_research_runs_status_check
+    CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  CONSTRAINT finding_research_runs_batch_limit_check
+    CHECK (batch_limit >= 1 AND batch_limit <= 32)
+);
+CREATE INDEX finding_research_runs_canvas_idx
+  ON finding_research_runs (canvas_id, created_at DESC);
+
+CREATE TABLE finding_dedupe_clusters (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id),
+  canonical_finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX finding_dedupe_clusters_canvas_idx
+  ON finding_dedupe_clusters (canvas_id, updated_at DESC);
+CREATE UNIQUE INDEX finding_dedupe_clusters_canonical_uniq
+  ON finding_dedupe_clusters (canvas_id, canonical_finding_id);
+
+CREATE TABLE finding_research (
+  finding_id uuid PRIMARY KEY REFERENCES findings(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id),
+  canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  dedupe_cluster_id uuid REFERENCES finding_dedupe_clusters(id) ON DELETE SET NULL,
+  canonical_finding_id uuid REFERENCES findings(id) ON DELETE SET NULL,
+  is_canonical boolean NOT NULL DEFAULT true,
+  dedupe_reason text,
+  priority_score numeric,
+  priority_reason text,
+  priority_model text,
+  priority_prompt_revision text,
+  last_run_id uuid REFERENCES finding_research_runs(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX finding_research_canvas_canonical_idx
+  ON finding_research (canvas_id, is_canonical);
+CREATE INDEX finding_research_cluster_idx
+  ON finding_research (dedupe_cluster_id);
 
 CREATE TABLE shared_asset_blobs (
   content_sha256 text PRIMARY KEY,

@@ -17,6 +17,7 @@ import {
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
+import { runFindingResearchBestEffort } from "./domains/finding-research/index.js";
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 import { planTaskReportVersion } from "./task-report-version.js";
@@ -1067,6 +1068,10 @@ export async function maybeDispatchReport(
       reason: "findings_not_converged",
     });
   }
+
+  // Research ranking is informational only: failure keeps candidates and never
+  // bounces the verify/report gate or mutates Finding confirmation.
+  await runFindingResearchBestEffort(tx, { canvasId, projectId, kind: "pipeline" });
 
   const [existing] = await tx`
     SELECT id, version, status, report_job_id, input_uri, input_sha256

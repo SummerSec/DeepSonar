@@ -38,7 +38,10 @@ test("verify / disposition / waiting_human stay independent dimensions", () => {
   assert.deepEqual([...VERIFY_VERDICTS], ["confirmed", "rework", "needs_human"]);
   assert.equal(HUMAN_JOB_STATUS, "waiting_human");
   const dimensions = new Set(FINDING_STATE_MATRIX.map((row) => row.dimension));
-  assert.deepEqual([...dimensions].sort(), ["disposition", "job_waiting_human", "verify_status"]);
+  assert.deepEqual(
+    [...dimensions].sort(),
+    ["disposition", "job_waiting_human", "research_dedupe", "research_priority", "verify_status"],
+  );
   const leftover = FINDING_STATE_MATRIX.find((row) => row.dimension === "verify_status" && row.value === "false_positive");
   assert.equal(leftover?.writer, "无（新流程不可写）");
   assert.match(leftover?.report ?? "", /不映射为 rework/);

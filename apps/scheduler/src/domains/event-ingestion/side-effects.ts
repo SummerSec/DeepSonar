@@ -52,6 +52,7 @@ import {
   findingProposalToArtifact,
   persistArtifact,
 } from "../artifacts/index.js";
+import { runFindingResearchBestEffort } from "../finding-research/index.js";
 
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
@@ -924,6 +925,13 @@ export function createEventIngestionSideEffectApplication(
 
       // 规则引擎：达到最低关注级别或未评分的 Finding 自动进入 Verify。
       await ports.findingVerification.evaluateFollowup(tx, job, finding);
+      if (canvasId) {
+        await runFindingResearchBestEffort(tx, {
+          canvasId,
+          projectId: job.project_id as string,
+          kind: "dedupe",
+        });
+      }
       return;
     }
 

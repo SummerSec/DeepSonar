@@ -1068,6 +1068,14 @@ const OPS: Op[] = [
     },
   },
   {
+    method: "get",
+    path: "/canvases/{id}/finding-research",
+    summary: "画布语义去重与相对优先级账本",
+    description: "只读投影 finding_research_runs / clusters / members。排序与归并不改写 verify_status、severity 或报告门禁；失败 run 显式保留 error。",
+    scope: "findings:read",
+    tags: ["Findings"],
+  },
+  {
     method: "post",
     path: "/tasks/{canvasId}/pause",
     summary: "暂停任务领取新 Job（已运行 Job 安全收尾）",
@@ -1299,6 +1307,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings",
     summary: "Finding 列表（SARIF 对齐）",
+    description: "技术验证、严重度与语义研究排序分列返回：research / dedupe_cluster_id / canonical_finding_id / priority_score 不改写 verify_status。",
     scope: "findings:read",
     tags: ["Findings"],
     query: {
@@ -1315,7 +1324,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings/{id}",
     summary: "Finding 完整详情与结构化验证追踪",
-    description: "trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。",
+    description: "trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
     scope: "findings:read",
     tags: ["Findings"],
   },

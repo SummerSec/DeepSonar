@@ -14,6 +14,8 @@ import {
   PROJECT_RISK_EYEBROW,
   PROJECT_RISK_SUBTITLE,
   PROJECT_RISK_TITLE,
+  researchDedupeLabel,
+  researchPriorityLabel,
 } from "../findings-risk-desk";
 import {
   DataTable,
@@ -57,6 +59,22 @@ function FindingStateBadges({ finding }: { finding: FindingSummary }) {
       <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] ${dispositionTone}`} title={`人工处置状态：${DISPOSITION_LABELS[disposition] ?? disposition}`}>
         处置 · {DISPOSITION_LABELS[disposition] ?? disposition}
       </span>
+      {researchDedupeLabel(finding) && (
+        <span
+          className="rounded-full border border-violet-400/25 bg-violet-400/[.08] px-2 py-0.5 font-mono text-[9px] text-violet-300"
+          title={finding.dedupe_reason ?? "语义重复关系，不改变验证状态"}
+        >
+          研究 · {researchDedupeLabel(finding)}
+        </span>
+      )}
+      {researchPriorityLabel(finding.priority_score) && (
+        <span
+          className="rounded-full border border-sky-400/20 bg-sky-400/[.06] px-2 py-0.5 font-mono text-[9px] text-sky-300"
+          title={finding.priority_reason ?? "相对优先级，不是严重度"}
+        >
+          研究 · {researchPriorityLabel(finding.priority_score)}
+        </span>
+      )}
     </div>
   );
 }

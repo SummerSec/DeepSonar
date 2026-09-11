@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 语义去重与相对优先级与漏洞确认分离（#448）：报告前有界批次聚类、canonical anchor 增量比较、canonical 集合 `priority_score`；写入 `finding_research*`（schema v48），不改 `verify_status` / severity / 报告门禁。失败显式记 run 并保留候选。只读 `GET /canvases/:id/finding-research`，列表/详情分列展示验证、严重度、重复关系与研究优先级。
 - Capability Pack 第一刀（#447）：`deepsonar.capability-pack/v1` Manifest、Job 级 list/search/describe/validate/preview，以及 RoleConfig 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`，不另建 envelope。
 - 质量指标与 Hub 回放基线（#445 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。项目级 token 必须匹配路径 `:id`，跨项目读 quality/replay 返回 `PROJECT_MISMATCH`。不改变 Hub 决策，不写入经验。
 - Artifact 成为内部写入真相（#444 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。
@@ -14,6 +15,7 @@
 
 ### 修复
 
+- Finding research 的 emit/report 挂钩用 savepoint 隔离持久化失败：研究 SQL 或失败账本写入出错只回滚 savepoint，外层 Finding / 报告事务继续提交（#448）。
 - Worker 派发 claim 改为单事务选节点 + 预留 `worker_sandbox_leases` 占位，并写入 `last_dispatch_at`；并发 provision 不能超过节点 `max_sandboxes`。远端 create 失败释放占位，成功则把占位改成真实 sandbox id。去掉 claim 失败后再 `pickRoundRobinWorker` 且不记账的 fallback（#434）。
 - Worker 沙箱租约在正常 destroy 时也会释放（#431 / #416 回归）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。
 - Worker 注册/心跳不再允许 bootstrap token 静默改写 endpoint 或抢占已有 `node_id`（含保留的 `local`）：远程注册拒绝保留 id 与同名接管，须管理员 `DELETE /workers/:id` 后才能 reclaim；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址，并可选用 CIDR/hostname allowlist；注册与拒绝的心跳写入审计并按 IP 限流；心跳不能改 kind/所有权。本地 seed 在 kind/endpoint 被改写后轮换 node token，劫持无法跨 Scheduler 重启存活（#433）。
