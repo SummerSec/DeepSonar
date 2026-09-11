@@ -368,7 +368,7 @@ Phase 1 已把 `RepairFeedback` 契约接到 Control API 的 schema/字节约束
 1. **D1 默认拒绝**：每个工具 `additionalProperties: false`；未知字段返回 `unknown_field`，不得 strip 后部分落库。
 2. **D2 标识符标准形态**：节点/边只认当前画布 `referableIds` 中的 canonical UUID；Finding 绑定只认数据库 Finding UUID；角色只认本轮 `list_available_roles`；运行镜像只认本轮 `list_available_runtime_images` 的市场 `image_key`；未来路径工具只认白名单前缀。
 3. **D3 通道不可污染**：语义事件只能由按 Job 授权的平台 API 结构化提交；Agent 不能用 shell 或 `.deepsonar/control-*` 文件模拟队列，也不能猜测管理 API；脏行告警后不得丢弃后续合法事件。
-4. **D4 错误形态**：拒绝返回稳定 `error_code` + 可读消息 + 可修正时的 `RepairFeedback`；禁止把 PostgreSQL/`JSON.parse` 堆栈作为唯一结果；禁止 API 先报成功、Scheduler 后静默失败。`observed_shape` 只保留类型/长度/计数，不得回显凭据或不可信原文。
+4. **D4 错误形态**：拒绝返回稳定 `error_code` + 可读消息 + 可修正时的 `RepairFeedback`；禁止把 PostgreSQL/`JSON.parse` 堆栈作为唯一结果；禁止 API 先报成功、Scheduler 后静默失败。`observed_shape` 只保留类型/长度/计数，不得回显凭据或不可信原文。Handler `details` 只允许白名单字段，且必须在规范信封之前合并，不得覆盖 `error` / `error_code` / `retryable` / `repair`。
 5. **D5 单源契约**：`shared-types` Zod schema 生成平台 operation 输入契约；每个 operation 必须有合法/非法夹具、宿主重验和业务前置条件测试。
 6. **D6 纵深校验**：API 同源 schema → runtime handler → ingest/apply transaction 三层均须拒绝；任何层缺失都不算完成。
 

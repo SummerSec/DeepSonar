@@ -251,11 +251,7 @@ async function executeInvocation(
         });
         return {
           statusCode: error.rejection.statusCode,
-          body: {
-            ...body,
-            ...(error.rejection.details ?? {}),
-            ...(error.rejection.details ? { details: error.rejection.details } : {}),
-          },
+          body,
           // Rate-limit rejection happens before the durable event write and
           // may be retried later with the same Job-scoped idempotency key.
           cacheable: error.rejection.statusCode !== 429,

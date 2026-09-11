@@ -173,3 +173,32 @@ test("handler unavailable and failed use the same transient RepairFeedback contr
   assert.equal(repairCategoryForControlFailure({ code: "HANDLER_UNAVAILABLE", statusCode: 503 }), "transient_retryable");
   assert.equal(repairCategoryForControlFailure({ code: "HANDLER_FAILED", statusCode: 500 }), "transient_retryable");
 });
+
+test("handler details containing error_code cannot overwrite the RepairFeedback envelope", () => {
+  const secret = "sk-live-should-not-leak";
+  const body = controlRuntimeRejection({
+    operation: "emit_fact",
+    code: "invalid_payload",
+    message: "字段不符合契约。",
+    retryable: true,
+    details: {
+      error_code: "provider_internal",
+      error: secret,
+      retryable: false,
+      accepted: true,
+      repair: { category: "permanent_failure", message: secret },
+      retry_after_sec: 5,
+      bucket: "progress",
+    },
+  });
+  assert.equal(body.accepted, false);
+  assert.equal(body.error_code, "invalid_payload");
+  assert.equal(body.retryable, true);
+  assert.equal(body.error, "字段不符合契约。");
+  assert.equal(body.repair.category, "model_correctable");
+  assert.equal(body.repair.code, "invalid_payload");
+  assert.equal((body as { retry_after_sec?: unknown }).retry_after_sec, 5);
+  assert.deepEqual(body.details, { retry_after_sec: 5, bucket: "progress" });
+  assert.equal(body.details && "error_code" in body.details, false);
+  assert.equal(JSON.stringify(body).includes(secret), false);
+});

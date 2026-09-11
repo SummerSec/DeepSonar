@@ -115,7 +115,7 @@ type Artifact = {
 
 ### 6.1 RepairFeedback
 
-as-built：`packages/shared-types` 已导出版本化 `RepairFeedback`；Control API 的 Zod 截断/校验与语义 payload 字节超限会返回该 envelope。Hub Plan、Verify、Completion Gate 与 durable receipt 尚未统一。
+as-built：`packages/shared-types` 已导出版本化 `RepairFeedback`；Control API 的 Zod 截断/校验与语义 payload 字节超限会返回该 envelope。Handler `details` 只保留白名单字段，且不得覆盖规范信封。Hub Plan、Verify、Completion Gate 与 durable receipt 尚未统一。
 
 `model_correctable` 不能只返回 `invalid_payload`。统一反馈至少包含：
 
@@ -224,7 +224,7 @@ proposed
 
 ### Phase 1：统一 RepairFeedback
 
-- **已落地（本切片）**：`packages/shared-types` 版本化 `RepairFeedback`；Control API schema 拒绝（含 `mark_job_done.summary` 8192 字节）与 `assertSemanticEventPayloadSize` 超限返回字段级 `repair`。
+- **已落地（本切片）**：`packages/shared-types` 版本化 `RepairFeedback`；Control API schema 拒绝（含 `mark_job_done.summary` 8192 字节）与 `assertSemanticEventPayloadSize` 超限返回字段级 `repair`。Handler `details` 经白名单嵌套，不得覆盖规范信封。
 - 让 Plan、Artifact、Verify 和 Runtime Adapter 使用同一反馈 Envelope。
 - 保留已有稳定错误码，补充 path、expected、current state、accepted effects、repair budget 和 next action。
 - 统一 Completion Gate，使 nudge 带上真实失败上下文而不是固定催促语句。
