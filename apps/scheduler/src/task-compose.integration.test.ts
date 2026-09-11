@@ -18,6 +18,7 @@ async function wipeProjectComposeFixtures(db: SchedulerSql, projectIds: readonly
   await db`DELETE FROM task_reports WHERE project_id = ANY(${ids}::uuid[])`;
   await db`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ANY(${ids}::uuid[]))`;
   await db`DELETE FROM findings WHERE project_id = ANY(${ids}::uuid[])`;
+  await db`DELETE FROM artifacts WHERE project_id = ANY(${ids}::uuid[])`;
   await db`DELETE FROM event_dedup WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ANY(${ids}::uuid[]))`;
   await db`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ANY(${ids}::uuid[]))`;
   await db`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ANY(${ids}::uuid[])`;

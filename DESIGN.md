@@ -41,7 +41,8 @@ Canvas  1 ── * canvas_nodes / canvas_edges
 Canvas  1 ── * canvas_broadcasts（Fact/Finding 向并发 Worker 的投递账本）
 Job     1 ── * events（语义）
 Job     1 ──  transcript / evidence（冷存储）
-Finding * ── 1 project + job + optional node
+Job     1 ── * artifacts（版本化内部写入真相；claims / evidence / relations）
+Finding * ── 1 project + job + optional node + optional artifact（投影缓存）
 Finding 1 ── * finding_verification_rounds
 Canvas  1 ── * task_reports（版本化任务总报告）
 Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
@@ -52,8 +53,9 @@ Finding 1 ── * finding_reports（confirmed Finding 的版本化单报告）
 | **任务** | 即 `canvases` 一行；API `GET /projects/:id/canvases`；`kind=standard` 为普通任务，`kind=compose` 以同项目 1–8 条未否定处置 Finding（含未确认）作为冻结只读种子，且不得扩大资产范围 |
 | **Job** | 一次沙箱运行：`hub_reason` / 角色名 / `verify_finding` / `report` 等 |
 | **Intent** | Hub 下发；与角色 Job 1:1；`prompt` 直接注入 Worker CLI |
-| **Fact** | 工作角色增量产出；可带 Finding 结构化证据块，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
-| **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`）；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
+| **Artifact** | 内部写入真相（#444 Phase 1）：版本化 `kind` / `schema_version` / claims / evidence / relations / namespaced extensions；`emit_fact` 可直接提交，`emit_finding` 先转换成 Artifact 再投影 Finding |
+| **Fact** | 工作角色增量产出；可带 Finding 结构化证据块与可选 Artifact 输入，并有独立的证据信任态 `verification_status`（#387，见 §4.3） |
+| **Finding** | 通用协议条目（`profile` / `category` / `tags` / `evidence_refs`），现为 Artifact 的安全投影缓存；`severity` 可选，`scoring` 可选且由 Scheduler 规范化；达到 `minVerifySeverity` 或未提供/未知 severity 时进入 verify 生命周期，明确低于阈值的 Finding 保留但不自动验证 |
 | **Finding report** | 仅对 `confirmed` Finding 自动生成；每个版本冻结 Scheduler 输入，报告本身不改变 Finding 状态 |
 | **Task report** | 画布收敛后按输入摘要版本化；相同输入幂等，输入变化时追加版本并保留历史 |
 | **Root** | 画布根；阶段如 `analysis_complete` / `reporting` / `succeeded` |
@@ -329,6 +331,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 | 主题 | Issue | 未完成点 |
 |------|-------|----------|
+| Artifact 内部真相 | #444 | **Phase 1 已落地**：`artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`；`emit_fact` 接受可选 Artifact 输入；`emit_finding` 先落 Artifact 再投影 `findings`（缓存 + 原 UUID）。**仍开放**：Phase 2 Verify 改读 Artifact/Claim/Evidence；Phase 3 报告/SARIF adapter；Phase 4 收敛旧 Finding 写入路径 |
 | 数值保真（quantities） | #368 / #374 | **Phase 1 已落地**：Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20，strict）；Report 机械核对已确认 Finding 与 **verified Fact** 的值+口径（`unverified` / `verifying` / `needs_human` / `rejected` 不参与门禁；Finding 的 `confirmed` 不是 Fact 状态）。Agent 覆盖足够但改写口径时回退 `defaultMarkdown`（模板逐字嵌入口径），仅回退仍失败才 `numeric_inconsistent`。Report 图注入与下发 prompt 要求原样保留 value/unit/basis。graph 预算砍掉带 quantities 的节点时沿用 `truncated/omitted`。**仍开放**：Phase 2 NL 抽取/单位换算（#368 明确不做）。 |
 | 读图预算 / GraphScope | #30 | scope + 字符预算已落地；索引层/Worker 邻域与可观测性可继续收紧 |
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
@@ -355,7 +358,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `apps/image-admission` | 第三方镜像扫描准入 |
 | `packages/runtime-sandbox` | SandboxRunner / RuntimeHost（OpenSandbox） |
 | `packages/shared-types` | zod 事件与 payload 单源 |
-| `database/schema.sql` | 唯一 schema 基线（当前 v46）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
+| `database/schema.sql` | 唯一 schema 基线（当前 v47）；空库套用、非空只校验版本与结构；改表 bump `SCHEMA_VERSION` 后重建库。运维可用 `pnpm db:rebuild` 备份并按列交集回填；启动仍不做增量升级，但会自动对齐并校验 owned sequences |
 | `deploy/` | 生产与 real 模式编排 |
 
 ## 13. 给实现者的硬约束
@@ -382,7 +385,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | `list_available_roles` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
 | `list_available_runtime_images` | 非空参数、未知字段、未授权调用 | `invalid_payload` / `unknown_field` / `tool_not_allowed` |
 | `emit_progress` | 空白/超长 message、percent 越界或非数字 | `invalid_progress` |
-| `emit_fact` | 缺 title/description、未知字段、非法 verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
+| `emit_fact` | 缺 title/description、未知字段、非法 Artifact/verification 或错误 Finding 绑定 | `invalid_payload` / `unknown_field` / `invalid_verification` |
 | `emit_finding` | 非法 profile/category、空白/超长字段、未接受的评分版本、写入内部 `raw` | `invalid_payload` / `unknown_field` |
 | `submit_hub_decision` | complete/intents 同时或皆无、空/半截 intent、非法 UUID/角色/预算、未就绪镜像 | `invalid_payload` / `invalid_node_ref` / `invalid_role` / `invalid_reference_budget` / `invalid_runtime_image` / `runtime_image_not_ready` |
 | `mark_job_done` | 空白或超过 8192 UTF-8 字节的 summary、verify 缺 verdict、rework 缺 missing_evidence、非 verify 乱传 verdict | `invalid_done` |

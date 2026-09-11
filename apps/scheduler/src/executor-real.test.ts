@@ -616,6 +616,30 @@ test("real fact ingress preserves ordinary fact behavior and outer intent associ
   });
 });
 
+test("real fact ingress forwards Artifact input to Scheduler convergence", async () => {
+  const accepted: EventEnvelope[] = [];
+  const artifact = {
+    kind: "quality.observation",
+    claims: [{ statement: "登录限流键只绑定客户端 IP。", status: "supported" as const }],
+    evidence: [
+      { statement: "源码以 req.ip 生成限流键。", polarity: "supports" as const },
+      { statement: "未验证反向代理覆盖。", polarity: "unknown" as const },
+    ],
+  };
+  await ingestFactSemanticEvent(
+    factEvent({
+      title: "限流键",
+      description: "源码以客户端 IP 生成限流键，代理覆盖仍未知。",
+      artifact,
+    }),
+    intentNodeId,
+    async (event) => {
+      accepted.push(event);
+    },
+  );
+  assert.deepEqual((accepted[0]?.payload as { artifact?: unknown }).artifact, artifact);
+});
+
 test("real fact ingress rejects malformed verification before convergence", async () => {
   let accepted = 0;
   await assert.rejects(

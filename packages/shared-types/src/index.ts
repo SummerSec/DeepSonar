@@ -420,6 +420,96 @@ export const EmitFindingPayload = z
   });
 export type EmitFindingPayload = z.infer<typeof EmitFindingPayload>;
 
+/** Artifact identity kind / namespaced extension keys (#444). Same syntax as Finding profile. */
+export const ArtifactKind = findingProfileName;
+export type ArtifactKind = z.infer<typeof ArtifactKind>;
+
+export const ArtifactSchemaVersion = z.string().min(1).max(20).regex(/^[0-9]+(?:\.[0-9]+)*$/);
+export type ArtifactSchemaVersion = z.infer<typeof ArtifactSchemaVersion>;
+
+export const ArtifactClaimStatus = z.enum(["supported", "contradicted", "unknown"]);
+export type ArtifactClaimStatus = z.infer<typeof ArtifactClaimStatus>;
+
+export const ArtifactEvidencePolarity = z.enum(["supports", "contradicts", "unknown"]);
+export type ArtifactEvidencePolarity = z.infer<typeof ArtifactEvidencePolarity>;
+
+export const ArtifactRelationType = z.enum([
+  "supports",
+  "contradicts",
+  "depends_on",
+  "derived_from",
+  "related",
+  "hypothesis_of",
+]);
+export type ArtifactRelationType = z.infer<typeof ArtifactRelationType>;
+
+export const ArtifactKey = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/);
+export type ArtifactKey = z.infer<typeof ArtifactKey>;
+
+export const ArtifactSubject = z
+  .object({
+    type: nonEmptyText(80).optional(),
+    id: z.string().uuid().optional(),
+    location: z.string().max(1000).regex(/\S/).optional(),
+    label: nonEmptyText(500).optional(),
+  })
+  .strict();
+export type ArtifactSubject = z.infer<typeof ArtifactSubject>;
+
+export const ArtifactClaimInput = z
+  .object({
+    statement: nonEmptyText(10000),
+    subject: ArtifactSubject.optional(),
+    expected: z.string().max(5000).regex(/\S/).optional(),
+    actual: z.string().max(5000).regex(/\S/).optional(),
+    status: ArtifactClaimStatus.optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+  })
+  .strict();
+export type ArtifactClaimInput = z.infer<typeof ArtifactClaimInput>;
+
+export const ArtifactEvidenceInput = z
+  .object({
+    kind: ArtifactKind.optional(),
+    statement: nonEmptyText(10000),
+    polarity: ArtifactEvidencePolarity.optional(),
+    uri: z.string().min(1).max(2000).optional(),
+    sha256: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+export type ArtifactEvidenceInput = z.infer<typeof ArtifactEvidenceInput>;
+
+export const ArtifactRelationInput = z
+  .object({
+    to_artifact_id: z.string().uuid(),
+    relation_type: ArtifactRelationType,
+  })
+  .strict();
+export type ArtifactRelationInput = z.infer<typeof ArtifactRelationInput>;
+
+export const ARTIFACT_CLAIM_MAX = 50;
+export const ARTIFACT_EVIDENCE_MAX = 50;
+export const ARTIFACT_RELATION_MAX = 20;
+
+export const ArtifactInput = z
+  .object({
+    kind: ArtifactKind.optional(),
+    schema_version: ArtifactSchemaVersion.optional(),
+    artifact_key: ArtifactKey.optional(),
+    claims: z.array(ArtifactClaimInput).max(ARTIFACT_CLAIM_MAX).optional(),
+    evidence: z.array(ArtifactEvidenceInput).max(ARTIFACT_EVIDENCE_MAX).optional(),
+    relations: z.array(ArtifactRelationInput).max(ARTIFACT_RELATION_MAX).optional(),
+    extensions: z.record(ArtifactKind, z.record(z.string(), z.unknown())).optional(),
+  })
+  .strict();
+export type ArtifactInput = z.infer<typeof ArtifactInput>;
+
+const optionalArtifact = ArtifactInput.optional();
+
 /** 角色 agent 的 fact 提案；verification 仅在 Hub 回弹补证 Job 上被接受。 */
 export const FactPayload = z
   .object({
@@ -429,6 +519,7 @@ export const FactPayload = z
     /** Scheduler-owned association; Agent input is ignored and overwritten. */
     intent_node_id: z.string().uuid().nullable().optional(),
     verification: VerificationEvidence.optional(),
+    artifact: optionalArtifact,
   })
   .strict();
 export type FactPayload = z.infer<typeof FactPayload>;
@@ -441,6 +532,7 @@ export const EmitFactDirectPayload = z
     description: meaningfulFactDescription,
     quantities: optionalQuantities,
     verification: VerificationEvidence.optional(),
+    artifact: optionalArtifact,
   })
   .strict();
 export type EmitFactDirectPayload = z.infer<typeof EmitFactDirectPayload>;
@@ -451,6 +543,7 @@ export const EmitFactPayload = z
     description: meaningfulFactDescription.optional(),
     quantities: optionalQuantities,
     verification: VerificationEvidence.optional(),
+    artifact: optionalArtifact,
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
   .strict()

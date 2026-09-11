@@ -44,6 +44,14 @@ import {
   composeBoundWorkerPrompt,
 } from "../../compose-scope.js";
 import { frozenTaskSeeds, TaskSeedInputError } from "../../task-compose.js";
+import {
+  bindArtifactNode,
+  deleteArtifact,
+  factProposalToArtifact,
+  findingArtifactKey,
+  findingProposalToArtifact,
+  persistArtifact,
+} from "../artifacts/index.js";
 
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
@@ -55,6 +63,7 @@ export interface EventSideEffectServices {
    */
   jobStatusAtLock?: string;
   attemptId?: string | null;
+  eventId?: string;
 }
 
 export interface EventIngestionSideEffectApplication {
@@ -833,10 +842,24 @@ export function createEventIngestionSideEffectApplication(
           (normalized.rule_id ?? "").trim(),
         ].join("|"),
       );
+      const [existingFinding] = await tx<{ id: string }[]>`
+        SELECT id FROM findings WHERE project_id = ${job.project_id} AND fingerprint = ${fingerprint}`;
+      if (existingFinding) return; // fingerprint 去重命中：同一 finding 不重复上图、不重复派生
+
+      const artifact = await persistArtifact(tx, {
+        projectId: job.project_id as string,
+        canvasId,
+        jobId,
+        sourceEventId: services.eventId ?? null,
+        sourceOperation: "emit_finding",
+        artifactKey: findingArtifactKey(fingerprint),
+        document: findingProposalToArtifact(normalized),
+      });
       const [finding] = await tx`
       INSERT INTO findings ${tx({
         project_id: job.project_id,
         job_id: jobId,
+        artifact_id: artifact.id,
         fingerprint,
         title: normalized.title,
         severity,
@@ -854,7 +877,10 @@ export function createEventIngestionSideEffectApplication(
       })}
       ON CONFLICT (project_id, fingerprint) DO NOTHING
       RETURNING *`;
-      if (!finding) return; // fingerprint 去重命中：同一 finding 不重复上图、不重复派生
+      if (!finding) {
+        await deleteArtifact(tx, artifact.id);
+        return;
+      }
 
       // 画布：finding 节点挂在 job 节点下，坐标服务端分配（§3.2）
       const [jobNode] = await tx`
@@ -870,6 +896,7 @@ export function createEventIngestionSideEffectApplication(
           node_type: "finding",
           title: normalized.title,
           body_json: {
+            artifact_id: artifact.id,
             profile: normalized.profile,
             category: normalized.category,
             severity,
@@ -892,6 +919,7 @@ export function createEventIngestionSideEffectApplication(
           edge_type: "produces",
         })}`;
         await tx`UPDATE findings SET node_id = ${node.id} WHERE id = ${finding.id}`;
+        await bindArtifactNode(tx, artifact.id, node.id as string);
       }
 
       // 规则引擎：达到最低关注级别或未评分的 Finding 自动进入 Verify。
@@ -907,6 +935,7 @@ export function createEventIngestionSideEffectApplication(
         description?: string;
         quantities?: FactPayload["quantities"];
         verification?: VerificationEvidence;
+        artifact?: FactPayload["artifact"];
       };
       if (!p.description) return;
       let canvasId = (job.canvas_id as string) ?? null;
@@ -927,6 +956,20 @@ export function createEventIngestionSideEffectApplication(
 
       const [{ count }] = await tx<[{ count: number }]>`
       SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact'`;
+      const artifact = await persistArtifact(tx, {
+        projectId: job.project_id as string,
+        canvasId,
+        jobId,
+        sourceEventId: services.eventId ?? null,
+        sourceOperation: "emit_fact",
+        document: factProposalToArtifact({
+          title: p.title ?? p.description.slice(0, 60),
+          description: p.description,
+          quantities: p.quantities,
+          verification: p.verification,
+          artifact: p.artifact,
+        }),
+      });
       const [node] = await tx`
       INSERT INTO canvas_nodes ${tx({
         canvas_id: canvasId,
@@ -935,6 +978,7 @@ export function createEventIngestionSideEffectApplication(
         title: (p.title ?? p.description.slice(0, 60)).slice(0, 200),
         body_json: {
           description: p.description,
+          artifact_id: artifact.id,
           ...(p.quantities && p.quantities.length > 0 ? { quantities: p.quantities } : {}),
         } as never,
         x: ((intentNode?.x as number) ?? 100) + 340,
@@ -943,6 +987,7 @@ export function createEventIngestionSideEffectApplication(
         verification_status: "unverified",
       })}
       RETURNING id`;
+      await bindArtifactNode(tx, artifact.id, node.id as string);
       // 'to' 边：意图 → 产出的事实（Cairn Intent.to）
       if (intentNode) {
         await ports.insertEdgeIfAbsent(tx, canvasId, intentNode.id as string, node.id as string, "to");
