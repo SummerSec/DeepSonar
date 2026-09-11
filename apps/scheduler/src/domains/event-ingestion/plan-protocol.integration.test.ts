@@ -13,7 +13,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("submit_plan / submit_plan_result persist audit and Hub intents adapt without extra events", async () => {
+  test("submit_plan / submit_plan_result persist audit and Hub complete adapts without extra events", async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.AGENT_MODE = "fake";
 
@@ -24,10 +24,13 @@ if (!testDatabaseUrl) {
 
     const projectId = randomUUID();
     const canvasId = `plan-protocol-${randomUUID()}`;
+    const hubCanvasId = `plan-protocol-hub-${randomUUID()}`;
     const planJobId = randomUUID();
     const hubJobId = randomUUID();
     const workerJobId = randomUUID();
+    const succeededRoleJobId = randomUUID();
     const rootId = randomUUID();
+    const hubRootId = randomUUID();
 
     await sql`
       INSERT INTO projects (id, name, config_json)
@@ -38,8 +41,14 @@ if (!testDatabaseUrl) {
       INSERT INTO canvases (id, project_id, title, target_json)
       VALUES (${canvasId}, ${projectId}, 'plan-protocol', ${sql.json({})})`;
     await sql`
+      INSERT INTO canvases (id, project_id, title, target_json)
+      VALUES (${hubCanvasId}, ${projectId}, 'plan-protocol-hub', ${sql.json({})})`;
+    await sql`
       INSERT INTO canvas_nodes (id, canvas_id, node_type, title, status, body_json)
       VALUES (${rootId}, ${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
+    await sql`
+      INSERT INTO canvas_nodes (id, canvas_id, node_type, title, status, body_json)
+      VALUES (${hubRootId}, ${hubCanvasId}, 'root', 'root', 'active', ${sql.json({})})`;
     await sql`
       INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
       VALUES (
@@ -54,7 +63,21 @@ if (!testDatabaseUrl) {
     await sql`
       INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
       VALUES (
-        ${hubJobId}, ${projectId}, ${canvasId}, 'hub_reason', 'running',
+        ${workerJobId}, ${projectId}, ${canvasId}, 'explore', 'running',
+        ${sql.json({ name: "explore", role_kind: "role", platform_tools: ["emit_fact", "mark_job_done"] })},
+        ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+      VALUES (
+        ${succeededRoleJobId}, ${projectId}, ${hubCanvasId}, 'explore', 'succeeded',
+        ${sql.json({ name: "explore", role_kind: "role", platform_tools: ["emit_fact", "mark_job_done"] })},
+        ${sql.json({})}
+      )`;
+    await sql`
+      INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+      VALUES (
+        ${hubJobId}, ${projectId}, ${hubCanvasId}, 'hub_reason', 'running',
         ${sql.json({
           name: "hub_reason",
           role_kind: "hub",
@@ -62,17 +85,15 @@ if (!testDatabaseUrl) {
         })},
         ${sql.json({})}
       )`;
-    await sql`
-      INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
-      VALUES (
-        ${workerJobId}, ${projectId}, ${canvasId}, 'explore', 'running',
-        ${sql.json({ name: "explore", role_kind: "role", platform_tools: ["emit_fact", "mark_job_done"] })},
-        ${sql.json({})}
-      )`;
-    for (const jobId of [planJobId, hubJobId, workerJobId]) {
+    for (const [jobId, jobCanvasId, status] of [
+      [planJobId, canvasId, "running"],
+      [workerJobId, canvasId, "running"],
+      [succeededRoleJobId, hubCanvasId, "succeeded"],
+      [hubJobId, hubCanvasId, "running"],
+    ] as const) {
       await sql`
         INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
-        VALUES (${canvasId}, ${jobId}, 'job', ${jobId.slice(0, 8)}, 'running', ${sql.json({})})`;
+        VALUES (${jobCanvasId}, ${jobId}, 'job', ${jobId.slice(0, 8)}, ${status}, ${sql.json({})})`;
     }
 
     try {
@@ -166,7 +187,7 @@ if (!testDatabaseUrl) {
         type: "hub_decision",
         payload: {
           complete: {
-            from: [rootId],
+            from: [hubRootId],
             description: "目标已被当前引用证据完整覆盖",
           },
         },
@@ -208,7 +229,15 @@ if (!testDatabaseUrl) {
         (error: unknown) => error instanceof ControlInputError && error.code === "tool_not_allowed",
       );
     } finally {
+      const canvasIds = [canvasId, hubCanvasId];
+      await sql`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM canvas_edges WHERE canvas_id = ANY(${canvasIds})`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ANY(${canvasIds})`;
+      await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM canvases WHERE id = ANY(${canvasIds})`;
       await deleteProjectsLeavingAuditShells(sql, [projectId]);
+      await sql.end({ timeout: 5 });
     }
   });
 }
