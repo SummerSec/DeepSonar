@@ -3,6 +3,7 @@ export { createWorkerPlaneOpenSandboxClient } from "./multiplex-client.js";
 export {
   clearWorkerApiKeysForTests,
   listWorkerNodes,
+  releaseOrphanSandboxLeases,
   seedLocalWorkerNode,
   workerApiKey,
 } from "./registry.js";

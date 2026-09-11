@@ -298,3 +298,31 @@ export async function lookupSandboxLease(sandboxId: string): Promise<string | nu
 export async function releaseSandboxLease(sandboxId: string): Promise<void> {
   await sql`DELETE FROM worker_sandbox_leases WHERE sandbox_id = ${sandboxId}`;
 }
+
+/** Job statuses that may still hold a live sandbox and therefore a lease. */
+export const SANDBOX_LEASE_HOLDING_JOB_STATUSES = [
+  "claimed",
+  "provisioning",
+  "running",
+  "waiting_human",
+] as const;
+
+/**
+ * Drop leases whose Job is gone or no longer holding a sandbox.
+ * Desired state is the jobs table; leftover rows after a successful destroy
+ * (or a pre-#431 leak) permanently pin worker capacity.
+ */
+export async function releaseOrphanSandboxLeases(): Promise<number> {
+  const rows = await sql<{ sandbox_id: string }[]>`
+    DELETE FROM worker_sandbox_leases l
+     WHERE NOT EXISTS (
+       SELECT 1 FROM jobs j
+        WHERE j.status = ANY(${SANDBOX_LEASE_HOLDING_JOB_STATUSES as unknown as string[]})
+          AND (
+            (l.job_id IS NOT NULL AND j.id::text = l.job_id)
+            OR (j.sandbox_id IS NOT NULL AND j.sandbox_id = l.sandbox_id)
+          )
+     )
+    RETURNING sandbox_id`;
+  return rows.length;
+}

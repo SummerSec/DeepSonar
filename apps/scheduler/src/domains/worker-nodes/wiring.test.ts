@@ -14,3 +14,10 @@ test("scheduler seeds a local worker and dispatches through the worker plane", (
   assert.match(auth, /\/workers\/register/);
   assert.match(auth, /\/workers\/heartbeat/);
 });
+
+test("reaper and reconcile reclaim sandbox leases for terminal jobs", () => {
+  const reaper = readFileSync(new URL("../../reaper.ts", import.meta.url), "utf8");
+  const reconcile = readFileSync(new URL("../../reconcile.ts", import.meta.url), "utf8");
+  assert.match(reaper, /releaseOrphanSandboxLeases\(\)/);
+  assert.match(reconcile, /releaseOrphanSandboxLeases\(\)/);
+});

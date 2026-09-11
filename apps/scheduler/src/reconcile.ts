@@ -9,6 +9,7 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { config } from "./config.js";
 import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
+import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
@@ -108,6 +109,11 @@ export async function reconcileOnBoot(): Promise<void> {
   await finalizeBootOrphanJobs(orphaned);
   if (orphaned.length > 0) {
     console.warn(`[reconcile] ${orphaned.length} 个 running job 已标记 orphan（可 resume）`);
+  }
+
+  const releasedLeases = await releaseOrphanSandboxLeases();
+  if (releasedLeases > 0) {
+    console.warn(`[reconcile] 回收 ${releasedLeases} 条终态/缺失 Job 的沙箱租约`);
   }
 
   await refreshSharedAssetsOrphanMetrics();

@@ -9,6 +9,7 @@ import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./resource-cleanup.js";
+import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -90,6 +91,11 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
       }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
     }
 
+  }
+
+  const releasedLeases = await releaseOrphanSandboxLeases();
+  if (releasedLeases > 0) {
+    console.warn(`[reaper] 回收 ${releasedLeases} 条终态/缺失 Job 的沙箱租约`);
   }
 
   return { timeouts: timedOut.length, orphans: orphaned.length, provisionStuck: provisionStuck.length, stalled: stalled.length };

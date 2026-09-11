@@ -334,7 +334,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
 | 态势看板 | #242 | P0 运营总览与用量账本已落地；P1/P2 服务端契约见 `GET /dashboard/ops`（#400）。不重建已交付 Dashboard UI |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
-| 执行面多 worker | #415 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
+| 执行面多 worker | #415 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。destroy / `destroyResource` 释放 `worker_sandbox_leases`（含 sessions 缓存路径）；reaper 与启动 reconcile 回收终态/缺失 Job 的孤儿租约（#431）。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
 
 ## 12. 仓库地图
 
