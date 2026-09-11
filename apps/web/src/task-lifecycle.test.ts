@@ -40,6 +40,7 @@ test("current active Job is detected when the rollup is stale", () => {
   const lifecycle = deriveTaskLifecycle({ jobs: [{ status: "waiting_human" }], jobCount: 1 });
   assert.equal(lifecycle.status, "running");
   assert.equal(lifecycle.activeCount, 1);
+  assert.match(lifecycle.reason, /等待人工/);
 });
 
 test("completed tasks retain their ended timestamp", () => {

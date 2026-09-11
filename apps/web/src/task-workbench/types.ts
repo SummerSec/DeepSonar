@@ -34,6 +34,7 @@ export type TaskAction = {
   reversible: boolean;
   next_state: string;
   priority: TaskActionPriority;
+  href?: string;
 };
 
 export type TaskTraceEntry = {

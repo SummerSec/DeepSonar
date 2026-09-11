@@ -1,4 +1,5 @@
 import { ArrowRight, LockSimple, LockSimpleOpen } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import type { TaskAction } from "./types";
 
 const KIND_LABEL: Record<TaskAction["kind"], string> = {
@@ -22,7 +23,7 @@ export function TaskActionCard({
   action: TaskAction;
   onOpen?: (action: TaskAction) => void;
 }) {
-  return (
+  const card = (
     <article className="flex flex-col gap-2 rounded-2xl bg-white/[.03] px-4 py-3 ring-1 ring-white/[.06]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-white/[.05] px-2 py-0.5 text-[10px] text-zinc-300">{KIND_LABEL[action.kind]}</span>
@@ -54,4 +55,8 @@ export function TaskActionCard({
       </div>
     </article>
   );
+  if (!onOpen && action.href) {
+    return <Link to={action.href} className="block no-underline">{card}</Link>;
+  }
+  return card;
 }

@@ -11,6 +11,8 @@ import {
   periodHint,
   toSlices,
 } from "../dashboard-overview";
+import { TaskActionCard } from "../task-workbench/TaskActionCard";
+import { projectDashboardActions } from "../task-workbench/task-actions";
 import { UsageLedgerBoard } from "../UsageLedgerBoard";
 import { EmptyState, PageHeader, PageSkeleton, PrimaryButton, SectionHeading, SeverityBadge, StatCard, StatusBadge, formatTime, relativeTime } from "../ui";
 
@@ -42,13 +44,8 @@ export function DashboardPage() {
   const activeJobs = jobs.filter((job) => ACTIVE.has(job.status));
   const failedJobs = jobs.filter((job) => FAILURE.has(job.status));
   const criticalFindings = findings.filter((finding) => finding.severity != null && ["critical", "high"].includes(finding.severity));
-  const humanJobs = jobs.filter((job) => job.status === "waiting_human");
-  const attentionCount = humanJobs.length + failedJobs.length + criticalFindings.filter((f) => f.verify_status !== "confirmed").length;
-  const focusItems = useMemo(() => [
-    ...humanJobs.map((j) => ({ id: j.id, type: "人工介入", title: j.canvas_title ?? j.type, meta: j.project_name ?? "未知项目", tone: "#e8bd70", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : `/projects/${j.project_id}/tasks` })),
-    ...failedJobs.map((j) => ({ id: j.id, type: "运行异常", title: j.canvas_title ?? j.type, meta: `${j.project_name ?? "未知项目"} · ${j.status}`, tone: "#ed6a7f", to: j.canvas_id ? `/projects/${j.project_id}/tasks/${j.canvas_id}` : `/projects/${j.project_id}/tasks` })),
-    ...criticalFindings.filter((f) => f.verify_status !== "confirmed").map((f) => ({ id: f.id, type: "高风险待验证", title: f.title, meta: f.project_name ?? "未知项目", tone: "#ec8c5d", to: f.canvas_id ? `/projects/${f.project_id}/tasks/${f.canvas_id}` : `/projects/${f.project_id}/findings` })),
-  ].slice(0, 5), [humanJobs, failedJobs, criticalFindings]);
+  const focusItems = useMemo(() => projectDashboardActions({ jobs, findings }).slice(0, 5), [jobs, findings]);
+  const attentionCount = focusItems.length;
   const emptyKind = overview ? dashboardEmptyKind(overview.totals) : "none";
 
   if (loading) return <PageSkeleton />;
@@ -111,7 +108,7 @@ export function DashboardPage() {
             <div className="flex items-start justify-between gap-4"><div><div className="eyebrow"><span style={{ background: attentionCount ? "#e8bd70" : "#65e6b4" }} />ATTENTION QUEUE</div><h2 className="mt-4 text-xl font-medium tracking-[-0.03em] text-zinc-100">{attentionCount ? "优先处理这些事项" : "当前没有阻塞项"}</h2><p className="mt-1 text-[12px] text-zinc-500">关注队列仍是处置入口，只展示会影响风险闭环或任务推进的事件</p></div><SectionLink to="/projects">进入项目工作台</SectionLink></div>
             {focusItems.length ? (
               <div className="mt-6 flex flex-col gap-2">
-                {focusItems.map((item, index) => <Link key={`${item.type}-${item.id}`} to={item.to} className="theme-surface group flex items-center gap-4 rounded-2xl px-4 py-3.5 transition-all hover:bg-[var(--surface-tint-strong)]" style={{ animationDelay: `${240 + index * 55}ms` }}><span className="grid size-9 shrink-0 place-items-center rounded-full" style={{ color: item.tone, background: `color-mix(in srgb, ${item.tone} 10%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${item.tone} 18%, transparent)` }}><Warning size={15} weight="light" /></span><span className="min-w-0 flex-1"><strong className="block truncate text-[13px] font-medium text-zinc-200">{item.title}</strong><small className="mt-0.5 block truncate text-[10px] text-zinc-600">{item.type} · {item.meta}</small></span><ArrowUpRight size={15} weight="light" className="text-zinc-700 transition-transform group-hover:translate-x-1 group-hover:-translate-y-0.5 group-hover:text-zinc-300" /></Link>)}
+                {focusItems.map((item) => <TaskActionCard key={item.id} action={item} />)}
               </div>
             ) : <div className="flex min-h-[210px] items-center justify-center"><div className="text-center"><div className="mx-auto grid size-14 place-items-center rounded-full bg-acc-500/[.07] text-acc-300 ring-1 ring-acc-300/10"><Pulse size={23} weight="light" /></div><p className="mt-4 text-[13px] text-zinc-300">系统运行平稳</p><p className="mt-1 text-[11px] text-zinc-600">异常或人工决策会自动汇总到这里</p></div></div>}
           </div>

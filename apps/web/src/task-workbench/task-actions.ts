@@ -1,3 +1,4 @@
+import { projectRepairFeedback, type RepairFeedback } from "./repair-feedback";
 import { conflictFindingIds, findingVerifyStatus, type OutcomeFact, type OutcomeFinding } from "./task-outcome";
 import type { TaskAction, TaskActionKind, TaskActionPriority } from "./types";
 
@@ -16,6 +17,7 @@ const KIND_RANK: Record<TaskActionKind, number> = {
 };
 
 export type ActionJobEffect = {
+  id?: string;
   effect_id: string;
   effect_kind?: string | null;
   status?: string | null;
@@ -27,6 +29,9 @@ export type ActionJob = {
   status?: string | null;
   error?: string | null;
   role_name?: string | null;
+  project_id?: string | null;
+  canvas_id?: string | null;
+  canvas_title?: string | null;
   /** Only true when an effect ledger proves every effect is settled. Missing means unproven. */
   replay_safe?: boolean;
   unknown_effects?: readonly ActionJobEffect[];
@@ -85,7 +90,7 @@ export function projectUnknownEffectAction(input: {
     evidence_refs: [`job:${input.jobId}`, `effect:${input.effectId}`],
     recommended_action: "confirm_unknown_effect",
     reversible: false,
-    next_state: "needs_human",
+    next_state: "needs_confirmation",
     priority: "critical",
   };
 }
@@ -96,6 +101,10 @@ function findingRef(id: string): string {
 
 function isUnknownEffect(effect: ActionJobEffect): boolean {
   return effect.status === "unknown" || effect.status === "effect_pending";
+}
+
+export function jobUnknownEffects(effects: readonly ActionJobEffect[] | undefined): ActionJobEffect[] {
+  return (effects ?? []).filter(isUnknownEffect);
 }
 
 /** Replay is allowed only when a ledger exists and proves no unknown/pending effects. */
@@ -109,7 +118,7 @@ function interruptedJobLabel(job: ActionJob): string {
 }
 
 function projectInterruptedJobAction(job: ActionJob, status: "timeout" | "orphan"): TaskAction {
-  const unknown = (job.unknown_effects ?? []).filter(isUnknownEffect);
+  const unknown = jobUnknownEffects(job.unknown_effects);
   if (!isInterruptedJobReplaySafe(job)) {
     return {
       id: `job:${job.id}:${status}`,
@@ -237,6 +246,16 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       continue;
     }
     if (status === "failed") {
+      const unknown = jobUnknownEffects(job.unknown_effects);
+      if (unknown.length > 0) {
+        const first = unknown[0];
+        actions.push(projectUnknownEffectAction({
+          jobId: job.id,
+          effectId: first?.effect_id || job.id,
+          effectKind: first?.effect_kind,
+        }));
+        continue;
+      }
       actions.push({
         id: `job:${job.id}:failed`,
         kind: "model_repair",
@@ -268,6 +287,144 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
   }
 
   return sortTaskActions(dedupeTaskActions(actions));
+}
+
+function taskHref(projectId: string | null | undefined, canvasId: string | null | undefined, query = ""): string | undefined {
+  if (!projectId || !canvasId) return undefined;
+  return `/projects/${projectId}/tasks/${canvasId}${query}`;
+}
+
+export function projectDashboardActions(input: {
+  jobs: readonly ActionJob[];
+  findings: readonly (OutcomeFinding & {
+    project_id?: string | null;
+    canvas_id?: string | null;
+    severity?: string | null;
+  })[];
+}): TaskAction[] {
+  const actions = projectTaskActions({
+    jobs: input.jobs,
+    findings: input.findings,
+  });
+  for (const finding of input.findings) {
+    if (!finding.severity || !["critical", "high"].includes(finding.severity)) continue;
+    if (findingVerifyStatus(finding) === "confirmed") continue;
+    actions.push({
+      id: `finding:${finding.id}:risk`,
+      kind: "human_decision",
+      title: finding.title?.trim() || finding.id,
+      reason: findingVerifyStatus(finding) === "needs_human" ? "高风险发现已标为待人工" : "高风险发现尚未确认",
+      impact: "不处理则风险台无法闭环，报告不能把该条写成已确认结论",
+      evidence_refs: [findingRef(finding.id)],
+      recommended_action: "review_evidence",
+      reversible: true,
+      next_state: "needs_human",
+      priority: finding.severity === "critical" ? "critical" : "high",
+      href: taskHref(finding.project_id, finding.canvas_id, `?finding=${finding.id}`)
+        ?? (finding.project_id ? `/projects/${finding.project_id}/findings?finding=${encodeURIComponent(finding.id)}` : undefined),
+    });
+  }
+  const jobsById = new Map(input.jobs.map((job) => [job.id, job]));
+  return sortTaskActions(dedupeTaskActions(actions)).map((action) => {
+    if (action.href) return action;
+    const jobId = action.evidence_refs.find((ref) => ref.startsWith("job:"))?.slice(4);
+    const job = jobId ? jobsById.get(jobId) : undefined;
+    const findingId = action.evidence_refs.find((ref) => ref.startsWith("finding:"))?.slice(8);
+    const finding = findingId ? input.findings.find((row) => row.id === findingId) : undefined;
+    return {
+      ...action,
+      href: job
+        ? taskHref(job.project_id, job.canvas_id, `?tab=jobs&job=${job.id}`)
+        : finding
+          ? taskHref(finding.project_id, finding.canvas_id, `?finding=${finding.id}`)
+          : action.href,
+    };
+  });
+}
+
+export function projectFindingActions(input: {
+  finding: OutcomeFinding & {
+    severity?: string | null;
+    has_waiting_human?: boolean;
+    project_id?: string | null;
+    canvas_id?: string | null;
+    evidence_refs_json?: unknown[];
+  };
+  missing?: readonly string[];
+  jobError?: string | null;
+  jobStatus?: string | null;
+}): TaskAction[] {
+  const finding = input.finding;
+  const href = taskHref(finding.project_id, finding.canvas_id, `?finding=${finding.id}`);
+  const actions: TaskAction[] = [];
+  const missing = input.missing ?? [];
+  if (findingVerifyStatus(finding) === "needs_human" || finding.has_waiting_human || missing.includes("unresolved_conflict")) {
+    actions.push({
+      id: `finding:${finding.id}:needs_human`,
+      kind: "human_decision",
+      title: finding.title?.trim() || finding.id,
+      reason: missing.includes("unresolved_conflict") ? "存在未解决的冲突证据" : "该发现需要人工判断",
+      impact: "不决定则不能确认，报告无法引用这条结论",
+      evidence_refs: [findingRef(finding.id)],
+      recommended_action: "review_evidence",
+      reversible: true,
+      next_state: "needs_human",
+      priority: finding.severity === "critical" ? "critical" : "high",
+      href,
+    });
+  }
+  if (input.jobError) {
+    const repair = projectRepairFeedback({ status: input.jobStatus, error: input.jobError });
+    actions.push({
+      id: `finding:${finding.id}:repair`,
+      kind: repair.category === "unknown_external_effect"
+        ? "unknown_effect"
+        : repair.category === "model_correctable"
+          ? "model_repair"
+          : repair.category === "transient_retryable"
+            ? "transient_retry"
+            : "human_decision",
+      title: finding.title?.trim() || finding.id,
+      reason: repair.observed ?? repair.source_error ?? "最近一次验证未能按预期结束",
+      impact: repair.category === "unknown_external_effect"
+        ? "未确认前不能当作普通失败，也不能无条件重放"
+        : "该发现的验证结论还不能收口",
+      evidence_refs: [findingRef(finding.id)],
+      recommended_action: repair.category === "unknown_external_effect" ? "needs_confirmation" : "review_evidence",
+      reversible: repair.category !== "unknown_external_effect",
+      next_state: repair.category === "unknown_external_effect" ? "needs_confirmation" : "needs_human",
+      priority: "high",
+      href,
+    });
+  }
+  return sortTaskActions(dedupeTaskActions(actions));
+}
+
+export function projectJobActions(input: {
+  job: ActionJob;
+  effects?: readonly ActionJobEffect[];
+}): { actions: TaskAction[]; repair: RepairFeedback | null } {
+  const ledger = input.effects;
+  const hasLedger = Array.isArray(ledger);
+  const unknown = jobUnknownEffects(ledger ?? input.job.unknown_effects);
+  const settled = (ledger ?? []).filter((effect) => effect.status === "settled");
+  const job: ActionJob = {
+    ...input.job,
+    replay_safe: hasLedger ? unknown.length === 0 : input.job.replay_safe,
+    unknown_effects: hasLedger ? unknown : input.job.unknown_effects,
+  };
+  const status = (job.status ?? "").toLowerCase();
+  const failed = ["failed", "timeout", "orphan"].includes(status) || Boolean(job.error) || unknown.length > 0;
+  const repair = failed
+    ? projectRepairFeedback({
+      status: job.status,
+      error: job.error,
+      unknownEffects: unknown,
+      acceptedEffects: settled,
+      hasEffectLedger: hasLedger,
+    })
+    : null;
+  return { actions: projectTaskActions({ jobs: [job] }), repair };
 }
 
 export function projectTaskNextSteps(actions: readonly TaskAction[]): string[] {

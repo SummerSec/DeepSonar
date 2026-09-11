@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   activityHref,
@@ -54,4 +55,11 @@ test("7-day trend bars scale against the busiest series, not a zero peak", () =>
   assert.equal(trendBarHeight(2, 4, 80), 40);
   assert.equal(trendBarHeight(0, 4, 80), 0);
   assert.equal(formatTrendDay("2026-08-19"), "8/19");
+});
+
+test("attention queue uses the shared TaskAction card", () => {
+  const page = readFileSync(new URL("./pages/DashboardPage.tsx", import.meta.url), "utf8");
+  assert.match(page, /projectDashboardActions/);
+  assert.match(page, /<TaskActionCard/);
+  assert.doesNotMatch(page, /type: "人工介入"/);
 });
