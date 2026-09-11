@@ -23,7 +23,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_fact: [
     "### `emit_fact` — 增量提交可验证事实",
-    "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
+    "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`artifact`（可选，通用 Artifact：kind/schema_version/claims/evidence/relations/extensions）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
     "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
     "- `verification` 字段：`finding_id`、`evidence_kind`（review|test）、`outcome`（supports|refutes|inconclusive）、`subject_revision` 必填；test 还应含 `steps`、`expected`、`actual`（或 artifact_refs）。",
     "- 时机：每得到一个不在画布中的原子事实立即调用；单 Job 最多 100 条。description 写明证据、来源、推理边界和仍未知内容。",

@@ -109,6 +109,7 @@ const eventIngestionApplication = createEventIngestionApplication(
     await eventIngestionSideEffectApplication.applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload, {
       jobStatusAtLock: ingest?.jobStatusAtLock,
       attemptId: ingest?.attemptId,
+      eventId: envelope.event_id,
     });
   },
   {

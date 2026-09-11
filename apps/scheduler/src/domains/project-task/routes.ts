@@ -113,6 +113,10 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
       SELECT id FROM jobs WHERE canvas_id = ${canvasId}
     )`;
   await tx`
+    DELETE FROM artifacts WHERE job_id IN (
+      SELECT id FROM jobs WHERE canvas_id = ${canvasId}
+    ) OR canvas_id = ${canvasId}`;
+  await tx`
     DELETE FROM events WHERE job_id IN (
       SELECT id FROM jobs WHERE canvas_id = ${canvasId}
     )`;

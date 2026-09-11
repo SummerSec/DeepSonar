@@ -463,7 +463,9 @@ export async function ingestFactSemanticEvent(
       intent_node_id: intentNodeId,
       title,
       description,
+      ...(fact.quantities && fact.quantities.length > 0 ? { quantities: fact.quantities } : {}),
       ...(fact.verification ? { verification: fact.verification } : {}),
+      ...(fact.artifact ? { artifact: fact.artifact } : {}),
     },
   }));
 }
