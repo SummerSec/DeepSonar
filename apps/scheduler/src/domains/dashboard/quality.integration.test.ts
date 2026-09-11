@@ -12,11 +12,12 @@ if (!testDatabaseUrl) {
 } else {
   test("quality and replay APIs derive scoped metrics from live tables", async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
-    const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }] = await Promise.all([
+    const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }, { generateToken }] = await Promise.all([
       import("fastify"),
       import("@fastify/websocket"),
       import("../../db.js"),
       import("../../routes.js"),
+      import("../../auth.js"),
     ]);
     await migrate();
     const app = Fastify({ logger: false });
@@ -147,7 +148,33 @@ if (!testDatabaseUrl) {
 
       const other = await app.inject({ method: "GET", url: `/projects/${otherProjectId}/quality` });
       assert.equal(other.json().findings.total, 0);
+
+      const token = generateToken();
+      await sql`
+        INSERT INTO api_tokens (name, project_id, token_prefix, token_hash, scopes)
+        VALUES ('quality-project', ${projectId}, ${token.prefix}, ${token.hash}, ${["projects:read"]})`;
+      const headers = { authorization: `Bearer ${token.plaintext}` };
+
+      const ownQuality = await app.inject({ method: "GET", url: `/projects/${projectId}/quality`, headers });
+      assert.equal(ownQuality.statusCode, 200, ownQuality.payload);
+      assert.equal(ownQuality.json().findings.confirmation.numerator, 1);
+
+      const crossQuality = await app.inject({ method: "GET", url: `/projects/${otherProjectId}/quality`, headers });
+      assert.equal(crossQuality.statusCode, 403, crossQuality.payload);
+      assert.equal(crossQuality.json().error_code, "PROJECT_MISMATCH");
+      assert.equal(crossQuality.json().findings, undefined);
+      assert.equal(crossQuality.json().scope, undefined);
+
+      const ownReplay = await app.inject({ method: "GET", url: `/projects/${projectId}/quality/replay`, headers });
+      assert.equal(ownReplay.statusCode, 200, ownReplay.payload);
+      assert.equal(ownReplay.json().records[0].job_id, hubId);
+
+      const crossReplay = await app.inject({ method: "GET", url: `/projects/${otherProjectId}/quality/replay`, headers });
+      assert.equal(crossReplay.statusCode, 403, crossReplay.payload);
+      assert.equal(crossReplay.json().error_code, "PROJECT_MISMATCH");
+      assert.equal(crossReplay.json().records, undefined);
     } finally {
+      await sql`DELETE FROM api_tokens WHERE project_id = ANY(${[projectId, otherProjectId]}::uuid[])`;
       await sql`DELETE FROM job_usage_ledger WHERE project_id = ${projectId}`;
       await sql`DELETE FROM job_attempts WHERE job_id = ANY(${[hubId, makerId, verifyId, childId]}::uuid[])`;
       await sql`DELETE FROM events WHERE job_id = ${hubId}`;

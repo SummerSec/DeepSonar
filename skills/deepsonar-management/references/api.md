@@ -57,8 +57,8 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /dashboard/usage | projects:read | 用量账本：聚合 `job_usage_ledger`（含缓存读/写）。`period=day\|week\|month` 为上海日历滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的 `YYYY-MM-DD` 或 ISO 时刻，最长 366 天。可选 `project_id`/`canvas_id`；不定价；项目级 token 只看到本项目 |
 | GET | /dashboard/quality | projects:read | 只读质量指标（#445 Phase 1）：确认率、误报率、Verify 分歧率、人工介入率、单 Finding token/时间成本。从 Job / Finding / Verify / Usage Ledger 派生，不改变 Hub 决策。可选 `project_id`/`canvas_id` |
 | GET | /dashboard/quality/replay | projects:read | Hub 回放基线：固定 `hub_replay` schema_version=1。可选 `project_id`/`canvas_id`/`limit`（默认 50，最大 200）。`recalled_experiences` Phase 1 恒为空 |
-| GET | /projects/:id/quality | projects:read | 项目级质量指标，语义同 `/dashboard/quality?project_id=` |
-| GET | /projects/:id/quality/replay | projects:read | 项目级 Hub 回放基线 |
+| GET | /projects/:id/quality | projects:read | 项目级质量指标，语义同 `/dashboard/quality?project_id=`。项目级 token 的 `:id` 必须匹配，否则 `PROJECT_MISMATCH` |
+| GET | /projects/:id/quality/replay | projects:read | 项目级 Hub 回放基线。项目级 token 的 `:id` 必须匹配，否则 `PROJECT_MISMATCH` |
 | GET | /canvases/:id/quality | tasks:read | 任务级质量指标 |
 | GET | /canvases/:id/quality/replay | tasks:read | 任务级 Hub 回放基线 |
 | GET | /projects | projects:read | 项目列表 |

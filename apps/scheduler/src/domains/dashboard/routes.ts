@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { sql } from "../../db.js";
+import { projectScopeAllows } from "../../project-scope.js";
 import { loadDashboardOps } from "./ops.js";
 import { loadDashboardOverview } from "./overview.js";
 import { buildQualityReport, loadQualityContext, type QualityScope } from "./quality.js";
@@ -86,6 +87,8 @@ export function registerDashboardRoutes(app: FastifyInstance): void {
 
   app.get("/projects/:id/quality", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
+    if (!projectScopeAllows(actorProjectId, id)) return projectMismatch(reply, actorProjectId!);
     const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!project) return reply.code(404).send({ error: "project not found", error_code: "NOT_FOUND" });
     return sendQuality({ kind: "project", project_id: id, canvas_id: null });
@@ -93,6 +96,8 @@ export function registerDashboardRoutes(app: FastifyInstance): void {
 
   app.get("/projects/:id/quality/replay", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const actorProjectId = req.actor?.projectId ?? null;
+    if (!projectScopeAllows(actorProjectId, id)) return projectMismatch(reply, actorProjectId!);
     const query = (req.query ?? {}) as { limit?: string };
     const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!project) return reply.code(404).send({ error: "project not found", error_code: "NOT_FOUND" });

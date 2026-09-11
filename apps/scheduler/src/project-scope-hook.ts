@@ -73,6 +73,13 @@ export async function projectScopeHook(req: FastifyRequest, reply: FastifyReply)
     }
   }
   if (!actorProjectId) return;
+  if (routeUrl.startsWith("/projects/:id")) {
+    const projectId = params.id;
+    if (projectId && !projectScopeAllows(actorProjectId, projectId)) {
+      return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: PROJECT_MISMATCH });
+    }
+    return;
+  }
   if (routeUrl.startsWith("/exports/:id")) {
     const exportId = params.id;
     if (!exportId) return;
