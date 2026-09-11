@@ -31,7 +31,21 @@ if (!testDatabaseUrl) {
         VALUES (${projectId}, 'artifact-phase1', ${sql.json({ rules: { hubEnabled: false } })})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
-        VALUES (${canvasId}, ${projectId}, 'artifact-phase1', ${sql.json({})})`;
+        VALUES (${canvasId}, ${projectId}, 'artifact-phase1', ${sql.json({
+          effective_finding_protocol: {
+            mode: "hybrid",
+            default_profile: "security.vulnerability",
+            allowed_profiles: ["security.vulnerability", "general"],
+            scoring: {
+              default_standard: "CVSS",
+              default_version: "3.1",
+              accepted_versions: ["3.1", "4.0"],
+              require_scoring_for_profiles: [],
+            },
+            display_name: "artifact-phase1",
+            source: "task",
+          },
+        })})`;
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
@@ -165,7 +179,7 @@ if (!testDatabaseUrl) {
         SELECT revision, status FROM artifacts
         WHERE project_id = ${projectId} AND artifact_key = 'login-rate-limit'
         ORDER BY revision`;
-      assert.deepEqual(versions, [
+      assert.deepEqual([...versions], [
         { revision: 1, status: "superseded" },
         { revision: 2, status: "submitted" },
       ]);
@@ -213,8 +227,8 @@ if (!testDatabaseUrl) {
 
       const findingEventId = randomUUID();
       const findingPayload = {
-        title: "重置令牌可重放",
-        summary: "成功重置后令牌未失效，可再次修改密码并接管账户。",
+        title: "重置令牌可重复使用",
+        summary: "成功重置后令牌未失效，可再次修改密码并接管账户。此摘要补足 Finding 契约要求的证据上下文长度。",
         severity: "high" as const,
         location: "src/auth/reset.ts:88",
         rule_id: "AUTH-RESET-REPLAY",
