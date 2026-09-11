@@ -979,6 +979,8 @@ expect(registryScript.includes("image build unchanged; version kept"), "generato
 expect(registryScript.includes("platform_version") && registryScript.includes("min_runtime_image"), "generator must emit split platform/runtime version axes");
 expect(releaseWorkflow.includes("maybe-skip-runtime-version-tags.sh"), "unchanged runtime products must skip new platform-version tags");
 expect(releaseWorkflow.includes("write-release-runtime-descriptor.sh"), "unchanged runtime products must reuse the previous catalog descriptor");
+const writeDescriptor = readFileSync(new URL("./write-release-runtime-descriptor.sh", import.meta.url), "utf8");
+expect(!writeDescriptor.includes("--digest"), "fingerprint skip must reuse catalog digest, not require src-* cache digest");
 expect(!releaseWorkflow.includes("release still republishes and inspects every configured channel"), "unchanged runtime products must not republish platform-version tags");
 expect(!releaseWorkflow.includes("Kali build unchanged; retag"), "unchanged Kali must keep its existing version instead of retagging");
 expect(schedulerRegistryContract.includes("min_runtime_image") && schedulerRegistryContract.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN") === false, "catalog parser owns min_runtime_image; HTTP error code lives in runtime-images");
