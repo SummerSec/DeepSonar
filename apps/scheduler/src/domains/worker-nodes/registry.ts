@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
 import { parseRemoteWorkerEndpoint, type WorkerEndpointPolicy } from "./endpoint.js";
@@ -11,7 +12,6 @@ import {
   parseWorkerEndpoint,
   parseWorkerLabels,
   parseWorkerNodeId,
-  pickRoundRobinWorker,
   shouldReuseLocalWorkerToken,
   WorkerNodeError,
   workerTokensEqual,
@@ -22,6 +22,15 @@ import {
   type WorkerProtocol,
   type WorkerStatus,
 } from "./model.js";
+
+export type WorkerDispatchClaim = DispatchableWorker & { reservationId: string };
+
+export type ClaimWorkerOptions = {
+  requireLocal?: boolean;
+  now?: number;
+  jobId?: string;
+  attemptId?: string;
+};
 
 const apiKeys = new Map<string, string>();
 
@@ -348,17 +357,66 @@ export async function forgetWorkerNode(id: string): Promise<DispatchableWorker |
   return node;
 }
 
-export async function claimWorkerForDispatch(options: {
-  requireLocal?: boolean;
-  now?: number;
-} = {}): Promise<DispatchableWorker | null> {
+export async function claimWorkerForDispatch(
+  options: ClaimWorkerOptions = {},
+): Promise<WorkerDispatchClaim | null> {
+  const knownIds = [...apiKeys.keys()];
+  if (knownIds.length === 0) return null;
+
   const now = options.now ?? Date.now();
-  const node = pickRoundRobinWorker(await listWorkerNodes(), now, workerStaleAfterMs(), {
-    requireLocal: options.requireLocal,
+  const staleCutoff = new Date(now - workerStaleAfterMs());
+  const requireLocal = options.requireLocal === true;
+  const reservationId = `reserve:${randomUUID()}`;
+  const jobId = options.jobId ?? null;
+  const attemptId = options.attemptId ?? null;
+
+  return sql.begin(async (tx) => {
+    const skipped: string[] = [];
+    for (;;) {
+      const [row] = await tx<WorkerRow[]>`
+        SELECT w.*, (
+          SELECT count(*)::int FROM worker_sandbox_leases l WHERE l.worker_id = w.id
+        ) AS active_sandboxes
+          FROM worker_nodes w
+         WHERE w.status <> 'unavailable'
+           AND w.id = ANY(${knownIds})
+           AND (${requireLocal} = false OR w.kind = 'local')
+           AND (w.kind = 'local' OR w.last_heartbeat_at > ${staleCutoff})
+           AND (${skipped.length} = 0 OR NOT (w.id = ANY(${skipped})))
+           AND (
+             SELECT count(*) FROM worker_sandbox_leases l WHERE l.worker_id = w.id
+           ) < coalesce((w.capacity_json->>'max_sandboxes')::int, 8)
+         ORDER BY w.last_dispatch_at NULLS FIRST, w.id
+         FOR UPDATE OF w
+         LIMIT 1`;
+      if (!row) return null;
+
+      const [{ n }] = await tx<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM worker_sandbox_leases WHERE worker_id = ${row.id}`;
+      const occupied = Number(n ?? 0);
+      const maxSandboxes = parseWorkerCapacity({
+        maxSandboxes: row.capacity_json?.max_sandboxes,
+      }).maxSandboxes;
+      if (occupied >= maxSandboxes) {
+        skipped.push(row.id);
+        continue;
+      }
+
+      await tx`
+        INSERT INTO worker_sandbox_leases (sandbox_id, worker_id, job_id, attempt_id)
+        VALUES (${reservationId}, ${row.id}, ${jobId}, ${attemptId})`;
+      const [updated] = await tx<WorkerRow[]>`
+        UPDATE worker_nodes
+           SET last_dispatch_at = now(), updated_at = now()
+         WHERE id = ${row.id}
+        RETURNING *`;
+      return {
+        ...fromRow(updated ?? row, occupied + 1),
+        lastDispatchAt: now,
+        reservationId,
+      };
+    }
   });
-  if (!node) return null;
-  await sql`UPDATE worker_nodes SET last_dispatch_at = now(), updated_at = now() WHERE id = ${node.id}`;
-  return { ...node, lastDispatchAt: now };
 }
 
 export async function recordSandboxLease(input: {
@@ -371,6 +429,25 @@ export async function recordSandboxLease(input: {
     INSERT INTO worker_sandbox_leases (sandbox_id, worker_id, job_id, attempt_id)
     VALUES (${input.sandboxId}, ${input.workerId}, ${input.jobId ?? null}, ${input.attemptId ?? null})
     ON CONFLICT (sandbox_id) DO UPDATE SET worker_id = excluded.worker_id`;
+}
+
+export async function finalizeSandboxLease(input: {
+  reservationId: string;
+  sandboxId: string;
+  workerId: string;
+  jobId?: string;
+  attemptId?: string;
+}): Promise<void> {
+  const rows = await sql`
+    UPDATE worker_sandbox_leases
+       SET sandbox_id = ${input.sandboxId},
+           job_id = ${input.jobId ?? null},
+           attempt_id = ${input.attemptId ?? null}
+     WHERE sandbox_id = ${input.reservationId} AND worker_id = ${input.workerId}
+    RETURNING sandbox_id`;
+  if (rows.length === 0) {
+    throw new Error(`WORKER_PLANE_LEASE_MISSING: ${input.reservationId}`);
+  }
 }
 
 export async function lookupSandboxLease(sandboxId: string): Promise<string | null> {

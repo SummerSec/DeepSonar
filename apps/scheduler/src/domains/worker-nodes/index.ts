@@ -1,7 +1,9 @@
 export { registerWorkerNodeRoutes } from "./routes.js";
 export { createWorkerPlaneOpenSandboxClient } from "./multiplex-client.js";
 export {
+  claimWorkerForDispatch,
   clearWorkerApiKeysForTests,
+  finalizeSandboxLease,
   forgetWorkerNode,
   listWorkerNodes,
   releaseOrphanSandboxLeases,

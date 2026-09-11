@@ -1,13 +1,15 @@
 import type { OpenSandboxClient, OpenSandboxConnection, OpenSandboxCreateInput } from "@deepsonar/runtime-sandbox";
-import { pickRoundRobinWorker, type DispatchableWorker } from "./model.js";
+import type { DispatchableWorker } from "./model.js";
 import {
   claimWorkerForDispatch,
+  finalizeSandboxLease,
   listWorkerNodes,
   lookupSandboxLease,
   recordSandboxLease,
   releaseSandboxLease,
   workerApiKey,
-  workerStaleAfterMs,
+  type ClaimWorkerOptions,
+  type WorkerDispatchClaim,
 } from "./registry.js";
 
 export type WorkerClientFactory = (connection: OpenSandboxConnection) => OpenSandboxClient;
@@ -16,7 +18,14 @@ export type WorkerPlaneDeps = {
   createClient: WorkerClientFactory;
   now?: () => number;
   listWorkers?: () => Promise<DispatchableWorker[]>;
-  claimWorker?: (options?: { requireLocal?: boolean; now?: number }) => Promise<DispatchableWorker | null>;
+  claimWorker?: (options?: ClaimWorkerOptions) => Promise<WorkerDispatchClaim | null>;
+  finalizeLease?: (input: {
+    reservationId: string;
+    sandboxId: string;
+    workerId: string;
+    jobId?: string;
+    attemptId?: string;
+  }) => Promise<void>;
   recordLease?: (input: { sandboxId: string; workerId: string; jobId?: string; attemptId?: string }) => Promise<void>;
   lookupLease?: (sandboxId: string) => Promise<string | null>;
   releaseLease?: (sandboxId: string) => Promise<void>;
@@ -47,6 +56,7 @@ export function createWorkerPlaneOpenSandboxClient(options: WorkerPlaneDeps): Op
   const clients = new Map<string, OpenSandboxClient>();
   const listWorkers = options.listWorkers ?? listWorkerNodes;
   const claimWorker = options.claimWorker ?? claimWorkerForDispatch;
+  const finalizeLease = options.finalizeLease ?? finalizeSandboxLease;
   const recordLease = options.recordLease ?? recordSandboxLease;
   const lookupLease = options.lookupLease ?? lookupSandboxLease;
   const releaseLease = options.releaseLease ?? releaseSandboxLease;
@@ -65,32 +75,33 @@ export function createWorkerPlaneOpenSandboxClient(options: WorkerPlaneDeps): Op
   return {
     async create(input) {
       const requireLocal = createNeedsLocalWorker(input);
-      let node = await claimWorker({ requireLocal, now: options.now?.() });
-      if (!node) {
-        node = pickRoundRobinWorker(
-          await listWorkers(),
-          options.now?.() ?? Date.now(),
-          workerStaleAfterMs(),
-          { requireLocal },
-        );
-      }
-      if (!node) throw new Error("WORKER_PLANE_NO_CAPACITY");
-      const client = clientFor(node);
-      if (!client) throw new Error(`WORKER_PLANE_API_KEY_MISSING: ${node.id}`);
-      const session = await client.create(input);
+      const jobId = input.metadata["deepsonar.job"];
+      const attemptId = input.metadata["deepsonar.attempt"];
+      const claimed = await claimWorker({ requireLocal, now: options.now?.(), jobId, attemptId });
+      if (!claimed) throw new Error("WORKER_PLANE_NO_CAPACITY");
+      let reserved: string | undefined = claimed.reservationId;
       try {
-        await recordLease({
-          sandboxId: session.id,
-          workerId: node.id,
-          jobId: input.metadata["deepsonar.job"],
-          attemptId: input.metadata["deepsonar.attempt"],
-        });
-      } catch (error) {
-        await session.kill().catch(() => {});
-        await session.close().catch(() => {});
-        throw error;
+        const client = clientFor(claimed);
+        if (!client) throw new Error(`WORKER_PLANE_API_KEY_MISSING: ${claimed.id}`);
+        const session = await client.create(input);
+        try {
+          await finalizeLease({
+            reservationId: claimed.reservationId,
+            sandboxId: session.id,
+            workerId: claimed.id,
+            jobId,
+            attemptId,
+          });
+          reserved = undefined;
+        } catch (error) {
+          await session.kill().catch(() => {});
+          await session.close().catch(() => {});
+          throw error;
+        }
+        return session;
+      } finally {
+        if (reserved) await releaseLease(reserved).catch(() => {});
       }
-      return session;
     },
     async connect(id) {
       const workerId = await lookupLease(id);
