@@ -29,3 +29,11 @@ test("emit and report hooks keep research best-effort and after the verify gate"
   const gateIdx = report.indexOf("if (!gate.ok)");
   assert.ok(callIdx > 0 && gateIdx > 0 && callIdx > gateIdx, "research must run only after the report gate decision");
 });
+
+test("best-effort research isolates persistence failures with a savepoint", () => {
+  assert.match(application, /function withResearchSavepoint/);
+  assert.match(application, /nested\.savepoint\(/);
+  const bestEffort = application.slice(application.indexOf("export async function runFindingResearchBestEffort"));
+  assert.match(bestEffort, /withResearchSavepoint\(tx, \(inner\) => runFindingResearch/);
+  assert.match(bestEffort, /withResearchSavepoint\(tx, \(inner\) => recordFailedRun/);
+});

@@ -20,6 +20,21 @@ import {
 export type FindingResearchDatabase = typeof sql;
 export type FindingResearchTransaction = FindingResearchDatabase;
 
+type SavepointTx = FindingResearchTransaction & {
+  savepoint<T>(callback: (tx: FindingResearchTransaction) => T | Promise<T>): Promise<T>;
+};
+
+function withResearchSavepoint<T>(
+  tx: FindingResearchTransaction,
+  fn: (inner: FindingResearchTransaction) => Promise<T>,
+): Promise<T> {
+  const nested = tx as SavepointTx;
+  if (typeof nested.savepoint === "function") {
+    return nested.savepoint(fn);
+  }
+  return fn(tx);
+}
+
 export interface FindingResearchRunInput {
   canvasId: string;
   projectId: string;
@@ -333,17 +348,22 @@ export async function runFindingResearch(
   }
 }
 
-/** Incremental / report hooks must keep the Finding even if research fails. */
+/**
+ * Incremental / report hooks must keep the Finding and report writes even if
+ * research persistence fails. PostgreSQL aborts a transaction after any
+ * statement error, so research SQL and the failed-run ledger each run in
+ * their own savepoint; a rolled-back savepoint leaves the outer tx usable.
+ */
 export async function runFindingResearchBestEffort(
   tx: FindingResearchTransaction,
   input: FindingResearchRunInput,
 ): Promise<FindingResearchRunResult> {
   try {
-    return await runFindingResearch(tx, input);
+    return await withResearchSavepoint(tx, (inner) => runFindingResearch(inner, input));
   } catch (error) {
     const message = error instanceof Error ? error.message : "finding research failed";
     try {
-      const runId = await recordFailedRun(tx, input, message);
+      const runId = await withResearchSavepoint(tx, (inner) => recordFailedRun(inner, input, message));
       return { status: "failed", runIds: [runId], processed: 0, remaining: 0, error: message };
     } catch {
       return { status: "failed", runIds: [], processed: 0, remaining: 0, error: message };

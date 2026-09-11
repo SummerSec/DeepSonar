@@ -20,7 +20,7 @@ reaching through its implementation module.
 | `event-ingestion` | Event envelope validation, event-id deduplication, per-Job sequencing, and dispatching semantic side effects. | The policy for a Job status transition. |
 | `hub-orchestration` | Hub eligibility, intent validation, round budgets, idle/complete progression. | Direct Job status writes; it requests a lifecycle transition. |
 | `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions. Implementation lives in `verify.ts`; `routes.ts` owns read-only Finding and verification projections. | Dispatcher claims, Report state, and research ranking. |
-| `finding-research` | Bounded-batch semantic clustering, canonical anchors, relative priority scores, and research-run audit (#448). Implementation lives in `domains/finding-research`. | Finding `verify_status` / severity / report gates. |
+| `finding-research` | Bounded-batch semantic clustering, canonical anchors, relative priority scores, and research-run audit (#448). Implementation lives in `domains/finding-research`. | Finding `verify_status` / severity / report gates. Research persistence failures stay in a savepoint and must not abort Finding/report writes. |
 | `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, report failure recovery, and report/download route registration. Implementation lives in `report.ts`. | Agent runtime snapshots or generic Job transition rules. |
 | `role-runtime-snapshot` | RoleConfig, credential/CLI compatibility, skills, and immutable runtime-image snapshots. | Canvas/Finding convergence and Job terminal decisions. |
 

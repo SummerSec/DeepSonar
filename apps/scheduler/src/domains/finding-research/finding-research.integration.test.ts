@@ -168,6 +168,57 @@ if (!testDatabaseUrl) {
       assert.equal(lateResearch.length, 0, "failed compare must not drop or auto-cluster the candidate");
       const failedRuns = await sql`SELECT status, error FROM finding_research_runs WHERE canvas_id = ${canvasId} AND status = 'failed'`;
       assert.ok(failedRuns.some((row) => String(row.error).includes("anchor compare unavailable")));
+
+      const isolatedFindingId = randomUUID();
+      const isolatedReportId = randomUUID();
+      await sql`
+        ALTER TABLE finding_research
+        ADD CONSTRAINT finding_research_force_failure CHECK (false) NOT VALID`;
+      try {
+        const isolated = await sql.begin(async (tx) => {
+          await tx`
+            INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, location, summary, category, verify_status)
+            VALUES (
+              ${isolatedFindingId}, ${projectId}, ${jobId}, 'fp-research-savepoint',
+              'Persistence failure must not roll back the finding', 'high', 'src/savepoint.ts:1',
+              'outer writes stay committed', 'other', 'pending'
+            )`;
+          await tx`
+            INSERT INTO task_reports (id, canvas_id, project_id, version, status, input_uri, input_sha256, summary_json)
+            VALUES (
+              ${isolatedReportId}, ${canvasId}, ${projectId}, 1, 'pending',
+              'reports/research-savepoint/input.json', ${"a".repeat(64)}, ${tx.json({})}
+            )`;
+          const result = await research.runFindingResearchBestEffort(tx as unknown as typeof sql, {
+            canvasId,
+            projectId,
+            kind: "pipeline",
+          });
+          return result;
+        });
+        assert.equal(isolated.status, "failed");
+        assert.match(isolated.error ?? "", /finding_research_force_failure|check constraint/i);
+      } finally {
+        await sql`ALTER TABLE finding_research DROP CONSTRAINT IF EXISTS finding_research_force_failure`;
+      }
+      const [keptFinding] = await sql`SELECT id, verify_status, severity FROM findings WHERE id = ${isolatedFindingId}`;
+      const [keptReport] = await sql`SELECT id, status FROM task_reports WHERE id = ${isolatedReportId}`;
+      assert.equal(keptFinding?.id, isolatedFindingId, "Finding insert must commit after research SQL failure");
+      assert.equal(keptFinding?.verify_status, "pending");
+      assert.equal(keptFinding?.severity, "high");
+      assert.equal(keptReport?.id, isolatedReportId, "task report insert must commit after research SQL failure");
+      assert.equal(keptReport?.status, "pending");
+      const isolatedCluster = await sql`SELECT finding_id FROM finding_research WHERE finding_id = ${isolatedFindingId}`;
+      assert.equal(isolatedCluster.length, 0, "failed research persistence must not assign the candidate");
+      const isolatedFailedRuns = await sql`
+        SELECT status, error FROM finding_research_runs
+        WHERE canvas_id = ${canvasId} AND status = 'failed'
+        ORDER BY created_at DESC`;
+      assert.ok(
+        isolatedFailedRuns.some((row) => String(row.error).includes("finding_research_force_failure")
+          || /check constraint/i.test(String(row.error))),
+        "failed run ledger should still record after savepoint rollback",
+      );
     } finally {
       if (closeApp) await closeApp().catch(() => {});
       if (endSql) await endSql().catch(() => {});
