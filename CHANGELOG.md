@@ -10,6 +10,7 @@
 
 ### 修复
 
+- Worker 派发 claim 改为单事务选节点 + 预留 `worker_sandbox_leases` 占位，并写入 `last_dispatch_at`；并发 provision 不能超过节点 `max_sandboxes`。远端 create 失败释放占位，成功则把占位改成真实 sandbox id。去掉 claim 失败后再 `pickRoundRobinWorker` 且不记账的 fallback（#434）。
 - Worker 沙箱租约在正常 destroy 时也会释放（#431 / #416 回归）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。
 - Worker 注册/心跳不再允许 bootstrap token 静默改写 endpoint 或抢占已有 `node_id`（含保留的 `local`）：远程注册拒绝保留 id 与同名接管，须管理员 `DELETE /workers/:id` 后才能 reclaim；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址，并可选用 CIDR/hostname allowlist；注册与拒绝的心跳写入审计并按 IP 限流；心跳不能改 kind/所有权。本地 seed 在 kind/endpoint 被改写后轮换 node token，劫持无法跨 Scheduler 重启存活（#433）。
 - 项目导出在活动 Job 下不再撕裂快照（#436）：数据收集走 `REPEATABLE READ` 只读事务；`project_full` 拒绝 `allow_active_jobs`，仅证据归档 / 自定义事件模块可显式允许；`credentials.mode=excluded` 不再把凭据身份写入 role-configs；events 达上限时标记 `counts.events_truncated` 与 manifest warning；导入对缺少 Job 的 Finding 记 warning。

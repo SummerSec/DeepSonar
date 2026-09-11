@@ -90,8 +90,9 @@ test("worker plane round-robins remote nodes and pins sandbox traffic to server-
     claimWorker: async () => {
       const next = nodes.slice().sort((a, b) => (a.lastDispatchAt ?? 0) - (b.lastDispatchAt ?? 0))[0]!;
       next.lastDispatchAt = Date.now();
-      return next;
+      return { ...next, reservationId: `reserve-${next.id}-${seen.length}` };
     },
+    finalizeLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
     recordLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
     lookupLease: async (sandboxId) => leases.get(sandboxId) ?? null,
     releaseLease: async (sandboxId) => { leases.delete(sandboxId); },
@@ -120,7 +121,8 @@ test("single local worker remains the only dispatch target", async () => {
       };
     },
     listWorkers: async () => [local],
-    claimWorker: async () => local,
+    claimWorker: async () => ({ ...local, reservationId: "reserve-local" }),
+    finalizeLease: async () => {},
     recordLease: async () => {},
     lookupLease: async () => "local",
     releaseLease: async () => {},
@@ -134,14 +136,42 @@ test("single local worker remains the only dispatch target", async () => {
 test("no dispatchable worker fails closed", async () => {
   const client = createWorkerPlaneOpenSandboxClient({
     createClient() { throw new Error("must not connect"); },
-    listWorkers: async () => [],
+    listWorkers: async () => [worker("stale-but-listed")],
     claimWorker: async () => null,
+    finalizeLease: async () => {},
     recordLease: async () => {},
     lookupLease: async () => null,
     releaseLease: async () => {},
     apiKeyOf: () => undefined,
   });
   await assert.rejects(() => client.create(emptyCreate()), /WORKER_PLANE_NO_CAPACITY/);
+});
+
+test("create failure releases the claim reservation and does not fall back to a second pick", async () => {
+  const released: string[] = [];
+  let claims = 0;
+  const client = createWorkerPlaneOpenSandboxClient({
+    createClient() {
+      return {
+        create: async () => { throw new Error("remote create failed"); },
+        connect: async () => undefined,
+        list: async () => [],
+      };
+    },
+    listWorkers: async () => [worker("w1")],
+    claimWorker: async () => {
+      claims += 1;
+      return { ...worker("w1"), reservationId: "reserve-w1" };
+    },
+    finalizeLease: async () => { throw new Error("must not finalize"); },
+    recordLease: async () => { throw new Error("must not record"); },
+    lookupLease: async () => null,
+    releaseLease: async (id) => { released.push(id); },
+    apiKeyOf: () => "node-key",
+  });
+  await assert.rejects(() => client.create(emptyCreate()), /remote create failed/);
+  assert.equal(claims, 1);
+  assert.deepEqual(released, ["reserve-w1"]);
 });
 
 test("worker plane destroy releases the lease even if the node destroy throws", async () => {
@@ -159,7 +189,8 @@ test("worker plane destroy releases the lease even if the node destroy throws", 
       };
     },
     listWorkers: async () => [local],
-    claimWorker: async () => local,
+    claimWorker: async () => ({ ...local, reservationId: "reserve-boom" }),
+    finalizeLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
     recordLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
     lookupLease: async (sandboxId) => leases.get(sandboxId) ?? null,
     releaseLease: async (sandboxId) => { leases.delete(sandboxId); },
@@ -188,6 +219,7 @@ test("OpenSandboxRunner provision then destroy returns worker-plane lease count 
   const local = worker("local", { capacity: { maxSandboxes: 1, memoryMib: 1024, cpu: 1 } });
   const leases = new Map<string, string>();
   let present = false;
+  let reservations = 0;
   const plane = createWorkerPlaneOpenSandboxClient({
     createClient() {
       const session = contractSession("local-sb");
@@ -206,7 +238,10 @@ test("OpenSandboxRunner provision then destroy returns worker-plane lease count 
       };
     },
     listWorkers: async () => [{ ...local, activeSandboxes: leases.size }],
-    claimWorker: async () => (leases.size >= local.capacity.maxSandboxes ? null : local),
+    claimWorker: async () => (leases.size >= local.capacity.maxSandboxes
+      ? null
+      : { ...local, reservationId: `reserve-${++reservations}` }),
+    finalizeLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
     recordLease: async ({ sandboxId, workerId }) => { leases.set(sandboxId, workerId); },
     lookupLease: async (sandboxId) => leases.get(sandboxId) ?? null,
     releaseLease: async (sandboxId) => { leases.delete(sandboxId); },

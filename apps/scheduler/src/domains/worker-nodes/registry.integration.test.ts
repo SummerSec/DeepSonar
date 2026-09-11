@@ -58,6 +58,11 @@ if (!testDatabaseUrl) {
       assert.ok(picked1 && picked2);
       assert.notEqual(picked1.id, picked2.id);
       assert.deepEqual([picked1.id, picked2.id].sort(), ids.slice().sort());
+      assert.match(picked1.reservationId, /^reserve:/);
+      assert.match(picked2.reservationId, /^reserve:/);
+      const reserved = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM worker_sandbox_leases WHERE worker_id LIKE ${`${prefix}%`}`;
+      assert.equal(reserved[0]?.n, 2);
 
       const snapshot = { agent_cli: "claude-code", credential_id: null, credential_provider: null, model: null };
       await sql`INSERT INTO projects (id, name, config_json) VALUES (${projectId}, ${`wn-lease-${projectId}`}, ${sql.json({})})`;
@@ -79,6 +84,45 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE id = ANY(${[liveJobId, deadJobId]}::uuid[])`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
       await deleteProjectsLeavingAuditShells(sql, [projectId]);
+      await sql`DELETE FROM worker_sandbox_leases WHERE worker_id LIKE ${`${prefix}%`}`;
+      await sql`DELETE FROM worker_nodes WHERE id LIKE ${`${prefix}%`}`;
+      clearWorkerApiKeysForTests();
+    }
+  });
+
+  test("concurrent worker claims cannot exceed max_sandboxes", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    process.env.AGENT_MODE = "fake";
+
+    const { migrate, sql } = await import("../../db.js");
+    const {
+      claimWorkerForDispatch,
+      clearWorkerApiKeysForTests,
+      registerRemoteWorker,
+    } = await import("./registry.js");
+    await migrate();
+
+    const prefix = `wnc-${randomUUID().slice(0, 8)}`;
+    const nodeId = `${prefix}-cap`;
+    try {
+      clearWorkerApiKeysForTests();
+      await registerRemoteWorker({
+        nodeId,
+        endpoint: "10.0.0.21:18081",
+        apiKey: "worker-cap-key",
+        capacity: { maxSandboxes: 3, memoryMib: 1024, cpu: 1 },
+      });
+
+      const results = await Promise.all(Array.from({ length: 10 }, () => claimWorkerForDispatch()));
+      const won = results.filter((row) => row != null);
+      assert.equal(won.length, 3);
+      assert.equal(new Set(won.map((row) => row.reservationId)).size, 3);
+      const [{ n }] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM worker_sandbox_leases WHERE worker_id = ${nodeId}`;
+      assert.equal(n, 3);
+      assert.equal(await claimWorkerForDispatch(), null);
+    } finally {
+      await sql`DELETE FROM worker_sandbox_leases WHERE worker_id LIKE ${`${prefix}%`}`;
       await sql`DELETE FROM worker_nodes WHERE id LIKE ${`${prefix}%`}`;
       clearWorkerApiKeysForTests();
     }
