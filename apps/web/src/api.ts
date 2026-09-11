@@ -16,6 +16,17 @@ import type {
 
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
 export type { EffectiveFindingProtocol, FindingProtocolConfig } from "@deepsonar/shared-types";
+export type {
+  TaskAction,
+  TaskActionKind,
+  TaskActionPriority,
+  TaskCognitionStatus,
+  TaskDeliveryStatus,
+  TaskOutcomeSummary,
+  TaskStatusLines,
+  TaskTraceEntry,
+  TaskTraceKind,
+} from "./task-workbench/types";
 
 export type TaskKind = "standard" | "compose";
 

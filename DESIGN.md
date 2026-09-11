@@ -308,13 +308,13 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 ## 10. 前端信息架构
 
-- 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 画布/发现/运行/报告完成。进入项目后，**项目账本**（`/projects/:id/usage`）看本项目 Gateway 用量；**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
+- 一级工作流固定为 **态势 / 项目 / Agent / Agent 市场 / 镜像**；跨项目 Findings/Jobs 保留查询页与命令菜单入口，但不占主 rail。日常闭环从项目 → 任务 → 总览/研究地图/发现/运行/报告完成。进入项目后，**项目账本**（`/projects/:id/usage`）看本项目 Gateway 用量；**项目风险**（`/projects/:id/findings`，文案「项目风险 / 风险发现」）是本项目全部任务 Finding 的风险台，不是默认首页，也不是跨项目 `/findings`。顶部计数走 `GET /projects/:id/findings/summary`，避免 Finding 列表 500 条窗口静默截断。
 - Finding 人工处置含 `human_reproducing`（人工复现中）：人已接手手工复现 / 打 PoC，尚未标「漏洞存在」或「拒绝误报」。**不是**技术 `verify_status=confirmed`，不能旁路 `confirmed_vuln` 的 Verify 门。compose 种子视为未否定处置。
 - **态势运营总览（#242 P0）**：`/` 在关注队列之上展示项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。总量走轻量 `GET /dashboard/overview`（Job/Finding 列表有窗口上限，前端不全量拉取）；关注队列仍用 `api.jobs()` / `api.findings()` 作为处置入口。P1/P2 **服务端**契约由 `GET /dashboard/ops` 提供（#400）；已交付 Dashboard UI 不再重建。
 - **用量账本看板**：`GET /dashboard/usage` 聚合 `job_usage_ledger`（不定价，含 `cache_read_input_tokens` / `cache_creation_input_tokens`）。预设 `day` / `week` / `month` 为 Asia/Shanghai 滚动窗口；`period=custom` 时 `from`/`to` 为含首尾的上海日历日或 ISO 时刻，跨度最长 366 天。可选 `project_id` / `canvas_id`。态势页看全局（项目/任务/模型 Top 8），CURRENT PROJECT「项目账本」tab（`/projects/:id/usage`）看本项目，任务工作台「本次运行」看本画布。任务工作台列表不再内嵌项目账本。看板可折叠，偏好按用户 + 页面写入 `localStorage`（`deepsonar:usage-ledger:<user>:<page>`），默认展开。
 - Agent 页只维护角色注册表与全局 RoleConfig。模块源归 Agent 市场；账号/用户/API Token 归安全与访问；Provider 密钥归凭据；**配置中心**（`/settings/platform`）维护 batch-1 运行时护栏与全局调度纪律，平台配置包仍归该区。
 - Agent 市场 MVP 使用 `deepsonar.agentpack/v1`：官方静态模板与本地 JSON 上传均安装到服务端角色/RoleConfig；包体有 256 KiB 上限，不接受 Credential 绑定、Provider 配置文件或疑似长期密钥环境变量。安装仍由 `agents:write` 权限控制，凭据必须本机另行绑定。
-- 任务列表 / 任务工作台（画布 · Findings · Facts · Jobs · 报告）。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联。人工收口开放 `unverified`/`verifying`/`needs_human`，`rejected` 不能直接升为 `verified`（#387 / §4.3）；不改写 Finding 技术验证。
+- 任务列表 / 任务工作台（#451 Phase 1）：默认 **总览**，另有研究地图、事实证据、任务发现、任务运行、报告六个一级视图；选中视图写入 URL `tab`，后台刷新不切换视图。Canvas / Job 仍是高级审计入口。新建任务支持 `standard` 与 `compose`：compose 从当前项目选择 1–8 条未否定处置 Finding（含未确认），创建后显示为只读种子背景，新画布只围绕这些条目而不扩大资产范围。Facts 使用独立服务端 keyset 分页与状态/证据/Finding/Job 筛选；详情只投影同项目、同画布、具有合法证据边的结构化关联。人工收口开放 `unverified`/`verifying`/`needs_human`，`rejected` 不能直接升为 `verified`（#387 / §4.3）；不改写 Finding 技术验证。
 - 列表型筛选统一使用可搜索多选 Combobox：同一维度按 OR、不同维度按 AND；URL 用逗号分隔保留可分享深链。服务端分页筛选（如 Facts）由 Scheduler 在分页前执行多值查询。配置、动作和阈值等单值业务选择保持可搜索单选。
 - 节点语义色：`SEMANTIC_STYLE`（hub 紫、finding 红、agent 黄、fact 青…）
 - 工作角色使用 `agent_roles.ui_color` 的调度器分配色；系统 / Hub 节点保留固定语义色。角色色在创建事务中经 advisory lock 分配，写入 intent/job 节点正文后冻结；画布边线与箭头取源节点最终色，边类型只改变线型与流速。
@@ -334,6 +334,7 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 | 整插件 / 整源挂载 | #33 | `modules` selector 持续打磨挂载体验 |
 | 态势看板 | #242 | P0 运营总览与用量账本已落地；P1/P2 服务端契约见 `GET /dashboard/ops`（#400）。不重建已交付 Dashboard UI |
 | 配置中心后续批次 | #263 | Batch 1（stall / token / timeout）已落库；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 仍走部署 env |
+| 任务工作台 / 研究地图 | #449 / #451 | **Phase 1 已落地**：共享 Header、六个一级视图、默认总览、前端 `TaskOutcomeSummary` / `TaskAction` / `TaskTraceEntry` 投影。**仍开放**：研究地图投影、统一详情抽屉、RepairFeedback、视觉重设计 |
 | 执行面多 worker | #415 / #431 / #433 / #434 | **P0 已落地**：`worker_nodes` 注册/心跳、轮询+并发上限、server-proxy、`docker-compose.worker.yml` / `deploy.sh up worker-join`、节点 bootstrap token。单机仍种子 `local` worker。派发 claim 在同一事务里 `SELECT … FOR UPDATE` 选节点、预留 `worker_sandbox_leases` 占位并写 `last_dispatch_at`；远端 create 失败释放占位，成功则把占位改成真实 sandbox id。无容量时直接 `WORKER_PLANE_NO_CAPACITY`，不再无记账重选。destroy / `destroyResource` 释放租约（含 sessions 缓存路径）；reaper 与启动 reconcile 回收终态/缺失 Job 的孤儿租约（#431）。**#433**：保留 `local`、同名须显式 forget/reclaim、远程 endpoint 拒绝 loopback/link-local/metadata/不可路由地址、注册/心跳审计+限流、心跳不改 kind/所有权。**未做**：P1 亲和/drain/健康面板与 worker 侧 gateway sidecar；P2 mTLS/扩缩容。心跳丢失不自动开新 attempt |
 | 可信执行内核与插件组合工作流 | #446 | 长期设计见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。未完成：统一 `RepairFeedback`、durable proposal/receipt/settlement、Plan/Capability Pack、Artifact-first 投影、插件失败修复准入与跨任务经验闭环；现有 Job/Attempt/effect、控制 API 和 Runtime Adapter 继续作为迁移基础 |
 
