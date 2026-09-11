@@ -79,6 +79,25 @@ if (!testDatabaseUrl) {
           severity: "low",
         };
         case "hub_decision": return { complete: { from: [], description: "late decision" } };
+        case "plan": return {
+          plan: {
+            v: 1,
+            goal: "late plan goal",
+            tasks: [{
+              id: "late-task",
+              title: "late task title",
+              role: "explore",
+              description: "late task description",
+              prompt: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            }],
+            completion: { mode: "explicit_result", description: "late completion policy" },
+          },
+        };
+        case "plan_result": return {
+          v: 1,
+          outcome: "continue",
+          summary: "late plan result summary",
+        };
         case "human": return {
           reason: "late operator decision",
           subject: { type: "platform_blocker", kind: "business_decision" },
@@ -124,7 +143,7 @@ if (!testDatabaseUrl) {
       }));
       const stale = await Promise.all(staleJobs);
       for (const { jobId } of stale) {
-        for (const type of ["progress", "fact", "finding", "hub_decision", "human", "done"]) {
+        for (const type of ["progress", "fact", "finding", "hub_decision", "plan", "plan_result", "human", "done"]) {
           await assertRejectedWithoutWrites(jobId, type, "job_not_running");
         }
       }

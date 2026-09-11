@@ -6,6 +6,7 @@ import {
   SearchCapabilitiesPayload,
   ValidateCompositionPayload,
 } from "./capability-pack.js";
+import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
 
@@ -153,7 +154,7 @@ export type JobStatus = z.infer<typeof JobStatus>;
 export const JobType = z.string().min(1);
 export type JobType = z.infer<typeof JobType>;
 
-export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision"]);
+export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision", "plan", "plan_result"]);
 export type EventType = z.infer<typeof EventType>;
 
 export const Severity = z.enum(["low", "medium", "high", "critical"]);
@@ -1089,6 +1090,8 @@ export const ControlToolPayloadSchemas = {
   emit_fact: EmitFactPayload,
   emit_finding: EmitFindingPayload,
   submit_hub_decision: HubDecisionPayload,
+  submit_plan: SubmitPlanPayload,
+  submit_plan_result: SubmitPlanResultPayload,
   mark_job_done: DonePayload,
   request_human: HumanPayload,
   ack_human_message: AckHumanMessagePayload,
@@ -1148,6 +1151,8 @@ export const ControlEventEnvelope = z.discriminatedUnion("type", [
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactDirectPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human_message_ack"), payload: AckHumanMessagePayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan"), payload: SubmitPlanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan_result"), payload: SubmitPlanResultPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("shared_asset_publish"), payload: PublishSharedAssetPayload }).strict(),
 ]);
 export type ControlEventEnvelope = z.infer<typeof ControlEventEnvelope>;
@@ -1161,6 +1166,8 @@ export const EventEnvelope = z.discriminatedUnion("type", [
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: FactPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionEnvelopeInput }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan"), payload: SubmitPlanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan_result"), payload: SubmitPlanResultPayload }).strict(),
 ]);
 export type EventEnvelope = z.infer<typeof EventEnvelope>;
 /** Broad producer input; `EventEnvelope.parse` is the runtime gate before
@@ -1186,6 +1193,8 @@ export const PlatformToolName = z.enum([
   "emit_fact",
   "emit_finding",
   "submit_hub_decision",
+  "submit_plan",
+  "submit_plan_result",
   "mark_job_done",
   "request_human",
   "list_shared_assets",
@@ -1320,6 +1329,8 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "emit_fact",
   "emit_finding",
   "submit_hub_decision",
+  "submit_plan",
+  "submit_plan_result",
   "mark_job_done",
   "request_human",
   "ack_human_message",
@@ -1353,6 +1364,33 @@ export function resolvePlatformTools(
 }
 
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位
+export {
+  CompletionPolicy,
+  PLAN_PROTOCOL_VERSION,
+  PLAN_TASK_LIMITS,
+  Plan,
+  PlanAuditRecord,
+  PlanAuditSource,
+  PlanBudget,
+  PlanResult,
+  PlanResultOutcome,
+  PlanTask,
+  PlanTaskExecution,
+  PlanTaskId,
+  PlanVerificationStrategy,
+  SubmitPlanPayload,
+  SubmitPlanResultPayload,
+  adaptHubCompleteToPlanResult,
+  adaptHubIntentsToPlan,
+  adaptIntentToPlanTask,
+  mergePlanAudit,
+  planTaskGraphHasCycle,
+  trimPlan,
+  type HubCompleteLike,
+  type HubIntentLike,
+  type PlanTrimLimits,
+} from "./plan.js";
+
 export {
   PI_EXTENSION_IMAGE_ROOT,
   PI_EXTENSION_MAX_PER_ROLE,

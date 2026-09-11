@@ -189,6 +189,8 @@ Issue #199 后，容器与共享资产卷另有不依赖 autoRemove 成功与否
 | `emit_fact` | Hub 可下发的非审计工作角色 | 增量建立 fact 节点与意图边 |
 | `emit_finding` | audit Worker | 增量建立 finding 节点 + 落库（结构化 Finding；不含是否 Verify 的提案字段） |
 | `submit_hub_decision` | hub_reason | 提交 complete 或 intents 提案 |
+| `submit_plan` | 冻结快照启用时 | 提交版本化 Plan；只审计原文与裁剪，Phase 1 不派发 |
+| `submit_plan_result` | 冻结快照启用时 | 提交 continue/complete/blocked/needs_human；只审计结果 |
 | `mark_job_done` | Worker | 结束节点 + 摘要 |
 | `request_human` | Worker | 提交结构化 Finding 或平台阻塞 subject；Scheduler 校验后将 Job 转人工等待并建立 human 节点 |
 

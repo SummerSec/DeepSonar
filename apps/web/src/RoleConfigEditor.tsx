@@ -58,6 +58,8 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
   emit_fact: { title: "事实提交", description: "允许工作角色把新证据写成画布 Fact。" },
   emit_finding: { title: "漏洞提交", description: "允许审计角色提交带严重级别的 Finding。" },
   submit_hub_decision: { title: "Hub 决策", description: "允许 Hub 提交完成结论或下一批派发意图。" },
+  submit_plan: { title: "提交计划", description: "允许模型提交版本化 Plan（目标、子任务、依赖、完成策略）；Scheduler 保存原文与裁剪结果。" },
+  submit_plan_result: { title: "提交计划结果", description: "允许模型提交 continue / complete / blocked / needs_human，并记录执行结果与终止原因。" },
   mark_job_done: { title: "正常完成", description: "提交 Job 最终摘要并形成合法终态。" },
   request_human: { title: "请求人工", description: "遇到授权或高风险阻塞时结束本轮并请求人工介入。" },
   ack_human_message: { title: "确认人工消息", description: "仅在当前 Job 实际收到人工消息后显式 ACK；普通文本回复不会确认。" },

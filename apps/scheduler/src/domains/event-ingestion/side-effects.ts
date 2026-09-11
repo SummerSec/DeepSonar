@@ -5,11 +5,14 @@ import {
   FindingPayload,
   HumanPayload,
   ProgressPayload,
+  SubmitPlanPayload,
+  SubmitPlanResultPayload,
   allowedPlatformTools,
   type PlatformToolName,
   type VerificationEvidence,
   type EffectiveFindingProtocol,
 } from "@deepsonar/shared-types";
+import { applyHubPlanAdapter, applySubmitPlan, applySubmitPlanResult } from "../plan-protocol/index.js";
 import type { SharedAssetSelection } from "../shared-assets/index.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
@@ -252,6 +255,8 @@ export function createEventIngestionSideEffectApplication(
     finding: "emit_finding",
     fact: "emit_fact",
     hub_decision: "submit_hub_decision",
+    plan: "submit_plan",
+    plan_result: "submit_plan_result",
     done: "mark_job_done",
     human: "request_human",
   };
@@ -736,7 +741,11 @@ export function createEventIngestionSideEffectApplication(
               ? parsePayload(DonePayload, payload, "invalid_done", "mark_job_done")
               : type === "human"
                 ? parsePayload(HumanPayload, payload, "invalid_human", "request_human")
-                : payload;
+                : type === "plan"
+                  ? parsePayload(SubmitPlanPayload, payload, "invalid_payload", "submit_plan")
+                  : type === "plan_result"
+                    ? parsePayload(SubmitPlanResultPayload, payload, "invalid_payload", "submit_plan_result")
+                    : payload;
     // Preserve the fail-fast parse boundary before taking the Job row lock.
     const hubDecision = type === "hub_decision" ? parseHubDecisionPayload(payload) : undefined;
     const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId} FOR UPDATE`;
@@ -754,6 +763,17 @@ export function createEventIngestionSideEffectApplication(
       return;
     }
     await assertTerminalEventHistory(tx, jobId, type);
+
+    if (type === "plan") {
+      const rules = await ports.rulesForProject(tx, job.project_id as string);
+      await applySubmitPlan(tx, jobId, job as Record<string, unknown>, validatedPayload, rules.maxIntentsPerDecision);
+      return;
+    }
+
+    if (type === "plan_result") {
+      await applySubmitPlanResult(tx, jobId, job as Record<string, unknown>, validatedPayload);
+      return;
+    }
 
     if (type === "done") {
       // The real executor performs the same check before buffering terminal
@@ -1048,6 +1068,17 @@ export function createEventIngestionSideEffectApplication(
         if (uniqueEdges.length === 0) return;
         await (services.hubEdgeBatchInsert ?? ports.insertEdgesIfAbsentBatch)(edgeTx, uniqueEdges);
       };
+
+      await applyHubPlanAdapter(
+        tx,
+        jobId,
+        job as Record<string, unknown>,
+        {
+          complete: p.complete,
+          intents: submittedIntents,
+        },
+        rules.maxIntentsPerDecision,
+      );
 
       if (p.complete?.description) {
         // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）
