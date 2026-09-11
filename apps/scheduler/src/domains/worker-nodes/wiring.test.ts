@@ -13,6 +13,16 @@ test("scheduler seeds a local worker and dispatches through the worker plane", (
   assert.match(health, /listWorkerNodes\(\)/);
   assert.match(auth, /\/workers\/register/);
   assert.match(auth, /\/workers\/heartbeat/);
+  assert.match(auth, /DELETE \/workers\/:id/);
+  const routes = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  assert.match(routes, /audit\(/);
+  assert.match(routes, /consumeWorkerRateLimit|consumePlaneRateLimit/);
+  assert.match(routes, /forgetWorkerNode/);
+  const registry = readFileSync(new URL("./registry.ts", import.meta.url), "utf8");
+  assert.match(registry, /WORKER_NODE_RESERVED/);
+  assert.match(registry, /WORKER_NODE_EXISTS/);
+  assert.match(registry, /shouldReuseLocalWorkerToken/);
+  assert.doesNotMatch(registry, /ON CONFLICT \(id\) DO UPDATE SET\s+endpoint = excluded.endpoint[\s\S]*kind = excluded.kind/);
 });
 
 test("reaper and reconcile reclaim sandbox leases for terminal jobs", () => {

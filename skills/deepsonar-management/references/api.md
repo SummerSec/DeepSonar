@@ -44,8 +44,9 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /schema.md | 豁免 | Markdown 契约（本文件） |
 | GET | /metrics | admin | Prometheus 文本 |
 | GET | /workers | admin | 执行面 worker 注册表（无凭据） |
-| POST | /workers/register | 豁免（bootstrap token） | `{node_id,endpoint,opensandbox_api_key,capacity}`；返回一次性 `node_token` |
-| POST | /workers/heartbeat | 豁免（node token） | 刷新在线状态；超时节点不再接收新沙箱 |
+| POST | /workers/register | 豁免（bootstrap token） | `{node_id,endpoint,opensandbox_api_key,capacity}`；返回一次性 `node_token`。不能占用保留 `local`（及 `DEEPSONAR_WORKER_LOCAL_ID`），也不能接管已有节点；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址。按 IP 限流并写审计 |
+| POST | /workers/heartbeat | 豁免（node token） | 刷新在线状态与容量；不能改 endpoint / protocol / kind。拒绝改写所有权时 `409 WORKER_HEARTBEAT_OWNERSHIP`。按 IP 限流；拒绝写入审计 |
+| DELETE | /workers/:id | admin | 显式 forget 节点（租约级联删除）；之后才能用同一 `node_id` 重新注册 |
 
 ### 项目
 

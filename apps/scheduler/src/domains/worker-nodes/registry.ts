@@ -1,15 +1,19 @@
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
+import { parseRemoteWorkerEndpoint, type WorkerEndpointPolicy } from "./endpoint.js";
 import {
   fingerprintApiKey,
   generateWorkerNodeToken,
   hashWorkerToken,
+  isReservedWorkerNodeId,
   localWorkerFromEnv,
   parseWorkerCapacity,
   parseWorkerEndpoint,
   parseWorkerLabels,
   parseWorkerNodeId,
   pickRoundRobinWorker,
+  shouldReuseLocalWorkerToken,
+  WorkerNodeError,
   workerTokensEqual,
   type DispatchableWorker,
   type WorkerCapacity,
@@ -86,14 +90,33 @@ export function workerStaleAfterMs(): number {
   return config.runtime.workerNodes.staleAfterSec * 1000;
 }
 
+export function configuredWorkerBootstrapToken(): string {
+  return (process.env.DEEPSONAR_WORKER_BOOTSTRAP_TOKEN ?? "").trim()
+    || config.runtime.workerNodes.bootstrapToken.trim();
+}
+
 export function bootstrapTokenConfigured(): boolean {
-  return config.runtime.workerNodes.bootstrapToken.trim().length > 0;
+  return configuredWorkerBootstrapToken().length > 0;
 }
 
 export function bootstrapTokenMatches(token: string): boolean {
-  const expected = config.runtime.workerNodes.bootstrapToken;
+  const expected = configuredWorkerBootstrapToken();
   if (!expected) return false;
   return workerTokensEqual(hashWorkerToken(token), hashWorkerToken(expected));
+}
+
+export function remoteWorkerEndpointPolicy(): WorkerEndpointPolicy {
+  const cidrs = config.runtime.workerNodes.endpointAllowCidrs;
+  const hosts = config.runtime.workerNodes.endpointAllowHosts;
+  return {
+    allowlistConfigured: cidrs.configured || hosts.configured,
+    allowCidrs: cidrs.values,
+    allowHosts: hosts.values,
+  };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as { code: string }).code === "23505");
 }
 
 async function leaseCounts(): Promise<Map<string, number>> {
@@ -124,7 +147,7 @@ export async function getWorkerNode(id: string): Promise<DispatchableWorker | nu
   return row ? fromRow(row, Number(row.active_sandboxes ?? 0)) : null;
 }
 
-async function upsertNode(input: {
+type PersistNodeInput = {
   id: string;
   endpoint: string;
   protocol: WorkerProtocol;
@@ -133,13 +156,18 @@ async function upsertNode(input: {
   capacity: WorkerCapacity;
   labels: Record<string, string>;
   token: { hash: string; prefix: string };
-}): Promise<DispatchableWorker> {
-  rememberWorkerApiKey(input.id, input.apiKey);
-  const capacityJson = {
-    max_sandboxes: input.capacity.maxSandboxes,
-    memory_mib: input.capacity.memoryMib,
-    cpu: input.capacity.cpu,
+};
+
+function capacityJson(capacity: WorkerCapacity) {
+  return {
+    max_sandboxes: capacity.maxSandboxes,
+    memory_mib: capacity.memoryMib,
+    cpu: capacity.cpu,
   };
+}
+
+async function insertNode(input: PersistNodeInput): Promise<DispatchableWorker> {
+  rememberWorkerApiKey(input.id, input.apiKey);
   const [row] = await sql<WorkerRow[]>`
     INSERT INTO worker_nodes (
       id, endpoint, protocol, kind, status, api_key_fingerprint,
@@ -148,12 +176,30 @@ async function upsertNode(input: {
     ) VALUES (
       ${input.id}, ${input.endpoint}, ${input.protocol}, ${input.kind}, 'online',
       ${fingerprintApiKey(input.apiKey)}, ${input.token.hash}, ${input.token.prefix},
-      ${sql.json(capacityJson)}, ${sql.json(input.labels)}, now(), now()
+      ${sql.json(capacityJson(input.capacity))}, ${sql.json(input.labels)}, now(), now()
+    )
+    RETURNING *`;
+  const counts = await leaseCounts();
+  return fromRow(row, counts.get(row.id) ?? 0);
+}
+
+/** Scheduler-owned local seed only. Remote register must not take this path. */
+async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWorker> {
+  rememberWorkerApiKey(input.id, input.apiKey);
+  const [row] = await sql<WorkerRow[]>`
+    INSERT INTO worker_nodes (
+      id, endpoint, protocol, kind, status, api_key_fingerprint,
+      node_token_hash, node_token_prefix, capacity_json, labels_json,
+      last_heartbeat_at, updated_at
+    ) VALUES (
+      ${input.id}, ${input.endpoint}, ${input.protocol}, ${input.kind}, 'online',
+      ${fingerprintApiKey(input.apiKey)}, ${input.token.hash}, ${input.token.prefix},
+      ${sql.json(capacityJson(input.capacity))}, ${sql.json(input.labels)}, now(), now()
     )
     ON CONFLICT (id) DO UPDATE SET
       endpoint = excluded.endpoint,
       protocol = excluded.protocol,
-      kind = excluded.kind,
+      kind = 'local',
       status = 'online',
       api_key_fingerprint = excluded.api_key_fingerprint,
       node_token_hash = excluded.node_token_hash,
@@ -175,18 +221,33 @@ export async function registerRemoteWorker(input: {
   capacity: WorkerCapacity;
   labels?: Record<string, string>;
 }): Promise<{ node: DispatchableWorker; nodeToken: string }> {
+  const id = parseWorkerNodeId(input.nodeId);
+  if (isReservedWorkerNodeId(id, [config.runtime.workerNodes.localNodeId])) {
+    throw new WorkerNodeError("WORKER_NODE_RESERVED", "reserved worker node id cannot be registered remotely", 403);
+  }
+  const existing = await getWorkerNode(id);
+  if (existing) {
+    throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists; forget it before reclaiming", 409);
+  }
   const token = generateWorkerNodeToken();
-  const node = await upsertNode({
-    id: parseWorkerNodeId(input.nodeId),
-    endpoint: parseWorkerEndpoint(input.endpoint),
-    protocol: input.protocol ?? "http",
-    kind: "remote",
-    apiKey: input.apiKey,
-    capacity: input.capacity,
-    labels: parseWorkerLabels(input.labels),
-    token,
-  });
-  return { node, nodeToken: token.plaintext };
+  try {
+    const node = await insertNode({
+      id,
+      endpoint: parseRemoteWorkerEndpoint(input.endpoint, remoteWorkerEndpointPolicy()),
+      protocol: input.protocol ?? "http",
+      kind: "remote",
+      apiKey: input.apiKey,
+      capacity: input.capacity,
+      labels: parseWorkerLabels(input.labels),
+      token,
+    });
+    return { node, nodeToken: token.plaintext };
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists; forget it before reclaiming", 409);
+    }
+    throw error;
+  }
 }
 
 export async function heartbeatWorker(input: {
@@ -203,8 +264,17 @@ export async function heartbeatWorker(input: {
   if (!row) return null;
   if (input.nodeId && input.nodeId !== row.id) return null;
   if (input.apiKey) rememberWorkerApiKey(row.id, input.apiKey);
-  const endpoint = input.endpoint ? parseWorkerEndpoint(input.endpoint) : row.endpoint;
-  const protocol = input.protocol ?? row.protocol;
+  if (input.endpoint) {
+    const endpoint = row.kind === "remote"
+      ? parseRemoteWorkerEndpoint(input.endpoint, remoteWorkerEndpointPolicy())
+      : parseWorkerEndpoint(input.endpoint);
+    if (endpoint !== row.endpoint) {
+      throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
+    }
+  }
+  if (input.protocol && input.protocol !== row.protocol) {
+    throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
+  }
   const capacity = input.capacity ?? parseWorkerCapacity({
     maxSandboxes: row.capacity_json?.max_sandboxes,
     memoryMib: row.capacity_json?.memory_mib,
@@ -213,8 +283,6 @@ export async function heartbeatWorker(input: {
   const labels = input.labels ? parseWorkerLabels(input.labels) : (row.labels_json ?? {});
   const [updated] = await sql<WorkerRow[]>`
     UPDATE worker_nodes SET
-      endpoint = ${endpoint},
-      protocol = ${protocol},
       status = 'online',
       api_key_fingerprint = ${input.apiKey ? fingerprintApiKey(input.apiKey) : row.api_key_fingerprint},
       capacity_json = ${sql.json({
@@ -225,34 +293,23 @@ export async function heartbeatWorker(input: {
       labels_json = ${sql.json(labels)},
       last_heartbeat_at = now(),
       updated_at = now()
-     WHERE id = ${row.id}
+     WHERE id = ${row.id} AND kind = ${row.kind}
      RETURNING *`;
+  if (!updated) {
+    throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
+  }
   const counts = await leaseCounts();
   return fromRow(updated, counts.get(updated.id) ?? 0);
 }
 
-export async function seedLocalWorkerNode(now = Date.now()): Promise<WorkerNodeRecord | null> {
-  const runtime = config.runtime;
-  if (runtime.agentMode !== "real" || runtime.provider !== "opensandbox") return null;
-  if (runtime.openSandbox.kubernetes) return null;
-  if (!runtime.workerNodes.seedLocal) return null;
-  const apiKey = runtime.openSandbox.apiKey.trim();
-  if (!apiKey) return null;
-  const spec = localWorkerFromEnv({
-    nodeId: runtime.workerNodes.localNodeId,
-    endpoint: runtime.openSandbox.domain,
-    protocol: runtime.openSandbox.protocol,
-    apiKey,
-    maxSandboxes: runtime.workerNodes.maxSandboxes,
-    memoryMib: runtime.workerNodes.memoryMib,
-    cpu: runtime.workerNodes.cpu,
-    now,
-  });
+export async function applyLocalWorkerSeed(
+  spec: ReturnType<typeof localWorkerFromEnv> & { apiKey: string },
+): Promise<DispatchableWorker> {
   const existing = await getWorkerNode(spec.id);
-  const token = existing
+  const token = shouldReuseLocalWorkerToken(existing, spec.endpoint) && existing
     ? { hash: existing.nodeTokenHash, prefix: existing.nodeTokenPrefix }
     : generateWorkerNodeToken();
-  return upsertNode({
+  return upsertLocalNode({
     id: spec.id,
     endpoint: spec.endpoint,
     protocol: spec.protocol,
@@ -262,6 +319,33 @@ export async function seedLocalWorkerNode(now = Date.now()): Promise<WorkerNodeR
     labels: spec.labels,
     token,
   });
+}
+
+export async function seedLocalWorkerNode(now = Date.now()): Promise<WorkerNodeRecord | null> {
+  const runtime = config.runtime;
+  if (runtime.agentMode !== "real" || runtime.provider !== "opensandbox") return null;
+  if (runtime.openSandbox.kubernetes) return null;
+  if (!runtime.workerNodes.seedLocal) return null;
+  const apiKey = runtime.openSandbox.apiKey.trim();
+  if (!apiKey) return null;
+  return applyLocalWorkerSeed(localWorkerFromEnv({
+    nodeId: runtime.workerNodes.localNodeId,
+    endpoint: runtime.openSandbox.domain,
+    protocol: runtime.openSandbox.protocol,
+    apiKey,
+    maxSandboxes: runtime.workerNodes.maxSandboxes,
+    memoryMib: runtime.workerNodes.memoryMib,
+    cpu: runtime.workerNodes.cpu,
+    now,
+  }));
+}
+
+export async function forgetWorkerNode(id: string): Promise<DispatchableWorker | null> {
+  const node = await getWorkerNode(id);
+  if (!node) return null;
+  await sql`DELETE FROM worker_nodes WHERE id = ${id}`;
+  apiKeys.delete(id);
+  return node;
 }
 
 export async function claimWorkerForDispatch(options: {

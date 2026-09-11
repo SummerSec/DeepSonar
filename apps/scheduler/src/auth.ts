@@ -222,6 +222,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /credentials/models/preview": "agents:write",
   "DELETE /credentials/:id": "agents:write",
   "GET /workers": "admin",
+  "DELETE /workers/:id": "admin",
   "GET /ws": "tasks:read",
   "GET /terminal-ws": "jobs:control",
   "POST /projects/:id/exports": "exports:write",

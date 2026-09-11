@@ -2,6 +2,19 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const WORKER_NODE_STALE_DEFAULT_SEC = 45;
 export const LOCAL_WORKER_ID = "local";
+export const RESERVED_WORKER_NODE_IDS = [LOCAL_WORKER_ID] as const;
+
+export class WorkerNodeError extends Error {
+  readonly code: string;
+  readonly statusCode: number;
+
+  constructor(code: string, message: string, statusCode: number) {
+    super(message);
+    this.name = "WorkerNodeError";
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
 
 export type WorkerKind = "local" | "remote";
 export type WorkerStatus = "online" | "stale" | "unavailable";
@@ -39,14 +52,49 @@ const NODE_ID_RE = /^[a-zA-Z0-9._:-]{1,64}$/;
 
 export function parseWorkerNodeId(raw: string): string {
   const id = raw.trim();
-  if (!NODE_ID_RE.test(id)) throw new Error("invalid worker node id");
+  if (!NODE_ID_RE.test(id)) throw new WorkerNodeError("WORKER_NODE_ID_INVALID", "invalid worker node id", 400);
   return id;
 }
 
+export function isReservedWorkerNodeId(id: string, extra: readonly string[] = []): boolean {
+  const needle = id.trim().toLowerCase();
+  if (!needle) return false;
+  if ((RESERVED_WORKER_NODE_IDS as readonly string[]).includes(needle)) return true;
+  return extra.some((value) => value.trim().toLowerCase() === needle);
+}
+
+export function shouldReuseLocalWorkerToken(
+  existing: { kind: WorkerKind; endpoint: string } | null,
+  specEndpoint: string,
+): boolean {
+  return Boolean(existing && existing.kind === "local" && existing.endpoint === specEndpoint);
+}
+
+/** Syntax-only host:port. Remote register applies parseRemoteWorkerEndpoint. */
 export function parseWorkerEndpoint(raw: string): string {
   const endpoint = raw.trim();
-  if (!endpoint || endpoint.length > 256 || endpoint.includes("://") || endpoint.includes("/") || endpoint.includes("?")) {
-    throw new Error("invalid worker endpoint");
+  if (
+    !endpoint
+    || endpoint.length > 256
+    || endpoint.includes("://")
+    || endpoint.includes("/")
+    || endpoint.includes("?")
+    || endpoint.includes("#")
+    || endpoint.includes("@")
+    || /\s/.test(endpoint)
+  ) {
+    throw new WorkerNodeError("WORKER_ENDPOINT_INVALID", "invalid worker endpoint", 400);
+  }
+  if (endpoint.startsWith("[")) {
+    if (!/^\[[0-9a-fA-F:.]+\]:\d{1,5}$/.test(endpoint)) {
+      throw new WorkerNodeError("WORKER_ENDPOINT_INVALID", "invalid worker endpoint", 400);
+    }
+  } else if (!/^[^:[\]]+:\d{1,5}$/.test(endpoint)) {
+    throw new WorkerNodeError("WORKER_ENDPOINT_INVALID", "invalid worker endpoint", 400);
+  }
+  const port = Number(endpoint.slice(endpoint.lastIndexOf(":") + 1));
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new WorkerNodeError("WORKER_ENDPOINT_INVALID", "invalid worker endpoint", 400);
   }
   return endpoint;
 }

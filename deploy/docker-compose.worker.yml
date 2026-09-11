@@ -47,11 +47,14 @@ services:
       DEEPSONAR_WORKER_MEMORY_MIB: ${DEEPSONAR_WORKER_MEMORY_MIB:-16384}
       DEEPSONAR_WORKER_CPU: ${DEEPSONAR_WORKER_CPU:-8}
       DEEPSONAR_WORKER_HEARTBEAT_SEC: ${DEEPSONAR_WORKER_HEARTBEAT_SEC:-15}
+      DEEPSONAR_WORKER_TOKEN_FILE: /var/lib/deepsonar-worker/node.token
       OPEN_SANDBOX_API_KEY: ${OPEN_SANDBOX_API_KEY:?set this worker OpenSandbox API key}
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
     volumes:
       - ./worker-register.mjs:/agent/worker-register.mjs:ro
+      - worker-agent-state:/var/lib/deepsonar-worker
     command: ["node", "/agent/worker-register.mjs"]
 
 volumes:
   opensandbox-data:
+  worker-agent-state:
