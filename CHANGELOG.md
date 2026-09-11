@@ -2,6 +2,22 @@
 
 发布条目依据已验证的 Git tag 与仓库变更维护，后续新增发布条目统一使用中文。不可变的 `vX.Y.Z` Git tag 是产品发布版本；根目录与 workspace package 的版本仅为私有内部元数据（`0.1.11`），不是发布标识。
 
+## [0.3.1] - 2026-09-12
+
+### 新增
+
+- AI-native 可信执行内核第一阶段：模型通过 Plan、Capability Pack、Artifact、Fact、Finding、Verify、Research 与 Report 组合工作，Scheduler 继续独占沙箱、权限、预算、幂等和副作用。
+- Plan 协议 Phase 1（#443）：新增版本化 Plan/PlanTask/CompletionPolicy/PlanResult、submit_plan 与 submit_plan_result 控制操作，并把原文、裁剪结果和终止原因写入 Job 审计；不改变现有 Hub 派发与收敛门。
+- Capability Pack（#447/#459）：增加 Manifest 与 Job 级发现/校验/预览，冻结 selector/digest 上界，统一 RepairFeedback 修复反馈。
+- Finding Research（#448/#460）：将语义去重、canonical anchor 与相对优先级写入独立研究表，不改验证状态、严重度或报告门禁。
+- 任务工作台（#449/#457）：增加总览、任务状态原因、统一 Action 卡片、RepairFeedback 展示，以及安全的超时/孤儿重试提示。
+- 根文档同步重写（#463）：更新 README、DESIGN 与 AGENTS 的 as-built 架构、插件边界、测试纪律和运维入口。
+
+### 修复
+
+- 冻结 Job Capability Pack 作为发现与物化上界，避免实时目录变化漂移；限制超长 selector 生成 RepairFeedback.path 时的长度异常。
+- 修复项目级质量/回放隔离、RepairFeedback 契约冲突和跨阶段任务工作台状态投影。
+
 ## [Unreleased]
 
 ### 新增
@@ -735,3 +751,4 @@
 [0.1.20]: https://github.com/SummerSec/DeepSonar/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/SummerSec/DeepSonar/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/SummerSec/DeepSonar/compare/v0.1.17...v0.1.18
+[0.3.1]: https://github.com/SummerSec/DeepSonar/compare/v0.2.11...v0.3.1
