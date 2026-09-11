@@ -52,6 +52,8 @@ test("dynamic OpenAPI only projects allowlisted concrete operations", () => {
     "unknown_external_effect",
     "permanent_failure",
   ]);
+  assert.ok(paths["/control/v1/jobs/{jobId}/operations/emit_progress"].post.responses["500"]);
+  assert.ok(paths["/control/v1/jobs/{jobId}/operations/emit_progress"].post.responses["503"].content["application/json"].schema.properties.repair);
 });
 
 test("list_available_runtime_images is a registered read-only operation with a strict empty payload", () => {
