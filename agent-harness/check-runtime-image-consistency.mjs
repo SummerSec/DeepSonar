@@ -109,6 +109,9 @@ const deploySh = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
 const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", import.meta.url), "utf8");
 const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
+const writeReleaseDescriptor = readFileSync(new URL("./write-release-runtime-descriptor.sh", import.meta.url), "utf8");
+const maybeSkipRuntimeVersionTags = readFileSync(new URL("./maybe-skip-runtime-version-tags.sh", import.meta.url), "utf8");
+const reuseCatalogDescriptor = readFileSync(new URL("./reuse-catalog-descriptor.mjs", import.meta.url), "utf8");
 const schedulerRegistryContract = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-contract.ts", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
 const schedulerRuntimeImageRoutes = readFileSync(
@@ -979,6 +982,26 @@ expect(registryScript.includes("image build unchanged; version kept"), "generato
 expect(registryScript.includes("platform_version") && registryScript.includes("min_runtime_image"), "generator must emit split platform/runtime version axes");
 expect(releaseWorkflow.includes("maybe-skip-runtime-version-tags.sh"), "unchanged runtime products must skip new platform-version tags");
 expect(releaseWorkflow.includes("write-release-runtime-descriptor.sh"), "unchanged runtime products must reuse the previous catalog descriptor");
+expect(
+  writeReleaseDescriptor.includes("reuse-catalog-descriptor.mjs")
+    && writeReleaseDescriptor.includes("record-runtime-image-digest.mjs")
+    && writeReleaseDescriptor.includes("inspecting published channels")
+    && writeReleaseDescriptor.includes("reuse_status")
+    && !writeReleaseDescriptor.includes("registry_evidence"),
+  "SKIP must reuse a catalog row when the digest exists, then inspect published channels on miss",
+);
+expect(
+  maybeSkipRuntimeVersionTags.includes("reuse-catalog-descriptor.mjs")
+    && maybeSkipRuntimeVersionTags.includes("--probe")
+    && maybeSkipRuntimeVersionTags.includes("publishing version tags"),
+  "version-tag skip must prove the previous catalog already has the src-cache digest",
+);
+expect(
+  reuseCatalogDescriptor.includes("CATALOG_REUSE_MISS_EXIT")
+    && reuseCatalogDescriptor.includes("CatalogReuseMiss")
+    && reuseCatalogDescriptor.includes("process.exitCode = CATALOG_REUSE_MISS_EXIT"),
+  "catalog reuse miss must be distinguishable from a broken catalog row",
+);
 expect(!releaseWorkflow.includes("release still republishes and inspects every configured channel"), "unchanged runtime products must not republish platform-version tags");
 expect(!releaseWorkflow.includes("Kali build unchanged; retag"), "unchanged Kali must keep its existing version instead of retagging");
 expect(schedulerRegistryContract.includes("min_runtime_image") && schedulerRegistryContract.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN") === false, "catalog parser owns min_runtime_image; HTTP error code lives in runtime-images");

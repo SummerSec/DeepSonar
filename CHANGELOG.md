@@ -27,6 +27,7 @@
 - Worker 沙箱租约在正常 destroy 时也会释放（#431 / #440）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。
 - 项目导出在活动 Job 下不再撕裂快照（#436 / #439）：数据收集走 `REPEATABLE READ` 只读事务；`project_full` 拒绝 `allow_active_jobs`，仅证据归档 / 自定义事件模块可显式允许；`credentials.mode=excluded` 不再把凭据身份写入 role-configs；events 达上限时标记 `counts.events_truncated` 与 manifest warning；导入对缺少 Job 的 Finding 记 warning。
 - 自定义项目导出模块校验：未知 / 原型链 selector（`constructor`/`toString` 等）返回 400 并列明 `rejected`，不再静默丢弃或 500；`reports`/`artifacts` 从未实现收集，已从导出契约移除（#435 / #438）。
+- Release 指纹未变但 `src-<fingerprint>` digest 尚未写入上一份 catalog 时，不再 fail closed：先发布 version tag，再对已发布通道做真实 inspect 补记 catalog 行。
 
 ### 安全
 
@@ -43,7 +44,7 @@
 - Plan / Capability Pack / 质量指标 / RepairFeedback 均为 Phase 1：不改 Hub 收敛门，也不自动派发新 Worker。
 - 任务工作台 timeout/orphan 默认须确认后再重试；无效果账本时不再给出无条件 `retry_same_session`。
 - 相对 v0.2.11：Docker 路径不再请求 execd isolation；仅 Kubernetes/Kata 需要该 extension。
-- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，运行时 catalog 可复用已有不可变 digest，平台镜像仍打 `0.3.1` tag。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。上一份 catalog 已有该 digest 时复用 version 行且不打新的运行时 version tag；若 src-cache digest 从未入册，仍发布 version tag 并由 inspect 补记，平台镜像仍打 `0.3.1` tag。
 
 ## [0.2.11] - 2026-09-11
 

@@ -2,8 +2,26 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export const CATALOG_REUSE_MISS_EXIT = 2;
+
+export class CatalogReuseMiss extends Error {
+  constructor(message) {
+    super(`reuse-catalog-descriptor: ${message}`);
+    this.name = "CatalogReuseMiss";
+    this.exitCode = CATALOG_REUSE_MISS_EXIT;
+  }
+}
+
+export function isCatalogReuseMiss(error) {
+  return error instanceof CatalogReuseMiss || error?.name === "CatalogReuseMiss";
+}
+
 function fail(message) {
   throw new Error(`reuse-catalog-descriptor: ${message}`);
+}
+
+function miss(message) {
+  throw new CatalogReuseMiss(message);
 }
 
 function arg(name, argv) {
@@ -36,13 +54,13 @@ export function descriptorFromCatalogVersion(imageKey, version) {
 
 export function reuseCatalogDescriptor({ catalog, imageKey, digest }) {
   const image = catalog?.images?.find((item) => item.image_key === imageKey);
-  if (!image) fail(`${imageKey} is not in the previous catalog`);
+  if (!image) miss(`${imageKey} is not in the previous catalog`);
   const versions = Array.isArray(image.versions) ? image.versions : [];
   const match = digest
     ? versions.find((version) => version.digest === digest)
     : versions[0];
   if (!match) {
-    fail(digest
+    miss(digest
       ? `${imageKey} previous catalog has no version with digest ${digest}`
       : `${imageKey} previous catalog has no version to reuse`);
   }
@@ -51,16 +69,30 @@ export function reuseCatalogDescriptor({ catalog, imageKey, digest }) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const imageKey = arg("--image-key", argv);
-  const output = arg("--out", argv);
-  const catalogPath = optionalArg("--catalog", argv)
-    ?? fileURLToPath(new URL("../deploy/runtime-image-registry.json", import.meta.url));
-  const digest = optionalArg("--digest", argv);
-  const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
-  const descriptor = reuseCatalogDescriptor({ catalog, imageKey, digest });
-  mkdirSync(dirname(output), { recursive: true });
-  writeFileSync(output, `${JSON.stringify(descriptor, null, 2)}\n`);
-  console.log(`image build unchanged; version kept: ${imageKey} ${descriptor.version}`);
+  try {
+    const probe = argv.includes("--probe");
+    const imageKey = arg("--image-key", argv);
+    const output = probe ? optionalArg("--out", argv) : arg("--out", argv);
+    const catalogPath = optionalArg("--catalog", argv)
+      ?? fileURLToPath(new URL("../deploy/runtime-image-registry.json", import.meta.url));
+    const digest = optionalArg("--digest", argv);
+    const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
+    const descriptor = reuseCatalogDescriptor({ catalog, imageKey, digest });
+    if (probe && !output) {
+      console.log(`reusable: ${imageKey} ${descriptor.version}`);
+      return;
+    }
+    mkdirSync(dirname(output), { recursive: true });
+    writeFileSync(output, `${JSON.stringify(descriptor, null, 2)}\n`);
+    console.log(`image build unchanged; version kept: ${imageKey} ${descriptor.version}`);
+  } catch (error) {
+    if (isCatalogReuseMiss(error)) {
+      console.error(error.message);
+      process.exitCode = CATALOG_REUSE_MISS_EXIT;
+      return;
+    }
+    throw error;
+  }
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
