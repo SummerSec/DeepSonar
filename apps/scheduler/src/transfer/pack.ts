@@ -27,7 +27,7 @@ export interface Manifest {
   };
   preset: Preset;
   modules: ModuleKey[];
-  counts: Record<string, number>;
+  counts: Record<string, number | boolean>;
   compatibility: {
     minimum_importer_version: string;
     module_versions: Record<string, number>;
@@ -35,6 +35,7 @@ export interface Manifest {
   secrets: { mode: "excluded" | "metadata"; algorithm: null };
   signature: null;
   content_sha256?: string;
+  warnings?: string[];
 }
 
 export type ManifestSourceInput = Omit<Manifest["source"], "schema_version">;

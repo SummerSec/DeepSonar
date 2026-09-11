@@ -280,6 +280,8 @@ Scheduler 在写出 finalized manifest 前中断时，`GET /jobs/:id/evidence` �
 
 **导入 provenance（#400）**：导入 Job 在 `payload_json.import_origin` 标记 historical/readonly。活动 Job 导入时归档为 `cancelled`，resume/rerun 返回 `409 JOB_IMPORTED_READONLY`；failed/timeout/orphan 导入仍可续跑，但必须过当前治理 admission。
 
+**项目导入导出一致性（#436）**：任务 / Finding / 事件收集在 `REPEATABLE READ` 只读事务中取同一时刻快照。`allow_active_jobs` 由服务端决定：`project_full` 拒绝该标志；仅 `evidence_archive` 与 `custom` 含 `events` 可显式允许活动 Job。`credentials.mode=excluded` 不把凭据身份写入 `role-configs`。events 达 100000 上限时 `counts.events_truncated=true` 并写 manifest warning。导入对缺少 Job 的 Finding 记 warning，不静默丢行。
+
 **宿主资源清理指标（#199）**：`/metrics` 暴露 desired-state 清理残留容器/卷、连续失败轮次和按资源分类失败 counter；安全 runtime image GC 暴露候选、删除、容器占用保留与失败；Node `statfs` 宿主文件系统探针暴露使用率和 `ok/warning/error` 水位。指标抓取路径只读进程内结果，不在抓取时调用 Docker。
 
 **鉴权（HTTP + WS，#38 已关）**：

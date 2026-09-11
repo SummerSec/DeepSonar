@@ -179,29 +179,65 @@ export const CONFIG_MODULES = new Set<ModuleKey>([
 
 /**
  * 运行中 Job 会持续追加的模块。导出它们等于把进行中会话当成一致快照。
- * findings / 已提交画布与 Job 行是落库只读数据；Job 运行态字段在收集时已剥掉。
  */
 export const LIVE_STREAM_MODULES: ReadonlySet<ModuleKey> = new Set(["events"]);
+
+/**
+ * 读取仍会被活动 Job 改写的图/结论数据。`side-effects` 会 INSERT
+ * canvas_nodes/edges 并 UPDATE findings，不能当成已提交只读行。
+ */
+export const SNAPSHOT_DATA_MODULES: ReadonlySet<ModuleKey> = new Set(["tasks", "findings", "events"]);
 
 export function isConfigOnly(modules: ModuleKey[]): boolean {
   return modules.every((m) => CONFIG_MODULES.has(m));
 }
 
-/** 完整一致性拷贝，或含进行中事件流时，默认要求项目没有活动 Job。 */
+/** 仅证据归档，或自定义且显式包含事件流时，允许客户端声明活动 Job。 */
+export function exportAllowsActiveJobs(preset: Preset, modules: readonly ModuleKey[]): boolean {
+  if (preset === "evidence_archive") return true;
+  return preset === "custom" && modules.includes("events");
+}
+
+export const ACTIVE_JOBS_NOT_ALLOWED = "ACTIVE_JOBS_NOT_ALLOWED";
+
+export function allowActiveJobsRejectedMessage(preset: Preset): string {
+  if (preset === "project_full") {
+    return "完整项目导出不允许 allow_active_jobs。请等待活动 Job 结束，或改用证据归档 / 自定义事件模块。";
+  }
+  return "仅证据归档或自定义事件模块可以显式允许活动 Job。";
+}
+
+/** 客户端声明 allow_active_jobs 时，由服务端决定是否接受。 */
+export function assertExportActiveJobsOption(
+  preset: Preset,
+  modules: readonly ModuleKey[],
+  allowActiveJobs: boolean,
+): void {
+  if (!allowActiveJobs) return;
+  if (exportAllowsActiveJobs(preset, modules)) return;
+  throw Object.assign(new Error(allowActiveJobsRejectedMessage(preset)), {
+    code: ACTIVE_JOBS_NOT_ALLOWED,
+  });
+}
+
+/**
+ * 完整项目、或读取画布/Finding/事件的模块，默认要求项目没有活动 Job。
+ * `allow_active_jobs` 只在服务端允许的预设上豁免。
+ */
 export function exportRequiresQuietProject(
   preset: Preset,
   modules: readonly ModuleKey[],
   allowActiveJobs = false,
 ): boolean {
-  if (allowActiveJobs) return false;
+  if (allowActiveJobs && exportAllowsActiveJobs(preset, modules)) return false;
   if (preset === "project_full") return true;
-  return modules.some((m) => LIVE_STREAM_MODULES.has(m));
+  return modules.some((m) => SNAPSHOT_DATA_MODULES.has(m));
 }
 
 export function activeJobsErrorMessage(activeCount: number): string {
   return (
-    `项目存在 ${activeCount} 个活动 Job。完整项目导出需要任务全部结束后才能保证一致性。` +
-    "可改用：配置模板（无任务数据）、证据归档（允许活动 Job，含任务/Finding/事件）、" +
-    "或自定义模块导出已提交的 Finding/任务结果；也可等待结束或取消活动任务。"
+    `项目存在 ${activeCount} 个活动 Job。完整项目或任务/Finding 快照需要任务全部结束后才能保证一致性。` +
+    "可改用：配置模板（无任务数据）、证据归档（允许活动 Job）、" +
+    "或自定义事件模块并显式允许活动 Job；也可等待结束或取消活动任务。"
   );
 }

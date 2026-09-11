@@ -310,7 +310,7 @@ LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/exports | exports:write | 项目包；`preset=configuration|project_full|evidence_archive|custom`，可选 `modules/include_blobs/allow_active_jobs/credentials.mode`。`custom` 的 `modules` 只认已实现白名单（rules/roles/skills/runtime_images/environment/credentials/tasks/findings/events/audit_archive）；未知值 400 `UNKNOWN_EXPORT_MODULES` 并列出 `rejected` |
+| POST | /projects/:id/exports | exports:write | 项目包；`preset=configuration|project_full|evidence_archive|custom`，可选 `modules/include_blobs/allow_active_jobs/credentials.mode`。`custom` 的 `modules` 只认已实现白名单（rules/roles/skills/runtime_images/environment/credentials/tasks/findings/events/audit_archive）；未知值 400 `UNKNOWN_EXPORT_MODULES` 并列出 `rejected`。`allow_active_jobs` 仅 `evidence_archive` 或 `custom` 含 `events` 可设为 true；`project_full` 携带则 `400 ACTIVE_JOBS_NOT_ALLOWED` |
 | GET | /projects/:id/exports | exports:read | 项目导出任务列表 |
 | POST | /platform/exports | exports:write | `{preset: platform_full\|custom, modules?: string[], credentials?: {mode}}`；`custom` 时 `modules` 可自由勾选：`global_rules` / `agent_roles` / `global_role_configs` / `skill_sources` / `credentials` |
 | GET | /platform/exports | exports:read | 平台导出任务列表 |

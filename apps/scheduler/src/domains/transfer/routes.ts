@@ -5,7 +5,7 @@ import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { isProjectScopedActor, PROJECT_MISMATCH, PROJECT_SCOPE_FORBIDDEN } from "../../project-scope.js";
 import { parseProjectExportRequest } from "../../transfer/export-request.js";
-import { resolveModules } from "../../transfer/modules.js";
+import { assertExportActiveJobsOption, resolveModules } from "../../transfer/modules.js";
 import { buildPreview, applyImport } from "../../transfer/import.js";
 import { saveImportUpload, loadPackFile, removeFileSafe, sha256Hex, openDeepsonarPack } from "../../transfer/pack.js";
 import { applyPlatformImport, buildPlatformPreview, PLATFORM_FORMAT, resolvePlatformModules } from "../../transfer/platform.js";
@@ -28,6 +28,13 @@ export function registerTransferRoutes(app: FastifyInstance): void {
       const [project] = await sql`SELECT id, name FROM projects WHERE id = ${id}`;
       if (!project) return reply.code(404).send({ error: "project not found" });
       const { modules } = resolveModules(body.preset, body.modules);
+      try {
+        assertExportActiveJobsOption(body.preset, modules, body.allow_active_jobs === true);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "ACTIVE_JOBS_NOT_ALLOWED";
+        return reply.code(400).send({ error: msg, error_code: code });
+      }
       const [row] = await sql`
         INSERT INTO data_exports ${sql({
           project_id: id,

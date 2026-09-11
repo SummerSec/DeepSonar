@@ -4,9 +4,9 @@
  */
 export const PROJECT_PRESETS = [
   { id: "configuration" as const, label: "配置模板", hint: "规则 / 角色 / Skill / 环境（无任务历史）" },
-  { id: "project_full" as const, label: "完整项目", hint: "含任务、Finding、事件；要求无活动 Job" },
-  { id: "evidence_archive" as const, label: "证据归档", hint: "允许活动 Job；含任务、Finding、事件与审计" },
-  { id: "custom" as const, label: "自定义模块", hint: "自选已实现模块；Finding / 任务结果在有活动 Job 时仍可导出" },
+  { id: "project_full" as const, label: "完整项目", hint: "含任务、Finding、事件；要求无活动 Job，不可客户端豁免" },
+  { id: "evidence_archive" as const, label: "证据归档", hint: "允许活动 Job；含任务、Finding、事件与审计（一致快照）" },
+  { id: "custom" as const, label: "自定义模块", hint: "自选已实现模块；任务/Finding 需无活动 Job；仅勾选事件时可显式允许" },
 ] as const;
 
 export type ProjectExportPreset = (typeof PROJECT_PRESETS)[number]["id"];
@@ -18,9 +18,9 @@ export const PROJECT_EXPORT_MODULES = [
   { id: "runtime_images", label: "运行镜像", hint: "项目镜像策略引用" },
   { id: "environment", label: "环境变量", hint: "env_keys 与已脱敏值，不含 Secret" },
   { id: "credentials", label: "凭据元数据", hint: "仅名称 / provider / 指纹，不含明文" },
-  { id: "tasks", label: "任务", hint: "画布、Job、节点；已提交行，运行态字段已剥离" },
-  { id: "findings", label: "Finding", hint: "已提交 Finding；有活动 Job 时仍可导出" },
-  { id: "events", label: "事件", hint: "语义事件流；有活动 Job 时会被拦截，请改用证据归档" },
+  { id: "tasks", label: "任务", hint: "画布、Job、节点；有活动 Job 时需改用证据归档" },
+  { id: "findings", label: "Finding", hint: "已提交 Finding；有活动 Job 时需改用证据归档" },
+  { id: "events", label: "事件", hint: "语义事件流；可显式允许活动 Job，达上限会标记截断" },
   { id: "audit_archive", label: "审计归档", hint: "项目审计日志（脱敏）" },
 ] as const;
 
@@ -30,8 +30,12 @@ export function defaultProjectExportModules(): Set<ProjectExportModuleId> {
   return new Set<ProjectExportModuleId>(["findings"]);
 }
 
-export function projectExportAllowsActiveJobs(preset: ProjectExportPreset): boolean {
-  return preset === "configuration" || preset === "evidence_archive";
+export function projectExportAllowsActiveJobs(
+  preset: ProjectExportPreset,
+  selectedModules?: ReadonlySet<ProjectExportModuleId>,
+): boolean {
+  if (preset === "evidence_archive") return true;
+  return preset === "custom" && Boolean(selectedModules?.has("events"));
 }
 
 export function buildProjectExportRequest(
@@ -54,7 +58,7 @@ export function buildProjectExportRequest(
   return {
     preset: "custom",
     modules,
-    allow_active_jobs: false,
+    allow_active_jobs: projectExportAllowsActiveJobs("custom", selectedModules),
     credentials: { mode: modules.includes("credentials") ? "metadata" : "excluded" },
   };
 }
