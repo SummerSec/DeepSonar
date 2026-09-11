@@ -2,8 +2,9 @@
  * Kubernetes Gateway bind (#162). OpenSandbox create has no ExtraHosts/hostAliases
  * field; Kata guests also cannot use Docker ExtraHosts. The Scheduler-owned
  * Service ClusterIP is written into sandbox /etc/hosts as root via execd after
- * create (#346), which requires bootstrap.execd.isolation=enable (#427).
- * Docker Desktop uses Engine `docker exec` instead (#423).
+ * create (#346). That path is the only create that requests
+ * bootstrap.execd.isolation=enable (#427 / #432). Docker uses Engine
+ * `docker exec` instead (#423) and must omit the extension.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

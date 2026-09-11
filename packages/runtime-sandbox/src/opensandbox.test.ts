@@ -156,18 +156,52 @@ test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", 
   assert.equal(input.volumes[0]?.pvc.createIfNotExists, false);
   assert.ok(!Object.values(input.env).some((value) => /api[_-]?key/i.test(value)));
   assert.equal(input.platform, undefined);
-  assert.deepEqual(input.extensions, openSandboxCreateExtensions());
-  assert.equal(input.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.equal(input.extensions, undefined);
+  assert.equal(input.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], undefined);
+  assert.equal(k8s.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.deepEqual(k8s.extensions, openSandboxCreateExtensions(undefined, { kubernetes: true }));
 });
 
-test("OpenSandbox create extensions always request execd isolation", () => {
-  assert.deepEqual(openSandboxCreateExtensions(), {
+test("OpenSandbox create extensions request execd isolation only on Kubernetes", () => {
+  assert.equal(openSandboxCreateExtensions(), undefined);
+  assert.deepEqual(openSandboxCreateExtensions({ other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: "off" }), {
+    other: "x",
+  });
+  assert.deepEqual(openSandboxCreateExtensions(undefined, { kubernetes: true }), {
     [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
   });
   assert.deepEqual(
-    openSandboxCreateExtensions({ other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: "off" }),
+    openSandboxCreateExtensions({ other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: "off" }, { kubernetes: true }),
     { other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE },
   );
+});
+
+test("Docker create input must not request bootstrap.execd.isolation", () => {
+  const docker = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.equal(docker.extensions, undefined);
+  assert.ok(!Object.hasOwn(docker, "extensions"));
+  assert.equal(docker.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], undefined);
+});
+
+test("Kubernetes create input must request bootstrap.execd.isolation=enable", () => {
+  const k8s = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    kubernetesResources: true,
+    limits,
+  });
+  assert.equal(k8s.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.deepEqual(k8s.extensions, {
+    [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  });
 });
 
 test("OpenSandbox runner constructor omits pids when kubernetesResources is set", async () => {
@@ -192,7 +226,8 @@ test("OpenSandbox runner constructor omits pids when kubernetesResources is set"
   });
   assert.deepEqual(docker.created[0]?.resource, { cpu: "2", memory: "2048Mi", pids: "512" });
   assert.equal(client.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
-  assert.equal(docker.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.equal(docker.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], undefined);
+  assert.ok(!Object.hasOwn(docker.created[0] ?? {}, "extensions"));
 });
 
 test("OpenSandbox runner provisions, exposes host, and verifies contract", async () => {

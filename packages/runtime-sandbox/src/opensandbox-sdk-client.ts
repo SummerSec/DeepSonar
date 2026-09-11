@@ -151,12 +151,9 @@ export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): O
         networkPolicy: input.networkPolicy,
         volumes: input.volumes,
         ...(input.platform ? { platform: input.platform } : {}),
-        // SDK Sandbox.create extensions: Record<string, string>. Isolation must
-        // stay last so callers cannot turn off the execd uid/gid bwrap gate.
-        extensions: {
-          ...input.extensions,
-          "bootstrap.execd.isolation": "enable",
-        },
+        // Forward caller extensions only. Isolation is a Kubernetes create
+        // request; forcing it here would grant CAP_SYS_ADMIN on Docker too.
+        ...(input.extensions ? { extensions: input.extensions } : {}),
         skipHealthCheck: false,
       });
       if (input.signal?.aborted) {

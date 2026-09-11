@@ -37,11 +37,10 @@ test("OpenSandbox SDK create forwards an explicit linux/arm64 platform", () => {
   assert.match(source, /input\.platform \? \{ platform: input\.platform \}/);
 });
 
-test("OpenSandbox SDK create always requests bootstrap.execd.isolation=enable", () => {
+test("OpenSandbox SDK create forwards extensions and does not force execd isolation", () => {
   const source = readFileSync(new URL("./opensandbox-sdk-client.ts", import.meta.url), "utf8");
-  assert.match(source, /extensions:\s*\{/);
-  assert.match(source, /"bootstrap\.execd\.isolation": "enable"/);
-  assert.match(source, /\.\.\.input\.extensions/);
+  assert.match(source, /input\.extensions \? \{ extensions: input\.extensions \}/);
+  assert.doesNotMatch(source, /"bootstrap\.execd\.isolation": "enable"/);
 });
 
 test("OpenSandbox execd run forwards uid/gid for privileged provision writes", () => {
