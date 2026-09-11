@@ -47,6 +47,11 @@ const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em]
 const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
   list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
   list_available_runtime_images: { title: "查询可用镜像", description: "让 Hub 按需获取本项目已启用且可信的运行镜像 image_key，用于按任务动态选择 Worker 容器。" },
+  list_capabilities: { title: "查询能力包", description: "列出本 Job 可见的 Capability Pack 摘要；完整契约用 describe_capability 按需读取。" },
+  search_capabilities: { title: "搜索能力包", description: "按任务查询可用 Capability Pack，不依赖预先知道 RoleConfig selector。" },
+  describe_capability: { title: "描述能力包", description: "按 id/version/digest 读取 Capability Pack 机器契约。" },
+  validate_composition: { title: "校验能力组合", description: "校验 Pack 草案与 selector，拒绝扩大冻结权限，失败返回 RepairFeedback。" },
+  preview_materialization: { title: "预览能力物化", description: "dry-run 解析 selector 并冻结 digest，不改 RoleConfig。" },
   list_shared_assets: { title: "查询共享资产", description: "列出本 Job 冻结的只读资产目录；用 mount_path 直接读取，无单独下载工具（Scheduler 预挂载，含 S3）。" },
   publish_shared_asset: { title: "发布共享资产", description: "把 /workspace 普通文件发布为不可变版本；Scheduler 经 BlobStore（本地/S3）落库，禁止从只读挂载树发布。" },
   emit_progress: { title: "过程进度", description: "允许 Worker 增量上报当前动作和完成百分比。" },

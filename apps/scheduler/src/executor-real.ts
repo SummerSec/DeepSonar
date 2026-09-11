@@ -19,6 +19,7 @@ import {
   PublishSharedAssetPayload,
   AckHumanMessagePayload,
   allowedPlatformTools,
+  CAPABILITY_DISCOVERY_TOOLS_LIST,
   type PlatformToolName,
   type VerifyVerdict,
   isSafeWorkspacePayloadFile,
@@ -34,6 +35,7 @@ import {
   rolesForProject,
   rulesForProject,
 } from "./core.js";
+import { handleCapabilityDiscovery } from "./domains/capability-pack/index.js";
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
@@ -1213,6 +1215,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     module_selectors: moduleEvidence.module_selectors,
     missing_modules: moduleEvidence.missing_modules,
     module_content_hash: moduleEvidence.module_content_hash,
+    capability_pack_id: snapshot.capability_pack?.id ?? null,
+    capability_pack_digest: snapshot.capability_pack?.digest ?? null,
     skill_revisions: moduleEvidence.skill_revisions,
     shared_assets_revision: snapshot.shared_assets_revision ?? null,
     shared_asset_count: snapshot.shared_assets?.length ?? 0,
@@ -1452,6 +1456,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         ? context.input as Record<string, unknown>
         : {};
       return { accepted: true, operation, ...filterFrozenSharedAssets(sharedAssetCatalog as unknown as Record<string, unknown>, input) };
+    }
+    if ((CAPABILITY_DISCOVERY_TOOLS_LIST as readonly string[]).includes(operation)) {
+      return handleCapabilityDiscovery({
+        operation,
+        payload: context.input,
+        snapshot,
+        db: sql,
+      });
     }
     const eventType = CONTROL_SEMANTIC_EVENT_TYPES[operation as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
     if (!eventType) throw new Error("unknown platform operation");

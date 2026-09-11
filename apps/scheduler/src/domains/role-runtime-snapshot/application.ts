@@ -15,6 +15,7 @@ import {
   projectProviderRuntimeSnapshot,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
+import { freezeTaskCapabilityPack } from "../capability-pack/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -366,6 +367,14 @@ async function resolveAgentSnapshotForJobUnchecked(
     expanded_modules: expanded.resolved_modules,
     missing_modules: expanded.missing_modules as MissingModule[],
     module_content_hash: expanded.content_hash,
+    capability_pack: freezeTaskCapabilityPack({
+      roleName,
+      summary: (role.description as string) ?? roleName,
+      platformTools,
+      selectors: modules,
+      resolvedModules: expanded.resolved_modules,
+      moduleContentHash: expanded.content_hash,
+    }),
     skill_revisions: expanded.revisions,
     skills,
     commands,

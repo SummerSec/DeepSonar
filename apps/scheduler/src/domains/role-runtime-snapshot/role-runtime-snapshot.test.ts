@@ -131,6 +131,9 @@ test("inherit_global leftover project RoleConfig.model does not steal snapshot m
     assert.equal(snapshot.model, "grok-4.6", `model under ${JSON.stringify(projectConfig)}`);
     assert.equal(snapshot.upstream_model, "grok-4.6", `upstream_model under ${JSON.stringify(projectConfig)}`);
     assert.equal(snapshot.agent_cli, "claude-code");
+    assert.equal(snapshot.capability_pack?.id, "role.audit");
+    assert.equal(snapshot.capability_pack?.scope, "task");
+    assert.match(snapshot.capability_pack?.digest ?? "", /^sha256:[a-f0-9]{64}$/);
   }
 });
 

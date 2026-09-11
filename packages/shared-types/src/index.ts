@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  DescribeCapabilityPayload,
+  ListCapabilitiesPayload,
+  PreviewMaterializationPayload,
+  SearchCapabilitiesPayload,
+  ValidateCompositionPayload,
+} from "./capability-pack.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
 
@@ -613,6 +620,29 @@ export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload
 export const ListAvailableRuntimeImagesPayload = z.object({}).strict();
 export type ListAvailableRuntimeImagesPayload = z.infer<typeof ListAvailableRuntimeImagesPayload>;
 
+export {
+  CAPABILITY_DISCOVERY_TOOLS_LIST,
+  CAPABILITY_PACK_SCHEMA,
+  CapabilityPackBudget,
+  CapabilityPackDigest,
+  CapabilityPackDraft,
+  CapabilityPackFailurePolicy,
+  CapabilityPackId,
+  CapabilityPackInput,
+  CapabilityPackManifest,
+  CapabilityPackOutput,
+  CapabilityPackPermissions,
+  CapabilityPackScope,
+  CapabilityPackSummary,
+  CapabilityPackVersion,
+  DescribeCapabilityPayload,
+  ListCapabilitiesPayload,
+  PreviewMaterializationPayload,
+  SearchCapabilitiesPayload,
+  ValidateCompositionPayload,
+  type CapabilityDiscoveryToolName,
+} from "./capability-pack.js";
+
 export const ListSharedAssetsPayload = z.object({
   scope: z.enum(["platform", "project", "finding"]).optional(),
   prefix: z.string().trim().min(1).max(120).optional(),
@@ -1048,6 +1078,11 @@ export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 export const ControlToolPayloadSchemas = {
   list_available_roles: ListAvailableRolesPayload,
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
+  list_capabilities: ListCapabilitiesPayload,
+  search_capabilities: SearchCapabilitiesPayload,
+  describe_capability: DescribeCapabilityPayload,
+  validate_composition: ValidateCompositionPayload,
+  preview_materialization: PreviewMaterializationPayload,
   list_shared_assets: ListSharedAssetsPayload,
   publish_shared_asset: PublishSharedAssetPayload,
   emit_progress: ProgressPayload,
@@ -1142,6 +1177,11 @@ export type EventEnvelopeInput = {
 export const PlatformToolName = z.enum([
   "list_available_roles",
   "list_available_runtime_images",
+  "list_capabilities",
+  "search_capabilities",
+  "describe_capability",
+  "validate_composition",
+  "preview_materialization",
   "emit_progress",
   "emit_fact",
   "emit_finding",
@@ -1269,6 +1309,11 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
 export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "list_available_roles",
   "list_available_runtime_images",
+  "list_capabilities",
+  "search_capabilities",
+  "describe_capability",
+  "validate_composition",
+  "preview_materialization",
   "list_shared_assets",
   "publish_shared_asset",
   "emit_progress",
