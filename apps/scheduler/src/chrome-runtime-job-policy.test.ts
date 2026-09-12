@@ -193,6 +193,15 @@ test("Dispatcher and real executor provision from the frozen snapshot only", () 
   assert.doesNotMatch(executorSource, /networkPolicy\.allow_egress/);
 });
 
+test("Dispatcher rejects an ambiguous Pi model before sandbox provision", () => {
+  const validate = dispatcherSource.indexOf("assertPiSnapshotLaunchSelection(snapshot)");
+  const provision = dispatcherSource.indexOf("runner.provision(");
+  assert.ok(validate >= 0, "dispatcher must resolve the Pi launch selection");
+  assert.ok(provision > validate, "Pi model resolution must run before runner.provision");
+  assert.match(executorSource, /assertPiSnapshotLaunchSelection\(/);
+  assert.match(executorSource, /modelProvider: piLaunch\.provider/);
+});
+
 test("dispatcher does not fall back to deleted projects.canvas_id", () => {
   assert.doesNotMatch(dispatcherSource, /SELECT canvas_id FROM projects/);
   assert.doesNotMatch(dispatcherSource, /兜底到项目旧画布/);

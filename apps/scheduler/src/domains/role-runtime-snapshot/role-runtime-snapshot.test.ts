@@ -222,6 +222,7 @@ test("Pi snapshot freezes the CLI model id when RoleConfig stores a deepsonar/ p
   assert.equal(snapshot.agent_cli, "pi");
   assert.equal(snapshot.model, "grok-4.6");
   assert.equal(snapshot.upstream_model, "grok-4.6");
+  assert.equal(snapshot.pi_provider, "deepsonar");
   assert.notEqual(snapshot.model, "deepsonar/grok-4.6");
 });
 

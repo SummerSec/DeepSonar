@@ -82,10 +82,10 @@ import { composeHubInstruction, composeScopeForPrompt, composeWorkerInstruction 
 import { frozenTaskSeeds } from "./task-compose.js";
 import { materializeFrozenPiExtensions, parseFrozenPiExtensions } from "./pi-extensions.js";
 import {
+  assertPiSnapshotLaunchSelection,
   hasProviderSettingsConfig,
   jobGatewayAllowedModels,
   materializeProviderSettings,
-  splitPiModelRef,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
@@ -1515,6 +1515,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   if (provider === "dsh" && !activeCredentialProvider) throw new Error("DSH_CREDENTIAL_PROVIDER_MISSING");
   const runtimeAdapter = requireAgentCliRuntimeAdapter(provider);
+  const piLaunch = assertPiSnapshotLaunchSelection({
+    agent_cli: provider,
+    model,
+    pi_provider: snapshot.pi_provider,
+    settings_config_json: snapshot.settings_config_json,
+    config_files: runtimeConfigFiles,
+  });
+  const runtimeModel = piLaunch?.cliModel ?? model;
   const dshProvider = runtimeAdapter.projectRuntime?.({
     settingsConfig: snapshot.settings_config_json,
     credentialProvider: activeCredentialProvider ?? "",
@@ -1535,7 +1543,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       provider,
       adapter: snapshot.agent_runtime,
       runtimeImageKey: snapshot.runtime_image.image_key,
-      model: provider === "pi" && model ? (splitPiModelRef(model).modelId || model) : model,
+      model: runtimeModel,
+      ...(piLaunch ? { modelProvider: piLaunch.provider } : {}),
       reasoning,
       dshProvider,
       dshTaskMode: snapshot.dsh_task_mode,

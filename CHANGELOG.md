@@ -6,6 +6,7 @@
 
 ### 修复
 
+- Pi 真实 Job 冻结已认证 `models.json` 路由到 `pi_provider`，adapter 传 `--provider <route> --model <id>`，避免 `grok-4.6` 这类裸 id 在 Pi 内置多 provider 目录中歧义后 provision 才失败。无法唯一确定时在快照解析 / claim 启动以 `PI_MODEL_UNAVAILABLE` 失败，不进入沙箱 provision（#479）。
 - RoleConfig 路径参数在进 SQL 前校验 UUID：`PUT /role-configs/global/:roleId` 等不再把 `explore` 这类角色名交给 Postgres；返回 `400` 与稳定 `error_code`（`INVALID_ROLE_ID` / `INVALID_ROLE_CONFIG_ID` / `INVALID_ID`），不回显数据库错误（#478）。
 
 ## [0.3.2] - 2026-09-12

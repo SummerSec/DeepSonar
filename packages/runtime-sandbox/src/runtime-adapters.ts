@@ -52,13 +52,31 @@ export function splitPiModelRef(model: string): { provider?: string; modelId: st
 }
 
 /**
- * Pi `--model` looks up the catalog `id` (e.g. `grok-4.6`), not the DeepSonar
- * provider route (`deepsonar/grok-4.6`). Leftover namespaced snapshot values
- * must be mapped here so already-frozen Jobs can start.
+ * Pi `--model` looks up the catalog `id` (e.g. `grok-4.6`), not a provider
+ * route (`deepsonar/grok-4.6`). Leftover namespaced snapshot values must be
+ * mapped here so already-frozen Jobs can start.
  */
 export function resolvePiCliModelId(model: string | undefined | null): string | undefined {
   if (!model?.trim()) return undefined;
   return splitPiModelRef(model).modelId || undefined;
+}
+
+/**
+ * Pi 0.84.4 rejects a bare catalog id when it exists on multiple built-in
+ * providers. Pass `--provider <route> --model <id>` (not `--model provider/id`).
+ */
+export function resolvePiCliLaunchFlags(
+  model?: string | null,
+  modelProvider?: string | null,
+): { cliModel?: string; provider?: string } {
+  const provider = modelProvider?.trim() || undefined;
+  if (provider) {
+    const cliModel = model?.trim() || undefined;
+    return { ...(cliModel ? { cliModel } : {}), provider };
+  }
+  const split = model?.trim() ? splitPiModelRef(model) : { modelId: "" };
+  const cliModel = split.modelId || undefined;
+  return { ...(cliModel ? { cliModel } : {}), ...(split.provider ? { provider: split.provider } : {}) };
 }
 
 export interface AdapterStartContext {
@@ -66,6 +84,8 @@ export interface AdapterStartContext {
   env: Record<string, string>;
   cwd: string;
   model?: string;
+  /** Frozen Pi models.json route; required when the catalog id is multi-provider. */
+  modelProvider?: string;
   reasoning?: string;
   /** Frozen llm-pi-ai route/profile selected from the Provider account. */
   dshProvider?: DshProviderRuntimeConfig;
@@ -632,8 +652,9 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
   }).join("");
   let command = `pi --mode rpc --no-approve --no-extensions --session-dir /workspace/.deepsonar-home/.pi/agent${extensions}`;
   if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
-  const cliModel = resolvePiCliModelId(context.model);
-  if (cliModel) command += ` --model ${shellQuote(cliModel)}`;
+  const launch = resolvePiCliLaunchFlags(context.model, context.modelProvider);
+  if (launch.cliModel) command += ` --model ${shellQuote(launch.cliModel)}`;
+  if (launch.provider) command += ` --provider ${shellQuote(launch.provider)}`;
   if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
   if (context.systemPromptPath) command += ` --append-system-prompt \"$(cat ${shellQuote(context.systemPromptPath)})\"`;
   return host.runAsync(command, { cwd: context.cwd, env: context.env });

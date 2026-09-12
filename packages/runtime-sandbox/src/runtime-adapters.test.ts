@@ -10,6 +10,7 @@ import {
 import { mapCliEvent } from "./runtime-agent.js";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
+  resolvePiCliLaunchFlags,
   resolvePiCliModelId,
   splitPiModelRef,
   PiJsonlFramer,
@@ -358,6 +359,12 @@ test("Pi adapter maps namespaced provider model to the CLI model id", async () =
   assert.equal(resolvePiCliModelId("anthropic/shared"), "shared");
   assert.equal(resolvePiCliModelId("grok-4.6"), "grok-4.6");
   assert.equal(resolvePiCliModelId("openrouter/openai/gpt-4o"), "openai/gpt-4o");
+  assert.deepEqual(resolvePiCliLaunchFlags("deepsonar/grok-4.6"), { cliModel: "grok-4.6", provider: "deepsonar" });
+  assert.deepEqual(resolvePiCliLaunchFlags("grok-4.6", "deepsonar"), { cliModel: "grok-4.6", provider: "deepsonar" });
+  assert.deepEqual(resolvePiCliLaunchFlags("openai/gpt-4o", "openrouter"), {
+    cliModel: "openai/gpt-4o",
+    provider: "openrouter",
+  });
 
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const namespaced = fakeSandbox();
@@ -370,6 +377,7 @@ test("Pi adapter maps namespaced provider model to the CLI model id", async () =
     model: "deepsonar/grok-4.6",
   });
   assert.match(namespaced.commands[0] ?? "", /--model 'grok-4\.6'/);
+  assert.match(namespaced.commands[0] ?? "", /--provider 'deepsonar'/);
   assert.doesNotMatch(namespaced.commands[0] ?? "", /--model 'deepsonar\/grok-4\.6'/);
 
   const bare = fakeSandbox();
@@ -380,8 +388,10 @@ test("Pi adapter maps namespaced provider model to the CLI model id", async () =
     input: "initial",
     mcpConfigPath: "/workspace/.deepsonar/mcp.json",
     model: "grok-4.6",
+    modelProvider: "deepsonar",
   });
   assert.match(bare.commands[0] ?? "", /--model 'grok-4\.6'/);
+  assert.match(bare.commands[0] ?? "", /--provider 'deepsonar'/);
 });
 
 test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", async () => {
