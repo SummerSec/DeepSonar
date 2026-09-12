@@ -479,9 +479,11 @@ test("Pi RPC failure markers become explicit error results and settlement cannot
   const state = {};
   const failed = adapter.decodeOutput({ type: "message_end", message: { stopReason: "aborted" } }, state);
   assert.equal(failed[0]?.is_error, true);
+  assert.equal(failed[0]?.result, "Pi message ended: aborted");
   const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
   assert.equal(settled[0]?.type, "result");
   assert.equal(settled[0]?.is_error, true);
+  assert.equal(settled[0]?.result, "Pi message ended: aborted");
 });
 
 test("Pi RPC response failures remain failed through settlement", () => {
@@ -569,6 +571,34 @@ test("preferInnerJsonErrorMessage 提取最内层 message 并在失败时回退�
   assert.equal(secret.message, "unauthorized");
   assert.equal(secret.detail, undefined);
   assert.doesNotMatch(secret.message, /sk-secret-value|api_key/);
+});
+
+test("Pi message_end error 保留脱敏后的上游 errorMessage", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  const expected = "Pi message ended: error: OpenAI API error (401): 无效的令牌 (request id: 20260901210556871436957gdfwdwZcW5EDY)";
+  const failed = adapter.decodeOutput({
+    type: "message_end",
+    message: { stopReason: "error", errorMessage: PI_ISSUE_320_SAMPLE },
+  }, state);
+  assert.deepEqual(failed, [
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: `Pi message ended: error: ${PI_ISSUE_320_SAMPLE}` },
+  ]);
+  const mapped = mapCliEvent(failed[0]!, () => {});
+  assert.equal(mapped.isError, true);
+  assert.equal(mapped.errorDetail, expected);
+  const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
+  assert.equal(settled[0]?.is_error, true);
+  assert.equal(settled[0]?.result, expected);
+
+  const secret = adapter.decodeOutput({
+    type: "message_end",
+    message: { stopReason: "error", errorMessage: "{\"message\":\"unauthorized\",\"api_key\":\"sk-secret-value\"}" },
+  }, {});
+  assert.equal(secret[0]?.is_error, true);
+  assert.equal(secret[0]?.result, "Pi message ended: error: unauthorized");
+  assert.equal(secret[0]?.detail, undefined);
+  assert.doesNotMatch(JSON.stringify(secret[0]), /sk-secret-value|api_key/);
 });
 
 test("Pi error / extension_error 优先展示嵌入 JSON 的 message", () => {
