@@ -367,26 +367,6 @@ function runtimeErrorResult(raw: string | undefined, fallback: string): Record<s
   };
 }
 
-function reasoningTextFrom(value: unknown, depth = 0): string | undefined {
-  if (depth > 5) return undefined;
-  if (typeof value === "string" && value) return value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of ["thinking", "reasoning", "text", "delta", "content", "summary"]) {
-    if (typeof record[key] === "string" && record[key]) return record[key] as string;
-  }
-  for (const key of ["summary", "content"]) {
-    const entries = record[key];
-    if (!Array.isArray(entries)) continue;
-    const text = entries
-      .map((entry) => reasoningTextFrom(entry, depth + 1))
-      .filter((entry): entry is string => Boolean(entry))
-      .join("");
-    return text || undefined;
-  }
-  return undefined;
-}
-
 function rememberStreamDelta(
   state: AdapterRuntimeState,
   kind: "text" | "reasoning",
