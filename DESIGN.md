@@ -177,7 +177,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 3. **事实证据**：Fact、Artifact、验证状态、证据边和来源；
 4. **任务发现**：本任务 Finding、Verify 状态、disposition 和追踪入口；
 5. **任务运行**：Job、Attempt、Session、流、广播和用量；
-6. **报告**：Finding Report、Task Report、版本、输入 checksum 和生成状态。
+6. **报告**：任务工作台报告 tab 仍展示 Finding Report、Task Report、版本、输入 checksum 和正文。项目报告页以统一 `ReportDeliverable` 投影为默认视图（可阅读 / 生成中 / 失败 / 尚未生成 / 已过时），任务只作上下文，不默认展开。
 
 选中的 `tab` 写入 URL，后台刷新不能强制切换视图。Canvas 是高级审计视图，默认只读；节点布局由服务端 elkjs 计算。列表筛选使用服务端分页和可搜索多选；不同维度按 AND，同一维度按 OR。项目账本和项目风险是独立项目视图，不塞进任务工作台的运行列表。
 
@@ -202,6 +202,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | Finding Research（#448） | 语义去重、canonical anchor、相对 priority 已落地 | 更强评估集、跨任务聚类和人工反馈闭环 |
 | Quality / Replay（#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
+| 项目报告工作台（#484） | Phase 1 已落地：统一 `ReportDeliverable` 投影、交付物优先列表、默认不展开任务、空/生成中/失败/无 Finding 状态可区分；旧路由与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
 

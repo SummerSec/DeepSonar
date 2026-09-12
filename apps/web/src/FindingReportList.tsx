@@ -1,7 +1,13 @@
 import { DownloadSimple, ArrowRight } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import { api, type ProjectFindingReportItem } from "./api";
-import { findingReportRowKey, reportGeneratedAt } from "./report-views";
+import {
+  DELIVERABLE_STATUS_LABEL,
+  FINDING_REPORT_LIST_EMPTY,
+  findingItemDeliverableStatus,
+  findingReportRowKey,
+  reportEvidenceSnapshotAt,
+} from "./report-views";
 import { SEVERITY_COLOR } from "./semantics";
 import { EmptyState, StatusBadge, formatTime } from "./ui";
 
@@ -15,7 +21,7 @@ export function FindingReportList({
   findingHref?: (findingId: string) => string;
 }) {
   if (items.length === 0) {
-    return <EmptyState title="暂无 confirmed Finding 独立报告" hint="Finding 被确认后会自动生成独立报告。" />;
+    return <EmptyState title={FINDING_REPORT_LIST_EMPTY.title} hint={FINDING_REPORT_LIST_EMPTY.hint} />;
   }
 
   return (
@@ -23,6 +29,7 @@ export function FindingReportList({
       {items.map((item) => {
         const report = item.report;
         const href = findingHref?.(item.finding_id);
+        const status = findingItemDeliverableStatus(item);
         return (
           <li key={findingReportRowKey(item)} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3">
             <span
@@ -33,12 +40,12 @@ export function FindingReportList({
             </span>
             <span className="min-w-0 flex-1 break-words text-[13px] text-zinc-200">{item.title}</span>
             <StatusBadge status={item.verify_status} compact />
+            <StatusBadge status={status} />
             {report ? (
               <>
                 <span className="font-mono text-[11px] text-zinc-500">v{report.version}</span>
-                <StatusBadge status={report.status} compact />
-                <span className="font-mono text-[11px] text-zinc-600">{formatTime(reportGeneratedAt(report))}</span>
-                {report.status === "succeeded" && (
+                <span className="font-mono text-[11px] text-zinc-600">{formatTime(reportEvidenceSnapshotAt(report))}</span>
+                {status === "readable" && (
                   <button
                     type="button"
                     onClick={() => void api.downloadReport(report.id, "markdown")}
@@ -47,9 +54,12 @@ export function FindingReportList({
                     <DownloadSimple size={12} /> 下载
                   </button>
                 )}
+                {status === "failed" && (
+                  <span className="font-mono text-[11px] text-red-300/90">生成失败，可在 Finding 详情重试</span>
+                )}
               </>
             ) : (
-              <span className="font-mono text-[11px] text-zinc-600">尚未生成</span>
+              <span className="font-mono text-[11px] text-zinc-500">{DELIVERABLE_STATUS_LABEL.not_yet_generated}</span>
             )}
             {href ? (
               <Link
