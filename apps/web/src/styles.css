@@ -402,13 +402,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   width: 24px;
   height: 24px;
   overflow: visible;
-  stroke: currentColor;
-  stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.brand-mark .deep-sonar-mark__arrow,
-.brand-mark .deep-sonar-mark__core { fill: currentColor; stroke: none; }
+.deep-sonar-mark__body,
+.deep-sonar-mark__tail,
+.deep-sonar-mark__fin { fill: var(--deep-sonar-mark-body, #4d6bfe); stroke: none; }
+.deep-sonar-mark__belly,
+.deep-sonar-mark__eye { fill: var(--deep-sonar-mark-highlight, #fff); stroke: none; }
+.deep-sonar-mark__pulse { fill: none; stroke: var(--deep-sonar-mark-highlight, #fff); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.45; }
+.deep-sonar-mark__pupil { fill: var(--deep-sonar-mark-body, #4d6bfe); stroke: none; }
+.deep-sonar-mark__smile { fill: none; stroke: var(--deep-sonar-mark-body, #4d6bfe); stroke-linecap: round; stroke-width: 1.05; }
 .brand-lockup strong { display: block; color: #f2f4f5; font: 600 14px/1.1 var(--font-mono); letter-spacing: -.04em; text-transform: uppercase; }
 .brand-lockup span { display: block; margin-top: 5px; color: #636c71; font: 500 8px/1 var(--font-mono); letter-spacing: .2em; }
 
