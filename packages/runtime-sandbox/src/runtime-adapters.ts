@@ -546,6 +546,14 @@ function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): b
   return usage.input === 0 && usage.output === 0;
 }
 
+/** Pi 在 stopReason=error|aborted 时把上游失败写在 AssistantMessage.errorMessage。 */
+function piMessageEndErrorRaw(line: Record<string, unknown>, message?: Record<string, unknown>): string | undefined {
+  for (const candidate of [message?.errorMessage, line.errorMessage, message?.error, line.error]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
 function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   const type = String(line.type ?? "");
   const fail = (detail: string): Record<string, unknown>[] => {
@@ -583,9 +591,15 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return piTextFromMessageEvent(line, state);
   }
   if (type === "message_end") {
-    const stopReason = String((line.message as Record<string, unknown> | undefined)?.stopReason ?? line.stopReason ?? "");
-    if (stopReason === "error" || stopReason === "aborted") return fail(`Pi message ended: ${stopReason}`);
-    const message = line.message;
+    const message = line.message && typeof line.message === "object" && !Array.isArray(line.message)
+      ? line.message as Record<string, unknown>
+      : undefined;
+    const stopReason = String(message?.stopReason ?? line.stopReason ?? "");
+    if (stopReason === "error" || stopReason === "aborted") {
+      const raw = piMessageEndErrorRaw(line, message);
+      const fallback = `Pi message ended: ${stopReason}`;
+      return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback);
+    }
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
     if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
