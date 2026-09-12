@@ -129,9 +129,10 @@ python scripts/deepsonar-api.py roles create --name security_review --descriptio
 python scripts/deepsonar-api.py roles update <roleId> --data '{"description":"..."}'
 python scripts/deepsonar-api.py roles delete <roleId>
 python scripts/deepsonar-api.py role-configs global
+# <roleId> 是 agent_roles.id UUID（GET /agent-roles 或 bindable.role_id），不是角色名 explore
 python scripts/deepsonar-api.py role-configs global-put <roleId> --data @role-config.json
 python scripts/deepsonar-api.py role-configs bindable
-# Provider 绑定列表等价轻量 PATCH（不改写凭据/config_files）
+# Provider 绑定列表等价轻量 PATCH（不改写凭据/config_files）；<roleConfigId> 是 bindable.id
 python scripts/deepsonar-api.py role-configs agent-cli <roleConfigId> --agent-cli claude-code
 python scripts/deepsonar-api.py role-configs runtime-image <roleConfigId> --image-key deepsonar-audit
 python scripts/deepsonar-api.py role-configs runtime-image <roleConfigId> --image-key null   # 系统底座

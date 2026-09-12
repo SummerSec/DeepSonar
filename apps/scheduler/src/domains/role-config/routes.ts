@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools, validatePiExtensionIds } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import { planCredentialAgentCliFollow, projectCredentialProvider } from "../../credentials.js";
+import { isUuid } from "../../project-scope.js";
 import {
   CONFIG_FILE_MAX_BYTES,
   CONFIG_FILE_MAX_COUNT,
@@ -27,6 +28,33 @@ const RoleBody = z.object({
   description: z.string().default(""),
 });
 const RolePatchBody = RoleBody.partial().omit({ name: true });
+
+/** `:roleId` is `agent_roles.id`, never the role name (`explore`). */
+export const INVALID_ROLE_ID = {
+  error: "roleId must be an agent role UUID, not the role name",
+  error_code: "INVALID_ROLE_ID",
+} as const;
+
+/** PATCH `/role-configs/:id/...` uses `role_configs.id` from bindable `id`. */
+export const INVALID_ROLE_CONFIG_ID = {
+  error: "invalid RoleConfig id",
+  error_code: "INVALID_ROLE_CONFIG_ID",
+} as const;
+
+const INVALID_PROJECT_ID = {
+  error: "invalid project id",
+  error_code: "INVALID_ID",
+} as const;
+
+function rejectUnlessUuid(
+  reply: FastifyReply,
+  value: string | undefined,
+  body: { error: string; error_code: string },
+): boolean {
+  if (isUuid(value)) return false;
+  reply.code(400).send(body);
+  return true;
+}
 
 type AgentCliFollow = { credentialId: string; from: string; to: string };
 
@@ -340,6 +368,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   /** Lightweight CLI update for Provider bind UI (does not rewrite credentials/files). */
   app.patch("/role-configs/:id/agent-cli", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (rejectUnlessUuid(reply, id, INVALID_ROLE_CONFIG_ID)) return;
     const body = z.object({
       agent_cli: AgentCliWriteSchema,
     }).parse(req.body);
@@ -418,6 +447,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   /** Lightweight runtime image update for Provider bind UI (null = system base). */
   app.patch("/role-configs/:id/runtime-image", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (rejectUnlessUuid(reply, id, INVALID_ROLE_CONFIG_ID)) return;
     const body = z.object({
       runtime_image_key: z.string().min(1).max(200).nullable(),
     }).parse(req.body);
@@ -542,6 +572,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   app.put("/role-configs/global/:roleId", async (req, reply) => {
     const { roleId } = req.params as { roleId: string };
+    if (rejectUnlessUuid(reply, roleId, INVALID_ROLE_ID)) return;
     if (req.actor?.projectId) {
       return reply.code(403).send({
         error: "project-scoped actors may modify only their own project RoleConfigs",
@@ -569,6 +600,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   app.get("/projects/:id/role-configs", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (rejectUnlessUuid(reply, id, INVALID_PROJECT_ID)) return;
     const actorProjectId = req.actor?.projectId ?? null;
     if (actorProjectId && actorProjectId !== id) {
       return reply.code(403).send({
@@ -599,6 +631,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   app.put("/projects/:id/role-configs/:roleId", async (req, reply) => {
     const { id, roleId } = req.params as { id: string; roleId: string };
+    if (rejectUnlessUuid(reply, id, INVALID_PROJECT_ID)) return;
+    if (rejectUnlessUuid(reply, roleId, INVALID_ROLE_ID)) return;
     const actorProjectId = req.actor?.projectId ?? null;
     if (actorProjectId && actorProjectId !== id) {
       return reply.code(403).send({
@@ -630,6 +664,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   app.delete("/projects/:id/role-configs/:roleId", async (req, reply) => {
     const { id, roleId } = req.params as { id: string; roleId: string };
+    if (rejectUnlessUuid(reply, id, INVALID_PROJECT_ID)) return;
+    if (rejectUnlessUuid(reply, roleId, INVALID_ROLE_ID)) return;
     const actorProjectId = req.actor?.projectId ?? null;
     if (actorProjectId && actorProjectId !== id) {
       return reply.code(403).send({
@@ -692,6 +728,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   app.patch("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (rejectUnlessUuid(reply, id, INVALID_ROLE_ID)) return;
     if (req.actor?.projectId) {
       return reply.code(403).send({
         error: "project-scoped actors may not modify the global role registry",
@@ -718,6 +755,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   app.delete("/agent-roles/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (rejectUnlessUuid(reply, id, INVALID_ROLE_ID)) return;
     if (req.actor?.projectId) {
       return reply.code(403).send({
         error: "project-scoped actors may not modify the global role registry",
@@ -744,6 +782,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   // 项目视角的角色清单：全部角色 + 本项目启用状态
   app.get("/projects/:id/roles", async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (rejectUnlessUuid(reply, id, INVALID_PROJECT_ID)) return;
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;

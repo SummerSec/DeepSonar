@@ -227,16 +227,22 @@ PUT body：
 
 Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。模型按 `RoleConfig.model（可选覆盖）→ Credential settingsConfig → null` 解析；`reasoning` 只从 Credential `settings_config_json` 读取。快照含 effective `model`、物化后的 CLI 配置文件、Provider-owned `reasoning`、`credential_id` 与 `runtime_image`（digest）。**改 RoleConfig 或 Credential 不影响已创建 Job**。
 
+路径参数都是 UUID，**不是**角色名（如 `explore`）：
+
+- `:roleId` = `agent_roles.id`（来自 `GET /agent-roles` 的 `id`，或 `GET /role-configs/bindable` 的 `role_id`）。非 UUID 返回 `400 INVALID_ROLE_ID`。
+- PATCH `/role-configs/:id/...` 的 `:id` = `role_configs.id`（来自 bindable 的 `id`）。非 UUID 返回 `400 INVALID_ROLE_CONFIG_ID`。
+- `:id` 在 `/projects/:id/...` 上是项目 UUID。非 UUID 返回 `400 INVALID_ID`。
+
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /role-configs/global | agents:read | 全局缺省清单（含 credentials / config_files） |
-| GET | /role-configs/bindable | agents:read | Provider 绑定选择器元数据（含 `agent_cli` / `runtime_image_key` / `can_bind`） |
-| PATCH | /role-configs/:id/agent-cli | agents:write | 仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider，兼容则同步凭据 `agent_cli` |
-| PATCH | /role-configs/:id/runtime-image | agents:write | 仅改 `runtime_image_key`（`null`=系统底座）；不改写凭据/文件 |
-| PUT | /role-configs/global/:roleId | agents:write | 全局 upsert（version +1）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
+| GET | /role-configs/bindable | agents:read | Provider 绑定选择器元数据（含 `agent_cli` / `runtime_image_key` / `can_bind` / `id` / `role_id`） |
+| PATCH | /role-configs/:id/agent-cli | agents:write | `:id` 为 RoleConfig UUID；仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider，兼容则同步凭据 `agent_cli` |
+| PATCH | /role-configs/:id/runtime-image | agents:write | `:id` 为 RoleConfig UUID；仅改 `runtime_image_key`（`null`=系统底座）；不改写凭据/文件 |
+| PUT | /role-configs/global/:roleId | agents:write | `:roleId` 为角色 UUID（不是 `explore` 这类 name）；全局 upsert（version +1）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
 | GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none；`project_config` 返回实时完整项目覆盖 |
-| PUT | /projects/:id/role-configs/:roleId | agents:write | 项目覆盖；普通角色须已启用（409）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
-| DELETE | /projects/:id/role-configs/:roleId | agents:write | 删除覆盖，回落全局 |
+| PUT | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；项目覆盖；普通角色须已启用（409）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
+| DELETE | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；删除覆盖，回落全局 |
 
 仓库管理 CLI 提供 `role-configs sync-builtin-prompts`：从 `database/schema.sql` 的单一基线提取内置 Prompt，读取线上全局 RoleConfig 后仅替换 `instructions_markdown`，保留模型、凭据、镜像、模块和配置文件；可先用 `--dry-run` 查看 Prompt 哈希。
 

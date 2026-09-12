@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- RoleConfig 路径参数在进 SQL 前校验 UUID：`PUT /role-configs/global/:roleId` 等不再把 `explore` 这类角色名交给 Postgres；返回 `400` 与稳定 `error_code`（`INVALID_ROLE_ID` / `INVALID_ROLE_CONFIG_ID` / `INVALID_ID`），不回显数据库错误（#478）。
+
 ## [0.3.2] - 2026-09-12
 
 ### 变更

@@ -65,6 +65,14 @@ test("RoleConfig and role registry OpenAPI documents project-scope boundaries", 
   }
   assert.match(String(paths["/role-configs/global"]?.get?.description), /Credential/);
   assert.match(String(paths["/role-configs/bindable"]?.get?.description), /跨项目绑定/);
+  const globalPut = paths["/role-configs/global/{roleId}"]?.put;
+  const roleIdParam = (globalPut.parameters as Array<Record<string, any>>).find((parameter) => parameter.name === "roleId");
+  assert.deepEqual(roleIdParam?.schema, { type: "string", format: "uuid" });
+  assert.match(String(globalPut.description), /INVALID_ROLE_ID/);
+  assert.match(String(globalPut.description), /不是角色名/);
+  assert.match(String(paths["/role-configs/{id}/agent-cli"]?.patch?.description), /INVALID_ROLE_CONFIG_ID/);
+  assert.match(String(paths["/projects/{id}/role-configs/{roleId}"]?.put?.description), /INVALID_ROLE_ID/);
+  assert.match(String(paths["/projects/{id}/role-configs/{roleId}"]?.delete?.description), /INVALID_ROLE_ID/);
 });
 
 test("/health OpenAPI includes deploy version", () => {
