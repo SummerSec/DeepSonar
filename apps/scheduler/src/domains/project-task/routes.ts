@@ -281,6 +281,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         body.kind === "compose" ? body.seed_finding_ids ?? [] : [],
       );
     } catch (error) {
+      if (isSnapshotUnresolvableError(error)) {
+        return reply.code(409).send(currentSnapshotUnresolvableBody(error));
+      }
       const mapped = runtimeImageHttpError(error);
       if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
       throw error;

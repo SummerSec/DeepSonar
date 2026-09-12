@@ -504,8 +504,7 @@ export function projectProviderRuntimeSnapshot(input: {
   const upstreamSource = input.agentCli === "pi" && model ? (splitPiModelRef(model).modelId || model) : model;
   const upstreamModel = resolveEffectiveModel({ roleModel: upstreamSource, agentCli: input.agentCli, settingsConfig }) ?? upstreamSource;
   if (input.agentCli === "pi" && model) {
-    const preferred = resolvePiPreferredProvider({ model, settingsConfig });
-    model = qualifyPiModelRef(model, configFiles, preferred) ?? model;
+    model = resolvePiCliModelSelection({ model, settingsConfig }).cliModel;
   }
   return {
     model,
@@ -593,6 +592,37 @@ export function splitPiModelRef(model: string): { provider?: string; modelId: st
   return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
 }
 
+/**
+ * Pi `--model` accepts the catalog model id. A namespaced `provider/model`
+ * is a route + id pair: freeze/pass `modelId`, not `deepsonar/<id>`.
+ * If the full string is itself a declared model id (OpenRouter-style), keep it.
+ */
+export function resolvePiCliModelSelection(input: {
+  model: string;
+  settingsConfig?: unknown;
+}): { provider?: string; cliModel: string } {
+  const trimmed = input.model.trim();
+  if (!trimmed) return { cliModel: "" };
+  const split = splitPiModelRef(trimmed);
+  const declared = extractModelsFromSettings(input.settingsConfig);
+  const declaredIds = [...new Set(declared.flatMap((id) => {
+    const inner = splitPiModelRef(id).modelId;
+    return inner && inner !== id ? [id, inner] : [id];
+  }))];
+  if (declared.includes(trimmed) || declaredIds.includes(trimmed)) {
+    return split.provider ? { provider: split.provider, cliModel: trimmed } : { cliModel: trimmed };
+  }
+  const cliModel = split.modelId || trimmed;
+  if (declaredIds.length > 0 && !declaredIds.includes(cliModel)) {
+    throw new Error(
+      `PI_MODEL_UNAVAILABLE: path model 不可用。Pi CLI --model 需要目录中的模型 id（${cliModel}），`
+      + `不能使用未登记的 selector ${trimmed}。已声明：${declaredIds.join(", ")}。`
+      + `请修改 RoleConfig.model 或 Provider models。`,
+    );
+  }
+  return split.provider ? { provider: split.provider, cliModel } : { cliModel };
+}
+
 function providerHasModelId(rawProvider: unknown, modelId: string): boolean {
   const provider = asObject(rawProvider);
   if (Array.isArray(provider.models)) return provider.models.some((raw) => asObject(raw).id === modelId);
@@ -606,7 +636,7 @@ export function resolvePiPreferredProvider(input: { model?: string | null; setti
   return split.provider || official?.route || null;
 }
 
-/** Pi CLI --model 需要 provider/model；裸模型 ID 会变成 provider= 空、请求发不出去。 */
+/** Namespaced `provider/model` route form for catalog lookup. Not the Pi CLI `--model` value. */
 export function qualifyPiModelRef(
   model: string | undefined,
   files: readonly MaterializedConfigFile[],

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- Pi 真实 Job 不再把 `deepsonar/<model>` 原样传给 `--model`：快照冻结 CLI 目录 id，adapter 映射已冻结的 provider 前缀；目录中不存在的模型在创建/解析快照时以 `PI_MODEL_UNAVAILABLE` 失败，而不是 Agent CLI 启动后才退出（#468）。
+
 ## [0.3.1] - 2026-09-12
 
 ### 新增

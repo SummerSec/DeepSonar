@@ -184,7 +184,9 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 `~/.pi/agent/skills/deepsonar-control/SKILL.md`，引导调用
 `GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list`；返回的每个获准 operation 直接携带输入 JSON Schema，后续请求由短期 Job token 和
 冻结 operation allowlist 再次鉴权。Provider 配置物化为 `.pi/agent/models.json` 与
-`.pi/agent/auth.json`，`--model` 使用 `provider/model`；模型请求统一改写到 Gateway，
+`.pi/agent/auth.json`。`--model` 使用 Provider 目录中的模型 `id`（例如 `grok-4.6`），
+不是 DeepSonar 默认路由前缀 `deepsonar/<id>`；adapter 会把已冻结的 `provider/model`
+映射为 CLI model id。模型请求统一改写到 Gateway，
 长期密钥不进入 snapshot、workspace、运行清单或 evidence。空 content / 零 usage 视为协议错误。
 
 项目 `.pi` 目录不会自动加载。`--no-extensions` 始终保留。RoleConfig `pi_extensions`

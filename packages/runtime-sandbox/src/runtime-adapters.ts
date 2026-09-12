@@ -43,6 +43,24 @@ export interface AgentRuntimeProjectionInput {
   platformSystemPrompt?: string | null;
 }
 
+/** Split `provider/model` on the first slash. OpenRouter-style ids stay in `modelId`. */
+export function splitPiModelRef(model: string): { provider?: string; modelId: string } {
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) return { modelId: trimmed };
+  return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
+}
+
+/**
+ * Pi `--model` looks up the catalog `id` (e.g. `grok-4.6`), not the DeepSonar
+ * provider route (`deepsonar/grok-4.6`). Leftover namespaced snapshot values
+ * must be mapped here so already-frozen Jobs can start.
+ */
+export function resolvePiCliModelId(model: string | undefined | null): string | undefined {
+  if (!model?.trim()) return undefined;
+  return splitPiModelRef(model).modelId || undefined;
+}
+
 export interface AdapterStartContext {
   host: RuntimeHost;
   env: Record<string, string>;
@@ -614,7 +632,8 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
   }).join("");
   let command = `pi --mode rpc --no-approve --no-extensions --session-dir /workspace/.deepsonar-home/.pi/agent${extensions}`;
   if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
-  if (context.model) command += ` --model ${shellQuote(context.model)}`;
+  const cliModel = resolvePiCliModelId(context.model);
+  if (cliModel) command += ` --model ${shellQuote(cliModel)}`;
   if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
   if (context.systemPromptPath) command += ` --append-system-prompt \"$(cat ${shellQuote(context.systemPromptPath)})\"`;
   return host.runAsync(command, { cwd: context.cwd, env: context.env });
