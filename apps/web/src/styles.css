@@ -59,6 +59,21 @@
   --broadcast-planned: #fbbf24;
   --broadcast-unknown: #a1a1aa;
   --broadcast-failed: #ff8178;
+  --surface-raised: var(--panel-raised);
+  --surface-thead: #0d1012;
+  --surface-node: #0c1012;
+  --surface-node-control: #101315;
+  --surface-node-ink: #e8ecee;
+  --surface-command: #070809;
+  --surface-error: #1a0d0d;
+  --badge-critical: #ed6a7f;
+  --badge-high: #ec8c5d;
+  --badge-medium: #e8bd70;
+  --badge-failed: #ed6a7f;
+  --badge-running: #6fbbe8;
+  --badge-success: #65e6b4;
+  --badge-warn: #e8bd70;
+  --badge-pending: #7f8796;
 }
 
 /* 主题感知浮层 / 抽屉 / 卡片（避免硬编码 #0b0f12 等导致亮色主题失效） */
@@ -2876,6 +2891,21 @@ html[data-color-scheme="light"] {
   --color-warn-400: #90610f;
   --color-crit-500: #c02e37;
   --color-high-500: #a8532f;
+  --surface-raised: var(--panel-raised);
+  --surface-thead: #e8ebf0;
+  --surface-node: #121719;
+  --surface-node-control: #101315;
+  --surface-node-ink: #e8ecee;
+  --surface-command: #f0f2f5;
+  --surface-error: #fdf4f4;
+  --badge-critical: #c02e37;
+  --badge-high: #a8532f;
+  --badge-medium: #90610f;
+  --badge-failed: #b4232b;
+  --badge-running: #087f98;
+  --badge-success: #177c50;
+  --badge-warn: #90610f;
+  --badge-pending: #65707c;
 }
 /* 瓷白：略暖的白，仍属白色调 */
 html[data-color-scheme="light"][data-accent-theme="porcelain"] {
@@ -2891,6 +2921,8 @@ html[data-color-scheme="light"][data-accent-theme="porcelain"] {
   --surface-control: #f5f4f1;
   --surface-disabled: #e6e4de;
 
+  --surface-thead: #e8e6df;
+  --surface-command: #f3f1ec;
 }
 /* 雾白：比瓷白略沉的冷白 */
 html[data-color-scheme="light"][data-accent-theme="mist"] {
@@ -2911,6 +2943,8 @@ html[data-color-scheme="light"][data-accent-theme="mist"] {
   --color-ink-850: #e2e6ec;
   --color-ink-800: #d4d9e1;
   --color-ink-700: #b8c0cb;
+  --surface-thead: #dfe3e9;
+  --surface-command: #e8ebf0;
 }
 /* 珊瑚纸台：暖白工作台 + 珊瑚橙强调，低饱和灰阶 */
 html[data-color-scheme="light"][data-accent-theme="coral"] {
@@ -2938,6 +2972,13 @@ html[data-color-scheme="light"][data-accent-theme="coral"] {
   --color-ink-850: #eceae4;
   --color-ink-800: #e0ddd6;
   --color-ink-700: #c8c4bb;
+  --surface-raised: #fffcf9;
+  --surface-thead: #eceae4;
+  --surface-node: #fffcf9;
+  --surface-node-control: #f6f5f2;
+  --surface-node-ink: #1a1a18;
+  --surface-command: #f6f5f2;
+  --surface-error: #f8ece8;
 }
 html[data-color-scheme="light"] ::-webkit-scrollbar-track { background: #e2e5ea; }
 html[data-color-scheme="light"] ::-webkit-scrollbar-thumb { background: #b4bac3; }
