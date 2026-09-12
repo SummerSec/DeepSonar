@@ -10,6 +10,7 @@
 
 ### 修复
 
+- 亮色主题为加载骨架、空状态、移动端壳层、选择器/模块选择、角色与凭据配置、intent launch 与 task handoff 补齐 `surface-control` / `surface-hover` / `surface-selected` / `surface-disabled` 等语义 token，不再复用近黑十六进制表面（#472）。
 - Pi 真实 Job 不再把 `deepsonar/<model>` 原样传给 `--model`：快照冻结 CLI 目录 id，adapter 映射已冻结的 provider 前缀；目录中不存在的模型在创建/解析快照时以 `PI_MODEL_UNAVAILABLE` 失败，而不是 Agent CLI 启动后才退出（#468）。
 - 亮色主题把表格、筛选、列表选中/hover/focus、抽屉和命令面板迁到独立语义 token（`surface-selected` / `surface-hover` / `surface-control` 等），Finding / Job 选中行不再复用近黑背景（#471）。
 
