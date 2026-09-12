@@ -1,7 +1,8 @@
 export const STATUS_COLOR: Record<string, string> = {
   active: "#6fbbe8", running: "#6fbbe8", claimed: "#6fbbe8", provisioning: "#6fbbe8", generating: "#6fbbe8", reporting: "#6fbbe8", verifying: "#6fbbe8",
-  succeeded: "#65e6b4", confirmed: "#65e6b4", verified: "#65e6b4", analysis_complete: "#65e6b4",
-  pending: "#7f8796", unverified: "#7f8796", cancelled: "#7f8796", false_positive: "#7f8796",
+  succeeded: "#65e6b4", confirmed: "#65e6b4", verified: "#65e6b4", analysis_complete: "#65e6b4", readable: "#65e6b4",
+  pending: "#7f8796", unverified: "#7f8796", cancelled: "#7f8796", false_positive: "#7f8796", not_yet_generated: "#7f8796",
+  stale: "#e8bd70",
   open: "#e8bd70", needs_human: "#e8bd70", waiting_human: "#e8bd70",
   failed: "#ed6a7f", rejected: "#ed6a7f", timeout: "#ed6a7f", orphan: "#ed6a7f",
 };

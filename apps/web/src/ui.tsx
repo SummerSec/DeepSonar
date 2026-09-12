@@ -15,6 +15,9 @@ import { STATUS_COLOR, SEVERITY_COLOR } from "./semantics";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "等待中",
+  readable: "可阅读",
+  not_yet_generated: "尚未生成",
+  stale: "已过时",
   generating: "生成中",
   claimed: "已领取",
   provisioning: "准备环境",
