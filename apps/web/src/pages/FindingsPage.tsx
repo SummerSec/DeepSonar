@@ -27,8 +27,8 @@ import {
   SeverityBadge,
   formatTime,
   relativeTime,
+  tableRowClass,
   tdCls,
-  trHover,
 } from "../ui";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -477,7 +477,8 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
                 visible.map((f) => (
                   <tr
                     key={f.id}
-                    className={`${trHover} cursor-pointer`}
+                    className={tableRowClass(selectedFinding === f.id)}
+                    aria-selected={selectedFinding === f.id}
                     onClick={() => openFinding(f.id)}
                   >
                     {scope === "project" && (
@@ -605,7 +606,7 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
         ) : (
           <div className="grid gap-3">
             {visible.map((finding) => (
-              <article key={finding.id} className="surface-shell text-left">
+              <article key={finding.id} className={`surface-shell text-left${selectedFinding === finding.id ? " is-selected" : ""}`}>
                 <div className="surface-core p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">

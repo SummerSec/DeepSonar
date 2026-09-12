@@ -211,7 +211,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
       style={{
         border: `1.5px solid color-mix(in srgb, ${displayColor} 55%, transparent)`,
         boxShadow: glow ?? `0 0 0 1px color-mix(in srgb, ${displayColor} 18%, transparent)`,
-        background: `linear-gradient(135deg, color-mix(in srgb, ${displayColor} 16%, #0c1012) 0%, #0c1012 48%)`,
+        background: `linear-gradient(135deg, color-mix(in srgb, ${displayColor} 16%, var(--surface-node)) 0%, var(--surface-node) 48%)`,
       }}
       data-kind={semantic}
       title={`${style.label} · ${style.hint}`}
