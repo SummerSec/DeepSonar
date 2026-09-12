@@ -662,14 +662,16 @@ export function resolvePiCliModelSelection(input: {
   const trimmed = input.model.trim();
   if (!trimmed) return { cliModel: "" };
   const split = splitPiModelRef(trimmed);
-  const providers = piProviderSource(input.settingsConfig, input.configFiles);
-  const providerIds = Object.keys(providers);
-  const catalogIds = listPiCatalogModelIds(providers, input.settingsConfig);
-  const declaredAliases = [...new Set(catalogIds.flatMap((id) => {
+  const settingsProviders = piProviderSource(input.settingsConfig);
+  const declaredCatalogIds = listPiCatalogModelIds(settingsProviders, input.settingsConfig);
+  const declaredAliases = [...new Set(declaredCatalogIds.flatMap((id) => {
     const inner = splitPiModelRef(id).modelId;
     return inner && inner !== id ? [id, inner] : [id];
   }))];
-  const exactCatalogId = catalogIds.includes(trimmed);
+  const providers = piProviderSource(input.settingsConfig, input.configFiles);
+  const providerIds = Object.keys(providers);
+  const catalogIds = listPiCatalogModelIds(providers, input.settingsConfig);
+  const exactCatalogId = catalogIds.includes(trimmed) || declaredCatalogIds.includes(trimmed);
   const cliModel = exactCatalogId ? trimmed : (split.modelId || trimmed);
   const hintedProvider = exactCatalogId ? undefined : split.provider;
   if (declaredAliases.length > 0 && !declaredAliases.includes(cliModel) && !declaredAliases.includes(trimmed)) {

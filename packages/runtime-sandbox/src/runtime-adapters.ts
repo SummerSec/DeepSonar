@@ -69,10 +69,14 @@ export function resolvePiCliLaunchFlags(
   model?: string | null,
   modelProvider?: string | null,
 ): { cliModel?: string; provider?: string } {
+  const provider = modelProvider?.trim() || undefined;
+  if (provider) {
+    const cliModel = model?.trim() || undefined;
+    return { ...(cliModel ? { cliModel } : {}), provider };
+  }
   const split = model?.trim() ? splitPiModelRef(model) : { modelId: "" };
   const cliModel = split.modelId || undefined;
-  const provider = modelProvider?.trim() || split.provider;
-  return { ...(cliModel ? { cliModel } : {}), ...(provider ? { provider } : {}) };
+  return { ...(cliModel ? { cliModel } : {}), ...(split.provider ? { provider: split.provider } : {}) };
 }
 
 export interface AdapterStartContext {
