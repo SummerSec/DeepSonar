@@ -211,7 +211,7 @@ try {
       jobGatewayAllowedModels,
       legacySettingsConfig,
       materializeProviderSettings,
-      qualifyPiModelRef,
+      splitPiModelRef,
       routeMaterializedProviderFilesThroughGateway,
     },
     { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings },
@@ -453,7 +453,7 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         cwd: "/workspace",
         input: prompt,
         model: selectedCli === "pi"
-          ? qualifyPiModelRef(plan.model, runtimeConfigFiles) ?? plan.model
+          ? splitPiModelRef(plan.model).modelId || plan.model
           : plan.model,
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
         systemPromptPath,

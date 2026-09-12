@@ -178,6 +178,53 @@ test("凭据 agent_cli 与角色不一致但 Provider 兼容时按角色解析",
   assert.deepEqual(snapshot.pi_extensions, []);
 });
 
+test("Pi snapshot freezes the CLI model id when RoleConfig stores a deepsonar/ prefix", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "pi",
+    model: "deepsonar/grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "openai",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "pi",
+    settings_config_json: {
+      provider: "openai",
+      baseUrl: "http://127.0.0.1/v1",
+      api: "openai-responses",
+      models: [{ id: "grok-4.6" }],
+    },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({
+      projectConfig: { image_strategy: "project_managed" },
+      projectCfg,
+      globalCfg: undefined,
+      credential,
+    }),
+    "project-1",
+    "audit",
+  );
+  assert.equal(snapshot.agent_cli, "pi");
+  assert.equal(snapshot.model, "grok-4.6");
+  assert.equal(snapshot.upstream_model, "grok-4.6");
+  assert.notEqual(snapshot.model, "deepsonar/grok-4.6");
+});
+
 test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可解析", async () => {
   const projectCfg = {
     id: "project-hub-cfg",

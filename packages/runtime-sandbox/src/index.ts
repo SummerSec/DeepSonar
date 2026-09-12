@@ -279,6 +279,8 @@ export {
   freezeAgentCliRuntime,
   getAgentCliRuntimeAdapter,
   requireAgentCliRuntimeAdapter,
+  resolvePiCliModelId,
+  splitPiModelRef,
 } from "./runtime-adapters.js";
 export type {
   AgentCliCapabilities,

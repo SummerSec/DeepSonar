@@ -15,6 +15,7 @@ import {
   providerSettingsForJobSnapshot,
   projectProviderRuntimeSnapshot,
   qualifyPiModelRef,
+  resolvePiCliModelSelection,
   resolvePiPreferredProvider,
   resolveContextWindowTokens,
   resolveEffectiveModel,
@@ -142,6 +143,13 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
   assert.match(routed[1]!.content, /"type": "api_key"/);
   assert.equal(qualifyPiModelRef("gpt-5", routed), "deepsonar/gpt-5");
   assert.equal(qualifyPiModelRef("deepsonar/gpt-5", routed), "deepsonar/gpt-5");
+  assert.deepEqual(resolvePiCliModelSelection({ model: "deepsonar/gpt-5", settingsConfig: settings }), {
+    provider: "deepsonar",
+    cliModel: "gpt-5",
+  });
+  assert.deepEqual(resolvePiCliModelSelection({ model: "gpt-5", settingsConfig: settings }), {
+    cliModel: "gpt-5",
+  });
 });
 
 test("Pi official multi-provider settings keep the default model on its declared route", () => {
@@ -170,8 +178,89 @@ test("Pi duplicate model IDs still honor agent-default-model.provider", () => {
   assert.equal(resolvePiPreferredProvider({ settingsConfig: settings }), "anthropic");
   assert.equal(qualifyPiModelRef("shared", files, "anthropic"), "anthropic/shared");
   const projection = projectProviderRuntimeSnapshot({ agentCli: "pi", roleModel: null, settingsConfig: settings, defaultModel: null });
-  assert.equal(projection.model, "anthropic/shared");
+  assert.equal(projection.model, "shared");
   assert.equal(projection.upstream_model, "shared");
+  assert.deepEqual(resolvePiCliModelSelection({ model: "anthropic/shared", settingsConfig: settings }), {
+    provider: "anthropic",
+    cliModel: "shared",
+  });
+});
+
+test("Pi Job snapshot freezes the CLI model id, not the deepsonar/ provider route", () => {
+  const settings = {
+    provider: "openai",
+    baseUrl: "http://127.0.0.1/v1",
+    api: "openai-responses",
+    models: [{ id: "grok-4.6" }],
+  };
+  const fromNamespaced = projectProviderRuntimeSnapshot({
+    agentCli: "pi",
+    roleModel: "deepsonar/grok-4.6",
+    settingsConfig: settings,
+    defaultModel: null,
+  });
+  assert.equal(fromNamespaced.model, "grok-4.6");
+  assert.equal(fromNamespaced.upstream_model, "grok-4.6");
+  const models = JSON.parse(fromNamespaced.config_files[0]!.content) as {
+    providers: { deepsonar: { models: Array<{ id: string }> } };
+  };
+  assert.equal(models.providers.deepsonar.models[0]?.id, "grok-4.6");
+  assert.notEqual(fromNamespaced.model, "deepsonar/grok-4.6");
+
+  const fromBare = projectProviderRuntimeSnapshot({
+    agentCli: "pi",
+    roleModel: "grok-4.6",
+    settingsConfig: settings,
+    defaultModel: null,
+  });
+  assert.equal(fromBare.model, "grok-4.6");
+  assert.equal(fromBare.upstream_model, "grok-4.6");
+});
+
+test("Pi snapshot keeps OpenRouter-style catalog ids that themselves contain a slash", () => {
+  const settings = {
+    providers: {
+      openrouter: {
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1/v1",
+        models: [{ id: "openai/gpt-4o" }],
+      },
+    },
+  };
+  const projection = projectProviderRuntimeSnapshot({
+    agentCli: "pi",
+    roleModel: "openrouter/openai/gpt-4o",
+    settingsConfig: settings,
+    defaultModel: null,
+  });
+  assert.equal(projection.model, "openai/gpt-4o");
+  assert.equal(projection.upstream_model, "openai/gpt-4o");
+  assert.deepEqual(resolvePiCliModelSelection({ model: "openai/gpt-4o", settingsConfig: settings }), {
+    provider: "openai",
+    cliModel: "openai/gpt-4o",
+  });
+});
+
+test("Pi unavailable model fails at snapshot freeze with provider/model feedback", () => {
+  const settings = {
+    provider: "openai",
+    baseUrl: "http://127.0.0.1/v1",
+    api: "openai-responses",
+    models: [{ id: "grok-4.6" }],
+  };
+  assert.throws(
+    () => projectProviderRuntimeSnapshot({
+      agentCli: "pi",
+      roleModel: "deepsonar/not-a-model",
+      settingsConfig: settings,
+      defaultModel: null,
+    }),
+    /PI_MODEL_UNAVAILABLE: path model.*not-a-model.*grok-4\.6/,
+  );
+  assert.throws(
+    () => resolvePiCliModelSelection({ model: "missing-model", settingsConfig: settings }),
+    /PI_MODEL_UNAVAILABLE: path model/,
+  );
 });
 
 test("materializeProviderSettings returns empty for empty settings", () => {
@@ -454,6 +543,14 @@ test("Pi extracts official llm-pi-ai YAML and JSON the same way as DSH", () => {
   const materialized = JSON.parse(file!.content) as { providers: { xxxx: { baseUrl: string; models: Array<{ id: string }> } } };
   assert.equal(materialized.providers.xxxx.baseUrl, "http://127.0.0.1/v1");
   assert.equal(materialized.providers.xxxx.models[0]?.id, "gpt-5.6");
+  const projection = projectProviderRuntimeSnapshot({
+    agentCli: "pi",
+    roleModel: null,
+    settingsConfig: officialLlmPiAiJson,
+    defaultModel: null,
+  });
+  assert.equal(projection.model, "gpt-5.6");
+  assert.equal(projection.upstream_model, "gpt-5.6");
 });
 
 test("DSH settings expose an arbitrary Pi AI route model and upstream base URL", () => {

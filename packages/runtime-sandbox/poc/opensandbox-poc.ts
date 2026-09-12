@@ -665,8 +665,8 @@ ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
 const POC_HOME = "/workspace/.deepsonar-home";
 const POC_MOCK_BASE = "http://127.0.0.1:8765";
 
-function pocCliModel(id: AgentCliId): string {
-  return id === "pi" ? "deepsonar/dummy" : "dummy";
+function pocCliModel(_id: AgentCliId): string {
+  return "dummy";
 }
 
 function pocDshProvider() {

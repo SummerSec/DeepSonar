@@ -10,6 +10,8 @@ import {
 import { mapCliEvent } from "./runtime-agent.js";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
+  resolvePiCliModelId,
+  splitPiModelRef,
   PiJsonlFramer,
   agentCliIdsCompatibleWithImage,
   applyRuntimeOutput,
@@ -346,6 +348,40 @@ test("Pi JSONL framing 对半帧、非法 UTF-8、空行和未知事件失败关
   assert.throws(() => parsePiJsonlRecord("[]"), /PI_RPC_RECORD_NOT_OBJECT/);
   const oversized = new PiJsonlFramer(8);
   assert.throws(() => oversized.push('{"type":"response"}\n'), /PI_RPC_MESSAGE_TOO_LARGE/);
+});
+
+test("Pi adapter maps namespaced provider model to the CLI model id", async () => {
+  assert.deepEqual(splitPiModelRef("deepsonar/grok-4.6"), { provider: "deepsonar", modelId: "grok-4.6" });
+  assert.deepEqual(splitPiModelRef("openrouter/openai/gpt-4o"), { provider: "openrouter", modelId: "openai/gpt-4o" });
+  assert.deepEqual(splitPiModelRef("grok-4.6"), { modelId: "grok-4.6" });
+  assert.equal(resolvePiCliModelId("deepsonar/grok-4.6"), "grok-4.6");
+  assert.equal(resolvePiCliModelId("anthropic/shared"), "shared");
+  assert.equal(resolvePiCliModelId("grok-4.6"), "grok-4.6");
+  assert.equal(resolvePiCliModelId("openrouter/openai/gpt-4o"), "openai/gpt-4o");
+
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const namespaced = fakeSandbox();
+  await adapter.start({
+    host: namespaced.host,
+    env: {},
+    cwd: "/workspace",
+    input: "initial",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    model: "deepsonar/grok-4.6",
+  });
+  assert.match(namespaced.commands[0] ?? "", /--model 'grok-4\.6'/);
+  assert.doesNotMatch(namespaced.commands[0] ?? "", /--model 'deepsonar\/grok-4\.6'/);
+
+  const bare = fakeSandbox();
+  await adapter.start({
+    host: bare.host,
+    env: {},
+    cwd: "/workspace",
+    input: "initial",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    model: "grok-4.6",
+  });
+  assert.match(bare.commands[0] ?? "", /--model 'grok-4\.6'/);
 });
 
 test("Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复", async () => {

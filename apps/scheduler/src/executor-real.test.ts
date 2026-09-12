@@ -142,7 +142,7 @@ test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () 
   assert.match(source, /adapter\.materialize/);
   assert.match(source, /legacySettingsConfig/);
   assert.match(source, /routeMaterializedProviderFilesThroughGateway/);
-  assert.match(source, /qualifyPiModelRef/);
+  assert.match(source, /splitPiModelRef/);
   assert.match(source, /encodeGetState/);
   assert.match(source, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
   assert.match(source, /const vendorCliIds = \["claude-code", "pi", "dsh"\] as const/);
