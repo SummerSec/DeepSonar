@@ -161,8 +161,7 @@ test("legacy open-kritt localStorage value migrates to coral and is not written 
 
   persistAccentTheme(theme, storage);
   assert.equal(storage.getItem(ACCENT_THEME_STORAGE_KEY), "coral");
-  assert.ok(storage.writes.every((value) => value === "coral"));
-  assert.ok(!storage.writes.includes(LEGACY_CORAL_STORAGE_VALUE));
+  assert.equal(storage.writes.join(","), "coral,coral");
 });
 
 test("existing mint/arctic/lime/titanium/porcelain/mist accent tokens stay unchanged", () => {
