@@ -42,11 +42,32 @@ export async function projectScopeHook(req: FastifyRequest, reply: FastifyReply)
   if (routeUrl.startsWith("/canvases/:id/facts/:nodeId") && !isUuid(params.nodeId)) {
     return reply.code(400).send({ error: "invalid Fact node id", error_code: "INVALID_ID" });
   }
-  const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay") && query.project_id && !isUuid(query.project_id)) {
+  if (routeUrl.startsWith("/projects/:id/runtime-images/:imageId") && !isUuid(params.imageId)) {
+    return reply.code(400).send({ error: "invalid runtime image id", error_code: "INVALID_ID" });
+  }
+  if (routeUrl.startsWith("/projects/:id") && !isUuid(params.id)) {
     return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
   }
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay") && query.canvas_id && !isUuid(query.canvas_id)) {
+  if (routeUrl.startsWith("/credentials/:id") && !isUuid(params.id)) {
+    return reply.code(400).send({ error: "invalid credential id", error_code: "INVALID_ID" });
+  }
+  if (routeUrl.startsWith("/skill-sources/:id") && !isUuid(params.id)) {
+    return reply.code(400).send({ error: "invalid skill source id", error_code: "INVALID_ID" });
+  }
+  if (routeUrl.startsWith("/runtime-images/:id") && !isUuid(params.id)) {
+    return reply.code(400).send({ error: "invalid runtime image id", error_code: "INVALID_ID" });
+  }
+  if (routeUrl.startsWith("/runtime-image-versions/:id") && !isUuid(params.id)) {
+    return reply.code(400).send({ error: "invalid runtime image version id", error_code: "INVALID_ID" });
+  }
+  if (routeUrl.startsWith("/tokens/:id") && !isUuid(params.id)) {
+    return reply.code(400).send({ error: "invalid token id", error_code: "INVALID_ID" });
+  }
+  const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
+  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/runtime-images") && query.project_id && !isUuid(query.project_id)) {
+    return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
+  }
+  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/runtime-images") && query.canvas_id && !isUuid(query.canvas_id)) {
     return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
   }
   const actorProjectId = req.actor?.projectId;
