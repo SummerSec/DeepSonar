@@ -22,7 +22,7 @@ import {
   type ReasoningValue,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
-import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
+import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiDocument, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
 import { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel } from "./provider-effective-model.js";
 export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 
@@ -455,6 +455,8 @@ export function extractReasoningFromSettings(agentCli: string, settingsConfig: u
 export interface ProviderRuntimeSnapshotProjection {
   model: string | null;
   upstream_model: string | null;
+  /** Frozen Pi models.json route for `--provider`. Null for non-Pi CLIs. */
+  pi_provider: string | null;
   reasoning: ReasoningValue | null;
   context_window_tokens: number | null;
   settings_config_json: Record<string, unknown>;
@@ -503,12 +505,20 @@ export function projectProviderRuntimeSnapshot(input: {
   }
   const upstreamSource = input.agentCli === "pi" && model ? (splitPiModelRef(model).modelId || model) : model;
   const upstreamModel = resolveEffectiveModel({ roleModel: upstreamSource, agentCli: input.agentCli, settingsConfig }) ?? upstreamSource;
+  let piProvider: string | null = null;
   if (input.agentCli === "pi" && model) {
-    model = resolvePiCliModelSelection({ model, settingsConfig }).cliModel;
+    const selected = resolvePiCliLaunchSelection({
+      model,
+      settingsConfig,
+      configFiles,
+    });
+    model = selected.cliModel;
+    piProvider = selected.provider;
   }
   return {
     model,
     upstream_model: upstreamModel,
+    pi_provider: input.agentCli === "pi" ? piProvider : null,
     reasoning,
     context_window_tokens: contextWindowTokens,
     settings_config_json: settingsConfig,
@@ -592,35 +602,146 @@ export function splitPiModelRef(model: string): { provider?: string; modelId: st
   return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
 }
 
+function listPiProviderModelIds(rawProvider: unknown): string[] {
+  const provider = asObject(rawProvider);
+  if (Array.isArray(provider.models)) {
+    return provider.models.flatMap((raw) => {
+      const id = asObject(raw).id;
+      return typeof id === "string" && id.trim() ? [id.trim()] : [];
+    });
+  }
+  return Object.keys(asObject(provider.models));
+}
+
+/** Same provider map materializeProviderSettings writes into models.json. */
+function piProviderSource(
+  settingsConfig?: unknown,
+  configFiles?: readonly MaterializedConfigFile[],
+): Record<string, unknown> {
+  const modelsFile = configFiles?.find((item) => item.path === ".pi/agent/models.json");
+  if (modelsFile) {
+    try {
+      const providers = asObject(asObject(JSON.parse(modelsFile.content) as unknown).providers);
+      if (Object.keys(providers).length > 0) return providers;
+    } catch {
+      // Fall through to settings; freeze/start still validate the catalog id.
+    }
+  }
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official && Object.keys(official.providers).length > 0) return official.providers;
+  const settings = asObject(settingsConfig);
+  const configured = asObject(settings.providers);
+  if (Object.keys(configured).length > 0) return configured;
+  return Object.keys(settings).length > 0 ? { deepsonar: settings } : {};
+}
+
+function listPiCatalogModelIds(providers: Record<string, unknown>, settingsConfig?: unknown): string[] {
+  const found: string[] = [];
+  const push = (value: string) => {
+    if (value && !found.includes(value)) found.push(value);
+  };
+  for (const rawProvider of Object.values(providers)) {
+    for (const id of listPiProviderModelIds(rawProvider)) push(id);
+  }
+  for (const id of extractModelsFromSettings(settingsConfig)) push(id);
+  return found;
+}
+
 /**
  * Pi `--model` accepts the catalog model id. A namespaced `provider/model`
  * is a route + id pair: freeze/pass `modelId`, not `deepsonar/<id>`.
  * If the full string is itself a declared model id (OpenRouter-style), keep it.
+ * The returned `provider` is the authenticated models.json route for `--provider`.
  */
 export function resolvePiCliModelSelection(input: {
   model: string;
   settingsConfig?: unknown;
+  configFiles?: readonly MaterializedConfigFile[];
+  frozenProvider?: string | null;
 }): { provider?: string; cliModel: string } {
   const trimmed = input.model.trim();
   if (!trimmed) return { cliModel: "" };
   const split = splitPiModelRef(trimmed);
-  const declared = extractModelsFromSettings(input.settingsConfig);
-  const declaredIds = [...new Set(declared.flatMap((id) => {
+  const providers = piProviderSource(input.settingsConfig, input.configFiles);
+  const providerIds = Object.keys(providers);
+  const catalogIds = listPiCatalogModelIds(providers, input.settingsConfig);
+  const declaredAliases = [...new Set(catalogIds.flatMap((id) => {
     const inner = splitPiModelRef(id).modelId;
     return inner && inner !== id ? [id, inner] : [id];
   }))];
-  if (declared.includes(trimmed) || declaredIds.includes(trimmed)) {
-    return split.provider ? { provider: split.provider, cliModel: trimmed } : { cliModel: trimmed };
-  }
-  const cliModel = split.modelId || trimmed;
-  if (declaredIds.length > 0 && !declaredIds.includes(cliModel)) {
+  const exactCatalogId = catalogIds.includes(trimmed);
+  const cliModel = exactCatalogId ? trimmed : (split.modelId || trimmed);
+  const hintedProvider = exactCatalogId ? undefined : split.provider;
+  if (declaredAliases.length > 0 && !declaredAliases.includes(cliModel) && !declaredAliases.includes(trimmed)) {
     throw new Error(
       `PI_MODEL_UNAVAILABLE: path model 不可用。Pi CLI --model 需要目录中的模型 id（${cliModel}），`
-      + `不能使用未登记的 selector ${trimmed}。已声明：${declaredIds.join(", ")}。`
+      + `不能使用未登记的 selector ${trimmed}。已声明：${declaredAliases.join(", ")}。`
       + `请修改 RoleConfig.model 或 Provider models。`,
     );
   }
-  return split.provider ? { provider: split.provider, cliModel } : { cliModel };
+  const frozen = input.frozenProvider?.trim() || undefined;
+  if (frozen && (providerIds.length === 0 || providerIds.includes(frozen))) {
+    return { provider: frozen, cliModel };
+  }
+  if (hintedProvider && providerIds.includes(hintedProvider)) {
+    return { provider: hintedProvider, cliModel };
+  }
+  const preferred = explicitOfficialPiRoute(input.settingsConfig);
+  if (preferred && providerIds.includes(preferred)) {
+    return { provider: preferred, cliModel };
+  }
+  const matches = providerIds.filter((id) => providerHasModelId(providers[id], cliModel));
+  if (matches.length === 1) return { provider: matches[0], cliModel };
+  if (providerIds.length === 1) return { provider: providerIds[0], cliModel };
+  if (matches.length > 1) {
+    throw new Error(
+      `PI_MODEL_UNAVAILABLE: path model 在多个已认证 Pi provider 间有歧义（${cliModel} → ${
+        matches.map((id) => `${id}/${cliModel}`).join(", ")
+      }）。请在 RoleConfig.model 使用 provider/model，或为 agent-default-model 指定唯一 provider。`,
+    );
+  }
+  if (hintedProvider) return { provider: hintedProvider, cliModel };
+  if (providerIds.length === 0) return { provider: "deepsonar", cliModel };
+  return { cliModel };
+}
+
+/** Unique authenticated Pi route + catalog id. Fail closed when the id is ambiguous. */
+export function resolvePiCliLaunchSelection(input: {
+  model: string;
+  settingsConfig?: unknown;
+  configFiles?: readonly MaterializedConfigFile[];
+  frozenProvider?: string | null;
+}): { provider: string; cliModel: string } {
+  const selected = resolvePiCliModelSelection(input);
+  if (!selected.cliModel) {
+    throw new Error("PI_MODEL_UNAVAILABLE: path model 为空，无法冻结 Pi CLI 模型。");
+  }
+  if (!selected.provider) {
+    throw new Error(
+      `PI_MODEL_UNAVAILABLE: path model 无法唯一确定已认证 Pi provider（${selected.cliModel}）。`
+      + `请在 RoleConfig.model 使用 provider/model，或确保冻结的 models.json 只有一个已认证路由。`,
+    );
+  }
+  return { provider: selected.provider, cliModel: selected.cliModel };
+}
+
+/** Validate a frozen Job snapshot before expensive sandbox provision. */
+export function assertPiSnapshotLaunchSelection(snapshot: {
+  agent_cli?: string | null;
+  model?: string | null;
+  pi_provider?: string | null;
+  settings_config_json?: unknown;
+  config_files?: readonly MaterializedConfigFile[];
+}): { provider: string; cliModel: string } | null {
+  if (snapshot.agent_cli !== "pi") return null;
+  const model = snapshot.model?.trim();
+  if (!model) return null;
+  return resolvePiCliLaunchSelection({
+    model,
+    frozenProvider: snapshot.pi_provider,
+    settingsConfig: snapshot.settings_config_json,
+    configFiles: snapshot.config_files,
+  });
 }
 
 function providerHasModelId(rawProvider: unknown, modelId: string): boolean {
@@ -629,11 +750,19 @@ function providerHasModelId(rawProvider: unknown, modelId: string): boolean {
   return Boolean(modelId && Object.prototype.hasOwnProperty.call(asObject(provider.models), modelId));
 }
 
+function explicitOfficialPiRoute(settingsConfig?: unknown): string | undefined {
+  const root = readOfficialLlmPiAiDocument(settingsConfig);
+  const selected = asObject(root?.["agent-default-model"]).provider;
+  if (typeof selected !== "string" || !selected.trim()) return undefined;
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  return official?.providers[selected.trim()] ? selected.trim() : undefined;
+}
+
 export function resolvePiPreferredProvider(input: { model?: string | null; settingsConfig: unknown }): string | null {
   const official = readOfficialLlmPiAiSettings(input.settingsConfig);
   const raw = input.model?.trim() || official?.defaultModel || "";
   const split = raw ? splitPiModelRef(raw) : { modelId: "" };
-  return split.provider || official?.route || null;
+  return split.provider || explicitOfficialPiRoute(input.settingsConfig) || official?.route || null;
 }
 
 /** Namespaced `provider/model` route form for catalog lookup. Not the Pi CLI `--model` value. */

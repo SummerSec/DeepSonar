@@ -33,6 +33,8 @@ export interface RealAgentSpec {
   runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
   model?: string;
+  /** Frozen Pi models.json route; adapter passes `--provider`. */
+  modelProvider?: string;
   /** 思考/推理强度；缺省由 provider 默认 */
   reasoning?: ReasoningEffort;
   /** Frozen llm-pi-ai provider route and profile for DSH. */
@@ -1305,6 +1307,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
+    ...(spec.modelProvider ? { modelProvider: spec.modelProvider } : {}),
     reasoning: spec.reasoning,
     dshProvider: spec.dshProvider,
     dshTaskMode: spec.dshTaskMode,
@@ -1332,6 +1335,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
+    ...(spec.modelProvider ? { modelProvider: spec.modelProvider } : {}),
     reasoning: spec.reasoning,
     dshProvider: spec.dshProvider,
     dshTaskMode: spec.dshTaskMode,

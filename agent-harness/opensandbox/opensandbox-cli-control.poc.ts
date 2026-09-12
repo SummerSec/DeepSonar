@@ -455,6 +455,9 @@ post mark_job_done '{"summary":"Vendor-model Platform API proof finished."}'
         model: selectedCli === "pi"
           ? splitPiModelRef(plan.model).modelId || plan.model
           : plan.model,
+        ...(selectedCli === "pi" && splitPiModelRef(plan.model).provider
+          ? { modelProvider: splitPiModelRef(plan.model).provider }
+          : {}),
         mcpConfigPath: "/workspace/.deepsonar/mcp.json",
         systemPromptPath,
         contextIdentity: state.contextIdentity,

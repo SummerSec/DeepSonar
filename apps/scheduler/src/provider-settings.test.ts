@@ -15,6 +15,8 @@ import {
   providerSettingsForJobSnapshot,
   projectProviderRuntimeSnapshot,
   qualifyPiModelRef,
+  assertPiSnapshotLaunchSelection,
+  resolvePiCliLaunchSelection,
   resolvePiCliModelSelection,
   resolvePiPreferredProvider,
   resolveContextWindowTokens,
@@ -148,6 +150,7 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
     cliModel: "gpt-5",
   });
   assert.deepEqual(resolvePiCliModelSelection({ model: "gpt-5", settingsConfig: settings }), {
+    provider: "deepsonar",
     cliModel: "gpt-5",
   });
 });
@@ -180,6 +183,7 @@ test("Pi duplicate model IDs still honor agent-default-model.provider", () => {
   const projection = projectProviderRuntimeSnapshot({ agentCli: "pi", roleModel: null, settingsConfig: settings, defaultModel: null });
   assert.equal(projection.model, "shared");
   assert.equal(projection.upstream_model, "shared");
+  assert.equal(projection.pi_provider, "anthropic");
   assert.deepEqual(resolvePiCliModelSelection({ model: "anthropic/shared", settingsConfig: settings }), {
     provider: "anthropic",
     cliModel: "shared",
@@ -201,6 +205,7 @@ test("Pi Job snapshot freezes the CLI model id, not the deepsonar/ provider rout
   });
   assert.equal(fromNamespaced.model, "grok-4.6");
   assert.equal(fromNamespaced.upstream_model, "grok-4.6");
+  assert.equal(fromNamespaced.pi_provider, "deepsonar");
   const models = JSON.parse(fromNamespaced.config_files[0]!.content) as {
     providers: { deepsonar: { models: Array<{ id: string }> } };
   };
@@ -215,6 +220,7 @@ test("Pi Job snapshot freezes the CLI model id, not the deepsonar/ provider rout
   });
   assert.equal(fromBare.model, "grok-4.6");
   assert.equal(fromBare.upstream_model, "grok-4.6");
+  assert.equal(fromBare.pi_provider, "deepsonar");
 });
 
 test("Pi snapshot keeps OpenRouter-style catalog ids that themselves contain a slash", () => {
@@ -235,9 +241,70 @@ test("Pi snapshot keeps OpenRouter-style catalog ids that themselves contain a s
   });
   assert.equal(projection.model, "openai/gpt-4o");
   assert.equal(projection.upstream_model, "openai/gpt-4o");
+  assert.equal(projection.pi_provider, "openrouter");
   assert.deepEqual(resolvePiCliModelSelection({ model: "openai/gpt-4o", settingsConfig: settings }), {
-    provider: "openai",
+    provider: "openrouter",
     cliModel: "openai/gpt-4o",
+  });
+});
+
+test("Pi ambiguous catalog id resolves to the authenticated models.json route", () => {
+  const settings = {
+    provider: "openai",
+    baseUrl: "http://127.0.0.1/v1",
+    api: "openai-responses",
+    models: [{ id: "grok-4.6" }],
+  };
+  assert.deepEqual(resolvePiCliLaunchSelection({ model: "grok-4.6", settingsConfig: settings }), {
+    provider: "deepsonar",
+    cliModel: "grok-4.6",
+  });
+  assert.deepEqual(resolvePiCliLaunchSelection({ model: "deepsonar/grok-4.6", settingsConfig: settings }), {
+    provider: "deepsonar",
+    cliModel: "grok-4.6",
+  });
+  const leftover = projectProviderRuntimeSnapshot({
+    agentCli: "pi",
+    roleModel: "grok-4.6",
+    settingsConfig: settings,
+    defaultModel: null,
+  });
+  assert.deepEqual(
+    assertPiSnapshotLaunchSelection({
+      agent_cli: "pi",
+      model: "grok-4.6",
+      settings_config_json: leftover.settings_config_json,
+      config_files: leftover.config_files,
+    }),
+    { provider: "deepsonar", cliModel: "grok-4.6" },
+  );
+});
+
+test("Pi multi-provider settings fail closed when the catalog id is ambiguous", () => {
+  const settings = {
+    "llm-pi-ai": {
+      providers: {
+        openai: { baseURL: "http://127.0.0.1/openai", models: [{ id: "grok-4.6" }] },
+        xai: { baseURL: "http://127.0.0.1/xai", models: [{ id: "grok-4.6" }] },
+      },
+    },
+  };
+  assert.throws(
+    () => resolvePiCliLaunchSelection({ model: "grok-4.6", settingsConfig: settings }),
+    /PI_MODEL_UNAVAILABLE: path model 在多个已认证 Pi provider 间有歧义.*openai\/grok-4\.6.*xai\/grok-4\.6/,
+  );
+  assert.throws(
+    () => projectProviderRuntimeSnapshot({
+      agentCli: "pi",
+      roleModel: "grok-4.6",
+      settingsConfig: settings,
+      defaultModel: null,
+    }),
+    /PI_MODEL_UNAVAILABLE: path model 在多个已认证 Pi provider 间有歧义/,
+  );
+  assert.deepEqual(resolvePiCliLaunchSelection({ model: "xai/grok-4.6", settingsConfig: settings }), {
+    provider: "xai",
+    cliModel: "grok-4.6",
   });
 });
 
@@ -551,6 +618,7 @@ test("Pi extracts official llm-pi-ai YAML and JSON the same way as DSH", () => {
   });
   assert.equal(projection.model, "gpt-5.6");
   assert.equal(projection.upstream_model, "gpt-5.6");
+  assert.equal(projection.pi_provider, "xxxx");
 });
 
 test("DSH settings expose an arbitrary Pi AI route model and upstream base URL", () => {

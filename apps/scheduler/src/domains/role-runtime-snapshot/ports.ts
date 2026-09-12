@@ -24,6 +24,8 @@ export interface RoleRuntimeSnapshotResult {
   model: string | null;
   /** Actual upstream model ID after resolving CLI aliases such as fable. */
   upstream_model: string | null;
+  /** Frozen Pi models.json route for `--provider`. Null for non-Pi CLIs. */
+  pi_provider: string | null;
   reasoning: ReasoningValue | null;
   env_vars: Record<string, string>;
   env_keys: string[];

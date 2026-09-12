@@ -14,6 +14,7 @@ import {
 import { PLATFORM_DEFAULT_AGENT_CLI, type AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
+import { assertPiSnapshotLaunchSelection } from "./provider-settings.js";
 import { sql } from "./db.js";
 import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/index.js";
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
@@ -795,6 +796,9 @@ async function runJob(jobId: string) {
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    // Fail closed before sandbox provision when a Pi catalog id cannot be
+    // mapped to one authenticated models.json route.
+    assertPiSnapshotLaunchSelection(snapshot);
     const snapshotAllowEgress = requireFrozenSnapshotAllowEgress(snapshot, jobId);
     const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");
     // Hub 与 Worker 共用 Job 创建时冻结的 allow_egress。

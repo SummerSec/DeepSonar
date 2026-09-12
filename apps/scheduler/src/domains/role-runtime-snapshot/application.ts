@@ -356,6 +356,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     agent_runtime: freezeAgentCliRuntime(runtimeAdapter),
     model: providerSnapshot.model,
     upstream_model: providerSnapshot.upstream_model,
+    pi_provider: providerSnapshot.pi_provider,
     reasoning: providerSnapshot.reasoning,
     env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object" ? cfg.env_vars_json as Record<string, string> : {},
     env_keys: (cfg?.env_keys as string[]) ?? [],
