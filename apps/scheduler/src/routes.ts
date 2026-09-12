@@ -23,11 +23,12 @@ import { registerSystemRoutes } from "./domains/system/routes.js";
 import { registerWorkerNodeRoutes } from "./domains/worker-nodes/index.js";
 import { registerTransferRoutes } from "./domains/transfer/routes.js";
 import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js";
+import { validationHttpError } from "./http-validation-error.js";
 import { runtimeImageHttpError } from "./runtime-images.js";
 
 export function registerRoutes(app: FastifyInstance) {
   app.setErrorHandler((error, _req, reply) => {
-    const mapped = runtimeImageHttpError(error);
+    const mapped = runtimeImageHttpError(error) ?? validationHttpError(error);
     if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
     return reply.send(error);
   });

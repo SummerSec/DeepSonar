@@ -356,8 +356,10 @@ Credential 连接测试和模型目录只读取 Scheduler append-only audit evid
 ## 错误格式
 
 ```json
-{ "error": "人类可读信息" }
+{ "error": "人类可读信息", "error_code": "稳定机器码（若有）" }
 ```
+
+未单独处理的 Zod / Fastify 校验失败统一为 `400` + `error_code=invalid_payload`。可选 `issues` 只含字段 `path` 与稳定 `code`，不回显正则、枚举全集或堆栈。
 
 | 状态 | 含义 |
 | --- | --- |
