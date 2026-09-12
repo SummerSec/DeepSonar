@@ -71,7 +71,7 @@ test("management API invalid bodies return 400 not 500", async () => {
   const findingId = "11111111-1111-4111-8111-111111111111";
   const jobId = "22222222-2222-4222-8222-222222222222";
   try {
-    const cases: Array<{ method: "POST" | "PATCH"; url: string; payload: unknown; paths?: string[] }> = [
+    const cases: Array<{ method: "POST" | "PATCH"; url: string; payload: Record<string, unknown>; paths?: string[] }> = [
       { method: "POST", url: "/projects", payload: {}, paths: ["name"] },
       { method: "POST", url: "/projects", payload: { name: "" }, paths: ["name"] },
       { method: "POST", url: "/projects", payload: { name: 123 }, paths: ["name"] },
