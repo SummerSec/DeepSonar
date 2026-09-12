@@ -4,10 +4,27 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-12
+
+### 新增
+
+- 项目报告页 Phase 1：统一交付物投影（#484 / #486）。从按任务默认展开的折叠列表改为交付物优先：任务总报告与 Finding 独立报告统一为 `ReportDeliverable`，状态映射为可阅读 / 生成中 / 失败 / 尚未生成 / 已过时；默认排序为失败 → 尚未生成 → 生成中 → 新近可阅读 → 已过时；任务仅作折叠上下文。不改报告实体、版本、下载接口和后端状态机。
+
+### 变更
+
+- 控制台品牌标与 favicon 改为紧凑鲸形剪影加高能声呐脉冲路径，并与蓝紫 / 白色视觉系统对齐（#487）。
+
 ### 修复
 
-- Pi 真实 Job 冻结已认证 `models.json` 路由到 `pi_provider`，adapter 传 `--provider <route> --model <id>`，避免 `grok-4.6` 这类裸 id 在 Pi 内置多 provider 目录中歧义后 provision 才失败。无法唯一确定时在快照解析 / claim 启动以 `PI_MODEL_UNAVAILABLE` 失败，不进入沙箱 provision（#479）。
-- RoleConfig 路径参数在进 SQL 前校验 UUID：`PUT /role-configs/global/:roleId` 等不再把 `explore` 这类角色名交给 Postgres；返回 `400` 与稳定 `error_code`（`INVALID_ROLE_ID` / `INVALID_ROLE_CONFIG_ID` / `INVALID_ID`），不回显数据库错误（#478）。
+- RoleConfig 路径参数在进 SQL 前校验 UUID：`PUT /role-configs/global/:roleId` 等不再把 `explore` 这类角色名交给 Postgres；返回 `400` 与稳定 `error_code`（`INVALID_ROLE_ID` / `INVALID_ROLE_CONFIG_ID` / `INVALID_ID`），不回显数据库错误（#478 / #480）。
+- 管理 API 全局将 `ZodError` 与 Fastify `FST_ERR_VALIDATION` 映射为 `400`：`error_code=invalid_payload`，人类可读 `error`，可选 `issues` 只含字段 `path` 与稳定 `code`；不回显堆栈、正则或枚举全集。已单独 catch 成 400 的路由保持原 `error_code`（#477 / #481）。
+- Pi 真实 Job 冻结已认证 `models.json` 路由到 `pi_provider`，adapter 传 `--provider <route> --model <id>`，避免 `grok-4.6` 这类裸 id 在 Pi 内置多 provider 目录中歧义后 provision 才失败。无法唯一确定时在快照解析 / claim 启动以 `PI_MODEL_UNAVAILABLE` 失败，不进入沙箱 provision（#479 / #483）。
+- Pi `message_end` 在 `stopReason` 为 `error` / `aborted` 时保留上游 `errorMessage`（及同级回退字段），写入脱敏后的 Job 失败短尾与 `agent_settled.errorDetail`，不再只显示 `Pi message ended: error`（#482 / #485）。
+
+### 部署 / 升级说明
+
+- 无需重建数据库（仍为 schema v48）。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。上一份 catalog 已有该 digest 时复用 version 行且不打新的运行时 version tag；若 src-cache digest 从未入册，仍发布 version tag 并由 inspect 补记，平台镜像仍打 `0.3.3` tag。
 
 ## [0.3.2] - 2026-09-12
 
@@ -760,6 +777,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.3.3]: https://github.com/SummerSec/DeepSonar/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/SummerSec/DeepSonar/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/SummerSec/DeepSonar/compare/v0.2.11...v0.3.1
 [0.2.11]: https://github.com/SummerSec/DeepSonar/compare/v0.2.10...v0.2.11
