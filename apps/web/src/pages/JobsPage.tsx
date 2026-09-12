@@ -14,6 +14,7 @@ import {
   StatusBadge,
   formatTime,
   relativeTime,
+  tableRowClass,
   tdCls,
 } from "../ui";
 
@@ -369,7 +370,8 @@ export function JobsPage() {
                 visible.map((j) => (
                   <tr
                     key={j.id}
-                    className="table-row-hover cursor-pointer"
+                    className={tableRowClass(selectedJob === j.id)}
+                    aria-selected={selectedJob === j.id}
                     onClick={() => openJob(j.id)}
                   >
                     <td className={tdCls}>
@@ -556,7 +558,7 @@ export function JobsPage() {
         ) : (
           <div className="grid gap-3">
             {visible.map((j) => (
-              <article key={j.id} className="surface-shell">
+              <article key={j.id} className={`surface-shell${selectedJob === j.id ? " is-selected" : ""}`}>
                 <div className="surface-core p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">

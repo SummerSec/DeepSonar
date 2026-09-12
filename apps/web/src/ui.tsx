@@ -52,8 +52,28 @@ export const DISPOSITION_OPTIONS: { value: string; label: string }[] = [
   { value: "archived", label: "归档" },
 ];
 
+function statusBadgeToken(status: string): string {
+  if (["failed", "rejected", "timeout", "orphan"].includes(status)) return "--badge-failed";
+  if (["succeeded", "confirmed", "verified", "analysis_complete"].includes(status)) return "--badge-success";
+  if (["open", "needs_human", "waiting_human"].includes(status)) return "--badge-warn";
+  if (["running", "claimed", "provisioning", "generating", "reporting", "verifying", "active"].includes(status)) return "--badge-running";
+  return "--badge-pending";
+}
+
+function severityBadgeToken(severity: string | null | undefined): string {
+  if (severity === "critical") return "--badge-critical";
+  if (severity === "high") return "--badge-high";
+  if (severity === "medium") return "--badge-medium";
+  return "--badge-pending";
+}
+
+function badgeFill(token: string, fallback: string): string {
+  return `var(${token}, ${fallback})`;
+}
+
 export function StatusBadge({ status, compact = false }: { status: string; compact?: boolean }) {
-  const c = STATUS_COLOR[status] ?? "#7f8796";
+  const fallback = STATUS_COLOR[status] ?? "#7f8796";
+  const c = badgeFill(statusBadgeToken(status), fallback);
   return (
     <span
       className="status-badge"
@@ -68,7 +88,8 @@ export function StatusBadge({ status, compact = false }: { status: string; compa
 
 export function SeverityBadge({ severity }: { severity: string | null | undefined }) {
   const label = severity || "未评分";
-  const c = severity ? (SEVERITY_COLOR[severity] ?? "#7f8796") : "#7f8796";
+  const fallback = severity ? (SEVERITY_COLOR[severity] ?? "#7f8796") : "#7f8796";
+  const c = badgeFill(severityBadgeToken(severity), fallback);
   return (
     <span className="severity-badge" style={{ color: c, background: `color-mix(in srgb, ${c} 10%, transparent)` }}>
       <span className="size-1.5 rounded-full" style={{ background: c }} />
@@ -463,3 +484,7 @@ export function DataTable({ children }: { children: ReactNode }) {
 export const thCls = "px-4 py-3.5 text-left font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500";
 export const tdCls = "px-4 py-4 text-[13px] text-zinc-300";
 export const trHover = "table-row-hover cursor-pointer";
+
+export function tableRowClass(selected = false): string {
+  return selected ? `${trHover} is-selected` : trHover;
+}
