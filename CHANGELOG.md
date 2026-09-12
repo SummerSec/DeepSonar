@@ -4,15 +4,22 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-12
+
 ### 变更
 
-- 将 v0.3.1 亮色主题 id/名称从 `open-kritt` 更名为内部语义 `coral` / `珊瑚纸台`（#470）。读取旧 `localStorage` 值会迁移为 `coral`，之后只写入新 id；视觉 token 不变。
+- 将 v0.3.1 亮色主题 id/名称从 `open-kritt` 更名为内部语义 `coral` / `珊瑚纸台`（#470 / #473）。读取旧 `localStorage` 值会迁移为 `coral`，之后只写入新 id；视觉 token 不变。
 
 ### 修复
 
-- 亮色主题为加载骨架、空状态、移动端壳层、选择器/模块选择、角色与凭据配置、intent launch 与 task handoff 补齐 `surface-control` / `surface-hover` / `surface-selected` / `surface-disabled` 等语义 token，不再复用近黑十六进制表面（#472）。
-- Pi 真实 Job 不再把 `deepsonar/<model>` 原样传给 `--model`：快照冻结 CLI 目录 id，adapter 映射已冻结的 provider 前缀；目录中不存在的模型在创建/解析快照时以 `PI_MODEL_UNAVAILABLE` 失败，而不是 Agent CLI 启动后才退出（#468）。
-- 亮色主题把表格、筛选、列表选中/hover/focus、抽屉和命令面板迁到独立语义 token（`surface-selected` / `surface-hover` / `surface-control` 等），Finding / Job 选中行不再复用近黑背景（#471）。
+- Pi 真实 Job 不再把 `deepsonar/<model>` 原样传给 `--model`：快照冻结 CLI 目录 id，adapter 映射已冻结的 provider 前缀；目录中不存在的模型在创建/解析快照时以 `PI_MODEL_UNAVAILABLE` 失败，而不是 Agent CLI 启动后才退出（#468 / #469）。
+- 亮色主题把表格、筛选、列表选中/hover/focus、抽屉和命令面板迁到独立语义 token（`surface-selected` / `surface-hover` / `surface-control` 等），Finding / Job 选中行不再复用近黑背景（#471 / #474）。
+- 亮色主题为加载骨架、空状态、移动端壳层、选择器/模块选择、角色与凭据配置、intent launch 与 task handoff 补齐 `surface-control` / `surface-hover` / `surface-selected` / `surface-disabled` 等语义 token，不再复用近黑十六进制表面（#472 / #475）。
+
+### 部署 / 升级说明
+
+- 无需重建数据库（仍为 schema v48）。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。上一份 catalog 已有该 digest 时复用 version 行且不打新的运行时 version tag；若 src-cache digest 从未入册，仍发布 version tag 并由 inspect 补记，平台镜像仍打 `0.3.2` tag。
 
 ## [0.3.1] - 2026-09-12
 
@@ -748,6 +755,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.3.2]: https://github.com/SummerSec/DeepSonar/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/SummerSec/DeepSonar/compare/v0.2.11...v0.3.1
 [0.2.11]: https://github.com/SummerSec/DeepSonar/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/SummerSec/DeepSonar/compare/v0.2.9...v0.2.10
