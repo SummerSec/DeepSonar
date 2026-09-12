@@ -3,7 +3,7 @@ import test from "node:test";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { z } from "zod";
-import { INVALID_PAYLOAD, validationHttpError } from "./http-validation-error.js";
+import { INVALID_PAYLOAD, isPostgresParameterError, validationHttpError } from "./http-validation-error.js";
 import { registerRoutes } from "./routes.js";
 
 const UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}/;
@@ -61,6 +61,74 @@ test("ZodError maps to 400 invalid_payload without regex or enum leaks", () => {
 test("non-validation errors are left unmapped", () => {
   assert.equal(validationHttpError(new Error("boom")), null);
   assert.equal(validationHttpError({ code: "FST_ERR_VALIDATION" })?.statusCode, 400);
+});
+
+test("Postgres parameter errors map to 400 without leaking pg code or text", () => {
+  const pgError = Object.assign(new Error('invalid input syntax for type uuid: "not-a-uuid"'), { code: "22P02" });
+  const mapped = validationHttpError(pgError);
+  assert.ok(mapped);
+  assert.equal(mapped.statusCode, 400);
+  assert.equal(mapped.body.error_code, INVALID_PAYLOAD);
+  const serialized = JSON.stringify(mapped.body);
+  assert.doesNotMatch(serialized, /22P02/);
+  assert.doesNotMatch(serialized, /invalid input syntax/);
+  assert.doesNotMatch(serialized, /not-a-uuid/);
+  assert.equal(isPostgresParameterError(pgError), true);
+  // Unrelated pg errors (e.g. unique violation) are not reclassified here.
+  assert.equal(isPostgresParameterError(Object.assign(new Error("dup"), { code: "23505" })), false);
+  assert.equal(validationHttpError(Object.assign(new Error("dup"), { code: "23505" })), null);
+});
+
+// #489：非 UUID 路径/查询 id 必须在进 SQL 前返回 400，而不是 500 + pg 原文。
+test("management endpoints reject malformed ids with 400 INVALID_ID and no pg detail", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  registerRoutes(app);
+  await app.ready();
+  const paths: Array<[string, string]> = [
+    ["GET", "/projects/not-a-uuid"],
+    ["GET", "/projects/not-a-uuid/canvases"],
+    ["GET", "/projects/not-a-uuid/settings"],
+    ["GET", "/projects/not-a-uuid/quality"],
+    ["GET", "/projects/not-a-uuid/quality/replay"],
+    ["GET", "/projects/not-a-uuid/exports"],
+    ["GET", "/projects/not-a-uuid/readiness"],
+    ["PATCH", "/projects/not-a-uuid"],
+    ["POST", "/projects/not-a-uuid/archive"],
+    ["PATCH", "/projects/not-a-uuid/settings"],
+    ["POST", "/projects/not-a-uuid/exports"],
+    ["PUT", "/projects/not-a-uuid/runtime-images/not-a-uuid"],
+    ["GET", "/runtime-image-versions/not-a-uuid/usage"],
+    ["POST", "/runtime-image-versions/not-a-uuid/rescan"],
+    ["POST", "/runtime-image-versions/not-a-uuid/status"],
+    ["POST", "/runtime-images/not-a-uuid/official-digest"],
+    ["GET", "/skill-sources/not-a-uuid"],
+    ["DELETE", "/skill-sources/not-a-uuid"],
+    ["POST", "/skill-sources/not-a-uuid/trust"],
+    ["POST", "/skill-sources/not-a-uuid/sync"],
+    ["GET", "/credentials/not-a-uuid"],
+    ["GET", "/credentials/not-a-uuid/impact"],
+    ["GET", "/credentials/not-a-uuid/models"],
+    ["DELETE", "/credentials/not-a-uuid"],
+    ["POST", "/credentials/not-a-uuid/test"],
+    ["POST", "/credentials/not-a-uuid/models"],
+    ["POST", "/credentials/not-a-uuid/rotate"],
+    ["POST", "/credentials/not-a-uuid/status"],
+    ["POST", "/tokens/not-a-uuid/revoke"],
+    ["GET", "/runtime-images?project_id=not-a-uuid"],
+  ];
+  try {
+    for (const [method, url] of paths) {
+      const response = await app.inject({ method: method as "GET", url });
+      assert.equal(response.statusCode, 400, `${method} ${url} -> ${response.statusCode} ${response.body}`);
+      const body = JSON.parse(response.body) as { error_code?: string; error?: string };
+      assert.equal(body.error_code, "INVALID_ID", `${method} ${url}`);
+      assert.doesNotMatch(response.body, /22P02|invalid input syntax|Internal Server Error|"stack"/, `${method} ${url}`);
+      assert.doesNotMatch(response.body, UUID_PATTERN, `${method} ${url}`);
+    }
+  } finally {
+    await app.close();
+  }
 });
 
 test("management API invalid bodies return 400 not 500", async () => {

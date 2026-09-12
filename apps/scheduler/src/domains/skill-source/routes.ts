@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
+import { validationHttpError } from "../../http-validation-error.js";
 import { syncSkillSource, validateSourceUrl } from "../../skill-sources.js";
 
 const SkillSourceBody = z.object({
@@ -65,6 +66,9 @@ export function registerSkillSourceRoutes(app: FastifyInstance): void {
       await audit(req, { action: "skill_source.sync", resourceType: "skill_source", resourceId: id, after: r });
       return { ok: true, ...r };
     } catch (e) {
+      // 本地参数/校验错误不是上游 Git 不可达：先按 400 契约映射，再落 502。
+      const mapped = validationHttpError(e);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
       return reply.code(502).send({ error: e instanceof Error ? e.message : String(e) });
     }
   });
