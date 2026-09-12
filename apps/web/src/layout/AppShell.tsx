@@ -9,7 +9,7 @@ import { DeepSonarMark } from "../components/DeepSonarMark";
 import { canAccessAnyScope } from "../permissions";
 import { formatHealthOpenSandbox, healthOpenSandboxDegraded, type HealthOpenSandbox } from "../health-status";
 import { formatHealthVersion, githubReleaseUrlForVersion } from "../product-version";
-import { ACCENT_THEME_STORAGE_KEY, ACCENT_THEMES, accentThemeById, resolveAccentTheme, type AccentTheme } from "../accent-themes";
+import { ACCENT_THEMES, accentThemeById, persistAccentTheme, readAccentTheme, type AccentTheme } from "../accent-themes";
 
 const WORKSPACE_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
   { to: "/", end: true, label: "态势", caption: "全局风险与运行", icon: ChartBar },
@@ -40,7 +40,7 @@ const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[
 ];
 
 function initialAccentTheme(): AccentTheme {
-  return resolveAccentTheme(localStorage.getItem(ACCENT_THEME_STORAGE_KEY));
+  return readAccentTheme();
 }
 
 type EscapeEventLike = {
@@ -140,7 +140,7 @@ export function AppShell() {
     const selected = accentThemeById(accentTheme);
     document.documentElement.dataset.accentTheme = accentTheme;
     document.documentElement.dataset.colorScheme = selected.scheme;
-    localStorage.setItem(ACCENT_THEME_STORAGE_KEY, accentTheme);
+    persistAccentTheme(accentTheme);
   }, [accentTheme]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
