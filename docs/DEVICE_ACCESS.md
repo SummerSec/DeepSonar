@@ -1,6 +1,6 @@
 # 真实设备接入：设备 broker + 设备租约 + 可抛弃设备机隔离
 
-> 状态：**设计（#494）**；Phase 1 MVP 的实现见 [#495](https://github.com/SummerSec/DeepSonar/issues/495)，落地后本文按 as-built 回写。
+> 状态：**设计（#494）+ Phase 1 MVP as-built（#495）**。Phase 1 已落地单设备 adb-over-TCP、设备租约、项目 opt-in + 任务级授权与审计；Phase 2（hdc/串口/电源控制、多设备池、危险操作确认、设备视图）仍为提案。
 > 事实入口：本文描述设计契约；实现细节以代码、`database/schema.sql`、OpenAPI 与测试为准。
 
 DeepSonar 的 Job 跑在硬化容器沙箱里，沙箱内**没有任何物理设备可达路径**。真机漏洞挖掘/复现（固件、IoT、路由、移动端、嵌入式）必须让 Agent 与真实设备交互。本文给出「设备如何被平台调度、隔离、授权与记账」这一层的设计。
@@ -99,7 +99,31 @@ Job pending → claimed（申请设备，写 pending 租约）
 
 ## 5. 分期落地
 
-**Phase 1（MVP，#495）**
+**Phase 1（MVP，#495；已落地）**
+
+已实现（细节以代码/测试为准）：
+
+- 契约与类型：`packages/shared-types/src/device.ts`（`DeviceRequirement`、`DeviceLeaseGrant`、
+  `deviceSandboxEnv` 投影、租约 token mint/verify、稳定错误码 `device_not_authorized` /
+  `device_not_available`）。
+- schema：`devices` / `device_leases` / `device_events` + `device_leases_one_active` 部分唯一索引
+  （`SCHEMA_VERSION=49`）。
+- broker：`apps/device-broker`（`/health`、`/devices`、`/lease/acquire`、`/lease/release`、
+  `/session`；序列号白名单 fail closed、租约 TTL 上限、append-only JSONL 审计、不持模型凭据）；
+  部署见 `deploy/Dockerfile.device-broker` 与 `deploy/docker-compose.device-broker.yml`（容器不映射 USB）。
+- 调度器：`apps/scheduler/src/domains/device/`（授权→broker 申请→落库，DB 部分唯一索引是
+  独占性的最终仲裁者；释放失败由 broker TTL + Reaper 兜底）、Dispatcher 在 provision 前申请并
+  注入端点、终态/取消释放、Reaper 回收过期租约。
+- 授权：项目 opt-in（`PATCH /projects/:id/settings` `device_access_enabled`）+ 任务级
+  `device` 需求（冻结进 `jobs.agent_snapshot_json.device_requirement`，按 `roles` 命中才占用设备）。
+- 测试：`ci:unit:device-broker`、`ci:unit:device-lease`、`ci:integration:device-lease`、
+  `ci:smoke:device`（真机 rig，未配置时 skip）。
+
+仍未覆盖（Phase 2 或需要真机环境）：
+
+- 真机全链路（test 角色 Job → 沙箱 → `adb shell` → Job 证据）需要一台 rig 才能验收；
+  `ci:smoke:device` 在无 rig 时会明确 skip，而不是伪装通过。
+- 管理与 Web UI 的设备/租约视图、多设备池与排队、危险操作人工确认。
 
 - 一台 device rig + broker 仅暴露**单设备 adb-over-TCP**（复用 `mobile-runtime.json` 既有 adb 能力）。
 - schema 加 `devices` / `device_leases` / `device_events`，bump `SCHEMA_VERSION`；Dispatcher 按冻结快照声明的 transport 租借设备；沙箱侧注入 endpoint + 短期 token。

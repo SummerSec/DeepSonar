@@ -622,6 +622,22 @@ export const ListAvailableRuntimeImagesPayload = z.object({}).strict();
 export type ListAvailableRuntimeImagesPayload = z.infer<typeof ListAvailableRuntimeImagesPayload>;
 
 export {
+  DEVICE_LEASE_ERROR_CODES,
+  DEVICE_LEASE_TOKEN_VERSION,
+  DEVICE_SANDBOX_ENV_KEYS,
+  DEVICE_TRANSPORTS,
+  DeviceLeaseEndpoint,
+  DeviceLeaseGrant,
+  DeviceLeaseTokenPayload,
+  DeviceRequirement,
+  deviceSandboxEnv,
+  mintDeviceLeaseToken,
+  verifyDeviceLeaseToken,
+  type DeviceLeaseErrorCode,
+  type DeviceTransport,
+} from "./device.js";
+
+export {
   CAPABILITY_DISCOVERY_TOOLS_LIST,
   CAPABILITY_PACK_SCHEMA,
   CapabilityPackBudget,
@@ -1122,6 +1138,7 @@ export function toMcpToolInputSchema(schema: z.ZodType): Record<string, unknown>
 }
 
 /** JSON Schema emitted for MCP tools/list from the same Zod contracts. */
+// SAFETY: Object.fromEntries 丢失键字面量类型；键集合直接来自 ControlToolPayloadSchemas。
 export const ControlToolInputSchemasJson = Object.fromEntries(
   Object.entries(ControlToolPayloadSchemas).map(([name, schema]) => [
     name,

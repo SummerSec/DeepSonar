@@ -22,6 +22,13 @@ import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import {
+  DeviceNotAuthorizedError,
+  DeviceNotAvailableError,
+  acquireDeviceLeaseForJob,
+  releaseDeviceLeasesForJobQuietly,
+  type DeviceLeaseHandle,
+} from "./domains/device/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import {
   beginEffect,
@@ -38,6 +45,12 @@ import {
 export function classifyDispatcherFailure(error: unknown): { reason: string; message: string } {
   if (error instanceof RuntimeImageNotReadyError) {
     return { reason: "runtime_image_not_ready", message: `runtime_image_not_ready: ${error.imageRef}` };
+  }
+  if (error instanceof DeviceNotAuthorizedError) {
+    return { reason: "device_not_authorized", message: `device_not_authorized: ${error.message}` };
+  }
+  if (error instanceof DeviceNotAvailableError) {
+    return { reason: "device_not_available", message: `device_not_available: ${error.message}` };
   }
   return { reason: "exception", message: error instanceof Error ? error.message : String(error) };
 }
@@ -66,6 +79,9 @@ export function formatDispatcherFailureMessage(error: unknown): string {
 /** OpenSandbox container startup failures are transient on Windows hosts. */
 export function isRetryableProvisionFailure(error: unknown): boolean {
   if (error instanceof RuntimeImageNotReadyError) return false;
+  // 设备未授权不可重试；设备/ broker 暂不可用可以再试一次（设备租约已在失败路径释放）。
+  if (error instanceof DeviceNotAuthorizedError) return false;
+  if (error instanceof DeviceNotAvailableError) return true;
   const text = formatDispatcherFailureMessage(error);
   return /CONTAINER_START_FAILED|Egress sidecar container failed to start|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)/i.test(text);
 }
@@ -550,6 +566,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
     // global_settings is the scheduler-wide hard cap; per-project
     // maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
+    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const rules = await globalRules(tx as unknown as typeof sql);
     const active = await tx`
       SELECT status, project_id,
@@ -664,6 +681,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         createdAt: String(last.created_at_key),
         id: String(last.id),
       };
+      // SAFETY: 两处都是 postgres.js 事务句柄，与 sql 同接口；候选行由本事务 SELECT 列清单决定。
       const graphBatch = await loadGraphEligibilityBatch(
         tx as unknown as typeof sql,
         pending as unknown as DispatchCandidate[],
@@ -687,6 +705,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         }
         // Task-level schedule gate: hold every job on the canvas until start_at.
         if (canvasScheduleBlocksDispatch(canvasTarget)) continue;
+        // SAFETY: 同上，事务句柄与 sql 同接口；job 由本事务投影为 DispatchCandidate。
         const graphSkip = await graphEligibilityReasonFromDb(
           tx as unknown as typeof sql,
           job as DispatchCandidate,
@@ -715,6 +734,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         if (skipReason) continue;
         const row = await lifecycle.claimPendingJob(job.id as string);
         if (!row) continue;
+        // SAFETY: 同上，事务句柄与 sql 同接口。
         await createOrGetActiveAttempt(
           tx as unknown as typeof sql,
           String(job.id),
@@ -782,6 +802,8 @@ async function runJob(jobId: string) {
   let provisionAttempted = false;
   let activeAttempt: Record<string, unknown> | null = null;
   let platformCapability: PreparedPlatformCapability | null = null;
+  /** 设备租约（#495）：申请到之后必须在 finally 释放，Reaper 兜底过期。 */
+  let deviceLease: DeviceLeaseHandle | null = null;
   const lifecycle = createSqlJobLifecycleApplication();
   try {
     const [job] = await sql`SELECT * FROM jobs WHERE id = ${jobId}`;
@@ -829,12 +851,14 @@ async function runJob(jobId: string) {
         files,
         catalog: buildJobSharedAssetCatalog({
           revision: snapshot.shared_assets_revision,
+          // SAFETY: shared_assets 的公开形状就是记录数组（快照由共享资产投影写入）。
           assets: frozenAssets as unknown as Array<Record<string, unknown>>,
         }),
       });
     }
     provisionEffectId = `provision:${String(attempt.attempt_no)}`;
     await sql.begin(async (tx) => {
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: provisionEffectId!,
         kind: "provision",
@@ -849,6 +873,18 @@ async function runJob(jobId: string) {
     });
     try {
       const provisionAbort = new AbortController();
+      // 真实设备接入：快照声明了设备需求且本 Job 角色命中时才申请租约。
+      // 授权在申请时重新校验；未授权 fail closed 且不进重试链。
+      if (useReal) {
+        provisionAttempted = true;
+        deviceLease = await acquireDeviceLeaseForJob({
+          jobId,
+          attemptId: attemptId!,
+          projectId: job.project_id as string,
+          snapshot,
+          roleName: String(snapshot.name ?? job.type ?? ""),
+        });
+      }
       const provisionInput = {
         jobId,
         attemptId: attemptId!,
@@ -858,6 +894,7 @@ async function runJob(jobId: string) {
           ? {
               DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0",
               ...platformCapability!.env,
+              ...(deviceLease?.env ?? {}),
             }
           : undefined,
         network: useReal ? (allowEgress ? "egress" : "restricted") : "none",
@@ -919,11 +956,13 @@ async function runJob(jobId: string) {
         unregisterProvision();
       }
     } catch (error) {
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       await sql.begin(async (tx) => {
         await markEffectUnknown(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
       }).catch(() => {});
       throw error;
     }
+    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     await sql.begin(async (tx) => {
       await settleEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, {
         status: "settled",
@@ -1047,6 +1086,12 @@ async function runJob(jobId: string) {
     }
   } finally {
     stopLeaseRenewal(jobId);
+    if (deviceLease) {
+      const lease = deviceLease;
+      deviceLease = null;
+      await releaseDeviceLeasesForJobQuietly(jobId, "attempt_terminal").catch(() => {});
+      void lease;
+    }
     if (platformCapability) {
       await revokeJobCapabilityTokens(jobId).catch(() => {});
       platformCapability = null;

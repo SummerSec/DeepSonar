@@ -1,0 +1,25 @@
+FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+
+# Device broker 只跑在 device rig 主机上（与调度主机、沙箱宿主隔离）。
+# adb 只用于枚举/转发 rig 上已插好的设备；broker 不持模型或 Provider 凭据。
+RUN apk add --no-cache android-tools ca-certificates && corepack enable
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/device-broker/package.json apps/device-broker/package.json
+COPY packages/shared-types/package.json packages/shared-types/package.json
+
+RUN pnpm install --frozen-lockfile --filter @deepsonar/device-broker...
+
+COPY apps/device-broker apps/device-broker
+COPY packages/shared-types packages/shared-types
+
+RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/device-broker build
+
+ENV NODE_ENV=production
+# 租约审计内需可写目录；默认挂载 rig 的日志卷。
+ENV DEVICE_BROKER_AUDIT_LOG=/var/log/deepsonar/device-broker.jsonl
+EXPOSE 8788
+
+CMD ["pnpm", "--filter", "@deepsonar/device-broker", "start"]

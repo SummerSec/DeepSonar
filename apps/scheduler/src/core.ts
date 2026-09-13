@@ -27,6 +27,7 @@ import {
   type AgentRuntimeSnapshot,
 } from "./domains/role-runtime-snapshot/index.js";
 import { transitionJob as applyJobTransition } from "./domains/job-lifecycle/index.js";
+import { freezeSnapshotDeviceRequirement } from "./domains/device/index.js";
 import {
   createEventIngestionApplication,
   createEventIngestionSideEffectApplication,
@@ -90,11 +91,12 @@ export async function assertJobCanPublishSharedAsset(jobId: string, sandboxId: s
 // are composed through the event-ingestion bounded context's typed ports.
 const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
   findingVerification,
+  // SAFETY: 以下四个适配器都把 postgres.js 事务句柄透传给同接口的 `sql` 实现。
   rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
-  rolesForProject: async (tx, projectId) => rolesForProject(tx as unknown as typeof sql, projectId),
+  rolesForProject: async (tx, projectId) => rolesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, projectId),
   resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = [], options) =>
-    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type, findingIds, options),
-  recordJobSharedAssets: async (tx, jobId, assets) => recordJobSharedAssets(tx as unknown as typeof sql, jobId, assets),
+    resolveAgentSnapshotForJob(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId, type, findingIds, options),
+  recordJobSharedAssets: async (tx, jobId, assets) => recordJobSharedAssets(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, jobId, assets),
   fixedPriorityForJob,
   insertEdgeIfAbsent: async (tx, canvasId, fromId, toId, edgeType) =>
     insertEdgeIfAbsent(tx as Tx, canvasId, fromId, toId, edgeType),
@@ -132,6 +134,7 @@ export async function preflightDeferredSemanticEvent(
   payload: unknown,
 ): Promise<void> {
   await sql.begin(async (tx) => {
+    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as Tx.
     await eventIngestionSideEffectApplication.preflightDeferredSideEffects(tx as unknown as Tx, jobId, type, payload);
   });
 }
@@ -225,7 +228,7 @@ export function scrubLeftoverRulesJson(rules: unknown): {
   const out: Record<string, unknown> = { ...source };
   const removedKeys: string[] = [];
   for (const key of LEFTOVER_RULE_ALIAS_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
+    if (!Object.hasOwn(out, key)) continue;
     delete out[key];
     removedKeys.push(key);
   }
@@ -513,7 +516,8 @@ export async function normalizePendingJobPriorities(
     WHERE j.status = 'pending'
     ORDER BY j.created_at ASC, j.id ASC`;
   let updated = 0;
-  for (const row of rows as unknown as Record<string, unknown>[]) {
+  // SAFETY: 上面的 SELECT 列清单固定，行形状就是 Record<string, unknown>。
+  for (const row of /* SAFETY: 行/投影形状由本文件固定 SELECT 列清单决定。 */ rows as unknown as Record<string, unknown>[]) {
     const normalized = priorityNormalization(row);
     if (!normalized.changed) continue;
     const [result] = await db`
@@ -840,6 +844,7 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
   ]);
   const enabled = (((p?.config_json as Record<string, unknown>)?.roles as Record<string, unknown> | undefined)
     ?.enabled ?? null) as string[] | null;
+  // SAFETY: 上面的 SELECT 列清单固定，行形状就是 RoleDef。
   const rows = all as unknown as RoleDef[];
   if (enabled == null) return rows.filter((r) => r.builtin);
   const set = new Set(enabled);
@@ -869,7 +874,7 @@ const canonicalUuid = new RegExp(CANONICAL_UUID_PATTERN, "i");
 
 /** Parse the untrusted payload declaration used to widen a Job's Finding scope. */
 export function parseRelatedFindingIds(payload: Record<string, unknown>): string[] {
-  if (!Object.prototype.hasOwnProperty.call(payload, "related_finding_ids")) return [];
+  if (!Object.hasOwn(payload, "related_finding_ids")) return [];
   const raw = payload.related_finding_ids;
   if (!Array.isArray(raw) || raw.length > MAX_RELATED_FINDING_IDS) {
     throw new Error(`related_finding_ids_invalid: expected at most ${MAX_RELATED_FINDING_IDS} canonical UUIDs`);
@@ -917,14 +922,22 @@ export async function createJob(input: CreateJobInput) {
     // 快照读取与 Job 插入必须处于同一事务；Credential provider 迁移会等待本事务结束，
     // 避免生成“快照是旧 provider、执行期已是新 provider”的竞态 Job。
     const job = await sql.begin(async (tx) => {
-      const snapshot = await freezeAgentSnapshotNetworkPolicy(
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+      const snapshot = await freezeSnapshotDeviceRequirement(
         tx as unknown as typeof sql,
+        input.projectId,
         input.canvasId,
-        await resolveAgentSnapshotForJob(
+        await freezeAgentSnapshotNetworkPolicy(
+          // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
           tx as unknown as typeof sql,
-          input.projectId,
-          input.type,
-          snapshotFindingIds,
+          input.canvasId,
+          await resolveAgentSnapshotForJob(
+            // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+            tx as unknown as typeof sql,
+            input.projectId,
+            input.type,
+            snapshotFindingIds,
+          ),
         ),
       );
       const [projectRow, globalRow] = await Promise.all([
@@ -967,7 +980,7 @@ export async function createJob(input: CreateJobInput) {
           ingress_key: input.ingressKey ?? null,
         })}
         RETURNING *`;
-      await recordJobSharedAssets(tx as unknown as typeof sql, created.id as string, snapshot.shared_assets ?? []);
+      await recordJobSharedAssets(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, created.id as string, snapshot.shared_assets ?? []);
       return created;
     });
     inc("deepsonar_jobs_created_total", { type: input.type });
@@ -1000,7 +1013,7 @@ function parseStoredFindingProtocolConfig(value: unknown) {
 }
 
 export function stripFindingProtocolFromRules(rules: Record<string, unknown>): Record<string, unknown> {
-  if (!Object.prototype.hasOwnProperty.call(rules, "finding_protocol")) return rules;
+  if (!Object.hasOwn(rules, "finding_protocol")) return rules;
   const { finding_protocol: _protocol, ...rest } = rules;
   return rest;
 }
@@ -1012,7 +1025,7 @@ export function stripFindingProtocolFromRules(rules: Record<string, unknown>): R
 export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
   return sql.begin(async (tx) => {
     const requestedPolicy = (input.target.network_policy ?? {}) as Record<string, unknown>;
-    const effectiveRules = await rulesForProject(tx as unknown as typeof sql, input.projectId);
+    const effectiveRules = await rulesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, input.projectId);
     const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const [project] = await tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`;
     if (!project) throw new Error(`project ${input.projectId} 不存在`);
@@ -1025,7 +1038,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
     const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
     const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
     const target = await freezeTaskSeedTarget(
-      tx as unknown as typeof sql,
+      /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
       input.projectId,
       {
         ...input.target,
@@ -1093,7 +1106,7 @@ export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<str
         RETURNING id`;
       if (rootNode) {
         await insertTaskSeedProjections(
-          tx as unknown as typeof sql,
+          /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
           canvasId,
           rootNode.id as string,
           target,
@@ -1183,17 +1196,17 @@ async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId
  * these adapters preserve the existing Scheduler lock and side-effect seams.
  */
 const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
-  rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
+  rulesForProject: async (tx, projectId) => rulesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId),
   lockCanvasForConvergence,
-  readCanvasConvergence: async (tx, canvasId) => readCanvasConvergence(tx as unknown as typeof sql, canvasId),
+  readCanvasConvergence: async (tx, canvasId) => readCanvasConvergence(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, canvasId),
   patchCanvasConvergence: async (tx, canvasId, patch) =>
-    patchCanvasConvergence(tx as unknown as typeof sql, canvasId, patch),
+    patchCanvasConvergence(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, canvasId, patch),
   careSeverities,
   resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) =>
-    resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, type, findingIds),
+    resolveAgentSnapshotForJob(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId, type, findingIds),
   recordJobSharedAssets: async (tx, jobId, snapshot) =>
     recordJobSharedAssets(
-      tx as unknown as typeof sql,
+      /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
       jobId,
       (
         snapshot as {
@@ -1222,7 +1235,6 @@ type CanvasEdgeInput = {
   edgeType: string;
 };
 
-type HubEdgeBatchInsert = (tx: Tx, edges: readonly CanvasEdgeInput[]) => Promise<void>;
 
 function dedupeCanvasEdges(edges: readonly CanvasEdgeInput[]): CanvasEdgeInput[] {
   const unique = new Map<string, CanvasEdgeInput>();
@@ -1345,12 +1357,12 @@ export async function finalizeJob(
     status === "succeeded" ? "succeeded" : "failed",
     {
       job_status: status,
-      ...(result?.summary !== undefined
-        ? {
+      ...(result?.summary === undefined
+        ? {}
+        : {
             summary_sha256: createHash("sha256").update(result.summary, "utf8").digest("hex"),
             summary_bytes: Buffer.byteLength(result.summary, "utf8"),
-          }
-        : {}),
+          }),
     },
     result?.error,
   );
@@ -1457,7 +1469,7 @@ export async function recoverVerifyJobTerminal(
   error?: string | null,
 ): Promise<void> {
   await sql.begin(async (txRaw) => {
-    const tx = txRaw as unknown as Tx;
+    const tx = /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ txRaw as unknown as Tx;
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (!job || job.type !== "verify_finding" || !job.finding_id) return;
     if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;

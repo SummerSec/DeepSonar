@@ -111,6 +111,17 @@ jobs:
 
       - name: Scheduler orphan recovery evidence unit
         run: pnpm ci:unit:recovery
+      - name: Device broker unit
+        run: pnpm ci:unit:device-broker
+
+      - name: Device lease contract unit
+        run: pnpm ci:unit:device-lease
+
+      - name: Device lease PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+        run: pnpm ci:integration:device-lease
+
 
       - name: Scheduler orphan recovery PostgreSQL integration
         env:

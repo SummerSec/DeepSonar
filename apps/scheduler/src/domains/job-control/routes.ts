@@ -17,6 +17,7 @@ import { dispositionAllowed } from "../../finding-state-matrix.js";
 import { jobProvenance } from "../../import-provenance.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
+import { releaseDeviceLeasesForJobQuietly } from "../device/index.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { runner } from "../../runtime.js";
 import { PROJECT_MISMATCH, resolveActorProjectId } from "../../project-scope.js";
@@ -646,6 +647,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     // §6.3：取消即吊销短期模型 Token
     await revokeJobTokens(id, "cancelled").catch(() => {});
     await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
+    // 设备租约（#495）：取消即释放，不让设备被终态 Job 占着。
+    await releaseDeviceLeasesForJobQuietly(id, "cancelled");
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
@@ -682,6 +685,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       }
       await revokeJobTokens(jobId, "cancelled").catch(() => {});
       await revokeJobCapabilityTokens(jobId, "cancelled").catch(() => {});
+      await releaseDeviceLeasesForJobQuietly(jobId, "cancelled");
       await sql`
         UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;

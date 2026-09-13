@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { FindingProtocolConfig } from "@deepsonar/shared-types";
+import { DeviceRequirement, FindingProtocolConfig } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
@@ -30,6 +30,11 @@ import {
 } from "../job-control/rerun.js";
 import { markAttemptInterrupted } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
+import {
+  DeviceNotAuthorizedError,
+  freezeSnapshotDeviceRequirement,
+  releaseDeviceLeasesForJobQuietly,
+} from "../device/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { runtimeImageHttpError } from "../../runtime-images.js";
@@ -77,6 +82,8 @@ const CreateTaskBody = z.object({
   allow_egress: z.boolean().optional(),
   finding_protocol: FindingProtocolConfig.optional(),
   kind: z.enum(TASK_KINDS).default("standard"),
+  /** 真实设备接入（#495）：声明设备需求，冻结进 Job 快照；需项目先 opt-in。 */
+  device: DeviceRequirement.optional(),
   seed_finding_ids: z.array(z.string().uuid()).max(MAX_TASK_SEED_FINDINGS).optional(),
   /** ISO-8601 timestamptz; omit for immediate start. Wins over schedule_beijing_8am. */
   scheduled_start_at: z.string().datetime().optional(),
@@ -147,6 +154,7 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
     }
     await revokeJobTokens(id, "cancelled").catch(() => {});
     await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
+    await releaseDeviceLeasesForJobQuietly(id, "cancelled");
     await sql`
       UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
       WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
@@ -303,6 +311,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           ...(body.allow_egress !== undefined
             ? { network_policy: { allow_egress: body.allow_egress } }
             : {}),
+          ...(body.device !== undefined ? { device_requirement: body.device } : {}),
           ...(schedule ? { schedule } : {}),
         },
       });
@@ -320,19 +329,29 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           ((await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`)[0]?.target_json ?? {}) as Record<string, unknown>,
         ).map((seed) => seed.id)
       : [];
-    const { job, duplicated } = await createJob({
-      projectId: id,
-      canvasId,
-      type: "hub_reason",
-      payload: {
-        title: body.title,
-        content: body.content,
-        goal: body.content,
-        trigger: { kind: "user_task" },
-        ...(body.kind === "compose" ? { related_finding_ids: frozenSeedIds } : {}),
-        ...(schedule ? { schedule } : {}),
-      },
-    });
+    let createdJob = null as Awaited<ReturnType<typeof createJob>> | null;
+    try {
+      createdJob = await createJob({
+        projectId: id,
+        canvasId,
+        type: "hub_reason",
+        payload: {
+          title: body.title,
+          content: body.content,
+          goal: body.content,
+          trigger: { kind: "user_task" },
+          ...(body.kind === "compose" ? { related_finding_ids: frozenSeedIds } : {}),
+          ...(schedule ? { schedule } : {}),
+        },
+      });
+    } catch (error) {
+      // 设备需求未授权（项目未 opt-in / Phase 1 之外的 transport）必须建任务时就 fail closed。
+      if (error instanceof DeviceNotAuthorizedError) {
+        return reply.code(409).send({ error: error.message, error_code: "device_not_authorized" });
+      }
+      throw error;
+    }
+    const { job, duplicated } = createdJob;
     if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
     if (schedule) noteScheduleWakeAt(schedule.start_at);
     await audit(req, {
@@ -1007,16 +1026,22 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       if (seedFindings.length > 0) {
         payload.related_finding_ids = seedFindings.map((seed) => seed.id);
       }
-      const snapshot = await freezeAgentSnapshotNetworkPolicy(
+      const snapshot = await freezeSnapshotDeviceRequirement(
         // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         tx as unknown as typeof sql,
+        projectId,
         canvasId,
-        await resolveAgentSnapshotForJob(
+        await freezeAgentSnapshotNetworkPolicy(
           // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
           tx as unknown as typeof sql,
-          projectId,
-          "hub_reason",
-          seedFindings.map((seed) => seed.id),
+          canvasId,
+          await resolveAgentSnapshotForJob(
+            // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+            tx as unknown as typeof sql,
+            projectId,
+            "hub_reason",
+            seedFindings.map((seed) => seed.id),
+          ),
         ),
       );
       await wipeCanvasRuntimeData(tx, canvasId);
