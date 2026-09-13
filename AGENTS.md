@@ -50,6 +50,7 @@ pnpm ci:unit:capability-pack
 pnpm ci:unit:finding-research
 pnpm ci:unit:canvas-facts
 pnpm ci:unit:web-facts
+pnpm ci:unit:searchable-selects     # gate 守则：Web 下拉必须用可搜索选择原语
 pnpm ci:integration:finding-research
 pnpm ci:integration:platform-api
 pnpm ci:smoke:control-api
@@ -57,7 +58,7 @@ pnpm ci:smoke:hub
 pnpm ci:images
 ```
 
-全量脚本见根目录 `package.json`。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
+`gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:bounded-contexts` 固定路由面），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。全量脚本见根目录 `package.json`。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
 
 ## 总体架构纪律
 
@@ -161,7 +162,7 @@ Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue �
 提交验证后：
 
 - `git diff --check`；
-- 与改动面匹配的 `ci:unit:*` / `ci:integration:*` / `ci:smoke:*`；
+- 与改动面匹配的 `ci:unit:*` / `ci:integration:*` / `ci:smoke:*`（Web 改动补 `ci:unit:searchable-selects` 等 gate 守则套件）；
 - 运行时/镜像改动执行 `pnpm ci:images` 和相应 sandbox smoke；
 - UI 改动执行对应 Web tests，并核对 URL、空态、错误态、刷新和权限边界；
 - 文档中的路径、命令、schema 版本、状态和链接重新检查。
