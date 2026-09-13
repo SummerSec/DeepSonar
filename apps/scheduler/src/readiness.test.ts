@@ -589,6 +589,29 @@ test("stale audit evidence is surfaced as a warning, not an online claim", () =>
   assert.equal(result.checks.some((check) => check.code === "MODEL_DISCOVERY_READY"), false);
 });
 
+test("probe-limited credential test failure warns while an auth rejection fails", () => {
+  const withTestResult = (after_json: Record<string, unknown> | null) => baseInput({
+    audits: baseInput().audits?.map((audit) => audit.action === "credential.test"
+      ? { ...audit, result: "error", after_json }
+      : audit),
+  });
+  // #491：目录等探测路径的失败不能当成「账号不可用」，降级为 warning。
+  const probeLimited = evaluateReadiness(withTestResult({ ok: false, category: "unknown", probe_path: "models" }));
+  const limited = probeLimited.checks.find((check) => check.code === "CREDENTIAL_TEST_FAILED");
+  assert.equal(limited?.severity, "warning");
+  assert.equal(limited?.state, "attention");
+  assert.equal(probeLimited.ready, true);
+
+  // 推理路径被拒才是权威结论，仍然 fail。
+  const rejected = evaluateReadiness(withTestResult({ ok: false, category: "authentication", probe_path: "inference" }));
+  assert.equal(rejected.checks.find((check) => check.code === "CREDENTIAL_TEST_FAILED")?.severity, "error");
+  assert.equal(rejected.ready, false);
+
+  // 旧审计行没有 category，保持原有 fail 语义。
+  const legacy = evaluateReadiness(withTestResult({ ok: false }));
+  assert.equal(legacy.checks.find((check) => check.code === "CREDENTIAL_TEST_FAILED")?.severity, "error");
+});
+
 test("all actionable readiness checks carry stable repair metadata by scope", () => {
   const projectVariants = [
     baseInput({ hubEnabled: false }),

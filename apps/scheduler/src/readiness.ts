@@ -247,6 +247,16 @@ function modelCountFromAudit(audit: ReadinessAuditRow | undefined): number | nul
   return typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : null;
 }
 
+/**
+ * 连接测试证据里的失败分类。`unknown` 表示失败来自探测路径限制（例如第三方中转
+ * 不支持 /v1/models），不代表 Provider 拒绝了账号；旧审计行没有该字段时返回 null。
+ */
+function credentialTestFailureCategory(audit: ReadinessAuditRow | undefined): string | null {
+  if (!audit || !audit.after_json || typeof audit.after_json !== "object" || Array.isArray(audit.after_json)) return null;
+  const category = (audit.after_json as Record<string, unknown>).category;
+  return typeof category === "string" && category ? category : null;
+}
+
 function runtimePlatformRank(row: ReadinessRuntimeImageRow, hostPlatform: string): number {
   const platforms = Array.isArray(row.platforms_json)
     ? row.platforms_json.filter((value): value is string => typeof value === "string")
@@ -646,13 +656,19 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       const testStatus: ReadinessEvidenceSummary["status"] = !latestTest
         ? "missing"
         : latestTest.result === "ok" && testFresh ? "ok" : latestTest.result === "ok" ? "stale" : "error";
+      // 只有推理路径被拒才能证明账号不可用；探测路径限制（category=unknown）
+      // 降级为 warning，避免第三方中转造成的永久 not ready（#491）。
+      const testProbeLimited = credentialTestFailureCategory(latestTest) === "unknown";
+      const testEvidence = evidenceSummary("credential_test", testStatus, latestTest, now);
       checks.push(testStatus === "error"
         ? input.executionMode === "real"
-          ? fail("CREDENTIAL_TEST_FAILED", `${role.name} 最近一次 Credential 连接测试失败；请重新测试后再运行。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("credential_test", testStatus, latestTest, now) })
-          : attention("CREDENTIAL_TEST_FAILED_FAKE", `${role.name} 最近一次 Credential 连接测试失败；fake 模式不消费 Provider 凭据，但切换 real 前请重新测试。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("credential_test", testStatus, latestTest, now) })
+          ? testProbeLimited
+            ? attention("CREDENTIAL_TEST_FAILED", `${role.name} 最近一次 Credential 连接测试未通过，但失败来自探测路径（如 Provider 不支持 /v1/models）；该结果不证明账号不能调用模型，请用真实推理调用核对。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: testEvidence })
+            : fail("CREDENTIAL_TEST_FAILED", `${role.name} 最近一次 Credential 连接测试失败；请重新测试后再运行。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: testEvidence })
+          : attention("CREDENTIAL_TEST_FAILED_FAKE", `${role.name} 最近一次 Credential 连接测试失败；fake 模式不消费 Provider 凭据，但切换 real 前请重新测试。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: testEvidence })
         : testStatus === "missing" || testStatus === "stale"
-          ? attention("CREDENTIAL_TEST_EVIDENCE_STALE", `${role.name} 没有 24 小时内成功的连接测试证据；服务端不会凭空声称 Provider 在线。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: evidenceSummary("credential_test", testStatus, latestTest, now) })
-          : pass("CREDENTIAL_TEST_READY", `${role.name} 有近期成功的 Credential 连接测试证据。`, { role: summary, credential: credentialRef, evidence: evidenceSummary("credential_test", testStatus, latestTest, now) }));
+          ? attention("CREDENTIAL_TEST_EVIDENCE_STALE", `${role.name} 没有 24 小时内成功的连接测试证据；服务端不会凭空声称 Provider 在线。`, credentialFix(input.scope), { role: summary, credential: credentialRef, evidence: testEvidence })
+          : pass("CREDENTIAL_TEST_READY", `${role.name} 有近期成功的 Credential 连接测试证据。`, { role: summary, credential: credentialRef, evidence: testEvidence }));
       const modelCount = modelCountFromAudit(latestModels);
       const modelsAt = latestModels ? new Date(latestModels.at) : null;
       const modelsFresh = Boolean(modelsAt && Number.isFinite(modelsAt.getTime()) && now.getTime() - modelsAt.getTime() <= EVIDENCE_MAX_AGE_MS);
@@ -873,6 +889,7 @@ export async function loadReadiness(
     LEFT JOIN role_configs gc ON gc.role_id = r.id AND gc.project_id IS NULL
     WHERE r.kind IN ('hub', 'role')
     ORDER BY r.kind DESC, r.builtin DESC, r.name`;
+  // SAFETY: 上面的 SELECT 列清单是本函数固定写死的，postgres.js 只把行投影为 Record<string, unknown>。
   const allRoleRows = roleRowsForScope(roleRows as unknown as Array<Record<string, unknown>>);
   const selectedRoleNames = projectId
     ? new Set((await rolesForProject(db, projectId)).map((role) => role.name))
@@ -888,6 +905,7 @@ export async function loadReadiness(
       FROM role_credentials rc
       LEFT JOIN credentials c ON c.id = rc.credential_id
       WHERE rc.role_config_id = ANY(${configIds})`;
+  // SAFETY: 上面的 SELECT 列清单固定，行形状即 ReadinessCredentialRow。
   const credentialIds = (credentials as unknown as ReadinessCredentialRow[])
     .map((row) => row.credential_id)
     .filter((id): id is string => Boolean(id));
@@ -973,8 +991,11 @@ export async function loadReadiness(
     materialSource: options.materialSource,
     roles,
     projectImagePolicy: imagePolicy,
+    // SAFETY: 四份行集都来自本文件固定列清单的查询，形状即对应 Readiness*Row。
     credentials: credentials as unknown as ReadinessCredentialRow[],
+    // SAFETY: 同上，镜像行集形状即 ReadinessRuntimeImageRow。
     runtimeImages: images as unknown as ReadinessRuntimeImageRow[],
+    // SAFETY: 同上，审计行集形状即 ReadinessAuditRow。
     audits: audits as unknown as ReadinessAuditRow[],
     hostDisk,
     openSandboxServer,

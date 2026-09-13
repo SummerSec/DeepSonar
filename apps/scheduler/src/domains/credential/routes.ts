@@ -440,6 +440,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     let result: BatchFailure | BatchSuccess;
     try {
       result = await sql.begin(async (txRaw): Promise<BatchFailure | BatchSuccess> => {
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
 
@@ -1144,6 +1145,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     type DeleteErr = { ok: false; statusCode: number; body: Record<string, unknown> };
 
     const result = await sql.begin(async (txRaw): Promise<DeleteOk | DeleteErr> => {
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       const [existing] = await tx`
@@ -1165,12 +1167,14 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
 
       // Serialize with resume: lock every non-terminal Job and active scan that
       // still points at this credential before reading impact on the same tx.
+      // SAFETY: 状态清单是 readonly 字面量元组，postgres.js 的 ANY() 需要可变 string[]。
       await tx`
         SELECT id FROM jobs
         WHERE agent_snapshot_json->>'credential_id' = ${id}
           AND status = ANY(${BLOCKING_JOB_STATUSES as unknown as string[]})
           AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         FOR UPDATE`;
+      // SAFETY: 同上，扫描状态清单同样需要可变 string[]。
       await tx`
         SELECT id FROM runtime_image_scans
         WHERE result_json->>'registry_credential_id' = ${id}
@@ -1311,7 +1315,12 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       resourceType: "credential",
       resourceId: id,
       result: result.ok ? "ok" : "error",
-      after: { ok: result.ok },
+      after: {
+        ok: result.ok,
+        // readiness 用 category 区分「账号被拒」与「探测路径不可用」（目录侧 401 → unknown）。
+        category: result.ok ? null : (result.category ?? "unknown"),
+        probe_path: result.probe_path ?? null,
+      },
     });
     return result;
   });
