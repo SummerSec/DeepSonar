@@ -21,6 +21,7 @@ const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => 
 const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ default: module.LoginPage })));
 const RuntimeImagesPage = lazy(() => import("./pages/RuntimeImagesPage").then((module) => ({ default: module.RuntimeImagesPage })));
 const PlatformSettingsPage = lazy(() => import("./pages/PlatformSettingsPage").then((module) => ({ default: module.PlatformSettingsPage })));
+const DevicesPage = lazy(() => import("./pages/DevicesPage").then((module) => ({ default: module.DevicesPage })));
 
 function Deferred({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
@@ -97,6 +98,14 @@ export default function App() {
           element={
             <Deferred>
               <RuntimeImagesPage />
+            </Deferred>
+          }
+        />
+        <Route
+          path="devices"
+          element={
+            <Deferred>
+              <DevicesPage />
             </Deferred>
           }
         />

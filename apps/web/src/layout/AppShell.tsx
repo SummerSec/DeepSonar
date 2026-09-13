@@ -1,4 +1,4 @@
-import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Database, FileText, Folder, Gear, Key, MagnifyingGlass, Moon, Palette, Queue, Receipt, Robot, ShieldCheck, SignOut, Storefront, Sun, User, X } from "@phosphor-icons/react";
+import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Database, DeviceMobile, FileText, Folder, Gear, Key, MagnifyingGlass, Moon, Palette, Queue, Receipt, Robot, ShieldCheck, SignOut, Storefront, Sun, User, X } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
@@ -19,6 +19,7 @@ const CAPABILITY_NAV: { to: string; end: boolean; label: string; caption: string
   { to: "/agents", end: false, label: "Agent", caption: "角色与能力", icon: Robot, scopes: ["agents:read"] },
   { to: "/agent-market", end: false, label: "Agent 市场", caption: "模板与模块", icon: Storefront, scopes: ["agents:read"] },
   { to: "/images", end: false, label: "镜像", caption: "可信运行环境", icon: Cube, scopes: ["images:read"] },
+  { to: "/devices", end: false, label: "设备", caption: "真实设备准入", icon: DeviceMobile, scopes: ["tasks:read"] },
 ];
 const PLATFORM_NAV: { to: string; label: string; caption: string; icon: Icon; scopes: string[] }[] = [
   { to: "/settings/access", label: "安全与访问", caption: "账号、用户与 Token", icon: ShieldCheck, scopes: ["tokens:manage"] },
