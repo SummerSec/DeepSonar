@@ -76,7 +76,7 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
-  assert.equal(SCHEMA_VERSION, 48);
+  assert.equal(SCHEMA_VERSION, 49);
 });
 
 /** 基线 CREATE TABLE 里声明了 serial / IDENTITY 的列（information_schema 投影）。 */
@@ -182,6 +182,7 @@ test("schema baseline serial and IDENTITY primary keys are all in the rebuild re
     [
       { table: "events", column: "id", kind: "serial" },
       { table: "audit_logs", column: "id", kind: "identity" },
+      { table: "device_events", column: "id", kind: "serial" },
     ],
   );
   for (const item of declared) {
