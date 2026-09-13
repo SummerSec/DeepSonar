@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-13
+
+### 新增
+
+- 真实设备接入 Phase 1（#494 / #495）：沙箱不直连物理设备，新增 device broker（独立服务，跑在可抛弃的 device rig 上）把物理设备暴露为可租借网络端点。Scheduler 在 provision 前申请**设备租约**（绑 Attempt、短期 token、TTL 过期可回收），把端点与 `ANDROID_ADB_SERVER_ADDRESS` / `ANDROID_ADB_SERVER_PORT` / `ANDROID_SERIAL` 注入沙箱，沙箱内 `adb devices` / `adb shell` 免改脚本可用。新增 `devices` / `device_leases` / `device_events` 三表与「一设备同刻最多一个未结束租约」的部分唯一索引（schema v49）；项目级 opt-in（`PATCH /projects/:id/settings` 的 `device_access_enabled`）+ 任务级 `device` 需求冻结进 Job 快照（按角色命中才占设备，Hub/report/verify 不占）；稳定错误码 `device_not_available`（可重试）/ `device_not_authorized`（不可重试）。设计见 `docs/DEVICE_ACCESS.md`。
+- OpenAPI 覆盖补齐（#492）：`GET /openapi.json` 从 150 个 operation 补到 184 个，新增平台导入导出整族、Finding 评论/关联、任务归档/硬删除/活动 Job 批量取消、画布收敛控制、用户管理、`POST /runtime-images/registry/apply`、`POST /auth/ws-ticket`；并加上「已注册路由 ⊆ OpenAPI ∪ 显式内部清单」与「operation 的 `x-deepsonar-scope` 必须等于强制 scope」两条断言，防止再次漂移。`GET /schema.md` 在仓库契约不可用时回退为运行时端点摘要，不再返回 404 占位。
+
+### 变更
+
+- Credential 连接测试改判推理路径（#491）：`POST /credentials/:id/test` 先按 vendor 口径做最小推理调用（`POST /v1/chat/completions`，Anthropic 为 `POST /v1/messages`，`max_tokens=8`），`2xx` 与 `400` 视为账号可用，只有推理路径 `401/403` 才是认证失败；模型目录路径的 `401/403/404/405` 记为 `unknown` 并单独文案。`/readiness` 的 `CREDENTIAL_TEST_FAILED` 只在权威 category 下判 error，探测路径限制降级为 warning，不再把可用的第三方中转判成不可用。响应新增 `probe_path` 标明结论来源。
+- 补齐若干端点的强制 scope（#492）：`GET /canvases/:id/convergence` 为 `tasks:read`，`pause` / `resume` / `stop-after-gate` / `drain-priority` / `run-hub-now` 为 `jobs:control`（此前未登记，非 GET 落到默认 `admin`，operator 会话在 Web UI 上会 403）；`POST /auth/logout` 登记为 `projects:read`（此前落到默认 `admin`，operator/viewer 无法注销）；`/metrics` 与 `/auth/me` 的文档 scope 对齐为任意已认证主体。
+
+### 修复
+
+- 统一输入校验与错误契约（#490）：非法 `limit` / `period` / `project_id` / `canvas_id` 一律返回 `400`（`invalid_payload` / `INVALID_ID` / `USAGE_PERIOD_INVALID`），不再静默按缺省范围返回另一个结果集；共享资产端点改用 `invalid_payload` 信封，不再回显原始 Zod issue 与 `x-asset-labels` 解析原文；终止 Job 的 cancel/priority 与归档任务的 retry/resume 补稳定 `error_code`（`JOB_NOT_CANCELLABLE` / `PRIORITY_FIXED` / `TASK_ARCHIVED`）。
+- 管理端点不再把非 UUID 路径/查询参数交给 Postgres（#489）：`GET|PATCH /projects/:id`、`/credentials/:id`、`/skill-sources/:id`、`/runtime-images/:id` 等返回 `400` 与稳定 `error_code`，不回显 `22P02` 等数据库细节。
+- 文档与实现对齐（#492）：`skills/deepsonar-management/references/api.md` 增加「OpenAPI 覆盖边界」与收敛控制条目，修正错误契约描述与若干表格渲染。
+
+### 部署 / 升级说明
+
+- **需要重建数据库**：schema v48 → v49（新增 `devices` / `device_leases` / `device_events`）。用 `pnpm db:rebuild -- --plan` / `--apply` 备份后按列交集回填；非空库版本或结构不符时 Scheduler fail closed，没有增量 ALTER 链。
+- 设备接入**默认关闭**：未配置 `DEEPSONAR_DEVICE_*` 时设备需求 fail closed（`device_not_authorized`），既有项目与任务行为不变。启用需在 device rig 上部署 broker（`deploy/docker-compose.device-broker.yml` + `deploy/Dockerfile.device-broker`），配置 `DEEPSONAR_DEVICE_ENABLED` / `DEEPSONAR_DEVICE_BROKER_URL` / `DEEPSONAR_DEVICE_BROKER_TOKEN` / `DEEPSONAR_DEVICE_LEASE_SECRET`，并为项目打开 `device_access_enabled`；见 `.env.example` 与 `docs/DEVICE_ACCESS.md`。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。平台镜像仍打 `0.4.0` tag。
+
 ## [0.3.3] - 2026-09-12
 
 ### 新增
@@ -777,6 +801,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.0]: https://github.com/SummerSec/DeepSonar/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/SummerSec/DeepSonar/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/SummerSec/DeepSonar/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/SummerSec/DeepSonar/compare/v0.2.11...v0.3.1
