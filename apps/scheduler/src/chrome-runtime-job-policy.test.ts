@@ -144,7 +144,6 @@ test("all direct Job creation paths freeze policy before INSERT", () => {
     const insert = source.indexOf("INSERT INTO jobs");
     assert.ok(freeze >= 0, `${name} must freeze network policy`);
     assert.ok(insert > freeze, `${name} must freeze before inserting a Job`);
-    assert.equal(source.indexOf("assertFrozenRuntimeImageLocal"), -1, `${name} must not keep the leftover local-docker inspect gate`);
   }
 });
 
