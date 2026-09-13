@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-13
+
 ### 新增
 
 - 多 rig 支持（#505 后续，schema v50）：平台从"单一 broker URL"扩展为 rig 注册表 —— 默认 rig 仍是 `DEEPSONAR_DEVICE_BROKER_URL`（id `default`），其余由 `DEEPSONAR_DEVICE_RIGS`（`;` 分隔的 `id=http(s)://host:port|token`，非法条目整条丢弃并在管理面 `rig.invalid_entries` 暴露）声明。设备归属进新列 `devices.rig_id`（`CHECK` + 索引，定列只存标识；端点与入站凭据只来自平台配置，不进 evidence）。准入推送改为**按 rig 分组整集替换**：每个 rig 用自己的 token 推自己的集合（空集也显式推，否则下架/删除不生效），读回各自 broker 的 revision 后再 PUT，结果逐 rig 回报 `rig_pushes`（替代原 `rig_push`）——某个 rig 不可达不影响其它 rig，也不回滚平台侧写入。租约获取按需求里的 `rig_id`（缺省 `default`）选 broker，未配置的 rig 在授权阶段 fail closed，绝不回落其它 rig；`DeviceRequirement` / `DeviceRegistration` 相应新增可选 `rig_id`。Web 设备页显示 rig 列、登记时可选目标 rig、逐 rig 展示准入摘要与推送结果。
@@ -820,6 +822,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.2]: https://github.com/SummerSec/DeepSonar/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SummerSec/DeepSonar/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SummerSec/DeepSonar/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/SummerSec/DeepSonar/compare/v0.3.2...v0.3.3
