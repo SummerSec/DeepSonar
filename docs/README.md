@@ -56,6 +56,7 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [TODO_CANVAS_PROCESS_TRUTH.md](TODO_CANVAS_PROCESS_TRUTH.md) | **A as-built · B 主路径可用** | 广播已交付；服务端 `x/y` 是 placement/exchange hint，Web 对当前可见投影布局（≤200 节点由 ELK 排主 DAG 节点/边，root 完成反馈走共享 rail；超阈值固定列）。**全图 `layout_revision` 权威重算暂缓 → #148** |
+| [DEVICE_ACCESS.md](DEVICE_ACCESS.md) | **设计（#494）** | 真实设备接入：device broker 把物理设备暴露为可租借网络端点（沙箱不直连设备）、设备租约绑 Attempt、项目 opt-in + 任务级授权、设备机可抛弃隔离与威胁模型；Phase 1 MVP 实现见 #495 |
 
 ## 已收口的设计债（#359）
 
