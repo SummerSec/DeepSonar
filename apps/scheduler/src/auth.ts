@@ -74,6 +74,15 @@ export function generateToken(): { plaintext: string; prefix: string; hash: stri
 /** 路由 → 所需 scope（§6.1 scope 表）；未列出的写操作默认 admin，读操作只需已认证 */
 const ROUTE_SCOPES: Record<string, string> = {
   "GET /dashboard/overview": "projects:read",
+  // 设备准入与管理面（#505）：读走 tasks:read（设备服务于任务执行），写走 admin；
+  // 项目隔离在 handler 内按 devices.project_id 判定（project_id 为空 = 平台共享池）。
+  "GET /devices": "tasks:read",
+  "GET /device-leases": "tasks:read",
+  "GET /devices/:id/events": "tasks:read",
+  "POST /devices": "admin",
+  "PATCH /devices/:id": "admin",
+  "DELETE /devices/:id": "admin",
+  "POST /device-leases/:id/release": "admin",
   "GET /dashboard/ops": "projects:read",
   "GET /dashboard/usage": "projects:read",
   "GET /dashboard/quality": "projects:read",
