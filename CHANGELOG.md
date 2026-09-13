@@ -4,11 +4,12 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-13
+
 ### 新增
 
 - 设备接入支持 hdc（#504）：`packages/shared-types/src/device.ts` 增加 `IMPLEMENTED_DEVICE_TRANSPORTS`（`adb` / `hdc`）与 `isImplementedDeviceTransport()`，作为 broker 与调度器判断「已实现 / 未授权」的唯一事实来源（`serial` / `ssh` / `net` 仍在契约中保留，传入即 403 / 409 `device_not_authorized`）。broker 新增 hdc 枚举（`hdc list targets`，过滤 `[Empty]` / `Connect server failed` / `[Fail]` 等噪声，目标 key 必须是单 token）与独立端点配置（`DEVICE_BROKER_HDC_HOST` / `DEVICE_BROKER_HDC_PORT`（默认 8710）/ `DEVICE_BROKER_HDC_BIN`），租约绑定 transport 且不跨 transport 匹配，单路枚举失败只让该 transport 无设备。调度器按 `DEEPSONAR_DEVICE_TRANSPORTS`（默认仅 `adb`）逐 transport 开启，并校验 broker 返回的 transport 与冻结需求一致（不一致即退回租约并按 `device_not_available` 失败）。hdc 沙箱侧消费通用变量 `DEEPSONAR_DEVICE_ENDPOINT`（`hdc -s <endpoint>` / `hdc tconn <endpoint>`），原生变量映射待真机验证后另议。
 - broker 新增平台准入（#505 阶段 1）：`PUT /rig/devices` 整集替换期望集合（revision 必须单调、同 revision 幂等重放、回退 409 `stale_revision`）、`GET /rig/devices` 返回生效集合与 `mode`，状态落 `DEVICE_BROKER_STATE_FILE` 供重启续用（缺失/损坏则空集合 fail closed）；默认 `trust platform`，显式设置 `DEVICE_BROKER_ALLOWED_KEYS` 时它作为硬上限（与平台集合取交集），从未 push 时沿用 #495 的 env 行为。平台侧管理面见下条。
-
 - 平台侧设备准入与管理面（#505 阶段 1）：新增 7 个管理端点 —— `GET /devices`（登记列表 + 在途租约 + rig 准入状态）、`POST /devices`（登记/更新，`key` 为 broker 侧设备句柄，`UNIQUE(key)` 幂等 upsert）、`PATCH /devices/:id`（`enable` / `maintenance` / `revoke`）、`DELETE /devices/:id`、`GET /device-leases`、`POST /device-leases/:id/release`（人工抢回并同步 rig）、`GET /devices/:id/events`（append-only 时间线）。读操作 scope 为 `tasks:read`、写操作为 `admin`；项目主体只能管理本项目设备，`project_id` 为空的平台共享池仅平台主体可改。每次写操作后把期望集合**整集**推给 rig broker（先 `GET /rig/devices` 读回 revision 再 PUT；推送不参与事务，失败只作为 `rig_push` 上报，由操作者重试，不假装成功）。有在途租约时 `revoke` / `DELETE` 返回 409 `DEVICE_HAS_ACTIVE_LEASE`；有租约历史时 `DELETE` 返回 409 `DEVICE_HAS_LEASE_HISTORY`（租约历史是 append-only 审计且 `device_leases.device_id` 有外键，只能下架不能删除）。同时修正 `devices.broker_ref` 的语义：它是 broker 侧设备句柄（序列号），不是 rig 标识，因此删除 #509 中按 rig 分组的 `groupDesiredByRig` / `desiredForRig`（多 rig 需按 rig 配置 broker 端点，当前 `DEEPSONAR_DEVICE_BROKER_URL` 为单一 URL）。
 - 设备管理面集成测试（#505）：`device-management.integration.test.ts` 在 scratch DB + 假 broker 上覆盖注册/重复登记、非法 transport 与项目（400）、跨项目与 scope 拒绝（403）、在途租约冲突（409）、租约列表与强制释放、维护态不进 rig 期望集合、事件链与删除规则。
 
@@ -813,6 +814,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.1]: https://github.com/SummerSec/DeepSonar/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SummerSec/DeepSonar/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/SummerSec/DeepSonar/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/SummerSec/DeepSonar/compare/v0.3.1...v0.3.2
