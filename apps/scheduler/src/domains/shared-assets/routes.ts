@@ -3,6 +3,7 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
+import { validationHttpError } from "../../http-validation-error.js";
 import { projectScopeAllows } from "../../project-scope.js";
 import {
   createSharedAsset,
@@ -21,6 +22,10 @@ const UploadHeaders = z.object({
 }).passthrough();
 
 function errorReply(reply: FastifyReply, error: unknown) {
+  // #490: a Zod/validation failure must use the shared envelope, not echo the
+  // raw Zod issue array (which leaks `origin`/`format` and drops error_code).
+  const mapped = validationHttpError(error);
+  if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
   const code = error instanceof Error ? error.message : "shared_asset_error";
   const status = code.includes("not_in_project") || code.includes("forbidden") ? 403
     : code.includes("not_found") ? 404
@@ -51,7 +56,13 @@ function requireWriter(req: FastifyRequest, reply: FastifyReply, platform = fals
 
 function parseLabels(raw: string | undefined): Record<string, string> {
   if (!raw) return {};
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    // Malformed x-asset-labels JSON is a client error, not a raw parse message.
+    throw new Error("asset_labels_invalid");
+  }
   return z.record(z.string().min(1).max(60), z.string().max(200)).parse(parsed);
 }
 

@@ -435,6 +435,23 @@ if (!testDatabaseUrl) {
       assert.equal(taskWaitingAfter.status, "pending");
       assert.equal(taskWaitingAttemptAfter.status, "interrupted");
       await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${taskWaitingJobId}`;
+      // #490: a terminal Job must answer with a stable error_code, not a bare 409.
+      const terminalCancel = await app.inject({
+        method: "POST",
+        url: `/jobs/${taskWaitingJobId}/cancel`,
+      });
+      assert.equal(terminalCancel.statusCode, 409, terminalCancel.payload);
+      assert.equal(terminalCancel.json().error_code, "JOB_NOT_CANCELLABLE");
+      // 201 is outside every scheduling class, so the class guard rejects it
+      // before the pending-status check.
+      const fixedPriority = await app.inject({
+        method: "PATCH",
+        url: `/jobs/${taskWaitingJobId}/priority`,
+        headers: { "content-type": "application/json" },
+        payload: { priority: coreModule.FIXED_PRIORITY.role + 1 },
+      });
+      assert.equal(fixedPriority.statusCode, 409, fixedPriority.payload);
+      assert.equal(fixedPriority.json().error_code, "PRIORITY_FIXED");
 
       // Every non-recoverable state is rejected before snapshot resolution or
       // mutation. In particular, running work cannot be re-frozen in place.

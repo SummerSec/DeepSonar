@@ -4,7 +4,10 @@ import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { z } from "zod";
 import { INVALID_PAYLOAD, isPostgresParameterError, validationHttpError } from "./http-validation-error.js";
+import { QueryParameterError } from "./pagination.js";
 import { registerRoutes } from "./routes.js";
+
+const FIXTURE_UUID = "11111111-1111-4111-8111-111111111111";
 
 const UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}/;
 const ZOD_REGEX_LEAK = /\/\^|expected.*uuid|Invalid option/i;
@@ -116,6 +119,9 @@ test("management endpoints reject malformed ids with 400 INVALID_ID and no pg de
     ["POST", "/credentials/not-a-uuid/status"],
     ["POST", "/tokens/not-a-uuid/revoke"],
     ["GET", "/runtime-images?project_id=not-a-uuid"],
+    ["GET", "/dashboard/overview?project_id=not-a-uuid"],
+    ["GET", "/dashboard/ops?project_id=not-a-uuid"],
+    ["GET", `/projects/${FIXTURE_UUID}/quality?canvas_id=not-a-uuid`],
   ];
   try {
     for (const [method, url] of paths) {
@@ -126,6 +132,39 @@ test("management endpoints reject malformed ids with 400 INVALID_ID and no pg de
       assert.doesNotMatch(response.body, /22P02|invalid input syntax|Internal Server Error|"stack"/, `${method} ${url}`);
       assert.doesNotMatch(response.body, UUID_PATTERN, `${method} ${url}`);
     }
+  } finally {
+    await app.close();
+  }
+});
+
+test("malformed query parameters map to 400 invalid_payload instead of a silent default", () => {
+  const mapped = validationHttpError(new QueryParameterError("limit"));
+  assert.ok(mapped);
+  assert.equal(mapped.statusCode, 400);
+  assert.equal(mapped.body.error_code, INVALID_PAYLOAD);
+  assert.deepEqual(mapped.body.issues, [{ path: "limit", code: "invalid_query" }]);
+});
+
+// #490：分页与枚举参数非法必须 400，而不是静默按缺省值返回 200 的另一个结果集。
+test("page-limit and shared-asset query errors use the shared client-error envelope", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  registerRoutes(app);
+  await app.ready();
+  const cases: Array<{ method: "GET" | "POST"; url: string }> = [
+    { method: "GET", url: "/findings?limit=abc" },
+    { method: "GET", url: "/audit-logs?limit=abc" },
+    { method: "GET", url: `/canvases/${FIXTURE_UUID}/messages?limit=abc` },
+    { method: "GET", url: "/shared-assets/not-a-uuid/content" },
+    { method: "POST", url: "/shared-assets/not-a-uuid/archive" },
+  ];
+  try {
+    for (const item of cases) {
+      const response = await app.inject({ method: item.method, url: item.url });
+      assertClientSafe400(response);
+    }
+    const limit = await app.inject({ method: "GET", url: "/findings?limit=abc" });
+    assert.deepEqual((JSON.parse(limit.body) as { issues?: unknown }).issues, [{ path: "limit", code: "invalid_query" }]);
   } finally {
     await app.close();
   }

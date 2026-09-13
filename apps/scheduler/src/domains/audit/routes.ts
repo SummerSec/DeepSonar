@@ -1,9 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { projectCredentialProvider } from "../../credentials.js";
 import { sql } from "../../db.js";
+import { parseBoundedLimit } from "../../pagination.js";
 
-function projectCredentialAuditPayload(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+/** Audit `before_json` / `after_json` are free-form JSONB columns. */
+type AuditPayload = null | undefined | boolean | number | string | unknown[] | Record<string, unknown>;
+
+function projectCredentialAuditPayload(value: unknown): AuditPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    // SAFETY: the guard above admits only JSON scalars, null/undefined and arrays,
+    // all of which AuditPayload already covers; no credential keys to project.
+    return value as AuditPayload;
+  }
   const payload = { ...(value as Record<string, unknown>) };
   if (payload.provider !== undefined && payload.provider !== null && payload.provider !== "") {
     Object.assign(payload, projectCredentialProvider(payload.kind ?? "llm_provider", payload.provider));
@@ -19,7 +27,7 @@ function projectCredentialAuditPayload(value: unknown): unknown {
 export function registerAuditRoutes(app: FastifyInstance): void {
   app.get("/audit-logs", async (req) => {
     const query = req.query as { project_id?: string; action?: string; limit?: string };
-    const limit = Math.min(Math.max(Number(query.limit) || 100, 1), 500);
+    const limit = parseBoundedLimit(query.limit, { max: 500, fallback: 100 });
     const rows = await sql`
       SELECT id, at, actor_type, actor_id, action, project_id, resource_type, resource_id,
              request_id, ip, result, error_code, before_json, after_json

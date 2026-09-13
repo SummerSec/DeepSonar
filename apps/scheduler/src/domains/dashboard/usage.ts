@@ -98,9 +98,11 @@ export interface UsageLedgerRow {
   canvas_title: string | null;
 }
 
-export function parseUsagePeriod(value: unknown, hasCustomRange: boolean): UsagePeriod {
-  if (USAGE_PERIODS.includes(value as UsagePeriod)) return value as UsagePeriod;
-  return hasCustomRange ? "custom" : "week";
+/** `null` means the caller sent a period outside USAGE_PERIODS (#490: that is a
+ * 400 USAGE_PERIOD_INVALID, not a silent `week` default). */
+export function parseUsagePeriod(value: unknown, hasCustomRange: boolean): UsagePeriod | null {
+  if (value === undefined || value === null || value === "") return hasCustomRange ? "custom" : "week";
+  return USAGE_PERIODS.includes(value as UsagePeriod) ? value as UsagePeriod : null;
 }
 
 export function isShanghaiYmd(value: string): boolean {
@@ -139,6 +141,9 @@ export function resolveUsageWindow(input: {
   const fromRaw = typeof input.from === "string" ? input.from.trim() : "";
   const toRaw = typeof input.to === "string" ? input.to.trim() : "";
   const period = parseUsagePeriod(input.period, Boolean(fromRaw || toRaw));
+  if (!period) {
+    return { ok: false, error: "period 不是有效取值", error_code: "USAGE_PERIOD_INVALID" };
+  }
 
   if (period !== "custom") {
     const today = shanghaiYmd(now);

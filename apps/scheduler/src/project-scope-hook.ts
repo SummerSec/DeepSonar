@@ -64,10 +64,10 @@ export async function projectScopeHook(req: FastifyRequest, reply: FastifyReply)
     return reply.code(400).send({ error: "invalid token id", error_code: "INVALID_ID" });
   }
   const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/runtime-images") && query.project_id && !isUuid(query.project_id)) {
+  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/dashboard/overview" || routeUrl === "/dashboard/ops" || routeUrl === "/runtime-images") && query.project_id && !isUuid(query.project_id)) {
     return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
   }
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/runtime-images") && query.canvas_id && !isUuid(query.canvas_id)) {
+  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/dashboard/overview" || routeUrl === "/dashboard/ops" || routeUrl === "/runtime-images" || routeUrl === "/projects/:id/quality" || routeUrl === "/projects/:id/quality/replay") && query.canvas_id && !isUuid(query.canvas_id)) {
     return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
   }
   const actorProjectId = req.actor?.projectId;

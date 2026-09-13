@@ -21,6 +21,7 @@ import { importedResumeBlockedReason, jobProvenance, type JobProvenance } from "
 
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 export const JOB_NOT_RESUMABLE = "JOB_NOT_RESUMABLE" as const;
+export const JOB_NOT_CANCELLABLE = "JOB_NOT_CANCELLABLE" as const;
 export { SnapshotUnresolvableError };
 
 type SnapshotObject = Record<string, unknown>;
@@ -212,6 +213,8 @@ export async function requeueJob(
   mode: "resume-frozen" | "rerun-current",
 ): Promise<RequeueJobResult> {
   const result = await sql.begin(async (rawTx) => {
+    // SAFETY: postgres.js hands the transaction handle the same tagged-template
+    // interface as `sql`; the assertion only widens the transaction type.
     const tx = rawTx as unknown as typeof sql;
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
 

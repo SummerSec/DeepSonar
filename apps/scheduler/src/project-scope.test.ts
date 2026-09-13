@@ -93,6 +93,13 @@ test("UUID guard rejects malformed route ids on management routes before SQL", a
     { url: "/runtime-images/:id/official-digest", params: { id: "x" } },
     { url: "/tokens/:id/revoke", params: { id: "x" } },
     { url: "/runtime-images", query: { project_id: "not-a-uuid" } },
+    // #490: overview/ops silently ignored a malformed project_id and returned
+    // global data as if it were the caller's scope.
+    { url: "/dashboard/overview", query: { project_id: "not-a-uuid" } },
+    { url: "/dashboard/ops", query: { project_id: "not-a-uuid" } },
+    { url: "/dashboard/overview", query: { canvas_id: "not-a-uuid" } },
+    { url: "/projects/:id/quality", params: { id: "00000000-0000-4000-8000-000000000001" }, query: { canvas_id: "not-a-uuid" } },
+    { url: "/projects/:id/quality/replay", params: { id: "00000000-0000-4000-8000-000000000001" }, query: { canvas_id: "not-a-uuid" } },
   ];
   for (const item of cases) {
     const state: CapturedReply = {};

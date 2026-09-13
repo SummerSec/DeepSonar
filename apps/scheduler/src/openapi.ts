@@ -639,7 +639,7 @@ const OPS: Op[] = [
     },
     responses: {
       "200": { description: "用量账本聚合" },
-      "400": { description: "自定义时间非法、倒序、超长或缺失" },
+      "400": { description: "period 不是 day/week/month/custom，或自定义时间非法、倒序、超长或缺失" },
     },
   },
   {

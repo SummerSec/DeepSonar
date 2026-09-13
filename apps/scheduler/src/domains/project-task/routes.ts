@@ -14,7 +14,6 @@ import {
   patchCanvasConvergence,
   projectJobQuotaFromConfig,
   resolveAgentSnapshotForJob,
-  rulesForProject,
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { revokeJobTokens } from "../../gateway.js";
@@ -33,7 +32,6 @@ import { markAttemptInterrupted } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
-import { resolveFindingProtocol } from "../../finding-protocol.js";
 import { runtimeImageHttpError } from "../../runtime-images.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 import {
@@ -467,6 +465,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
             LIMIT 1`;
           if (!interruptedWorker) {
             await maybeTriggerHub(
+              // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
               tx as unknown as typeof sql,
               {
                 id: null,
@@ -650,7 +649,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     if ((canvas.status as string) === "archived") {
-      return reply.code(409).send({ error: "任务已归档，请先取消归档再继续执行" });
+      return reply.code(409).send({ error: "任务已归档，请先取消归档再继续执行", error_code: "TASK_ARCHIVED" });
     }
     const projectId = canvas.project_id as string;
 
@@ -698,6 +697,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     // 每个 Job 默认使用旧冻结快照；任一快照相对当前受治理身份 stale 时，
     // 整批 fail closed，禁止部分入队后静默使用旧模型。
     const interruptedBatch = await sql.begin(async (rawTx) => {
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       const tx = rawTx as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
       await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
@@ -746,7 +746,6 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         const detail = await frozenSnapshotStaleDetail(tx, worker as Record<string, unknown>);
         if (detail) {
           stale.push(detail);
-          continue;
         }
       }
       if (stale.length > 0) {
@@ -890,6 +889,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     let convergence;
     try {
       convergence = await sql.begin(async (tx) => {
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         const resumedConvergence = await patchCanvasConvergence(tx as unknown as typeof sql, canvasId, {
           hub_paused: false,
           auto_stopped: false,
@@ -897,6 +897,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           paused_at: undefined,
         });
         await maybeTriggerHub(
+          // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
           tx as unknown as typeof sql,
           {
             id: null,
@@ -944,7 +945,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     if ((canvas.status as string) === "archived") {
-      return reply.code(409).send({ error: "任务已归档，请先取消归档再重试" });
+      return reply.code(409).send({ error: "任务已归档，请先取消归档再重试", error_code: "TASK_ARCHIVED" });
     }
     const projectId = canvas.project_id as string;
 
@@ -998,6 +999,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       // execution, so disposed or stale seeds fail closed before the wipe.
       const retryTarget = (lockedCanvas.target_json ?? {}) as Record<string, unknown>;
       const seedFindings = await validateFrozenTaskSeedsForRetry(
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         tx as unknown as typeof sql,
         projectId,
         retryTarget,
@@ -1006,9 +1008,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         payload.related_finding_ids = seedFindings.map((seed) => seed.id);
       }
       const snapshot = await freezeAgentSnapshotNetworkPolicy(
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         tx as unknown as typeof sql,
         canvasId,
         await resolveAgentSnapshotForJob(
+          // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
           tx as unknown as typeof sql,
           projectId,
           "hub_reason",
@@ -1035,6 +1039,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         })}
         RETURNING id`;
       await insertTaskSeedProjections(
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         tx as unknown as typeof sql,
         canvasId,
         rootNode.id as string,
@@ -1054,6 +1059,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           followup_depth: 0,
         })}
         RETURNING *`;
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       await recordJobSharedAssets(tx as unknown as typeof sql, hubJob.id as string, snapshot.shared_assets ?? []);
 
       const [{ next_x }] = await tx<[{ next_x: number }]>`
@@ -1096,7 +1102,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
     if (!retryResult.job) {
       if (retryResult.reason === "archived") {
-        return reply.code(409).send({ error: "任务已归档，请先取消归档再重试" });
+        return reply.code(409).send({ error: "任务已归档，请先取消归档再重试", error_code: "TASK_ARCHIVED" });
       }
       if (retryResult.reason === "active") {
         return reply.code(409).send({ error: "该任务仍有活动 Job，请先取消后再重试" });
