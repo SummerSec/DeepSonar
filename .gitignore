@@ -13,3 +13,7 @@ deploy/master.key
 
 # 本地引导 admin token（敏感临时文件，勿提交）
 .deepsonar-admin-token*
+
+# 软著登记身份等个人信息不入库
+软件著作权申请资料/本地私密.json
+
