@@ -100,7 +100,7 @@ Job pending → claimed（申请设备，写 pending 租约）
 
 ## 5. 分期落地
 
-#### Phase 1（MVP，#495 / #504 / #506；已落地）
+#### Phase 1（MVP，#495 / #504 / #505 阶段 1 / #506；已落地）
 
 已实现（细节以代码/测试为准）：
 
@@ -120,7 +120,21 @@ Job pending → claimed（申请设备，写 pending 租约）
   注入端点、终态/取消释放、Reaper 回收过期租约。
 - 授权：项目 opt-in（`PATCH /projects/:id/settings` `device_access_enabled`）+ 任务级
   `device` 需求（冻结进 `jobs.agent_snapshot_json.device_requirement`，按 `roles` 命中才占用设备）。
-- 测试：`ci:unit:device-broker`、`ci:unit:device-lease`、`ci:integration:device-lease`、
+- 平台准入与管理面（#505 阶段 1）：broker 侧 `PUT /rig/devices` 整集替换期望集合（revision 单调、
+  同号幂等重放、回退 409 `stale_revision`；默认 `trust platform`，显式 `DEVICE_BROKER_ALLOWED_KEYS`
+  时作硬上限取交集；从未 push 时沿用 #495 的 env 行为）、`GET /rig/devices` 回读生效集合与 `mode`。
+  平台侧 `domains/device/rig-registry.ts` 负责「先读回 revision 再把期望集合整集推过去」，409/401/
+  网络与契约不符映射为稳定代号且不回显 broker 正文，未知结果只读回不自动重放。
+  管理端点：`GET /devices`、`POST /devices`（`key` = broker 侧设备句柄，`UNIQUE(key)` 幂等 upsert）、
+  `PATCH /devices/:id`（`enable` / `maintenance` / `revoke`）、`DELETE /devices/:id`、
+  `GET /device-leases`、`POST /device-leases/:id/release`、`GET /devices/:id/events`（append-only）。
+  读取 scope 为 `tasks:read`、写入为 `admin`；项目主体只能管理本项目设备，`devices.project_id`
+  为空的平台共享池仅平台主体可改。有在途租约时 `revoke` / `DELETE` 返回 409 `DEVICE_HAS_ACTIVE_LEASE`；
+  有租约历史时 `DELETE` 返回 409 `DEVICE_HAS_LEASE_HISTORY`（只能下架，审计不可删）。
+  **`devices.broker_ref` 是 broker 侧设备句柄（序列号），不是 rig 标识**；一个 Scheduler 只对单一
+  `DEEPSONAR_DEVICE_BROKER_URL` 推送，多 rig 需要按 rig 配置端点（尚未实现）。
+- 测试：`ci:unit:device-broker`、`ci:unit:device-lease`、`ci:integration:device-lease`
+  （含管理面 `device-management.integration.test.ts`：400 / 403 / 409 与 rig 推送）、
   `ci:smoke:device`（真机 rig，未配置时 skip）。
 
 仍未覆盖（Phase 2 或需要真机环境）：

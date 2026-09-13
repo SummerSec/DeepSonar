@@ -109,7 +109,7 @@ export async function assertDeviceAccessAuthorized(
   }
 }
 
-async function recordDeviceEvents(
+export async function recordDeviceEvents(
   db: typeof sql,
   rows: Array<{
     device_id: string | null;

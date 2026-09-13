@@ -8,6 +8,7 @@
 export const REGISTERED_ROUTE_SURFACE = `
 DELETE /agent-roles/:id
 DELETE /credentials/:id
+DELETE /devices/:id
 DELETE /exports/:id
 DELETE /findings/:id/comments/:commentId
 DELETE /findings/:id/links/:linkId
@@ -51,6 +52,9 @@ GET /dashboard/overview
 GET /dashboard/quality
 GET /dashboard/quality/replay
 GET /dashboard/usage
+GET /device-leases
+GET /devices
+GET /devices/:id/events
 GET /exports/:id
 GET /exports/:id/download
 GET /findings
@@ -91,6 +95,7 @@ GET /reports/:id/markdown
 GET /reports/:id/sarif
 GET /role-configs/bindable
 GET /role-configs/global
+PATCH /devices/:id
 PATCH /role-configs/:id/agent-cli
 PATCH /role-configs/:id/runtime-image
 GET /runtime-images
@@ -147,6 +152,8 @@ POST /credentials/:id/rotate
 POST /credentials/:id/status
 POST /credentials/:id/test
 POST /credentials/batch-bind
+POST /device-leases/:id/release
+POST /devices
 POST /exports/:id/cancel
 POST /findings/:id/comments
 POST /findings/:id/evidence-jobs
@@ -207,6 +214,7 @@ PUT /role-configs/global/:roleId
 export const OPENAPI_OPERATION_SURFACE = `
 DELETE /agent-roles/{id}
 DELETE /credentials/{id}
+DELETE /devices/{id}
 DELETE /exports/{id}
 DELETE /findings/{id}/comments/{commentId}
 DELETE /findings/{id}/links/{linkId}
@@ -245,6 +253,9 @@ GET /dashboard/overview
 GET /dashboard/quality
 GET /dashboard/quality/replay
 GET /dashboard/usage
+GET /device-leases
+GET /devices
+GET /devices/{id}/events
 GET /exports/{id}
 GET /exports/{id}/download
 GET /findings
@@ -300,6 +311,7 @@ GET /workers
 PATCH /agent-roles/{id}
 PATCH /canvases/{id}/facts/{nodeId}/verification
 PATCH /credentials/{id}
+PATCH /devices/{id}
 PATCH /findings/{id}/disposition
 PATCH /findings/{id}/verify-status
 PATCH /global-settings
@@ -336,6 +348,8 @@ POST /credentials/{id}/models
 POST /credentials/{id}/rotate
 POST /credentials/{id}/status
 POST /credentials/{id}/test
+POST /device-leases/{id}/release
+POST /devices
 POST /exports/{id}/cancel
 POST /findings/{id}/comments
 POST /findings/{id}/evidence-jobs

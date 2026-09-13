@@ -42,22 +42,3 @@ test("delete is blocked while a lease is still active", async () => {
   assert.equal(deviceDeleteBlocked(0), false);
   assert.equal(deviceDeleteBlocked(1), true);
 });
-
-const rows = [
-  { key: "rig-1", transport: "adb", model: "Pixel-7", status: "idle", broker_ref: "rig-a", updated_at: 1 },
-  { key: "rig-2", transport: "adb", model: null, status: "maintenance", broker_ref: "rig-a", updated_at: 2 },
-  { key: "oh-1", transport: "hdc", model: null, status: "idle", broker_ref: "rig-b", updated_at: 3 },
-  { key: "rig-3", transport: "adb", model: null, status: "revoked", broker_ref: "rig-b", updated_at: 4 },
-  { key: "orphan", transport: "adb", model: null, status: "idle", broker_ref: null, updated_at: 5 },
-];
-
-test("desired sets are grouped per rig and skip maintenance/revoked rows", async () => {
-  const { groupDesiredByRig, desiredForRig } = await import("./management.js");
-  const grouped = groupDesiredByRig(rows);
-  // 没有 broker_ref 的登记项不参与推送。
-  assert.deepEqual([...grouped.keys()], ["rig-a", "rig-b"]);
-  assert.deepEqual(grouped.get("rig-a")?.map((device) => device.key), ["rig-1"]);
-  assert.deepEqual(grouped.get("rig-b")?.map((device) => device.key), ["oh-1"]);
-  assert.deepEqual(desiredForRig(rows, "rig-b").map((device) => device.transport), ["hdc"]);
-  assert.deepEqual(desiredForRig(rows, "rig-missing"), []);
-});

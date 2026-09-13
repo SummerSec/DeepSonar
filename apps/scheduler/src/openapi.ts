@@ -243,6 +243,14 @@ const RuntimeImageChannelUnavailableSchema = {
 
 /** 核心 API 操作表（OpenAPI paths 的单一来源） */
 const OPS: Op[] = [
+  // 设备准入与管理面（#505 阶段 1）：平台是权威，写操作后把期望集合整集推给 rig broker。
+  { method: "get", path: "/devices", summary: "设备登记列表（含在途租约与 rig 准入状态；不返回租约 token）", scope: "tasks:read", tags: ["Devices"] },
+  { method: "post", path: "/devices", summary: "登记/更新一台真实设备（key = broker 侧设备句柄；登记后下发给 rig）", scope: "admin", tags: ["Devices"] },
+  { method: "patch", path: "/devices/{id}", summary: "设备管理动作（enable / maintenance / revoke）；有在途租约时 revoke 返回 409", scope: "admin", tags: ["Devices"] },
+  { method: "delete", path: "/devices/{id}", summary: "删除设备登记（有在途租约时 409，需先强制释放）", scope: "admin", tags: ["Devices"] },
+  { method: "get", path: "/device-leases", summary: "设备租约列表（按 job / project / device / state 过滤）", scope: "tasks:read", tags: ["Devices"] },
+  { method: "post", path: "/device-leases/{id}/release", summary: "强制释放租约（人工抢回设备；设备回 idle 并同步 rig）", scope: "admin", tags: ["Devices"] },
+  { method: "get", path: "/devices/{id}/events", summary: "设备控制面事件时间线（append-only）", scope: "tasks:read", tags: ["Devices"] },
   // meta
   {
     method: "get",
@@ -2948,6 +2956,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     ],
     tags: [
       { name: "Meta" },
+      { name: "Devices" },
       { name: "Auth" },
       { name: "Dashboard" },
       { name: "Projects" },
