@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { DeviceRegistration, DeviceStatusAction } from "@deepsonar/shared-types";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
+import { rigForId } from "../../device-rigs.js";
 import { sql } from "../../db.js";
 import { validationHttpError } from "../../http-validation-error.js";
 import { parseBoundedLimit } from "../../pagination.js";
@@ -17,11 +18,10 @@ import {
   statusAfterAction,
 } from "./management.js";
 import {
-  desiredRigDevices,
-  pushRigAdmission,
+  pushAllRigAdmissions,
   readRigAdmission,
   rigRegistryConfigured,
-  type PushOutcome,
+  type RigPushResult,
 } from "./rig-registry.js";
 
 /**
@@ -43,6 +43,7 @@ type DeviceListRow = {
   model: string | null;
   transport: string;
   broker_ref: string | null;
+  rig_id: string;
   status: string;
   capabilities_json: unknown;
   spec_json: unknown;
@@ -88,11 +89,11 @@ function forbidden(reply: FastifyReply, req: FastifyRequest): FastifyReply {
 }
 
 /**
- * 把当前期望集合整集推给该 rig 的 broker。`devices.broker_ref` 是 broker 侧设备句柄，
- * 不是 rig 标识：本阶段一个 Scheduler 只对单一 broker URL 推送（多 rig 需要按 rig 配置端点）。
+ * 把当前期望集合推给**所有已配置 rig**（各自整集替换）：`devices.rig_id` 是归属，端点与凭据来自平台
+ * 配置。推送不参与事务 —— DB 写入是平台侧真相，失败只作为 `rig_pushes` 回报给操作者，由他重试。
  */
-async function pushDesiredDevices(): Promise<PushOutcome | null> {
-  if (!rigRegistryConfigured()) return null;
+async function pushDesiredDevices(): Promise<RigPushResult[]> {
+  if (!rigRegistryConfigured()) return [];
   const rows = await sql<
     Array<{
       key: string;
@@ -100,9 +101,10 @@ async function pushDesiredDevices(): Promise<PushOutcome | null> {
       model: string | null;
       status: string;
       updated_at: unknown;
+      rig_id: string;
     }>
-  >`SELECT key, transport, model, status, updated_at FROM devices ORDER BY key`;
-  return pushRigAdmission(desiredRigDevices(rows));
+  >`SELECT key, transport, model, status, updated_at, rig_id FROM devices ORDER BY key`;
+  return pushAllRigAdmissions(rows);
 }
 
 export function registerDeviceRoutes(app: FastifyInstance): void {
@@ -115,7 +117,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     const limit = parseBoundedLimit(query.limit, { max: 500, fallback: 200 });
     const actorProjectId = req.actor?.projectId ?? null;
     const devices = await sql<DeviceListRow[]>`
-      SELECT d.id, d.project_id, d.key, d.model, d.transport, d.broker_ref, d.status,
+      SELECT d.id, d.project_id, d.key, d.model, d.transport, d.broker_ref, d.rig_id, d.status,
              d.capabilities_json, d.spec_json, d.created_at, d.updated_at,
              l.id AS lease_id, l.job_id AS lease_job_id, l.state AS lease_state,
              l.expires_at AS lease_expires_at
@@ -127,13 +129,28 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         AND (${actorProjectId}::uuid IS NULL OR d.project_id = ${actorProjectId}::uuid)
       ORDER BY d.key ASC
       LIMIT ${limit}`;
+    // 每个已配置 rig 单独回报准入状态：一个 rig 不可达不影响其它 rig 的结论。
+    const rigs: Array<{
+      id: string;
+      broker_configured: boolean;
+      admission: Awaited<ReturnType<typeof readRigAdmission>>;
+    }> = [];
+    for (const rig of config.device.rigs) {
+      rigs.push({
+        id: rig.id,
+        broker_configured: deviceBrokerConfigured(rig.id),
+        admission: await readRigAdmission(rig.id),
+      });
+    }
     return {
       devices,
       rig: {
         enabled: config.device.enabled,
         broker_configured: deviceBrokerConfigured(),
         transports: config.device.transports,
-        admission: await readRigAdmission(),
+        rigs,
+        /** 被丢弃的 DEEPSONAR_DEVICE_RIGS 条目原因（只含形状描述，不含凭据）。 */
+        invalid_entries: config.device.invalidRigEntries,
       },
     };
   });
@@ -144,6 +161,12 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       return badRequest(reply, parsed.error, "invalid device registration");
     const row = registrationRow(parsed.data);
     if (!projectAllowed(req, row.project_id)) return forbidden(reply, req);
+    // rig 必须已配置：登记到一个不存在的 rig 会让集合推不掉，等于静默失效。
+    if (!rigForId(config.device.rigs, row.rig_id))
+      return reply.code(400).send({
+        error: `rig ${row.rig_id} 未配置（DEEPSONAR_DEVICE_RIGS / DEEPSONAR_DEVICE_BROKER_URL）`,
+        error_code: "INVALID_RIG",
+      });
     if (row.project_id) {
       const [project] = await sql<[{ id: string }?]>`
         SELECT id FROM projects WHERE id = ${row.project_id}`;
@@ -156,15 +179,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       Array<{ id: string; status: string; created_at: string }>
     >`
       INSERT INTO devices (
-        project_id, key, model, transport, broker_ref, status, capabilities_json, spec_json
+        project_id, key, model, transport, broker_ref, rig_id, status, capabilities_json, spec_json
       ) VALUES (
-        ${row.project_id}, ${row.key}, ${row.model}, ${row.transport}, ${row.key},
+        ${row.project_id}, ${row.key}, ${row.model}, ${row.transport}, ${row.key}, ${row.rig_id},
         ${row.status}, ${sql.json([row.transport] as never)}, ${sql.json({} as never)}
       )
       ON CONFLICT (key) DO UPDATE SET
         project_id = EXCLUDED.project_id,
         model = COALESCE(EXCLUDED.model, devices.model),
         transport = EXCLUDED.transport,
+        rig_id = EXCLUDED.rig_id,
         status = EXCLUDED.status,
         updated_at = now()
       RETURNING id, status, created_at`;
@@ -184,6 +208,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           device_key: row.key,
           transport: row.transport,
           project_id: row.project_id,
+          rig_id: row.rig_id,
           status: device.status,
         },
       },
@@ -196,6 +221,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         device_key: row.key,
         transport: row.transport,
         project_id: row.project_id,
+        rig_id: row.rig_id,
         status: device.status,
       },
     });
@@ -206,10 +232,11 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         key: row.key,
         model: row.model,
         transport: row.transport,
+        rig_id: row.rig_id,
         status: device.status,
         created_at: device.created_at,
       },
-      rig_push: await pushDesiredDevices(),
+      rig_pushes: await pushDesiredDevices(),
     });
   });
 
@@ -271,7 +298,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     });
     return reply.send({
       device: { id: deviceId, key: current.key, status },
-      rig_push: await pushDesiredDevices(),
+      rig_pushes: await pushDesiredDevices(),
     });
   });
 
@@ -338,7 +365,7 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     return reply.send({
       deleted: true,
       device_key: outcome.key,
-      rig_push: await pushDesiredDevices(),
+      rig_pushes: await pushDesiredDevices(),
     });
   });
 

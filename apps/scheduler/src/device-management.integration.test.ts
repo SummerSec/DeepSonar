@@ -143,7 +143,11 @@ if (testDatabaseUrl) {
       assert.equal(registered.statusCode, 201, registered.payload);
       const device = registered.json().device as { id: string; status: string };
       assert.equal(device.status, "idle");
-      assert.equal(registered.json().rig_push.ok, true, registered.payload);
+      const pushes = registered.json().rig_pushes as Array<{
+        rig: string;
+        ok: boolean;
+      }>;
+      assert.equal(pushes.find((entry) => entry.rig === "default")?.ok, true, registered.payload);
       assert.deepEqual(
         (rigPushes.at(-1)?.devices as Array<{ key: string }>).map((d) => d.key),
         ["rig-9"],

@@ -1,4 +1,9 @@
-import { deviceStatusForAction, type DeviceRegistration, type DeviceStatusAction } from "@deepsonar/shared-types";
+import {
+  DEFAULT_DEVICE_RIG_ID,
+  deviceStatusForAction,
+  type DeviceRegistration,
+  type DeviceStatusAction,
+} from "@deepsonar/shared-types";
 
 /**
  * 设备准入的规则层（#505 阶段 1）。这里只做纯计算：管理面路由负责校验、事务与审计，
@@ -11,6 +16,8 @@ export type DeviceRegistrationRow = {
   model: string | null;
   /** null = 平台共享池（`devices.project_id` 为空）。 */
   project_id: string | null;
+  /** 归属 rig；缺省写默认 rig（与列 DEFAULT 一致）。 */
+  rig_id: string;
   status: "idle" | "maintenance" | "revoked";
 };
 
@@ -21,6 +28,7 @@ export function registrationRow(registration: DeviceRegistration): DeviceRegistr
     transport: registration.transport,
     model: registration.model ?? null,
     project_id: registration.project_id ?? null,
+    rig_id: registration.rig_id ?? DEFAULT_DEVICE_RIG_ID,
     status: registration.enabled ? "idle" : "maintenance",
   };
 }

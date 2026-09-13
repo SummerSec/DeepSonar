@@ -4,6 +4,8 @@ import test from "node:test";
 // config 在 import 时读 env；broker 地址与 fetch 由每段测试内的 stub 接管。
 process.env.DEEPSONAR_DEVICE_ENABLED = "true";
 process.env.DEEPSONAR_DEVICE_BROKER_URL = "http://127.0.0.1:8798";
+// 多 rig（#505 后续）：具名 rig 与默认 rig 并存，准入集合按 rig 分组。
+process.env.DEEPSONAR_DEVICE_RIGS = "rig-b=http://127.0.0.1:8797|broker-token-b";
 process.env.DEEPSONAR_DEVICE_BROKER_TOKEN = "broker-inbound-token";
 process.env.DEEPSONAR_DEVICE_TRANSPORTS = "adb,hdc";
 

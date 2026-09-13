@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { DeviceEvent, DeviceLease, DeviceRegistry, DeviceSummary } from "../api";
+import type { DeviceEvent, DeviceLease, DeviceRegistry, DeviceRigPush, DeviceSummary } from "../api";
 import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import {
@@ -9,10 +9,13 @@ import {
   deviceCanManage,
   deviceErrorCode,
   deviceRemedyHint,
+  deviceRigOptions,
   deviceStatusLabel,
   deviceStatusTone,
+  formatRigPushes,
   leaseIsActive,
   leaseStateLabel,
+  rigAdmissionLine,
   rigAdmissionSummary,
 } from "../devices";
 import {
@@ -73,7 +76,11 @@ export function DevicesPage() {
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [eventsFor, setEventsFor] = useState<string | null>(null);
   const [events, setEvents] = useState<DeviceEvent[]>([]);
-  const [form, setForm] = useState({ key: "", transport: "adb", model: "" });
+  const [form, setForm] = useState({ key: "", transport: "adb", model: "", rig_id: "default" });
+  const configuredRigs = useMemo(
+    () => (registry?.rig.rigs ?? []).map((rig) => rig.id),
+    [registry],
+  );
 
   const canRead = canAccessAnyScope(me, ["tasks:read"]);
   const canManage = deviceCanManage(me);
@@ -102,8 +109,12 @@ export function DevicesPage() {
       setError(null);
       setNotice(null);
       try {
-        await action();
-        setNotice(successNotice);
+        const result = await action();
+        setNotice(
+          result && typeof result === "object" && "rig_pushes" in result
+            ? `${successNotice} · ${formatRigPushes((result as { rig_pushes: DeviceRigPush[] }).rig_pushes)}`
+            : successNotice,
+        );
         setConfirmingDelete(null);
         await load();
       } catch (cause) {
@@ -130,13 +141,14 @@ export function DevicesPage() {
     setError(null);
     setNotice(null);
     try {
-      await api.registerDevice({
+      const result = await api.registerDevice({
         key,
         transport: form.transport,
         model: form.model.trim() ? form.model.trim() : null,
+        rig_id: form.rig_id,
       });
-      setNotice(`已登记 ${key}，并把期望集合推给 rig`);
-      setForm({ key: "", transport: form.transport, model: "" });
+      setNotice(`已登记 ${key}（rig ${form.rig_id}）· ${formatRigPushes(result.rig_pushes)}`);
+      setForm({ key: "", transport: form.transport, model: "", rig_id: form.rig_id });
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -185,6 +197,17 @@ export function DevicesPage() {
       <section className="flex flex-col gap-2 rounded-lg border border-zinc-800/70 bg-zinc-900/30 p-4">
         <SectionHeading title="rig 准入" meta={registry?.rig.enabled ? "enabled" : "disabled"} />
         <p className="text-[13px] text-zinc-400">{rigAdmissionSummary(registry?.rig)}</p>
+        {registry?.rig.rigs.map((rig) => (
+          <p key={rig.id} className="font-mono text-[11px] text-zinc-500">
+            {rig.id} · {rigAdmissionLine(rig)}
+          </p>
+        ))}
+        {registry && registry.rig.invalid_entries.length > 0 ? (
+          <p className="text-[12px] text-amber-300">
+            DEEPSONAR_DEVICE_RIGS 有 {registry.rig.invalid_entries.length} 条被丢弃：
+            {registry.rig.invalid_entries.join("；")}
+          </p>
+        ) : null}
         <p className="font-mono text-[11px] text-zinc-500">
           transports={registry?.rig.transports.join(",") ?? "-"} · devices={devices.length} · active_leases={activeLeaseCount}
         </p>
@@ -218,12 +241,19 @@ export function DevicesPage() {
                 placeholder="Pixel-7"
               />
             </Field>
+            <FilterSelect
+              value={form.rig_id}
+              onChange={(value) => setForm({ ...form, rig_id: value })}
+              options={deviceRigOptions(configuredRigs)}
+              placeholder="目标 rig"
+              label="目标 rig"
+            />
             <PrimaryButton type="submit" busy={busy === "register"}>
               登记并同步 rig
             </PrimaryButton>
           </form>
           <p className="text-[12px] text-zinc-500">
-            留空 project 表示平台共享池；登记是幂等 upsert（同一 key 覆盖 transport 与状态）。
+            留空 project 表示平台共享池；登记是幂等 upsert（同一 key 覆盖 transport、rig 与状态）。
           </p>
         </section>
       ) : (
@@ -256,6 +286,7 @@ export function DevicesPage() {
             <thead>
               <tr>
                 <th className={thCls}>key</th>
+                <th className={thCls}>rig</th>
                 <th className={thCls}>transport</th>
                 <th className={thCls}>model</th>
                 <th className={thCls}>状态</th>
@@ -270,6 +301,9 @@ export function DevicesPage() {
                   <td className={tdCls}>
                     <span className="font-mono text-[12px] text-zinc-200">{device.key}</span>
                     <p className="font-mono text-[10px] text-zinc-500">{device.project_id ?? "平台共享池"}</p>
+                  </td>
+                  <td className={tdCls}>
+                    <span className="font-mono text-[11px] text-zinc-300">{device.rig_id}</span>
                   </td>
                   <td className={tdCls}>{device.transport}</td>
                   <td className={tdCls}>{device.model ?? "-"}</td>

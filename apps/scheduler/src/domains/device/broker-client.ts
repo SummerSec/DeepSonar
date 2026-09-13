@@ -1,12 +1,16 @@
 import { DeviceLeaseGrant, type DeviceRequirement } from "@deepsonar/shared-types";
 import { config } from "../../config.js";
+import { rigForId, type DeviceRig } from "../../device-rigs.js";
 
 /**
- * Device broker 客户端（#495）。调度器是唯一有副作用的执行者：broker 是不可信外部进程，
+ * Device broker 客户端（#495 / 多 rig）。调度器是唯一有副作用的执行者：broker 是不可信外部进程，
  * 响应必须按共享契约解析后才能落库，且调度器持有的是短期租约而不是设备控制权。
+ *
+ * 多 rig（#505 后续）：所有调用都必须显式带上目标 rig —— 端点与入站凭据来自平台配置，
+ * 由调用方先用 `rigForId()` 解析；解析不到就 fail closed，绝不回落到"随便找个 broker"。
  */
 
-/** 未授权：不可重试（项目未 opt-in、传输未实现、功能未启用）。 */
+/** 未授权：不可重试（项目未 opt-in、传输未实现、功能未启用、rig 未配置）。 */
 export class DeviceNotAuthorizedError extends Error {
   readonly code = "device_not_authorized";
   constructor(message: string) {
@@ -24,28 +28,37 @@ export class DeviceNotAvailableError extends Error {
   }
 }
 
-export function deviceBrokerConfigured(): boolean {
-  return config.device.enabled && Boolean(config.device.brokerUrl) && Boolean(config.device.brokerToken);
+/**
+ * 是否存在可用 rig：不带参数表示"至少配置了一个 rig"；带 rigId 表示该 rig 是否已配置
+ * （`null` → 默认 rig）。
+ */
+export function deviceBrokerConfigured(rigId?: string | null): boolean {
+  if (!config.device.enabled) return false;
+  if (rigId === undefined) return config.device.rigs.length > 0;
+  return rigForId(config.device.rigs, rigId) !== null;
 }
 
-function brokerBaseUrl(): string {
-  return config.device.brokerUrl.replace(/\/+$/u, "");
-}
-
-async function brokerFetch(path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+async function brokerFetch(
+  rig: DeviceRig,
+  path: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
   try {
-    return await fetch(`${brokerBaseUrl()}${path}`, {
+    return await fetch(`${rig.brokerUrl.replace(/\/+$/u, "")}${path}`, {
       ...init,
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${config.device.brokerToken}`,
+        authorization: `Bearer ${rig.brokerToken}`,
         ...(init.headers ?? {}),
       },
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new DeviceNotAvailableError(`device broker 不可达：${detail}`);
+    throw new DeviceNotAvailableError(
+      `device broker 不可达（rig ${rig.id}）：${detail}`,
+    );
   }
 }
 
@@ -58,8 +71,10 @@ export async function acquireDeviceOnBroker(input: {
   attemptId: string;
   projectId: string;
   requirement: DeviceRequirement;
+  rig: DeviceRig;
 }): Promise<DeviceLeaseGrant> {
   const response = await brokerFetch(
+    input.rig,
     "/lease/acquire",
     {
       method: "POST",
@@ -80,7 +95,9 @@ export async function acquireDeviceOnBroker(input: {
     throw new DeviceNotAuthorizedError("device broker 拒绝了租约请求（未授权）");
   }
   if (!response.ok) {
-    throw new DeviceNotAvailableError(`device broker 租约失败（HTTP ${response.status}）`);
+    throw new DeviceNotAvailableError(
+      `device broker 租约失败（rig ${input.rig.id}，HTTP ${response.status}）`,
+    );
   }
   let payload: unknown;
   try {
@@ -100,8 +117,10 @@ export async function releaseDeviceOnBroker(input: {
   leaseId: string;
   deviceKey: string;
   reason?: string;
+  rig: DeviceRig;
 }): Promise<void> {
   const response = await brokerFetch(
+    input.rig,
     "/lease/release",
     {
       method: "POST",
@@ -114,5 +133,7 @@ export async function releaseDeviceOnBroker(input: {
     config.device.releaseTimeoutMs,
   );
   if (response.ok || response.status === 404) return;
-  throw new DeviceNotAvailableError(`device broker 释放租约失败（HTTP ${response.status}）`);
+  throw new DeviceNotAvailableError(
+    `device broker 释放租约失败（rig ${input.rig.id}，HTTP ${response.status}）`,
+  );
 }

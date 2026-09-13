@@ -6,6 +6,8 @@
 
 ### 新增
 
+- 多 rig 支持（#505 后续，schema v50）：平台从"单一 broker URL"扩展为 rig 注册表 —— 默认 rig 仍是 `DEEPSONAR_DEVICE_BROKER_URL`（id `default`），其余由 `DEEPSONAR_DEVICE_RIGS`（`;` 分隔的 `id=http(s)://host:port|token`，非法条目整条丢弃并在管理面 `rig.invalid_entries` 暴露）声明。设备归属进新列 `devices.rig_id`（`CHECK` + 索引，定列只存标识；端点与入站凭据只来自平台配置，不进 evidence）。准入推送改为**按 rig 分组整集替换**：每个 rig 用自己的 token 推自己的集合（空集也显式推，否则下架/删除不生效），读回各自 broker 的 revision 后再 PUT，结果逐 rig 回报 `rig_pushes`（替代原 `rig_push`）——某个 rig 不可达不影响其它 rig，也不回滚平台侧写入。租约获取按需求里的 `rig_id`（缺省 `default`）选 broker，未配置的 rig 在授权阶段 fail closed，绝不回落其它 rig；`DeviceRequirement` / `DeviceRegistration` 相应新增可选 `rig_id`。Web 设备页显示 rig 列、登记时可选目标 rig、逐 rig 展示准入摘要与推送结果。
+
 - 设备准入管理面板（#505 阶段 1 后续）：新增平台级 `/devices` 页面（`apps/web/src/pages/DevicesPage.tsx`）——展示 rig 准入摘要（未启用 / 未配置 / 不可达 / 已同步 四种状态如实呈现，不假装同步）、设备登记列表（key / transport / model / 状态 / 在途租约 / 更新时间）与设备租约列表，并支持登记、启用 / 转维护 / 下架、二次确认删除和强制释放租约。写操作仅 `admin` 可用（与后端 `ROUTE_SCOPES` 一致，只读角色只看列表），409 冲突按稳定错误码给补救提示（`DEVICE_HAS_ACTIVE_LEASE` → 先强制释放；`DEVICE_HAS_LEASE_HISTORY` → 改用下架，因为租约历史是 append-only 审计）。导航新增「设备」入口（scope `tasks:read`）。
 
 ## [0.4.1] - 2026-09-13

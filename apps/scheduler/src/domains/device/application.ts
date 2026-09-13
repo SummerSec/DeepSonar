@@ -5,6 +5,7 @@ import {
   isImplementedDeviceTransport,
 } from "@deepsonar/shared-types";
 import { config } from "../../config.js";
+import { rigForId } from "../../device-rigs.js";
 import { sql } from "../../db.js";
 import { frozenSnapshotAllowEgress } from "../role-runtime-snapshot/index.js";
 import {
@@ -89,6 +90,12 @@ export async function assertDeviceAccessAuthorized(
       "平台未启用真实设备接入（DEEPSONAR_DEVICE_ENABLED / broker 未配置）",
     );
   }
+  // 多 rig：需求里的 rig_id 必须已配置，否则授权阶段就 fail closed（绝不回落其它 rig 的 broker）。
+  if (!rigForId(config.device.rigs, requirement.rig_id)) {
+    throw new DeviceNotAuthorizedError(
+      `平台未配置 rig ${requirement.rig_id ?? "default"}（DEEPSONAR_DEVICE_RIGS）`,
+    );
+  }
   if (!isImplementedDeviceTransport(requirement.transport)) {
     throw new DeviceNotAuthorizedError(
       `平台尚未实现 ${requirement.transport} 设备接入（当前仅 adb / hdc）`,
@@ -162,12 +169,17 @@ export async function acquireDeviceLeaseForJob(input: {
   );
   await assertDeviceAccessAuthorized(sql, input.projectId, requirement);
 
+  // 授权已确认该 rig 已配置；这里再取实体（两次调用之间改配置属于配置错误，fail closed）。
+  const rig = rigForId(config.device.rigs, requirement.rig_id);
+  if (!rig) throw new DeviceNotAuthorizedError("设备 rig 未配置");
+
   const leaseId = randomUUID();
   const grant = await acquireDeviceOnBroker({
     jobId: input.jobId,
     attemptId: input.attemptId,
     projectId: input.projectId,
     requirement,
+    rig,
   });
   // broker 是不可信外部进程：返回的 transport 必须与冻结需求一致，否则按契约不符 fail closed，
   // 并把 broker 侧刚发出的租约还回去（#504）。
@@ -176,6 +188,7 @@ export async function acquireDeviceLeaseForJob(input: {
       leaseId,
       deviceKey: grant.device_key,
       reason: "transport_mismatch",
+      rig,
     }).catch(() => {});
     throw new DeviceNotAvailableError(
       `device broker 返回的 transport(${grant.transport}) 与需求(${requirement.transport}) 不一致`,
@@ -187,13 +200,14 @@ export async function acquireDeviceLeaseForJob(input: {
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       const tx = txRaw as unknown as typeof sql;
       const [device] = await tx<[{ id: string; status: string }?]>`
-        INSERT INTO devices (project_id, key, model, transport, broker_ref, status, capabilities_json, spec_json)
+        INSERT INTO devices (project_id, key, model, transport, broker_ref, rig_id, status, capabilities_json, spec_json)
         VALUES (${null}, ${grant.device_key}, ${grant.model ?? null}, ${grant.transport},
-                ${grant.device_key}, 'leased', ${tx.json([grant.transport] as never)}, ${tx.json({} as never)})
+                ${grant.device_key}, ${rig.id}, 'leased', ${tx.json([grant.transport] as never)}, ${tx.json({} as never)})
         ON CONFLICT (key) DO UPDATE SET
           model = COALESCE(EXCLUDED.model, devices.model),
           transport = EXCLUDED.transport,
           broker_ref = EXCLUDED.broker_ref,
+          rig_id = EXCLUDED.rig_id,
           status = 'leased',
           updated_at = now()
         RETURNING id, status`;
@@ -229,6 +243,7 @@ export async function acquireDeviceLeaseForJob(input: {
       leaseId,
       deviceKey: grant.device_key,
       reason: "db_rollback",
+      rig,
     }).catch(() => {});
     if (
       error instanceof DeviceNotAvailableError ||
@@ -263,9 +278,9 @@ export async function releaseDeviceLeasesForJob(
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const tx = txRaw as unknown as typeof sql;
     const active = await tx<
-      Array<{ id: string; device_id: string; key: string }>
+      Array<{ id: string; device_id: string; key: string; rig_id: string }>
     >`
-      SELECT l.id, l.device_id, d.key
+      SELECT l.id, l.device_id, d.key, d.rig_id
       FROM device_leases l
       JOIN devices d ON d.id = l.device_id
       WHERE l.job_id = ${jobId} AND l.state IN ('pending', 'active')
@@ -293,10 +308,17 @@ export async function releaseDeviceLeasesForJob(
   });
 
   for (const lease of leases) {
+    // rig 可能已在配置里被移除：此时无法通知 broker，只记录（broker 侧 TTL + Reaper 兜底）。
+    const leaseRig = rigForId(config.device.rigs, lease.rig_id);
+    if (!leaseRig) {
+      console.error(`[device] 租约 ${lease.id} 的 rig ${lease.rig_id} 未配置，跳过 broker 释放`);
+      continue;
+    }
     await releaseDeviceOnBroker({
       leaseId: lease.id,
       deviceKey: lease.key,
       reason,
+      rig: leaseRig,
     }).catch((error: unknown) => {
       console.error(
         "[device] broker 释放租约失败:",
@@ -316,9 +338,9 @@ export async function reapExpiredDeviceLeases(
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const tx = txRaw as unknown as typeof sql;
     const rows = await tx<
-      Array<{ id: string; device_id: string; job_id: string; key: string }>
+      Array<{ id: string; device_id: string; job_id: string; key: string; rig_id: string }>
     >`
-      SELECT l.id, l.device_id, l.job_id, d.key
+      SELECT l.id, l.device_id, l.job_id, d.key, d.rig_id
       FROM device_leases l
       JOIN devices d ON d.id = l.device_id
       WHERE l.state IN ('pending', 'active')
@@ -348,10 +370,13 @@ export async function reapExpiredDeviceLeases(
   });
 
   for (const lease of expired) {
+    const leaseRig = rigForId(config.device.rigs, lease.rig_id);
+    if (!leaseRig) continue;
     await releaseDeviceOnBroker({
       leaseId: lease.id,
       deviceKey: lease.key,
       reason: "expired",
+      rig: leaseRig,
     }).catch(() => {});
   }
   return expired.length;
