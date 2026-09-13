@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { allDeviceRigs, defaultDeviceRig, parseDeviceRigs } from "./device-rigs.js";
 import path from "node:path";
 
 const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
@@ -64,6 +65,19 @@ function csv(name: string): { configured: boolean; values: string[] } {
       .filter(Boolean),
   };
 }
+/** 配置的多 rig 注册表：默认 rig（单 URL 模式）+ `DEEPSONAR_DEVICE_RIGS` 里的具名 rig。 */
+function deviceRigs() {
+  const parsed = parseDeviceRigs(process.env.DEEPSONAR_DEVICE_RIGS);
+  return allDeviceRigs(
+    defaultDeviceRig(process.env.DEEPSONAR_DEVICE_BROKER_URL, process.env.DEEPSONAR_DEVICE_BROKER_TOKEN),
+    parsed.rigs,
+  );
+}
+/** 被丢弃的 `DEEPSONAR_DEVICE_RIGS` 条目原因（形状描述，不含凭据），供启动日志暴露配置错误。 */
+function invalidDeviceRigEntries(): string[] {
+  return parseDeviceRigs(process.env.DEEPSONAR_DEVICE_RIGS).invalid;
+}
+
 /** 平台允许的设备 transport；未配置时只开 adb（hdc 需显式加入）。 */
 function deviceTransports(): string[] {
   const { values } = csv("DEEPSONAR_DEVICE_TRANSPORTS");
@@ -221,6 +235,9 @@ export const config = {
     brokerUrl: str("DEEPSONAR_DEVICE_BROKER_URL"),
     /** Scheduler → broker 的入站凭据（broker 自己的短期凭据，不是 Provider/模型密钥）。 */
     brokerToken: str("DEEPSONAR_DEVICE_BROKER_TOKEN"),
+    /** 目标 rig 注册表；默认 rig 来自上面的 brokerUrl/brokerToken，其余来自 DEEPSONAR_DEVICE_RIGS。 */
+    rigs: deviceRigs(),
+    invalidRigEntries: invalidDeviceRigEntries(),
     /** 租约 token HMAC 共享密钥；只用于 mint/verify 租约 token。 */
     leaseSecret: str("DEEPSONAR_DEVICE_LEASE_SECRET"),
     acquireTimeoutMs: int("DEEPSONAR_DEVICE_ACQUIRE_TIMEOUT_MS", 15_000),

@@ -1976,6 +1976,8 @@ export interface DeviceSummary {
   model: string | null;
   transport: string;
   broker_ref: string | null;
+  /** 归属 rig；`default` = 平台默认 rig（DEEPSONAR_DEVICE_BROKER_URL）。 */
+  rig_id: string;
   status: string;
   created_at: string;
   updated_at: string;
@@ -2011,15 +2013,33 @@ export interface DeviceEvent {
   created_at: string;
 }
 
-/** 登记列表 + rig 准入摘要；`admission` 为 null 表示 broker 不可达（不猜）。 */
+/** 单个 rig 的准入状态；`admission` 为 null 表示该 rig 的 broker 不可达（不猜）。 */
+export interface DeviceRigStatus {
+  id: string;
+  broker_configured: boolean;
+  admission: { revision: number; reconciled: boolean; mode: string; usable: string[] } | null;
+}
+
+/** 登记列表 + 逐 rig 准入摘要；`invalid_entries` 是被丢弃的 DEEPSONAR_DEVICE_RIGS 条目原因。 */
 export interface DeviceRegistry {
   devices: DeviceSummary[];
   rig: {
     enabled: boolean;
     broker_configured: boolean;
     transports: string[];
-    admission: { revision: number; reconciled: boolean; mode: string; usable: string[] } | null;
+    rigs: DeviceRigStatus[];
+    invalid_entries: string[];
   };
+}
+
+/** 一次写操作向每个已配置 rig 的推送结果。 */
+export interface DeviceRigPush {
+  rig: string;
+  devices: number;
+  ok: boolean;
+  revision?: number;
+  mode?: string;
+  reason?: string;
 }
 
 export interface DeviceRegistrationBody {
@@ -2027,6 +2047,8 @@ export interface DeviceRegistrationBody {
   transport: string;
   model?: string | null;
   project_id?: string | null;
+  /** 目标 rig；缺省 = 平台默认 rig。 */
+  rig_id?: string;
   enabled?: boolean;
 }
 
@@ -2039,16 +2061,22 @@ export const api = {
   deviceEvents: (id: string) =>
     get<{ device: { id: string; key: string }; events: DeviceEvent[] }>(`/devices/${id}/events`),
   registerDevice: (body: DeviceRegistrationBody) =>
-    send<{ device: DeviceSummary; rig_push: unknown }>("POST", "/devices", body),
+    send<{ device: DeviceSummary; rig_pushes: DeviceRigPush[] }>("POST", "/devices", body),
   setDeviceStatus: (id: string, action: DeviceStatusAction) =>
-    send<{ device: { id: string; key: string; status: string }; rig_push: unknown }>(
-      "PATCH",
+    send<{
+      device: { id: string; key: string; status: string };
+      rig_pushes: DeviceRigPush[];
+    }>("PATCH", `/devices/${id}`, { action }),
+  deleteDevice: (id: string) =>
+    send<{ deleted: boolean; device_key: string; rig_pushes: DeviceRigPush[] }>(
+      "DELETE",
       `/devices/${id}`,
-      { action },
     ),
-  deleteDevice: (id: string) => send<{ deleted: boolean; device_key: string }>("DELETE", `/devices/${id}`),
   releaseDeviceLease: (id: string) =>
-    send<{ released: number; rig_push: unknown }>("POST", `/device-leases/${id}/release`),
+    send<{ released: number; rig_pushes: DeviceRigPush[] }>(
+      "POST",
+      `/device-leases/${id}/release`,
+    ),
 
   dashboardOverview: () => get<DashboardOverview>("/dashboard/overview"),
   dashboardOps: () => get<DashboardOps>("/dashboard/ops"),

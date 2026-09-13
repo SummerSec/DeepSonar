@@ -136,8 +136,16 @@ Job pending → claimed（申请设备，写 pending 租约）
 - 测试：`ci:unit:device-broker`、`ci:unit:device-lease`、`ci:integration:device-lease`
   （含管理面 `device-management.integration.test.ts`：400 / 403 / 409 与 rig 推送）、
   `ci:smoke:device`（真机 rig，未配置时 skip）。
-- 管理面板：Web 平台级 `/devices` 页面（`apps/web/src/pages/DevicesPage.tsx`）——rig 准入摘要、登记列表、
-  租约列表，以及登记 / 启用 / 转维护 / 下架 / 删除与强制释放；写操作仅 `admin` 可用，只读角色仅看列表。
+- 管理面板：Web 平台级 `/devices` 页面（`apps/web/src/pages/DevicesPage.tsx`）——逐 rig 准入摘要、登记列表
+  （含 rig 列）、租约列表，以及登记（可选目标 rig）/ 启用 / 转维护 / 下架 / 删除与强制释放；写操作仅 `admin`
+  可用，只读角色仅看列表。
+- **多 rig（schema v50）**：默认 rig 仍是 `DEEPSONAR_DEVICE_BROKER_URL`（id = `default`），其余 rig 由
+  `DEEPSONAR_DEVICE_RIGS`（`;` 分隔的 `id=http(s)://host:port|token`）声明；设备归属进 `devices.rig_id`
+  （`CHECK` 约束 + 索引），端点与入站凭据**只来自平台配置**，不落库、不进 evidence。写操作按 rig 分组
+  **整集推送**（每个 rig 用自己的 token，读回自己的 revision 后再 PUT），推送给结果逐 rig 回报
+  （`rig_pushes`，不参与事务）；某个 rig 不可达不影响其它 rig，也不回滚平台侧写入。租约获取按需求里的
+  `rig_id`（缺省 = 默认 rig）选 broker，未配置的 rig 在**授权阶段**就 fail closed，绝不回落其它 rig。
+  非法配置条目整条丢弃并在 `GET /devices` 的 `rig.invalid_entries` 暴露（原因只含形状描述）。
 
 仍未覆盖（Phase 2 或需要真机环境）：
 

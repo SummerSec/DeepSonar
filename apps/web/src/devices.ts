@@ -1,5 +1,5 @@
 /**
- * 真实设备准入（#505）的前端纯逻辑：标签、可管理性判定与错误提示映射。
+ * 真实设备准入（#505）的前端纯逻辑：标签、可管理性判定、错误提示映射与多 rig 投影。
  * 这里不放请求，只放可单测的投影，页面只负责组装。
  */
 
@@ -10,6 +10,9 @@ export const DEVICE_TRANSPORT_OPTIONS: { value: DeviceTransport; label: string }
   { value: "adb", label: "ADB（Android）" },
   { value: "hdc", label: "HDC（OpenHarmony）" },
 ];
+
+/** 与 shared-types 的 `DEFAULT_DEVICE_RIG_ID` 一致：默认 rig 由 DEEPSONAR_DEVICE_BROKER_URL 提供。 */
+export const DEFAULT_DEVICE_RIG_ID = "default";
 
 const STATUS_LABELS: Record<string, string> = {
   idle: "空闲",
@@ -31,6 +34,13 @@ const ACTION_LABELS: Record<string, string> = {
   enable: "启用",
   maintenance: "转维护",
   revoke: "下架",
+};
+
+const PUSH_REASON_LABELS: Record<string, string> = {
+  stale_revision: "revision 回退（需重新读回）",
+  unauthorized: "凭据被拒",
+  unavailable: "不可达/契约不符",
+  not_configured: "rig 未配置",
 };
 
 export function deviceStatusLabel(status: string | null | undefined): string {
@@ -97,6 +107,8 @@ export function deviceRemedyHint(errorCode: string | null | undefined): string |
       return "登记项已不存在，刷新列表。";
     case "INVALID_PROJECT":
       return "项目不存在：确认 project_id，留空表示平台共享池。";
+    case "INVALID_RIG":
+      return "目标 rig 未配置：先把它加进 DEEPSONAR_DEVICE_RIGS（或留空使用默认 rig）。";
     case "PROJECT_MISMATCH":
       return "项目主体的 token 只能管理本项目的设备。";
     default:
@@ -104,17 +116,70 @@ export function deviceRemedyHint(errorCode: string | null | undefined): string |
   }
 }
 
-/** rig 侧准入摘要：未配置 / 未同步 / 已同步，供页面直接展示。 */
-export function rigAdmissionSummary(rig: {
-  enabled: boolean;
+/** 登记表单的目标 rig 选项；默认 rig 标注出来，避免把它当成普通 rig。 */
+export function deviceRigOptions(rigIds: readonly string[]): { value: string; label: string }[] {
+  return rigIds.map((id) => ({
+    value: id,
+    label: id === DEFAULT_DEVICE_RIG_ID ? `${id}（默认）` : id,
+  }));
+}
+
+export type RigAdmissionView = {
+  id: string;
   broker_configured: boolean;
-  admission: { mode: string; reconciled: boolean; usable: string[] } | null;
-} | null | undefined): string {
+  admission: { revision: number; reconciled: boolean; mode: string; usable: string[] } | null;
+};
+
+/** 单个 rig 的准入状态：不可达就说不可达，不猜已同步。 */
+export function rigAdmissionLine(entry: RigAdmissionView): string {
+  if (!entry.broker_configured) return "未配置 broker 凭据";
+  if (!entry.admission) return "不可达或返回异常（准入未知）";
+  return entry.admission.reconciled
+    ? `已同步（mode=${entry.admission.mode}，可用 ${entry.admission.usable.length} 台）`
+    : `期望集合已下发、rig 尚未确认（mode=${entry.admission.mode}）`;
+}
+
+/** 平台级摘要：未启用 / 未配置任何 rig / 已配置 N 个 rig（含多少个当前不可达）。 */
+export function rigAdmissionSummary(
+  rig:
+    | {
+        enabled: boolean;
+        broker_configured: boolean;
+        rigs: readonly RigAdmissionView[];
+        invalid_entries?: readonly string[];
+      }
+    | null
+    | undefined,
+): string {
   if (!rig) return "未知";
   if (!rig.enabled) return "平台未启用真实设备接入";
-  if (!rig.broker_configured) return "未配置 rig broker（DEEPSONAR_DEVICE_BROKER_URL）";
-  if (!rig.admission) return "rig broker 不可达或返回异常，准入未知";
-  return rig.admission.reconciled
-    ? `已同步（mode=${rig.admission.mode}，可用 ${rig.admission.usable.length} 台）`
-    : `期望集合已下发、rig 尚未确认（mode=${rig.admission.mode}）`;
+  if (rig.rigs.length === 0) return "未配置任何 rig（DEEPSONAR_DEVICE_BROKER_URL / DEEPSONAR_DEVICE_RIGS）";
+  const unreachable = rig.rigs.filter((entry) => !entry.admission).length;
+  const base = `已配置 ${rig.rigs.length} 个 rig`;
+  const invalid = rig.invalid_entries?.length ?? 0;
+  const parts = [
+    unreachable > 0 ? `${unreachable} 个当前不可达` : "全部可达",
+    ...(invalid > 0 ? [`${invalid} 条配置被丢弃`] : []),
+  ];
+  return `${base}（${parts.join("，")}）`;
+}
+
+/**
+ * 一次写操作的按 rig 推送结果：哪些 rig 成功、哪些失败与原因。推送不参与事务，
+ * 失败要让操作者看见并重试，而不是假装成功。
+ */
+export function formatRigPushes(
+  pushes:
+    | readonly { rig: string; ok: boolean; devices: number; reason?: string }[]
+    | null
+    | undefined,
+): string {
+  if (!pushes || pushes.length === 0) return "未配置 rig，未推送";
+  return pushes
+    .map((push) =>
+      push.ok
+        ? `${push.rig} ✓ ${push.devices} 台`
+        : `${push.rig} ✗ ${PUSH_REASON_LABELS[push.reason ?? ""] ?? push.reason ?? "失败"}`,
+    )
+    .join(" · ");
 }

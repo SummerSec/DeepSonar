@@ -10,7 +10,14 @@ test("registration row defaults to the shared pool and treats enabled=false as m
       model: "Pixel-7",
       enabled: true,
     }),
-    { key: "rig-1", transport: "adb", model: "Pixel-7", project_id: null, status: "idle" },
+    {
+      key: "rig-1",
+      transport: "adb",
+      model: "Pixel-7",
+      project_id: null,
+      rig_id: "default",
+      status: "idle",
+    },
   );
   assert.deepEqual(
     registrationRow({
@@ -25,8 +32,17 @@ test("registration row defaults to the shared pool and treats enabled=false as m
       transport: "hdc",
       model: null,
       project_id: "3f1c0a1e-0c2b-4c3d-9e4f-5a6b7c8d9e0f",
+      rig_id: "default",
       status: "maintenance",
     },
+  );
+});
+
+test("explicit rig_id wins over the default rig", async () => {
+  const { registrationRow } = await import("./management.js");
+  assert.equal(
+    registrationRow({ key: "rig-2", transport: "adb", rig_id: "rig-b", enabled: true }).rig_id,
+    "rig-b",
   );
 });
 

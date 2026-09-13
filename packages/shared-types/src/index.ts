@@ -630,6 +630,8 @@ export {
   DEVICE_STATUS_ACTIONS,
   DEVICE_STATUSES,
   DeviceRegistration,
+  DEFAULT_DEVICE_RIG_ID,
+  DeviceRigId,
   DeviceStatusAction,
   DeviceLeaseEndpoint,
   DeviceLeaseGrant,

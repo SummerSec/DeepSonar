@@ -19,7 +19,10 @@ export {
   type FrozenDeviceRequirement,
 } from "./application.js";
 export {
+  desiredByRig,
   desiredRigDevices,
+  pushAllRigAdmissions,
+  rowRigId,
   nextRigRevision,
   pushRigAdmission,
   readRigAdmission,
@@ -27,6 +30,7 @@ export {
   type DesiredRigDevice,
   type PushOutcome,
   type RigAdmissionState,
+  type RigPushResult,
 } from "./rig-registry.js";
 export {
   deviceDeleteBlocked,

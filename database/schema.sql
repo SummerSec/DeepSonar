@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 49);
+INSERT INTO schema_meta (id, version) VALUES ('global', 50);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2050,6 +2050,8 @@ CREATE TABLE devices (
   model text,
   transport text NOT NULL,
   broker_ref text,
+  -- 归属 rig（#505 后续：多 rig）：标识进定列，端点与凭据只来自平台配置。
+  rig_id text NOT NULL DEFAULT 'default',
   status text NOT NULL DEFAULT 'offline',
   capabilities_json jsonb NOT NULL DEFAULT '[]'::jsonb,
   spec_json jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -2058,9 +2060,11 @@ CREATE TABLE devices (
   CONSTRAINT devices_key_check CHECK (char_length(key) BETWEEN 1 AND 200),
   CONSTRAINT devices_transport_check CHECK (transport IN ('adb', 'hdc', 'serial', 'ssh', 'net')),
   CONSTRAINT devices_status_check CHECK (status IN ('idle', 'leased', 'offline', 'maintenance', 'revoked')),
+  CONSTRAINT devices_rig_id_check CHECK (rig_id ~ '^[a-z0-9][a-z0-9_-]{0,31}$'),
   UNIQUE (key)
 );
 CREATE INDEX devices_status_idx ON devices (status, updated_at);
+CREATE INDEX devices_rig_idx ON devices (rig_id, status);
 
 -- 设备租约绑 Job/Attempt：claim 后申请，终态或 Reaper 回收后设备回 idle。
 CREATE TABLE device_leases (

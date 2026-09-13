@@ -33,9 +33,22 @@ export function isImplementedDeviceTransport(
 }
 
 /** 冻结进 `jobs.agent_snapshot_json` 的设备需求：任务创建时声明，执行期只认快照。 */
+/**
+ * 设备 rig 标识：承载 device broker 的可抛弃设备机。平台按 rig 分发准入集合、按 rig 选 broker 端点；
+ * rig 归属进 `devices.rig_id`，端点与凭据只来自平台配置（不进 evidence、不落 Job 之外的存储）。
+ */
+export const DEFAULT_DEVICE_RIG_ID = "default";
+export const DeviceRigId = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/u, "rig_id 只能是 1-32 位小写字母、数字、下划线或连字符");
+export type DeviceRigId = z.infer<typeof DeviceRigId>;
+
 export const DeviceRequirement = z
   .object({
     transport: z.enum(DEVICE_TRANSPORTS),
+    /** 目标 rig；缺省 = 平台默认 rig。未配置的 rig 在授权阶段 fail closed。 */
+    rig_id: DeviceRigId.optional(),
     /** 指定具体设备 key（默认由 broker 分配匹配设备）。 */
     key: z.string().trim().min(1).max(200).optional(),
     model: z.string().trim().min(1).max(120).optional(),
@@ -247,6 +260,8 @@ export const DeviceRegistration = z
     transport: z.enum(IMPLEMENTED_DEVICE_TRANSPORTS),
     model: z.string().trim().max(120).nullish(),
     project_id: z.string().uuid().nullish(),
+    /** 目标 rig；缺省 = 平台默认 rig（DEEPSONAR_DEVICE_BROKER_URL）。 */
+    rig_id: DeviceRigId.optional(),
     enabled: z.boolean().default(true),
   })
   .strict();

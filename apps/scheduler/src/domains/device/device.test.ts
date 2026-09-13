@@ -9,6 +9,13 @@ process.env.DEEPSONAR_DEVICE_BROKER_TOKEN = "broker-inbound-token";
 process.env.DEEPSONAR_DEVICE_LEASE_SECRET =
   "shared-lease-secret-0123456789abcdef";
 
+/** 显式 rig：多 rig 之后，所有 broker 调用都必须带目标 rig（不再有隐式全局 broker）。 */
+const testRig = {
+  id: "default",
+  brokerUrl: "http://127.0.0.1:8799",
+  brokerToken: "broker-inbound-token",
+};
+
 const requirement = {
   transport: "adb" as const,
   key: "rig-1",
@@ -54,6 +61,7 @@ test("broker acquire maps untrusted responses into the two stable device errors"
       return respond(201, grant);
     }) as typeof fetch;
     const acquired = await acquireDeviceOnBroker({
+      rig: testRig,
       jobId: "job-1",
       attemptId: "attempt-1",
       projectId: "project-1",
@@ -78,6 +86,7 @@ test("broker acquire maps untrusted responses into the two stable device errors"
     await assert.rejects(
       () =>
         acquireDeviceOnBroker({
+          rig: testRig,
           jobId: "j",
           attemptId: "a",
           projectId: "p",
@@ -91,6 +100,7 @@ test("broker acquire maps untrusted responses into the two stable device errors"
     await assert.rejects(
       () =>
         acquireDeviceOnBroker({
+          rig: testRig,
           jobId: "j",
           attemptId: "a",
           projectId: "p",
@@ -105,6 +115,7 @@ test("broker acquire maps untrusted responses into the two stable device errors"
     await assert.rejects(
       () =>
         acquireDeviceOnBroker({
+          rig: testRig,
           jobId: "j",
           attemptId: "a",
           projectId: "p",
@@ -121,6 +132,7 @@ test("broker acquire maps untrusted responses into the two stable device errors"
     await assert.rejects(
       () =>
         acquireDeviceOnBroker({
+          rig: testRig,
           jobId: "j",
           attemptId: "a",
           projectId: "p",
@@ -142,12 +154,12 @@ test("release treats an unknown lease as already released and surfaces transport
     for (const status of [200, 404]) {
       globalThis.fetch = (async () =>
         new Response("{}", { status })) as typeof fetch;
-      await releaseDeviceOnBroker({ leaseId: "lease-1", deviceKey: "rig-1" });
+      await releaseDeviceOnBroker({ leaseId: "lease-1", deviceKey: "rig-1", rig: testRig });
     }
     globalThis.fetch = (async () =>
       new Response("{}", { status: 500 })) as typeof fetch;
     await assert.rejects(
-      () => releaseDeviceOnBroker({ leaseId: "lease-1", deviceKey: "rig-1" }),
+      () => releaseDeviceOnBroker({ leaseId: "lease-1", deviceKey: "rig-1", rig: testRig }),
       (error: unknown) => error instanceof DeviceNotAvailableError,
     );
   } finally {

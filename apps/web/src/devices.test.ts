@@ -5,10 +5,13 @@ import {
   deviceCanManage,
   deviceErrorCode,
   deviceRemedyHint,
+  deviceRigOptions,
   deviceStatusLabel,
   deviceStatusTone,
+  formatRigPushes,
   leaseIsActive,
   leaseStateLabel,
+  rigAdmissionLine,
   rigAdmissionSummary,
 } from "./devices";
 
@@ -64,29 +67,72 @@ test("remedy hints distinguish active-lease conflicts from immutable lease histo
   assert.equal(deviceRemedyHint(null), null);
 });
 
+const syncedRig = {
+  id: "default",
+  broker_configured: true,
+  admission: { revision: 3, reconciled: true, mode: "platform", usable: ["rig-1", "rig-2"] },
+};
+const unreachableRig = { id: "rig-b", broker_configured: true, admission: null };
+
 test("rig admission summary reports configuration gaps instead of pretending synced", () => {
   assert.match(rigAdmissionSummary(null), /未知/);
-  assert.match(rigAdmissionSummary({ enabled: false, broker_configured: true, admission: null }), /未启用/);
-  assert.match(rigAdmissionSummary({ enabled: true, broker_configured: false, admission: null }), /未配置/);
+  assert.match(rigAdmissionSummary({ enabled: false, broker_configured: true, rigs: [] }), /未启用/);
+  assert.match(rigAdmissionSummary({ enabled: true, broker_configured: false, rigs: [] }), /未配置任何 rig/);
   assert.match(
-    rigAdmissionSummary({ enabled: true, broker_configured: true, admission: null }),
-    /不可达/,
+    rigAdmissionSummary({ enabled: true, broker_configured: true, rigs: [syncedRig, unreachableRig] }),
+    /已配置 2 个 rig（1 个当前不可达）/,
   );
+  assert.match(rigAdmissionSummary({ enabled: true, broker_configured: true, rigs: [syncedRig] }), /全部可达/);
   assert.match(
     rigAdmissionSummary({
       enabled: true,
       broker_configured: true,
-      admission: { mode: "platform", reconciled: true, usable: ["rig-1", "rig-2"] },
+      rigs: [syncedRig],
+      invalid_entries: ["条目缺少 'id=' 前缀"],
     }),
-    /已同步.*可用 2 台/,
+    /1 条配置被丢弃/,
   );
+});
+
+test("per-rig admission lines distinguish missing credentials, unreachable and unreconciled", () => {
   assert.match(
-    rigAdmissionSummary({
-      enabled: true,
+    rigAdmissionLine({ id: "rig-b", broker_configured: false, admission: null }),
+    /未配置 broker 凭据/,
+  );
+  assert.match(rigAdmissionLine(unreachableRig), /不可达/);
+  assert.match(
+    rigAdmissionLine({
+      id: "rig-b",
       broker_configured: true,
-      admission: { mode: "env-legacy", reconciled: false, usable: [] },
+      admission: { revision: 1, reconciled: false, mode: "env-legacy", usable: [] },
     }),
     /尚未确认/,
+  );
+  assert.match(rigAdmissionLine(syncedRig), /已同步.*可用 2 台/);
+});
+
+test("rig options label the default rig so operators do not mistake it for a named rig", () => {
+  assert.deepEqual(deviceRigOptions(["default", "rig-b"]), [
+    { value: "default", label: "default（默认）" },
+    { value: "rig-b", label: "rig-b" },
+  ]);
+  assert.deepEqual(deviceRigOptions([]), []);
+});
+
+test("push results name each rig and its failure reason", () => {
+  assert.equal(formatRigPushes([]), "未配置 rig，未推送");
+  assert.equal(formatRigPushes(null), "未配置 rig，未推送");
+  assert.equal(
+    formatRigPushes([
+      { rig: "default", ok: true, devices: 2 },
+      { rig: "rig-b", ok: false, reason: "unavailable", devices: 0 },
+    ]),
+    "default ✓ 2 台 · rig-b ✗ 不可达/契约不符",
+  );
+  // 未知 reason 原样透出，不吞信息。
+  assert.match(
+    formatRigPushes([{ rig: "rig-c", ok: false, reason: "mystery", devices: 0 }]),
+    /mystery/,
   );
 });
 
