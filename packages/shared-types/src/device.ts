@@ -227,3 +227,39 @@ export async function verifyDeviceLeaseToken(
     return null;
   }
 }
+
+/** 平台侧设备登记的稳定状态（DB 用字符串，不锁枚举演进）。 */
+export const DEVICE_STATUSES = ["idle", "leased", "offline", "maintenance", "revoked"] as const;
+export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
+
+/** 设备管理动作（#505）：启用 / 转维护 / 下架。 */
+export const DEVICE_STATUS_ACTIONS = ["enable", "maintenance", "revoke"] as const;
+export const DeviceStatusAction = z.enum(DEVICE_STATUS_ACTIONS);
+export type DeviceStatusAction = z.infer<typeof DeviceStatusAction>;
+
+/**
+ * 设备登记/准入入参（管理面专用；Job capability token 不可达）。
+ * `project_id` 为 null 表示平台共享池；`enabled=false` 表示登记但暂不参与调度。
+ */
+export const DeviceRegistration = z
+  .object({
+    key: z.string().trim().min(1).max(200),
+    transport: z.enum(IMPLEMENTED_DEVICE_TRANSPORTS),
+    model: z.string().trim().max(120).nullish(),
+    project_id: z.string().uuid().nullish(),
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+export type DeviceRegistration = z.infer<typeof DeviceRegistration>;
+
+/** 动作 → 目标状态：启用回 idle，维护 → maintenance，下架 → revoked。 */
+export function deviceStatusForAction(action: DeviceStatusAction): DeviceStatus {
+  if (action === "maintenance") return "maintenance";
+  if (action === "revoke") return "revoked";
+  return "idle";
+}
+
+/** 只有既未被下架、也未被维护的登记项才会被下发给 rig（broker 侧的准入集合）。 */
+export function deviceIsRigEligible(status: string): boolean {
+  return status !== "revoked" && status !== "maintenance";
+}

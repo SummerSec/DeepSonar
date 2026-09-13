@@ -1,4 +1,4 @@
-import { isImplementedDeviceTransport } from "@deepsonar/shared-types";
+import { deviceIsRigEligible, isImplementedDeviceTransport } from "@deepsonar/shared-types";
 import { config } from "../../config.js";
 import { DeviceNotAvailableError } from "./broker-client.js";
 
@@ -84,7 +84,7 @@ export function desiredRigDevices(
   for (const row of rows) {
     if (!isImplementedDeviceTransport(row.transport)) continue;
     const status = typeof row.status === "string" ? row.status : "idle";
-    if (status === "revoked" || status === "maintenance") continue;
+    if (!deviceIsRigEligible(status)) continue;
     const parsed =
       row.updated_at instanceof Date
         ? row.updated_at.getTime()

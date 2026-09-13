@@ -28,3 +28,11 @@ export {
   type PushOutcome,
   type RigAdmissionState,
 } from "./rig-registry.js";
+export {
+  desiredForRig,
+  deviceDeleteBlocked,
+  groupDesiredByRig,
+  registrationRow,
+  statusAfterAction,
+  type DeviceRegistrationRow,
+} from "./management.js";

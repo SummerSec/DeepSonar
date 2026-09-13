@@ -75,7 +75,7 @@
     "ci:unit:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test src/finding-protocol.test.ts src/runtime-knobs.test.ts src/domains/finding-verification/project-findings-summary.test.ts",
     "ci:unit:finding-research": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/finding-research/policy.test.ts src/domains/finding-research/application.test.ts src/finding-state-matrix.test.ts",
     "ci:unit:device-broker": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/device-broker test",
-    "ci:unit:device-lease": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/device/device.test.ts src/domains/device/rig-registry.test.ts",
+    "ci:unit:device-lease": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/device/device.test.ts src/domains/device/rig-registry.test.ts src/domains/device/management.test.ts",
     "ci:integration:device-lease": "pnpm --filter @deepsonar/scheduler exec tsx --test --test-concurrency=1 src/device-lease.integration.test.ts",
     "ci:smoke:device": "node agent-harness/test-device-broker.mjs",
     "ci:integration:finding-protocol": "pnpm --filter @deepsonar/scheduler exec tsx --test --test-concurrency=1 src/finding-protocol.integration.test.ts src/domains/finding-verification/project-findings-summary.integration.test.ts src/domains/artifacts/artifacts.integration.test.ts",
