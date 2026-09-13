@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 设备准入管理面板（#505 阶段 1 后续）：新增平台级 `/devices` 页面（`apps/web/src/pages/DevicesPage.tsx`）——展示 rig 准入摘要（未启用 / 未配置 / 不可达 / 已同步 四种状态如实呈现，不假装同步）、设备登记列表（key / transport / model / 状态 / 在途租约 / 更新时间）与设备租约列表，并支持登记、启用 / 转维护 / 下架、二次确认删除和强制释放租约。写操作仅 `admin` 可用（与后端 `ROUTE_SCOPES` 一致，只读角色只看列表），409 冲突按稳定错误码给补救提示（`DEVICE_HAS_ACTIVE_LEASE` → 先强制释放；`DEVICE_HAS_LEASE_HISTORY` → 改用下架，因为租约历史是 append-only 审计）。导航新增「设备」入口（scope `tasks:read`）。
+
 ## [0.4.1] - 2026-09-13
 
 ### 新增

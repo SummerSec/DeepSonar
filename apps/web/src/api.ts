@@ -1969,7 +1969,87 @@ function unwrapPage<T>(payload: T[] | PageEnvelope<T>): T[] {
   return Array.isArray(payload) ? payload : payload.items;
 }
 
+export interface DeviceSummary {
+  id: string;
+  project_id: string | null;
+  key: string;
+  model: string | null;
+  transport: string;
+  broker_ref: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  lease_id: string | null;
+  lease_job_id: string | null;
+  lease_state: string | null;
+  lease_expires_at: string | null;
+}
+
+/** 设备租约（#495/#505）：绑 Job/Attempt，`pending`/`active` 才占用设备。 */
+export interface DeviceLease {
+  id: string;
+  device_id: string;
+  job_id: string;
+  state: string;
+  granted_by: string | null;
+  granted_at: string | null;
+  expires_at: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+  device_key: string;
+  device_transport: string;
+}
+
+export interface DeviceEvent {
+  id: string;
+  device_id: string | null;
+  lease_id: string | null;
+  job_id: string | null;
+  actor: string;
+  action: string;
+  payload_json: unknown;
+  created_at: string;
+}
+
+/** 登记列表 + rig 准入摘要；`admission` 为 null 表示 broker 不可达（不猜）。 */
+export interface DeviceRegistry {
+  devices: DeviceSummary[];
+  rig: {
+    enabled: boolean;
+    broker_configured: boolean;
+    transports: string[];
+    admission: { revision: number; reconciled: boolean; mode: string; usable: string[] } | null;
+  };
+}
+
+export interface DeviceRegistrationBody {
+  key: string;
+  transport: string;
+  model?: string | null;
+  project_id?: string | null;
+  enabled?: boolean;
+}
+
+export type DeviceStatusAction = "enable" | "maintenance" | "revoke";
+
 export const api = {
+  /** 设备准入与管理面（#505）：平台是权威，写操作后会把期望集合整集重推给 rig。 */
+  deviceRegistry: () => get<DeviceRegistry>("/devices"),
+  deviceLeases: () => get<{ leases: DeviceLease[] }>("/device-leases"),
+  deviceEvents: (id: string) =>
+    get<{ device: { id: string; key: string }; events: DeviceEvent[] }>(`/devices/${id}/events`),
+  registerDevice: (body: DeviceRegistrationBody) =>
+    send<{ device: DeviceSummary; rig_push: unknown }>("POST", "/devices", body),
+  setDeviceStatus: (id: string, action: DeviceStatusAction) =>
+    send<{ device: { id: string; key: string; status: string }; rig_push: unknown }>(
+      "PATCH",
+      `/devices/${id}`,
+      { action },
+    ),
+  deleteDevice: (id: string) => send<{ deleted: boolean; device_key: string }>("DELETE", `/devices/${id}`),
+  releaseDeviceLease: (id: string) =>
+    send<{ released: number; rig_push: unknown }>("POST", `/device-leases/${id}/release`),
+
   dashboardOverview: () => get<DashboardOverview>("/dashboard/overview"),
   dashboardOps: () => get<DashboardOps>("/dashboard/ops"),
   dashboardUsage: (query: {

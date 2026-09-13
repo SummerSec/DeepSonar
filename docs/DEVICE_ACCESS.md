@@ -136,6 +136,8 @@ Job pending → claimed（申请设备，写 pending 租约）
 - 测试：`ci:unit:device-broker`、`ci:unit:device-lease`、`ci:integration:device-lease`
   （含管理面 `device-management.integration.test.ts`：400 / 403 / 409 与 rig 推送）、
   `ci:smoke:device`（真机 rig，未配置时 skip）。
+- 管理面板：Web 平台级 `/devices` 页面（`apps/web/src/pages/DevicesPage.tsx`）——rig 准入摘要、登记列表、
+  租约列表，以及登记 / 启用 / 转维护 / 下架 / 删除与强制释放；写操作仅 `admin` 可用，只读角色仅看列表。
 
 仍未覆盖（Phase 2 或需要真机环境）：
 
