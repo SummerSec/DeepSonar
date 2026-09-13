@@ -1,6 +1,9 @@
 import type { SandboxLimits } from "@deepsonar/runtime-sandbox";
 
-type NetworkPolicyQuery = (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
+type NetworkPolicyQuery = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => unknown;
 
 export interface FrozenNetworkPolicy {
   allow_egress: boolean;
@@ -41,10 +44,14 @@ export function assertChromeRuntimeEgressAllowed(
 ): void {
   const key = typeof runtimeImageKey === "string" ? runtimeImageKey : "";
   if (CHROME_RUNTIME_IMAGE_KEYS.has(key) && allowEgress !== true) {
-    throw new Error(`Chrome runtime ${key} requires canvas network_policy.allow_egress=true`);
+    throw new Error(
+      `Chrome runtime ${key} requires canvas network_policy.allow_egress=true`,
+    );
   }
   if (CLICKHOUSE_RUNTIME_IMAGE_KEYS.has(key) && allowEgress !== true) {
-    throw new Error(`ClickHouse runtime ${key} requires canvas network_policy.allow_egress=true`);
+    throw new Error(
+      `ClickHouse runtime ${key} requires canvas network_policy.allow_egress=true`,
+    );
   }
 }
 
@@ -52,21 +59,28 @@ export function assertChromeRuntimeEgressAllowed(
  * arbitrary Job payload metadata. Undefined means the canvas is malformed or
  * not available; browser runtimes fail closed through the shared assertion. */
 export function frozenCanvasAllowEgress(target: unknown): boolean | undefined {
-  if (!target || typeof target !== "object" || Array.isArray(target)) return undefined;
+  if (!target || typeof target !== "object" || Array.isArray(target))
+    return undefined;
   const policy = (target as Record<string, unknown>).network_policy;
-  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return undefined;
+  if (!policy || typeof policy !== "object" || Array.isArray(policy))
+    return undefined;
   const value = (policy as Record<string, unknown>).allow_egress;
   return typeof value === "boolean" ? value : undefined;
 }
 
-function snapshotRuntimeImageKey(snapshot: unknown): unknown {
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return undefined;
+function snapshotRuntimeImageKey(snapshot: unknown): string | undefined {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot))
+    return undefined;
   const value = snapshot as Record<string, unknown>;
   const runtimeImage = value.runtime_image;
-  if (runtimeImage && typeof runtimeImage === "object" && !Array.isArray(runtimeImage)) {
-    return (runtimeImage as Record<string, unknown>).image_key ?? value.runtime_image_key;
-  }
-  return value.runtime_image_key;
+  const imageKey =
+    runtimeImage &&
+    typeof runtimeImage === "object" &&
+    !Array.isArray(runtimeImage)
+      ? ((runtimeImage as Record<string, unknown>).image_key ??
+        value.runtime_image_key)
+      : value.runtime_image_key;
+  return typeof imageKey === "string" ? imageKey : undefined;
 }
 
 /**
@@ -80,33 +94,64 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
   canvasId: string | null | undefined,
   snapshot: T,
 ): Promise<T & { network_policy: FrozenNetworkPolicy }> {
-  if (!canvasId) throw new Error("Job 创建缺少 canvas_id，无法冻结 network_policy.allow_egress");
+  if (!canvasId)
+    throw new Error(
+      "Job 创建缺少 canvas_id，无法冻结 network_policy.allow_egress",
+    );
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
-    throw new Error("Job 创建缺少合法的 Agent 运行快照，无法冻结 network_policy.allow_egress");
+    throw new Error(
+      "Job 创建缺少合法的 Agent 运行快照，无法冻结 network_policy.allow_egress",
+    );
   }
-  const [canvas] = await db`SELECT target_json FROM canvases WHERE id = ${canvasId} FOR SHARE` as Array<{ target_json?: unknown }>;
-  if (!canvas) throw new Error(`canvas ${canvasId} 不存在，无法冻结 network_policy.allow_egress`);
+  const [canvas] =
+    (await db`SELECT target_json FROM canvases WHERE id = ${canvasId} FOR SHARE`) as Array<{
+      target_json?: unknown;
+    }>;
+  if (!canvas)
+    throw new Error(
+      `canvas ${canvasId} 不存在，无法冻结 network_policy.allow_egress`,
+    );
   const allowEgress = frozenCanvasAllowEgress(canvas.target_json);
   if (typeof allowEgress !== "boolean") {
-    throw new Error(`canvas ${canvasId} 缺少合法的 network_policy.allow_egress`);
+    throw new Error(
+      `canvas ${canvasId} 缺少合法的 network_policy.allow_egress`,
+    );
   }
-  assertChromeRuntimeEgressAllowed(snapshotRuntimeImageKey(snapshot), allowEgress);
+  assertChromeRuntimeEgressAllowed(
+    snapshotRuntimeImageKey(snapshot),
+    allowEgress,
+  );
   return {
     ...snapshot,
     network_policy: { allow_egress: allowEgress },
   };
 }
 
-/** Read only the immutable network policy embedded in a Job snapshot. */
-export function requireFrozenSnapshotAllowEgress(snapshot: unknown, jobId?: string): boolean {
-  const value = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
-    ? (snapshot as Record<string, unknown>).network_policy
-    : undefined;
-  const allowEgress = value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>).allow_egress
-    : undefined;
-  if (typeof allowEgress !== "boolean") {
-    throw new Error(`${jobId ? `job ${jobId}` : "Job"} 缺少冻结的 network_policy.allow_egress`);
+/** Read only the immutable network policy embedded in a Job snapshot; undefined when absent. */
+export function frozenSnapshotAllowEgress(
+  snapshot: unknown,
+): boolean | undefined {
+  const value =
+    snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+      ? (snapshot as Record<string, unknown>).network_policy
+      : undefined;
+  const allowEgress =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>).allow_egress
+      : undefined;
+  return typeof allowEgress === "boolean" ? allowEgress : undefined;
+}
+
+/** 同一读取，但缺失视为硬错误：执行期不允许猜网络模式。 */
+export function requireFrozenSnapshotAllowEgress(
+  snapshot: unknown,
+  jobId?: string,
+): boolean {
+  const allowEgress = frozenSnapshotAllowEgress(snapshot);
+  if (allowEgress === undefined) {
+    throw new Error(
+      `${jobId ? `job ${jobId}` : "Job"} 缺少冻结的 network_policy.allow_egress`,
+    );
   }
   return allowEgress;
 }
@@ -132,23 +177,31 @@ function finiteNumber(value: unknown): value is number {
 }
 
 function validCpu(value: unknown): value is number {
-  return finiteNumber(value) && value >= SANDBOX_LIMIT_BOUNDS.cpu.min && value <= SANDBOX_LIMIT_BOUNDS.cpu.max;
+  return (
+    finiteNumber(value) &&
+    value >= SANDBOX_LIMIT_BOUNDS.cpu.min &&
+    value <= SANDBOX_LIMIT_BOUNDS.cpu.max
+  );
 }
 
 function validPositiveInteger(
   value: unknown,
   bounds: { min: number; max: number },
 ): value is number {
-  return Number.isSafeInteger(value)
-    && (value as number) >= bounds.min
-    && (value as number) <= bounds.max;
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) >= bounds.min &&
+    (value as number) <= bounds.max
+  );
 }
 
 /**
  * Validate a RoleConfig JSONB override. Unknown keys and server-governed
  * capability flags are rejected rather than silently discarded.
  */
-export function parseSandboxLimitsOverride(value: unknown): SandboxLimitsOverride {
+export function parseSandboxLimitsOverride(
+  value: unknown,
+): SandboxLimitsOverride {
   if (value === undefined || value === null) return {};
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error("sandbox_limits must be an object");
@@ -161,13 +214,25 @@ export function parseSandboxLimitsOverride(value: unknown): SandboxLimitsOverrid
     }
   }
   if (input.cpu !== undefined && !validCpu(input.cpu)) {
-    throw new Error(`sandbox_limits.cpu must be between ${SANDBOX_LIMIT_BOUNDS.cpu.min} and ${SANDBOX_LIMIT_BOUNDS.cpu.max}`);
+    throw new Error(
+      `sandbox_limits.cpu must be between ${SANDBOX_LIMIT_BOUNDS.cpu.min} and ${SANDBOX_LIMIT_BOUNDS.cpu.max}`,
+    );
   }
-  if (input.memoryMiB !== undefined && !validPositiveInteger(input.memoryMiB, SANDBOX_LIMIT_BOUNDS.memoryMiB)) {
-    throw new Error(`sandbox_limits.memoryMiB must be an integer between ${SANDBOX_LIMIT_BOUNDS.memoryMiB.min} and ${SANDBOX_LIMIT_BOUNDS.memoryMiB.max}`);
+  if (
+    input.memoryMiB !== undefined &&
+    !validPositiveInteger(input.memoryMiB, SANDBOX_LIMIT_BOUNDS.memoryMiB)
+  ) {
+    throw new Error(
+      `sandbox_limits.memoryMiB must be an integer between ${SANDBOX_LIMIT_BOUNDS.memoryMiB.min} and ${SANDBOX_LIMIT_BOUNDS.memoryMiB.max}`,
+    );
   }
-  if (input.pidsLimit !== undefined && !validPositiveInteger(input.pidsLimit, SANDBOX_LIMIT_BOUNDS.pidsLimit)) {
-    throw new Error(`sandbox_limits.pidsLimit must be an integer between ${SANDBOX_LIMIT_BOUNDS.pidsLimit.min} and ${SANDBOX_LIMIT_BOUNDS.pidsLimit.max}`);
+  if (
+    input.pidsLimit !== undefined &&
+    !validPositiveInteger(input.pidsLimit, SANDBOX_LIMIT_BOUNDS.pidsLimit)
+  ) {
+    throw new Error(
+      `sandbox_limits.pidsLimit must be an integer between ${SANDBOX_LIMIT_BOUNDS.pidsLimit.min} and ${SANDBOX_LIMIT_BOUNDS.pidsLimit.max}`,
+    );
   }
   return {
     ...(input.cpu === undefined ? {} : { cpu: input.cpu }),
@@ -196,15 +261,22 @@ export function resolveEffectiveSandboxLimits(
   const parsed = parseSandboxLimitsOverride(override);
   const defaults = serverDefaults ?? {};
   const cpu = boundedServerNumber(defaults.cpu, SERVER_DEFAULTS.cpu, validCpu);
-  const memoryMiB = boundedServerNumber(defaults.memoryMiB, SERVER_DEFAULTS.memoryMiB, (value) =>
-    validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.memoryMiB));
-  const pidsLimit = boundedServerNumber(defaults.pidsLimit, SERVER_DEFAULTS.pidsLimit, (value) =>
-    validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.pidsLimit));
+  const memoryMiB = boundedServerNumber(
+    defaults.memoryMiB,
+    SERVER_DEFAULTS.memoryMiB,
+    (value) => validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.memoryMiB),
+  );
+  const pidsLimit = boundedServerNumber(
+    defaults.pidsLimit,
+    SERVER_DEFAULTS.pidsLimit,
+    (value) => validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.pidsLimit),
+  );
   return {
     cpu: parsed.cpu ?? cpu,
     memoryMiB: parsed.memoryMiB ?? memoryMiB,
     pidsLimit: parsed.pidsLimit ?? pidsLimit,
     capDropAll: defaults.capDropAll ?? SERVER_DEFAULTS.capDropAll,
-    noNewPrivileges: defaults.noNewPrivileges ?? SERVER_DEFAULTS.noNewPrivileges,
+    noNewPrivileges:
+      defaults.noNewPrivileges ?? SERVER_DEFAULTS.noNewPrivileges,
   };
 }

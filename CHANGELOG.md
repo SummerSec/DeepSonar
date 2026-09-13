@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 设备接入支持 hdc（#504）：`packages/shared-types/src/device.ts` 增加 `IMPLEMENTED_DEVICE_TRANSPORTS`（`adb` / `hdc`）与 `isImplementedDeviceTransport()`，作为 broker 与调度器判断「已实现 / 未授权」的唯一事实来源（`serial` / `ssh` / `net` 仍在契约中保留，传入即 403 / 409 `device_not_authorized`）。broker 新增 hdc 枚举（`hdc list targets`，过滤 `[Empty]` / `Connect server failed` / `[Fail]` 等噪声，目标 key 必须是单 token）与独立端点配置（`DEVICE_BROKER_HDC_HOST` / `DEVICE_BROKER_HDC_PORT`（默认 8710）/ `DEVICE_BROKER_HDC_BIN`），租约绑定 transport 且不跨 transport 匹配，单路枚举失败只让该 transport 无设备。调度器按 `DEEPSONAR_DEVICE_TRANSPORTS`（默认仅 `adb`）逐 transport 开启，并校验 broker 返回的 transport 与冻结需求一致（不一致即退回租约并按 `device_not_available` 失败）。hdc 沙箱侧消费通用变量 `DEEPSONAR_DEVICE_ENDPOINT`（`hdc -s <endpoint>` / `hdc tconn <endpoint>`），原生变量映射待真机验证后另议。
+- broker 新增平台准入（#505 阶段 1）：`PUT /rig/devices` 整集替换期望集合（revision 必须单调、同 revision 幂等重放、回退 409 `stale_revision`）、`GET /rig/devices` 返回生效集合与 `mode`，状态落 `DEVICE_BROKER_STATE_FILE` 供重启续用（缺失/损坏则空集合 fail closed）；默认 `trust platform`，显式设置 `DEVICE_BROKER_ALLOWED_KEYS` 时它作为硬上限（与平台集合取交集），从未 push 时沿用 #495 的 env 行为。平台侧登记 API（`/devices` 读写、强制释放租约）仍在实现中，见 #505。
+
+### 修复
+
+- 设备 Job 缺少 `allow_egress` 前置校验（#506）：此前授权链路（功能开关 + broker 配置、`transport`、`exclusive`、项目 opt-in）都不检查出网，而设备端点是沙箱**直连** rig（`restricted` 网络策略为 deny-by-default，只放行 Gateway 代理主机），于是「授权通过 → broker 发租约 → 沙箱内 `adb`/`hdc` 必然连不上」会晚失败，真机被白占到 TTL / Reaper 兜底，且错误不是两个稳定码之一。现按 fail closed 处理：新增 `assertDeviceEgressAllowed()`，在**建 Job（冻结画布设备需求）**与**申请租约（校验冻结快照）**两处生效，返回 409 `device_not_authorized`（不进重试链）；冻结策略缺失视为不允许。`docs/DEVICE_ACCESS.md` §3.3 同步标注「固定目标 sidecar 转发」与「租约 token 保护数据面」尚未落地，避免把设计目标当成 as-built。
+
 ## [0.4.0] - 2026-09-13
 
 ### 新增

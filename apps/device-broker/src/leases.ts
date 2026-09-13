@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import {
   DEVICE_LEASE_TOKEN_VERSION,
   DeviceLeaseTokenPayload,
+  isImplementedDeviceTransport,
   mintDeviceLeaseToken,
   verifyDeviceLeaseToken,
 } from "@deepsonar/shared-types";
-import type { BrokerAdbDevice } from "./adb.js";
+import type { BrokerDevice } from "./device.js";
 
 /**
  * 租约登记表（Phase 1 为进程内状态）。
@@ -19,6 +20,8 @@ import type { BrokerAdbDevice } from "./adb.js";
 export type BrokerLease = {
   leaseId: string;
   deviceKey: string;
+  /** 租约绑定的 transport（#504：adb / hdc 共用同一张租约表）。 */
+  transport: BrokerDevice["transport"];
   jobId: string;
   attemptId: string;
   projectId: string;
@@ -42,7 +45,15 @@ export type AcquireInput = {
 
 export type AcquireOutcome =
   | { ok: true; lease: BrokerLease }
-  | { ok: false; reason: "unsupported_transport" | "no_device" | "device_busy" | "not_whitelisted" | "leased" };
+  | {
+      ok: false;
+      reason:
+        | "unsupported_transport"
+        | "no_device"
+        | "device_busy"
+        | "not_whitelisted"
+        | "leased";
+    };
 
 export class LeaseStore {
   private readonly leases = new Map<string, BrokerLease>();
@@ -88,20 +99,37 @@ export class LeaseStore {
     return purged;
   }
 
-  async acquire(input: AcquireInput, devices: BrokerAdbDevice[]): Promise<AcquireOutcome> {
+  async acquire(
+    input: AcquireInput,
+    devices: BrokerDevice[],
+  ): Promise<AcquireOutcome> {
     this.purgeExpired();
-    if (input.transport !== "adb") return { ok: false, reason: "unsupported_transport" };
+    // 只有已落地的 transport 才发租约（单一事实来源在 shared-types）；其余视为未实现 → 未授权。
+    if (!isImplementedDeviceTransport(input.transport))
+      return { ok: false, reason: "unsupported_transport" };
     if (!input.exclusive) return { ok: false, reason: "unsupported_transport" };
-    const candidates = devices.filter((device) =>
-      input.deviceKey ? device.key === input.deviceKey : input.model ? device.model === input.model : true,
+    const transport = input.transport;
+    const matchesRequest = (device: BrokerDevice): boolean => {
+      if (input.deviceKey) return device.key === input.deviceKey;
+      if (input.model) return device.model === input.model;
+      return true;
+    };
+    const candidates = devices.filter(
+      (device) => device.transport === transport && matchesRequest(device),
     );
     if (candidates.length === 0) return { ok: false, reason: "no_device" };
-    const device = candidates.find((candidate) => this.isWhitelisted(candidate.key));
+    const device = candidates.find((candidate) =>
+      this.isWhitelisted(candidate.key),
+    );
     if (!device) return { ok: false, reason: "not_whitelisted" };
-    if (this.activeLeaseFor(device.key)) return { ok: false, reason: "device_busy" };
+    if (this.activeLeaseFor(device.key))
+      return { ok: false, reason: "device_busy" };
 
     const ttlSec = Math.min(
-      Math.max(Number.isFinite(input.ttlSec) ? input.ttlSec : this.deps.ttlDefaultSec, 60),
+      Math.max(
+        Number.isFinite(input.ttlSec) ? input.ttlSec : this.deps.ttlDefaultSec,
+        60,
+      ),
       this.deps.ttlMaxSec,
     );
     const leaseId = randomUUID();
@@ -118,6 +146,7 @@ export class LeaseStore {
     const lease: BrokerLease = {
       leaseId,
       deviceKey: device.key,
+      transport,
       jobId: input.jobId,
       attemptId: input.attemptId,
       projectId: input.projectId,
@@ -132,7 +161,10 @@ export class LeaseStore {
   }
 
   /** 幂等释放；未知租约也返回 released（Scheduler 侧把 404 当成功）。 */
-  release(leaseId: string, reason: string): { ok: true; lease: BrokerLease | null } {
+  release(
+    leaseId: string,
+    reason: string,
+  ): { ok: true; lease: BrokerLease | null } {
     this.purgeExpired();
     const lease = this.leases.get(leaseId) ?? null;
     if (!lease) return { ok: true, lease: null };
@@ -146,7 +178,11 @@ export class LeaseStore {
   /** 沙箱侧短时端点查询：只接受未过期的租约 token。 */
   async session(token: string): Promise<BrokerLease | null> {
     this.purgeExpired();
-    const payload = await verifyDeviceLeaseToken(token, this.deps.leaseSecret, this.now());
+    const payload = await verifyDeviceLeaseToken(
+      token,
+      this.deps.leaseSecret,
+      this.now(),
+    );
     if (!payload) return null;
     const lease = this.leases.get(payload.lease_id);
     if (!lease || lease.releasedAt !== null) return null;

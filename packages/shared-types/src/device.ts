@@ -5,9 +5,32 @@ import { z } from "zod";
  * 沙箱只拿到端点 + 短期租约 token。类型与校验是 Scheduler / broker / 快照投影的单源。
  */
 
-/** Phase 1 只落地 adb；schema 与契约已允许后续 transport。 */
-export const DEVICE_TRANSPORTS = ["adb", "hdc", "serial", "ssh", "net"] as const;
+/** 契约允许的 transport 取值；schema/DB 用字符串保存，不锁枚举演进。 */
+export const DEVICE_TRANSPORTS = [
+  "adb",
+  "hdc",
+  "serial",
+  "ssh",
+  "net",
+] as const;
 export type DeviceTransport = (typeof DEVICE_TRANSPORTS)[number];
+
+/**
+ * 已落地的 transport（#504）：adb（Android）与 hdc（OpenHarmony）。其余取值只在契约与 schema
+ * 中保留，broker 与调度器一律按「未实现 → 未授权」拒绝，避免误配后到执行期才晚失败。
+ */
+export const IMPLEMENTED_DEVICE_TRANSPORTS = [
+  "adb",
+  "hdc",
+] as const satisfies readonly DeviceTransport[];
+export type ImplementedDeviceTransport =
+  (typeof IMPLEMENTED_DEVICE_TRANSPORTS)[number];
+
+export function isImplementedDeviceTransport(
+  value: string,
+): value is ImplementedDeviceTransport {
+  return (IMPLEMENTED_DEVICE_TRANSPORTS as readonly string[]).includes(value);
+}
 
 /** 冻结进 `jobs.agent_snapshot_json` 的设备需求：任务创建时声明，执行期只认快照。 */
 export const DeviceRequirement = z
@@ -20,7 +43,11 @@ export const DeviceRequirement = z
     exclusive: z.boolean().default(true),
     ttl_sec: z.number().int().min(60).max(86_400).default(1800),
     /** 需要设备租约的角色名（缺省只给 test）；Hub/report/verify 不占用设备。 */
-    roles: z.array(z.string().trim().min(1).max(64)).min(1).max(16).default(["test"]),
+    roles: z
+      .array(z.string().trim().min(1).max(64))
+      .min(1)
+      .max(16)
+      .default(["test"]),
   })
   .strict();
 export type DeviceRequirement = z.infer<typeof DeviceRequirement>;
@@ -56,7 +83,8 @@ export const DEVICE_LEASE_ERROR_CODES = {
   notAuthorized: "device_not_authorized",
   notAvailable: "device_not_available",
 } as const;
-export type DeviceLeaseErrorCode = (typeof DEVICE_LEASE_ERROR_CODES)[keyof typeof DEVICE_LEASE_ERROR_CODES];
+export type DeviceLeaseErrorCode =
+  (typeof DEVICE_LEASE_ERROR_CODES)[keyof typeof DEVICE_LEASE_ERROR_CODES];
 
 /** 注入沙箱的设备环境变量前缀（adb 场景对 Agent 透明）。 */
 export const DEVICE_SANDBOX_ENV_KEYS = {
@@ -68,7 +96,10 @@ export const DEVICE_SANDBOX_ENV_KEYS = {
 
 /** 把端点投影成沙箱环境变量：adb 走 ANDROID_* 透明变量 + 平台自有变量。 */
 export function deviceSandboxEnv(
-  grant: Pick<DeviceLeaseGrant, "lease_id" | "transport" | "endpoint" | "token">,
+  grant: Pick<
+    DeviceLeaseGrant,
+    "lease_id" | "transport" | "endpoint" | "token"
+  >,
   deviceKey?: string,
 ): Record<string, string> {
   const env: Record<string, string> = {
@@ -83,6 +114,9 @@ export function deviceSandboxEnv(
     env.ANDROID_ADB_SERVER_PORT = String(grant.endpoint.port);
     if (deviceKey) env.ANDROID_SERIAL = deviceKey;
   }
+  // hdc 目前没有可信的原生「服务器地址」环境变量（需真机验证后再决定是否映射）：
+  // OpenHarmony 侧消费通用变量，例如 `hdc -s $DEEPSONAR_DEVICE_ENDPOINT` 或
+  // `hdc tconn $DEEPSONAR_DEVICE_ENDPOINT`。
   return env;
 }
 
@@ -108,7 +142,10 @@ export type DeviceLeaseTokenPayload = z.infer<typeof DeviceLeaseTokenPayload>;
 function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
 }
 
 /** WebCrypto 要 ArrayBuffer-backed 视图；这里显式复制，避免 SharedArrayBuffer 类型歧义。 */
@@ -123,10 +160,14 @@ function utf8(value: string): Uint8Array<ArrayBuffer> {
 }
 
 function fromBase64url(value: string): Uint8Array<ArrayBuffer> {
-  const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const padded = value
+    .replaceAll("-", "+")
+    .replaceAll("_", "/")
+    .padEnd(Math.ceil(value.length / 4) * 4, "=");
   const binary = atob(padded);
   const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  for (let index = 0; index < binary.length; index += 1)
+    bytes[index] = binary.charCodeAt(index);
   return bytes;
 }
 
@@ -140,9 +181,18 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
   );
 }
 
-export async function mintDeviceLeaseToken(payload: DeviceLeaseTokenPayload, secret: string): Promise<string> {
-  const body = base64url(utf8(JSON.stringify(DeviceLeaseTokenPayload.parse(payload))));
-  const signature = await crypto.subtle.sign("HMAC", await hmacKey(secret), utf8(body));
+export async function mintDeviceLeaseToken(
+  payload: DeviceLeaseTokenPayload,
+  secret: string,
+): Promise<string> {
+  const body = base64url(
+    utf8(JSON.stringify(DeviceLeaseTokenPayload.parse(payload))),
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    await hmacKey(secret),
+    utf8(body),
+  );
   return `${DEVICE_LEASE_TOKEN_VERSION}.${body}.${base64url(new Uint8Array(signature))}`;
 }
 
@@ -153,7 +203,8 @@ export async function verifyDeviceLeaseToken(
   nowMs: number = Date.now(),
 ): Promise<DeviceLeaseTokenPayload | null> {
   const parts = token.split(".");
-  if (parts.length !== 3 || parts[0] !== DEVICE_LEASE_TOKEN_VERSION) return null;
+  if (parts.length !== 3 || parts[0] !== DEVICE_LEASE_TOKEN_VERSION)
+    return null;
   const [, body, signature] = parts;
   let valid = false;
   try {
@@ -168,7 +219,9 @@ export async function verifyDeviceLeaseToken(
   }
   if (!valid) return null;
   try {
-    const payload = DeviceLeaseTokenPayload.parse(JSON.parse(new TextDecoder().decode(fromBase64url(body))));
+    const payload = DeviceLeaseTokenPayload.parse(
+      JSON.parse(new TextDecoder().decode(fromBase64url(body))),
+    );
     return payload.exp * 1000 > nowMs ? payload : null;
   } catch {
     return null;

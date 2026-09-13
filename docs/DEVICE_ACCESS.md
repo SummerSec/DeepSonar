@@ -1,6 +1,6 @@
 # 真实设备接入：设备 broker + 设备租约 + 可抛弃设备机隔离
 
-> 状态：**设计（#494）+ Phase 1 MVP as-built（#495）**。Phase 1 已落地单设备 adb-over-TCP、设备租约、项目 opt-in + 任务级授权与审计；Phase 2（hdc/串口/电源控制、多设备池、危险操作确认、设备视图）仍为提案。
+> 状态：**设计（#494）+ Phase 1 MVP as-built（#495 / #504 / #506）**。已落地 adb 与 hdc 两条 transport、设备租约、项目 opt-in + 任务级授权与审计，以及「设备任务必须允许出网」的 fail-closed 前置（#506）；Phase 2（串口/SSH、电源与复位控制、多设备池、危险操作确认、设备视图）仍为提案。真机全链路仍需在 rig + 真机上验收。
 > 事实入口：本文描述设计契约；实现细节以代码、`database/schema.sql`、OpenAPI 与测试为准。
 
 DeepSonar 的 Job 跑在硬化容器沙箱里，沙箱内**没有任何物理设备可达路径**。真机漏洞挖掘/复现（固件、IoT、路由、移动端、嵌入式）必须让 Agent 与真实设备交互。本文给出「设备如何被平台调度、隔离、授权与记账」这一层的设计。
@@ -60,7 +60,8 @@ device_events    id, device_id, lease_id, job_id, actor, action, payload_json, c
 
 - 任务创建时可声明设备需求（`transport` + 型号/能力 + 独占 + 时长上限），**冻结进 `jobs.agent_snapshot_json`**；执行期只认冻结快照，不回读最新配置。
 - Dispatcher 在 `provisioning` 前完成租借，把 broker 端点与短期租约 token 投影进沙箱环境，与现有 `deepsonar-gateway-proxy:3100/gateway` 的固定目标投影同构。
-- 沙箱内工具（`adb`/`hdc`/`minicom`/`ssh`）连 broker 网关地址 + 短期 token，不直连物理设备。egress 关闭时不放弃治理：端点经固定目标 sidecar 转发，不放开任意出站。
+- **Phase 1 as-built（#504 / #506）**：沙箱内的 `adb` / `hdc` **直连 rig 端点**——adb 用 `ANDROID_ADB_SERVER_ADDRESS` / `ANDROID_ADB_SERVER_PORT` / `ANDROID_SERIAL`，hdc 消费通用变量 `DEEPSONAR_DEVICE_ENDPOINT`（例如 `hdc -s <endpoint>` 或 `hdc tconn <endpoint>`）。因此设备任务**必须允许出网**（`network_policy.allow_egress=true`）：在建 Job（冻结画布需求）与申请租约（校验冻结快照）两处 fail closed 返回 409 `device_not_authorized`。
+- **尚未实现（原设计目标，勿当成 as-built）**：端点经固定目标 sidecar 转发、沙箱只与 broker 网关 + 短期 token 通话。因此租约 token 目前**只保护控制面**（`/session`、`/lease/release`），**不保护设备数据面**：同一 rig 上 `adb -s <其它序列号>` 仍可达，实际边界依赖「一 rig 一设备 + 网络隔离」。
 - adb 场景对 Agent 透明：注入 `ANDROID_ADB_SERVER_ADDRESS` / `ANDROID_ADB_SERVER_PORT` / `ANDROID_SERIAL`，沙箱内 `adb devices` / `adb shell` 免改脚本即可用。
 
 ### 3.4 授权与隔离
@@ -99,7 +100,7 @@ Job pending → claimed（申请设备，写 pending 租约）
 
 ## 5. 分期落地
 
-**Phase 1（MVP，#495；已落地）**
+#### Phase 1（MVP，#495 / #504 / #506；已落地）
 
 已实现（细节以代码/测试为准）：
 
@@ -110,6 +111,9 @@ Job pending → claimed（申请设备，写 pending 租约）
   （`SCHEMA_VERSION=49`）。
 - broker：`apps/device-broker`（`/health`、`/devices`、`/lease/acquire`、`/lease/release`、
   `/session`；序列号白名单 fail closed、租约 TTL 上限、append-only JSONL 审计、不持模型凭据）；
+  枚举 adb（`adb devices -l`）与 hdc（`hdc list targets`，过滤 `[Empty]` / `Connect server failed` 等噪声），
+  租约绑定 transport 且不跨 transport 匹配；端点按 transport 配置（`DEVICE_BROKER_ADB_*` / `DEVICE_BROKER_HDC_*`，
+  hdc server 默认 8710，hdc 可执行文件用 `DEVICE_BROKER_HDC_BIN`，缺 hdc 时该 transport 枚举为空即 fail closed）；
   部署见 `deploy/Dockerfile.device-broker` 与 `deploy/docker-compose.device-broker.yml`（容器不映射 USB）。
 - 调度器：`apps/scheduler/src/domains/device/`（授权→broker 申请→落库，DB 部分唯一索引是
   独占性的最终仲裁者；释放失败由 broker TTL + Reaper 兜底）、Dispatcher 在 provision 前申请并
@@ -125,14 +129,14 @@ Job pending → claimed（申请设备，写 pending 租约）
   `ci:smoke:device` 在无 rig 时会明确 skip，而不是伪装通过。
 - 管理与 Web UI 的设备/租约视图、多设备池与排队、危险操作人工确认。
 
-- 一台 device rig + broker 仅暴露**单设备 adb-over-TCP**（复用 `mobile-runtime.json` 既有 adb 能力）。
+- 一台 device rig + broker 暴露**单设备 adb-over-TCP 或 hdc-over-TCP**（复用 `mobile-runtime.json` / `openharmony-test-runtime.json` 既有 adb / hdc 能力）；`DEEPSONAR_DEVICE_TRANSPORTS`（默认 `adb`）逐 transport 开启。
 - schema 加 `devices` / `device_leases` / `device_events`，bump `SCHEMA_VERSION`；Dispatcher 按冻结快照声明的 transport 租借设备；沙箱侧注入 endpoint + 短期 token。
 - 项目 opt-in + 任务级授权字段 + `device_events` 审计。
 - 验收：test 角色 Job 经 broker 对真机执行 `adb devices` / `adb shell <cmd>` 并回读输出落 Job 证据；回收后设备回 `idle`；未 opt-in 项目拿不到租约；审计可追溯。
 
-**Phase 2**
+#### Phase 2
 
-- hdc（OpenHarmony 镜像）/ 串口 / SSH 传输；设备控制面（电源、reset、串口日志）。
+- 串口 / SSH 传输；设备控制面（电源、reset、串口日志）。
 - 多设备池 + 排队 + 优先级；跨设备测试矩阵（同固件多型号）。
 - 危险操作 `high_risk_action` 人工确认链路。
 - 管理 API / Web UI 的设备与租约视图（Phase 1 先以 DB + broker API + 审计为准）。

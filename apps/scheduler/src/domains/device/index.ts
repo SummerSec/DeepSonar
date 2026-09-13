@@ -8,6 +8,7 @@ export {
 export {
   acquireDeviceLeaseForJob,
   assertDeviceAccessAuthorized,
+  assertDeviceEgressAllowed,
   deviceRequirementFromSnapshot,
   freezeSnapshotDeviceRequirement,
   jobNeedsDevice,
@@ -17,3 +18,13 @@ export {
   type DeviceLeaseHandle,
   type FrozenDeviceRequirement,
 } from "./application.js";
+export {
+  desiredRigDevices,
+  nextRigRevision,
+  pushRigAdmission,
+  readRigAdmission,
+  rigRegistryConfigured,
+  type DesiredRigDevice,
+  type PushOutcome,
+  type RigAdmissionState,
+} from "./rig-registry.js";
