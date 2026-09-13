@@ -37,7 +37,10 @@ test("connection success/failure returns fixed health category and safe URL", as
     });
     assert.deepEqual(failureUrls, ["http://127.0.0.1/v1/models"]);
     assert.equal(failure.ok, false);
-    assert.equal(failure.category, "authentication");
+    // #491: 没有可用的推理模型时只有目录证据，目录 401 不能定性为认证失败。
+    assert.equal(failure.category, "unknown");
+    assert.match(failure.detail, /模型目录不可用/);
+    assert.equal(failure.probe_path, "models");
     assert.equal(failure.detail.includes("super-secret"), false);
     assert.equal(JSON.stringify(failure).includes("Bearer"), false);
   } finally {
@@ -112,7 +115,7 @@ test("connection test falls back on 404/405 and reports the last missing candida
     ]);
     assert.equal(cancelled, 2);
     assert.equal(result.ok, false);
-    assert.equal(result.detail, "Provider 连接失败（unknown，HTTP 405）");
+    assert.equal(result.detail, "Provider 模型目录不可用（HTTP 405）；该路径失败不代表推理调用不可用");
     assert.equal(result.source_url, "http://127.0.0.1/v2/v1/models");
   } finally {
     globalThis.fetch = originalFetch;
@@ -307,6 +310,85 @@ test("model discovery maps a header-then-stall AbortError to timeout", async () 
     assert.deepEqual(stalled.models, []);
     assert.equal(stalled.fetched_at, null);
     assert.equal(stalled.category, "timeout");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("inference probe is authoritative while catalog-only failures stay unknown", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method?: string; body: unknown }> = [];
+  // Provider 声明模型走 settingsConfig；base_url 仍由 metadata 提供。
+  const credential = (provider: string, metadata: Record<string, unknown> = { base_url: "http://127.0.0.1" }) => ({
+    provider,
+    kind: "llm_provider",
+    ...encrypted,
+    public_metadata_json: metadata,
+    settings_config_json: { models: { "probe-model": {} } },
+  });
+  const statusQueue = (statuses: number[]) => (async (input: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), method: init?.method, body: init?.body });
+    return new Response(JSON.stringify({ ok: true }), { status: statuses.shift() ?? 200 });
+  }) as typeof fetch;
+  try {
+    globalThis.fetch = statusQueue([200]);
+    const accepted = await testCredential(credential("openai") as never);
+    assert.deepEqual(calls.map((call) => [call.url, call.method]), [
+      ["http://127.0.0.1/v1/chat/completions", "POST"],
+    ]);
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.probe_path, "inference");
+    assert.equal(accepted.source_url, "http://127.0.0.1/v1/chat/completions");
+    assert.deepEqual(JSON.parse(String(calls[0].body)), {
+      model: "probe-model",
+      max_tokens: 8,
+      messages: [{ role: "user", content: "ping" }],
+    });
+
+    // 400 只说明 ping 的模型/参数被拒，认证本身已通过（与 vendor PoC 同口径）。
+    calls.length = 0;
+    globalThis.fetch = statusQueue([400]);
+    const rejectedModel = await testCredential(credential("openai") as never);
+    assert.equal(rejectedModel.ok, true);
+    assert.match(rejectedModel.detail, /推理调用已被 Provider 接受（HTTP 400）/);
+
+    // 推理路径 401 才是权威的认证失败。
+    calls.length = 0;
+    globalThis.fetch = statusQueue([401]);
+    const unauthorized = await testCredential(credential("openai") as never);
+    assert.equal(unauthorized.ok, false);
+    assert.equal(unauthorized.category, "authentication");
+    assert.equal(unauthorized.probe_path, "inference");
+
+    // #491 现场：只实现 completions 的中转 —— 推理路径 404/405，目录路径 401。
+    calls.length = 0;
+    globalThis.fetch = statusQueue([404, 401]);
+    const issueCase = await testCredential(credential("openai") as never);
+    assert.deepEqual(calls.map((call) => call.url), [
+      "http://127.0.0.1/v1/chat/completions",
+      "http://127.0.0.1/v1/models",
+    ]);
+    assert.equal(issueCase.ok, false);
+    assert.equal(issueCase.category, "unknown");
+    assert.equal(issueCase.probe_path, "models");
+    assert.match(issueCase.detail, /模型目录不可用（HTTP 401）.*不代表推理调用不可用/);
+
+    // 推理路径不存在但目录可达：认证已通过，仍然算可用。
+    calls.length = 0;
+    globalThis.fetch = statusQueue([404, 200]);
+    const catalogOnly = await testCredential(credential("openai") as never);
+    assert.equal(catalogOnly.ok, true);
+    assert.equal(catalogOnly.probe_path, "models");
+    assert.match(catalogOnly.detail, /推理路径未实现（HTTP 404）/);
+
+    // Anthropic 走 /v1/messages（与 vendor PoC 同一路径选择）。
+    calls.length = 0;
+    globalThis.fetch = statusQueue([200]);
+    await testCredential(credential("anthropic", { base_url: "https://api.anthropic.com" }) as never);
+    assert.deepEqual(calls.map((call) => call.url), ["https://api.anthropic.com/v1/messages"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

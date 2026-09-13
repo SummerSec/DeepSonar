@@ -8,7 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
-import { extractBaseUrlFromSettings } from "./provider-settings.js";
+import { extractBaseUrlFromSettings, extractModelsFromSettings, splitPiModelRef } from "./provider-settings.js";
 
 /** Provider response bytes accepted by model discovery (before JSON parsing). */
 export const CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES = 256 * 1024;
@@ -22,11 +22,13 @@ type CredentialProbe = {
   public_metadata_json: unknown;
   /** CC Switch settingsConfig; used when public_metadata lacks base_url. */
   settings_config_json?: unknown;
+  /** Scheduler-owned model catalog; only used to pick a probe model id. */
+  model_catalog_json?: unknown;
 };
 
 type CredentialRequestInput = Pick<
   CredentialProbe,
-  "provider" | "kind" | "public_metadata_json" | "settings_config_json"
+  "provider" | "kind" | "public_metadata_json" | "settings_config_json" | "model_catalog_json"
 >;
 
 export type CredentialProbeResult = {
@@ -35,7 +37,12 @@ export type CredentialProbeResult = {
   category?: CredentialHealthErrorCategory;
   source_url?: string;
   fetched_at: string;
+  /** Which probe path produced this verdict; inference is the authoritative one. */
+  probe_path?: CredentialProbePath;
 };
+
+/** 推理路径能证明「凭据可运行 Job」；目录路径只是补充证据。 */
+type CredentialProbePath = "inference" | "models";
 
 /** Optional Provider /models catalog. Probe failure never throws for network/HTTP/empty responses. */
 export type ModelCatalogDiscovery = {
@@ -99,7 +106,7 @@ function modelUrls(root: string): string[] {
   return [...new Set(candidates.map(safeSourceUrl))];
 }
 
-function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
+function resolveProbeBaseUrl(cred: CredentialRequestInput): string {
   const mapping = PROVIDER_ENV_MAP[cred.provider];
   if (!isProviderKnown(cred.provider) || !mapping) throw new CredentialProbeError("Provider 未在服务器允许列表", "configuration");
   const metadata = projectCredentialMetadata(cred.kind ?? "llm_provider", cred.provider, cred.public_metadata_json);
@@ -110,12 +117,96 @@ function modelRequest(cred: CredentialRequestInput, secret: string): { urls: str
   if (!baseUrl) {
     throw new CredentialProbeError("Credential 缺少 Provider URL 配置（请在 metadata.base_url 或 settingsConfig 中填写）", "configuration");
   }
+  return baseUrl;
+}
+
+function authHeaders(provider: string, secret: string): Record<string, string> {
+  return provider === "anthropic"
+    ? { Authorization: `Bearer ${secret}`, "x-api-key": secret, "anthropic-version": "2023-06-01" }
+    : { Authorization: `Bearer ${secret}` };
+}
+
+function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
+  return { urls: modelUrls(resolveProbeBaseUrl(cred)), headers: authHeaders(cred.provider, secret) };
+}
+
+/** vendor PoC（opensandbox-cli-control.poc.ts）的最小推理调用口径。 */
+const INFERENCE_PROBE_MAX_TOKENS = 8;
+
+type InferenceProbeRequest = { url: string; headers: Record<string, string>; body: string };
+
+/**
+ * 推理探测使用的模型 id：优先 settingsConfig 声明的模型（与真实 Job 同一来源），
+ * 退化到已保存的模型目录。用 splitPiModelRef 剥掉 Pi 的 `provider/model` 前缀，
+ * 与 Pi 启动路径保持同一口径。没有可用模型时不探测推理路径。
+ */
+function inferenceProbeModel(cred: CredentialRequestInput): string | null {
+  const candidates = [
+    ...extractModelsFromSettings(cred.settings_config_json).map((model) => splitPiModelRef(model).modelId),
+    ...normalizeModelCatalog(cred.model_catalog_json),
+  ];
+  return candidates.find((model) => model.trim().length > 0 && model.trim().length <= CREDENTIAL_MODEL_ID_MAX_LENGTH)?.trim() ?? null;
+}
+
+function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): InferenceProbeRequest | null {
+  const model = inferenceProbeModel(cred);
+  if (!model) return null;
+  const base = safeSourceUrl(resolveProbeBaseUrl(cred));
   return {
-    urls: modelUrls(baseUrl),
-    headers: cred.provider === "anthropic"
-      ? { Authorization: `Bearer ${secret}`, "x-api-key": secret, "anthropic-version": "2023-06-01" }
-      : { Authorization: `Bearer ${secret}` },
+    url: cred.provider === "anthropic" ? `${base}/v1/messages` : `${base}/v1/chat/completions`,
+    headers: { "content-type": "application/json", ...authHeaders(cred.provider, secret) },
+    body: JSON.stringify({
+      model,
+      max_tokens: INFERENCE_PROBE_MAX_TOKENS,
+      messages: [{ role: "user", content: "ping" }],
+    }),
   };
+}
+
+/**
+ * 2xx 与 400 都证明这次请求通过了 Provider 认证：400 只说明 ping 的模型/参数
+ * 被拒，凭据本身可用（与 vendor PoC 的 assertVendorUpstreamStatus 同口径）。
+ */
+function inferenceStatusAccepted(status: number): boolean {
+  return (status >= 200 && status < 300) || status === 400;
+}
+
+async function requestInferenceProbe(
+  request: InferenceProbeRequest,
+  timeoutMs: number,
+): Promise<{ status: number; url: string }> {
+  // 与目录探测同一口径：URL 已由 safeSourceUrl + Provider 允许列表校验（见 inferenceProbeRequest）。
+  const url = request.url;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: request.headers,
+      body: request.body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    const category: CredentialHealthErrorCategory = isAbortError(error) ? "timeout" : "network";
+    throw new CredentialProbeError(detailForCategory(category), category);
+  }
+  await cancelResponseBody(response);
+  return { status: response.status, url: request.url };
+}
+
+/**
+ * 目录发现路径的 401/403/404/405 只说明该路径不可用（第三方中转常常只实现
+ * completions），不构成「账号不能调用模型」的结论，因此归为 unknown。
+ */
+function discoveryCategoryForStatus(status: number): CredentialHealthErrorCategory {
+  return status === 401 || status === 403 || status === 404 || status === 405
+    ? "unknown"
+    : categoryForStatus(status);
+}
+
+function discoveryDetail(status: number, category: CredentialHealthErrorCategory): string {
+  return category === "unknown"
+    ? `Provider 模型目录不可用（HTTP ${status}）；该路径失败不代表推理调用不可用`
+    : detailForCategory(category, status);
 }
 
 function categoryForStatus(status: number): CredentialHealthErrorCategory {
@@ -252,25 +343,33 @@ function modelId(row: unknown): string {
   return "";
 }
 
-async function summarizeResponse(result: CandidateRequestResult): Promise<CredentialProbeResult> {
+async function summarizeCatalogResponse(
+  result: CandidateRequestResult,
+  inferenceMissing: { status: number } | null,
+): Promise<CredentialProbeResult> {
   const sourceUrl = safeSourceUrl(result.url);
+  const suffix = inferenceMissing ? `；推理路径未实现（HTTP ${inferenceMissing.status}）` : "";
   if (result.ok) {
     await cancelResponseBody(result.response);
     return {
       ok: true,
-      detail: `连接成功（HTTP ${result.response.status}）`,
+      detail: inferenceMissing
+        ? `模型目录可达（HTTP ${result.response.status}）${suffix}`
+        : `连接成功（HTTP ${result.response.status}）`,
       source_url: sourceUrl,
       fetched_at: now(),
+      probe_path: "models",
     };
   }
-  const category = categoryForStatus(result.status);
+  const category = discoveryCategoryForStatus(result.status);
   // 不读取或持久化上游正文；其中可能包含 URL、请求 ID 或意外回显的密钥。
   return {
     ok: false,
-    detail: detailForCategory(category, result.status),
+    detail: `${discoveryDetail(result.status, category)}${suffix}`,
     category,
     source_url: sourceUrl,
     fetched_at: now(),
+    probe_path: "models",
   };
 }
 
@@ -305,8 +404,8 @@ async function discoverModelCatalogWithSecret(
   try {
     const result = await requestModelCandidate(modelRequest(cred, secret), 15_000);
     if (!result.ok) {
-      const category = categoryForStatus(result.status);
-      return catalogUnavailable(category, detailForCategory(category, result.status), safeSourceUrl(result.url));
+      const category = discoveryCategoryForStatus(result.status);
+      return catalogUnavailable(category, discoveryDetail(result.status, category), safeSourceUrl(result.url));
     }
     const payload = await readJsonBounded(result.response);
     const models = normalizeModelCatalog(modelRows(payload).map(modelId))
@@ -385,8 +484,37 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
         fetched_at: now(),
       };
     }
+    // 先探测推理路径：它才是「这份凭据能不能跑 Job」的证据。目录路径只作补充，
+    // 因此目录侧 401/403/404/405 不再升级为 readiness 的认证失败。
+    const inference = inferenceProbeRequest(cred, secret);
+    let inferenceMissing: { status: number } | null = null;
+    if (inference) {
+      const probed = await requestInferenceProbe(inference, 10_000);
+      if (inferenceStatusAccepted(probed.status)) {
+        return {
+          ok: true,
+          detail: `推理调用已被 Provider 接受（HTTP ${probed.status}）`,
+          source_url: safeSourceUrl(probed.url),
+          fetched_at: now(),
+          probe_path: "inference",
+        };
+      }
+      if (probed.status !== 404 && probed.status !== 405) {
+        const category = categoryForStatus(probed.status);
+        return {
+          ok: false,
+          detail: detailForCategory(category, probed.status),
+          category,
+          source_url: safeSourceUrl(probed.url),
+          fetched_at: now(),
+          probe_path: "inference",
+        };
+      }
+      // 404/405 说明该推理路径不存在（供应商计划不同），交回目录路径复核。
+      inferenceMissing = probed;
+    }
     const result = await requestModelCandidate(modelRequest(cred, secret), 10_000);
-    return await summarizeResponse(result);
+    return await summarizeCatalogResponse(result, inferenceMissing);
   } catch (error) {
     if (error instanceof CredentialProbeError) {
       return { ok: false, detail: error.message, category: error.category, fetched_at: now() };
