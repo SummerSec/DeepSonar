@@ -190,6 +190,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - Control API 不写 Agent 可写控制文件，不从普通 CLI 输出或伪造 MCP tool call 推断事件。
 - 镜像、sandbox、Gateway、Provider 和事件流都采用 fail-closed；不知道外部效果时不重放。
 - 审计日志 append-only；过程流、Session、运行产物和错误反馈不得泄露长期密钥或完整 Provider 响应。
+- 物理设备接入走 broker（沙箱不直连设备），设备按不可信输入对待，设备租约与授权细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md)。
 
 ## 12. 当前状态与开放演进
 
@@ -203,6 +204,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | Quality / Replay（#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
 | 项目报告工作台（#484） | Phase 1 已落地：统一 `ReportDeliverable` 投影、交付物优先列表、默认不展开任务、空/生成中/失败/无 Finding 状态可区分；旧路由与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
+| 真实设备接入（#494/#495） | 设计为「沙箱不直连设备」：device broker 把物理设备暴露为网络端点，设备租约绑 Attempt，设备机可抛弃隔离；状态以 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md) 为准 | Phase 1 MVP（单设备 adb-over-TCP + 项目 opt-in + 任务授权 + 审计）；Phase 2 hdc/串口/电源控制与多设备池 |
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
 
