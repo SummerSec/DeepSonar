@@ -282,7 +282,7 @@ const OPS: Op[] = [
   { method: "get", path: "/openapi.json", summary: "OpenAPI 3 JSON schema", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema", summary: "API schema（默认 OpenAPI JSON；?format=markdown 返回 Markdown）", scope: null, tags: ["Meta"] },
   { method: "get", path: "/schema.md", summary: "API Markdown 文档", scope: null, tags: ["Meta"] },
-  { method: "get", path: "/metrics", summary: "Prometheus 指标文本", scope: "admin", tags: ["Meta"] },
+  { method: "get", path: "/metrics", summary: "Prometheus 指标文本", scope: "authenticated", tags: ["Meta"] },
   {
     method: "get",
     path: "/workers",
@@ -414,7 +414,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/auth/me",
     summary: "当前认证主体",
-    scope: "projects:read",
+    scope: "authenticated",
     tags: ["Auth"],
     responses: {
       "200": {
@@ -2449,6 +2449,381 @@ const OPS: Op[] = [
 
   // audit
   { method: "get", path: "/audit-logs", summary: "审计日志", scope: "admin", tags: ["Admin"] },
+
+  // ---------- 平台导入导出（.deepsonarpack） ----------
+  {
+    method: "post",
+    path: "/projects/{id}/exports",
+    summary: "创建项目导出",
+    description:
+      "preset=configuration|project_full|evidence_archive|custom。未知模块、或存在活动 Job 且未勾选 allow_active_jobs 时返回 400（带稳定 error_code）。产物落盘后用 GET /exports/:id/download 下载。",
+    scope: "exports:write",
+    tags: ["Transfer"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      properties: {
+        preset: { type: "string", enum: ["configuration", "project_full", "evidence_archive", "custom"] },
+        modules: { type: "array", items: { type: "string" } },
+        include_blobs: { type: "boolean" },
+        allow_active_jobs: { type: "boolean" },
+        credentials: {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["excluded", "metadata"] } },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/exports",
+    summary: "项目导出列表（最近 50 条）",
+    scope: "exports:read",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/platform/exports",
+    summary: "创建平台导出（跨项目配置）",
+    description:
+      "preset=platform_full|custom。项目作用域的 token 返回 403 PROJECT_SCOPE_FORBIDDEN。凭据默认排除，仅可选 metadata 模式。",
+    scope: "exports:write",
+    tags: ["Transfer"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      properties: {
+        preset: { type: "string", enum: ["platform_full", "custom"] },
+        modules: { type: "array", items: { type: "string" } },
+        credentials: {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["excluded", "metadata"] } },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/platform/exports",
+    summary: "平台导出列表（最近 50 条）",
+    description: "项目作用域的 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "exports:read",
+    tags: ["Transfer"],
+  },
+  { method: "get", path: "/exports/{id}", summary: "导出详情", scope: "exports:read", tags: ["Transfer"] },
+  {
+    method: "get",
+    path: "/exports/{id}/download",
+    summary: "下载导出包",
+    description:
+      "content-type: application/x-deepsonarpack，响应头 x-content-sha256 为产物摘要。未成功 409，已过期 410；下载会写 audit。",
+    scope: "exports:read",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/exports/{id}/cancel",
+    summary: "取消导出",
+    description: "仅 pending/collecting/packaging 可取消，其他状态 409。无 body。",
+    scope: "exports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "delete",
+    path: "/exports/{id}",
+    summary: "删除导出记录与产物",
+    scope: "exports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/imports",
+    summary: "上传 .deepsonarpack",
+    description:
+      "请求体就是包本体（Content-Type: application/zip 或 application/x-deepsonarpack）；空体或非二进制 400。包内格式为 platform 时需平台权限，项目作用域 token 上传平台包返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+    successStatus: "201",
+    body: { type: "string", format: "binary" },
+    bodyContentType: "application/x-deepsonarpack",
+  },
+  { method: "get", path: "/imports/{id}", summary: "导入详情", scope: "imports:read", tags: ["Transfer"] },
+  {
+    method: "post",
+    path: "/imports/{id}/preview",
+    summary: "导入预检",
+    description: "无 body。预检失败写 data_imports.status=failed 与 error_code，并返回 400。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/imports/{id}/apply",
+    summary: "应用导入",
+    description:
+      "mode=create_new|merge_configuration|merge_platform。项目作用域 token 只能 merge_configuration 到自己的项目，否则 403 PROJECT_SCOPE_FORBIDDEN / PROJECT_MISMATCH。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+    body: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["create_new", "merge_configuration", "merge_platform"] },
+        project_name: { type: "string" },
+        target_project_id: { type: "string", format: "uuid" },
+        modules: { type: "array", items: { type: "string" } },
+        conflict_policy: { type: "string", enum: ["rename", "keep_target", "use_source"] },
+        credential_mappings: { type: "object", additionalProperties: { type: "string" } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/imports/{id}/cancel",
+    summary: "取消导入",
+    description: "仅 uploaded/validating/preview_ready 可取消，其他状态 409。无 body。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "delete",
+    path: "/imports/{id}",
+    summary: "删除导入记录与产物",
+    scope: "imports:write",
+    tags: ["Transfer"],
+  },
+
+  // ---------- Finding 评论 / 关联 ----------
+  {
+    method: "post",
+    path: "/findings/{id}/comments",
+    summary: "新增 Finding 评论",
+    description:
+      "request_hub 默认 true：已 confirmed 的 Finding 评论后会按人工消息唤醒 Hub 再决策；响应 hub 字段回报是否入队及原因（not_confirmed / request_hub_false）。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      required: ["body"],
+      properties: {
+        body: { type: "string", minLength: 1, maxLength: 8000 },
+        request_hub: { type: "boolean" },
+      },
+    },
+  },
+  {
+    method: "delete",
+    path: "/findings/{id}/comments/{commentId}",
+    summary: "删除 Finding 评论",
+    description: "评论必须属于该 Finding，否则 404。",
+    scope: "findings:write",
+    tags: ["Findings"],
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/links",
+    summary: "新增 Finding 关联链接",
+    description: "link_type=related|ticket|pr|doc|evidence；url 必须合法且不超过 2000 字符。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      required: ["url"],
+      properties: {
+        url: { type: "string", maxLength: 2000 },
+        title: { type: "string", maxLength: 200 },
+        link_type: { type: "string", enum: ["related", "ticket", "pr", "doc", "evidence"] },
+      },
+    },
+  },
+  {
+    method: "delete",
+    path: "/findings/{id}/links/{linkId}",
+    summary: "删除 Finding 关联链接",
+    description: "链接必须属于该 Finding，否则 404。",
+    scope: "findings:write",
+    tags: ["Findings"],
+  },
+
+  // ---------- 任务归档 / 硬删除 / 活动 Job 批量取消 ----------
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/archive",
+    summary: "归档任务（软删除）",
+    description:
+      "取消画布上活动 Job、吊销 Job Token、暂停 Hub，历史数据保留；已归档再调用幂等返回 cancelled_jobs=0。无 body。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/unarchive",
+    summary: "取消归档任务",
+    description: "恢复为 active，不自动唤醒 Hub（需显式继续执行）。所属项目已归档时 409。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+  },
+  {
+    method: "delete",
+    path: "/tasks/{canvasId}",
+    summary: "硬删除任务数据",
+    description:
+      "先取消活动 Job，再删除画布与 jobs/findings/events/报告/图节点；不可恢复。无 body。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/jobs/cancel-active",
+    summary: "取消画布上全部活动 Job",
+    description: "reason 可选（默认“强制退出全部活动 Job”）；逐 Job 回收沙箱、吊销 Job Token 并标记已取消节点。",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+    body: {
+      type: "object",
+      properties: { reason: { type: "string", maxLength: 500 } },
+    },
+  },
+
+  // ---------- 画布收敛控制 ----------
+  {
+    method: "get",
+    path: "/canvases/{id}/convergence",
+    summary: "读取画布收敛状态",
+    description: "返回 convergence、项目规则（minVerifySeverity / maxVerificationRounds）与 careSeverities（收效门要关心的严重度）。",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/pause",
+    summary: "暂停画布 Hub 收敛",
+    description: "body 可选 {reason}；暂停后不再自动开新 Hub 轮次，已入队 Job 不受影响。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    body: { type: "object", properties: { reason: { type: "string" } } },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/resume",
+    summary: "恢复画布 Hub 收敛",
+    description: "body 可选 {force_hub}；force_hub=true 时同事务内强制唤醒一轮 Hub。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    body: { type: "object", properties: { force_hub: { type: "boolean" } } },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/stop-after-gate",
+    summary: "收敛门外停止（本轮回合跑完即停）",
+    description: "no body；返回 convergence 与项目规则。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/drain-priority",
+    summary: "排空当前优先级层",
+    description: "no body；返回画布责任严重度与各优先级剩余计数。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/run-hub-now",
+    summary: "立即唤醒一轮 Hub",
+    description: "no body；已有活动 Hub 时不重复入队，返回 ok 与最新 convergence。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+
+  // ---------- 用户管理（仅 admin） ----------
+  {
+    method: "get",
+    path: "/users",
+    summary: "用户列表",
+    description: "只返回公开字段（无密码 hash / 会话）。",
+    scope: "admin",
+    tags: ["Users"],
+  },
+  {
+    method: "post",
+    path: "/users",
+    summary: "创建用户",
+    description: "role=admin|operator|viewer（默认 operator）；用户名冲突等失败返回 400 与稳定 error_code。",
+    scope: "admin",
+    tags: ["Users"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      required: ["username", "password"],
+      properties: {
+        username: { type: "string", minLength: 2, maxLength: 64 },
+        password: { type: "string", minLength: 8, maxLength: 200 },
+        display_name: { type: "string", maxLength: 100 },
+        role: { type: "string", enum: ["admin", "operator", "viewer"] },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/users/{id}",
+    summary: "更新用户资料 / 角色 / 状态",
+    description: "status=disabled 会阻止登录；不存在返回 404。",
+    scope: "admin",
+    tags: ["Users"],
+    body: {
+      type: "object",
+      properties: {
+        display_name: { type: "string", maxLength: 100 },
+        role: { type: "string", enum: ["admin", "operator", "viewer"] },
+        status: { type: "string", enum: ["active", "disabled"] },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/users/{id}/password",
+    summary: "重置用户密码",
+    description: "密码长度 8..200；成功后不返回密码。",
+    scope: "admin",
+    tags: ["Users"],
+    body: {
+      type: "object",
+      required: ["password"],
+      properties: { password: { type: "string", minLength: 8, maxLength: 200 } },
+    },
+  },
+
+  // ---------- 运行时镜像本地流程 / 浏览器实时流票据 ----------
+  {
+    method: "post",
+    path: "/runtime-images/registry/apply",
+    summary: "应用上传的镜像市场清单",
+    description:
+      "body 直接是清单对象，或包一层 {registry}。写入记录来源标记为 upload；项目作用域 token 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: { type: "object", additionalProperties: true },
+  },
+  {
+    method: "post",
+    path: "/auth/ws-ticket",
+    summary: "签发一次性浏览器 WS 票据",
+    description:
+      "purpose=stream|terminal（默认 stream）。terminal 需要 admin 或 jobs:control。票据绑定单个 Job、秒级过期，只能消费一次；Job 不在可流式状态返回 409 JOB_NOT_RUNNING，跨项目返回 403 PROJECT_MISMATCH。长期 Token 不会进入 WebSocket URL。",
+    scope: "tasks:read",
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["job_id"],
+      properties: {
+        job_id: { type: "string", format: "uuid" },
+        purpose: { type: "string", enum: ["stream", "terminal"] },
+      },
+    },
+  },
 ];
 
 function pathParams(p: string): Array<{ name: string; in: "path"; required: true; schema: { type: string; format?: string } }> {
@@ -2537,6 +2912,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       version: "0.0.1",
       description:
         "多项目代码审计调度平台 HTTP API。Agent 只提案，调度器是唯一有副作用的执行者。" +
+        " `x-deepsonar-scope`：具体 scope 名 = 需要该 scope；`authenticated` = 任意已认证主体；`exempt` = 豁免鉴权。" +
         " 人类可读摘要见 GET /schema.md；Management Skill 契约见 skills/deepsonar-management/references/api.md。" +
         " 运行时镜像官方目录支持 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN（仅向 github.com/api.github.com 发送，重定向到 release-assets/objects 时丢弃）。",
     },
@@ -2561,6 +2937,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       { name: "Runtime Images" },
       { name: "Skills" },
       { name: "Credentials" },
+      { name: "Transfer" },
+      { name: "Users" },
       { name: "Tokens" },
       { name: "Profiles" },
       { name: "Admin" },

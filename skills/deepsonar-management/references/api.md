@@ -10,6 +10,10 @@ Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
 
 **普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/workers/register`、`/workers/heartbeat`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/workers/register` 使用 `DEEPSONAR_WORKER_BOOTSTRAP_TOKEN`，`/workers/heartbeat` 使用注册返回的节点 token；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 
+**OpenAPI 覆盖边界**：`GET /openapi.json` 覆盖全部管理面 HTTP operation（= 已注册路由 − 下面三组）。不在其中的只有：`/gateway/*`（Job Token 自鉴权的 Model Gateway 代理）、`/control/v1/jobs/*`（沙箱内 Agent 的 Job capability Control API，Job token 自鉴权）、`/ws` 与 `/terminal-ws`（WebSocket 升级入口，handler 内消费一次性 ticket）。它们没有 request/response JSON 契约，因此不进 OpenAPI；`route-surface.test.ts` 用显式 allowlist 断言这条边界，新增路由既未进 OpenAPI 也不在 allowlist 会直接失败。
+
+`x-deepsonar-scope`：具体 scope 名 = 需要该 scope；`authenticated` = 任意已认证主体（无具体 scope 要求）；`exempt` = 豁免鉴权。
+
 Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出的写操作默认 `admin`，读操作只需已认证。
 
 **注意**：「角色 / RoleConfig / 设置 / 凭据」统一使用 `agents:read` / `agents:write`；运行时镜像市场使用独立的 `images:*` scopes。
@@ -93,6 +97,13 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /canvases/:id/messages | tasks:read | 读取人工消息账本，`limit` 为 1–500 |
 | POST | /canvases/:id/messages | tasks:write | 发送人工消息 `{message_id,target:{kind:hub\|job,node_id?},body,attachment_version_ids}`；带附件还要求 `assets:read` |
 | POST | /canvases/:id/human-nodes/:nodeId/ignore | jobs:control | 忽略仍为 open 的人工介入节点；若对应 Job 为 waiting_human 则关闭旧 Attempt 并恢复 pending |
+| GET | /canvases/:id/convergence | tasks:read | 画布收敛状态：`convergence` 与项目规则（`minVerifySeverity`/`maxVerificationRounds`）、`careSeverities` |
+| POST | /canvases/:id/convergence/pause | jobs:control | 暂停 Hub 自动收敛 `{reason?}`（缺省 `manual_pause`）；已入队 Job 不受影响 |
+| POST | /canvases/:id/convergence/resume | jobs:control | 恢复收敛 `{force_hub?}`；`force_hub=true` 时同事务强制唤醒一轮 Hub |
+| POST | /canvases/:id/convergence/stop-after-gate | jobs:control | 本轮回合跑（收敛门外）即停，无 body；返回 convergence 与项目规则 |
+| POST | /canvases/:id/convergence/drain-priority | jobs:control | 排空当前优先级层，无 body；返回责任严重度与各优先级剩余计数 |
+| POST | /canvases/:id/convergence/run-hub-now | jobs:control | 立即唤醒一轮 Hub，无 body；已有活动 Hub 时不重复入队 |
+| POST | /canvases/:id/jobs/cancel-active | jobs:control | 取消画布上全部活动 Job `{reason?}`；逐 Job 回收沙箱、吊销 Job Token 并把节点标记为 cancelled |
 
 ### 共享资产
 
@@ -314,8 +325,8 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | POST | /credentials/:id/models | agents:write | 实时拉取 Provider 模型目录（无 body；用于配置文件模型字段的参考） |
 | POST | /credentials/models/preview | agents:write | `{agent_cli, provider, secret, base_url?, settings_config?}`；未保存账号一键获取模型目录，不落库/审计/回显密钥 |
 | GET | /credentials/:id/models | agents:read | 读取已持久化的有界模型 ID 目录 |
-| GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code|pi|dsh&model=<可选覆盖>`；省略 model 时服务端从 Credential settingsConfig 解析 effective model；leftover `codex`/`open-code` 拒绝并提示迁移 |
-| POST | /credentials/batch-bind | agents:write | `{credential_id, role_config_ids[], mode: bind|migrate, source_credential_id?, model?, effect: new_jobs_only|refresh_pending, idempotency_key}`；运行中 Job 不会被改写 |
+| GET | /credentials/:id/compatibility | agents:read | `?agent_cli=claude-code\|pi\|dsh&model=<可选覆盖>`；省略 model 时服务端从 Credential settingsConfig 解析 effective model；leftover `codex`/`open-code` 拒绝并提示迁移 |
+| POST | /credentials/batch-bind | agents:write | `{credential_id, role_config_ids[], mode: bind\|migrate, source_credential_id?, model?, effect: new_jobs_only\|refresh_pending, idempotency_key}`；运行中 Job 不会被改写 |
 
 LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json.reasoning` 由 Provider/模型拥有；Claude Code 只接受 `low | medium | high | xhigh` 并物化为 `effortLevel`；Pi 只接受 `off | minimal | low | medium | high | xhigh | max`；DSH 只接受 `off | minimal | low | medium | high | xhigh | max`，第三方 wire value 必须配置在模型 `reasoningEfforts` 映射。leftover Codex/OpenCode 凭据仍可读历史 reasoning，但不能再保存为新配置。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai` 与固定提交的 `dsh-reasoning-settings@0.3.0`，`settings_config_json.config` 保存官方 `settings.yaml` 形状的 YAML（`llm-pi-ai.providers` + `agent-default-model`）；route 可自定义，`api` 必须与 Credential wire protocol 兼容。Job 只冻结一个 route，并把 endpoint/credential 强制替换为 Model Gateway 与短期 Job token。其它 CLI 的 `settings_config_json` 在 Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。写入时 leftover `allowed_model_ids` 按未知字段拒绝；导入/投影旧行丢弃该键。模型可用性只认 `settings_config`。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。`/readiness` 只在推理路径被拒（`authentication`/`authorization` 等权威 category）时把 `CREDENTIAL_TEST_FAILED` 判为 error；探测路径限制（`unknown`）降级为 warning，不再把可用的第三方中转判成不可用。
 
@@ -323,7 +334,7 @@ LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/exports | exports:write | 项目包；`preset=configuration|project_full|evidence_archive|custom`，可选 `modules/include_blobs/allow_active_jobs/credentials.mode`。`custom` 的 `modules` 只认已实现白名单（rules/roles/skills/runtime_images/environment/credentials/tasks/findings/events/audit_archive）；未知值 400 `UNKNOWN_EXPORT_MODULES` 并列出 `rejected`。`allow_active_jobs` 仅 `evidence_archive` 或 `custom` 含 `events` 可设为 true；`project_full` 携带则 `400 ACTIVE_JOBS_NOT_ALLOWED` |
+| POST | /projects/:id/exports | exports:write | 项目包；`preset=configuration\|project_full\|evidence_archive\|custom`，可选 `modules/include_blobs/allow_active_jobs/credentials.mode`。`custom` 的 `modules` 只认已实现白名单（rules/roles/skills/runtime_images/environment/credentials/tasks/findings/events/audit_archive）；未知值 400 `UNKNOWN_EXPORT_MODULES` 并列出 `rejected`。`allow_active_jobs` 仅 `evidence_archive` 或 `custom` 含 `events` 可设为 true；`project_full` 携带则 `400 ACTIVE_JOBS_NOT_ALLOWED` |
 | GET | /projects/:id/exports | exports:read | 项目导出任务列表 |
 | POST | /platform/exports | exports:write | `{preset: platform_full\|custom, modules?: string[], credentials?: {mode}}`；`custom` 时 `modules` 可自由勾选：`global_rules` / `agent_roles` / `global_role_configs` / `skill_sources` / `credentials` |
 | GET | /platform/exports | exports:read | 平台导出任务列表 |
@@ -334,7 +345,7 @@ LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages�
 | POST | /imports | imports:write | 上传 `.deepsonarpack`（raw body，`application/zip`/`application/x-deepsonarpack`） |
 | GET | /imports/:id | imports:read | 导入详情/状态 |
 | POST | /imports/:id/preview | imports:write | 预览可导入模块与冲突 |
-| POST | /imports/:id/apply | imports:write | `{mode: create_new|merge_configuration|merge_platform, project_name?, target_project_id?, modules?, conflict_policy?, credential_mappings?}` |
+| POST | /imports/:id/apply | imports:write | `{mode: create_new\|merge_configuration\|merge_platform, project_name?, target_project_id?, modules?, conflict_policy?, credential_mappings?}` |
 | POST | /imports/:id/cancel | imports:write | 取消未应用导入 |
 | DELETE | /imports/:id | imports:write | 删除上传包及记录 |
 
@@ -346,7 +357,8 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 | --- | --- | --- | --- |
 | * | /tokens* | tokens:manage | API Token 管理 |
 | GET | /audit-logs | admin | 审计日志 |
-| GET | /ws | tasks:read | Job 实时流 WebSocket |
+| GET | /ws | tasks:read | Job 实时流 WebSocket；升级入口不在 `/openapi.json` 的 HTTP operation 清单内，必须先 `POST /auth/ws-ticket` 拿一次性 ticket |
+| GET | /terminal-ws | — | Job 终端 WebSocket（同上）；`purpose=terminal` 的 ticket 需 admin 或 jobs:control |
 
 ### Readiness / preflight（#35/#36）
 

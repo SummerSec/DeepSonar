@@ -20,6 +20,22 @@ async function defaultOfficialImageWarnings(): Promise<string[]> {
   }
 }
 
+/** 运行时端点摘要：api.md 不可用时（例如容器未挂载 skills/）的 Markdown 回退。 */
+function runtimeSchemaMarkdown(): string {
+  const summary = buildSchemaSummary() as {
+    title: string;
+    endpoints: { method: string; path: string; summary: string; scope: string }[];
+  };
+  return [
+    `# ${summary.title}`,
+    "",
+    "（未找到 skills/.../api.md，以下为运行时生成的端点摘要，与 `GET /openapi.json` 同源）",
+    "",
+    ...summary.endpoints.map((endpoint) => `- \`${endpoint.method} ${endpoint.path}\` — ${endpoint.summary} _(scope: ${endpoint.scope})_`),
+    "",
+  ].join("\n");
+}
+
 export function registerSystemRoutes(
   app: FastifyInstance,
   dependencies: {
@@ -43,16 +59,7 @@ export function registerSystemRoutes(
     if (format === "markdown" || format === "md") {
       const md = loadApiMarkdown();
       if (md) return reply.type("text/markdown; charset=utf-8").send(md);
-      const summary = buildSchemaSummary() as { title: string; endpoints: { method: string; path: string; summary: string; scope: string }[] };
-      const lines = [
-        `# ${summary.title}`,
-        "",
-        "（未找到 skills/.../api.md，以下为运行时生成的端点摘要）",
-        "",
-        ...summary.endpoints.map((endpoint) => `- \`${endpoint.method} ${endpoint.path}\` — ${endpoint.summary} _(scope: ${endpoint.scope})_`),
-        "",
-      ];
-      return reply.type("text/markdown; charset=utf-8").send(lines.join("\n"));
+      return reply.type("text/markdown; charset=utf-8").send(runtimeSchemaMarkdown());
     }
     return reply.type("application/json; charset=utf-8").send(buildOpenApiDocument());
   });
@@ -60,7 +67,8 @@ export function registerSystemRoutes(
   app.get("/schema.md", async (_req, reply) => {
     const md = loadApiMarkdown();
     if (md) return reply.type("text/markdown; charset=utf-8").send(md);
-    return reply.code(404).send({ error: "api.md not found in workspace" });
+    // 不再 404 占位：回退到运行时端点清单，避免第三份契约静默分叉（#492）。
+    return reply.type("text/markdown; charset=utf-8").send(runtimeSchemaMarkdown());
   });
 
   // Liveness stays HTTP 200 while startup images are preparing or retrying.

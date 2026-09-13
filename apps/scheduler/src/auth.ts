@@ -98,6 +98,14 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/messages": "tasks:read",
   "POST /canvases/:id/messages": "tasks:write",
   "POST /canvases/:id/human-nodes/:nodeId/ignore": "jobs:control",
+  // 画布收敛控制与其它画布控制端点同权：读取走 tasks:read，控制走 jobs:control。
+  // （此前未登记，非 GET 落到默认 admin，operator 会话在 Web UI 上会 403。）
+  "GET /canvases/:id/convergence": "tasks:read",
+  "POST /canvases/:id/convergence/pause": "jobs:control",
+  "POST /canvases/:id/convergence/resume": "jobs:control",
+  "POST /canvases/:id/convergence/stop-after-gate": "jobs:control",
+  "POST /canvases/:id/convergence/drain-priority": "jobs:control",
+  "POST /canvases/:id/convergence/run-hub-now": "jobs:control",
   "GET /canvases/:id/summary": "tasks:read",
   "GET /canvases/:id/delta": "tasks:read",
   "GET /canvases/:id/nodes/:nodeId": "tasks:read",
@@ -105,8 +113,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /canvases/:id/facts/:nodeId": "tasks:read",
   "GET /canvases/:id/finding-research": "findings:read",
   "PATCH /canvases/:id/facts/:nodeId/verification": "jobs:control",
-  "GET /canvases/:id/report": "tasks:read",
-  "GET /canvases/:id/report/availability": "tasks:read",
+  "GET /canvases/:id/report": "tasks:read",  "GET /canvases/:id/report/availability": "tasks:read",
   "GET /canvases/:id/reports": "tasks:read",
   "GET /projects/:id/reports": "tasks:read",
   "GET /findings/:id/report": "findings:read",
@@ -206,6 +213,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /tokens/:id/revoke": "tokens:manage",
   "POST /tokens/:id/rotate": "tokens:manage",
   // /auth/me / logout：任意已认证主体（user / api_token / bootstrap）
+  "POST /auth/logout": "projects:read",
   "POST /auth/change-password": "projects:read",
   "POST /auth/change-username": "projects:read",
   "POST /auth/ws-ticket": "tasks:read",
