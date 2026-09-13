@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { QueryParameterError } from "./pagination.js";
 
 export const INVALID_PAYLOAD = "invalid_payload";
 
@@ -62,6 +63,16 @@ export function validationHttpError(
       body: {
         error: "invalid request",
         error_code: INVALID_PAYLOAD,
+      },
+    };
+  }
+  if (error instanceof QueryParameterError) {
+    return {
+      statusCode: 400,
+      body: {
+        error: "invalid request",
+        error_code: INVALID_PAYLOAD,
+        issues: [{ path: error.path, code: "invalid_query" }],
       },
     };
   }

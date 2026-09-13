@@ -98,6 +98,9 @@ test("custom range validation rejects missing, inverted, future, and oversized w
   if (!("error_code" in long)) return;
   assert.equal(long.error_code, "USAGE_RANGE_TOO_LONG");
   assert.match(long.error, new RegExp(String(USAGE_MAX_DAYS)));
+  // #490: an unknown period is a client error, not a silent `week` default.
+  assert.equal(errorCode(resolveUsageWindow({ period: "bogus", now: NOW })), "USAGE_PERIOD_INVALID");
+  assert.equal(errorCode(resolveUsageWindow({ period: "bogus", from: "2026-08-18", to: "2026-08-19", now: NOW })), "USAGE_PERIOD_INVALID");
 });
 
 test("from/to without period implies a custom window", () => {

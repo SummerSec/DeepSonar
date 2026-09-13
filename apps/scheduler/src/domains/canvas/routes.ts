@@ -13,7 +13,7 @@ import {
   rulesForProject,
 } from "../../core.js";
 import { sql } from "../../db.js";
-import { cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
+import { cursorForRow, decodeCursor, page, pageLimit, parseBoundedLimit } from "../../pagination.js";
 import { buildCanvasDelta, cursorGap, parseCanvasRevision } from "../../canvas-delta.js";
 import { parseCanvasBroadcastLimit } from "./broadcast-contract.js";
 import { createHumanMessage, HumanInterventionError, ignoreHumanIntervention, listHumanMessages } from "./human-messages.js";
@@ -264,9 +264,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
 
   app.get("/canvases/:id/messages", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const rawLimit = (req.query as { limit?: unknown }).limit;
-    const parsed = typeof rawLimit === "string" && /^[1-9]\d*$/u.test(rawLimit) ? Number(rawLimit) : 100;
-    const limit = Math.min(parsed, 500);
+    const limit = parseBoundedLimit((req.query as { limit?: unknown }).limit, { max: 500, fallback: 100 });
     const [canvas] = await sql`SELECT id FROM canvases WHERE id=${id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
     const result = await listHumanMessages(id, limit);

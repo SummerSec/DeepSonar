@@ -108,6 +108,14 @@ if (!testDatabaseUrl) {
       assert.deepEqual(retry.json().stale_fields, ["current_snapshot_unresolvable"]);
       const [retryJob] = await sql`SELECT id, status FROM jobs WHERE id = ${succeededJobId}`;
       assert.equal(retryJob.status, "succeeded", "retry must not wipe the canvas when the Hub snapshot is unresolvable");
+
+      // #490: an archived canvas must answer retry/resume with a stable error_code.
+      await sql`UPDATE canvases SET status = 'archived', archived_at = now() WHERE id = ${canvasId}`;
+      for (const url of [`/tasks/${canvasId}/retry`, `/tasks/${canvasId}/resume-session`]) {
+        const archived = await app.inject({ method: "POST", url });
+        assert.equal(archived.statusCode, 409, `${url} ${archived.payload}`);
+        assert.equal(archived.json().error_code, "TASK_ARCHIVED", url);
+      }
     } finally {
       if (closeApp) await closeApp().catch(() => {});
       if (endSql) await endSql().catch(() => {});

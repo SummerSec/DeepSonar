@@ -27,6 +27,7 @@ import { projectJobProviderFields, projectJobSnapshot } from "../credential/proj
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { projectContextDiagnostics } from "../context/index.js";
 import {
+  JOB_NOT_CANCELLABLE,
   JOB_NOT_RESUMABLE,
   SNAPSHOT_STALE,
   currentSnapshotUnresolvableBody,
@@ -45,7 +46,6 @@ const CreateJobBody = z.object({
   max_requests: z.number().int().min(0).max(1_000_000).optional(),
 });
 const PriorityBody = z.object({ priority: z.number().int() });
-const ACTIVE_JOB_STATUSES = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 const STREAMABLE_JOB_STATUSES = new Set(["running", "waiting_human"]);
 
 function sendRequeueError(
@@ -138,6 +138,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     if (body.priority !== undefined && body.priority !== expectedPriority) {
       return reply.code(409).send({
         error: "priority is fixed by scheduling class",
+        error_code: "PRIORITY_FIXED",
         expected_priority: expectedPriority,
       });
     }
@@ -551,7 +552,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const safeName = session.meta.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     return reply
       .header("content-type", "application/x-ndjson; charset=utf-8")
-      .header("content-disposition", `attachment; filename=\"${safeName}\"`)
+      .header("content-disposition", `attachment; filename="${safeName}"`)
       .send(session.content);
   });
 
@@ -609,6 +610,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     }, body.priority)) {
       return reply.code(409).send({
         error: "priority is fixed by scheduling class; use an in-class value",
+        error_code: "PRIORITY_FIXED",
         expected_priority: expected,
       });
     }
@@ -635,7 +637,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       body.reason?.trim() ||
       (body.force ? "强制退出" : "cancelled");
     const job = await createSqlJobLifecycleApplication().cancelJob(id, reason);
-    if (!job) return reply.code(409).send({ error: "job 不在可取消状态" });
+    if (!job) return reply.code(409).send({ error: "job 不在可取消状态", error_code: JOB_NOT_CANCELLABLE });
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch((e) => {
         console.error(`[cancel] 沙箱回收失败 ${job.sandbox_id}:`, e);

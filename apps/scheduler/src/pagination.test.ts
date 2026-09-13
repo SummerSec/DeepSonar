@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cursorErrorHttpStatus, decodeCursor, encodeCursor, pageLimit } from "./pagination.js";
+import { cursorErrorHttpStatus, decodeCursor, encodeCursor, pageLimit, QueryParameterError } from "./pagination.js";
 
 function rawCursor(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
@@ -55,8 +55,12 @@ test("valid cursors use canonical UUID and timestamp forms", () => {
 });
 test("page limit is capped for bounded list endpoints", () => {
   assert.equal(pageLimit("5000"), 50);
-  assert.equal(pageLimit("0"), 50);
   assert.equal(pageLimit("7"), 7);
+  assert.equal(pageLimit(undefined), 50);
+  // #490: malformed / non-positive limits are a client error, not a silent fallback.
+  assert.throws(() => pageLimit("0"), QueryParameterError);
+  assert.throws(() => pageLimit("abc"), QueryParameterError);
+  assert.throws(() => pageLimit("-1"), QueryParameterError);
 });
 
 test("cursor errors use bad-request for malformed cursors and conflict for gaps", () => {

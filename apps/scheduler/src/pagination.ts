@@ -47,6 +47,19 @@ export interface PageEnvelope<T> {
 
 export type CursorErrorCode = "INVALID_CURSOR" | "CURSOR_GAP";
 
+/** A malformed query parameter (e.g. `limit=abc`, `period=bogus`). Mapped to
+ * 400 by the global error handler; silent fallback would return a 200 with a
+ * different result set than the caller asked for. */
+export class QueryParameterError extends Error {
+  readonly path: string;
+
+  constructor(path: string, message = "invalid query parameter") {
+    super(message);
+    this.name = "QueryParameterError";
+    this.path = path;
+  }
+}
+
 /** Explicit cursor failures are part of the HTTP/WS stream contract. */
 export class CursorError extends Error {
   readonly code: CursorErrorCode;
@@ -70,10 +83,22 @@ export function parseCursor(raw: unknown, kind: string): CursorPayload | null {
   return decoded;
 }
 
+/** Parse a bounded page size, rejecting malformed input instead of silently
+ * falling back (a `limit=abc` must be a 400, not a 200 with the default page).
+ * Out-of-range but well-formed values are clamped to `max`. */
+export function parseBoundedLimit(raw: unknown, options: { max: number; fallback: number }): number {
+  if (raw === undefined || raw === null || raw === "") return options.fallback;
+  const text = String(raw);
+  const value = /^[1-9][0-9]*$/u.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new QueryParameterError("limit");
+  return Math.min(options.max, value);
+}
+
 export function pageLimit(raw: unknown, fallback = MAX_PAGE_SIZE): number {
-  const n = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
-  if (!Number.isFinite(n) || n <= 0) return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(fallback)));
-  return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(n)));
+  return parseBoundedLimit(raw, {
+    max: MAX_PAGE_SIZE,
+    fallback: Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(fallback))),
+  });
 }
 
 export function encodeCursor(payload: Omit<CursorPayload, "v">): string {
