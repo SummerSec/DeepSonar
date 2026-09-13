@@ -626,15 +626,18 @@ export {
   DEVICE_LEASE_TOKEN_VERSION,
   DEVICE_SANDBOX_ENV_KEYS,
   DEVICE_TRANSPORTS,
+  IMPLEMENTED_DEVICE_TRANSPORTS,
   DeviceLeaseEndpoint,
   DeviceLeaseGrant,
   DeviceLeaseTokenPayload,
   DeviceRequirement,
   deviceSandboxEnv,
+  isImplementedDeviceTransport,
   mintDeviceLeaseToken,
   verifyDeviceLeaseToken,
   type DeviceLeaseErrorCode,
   type DeviceTransport,
+  type ImplementedDeviceTransport,
 } from "./device.js";
 
 export {

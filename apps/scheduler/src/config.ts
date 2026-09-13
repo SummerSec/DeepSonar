@@ -34,7 +34,11 @@ function boundedInt(name: string, dflt: number, max: number): number {
   const v = Number(process.env[name]);
   return Number.isSafeInteger(v) && v > 0 && v <= max ? v : dflt;
 }
-function boundedNonNegativeInt(name: string, dflt: number, max: number): number {
+function boundedNonNegativeInt(
+  name: string,
+  dflt: number,
+  max: number,
+): number {
   const v = Number(process.env[name]);
   return Number.isSafeInteger(v) && v >= 0 && v <= max ? v : dflt;
 }
@@ -50,8 +54,20 @@ function bool(name: string, dflt: boolean): boolean {
 /** Comma-separated allowlist. Empty/missing means "not configured". */
 function csv(name: string): { configured: boolean; values: string[] } {
   const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") return { configured: false, values: [] };
-  return { configured: true, values: raw.split(",").map((s) => s.trim()).filter(Boolean) };
+  if (raw === undefined || raw.trim() === "")
+    return { configured: false, values: [] };
+  return {
+    configured: true,
+    values: raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  };
+}
+/** 平台允许的设备 transport；未配置时只开 adb（hdc 需显式加入）。 */
+function deviceTransports(): string[] {
+  const { values } = csv("DEEPSONAR_DEVICE_TRANSPORTS");
+  return values.length > 0 ? values : ["adb"];
 }
 /** Hop count for Fastify trustProxy; 0 disables. Invalid values use the default. */
 function trustProxyHops(name: string, dflt: number): number {
@@ -61,17 +77,28 @@ function trustProxyHops(name: string, dflt: number): number {
   return Number.isSafeInteger(v) && v >= 0 && v <= 8 ? v : dflt;
 }
 
-const configuredDiskWarningPercent = percent("DEEPSONAR_HOST_DISK_WARNING_PERCENT", 85);
-const configuredDiskErrorPercent = percent("DEEPSONAR_HOST_DISK_ERROR_PERCENT", 90);
-const hostDiskWarningPercent = configuredDiskWarningPercent < configuredDiskErrorPercent
-  ? configuredDiskWarningPercent
-  : 85;
-const hostDiskErrorPercent = configuredDiskWarningPercent < configuredDiskErrorPercent
-  ? configuredDiskErrorPercent
-  : 90;
+const configuredDiskWarningPercent = percent(
+  "DEEPSONAR_HOST_DISK_WARNING_PERCENT",
+  85,
+);
+const configuredDiskErrorPercent = percent(
+  "DEEPSONAR_HOST_DISK_ERROR_PERCENT",
+  90,
+);
+const hostDiskWarningPercent =
+  configuredDiskWarningPercent < configuredDiskErrorPercent
+    ? configuredDiskWarningPercent
+    : 85;
+const hostDiskErrorPercent =
+  configuredDiskWarningPercent < configuredDiskErrorPercent
+    ? configuredDiskErrorPercent
+    : 90;
 
 export const config = {
-  databaseUrl: str("DATABASE_URL", "postgres://deepsonar:deepsonar@localhost:5432/deepsonar"),
+  databaseUrl: str(
+    "DATABASE_URL",
+    "postgres://deepsonar:deepsonar@localhost:5432/deepsonar",
+  ),
   port: int("SCHEDULER_PORT", 3100),
   /** 监听地址：默认只绑回环（P0 可信网络）；容器部署显式设 0.0.0.0 */
   host: str("SCHEDULER_HOST", "127.0.0.1"),
@@ -117,7 +144,10 @@ export const config = {
     leaseTtlSec: int("LEASE_TTL_SEC", 120),
     reaperIntervalSec: int("REAPER_INTERVAL_SEC", 30),
     /** running Job 无语义事件且无在飞 tool.call 超过此时长则判失败；0 关闭。默认 15 分钟。chrome 镜像另有 per-image 下限。 */
-    stallSec: Number(process.env.DEEPSONAR_JOB_STALL_SEC) === 0 ? 0 : int("DEEPSONAR_JOB_STALL_SEC", 900),
+    stallSec:
+      Number(process.env.DEEPSONAR_JOB_STALL_SEC) === 0
+        ? 0
+        : int("DEEPSONAR_JOB_STALL_SEC", 900),
     /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
     dispatchPollSec: int("DEEPSONAR_DISPATCH_POLL_SEC", 0),
   },
@@ -146,11 +176,20 @@ export const config = {
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
     /** Endpoint injected into every real sandbox CLI configuration. */
-    sandboxUrl: str("DEEPSONAR_GATEWAY_SANDBOX_URL", "http://deepsonar-gateway-proxy:3100/gateway"),
+    sandboxUrl: str(
+      "DEEPSONAR_GATEWAY_SANDBOX_URL",
+      "http://deepsonar-gateway-proxy:3100/gateway",
+    ),
     /** URL used only by the managed proxy to reach Scheduler /gateway. */
-    proxyUpstreamUrl: str("DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL", "http://host.docker.internal:3100/gateway"),
+    proxyUpstreamUrl: str(
+      "DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL",
+      "http://host.docker.internal:3100/gateway",
+    ),
     /** Job Token 默认请求上限；0 = 不限制。落库后由配置中心覆盖。 */
-    maxRequests: Number(process.env.DEEPSONAR_JOB_TOKEN_MAX_REQUESTS) === 0 ? 0 : int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
+    maxRequests:
+      Number(process.env.DEEPSONAR_JOB_TOKEN_MAX_REQUESTS) === 0
+        ? 0
+        : int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
     /** Job Token 生命周期（秒），应 ≥ job timeout */
     tokenTtlSec: int("DEEPSONAR_JOB_TOKEN_TTL_SEC", 4 * 3600),
     /** 转发上游超时（毫秒；流式为首字节超时） */
@@ -162,7 +201,10 @@ export const config = {
   /** Job-scoped runtime control API (never the management API). */
   platformApi: {
     /** Fixed sidecar URL reachable from restricted sandboxes; no localhost fallback. */
-    sandboxUrl: str("DEEPSONAR_API_SANDBOX_URL", "http://deepsonar-gateway-proxy:3100/control/v1"),
+    sandboxUrl: str(
+      "DEEPSONAR_API_SANDBOX_URL",
+      "http://deepsonar-gateway-proxy:3100/control/v1",
+    ),
   },
 
   /**
@@ -171,6 +213,11 @@ export const config = {
    */
   device: {
     enabled: bool("DEEPSONAR_DEVICE_ENABLED", false),
+    /**
+     * 平台允许的 transport 白名单（逗号分隔）。默认只开 adb（与 #495 行为一致），hdc 需显式加入；
+     * 未实现的 transport 无论怎么配都会被拒（#504）。
+     */
+    transports: deviceTransports(),
     brokerUrl: str("DEEPSONAR_DEVICE_BROKER_URL"),
     /** Scheduler → broker 的入站凭据（broker 自己的短期凭据，不是 Provider/模型密钥）。 */
     brokerToken: str("DEEPSONAR_DEVICE_BROKER_TOKEN"),
@@ -202,14 +249,28 @@ export const config = {
       cpu: int("DEEPSONAR_WORKER_CPU", 8),
       endpointAllowCidrs: csv("DEEPSONAR_WORKER_ENDPOINT_CIDRS"),
       endpointAllowHosts: csv("DEEPSONAR_WORKER_ENDPOINT_HOSTS"),
-      registerLimitPerWindow: boundedInt("DEEPSONAR_WORKER_REGISTER_LIMIT", 10, 1_000),
-      heartbeatLimitPerWindow: boundedInt("DEEPSONAR_WORKER_HEARTBEAT_LIMIT", 120, 10_000),
-      rateLimitWindowSec: boundedInt("DEEPSONAR_WORKER_RATE_WINDOW_SEC", 60, 3_600),
+      registerLimitPerWindow: boundedInt(
+        "DEEPSONAR_WORKER_REGISTER_LIMIT",
+        10,
+        1_000,
+      ),
+      heartbeatLimitPerWindow: boundedInt(
+        "DEEPSONAR_WORKER_HEARTBEAT_LIMIT",
+        120,
+        10_000,
+      ),
+      rateLimitWindowSec: boundedInt(
+        "DEEPSONAR_WORKER_RATE_WINDOW_SEC",
+        60,
+        3_600,
+      ),
     },
     openSandbox: {
       domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"),
       apiKey: str("OPEN_SANDBOX_API_KEY", ""),
-      protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https" ? "https" : "http") as "http" | "https",
+      protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https"
+        ? "https"
+        : "http") as "http" | "https",
       useServerProxy: bool("OPEN_SANDBOX_USE_SERVER_PROXY", true),
       sdkVersion: str("OPEN_SANDBOX_SDK_VERSION", ""),
       serverImage: str("OPENSANDBOX_SERVER_IMAGE", ""),
@@ -236,18 +297,32 @@ export const config = {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean)
-        .some((p) => (p.endsWith("*") ? key.startsWith(p.slice(0, -1)) : key === p));
+        .some((p) =>
+          p.endsWith("*") ? key.startsWith(p.slice(0, -1)) : key === p,
+        );
     },
   },
 
   events: {
     /** Persistent per-Job semantic-event fixed-window budgets (Issue #57). */
     rateLimitWindowSec: boundedInt("EVENT_RATE_LIMIT_WINDOW_SEC", 60, 3600),
-    rateLimitProgressPerWindow: boundedInt("EVENT_RATE_LIMIT_PROGRESS_PER_WINDOW", 30, 10_000),
-    rateLimitStandardPerWindow: boundedInt("EVENT_RATE_LIMIT_STANDARD_PER_WINDOW", 120, 10_000),
+    rateLimitProgressPerWindow: boundedInt(
+      "EVENT_RATE_LIMIT_PROGRESS_PER_WINDOW",
+      30,
+      10_000,
+    ),
+    rateLimitStandardPerWindow: boundedInt(
+      "EVENT_RATE_LIMIT_STANDARD_PER_WINDOW",
+      120,
+      10_000,
+    ),
     // Reserved terminal bucket keeps done/human semantics available even when
     // progress is noisy. It is intentionally independent, not a shared pool.
-    rateLimitTerminalPerWindow: boundedInt("EVENT_RATE_LIMIT_TERMINAL_PER_WINDOW", 8, 1000),
+    rateLimitTerminalPerWindow: boundedInt(
+      "EVENT_RATE_LIMIT_TERMINAL_PER_WINDOW",
+      8,
+      1000,
+    ),
   },
 
   /**
@@ -271,7 +346,10 @@ export const config = {
       /** Optional key prefix inside the bucket (e.g. deepsonar/blobs). */
       prefix: str("BLOB_S3_PREFIX"),
       accessKeyId: str("BLOB_S3_ACCESS_KEY_ID", str("AWS_ACCESS_KEY_ID")),
-      secretAccessKey: str("BLOB_S3_SECRET_ACCESS_KEY", str("AWS_SECRET_ACCESS_KEY")),
+      secretAccessKey: str(
+        "BLOB_S3_SECRET_ACCESS_KEY",
+        str("AWS_SECRET_ACCESS_KEY"),
+      ),
       sessionToken: str("BLOB_S3_SESSION_TOKEN", str("AWS_SESSION_TOKEN")),
       /**
        * Path-style addressing. Default true when an endpoint is set (MinIO and
@@ -285,7 +363,10 @@ export const config = {
         return Boolean(str("BLOB_S3_ENDPOINT"));
       })(),
       /** Local materialize cache for Job volume injection when backend is s3. */
-      cacheDir: path.resolve(process.cwd(), str("BLOB_S3_CACHE_DIR", str("BLOB_DIR", "./data/blobs"))),
+      cacheDir: path.resolve(
+        process.cwd(),
+        str("BLOB_S3_CACHE_DIR", str("BLOB_DIR", "./data/blobs")),
+      ),
     },
   },
 
@@ -293,17 +374,44 @@ export const config = {
     path: path.resolve(str("DEEPSONAR_HOST_DISK_PATH", "/")),
     warningPercent: hostDiskWarningPercent,
     errorPercent: hostDiskErrorPercent,
-    checkIntervalSec: boundedInt("DEEPSONAR_HOST_DISK_CHECK_INTERVAL_SEC", 30, 3600),
+    checkIntervalSec: boundedInt(
+      "DEEPSONAR_HOST_DISK_CHECK_INTERVAL_SEC",
+      30,
+      3600,
+    ),
   },
 
   sharedAssets: {
     /** 用于填充共享资产卷的不可变 helper 镜像。 */
-    helperImage: str("DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE", DEFAULT_SHARED_ASSETS_HELPER_IMAGE),
-    maxFileBytes: boundedInt("DEEPSONAR_SHARED_ASSET_MAX_FILE_BYTES", 64 * 1024 * 1024, 1024 * 1024 * 1024),
-    projectQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_PROJECT_QUOTA_BYTES", 2 * 1024 * 1024 * 1024, 20 * 1024 * 1024 * 1024),
-    findingQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_FINDING_QUOTA_BYTES", 256 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
-    platformQuotaBytes: boundedInt("DEEPSONAR_SHARED_ASSET_PLATFORM_QUOTA_BYTES", 5 * 1024 * 1024 * 1024, 50 * 1024 * 1024 * 1024),
-    maxCatalogEntries: boundedInt("DEEPSONAR_SHARED_ASSET_MAX_CATALOG_ENTRIES", 500, 5000),
+    helperImage: str(
+      "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE",
+      DEFAULT_SHARED_ASSETS_HELPER_IMAGE,
+    ),
+    maxFileBytes: boundedInt(
+      "DEEPSONAR_SHARED_ASSET_MAX_FILE_BYTES",
+      64 * 1024 * 1024,
+      1024 * 1024 * 1024,
+    ),
+    projectQuotaBytes: boundedInt(
+      "DEEPSONAR_SHARED_ASSET_PROJECT_QUOTA_BYTES",
+      2 * 1024 * 1024 * 1024,
+      20 * 1024 * 1024 * 1024,
+    ),
+    findingQuotaBytes: boundedInt(
+      "DEEPSONAR_SHARED_ASSET_FINDING_QUOTA_BYTES",
+      256 * 1024 * 1024,
+      2 * 1024 * 1024 * 1024,
+    ),
+    platformQuotaBytes: boundedInt(
+      "DEEPSONAR_SHARED_ASSET_PLATFORM_QUOTA_BYTES",
+      5 * 1024 * 1024 * 1024,
+      50 * 1024 * 1024 * 1024,
+    ),
+    maxCatalogEntries: boundedInt(
+      "DEEPSONAR_SHARED_ASSET_MAX_CATALOG_ENTRIES",
+      500,
+      5000,
+    ),
   },
 
   skillSources: {
@@ -321,17 +429,31 @@ export const config = {
     officialAuditRef: str("DEEPSONAR_OFFICIAL_AUDIT_IMAGE"),
     officialKaliMinimalRef: str("DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE"),
     /** 部署使用的 registry/namespace 基址；官方清单同步时只选择该基址下的已核验 ref。 */
-    preferredRegistry: str("DEEPSONAR_IMAGE_REGISTRY").trim().replace(/\/+$/, ""),
+    preferredRegistry: str("DEEPSONAR_IMAGE_REGISTRY")
+      .trim()
+      .replace(/\/+$/, ""),
     /** 私有 GitHub Release 清单的短期/部署级读取凭据；永不返回 API。 */
     registryGithubToken: str("DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN"),
     registrySyncSec: int("DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC", 3600),
     /** 0 disables safe DB-known runtime image GC. */
-    gcIntervalSec: boundedNonNegativeInt("DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC", 21_600, 31 * 24 * 3600),
-    allowedRegistries: str("DEEPSONAR_ALLOWED_IMAGE_REGISTRIES", "ghcr.io,docker.io,registry-1.docker.io"),
+    gcIntervalSec: boundedNonNegativeInt(
+      "DEEPSONAR_RUNTIME_IMAGE_GC_INTERVAL_SEC",
+      21_600,
+      31 * 24 * 3600,
+    ),
+    allowedRegistries: str(
+      "DEEPSONAR_ALLOWED_IMAGE_REGISTRIES",
+      "ghcr.io,docker.io,registry-1.docker.io",
+    ),
     isRegistryAllowed(imageRef: string): boolean {
       const first = imageRef.split("/")[0]?.toLowerCase() ?? "";
-      const registry = first.includes(".") || first.includes(":") ? first : "docker.io";
-      return this.allowedRegistries.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes(registry);
+      const registry =
+        first.includes(".") || first.includes(":") ? first : "docker.io";
+      return this.allowedRegistries
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .includes(registry);
     },
   },
 } as const;
@@ -344,7 +466,9 @@ export function managesHostDockerRuntime(
     openSandbox?: { kubernetes?: boolean };
   } = config.runtime,
 ): boolean {
-  return runtime.agentMode === "real"
-    && runtime.provider === "opensandbox"
-    && runtime.openSandbox?.kubernetes !== true;
+  return (
+    runtime.agentMode === "real" &&
+    runtime.provider === "opensandbox" &&
+    runtime.openSandbox?.kubernetes !== true
+  );
 }

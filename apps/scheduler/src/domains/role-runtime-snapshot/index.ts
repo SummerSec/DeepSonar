@@ -30,7 +30,12 @@ export {
   CLICKHOUSE_RUNTIME_IMAGE_KEYS,
   assertChromeRuntimeEgressAllowed,
   frozenCanvasAllowEgress,
+  frozenSnapshotAllowEgress,
   freezeAgentSnapshotNetworkPolicy,
   requireFrozenSnapshotAllowEgress,
 } from "./sandbox-limits.js";
-export type { EffectiveSandboxLimits, FrozenNetworkPolicy, SandboxLimitsOverride } from "./sandbox-limits.js";
+export type {
+  EffectiveSandboxLimits,
+  FrozenNetworkPolicy,
+  SandboxLimitsOverride,
+} from "./sandbox-limits.js";

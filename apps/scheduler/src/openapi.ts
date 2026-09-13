@@ -841,9 +841,9 @@ const OPS: Op[] = [
           type: "object",
           additionalProperties: false,
           description:
-            "真实设备接入（#495）：声明设备需求，冻结进 Job 快照；需要项目先 PATCH /projects/{id}/settings device_access_enabled=true，否则 409 device_not_authorized。Phase 1 只支持 transport=adb 且 exclusive=true。",
+            "真实设备接入（#495 / #504）：声明设备需求，冻结进 Job 快照；需要项目先 PATCH /projects/{id}/settings device_access_enabled=true，否则 409 device_not_authorized。已实现 transport=adb / hdc 且 exclusive=true；设备数据面由沙箱直连 rig 端点，因此设备任务必须允许出网（network_policy.allow_egress=true），否则同样 409 device_not_authorized（#506）。",
           properties: {
-            transport: { type: "string", enum: ["adb", "hdc", "serial", "ssh", "net"], description: "Phase 1 只实现 adb" },
+            transport: { type: "string", enum: ["adb", "hdc", "serial", "ssh", "net"], description: "已实现 adb 与 hdc（需 DEEPSONAR_DEVICE_TRANSPORTS 开启）；其余取值在契约中保留，传入会被拒（409 device_not_authorized）" },
             key: { type: "string", description: "指定具体设备 key（默认由 broker 分配匹配设备）" },
             model: { type: "string" },
             exclusive: { type: "boolean", default: true },
