@@ -75,7 +75,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?}`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
+| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?, device?}`；`device` = 真实设备需求 `{transport, key?, model?, exclusive?, ttl_sec?, roles?}`（缺省 `roles:["test"]`），冻结进 Job 快照并需要项目先 `device_access_enabled=true`，否则 `409 device_not_authorized`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
 | PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?}`（至少一项）；同步 `canvases.title` 与 `target_json.title/content/goal` 及 root 节点。只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`。归档返回 `409 TASK_ARCHIVED` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |
@@ -329,6 +329,23 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | POST | /credentials/batch-bind | agents:write | `{credential_id, role_config_ids[], mode: bind\|migrate, source_credential_id?, model?, effect: new_jobs_only\|refresh_pending, idempotency_key}`；运行中 Job 不会被改写 |
 
 LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages，`openai` = OpenAI Responses。`settings_config_json.reasoning` 由 Provider/模型拥有；Claude Code 只接受 `low | medium | high | xhigh` 并物化为 `effortLevel`；Pi 只接受 `off | minimal | low | medium | high | xhigh | max`；DSH 只接受 `off | minimal | low | medium | high | xhigh | max`，第三方 wire value 必须配置在模型 `reasoningEfforts` 映射。leftover Codex/OpenCode 凭据仍可读历史 reasoning，但不能再保存为新配置。DSH 使用官方 `@deepseek-ai/dsh-llm-pi-ai` 与固定提交的 `dsh-reasoning-settings@0.3.0`，`settings_config_json.config` 保存官方 `settings.yaml` 形状的 YAML（`llm-pi-ai.providers` + `agent-default-model`）；route 可自定义，`api` 必须与 Credential wire protocol 兼容。Job 只冻结一个 route，并把 endpoint/credential 强制替换为 Model Gateway 与短期 Job token。其它 CLI 的 `settings_config_json` 在 Job 创建时物化为 Agent 沙箱内的 CLI 文件；管理 API 只返回带 `[已保存密钥]` 的脱敏投影。Credential `metadata` 不是任意 JSON。服务器按 kind/provider 只接受 LLM 的 `base_url`、`model_concurrency`、`max_concurrent`，或 OCI 的 `registry`、`username`；未知/secret-like key、URL userinfo/query/fragment 均拒绝。写入时 leftover `allowed_model_ids` 按未知字段拒绝；导入/投影旧行丢弃该键。模型可用性只认 `settings_config`。连接健康只保存固定 category 与平台生成人话；Provider body、Authorization、密钥和带 query 的 URL 永不进入 API、审计或 transfer。`/readiness` 只在推理路径被拒（`authentication`/`authorization` 等权威 category）时把 `CREDENTIAL_TEST_FAILED` 判为 error；探测路径限制（`unknown`）降级为 warning，不再把可用的第三方中转判成不可用。
+
+### 真实设备接入（#495）
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| PATCH | /projects/:id/settings | agents:write | `device_access_enabled: true\|false\|null` 项目级 opt-in（默认关；null 清除）。设备租约的发放前置就是它 |
+| GET | /projects/:id/settings | agents:read | 返回 `device_access_enabled` |
+
+设备经 **device broker** 暴露为可租借端点，沙箱不直连物理设备：
+
+- Scheduler 在 Job `provisioning` 前向 broker 申请租约（`POST /lease/acquire`），把
+  `ANDROID_ADB_SERVER_ADDRESS` / `ANDROID_ADB_SERVER_PORT` / `ANDROID_SERIAL` 与
+  `DEEPSONAR_DEVICE_*`（端点 + 短期租约 token）注入沙箱；沙箱内 `adb devices` / `adb shell` 免改脚本。
+- 稳定错误码：`device_not_available`（可重试：设备忙/离线/broker 不可达）、
+  `device_not_authorized`（不可重试：项目未 opt-in、transport 未实现、非独占）。
+- 记账：`devices` / `device_leases` / `device_events`（append-only，不含凭据）；
+  终态释放、崩溃由 Reaper 回收过期租约。broker 侧 API 只对调度主机开放，并用独立 token 鉴权。
 
 ### 平台导入导出（.deepsonarpack）
 

@@ -10,6 +10,7 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./resource-cleanup.js";
 import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
+import { reapExpiredDeviceLeases } from "./domains/device/index.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -67,6 +68,7 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     }
     if (meta?.type === "report") {
       await sql.begin(async (tx) => {
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         await finalizeReportJob(tx as unknown as typeof sql, jobId, {
           failed: true,
           error: (meta.error as string) ?? "reaper",
@@ -76,6 +78,7 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     // 任意非 Report job 被 reaper 收口后统一推进：analysis_complete → Report，否则空闲唤醒 Hub。
     if (meta?.canvas_id && meta.type !== "report") {
       await sql.begin(async (txRaw) => {
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         const tx = txRaw as unknown as typeof sql;
         await advanceCanvasAfterTerminalJob(
           tx,
@@ -96,6 +99,16 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
   const releasedLeases = await releaseOrphanSandboxLeases();
   if (releasedLeases > 0) {
     console.warn(`[reaper] 回收 ${releasedLeases} 条终态/缺失 Job 的沙箱租约`);
+  }
+
+  // 设备租约（#495）的兼底：过期租约 → expired 且设备回 idle；broker 不可达时只记日志，
+  // 由 broker 自身租约 TTL 与下一次 reap 继续收敛。
+  const expiredDeviceLeases = await reapExpiredDeviceLeases().catch((error: unknown) => {
+    console.error(`[reaper] 设备租约回收失败:`, error instanceof Error ? error.message : error);
+    return 0;
+  });
+  if (expiredDeviceLeases > 0) {
+    console.warn(`[reaper] 回收 ${expiredDeviceLeases} 条过期设备租约`);
   }
 
   return { timeouts: timedOut.length, orphans: orphaned.length, provisionStuck: provisionStuck.length, stalled: stalled.length };

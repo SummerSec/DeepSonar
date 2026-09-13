@@ -50,7 +50,7 @@ const GLOBAL_ONLY_RULE_KEYS = new Set([
 const CLI_CONCURRENCY_KEYS = new Set(["claude-code", "pi", "dsh"]);
 const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) => {
   for (const key of LEFTOVER_RULE_ALIAS_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(rules, key)) {
+    if (Object.hasOwn(rules, key)) {
       ctx.addIssue({
         code: "custom",
         path: [key],
@@ -58,7 +58,7 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       });
     }
   }
-  if (Object.prototype.hasOwnProperty.call(rules, "finding_protocol")) {
+  if (Object.hasOwn(rules, "finding_protocol")) {
     ctx.addIssue({
       code: "custom",
       path: ["finding_protocol"],
@@ -83,13 +83,13 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       });
     }
   }
-  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentJobs")) {
+  if (Object.hasOwn(rules, "maxConcurrentJobs")) {
     const value = rules.maxConcurrentJobs;
     if (value !== null && (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000)) {
       ctx.addIssue({ code: "custom", path: ["maxConcurrentJobs"], message: "maxConcurrentJobs 必须是 0-1000 的整数或 null" });
     }
   }
-  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByAgentCli")) {
+  if (Object.hasOwn(rules, "maxConcurrentByAgentCli")) {
     const cliRules = rules.maxConcurrentByAgentCli;
     if (!cliRules || typeof cliRules !== "object" || Array.isArray(cliRules)) {
       ctx.addIssue({ code: "custom", path: ["maxConcurrentByAgentCli"], message: "Agent CLI 并发必须是对象" });
@@ -101,7 +101,7 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       }
     }
   }
-  if (!Object.prototype.hasOwnProperty.call(rules, "maxConcurrentByProvider")) return;
+  if (!Object.hasOwn(rules, "maxConcurrentByProvider")) return;
   const providerRules = rules.maxConcurrentByProvider;
   if (!providerRules || typeof providerRules !== "object" || Array.isArray(providerRules)) {
     ctx.addIssue({ code: "custom", path: ["maxConcurrentByProvider"], message: "Provider 并发必须是对象" });
@@ -134,13 +134,13 @@ export function projectJobQuotaPatchExceedsGlobal(
 }
 
 const GlobalRulesPatch = RulesPatch.superRefine((rules, ctx) => {
-  if (Object.prototype.hasOwnProperty.call(rules, "maxConcurrentJobs")) {
+  if (Object.hasOwn(rules, "maxConcurrentJobs")) {
     ctx.addIssue({ code: "custom", path: ["maxConcurrentJobs"], message: "maxConcurrentJobs 只能在项目设置中配置" });
   }
 });
 const ProjectRulesPatch = RulesPatch.superRefine((rules, ctx) => {
   for (const key of GLOBAL_ONLY_RULE_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(rules, key)) {
+    if (Object.hasOwn(rules, key)) {
       ctx.addIssue({ code: "custom", path: [key], message: `${key} 属于全局调度上限，不能在项目设置中修改` });
     }
   }
@@ -151,6 +151,8 @@ const SettingsPatchBody = z.object({
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
   image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).optional(),
+  /** 真实设备接入（#495）项目级 opt-in；null = 清除（默认关）。 */
+  device_access_enabled: z.boolean().nullable().optional(),
   role_runtime_images: z.record(
     z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
     z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
@@ -295,7 +297,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       after: {
         changed_keys: [
           ...Object.keys(body.rules ?? {}),
-          ...(body.finding_protocol !== undefined ? ["finding_protocol"] : []),
+          ...(body.finding_protocol === undefined ? [] : ["finding_protocol"]),
         ],
       },
     });
@@ -380,6 +382,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
+      device_access_enabled: cfg.device_access_enabled === true,
       active_jobs: Number(activeRow?.count ?? 0),
     };
   });
@@ -411,7 +414,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (body.rules) {
       const currentRules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
       const nextRules = { ...currentRules, ...body.rules };
-      if (Object.prototype.hasOwnProperty.call(body.rules, "maxConcurrentJobs")) {
+      if (Object.hasOwn(body.rules, "maxConcurrentJobs")) {
         if (body.rules.maxConcurrentJobs === null) {
           delete nextRules.maxConcurrentJobs;
         } else {
@@ -442,6 +445,11 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (body.image_strategy !== undefined) {
       cfg.image_strategy = body.image_strategy;
       if (body.image_strategy === "inherit_global") delete cfg.role_runtime_images;
+    }
+    if (body.device_access_enabled !== undefined) {
+      // 默认关：null 清除。设备租约的发放前置就是这里的 opt-in。
+      if (body.device_access_enabled === null) delete cfg.device_access_enabled;
+      else cfg.device_access_enabled = body.device_access_enabled;
     }
     if (body.role_runtime_images !== undefined) cfg.role_runtime_images = body.role_runtime_images;
     scrubStoredProjectImagePolicy(cfg);
@@ -481,7 +489,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     // pending jobs do not wait for the next unrelated enqueue event.
     await sql`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;
     // 项目级 rules 覆盖 / roles 启停都属配置修改
-    const afterQuota = Object.prototype.hasOwnProperty.call(body.rules ?? {}, "maxConcurrentJobs")
+    const afterQuota = Object.hasOwn(body.rules ?? {}, "maxConcurrentJobs")
       ? ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs ?? null)
       : undefined;
     await audit(req, {
@@ -506,6 +514,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_finding_protocol: effectiveFindingProtocol,
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
+      device_access_enabled: cfg.device_access_enabled === true,
       active_jobs: Number(activeRow?.count ?? 0),
     };
   });

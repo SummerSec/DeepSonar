@@ -837,6 +837,25 @@ const OPS: Op[] = [
           type: "boolean",
           description: "为 true 时在下一北京时间 08:00（Asia/Shanghai）开始；scheduled_start_at 优先",
         },
+        device: {
+          type: "object",
+          additionalProperties: false,
+          description:
+            "真实设备接入（#495）：声明设备需求，冻结进 Job 快照；需要项目先 PATCH /projects/{id}/settings device_access_enabled=true，否则 409 device_not_authorized。Phase 1 只支持 transport=adb 且 exclusive=true。",
+          properties: {
+            transport: { type: "string", enum: ["adb", "hdc", "serial", "ssh", "net"], description: "Phase 1 只实现 adb" },
+            key: { type: "string", description: "指定具体设备 key（默认由 broker 分配匹配设备）" },
+            model: { type: "string" },
+            exclusive: { type: "boolean", default: true },
+            ttl_sec: { type: "integer", minimum: 60, maximum: 86400, default: 1800 },
+            roles: {
+              type: "array",
+              items: { type: "string" },
+              default: ["test"],
+              description: "需要设备租约的角色名（缺省只给 test）；Hub/report/verify 不占用设备",
+            },
+          },
+        },
       },
     },
   },
@@ -1672,6 +1691,11 @@ const OPS: Op[] = [
           },
         },
         image_strategy: { type: "string", enum: ["inherit_global", "project_managed"] },
+        device_access_enabled: {
+          type: "boolean",
+          nullable: true,
+          description: "真实设备接入（#495）项目级 opt-in；默认关，null 清除。未 opt-in 的项目无法为任务申请设备租约（409 device_not_authorized）。",
+        },
         role_runtime_images: {
           type: "object",
           additionalProperties: { oneOf: [{ type: "string" }, { type: "null" }] },

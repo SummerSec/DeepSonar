@@ -165,6 +165,21 @@ export const config = {
     sandboxUrl: str("DEEPSONAR_API_SANDBOX_URL", "http://deepsonar-gateway-proxy:3100/control/v1"),
   },
 
+  /**
+   * 真实设备接入（#495）：调度器不直连物理设备，只用 broker 暴露的可租借端点。
+   * 默认关闭；未配置 broker 时所有设备需求 fail closed（device_not_authorized）。
+   */
+  device: {
+    enabled: bool("DEEPSONAR_DEVICE_ENABLED", false),
+    brokerUrl: str("DEEPSONAR_DEVICE_BROKER_URL"),
+    /** Scheduler → broker 的入站凭据（broker 自己的短期凭据，不是 Provider/模型密钥）。 */
+    brokerToken: str("DEEPSONAR_DEVICE_BROKER_TOKEN"),
+    /** 租约 token HMAC 共享密钥；只用于 mint/verify 租约 token。 */
+    leaseSecret: str("DEEPSONAR_DEVICE_LEASE_SECRET"),
+    acquireTimeoutMs: int("DEEPSONAR_DEVICE_ACQUIRE_TIMEOUT_MS", 15_000),
+    releaseTimeoutMs: int("DEEPSONAR_DEVICE_RELEASE_TIMEOUT_MS", 5_000),
+  },
+
   /** 数据库连接治理（§12.3）：池上限、语句/空闲超时 */
   db: {
     poolMax: int("DEEPSONAR_DB_POOL_MAX", 10),

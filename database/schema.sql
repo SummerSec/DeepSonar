@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 48);
+INSERT INTO schema_meta (id, version) VALUES ('global', 49);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2040,5 +2040,66 @@ CREATE TABLE worker_sandbox_leases (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX worker_sandbox_leases_worker_idx ON worker_sandbox_leases (worker_id);
+
+-- 真实设备接入（#495）：物理设备不直连沙箱，经 device broker 暴露为可租借网络端点。
+-- broker-ref 派生自 broker 侧设备句柄（序列号），不是凭据；endpoint_json 是沙箱侧投影。
+CREATE TABLE devices (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES projects(id),
+  key text NOT NULL,
+  model text,
+  transport text NOT NULL,
+  broker_ref text,
+  status text NOT NULL DEFAULT 'offline',
+  capabilities_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  spec_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT devices_key_check CHECK (char_length(key) BETWEEN 1 AND 200),
+  CONSTRAINT devices_transport_check CHECK (transport IN ('adb', 'hdc', 'serial', 'ssh', 'net')),
+  CONSTRAINT devices_status_check CHECK (status IN ('idle', 'leased', 'offline', 'maintenance', 'revoked')),
+  UNIQUE (key)
+);
+CREATE INDEX devices_status_idx ON devices (status, updated_at);
+
+-- 设备租约绑 Job/Attempt：claim 后申请，终态或 Reaper 回收后设备回 idle。
+CREATE TABLE device_leases (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_id uuid NOT NULL REFERENCES devices(id),
+  job_id uuid NOT NULL REFERENCES jobs(id),
+  attempt_id uuid REFERENCES job_attempts(id),
+  project_id uuid REFERENCES projects(id),
+  state text NOT NULL DEFAULT 'pending',
+  endpoint_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  granted_by text,
+  granted_at timestamptz,
+  expires_at timestamptz,
+  released_at timestamptz,
+  release_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT device_leases_state_check CHECK (state IN ('pending', 'active', 'released', 'expired', 'revoked'))
+);
+-- 一台设备同刻最多一个未结束租约（对齐 jobs_one_active_verify_per_finding 的护栏风格）。
+CREATE UNIQUE INDEX device_leases_one_active
+  ON device_leases (device_id)
+  WHERE state IN ('pending', 'active');
+CREATE INDEX device_leases_job_idx ON device_leases (job_id);
+CREATE INDEX device_leases_expiry_idx ON device_leases (expires_at)
+  WHERE state IN ('pending', 'active');
+
+-- 设备控制面与会话审计（append-only；不存凭据与长期密钥）。
+CREATE TABLE device_events (
+  id bigserial PRIMARY KEY,
+  device_id uuid,
+  lease_id uuid,
+  job_id uuid,
+  actor text NOT NULL,
+  action text NOT NULL,
+  payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX device_events_device_idx ON device_events (device_id, created_at DESC);
+CREATE INDEX device_events_lease_idx ON device_events (lease_id, created_at DESC);
 
 COMMIT;
