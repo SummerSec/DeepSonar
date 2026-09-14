@@ -30,6 +30,25 @@ function int(name: string, dflt: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
+/**
+ * Hub round budget (#521): unset → unlimited (`0`); `unlimited`/`0` → unlimited;
+ * positive integer → finite cap; invalid → fallback (logged, not silent 20).
+ * Keep this parser local so config does not import hub-orchestration.
+ */
+function hubMaxRounds(name: string, dflt: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return dflt;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    console.warn(`[config] ${name} 为空，回落 ${dflt === 0 ? "unlimited" : dflt}`);
+    return dflt;
+  }
+  if (/^unlimited$/i.test(trimmed)) return 0;
+  const v = Number(trimmed);
+  if (Number.isSafeInteger(v) && v >= 0 && v <= 10_000) return v;
+  console.warn(`[config] ${name}=${JSON.stringify(raw)} 非法，回落 ${dflt === 0 ? "unlimited" : dflt}`);
+  return dflt;
+}
 /** Bounded positive integer configuration; invalid or out-of-range values use the safe default. */
 function boundedInt(name: string, dflt: number, max: number): number {
   const v = Number(process.env[name]);
@@ -179,7 +198,8 @@ export const config = {
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */
   hub: {
     enabled: bool("DEEPSONAR_HUB_ENABLED", true),
-    maxRounds: int("DEEPSONAR_HUB_MAX_ROUNDS", 20),
+    /** 0 = unlimited。未设置或 `unlimited`/`0` 都不按轮次停；正整数才是护栏。 */
+    maxRounds: hubMaxRounds("DEEPSONAR_HUB_MAX_ROUNDS", 0),
     maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 6),
   },
 

@@ -252,12 +252,12 @@ Scheduler 的领域代码通过 application/ports seam 拆分，PostgreSQL 仍�
 
 - `domains/job-lifecycle`：Job 状态迁移、claim、恢复、取消与重试的 CAS 写入；
 - `domains/event-ingestion`：event envelope 校验、幂等、`job_seq`、固定窗口限流，以及由显式 ports 组合的 progress/fact/finding/Hub decision/done/human 语义副作用；
-- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger（签名变化且门禁指纹变化才唤醒）、idle/terminal 推进、人工评论唤醒、`maxHubRounds` 收口；
+- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger（签名变化且门禁指纹变化才唤醒）、idle/terminal 推进、人工评论唤醒、可选 `maxHubRounds` 护栏（默认 unlimited）；
 - `domains/finding-verification`：Finding 派生、证据附着、verification round、完成门与 rework/needs_human/confirmed 收口；
 - `domains/report-convergence`：analysis complete 后的任务报告、Finding 报告、输入冻结与失败恢复；
 - `domains/role-runtime-snapshot`：RoleConfig、Credential/CLI、skill/shared asset 与 runtime image 的建 Job 时冻结。
 
-Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker（`hub_evidence_signature` / `hub_gate_fingerprint`）并停在人工恢复边界，不递归生成相同快照的 Hub。证据签名增长但门禁结论指纹不变时不唤醒。`maxHubRounds` 只统计 `hub_reason.status = succeeded`，耗尽时复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。
+Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker（`hub_evidence_signature` / `hub_gate_fingerprint`）并停在人工恢复边界，不递归生成相同快照的 Hub。证据签名增长但门禁结论指纹不变时不唤醒。常规终止来自完成门、验证分类或 `no_progress:*`；`maxHubRounds`（`0`/`unlimited` 为不限制，默认 unlimited）只统计 `hub_reason.status = succeeded`，耗尽时是异常兜底（`budget_exhausted:*`），复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。已有环境显式写了 `DEEPSONAR_HUB_MAX_ROUNDS=20` 的部署保持 20。
 
 `event-ingestion` 先解析目标 Canvas，按 Canvas → Job → 事件历史/领域记录的顺序加锁，并在同一事务中完成 dedup、`events` append 和语义副作用；任何校验或下游 service 失败都会连同配额与副作用整体回滚。Finding/Hub/Report/runtime snapshot 变化只通过注入的显式 service ports 发起，不由 event-ingestion 直接取得其他领域的可变全局状态。
 
@@ -659,8 +659,8 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 - Fact 过程真相由 `GET /canvases/{id}/facts` 提供服务端 keyset 分页及验证态、证据种类、Finding、来源 Job 筛选；`GET /canvases/{id}/facts/{nodeId}` 返回完整正文和最多一跳的有界 trace；`PATCH /canvases/{id}/facts/{nodeId}/verification` 记录人工结论与审计。结构化 Finding 证据仅在同项目、同画布、canonical Finding 和 `reviewed_by/tested_by` 边同时成立时投影，禁止解析 description 补关联
 - **hub_reason**（job 类型，也是所有任务的统一入口）：输入 = 任务内容 + 服务端 `GraphScope=hub` 投影；需要派发时由 Hub 调用 `list_available_roles` 动态系统工具获取数据库角色，再通过 `submit_hub_decision` 提交 complete 或 intents；intent 的 `prompt` 必填并直接注入 Worker CLI，首次决策不得在没有执行证据时直接完成
 - Hub 可下发工作角色输入 = 自包含 intent prompt + 服务端 `GraphScope=agent` 引用邻域；执行中每发现一个新事实就调用 `emit_fact`，一轮可产出多个增量事实并立即建立 fact 节点 + to 边；`audit` 则用 `emit_finding`
-- **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；`maxHubRounds` 轮次上限防失控）
-- 规则：`hubEnabled`（默认 true，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED` 可覆盖关闭）、`maxHubRounds`、`maxIntentsPerDecision`、`maxNoProgressRounds`（wait_evidence 门禁结论不变的连续轮次上限，默认 2）；`allowEgress` 同样默认 true，任务创建时可覆盖并冻结到画布
+- **事件触发，无定时任务**：角色 job 的 `done` 事件 → `finalizeJob` → 同事务触发 hub（单画布同一时间最多一个活跃 hub；可选 `maxHubRounds` 只防失控，不能代替完成说明）
+- 规则：`hubEnabled`（默认 true，per-project `config_json.rules` 或 `DEEPSONAR_HUB_ENABLED` 可覆盖关闭）、`maxHubRounds`（`0`/`unlimited` 表示不限制，默认 unlimited；正整数才是护栏）、`maxIntentsPerDecision`、`maxNoProgressRounds`（wait_evidence 门禁结论不变的连续轮次上限，默认 2）；`allowEgress` 同样默认 true，任务创建时可覆盖并冻结到画布
 - **角色注册表（Phase ② 已落地）**：`schema.sql` 只负责首次建库写入可编辑的内置模板，运行时以 `agent_roles` 为唯一真相。Hub 需要派发时主动调用 `list_available_roles` 平台工具；工具从数据库查询 `kind='role'`，再按项目 `config_json.roles.enabled` 过滤，不把角色清单预埋进 prompt，也不维护代码侧固定角色枚举。`submit_hub_decision` 落地时调度器用同一数据库边界再次校验，缺失、停用或 system/hub 角色会令整次决策失败，不做默认回退。默认模板包含 `audit/explore/analyze/review/test/code` 六个工作角色；所有 `kind='role'` 条目（包括内置模板）都可删除或新增。`verify/report` 为调度器专用系统角色，`hub_reason` 为唯一中枢，三者都不进入 Hub 可派发清单且不可删除，但职责描述和 RoleConfig 均可修改。其中 `audit` 产出 Finding，其余工作角色产出 Fact
 - **角色颜色（Schema v16）**：`agent_roles.ui_color` 仅允许 `#RRGGBB`，由 Scheduler 在创建事务内持 `deepsonar_role_color_allocator` advisory lock，从非语义保留色的共享调色板分配；调色板耗尽后先用稳定、最大间距的 HSL 候选，再用覆盖完整 `2^24` 色域的确定性 RGB 置换，跳过保留色、已占用色和过暗颜色，色域真正耗尽才失败。删除角色会释放颜色，导入包里的颜色只是提示，保留色/冲突色/缺失色会在同一锁内重映射；system / hub 角色始终为 `NULL`。角色 Job 创建时把最终色冻结进 intent/job `body_json`，旧节点安全回退语义色；前端边 stroke/marker 取源节点最终色，`edge_type` 只控制 dash 与动画速度。
 - **语义事件限流（Schema v17 / Issue #57）**：`job_event_rate_limits` 为每 Job 持久化固定窗口计数行；`progress`、普通语义事件与 `done`/`human` 终态控制事件使用独立预算。摄入事务在 dedup 后锁行并原子递增；超限是带 `event_rate_limited` 与 retry 元数据的全事务拒绝，重放不占预算。
@@ -780,7 +780,7 @@ MAX_FOLLOWUP_DEPTH=12
 MAX_AUTO_RETRIES=6
 
 DEEPSONAR_HUB_ENABLED=true
-DEEPSONAR_HUB_MAX_ROUNDS=20
+DEEPSONAR_HUB_MAX_ROUNDS=unlimited
 DEEPSONAR_HUB_MAX_INTENTS=6
 
 SANDBOX_PROVIDER=opensandbox

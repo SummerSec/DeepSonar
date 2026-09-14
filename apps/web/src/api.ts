@@ -797,6 +797,7 @@ export interface EffectiveRules {
   jobTokenMaxRequests: number;
   provisionTimeoutSec: number;
   hubEnabled: boolean;
+  /** Hub 决策轮次上限；0 = unlimited，正整数才是可选护栏。 */
   maxHubRounds: number;
   maxIntentsPerDecision: number;
   allowEgress: boolean;

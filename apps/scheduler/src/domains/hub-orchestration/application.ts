@@ -1,7 +1,9 @@
 import { sql } from "../../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
+import { inc } from "../../metrics.js";
 import {
+  hubRoundLimitLabel,
   isHubRoundWithinBudget,
   shouldConsiderHubTrigger,
   shouldWakeEvidenceHub,
@@ -23,7 +25,15 @@ export type {
   HubOrchestrationPorts,
   HubOrchestrationTransaction,
 } from "./ports.js";
-export { isHubRoundWithinBudget, shouldConsiderHubTrigger, shouldWakeEvidenceHub } from "./policy.js";
+export {
+  hubRoundLimitLabel,
+  isHubRoundWithinBudget,
+  parseHubMaxRounds,
+  parseHubMaxRoundsEnv,
+  shouldConsiderHubTrigger,
+  shouldWakeEvidenceHub,
+  UNLIMITED_HUB_ROUNDS,
+} from "./policy.js";
 
 export interface HubTriggerOptions {
   force?: boolean;
@@ -319,8 +329,10 @@ export function createHubOrchestrationApplication(
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
     if (!isHubRoundWithinBudget(Number(count), rules.maxHubRounds)) {
-      console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${rules.maxHubRounds}，停止自驱`);
-      await ports.settleCanvasFindingsAtGuardrail(tx, canvasId, "max_hub_rounds").catch((e) =>
+      const limitLabel = hubRoundLimitLabel(rules.maxHubRounds);
+      console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${limitLabel}，停止自驱`);
+      inc("deepsonar_hub_budget_exhausted_total", { limit: limitLabel });
+      await ports.settleCanvasFindingsAtGuardrail(tx, canvasId, "budget_exhausted").catch((e) =>
         console.error(`[hub] settle findings at maxHubRounds failed:`, e),
       );
       const gate = await ports.evaluateAnalysisCompleteGate(tx, canvasId, {
@@ -330,8 +342,11 @@ export function createHubOrchestrationApplication(
         await tx`
           UPDATE canvas_nodes SET status = 'analysis_complete',
             body_json = body_json || ${tx.json({
-              conclusion: `Hub 决策轮次达上限 ${rules.maxHubRounds}；未完成 Finding 已收口为 needs_human，自动进入报告。`,
-              guardrail: "max_hub_rounds",
+              conclusion: `Hub 决策轮次达上限 ${limitLabel}；未完成 Finding 已收口为 needs_human，自动进入报告。`,
+              guardrail: "budget_exhausted",
+              hub_rounds_used: Number(count),
+              hub_round_limit: limitLabel,
+              blockers: gate.blockers,
             })},
             updated_at = now()
           WHERE canvas_id = ${canvasId} AND node_type = 'root'
@@ -345,8 +360,8 @@ export function createHubOrchestrationApplication(
         await ports.patchCanvasConvergence(tx, canvasId, {
           auto_stopped: true,
           paused_reason: noRole
-            ? `max_hub_rounds_no_role_work:${rules.maxHubRounds}`
-            : `max_hub_rounds_incomplete:${rules.maxHubRounds}`,
+            ? `budget_exhausted:no_role_work:${limitLabel}`
+            : `budget_exhausted:incomplete:${limitLabel}`,
           paused_at: new Date().toISOString(),
         });
         console.warn(

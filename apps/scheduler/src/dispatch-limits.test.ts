@@ -204,6 +204,13 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   assert.equal(global.maxNoProgressRounds, 2);
   const noProgressOff = await globalRules(fakeDb([{ rules_json: { maxNoProgressRounds: 0 } }]));
   assert.equal(noProgressOff.maxNoProgressRounds, 0);
+  assert.equal(global.maxHubRounds, config.hub.maxRounds, "unset persisted hub rounds inherit env/default");
+  const unlimitedHub = await globalRules(fakeDb([{ rules_json: { maxHubRounds: "unlimited" } }]));
+  assert.equal(unlimitedHub.maxHubRounds, 0);
+  const finiteHub = await globalRules(fakeDb([{ rules_json: { maxHubRounds: 3 } }]));
+  assert.equal(finiteHub.maxHubRounds, 3);
+  const invalidHub = await globalRules(fakeDb([{ rules_json: { maxHubRounds: -1 } }]));
+  assert.equal(invalidHub.maxHubRounds, config.hub.maxRounds, "invalid persisted maxHubRounds keeps env/default");
   assert.equal(asConcurrencyLimit("not-a-number", 6), 6);
 
   const project = await rulesForProject(
@@ -245,6 +252,12 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   assert.throws(() => parseConcurrencyRulesPatch({ maxNoProgressRounds: -1 }));
   assert.deepEqual(parseConcurrencyRulesPatch({ maxNoProgressRounds: 0 }), { maxNoProgressRounds: 0 });
   assert.deepEqual(parseConcurrencyRulesPatch({ maxNoProgressRounds: 2 }), { maxNoProgressRounds: 2 });
+  assert.throws(() => parseConcurrencyRulesPatch({ maxHubRounds: -1 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxHubRounds: "abc" }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxHubRounds: true }));
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxHubRounds: 0 }), { maxHubRounds: 0 });
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxHubRounds: 3 }), { maxHubRounds: 3 });
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxHubRounds: "unlimited" }), { maxHubRounds: "unlimited" });
   assert.throws(() => parseConcurrencyRulesPatch({ jobTokenMaxRequests: 1_000_001 }));
   assert.throws(() => parseConcurrencyRulesPatch({ provisionTimeoutSec: 10 }));
   assert.deepEqual(parseConcurrencyRulesPatch({ stallSec: 0, jobTokenMaxRequests: 0, provisionTimeoutSec: 400 }), {

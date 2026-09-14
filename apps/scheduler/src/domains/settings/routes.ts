@@ -93,6 +93,19 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       });
     }
   }
+  if (Object.hasOwn(rules, "maxHubRounds")) {
+    const value = rules.maxHubRounds;
+    const unlimited = typeof value === "string" && /^unlimited$/i.test(value.trim());
+    const finite =
+      typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 10_000;
+    if (!unlimited && !finite) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["maxHubRounds"],
+        message: "maxHubRounds 必须是 0-10000 的整数或 unlimited（0 / unlimited 表示不限制轮次）",
+      });
+    }
+  }
   if (Object.hasOwn(rules, "maxConcurrentJobs")) {
     const value = rules.maxConcurrentJobs;
     if (value !== null && (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000)) {

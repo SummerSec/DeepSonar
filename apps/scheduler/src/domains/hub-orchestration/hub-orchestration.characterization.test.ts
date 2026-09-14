@@ -3,9 +3,13 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   createHubOrchestrationApplication,
+  hubRoundLimitLabel,
   isHubRoundWithinBudget,
+  parseHubMaxRounds,
+  parseHubMaxRoundsEnv,
   shouldConsiderHubTrigger,
   shouldWakeEvidenceHub,
+  UNLIMITED_HUB_ROUNDS,
 } from "./application.js";
 
 test("Hub evidence wakeups and round budgets remain edge-triggered", () => {
@@ -30,6 +34,26 @@ test("Hub evidence wakeups and round budgets remain edge-triggered", () => {
   assert.equal(isHubRoundWithinBudget(0, 1), true);
   assert.equal(isHubRoundWithinBudget(1, 1), false);
   assert.equal(isHubRoundWithinBudget(5, 3), false);
+  assert.equal(isHubRoundWithinBudget(0, 0), true, "0 is unlimited");
+  assert.equal(isHubRoundWithinBudget(20, 0), true, "unlimited never exhausts on round count");
+});
+
+test("Hub round budget parses unlimited without silently substituting 20", () => {
+  assert.equal(parseHubMaxRounds(undefined), null);
+  assert.equal(parseHubMaxRounds("unlimited"), UNLIMITED_HUB_ROUNDS);
+  assert.equal(parseHubMaxRounds("UNLIMITED"), UNLIMITED_HUB_ROUNDS);
+  assert.equal(parseHubMaxRounds(0), UNLIMITED_HUB_ROUNDS);
+  assert.equal(parseHubMaxRounds("0"), UNLIMITED_HUB_ROUNDS);
+  assert.equal(parseHubMaxRounds(3), 3);
+  assert.equal(parseHubMaxRounds(-1), null);
+  assert.equal(parseHubMaxRounds("abc"), null);
+  assert.equal(parseHubMaxRounds(true), null);
+  assert.equal(parseHubMaxRounds({}), null);
+  assert.equal(parseHubMaxRoundsEnv(undefined, UNLIMITED_HUB_ROUNDS).value, UNLIMITED_HUB_ROUNDS);
+  assert.equal(parseHubMaxRoundsEnv(undefined, UNLIMITED_HUB_ROUNDS).invalid, false);
+  assert.equal(parseHubMaxRoundsEnv("abc", UNLIMITED_HUB_ROUNDS).invalid, true);
+  assert.equal(hubRoundLimitLabel(0), "unlimited");
+  assert.equal(hubRoundLimitLabel(20), "20");
 });
 
 test("Hub trigger policy preserves non-recursive and explicit wake paths", () => {
@@ -91,6 +115,10 @@ test("core composition root wires Hub orchestration without owning eligibility S
   );
   assert.doesNotMatch(application, /assertFrozenRuntimeImageLocal|runtimeImageNotLocalCanvasBlock|RuntimeImageNotLocalError/);
   assert.match(application, /isHubRoundWithinBudget\(Number\(count\), rules\.maxHubRounds\)/);
+  assert.match(application, /budget_exhausted:incomplete:\$\{limitLabel\}/);
+  assert.match(application, /deepsonar_hub_budget_exhausted_total/);
+  assert.doesNotMatch(application, /max_hub_rounds_incomplete/);
+  assert.match(source, /parseHubMaxRounds\(raw\.maxHubRounds\) \?\? base\.maxHubRounds/);
   assert.match(application, /dispatched_prompt: extractDispatchPrompt\("hub_reason"/);
   assert.match(
     application,
