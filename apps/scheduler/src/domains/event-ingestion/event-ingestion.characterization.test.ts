@@ -31,6 +31,11 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   assert.match(applicationSource, /shouldSkipTerminalAfterAcceptedHuman/);
   assert.match(applicationSource, /acceptedHumanInThisIngest/);
   assert.match(sideEffectSource, /createEventIngestionSideEffectApplication/);
+  assert.match(sideEffectSource, /SET heartbeat_at = now\(\)/);
+  assert.match(
+    sideEffectSource,
+    /SET lease_expires_at = now\(\) \+ \(\$\{config\.timeouts\.leaseTtlSec\}::int \* interval '1 second'\)[\s\S]*WHERE id = \$\{jobId\} AND status = 'running'/,
+  );
   assert.match(sideEffectSource, /persistArtifact/);
   assert.match(sideEffectSource, /findingProposalToArtifact/);
   assert.match(sideEffectSource, /factProposalToArtifact/);

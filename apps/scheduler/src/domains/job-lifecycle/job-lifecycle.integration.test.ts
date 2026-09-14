@@ -81,9 +81,34 @@ if (!testDatabaseUrl) {
       await sql`
         UPDATE jobs SET lease_expires_at = now() - interval '10 seconds'
         WHERE id = ${orphanId}`;
+      const heartbeatGuardId = await insertJob("running");
+      await sql`
+        UPDATE jobs
+        SET lease_expires_at = now() - interval '10 seconds',
+            heartbeat_at = now() - interval '1 second'
+        WHERE id = ${heartbeatGuardId}`;
+      const eventGuardId = await insertJob("running");
+      await sql`
+        UPDATE jobs SET lease_expires_at = now() - interval '10 seconds'
+        WHERE id = ${eventGuardId}`;
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json, created_at)
+        VALUES (
+          ${eventGuardId}, ${randomUUID()}, 1, 'progress',
+          ${sql.json({ message: "tool.call.started bash" } as never)},
+          now() - interval '1 second'
+        )`;
+      const orphans = await app.reapLeaseOrphans();
+      const orphanedIds = new Set(orphans.map((row) => row.id));
       assert.equal((await app.reapExecutionTimeout()).some((row) => row.id === timeoutId), true);
       assert.equal((await app.reapProvisionTimeout(1)).some((row) => row.id === provisionId), true);
-      assert.equal((await app.reapLeaseOrphans()).some((row) => row.id === orphanId), true);
+      assert.equal(orphanedIds.has(orphanId), true, "expired lease without heartbeat or events is orphaned");
+      assert.equal(orphanedIds.has(heartbeatGuardId), false, "fresh heartbeat after expired lease is kept");
+      assert.equal(orphanedIds.has(eventGuardId), false, "fresh event after expired lease is kept");
+      const [keptHeartbeat] = await sql`SELECT status FROM jobs WHERE id = ${heartbeatGuardId}`;
+      const [keptEvent] = await sql`SELECT status FROM jobs WHERE id = ${eventGuardId}`;
+      assert.equal(keptHeartbeat.status, "running");
+      assert.equal(keptEvent.status, "running");
 
       const resetClaimed = await insertJob("claimed");
       const resetProvision = await insertJob("provisioning");

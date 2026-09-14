@@ -140,7 +140,7 @@ pending → claimed → provisioning → running → succeeded
 - Job 进入 `running` 时写入 `lease_expires_at = now + LEASE_TTL`（默认 120s）
 - 调度器经 `RuntimeHost` / `SandboxRunner.isAlive` 探测存活并续 lease；进程/通道断开即停续。real 默认 OpenSandbox，不把本机 Docker inspect 当唯一真相
 - **Reaper**（调度器内置定时任务，默认每 30s 扫描）：
-  - 发现 `status=running 且 lease_expires_at < now` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed`；若任务绑定 Plane，再尽力回写外部状态
+  - 发现 `status=running 且 lease_expires_at < now`，且 `heartbeat_at` 与最近 `events.created_at` 都早于 `lease_expires_at` → 标记 `orphan` → 强制销毁沙箱 → 按重试策略重入队或转 `failed`；若任务绑定 Plane，再尽力回写外部状态。`isAlive` 假阴性停续租时，仍在说话的 Control 心跳 / 语义事件不得被判孤儿。`emit_progress` 在 Job 仍 `running` 时同时刷新 `heartbeat_at` 和 `lease_expires_at`
   - 发现 `运行时长 > timeout_sec` → 标记 `timeout` → 同上回收
   - 发现 `running` 且最近语义事件（或 `started_at`）超过 stall 窗口 → 标记 `failed`（产出停滞）。默认窗口 `DEEPSONAR_JOB_STALL_SEC=900`；`deepsonar-chrome-audit/test` 与 `deepsonar-clickhouse-audit/test` 下限 5400s、`deepsonar-chrome-fuzz` 与 `deepsonar-clickhouse-fuzz` 10800s。lease 心跳单独不能证明进度，但在飞 `tool.call`（`payload_json.runtime_activity.inflight_tool` 或最近一条 `tool.call.started` 进度）且 lease 仍有效时不判停滞
 - **超时与孤儿由调度器判定，不信任 Agent 自报**。harness 上报 `done/failed` 是善意路径，Reaper 是兜底路径

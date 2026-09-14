@@ -56,6 +56,7 @@ import {
   persistArtifact,
 } from "../artifacts/index.js";
 import { runFindingResearchBestEffort } from "../finding-research/index.js";
+import { config } from "../../config.js";
 
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
@@ -816,7 +817,14 @@ export function createEventIngestionSideEffectApplication(
       await tx`
       UPDATE canvas_nodes SET body_json = body_json || ${tx.json({ last_progress: p })}, updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
-      await tx`UPDATE jobs SET heartbeat_at = now() WHERE id = ${jobId}`;
+      await tx`
+        UPDATE jobs
+        SET heartbeat_at = now()
+        WHERE id = ${jobId}`;
+      await tx`
+        UPDATE jobs
+        SET lease_expires_at = now() + (${config.timeouts.leaseTtlSec}::int * interval '1 second')
+        WHERE id = ${jobId} AND status = 'running'`;
       return;
     }
 
