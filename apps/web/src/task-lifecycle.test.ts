@@ -149,6 +149,20 @@ test("report and root failures are surfaced before terminal success", () => {
   assert.equal(deriveTaskLifecycle({ jobCount: 1, rootStatus: "succeeded", reportStatus: "failed" }).status, "failed");
 });
 
+test("report_failed root with active=0 is failed, not stuck reporting", () => {
+  const lifecycle = deriveTaskLifecycle({
+    activeCount: 0,
+    jobCount: 2,
+    rootStatus: "report_failed",
+    reportStatus: "failed",
+    startedAt: "2026-09-14T10:00:00.000Z",
+    endedAt: "2026-09-14T10:09:30.000Z",
+  });
+  assert.equal(lifecycle.status, "failed");
+  assert.equal(lifecycle.label, "失败");
+  assert.equal(lifecycle.isActive, false);
+});
+
 test("a failure is not hidden when the canvas has no visible Jobs", () => {
   assert.equal(deriveTaskLifecycle({ jobCount: 0, rootStatus: "failed" }).status, "failed");
 });

@@ -680,7 +680,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 预算由 `MAX_GRAPH_YAML_CHARS_HUB/AGENT/VERIFY/REPORT` 配置但由 Scheduler 强制执行。超预算时投影写入顶层 `truncated: true` 与 `omitted` 计数；返回的 `referableIds` 始终来自完整画布，供服务端校验 `intent.from`。每次投影的 scope、字符数、节点计数和截断状态写入 Job runtime evidence，并暴露为 Prometheus 计数器。
 
-`report` Job 的 `payload_json.kind` 区分 `task_report` 与 `finding_report`。前者绑定画布 Root 的 `analysis_complete → reporting → succeeded` 生命周期并消费 Scheduler 生成的任务级 `report-input.json`；后者只绑定一条已确认 Finding，消费带 SHA-256 校验的冻结输入，不推进 Root，也不改变 Finding 的 `verify_status`。单 Finding 输入由 `MAX_FINDING_REPORT_INPUT_CHARS`（默认 40000）限制；截断时冻结 JSON 显式记录 `input_truncated`、预算与各类省略计数，Executor 在注入模型前再次执行同一上限。
+`report` Job 的 `payload_json.kind` 区分 `task_report` 与 `finding_report`。前者绑定画布 Root 的 `analysis_complete → reporting → succeeded` 生命周期（报告 Job 终态失败时有界自动再派一次，预算耗尽则 Root 进入 `report_failed`，由人工 `POST /canvases/:id/report/retry` 恢复）并消费 Scheduler 生成的任务级 `report-input.json`；后者只绑定一条已确认 Finding，消费带 SHA-256 校验的冻结输入，不推进 Root，也不改变 Finding 的 `verify_status`。单 Finding 输入由 `MAX_FINDING_REPORT_INPUT_CHARS`（默认 40000）限制；截断时冻结 JSON 显式记录 `input_truncated`、预算与各类省略计数，Executor 在注入模型前再次执行同一上限。
 
 ---
 

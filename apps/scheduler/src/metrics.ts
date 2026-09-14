@@ -91,6 +91,8 @@ const HELP: Record<string, string> = {
   deepsonar_event_rate_limited_total: "Semantic events rejected by the persistent per-Job rate limiter, by bucket",
   deepsonar_usage_ledger_write_failures_total: "Model Gateway usage ledger write failures, by source",
   deepsonar_finding_no_progress_total: "Findings settled as needs_human because the fact-first gate conclusion did not change",
+  deepsonar_report_auto_retry_total: "Task report jobs automatically re-dispatched after a terminal failure",
+  deepsonar_report_root_settled_total: "Canvases whose root left reporting after report retry budget exhaustion",
 };
 
 const PROCESS_GAUGE_HELP: Record<string, string> = {

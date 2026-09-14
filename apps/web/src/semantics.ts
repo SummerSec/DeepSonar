@@ -4,7 +4,7 @@ export const STATUS_COLOR: Record<string, string> = {
   pending: "#7f8796", unverified: "#7f8796", cancelled: "#7f8796", false_positive: "#7f8796", not_yet_generated: "#7f8796",
   stale: "#e8bd70",
   open: "#e8bd70", needs_human: "#e8bd70", waiting_human: "#e8bd70",
-  failed: "#ed6a7f", rejected: "#ed6a7f", timeout: "#ed6a7f", orphan: "#ed6a7f",
+  failed: "#ed6a7f", report_failed: "#ed6a7f", rejected: "#ed6a7f", timeout: "#ed6a7f", orphan: "#ed6a7f",
 };
 
 export const SEVERITY_COLOR: Record<string, string> = { low: "#7f8796", medium: "#e8bd70", high: "#ec8c5d", critical: "#ed6a7f" };

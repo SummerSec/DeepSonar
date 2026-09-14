@@ -1598,7 +1598,8 @@ export type TaskReportAvailabilityReason =
   | "active_work"
   | "no_role_work"
   | "findings_not_converged"
-  | "report_not_dispatched";
+  | "report_not_dispatched"
+  | "report_failed";
 
 export interface TaskReportBlockingFinding {
   finding_id: string;

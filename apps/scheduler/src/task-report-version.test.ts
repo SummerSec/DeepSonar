@@ -29,3 +29,9 @@ test("无历史报告时从版本一开始", () => {
     { alreadySucceeded: false, reuseVersion: false, version: 1 },
   );
 });
+
+test("同输入失败版本会 reuseVersion，因此失败路径必须自带有界预算", () => {
+  const reused = planTaskReportVersion({ version: 1, status: "failed", input_sha256: "same" }, "same");
+  assert.equal(reused.reuseVersion, true);
+  assert.equal(reused.version, 1);
+});
