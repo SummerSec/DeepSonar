@@ -16,7 +16,7 @@ import {
   requestAttemptCancel,
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
-import { CHROME_JOB_STALL_SEC, CLICKHOUSE_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
+import { CHROME_JOB_STALL_SEC, CLICKHOUSE_JOB_STALL_SEC, HUB_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
 
 export type {
   JobLifecycleDatabase,
@@ -148,10 +148,11 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       });
     },
 
-    /** Executor 异常：只有活动执行状态允许进入 failed。 */
+    /** Executor 异常：只有活动执行状态允许进入 failed。空串不能当失败原因。 */
     async failExecution(jobId, error) {
+      const persistedError = error.trim() || "exception";
       const [row] = await db`
-        UPDATE jobs SET status = 'failed', finished_at = now(), error = ${error}
+        UPDATE jobs SET status = 'failed', finished_at = now(), error = ${persistedError}
         WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')
         RETURNING id, type`;
       return row ? (row as JobLifecycleRow) : null;
@@ -232,6 +233,7 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       const clickhouseAuditStall = CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-audit"];
       const clickhouseTestStall = CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-test"];
       const clickhouseFuzzStall = CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"];
+      const hubStall = HUB_JOB_STALL_SEC;
       return atomically(async (tx) => {
         const result = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
@@ -262,6 +264,10 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
                     (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
                     ${platformStall}::int
                   )
+                END,
+                CASE type
+                  WHEN 'hub_reason' THEN ${hubStall}::int
+                  ELSE 0
                 END
               )::int * interval '1 second'
             ) < now()

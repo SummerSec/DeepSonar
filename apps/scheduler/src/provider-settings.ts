@@ -203,6 +203,8 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       const provider = asObject(rawProvider);
       provider.baseUrl = gatewayBaseUrl;
       provider.apiKey = "$DEEPSONAR_GATEWAY_TOKEN";
+      // Pi anthropic-messages 默认只发 x-api-key；现网 Gateway 认 Bearer。
+      if (provider.api === "anthropic-messages") provider.authHeader = true;
       providers[providerId] = provider;
       auth[providerId] = { type: "api_key", key: jobToken };
     }

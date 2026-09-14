@@ -6,6 +6,7 @@ import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   globalRules,
   ingestEvent,
+  lockCanvasForConvergence,
   projectJobQuotaFromConfig,
   recoverVerifyJobTerminal,
   rolesForProject,
@@ -42,6 +43,22 @@ import {
   updateAttemptResource,
 } from "./domains/job-attempt/index.js";
 
+const DISPATCHER_EXCEPTION_FALLBACK = "exception";
+
+function nonEmptyDispatcherFailureMessage(error: unknown, composed: string): string {
+  const trimmed = composed.trim();
+  if (trimmed) return trimmed;
+  if (error instanceof Error) {
+    const name = error.name.trim();
+    if (name && name !== "Error") return name;
+  }
+  if (error && typeof error === "object" && "code" in error) {
+    const code = String((error as { code?: unknown }).code ?? "").trim();
+    if (code) return code;
+  }
+  return DISPATCHER_EXCEPTION_FALLBACK;
+}
+
 export function classifyDispatcherFailure(error: unknown): { reason: string; message: string } {
   if (error instanceof RuntimeImageNotReadyError) {
     return { reason: "runtime_image_not_ready", message: `runtime_image_not_ready: ${error.imageRef}` };
@@ -52,13 +69,13 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   if (error instanceof DeviceNotAvailableError) {
     return { reason: "device_not_available", message: `device_not_available: ${error.message}` };
   }
-  return { reason: "exception", message: error instanceof Error ? error.message : String(error) };
+  return { reason: "exception", message: formatDispatcherFailureMessage(error) };
 }
 
 /** Keep provider error details that are otherwise hidden behind SDK wrappers. */
 export function formatDispatcherFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (!error || typeof error !== "object") return message;
+  if (!error || typeof error !== "object") return nonEmptyDispatcherFailureMessage(error, message);
   const value = error as Record<string, unknown>;
   const objects: Record<string, unknown>[] = [value];
   for (const key of ["error", "response", "responseBody", "rawResponse", "data", "body", "details", "cause"]) {
@@ -73,7 +90,10 @@ export function formatDispatcherFailureMessage(error: unknown): string {
     item.detail,
   ]).filter((item) => item !== undefined && item !== null && String(item).trim() !== "").map(String);
   const unique = [...new Set(details)].filter((item) => !message.includes(item));
-  return unique.length > 0 ? `${message} (${unique.join("; ")})` : message;
+  const composed = unique.length > 0
+    ? (message.trim() ? `${message} (${unique.join("; ")})` : unique.join("; "))
+    : message;
+  return nonEmptyDispatcherFailureMessage(error, composed);
 }
 
 /** OpenSandbox container startup failures are transient on Windows hosts. */
@@ -83,7 +103,7 @@ export function isRetryableProvisionFailure(error: unknown): boolean {
   if (error instanceof DeviceNotAuthorizedError) return false;
   if (error instanceof DeviceNotAvailableError) return true;
   const text = formatDispatcherFailureMessage(error);
-  return /CONTAINER_START_FAILED|Egress sidecar container failed to start|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)/i.test(text);
+  return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response/i.test(text);
 }
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot, evaluateConfirmGate, resolveFindingSubjectRevision } from "./verify.js";
@@ -780,16 +800,22 @@ async function retryProvisioningJob(
   jobId: string,
   attempt: Record<string, unknown>,
   errorMessage: string,
-  lifecycle: ReturnType<typeof createSqlJobLifecycleApplication>,
 ): Promise<boolean> {
   const attemptNo = Number(attempt.attempt_no ?? 0);
   if (!Number.isSafeInteger(attemptNo) || attemptNo < 1 || attemptNo > MAX_AUTOMATIC_PROVISION_RETRIES) return false;
-  const retried = await lifecycle.retryProvisioning(
-    jobId,
-    errorMessage,
-    (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
-    (attempt.resource_labels_json ?? {}) as Record<string, string>,
-  );
+  const retried = await sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as typeof sql;
+    const [locator] = await tx<{ canvas_id: string | null }[]>`
+      SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+    await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
+    const txLifecycle = createSqlJobLifecycleApplication(tx);
+    return txLifecycle.retryProvisioning(
+      jobId,
+      errorMessage,
+      (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
+      (attempt.resource_labels_json ?? {}) as Record<string, string>,
+    );
+  });
   if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'provision_retry')`;
   return Boolean(retried);
 }
@@ -1033,14 +1059,15 @@ async function runJob(jobId: string) {
     // 对执行器边界后的限流错误保留稳定、低基数观测，不序列化事件正文。
     const classified = classifyDispatcherFailure(e);
     const failureReason = classified.reason;
-    const msg = e instanceof RuntimeImageNotReadyError
+    const formatted = e instanceof RuntimeImageNotReadyError
       ? classified.message
       : details?.code === "event_rate_limited"
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
+    const msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
     if (provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)
       && Number(activeAttempt.attempt_no ?? 0) <= MAX_AUTOMATIC_PROVISION_RETRIES) {
-      const retried = await retryProvisioningJob(jobId, activeAttempt, msg, lifecycle).catch((retryError) => {
+      const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;
       });
@@ -1050,17 +1077,43 @@ async function runJob(jobId: string) {
       }
     }
     inc("deepsonar_jobs_failed_total", { reason: failureReason });
-    // 守卫：只覆盖活动状态；cancelled/timeout/orphan 终态不被失败覆盖（§8.2）
-    const failedRow = await sql.begin(async (tx) => {
-      const txLifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
+    // Canvas-first：先锁画布再 fail Job / 写节点 / 推进 Hub，避免和 ingest 交叉成 40P01。
+    const failedRow = await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      const [locator] = await tx<{
+        id: string;
+        type: string;
+        canvas_id: string | null;
+        project_id: string | null;
+        priority: number | null;
+      }[]>`
+        SELECT id, type, canvas_id, project_id, priority FROM jobs WHERE id = ${jobId}`;
+      const canvasId = (locator?.canvas_id as string | null) ?? null;
+      await lockCanvasForConvergence(tx, canvasId);
+      const txLifecycle = createSqlJobLifecycleApplication(tx);
       const row = await txLifecycle.failExecution(jobId, msg);
       if (row) {
-        await settleAttemptTerminal(tx as unknown as typeof sql, jobId, "failed", { reason: failureReason }, msg);
+        await settleAttemptTerminal(tx, jobId, "failed", { reason: failureReason }, msg);
+      }
+      await tx`
+        UPDATE canvas_nodes SET status = 'failed', updated_at = now()
+        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
+      if (row && row.type !== "report" && canvasId && locator) {
+        await advanceCanvasAfterTerminalJob(
+          tx,
+          {
+            id: locator.id,
+            type: row.type,
+            canvas_id: canvasId,
+            project_id: locator.project_id,
+            priority: locator.priority ?? 0,
+          },
+          "failed",
+        );
       }
       return row;
     });
     const failed = failedRow ? [failedRow] : [];
-    await sql`UPDATE canvas_nodes SET status = 'failed', updated_at = now() WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
     if (failed[0]?.type === "verify_finding") {
       await recoverVerifyJobTerminal(jobId, "failed", msg).catch((err) =>
         console.error(`[dispatcher] verify recovery failed:`, err),
@@ -1070,19 +1123,6 @@ async function runJob(jobId: string) {
       await sql.begin(async (tx) => {
         await finalizeReportJob(tx as unknown as typeof sql, jobId, { failed: true, error: msg });
       }).catch(() => {});
-    }
-    // 异常失败后统一推进画布：analysis_complete → Report，否则空闲唤醒 Hub。
-    if (failed[0] && failed[0].type !== "report") {
-      const [meta] = await sql`SELECT id, type, canvas_id, project_id, priority FROM jobs WHERE id = ${jobId}`;
-      if (meta?.canvas_id) {
-        await sql.begin(async (txRaw) => {
-          await advanceCanvasAfterTerminalJob(
-            txRaw as unknown as typeof sql,
-            meta as Record<string, unknown>,
-            "failed",
-          );
-        }).catch((err) => console.error(`[dispatcher] terminal canvas advance failed:`, err));
-      }
     }
   } finally {
     stopLeaseRenewal(jobId);
@@ -1458,52 +1498,57 @@ function stopLeaseRenewal(jobId: string) {
 }
 
 async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
-  // intent 节点由 hub_decision 随角色 job 同事务创建（1:1）；已有节点则只同步运行态
-  const existing = await sql`SELECT id, node_type FROM canvas_nodes WHERE job_id = ${jobId}`;
-  if (existing.length > 0) {
-    // resume 重跑的 job：节点已在（上一轮终态），同步回 running
-    await sql`
-      UPDATE canvas_nodes SET status = 'running', updated_at = now()
-      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'pending'`;
-    return;
-  }
-  // 一任务一画布：只认 job.canvas_id。projects.canvas_id 假身份已删，缺画布则不补节点。
+  // intent 节点由 hub_decision 随角色 job 同事务创建（1:1）；已有节点则只同步运行态。
+  // 变更日志触发器会在节点行锁之后再锁 canvases，所以这里必须 Canvas-first。
   const canvasId = (job.canvas_id as string | null) ?? null;
-  if (!canvasId) return;
-  const [{ next_x }] = await sql<[{ next_x: number }]>`
-    SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
-  const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null } | null;
-  const [node] = await sql`
-    INSERT INTO canvas_nodes ${sql({
-      canvas_id: canvasId,
-      job_id: jobId,
-      node_type: "job",
-      title: `${job.type} #${(jobId as string).slice(0, 8)}`,
-      body_json: {
-        type: job.type,
-        role: job.type,
-        payload: job.payload_json,
-        ...(roleSnapshot?.role_kind === "role" && roleSnapshot.ui_color
-          ? { ui_color: roleSnapshot.ui_color }
-          : {}),
-      } as never,
-      x: next_x,
-      y: 300,
-      status: "running",
-    })}
-    RETURNING id`;
-  // child 边：任务 root → job（早退保证不重复）
-  const [root] = await sql`
-    SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-  if (root) {
-    await sql`
-      INSERT INTO canvas_edges ${sql({
+  await sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as typeof sql;
+    if (!(await lockCanvasForConvergence(tx, canvasId))) return;
+    const existing = await tx`SELECT id, node_type FROM canvas_nodes WHERE job_id = ${jobId}`;
+    if (existing.length > 0) {
+      // resume 重跑的 job：节点已在（上一轮终态），同步回 running
+      await tx`
+        UPDATE canvas_nodes SET status = 'running', updated_at = now()
+        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'pending'`;
+      return;
+    }
+    // 一任务一画布：只认 job.canvas_id。projects.canvas_id 假身份已删，缺画布则不补节点。
+    if (!canvasId) return;
+    const [{ next_x }] = await tx<[{ next_x: number }]>`
+      SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+    const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null } | null;
+    const [node] = await tx`
+      INSERT INTO canvas_nodes ${tx({
         canvas_id: canvasId,
-        from_node_id: root.id,
-        to_node_id: node.id,
-        edge_type: "child",
-      })}`;
-  }
+        job_id: jobId,
+        node_type: "job",
+        title: `${job.type} #${(jobId as string).slice(0, 8)}`,
+        body_json: {
+          type: job.type,
+          role: job.type,
+          payload: job.payload_json,
+          ...(roleSnapshot?.role_kind === "role" && roleSnapshot.ui_color
+            ? { ui_color: roleSnapshot.ui_color }
+            : {}),
+        } as never,
+        x: next_x,
+        y: 300,
+        status: "running",
+      })}
+      RETURNING id`;
+    // child 边：任务 root → job（早退保证不重复）
+    const [root] = await tx`
+      SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    if (root) {
+      await tx`
+        INSERT INTO canvas_edges ${tx({
+          canvas_id: canvasId,
+          from_node_id: root.id,
+          to_node_id: node.id,
+          edge_type: "child",
+        })}`;
+    }
+  });
 }
 
 /**

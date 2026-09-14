@@ -19,7 +19,7 @@ if (!testDatabaseUrl) {
     const { migrate, sql } = await import("../../db.js");
     const { createEventIngestionApplication } = await import("./application.js");
     const { createAttempt } = await import("../job-attempt/application.js");
-    const { finalizeJob, ingestEvent, preflightDeferredSemanticEvent } = await import("../../core.js");
+    const { finalizeJob, ingestEvent, lockCanvasForConvergence, preflightDeferredSemanticEvent } = await import("../../core.js");
     const { ControlInputError } = await import("../../control-input.js");
     await migrate();
 
@@ -700,6 +700,53 @@ if (!testDatabaseUrl) {
       }
       const [terminal] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${terminalJobId}`;
       assert.equal(terminal?.status, "succeeded");
+
+      // Same-canvas progress ingest (Canvas-first) racing a dispatcher-style
+      // node UPDATE must not 40P01. The change-log trigger locks canvases after
+      // the node row, so the node writer has to take Canvas first.
+      const lockRaceJobId = randomUUID();
+      await sql`
+        INSERT INTO jobs (
+          id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json
+        ) VALUES (
+          ${lockRaceJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
+          ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})}
+        )`;
+      await sql`
+        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, ${lockRaceJobId}, 'job', 'lock-race job', 'running', ${sql.json({})})`;
+      const progressIds = [randomUUID(), randomUUID(), randomUUID()];
+      fixture.eventIds.push(...progressIds);
+      const ingestProgress = Promise.all(
+        progressIds.map((eventId, index) =>
+          ingestEvent(lockRaceJobId, {
+            v: 1,
+            event_id: eventId,
+            type: "progress",
+            payload: { message: `hb-${index}` },
+          }),
+        ),
+      );
+      const nodeUpdates = Promise.all(
+        Array.from({ length: 3 }, () =>
+          sql.begin(async (txRaw) => {
+            const tx = txRaw as unknown as typeof sql;
+            await lockCanvasForConvergence(tx, canvasId);
+            await tx`
+              UPDATE canvas_nodes SET status = 'running', updated_at = now()
+              WHERE job_id = ${lockRaceJobId} AND node_type = ANY(${["job", "intent"]})`;
+          }),
+        ),
+      );
+      const lockRace = await Promise.race([
+        Promise.allSettled([ingestProgress, nodeUpdates]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("same-canvas progress ingest / node UPDATE deadlock")), 8000),
+        ),
+      ]);
+      const [progressResult, nodeResult] = lockRace;
+      assert.equal(progressResult.status, "fulfilled", "progress ingest must settle without 40P01");
+      assert.equal(nodeResult.status, "fulfilled", "canvas-first node UPDATE must settle without 40P01");
     } finally {
       for (const eventId of fixture.eventIds) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;

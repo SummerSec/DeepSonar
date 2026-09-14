@@ -789,6 +789,8 @@ export interface EffectiveRules {
   maxFollowupsPerJob: number;
   maxFollowupDepth: number;
   maxAutoRetries: number;
+  /** wait_evidence 门禁结论不变的连续轮次上限；0 关闭该刹车。 */
+  maxNoProgressRounds: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
   stallSec: number;

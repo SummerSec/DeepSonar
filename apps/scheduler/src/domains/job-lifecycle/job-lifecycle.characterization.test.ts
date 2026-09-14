@@ -58,6 +58,8 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(lifecycleSource, /runtime_activity,inflight_tool/);
   assert.match(lifecycleSource, /deepsonar-chrome-fuzz/);
   assert.match(lifecycleSource, /deepsonar-clickhouse-fuzz/);
+  assert.match(lifecycleSource, /HUB_JOB_STALL_SEC/);
+  assert.match(lifecycleSource, /WHEN 'hub_reason'/);
   assert.match(lifecycleSource, /tool\.call\.started/);
   assert.match(
     lifecycleSource,
@@ -81,8 +83,13 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.doesNotMatch(reconcileSource, /UPDATE\s+jobs\s+SET\s+status/);
   assert.match(dispatcherSource, /createSqlJobLifecycleApplication\(\)/);
   assert.doesNotMatch(dispatcherSource, /UPDATE\s+jobs\s+SET\s+status/);
+  assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, canvasId\)/);
+  assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, locator\?\.canvas_id \?\? null\)/);
+  assert.match(reaperSource, /lockCanvasForConvergence\(tx, meta\?\.canvas_id \?\? null\)/);
+  assert.match(reconcileSource, /lockCanvasForConvergence\(tx, \(job\.canvas_id as string \| null\) \?\? null\)/);
   assert.match(routesSource, /createSqlJobLifecycleApplication\(\)/);
   assert.doesNotMatch(routesSource, /UPDATE\s+jobs\s+SET\s+status/);
+  assert.match(routesSource, /lockCanvasForConvergence/);
 });
 
 test("characterization fixture keeps transition metadata separate from persisted status", () => {

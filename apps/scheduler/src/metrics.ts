@@ -90,6 +90,7 @@ const HELP: Record<string, string> = {
   deepsonar_control_input_warnings_total: "Malformed runtime lines and forbidden control-file attempts",
   deepsonar_event_rate_limited_total: "Semantic events rejected by the persistent per-Job rate limiter, by bucket",
   deepsonar_usage_ledger_write_failures_total: "Model Gateway usage ledger write failures, by source",
+  deepsonar_finding_no_progress_total: "Findings settled as needs_human because the fact-first gate conclusion did not change",
 };
 
 const PROCESS_GAUGE_HELP: Record<string, string> = {

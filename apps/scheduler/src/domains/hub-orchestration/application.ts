@@ -120,6 +120,8 @@ export function createHubOrchestrationApplication(
     missing: string[];
     evidence_signature: string;
     hub_evidence_signature: string | null;
+    gate_fingerprint: string | null;
+    hub_gate_fingerprint: string | null;
     node_id: string | null;
   } | null> {
     const rows = await tx`
@@ -149,9 +151,24 @@ export function createHubOrchestrationApplication(
         : [];
       const evidence_signature = JSON.stringify({ review: ids("review"), test: ids("test"), missing });
       const hub_evidence_signature = (req.hub_evidence_signature as string | null) ?? null;
+      const gate_fingerprint =
+        typeof req.gate_fingerprint === "string" && req.gate_fingerprint.trim().length > 0
+          ? req.gate_fingerprint
+          : null;
+      const hub_gate_fingerprint =
+        typeof req.hub_gate_fingerprint === "string" && req.hub_gate_fingerprint.trim().length > 0
+          ? req.hub_gate_fingerprint
+          : null;
       // Skip a consumed evidence edge so an older stalled finding cannot
-      // starve a newer waiting round.
-      if (!shouldWakeEvidenceHub(hub_evidence_signature, evidence_signature)) continue;
+      // starve a newer waiting round. Gate fingerprint unchanged = no progress (#519).
+      if (
+        !shouldWakeEvidenceHub(hub_evidence_signature, evidence_signature, {
+          lastGateFingerprint: hub_gate_fingerprint,
+          gateFingerprint: gate_fingerprint,
+        })
+      ) {
+        continue;
+      }
       return {
         id: row.id as string,
         finding_id: row.finding_id as string,
@@ -159,6 +176,8 @@ export function createHubOrchestrationApplication(
         missing,
         evidence_signature,
         hub_evidence_signature,
+        gate_fingerprint,
+        hub_gate_fingerprint,
         node_id: (row.node_id as string | null) ?? null,
       };
     }
@@ -261,20 +280,32 @@ export function createHubOrchestrationApplication(
     }
 
     const waiting = await waitingEvidenceRound(tx, canvasId);
-    let waitingWake: { id: string; evidence_signature: string } | null = null;
+    let waitingWake: { id: string; evidence_signature: string; gate_fingerprint: string | null } | null = null;
     let trigger = options.trigger ?? {
       kind: options.idleWake ? "canvas_idle" : "graph_progress",
     };
     if (waiting && !options.manual) {
-      if (!shouldWakeEvidenceHub(waiting.hub_evidence_signature, waiting.evidence_signature)) return;
+      if (
+        !shouldWakeEvidenceHub(waiting.hub_evidence_signature, waiting.evidence_signature, {
+          lastGateFingerprint: waiting.hub_gate_fingerprint,
+          gateFingerprint: waiting.gate_fingerprint,
+        })
+      ) {
+        return;
+      }
       trigger = {
         kind: "verify_rework",
         finding_id: waiting.finding_id,
         missing_evidence: waiting.missing,
         summary: "Verify 缺少独立 review/test 证据，先派发补证工作",
         evidence_signature: waiting.evidence_signature,
+        gate_fingerprint: waiting.gate_fingerprint,
       };
-      waitingWake = { id: waiting.id, evidence_signature: waiting.evidence_signature };
+      waitingWake = {
+        id: waiting.id,
+        evidence_signature: waiting.evidence_signature,
+        gate_fingerprint: waiting.gate_fingerprint,
+      };
     } else if (!waiting && !options.manual && (await hasWaitingEvidenceRound(tx, canvasId))) {
       return;
     }
@@ -328,7 +359,10 @@ export function createHubOrchestrationApplication(
     if (waitingWake) {
       await tx`
         UPDATE finding_verification_rounds
-        SET requirements_json = requirements_json || ${tx.json({ hub_evidence_signature: waitingWake.evidence_signature } as never)}
+        SET requirements_json = requirements_json || ${tx.json({
+          hub_evidence_signature: waitingWake.evidence_signature,
+          hub_gate_fingerprint: waitingWake.gate_fingerprint,
+        } as never)}
         WHERE id = ${waitingWake.id}`;
     }
 
@@ -424,7 +458,7 @@ export function createHubOrchestrationApplication(
     if (job.type === "hub_reason" && terminalStatus !== "succeeded") {
       await tx`
         UPDATE finding_verification_rounds r
-        SET requirements_json = requirements_json - 'hub_evidence_signature'
+        SET requirements_json = (requirements_json - 'hub_evidence_signature') - 'hub_gate_fingerprint'
         FROM findings f
         JOIN jobs origin ON origin.id = f.job_id
         WHERE r.finding_id = f.id

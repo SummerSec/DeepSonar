@@ -2,6 +2,7 @@
  * Fact-first Finding confirm gate (#399).
  * Scheduler-owned: only structured on-graph Facts count; plain-text verdicts do not.
  */
+import { createHash } from "node:crypto";
 
 export type FactFirstRecord = {
   node_id: string;
@@ -103,20 +104,23 @@ export function evaluateFactFirstConfirmGate(
     return !findingId || id.length === 0 || id === findingId;
   });
   const revisions = [...new Set(structured.map((fact) => textField(fact.subject_revision)))];
-  const currentRevision = textField(opts.subjectRevision) || (revisions.length === 1 ? revisions[0] : "");
+  const frozen = textField(opts.subjectRevision);
 
-  if (structured.length > 0 && currentRevision) {
-    const mismatched = structured.filter((fact) => textField(fact.subject_revision) !== currentRevision);
-    if (mismatched.length > 0) {
+  let counted = structured;
+  if (structured.length > 0 && frozen) {
+    const matched = structured.filter((fact) => textField(fact.subject_revision) === frozen);
+    const mismatched = structured.filter((fact) => textField(fact.subject_revision) !== frozen);
+    if (matched.length === 0) {
       return fail(
         "revision_mismatch",
         ["subject_revision_mismatch"],
-        [`Fact ${mismatched.map((f) => f.node_id).join(",")} subject_revision 与当前 ${currentRevision} 不一致`],
+        [`Fact ${mismatched.map((f) => f.node_id).join(",")} subject_revision 与当前 ${frozen} 不一致`],
         mismatched.map((f) => f.node_id),
       );
     }
-  }
-  if (structured.length > 1 && revisions.length > 1 && !currentRevision) {
+    // Alias / non-canonical spellings of the same snapshot must not poison confirm.
+    counted = matched;
+  } else if (structured.length > 1 && revisions.length > 1 && !frozen) {
     return fail(
       "revision_mismatch",
       ["subject_revision_mismatch"],
@@ -125,7 +129,19 @@ export function evaluateFactFirstConfirmGate(
     );
   }
 
-  const failed = relevant.filter((fact) => FAILED_JOB.has(textField(fact.job_status)) && textField(fact.outcome).length > 0);
+  const ignored = new Set(
+    frozen
+      ? structured
+          .filter((fact) => textField(fact.subject_revision) !== frozen)
+          .map((fact) => fact.node_id)
+      : [],
+  );
+  const failed = relevant.filter(
+    (fact) =>
+      !ignored.has(fact.node_id) &&
+      FAILED_JOB.has(textField(fact.job_status)) &&
+      textField(fact.outcome).length > 0,
+  );
   if (failed.length > 0) {
     return fail(
       "failed",
@@ -135,8 +151,12 @@ export function evaluateFactFirstConfirmGate(
     );
   }
 
-  const rejected = relevant.filter((fact) => REJECT_OUTCOMES.has(textField(fact.outcome)));
-  const supporting = structured.filter((fact) => textField(fact.outcome) === "supports" && !FAILED_JOB.has(textField(fact.job_status)));
+  const rejected = relevant.filter(
+    (fact) => !ignored.has(fact.node_id) && REJECT_OUTCOMES.has(textField(fact.outcome)),
+  );
+  const supporting = counted.filter(
+    (fact) => textField(fact.outcome) === "supports" && !FAILED_JOB.has(textField(fact.job_status)),
+  );
 
   if (rejected.length > 0 && supporting.length > 0) {
     return fail(
@@ -174,5 +194,71 @@ export function factFirstAuditAfter(gate: FactFirstGateResult): Record<string, u
     used_fact_ids: gate.used_fact_ids,
     missing: gate.missing,
     reasons: gate.reasons,
+  };
+}
+
+const HUMAN_SETTLEMENT_RESULTS = new Set<FactFirstGateResult["result"]>(["conflict", "rejected"]);
+
+/**
+ * Fact-first 结果如何驱动 Verify 生命周期（#518）。
+ * conflict/rejected 不能靠再派 review/test 解开；insufficient / revision_mismatch 仍等证据。
+ */
+export type FactFirstFollowupAction = "confirm" | "needs_human" | "wait_evidence";
+
+export function classifyFactFirstFollowup(gate: Pick<FactFirstGateResult, "ok" | "result">): FactFirstFollowupAction {
+  if (gate.ok) return "confirm";
+  if (HUMAN_SETTLEMENT_RESULTS.has(gate.result)) return "needs_human";
+  return "wait_evidence";
+}
+
+export function factFirstHumanSettlementReason(gate: Pick<FactFirstGateResult, "result">): string {
+  return `fact_first_${gate.result}`;
+}
+
+/**
+ * 门禁结论指纹：只由 result + missing 决定（#519）。
+ * 故意排除 reasons / used_fact_ids —— 它们含 fact id，会随证据增长而变。
+ */
+export function gateFingerprint(gate: Pick<FactFirstGateResult, "result" | "missing">): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ result: gate.result, missing: [...gate.missing].sort() }))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+export function resolveWaitEvidenceNoProgress(input: {
+  prevGateFingerprint: string;
+  gateFingerprint: string;
+  prevNoProgressCount: number;
+  prevNoNewEvidenceCount: number;
+  missingLength: number;
+  maxNoProgressRounds: number;
+  hubConsumedSameFingerprint: boolean;
+  result: FactFirstGateResult["result"];
+}): {
+  progressed: boolean;
+  noProgressCount: number;
+  settle: boolean;
+  reason: string | null;
+} {
+  const same =
+    input.prevGateFingerprint.length > 0 &&
+    input.prevGateFingerprint === input.gateFingerprint &&
+    input.missingLength > 0;
+  if (!same) {
+    return { progressed: true, noProgressCount: 0, settle: false, reason: null };
+  }
+  const noProgressCount = Math.max(input.prevNoProgressCount, input.prevNoNewEvidenceCount, 0) + 1;
+  if (input.maxNoProgressRounds <= 0) {
+    return { progressed: false, noProgressCount, settle: false, reason: null };
+  }
+  // Hub 已消费同一指纹时不会再唤醒（#519 T4）。若仍低于 maxNoProgressRounds
+  // 就 return，画布会停在 waiting_evidence。生产路径必须在这里收口。
+  const settle = noProgressCount >= input.maxNoProgressRounds || input.hubConsumedSameFingerprint;
+  return {
+    progressed: false,
+    noProgressCount,
+    settle,
+    reason: settle ? `no_progress:${input.result}` : null,
   };
 }

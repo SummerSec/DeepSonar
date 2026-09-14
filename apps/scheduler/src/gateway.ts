@@ -4,6 +4,7 @@
  *   Sandbox ──DEEPSONAR_JOB_TOKEN（短期/单 Job/限模型/限额度）──▶ Gateway ──解密 Credential──▶ 上游
  *
  * - Token 只在执行器内铸造，明文仅注入本 Job 的沙箱 env；库中只存 sha256 + 前缀
+ * - 入站认 Authorization Bearer、Anthropic `x-api-key` / `anthropic-api-key`（Pi anthropic-messages 默认不发 Bearer）
  * - 每次请求回查：token 有效 + job 仍在活跃状态（容器残留也调不动）+ 模型/额度限制
  * - 转发：/gateway/<上游路径> → credential.base_url + 路径，按 provider 注入真实认证头
  * - 用量：请求数必计；token 数从非流式 JSON usage 与 SSE usage 片段尽力解析
@@ -27,6 +28,31 @@ import { extractBaseUrlFromSettings } from "./provider-settings.js";
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
+const JOB_TOKEN_RE = /^deepsonarjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/;
+
+function headerString(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return typeof value[0] === "string" ? value[0].trim() : "";
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * 沙箱入站 Job token：Claude Code 发 Bearer；Pi anthropic-messages 把 api_key 放进 x-api-key。
+ * 多个来源同时出现时必须字面相等，冲突 fail closed。
+ */
+export function extractInboundJobToken(headers: {
+  authorization?: string | string[];
+  "x-api-key"?: string | string[];
+  "anthropic-api-key"?: string | string[];
+}): string | null {
+  const authorization = headerString(headers.authorization);
+  const bearer = /^Bearer\s+/iu.test(authorization) ? authorization.replace(/^Bearer\s+/iu, "").trim() : "";
+  const unique = [...new Set(
+    [bearer, headerString(headers["x-api-key"]), headerString(headers["anthropic-api-key"])].filter(Boolean),
+  )];
+  if (unique.length !== 1) return null;
+  const token = unique[0]!;
+  return JOB_TOKEN_RE.test(token) ? token : null;
+}
 
 /** Claude Code CLI selectors that must not be forwarded to a compatible upstream. */
 const CLAUDE_CLI_MODEL_ALIASES = new Set(["fable", "sonnet", "opus", "haiku"]);
@@ -621,10 +647,9 @@ export function registerGateway(app: FastifyInstance): void {
     url: "/gateway/*",
     bodyLimit: MODEL_GATEWAY_BODY_LIMIT,
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
-      const header = req.headers.authorization ?? "";
-      const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-      const m = token.match(/^deepsonarjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/);
-      if (!m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
+      const token = extractInboundJobToken(req.headers);
+      const m = token?.match(JOB_TOKEN_RE) ?? null;
+      if (!token || !m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
 
       const [jt] = await sql`
         SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,

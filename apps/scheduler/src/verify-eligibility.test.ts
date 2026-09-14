@@ -188,6 +188,10 @@ test("evidence-wait wakeup is edge-triggered and does not churn", () => {
   assert.equal(shouldWakeEvidenceHub("same", "same"), false);
   assert.equal(shouldWakeEvidenceHub("old", "new"), true);
   assert.equal(
+    shouldWakeEvidenceHub("old", "new", { lastGateFingerprint: "fp1", gateFingerprint: "fp1" }),
+    false,
+  );
+  assert.equal(
     priorityMatchesJob({ type: "verify_finding", purpose: "verify", severity: "high" }, FIXED_PRIORITY.verifyHigh),
     true,
   );

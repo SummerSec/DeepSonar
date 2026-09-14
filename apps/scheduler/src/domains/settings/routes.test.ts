@@ -70,6 +70,13 @@ test("运行时护栏 PATCH 拒绝非法值，项目不能写 provisionTimeoutSe
   });
   assert.equal(projectProvision.statusCode, 400);
   assert.match(projectProvision.json<{ error: string }>().error, /invalid project settings rules/);
+
+  const noProgress = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { maxNoProgressRounds: 9 } },
+  });
+  assert.equal(noProgress.statusCode, 400);
   await app.close();
 });
 

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyGatewayOutboundModelRewrite,
   createGatewayUsageScanner,
+  extractInboundJobToken,
   extractUsageBreakdown,
   joinGatewayUpstreamUrl,
   rewriteGatewayOutboundModel,
@@ -15,6 +16,24 @@ test("usage JSON 跨 chunk 且完整记录落在前一块尾部时只累计一�
   scanner.push('data: {"usage":{"input_tokens":12,');
   scanner.push('"output_tokens":5}}\n');
   assert.deepEqual(scanner.finish(), { input: 12, output: 5, total: 17, cacheRead: 0, cacheWrite: 0 });
+});
+
+test("入站 Job token 同时认 Bearer 与 Anthropic x-api-key", () => {
+  const token = "deepsonarjob_12345678_test-token-value";
+  assert.equal(extractInboundJobToken({ authorization: `Bearer ${token}` }), token);
+  assert.equal(extractInboundJobToken({ "x-api-key": token }), token);
+  assert.equal(extractInboundJobToken({ "anthropic-api-key": token }), token);
+  assert.equal(extractInboundJobToken({
+    authorization: `Bearer ${token}`,
+    "x-api-key": token,
+  }), token);
+  assert.equal(extractInboundJobToken({}), null);
+  assert.equal(extractInboundJobToken({ authorization: "Bearer not-a-job-token" }), null);
+  assert.equal(extractInboundJobToken({ "x-api-key": "sk-ant-not-a-job-token" }), null);
+  assert.equal(extractInboundJobToken({
+    authorization: `Bearer ${token}`,
+    "x-api-key": "deepsonarjob_aaaaaaaa_other-token-value",
+  }), null);
 });
 
 test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {

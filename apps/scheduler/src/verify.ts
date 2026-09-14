@@ -22,9 +22,14 @@ import {
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { maybeDispatchFindingReport } from "./report.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
+import { inc } from "./metrics.js";
 import {
+  classifyFactFirstFollowup,
   evaluateFactFirstConfirmGate,
   factFirstAuditAfter,
+  factFirstHumanSettlementReason,
+  gateFingerprint,
+  resolveWaitEvidenceNoProgress,
   type FactFirstGateResult,
   type FactFirstRecord,
 } from "./verify-fact-gate.js";
@@ -358,6 +363,7 @@ async function recordVerifyGateAudit(
         after_json: tx.json({
           ...factFirstAuditAfter(opts.gate),
           subject_revision: opts.subjectRevision,
+          gate_fingerprint: gateFingerprint(opts.gate),
         } as never),
         result: opts.gate.ok ? "ok" : "denied",
         error_code: opts.gate.ok ? null : opts.gate.result,
@@ -529,6 +535,13 @@ export async function createVerifyRound(
     return null;
   }
 
+  // Matching-revision supports+refutes (or only refutes) cannot be repaired by
+  // another Hub review/test round; waiting_evidence would freeze attempt=1 forever (#518).
+  if (!opts.manualOverride && classifyFactFirstFollowup(gate) === "needs_human") {
+    await markFindingNeedsHuman(tx, findingId, factFirstHumanSettlementReason(gate));
+    return null;
+  }
+
   // An in-scope Finding enters the Verify lifecycle, but a round with missing
   // independent evidence is represented explicitly and has no runnable Job.
   // This avoids a pending verify spinning through rework while Hub is waiting
@@ -542,7 +555,10 @@ export async function createVerifyRound(
       missing: [...new Set([...evidence.missing, ...gate.missing])],
       evidence_signature: signature,
       hub_evidence_signature: existingRequirements.hub_evidence_signature ?? null,
+      hub_gate_fingerprint: existingRequirements.hub_gate_fingerprint ?? null,
       gate: factFirstAuditAfter(gate),
+      gate_fingerprint: gateFingerprint(gate),
+      last_gate_result: gate.result,
     };
     if (openRound) {
       await tx`
@@ -1236,6 +1252,11 @@ export async function maybeReverifyAfterFollowup(
     return;
   }
 
+  if (classifyFactFirstFollowup(gate) === "needs_human") {
+    await markFindingNeedsHuman(tx, findingId, factFirstHumanSettlementReason(gate));
+    return;
+  }
+
   // 对比上一轮证据快照哈希：无增量则回弹 Hub 说明无新证据
   const [prev] = await tx`
     SELECT id, attempt, requirements_json, evidence_snapshot_json FROM finding_verification_rounds
@@ -1250,27 +1271,77 @@ export async function maybeReverifyAfterFollowup(
   const curSnap =
     JSON.stringify(evidence.review.map((r) => r.node_id).sort()) +
     JSON.stringify(evidence.test.map((t) => t.node_id).sort());
+  const prevReq = (prev?.requirements_json as Record<string, unknown> | undefined) ?? {};
+  const gateFp = gateFingerprint(gate);
+  const evidenceGrew = prevSnap !== curSnap;
+  const prevGateFp = String(prevReq.gate_fingerprint ?? "");
+  const previousNoNew = Number(prevReq.no_new_evidence_count ?? 0);
+  const previousNoProgress = Number(prevReq.no_progress_count ?? 0);
+  const hubConsumedSameFingerprint =
+    String(prevReq.hub_gate_fingerprint ?? "").trim().length > 0 &&
+    String(prevReq.hub_gate_fingerprint) === gateFp;
 
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
   const attempt = Number(prev?.attempt ?? 0);
+  const noProgress = resolveWaitEvidenceNoProgress({
+    prevGateFingerprint: prevGateFp,
+    gateFingerprint: gateFp,
+    prevNoProgressCount: previousNoProgress,
+    prevNoNewEvidenceCount: previousNoNew,
+    missingLength: evidence.missing.length,
+    maxNoProgressRounds: rules.maxNoProgressRounds,
+    hubConsumedSameFingerprint,
+    result: gate.result,
+  });
 
-  // 无增量证据：若已达验证轮次上限 → needs_human；否则保持既有
-  // waiting_evidence 资格态。重复回弹 Hub 会在每个 role 终态制造同一
-  // 个决策 Job，形成 churn，因此没有新的证据就不再派生任何 Job。
-  if (prev && prevSnap === curSnap && evidence.missing.length > 0) {
-    const previousNoNew = Number(
-      ((prev.requirements_json as Record<string, unknown> | undefined)?.no_new_evidence_count ?? 0),
-    );
-    const noNewCount = previousNoNew + 1;
+  // 门禁结论没变：证据条目增长不算进展（#519）。保留 no_new_evidence_count
+  // 读取以兼容旧 round；上限取 max(no_progress, no_new_evidence)。
+  if (prev && !noProgress.progressed) {
+    const noNewCount = evidenceGrew ? previousNoNew : previousNoNew + 1;
     await tx`
       UPDATE finding_verification_rounds
-      SET requirements_json = requirements_json || ${tx.json({ no_new_evidence_count: noNewCount } as never)}
+      SET requirements_json = requirements_json || ${tx.json({
+        no_new_evidence_count: noNewCount,
+        no_progress_count: noProgress.noProgressCount,
+        gate_fingerprint: gateFp,
+        last_gate_result: gate.result,
+        evidence_growth: evidenceGrew,
+      } as never)}
       WHERE id = ${prev.id as string}`;
+    if (noProgress.settle) {
+      const added = Math.max(0, evidence.review.length + evidence.test.length
+        - (((prev.evidence_snapshot_json as EvidenceSnapshot | undefined)?.review ?? []).length
+          + ((prev.evidence_snapshot_json as EvidenceSnapshot | undefined)?.test ?? []).length));
+      console.info(
+        `[verify] finding=${findingId} 无进展 ${noProgress.noProgressCount} 轮（result=${gate.result}，证据 +${added} 条），转 needs_human`,
+      );
+      inc("deepsonar_finding_no_progress_total", { result: gate.result });
+      await markFindingNeedsHuman(tx, findingId, noProgress.reason ?? `no_progress:${gate.result}`, {
+        gateFingerprint: gateFp,
+        evidenceGrowth: evidenceGrew,
+      });
+      return;
+    }
     if (attempt >= rules.maxVerificationRounds || noNewCount >= rules.maxVerificationRounds) {
-      await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence");
+      await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence", {
+        gateFingerprint: gateFp,
+        evidenceGrowth: evidenceGrew,
+      });
       return;
     }
     return;
+  }
+
+  if (prev) {
+    await tx`
+      UPDATE finding_verification_rounds
+      SET requirements_json = requirements_json || ${tx.json({
+        gate_fingerprint: gateFp,
+        last_gate_result: gate.result,
+        evidence_growth: evidenceGrew,
+        no_progress_count: 0,
+      } as never)}
+      WHERE id = ${prev.id as string}`;
   }
 
   const created = await createVerifyRound(tx, {
@@ -1351,9 +1422,19 @@ export async function attachVerificationEvidence(
   }
 
   const [finding] = await tx`
-    SELECT id, node_id, project_id, job_id FROM findings WHERE id = ${ver.finding_id}`;
+    SELECT id, node_id, project_id, job_id, raw_json FROM findings WHERE id = ${ver.finding_id}`;
   if (!finding?.node_id) {
     throw invalidVerification("verification.finding_id 不存在或尚未生成 Finding 节点。", "verification.finding_id");
+  }
+  const frozenRevision = String(
+    (((finding.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined)
+      ?.subject_revision as string | undefined) ?? "",
+  ).trim();
+  if (frozenRevision && ver.subject_revision.trim() !== frozenRevision) {
+    throw invalidVerification(
+      `verification.subject_revision 必须与已冻结值完全一致（${frozenRevision}）。`,
+      "verification.subject_revision",
+    );
   }
 
   // Re-check all ownership links at the authoritative write boundary. The
@@ -1701,7 +1782,11 @@ export async function markFindingNeedsHuman(
   tx: Tx,
   findingId: string,
   reason: string,
-  options: { requireWaitingHumanHub?: boolean } = {},
+  options: {
+    requireWaitingHumanHub?: boolean;
+    gateFingerprint?: string;
+    evidenceGrowth?: boolean;
+  } = {},
 ): Promise<boolean> {
   const [origin] = await tx`
     SELECT f.id, f.project_id, f.node_id, f.verify_status,
@@ -1746,6 +1831,8 @@ export async function markFindingNeedsHuman(
     await ensureHumanBlocker(tx, canvasId, findingId, finding.node_id as string | null, {
       reason,
       summary: reason,
+      ...(options.gateFingerprint ? { gate_fingerprint: options.gateFingerprint } : {}),
+      ...(options.evidenceGrowth !== undefined ? { evidence_growth: options.evidenceGrowth } : {}),
     });
   }
   return true;

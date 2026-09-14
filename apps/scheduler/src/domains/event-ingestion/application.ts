@@ -114,6 +114,16 @@ class RetryCanvasResolution extends Error {
   readonly code = "EVENT_CANVAS_CHANGED";
 }
 
+const MAX_INGEST_LOCK_ATTEMPTS = 3;
+
+/** Canvas hint drift plus Postgres lock conflicts are retryable; other errors fail closed. */
+export function isRetryableCanvasLockError(error: unknown): boolean {
+  if (error instanceof RetryCanvasResolution) return true;
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  const code = String((error as { code?: unknown }).code);
+  return code === "40P01" || code === "55P03";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -394,15 +404,15 @@ export function createEventIngestionApplication(
     });
     for (const envelope of envelopes) assertSemanticEventPayloadSize(envelope.type, envelope.payload, maxPayloadBytes);
 
-    // A Job's canvas_id is immutable in normal operation.  One retry keeps
-    // this boundary safe if a legacy repair path changes it between the
-    // lock-target read and the transaction.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    // A Job's canvas_id is immutable in normal operation. Bounded retries cover
+    // a legacy canvas reassignment between the hint read and the transaction,
+    // plus Postgres lock conflicts (40P01/55P03) from the canvas-change trigger.
+    for (let attempt = 0; attempt < MAX_INGEST_LOCK_ATTEMPTS; attempt += 1) {
       const hint = await resolveCanvasHint(db, jobId, envelopes[0]!);
       try {
         return await appendAndApplyBundle(db, jobId, envelopes, hint, sideEffects, options);
       } catch (error) {
-        if (error instanceof RetryCanvasResolution && attempt === 0) continue;
+        if (isRetryableCanvasLockError(error) && attempt < MAX_INGEST_LOCK_ATTEMPTS - 1) continue;
         throw error;
       }
     }

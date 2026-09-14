@@ -6,6 +6,7 @@ import {
   compactAttemptOutcome,
   canReplayEffect,
   effectCrashRecovery,
+  sanitizeError,
   validateEffectDescriptor,
 } from "./model.js";
 
@@ -75,4 +76,11 @@ test("默认 never 重放，只有显式 safe 效果且快照完全一致才可�
 
 test("确定性故障点默认拒绝重放并保留 after-settlement 成功", () => {
   assert.deepEqual(EFFECT_CRASH_POINTS.map(effectCrashRecovery), ["retry_new_attempt", "mark_unknown", "mark_unknown", "continue"]);
+});
+
+test("sanitizeError 不把空 Error.message 收成空串", () => {
+  assert.equal(sanitizeError("boom"), "boom");
+  assert.equal(sanitizeError(new Error("")), "Error");
+  assert.equal(sanitizeError("   "), "unknown_error");
+  assert.notEqual(sanitizeError(new Error("")).trim(), "");
 });
