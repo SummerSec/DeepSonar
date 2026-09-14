@@ -230,7 +230,10 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       return timedOut;
     },
 
-    /** Reaper lease 恢复：只有过期的 running lease 可进入 orphan。 */
+    /**
+     * Reaper lease 恢复：过期的 running lease 可进入 orphan。
+     * Control 心跳或最近语义事件不早于 lease_expires_at 时不得误杀（#529）。
+     */
     async reapLeaseOrphans() {
       return atomically(async (tx) => {
         const result = await tx`
@@ -239,6 +242,11 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
           WHERE status = 'running'
             AND lease_expires_at IS NOT NULL
             AND lease_expires_at < now()
+            AND COALESCE(heartbeat_at, '-infinity'::timestamptz) < lease_expires_at
+            AND COALESCE(
+              (SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id),
+              '-infinity'::timestamptz
+            ) < lease_expires_at
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "orphan", { reason: "lease_expired" }, "lease 过期（Reaper 判定孤儿）");
