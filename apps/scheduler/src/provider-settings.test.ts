@@ -141,6 +141,7 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
   assert.equal(routed[2]?.path, ".pi/agent/settings.json");
   assert.match(routed[0]!.content, /DEEPSONAR_GATEWAY_TOKEN/);
   assert.doesNotMatch(routed[0]!.content, /long-lived|api\.openai\.com/);
+  assert.doesNotMatch(routed[0]!.content, /"authHeader": true/);
   assert.match(routed[1]!.content, /deepsonarjob_12345678_test-token-value/);
   assert.match(routed[1]!.content, /"type": "api_key"/);
   assert.equal(qualifyPiModelRef("gpt-5", routed), "deepsonar/gpt-5");
@@ -153,6 +154,33 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
     provider: "deepsonar",
     cliModel: "gpt-5",
   });
+});
+
+test("Pi anthropic-messages 网关改写补 authHeader 以便现网 Gateway 认 Bearer", () => {
+  const files = materializeProviderSettings({
+    agentCli: "pi",
+    settingsConfig: {
+      providers: {
+        anthropic: {
+          api: "anthropic-messages",
+          baseUrl: "http://host.docker.internal:8088",
+          models: [{ id: "grok-4.6" }],
+        },
+      },
+    },
+  });
+  const routed = routeMaterializedProviderFilesThroughGateway({
+    agentCli: "pi",
+    files,
+    gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway",
+    jobToken: "deepsonarjob_12345678_test-token-value",
+  });
+  const models = JSON.parse(routed[0]!.content) as {
+    providers: { anthropic: { api: string; authHeader?: boolean; apiKey: string } };
+  };
+  assert.equal(models.providers.anthropic.api, "anthropic-messages");
+  assert.equal(models.providers.anthropic.authHeader, true);
+  assert.equal(models.providers.anthropic.apiKey, "$DEEPSONAR_GATEWAY_TOKEN");
 });
 
 test("Pi official multi-provider settings keep the default model on its declared route", () => {

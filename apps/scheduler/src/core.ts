@@ -164,6 +164,11 @@ export interface ProjectRules {
   maxAutoRetries: number;
   /** Finding 业务验证轮次上限（与 maxAutoRetries 基础设施重试分离）；默认 3。 */
   maxVerificationRounds: number;
+  /**
+   * wait_evidence 路径上「门禁结论不变」的连续轮次上限（#519）。
+   * 默认 2；0 关闭该刹车并回退旧行为。范围 0..5。
+   */
+  maxNoProgressRounds: number;
   auditTimeoutSec: number;
   verifyTimeoutSec: number;
   /** running Job 无语义事件且无在飞 tool.call 超过此时长则判失败；0 关闭。 */
@@ -565,6 +570,7 @@ function envDefaultRules(): ProjectRules {
     maxFollowupDepth: config.limits.maxFollowupDepth,
     maxAutoRetries: config.limits.maxAutoRetries,
     maxVerificationRounds: 3,
+    maxNoProgressRounds: config.rules.maxNoProgressRounds,
     auditTimeoutSec: config.timeouts.auditSec,
     verifyTimeoutSec: config.timeouts.verifySec,
     stallSec: config.timeouts.stallSec,
@@ -589,6 +595,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
   if (raw.minVerifySeverity != null) min = asSeverityRank(raw.minVerifySeverity, min);
 
   const maxVerificationRounds = Number(raw.maxVerificationRounds);
+  const maxNoProgressRounds = Number(raw.maxNoProgressRounds);
   const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);
   const maxJobsPerProject = Math.min(maxGlobalJobs, asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject));
   const maxConcurrentProvisioning = asConcurrencyLimit(raw.maxConcurrentProvisioning, base.maxConcurrentProvisioning);
@@ -601,6 +608,10 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
       Number.isInteger(maxVerificationRounds) && maxVerificationRounds >= 1 && maxVerificationRounds <= 20
         ? maxVerificationRounds
         : base.maxVerificationRounds,
+    maxNoProgressRounds:
+      Number.isInteger(maxNoProgressRounds) && maxNoProgressRounds >= 0 && maxNoProgressRounds <= 5
+        ? maxNoProgressRounds
+        : base.maxNoProgressRounds,
     auditTimeoutSec: asBoundedInt(raw.auditTimeoutSec, base.auditTimeoutSec, RUNTIME_KNOB_BOUNDS.timeoutSec.min, RUNTIME_KNOB_BOUNDS.timeoutSec.max),
     verifyTimeoutSec: asBoundedInt(raw.verifyTimeoutSec, base.verifyTimeoutSec, RUNTIME_KNOB_BOUNDS.timeoutSec.min, RUNTIME_KNOB_BOUNDS.timeoutSec.max),
     stallSec: asBoundedInt(raw.stallSec, base.stallSec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max),

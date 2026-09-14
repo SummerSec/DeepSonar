@@ -13,7 +13,7 @@ import {
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
-import { assertSemanticEventPayloadSize, orderSemanticIngestBundle, shouldSkipTerminalAfterAcceptedHuman } from "./application.js";
+import { assertSemanticEventPayloadSize, isRetryableCanvasLockError, orderSemanticIngestBundle, shouldSkipTerminalAfterAcceptedHuman } from "./application.js";
 
 import {
   DEFAULT_EVENT_RATE_LIMIT_POLICY,
@@ -139,3 +139,12 @@ test("same-ingest terminals after accepted request_human are skipped", () => {
   assert.equal(shouldSkipTerminalAfterAcceptedHuman("done", false), false);
   assert.equal(shouldSkipTerminalAfterAcceptedHuman("hub_decision", false), false);
 });
+
+test("ingest treats Postgres lock conflicts as retryable canvas lock errors", () => {
+  assert.equal(isRetryableCanvasLockError({ code: "40P01" }), true);
+  assert.equal(isRetryableCanvasLockError({ code: "55P03" }), true);
+  assert.equal(isRetryableCanvasLockError({ code: "23505" }), false);
+  assert.equal(isRetryableCanvasLockError(new Error("agent 运行失败")), false);
+  assert.equal(isRetryableCanvasLockError(null), false);
+});
+

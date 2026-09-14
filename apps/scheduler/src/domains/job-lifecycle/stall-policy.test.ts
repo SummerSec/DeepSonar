@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CHROME_JOB_STALL_SEC,
   CLICKHOUSE_JOB_STALL_SEC,
+  HUB_JOB_STALL_SEC,
   inflightToolFromPayload,
   resolveJobStallSec,
   runtimeImageKeyFromSnapshot,
@@ -27,7 +28,38 @@ test("chrome image keys get a stall floor; others keep the global 900s window", 
   assert.equal(resolveJobStallSec("deepsonar-clickhouse-test", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-test"]);
   assert.equal(resolveJobStallSec("deepsonar-clickhouse-fuzz", 900), CLICKHOUSE_JOB_STALL_SEC["deepsonar-clickhouse-fuzz"]);
   assert.equal(resolveJobStallSec("deepsonar-chrome-audit", 0), 0);
+  assert.equal(resolveJobStallSec("deepsonar-base", 900), 900);
+  assert.equal(resolveJobStallSec("deepsonar-base", 900, "hub_reason"), HUB_JOB_STALL_SEC);
+  assert.equal(resolveJobStallSec("deepsonar-base", 900, "audit"), 900);
+  assert.equal(resolveJobStallSec("deepsonar-base", 0, "hub_reason"), 0);
   assert.equal(runtimeImageKeyFromSnapshot({ runtime_image: { image_key: "deepsonar-chrome-fuzz" } }), "deepsonar-chrome-fuzz");
+});
+
+test("hub_reason floor keeps a silent Hub alive past 900s when stall is on", () => {
+  assert.equal(shouldReapStalledJob({
+    now,
+    startedAt,
+    stallSec: 900,
+    imageKey: "deepsonar-base",
+    jobType: "hub_reason",
+    leaseExpiresAt: liveLease,
+  }), false);
+  assert.equal(shouldReapStalledJob({
+    now: new Date(startedAt.getTime() + HUB_JOB_STALL_SEC * 1000 + 1),
+    startedAt,
+    stallSec: 900,
+    imageKey: "deepsonar-base",
+    jobType: "hub_reason",
+    leaseExpiresAt: liveLease,
+  }), true);
+  assert.equal(shouldReapStalledJob({
+    now,
+    startedAt,
+    stallSec: 900,
+    imageKey: "deepsonar-base",
+    jobType: "audit",
+    leaseExpiresAt: liveLease,
+  }), true);
 });
 
 test("in-flight tool.call + live lease is not stalled even after 900s of silence", () => {

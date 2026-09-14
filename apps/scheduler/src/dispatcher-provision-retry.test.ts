@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatDispatcherFailureMessage, isRetryableProvisionFailure } from "./dispatcher.js";
+import { classifyDispatcherFailure, formatDispatcherFailureMessage, isRetryableProvisionFailure } from "./dispatcher.js";
 
 test("OpenSandbox container startup errors retain nested provider details", () => {
   const error = Object.assign(new Error("Egress sidecar container failed to start."), {
@@ -19,4 +19,37 @@ test("only transient container startup failures are automatically retryable", ()
   assert.equal(isRetryableProvisionFailure(new Error("runtime image digest mismatch")), false);
   assert.equal(isRetryableProvisionFailure(new Error("Egress sidecar container failed to start.")), true);
   assert.equal(isRetryableProvisionFailure(new Error("provision 已取消")), false);
+  assert.equal(
+    isRetryableProvisionFailure(
+      new Error("Sandbox health check timed out after 30s (1 attempts). Last health check error: An internal error occurred in the proxy: Server disconnected without sending a response. Connection context: domain=open"),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableProvisionFailure(
+      Object.assign(new Error("Egress sidecar did not become ready within 30s for sandbox a15628b7-fb39-423b-966e-4423569a21ac: timed out"), {
+        code: "DOCKER::SANDBOX_START_FAILED",
+        statusCode: 500,
+      }),
+    ),
+    true,
+  );
+});
+
+test("empty Error without nested details still yields a non-empty failure message", () => {
+  const error = new Error("");
+  const message = formatDispatcherFailureMessage(error);
+  assert.notEqual(message.trim(), "");
+  assert.match(message, /exception/);
+  assert.equal(isRetryableProvisionFailure(error), false);
+  const classified = classifyDispatcherFailure(error);
+  assert.equal(classified.reason, "exception");
+  assert.equal(classified.message, "exception");
+});
+
+test("empty Error keeps nested provider code when message is blank", () => {
+  const error = Object.assign(new Error(""), { code: "EPIPE" });
+  const message = formatDispatcherFailureMessage(error);
+  assert.match(message, /EPIPE/);
+  assert.notEqual(message.trim(), "");
 });

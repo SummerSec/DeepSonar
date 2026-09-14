@@ -263,6 +263,7 @@ export function SettingsPanel({
       maxFollowupsPerJob: rules.maxFollowupsPerJob,
       maxFollowupDepth: rules.maxFollowupDepth,
       maxAutoRetries: rules.maxAutoRetries,
+      maxNoProgressRounds: rules.maxNoProgressRounds,
       auditTimeoutSec: rules.auditTimeoutSec,
       verifyTimeoutSec: rules.verifyTimeoutSec,
       stallSec: rules.stallSec,
@@ -981,7 +982,11 @@ export function SettingsPanel({
                   "0=直接任务，verify 一般为 1；到顶不再自动派生。",
                 )}
                 {numField("maxAutoRetries", "失败自动重试上限")}
-                <div className="hidden sm:block" />
+                {numField(
+                  "maxNoProgressRounds",
+                  "无进展轮次上限",
+                  "wait_evidence 门禁结论连续不变多少轮后转 needs_human。0 关闭该刹车。",
+                )}
                 {numField("auditTimeoutSec", "审计超时（秒）")}
                 {numField("verifyTimeoutSec", "验证超时（秒）")}
               </div>

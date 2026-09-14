@@ -5,6 +5,9 @@ export const CHROME_JOB_STALL_SEC = Object.freeze({
   "deepsonar-chrome-fuzz": 10_800,
 });
 
+/** Hub 读大图时常 15 分钟内发不出 tool.call；心跳不算进度。 */
+export const HUB_JOB_STALL_SEC = 5_400;
+
 export const CLICKHOUSE_JOB_STALL_SEC = Object.freeze({
   "deepsonar-clickhouse-audit": 5_400,
   "deepsonar-clickhouse-test": 5_400,
@@ -34,11 +37,12 @@ export function runtimeImageKeyFromSnapshot(snapshot: unknown): string | null {
     : null;
 }
 
-export function resolveJobStallSec(imageKey: unknown, defaultStallSec: number): number {
+export function resolveJobStallSec(imageKey: unknown, defaultStallSec: number, jobType?: unknown): number {
   if (!Number.isSafeInteger(defaultStallSec) || defaultStallSec <= 0) return 0;
   const key = typeof imageKey === "string" ? imageKey : "";
-  const override = SPECIALIST_JOB_STALL_SEC[key as keyof typeof SPECIALIST_JOB_STALL_SEC];
-  return override ? Math.max(defaultStallSec, override) : defaultStallSec;
+  const override = SPECIALIST_JOB_STALL_SEC[key as keyof typeof SPECIALIST_JOB_STALL_SEC] ?? 0;
+  const typeFloor = jobType === "hub_reason" ? HUB_JOB_STALL_SEC : 0;
+  return Math.max(defaultStallSec, override, typeFloor);
 }
 
 export function toolCallProgressMessage(phase: ToolCallPhase, toolName: string): string {
@@ -79,11 +83,12 @@ export function shouldReapStalledJob(input: {
   lastEventAt?: Date | null;
   stallSec: number;
   imageKey?: unknown;
+  jobType?: unknown;
   leaseExpiresAt?: Date | null;
   inflightTool?: string | null;
   latestToolCallPhase?: ToolCallPhase | null;
 }): boolean {
-  const stallSec = resolveJobStallSec(input.imageKey, input.stallSec);
+  const stallSec = resolveJobStallSec(input.imageKey, input.stallSec, input.jobType);
   if (stallSec <= 0) return false;
   const lastActivity = input.lastEventAt && input.lastEventAt > input.startedAt
     ? input.lastEventAt

@@ -4,7 +4,7 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
-import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
+import { advanceCanvasAfterTerminalJob, lockCanvasForConvergence, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
@@ -53,33 +53,27 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     // §6.3：终局判定即吊销短期模型 Token
     await revokeJobTokens(jobId, "reaper").catch(() => {});
     await revokeJobCapabilityTokens(jobId, "reaper").catch(() => {});
-    // 失败不能只改 jobs 表而留下 running 画布节点（§8.3：job/intent 节点同步终态）
-    await sql`
-      UPDATE canvas_nodes SET status = 'failed', updated_at = now()
-      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
-
-    // verify 收口：不得遗留 verifying；report 失败保持 Root reporting
-    const [meta] = await sql`SELECT type, error, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
-    if (meta?.type === "verify_finding") {
-      const status = isTimeout ? "timeout" : isProvision || isStalled ? "failed" : "orphan";
-      await recoverVerifyJobTerminal(jobId, status, (meta.error as string) ?? null).catch((e) =>
-        console.error(`[reaper] verify recovery failed:`, e),
-      );
-    }
-    if (meta?.type === "report") {
-      await sql.begin(async (tx) => {
-        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-        await finalizeReportJob(tx as unknown as typeof sql, jobId, {
+    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled ? "failed" : "orphan";
+    const [meta] = await sql<{
+      id: string;
+      type: string;
+      error: string | null;
+      canvas_id: string | null;
+      project_id: string | null;
+      priority: number | null;
+    }[]>`SELECT type, error, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
+    await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      await lockCanvasForConvergence(tx, meta?.canvas_id ?? null);
+      await tx`
+        UPDATE canvas_nodes SET status = 'failed', updated_at = now()
+        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+      if (meta?.type === "report") {
+        await finalizeReportJob(tx, jobId, {
           failed: true,
           error: (meta.error as string) ?? "reaper",
         });
-      }).catch(() => {});
-    }
-    // 任意非 Report job 被 reaper 收口后统一推进：analysis_complete → Report，否则空闲唤醒 Hub。
-    if (meta?.canvas_id && meta.type !== "report") {
-      await sql.begin(async (txRaw) => {
-        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-        const tx = txRaw as unknown as typeof sql;
+      } else if (meta?.canvas_id && meta.type !== "report") {
         await advanceCanvasAfterTerminalJob(
           tx,
           {
@@ -89,9 +83,14 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
             type: meta.type,
             priority: meta.priority ?? 0,
           },
-          isTimeout ? "timeout" : isProvision || isStalled ? "failed" : "orphan",
+          terminalStatus,
         );
-      }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
+      }
+    }).catch((e) => console.error(`[reaper] terminal canvas advance failed:`, e));
+    if (meta?.type === "verify_finding") {
+      await recoverVerifyJobTerminal(jobId, terminalStatus, (meta.error as string) ?? null).catch((e) =>
+        console.error(`[reaper] verify recovery failed:`, e),
+      );
     }
 
   }

@@ -2723,7 +2723,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/canvases/{id}/convergence",
     summary: "读取画布收敛状态",
-    description: "返回 convergence、项目规则（minVerifySeverity / maxVerificationRounds）与 careSeverities（收效门要关心的严重度）。",
+    description: "返回 convergence、项目规则（minVerifySeverity / maxVerificationRounds / maxNoProgressRounds）与 careSeverities（收效门要关心的严重度）。",
     scope: "tasks:read",
     tags: ["Tasks"],
   },

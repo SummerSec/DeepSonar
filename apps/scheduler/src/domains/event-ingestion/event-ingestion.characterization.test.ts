@@ -47,4 +47,7 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   assert.match(sideEffectSource, /finalizeJob/);
   assert.doesNotMatch(sideEffectSource, /from ["'](?:\.\.\/)+core\.js["']/);
   assert.doesNotMatch(sideEffectSource, /import\(/);
+  assert.match(applicationSource, /MAX_INGEST_LOCK_ATTEMPTS = 3/);
+  assert.match(applicationSource, /isRetryableCanvasLockError\(error\) && attempt < MAX_INGEST_LOCK_ATTEMPTS - 1/);
+  assert.match(applicationSource, /code === "40P01" \|\| code === "55P03"/);
 });

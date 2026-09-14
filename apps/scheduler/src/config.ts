@@ -169,6 +169,11 @@ export const config = {
   rules: {
     /** 默认只自动验证高危；项目/全局 `minVerifySeverity` 可覆盖 */
     minVerifySeverity: str("MIN_VERIFY_SEVERITY", "high"),
+    /**
+     * wait_evidence 门禁结论不变的连续轮次上限（#519）。
+     * 默认 2；0 关闭该刹车。范围 0..5。
+     */
+    maxNoProgressRounds: boundedNonNegativeInt("DEEPSONAR_MAX_NO_PROGRESS_ROUNDS", 2, 5),
   },
 
   /** hub 循环（Cairn 式图语义）：角色 job 成功后触发 hub_reason 读图决策 */

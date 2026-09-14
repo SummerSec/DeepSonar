@@ -83,6 +83,16 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       });
     }
   }
+  if (Object.hasOwn(rules, "maxNoProgressRounds")) {
+    const value = rules.maxNoProgressRounds;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 5) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["maxNoProgressRounds"],
+        message: "maxNoProgressRounds 必须是 0-5 的整数（0 表示关闭无进展刹车）",
+      });
+    }
+  }
   if (Object.hasOwn(rules, "maxConcurrentJobs")) {
     const value = rules.maxConcurrentJobs;
     if (value !== null && (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000)) {

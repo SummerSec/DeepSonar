@@ -7,6 +7,7 @@ import {
   createJob,
   ensureCanvasForTask,
   fixedPriorityForJob,
+  lockCanvasForConvergence,
   priorityMatchesJob,
   rolesForProject,
   triggerHubFromHumanComment,
@@ -649,9 +650,13 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
     // 设备租约（#495）：取消即释放，不让设备被终态 Job 占着。
     await releaseDeviceLeasesForJobQuietly(id, "cancelled");
-    await sql`
-      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
-      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+    await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null);
+      await tx`
+        UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+        WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+    });
     await recoverCancelledDerivedJob(job, reason).catch((e) =>
       console.error(`[cancel] derived job recovery failed:`, e),
     );
@@ -676,6 +681,17 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const reason = body.reason?.trim() || "强制退出全部活动 Job";
     const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(canvasId, reason);
+    if (active.length > 0) {
+      await sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        await lockCanvasForConvergence(tx, canvasId);
+        for (const cancelledJob of active) {
+          await tx`
+            UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+            WHERE job_id = ${cancelledJob.id as string} AND node_type = ANY(${["job", "intent", "report"]})`;
+        }
+      });
+    }
     let cancelled = 0;
     for (const job of active) {
       const jobId = job.id as string;
@@ -686,9 +702,6 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       await revokeJobTokens(jobId, "cancelled").catch(() => {});
       await revokeJobCapabilityTokens(jobId, "cancelled").catch(() => {});
       await releaseDeviceLeasesForJobQuietly(jobId, "cancelled");
-      await sql`
-        UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
-        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
       await recoverCancelledDerivedJob(job, reason).catch(() => {});
     }
     await audit(req, {

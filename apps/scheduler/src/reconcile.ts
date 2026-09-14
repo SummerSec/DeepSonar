@@ -3,7 +3,7 @@ import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
-import { advanceCanvasAfterTerminalJob, recoverVerifyJobTerminal } from "./core.js";
+import { advanceCanvasAfterTerminalJob, lockCanvasForConvergence, recoverVerifyJobTerminal } from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
@@ -174,26 +174,26 @@ async function closeOrphanJob(
   options: { deferCanvasAdvance: boolean },
 ): Promise<void> {
   const jobId = String(job.id);
-  await sql`
-    UPDATE canvas_nodes SET status = 'failed', updated_at = now()
-    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+  await sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as typeof sql;
+    await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null);
+    await tx`
+      UPDATE canvas_nodes SET status = 'failed', updated_at = now()
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+    if (job.type === "report") {
+      await finalizeReportJob(tx, jobId, {
+        failed: true,
+        error: (job.error as string) ?? "orphan_reconcile",
+      });
+    } else if (job.canvas_id && job.type !== "report" && !options.deferCanvasAdvance) {
+      await advanceCanvasAfterTerminalJob(tx, job, "orphan");
+    }
+  }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));
   await revokeJobTokens(jobId, "orphan_reconcile").catch(() => {});
   await revokeJobCapabilityTokens(jobId, "orphan_reconcile").catch(() => {});
   if (job.type === "verify_finding") {
     await recoverVerifyJobTerminal(jobId, "orphan", (job.error as string) ?? null).catch((error) =>
       console.error(`[reconcile] verify recovery failed:`, error),
     );
-  } else if (job.type === "report") {
-    await sql.begin(async (tx) => {
-      await finalizeReportJob(tx as unknown as typeof sql, jobId, {
-        failed: true,
-        error: (job.error as string) ?? "orphan_reconcile",
-      });
-    }).catch((error) => console.error(`[reconcile] report recovery failed:`, error));
-  }
-  if (job.canvas_id && job.type !== "report" && !options.deferCanvasAdvance) {
-    await sql.begin(async (tx) => {
-      await advanceCanvasAfterTerminalJob(tx as unknown as typeof sql, job, "orphan");
-    }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));
   }
 }

@@ -194,8 +194,14 @@ export function validateEffectDescriptor(input: EffectDescriptor): Required<Pick
 }
 
 export function sanitizeError(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, ATTEMPT_MAX_ERROR_CHARS);
+  const raw = error instanceof Error ? error.message : String(error);
+  const text = raw.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
+  if (text) return text.slice(0, ATTEMPT_MAX_ERROR_CHARS);
+  if (error instanceof Error) {
+    const name = error.name.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
+    if (name) return name.slice(0, ATTEMPT_MAX_ERROR_CHARS);
+  }
+  return "unknown_error";
 }
 
 export function buildAttemptState(input: {

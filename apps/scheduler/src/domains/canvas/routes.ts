@@ -486,6 +486,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       convergence: parseCanvasConvergence(canvas.target_json),
       minVerifySeverity: rules.minVerifySeverity,
       maxVerificationRounds: rules.maxVerificationRounds,
+      maxNoProgressRounds: rules.maxNoProgressRounds,
       careSeverities: care,
     };
   });

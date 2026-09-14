@@ -12,6 +12,21 @@ test("Hub evidence wakeups and round budgets remain edge-triggered", () => {
   assert.equal(shouldWakeEvidenceHub(null, "evidence-v1"), true);
   assert.equal(shouldWakeEvidenceHub("evidence-v1", "evidence-v1"), false);
   assert.equal(shouldWakeEvidenceHub("evidence-v1", "evidence-v2"), true);
+  assert.equal(
+    shouldWakeEvidenceHub("evidence-v1", "evidence-v2", {
+      lastGateFingerprint: "aaaa",
+      gateFingerprint: "aaaa",
+    }),
+    false,
+    "unchanged gate fingerprint is not progress even when the evidence signature grows",
+  );
+  assert.equal(
+    shouldWakeEvidenceHub("evidence-v1", "evidence-v2", {
+      lastGateFingerprint: "aaaa",
+      gateFingerprint: "bbbb",
+    }),
+    true,
+  );
   assert.equal(isHubRoundWithinBudget(0, 1), true);
   assert.equal(isHubRoundWithinBudget(1, 1), false);
   assert.equal(isHubRoundWithinBudget(5, 3), false);
@@ -77,5 +92,8 @@ test("core composition root wires Hub orchestration without owning eligibility S
   assert.doesNotMatch(application, /assertFrozenRuntimeImageLocal|runtimeImageNotLocalCanvasBlock|RuntimeImageNotLocalError/);
   assert.match(application, /isHubRoundWithinBudget\(Number\(count\), rules\.maxHubRounds\)/);
   assert.match(application, /dispatched_prompt: extractDispatchPrompt\("hub_reason"/);
-  assert.match(application, /requirements_json = requirements_json - 'hub_evidence_signature'/);
+  assert.match(
+    application,
+    /requirements_json = \(requirements_json - 'hub_evidence_signature'\) - 'hub_gate_fingerprint'/,
+  );
 });

@@ -201,6 +201,9 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   assert.equal(global.maxGlobalJobs, config.limits.maxGlobalJobs);
   assert.equal(global.maxJobsPerProject, config.limits.maxJobsPerProject);
   assert.equal(global.maxConcurrentProvisioning, config.limits.maxConcurrentProvisioning);
+  assert.equal(global.maxNoProgressRounds, 2);
+  const noProgressOff = await globalRules(fakeDb([{ rules_json: { maxNoProgressRounds: 0 } }]));
+  assert.equal(noProgressOff.maxNoProgressRounds, 0);
   assert.equal(asConcurrencyLimit("not-a-number", 6), 6);
 
   const project = await rulesForProject(
@@ -238,6 +241,10 @@ test("concurrency caps reject boolean/object/null and only accept JSON numbers",
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: -1 }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentJobs: 1001 }));
   assert.throws(() => parseConcurrencyRulesPatch({ stallSec: -1 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxNoProgressRounds: 9 }));
+  assert.throws(() => parseConcurrencyRulesPatch({ maxNoProgressRounds: -1 }));
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxNoProgressRounds: 0 }), { maxNoProgressRounds: 0 });
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxNoProgressRounds: 2 }), { maxNoProgressRounds: 2 });
   assert.throws(() => parseConcurrencyRulesPatch({ jobTokenMaxRequests: 1_000_001 }));
   assert.throws(() => parseConcurrencyRulesPatch({ provisionTimeoutSec: 10 }));
   assert.deepEqual(parseConcurrencyRulesPatch({ stallSec: 0, jobTokenMaxRequests: 0, provisionTimeoutSec: 400 }), {

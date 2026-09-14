@@ -1,6 +1,23 @@
-/** Evidence-wait Hub wakeups are edge-triggered by the evidence snapshot. */
-export function shouldWakeEvidenceHub(lastSignature: string | null | undefined, currentSignature: string): boolean {
-  return currentSignature.trim().length > 0 && lastSignature !== currentSignature;
+export type EvidenceHubWakeOpts = {
+  lastGateFingerprint?: string | null;
+  gateFingerprint?: string | null;
+};
+
+/**
+ * Evidence-wait Hub wakeups are edge-triggered by the evidence snapshot (#519).
+ * Signature growth alone is not progress: if a gate fingerprint is present and
+ * unchanged, Hub must not wake on new review/test node ids.
+ */
+export function shouldWakeEvidenceHub(
+  lastSignature: string | null | undefined,
+  currentSignature: string,
+  opts?: EvidenceHubWakeOpts,
+): boolean {
+  if (currentSignature.trim().length === 0 || lastSignature === currentSignature) return false;
+  const lastFp = String(opts?.lastGateFingerprint ?? "").trim();
+  const curFp = String(opts?.gateFingerprint ?? "").trim();
+  if (lastFp && curFp && lastFp === curFp) return false;
+  return true;
 }
 
 /** A Hub terminal row is the only input that consumes the decision budget. */
