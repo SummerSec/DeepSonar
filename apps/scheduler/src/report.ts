@@ -21,7 +21,15 @@ import { runFindingResearchBestEffort } from "./domains/finding-research/index.j
 import { careSeverityMeta, evaluateAnalysisCompleteGate } from "./verify.js";
 import type { FindingStatusProblem } from "./verify.js";
 import { planTaskReportVersion } from "./task-report-version.js";
+import {
+  planTaskReportFailureRecovery,
+  readAutomaticReportRetryCount,
+  reportFailureMessage,
+  ROOT_STATUS_REPORT_FAILED,
+  shouldKeepRootReporting,
+} from "./report-failure-recovery.js";
 import { frozenTaskSeeds } from "./task-compose.js";
+import { inc } from "./metrics.js";
 import {
   checkReportNumericFidelity,
   declaredQuantitiesFromPayloads,
@@ -1301,6 +1309,111 @@ async function finalizeFindingReportJob(
 }
 
 /**
+ * Task Report Job 终态失败：先标 task_reports / 报告节点，再按预算自动再派或把 Root 收到 report_failed。
+ * 不看 jobs.error 文本；空 error 与 40P01 走同一条路径。
+ */
+async function settleFailedTaskReport(
+  tx: Tx,
+  canvasId: string,
+  jobId: string,
+  error: string | null | undefined,
+): Promise<void> {
+  const message = reportFailureMessage(error);
+  const [report] = await tx`
+    SELECT id, status, summary_json FROM task_reports
+    WHERE canvas_id = ${canvasId} AND report_job_id = ${jobId}
+    FOR UPDATE`;
+  await tx`
+    UPDATE canvas_nodes SET status = 'failed', updated_at = now()
+    WHERE job_id = ${jobId} AND node_type = 'report'`;
+  // 自动再派会把 report_job_id 换成新 Job；旧 Job 的迟到 finalize 不得再动 Root。
+  if (!report) {
+    const [latest] = await tx`
+      SELECT id, report_job_id FROM task_reports
+      WHERE canvas_id = ${canvasId}
+      ORDER BY version DESC LIMIT 1 FOR UPDATE`;
+    if (latest && String(latest.report_job_id ?? "") !== jobId) return;
+    await tx`
+      UPDATE canvas_nodes SET
+        status = ${ROOT_STATUS_REPORT_FAILED},
+        body_json = body_json || ${tx.json({
+          report_failed: {
+            at: new Date().toISOString(),
+            job_id: jobId,
+            error: message,
+            automatic_retry_count: 0,
+          },
+        })},
+        updated_at = now()
+      WHERE canvas_id = ${canvasId} AND node_type = 'root' AND status IN ('reporting', 'analysis_complete')`;
+    inc("deepsonar_report_root_settled_total");
+    return;
+  }
+
+  const previousSummary =
+    report.summary_json && typeof report.summary_json === "object" && !Array.isArray(report.summary_json)
+      ? { ...(report.summary_json as Record<string, unknown>) }
+      : {};
+  const consumed = readAutomaticReportRetryCount(previousSummary);
+  const plan = planTaskReportFailureRecovery(consumed);
+  const nextSummary = {
+    ...previousSummary,
+    automatic_retry_count: plan.nextRetryCount,
+    last_failure_at: new Date().toISOString(),
+  };
+
+  await tx`
+    UPDATE task_reports SET
+      status = 'failed',
+      error = ${message},
+      summary_json = ${tx.json(nextSummary as never)},
+      updated_at = now()
+    WHERE id = ${report.id as string}`;
+
+  if (plan.retry) {
+    await tx`
+      UPDATE canvas_nodes SET status = 'analysis_complete', updated_at = now()
+      WHERE canvas_id = ${canvasId} AND node_type = 'root' AND status IN ('reporting', ${ROOT_STATUS_REPORT_FAILED})`;
+    let dispatched: { dispatched: boolean; bounced?: boolean; reason?: string };
+    try {
+      dispatched = await maybeDispatchReport(tx, canvasId, { excludeJobId: jobId });
+    } catch (error) {
+      console.warn(`[report] canvas ${canvasId} 报告自动再派异常，收口 Root:`, error);
+      dispatched = { dispatched: false, reason: "dispatch_threw" };
+    }
+    if (shouldKeepRootReporting(dispatched)) {
+      if (!dispatched.dispatched && !dispatched.bounced) {
+        await tx`
+          UPDATE canvas_nodes SET status = 'reporting', updated_at = now()
+          WHERE canvas_id = ${canvasId} AND node_type = 'root' AND status = 'analysis_complete'`;
+      }
+      inc("deepsonar_report_auto_retry_total");
+      console.info(`[report] canvas ${canvasId} 报告失败后自动再派 reason=${dispatched.reason ?? "dispatched"}`);
+      return;
+    }
+    console.warn(
+      `[report] canvas ${canvasId} 报告自动再派未入队 reason=${dispatched.reason ?? "unknown"}，收口 Root`,
+    );
+  }
+
+  await tx`
+    UPDATE canvas_nodes SET
+      status = ${ROOT_STATUS_REPORT_FAILED},
+      body_json = body_json || ${tx.json({
+        report_failed: {
+          at: new Date().toISOString(),
+          job_id: jobId,
+          error: message,
+          automatic_retry_count: plan.nextRetryCount,
+        },
+      })},
+      updated_at = now()
+    WHERE canvas_id = ${canvasId} AND node_type = 'root' AND status IN ('reporting', 'analysis_complete')`;
+  inc("deepsonar_report_root_settled_total");
+  console.warn(`[report] canvas ${canvasId} 报告失败已收口 Root → ${ROOT_STATUS_REPORT_FAILED}`);
+}
+
+/**
  * Report Job 成功：写产物、校验、Root → succeeded。
  * fake/real 均可调用；markdown 可来自 Agent summary 或确定性模板。
  */
@@ -1324,13 +1437,7 @@ export async function finalizeReportJob(
   }
 
   if (opts.failed) {
-    await tx`
-      UPDATE task_reports SET status = 'failed', error = ${opts.error ?? "report_failed"}, updated_at = now()
-      WHERE report_job_id = ${jobId}`;
-    await tx`
-      UPDATE canvas_nodes SET status = 'failed', updated_at = now()
-      WHERE job_id = ${jobId} AND node_type = 'report'`;
-    // Root 保持 reporting
+    await settleFailedTaskReport(tx, canvasId, jobId, opts.error);
     return;
   }
 
@@ -1373,12 +1480,7 @@ export async function finalizeReportJob(
   const numeric = resolved.numeric;
   if (!numeric.ok) {
     const error = numericInconsistentError(numeric);
-    await tx`
-      UPDATE task_reports SET status = 'failed', error = ${error}, updated_at = now()
-      WHERE report_job_id = ${jobId}`;
-    await tx`
-      UPDATE canvas_nodes SET status = 'failed', updated_at = now()
-      WHERE job_id = ${jobId} AND node_type = 'report'`;
+    await settleFailedTaskReport(tx, canvasId, jobId, error);
     console.warn(`[report] job ${jobId} ${error}`);
     return;
   }
@@ -1457,7 +1559,8 @@ export type TaskReportAvailabilityReason =
   | "active_work"
   | "no_role_work"
   | "findings_not_converged"
-  | "report_not_dispatched";
+  | "report_not_dispatched"
+  | "report_failed";
 
 export interface TaskReportBlockingFinding {
   finding_id: string;
@@ -1490,7 +1593,9 @@ export function classifyTaskReportAvailability(input: {
     "analysis_complete",
     "reporting",
     "succeeded",
+    ROOT_STATUS_REPORT_FAILED,
   ].includes(input.rootStatus)) reason = "root_not_ready";
+  else if (input.rootStatus === ROOT_STATUS_REPORT_FAILED) reason = "report_failed";
   else if (input.blockers.includes("active_work")) reason = "active_work";
   else if (input.blockers.includes("no_role_work")) reason = "no_role_work";
   else if (input.blockers.length > 0) reason = "findings_not_converged";
@@ -1607,7 +1712,7 @@ export async function retryReport(canvasId: string): Promise<{ ok: boolean; reas
     if (root.status === "succeeded") {
       return { ok: false, reason: "root_already_succeeded" };
     }
-    if (!["analysis_complete", "reporting"].includes(root.status as string)) {
+    if (!["analysis_complete", "reporting", ROOT_STATUS_REPORT_FAILED].includes(root.status as string)) {
       return { ok: false, reason: `root_status:${root.status}` };
     }
 
@@ -1636,11 +1741,15 @@ export async function retryReport(canvasId: string): Promise<{ ok: boolean; reas
     }
 
     await tx`
-      UPDATE task_reports SET status = 'pending', error = null, updated_at = now()
+      UPDATE task_reports SET
+        status = 'pending',
+        error = null,
+        summary_json = COALESCE(summary_json, '{}'::jsonb) || ${tx.json({ automatic_retry_count: 0 })},
+        updated_at = now()
       WHERE id = ${report.id as string}`;
 
-    // Root 保持 analysis_complete，便于 maybeDispatchReport 入队
-    if (root.status === "reporting") {
+    // Root 回到 analysis_complete，便于 maybeDispatchReport 入队（含 report_failed 收口后的人工重试）
+    if (root.status === "reporting" || root.status === ROOT_STATUS_REPORT_FAILED) {
       await tx`
         UPDATE canvas_nodes SET status = 'analysis_complete', updated_at = now()
         WHERE canvas_id = ${canvasId} AND node_type = 'root'`;

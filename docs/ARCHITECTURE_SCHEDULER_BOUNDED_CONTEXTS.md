@@ -21,7 +21,7 @@ reaching through its implementation module.
 | `hub-orchestration` | Hub eligibility, intent validation, round budgets, idle/complete progression. Evidence-wait wakeup requires both a new evidence signature and a changed gate fingerprint. | Direct Job status writes; it requests a lifecycle transition. |
 | `finding-verification` | Verification rounds, evidence gates, rework/needs-human/confirmed decisions, and wait_evidence no-progress settlement (`gateFingerprint`). Implementation lives in `verify.ts`; `routes.ts` owns read-only Finding and verification projections. | Dispatcher claims, Report state, and research ranking. |
 | `finding-research` | Bounded-batch semantic clustering, canonical anchors, relative priority scores, and research-run audit (#448). Implementation lives in `domains/finding-research`. | Finding `verify_status` / severity / report gates. Research persistence failures stay in a savepoint and must not abort Finding/report writes. |
-| `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, report failure recovery, and report/download route registration. Implementation lives in `report.ts`. | Agent runtime snapshots or generic Job transition rules. |
+| `report-convergence` | `analysis_complete`/`reporting` gates, report input, SARIF output, bounded report-job retry then `report_failed` root settlement, and report/download route registration. Implementation lives in `report.ts`. | Agent runtime snapshots or generic Job transition rules. |
 | `role-runtime-snapshot` | RoleConfig, credential/CLI compatibility, skills, and immutable runtime-image snapshots. | Canvas/Finding convergence and Job terminal decisions. |
 
 The route layer is an adapter over these application interfaces. Business

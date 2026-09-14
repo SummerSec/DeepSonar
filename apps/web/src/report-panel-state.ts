@@ -39,6 +39,7 @@ export function taskReportAvailabilityLabel(reason: TaskReportAvailability["reas
     case "no_role_work": return "尚未产出普通角色结果";
     case "findings_not_converged": return "配置阈值范围内仍有 Finding 未收敛";
     case "report_not_dispatched": return "完成门已通过，报告任务尚未入队";
+    case "report_failed": return "报告生成失败，可重试";
   }
 }
 

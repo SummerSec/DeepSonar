@@ -450,6 +450,8 @@ export function createHubOrchestrationApplication(
     const [root] = await tx`
       SELECT status FROM canvas_nodes
       WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    // report_failed 是报告终态收口，禁止空闲 Hub 再拉一轮。
+    if (root?.status === "report_failed") return "noop";
     if (root?.status === "analysis_complete" || root?.status === "reporting") {
       await ports.maybeDispatchReport(tx, canvasId);
       return "report";

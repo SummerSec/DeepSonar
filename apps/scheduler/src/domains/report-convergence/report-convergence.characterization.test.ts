@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { buildSarifFromConfirmed, classifyTaskReportAvailability, type ReportInput } from "../../report.js";
 
@@ -49,6 +49,15 @@ test("classifyTaskReportAvailability maps gate blockers to panel reasons", () =>
       ],
     }).reason,
     "findings_not_converged",
+  );
+  assert.equal(
+    classifyTaskReportAvailability({
+      rootStatus: "report_failed",
+      minVerifySeverity: "high",
+      blockers: [],
+      problems: [],
+    }).reason,
+    "report_failed",
   );
 });
 
@@ -108,4 +117,11 @@ test("buildSarifFromConfirmed emits a SARIF 2.1.0 run for confirmed findings", (
 test("report-convergence has one implementation home and no forwarding adapter", () => {
   assert.equal(existsSync(new URL("./application.ts", import.meta.url)), false);
   assert.equal(existsSync(new URL("./ports.ts", import.meta.url)), false);
+});
+
+test("failed task reports settle Root instead of leaving reporting forever", () => {
+  const source = readFileSync(new URL("../../report.ts", import.meta.url), "utf8");
+  assert.match(source, /settleFailedTaskReport/);
+  assert.match(source, /ROOT_STATUS_REPORT_FAILED/);
+  assert.doesNotMatch(source, /Root 保持 reporting/);
 });

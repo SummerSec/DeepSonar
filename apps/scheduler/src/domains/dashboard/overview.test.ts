@@ -75,6 +75,12 @@ test("task classification follows active_count and does not treat last job succe
     root_status: "failed",
   }), NOW), "failed");
   assert.equal(classifyDashboardTask(task({
+    active_count: 0,
+    ended_at: "2026-09-14T10:09:30.000Z",
+    root_status: "report_failed",
+    report_status: "failed",
+  }), NOW), "failed");
+  assert.equal(classifyDashboardTask(task({
     status: "archived",
     active_count: 1,
   }), NOW), "archived");

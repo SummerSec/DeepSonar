@@ -1401,7 +1401,7 @@ export async function finalizeJob(
     }
   }
 
-  // Report Job：成功写产物并把 Root 置 succeeded；失败保持 reporting
+  // Report Job：成功写产物并把 Root 置 succeeded；失败走有界再派或 Root report_failed
   if (job?.type === "report") {
     if (status === "succeeded") {
       await reportConvergence.finalizeReportJob(tx, jobId, {

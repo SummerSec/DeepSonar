@@ -96,4 +96,5 @@ test("core composition root wires Hub orchestration without owning eligibility S
     application,
     /requirements_json = \(requirements_json - 'hub_evidence_signature'\) - 'hub_gate_fingerprint'/,
   );
+  assert.match(application, /root\?\.status === "report_failed"/);
 });

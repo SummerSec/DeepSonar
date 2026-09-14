@@ -1500,6 +1500,7 @@ const OPS: Op[] = [
               "no_role_work",
               "findings_not_converged",
               "report_not_dispatched",
+              "report_failed",
             ],
           },
           root_status: { type: "string", nullable: true },
