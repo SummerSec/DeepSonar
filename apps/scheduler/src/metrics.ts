@@ -79,6 +79,7 @@ const HELP: Record<string, string> = {
   deepsonar_sandbox_provision_seconds_count: "Count of successful sandbox provisions by provider",
   deepsonar_sandbox_provision_failed_total: "Sandbox provision failures by provider",
   deepsonar_sandbox_provision_retry_total: "Automatic sandbox provision retries",
+  deepsonar_pi_stream_truncation_retry_total: "Automatic Job retries after Pi Anthropic stream truncation",
   deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
   deepsonar_shared_assets_cleanup_failed_total: "共享资产卷清理失败次数",
   deepsonar_desired_state_cleanup_failures_total: "Desired-state cleanup failures by managed resource type",

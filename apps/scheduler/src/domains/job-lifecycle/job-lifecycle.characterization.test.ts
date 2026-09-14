@@ -75,6 +75,10 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
 
   assert.equal(canTransition("claimed", "pending"), false);
   assert.equal(canTransition("provisioning", "pending"), false);
+  assert.equal(canTransition("running", "pending"), false);
+  assert.match(lifecycleSource, /retryTruncatedExecution/);
+  assert.match(lifecycleSource, /status = 'running' AND started_at IS NOT NULL/);
+  assert.match(lifecycleSource, /reason: "pi_stream_truncated"/);
   assert.match(lifecycleSource, /reconcileProvisioning/);
   assert.match(lifecycleSource, /WHERE\s+status\s+IN\s*\('claimed','provisioning'\)/);
   assert.match(lifecycleSource, /claimed_at\s*=\s*NULL/);
@@ -85,7 +89,11 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.doesNotMatch(dispatcherSource, /UPDATE\s+jobs\s+SET\s+status/);
   assert.match(dispatcherSource, /planAutomaticProvisionRetry/);
   assert.match(dispatcherSource, /countConsumedProvisionRetries/);
+  assert.match(dispatcherSource, /planAutomaticPiStreamTruncationRetry/);
+  assert.match(dispatcherSource, /countConsumedPiStreamTruncationRetries/);
+  assert.match(dispatcherSource, /retryTruncatedExecution/);
   assert.doesNotMatch(dispatcherSource, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
+  assert.doesNotMatch(dispatcherSource, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PI_STREAM_TRUNCATION_RETRIES/);
   assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, canvasId\)/);
   assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, locator\?\.canvas_id \?\? null\)/);
   assert.match(reaperSource, /lockCanvasForConvergence\(tx, meta\?\.canvas_id \?\? null\)/);

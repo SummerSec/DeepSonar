@@ -72,6 +72,7 @@ export function createJobLifecycleApplication(
     },
     claimPendingJob: requireOperation("claimPendingJob"),
     retryProvisioning: requireOperation("retryProvisioning"),
+    retryTruncatedExecution: requireOperation("retryTruncatedExecution"),
     failExecution: requireOperation("failExecution"),
     reapExecutionTimeout: requireOperation("reapExecutionTimeout"),
     reapProvisionTimeout: requireOperation("reapProvisionTimeout"),
@@ -137,6 +138,32 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         if (!row) return null;
         await settleAttemptTerminal(tx, jobId, "failed", {
           reason: "provision_retry",
+          retry_scheduled: true,
+        }, error);
+        await tx`
+          UPDATE canvas_nodes SET status = 'pending', updated_at = now()
+          WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
+            AND status IN ('running', 'failed')`;
+        await createAttempt(tx, jobId, snapshotIdentity, resourceLabels);
+        return row as JobLifecycleRow;
+      });
+    },
+
+    /**
+     * Requeue a transient post-provision stream truncation with a fresh Attempt.
+     * Must not reuse retryProvisioning: that CAS requires started_at IS NULL.
+     */
+    async retryTruncatedExecution(jobId, error, snapshotIdentity, resourceLabels) {
+      return atomically(async (tx) => {
+        const [row] = await tx`
+          UPDATE jobs
+          SET status = 'pending', claimed_at = NULL, started_at = NULL,
+              finished_at = NULL, lease_expires_at = NULL, sandbox_id = NULL, error = NULL
+          WHERE id = ${jobId} AND status = 'running' AND started_at IS NOT NULL
+          RETURNING id, status`;
+        if (!row) return null;
+        await settleAttemptTerminal(tx, jobId, "failed", {
+          reason: "pi_stream_truncated",
           retry_scheduled: true,
         }, error);
         await tx`

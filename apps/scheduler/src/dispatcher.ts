@@ -69,7 +69,11 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   if (error instanceof DeviceNotAvailableError) {
     return { reason: "device_not_available", message: `device_not_available: ${error.message}` };
   }
-  return { reason: "exception", message: formatDispatcherFailureMessage(error) };
+  const message = formatDispatcherFailureMessage(error);
+  if (isPiStreamTruncationMessage(message)) {
+    return { reason: PI_STREAM_TRUNCATED_REASON, message };
+  }
+  return { reason: "exception", message };
 }
 
 /** Keep provider error details that are otherwise hidden behind SDK wrappers. */
@@ -105,6 +109,11 @@ export function isRetryableProvisionFailure(error: unknown): boolean {
   const text = formatDispatcherFailureMessage(error);
   return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response/i.test(text);
 }
+
+/** Pi Anthropic transport truncation after provision; schema/auth stay fail closed. */
+export function isRetryablePiStreamTruncation(error: unknown): boolean {
+  return classifyDispatcherFailure(error).reason === PI_STREAM_TRUNCATED_REASON;
+}
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot, evaluateConfirmGate, resolveFindingSubjectRevision } from "./verify.js";
 import {
@@ -117,6 +126,12 @@ import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
 import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
+import {
+  PI_STREAM_TRUNCATED_REASON,
+  countConsumedPiStreamTruncationRetries,
+  isPiStreamTruncationMessage,
+  planAutomaticPiStreamTruncationRetry,
+} from "./pi-stream-truncation.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -824,6 +839,34 @@ async function retryProvisioningJob(
   return Boolean(retried);
 }
 
+async function retryTruncatedExecutionJob(
+  jobId: string,
+  attempt: Record<string, unknown>,
+  errorMessage: string,
+): Promise<boolean> {
+  const retried = await sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as typeof sql;
+    const [locator] = await tx<{ canvas_id: string | null }[]>`
+      SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+    await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
+    const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
+      SELECT status, outcome_json, state_json
+      FROM job_attempts
+      WHERE job_id = ${jobId} AND status <> 'active'`;
+    const plan = planAutomaticPiStreamTruncationRetry(countConsumedPiStreamTruncationRetries(previous));
+    if (!plan.retry) return false;
+    const txLifecycle = createSqlJobLifecycleApplication(tx);
+    return txLifecycle.retryTruncatedExecution(
+      jobId,
+      errorMessage,
+      (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
+      (attempt.resource_labels_json ?? {}) as Record<string, string>,
+    );
+  });
+  if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'pi_stream_truncation_retry')`;
+  return Boolean(retried);
+}
+
 async function runJob(jobId: string) {
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
@@ -1076,6 +1119,16 @@ async function runJob(jobId: string) {
       });
       if (retried) {
         inc("deepsonar_sandbox_provision_retry_total");
+        return;
+      }
+    }
+    if (handle && attemptId && activeAttempt && isRetryablePiStreamTruncation(e)) {
+      const retried = await retryTruncatedExecutionJob(jobId, activeAttempt, msg).catch((retryError) => {
+        console.error(`[dispatcher] pi stream truncation retry scheduling failed for ${jobId}:`, retryError);
+        return false;
+      });
+      if (retried) {
+        inc("deepsonar_pi_stream_truncation_retry_total");
         return;
       }
     }

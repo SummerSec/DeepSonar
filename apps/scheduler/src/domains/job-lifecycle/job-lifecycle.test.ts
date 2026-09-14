@@ -134,6 +134,10 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
       calls.push(`claim:${id}`);
       return { id, status: "claimed" };
     },
+    retryTruncatedExecution: async (id, error) => {
+      calls.push(`truncate:${id}:${error}`);
+      return { id, status: "pending", error };
+    },
     failExecution: async (id, error) => {
       calls.push(`fail:${id}:${error}`);
       return { id, status: "failed", error };
@@ -177,6 +181,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
   });
 
   assert.equal((await app.claimPendingJob("claim"))?.status, "claimed");
+  assert.equal((await app.retryTruncatedExecution("truncate", "stream cut", {}, {}))?.status, "pending");
   assert.equal((await app.failExecution("fail", "boom"))?.status, "failed");
   assert.deepEqual(await app.reapExecutionTimeout(), [{ id: "timeout" }]);
   assert.deepEqual(await app.reapProvisionTimeout(7), [{ id: "provision" }]);
@@ -189,6 +194,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
   assert.deepEqual(await app.cancelJobsForRuntimeImageVersion("image", "revoked"), [{ id: "image-job" }]);
   assert.deepEqual(calls, [
     "claim:claim",
+    "truncate:truncate:stream cut",
     "fail:fail:boom",
     "reap-timeout",
     "reap-provision:7",
