@@ -83,6 +83,9 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.doesNotMatch(reconcileSource, /UPDATE\s+jobs\s+SET\s+status/);
   assert.match(dispatcherSource, /createSqlJobLifecycleApplication\(\)/);
   assert.doesNotMatch(dispatcherSource, /UPDATE\s+jobs\s+SET\s+status/);
+  assert.match(dispatcherSource, /planAutomaticProvisionRetry/);
+  assert.match(dispatcherSource, /countConsumedProvisionRetries/);
+  assert.doesNotMatch(dispatcherSource, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
   assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, canvasId\)/);
   assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, locator\?\.canvas_id \?\? null\)/);
   assert.match(reaperSource, /lockCanvasForConvergence\(tx, meta\?\.canvas_id \?\? null\)/);

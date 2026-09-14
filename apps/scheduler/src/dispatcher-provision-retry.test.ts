@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { classifyDispatcherFailure, formatDispatcherFailureMessage, isRetryableProvisionFailure } from "./dispatcher.js";
+import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
 
 test("OpenSandbox container startup errors retain nested provider details", () => {
   const error = Object.assign(new Error("Egress sidecar container failed to start."), {
@@ -52,4 +54,20 @@ test("empty Error keeps nested provider code when message is blank", () => {
   const message = formatDispatcherFailureMessage(error);
   assert.match(message, /EPIPE/);
   assert.notEqual(message.trim(), "");
+});
+
+test("sidecar retry after a non-provision attempt still has budget", () => {
+  const consumed = countConsumedProvisionRetries([
+    { status: "failed", outcome_json: { reason: "exception" } },
+  ]);
+  assert.equal(consumed, 0);
+  assert.equal(planAutomaticProvisionRetry(consumed).retry, true);
+});
+
+test("dispatcher provision retry budget is counted attempts, not attempt_no", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(source, /planAutomaticProvisionRetry\(countConsumedProvisionRetries\(previous\)\)/);
+  assert.match(source, /FROM job_attempts/);
+  assert.doesNotMatch(source, /attempt_no\s*>\s*MAX_AUTOMATIC_PROVISION_RETRIES/);
+  assert.doesNotMatch(source, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
 });

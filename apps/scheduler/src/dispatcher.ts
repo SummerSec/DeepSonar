@@ -116,6 +116,7 @@ import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
+import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -130,7 +131,6 @@ export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index
 
 /** 在执行的 job（优雅退出 drain 用，§12.2） */
 const inFlight = new Set<Promise<void>>();
-const MAX_AUTOMATIC_PROVISION_RETRIES = 1;
 
 export type DispatchCandidate = {
   id?: unknown;
@@ -801,13 +801,17 @@ async function retryProvisioningJob(
   attempt: Record<string, unknown>,
   errorMessage: string,
 ): Promise<boolean> {
-  const attemptNo = Number(attempt.attempt_no ?? 0);
-  if (!Number.isSafeInteger(attemptNo) || attemptNo < 1 || attemptNo > MAX_AUTOMATIC_PROVISION_RETRIES) return false;
   const retried = await sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as typeof sql;
     const [locator] = await tx<{ canvas_id: string | null }[]>`
       SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
     await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
+    const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
+      SELECT status, outcome_json, state_json
+      FROM job_attempts
+      WHERE job_id = ${jobId} AND status <> 'active'`;
+    const plan = planAutomaticProvisionRetry(countConsumedProvisionRetries(previous));
+    if (!plan.retry) return false;
     const txLifecycle = createSqlJobLifecycleApplication(tx);
     return txLifecycle.retryProvisioning(
       jobId,
@@ -1065,8 +1069,7 @@ async function runJob(jobId: string) {
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
     const msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
-    if (provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)
-      && Number(activeAttempt.attempt_no ?? 0) <= MAX_AUTOMATIC_PROVISION_RETRIES) {
+    if (provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;
