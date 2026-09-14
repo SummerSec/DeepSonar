@@ -819,12 +819,12 @@ export function createEventIngestionSideEffectApplication(
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
       await tx`
         UPDATE jobs
-        SET heartbeat_at = now(),
-            lease_expires_at = CASE
-              WHEN status = 'running' THEN now() + (${config.timeouts.leaseTtlSec}::int * interval '1 second')
-              ELSE lease_expires_at
-            END
+        SET heartbeat_at = now()
         WHERE id = ${jobId}`;
+      await tx`
+        UPDATE jobs
+        SET lease_expires_at = now() + (${config.timeouts.leaseTtlSec}::int * interval '1 second')
+        WHERE id = ${jobId} AND status = 'running'`;
       return;
     }
 
