@@ -36,6 +36,7 @@ import {
 } from "./domains/event-ingestion/index.js";
 import {
   createHubOrchestrationApplication,
+  parseHubMaxRounds,
   type HubHumanCommentInput,
   type HubHumanCommentResult,
   type HubJobRecord,
@@ -628,7 +629,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
       RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.max,
     ),
     hubEnabled: (raw.hubEnabled as boolean) ?? base.hubEnabled,
-    maxHubRounds: (raw.maxHubRounds as number) ?? base.maxHubRounds,
+    maxHubRounds: parseHubMaxRounds(raw.maxHubRounds) ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
     maxGlobalJobs,

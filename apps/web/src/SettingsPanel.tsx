@@ -969,7 +969,11 @@ export function SettingsPanel({
                 <span className="text-[14px] text-zinc-200">启用 hub 自驱</span>
               </label>
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {numField("maxHubRounds", "hub 轮次上限")}
+                {numField(
+                  "maxHubRounds",
+                  "hub 轮次上限",
+                  "0 表示不限制。正整数才是防失控护栏，不能代替完成门 / 无进展刹车。",
+                )}
                 {numField("maxIntentsPerDecision", "单次派发意图上限")}
                 {numField(
                   "maxFollowupsPerJob",

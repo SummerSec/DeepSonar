@@ -77,6 +77,13 @@ test("运行时护栏 PATCH 拒绝非法值，项目不能写 provisionTimeoutSe
     payload: { rules: { maxNoProgressRounds: 9 } },
   });
   assert.equal(noProgress.statusCode, 400);
+
+  const hubRounds = await app.inject({
+    method: "PATCH",
+    url: "/global-settings",
+    payload: { rules: { maxHubRounds: -1 } },
+  });
+  assert.equal(hubRounds.statusCode, 400);
   await app.close();
 });
 

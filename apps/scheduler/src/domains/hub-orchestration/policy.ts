@@ -20,8 +20,55 @@ export function shouldWakeEvidenceHub(
   return true;
 }
 
+/**
+ * Hub round budget (#521).
+ * `0` means unlimited (no round-count stop). Positive integers are an optional
+ * runaway guardrail, not a normal completion criterion.
+ */
+export const UNLIMITED_HUB_ROUNDS = 0;
+const MAX_FINITE_HUB_ROUNDS = 10_000;
+
+export function isUnlimitedHubRounds(maxHubRounds: number): boolean {
+  return maxHubRounds === UNLIMITED_HUB_ROUNDS;
+}
+
+export function hubRoundLimitLabel(maxHubRounds: number): string {
+  return isUnlimitedHubRounds(maxHubRounds) ? "unlimited" : String(maxHubRounds);
+}
+
+/**
+ * Parse env / persisted / PATCH values.
+ * Accepts `unlimited` (any case) and `0` as unlimited; positive safe integers
+ * as a finite cap. Invalid values return null so callers can fail closed or
+ * keep the previous layer instead of silently substituting 20.
+ */
+export function parseHubMaxRounds(raw: unknown): number | null {
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) return null;
+    if (/^unlimited$/i.test(trimmed)) return UNLIMITED_HUB_ROUNDS;
+    raw = trimmed;
+  }
+  if (typeof raw === "boolean" || typeof raw === "object") return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0 || n > MAX_FINITE_HUB_ROUNDS) return null;
+  return n;
+}
+
+export function parseHubMaxRoundsEnv(raw: string | undefined, fallback: number): {
+  value: number;
+  invalid: boolean;
+} {
+  if (raw === undefined) return { value: fallback, invalid: false };
+  const parsed = parseHubMaxRounds(raw);
+  if (parsed == null) return { value: fallback, invalid: true };
+  return { value: parsed, invalid: false };
+}
+
 /** A Hub terminal row is the only input that consumes the decision budget. */
 export function isHubRoundWithinBudget(succeededRounds: number, maxHubRounds: number): boolean {
+  if (isUnlimitedHubRounds(maxHubRounds)) return true;
   return succeededRounds < maxHubRounds;
 }
 
