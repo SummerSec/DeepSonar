@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-15
+
+### 变更
+
+- Hub 轮次预算默认改为 unlimited（#521）：未设置、`0` 或 `unlimited` 不再按轮次停（内部仍用 `0` 表示无限）；正整数才是可选 runaway 护栏，非法值不再静默换成 20。预算耗尽 reason 改为 `budget_exhausted:*`，与完成门、验证分类、`no_progress:*`、fact-first 常规终止可区分。Root 写入 `hub_rounds_used` / `hub_round_limit` / `blockers`，指标 `deepsonar_hub_budget_exhausted_total{limit=...}`。Settings PATCH 接受 `0` / `unlimited` / 1..10000。已有部署若显式写了 `DEEPSONAR_HUB_MAX_ROUNDS=20` 仍保持 20。
+
+### 修复
+
+- 收口 `waiting_evidence` 无进展与 Canvas-first 锁顺序（#516–#522 / #528）：
+  - dispatcher / reaper / reconcile / cancel 写 `canvas_nodes` 改为 Canvas-first；ingest 对 `40P01` / `55P03` 有界重试（最多 3 次）。
+  - `subject_revision` 别名不再把匹配的 supports 当 mismatch。
+  - fact-first `conflict` / `rejected` 直接 `needs_human`，不再停在 `waiting_evidence`。
+  - 门禁指纹 `gateFingerprint(result + sorted missing)`；证据签名变化且指纹变化才唤醒 Hub；`maxNoProgressRounds` 默认 2（`0` 关闭）。同指纹被 Hub 消费后 settle，避免画布停在 `waiting_evidence`。
+  - `hub_reason` stall 地板 5400s；失败轮仍不占 `maxHubRounds`。
+  - 空 `Error.message` 回落到 `name` / `code` / `exception`，失败可观测、可按针。
+  - provision 自动重试分类补上 `SANDBOX_START_FAILED`、sidecar `did not become ready`、健康检查 30s 超时文案。
+  - Gateway 认 Pi anthropic `x-api-key` / `anthropic-api-key`；物化 `anthropic-messages` 时写 `authHeader`。
+- Report Job 终态失败后有界再派并收口 Root（#523）：自动再派预算为 1，不看 error 文本；预算耗尽后 Root 进入 `report_failed`（Web 投影为 failed）。人工 `POST /canvases/:id/report/retry` 接受该状态并重置自动重试计数；Hub 在 Root=`report_failed` 时不再空闲唤醒；迟到的旧 Job finalize 不再覆盖已换绑的新报告 Job。
+- sidecar / `CONTAINER_START_FAILED` 自动重试预算改为按本 Job 已结算的 `provision_retry` 次数计，上限仍是 1（#524）。40P01 或人工 `rerun-current` 把下一轮变成 attempt 2 后，sidecar 仍可自动重试一次；非 provision 失败不占这笔预算。
+- Pi + Anthropic Messages 流截断有界再入队新 Attempt（#525）：失败分类稳定为 `pi_stream_truncated`；沙箱已起来时走 `retryTruncatedExecution`（`running` + `started_at IS NOT NULL` → `pending`，新 Attempt、新 provision）。预算按已结算的 `pi_stream_truncated` 次数计，`MAX=1`。schema / 401 / `PI_EMPTY_MODEL_RESPONSE` / `aborted` 仍 fail closed；不复用同会话 CLI resume，不自动重放 `replay_policy=never` 的未知效果。
+- lease Reaper 尊重心跳与语义事件（#529）：过期 lease 且 `heartbeat_at` 与最近 `events.created_at` 都早于 `lease_expires_at` 才 orphan。`emit_progress` 在 Job 仍 `running` 时同时刷新 `heartbeat_at` 和 `lease_expires_at`（TTL = `LEASE_TTL_SEC`），且不写 `jobs.status`。不改 `isAlive` 语义，不把 lease orphan 改成 stall failed。
+
+### 部署 / 升级说明
+
+- 无需重建数据库（仍为 schema v50）。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。平台镜像仍打 `0.4.3` tag。
+- Hub 轮次默认 unlimited。若现网 `.env` 已显式设置 `DEEPSONAR_HUB_MAX_ROUNDS`，升级后保持该值，不会被本版默认覆盖。
+
 ## [0.4.2] - 2026-09-13
 
 ### 新增
@@ -822,6 +850,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.3]: https://github.com/SummerSec/DeepSonar/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/SummerSec/DeepSonar/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SummerSec/DeepSonar/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SummerSec/DeepSonar/compare/v0.3.3...v0.4.0
