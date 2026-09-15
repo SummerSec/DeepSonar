@@ -470,6 +470,27 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
       setRerunBusy(null);
     }
   };
+  const resumable = Boolean(detail && RESUMABLE.has(detail.job.status));
+  const repairRecoveryActions = resumable && jobProjection.repair?.category === "unknown_external_effect"
+    ? [
+      {
+        id: "resume",
+        label: rerunBusy === "resume" ? "入队中…" : "确认后 · 旧快照重跑",
+        title: "确认未决效果后，使用该 Job 创建时的旧冻结快照；身份漂移时拒绝",
+        busy: rerunBusy !== null,
+        disabled: rerunBusy !== null,
+        onClick: () => void rerun("resume"),
+      },
+      {
+        id: "current",
+        label: rerunBusy === "current" ? "入队中…" : "确认后 · 当前配置重跑",
+        title: "确认未决效果后，按当前 RoleConfig、凭据和运行镜像重冻快照",
+        busy: rerunBusy !== null,
+        disabled: rerunBusy !== null,
+        onClick: () => void rerun("current"),
+      },
+    ]
+    : undefined;
   const loadMoreEvents = async () => {
     if (!eventsHasMore || !eventsCursor) return;
     try {
@@ -714,7 +735,9 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           {detail && (jobProjection.actions.length > 0 || jobProjection.repair) && tab !== "result" && (
             <div className="m-4 space-y-2">
               {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
-              {jobProjection.repair && <RepairFeedbackPanel feedback={jobProjection.repair} />}
+              {jobProjection.repair && (
+                <RepairFeedbackPanel feedback={jobProjection.repair} recoveryActions={repairRecoveryActions} />
+              )}
             </div>
           )}
 
@@ -725,7 +748,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                 <div className="space-y-2">
                   {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
                   {jobProjection.repair
-                    ? <RepairFeedbackPanel feedback={jobProjection.repair} />
+                    ? <RepairFeedbackPanel feedback={jobProjection.repair} recoveryActions={repairRecoveryActions} />
                     : detail.job.error && (
                       <div className="rounded-xl bg-red-950/25 px-4 py-3 text-red-300 ring-1 ring-red-400/20">
                         <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-red-400/80">

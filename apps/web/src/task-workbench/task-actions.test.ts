@@ -132,6 +132,14 @@ test("dashboard and job projectors keep unproven timeout in needs_confirmation",
     jobError: "old boom",
     jobStatus: "failed",
   })[0]?.kind, "human_decision");
+
+  const settledProvision = projectJobActions({
+    job: { id: "j8", type: "audit", status: "failed", error: "DOCKER::SANDBOX_START_FAILED" },
+    effects: [{ effect_id: "provision:1", effect_kind: "provision", status: "settled" }],
+  });
+  assert.notEqual(settledProvision.repair?.category, "unknown_external_effect");
+  assert.deepEqual(settledProvision.repair?.accepted_effects, ["provision ×1"]);
+  assert.equal(settledProvision.repair?.unknown_effects.length, 0);
 });
 
 test("sort and dedupe keep a single highest-priority action per evidence", () => {
