@@ -83,7 +83,7 @@ export function extractFieldPath(error: string | null | undefined): string | nul
 
 export function describeUnknownEffect(kind: string | null | undefined): string {
   const normalized = (kind ?? "").trim();
-  if (normalized === "provision") return "沙箱创建未完成，无外部后果，可放心重试";
+  if (normalized === "provision") return "沙箱创建结果未确认，可能残留沙箱，请谨慎确认后再重试";
   if (normalized === "agent_run" || normalized === "agent_resume") return "进程可能已产生影响，请人工判断";
   return "未决外部效果，请人工判断";
 }
@@ -190,7 +190,7 @@ function nextStepFor(category: RepairCategory, unknownEffects: readonly RepairUn
       return "可以按同一会话安全重试；次数用尽后再转人工。";
     case "unknown_external_effect":
       if (unknownEffects.length > 0 && unknownEffects.every((effect) => effect.effect_kind === "provision")) {
-        return "沙箱创建未完成，无外部后果。确认后可以重跑，不要把它当成已启动的未知窗口。";
+        return "沙箱创建处于未知窗口，可能已有残留。先确认外部状态再决定是否重跑，不要当成无外部后果。";
       }
       return "先确认未决外部效果。未确认前不能当作普通失败，也不能无条件重试。";
     case "permanent_failure":

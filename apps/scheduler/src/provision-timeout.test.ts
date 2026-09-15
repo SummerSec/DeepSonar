@@ -58,3 +58,37 @@ test("dispatcher records provision latency by sandbox provider", () => {
   assert.match(source, /deepsonar_sandbox_provision_failed_total/);
   assert.match(source, /agentMode !== "real"\s*\n\s*\? "noop"\s*\n\s*: "opensandbox"/);
 });
+
+test("late destroy failure is visible to the caller before timeout reaches them", async () => {
+  const provision = deferred<{ sandboxId: string }>();
+  const timeoutStarted = deferred<void>();
+  let lateSeen = false;
+  let destroyFailed = false;
+  const result = withProvisionTimeout(
+    provision.promise,
+    1,
+    "provision timed out",
+    async () => timeoutStarted.resolve(),
+    async (handle) => {
+      lateSeen = true;
+      try {
+        throw new Error(`cleanup failed for ${handle.sandboxId}`);
+      } catch {
+        destroyFailed = true;
+      }
+    },
+  );
+
+  await timeoutStarted.promise;
+  provision.resolve({ sandboxId: "leftover-sandbox" });
+  await assert.rejects(result, /provision timed out/);
+  assert.equal(lateSeen, true);
+  assert.equal(destroyFailed, true);
+});
+
+test("dispatcher fail-closes never_started when late provision handle is observed", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(source, /lateProvisionExternalUncertain = true/);
+  assert.match(source, /markEffectUnknown/);
+  assert.match(source, /settleUnstartedProvisionEffect/);
+});

@@ -72,10 +72,12 @@ test("dispatcher provision retry budget is counted attempts, not attempt_no", ()
   assert.doesNotMatch(source, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
 });
 
-test("observed provision create failure settles never_started instead of unknown", () => {
+test("observed provision create failure settles never_started; late handle stays unknown", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /settleUnstartedProvisionEffect/);
-  assert.doesNotMatch(source, /markEffectUnknown/);
+  assert.match(source, /lateProvisionExternalUncertain/);
+  assert.match(source, /markEffectUnknown/);
+  assert.match(source, /lateProvisionExternalUncertain\)\s*\{\s*\n\s*await markEffectUnknown/);
 });
 
 test("Upload failed 500 / UNEXPECTED_RESPONSE during provision is automatically retryable", () => {

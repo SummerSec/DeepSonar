@@ -36,6 +36,7 @@ import {
   createOrGetActiveAttempt,
   getActiveAttempt,
   interruptProvision,
+  markEffectUnknown,
   registerProvisionCancellation,
   settleEffect,
   settleUnstartedProvisionEffect,
@@ -949,6 +950,8 @@ async function runJob(jobId: string) {
         intent: { image_ref: runtimeImage, network: useReal ? (allowEgress ? "egress" : "restricted") : "none" },
       });
     });
+    // 超时路径若观察到迟到沙箱（或 late destroy 失败），不得再标 never_started。
+    let lateProvisionExternalUncertain = false;
     try {
       const provisionAbort = new AbortController();
       // 真实设备接入：快照声明了设备需求且本 Job 角色命中时才申请租约。
@@ -1019,10 +1022,16 @@ async function runJob(jobId: string) {
             provisionSec * 1000,
             `provision 超时（${provisionSec}s）`,
             () => interruptProvision(jobId, attemptId!),
-            (lateHandle) => runner.destroy(lateHandle).catch((error) => {
-              inc("deepsonar_sandbox_cleanup_failed_total");
-              console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
-            }),
+            async (lateHandle) => {
+              // 迟到 create 已产出沙箱：fail closed，禁止再写 never_started / external_effect:false。
+              lateProvisionExternalUncertain = true;
+              try {
+                await runner.destroy(lateHandle);
+              } catch (error) {
+                inc("deepsonar_sandbox_cleanup_failed_total");
+                console.error(`[dispatcher] late sandbox cleanup failed ${lateHandle.sandboxId}:`, error);
+              }
+            },
           );
           inc("deepsonar_sandbox_provision_seconds_sum", { provider }, Math.max(1, Math.round((Date.now() - provisionStarted) / 1000)));
           inc("deepsonar_sandbox_provision_seconds_count", { provider });
@@ -1034,11 +1043,15 @@ async function runJob(jobId: string) {
         unregisterProvision();
       }
     } catch (error) {
-      // 沙箱从未绑定：创建失败路径已由 provider cleanup。不得把账本留在 unknown，
-      // 否则 RepairFeedback 会把可证明无外部后果的失败当成 unknown_external_effect。
+      // 观察到的创建失败且从未见到沙箱：provider cleanup 后可证明无外部后果 → never_started。
+      // 超时路径若已观察到迟到 handle（或 destroy 失败留下残留风险）→ 保持 unknown，fail closed。
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       await sql.begin(async (tx) => {
-        await settleUnstartedProvisionEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
+        if (lateProvisionExternalUncertain) {
+          await markEffectUnknown(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
+        } else {
+          await settleUnstartedProvisionEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
+        }
       }).catch(() => {});
       throw error;
     }

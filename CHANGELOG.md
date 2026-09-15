@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 评审跟进（#545 / #546）：`RepairFeedback` 对仍为 `unknown` 的 provision 不再宣称「无外部后果 / 可放心重试」，改为提示可能残留沙箱；provision 超时路径若观察到迟到 sandbox handle（或 late destroy 失败），不再结算为 `never_started`，fail closed 留在 `unknown`。
+
 ### 修复
 
 - 专项镜像 provision 上传 500 / `UNEXPECTED_RESPONSE`（#548）：OpenSandbox `writeFiles` 对瞬态代理/上传失败有界重试；dispatcher 将 `Upload failed (status=5xx)` / `UNEXPECTED_RESPONSE` / websocket proxy failure 纳入 `isRetryableProvisionFailure`；Docker `deploy/opensandbox/config.toml` 默认 `[ingress] mode = "gateway"`，避免 rootless hostfwd 在沙箱增删时切断 execd 通道。CLI 流与失败文案写库前清洗 NUL/控制字符，防止通道截断后的次生 `22P05`。

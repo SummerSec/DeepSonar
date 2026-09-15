@@ -103,7 +103,8 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(dispatcherSource, /countConsumedPiStreamTruncationRetries/);
   assert.match(dispatcherSource, /retryTruncatedExecution/);
   assert.match(dispatcherSource, /settleUnstartedProvisionEffect/);
-  assert.doesNotMatch(dispatcherSource, /markEffectUnknown/);
+  assert.match(dispatcherSource, /lateProvisionExternalUncertain/);
+  assert.match(dispatcherSource, /markEffectUnknown/);
   assert.doesNotMatch(dispatcherSource, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
   assert.doesNotMatch(dispatcherSource, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PI_STREAM_TRUNCATION_RETRIES/);
   assert.match(dispatcherSource, /lockCanvasForConvergence\(tx, canvasId\)/);
