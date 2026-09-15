@@ -6,6 +6,7 @@ import {
   compactAttemptOutcome,
   canReplayEffect,
   effectCrashRecovery,
+  provisionNeverStartedSettlement,
   sanitizeError,
   validateEffectDescriptor,
 } from "./model.js";
@@ -76,6 +77,13 @@ test("默认 never 重放，只有显式 safe 效果且快照完全一致才可�
 
 test("确定性故障点默认拒绝重放并保留 after-settlement 成功", () => {
   assert.deepEqual(EFFECT_CRASH_POINTS.map(effectCrashRecovery), ["retry_new_attempt", "mark_unknown", "mark_unknown", "continue"]);
+});
+
+test("观察到的 provision 创建失败不是 unknown 窗口", () => {
+  const settlement = provisionNeverStartedSettlement("DOCKER::SANDBOX_START_FAILED");
+  assert.equal(settlement.status, "settled");
+  assert.equal(settlement.error, "DOCKER::SANDBOX_START_FAILED");
+  assert.deepEqual(settlement.outcome, { result: "never_started", external_effect: false });
 });
 
 test("sanitizeError 不把空 Error.message 收成空串", () => {

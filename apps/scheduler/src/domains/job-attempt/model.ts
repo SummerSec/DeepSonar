@@ -102,6 +102,22 @@ export type EffectSettlement = {
   evidenceRef?: string | null;
 };
 
+/**
+ * Observed provision failure: Scheduler never bound a sandbox_id and the
+ * provider returned a failure (cleanup already ran). This is not an unknown
+ * external-effect window. Crash, timeout, cancel, and restart still use unknown.
+ */
+export function provisionNeverStartedSettlement(error?: unknown): EffectSettlement {
+  return {
+    status: "settled",
+    error: error === undefined ? null : sanitizeError(error),
+    outcome: {
+      result: "never_started",
+      external_effect: false,
+    },
+  };
+}
+
 export const EFFECT_CRASH_POINTS = [
   "before_intent",
   "after_intent_before_external",
