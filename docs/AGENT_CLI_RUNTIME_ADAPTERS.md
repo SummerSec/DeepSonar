@@ -45,8 +45,8 @@ The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLI
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.252 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
-| `pi` | Pi Coding Agent 0.84.4 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
+| `claude-code` | Claude Code 2.1.258 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
+| `pi` | Pi Coding Agent 0.85.1 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
 | `dsh` | DeepSeek Harness 0.1.1-rc.2 | 官方 SDK JSON-RPC packaged entrypoint，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（Code Mode `run_code`） | yes | 由 `@deepseek-ai/dsh-compaction-basic` 管理；恢复复用精确 session ID | DSH profile model 配置 | `session.event` 的结构化 reasoning 事件 |
 
 DSH 的首条 system 消息（agent-spine `persona` / `DSH_SYSTEM_PROMPT`）会进入上游
@@ -137,7 +137,7 @@ never infers or fabricates reasoning from ordinary text, tool output, or
 terminal lines. If the selected CLI/model does not emit a supported reasoning
 event, the live and archived stream simply contains no reasoning block.
 
-Claude partial frames are enabled only for the pinned 2.1.252 governed minimum
+Claude partial frames are enabled only for the pinned 2.1.258 governed minimum
 above. `content_block_delta` `thinking_delta`/`text_delta` frames are
 normalized to `reasoning.delta`/`text.delta`; the later complete assistant
 message remains accepted for compatibility but is de-duplicated against those
@@ -198,7 +198,7 @@ ambiguous。模型请求统一改写到 Gateway，
 未注册 id、用户上传的扩展源码、以及镜像目录外的 `-e` 路径一律拒绝。出网扩展服从任务
 `allow_egress`；本路径不向快照或工作区写入长期密钥。已注册扩展预置到兼容镜像的
 `/opt/deepsonar/pi-extensions/node_modules/`（pilot `pi-web-access` 只进 audit / kali-minimal，
-不进 size-gated 的 base），与 `@earendil-works/pi-coding-agent@0.84.4` 一样按 version + integrity 校验。
+不进 size-gated 的 base），与 `@earendil-works/pi-coding-agent@0.85.1` 一样按 version + integrity 校验。
 
 ## Verification
 
@@ -225,7 +225,7 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 | 契约 | 输入 | 输出 | 家 | 钉死版本 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 请求兼容投影 | 平台 system prompt | 进入上游 `input[0]` 的 pi 风格首帧 | `dsh-request-frame.ts` | DSH `0.1.1-rc.2` | **已完整**（#321）。证据：`projectDshSystemPrompt` + `runtime-adapters.test.ts`「DSH request frame」 |
-| 运行事件解码 | CLI 结构化 stdout（Pi RPC JSONL / DSH JSON-RPC） | 宿主归一化事件（`assistant` / `user` / `result` / `unknown_runtime` / `agent_settled`） | `runtime-adapters.ts` `decodePi` / `decodeDsh` | Pi `0.84.4` · DSH `0.1.1-rc.2` | **产品字段已齐**。#320 只补错误串内嵌 JSON 的 `message` 提取，不是整解码器。#389 补的是 DSH 未知/损坏帧可诊断，以及独立 `tool/call` / `tool/result` |
+| 运行事件解码 | CLI 结构化 stdout（Pi RPC JSONL / DSH JSON-RPC） | 宿主归一化事件（`assistant` / `user` / `result` / `unknown_runtime` / `agent_settled`） | `runtime-adapters.ts` `decodePi` / `decodeDsh` | Pi `0.85.1` · DSH `0.1.1-rc.2` | **产品字段已齐**。#320 只补错误串内嵌 JSON 的 `message` 提取，不是整解码器。#389 补的是 DSH 未知/损坏帧可诊断，以及独立 `tool/call` / `tool/result` |
 | Session 归档 / 查看器 | 沙箱内本次 session artifact | 时间线 / usage / 工具统计 / 原始下载 | `cli-session-adapters.ts` + `apps/web/src/session-viewer/` | 同上 | **已完整**。归档失败显式 `captureError`；查看器 `skipped` + `other` 诊断未知/损坏行；「下载原始文件」不改写字节 |
 
 产品必需字段与真实缺口（只填缺口，已齐层不重写）：

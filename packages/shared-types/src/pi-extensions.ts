@@ -30,8 +30,8 @@ export const PI_EXTENSION_REGISTRY = {
   "pi-web-access": {
     id: "pi-web-access",
     package: "pi-web-access",
-    version: "0.27.0",
-    integrity: "sha512-D/z7ILwbnJeDjzFPC1j3G1OvO+j2vl2H13ByYcH5FLbrJ1yBdbBwTBcl96Bbt2NEqH5vdmoZ/EpbDG8BTF9W7Q==",
+    version: "0.29.0",
+    integrity: "sha512-1l4sAWYkFhiBynJf/mXuxmCHxjhiAyWJ4rfQVFu8UPa0JQhCS9oXAmNXcL0Q1SfrO00plmb6L4IkypJ3n1Q4Kg==",
     license: "MIT",
     capabilities: ["web-search", "content-extract", "url-fetch"],
     requires_egress: true,

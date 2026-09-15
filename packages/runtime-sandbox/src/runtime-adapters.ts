@@ -62,7 +62,7 @@ export function resolvePiCliModelId(model: string | undefined | null): string | 
 }
 
 /**
- * Pi 0.84.4 rejects a bare catalog id when it exists on multiple built-in
+ * Pi 0.85.1 rejects a bare catalog id when it exists on multiple built-in
  * providers. Pass `--provider <route> --model <id>` (not `--model provider/id`).
  */
 export function resolvePiCliLaunchFlags(
@@ -440,11 +440,11 @@ function sandboxClaude(
 
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
-  version: "2.1.252",
+  version: "2.1.258",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  // Claude Code 2.1.252 is the governed pin (npm latest). That
+  // Claude Code 2.1.258 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
   // an adapter whose pinned minimum does not support it.
   start: (context) => sandboxClaude(context.host, context),
@@ -656,7 +656,7 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
 
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
-  version: "0.84.4",
+  version: "0.85.1",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
