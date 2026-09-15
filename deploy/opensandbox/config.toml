@@ -27,8 +27,11 @@ drop_capabilities = ["ALL"]
 no_new_privileges = true
 pids_limit = 4096
 
+# Prefer gateway so execd traffic stays on the OpenSandbox server listener
+# instead of rootless podman/Docker hostfwd per sandbox (#548). renew_intent
+# stays disabled; gateway mode does not require Redis when renew_intent is off.
 [ingress]
-mode = "direct"
+mode = "gateway"
 
 [egress]
 image = "docker.io/opensandbox/egress@sha256:db7345d567b0970f384b8e3fa7a93a71b7f43d4b16bb2009de34096e9a87b3b5"

@@ -77,3 +77,29 @@ test("observed provision create failure settles never_started instead of unknown
   assert.match(source, /settleUnstartedProvisionEffect/);
   assert.doesNotMatch(source, /markEffectUnknown/);
 });
+
+test("Upload failed 500 / UNEXPECTED_RESPONSE during provision is automatically retryable", () => {
+  assert.equal(
+    isRetryableProvisionFailure(
+      Object.assign(new Error("Upload failed (status=500)"), {
+        statusCode: 500,
+        code: "UNEXPECTED_RESPONSE",
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableProvisionFailure(
+      new Error("An internal error occurred in the proxy: Unexpected websocket proxy failure for sandbox=abc port=44772"),
+    ),
+    true,
+  );
+  assert.equal(isRetryableProvisionFailure(new Error("Upload failed (status=400)")), false);
+});
+
+test("dispatcher failure messages scrub NUL before classification", () => {
+  const message = formatDispatcherFailureMessage(new Error("Upload failed (status=500)\0UNEXPECTED_RESPONSE"));
+  assert.equal(message.includes("\0"), false);
+  assert.match(message, /Upload failed \(status=500\)/);
+  assert.equal(isRetryableProvisionFailure(new Error("Upload failed (status=500)\0")), true);
+});

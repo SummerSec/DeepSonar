@@ -135,6 +135,22 @@ async function metaFor(root: string, filePath: string, name: string, kind: Evide
 }
 
 /** 单 Job 顺序写入器：stdout 回调可高频调用，但磁盘 append 始终保持事件顺序。 */
+
+/** Strip NUL/control bytes from CLI stream frames before persistence (#548 / 22P05). */
+function scrubEvidenceControlChars(value: unknown, depth = 0): unknown {
+  if (depth > 8 || value == null) return value;
+  if (typeof value === "string") return value.replace(/[\u0000-\u001f\u007f]/gu, " ");
+  if (Array.isArray(value)) return value.map((entry) => scrubEvidenceControlChars(entry, depth + 1));
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = scrubEvidenceControlChars(entry, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 export class JobEvidenceWriter {
   private readonly root: string;
   private readonly attemptRoot: string;
@@ -164,7 +180,9 @@ export class JobEvidenceWriter {
    * uses the promise as its cursor visibility gate. */
   appendNormalized(event: Record<string, unknown>): Promise<number> {
     const seq = ++this.sequence;
-    const safeEvent = redactEvidenceValue(event, exactSecrets(this.jobId)) as Record<string, unknown>;
+    const safeEvent = scrubEvidenceControlChars(
+      redactEvidenceValue(event, exactSecrets(this.jobId)),
+    ) as Record<string, unknown>;
     const line = JSON.stringify({ ...safeEvent, at: Date.now(), attempt_id: this.safeAttemptId, seq }) + "\n";
     this.pending += 1;
     this.queue = this.queue.then(async () => {

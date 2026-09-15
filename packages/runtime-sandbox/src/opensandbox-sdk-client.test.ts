@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, joinCommandLogText } from "./opensandbox-sdk-client.js";
+import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
 import { OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 
@@ -54,4 +54,69 @@ test("Pi and DSH stay on the same OpenSandbox RuntimeHost path", () => {
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.platformControlApi, true);
     assert.equal(AGENT_CLI_RUNTIME_ADAPTERS[id].capabilities.interactiveTerminal, true);
   }
+});
+
+test("OpenSandbox upload errors classify transient proxy 500s and keep auth failures fail-closed", () => {
+  assert.equal(
+    isTransientOpenSandboxUploadError(Object.assign(new Error("Upload failed (status=500)"), {
+      statusCode: 500,
+      code: "UNEXPECTED_RESPONSE",
+    })),
+    true,
+  );
+  assert.equal(
+    isTransientOpenSandboxUploadError(new Error("An internal error occurred in the proxy: Server disconnected without sending a response")),
+    true,
+  );
+  assert.equal(
+    isTransientOpenSandboxUploadError(Object.assign(new Error("forbidden"), { statusCode: 403 })),
+    false,
+  );
+  assert.equal(
+    isTransientOpenSandboxUploadError(Object.assign(new Error("SANDBOX_NOT_FOUND"), { statusCode: 404 })),
+    false,
+  );
+});
+
+test("writeFilesWithRetry retries transient upload 500 then succeeds", async () => {
+  const calls: number[] = [];
+  const delays: number[] = [];
+  await writeFilesWithRetry(
+    async () => {
+      calls.push(1);
+      if (calls.length < 3) {
+        throw Object.assign(new Error("Upload failed (status=500)"), {
+          statusCode: 500,
+          code: "UNEXPECTED_RESPONSE",
+        });
+      }
+    },
+    [{ path: "/workspace/a.txt", data: "x" }],
+    { baseDelayMs: 1, sleep: async (ms) => { delays.push(ms); } },
+  );
+  assert.equal(calls.length, 3);
+  assert.deepEqual(delays, [1, 2]);
+});
+
+test("writeFilesWithRetry does not retry permanent failures", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => writeFilesWithRetry(
+      async () => {
+        calls += 1;
+        throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+      },
+      [{ path: "/workspace/a.txt", data: "x" }],
+      { attempts: 3, baseDelayMs: 1, sleep: async () => undefined },
+    ),
+    /forbidden/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("OpenSandbox SDK client routes writeFile and stdin uploads through writeFilesWithRetry", () => {
+  const source = readFileSync(new URL("./opensandbox-sdk-client.ts", import.meta.url), "utf8");
+  assert.match(source, /writeFilesWithRetry/);
+  assert.match(source, /isTransientOpenSandboxUploadError/);
+  assert.equal((source.match(/writeFilesWithRetry\(/g) ?? []).length >= 3, true);
 });

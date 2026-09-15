@@ -36,7 +36,8 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.match(toml, /no_new_privileges = true/);
   assert.match(toml, /drop_capabilities = \["ALL"\]/);
   assert.match(toml, /type = "sqlite"/);
-  assert.match(toml, /mode = "direct"/);
+  assert.match(toml, /\[ingress\][\s\S]*?mode = "gateway"/);
+  assert.doesNotMatch(toml, /\[ingress\][\s\S]*?mode = "direct"/);
   assert.doesNotMatch(toml, /(?:^|\s)latest(?:\s|$)|network_mode = "host"|api_key_env|^\s*driver\s*=/m);
   assert.match(toml, new RegExp(OPENSANDBOX_EXECD_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -46,6 +47,16 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.doesNotMatch(compose, /127\.0\.0\.1:8080:8080/);
   assert.match(compose, /driver: bridge/);
   assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
+});
+
+
+test("OpenSandbox Docker ingress defaults to gateway to avoid rootless hostfwd churn (#548)", () => {
+  const toml = readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8");
+  const ingress = toml.match(/\[ingress\]([\s\S]*?)(?=\n\[|$)/);
+  assert.ok(ingress, "missing [ingress]");
+  assert.match(ingress[1], /mode = "gateway"/);
+  assert.doesNotMatch(ingress[1], /mode = "direct"/);
+  assert.match(toml, /#548/);
 });
 
 test("OpenSandbox compose mounts /.dockerenv so Podman in-container detection matches Docker", () => {

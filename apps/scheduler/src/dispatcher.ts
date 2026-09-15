@@ -76,9 +76,14 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   return { reason: "exception", message };
 }
 
+/** Strip NUL/control bytes before failure text hits Postgres (22P05) (#548). */
+function scrubDispatcherText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/gu, " ");
+}
+
 /** Keep provider error details that are otherwise hidden behind SDK wrappers. */
 export function formatDispatcherFailureMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = scrubDispatcherText(error instanceof Error ? error.message : String(error));
   if (!error || typeof error !== "object") return nonEmptyDispatcherFailureMessage(error, message);
   const value = error as Record<string, unknown>;
   const objects: Record<string, unknown>[] = [value];
@@ -92,7 +97,7 @@ export function formatDispatcherFailureMessage(error: unknown): string {
     item.status,
     item.message,
     item.detail,
-  ]).filter((item) => item !== undefined && item !== null && String(item).trim() !== "").map(String);
+  ]).filter((item) => item !== undefined && item !== null && String(item).trim() !== "").map((item) => scrubDispatcherText(String(item)));
   const unique = [...new Set(details)].filter((item) => !message.includes(item));
   const composed = unique.length > 0
     ? (message.trim() ? `${message} (${unique.join("; ")})` : unique.join("; "))
@@ -100,14 +105,14 @@ export function formatDispatcherFailureMessage(error: unknown): string {
   return nonEmptyDispatcherFailureMessage(error, composed);
 }
 
-/** OpenSandbox container startup failures are transient on Windows hosts. */
+/** Transient OpenSandbox provision failures (startup, hostfwd/proxy upload) eligible for one automatic retry. */
 export function isRetryableProvisionFailure(error: unknown): boolean {
   if (error instanceof RuntimeImageNotReadyError) return false;
   // 设备未授权不可重试；设备/ broker 暂不可用可以再试一次（设备租约已在失败路径释放）。
   if (error instanceof DeviceNotAuthorizedError) return false;
   if (error instanceof DeviceNotAvailableError) return true;
   const text = formatDispatcherFailureMessage(error);
-  return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response/i.test(text);
+  return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response|Upload failed\s*\(\s*status\s*=\s*5\d\d\s*\)|UNEXPECTED_RESPONSE|An internal error occurred in the proxy|websocket proxy failure/i.test(text);
 }
 
 /** Pi Anthropic transport truncation after provision; schema/auth stay fail closed. */
