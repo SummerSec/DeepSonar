@@ -6,6 +6,7 @@ import {
   requestAttemptCancel,
   settleAttemptTerminal,
   settleEffect,
+  settleUnstartedProvisionEffect,
   updateAttemptResource,
   updateAttemptSession,
   type AttemptDatabase,
@@ -75,7 +76,12 @@ function fakeAttemptDatabase(initialState: AttemptState): {
           const terminalStatus = values.find((value): value is AttemptStatus => (
             value === "succeeded" || value === "failed" || value === "cancelled" || value === "timeout" || value === "orphan"
           ));
-          effect.status = terminalStatus === "succeeded" && effect.effect_kind === "agent_run" ? "settled" : "unknown";
+          const neverStartedProvision = terminalStatus === "failed"
+            && effect.effect_kind === "provision"
+            && state.sandbox_id == null;
+          effect.status = (terminalStatus === "succeeded" && effect.effect_kind === "agent_run") || neverStartedProvision
+            ? "settled"
+            : "unknown";
         }
         return [];
       }
@@ -259,6 +265,69 @@ test("settleAttemptTerminal 超限 outcome 抛 ControlInputError 而不是裸 Er
     (error: unknown) => error instanceof ControlInputError && error.code === "invalid_done" && error.retryable,
   );
   assert.equal(read().status, "active");
+});
+
+test("provision 失败且从未绑定 sandbox_id 时，终态把账本收成 settled 而不是 unknown", async () => {
+  const { db, read } = fakeAttemptDatabase(attemptState());
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "provision:1",
+    kind: "provision",
+    resourceIdentity: { job_id: "job-race-1" },
+    intent: { image: "deepsonar-base@sha256:abc" },
+  });
+  await settleAttemptTerminal(db, "job-race-1", "failed", { reason: "sandbox_start_failed" }, "DOCKER::SANDBOX_START_FAILED");
+  assert.equal(read().status, "failed");
+  assert.equal(read().effect?.status, "settled");
+});
+
+test("provision 已绑定 sandbox_id 后失败，终态仍把未收口效果标 unknown", async () => {
+  const { db, read } = fakeAttemptDatabase(attemptState());
+  await updateAttemptResource(db, "attempt-race-1", { sandboxId: "sandbox-live", phase: "provisioned" });
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "provision:1",
+    kind: "provision",
+    resourceIdentity: { job_id: "job-race-1", sandbox_id: "sandbox-live" },
+    intent: { image: "deepsonar-base@sha256:abc" },
+  });
+  await settleAttemptTerminal(db, "job-race-1", "failed", { reason: "exception" }, "running destroy raced");
+  assert.equal(read().status, "failed");
+  assert.equal(read().state.sandbox_id, "sandbox-live");
+  assert.equal(read().effect?.status, "unknown");
+});
+
+test("timeout / cancelled / orphan 的未收口 provision 仍是 unknown", async () => {
+  for (const status of ["timeout", "cancelled", "orphan"] as const) {
+    const { db, read } = fakeAttemptDatabase({
+      ...attemptState(),
+      attempt_id: `attempt-${status}`,
+      job_id: `job-${status}`,
+    });
+    await beginEffect(db, `attempt-${status}`, {
+      effectId: "provision:1",
+      kind: "provision",
+      resourceIdentity: { job_id: `job-${status}` },
+      intent: { image: "deepsonar-base@sha256:abc" },
+    });
+    await settleAttemptTerminal(db, `job-${status}`, status, { reason: status }, status);
+    assert.equal(read().status, status, status);
+    assert.equal(read().effect?.status, "unknown", status);
+  }
+});
+
+test("settleUnstartedProvisionEffect 把观察到的创建失败收成 settled，且不把 Attempt 标成 provisioned", async () => {
+  const { db, read } = fakeAttemptDatabase(attemptState());
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "provision:1",
+    kind: "provision",
+    resourceIdentity: { job_id: "job-race-1" },
+    intent: { image: "deepsonar-base@sha256:abc" },
+  });
+  await settleUnstartedProvisionEffect(db, "attempt-race-1", "provision:1", "DOCKER::SANDBOX_START_FAILED");
+  const after = read();
+  assert.equal(after.effect?.status, "settled");
+  assert.equal(after.status, "active");
+  assert.notEqual(after.state.phase, "provisioned");
+  assert.equal(after.state.phase, "settling");
 });
 
 test("terminal 收口后，迟到的 Agent effect settlement 是幂等 no-op", async () => {

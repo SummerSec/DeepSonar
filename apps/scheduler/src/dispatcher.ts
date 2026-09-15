@@ -36,9 +36,9 @@ import {
   createOrGetActiveAttempt,
   getActiveAttempt,
   interruptProvision,
-  markEffectUnknown,
   registerProvisionCancellation,
   settleEffect,
+  settleUnstartedProvisionEffect,
   settleAttemptTerminal,
   updateAttemptResource,
 } from "./domains/job-attempt/index.js";
@@ -1029,9 +1029,11 @@ async function runJob(jobId: string) {
         unregisterProvision();
       }
     } catch (error) {
+      // 沙箱从未绑定：创建失败路径已由 provider cleanup。不得把账本留在 unknown，
+      // 否则 RepairFeedback 会把可证明无外部后果的失败当成 unknown_external_effect。
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       await sql.begin(async (tx) => {
-        await markEffectUnknown(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
+        await settleUnstartedProvisionEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
       }).catch(() => {});
       throw error;
     }

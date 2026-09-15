@@ -123,6 +123,34 @@ if (!testDatabaseUrl) {
       assert.deepEqual({ status: attempt.status, cancel_requested: attempt.cancel_requested, phase: attempt.phase, effect: effect.status }, { status: "cancelled", cancel_requested: true, phase: "terminal", effect: "unknown" });
       assert.equal(attempt.state_json.session_id, "integration-session-1");
       assert.equal(attempt.state_json.session_file, "/workspace/.deepsonar-home/.pi/agent/integration-session-1.jsonl");
+
+      const failedJobId = randomUUID();
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json) VALUES (${failedJobId}, ${projectId}, ${canvasId}, 'audit', 'provisioning', ${sql.json({ agent_cli: 'claude-code' } as never)})`;
+      const failedAttempt = await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, failedJobId, { agent_cli: "claude-code" }));
+      await sql.begin(async (tx) => {
+        await beginEffect(tx as unknown as typeof sql, String(failedAttempt.id), {
+          effectId: "provision:sandbox-start",
+          kind: "provision",
+          inputDigest: "b".repeat(64),
+          resourceIdentity: { job_id: failedJobId },
+          intent: { image: "test" },
+        });
+        await settleAttemptTerminal(
+          tx as unknown as typeof sql,
+          failedJobId,
+          "failed",
+          { reason: "sandbox_start_failed" },
+          "DOCKER::SANDBOX_START_FAILED",
+        );
+      });
+      const [failedAttemptRow] = await sql`SELECT status, sandbox_id FROM job_attempts WHERE id = ${String(failedAttempt.id)}`;
+      const [failedEffect] = await sql`SELECT status, settlement_json FROM job_attempt_effects WHERE attempt_id = ${String(failedAttempt.id)} AND effect_id = 'provision:sandbox-start'`;
+      assert.equal(failedAttemptRow.status, "failed");
+      assert.equal(failedAttemptRow.sandbox_id, null);
+      assert.equal(failedEffect.status, "settled");
+      assert.equal(failedEffect.settlement_json.result, "never_started");
+      assert.equal(failedEffect.settlement_json.external_effect, false);
+      await sql`DELETE FROM jobs WHERE id = ${failedJobId}`;
     } finally {
       await sql`DELETE FROM jobs WHERE id = ${jobId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;

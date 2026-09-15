@@ -71,3 +71,9 @@ test("dispatcher provision retry budget is counted attempts, not attempt_no", ()
   assert.doesNotMatch(source, /attempt_no\s*>\s*MAX_AUTOMATIC_PROVISION_RETRIES/);
   assert.doesNotMatch(source, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
 });
+
+test("observed provision create failure settles never_started instead of unknown", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(source, /settleUnstartedProvisionEffect/);
+  assert.doesNotMatch(source, /markEffectUnknown/);
+});

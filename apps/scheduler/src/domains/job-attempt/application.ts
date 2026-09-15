@@ -12,6 +12,7 @@ import {
   assertBoundedJson,
   buildAttemptState,
   compactAttemptOutcome,
+  provisionNeverStartedSettlement,
   sanitizeError,
   validateEffectDescriptor,
   type AttemptPhase,
@@ -196,7 +197,10 @@ export async function settleEffect(
   if (effect.effect_kind === "canvas_delivery" || effect.effect_kind === "gateway_model_request") {
     return getActiveAttempt(db, String((await db`SELECT job_id FROM job_attempts WHERE id = ${attemptId}`)[0]?.job_id ?? ""));
   }
-  const nextPhase: AttemptPhase = effect.effect_kind === "provision" && settlement.status === "settled"
+  const neverStarted = settlement.status === "settled"
+    && settlement.outcome
+    && settlement.outcome.result === "never_started";
+  const nextPhase: AttemptPhase = effect.effect_kind === "provision" && settlement.status === "settled" && !neverStarted
     ? "provisioned"
     : settlement.status === "unknown"
       ? "unknown"
@@ -218,6 +222,16 @@ export async function markEffectUnknown(
     error: sanitizeError(error),
     outcome: { result: "unknown_effect" },
   });
+}
+
+/** Provision threw before sandbox_id was bound; do not leave the ledger on unknown. */
+export async function settleUnstartedProvisionEffect(
+  db: AttemptDatabase,
+  attemptId: string,
+  effectId: string,
+  error: unknown,
+): Promise<AttemptRow | null> {
+  return settleEffect(db, attemptId, effectId, provisionNeverStartedSettlement(error));
 }
 
 export async function updateAttemptResource(
@@ -333,13 +347,25 @@ export async function settleAttemptTerminal(
   assertBoundedJson(next, "attempt state", ATTEMPT_MAX_STATE_BYTES);
   // 终态与未收口外部效果必须在调用方同一事务中提交。只有主 Agent run
   // 可由成功终态证明已完成；并发投递/网关效果未显式结算时仍必须 unknown。
+  // provision 失败且从未绑定 sandbox_id：创建已失败并清理，不得留 unknown。
+  const sandboxId = current.sandbox_id;
+  const neverStartedOutcome = {
+    result: "never_started",
+    external_effect: false,
+    job_status: status,
+  };
   await db`
     UPDATE job_attempt_effects
        SET status = CASE
              WHEN ${status} = 'succeeded' AND effect_kind = 'agent_run' THEN 'settled'
+             WHEN ${status} = 'failed' AND effect_kind = 'provision' AND ${sandboxId} IS NULL THEN 'settled'
              ELSE 'unknown'
            END,
-           settlement_json = ${db.json({ job_status: status } as never)},
+           settlement_json = CASE
+             WHEN ${status} = 'failed' AND effect_kind = 'provision' AND ${sandboxId} IS NULL
+               THEN ${db.json(neverStartedOutcome as never)}
+             ELSE ${db.json({ job_status: status } as never)}
+           END,
            error = COALESCE(error, ${safeError}),
            settled_at = COALESCE(settled_at, now()),
            updated_at = now()
