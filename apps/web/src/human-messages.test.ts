@@ -162,6 +162,13 @@ test("open human interventions can be ignored; processed history cannot", () => 
   });
   assert.equal(isPendingHumanIntervention(pending), true);
   assert.equal(canIgnoreHumanIntervention(pending), true);
+  assert.equal(isPendingHumanIntervention(node({
+    id: "human-expired",
+    node_type: "human",
+    status: "expired",
+    job_id: "job-1",
+    body_json: { reason: "过期请求", resolution: "expired" },
+  })), false);
   assert.equal(canIgnoreHumanIntervention(ignored), false);
   assert.equal(canIgnoreHumanIntervention(delivered), false);
   assert.equal(openHumanInterventionForJob([pending, ignored], "job-1")?.id, "human-open");

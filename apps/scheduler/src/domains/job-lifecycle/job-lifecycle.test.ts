@@ -158,6 +158,10 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
       calls.push(`reap-stall:${seconds}`);
       return [{ id: "stalled" }];
     },
+    reapWaitingHumanTimeout: async (seconds) => {
+      calls.push(`reap-waiting-human:${seconds}`);
+      return [{ id: "human-timeout" }];
+    },
     reconcileProvisioning: async () => {
       calls.push("reconcile-provision");
       return { requeued: [{ id: "reset" }], orphaned: [] };
@@ -187,6 +191,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
   assert.deepEqual(await app.reapProvisionTimeout(7), [{ id: "provision" }]);
   assert.deepEqual(await app.reapLeaseOrphans(), [{ id: "orphan" }]);
   assert.deepEqual(await app.reapStalledExecution(900), [{ id: "stalled" }]);
+  assert.deepEqual(await app.reapWaitingHumanTimeout(1800), [{ id: "human-timeout" }]);
   assert.deepEqual(await app.reconcileProvisioning(), { requeued: [{ id: "reset" }], orphaned: [] });
   assert.deepEqual(await app.reconcileRunning(), [{ id: "orphan" }]);
   assert.equal((await app.cancelJob("cancel", "reason"))?.status, "cancelled");
@@ -200,6 +205,7 @@ test("application seam exposes explicit recovery and bulk ports without bypassin
     "reap-provision:7",
     "reap-orphan",
     "reap-stall:900",
+    "reap-waiting-human:1800",
     "reconcile-provision",
     "reconcile-running",
     "cancel:cancel:reason",
@@ -254,6 +260,27 @@ test("Reaper provision 超时先提交终态，再等待所有 provision 中止�
     releaseCancel();
     unregister();
   }
+});
+
+test("reapWaitingHumanTimeout casts budget to int and skips when closed", async () => {
+  const queries: string[] = [];
+  const db = Object.assign(
+    ((strings: TemplateStringsArray) => {
+      const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+      queries.push(query);
+      return [];
+    }) as unknown as typeof sql,
+    { json: (value: unknown) => value, begin: async (work: (tx: typeof sql) => Promise<unknown>) => work(db) },
+  );
+  const app = createSqlJobLifecycleApplication(db);
+  assert.deepEqual(await app.reapWaitingHumanTimeout(0), []);
+  assert.equal(queries.length, 0, "0 disables waiting_human timeout without SQL");
+  assert.deepEqual(await app.reapWaitingHumanTimeout(1800), []);
+  const timeout = queries.find((query) => query.includes("人工等待超时"));
+  assert.ok(timeout, "waiting_human timeout UPDATE must run");
+  assert.match(timeout, /status = 'waiting_human'/);
+  assert.match(timeout, /e\.type = 'human'/);
+  assert.match(timeout, /::int \* interval '1 second'/);
 });
 
 test("reapStalledExecution casts interpolated stall seconds to int before * interval", async () => {

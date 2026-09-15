@@ -189,6 +189,7 @@ export function isIgnoredHumanIntervention(node: CanvasNode): boolean {
 
 export function isPendingHumanIntervention(node: CanvasNode): boolean {
   if (node.node_type !== "human" || isIgnoredHumanIntervention(node)) return false;
+  if (node.status === "expired" || node.body_json?.resolution === "expired") return false;
   return HUMAN_INTERVENTION_PENDING_STATUSES.has(node.status ?? "");
 }
 

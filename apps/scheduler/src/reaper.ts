@@ -11,14 +11,24 @@ import { finalizeReportJob } from "./report.js";
 import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./resource-cleanup.js";
 import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
 import { reapExpiredDeviceLeases } from "./domains/device/index.js";
+import { expireDanglingHumanNodes, reapExpiredHumanNodes } from "./domains/canvas/human-node-expire.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
  * - 超时：started_at + timeout_sec 到期 → timeout
  * - 孤儿：lease 过期 → orphan（沙箱可能已死/调度器崩溃后恢复）
+ * - waiting_human：最近一次 human 事件超过独立预算 → failed(human_timeout)
+ * - dangling human 投影：无类型/无目标/无处理入口的 open 节点 → expired
  */
 
-export async function reapOnce(): Promise<{ timeouts: number; orphans: number; provisionStuck: number; stalled: number }> {
+export async function reapOnce(): Promise<{
+  timeouts: number;
+  orphans: number;
+  provisionStuck: number;
+  stalled: number;
+  humanTimeouts: number;
+  expiredHumanNodes: number;
+}> {
   const lifecycle = createSqlJobLifecycleApplication();
   const timedOut = await lifecycle.reapExecutionTimeout();
   const liveRules = await globalRules(sql);
@@ -28,8 +38,9 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
 
   const orphaned = await lifecycle.reapLeaseOrphans();
   const stalled = await lifecycle.reapStalledExecution(liveRules.stallSec);
+  const waitingHumanTimedOut = await lifecycle.reapWaitingHumanTimeout(config.timeouts.waitingHumanSec);
 
-  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled]) {
+  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled, ...waitingHumanTimedOut]) {
     const jobId = j.id as string;
     const sandboxId = j.sandbox_id as string | null | undefined;
     if (sandboxId) {
@@ -46,14 +57,16 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     const isTimeout = timedOut.some((x) => x.id === jobId);
     const isProvision = provisionStuck.some((x) => x.id === jobId);
     const isStalled = stalled.some((x) => x.id === jobId);
+    const isHumanTimeout = waitingHumanTimedOut.some((x) => x.id === jobId);
     if (isTimeout) inc("deepsonar_jobs_failed_total", { reason: "timeout" });
     else if (isProvision) inc("deepsonar_jobs_failed_total", { reason: "provision_stuck" });
     else if (isStalled) inc("deepsonar_jobs_failed_total", { reason: "stalled" });
+    else if (isHumanTimeout) inc("deepsonar_jobs_failed_total", { reason: "human_timeout" });
     else inc("deepsonar_jobs_orphan_total");
     // §6.3：终局判定即吊销短期模型 Token
     await revokeJobTokens(jobId, "reaper").catch(() => {});
     await revokeJobCapabilityTokens(jobId, "reaper").catch(() => {});
-    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled ? "failed" : "orphan";
+    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled || isHumanTimeout ? "failed" : "orphan";
     const [meta] = await sql<{
       id: string;
       type: string;
@@ -68,6 +81,7 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
       await tx`
         UPDATE canvas_nodes SET status = 'failed', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+      if (meta?.canvas_id) await expireDanglingHumanNodes(tx, meta.canvas_id);
       if (meta?.type === "report") {
         await finalizeReportJob(tx, jobId, {
           failed: true,
@@ -110,7 +124,22 @@ export async function reapOnce(): Promise<{ timeouts: number; orphans: number; p
     console.warn(`[reaper] 回收 ${expiredDeviceLeases} 条过期设备租约`);
   }
 
-  return { timeouts: timedOut.length, orphans: orphaned.length, provisionStuck: provisionStuck.length, stalled: stalled.length };
+  const expiredHumanNodes = await reapExpiredHumanNodes().catch((error: unknown) => {
+    console.error(`[reaper] human 节点收口失败:`, error instanceof Error ? error.message : error);
+    return 0;
+  });
+  if (expiredHumanNodes > 0) {
+    console.warn(`[reaper] 收口 ${expiredHumanNodes} 个 dangling human 节点`);
+  }
+
+  return {
+    timeouts: timedOut.length,
+    orphans: orphaned.length,
+    provisionStuck: provisionStuck.length,
+    stalled: stalled.length,
+    humanTimeouts: waitingHumanTimedOut.length,
+    expiredHumanNodes,
+  };
 }
 
 export function startReaper() {
@@ -120,7 +149,7 @@ export function startReaper() {
     running = true;
     void (async () => {
       const result = await reapOnce();
-      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled > 0) {
+      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled + result.humanTimeouts + result.expiredHumanNodes > 0) {
         console.log("[reaper]", result);
       }
       if (shouldCleanupManagedResources(config.runtime)) {

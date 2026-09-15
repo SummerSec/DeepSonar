@@ -56,6 +56,8 @@ test("only open human nodes can be ignored and ignored is a terminal resolution"
   assert.equal(isAlreadyIgnoredHumanNode({ status: "ignored" }), true);
   assert.equal(isAlreadyIgnoredHumanNode({ status: "open", body_json: { resolution: "ignored" } }), true);
   assert.equal(canIgnoreHumanNode({ node_type: "human", status: "ignored" }), false);
+  assert.equal(canIgnoreHumanNode({ node_type: "human", status: "expired" }), false);
+  assert.equal(canIgnoreHumanNode({ node_type: "human", status: "open", body_json: { resolution: "expired" } }), false);
   const patch = humanIgnoreBodyPatch("2026-08-21T00:00:00.000Z", "alice");
   assert.equal(patch.resolution, "ignored");
   assert.equal(patch.instruction, HUMAN_IGNORE_CONTINUE_HINT);

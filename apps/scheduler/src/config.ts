@@ -181,6 +181,14 @@ export const config = {
       Number(process.env.DEEPSONAR_JOB_STALL_SEC) === 0
         ? 0
         : int("DEEPSONAR_JOB_STALL_SEC", 900),
+    /**
+     * waiting_human 独立预算（#536）：从最近一次 `human` 事件起算，超时 Job → failed(human_timeout)。
+     * 0 关闭。默认 30 分钟。不占用 5 小时 audit timeout，也不与 Finding needs_human / 画布 human 投影共用时钟。
+     */
+    waitingHumanSec:
+      Number(process.env.DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC) === 0
+        ? 0
+        : int("DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC", 1_800),
     /** 任务领取的兜底轮询（默认 0=关闭，纯 LISTEN/NOTIFY 事件驱动） */
     dispatchPollSec: int("DEEPSONAR_DISPATCH_POLL_SEC", 0),
   },

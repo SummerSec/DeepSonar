@@ -335,6 +335,8 @@ async function resumeWaitingHumanJob(
 export function canIgnoreHumanNode(node: { node_type?: unknown; status?: unknown; body_json?: unknown }): boolean {
   if (node.node_type !== "human") return false;
   if (isAlreadyIgnoredHumanNode(node)) return false;
+  const body = (node.body_json ?? {}) as Record<string, unknown>;
+  if (String(node.status ?? "") === "expired" || body.resolution === "expired") return false;
   const status = String(node.status ?? "open");
   return status === "open" || status === "";
 }

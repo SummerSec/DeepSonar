@@ -78,6 +78,7 @@ export function createJobLifecycleApplication(
     reapProvisionTimeout: requireOperation("reapProvisionTimeout"),
     reapLeaseOrphans: requireOperation("reapLeaseOrphans"),
     reapStalledExecution: requireOperation("reapStalledExecution"),
+    reapWaitingHumanTimeout: requireOperation("reapWaitingHumanTimeout"),
     reconcileProvisioning: requireOperation("reconcileProvisioning"),
     reconcileRunning: requireOperation("reconcileRunning"),
     cancelJob: requireOperation("cancelJob"),
@@ -328,6 +329,40 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
+        }
+        return rows(result as unknown as JobLifecycleRow[]);
+      });
+    },
+
+    /**
+     * waiting_human 独立预算（#536）：从最近一次 `human` 事件起算，超时 → failed。
+     * 0 关闭。时钟不复用 started_at / audit timeout，也不改 Finding verify_status。
+     */
+    async reapWaitingHumanTimeout(waitingHumanSec) {
+      const budget = Number.isSafeInteger(waitingHumanSec) ? waitingHumanSec : 0;
+      if (budget <= 0) return [];
+      return atomically(async (tx) => {
+        const result = await tx`
+          UPDATE jobs SET status = 'failed', finished_at = now(),
+                          error = COALESCE(error, '') || '人工等待超时（Reaper 判定）',
+                          lease_expires_at = NULL, heartbeat_at = NULL
+          WHERE status = 'waiting_human'
+            AND ${budget}::int > 0
+            AND COALESCE(
+              (SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id AND e.type = 'human'),
+              started_at,
+              claimed_at,
+              created_at
+            ) + (${budget}::int * interval '1 second') < now()
+          RETURNING id, sandbox_id`;
+        for (const row of result) {
+          await settleAttemptTerminal(
+            tx,
+            String(row.id),
+            "failed",
+            { reason: "human_timeout" },
+            "人工等待超时（Reaper 判定）",
+          );
         }
         return rows(result as unknown as JobLifecycleRow[]);
       });
