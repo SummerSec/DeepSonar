@@ -1,0 +1,42 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "action": "初稿生成",
+      "issues": ["存在偏技术表达：代码", "存在疑似 AI 味/空泛表达：闭环", "章节句式重复"]
+    },
+    {
+      "round": 2,
+      "action": "按项目真实运行流程扩写",
+      "issues": ["仍残留脚本套话", "闭环、代码字样未清"]
+    },
+    {
+      "round": 3,
+      "action": "去除制式表达和 AI 味",
+      "issues": ["脚本敏感词仍命中业务用语中的代码、闭环"]
+    },
+    {
+      "round": 4,
+      "action": "脚本自动复核",
+      "issues": ["存在偏技术表达：代码", "存在疑似 AI 味/空泛表达：闭环"]
+    },
+    {
+      "round": 5,
+      "action": "通篇改写为连续段落并替换敏感词",
+      "issues": []
+    },
+    {
+      "round": 6,
+      "action": "再扫敏感词与截图预留",
+      "issues": []
+    },
+    {
+      "round": 7,
+      "action": "定稿，待用户确认手册并选择截图方式",
+      "issues": []
+    }
+  ],
+  "module_count": 13,
+  "screenshot_placeholders": 13,
+  "remaining_gates": ["application-fields", "code-selection", "screenshot-method", "markdown"]
+}

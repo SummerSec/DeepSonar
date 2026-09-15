@@ -1,0 +1,6672 @@
+{
+  "project_root": "/workspace",
+  "selection_required": true,
+  "model_selection_required": true,
+  "confirmation_required": true,
+  "user_confirmed": false,
+  "target_pages": 60,
+  "lines_per_page": 50,
+  "target_lines": 3000,
+  "estimated_selected_lines": 31330,
+  "estimated_selected_pages": 627,
+  "estimated_all_candidate_lines": 146924,
+  "estimated_all_candidate_pages": 2939,
+  "supplement_rule": "模型优先选择能体现软件核心功能和真实运行逻辑的源码；不足60页时再从其他相关源码中补充；候选源码仍不足时才生成全部代码材料。",
+  "confirmation_stage": "code-selection",
+  "next_action": "模型已选出 68 个文件。请用户确认或修改后再运行 confirm_stage.py --stage code-selection。",
+  "instructions": "The script only inventories source files. The model must choose selected/model_reason before user confirmation. Selected files are extracted in full with blank-only lines removed.",
+  "files": [
+    {
+      "path": "apps/web/src/App.tsx",
+      "selected": true,
+      "line_count": 197,
+      "material_line_count": 194,
+      "priority": 0,
+      "selection_tier": "frontend",
+      "evidence": "入口文件证据",
+      "model_reason": "浏览器路由表，对应登录、态势、项目、任务、发现、镜像和设置等真实页面。"
+    },
+    {
+      "path": "apps/web/src/main.tsx",
+      "selected": true,
+      "line_count": 21,
+      "material_line_count": 20,
+      "priority": 0,
+      "selection_tier": "frontend",
+      "evidence": "入口文件证据",
+      "model_reason": "前端入口，挂载控制台并启动路由。"
+    },
+    {
+      "path": "apps/scheduler/src/credential-security-routes.test.ts",
+      "selected": false,
+      "line_count": 61,
+      "material_line_count": 55,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/api-token/routes.ts",
+      "selected": false,
+      "line_count": 153,
+      "material_line_count": 146,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/audit/routes.ts",
+      "selected": false,
+      "line_count": 40,
+      "material_line_count": 38,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/auth/routes.ts",
+      "selected": false,
+      "line_count": 349,
+      "material_line_count": 336,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/routes.ts",
+      "selected": false,
+      "line_count": 624,
+      "material_line_count": 607,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/credential/routes.ts",
+      "selected": false,
+      "line_count": 1531,
+      "material_line_count": 1491,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/routes.ts",
+      "selected": false,
+      "line_count": 38,
+      "material_line_count": 35,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/finding-verification/routes.ts",
+      "selected": false,
+      "line_count": 603,
+      "material_line_count": 591,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-control/routes.test.ts",
+      "selected": false,
+      "line_count": 38,
+      "material_line_count": 31,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-control/routes.ts",
+      "selected": false,
+      "line_count": 751,
+      "material_line_count": 727,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/routes.ts",
+      "selected": false,
+      "line_count": 335,
+      "material_line_count": 306,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/project-task/routes.ts",
+      "selected": false,
+      "line_count": 1205,
+      "material_line_count": 1156,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/report-convergence/routes.ts",
+      "selected": false,
+      "line_count": 161,
+      "material_line_count": 150,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-config/routes.ts",
+      "selected": false,
+      "line_count": 761,
+      "material_line_count": 740,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/runtime-image/routes.ts",
+      "selected": false,
+      "line_count": 916,
+      "material_line_count": 890,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/settings/routes.test.ts",
+      "selected": false,
+      "line_count": 116,
+      "material_line_count": 99,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/settings/routes.ts",
+      "selected": false,
+      "line_count": 512,
+      "material_line_count": 496,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/shared-assets/routes.ts",
+      "selected": false,
+      "line_count": 178,
+      "material_line_count": 165,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/skill-source/routes.ts",
+      "selected": false,
+      "line_count": 106,
+      "material_line_count": 99,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/stream/routes.ts",
+      "selected": false,
+      "line_count": 265,
+      "material_line_count": 255,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/system/routes.ts",
+      "selected": false,
+      "line_count": 96,
+      "material_line_count": 90,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/transfer/routes.ts",
+      "selected": false,
+      "line_count": 354,
+      "material_line_count": 336,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/routes.ts",
+      "selected": true,
+      "line_count": 74,
+      "material_line_count": 60,
+      "priority": 10,
+      "selection_tier": "frontend",
+      "evidence": "路由文件证据",
+      "model_reason": "HTTP 路由组装入口。"
+    },
+    {
+      "path": "apps/web/src/pages/AgentMarketplacePage.tsx",
+      "selected": true,
+      "line_count": 169,
+      "material_line_count": 157,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "Agent 市场：安装受治理的角色配置包。"
+    },
+    {
+      "path": "apps/web/src/pages/AgentsPage.tsx",
+      "selected": true,
+      "line_count": 20,
+      "material_line_count": 19,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "Agent 管理：角色能力与默认运行配置。"
+    },
+    {
+      "path": "apps/web/src/pages/DashboardPage.tsx",
+      "selected": true,
+      "line_count": 184,
+      "material_line_count": 169,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "运行态势首页，展示项目、任务、运行和待处理事项。"
+    },
+    {
+      "path": "apps/web/src/pages/FindingsPage.tsx",
+      "selected": true,
+      "line_count": 727,
+      "material_line_count": 699,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "项目风险与跨项目发现列表、筛选和处置。"
+    },
+    {
+      "path": "apps/web/src/pages/JobsPage.tsx",
+      "selected": true,
+      "line_count": 640,
+      "material_line_count": 616,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "调度队列：查看、取消和恢复各次运行。"
+    },
+    {
+      "path": "apps/web/src/pages/LoginPage.tsx",
+      "selected": true,
+      "line_count": 177,
+      "material_line_count": 165,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "登录页：账号登录、创建首位管理员、API Token。"
+    },
+    {
+      "path": "apps/web/src/pages/NotFoundPage.tsx",
+      "selected": true,
+      "line_count": 6,
+      "material_line_count": 5,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "未知地址提示页。"
+    },
+    {
+      "path": "apps/web/src/pages/PlatformSettingsPage.tsx",
+      "selected": true,
+      "line_count": 71,
+      "material_line_count": 68,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "安全与访问、凭据、配置中心。"
+    },
+    {
+      "path": "apps/web/src/pages/ProjectDataPage.tsx",
+      "selected": true,
+      "line_count": 29,
+      "material_line_count": 27,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "项目数据导入导出入口。"
+    },
+    {
+      "path": "apps/web/src/pages/ProjectLayout.tsx",
+      "selected": true,
+      "line_count": 68,
+      "material_line_count": 63,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "进入某个项目后的页签布局。"
+    },
+    {
+      "path": "apps/web/src/pages/ProjectReportsPage.tsx",
+      "selected": true,
+      "line_count": 191,
+      "material_line_count": 184,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "项目报告：任务总报告和已确认发现报告下载。"
+    },
+    {
+      "path": "apps/web/src/pages/ProjectsPage.tsx",
+      "selected": true,
+      "line_count": 430,
+      "material_line_count": 409,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "项目空间列表、新建、编辑与归档。"
+    },
+    {
+      "path": "apps/web/src/pages/ProjectUsagePage.tsx",
+      "selected": true,
+      "line_count": 13,
+      "material_line_count": 12,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "项目账本入口。"
+    },
+    {
+      "path": "apps/web/src/pages/RuntimeImagesPage.tsx",
+      "selected": true,
+      "line_count": 1646,
+      "material_line_count": 1587,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "镜像市场与项目镜像启用、准入和固定版本。"
+    },
+    {
+      "path": "apps/web/src/pages/SettingsPage.tsx",
+      "selected": true,
+      "line_count": 24,
+      "material_line_count": 22,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "项目策略：本项目相对全局的角色和规则覆盖。"
+    },
+    {
+      "path": "apps/web/src/pages/TaskCanvasPage.tsx",
+      "selected": true,
+      "line_count": 1578,
+      "material_line_count": 1527,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "任务详情：过程画布、事实、发现、运行、报告和人工介入。"
+    },
+    {
+      "path": "apps/web/src/pages/TaskCanvasRoute.tsx",
+      "selected": true,
+      "line_count": 42,
+      "material_line_count": 39,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "任务详情路由入口。"
+    },
+    {
+      "path": "apps/web/src/pages/TasksPage.tsx",
+      "selected": true,
+      "line_count": 906,
+      "material_line_count": 882,
+      "priority": 20,
+      "selection_tier": "frontend",
+      "evidence": "页面文件证据",
+      "model_reason": "任务工作台：下达普通/组合任务、筛选和预约开始。"
+    },
+    {
+      "path": "agent-harness/demo-repo/api/upload.php",
+      "selected": false,
+      "line_count": 16,
+      "material_line_count": 13,
+      "priority": 30,
+      "selection_tier": "supplement",
+      "evidence": "数据交互文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/components/ConfirmDialog.tsx",
+      "selected": true,
+      "line_count": 139,
+      "material_line_count": 130,
+      "priority": 50,
+      "selection_tier": "frontend",
+      "evidence": "页面组成文件证据",
+      "model_reason": "危险操作确认框。"
+    },
+    {
+      "path": "apps/web/src/components/DeepSonarMark.tsx",
+      "selected": true,
+      "line_count": 23,
+      "material_line_count": 22,
+      "priority": 50,
+      "selection_tier": "frontend",
+      "evidence": "页面组成文件证据",
+      "model_reason": "产品标志。"
+    },
+    {
+      "path": "apps/web/src/components/IntentLaunchRail.tsx",
+      "selected": true,
+      "line_count": 377,
+      "material_line_count": 351,
+      "priority": 50,
+      "selection_tier": "frontend",
+      "evidence": "页面组成文件证据",
+      "model_reason": "从一句目标开始的快捷入口。"
+    },
+    {
+      "path": "apps/web/src/components/NewProjectForm.tsx",
+      "selected": true,
+      "line_count": 167,
+      "material_line_count": 156,
+      "priority": 50,
+      "selection_tier": "frontend",
+      "evidence": "页面组成文件证据",
+      "model_reason": "新建项目表单。"
+    },
+    {
+      "path": "agent-harness/check-runtime-image-consistency.mjs",
+      "selected": false,
+      "line_count": 1004,
+      "material_line_count": 1000,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/chrome-test-smoke.mjs",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 52,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/clickhouse-test-smoke.mjs",
+      "selected": false,
+      "line_count": 63,
+      "material_line_count": 59,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/demo-repo/web/comment.js",
+      "selected": false,
+      "line_count": 14,
+      "material_line_count": 12,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/dsh-cordis-smoke-config.mjs",
+      "selected": false,
+      "line_count": 105,
+      "material_line_count": 91,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/generate-runtime-image-registry.mjs",
+      "selected": false,
+      "line_count": 435,
+      "material_line_count": 409,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/image-build-fingerprint.mjs",
+      "selected": false,
+      "line_count": 326,
+      "material_line_count": 312,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/image.mjs",
+      "selected": false,
+      "line_count": 46,
+      "material_line_count": 44,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/oci-image-size.mjs",
+      "selected": false,
+      "line_count": 170,
+      "material_line_count": 158,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-cli-control.poc.ts",
+      "selected": false,
+      "line_count": 574,
+      "material_line_count": 554,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-dispatch.poc.ts",
+      "selected": false,
+      "line_count": 198,
+      "material_line_count": 187,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-gvisor.poc.ts",
+      "selected": false,
+      "line_count": 34,
+      "material_line_count": 31,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-platform-api.poc.ts",
+      "selected": false,
+      "line_count": 261,
+      "material_line_count": 241,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-prod-compose.poc.ts",
+      "selected": false,
+      "line_count": 200,
+      "material_line_count": 190,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-prod-official.poc.ts",
+      "selected": false,
+      "line_count": 198,
+      "material_line_count": 187,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-prod-stack.poc.ts",
+      "selected": false,
+      "line_count": 112,
+      "material_line_count": 105,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-reaper.poc.ts",
+      "selected": false,
+      "line_count": 261,
+      "material_line_count": 246,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/opensandbox/opensandbox-reconcile.poc.ts",
+      "selected": false,
+      "line_count": 186,
+      "material_line_count": 171,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/record-runtime-image-digest.mjs",
+      "selected": false,
+      "line_count": 120,
+      "material_line_count": 109,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/runtime-image-record.mjs",
+      "selected": false,
+      "line_count": 57,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-canvas-updates.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 40,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-changelog.mjs",
+      "selected": false,
+      "line_count": 50,
+      "material_line_count": 45,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-chrome-runtime.mjs",
+      "selected": false,
+      "line_count": 58,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-clickhouse-runtime.mjs",
+      "selected": false,
+      "line_count": 58,
+      "material_line_count": 54,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-control-api.ts",
+      "selected": false,
+      "line_count": 194,
+      "material_line_count": 181,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-dsh-cordis.mjs",
+      "selected": false,
+      "line_count": 219,
+      "material_line_count": 201,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-image-build-fingerprint.mjs",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 38,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-maven-package.mjs",
+      "selected": false,
+      "line_count": 68,
+      "material_line_count": 62,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-mobile-runtime.mjs",
+      "selected": false,
+      "line_count": 263,
+      "material_line_count": 245,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-oci-image-size.mjs",
+      "selected": false,
+      "line_count": 36,
+      "material_line_count": 33,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-openharmony-hdc.mjs",
+      "selected": false,
+      "line_count": 159,
+      "material_line_count": 141,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-opensandbox-poc.ts",
+      "selected": false,
+      "line_count": 441,
+      "material_line_count": 425,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-pi-rpc.mjs",
+      "selected": false,
+      "line_count": 278,
+      "material_line_count": 256,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-runtime-image-record.mjs",
+      "selected": false,
+      "line_count": 79,
+      "material_line_count": 72,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-runtime-image.mjs",
+      "selected": false,
+      "line_count": 76,
+      "material_line_count": 73,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-runtime-policy.ts",
+      "selected": false,
+      "line_count": 60,
+      "material_line_count": 56,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-runtime-registry-fetch.ts",
+      "selected": false,
+      "line_count": 68,
+      "material_line_count": 62,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-runtime-registry-generator.mjs",
+      "selected": false,
+      "line_count": 190,
+      "material_line_count": 178,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-scheduler-convergence.ts",
+      "selected": false,
+      "line_count": 222,
+      "material_line_count": 205,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-task-lifecycle.ts",
+      "selected": false,
+      "line_count": 21,
+      "material_line_count": 18,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-transfer-schema-version.ts",
+      "selected": false,
+      "line_count": 127,
+      "material_line_count": 115,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/validate-changelog.mjs",
+      "selected": false,
+      "line_count": 120,
+      "material_line_count": 104,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/write-tool-manifest.mjs",
+      "selected": false,
+      "line_count": 57,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/cosign-verify.test.ts",
+      "selected": false,
+      "line_count": 67,
+      "material_line_count": 60,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/cosign-verify.ts",
+      "selected": false,
+      "line_count": 101,
+      "material_line_count": 92,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/index.ts",
+      "selected": false,
+      "line_count": 475,
+      "material_line_count": 448,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/registry-ref.test.ts",
+      "selected": false,
+      "line_count": 74,
+      "material_line_count": 66,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/registry-ref.ts",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 48,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/scanner-config.test.ts",
+      "selected": false,
+      "line_count": 67,
+      "material_line_count": 61,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/scanner-config.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 40,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/trust-policy.test.ts",
+      "selected": false,
+      "line_count": 106,
+      "material_line_count": 99,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/image-admission/src/trust-policy.ts",
+      "selected": false,
+      "line_count": 34,
+      "material_line_count": 31,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/agent-cli-convergence.test.ts",
+      "selected": false,
+      "line_count": 74,
+      "material_line_count": 68,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/audit.test.ts",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 51,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/audit.ts",
+      "selected": false,
+      "line_count": 121,
+      "material_line_count": 115,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/auth.ts",
+      "selected": true,
+      "line_count": 409,
+      "material_line_count": 384,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "控制台与自动化访问鉴权。"
+    },
+    {
+      "path": "apps/scheduler/src/authorization-boundaries.integration.test.ts",
+      "selected": false,
+      "line_count": 404,
+      "material_line_count": 368,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/blob-store/blob-store.test.ts",
+      "selected": false,
+      "line_count": 72,
+      "material_line_count": 66,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/blob-store/index.ts",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/blob-store/keys.ts",
+      "selected": false,
+      "line_count": 26,
+      "material_line_count": 22,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/blob-store/local.ts",
+      "selected": false,
+      "line_count": 67,
+      "material_line_count": 60,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/blob-store/s3.ts",
+      "selected": false,
+      "line_count": 168,
+      "material_line_count": 156,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/blob-store/types.ts",
+      "selected": false,
+      "line_count": 27,
+      "material_line_count": 24,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-change-log.integration.test.ts",
+      "selected": false,
+      "line_count": 161,
+      "material_line_count": 151,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-convergence-120.test.ts",
+      "selected": false,
+      "line_count": 411,
+      "material_line_count": 389,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-delta.test.ts",
+      "selected": false,
+      "line_count": 68,
+      "material_line_count": 64,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-delta.ts",
+      "selected": false,
+      "line_count": 202,
+      "material_line_count": 191,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-lifecycle-projection.integration.test.ts",
+      "selected": false,
+      "line_count": 134,
+      "material_line_count": 126,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-projection-order.test.ts",
+      "selected": false,
+      "line_count": 16,
+      "material_line_count": 14,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-updates.test.ts",
+      "selected": false,
+      "line_count": 38,
+      "material_line_count": 35,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/canvas-updates.ts",
+      "selected": false,
+      "line_count": 179,
+      "material_line_count": 169,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/chrome-runtime-job-policy.test.ts",
+      "selected": false,
+      "line_count": 210,
+      "material_line_count": 195,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/compose-scope.test.ts",
+      "selected": false,
+      "line_count": 70,
+      "material_line_count": 65,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/compose-scope.ts",
+      "selected": false,
+      "line_count": 112,
+      "material_line_count": 97,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/config.ts",
+      "selected": false,
+      "line_count": 315,
+      "material_line_count": 292,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/control-input.test.ts",
+      "selected": false,
+      "line_count": 25,
+      "material_line_count": 24,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/control-input.ts",
+      "selected": false,
+      "line_count": 197,
+      "material_line_count": 178,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/convergence-recovery.integration.test.ts",
+      "selected": false,
+      "line_count": 515,
+      "material_line_count": 495,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/core.ts",
+      "selected": true,
+      "line_count": 1655,
+      "material_line_count": 1544,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "任务创建、状态迁移和终态编排。"
+    },
+    {
+      "path": "apps/scheduler/src/credential-auth-scopes.integration.test.ts",
+      "selected": false,
+      "line_count": 94,
+      "material_line_count": 89,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-batch-bind.integration.test.ts",
+      "selected": false,
+      "line_count": 275,
+      "material_line_count": 262,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-batch-bind.test.ts",
+      "selected": false,
+      "line_count": 104,
+      "material_line_count": 97,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-catalog-soft-degrade.integration.test.ts",
+      "selected": false,
+      "line_count": 144,
+      "material_line_count": 131,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-compatibility.test.ts",
+      "selected": false,
+      "line_count": 183,
+      "material_line_count": 173,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-delete.integration.test.ts",
+      "selected": false,
+      "line_count": 279,
+      "material_line_count": 259,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-delete.test.ts",
+      "selected": false,
+      "line_count": 67,
+      "material_line_count": 60,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-health-concurrency.integration.test.ts",
+      "selected": false,
+      "line_count": 126,
+      "material_line_count": 118,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-metadata.test.ts",
+      "selected": false,
+      "line_count": 130,
+      "material_line_count": 121,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-project-scope.integration.test.ts",
+      "selected": false,
+      "line_count": 286,
+      "material_line_count": 264,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-secret-projection.test.ts",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 48,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-secret-projection.ts",
+      "selected": false,
+      "line_count": 70,
+      "material_line_count": 64,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-security.integration.test.ts",
+      "selected": false,
+      "line_count": 573,
+      "material_line_count": 532,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-test.test.ts",
+      "selected": false,
+      "line_count": 348,
+      "material_line_count": 334,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credential-test.ts",
+      "selected": false,
+      "line_count": 401,
+      "material_line_count": 368,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/credentials.ts",
+      "selected": false,
+      "line_count": 569,
+      "material_line_count": 514,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/db.test.ts",
+      "selected": false,
+      "line_count": 49,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/db.ts",
+      "selected": false,
+      "line_count": 56,
+      "material_line_count": 51,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/dispatch-limits.integration.test.ts",
+      "selected": false,
+      "line_count": 290,
+      "material_line_count": 270,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/dispatch-limits.test.ts",
+      "selected": false,
+      "line_count": 597,
+      "material_line_count": 565,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/dispatcher-provision-retry.test.ts",
+      "selected": false,
+      "line_count": 22,
+      "material_line_count": 20,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/dispatcher.ts",
+      "selected": true,
+      "line_count": 1512,
+      "material_line_count": 1452,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "领取待运行任务并启动隔离执行。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/broadcast-contract.test.ts",
+      "selected": false,
+      "line_count": 26,
+      "material_line_count": 23,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/broadcast-contract.ts",
+      "selected": false,
+      "line_count": 7,
+      "material_line_count": 6,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/canvas-facts.integration.test.ts",
+      "selected": false,
+      "line_count": 482,
+      "material_line_count": 461,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/fact-contract.test.ts",
+      "selected": false,
+      "line_count": 76,
+      "material_line_count": 70,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/fact-contract.ts",
+      "selected": false,
+      "line_count": 25,
+      "material_line_count": 22,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/fact-verification.integration.test.ts",
+      "selected": false,
+      "line_count": 232,
+      "material_line_count": 211,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/fact-verification.test.ts",
+      "selected": false,
+      "line_count": 74,
+      "material_line_count": 69,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/fact-verification.ts",
+      "selected": false,
+      "line_count": 44,
+      "material_line_count": 41,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/facts.ts",
+      "selected": false,
+      "line_count": 314,
+      "material_line_count": 307,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/human-messages.test.ts",
+      "selected": false,
+      "line_count": 71,
+      "material_line_count": 65,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/canvas/human-messages.ts",
+      "selected": false,
+      "line_count": 413,
+      "material_line_count": 383,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/context/context.test.ts",
+      "selected": false,
+      "line_count": 113,
+      "material_line_count": 108,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/context/index.ts",
+      "selected": false,
+      "line_count": 176,
+      "material_line_count": 171,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/credential/projection.test.ts",
+      "selected": false,
+      "line_count": 32,
+      "material_line_count": 30,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/credential/projection.ts",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 53,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/ops.integration.test.ts",
+      "selected": false,
+      "line_count": 68,
+      "material_line_count": 64,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/ops.test.ts",
+      "selected": false,
+      "line_count": 122,
+      "material_line_count": 117,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/ops.ts",
+      "selected": false,
+      "line_count": 392,
+      "material_line_count": 375,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/overview.integration.test.ts",
+      "selected": false,
+      "line_count": 64,
+      "material_line_count": 60,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/overview.test.ts",
+      "selected": false,
+      "line_count": 162,
+      "material_line_count": 156,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/overview.ts",
+      "selected": false,
+      "line_count": 511,
+      "material_line_count": 466,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/usage.test.ts",
+      "selected": false,
+      "line_count": 163,
+      "material_line_count": 151,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/dashboard/usage.ts",
+      "selected": false,
+      "line_count": 377,
+      "material_line_count": 338,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/application.ts",
+      "selected": false,
+      "line_count": 414,
+      "material_line_count": 377,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/authorization.integration.test.ts",
+      "selected": false,
+      "line_count": 524,
+      "material_line_count": 496,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/event-ingestion.characterization.test.ts",
+      "selected": false,
+      "line_count": 47,
+      "material_line_count": 44,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/event-ingestion.integration.test.ts",
+      "selected": false,
+      "line_count": 729,
+      "material_line_count": 703,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/hub-runtime-image.integration.test.ts",
+      "selected": false,
+      "line_count": 246,
+      "material_line_count": 233,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/index.ts",
+      "selected": false,
+      "line_count": 17,
+      "material_line_count": 17,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/rate-limit.integration.test.ts",
+      "selected": false,
+      "line_count": 165,
+      "material_line_count": 156,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/rate-limit.test.ts",
+      "selected": false,
+      "line_count": 137,
+      "material_line_count": 127,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/rate-limit.ts",
+      "selected": false,
+      "line_count": 229,
+      "material_line_count": 211,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/event-ingestion/side-effects.ts",
+      "selected": false,
+      "line_count": 1266,
+      "material_line_count": 1216,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/finding-verification/finding-verification.characterization.test.ts",
+      "selected": false,
+      "line_count": 135,
+      "material_line_count": 127,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/finding-verification/index.ts",
+      "selected": false,
+      "line_count": 2,
+      "material_line_count": 2,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/finding-verification/project-findings-summary.integration.test.ts",
+      "selected": false,
+      "line_count": 114,
+      "material_line_count": 103,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/finding-verification/project-findings-summary.test.ts",
+      "selected": false,
+      "line_count": 52,
+      "material_line_count": 50,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/finding-verification/project-findings-summary.ts",
+      "selected": false,
+      "line_count": 145,
+      "material_line_count": 136,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/hub-orchestration/application.ts",
+      "selected": false,
+      "line_count": 553,
+      "material_line_count": 513,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/hub-orchestration/hub-orchestration.characterization.test.ts",
+      "selected": false,
+      "line_count": 81,
+      "material_line_count": 76,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/hub-orchestration/index.ts",
+      "selected": false,
+      "line_count": 3,
+      "material_line_count": 3,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "不抽进鉴别材料正文：体积大的 HTTP 路由会把前30页占满，审核员更应先看到控制台页面。"
+    },
+    {
+      "path": "apps/scheduler/src/domains/hub-orchestration/policy.ts",
+      "selected": false,
+      "line_count": 17,
+      "material_line_count": 15,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/hub-orchestration/ports.ts",
+      "selected": false,
+      "line_count": 91,
+      "material_line_count": 84,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/application.integration.test.ts",
+      "selected": false,
+      "line_count": 133,
+      "material_line_count": 130,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/application.test.ts",
+      "selected": false,
+      "line_count": 278,
+      "material_line_count": 264,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/application.ts",
+      "selected": false,
+      "line_count": 368,
+      "material_line_count": 352,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/index.ts",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 53,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/model.test.ts",
+      "selected": false,
+      "line_count": 78,
+      "material_line_count": 74,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/model.ts",
+      "selected": false,
+      "line_count": 244,
+      "material_line_count": 217,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/provision-cancellation.test.ts",
+      "selected": false,
+      "line_count": 43,
+      "material_line_count": 41,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-attempt/provision-cancellation.ts",
+      "selected": false,
+      "line_count": 49,
+      "material_line_count": 44,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-control/recovery.ts",
+      "selected": false,
+      "line_count": 21,
+      "material_line_count": 20,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-control/rerun.test.ts",
+      "selected": false,
+      "line_count": 114,
+      "material_line_count": 108,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-control/rerun.ts",
+      "selected": false,
+      "line_count": 351,
+      "material_line_count": 322,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/application.ts",
+      "selected": false,
+      "line_count": 466,
+      "material_line_count": 444,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/index.ts",
+      "selected": false,
+      "line_count": 4,
+      "material_line_count": 4,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/job-lifecycle.characterization.test.ts",
+      "selected": false,
+      "line_count": 102,
+      "material_line_count": 95,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/job-lifecycle.integration.test.ts",
+      "selected": false,
+      "line_count": 196,
+      "material_line_count": 178,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/job-lifecycle.test.ts",
+      "selected": false,
+      "line_count": 284,
+      "material_line_count": 265,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/ports.ts",
+      "selected": false,
+      "line_count": 37,
+      "material_line_count": 30,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/stall-policy.test.ts",
+      "selected": false,
+      "line_count": 115,
+      "material_line_count": 109,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/stall-policy.ts",
+      "selected": false,
+      "line_count": 97,
+      "material_line_count": 86,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/job-lifecycle/transition-policy.ts",
+      "selected": false,
+      "line_count": 87,
+      "material_line_count": 75,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/index.ts",
+      "selected": false,
+      "line_count": 4,
+      "material_line_count": 4,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/operations.ts",
+      "selected": false,
+      "line_count": 376,
+      "material_line_count": 357,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/platform-api.integration.test.ts",
+      "selected": false,
+      "line_count": 188,
+      "material_line_count": 174,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/platform-api.test.ts",
+      "selected": false,
+      "line_count": 177,
+      "material_line_count": 168,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/registry.ts",
+      "selected": false,
+      "line_count": 230,
+      "material_line_count": 208,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/platform-api/tokens.ts",
+      "selected": false,
+      "line_count": 403,
+      "material_line_count": 364,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/report-convergence/index.ts",
+      "selected": false,
+      "line_count": 1,
+      "material_line_count": 1,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/report-convergence/report-convergence.characterization.test.ts",
+      "selected": false,
+      "line_count": 111,
+      "material_line_count": 108,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/application.ts",
+      "selected": false,
+      "line_count": 410,
+      "material_line_count": 379,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/index.ts",
+      "selected": false,
+      "line_count": 36,
+      "material_line_count": 36,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/ports.ts",
+      "selected": false,
+      "line_count": 93,
+      "material_line_count": 90,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/role-runtime-snapshot.characterization.test.ts",
+      "selected": false,
+      "line_count": 105,
+      "material_line_count": 100,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/role-runtime-snapshot.test.ts",
+      "selected": false,
+      "line_count": 370,
+      "material_line_count": 352,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.test.ts",
+      "selected": false,
+      "line_count": 57,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts",
+      "selected": false,
+      "line_count": 210,
+      "material_line_count": 191,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/shared-assets/application.ts",
+      "selected": false,
+      "line_count": 247,
+      "material_line_count": 229,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/shared-assets/catalog.test.ts",
+      "selected": false,
+      "line_count": 30,
+      "material_line_count": 29,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/shared-assets/catalog.ts",
+      "selected": false,
+      "line_count": 77,
+      "material_line_count": 72,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/domains/shared-assets/index.ts",
+      "selected": false,
+      "line_count": 2,
+      "material_line_count": 2,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/dsh-adapter-boundary.test.ts",
+      "selected": false,
+      "line_count": 25,
+      "material_line_count": 23,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/event-attribution.test.ts",
+      "selected": false,
+      "line_count": 47,
+      "material_line_count": 44,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/event-attribution.ts",
+      "selected": false,
+      "line_count": 87,
+      "material_line_count": 79,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/evidence-session.test.ts",
+      "selected": false,
+      "line_count": 82,
+      "material_line_count": 76,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/evidence-stream.test.ts",
+      "selected": false,
+      "line_count": 343,
+      "material_line_count": 325,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/evidence.ts",
+      "selected": false,
+      "line_count": 856,
+      "material_line_count": 801,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/executor-real.test.ts",
+      "selected": false,
+      "line_count": 728,
+      "material_line_count": 681,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/executor-real.ts",
+      "selected": false,
+      "line_count": 1715,
+      "material_line_count": 1623,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-disposition.ts",
+      "selected": false,
+      "line_count": 22,
+      "material_line_count": 19,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-human-handling.integration.test.ts",
+      "selected": false,
+      "line_count": 194,
+      "material_line_count": 183,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-protocol.integration.test.ts",
+      "selected": false,
+      "line_count": 217,
+      "material_line_count": 206,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-protocol.test.ts",
+      "selected": false,
+      "line_count": 220,
+      "material_line_count": 208,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-protocol.ts",
+      "selected": false,
+      "line_count": 269,
+      "material_line_count": 250,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-report.integration.test.ts",
+      "selected": false,
+      "line_count": 283,
+      "material_line_count": 270,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-state-matrix.test.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 42,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-state-matrix.ts",
+      "selected": false,
+      "line_count": 201,
+      "material_line_count": 186,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-trace.integration.test.ts",
+      "selected": false,
+      "line_count": 186,
+      "material_line_count": 176,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-trace.test.ts",
+      "selected": false,
+      "line_count": 61,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/finding-trace.ts",
+      "selected": false,
+      "line_count": 418,
+      "material_line_count": 401,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/gateway-body-limit.test.ts",
+      "selected": false,
+      "line_count": 20,
+      "material_line_count": 18,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/gateway-retry.test.ts",
+      "selected": false,
+      "line_count": 226,
+      "material_line_count": 205,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/gateway-usage.test.ts",
+      "selected": false,
+      "line_count": 142,
+      "material_line_count": 129,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/gateway.ts",
+      "selected": true,
+      "line_count": 887,
+      "material_line_count": 829,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "模型请求网关，沙箱不持有长期密钥。"
+    },
+    {
+      "path": "apps/scheduler/src/graph-budget.test.ts",
+      "selected": false,
+      "line_count": 259,
+      "material_line_count": 243,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/graph-reference.integration.test.ts",
+      "selected": false,
+      "line_count": 282,
+      "material_line_count": 268,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/graph-reference.test.ts",
+      "selected": false,
+      "line_count": 152,
+      "material_line_count": 134,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/graph.ts",
+      "selected": true,
+      "line_count": 864,
+      "material_line_count": 818,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "把画布事实投影给决策中枢阅读。"
+    },
+    {
+      "path": "apps/scheduler/src/host-disk.test.ts",
+      "selected": false,
+      "line_count": 71,
+      "material_line_count": 64,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/host-disk.ts",
+      "selected": false,
+      "line_count": 125,
+      "material_line_count": 115,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/hub-decision-payload-file.test.ts",
+      "selected": false,
+      "line_count": 85,
+      "material_line_count": 78,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/import-provenance.test.ts",
+      "selected": false,
+      "line_count": 50,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/import-provenance.ts",
+      "selected": false,
+      "line_count": 73,
+      "material_line_count": 63,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/import-resume.integration.test.ts",
+      "selected": false,
+      "line_count": 71,
+      "material_line_count": 67,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/index.ts",
+      "selected": true,
+      "line_count": 149,
+      "material_line_count": 140,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "调度器启动：库校验、路由、领取运行和超时回收。"
+    },
+    {
+      "path": "apps/scheduler/src/job-capability-revocation.test.ts",
+      "selected": false,
+      "line_count": 59,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/job-dispatch-prompt.test.ts",
+      "selected": false,
+      "line_count": 59,
+      "material_line_count": 54,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/job-dispatch-prompt.ts",
+      "selected": false,
+      "line_count": 116,
+      "material_line_count": 104,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/job-rerun.integration.test.ts",
+      "selected": false,
+      "line_count": 544,
+      "material_line_count": 524,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/job-state-write-inventory.test.ts",
+      "selected": false,
+      "line_count": 233,
+      "material_line_count": 219,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/leftover-job-type-aliases.test.ts",
+      "selected": false,
+      "line_count": 39,
+      "material_line_count": 37,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/login-client-ip.test.ts",
+      "selected": false,
+      "line_count": 41,
+      "material_line_count": 38,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/login-rate-limit.integration.test.ts",
+      "selected": false,
+      "line_count": 176,
+      "material_line_count": 162,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/login-rate-limit.test.ts",
+      "selected": false,
+      "line_count": 58,
+      "material_line_count": 50,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/login-rate-limit.ts",
+      "selected": false,
+      "line_count": 179,
+      "material_line_count": 164,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/manual-evidence-priority.test.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 42,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/metrics.ts",
+      "selected": false,
+      "line_count": 129,
+      "material_line_count": 120,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/migration-runner.test.ts",
+      "selected": false,
+      "line_count": 243,
+      "material_line_count": 233,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/migration-runner.ts",
+      "selected": false,
+      "line_count": 333,
+      "material_line_count": 307,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/module-selectors.test.ts",
+      "selected": false,
+      "line_count": 197,
+      "material_line_count": 182,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/openapi.test.ts",
+      "selected": false,
+      "line_count": 114,
+      "material_line_count": 107,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/openapi.ts",
+      "selected": false,
+      "line_count": 2881,
+      "material_line_count": 2843,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/opensandbox-health.test.ts",
+      "selected": false,
+      "line_count": 68,
+      "material_line_count": 61,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/opensandbox-health.ts",
+      "selected": false,
+      "line_count": 139,
+      "material_line_count": 127,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/owned-sequences.ts",
+      "selected": false,
+      "line_count": 209,
+      "material_line_count": 191,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/pagination.test.ts",
+      "selected": false,
+      "line_count": 65,
+      "material_line_count": 60,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/pagination.ts",
+      "selected": false,
+      "line_count": 193,
+      "material_line_count": 174,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/pi-extensions.test.ts",
+      "selected": false,
+      "line_count": 77,
+      "material_line_count": 72,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/pi-extensions.ts",
+      "selected": false,
+      "line_count": 132,
+      "material_line_count": 123,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/platform-control-skill.test.ts",
+      "selected": false,
+      "line_count": 48,
+      "material_line_count": 44,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/platform-control-skill.ts",
+      "selected": false,
+      "line_count": 119,
+      "material_line_count": 99,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/platform-control.ts",
+      "selected": false,
+      "line_count": 15,
+      "material_line_count": 15,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/platform-tools.ts",
+      "selected": false,
+      "line_count": 119,
+      "material_line_count": 116,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/process-stream-boundary.test.ts",
+      "selected": false,
+      "line_count": 216,
+      "material_line_count": 199,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/process-stream-live.ts",
+      "selected": false,
+      "line_count": 72,
+      "material_line_count": 68,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/product-version.test.ts",
+      "selected": false,
+      "line_count": 26,
+      "material_line_count": 22,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/product-version.ts",
+      "selected": false,
+      "line_count": 12,
+      "material_line_count": 11,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/project-reports.integration.test.ts",
+      "selected": false,
+      "line_count": 118,
+      "material_line_count": 111,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/project-reports.test.ts",
+      "selected": false,
+      "line_count": 66,
+      "material_line_count": 62,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/project-reports.ts",
+      "selected": false,
+      "line_count": 187,
+      "material_line_count": 170,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/project-scope-hook.ts",
+      "selected": false,
+      "line_count": 155,
+      "material_line_count": 154,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/project-scope.test.ts",
+      "selected": false,
+      "line_count": 37,
+      "material_line_count": 33,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/project-scope.ts",
+      "selected": false,
+      "line_count": 38,
+      "material_line_count": 32,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/provider-effective-model.ts",
+      "selected": false,
+      "line_count": 94,
+      "material_line_count": 88,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/provider-settings.test.ts",
+      "selected": false,
+      "line_count": 510,
+      "material_line_count": 479,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/provider-settings.ts",
+      "selected": false,
+      "line_count": 656,
+      "material_line_count": 616,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/provision-timeout.test.ts",
+      "selected": false,
+      "line_count": 60,
+      "material_line_count": 53,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/query-planes.test.ts",
+      "selected": false,
+      "line_count": 19,
+      "material_line_count": 18,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/query-planes.ts",
+      "selected": false,
+      "line_count": 102,
+      "material_line_count": 97,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/readiness.test.ts",
+      "selected": false,
+      "line_count": 712,
+      "material_line_count": 676,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/readiness.ts",
+      "selected": false,
+      "line_count": 952,
+      "material_line_count": 904,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/reaper.ts",
+      "selected": false,
+      "line_count": 121,
+      "material_line_count": 112,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/reconcile.ts",
+      "selected": false,
+      "line_count": 193,
+      "material_line_count": 181,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/recovery-issue186.integration.test.ts",
+      "selected": false,
+      "line_count": 221,
+      "material_line_count": 207,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/report-download.integration.test.ts",
+      "selected": false,
+      "line_count": 193,
+      "material_line_count": 178,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/report-download.openapi.test.ts",
+      "selected": false,
+      "line_count": 33,
+      "material_line_count": 31,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/report-numeric-fidelity.test.ts",
+      "selected": false,
+      "line_count": 240,
+      "material_line_count": 222,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/report-numeric-fidelity.ts",
+      "selected": false,
+      "line_count": 113,
+      "material_line_count": 99,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/report.ts",
+      "selected": false,
+      "line_count": 1660,
+      "material_line_count": 1564,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/resource-cleanup.test.ts",
+      "selected": false,
+      "line_count": 120,
+      "material_line_count": 113,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/resource-cleanup.ts",
+      "selected": false,
+      "line_count": 163,
+      "material_line_count": 152,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/role-colors.integration.test.ts",
+      "selected": false,
+      "line_count": 213,
+      "material_line_count": 205,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/role-colors.test.ts",
+      "selected": false,
+      "line_count": 77,
+      "material_line_count": 70,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/role-colors.ts",
+      "selected": false,
+      "line_count": 181,
+      "material_line_count": 163,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/role-config-agent-cli-follow.integration.test.ts",
+      "selected": false,
+      "line_count": 131,
+      "material_line_count": 122,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/role-config-credential-lock.test.ts",
+      "selected": false,
+      "line_count": 86,
+      "material_line_count": 77,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/role-config-project-scope.integration.test.ts",
+      "selected": false,
+      "line_count": 258,
+      "material_line_count": 240,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/route-surface.manifest.ts",
+      "selected": false,
+      "line_count": 336,
+      "material_line_count": 334,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/route-surface.test.ts",
+      "selected": false,
+      "line_count": 155,
+      "material_line_count": 145,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-config-activation.ts",
+      "selected": false,
+      "line_count": 20,
+      "material_line_count": 18,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-gc.test.ts",
+      "selected": false,
+      "line_count": 91,
+      "material_line_count": 86,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-gc.ts",
+      "selected": false,
+      "line_count": 269,
+      "material_line_count": 254,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-local-gate.test.ts",
+      "selected": false,
+      "line_count": 14,
+      "material_line_count": 13,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-pull-status.test.ts",
+      "selected": false,
+      "line_count": 75,
+      "material_line_count": 72,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-pull-status.ts",
+      "selected": false,
+      "line_count": 288,
+      "material_line_count": 265,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-readiness.test.ts",
+      "selected": false,
+      "line_count": 125,
+      "material_line_count": 118,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-readiness.ts",
+      "selected": false,
+      "line_count": 163,
+      "material_line_count": 152,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-registry-contract.ts",
+      "selected": false,
+      "line_count": 557,
+      "material_line_count": 520,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-warmup.test.ts",
+      "selected": false,
+      "line_count": 417,
+      "material_line_count": 397,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-image-warmup.ts",
+      "selected": false,
+      "line_count": 110,
+      "material_line_count": 101,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-images-channel.integration.test.ts",
+      "selected": false,
+      "line_count": 94,
+      "material_line_count": 87,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-images-promotions.integration.test.ts",
+      "selected": false,
+      "line_count": 487,
+      "material_line_count": 457,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-images.test.ts",
+      "selected": false,
+      "line_count": 1224,
+      "material_line_count": 1161,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-images.ts",
+      "selected": false,
+      "line_count": 2594,
+      "material_line_count": 2465,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-knobs.test.ts",
+      "selected": false,
+      "line_count": 143,
+      "material_line_count": 130,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-knobs.ts",
+      "selected": false,
+      "line_count": 357,
+      "material_line_count": 331,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime-registry-channel.test.ts",
+      "selected": false,
+      "line_count": 19,
+      "material_line_count": 17,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/runtime.ts",
+      "selected": false,
+      "line_count": 65,
+      "material_line_count": 61,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/schedule-wake.ts",
+      "selected": false,
+      "line_count": 106,
+      "material_line_count": 96,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/schema-rebuild-cli.ts",
+      "selected": false,
+      "line_count": 154,
+      "material_line_count": 142,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/schema-rebuild.integration.test.ts",
+      "selected": false,
+      "line_count": 186,
+      "material_line_count": 172,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/schema-rebuild.test.ts",
+      "selected": false,
+      "line_count": 202,
+      "material_line_count": 192,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/schema-rebuild.ts",
+      "selected": false,
+      "line_count": 558,
+      "material_line_count": 514,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/schema-version.ts",
+      "selected": false,
+      "line_count": 8,
+      "material_line_count": 8,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/semantic-payload.test.ts",
+      "selected": false,
+      "line_count": 112,
+      "material_line_count": 101,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/shared-assets.integration.test.ts",
+      "selected": false,
+      "line_count": 147,
+      "material_line_count": 134,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/shared-assets.test.ts",
+      "selected": false,
+      "line_count": 69,
+      "material_line_count": 64,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/skill-source-sync.test.ts",
+      "selected": false,
+      "line_count": 48,
+      "material_line_count": 43,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/skill-sources-boot.test.ts",
+      "selected": false,
+      "line_count": 141,
+      "material_line_count": 135,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/skill-sources.ts",
+      "selected": false,
+      "line_count": 806,
+      "material_line_count": 760,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/startup-status.ts",
+      "selected": false,
+      "line_count": 12,
+      "material_line_count": 10,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/stream-bus.test.ts",
+      "selected": false,
+      "line_count": 91,
+      "material_line_count": 86,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/stream-bus.ts",
+      "selected": false,
+      "line_count": 209,
+      "material_line_count": 190,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-compose.integration.test.ts",
+      "selected": false,
+      "line_count": 329,
+      "material_line_count": 309,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-compose.test.ts",
+      "selected": false,
+      "line_count": 129,
+      "material_line_count": 121,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-compose.ts",
+      "selected": false,
+      "line_count": 263,
+      "material_line_count": 250,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-execution-control.contract.test.ts",
+      "selected": false,
+      "line_count": 35,
+      "material_line_count": 33,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-execution-control.integration.test.ts",
+      "selected": false,
+      "line_count": 282,
+      "material_line_count": 263,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-execution-control.test.ts",
+      "selected": false,
+      "line_count": 70,
+      "material_line_count": 66,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-execution-control.ts",
+      "selected": false,
+      "line_count": 90,
+      "material_line_count": 82,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-intent.contract.test.ts",
+      "selected": false,
+      "line_count": 28,
+      "material_line_count": 26,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-intent.integration.test.ts",
+      "selected": false,
+      "line_count": 135,
+      "material_line_count": 119,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-intent.test.ts",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 51,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-intent.ts",
+      "selected": false,
+      "line_count": 51,
+      "material_line_count": 43,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-report-version.test.ts",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 27,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-report-version.ts",
+      "selected": false,
+      "line_count": 21,
+      "material_line_count": 20,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-retry-hub-snapshot.integration.test.ts",
+      "selected": false,
+      "line_count": 123,
+      "material_line_count": 115,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-schedule.test.ts",
+      "selected": false,
+      "line_count": 96,
+      "material_line_count": 86,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/task-schedule.ts",
+      "selected": false,
+      "line_count": 206,
+      "material_line_count": 189,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/test-project-teardown.test.ts",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 26,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/test-project-teardown.ts",
+      "selected": false,
+      "line_count": 18,
+      "material_line_count": 17,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/token-policy.test.ts",
+      "selected": false,
+      "line_count": 57,
+      "material_line_count": 51,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/token-policy.ts",
+      "selected": false,
+      "line_count": 30,
+      "material_line_count": 26,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/export.ts",
+      "selected": false,
+      "line_count": 507,
+      "material_line_count": 466,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/import.ts",
+      "selected": false,
+      "line_count": 675,
+      "material_line_count": 625,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/modules.ts",
+      "selected": false,
+      "line_count": 132,
+      "material_line_count": 122,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/pack.ts",
+      "selected": false,
+      "line_count": 224,
+      "material_line_count": 198,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/platform.ts",
+      "selected": false,
+      "line_count": 691,
+      "material_line_count": 643,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/sanitize.test.ts",
+      "selected": false,
+      "line_count": 46,
+      "material_line_count": 40,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/sanitize.ts",
+      "selected": false,
+      "line_count": 113,
+      "material_line_count": 104,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/transfer/worker.ts",
+      "selected": false,
+      "line_count": 46,
+      "material_line_count": 42,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/users.integration.test.ts",
+      "selected": false,
+      "line_count": 93,
+      "material_line_count": 82,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/users.ts",
+      "selected": true,
+      "line_count": 366,
+      "material_line_count": 334,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "用户账号。"
+    },
+    {
+      "path": "apps/scheduler/src/verify-blind.test.ts",
+      "selected": false,
+      "line_count": 167,
+      "material_line_count": 159,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/verify-eligibility.integration.test.ts",
+      "selected": false,
+      "line_count": 337,
+      "material_line_count": 323,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/verify-eligibility.test.ts",
+      "selected": false,
+      "line_count": 296,
+      "material_line_count": 284,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/verify-fact-first.test.ts",
+      "selected": false,
+      "line_count": 147,
+      "material_line_count": 133,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/verify-fact-gate.ts",
+      "selected": false,
+      "line_count": 178,
+      "material_line_count": 161,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/verify-prompt.ts",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 25,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/verify.ts",
+      "selected": false,
+      "line_count": 1914,
+      "material_line_count": 1799,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/ws-early-close.test.ts",
+      "selected": false,
+      "line_count": 44,
+      "material_line_count": 38,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/ws-early-close.ts",
+      "selected": false,
+      "line_count": 47,
+      "material_line_count": 45,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/ws-send-queue.test.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 42,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/ws-send-queue.ts",
+      "selected": false,
+      "line_count": 107,
+      "material_line_count": 97,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/ws-tickets.test.ts",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 28,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/scheduler/src/ws-tickets.ts",
+      "selected": false,
+      "line_count": 70,
+      "material_line_count": 62,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/index.html",
+      "selected": false,
+      "line_count": 16,
+      "material_line_count": 16,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/AccountPanel.tsx",
+      "selected": true,
+      "line_count": 175,
+      "material_line_count": 165,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "当前账号。"
+    },
+    {
+      "path": "apps/web/src/agent-marketplace.test.ts",
+      "selected": false,
+      "line_count": 119,
+      "material_line_count": 111,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/agent-marketplace.ts",
+      "selected": false,
+      "line_count": 219,
+      "material_line_count": 204,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/api-download.test.ts",
+      "selected": false,
+      "line_count": 207,
+      "material_line_count": 188,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/api.ts",
+      "selected": true,
+      "line_count": 2608,
+      "material_line_count": 2459,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "控制台访问调度器的接口封装，覆盖项目、任务、发现、报告和设置。"
+    },
+    {
+      "path": "apps/web/src/app-shell-nav.test.ts",
+      "selected": false,
+      "line_count": 21,
+      "material_line_count": 19,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/auth-status.test.ts",
+      "selected": false,
+      "line_count": 100,
+      "material_line_count": 90,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/auth-status.ts",
+      "selected": true,
+      "line_count": 59,
+      "material_line_count": 52,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "鉴权状态展示与是否需要登录的判断。"
+    },
+    {
+      "path": "apps/web/src/auth.tsx",
+      "selected": true,
+      "line_count": 202,
+      "material_line_count": 185,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "登录态、账号密码、首次管理员和 Token 进入控制台。"
+    },
+    {
+      "path": "apps/web/src/canvas-broadcasts.test.ts",
+      "selected": false,
+      "line_count": 78,
+      "material_line_count": 71,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-broadcasts.ts",
+      "selected": false,
+      "line_count": 142,
+      "material_line_count": 126,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-layout-controls.test.ts",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 52,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-page-sync.test.ts",
+      "selected": false,
+      "line_count": 26,
+      "material_line_count": 22,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-page-sync.ts",
+      "selected": false,
+      "line_count": 35,
+      "material_line_count": 31,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-process-chrome.test.ts",
+      "selected": false,
+      "line_count": 117,
+      "material_line_count": 110,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-process-chrome.ts",
+      "selected": false,
+      "line_count": 49,
+      "material_line_count": 41,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-sync.test.ts",
+      "selected": false,
+      "line_count": 362,
+      "material_line_count": 347,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-sync.ts",
+      "selected": false,
+      "line_count": 183,
+      "material_line_count": 167,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-viewport.test.ts",
+      "selected": false,
+      "line_count": 93,
+      "material_line_count": 85,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/canvas-viewport.ts",
+      "selected": false,
+      "line_count": 78,
+      "material_line_count": 70,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/CanvasView.tsx",
+      "selected": true,
+      "line_count": 1671,
+      "material_line_count": 1615,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "只读过程画布渲染。"
+    },
+    {
+      "path": "apps/web/src/CcSwitchClaudeFields.tsx",
+      "selected": false,
+      "line_count": 350,
+      "material_line_count": 329,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/CcSwitchCodexFields.tsx",
+      "selected": false,
+      "line_count": 137,
+      "material_line_count": 129,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/CcSwitchOpenCodeFields.tsx",
+      "selected": false,
+      "line_count": 192,
+      "material_line_count": 183,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/composeTaskModel.test.ts",
+      "selected": false,
+      "line_count": 95,
+      "material_line_count": 89,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/composeTaskModel.ts",
+      "selected": true,
+      "line_count": 64,
+      "material_line_count": 57,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "组合任务选种规则（1–8 条发现、不得扩大范围）。"
+    },
+    {
+      "path": "apps/web/src/confirm-dialog.test.ts",
+      "selected": false,
+      "line_count": 39,
+      "material_line_count": 34,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/CredentialConfigEditor.tsx",
+      "selected": true,
+      "line_count": 894,
+      "material_line_count": 860,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "凭据配置编辑，不回显明文密钥。"
+    },
+    {
+      "path": "apps/web/src/CredentialsPanel.tsx",
+      "selected": true,
+      "line_count": 27,
+      "material_line_count": 24,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "凭据列表。"
+    },
+    {
+      "path": "apps/web/src/dashboard-charts.tsx",
+      "selected": false,
+      "line_count": 112,
+      "material_line_count": 108,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/dashboard-overview.test.ts",
+      "selected": false,
+      "line_count": 57,
+      "material_line_count": 53,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/dashboard-overview.ts",
+      "selected": true,
+      "line_count": 144,
+      "material_line_count": 126,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "态势页汇总计算。"
+    },
+    {
+      "path": "apps/web/src/dashboard-quick-start.test.ts",
+      "selected": false,
+      "line_count": 265,
+      "material_line_count": 244,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/dashboard-quick-start.ts",
+      "selected": false,
+      "line_count": 305,
+      "material_line_count": 265,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/DatetimeLocalPicker.test.ts",
+      "selected": false,
+      "line_count": 36,
+      "material_line_count": 33,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/DatetimeLocalPicker.tsx",
+      "selected": false,
+      "line_count": 247,
+      "material_line_count": 239,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/edge-path.test.ts",
+      "selected": false,
+      "line_count": 86,
+      "material_line_count": 80,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/edge-path.ts",
+      "selected": false,
+      "line_count": 140,
+      "material_line_count": 132,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/edge-style.ts",
+      "selected": false,
+      "line_count": 11,
+      "material_line_count": 11,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/edge-visibility.test.ts",
+      "selected": false,
+      "line_count": 104,
+      "material_line_count": 97,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/edge-visibility.ts",
+      "selected": false,
+      "line_count": 94,
+      "material_line_count": 83,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/fact-page-state.ts",
+      "selected": false,
+      "line_count": 60,
+      "material_line_count": 53,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/fact-verification.ts",
+      "selected": false,
+      "line_count": 10,
+      "material_line_count": 8,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/fact-workbench.test.ts",
+      "selected": false,
+      "line_count": 226,
+      "material_line_count": 207,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/FactDetailPanel.tsx",
+      "selected": true,
+      "line_count": 294,
+      "material_line_count": 279,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "事实详情。"
+    },
+    {
+      "path": "apps/web/src/finding-trace-focus.test.ts",
+      "selected": false,
+      "line_count": 52,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/finding-trace-focus.ts",
+      "selected": false,
+      "line_count": 23,
+      "material_line_count": 20,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/FindingDetailPanel.tsx",
+      "selected": true,
+      "line_count": 1074,
+      "material_line_count": 1025,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "发现详情、评论和处置。"
+    },
+    {
+      "path": "apps/web/src/FindingProtocolEditor.tsx",
+      "selected": true,
+      "line_count": 104,
+      "material_line_count": 100,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "发现协议配置。"
+    },
+    {
+      "path": "apps/web/src/FindingReportList.tsx",
+      "selected": true,
+      "line_count": 75,
+      "material_line_count": 73,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "发现报告列表。"
+    },
+    {
+      "path": "apps/web/src/findings-risk-desk.test.ts",
+      "selected": false,
+      "line_count": 82,
+      "material_line_count": 78,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/findings-risk-desk.ts",
+      "selected": true,
+      "line_count": 55,
+      "material_line_count": 50,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "项目风险页文案和筛选。"
+    },
+    {
+      "path": "apps/web/src/graph-depth.test.ts",
+      "selected": false,
+      "line_count": 105,
+      "material_line_count": 95,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/graph-depth.ts",
+      "selected": false,
+      "line_count": 209,
+      "material_line_count": 191,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/health-status.test.ts",
+      "selected": false,
+      "line_count": 18,
+      "material_line_count": 16,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/health-status.ts",
+      "selected": false,
+      "line_count": 19,
+      "material_line_count": 16,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/human-messages.test.ts",
+      "selected": false,
+      "line_count": 223,
+      "material_line_count": 212,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/human-messages.ts",
+      "selected": true,
+      "line_count": 246,
+      "material_line_count": 212,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "人工消息对象和恢复规则。"
+    },
+    {
+      "path": "apps/web/src/HumanInterventionBanner.tsx",
+      "selected": true,
+      "line_count": 130,
+      "material_line_count": 128,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "等待人工时的介入条。"
+    },
+    {
+      "path": "apps/web/src/HumanMessageComposer.tsx",
+      "selected": true,
+      "line_count": 145,
+      "material_line_count": 135,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "向运行中的任务发送人工说明和附件。"
+    },
+    {
+      "path": "apps/web/src/HumanMessageList.tsx",
+      "selected": true,
+      "line_count": 57,
+      "material_line_count": 56,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "人工消息记录。"
+    },
+    {
+      "path": "apps/web/src/job-detail-ui.test.ts",
+      "selected": false,
+      "line_count": 88,
+      "material_line_count": 79,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/job-dispatch-prompt.test.ts",
+      "selected": false,
+      "line_count": 69,
+      "material_line_count": 62,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/job-dispatch-prompt.ts",
+      "selected": false,
+      "line_count": 116,
+      "material_line_count": 104,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/JobDetailPanel.tsx",
+      "selected": true,
+      "line_count": 1224,
+      "material_line_count": 1183,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "单次运行详情与会话查看。"
+    },
+    {
+      "path": "apps/web/src/json-text.test.ts",
+      "selected": false,
+      "line_count": 34,
+      "material_line_count": 29,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/json-text.ts",
+      "selected": false,
+      "line_count": 50,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/layout.test.ts",
+      "selected": false,
+      "line_count": 146,
+      "material_line_count": 138,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/layout.ts",
+      "selected": false,
+      "line_count": 286,
+      "material_line_count": 266,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/layout/AppShell.tsx",
+      "selected": true,
+      "line_count": 371,
+      "material_line_count": 358,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "左侧导航和工作区框架，用户从这里进入各业务页面。"
+    },
+    {
+      "path": "apps/web/src/layout/AppShellEscape.test.ts",
+      "selected": false,
+      "line_count": 58,
+      "material_line_count": 49,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/LiveStream.test.ts",
+      "selected": false,
+      "line_count": 100,
+      "material_line_count": 90,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/LiveStream.tsx",
+      "selected": true,
+      "line_count": 584,
+      "material_line_count": 561,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "运行过程实时输出。"
+    },
+    {
+      "path": "apps/web/src/LiveTerminalWorkspace.tsx",
+      "selected": false,
+      "line_count": 154,
+      "material_line_count": 146,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/MarkdownView.tsx",
+      "selected": false,
+      "line_count": 284,
+      "material_line_count": 268,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/module-selector-state.test.ts",
+      "selected": false,
+      "line_count": 85,
+      "material_line_count": 80,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/module-selector-state.ts",
+      "selected": false,
+      "line_count": 136,
+      "material_line_count": 121,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/nodes.tsx",
+      "selected": false,
+      "line_count": 414,
+      "material_line_count": 392,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/orthogonal-edge.tsx",
+      "selected": false,
+      "line_count": 50,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/permissions.ts",
+      "selected": true,
+      "line_count": 10,
+      "material_line_count": 9,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "页面和操作的权限范围，决定用户能看见哪些入口。"
+    },
+    {
+      "path": "apps/web/src/product-version.test.ts",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 47,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/product-version.ts",
+      "selected": false,
+      "line_count": 17,
+      "material_line_count": 15,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/provider-account-flow.test.ts",
+      "selected": false,
+      "line_count": 437,
+      "material_line_count": 413,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/ProviderAccountFlow.tsx",
+      "selected": true,
+      "line_count": 1649,
+      "material_line_count": 1597,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "绑定上游模型凭据的流程。"
+    },
+    {
+      "path": "apps/web/src/report-panel-state.test.ts",
+      "selected": false,
+      "line_count": 97,
+      "material_line_count": 86,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/report-panel-state.ts",
+      "selected": false,
+      "line_count": 127,
+      "material_line_count": 113,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/report-views.test.ts",
+      "selected": false,
+      "line_count": 99,
+      "material_line_count": 93,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/report-views.ts",
+      "selected": false,
+      "line_count": 48,
+      "material_line_count": 41,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/ReportPanel.tsx",
+      "selected": true,
+      "line_count": 393,
+      "material_line_count": 376,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "任务报告查看与下载。"
+    },
+    {
+      "path": "apps/web/src/role-colors.test.ts",
+      "selected": false,
+      "line_count": 38,
+      "material_line_count": 34,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/RoleConfigEditor.tsx",
+      "selected": true,
+      "line_count": 724,
+      "material_line_count": 699,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "角色运行配置编辑。"
+    },
+    {
+      "path": "apps/web/src/runtime-image-option.test.ts",
+      "selected": false,
+      "line_count": 78,
+      "material_line_count": 74,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/runtime-image-option.ts",
+      "selected": false,
+      "line_count": 68,
+      "material_line_count": 63,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/runtime-image-pull.test.ts",
+      "selected": false,
+      "line_count": 122,
+      "material_line_count": 116,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/runtime-image-pull.ts",
+      "selected": false,
+      "line_count": 110,
+      "material_line_count": 95,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/runtime-images-channel.test.ts",
+      "selected": false,
+      "line_count": 132,
+      "material_line_count": 123,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/runtime-images-theme.test.ts",
+      "selected": false,
+      "line_count": 52,
+      "material_line_count": 47,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/searchable-select-adoption.test.ts",
+      "selected": false,
+      "line_count": 52,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/searchable-select-model.test.ts",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 27,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/searchable-select-model.ts",
+      "selected": false,
+      "line_count": 35,
+      "material_line_count": 29,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/SearchableSelect.tsx",
+      "selected": false,
+      "line_count": 197,
+      "material_line_count": 185,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/semantics.ts",
+      "selected": false,
+      "line_count": 17,
+      "material_line_count": 15,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/index.ts",
+      "selected": false,
+      "line_count": 23,
+      "material_line_count": 23,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/legacy-session/cli.ts",
+      "selected": false,
+      "line_count": 19,
+      "material_line_count": 16,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/legacy-session/index.ts",
+      "selected": false,
+      "line_count": 13,
+      "material_line_count": 13,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/legacy-session/parse.ts",
+      "selected": false,
+      "line_count": 730,
+      "material_line_count": 707,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/parse-shared.ts",
+      "selected": false,
+      "line_count": 482,
+      "material_line_count": 436,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/parseAgentSession.test.ts",
+      "selected": false,
+      "line_count": 784,
+      "material_line_count": 740,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/parseAgentSession.ts",
+      "selected": true,
+      "line_count": 871,
+      "material_line_count": 838,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "运行会话记录解析，供用户回看过程。"
+    },
+    {
+      "path": "apps/web/src/session-viewer/SessionViewer.test.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 40,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/SessionViewer.tsx",
+      "selected": false,
+      "line_count": 670,
+      "material_line_count": 632,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/sessionViewerModel.test.ts",
+      "selected": false,
+      "line_count": 112,
+      "material_line_count": 102,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/sessionViewerModel.ts",
+      "selected": false,
+      "line_count": 267,
+      "material_line_count": 242,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/settings-panel-image-policy.test.ts",
+      "selected": false,
+      "line_count": 36,
+      "material_line_count": 32,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/settings-panel.test.ts",
+      "selected": false,
+      "line_count": 51,
+      "material_line_count": 45,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/settings-save-feedback.test.ts",
+      "selected": false,
+      "line_count": 52,
+      "material_line_count": 46,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/SettingsPanel.tsx",
+      "selected": true,
+      "line_count": 1353,
+      "material_line_count": 1293,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "角色、规则和平台设置面板。"
+    },
+    {
+      "path": "apps/web/src/SharedAssetsPanel.tsx",
+      "selected": false,
+      "line_count": 120,
+      "material_line_count": 111,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/Sidebar.tsx",
+      "selected": false,
+      "line_count": 383,
+      "material_line_count": 366,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/skill-source-sync-flash.test.ts",
+      "selected": false,
+      "line_count": 39,
+      "material_line_count": 36,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/skill-source-sync-flash.ts",
+      "selected": false,
+      "line_count": 18,
+      "material_line_count": 18,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/task-intent.test.ts",
+      "selected": false,
+      "line_count": 92,
+      "material_line_count": 87,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/task-intent.ts",
+      "selected": true,
+      "line_count": 22,
+      "material_line_count": 18,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "任务标题与目标内容。"
+    },
+    {
+      "path": "apps/web/src/task-lifecycle.test.ts",
+      "selected": false,
+      "line_count": 277,
+      "material_line_count": 252,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/task-lifecycle.ts",
+      "selected": true,
+      "line_count": 196,
+      "material_line_count": 182,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "任务是否在推进的判断。"
+    },
+    {
+      "path": "apps/web/src/task-schedule.test.ts",
+      "selected": false,
+      "line_count": 102,
+      "material_line_count": 95,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/task-schedule.ts",
+      "selected": false,
+      "line_count": 224,
+      "material_line_count": 194,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/task-workbench-layers.test.ts",
+      "selected": false,
+      "line_count": 45,
+      "material_line_count": 41,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/task-workbench-layers.ts",
+      "selected": false,
+      "line_count": 20,
+      "material_line_count": 17,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/TaskList.tsx",
+      "selected": true,
+      "line_count": 101,
+      "material_line_count": 99,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "任务列表展示。"
+    },
+    {
+      "path": "apps/web/src/terminal-panel.test.ts",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 49,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/TerminalPanel.tsx",
+      "selected": false,
+      "line_count": 227,
+      "material_line_count": 214,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/theme-surface-adoption.test.ts",
+      "selected": false,
+      "line_count": 62,
+      "material_line_count": 52,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/toast.tsx",
+      "selected": false,
+      "line_count": 50,
+      "material_line_count": 43,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/TokensPanel.tsx",
+      "selected": true,
+      "line_count": 380,
+      "material_line_count": 358,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "API Token 管理。"
+    },
+    {
+      "path": "apps/web/src/toml-text.test.ts",
+      "selected": false,
+      "line_count": 33,
+      "material_line_count": 29,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/toml-text.ts",
+      "selected": false,
+      "line_count": 80,
+      "material_line_count": 74,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/TransferPanel.tsx",
+      "selected": true,
+      "line_count": 456,
+      "material_line_count": 427,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "项目数据包导入导出操作。"
+    },
+    {
+      "path": "apps/web/src/ui.tsx",
+      "selected": true,
+      "line_count": 454,
+      "material_line_count": 426,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "页面标题、按钮、表格、状态徽章等用户可见通用控件。"
+    },
+    {
+      "path": "apps/web/src/usage-ledger.test.ts",
+      "selected": false,
+      "line_count": 102,
+      "material_line_count": 93,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/usage-ledger.ts",
+      "selected": false,
+      "line_count": 73,
+      "material_line_count": 60,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/UsageLedgerBoard.tsx",
+      "selected": true,
+      "line_count": 308,
+      "material_line_count": 294,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "用量账本数字和周期筛选。"
+    },
+    {
+      "path": "apps/web/src/UsersPanel.tsx",
+      "selected": true,
+      "line_count": 170,
+      "material_line_count": 162,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": "平台用户管理。"
+    },
+    {
+      "path": "deploy/deploy.ps1.test.mjs",
+      "selected": false,
+      "line_count": 82,
+      "material_line_count": 75,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/ensure-postgres.mjs",
+      "selected": false,
+      "line_count": 62,
+      "material_line_count": 55,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/web-server-headers.test.mjs",
+      "selected": false,
+      "line_count": 17,
+      "material_line_count": 15,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/web-server.mjs",
+      "selected": false,
+      "line_count": 125,
+      "material_line_count": 114,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/index.ts",
+      "selected": false,
+      "line_count": 48,
+      "material_line_count": 48,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-gvisor-poc.test.ts",
+      "selected": false,
+      "line_count": 61,
+      "material_line_count": 56,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-gvisor-poc.ts",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 47,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.test.ts",
+      "selected": false,
+      "line_count": 189,
+      "material_line_count": 181,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.ts",
+      "selected": false,
+      "line_count": 145,
+      "material_line_count": 137,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-k8s-poc.test.ts",
+      "selected": false,
+      "line_count": 190,
+      "material_line_count": 181,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-k8s-poc.ts",
+      "selected": false,
+      "line_count": 320,
+      "material_line_count": 302,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-poc.test.ts",
+      "selected": false,
+      "line_count": 767,
+      "material_line_count": 735,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/poc/opensandbox-poc.ts",
+      "selected": false,
+      "line_count": 1051,
+      "material_line_count": 1009,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/cli-session-adapters.ts",
+      "selected": false,
+      "line_count": 148,
+      "material_line_count": 135,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/context-contract.test.ts",
+      "selected": false,
+      "line_count": 125,
+      "material_line_count": 119,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/context-contract.ts",
+      "selected": false,
+      "line_count": 487,
+      "material_line_count": 447,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/dsh-pi-ai.test.ts",
+      "selected": false,
+      "line_count": 125,
+      "material_line_count": 116,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/dsh-pi-ai.ts",
+      "selected": false,
+      "line_count": 335,
+      "material_line_count": 313,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/dsh-request-frame.ts",
+      "selected": false,
+      "line_count": 39,
+      "material_line_count": 35,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/embedded-error-message.ts",
+      "selected": false,
+      "line_count": 87,
+      "material_line_count": 81,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/human-inbox.test.ts",
+      "selected": false,
+      "line_count": 78,
+      "material_line_count": 73,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/index.ts",
+      "selected": false,
+      "line_count": 311,
+      "material_line_count": 301,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/kubernetes-gateway.test.ts",
+      "selected": false,
+      "line_count": 52,
+      "material_line_count": 49,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/kubernetes-gateway.ts",
+      "selected": false,
+      "line_count": 79,
+      "material_line_count": 70,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/kubernetes-shared-assets-volume.test.ts",
+      "selected": false,
+      "line_count": 97,
+      "material_line_count": 91,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/kubernetes-shared-assets-volume.ts",
+      "selected": false,
+      "line_count": 231,
+      "material_line_count": 212,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-deploy.test.ts",
+      "selected": false,
+      "line_count": 326,
+      "material_line_count": 314,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-pty.test.ts",
+      "selected": false,
+      "line_count": 72,
+      "material_line_count": 70,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-pty.ts",
+      "selected": false,
+      "line_count": 188,
+      "material_line_count": 170,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-sdk-client.test.ts",
+      "selected": false,
+      "line_count": 51,
+      "material_line_count": 44,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-sdk-client.ts",
+      "selected": false,
+      "line_count": 209,
+      "material_line_count": 200,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-version.test.ts",
+      "selected": false,
+      "line_count": 42,
+      "material_line_count": 40,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox-version.ts",
+      "selected": false,
+      "line_count": 63,
+      "material_line_count": 54,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox.test.ts",
+      "selected": false,
+      "line_count": 583,
+      "material_line_count": 556,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/opensandbox.ts",
+      "selected": false,
+      "line_count": 595,
+      "material_line_count": 557,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-adapters.test.ts",
+      "selected": false,
+      "line_count": 714,
+      "material_line_count": 673,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-adapters.ts",
+      "selected": false,
+      "line_count": 1040,
+      "material_line_count": 966,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-agent-config.ts",
+      "selected": false,
+      "line_count": 36,
+      "material_line_count": 32,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-agent.ts",
+      "selected": false,
+      "line_count": 1756,
+      "material_line_count": 1668,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-behavior.test.ts",
+      "selected": false,
+      "line_count": 1376,
+      "material_line_count": 1282,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-docker.ts",
+      "selected": false,
+      "line_count": 278,
+      "material_line_count": 260,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-gateway.ts",
+      "selected": false,
+      "line_count": 438,
+      "material_line_count": 421,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-host.test.ts",
+      "selected": false,
+      "line_count": 26,
+      "material_line_count": 23,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-host.ts",
+      "selected": false,
+      "line_count": 71,
+      "material_line_count": 62,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-shared.ts",
+      "selected": false,
+      "line_count": 234,
+      "material_line_count": 216,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-stdin-close.test.ts",
+      "selected": false,
+      "line_count": 49,
+      "material_line_count": 45,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/runtime-stdin-close.ts",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 28,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/shared-assets-volume.integration.test.ts",
+      "selected": false,
+      "line_count": 60,
+      "material_line_count": 57,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/shared-assets-volume.test.ts",
+      "selected": false,
+      "line_count": 415,
+      "material_line_count": 381,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/runtime-sandbox/src/shared-assets-volume.ts",
+      "selected": false,
+      "line_count": 301,
+      "material_line_count": 276,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/shared-types/src/index.ts",
+      "selected": false,
+      "line_count": 1242,
+      "material_line_count": 1140,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "packages/shared-types/src/pi-extensions.ts",
+      "selected": false,
+      "line_count": 99,
+      "material_line_count": 87,
+      "priority": 80,
+      "selection_tier": "frontend",
+      "evidence": "普通源码文件",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/session-viewer/SessionViewer.css",
+      "selected": false,
+      "line_count": 917,
+      "material_line_count": 799,
+      "priority": 90,
+      "selection_tier": "frontend",
+      "evidence": "样式文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "apps/web/src/styles.css",
+      "selected": false,
+      "line_count": 3149,
+      "material_line_count": 3107,
+      "priority": 90,
+      "selection_tier": "frontend",
+      "evidence": "样式文件证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/chrome-audit-runtime.json",
+      "selected": false,
+      "line_count": 25,
+      "material_line_count": 25,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/chrome-fuzz-runtime.json",
+      "selected": false,
+      "line_count": 37,
+      "material_line_count": 37,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/chrome-test-runtime.json",
+      "selected": false,
+      "line_count": 25,
+      "material_line_count": 25,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/clickhouse-audit-runtime.json",
+      "selected": false,
+      "line_count": 27,
+      "material_line_count": 27,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/clickhouse-fuzz-runtime.json",
+      "selected": false,
+      "line_count": 37,
+      "material_line_count": 37,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/clickhouse-test-runtime.json",
+      "selected": false,
+      "line_count": 26,
+      "material_line_count": 26,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/demo-repo/auth/login.php",
+      "selected": false,
+      "line_count": 17,
+      "material_line_count": 15,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/kali-minimal-runtime.json",
+      "selected": false,
+      "line_count": 116,
+      "material_line_count": 116,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/mobile-runtime.json",
+      "selected": false,
+      "line_count": 179,
+      "material_line_count": 179,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/openharmony-test-runtime.json",
+      "selected": false,
+      "line_count": 44,
+      "material_line_count": 44,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/resolve-image-src-cache.sh",
+      "selected": false,
+      "line_count": 84,
+      "material_line_count": 80,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/runtime-images.json",
+      "selected": false,
+      "line_count": 61,
+      "material_line_count": 61,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/select-runtime-platform-sources.sh",
+      "selected": false,
+      "line_count": 35,
+      "material_line_count": 31,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-auth-api.py",
+      "selected": false,
+      "line_count": 257,
+      "material_line_count": 234,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-credentials-api.py",
+      "selected": false,
+      "line_count": 125,
+      "material_line_count": 105,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-gateway.py",
+      "selected": false,
+      "line_count": 141,
+      "material_line_count": 120,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-hub-loop.py",
+      "selected": false,
+      "line_count": 169,
+      "material_line_count": 150,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-local-project-api.py",
+      "selected": false,
+      "line_count": 209,
+      "material_line_count": 185,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-roles-api.py",
+      "selected": false,
+      "line_count": 260,
+      "material_line_count": 237,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "agent-harness/test-runtime-images-api.py",
+      "selected": false,
+      "line_count": 239,
+      "material_line_count": 216,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "database/schema.sql",
+      "selected": true,
+      "line_count": 1833,
+      "material_line_count": 1697,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": "项目、任务、发现、运行等业务数据表结构。"
+    },
+    {
+      "path": "deploy/chrome-audit-env.sh",
+      "selected": false,
+      "line_count": 55,
+      "material_line_count": 49,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/chrome-fuzz-env.sh",
+      "selected": false,
+      "line_count": 43,
+      "material_line_count": 37,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/chrome-fuzz-smoke.sh",
+      "selected": false,
+      "line_count": 14,
+      "material_line_count": 13,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/chrome-fuzz-toolchain-preflight.sh",
+      "selected": false,
+      "line_count": 120,
+      "material_line_count": 106,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/chrome-headless.sh",
+      "selected": false,
+      "line_count": 36,
+      "material_line_count": 33,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/chrome-runtime-sources.json",
+      "selected": false,
+      "line_count": 48,
+      "material_line_count": 48,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/chrome-test-env.sh",
+      "selected": false,
+      "line_count": 18,
+      "material_line_count": 16,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-audit-env.sh",
+      "selected": false,
+      "line_count": 63,
+      "material_line_count": 57,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-fuzz-env.sh",
+      "selected": false,
+      "line_count": 43,
+      "material_line_count": 36,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-fuzz-smoke.sh",
+      "selected": false,
+      "line_count": 20,
+      "material_line_count": 17,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-install-static.sh",
+      "selected": false,
+      "line_count": 40,
+      "material_line_count": 37,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-runtime-sources.json",
+      "selected": false,
+      "line_count": 25,
+      "material_line_count": 25,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-sandbox-config.sh",
+      "selected": false,
+      "line_count": 119,
+      "material_line_count": 116,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-server.sh",
+      "selected": false,
+      "line_count": 31,
+      "material_line_count": 26,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/clickhouse-test-env.sh",
+      "selected": false,
+      "line_count": 29,
+      "material_line_count": 24,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/deploy.sh",
+      "selected": false,
+      "line_count": 352,
+      "material_line_count": 325,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/local-daemon.sh",
+      "selected": false,
+      "line_count": 90,
+      "material_line_count": 86,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-adb-bin.sh",
+      "selected": false,
+      "line_count": 13,
+      "material_line_count": 13,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-adb.sh",
+      "selected": false,
+      "line_count": 33,
+      "material_line_count": 27,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-apkcheckpack-bin.sh",
+      "selected": false,
+      "line_count": 13,
+      "material_line_count": 13,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-env.sh",
+      "selected": false,
+      "line_count": 106,
+      "material_line_count": 99,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-hap.sh",
+      "selected": false,
+      "line_count": 39,
+      "material_line_count": 34,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-hdc.sh",
+      "selected": false,
+      "line_count": 85,
+      "material_line_count": 73,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-ios.sh",
+      "selected": false,
+      "line_count": 58,
+      "material_line_count": 50,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/mobile-so.sh",
+      "selected": false,
+      "line_count": 49,
+      "material_line_count": 43,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-audit-env.sh",
+      "selected": false,
+      "line_count": 42,
+      "material_line_count": 37,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-audit-scan.sh",
+      "selected": false,
+      "line_count": 126,
+      "material_line_count": 111,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-build.sh",
+      "selected": false,
+      "line_count": 29,
+      "material_line_count": 23,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-env.sh",
+      "selected": false,
+      "line_count": 67,
+      "material_line_count": 62,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-fuzz-build.sh",
+      "selected": false,
+      "line_count": 66,
+      "material_line_count": 57,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-fuzz-env.sh",
+      "selected": false,
+      "line_count": 129,
+      "material_line_count": 120,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-hdc-bin.sh",
+      "selected": false,
+      "line_count": 14,
+      "material_line_count": 14,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-hdc.sh",
+      "selected": false,
+      "line_count": 96,
+      "material_line_count": 84,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/openharmony-init.sh",
+      "selected": false,
+      "line_count": 53,
+      "material_line_count": 47,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/prepare-runtime-images.sh",
+      "selected": false,
+      "line_count": 375,
+      "material_line_count": 353,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/pull-runtime-images.sh",
+      "selected": false,
+      "line_count": 142,
+      "material_line_count": 134,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "deploy/runtime-image-registry.json",
+      "selected": false,
+      "line_count": 606,
+      "material_line_count": 606,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "skills/deepsonar-management/scripts/deepsonar-api.py",
+      "selected": false,
+      "line_count": 1126,
+      "material_line_count": 959,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "skills/deepsonar-management/scripts/test_deepsonar_api.py",
+      "selected": false,
+      "line_count": 197,
+      "material_line_count": 176,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    },
+    {
+      "path": "tsconfig.base.json",
+      "selected": false,
+      "line_count": 16,
+      "material_line_count": 16,
+      "priority": 100,
+      "selection_tier": "supplement",
+      "evidence": "补充源码证据",
+      "model_reason": ""
+    }
+  ],
+  "model_selection_filled": true,
+  "selection_note": "前部以 Web 页面和交互为主，后部保留调度核心与 schema.sql，避免 routes.ts 占据前30页。"
+}
