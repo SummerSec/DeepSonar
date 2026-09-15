@@ -36,7 +36,7 @@ export function TaskOverview({
   onOpenView?: (view: TaskWorkbenchView) => void;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-6">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6">
       <section className="grid gap-3 sm:grid-cols-4">
         <OverviewStat label="已确认" value={outcome.confirmed_count} hint="证据成立的结论" />
         <OverviewStat label="待验证" value={outcome.pending_verification_count} hint="还缺验证" />
