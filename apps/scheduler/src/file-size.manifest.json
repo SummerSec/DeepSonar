@@ -1,0 +1,72 @@
+{
+  "schema": "deepsonar.file-size/v1",
+  "limits": {
+    "logicSoft": 1200,
+    "logicHard": 2000,
+    "webComponentSoft": 800,
+    "contractHard": 6000
+  },
+  "contractPaths": [
+    "database/schema.sql",
+    "apps/scheduler/src/openapi.ts",
+    "apps/web/src/api.ts",
+    "packages/shared-types/src/index.ts"
+  ],
+  "grandfathered": {
+    "apps/scheduler/src/runtime-images.ts": {
+      "class": "logic",
+      "maxLines": 2707,
+      "issue": "#544"
+    },
+    "apps/scheduler/src/verify.ts": {
+      "class": "logic",
+      "maxLines": 2059,
+      "issue": "#544"
+    },
+    "apps/web/src/CanvasView.tsx": {
+      "class": "web",
+      "maxLines": 1671,
+      "issue": "#544"
+    },
+    "apps/web/src/pages/RuntimeImagesPage.tsx": {
+      "class": "web",
+      "maxLines": 1656,
+      "issue": "#544"
+    },
+    "apps/web/src/ProviderAccountFlow.tsx": {
+      "class": "web",
+      "maxLines": 1649,
+      "issue": "#544"
+    },
+    "apps/web/src/pages/TaskCanvasPage.tsx": {
+      "class": "web",
+      "maxLines": 1627,
+      "issue": "#544"
+    },
+    "apps/web/src/SettingsPanel.tsx": {
+      "class": "web",
+      "maxLines": 1362,
+      "issue": "#544"
+    },
+    "apps/web/src/JobDetailPanel.tsx": {
+      "class": "web",
+      "maxLines": 1269,
+      "issue": "#544"
+    },
+    "apps/web/src/FindingDetailPanel.tsx": {
+      "class": "web",
+      "maxLines": 1147,
+      "issue": "#544"
+    },
+    "apps/web/src/pages/TasksPage.tsx": {
+      "class": "web",
+      "maxLines": 906,
+      "issue": "#544"
+    },
+    "apps/web/src/CredentialConfigEditor.tsx": {
+      "class": "web",
+      "maxLines": 894,
+      "issue": "#544"
+    }
+  }
+}
