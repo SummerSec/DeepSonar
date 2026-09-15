@@ -41,6 +41,7 @@ export interface HubReplayRecord {
       confirmed: number;
       false_positive: number;
       needs_human: number;
+      inconclusive: number;
       open: number;
     };
   };
@@ -134,7 +135,7 @@ export function parseHubPlan(payload: unknown, eventId: string | null): HubRepla
 }
 
 function findingCountsAt(findings: readonly QualityFindingRow[], at: string): HubReplayRecord["input"]["finding_counts"] {
-  const counts = { total: 0, confirmed: 0, false_positive: 0, needs_human: 0, open: 0 };
+  const counts = { total: 0, confirmed: 0, false_positive: 0, needs_human: 0, inconclusive: 0, open: 0 };
   for (const finding of findings) {
     if (finding.created_at > at) continue;
     counts.total += 1;

@@ -629,7 +629,7 @@ root/source → intent(round 1) → fact|finding
 6. 同一 graph revision 在固定排序/种子下重算坐标稳定；complete 的 `fact→root` 不制造 rank 环，异常环产生稳定 SCC 布局与 warning；无节点矩形重叠（允许边交叉但设预算）。
 7. 服务端布局完成后，Canvas API/导出坐标与完整展开 UI 一致；前端筛选/折叠不回写权威坐标。
 8. Hub YAML/读图逻辑不因视觉整理而回归：`intent.from` 只接受同画布 root/fact/finding，target 必须是 intent；流程/证据边不被误当决策引用，同时 evidence fact 正文仍可用于收敛判断。
-9. Verify/Report/Hub 生命周期回归仍满足 `confirmed/needs_human` 收敛门禁；布局更新不创建任何 Job/event。
+9. Verify/Report/Hub 生命周期回归仍满足 `confirmed/needs_human/refuted/inconclusive` 收敛门禁；布局更新不创建任何 Job/event。
 10. 导入旧画布或显式开发 ALTER 后先呈现 `dirty/stale`，首轮布局成功才把 `layout_revision` 追到 `graph_revision`；失败不把旧占位坐标标成权威。
 11. 验证至少包含 `pnpm typecheck`、`pnpm build`、现有 convergence/control-api smoke、导入导出 round-trip、`git diff --check` 和浏览器实图检查。
 

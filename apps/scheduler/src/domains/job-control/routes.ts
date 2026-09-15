@@ -251,7 +251,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       WHERE id = ${id}
       RETURNING *`;
     // rejected_fp 仅人工业务处置；不伪造技术 confirmed，也不把未收敛 round 绕过
-    // 不再把 verify_status 写成 false_positive（新流程否定结论走 rework→pending）
+    // 不再把 verify_status 写成 false_positive（新流程否定结论走 Scheduler 终态 refuted/inconclusive）
     await audit(req, {
       action: "finding.disposition",
       resourceType: "finding",

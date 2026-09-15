@@ -94,7 +94,7 @@ export function extractDispatchPrompt(
       "凡 finding/fact 声明的 quantities，报告必须原样保留 value、unit、basis，不得改写措辞或折叠口径。",
       goal ? `任务目标：${goal}` : "",
       payload.confirmed_count != null
-        ? `confirmed=${payload.confirmed_count} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}`
+        ? `confirmed=${payload.confirmed_count} refuted=${payload.refuted_count ?? "?"} inconclusive=${payload.inconclusive_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}`
         : "",
     ].filter(Boolean).join("\n");
   }

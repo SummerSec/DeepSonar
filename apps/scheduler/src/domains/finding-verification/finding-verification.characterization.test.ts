@@ -3,13 +3,15 @@ import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { buildEvidenceSnapshot, evaluateConfirmGate, freezeVerifyFindingSubject, mapProposedVerdict } from "../../verify.js";
 
-test("mapProposedVerdict only accepts confirmed/rework/needs_human", () => {
+test("mapProposedVerdict only accepts confirmed/rework/needs_human/refuted", () => {
   assert.equal(mapProposedVerdict("confirmed"), "confirmed");
   assert.equal(mapProposedVerdict("rework"), "rework");
   assert.equal(mapProposedVerdict("needs_human"), "needs_human");
-  assert.throws(() => mapProposedVerdict("false_positive"), /confirmed、rework 或 needs_human/);
-  assert.throws(() => mapProposedVerdict("unknown"), /confirmed、rework 或 needs_human/);
-  assert.throws(() => mapProposedVerdict(null), /confirmed、rework 或 needs_human/);
+  assert.equal(mapProposedVerdict("refuted"), "refuted");
+  assert.throws(() => mapProposedVerdict("false_positive"), /confirmed、rework、needs_human 或 refuted/);
+  assert.throws(() => mapProposedVerdict("inconclusive"), /confirmed、rework、needs_human 或 refuted/);
+  assert.throws(() => mapProposedVerdict("unknown"), /confirmed、rework、needs_human 或 refuted/);
+  assert.throws(() => mapProposedVerdict(null), /confirmed、rework、needs_human 或 refuted/);
 });
 
 test("buildEvidenceSnapshot requires independent review and a supporting test", () => {

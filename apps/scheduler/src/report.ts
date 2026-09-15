@@ -125,12 +125,16 @@ export interface ReportInput {
     findings_total: number;
     confirmed_count: number;
     needs_human_count: number;
+    refuted_count: number;
+    inconclusive_count: number;
     excluded_count: number;
     confirmed_by_severity: Record<string, number>;
   };
   findings: ReportInputFinding[];
   confirmed_findings: ReportInputFinding[];
   needs_human_findings: ReportInputFinding[];
+  refuted_findings: ReportInputFinding[];
+  inconclusive_findings: ReportInputFinding[];
   excluded_findings: ReportInputFinding[];
   seed_findings: Array<{
     title: string;
@@ -391,6 +395,8 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
 
   const confirmed = items.filter((i) => i.verify_status === "confirmed");
   const needsHuman = items.filter((i) => i.verify_status === "needs_human");
+  const refuted = items.filter((i) => i.verify_status === "refuted");
+  const inconclusive = items.filter((i) => i.verify_status === "inconclusive");
   const excluded = items.filter((i) => i.verification_policy?.eligibility === "below_min_verify_severity");
   const bySev: Record<string, number> = {};
   for (const c of confirmed) {
@@ -412,12 +418,16 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
       findings_total: items.length,
       confirmed_count: confirmed.length,
       needs_human_count: needsHuman.length,
+      refuted_count: refuted.length,
+      inconclusive_count: inconclusive.length,
       excluded_count: excluded.length,
       confirmed_by_severity: bySev,
     },
     findings: items,
     confirmed_findings: confirmed,
     needs_human_findings: needsHuman,
+    refuted_findings: refuted,
+    inconclusive_findings: inconclusive,
     excluded_findings: excluded,
     seed_findings: reportSeedFindings,
     scope_and_coverage: {
@@ -617,7 +627,7 @@ function defaultMarkdown(input: ReportInput): string {
   lines.push("## 执行摘要");
   lines.push("");
   lines.push(
-    `本次共发现 **${input.statistics.findings_total}** 条 Finding：已确认 **${input.statistics.confirmed_count}**，待人工 **${input.statistics.needs_human_count}**，因严重度策略未自动验证 **${input.statistics.excluded_count}**。`,
+    `本次共发现 **${input.statistics.findings_total}** 条 Finding：已确认 **${input.statistics.confirmed_count}**，已排除 **${input.statistics.refuted_count}**，未证实 **${input.statistics.inconclusive_count}**，待人工 **${input.statistics.needs_human_count}**，因严重度策略未自动验证 **${input.statistics.excluded_count}**。`,
   );
   if (input.statistics.confirmed_count === 0) {
     lines.push("");
@@ -645,6 +655,42 @@ function defaultMarkdown(input: ReportInput): string {
         lines.push(`- 验证轮次：${f.final_verification_round?.attempt ?? "?"}`);
         lines.push("");
       }
+    }
+  }
+  lines.push("## 已排除");
+  lines.push("");
+  if (input.refuted_findings.length === 0) {
+    lines.push("_无_");
+  } else {
+    lines.push("以下 Finding 已被匹配修订的结构化否定证据推翻；这不等于人工误报处置。");
+    lines.push("");
+    for (const f of input.refuted_findings) {
+      lines.push(`### [${f.severity ?? "未评分"}] ${f.title}`);
+      lines.push("");
+      lines.push(`- Profile：${f.profile}`);
+      if (f.location) lines.push(`- 位置：\`${f.location}\``);
+      if (f.summary) lines.push(`- 摘要：${f.summary}`);
+      const err = f.final_verification_round?.error ?? f.final_verification_round?.summary;
+      if (err) lines.push(`- 收口：${err}`);
+      lines.push("");
+    }
+  }
+  lines.push("## 未证实");
+  lines.push("");
+  if (input.inconclusive_findings.length === 0) {
+    lines.push("_无_");
+  } else {
+    lines.push("以下 Finding 证据不足但已终止；语义是未证实，不是已排除，也不等于待人工。");
+    lines.push("");
+    for (const f of input.inconclusive_findings) {
+      lines.push(`### [${f.severity ?? "未评分"}] ${f.title}`);
+      lines.push("");
+      lines.push(`- Profile：${f.profile}`);
+      if (f.location) lines.push(`- 位置：\`${f.location}\``);
+      if (f.summary) lines.push(`- 摘要：${f.summary}`);
+      const err = f.final_verification_round?.error ?? f.final_verification_round?.summary;
+      if (err) lines.push(`- 收口：${err}`);
+      lines.push("");
     }
   }
   lines.push("## 待人工确认 / 验证限制");
@@ -717,6 +763,8 @@ function taskReportCoverageOk(input: ReportInput, markdown: string): boolean {
         markdown.includes(f.id) ||
         markdown.includes(f.title) ||
         (f.verify_status === "confirmed" && markdown.includes("已确认")) ||
+        (f.verify_status === "refuted" && markdown.includes("已排除")) ||
+        (f.verify_status === "inconclusive" && markdown.includes("未证实")) ||
         (f.verify_status === "needs_human" && (markdown.includes("人工") || markdown.includes("待"))) ||
         (f.verification_policy?.eligibility === "below_min_verify_severity" && markdown.includes("未自动验证")),
     )
@@ -1005,7 +1053,7 @@ async function bounceReportGateToHub(
         problem_count: problems.length,
         problems: problemsJson,
         summary:
-          `Report 被拒绝：自动验证范围内 Finding 须为 confirmed 或 needs_human。\n` +
+          `Report 被拒绝：自动验证范围内 Finding 须为 confirmed / needs_human / refuted / inconclusive。\n` +
           problemSummary,
       },
     },
@@ -1023,8 +1071,8 @@ async function bounceReportGateToHub(
 }
 
 /**
- * 在 Root 为 analysis_complete 且验证范围内 Finding ∈ {confirmed, needs_human} 时，幂等创建唯一 Report Job。
- * 低于阈值项单列为未自动验证；needs_human 进报告待人工章节，SARIF 仅 confirmed。
+ * 在 Root 为 analysis_complete 且验证范围内 Finding ∈ {confirmed, needs_human, refuted, inconclusive} 时，幂等创建唯一 Report Job。
+ * 低于阈值项单列为未自动验证；needs_human 进待人工，refuted 进已排除，inconclusive 进未证实；SARIF 仅 confirmed。
  *
  * 时序：Hub complete 同事务内当前 Hub 可能仍 running —— 此时只 **等待**，保持 analysis_complete，
  * **禁止** bounceReportGateToHub（否则 Root 被打回 running，空转烧 maxHubRounds）。
@@ -1172,6 +1220,8 @@ export async function maybeDispatchReport(
         findings_total: reportInput.statistics.findings_total,
         confirmed_count: reportInput.statistics.confirmed_count,
         needs_human_count: reportInput.statistics.needs_human_count,
+        refuted_count: reportInput.statistics.refuted_count,
+        inconclusive_count: reportInput.statistics.inconclusive_count,
         excluded_count: reportInput.statistics.excluded_count,
       } as never,
       timeout_sec: rules.auditTimeoutSec,
@@ -1503,6 +1553,8 @@ export async function finalizeReportJob(
   const summaryJson = {
     confirmed_count: input.statistics.confirmed_count,
     needs_human_count: input.statistics.needs_human_count,
+    refuted_count: input.statistics.refuted_count,
+    inconclusive_count: input.statistics.inconclusive_count,
     excluded_count: input.statistics.excluded_count,
     findings_total: input.statistics.findings_total,
     confirmed_by_severity: input.statistics.confirmed_by_severity,

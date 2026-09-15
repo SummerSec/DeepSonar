@@ -350,8 +350,8 @@ export function buildDeferredSemanticTerminalEvents(input: {
   }
 
   const verdict = state.done.verdict;
-  if (input.isVerify && !["confirmed", "rework", "needs_human"].includes(verdict ?? "")) {
-    throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human）");
+  if (input.isVerify && !["confirmed", "rework", "needs_human", "refuted"].includes(verdict ?? "")) {
+    throw new Error("verify 的 mark_job_done 缺少合法 verdict（confirmed|rework|needs_human|refuted）");
   }
   events.push({
     v: 1,
@@ -484,7 +484,7 @@ function resultContract(
     return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images 的 image_key，且须与该角色 CLI 兼容、readiness=ready；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image），未就绪镜像拒绝（runtime_image_not_ready）且不创建 Worker。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
-    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human。confirmed 只认图上结构化 Fact（finding_id / subject_revision / ownership / expected / actual / outcome），不要重读源码、制品或 maker 结论做第二次复核；门禁失败时调度器会记为 rework 并回弹 Hub。只在文本里给出结论不等于提交，平台只认工具调用。`;
+    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human、refuted。confirmed 只认图上结构化 Fact（finding_id / subject_revision / ownership / expected / actual / outcome），不要重读源码、制品或 maker 结论做第二次复核；门禁失败时调度器会记为 rework 并回弹 Hub。全量匹配修订的 refutes 可提案 refuted，终态仍由 Scheduler 硬门写入。只在文本里给出结论不等于提交，平台只认工具调用。`;
   }
   if (isRole) {
     return enabled.has("emit_fact")
@@ -902,16 +902,16 @@ Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace �
       initialInput += `
 
 本轮由 **Report 门禁失败** 回弹触发。
-**自动验证范围内 Finding 须为 confirmed 或 needs_human** 才能生成报告；以下范围内 Finding 仍未收敛：
+**自动验证范围内 Finding 须为 confirmed / needs_human / refuted / inconclusive** 才能生成报告；以下范围内 Finding 仍未收敛：
 
 ${lines || (trigger as { summary?: string }).summary || "（见画布 root.report_gate_rejected）"}
 
 你必须：
-1. 针对上述 Finding 派发补证/推动 Verify，或在无法自动闭环时使其进入 needs_human（人工节点/阻塞说明）；
+1. 针对上述 Finding 派发补证/推动 Verify；能力边界才走 needs_human（人工节点）；预算/无进展/否定证据由 Scheduler 写成 refuted 或 inconclusive，不要把垃圾桶丢给人；
 2. 不得在自动验证范围内仍有 pending/verifying Finding 时 complete；明确低于 minVerifySeverity 的策略排除项不阻塞；
 3. 不能下发 verify/report 系统角色，也不能直接写 confirmed。`;
     } else if (trigger?.kind === "confirmed_finding") {
-      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。自动验证范围内 Finding 为 confirmed/needs_human 且无活跃工作时才可 complete；低于 minVerifySeverity 的策略排除项不阻塞。";
+      initialInput += "\n\n本轮由已确认风险触发。请对 Finding 做验收，并自行决定是否派发环境搭建、最小 PoC、动态复现或影响确认。自动验证范围内 Finding 为 confirmed/needs_human/refuted/inconclusive 且无活跃工作时才可 complete；低于 minVerifySeverity 的策略排除项不阻塞。";
     } else if (trigger?.kind === "verify_rework" || trigger?.kind === "verify_failed") {
       initialInput += `
 
@@ -923,7 +923,7 @@ Finding：${trigger.finding_id ?? "未知"}
 
 你只能：
 1. 派发普通角色（review/test/audit/explore 等）补充独立复核或实测证据；每个 intent 的 prompt 必须写明 finding_id 与证据目标；
-2. 若已无安全可行路径，说明阻塞并以 finding_id + subject_revision 的结构化 subject 调用 request_human / 在 complete 前确保 Finding 进入 needs_human。
+2. 若卡在凭据/设备/网络/生产环境或业务范围，以 finding_id + subject_revision 的结构化 subject 调用 request_human；预算耗尽或证据不足不要造人工节点，由 Scheduler 写成 inconclusive。
 你不能直接把 Finding 写成 confirmed，也不能下发 verify 或 report 系统角色。`;
     } else if (trigger?.kind === "risk_acceptance_followup") {
       initialInput += "\n\n这是风险回收验收轮次。证据足够且自动验证范围内 Finding 收敛则 complete；否则只派发必要下一步。";
@@ -943,7 +943,7 @@ Finding：${trigger.finding_id ?? "未知"}
 
 本轮由**画布空闲 / 图进度**触发：当前没有待跑的 Worker/Verify 节点。
 请读整图决策：
-1. 若目标已覆盖且**自动验证范围内 Finding 为 confirmed 或 needs_human** → complete（随后自动 Report；SARIF 仅含 confirmed）；
+1. 若目标已覆盖且**自动验证范围内 Finding 为 confirmed / needs_human / refuted / inconclusive** → complete（随后自动 Report；SARIF 仅含 confirmed）；
 2. 若自动验证范围内仍有 pending/verifying → 派发补证或推动验证，不得 complete；低于 minVerifySeverity 的策略排除项不阻塞；
 3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并调用 request_human；必须显式传 Finding 或 platform_blocker subject，禁止只传 reason。调用 request_human 后停止，不要再 submit_hub_decision 或 mark_job_done。`;
     } else if (["user_task", "external_event"].includes(trigger?.kind ?? "")) {
@@ -1015,7 +1015,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}\n` : ""}
 ${REPORT_QUANTITY_VERBATIM_NOTE}
 
 任务目标：${taskGoal || "未提供"}
-统计：confirmed=${payload.confirmed_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}
+统计：confirmed=${payload.confirmed_count ?? "?"} refuted=${payload.refuted_count ?? "?"} inconclusive=${payload.inconclusive_count ?? "?"} needs_human=${payload.needs_human_count ?? "?"} not_auto_verified=${payload.excluded_count ?? "?"} total=${payload.findings_total ?? "?"}
 
 ## 确定性报告输入（report-input.json）
 以下 JSON 是 Finding 集合、状态和证据摘要的唯一权威来源；不得用任务文本、画布内容或模型常识覆盖它。
@@ -1023,7 +1023,7 @@ ${REPORT_QUANTITY_VERBATIM_NOTE}
 ${inputBlock}
 \`\`\`
 ${graph ? `\n任务画布（YAML）：\n${graph.yaml}\n` : ""}
-在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」「待人工确认」与「未自动验证（严重度策略）」；策略排除项不等于误报或待人工。即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。`;
+在 mark_job_done.summary 中给出完整 Markdown 报告正文：必须区分「已确认问题」「已排除」「未证实」「待人工确认」与「未自动验证（严重度策略）」；策略排除项不等于误报或待人工，未证实不等于已排除。即使没有 confirmed 也要明确「本次未形成已确认漏洞」，并尽量引用 Finding id 或标题。SARIF 仅含 confirmed。`;
   } else {
     initialInput = `执行 Hub 下发的安全审计任务：
 ${workerPrompt}
@@ -1625,7 +1625,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       nudgeMessage: isHub
         ? "你还没有通过平台工具提交本轮决策，只输出文本不算完成。请立即调用 submit_hub_decision（complete、intents 或 payload_file 三选一），然后调用 mark_job_done 提交本轮摘要。"
         : isVerify
-          ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/rework/needs_human）。"
+          ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/rework/needs_human/refuted）。"
           : "你还没有通过平台工具提交最终结果，只输出文本不算完成。请通过 emit_fact/emit_finding 提交发现（如有），然后调用 mark_job_done 提交最终摘要。",
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});

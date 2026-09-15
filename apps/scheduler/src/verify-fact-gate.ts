@@ -197,23 +197,27 @@ export function factFirstAuditAfter(gate: FactFirstGateResult): Record<string, u
   };
 }
 
-const HUMAN_SETTLEMENT_RESULTS = new Set<FactFirstGateResult["result"]>(["conflict", "rejected"]);
-
 /**
- * Fact-first 结果如何驱动 Verify 生命周期（#518）。
- * conflict/rejected 不能靠再派 review/test 解开；insufficient / revision_mismatch 仍等证据。
+ * Fact-first 结果如何驱动 Verify 生命周期（#518 / #537）。
+ * rejected → refuted（原命题不成立）；conflict → inconclusive（未证实）。
+ * 二者都不能靠再派 review/test 解开，也不得写成 needs_human。
+ * insufficient / revision_mismatch / finding_id_mismatch / failed 仍等证据。
  */
-export type FactFirstFollowupAction = "confirm" | "needs_human" | "wait_evidence";
+export type FactFirstFollowupAction = "confirm" | "refuted" | "inconclusive" | "wait_evidence";
 
 export function classifyFactFirstFollowup(gate: Pick<FactFirstGateResult, "ok" | "result">): FactFirstFollowupAction {
   if (gate.ok) return "confirm";
-  if (HUMAN_SETTLEMENT_RESULTS.has(gate.result)) return "needs_human";
+  if (gate.result === "rejected") return "refuted";
+  if (gate.result === "conflict") return "inconclusive";
   return "wait_evidence";
 }
 
-export function factFirstHumanSettlementReason(gate: Pick<FactFirstGateResult, "result">): string {
+export function factFirstSettlementReason(gate: Pick<FactFirstGateResult, "result">): string {
   return `fact_first_${gate.result}`;
 }
+
+/** @deprecated #537 否定终态不再走 needs_human；保留别名以免漏改调用点。 */
+export const factFirstHumanSettlementReason = factFirstSettlementReason;
 
 /**
  * 门禁结论指纹：只由 result + missing 决定（#519）。

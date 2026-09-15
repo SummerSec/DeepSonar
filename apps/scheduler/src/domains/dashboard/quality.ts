@@ -150,10 +150,13 @@ export function qualityRate(numerator: number, denominator: number): QualityRate
 }
 
 export function classifyFindingOutcome(row: Pick<QualityFindingRow, "verify_status" | "disposition">):
-  "confirmed" | "false_positive" | "needs_human" | "open" {
-  if (row.disposition === "rejected_fp" || row.verify_status === "false_positive") return "false_positive";
+  "confirmed" | "false_positive" | "needs_human" | "inconclusive" | "open" {
+  if (row.disposition === "rejected_fp" || row.verify_status === "false_positive" || row.verify_status === "refuted") {
+    return "false_positive";
+  }
   if (row.verify_status === "confirmed") return "confirmed";
   if (row.verify_status === "needs_human") return "needs_human";
+  if (row.verify_status === "inconclusive") return "inconclusive";
   return "open";
 }
 
@@ -305,7 +308,7 @@ export function buildQualityReport(input: QualityContext): QualityReport {
     else if (outcome === "needs_human") needsHuman += 1;
   }
 
-  const finishedRound = new Set(["confirmed", "rework", "needs_human", "failed"]);
+  const finishedRound = new Set(["confirmed", "rework", "needs_human", "failed", "refuted", "inconclusive"]);
   let bothVerdicts = 0;
   let disagreed = 0;
   let reworkRounds = 0;

@@ -924,7 +924,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   <p className="mt-1.5 text-[11px] leading-4 text-zinc-600">
                     技术 confirmed 只能由 Scheduler Verify 根据独立证据产生。
                   </p>
-                  {f.verify_status !== "confirmed" && f.verify_status !== "needs_human" && (
+                  {f.verify_status !== "confirmed" && f.verify_status !== "needs_human" && f.verify_status !== "refuted" && f.verify_status !== "inconclusive" && (
                     <div className="mt-3 space-y-2">
                       <textarea
                         value={verifyReason}

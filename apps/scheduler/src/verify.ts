@@ -27,12 +27,18 @@ import {
   classifyFactFirstFollowup,
   evaluateFactFirstConfirmGate,
   factFirstAuditAfter,
-  factFirstHumanSettlementReason,
+  factFirstSettlementReason,
   gateFingerprint,
   resolveWaitEvidenceNoProgress,
   type FactFirstGateResult,
   type FactFirstRecord,
 } from "./verify-fact-gate.js";
+import {
+  classifyVerifyTerminalReason,
+  isVerifyConvergedStatus,
+  shouldCreateHumanBlocker,
+  type VerifySettleTerminal,
+} from "./verify-terminal.js";
 
 export function isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean {
   return coreIsSeverityInVerifyScope(minSeverity, severity);
@@ -46,13 +52,13 @@ type SavepointTx = Tx & {
 const ACTIVE_JOB = ["pending", "claimed", "provisioning", "running", "waiting_human"] as const;
 const TERMINAL_JOB = ["succeeded", "failed", "timeout", "cancelled", "orphan"] as const;
 
-export type ProposedVerdict = "confirmed" | "rework" | "needs_human";
-export type RoundOutcome = "confirmed" | "rework" | "needs_human";
+export type ProposedVerdict = "confirmed" | "rework" | "needs_human" | "refuted";
+export type RoundOutcome = "confirmed" | "rework" | "needs_human" | "refuted" | "inconclusive";
 
 export function mapProposedVerdict(raw: string | undefined | null): ProposedVerdict {
   const v = String(raw ?? "").toLowerCase();
-  if (v === "confirmed" || v === "rework" || v === "needs_human") return v;
-  throw invalidVerification("verdict 只能是 confirmed、rework 或 needs_human", "verdict");
+  if (v === "confirmed" || v === "rework" || v === "needs_human" || v === "refuted") return v;
+  throw invalidVerification("verdict 只能是 confirmed、rework、needs_human 或 refuted", "verdict");
 }
 
 export interface EvidenceSnapshot {
@@ -485,7 +491,7 @@ export async function createVerifyRound(
   }
 
   if (opts.followupDepth >= rules.maxFollowupDepth) {
-    await markFindingNeedsHuman(tx, findingId, "max_followup_depth");
+    await settleFindingVerifyByReason(tx, findingId, "max_followup_depth");
     return null;
   }
 
@@ -497,7 +503,7 @@ export async function createVerifyRound(
     SELECT MAX(attempt) AS max_attempt FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
   const nextAttempt = Number(openRound?.attempt ?? ((max_attempt ?? 0) + 1));
   if (nextAttempt > rules.maxVerificationRounds) {
-    await markFindingNeedsHuman(tx, findingId, "max_verification_rounds");
+    await settleFindingVerifyByReason(tx, findingId, "max_verification_rounds");
     return null;
   }
 
@@ -537,8 +543,10 @@ export async function createVerifyRound(
 
   // Matching-revision supports+refutes (or only refutes) cannot be repaired by
   // another Hub review/test round; waiting_evidence would freeze attempt=1 forever (#518).
-  if (!opts.manualOverride && classifyFactFirstFollowup(gate) === "needs_human") {
-    await markFindingNeedsHuman(tx, findingId, factFirstHumanSettlementReason(gate));
+  // #537: rejected → refuted, conflict → inconclusive; never needs_human.
+  const factFirstAction = classifyFactFirstFollowup(gate);
+  if (!opts.manualOverride && (factFirstAction === "refuted" || factFirstAction === "inconclusive")) {
+    await settleFindingVerifyTerminal(tx, findingId, factFirstAction, factFirstSettlementReason(gate));
     return null;
   }
 
@@ -838,8 +846,8 @@ export async function normalizePendingVerificationRounds(
         FROM jobs j JOIN findings f ON f.id = ${round.finding_id as string}
         WHERE j.id = ${stale.verify_job_id as string}`;
       if (job?.status !== "succeeded") return false;
-      if (job.verify_status === "confirmed" || job.verify_status === "needs_human") {
-        const terminalStatus = job.verify_status === "confirmed" ? "confirmed" : "needs_human";
+      if (isVerifyConvergedStatus(String(job.verify_status ?? ""))) {
+        const terminalStatus = String(job.verify_status);
         await tx`
           UPDATE finding_verification_rounds SET
             status = ${terminalStatus}, final_outcome = ${terminalStatus},
@@ -848,7 +856,7 @@ export async function normalizePendingVerificationRounds(
           WHERE id = ${round.id as string}`;
         return true;
       }
-      await markFindingNeedsHuman(
+      await settleFindingVerifyByReason(
         tx,
         round.finding_id as string,
         "boot_stale_verify_success",
@@ -883,7 +891,7 @@ export async function evaluateFollowup(
   }
 
   if ((job.followup_depth as number) >= rules.maxFollowupDepth) {
-    await markFindingNeedsHuman(tx, findingId, "max_followup_depth");
+    await settleFindingVerifyByReason(tx, findingId, "max_followup_depth");
     return;
   }
 
@@ -891,7 +899,7 @@ export async function evaluateFollowup(
     SELECT COUNT(*)::int AS count FROM jobs WHERE parent_job_id = ${job.id as string}`;
   if (count >= rules.maxFollowupsPerJob) {
     console.warn(`[verify] job ${job.id} followup 超过上限 ${rules.maxFollowupsPerJob}`);
-    await markFindingNeedsHuman(tx, findingId, "max_followups_per_job");
+    await settleFindingVerifyByReason(tx, findingId, "max_followups_per_job");
     return;
   }
 
@@ -907,8 +915,8 @@ export async function evaluateFollowup(
 }
 
 /**
- * 护栏耗尽（maxHubRounds 等）：把画布上仍 pending/verifying 的 Finding 统一收口为 needs_human，
- * 避免永久 pending 堵死 complete/report。
+ * 护栏耗尽（maxHubRounds 等）：把画布上仍 pending/verifying 的 Finding 统一收口为 inconclusive，
+ * 避免永久 pending 堵死 complete/report。预算类 reason 不造 human 节点。
  */
 export async function settleCanvasFindingsAtGuardrail(
   tx: Tx,
@@ -932,15 +940,7 @@ export async function settleCanvasFindingsAtGuardrail(
       await markFindingBelowMinVerifySeverity(tx, f.id as string, rules.minVerifySeverity);
       continue;
     }
-    // 关闭未结束的 round
-    await tx`
-      UPDATE finding_verification_rounds SET
-        status = 'needs_human',
-        final_outcome = 'needs_human',
-        error = ${reason},
-        finished_at = COALESCE(finished_at, now())
-      WHERE finding_id = ${f.id as string} AND status IN ('pending', 'running')`;
-    await markFindingNeedsHuman(tx, f.id as string, reason);
+    await settleFindingVerifyByReason(tx, f.id as string, reason);
     settled += 1;
   }
   return { settled };
@@ -1004,7 +1004,7 @@ export async function closeVerifyRound(
     )[0];
   }
   if (!round) return { outcome: "skipped", forceHub: false };
-  if (["confirmed", "rework", "needs_human", "failed"].includes(round.status as string) && round.finished_at) {
+  if (["confirmed", "rework", "needs_human", "failed", "refuted", "inconclusive"].includes(round.status as string) && round.finished_at) {
     return { outcome: "skipped", forceHub: false };
   }
 
@@ -1025,22 +1025,19 @@ export async function closeVerifyRound(
     const attempt = round.attempt as number;
     const atLimit = attempt >= rules.maxVerificationRounds;
     if (atLimit || opts.jobStatus === "cancelled") {
-      const outcome: RoundOutcome = "needs_human";
+      const reason = opts.error ?? `verify_${opts.jobStatus}`;
+      const outcome: RoundOutcome = classifyVerifyTerminalReason(reason);
       await finishRound(tx, round.id as string, {
         status: "failed",
         proposed: null,
         final: outcome,
         evidence,
         summary: opts.summary ?? null,
-        error: opts.error ?? `verify_${opts.jobStatus}`,
+        error: reason,
       });
-      await setFindingStatus(tx, findingId, "needs_human", finding.node_id as string | null);
-      if (canvasId) {
-        await ensureHumanBlocker(tx, canvasId, findingId, finding.node_id as string | null, {
-          reason: `verify_${opts.jobStatus}`,
-          summary: opts.error ?? opts.summary ?? `Verify ${opts.jobStatus}`,
-        });
-      }
+      await settleFindingVerifyTerminal(tx, findingId, outcome, reason, {
+        skipRoundClose: true,
+      });
       return { outcome, forceHub: false };
     }
 
@@ -1089,6 +1086,17 @@ export async function closeVerifyRound(
       gateFailed = true;
       missing = confirm.missing.length > 0 ? confirm.missing : ["evidence_incomplete"];
     }
+  } else if (proposed === "refuted") {
+    const factFirstAction = classifyFactFirstFollowup(gate);
+    if (factFirstAction === "refuted") {
+      final = "refuted";
+    } else if (factFirstAction === "inconclusive") {
+      final = "inconclusive";
+    } else {
+      final = "rework";
+      gateFailed = true;
+      missing = gate.missing.length > 0 ? gate.missing : ["evidence_incomplete"];
+    }
   } else if (proposed === "needs_human") {
     // 仅当明确阻塞时接受；否则也可回弹（本实现：直接接受 needs_human）
     final = "needs_human";
@@ -1096,18 +1104,26 @@ export async function closeVerifyRound(
     final = "rework";
   }
 
-  // 轮次上限：rework 且已达上限 → needs_human
+  // 轮次上限：rework 且已达上限 → inconclusive（预算耗尽，不是人）
   if (final === "rework" && (round.attempt as number) >= rules.maxVerificationRounds) {
-    final = "needs_human";
+    final = "inconclusive";
   }
 
+  const roundStatus =
+    final === "confirmed" ? "confirmed"
+    : final === "needs_human" ? "needs_human"
+    : final === "refuted" ? "refuted"
+    : final === "inconclusive" ? "inconclusive"
+    : "rework";
   await finishRound(tx, round.id as string, {
-    status: final === "confirmed" ? "confirmed" : final === "needs_human" ? "needs_human" : "rework",
+    status: roundStatus,
     proposed,
     final,
     evidence,
     summary: opts.summary ?? null,
-    error: gateFailed ? gate.reasons.join(";") || evidence.reason || "fact_first_gate_failed" : null,
+    error: gateFailed ? gate.reasons.join(";") || evidence.reason || "fact_first_gate_failed" : (
+      final === "inconclusive" ? "max_verification_rounds" : null
+    ),
   });
 
   if (final === "confirmed") {
@@ -1146,16 +1162,18 @@ export async function closeVerifyRound(
     };
   }
 
-  if (final === "needs_human") {
-    await setFindingStatus(tx, findingId, "needs_human", finding.node_id as string | null);
-    if (canvasId) {
-      await ensureHumanBlocker(tx, canvasId, findingId, finding.node_id as string | null, {
-        reason: proposed === "needs_human" ? "verify_needs_human" : "verification_limit",
-        summary: opts.summary ?? "自动验证无法闭环",
-        missing_evidence: missing,
-      });
-    }
-    return { outcome: "needs_human", forceHub: false };
+  if (final === "needs_human" || final === "refuted" || final === "inconclusive") {
+    const settleReason =
+      final === "needs_human"
+        ? (proposed === "needs_human" ? "verify_needs_human" : "verification_limit")
+        : final === "refuted"
+          ? factFirstSettlementReason(gate)
+          : (final === "inconclusive" && proposed === "rework" ? "max_verification_rounds" : factFirstSettlementReason(gate));
+    await settleFindingVerifyTerminal(tx, findingId, final, settleReason, {
+      skipRoundClose: true,
+      extraBody: { summary: opts.summary ?? "自动验证无法闭环", missing_evidence: missing },
+    });
+    return { outcome: final, forceHub: false };
   }
 
   // rework → pending + force Hub
@@ -1205,7 +1223,7 @@ export async function maybeReverifyAfterFollowup(
   const [finding] = await tx`
     SELECT * FROM findings WHERE id = ${findingId} FOR UPDATE`;
   if (!finding) return;
-  if (finding.verify_status === "confirmed" || finding.verify_status === "needs_human") return;
+  if (isVerifyConvergedStatus(String(finding.verify_status ?? ""))) return;
 
   // 同画布、同 finding 的其它活跃补证 job 是否都结束（排除本 Job）
   const activeFollowups = await tx`
@@ -1252,8 +1270,9 @@ export async function maybeReverifyAfterFollowup(
     return;
   }
 
-  if (classifyFactFirstFollowup(gate) === "needs_human") {
-    await markFindingNeedsHuman(tx, findingId, factFirstHumanSettlementReason(gate));
+  const followupAction = classifyFactFirstFollowup(gate);
+  if (followupAction === "refuted" || followupAction === "inconclusive") {
+    await settleFindingVerifyTerminal(tx, findingId, followupAction, factFirstSettlementReason(gate));
     return;
   }
 
@@ -1313,17 +1332,17 @@ export async function maybeReverifyAfterFollowup(
         - (((prev.evidence_snapshot_json as EvidenceSnapshot | undefined)?.review ?? []).length
           + ((prev.evidence_snapshot_json as EvidenceSnapshot | undefined)?.test ?? []).length));
       console.info(
-        `[verify] finding=${findingId} 无进展 ${noProgress.noProgressCount} 轮（result=${gate.result}，证据 +${added} 条），转 needs_human`,
+        `[verify] finding=${findingId} 无进展 ${noProgress.noProgressCount} 轮（result=${gate.result}，证据 +${added} 条），转 inconclusive`,
       );
       inc("deepsonar_finding_no_progress_total", { result: gate.result });
-      await markFindingNeedsHuman(tx, findingId, noProgress.reason ?? `no_progress:${gate.result}`, {
+      await settleFindingVerifyByReason(tx, findingId, noProgress.reason ?? `no_progress:${gate.result}`, {
         gateFingerprint: gateFp,
         evidenceGrowth: evidenceGrew,
       });
       return;
     }
     if (attempt >= rules.maxVerificationRounds || noNewCount >= rules.maxVerificationRounds) {
-      await markFindingNeedsHuman(tx, findingId, "max_verification_rounds_no_new_evidence", {
+      await settleFindingVerifyByReason(tx, findingId, "max_verification_rounds_no_new_evidence", {
         gateFingerprint: gateFp,
         evidenceGrowth: evidenceGrew,
       });
@@ -1534,8 +1553,8 @@ export async function careSeverityMeta(
 
 /**
  * Hub complete / Report 统一收敛门（TODO §0.3 / §4.2 / §5）：
- * 阈值范围内每条 Finding 的 verify_status ∈ {confirmed, needs_human}；
- * confirmed 须有可追溯 verification round；无未关闭 round。
+ * 阈值范围内每条 Finding 的 verify_status ∈ {confirmed, needs_human, refuted, inconclusive}；
+ * confirmed / refuted / inconclusive 须有匹配 final_outcome 的 verification round；无未关闭 round。
  * 低于 minVerifySeverity 的 Finding 保持 pending 并由策略标记，不阻塞门。
  */
 export async function canvasFindingsConverged(
@@ -1564,31 +1583,31 @@ export async function canvasFindingsConverged(
 
     if (!isSeverityInVerifyScope(minVerifySeverity, sev)) continue;
 
-    if (st !== "confirmed" && st !== "needs_human") {
+    if (!isVerifyConvergedStatus(st)) {
       blockers.push(`finding:${f.id}:${st}`);
       problems.push({
         finding_id: f.id as string,
         title: String(f.title ?? ""),
         severity: sev,
         verify_status: st,
-        issue: `Finding 未收敛（须 confirmed 或 needs_human，当前 ${st}）`,
+        issue: `Finding 未收敛（须 confirmed / needs_human / refuted / inconclusive，当前 ${st}）`,
         in_care_scope: true,
       });
       continue;
     }
-    if (st === "confirmed") {
+    if (st === "confirmed" || st === "refuted" || st === "inconclusive") {
       const [round] = await tx`
         SELECT id FROM finding_verification_rounds
-        WHERE finding_id = ${f.id as string} AND final_outcome = 'confirmed'
+        WHERE finding_id = ${f.id as string} AND final_outcome = ${st}
         LIMIT 1`;
       if (!round) {
-        blockers.push(`finding:${f.id}:confirmed_without_round`);
+        blockers.push(`finding:${f.id}:${st}_without_round`);
         problems.push({
           finding_id: f.id as string,
           title: String(f.title ?? ""),
           severity: sev,
           verify_status: st,
-          issue: "confirmed 缺少可追溯 verification round",
+          issue: `${st} 缺少可追溯 verification round`,
           in_care_scope: true,
         });
       }
@@ -1681,7 +1700,7 @@ export async function hasSucceededRoleWork(tx: Tx, canvasId: string): Promise<bo
 
 /**
  * 统一分析完成门（Hub complete 与 maxHubRounds 护栏共用）。
- * - 阈值范围内 Finding ∈ {confirmed, needs_human}（含 human blocker 校验）
+ * - 阈值范围内 Finding ∈ {confirmed, needs_human, refuted, inconclusive}（needs_human 含 human blocker 校验）
  * - 无未关闭 verification round
  * - 无活跃工作（可排除当前 job）
  * - 至少一次普通角色成功 Job（防空图成功报告）
@@ -1778,14 +1797,17 @@ async function setFindingStatus(
   }
 }
 
-export async function markFindingNeedsHuman(
+export async function settleFindingVerifyTerminal(
   tx: Tx,
   findingId: string,
+  status: VerifySettleTerminal,
   reason: string,
   options: {
     requireWaitingHumanHub?: boolean;
     gateFingerprint?: string;
     evidenceGrowth?: boolean;
+    skipRoundClose?: boolean;
+    extraBody?: Record<string, unknown>;
   } = {},
 ): Promise<boolean> {
   const [origin] = await tx`
@@ -1819,23 +1841,59 @@ export async function markFindingNeedsHuman(
       LIMIT 1`;
     if (!waitingHub) return false;
   }
-  // 等待证据的轮次没有可收口 Job；人工接管 Finding 时显式关闭它，
+  // 等待证据的轮次没有可收口 Job；终态接管 Finding 时显式关闭它，
   // 避免收敛门继续被该轮次阻塞。
-  await tx`
-    UPDATE finding_verification_rounds SET
-      status = 'needs_human', final_outcome = 'needs_human',
-      error = ${reason}, finished_at = COALESCE(finished_at, now())
-    WHERE finding_id = ${findingId} AND status IN ('pending','running')`;
-  await setFindingStatus(tx, findingId, "needs_human", finding.node_id as string | null);
-  if (canvasId) {
+  if (!options.skipRoundClose) {
+    await tx`
+      UPDATE finding_verification_rounds SET
+        status = ${status}, final_outcome = ${status},
+        error = ${reason}, finished_at = COALESCE(finished_at, now())
+      WHERE finding_id = ${findingId} AND status IN ('pending','running')`;
+  }
+  await setFindingStatus(tx, findingId, status, finding.node_id as string | null);
+  if (canvasId && shouldCreateHumanBlocker(status)) {
     await ensureHumanBlocker(tx, canvasId, findingId, finding.node_id as string | null, {
       reason,
       summary: reason,
       ...(options.gateFingerprint ? { gate_fingerprint: options.gateFingerprint } : {}),
       ...(options.evidenceGrowth !== undefined ? { evidence_growth: options.evidenceGrowth } : {}),
+      ...(options.extraBody ?? {}),
     });
   }
   return true;
+}
+
+export async function settleFindingVerifyByReason(
+  tx: Tx,
+  findingId: string,
+  reason: string,
+  options: {
+    requireWaitingHumanHub?: boolean;
+    gateFingerprint?: string;
+    evidenceGrowth?: boolean;
+    extraBody?: Record<string, unknown>;
+  } = {},
+): Promise<boolean> {
+  return settleFindingVerifyTerminal(
+    tx,
+    findingId,
+    classifyVerifyTerminalReason(reason),
+    reason,
+    options,
+  );
+}
+
+export async function markFindingNeedsHuman(
+  tx: Tx,
+  findingId: string,
+  reason: string,
+  options: {
+    requireWaitingHumanHub?: boolean;
+    gateFingerprint?: string;
+    evidenceGrowth?: boolean;
+  } = {},
+): Promise<boolean> {
+  return settleFindingVerifyTerminal(tx, findingId, "needs_human", reason, options);
 }
 
 /**
@@ -1853,7 +1911,7 @@ async function markFindingBelowMinVerifySeverity(
     FROM findings
     WHERE id = ${findingId}
     FOR UPDATE`;
-  if (!finding || finding.verify_status === "confirmed" || finding.verify_status === "needs_human") return;
+  if (!finding || isVerifyConvergedStatus(String(finding.verify_status ?? ""))) return;
 
   await tx`
     UPDATE finding_verification_rounds

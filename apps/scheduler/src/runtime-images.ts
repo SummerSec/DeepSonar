@@ -2218,7 +2218,7 @@ export async function bootstrapOfficialRuntimeImages(): Promise<void> {
       AND rc.runtime_image_key = 'deepsonar-base'`;
   await sql`
     UPDATE agent_roles SET
-      description = '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、rework 或 needs_human 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发',
+      description = '系统角色：默认在最小基础环境中验证 Finding，给出 confirmed、rework、needs_human 或 refuted 结论；需要专项工具时可由 RoleConfig 覆盖镜像；Hub 不可下发',
       updated_at = now()
     WHERE name = 'verify' AND builtin = true AND kind = 'system'
       AND description IN (

@@ -222,7 +222,7 @@ loop:
   4. Runtime：经 `SandboxRunner` 起沙箱（real 默认 OpenSandbox），注入任务包、静态控制 Skill 与冻结 API operation allowlist
   5. 启动冻结的 Agent CLI；文本流经 Runtime Adapter 回传，语义事件经 Job 级控制 API 回传，调度器维护 lease
   6. 结束（正常回调 或 Reaper 判定超时/孤儿）：销毁沙箱；绑定了 Plane 的 job 尽力回写（失败只告警，不改本地终态）；Canvas 节点定格
-  7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human 后生成版本化任务总 Report
+  7. Hub 派发 audit 等角色；达到 `minVerifySeverity` 或未评分/未知 severity 的 Finding 自动进入多轮 verify，rework 强制回弹 Hub 补证；每条 Finding 进入 `confirmed` 时独立生成版本化 Finding Report；验证范围内 Finding 收敛为 confirmed/needs_human/refuted/inconclusive 后生成版本化任务总 Report
 ```
 
 Canvas 级任务暂停是独立于 Hub convergence 和项目并发配额的 claim admission。控制对象保存在
@@ -241,9 +241,9 @@ pause/start 事务先 `FOR UPDATE` 锁 Canvas；Dispatcher 对候选 Job 再以 
 3. 派生前按 `fingerprint` 去重；Hub 的 review/test 若引用 Finding，必须只引用一个同画布 canonical Finding 节点，Scheduler 据此冻结 `jobs.finding_id` 与 `verification_followup`。多 Finding、映射歧义或 Verify trigger 错配使整次 Hub 决策回滚；analyze/explore 可保留多来源引用
 4. 同一 Finding 同时最多一个活跃 verify，但允许在 Hub 补证后创建下一验证轮次
 5. Scheduler 以图上结构化 Fact 做 Fact-first 硬门：校验 `finding_id`、来源 Job/角色、当前 `subject_revision`、`outcome` 与结构化 `expected`/`actual`。普通文本 verdict 不计。门禁通过时可直接确认收口，或创建只消费 Fact 投影的 `verify_finding` 提交收口提案；两条路径都不重读源代码、原始制品或 maker 结论。`GraphScope=verify` 仍只投影身份骨架与引用
-6. `verify_finding` 若仍运行，只提交 `confirmed` / `rework` / `needs_human` 提案；Scheduler 再次执行同一 Fact-first 门禁后才可写 confirmed。审计记录所用 Fact、门禁结果与失败原因
-7. Fact 不足、失败、冲突或 revision/`finding_id` 不匹配时 Finding 保持未确认并回弹 Hub 补证；`confirmed` 可触发影响验收。
-8. 验证范围内 Finding ∈ `{confirmed, needs_human}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，SARIF 仅包含 `confirmed`。
+6. `verify_finding` 若仍运行，只提交 `confirmed` / `rework` / `needs_human` / `refuted` 提案（不能提案 `inconclusive`）；Scheduler 再次执行同一 Fact-first 门禁后才可写终态。`ok` 可写 `confirmed`；匹配修订的全量 `refutes` 写 `refuted`（原命题不成立 / 已排除）；证据冲突写 `inconclusive`（未证实，不是已排除）。审计记录所用 Fact、门禁结果与失败原因。Agent 不能直接写 `verify_status`。
+7. Fact 不足、失败、冲突或 revision/`finding_id` 不匹配时 Finding 保持未确认并回弹 Hub 补证；`confirmed` 可触发影响验收。预算/护栏耗尽、`no_progress:*`、Verify Job 失败上限写 `inconclusive`，不造 human 节点。`needs_human` 只留给能力边界（凭据/设备/网络/生产环境、业务范围、显式模型提问）和人工 `PATCH`。
+8. 验证范围内 Finding ∈ `{confirmed, needs_human, refuted, inconclusive}`、画布无活跃工作且 Hub complete 后，Scheduler 按确定性输入摘要派发任务总 Report。`task_reports` 以 `(canvas_id, version)` 版本化并限制每个画布最多一个活动版本；相同成功输入幂等，输入变化时追加版本，失败同输入重试复用版本。每版输入与产物写入独立 `vN` 目录，API 默认读取最新版本并提供历史列表。任务报告汇总全部 Finding，低于阈值项明确列为未自动验证，`needs_human` 保留在待人工章节，`refuted` 进已排除，`inconclusive` 进未证实，SARIF 仅包含 `confirmed`。legacy `false_positive` 仍阻塞收敛且新流程不可写。
 9. 每条 Finding 写入 `confirmed` 时，Scheduler 在独立 Report Job 路径派发 Finding Report：输入冻结为 `report-input.json` 并记录 SHA-256，`finding_reports` 以 `(finding_id, version)` 版本化且 `pending/generating` 期间只允许一个活跃版本。`POST /findings/:id/report` 可手动刷新/重试并创建下一版本；生成失败只标记报告失败，不回退或修改 Finding 状态。两条报告轨道互不替代。
 
 ### 4.4 Scheduler bounded contexts（Issue #37）
@@ -253,7 +253,7 @@ Scheduler 的领域代码通过 application/ports seam 拆分，PostgreSQL 仍�
 - `domains/job-lifecycle`：Job 状态迁移、claim、恢复、取消与重试的 CAS 写入；
 - `domains/event-ingestion`：event envelope 校验、幂等、`job_seq`、固定窗口限流，以及由显式 ports 组合的 progress/fact/finding/Hub decision/done/human 语义副作用；
 - `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger（签名变化且门禁指纹变化才唤醒）、idle/terminal 推进、人工评论唤醒、可选 `maxHubRounds` 护栏（默认 unlimited）；
-- `domains/finding-verification`：Finding 派生、证据附着、verification round、完成门与 rework/needs_human/confirmed 收口；
+- `domains/finding-verification`：Finding 派生、证据附着、verification round、完成门与 rework/needs_human/confirmed/refuted/inconclusive 收口；
 - `domains/report-convergence`：analysis complete 后的任务报告、Finding 报告、输入冻结与失败恢复；
 - `domains/role-runtime-snapshot`：RoleConfig、Credential/CLI、skill/shared asset 与 runtime image 的建 Job 时冻结。
 
@@ -267,15 +267,15 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 
 - 每 Job 最大 followup 数 `MAX_FOLLOWUPS_PER_JOB`（默认 60）
 - 派生深度上限 `MAX_FOLLOWUP_DEPTH`（默认 12；verify 的结果仍由规则引擎约束，不由 Agent 自行派生）
-- 超出验证轮次、派生深度或 Hub 轮次护栏 → Finding 收口为 `needs_human` 并记录 human blocker；随后仍可进入报告的待人工章节
+- 超出验证轮次、派生深度或 Hub 轮次护栏 → Finding 收口为 `inconclusive`，不记录 human blocker；随后进入报告的未证实章节，不进待人工
 
 ### 4.5 人工介入与恢复
 
 - `request_human` 必须包含 `reason` 与结构化 `subject`。Finding subject 固定为 canonical `finding_id + subject_revision`，Scheduler 在事件事务内校验同项目、同画布及 `minVerifySeverity`；平台阻塞只接受 `authorization`、`credential`、`high_risk_action`、`business_decision` 四类。reason 只用于展示，禁止从自然语言反推 Finding 或绕过规则。校验通过后 Job 才转 `waiting_human`、对应 `job`/`intent`/`report` 画布节点同步该状态；若项目绑定 Plane，再将外部 issue 标为 Blocked；同时建立 human 节点。同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时跳过后续终态，保住 wait gate；同 Attempt 分次提交仍互斥
 - 人处理完后可调用 `POST /jobs/{id}/resume` 使用旧冻结快照重新入队；当前受治理身份漂移时返回 `SNAPSHOT_STALE`，改用 `POST /jobs/{id}/rerun-current` 按当前配置重冻。两者都是同 Job、新 Attempt，不跨已销毁沙箱恢复 CLI Session
 - Finding 详情可调用 `POST /findings/{id}/verify` 强制新建 Verify round，或调用 `POST /findings/{id}/evidence-jobs` 新建绑定该 Finding 的 review/test 补证 Job。两类动作继续受 follow-up 深度、验证轮次、活动任务唯一性与终态约束，不修改历史 Job；若同画布 Hub 正在等待人工，则在同一事务恢复为 `pending`
-- 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` 仍只有系统 Verify 能写
-- 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径，而是用 verdict=`needs_human` 把 Finding 收口为可报告终态
+- 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` / `refuted` / `inconclusive` 仍只有系统 Verify 能写
+- 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径。能力边界可用 verdict=`needs_human` 把 Finding 收口为可报告终态并造 human 节点；否定结论走 Scheduler 终态 `refuted`/`inconclusive`，不复活 `false_positive`
 
 恢复或重启后的每次执行均可在 Job 详情投影 Attempt、effect 和资源身份；`agent_run`、`agent_resume`、`cancel`、`timeout` 的效果记录用于区分可继续的同会话恢复和不可安全重放的未知窗口。
 
@@ -874,7 +874,7 @@ CANVAS_LAYOUT=auto
 - **单 Scheduler 实例**：MVP 假设单实例运行，claim 靠 DB 唯一约束兜底。多实例扩展时改用 `SELECT ... FOR UPDATE SKIP LOCKED` 竞争领取，接口不变
 - **DB 轮询而非 Webhook/Redis**：延迟秒级可接受；二期再升级
 - **画布不做多人协同编辑**：第一期只读展示 + 服务端写入；协同编辑是二期候选
-- **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、回弹 Hub 或 needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
+- **verify 不直接派生下游**：Verify 只提交 verdict；Scheduler 依据硬门决定 confirmed、refuted、inconclusive、回弹 Hub 或（仅能力边界）needs_human，并以多轮/深度/Hub 轮次护栏防止链式失控
 - **运行时边界是 RuntimeHost（#162）**：当前三类 CLI 不引用 provider SDK 类型；语义事件只经 Job 级 Platform API。real 默认 OpenSandbox；Agentbox 实现与 `agentbox-sdk` 已删除。
 - **沙箱内权限完全开放**（`approvalMode: "auto"`）：安全边界在沙箱层（断网/隔离/一次性），不在 Agent 层做二次权限收敛
 - **用量账本**：`job_usage_ledger` 已记录按 Attempt/effect 关联的请求与 token 观察结果（含缓存读/写）；额度缓存仍由 `job_tokens` 熔断，成本定价不在本阶段计算。`GET /dashboard/usage` 按日/周/月或自定义时间把账本聚到全局/项目/任务看板，不把 Session 归档 usage 与 Gateway 行对账成同一数字

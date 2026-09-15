@@ -35,7 +35,7 @@ test("open high-risk excludes confirmed_vuln and closed dispositions", () => {
 });
 
 test("verify / disposition / waiting_human stay independent dimensions", () => {
-  assert.deepEqual([...VERIFY_VERDICTS], ["confirmed", "rework", "needs_human"]);
+  assert.deepEqual([...VERIFY_VERDICTS], ["confirmed", "rework", "needs_human", "refuted"]);
   assert.equal(HUMAN_JOB_STATUS, "waiting_human");
   const dimensions = new Set(FINDING_STATE_MATRIX.map((row) => row.dimension));
   assert.deepEqual(
@@ -45,4 +45,10 @@ test("verify / disposition / waiting_human stay independent dimensions", () => {
   const leftover = FINDING_STATE_MATRIX.find((row) => row.dimension === "verify_status" && row.value === "false_positive");
   assert.equal(leftover?.writer, "无（新流程不可写）");
   assert.match(leftover?.report ?? "", /不映射为 rework/);
+  const refuted = FINDING_STATE_MATRIX.find((row) => row.dimension === "verify_status" && row.value === "refuted");
+  assert.equal(refuted?.terminal, true);
+  assert.equal(refuted?.owner, "Scheduler");
+  const inconclusive = FINDING_STATE_MATRIX.find((row) => row.dimension === "verify_status" && row.value === "inconclusive");
+  assert.equal(inconclusive?.terminal, true);
+  assert.match(inconclusive?.meaning ?? "", /未证实/);
 });
