@@ -54,7 +54,7 @@ test("generic failures stay permanent and do not offer unconditional retry", () 
 });
 
 test("settled effects aggregate by kind and unknown effects keep per-kind copy", () => {
-  assert.equal(describeUnknownEffect("provision"), "沙箱创建未完成，无外部后果，可放心重试");
+  assert.equal(describeUnknownEffect("provision"), "沙箱创建结果未确认，可能残留沙箱，请谨慎确认后再重试");
   assert.equal(describeUnknownEffect("agent_run"), "进程可能已产生影响，请人工判断");
   assert.deepEqual(aggregateSettledEffects([
     { effect_kind: "provision", status: "settled" },
@@ -101,15 +101,17 @@ test("all settled with no unknown is not unknown_external_effect", () => {
   assert.equal(feedback.unknown_effects.length, 0);
 });
 
-test("provision unknown copy says retry is safe; mixed unknown stays confirmation", () => {
+test("provision unknown copy urges caution; mixed unknown stays confirmation", () => {
   const provisionOnly = projectRepairFeedback({
     status: "failed",
     unknownEffects: [{ effect_kind: "provision", status: "unknown", effect_id: "p-unknown" }],
     hasEffectLedger: true,
   });
   assert.equal(provisionOnly.category, "unknown_external_effect");
-  assert.match(provisionOnly.unknown_effects[0]?.summary ?? "", /可放心重试/);
-  assert.match(provisionOnly.next_step, /可以重跑/);
+  assert.match(provisionOnly.unknown_effects[0]?.summary ?? "", /可能残留沙箱/);
+  assert.doesNotMatch(provisionOnly.unknown_effects[0]?.summary ?? "", /可放心重试/);
+  assert.match(provisionOnly.next_step, /不要当成无外部后果/);
+  assert.doesNotMatch(provisionOnly.next_step, /无外部后果。确认后可以重跑/);
   assert.equal(provisionOnly.observed, null);
   assert.deepEqual(provisionOnly.alternatives, []);
   assert.equal(provisionOnly.remaining_budget, null);
