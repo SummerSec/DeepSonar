@@ -54,7 +54,12 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.equal(canTransition("provisioning", "timeout"), false);
   assert.match(lifecycleSource, /reapExecutionTimeout/);
   assert.match(lifecycleSource, /reapStalledExecution/);
+  assert.match(lifecycleSource, /reapWaitingHumanTimeout/);
   assert.match(reaperSource, /reapStalledExecution/);
+  assert.match(reaperSource, /reapWaitingHumanTimeout/);
+  assert.match(reaperSource, /expireDanglingHumanNodes/);
+  assert.match(reaperSource, /reapExpiredHumanNodes/);
+  assert.doesNotMatch(reaperSource, /UPDATE\s+jobs\s+SET\s+status/);
   assert.match(lifecycleSource, /runtime_activity,inflight_tool/);
   assert.match(lifecycleSource, /deepsonar-chrome-fuzz/);
   assert.match(lifecycleSource, /deepsonar-clickhouse-fuzz/);
@@ -71,7 +76,6 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(lifecycleSource, /started_at\s+IS\s+NOT\s+NULL/);
   assert.match(lifecycleSource, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);
   assert.match(reaperSource, /createSqlJobLifecycleApplication\(\)/);
-  assert.doesNotMatch(reaperSource, /UPDATE\s+jobs\s+SET\s+status/);
   assert.match(lifecycleSource, /reapLeaseOrphans/);
   assert.match(lifecycleSource, /COALESCE\(heartbeat_at, '-infinity'::timestamptz\) < lease_expires_at/);
   assert.match(

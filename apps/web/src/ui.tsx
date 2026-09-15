@@ -39,6 +39,7 @@ const STATUS_LABEL: Record<string, string> = {
   needs_human: "待人工",
   // Finding 人工处置
   open: "待处置",
+  expired: "已过期",
   accepted: "已接受",
   human_reproducing: "人工复现中",
   confirmed_vuln: "漏洞存在",

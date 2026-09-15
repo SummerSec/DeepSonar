@@ -276,6 +276,8 @@ Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verificati
 - Finding 详情可调用 `POST /findings/{id}/verify` 强制新建 Verify round，或调用 `POST /findings/{id}/evidence-jobs` 新建绑定该 Finding 的 review/test 补证 Job。两类动作继续受 follow-up 深度、验证轮次、活动任务唯一性与终态约束，不修改历史 Job；若同画布 Hub 正在等待人工，则在同一事务恢复为 `pending`
 - 若同画布等待的是 `hub_reason`，Finding 详情也可调用 `PATCH /findings/{id}/verify-status`，且请求只接受 `needs_human`。Scheduler 按 Canvas → Finding → Hub Job 顺序加锁，在同一事务关闭等待证据轮次、写 verification blocker、恢复 Hub 为 `pending` 并 `pg_notify`；`confirmed` / `refuted` / `inconclusive` 仍只有系统 Verify 能写
 - 普通 Worker 的 `request_human` 表示 Job 暂停并等待恢复；Verify 不走该路径。能力边界可用 verdict=`needs_human` 把 Finding 收口为可报告终态并造 human 节点；否定结论走 Scheduler 终态 `refuted`/`inconclusive`，不复活 `false_positive`
+- `waiting_human`（Job 暂停）、Finding `needs_human`（语义终态）和 Canvas human 节点（投影）分三条链路，不共用超时。Reaper 对 `waiting_human` 使用独立预算 `DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC`（默认 1800s，0 关闭），从最近一次 `human` 事件起算，超时 Job → `failed`（`reason=human_timeout`），释放 Attempt/sandbox/lease/token；迟到回复不能改写已完成的审核结论。Finding `needs_human` 不因 Job 超时自动改写。
+- Canvas human 投影由 Reaper 收口 dangling：绑已非 `waiting_human` Job 的 open 请求、已非 `needs_human` 的 verification_blocker、以及无类型/无目标/无处理入口的 open 节点 → `expired`。`finding_comment`、用户消息账本、仍有效的 verification_blocker、以及仍绑 `waiting_human` 的请求节点保留。`job_id IS NULL` 本身不是垃圾。
 
 恢复或重启后的每次执行均可在 Job 详情投影 Attempt、effect 和资源身份；`agent_run`、`agent_resume`、`cancel`、`timeout` 的效果记录用于区分可继续的同会话恢复和不可安全重放的未知窗口。
 

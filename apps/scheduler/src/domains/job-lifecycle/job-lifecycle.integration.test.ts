@@ -110,6 +110,35 @@ if (!testDatabaseUrl) {
       assert.equal(keptHeartbeat.status, "running");
       assert.equal(keptEvent.status, "running");
 
+      const waitingFreshId = await insertJob("waiting_human");
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json, created_at)
+        VALUES (
+          ${waitingFreshId}, ${randomUUID()}, 1, 'human',
+          ${sql.json({ reason: "需要授权" } as never)},
+          now() - interval '1 second'
+        )`;
+      const waitingStaleId = await insertJob("waiting_human");
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json, created_at)
+        VALUES (
+          ${waitingStaleId}, ${randomUUID()}, 1, 'human',
+          ${sql.json({ reason: "需要授权" } as never)},
+          now() - interval '10 seconds'
+        )`;
+      assert.equal((await app.reapWaitingHumanTimeout(0)).length, 0, "0 disables waiting_human timeout");
+      const [keptFreshBefore] = await sql`SELECT status FROM jobs WHERE id = ${waitingFreshId}`;
+      assert.equal(keptFreshBefore.status, "waiting_human");
+      const humanTimedOut = await app.reapWaitingHumanTimeout(2);
+      const humanTimedOutIds = new Set(humanTimedOut.map((row) => row.id));
+      assert.equal(humanTimedOutIds.has(waitingStaleId), true, "stale waiting_human is failed after independent budget");
+      assert.equal(humanTimedOutIds.has(waitingFreshId), false, "fresh human event is kept");
+      const [staleHuman] = await sql`SELECT status, error FROM jobs WHERE id = ${waitingStaleId}`;
+      const [freshHuman] = await sql`SELECT status FROM jobs WHERE id = ${waitingFreshId}`;
+      assert.equal(staleHuman.status, "failed");
+      assert.match(String(staleHuman.error), /人工等待超时/);
+      assert.equal(freshHuman.status, "waiting_human");
+
       const resetClaimed = await insertJob("claimed");
       const resetProvision = await insertJob("provisioning");
       const safeRequeue = await insertJob("provisioning");
@@ -210,7 +239,60 @@ if (!testDatabaseUrl) {
       const [silentRow] = await sql`SELECT status, error FROM jobs WHERE id = ${silentAudit}`;
       assert.equal(silentRow.status, "failed");
       assert.match(String(silentRow.error), /产出停滞/);
+
+      const { expireDanglingHumanNodes } = await import("../canvas/human-node-expire.js");
+      // cancelJobsOnCanvas 会收走 waitingFreshId；live 请求必须绑一条仍为 waiting_human 的 Job。
+      const liveWaitingJob = await insertJob("waiting_human");
+      const deadJob = waitingStaleId;
+      const liveFindingId = randomUUID();
+      const deadFindingId = randomUUID();
+      await sql`
+        INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, verify_status)
+        VALUES
+          (${liveFindingId}, ${projectId}, ${liveWaitingJob}, ${`live-${liveFindingId}`}, '仍需人', 'high', 'needs_human'),
+          (${deadFindingId}, ${projectId}, ${deadJob}, ${`dead-${deadFindingId}`}, '已自动收口', 'high', 'inconclusive')`;
+      const liveRequestId = randomUUID();
+      const deadRequestId = randomUUID();
+      const liveBlockerId = randomUUID();
+      const deadBlockerId = randomUUID();
+      const commentId = randomUUID();
+      const danglingId = randomUUID();
+      const ignoredId = randomUUID();
+      await sql`
+        INSERT INTO canvas_nodes (id, canvas_id, job_id, node_type, title, status, body_json)
+        VALUES
+          (${liveRequestId}, ${canvasId}, ${liveWaitingJob}, 'human', '仍在等人', 'open', ${sql.json({ reason: "需要授权" } as never)}),
+          (${deadRequestId}, ${canvasId}, ${deadJob}, 'human', 'Job 已失败', 'open', ${sql.json({ reason: "需要授权" } as never)}),
+          (${liveBlockerId}, ${canvasId}, null, 'human', '验证阻塞', 'open', ${sql.json({ kind: "verification_blocker", finding_id: liveFindingId } as never)}),
+          (${deadBlockerId}, ${canvasId}, null, 'human', '预算 blocker', 'open', ${sql.json({ kind: "verification_blocker", finding_id: deadFindingId } as never)}),
+          (${commentId}, ${canvasId}, null, 'human', '评论投影', 'open', ${sql.json({ kind: "finding_comment", finding_id: liveFindingId } as never)}),
+          (${danglingId}, ${canvasId}, null, 'human', '脱钩垃圾', 'open', ${sql.json({ reason: "环境说明" } as never)}),
+          (${ignoredId}, ${canvasId}, ${deadJob}, 'human', '人已忽略', 'ignored', ${sql.json({ resolution: "ignored" } as never)})`;
+      const expiredCount = await sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as typeof sql;
+        return expireDanglingHumanNodes(tx, canvasId);
+      });
+      assert.equal(expiredCount, 3);
+      const statuses = Object.fromEntries(
+        (await sql`
+          SELECT id, status, body_json->>'expired_reason' AS expired_reason
+          FROM canvas_nodes
+          WHERE id = ANY(${[liveRequestId, deadRequestId, liveBlockerId, deadBlockerId, commentId, danglingId, ignoredId]})
+        `).map((row) => [String(row.id), { status: String(row.status), reason: row.expired_reason ? String(row.expired_reason) : null }]),
+      );
+      assert.deepEqual(statuses[liveRequestId], { status: "open", reason: null });
+      assert.deepEqual(statuses[deadRequestId], { status: "expired", reason: "job_not_waiting_human" });
+      assert.deepEqual(statuses[liveBlockerId], { status: "open", reason: null });
+      assert.deepEqual(statuses[deadBlockerId], { status: "expired", reason: "finding_not_needs_human" });
+      assert.deepEqual(statuses[commentId], { status: "open", reason: null });
+      assert.deepEqual(statuses[danglingId], { status: "expired", reason: "dangling_human_node" });
+      assert.deepEqual(statuses[ignoredId], { status: "ignored", reason: null });
+      const [liveFinding] = await sql`SELECT verify_status FROM findings WHERE id = ${liveFindingId}`;
+      assert.equal(liveFinding.verify_status, "needs_human");
     } finally {
+      await sql`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
       await sql`DELETE FROM events WHERE job_id = ANY(${jobIds})`;
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds})`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;

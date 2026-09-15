@@ -30,6 +30,7 @@ export interface JobLifecycleOperations {
   reapProvisionTimeout: (provisionSec: number) => Promise<JobLifecycleRow[]>;
   reapLeaseOrphans: () => Promise<JobLifecycleRow[]>;
   reapStalledExecution: (stallSec: number) => Promise<JobLifecycleRow[]>;
+  reapWaitingHumanTimeout: (waitingHumanSec: number) => Promise<JobLifecycleRow[]>;
   reconcileProvisioning: () => Promise<ProvisionReconcileResult>;
   reconcileRunning: () => Promise<JobLifecycleRow[]>;
   cancelJob: (jobId: string, error: string) => Promise<JobLifecycleRow | null>;
