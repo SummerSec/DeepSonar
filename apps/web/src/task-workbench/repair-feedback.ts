@@ -12,6 +12,13 @@ export const REPAIR_CATEGORIES = [
 
 export type RepairCategory = (typeof REPAIR_CATEGORIES)[number];
 
+export interface RepairUnknownEffect {
+  effect_id: string | null;
+  effect_kind: string | null;
+  status: string | null;
+  summary: string;
+}
+
 export interface RepairFeedback {
   category: RepairCategory;
   stage: string | null;
@@ -19,6 +26,7 @@ export interface RepairFeedback {
   expected: string | null;
   observed: string | null;
   accepted_effects: string[];
+  unknown_effects: RepairUnknownEffect[];
   alternatives: string[];
   remaining_budget: string | null;
   next_step: string;
@@ -73,6 +81,25 @@ export function extractFieldPath(error: string | null | undefined): string | nul
   return match?.[1] ?? match?.[0] ?? null;
 }
 
+export function describeUnknownEffect(kind: string | null | undefined): string {
+  const normalized = (kind ?? "").trim();
+  if (normalized === "provision") return "沙箱创建未完成，无外部后果，可放心重试";
+  if (normalized === "agent_run" || normalized === "agent_resume") return "进程可能已产生影响，请人工判断";
+  return "未决外部效果，请人工判断";
+}
+
+export function aggregateSettledEffects(
+  effects: readonly { effect_kind?: string | null; status?: string | null }[],
+): string[] {
+  const counts = new Map<string, number>();
+  for (const effect of effects) {
+    if (effect.status !== "settled") continue;
+    const kind = (effect.effect_kind ?? "").trim() || "effect";
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([kind, count]) => `${kind} ×${count}`);
+}
+
 export function classifyRepairCategory(input: {
   status?: string | null;
   error?: string | null;
@@ -109,22 +136,23 @@ export function projectRepairFeedback(input: {
     hasEffectLedger: input.hasEffectLedger,
   });
   const { code, message } = parseErrorCode(input.error);
-  const observed = message || (hasUnknownEffects
-    ? unknownEffects.map((effect) => `${effect.effect_kind ?? "effect"} · ${effect.status ?? "unknown"}`).join("；")
-    : null);
-  const accepted = (input.acceptedEffects ?? [])
-    .filter((effect) => effect.status === "settled")
-    .map((effect) => effect.effect_kind || effect.effect_id || "已接受效果");
+  const unknownViews: RepairUnknownEffect[] = unknownEffects.map((effect) => ({
+    effect_id: effect.effect_id ?? null,
+    effect_kind: effect.effect_kind ?? null,
+    status: effect.status ?? "unknown",
+    summary: describeUnknownEffect(effect.effect_kind),
+  }));
   return {
     category,
     stage: input.stage ?? (input.status ? `job.${input.status}` : null),
     field_path: extractFieldPath(input.error),
     expected: expectedShape(category, code),
-    observed: observed || null,
-    accepted_effects: accepted,
+    observed: message || null,
+    accepted_effects: aggregateSettledEffects(input.acceptedEffects ?? []),
+    unknown_effects: unknownViews,
     alternatives: alternativesFor(category),
     remaining_budget: input.remainingBudget ?? null,
-    next_step: nextStepFor(category),
+    next_step: nextStepFor(category, unknownViews),
     source_error: input.error ?? null,
   };
 }
@@ -148,19 +176,22 @@ function alternativesFor(category: RepairCategory): string[] {
     case "transient_retryable":
       return ["使用同一 Job 安全重试", "等待瞬时故障恢复后再试"];
     case "unknown_external_effect":
-      return ["先确认外部效果", "确认后再决定是否继续"];
+      return [];
     case "permanent_failure":
       return ["转人工判断", "补充要求后另开一轮"];
   }
 }
 
-function nextStepFor(category: RepairCategory): string {
+function nextStepFor(category: RepairCategory, unknownEffects: readonly RepairUnknownEffect[] = []): string {
   switch (category) {
     case "model_correctable":
       return "把出错字段、期望形状和当前观测发回模型，不要无上下文重放。";
     case "transient_retryable":
       return "可以按同一会话安全重试；次数用尽后再转人工。";
     case "unknown_external_effect":
+      if (unknownEffects.length > 0 && unknownEffects.every((effect) => effect.effect_kind === "provision")) {
+        return "沙箱创建未完成，无外部后果。确认后可以重跑，不要把它当成已启动的未知窗口。";
+      }
       return "先确认未决外部效果。未确认前不能当作普通失败，也不能无条件重试。";
     case "permanent_failure":
       return "需要人工判断原因和影响，再决定是否换配置重跑。";

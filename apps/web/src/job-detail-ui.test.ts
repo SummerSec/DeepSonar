@@ -81,6 +81,10 @@ test("运行详情把错误投影为 RepairFeedback，未知效果不提供无�
   assert.match(panel, /projectJobActions/);
   assert.match(panel, /allowJobRetry/);
   assert.match(panel, /unknown_external_effect/);
+  assert.match(panel, /repairRecoveryActions/);
+  assert.match(panel, /recoveryActions=\{repairRecoveryActions\}/);
+  assert.match(panel, /确认后 · 旧快照重跑/);
+  assert.match(panel, /RESUMABLE\.has\(detail\.job\.status\) && allowJobRetry/);
 });
 
 test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => {
