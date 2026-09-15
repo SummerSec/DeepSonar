@@ -326,7 +326,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
         WHERE f.id = ${id} AND origin.canvas_id = ${canvasId}
         FOR UPDATE OF f`;
       if (!finding) return { kind: "invalid_canvas" as const };
-      if (["confirmed", "needs_human"].includes(String(finding.verify_status))) {
+      if (["confirmed", "needs_human", "refuted", "inconclusive"].includes(String(finding.verify_status))) {
         return { kind: "terminal" as const, verify_status: String(finding.verify_status) };
       }
       const created = await createVerifyRound(tx, {
@@ -424,7 +424,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
         WHERE f.id = ${id} AND origin.canvas_id = ${canvasId}
         FOR UPDATE OF f`;
       if (!finding) return { kind: "invalid_canvas" as const };
-      if (["confirmed", "needs_human"].includes(String(finding.verify_status))) {
+      if (["confirmed", "needs_human", "refuted", "inconclusive"].includes(String(finding.verify_status))) {
         return { kind: "terminal" as const, verify_status: String(finding.verify_status) };
       }
       const rules = await rulesForProject(tx, finding.project_id as string);

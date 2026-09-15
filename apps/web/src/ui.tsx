@@ -34,6 +34,8 @@ const STATUS_LABEL: Record<string, string> = {
   verified: "已验证",
   rejected: "已排除",
   false_positive: "已排除",
+  refuted: "已排除",
+  inconclusive: "未证实",
   needs_human: "待人工",
   // Finding 人工处置
   open: "待处置",

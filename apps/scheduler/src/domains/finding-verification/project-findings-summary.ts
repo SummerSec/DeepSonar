@@ -8,6 +8,8 @@ export const FINDING_VERIFY_KEYS = [
   "confirmed",
   "false_positive",
   "needs_human",
+  "refuted",
+  "inconclusive",
 ] as const;
 
 export interface CountBucket {

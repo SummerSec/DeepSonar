@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 50);
+INSERT INTO schema_meta (id, version) VALUES ('global', 51);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -352,7 +352,7 @@ CREATE TABLE findings (
   CONSTRAINT findings_project_id_fingerprint_key UNIQUE (project_id, fingerprint),
   CONSTRAINT findings_severity_check CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
   CONSTRAINT findings_verify_status_check CHECK (
-    verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human')
+    verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human', 'refuted', 'inconclusive')
   ),
   CONSTRAINT findings_disposition_check CHECK (
     disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
@@ -413,13 +413,13 @@ CREATE TABLE finding_verification_rounds (
   UNIQUE (finding_id, attempt),
   UNIQUE (verify_job_id),
   CONSTRAINT finding_verification_rounds_status_check CHECK (
-    status IN ('pending','running','rework','confirmed','needs_human','failed')
+    status IN ('pending','running','rework','confirmed','needs_human','failed','refuted','inconclusive')
   ),
   CONSTRAINT finding_verification_rounds_proposed_check CHECK (
-    proposed_verdict IS NULL OR proposed_verdict IN ('confirmed','rework','needs_human')
+    proposed_verdict IS NULL OR proposed_verdict IN ('confirmed','rework','needs_human','refuted')
   ),
   CONSTRAINT finding_verification_rounds_outcome_check CHECK (
-    final_outcome IS NULL OR final_outcome IN ('confirmed','rework','needs_human')
+    final_outcome IS NULL OR final_outcome IN ('confirmed','rework','needs_human','refuted','inconclusive')
   ),
   CONSTRAINT finding_verification_rounds_attempt_check CHECK (attempt >= 1)
 );
@@ -1783,13 +1783,13 @@ $instructions$),
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
 6. 只在普通文本里描述决策、理由或摘要不构成提交，平台只认通过 Job-scoped API 发起的 operation；结束回合前确认 `submit_hub_decision` 与 `mark_job_done` 均已返回响应。通过静态 `deepsonar-control` Skill 进行 capabilities/OpenAPI discovery 并调用 Job-scoped HTTP API；由 Agent 使用自身可用的 HTTP 工具直接发起请求，Runtime Adapter 只负责驱动 CLI 协议。禁止调用同名 MCP、写控制文件、猜测管理路由或在 API 失败后回退到 MCP/其他控制通道。API 返回 `accepted` 仅表示 Scheduler 已接收输入，仍会重验并记账；HTTP 错误始终带稳定 `error_code` 和可读消息，修正请求后方可重试，不得把失败调用当作已上报。
 7. **complete / Report 硬门槛（Scheduler 会再校验）**：
-   - **自动验证范围内 Finding** 的 `verify_status` 必须是 `confirmed` 或 `needs_human`；明确低于 `minVerifySeverity` 的 Finding 不派生 Verify、不阻塞收敛，但必须保留并在报告中单列；缺失或未知 severity 保守进入自动验证；
-   - `needs_human` 可进报告「待人工」章节，SARIF 仅含 `confirmed`；即使没有 confirmed 也必须能出报告；
+   - **自动验证范围内 Finding** 的 `verify_status` 必须是 `confirmed`、`needs_human`、`refuted` 或 `inconclusive`；明确低于 `minVerifySeverity` 的 Finding 不派生 Verify、不阻塞收敛，但必须保留并在报告中单列；缺失或未知 severity 保守进入自动验证；
+   - `needs_human` 可进报告「待人工」章节，`refuted` 进「已排除」，`inconclusive` 进「未证实」，SARIF 仅含 `confirmed`；即使没有 confirmed 也必须能出报告；
    - 画布无活跃普通角色 / Hub / Verify 工作；
    - 不得静默丢弃任何 Finding。
 8. **触发类型处理**：
    - `verify_rework` / `verify_failed`：只能派发 `review` / `test` 补独立复核与实测证据；每个 intent 的 prompt 必须写明 `finding_id`、唯一证据目标（review 或 test）以及上一轮缺口；不得用 audit/explore 代替结构化补证，也不要原样重复上一轮。
-   - `report_gate_failed`：Report 因仍有 pending/verifying Finding 被打回；trigger.problems 列出问题，须补证或收口为 needs_human，不得空 complete。
+   - `report_gate_failed`：Report 因仍有 pending/verifying Finding 被打回；trigger.problems 列出问题，须补证或收口为 confirmed / needs_human / refuted / inconclusive，不得空 complete。
    - `confirmed_finding`：可做影响验收或相关跟进；自动验证范围内 Finding 收敛后才可 complete。
    - `canvas_idle` / `graph_progress`：画布当前无待跑节点，读整图决定 complete 或最小增量 intents；禁止空转。
 9. 补证 intent 应要求 Worker 用 `emit_fact.verification` 提交结构化证据；缺 review 派 review，缺 runtime_test 派 test，二者尽量不同角色、不同 Job。

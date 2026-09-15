@@ -1574,10 +1574,12 @@ export interface TaskReport {
   status: "pending" | "generating" | "succeeded" | "failed";
   input_uri: string;
   input_sha256: string;
-  /** 结构化摘要：confirmed / needs_human / 未自动验证分栏，SARIF 只含 confirmed */
+  /** 结构化摘要：confirmed / refuted / inconclusive / needs_human / 未自动验证分栏，SARIF 只含 confirmed */
   summary_json: {
     confirmed_count?: number;
     needs_human_count?: number;
+    refuted_count?: number;
+    inconclusive_count?: number;
     excluded_count?: number;
     findings_total?: number;
     confirmed_by_severity?: Record<string, number>;

@@ -14,10 +14,12 @@ export const VERIFY_STATUSES = [
   "confirmed",
   "false_positive",
   "needs_human",
+  "refuted",
+  "inconclusive",
 ] as const;
 export type VerifyStatusValue = (typeof VERIFY_STATUSES)[number];
 
-export const VERIFY_VERDICTS = ["confirmed", "rework", "needs_human"] as const;
+export const VERIFY_VERDICTS = ["confirmed", "rework", "needs_human", "refuted"] as const;
 
 export const HUMAN_JOB_STATUS = "waiting_human" as const;
 
@@ -75,9 +77,27 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     dimension: "verify_status",
     value: "needs_human",
     owner: "Scheduler",
-    writer: "Verify verdict 或 PATCH /findings/:id/verify-status",
-    meaning: "技术验证无法收口，等待人；不是 disposition=human_reproducing",
+    writer: "能力边界 / PATCH /findings/:id/verify-status",
+    meaning: "技术验证卡在能力边界，等待人；不是预算耗尽，也不是 disposition=human_reproducing",
     report: "待人工章节；不进 SARIF",
+    terminal: true,
+  },
+  {
+    dimension: "verify_status",
+    value: "refuted",
+    owner: "Scheduler",
+    writer: "fact-first 全量匹配修订 refutes（唯一）",
+    meaning: "结构化否定证据成立，原命题不成立；不是人工误报处置，也不能旁路 confirmed_vuln",
+    report: "已排除章节；不进 SARIF",
+    terminal: true,
+  },
+  {
+    dimension: "verify_status",
+    value: "inconclusive",
+    owner: "Scheduler",
+    writer: "预算/无进展/冲突护栏",
+    meaning: "证据不足但已终止（未证实，不是已排除）；不创建 human 节点",
+    report: "未证实章节；不进 SARIF",
     terminal: true,
   },
   {

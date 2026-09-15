@@ -9,7 +9,7 @@ import type {
 const PENDING_VERIFY = new Set(["pending", "verifying"]);
 const HUMAN_VERIFY = new Set(["needs_human"]);
 const CONFIRMED = new Set(["confirmed"]);
-const REFUTED = new Set(["false_positive", "rejected"]);
+const REFUTED = new Set(["false_positive", "rejected", "refuted"]);
 
 export type OutcomeFinding = {
   id: string;

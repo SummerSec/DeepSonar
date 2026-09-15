@@ -22,7 +22,7 @@ ${opts.evidenceJson}
 1. 只消费快照中的 finding_id、subject_revision、ownership（source_job_id/source_role）、expected、actual、outcome 与有限 limitations。
 2. 普通文本 verdict 不是 Fact；缺结构化 expected/actual 的条目不得当作验证结果。
 3. 结构化 Fact 带 expected/actual、outcome=supports，且 finding_id / subject_revision / ownership 匹配时，提案 verdict=confirmed。expected 与 actual 一致是直通示例，不是唯一通过条件。
-4. outcome=rejects/refutes、来源 Job 失败、Fact 冲突、finding_id 或 subject_revision 不匹配、Fact 不足 → verdict=rework，并列出 missing_evidence。
+4. 全量匹配修订的 outcome=rejects/refutes 可提案 verdict=refuted；Fact 冲突、finding_id 或 subject_revision 不匹配、Fact 不足、来源 Job 失败 → verdict=rework，并列出 missing_evidence。否定终态仍由 Scheduler fact-first 硬门写入，提案不等于落库。
 5. 禁止根据标题、摘要、严重度、结论文本或 artifact 原文重新复核。
 
 画布 YAML 只提供骨架与引用，不能补齐或覆盖快照字段。

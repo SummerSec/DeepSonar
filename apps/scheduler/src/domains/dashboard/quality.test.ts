@@ -74,6 +74,25 @@ test("false_positive classification prefers leftover verify status and rejected_
   assert.equal(classifyFindingOutcome({ verify_status: "confirmed", disposition: "open" }), "confirmed");
   assert.equal(classifyFindingOutcome({ verify_status: "needs_human", disposition: "open" }), "needs_human");
   assert.equal(classifyFindingOutcome({ verify_status: "pending", disposition: "open" }), "open");
+  assert.equal(classifyFindingOutcome({ verify_status: "refuted", disposition: "open" }), "false_positive");
+  assert.equal(classifyFindingOutcome({ verify_status: "inconclusive", disposition: "open" }), "inconclusive");
+});
+
+test("inconclusive is closed-unconfirmed and does not inflate needs_human or confirmation denominators", () => {
+  const report = buildQualityReport(ctx({
+    findings: [
+      finding({ id: "a", verify_status: "confirmed" }),
+      finding({ id: "b", job_id: "maker-1", verify_status: "false_positive" }),
+      finding({ id: "c", job_id: "maker-1", verify_status: "needs_human" }),
+      finding({ id: "d", job_id: "maker-1", verify_status: "pending" }),
+      finding({ id: "e", job_id: "maker-1", verify_status: "refuted" }),
+      finding({ id: "f", job_id: "maker-1", verify_status: "inconclusive" }),
+    ],
+  }));
+  assert.deepEqual(report.findings.confirmation, { rate: 0.25, numerator: 1, denominator: 4 });
+  assert.deepEqual(report.findings.false_positive, { rate: 0.6667, numerator: 2, denominator: 3 });
+  assert.equal(report.human.findings_needs_human, 1);
+  assert.equal(report.findings.total, 6);
 });
 
 test("confirmation and false-positive rates use exclusive terminal outcomes", () => {

@@ -1401,14 +1401,14 @@ async function executeFake(jobId: string, type: string) {
               from: refs.map((r) => r.id as string),
               role: selected.name,
               description: `Report 门禁失败：补证或收口未收敛 Finding`,
-              prompt: `针对 report_gate_failed 列出的 Finding 补充证据或推动至 confirmed/needs_human。finding_id=${findingId ?? "见 trigger.problems"}`,
+              prompt: `针对 report_gate_failed 列出的 Finding 补充证据或推动至 confirmed / needs_human / refuted / inconclusive。finding_id=${findingId ?? "见 trigger.problems"}`,
             },
           ],
         });
         return;
       }
       if (trigger.kind === "confirmed_finding") {
-        // 已确认后：自动验证范围内 Finding 收敛（confirmed|needs_human）才 complete
+        // 已确认后：自动验证范围内 Finding 收敛（confirmed|needs_human|refuted|inconclusive）才 complete
         const care = await canvasFindingsConverged(sql, canvasId);
         if (care.ok) {
           const refs = await sql`
@@ -1418,7 +1418,7 @@ async function executeFake(jobId: string, type: string) {
           await emit("hub_decision", {
             complete: {
               from: refs.map((r) => r.id as string),
-              description: "假 hub：自动验证范围内 Finding 已收敛（confirmed/needs_human），分析完成，可生成报告。",
+              description: "假 hub：自动验证范围内 Finding 已收敛（confirmed/needs_human/refuted/inconclusive），分析完成，可生成报告。",
             },
           });
           return;
@@ -1438,7 +1438,7 @@ async function executeFake(jobId: string, type: string) {
               from: refs.map((r) => r.id as string),
               role: selected.name,
               description: `由 ${selected.title} 角色补证未收敛 Finding`,
-              prompt: `针对尚未 confirmed/needs_human 的 Finding 补充实测证据。finding_id=${badId ?? "见画布"}`,
+              prompt: `针对尚未 confirmed/needs_human/refuted/inconclusive 的 Finding 补充实测证据。finding_id=${badId ?? "见画布"}`,
             },
           ],
         });
@@ -1470,7 +1470,7 @@ async function executeFake(jobId: string, type: string) {
         await emit("hub_decision", {
           complete: {
             from: refs.map((r) => r.id as string),
-            description: "假 hub：Finding 已收敛（confirmed/needs_human），分析完成。",
+            description: "假 hub：Finding 已收敛（confirmed/needs_human/refuted/inconclusive），分析完成。",
           },
         });
       } else {

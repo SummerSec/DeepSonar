@@ -222,11 +222,13 @@ export const VerifyStatus = z.enum([
   "confirmed",
   "false_positive",
   "needs_human",
+  "refuted",
+  "inconclusive",
 ]);
 export type VerifyStatus = z.infer<typeof VerifyStatus>;
 
 /** Verify Agent 提交的 verdict 提案。历史 Finding `verify_status=false_positive` 仍可读，不能再作为输入。 */
-export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human"]);
+export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human", "refuted"]);
 export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
 
 /** 绑定到 Finding 的独立复核 / 实测证据（emit_fact 可选字段）。 */

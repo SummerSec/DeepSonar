@@ -130,7 +130,7 @@ test("frozen subject_revision alias does not poison matching supports", () => {
   assert.deepEqual(gate.used_fact_ids, ["match"]);
 });
 
-test("conflict and rejected settle as needs_human instead of waiting for more evidence", () => {
+test("conflict settles as inconclusive and rejected settles as refuted", () => {
   const conflict = evaluateFactFirstConfirmGate(
     [
       fact({ node_id: "support", outcome: "supports" }),
@@ -147,14 +147,14 @@ test("conflict and rejected settle as needs_human instead of waiting for more ev
     ],
     { findingId: FINDING, subjectRevision: "ctf@v1" },
   );
-  assert.equal(classifyFactFirstFollowup(conflict), "needs_human");
+  assert.equal(classifyFactFirstFollowup(conflict), "inconclusive");
   assert.equal(factFirstHumanSettlementReason(conflict), "fact_first_conflict");
 
   const rejected = evaluateFactFirstConfirmGate(
     [fact({ outcome: "refutes" })],
     { findingId: FINDING, subjectRevision: "ctf@v1" },
   );
-  assert.equal(classifyFactFirstFollowup(rejected), "needs_human");
+  assert.equal(classifyFactFirstFollowup(rejected), "refuted");
   assert.equal(factFirstHumanSettlementReason(rejected), "fact_first_rejected");
 
   const insufficient = evaluateFactFirstConfirmGate([], { findingId: FINDING, subjectRevision: "ctf@v1" });

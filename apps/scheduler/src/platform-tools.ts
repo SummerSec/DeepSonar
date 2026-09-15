@@ -95,7 +95,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   mark_job_done: [
     "### `mark_job_done` — 正常结束 Job",
     "- 普通 Worker 参数：`summary`（必填，至少 8 个非空白字符，最多 10000）；不得传 `verdict`。",
-    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|rework|needs_human`。",
+    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|rework|needs_human|refuted`。",
     "- `confirmed` 仍须通过 Scheduler Fact-first 硬门（finding_id / subject_revision / ownership / expected / actual / outcome）；普通文本不算验证。不满足时会记为 rework 并回弹 Hub。",
     "- `rework` 时建议在 summary 中写明缺失证据；可选 `missing_evidence` 字符串数组。",
     "- 时机：所有增量 fact/finding 已提交且任务确实收尾后只调用一次。Hub 必须先调用 `submit_hub_decision`。",

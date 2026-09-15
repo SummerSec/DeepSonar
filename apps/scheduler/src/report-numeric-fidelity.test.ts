@@ -57,12 +57,16 @@ function reportInput(overrides: Partial<ReportInput> = {}): ReportInput {
       findings_total: 1,
       confirmed_count: 1,
       needs_human_count: 0,
+      refuted_count: 0,
+      inconclusive_count: 0,
       excluded_count: 0,
       confirmed_by_severity: { high: 1 },
     },
     findings: [finding],
     confirmed_findings: [finding],
     needs_human_findings: [],
+    refuted_findings: [],
+    inconclusive_findings: [],
     excluded_findings: [],
     seed_findings: [],
     scope_and_coverage: {},
@@ -237,4 +241,49 @@ test("report prompt and graph inject require verbatim quantities", () => {
   assert.match(graph, /REPORT_QUANTITY_VERBATIM_NOTE/);
   assert.match(executor, /REPORT_QUANTITY_VERBATIM_NOTE/);
   assert.match(REPORT_QUANTITY_VERBATIM_NOTE, /value、unit、basis/);
+});
+
+test("task report chapters split refuted/inconclusive and SARIF stays confirmed-only", () => {
+  const refutedFinding: ReportInputFinding = {
+    ...finding,
+    id: "finding-refuted",
+    title: "Not a vuln",
+    verify_status: "refuted",
+    quantities: undefined,
+  };
+  const inconclusiveFinding: ReportInputFinding = {
+    ...finding,
+    id: "finding-inconclusive",
+    title: "Budget exhausted",
+    verify_status: "inconclusive",
+    quantities: undefined,
+  };
+  const input = reportInput({
+    statistics: {
+      findings_total: 3,
+      confirmed_count: 1,
+      needs_human_count: 0,
+      refuted_count: 1,
+      inconclusive_count: 1,
+      excluded_count: 0,
+      confirmed_by_severity: { high: 1 },
+    },
+    findings: [finding, refutedFinding, inconclusiveFinding],
+    confirmed_findings: [finding],
+    needs_human_findings: [],
+    refuted_findings: [refutedFinding],
+    inconclusive_findings: [inconclusiveFinding],
+    facts: [],
+  });
+  const resolved = finalizeTaskReportMarkdown(input, "too short");
+  assert.equal(resolved.usedDefault, "coverage");
+  assert.match(resolved.markdown, /## 已排除/);
+  assert.match(resolved.markdown, /## 未证实/);
+  assert.match(resolved.markdown, /Not a vuln/);
+  assert.match(resolved.markdown, /Budget exhausted/);
+  assert.match(resolved.markdown, /未证实，不是已排除/);
+  const sarif = buildSarifFromConfirmed(input) as {
+    runs: Array<{ results: Array<{ ruleId: string }> }>;
+  };
+  assert.deepEqual(sarif.runs[0]?.results.map((row) => row.ruleId), ["finding-1"]);
 });
