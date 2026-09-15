@@ -85,6 +85,62 @@ export function commandWithEnv(command: string, env?: Record<string, string>): s
   return `env ${assigns} sh -c ${shellQuote(command)}`;
 }
 
+
+/** Transient execd/proxy upload failures under rootless hostfwd / ingress churn (#548). */
+const TRANSIENT_UPLOAD_RE =
+  /Upload failed\s*\(\s*status\s*=\s*5\d\d\s*\)|UNEXPECTED_RESPONSE|Server disconnected without sending a response|An internal error occurred in the proxy|websocket proxy failure|ECONNRESET|EPIPE|socket hang up/i;
+
+export function isTransientOpenSandboxUploadError(error: unknown): boolean {
+  if (error == null) return false;
+  if (typeof error !== "object") return TRANSIENT_UPLOAD_RE.test(String(error));
+  const value = error as Record<string, unknown>;
+  const nested = value.error && typeof value.error === "object"
+    ? `${(value.error as { code?: string }).code ?? ""} ${(value.error as { message?: string }).message ?? ""}`
+    : "";
+  const text = [
+    "message" in value ? String(value.message ?? "") : "",
+    "code" in value ? String(value.code ?? "") : "",
+    nested,
+    "statusCode" in value ? String(value.statusCode ?? "") : "",
+    "status" in value ? String(value.status ?? "") : "",
+  ].join(" ");
+  if (TRANSIENT_UPLOAD_RE.test(text)) return true;
+  const status = Number(value.statusCode ?? value.status ?? 0);
+  // Multipart upload 5xx without a permanent auth/not-found code.
+  if (status === 502 || status === 503 || status === 504) return true;
+  if (status === 500 && /Upload failed|UNEXPECTED_RESPONSE|proxy|disconnected/i.test(text)) return true;
+  return false;
+}
+
+const UPLOAD_RETRY_ATTEMPTS = 3;
+const UPLOAD_RETRY_BASE_DELAY_MS = 150;
+
+async function sleepMs(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+export async function writeFilesWithRetry(
+  writeFiles: (files: Array<{ path: string; data: string | Buffer }>) => Promise<unknown>,
+  files: Array<{ path: string; data: string | Buffer }>,
+  options?: { attempts?: number; baseDelayMs?: number; sleep?: (ms: number) => Promise<void> },
+): Promise<void> {
+  const attempts = Math.max(1, options?.attempts ?? UPLOAD_RETRY_ATTEMPTS);
+  const baseDelayMs = Math.max(0, options?.baseDelayMs ?? UPLOAD_RETRY_BASE_DELAY_MS);
+  const sleep = options?.sleep ?? sleepMs;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await writeFiles(files);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientOpenSandboxUploadError(error) || attempt >= attempts) throw error;
+      await sleep(baseDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
 function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenSandboxSession {
   return {
     id: sandbox.id,
@@ -92,7 +148,10 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
       let cmd = command;
       if (options?.stdin) {
         const tmp = `/tmp/deepsonar-stdin-${randomUUID()}`;
-        await sandbox.files.writeFiles([{ path: tmp, data: options.stdin }]);
+        await writeFilesWithRetry(
+          (files) => sandbox.files.writeFiles(files),
+          [{ path: tmp, data: options.stdin }],
+        );
         cmd = `sh -c ${shellQuote(command)} < ${shellQuote(tmp)}`;
       }
       const execution = await sandbox.commands.run(cmd, {
@@ -122,7 +181,10 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
       });
     },
     async writeFile(destPath, content) {
-      await sandbox.files.writeFiles([{ path: destPath, data: content }]);
+      await writeFilesWithRetry(
+        (files) => sandbox.files.writeFiles(files),
+        [{ path: destPath, data: content }],
+      );
     },
     async readFile(filePath) {
       return Buffer.from(await sandbox.files.readBytes(filePath));

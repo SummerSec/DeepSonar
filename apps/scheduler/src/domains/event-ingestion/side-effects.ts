@@ -813,7 +813,12 @@ export function createEventIngestionSideEffectApplication(
     }
 
     if (type === "progress") {
-      const p = validatedPayload as { message: string; percent?: number };
+      const raw = validatedPayload as { message: string; percent?: number };
+      // Scrub control bytes before jsonb write — corrupted CLI/proxy frames can embed NUL (22P05) (#548).
+      const p = {
+        ...raw,
+        message: raw.message.replace(/[\u0000-\u001f\u007f]/gu, " "),
+      };
       await tx`
       UPDATE canvas_nodes SET body_json = body_json || ${tx.json({ last_progress: p })}, updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;

@@ -45,6 +45,20 @@ test("runtime capability secrets are redacted from normalized and OTLP evidence"
   }
 });
 
+test("JobEvidenceWriter scrubs NUL from CLI stream frames before append (#548)", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000548";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const writer = new JobEvidenceWriter(jobId, "test", "attempt-nul");
+  try {
+    await writer.appendNormalized({ type: "text.delta", delta: "before\u0000after" });
+    const raw = await readFile(path.join(root, "attempts", "attempt-nul", "stream.ndjson"), "utf8");
+    assert.equal(raw.includes("\u0000"), false);
+    assert.match(raw, /before after/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("gzip evidence tail stops at decompression budget instead of inflating a bomb", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deepsonar-evidence-"));
   const archive = path.join(dir, "stream.ndjson.gz");

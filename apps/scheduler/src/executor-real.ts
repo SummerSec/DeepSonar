@@ -1422,19 +1422,20 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
 
   // 工具输入 → 一行动作描述（节点「当前动作」+ 实时流卡片共用）
+  const scrubCliText = (value: string): string => value.replace(/[\u0000-\u001f\u007f]/gu, " ");
   const actionOf = (toolName: string, input: unknown): string => {
     const o = (input ?? {}) as Record<string, unknown>;
     const target =
       (o.file_path as string) ?? (o.command as string) ?? (o.pattern as string) ??
       (o.path as string) ?? (o.url as string) ?? "";
-    return `${toolName}${target ? ` ${String(target).slice(0, 80)}` : ""}`;
+    return scrubCliText(`${toolName}${target ? ` ${String(target).slice(0, 80)}` : ""}`);
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s）；tool.call 另写 runtime_activity 刷新 stall。
   let lastActionPush = 0;
   let lastToolProgressEmit = 0;
   const recordToolCallActivity = (phase: ToolCallPhase, toolName: string) => {
     void sql`
-      UPDATE jobs SET payload_json = payload_json || ${sql.json(toolCallActivityPatch(phase, toolName) as never)}
+      UPDATE jobs SET payload_json = payload_json || ${sql.json(toolCallActivityPatch(phase, scrubCliText(toolName)) as never)}
       WHERE id = ${jobId} AND status = 'running'`.catch(() => {});
     const now = Date.now();
     if (phase === "started" || now - lastToolProgressEmit > 20_000) {

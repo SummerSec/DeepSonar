@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 专项镜像 provision 上传 500 / `UNEXPECTED_RESPONSE`（#548）：OpenSandbox `writeFiles` 对瞬态代理/上传失败有界重试；dispatcher 将 `Upload failed (status=5xx)` / `UNEXPECTED_RESPONSE` / websocket proxy failure 纳入 `isRetryableProvisionFailure`；Docker `deploy/opensandbox/config.toml` 默认 `[ingress] mode = "gateway"`，避免 rootless hostfwd 在沙箱增删时切断 execd 通道。CLI 流与失败文案写库前清洗 NUL/控制字符，防止通道截断后的次生 `22P05`。
+
 ## [0.4.3] - 2026-09-15
 
 ### 变更
