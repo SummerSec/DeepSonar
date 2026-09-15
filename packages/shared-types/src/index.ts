@@ -681,6 +681,129 @@ export const ListSharedAssetsPayload = z.object({
 }).strict();
 export type ListSharedAssetsPayload = z.infer<typeof ListSharedAssetsPayload>;
 
+/** Per-kind hard caps for the Job-scoped `graph_query` Control API (#538). */
+export const GRAPH_QUERY_LIMITS = {
+  index: 50,
+  nodeIds: 20,
+  nodeBodyChars: 8_192,
+  edges: 200,
+  findings: 30,
+  evidenceChars: 8_192,
+  intents: 50,
+  overviewChars: 2_048,
+} as const;
+
+export const GraphQueryKind = z.enum([
+  "overview",
+  "index",
+  "node",
+  "edges",
+  "findings",
+  "evidence",
+  "intents",
+]);
+export type GraphQueryKind = z.infer<typeof GraphQueryKind>;
+
+export const GraphQueryEdgeDirection = z.enum(["out", "in", "both"]);
+export type GraphQueryEdgeDirection = z.infer<typeof GraphQueryEdgeDirection>;
+
+/**
+ * Single-object + kind discriminant. Top-level anyOf/oneOf is rejected by
+ * Anthropic MCP tools/list; unused kind fields stay optional and are gated
+ * by superRefine. `canvas_id` / `project_id` are forbidden (unknown_field).
+ */
+export const GraphQueryPayload = z
+  .object({
+    kind: GraphQueryKind,
+    node_type: z.string().trim().min(1).max(40).optional(),
+    status: z.string().trim().min(1).max(40).optional(),
+    since: z.string().trim().min(1).max(40).optional(),
+    cursor: z.string().trim().min(1).max(120).optional(),
+    limit: z.number().int().min(1).max(GRAPH_QUERY_LIMITS.edges).optional(),
+    ids: z.array(z.string().uuid()).max(GRAPH_QUERY_LIMITS.nodeIds).optional(),
+    id: z.string().uuid().optional(),
+    direction: GraphQueryEdgeDirection.optional(),
+    edge_type: z.string().trim().min(1).max(40).optional(),
+    verify_status: z.string().trim().min(1).max(40).optional(),
+    unconverged_only: z.boolean().optional(),
+    finding_id: z.string().uuid().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const add = (path: string[], message: string) => {
+      ctx.addIssue({ code: "custom", path, message });
+    };
+    if (value.kind === "overview") {
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `overview does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "index") {
+      if (value.ids !== undefined) add(["ids"], "index does not accept ids");
+      if (value.id !== undefined) add(["id"], "index does not accept id");
+      if (value.direction !== undefined) add(["direction"], "index does not accept direction");
+      if (value.edge_type !== undefined) add(["edge_type"], "index does not accept edge_type");
+      if (value.verify_status !== undefined) add(["verify_status"], "index does not accept verify_status");
+      if (value.unconverged_only !== undefined) add(["unconverged_only"], "index does not accept unconverged_only");
+      if (value.finding_id !== undefined) add(["finding_id"], "index does not accept finding_id");
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.index) {
+        add(["limit"], `index limit must be <= ${GRAPH_QUERY_LIMITS.index}`);
+      }
+      return;
+    }
+    if (value.kind === "node") {
+      if (!value.ids || value.ids.length === 0) add(["ids"], "node requires ids");
+      else if (value.ids.length > GRAPH_QUERY_LIMITS.nodeIds) {
+        add(["ids"], `node ids must be <= ${GRAPH_QUERY_LIMITS.nodeIds}`);
+      }
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `node does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "edges") {
+      if (!value.id) add(["id"], "edges requires id");
+      if (value.ids !== undefined) add(["ids"], "edges does not accept ids");
+      if (value.node_type !== undefined) add(["node_type"], "edges does not accept node_type");
+      if (value.status !== undefined) add(["status"], "edges does not accept status");
+      if (value.since !== undefined) add(["since"], "edges does not accept since");
+      if (value.cursor !== undefined) add(["cursor"], "edges does not accept cursor");
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.edges) {
+        add(["limit"], `edges limit must be <= ${GRAPH_QUERY_LIMITS.edges}`);
+      }
+      if (value.verify_status !== undefined) add(["verify_status"], "edges does not accept verify_status");
+      if (value.unconverged_only !== undefined) add(["unconverged_only"], "edges does not accept unconverged_only");
+      if (value.finding_id !== undefined) add(["finding_id"], "edges does not accept finding_id");
+      return;
+    }
+    if (value.kind === "findings") {
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.findings) {
+        add(["limit"], `findings limit must be <= ${GRAPH_QUERY_LIMITS.findings}`);
+      }
+      for (const key of ["node_type", "status", "since", "ids", "id", "direction", "edge_type", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `findings does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "evidence") {
+      if (!value.finding_id) add(["finding_id"], "evidence requires finding_id");
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only"] as const) {
+        if (value[key] !== undefined) add([key], `evidence does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "intents") {
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.intents) {
+        add(["limit"], `intents limit must be <= ${GRAPH_QUERY_LIMITS.intents}`);
+      }
+      for (const key of ["node_type", "since", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `intents does not accept ${key}`);
+      }
+    }
+  });
+export type GraphQueryPayload = z.infer<typeof GraphQueryPayload>;
+
 export const PublishSharedAssetPayload = z.object({
   scope: z.enum(["project", "finding"]),
   source_path: z.string().min(1).max(320).regex(
@@ -1113,6 +1236,7 @@ export const ControlToolPayloadSchemas = {
   validate_composition: ValidateCompositionPayload,
   preview_materialization: PreviewMaterializationPayload,
   list_shared_assets: ListSharedAssetsPayload,
+  graph_query: GraphQueryPayload,
   publish_shared_asset: PublishSharedAssetPayload,
   emit_progress: ProgressPayload,
   emit_fact: EmitFactPayload,
@@ -1227,6 +1351,7 @@ export const PlatformToolName = z.enum([
   "mark_job_done",
   "request_human",
   "list_shared_assets",
+  "graph_query",
   "publish_shared_asset",
   "ack_human_message",
 ]);
@@ -1353,6 +1478,7 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "validate_composition",
   "preview_materialization",
   "list_shared_assets",
+  "graph_query",
   "publish_shared_asset",
   "emit_progress",
   "emit_fact",
@@ -1378,7 +1504,8 @@ export function allowedPlatformTools(
 }
 
 /** These Job-wide control capabilities cannot be disabled by RoleConfig. */
-export function requiredPlatformTools(_roleKind: "role" | "hub" | "system"): PlatformToolName[] {
+export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): PlatformToolName[] {
+  if (roleKind === "hub") return ["mark_job_done", "ack_human_message", "graph_query"];
   return ["mark_job_done", "ack_human_message"];
 }
 

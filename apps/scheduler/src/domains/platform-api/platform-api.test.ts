@@ -87,6 +87,31 @@ test("capability discovery operations are registered read-only Job control APIs"
   }
 });
 
+test("graph_query is a registered read-only Job control API", () => {
+  const document = buildPlatformOpenApiDocument({
+    jobId: "00000000-0000-4000-8000-000000000001",
+    operationIds: ["graph_query"],
+  });
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const operation = paths["/control/v1/jobs/{jobId}/operations/graph_query"]?.post;
+  assert.ok(operation, "graph_query must be projectable into the Job-scoped OpenAPI");
+  assert.equal(operation.operationId, "graph_query");
+  const schema = ControlToolInputSchemasJson.graph_query as Record<string, unknown>;
+  assert.equal(schema.type, "object");
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(Array.isArray(schema.anyOf), false);
+  assert.equal(Array.isArray(schema.oneOf), false);
+  const projection = buildCapabilitiesProjection({
+    jobId: "00000000-0000-4000-8000-000000000001",
+    projectId: "00000000-0000-4000-8000-000000000002",
+    canvasId: "00000000-0000-4000-8000-000000000003",
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    operationIds: ["graph_query"],
+  });
+  assert.equal(projection.operations[0]?.read_only, true);
+  assert.equal(projection.operations[0]?.event_type, null);
+});
+
 test("list_available_runtime_images is a registered read-only operation with a strict empty payload", () => {
   const document = buildPlatformOpenApiDocument({
     jobId: "00000000-0000-4000-8000-000000000001",

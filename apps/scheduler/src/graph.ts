@@ -35,8 +35,10 @@ export interface GraphSnapshot {
   goal: string;
   target: Record<string, unknown>;
   yaml: string;
-  /** Full canvas fact/finding/root IDs used for server-side from validation. */
+  /** Full canvas fact/finding/root IDs (membership universe, not the live Hub allowlist). */
   referableIds: string[];
+  /** IDs actually present in this YAML projection; Hub from-refs start from this set. */
+  projectedReferableIds: string[];
   openIntentCount: number;
   yamlChars: number;
   truncated: boolean;
@@ -48,7 +50,7 @@ function kv(key: string, value: unknown): string {
   return key + ": " + JSON.stringify(value ?? null);
 }
 
-function short(value: unknown, max: number): string {
+export function short(value: unknown, max: number): string {
   const valueText = String(value ?? "");
   return valueText.length > max ? valueText.slice(0, Math.max(0, max - 1)) + "…" : valueText;
 }
@@ -76,7 +78,20 @@ function boundedJson(value: unknown, max: number): unknown {
   return { truncated: true, preview: short(raw, Math.max(80, max - 64)) };
 }
 
-function budgetFor(scope: GraphScope): number {
+/** Restrict a candidate id list to those that actually appear in a YAML/JSON projection. */
+export function idsMentionedInText(text: string, candidates: readonly string[]): string[] {
+  if (!text || candidates.length === 0) return [];
+  const allowed = new Set(candidates.map((id) => id.toLowerCase()));
+  const found = new Set<string>();
+  const pattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+  for (const match of text.matchAll(pattern)) {
+    const id = match[0].toLowerCase();
+    if (allowed.has(id)) found.add(id);
+  }
+  return candidates.filter((id) => found.has(id.toLowerCase()));
+}
+
+export function budgetFor(scope: GraphScope): number {
   if (scope === "hub") return config.graph.maxYamlCharsHub;
   if (scope === "agent") return config.graph.maxYamlCharsAgent;
   if (scope === "verify") return config.graph.maxYamlCharsVerify;
@@ -314,10 +329,6 @@ export async function buildGraphSnapshot(
     acc[type] = (acc[type] ?? 0) + 1;
     return acc;
   }, {});
-  const referableIds = unique([
-    ...facts.map((node) => String(node.id)),
-    ...nodes.filter((node) => node.node_type === "root").map((node) => String(node.id)),
-  ]);
 
   const maxChars = Math.max(512, options.maxYamlChars ?? budgetFor(scope));
   const contentLimit = Math.max(256, maxChars - 1_024);
@@ -637,12 +648,17 @@ export async function buildGraphSnapshot(
     lines[2] = overflowMarkers.omitted;
     yaml = lines.join("\n");
   }
+  const referableIds = unique([
+    ...facts.map((node) => String(node.id)),
+    ...nodes.filter((node) => node.node_type === "root").map((node) => String(node.id)),
+  ]);
   return {
     scope,
     goal,
     target,
     yaml,
     referableIds,
+    projectedReferableIds: idsMentionedInText(yaml, referableIds),
     openIntentCount: openIntents.length,
     yamlChars: yaml.length,
     truncated,

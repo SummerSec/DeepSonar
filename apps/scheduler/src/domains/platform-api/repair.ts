@@ -27,6 +27,9 @@ const REJECTION_DETAIL_ALLOWLIST = [
   "preparing",
   "task_id",
   "checked_at",
+  "remaining",
+  "calls_left",
+  "bytes_left",
 ] as const;
 
 const DETAIL_STRING_MAX = 240;

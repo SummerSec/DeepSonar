@@ -39,6 +39,7 @@ import { handleCapabilityDiscovery } from "./domains/capability-pack/index.js";
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
+import { executeGraphQuery, seedGraphQueryProjectedIds } from "./graph-query.js";
 import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import {
@@ -849,6 +850,13 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     inc("deepsonar_graph_snapshots_total", { scope: graph.scope, truncated: String(graph.truncated) });
     inc("deepsonar_graph_yaml_chars_total", { scope: graph.scope }, graph.yamlChars);
   }
+  // Hub from-refs are the union of IDs actually projected into this Job
+  // (YAML injection + graph_query results), not the full canvas membership set.
+  const hubProjectedIds = new Set<string>(graph?.projectedReferableIds ?? []);
+  if (isHub && graph) {
+    const seeded = await seedGraphQueryProjectedIds(jobId, graph.projectedReferableIds);
+    for (const id of seeded) hubProjectedIds.add(id);
+  }
   let initialInput: string;
   if (isHub) {
     if (!graph) throw new Error("hub_reason job 缺 canvas_id，无法读图");
@@ -1251,7 +1259,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           runtimeControl,
         );
       }
-      if (raw.type === "hub_decision") payload = parseHubDecisionPayload(payload, graph?.referableIds);
+      if (raw.type === "hub_decision") payload = parseHubDecisionPayload(payload, graph ? hubProjectedIds : undefined);
       event = ControlEventEnvelope.parse({ ...raw, payload });
       assertSemanticEventPayloadSize(event.type, event.payload);
     } catch (error) {
@@ -1468,6 +1476,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         payload: context.input,
         snapshot,
         db: sql,
+      });
+    }
+    if (operation === "graph_query") {
+      return executeGraphQuery({
+        jobId,
+        canvasId: context.canvasId ?? canvasId,
+        payload: context.input,
+        liveProjectedIds: hubProjectedIds,
       });
     }
     const eventType = CONTROL_SEMANTIC_EVENT_TYPES[operation as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
@@ -1706,7 +1722,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。
   const decision = isHub && semanticState.hub
-    ? parseHubDecisionPayload(semanticState.hub.payload, graph?.referableIds)
+    ? parseHubDecisionPayload(semanticState.hub.payload, graph ? hubProjectedIds : undefined)
     : null;
   if (isHub && decision?.intents?.some((intent) => !availableHubRoleNames.has(intent.role))) {
     const invalidIndex = decision.intents!.findIndex((intent) => !availableHubRoleNames.has(intent.role));

@@ -71,7 +71,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   submit_hub_decision: [
     "### `submit_hub_decision` — 提交 Hub 决策",
     "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
-    "- `from` 只能填写本轮画布中的 root/fact/finding id；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` 只能原样选择本轮 `list_available_runtime_images` 的 image_key，且须与该角色 CLI 兼容；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
+    "- `from` 只能填写本 Job 已投影的 root/fact/finding id（YAML 注入或 `graph_query` 返回的 `referable_ids`）；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` 只能原样选择本轮 `list_available_runtime_images` 的 image_key，且须与该角色 CLI 兼容；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
     '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
     "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
@@ -111,6 +111,14 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 调用后停止执行，不再调用 `mark_job_done` 或 `submit_hub_decision`。",
     '- Finding 示例：`{"reason":"需要人工确认风险接受边界和目标版本。","subject":{"type":"finding","finding_id":"<uuid>","subject_revision":"app@abc123"}}`',
     '- 平台阻塞示例：`{"reason":"缺少隔离测试账号，无法继续动态验证。","subject":{"type":"platform_blocker","kind":"credential"}}`',
+  ].join("\n"),
+  graph_query: [
+    "### `graph_query` — 按需读取本 Job 画布（有界只读）",
+    "- 参数：`kind` 必填，只能是 `overview|index|node|edges|findings|evidence|intents`。先用 `overview` 定位，再 `index`/`node`；不要试图一次拉全图。",
+    "- `index`：可选 `node_type`、`status`、`since`、`cursor`、`limit`（≤50）。`node`：`ids`（≤20）。`edges`：`id` 与可选 `direction`/`edge_type`/`limit`（≤200）。`findings`：可选 `verify_status`、`unconverged_only`、`limit`（≤30）。`evidence`：`finding_id`。`intents`：可选 `status`/`limit`（≤50）。",
+    "- 画布与项目只能来自当前 Job 快照；不要传 `canvas_id` 或 `project_id`（未知字段会被拒绝）。返回含 `referable_ids`、`truncated`、`omitted`、`budget`。`submit_hub_decision` 的 `from` 只能引用本 Job 已经投影过（注入或本次查询）的 id。",
+    "- 单 Job 默认最多 40 次、累计 512 KB；超限返回 RepairFeedback `graph_query_budget_exceeded`。",
+    '- 示例：`{"kind":"overview"}` 或 `{"kind":"index","node_type":"fact","limit":50}` 或 `{"kind":"node","ids":["<uuid>"]}`',
   ].join("\n"),
   list_shared_assets: [
     "### `list_shared_assets` — 查询本 Job 冻结的只读共享资产目录",
@@ -155,6 +163,7 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   submit_plan_result: "注意：outcome 只能是 continue|complete|blocked|needs_human；非 continue 必须提供 termination_reason。本阶段只审计，不改变 Hub 收敛。",
   mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
   request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done 或 submit_hub_decision，仅在 HTTP 请求失败或参数校验失败后重试。",
+  graph_query: "注意：先 overview 再收窄；不要用多次查询拼回全图。from 只能引用返回的 referable_ids。超限后收窄查询或改用 overview，不要换 canvas。",
   list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
   publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在 HTTP 请求失败或参数校验失败后重试。",
   ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在 HTTP 请求失败或参数校验失败后重试。",

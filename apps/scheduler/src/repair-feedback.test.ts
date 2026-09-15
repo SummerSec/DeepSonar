@@ -146,6 +146,29 @@ test("rate-limit and fail-closed control codes map to the remaining kernel categ
   assert.equal(unknown.accepted_effects?.[0]?.status, "unknown");
 });
 
+test("graph_query budget exhaustion is model_correctable RepairFeedback", () => {
+  const body = controlRuntimeRejection({
+    operation: "graph_query",
+    code: "graph_query_budget_exceeded",
+    message: "[graph_query_budget_exceeded] graph_query budget exhausted (calls_left=0, bytes_left=12); narrow the query or use overview",
+    retryable: true,
+    details: {
+      remaining: { calls: 0, bytes: 12 },
+      calls_left: 0,
+      bytes_left: 12,
+      expected: { kind: "graph_query_budget", max_calls: 40, max_bytes: 512_000 },
+    },
+  });
+  assert.equal(body.accepted, false);
+  assert.equal(body.error_code, "graph_query_budget_exceeded");
+  assert.equal(body.repair.category, "model_correctable");
+  assert.equal(body.repair.operation, "graph_query");
+  assert.match(body.repair.next_action ?? "", /停止 graph_query/);
+  assert.deepEqual(body.details?.remaining, { calls: 0, bytes: 12 });
+  assert.equal(body.details?.calls_left, 0);
+  assert.equal(body.details?.bytes_left, 12);
+});
+
 test("handler unavailable and failed use the same transient RepairFeedback contract", () => {
   const key = "00000000-0000-4000-8000-000000000024";
   const unavailable = controlPlatformFailure({
