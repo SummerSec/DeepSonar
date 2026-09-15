@@ -358,7 +358,7 @@ export function projectEdges(
   id: string,
   direction: "out" | "in" | "both" = "both",
   edgeType?: string,
-  limit = GRAPH_QUERY_LIMITS.edges,
+  limit: number = GRAPH_QUERY_LIMITS.edges,
 ): { items: Record<string, unknown>[]; truncated: boolean; omitted: Record<string, number>; referable_ids: string[] } {
   const matched = edges.filter((edge) => {
     if (edgeType && edge.edge_type !== edgeType) return false;

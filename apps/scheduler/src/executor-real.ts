@@ -1479,12 +1479,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       });
     }
     if (operation === "graph_query") {
-      return executeGraphQuery({
+      return { ...await executeGraphQuery({
         jobId,
         canvasId: context.canvasId ?? canvasId,
         payload: context.input,
         liveProjectedIds: hubProjectedIds,
-      });
+      }) };
     }
     const eventType = CONTROL_SEMANTIC_EVENT_TYPES[operation as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
     if (!eventType) throw new Error("unknown platform operation");
