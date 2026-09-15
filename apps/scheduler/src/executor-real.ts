@@ -902,12 +902,12 @@ Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace �
       initialInput += `
 
 本轮由 **Report 门禁失败** 回弹触发。
-**自动验证范围内 Finding 须为 confirmed 或 needs_human** 才能生成报告；以下范围内 Finding 仍未收敛：
+**自动验证范围内 Finding 须为 confirmed / needs_human / refuted / inconclusive** 才能生成报告；以下范围内 Finding 仍未收敛：
 
 ${lines || (trigger as { summary?: string }).summary || "（见画布 root.report_gate_rejected）"}
 
 你必须：
-1. 针对上述 Finding 派发补证/推动 Verify，或在无法自动闭环时使其进入 needs_human（人工节点/阻塞说明）；
+1. 针对上述 Finding 派发补证/推动 Verify；能力边界才走 needs_human（人工节点）；预算/无进展/否定证据由 Scheduler 写成 refuted 或 inconclusive，不要把垃圾桶丢给人；
 2. 不得在自动验证范围内仍有 pending/verifying Finding 时 complete；明确低于 minVerifySeverity 的策略排除项不阻塞；
 3. 不能下发 verify/report 系统角色，也不能直接写 confirmed。`;
     } else if (trigger?.kind === "confirmed_finding") {
@@ -923,7 +923,7 @@ Finding：${trigger.finding_id ?? "未知"}
 
 你只能：
 1. 派发普通角色（review/test/audit/explore 等）补充独立复核或实测证据；每个 intent 的 prompt 必须写明 finding_id 与证据目标；
-2. 若已无安全可行路径，说明阻塞并以 finding_id + subject_revision 的结构化 subject 调用 request_human / 在 complete 前确保 Finding 进入 needs_human。
+2. 若卡在凭据/设备/网络/生产环境或业务范围，以 finding_id + subject_revision 的结构化 subject 调用 request_human；预算耗尽或证据不足不要造人工节点，由 Scheduler 写成 inconclusive。
 你不能直接把 Finding 写成 confirmed，也不能下发 verify 或 report 系统角色。`;
     } else if (trigger?.kind === "risk_acceptance_followup") {
       initialInput += "\n\n这是风险回收验收轮次。证据足够且自动验证范围内 Finding 收敛则 complete；否则只派发必要下一步。";
@@ -943,7 +943,7 @@ Finding：${trigger.finding_id ?? "未知"}
 
 本轮由**画布空闲 / 图进度**触发：当前没有待跑的 Worker/Verify 节点。
 请读整图决策：
-1. 若目标已覆盖且**自动验证范围内 Finding 为 confirmed 或 needs_human** → complete（随后自动 Report；SARIF 仅含 confirmed）；
+1. 若目标已覆盖且**自动验证范围内 Finding 为 confirmed / needs_human / refuted / inconclusive** → complete（随后自动 Report；SARIF 仅含 confirmed）；
 2. 若自动验证范围内仍有 pending/verifying → 派发补证或推动验证，不得 complete；低于 minVerifySeverity 的策略排除项不阻塞；
 3. 不要空转：若确实无增量工作且尚未满足 complete 条件，说明阻塞并调用 request_human；必须显式传 Finding 或 platform_blocker subject，禁止只传 reason。调用 request_human 后停止，不要再 submit_hub_decision 或 mark_job_done。`;
     } else if (["user_task", "external_event"].includes(trigger?.kind ?? "")) {

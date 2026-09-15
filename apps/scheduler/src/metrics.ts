@@ -91,7 +91,7 @@ const HELP: Record<string, string> = {
   deepsonar_control_input_warnings_total: "Malformed runtime lines and forbidden control-file attempts",
   deepsonar_event_rate_limited_total: "Semantic events rejected by the persistent per-Job rate limiter, by bucket",
   deepsonar_usage_ledger_write_failures_total: "Model Gateway usage ledger write failures, by source",
-  deepsonar_finding_no_progress_total: "Findings settled as needs_human because the fact-first gate conclusion did not change",
+  deepsonar_finding_no_progress_total: "Findings settled as inconclusive because the fact-first gate conclusion did not change",
   deepsonar_hub_budget_exhausted_total: "Hub self-drive stopped because the optional round-count guardrail was exhausted",
   deepsonar_report_auto_retry_total: "Task report jobs automatically re-dispatched after a terminal failure",
   deepsonar_report_root_settled_total: "Canvases whose root left reporting after report retry budget exhaustion",
