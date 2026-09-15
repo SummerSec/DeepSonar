@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   beginEffect,
@@ -76,10 +77,11 @@ function fakeAttemptDatabase(initialState: AttemptState): {
           const terminalStatus = values.find((value): value is AttemptStatus => (
             value === "succeeded" || value === "failed" || value === "cancelled" || value === "timeout" || value === "orphan"
           ));
-          const neverStartedProvision = terminalStatus === "failed"
+          const settleFailedUnstartedProvision = values.includes(true)
+            && terminalStatus === "failed"
             && effect.effect_kind === "provision"
-            && state.sandbox_id == null;
-          effect.status = (terminalStatus === "succeeded" && effect.effect_kind === "agent_run") || neverStartedProvision
+            && !state.sandbox_id;
+          effect.status = (terminalStatus === "succeeded" && effect.effect_kind === "agent_run") || settleFailedUnstartedProvision
             ? "settled"
             : "unknown";
         }
@@ -312,6 +314,13 @@ test("timeout / cancelled / orphan 的未收口 provision 仍是 unknown", async
     assert.equal(read().status, status, status);
     assert.equal(read().effect?.status, "unknown", status);
   }
+});
+
+test("settleAttemptTerminal 用布尔参数判定未启动 provision，不用裸 null IS NULL", async () => {
+  const source = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
+  const terminal = source.slice(source.indexOf("export async function settleAttemptTerminal"));
+  assert.match(terminal, /settleFailedUnstartedProvision/);
+  assert.doesNotMatch(terminal.slice(0, terminal.indexOf("export async function markAttemptInterrupted")), /\$\{sandboxId\} IS NULL/);
 });
 
 test("settleUnstartedProvisionEffect 把观察到的创建失败收成 settled，且不把 Attempt 标成 provisioned", async () => {
