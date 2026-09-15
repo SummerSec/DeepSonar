@@ -53,6 +53,7 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
   validate_composition: { title: "校验能力组合", description: "校验 Pack 草案与 selector，拒绝扩大冻结权限，失败返回 RepairFeedback。" },
   preview_materialization: { title: "预览能力物化", description: "dry-run 解析 selector 并冻结 digest，不改 RoleConfig。" },
   list_shared_assets: { title: "查询共享资产", description: "列出本 Job 冻结的只读资产目录；用 mount_path 直接读取，无单独下载工具（Scheduler 预挂载，含 S3）。" },
+  graph_query: { title: "按需读图", description: "让 Hub 按需查询本 Job 画布（overview/index/node 等有界投影），不要一次拉全图。Hub 角色不可关闭。" },
   publish_shared_asset: { title: "发布共享资产", description: "把 /workspace 普通文件发布为不可变版本；Scheduler 经 BlobStore（本地/S3）落库，禁止从只读挂载树发布。" },
   emit_progress: { title: "过程进度", description: "允许 Worker 增量上报当前动作和完成百分比。" },
   emit_fact: { title: "事实提交", description: "允许工作角色把新证据写成画布 Fact。" },
@@ -495,7 +496,7 @@ export function RoleConfigEditor({
             <label className={labelCls}>
               平台工具
               <HelpTip>
-                平台工具 list 对每个 Agent 全量可选，默认全部启用；仅 mark_job_done（正常完成）为终态必需且不可关闭。
+                平台工具 list 对每个 Agent 全量可选，默认全部启用；mark_job_done 为终态必需且不可关闭。Hub 另需 graph_query。
                 保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
               </HelpTip>
             </label>

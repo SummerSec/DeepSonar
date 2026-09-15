@@ -116,6 +116,7 @@ assert.deepEqual(restrictedTools, [
   "validate_composition",
   "preview_materialization",
   "list_shared_assets",
+  "graph_query",
   "publish_shared_asset",
   "emit_fact",
   "emit_finding",

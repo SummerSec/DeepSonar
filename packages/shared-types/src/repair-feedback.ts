@@ -231,6 +231,9 @@ function nextActionFor(input: {
   if (input.category === "permanent_failure") {
     return "不要重试此提案；先修复 Job 权限、状态或平台配置。";
   }
+  if (input.code === "graph_query_budget_exceeded") {
+    return "收窄查询或改用 overview；不要试图一次拉全图。预算耗尽后停止 graph_query。";
+  }
   if (input.expected && typeof input.expected === "object" && input.expected !== null && "kind" in input.expected
     && (input.expected as { kind?: string }).kind === "utf8_bytes_max") {
     const max = Number((input.expected as { max?: number }).max);

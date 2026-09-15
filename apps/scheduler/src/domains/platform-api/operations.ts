@@ -61,6 +61,12 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: true,
     eventType: null,
   },
+  graph_query: {
+    summary: "Query the current Job canvas graph on demand",
+    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, or intents). Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
+    readOnly: true,
+    eventType: null,
+  },
   publish_shared_asset: {
     summary: "Publish a shared asset proposal",
     description: "Submit a shared asset proposal for Scheduler validation and persistence.",
