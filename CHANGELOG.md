@@ -4,11 +4,33 @@
 
 ## [Unreleased]
 
-- 评审跟进（#545 / #546）：`RepairFeedback` 对仍为 `unknown` 的 provision 不再宣称「无外部后果 / 可放心重试」，改为提示可能残留沙箱；provision 超时路径若观察到迟到 sandbox handle（或 late destroy 失败），不再结算为 `never_started`，fail closed 留在 `unknown`。
+## [0.4.4] - 2026-09-15
+
+### 新增
+
+- Hub 阶段 1 有界只读 `graph_query`（#538 / #549）：按需读 overview / index / node / edges / findings / evidence / intents；scope 冻结到 Job 快照；预算 40 次 / 512KB，超限返回 `graph_query_budget_exceeded`；不改 48k YAML 注入，不发明 Job `blocked` 状态。`submit_hub_decision` 的 `from` 改为本 Job 已投影 id 并集。
+
+### 变更
+
+- 治理 CLI 升级（#540 / #547）：Pi `0.85.1`、Claude Code `2.1.258`、pi-web-access `0.29.0`（integrity 以 npm `dist.integrity` 为准）。会改 runtime fingerprint，需重建 `deepsonar-base` / `audit` / `kali-minimal`；chrome / openharmony / mobile 专项镜像不在本变更范围。
+- CI 文件体量棘轮门禁（#544 / #552）：`file-size-gate.ts` + `file-size.manifest.json`，经 `ci:unit:authz` / `ci:unit:file-size` 执行；grandfathered 文件只许降 `maxLines`，相对 `origin/main` 抬天花板失败。
 
 ### 修复
 
-- 专项镜像 provision 上传 500 / `UNEXPECTED_RESPONSE`（#548）：OpenSandbox `writeFiles` 对瞬态代理/上传失败有界重试；dispatcher 将 `Upload failed (status=5xx)` / `UNEXPECTED_RESPONSE` / websocket proxy failure 纳入 `isRetryableProvisionFailure`；Docker `deploy/opensandbox/config.toml` 默认 `[ingress] mode = "gateway"`，避免 rootless hostfwd 在沙箱增删时切断 execd 通道。CLI 流与失败文案写库前清洗 NUL/控制字符，防止通道截断后的次生 `22P05`。
+- 平台可写 verify 终态 `refuted` / `inconclusive`（#537 / #550）：预算类 / conflict / rejected / no_progress 等不再落 `needs_human`；仅真需人时建 human blocker。Agent 不可提案 `inconclusive`；SARIF 仍只导出 `confirmed`。
+- 专项镜像 provision 上传 500 / `UNEXPECTED_RESPONSE`（#548 / #551）：OpenSandbox `writeFiles` 对瞬态代理/上传失败有界重试；dispatcher 纳入 `isRetryableProvisionFailure`；Docker `deploy/opensandbox/config.toml` 默认 `[ingress] mode = "gateway"`。写库前清洗 NUL/控制字符，防止次生 `22P05`。
+- provision 创建失败账本（#541 / #545）：观察到创建失败且从未绑 `sandbox_id` → `never_started` / `external_effect: false`，避免 RepairFeedback 误判需人工确认。
+- RepairFeedback 未决效果语义（#542 / #546）：按 kind 聚合说明；全 settled 不再误报 `unknown_external_effect`；确认后重跑出口接到面板。
+- 评审跟进（#553）：unknown provision 文案不再宣称「无外部后果 / 可放心重试」；provision 超时若见过 late sandbox handle（或 late destroy 失败）fail closed 留在 `unknown`，不得假 `never_started`。
+- `waiting_human` 独立超时与 dangling human 投影收口（#536 部分 / #554）：默认 `DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC=1800`（`0` 关闭），超时 Job → `failed(human_timeout)` 并释放 Attempt/sandbox/lease/token；不改 Finding `verify_status`；只 expire 无处理入口的 dangling 节点。选项式提问 / `HUMAN_NOTIFY_URL` 未做。
+- 任务工作台「总览」无法滚动（#539 / #543）：`TaskOverview` 与 `ReportPanel` 对齐 `h-full min-h-0 overflow-y-auto` 高度链。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v50 → **v51**（#550 verify 四终态）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。部署后对 leftover `needs_human` 做一次 repair。
+- OpenSandbox：Docker 部署确认 `[ingress] mode = "gateway"` 并重启服务；专项镜像（chrome-audit/fuzz/test、openharmony-test）回归 provision 上传。
+- 重建官方 runtime 镜像 `deepsonar-base` / `audit` / `kali-minimal`（#547 CLI 指纹变更）；平台镜像打 `0.4.4` tag。
+- 若现网 `.env` 未设 `DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC`，升级后默认 1800s。
 
 ## [0.4.3] - 2026-09-15
 
@@ -856,6 +878,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.4]: https://github.com/SummerSec/DeepSonar/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/SummerSec/DeepSonar/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/SummerSec/DeepSonar/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SummerSec/DeepSonar/compare/v0.4.0...v0.4.1
