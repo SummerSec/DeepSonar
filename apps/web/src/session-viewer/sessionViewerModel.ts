@@ -30,6 +30,8 @@ export type SessionGatewayUsageRow = {
   request_no?: number;
   provider?: string;
   model?: string;
+  model_catalog_match?: boolean | null;
+  upstream_reporting_model?: string | null;
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;

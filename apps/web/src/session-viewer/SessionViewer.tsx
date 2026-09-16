@@ -652,7 +652,22 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
               {gateway.rows.map((row) => (
                 <tr key={`${row.request_no}:${row.provider}:${row.model}:${row.observed_at ?? ""}`}>
                   <td>{row.request_no}</td>
-                  <td>{row.model}</td>
+                  <td>
+                    {row.model}
+                    {row.model_catalog_match === false && (
+                      <span
+                        className="ml-1 inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-200"
+                        title="请求模型不在凭据 model_catalog_json；可能经 alias 转发"
+                      >
+                        目录未匹配
+                      </span>
+                    )}
+                    {row.upstream_reporting_model && row.upstream_reporting_model !== row.model && (
+                      <div className="text-[10px] text-zinc-500" title="上游响应报告的模型">
+                        上游报告 · {row.upstream_reporting_model}
+                      </div>
+                    )}
+                  </td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.input_tokens || 0))}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.output_tokens || 0))}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.cache_read_input_tokens || 0))}</td>

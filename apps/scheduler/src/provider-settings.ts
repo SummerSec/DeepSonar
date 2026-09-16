@@ -23,8 +23,31 @@ import {
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiDocument, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
-import { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel } from "./provider-effective-model.js";
-export { extractModelFromSettings, resolveEffectiveModel, resolveRequestedModel, snapshotUpstreamModel } from "./provider-effective-model.js";
+import {
+  agentCliBuiltinDefaultModel,
+  extractModelFromSettings,
+  formatCliDefaultUpstreamModel,
+  resolveEffectiveModel,
+  resolveModelSource,
+  resolveRequestedModel,
+} from "./provider-effective-model.js";
+export {
+  AGENT_CLI_BUILTIN_DEFAULT_MODELS,
+  CLI_DEFAULT_MODEL_PREFIX,
+  ModelCatalogMismatchError,
+  agentCliBuiltinDefaultModel,
+  assertResolvedModelInCredentialCatalog,
+  bareUpstreamModelId,
+  extractModelFromSettings,
+  formatCliDefaultUpstreamModel,
+  isCliDefaultUpstreamModel,
+  modelCatalogMatchForRequest,
+  modelMatchesCredentialCatalog,
+  resolveEffectiveModel,
+  resolveModelSource,
+  resolveRequestedModel,
+  snapshotUpstreamModel,
+} from "./provider-effective-model.js";
 
 /** Keep in sync with core.CONFIG_FILE_PATHS (avoid circular import via core). */
 const CONFIG_FILE_PATHS: Record<string, string> = {
@@ -503,6 +526,27 @@ export function projectProviderRuntimeSnapshot(input: {
       model = resolveRequestedModel({ roleModel: null, agentCli: input.agentCli, settingsConfig })
         ?? input.defaultModel
         ?? null;
+    }
+  }
+  const modelSource = resolveModelSource({
+    roleModel: roleModel,
+    agentCli: input.agentCli,
+    settingsConfig: hasSettings ? settingsConfig : {},
+  });
+  // When RoleConfig and settings leave model empty, freeze a cli-default marker so
+  // Job detail is not blank; runtime callers strip the prefix via snapshotUpstreamModel.
+  if (!model && modelSource === "cli_default") {
+    const cliDefault = agentCliBuiltinDefaultModel(input.agentCli);
+    if (cliDefault) {
+      return {
+        model: null,
+        upstream_model: formatCliDefaultUpstreamModel(cliDefault),
+        pi_provider: null,
+        reasoning,
+        context_window_tokens: contextWindowTokens,
+        settings_config_json: settingsConfig,
+        config_files: configFiles,
+      };
     }
   }
   const upstreamSource = input.agentCli === "pi" && model ? (splitPiModelRef(model).modelId || model) : model;

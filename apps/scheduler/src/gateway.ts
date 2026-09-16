@@ -25,6 +25,10 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
+import {
+  bareUpstreamModelId,
+  modelCatalogMatchForRequest,
+} from "./provider-effective-model.js";
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
@@ -75,7 +79,7 @@ function frozenSnapshotUpstreamModel(snapshot: unknown): string | null {
     ? snapshot as { upstream_model?: unknown }
     : null;
   const upstream = typeof record?.upstream_model === "string" ? record.upstream_model.trim() : "";
-  return upstream || null;
+  return bareUpstreamModelId(upstream);
 }
 
 /**
@@ -560,10 +564,29 @@ type GatewayUsageLedgerInput = {
   requestNo: number;
   provider: string;
   model: string;
+  modelCatalogMatch: boolean | null;
+  upstreamReportingModel: string | null;
   usage: UsageBreakdown;
   status: "settled" | "unknown" | "not_reported";
   source: "gateway_response" | "gateway_stream" | "gateway_error";
 };
+
+
+/** Best-effort upstream model id from a non-stream JSON body or SSE data line. */
+export function extractUpstreamReportingModel(text: string): string | null {
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const model = (parsed as { model?: unknown }).model;
+      if (typeof model === "string" && model.trim()) return model.trim().slice(0, 200);
+    }
+  } catch {
+    /* SSE / partial */
+  }
+  const match = /"model"\s*:\s*"([^"\\]{1,200})"/.exec(text);
+  return match?.[1]?.trim() || null;
+}
 
 async function appendUsageLedger(
   db: typeof sql,
@@ -578,6 +601,8 @@ async function appendUsageLedger(
       request_no: input.requestNo,
       provider: input.provider.slice(0, 100),
       model: input.model.slice(0, 200),
+      model_catalog_match: input.modelCatalogMatch,
+      upstream_reporting_model: input.upstreamReportingModel ? input.upstreamReportingModel.slice(0, 200) : null,
       input_tokens: input.usage.input,
       output_tokens: input.usage.output,
       total_tokens: input.usage.total,
@@ -745,6 +770,16 @@ export function registerGateway(app: FastifyInstance): void {
       const model = outboundBody && typeof outboundBody === "object" && !Array.isArray(outboundBody)
         ? String((outboundBody as { model?: unknown }).model ?? "")
         : "";
+      // Empty catalog soft-degrades to null (unknown); non-empty → boolean match on request model.
+      const modelCatalogMatch = modelCatalogMatchForRequest(model, cred.model_catalog_json);
+      let upstreamReportingModel: string | null = null;
+      let responseSample = "";
+      const noteResponseChunk = (chunk: string | Uint8Array): void => {
+        if (upstreamReportingModel || responseSample.length >= 65_536) return;
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+        responseSample = (responseSample + text).slice(0, 65_536);
+        upstreamReportingModel = extractUpstreamReportingModel(responseSample);
+      };
       // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
       const gatewayInputDigest = createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex");
@@ -804,6 +839,8 @@ export function registerGateway(app: FastifyInstance): void {
           requestNo,
           provider: safeProvider,
           model,
+          modelCatalogMatch,
+          upstreamReportingModel: null,
           usage: { ...EMPTY_USAGE },
           status: "unknown",
           source: "gateway_error",
@@ -840,6 +877,8 @@ export function registerGateway(app: FastifyInstance): void {
           requestNo,
           provider: safeProvider,
           model,
+          modelCatalogMatch,
+          upstreamReportingModel: null,
           usage: { ...EMPTY_USAGE },
           status: "not_reported",
           source: isSse ? "gateway_stream" : "gateway_response",
@@ -858,6 +897,7 @@ export function registerGateway(app: FastifyInstance): void {
             // 只解析完整 SSE/JSON 行；保留未完成行，避免重叠尾巴导致
             // 同一 usage JSON 在相邻 chunk 中被重复累计。
             usageScanner.push(value);
+            noteResponseChunk(value);
           }
         }
       } catch {
@@ -876,6 +916,8 @@ export function registerGateway(app: FastifyInstance): void {
         requestNo,
         provider: safeProvider,
         model,
+        modelCatalogMatch,
+        upstreamReportingModel,
         usage,
         status: streamInterrupted ? "unknown" : scanned > 0 ? "settled" : "not_reported",
         source: isSse ? "gateway_stream" : "gateway_response",

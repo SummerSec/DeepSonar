@@ -308,10 +308,11 @@ export type CredentialHealthErrorCategory =
   | "unknown";
 
 /**
- * Scheduler-owned model catalog capability. The /models catalog is optional
- * reference only (CC Switch style). Probe failure soft-degrades to an empty
- * catalog and must not block credential or RoleConfig saves. Job resolution
- * uses settings / RoleConfig model fields, not this catalog.
+ * Scheduler-owned model catalog capability (CC Switch style probe).
+ * Probe failure soft-degrades to an empty catalog and must not block credential
+ * or RoleConfig saves. When the catalog is non-empty, Job snapshot freeze
+ * fail-closed-checks the resolved model unless allow_model_catalog_passthrough /
+ * DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH (#570).
  */
 export type CredentialModelCatalogCapability = "required" | "unsupported";
 

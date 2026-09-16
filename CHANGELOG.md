@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 角色未指定 model 时 Job 快照不再空白，并避免 usage 台账把 CLI 默认名误当成凭据目录模型（#570）：
+  - provision：解析模型（角色 → settings → CLI 默认）后与凭据 `model_catalog_json` 比对；目录非空且未命中则 fail-closed（中文列出可选项）。RoleConfig `allow_model_catalog_passthrough` 或平台 `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH` 可显式放行 alias 直通。
+  - 快照：未指定时冻结 `upstream_model = cli-default:<name>`；详情页展示「未指定 → CLI 默认 …」。
+  - 台账：`model` 保持请求协议值；新增 `model_catalog_match` / 可选 `upstream_reporting_model`（schema v52）；Session 明细对未匹配打标。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v51 → **v52**（#570：`job_usage_ledger.model_catalog_match` / `upstream_reporting_model`，`role_configs.allow_model_catalog_passthrough`）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+
 ### 新增
 
 - 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。

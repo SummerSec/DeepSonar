@@ -154,7 +154,9 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧全局并发上限，不能放宽安全硬门。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
 
-运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
+运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
+
+**Model Gateway 目录校验与 alias 语义（#570）：** 解析顺序为 RoleConfig.model → Credential `settings_config` → Agent CLI 内置默认（如 Claude Code → `claude-opus-5`）。若凭据 `model_catalog_json` 非空，冻结快照前把解析结果与目录比对：不在目录则 fail-closed，中文错误列出可选项。空目录视为探测软降级，不拦 Job。显式 alias 直通可关闭校验：RoleConfig `allow_model_catalog_passthrough=true`，或平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true`。角色/settings 未指定 model 时，快照冻结 `upstream_model = "cli-default:<name>"`（详情页展示「未指定 → CLI 默认 …（经凭据 alias 转发，实际模型不可观测）」）；运行时 concurrency / Gateway 出站会剥掉 `cli-default:` 前缀。`job_usage_ledger.model` 仍记请求协议值；`model_catalog_match` 标注是否命中目录；可选 `upstream_reporting_model` 尽力从上游响应读取，无字段不强行伪造。
 
 运行镜像必须来自已准入市场。第三方镜像先经 `apps/image-admission` 扫描、批准和项目启用；Agent 不能提交任意 OCI 地址。镜像和平台版本分开管理，执行永远使用不可变 digest，不使用可变 `latest`。出网权限在 Canvas/Job 快照中冻结，禁止出网的沙箱只能通过固定 Gateway 访问模型。
 

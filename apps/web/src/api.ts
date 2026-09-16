@@ -1479,6 +1479,8 @@ export type RoleConfigInput = {
   agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
   dsh_task_mode?: "standard" | "ptc";
   model?: string | null;
+  /** #570：关闭凭据模型目录 fail-closed（alias 直通） */
+  allow_model_catalog_passthrough?: boolean;
   /** 通用客户端上下文预算；不会提升上游模型能力。 */
   context_window_tokens?: number | null;
   /** 非敏感环境变量（疑似密钥名会被后端拒绝，引导改用 Credential） */
@@ -1513,6 +1515,7 @@ export interface RoleConfigView {
   agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
   dsh_task_mode: "standard" | "ptc";
   model: string | null;
+  allow_model_catalog_passthrough?: boolean;
   context_window_tokens: number | null;
   env_keys: string[];
   env_vars_json: Record<string, string>;
