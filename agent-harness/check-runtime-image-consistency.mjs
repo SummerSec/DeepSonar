@@ -151,10 +151,16 @@ const mobileSmoke = readFileSync(new URL("./test-mobile-runtime.mjs", import.met
 const mobileWorkflow = readFileSync(new URL("../.github/workflows/mobile-runtime.yml", import.meta.url), "utf8");
 const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const schedulerRuntimeSnapshot = readFileSync(
-  new URL("../apps/scheduler/src/domains/role-runtime-snapshot/application.ts", import.meta.url),
-  "utf8",
-);
+const schedulerRuntimeSnapshot = [
+  readFileSync(
+    new URL("../apps/scheduler/src/domains/role-runtime-snapshot/application.ts", import.meta.url),
+    "utf8",
+  ),
+  readFileSync(
+    new URL("../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts", import.meta.url),
+    "utf8",
+  ),
+].join("\n");
 const schedulerDispatcher = readFileSync(new URL("../apps/scheduler/src/dispatcher.ts", import.meta.url), "utf8");
 const schema = readFileSync(new URL("../database/schema.sql", import.meta.url), "utf8");
 const roleSmoke = readFileSync(new URL("./test-runtime-images-api.py", import.meta.url), "utf8");

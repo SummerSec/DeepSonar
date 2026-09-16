@@ -1777,7 +1777,7 @@ $instructions$),
 ### 决策纪律
 
 1. 没有执行证据时不得直接 complete；complete.from 必须引用支持总结论的画布节点。
-2. 需要派发时必须先调用 `list_available_roles`；只原样使用工具本轮返回的角色 name，不使用记忆中的固定清单，不派发 verify、report 或其他 system/hub 角色。需要专项工具链时再调用 `list_available_runtime_images`，intent 的可选 `runtime_image_key` 必须原样复制返回且 readiness=ready 的 image_key，且与该角色 CLI 兼容；省略则按角色缺省镜像解析。
+2. 需要派发时必须先调用 `list_available_roles`；只原样使用工具本轮返回的角色 name，不使用记忆中的固定清单，不派发 verify、report 或其他 system/hub 角色。需要非缺省工具链时必须再调用 `list_available_runtime_images`，按返回的 `purpose` / `capabilities` / `selection_hints` / `tool_summary` / `not_included` 匹配任务（勿猜 key），intent 的可选 `runtime_image_key` 必须原样复制返回且 readiness=ready 的 image_key，且与该角色 CLI 兼容；省略则按角色缺省镜像解析。
 3. intent.prompt 必须包含目标、范围、已有证据、期望新增事实、约束和验收标准，使全新 Worker 无需隐含上下文即可执行。
 4. 不重复开放或已完成意图；优先派发能最大幅度缩小关键不确定性的最少任务，并遵守本轮意图数量上限。
 5. Hub 不下载目标材料、不替 Worker 出网、不调用 Scheduler/数据库接口；它只通过本 Job 动态下发的系统工具提交 complete 或 intents 提案。
@@ -1798,7 +1798,7 @@ $instructions$),
 
 - 可用 `emit_progress({"message":"已完成图缺口分析，正在选择最小角色集合","percent":60})` 上报决策阶段。
 - 需要派发时先调用 `list_available_roles({})`，读取返回的 name、title、description；该结果来自本项目数据库配置，且已排除所有 system/hub 角色。
-- 需要专项运行镜像时再调用 `list_available_runtime_images({})`，读取返回的 image_key、compatible_agent_clis 与 readiness；intent 可带 `runtime_image_key`，必须原样命中本轮目录、readiness=ready 且与该角色 CLI 兼容。
+- 需要非缺省工具链时再调用 `list_available_runtime_images({})`，读取 `purpose`、`tool_summary`、`not_included`、`suited_roles`、`suited_evidence`、`selection_hints`、`capabilities`、`image_key`、`compatible_agent_clis` 与 `readiness`；按任务证据需求匹配后再原样复制 `image_key`（例：APK→mobile，CDP→chrome-test）；intent 可带 `runtime_image_key`，必须原样命中本轮目录、readiness=ready 且与该角色 CLI 兼容；禁止猜测未返回的 key。
 - 每轮只调用一次 `submit_hub_decision`，参数严格二选一：完成时 `{"complete":{"from":["<fact-id>"],"description":"由引用节点支持的完成结论"}}`；派发时 `{"intents":[{"from":["<root-or-fact-id>"],"role":"list_available_roles 返回的 name","runtime_image_key":"list_available_runtime_images 返回的 image_key（可选）","description":"意图目标","prompt":"给全新 Worker 的完整任务、证据、边界和验收标准；若补证须含 finding_id 与 verification 要求"}]}`。
 - `from` 只能引用本轮画布 root/fact/finding id；role 必须原样命中本轮工具结果；不得同时传 complete 与 intents。
 - 提交决策后只调用一次 `mark_job_done({"summary":"本轮判断依据与派发/完成摘要"})`。

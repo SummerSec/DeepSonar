@@ -15,7 +15,7 @@
   "grandfathered": {
     "apps/scheduler/src/runtime-images.ts": {
       "class": "logic",
-      "maxLines": 2707,
+      "maxLines": 2669,
       "issue": "#544"
     },
     "apps/scheduler/src/verify.ts": {

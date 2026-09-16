@@ -1203,6 +1203,12 @@ test("Hub catalog entries require a compatible governance CLI and omit executabl
   assert.equal("immutable_ref" in kali, false);
   assert.equal(kali.readiness, "ready");
   assert.equal(kali.preparing, false);
+  assert.match(kali.purpose, /动态测试|PoC/);
+  assert.match(kali.tool_summary, /JDK|Maven|Python|Go|Rust/);
+  assert.match(kali.not_included, /metapackage|DinD|GUI/);
+  assert.ok(kali.capabilities.includes("runtime-test"));
+  assert.ok(kali.selection_hints.length > 0);
+  assert.ok(kali.suited_roles.includes("test"));
 
   const chrome = toHubRuntimeImageCatalogEntry({
     image_key: "deepsonar-chrome-fuzz",
@@ -1213,6 +1219,21 @@ test("Hub catalog entries require a compatible governance CLI and omit executabl
   });
   assert.ok(chrome);
   assert.deepEqual(chrome.compatible_agent_clis, ["claude-code", "pi"]);
+  assert.match(chrome.purpose, /fuzz|d8|V8/i);
+  assert.ok(chrome.capabilities.includes("d8"));
+  assert.match(chrome.not_included, /toy|浏览器|V8/);
+
+  const mobile = toHubRuntimeImageCatalogEntry({
+    image_key: "deepsonar-mobile",
+    name: "Mobile",
+    description: "mobile",
+    official: true,
+    project_opt_in: true,
+    source_kind: "official",
+  });
+  assert.ok(mobile);
+  assert.ok(mobile.capabilities.includes("apk"));
+  assert.match(mobile.selection_hints.join(" "), /APK|mobile/i);
 
   assert.equal(toHubRuntimeImageCatalogEntry({
     image_key: "third-party-unlisted",

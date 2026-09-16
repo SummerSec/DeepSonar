@@ -482,7 +482,7 @@ function resultContract(
 ): string {
   const enabled = new Set(toolNames);
   if (isHub) {
-    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images 的 image_key，且须与该角色 CLI 兼容、readiness=ready；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image），未就绪镜像拒绝（runtime_image_not_ready）且不创建 Worker。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
+    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images（按 purpose/capabilities/selection_hints 匹配任务后复制 image_key），且须与该角色 CLI 兼容、readiness=ready；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image），未就绪镜像拒绝（runtime_image_not_ready）且不创建 Worker。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
   }
   if (isVerify) {
     return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human、refuted。confirmed 只认图上结构化 Fact（finding_id / subject_revision / ownership / expected / actual / outcome），不要重读源码、制品或 maker 结论做第二次复核；门禁失败时调度器会记为 rework 并回弹 Hub。全量匹配修订的 refutes 可提案 refuted，终态仍由 Scheduler 硬门写入。只在文本里给出结论不等于提交，平台只认工具调用。`;
@@ -866,7 +866,7 @@ ${taskGoal}
 
 读取下面的任务画布，判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。
 每个 intent 可按本轮目标需要附加可选字段 agent_cli / credential_id 选择 Agent CLI 与 Provider：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / credential_id；二者与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省或 RoleConfig 回退。并发以 Provider 配额为准。不得提案未启用目录外的值。
-每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：先调用 list_available_runtime_images 查询本项目已启用且可信的镜像目录，原样使用返回的 image_key，并核对该条目的 compatible_agent_clis 覆盖本轮角色 CLI、readiness=ready（例如需要动态复现选 Kali 类、移动端目标选 mobile 类）；省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
+每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：需要非缺省工具链时必须先调用 list_available_runtime_images，按返回条目的 purpose、capabilities、selection_hints、tool_summary、not_included 匹配任务（APK/移动端→mobile，Chromium/CDP→chrome-test，ClickHouse SQL→clickhouse-test，hdc/OpenHarmony 设备→openharmony-test，多语言动态 PoC→kali-minimal 等），再原样复制 image_key；同时核对 compatible_agent_clis 覆盖本轮角色 CLI 且 readiness=ready。禁止凭记忆猜测 image_key。省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
 
 画布（YAML）：
 ${graph.yaml}

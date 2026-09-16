@@ -1,3 +1,4 @@
+import { officialRuntimeImageNotIncludedOneLiner } from "./runtime-image-boundary";
 import type { RuntimeImageSummary } from "./api";
 import type { SelectOption } from "./searchable-select-model";
 
@@ -63,12 +64,14 @@ export function runtimeImageSelectOption(
   projectId: string | null,
   disabled = false,
 ): SelectOption {
-  const hint = runtimeImageKindHint(image, projectId);
+  const kind = runtimeImageKindHint(image, projectId);
+  const notIncluded = officialRuntimeImageNotIncludedOneLiner(image.image_key);
+  const hint = notIncluded ? `${kind} · 不包含：${notIncluded}` : kind;
   return {
     value: image.image_key,
     label: image.name,
     hint,
-    keywords: [image.image_key, hint],
+    keywords: [image.image_key, kind, hint, notIncluded ?? ""].filter(Boolean),
     disabled,
   };
 }
