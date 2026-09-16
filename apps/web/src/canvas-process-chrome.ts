@@ -3,14 +3,35 @@ import type { TraceFocusMode } from "./finding-trace-focus";
 
 export const CANVAS_FILTER_DESKTOP_MQ = "(min-width: 640px)";
 export const CANVAS_FILTER_TOGGLE_LABEL = "筛选节点";
+export const CANVAS_LEGEND_TOGGLE_LABEL = "图例";
+export const CANVAS_LEGEND_PREF_KEY = "deepsonar:canvas-legend";
 
 /**
- * 筛选坞始终默认展开。
- * 不能用窗口 640px 当桌面判断：系统 150–200% 缩放时 CSS 像素会跌破断点，
- * 折叠后再被 100%-176px 裁切就只剩「导出」。
+ * 筛选坞默认折叠，减少首屏占位；用户可再展开。
+ * 保留 media 参数以兼容调用方；不再按视口强制展开。
  */
 export function defaultCanvasFiltersOpen(_media?: { matches: boolean } | null): boolean {
-  return true;
+  return false;
+}
+
+/** 无 localStorage 偏好时默认折叠图例。 */
+export function readCanvasLegendCollapsed(): boolean {
+  try {
+    const raw = globalThis.localStorage?.getItem(CANVAS_LEGEND_PREF_KEY);
+    if (!raw) return true;
+    const parsed = JSON.parse(raw) as { collapsed?: unknown };
+    return parsed.collapsed === true;
+  } catch {
+    return true;
+  }
+}
+
+export function writeCanvasLegendCollapsed(collapsed: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(CANVAS_LEGEND_PREF_KEY, JSON.stringify({ collapsed }));
+  } catch {
+    /* quota / private mode */
+  }
 }
 
 export function visibleTopologyEdges<T extends Pick<CanvasEdge, "id" | "from_node_id" | "to_node_id">>(

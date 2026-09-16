@@ -60,7 +60,7 @@ test("cache hit rate uses billed cache reads over reads plus writes", () => {
   assert.equal(formatCacheHitRate(-1, 10), "0.0%");
 });
 
-test("collapse prefs default expanded and persist per user and page", () => {
+test("collapse prefs default collapsed and persist per user and page", () => {
   assert.equal(usageLedgerPageKey("global"), "global");
   assert.equal(usageLedgerPageKey("project", "p1"), "project:p1");
   assert.equal(usageLedgerPageKey("task", "p1", "c1"), "task:c1");
@@ -76,10 +76,12 @@ test("collapse prefs default expanded and persist per user and page", () => {
     },
   });
   try {
+    assert.equal(readUsageLedgerCollapsed("user-1", "global"), true);
+    writeUsageLedgerCollapsed("user-1", "global", false);
     assert.equal(readUsageLedgerCollapsed("user-1", "global"), false);
+    assert.equal(readUsageLedgerCollapsed("user-2", "global"), true);
     writeUsageLedgerCollapsed("user-1", "global", true);
     assert.equal(readUsageLedgerCollapsed("user-1", "global"), true);
-    assert.equal(readUsageLedgerCollapsed("user-2", "global"), false);
   } finally {
     if (localStorageDescriptor) Object.defineProperty(globalThis, "localStorage", localStorageDescriptor);
     else delete (globalThis as { localStorage?: Storage }).localStorage;

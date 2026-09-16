@@ -6,20 +6,48 @@ import {
   broadcastLedgerHeading,
   CANVAS_FILTER_DESKTOP_MQ,
   CANVAS_FILTER_TOGGLE_LABEL,
+  CANVAS_LEGEND_PREF_KEY,
+  CANVAS_LEGEND_TOGGLE_LABEL,
   countHiddenTopologyEdges,
   defaultCanvasFiltersOpen,
   hiddenEdgeHint,
+  readCanvasLegendCollapsed,
   shouldMountBroadcastLedger,
   visibleTopologyEdges,
+  writeCanvasLegendCollapsed,
 } from "./canvas-process-chrome";
 
-test("filter dock defaults open even when the 640px window query fails", () => {
+test("filter dock defaults closed on all viewports", () => {
   assert.equal(CANVAS_FILTER_DESKTOP_MQ, "(min-width: 640px)");
   assert.equal(CANVAS_FILTER_TOGGLE_LABEL, "筛选节点");
-  assert.equal(defaultCanvasFiltersOpen({ matches: true }), true);
-  assert.equal(defaultCanvasFiltersOpen({ matches: false }), true);
-  assert.equal(defaultCanvasFiltersOpen(null), true);
-  assert.equal(defaultCanvasFiltersOpen(undefined), true);
+  assert.equal(defaultCanvasFiltersOpen({ matches: true }), false);
+  assert.equal(defaultCanvasFiltersOpen({ matches: false }), false);
+  assert.equal(defaultCanvasFiltersOpen(null), false);
+  assert.equal(defaultCanvasFiltersOpen(undefined), false);
+});
+
+test("canvas legend defaults collapsed and persists preference", () => {
+  assert.equal(CANVAS_LEGEND_TOGGLE_LABEL, "图例");
+  assert.equal(CANVAS_LEGEND_PREF_KEY, "deepsonar:canvas-legend");
+  const store = new Map<string, string>();
+  const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    },
+  });
+  try {
+    assert.equal(readCanvasLegendCollapsed(), true);
+    writeCanvasLegendCollapsed(false);
+    assert.equal(readCanvasLegendCollapsed(), false);
+    writeCanvasLegendCollapsed(true);
+    assert.equal(readCanvasLegendCollapsed(), true);
+  } finally {
+    if (localStorageDescriptor) Object.defineProperty(globalThis, "localStorage", localStorageDescriptor);
+    else delete (globalThis as { localStorage?: Storage }).localStorage;
+  }
 });
 
 test("depth or filter hiding reports a visible edge count", () => {
@@ -62,15 +90,20 @@ test("broadcast ledger stays mounted at total=0", () => {
 
 test("canvas view wires discoverable chrome instead of silent unmount", () => {
   const source = readFileSync(new URL("./CanvasView.tsx", import.meta.url), "utf8");
+  const legend = readFileSync(new URL("./CanvasLegend.tsx", import.meta.url), "utf8");
   assert.match(source, /defaultCanvasFiltersOpen\(/);
   assert.match(source, /CANVAS_FILTER_TOGGLE_LABEL/);
+  assert.match(source, /<CanvasLegend /);
+  assert.match(legend, /CANVAS_LEGEND_TOGGLE_LABEL/);
+  assert.match(legend, /readCanvasLegendCollapsed\(/);
+  assert.match(legend, /writeCanvasLegendCollapsed\(/);
+  assert.match(legend, /canvas-legend-toggle/);
   assert.match(source, /shouldMountBroadcastLedger\(broadcastPage\)/);
   assert.match(source, /hiddenEdgeHint\(/);
   assert.match(source, /broadcastLedgerHeading\(/);
   assert.match(source, /<Panel position="top-left"/);
   assert.match(source, /canvas-chrome-panel/);
   assert.doesNotMatch(source, /broadcastPage && broadcastPage\.total > 0/);
-  assert.doesNotMatch(source, /const \[filtersOpen, setFiltersOpen\] = useState\(false\)/);
   assert.doesNotMatch(
     source,
     /canvas-filter-toggle[^\n]*min-w-0/,

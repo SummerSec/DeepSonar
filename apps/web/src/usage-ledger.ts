@@ -56,11 +56,11 @@ export function usageLedgerPrefKey(userKey: string, pageKey: string): string {
 export function readUsageLedgerCollapsed(userKey: string, pageKey: string): boolean {
   try {
     const raw = globalThis.localStorage?.getItem(usageLedgerPrefKey(userKey, pageKey));
-    if (!raw) return false;
+    if (!raw) return true;
     const parsed = JSON.parse(raw) as { collapsed?: unknown };
     return parsed.collapsed === true;
   } catch {
-    return false;
+    return true;
   }
 }
 

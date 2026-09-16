@@ -1118,6 +1118,13 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   margin: 12px;
   max-width: calc(100% - 24px);
 }
+.canvas-legend-toggle {
+  color: var(--text);
+  background: var(--panel-raised);
+  font-weight: 600;
+  cursor: pointer;
+}
+.canvas-legend-toggle:hover { background: var(--surface-tint-strong); }
 .canvas-filter-panel {
   z-index: 50;
   width: min(760px, calc(100% - 32px));
