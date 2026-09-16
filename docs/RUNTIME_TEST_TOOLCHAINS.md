@@ -1,6 +1,6 @@
 # Runtime-test 工具链与证据边界
 
-> **状态：as-built**。索引：[`README.md`](README.md)。
+> **状态：as-built**。索引：[`README.md`](README.md)。角色×官方镜像权威矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)（#565）。
 
 DeepSonar 把“读代码找问题”和“启动目标、发送请求、观察实际结果”分成两类工作。`audit` 提供基础工具让 Agent 自行阅读与假设，**不是**“规则匹配通常足够”的固定 SAST 路径；需要 `runtime_test` 的 `test` Job 默认使用受治理的 `deepsonar-kali-minimal`（Kali Test），Job 创建时由 Scheduler 冻结可信 digest。系统 `verify` 全局默认仍是 Base（未绑定 RoleConfig 时使用 Base 系统沙箱）；只有目标确实需要动态复现时，项目级 RoleConfig 才显式选择一个已准入、可信且具备目标工具链的镜像。
 

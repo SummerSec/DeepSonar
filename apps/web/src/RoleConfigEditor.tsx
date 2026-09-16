@@ -46,7 +46,7 @@ const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em]
 
 const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
   list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
-  list_available_runtime_images: { title: "查询可用镜像", description: "让 Hub 按需获取本项目已启用且可信的运行镜像 image_key，用于按任务动态选择 Worker 容器。" },
+  list_available_runtime_images: { title: "查询可用镜像", description: "让 Hub 按需获取本项目已启用且可信的镜像目录（含 purpose/tool_summary/not_included/capabilities/selection_hints），按任务匹配后原样复制 image_key，禁止猜测。" },
   list_capabilities: { title: "查询能力包", description: "列出本 Job 可见的 Capability Pack 摘要；完整契约用 describe_capability 按需读取。" },
   search_capabilities: { title: "搜索能力包", description: "按任务查询可用 Capability Pack，不依赖预先知道 RoleConfig selector。" },
   describe_capability: { title: "描述能力包", description: "按 id/version/digest 读取 Capability Pack 机器契约。" },
