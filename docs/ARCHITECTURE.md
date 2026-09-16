@@ -583,6 +583,7 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 `project_managed` 则只读取 `role_runtime_images` 的角色映射，缺项或 `null`
 固定使用系统 `deepsonar-base`，并允许项目 RoleConfig 托管自己的 model / 默认 CLI。非空 key 在项目设置写入时必须命中已启用、可信且符合
 现有准入规则的 runtime image；最终解析的 immutable digest/ref 与工具清单仍只冻结在新 Job。
+Hub 经 `list_available_runtime_images` 提案并提交的 `runtime_image_key`（若存在）优先于上述角色缺省。
 
 Finding 协议是同一配置层级中的独立规则：全局物理存于
 `global_settings.rules_json.finding_protocol`（API 只认顶层 `finding_protocol`，不进 `rules` 投影），项目存于

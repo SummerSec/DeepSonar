@@ -15,7 +15,7 @@ export const PROJECT_EXPORT_MODULES = [
   { id: "rules", label: "规则", hint: "项目规则与协议覆盖" },
   { id: "roles", label: "角色", hint: "角色注册与项目 RoleConfig" },
   { id: "skills", label: "模块源", hint: "Skill / 插件源引用（导入后需重新审批）" },
-  { id: "runtime_images", label: "运行镜像", hint: "项目镜像策略引用" },
+  { id: "runtime_images", label: "运行镜像", hint: "项目镜像缺省引用" },
   { id: "environment", label: "环境变量", hint: "env_keys 与已脱敏值，不含 Secret" },
   { id: "credentials", label: "凭据元数据", hint: "仅名称 / provider / 指纹，不含明文" },
   { id: "tasks", label: "任务", hint: "画布、Job、节点；有活动 Job 时需改用证据归档" },

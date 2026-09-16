@@ -292,14 +292,14 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
             </div>
 
             {isCreatingProject && <fieldset className="intent-launch-project-policy">
-              <legend>项目镜像策略</legend>
+              <legend>镜像启用与角色缺省</legend>
               <label className={imageStrategy === "inherit_global" ? "is-selected" : ""}>
                 <input type="radio" name={`quick-start-image-strategy-${instanceId}`} value="inherit_global" checked={imageStrategy === "inherit_global"} onChange={() => setImageStrategy("inherit_global")} />
-                <span><strong>继承全局</strong><small>各角色使用全局运行配置中的镜像。</small></span>
+                <span><strong>继承全局</strong><small>缺省跟随各角色全局 RoleConfig 镜像。</small></span>
               </label>
               <label className={imageStrategy === "project_managed" ? "is-selected" : ""}>
                 <input type="radio" name={`quick-start-image-strategy-${instanceId}`} value="project_managed" checked={imageStrategy === "project_managed"} onChange={() => setImageStrategy("project_managed")} />
-                <span><strong>项目托管</strong><small>在项目设置集中选择可信镜像，未选角色使用系统基础环境。</small></span>
+                <span><strong>项目托管</strong><small>缺省使用项目角色映射；未映射角色用系统基础环境（deepsonar-base）。</small></span>
               </label>
             </fieldset>}
 

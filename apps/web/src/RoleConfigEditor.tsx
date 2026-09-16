@@ -156,9 +156,9 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
 }
 
 const SANDBOX_LIMIT_FIELDS = [
-  { key: "cpu", label: "CPU", unit: "cores", min: 0.25, max: 64, step: 0.25 },
-  { key: "memoryMiB", label: "Memory", unit: "MiB", min: 256, max: 131_072, step: 256 },
-  { key: "pidsLimit", label: "PIDs", unit: "processes", min: 64, max: 32_768, step: 1 },
+  { key: "cpu", label: "CPU", unit: "核", min: 0.25, max: 64, step: 0.25 },
+  { key: "memoryMiB", label: "内存", unit: "MiB", min: 256, max: 131_072, step: 256 },
+  { key: "pidsLimit", label: "进程上限", unit: "个", min: 64, max: 32_768, step: 1 },
 ] as const;
 
 function numericSandboxOverride(raw: string, label: string, min: number, max: number, integer: boolean): number | undefined {
@@ -608,16 +608,16 @@ export function RoleConfigEditor({
           </div>
           <div className="mt-4 border-t border-ink-700/60 pt-4">
             <label className={labelCls}>
-              Sandbox resources
+              沙箱资源缺省
               <HelpTip>
-                Numeric overrides are available only for project RoleConfigs. Leave a field blank to inherit the server default.
-                CPU is measured in cores; memory in MiB; PIDs is the process limit. Capability drop and no-new-privileges remain server-governed.
+                角色级资源缺省：仅项目 RoleConfig 可填数字覆盖；留空继承服务端缺省。
+                Job / Hub 快照仍可在治理范围内冻结更具体的值。CPU 以核计、内存以 MiB、进程上限为 PID 数；capability drop 与 no-new-privileges 仍由服务端治理。
               </HelpTip>
             </label>
             <p className="mb-2 text-[11px] leading-5 text-zinc-500">
               {projectId
-                ? "Project override · blank fields inherit server defaults"
-                : "Global RoleConfig · server defaults only (project overrides can be set per project)"}
+                ? "项目角色覆盖 · 留空继承服务端缺省"
+                : "全局 RoleConfig · 仅服务端缺省（可在项目角色上覆盖）"}
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {SANDBOX_LIMIT_FIELDS.map((field) => (
@@ -640,17 +640,18 @@ export function RoleConfigEditor({
                     className={inputCls}
                     aria-label={`${field.label} ${field.unit}`}
                   />
-                  <span className="mt-1 block font-mono text-[10px] text-zinc-600">bounds {field.min}–{field.max}</span>
+                  <span className="mt-1 block font-mono text-[10px] text-zinc-600">范围 {field.min}–{field.max}</span>
                 </label>
               ))}
             </div>
           </div>
           <div className="mt-4 border-t border-ink-700/60 pt-4">
             <label className={labelCls}>
-              运行时护栏覆盖
+              运行时护栏缺省
               <HelpTip>
-                留空继承项目 / 平台 / 部署 env。0 表示关闭停滞判定或不限制 Token 请求。
-                Chrome 专项镜像仍有 stall 下限；这里可以再抬高。优先级：Job &gt; 本角色 &gt; 项目规则 &gt; 平台。
+                角色级护栏缺省：Job / Hub 冻结值优先；此处仅在上层未给出更具体值时生效。
+                留空继承项目规则 / 平台 / 部署 env。0 表示关闭停滞判定或不限制 Token 请求。
+                Chrome 专项镜像仍有 stall 下限，可在此再抬高。优先级：Job &gt; 本角色 &gt; 项目规则 &gt; 平台。
               </HelpTip>
             </label>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
