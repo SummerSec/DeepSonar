@@ -40,7 +40,10 @@ test("config center exposes batch-1 runtime knobs with toast save feedback", () 
   assert.match(panel, /showToast\(m, inferToastKind\(m\)\)/);
   assert.match(shell, /配置中心/);
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
-  assert.match(editor, /运行时护栏覆盖/);
+  assert.match(editor, /运行时护栏缺省/);
+  assert.match(editor, /沙箱资源缺省/);
+  assert.match(editor, /项目角色覆盖 · 留空继承服务端缺省/);
+  assert.doesNotMatch(editor, /Sandbox resources/);
   assert.match(editor, /runtime_knobs/);
 });
 
