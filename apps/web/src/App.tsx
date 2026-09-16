@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { RequireAuth } from "./auth";
 import { AppShell } from "./layout/AppShell";
 import { PageSkeleton } from "./ui";
@@ -14,7 +14,7 @@ const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => 
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const ProjectDataPage = lazy(() => import("./pages/ProjectDataPage").then((module) => ({ default: module.ProjectDataPage })));
 const ProjectUsagePage = lazy(() => import("./pages/ProjectUsagePage").then((module) => ({ default: module.ProjectUsagePage })));
-const ProjectReportsPage = lazy(() => import("./pages/ProjectReportsPage").then((module) => ({ default: module.ProjectReportsPage })));
+const ProjectDeliveryPage = lazy(() => import("./pages/ProjectDeliveryPage").then((module) => ({ default: module.ProjectDeliveryPage })));
 const TaskCanvasRoute = lazy(() => import("./pages/TaskCanvasRoute").then((module) => ({ default: module.TaskCanvasRoute })));
 const TasksPage = lazy(() => import("./pages/TasksPage").then((module) => ({ default: module.TasksPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
@@ -22,6 +22,13 @@ const LoginPage = lazy(() => import("./pages/LoginPage").then((module) => ({ def
 const RuntimeImagesPage = lazy(() => import("./pages/RuntimeImagesPage").then((module) => ({ default: module.RuntimeImagesPage })));
 const PlatformSettingsPage = lazy(() => import("./pages/PlatformSettingsPage").then((module) => ({ default: module.PlatformSettingsPage })));
 const DevicesPage = lazy(() => import("./pages/DevicesPage").then((module) => ({ default: module.DevicesPage })));
+
+
+function ProjectReportsRedirect() {
+  const { projectId } = useParams<{ projectId: string }>();
+  if (!projectId) return <Navigate to="/projects" replace />;
+  return <Navigate to={`/projects/${projectId}/findings?panel=reports`} replace />;
+}
 
 function Deferred({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
@@ -147,18 +154,11 @@ export default function App() {
             path="findings"
             element={
               <Deferred>
-                <FindingsPage scope="project" />
+                <ProjectDeliveryPage />
               </Deferred>
             }
           />
-          <Route
-            path="reports"
-            element={
-              <Deferred>
-                <ProjectReportsPage />
-              </Deferred>
-            }
-          />
+          <Route path="reports" element={<ProjectReportsRedirect />} />
           <Route
             path="usage"
             element={

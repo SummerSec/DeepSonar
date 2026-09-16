@@ -67,7 +67,7 @@ function DeliverableActions({
   );
 }
 
-export function ProjectReportsPage() {
+export function ProjectReportsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { projectId } = useParams<{ projectId: string }>();
   const [data, setData] = useState<ProjectReportAggregation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -147,13 +147,20 @@ export function ProjectReportsPage() {
     }
   };
 
-  return (
-    <div className="page-scroll">
-      <PageHeader
-        title="项目报告"
-        eyebrow="交付物"
-        subtitle="先看可阅读结论、生成中或失败的报告，以及已确认但尚未生成的 Finding。任务只作为上下文，不会默认展开。"
-      />
+  const body = (
+    <>
+      {!embedded && (
+        <PageHeader
+          title="项目报告"
+          eyebrow="交付物"
+          subtitle="先看可阅读结论、生成中或失败的报告，以及已确认但尚未生成的 Finding。任务只作为上下文，不会默认展开。"
+        />
+      )}
+      {embedded && (
+        <p className="mb-4 font-mono text-[11px] text-zinc-600">
+          先看可阅读结论、生成中或失败的报告，以及已确认但尚未生成的 Finding。任务只作为上下文，不会默认展开。
+        </p>
+      )}
       <div className="mb-5 flex flex-wrap gap-2" aria-label="交付物摘要">
         {SUMMARY_ORDER.map((status) => (
           <span
@@ -234,6 +241,9 @@ export function ProjectReportsPage() {
           </section>
         </div>
       ) : null}
-    </div>
+    </>
   );
+
+  if (embedded) return body;
+  return <div className="page-scroll">{body}</div>;
 }

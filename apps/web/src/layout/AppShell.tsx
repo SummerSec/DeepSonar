@@ -1,4 +1,4 @@
-import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Database, DeviceMobile, FileText, Folder, Gear, Key, MagnifyingGlass, Moon, Palette, Queue, Receipt, Robot, ShieldCheck, SignOut, Storefront, Sun, User, X } from "@phosphor-icons/react";
+import { Bug, CaretLeft, CaretRight, ChartBar, Check, Crosshair, Cube, Database, DeviceMobile, Folder, Gear, Key, MagnifyingGlass, Moon, Palette, Queue, Receipt, Robot, ShieldCheck, SignOut, Storefront, Sun, User, X } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
@@ -33,8 +33,7 @@ const SECONDARY_COMMANDS = [
 const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[] = [
   { seg: "tasks", label: "任务工作台", caption: "意图与交付闭环", icon: Crosshair },
   { seg: "usage", label: "项目账本", caption: "用量与缓存命中", icon: Receipt },
-  { seg: "findings", label: "项目风险", caption: "风险发现", icon: Bug },
-  { seg: "reports", label: "项目报告", caption: "任务与 Finding 报告", icon: FileText },
+  { seg: "findings", label: "风险与报告", caption: "风险发现与交付结论", icon: Bug },
   { seg: "data", label: "项目数据", caption: "导入与导出", icon: Folder },
   { seg: "settings", label: "项目策略", caption: "角色与规则覆盖", icon: Gear },
   { seg: "images", label: "项目镜像", caption: "启用与版本固定", icon: Cube },

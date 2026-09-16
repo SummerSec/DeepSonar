@@ -177,9 +177,9 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 3. **事实证据**：Fact、Artifact、验证状态、证据边和来源；
 4. **任务发现**：本任务 Finding、Verify 状态、disposition 和追踪入口；
 5. **任务运行**：Job、Attempt、Session、流、广播和用量；
-6. **报告**：任务工作台报告 tab 仍展示 Finding Report、Task Report、版本、输入 checksum 和正文。项目报告页以统一 `ReportDeliverable` 投影为默认视图（可阅读 / 生成中 / 失败 / 尚未生成 / 已过时），任务只作上下文，不默认展开。
+6. **报告**：任务工作台报告 tab 仍展示 Finding Report、Task Report、版本、输入 checksum 和正文。项目侧「风险与报告」统一台（`/projects/:id/findings`，`?panel=reports` 切报告区）复用同一 `ReportDeliverable` 投影（可阅读 / 生成中 / 失败 / 尚未生成 / 已过时），任务只作上下文，不默认展开；旧 `/projects/:id/reports` redirect 到合并页。
 
-选中的 `tab` 写入 URL，后台刷新不能强制切换视图。Canvas 是高级审计视图，默认只读；节点布局由服务端 elkjs 计算。列表筛选使用服务端分页和可搜索多选；不同维度按 AND，同一维度按 OR。项目账本和项目风险是独立项目视图，不塞进任务工作台的运行列表。
+选中的 `tab` / `panel` 写入 URL，后台刷新不能强制切换视图。Canvas 是高级审计视图，默认只读；节点布局由服务端 elkjs 计算。列表筛选使用服务端分页和可搜索多选；不同维度按 AND，同一维度按 OR。项目账本与「风险与报告」是独立项目视图，不塞进任务工作台的运行列表。
 
 ## 11. 安全与授权硬门
 
@@ -203,7 +203,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | Finding Research（#448） | 语义去重、canonical anchor、相对 priority 已落地 | 更强评估集、跨任务聚类和人工反馈闭环 |
 | Quality / Replay（#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
-| 项目报告工作台（#484） | Phase 1 已落地：统一 `ReportDeliverable` 投影、交付物优先列表、默认不展开任务、空/生成中/失败/无 Finding 状态可区分；旧路由与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
+| 项目报告工作台（#484 / #561） | Phase 1 已落地：统一 `ReportDeliverable` 投影；#561 并入项目「风险与报告」台（`/findings` + `?panel=reports`，旧 `/reports` redirect）；任务工作台报告 tab 与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
 | 真实设备接入（#494/#495，多 rig #505 后续） | Phase 1 已落地：device broker 把物理设备暴露为可租借网络端点（沙箱不直连设备），租约绑 Attempt、项目 opt-in + 任务级授权、`device_events` 审计、Reaper 回收过期租约；多 rig 准入（平台按 `devices.rig_id` 分组整集推送、按需 rig 选 broker 端点，schema v50）与平台设备视图也已落地；细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md) | 真机 rig 验收、Phase 2 hdc/串口/电源控制、跨 rig 调度（一个 Job 只用一个 rig 的设备）、同 rig 多设备池的策略 |
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
