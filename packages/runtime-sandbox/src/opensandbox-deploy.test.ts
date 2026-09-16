@@ -36,8 +36,8 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
   assert.match(toml, /no_new_privileges = true/);
   assert.match(toml, /drop_capabilities = \["ALL"\]/);
   assert.match(toml, /type = "sqlite"/);
-  assert.match(toml, /\[ingress\][\s\S]*?mode = "gateway"/);
-  assert.doesNotMatch(toml, /\[ingress\][\s\S]*?mode = "direct"/);
+  assert.match(toml, /\[ingress\][\s\S]*?mode = "direct"/);
+  assert.doesNotMatch(toml, /\[ingress\][\s\S]*?mode = "gateway"/);
   assert.doesNotMatch(toml, /(?:^|\s)latest(?:\s|$)|network_mode = "host"|api_key_env|^\s*driver\s*=/m);
   assert.match(toml, new RegExp(OPENSANDBOX_EXECD_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -50,12 +50,13 @@ test("OpenSandbox deploy pins official schema and immutable digests", () => {
 });
 
 
-test("OpenSandbox Docker ingress defaults to gateway to avoid rootless hostfwd churn (#548)", () => {
+test("OpenSandbox Docker ingress defaults to direct until server supports docker gateway (#556)", () => {
   const toml = readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8");
   const ingress = toml.match(/\[ingress\]([\s\S]*?)(?=\n\[|$)/);
   assert.ok(ingress, "missing [ingress]");
-  assert.match(ingress[1], /mode = "gateway"/);
-  assert.doesNotMatch(ingress[1], /mode = "direct"/);
+  assert.match(ingress[1], /mode = "direct"/);
+  assert.doesNotMatch(ingress[1], /mode = "gateway"/);
+  assert.match(toml, /#556/);
   assert.match(toml, /#548/);
 });
 
