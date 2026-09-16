@@ -482,6 +482,9 @@ expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin ap
 expect(mobileConfig.downloads?.bundletool?.version === "1.18.3", "Mobile must pin bundletool 1.18.3");
 expect(mobileConfig.downloads?.apkeep?.version === "1.0.0", "Mobile must pin apkeep 1.0.0");
 expect(mobileConfig.managed?.pip?.androguard?.version === "4.1.4", "Mobile must pin androguard 4.1.4");
+expect(mobileConfig.managed?.pip?.droidasc?.version === "0.1.1", "Mobile must pin droidasc 0.1.1");
+expect(mobileConfig.managed?.pip?.droidasc?.license === "Apache-2.0", "Mobile droidasc must be Apache-2.0");
+expect(mobileConfig.managed?.pip?.droidasc?.capabilities?.includes("apk-xref-search"), "Mobile droidasc must declare apk-xref-search");
 expect(mobileConfig.downloads?.apkcheckpack?.version === "20260618", "Mobile must pin ApkCheckPack 20260618");
 expect(mobileConfig.downloads?.apkcheckpack?.assets?.all?.sha256 === "c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b", "Mobile ApkCheckPack SHA256 drift");
 expect(mobileConfig.downloads?.apkcheckpack?.license === "NOASSERTION", "Mobile ApkCheckPack must record upstream has no SPDX license");
@@ -514,6 +517,10 @@ expect(mobileDockerfile.includes("frida==${FRIDA_SERVER_VERSION}"), "Mobile must
 expect(mobileConfig.managed?.pip?.frida?.version === "17.17.0", "Mobile manifest must pin frida 17.17.0");
 expect(mobileConfig.toolsets?.mobile?.maxSizeMiB === 2400, "Mobile size budget must leave margin for JDK/venv/frida-server");
 expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
+expect(mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1"), "Mobile Dockerfile must pin DROIDASC_VERSION=0.1.1");
+expect(mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}"), "Mobile Dockerfile must install pinned droidasc");
+expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc"), "Mobile must symlink /opt/deepsonar/bin/droidasc");
+expect(mobileDockerfile.includes('"droidasc"') && mobileDockerfile.includes('tools:["java"'), "Mobile tool-manifest must list droidasc");
 expect(mobileDockerfile.includes("ARG APKCHECKPACK_SHA256=c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"), "Mobile Dockerfile ApkCheckPack checksum drift");
 expect(mobileDockerfile.includes("APKCHECKPACK_URL") && mobileDockerfile.includes("moyuwa/ApkCheckPack"), "Mobile Dockerfile must download pinned ApkCheckPack from GitHub Release");
 expect(mobileDockerfile.includes("mobile-apkcheckpack-bin.sh") && mobileDockerfile.includes("/opt/deepsonar/bin/apkcheckpack"), "Mobile must install the ApkCheckPack qemu wrapper");
@@ -542,7 +549,7 @@ expect(!/jadx-ai-mcp|apktool-mcp|firerpa|quark-engine/i.test(mobileDockerfile), 
 expect(mobileDockerfile.includes("bundletool") && mobileDockerfile.includes("apkeep") && mobileDockerfile.includes("androguard"), "Mobile must install bundletool/apkeep/androguard");
 expect(mobileDockerfile.includes("mobile-so.sh") && mobileDockerfile.includes("radare2") && !mobileDockerfile.includes("ghidra_"), "Mobile must install lightweight SO tools and must not bake Ghidra");
 expect(mobileDockerfile.includes("不预装") && mobileDockerfile.includes("MobSF") && mobileDockerfile.includes("Burp"), "Mobile must document that MobSF/Burp/IDA stay out");
-expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("apkcheckpack -h") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/apkcheckpack/adb");
+expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("droidasc --help") && mobileEnv.includes("apkcheckpack -h") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/droidasc/apkcheckpack/adb");
 expect(mobileApkCheckPackBin.includes("qemu-x86_64-static") && mobileApkCheckPackBin.includes("ApkCheckPack"), "Mobile ApkCheckPack wrapper must run the official linux-x64 binary via qemu on arm64");
 expect(mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke Frida/Objection");
 expect(!mobileEnv.includes("mitmdump --version"), "Mobile env check must not require mitmdump");
@@ -576,6 +583,7 @@ expect(mobileSmoke.includes("no_adb_target") && mobileSmoke.includes("needs_huma
 expect(mobileSmoke.includes("no_hdc_target") && mobileSmoke.includes("no_ios_target") && mobileSmoke.includes("pack.info"), "Mobile unit smoke must cover hdc, iOS, and HAP helpers");
 expect(mobileSmoke.includes("so --check") && mobileSmoke.includes("libdemo.so"), "Mobile unit smoke must cover SO helper");
 expect(mobileSmoke.includes("apkcheckpack") && mobileSmoke.includes("APK检测工具"), "Mobile unit smoke must cover ApkCheckPack wrapper help");
+expect(mobileSmoke.includes("droidasc") && mobileSmoke.includes("apk-xref-search"), "Mobile unit smoke must cover droidasc pin/presence");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-so.sh"), "Mobile fingerprint must include the SO helper");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-apkcheckpack-bin.sh"), "Mobile fingerprint must include the ApkCheckPack wrapper");
 expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
@@ -584,6 +592,7 @@ expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("agent-harness/mobile-runtime.json"), "Mobile fingerprint must include the runtime manifest");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/vendor/openharmony-hdc/hdc"), "Mobile fingerprint must include vendored hdc");
 expect(schedulerRuntimeSnapshot.includes("Mobile device protocols (Scheduler policy)"), "Mobile snapshots must require official adb/hdc/ios device evidence");
+expect(schedulerRuntimeSnapshot.includes("droidasc") && schedulerRuntimeSnapshot.includes("Never invent device, traffic, or native/OLLVM results from JADX, droidasc, or apkcheckpack"), "Mobile policy must describe droidasc vs JADX and forbid inventing device results from ASC");
 expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-mobile-runtime.mjs"), "ci:images must run the Mobile helper smoke");
 expect(chromeSources.contract === "deepsonar.chrome.runtime.sources/v1", "Chrome source metadata contract drift");
 expect(chromeSources.chromium.version === "151.0.7922.71-1~deb12u1", "Chrome Chromium version must remain pinned");

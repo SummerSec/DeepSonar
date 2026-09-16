@@ -158,6 +158,12 @@
       "frida-tools": { "version": "14.10.4", "license": "wxWindows Library Licence 3.1", "capabilities": ["runtime-instrumentation"] },
       "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
       "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] },
+      "droidasc": {
+        "version": "0.1.1",
+        "license": "Apache-2.0",
+        "capabilities": ["apk-decompile", "apk-xref-search", "apk-manifest-decode"],
+        "source": "PyPI droidasc (MG1937/ASC); CLI only — do not use --gui"
+      },
       "lief": { "version": "1.0.0", "license": "Apache-2.0", "capabilities": ["elf-parse"] }
     },
     "apt": {
@@ -172,7 +178,7 @@
   "toolsets": {
     "mobile": {
       "imageKey": "deepsonar-mobile",
-      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned droidasc (Droid ASC) for on-demand APK class/manifest/xref CLI and pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
       "maxSizeMiB": 2400
     }
   }

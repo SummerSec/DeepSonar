@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。
+
 ### 修复
 
 - 登录页密码 / API Token 可一键显示或隐藏（默认仍隐藏）；限流 `429 LOGIN_RATE_LIMITED` 展示含重试时长的中文提示，不再只抛 `POST /auth/login -> 429: …`（#560）。Credential / Provider API Key 仍禁止浏览器内 reveal。服务端登录限流（5/5min 用户名+IP、20/5min IP）本已存在，本变更核对其 Web→Scheduler IP 转发与 migration，并补前端体验。
