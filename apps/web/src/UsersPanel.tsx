@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Eye, EyeSlash } from "@phosphor-icons/react";
 import { api, type PublicUser } from "./api";
 import { SearchableSelect } from "./SearchableSelect";
 import { inferToastKind, showToast } from "./toast";
@@ -14,6 +15,7 @@ export function UsersPanel() {
     role: "operator" as "admin" | "operator" | "viewer",
   });
   const [busy, setBusy] = useState(false);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
 
   const reload = () => {
     api
@@ -136,13 +138,24 @@ export function UsersPanel() {
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
             className="rounded-md border border-ink-700 bg-ink-850 px-3 py-2 text-[13px] text-zinc-200"
           />
-          <input
-            type="password"
-            placeholder="初始密码（≥8）"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            className="rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[13px] text-zinc-200"
-          />
+          <div className="relative">
+            <input
+              type={showCreatePassword ? "text" : "password"}
+              placeholder="初始密码（≥8）"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className="w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 pr-10 font-mono text-[13px] text-zinc-200"
+            />
+            <button
+              type="button"
+              onClick={() => setShowCreatePassword((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-500 hover:text-zinc-300"
+              aria-label={showCreatePassword ? "隐藏密码" : "显示密码"}
+              title={showCreatePassword ? "隐藏密码" : "显示密码"}
+            >
+              {showCreatePassword ? <EyeSlash size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
           <SearchableSelect
             value={form.role}
             onChange={(role) => setForm({ ...form, role: role as typeof form.role })}
