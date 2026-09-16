@@ -558,7 +558,7 @@ export function createEventIngestionSideEffectApplication(
     const catalogByKey = new Map(catalog.map((entry) => [entry.image_key, entry]));
     const agentCliCatalog = await listHubAgentCliCatalog(tx as never, job.project_id as string);
     const allowedAgentClis = agentCliCatalog.map((entry) => entry.agent_cli);
-    const allowedAgentCliSet = new Set(allowedAgentClis);
+    const allowedAgentCliSet = new Set<string>(allowedAgentClis);
     const providerCatalog = await listHubProviderCatalog(tx as never, job.project_id as string);
     const allowedCredentialIds = providerCatalog.map((entry) => entry.credential_id);
     const allowedCredentialIdSet = new Set(allowedCredentialIds);
