@@ -35,6 +35,7 @@
 | [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期设计提案**（#446；Phase 1 脚手架已落地） | 最小可信执行内核、可组合插件、统一修复反馈、durable receipt、插件准入与分阶段迁移。`RepairFeedback` 契约与 Control API 截断/校验路径已接线 |
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70 / #417） | 官方镜像 catalog v2、通道、平台/运行时版本轴、`min_runtime_image` fail-closed |
 | [RUNTIME_TEST_TOOLCHAINS.md](RUNTIME_TEST_TOOLCHAINS.md) | **as-built** | Kali Test / Verify Base 工具链边界 |
+| [RUNTIME_ROLE_IMAGE_MATRIX.md](RUNTIME_ROLE_IMAGE_MATRIX.md) | **as-built**（#565） | 角色×官方镜像默认、工具范围、不包含、Scheduler 边界注入 |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；改 CLI 钉死后需发版才出新镜像 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署与生产拓扑 |

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isRuntimeImageBelowPlatformMin, isRuntimeImagePinStale, runtimeImageKindHint, runtimeImageOptionLabel, runtimeImagePinLabel, runtimeImageSelectOption } from "./runtime-image-option";
+import { officialRuntimeImageBoundary, WEB_SPECIALTY_IMAGE_KEYS } from "./runtime-image-boundary";
 import { optionTitle } from "./searchable-select-model";
 
 const openharmony = {
@@ -14,8 +15,8 @@ const openharmony = {
 test("runtime image options keep the product name intact and put kind in the hint", () => {
   const option = runtimeImageSelectOption(openharmony, "project-1");
   assert.equal(option.label, "DeepSonar OpenHarmony Audit");
-  assert.equal(option.hint, "专项·项目启用");
-  assert.equal(optionTitle(option), "DeepSonar OpenHarmony Audit · 专项·项目启用");
+  assert.match(option.hint, /^专项·项目启用 · 不包含：/);
+  assert.match(optionTitle(option), /^DeepSonar OpenHarmony Audit · 专项·项目启用 · 不包含：/);
   assert.equal(runtimeImageOptionLabel(openharmony, "project-1"), "DeepSonar OpenHarmony Audit · 专项·项目启用");
   assert.doesNotMatch(option.label, /OpenHarm\.\.\./);
 });
@@ -82,3 +83,13 @@ test("runtime image kind hint distinguishes specialty opt-in from base", () => {
     project_enabled: false,
   }, "project-1"), "专项·项目启用 · 未在项目启用");
 });
+
+test("official image boundary one-liners cover specialty keys used by scheduler injection", () => {
+  for (const key of WEB_SPECIALTY_IMAGE_KEYS) {
+    const boundary = officialRuntimeImageBoundary(key);
+    assert.ok(boundary?.toolset, key);
+    assert.ok(boundary?.not_included, key);
+  }
+  assert.equal(officialRuntimeImageBoundary("deepsonar-chrome-test")?.not_included.includes("Selenium"), true);
+});
+

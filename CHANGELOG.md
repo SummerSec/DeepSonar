@@ -7,6 +7,7 @@
 ### 新增
 
 - 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。
+- 角色×官方镜像能力矩阵与专项边界注入（#565）：权威文档 `docs/RUNTIME_ROLE_IMAGE_MATRIX.md`；Scheduler 对 chrome/clickhouse/openharmony/mobile 等专项镜像在**任意角色**注入与 mobile/OH 同级的 AGENTS.md 能力边界；RoleConfig 镜像选择 hint 附带「不包含」一句话。镜像详情页结构化「工具范围/不包含」字段留作 follow-up（API 尚无独立字段）。
 
 ### 修复
 

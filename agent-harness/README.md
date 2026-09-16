@@ -20,7 +20,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控
 
 构建 base/audit：`DEEPSONAR_IMAGE_TOOLSET=base|audit npx agentbox image build --provider local-docker --file agent-harness/image.mjs`。Kali Test 使用 `deploy/Dockerfile.agent-kali-minimal`；Python 版本化命令为 `python3.10`…`python3.14`，Java 可用 `java8`/`javac8`、`java11`/`javac11` 与默认的 `java17`/`javac17`，Maven 可用 `mvn`（3.9.16）。断网硬化冒烟执行 `mvn -v`；联网最小 POM 构建可运行 `node agent-harness/test-maven-package.mjs deepsonar-kali-minimal:local`。
 
-动态测试的 RoleConfig/证据纪律、Java/Python/Go/Rust 静态—动态矩阵见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](../docs/RUNTIME_TEST_TOOLCHAINS.md)。系统 Verify 仍默认使用 Base；只在项目级 RoleConfig 中显式选择已准入的动态镜像，不把 Kali 全局化。
+动态测试的 RoleConfig/证据纪律、Java/Python/Go/Rust 静态—动态矩阵见 [`docs/RUNTIME_TEST_TOOLCHAINS.md`](../docs/RUNTIME_TEST_TOOLCHAINS.md)；角色×官方镜像默认与能力边界见 [`docs/RUNTIME_ROLE_IMAGE_MATRIX.md`](../docs/RUNTIME_ROLE_IMAGE_MATRIX.md)。系统 Verify 仍默认使用 Base；只在项目级 RoleConfig 中显式选择已准入的动态镜像，不把 Kali 全局化。
 
 ### 静态审计 vs 动态验证（多语言）
 

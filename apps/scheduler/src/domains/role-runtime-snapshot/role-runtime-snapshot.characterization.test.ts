@@ -9,6 +9,8 @@ import {
   roleNameForJobType,
   runtimeImageKeyForProjectPolicy,
   withRuntimeTestToolchainPolicy,
+  SPECIALTY_RUNTIME_IMAGE_POLICIES,
+  specialtyPolicyForImageKey,
 } from "./application.js";
 
 test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain policy", () => {
@@ -39,6 +41,69 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
   const source = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /warnIgnoredLegacyAgentDefaults|legacy AGENT_PROVIDER/);
   assert.doesNotMatch(source, /jobType === "audit_module"\) return "audit"/);
+});
+
+test("specialty image boundary injects for any role; chrome/clickhouse peer mobile/OH", () => {
+  assert.match(
+    withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-chrome-test") ?? "",
+    /Chrome CDP runtime/,
+  );
+  assert.match(
+    withRuntimeTestToolchainPolicy("explore", null, "deepsonar-clickhouse-test") ?? "",
+    /ClickHouse official runtime/,
+  );
+  assert.match(
+    withRuntimeTestToolchainPolicy("hub_reason", "hub", "deepsonar-chrome-audit") ?? "",
+    /Chrome\/C\+\+ audit toolchain/,
+  );
+  assert.match(
+    withRuntimeTestToolchainPolicy("verify", null, "deepsonar-clickhouse-fuzz") ?? "",
+    /ClickHouse fuzz runtime/,
+  );
+  assert.match(
+    withRuntimeTestToolchainPolicy("verify", null, "deepsonar-clickhouse-fuzz") ?? "",
+    /Runtime test toolchain/,
+  );
+  assert.doesNotMatch(
+    withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-chrome-test") ?? "",
+    /Runtime test toolchain/,
+  );
+  assert.equal(withRuntimeTestToolchainPolicy("code", null, "deepsonar-base"), null);
+  assert.equal(withRuntimeTestToolchainPolicy("review", "keep", "deepsonar-kali-minimal"), "keep");
+
+  const keys = SPECIALTY_RUNTIME_IMAGE_POLICIES.map((item) => item.image_key);
+  for (const key of [
+    "deepsonar-chrome-test",
+    "deepsonar-chrome-audit",
+    "deepsonar-chrome-fuzz",
+    "deepsonar-clickhouse-test",
+    "deepsonar-clickhouse-audit",
+    "deepsonar-clickhouse-fuzz",
+    "deepsonar-openharmony-test",
+    "deepsonar-mobile",
+  ]) {
+    assert.ok(keys.includes(key), `missing specialty policy for ${key}`);
+    assert.ok(specialtyPolicyForImageKey(key)?.body.includes("needs_human") || specialtyPolicyForImageKey(key)?.body.includes("inconclusive"));
+  }
+});
+
+test("角色×镜像矩阵文档与默认 Role 镜像、专项 policy 对齐", () => {
+  const matrix = readFileSync(new URL("../../../../../docs/RUNTIME_ROLE_IMAGE_MATRIX.md", import.meta.url), "utf8");
+  assert.match(matrix, /角色 × 官方镜像能力矩阵/);
+  assert.match(matrix, /deepsonar-kali-minimal/);
+  assert.match(matrix, /deepsonar-audit/);
+  assert.match(matrix, /deepsonar-base/);
+  assert.match(matrix, /deepsonar-chrome-test/);
+  assert.match(matrix, /deepsonar-clickhouse-test/);
+  assert.match(matrix, /deepsonar-mobile/);
+  assert.match(matrix, /needs_human/);
+  assert.match(matrix, /withRuntimeTestToolchainPolicy/);
+  assert.match(matrix, /DEFAULT_RUNTIME_IMAGE_BY_ROLE/);
+  for (const item of SPECIALTY_RUNTIME_IMAGE_POLICIES) {
+    assert.match(matrix, new RegExp(item.image_key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  const toolchains = readFileSync(new URL("../../../../../docs/RUNTIME_TEST_TOOLCHAINS.md", import.meta.url), "utf8");
+  assert.match(toolchains, /RUNTIME_ROLE_IMAGE_MATRIX/);
 });
 
 test("项目镜像策略按全局继承与项目托管分别选择镜像", () => {

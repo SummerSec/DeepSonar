@@ -1,0 +1,63 @@
+# 角色 × 官方镜像能力矩阵
+
+> **状态：as-built**（#565）。索引：[`README.md`](README.md)。语言工具链细节见 [`RUNTIME_TEST_TOOLCHAINS.md`](RUNTIME_TEST_TOOLCHAINS.md)；镜像 OCI/catalog 契约见 [`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
+
+本文件是操作者与 Agent 的**权威摘要**：内置角色默认绑什么镜像、各官方镜像适合什么证据、预装什么、明确不预装什么、缺工具时如何收口。机器可读契约以 `agent-harness/*-runtime.json`、`/opt/deepsonar/tool-manifest.json` 与 RoleConfig / `DEFAULT_RUNTIME_IMAGE_BY_ROLE` 为准；本文与 Scheduler 注入的 AGENTS.md 边界应对齐，发现漂移时以代码与 harness 为准并回写本文。
+
+## 注入规则（Scheduler）
+
+`withRuntimeTestToolchainPolicy(role, instructions, resolved_image_key)`：
+
+| 条件 | 注入内容 |
+| --- | --- |
+| 角色 `test`，或 `verify` 且镜像 ≠ `deepsonar-base` | `### Runtime test toolchain (Scheduler policy)`（禁止 Job 内 bootstrap JDK/Maven/…；缺工具 → `inconclusive`/`needs_human`） |
+| **任意角色**，且冻结镜像属于官方专项 key（见下表「Scheduler 边界」列） | 对应 chrome / clickhouse / openharmony / mobile 专项能力边界（与 mobile/OH 同级） |
+| 角色走 `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` 且非上表 test/verify 动态路径 | **不**自动注入镜像百科；依赖 RoleConfig `instructions_markdown` + 通用 AGENTS 规则 + 本矩阵文档 / UI 摘要 |
+
+专项 key 列表锁定在 `SPECIALTY_RUNTIME_IMAGE_POLICIES`（`apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts`）。
+
+## 内置角色 → 默认镜像
+
+来源：`DEFAULT_RUNTIME_IMAGE_BY_ROLE` + `database/schema.sql` 全局 RoleConfig 种子（`runtime_image_key` 为 `NULL` 时解析为 Base）。
+
+| 角色 | kind | 默认 `image_key` | 适用证据（意图） | 备注 |
+| --- | --- | --- | --- | --- |
+| `test` | role | `deepsonar-kali-minimal` | 动态 PoC / 小服务 runtime_test | 全局 RoleConfig 显式绑 Kali |
+| `audit` | role | `deepsonar-audit` | 读仓 + Agent 自选启发式；产出 Finding | 全局 RoleConfig 显式绑 Audit |
+| `verify` | system | `deepsonar-base` | Finding 验证终态提案 | 需动态复现时由项目 RoleConfig 覆盖为 Kali/专项 |
+| `explore` / `analyze` / `review` / `code` | role | `deepsonar-base` | 事实收集 / 分析 / 复核 / 改代码 | RoleConfig `NULL` → Base |
+| `hub_reason` | hub | `deepsonar-base` | 画布决策与派发 | 通常不需要专项工具链 |
+| `report` | system | `deepsonar-base` | 任务总报告 | 通常不需要专项工具链 |
+
+项目策略 `inherit_global` / `project_managed` 可覆盖角色镜像；专项镜像均为 `project_opt_in`，须在项目启用后才能冻结进 Job。
+
+## 官方镜像能力表
+
+| `image_key` | 默认适用角色 | 工具摘要（预装） | 明确不包含 | 缺能力纪律 | Scheduler 边界 |
+| --- | --- | --- | --- | --- | --- |
+| `deepsonar-base` | explore / analyze / review / code / hub / verify / report | Node 22 + 最小通用 CLI（git/rg/jq/…） | JDK/Maven/Go/Rust 完整矩阵、Kali metapackage、专项浏览器/DB/设备协议 | 缺命令 → 说明限制；动态 verify 不得用静态叙述冒充 runtime | 无专项块（verify+非 base 才有 Runtime test 块） |
+| `deepsonar-audit` | audit | Base + binutils 等审计辅助；**不**预装 Semgrep/gitleaks/shellcheck 决策扫描器 | SAST/密钥扫描器、Chrome/ClickHouse/设备协议全家桶 | 同左；Finding 仍须可复查证据 | 无专项块 |
+| `deepsonar-kali-minimal` | test（默认） | Temurin 8/11/17 + Maven 3.9.16、Python 3.10–3.14+uv、Go、Rust；无预置 `.m2` | Kali metapackage/GUI、DinD、完整 DB/Compose | Runtime test 纪律；缺工具 → `inconclusive`/`needs_human` | Runtime test（test / 动态 verify） |
+| `deepsonar-chrome-test` | 项目覆盖 test/verify/… | 钉死 Chromium + CDP（playwright-core connectOverCDP） | 第二套 Chromium、完整 Playwright browsers、Selenium Grid、桌面 GUI | CDP/浏览器不可用 → `needs_human`/`inconclusive`；禁止源码叙述冒充 DOM | **任意角色**注入 Chrome CDP |
+| `deepsonar-chrome-audit` | 项目覆盖 audit/… | git + Clang/LLVM + binutils；Agent 自选检查 | 固定扫描脚本/规则包、Chromium 浏览器本体、决策扫描器 | 缺工具 → `needs_human`/`inconclusive`；禁止把静态 C++ 当浏览器结果 | **任意角色**注入 Chrome/C++ audit |
+| `deepsonar-chrome-fuzz` | 项目覆盖 test/… | 钉死 V8 `d8` + libFuzzer/AFL++/sanitizer | toy d8、第二套 V8、完整 Chrome 浏览器 | 缺 d8/构建失败 → `needs_human`/`inconclusive` | **任意角色**注入 Chrome/V8 fuzz |
+| `deepsonar-clickhouse-test` | 项目覆盖 test/verify/… | 钉死官方 ClickHouse LTS（server/client/local） | apt/非官方包、DinD、toy SQL harness | 官方二进制不可用 → `needs_human`/`inconclusive` | **任意角色**注入 ClickHouse official |
+| `deepsonar-clickhouse-audit` | 项目覆盖 audit/… | git + CMake/Ninja + Clang/LLVM + binutils | 固定扫描脚本、本镜像内 CH server、决策扫描器 | 缺工具 → `needs_human`/`inconclusive` | **任意角色**注入 ClickHouse/C++ audit |
+| `deepsonar-clickhouse-fuzz` | 项目覆盖 test/… | 官方 clickhouse-local + Clang sanitizer + AFL++/libFuzzer | toy harness 冒充官方 binary | 缺官方 binary → `needs_human`/`inconclusive` | **任意角色**注入 ClickHouse fuzz |
+| `deepsonar-openharmony-test` | 项目覆盖 test/… | 源码同步/构建 + 官方 `hdc` 设备协议 | DevEco/完整 SDK、把 gdb/strace 当设备协议 | `hdc list targets` 空 → `needs_human`/`inconclusive` | **任意角色**注入 OH hdc |
+| `deepsonar-openharmony-audit` | 项目覆盖 audit/… | 主机 Clang/tidy/cppcheck/sparse + ASan/UBSan | 设备协议 hdc、密钥扫描器、DevEco | 缺主机工具 → `needs_human`/`inconclusive`；禁止把构建日志写成设备结果 | **任意角色**注入 OH host audit |
+| `deepsonar-openharmony-fuzz` | 项目覆盖 test/… | 主机 libFuzzer/AFL++ + sanitizer | DevEco、toy harness | 缺工具链 → `needs_human`/`inconclusive` | **任意角色**注入 OH host fuzz |
+| `deepsonar-mobile` | 项目覆盖 audit/test/… | Android JADX/apktool/…/droidasc/apkcheckpack/adb/Frida；iOS libimobiledevice；OH HAP/hdc；`.so` radare2/LIEF | MobSF/jadx-gui/Burp/IDA/Ghidra/DevEco/第三方 MCP/mitmproxy；禁止 droidasc `--gui` | 空 adb/hdc/idevice → `needs_human`/`inconclusive`；勿用 JADX/droidasc 叙述冒充设备/流量 | **任意角色**注入 Mobile protocols |
+
+Harness 出处：`agent-harness/chrome-*-runtime.json`、`clickhouse-*-runtime.json`、`mobile-runtime.json`、`openharmony-test-runtime.json`、`kali-minimal-runtime.json`、`runtime-images.json`；Dockerfile 头注释与 `tool-manifest.json` 为构建期契约。
+
+## 操作者 UI
+
+- 运行时镜像 API 已暴露 `description` 与版本 `tools_json`（含 capabilities），市场页可展示描述与工具计数。
+- RoleConfig / Provider 镜像选择器 hint 对已知专项 key 附加「不包含」一句话（客户端与 Scheduler 专项表同 key，见 `apps/web/src/runtime-image-boundary.ts`）。
+- **Follow-up**：若要把「工具范围 / 不包含」做成镜像详情一等字段，应在 registry/API 增加结构化字段，避免 Web 与 Scheduler 双份手抄；本 PR 不扩 API schema。
+
+## 校验
+
+- `apps/scheduler/src/domains/role-runtime-snapshot/role-runtime-snapshot.characterization.test.ts` 锁定 policy 字符串、专项 key 集合与本文档关键锚点。
+- 改默认角色镜像或专项边界时：同步改 `DEFAULT_RUNTIME_IMAGE_BY_ROLE` / schema 种子 / `SPECIALTY_RUNTIME_IMAGE_POLICIES` / 本文 / Web one-liner。
