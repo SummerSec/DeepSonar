@@ -52,6 +52,14 @@ assert.match(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
   /apkcheckpack/,
 );
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /droidasc/,
+);
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /Never invent device, traffic, or native\/OLLVM results from JADX, droidasc, or apkcheckpack/,
+);
 assert.doesNotMatch(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
   /Mobile device protocols/,

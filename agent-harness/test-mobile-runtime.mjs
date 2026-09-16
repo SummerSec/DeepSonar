@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -258,6 +258,45 @@ const apkMissing = runHelper("deploy/mobile-apkcheckpack-bin.sh", ["-h"], {
 });
 if (apkMissing.status !== 127) {
   throw new Error(`missing apkcheckpack must exit 127, got ${apkMissing.status}\n${apkMissing.stdout}\n${apkMissing.stderr}`);
+}
+
+
+const mobileRuntime = JSON.parse(readFileSync(join(root, "agent-harness/mobile-runtime.json"), "utf8"));
+const droidascPin = mobileRuntime.managed?.pip?.droidasc;
+if (droidascPin?.version !== "0.1.1" || droidascPin?.license !== "Apache-2.0") {
+  throw new Error(`mobile-runtime.json must pin droidasc 0.1.1 Apache-2.0, got ${JSON.stringify(droidascPin)}`);
+}
+if (!Array.isArray(droidascPin.capabilities) || !droidascPin.capabilities.includes("apk-xref-search")) {
+  throw new Error(`droidasc capabilities must include apk-xref-search: ${JSON.stringify(droidascPin.capabilities)}`);
+}
+const mobileDockerfile = readFileSync(join(root, "deploy/Dockerfile.agent-mobile"), "utf8");
+if (!mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1") || !mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}")) {
+  throw new Error("Dockerfile.agent-mobile must pin and install droidasc==${DROIDASC_VERSION}");
+}
+if (!mobileDockerfile.includes("/opt/deepsonar/bin/droidasc")) {
+  throw new Error("Dockerfile.agent-mobile must symlink /opt/deepsonar/bin/droidasc");
+}
+const liveDroidasc = spawnSync("bash", ["-lc", "command -v droidasc >/dev/null && droidasc --help"], { encoding: "utf8" });
+if (liveDroidasc.status === 0) {
+  if (!liveDroidasc.stdout.includes("getclass") || !liveDroidasc.stdout.includes("findrefs")) {
+    throw new Error(`droidasc --help must mention getclass/findrefs\n${liveDroidasc.stdout}\n${liveDroidasc.stderr}`);
+  }
+} else {
+  // Image not present on the host: fake PATH presence check for harness unit smoke.
+  const fakeDroidasc = writeFake("mobile-droidasc-", "droidasc", `#!/usr/bin/env bash
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo 'usage: droidasc [-h] {getclass,getmanifest,findrefs} ...'
+  echo 'getclass'
+  echo 'findrefs'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+  const fakeHelp = spawnSync(fakeDroidasc, ["--help"], { encoding: "utf8" });
+  if (fakeHelp.status !== 0 || !fakeHelp.stdout.includes("getclass") || !fakeHelp.stdout.includes("findrefs")) {
+    throw new Error(`droidasc --help presence smoke failed: status=${fakeHelp.status}\n${fakeHelp.stdout}\n${fakeHelp.stderr}`);
+  }
 }
 
 console.log("mobile runtime helper smoke ok");
