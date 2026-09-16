@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 项目配置：CLI / Provider 白名单选型与 Hub 运行时组合（#568）。项目设置新增「CLI / Provider 启用与缺省」面板（对标镜像启用）；`config_json` 持久化 `enabled_agent_clis` / `enabled_credential_ids` 与可选软缺省。Hub 新增 `list_available_agent_clis` / `list_available_providers`，intent 可提案 `agent_cli` / `credential_id`（目录外 fail-closed）；省略时走项目软缺省或 RoleConfig 回退。并发仍归 Provider（`max_concurrent` / `model_concurrency`）。迁移：首次读设置时把现有 RoleConfig 绑定种子进白名单，避免静默丢配置。平台只做启用/配额/审计控制面，不在角色上锁死完整身份。
 - 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。
 
 ### 修复

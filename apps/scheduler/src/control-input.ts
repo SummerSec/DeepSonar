@@ -11,6 +11,8 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidFindingRef: "invalid_finding_ref",
   invalidRole: "invalid_role",
   invalidRuntimeImage: "invalid_runtime_image",
+  invalidAgentCli: "invalid_agent_cli",
+  invalidCredential: "invalid_credential",
   runtimeImageNotReady: "runtime_image_not_ready",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
@@ -68,6 +70,8 @@ const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new 
   CONTROL_INPUT_ERROR_CODES.invalidFindingRef,
   CONTROL_INPUT_ERROR_CODES.invalidRole,
   CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
+  CONTROL_INPUT_ERROR_CODES.invalidAgentCli,
+  CONTROL_INPUT_ERROR_CODES.invalidCredential,
   CONTROL_INPUT_ERROR_CODES.runtimeImageNotReady,
   CONTROL_INPUT_ERROR_CODES.invalidVerification,
   CONTROL_INPUT_ERROR_CODES.invalidProgress,
@@ -177,6 +181,30 @@ export function invalidRuntimeImage(path = "runtime_image_key", allowed?: readon
     CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
     `Hub 运行镜像必须来自本轮 list_available_runtime_images 的市场 image_key（项目已启用、存在可信版本、且与该角色 CLI 兼容），字段 ${path} 不合法、不在可选集合或与角色 CLI 不兼容。${allowHint}`,
     path,
+  );
+}
+
+export function invalidAgentCli(path = "agent_cli", allowed?: readonly string[]): ControlInputError {
+  const allowHint = allowed && allowed.length > 0
+    ? ` 允许值：${allowed.slice(0, 20).join(", ")}${allowed.length > 20 ? "…" : ""}。`
+    : " 请使用 list_available_agent_clis 返回的 agent_cli。";
+  return new ControlInputError(
+    CONTROL_INPUT_ERROR_CODES.invalidAgentCli,
+    `Hub Agent CLI 必须来自本轮 list_available_agent_clis（项目已启用白名单），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    path,
+    allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
+  );
+}
+
+export function invalidCredential(path = "credential_id", allowed?: readonly string[]): ControlInputError {
+  const allowHint = allowed && allowed.length > 0
+    ? ` 允许 credential_id 共 ${allowed.length} 个。`
+    : " 请使用 list_available_providers 返回的 credential_id。";
+  return new ControlInputError(
+    CONTROL_INPUT_ERROR_CODES.invalidCredential,
+    `Hub Provider 必须来自本轮 list_available_providers（项目已启用且 active），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    path,
+    allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
   );
 }
 

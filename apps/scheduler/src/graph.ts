@@ -698,6 +698,10 @@ export interface HubIntent {
   prompt: string;
   /** Hub 提案的市场 image_key；省略时按项目镜像策略与 RoleConfig 缺省解析。 */
   runtime_image_key?: string;
+  /** Hub 提案的 agent_cli；省略时用项目软缺省 / RoleConfig。 */
+  agent_cli?: string;
+  /** Hub 提案的 credential_id；省略时用项目软缺省 / RoleConfig 绑定。 */
+  credential_id?: string;
 }
 
 export interface HubDecision {

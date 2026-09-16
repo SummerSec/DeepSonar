@@ -42,6 +42,7 @@ import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubD
 import { executeGraphQuery, seedGraphQueryProjectedIds } from "./graph-query.js";
 import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
+import { listHubAgentCliCatalog, listHubProviderCatalog } from "./domains/project-agent-allowlist/index.js";
 import {
   PROVIDER_ENV_MAP,
   UNKNOWN_PROVIDER_ERROR,
@@ -864,6 +865,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
 ${taskGoal}
 
 读取下面的任务画布，判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。
+每个 intent 可按本轮目标需要附加可选字段 agent_cli / credential_id 选择 Agent CLI 与 Provider：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / credential_id；二者与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省或 RoleConfig 回退。并发以 Provider 配额为准。不得提案未启用目录外的值。
 每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：先调用 list_available_runtime_images 查询本项目已启用且可信的镜像目录，原样使用返回的 image_key，并核对该条目的 compatible_agent_clis 覆盖本轮角色 CLI、readiness=ready（例如需要动态复现选 Kali 类、移动端目标选 mobile 类）；省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
 
 画布（YAML）：
@@ -1464,6 +1466,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (operation === "list_available_runtime_images") {
       const images = await listHubRuntimeImageCatalog(sql, job.project_id as string);
       return { accepted: true, operation, images };
+    }
+    if (operation === "list_available_agent_clis") {
+      const agent_clis = await listHubAgentCliCatalog(sql as never, job.project_id as string);
+      return { accepted: true, operation, agent_clis };
+    }
+    if (operation === "list_available_providers") {
+      const providers = await listHubProviderCatalog(sql as never, job.project_id as string);
+      return { accepted: true, operation, providers };
     }
     if (operation === "list_shared_assets") {
       const input = context.input && typeof context.input === "object" && !Array.isArray(context.input)

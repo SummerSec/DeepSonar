@@ -8,6 +8,20 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 边界：结果只含 `kind=role` 且当前项目启用的角色，不含 verify、report、hub_reason 或其他 system/hub 角色。不得用记忆补充角色名。",
     "- 示例：`{}`",
   ].join("\n"),
+  list_available_agent_clis: [
+    "### `list_available_agent_clis` — 查询 Hub 当前可提案的 Agent CLI",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用的 Agent CLI（claude-code / pi / dsh）及软缺省标记。",
+    "- 边界：intent 可选字段 `agent_cli` 只能原样使用返回值；省略时平台用项目软缺省或 RoleConfig 回退。不得猜测或使用未启用 CLI（`invalid_agent_cli`）。CLI×Provider×镜像在已启用集合内可自由组合。",
+    "- 示例：`{}`",
+  ].join("\n"),
+  list_available_providers: [
+    "### `list_available_providers` — 查询 Hub 当前可提案的 Provider 账号",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且 active 的 LLM Provider（credential_id、provider、compatible_agent_clis、max_concurrent / model_concurrency 摘要）。",
+    "- 边界：intent 可选字段 `credential_id` 只能原样使用返回的 credential_id；省略时平台用项目软缺省或 RoleConfig 绑定回退。并发门禁读 Provider 配额，不在角色上配并发。目录外或未启用账号拒绝（`invalid_credential`）。",
+    "- 示例：`{}`",
+  ].join("\n"),
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
@@ -71,7 +85,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   submit_hub_decision: [
     "### `submit_hub_decision` — 提交 Hub 决策",
     "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
-    "- `from` 只能填写本 Job 已投影的 root/fact/finding id（YAML 注入或 `graph_query` 返回的 `referable_ids`）；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` 只能原样选择本轮 `list_available_runtime_images` 的 image_key，且须与该角色 CLI 兼容；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
+    "- `from` 只能填写本 Job 已投影的 root/fact/finding id（YAML 注入或 `graph_query` 返回的 `referable_ids`）；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` / `agent_cli` / `credential_id` 只能原样来自本轮对应 list_available_* 目录；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
     '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
     "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
@@ -150,6 +164,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
   list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；只提案 readiness=ready 的条目；不得猜测或使用未启用、未准入、正在准备或不可用的镜像，不得填写 OCI 引用。",
+  list_available_agent_clis: "注意：Hub 派发前调用，并原样复制返回的 agent_cli；只能提案项目已启用的 CLI。",
+  list_available_providers: "注意：Hub 派发前调用，并原样复制返回的 credential_id；只能提案项目已启用且 active 的 Provider；并发以 Provider 为准。",
   list_capabilities: "注意：只使用返回的 id/digest；需要完整契约时再 describe_capability，不要注入或猜测 SKILL.md 全文。",
   search_capabilities: "注意：query 必须非空；只从本轮结果选择 Pack，不得使用记忆中的 RoleConfig selector。",
   describe_capability: "注意：id 必须来自本轮 list/search；version/digest 不匹配会返回 RepairFeedback。",

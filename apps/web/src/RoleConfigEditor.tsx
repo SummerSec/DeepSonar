@@ -36,7 +36,7 @@ import {
 
 /**
  * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
- * Agent CLI、模型、LLM 凭据、settings/env 由 Provider 账号页承接；运行镜像由镜像页承接。
+ * Agent CLI / Provider 主边界在项目设置「CLI / Provider 启用与缺省」；此处绑定须 ∈ 白名单，并发在凭据页；运行镜像由镜像页承接。
  * 保存时保留已有 agent_cli / credential / model / env / runtime_image 绑定。
  */
 
@@ -364,6 +364,7 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
   </div>;
 }
 
+/** 项目侧 CLI/Provider 主边界在设置「CLI / Provider 启用与缺省」；此处绑定须 ∈ 项目白名单，并发不在角色上配置。 */
 export function RoleConfigEditor({
   title,
   roleName,

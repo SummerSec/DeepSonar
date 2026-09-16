@@ -29,6 +29,12 @@ import {
   scrubIgnoredProjectRoleConfigIdentity,
   scrubStoredProjectImagePolicy,
 } from "../role-runtime-snapshot/application.js";
+import {
+  applyProjectAgentAllowlistPatch,
+  collectProjectIdentityBindings,
+  parseProjectAgentAllowlist,
+  seedProjectAgentAllowlist,
+} from "../project-agent-allowlist/index.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
@@ -169,6 +175,18 @@ const ProjectRulesPatch = RulesPatch.superRefine((rules, ctx) => {
   }
 });
 
+
+function projectAllowlistResponse(cfg: Record<string, unknown>) {
+  const allowlist = parseProjectAgentAllowlist(cfg);
+  return {
+    enabled_agent_clis: allowlist.enabled_agent_clis,
+    enabled_credential_ids: allowlist.enabled_credential_ids,
+    default_agent_cli: allowlist.default_agent_cli,
+    default_credential_id: allowlist.default_credential_id,
+    agent_allowlist_configured: allowlist.configured,
+  };
+}
+
 const SettingsPatchBody = z.object({
   rules: ProjectRulesPatch.optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
@@ -176,6 +194,14 @@ const SettingsPatchBody = z.object({
   image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).optional(),
   /** 真实设备接入（#495）项目级 opt-in；null = 清除（默认关）。 */
   device_access_enabled: z.boolean().nullable().optional(),
+  /** 项目启用的 Agent CLI 白名单（组合积木）；Hub 只能从中提案。 */
+  enabled_agent_clis: z.array(z.enum(["claude-code", "pi", "dsh"])).min(1).optional(),
+  /** 项目启用的 Provider Credential 白名单。 */
+  enabled_credential_ids: z.array(z.string().uuid()).optional(),
+  /** Hub 省略时的软缺省 CLI（必须 ∈ 白名单）。 */
+  default_agent_cli: z.enum(["claude-code", "pi", "dsh"]).nullable().optional(),
+  /** Hub 省略时的软缺省 Provider（必须 ∈ 白名单）。 */
+  default_credential_id: z.string().uuid().nullable().optional(),
   role_runtime_images: z.record(
     z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
     z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
@@ -397,6 +423,14 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [activeRow] = await sql`
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
+    // 迁移：首次读取时把当前 RoleConfig 绑定种子进白名单，避免旧项目静默不可派发。
+    {
+      const seed = await collectProjectIdentityBindings(sql as never, id);
+      const seeded = seedProjectAgentAllowlist(cfg, seed);
+      if (seeded.changed) {
+        await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+      }
+    }
     return {
       rules: stripFindingProtocolFromRules(scrubLeftoverRulesJson(cfg.rules ?? {}).rules),
       roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
@@ -406,6 +440,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
       device_access_enabled: cfg.device_access_enabled === true,
+      ...projectAllowlistResponse(cfg),
       active_jobs: Number(activeRow?.count ?? 0),
     };
   });
@@ -475,6 +510,27 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       else cfg.device_access_enabled = body.device_access_enabled;
     }
     if (body.role_runtime_images !== undefined) cfg.role_runtime_images = body.role_runtime_images;
+    if (
+      body.enabled_agent_clis !== undefined
+      || body.enabled_credential_ids !== undefined
+      || body.default_agent_cli !== undefined
+      || body.default_credential_id !== undefined
+    ) {
+      try {
+        if (!parseProjectAgentAllowlist(cfg).configured) {
+          const seed = await collectProjectIdentityBindings(sql as never, id);
+          seedProjectAgentAllowlist(cfg, seed);
+        }
+        applyProjectAgentAllowlistPatch(cfg, {
+          enabled_agent_clis: body.enabled_agent_clis,
+          enabled_credential_ids: body.enabled_credential_ids,
+          default_agent_cli: body.default_agent_cli,
+          default_credential_id: body.default_credential_id,
+        });
+      } catch (error) {
+        return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid agent allowlist" });
+      }
+    }
     scrubStoredProjectImagePolicy(cfg);
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const globalProtocol = parseStoredFindingProtocolConfig(
@@ -538,6 +594,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       image_strategy: imagePolicy.image_strategy,
       role_runtime_images: imagePolicy.role_runtime_images,
       device_access_enabled: cfg.device_access_enabled === true,
+      ...projectAllowlistResponse(cfg),
       active_jobs: Number(activeRow?.count ?? 0),
     };
   });
