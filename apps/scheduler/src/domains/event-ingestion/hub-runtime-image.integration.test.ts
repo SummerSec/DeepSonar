@@ -75,12 +75,13 @@ if (!testDatabaseUrl) {
           VALUES (${id}, ${projectId}, ${canvasId}, 'hub_reason', 'running', ${sql.json(hubSnapshot)}, ${sql.json({})})`;
         return id;
       };
-      const intent = (description: string, runtimeImageKey?: string) => ({
+      const intent = (description: string, runtimeImageKey?: string, agentCli?: string) => ({
         from: [root.id],
         role: "review",
         description,
         prompt: "Review the referenced root goal and report durable evidence for this fixture.",
         ...(runtimeImageKey ? { runtime_image_key: runtimeImageKey } : {}),
+        ...(agentCli ? { agent_cli: agentCli } : {}),
       });
 
       // 1) A catalog image_key is accepted and frozen into the derived Worker snapshot.
@@ -184,12 +185,19 @@ if (!testDatabaseUrl) {
       await sql`
         UPDATE projects SET config_json = config_json || ${sql.json({ image_strategy: "project_managed" })}
         WHERE id = ${projectId}`;
-      // project_managed 采用项目 RoleConfig 的 CLI。给 model 以免冻快照在
-      // 镜像/CLI 门之前就被「DSH Provider 配置 YAML 必填」拦住。
+      // Composition model: Hub 可显式提案 agent_cli；项目软缺省优先于 RoleConfig。
+      // 本用例直接提案 dsh，并写入白名单，验证 chrome-fuzz×dsh 在冻快照时收成 invalid_runtime_image。
+      // 给 model 以免冻快照在镜像/CLI 门之前就被「DSH Provider 配置 YAML 必填」拦住。
       await sql`
         INSERT INTO role_configs (role_id, project_id, agent_cli, model, instructions_markdown)
         SELECT id, ${projectId}, 'dsh', 'grok-4.6', 'fixture dsh review'
         FROM agent_roles WHERE name = 'review'`;
+      await sql`
+        UPDATE projects SET config_json = config_json || ${sql.json({
+          enabled_agent_clis: ["claude-code", "pi", "dsh"],
+          default_agent_cli: "dsh",
+        })}
+        WHERE id = ${projectId}`;
       const catalogWithChrome = await listHubRuntimeImageCatalog(sql, projectId);
       assert.ok(
         catalogWithChrome.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
@@ -198,7 +206,7 @@ if (!testDatabaseUrl) {
       const hubCli = await makeHubJob();
       await assert.rejects(
         preflightDeferredSemanticEvent(hubCli, "hub_decision", {
-          intents: [intent("dispatch review on chrome fuzz for dsh", "deepsonar-chrome-fuzz")],
+          intents: [intent("dispatch review on chrome fuzz for dsh", "deepsonar-chrome-fuzz", "dsh")],
         }),
         (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image" && error.retryable,
       );
@@ -207,7 +215,7 @@ if (!testDatabaseUrl) {
           v: 1,
           event_id: randomUUID(),
           type: "hub_decision",
-          payload: { intents: [intent("dispatch review on chrome fuzz for dsh apply", "deepsonar-chrome-fuzz")] },
+          payload: { intents: [intent("dispatch review on chrome fuzz for dsh apply", "deepsonar-chrome-fuzz", "dsh")] },
         }),
         (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image",
       );
