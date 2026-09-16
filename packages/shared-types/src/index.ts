@@ -623,6 +623,12 @@ export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload
 export const ListAvailableRuntimeImagesPayload = z.object({}).strict();
 export type ListAvailableRuntimeImagesPayload = z.infer<typeof ListAvailableRuntimeImagesPayload>;
 
+export const ListAvailableAgentClisPayload = z.object({}).strict();
+export type ListAvailableAgentClisPayload = z.infer<typeof ListAvailableAgentClisPayload>;
+
+export const ListAvailableProvidersPayload = z.object({}).strict();
+export type ListAvailableProvidersPayload = z.infer<typeof ListAvailableProvidersPayload>;
+
 export {
   DEVICE_LEASE_ERROR_CODES,
   DEVICE_LEASE_TOKEN_VERSION,
@@ -1158,6 +1164,10 @@ export const HubIntentPayload = z
     // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
     // 省略时 Scheduler 按项目镜像策略与 RoleConfig 缺省解析。
     runtime_image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/).optional(),
+    // Hub 可选提案 Agent CLI / Provider：只能来自本轮 list_available_agent_clis /
+    // list_available_providers；省略时用项目软缺省或 RoleConfig 回退。不强制按角色绑死。
+    agent_cli: CurrentAgentCliSchema.optional(),
+    credential_id: z.string().uuid().optional(),
   })
   .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
@@ -1232,6 +1242,8 @@ export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 export const ControlToolPayloadSchemas = {
   list_available_roles: ListAvailableRolesPayload,
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
+  list_available_agent_clis: ListAvailableAgentClisPayload,
+  list_available_providers: ListAvailableProvidersPayload,
   list_capabilities: ListCapabilitiesPayload,
   search_capabilities: SearchCapabilitiesPayload,
   describe_capability: DescribeCapabilityPayload,
@@ -1339,6 +1351,8 @@ export type EventEnvelopeInput = {
 export const PlatformToolName = z.enum([
   "list_available_roles",
   "list_available_runtime_images",
+  "list_available_agent_clis",
+  "list_available_providers",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",
@@ -1474,6 +1488,8 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
 export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "list_available_roles",
   "list_available_runtime_images",
+  "list_available_agent_clis",
+  "list_available_providers",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",

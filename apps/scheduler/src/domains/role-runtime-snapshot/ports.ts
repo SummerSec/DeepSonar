@@ -93,6 +93,12 @@ export interface RoleRuntimeSnapshotApplication {
     db: RoleRuntimeSnapshotTransaction,
     projectId: string,
     jobType: string,
-    options?: { runtimeImageKey?: string | null },
+    options?: {
+      runtimeImageKey?: string | null;
+      /** Hub 提案的 agent_cli；省略时走项目软缺省 / RoleConfig。 */
+      agentCli?: string | null;
+      /** Hub 提案的 credential_id；省略时走项目软缺省 / RoleConfig 绑定。 */
+      credentialId?: string | null;
+    },
   ): Promise<RoleRuntimeSnapshotResult>;
 }

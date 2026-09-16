@@ -83,3 +83,51 @@ test("HubIntentPayload accepts a marketplace runtime_image_key and rejects OCI r
     assert.equal(parsed.success, false, `must reject ${bad}`);
   }
 });
+
+test("HubIntentPayload accepts optional agent_cli and credential_id from Hub composition", () => {
+  const cred = "11111111-1111-4111-8111-111111111111";
+  const ok = HubDecisionPayload.safeParse({
+    intents: [
+      {
+        from: [rootId],
+        role: "explore",
+        description: "12345678",
+        prompt: "p".repeat(40),
+        agent_cli: "dsh",
+        credential_id: cred,
+        runtime_image_key: "deepsonar-chrome-fuzz",
+      },
+    ],
+  });
+  assert.equal(ok.success, true);
+  assert.equal(ok.success && ok.data.intents?.[0]?.agent_cli, "dsh");
+  assert.equal(ok.success && ok.data.intents?.[0]?.credential_id, cred);
+
+  for (const bad of ["codex", "claude", "", "DSH"]) {
+    const parsed = HubDecisionPayload.safeParse({
+      intents: [
+        {
+          from: [rootId],
+          role: "explore",
+          description: "12345678",
+          prompt: "p".repeat(40),
+          agent_cli: bad,
+        },
+      ],
+    });
+    assert.equal(parsed.success, false, `must reject agent_cli=${bad}`);
+  }
+
+  const badCred = HubDecisionPayload.safeParse({
+    intents: [
+      {
+        from: [rootId],
+        role: "explore",
+        description: "12345678",
+        prompt: "p".repeat(40),
+        credential_id: "not-a-uuid",
+      },
+    ],
+  });
+  assert.equal(badCred.success, false);
+});

@@ -31,6 +31,8 @@ import {
   invalidControlPayload,
   invalidRole,
   invalidRuntimeImage,
+  invalidAgentCli,
+  invalidCredential,
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
@@ -40,6 +42,10 @@ import {
   defaultRuntimeImageKey,
   listHubRuntimeImageCatalog,
 } from "../../runtime-images.js";
+import {
+  listHubAgentCliCatalog,
+  listHubProviderCatalog,
+} from "../project-agent-allowlist/index.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
 import {
   assertComposeFindingInScope,
@@ -184,7 +190,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -550,6 +556,13 @@ export function createEventIngestionSideEffectApplication(
     const allowedImageKeys = catalog.map((entry) => entry.image_key);
     const allowedImageKeySet = new Set(allowedImageKeys);
     const catalogByKey = new Map(catalog.map((entry) => [entry.image_key, entry]));
+    const agentCliCatalog = await listHubAgentCliCatalog(tx as never, job.project_id as string);
+    const allowedAgentClis = agentCliCatalog.map((entry) => entry.agent_cli);
+    const allowedAgentCliSet = new Set<string>(allowedAgentClis);
+    const providerCatalog = await listHubProviderCatalog(tx as never, job.project_id as string);
+    const allowedCredentialIds = providerCatalog.map((entry) => entry.credential_id);
+    const allowedCredentialIdSet = new Set(allowedCredentialIds);
+    const providerById = new Map(providerCatalog.map((entry) => [entry.credential_id, entry]));
     for (const [index, intent] of submittedIntents.entries()) {
       const key = intent.runtime_image_key;
       const path = phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key";
@@ -558,14 +571,34 @@ export function createEventIngestionSideEffectApplication(
       }
       const selected = catalogByKey.get(key ?? defaultRuntimeImageKey(intent.role));
       if (selected) assertHubRuntimeImageReady(selected, path);
-      if (phase === "preflight" && key) {
+      const intentCli = intent.agent_cli;
+      const cliPath = phase === "preflight" ? `intents.${index}.agent_cli` : "intents.agent_cli";
+      if (intentCli && !allowedAgentCliSet.has(intentCli)) {
+        throw invalidAgentCli(cliPath, allowedAgentClis);
+      }
+      const intentCred = intent.credential_id;
+      const credPath = phase === "preflight" ? `intents.${index}.credential_id` : "intents.credential_id";
+      if (intentCred && !allowedCredentialIdSet.has(intentCred)) {
+        throw invalidCredential(credPath, allowedCredentialIds);
+      }
+      if (intentCli && intentCred) {
+        const provider = providerById.get(intentCred);
+        if (provider && !provider.compatible_agent_clis.includes(intentCli as typeof provider.compatible_agent_clis[number])) {
+          throw invalidCredential(credPath, allowedCredentialIds);
+        }
+      }
+      if (phase === "preflight" && (key || intentCli || intentCred)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
             job.project_id as string,
             intent.role,
             [],
-            { runtimeImageKey: key },
+            {
+              runtimeImageKey: key,
+              agentCli: intentCli ?? null,
+              credentialId: intentCred ?? null,
+            },
           );
         } catch (error) {
           if (error instanceof ControlInputError) throw error;
@@ -1204,7 +1237,7 @@ export function createEventIngestionSideEffectApplication(
               job.project_id as string,
               role,
               snapshotFindingIds,
-              { runtimeImageKey: it.runtime_image_key ?? null },
+              { runtimeImageKey: it.runtime_image_key ?? null, agentCli: it.agent_cli ?? null, credentialId: it.credential_id ?? null },
             ),
           );
         } catch (error) {

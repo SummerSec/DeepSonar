@@ -36,7 +36,7 @@ import {
 
 /**
  * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
- * Agent CLI、模型、LLM 凭据、settings/env 由 Provider 账号页承接；运行镜像由镜像页承接。
+ * Agent CLI / Provider 主边界在项目设置「CLI / Provider 启用与缺省」；此处绑定须 ∈ 白名单，并发在凭据页；运行镜像由镜像页承接。
  * 保存时保留已有 agent_cli / credential / model / env / runtime_image 绑定。
  */
 
@@ -47,6 +47,8 @@ const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em]
 const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
   list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
   list_available_runtime_images: { title: "查询可用镜像", description: "让 Hub 按需获取本项目已启用且可信的镜像目录（含 purpose/tool_summary/not_included/capabilities/selection_hints），按任务匹配后原样复制 image_key，禁止猜测。" },
+  list_available_agent_clis: { title: "查询可用 Agent CLI", description: "让 Hub 按需获取本项目白名单内的 Agent CLI；提案须 ∈ 列表，省略时走项目软缺省或角色回退。" },
+  list_available_providers: { title: "查询可用 Provider", description: "让 Hub 按需获取本项目白名单内的 Provider/凭据；提案须 ∈ 列表，并发与配额在 Provider 侧，不按角色锁死。" },
   list_capabilities: { title: "查询能力包", description: "列出本 Job 可见的 Capability Pack 摘要；完整契约用 describe_capability 按需读取。" },
   search_capabilities: { title: "搜索能力包", description: "按任务查询可用 Capability Pack，不依赖预先知道 RoleConfig selector。" },
   describe_capability: { title: "描述能力包", description: "按 id/version/digest 读取 Capability Pack 机器契约。" },
@@ -367,6 +369,7 @@ function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources:
   </div>;
 }
 
+/** 项目侧 CLI/Provider 主边界在设置「CLI / Provider 启用与缺省」；此处绑定须 ∈ 项目白名单，并发不在角色上配置。 */
 export function RoleConfigEditor({
   title,
   roleName,

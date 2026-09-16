@@ -1,0 +1,119 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  applyProjectAgentAllowlistPatch,
+  assertAgentCliAllowlisted,
+  assertCredentialAllowlisted,
+  parseProjectAgentAllowlist,
+  seedProjectAgentAllowlist,
+  toHubAgentCliCatalog,
+  toHubProviderCatalogEntry,
+} from "./policy.js";
+
+test("parse: 缺键视为未配置，CLI 全集，凭据空", () => {
+  const allowlist = parseProjectAgentAllowlist({});
+  assert.equal(allowlist.configured, false);
+  assert.deepEqual(allowlist.enabled_agent_clis, ["claude-code", "pi", "dsh"]);
+  assert.deepEqual(allowlist.enabled_credential_ids, []);
+});
+
+test("seed: 从未配置迁移到绑定集合，不静默丢弃", () => {
+  const cfg: Record<string, unknown> = {};
+  const cred = "11111111-1111-4111-8111-111111111111";
+  const { changed, allowlist } = seedProjectAgentAllowlist(cfg, {
+    agent_clis: ["pi", "leftover"],
+    credential_ids: [cred],
+  });
+  assert.equal(changed, true);
+  assert.equal(allowlist.configured, true);
+  assert.ok(allowlist.enabled_agent_clis.includes("claude-code"));
+  assert.ok(allowlist.enabled_agent_clis.includes("pi"));
+  assert.ok(!allowlist.enabled_agent_clis.includes("leftover" as never));
+  assert.deepEqual(allowlist.enabled_credential_ids, [cred]);
+  assert.equal(allowlist.default_credential_id, cred);
+});
+
+test("seed: 已配置不再改写", () => {
+  const cfg: Record<string, unknown> = {
+    enabled_agent_clis: ["claude-code"],
+    enabled_credential_ids: [],
+  };
+  const { changed } = seedProjectAgentAllowlist(cfg, {
+    agent_clis: ["pi"],
+    credential_ids: ["11111111-1111-4111-8111-111111111111"],
+  });
+  assert.equal(changed, false);
+  assert.deepEqual(cfg.enabled_agent_clis, ["claude-code"]);
+});
+
+test("patch: 缺省必须 ∈ 白名单；至少一种 CLI", () => {
+  const cfg: Record<string, unknown> = {};
+  assert.throws(
+    () => applyProjectAgentAllowlistPatch(cfg, { enabled_agent_clis: [] }),
+    /至少启用一种 Agent CLI/,
+  );
+  const allowlist = applyProjectAgentAllowlistPatch(cfg, {
+    enabled_agent_clis: ["claude-code", "pi"],
+    enabled_credential_ids: ["11111111-1111-4111-8111-111111111111"],
+    default_agent_cli: "pi",
+    default_credential_id: "11111111-1111-4111-8111-111111111111",
+  });
+  assert.equal(allowlist.default_agent_cli, "pi");
+  assert.throws(
+    () => applyProjectAgentAllowlistPatch(cfg, { default_agent_cli: "dsh" }),
+    /必须属于已启用白名单/,
+  );
+});
+
+test("assert: 未配置不阻断；配置后 fail-closed", () => {
+  const open = parseProjectAgentAllowlist({});
+  assert.doesNotThrow(() => assertAgentCliAllowlisted(open, "pi"));
+  assert.doesNotThrow(() => assertCredentialAllowlisted(open, "11111111-1111-4111-8111-111111111111"));
+
+  const closed = parseProjectAgentAllowlist({
+    enabled_agent_clis: ["claude-code"],
+    enabled_credential_ids: ["11111111-1111-4111-8111-111111111111"],
+  });
+  assert.throws(() => assertAgentCliAllowlisted(closed, "pi"), /不在本项目已启用白名单/);
+  assert.throws(
+    () => assertCredentialAllowlisted(closed, "22222222-2222-4222-8222-222222222222"),
+    /不在本项目已启用 Provider/,
+  );
+  assert.doesNotThrow(() => assertAgentCliAllowlisted(closed, "claude-code"));
+  assert.doesNotThrow(() => assertCredentialAllowlisted(closed, "11111111-1111-4111-8111-111111111111"));
+});
+
+test("Hub catalog: CLI 与 Provider 条目含缺省标记与并发摘要", () => {
+  const cred = "11111111-1111-4111-8111-111111111111";
+  const allowlist = parseProjectAgentAllowlist({
+    enabled_agent_clis: ["claude-code", "pi"],
+    enabled_credential_ids: [cred],
+    default_agent_cli: "claude-code",
+    default_credential_id: cred,
+  });
+  const clis = toHubAgentCliCatalog(allowlist);
+  assert.equal(clis.find((c) => c.agent_cli === "claude-code")?.is_default, true);
+  assert.equal(clis.find((c) => c.agent_cli === "pi")?.is_default, false);
+
+  const entry = toHubProviderCatalogEntry({
+    id: cred,
+    name: "main",
+    provider: "anthropic",
+    status: "active",
+    public_metadata_json: { max_concurrent: 2, model_concurrency: { "claude-opus": 1 } },
+  }, allowlist);
+  assert.ok(entry);
+  assert.equal(entry!.is_default, true);
+  assert.equal(entry!.max_concurrent, 2);
+  assert.deepEqual(entry!.model_concurrency, { "claude-opus": 1 });
+  assert.ok(entry!.compatible_agent_clis.includes("claude-code"));
+  assert.equal(
+    toHubProviderCatalogEntry({
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "other",
+      provider: "anthropic",
+      status: "active",
+    }, allowlist),
+    null,
+  );
+});

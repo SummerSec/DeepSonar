@@ -59,7 +59,7 @@
     "ci:unit:login-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/login-rate-limit.test.ts src/login-client-ip.test.ts && node --test deploy/web-server-headers.test.mjs",
     "ci:unit:deploy-ps1": "node --test deploy/deploy.ps1.test.mjs",
     "ci:integration:event-rate-limit": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/rate-limit.integration.test.ts",
-    "ci:unit:graph-references": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/scheduler exec tsx --test src/graph-reference.test.ts src/graph-budget.test.ts src/graph-query.test.ts",
+    "ci:unit:graph-references": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/scheduler exec tsx --test src/graph-reference.test.ts src/graph-budget.test.ts src/graph-query.test.ts src/hub-decision-payload-file.test.ts",
     "ci:integration:graph-references": "pnpm --filter @deepsonar/scheduler exec tsx --test src/graph-reference.integration.test.ts",
     "ci:unit:compose-tasks": "pnpm --filter @deepsonar/scheduler exec tsx --test src/task-compose.test.ts src/compose-scope.test.ts ../../apps/web/src/composeTaskModel.test.ts",
     "ci:unit:task-intent": "pnpm --filter @deepsonar/scheduler exec tsx --test src/task-intent.test.ts src/task-intent.contract.test.ts && pnpm --filter @deepsonar/web exec tsx --test src/task-intent.test.ts",

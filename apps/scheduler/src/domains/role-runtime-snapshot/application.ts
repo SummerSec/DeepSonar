@@ -45,6 +45,11 @@ export {
 } from "./runtime-image-boundary-policy.js";
 import { freezePiExtensions } from "../../pi-extensions.js";
 import { parseRuntimeKnobOverride } from "../../runtime-knobs.js";
+import {
+  assertAgentCliAllowlisted,
+  assertCredentialAllowlisted,
+  parseProjectAgentAllowlist,
+} from "../project-agent-allowlist/index.js";
 import type {
   RoleRuntimeSnapshotApplication,
   RoleRuntimeSnapshotResult,
@@ -250,7 +255,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
@@ -258,13 +263,19 @@ async function resolveAgentSnapshotForJobUnchecked(
 
   const [project] = (await db`SELECT config_json FROM projects WHERE id = ${projectId}`) as Array<Record<string, unknown>>;
   const projectImagePolicy = parseProjectImagePolicy(project?.config_json);
+  const agentAllowlist = parseProjectAgentAllowlist(project?.config_json);
   const [projectCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`) as Array<Record<string, unknown>>;
   const [globalCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
   // Modules / bindings can still come from a leftover project row; model and
   // default CLI follow image policy so inherit_global cannot steal identity.
+  // Hub 提案 > 项目软缺省 > RoleConfig：角色不是唯一绑定面。
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
   const identity = roleIdentityForProjectPolicy(projectImagePolicy, projectCfg, globalCfg);
-  const agentCli = identity.agent_cli;
+  const hubCli = typeof options?.agentCli === "string" && options.agentCli.trim() ? options.agentCli.trim() : null;
+  const agentCli = hubCli
+    ?? agentAllowlist.default_agent_cli
+    ?? identity.agent_cli;
+  assertAgentCliAllowlisted(agentAllowlist, agentCli);
   const leftoverCli = rejectNonCurrentAgentCli(agentCli);
   if (leftoverCli) throw new Error(leftoverCli);
   const dshTaskMode = cfg?.dsh_task_mode === "ptc" ? "ptc" : "standard";
@@ -284,8 +295,23 @@ async function resolveAgentSnapshotForJobUnchecked(
   const skills = [...manualSkills, ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name))];
   const commands = [...manualCommands, ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name))];
 
-  const [llm] = (cfg
-    ? await db`
+  const hubCredentialId = typeof options?.credentialId === "string" && options.credentialId.trim()
+    ? options.credentialId.trim()
+    : null;
+  const preferredCredentialId = hubCredentialId ?? agentAllowlist.default_credential_id;
+  let llm: Record<string, unknown> | undefined;
+  if (preferredCredentialId) {
+    const [row] = await db`
+      SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
+             c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json
+      FROM credentials c
+      WHERE c.id = ${preferredCredentialId} AND c.kind = 'llm_provider'
+      LIMIT 1
+      FOR SHARE OF c` as Array<Record<string, unknown>>;
+    llm = row;
+    if (!llm) throw new Error(`Credential ${preferredCredentialId} 不存在`);
+  } else if (cfg) {
+    const [row] = await db`
         SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
                c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json,
                c.model_catalog_json
@@ -293,8 +319,10 @@ async function resolveAgentSnapshotForJobUnchecked(
         JOIN credentials c ON c.id = rc.credential_id
         WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
         LIMIT 1
-        FOR SHARE OF c`
-    : [undefined]) as Array<Record<string, unknown> | undefined>;
+        FOR SHARE OF c` as Array<Record<string, unknown>>;
+    llm = row;
+  }
+  assertCredentialAllowlisted(agentAllowlist, (llm?.id as string | undefined) ?? preferredCredentialId);
   const settingsConfig = llm?.settings_config_json ?? {};
   const hasSettings = hasProviderSettingsConfig(settingsConfig);
   const manualConfigFiles = cfg
@@ -335,10 +363,17 @@ async function resolveAgentSnapshotForJobUnchecked(
     const compatibilityError = validateCredentialCompatibility(agentCli, provider);
     if (compatibilityError) throw new Error(compatibilityError);
     const credProject = (llm.cred_project_id as string | null) ?? null;
-    if (cfg?.project_id != null && credProject && credProject !== projectId) {
-      throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
+    // Hub / 项目软缺省可选项目或全局凭据；仅 RoleConfig 绑定路径仍限制全局配置只能绑全局凭据。
+    if (preferredCredentialId) {
+      if (credProject && credProject !== projectId) {
+        throw new Error(`Credential ${llm.id} 属于其他项目，不能用于本项目 Job`);
+      }
+    } else {
+      if (cfg?.project_id != null && credProject && credProject !== projectId) {
+        throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
+      }
+      if (cfg?.project_id == null && credProject) throw new Error("全局 RoleConfig 只能绑定全局 Credential");
     }
-    if (cfg?.project_id == null && credProject) throw new Error("全局 RoleConfig 只能绑定全局 Credential");
     if ((llm.status as string) !== "active") {
       throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
     }
@@ -424,7 +459,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

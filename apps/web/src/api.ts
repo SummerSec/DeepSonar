@@ -1004,6 +1004,15 @@ export interface ProjectSettings {
   effective_finding_protocol: EffectiveFindingProtocol;
   image_strategy: ProjectImageStrategy;
   role_runtime_images: Record<string, string | null>;
+  /** 项目启用的 Agent CLI 白名单（组合积木）。 */
+  enabled_agent_clis: Array<"claude-code" | "pi" | "dsh">;
+  /** 项目启用的 Provider Credential 白名单。 */
+  enabled_credential_ids: string[];
+  /** Hub 省略时的软缺省 CLI。 */
+  default_agent_cli: "claude-code" | "pi" | "dsh" | null;
+  /** Hub 省略时的软缺省 Provider。 */
+  default_credential_id: string | null;
+  agent_allowlist_configured?: boolean;
   /** claimed / provisioning / running；waiting_human 不占调度额度。 */
   active_jobs: number;
 }
@@ -2463,6 +2472,10 @@ export const api = {
       finding_protocol?: FindingProtocolConfig | null;
       image_strategy?: ProjectImageStrategy;
       role_runtime_images?: Record<string, string | null>;
+      enabled_agent_clis?: Array<"claude-code" | "pi" | "dsh">;
+      enabled_credential_ids?: string[];
+      default_agent_cli?: "claude-code" | "pi" | "dsh" | null;
+      default_credential_id?: string | null;
     },
   ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),

@@ -25,6 +25,18 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: true,
     eventType: null,
   },
+  list_available_agent_clis: {
+    summary: "List Agent CLIs available to the current Hub Job",
+    description: "Return the project-enabled Agent CLI allowlist (claude-code / pi / dsh) with soft-default markers. Hub may propose agent_cli from this catalog; omitting uses project soft default or RoleConfig fallback.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_providers: {
+    summary: "List Providers available to the current Hub Job",
+    description: "Return project-enabled, active LLM Provider credentials (credential_id, provider, compatible_agent_clis, concurrency summary). Hub may propose credential_id from this catalog; concurrency gates remain on the Provider.",
+    readOnly: true,
+    eventType: null,
+  },
   list_capabilities: {
     summary: "List Capability Packs visible to the current Job",
     description: "Return summaries of builtin, trusted-module, and RoleConfig-projected Capability Packs. Results are id/version/digest/scope/summary only; call describe_capability for the full machine contract.",

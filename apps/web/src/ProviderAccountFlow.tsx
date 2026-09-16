@@ -49,7 +49,6 @@ type FlowStep = "account" | "roles" | "effect";
 function newBatchIdempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `provider-batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
-
 const cliLabel: Record<string, string> = {
   "claude-code": "Claude Code",
   pi: "Pi Coding Agent",
