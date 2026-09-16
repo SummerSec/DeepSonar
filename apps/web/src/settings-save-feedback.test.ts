@@ -27,7 +27,10 @@ test("settings save flash also raises a viewport-fixed toast", () => {
 
 test("primary settings save buttons expose busy and saved labels", () => {
   assert.match(panel, /rulesBusy \? "保存中…" : rulesSaved \? "已保存"/);
-  assert.match(panel, /imagePolicyBusy \? "保存中…" : imagePolicySaved \? "已保存"/);
+  const imagePolicy = readFileSync(new URL("./components/ProjectImagePolicySection.tsx", import.meta.url), "utf8");
+  assert.match(imagePolicy, /imagePolicyBusy \? "保存中…" : imagePolicySaved \? "已保存"/);
+  const cliProvider = readFileSync(new URL("./components/ProjectCliProviderAllowlistPanel.tsx", import.meta.url), "utf8");
+  assert.match(cliProvider, /busy \? "保存中…" : saved \? "已保存"/);
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(editor, /busy \? "保存中…" : saved \? "已保存"/);
 });
