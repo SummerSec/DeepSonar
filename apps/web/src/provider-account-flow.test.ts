@@ -382,20 +382,25 @@ test("Provider account flow user-facing copy is Chinese", () => {
   assert.doesNotMatch(flow, /Apply to selected RoleConfigs/);
 });
 
-test("credential and login secrets cannot be revealed in the browser", () => {
+test("credential secrets cannot be revealed; login may toggle password visibility", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
   const claude = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
   const codex = readFileSync(new URL("./CcSwitchCodexFields.tsx", import.meta.url), "utf8");
   const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
   const login = readFileSync(new URL("./pages/LoginPage.tsx", import.meta.url), "utf8");
-  for (const source of [claude, codex, openCode, login]) {
-    assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey/iu);
+  // Provider / Credential API key surfaces must stay non-revealable in the browser.
+  for (const source of [claude, codex, openCode, editor, flow]) {
+    assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey|显示密码|隐藏密码/iu);
   }
   assert.match(claude, /id="cc-switch-api-key"\s+type="password"/u);
   assert.match(codex, /id="cc-switch-codex-key" type="password"/u);
   assert.match(openCode, /id="cc-switch-opencode-key" type="password"/u);
-  assert.match(login, /type="password"/u);
+  assert.match(editor, /type="password"/u);
+  // Login page (and API Token paste) may offer an explicit show/hide toggle; default remains hidden.
+  assert.match(login, /显示密码|隐藏密码|显示 Token|隐藏 Token/u);
+  assert.match(login, /type=\{revealed \? "text" : "password"\}/u);
+  assert.match(login, /authFormErrorMessage|LOGIN_RATE_LIMITED|过于频繁/u);
   assert.match(flow, /setEditApiKey\(""\)/u);
   assert.match(editor, /redactSecretValues|restoreRedactedSecrets/u);
   assert.doesNotMatch(editor, /return entries\.length > 0 \? entries : .*anthropic/u);

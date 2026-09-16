@@ -1,8 +1,68 @@
 import { useEffect, useState } from "react";
+import { Eye, EyeSlash } from "@phosphor-icons/react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { DeepSonarMark } from "../components/DeepSonarMark";
 import { useAuth } from "../auth";
 import { isExplicitAuthDisabled } from "../auth-status";
+import { authFormErrorMessage } from "../login-error";
+
+function SecretField({
+  label,
+  value,
+  onChange,
+  autoComplete,
+  required,
+  minLength,
+  placeholder,
+  hint,
+  monoClass = "font-mono text-[14px]",
+  revealLabel = "显示密码",
+  hideLabel = "隐藏密码",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  autoComplete?: string;
+  required?: boolean;
+  minLength?: number;
+  placeholder?: string;
+  hint?: string;
+  monoClass?: string;
+  revealLabel?: string;
+  hideLabel?: string;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <label className="block">
+      <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+        {label}
+      </span>
+      <div className="relative">
+        <input
+          type={revealed ? "text" : "password"}
+          autoComplete={autoComplete}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          spellCheck={false}
+          className={`w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2.5 pr-10 ${monoClass} text-zinc-100 outline-none focus:border-acc-500`}
+          required={required}
+          minLength={minLength}
+        />
+        <button
+          type="button"
+          onClick={() => setRevealed((v) => !v)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-zinc-500 hover:text-zinc-300"
+          aria-label={revealed ? hideLabel : revealLabel}
+          title={revealed ? hideLabel : revealLabel}
+        >
+          {revealed ? <EyeSlash size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
+      {hint && <span className="mt-1 block text-[11px] leading-5 text-zinc-600">{hint}</span>}
+    </label>
+  );
+}
 
 export function LoginPage() {
   const { loading, status, me, login, bootstrap, setToken, refresh } = useAuth();
@@ -54,7 +114,7 @@ export function LoginPage() {
       }
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(authFormErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -125,43 +185,35 @@ export function LoginPage() {
                   />
                 </label>
               )}
-              <label className="block">
-                <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
-                  密码
-                </span>
-                <input
-                  type="password"
-                  autoComplete={mode === "bootstrap" ? "new-password" : "current-password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2.5 font-mono text-[14px] text-zinc-100 outline-none focus:border-acc-500"
-                  required
-                  minLength={mode === "bootstrap" ? 8 : 1}
-                />
-              </label>
+              <SecretField
+                label="密码"
+                value={password}
+                onChange={setPassword}
+                autoComplete={mode === "bootstrap" ? "new-password" : "current-password"}
+                required
+                minLength={mode === "bootstrap" ? 8 : 1}
+              />
             </>
           ) : (
-            <label className="block">
-              <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
-                API Token / 会话 Token
-              </span>
-              <input
-                type="password"
-                value={tokenInput}
-                onChange={(e) => setTokenInput(e.target.value)}
-                placeholder="deepsonar_… 或 deepsonar_user_…"
-                autoComplete="off"
-                spellCheck={false}
-                className="w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2.5 font-mono text-[12px] text-zinc-100 outline-none focus:border-acc-500"
-                required
-              />
-              <span className="mt-1 block text-[11px] leading-5 text-zinc-600">
-                默认隐藏明文。用户会话与 API Token 会分 key 存入本机。
-              </span>
-            </label>
+            <SecretField
+              label="API Token / 会话 Token"
+              value={tokenInput}
+              onChange={setTokenInput}
+              placeholder="deepsonar_… 或 deepsonar_user_…"
+              autoComplete="off"
+              required
+              monoClass="font-mono text-[12px]"
+              revealLabel="显示 Token"
+              hideLabel="隐藏 Token"
+              hint="默认隐藏明文。用户会话与 API Token 会分 key 存入本机。"
+            />
           )}
 
-          {error && <div className="text-[12px] text-red-300/90">{error}</div>}
+          {error && (
+            <div className="text-[12px] text-red-300/90" role="alert">
+              {error}
+            </div>
+          )}
 
           <button
             type="submit"

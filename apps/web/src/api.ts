@@ -14,6 +14,8 @@ import type {
   TaskExecutionState,
 } from "@deepsonar/shared-types";
 
+import { ApiRequestError, parseRetryAfterSec, type ApiErrorBody } from "./login-error";
+
 export type { ModuleSelectorKind, ParsedModuleSelector } from "@deepsonar/shared-types";
 export type { EffectiveFindingProtocol, FindingProtocolConfig } from "@deepsonar/shared-types";
 export type {
@@ -1946,18 +1948,20 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
   }
   const res = await fetch(`/api${path}`, { method, headers, body: payload });
   if (!res.ok) {
-    let detail = "";
+    let errorBody: ApiErrorBody | null = null;
     try {
-      const err = (await res.json()) as { error?: string; message?: string; error_code?: string };
-      detail = [err.error_code, err.error ?? err.message].filter(Boolean).join(": ");
+      errorBody = (await res.json()) as ApiErrorBody;
     } catch {
       /* ignore non-JSON error body */
     }
-    throw new Error(
-      detail
-        ? `${method} ${path} -> ${res.status}: ${detail}`
-        : `${method} ${path} -> ${res.status}`,
-    );
+    throw new ApiRequestError({
+      method,
+      path,
+      status: res.status,
+      errorCode: errorBody?.error_code ?? null,
+      serverMessage: errorBody?.error ?? errorBody?.message ?? null,
+      retryAfterSec: parseRetryAfterSec(errorBody, res.headers.get("retry-after")),
+    });
   }
   return res.json() as Promise<T>;
 }
