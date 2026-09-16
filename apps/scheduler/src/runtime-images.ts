@@ -37,10 +37,9 @@ import {
   type RuntimeImageRegistryPolicy,
   type RuntimeImageRegistryVersion as RuntimeImageRegistryVersionContract,
 } from "./runtime-image-registry-contract.js";
-import {
-  type HubRuntimeImageCatalogEntry,
-  toHubRuntimeImageCatalogEntry,
-} from "./hub-runtime-image-capability.js";
+import { type HubRuntimeImageCapability, type HubRuntimeImageCatalogEntry, hubRuntimeImageCapability, officialHubRuntimeImageCapabilityKeys, toHubRuntimeImageCatalogEntry } from "./hub-runtime-image-capability.js";
+export type { HubRuntimeImageCapability, HubRuntimeImageCatalogEntry };
+export { hubRuntimeImageCapability, officialHubRuntimeImageCapabilityKeys, toHubRuntimeImageCatalogEntry };
 
 export {
   createServerOwnedRuntimeImageRegistryPolicy,
@@ -2356,13 +2355,6 @@ export function hostRuntimePlatform(arch: NodeJS.Architecture = process.arch): "
   if (arch === "arm64") return "linux/arm64";
   throw new Error(`不支持的 Scheduler 宿主架构：${arch}`);
 }
-
-export type { HubRuntimeImageCapability, HubRuntimeImageCatalogEntry } from "./hub-runtime-image-capability.js";
-export {
-  hubRuntimeImageCapability,
-  officialHubRuntimeImageCapabilityKeys,
-  toHubRuntimeImageCatalogEntry,
-} from "./hub-runtime-image-capability.js";
 
 export async function classifyRuntimeImageReadiness(opts: {
   imageKey: string;
