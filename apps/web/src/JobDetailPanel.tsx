@@ -1,6 +1,7 @@
 import { ArrowClockwise, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type JobSession, type ProviderCredential } from "./api";
+import { formatSnapshotModelField } from "./snapshot-model-label";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
@@ -60,7 +61,6 @@ function snapRuntimeImageKey(snap: Record<string, unknown> | null | undefined): 
     const key = (runtimeImage as Record<string, unknown>).image_key;
     if (typeof key === "string" && key.trim()) return key;
   }
-  // Older snapshots may only carry the RoleConfig override field.
   return snapStr(snap, "runtime_image_key");
 }
 
@@ -203,8 +203,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      // ConfirmDialog is portaled outside this drawer. Let its own Escape
-      // handler resolve the pending confirmation before closing the job view.
+      // ConfirmDialog is portaled; let it handle Escape before closing this drawer.
       if (document.querySelector('[role="alertdialog"]')) return;
       event.preventDefault();
       onClose();
@@ -419,6 +418,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const dshTaskMode = snapStr(snapshot, "dsh_task_mode");
   const model = snapStr(snapshot, "model");
   const upstreamModel = snapStr(snapshot, "upstream_model");
+  const modelFields = formatSnapshotModelField(model, upstreamModel);
   const contextWindowTokens = snapStr(snapshot, "context_window_tokens");
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
@@ -1140,8 +1140,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                     <div className="grid gap-2 sm:grid-cols-2">
                       <ConfigField label="CLI 工具 (agent_cli)" value={agentCli} />
                       {agentCli === "dsh" && <ConfigField label="DSH 任务模式" value={dshTaskMode} />}
-                      <ConfigField label="模型 (model)" value={model} />
-                      <ConfigField label="上游模型 (upstream_model)" value={upstreamModel} />
+                      <ConfigField label="模型 (model)" value={modelFields.modelLabel} title={modelFields.title} />
+                      <ConfigField label="上游模型 (upstream_model)" value={modelFields.upstreamLabel} title={modelFields.title} />
                       <ConfigField
                         label="CLI 客户端上下文预算"
                         value={contextWindowTokens === "—" ? "Provider / CLI 默认" : `${contextWindowTokens} tokens`}

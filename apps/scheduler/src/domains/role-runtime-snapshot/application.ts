@@ -11,8 +11,11 @@ import {
   validateCredentialCompatibility,
 } from "../../credentials.js";
 import {
+  assertResolvedModelInCredentialCatalog,
   hasProviderSettingsConfig,
   projectProviderRuntimeSnapshot,
+  resolveModelSource,
+  snapshotUpstreamModel,
 } from "../../provider-settings.js";
 import { resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { freezeTaskCapabilityPack } from "../capability-pack/index.js";
@@ -284,7 +287,8 @@ async function resolveAgentSnapshotForJobUnchecked(
   const [llm] = (cfg
     ? await db`
         SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
-               c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json
+               c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json,
+               c.model_catalog_json
         FROM role_credentials rc
         JOIN credentials c ON c.id = rc.credential_id
         WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
@@ -307,6 +311,19 @@ async function resolveAgentSnapshotForJobUnchecked(
   const snapshotSettingsConfig = providerSnapshot.settings_config_json;
   const contextWindowTokens = providerSnapshot.context_window_tokens;
   if (llm) {
+    const rolePassthrough = cfg?.allow_model_catalog_passthrough === true;
+    const allowPassthrough = config.allowModelCatalogPassthrough || rolePassthrough;
+    const modelSource = resolveModelSource({
+      roleModel: identity.model,
+      agentCli,
+      settingsConfig,
+    });
+    assertResolvedModelInCredentialCatalog({
+      resolvedModel: snapshotUpstreamModel(providerSnapshot) ?? providerSnapshot.model,
+      catalogJson: llm.model_catalog_json,
+      allowPassthrough,
+      modelSource,
+    });
     const provider = String(llm.provider ?? "");
     if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
     // Credential.agent_cli is a hint. A full settingsConfig profile may serve

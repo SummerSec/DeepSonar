@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 51);
+INSERT INTO schema_meta (id, version) VALUES ('global', 52);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -848,6 +848,8 @@ CREATE TABLE job_usage_ledger (
   request_no int NOT NULL,
   provider text NOT NULL,
   model text NOT NULL DEFAULT '',
+  model_catalog_match boolean,
+  upstream_reporting_model text,
   input_tokens bigint NOT NULL DEFAULT 0,
   output_tokens bigint NOT NULL DEFAULT 0,
   total_tokens bigint NOT NULL DEFAULT 0,
@@ -862,6 +864,10 @@ CREATE TABLE job_usage_ledger (
   CONSTRAINT job_usage_ledger_request_no_check CHECK (request_no >= 1 AND request_no <= 1000000000),
   CONSTRAINT job_usage_ledger_provider_check CHECK (length(provider) BETWEEN 1 AND 100 AND provider !~ '[[:cntrl:]]'),
   CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_upstream_reporting_model_check CHECK (
+    upstream_reporting_model IS NULL
+    OR (length(upstream_reporting_model) <= 200 AND upstream_reporting_model !~ '[[:cntrl:]]')
+  ),
   CONSTRAINT job_usage_ledger_counts_check CHECK (
     input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
     AND cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0
@@ -1270,6 +1276,8 @@ CREATE TABLE role_configs (
   agent_cli text NOT NULL DEFAULT 'claude-code',
   dsh_task_mode text NOT NULL DEFAULT 'standard',
   model text,
+  -- #570: alias-passthrough opt-out for credential model_catalog fail-closed
+  allow_model_catalog_passthrough boolean NOT NULL DEFAULT false,
   context_window_tokens int,
   env_keys text[] NOT NULL DEFAULT '{}',
   env_vars_json jsonb NOT NULL DEFAULT '{}',

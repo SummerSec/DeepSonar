@@ -4,6 +4,7 @@ import {
   applyGatewayOutboundModelRewrite,
   createGatewayUsageScanner,
   extractInboundJobToken,
+  extractUpstreamReportingModel,
   extractUsageBreakdown,
   joinGatewayUpstreamUrl,
   rewriteGatewayOutboundModel,
@@ -158,4 +159,18 @@ test("usage 为 null 时不吞后续无关对象；扁平残缺 JSON 仍能记�
     extractUsageBreakdown('data: {"usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":30}'),
     { input: 11, output: 2, total: 13, cacheRead: 30, cacheWrite: 0 },
   );
+});
+
+test("尽力解析上游响应中的 reporting model", () => {
+  assert.equal(extractUpstreamReportingModel('{"id":"1","model":"deepseek-chat","usage":{"input_tokens":1}}'), "deepseek-chat");
+  assert.equal(extractUpstreamReportingModel("not-json"), null);
+  assert.equal(extractUpstreamReportingModel(""), null);
+});
+
+test("Gateway 出站改写会剥掉快照 cli-default 前缀", () => {
+  const body = { model: "opus" };
+  const rewritten = applyGatewayOutboundModelRewrite(body, {
+    upstream_model: "cli-default:claude-opus-5",
+  });
+  assert.deepEqual(rewritten, { model: "claude-opus-5" });
 });

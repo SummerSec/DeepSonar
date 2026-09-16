@@ -403,7 +403,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
             FROM canvas_broadcasts
            WHERE source_job_id = ${id} OR target_job_id = ${id}
            ORDER BY created_at DESC LIMIT 100`,
-      sql`SELECT id, attempt_id, effect_id, request_no, provider, model, input_tokens,
+      sql`SELECT id, attempt_id, effect_id, request_no, provider, model,
+                 model_catalog_match, upstream_reporting_model, input_tokens,
                  output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens,
                  adjustment_tokens, settlement_status, source,
                  observed_at, created_at

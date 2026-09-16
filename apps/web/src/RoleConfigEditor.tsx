@@ -73,6 +73,7 @@ interface ConfigForm {
   agent_cli: string;
   dsh_task_mode: "standard" | "ptc";
   model: string;
+  allow_model_catalog_passthrough: boolean;
   context_window_tokens: string;
   credential_id: string;
   env_keys: string[];
@@ -103,6 +104,7 @@ const EMPTY: ConfigForm = {
   agent_cli: "claude-code",
   dsh_task_mode: "standard",
   model: "",
+  allow_model_catalog_passthrough: false,
   context_window_tokens: "",
   credential_id: "",
   env_keys: [],
@@ -128,6 +130,7 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     agent_cli: cfg.agent_cli,
     dsh_task_mode: cfg.dsh_task_mode ?? "standard",
     model: cfg.model ?? "",
+    allow_model_catalog_passthrough: cfg.allow_model_catalog_passthrough === true,
     context_window_tokens: cfg.context_window_tokens == null ? "" : String(cfg.context_window_tokens),
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: cfg.env_keys ?? [],
@@ -410,6 +413,7 @@ export function RoleConfigEditor({
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         dsh_task_mode: form.dsh_task_mode,
         model: form.model.trim() || null,
+        allow_model_catalog_passthrough: form.allow_model_catalog_passthrough,
         context_window_tokens: contextWindowTokensFromForm(form.context_window_tokens),
         env_keys: form.env_keys,
         env_vars: form.env_vars,
@@ -461,6 +465,11 @@ export function RoleConfigEditor({
               指令与平台工具
               <HelpTip>
                 Agent CLI、LLM 凭据、模型与 settings/env 请在「凭据 / Provider 账号」页配置与绑定；此处仅维护角色职责与平台工具。
+                {!form.model.trim() && (
+                  <span className="mt-1 block text-[11px] text-amber-200/90">
+                    当前模型为空：将使用 CLI 内置默认模型，建议从凭据目录选择。也可开启下方「允许模型目录直通」以支持 alias 网关。
+                  </span>
+                )}
                 {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}（由 Provider 绑定流程维护）。` : ""}
                 {form.credential_id ? " 已绑定 LLM 凭据。" : " 尚未绑定 LLM 凭据。"}
               </HelpTip>
@@ -585,6 +594,27 @@ export function RoleConfigEditor({
               </div>
             </div>
           )}
+          <div className="mt-4 border-t border-ink-700/60 pt-4">
+            <label className="flex cursor-pointer items-start gap-2.5 text-[12px] text-zinc-300">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={form.allow_model_catalog_passthrough}
+                onChange={(event) => setForm((current) => ({
+                  ...current,
+                  allow_model_catalog_passthrough: event.target.checked,
+                }))}
+                aria-label="允许模型目录直通"
+              />
+              <span>
+                允许模型目录直通（alias）
+                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-500">
+                  关闭时：凭据 <code className="text-zinc-400">model_catalog_json</code> 非空则解析模型必须在目录内（fail-closed）。
+                  开启后放行 alias 网关；平台 env <code className="text-zinc-400">DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH</code> 亦可全局放行。
+                </span>
+              </span>
+            </label>
+          </div>
           <div className="mt-4 border-t border-ink-700/60 pt-4">
             <label className={labelCls}>
               CLI 客户端上下文预算（tokens）

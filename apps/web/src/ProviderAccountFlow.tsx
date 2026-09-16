@@ -120,7 +120,7 @@ export function roleModelLabel(
   credential: Pick<ProviderCredential, "settings_config_json"> | null,
 ): string {
   const requested = roleConfig.model?.trim() || modelsFromSettingsConfig(credential)[0] || null;
-  if (!requested) return "配置文件 · 未声明模型";
+  if (!requested) return "未指定模型 · 将使用 CLI 内置默认（建议从凭据目录选择）";
   const upstream = resolvedUpstreamModel(roleConfig.agent_cli, requested, credential?.settings_config_json);
   if (upstream && upstream !== requested) {
     const aliasHint = ["fable", "sonnet", "opus", "haiku"].includes(requested.toLowerCase())

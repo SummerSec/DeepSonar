@@ -222,6 +222,12 @@ export const config = {
     queryMaxBytes: int("DEEPSONAR_GRAPH_QUERY_MAX_BYTES", 512_000),
   },
 
+  /**
+   * 凭据 model_catalog_json 非空时，Job 冻结前校验解析模型是否在目录内（#570）。
+   * 设为 true 时关闭 fail-closed，供 alias 网关直通（角色字段 allow_model_catalog_passthrough 亦可单独放行）。
+   */
+  allowModelCatalogPassthrough: bool("DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH", false),
+
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
     /** Endpoint injected into every real sandbox CLI configuration. */

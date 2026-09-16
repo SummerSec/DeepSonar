@@ -82,6 +82,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     agent_cli: AgentCliWriteSchema.default("claude-code"),
     dsh_task_mode: z.enum(["standard", "ptc"]).default("standard"),
     model: z.string().nullish(),
+    /** #570：关闭凭据 model_catalog fail-closed（alias 直通） */
+    allow_model_catalog_passthrough: z.boolean().optional().default(false),
     context_window_tokens: z.unknown().optional(),
     env_keys: z.array(z.string()).default([]),
     env_vars: z.record(z.string(), z.string()).default({}),
@@ -227,6 +229,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       agent_cli: body.agent_cli,
       dsh_task_mode: body.dsh_task_mode,
       model: persistModel,
+      allow_model_catalog_passthrough: body.allow_model_catalog_passthrough === true,
       context_window_tokens: parseContextWindowTokens(body.context_window_tokens),
       env_vars_json: body.env_vars as never,
       env_keys: body.env_keys as never,
