@@ -7,8 +7,11 @@ import {
   dispositionBadgeTone,
   filterProjectFindings,
   findingsListTruncated,
-  PROJECT_RISK_CAPTION,
-  PROJECT_RISK_TITLE,
+  PROJECT_DELIVERY_CAPTION,
+  PROJECT_DELIVERY_TITLE,
+  projectReportsRedirectPath,
+  readProjectDeliveryPanel,
+  writeProjectDeliveryPanel,
   researchDedupeLabel,
   researchPriorityLabel,
 } from "./findings-risk-desk";
@@ -38,15 +41,35 @@ function finding(overrides: Partial<FindingSummary> = {}): FindingSummary {
   };
 }
 
-test("project risk desk copy is first-class and distinct from cross-project findings", () => {
+test("project delivery desk merges risk and reports and stays distinct from cross-project findings", () => {
   const shell = readFileSync(new URL("./layout/AppShell.tsx", import.meta.url), "utf8");
+  const layout = readFileSync(new URL("./pages/ProjectLayout.tsx", import.meta.url), "utf8");
+  const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+  const delivery = readFileSync(new URL("./pages/ProjectDeliveryPage.tsx", import.meta.url), "utf8");
   const page = readFileSync(new URL("./pages/FindingsPage.tsx", import.meta.url), "utf8");
-  assert.match(shell, new RegExp(`label:\\s*"${PROJECT_RISK_TITLE}"`));
-  assert.match(shell, new RegExp(`caption:\\s*"${PROJECT_RISK_CAPTION}"`));
+  assert.match(shell, new RegExp(`label:\\s*"${PROJECT_DELIVERY_TITLE}"`));
+  assert.match(shell, new RegExp(`caption:\\s*"${PROJECT_DELIVERY_CAPTION}"`));
+  assert.doesNotMatch(shell, /seg:\s*"reports"/);
+  assert.doesNotMatch(shell, /项目报告/);
   assert.match(shell, /跨项目发现/);
-  assert.match(page, /PROJECT_RISK_TITLE/);
+  assert.match(layout, /to: "findings"/);
+  assert.doesNotMatch(layout, /to: "reports"/);
+  assert.match(layout, /风险报告/);
+  assert.match(app, /ProjectDeliveryPage/);
+  assert.match(app, /panel=reports/);
+  assert.match(delivery, /FindingsPage scope="project" hidePageChrome/);
+  assert.match(delivery, /ProjectReportsPage embedded/);
+  assert.match(page, /PROJECT_DELIVERY_TITLE/);
   assert.match(page, /projectFindingsSummary/);
   assert.doesNotMatch(page, /title=\{scope === "global" \? "发现" : "项目发现"\}/);
+});
+
+test("delivery panel query helpers keep risk default and reports bookmarkable", () => {
+  assert.equal(readProjectDeliveryPanel(new URLSearchParams()), "risk");
+  assert.equal(readProjectDeliveryPanel(new URLSearchParams("panel=reports")), "reports");
+  assert.equal(writeProjectDeliveryPanel(new URLSearchParams("finding=f1"), "reports").get("panel"), "reports");
+  assert.equal(writeProjectDeliveryPanel(new URLSearchParams("panel=reports&finding=f1"), "risk").get("panel"), null);
+  assert.equal(projectReportsRedirectPath("proj-1"), "/projects/proj-1/findings?panel=reports");
 });
 
 test("project list keeps findings from every canvas and can filter by source task", () => {

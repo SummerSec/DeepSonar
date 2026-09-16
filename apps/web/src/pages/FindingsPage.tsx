@@ -11,9 +11,7 @@ import {
   dispositionBadgeTone,
   filterProjectFindings,
   findingsListTruncated,
-  PROJECT_RISK_EYEBROW,
-  PROJECT_RISK_SUBTITLE,
-  PROJECT_RISK_TITLE,
+  PROJECT_DELIVERY_TITLE,
   researchDedupeLabel,
   researchPriorityLabel,
 } from "../findings-risk-desk";
@@ -80,7 +78,7 @@ function FindingStateBadges({ finding }: { finding: FindingSummary }) {
 }
 
 /** 全局或项目级发现清单 */
-export function FindingsPage({ scope }: { scope: "global" | "project" }) {
+export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global" | "project"; hidePageChrome?: boolean }) {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -264,15 +262,17 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
 
   if (loading) return <PageSkeleton rows={5} />;
 
-  return (
-    <div className="page-scroll">
-      <PageHeader
-        title={scope === "global" ? "发现" : PROJECT_RISK_TITLE}
-        eyebrow={scope === "global" ? "EVIDENCE REGISTER" : PROJECT_RISK_EYEBROW}
-        subtitle={scope === "global"
-          ? "跨项目证据检索。进入某个项目后请用「项目风险」看该项目全部任务的发现。"
-          : PROJECT_RISK_SUBTITLE}
-      />
+  const body = (
+    <>
+      {!hidePageChrome && (
+        <PageHeader
+          title={scope === "global" ? "发现" : PROJECT_DELIVERY_TITLE}
+          eyebrow={scope === "global" ? "EVIDENCE REGISTER" : "PROJECT DELIVERY"}
+          subtitle={scope === "global"
+            ? "跨项目证据检索。进入某个项目后请用「风险与报告」看该项目全部任务的发现与交付结论。"
+            : "本项目全部任务的风险发现，不是单画布工作台。跨项目检索请用「跨项目发现」。"}
+        />
+      )}
 
       {scope === "project" && summary && (
         <ProjectRiskSummary
@@ -646,8 +646,11 @@ export function FindingsPage({ scope }: { scope: "global" | "project" }) {
       {selectedFinding && (
         <FindingDetailPanel findingId={selectedFinding} onClose={() => openFinding(null)} />
       )}
-    </div>
+    </>
   );
+
+  if (hidePageChrome) return body;
+  return <div className="page-scroll">{body}</div>;
 }
 
 function toggleChip(current: readonly string[], value: string): string[] {

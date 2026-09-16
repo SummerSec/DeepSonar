@@ -8,6 +8,10 @@
 
 - 登录页密码 / API Token 可一键显示或隐藏（默认仍隐藏）；限流 `429 LOGIN_RATE_LIMITED` 展示含重试时长的中文提示，不再只抛 `POST /auth/login -> 429: …`（#560）。Credential / Provider API Key 仍禁止浏览器内 reveal。服务端登录限流（5/5min 用户名+IP、20/5min IP）本已存在，本变更核对其 Web→Scheduler IP 转发与 migration，并补前端体验。
 
+### 变更
+
+- 合并项目侧「项目风险」与「项目报告」为统一「风险与报告」交付台（#561）：侧栏单一入口，主路径 `/projects/:id/findings`，`?panel=reports` 切报告区；旧 `/projects/:id/reports` redirect。全局 `/findings` 与任务工作台报告 tab 不变。
+
 ## [0.4.4] - 2026-09-15
 
 ### 新增

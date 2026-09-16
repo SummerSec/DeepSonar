@@ -1,10 +1,38 @@
 import type { FindingSummary, ProjectFindingsSummary } from "./api";
 
-export const PROJECT_RISK_TITLE = "项目风险";
-export const PROJECT_RISK_CAPTION = "风险发现";
-export const PROJECT_RISK_EYEBROW = "PROJECT RISK";
-export const PROJECT_RISK_SUBTITLE =
-  "本项目全部任务的风险发现，不是单画布工作台。跨项目检索请用「跨项目发现」。";
+/** 项目侧合并后的「风险与报告」交付台文案（#561）。 */
+export const PROJECT_DELIVERY_TITLE = "风险与报告";
+export const PROJECT_DELIVERY_CAPTION = "风险发现与交付结论";
+export const PROJECT_DELIVERY_NAV_SHORT = "风险报告";
+export const PROJECT_DELIVERY_EYEBROW = "PROJECT DELIVERY";
+export const PROJECT_DELIVERY_SUBTITLE =
+  "本项目风险发现与报告交付闭环。跨项目检索请用「跨项目发现」。";
+
+export type ProjectDeliveryPanel = "risk" | "reports";
+
+export function readProjectDeliveryPanel(searchParams: URLSearchParams): ProjectDeliveryPanel {
+  return searchParams.get("panel") === "reports" ? "reports" : "risk";
+}
+
+export function writeProjectDeliveryPanel(
+  searchParams: URLSearchParams,
+  panel: ProjectDeliveryPanel,
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  if (panel === "reports") next.set("panel", "reports");
+  else next.delete("panel");
+  return next;
+}
+
+export function projectReportsRedirectPath(projectId: string): string {
+  return `/projects/${projectId}/findings?panel=reports`;
+}
+
+/** @deprecated 使用 PROJECT_DELIVERY_*；保留别名避免外部引用断裂。 */
+export const PROJECT_RISK_TITLE = PROJECT_DELIVERY_TITLE;
+export const PROJECT_RISK_CAPTION = PROJECT_DELIVERY_CAPTION;
+export const PROJECT_RISK_EYEBROW = PROJECT_DELIVERY_EYEBROW;
+export const PROJECT_RISK_SUBTITLE = PROJECT_DELIVERY_SUBTITLE;
 
 export function findingsListTruncated(loaded: number, total: number): boolean {
   return total > loaded;
