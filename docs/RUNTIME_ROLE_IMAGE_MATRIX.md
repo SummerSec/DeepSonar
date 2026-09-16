@@ -2,7 +2,7 @@
 
 > **状态：as-built**（#565）。索引：[`README.md`](README.md)。语言工具链细节见 [`RUNTIME_TEST_TOOLCHAINS.md`](RUNTIME_TEST_TOOLCHAINS.md)；镜像 OCI/catalog 契约见 [`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
 
-本文件是操作者与 Agent 的**权威摘要**：内置角色默认绑什么镜像、各官方镜像适合什么证据、预装什么、明确不预装什么、缺工具时如何收口。机器可读契约以 `agent-harness/*-runtime.json`、`/opt/deepsonar/tool-manifest.json` 与 RoleConfig / `DEFAULT_RUNTIME_IMAGE_BY_ROLE` 为准；本文与 Scheduler 注入的 AGENTS.md 边界应对齐，发现漂移时以代码与 harness 为准并回写本文。
+**主目标（#565）**：让运行时 AI（尤其 Hub）能决定给 Worker 提案哪张运行镜像。权威机器目录是 `list_available_runtime_images` 返回字段（`purpose` / `tool_summary` / `not_included` / `suited_*` / `selection_hints` / `capabilities`），实现于 `apps/scheduler/src/hub-runtime-image-capability.ts`。本文是同源中文矩阵，便于人读；与 harness / Role 默认 / Worker AGENTS 边界漂移时以代码为准并回写本文。
 
 ## 注入规则（Scheduler）
 
@@ -51,11 +51,11 @@
 
 Harness 出处：`agent-harness/chrome-*-runtime.json`、`clickhouse-*-runtime.json`、`mobile-runtime.json`、`openharmony-test-runtime.json`、`kali-minimal-runtime.json`、`runtime-images.json`；Dockerfile 头注释与 `tool-manifest.json` 为构建期契约。
 
-## 操作者 UI
+## Hub 目录与操作者 UI
 
-- 运行时镜像 API 已暴露 `description` 与版本 `tools_json`（含 capabilities），市场页可展示描述与工具计数。
-- RoleConfig / Provider 镜像选择器 hint 对已知专项 key 附加「不包含」一句话（客户端与 Scheduler 专项表同 key，见 `apps/web/src/runtime-image-boundary.ts`）。
-- **Follow-up**：若要把「工具范围 / 不包含」做成镜像详情一等字段，应在 registry/API 增加结构化字段，避免 Web 与 Scheduler 双份手抄；本 PR 不扩 API schema。
+- **Hub 必读**：`list_available_runtime_images`（见上）；按 `selection_hints` / `capabilities` 匹配，禁止猜 key。
+- 市场页仍主要展示 `description` / `tools_json`；RoleConfig 选择器 hint 对已知 key 附「不包含」一句话（`apps/web/src/runtime-image-boundary.ts`，与 Hub 目录同 key）。
+- 镜像详情页更重的结构化展示可 follow-up，不以 UI 为 #565 验收主路径。
 
 ## 校验
 

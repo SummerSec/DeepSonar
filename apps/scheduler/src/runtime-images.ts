@@ -2353,50 +2353,12 @@ export function hostRuntimePlatform(arch: NodeJS.Architecture = process.arch): "
   throw new Error(`不支持的 Scheduler 宿主架构：${arch}`);
 }
 
-/** Hub 本轮可提案的运行镜像目录条目；只含决策摘要，不含可执行 OCI 引用或 digest。 */
-export interface HubRuntimeImageCatalogEntry {
-  image_key: string;
-  name: string;
-  description: string;
-  official: boolean;
-  project_opt_in: boolean;
-  source_kind: string;
-  compatible_agent_clis: string[];
-  readiness: RuntimeImageReadiness;
-  preparing: boolean;
-  error_code: string | null;
-  error: string | null;
-  checked_at: string;
-  task_id: string | null;
-}
-
-function defaultHubRuntimeImageReadiness(): RuntimeImageReadinessView {
-  return {
-    readiness: "ready",
-    preparing: false,
-    error_code: null,
-    error: null,
-    checked_at: new Date().toISOString(),
-    task_id: null,
-  };
-}
-
-/** 目录条目：无治理 CLI 能跑的 key（例如第三方尚未进适配器 allowlist）对 Hub 不可见。 */
-export function toHubRuntimeImageCatalogEntry(row: Record<string, unknown>): HubRuntimeImageCatalogEntry | null {
-  const image_key = String(row.image_key);
-  const compatible_agent_clis = agentCliIdsCompatibleWithImage(image_key);
-  if (compatible_agent_clis.length === 0) return null;
-  return {
-    image_key,
-    name: String(row.name),
-    description: String(row.description ?? ""),
-    official: row.official === true,
-    project_opt_in: row.project_opt_in === true,
-    source_kind: String(row.source_kind),
-    compatible_agent_clis,
-    ...defaultHubRuntimeImageReadiness(),
-  };
-}
+export type { HubRuntimeImageCapability, HubRuntimeImageCatalogEntry } from "./hub-runtime-image-capability.js";
+export {
+  hubRuntimeImageCapability,
+  officialHubRuntimeImageCapabilityKeys,
+  toHubRuntimeImageCatalogEntry,
+} from "./hub-runtime-image-capability.js";
 
 export async function classifyRuntimeImageReadiness(opts: {
   imageKey: string;
@@ -2469,7 +2431,7 @@ export async function listOfficialRuntimeImageStatus(
 /**
  * Hub 可选镜像目录：项目已启用、存在当前通道与宿主平台可执行 trusted 版本，
  * 且至少一种治理 CLI 能启动。与 resolveRuntimeImageForJob 的可用性口径一致；
- * 只暴露 image_key、展示字段和 compatible_agent_clis，digest/ref 仍只在 Job 创建时冻结。
+ * 暴露 image_key、展示字段、compatible_agent_clis、purpose/tool_summary/not_included/suited_* /selection_hints/capabilities；digest/ref 仍只在 Job 创建时冻结。
  */
 export async function listHubRuntimeImageCatalog(
   db: typeof sql,

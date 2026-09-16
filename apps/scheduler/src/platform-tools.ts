@@ -11,8 +11,9 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用、存在可信版本、且至少一种治理 CLI 能跑的市场镜像 `image_key`、`name`、`description`、`compatible_agent_clis`，以及实时 `readiness`（ready/preparing/unavailable/error）、`preparing`、`error_code`、脱敏 `error`、`checked_at`。",
-    "- 边界：intent 的可选字段 `runtime_image_key` 只能原样使用返回的 image_key，且必须与该 intent 角色的 CLI 兼容；省略该字段时平台按角色缺省镜像解析。不得填写 OCI 地址、可变 tag、digest 或目录之外的 key（`invalid_runtime_image`）。`readiness` 不是 ready 时整次决策被拒绝（`runtime_image_not_ready`，可重试），不会创建 Worker Job。目录不包含可执行 OCI 引用或 digest。",
+    "- 时机：**凡派发 Worker 且任务可能需要非缺省工具链时必须先调用**（移动端 APK、浏览器 CDP、ClickHouse、OpenHarmony、多语言动态 PoC 等）；不要凭记忆猜 image_key。",
+    "- 返回每条含：`image_key`、`name`、`description`、`compatible_agent_clis`、`purpose`（用途）、`tool_summary`（预装工具）、`not_included`（明确不包含）、`suited_roles`、`suited_evidence`、`selection_hints`（任务→镜像匹配提示）、`capabilities`（能力标签），以及实时 `readiness`（ready/preparing/unavailable/error）、`preparing`、`error_code`、脱敏 `error`、`checked_at`。",
+    "- 选择纪律：按本轮任务证据需求匹配 `purpose` / `capabilities` / `selection_hints`（例：APK→mobile，Chromium/CDP→chrome-test，官方 ClickHouse SQL→clickhouse-test，hdc 设备→openharmony-test，Java/Python/Go/Rust PoC→kali-minimal）；再核对角色 CLI ∈ `compatible_agent_clis` 且 `readiness=ready`。intent.`runtime_image_key` 只能原样复制返回的 image_key；省略则按角色缺省镜像。不得填写 OCI/digest/目录外 key（`invalid_runtime_image`）；非 ready 整单拒绝（`runtime_image_not_ready`）。",
     "- 示例：`{}`",
   ].join("\n"),
   list_capabilities: [
@@ -149,7 +150,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
 /** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
 const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
-  list_available_runtime_images: "注意：Hub 派发前调用，并原样复制返回的 image_key；只提案 readiness=ready 的条目；不得猜测或使用未启用、未准入、正在准备或不可用的镜像，不得填写 OCI 引用。",
+  list_available_runtime_images: "注意：按返回的 purpose/capabilities/selection_hints 匹配任务后原样复制 image_key；只提案 readiness=ready；不得猜测 key 或填写 OCI 引用；无专项需求可省略字段走角色缺省。",
   list_capabilities: "注意：只使用返回的 id/digest；需要完整契约时再 describe_capability，不要注入或猜测 SKILL.md 全文。",
   search_capabilities: "注意：query 必须非空；只从本轮结果选择 Pack，不得使用记忆中的 RoleConfig selector。",
   describe_capability: "注意：id 必须来自本轮 list/search；version/digest 不匹配会返回 RepairFeedback。",

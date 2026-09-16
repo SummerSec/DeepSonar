@@ -99,6 +99,8 @@ test("角色×镜像矩阵文档与默认 Role 镜像、专项 policy 对齐", (
   assert.match(matrix, /needs_human/);
   assert.match(matrix, /withRuntimeTestToolchainPolicy/);
   assert.match(matrix, /DEFAULT_RUNTIME_IMAGE_BY_ROLE/);
+  assert.match(matrix, /list_available_runtime_images/);
+  assert.match(matrix, /selection_hints|purpose/);
   for (const item of SPECIALTY_RUNTIME_IMAGE_POLICIES) {
     assert.match(matrix, new RegExp(item.image_key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
