@@ -5,7 +5,7 @@ import test from "node:test";
 const panel = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
-test("项目镜像策略过滤官方专项镜像的项目启用状态", () => {
+test("镜像缺省过滤官方专项镜像的项目启用状态", () => {
   const start = panel.indexOf("const projectRuntimeImageChoices");
   const end = panel.indexOf("const saveImagePolicy", start);
   const filter = panel.slice(start, end);
@@ -14,7 +14,7 @@ test("项目镜像策略过滤官方专项镜像的项目启用状态", () => {
   assert.match(filter, /image\.project_enabled === true/);
 });
 
-test("项目镜像策略下拉展示完整产品名并让选择器占满剩余宽度", () => {
+test("角色镜像缺省下拉展示完整产品名并让选择器占满剩余宽度", () => {
   const start = panel.indexOf("{imagePolicyRoles.map");
   const end = panel.indexOf("{imagePolicyRoles.length === 0");
   const rows = panel.slice(start, end);
@@ -33,4 +33,15 @@ test("searchable-select-wrap 允许触发器换行以显示完整镜像名", () 
   assert.match(wrap, /white-space:\s*normal/);
   assert.match(wrap, /word-break:\s*break-word/);
   assert.doesNotMatch(wrap, /text-overflow:\s*ellipsis/);
+});
+
+test("设置页镜像文案表述为启用边界与角色缺省而非替 AI 选图", () => {
+  assert.match(panel, /镜像启用与角色缺省/);
+  assert.match(panel, /Hub 可按任务从本项目已启用且可信的镜像中提案/);
+  assert.match(panel, /缺省跟随各角色全局 RoleConfig 镜像/);
+  assert.match(panel, /缺省使用下方角色映射；未映射角色用系统基础环境（deepsonar-base）/);
+  assert.match(panel, /保存镜像缺省/);
+  assert.match(panel, /镜像缺省已保存（下一 job 生效）/);
+  assert.doesNotMatch(panel, /项目镜像策略/);
+  assert.doesNotMatch(panel, /保存镜像策略/);
 });

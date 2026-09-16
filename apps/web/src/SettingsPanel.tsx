@@ -326,7 +326,7 @@ export function SettingsPanel({
         flash(`正在后台准备 ${result.task.total} 个运行镜像；本次未保存，请在拉取完成后重试`);
         return;
       }
-      flash("项目镜像策略已保存（下一 job 生效）");
+      flash("镜像缺省已保存（下一 job 生效）");
       setImagePolicySaved(true);
       window.setTimeout(() => setImagePolicySaved(false), 2000);
       reload();
@@ -783,9 +783,9 @@ export function SettingsPanel({
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
-                    <span>项目镜像策略</span>
+                    <span>镜像启用与角色缺省</span>
                     <HelpTip>
-                      全局继承只读取各角色的全局运行配置；项目托管在这里集中选择项目已启用的可信镜像。未选择的角色使用系统基础环境。
+                      Hub 可按任务从本项目已启用且可信的镜像中提案；此处只配置启用边界与角色缺省（Hub 省略或非 Hub 建 Job 时使用）。专项镜像须先在项目镜像页启用。
                     </HelpTip>
                   </div>
                 </div>
@@ -801,7 +801,7 @@ export function SettingsPanel({
                       />
                       <span>
                         <strong className="block text-[13px] text-zinc-200">继承全局</strong>
-                        <small className="text-[11px] leading-5 text-zinc-500">每个角色使用全局 RoleConfig 的镜像。</small>
+                        <small className="text-[11px] leading-5 text-zinc-500">缺省跟随各角色全局 RoleConfig 镜像。</small>
                       </span>
                     </label>
                     <label className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 ${imageStrategy === "project_managed" ? "border-acc-400/50 bg-acc-400/[.06]" : "border-ink-700"}`}>
@@ -814,7 +814,7 @@ export function SettingsPanel({
                       />
                       <span>
                         <strong className="block text-[13px] text-zinc-200">项目托管</strong>
-                        <small className="text-[11px] leading-5 text-zinc-500">在项目内集中选择可信镜像，未选角色使用系统基础环境。</small>
+                        <small className="text-[11px] leading-5 text-zinc-500">缺省使用下方角色映射；未映射角色用系统基础环境（deepsonar-base）。</small>
                       </span>
                     </label>
                   </div>
@@ -859,7 +859,7 @@ export function SettingsPanel({
                     disabled={imagePolicyBusy}
                     className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
                   >
-                    <FloppyDisk size={13} /> {imagePolicyBusy ? "保存中…" : imagePolicySaved ? "已保存" : imagePolicyFailed ? "保存失败" : "保存镜像策略"}
+                    <FloppyDisk size={13} /> {imagePolicyBusy ? "保存中…" : imagePolicySaved ? "已保存" : imagePolicyFailed ? "保存失败" : "保存镜像缺省"}
                   </button>
                 </div>
               </section>

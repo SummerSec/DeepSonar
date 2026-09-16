@@ -138,7 +138,7 @@ test("ready preflight creates a task and keeps the selected network override", a
   ]);
 });
 
-test("快捷创建把项目镜像策略传给项目 API", async () => {
+test("快捷创建把项目镜像缺省策略传给项目 API", async () => {
   let createdInput: { name: string; description?: string; image_strategy?: string } | null = null;
   const client: QuickStartApi = {
     createProject: async (input) => {

@@ -1430,12 +1430,12 @@ export function ProviderAccountFlow({
                       {roleConfig.project_id ? (
                         <span
                           className="provider-flow-role-cli-wrap provider-flow-role-image-wrap"
-                          title="项目 RoleConfig 的镜像由项目镜像策略集中决定"
+                          title="项目 RoleConfig 的镜像由设置中的角色缺省决定"
                           onClick={(event) => event.stopPropagation()}
                           onMouseDown={(event) => event.stopPropagation()}
                         >
                           <span className="provider-flow-role-cli-caption">镜像</span>
-                          <span className="provider-flow-role-image-readonly">由项目镜像策略决定</span>
+                          <span className="provider-flow-role-image-readonly">由项目镜像缺省决定</span>
                         </span>
                       ) : (
                         <div
