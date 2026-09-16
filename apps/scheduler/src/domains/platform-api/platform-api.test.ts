@@ -135,6 +135,31 @@ test("list_available_runtime_images is a registered read-only operation with a s
   assert.equal(projection.operations[0]?.event_type, null);
 });
 
+test("list_available_agent_clis and list_available_providers are registered read-only Hub composition ops", () => {
+  for (const operationId of ["list_available_agent_clis", "list_available_providers"] as const) {
+    const document = buildPlatformOpenApiDocument({
+      jobId: "00000000-0000-4000-8000-000000000001",
+      operationIds: [operationId],
+    });
+    const paths = document.paths as Record<string, Record<string, any>>;
+    const operation = paths[`/control/v1/jobs/{jobId}/operations/${operationId}`]?.post;
+    assert.ok(operation, `${operationId} must be projectable into the Job-scoped OpenAPI`);
+    assert.equal(operation.operationId, operationId);
+    const schema = ControlToolInputSchemasJson[operationId] as Record<string, unknown>;
+    assert.equal(schema.type, "object");
+    assert.equal(schema.additionalProperties, false);
+    const projection = buildCapabilitiesProjection({
+      jobId: "00000000-0000-4000-8000-000000000001",
+      projectId: "00000000-0000-4000-8000-000000000002",
+      canvasId: null,
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      operationIds: [operationId],
+    });
+    assert.equal(projection.operations[0]?.read_only, true);
+    assert.equal(projection.operations[0]?.event_type, null);
+  }
+});
+
 test("capabilities projection does not expose a token and points to same-level operation URLs", () => {
   const projection = buildCapabilitiesProjection({
     jobId: "00000000-0000-4000-8000-000000000001",
