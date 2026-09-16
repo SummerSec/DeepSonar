@@ -15,6 +15,7 @@ const openharmony = {
 test("runtime image options keep the product name intact and put kind in the hint", () => {
   const option = runtimeImageSelectOption(openharmony, "project-1");
   assert.equal(option.label, "DeepSonar OpenHarmony Audit");
+  assert.ok(option.hint !== undefined);
   assert.match(option.hint, /^专项·项目启用 · 不包含：/);
   assert.match(optionTitle(option), /^DeepSonar OpenHarmony Audit · 专项·项目启用 · 不包含：/);
   assert.equal(runtimeImageOptionLabel(openharmony, "project-1"), "DeepSonar OpenHarmony Audit · 专项·项目启用");
