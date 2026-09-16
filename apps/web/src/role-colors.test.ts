@@ -31,8 +31,9 @@ test("edge style keeps exact dash patterns and independent animation speeds", ()
 
 test("canvas edges use the source node color for stroke and marker, with SVG legend patterns", () => {
   const canvasSource = readFileSync(new URL("./CanvasView.tsx", import.meta.url), "utf8");
+  const canvasLegendSource = readFileSync(new URL("./CanvasLegend.tsx", import.meta.url), "utf8");
   assert.match(canvasSource, /stroke: sourceColor/);
   assert.match(canvasSource, /markerEnd:\s*\{[^}]*color: sourceColor/s);
   assert.match(canvasSource, /strokeDasharray: boostedDashCss\(st\.dash\)/);
-  assert.match(canvasSource, /<svg[^>]*>\s*<line[\s\S]*strokeDasharray=\{it\.dash \|\| undefined\}/);
+  assert.match(canvasLegendSource, /<svg[^>]*>\s*<line[\s\S]*strokeDasharray=\{it\.dash \|\| undefined\}/);
 });
