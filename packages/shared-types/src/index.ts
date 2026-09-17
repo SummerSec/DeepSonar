@@ -360,6 +360,19 @@ export function parseDeclaredQuantities(value: unknown): QuantityAnchor[] {
 
 const optionalQuantities = QuantityAnchors.optional();
 
+/** Impact semantics for security findings (#590). */
+export const FindingImpact = z
+  .object({
+    attacker_entry: z.string().max(2000).regex(/\S/).optional(),
+    victim_resource: z.string().max(2000).regex(/\S/).optional(),
+    impact_flow: z.string().max(8000).regex(/\S/).optional(),
+    preconditions: z.array(nonEmptyText(500)).max(32).optional(),
+    known_issue_refs: z.array(nonEmptyText(300)).max(32).optional(),
+    impact_waiver: z.string().max(2000).regex(/\S/).optional(),
+  })
+  .strict();
+export type FindingImpact = z.infer<typeof FindingImpact>;
+
 export const FindingPayload = z
   .object({
     title: meaningfulFindingTitle,
@@ -373,6 +386,7 @@ export const FindingPayload = z
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
     quantities: optionalQuantities,
+    impact: FindingImpact.optional(),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
   })
   .strict()
@@ -398,6 +412,7 @@ export const EmitFindingDirectPayload = z
     summary: meaningfulFindingSummary,
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
+    impact: FindingImpact.optional(),
   })
   .strict();
 export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
@@ -415,6 +430,7 @@ export const EmitFindingPayload = z
     summary: meaningfulFindingSummary.optional(),
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
+    impact: FindingImpact.optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
   .strict()

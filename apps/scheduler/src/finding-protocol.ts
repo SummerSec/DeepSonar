@@ -7,6 +7,7 @@ import {
   type FindingScoringProposal,
   type Severity,
 } from "@deepsonar/shared-types";
+import { extractKnownIssueRefs, normalizeFindingImpact } from "./finding-impact.js";
 import type { Cvss3P1, Cvss4P0 } from "ae-cvss-calculator";
 import { createRequire } from "node:module";
 
@@ -38,11 +39,10 @@ export const DEFAULT_FINDING_PROTOCOL: EffectiveFindingProtocol = {
     default_standard: "CVSS",
     default_version: "3.1",
     accepted_versions: ["3.1", "4.0"],
-    // Preserve compatibility with existing audit Agents; projects can opt in
-    // to mandatory scoring after their prompts emit versioned vectors.
-    require_scoring_for_profiles: [],
+    // #590: security.vulnerability 默认强制评分；项目协议可覆盖。
+    require_scoring_for_profiles: ["security.vulnerability"],
   },
-  display_name: "安全漏洞 · CVSS 3.1（Agent 可选）",
+  display_name: "安全漏洞 · CVSS 3.1（security.vulnerability 必填评分）",
   source: "global",
 };
 
@@ -260,8 +260,16 @@ export function normalizeFindingProposal(
   if (protocol.scoring.require_scoring_for_profiles.includes(profile) && !proposal.scoring) {
     throw new Error(`finding profile ${profile} requires scoring`);
   }
+  const known = extractKnownIssueRefs(
+    typeof proposal.location === "string" ? proposal.location : null,
+    typeof proposal.summary === "string" ? proposal.summary : null,
+  );
+  const tags = [...new Set([...(proposal.tags ?? []), ...(known.length ? ["known_issue", ...known] : [])])];
+  const impact = normalizeFindingImpact(proposal.impact) ?? undefined;
   return {
     ...rest,
+    tags,
+    ...(impact ? { impact } : {}),
     title: proposal.title,
     profile,
     ...(proposal.scoring ? { scoring: normalizeFindingScoring(profile, proposal.scoring) } : {}),

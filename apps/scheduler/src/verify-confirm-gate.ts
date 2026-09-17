@@ -5,6 +5,7 @@
 import {
   evaluateVerificationStrategy,
   strategyActionableMissing,
+  profileRequiresEvidencePair,
   type FactFirstGateResult,
   type FactFirstRecord,
   type VerificationStrategyDecision,
@@ -22,6 +23,11 @@ import {
   vulnProofAuditFields,
   type VulnProofClaim,
 } from "./vuln-proof-contract.js";
+import {
+  evaluateImpactForConfirm,
+  normalizeFindingImpact,
+  type FindingImpact,
+} from "./finding-impact.js";
 
 /** Minimal evidence shape needed by the confirm gate (mirrors verify.EvidenceSnapshot). */
 export type ConfirmGateEvidence = {
@@ -49,6 +55,12 @@ export type ConfirmGateOptions = {
   vulnProof?: VulnProofClaim | null;
   /** When set and not security.vulnerability, requireVulnProof is ignored. */
   findingProfile?: string | null;
+  /** #590: force review/test pair as required (defaults from profileRequiresEvidencePair). */
+  requireEvidencePair?: boolean;
+  impact?: FindingImpact | null;
+  attemptedRefutation?: readonly string[] | null;
+  declaredUsedFactIds?: readonly string[];
+  factsById?: ReadonlyMap<string, FactFirstRecord>;
 };
 
 export type ConfirmGateResult = {
@@ -104,6 +116,10 @@ export function evaluateConfirmGate(
     originJobId: opts?.originJobId,
     pairMissing: evidence.missing,
     conflictingNodeIds: evidence.conflicting_node_ids,
+    findingProfile: opts?.findingProfile,
+    requireEvidencePair: opts?.requireEvidencePair,
+    declaredUsedFactIds: opts?.declaredUsedFactIds,
+    factsById: opts?.factsById,
   });
   const integrity = evaluateEvidenceIntegrityForConfirm(
     factNodeSnapshotsFromEvidenceRows(evidenceRows(evidence)),
@@ -124,6 +140,39 @@ export function evaluateConfirmGate(
     merged = mergeStrategyWithVulnProof(merged, vuln);
   }
 
+  if (merged.require_evidence_pair) {
+    const extra: string[] = [];
+    const reasons: string[] = [];
+    const impactDecision = evaluateImpactForConfirm(
+      opts?.findingProfile,
+      opts?.impact ?? normalizeFindingImpact(null),
+    );
+    if (!impactDecision.ok) {
+      extra.push(...impactDecision.required_missing);
+      reasons.push(...impactDecision.reasons);
+    }
+    const attempted = (opts?.attemptedRefutation ?? []).map(String).map((s) => s.trim()).filter(Boolean);
+    if (attempted.length === 0) {
+      extra.push("attempted_refutation");
+      reasons.push("confirmed 必须附带 attempted_refutation");
+    }
+    const used = new Set(merged.used_fact_ids);
+    const tests = evidence.test.filter((row) => used.has(String(row.node_id ?? "")));
+    if (tests.some((row) => !Array.isArray(row.artifact_refs) || row.artifact_refs.length === 0)) {
+      extra.push("qualified_test_artifact_refs");
+      reasons.push("合格 test 缺少 artifact_refs");
+    }
+    if (extra.length > 0) {
+      merged = {
+        ...merged,
+        ok: false,
+        required_missing: [...new Set([...merged.required_missing, ...extra])],
+        reasons: [...merged.reasons, ...reasons],
+        confirm_reason: null,
+      };
+    }
+  }
+
   return {
     ok: merged.ok,
     missing: merged.ok ? [] : strategyActionableMissing(merged),
@@ -132,3 +181,5 @@ export function evaluateConfirmGate(
     vuln_proof: vulnAudit,
   };
 }
+
+export { profileRequiresEvidencePair };
