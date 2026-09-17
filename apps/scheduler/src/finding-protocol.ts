@@ -265,7 +265,7 @@ export function normalizeFindingProposal(
     typeof proposal.summary === "string" ? proposal.summary : null,
   );
   const tags = [...new Set([...(proposal.tags ?? []), ...(known.length ? ["known_issue", ...known] : [])])];
-  const impact = normalizeFindingImpact(proposal.impact) ?? undefined;
+  const impact = normalizeFindingImpact(proposal.impact);
   return {
     ...rest,
     tags,

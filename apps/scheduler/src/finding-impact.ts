@@ -3,15 +3,9 @@
  * security.vulnerability confirmed requires impact_flow or explicit waiver.
  */
 import { textField, profileRequiresEvidencePair } from "./verify-fact-gate.js";
+import type { FindingImpact as SharedFindingImpact } from "@deepsonar/shared-types";
 
-export type FindingImpact = {
-  attacker_entry?: string | null;
-  victim_resource?: string | null;
-  impact_flow?: string | null;
-  preconditions?: string[] | null;
-  known_issue_refs?: string[] | null;
-  impact_waiver?: string | null;
-};
+export type FindingImpact = SharedFindingImpact;
 
 export type ImpactConfirmDecision = {
   ok: boolean;
@@ -27,8 +21,13 @@ const KNOWN_ISSUE_PATTERNS: RegExp[] = [
   /\bCVE-\d{4}-\d{4,7}\b/gi,
 ];
 
-export function normalizeFindingImpact(raw: unknown): FindingImpact | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+function optionalText(value: unknown): string | undefined {
+  const text = textField(value);
+  return text.length > 0 ? text : undefined;
+}
+
+export function normalizeFindingImpact(raw: unknown): FindingImpact | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const o = raw as Record<string, unknown>;
   const preconditions = Array.isArray(o.preconditions)
     ? o.preconditions.map((v) => String(v).trim()).filter(Boolean).slice(0, 32)
@@ -36,14 +35,15 @@ export function normalizeFindingImpact(raw: unknown): FindingImpact | null {
   const known = Array.isArray(o.known_issue_refs)
     ? o.known_issue_refs.map((v) => String(v).trim()).filter(Boolean).slice(0, 32)
     : [];
-  return {
-    attacker_entry: textField(o.attacker_entry) || null,
-    victim_resource: textField(o.victim_resource) || null,
-    impact_flow: textField(o.impact_flow) || null,
-    preconditions: preconditions.length > 0 ? preconditions : null,
-    known_issue_refs: known.length > 0 ? known : null,
-    impact_waiver: textField(o.impact_waiver) || null,
+  const impact: FindingImpact = {
+    ...(optionalText(o.attacker_entry) ? { attacker_entry: optionalText(o.attacker_entry) } : {}),
+    ...(optionalText(o.victim_resource) ? { victim_resource: optionalText(o.victim_resource) } : {}),
+    ...(optionalText(o.impact_flow) ? { impact_flow: optionalText(o.impact_flow) } : {}),
+    ...(preconditions.length > 0 ? { preconditions } : {}),
+    ...(known.length > 0 ? { known_issue_refs: known } : {}),
+    ...(optionalText(o.impact_waiver) ? { impact_waiver: optionalText(o.impact_waiver) } : {}),
   };
+  return Object.keys(impact).length > 0 ? impact : undefined;
 }
 
 export function extractKnownIssueRefs(...texts: Array<string | null | undefined>): string[] {
