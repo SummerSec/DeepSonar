@@ -21,6 +21,7 @@
 ### 新增
 
 - 安全漏洞证明契约（#578）：为 profile `security.vulnerability` 增加可冻结策略 `security.vulnerability.proof` v1（静态/动态双路径）。TODO/注释/危险函数存在/单纯行号命中不能单独过门；可达/不可达、受保护/可绕过、已证实影响/仅假设影响成对样本有单测。缺工具/目标/设备 → inconclusive；要求动态复现的类型不能只用静态叙述过门，静态可成立类型不被强制动态 PoC 阻断。Verify 只消费 Fact；`requireVulnProof` 可选接入确认硬门（默认不回归 fact_first v1）。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
+- 上游 review/test 独立反证与有界假设修正闭环（#579）：新增 `research.hypothesis_loop` v1。「未找到反证」不能自动 confirmed；相同输入指纹停止重复派发；反驳后派生子假设须保留父命题链接且禁止原文复活；预算耗尽 → request_human（不回归 #575 paused_reason）；Hub 可回放下一步决策；Verify 仍只消费 Fact。
 
 - 项目配置：CLI / Provider 白名单选型与 Hub 运行时组合（#568）。项目设置新增「CLI / Provider 启用与缺省」面板（对标镜像启用）；`config_json` 持久化 `enabled_agent_clis` / `enabled_credential_ids` 与可选软缺省。Hub 新增 `list_available_agent_clis` / `list_available_providers`，intent 可提案 `agent_cli` / `credential_id`（目录外 fail-closed）；省略时走项目软缺省或 RoleConfig 回退。并发仍归 Provider（`max_concurrent` / `model_concurrency`）。迁移：首次读设置时把现有 RoleConfig 绑定种子进白名单，避免静默丢配置。平台只做启用/配额/审计控制面，不在角色上锁死完整身份。
 - 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。
