@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { config } from "./config.js";
 import { boundGraphSection, graphProjectionMarkers, humanHintProjection, parseHubDecision, projectedQuantities, projectVerifyFinding, serializeFindingStatusIndex } from "./graph.js";
-import { buildEvidenceSnapshot, findingVerificationSummaries } from "./verify.js";
+import { buildEvidenceSnapshot } from "./verify.js";
+import { findingVerificationSummaries } from "./verify-summaries.js";
 
 test("Hub Finding status index keeps all 357 entries within the 48 KB budget", () => {
   const findings = Array.from({ length: 357 }, (_, index) => ({
@@ -232,7 +233,11 @@ test("batch Finding summaries use one query per dataset and preserve gate fields
   assert.equal(calls.length, 3);
   assert.equal(summaries.get("finding-1")?.verify_status, "pending");
   assert.equal(summaries.get("finding-1")?.verification_attempt, 2);
-  assert.deepEqual(summaries.get("finding-1")?.missing_evidence, ["independent_review", "runtime_test"]);
+  assert.deepEqual(summaries.get("finding-1")?.missing_evidence, ["structured_supporting_fact"]);
+  assert.deepEqual(summaries.get("finding-1")?.advisory_missing, ["independent_review", "runtime_test"]);
+  assert.equal(summaries.get("finding-1")?.strategy_id, "fact_first");
+  assert.equal(summaries.get("finding-1")?.strategy_version, 1);
+  assert.equal(summaries.get("finding-1")?.legacy_unversioned_strategy, false);
 });
 
 test("human hints expose ignored resolution so resumed agents can continue", () => {

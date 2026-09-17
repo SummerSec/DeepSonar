@@ -133,5 +133,6 @@ test("unused verify compat wrappers are gone", () => {
   const verify = readFileSync(new URL("../../verify.ts", import.meta.url), "utf8");
   assert.doesNotMatch(verify, /checkCareFindingsConfirmed|requireCareConfirmed|findingVerificationSummary/);
   assert.match(verify, /export async function canvasFindingsConverged/);
-  assert.match(verify, /export async function findingVerificationSummaries/);
+  assert.match(readFileSync(new URL("../../verify-summaries.ts", import.meta.url), "utf8"), /export async function findingVerificationSummaries/);
+  assert.doesNotMatch(verify, /export async function findingVerificationSummaries/);
 });

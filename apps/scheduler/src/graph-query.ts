@@ -6,7 +6,8 @@ import {
 } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
 import { config } from "./config.js";
-import { findingVerificationSummaries, isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
+import { isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
+import { findingVerificationSummaries } from "./verify-summaries.js";
 import { taskTargetForPrompt } from "./task-compose.js";
 import {
   humanHintProjection,

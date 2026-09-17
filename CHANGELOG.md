@@ -6,6 +6,7 @@
 
 ### 修复
 
+- 统一 Fact-first 确认策略与 `missing_evidence`（#576）：引入可冻结 `strategy_id=fact_first` / `strategy_version=1`，门禁、必需缺项、advisory 缺项与确认理由同一路径计算；直接确认与 Verify Job 收口共用。`confirmed` 时 `missing_evidence` 只反映必需项（通过则为空），review/test 配对缺口写入 `advisory_missing`，不再出现「已确认却仍列 independent_review 等必需缺项」。冲突 / 来源失败 / 错误 finding-revision 仍阻断；CTF 单 Fact 直通保留。历史无策略版本的确认标记 `legacy_unversioned_strategy`，不静默重写。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
 - Hub verify 收敛门静默停机（#574）：`waiting_evidence` 在证据签名未变时不再 silent return；从未验证的 pending 可唤醒；关注级别内持久 `inconclusive` / stalled pending 在 N=`INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS`（2）后升级 `needs_human`+human Action，并写入 `paused_reason=verify_unclosed:…`（Web 总览副标题透出）。
 - 角色未指定 model 时 Job 快照不再空白，并避免 usage 台账把 CLI 默认名误当成凭据目录模型（#570）：
   - provision：解析模型（角色 → settings → CLI 默认）后与凭据 `model_catalog_json` 比对；目录非空且未命中则 fail-closed（中文列出可选项）。RoleConfig `allow_model_catalog_passthrough` 或平台 `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH` 可显式放行 alias 直通。

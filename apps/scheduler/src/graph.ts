@@ -1,6 +1,7 @@
 import { sql } from "./db.js";
 import { taskTargetForPrompt } from "./task-compose.js";
-import { findingVerificationSummaries, isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
+import { isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
+import { findingVerificationSummaries } from "./verify-summaries.js";
 import { config } from "./config.js";
 import {
   GraphNodeReference,

@@ -197,6 +197,127 @@ export function factFirstAuditAfter(gate: FactFirstGateResult): Record<string, u
   };
 }
 
+/** Freezable confirm strategy id (#576). Fact-first v1: structured supporting Fact closes; review/test pair is advisory. */
+export const VERIFICATION_STRATEGY_ID = "fact_first" as const;
+export const VERIFICATION_STRATEGY_VERSION = 1 as const;
+
+export type VerificationStrategyDecision = {
+  strategy_id: typeof VERIFICATION_STRATEGY_ID;
+  strategy_version: typeof VERIFICATION_STRATEGY_VERSION;
+  ok: boolean;
+  result: FactFirstGateResult["result"];
+  /** Blocks confirm; projected as missing_evidence. */
+  required_missing: string[];
+  /** Non-blocking inventory (e.g. independent_review / runtime_test under Fact-first). */
+  advisory_missing: string[];
+  used_fact_ids: string[];
+  reasons: string[];
+  confirm_reason: string | null;
+  gate: FactFirstGateResult;
+};
+
+/** Pair-completeness inventory from buildEvidenceSnapshot — advisory under fact_first v1. */
+const PAIR_INVENTORY = new Set([
+  "independent_review",
+  "runtime_test",
+  "independent_jobs",
+  "supporting_test",
+  "unresolved_conflict",
+]);
+
+/**
+ * Single path for gate + required/advisory missing + confirm reason (#576).
+ * Direct confirm and Verify Job close-out must share this decision.
+ */
+export function evaluateVerificationStrategy(
+  facts: readonly FactFirstRecord[],
+  opts: {
+    findingId: string;
+    subjectRevision?: string | null;
+    originJobId?: string | null;
+    pairMissing?: readonly string[];
+    conflictingNodeIds?: readonly string[];
+  },
+): VerificationStrategyDecision {
+  const gate = evaluateFactFirstConfirmGate(facts, {
+    findingId: opts.findingId,
+    subjectRevision: opts.subjectRevision,
+    originJobId: opts.originJobId,
+  });
+  const pairMissing = [...new Set((opts.pairMissing ?? []).map(String).filter(Boolean))];
+  const advisory = pairMissing.filter((item) => PAIR_INVENTORY.has(item));
+
+  if (gate.ok) {
+    return {
+      strategy_id: VERIFICATION_STRATEGY_ID,
+      strategy_version: VERIFICATION_STRATEGY_VERSION,
+      ok: true,
+      result: "passed",
+      required_missing: [],
+      advisory_missing: advisory,
+      used_fact_ids: gate.used_fact_ids,
+      reasons: [],
+      confirm_reason: `fact_first_v${VERIFICATION_STRATEGY_VERSION}_passed`,
+      gate,
+    };
+  }
+
+  const required = [...gate.missing];
+  if ((opts.conflictingNodeIds?.length ?? 0) > 0 && !required.includes("path_fork")) {
+    required.push("path_fork");
+  }
+  const requiredSet = new Set(required);
+  return {
+    strategy_id: VERIFICATION_STRATEGY_ID,
+    strategy_version: VERIFICATION_STRATEGY_VERSION,
+    ok: false,
+    result: gate.result,
+    required_missing: [...requiredSet],
+    advisory_missing: advisory.filter((item) => !requiredSet.has(item)),
+    used_fact_ids: gate.used_fact_ids,
+    reasons: gate.reasons,
+    confirm_reason: null,
+    gate,
+  };
+}
+
+/** Actionable Hub / rework hints: required first, then advisory (no duplicates). */
+export function strategyActionableMissing(decision: VerificationStrategyDecision): string[] {
+  return [...new Set([...decision.required_missing, ...decision.advisory_missing])];
+}
+
+export function strategyAuditFields(decision: VerificationStrategyDecision): Record<string, unknown> {
+  return {
+    strategy_id: decision.strategy_id,
+    strategy_version: decision.strategy_version,
+    ok: decision.ok,
+    result: decision.result,
+    required_missing: decision.required_missing,
+    advisory_missing: decision.advisory_missing,
+    used_fact_ids: decision.used_fact_ids,
+    reasons: decision.reasons,
+    confirm_reason: decision.confirm_reason,
+    gate: factFirstAuditAfter(decision.gate),
+  };
+}
+
+/**
+ * Historical rows without strategy_id/version are legacy; do not silently rewrite them as v1-passed.
+ */
+export function readStoredStrategyContext(raw: Record<string, unknown> | null | undefined): {
+  strategy_id: string | null;
+  strategy_version: number | null;
+  legacy_unversioned: boolean;
+} {
+  const strategy_id = typeof raw?.strategy_id === "string" ? raw.strategy_id : null;
+  const strategy_version = typeof raw?.strategy_version === "number" ? raw.strategy_version : null;
+  return {
+    strategy_id,
+    strategy_version,
+    legacy_unversioned: strategy_id == null || strategy_version == null,
+  };
+}
+
 /**
  * Fact-first 结果如何驱动 Verify 生命周期（#518 / #537）。
  * rejected → refuted（原命题不成立）；conflict → inconclusive（未证实）。

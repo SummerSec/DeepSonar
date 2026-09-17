@@ -20,7 +20,7 @@
     },
     "apps/scheduler/src/verify.ts": {
       "class": "logic",
-      "maxLines": 2059,
+      "maxLines": 2028,
       "issue": "#544"
     },
     "apps/web/src/CanvasView.tsx": {
