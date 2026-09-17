@@ -27,6 +27,7 @@ export const PRESETS = {
   "deepsonar-base": {
     dockerfile: "deploy/Dockerfile.agent",
     paths: [
+      "agent-harness/manuals/deepsonar-base",
       "agent-harness/runtime-images.json",
       "agent-harness/write-tool-manifest.mjs",
     ],
@@ -36,6 +37,7 @@ export const PRESETS = {
   "deepsonar-audit": {
     dockerfile: "deploy/Dockerfile.agent",
     paths: [
+      "agent-harness/manuals/deepsonar-audit",
       "agent-harness/runtime-images.json",
       "agent-harness/write-tool-manifest.mjs",
     ],
@@ -45,6 +47,7 @@ export const PRESETS = {
   "deepsonar-kali-minimal": {
     dockerfile: "deploy/Dockerfile.agent-kali-minimal",
     paths: [
+      "agent-harness/manuals/deepsonar-kali-minimal",
       "agent-harness/kali-minimal-runtime.json",
       "agent-harness/write-tool-manifest.mjs",
     ],
@@ -104,6 +107,7 @@ export const PRESETS = {
   "deepsonar-openharmony-test": {
     dockerfile: "deploy/Dockerfile.agent-openharmony",
     paths: [
+      "agent-harness/manuals/deepsonar-openharmony-test",
       "agent-harness/openharmony-test-runtime.json",
       "deploy/vendor/gitcode-repo-py3",
       "deploy/vendor/openharmony-hdc/hdc",
@@ -119,6 +123,7 @@ export const PRESETS = {
   "deepsonar-openharmony-audit": {
     dockerfile: "deploy/Dockerfile.agent-openharmony-audit",
     paths: [
+      "agent-harness/manuals/deepsonar-openharmony-audit",
       "deploy/vendor/gitcode-repo-py3",
       "deploy/openharmony-env.sh",
       "deploy/openharmony-init.sh",
@@ -131,6 +136,7 @@ export const PRESETS = {
   "deepsonar-openharmony-fuzz": {
     dockerfile: "deploy/Dockerfile.agent-openharmony-fuzz",
     paths: [
+      "agent-harness/manuals/deepsonar-openharmony-fuzz",
       "deploy/vendor/gitcode-repo-py3",
       "deploy/openharmony-env.sh",
       "deploy/openharmony-init.sh",
@@ -143,6 +149,7 @@ export const PRESETS = {
   "deepsonar-chrome-audit": {
     dockerfile: "deploy/Dockerfile.agent-chrome-audit",
     paths: [
+      "agent-harness/manuals/deepsonar-chrome-audit",
       "agent-harness/chrome-audit-runtime.json",
       "deploy/chrome-runtime-sources.json",
       "deploy/chrome-audit-env.sh",
@@ -152,6 +159,7 @@ export const PRESETS = {
   "deepsonar-chrome-test": {
     dockerfile: "deploy/Dockerfile.agent-chrome-test",
     paths: [
+      "agent-harness/manuals/deepsonar-chrome-test",
       "agent-harness/chrome-test-runtime.json",
       "deploy/chrome-runtime-sources.json",
       "deploy/chrome-headless.sh",
@@ -163,6 +171,7 @@ export const PRESETS = {
   "deepsonar-chrome-fuzz": {
     dockerfile: "deploy/Dockerfile.agent-chrome-fuzz",
     paths: [
+      "agent-harness/manuals/deepsonar-chrome-fuzz",
       "agent-harness/chrome-fuzz-runtime.json",
       "deploy/chrome-runtime-sources.json",
       "deploy/chrome-fuzz-env.sh",
@@ -174,6 +183,7 @@ export const PRESETS = {
   "deepsonar-clickhouse-audit": {
     dockerfile: "deploy/Dockerfile.agent-clickhouse-audit",
     paths: [
+      "agent-harness/manuals/deepsonar-clickhouse-audit",
       "agent-harness/clickhouse-audit-runtime.json",
       "deploy/clickhouse-runtime-sources.json",
       "deploy/clickhouse-audit-env.sh",
@@ -183,6 +193,7 @@ export const PRESETS = {
   "deepsonar-clickhouse-test": {
     dockerfile: "deploy/Dockerfile.agent-clickhouse-test",
     paths: [
+      "agent-harness/manuals/deepsonar-clickhouse-test",
       "agent-harness/clickhouse-test-runtime.json",
       "deploy/clickhouse-runtime-sources.json",
       "deploy/clickhouse-install-static.sh",
@@ -196,6 +207,7 @@ export const PRESETS = {
   "deepsonar-clickhouse-fuzz": {
     dockerfile: "deploy/Dockerfile.agent-clickhouse-fuzz",
     paths: [
+      "agent-harness/manuals/deepsonar-clickhouse-fuzz",
       "agent-harness/clickhouse-fuzz-runtime.json",
       "deploy/clickhouse-runtime-sources.json",
       "deploy/clickhouse-install-static.sh",
@@ -208,6 +220,7 @@ export const PRESETS = {
   "deepsonar-mobile": {
     dockerfile: "deploy/Dockerfile.agent-mobile",
     paths: [
+      "agent-harness/manuals/deepsonar-mobile",
       "agent-harness/mobile-runtime.json",
       "deploy/mobile-env.sh",
       "deploy/mobile-adb.sh",

@@ -2,6 +2,10 @@
 
 ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控制约定」。真实 Job 只使用平台注入的静态 `deepsonar-control` Skill 和短期 capability token，语义事件经 Job 级 API 回传（沙箱可断网、零长期凭据）。
 
+## 工具说明书（#588）
+
+官方运行镜像的 Agent 面向工具说明书位于 `agent-harness/manuals/<imageKey>/`，构建安装到 `/opt/deepsonar/manuals/`。覆盖与结构由 `check-runtime-manuals.mjs` 门禁校验。
+
 ## 官方镜像
 
 - `deepsonar-base`：固定 digest 的 Node 22 Debian slim + 最小通用 CLI。

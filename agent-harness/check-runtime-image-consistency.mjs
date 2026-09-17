@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
 import { Script } from "node:vm";
 import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
+import { checkRuntimeManuals } from "./check-runtime-manuals.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
 // checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
@@ -1047,6 +1048,9 @@ const kaliDigestInspectIndex = releaseWorkflow.indexOf('digest="$(docker buildx 
 const kaliImmutableCopyIndex = releaseWorkflow.indexOf('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"');
 expect(kaliDigestInspectIndex >= 0 && kaliImmutableCopyIndex > kaliDigestInspectIndex, "Kali Docker Hub copy must use a GHCR digest inspected before the cross-registry copy");
 expect(!releaseWorkflow.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"'), "Kali Docker Hub copy must not use the mutable GHCR tag");
+
+
+failures.push(...checkRuntimeManuals({ fingerprintPresets: PRESETS }));
 
 if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));

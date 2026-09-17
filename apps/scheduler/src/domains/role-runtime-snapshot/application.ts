@@ -221,6 +221,16 @@ This Job uses a Scheduler-selected, trusted runtime image. Before testing, read 
 - If a required preinstalled command is missing, stop the dynamic attempt and submit structured inconclusive/needs-human evidence. Never claim a confirmed Finding from a static description alone.
 - Record the runtime image key/digest, tool versions, target revision, exact steps, expected result, actual result, and limitations in emit_fact.verification for runtime-test evidence.`;
 
+/** #588: every official runtime image ships offline tool manuals. */
+export const RUNTIME_TOOL_MANUALS_POLICY = `### Runtime tool manuals (Scheduler policy)
+
+This Job's runtime image includes offline tool manuals at \`/opt/deepsonar/manuals/\`.
+
+- Start with \`/opt/deepsonar/manuals/INDEX.md\`, then open only the relevant \`tools/*.md\` pages for the task.
+- Manuals cover when to use / when not, prerequisites, invocation, output meaning, failure classes, composition, evidence retention, and version limits.
+- Do not rely on host-repo docs or guessed \`--help\` alone. Prefer manuals before first invocation of an unfamiliar tool.
+- Empty results are not automatic \`needs_human\`; missing devices/services must be labeled inconclusive/needs_human without fabricating runtime output.`;
+
 export function withRuntimeTestToolchainPolicy(
   roleName: string,
   instructions: string | null,
@@ -229,9 +239,13 @@ export function withRuntimeTestToolchainPolicy(
   const dynamicVerify = roleName === "verify" && resolvedRuntimeImageKey !== null && resolvedRuntimeImageKey !== "deepsonar-base";
   const injectRuntimeTest = roleName === "test" || dynamicVerify;
   const specialty = lookupSpecialtyPolicy(resolvedRuntimeImageKey);
-  if (!injectRuntimeTest && !specialty) return instructions;
+  const injectManuals = Boolean(resolvedRuntimeImageKey);
+  if (!injectRuntimeTest && !specialty && !injectManuals) return instructions;
 
   let text = instructions?.trim() ?? "";
+  if (injectManuals) {
+    text = appendPolicyBlock(text, "### Runtime tool manuals (Scheduler policy)", RUNTIME_TOOL_MANUALS_POLICY);
+  }
   if (injectRuntimeTest) {
     text = appendPolicyBlock(text, "### Runtime test toolchain (Scheduler policy)", RUNTIME_TEST_TOOLCHAIN_POLICY);
   }

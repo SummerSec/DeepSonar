@@ -1,0 +1,1188 @@
+{
+  "contract": "deepsonar.runtime.manuals/v1",
+  "manuals_root_in_image": "/opt/deepsonar/manuals",
+  "required_headings": [
+    "## 使用场景",
+    "## 选型依据",
+    "## 前置条件",
+    "## 调用方式",
+    "## 输出解释",
+    "## 失败处理",
+    "## 组合流程",
+    "## 证据留存",
+    "## 版本与限制"
+  ],
+  "images": {
+    "deepsonar-base": {
+      "dockerfile": "deploy/Dockerfile.agent",
+      "focus": "通用工具选型、文件/代码/数据处理、能力限制",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "ca-certificates",
+          "file": "tools/ca-certificates.md",
+          "title": "ca-certificates"
+        },
+        {
+          "id": "curl",
+          "file": "tools/curl.md",
+          "title": "curl"
+        },
+        {
+          "id": "ripgrep",
+          "file": "tools/ripgrep.md",
+          "title": "ripgrep (rg)"
+        },
+        {
+          "id": "jq",
+          "file": "tools/jq.md",
+          "title": "jq"
+        },
+        {
+          "id": "file",
+          "file": "tools/file.md",
+          "title": "file"
+        },
+        {
+          "id": "unzip",
+          "file": "tools/unzip.md",
+          "title": "unzip"
+        },
+        {
+          "id": "xz-utils",
+          "file": "tools/xz-utils.md",
+          "title": "xz / unxz"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-audit": {
+      "dockerfile": "deploy/Dockerfile.agent",
+      "focus": "源码审计工具分工、检索、静态观察与证据解释",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "ca-certificates",
+          "file": "tools/ca-certificates.md",
+          "title": "ca-certificates"
+        },
+        {
+          "id": "curl",
+          "file": "tools/curl.md",
+          "title": "curl"
+        },
+        {
+          "id": "ripgrep",
+          "file": "tools/ripgrep.md",
+          "title": "ripgrep (rg)"
+        },
+        {
+          "id": "jq",
+          "file": "tools/jq.md",
+          "title": "jq"
+        },
+        {
+          "id": "file",
+          "file": "tools/file.md",
+          "title": "file"
+        },
+        {
+          "id": "unzip",
+          "file": "tools/unzip.md",
+          "title": "unzip"
+        },
+        {
+          "id": "xz-utils",
+          "file": "tools/xz-utils.md",
+          "title": "xz / unxz"
+        },
+        {
+          "id": "binutils",
+          "file": "tools/binutils.md",
+          "title": "binutils (readelf/objdump/nm)"
+        },
+        {
+          "id": "readelf",
+          "file": "tools/readelf.md",
+          "title": "readelf"
+        },
+        {
+          "id": "objdump",
+          "file": "tools/objdump.md",
+          "title": "objdump"
+        },
+        {
+          "id": "nm",
+          "file": "tools/nm.md",
+          "title": "nm"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-kali-minimal": {
+      "dockerfile": "deploy/Dockerfile.agent-kali-minimal",
+      "focus": "多语言环境选择、构建运行、依赖约束与 PoC 流程",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "python",
+          "file": "tools/python.md",
+          "title": "python (managed multi-version)"
+        },
+        {
+          "id": "ca-certificates",
+          "file": "tools/ca-certificates.md",
+          "title": "ca-certificates"
+        },
+        {
+          "id": "curl",
+          "file": "tools/curl.md",
+          "title": "curl"
+        },
+        {
+          "id": "ripgrep",
+          "file": "tools/ripgrep.md",
+          "title": "ripgrep (rg)"
+        },
+        {
+          "id": "jq",
+          "file": "tools/jq.md",
+          "title": "jq"
+        },
+        {
+          "id": "file",
+          "file": "tools/file.md",
+          "title": "file"
+        },
+        {
+          "id": "unzip",
+          "file": "tools/unzip.md",
+          "title": "unzip"
+        },
+        {
+          "id": "xz-utils",
+          "file": "tools/xz-utils.md",
+          "title": "xz / unxz"
+        },
+        {
+          "id": "binutils",
+          "file": "tools/binutils.md",
+          "title": "binutils (readelf/objdump/nm)"
+        },
+        {
+          "id": "build-essential",
+          "file": "tools/build-essential.md",
+          "title": "build-essential (gcc/make)"
+        },
+        {
+          "id": "pkg-config",
+          "file": "tools/pkg-config.md",
+          "title": "pkg-config"
+        },
+        {
+          "id": "golang-go",
+          "file": "tools/golang-go.md",
+          "title": "go"
+        },
+        {
+          "id": "rustc",
+          "file": "tools/rustc.md",
+          "title": "rustc/cargo"
+        },
+        {
+          "id": "cargo",
+          "file": "tools/cargo.md",
+          "title": "cargo"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "uv",
+          "file": "tools/uv.md",
+          "title": "uv"
+        },
+        {
+          "id": "maven",
+          "file": "tools/maven.md",
+          "title": "mvn"
+        },
+        {
+          "id": "jdk",
+          "file": "tools/jdk.md",
+          "title": "java/javac (managed JDK)"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-chrome-test": {
+      "dockerfile": "deploy/Dockerfile.agent-chrome-test",
+      "focus": "浏览器启动、CDP 连接、页面观察、产物与清理",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "chromium",
+          "file": "tools/chromium.md",
+          "title": "chromium + chrome-headless.sh"
+        },
+        {
+          "id": "chromium-common",
+          "file": "tools/chromium-common.md",
+          "title": "chromium-common"
+        },
+        {
+          "id": "chromium-headless",
+          "file": "tools/chromium-headless.md",
+          "title": "chromium-headless 能力"
+        },
+        {
+          "id": "remote-debugging-cdp",
+          "file": "tools/remote-debugging-cdp.md",
+          "title": "CDP remote debugging"
+        },
+        {
+          "id": "playwright-core",
+          "file": "tools/playwright-core.md",
+          "title": "playwright-core"
+        },
+        {
+          "id": "chrome-test-env.sh",
+          "file": "tools/chrome-test-env.sh.md",
+          "title": "chrome-test-env.sh"
+        },
+        {
+          "id": "chrome-headless.sh",
+          "file": "tools/chrome-headless.sh.md",
+          "title": "chrome-headless.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-chrome-audit": {
+      "dockerfile": "deploy/Dockerfile.agent-chrome-audit",
+      "focus": "C/C++ 分析、编译上下文、Clang/LLVM 工具分工",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "git-partial-clone",
+          "file": "tools/git-partial-clone.md",
+          "title": "git partial clone"
+        },
+        {
+          "id": "clang",
+          "file": "tools/clang.md",
+          "title": "clang/clang++"
+        },
+        {
+          "id": "clang-tidy",
+          "file": "tools/clang-tidy.md",
+          "title": "clang-tidy"
+        },
+        {
+          "id": "clangd",
+          "file": "tools/clangd.md",
+          "title": "clangd"
+        },
+        {
+          "id": "llvm",
+          "file": "tools/llvm.md",
+          "title": "llvm 工具集"
+        },
+        {
+          "id": "objdump",
+          "file": "tools/objdump.md",
+          "title": "objdump"
+        },
+        {
+          "id": "readelf",
+          "file": "tools/readelf.md",
+          "title": "readelf"
+        },
+        {
+          "id": "llvm-nm",
+          "file": "tools/llvm-nm.md",
+          "title": "llvm-nm"
+        },
+        {
+          "id": "jq",
+          "file": "tools/jq.md",
+          "title": "jq"
+        },
+        {
+          "id": "chrome-audit-env.sh",
+          "file": "tools/chrome-audit-env.sh.md",
+          "title": "chrome-audit-env.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-chrome-fuzz": {
+      "dockerfile": "deploy/Dockerfile.agent-chrome-fuzz",
+      "focus": "d8、fuzz harness、种子、sanitizer 与崩溃复现",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "clang-16",
+          "file": "tools/clang-16.md",
+          "title": "clang-16"
+        },
+        {
+          "id": "clang++-16",
+          "file": "tools/clang++-16.md",
+          "title": "clang++-16"
+        },
+        {
+          "id": "lld-16",
+          "file": "tools/lld-16.md",
+          "title": "lld-16"
+        },
+        {
+          "id": "llvm-16",
+          "file": "tools/llvm-16.md",
+          "title": "llvm-16"
+        },
+        {
+          "id": "compiler-rt",
+          "file": "tools/compiler-rt.md",
+          "title": "compiler-rt"
+        },
+        {
+          "id": "libFuzzer-16",
+          "file": "tools/libFuzzer-16.md",
+          "title": "libFuzzer"
+        },
+        {
+          "id": "AFL++",
+          "file": "tools/AFL++.md",
+          "title": "AFL++"
+        },
+        {
+          "id": "binutils",
+          "file": "tools/binutils.md",
+          "title": "binutils (readelf/objdump/nm)"
+        },
+        {
+          "id": "v8-source",
+          "file": "tools/v8-source.md",
+          "title": "V8/d8 源码与构建产物"
+        },
+        {
+          "id": "d8",
+          "file": "tools/d8.md",
+          "title": "d8"
+        },
+        {
+          "id": "v8_json_libfuzzer",
+          "file": "tools/v8_json_libfuzzer.md",
+          "title": "v8_json_libfuzzer"
+        },
+        {
+          "id": "chrome-fuzz-env.sh",
+          "file": "tools/chrome-fuzz-env.sh.md",
+          "title": "chrome-fuzz-env.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-clickhouse-test": {
+      "dockerfile": "deploy/Dockerfile.agent-clickhouse-test",
+      "focus": "local/client/server 选型、SQL 执行与结果解释",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "clickhouse",
+          "file": "tools/clickhouse.md",
+          "title": "clickhouse 官方二进制"
+        },
+        {
+          "id": "clickhouse-client",
+          "file": "tools/clickhouse-client.md",
+          "title": "clickhouse-client"
+        },
+        {
+          "id": "clickhouse-local",
+          "file": "tools/clickhouse-local.md",
+          "title": "clickhouse-local"
+        },
+        {
+          "id": "clickhouse-server",
+          "file": "tools/clickhouse-server.md",
+          "title": "clickhouse-server.sh"
+        },
+        {
+          "id": "clickhouse-http",
+          "file": "tools/clickhouse-http.md",
+          "title": "ClickHouse HTTP 接口"
+        },
+        {
+          "id": "clickhouse-test-env.sh",
+          "file": "tools/clickhouse-test-env.sh.md",
+          "title": "clickhouse-test-env.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-clickhouse-audit": {
+      "dockerfile": "deploy/Dockerfile.agent-clickhouse-audit",
+      "focus": "源码、构建及静态分析流程",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "git-partial-clone",
+          "file": "tools/git-partial-clone.md",
+          "title": "git partial clone"
+        },
+        {
+          "id": "cmake",
+          "file": "tools/cmake.md",
+          "title": "cmake"
+        },
+        {
+          "id": "ninja",
+          "file": "tools/ninja.md",
+          "title": "ninja"
+        },
+        {
+          "id": "clang",
+          "file": "tools/clang.md",
+          "title": "clang/clang++"
+        },
+        {
+          "id": "clang-tidy",
+          "file": "tools/clang-tidy.md",
+          "title": "clang-tidy"
+        },
+        {
+          "id": "clangd",
+          "file": "tools/clangd.md",
+          "title": "clangd"
+        },
+        {
+          "id": "llvm",
+          "file": "tools/llvm.md",
+          "title": "llvm 工具集"
+        },
+        {
+          "id": "objdump",
+          "file": "tools/objdump.md",
+          "title": "objdump"
+        },
+        {
+          "id": "readelf",
+          "file": "tools/readelf.md",
+          "title": "readelf"
+        },
+        {
+          "id": "llvm-nm",
+          "file": "tools/llvm-nm.md",
+          "title": "llvm-nm"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "jq",
+          "file": "tools/jq.md",
+          "title": "jq"
+        },
+        {
+          "id": "clickhouse-audit-env.sh",
+          "file": "tools/clickhouse-audit-env.sh.md",
+          "title": "clickhouse-audit-env.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-clickhouse-fuzz": {
+      "dockerfile": "deploy/Dockerfile.agent-clickhouse-fuzz",
+      "focus": "fuzz 目标、构建前提、输入样本与崩溃确认",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "clang-16",
+          "file": "tools/clang-16.md",
+          "title": "clang-16"
+        },
+        {
+          "id": "clang++-16",
+          "file": "tools/clang++-16.md",
+          "title": "clang++-16"
+        },
+        {
+          "id": "lld-16",
+          "file": "tools/lld-16.md",
+          "title": "lld-16"
+        },
+        {
+          "id": "llvm-16",
+          "file": "tools/llvm-16.md",
+          "title": "llvm-16"
+        },
+        {
+          "id": "compiler-rt",
+          "file": "tools/compiler-rt.md",
+          "title": "compiler-rt"
+        },
+        {
+          "id": "libFuzzer-16",
+          "file": "tools/libFuzzer-16.md",
+          "title": "libFuzzer"
+        },
+        {
+          "id": "AFL++",
+          "file": "tools/AFL++.md",
+          "title": "AFL++"
+        },
+        {
+          "id": "binutils",
+          "file": "tools/binutils.md",
+          "title": "binutils (readelf/objdump/nm)"
+        },
+        {
+          "id": "cmake",
+          "file": "tools/cmake.md",
+          "title": "cmake"
+        },
+        {
+          "id": "ninja",
+          "file": "tools/ninja.md",
+          "title": "ninja"
+        },
+        {
+          "id": "clickhouse",
+          "file": "tools/clickhouse.md",
+          "title": "clickhouse 官方二进制"
+        },
+        {
+          "id": "clickhouse-local",
+          "file": "tools/clickhouse-local.md",
+          "title": "clickhouse-local"
+        },
+        {
+          "id": "clickhouse-fuzz-env.sh",
+          "file": "tools/clickhouse-fuzz-env.sh.md",
+          "title": "clickhouse-fuzz-env.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-openharmony-test": {
+      "dockerfile": "deploy/Dockerfile.agent-openharmony",
+      "focus": "构建、hdc 接入、设备操作前提及观察",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "git-lfs",
+          "file": "tools/git-lfs.md",
+          "title": "git-lfs"
+        },
+        {
+          "id": "repo",
+          "file": "tools/repo.md",
+          "title": "repo"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "python3-requests",
+          "file": "tools/python3-requests.md",
+          "title": "python3-requests"
+        },
+        {
+          "id": "build-essential",
+          "file": "tools/build-essential.md",
+          "title": "build-essential (gcc/make)"
+        },
+        {
+          "id": "ccache",
+          "file": "tools/ccache.md",
+          "title": "ccache"
+        },
+        {
+          "id": "cmake",
+          "file": "tools/cmake.md",
+          "title": "cmake"
+        },
+        {
+          "id": "ninja",
+          "file": "tools/ninja.md",
+          "title": "ninja"
+        },
+        {
+          "id": "hdc",
+          "file": "tools/hdc.md",
+          "title": "hdc + wrappers"
+        },
+        {
+          "id": "openharmony-env.sh",
+          "file": "tools/openharmony-env.sh.md",
+          "title": "openharmony-env.sh"
+        },
+        {
+          "id": "openharmony-hdc.sh",
+          "file": "tools/openharmony-hdc.sh.md",
+          "title": "openharmony-hdc.sh"
+        },
+        {
+          "id": "openharmony-init.sh",
+          "file": "tools/openharmony-init.sh.md",
+          "title": "openharmony-init.sh"
+        },
+        {
+          "id": "openharmony-build.sh",
+          "file": "tools/openharmony-build.sh.md",
+          "title": "openharmony-build.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-openharmony-audit": {
+      "dockerfile": "deploy/Dockerfile.agent-openharmony-audit",
+      "focus": "主机静态分析、工具选择及证据边界",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "git-lfs",
+          "file": "tools/git-lfs.md",
+          "title": "git-lfs"
+        },
+        {
+          "id": "repo",
+          "file": "tools/repo.md",
+          "title": "repo"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "build-essential",
+          "file": "tools/build-essential.md",
+          "title": "build-essential (gcc/make)"
+        },
+        {
+          "id": "ccache",
+          "file": "tools/ccache.md",
+          "title": "ccache"
+        },
+        {
+          "id": "cmake",
+          "file": "tools/cmake.md",
+          "title": "cmake"
+        },
+        {
+          "id": "ninja",
+          "file": "tools/ninja.md",
+          "title": "ninja"
+        },
+        {
+          "id": "clang",
+          "file": "tools/clang.md",
+          "title": "clang/clang++"
+        },
+        {
+          "id": "clang-tidy",
+          "file": "tools/clang-tidy.md",
+          "title": "clang-tidy"
+        },
+        {
+          "id": "scan-build",
+          "file": "tools/scan-build.md",
+          "title": "scan-build"
+        },
+        {
+          "id": "llvm-symbolizer",
+          "file": "tools/llvm-symbolizer.md",
+          "title": "llvm-symbolizer"
+        },
+        {
+          "id": "compiler-rt",
+          "file": "tools/compiler-rt.md",
+          "title": "compiler-rt"
+        },
+        {
+          "id": "gdb",
+          "file": "tools/gdb.md",
+          "title": "gdb"
+        },
+        {
+          "id": "objdump",
+          "file": "tools/objdump.md",
+          "title": "objdump"
+        },
+        {
+          "id": "addr2line",
+          "file": "tools/addr2line.md",
+          "title": "addr2line"
+        },
+        {
+          "id": "sparse",
+          "file": "tools/sparse.md",
+          "title": "sparse"
+        },
+        {
+          "id": "cppcheck",
+          "file": "tools/cppcheck.md",
+          "title": "cppcheck"
+        },
+        {
+          "id": "bear",
+          "file": "tools/bear.md",
+          "title": "bear"
+        },
+        {
+          "id": "libasan",
+          "file": "tools/libasan.md",
+          "title": "libasan"
+        },
+        {
+          "id": "libubsan",
+          "file": "tools/libubsan.md",
+          "title": "libubsan"
+        },
+        {
+          "id": "openharmony-audit-env.sh",
+          "file": "tools/openharmony-audit-env.sh.md",
+          "title": "openharmony-audit-env.sh"
+        },
+        {
+          "id": "openharmony-audit-scan.sh",
+          "file": "tools/openharmony-audit-scan.sh.md",
+          "title": "openharmony-audit-scan.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-openharmony-fuzz": {
+      "dockerfile": "deploy/Dockerfile.agent-openharmony-fuzz",
+      "focus": "主机 fuzz/sanitizer、样本与复现",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "git",
+          "file": "tools/git.md",
+          "title": "git"
+        },
+        {
+          "id": "git-lfs",
+          "file": "tools/git-lfs.md",
+          "title": "git-lfs"
+        },
+        {
+          "id": "repo",
+          "file": "tools/repo.md",
+          "title": "repo"
+        },
+        {
+          "id": "python3",
+          "file": "tools/python3.md",
+          "title": "python3"
+        },
+        {
+          "id": "build-essential",
+          "file": "tools/build-essential.md",
+          "title": "build-essential (gcc/make)"
+        },
+        {
+          "id": "ccache",
+          "file": "tools/ccache.md",
+          "title": "ccache"
+        },
+        {
+          "id": "cmake",
+          "file": "tools/cmake.md",
+          "title": "cmake"
+        },
+        {
+          "id": "ninja",
+          "file": "tools/ninja.md",
+          "title": "ninja"
+        },
+        {
+          "id": "clang",
+          "file": "tools/clang.md",
+          "title": "clang/clang++"
+        },
+        {
+          "id": "llvm-symbolizer",
+          "file": "tools/llvm-symbolizer.md",
+          "title": "llvm-symbolizer"
+        },
+        {
+          "id": "compiler-rt",
+          "file": "tools/compiler-rt.md",
+          "title": "compiler-rt"
+        },
+        {
+          "id": "libfuzzer",
+          "file": "tools/libfuzzer.md",
+          "title": "libFuzzer"
+        },
+        {
+          "id": "afl-fuzz",
+          "file": "tools/afl-fuzz.md",
+          "title": "afl-fuzz"
+        },
+        {
+          "id": "afl-clang-fast",
+          "file": "tools/afl-clang-fast.md",
+          "title": "afl-clang-fast"
+        },
+        {
+          "id": "gdb",
+          "file": "tools/gdb.md",
+          "title": "gdb"
+        },
+        {
+          "id": "objdump",
+          "file": "tools/objdump.md",
+          "title": "objdump"
+        },
+        {
+          "id": "addr2line",
+          "file": "tools/addr2line.md",
+          "title": "addr2line"
+        },
+        {
+          "id": "libasan",
+          "file": "tools/libasan.md",
+          "title": "libasan"
+        },
+        {
+          "id": "libubsan",
+          "file": "tools/libubsan.md",
+          "title": "libubsan"
+        },
+        {
+          "id": "openharmony-fuzz-env.sh",
+          "file": "tools/openharmony-fuzz-env.sh.md",
+          "title": "openharmony-fuzz-env.sh"
+        },
+        {
+          "id": "openharmony-fuzz-build.sh",
+          "file": "tools/openharmony-fuzz-build.sh.md",
+          "title": "openharmony-fuzz-build.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    },
+    "deepsonar-mobile": {
+      "dockerfile": "deploy/Dockerfile.agent-mobile",
+      "focus": "Android/iOS/OpenHarmony 包分析、设备操作与 native 分析",
+      "index": "INDEX.md",
+      "tools": [
+        {
+          "id": "java",
+          "file": "tools/java.md",
+          "title": "java (mobile JDK)"
+        },
+        {
+          "id": "jadx",
+          "file": "tools/jadx.md",
+          "title": "jadx"
+        },
+        {
+          "id": "apktool",
+          "file": "tools/apktool.md",
+          "title": "apktool"
+        },
+        {
+          "id": "bundletool",
+          "file": "tools/bundletool.md",
+          "title": "bundletool"
+        },
+        {
+          "id": "apkeep",
+          "file": "tools/apkeep.md",
+          "title": "apkeep"
+        },
+        {
+          "id": "androguard",
+          "file": "tools/androguard.md",
+          "title": "androguard"
+        },
+        {
+          "id": "droidasc",
+          "file": "tools/droidasc.md",
+          "title": "droidasc"
+        },
+        {
+          "id": "apkcheckpack",
+          "file": "tools/apkcheckpack.md",
+          "title": "apkcheckpack"
+        },
+        {
+          "id": "readelf",
+          "file": "tools/readelf.md",
+          "title": "readelf"
+        },
+        {
+          "id": "objdump",
+          "file": "tools/objdump.md",
+          "title": "objdump"
+        },
+        {
+          "id": "r2",
+          "file": "tools/r2.md",
+          "title": "radare2 (r2)"
+        },
+        {
+          "id": "adb",
+          "file": "tools/adb.md",
+          "title": "adb + mobile-adb.sh"
+        },
+        {
+          "id": "hdc",
+          "file": "tools/hdc.md",
+          "title": "hdc + wrappers"
+        },
+        {
+          "id": "idevice_id",
+          "file": "tools/idevice_id.md",
+          "title": "idevice_id"
+        },
+        {
+          "id": "ideviceinstaller",
+          "file": "tools/ideviceinstaller.md",
+          "title": "ideviceinstaller"
+        },
+        {
+          "id": "plistutil",
+          "file": "tools/plistutil.md",
+          "title": "plistutil"
+        },
+        {
+          "id": "iproxy",
+          "file": "tools/iproxy.md",
+          "title": "iproxy"
+        },
+        {
+          "id": "frida",
+          "file": "tools/frida.md",
+          "title": "frida"
+        },
+        {
+          "id": "objection",
+          "file": "tools/objection.md",
+          "title": "objection"
+        },
+        {
+          "id": "jq",
+          "file": "tools/jq.md",
+          "title": "jq"
+        },
+        {
+          "id": "unzip",
+          "file": "tools/unzip.md",
+          "title": "unzip"
+        },
+        {
+          "id": "mobile-env.sh",
+          "file": "tools/mobile-env.sh.md",
+          "title": "mobile-env.sh"
+        },
+        {
+          "id": "mobile-adb.sh",
+          "file": "tools/mobile-adb.sh.md",
+          "title": "mobile-adb.sh"
+        },
+        {
+          "id": "mobile-hdc.sh",
+          "file": "tools/mobile-hdc.sh.md",
+          "title": "mobile-hdc.sh"
+        },
+        {
+          "id": "mobile-ios.sh",
+          "file": "tools/mobile-ios.sh.md",
+          "title": "mobile-ios.sh"
+        },
+        {
+          "id": "mobile-hap.sh",
+          "file": "tools/mobile-hap.sh.md",
+          "title": "mobile-hap.sh"
+        },
+        {
+          "id": "mobile-so.sh",
+          "file": "tools/mobile-so.sh.md",
+          "title": "mobile-so.sh"
+        },
+        {
+          "id": "node",
+          "file": "tools/node.md",
+          "title": "node"
+        },
+        {
+          "id": "claude",
+          "file": "tools/claude.md",
+          "title": "claude / Agent CLI"
+        }
+      ]
+    }
+  }
+}
