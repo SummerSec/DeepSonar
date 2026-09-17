@@ -60,6 +60,7 @@ import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-selec
 import { TaskOverview } from "../task-workbench/TaskOverview";
 import { TaskWorkbenchHeader } from "../task-workbench/TaskWorkbenchHeader";
 import { TaskWorkbenchShell } from "../task-workbench/TaskWorkbenchShell";
+import { formatHubDecisionLabel } from "../task-workbench/hub-decision-label";
 import { projectTaskActions, projectTaskNextSteps } from "../task-workbench/task-actions";
 import {
   projectCognitionStatus,
@@ -703,21 +704,7 @@ export function TaskCanvasPage() {
   }, [meta]);
 
   /** 决策态文案：并入副标题，不用彩色 badge */
-  const decisionLabel = useMemo(() => {
-    if (!convergence) return null;
-    if (convergence.hub_paused) return "已暂停";
-    if (convergence.auto_stopped) {
-      const reason = convergence.paused_reason ?? "";
-      const unclosed = reason.match(
-        /^verify_unclosed:high=(\d+)\(inconclusive=(\d+),pending=(\d+)\)$/,
-      );
-      if (unclosed) {
-        return `Hub 已停：${unclosed[1]} 个 high 未收口（${unclosed[2]} inconclusive / ${unclosed[3]} pending）`;
-      }
-      return reason.startsWith("verify_unclosed:") ? `Hub 已停：${reason}` : "已收敛";
-    }
-    return "自驱中";
-  }, [convergence]);
+  const decisionLabel = useMemo(() => formatHubDecisionLabel(convergence), [convergence]);
 
   const findingsForProjection = findingIndex.length ? findingIndex : findings;
   const outcome = useMemo(() => projectTaskOutcomeSummary({
