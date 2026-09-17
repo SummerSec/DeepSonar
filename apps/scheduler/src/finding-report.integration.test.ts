@@ -208,10 +208,11 @@ if (!testDatabaseUrl) {
           (${isolatedVerifyJobId}, ${projectId}, ${canvasId}, 'verify_finding', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
       await sql`
         INSERT INTO findings (
-          id, project_id, job_id, fingerprint, title, severity, summary, verify_status, raw_json
+          id, project_id, job_id, fingerprint, title, severity, summary, verify_status, profile, raw_json
         ) VALUES (
           ${isolatedFindingId}, ${projectId}, ${sourceJobId}, 'finding-report-savepoint',
-          'Confirmation survives report failure', 'medium', 'Verified independently', 'verifying', ${sql.json({})}
+          'Confirmation survives report failure', 'medium', 'Verified independently', 'verifying', 'general',
+          ${sql.json({})}
         )`;
       await sql`UPDATE jobs SET finding_id = ${isolatedFindingId} WHERE id = ${isolatedVerifyJobId}`;
       await sql`
@@ -230,6 +231,10 @@ if (!testDatabaseUrl) {
               evidence_kind: "review",
               outcome: "supports",
               subject_revision: "commit-1",
+              expected: "finding holds",
+              actual: "finding holds",
+              source_job_id: reviewJobId,
+              source_role: "review",
             },
           })}, 'unverified'),
           (${canvasId}, ${testJobId}, 'fact', 'Runtime reproduction', ${sql.json({
@@ -242,6 +247,9 @@ if (!testDatabaseUrl) {
               steps: ["run the reproducer"],
               expected: "request is rejected",
               actual: "request was accepted",
+              artifact_refs: [{ uri: "shared://repro.log", sha256: "ab".repeat(32) }],
+              source_job_id: testJobId,
+              source_role: "test",
             },
           })}, 'unverified')`;
       await sql`
