@@ -11,6 +11,7 @@ ARG DEPOT_TOOLS_REPOSITORY=https://chromium.googlesource.com/chromium/tools/depo
 ARG DEPOT_TOOLS_COMMIT=921e61b35fbc5e97b14250a118e363ec05078089
 ARG COMPILER_RT_REPOSITORY=https://github.com/llvm/llvm-project.git
 ARG COMPILER_RT_COMMIT=53d18800eda3b7407e53366f27ca78e922c6e0db
+ARG V8_ARTIFACTS_IMAGE=ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:39c9059a9f409ad31c1a4d611a2c5b340133213f9ecc92d6e3920b550e2e9342
 
 # V8's pinned Chromium Clang package is a linux/amd64 host toolchain. Keep the
 # expensive source build on that native host architecture and cross-compile the
@@ -145,9 +146,8 @@ RUN set -eux; \
 
 # #588: reuse the last published chrome-fuzz image for V8 binaries so manuals-only
 # rebuilds do not cold-sync gclient (shallow sync is flaky on GH runners). Keep the
-# v8-builder stage above for source rebuilds; override V8_ARTIFACTS_IMAGE to that
-# stage locally if you need a from-source build.
-ARG V8_ARTIFACTS_IMAGE=ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:39c9059a9f409ad31c1a4d611a2c5b340133213f9ecc92d6e3920b550e2e9342
+# v8-builder stage above for source rebuilds; override V8_ARTIFACTS_IMAGE (global ARG)
+# for a from-source build if needed.
 FROM ${V8_ARTIFACTS_IMAGE} AS v8-artifacts
 
 FROM runtime-rootfs AS runtime-final
