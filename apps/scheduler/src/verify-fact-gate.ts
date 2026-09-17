@@ -197,7 +197,7 @@ export function factFirstAuditAfter(gate: FactFirstGateResult): Record<string, u
   };
 }
 
-/** Freezable confirm strategy id (#576). Fact-first v1: structured supporting Fact closes; review/test pair is advisory. */
+/** Freezable confirm strategy id (#576 / #590). Fact-first: structured supporting Fact is the base hard gate. */
 export const VERIFICATION_STRATEGY_ID = "fact_first" as const;
 export const VERIFICATION_STRATEGY_VERSION = 1 as const;
 
@@ -208,16 +208,18 @@ export type VerificationStrategyDecision = {
   result: FactFirstGateResult["result"];
   /** Blocks confirm; projected as missing_evidence. */
   required_missing: string[];
-  /** Non-blocking inventory (e.g. independent_review / runtime_test under Fact-first). */
+  /** Non-blocking inventory (e.g. independent_review / runtime_test under CTF / non-pair profiles). */
   advisory_missing: string[];
   used_fact_ids: string[];
   reasons: string[];
   confirm_reason: string | null;
   gate: FactFirstGateResult;
+  /** #590: whether review/test pair gaps were treated as required for this decision. */
+  require_evidence_pair: boolean;
 };
 
-/** Pair-completeness inventory from buildEvidenceSnapshot — advisory under fact_first v1. */
-const PAIR_INVENTORY = new Set([
+/** Pair-completeness inventory from buildEvidenceSnapshot. */
+export const PAIR_INVENTORY = new Set([
   "independent_review",
   "runtime_test",
   "independent_jobs",
@@ -225,9 +227,95 @@ const PAIR_INVENTORY = new Set([
   "unresolved_conflict",
 ]);
 
+/** Profiles whose confirm path requires independent review + qualified test (#590 vs #576). */
+export const EVIDENCE_PAIR_REQUIRED_PROFILES = new Set([
+  "security.vulnerability",
+  "security.misconfig",
+  "security.secret",
+]);
+
+export function profileRequiresEvidencePair(profile?: string | null): boolean {
+  return EVIDENCE_PAIR_REQUIRED_PROFILES.has(textField(profile));
+}
+
+export type UsedFactResolveResult = {
+  ok: boolean;
+  missing: string[];
+  reasons: string[];
+  dangling_ids: string[];
+};
+
 /**
- * Single path for gate + required/advisory missing + confirm reason (#576).
+ * #590 gate resolver: every used_fact_id MUST EXISTS-resolve to a Fact record
+ * with finding association + ownership (source Job ≠ Finding origin Job).
+ * Unresolvable / dangling → blocks confirm (rework).
+ *
+ * used_fact_ids are canvas Fact node ids (#577) — absence from Artifact four
+ * tables alone is NOT dangling; absence from the resolvable Fact map IS.
+ */
+export function resolveUsedFactRefs(
+  usedFactIds: readonly string[],
+  factsById: ReadonlyMap<string, FactFirstRecord>,
+  opts: { findingId: string; originJobId?: string | null },
+): UsedFactResolveResult {
+  const findingId = textField(opts.findingId);
+  const originJobId = textField(opts.originJobId);
+  const dangling_ids: string[] = [];
+  const missing: string[] = [];
+  const reasons: string[] = [];
+
+  for (const rawId of usedFactIds) {
+    const id = textField(rawId);
+    if (!id) continue;
+    const fact = factsById.get(id);
+    if (!fact) {
+      dangling_ids.push(id);
+      reasons.push(`used_fact_id ${id} 无法解析到真实 Fact 行（悬空引用）`);
+      continue;
+    }
+    const claimedFinding = textField(fact.finding_id);
+    if (claimedFinding && findingId && claimedFinding !== findingId) {
+      missing.push("finding_id_mismatch");
+      reasons.push(`Fact ${id} finding_id 与目标 Finding 不一致`);
+    }
+    const jobId = ownershipJobId(fact);
+    const role = ownershipRole(fact);
+    if (!jobId || !role) {
+      missing.push("ownership_incomplete");
+      reasons.push(`Fact ${id} 缺少来源 Job/角色 ownership`);
+    } else if (originJobId && jobId === originJobId) {
+      missing.push("origin_job_self_evidence");
+      reasons.push(`Fact ${id} 来源 Job 与 Finding 原始 Job 相同，不能自证`);
+    }
+  }
+
+  if (dangling_ids.length > 0) missing.push("dangling_fact_ref");
+  return {
+    ok: missing.length === 0,
+    missing: [...new Set(missing)],
+    reasons,
+    dangling_ids,
+  };
+}
+
+function factsByIdFromRecords(facts: readonly FactFirstRecord[]): Map<string, FactFirstRecord> {
+  const map = new Map<string, FactFirstRecord>();
+  for (const fact of facts) {
+    const id = textField(fact.node_id);
+    if (id && !map.has(id)) map.set(id, fact);
+  }
+  return map;
+}
+
+/**
+ * Single path for gate + required/advisory missing + confirm reason (#576 / #590).
  * Direct confirm and Verify Job close-out must share this decision.
+ *
+ * #590 overlay on Fact-first v1:
+ * - dangling used_fact_ids always block confirm
+ * - security.vulnerability (and sibling security profiles) treat review/test pair
+ *   gaps as required_missing — do not blank missing to pass confirm
+ * - CTF / general / explicit requireEvidencePair=false keep pair gaps advisory
  */
 export function evaluateVerificationStrategy(
   facts: readonly FactFirstRecord[],
@@ -237,28 +325,89 @@ export function evaluateVerificationStrategy(
     originJobId?: string | null;
     pairMissing?: readonly string[];
     conflictingNodeIds?: readonly string[];
+    /** When true, independent_review / runtime_test / pair gaps block confirm. */
+    requireEvidencePair?: boolean;
+    findingProfile?: string | null;
+    /**
+     * Resolver map for used_fact_ids. Defaults to `facts`.
+     * Pass a DB-scoped map (or empty) so dangling ids fail even if shape-only
+     * records were supplied to the Fact-first gate.
+     */
+    factsById?: ReadonlyMap<string, FactFirstRecord>;
+    /** Extra ids that must resolve (e.g. Chrome-style declared used_fact_ids). */
+    declaredUsedFactIds?: readonly string[];
   },
 ): VerificationStrategyDecision {
+  const requirePair =
+    opts.requireEvidencePair ?? profileRequiresEvidencePair(opts.findingProfile);
   const gate = evaluateFactFirstConfirmGate(facts, {
     findingId: opts.findingId,
     subjectRevision: opts.subjectRevision,
     originJobId: opts.originJobId,
   });
   const pairMissing = [...new Set((opts.pairMissing ?? []).map(String).filter(Boolean))];
-  const advisory = pairMissing.filter((item) => PAIR_INVENTORY.has(item));
+  const pairItems = pairMissing.filter((item) => PAIR_INVENTORY.has(item));
+  const byId = opts.factsById ?? factsByIdFromRecords(facts);
+  const usedIds = [
+    ...new Set([
+      ...gate.used_fact_ids,
+      ...(opts.declaredUsedFactIds ?? []).map(String).filter(Boolean),
+    ]),
+  ];
+  const resolved = resolveUsedFactRefs(usedIds, byId, {
+    findingId: opts.findingId,
+    originJobId: opts.originJobId,
+  });
+
+  const base = {
+    strategy_id: VERIFICATION_STRATEGY_ID,
+    strategy_version: VERIFICATION_STRATEGY_VERSION,
+    used_fact_ids: usedIds,
+    gate,
+    require_evidence_pair: requirePair,
+  } as const;
+
+  if (!resolved.ok) {
+    const required = [...resolved.missing];
+    if (!gate.ok) required.push(...gate.missing);
+    if ((opts.conflictingNodeIds?.length ?? 0) > 0 && !required.includes("path_fork")) {
+      required.push("path_fork");
+    }
+    if (requirePair) required.push(...pairItems);
+    const requiredSet = new Set(required);
+    return {
+      ...base,
+      ok: false,
+      result: gate.ok ? "insufficient" : gate.result,
+      required_missing: [...requiredSet],
+      advisory_missing: requirePair ? [] : pairItems.filter((item) => !requiredSet.has(item)),
+      reasons: [...resolved.reasons, ...gate.reasons],
+      confirm_reason: null,
+    };
+  }
 
   if (gate.ok) {
+    if (requirePair && pairItems.length > 0) {
+      return {
+        ...base,
+        ok: false,
+        result: "insufficient",
+        required_missing: [...new Set(pairItems)],
+        advisory_missing: [],
+        reasons: [
+          `profile 要求独立 review+test 且 missing_evidence 为空；仍缺: ${pairItems.join(",")}`,
+        ],
+        confirm_reason: null,
+      };
+    }
     return {
-      strategy_id: VERIFICATION_STRATEGY_ID,
-      strategy_version: VERIFICATION_STRATEGY_VERSION,
+      ...base,
       ok: true,
       result: "passed",
       required_missing: [],
-      advisory_missing: advisory,
-      used_fact_ids: gate.used_fact_ids,
+      advisory_missing: requirePair ? [] : pairItems,
       reasons: [],
       confirm_reason: `fact_first_v${VERIFICATION_STRATEGY_VERSION}_passed`,
-      gate,
     };
   }
 
@@ -266,18 +415,16 @@ export function evaluateVerificationStrategy(
   if ((opts.conflictingNodeIds?.length ?? 0) > 0 && !required.includes("path_fork")) {
     required.push("path_fork");
   }
+  if (requirePair) required.push(...pairItems);
   const requiredSet = new Set(required);
   return {
-    strategy_id: VERIFICATION_STRATEGY_ID,
-    strategy_version: VERIFICATION_STRATEGY_VERSION,
+    ...base,
     ok: false,
     result: gate.result,
     required_missing: [...requiredSet],
-    advisory_missing: advisory.filter((item) => !requiredSet.has(item)),
-    used_fact_ids: gate.used_fact_ids,
+    advisory_missing: requirePair ? [] : pairItems.filter((item) => !requiredSet.has(item)),
     reasons: gate.reasons,
     confirm_reason: null,
-    gate,
   };
 }
 
@@ -297,6 +444,7 @@ export function strategyAuditFields(decision: VerificationStrategyDecision): Rec
     used_fact_ids: decision.used_fact_ids,
     reasons: decision.reasons,
     confirm_reason: decision.confirm_reason,
+    require_evidence_pair: decision.require_evidence_pair,
     gate: factFirstAuditAfter(decision.gate),
   };
 }

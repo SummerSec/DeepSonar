@@ -404,6 +404,7 @@ function evaluateFindingFactGate(
     originJobId,
     pairMissing: evidence.missing,
     conflictingNodeIds: evidence.conflicting_node_ids,
+    findingProfile: typeof finding.profile === "string" ? finding.profile : null,
   });
   const integrity = evaluateEvidenceIntegrityForConfirm(
     factNodeSnapshotsFromEvidenceRows([
@@ -1127,9 +1128,8 @@ export async function closeVerifyRound(
   let confirmStrategy = strategy;
   if (proposed === "confirmed") {
     const confirm = evaluateConfirmGate(evidence, {
-      findingId,
-      subjectRevision,
-      originJobId,
+      findingId, subjectRevision, originJobId,
+      findingProfile: typeof finding.profile === "string" ? finding.profile : null,
     });
     confirmStrategy = confirm.strategy;
     if (!confirm.ok) {
