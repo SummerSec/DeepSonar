@@ -175,6 +175,18 @@ function normalizedCoverage(value) {
     .replace(/[^a-z0-9+.-]+/g, "-");
 }
 
+function catalogCoverage(entries) {
+  return new Set(entries.flatMap((entry) => [
+    entry.id,
+    ...entry.commands,
+    ...(Array.isArray(entry.covers) ? entry.covers : []),
+  ]).flatMap((value) => [normalizedCoverage(value), String(value).trim().toLowerCase()]));
+}
+
+function missingCoverage(declared, coverage) {
+  return declared.filter((tool) => ![normalizedCoverage(tool), tool.toLowerCase()].some((key) => coverage.has(key)));
+}
+
 function assertDockerfile(imageKey, entries) {
   const file = dockerfileFor(imageKey);
   if (!existsSync(file)) fail(`${imageKey} Dockerfile is missing`);
@@ -183,17 +195,30 @@ function assertDockerfile(imageKey, entries) {
   if (!source.includes("materialize-runtime-manuals.mjs")) fail(`${imageKey} Dockerfile does not run materializer`);
   if (!source.includes("--tool-manifest") || !source.includes("--image-key")) fail(`${imageKey} Dockerfile materializer is not bound to final tool manifest`);
   if (!source.includes('io.deepsonar.manuals="/opt/deepsonar/manuals/index.json"')) fail(`${imageKey} Dockerfile is missing OCI manual label`);
-  const inlineTools = source.match(/tools:\[(.*?)\]/s)?.[1];
+  const inlineTools = source.match(/(?:tools|\\"tools\\"):\[(.*?)\]/s)?.[1];
   if (inlineTools) {
     const manifestTools = [...inlineTools.matchAll(/\\"([^\"]+)\\"/g)].map((match) => match[1]);
-    const coverage = new Set(entries.flatMap((entry) => [
-      entry.id,
-      ...entry.commands,
-      ...(Array.isArray(entry.covers) ? entry.covers : []),
-    ]).flatMap((value) => [normalizedCoverage(value), String(value).trim().toLowerCase()]));
-    const missing = manifestTools.filter((tool) => ![normalizedCoverage(tool), tool.toLowerCase()].some((key) => coverage.has(key)));
+    const missing = missingCoverage(manifestTools, catalogCoverage(entries));
     if (missing.length > 0) fail(`${imageKey} final tool manifest entries lack documentation: ${missing.join(", ")}`);
   }
+}
+
+const GENERATED_MANIFEST_SOURCES = Object.freeze({
+  "deepsonar-base": ["agent-harness/runtime-images.json", "base"],
+  "deepsonar-audit": ["agent-harness/runtime-images.json", "audit"],
+  "deepsonar-kali-minimal": ["agent-harness/kali-minimal-runtime.json", "kali-minimal"],
+});
+
+function assertGeneratedManifestSource(imageKey, entries) {
+  const source = GENERATED_MANIFEST_SOURCES[imageKey];
+  if (!source) return;
+  const [relativeConfigPath, toolset] = source;
+  const config = object(JSON.parse(readFileSync(join(root, relativeConfigPath), "utf8")), `${imageKey} runtime inventory`);
+  const enabled = (entry) => !entry.toolsets || entry.toolsets.includes(toolset);
+  const declared = ["apt", "npm", "downloads", "managed", "piExtensions"].flatMap((section) =>
+    Object.entries(config[section] ?? {}).filter(([, entry]) => enabled(entry)).map(([name]) => name));
+  const missing = missingCoverage(declared, catalogCoverage(entries));
+  if (missing.length > 0) fail(`${imageKey} generated tool manifest entries lack documentation: ${missing.join(", ")}`);
 }
 
 function assertFingerprint(imageKey) {
@@ -243,6 +268,7 @@ export function runStaticManualGate() {
     const missingInherited = [...inheritedCommands].filter((command) => !coveredCommands.has(command));
     if (missingInherited.length > 0) fail(`${imageKey} omits inherited base commands: ${missingInherited.join(", ")}`);
     assertDockerfile(imageKey, entries);
+    assertGeneratedManifestSource(imageKey, entries);
     assertFingerprint(imageKey);
   }
   return { imageCount: OFFICIAL_RUNTIME_IMAGES.length, catalogPath };
