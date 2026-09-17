@@ -124,6 +124,8 @@ review/test/worker 的复核结果必须作为结构化 Fact 提交，至少引�
 
 确认记录可经只读 `fact_evidence_trace`（#577）按 `used_fact_ids`→`canvas_nodes` Fact 解析来源 Job/Attempt、目标 revision、可选 Artifact/Evidence 与内容完整性摘要；缺 Artifact 四表行不表示悬空。`runtime_digest`/`exit_code`/产物 sha256 与 Hub 唤醒用 `evidence_signature`/`gate_fingerprint` 分离；文本 expected/actual 本身不是运行证明。摘要不符在观测可得时阻断确认；`fact_first` v1 默认不强制 runtime_proof。
 
+安全漏洞研究（profile `security.vulnerability`）可另启用可冻结证明契约 `security.vulnerability.proof` v1（#578）：要求固定 revision、受影响组件、攻击者控制点、前置条件、入口→危险操作可达路径，以及静态（文件位置+片段摘要+路径依据）或动态（运行证明）证据；TODO/注释/危险函数存在/单纯行号命中不能单独满足；缺工具/目标/设备降为 inconclusive；Verify 只消费 Fact，不重审源码。该契约默认不启用，以免把通用 fact_first 改成强制动态 PoC。
+
 Verify 只消费允许的 Fact、Artifact、Evidence 和独立 Evaluation，不重读 maker 结论作为证据（#399）。证据不足、冲突、版本不匹配或主体变更时，Finding 保持未确认，Hub 可按 advisory/必需缺项派发补证。`minVerifySeverity` 只决定自动验证和收敛范围，不会删除低于阈值的 Finding。
 
 Hub 证据等待唤醒以证据签名 / 门禁指纹边沿触发；**从未有过 review/test 证据的 pending Finding** 即使签名未变也计入唤醒（签名门只防「已有证据但无进展」的重复轮）。关注级别内 `inconclusive` 若在 Hub 自驱停滞时仍未收口（默认连续 ≥`INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS`=2 轮，或与 stalled pending 一并停机），升级为 `needs_human` 并创建 human Action，同时在画布 convergence / root `body_json` 写入 `paused_reason=verify_unclosed:…`，禁止静默停机。

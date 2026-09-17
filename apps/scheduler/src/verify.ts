@@ -43,6 +43,8 @@ import {
   mergeStrategyWithEvidenceIntegrity,
 } from "./verify-evidence-chain.js";
 export { attachVerificationEvidence } from "./verify-attach-evidence.js";
+export { evaluateConfirmGate } from "./verify-confirm-gate.js";
+export type { ConfirmGateOptions, ConfirmGateResult } from "./verify-confirm-gate.js";
 import {
   classifyVerifyTerminalReason,
   isVerifyConvergedStatus,
@@ -215,39 +217,6 @@ export function resolveFindingSubjectRevision(
   if (frozen) return frozen;
   const revisions = [...new Set(facts.map((fact) => String(fact.subject_revision ?? "").trim()).filter(Boolean))];
   return revisions.length === 1 ? revisions[0] : null;
-}
-
-/** Confirm hard gate: shared Fact-first strategy (#576) + evidence-chain integrity (#577). */
-export function evaluateConfirmGate(
-  evidence: EvidenceSnapshot,
-  opts?: {
-    findingId?: string | null;
-    subjectRevision?: string | null;
-    originJobId?: string | null;
-    /** Strategies that require reproduced runtime proof (not fact_first v1 default). */
-    requireRuntimeProof?: boolean;
-    requireObservedDigests?: boolean;
-  },
-): { ok: boolean; missing: string[]; gate: FactFirstGateResult; strategy: VerificationStrategyDecision } {
-  const strategy = evaluateVerificationStrategy(factFirstRecordsFromSnapshot(evidence), {
-    findingId: opts?.findingId ?? "",
-    subjectRevision: opts?.subjectRevision,
-    originJobId: opts?.originJobId,
-    pairMissing: evidence.missing,
-    conflictingNodeIds: evidence.conflicting_node_ids,
-  });
-  const integrity = evaluateEvidenceIntegrityForConfirm(factNodeSnapshotsFromEvidenceRows([...(Array.isArray(evidence.facts) ? evidence.facts : []), ...evidence.review, ...evidence.test]), {
-    requireRuntimeProof: opts?.requireRuntimeProof === true,
-    requireObservedDigests: opts?.requireObservedDigests === true,
-  });
-  const merged = mergeStrategyWithEvidenceIntegrity(strategy, integrity);
-  // Rework/Hub hints keep required+advisory; confirm paths must use strategy.required_missing only.
-  return {
-    ok: merged.ok,
-    missing: merged.ok ? [] : strategyActionableMissing(merged),
-    gate: merged.gate,
-    strategy: merged,
-  };
 }
 
 export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Record<string, unknown> {
