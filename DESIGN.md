@@ -214,7 +214,10 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | Capability Pack（#447/#459） | Manifest、Job 级发现和快照 selector/digest 已落地；目录发现仍需严格受冻结 selector/digest 上限约束 | live catalog 漂移门禁、task/session 生命周期、准入评估、临时组合、经验推荐 |
 | Plan / 模型主导收敛（#443） | 当前仍由 Hub Intent + 硬护栏运行 | PlanTask、模型完成声明、预算化验证和回放 |
 | Finding Research（#448） | 语义去重、canonical anchor、相对 priority 已落地 | 更强评估集、跨任务聚类和人工反馈闭环 |
-| Quality / Replay（#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
+| Quality / Replay
+
+人工标注审计回归集（#580）：变更模型/prompt/策略前相对冻结基线对比；人工标签为真值，平台 confirmed 不是独立真值；缺少 PoC ≠ 误报；门禁区分质量退化与环境失败，不发明准确率承诺。
+（#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
 | 项目报告工作台（#484 / #561） | Phase 1 已落地：统一 `ReportDeliverable` 投影；#561 并入项目「风险与报告」台（`/findings` + `?panel=reports`，旧 `/reports` redirect）；任务工作台报告 tab 与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
 | 真实设备接入（#494/#495，多 rig #505 后续） | Phase 1 已落地：device broker 把物理设备暴露为可租借网络端点（沙箱不直连设备），租约绑 Attempt、项目 opt-in + 任务级授权、`device_events` 审计、Reaper 回收过期租约；多 rig 准入（平台按 `devices.rig_id` 分组整集推送、按需 rig 选 broker 端点，schema v50）与平台设备视图也已落地；细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md) | 真机 rig 验收、Phase 2 hdc/串口/电源控制、跨 rig 调度（一个 Job 只用一个 rig 的设备）、同 rig 多设备池的策略 |
