@@ -252,12 +252,12 @@ Scheduler 的领域代码通过 application/ports seam 拆分，PostgreSQL 仍�
 
 - `domains/job-lifecycle`：Job 状态迁移、claim、恢复、取消与重试的 CAS 写入；
 - `domains/event-ingestion`：event envelope 校验、幂等、`job_seq`、固定窗口限流，以及由显式 ports 组合的 progress/fact/finding/Hub decision/done/human 语义副作用；
-- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger（签名变化且门禁指纹变化才唤醒）、idle/terminal 推进、人工评论唤醒、可选 `maxHubRounds` 护栏（默认 unlimited）；
+- `domains/hub-orchestration`：Hub 资格判断、证据快照 edge-trigger（签名变化且门禁指纹变化才唤醒；从未验证的 pending 例外，见下）、idle/terminal 推进、人工评论唤醒、可选 `maxHubRounds` 护栏（默认 unlimited）；
 - `domains/finding-verification`：Finding 派生、证据附着、verification round、完成门与 rework/needs_human/confirmed/refuted/inconclusive 收口；
 - `domains/report-convergence`：analysis complete 后的任务报告、Finding 报告、输入冻结与失败恢复；
 - `domains/role-runtime-snapshot`：RoleConfig、Credential/CLI、skill/shared asset 与 runtime image 的建 Job 时冻结。
 
-Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker（`hub_evidence_signature` / `hub_gate_fingerprint`）并停在人工恢复边界，不递归生成相同快照的 Hub。证据签名增长但门禁结论指纹不变时不唤醒。常规终止来自完成门、验证分类或 `no_progress:*`；`maxHubRounds`（`0`/`unlimited` 为不限制，默认 unlimited）只统计 `hub_reason.status = succeeded`，耗尽时是异常兜底（`budget_exhausted:*`），复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。已有环境显式写了 `DEEPSONAR_HUB_MAX_ROUNDS=20` 的部署保持 20。
+Hub 的每次资格检查先锁 `canvases`，再读取/锁定 waiting verification round；同一事务内才会写入 Hub Job、节点和 `next` 边。失败 Hub 会清除等待证据的 edge marker（`hub_evidence_signature` / `hub_gate_fingerprint`）并停在人工恢复边界，不递归生成相同快照的 Hub。证据签名增长但门禁结论指纹不变时不唤醒——例外：从未出现 review/test 证据的 `waiting_evidence` pending（`neverVerified`）即使签名/指纹未变也唤醒，并累计 `hub_wake_attempts`；达 `INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS`（默认 2）或 waiting 轮全部无法再唤醒时，将关注级别内 stalled `inconclusive`/`pending` 升级为 `needs_human`，写入 `auto_stopped` 与 `paused_reason=verify_unclosed:…`，禁止静默停机（#574）。常规终止来自完成门、验证分类或 `no_progress:*`；`maxHubRounds`（`0`/`unlimited` 为不限制，默认 unlimited）只统计 `hub_reason.status = succeeded`，耗尽时是异常兜底（`budget_exhausted:*`），复用 Verify 完成门；未通过完成门则设置 `auto_stopped`，不派发空图 Report。已有环境显式写了 `DEEPSONAR_HUB_MAX_ROUNDS=20` 的部署保持 20。
 
 `event-ingestion` 先解析目标 Canvas，按 Canvas → Job → 事件历史/领域记录的顺序加锁，并在同一事务中完成 dedup、`events` append 和语义副作用；任何校验或下游 service 失败都会连同配额与副作用整体回滚。Finding/Hub/Report/runtime snapshot 变化只通过注入的显式 service ports 发起，不由 event-ingestion 直接取得其他领域的可变全局状态。
 
@@ -939,6 +939,6 @@ round/Job，也不阻塞 complete/Report。缺失或未知 severity 保守进入
 证据不足时，`finding_verification_rounds.requirements_json` 写入
 `eligibility = "waiting_evidence"`，Finding 的 `raw_json.verification_state`
 同步记录同一资格；此时不创建可运行的 `verify_finding` Job。补证 Hub
-在无活跃 Hub、普通角色或 `waiting_human` Job 后按证据快照至多唤醒一次。
+在无活跃 Hub、普通角色或 `waiting_human` Job 后按证据快照边沿唤醒（含从未验证 pending 的例外，见 §4.4）。
 结构化 Fact 门禁通过后直接确认收口，或由只消费 Fact 的 `verify_finding`
 提交提案；不足、失败、冲突或版本不匹配保持未确认并回弹 Hub。

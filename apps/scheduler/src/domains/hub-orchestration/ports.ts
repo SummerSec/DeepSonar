@@ -88,4 +88,10 @@ export interface HubOrchestrationPorts {
   ) => Promise<HubAnalysisCompleteGate>;
   hasSucceededRoleWork: (tx: HubOrchestrationTransaction, canvasId: string) => Promise<boolean>;
   maybeDispatchReport: (tx: HubOrchestrationTransaction, canvasId: string) => Promise<unknown>;
+  /** Escalate a stuck Finding to needs_human + human Action (#574). */
+  markFindingNeedsHuman: (
+    tx: HubOrchestrationTransaction,
+    findingId: string,
+    reason: string,
+  ) => Promise<boolean>;
 }

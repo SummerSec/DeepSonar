@@ -40,7 +40,7 @@
     },
     "apps/web/src/pages/TaskCanvasPage.tsx": {
       "class": "web",
-      "maxLines": 1627,
+      "maxLines": 1623,
       "issue": "#544"
     },
     "apps/web/src/SettingsPanel.tsx": {

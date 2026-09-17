@@ -192,6 +192,11 @@ test("evidence-wait wakeup is edge-triggered and does not churn", () => {
     false,
   );
   assert.equal(
+    shouldWakeEvidenceHub("same", "same", { neverVerified: true }),
+    true,
+    "never-verified pending must wake even when signature unchanged (#574)",
+  );
+  assert.equal(
     priorityMatchesJob({ type: "verify_finding", purpose: "verify", severity: "high" }, FIXED_PRIORITY.verifyHigh),
     true,
   );
