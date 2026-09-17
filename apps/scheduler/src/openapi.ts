@@ -1356,6 +1356,14 @@ const OPS: Op[] = [
     tags: ["Findings"],
   },
   {
+    method: "get",
+    path: "/findings/{id}/evidence-trace",
+    summary: "Finding Fact↔Evidence 只读溯源（确认依据可复查）",
+    description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；content_integrity_digest 与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
+    scope: "findings:read",
+    tags: ["Findings"],
+  },
+  {
     method: "patch",
     path: "/findings/{id}/disposition",
     summary: "人工更新 Finding 处置态",

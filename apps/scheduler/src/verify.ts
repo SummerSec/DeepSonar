@@ -37,6 +37,13 @@ import {
   type VerificationStrategyDecision,
 } from "./verify-fact-gate.js";
 import {
+  confirmIntegrityAuditFromFacts,
+  evaluateEvidenceIntegrityForConfirm,
+  factNodeSnapshotsFromEvidenceRows,
+  mergeStrategyWithEvidenceIntegrity,
+} from "./verify-evidence-chain.js";
+export { attachVerificationEvidence } from "./verify-attach-evidence.js";
+import {
   classifyVerifyTerminalReason,
   isVerifyConvergedStatus,
   shouldCreateHumanBlocker,
@@ -210,10 +217,17 @@ export function resolveFindingSubjectRevision(
   return revisions.length === 1 ? revisions[0] : null;
 }
 
-/** Confirm hard gate: shared Fact-first strategy (#576); no second-pass review. */
+/** Confirm hard gate: shared Fact-first strategy (#576) + evidence-chain integrity (#577). */
 export function evaluateConfirmGate(
   evidence: EvidenceSnapshot,
-  opts?: { findingId?: string | null; subjectRevision?: string | null; originJobId?: string | null },
+  opts?: {
+    findingId?: string | null;
+    subjectRevision?: string | null;
+    originJobId?: string | null;
+    /** Strategies that require reproduced runtime proof (not fact_first v1 default). */
+    requireRuntimeProof?: boolean;
+    requireObservedDigests?: boolean;
+  },
 ): { ok: boolean; missing: string[]; gate: FactFirstGateResult; strategy: VerificationStrategyDecision } {
   const strategy = evaluateVerificationStrategy(factFirstRecordsFromSnapshot(evidence), {
     findingId: opts?.findingId ?? "",
@@ -222,12 +236,17 @@ export function evaluateConfirmGate(
     pairMissing: evidence.missing,
     conflictingNodeIds: evidence.conflicting_node_ids,
   });
+  const integrity = evaluateEvidenceIntegrityForConfirm(factNodeSnapshotsFromEvidenceRows([...(Array.isArray(evidence.facts) ? evidence.facts : []), ...evidence.review, ...evidence.test]), {
+    requireRuntimeProof: opts?.requireRuntimeProof === true,
+    requireObservedDigests: opts?.requireObservedDigests === true,
+  });
+  const merged = mergeStrategyWithEvidenceIntegrity(strategy, integrity);
   // Rework/Hub hints keep required+advisory; confirm paths must use strategy.required_missing only.
   return {
-    ok: strategy.ok,
-    missing: strategy.ok ? [] : strategyActionableMissing(strategy),
-    gate: strategy.gate,
-    strategy,
+    ok: merged.ok,
+    missing: merged.ok ? [] : strategyActionableMissing(merged),
+    gate: merged.gate,
+    strategy: merged,
   };
 }
 
@@ -245,6 +264,8 @@ export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Reco
     expected: row.expected,
     actual: row.actual,
     artifact_refs: row.artifact_refs,
+    runtime_digest: row.runtime_digest,
+    exit_code: row.exit_code,
     limitations: row.limitations,
     environment: row.environment,
   });
@@ -289,8 +310,13 @@ export function buildEvidenceSnapshot(
       expected: verification.expected ?? null,
       actual: verification.actual ?? null,
       artifact_refs: verification.artifact_refs ?? null,
+      runtime_digest: verification.runtime_digest ?? null,
+      exit_code: typeof verification.exit_code === "number" ? verification.exit_code : null,
       limitations: verification.limitations ?? null,
       environment: verification.environment ?? null,
+      observed_content_digests: verification.observed_content_digests ?? null,
+      content_readable: verification.content_readable !== false,
+      content_unreadable_reason: verification.content_unreadable_reason ?? null,
       title: row.title as string,
       description: (body.description as string) ?? null,
     };
@@ -409,8 +435,16 @@ function evaluateFindingFactGate(
     pairMissing: evidence.missing,
     conflictingNodeIds: evidence.conflicting_node_ids,
   });
-  evidence.gate = strategy.gate;
-  return { gate: strategy.gate, subjectRevision, strategy };
+  const integrity = evaluateEvidenceIntegrityForConfirm(
+    factNodeSnapshotsFromEvidenceRows([
+      ...(Array.isArray(evidence.facts) ? evidence.facts : []),
+      ...evidence.review,
+      ...evidence.test,
+    ]),
+  );
+  const merged = mergeStrategyWithEvidenceIntegrity(strategy, integrity);
+  evidence.gate = merged.gate;
+  return { gate: merged.gate, subjectRevision, strategy: merged };
 }
 
 async function confirmFindingFromFacts(
@@ -467,12 +501,26 @@ async function confirmFindingFromFacts(
         summary: opts.reason,
       })}`;
   }
+  const subjectRevision = resolveFindingSubjectRevision(opts.finding, factFirstRecordsFromSnapshot(opts.evidence));
+  const confirmIntegrityAudit = confirmIntegrityAuditFromFacts(
+    opts.gate.used_fact_ids,
+    factNodeSnapshotsFromEvidenceRows([
+      ...opts.evidence.review,
+      ...opts.evidence.test,
+      ...(opts.evidence.facts ?? []),
+    ]),
+  );
   const state = {
     ...verificationState("eligible", opts.evidence, strategy),
     gate: factFirstAuditAfter(opts.gate),
     used_fact_ids: opts.gate.used_fact_ids,
     close_path: "fact_first",
-    subject_revision: resolveFindingSubjectRevision(opts.finding, factFirstRecordsFromSnapshot(opts.evidence)),
+    subject_revision: subjectRevision,
+    // content integrity ≠ Hub wake fingerprint (gateFingerprint / evidence_signature)
+    confirm_trace: {
+      content_integrity_digest: confirmIntegrityAudit.content_integrity_digest,
+      used_fact_replay: confirmIntegrityAudit.used_fact_replay,
+    },
   };
   await tx`
     UPDATE findings SET
@@ -1435,131 +1483,6 @@ export function buildVerificationFollowupPayload(
     trigger_kind: kind,
     from: intentFrom ?? [],
   };
-}
-
-/**
- * 接受结构化验证证据 fact：Zod 校验 + 绑定校验后写入 body_json 与边。
- * 任一绑定失败都抛出稳定控制面错误；调用方所在事件事务会回滚，
- * 绝不把补证失败降级成普通 fact。
- */
-export async function attachVerificationEvidence(
-  tx: Tx,
-  job: Record<string, unknown>,
-  nodeId: string,
-  canvasId: string,
-  verification: unknown,
-): Promise<boolean> {
-  const parsed = VerificationEvidence.safeParse(verification);
-  if (!parsed.success) {
-    throw invalidVerification(`verification 字段不符合严格契约（job=${String(job.id)}）。`);
-  }
-  const ver: VerificationEvidenceType = parsed.data;
-
-  // 补证 Job 仍要求角色与 evidence_kind 一致；其它工作角色可提交结构化 verification Fact。
-  const jobType = String(job.type ?? "");
-  const payload = (job.payload_json ?? {}) as Record<string, unknown>;
-  const vf = payload.verification_followup as { finding_id?: string } | undefined;
-  if (vf?.finding_id) {
-    if (jobType !== ver.evidence_kind) {
-      throw invalidVerification(
-        `verification.evidence_kind=${ver.evidence_kind} 与当前角色 ${jobType} 不匹配。`,
-        "verification.evidence_kind",
-      );
-    }
-    if (vf.finding_id !== ver.finding_id) {
-      throw invalidVerification(
-        "verification.finding_id 必须匹配当前 Scheduler 绑定的补证 Finding。",
-        "verification.finding_id",
-      );
-    }
-  } else if (["hub_reason", "verify_finding", "verify", "report"].includes(jobType)) {
-    throw invalidVerification("系统 Job 不能提交 Finding 验证 Fact。", "verification");
-  }
-
-  const [finding] = await tx`
-    SELECT id, node_id, project_id, job_id, raw_json FROM findings WHERE id = ${ver.finding_id}`;
-  if (!finding?.node_id) {
-    throw invalidVerification("verification.finding_id 不存在或尚未生成 Finding 节点。", "verification.finding_id");
-  }
-  const frozenRevision = String(
-    (((finding.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined)
-      ?.subject_revision as string | undefined) ?? "",
-  ).trim();
-  if (frozenRevision && ver.subject_revision.trim() !== frozenRevision) {
-    throw invalidVerification(
-      `verification.subject_revision 必须与已冻结值完全一致（${frozenRevision}）。`,
-      "verification.subject_revision",
-    );
-  }
-
-  // Re-check all ownership links at the authoritative write boundary. The
-  // follow-up payload is scheduler-owned, but a forged internal call could
-  // still point it at a Finding from another project or at the producing Job
-  // itself. Neither may attach independent evidence.
-  if (String(finding.project_id) !== String(job.project_id)) {
-    throw invalidVerification("verification.finding_id 不属于当前 Job 所在项目。", "verification.finding_id");
-  }
-  const [originJob] = await tx`
-    SELECT id, project_id FROM jobs WHERE id = ${finding.job_id}`;
-  if (!originJob || String(originJob.project_id) !== String(finding.project_id)) {
-    throw invalidVerification("verification.finding_id 的原始 Job 绑定无效。", "verification.finding_id");
-  }
-  if (finding.job_id && String(finding.job_id) === String(job.id)) {
-    throw invalidVerification("验证证据 Job 不能与 Finding 的原始 Job 相同。", "verification.finding_id");
-  }
-  if (job.finding_id && String(job.finding_id) !== String(ver.finding_id)) {
-    throw invalidVerification("当前 Job 绑定的 Finding 与 verification.finding_id 不一致。", "verification.finding_id");
-  }
-
-  // 确认 finding 属于当前画布
-  const [fn] = await tx`
-    SELECT canvas_id FROM canvas_nodes WHERE id = ${finding.node_id as string}`;
-  if (!fn || fn.canvas_id !== canvasId) {
-    throw invalidVerification("verification.finding_id 不属于当前任务画布。", "verification.finding_id");
-  }
-
-  const [evidenceNode] = await tx`
-    SELECT id, canvas_id, job_id FROM canvas_nodes WHERE id = ${nodeId} FOR UPDATE`;
-  if (!evidenceNode || evidenceNode.canvas_id !== canvasId || String(evidenceNode.job_id) !== String(job.id)) {
-    throw invalidVerification("验证事实节点不属于当前 Job/Canvas。", "verification");
-  }
-
-  const edgeType = ver.evidence_kind === "review" ? "reviewed_by" : "tested_by";
-  const updated = await tx`
-    UPDATE canvas_nodes
-    SET body_json = body_json || ${tx.json({
-      verification: {
-        finding_id: ver.finding_id,
-        evidence_kind: ver.evidence_kind,
-        outcome: ver.outcome,
-        subject_revision: ver.subject_revision,
-        environment: ver.environment ?? null,
-        steps: ver.steps ?? [],
-        expected: ver.expected ?? null,
-        actual: ver.actual ?? null,
-        artifact_refs: ver.artifact_refs ?? [],
-        limitations: ver.limitations ?? [],
-        source_job_id: String(job.id),
-        source_role: String(job.type),
-      },
-    })}
-    WHERE id = ${nodeId} AND job_id = ${job.id as string} AND canvas_id = ${canvasId}
-    RETURNING id`;
-  if (updated.length === 0) throw invalidVerification("验证事实节点不存在，证据未附着。", "verification");
-
-  await insertEdgeIfAbsent(tx, canvasId, finding.node_id as string, nodeId, edgeType);
-  const [findingState] = await tx`SELECT raw_json FROM findings WHERE id = ${ver.finding_id}`;
-  const state = ((findingState?.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined) ?? {};
-  if (typeof state.subject_revision !== "string" || !state.subject_revision.trim()) {
-    await tx`
-      UPDATE findings SET
-        raw_json = raw_json || ${tx.json({
-          verification_state: { ...state, subject_revision: ver.subject_revision },
-        } as never)},
-        updated_at = now()
-      WHERE id = ${ver.finding_id}`;
-  }
-  return true;
 }
 
 export interface FindingStatusProblem {

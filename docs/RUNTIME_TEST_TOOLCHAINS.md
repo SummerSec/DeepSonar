@@ -32,3 +32,5 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 - `python agent-harness/test-runtime-images-api.py` 检查 Test 默认 Kali、Verify 默认 Base、显式项目级 Verify 动态覆盖和 Job 不可变 snapshot。
 
 这些是运行时能力和配置门禁，不是对 `java-sec-code` 或任何具体漏洞的确认。Scheduler 确认硬门是可版本化的 Fact-first 策略（当前 `fact_first` v1）：合格的结构化 supporting Fact（含 `subject_revision` / ownership / `expected` / `actual` / `outcome=supports`）即可确认；独立 review + runtime_test 配对是动态复现域的 **advisory** 完整度提示，不是所有 profile 的必需门禁，也不得与 `confirmed` 同时宣称「必需证据缺失」。本地冒烟本身永远不会生成 Finding。
+
+运行证明与文本 expected/actual 的边界（#577）：策略若要求 runtime proof，须持久化目标 revision、steps、environment 或 runtime_digest、exit_code，以及带内容摘要的产物引用；仅有文本 expected/actual 不构成已复现证明。内容完整性摘要与 Hub 唤醒用 evidence_signature / gate_fingerprint 分离——修改完整性不得引入重复 Hub 唤醒。确认记录可通过 fact_evidence_trace 按 used_fact_ids（canvas Fact 节点）回放到来源 Job/Attempt 与可复查产物；无生产库样本时不预断言悬空数量。

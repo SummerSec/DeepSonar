@@ -6,6 +6,7 @@
 
 ### 修复
 
+- Fact 确认依据可复查链路（#577）：新增只读 `GET /findings/:id/evidence-trace`（`findings:read`），`GET /findings/:id` 亦附带 `fact_evidence_trace`；按 `used_fact_ids`（canvas Fact 节点，非 artifact_evidence FK）解析存在性/归属/来源 Job·Attempt/修订/可读取性。确认态在 `verification_state.confirm_trace` 写入 `content_integrity_digest` 与 `used_fact_replay`（含 `text_only_not_reproduction_proof`），与 Hub 唤醒指纹分离。VerificationEvidence 可选 `runtime_digest`/`exit_code`；观测摘要不符阻断确认；`requireRuntimeProof` 可选收紧运行证明，默认不回归 fact_first v1；不强制全部 Fact 映射 artifact_evidence。
 - 统一 Fact-first 确认策略与 `missing_evidence`（#576）：引入可冻结 `strategy_id=fact_first` / `strategy_version=1`，门禁、必需缺项、advisory 缺项与确认理由同一路径计算；直接确认与 Verify Job 收口共用。`confirmed` 时 `missing_evidence` 只反映必需项（通过则为空），review/test 配对缺口写入 `advisory_missing`，不再出现「已确认却仍列 independent_review 等必需缺项」。冲突 / 来源失败 / 错误 finding-revision 仍阻断；CTF 单 Fact 直通保留。历史无策略版本的确认标记 `legacy_unversioned_strategy`，不静默重写。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
 - Hub verify 收敛门静默停机（#574）：`waiting_evidence` 在证据签名未变时不再 silent return；从未验证的 pending 可唤醒；关注级别内持久 `inconclusive` / stalled pending 在 N=`INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS`（2）后升级 `needs_human`+human Action，并写入 `paused_reason=verify_unclosed:…`（Web 总览副标题透出）。
 - 角色未指定 model 时 Job 快照不再空白，并避免 usage 台账把 CLI 默认名误当成凭据目录模型（#570）：
