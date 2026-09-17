@@ -11,6 +11,7 @@ import {
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import { sql } from "../../db.js";
 import { loadFindingTrace } from "../../finding-trace.js";
+import { loadFactEvidenceTrace } from "../../fact-evidence-trace.js";
 import { FINDINGS_LIST_WINDOW } from "../../finding-disposition.js";
 import { isUuid } from "../../project-scope.js";
 import { decodeCursor, cursorForRow, page, pageLimit } from "../../pagination.js";
@@ -610,6 +611,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
           FROM finding_research_runs WHERE id = ${research.last_run_id}`
       : [];
     const trace = await loadFindingTrace(sql, finding, verification_rounds);
+    const fact_evidence_trace = await loadFactEvidenceTrace(sql, finding, verification_rounds);
     return {
       finding: { ...finding, ...research },
       research,
@@ -628,6 +630,38 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       links,
       verification_rounds: verification_rounds.slice(0, 1000),
       trace,
+      fact_evidence_trace,
+    };
+  });
+
+  /** Read-only Fact↔Evidence traceability for a confirmed Finding (#577). Scope: findings:read. */
+  app.get("/findings/:id/evidence-trace", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const [finding] = await sql`
+      SELECT f.*, j.canvas_id
+      FROM findings f
+      JOIN jobs j ON j.id = f.job_id
+      WHERE f.id = ${id}`;
+    if (!finding) return reply.code(404).send({ error: "finding not found" });
+    const verification_rounds = await sql`
+      SELECT id, attempt, verify_job_id, status, proposed_verdict, final_outcome,
+             requirements_json, evidence_snapshot_json, summary, error, created_at, finished_at
+      FROM finding_verification_rounds WHERE finding_id = ${id} ORDER BY attempt LIMIT 1001`;
+    const fact_evidence_trace = await loadFactEvidenceTrace(sql, finding, verification_rounds);
+    const raw = (finding.raw_json ?? {}) as Record<string, unknown>;
+    const state = (raw.verification_state ?? {}) as Record<string, unknown>;
+    const confirm_trace = state.confirm_trace ?? {
+      content_integrity_digest: state.content_integrity_digest ?? null,
+      used_fact_replay: state.used_fact_replay ?? null,
+    };
+    return {
+      finding_id: finding.id,
+      project_id: finding.project_id,
+      canvas_id: finding.canvas_id ?? null,
+      verify_status: finding.verify_status,
+      subject_revision: state.subject_revision ?? null,
+      confirm_trace,
+      fact_evidence_trace,
     };
   });
 }
