@@ -385,3 +385,19 @@ test("worker-join compose keeps server-proxy and does not change single-host pro
   assert.match(deployPs1, /worker-join/);
   assert.match(deployPs1, /docker-compose.worker.yml/);
 });
+
+test("OpenSandbox config schema gate is wired into unit and CI gates (#583)", () => {
+  const pkg = readFileSync(join(root, "package.json"), "utf8");
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const gate = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-config-schema-gate.ts"), "utf8");
+  assert.match(pkg, /ci:gate:opensandbox-config-schema/);
+  assert.match(pkg, /opensandbox-config-schema-gate\.test\.ts/);
+  // Dedicated workflow step needs `workflow` token scope; gate still runs via runtime-sandbox unit.
+  assert.match(ci, /pnpm ci:unit:runtime-sandbox/);
+  assert.match(gate, /load_config\("\/etc\/opensandbox\/config\.toml"\)/);
+  assert.match(gate, /OPENSANDBOX_SERVER_IMAGE|pinnedOpenSandboxServerImage/);
+  assert.match(gate, /--network[\s\S]*none/);
+  assert.doesNotMatch(gate, /\/var\/run\/docker\.sock/);
+  assert.match(gate, /No docker\.sock/);
+  assert.match(gate, /OPENSANDBOX_SCHEMA_GATE_REQUIRED|schemaGateRequiredInThisEnvironment/);
+});
