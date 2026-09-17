@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 文档
+
+- 发布验收闭环清单（#582）：新增 `docs/RELEASE_READINESS_POST_v0.4.4.md`，覆盖 v0.4.4→当前 main 的 Docker/OpenSandbox、schema v52、模型目录、CLI/Provider、mobile、UI、收敛与确认门禁、发行元数据；每项区分「已核实（代码/CI）」与「延期（需实机）」并附 PR/SHA。同步 README / DESIGN / `database/README` 的 schema 字面量为 **v52**。注明 v0.4.4 Release 中 Docker `gateway` 指引的勘误（现默认 `direct`，见 #559）。
+
 ### 修复
 
 - Verify 硬门悬空引用与 confirmed 断言（#590）：`used_fact_ids` 必须 EXISTS 解析到真实 Fact（finding 归属 + 来源 Job ≠ Finding 原始 Job）；悬空 → `gate.ok=false` → rework。`security.vulnerability`（及 misconfig/secret）确认路径将 independent_review / runtime_test 等配对缺口提升为 **required_missing**，不得再把 missing 抹空后放行 confirmed；CTF/general 仍保持 #576 advisory。新增 `impact`（attacker_entry / victim_resource / impact_flow / preconditions / known_issue_refs / impact_waiver）与 confirmed 钩子；缺 impact_flow 且无 waiver 时阻断。建议项目协议将 `security.vulnerability` 列入 `require_scoring_for_profiles`（默认仍为空以兼容现有 Agent）；location/summary 自动抽取 TODO/crbug/CVE 打 `known_issue` 标签；confirmed 需 `attempted_refutation`，合格 test 需 `artifact_refs`。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。

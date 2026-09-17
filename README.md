@@ -127,7 +127,7 @@ pnpm ci:unit:web-facts
 pnpm ci:images
 ```
 
-按改动范围选择单元、集成或 `agent-harness` 冒烟测试；只跑 typecheck 不能替代行为验证。当前 schema 版本以 `apps/scheduler/src/schema-version.ts` 和 `database/schema.sql` 为准（主线当前为 v48）。
+按改动范围选择单元、集成或 `agent-harness` 冒烟测试；只跑 typecheck 不能替代行为验证。当前 schema 版本以 `apps/scheduler/src/schema-version.ts` 和 `database/schema.sql` 为准（主线当前为 v52）。
 
 改表时直接修改 `database/schema.sql`、同步 bump `SCHEMA_VERSION`，再用 `pnpm db:rebuild -- --plan` / `--apply` 重建并回填交集列。Scheduler 不执行增量 ALTER，也不会在启动时静默升级非空库。
 
