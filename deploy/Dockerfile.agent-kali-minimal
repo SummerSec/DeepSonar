@@ -177,10 +177,16 @@ WORKDIR /workspace
 
 # Keep the specialist runtime small by exporting only the finished filesystem,
 # not superseded bytes from package-manager and tool-install layers.
+
+# deepsonar-runtime-manuals (#588)
+COPY agent-harness/manuals/deepsonar-kali-minimal /opt/deepsonar/manuals
+RUN test -f /opt/deepsonar/manuals/INDEX.md
+
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="kali-minimal" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals" \
       org.opencontainers.image.title="DeepSonar Kali Test" \
       org.opencontainers.image.description="DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

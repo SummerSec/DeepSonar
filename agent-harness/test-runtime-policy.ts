@@ -1,28 +1,36 @@
 import assert from "node:assert/strict";
 import {
   RUNTIME_TEST_TOOLCHAIN_POLICY,
+  RUNTIME_TOOL_MANUALS_POLICY,
   withRuntimeTestToolchainPolicy,
 } from "../apps/scheduler/src/domains/role-runtime-snapshot/index.ts";
 
 const custom = "operator-authored test instructions";
+const manualsThenToolchain = `${RUNTIME_TOOL_MANUALS_POLICY}\n\n${RUNTIME_TEST_TOOLCHAIN_POLICY}`;
 
 assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Java uses/);
 assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Python uses/);
 assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Go uses/);
 assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Rust uses/);
 assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /Do \*\*not\*\* install or download JDK, Maven/);
+assert.match(RUNTIME_TOOL_MANUALS_POLICY, /\/opt\/deepsonar\/manuals/);
+assert.match(RUNTIME_TOOL_MANUALS_POLICY, /INDEX\.md/);
 
 assert.equal(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal"),
-  RUNTIME_TEST_TOOLCHAIN_POLICY,
+  manualsThenToolchain,
 );
 assert.equal(
   withRuntimeTestToolchainPolicy("test", RUNTIME_TEST_TOOLCHAIN_POLICY, "deepsonar-base"),
-  RUNTIME_TEST_TOOLCHAIN_POLICY,
+  manualsThenToolchain,
 );
 assert.equal(
   withRuntimeTestToolchainPolicy("verify", custom, "deepsonar-base"),
-  custom,
+  `${RUNTIME_TOOL_MANUALS_POLICY}\n\n${custom}`,
+);
+assert.match(
+  withRuntimeTestToolchainPolicy("verify", custom, "deepsonar-kali-minimal") ?? "",
+  /Runtime tool manuals \(Scheduler policy\)/,
 );
 assert.match(
   withRuntimeTestToolchainPolicy("verify", custom, "deepsonar-kali-minimal") ?? "",
@@ -34,7 +42,7 @@ assert.equal(
 );
 assert.equal(
   withRuntimeTestToolchainPolicy("audit", null, "deepsonar-audit"),
-  null,
+  RUNTIME_TOOL_MANUALS_POLICY,
 );
 assert.match(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-openharmony-test") ?? "",
@@ -64,5 +72,9 @@ assert.doesNotMatch(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
   /Mobile device protocols/,
 );
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-kali-minimal") ?? "",
+  /Runtime tool manuals \(Scheduler policy\)/,
+);
 
-console.log("OK: runtime test policy selection and idempotence");
+console.log("OK: runtime test policy selection, manuals injection, and idempotence");

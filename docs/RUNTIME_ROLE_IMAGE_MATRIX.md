@@ -57,6 +57,16 @@ Harness 出处：`agent-harness/chrome-*-runtime.json`、`clickhouse-*-runtime.j
 - 市场页仍主要展示 `description` / `tools_json`；RoleConfig 选择器 hint 对已知 key 附「不包含」一句话（`apps/web/src/runtime-image-boundary.ts`，与 Hub 目录同 key）。
 - 镜像详情页更重的结构化展示可 follow-up，不以 UI 为 #565 验收主路径。
 
+## 工具说明书（#588）
+
+每个官方运行镜像（含 base）必须在镜像内提供完整工具说明书，路径统一为 `/opt/deepsonar/manuals/`（`INDEX.md` + `tools/*.md`）。
+
+- 仓库源：`agent-harness/manuals/<imageKey>/`；`catalog.json` 为覆盖清单权威源。
+- 构建：各 `deploy/Dockerfile.agent*` 将对应手册 `COPY` 进镜像；标签 `io.deepsonar.manuals`。
+- 验收门禁：`agent-harness/check-runtime-manuals.mjs`（由 `check-runtime-image-consistency.mjs` / `pnpm ci:images` 调用）；缺手册、缺九段结构、Dockerfile 未安装或指纹未纳入均失败。
+- Worker 发现：`withRuntimeTestToolchainPolicy` 对任意已解析官方镜像注入 manuals 阅读要求；专项边界策略亦指向 `INDEX.md`。
+- 说明书须覆盖 Agent 面向工具/包装入口（含继承工具），区分内部依赖；失败分类不得一律 `needs_human`。
+
 ## 校验
 
 - `apps/scheduler/src/domains/role-runtime-snapshot/role-runtime-snapshot.characterization.test.ts` 锁定 policy 字符串、专项 key 集合与本文档关键锚点。

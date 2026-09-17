@@ -26,6 +26,7 @@
 - 上游 review/test 独立反证与有界假设修正闭环（#579）：新增 `research.hypothesis_loop` v1。「未找到反证」不能自动 confirmed；相同输入指纹停止重复派发；反驳后派生子假设须保留父命题链接且禁止原文复活；预算耗尽 → request_human（不回归 #575 paused_reason）；Hub 可回放下一步决策；Verify 仍只消费 Fact。
 - 人工标注审计回归集与模型/策略变更质量门禁（#580）：新增 `audit.regression_gate` v1 与 `fixtures/audit-regression/samples.v1.json`。标签须含人工理由与适用修订；争议样本不进准确率分母；禁止用平台 confirmed 当独立真值；缺少 PoC 不得自动标误报。门禁相对冻结基线做逐样本对比，区分质量退化 / 环境失败 / 评估未完成，不以 confirmed 率或反驳数作为单一优化目标。
 - 已知性/版本适用性与可解释审计覆盖（#581 首片）：`research.knownness_coverage` v1。命中公开问题且 pinned revision 仍受影响时禁止自动降为 hardening；HEAD 复查追加适用性不覆盖历史；检索失败标 unknown；CVSS 向量正确 ≠ 影响已证实；无解释分母则拒报覆盖率。
+- 官方运行镜像工具说明书交付与验收门禁（#588）：13 个官方运行镜像均在 `agent-harness/manuals/<imageKey>/` 维护完整说明书（使用场景、选型、前置、调用、输出、失败分类、组合、证据、版本限制），构建安装到 `/opt/deepsonar/manuals/`；`check-runtime-manuals.mjs` 纳入 `ci:images`，缺手册即拒收。Scheduler 对已解析镜像注入 manuals 发现要求。
 
 - 项目配置：CLI / Provider 白名单选型与 Hub 运行时组合（#568）。项目设置新增「CLI / Provider 启用与缺省」面板（对标镜像启用）；`config_json` 持久化 `enabled_agent_clis` / `enabled_credential_ids` 与可选软缺省。Hub 新增 `list_available_agent_clis` / `list_available_providers`，intent 可提案 `agent_cli` / `credential_id`（目录外 fail-closed）；省略时走项目软缺省或 RoleConfig 回退。并发仍归 Provider（`max_concurrent` / `model_concurrency`）。迁移：首次读设置时把现有 RoleConfig 绑定种子进白名单，避免静默丢配置。平台只做启用/配额/审计控制面，不在角色上锁死完整身份。
 - 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。
