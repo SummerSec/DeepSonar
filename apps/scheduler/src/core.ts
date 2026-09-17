@@ -1238,6 +1238,8 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
   },
   hasSucceededRoleWork: findingVerification.hasSucceededRoleWork,
   maybeDispatchReport: reportConvergence.maybeDispatchReport,
+  markFindingNeedsHuman: async (tx, findingId, reason) =>
+    findingVerification.markFindingNeedsHuman(tx, findingId, reason),
 });
 
 type CanvasEdgeInput = {

@@ -706,7 +706,16 @@ export function TaskCanvasPage() {
   const decisionLabel = useMemo(() => {
     if (!convergence) return null;
     if (convergence.hub_paused) return "已暂停";
-    if (convergence.auto_stopped) return "已收敛";
+    if (convergence.auto_stopped) {
+      const reason = convergence.paused_reason ?? "";
+      const unclosed = reason.match(
+        /^verify_unclosed:high=(\d+)\(inconclusive=(\d+),pending=(\d+)\)$/,
+      );
+      if (unclosed) {
+        return `Hub 已停：${unclosed[1]} 个 high 未收口（${unclosed[2]} inconclusive / ${unclosed[3]} pending）`;
+      }
+      return reason.startsWith("verify_unclosed:") ? `Hub 已停：${reason}` : "已收敛";
+    }
     return "自驱中";
   }, [convergence]);
 

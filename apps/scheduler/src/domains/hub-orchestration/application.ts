@@ -3,9 +3,12 @@ import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
 import { inc } from "../../metrics.js";
 import {
+  formatVerifyUnclosedPausedReason,
   hubRoundLimitLabel,
+  INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS,
   isHubRoundWithinBudget,
   shouldConsiderHubTrigger,
+  shouldEscalateUnclosedVerify,
   shouldWakeEvidenceHub,
 } from "./policy.js";
 import type {
@@ -26,11 +29,14 @@ export type {
   HubOrchestrationTransaction,
 } from "./ports.js";
 export {
+  formatVerifyUnclosedPausedReason,
   hubRoundLimitLabel,
+  INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS,
   isHubRoundWithinBudget,
   parseHubMaxRounds,
   parseHubMaxRoundsEnv,
   shouldConsiderHubTrigger,
+  shouldEscalateUnclosedVerify,
   shouldWakeEvidenceHub,
   UNLIMITED_HUB_ROUNDS,
 } from "./policy.js";
@@ -132,6 +138,8 @@ export function createHubOrchestrationApplication(
     hub_evidence_signature: string | null;
     gate_fingerprint: string | null;
     hub_gate_fingerprint: string | null;
+    hub_wake_attempts: number;
+    never_verified: boolean;
     node_id: string | null;
   } | null> {
     const rows = await tx`
@@ -159,7 +167,11 @@ export function createHubOrchestrationApplication(
       const missing = Array.isArray(req.missing)
         ? (req.missing as unknown[]).map(String).filter(Boolean).sort()
         : [];
-      const evidence_signature = JSON.stringify({ review: ids("review"), test: ids("test"), missing });
+      const reviewIds = ids("review");
+      const testIds = ids("test");
+      const never_verified = reviewIds.length === 0 && testIds.length === 0;
+      const hub_wake_attempts = Math.max(0, Number(req.hub_wake_attempts ?? 0) || 0);
+      const evidence_signature = JSON.stringify({ review: reviewIds, test: testIds, missing });
       const hub_evidence_signature = (req.hub_evidence_signature as string | null) ?? null;
       const gate_fingerprint =
         typeof req.gate_fingerprint === "string" && req.gate_fingerprint.trim().length > 0
@@ -169,12 +181,16 @@ export function createHubOrchestrationApplication(
         typeof req.hub_gate_fingerprint === "string" && req.hub_gate_fingerprint.trim().length > 0
           ? req.hub_gate_fingerprint
           : null;
-      // Skip a consumed evidence edge so an older stalled finding cannot
-      // starve a newer waiting round. Gate fingerprint unchanged = no progress (#519).
+      // Never-verified pending stays wakeable until escalate floor (#574).
+      // Otherwise skip a consumed evidence edge so an older stalled finding
+      // cannot starve a newer waiting round. Gate fingerprint unchanged = no progress (#519).
+      const allowNeverVerifiedWake =
+        never_verified && !shouldEscalateUnclosedVerify(hub_wake_attempts);
       if (
         !shouldWakeEvidenceHub(hub_evidence_signature, evidence_signature, {
           lastGateFingerprint: hub_gate_fingerprint,
           gateFingerprint: gate_fingerprint,
+          neverVerified: allowNeverVerifiedWake,
         })
       ) {
         continue;
@@ -188,6 +204,8 @@ export function createHubOrchestrationApplication(
         hub_evidence_signature,
         gate_fingerprint,
         hub_gate_fingerprint,
+        hub_wake_attempts,
+        never_verified,
         node_id: (row.node_id as string | null) ?? null,
       };
     }
@@ -206,6 +224,117 @@ export function createHubOrchestrationApplication(
         AND r.requirements_json->>'eligibility' = 'waiting_evidence'
       LIMIT 1`;
     return rows.length > 0;
+  }
+
+  /**
+   * #574: when evidence-wait rounds exist but none are wakeable (signature
+   * unchanged / escalate floor hit), do not silent-return. Escalate care-scope
+   * inconclusive + never-verified pending to needs_human (human Action) and
+   * record paused_reason so the canvas is observable.
+   */
+  async function stopHubForUnclosedVerify(
+    tx: HubOrchestrationTransaction,
+    canvasId: string,
+    severities: string[],
+  ): Promise<void> {
+    if (severities.length === 0) return;
+
+    const [{ hub_rounds }] = await tx<[{ hub_rounds: number }]>`
+      SELECT COUNT(*)::int AS hub_rounds FROM jobs
+      WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
+    const hubRounds = Number(hub_rounds);
+
+    const rows = await tx`
+      SELECT f.id, f.verify_status, f.title, f.severity,
+             r.requirements_json, r.evidence_snapshot_json
+      FROM findings f
+      JOIN jobs origin ON origin.id = f.job_id
+      LEFT JOIN LATERAL (
+        SELECT requirements_json, evidence_snapshot_json
+        FROM finding_verification_rounds
+        WHERE finding_id = f.id AND status = 'pending' AND verify_job_id IS NULL
+          AND requirements_json->>'eligibility' = 'waiting_evidence'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      ) r ON true
+      WHERE origin.canvas_id = ${canvasId}
+        AND lower(f.severity) = ANY(${severities})
+        AND f.verify_status IN ('inconclusive', 'pending')
+        AND COALESCE(f.raw_json->'verification_state'->>'eligibility', '') <> 'below_min_verify_severity'`;
+
+    let inconclusive = 0;
+    let pending = 0;
+    const pendingEscalate: Array<{ id: string; reason: string }> = [];
+    const inconclusiveIds: string[] = [];
+
+    for (const row of rows) {
+      const status = String(row.verify_status ?? "");
+      const req = asRecord(row.requirements_json);
+      const snap = asRecord(row.evidence_snapshot_json);
+      const reviewLen = Array.isArray(snap.review) ? snap.review.length : 0;
+      const testLen = Array.isArray(snap.test) ? snap.test.length : 0;
+      const neverVerified = reviewLen === 0 && testLen === 0;
+      const hubWakeAttempts = Math.max(0, Number(req.hub_wake_attempts ?? 0) || 0);
+
+      if (status === "inconclusive") {
+        inconclusive += 1;
+        inconclusiveIds.push(row.id as string);
+        continue;
+      }
+
+      pending += 1;
+      // Stall path: never-verified / waiting_evidence pending cannot wake again.
+      pendingEscalate.push({
+        id: row.id as string,
+        reason: neverVerified
+          ? "pending_never_verified_stalled"
+          : shouldEscalateUnclosedVerify(hubWakeAttempts)
+            ? "pending_waiting_evidence_stalled"
+            : "pending_waiting_evidence_signature_stale",
+      });
+    }
+
+    if (inconclusive + pending === 0) return;
+
+    const escalateInconclusive =
+      hubRounds >= INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS || pendingEscalate.length > 0;
+    const escalateIds: Array<{ id: string; reason: string }> = [...pendingEscalate];
+    if (escalateInconclusive) {
+      for (const id of inconclusiveIds) {
+        escalateIds.push({
+          id,
+          reason: `inconclusive_escalate_after_${INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS}_hub_rounds`,
+        });
+      }
+    }
+
+    // Only inconclusive, below N hub rounds, and no pending stall → keep waiting.
+    if (escalateIds.length === 0) return;
+
+    for (const item of escalateIds) {
+      await ports.markFindingNeedsHuman(tx, item.id, item.reason).catch((e) =>
+        console.error(`[hub] escalate finding ${item.id} failed:`, e),
+      );
+    }
+
+    const pausedReason = formatVerifyUnclosedPausedReason({ inconclusive, pending });
+    await ports.patchCanvasConvergence(tx, canvasId, {
+      auto_stopped: true,
+      paused_reason: pausedReason,
+      paused_at: new Date().toISOString(),
+    });
+    await tx`
+      UPDATE canvas_nodes SET
+        body_json = body_json || ${tx.json({
+          paused_reason: pausedReason,
+          hub_stop: "verify_unclosed",
+          unclosed_verify: { inconclusive, pending, escalated: escalateIds.length },
+        } as never)},
+        updated_at = now()
+      WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+    console.warn(
+      `[hub] 画布 ${canvasId} 停止自驱：${pausedReason} escalated=${escalateIds.length} (N=${INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS})`,
+    );
   }
 
   async function hasActiveRunnableJobs(
@@ -289,18 +418,29 @@ export function createHubOrchestrationApplication(
       if (await hasActiveRoleJobs(tx, canvasId)) return;
     }
 
+    const waitSeverities = ports.careSeverities(rules.minVerifySeverity);
     const waiting = await waitingEvidenceRound(tx, canvasId);
-    let waitingWake: { id: string; evidence_signature: string; gate_fingerprint: string | null } | null = null;
+    let waitingWake: {
+      id: string;
+      evidence_signature: string;
+      gate_fingerprint: string | null;
+      hub_wake_attempts: number;
+    } | null = null;
     let trigger = options.trigger ?? {
       kind: options.idleWake ? "canvas_idle" : "graph_progress",
     };
     if (waiting && !options.manual) {
+      const allowNeverVerifiedWake =
+        waiting.never_verified && !shouldEscalateUnclosedVerify(waiting.hub_wake_attempts);
       if (
         !shouldWakeEvidenceHub(waiting.hub_evidence_signature, waiting.evidence_signature, {
           lastGateFingerprint: waiting.hub_gate_fingerprint,
           gateFingerprint: waiting.gate_fingerprint,
+          neverVerified: allowNeverVerifiedWake,
         })
       ) {
+        // Signature-stale (or escalate floor): stop observably instead of silent return (#574).
+        await stopHubForUnclosedVerify(tx, canvasId, waitSeverities);
         return;
       }
       trigger = {
@@ -315,12 +455,14 @@ export function createHubOrchestrationApplication(
         id: waiting.id,
         evidence_signature: waiting.evidence_signature,
         gate_fingerprint: waiting.gate_fingerprint,
+        hub_wake_attempts: waiting.hub_wake_attempts,
       };
     } else if (!waiting && !options.manual && (await hasWaitingEvidenceRound(tx, canvasId))) {
+      // All waiting_evidence rounds failed the wake gate — escalate + paused_reason (#574).
+      await stopHubForUnclosedVerify(tx, canvasId, waitSeverities);
       return;
     }
 
-    const waitSeverities = ports.careSeverities(rules.minVerifySeverity);
     if (!options.manual && !options.force) {
       if (await hasActiveBlockingVerify(tx, canvasId, waitSeverities)) return;
     }
@@ -377,6 +519,7 @@ export function createHubOrchestrationApplication(
         SET requirements_json = requirements_json || ${tx.json({
           hub_evidence_signature: waitingWake.evidence_signature,
           hub_gate_fingerprint: waitingWake.gate_fingerprint,
+          hub_wake_attempts: waitingWake.hub_wake_attempts + 1,
         } as never)}
         WHERE id = ${waitingWake.id}`;
     }

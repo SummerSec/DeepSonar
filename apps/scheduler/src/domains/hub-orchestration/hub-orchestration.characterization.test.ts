@@ -3,11 +3,14 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   createHubOrchestrationApplication,
+  formatVerifyUnclosedPausedReason,
   hubRoundLimitLabel,
+  INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS,
   isHubRoundWithinBudget,
   parseHubMaxRounds,
   parseHubMaxRoundsEnv,
   shouldConsiderHubTrigger,
+  shouldEscalateUnclosedVerify,
   shouldWakeEvidenceHub,
   UNLIMITED_HUB_ROUNDS,
 } from "./application.js";
@@ -36,6 +39,39 @@ test("Hub evidence wakeups and round budgets remain edge-triggered", () => {
   assert.equal(isHubRoundWithinBudget(5, 3), false);
   assert.equal(isHubRoundWithinBudget(0, 0), true, "0 is unlimited");
   assert.equal(isHubRoundWithinBudget(20, 0), true, "unlimited never exhausts on round count");
+});
+
+test("never-verified pending wakes even when evidence signature is unchanged (#574)", () => {
+  assert.equal(
+    shouldWakeEvidenceHub("same", "same", { neverVerified: true }),
+    true,
+    "signature gate must not suppress never-verified pending wakeup",
+  );
+  assert.equal(
+    shouldWakeEvidenceHub("same", "same", { neverVerified: false }),
+    false,
+  );
+  assert.equal(
+    shouldWakeEvidenceHub("old", "new", {
+      neverVerified: true,
+      lastGateFingerprint: "fp",
+      gateFingerprint: "fp",
+    }),
+    true,
+    "never-verified bypasses fingerprint sameness as well",
+  );
+});
+
+test("inconclusive / unclosed verify escalates after documented N hub rounds (#574)", () => {
+  assert.equal(INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS, 2);
+  assert.equal(shouldEscalateUnclosedVerify(0), false);
+  assert.equal(shouldEscalateUnclosedVerify(1), false);
+  assert.equal(shouldEscalateUnclosedVerify(2), true);
+  assert.equal(shouldEscalateUnclosedVerify(5), true);
+  assert.equal(
+    formatVerifyUnclosedPausedReason({ inconclusive: 4, pending: 1 }),
+    "verify_unclosed:high=5(inconclusive=4,pending=1)",
+  );
 });
 
 test("Hub round budget parses unlimited without silently substituting 20", () => {
@@ -88,6 +124,7 @@ test("Hub application keeps no-op guards before touching the transaction", async
     evaluateAnalysisCompleteGate: async () => ({ ok: false, blockers: ["fixture"] }),
     hasSucceededRoleWork: async () => false,
     maybeDispatchReport: async () => undefined,
+    markFindingNeedsHuman: async () => true,
   });
 
   await app.maybeTriggerHub(fakeTx, undefined);
@@ -100,6 +137,18 @@ test("Hub application keeps no-op guards before touching the transaction", async
   assert.equal(queryCount, 0, "invalid and recursive Hub wakeups must stop before SQL");
 });
 
+test("Hub application stop path writes paused_reason for verify-unclosed (#574)", () => {
+  const application = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
+  assert.match(application, /stopHubForUnclosedVerify/);
+  assert.match(application, /formatVerifyUnclosedPausedReason/);
+  assert.match(application, /markFindingNeedsHuman/);
+  assert.match(application, /hub_wake_attempts/);
+  assert.match(application, /neverVerified: allowNeverVerifiedWake/);
+  assert.match(application, /paused_reason: pausedReason/);
+  assert.match(application, /hub_stop: "verify_unclosed"/);
+  assert.match(application, /INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS/);
+});
+
 test("core composition root wires Hub orchestration without owning eligibility SQL", () => {
   const source = readFileSync(new URL("../../core.ts", import.meta.url), "utf8");
   const application = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
@@ -108,6 +157,7 @@ test("core composition root wires Hub orchestration without owning eligibility S
   assert.match(source, /hubOrchestrationApplication\.advanceCanvasAfterTerminalJob/);
   assert.match(source, /hubOrchestrationApplication\.triggerHubFromHumanComment/);
   assert.match(source, /export async function maybeTriggerHub\([\s\S]*?return hubOrchestrationApplication\.maybeTriggerHub/);
+  assert.match(source, /markFindingNeedsHuman/);
   assert.ok(
     application.indexOf("ports.lockCanvasForConvergence(tx, canvasId)") <
       application.indexOf("const activeHub"),
