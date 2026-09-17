@@ -120,7 +120,9 @@ Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Schedule
 
 review/test/worker 的复核结果必须作为结构化 Fact 提交，至少引用 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual` 和 `outcome`。Scheduler 校验项目/画布归属、版本和 Fact 间冲突；普通文本 verdict 不计入门禁。
 
-Verify 只消费允许的 Fact、Artifact、Evidence 和独立 Evaluation，不重读 maker 结论作为证据。证据不足、冲突、版本不匹配或主体变更时，Finding 保持未确认，Hub 重新派发 review/test 补证。`minVerifySeverity` 只决定自动验证和收敛范围，不会删除低于阈值的 Finding。
+确认策略冻结为可版本化的 **Fact-first**（`strategy_id=fact_first`，当前 `strategy_version=1`）：门禁、必需缺项、advisory 缺项与确认理由由同一路径计算；直接确认与 `verify_finding` 收口共用该结果。v1 以结构化 supporting Fact 为确认硬门——不强制所有领域提供独立 review + runtime_test 配对或动态 PoC（CTF 等场景可直通）。`buildEvidenceSnapshot` 的 review/test 配对缺口记为 **advisory**，不得在 `confirmed` 时仍写入 `missing_evidence` 必需项。冲突、来源 Job 失败、错误 `finding_id` / `subject_revision` 仍为必需阻断。历史确认记录若无策略版本字段，标记为 legacy/unversioned，不静默改写为已通过新策略。
+
+Verify 只消费允许的 Fact、Artifact、Evidence 和独立 Evaluation，不重读 maker 结论作为证据（#399）。证据不足、冲突、版本不匹配或主体变更时，Finding 保持未确认，Hub 可按 advisory/必需缺项派发补证。`minVerifySeverity` 只决定自动验证和收敛范围，不会删除低于阈值的 Finding。
 
 Hub 证据等待唤醒以证据签名 / 门禁指纹边沿触发；**从未有过 review/test 证据的 pending Finding** 即使签名未变也计入唤醒（签名门只防「已有证据但无进展」的重复轮）。关注级别内 `inconclusive` 若在 Hub 自驱停滞时仍未收口（默认连续 ≥`INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS`=2 轮，或与 stalled pending 一并停机），升级为 `needs_human` 并创建 human Action，同时在画布 convergence / root `body_json` 写入 `paused_reason=verify_unclosed:…`，禁止静默停机。
 

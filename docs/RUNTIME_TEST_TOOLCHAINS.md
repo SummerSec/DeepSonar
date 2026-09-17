@@ -22,7 +22,7 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 - 工具缺失时停止动态尝试，提交 `inconclusive`/`needs_human` 结构化证据；不得用静态叙述冒充运行时结果。
 - OpenHarmony Test 的设备协议是官方 `hdc`（`list targets` / `shell` / `file send|recv` / `install` / `hilog` / `fport` / `tconn`）。无 target 时必须结构化 `needs_human` / `inconclusive`，禁止把主机构建日志或源码叙述写成设备结果。audit/fuzz 仍可使用主机 Clang/ASan/libFuzzer；不要把 gdb/strace 或 Kali 进程工具当成 OH 的设备协议。
 - 移动端专项镜像 `deepsonar-mobile`：Android 设备协议是官方 `adb`；iOS Linux 宿主是 `idevice_id` / `ideviceinstaller` / `iproxy`（无 Xcode/Simulator）；OpenHarmony 设备协议是官方 `hdc`（与 OH Test 同一 vendor 二进制），HAP 静态检查用 unzip + `pack.info` / `module.json`。Android 静态检查：Java/Kotlin 用 JADX CLI、apktool、bundletool、apkeep、androguard、钉死的 `droidasc`（Droid ASC：大包按需 `getclass`/`getmanifest`/`findrefs`，与 JADX 互补；禁止 `--gui`），以及 Agent 可调用的钉死 `apkcheckpack`（加固/SDK 指纹，不是平台扫描入口）；`.so` 用 `readelf`/`objdump`/`nm`、radare2 与 LIEF（`mobile-so.sh inspect`）。运行时插桩用 Frida/Objection 与 `/opt/deepsonar/frida-server`。不预装 mitmproxy/Burp。无 adb / hdc / idevice 目标时必须结构化 `needs_human` / `inconclusive`，禁止把 JADX/droidasc 反编译或 HAP/IPA 解压叙述写成设备、流量或原生结果。不预装 MobSF / jadx-gui / Burp / IDA / Ghidra / DevEco / 第三方 MCP。
-- 合格的 test 证据至少要有 `subject_revision`、完整 `steps`、`expected`，以及 `actual` 或 `artifact_refs`，且 test 与 review 必须来自不同 Job。
+- 合格计入配对库存的 test 证据至少要有 `subject_revision`、完整 `steps`、`expected`，以及 `actual` 或 `artifact_refs`，且 test 与 review 来自不同 Job 时才算配对完整；该配对在 Fact-first v1 下为 advisory，确认硬门仍只看结构化 supporting Fact。
 
 ## 冒烟与真实证据
 
@@ -31,4 +31,4 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 - `node agent-harness/test-maven-package.mjs <image>` 使用联网最小 POM 构建并运行一个 Java 类，仓库放在临时目录，不写入镜像的 `.m2`。
 - `python agent-harness/test-runtime-images-api.py` 检查 Test 默认 Kali、Verify 默认 Base、显式项目级 Verify 动态覆盖和 Job 不可变 snapshot。
 
-这些是运行时能力和配置门禁，不是对 `java-sec-code` 或任何具体漏洞的确认。只有真实目标版本、独立 review、可复查的 runtime_test 输出和 Scheduler 证据硬门全部满足时，Verify 才可能进入 `confirmed`；本地冒烟本身永远不会生成 Finding。
+这些是运行时能力和配置门禁，不是对 `java-sec-code` 或任何具体漏洞的确认。Scheduler 确认硬门是可版本化的 Fact-first 策略（当前 `fact_first` v1）：合格的结构化 supporting Fact（含 `subject_revision` / ownership / `expected` / `actual` / `outcome=supports`）即可确认；独立 review + runtime_test 配对是动态复现域的 **advisory** 完整度提示，不是所有 profile 的必需门禁，也不得与 `confirmed` 同时宣称「必需证据缺失」。本地冒烟本身永远不会生成 Finding。

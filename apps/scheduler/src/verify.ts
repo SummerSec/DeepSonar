@@ -25,13 +25,16 @@ import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapsho
 import { inc } from "./metrics.js";
 import {
   classifyFactFirstFollowup,
-  evaluateFactFirstConfirmGate,
+  evaluateVerificationStrategy,
   factFirstAuditAfter,
   factFirstSettlementReason,
   gateFingerprint,
   resolveWaitEvidenceNoProgress,
+  strategyActionableMissing,
+  strategyAuditFields,
   type FactFirstGateResult,
   type FactFirstRecord,
+  type VerificationStrategyDecision,
 } from "./verify-fact-gate.js";
 import {
   classifyVerifyTerminalReason,
@@ -85,11 +88,19 @@ function evidenceSignature(evidence: Pick<EvidenceSnapshot, "review" | "test" | 
 function verificationState(
   eligibility: VerificationEligibility,
   evidence: EvidenceSnapshot,
+  strategy: VerificationStrategyDecision,
 ): Record<string, unknown> {
   return {
     eligibility,
-    missing_evidence: evidence.missing,
-    evidence_signature: evidenceSignature(evidence),
+    missing_evidence: strategy.required_missing,
+    advisory_missing: strategy.advisory_missing,
+    evidence_signature: evidenceSignature({
+      review: evidence.review,
+      test: evidence.test,
+      missing: strategy.required_missing,
+    }),
+    strategy_id: strategy.strategy_id,
+    strategy_version: strategy.strategy_version,
     updated_at: new Date().toISOString(),
   };
 }
@@ -199,20 +210,25 @@ export function resolveFindingSubjectRevision(
   return revisions.length === 1 ? revisions[0] : null;
 }
 
-/** Confirm hard gate: Fact-first structured expected/actual; no second-pass review. */
+/** Confirm hard gate: shared Fact-first strategy (#576); no second-pass review. */
 export function evaluateConfirmGate(
   evidence: EvidenceSnapshot,
   opts?: { findingId?: string | null; subjectRevision?: string | null; originJobId?: string | null },
-): { ok: boolean; missing: string[]; gate: FactFirstGateResult } {
-  const facts = factFirstRecordsFromSnapshot(evidence);
-  const gate = evaluateFactFirstConfirmGate(facts, {
+): { ok: boolean; missing: string[]; gate: FactFirstGateResult; strategy: VerificationStrategyDecision } {
+  const strategy = evaluateVerificationStrategy(factFirstRecordsFromSnapshot(evidence), {
     findingId: opts?.findingId ?? "",
     subjectRevision: opts?.subjectRevision,
     originJobId: opts?.originJobId,
+    pairMissing: evidence.missing,
+    conflictingNodeIds: evidence.conflicting_node_ids,
   });
-  const missing = gate.ok ? [] : [...gate.missing, ...evidence.missing];
-  if (!gate.ok && evidence.conflicting_node_ids.length > 0) missing.push("path_fork");
-  return { ok: gate.ok, missing: [...new Set(missing)], gate };
+  // Rework/Hub hints keep required+advisory; confirm paths must use strategy.required_missing only.
+  return {
+    ok: strategy.ok,
+    missing: strategy.ok ? [] : strategyActionableMissing(strategy),
+    gate: strategy.gate,
+    strategy,
+  };
 }
 
 export function projectVerifyEvidenceForPrompt(evidence: EvidenceSnapshot): Record<string, unknown> {
@@ -383,16 +399,18 @@ function evaluateFindingFactGate(
   finding: Record<string, unknown>,
   evidence: EvidenceSnapshot,
   originJobId: string | null,
-): { gate: FactFirstGateResult; subjectRevision: string | null } {
+): { gate: FactFirstGateResult; subjectRevision: string | null; strategy: VerificationStrategyDecision } {
   const facts = factFirstRecordsFromSnapshot(evidence);
   const subjectRevision = resolveFindingSubjectRevision(finding, facts);
-  const gate = evaluateFactFirstConfirmGate(facts, {
+  const strategy = evaluateVerificationStrategy(facts, {
     findingId: String(finding.id ?? ""),
     subjectRevision,
     originJobId,
+    pairMissing: evidence.missing,
+    conflictingNodeIds: evidence.conflicting_node_ids,
   });
-  evidence.gate = gate;
-  return { gate, subjectRevision };
+  evidence.gate = strategy.gate;
+  return { gate: strategy.gate, subjectRevision, strategy };
 }
 
 async function confirmFindingFromFacts(
@@ -401,20 +419,28 @@ async function confirmFindingFromFacts(
     finding: Record<string, unknown>;
     evidence: EvidenceSnapshot;
     gate: FactFirstGateResult;
+    strategy: VerificationStrategyDecision;
     reason: string;
     openRound?: Record<string, unknown> | null;
     nextAttempt: number;
   },
 ): Promise<void> {
   const findingId = opts.finding.id as string;
-  const snapshot = { ...opts.evidence, gate: opts.gate };
+  const strategy = opts.strategy;
+  const snapshot = { ...opts.evidence, gate: opts.gate, strategy: strategyAuditFields(strategy) };
   const requirements = {
     eligibility: "eligible",
-    missing: [],
-    evidence_signature: evidenceSignature(opts.evidence),
+    missing: strategy.required_missing,
+    advisory_missing: strategy.advisory_missing,
+    evidence_signature: evidenceSignature({
+      review: opts.evidence.review,
+      test: opts.evidence.test,
+      missing: strategy.required_missing,
+    }),
     gate: factFirstAuditAfter(opts.gate),
+    ...strategyAuditFields(strategy),
     close_path: "fact_first",
-    reason: opts.reason,
+    reason: opts.reason || strategy.confirm_reason || "fact_first_confirm",
   };
   if (opts.openRound) {
     await tx`
@@ -442,7 +468,7 @@ async function confirmFindingFromFacts(
       })}`;
   }
   const state = {
-    ...verificationState("eligible", opts.evidence),
+    ...verificationState("eligible", opts.evidence, strategy),
     gate: factFirstAuditAfter(opts.gate),
     used_fact_ids: opts.gate.used_fact_ids,
     close_path: "fact_first",
@@ -522,7 +548,7 @@ export async function createVerifyRound(
   // a stale/missing eligibility marker instead of leaving them invisible.
   const existingRoundIsWaiting = Boolean(openRound) && !openRound?.verify_job_id;
   const originJobId = (opts.finding.job_id as string) ?? null;
-  const { gate, subjectRevision } = evaluateFindingFactGate(opts.finding, evidence, originJobId);
+  const { gate, subjectRevision, strategy } = evaluateFindingFactGate(opts.finding, evidence, originJobId);
   await recordVerifyGateAudit(tx, {
     projectId: opts.projectId,
     findingId,
@@ -534,7 +560,8 @@ export async function createVerifyRound(
       finding: opts.finding,
       evidence,
       gate,
-      reason: opts.reason ?? "fact_first_confirm",
+      strategy,
+      reason: opts.reason ?? strategy.confirm_reason ?? "fact_first_confirm",
       openRound: existingRoundIsWaiting ? (openRound as Record<string, unknown>) : null,
       nextAttempt,
     });
@@ -560,13 +587,17 @@ export async function createVerifyRound(
       need_review: true,
       need_test: true,
       eligibility: "waiting_evidence" as VerificationEligibility,
-      missing: [...new Set([...evidence.missing, ...gate.missing])],
+      missing: strategyActionableMissing(strategy),
+      required_missing: strategy.required_missing,
+      advisory_missing: strategy.advisory_missing,
       evidence_signature: signature,
       hub_evidence_signature: existingRequirements.hub_evidence_signature ?? null,
       hub_gate_fingerprint: existingRequirements.hub_gate_fingerprint ?? null,
       gate: factFirstAuditAfter(gate),
       gate_fingerprint: gateFingerprint(gate),
       last_gate_result: gate.result,
+      strategy_id: strategy.strategy_id,
+      strategy_version: strategy.strategy_version,
     };
     if (openRound) {
       await tx`
@@ -591,7 +622,7 @@ export async function createVerifyRound(
         verify_status = 'pending',
         raw_json = raw_json || ${tx.json({
           verification_state: {
-            ...verificationState("waiting_evidence", evidence),
+            ...verificationState("waiting_evidence", evidence, strategy),
             gate: factFirstAuditAfter(gate),
             subject_revision: subjectRevision,
           },
@@ -692,7 +723,7 @@ export async function createVerifyRound(
   await tx`
     UPDATE findings SET
       verify_status = 'verifying',
-      raw_json = raw_json || ${tx.json({ verification_state: verificationState("eligible", evidence) } as never)},
+      raw_json = raw_json || ${tx.json({ verification_state: verificationState("eligible", evidence, strategy) } as never)},
       updated_at = now()
     WHERE id = ${findingId}`;
 
@@ -1010,7 +1041,7 @@ export async function closeVerifyRound(
 
   const originJobId = (finding.job_id as string) ?? null;
   const evidence = await collectEvidenceSnapshot(tx, findingId, originJobId);
-  const { gate, subjectRevision } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, originJobId);
+  const { gate, subjectRevision, strategy } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, originJobId);
   await recordVerifyGateAudit(tx, {
     projectId: job.project_id as string,
     findingId,
@@ -1075,16 +1106,20 @@ export async function closeVerifyRound(
   let missing = evidence.missing;
   let gateFailed = false;
 
+  let confirmStrategy = strategy;
   if (proposed === "confirmed") {
     const confirm = evaluateConfirmGate(evidence, {
       findingId,
       subjectRevision,
       originJobId,
     });
+    confirmStrategy = confirm.strategy;
     if (!confirm.ok) {
       final = "rework";
       gateFailed = true;
       missing = confirm.missing.length > 0 ? confirm.missing : ["evidence_incomplete"];
+    } else {
+      missing = confirm.strategy.required_missing;
     }
   } else if (proposed === "refuted") {
     const factFirstAction = classifyFactFirstFollowup(gate);
@@ -1131,7 +1166,7 @@ export async function closeVerifyRound(
       UPDATE findings SET
         raw_json = raw_json || ${tx.json({
           verification_state: {
-            ...verificationState("eligible", evidence),
+            ...verificationState("eligible", evidence, confirmStrategy),
             gate: factFirstAuditAfter(gate),
             used_fact_ids: gate.used_fact_ids,
             close_path: "verify_finding_proposal",
@@ -1245,7 +1280,7 @@ export async function maybeReverifyAfterFollowup(
 
   const originJobId = (finding.job_id as string) ?? null;
   const evidence = await collectEvidenceSnapshot(tx, findingId, originJobId);
-  const { gate, subjectRevision } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, originJobId);
+  const { gate, subjectRevision, strategy } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, originJobId);
   await recordVerifyGateAudit(tx, {
     projectId: job.project_id as string,
     findingId,
@@ -1263,6 +1298,7 @@ export async function maybeReverifyAfterFollowup(
       finding: finding as Record<string, unknown>,
       evidence,
       gate,
+      strategy,
       reason: "followup_fact_first_confirm",
       openRound: openRound && !openRound.verify_job_id ? (openRound as Record<string, unknown>) : null,
       nextAttempt: Number(openRound?.attempt ?? ((max_attempt ?? 0) + 1)),
@@ -1990,70 +2026,3 @@ async function clearAutoStopped(tx: Tx, canvasId: string) {
   });
 }
 
-/** 导出给 graph 的 Finding 验证摘要 */
-/**
- * Batch Finding verification summaries for graph projections.
- * Findings, latest rounds and evidence nodes are loaded in three queries.
- */
-export async function findingVerificationSummaries(
-  tx: Tx,
-  findingIds: readonly string[],
-): Promise<Map<string, Record<string, unknown>>> {
-  const ids = [...new Set(findingIds.filter((id) => typeof id === "string" && id.trim()))];
-  const result = new Map<string, Record<string, unknown>>();
-  if (ids.length === 0) return result;
-  const findings = await tx`
-    SELECT id, verify_status, job_id, raw_json
-    FROM findings WHERE id = ANY(${ids as unknown as string[]}::uuid[])`;
-  const rounds = await tx`
-    SELECT DISTINCT ON (finding_id)
-      finding_id, attempt, status, final_outcome, proposed_verdict, verify_job_id,
-      requirements_json, summary, error
-    FROM finding_verification_rounds
-    WHERE finding_id = ANY(${ids as unknown as string[]}::uuid[])
-    ORDER BY finding_id, attempt DESC`;
-  const evidenceRows = await tx`
-    SELECT n.id, n.job_id, n.body_json, n.title, j.type AS job_type, j.status AS job_status
-    FROM canvas_nodes n
-    JOIN jobs j ON j.id = n.job_id
-    WHERE n.node_type = 'fact'
-      AND n.body_json ? 'verification'
-      AND n.body_json->'verification'->>'finding_id' = ANY(${ids as unknown as string[]}::text[])
-      AND j.status = ANY(${["succeeded", "failed", "timeout", "orphan", "cancelled"] as unknown as string[]})`;
-  const roundByFinding = new Map(rounds.map((row) => [String(row.finding_id), row]));
-  const evidenceByFinding = new Map<string, EvidenceNodeRow[]>();
-  for (const row of evidenceRows) {
-    const body = (row.body_json ?? {}) as Record<string, unknown>;
-    const findingId = String(((body.verification ?? {}) as Record<string, unknown>).finding_id ?? "");
-    if (!findingId) continue;
-    const list = evidenceByFinding.get(findingId) ?? [];
-    list.push(row as EvidenceNodeRow);
-    evidenceByFinding.set(findingId, list);
-  }
-  for (const finding of findings) {
-    const findingId = String(finding.id);
-    const round = roundByFinding.get(findingId);
-    const evidence = buildEvidenceSnapshot(evidenceByFinding.get(findingId) ?? [], (finding.job_id as string) ?? null);
-    const { gate } = evaluateFindingFactGate(finding as Record<string, unknown>, evidence, (finding.job_id as string) ?? null);
-    const state = ((finding.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined) ?? {};
-    const requirements = (round?.requirements_json as Record<string, unknown> | undefined) ?? {};
-    result.set(findingId, {
-      verify_status: finding.verify_status ?? "pending",
-      eligibility: state.eligibility ?? requirements.eligibility ?? (round?.verify_job_id ? "eligible" : "waiting_evidence"),
-      verification_attempt: round?.attempt ?? 0,
-      latest_outcome: round?.final_outcome ?? round?.status ?? null,
-      proposed_verdict: round?.proposed_verdict ?? null,
-      missing_evidence: evidence.missing,
-      review_evidence_ids: evidence.review.map((item) => item.node_id),
-      test_evidence_ids: evidence.test.map((item) => item.node_id),
-      conflicting_evidence_ids: evidence.conflicting_node_ids,
-      used_fact_ids: gate.used_fact_ids,
-      gate_result: gate.result,
-      summary: round?.summary ?? null,
-      error: round?.error ?? null,
-    });
-  }
-  return result;
-}
-
-void TERMINAL_JOB;

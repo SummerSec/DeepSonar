@@ -3,11 +3,17 @@ import test from "node:test";
 import {
   classifyFactFirstFollowup,
   evaluateFactFirstConfirmGate,
+  evaluateVerificationStrategy,
   factFirstHumanSettlementReason,
   gateFingerprint,
   isStructuredVerificationFact,
+  readStoredStrategyContext,
   resolveWaitEvidenceNoProgress,
+  strategyActionableMissing,
+  VERIFICATION_STRATEGY_ID,
+  VERIFICATION_STRATEGY_VERSION,
 } from "./verify-fact-gate.js";
+import { buildEvidenceSnapshot, evaluateConfirmGate } from "./verify.js";
 
 const FINDING = "00000000-0000-4000-8000-000000000399";
 const OTHER = "00000000-0000-4000-8000-000000000400";
@@ -364,4 +370,119 @@ test("live snapshot of alias spellings still confirms after #517", () => {
   assert.equal(gate.ok, true);
   assert.equal(gate.result, "passed");
   assert.equal(classifyFactFirstFollowup(gate), "confirm");
+});
+
+
+test("fact_first v1: single supporting Fact confirms; pair gaps are advisory only", () => {
+  const decision = evaluateVerificationStrategy([fact()], {
+    findingId: FINDING,
+    subjectRevision: "ctf@v1",
+    pairMissing: ["independent_review", "runtime_test"],
+  });
+  assert.equal(decision.ok, true);
+  assert.equal(decision.strategy_id, VERIFICATION_STRATEGY_ID);
+  assert.equal(decision.strategy_version, VERIFICATION_STRATEGY_VERSION);
+  assert.deepEqual(decision.required_missing, []);
+  assert.ok(decision.advisory_missing.includes("independent_review"));
+  assert.ok(decision.advisory_missing.includes("runtime_test"));
+  assert.equal(decision.confirm_reason, "fact_first_v1_passed");
+  // Never both confirmed and required missing.
+  assert.equal(decision.ok && decision.required_missing.length === 0, true);
+});
+
+test("fact_first v1: conflict / failed source / revision mismatch stay required blockers", () => {
+  const conflict = evaluateVerificationStrategy(
+    [
+      fact({ node_id: "support", outcome: "supports" }),
+      fact({
+        node_id: "deny",
+        job_id: "review-job",
+        job_type: "review",
+        source_job_id: "review-job",
+        source_role: "review",
+        outcome: "refutes",
+        expected: "flag{deepsonar}",
+        actual: "missing",
+      }),
+    ],
+    {
+      findingId: FINDING,
+      subjectRevision: "ctf@v1",
+      pairMissing: ["unresolved_conflict"],
+      conflictingNodeIds: ["deny"],
+    },
+  );
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.result, "conflict");
+  assert.ok(conflict.required_missing.includes("conflicting_facts"));
+  assert.ok(conflict.required_missing.includes("path_fork"));
+  assert.ok(conflict.advisory_missing.includes("unresolved_conflict"));
+
+  const failed = evaluateVerificationStrategy([fact({ job_status: "failed" })], {
+    findingId: FINDING,
+    subjectRevision: "ctf@v1",
+    pairMissing: ["runtime_test"],
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.result, "failed");
+  assert.ok(failed.required_missing.includes("failed_fact"));
+
+  const revision = evaluateVerificationStrategy([fact({ subject_revision: "old@v0" })], {
+    findingId: FINDING,
+    subjectRevision: "ctf@v1",
+  });
+  assert.equal(revision.ok, false);
+  assert.equal(revision.result, "revision_mismatch");
+  assert.ok(revision.required_missing.includes("subject_revision_mismatch"));
+});
+
+test("evaluateConfirmGate shares strategy: CTF Fact without review/test pair passes", () => {
+  const snapshot = buildEvidenceSnapshot(
+    [
+      {
+        id: "ctf-fact",
+        job_id: "test-job",
+        job_type: "test",
+        job_status: "succeeded",
+        title: "ctf",
+        body_json: {
+          verification: {
+            finding_id: FINDING,
+            evidence_kind: "test",
+            outcome: "supports",
+            subject_revision: "ctf@v1",
+            steps: ["run"],
+            expected: "flag{deepsonar}",
+            actual: "flag{deepsonar}",
+            source_job_id: "test-job",
+            source_role: "test",
+          },
+        },
+      },
+    ],
+    "origin-job",
+  );
+  assert.ok(snapshot.missing.includes("independent_review"));
+  const gate = evaluateConfirmGate(snapshot, {
+    findingId: FINDING,
+    subjectRevision: "ctf@v1",
+    originJobId: "origin-job",
+  });
+  assert.equal(gate.ok, true);
+  assert.deepEqual(gate.missing, []);
+  assert.deepEqual(gate.strategy.required_missing, []);
+  assert.ok(gate.strategy.advisory_missing.includes("independent_review"));
+  assert.equal(strategyActionableMissing(gate.strategy).includes("independent_review"), true);
+});
+
+test("legacy confirmation records without strategy_version are marked unversioned", () => {
+  const legacy = readStoredStrategyContext({ eligibility: "eligible", missing_evidence: ["independent_review"] });
+  assert.equal(legacy.legacy_unversioned, true);
+  assert.equal(legacy.strategy_version, null);
+  const current = readStoredStrategyContext({
+    strategy_id: VERIFICATION_STRATEGY_ID,
+    strategy_version: VERIFICATION_STRATEGY_VERSION,
+  });
+  assert.equal(current.legacy_unversioned, false);
+  assert.equal(current.strategy_version, 1);
 });
