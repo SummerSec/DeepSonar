@@ -1,4 +1,4 @@
-FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81
 
 # Device broker 只跑在 device rig 主机上（与调度主机、沙箱宿主隔离）。
 # adb 只用于枚举/转发 rig 上已插好的设备；broker 不持模型或 Provider 凭据。

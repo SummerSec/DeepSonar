@@ -1,4 +1,5 @@
-FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81
+# Pin must be a multi-arch OCI index (linux/amd64 + linux/arm64). See #598.
 
 # kubectl is required when OPEN_SANDBOX_KUBERNETES=1 (Gateway ClusterIP bind + PVC seeder).
 ARG TARGETARCH=amd64

@@ -1,3 +1,4 @@
 # Shared-assets volume writer. Republishes the pinned busybox rootfs under
 # DeepSonar's release name. Runtime still requires name@sha256:64hex and --pull=never.
+# Upstream busybox digest is a multi-arch index (amd64+arm64); release publishes both (#598).
 FROM docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23

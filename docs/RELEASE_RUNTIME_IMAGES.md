@@ -6,6 +6,17 @@
 
 同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` **提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json for vX.Y.Z`），用于更新内置 bundled 回退清单。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。若默认分支开启了「禁止 GITHUB_TOKEN 直推」类保护规则，需为 Actions 放行或改用可写 PAT。
 
+## 控制面镜像平台矩阵（#598）
+
+运行时镜像（base / audit / kali / 专项）此前已按 `linux/amd64,linux/arm64` 发布。自本变更起，**控制面**与再发布依赖同样走双架构：
+
+| 镜像 | platforms |
+| --- | --- |
+| `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` | `linux/amd64,linux/arm64` |
+| `deepsonar-assets-helper` / `deepsonar-silo` | `linux/amd64,linux/arm64`（上游 busybox / pgsty/silo digest 已含 arm64） |
+
+控制面 Dockerfile 的 `node:24-alpine` pin 必须是含 amd64+arm64 的 OCI index；静态门禁见 `pnpm ci:unit:control-plane-platforms`（亦挂入 `pnpm ci:images`）。发布后可用 `docker buildx imagetools inspect` 验收 index 同时含两平台。
+
 ## 发布前门禁
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。

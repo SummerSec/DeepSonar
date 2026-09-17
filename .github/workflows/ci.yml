@@ -236,6 +236,9 @@ jobs:
       - name: Windows deploy.ps1 encoding and pull semantics
         run: pnpm ci:unit:deploy-ps1
 
+      - name: Control-plane multi-arch pins (#598)
+        run: pnpm ci:unit:control-plane-platforms
+
       - name: Semantic event rate-limit Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
