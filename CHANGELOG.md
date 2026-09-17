@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-17
+
+
 ### 文档
 
 - 发布验收闭环清单（#582）：新增 `docs/RELEASE_READINESS_POST_v0.4.4.md`，覆盖 v0.4.4→当前 main 的 Docker/OpenSandbox、schema v52、模型目录、CLI/Provider、mobile、UI、收敛与确认门禁、发行元数据；每项区分「已核实（代码/CI）」与「延期（需实机）」并附 PR/SHA。同步 README / DESIGN / `database/README` 的 schema 字面量为 **v52**。注明 v0.4.4 Release 中 Docker `gateway` 指引的勘误（现默认 `direct`，见 #559）。
@@ -920,6 +923,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.5]: https://github.com/SummerSec/DeepSonar/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/SummerSec/DeepSonar/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/SummerSec/DeepSonar/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/SummerSec/DeepSonar/compare/v0.4.1...v0.4.2
