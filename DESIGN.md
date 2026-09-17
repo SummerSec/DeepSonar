@@ -135,6 +135,7 @@ Fact `verification_status`（证据可信度）、Finding `verify_status`（技�
 ### 6.2 Research
 
 上游 review/test 可输出正向论据、替代解释、保护条件、反例与未决假设（#579，`research.hypothesis_loop` v1）。「未找到反证」不能自动变成 confirmed；相同输入指纹不得无限再派；反驳后的新假设必须带父命题派生关系。Verify 仍只消费允许的 Fact，不在研究策略中写 verify_status。
+已知性与覆盖（#581）：known issue 在 pinned revision 仍受影响时不得自动降级；HEAD 复查不抹掉旧适用性；覆盖率须有可解释分母，Finding 数不能冒充全量覆盖。
 
 
 Research 是报告前的只读辅助层：Scheduler 按有界批次对 Finding 做语义聚类，维护 canonical anchor、重复关系、`dedupe_reason` 和相对 `priority_score`。priority 是注意力分配，不是 severity；它不改变 `verify_status`、Fact 门禁、Finding severity 或报告收敛。
