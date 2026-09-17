@@ -20,6 +20,7 @@
 
 ### 新增
 
+- 提示词组合与预览首片（#594）：新增可冻结策略 `prompt.composition` v1。统一平台协议 / 角色默认 / 项目覆盖 / 任务派发 / 镜像手册索引 / 上下文摘要的来源与版本；业务覆盖顺序为任务 → 项目 → 角色（不可覆盖平台协议与授权）。预览输出层级溯源、遮蔽关系、组装摘要与 Attempt 冻结记录；不支持的 CLI 注入通道 fail-closed，禁止把 user_message 静默冒充 system_prompt 替换。业务文本越权措辞校验；出网/工具授权仍由内核 `allow_egress` 与工具列表决定。区分「修订重派」「原输入重跑」「当前配置重跑」「Hub 重新规划」。后续切片接入派发修订 API 与 Attempt 落库。
 - 安全漏洞证明契约（#578）：为 profile `security.vulnerability` 增加可冻结策略 `security.vulnerability.proof` v1（静态/动态双路径）。TODO/注释/危险函数存在/单纯行号命中不能单独过门；可达/不可达、受保护/可绕过、已证实影响/仅假设影响成对样本有单测。缺工具/目标/设备 → inconclusive；要求动态复现的类型不能只用静态叙述过门，静态可成立类型不被强制动态 PoC 阻断。Verify 只消费 Fact；`requireVulnProof` 可选接入确认硬门（默认不回归 fact_first v1）。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
 - 上游 review/test 独立反证与有界假设修正闭环（#579）：新增 `research.hypothesis_loop` v1。「未找到反证」不能自动 confirmed；相同输入指纹停止重复派发；反驳后派生子假设须保留父命题链接且禁止原文复活；预算耗尽 → request_human（不回归 #575 paused_reason）；Hub 可回放下一步决策；Verify 仍只消费 Fact。
 - 人工标注审计回归集与模型/策略变更质量门禁（#580）：新增 `audit.regression_gate` v1 与 `fixtures/audit-regression/samples.v1.json`。标签须含人工理由与适用修订；争议样本不进准确率分母；禁止用平台 confirmed 当独立真值；缺少 PoC 不得自动标误报。门禁相对冻结基线做逐样本对比，区分质量退化 / 环境失败 / 评估未完成，不以 confirmed 率或反驳数作为单一优化目标。
