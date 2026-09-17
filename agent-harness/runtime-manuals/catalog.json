@@ -12210,7 +12210,10 @@
           ],
           "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
           "verification_status": "source_declared_unexecuted",
-          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
+          "covers": [
+            "llvm"
+          ]
         },
         {
           "image_key": "deepsonar-clickhouse-audit",
@@ -15890,6 +15893,53 @@
         },
         {
           "image_key": "deepsonar-clickhouse-fuzz",
+          "id": "binutils",
+          "kind": "tool",
+          "agent_visible": true,
+          "implementation_only": false,
+          "version": "Debian snapshot (exact version not pinned)",
+          "version_source": "agent-harness/clickhouse-fuzz-runtime.json#/apt.binutils",
+          "commands": [
+            "objdump",
+            "readelf",
+            "nm"
+          ],
+          "usage_scenario": "Inspect fuzz targets and crash artifacts for headers, sections, symbols, and disassembly.",
+          "selection_basis": "Use binutils for deterministic native binary observations; use the matching LLVM symbolizer for sanitizer addresses.",
+          "prerequisites": [
+            "Read the frozen job image manifest and work under the job workspace."
+          ],
+          "minimal_invocation": "readelf -hW ./target",
+          "common_parameters": [
+            "-h",
+            "-S",
+            "-s",
+            "-d",
+            "-W"
+          ],
+          "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
+          "failure_handling": {
+            "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
+            "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
+            "transient_retryable": "For a busy process, temporary network error, or service startup race, retain logs and retry within the job budget after checking for duplicate side effects.",
+            "missing_condition": "If a required file, device, authorization, service, network permission, or architecture is absent, record inconclusive/needs_human with the missing condition.",
+            "permanent": "For unsupported input, corrupt artifacts, an unavailable binary, or an unrecoverable exit, stop and record permanent_failure with stderr and the exact command."
+          },
+          "composition_flow": "Save the raw output, normalize only with a documented transformation, then pass the artifact to the next tool or verifier.",
+          "evidence_retention": [
+            "Exact command and arguments",
+            "image key and digest",
+            "tool version",
+            "stdout/stderr",
+            "exit code",
+            "input and output hashes"
+          ],
+          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "verification_status": "source_declared_unexecuted",
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
+        },
+        {
+          "image_key": "deepsonar-clickhouse-fuzz",
           "id": "cmake-ninja",
           "kind": "tool",
           "agent_visible": true,
@@ -15975,7 +16025,10 @@
           ],
           "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
           "verification_status": "source_declared_unexecuted",
-          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
+          "covers": [
+            "clickhouse"
+          ]
         },
         {
           "image_key": "deepsonar-clickhouse-fuzz",
@@ -16140,8 +16193,8 @@
           "verification_note": "Used in Dockerfile build stage and not copied into the final scratch image."
         }
       ],
-      "entry_count": 49,
-      "agent_visible_entry_count": 25,
+      "entry_count": 50,
+      "agent_visible_entry_count": 26,
       "implementation_only_entry_count": 24
     },
     {
@@ -26076,8 +26129,8 @@
   ],
   "totals": {
     "image_count": 13,
-    "entry_count": 645,
-    "agent_visible_entry_count": 341,
+    "entry_count": 646,
+    "agent_visible_entry_count": 342,
     "implementation_only_entry_count": 304
   }
 }

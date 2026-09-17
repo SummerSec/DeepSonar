@@ -162,7 +162,20 @@ function dockerfileFor(imageKey) {
   return join(root, "deploy", aliases[suffix] ?? `Dockerfile.agent-${suffix}`);
 }
 
-function assertDockerfile(imageKey) {
+function normalizedCoverage(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replaceAll("\\", "/")
+    .replace(/^.*\//, "")
+    .replace(/\.(?:sh|bash|py|mjs|js|jar)$/i, "")
+    .replace(/@\d[\w.+-]*/g, "")
+    .replace(/-(?:\d+)(?:\.\d+)+$/g, "")
+    .replace(/-(?:\d+)$/g, "")
+    .replace(/[^a-z0-9+.-]+/g, "-");
+}
+
+function assertDockerfile(imageKey, entries) {
   const file = dockerfileFor(imageKey);
   if (!existsSync(file)) fail(`${imageKey} Dockerfile is missing`);
   const source = readFileSync(file, "utf8");
@@ -170,6 +183,17 @@ function assertDockerfile(imageKey) {
   if (!source.includes("materialize-runtime-manuals.mjs")) fail(`${imageKey} Dockerfile does not run materializer`);
   if (!source.includes("--tool-manifest") || !source.includes("--image-key")) fail(`${imageKey} Dockerfile materializer is not bound to final tool manifest`);
   if (!source.includes('io.deepsonar.manuals="/opt/deepsonar/manuals/index.json"')) fail(`${imageKey} Dockerfile is missing OCI manual label`);
+  const inlineTools = source.match(/tools:\[(.*?)\]/s)?.[1];
+  if (inlineTools) {
+    const manifestTools = [...inlineTools.matchAll(/\\"([^\"]+)\\"/g)].map((match) => match[1]);
+    const coverage = new Set(entries.flatMap((entry) => [
+      entry.id,
+      ...entry.commands,
+      ...(Array.isArray(entry.covers) ? entry.covers : []),
+    ]).flatMap((value) => [normalizedCoverage(value), String(value).trim().toLowerCase()]));
+    const missing = manifestTools.filter((tool) => ![normalizedCoverage(tool), tool.toLowerCase()].some((key) => coverage.has(key)));
+    if (missing.length > 0) fail(`${imageKey} final tool manifest entries lack documentation: ${missing.join(", ")}`);
+  }
 }
 
 function assertFingerprint(imageKey) {
@@ -218,7 +242,7 @@ export function runStaticManualGate() {
     ]).filter(Boolean));
     const missingInherited = [...inheritedCommands].filter((command) => !coveredCommands.has(command));
     if (missingInherited.length > 0) fail(`${imageKey} omits inherited base commands: ${missingInherited.join(", ")}`);
-    assertDockerfile(imageKey);
+    assertDockerfile(imageKey, entries);
     assertFingerprint(imageKey);
   }
   return { imageCount: OFFICIAL_RUNTIME_IMAGES.length, catalogPath };
