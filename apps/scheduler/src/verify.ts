@@ -43,7 +43,8 @@ import {
   mergeStrategyWithEvidenceIntegrity,
 } from "./verify-evidence-chain.js";
 export { attachVerificationEvidence } from "./verify-attach-evidence.js";
-export { evaluateConfirmGate } from "./verify-confirm-gate.js";
+import { evaluateConfirmGate } from "./verify-confirm-gate.js";
+export { evaluateConfirmGate };
 export type { ConfirmGateOptions, ConfirmGateResult } from "./verify-confirm-gate.js";
 import {
   classifyVerifyTerminalReason,
