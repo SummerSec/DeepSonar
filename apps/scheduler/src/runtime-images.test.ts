@@ -100,7 +100,7 @@ const acrPolicy = createServerOwnedRuntimeImageRegistryPolicy({
 
 test("legacy official env refs resolve only through their matching registry channel", () => {
   const githubRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
-  const version = { version: "configured", image_ref: githubRef, digest: DIGEST };
+  const version = { version: "configured", image_ref: githubRef, digest: DIGEST, manual: OFFICIAL_MANUAL };
   assert.equal(runtimeImageRefForChannel(version, "github"), githubRef);
   assert.equal(runtimeImageRefForChannel(version, "dockerhub"), null);
   assert.equal(runtimeImageRefForChannel(version, "aliyun-acr"), null);

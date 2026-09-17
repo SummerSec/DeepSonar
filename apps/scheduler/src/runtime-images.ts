@@ -995,17 +995,9 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
-    const digest = immutableDigest(override.image_ref)!;
-    if (!image.versions.some((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest)) {
-      const channel = legacyChannelForRef(override.image_ref);
-      image.versions.push({
-        version: `configured-${digest.slice(7, 19)}`,
-        image_ref: override.image_ref,
-        digest,
-        ...(channel ? { registry_refs: { [channel]: override.image_ref } } : {}),
-        platforms: ["linux/amd64", "linux/arm64"],
-      });
-    }
+    // Env refs alone cannot invent offline manuals; after #588 / fail-closed manuals,
+    // leave the product empty rather than publish an unresolvable version.
+    console.warn(`[runtime-images] skip env override for ${override.image_key}: no offline manual metadata`);
   }
   const trustedVersions = await sql`
     SELECT ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url, ri.project_opt_in,
@@ -1075,6 +1067,10 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
         ? Number(row.size_bytes)
         : null;
     const manual = runtimeManualFromScanSummary(row.scan_summary_json);
+    if (!manual) {
+      // Trusted DB rows without manuals cannot enter the registry view; Job resolve already fail-closes.
+      continue;
+    }
     const existingVersion = image.versions.find((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest);
     if (!existingVersion) {
       image.versions.push({
@@ -1084,7 +1080,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
         ...(Object.keys(refs).length > 0 ? { registry_refs: refs } : {}),
         ...(Object.keys(evidence).length > 0 ? { registry_evidence: evidence as never } : {}),
         ...(typeof row.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: row.tools_manifest_sha256 } : {}),
-        ...(manual ? { manual } : {}),
+        manual,
         ...(Array.isArray(row.platforms_json) ? { platforms: row.platforms_json as string[] } : {}),
         ...(sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0 ? { size_bytes: sizeBytes } : {}),
       });
@@ -1095,7 +1091,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       if (!existingVersion.tools_manifest_sha256 && typeof row.tools_manifest_sha256 === "string") {
         existingVersion.tools_manifest_sha256 = row.tools_manifest_sha256;
       }
-      if (!existingVersion.manual && manual) existingVersion.manual = manual;
+      existingVersion.manual = manual;
       if ((!existingVersion.platforms || existingVersion.platforms.length === 0) && Array.isArray(row.platforms_json)) {
         existingVersion.platforms = row.platforms_json as string[];
       }
@@ -1120,17 +1116,7 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
-    const digest = immutableDigest(override.image_ref)!;
-    if (!image.versions.some((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest)) {
-      const channel = legacyChannelForRef(override.image_ref);
-      image.versions.push({
-        version: `configured-${digest.slice(7, 19)}`,
-        image_ref: override.image_ref,
-        digest,
-        ...(channel ? { registry_refs: { [channel]: override.image_ref } } : {}),
-        platforms: ["linux/amd64", "linux/arm64"],
-      });
-    }
+    console.warn(`[runtime-images] skip env override for ${override.image_key}: no offline manual metadata`);
   }
   return {
     schema: registry.schema,
