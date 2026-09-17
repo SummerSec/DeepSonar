@@ -243,8 +243,11 @@ export function withRuntimeTestToolchainPolicy(
   if (!injectRuntimeTest && !specialty && !injectManuals) return instructions;
 
   let text = instructions?.trim() ?? "";
-  if (injectManuals) {
-    text = appendPolicyBlock(text, "### Runtime tool manuals (Scheduler policy)", RUNTIME_TOOL_MANUALS_POLICY);
+  // Manuals stay first so agents read INDEX.md before toolchain/specialty blocks.
+  if (injectManuals && !text.includes("### Runtime tool manuals (Scheduler policy)")) {
+    text = text ? `${RUNTIME_TOOL_MANUALS_POLICY}
+
+${text}` : RUNTIME_TOOL_MANUALS_POLICY;
   }
   if (injectRuntimeTest) {
     text = appendPolicyBlock(text, "### Runtime test toolchain (Scheduler policy)", RUNTIME_TEST_TOOLCHAIN_POLICY);

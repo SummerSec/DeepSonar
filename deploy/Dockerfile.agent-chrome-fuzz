@@ -72,7 +72,11 @@ RUN set -eux; \
   mkdir -p /tmp/v8-checkout; \
   cd /tmp/v8-checkout; \
   gclient config --name src "$V8_REPOSITORY"; \
-  gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; \
+  if ! gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; then \
+    echo "shallow gclient sync failed; clearing partial checkout and retrying without --shallow" >&2; \
+    rm -rf /tmp/v8-checkout/src /tmp/v8-checkout/_bad_scm; \
+    gclient sync --revision "src@$V8_COMMIT" --no-history; \
+  fi; \
   cd src; \
   git init third_party/deepsonar-compiler-rt; \
   git -C third_party/deepsonar-compiler-rt remote add origin "$COMPILER_RT_REPOSITORY"; \
