@@ -236,6 +236,8 @@ test("batch Finding summaries use one query per dataset and preserve gate fields
   assert.deepEqual(summaries.get("finding-1")?.missing_evidence, ["structured_supporting_fact"]);
   assert.deepEqual(summaries.get("finding-1")?.advisory_missing, ["independent_review", "runtime_test"]);
   assert.equal(summaries.get("finding-1")?.strategy_id, "fact_first");
+  assert.equal(summaries.get("finding-1")?.strategy_version, 1);
+  assert.equal(summaries.get("finding-1")?.legacy_unversioned_strategy, false);
 });
 
 test("human hints expose ignored resolution so resumed agents can continue", () => {

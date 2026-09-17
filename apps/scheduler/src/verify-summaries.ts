@@ -66,19 +66,29 @@ export async function findingVerificationSummaries(
     const state = ((finding.raw_json as Record<string, unknown> | undefined)?.verification_state as Record<string, unknown> | undefined) ?? {};
     const requirements = (round?.requirements_json as Record<string, unknown> | undefined) ?? {};
     const stored = readStoredStrategyContext(
-      typeof state.strategy_id === "string" || typeof state.strategy_version === "number" ? state : requirements,
+      typeof state.strategy_id === "string" || typeof state.strategy_version === "number"
+        ? state
+        : typeof requirements.strategy_id === "string" || typeof requirements.strategy_version === "number"
+          ? requirements
+          : state,
     );
     const confirmed = String(finding.verify_status ?? "") === "confirmed";
+    // Confirmed rows without strategy fields stay legacy; do not invent fact_first v1.
+    const projectLiveStrategy = !(confirmed && stored.legacy_unversioned);
     result.set(findingId, {
       verify_status: finding.verify_status ?? "pending",
       eligibility: state.eligibility ?? requirements.eligibility ?? (round?.verify_job_id ? "eligible" : "waiting_evidence"),
       verification_attempt: round?.attempt ?? 0,
       latest_outcome: round?.final_outcome ?? round?.status ?? null,
       proposed_verdict: round?.proposed_verdict ?? null,
-      missing_evidence: strategy.required_missing,
-      advisory_missing: strategy.advisory_missing,
-      strategy_id: stored.strategy_id ?? strategy.strategy_id,
-      strategy_version: stored.strategy_version,
+      missing_evidence: projectLiveStrategy
+        ? strategy.required_missing
+        : (Array.isArray(state.missing_evidence) ? state.missing_evidence : strategy.required_missing),
+      advisory_missing: projectLiveStrategy
+        ? strategy.advisory_missing
+        : (Array.isArray(state.advisory_missing) ? state.advisory_missing : strategy.advisory_missing),
+      strategy_id: projectLiveStrategy ? (stored.strategy_id ?? strategy.strategy_id) : stored.strategy_id,
+      strategy_version: projectLiveStrategy ? (stored.strategy_version ?? strategy.strategy_version) : null,
       legacy_unversioned_strategy: confirmed && stored.legacy_unversioned,
       review_evidence_ids: evidence.review.map((item) => item.node_id),
       test_evidence_ids: evidence.test.map((item) => item.node_id),
