@@ -38,6 +38,8 @@ import {
   withSharedAssetsHelperRef,
   RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
   RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
+  OFFICIAL_RUNTIME_IMAGE_KEYS,
+  isOfficialRuntimeImageKey,
   type RuntimeImageRegistry,
 } from "./runtime-images.js";
 
@@ -216,6 +218,34 @@ test("v1 single image_ref is normalized to a known channel without changing the 
   assert.equal(version.digest, DIGEST);
   assert.deepEqual(version.registry_refs!, { github: version.image_ref });
   assert.equal(parseRuntimeImageRegistry({ schema_version: 1, images: [] }).schema, "deepsonar.registry/v1");
+});
+
+test("official runtime versions carry strict offline manual metadata when declared", () => {
+  assert.equal(OFFICIAL_RUNTIME_IMAGE_KEYS.length, 13);
+  assert.equal(isOfficialRuntimeImageKey("deepsonar-base"), true);
+  assert.equal(isOfficialRuntimeImageKey("third-party-toolbox"), false);
+  const manual = {
+    contract: "deepsonar.runtime.manuals/v1",
+    path: "/opt/deepsonar/manuals/index.json",
+    version: "2026.09.17",
+    sha256: "a".repeat(64),
+    count: 2,
+  };
+  const parsed = parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, manual }],
+    }],
+  });
+  assert.deepEqual(parsed.images[0]!.versions[0]!.manual, manual);
+  assert.throws(() => parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, manual: { ...manual, path: "/tmp/index.json" } }],
+    }],
+  }), /manual path is invalid/);
 });
 
 test("the current official ACR-only v1 endpoint is accepted, while arbitrary ACR hosts stay rejected", () => {

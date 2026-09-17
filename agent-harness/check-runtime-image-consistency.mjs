@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
 import { Script } from "node:vm";
 import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
-import { checkRuntimeManuals } from "./check-runtime-manuals.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
 // checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
@@ -168,6 +167,9 @@ const roleSmoke = readFileSync(new URL("./test-runtime-images-api.py", import.me
 const dockerIgnore = readFileSync(new URL("../.dockerignore", import.meta.url), "utf8");
 const chromeWorkflow = readFileSync(new URL("../.github/workflows/chrome-runtime.yml", import.meta.url), "utf8");
 const openHarmonyWorkflow = readFileSync(new URL("../.github/workflows/openharmony-runtime.yml", import.meta.url), "utf8");
+const runtimeManualStatic = readFileSync(new URL("./test-runtime-manuals.mjs", import.meta.url), "utf8");
+const runtimeManualRuntime = readFileSync(new URL("./test-runtime-manuals-runtime.mjs", import.meta.url), "utf8");
+const runtimeManualMaterializer = readFileSync(new URL("./materialize-runtime-manuals.mjs", import.meta.url), "utf8");
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
@@ -224,6 +226,26 @@ for (const [manifest, source, label] of [[config, dockerfile, "base"], [kaliConf
 expect(FINGERPRINT_SCHEMA_VERSION === "v2", "fingerprint schema version must be bumped deliberately when semantics change");
 expect(COMMON_FINGERPRINT_PATHS.length === 1 && COMMON_FINGERPRINT_PATHS[0] === ".dockerignore", "all image fingerprints must include the shared .dockerignore input");
 expect(dockerIgnore.trim().length > 0, ".dockerignore must remain present for image-context fingerprinting");
+expect(runtimeManualStatic.includes("deepsonar-base") && runtimeManualStatic.includes("deepsonar-mobile"), "runtime manual static gate must enumerate official images");
+expect(runtimeManualRuntime.includes('"--network", "none"') && runtimeManualRuntime.includes("manual_sha256"), "runtime manual smoke must verify offline files and hash");
+expect(runtimeManualMaterializer.includes("tool manifest entries without documentation") && runtimeManualMaterializer.includes("manual_sha256"), "runtime manual materializer must fail closed on coverage and emit integrity metadata");
+for (const [imageKey, source] of [
+  ["deepsonar-base", dockerfile], ["deepsonar-audit", dockerfile], ["deepsonar-kali-minimal", kaliDockerfile],
+  ["deepsonar-openharmony-test", openHarmonyDockerfile], ["deepsonar-openharmony-audit", openHarmonyAuditDockerfile], ["deepsonar-openharmony-fuzz", openHarmonyFuzzDockerfile],
+  ["deepsonar-chrome-audit", chromeAuditDockerfile], ["deepsonar-chrome-test", chromeTestDockerfile], ["deepsonar-chrome-fuzz", chromeFuzzDockerfile],
+  ["deepsonar-clickhouse-audit", clickhouseAuditDockerfile], ["deepsonar-clickhouse-test", clickhouseTestDockerfile], ["deepsonar-clickhouse-fuzz", clickhouseFuzzDockerfile],
+  ["deepsonar-mobile", mobileDockerfile],
+]) {
+  expect(source.includes("agent-harness/runtime-manuals") && source.includes("materialize-runtime-manuals.mjs"), `${imageKey} must materialize the canonical manual catalog`);
+  expect(source.includes('io.deepsonar.manuals="/opt/deepsonar/manuals/index.json"'), `${imageKey} must publish the OCI manual label`);
+}
+for (const imageKey of [
+  "deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test", "deepsonar-openharmony-audit", "deepsonar-openharmony-fuzz",
+  "deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz", "deepsonar-clickhouse-audit", "deepsonar-clickhouse-test", "deepsonar-clickhouse-fuzz", "deepsonar-mobile",
+]) {
+  expect(PRESETS[imageKey]?.paths?.includes("agent-harness/runtime-manuals"), `${imageKey} fingerprint must include canonical manual sources`);
+  expect(PRESETS[imageKey]?.paths?.includes("agent-harness/materialize-runtime-manuals.mjs"), `${imageKey} fingerprint must include materializer`);
+}
 const assertSpecialistWorkflow = (workflow, label, paths) => {
   expect(workflow.includes("pull_request:\n    paths:"), `${label} workflow must use a pull_request path filter`);
   expect(workflow.includes("push:\n    branches: [main]\n    paths:"), `${label} workflow must use a main push path filter`);
@@ -239,23 +261,31 @@ const assertSpecialistWorkflow = (workflow, label, paths) => {
 assertSpecialistWorkflow(chromeWorkflow, "Chrome", [
   "deploy/Dockerfile.agent-chrome-*", "deploy/chrome-*", "agent-harness/chrome-*-runtime.json",
   "agent-harness/chrome-*.mjs", "agent-harness/test-chrome-runtime.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/chrome-runtime.yml",
 ]);
 assertSpecialistWorkflow(clickhouseWorkflow, "ClickHouse", [
   "deploy/Dockerfile.agent-clickhouse-*", "deploy/clickhouse-*", "agent-harness/clickhouse-*-runtime.json",
   "agent-harness/clickhouse-*.mjs", "agent-harness/test-clickhouse-runtime.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/clickhouse-runtime.yml",
 ]);
 assertSpecialistWorkflow(openHarmonyWorkflow, "OpenHarmony", [
   "deploy/Dockerfile.agent-openharmony", "deploy/Dockerfile.agent-openharmony-*", "deploy/openharmony-*.sh",
   "deploy/vendor/gitcode-repo-py3", "deploy/vendor/openharmony-hdc/**", "agent-harness/openharmony-test-runtime.json",
   "agent-harness/test-openharmony-hdc.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/openharmony-runtime.yml",
 ]);
 assertSpecialistWorkflow(mobileWorkflow, "Mobile", [
   "deploy/Dockerfile.agent-mobile", "deploy/mobile-*.sh", "deploy/vendor/openharmony-hdc/**",
   "agent-harness/mobile-runtime.json",
   "agent-harness/test-mobile-runtime.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/mobile-runtime.yml",
 ]);
 expect(!ciWorkflow.includes("chrome-runtime-images"), "core ci workflow must not contain the Chrome specialist job");
@@ -265,10 +295,17 @@ expect(!ciWorkflow.includes("mobile-runtime-images"), "core ci workflow must not
 expect(!ciWorkflow.includes("android-runtime-images"), "core ci workflow must not contain a leftover Android specialist job");
 expect(ciWorkflow.includes("toolset: base") && ciWorkflow.includes("toolset: audit") && ciWorkflow.includes("toolset: kali-minimal"), "core ci workflow must retain base/audit/kali runtime jobs");
 expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.includes("timeout-minutes: 240") && chromeWorkflow.includes("platforms: linux/amd64") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome workflow must retain its cold-build allowance, amd64 matrix, and smoke");
+expect(chromeWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Chrome workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(chromeWorkflow), "Chrome manual smoke must also run on cache hits");
 expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
 expect(clickhouseWorkflow.includes("clickhouse-runtime-images:") && clickhouseWorkflow.includes("timeout-minutes: 90") && clickhouseWorkflow.includes("platforms: linux/amd64") && clickhouseWorkflow.includes("test-clickhouse-runtime.mjs"), "ClickHouse workflow must retain its amd64 matrix and smoke");
+expect(clickhouseWorkflow.includes("test-runtime-manuals-runtime.mjs"), "ClickHouse workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(clickhouseWorkflow), "ClickHouse manual smoke must also run on cache hits");
 expect(clickhouseWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "ClickHouse workflow must pull immutable src-* images before cache-hit smoke");
 expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
+expect(openHarmonyWorkflow.includes("test-runtime-manuals-runtime.mjs"), "OpenHarmony workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(openHarmonyWorkflow), "OpenHarmony manual smoke must also run on cache hits");
+expect(openHarmonyWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"'), "OpenHarmony workflow must pull immutable cache-hit images before manual smoke");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-test/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two test matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-audit/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two audit matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-fuzz/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two fuzz matrix entries");
@@ -489,7 +526,7 @@ expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin ap
 expect(mobileConfig.downloads?.bundletool?.version === "1.18.3", "Mobile must pin bundletool 1.18.3");
 expect(mobileConfig.downloads?.apkeep?.version === "1.0.0", "Mobile must pin apkeep 1.0.0");
 expect(mobileConfig.managed?.pip?.androguard?.version === "4.1.4", "Mobile must pin androguard 4.1.4");
-expect(mobileConfig.managed?.pip?.droidasc?.version === "0.1.1", "Mobile must pin droidasc 0.1.1");
+expect(mobileConfig.managed?.pip?.droidasc?.version === "0.1.1.post1", "Mobile must pin droidasc 0.1.1.post1");
 expect(mobileConfig.managed?.pip?.droidasc?.license === "Apache-2.0", "Mobile droidasc must be Apache-2.0");
 expect(mobileConfig.managed?.pip?.droidasc?.capabilities?.includes("apk-xref-search"), "Mobile droidasc must declare apk-xref-search");
 expect(mobileConfig.downloads?.apkcheckpack?.version === "20260618", "Mobile must pin ApkCheckPack 20260618");
@@ -524,7 +561,7 @@ expect(mobileDockerfile.includes("frida==${FRIDA_SERVER_VERSION}"), "Mobile must
 expect(mobileConfig.managed?.pip?.frida?.version === "17.17.0", "Mobile manifest must pin frida 17.17.0");
 expect(mobileConfig.toolsets?.mobile?.maxSizeMiB === 2400, "Mobile size budget must leave margin for JDK/venv/frida-server");
 expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
-expect(mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1"), "Mobile Dockerfile must pin DROIDASC_VERSION=0.1.1");
+expect(mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1"), "Mobile Dockerfile must pin DROIDASC_VERSION=0.1.1.post1");
 expect(mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}"), "Mobile Dockerfile must install pinned droidasc");
 expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc"), "Mobile must symlink /opt/deepsonar/bin/droidasc");
 expect(mobileDockerfile.includes('"droidasc"') && mobileDockerfile.includes('tools:["java"'), "Mobile tool-manifest must list droidasc");
@@ -594,6 +631,9 @@ expect(mobileSmoke.includes("droidasc") && mobileSmoke.includes("apk-xref-search
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-so.sh"), "Mobile fingerprint must include the SO helper");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-apkcheckpack-bin.sh"), "Mobile fingerprint must include the ApkCheckPack wrapper");
 expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
+expect(mobileWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Mobile workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(mobileWorkflow), "Mobile manual smoke must also run on cache hits");
+expect(mobileWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"'), "Mobile workflow must pull immutable cache-hit images before manual smoke");
 expect((mobileWorkflow.match(/toolset: mobile/g) ?? []).length === 2, "Mobile workflow must retain exactly two matrix entries");
 expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (mobileWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 1, "Mobile workflow must retain amd64/arm64 matrix coverage");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("agent-harness/mobile-runtime.json"), "Mobile fingerprint must include the runtime manifest");
@@ -601,6 +641,10 @@ expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/vendor/openharmony-h
 expect(schedulerRuntimeSnapshot.includes("Mobile device protocols (Scheduler policy)"), "Mobile snapshots must require official adb/hdc/ios device evidence");
 expect(schedulerRuntimeSnapshot.includes("droidasc") && schedulerRuntimeSnapshot.includes("Never invent device, traffic, or native/OLLVM results from JADX, droidasc, or apkcheckpack"), "Mobile policy must describe droidasc vs JADX and forbid inventing device results from ASC");
 expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-mobile-runtime.mjs"), "ci:images must run the Mobile helper smoke");
+expect(ciWorkflow.includes("test-runtime-manuals-runtime.mjs"), "core CI must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(ciWorkflow), "core CI manual smoke must also run on cache hits");
+expect(ciWorkflow.includes("Load reused runtime for offline validation"), "core CI must load immutable cache-hit images before manual smoke");
+expect(releaseWorkflow.includes("test-runtime-manuals-runtime.mjs"), "release workflow must run the offline runtime manual smoke");
 expect(chromeSources.contract === "deepsonar.chrome.runtime.sources/v1", "Chrome source metadata contract drift");
 expect(chromeSources.chromium.version === "151.0.7922.71-1~deb12u1", "Chrome Chromium version must remain pinned");
 expect(chromeSources.debianSecuritySnapshot === "20260731T162426Z", "Chrome Debian security snapshot must remain pinned");
@@ -1049,8 +1093,6 @@ const kaliImmutableCopyIndex = releaseWorkflow.indexOf('retry_imagetools_create 
 expect(kaliDigestInspectIndex >= 0 && kaliImmutableCopyIndex > kaliDigestInspectIndex, "Kali Docker Hub copy must use a GHCR digest inspected before the cross-registry copy");
 expect(!releaseWorkflow.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"'), "Kali Docker Hub copy must not use the mutable GHCR tag");
 
-
-failures.push(...checkRuntimeManuals({ fingerprintPresets: PRESETS }));
 
 if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));

@@ -84,6 +84,14 @@ export interface RuntimeImageRegistryVersion {
   /** Optional release evidence for every emitted channel reference. */
   registry_evidence?: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>>;
   tools_manifest_sha256?: string;
+  /** Offline Worker manual metadata bound to the image version. */
+  manual?: {
+    contract: "deepsonar.runtime.manuals/v1";
+    path: "/opt/deepsonar/manuals/index.json";
+    version: string;
+    sha256: string;
+    count: number;
+  };
 }
 
 export interface RuntimeImageRegistryImage {
@@ -426,6 +434,25 @@ function parseToolsManifest(value: unknown, imageKey: string, version: string): 
   return value;
 }
 
+function parseManual(value: unknown, imageKey: string, version: string): RuntimeImageRegistryVersion["manual"] | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid(`${imageKey} ${version} manual must be an object`);
+  const manual = value as Record<string, unknown>;
+  assertKnownKeys(manual, ["contract", "path", "version", "sha256", "count"], `${imageKey} ${version} manual`);
+  if (manual.contract !== "deepsonar.runtime.manuals/v1") invalid(`${imageKey} ${version} manual contract is invalid`);
+  if (manual.path !== "/opt/deepsonar/manuals/index.json") invalid(`${imageKey} ${version} manual path is invalid`);
+  if (typeof manual.version !== "string" || manual.version.trim() === "") invalid(`${imageKey} ${version} manual version is invalid`);
+  if (typeof manual.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(manual.sha256)) invalid(`${imageKey} ${version} manual sha256 is invalid`);
+  if (!Number.isSafeInteger(manual.count) || (manual.count as number) < 0) invalid(`${imageKey} ${version} manual count is invalid`);
+  return {
+    contract: "deepsonar.runtime.manuals/v1",
+    path: "/opt/deepsonar/manuals/index.json",
+    version: manual.version,
+    sha256: manual.sha256,
+    count: manual.count as number,
+  };
+}
+
 function parseRegistryEvidence(
   value: unknown,
   imageKey: string,
@@ -477,7 +504,7 @@ function parseRegistryEvidence(
 }
 
 function parseV1Version(item: Record<string, unknown>, imageKey: string, index: number, policy: RuntimeImageRegistryPolicy): RuntimeImageRegistryVersion {
-  assertKnownKeys(item, ["version", "image_ref", "platforms", "size_bytes", "tools_manifest_sha256"], `${imageKey} versions[${index}]`);
+  assertKnownKeys(item, ["version", "image_ref", "platforms", "size_bytes", "tools_manifest_sha256", "manual"], `${imageKey} versions[${index}]`);
   const version = typeof item.version === "string" && item.version.length > 0 ? item.version : "";
   if (!version) invalid(`${imageKey} versions[${index}] version is invalid`);
   // The v1 loader historically trimmed image_ref before checking the digest;
@@ -488,6 +515,7 @@ function parseV1Version(item: Record<string, unknown>, imageKey: string, index: 
   const platforms = parsePlatforms(item.platforms, false, imageKey, version);
   const sizeBytes = parseSize(item.size_bytes, false, imageKey, version);
   const toolsManifest = parseToolsManifest(item.tools_manifest_sha256, imageKey, version);
+  const manual = parseManual(item.manual, imageKey, version);
   return {
     version,
     image_ref: parsed.normalized,
@@ -496,11 +524,12 @@ function parseV1Version(item: Record<string, unknown>, imageKey: string, index: 
     ...(platforms ? { platforms } : {}),
     ...(sizeBytes !== undefined ? { size_bytes: sizeBytes } : {}),
     ...(toolsManifest ? { tools_manifest_sha256: toolsManifest } : {}),
+    ...(manual ? { manual } : {}),
   };
 }
 
 function parseV2Version(item: Record<string, unknown>, imageKey: string, index: number, policy: RuntimeImageRegistryPolicy): RuntimeImageRegistryVersion {
-  assertKnownKeys(item, ["version", "digest", "platforms", "size_bytes", "registry_refs", "image_ref", "registry_evidence", "tools_manifest_sha256"], `${imageKey} versions[${index}]`);
+  assertKnownKeys(item, ["version", "digest", "platforms", "size_bytes", "registry_refs", "image_ref", "registry_evidence", "tools_manifest_sha256", "manual"], `${imageKey} versions[${index}]`);
   const version = typeof item.version === "string" && item.version.length > 0 ? item.version : "";
   if (!version) invalid(`${imageKey} versions[${index}] version is invalid`);
   const digest = typeof item.digest === "string" && DIGEST_RE.test(item.digest) ? item.digest : "";
@@ -542,6 +571,7 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
     invalid(`${imageKey} ${version} github registry_evidence must be available and inspected`);
   }
   const toolsManifest = parseToolsManifest(item.tools_manifest_sha256, imageKey, version);
+  const manual = parseManual(item.manual, imageKey, version);
   return {
     version,
     ...(githubRef ? { image_ref: githubRef } : {}),
@@ -551,6 +581,7 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
     registry_refs: refs,
     ...(registryEvidence ? { registry_evidence: registryEvidence } : {}),
     ...(toolsManifest ? { tools_manifest_sha256: toolsManifest } : {}),
+    ...(manual ? { manual } : {}),
   };
 }
 

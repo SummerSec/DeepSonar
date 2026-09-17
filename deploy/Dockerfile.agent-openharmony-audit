@@ -45,6 +45,16 @@ RUN /opt/deepsonar/bin/openharmony-env.sh --check \
   && /opt/deepsonar/bin/openharmony-audit-env.sh --check \
   && node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-audit","imageKey":"deepsonar-openharmony-audit","tools":["git","git-lfs","repo","python3","build-essential","ccache","cmake","ninja","clang","clang-tidy","scan-build","llvm-symbolizer","compiler-rt","gdb","objdump","addr2line","sparse","cppcheck","bear","libasan","libubsan","node","claude"],"focus":["oob","uaf","integer-overflow","privilege-escalation","memory-safety"],"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master"},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-audit-env.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh","scan":"/opt/deepsonar/bin/openharmony-audit-scan.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\n")'
 
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-openharmony-audit \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
     CC=clang \
@@ -52,16 +62,11 @@ ENV IS_SANDBOX=1 \
     PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-openharmony-audit /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
-
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="openharmony-audit" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar OpenHarmony Audit" \
       org.opencontainers.image.description="OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

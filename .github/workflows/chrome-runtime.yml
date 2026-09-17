@@ -8,6 +8,10 @@ on:
       - "agent-harness/chrome-*-runtime.json"
       - "agent-harness/chrome-*.mjs"
       - "agent-harness/test-chrome-runtime.mjs"
+      - "agent-harness/runtime-manuals/**"
+      - "agent-harness/materialize-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals-runtime.mjs"
       - ".dockerignore"
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
@@ -20,6 +24,10 @@ on:
       - "agent-harness/chrome-*-runtime.json"
       - "agent-harness/chrome-*.mjs"
       - "agent-harness/test-chrome-runtime.mjs"
+      - "agent-harness/runtime-manuals/**"
+      - "agent-harness/materialize-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals-runtime.mjs"
       - ".dockerignore"
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
@@ -132,6 +140,8 @@ jobs:
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
       - name: Chrome runtime contract and smoke
         run: node agent-harness/test-chrome-runtime.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
+      - name: Offline runtime manual smoke
+        run: node agent-harness/test-runtime-manuals-runtime.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
       - name: Pin single-arch Chrome src cache
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         shell: bash

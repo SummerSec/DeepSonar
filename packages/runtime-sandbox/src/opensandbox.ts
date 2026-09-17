@@ -7,11 +7,14 @@ import {
   DEEPSONAR_GATEWAY_PROXY_HOST,
   HUMAN_INBOX_WRITER_SCRIPT,
   RuntimeImageContractError,
+  RUNTIME_MANUAL_CONTRACT,
+  RUNTIME_MANUAL_INDEX_PATH,
   SHARED_ASSETS_MOUNT_PATH,
   assertReadableWorkspacePath,
   assertSharedAssetsGuestMount,
   assertSharedAssetsVolumeOwnership,
   parseHumanInboxWorkspacePath,
+  parseRuntimeManualIndex,
   parseToolManifest,
 } from "./runtime-shared.js";
 import { docker } from "./runtime-docker.js";
@@ -595,6 +598,44 @@ export class OpenSandboxRunner implements SandboxRunner {
         const hashResult = await host.run("sha256sum /opt/deepsonar/tool-manifest.json | cut -d' ' -f1", { timeoutMs: 5_000 });
         if (hashResult.exitCode !== 0 || hashResult.stdout.trim() !== input.expectedToolsManifestSha256.replace(/^sha256:/, "")) {
           throw new RuntimeImageContractError("tool manifest sha256 mismatch");
+        }
+      }
+      const expectedManual = input.expectedRuntimeManual;
+      if (input.requireRuntimeManual || expectedManual) {
+        const manual = manifest.manual;
+        if (!manual) throw new RuntimeImageContractError("runtime image missing runtime manual metadata");
+        if (manual.contract !== RUNTIME_MANUAL_CONTRACT || manual.path !== RUNTIME_MANUAL_INDEX_PATH) {
+          throw new RuntimeImageContractError("runtime manual metadata contract or path mismatch");
+        }
+        if (expectedManual?.contract && manual.contract !== expectedManual.contract) {
+          throw new RuntimeImageContractError("runtime manual contract mismatch");
+        }
+        if (expectedManual?.path && manual.path !== expectedManual.path) {
+          throw new RuntimeImageContractError("runtime manual path mismatch");
+        }
+        if (expectedManual?.version && manual.version !== expectedManual.version) {
+          throw new RuntimeImageContractError("runtime manual version mismatch");
+        }
+        if (expectedManual?.sha256 && manual.sha256 !== expectedManual.sha256.replace(/^sha256:/, "")) {
+          throw new RuntimeImageContractError("runtime manual sha256 mismatch");
+        }
+        if (expectedManual?.count !== undefined && expectedManual.count !== null && manual.count !== expectedManual.count) {
+          throw new RuntimeImageContractError("runtime manual entry count metadata mismatch");
+        }
+        const manualResult = await host.run(
+          `test -f ${RUNTIME_MANUAL_INDEX_PATH} && test -r ${RUNTIME_MANUAL_INDEX_PATH} && cat ${RUNTIME_MANUAL_INDEX_PATH}`,
+          { timeoutMs: 15_000 },
+        );
+        if (manualResult.exitCode !== 0) throw new RuntimeImageContractError("runtime image missing readable runtime manual index");
+        const index = parseRuntimeManualIndex(manualResult.stdout);
+        if (input.expectedRuntimeImageKey && index.image_key !== input.expectedRuntimeImageKey) {
+          throw new RuntimeImageContractError("runtime manual image key mismatch");
+        }
+        if (index.manual_sha256 !== manual.sha256 || index.manual_version !== manual.version) {
+          throw new RuntimeImageContractError("runtime manual index does not match manifest metadata");
+        }
+        if (manual.count !== index.entries.length) {
+          throw new RuntimeImageContractError("runtime manual entry count does not match manifest metadata");
         }
       }
       if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl) {

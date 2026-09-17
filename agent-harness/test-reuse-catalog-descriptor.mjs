@@ -16,6 +16,28 @@ const writeScript = fileURLToPath(new URL("./write-release-runtime-descriptor.sh
 const maybeSkipScript = fileURLToPath(new URL("./maybe-skip-runtime-version-tags.sh", import.meta.url));
 const digest = `sha256:${"a".repeat(64)}`;
 const missingDigest = `sha256:${"b".repeat(64)}`;
+const bashPathEnvNames = new Set(["PREVIOUS_REGISTRY", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"]);
+
+function toBashPath(value) {
+  if (process.platform !== "win32") return value;
+  return value.replace(/^([A-Za-z]):[\\/]/, (_, drive) => `/mnt/${drive.toLowerCase()}/`).replaceAll("\\", "/");
+}
+
+function runBash(script, args, env) {
+  if (process.platform === "win32") {
+    const envArgs = Object.entries(env).map(([key, value]) => `${key}=${bashPathEnvNames.has(key) ? toBashPath(value) : value}`);
+    return execFileSync("wsl.exe", [
+      "--cd", toBashPath(repoRoot), "--exec", "env", ...envArgs,
+      "bash", toBashPath(script), ...args.map(toBashPath),
+    ], { encoding: "utf8" });
+  }
+  return execFileSync("bash", [script, ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
+
 const catalog = {
   schema: "deepsonar.registry/v2",
   schema_version: 2,
@@ -97,17 +119,12 @@ try {
 
   const reusedOut = path.join(temp, "reused.json");
   const reusedSummary = path.join(temp, "summary-reused");
-  execFileSync("bash", [writeScript, reusedOut], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
+  runBash(writeScript, [reusedOut], {
       SKIP: "true",
       IMAGE_KEY: "deepsonar-base",
       DIGEST: digest,
       PREVIOUS_REGISTRY: catalogPath,
       GITHUB_STEP_SUMMARY: reusedSummary,
-    },
   });
   assert.equal(JSON.parse(readFileSync(reusedOut, "utf8")).version, "0.1.8");
   assert.match(readFileSync(reusedSummary, "utf8"), /version kept/);
@@ -115,17 +132,12 @@ try {
   const fallbackOut = path.join(temp, "fallback.json");
   const fallbackSummary = path.join(temp, "summary-fallback");
   try {
-    execFileSync("bash", [writeScript, fallbackOut], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
+    runBash(writeScript, [fallbackOut], {
         SKIP: "true",
         IMAGE_KEY: "deepsonar-base",
         DIGEST: missingDigest,
         PREVIOUS_REGISTRY: catalogPath,
         GITHUB_STEP_SUMMARY: fallbackSummary,
-      },
     });
     assert.fail("write script must reach record-runtime-image-digest when reuse misses");
   } catch (error) {
@@ -137,34 +149,24 @@ try {
 
   const githubOutputHit = path.join(temp, "github-output-hit");
   const summaryHit = path.join(temp, "summary-hit");
-  execFileSync("bash", [maybeSkipScript], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
+  runBash(maybeSkipScript, [], {
       SKIP: "true",
       SOURCE_DIGEST: digest,
       IMAGE_KEY: "deepsonar-base",
       PREVIOUS_REGISTRY: catalogPath,
       GITHUB_OUTPUT: githubOutputHit,
       GITHUB_STEP_SUMMARY: summaryHit,
-    },
   });
   assert.match(readFileSync(summaryHit, "utf8"), /version kept/);
   assert.match(readFileSync(githubOutputHit, "utf8"), new RegExp(`digest=${digest}`));
 
   try {
-    execFileSync("bash", [maybeSkipScript], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
+    runBash(maybeSkipScript, [], {
         SKIP: "true",
         SOURCE_DIGEST: missingDigest,
         IMAGE_NAME: "ghcr.io/summersec/deepsonar-base",
         PREVIOUS_REGISTRY: catalogPath,
         GITHUB_OUTPUT: path.join(temp, "github-output-miss"),
-      },
     });
     assert.fail("maybe-skip must publish tags when the catalog lacks the digest");
   } catch (error) {

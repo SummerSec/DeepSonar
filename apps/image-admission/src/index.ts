@@ -17,6 +17,12 @@ import {
   isOfficialSource,
   shouldRevokeOnScanFailure,
 } from "./trust-policy.js";
+import {
+  assertRuntimeManualLabel,
+  RUNTIME_MANUAL_INDEX_PATH,
+  validateRuntimeManualPair,
+  type RuntimeManualMetadata,
+} from "./runtime-manual.js";
 
 const execFileP = promisify(execFile);
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://deepsonar:deepsonar@localhost:5432/deepsonar";
@@ -209,12 +215,26 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
     throw new Error("tools manifest label must point to /opt/deepsonar/tool-manifest.json");
   }
 
+  const manualRequired = isOfficialSource(row.source_kind);
+  assertRuntimeManualLabel(labels, manualRequired);
+
   const hardening = ["run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--cpus", "1", "--memory", "1g", "--pids-limit", "256", "--entrypoint", "sh", resolvedRef, "-lc"];
   const manifestText = await docker([...hardening, "cat /opt/deepsonar/tool-manifest.json && test -x /bin/sh && test -d /workspace"]);
-  const manifest = JSON.parse(manifestText) as { contract?: string; tools?: unknown[]; platforms?: string[] };
+  const manifest = JSON.parse(manifestText) as { contract?: string; tools?: unknown[]; platforms?: string[]; manual?: unknown };
   const toolsManifestSha256 = (await docker([...hardening, "sha256sum /opt/deepsonar/tool-manifest.json | cut -d' ' -f1"])).trim();
   if (manifest.contract !== "deepsonar.runtime.contract/v1" || !Array.isArray(manifest.tools)) {
     throw new Error("invalid tool manifest contract");
+  }
+  let manual: RuntimeManualMetadata | undefined;
+  if (manualRequired || manifest.manual !== undefined || labels["io.deepsonar.manuals"] !== undefined) {
+    const manualText = await docker([...hardening, `test -f ${RUNTIME_MANUAL_INDEX_PATH} && test -r ${RUNTIME_MANUAL_INDEX_PATH} && cat ${RUNTIME_MANUAL_INDEX_PATH}`]);
+    let manualIndex: unknown;
+    try {
+      manualIndex = JSON.parse(manualText);
+    } catch (error) {
+      throw new Error(`runtime manual index is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    manual = validateRuntimeManualPair(manifest.manual, manualIndex, String(row.image_key));
   }
   await docker([...hardening, "git --version && rg --version && jq --version && file --version && python3 --version && node --version"]);
   const setuid = (await docker([...hardening, "find / -xdev -type f -perm /6000 -print 2>/dev/null || true"])).split("\n").filter(Boolean);
@@ -257,7 +277,17 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   if (!vulnPolicy.ok) throw new Error(vulnPolicy.message);
 
   const platforms = [`${String(inspect.Os ?? "linux")}/${String(inspect.Architecture ?? "unknown")}`];
-  const scanSummary = { contract: "passed", signature: signatureScan.status, malware: "clean", licenses: "captured-in-sbom", critical: criticalCount, secrets: secretCount, setuid, worker_id: workerId };
+  const scanSummary = {
+    contract: "passed",
+    signature: signatureScan.status,
+    malware: "clean",
+    licenses: "captured-in-sbom",
+    critical: criticalCount,
+    secrets: secretCount,
+    setuid,
+    worker_id: workerId,
+    ...(manual ? { manual } : {}),
+  };
   await sql.begin(async (tx) => {
     await tx`
       UPDATE runtime_image_versions SET resolved_ref = ${resolvedRef}, digest = ${digest},

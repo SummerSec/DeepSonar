@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { agentCliIdsCompatibleWithImage } from "@deepsonar/runtime-sandbox";
+import { OFFICIAL_RUNTIME_IMAGE_KEYS, isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
+import { inspectLocalRuntimeImage } from "./runtime-image-local-inspection.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -66,6 +67,7 @@ export type {
   RuntimeImageRegistryMetadataSource,
   RuntimeImageRegistryPolicy,
 } from "./runtime-image-registry-contract.js";
+export { OFFICIAL_RUNTIME_IMAGE_KEYS, isOfficialRuntimeImageKey } from "./runtime-image-manual.js";
 
 export const RUNTIME_IMAGE_CONTRACT = "deepsonar.runtime.contract/v1";
 /** Legacy schema constant retained for existing callers; v2 is accepted by the parser. */
@@ -77,13 +79,10 @@ const RUNTIME_IMAGE_REGISTRY_MAX_BYTES = 1024 * 1024;
 const RUNTIME_IMAGE_REGISTRY_CACHE_MS = 5 * 60_000;
 const RUNTIME_IMAGE_REGISTRY_RETRY_MS = 60_000;
 const RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES = 8 * 1024;
-const RUNTIME_IMAGE_INSPECT_MAX_BYTES = 512 * 1024;
-const RUNTIME_IMAGE_INSPECT_TIMEOUT_MS = 10_000;
 const SAME_DIGEST_REF_CACHE_MS = 60_000;
 const SAME_DIGEST_FALLBACK_CHANNELS = ["dockerhub", "github", "aliyun-acr"] as const;
 export const RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR = "channel timed out, same-digest fallback attempted";
 export const RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR = "digest not found";
-const execFileP = promisify(execFile);
 
 export type RuntimeImageRegistryVersion = RuntimeImageRegistryVersionContract;
 export type RuntimeImageRegistry = RuntimeImageRegistryContract;
@@ -148,6 +147,7 @@ export interface RuntimeImageSnapshot {
   /** Catalog version label at freeze time; historical snapshots may omit it. */
   image_version?: string | null;
   tools_manifest_sha256: string | null;
+  manual?: RuntimeManualMetadata | null;
   admission_scan_id: string | null;
   contract_version: string;
   source_kind: "official" | "third_party" | "fake";
@@ -764,157 +764,8 @@ export function sanitizeRuntimeImageError(value: unknown, maxBytes = RUNTIME_IMA
   return `${text.slice(0, end)} …[truncated]`;
 }
 
-export interface RuntimeImageLocalInspection {
-  image_ref: string;
-  exists: boolean;
-  image_id: string | null;
-  repo_digests: string[];
-  os: string | null;
-  arch: string | null;
-  labels: {
-    contract: string | null;
-    image_key: string | null;
-    tool_manifest: string | null;
-    tool_manifest_label: "io.deepsonar.tool-manifest" | "io.deepsonar.tools-manifest" | null;
-    toolset: string | null;
-  };
-  contract_matches: boolean;
-  matches_product: boolean;
-  tool_manifest_matches: boolean;
-  immutable_ref: string | null;
-  can_adopt: boolean;
-  reasons: string[];
-  error: string | null;
-}
-
-const TOOLSET_TO_RUNTIME_IMAGE_KEY: Record<string, string> = {
-  base: "deepsonar-base",
-  audit: "deepsonar-audit",
-  "kali-minimal": "deepsonar-kali-minimal",
-  "openharmony-test": "deepsonar-openharmony-test",
-  "openharmony-audit": "deepsonar-openharmony-audit",
-  "openharmony-fuzz": "deepsonar-openharmony-fuzz",
-  "chrome-audit": "deepsonar-chrome-audit",
-  "chrome-test": "deepsonar-chrome-test",
-  "chrome-fuzz": "deepsonar-chrome-fuzz",
-  "clickhouse-audit": "deepsonar-clickhouse-audit",
-  "clickhouse-test": "deepsonar-clickhouse-test",
-  "clickhouse-fuzz": "deepsonar-clickhouse-fuzz",
-  mobile: "deepsonar-mobile",
-};
-
-function imageRepository(imageRef: string): string | null {
-  const value = imageRef.trim().replace(/@sha256:[0-9a-f]{64}$/i, "");
-  if (!value) return null;
-  const lastSlash = value.lastIndexOf("/");
-  const lastColon = value.lastIndexOf(":");
-  return (lastColon > lastSlash ? value.slice(0, lastColon) : value).toLowerCase();
-}
-
-function localInspectionSkeleton(imageRef: string, reasons: string[], error: string | null): RuntimeImageLocalInspection {
-  return {
-    image_ref: imageRef,
-    exists: false,
-    image_id: null,
-    repo_digests: [],
-    os: null,
-    arch: null,
-    labels: { contract: null, image_key: null, tool_manifest: null, tool_manifest_label: null, toolset: null },
-    contract_matches: false,
-    matches_product: false,
-    tool_manifest_matches: false,
-    immutable_ref: null,
-    can_adopt: false,
-    reasons,
-    error,
-  };
-}
-
-/**
- * Read-only local Docker inspection. The command always uses execFile with an
- * argument array and shell=false; callers decide whether a mutable tag may be
- * used for detection, while adoption only accepts the returned immutable ref.
- */
-export async function inspectLocalRuntimeImage(
-  imageRef: string,
-  productKey: string,
-  knownImageRefs: string[] = [],
-): Promise<RuntimeImageLocalInspection> {
-  const normalizedRef = imageRef.trim();
-  try {
-    const result = await execFileP("docker", ["image", "inspect", normalizedRef], {
-      shell: false,
-      windowsHide: true,
-      timeout: RUNTIME_IMAGE_INSPECT_TIMEOUT_MS,
-      maxBuffer: RUNTIME_IMAGE_INSPECT_MAX_BYTES,
-    });
-    const parsed = JSON.parse(result.stdout) as unknown;
-    const item = Array.isArray(parsed) ? parsed[0] : parsed;
-    if (!item || typeof item !== "object") throw new Error("docker image inspect 返回格式无效");
-    const raw = item as Record<string, unknown>;
-    const config = raw.Config && typeof raw.Config === "object" ? raw.Config as Record<string, unknown> : {};
-    const rawLabels = config.Labels && typeof config.Labels === "object" ? config.Labels as Record<string, unknown> : {};
-    const labels = Object.fromEntries(Object.entries(rawLabels).filter(([, value]) => typeof value === "string")) as Record<string, string>;
-    const imageId = typeof raw.Id === "string" && localImageDigest(raw.Id) ? raw.Id.toLowerCase() : null;
-    const repoDigests = Array.isArray(raw.RepoDigests)
-      ? raw.RepoDigests.filter((value): value is string => typeof value === "string" && immutableDigest(value) !== null)
-      : [];
-    const contract = labels["io.deepsonar.contract"] ?? null;
-    const explicitImageKey = labels["io.deepsonar.image-key"] ?? null;
-    const toolset = labels["io.deepsonar.toolset"] ?? null;
-    const toolManifestLabel = labels["io.deepsonar.tool-manifest"] !== undefined
-      ? "io.deepsonar.tool-manifest"
-      : labels["io.deepsonar.tools-manifest"] !== undefined ? "io.deepsonar.tools-manifest" : null;
-    const toolManifest = toolManifestLabel ? labels[toolManifestLabel] ?? null : null;
-    const compatibleImageKey = explicitImageKey ?? (toolset ? TOOLSET_TO_RUNTIME_IMAGE_KEY[toolset] ?? null : null);
-    const knownRepositories = knownImageRefs.map(imageRepository).filter((value): value is string => Boolean(value));
-    const matchingRepoDigest = repoDigests.find((value) => {
-      const repository = imageRepository(value);
-      return repository !== null && knownRepositories.includes(repository);
-    }) ?? null;
-    const immutableRef = matchingRepoDigest ?? imageId;
-    const reasons: string[] = [];
-    const contractMatches = contract === RUNTIME_IMAGE_CONTRACT;
-    const matchesProduct = compatibleImageKey === productKey;
-    const toolManifestMatches = toolManifest === "/opt/deepsonar/tool-manifest.json";
-    if (!contractMatches) reasons.push("contract_mismatch");
-    if (!matchesProduct) {
-      reasons.push(explicitImageKey ? "image_key_mismatch" : toolset ? "toolset_mismatch" : "image_key_and_toolset_missing");
-    }
-    if (!toolManifestMatches) reasons.push("tool_manifest_mismatch");
-    if (!matchingRepoDigest && !imageId) reasons.push("immutable_ref_unavailable");
-    if (!explicitImageKey && compatibleImageKey === productKey) reasons.push("legacy_toolset_label_accepted");
-    const canAdopt = Boolean(imageId && immutableRef && contractMatches && matchesProduct && toolManifestMatches);
-    if (canAdopt) reasons.push("ready_for_adoption");
-    return {
-      image_ref: normalizedRef,
-      exists: true,
-      image_id: imageId,
-      repo_digests: repoDigests,
-      os: typeof raw.Os === "string" ? raw.Os : null,
-      arch: typeof raw.Architecture === "string" ? raw.Architecture : null,
-      labels: {
-        contract,
-        image_key: explicitImageKey,
-        tool_manifest: toolManifest,
-        tool_manifest_label: toolManifestLabel,
-        toolset,
-      },
-      contract_matches: contractMatches,
-      matches_product: matchesProduct,
-      tool_manifest_matches: toolManifestMatches,
-      immutable_ref: immutableRef,
-      can_adopt: canAdopt,
-      reasons,
-      error: null,
-    };
-  } catch (error) {
-    const rawError = error as { stderr?: unknown; code?: unknown };
-    const detail = sanitizeRuntimeImageError(rawError.stderr || error);
-    const notFound = /no such (image|object)|unable to find image|not found/i.test(detail);
-    return localInspectionSkeleton(normalizedRef, [notFound ? "image_not_found" : "docker_inspect_failed"], detail || "docker image inspect 失败");
-  }
-}
+export { inspectLocalRuntimeImage };
+export type { RuntimeImageLocalInspection } from "./runtime-image-local-inspection.js";
 
 function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
   const digest = `sha256:${createHash("sha256").update(`fake:${imageKey}`).digest("hex")}`;
@@ -1147,7 +998,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
   }
   const trustedVersions = await sql`
     SELECT ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url, ri.project_opt_in,
-           v.version, v.image_ref, v.resolved_ref, v.digest, v.tools_manifest_sha256, v.platforms_json, v.size_bytes,
+           v.version, v.image_ref, v.resolved_ref, v.digest, v.tools_manifest_sha256, v.platforms_json, v.size_bytes, v.scan_summary_json,
            COALESCE((
              SELECT jsonb_object_agg(r.channel, jsonb_build_object(
                'image_ref', r.image_ref,
@@ -1212,6 +1063,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       : typeof row.size_bytes === "string" && /^\d+$/.test(row.size_bytes)
         ? Number(row.size_bytes)
         : null;
+    const manual = runtimeManualFromScanSummary(row.scan_summary_json);
     const existingVersion = image.versions.find((version) => (version.digest ?? immutableDigest(version.image_ref ?? "")) === digest);
     if (!existingVersion) {
       image.versions.push({
@@ -1221,6 +1073,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
         ...(Object.keys(refs).length > 0 ? { registry_refs: refs } : {}),
         ...(Object.keys(evidence).length > 0 ? { registry_evidence: evidence as never } : {}),
         ...(typeof row.tools_manifest_sha256 === "string" ? { tools_manifest_sha256: row.tools_manifest_sha256 } : {}),
+        ...(manual ? { manual } : {}),
         ...(Array.isArray(row.platforms_json) ? { platforms: row.platforms_json as string[] } : {}),
         ...(sizeBytes !== null && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0 ? { size_bytes: sizeBytes } : {}),
       });
@@ -1231,6 +1084,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       if (!existingVersion.tools_manifest_sha256 && typeof row.tools_manifest_sha256 === "string") {
         existingVersion.tools_manifest_sha256 = row.tools_manifest_sha256;
       }
+      if (!existingVersion.manual && manual) existingVersion.manual = manual;
       if ((!existingVersion.platforms || existingVersion.platforms.length === 0) && Array.isArray(row.platforms_json)) {
         existingVersion.platforms = row.platforms_json as string[];
       }
@@ -1456,7 +1310,7 @@ export async function applyOfficialRuntimeCatalog(
         runtime_image_id: image.id, version: version.version, image_ref: selectedRef,
         resolved_ref: selectedRef, digest, contract_version: RUNTIME_IMAGE_CONTRACT,
         platforms_json: (version.platforms ?? []) as never, tools_manifest_sha256: version.tools_manifest_sha256 ?? null,
-        size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared" } as never,
+        size_bytes: version.size_bytes ?? null, scan_summary_json: { source, contract: "declared", ...(version.manual ? { manual: version.manual } : {}) } as never,
         trust_status: "trusted", approved_by: "bootstrap", scanned_at: new Date(), approved_at: new Date(),
         promoted_at: reconcilePromotions || envOnly ? new Date() : null,
       } as never;
@@ -1481,6 +1335,7 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
             tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
             size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
+            scan_summary_json = CASE WHEN EXCLUDED.scan_summary_json ? 'manual' THEN COALESCE(runtime_image_versions.scan_summary_json, '{}'::jsonb) || jsonb_build_object('manual', EXCLUDED.scan_summary_json->'manual') ELSE runtime_image_versions.scan_summary_json END,
             updated_at = now()
           RETURNING id`;
         if (!saved?.id) continue;
@@ -1516,6 +1371,7 @@ export async function applyOfficialRuntimeCatalog(
               THEN EXCLUDED.platforms_json ELSE runtime_image_versions.platforms_json END,
             tools_manifest_sha256 = COALESCE(EXCLUDED.tools_manifest_sha256, runtime_image_versions.tools_manifest_sha256),
             size_bytes = COALESCE(EXCLUDED.size_bytes, runtime_image_versions.size_bytes),
+            scan_summary_json = CASE WHEN EXCLUDED.scan_summary_json ? 'manual' THEN COALESCE(runtime_image_versions.scan_summary_json, '{}'::jsonb) || jsonb_build_object('manual', EXCLUDED.scan_summary_json->'manual') ELSE runtime_image_versions.scan_summary_json END,
             trust_status = CASE
               WHEN runtime_image_versions.trust_status = 'revoked'
                 AND runtime_image_versions.image_ref IS DISTINCT FROM EXCLUDED.image_ref THEN 'quarantined'
@@ -2545,7 +2401,7 @@ async function queryExecutableRuntimeImageVersion(
            CASE WHEN ri.official THEN channel_ref.resolved_ref ELSE v.resolved_ref END AS resolved_ref,
            CASE WHEN ri.official THEN channel_ref.digest ELSE v.digest END AS digest,
            CASE WHEN ri.official THEN channel_ref.channel ELSE NULL END AS registry_channel,
-           v.tools_manifest_sha256, v.contract_version,
+           v.tools_manifest_sha256, v.contract_version, v.scan_summary_json,
            scan.id AS admission_scan_id
     FROM runtime_images ri
     JOIN runtime_image_versions v ON v.runtime_image_id = ri.id
@@ -2639,6 +2495,7 @@ async function selectRuntimeImageSnapshot(
       projectId,
     );
   }
+  const manual = runtimeManualFromScanSummary(row.scan_summary_json);
   return {
     runtime_image_id: String(row.runtime_image_id),
     runtime_image_version_id: String(row.runtime_image_version_id),
@@ -2647,6 +2504,7 @@ async function selectRuntimeImageSnapshot(
     image_digest: digest,
     image_version: row.version ? String(row.version) : null,
     tools_manifest_sha256: row.tools_manifest_sha256 ? String(row.tools_manifest_sha256) : null,
+    manual,
     admission_scan_id: row.admission_scan_id ? String(row.admission_scan_id) : null,
     contract_version: String(row.contract_version),
     source_kind: String(row.source_kind) as RuntimeImageSnapshot["source_kind"],

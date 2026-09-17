@@ -8,6 +8,10 @@ on:
       - "agent-harness/clickhouse-*-runtime.json"
       - "agent-harness/clickhouse-*.mjs"
       - "agent-harness/test-clickhouse-runtime.mjs"
+      - "agent-harness/runtime-manuals/**"
+      - "agent-harness/materialize-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals-runtime.mjs"
       - ".dockerignore"
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
@@ -20,6 +24,10 @@ on:
       - "agent-harness/clickhouse-*-runtime.json"
       - "agent-harness/clickhouse-*.mjs"
       - "agent-harness/test-clickhouse-runtime.mjs"
+      - "agent-harness/runtime-manuals/**"
+      - "agent-harness/materialize-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals-runtime.mjs"
       - ".dockerignore"
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
@@ -130,6 +138,8 @@ jobs:
             type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
       - name: ClickHouse runtime contract and smoke
         run: node agent-harness/test-clickhouse-runtime.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
+      - name: Offline runtime manual smoke
+        run: node agent-harness/test-runtime-manuals-runtime.mjs deepsonar-${{ matrix.toolset }}:ci ${{ matrix.toolset }} ${{ matrix.config }}
       - name: Pin single-arch ClickHouse src cache
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         shell: bash

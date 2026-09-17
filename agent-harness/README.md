@@ -2,19 +2,21 @@
 
 ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控制约定」。真实 Job 只使用平台注入的静态 `deepsonar-control` Skill 和短期 capability token，语义事件经 Job 级 API 回传（沙箱可断网、零长期凭据）。
 
-## 工具说明书（#588）
-
-官方运行镜像的 Agent 面向工具说明书位于 `agent-harness/manuals/<imageKey>/`，构建安装到 `/opt/deepsonar/manuals/`。覆盖与结构由 `check-runtime-manuals.mjs` 门禁校验。
-
 ## 官方镜像
 
 - `deepsonar-base`：固定 digest 的 Node 22 Debian slim + 最小通用 CLI。
-- `deepsonar-audit`：在 base 清单上增加 Semgrep、Gitleaks、ShellCheck、binutils，默认供 Audit 使用。
+- `deepsonar-audit`：在 base 清单上增加 binutils 等基础观察工具，默认供 Audit 使用；不预装 Semgrep、Gitleaks、ShellCheck 等决策扫描器。
 - `deepsonar-kali-minimal`（市场名 Kali Test）：仅 Test 的默认环境。固定官方 Kali last-release digest，预装 Python 3.10–3.14、Temurin JDK 8/11/17（默认 17，不含 21）、固定 Apache Maven 3.9.16、Go、Rust 与原有审计 CLI；Maven 安装到 `/opt/deepsonar/maven`，镜像不预置 `.m2` 缓存。不安装 `kali-linux-*`、`kali-tools-*`、GUI 或桌面。Verify 默认使用最小的 `deepsonar-base`，需要专项工具时再由 RoleConfig 覆盖。
 - `deepsonar-openharmony-test` / `deepsonar-openharmony-audit` / `deepsonar-openharmony-fuzz`：OpenHarmony 专项（`project_opt_in`）。Test 负责源码同步、构建，并钉死官方 SDK `toolchains/hdc` 设备协议（冒烟 `hdc version` / `hdc -v`，不要求真机）；Audit 面向高危主机静态分析（Clang/clang-tidy/cppcheck/sparse + ASan/UBSan）；Fuzz 面向主机动态验证（libFuzzer/AFL++）。均基于 `deepsonar-base`，Dockerfile 见 `deploy/Dockerfile.agent-openharmony*`。
 - `deepsonar-chrome-audit` / `deepsonar-chrome-test` / `deepsonar-chrome-fuzz`：Chrome 专项（`project_opt_in`）。Audit 提供 C++ 静态分析；Test 提供固定 Chromium/CDP；Fuzz 提供固定 V8 `d8` 与 libFuzzer。均基于 `deepsonar-base`，Dockerfile 见 `deploy/Dockerfile.agent-chrome*`。
 
 `runtime-images.json` 与 `kali-minimal-runtime.json` 记录工具、来源、校验和、平台与 `maxSizeMiB`。`maxSizeMiB` 约束 `docker save` 后 gzip 压缩的可分发镜像包；CI 同时报告解压层大小。压缩包超预算、定义漂移或断网硬化冒烟失败都会阻断 CI。
+
+### 离线工具手册
+
+`runtime-manuals/catalog.json` 是 13 个官方运行镜像的手册单一来源。构建时 `materialize-runtime-manuals.mjs` 读取当前镜像最终 `tool-manifest.json`，把公共和镜像专属条目展开为 `/opt/deepsonar/manuals/index.json`、`INDEX.md` 与逐工具 Markdown，并把手册契约、版本、路径和 SHA-256 回写工具清单。最终镜像不能只引用基础镜像文档。
+
+每个工具或包装入口都说明使用场景、选型依据、前置条件、调用、输出解释、失败分类、组合流程、证据留存与版本限制。`test-runtime-manuals.mjs` 做仓库级完整性检查；`test-runtime-manuals-runtime.mjs` 在断网容器内检查实际文件和摘要。Worker 启动只得到索引位置，按任务读取章节；手册不改变 Scheduler 冻结的权限、网络和预算。
 
 ### Fingerprint 与专项 CI
 
@@ -30,7 +32,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控
 
 | 阶段 | 角色 | 推荐镜像 | 说明 |
 |------|------|----------|------|
-| 静态审计 | audit | `deepsonar-audit` | 读仓 + Semgrep 等；多数语言可起步 |
+| 静态审计 | audit | `deepsonar-audit` | 读仓 + 基础检索/binutils；Agent 按证据需要自行选工具 |
 | 动态验证 / PoC | test | `deepsonar-kali-minimal` | 需编译运行时**必须**用 Kali（或专项），勿绑 base |
 | 系统验证 | verify | 默认 base；需 runtime 时 RoleConfig 覆盖为 Kali/专项 | 与 test 同样受语言工具链约束 |
 

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepsonar.invalid/schemas/runtime-manual-catalog-v1.json",
+  "title": "DeepSonar runtime manual catalog",
+  "type": "object",
+  "required": ["schema", "catalog_version", "delivery_path", "failure_categories", "images", "totals"],
+  "properties": {
+    "schema": { "const": "deepsonar.runtime-manual-catalog/v1" },
+    "catalog_version": { "type": "string", "minLength": 1 },
+    "generated_by": { "type": "string", "minLength": 1 },
+    "delivery_path": { "const": "/opt/deepsonar/manuals" },
+    "failure_categories": {
+      "type": "array",
+      "const": ["normal_empty", "model_correctable", "transient_retryable", "missing_condition", "permanent"]
+    },
+    "source_contracts": { "type": "array", "items": { "type": "string" } },
+    "images": {
+      "type": "array",
+      "minItems": 13,
+      "items": { "$ref": "#/$defs/image" }
+    },
+    "totals": {
+      "type": "object",
+      "required": ["image_count", "entry_count", "agent_visible_entry_count", "implementation_only_entry_count"],
+      "properties": {
+        "image_count": { "type": "integer", "minimum": 13 },
+        "entry_count": { "type": "integer", "minimum": 1 },
+        "agent_visible_entry_count": { "type": "integer", "minimum": 1 },
+        "implementation_only_entry_count": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "failureHandling": {
+      "type": "object",
+      "required": ["normal_empty", "model_correctable", "transient_retryable", "missing_condition", "permanent"],
+      "properties": {
+        "normal_empty": { "type": "string", "minLength": 1 },
+        "model_correctable": { "type": "string", "minLength": 1 },
+        "transient_retryable": { "type": "string", "minLength": 1 },
+        "missing_condition": { "type": "string", "minLength": 1 },
+        "permanent": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "image_key", "id", "kind", "agent_visible", "implementation_only",
+        "version", "version_source", "commands", "usage_scenario", "selection_basis",
+        "prerequisites", "minimal_invocation", "common_parameters", "output_interpretation",
+        "failure_handling", "composition_flow", "evidence_retention",
+        "version_limits_side_effects_cleanup", "verification_status", "verification_note"
+      ],
+      "properties": {
+        "image_key": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["tool", "library", "wrapper", "capability", "runtime_dependency", "implementation_dependency"] },
+        "agent_visible": { "type": "boolean" },
+        "implementation_only": { "type": "boolean" },
+        "version": { "type": "string", "minLength": 1 },
+        "version_source": { "type": "string", "minLength": 1 },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "usage_scenario": { "type": "string", "minLength": 1 },
+        "selection_basis": { "type": "string", "minLength": 1 },
+        "prerequisites": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "minimal_invocation": { "type": "string", "minLength": 1 },
+        "common_parameters": { "type": "array", "items": { "type": "string" } },
+        "output_interpretation": { "type": "string", "minLength": 1 },
+        "failure_handling": { "$ref": "#/$defs/failureHandling" },
+        "composition_flow": { "type": "string", "minLength": 1 },
+        "evidence_retention": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "version_limits_side_effects_cleanup": { "type": "string", "minLength": 1 },
+        "verification_status": { "enum": ["source_declared_unexecuted", "source_reviewed_unexecuted", "source_reviewed_not_shipped_as_command"] },
+        "verification_note": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "image": {
+      "type": "object",
+      "required": ["image_key", "manual_path", "self_contained", "inherited_from", "source_files", "sections", "entries", "entry_count", "agent_visible_entry_count", "implementation_only_entry_count"],
+      "properties": {
+        "image_key": { "type": "string", "minLength": 1 },
+        "manual_path": { "type": "string", "pattern": "^/opt/deepsonar/manuals/images/[^/]+/index\\.md$" },
+        "self_contained": { "const": true },
+        "inherited_from": { "type": "array", "items": { "type": "string" } },
+        "source_files": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "sections": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "entries": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entry" } },
+        "entry_count": { "type": "integer", "minimum": 1 },
+        "agent_visible_entry_count": { "type": "integer", "minimum": 1 },
+        "implementation_only_entry_count": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

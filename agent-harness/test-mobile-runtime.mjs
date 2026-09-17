@@ -1,16 +1,47 @@
 #!/usr/bin/env node
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
+function toBashPath(value) {
+  if (process.platform !== "win32") return value;
+  const match = String(value).match(/^([A-Za-z]):[\\/](.*)$/);
+  if (!match) return String(value).replaceAll("\\", "/");
+  return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+}
+
+function spawnWsl(args, options = {}) {
+  let result;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    result = spawnSync("wsl.exe", args, options);
+    const transient = result.status === -1 || result.status === 0xffffffff
+      || /Wsl\/Service\/0x8007274c/i.test(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+    if (!transient) return result;
+  }
+  return result;
+}
+
 function runHelper(helper, args, env) {
+  const pathKeys = new Set(["ADB_BIN", "HDC_BIN", "IDEVICE_ID_BIN", "APKCHECKPACK_BIN", "MOBILE_PYTHON"]);
+  const pathDirs = [bashSupportDir, ...String(env.BASH_PATH_DIRS ?? "").split(";").filter(Boolean)].map(toBashPath);
+  const normalizedEnv = Object.fromEntries(Object.entries(env)
+    .filter(([key]) => key !== "PATH" && key !== "BASH_PATH_DIRS")
+    .map(([key, value]) => [key, pathKeys.has(key) ? toBashPath(value) : value]));
+  const bashPath = [...pathDirs, "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].join(":");
+  if (process.platform === "win32") {
+    const envArgs = Object.entries({ ...normalizedEnv, PATH: bashPath }).map(([key, value]) => `${key}=${value}`);
+    return spawnWsl([
+      "--exec", "env", ...envArgs, "bash", toBashPath(join(root, helper)),
+      ...args.map((value) => /^[A-Za-z]:[\\/]/.test(value) ? toBashPath(value) : value),
+    ], { encoding: "utf8" });
+  }
   return spawnSync("bash", [join(root, helper), ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...normalizedEnv, ...(pathDirs.length > 0 ? { PATH: bashPath } : {}) },
   });
 }
 
@@ -19,8 +50,19 @@ function writeFake(dirPrefix, name, script) {
   const bin = join(dir, name);
   writeFileSync(bin, script);
   chmodSync(bin, 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(bin)]);
   return bin;
 }
+
+const jqShim = writeFake("mobile-support-", "jq", `#!/usr/bin/env python3
+import json, sys
+text = sys.stdin.read()
+program = " ".join(sys.argv[1:])
+protocol = "usbmuxd" if "usbmuxd" in program else "hdc"
+targets = [line.strip() for line in text.splitlines() if line.strip()]
+print(json.dumps({"protocol": protocol, "status": "ok", "targets": targets}, separators=(",", ":")))
+`);
+const bashSupportDir = dirname(jqShim);
 
 const versionAdb = writeFake("mobile-adb-", "adb", `#!/usr/bin/env bash
 if [[ "$1" == "version" ]]; then
@@ -160,14 +202,15 @@ if (presentJson.status !== "ok" || presentJson.targets?.[0] !== "127.0.0.1:5555"
 const emptyIos = writeFake("mobile-ios-", "idevice_id", `#!/usr/bin/env bash
 exit 0
 `);
-const iosDir = emptyIos.slice(0, emptyIos.lastIndexOf("/"));
+const iosDir = dirname(emptyIos);
 for (const name of ["ideviceinstaller", "plistutil", "iproxy"]) {
   writeFileSync(join(iosDir, name), "#!/usr/bin/env bash\nexit 0\n");
   chmodSync(join(iosDir, name), 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(join(iosDir, name))]);
 }
 const iosCheck = runHelper("deploy/mobile-ios.sh", ["--check"], {
   IDEVICE_ID_BIN: emptyIos,
-  PATH: `${iosDir}:${process.env.PATH}`,
+  BASH_PATH_DIRS: iosDir,
 });
 if (iosCheck.status !== 0 || !iosCheck.stdout.includes("no_ios_target") || !iosCheck.stdout.includes("needs_human")) {
   throw new Error(`empty idevice_id must emit structured no-target evidence\n${iosCheck.stdout}\n${iosCheck.stderr}`);
@@ -175,7 +218,7 @@ if (iosCheck.status !== 0 || !iosCheck.stdout.includes("no_ios_target") || !iosC
 
 const iosDevices = runHelper("deploy/mobile-ios.sh", ["devices"], {
   IDEVICE_ID_BIN: emptyIos,
-  PATH: `${iosDir}:${process.env.PATH}`,
+  BASH_PATH_DIRS: iosDir,
 });
 if (iosDevices.status !== 2) throw new Error(`empty ios devices must exit 2, got ${iosDevices.status}\n${iosDevices.stdout}`);
 const iosJson = JSON.parse(iosDevices.stdout);
@@ -223,9 +266,10 @@ for (const [name, script] of [
 ]) {
   writeFileSync(join(soDir, name), script);
   chmodSync(join(soDir, name), 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(join(soDir, name))]);
 }
 const soCheck = runHelper("deploy/mobile-so.sh", ["--check"], {
-  PATH: `${soDir}:${soBin.slice(0, soBin.lastIndexOf("/"))}:${process.env.PATH}`,
+  BASH_PATH_DIRS: [soDir, dirname(soBin)].join(";"),
   MOBILE_PYTHON: join(soDir, "python"),
 });
 if (soCheck.status !== 0 || !soCheck.stdout.includes("binutils + radare2 + LIEF")) {
@@ -234,7 +278,7 @@ if (soCheck.status !== 0 || !soCheck.stdout.includes("binutils + radare2 + LIEF"
 const soFile = join(soDir, "libdemo.so");
 writeFileSync(soFile, "not-a-real-elf");
 const soInspect = runHelper("deploy/mobile-so.sh", ["inspect", soFile], {
-  PATH: `${soDir}:${soBin.slice(0, soBin.lastIndexOf("/"))}:${process.env.PATH}`,
+  BASH_PATH_DIRS: [soDir, dirname(soBin)].join(";"),
   MOBILE_PYTHON: join(soDir, "python"),
 });
 if (soInspect.status !== 0 || !soInspect.stdout.includes("readelf") || !soInspect.stdout.includes("LIEF")) {
@@ -263,14 +307,14 @@ if (apkMissing.status !== 127) {
 
 const mobileRuntime = JSON.parse(readFileSync(join(root, "agent-harness/mobile-runtime.json"), "utf8"));
 const droidascPin = mobileRuntime.managed?.pip?.droidasc;
-if (droidascPin?.version !== "0.1.1" || droidascPin?.license !== "Apache-2.0") {
-  throw new Error(`mobile-runtime.json must pin droidasc 0.1.1 Apache-2.0, got ${JSON.stringify(droidascPin)}`);
+if (droidascPin?.version !== "0.1.1.post1" || droidascPin?.license !== "Apache-2.0") {
+  throw new Error(`mobile-runtime.json must pin installable droidasc 0.1.1.post1 Apache-2.0, got ${JSON.stringify(droidascPin)}`);
 }
 if (!Array.isArray(droidascPin.capabilities) || !droidascPin.capabilities.includes("apk-xref-search")) {
   throw new Error(`droidasc capabilities must include apk-xref-search: ${JSON.stringify(droidascPin.capabilities)}`);
 }
 const mobileDockerfile = readFileSync(join(root, "deploy/Dockerfile.agent-mobile"), "utf8");
-if (!mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1") || !mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}")) {
+if (!mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1") || !mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}")) {
   throw new Error("Dockerfile.agent-mobile must pin and install droidasc==${DROIDASC_VERSION}");
 }
 if (!mobileDockerfile.includes("/opt/deepsonar/bin/droidasc")) {
@@ -293,7 +337,9 @@ fi
 echo "unexpected $*" >&2
 exit 1
 `);
-  const fakeHelp = spawnSync(fakeDroidasc, ["--help"], { encoding: "utf8" });
+  const fakeHelp = process.platform === "win32"
+    ? spawnWsl(["--exec", "bash", toBashPath(fakeDroidasc), "--help"], { encoding: "utf8" })
+    : spawnSync(fakeDroidasc, ["--help"], { encoding: "utf8" });
   if (fakeHelp.status !== 0 || !fakeHelp.stdout.includes("getclass") || !fakeHelp.stdout.includes("findrefs")) {
     throw new Error(`droidasc --help presence smoke failed: status=${fakeHelp.status}\n${fakeHelp.stdout}\n${fakeHelp.stderr}`);
   }

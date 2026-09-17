@@ -11,7 +11,6 @@ ARG DEPOT_TOOLS_REPOSITORY=https://chromium.googlesource.com/chromium/tools/depo
 ARG DEPOT_TOOLS_COMMIT=921e61b35fbc5e97b14250a118e363ec05078089
 ARG COMPILER_RT_REPOSITORY=https://github.com/llvm/llvm-project.git
 ARG COMPILER_RT_COMMIT=53d18800eda3b7407e53366f27ca78e922c6e0db
-ARG V8_ARTIFACTS_IMAGE=ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:39c9059a9f409ad31c1a4d611a2c5b340133213f9ecc92d6e3920b550e2e9342
 
 # V8's pinned Chromium Clang package is a linux/amd64 host toolchain. Keep the
 # expensive source build on that native host architecture and cross-compile the
@@ -143,18 +142,11 @@ RUN set -eux; \
   test -x out/release/v8_json_libfuzzer; \
   test -f out/release/libsanitizer_shared_hooks.so
 
-
-# #588: reuse the last published chrome-fuzz image for V8 binaries so manuals-only
-# rebuilds do not cold-sync gclient (shallow sync is flaky on GH runners). Keep the
-# v8-builder stage above for source rebuilds; override V8_ARTIFACTS_IMAGE (global ARG)
-# for a from-source build if needed.
-FROM ${V8_ARTIFACTS_IMAGE} AS v8-artifacts
-
 FROM runtime-rootfs AS runtime-final
 ARG TARGETARCH
-COPY --from=v8-artifacts --chmod=0755 /opt/deepsonar/bin/d8 /opt/deepsonar/bin/d8
-COPY --from=v8-artifacts --chmod=0755 /opt/deepsonar/bin/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer
-COPY --from=v8-artifacts --chmod=0755 /opt/deepsonar/lib/libsanitizer_shared_hooks.so /opt/deepsonar/lib/libsanitizer_shared_hooks.so
+COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/d8 /opt/deepsonar/bin/d8
+COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer
+COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/libsanitizer_shared_hooks.so /opt/deepsonar/lib/libsanitizer_shared_hooks.so
 ENV LD_LIBRARY_PATH=/opt/deepsonar/lib
 
 COPY deploy/chrome-fuzz-env.sh /tmp/chrome-fuzz-env.sh
@@ -192,16 +184,21 @@ RUN set -eux; \
     *) echo "unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
   esac
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-chrome-fuzz /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-chrome-fuzz \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
 
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="chrome-fuzz" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar Chrome Fuzz" \
       org.opencontainers.image.description="Project-opt-in real V8 d8 built from a pinned source revision with Clang/LLVM, compiler-rt/libFuzzer and AFL++." \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

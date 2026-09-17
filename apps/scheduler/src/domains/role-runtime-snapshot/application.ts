@@ -17,7 +17,7 @@ import {
   resolveModelSource,
   snapshotUpstreamModel,
 } from "../../provider-settings.js";
-import { resolveRuntimeImageForJob } from "../../runtime-images.js";
+import { isOfficialRuntimeImageKey, resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { freezeTaskCapabilityPack } from "../capability-pack/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
@@ -226,9 +226,10 @@ export const RUNTIME_TOOL_MANUALS_POLICY = `### Runtime tool manuals (Scheduler 
 
 This Job's runtime image includes offline tool manuals at \`/opt/deepsonar/manuals/\`.
 
-- Start with \`/opt/deepsonar/manuals/INDEX.md\`, then open only the relevant \`tools/*.md\` pages for the task.
+- Start with \`/opt/deepsonar/manuals/index.json\` (or its readable \`INDEX.md\` projection), then open only the relevant \`tools/*.md\` pages for the task.
 - Manuals cover when to use / when not, prerequisites, invocation, output meaning, failure classes, composition, evidence retention, and version limits.
 - Do not rely on host-repo docs or guessed \`--help\` alone. Prefer manuals before first invocation of an unfamiliar tool.
+- The manual does not grant tools, network access, credentials, devices, Job operations, budget, or side-effect permissions; the frozen Job snapshot and Scheduler remain authoritative.
 - Empty results are not automatic \`needs_human\`; missing devices/services must be labeled inconclusive/needs_human without fabricating runtime output.`;
 
 export function withRuntimeTestToolchainPolicy(
@@ -239,7 +240,7 @@ export function withRuntimeTestToolchainPolicy(
   const dynamicVerify = roleName === "verify" && resolvedRuntimeImageKey !== null && resolvedRuntimeImageKey !== "deepsonar-base";
   const injectRuntimeTest = roleName === "test" || dynamicVerify;
   const specialty = lookupSpecialtyPolicy(resolvedRuntimeImageKey);
-  const injectManuals = Boolean(resolvedRuntimeImageKey);
+  const injectManuals = isOfficialRuntimeImageKey(resolvedRuntimeImageKey);
   if (!injectRuntimeTest && !specialty && !injectManuals) return instructions;
 
   let text = instructions?.trim() ?? "";

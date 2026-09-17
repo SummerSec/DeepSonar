@@ -21,7 +21,7 @@ import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_R
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { RuntimeImageNotReadyError } from "./runtime-images.js";
+import { isOfficialRuntimeImageKey, RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import {
   DeviceNotAuthorizedError,
@@ -982,6 +982,9 @@ async function runJob(jobId: string) {
         gatewayUpstreamUrl: useReal ? config.gateway.proxyUpstreamUrl : undefined,
         expectedContract: snapshot.runtime_image.contract_version,
         expectedToolsManifestSha256: snapshot.runtime_image.tools_manifest_sha256,
+        requireRuntimeManual: isOfficialRuntimeImageKey(snapshot.runtime_image.image_key),
+        expectedRuntimeManual: snapshot.runtime_image.manual ?? undefined,
+        expectedRuntimeImageKey: snapshot.runtime_image.image_key,
         sharedAssetsMount: sharedAssetsVolumeName ? { volumeName: sharedAssetsVolumeName } : undefined,
         // Job 快照是运行时资源的唯一权威；这里不读取可变服务配置，保证
         // pending/running Job 的执行仍可复现。

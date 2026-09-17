@@ -73,6 +73,24 @@ function assertSize(value, label, required = true) {
   return value;
 }
 
+function assertManual(value, label, required = false) {
+  if (value === undefined && !required) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} manual is invalid`);
+  assertKnownKeys(value, ["contract", "path", "version", "sha256", "count"], `${label} manual`);
+  if (value.contract !== "deepsonar.runtime.manuals/v1") fail(`${label} manual contract is invalid`);
+  if (value.path !== "/opt/deepsonar/manuals/index.json") fail(`${label} manual path is invalid`);
+  if (typeof value.version !== "string" || value.version.trim() === "") fail(`${label} manual version is invalid`);
+  if (typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256)) fail(`${label} manual sha256 is invalid`);
+  if (!Number.isSafeInteger(value.count) || value.count <= 0) fail(`${label} manual count is invalid`);
+  return {
+    contract: value.contract,
+    path: value.path,
+    version: value.version,
+    sha256: value.sha256,
+    count: value.count,
+  };
+}
+
 function parseImmutableRef(value, label) {
   if (typeof value !== "string" || value.trim() !== value || value.includes("?") || value.includes("#") || value.includes("\\") || value.includes("%")) {
     fail(`${label} ref 不是严格 OCI digest 引用`);
@@ -163,7 +181,7 @@ function assertDescriptor(descriptor, expectedKey) {
   if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) fail(`${expectedKey} descriptor 无效`);
   assertKnownKeys(descriptor, [
     "image_key", "version", "digest", "platforms", "size_bytes", "platform_size_bytes", "platform_digests",
-    "registry_records", "registry_evidence", "registry_refs", "ghcr_ref", "acr_ref", "tools_manifest_sha256",
+    "registry_records", "registry_evidence", "registry_refs", "ghcr_ref", "acr_ref", "tools_manifest_sha256", "manual",
   ], `${expectedKey} descriptor`);
   if (descriptor.image_key !== expectedKey) fail(`${expectedKey} descriptor image_key 不匹配`);
   assertDigest(descriptor.digest, `${expectedKey}`);
@@ -187,6 +205,7 @@ function assertDescriptor(descriptor, expectedKey) {
   }
   if (descriptor.version !== undefined) assertVersion(descriptor.version, expectedKey);
   if (descriptor.tools_manifest_sha256 !== undefined && !/^[0-9a-f]{64}$/.test(descriptor.tools_manifest_sha256)) fail(`${expectedKey} tools_manifest_sha256 无效`);
+  descriptor.manual = assertManual(descriptor.manual, expectedKey, true);
   const records = recordsForDescriptor(descriptor);
   return { descriptor, records };
 }
@@ -263,6 +282,7 @@ function buildV2Version(descriptor, records, releaseVersion) {
     ...(githubRef ? { image_ref: githubRef } : {}),
     registry_evidence: registryEvidence,
     ...(descriptor.tools_manifest_sha256 ? { tools_manifest_sha256: descriptor.tools_manifest_sha256 } : {}),
+    manual: descriptor.manual,
   };
 }
 
@@ -289,7 +309,7 @@ function assertV1Registry(registry) {
     seenImages.add(image.image_key);
     const seenVersions = new Set();
     for (const [versionIndex, version] of image.versions.entries()) {
-      assertKnownKeys(version, ["version", "image_ref", "platforms", "size_bytes", "tools_manifest_sha256"], `${image.image_key}.versions[${versionIndex}]`);
+      assertKnownKeys(version, ["version", "image_ref", "platforms", "size_bytes", "tools_manifest_sha256", "manual"], `${image.image_key}.versions[${versionIndex}]`);
       assertVersion(version.version, `${image.image_key}.versions[${versionIndex}]`);
       if (seenVersions.has(version.version)) fail(`${image.image_key} 重复 version ${version.version}`);
       seenVersions.add(version.version);
@@ -298,6 +318,7 @@ function assertV1Registry(registry) {
       const platforms = assertPlatforms(version.platforms, `${image.image_key}.${version.version}`, false);
       if (platforms && platforms.length !== 1) fail(`${image.image_key} v1 每个 version 只能有一个 platform`);
       assertSize(version.size_bytes, `${image.image_key}.${version.version}`, false);
+      assertManual(version.manual, `${image.image_key}.${version.version}`);
       const existing = seenRefs.get(parsed.normalized);
       if (!existing) {
         seenRefs.set(parsed.normalized, { imageKey: image.image_key, platforms: platforms ? new Set(platforms) : null });
@@ -323,13 +344,14 @@ function assertV2Registry(registry) {
     const seenVersions = new Set();
     for (const [versionIndex, version] of image.versions.entries()) {
       const label = `${image.image_key}.versions[${versionIndex}]`;
-      assertKnownKeys(version, ["version", "digest", "platforms", "size_bytes", "registry_refs", "image_ref", "registry_evidence", "tools_manifest_sha256"], label);
+      assertKnownKeys(version, ["version", "digest", "platforms", "size_bytes", "registry_refs", "image_ref", "registry_evidence", "tools_manifest_sha256", "manual"], label);
       assertVersion(version.version, label);
       if (seenVersions.has(version.version)) fail(`${image.image_key} 重复 version ${version.version}`);
       seenVersions.add(version.version);
       assertDigest(version.digest, label);
       assertPlatforms(version.platforms, label, true);
       assertSize(version.size_bytes, label, true);
+      assertManual(version.manual, label);
       if (!version.registry_refs || typeof version.registry_refs !== "object" || Array.isArray(version.registry_refs)) fail(`${label} registry_refs 无效`);
       const channels = Object.keys(version.registry_refs);
       if (channels.length === 0 || channels.some((channel) => !CHANNELS.includes(channel))) fail(`${label} registry_refs 含未知或空 channel`);
@@ -395,8 +417,20 @@ function assertMinRuntimeImage(value) {
 
 export function versionsForUnchangedDigest(previousVersions, nextVersion) {
   const previous = Array.isArray(previousVersions) ? previousVersions : [];
-  if (nextVersion && previous.some((version) => version.digest === nextVersion.digest)) {
-    return previous;
+  if (nextVersion) {
+    const matchingIndex = previous.findIndex((version) => version.digest === nextVersion.digest);
+    if (matchingIndex >= 0) {
+      const matching = previous[matchingIndex];
+      if (matching.manual && JSON.stringify(matching.manual) !== JSON.stringify(nextVersion.manual)) {
+        fail(`unchanged digest ${nextVersion.digest} has conflicting runtime manual metadata`);
+      }
+      if (!matching.manual && nextVersion.manual) {
+        return previous.map((version, index) => index === matchingIndex
+          ? { ...version, manual: nextVersion.manual }
+          : version);
+      }
+      return previous;
+    }
   }
   return nextVersion ? [nextVersion] : previous;
 }

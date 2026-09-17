@@ -51,6 +51,16 @@ RUN set -eux; \
   node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"clickhouse-fuzz",imageKey:"deepsonar-clickhouse-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","cmake","ninja","clickhouse@26.3.28.5","clickhouse-local","node","claude"],clickhouse:{binary:"/opt/deepsonar/bin/clickhouse",official:true,version:"26.3.28.5",tag:"v26.3.28.5-lts"},fuzz:{target:"clickhouse-local",actual:true,source:"official-clickhouse-common-static",honesty:"The image fails its build smoke if the official clickhouse-local binary is unavailable; no substitute harness fallback exists."},entrypoints:{check:"/opt/deepsonar/bin/clickhouse-fuzz-env.sh",smoke:"/opt/deepsonar/bin/clickhouse-fuzz-smoke.sh",local:"/opt/deepsonar/bin/clickhouse-local"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-clickhouse-fuzz \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
 ENV IS_SANDBOX=1 \
     CC=clang \
     CXX=clang++ \
@@ -61,16 +71,11 @@ ENV IS_SANDBOX=1 \
 WORKDIR /workspace
 RUN /opt/deepsonar/bin/clickhouse-fuzz-env.sh --check
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-clickhouse-fuzz /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
-
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="clickhouse-fuzz" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar ClickHouse Fuzz" \
       org.opencontainers.image.description="Project-opt-in official ClickHouse LTS clickhouse-local plus Clang/LLVM sanitizer and AFL++ toolchain." \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

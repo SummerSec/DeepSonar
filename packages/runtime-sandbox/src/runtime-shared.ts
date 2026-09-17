@@ -36,20 +36,106 @@ export class RuntimeImageContractError extends Error {
   }
 }
 
+/** Offline runtime manual contract shared by image admission and workers. */
+export const RUNTIME_MANUAL_CONTRACT = "deepsonar.runtime.manuals/v1" as const;
+export const RUNTIME_MANUAL_INDEX_PATH = "/opt/deepsonar/manuals/index.json" as const;
+export const RUNTIME_MANUAL_ROOT_PATH = "/opt/deepsonar/manuals" as const;
+export const RUNTIME_MANUAL_LABEL = "io.deepsonar.manuals" as const;
+
+export interface RuntimeManualMetadata {
+  contract: typeof RUNTIME_MANUAL_CONTRACT;
+  path: typeof RUNTIME_MANUAL_INDEX_PATH;
+  version: string;
+  sha256: string;
+  count: number;
+}
+
+export interface RuntimeManualIndex {
+  contract: typeof RUNTIME_MANUAL_CONTRACT;
+  image_key: string;
+  manual_version: string;
+  path: typeof RUNTIME_MANUAL_INDEX_PATH;
+  entries: Array<Record<string, unknown>>;
+  manual_sha256: string;
+  index_sha256?: string;
+}
+
+function assertManualObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new RuntimeImageContractError(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/** Parse and validate the manifest's manual metadata, if present. */
+export function parseRuntimeManualMetadata(value: unknown): RuntimeManualMetadata | undefined {
+  if (value === undefined) return undefined;
+  const raw = assertManualObject(value, "runtime manual metadata");
+  const unknown = Object.keys(raw).filter((key) => !["contract", "path", "version", "sha256", "count"].includes(key));
+  if (unknown.length > 0) throw new RuntimeImageContractError(`runtime manual metadata contains unknown fields: ${unknown.join(", ")}`);
+  if (raw.contract !== RUNTIME_MANUAL_CONTRACT) throw new RuntimeImageContractError("runtime manual contract is invalid");
+  if (raw.path !== RUNTIME_MANUAL_INDEX_PATH) throw new RuntimeImageContractError("runtime manual path is invalid");
+  if (typeof raw.version !== "string" || raw.version.trim() === "") throw new RuntimeImageContractError("runtime manual version is invalid");
+  if (typeof raw.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(raw.sha256)) throw new RuntimeImageContractError("runtime manual sha256 is invalid");
+  if (!Number.isSafeInteger(raw.count) || (raw.count as number) < 0) throw new RuntimeImageContractError("runtime manual count is invalid");
+  return {
+    contract: RUNTIME_MANUAL_CONTRACT,
+    path: RUNTIME_MANUAL_INDEX_PATH,
+    version: raw.version,
+    sha256: raw.sha256,
+    count: raw.count as number,
+  };
+}
+
+/** Parse the machine-readable manual index read from a provisioned worker. */
+export function parseRuntimeManualIndex(raw: string): RuntimeManualIndex {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw.replace(/^\uFEFF/, "").trim());
+  } catch (error) {
+    throw new RuntimeImageContractError(`runtime manual index is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const index = assertManualObject(value, "runtime manual index");
+  if (index.contract !== RUNTIME_MANUAL_CONTRACT) throw new RuntimeImageContractError("runtime manual index contract is invalid");
+  if (typeof index.image_key !== "string" || index.image_key.trim() === "") throw new RuntimeImageContractError("runtime manual index image_key is invalid");
+  if (typeof index.manual_version !== "string" || index.manual_version.trim() === "") throw new RuntimeImageContractError("runtime manual index manual_version is invalid");
+  if (index.path !== RUNTIME_MANUAL_INDEX_PATH) throw new RuntimeImageContractError("runtime manual index path is invalid");
+  if (!Array.isArray(index.entries) || index.entries.length === 0 || index.entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+    throw new RuntimeImageContractError("runtime manual index entries are invalid");
+  }
+  if (typeof index.manual_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(index.manual_sha256)) throw new RuntimeImageContractError("runtime manual index manual_sha256 is invalid");
+  if (index.index_sha256 !== undefined && (typeof index.index_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(index.index_sha256))) {
+    throw new RuntimeImageContractError("runtime manual index index_sha256 is invalid");
+  }
+  return {
+    contract: RUNTIME_MANUAL_CONTRACT,
+    image_key: index.image_key,
+    manual_version: index.manual_version,
+    path: RUNTIME_MANUAL_INDEX_PATH,
+    entries: index.entries as Array<Record<string, unknown>>,
+    manual_sha256: index.manual_sha256,
+    ...(typeof index.index_sha256 === "string" ? { index_sha256: index.index_sha256 } : {}),
+  };
+}
+
 /**
  * 解析运行时 tool-manifest。部分已发布 OH 镜像在合法 JSON 后多了字面量 `\n`
  *（Dockerfile 单引号里写了 +"\\n"），严格 parse 会报
  * "Unexpected non-whitespace character after JSON"。
  */
-export function parseToolManifest(raw: string): { contract?: string } {
+export function parseToolManifest(raw: string): { contract?: string; manual?: RuntimeManualMetadata; [key: string]: unknown } {
   const text = raw.replace(/^\uFEFF/, "").trim();
   try {
-    return JSON.parse(text) as { contract?: string };
+    const manifest = JSON.parse(text) as Record<string, unknown>;
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new RuntimeImageContractError("tool manifest must be an object");
+    return { ...manifest, ...(manifest.manual === undefined ? {} : { manual: parseRuntimeManualMetadata(manifest.manual) }) };
   } catch (first) {
     const stripped = text.replace(/(?:\\n)+\s*$/g, "").trim();
     if (stripped !== text) {
       try {
-        return JSON.parse(stripped) as { contract?: string };
+        const manifest = JSON.parse(stripped) as Record<string, unknown>;
+        if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new RuntimeImageContractError("tool manifest must be an object");
+        return { ...manifest, ...(manifest.manual === undefined ? {} : { manual: parseRuntimeManualMetadata(manifest.manual) }) };
       } catch {
         /* fall through */
       }
@@ -75,7 +161,9 @@ export function parseToolManifest(raw: string): { contract?: string } {
         else if (ch === "}") {
           depth--;
           if (depth === 0) {
-            return JSON.parse(text.slice(start, i + 1)) as { contract?: string };
+            const manifest = JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
+            if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new RuntimeImageContractError("tool manifest must be an object");
+            return { ...manifest, ...(manifest.manual === undefined ? {} : { manual: parseRuntimeManualMetadata(manifest.manual) }) };
           }
         }
       }

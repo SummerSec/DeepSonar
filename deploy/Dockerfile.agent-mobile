@@ -37,7 +37,7 @@ ARG PYTHON_VERSION=3.12.13
 ARG FRIDA_TOOLS_VERSION=14.10.4
 ARG OBJECTION_VERSION=1.12.5
 ARG ANDROGUARD_VERSION=4.1.4
-ARG DROIDASC_VERSION=0.1.1
+ARG DROIDASC_VERSION=0.1.1.post1
 ARG LIEF_VERSION=1.0.0
 ARG BINUTILS_VERSION=2.40-2
 ARG RADARE2_VERSION=6.2.0
@@ -210,6 +210,16 @@ RUN set -eux; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
 
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-mobile \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
 ENV IS_SANDBOX=1 \
     JAVA_HOME=/opt/deepsonar/jdks/17 \
     ADB_HOME=/opt/deepsonar/platform-tools \
@@ -219,18 +229,13 @@ ENV IS_SANDBOX=1 \
     PATH=/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-mobile /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
-
 FROM scratch
 ARG OCI_TITLE="DeepSonar Mobile"
 ARG OCI_DESCRIPTION="Project-opt-in mobile runtime for Android, iOS host tools, OpenHarmony HAP/hdc, lightweight .so analysis, and pinned ApkCheckPack. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers or full OH SDK."
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="mobile" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="${OCI_TITLE}" \
       org.opencontainers.image.description="${OCI_DESCRIPTION}" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

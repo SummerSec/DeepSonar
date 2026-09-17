@@ -24,7 +24,7 @@ import {
   type OpenSandboxRunOptions,
   type OpenSandboxSession,
 } from "./opensandbox.js";
-import { RuntimeImageContractError } from "./runtime-shared.js";
+import { RUNTIME_MANUAL_CONTRACT, RUNTIME_MANUAL_INDEX_PATH, RuntimeImageContractError } from "./runtime-shared.js";
 import { isManagedRuntimeResource } from "./opensandbox-version.js";
 
 function fakeSession(id = "sbx-1"): OpenSandboxSession & {
@@ -249,6 +249,92 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   await host.uploadFile("hello", "/workspace/note.txt");
   assert.deepEqual(client.session.files, [{ path: "/workspace/note.txt", bytes: 5 }]);
   assert.equal(await runner.isAlive(handle), true);
+});
+
+test("OpenSandbox official provision reads and verifies the offline runtime manual", async () => {
+  const session = fakeSession();
+  const manualHash = "b".repeat(64);
+  const metadata = {
+    contract: RUNTIME_MANUAL_CONTRACT,
+    path: RUNTIME_MANUAL_INDEX_PATH,
+    version: "2026.09.17",
+    sha256: manualHash,
+    count: 1,
+  };
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    session.commands.push(command);
+    session.runs.push({ command, options });
+    if (command.includes(`cat ${RUNTIME_MANUAL_INDEX_PATH}`)) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          contract: RUNTIME_MANUAL_CONTRACT,
+          image_key: "deepsonar-base",
+          manual_version: metadata.version,
+          path: RUNTIME_MANUAL_INDEX_PATH,
+          entries: [{ id: "jq", doc: "tools/jq.md" }],
+          manual_sha256: manualHash,
+        }),
+        stderr: "",
+      };
+    }
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", manual: metadata }), stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+    expectedToolsManifestSha256: "aa".repeat(32),
+    requireRuntimeManual: true,
+    expectedRuntimeManual: metadata,
+    expectedRuntimeImageKey: "deepsonar-base",
+  });
+  assert.equal(handle.sandboxId, "sbx-1");
+  assert.ok(session.commands.some((command) => command.includes(`cat ${RUNTIME_MANUAL_INDEX_PATH}`)));
+});
+
+test("OpenSandbox official provision rejects a missing manual index", async () => {
+  const session = fakeSession();
+  const manualHash = "c".repeat(64);
+  const metadata = {
+    contract: RUNTIME_MANUAL_CONTRACT,
+    path: RUNTIME_MANUAL_INDEX_PATH,
+    version: "2026.09.17",
+    sha256: manualHash,
+    count: 1,
+  };
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    session.commands.push(command);
+    session.runs.push({ command, options });
+    if (command.includes(`cat ${RUNTIME_MANUAL_INDEX_PATH}`)) return { exitCode: 1, stdout: "", stderr: "missing" };
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", manual: metadata }), stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(
+    runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+      requireRuntimeManual: true,
+    }),
+    (error) => error instanceof RuntimeImageContractError && /missing readable runtime manual index/.test(error.message),
+  );
 });
 
 function okDockerInject(): GatewayHostsInjectResult {
