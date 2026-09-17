@@ -93,6 +93,7 @@ export const PRESETS = {
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
       "tsconfig.base.json",
+      "packages/runtime-manual-contract",
       "apps/image-admission",
     ],
     platforms: "linux/amd64",

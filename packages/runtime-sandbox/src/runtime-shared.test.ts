@@ -26,7 +26,7 @@ test("tool manifest keeps legacy manifests readable and parses manual metadata",
   assert.deepEqual(parseToolManifest(JSON.stringify({ contract: "deepsonar.runtime/v1", manual: validManual() })).manual, validManual());
 });
 
-test("runtime manual metadata rejects a wrong path or digest", () => {
+test("runtime manual metadata rejects a wrong path, digest, or empty count", () => {
   assert.throws(
     () => parseRuntimeManualMetadata({ ...validManual(), path: "/tmp/manual.json" }),
     (error) => error instanceof RuntimeImageContractError && /path is invalid/.test(error.message),
@@ -34,6 +34,10 @@ test("runtime manual metadata rejects a wrong path or digest", () => {
   assert.throws(
     () => parseRuntimeManualMetadata({ ...validManual(), sha256: "A".repeat(64) }),
     (error) => error instanceof RuntimeImageContractError && /sha256 is invalid/.test(error.message),
+  );
+  assert.throws(
+    () => parseRuntimeManualMetadata({ ...validManual(), count: 0 }),
+    (error) => error instanceof RuntimeImageContractError && /count is invalid/.test(error.message),
   );
 });
 

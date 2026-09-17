@@ -4,6 +4,21 @@
 
 import path from "node:path";
 
+import {
+  RUNTIME_MANUAL_CONTRACT,
+  RUNTIME_MANUAL_INDEX_PATH,
+  RUNTIME_MANUAL_LABEL,
+  RUNTIME_MANUAL_ROOT_PATH,
+  RuntimeManualContractError,
+  assertRuntimeManualLabel,
+  validateRuntimeManualIndex,
+  validateRuntimeManualMetadata,
+  validateRuntimeManualPair,
+  type RuntimeManualIndex,
+  type RuntimeManualMetadata,
+} from "@deepsonar/runtime-manual-contract";
+
+
 export const DEEPSONAR_GATEWAY_PROXY_HOST = "deepsonar-gateway-proxy";
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
@@ -36,55 +51,32 @@ export class RuntimeImageContractError extends Error {
   }
 }
 
-/** Offline runtime manual contract shared by image admission and workers. */
-export const RUNTIME_MANUAL_CONTRACT = "deepsonar.runtime.manuals/v1" as const;
-export const RUNTIME_MANUAL_INDEX_PATH = "/opt/deepsonar/manuals/index.json" as const;
-export const RUNTIME_MANUAL_ROOT_PATH = "/opt/deepsonar/manuals" as const;
-export const RUNTIME_MANUAL_LABEL = "io.deepsonar.manuals" as const;
+export {
+  RUNTIME_MANUAL_CONTRACT,
+  RUNTIME_MANUAL_INDEX_PATH,
+  RUNTIME_MANUAL_LABEL,
+  RUNTIME_MANUAL_ROOT_PATH,
+  assertRuntimeManualLabel,
+  validateRuntimeManualPair,
+  type RuntimeManualIndex,
+  type RuntimeManualMetadata,
+};
 
-export interface RuntimeManualMetadata {
-  contract: typeof RUNTIME_MANUAL_CONTRACT;
-  path: typeof RUNTIME_MANUAL_INDEX_PATH;
-  version: string;
-  sha256: string;
-  count: number;
-}
-
-export interface RuntimeManualIndex {
-  contract: typeof RUNTIME_MANUAL_CONTRACT;
-  image_key: string;
-  manual_version: string;
-  path: typeof RUNTIME_MANUAL_INDEX_PATH;
-  entries: Array<Record<string, unknown>>;
-  manual_sha256: string;
-  index_sha256?: string;
-}
-
-function assertManualObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new RuntimeImageContractError(`${label} must be an object`);
+function asImageContractError(error: unknown): never {
+  if (error instanceof RuntimeManualContractError) {
+    throw new RuntimeImageContractError(error.message.replace(/^runtime manual: /, "runtime manual "));
   }
-  return value as Record<string, unknown>;
+  throw error instanceof Error ? error : new Error(String(error));
 }
 
 /** Parse and validate the manifest's manual metadata, if present. */
 export function parseRuntimeManualMetadata(value: unknown): RuntimeManualMetadata | undefined {
   if (value === undefined) return undefined;
-  const raw = assertManualObject(value, "runtime manual metadata");
-  const unknown = Object.keys(raw).filter((key) => !["contract", "path", "version", "sha256", "count"].includes(key));
-  if (unknown.length > 0) throw new RuntimeImageContractError(`runtime manual metadata contains unknown fields: ${unknown.join(", ")}`);
-  if (raw.contract !== RUNTIME_MANUAL_CONTRACT) throw new RuntimeImageContractError("runtime manual contract is invalid");
-  if (raw.path !== RUNTIME_MANUAL_INDEX_PATH) throw new RuntimeImageContractError("runtime manual path is invalid");
-  if (typeof raw.version !== "string" || raw.version.trim() === "") throw new RuntimeImageContractError("runtime manual version is invalid");
-  if (typeof raw.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(raw.sha256)) throw new RuntimeImageContractError("runtime manual sha256 is invalid");
-  if (!Number.isSafeInteger(raw.count) || (raw.count as number) < 0) throw new RuntimeImageContractError("runtime manual count is invalid");
-  return {
-    contract: RUNTIME_MANUAL_CONTRACT,
-    path: RUNTIME_MANUAL_INDEX_PATH,
-    version: raw.version,
-    sha256: raw.sha256,
-    count: raw.count as number,
-  };
+  try {
+    return validateRuntimeManualMetadata(value);
+  } catch (error) {
+    asImageContractError(error);
+  }
 }
 
 /** Parse the machine-readable manual index read from a provisioned worker. */
@@ -95,27 +87,11 @@ export function parseRuntimeManualIndex(raw: string): RuntimeManualIndex {
   } catch (error) {
     throw new RuntimeImageContractError(`runtime manual index is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const index = assertManualObject(value, "runtime manual index");
-  if (index.contract !== RUNTIME_MANUAL_CONTRACT) throw new RuntimeImageContractError("runtime manual index contract is invalid");
-  if (typeof index.image_key !== "string" || index.image_key.trim() === "") throw new RuntimeImageContractError("runtime manual index image_key is invalid");
-  if (typeof index.manual_version !== "string" || index.manual_version.trim() === "") throw new RuntimeImageContractError("runtime manual index manual_version is invalid");
-  if (index.path !== RUNTIME_MANUAL_INDEX_PATH) throw new RuntimeImageContractError("runtime manual index path is invalid");
-  if (!Array.isArray(index.entries) || index.entries.length === 0 || index.entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
-    throw new RuntimeImageContractError("runtime manual index entries are invalid");
+  try {
+    return validateRuntimeManualIndex(value);
+  } catch (error) {
+    asImageContractError(error);
   }
-  if (typeof index.manual_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(index.manual_sha256)) throw new RuntimeImageContractError("runtime manual index manual_sha256 is invalid");
-  if (index.index_sha256 !== undefined && (typeof index.index_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(index.index_sha256))) {
-    throw new RuntimeImageContractError("runtime manual index index_sha256 is invalid");
-  }
-  return {
-    contract: RUNTIME_MANUAL_CONTRACT,
-    image_key: index.image_key,
-    manual_version: index.manual_version,
-    path: RUNTIME_MANUAL_INDEX_PATH,
-    entries: index.entries as Array<Record<string, unknown>>,
-    manual_sha256: index.manual_sha256,
-    ...(typeof index.index_sha256 === "string" ? { index_sha256: index.index_sha256 } : {}),
-  };
 }
 
 /**

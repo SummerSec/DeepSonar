@@ -83,6 +83,7 @@ RUN /opt/deepsonar/bin/chrome-test-env.sh --check
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="chrome-test" \
+      io.deepsonar.image-key="deepsonar-chrome-test" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
       io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar Chrome Test" \

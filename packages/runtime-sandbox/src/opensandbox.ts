@@ -602,6 +602,14 @@ export class OpenSandboxRunner implements SandboxRunner {
       }
       const expectedManual = input.expectedRuntimeManual;
       if (input.requireRuntimeManual || expectedManual) {
+        if (input.requireRuntimeManual) {
+          if (!expectedManual
+            || typeof expectedManual.version !== "string" || expectedManual.version.trim() === ""
+            || typeof expectedManual.sha256 !== "string" || expectedManual.sha256.trim() === ""
+            || expectedManual.count === undefined || expectedManual.count === null) {
+            throw new RuntimeImageContractError("official Job snapshot is missing frozen runtime manual metadata");
+          }
+        }
         const manual = manifest.manual;
         if (!manual) throw new RuntimeImageContractError("runtime image missing runtime manual metadata");
         if (manual.contract !== RUNTIME_MANUAL_CONTRACT || manual.path !== RUNTIME_MANUAL_INDEX_PATH) {

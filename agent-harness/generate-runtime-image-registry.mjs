@@ -318,7 +318,7 @@ function assertV1Registry(registry) {
       const platforms = assertPlatforms(version.platforms, `${image.image_key}.${version.version}`, false);
       if (platforms && platforms.length !== 1) fail(`${image.image_key} v1 每个 version 只能有一个 platform`);
       assertSize(version.size_bytes, `${image.image_key}.${version.version}`, false);
-      assertManual(version.manual, `${image.image_key}.${version.version}`);
+      assertManual(version.manual, `${image.image_key}.${version.version}`, true);
       const existing = seenRefs.get(parsed.normalized);
       if (!existing) {
         seenRefs.set(parsed.normalized, { imageKey: image.image_key, platforms: platforms ? new Set(platforms) : null });
@@ -351,7 +351,7 @@ function assertV2Registry(registry) {
       assertDigest(version.digest, label);
       assertPlatforms(version.platforms, label, true);
       assertSize(version.size_bytes, label, true);
-      assertManual(version.manual, label);
+      assertManual(version.manual, label, true);
       if (!version.registry_refs || typeof version.registry_refs !== "object" || Array.isArray(version.registry_refs)) fail(`${label} registry_refs 无效`);
       const channels = Object.keys(version.registry_refs);
       if (channels.length === 0 || channels.some((channel) => !CHANNELS.includes(channel))) fail(`${label} registry_refs 含未知或空 channel`);

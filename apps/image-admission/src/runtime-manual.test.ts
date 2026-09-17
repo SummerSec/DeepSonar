@@ -34,4 +34,5 @@ test("official image without the canonical manual label fails closed", () => {
   assert.throws(() => assertRuntimeManualLabel({ "io.deepsonar.manuals": "/tmp/index.json" }, false), /must point/);
   assert.throws(() => validateRuntimeManualPair(metadata, { ...index, manual_sha256: "b".repeat(64) }), /does not match metadata/);
   assert.throws(() => validateRuntimeManualPair(metadata, index, "deepsonar-mobile"), /image_key does not match/);
+  assert.throws(() => validateRuntimeManualPair({ ...metadata, count: 0 }, index), /count is invalid/);
 });

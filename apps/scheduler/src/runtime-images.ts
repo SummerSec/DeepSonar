@@ -804,7 +804,18 @@ async function loadBundledRuntimeImageRegistry(): Promise<RuntimeImageRegistry> 
   for (const filePath of candidates) {
     try {
       const file = await readFile(filePath, "utf8");
-      return parseRegistry(JSON.parse(file) as unknown);
+      const raw = JSON.parse(file) as { images?: Array<{ versions?: unknown[] }> };
+      // Pre-manual catalog rows (e.g. v0.4.5) are product skeletons only: drop
+      // versions that lack offline manuals so the fail-closed parser can load.
+      if (Array.isArray(raw.images)) {
+        for (const image of raw.images) {
+          if (!Array.isArray(image.versions)) continue;
+          image.versions = image.versions.filter((version) => {
+            return Boolean(version && typeof version === "object" && !Array.isArray(version) && (version as { manual?: unknown }).manual);
+          });
+        }
+      }
+      return parseRegistry(raw);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw new Error(`读取运行时镜像注册表失败（${filePath}）：${error instanceof Error ? error.message : String(error)}`);
@@ -2496,10 +2507,14 @@ async function selectRuntimeImageSnapshot(
     );
   }
   const manual = runtimeManualFromScanSummary(row.scan_summary_json);
+  const imageKey = String(row.image_key);
+  if ((row.official === true || isOfficialRuntimeImageKey(imageKey)) && !manual) {
+    throw new Error(`trusted official runtime image is missing offline manual metadata (key=${imageKey})`);
+  }
   return {
     runtime_image_id: String(row.runtime_image_id),
     runtime_image_version_id: String(row.runtime_image_version_id),
-    image_key: String(row.image_key),
+    image_key: imageKey,
     image_ref: resolvedRef,
     image_digest: digest,
     image_version: row.version ? String(row.version) : null,

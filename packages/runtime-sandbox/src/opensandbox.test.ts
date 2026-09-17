@@ -332,8 +332,27 @@ test("OpenSandbox official provision rejects a missing manual index", async () =
       limits,
       expectedContract: "deepsonar.runtime/v1",
       requireRuntimeManual: true,
+      expectedRuntimeManual: metadata,
+      expectedRuntimeImageKey: "deepsonar-base",
     }),
     (error) => error instanceof RuntimeImageContractError && /missing readable runtime manual index/.test(error.message),
+  );
+});
+
+test("OpenSandbox official provision rejects Jobs that omit frozen manual metadata", async () => {
+  const session = fakeSession();
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(
+    runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+      requireRuntimeManual: true,
+    }),
+    (error) => error instanceof RuntimeImageContractError && /missing frozen runtime manual metadata/.test(error.message),
   );
 });
 

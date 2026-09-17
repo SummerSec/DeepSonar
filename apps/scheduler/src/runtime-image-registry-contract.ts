@@ -84,8 +84,8 @@ export interface RuntimeImageRegistryVersion {
   /** Optional release evidence for every emitted channel reference. */
   registry_evidence?: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>>;
   tools_manifest_sha256?: string;
-  /** Offline Worker manual metadata bound to the image version. */
-  manual?: {
+  /** Offline Worker manual metadata bound to the image version (required for official catalog). */
+  manual: {
     contract: "deepsonar.runtime.manuals/v1";
     path: "/opt/deepsonar/manuals/index.json";
     version: string;
@@ -434,8 +434,9 @@ function parseToolsManifest(value: unknown, imageKey: string, version: string): 
   return value;
 }
 
-function parseManual(value: unknown, imageKey: string, version: string): RuntimeImageRegistryVersion["manual"] | undefined {
-  if (value === undefined) return undefined;
+function parseManual(value: unknown, imageKey: string, version: string): RuntimeImageRegistryVersion["manual"] {
+  // Official catalog versions must ship offline manuals; missing metadata fails closed.
+  if (value === undefined) invalid(`${imageKey} ${version} manual is required`);
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid(`${imageKey} ${version} manual must be an object`);
   const manual = value as Record<string, unknown>;
   assertKnownKeys(manual, ["contract", "path", "version", "sha256", "count"], `${imageKey} ${version} manual`);
@@ -443,7 +444,7 @@ function parseManual(value: unknown, imageKey: string, version: string): Runtime
   if (manual.path !== "/opt/deepsonar/manuals/index.json") invalid(`${imageKey} ${version} manual path is invalid`);
   if (typeof manual.version !== "string" || manual.version.trim() === "") invalid(`${imageKey} ${version} manual version is invalid`);
   if (typeof manual.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(manual.sha256)) invalid(`${imageKey} ${version} manual sha256 is invalid`);
-  if (!Number.isSafeInteger(manual.count) || (manual.count as number) < 0) invalid(`${imageKey} ${version} manual count is invalid`);
+  if (!Number.isSafeInteger(manual.count) || (manual.count as number) <= 0) invalid(`${imageKey} ${version} manual count is invalid`);
   return {
     contract: "deepsonar.runtime.manuals/v1",
     path: "/opt/deepsonar/manuals/index.json",
@@ -524,7 +525,7 @@ function parseV1Version(item: Record<string, unknown>, imageKey: string, index: 
     ...(platforms ? { platforms } : {}),
     ...(sizeBytes !== undefined ? { size_bytes: sizeBytes } : {}),
     ...(toolsManifest ? { tools_manifest_sha256: toolsManifest } : {}),
-    ...(manual ? { manual } : {}),
+    manual,
   };
 }
 
@@ -581,7 +582,7 @@ function parseV2Version(item: Record<string, unknown>, imageKey: string, index: 
     registry_refs: refs,
     ...(registryEvidence ? { registry_evidence: registryEvidence } : {}),
     ...(toolsManifest ? { tools_manifest_sha256: toolsManifest } : {}),
-    ...(manual ? { manual } : {}),
+    manual,
   };
 }
 

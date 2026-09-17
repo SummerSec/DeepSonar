@@ -195,6 +195,9 @@ function assertDockerfile(imageKey, entries) {
   if (!source.includes("materialize-runtime-manuals.mjs")) fail(`${imageKey} Dockerfile does not run materializer`);
   if (!source.includes("--tool-manifest") || !source.includes("--image-key")) fail(`${imageKey} Dockerfile materializer is not bound to final tool manifest`);
   if (!source.includes('io.deepsonar.manuals="/opt/deepsonar/manuals/index.json"')) fail(`${imageKey} Dockerfile is missing OCI manual label`);
+  if (!source.includes(`io.deepsonar.image-key="${imageKey}"`) && !source.includes('io.deepsonar.image-key="deepsonar-${TOOLSET}"')) {
+    fail(`${imageKey} Dockerfile is missing OCI image-key label`);
+  }
   const inlineTools = source.match(/(?:tools|\\"tools\\"):\[(.*?)\]/s)?.[1];
   if (inlineTools) {
     const manifestTools = [...inlineTools.matchAll(/\\"([^\"]+)\\"/g)].map((match) => match[1]);

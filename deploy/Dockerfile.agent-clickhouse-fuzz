@@ -74,6 +74,7 @@ RUN /opt/deepsonar/bin/clickhouse-fuzz-env.sh --check
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="clickhouse-fuzz" \
+      io.deepsonar.image-key="deepsonar-clickhouse-fuzz" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
       io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar ClickHouse Fuzz" \

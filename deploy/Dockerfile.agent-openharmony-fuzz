@@ -72,6 +72,7 @@ WORKDIR /workspace
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="openharmony-fuzz" \
+      io.deepsonar.image-key="deepsonar-openharmony-fuzz" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
       io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar OpenHarmony Fuzz" \

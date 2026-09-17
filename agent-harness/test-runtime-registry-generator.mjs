@@ -176,16 +176,25 @@ try {
     version.registry_evidence.dockerhub = { available: false, provenance: "unavailable", reason: "credentials_missing" };
   });
 
-  // --check remains able to read a historical v1 catalog.
+  // --check accepts a historical v1 catalog only when offline manuals are present.
   const v1Path = path.join(tempRoot, "legacy-v1.json");
   writeFileSync(v1Path, JSON.stringify({
+    schema: "deepsonar.registry/v1",
+    images: template.images.map((image) => ({
+      ...image,
+      versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/${image.image_key}@${digest}`, platforms: ["linux/amd64"], size_bytes: 42, manual: { ...manual } }],
+    })),
+  }));
+  execFileSync(process.execPath, [generator, "--check", v1Path], { stdio: "pipe" });
+  const v1MissingManualPath = path.join(tempRoot, "legacy-v1-missing-manual.json");
+  writeFileSync(v1MissingManualPath, JSON.stringify({
     schema: "deepsonar.registry/v1",
     images: template.images.map((image) => ({
       ...image,
       versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/${image.image_key}@${digest}`, platforms: ["linux/amd64"], size_bytes: 42 }],
     })),
   }));
-  execFileSync(process.execPath, [generator, "--check", v1Path], { stdio: "pipe" });
+  assert.throws(() => execFileSync(process.execPath, [generator, "--check", v1MissingManualPath], { stdio: "pipe" }), /manual/i);
 
   const duplicateV1Path = path.join(tempRoot, "legacy-v1-duplicate.json");
   const duplicateImages = JSON.parse(readFileSync(v1Path, "utf8"));
@@ -194,12 +203,12 @@ try {
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateV1Path], { stdio: "pipe" }), /duplicate/i);
   const duplicateAliasPath = path.join(tempRoot, "legacy-v1-overlap.json");
   const duplicateAlias = JSON.parse(readFileSync(v1Path, "utf8"));
-  duplicateAlias.images[0].versions.push({ version: "0.1.1-linux-amd64", image_ref: duplicateAlias.images[0].versions[0].image_ref, platforms: ["linux/amd64"], size_bytes: 42 });
+  duplicateAlias.images[0].versions.push({ version: "0.1.1-linux-amd64", image_ref: duplicateAlias.images[0].versions[0].image_ref, platforms: ["linux/amd64"], size_bytes: 42, manual: { ...manual } });
   writeFileSync(duplicateAliasPath, JSON.stringify(duplicateAlias));
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateAliasPath], { stdio: "pipe" }), /duplicate/i);
   const duplicateMissingPlatformPath = path.join(tempRoot, "legacy-v1-missing-platform.json");
   const duplicateMissingPlatform = JSON.parse(readFileSync(v1Path, "utf8"));
-  duplicateMissingPlatform.images[0].versions.push({ version: "0.1.1", image_ref: duplicateMissingPlatform.images[0].versions[0].image_ref });
+  duplicateMissingPlatform.images[0].versions.push({ version: "0.1.1", image_ref: duplicateMissingPlatform.images[0].versions[0].image_ref, manual: { ...manual } });
   writeFileSync(duplicateMissingPlatformPath, JSON.stringify(duplicateMissingPlatform));
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateMissingPlatformPath], { stdio: "pipe" }), /duplicate/i);
 
