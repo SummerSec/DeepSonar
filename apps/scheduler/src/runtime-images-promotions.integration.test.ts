@@ -375,9 +375,9 @@ if (!testDatabaseUrl) {
           (${pinOkVersionId}, ${officialId}, '0.1.40', ${pinOkAcr}, ${pinOkAcr}, ${pinOkDigest},
            ${sql.json([hostPlatform] as never)}, 'trusted', NULL, ${sql.json(FIXTURE_SCAN_SUMMARY as never)}),
           (${oldThirdVersionId}, ${thirdPartyId}, '9.0.0', ${`example.local/${thirdPartyKey}@${thirdOldDigest}`},
-           ${`example.local/${thirdPartyKey}@${thirdOldDigest}`}, ${thirdOldDigest}, ${sql.json([hostPlatform] as never)}, 'disabled', NULL, NULL),
+           ${`example.local/${thirdPartyKey}@${thirdOldDigest}`}, ${thirdOldDigest}, ${sql.json([hostPlatform] as never)}, 'disabled', NULL, ${sql.json({ source: "fixture" } as never)}),
           (${newThirdVersionId}, ${thirdPartyId}, '9.1.0', ${`example.local/${thirdPartyKey}@${thirdNewDigest}`},
-           ${`example.local/${thirdPartyKey}@${thirdNewDigest}`}, ${thirdNewDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now(), NULL)`;
+           ${`example.local/${thirdPartyKey}@${thirdNewDigest}`}, ${thirdNewDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now(), ${sql.json({ source: "fixture" } as never)})`;
       await sql`
         INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
         VALUES (${pinOkVersionId}, 'aliyun-acr', ${pinOkAcr}, ${pinOkAcr}, ${pinOkDigest}, ${sql.json({ source: "fixture" } as never)})`;
