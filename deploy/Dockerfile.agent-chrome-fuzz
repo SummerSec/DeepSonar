@@ -72,11 +72,7 @@ RUN set -eux; \
   mkdir -p /tmp/v8-checkout; \
   cd /tmp/v8-checkout; \
   gclient config --name src "$V8_REPOSITORY"; \
-  if ! gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; then \
-    echo "shallow gclient sync failed; clearing partial checkout and retrying without --shallow" >&2; \
-    rm -rf /tmp/v8-checkout/src /tmp/v8-checkout/_bad_scm; \
-    gclient sync --revision "src@$V8_COMMIT" --no-history; \
-  fi; \
+  gclient sync --revision "src@$V8_COMMIT" --no-history --shallow; \
   cd src; \
   git init third_party/deepsonar-compiler-rt; \
   git -C third_party/deepsonar-compiler-rt remote add origin "$COMPILER_RT_REPOSITORY"; \
@@ -146,11 +142,19 @@ RUN set -eux; \
   test -x out/release/v8_json_libfuzzer; \
   test -f out/release/libsanitizer_shared_hooks.so
 
+
+# #588: reuse the last published chrome-fuzz image for V8 binaries so manuals-only
+# rebuilds do not cold-sync gclient (shallow sync is flaky on GH runners). Keep the
+# v8-builder stage above for source rebuilds; override V8_ARTIFACTS_IMAGE to that
+# stage locally if you need a from-source build.
+ARG V8_ARTIFACTS_IMAGE=ghcr.io/summersec/deepsonar-chrome-fuzz@sha256:39c9059a9f409ad31c1a4d611a2c5b340133213f9ecc92d6e3920b550e2e9342
+FROM ${V8_ARTIFACTS_IMAGE} AS v8-artifacts
+
 FROM runtime-rootfs AS runtime-final
 ARG TARGETARCH
-COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/d8 /opt/deepsonar/bin/d8
-COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer
-COPY --from=v8-builder --chmod=0755 /tmp/v8-checkout/src/out/release/libsanitizer_shared_hooks.so /opt/deepsonar/lib/libsanitizer_shared_hooks.so
+COPY --from=v8-artifacts --chmod=0755 /opt/deepsonar/bin/d8 /opt/deepsonar/bin/d8
+COPY --from=v8-artifacts --chmod=0755 /opt/deepsonar/bin/v8_json_libfuzzer /opt/deepsonar/bin/v8_json_libfuzzer
+COPY --from=v8-artifacts --chmod=0755 /opt/deepsonar/lib/libsanitizer_shared_hooks.so /opt/deepsonar/lib/libsanitizer_shared_hooks.so
 ENV LD_LIBRARY_PATH=/opt/deepsonar/lib
 
 COPY deploy/chrome-fuzz-env.sh /tmp/chrome-fuzz-env.sh
