@@ -1,0 +1,34 @@
+# Illegal K8s gateway fixture (#583): gateway without required address.
+[server]
+host = "0.0.0.0"
+port = 8080
+max_sandbox_timeout_seconds = 86400
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "kubernetes"
+execd_image = "docker.io/opensandbox/execd@sha256:d358f23cb268779eaa71433ce0654a71cd9d016d429e57d7f245ad8f91b8ff7a"
+
+[kubernetes]
+namespace = "deepsonar-opensandbox"
+workload_provider = "batchsandbox"
+image_pull_policy = "IfNotPresent"
+batchsandbox_template_file = "/etc/opensandbox/batchsandbox-template.yaml"
+
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+# address intentionally omitted for schema-gate coverage
+
+[ingress.gateway.route]
+mode = "header"
+
+[store]
+type = "sqlite"
+path = "/tmp/opensandbox-schema-gate-k8s-missing-address.db"
+
+[renew_intent]
+enabled = false
