@@ -85,9 +85,9 @@ for (const entry of index.entries) {
   regular(absolute, entry.id + " documentation");
   const content = fs.readFileSync(absolute, "utf8");
   if (content.trim().length < 80) fail(entry.id + " documentation is too short");
-  if (/^\\s*(?:see|refer to|reference|参考|参见|详见|见)\\s+base\\b/im.test(content)) fail(entry.id + " delegates to base manual");
+  if (/^\s*(?:see|refer to|reference|参考|参见|详见|见)\s+base\b/im.test(content)) fail(entry.id + " delegates to base manual");
   for (const heading of ["使用场景", "选型依据", "前置条件", "调用方式", "输出解释", "失败处理", "组合流程", "证据留存", "版本与限制"]) {
-    if (!content.split(/\\r?\\n/).some((line) => /^#{1,6}\\s+/.test(line.trim()) && line.toLowerCase().includes(heading.toLowerCase()))) fail(entry.id + " missing section " + heading);
+    if (!content.split(/\r?\n/).some((line) => /^#{1,6}\s+/.test(line.trim()) && line.toLowerCase().includes(heading.toLowerCase()))) fail(entry.id + " missing section " + heading);
   }
   files.push({ path: doc, absolute });
 }

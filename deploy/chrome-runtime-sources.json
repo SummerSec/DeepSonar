@@ -39,6 +39,7 @@
     "version": "15.1.206.10",
     "depot_tools_repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
     "depot_tools_commit": "921e61b35fbc5e97b14250a118e363ec05078089",
+    "depot_tools_git_compat": "Automatic updates are disabled so the pinned gclient remains compatible with Debian Git 2.39.",
     "compiler_rt_repository": "https://github.com/llvm/llvm-project.git",
     "compiler_rt_commit": "53d18800eda3b7407e53366f27ca78e922c6e0db",
     "target": "d8",
