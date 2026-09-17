@@ -9,14 +9,14 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("waiting evidence round wakes Hub once and becomes runnable after review/test evidence", async () => {
+  test("waiting evidence round wakes Hub for never-verified pending then progresses after review/test evidence", async () => {
     // Install the explicit URL before importing scheduler modules so a local
     // .env can never redirect this test to an existing database.
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.AGENT_MODE = "fake";
 
     const { migrate, sql } = await import("./db.js");
-    const { fixedPriorityForJob, maybeTriggerHub } = await import("./core.js");
+    const { fixedPriorityForJob, maybeTriggerHub, patchCanvasConvergence, readCanvasConvergence } = await import("./core.js");
     const { buildReportInput, maybeDispatchReport, refreshTaskReport } = await import("./report.js");
     const {
       canvasFindingsConverged,
@@ -91,11 +91,42 @@ if (!testDatabaseUrl) {
       await sql`
         UPDATE jobs SET status = 'succeeded', finished_at = now()
         WHERE canvas_id = ${canvasId} AND type = 'hub_reason'`;
+      // #574: never-verified pending may re-wake up to N hub attempts even when
+      // the evidence signature is unchanged (signature gate alone must not stall).
       await sql.begin(async (tx) => maybeTriggerHub(tx as unknown as typeof sql, dummyJob));
-      const [{ no_churn_count }] = await sql`
-        SELECT COUNT(*)::int AS no_churn_count FROM jobs
+      const [{ second_hub_count }] = await sql`
+        SELECT COUNT(*)::int AS second_hub_count FROM jobs
         WHERE canvas_id = ${canvasId} AND type = 'hub_reason'`;
-      assert.equal(no_churn_count, 1);
+      assert.equal(second_hub_count, 2);
+      await sql`
+        UPDATE jobs SET status = 'succeeded', finished_at = now()
+        WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'pending'`;
+      // Past escalate floor: no third Hub; canvas stops with paused_reason instead.
+      await sql.begin(async (tx) => maybeTriggerHub(tx as unknown as typeof sql, dummyJob));
+      const [{ stalled_hub_count }] = await sql`
+        SELECT COUNT(*)::int AS stalled_hub_count FROM jobs
+        WHERE canvas_id = ${canvasId} AND type = 'hub_reason'`;
+      assert.equal(stalled_hub_count, 2);
+      const conv = await readCanvasConvergence(sql, canvasId);
+      assert.equal(conv.auto_stopped, true);
+      assert.match(String(conv.paused_reason ?? ""), /^verify_unclosed:/);
+      // Resume for the evidence-progress path below (manual/force clears stop).
+      await patchCanvasConvergence(sql, canvasId, {
+        auto_stopped: false,
+        paused_reason: undefined,
+        paused_at: undefined,
+      });
+      // Finding was escalated to needs_human on stall — reopen as pending waiting_evidence
+      // so the rest of this fixture can still exercise evidence → verify progress.
+      await sql`
+        UPDATE findings SET verify_status = 'pending', updated_at = now()
+        WHERE id = ${findingId}`;
+      await sql`
+        UPDATE finding_verification_rounds
+        SET status = 'pending', final_outcome = NULL, error = NULL, finished_at = NULL,
+            requirements_json = (requirements_json - 'hub_evidence_signature') - 'hub_gate_fingerprint' - 'hub_wake_attempts'
+              || ${sql.json({ eligibility: "waiting_evidence" } as never)}
+        WHERE finding_id = ${findingId}`;
 
       const reviewJobId = randomUUID();
       await sql`
