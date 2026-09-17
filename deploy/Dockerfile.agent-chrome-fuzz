@@ -46,8 +46,11 @@ RUN set -eux; \
   install -d -m 0755 /opt/deepsonar/bin /opt/deepsonar/lib /workspace
 
 # A shallow, commit-addressed depot_tools checkout makes the source-build
-# dependency explicit. gclient then resolves V8 dependencies from the exact
-# V8 commit. The pinned Chromium sanitizer config maps use_libfuzzer=true to
+# dependency explicit. After checkout, ensure_bootstrap creates
+# python3_bin_reldir.txt while DEPOT_TOOLS_UPDATE=0 keeps the pin from
+# drifting to a tip that needs Git >=2.46. gclient then resolves V8
+# dependencies from the exact V8 commit. The pinned Chromium sanitizer
+# config maps use_libfuzzer=true to
 # -fsanitize=fuzzer-no-link. Compile compiler-rt's matching libFuzzer revision
 # inside the same GN graph. Both targets use that exact downloaded compiler;
 # arm64 is cross-compiled on its native x86_64 host rather than mixing current
@@ -70,6 +73,8 @@ RUN set -eux; \
   git -C /opt/depot_tools checkout --detach "$DEPOT_TOOLS_COMMIT"; \
   export DEPOT_TOOLS_UPDATE=0; \
   export PATH="/usr/bin:/opt/depot_tools:$PATH"; \
+  /opt/depot_tools/ensure_bootstrap; \
+  test -f /opt/depot_tools/python3_bin_reldir.txt; \
   mkdir -p /tmp/v8-checkout; \
   cd /tmp/v8-checkout; \
   gclient config --name src "$V8_REPOSITORY"; \
@@ -158,7 +163,7 @@ RUN set -eux; \
   rm -f /tmp/chrome-fuzz-env.sh /tmp/chrome-fuzz-smoke.sh; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",compiler_runtime:"V8-pinned Chromium Clang and compiler-rt target runtime closure",libfuzzer_source:"pinned compiler-rt source compiled in the V8 GN graph; Debian libfuzzer-16-dev is not linked",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089",depot_tools_git_compat:"Automatic updates are disabled so the pinned gclient remains compatible with Debian Git 2.39.",compiler_rt_commit:"53d18800eda3b7407e53366f27ca78e922c6e0db"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-fuzz",imageKey:"deepsonar-chrome-fuzz",project_opt_in:true,tools:["clang-16","clang++-16","lld-16","llvm-16","compiler-rt","libFuzzer-16","AFL++","binutils","v8-source","d8","v8_json_libfuzzer","node","claude"],fuzz:{target:"d8",libfuzzer_target:"v8_json_libfuzzer",actual:true,source:"v8",compiler_runtime:"V8-pinned Chromium Clang and compiler-rt target runtime closure",libfuzzer_source:"pinned compiler-rt source compiled in the V8 GN graph; Debian libfuzzer-16-dev is not linked",v8_commit:"792d9716fea48312ad7ce4413c538e00628b1d50",v8_version:"15.1.206.10",depot_tools_commit:"921e61b35fbc5e97b14250a118e363ec05078089",depot_tools_git_compat:"Automatic updates are disabled and ensure_bootstrap initializes the pinned checkout so gclient stays compatible with Debian Git 2.39.",compiler_rt_commit:"53d18800eda3b7407e53366f27ca78e922c6e0db"},entrypoints:{check:"/opt/deepsonar/bin/chrome-fuzz-env.sh",smoke:"/opt/deepsonar/bin/chrome-fuzz-smoke.sh",d8:"/opt/deepsonar/bin/d8",libfuzzer:"/opt/deepsonar/bin/v8_json_libfuzzer"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
 ENV IS_SANDBOX=1 \
