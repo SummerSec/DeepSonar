@@ -39,10 +39,10 @@ export const DEFAULT_FINDING_PROTOCOL: EffectiveFindingProtocol = {
     default_standard: "CVSS",
     default_version: "3.1",
     accepted_versions: ["3.1", "4.0"],
-    // #590: security.vulnerability 默认强制评分；项目协议可覆盖。
-    require_scoring_for_profiles: ["security.vulnerability"],
+    // #590: 默认不强制（兼容现有 Agent）；项目协议可将 security.vulnerability 列入 require_scoring_for_profiles。
+    require_scoring_for_profiles: [],
   },
-  display_name: "安全漏洞 · CVSS 3.1（security.vulnerability 必填评分）",
+  display_name: "安全漏洞 · CVSS 3.1（建议对 security.vulnerability 开启强制评分）",
   source: "global",
 };
 
