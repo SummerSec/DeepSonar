@@ -37,6 +37,7 @@
 
 ### 变更
 
+- 控制面镜像多架构发布（#598）：`scheduler` / `web` / `image-admission` 与再发布 `assets-helper` / `silo` 的 Release 矩阵改为 `linux/amd64,linux/arm64`；控制面 Dockerfile 换用含 amd64+arm64 的 `node:24-alpine` OCI index digest；scheduler 继续按 `TARGETARCH` 校验 kubectl；文档补充控制面 vs 运行时平台矩阵；静态门禁 `pnpm ci:unit:control-plane-platforms`。
 - 过程画布筛选坞、左下角图例与用量账本默认折叠，减少首屏占位（#572）。
 - 合并项目侧「项目风险」与「项目报告」为统一「风险与报告」交付台（#561）：侧栏单一入口，主路径 `/projects/:id/findings`，`?panel=reports` 切报告区；旧 `/projects/:id/reports` redirect。全局 `/findings` 与任务工作台报告 tab 不变。
 

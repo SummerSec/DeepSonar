@@ -92,6 +92,20 @@ DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.
 DEEPSONAR_IMAGE_TAG=<release-version-without-v>
 ```
 
+## 3.1 平台矩阵（控制面 vs 运行时）
+
+正式 Release（`v*` → `.github/workflows/release.yml`）对官方镜像按下列矩阵发布多架构 OCI index；ACR / GHCR / Docker Hub 同步同一 index（通道缺凭据时该通道记 unavailable，不编造 digest）。
+
+| 类别 | 镜像 | 平台 |
+| --- | --- | --- |
+| 控制面 | `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission` | `linux/amd64` + `linux/arm64` |
+| 控制面依赖再发布 | `deepsonar-assets-helper`（busybox）/ `deepsonar-silo`（pgsty/silo） | `linux/amd64` + `linux/arm64`（上游 digest 已含双架构） |
+| 运行时 | `deepsonar-base` / `audit` / `kali-minimal` 及多数专项 runtime | `linux/amd64` + `linux/arm64`（既有） |
+
+`deploy/Dockerfile.scheduler` 按 `TARGETARCH` 安装并校验 amd64/arm64 各自的 `kubectl` sha。控制面 Node 基础镜像钉 `node:24-alpine@sha256:…` 的**多架构 index**（须同时含 amd64 与 arm64；禁止回退到历史 amd64-only digest，见 #598）。
+
+Apple Silicon / Graviton / 本机 arm64 上 `./deploy/deploy.sh up real pull` 应直接拉取 arm64 层，无需 `--platform linux/amd64`。`device-broker` 为 rig 侧可选镜像，Dockerfile 与控制面共用同一 Node pin，但不走上述 Release 矩阵。
+
 ## 4. fake 与 real
 
 | 模式 | 用途 | 要点 |

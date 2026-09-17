@@ -2,6 +2,10 @@
 
 生产与本地一键部署编排（Docker Compose + 脚本）。
 
+## 平台矩阵
+
+控制面镜像（`scheduler` / `web` / `image-admission`）与再发布依赖（`assets-helper` / `silo`）随 Release 发布 `linux/amd64` + `linux/arm64` 多架构 index；运行时镜像此前已多架构。详见 [`docs/ONE_CLICK_DEPLOYMENT.md`](../docs/ONE_CLICK_DEPLOYMENT.md) §3.1 与 [`docs/RELEASE_RUNTIME_IMAGES.md`](../docs/RELEASE_RUNTIME_IMAGES.md)。
+
 ## 快速开始
 
 ```bash

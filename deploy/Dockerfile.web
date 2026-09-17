@@ -1,4 +1,4 @@
-FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114 AS builder
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder
 
 RUN corepack enable
 WORKDIR /app
@@ -13,7 +13,7 @@ COPY apps/web apps/web
 COPY packages/shared-types packages/shared-types
 RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/web build
 
-FROM node:24-alpine@sha256:7fddd9ddeae8196abf4a3ef2de34e11f7b1a722119f91f28ddf1e99dcafdf114
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81
 WORKDIR /app
 COPY --from=builder /app/apps/web/dist /app/public
 COPY deploy/web-server.mjs /app/web-server.mjs
