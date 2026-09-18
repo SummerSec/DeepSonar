@@ -164,7 +164,6 @@ export function SettingsPanel({
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [projectJobQuota, setProjectJobQuota] = useState("");
   const [sources, setSources] = useState<SkillSource[]>([]);
-  const [enabledSkillSourceIds, setEnabledSkillSourceIds] = useState<string[] | null>(null);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
   const [newSource, setNewSource] = useState({ name: "", repo_url: "", branch: "main" });
@@ -182,7 +181,6 @@ export function SettingsPanel({
   const reload = () => {
     if (!projectId && visibleGlobalTabs.length === 0) return;
     setAgentLoadError(null);
-    if (!projectId) setEnabledSkillSourceIds(null);
     const showAgentLoadError = (label: string, error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
       setAgentLoadError(`${label}加载失败：${detail}`);
@@ -210,9 +208,6 @@ export function SettingsPanel({
           setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
         })
         .catch(() => {});
-      api.projectSkillSources(projectId)
-        .then((res) => setEnabledSkillSourceIds(res.sources.filter((s) => s.project_enabled).map((s) => s.skill_source_id)))
-        .catch(() => setEnabledSkillSourceIds(null));
     } else if (globalSection === "agents" && canLoadTab("roles")) {
       // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
       api
@@ -610,7 +605,6 @@ export function SettingsPanel({
                   : credentials.filter((c) => c.project_id === null)
               }
               sources={sources}
-              enabledSkillSourceIds={projectId ? enabledSkillSourceIds : null}
               sourceDetails={sourceDetails}
               busy={configBusy}
               saved={configSaved}
@@ -628,7 +622,6 @@ export function SettingsPanel({
       </div>
     );
   };
-
 
   const shellCls =
     variant === "page"

@@ -733,7 +733,7 @@ export function RoleConfigEditor({
               <strong>
                 Agent 模块目录
                 <HelpTip>
-                  目录由「模块源」同步生成。展开后列表内上下滚动；可挂载整插件/整源，selector 会跟随后续 sync 在下一 Job 纳入新增模块。 候选应来自项目 Skill 源白名单（#603）；RoleConfig 勾选仅为过渡绑定，主路径将迁到 Hub 从项目已启用集合选型。
+                  目录由「模块源」同步生成。展开后列表内上下滚动；可挂载整插件/整源，selector 会跟随后续 sync 在下一 Job 纳入新增模块。 候选须 ∈ 项目 Skill 源白名单（#603，服务端 fail-closed）；RoleConfig 勾选仅为过渡缺省建议，主路径将迁到 Hub 从项目已启用集合选型。
                 </HelpTip>
               </strong>
             </div>
