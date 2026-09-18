@@ -21,6 +21,19 @@ export {
   FrozenLanguageServerCapability,
 } from "./language-server-capability.js";
 export type { LanguageServerOperation as LanguageServerOperationName } from "./language-server-capability.js";
+export {
+  CLI_CAPABILITY_SCHEMA,
+  CLI_UNAVAILABLE_CODE,
+  CliCapabilityId,
+  CliCapabilityManifest,
+  CliLimits,
+  CliNetworkMode,
+  CliPermission,
+  CliUnavailableReason,
+  CliCapabilityResult,
+  FrozenCliCapability,
+  FrozenCliCapabilityPack,
+} from "./cli-capability.js";
 import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
@@ -1213,6 +1226,18 @@ export const HubIntentPayload = z
       .min(3)
       .max(160)
       .regex(/^[a-z][a-z0-9_.-]*$/)
+      .optional(),
+    // Hub 可选提案通用 CLI 能力集合：只能来自 list_capabilities / describe_capability
+    // 返回的已登记 id（#611 phase 1）。省略则不冻结 cli_capabilities。
+    cli_capability_ids: z
+      .array(
+        z
+          .string()
+          .min(3)
+          .max(160)
+          .regex(/^[a-z][a-z0-9_.-]*$/),
+      )
+      .max(32)
       .optional(),
   })
   .strict();

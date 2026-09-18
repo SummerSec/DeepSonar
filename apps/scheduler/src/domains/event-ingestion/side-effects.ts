@@ -190,7 +190,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -590,7 +590,10 @@ export function createEventIngestionSideEffectApplication(
       const intentLs = typeof intent.language_server_capability_id === "string"
         ? intent.language_server_capability_id.trim()
         : "";
-      if (phase === "preflight" && (key || intentCli || intentCred || intentLs)) {
+      const intentCliCaps = Array.isArray(intent.cli_capability_ids)
+        ? intent.cli_capability_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
+        : [];
+      if (phase === "preflight" && (key || intentCli || intentCred || intentLs || intentCliCaps.length > 0)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
@@ -602,6 +605,7 @@ export function createEventIngestionSideEffectApplication(
               agentCli: intentCli ?? null,
               credentialId: intentCred ?? null,
               languageServerCapabilityId: intentLs || null,
+              cliCapabilityIds: intentCliCaps.length > 0 ? intentCliCaps : null,
             },
           );
         } catch (error) {
@@ -1241,7 +1245,13 @@ export function createEventIngestionSideEffectApplication(
               job.project_id as string,
               role,
               snapshotFindingIds,
-              { runtimeImageKey: it.runtime_image_key ?? null, agentCli: it.agent_cli ?? null, credentialId: it.credential_id ?? null, languageServerCapabilityId: it.language_server_capability_id ?? null },
+              {
+                runtimeImageKey: it.runtime_image_key ?? null,
+                agentCli: it.agent_cli ?? null,
+                credentialId: it.credential_id ?? null,
+                languageServerCapabilityId: it.language_server_capability_id ?? null,
+                cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
+              },
             ),
           );
         } catch (error) {

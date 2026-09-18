@@ -2,6 +2,8 @@ import {
   PlatformToolName,
   rejectNonCurrentAgentCli,
   resolvePlatformTools,
+  type FrozenCliCapability,
+  type FrozenCliCapabilityPack,
   type FrozenLanguageServerCapability,
   type PlatformToolConfig,
   type ReasoningValue,
@@ -24,6 +26,9 @@ import {
   findLanguageServerCapability,
   freezeLanguageServerCapability,
 } from "../language-server-capability/index.js";
+import {
+  admitCliCapabilities,
+} from "../cli-capability/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -279,7 +284,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
@@ -443,6 +448,25 @@ async function resolveAgentSnapshotForJobUnchecked(
     language_server = freezeLanguageServerCapability({ module, imageKey: runtimeImage.image_key });
   }
 
+  let cli_capabilities: FrozenCliCapability[] | undefined;
+  let cli_capability_pack: FrozenCliCapabilityPack | undefined;
+  const requestedCliIds = Array.isArray(options?.cliCapabilityIds)
+    ? options.cliCapabilityIds.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+  if (requestedCliIds.length > 0) {
+    const admitted = admitCliCapabilities({
+      ids: requestedCliIds,
+      imageKey: runtimeImage.image_key,
+    });
+    if (!admitted.ok) {
+      throw new Error(
+        `cli capability unavailable (${admitted.reason}${admitted.failed_id ? `: ${admitted.failed_id}` : ""}): ${admitted.repair.message}`,
+      );
+    }
+    cli_capabilities = admitted.frozen;
+    cli_capability_pack = admitted.pack;
+  }
+
   return {
     name: roleName,
     role_kind: roleKind,
@@ -473,6 +497,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       moduleContentHash: expanded.content_hash,
     }),
     ...(language_server ? { language_server } : {}),
+    ...(cli_capabilities ? { cli_capabilities, cli_capability_pack } : {}),
     skill_revisions: expanded.revisions,
     skills,
     commands,
@@ -502,7 +527,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

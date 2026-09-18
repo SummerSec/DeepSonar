@@ -40,6 +40,10 @@ import {
   findLanguageServerCapability,
   languageServerCapabilityPackRecords,
 } from "../language-server-capability/index.js";
+import {
+  findCliCapability,
+  cliCapabilityPackRecords,
+} from "../cli-capability/index.js";
 
 export interface CapabilityJobEnvelope {
   roleName: string;
@@ -87,6 +91,7 @@ export function buildCapabilityCatalog(input: {
   const records: CapabilityCatalogRecord[] = [
     ...BUILTIN_CAPABILITY_PACKS,
     ...languageServerCapabilityPackRecords(),
+    ...cliCapabilityPackRecords(),
   ];
   if (input.job?.frozen) {
     records.push(...projectFrozenSkillModules(input.job.frozen));
@@ -162,6 +167,7 @@ export function searchCapabilities(records: readonly CapabilityCatalogRecord[], 
 export function describeCapability(records: readonly CapabilityCatalogRecord[], input: DescribeCapabilityPayload): {
   capability: CapabilityPackManifest | null;
   language_server?: ReturnType<typeof findLanguageServerCapability>;
+  cli_capability?: ReturnType<typeof findCliCapability>;
   repair: RepairFeedback[];
 } {
   const record = findCatalogRecord(records, input);
@@ -172,9 +178,11 @@ export function describeCapability(records: readonly CapabilityCatalogRecord[], 
     };
   }
   const language_server = findLanguageServerCapability(record.manifest.id);
+  const cli_capability = findCliCapability(record.manifest.id);
   return {
     capability: record.manifest,
     ...(language_server ? { language_server } : {}),
+    ...(cli_capability ? { cli_capability } : {}),
     repair: [],
   };
 }
