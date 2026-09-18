@@ -703,6 +703,8 @@ export interface HubIntent {
   agent_cli?: string;
   /** Hub 提案的 credential_id；省略时用项目软缺省 / RoleConfig 绑定。 */
   credential_id?: string;
+  /** Hub 提案的 language-server capability id（如 language-server.clangd）；省略则不绑定 LSP。 */
+  language_server_capability_id?: string;
 }
 
 export interface HubDecision {

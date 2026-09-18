@@ -173,6 +173,7 @@ export type HubIntentLike = {
   description: string;
   prompt: string;
   runtime_image_key?: string;
+  language_server_capability_id?: string;
 };
 
 export type HubCompleteLike = {
