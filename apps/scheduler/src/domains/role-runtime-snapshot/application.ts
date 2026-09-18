@@ -1,5 +1,6 @@
 import {
   PlatformToolName,
+  type FrozenAgentRuntimeProfile,
   rejectNonCurrentAgentCli,
   resolvePlatformTools,
   type FrozenCliCapability,
@@ -8,6 +9,11 @@ import {
   type PlatformToolConfig,
   type ReasoningValue,
 } from "@deepsonar/shared-types";
+import {
+  freezeAgentRuntimeProfile,
+  profileSystemPromptRef,
+  UnsupportedAgentRuntimeProfileError,
+} from "../../agent-runtime-profile.js";
 import {
   isProviderKnown,
   UNKNOWN_PROVIDER_ERROR,
@@ -273,10 +279,12 @@ ${text}` : RUNTIME_TOOL_MANUALS_POLICY;
 /** Current RoleConfig/Credential/runtime identity cannot be frozen into a Job snapshot. */
 export class SnapshotUnresolvableError extends Error {
   readonly stale_fields = ["current_snapshot_unresolvable"] as const;
+  readonly error_code: "SNAPSHOT_STALE" | "unsupported_config";
   constructor(cause: unknown) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    super(message.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 500) || "current snapshot resolution failed");
+    super(message.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 500) || "current snapshot resolution failed", { cause });
     this.name = "SnapshotUnresolvableError";
+    this.error_code = cause instanceof UnsupportedAgentRuntimeProfileError ? "unsupported_config" : "SNAPSHOT_STALE";
   }
 }
 
@@ -431,6 +439,65 @@ async function resolveAgentSnapshotForJobUnchecked(
   }
   const sandboxLimits = resolveEffectiveSandboxLimits(sandboxOverride, config.runtime.sandboxLimits);
 
+  const frozenPiExtensions = freezePiExtensions(cfg?.pi_extensions_json, agentCli, runtimeImage.image_key);
+  const providerEnvRefs = Object.keys(
+    providerSnapshot.settings_config_json && typeof providerSnapshot.settings_config_json === "object"
+      ? ((providerSnapshot.settings_config_json as Record<string, unknown>).env as Record<string, unknown> | undefined) ?? {}
+      : {},
+  ).filter((name) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name));
+  const profileEnvRefs = [
+    ...((cfg?.env_keys as string[] | undefined) ?? [])
+      .filter((name) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name))
+      .map((name) => ({ name, source: "role_config" as const })),
+    ...providerEnvRefs.map((name) => ({ name, source: "provider_profile" as const })),
+    { name: "DEEPSONAR_GATEWAY_TOKEN", source: "gateway" as const },
+  ].filter((item, index, all) => all.findIndex((candidate) => candidate.name === item.name && candidate.source === item.source) === index);
+  const nativeOptions = {
+    claude_code: agentCli === "claude-code"
+      ? {
+          model_env: "ANTHROPIC_MODEL",
+          effort_level: providerSnapshot.reasoning,
+        }
+      : null,
+    pi: agentCli === "pi"
+      ? {
+          model: providerSnapshot.model,
+          provider: providerSnapshot.pi_provider,
+          extensions: frozenPiExtensions.map((extension) => extension.id),
+        }
+      : null,
+    dsh: agentCli === "dsh"
+      ? {
+          task_mode: dshTaskMode as "standard" | "ptc",
+          provider: providerSnapshot.pi_provider,
+        }
+      : null,
+  } as const;
+  const runtime_profile: FrozenAgentRuntimeProfile = freezeAgentRuntimeProfile({
+    schema: "deepsonar.agent-runtime-profile/v1",
+    profile_version: 1,
+    agent_cli: agentCli as "claude-code" | "pi" | "dsh",
+    provider_ref: llm
+      ? { credential_id: String(llm.id), provider: String(llm.provider) }
+      : null,
+    model_ref: providerSnapshot.model,
+    reasoning_effort: providerSnapshot.reasoning,
+    context_window_tokens: providerSnapshot.context_window_tokens,
+    extensions: frozenPiExtensions.map((extension) => ({
+      id: extension.id,
+      version: extension.version,
+      integrity: extension.integrity,
+    })),
+    system_prompt_ref: profileSystemPromptRef({
+      instructions: cfg?.instructions_markdown as string | null | undefined,
+      roleConfigId: (cfg?.id as string | undefined) ?? null,
+      roleConfigVersion: typeof cfg?.version === "number" ? cfg.version : null,
+    }),
+    env_refs: profileEnvRefs,
+    native_options: nativeOptions,
+    resolution_order: ["global", "project", "role", "task", "job"],
+  });
+
   let language_server: FrozenLanguageServerCapability | undefined;
   const requestedLs = typeof options?.languageServerCapabilityId === "string"
     ? options.languageServerCapabilityId.trim()
@@ -496,6 +563,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       resolvedModules: expanded.resolved_modules,
       moduleContentHash: expanded.content_hash,
     }),
+    runtime_profile,
     ...(language_server ? { language_server } : {}),
     ...(cli_capabilities ? { cli_capabilities, cli_capability_pack } : {}),
     skill_revisions: expanded.revisions,
@@ -509,7 +577,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     context_window_tokens: contextWindowTokens,
     settings_config_json: snapshotSettingsConfig,
     config_files: providerSnapshot.config_files,
-    pi_extensions: freezePiExtensions(cfg?.pi_extensions_json, agentCli, runtimeImage.image_key),
+    pi_extensions: frozenPiExtensions,
     role_config_id: (cfg?.id as string) ?? null,
     role_config_version: (cfg?.version as number) ?? null,
     runtime_image_key: runtimeImageKey,
