@@ -139,6 +139,7 @@ import {
   recordOpenSandboxJobOutcome,
   sealOpenSandboxUploadWave,
   shouldProbeOpenSandboxUpload,
+  createOpenSandboxUploadCircuitError,
 } from "./opensandbox-upload-circuit.js";
 import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
 import {
