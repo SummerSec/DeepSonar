@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 通用 CLI 基础能力包（#611）：登记 `deepsonar.cli-capability/v1` 十项 phase-1 能力（`text.search.rg` / `file.discovery.fd` / `json.query.jq` / `yaml.query.yq` / `source.control.git` / `file.inspect.file` / `evidence.hash.sha256sum` / `patch.diff` / `execution.timeout` / `archive.extract`）；`list_capabilities` / `describe_capability` 可发现并附带 `cli_capability` 元数据；Scheduler `admitCliCapability(ies)` 拒绝未登记 / 镜像不兼容 / 工具未上架 / 运行时安装；Hub Intent `cli_capability_ids` 可冻结进 Job 快照（含 pack fingerprint）；结果固定 `is_finding: false`。`fd` / `yq` / `diff`/`patch` 本切片仅目录登记（镜像 apt 钉死与手册扩写 follow-up）；不含 curl/binutils 专项。
 - 语言服务器能力模块（#604）：登记受治理的 `language-server.clangd`（C/C++，兼容 chrome/clickhouse audit，只读、禁网、需 `compile_commands.json`，含调用/超时/响应限额）；Scheduler 准入拒绝未登记/镜像不兼容/缺前置/运行时安装；Hub 可通过 `language_server_capability_id` 提案并冻结进 Job 快照；`list_capabilities` / `describe_capability` 可发现完整元数据；受控 Adapter（`agent-harness/language-server-adapter.mjs`）提供有界只读查询与证据形状（非 Finding）；Chrome/ClickHouse Audit 离线手册已更新。其它语言服务器与镜像内 Adapter 安装不在本切片。
 - 项目 Skill 源启用白名单与 fail-closed 展开（#603 首片）：新增 `project_skill_sources`（schema **v53**），项目设置提供启用清单（对标运行时镜像 / CLI·Provider）；首次读取时把历史 RoleConfig `modules_json` 引用的源种子为启用，禁止静默丢配置。`expandModules` / role-runtime-snapshot 在项目范围拒绝未启用源。Hub 增加只读 `list_available_skill_sources` 目录 stub（后续 Intent 选型）。Web RoleConfig 模块候选过滤到项目白名单，并标注 RoleConfig 勾选为过渡态。
 

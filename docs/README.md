@@ -38,6 +38,7 @@
 | [RUNTIME_ROLE_IMAGE_MATRIX.md](RUNTIME_ROLE_IMAGE_MATRIX.md) | **as-built**（#565 / #588） | 角色×官方镜像默认、工具范围、不包含、Scheduler 边界注入；#588 起每镜附带 `/opt/deepsonar/manuals` 工具说明书与 CI 门禁 |
 | [RUNTIME_TOOL_MANUALS.md](RUNTIME_TOOL_MANUALS.md) | **as-built**（#588） | 13 个官方镜像的离线工具手册契约、发现方式、构建与验收门禁 |
 | [语言服务器能力](LANGUAGE_SERVER_CAPABILITIES.md) | #604 受治理 `language-server.clangd`（phase 1） |
+| [通用 CLI 能力包](CLI_CAPABILITIES.md) | #611 受治理通用 CLI（`deepsonar.cli-capability/v1`，phase 1） |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；改 CLI 钉死后需发版才出新镜像 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署与生产拓扑 |

@@ -88,6 +88,10 @@ Job 创建时冻结 capability selector、digest、模块内容 hash、缺失模
 
 语言服务器是受治理的 **Capability Module**（契约 `deepsonar.language-server-capability/v1`），不是 Agent 可随意拉取的二进制。Hub 只能从能力目录提出已登记模块（首期 `language-server.clangd`）；Scheduler 校验镜像兼容性与前置条件（如 `compile_commands.json`）后，把 id / version / image_key / config_fingerprint 冻结进 Job 快照。Agent **不得**在任务内 `apt`/`npm` 安装 LSP，也不得把未准入的 raw `clangd` 命令当作静默降级路径；不可用时返回结构化 `capability_unavailable`。受控 LSP Adapter（有界操作，禁止自由 JSON-RPC）已落地于 `agent-harness/language-server-adapter.mjs`；其它语言服务器与镜像内安装仍为后续切片。Hub 可通过 Intent 的 `language_server_capability_id` 提案并冻结进 Job 快照。
 
+### 4.1.2 General CLI Capability Pack
+
+通用 CLI 工具同样是受治理的 **Capability Module**（契约 `deepsonar.cli-capability/v1`，#611）。Phase 1 登记 `text.search.rg`、`json.query.jq`、`source.control.git`、`file.inspect.file`、`evidence.hash.sha256sum`、`execution.timeout`、`archive.extract` 等；`file.discovery.fd` / `yaml.query.yq` / `patch.diff` 已进目录但默认不可用（镜像钉死 follow-up）。Hub 通过 Intent `cli_capability_ids` 提案；Scheduler `admitCliCapabilities` 校验后冻结 `cli_capabilities` 与 pack fingerprint。CLI 输出固定 `is_finding: false`，只作 Evidence/Fact 输入。`curl` 与 binutils 专项工具不纳入本基础包。
+
 ### 4.2 Plan
 
 当前 Hub 仍以 Intent 驱动，长期目标是把 Intent 适配为 `PlanTask`，由模型声明目的、依赖、输入引用、期望输出、验证路径、完成理由和预算。平台验证 schema、canonical 引用、依赖环、权限、预算和可执行性；模型判断业务上继续、收敛、阻塞或请求人工。
