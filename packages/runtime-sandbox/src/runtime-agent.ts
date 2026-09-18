@@ -20,6 +20,7 @@ import {
   type AgentCliRuntimeSnapshot,
   type DshProviderRuntimeConfig,
 } from "./runtime-adapters.js";
+import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-adapters.js";
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 
@@ -30,6 +31,8 @@ export { createStdinCloseKiller, DEFAULT_STDIN_CLOSE_KILL_MS } from "./runtime-s
 export interface RealAgentSpec {
   provider: "claude-code" | "dsh" | "pi";
   adapter?: AgentCliRuntimeSnapshot;
+  /** Scheduler-frozen unified Provider/CLI launch contract (#613/#617). */
+  agentRuntimeLaunch?: AgentRuntimeLaunchSpecification;
   runtimeImageKey?: string;
   /** 模型 ID（如 claude-sonnet-4-5、gpt-5） */
   model?: string;
@@ -1250,6 +1253,14 @@ export function mapCliEvent(
 export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
+  if (spec.agentRuntimeLaunch) {
+    if (spec.agentRuntimeLaunch.adapter_id !== adapter.id || spec.agentRuntimeLaunch.adapter_version !== adapter.version) {
+      throw new Error(`AGENT_RUNTIME_LAUNCH_SNAPSHOT_MISMATCH: ${adapter.id}`);
+    }
+    if (!spec.agentRuntimeLaunch.profile_fingerprint.startsWith("sha256:")) {
+      throw new Error("AGENT_RUNTIME_LAUNCH_FINGERPRINT_INVALID");
+    }
+  }
   // 按键比较能力映射，不使用 JSON.stringify：Postgres JSONB 不保留对象键插入顺序，
   // 单纯字符串比较会误拒绝所有经过数据库往返的冻结 Job。
   const capabilityValues = (value: object | undefined): Map<string, unknown> => {

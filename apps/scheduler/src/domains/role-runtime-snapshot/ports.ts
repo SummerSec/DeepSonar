@@ -7,7 +7,7 @@ import type { FrozenAgentRuntimeProfile,
   FrozenCliCapabilityPack } from "@deepsonar/shared-types";
 import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
-import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
+import type { AgentCliRuntimeSnapshot, AgentRuntimeLaunchSpecification } from "@deepsonar/runtime-sandbox";
 import type { EffectiveSandboxLimits, FrozenNetworkPolicy } from "./sandbox-limits.js";
 import type { FrozenRuntimeKnobs, RuntimeKnobOverride } from "../../runtime-knobs.js";
 
@@ -27,6 +27,8 @@ export interface RoleRuntimeSnapshotResult {
   agent_runtime: AgentCliRuntimeSnapshot;
   /** Unified provider/CLI/profile projection frozen with this Job (#613). */
   runtime_profile: FrozenAgentRuntimeProfile;
+  /** Adapter-owned launch contract derived from the frozen Runtime Profile (#617). */
+  agent_runtime_launch: AgentRuntimeLaunchSpecification;
   model: string | null;
   /** Actual upstream model ID after resolving CLI aliases such as fable. */
   upstream_model: string | null;

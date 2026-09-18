@@ -327,6 +327,11 @@ export type {
   RuntimeAdapter,
 } from "./runtime-adapters.js";
 export {
+  AGENT_RUNTIME_LAUNCH_SPEC_SCHEMA,
+  buildAgentRuntimeLaunchSpecification,
+} from "./agent-runtime-profile-adapters.js";
+export type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-adapters.js";
+export {
   CONTEXT_CONTRACT_VERSION,
   CONTEXT_MAX_COMPACTIONS,
   CONTEXT_MAX_EVENT_IDS,
