@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { DeviceRequirement, FindingProtocolConfig } from "@deepsonar/shared-types";
+import { DeviceRequirement, FindingProtocolConfig, RuntimeProfileOverridePayload } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
@@ -89,6 +89,8 @@ const CreateTaskBody = z.object({
   scheduled_start_at: z.string().datetime().optional(),
   /** When true (and scheduled_start_at omitted), start at next 08:00 Asia/Shanghai. */
   schedule_beijing_8am: z.boolean().optional(),
+  /** Optional task-level Runtime Profile overlay frozen with the first Job. */
+  runtime_profile: RuntimeProfileOverridePayload.optional(),
 });
 const TriggerTaskBody = z.object({
   event_id: z.string().trim().min(1).max(200),
@@ -285,6 +287,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         id,
         "hub_reason",
         body.kind === "compose" ? body.seed_finding_ids ?? [] : [],
+        { runtimeProfile: body.runtime_profile ?? null },
       );
     } catch (error) {
       if (isSnapshotUnresolvableError(error)) {
@@ -312,6 +315,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
             ? { network_policy: { allow_egress: body.allow_egress } }
             : {}),
           ...(body.device !== undefined ? { device_requirement: body.device } : {}),
+          ...(body.runtime_profile !== undefined ? { runtime_profile: body.runtime_profile } : {}),
           ...(schedule ? { schedule } : {}),
         },
       });
@@ -335,6 +339,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         projectId: id,
         canvasId,
         type: "hub_reason",
+        runtimeProfile: body.runtime_profile ?? null,
         payload: {
           title: body.title,
           content: body.content,
@@ -1041,6 +1046,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
             projectId,
             "hub_reason",
             seedFindings.map((seed) => seed.id),
+            { runtimeProfile: (retryTarget.runtime_profile ?? null) as RuntimeProfileOverridePayload | null },
           ),
         ),
       );
@@ -1079,7 +1085,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           agent_snapshot_json: snapshot as never,
           type: "hub_reason",
           priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
-          payload_json: { ...payload, scheduling_purpose: "hub" } as never,
+          payload_json: {
+            ...payload,
+            scheduling_purpose: "hub",
+            ...(retryTarget.runtime_profile ? { runtime_profile: retryTarget.runtime_profile } : {}),
+          } as never,
           timeout_sec: config.timeouts.auditSec,
           followup_depth: 0,
         })}

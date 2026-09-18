@@ -131,3 +131,22 @@ test("HubIntentPayload accepts optional agent_cli and credential_id from Hub com
   });
   assert.equal(badCred.success, false);
 });
+
+test("HubIntentPayload accepts governed model proposals and capability requirements", () => {
+  const parsed = HubDecisionPayload.safeParse({
+    intents: [{
+      from: [rootId],
+      role: "explore",
+      description: "选择满足能力的模型",
+      prompt: "p".repeat(40),
+      model_ref: "claude-sonnet-4-5",
+      model_requirements: {
+        min_context_window: 100_000,
+        require_tools: true,
+        reasoning_effort: "high",
+      },
+    }],
+  });
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.success && parsed.data.intents?.[0]?.model_ref, "claude-sonnet-4-5");
+});

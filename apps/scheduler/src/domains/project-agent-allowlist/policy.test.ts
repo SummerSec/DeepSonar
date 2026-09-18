@@ -65,6 +65,26 @@ test("patch: 缺省必须 ∈ 白名单；至少一种 CLI", () => {
   );
 });
 
+test("model defaults and fallback refs stay paired with the selected Provider", () => {
+  const cred = "11111111-1111-4111-8111-111111111111";
+  const cfg: Record<string, unknown> = {};
+  const allowlist = applyProjectAgentAllowlistPatch(cfg, {
+    enabled_agent_clis: ["pi"],
+    enabled_credential_ids: [cred],
+    default_agent_cli: "pi",
+    default_credential_id: cred,
+    default_model_ref: "gpt-5",
+    fallback_model_refs: ["o4-mini", "gpt-5"],
+    allow_model_catalog_passthrough: true,
+  });
+  assert.equal(allowlist.default_model_ref, "gpt-5");
+  assert.deepEqual(allowlist.fallback_model_refs, ["o4-mini", "gpt-5"]);
+  assert.equal(allowlist.allow_model_catalog_passthrough, true);
+  const cleared = applyProjectAgentAllowlistPatch(cfg, { default_credential_id: null });
+  assert.equal(cleared.default_model_ref, null);
+  assert.deepEqual(cleared.fallback_model_refs, []);
+});
+
 test("assert: 未配置不阻断；配置后 fail-closed", () => {
   const open = parseProjectAgentAllowlist({});
   assert.doesNotThrow(() => assertAgentCliAllowlisted(open, "pi"));
@@ -101,12 +121,14 @@ test("Hub catalog: CLI 与 Provider 条目含缺省标记与并发摘要", () =>
     provider: "anthropic",
     status: "active",
     public_metadata_json: { max_concurrent: 2, model_concurrency: { "claude-opus": 1 } },
+    model_catalog_json: ["claude-opus"],
   }, allowlist);
   assert.ok(entry);
   assert.equal(entry!.is_default, true);
   assert.equal(entry!.max_concurrent, 2);
   assert.deepEqual(entry!.model_concurrency, { "claude-opus": 1 });
   assert.ok(entry!.compatible_agent_clis.includes("claude-code"));
+  assert.equal(entry!.models[0]?.model_id, "claude-opus");
   assert.equal(
     toHubProviderCatalogEntry({
       id: "22222222-2222-4222-8222-222222222222",

@@ -18,8 +18,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_providers: [
     "### `list_available_providers` — 查询 Hub 当前可提案的 Provider 账号",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且 active 的 LLM Provider（credential_id、provider、compatible_agent_clis、max_concurrent / model_concurrency 摘要）。",
-    "- 边界：intent 可选字段 `credential_id` 只能原样使用返回的 credential_id；省略时平台用项目软缺省或 RoleConfig 绑定回退。并发门禁读 Provider 配额，不在角色上配并发。目录外或未启用账号拒绝（`invalid_credential`）。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且 active 的 LLM Provider（credential_id、provider、compatible_agent_clis、models 能力目录、max_concurrent / model_concurrency 摘要）。",
+    "- 边界：intent 可选字段 `credential_id` / `model_ref` 只能原样使用返回的值；model_requirements 会在 Scheduler 冻结前复核。省略时平台用项目软缺省或 RoleConfig 绑定回退。并发门禁读 Provider 配额，不在角色上配并发。目录外或未启用账号拒绝（`invalid_credential` / `invalid_model`）。",
     "- 示例：`{}`",
   ].join("\n"),
   list_available_skill_sources: [
@@ -173,7 +173,7 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
   list_available_runtime_images: "注意：按返回的 purpose/capabilities/selection_hints 匹配任务后原样复制 image_key；只提案 readiness=ready；不得猜测 key 或填写 OCI 引用；无专项需求可省略字段走角色缺省。",
   list_available_agent_clis: "注意：Hub 派发前调用，并原样复制返回的 agent_cli；只能提案项目已启用的 CLI。",
-  list_available_providers: "注意：Hub 派发前调用，并原样复制返回的 credential_id；只能提案项目已启用且 active 的 Provider；并发以 Provider 为准。",
+  list_available_providers: "注意：Hub 派发前调用，并原样复制返回的 credential_id 与 models.model_id；模型必须满足本轮 model_requirements；只能提案项目已启用且 active 的 Provider；并发以 Provider 为准。",
   list_available_skill_sources: "注意：Hub 派发前可调用；只能使用项目已启用 Skill 源。本切片为只读目录 stub，Intent 级 selector 提案后续落地（#603）。",
   list_capabilities: "注意：只使用返回的 id/digest；需要完整契约时再 describe_capability，不要注入或猜测 SKILL.md 全文。",
   search_capabilities: "注意：query 必须非空；只从本轮结果选择 Pack，不得使用记忆中的 RoleConfig selector。",

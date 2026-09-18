@@ -7,7 +7,7 @@ import type { FrozenAgentRuntimeProfile,
   FrozenCliCapabilityPack,
   FrozenMaterializationPack,
   FrozenProviderModelSnapshot } from "@deepsonar/shared-types";
-import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
+import type { PlatformToolName, ReasoningValue, RuntimeProfileOverridePayload } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot, AgentRuntimeLaunchSpecification } from "@deepsonar/runtime-sandbox";
 import type { EffectiveSandboxLimits, FrozenNetworkPolicy } from "./sandbox-limits.js";
@@ -119,6 +119,11 @@ export interface RoleRuntimeSnapshotApplication {
       agentCli?: string | null;
       /** Hub 提案的 credential_id；省略时走项目软缺省 / RoleConfig 绑定。 */
       credentialId?: string | null;
+      /** Hub/Task model proposal; resolved against the selected Provider catalog. */
+      modelRef?: string | null;
+      /** Capability requirements rechecked before the Job snapshot is frozen. */
+      modelRequirements?: Record<string, unknown> | null;
+      runtimeProfile?: RuntimeProfileOverridePayload | null;
       /** Hub 提案的 language-server capability id（#604）；省略则不冻结。 */
       languageServerCapabilityId?: string | null;
       /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结。 */

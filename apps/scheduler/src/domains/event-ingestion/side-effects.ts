@@ -33,6 +33,7 @@ import {
   invalidRuntimeImage,
   invalidAgentCli,
   invalidCredential,
+  invalidModel,
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
@@ -63,6 +64,7 @@ import {
 } from "../artifacts/index.js";
 import { runFindingResearchBestEffort } from "../finding-research/index.js";
 import { config } from "../../config.js";
+import { selectModelsForRequirements } from "../provider-adapter/index.js";
 
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
@@ -190,7 +192,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -587,13 +589,46 @@ export function createEventIngestionSideEffectApplication(
           throw invalidCredential(credPath, allowedCredentialIds);
         }
       }
+      if (intent.model_ref || intent.model_requirements) {
+        const provider = intentCred
+          ? providerById.get(intentCred)
+          : providerCatalog.find((entry) => entry.is_default);
+        const requirements = intent.model_requirements && typeof intent.model_requirements === "object"
+          ? intent.model_requirements as Record<string, unknown>
+          : {};
+        const normalizedRequirements = {
+          agent_cli: intentCli ?? undefined,
+          min_context_window: typeof requirements.min_context_window === "number"
+            ? requirements.min_context_window
+            : typeof requirements.context_window_tokens === "number" ? requirements.context_window_tokens : undefined,
+          require_tools: requirements.require_tools === true || requirements.supports_tools === true ? true : undefined,
+          require_streaming: requirements.require_streaming === true || requirements.supports_streaming === true ? true : undefined,
+          require_structured_output: requirements.require_structured_output === true || requirements.supports_structured_output === true ? true : undefined,
+          reasoning_effort: typeof requirements.reasoning_effort === "string" ? requirements.reasoning_effort : undefined,
+          max_input_cost_per_1m_usd: typeof requirements.max_input_cost_per_1m_usd === "number"
+            ? requirements.max_input_cost_per_1m_usd
+            : typeof requirements.max_input_cost_per_million === "number" ? requirements.max_input_cost_per_million : undefined,
+          max_output_cost_per_1m_usd: typeof requirements.max_output_cost_per_1m_usd === "number"
+            ? requirements.max_output_cost_per_1m_usd
+            : typeof requirements.max_output_cost_per_million === "number" ? requirements.max_output_cost_per_million : undefined,
+          allow_unverified: requirements.allow_unverified === true,
+          allow_passthrough: provider?.passthrough_allowed === true || requirements.allow_passthrough === true,
+        };
+        const selected = provider
+          ? selectModelsForRequirements(provider.models, normalizedRequirements as never)
+              .some((model) => intent.model_ref ? model.model_id === intent.model_ref : true)
+          : false;
+        if (!provider || (!selected && provider.passthrough_allowed !== true)) {
+          throw invalidModel(`intents.${index}.model_ref`, provider?.models.map((entry) => entry.model_id));
+        }
+      }
       const intentLs = typeof intent.language_server_capability_id === "string"
         ? intent.language_server_capability_id.trim()
         : "";
       const intentCliCaps = Array.isArray(intent.cli_capability_ids)
         ? intent.cli_capability_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
-      if (phase === "preflight" && (key || intentCli || intentCred || intentLs || intentCliCaps.length > 0)) {
+      if (phase === "preflight" && (key || intentCli || intentCred || intent.model_ref || intent.model_requirements || intentLs || intentCliCaps.length > 0)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
@@ -604,6 +639,8 @@ export function createEventIngestionSideEffectApplication(
               runtimeImageKey: key,
               agentCli: intentCli ?? null,
               credentialId: intentCred ?? null,
+              modelRef: intent.model_ref ?? null,
+              modelRequirements: intent.model_requirements ?? null,
               languageServerCapabilityId: intentLs || null,
               cliCapabilityIds: intentCliCaps.length > 0 ? intentCliCaps : null,
             },
@@ -1249,6 +1286,8 @@ export function createEventIngestionSideEffectApplication(
                 runtimeImageKey: it.runtime_image_key ?? null,
                 agentCli: it.agent_cli ?? null,
                 credentialId: it.credential_id ?? null,
+                modelRef: it.model_ref ?? null,
+                modelRequirements: it.model_requirements ?? null,
                 languageServerCapabilityId: it.language_server_capability_id ?? null,
                 cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
               },
@@ -1309,6 +1348,8 @@ export function createEventIngestionSideEffectApplication(
               description: it.description,
               prompt: workerPrompt,
               from: it.from,
+              ...(it.model_ref ? { model_ref: it.model_ref } : {}),
+              ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
             ...(relatedImportedIds.length > 0 ? { related_finding_ids: relatedImportedIds } : {}),

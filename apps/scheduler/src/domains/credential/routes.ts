@@ -48,6 +48,7 @@ import {
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
 import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../role-runtime-snapshot/index.js";
 import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
+import { findProviderAdapter, resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
 import { sql } from "../../db.js";
 import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";
 import {
@@ -112,6 +113,16 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const metadata = projectCredentialMetadata(kind, provider, row.public_metadata_json);
     const modelCatalog = normalizeModelCatalog(row.model_catalog_json);
     const healthStatus = row.health_status === "ok" || row.health_status === "error" ? row.health_status : "unknown";
+    const adapter = findProviderAdapter(provider);
+    const modelDescriptors = resolveModelDescriptorCatalog({
+      provider,
+      catalogJson: row.model_catalog_json,
+      catalogRevision: typeof row.model_catalog_fetched_at === "string"
+        ? row.model_catalog_fetched_at
+        : `credential:${String(row.id ?? "unknown")}`,
+      compatibleAgentClis: adapter?.cli_compatibility.filter((item) => item.compatible).map((item) => item.agent_cli),
+      healthStatus: healthStatus === "ok" ? "verified" : healthStatus === "error" ? "probe_failed" : undefined,
+    });
     const healthErrorCategory = typeof row.health_error_category === "string" ? row.health_error_category : null;
     const healthDetail = safeHealthDetail(row.health_detail);
     const settingsConfig = row.settings_config_json && typeof row.settings_config_json === "object" && !Array.isArray(row.settings_config_json)
@@ -125,6 +136,15 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       ...providerProjection,
       public_metadata_json: metadata,
       model_catalog_json: modelCatalog,
+      model_descriptors: modelDescriptors,
+      adapter: adapter ? {
+        adapter_id: adapter.adapter_id,
+        adapter_version: adapter.adapter_version,
+        provider: adapter.provider,
+        label: adapter.label,
+        compatible_agent_clis: adapter.cli_compatibility.filter((item) => item.compatible).map((item) => item.agent_cli),
+        gateway: adapter.gateway,
+      } : null,
       agent_cli: row.agent_cli ?? null,
       settings_config_json: redactSecretProjection(settingsConfig),
       meta_json: metaJson,
@@ -135,6 +155,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         error_category: healthErrorCategory,
         detail: healthDetail,
         model_catalog: modelCatalog,
+        model_descriptors: modelDescriptors,
         model_catalog_fetched_at: row.model_catalog_fetched_at ?? null,
       },
       ...extras,
@@ -1358,6 +1379,15 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
       return {
         models: result.available ? result.models : [],
+        model_descriptors: result.available
+          ? resolveModelDescriptorCatalog({
+              provider: body.provider,
+              catalogJson: result.models,
+              catalogRevision: result.fetched_at ?? `preview:${body.provider}`,
+            })
+          : [],
+        catalog_revision: result.fetched_at ?? null,
+        state: result.available ? "verified" : "probe_failed",
         source_url: result.source_url,
         fetched_at: result.available ? result.fetched_at : null,
       };
@@ -1394,6 +1424,13 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       credential_id: id,
       ...providerProjection,
       models: normalizeModelCatalog(cred.model_catalog_json),
+      model_descriptors: resolveModelDescriptorCatalog({
+        provider: String(cred.provider),
+        catalogJson: cred.model_catalog_json,
+        catalogRevision: typeof cred.model_catalog_fetched_at === "string" ? cred.model_catalog_fetched_at : `credential:${id}`,
+      }),
+      catalog_revision: cred.model_catalog_fetched_at ?? null,
+      state: "verified",
       fetched_at: cred.model_catalog_fetched_at ?? null,
     };
   });
@@ -1465,6 +1502,11 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const result = await discoverModelCatalog(cred as never);
       const available = result.available;
       const models = available ? normalizeModelCatalog(result.models) : [];
+      const modelDescriptors = resolveModelDescriptorCatalog({
+        provider: String(cred.provider),
+        catalogJson: models,
+        catalogRevision: result.fetched_at ?? `probe:${String(cred.provider)}`,
+      });
       const fetchedAt = available ? result.fetched_at : null;
       const testedAt = fetchedAt ?? new Date().toISOString();
       const category = available ? null : (result.category ?? "unknown");
@@ -1498,6 +1540,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       });
       return {
         models,
+        model_descriptors: modelDescriptors,
+        catalog_revision: result.fetched_at ?? modelDescriptors[0]?.catalog_revision ?? null,
+        state: available ? "verified" : "probe_failed",
         source_url: result.source_url,
         fetched_at: fetchedAt,
       };
