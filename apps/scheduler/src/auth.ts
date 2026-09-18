@@ -182,6 +182,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /skill-sources/:id/sync": "skills:write",
   "POST /skill-sources/:id/trust": "skills:write",
   "DELETE /skill-sources/:id": "skills:write",
+  "GET /projects/:id/skill-sources": "skills:read",
+  "PUT /projects/:id/skill-sources/:sourceId": "skills:write",
   "GET /agent-roles": "agents:read",
   "POST /agent-roles": "agents:write",
   "PATCH /agent-roles/:id": "agents:write",
