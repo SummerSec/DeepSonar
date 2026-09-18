@@ -33,6 +33,10 @@ import {
 } from "./domains/role-runtime-snapshot/application.js";
 import { refreshHostDiskPressure, type HostDiskPressureStatus } from "./host-disk.js";
 import { refreshOpenSandboxServerStatus, type OpenSandboxServerStatus } from "./opensandbox-health.js";
+import {
+  OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
+  openSandboxUploadCircuitStatus,
+} from "./opensandbox-upload-circuit.js";
 
 const EVIDENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -525,6 +529,22 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       null,
     ));
   }
+
+  const uploadCircuit = openSandboxUploadCircuitStatus();
+  if (uploadCircuit.state === "open") {
+    checks.push(fail(
+      "OPENSANDBOX_UPLOAD_CIRCUIT_OPEN",
+      `OpenSandbox 上传熔断已打开（${uploadCircuit.lastTripReason ?? "persistent upload 5xx"}）；新 Worker 派发已暂停，并已按配置尝试自愈（docker restart / 告警）。`,
+      null,
+    ));
+  } else if (uploadCircuit.state === "half_open") {
+    checks.push(attention(
+      "OPENSANDBOX_UPLOAD_CIRCUIT_HALF_OPEN",
+      `OpenSandbox 上传熔断半开，正在探针恢复（最近失败 ${uploadCircuit.recentUploadFailures}）。`,
+      null,
+    ));
+  }
+
 
   if (input.scope.projectId && input.projectStatus === "archived") {
     checks.push(fail(
