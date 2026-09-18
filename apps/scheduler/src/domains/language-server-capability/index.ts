@@ -7,6 +7,7 @@ export {
   languageServerConfigFingerprint,
   languageServerPackDigest,
   listLanguageServerCapabilities,
+  languageServerForImage,
 } from "./catalog.js";
 export {
   admitLanguageServerCapability,

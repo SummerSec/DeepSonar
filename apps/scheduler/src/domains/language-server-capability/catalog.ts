@@ -154,3 +154,11 @@ export function languageServerPackDigest(id: string): string | undefined {
   if (!module) return undefined;
   return capabilityPackDigest(packDraftForLanguageServer(module));
 }
+
+/**
+ * Resolve a catalog language-server module compatible with `imageKey`.
+ * Does not admit or freeze by itself — callers must run `admitLanguageServerCapability`.
+ */
+export function languageServerForImage(imageKey: string) {
+  return LANGUAGE_SERVER_CAPABILITY_MANIFESTS.find((item) => item.compatible_images.includes(imageKey));
+}
