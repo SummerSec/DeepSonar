@@ -57,22 +57,28 @@ RUN echo "$HDC_SHA256  /tmp/hdc" | sha256sum -c - \
 RUN node -e 'const fs=require("node:fs"); const m={"contract":"deepsonar.runtime.contract/v1","toolset":"openharmony-test","imageKey":"deepsonar-openharmony-test","project_opt_in":true,"tools":["git","git-lfs","repo","python3","python3-requests","build-essential","ccache","cmake","ninja","hdc","node","claude"],"device":{"protocol":"hdc","binary":"/opt/deepsonar/hdc/hdc","wrapper":"/opt/deepsonar/bin/hdc","companion":["libusb_shared.so"],"commands":["list targets","shell","file send","file recv","install","hilog","fport","tconn"]},"source":{"manifest":"https://gitcode.com/openharmony/manifest.git","branch":"master","hdc":{"sdk":"https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz","version":"3.2.0b"}},"entrypoints":{"check":"/opt/deepsonar/bin/openharmony-env.sh","hdc":"/opt/deepsonar/bin/openharmony-hdc.sh","init":"/opt/deepsonar/bin/openharmony-init.sh","build":"/opt/deepsonar/bin/openharmony-build.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json", JSON.stringify(m,null,2)+"\n")' \
   && PATH="/opt/deepsonar/bin:/opt/deepsonar/hdc:$PATH" /opt/deepsonar/bin/openharmony-env.sh --check --hdc
 
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-openharmony-test \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
 ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
     HDC_HOME=/opt/deepsonar/hdc \
     PATH=/opt/deepsonar/bin:/opt/deepsonar/hdc:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-openharmony-test /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
-
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="openharmony-test" \
+      io.deepsonar.image-key="deepsonar-openharmony-test" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar OpenHarmony Test" \
       org.opencontainers.image.description="OpenHarmony 官方源码同步、构建验证与钉死 hdc 设备协议；不包含全量源码或特定开发板固件。" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

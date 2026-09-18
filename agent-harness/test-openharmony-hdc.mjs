@@ -9,10 +9,37 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const helper = join(root, "deploy/openharmony-hdc.sh");
 const envHelper = join(root, "deploy/openharmony-env.sh");
 
+function toBashPath(value) {
+  if (process.platform !== "win32") return value;
+  const match = String(value).match(/^([A-Za-z]):[\\/](.*)$/);
+  if (!match) return String(value).replaceAll("\\", "/");
+  return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+}
+
+function spawnWsl(args, options = {}) {
+  let result;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    result = spawnSync("wsl.exe", args, options);
+    const transient = result.status === -1 || result.status === 0xffffffff
+      || /Wsl\/Service\/0x8007274c/i.test(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+    if (!transient) return result;
+  }
+  return result;
+}
+
 function run(args, env) {
-  return spawnSync("bash", [helper, ...args], {
+  const bashEnv = Object.fromEntries(Object.entries(env).map(([key, value]) => [
+    key,
+    key === "HDC_BIN" ? toBashPath(value) : value,
+  ]));
+  if (process.platform === "win32") {
+    return spawnWsl([
+      "--exec", "env", `HDC_BIN=${bashEnv.HDC_BIN}`, "bash", toBashPath(helper), ...args,
+    ], { encoding: "utf8" });
+  }
+  return spawnSync("bash", [toBashPath(helper), ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...bashEnv },
   });
 }
 
@@ -21,6 +48,7 @@ function writeFakeHdc(script) {
   const bin = join(dir, "hdc");
   writeFileSync(bin, script);
   chmodSync(bin, 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(bin)]);
   return bin;
 }
 
@@ -28,6 +56,7 @@ function writeStub(dir, name, script = "#!/usr/bin/env bash\nexit 0\n") {
   const bin = join(dir, name);
   writeFileSync(bin, script);
   chmodSync(bin, 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(bin)]);
   return bin;
 }
 
@@ -131,12 +160,20 @@ function runEnvCheck({ hdcScript, includeHdc = true } = {}) {
     imageKey: "deepsonar-openharmony-test",
     device: { protocol: "hdc" },
   }));
-  return spawnSync("bash", [envHelper, "--check", "--hdc"], {
+  const bashPath = `${toBashPath(dir)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
+  const bashManifest = toBashPath(manifest);
+  if (process.platform === "win32") {
+    return spawnWsl([
+      "--exec", "env", `PATH=${bashPath}`, `DEEPSONAR_TOOL_MANIFEST=${bashManifest}`,
+      "bash", toBashPath(envHelper), "--check", "--hdc",
+    ], { encoding: "utf8" });
+  }
+  return spawnSync("bash", [toBashPath(envHelper), "--check", "--hdc"], {
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${dir}:${process.env.PATH}`,
-      DEEPSONAR_TOOL_MANIFEST: manifest,
+      PATH: bashPath,
+      DEEPSONAR_TOOL_MANIFEST: bashManifest,
     },
   });
 }

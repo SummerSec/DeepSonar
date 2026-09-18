@@ -33,6 +33,16 @@ RUN set -eux; \
   node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"clickhouse-audit",imageKey:"deepsonar-clickhouse-audit",project_opt_in:true,tools:["git","git-partial-clone","cmake","ninja","clang","clang-tidy","clangd","llvm","objdump","readelf","llvm-nm","python3","jq","node","claude"],focus:["c++-toolchain","source-inspection","clickhouse"],entrypoints:{check:"/opt/deepsonar/bin/clickhouse-audit-env.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-clickhouse-audit \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
 RUN /opt/deepsonar/bin/clickhouse-audit-env.sh --check
 
 ENV IS_SANDBOX=1 \
@@ -40,18 +50,14 @@ ENV IS_SANDBOX=1 \
     PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-clickhouse-audit /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
-
 FROM scratch
 ARG OCI_TITLE="DeepSonar ClickHouse Audit"
 ARG OCI_DESCRIPTION="Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils."
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="clickhouse-audit" \
+      io.deepsonar.image-key="deepsonar-clickhouse-audit" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="${OCI_TITLE}" \
       org.opencontainers.image.description="${OCI_DESCRIPTION}" \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

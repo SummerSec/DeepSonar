@@ -12,6 +12,14 @@ const tempRoot = mkdtempSync(path.join(os.tmpdir(), "deepsonar-runtime-registry-
 const descriptorDir = path.join(tempRoot, "descriptors");
 const outputPath = path.join(tempRoot, "runtime-image-registry.json");
 const digest = `sha256:${"a".repeat(64)}`;
+const manualSha256 = "c".repeat(64);
+const manual = {
+  contract: "deepsonar.runtime.manuals/v1",
+  path: "/opt/deepsonar/manuals/index.json",
+  version: "2026.09.17",
+  sha256: manualSha256,
+  count: 12,
+};
 const channels = {
   github: `ghcr.io/summersec/deepsonar-base@${digest}`,
   dockerhub: `docker.io/sumsec/deepsonar-base@${digest}`,
@@ -43,6 +51,7 @@ function writeDescriptors({ optional = "all", mutate } = {}) {
       platforms: ["linux/amd64", "linux/arm64"],
       size_bytes: 100 + index,
       platform_size_bytes: { "linux/amd64": 100 + index, "linux/arm64": 120 + index },
+      manual: { ...manual },
       registry_records: records,
     };
     mutate?.(descriptor, imageKey);
@@ -75,6 +84,7 @@ try {
     assert.match(version.registry_refs["aliyun-acr"], /^crpi-6s5wwv0nhl6dq1l0\.cn-hangzhou\.personal\.cr\.aliyuncs\.com\/summersec\//);
     assert.equal(version.image_ref, version.registry_refs.github);
     assert.equal(version.registry_evidence.github.inspect_digest, digest);
+    assert.deepEqual(version.manual, manual);
   }
   execFileSync(process.execPath, [generator, "--check", outputPath], { stdio: "pipe" });
   assert.equal(generated.platform_version, "0.1.0");
@@ -138,6 +148,12 @@ try {
   assertGenerationFails(/unknown fields/i, (descriptor, imageKey) => {
     if (imageKey === "deepsonar-base") descriptor.untrusted_extra = true;
   });
+  assertGenerationFails(/manual/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") delete descriptor.manual;
+  });
+  assertGenerationFails(/manual sha256/i, (descriptor, imageKey) => {
+    if (imageKey === "deepsonar-base") descriptor.manual.sha256 = "invalid";
+  });
 
   const assertRegistryCheckFails = (message, mutate) => {
     writeDescriptors();
@@ -150,6 +166,7 @@ try {
   assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.untrusted_extra = true; });
   assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].untrusted_extra = true; });
   assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].versions[0].untrusted_extra = true; });
+  assertRegistryCheckFails(/manual path/i, (candidate) => { candidate.images[0].versions[0].manual.path = "/tmp/index.json"; });
   assertRegistryCheckFails(/unknown fields/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.github.untrusted_extra = true; });
   assertRegistryCheckFails(/registry_evidence|provenance/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.github.provenance = "cross-registry-copy+inspect"; });
   assertRegistryCheckFails(/registry_evidence|unavailable|reason/i, (candidate) => { candidate.images[0].versions[0].registry_evidence.dockerhub.reason = "credentials missing"; });
@@ -159,16 +176,25 @@ try {
     version.registry_evidence.dockerhub = { available: false, provenance: "unavailable", reason: "credentials_missing" };
   });
 
-  // --check remains able to read a historical v1 catalog.
+  // --check accepts a historical v1 catalog only when offline manuals are present.
   const v1Path = path.join(tempRoot, "legacy-v1.json");
   writeFileSync(v1Path, JSON.stringify({
+    schema: "deepsonar.registry/v1",
+    images: template.images.map((image) => ({
+      ...image,
+      versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/${image.image_key}@${digest}`, platforms: ["linux/amd64"], size_bytes: 42, manual: { ...manual } }],
+    })),
+  }));
+  execFileSync(process.execPath, [generator, "--check", v1Path], { stdio: "pipe" });
+  const v1MissingManualPath = path.join(tempRoot, "legacy-v1-missing-manual.json");
+  writeFileSync(v1MissingManualPath, JSON.stringify({
     schema: "deepsonar.registry/v1",
     images: template.images.map((image) => ({
       ...image,
       versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/${image.image_key}@${digest}`, platforms: ["linux/amd64"], size_bytes: 42 }],
     })),
   }));
-  execFileSync(process.execPath, [generator, "--check", v1Path], { stdio: "pipe" });
+  assert.throws(() => execFileSync(process.execPath, [generator, "--check", v1MissingManualPath], { stdio: "pipe" }), /manual/i);
 
   const duplicateV1Path = path.join(tempRoot, "legacy-v1-duplicate.json");
   const duplicateImages = JSON.parse(readFileSync(v1Path, "utf8"));
@@ -177,12 +203,12 @@ try {
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateV1Path], { stdio: "pipe" }), /duplicate/i);
   const duplicateAliasPath = path.join(tempRoot, "legacy-v1-overlap.json");
   const duplicateAlias = JSON.parse(readFileSync(v1Path, "utf8"));
-  duplicateAlias.images[0].versions.push({ version: "0.1.1-linux-amd64", image_ref: duplicateAlias.images[0].versions[0].image_ref, platforms: ["linux/amd64"], size_bytes: 42 });
+  duplicateAlias.images[0].versions.push({ version: "0.1.1-linux-amd64", image_ref: duplicateAlias.images[0].versions[0].image_ref, platforms: ["linux/amd64"], size_bytes: 42, manual: { ...manual } });
   writeFileSync(duplicateAliasPath, JSON.stringify(duplicateAlias));
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateAliasPath], { stdio: "pipe" }), /duplicate/i);
   const duplicateMissingPlatformPath = path.join(tempRoot, "legacy-v1-missing-platform.json");
   const duplicateMissingPlatform = JSON.parse(readFileSync(v1Path, "utf8"));
-  duplicateMissingPlatform.images[0].versions.push({ version: "0.1.1", image_ref: duplicateMissingPlatform.images[0].versions[0].image_ref });
+  duplicateMissingPlatform.images[0].versions.push({ version: "0.1.1", image_ref: duplicateMissingPlatform.images[0].versions[0].image_ref, manual: { ...manual } });
   writeFileSync(duplicateMissingPlatformPath, JSON.stringify(duplicateMissingPlatform));
   assert.throws(() => execFileSync(process.execPath, [generator, "--check", duplicateMissingPlatformPath], { stdio: "pipe" }), /duplicate/i);
 
@@ -191,7 +217,9 @@ try {
   writeDescriptors();
   runGenerator({ VERSION: "0.1.0" });
   const first = JSON.parse(readFileSync(outputPath, "utf8"));
-  writeFileSync(previousPath, `${JSON.stringify(first, null, 2)}\n`);
+  const historicalWithoutManual = structuredClone(first);
+  for (const image of historicalWithoutManual.images) delete image.versions[0].manual;
+  writeFileSync(previousPath, `${JSON.stringify(historicalWithoutManual, null, 2)}\n`);
   runGenerator({ VERSION: "0.2.0", PREVIOUS_REGISTRY: previousPath });
   const reused = JSON.parse(readFileSync(outputPath, "utf8"));
   assert.equal(reused.platform_version, "0.2.0");
@@ -199,6 +227,7 @@ try {
     assert.equal(image.versions.length, 1);
     assert.equal(image.versions[0].version, "0.1.0");
     assert.equal(image.versions[0].digest, digest);
+    assert.deepEqual(image.versions[0].manual, manual);
   }
   const changedDigest = `sha256:${"b".repeat(64)}`;
   writeDescriptors({

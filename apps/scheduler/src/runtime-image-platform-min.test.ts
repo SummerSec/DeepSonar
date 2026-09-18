@@ -9,6 +9,13 @@ import {
   RuntimeImageBelowPlatformMinError,
 } from "./runtime-images.js";
 
+const OFFICIAL_MANUAL = {
+  contract: "deepsonar.runtime.manuals/v1" as const,
+  path: "/opt/deepsonar/manuals/index.json" as const,
+  version: "2026.09.17",
+  sha256: "a".repeat(64),
+  count: 1,
+};
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
 test("runtime image version core reads the leading X.Y.Z", () => {
@@ -66,6 +73,7 @@ test("parser accepts platform_version and min_runtime_image, and rejects invalid
         version: "0.2.10",
         digest: DIGEST,
         platforms: ["linux/amd64"],
+        manual: OFFICIAL_MANUAL,
         size_bytes: 1,
         registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
         registry_evidence: {

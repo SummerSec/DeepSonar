@@ -3,9 +3,11 @@ FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd
 RUN apk add --no-cache ca-certificates docker-cli && corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/runtime-manual-contract/package.json packages/runtime-manual-contract/package.json
 COPY apps/image-admission/package.json apps/image-admission/package.json
 RUN pnpm install --frozen-lockfile --filter @deepsonar/image-admission...
+COPY packages/runtime-manual-contract packages/runtime-manual-contract
 COPY apps/image-admission apps/image-admission
-RUN pnpm --filter @deepsonar/image-admission build
+RUN pnpm --filter @deepsonar/runtime-manual-contract --filter @deepsonar/image-admission build
 ENV NODE_ENV=production
 CMD ["pnpm", "--filter", "@deepsonar/image-admission", "start"]

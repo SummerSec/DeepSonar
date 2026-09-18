@@ -14,6 +14,7 @@ import {
   applyUploadedRuntimeCatalog,
   hostRuntimePlatform,
   immutableDigest,
+  isOfficialRuntimeImageKey,
   isRuntimeImageBelowPlatformMin,
   platformMinRuntimeImage,
   inspectLocalRuntimeImage,
@@ -360,12 +361,14 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     product_match: inspection.matches_product,
     adoptable: inspection.can_adopt,
     tool_manifest_valid: inspection.tool_manifest_matches,
+    manual_index_valid: inspection.manual_index_matches,
     labels: {
       ...(inspection.labels.contract ? { "io.deepsonar.contract": inspection.labels.contract } : {}),
       ...(inspection.labels.image_key ? { "io.deepsonar.image-key": inspection.labels.image_key } : {}),
       ...(inspection.labels.toolset ? { "io.deepsonar.toolset": inspection.labels.toolset } : {}),
       ...(inspection.labels.tool_manifest && inspection.labels.tool_manifest_label
         ? { [inspection.labels.tool_manifest_label]: inspection.labels.tool_manifest } : {}),
+      ...(inspection.labels.manual_index ? { "io.deepsonar.manuals": inspection.labels.manual_index } : {}),
     },
   });
 
@@ -648,6 +651,9 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     if (!config.images.isRegistryAllowed(body.image_ref)) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
     }
+    if (isOfficialRuntimeImageKey(body.image_key)) {
+      return reply.code(400).send({ error: "official runtime images must come from the server-owned catalog and admission flow" });
+    }
     let image: Record<string, unknown>;
     let version: Record<string, unknown>;
     try {
@@ -694,6 +700,9 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const denied = denyProjectScopedCatalog(req, reply);
     if (denied) return denied;
     const body = RuntimeImageImportBody.parse(req.body);
+    if (isOfficialRuntimeImageKey(body.image_key)) {
+      return reply.code(400).send({ error: "official runtime images must come from the server-owned catalog and admission flow" });
+    }
     if (!config.images.isRegistryAllowed(body.image_ref)) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
     }

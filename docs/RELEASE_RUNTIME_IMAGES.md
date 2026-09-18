@@ -124,7 +124,9 @@ consumed by the three Chrome Dockerfiles and the consistency gate:
 - `playwright-core@1.62.1` is installed with its npm integrity value. The test
   smoke launches the image's governed Chromium wrapper and connects through
   the CDP endpoint with Playwright; it is not a host-browser smoke.
-- Chrome Fuzz 固定 checkout depot_tools 提交
+- Chrome Fuzz 固定 checkout depot_tools 提交，关闭自动更新，并在 gclient 前运行
+  `ensure_bootstrap`（生成 `python3_bin_reldir.txt`），避免浅克隆未初始化或漂移到
+  与 Debian Git 2.39 不兼容的新 gclient
   `921e61b35fbc5e97b14250a118e363ec05078089` 与 V8 提交
   `792d9716fea48312ad7ce4413c538e00628b1d50`（V8 `15.1.206.10`，来自 Chromium
   `151.0.7922.71`），然后针对目标架构运行 `autoninja d8

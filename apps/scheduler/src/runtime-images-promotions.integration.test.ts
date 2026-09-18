@@ -4,6 +4,20 @@ import test from "node:test";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
+/** Fixture offline manuals required for trusted official resolve / catalog rows. */
+const FIXTURE_MANUAL = {
+  contract: "deepsonar.runtime.manuals/v1" as const,
+  path: "/opt/deepsonar/manuals/index.json" as const,
+  version: "2026.09.17-fixture",
+  sha256: "b".repeat(64),
+  count: 1,
+};
+const FIXTURE_SCAN_SUMMARY = {
+  source: "fixture",
+  contract: "declared",
+  manual: FIXTURE_MANUAL,
+};
+
 if (!testDatabaseUrl) {
   test("runtime image no-GitHub promotion reconciliation (set TEST_DATABASE_URL to run)", {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
@@ -47,6 +61,7 @@ if (!testDatabaseUrl) {
             digest: newDigest,
             platforms: ["linux/amd64"],
             size_bytes: 42,
+            manual: FIXTURE_MANUAL,
             registry_refs: {
               dockerhub: `docker.io/sumsec/${imageKey}@${newDigest}`,
               "aliyun-acr": `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec/${imageKey}@${newDigest}`,
@@ -110,6 +125,7 @@ if (!testDatabaseUrl) {
             image_ref: githubRef,
             digest,
             platforms: ["linux/amd64"],
+            manual: FIXTURE_MANUAL,
             registry_refs: { github: githubRef, "aliyun-acr": acrRef },
           }],
         }],
@@ -150,6 +166,7 @@ if (!testDatabaseUrl) {
           image_ref: githubRef,
           digest,
           platforms: ["linux/amd64"],
+          manual: FIXTURE_MANUAL,
           registry_refs: { github: githubRef, "aliyun-acr": acrRef },
         }],
       }],
@@ -212,10 +229,10 @@ if (!testDatabaseUrl) {
         VALUES (${imageId}, ${imageKey}, 'Pin stale fixture', 'fixture', 'SummerSec', 'official', true)`;
       await sql`
         INSERT INTO runtime_image_versions
-          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at, scan_summary_json)
         VALUES
-          (${oldVersionId}, ${imageId}, '0.1.38', ${oldGithub}, ${oldGithub}, ${oldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
-          (${newVersionId}, ${imageId}, '0.1.39', ${newRef}, ${newRef}, ${newDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now())`;
+          (${oldVersionId}, ${imageId}, '0.1.38', ${oldGithub}, ${oldGithub}, ${oldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL, ${sql.json(FIXTURE_SCAN_SUMMARY as never)}),
+          (${newVersionId}, ${imageId}, '0.1.39', ${newRef}, ${newRef}, ${newDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now(), ${sql.json(FIXTURE_SCAN_SUMMARY as never)})`;
       await sql`
         INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
         VALUES (${newVersionId}, 'aliyun-acr', ${newRef}, ${newRef}, ${newDigest}, ${sql.json({ source: "fixture" } as never)})`;
@@ -274,11 +291,11 @@ if (!testDatabaseUrl) {
         VALUES (${imageId}, ${imageKey}, 'Revoked official', 'fixture', 'SummerSec', 'official', true, false)`;
       await sql`
         INSERT INTO runtime_image_versions
-          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, status_reason, revoked_at)
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, status_reason, revoked_at, scan_summary_json)
         VALUES
           (${versionId}, ${imageId}, '0.1.41', ${acrRef}, ${acrRef}, ${digest},
            ${sql.json(["linux/amd64", "linux/arm64"] as never)},
-           'revoked', 'admission policy failed: critical=19, secrets=0', now())`;
+           'revoked', 'admission policy failed: critical=19, secrets=0', now(), ${sql.json(FIXTURE_SCAN_SUMMARY as never)})`;
       await sql`
         INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
         VALUES (${versionId}, 'aliyun-acr', ${acrRef}, ${acrRef}, ${digest}, ${sql.json({ source: "fixture" } as never)})`;
@@ -351,16 +368,16 @@ if (!testDatabaseUrl) {
           (${thirdPartyId}, ${thirdPartyKey}, 'Third party roll', 'fixture', 'Other', 'third_party', false)`;
       await sql`
         INSERT INTO runtime_image_versions
-          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+          (id, runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at, scan_summary_json)
         VALUES
           (${oldOfficialVersionId}, ${officialId}, '0.1.41', ${`ghcr.io/summersec/${officialKey}@${oldDigest}`},
-           ${`ghcr.io/summersec/${officialKey}@${oldDigest}`}, ${oldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
+           ${`ghcr.io/summersec/${officialKey}@${oldDigest}`}, ${oldDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', NULL, ${sql.json(FIXTURE_SCAN_SUMMARY as never)}),
           (${pinOkVersionId}, ${officialId}, '0.1.40', ${pinOkAcr}, ${pinOkAcr}, ${pinOkDigest},
-           ${sql.json([hostPlatform] as never)}, 'trusted', NULL),
+           ${sql.json([hostPlatform] as never)}, 'trusted', NULL, ${sql.json(FIXTURE_SCAN_SUMMARY as never)}),
           (${oldThirdVersionId}, ${thirdPartyId}, '9.0.0', ${`example.local/${thirdPartyKey}@${thirdOldDigest}`},
-           ${`example.local/${thirdPartyKey}@${thirdOldDigest}`}, ${thirdOldDigest}, ${sql.json([hostPlatform] as never)}, 'disabled', NULL),
+           ${`example.local/${thirdPartyKey}@${thirdOldDigest}`}, ${thirdOldDigest}, ${sql.json([hostPlatform] as never)}, 'disabled', NULL, ${sql.json({ source: "fixture" } as never)}),
           (${newThirdVersionId}, ${thirdPartyId}, '9.1.0', ${`example.local/${thirdPartyKey}@${thirdNewDigest}`},
-           ${`example.local/${thirdPartyKey}@${thirdNewDigest}`}, ${thirdNewDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now())`;
+           ${`example.local/${thirdPartyKey}@${thirdNewDigest}`}, ${thirdNewDigest}, ${sql.json([hostPlatform] as never)}, 'trusted', now(), ${sql.json({ source: "fixture" } as never)})`;
       await sql`
         INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest, evidence_json)
         VALUES (${pinOkVersionId}, 'aliyun-acr', ${pinOkAcr}, ${pinOkAcr}, ${pinOkDigest}, ${sql.json({ source: "fixture" } as never)})`;
@@ -407,6 +424,7 @@ if (!testDatabaseUrl) {
             image_ref: newGithub,
             digest: newDigest,
             platforms: [hostPlatform],
+            manual: FIXTURE_MANUAL,
             registry_refs: { github: newGithub, "aliyun-acr": newAcr },
           }],
         }],
@@ -469,6 +487,7 @@ if (!testDatabaseUrl) {
             image_ref: newGithub,
             digest: newDigest,
             platforms: [hostPlatform],
+            manual: FIXTURE_MANUAL,
             registry_refs: { github: newGithub, "aliyun-acr": newAcr },
           }],
         }],

@@ -159,7 +159,7 @@
       "objection": { "version": "1.12.5", "license": "GPL-3.0-only", "capabilities": ["runtime-instrumentation"] },
       "androguard": { "version": "4.1.4", "license": "Apache-2.0", "capabilities": ["apk-static-analysis"] },
       "droidasc": {
-        "version": "0.1.1",
+        "version": "0.1.1.post1",
         "license": "Apache-2.0",
         "capabilities": ["apk-decompile", "apk-xref-search", "apk-manifest-decode"],
         "source": "PyPI droidasc (MG1937/ASC); CLI only — do not use --gui"

@@ -62,6 +62,16 @@ RUN set -eux; \
   node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"chrome-test",imageKey:"deepsonar-chrome-test",project_opt_in:true,tools:["chromium@151.0.7922.71","chromium-common@151.0.7922.71","chromium-headless","remote-debugging-cdp","playwright-core@1.62.1","node","claude"],browser:{binary:"/usr/bin/chromium",protocol:"cdp",wrapper:"/opt/deepsonar/bin/chrome-headless.sh",requiredFlags:["--no-sandbox","--headless=new"]},entrypoints:{check:"/opt/deepsonar/bin/chrome-test-env.sh",launch:"/opt/deepsonar/bin/chrome-headless.sh",smoke:"/opt/deepsonar/chrome-test-smoke.mjs"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace
 
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key deepsonar-chrome-test \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
 ENV IS_SANDBOX=1 \
     CHROME_BIN=/usr/bin/chromium \
     CHROME_REMOTE_DEBUGGING_PORT=9222 \
@@ -70,16 +80,12 @@ ENV IS_SANDBOX=1 \
 WORKDIR /workspace
 RUN /opt/deepsonar/bin/chrome-test-env.sh --check
 
-
-# deepsonar-runtime-manuals (#588)
-COPY agent-harness/manuals/deepsonar-chrome-test /opt/deepsonar/manuals
-RUN test -f /opt/deepsonar/manuals/INDEX.md
-
 FROM scratch
 LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       io.deepsonar.toolset="chrome-test" \
+      io.deepsonar.image-key="deepsonar-chrome-test" \
       io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
-      io.deepsonar.manuals="/opt/deepsonar/manuals" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
       org.opencontainers.image.title="DeepSonar Chrome Test" \
       org.opencontainers.image.description="Project-opt-in pinned Chromium headless/CDP runtime with a governed --no-sandbox wrapper and Playwright path." \
       org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \

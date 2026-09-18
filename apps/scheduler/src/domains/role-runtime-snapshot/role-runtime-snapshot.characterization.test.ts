@@ -9,6 +9,7 @@ import {
   roleNameForJobType,
   runtimeImageKeyForProjectPolicy,
   withRuntimeTestToolchainPolicy,
+  RUNTIME_TOOL_MANUALS_POLICY,
   SPECIALTY_RUNTIME_IMAGE_POLICIES,
   specialtyPolicyForImageKey,
 } from "./application.js";
@@ -39,6 +40,7 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
   );
   assert.match(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit") ?? "", /Runtime tool manuals/);
   assert.match(withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-audit") ?? "", /custom/);
+  assert.match(RUNTIME_TOOL_MANUALS_POLICY, /does not grant tools/);
   const source = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /warnIgnoredLegacyAgentDefaults|legacy AGENT_PROVIDER/);
   assert.doesNotMatch(source, /jobType === "audit_module"\) return "audit"/);
@@ -72,6 +74,26 @@ test("specialty image boundary injects for any role; chrome/clickhouse peer mobi
   assert.match(withRuntimeTestToolchainPolicy("code", null, "deepsonar-base") ?? "", /Runtime tool manuals/);
   assert.match(withRuntimeTestToolchainPolicy("review", "keep", "deepsonar-kali-minimal") ?? "", /Runtime tool manuals/);
   assert.match(withRuntimeTestToolchainPolicy("review", "keep", "deepsonar-kali-minimal") ?? "", /keep/);
+
+  for (const imageKey of [
+    "deepsonar-base",
+    "deepsonar-audit",
+    "deepsonar-kali-minimal",
+    "deepsonar-chrome-test",
+    "deepsonar-chrome-audit",
+    "deepsonar-chrome-fuzz",
+    "deepsonar-clickhouse-test",
+    "deepsonar-clickhouse-audit",
+    "deepsonar-clickhouse-fuzz",
+    "deepsonar-openharmony-test",
+    "deepsonar-openharmony-audit",
+    "deepsonar-openharmony-fuzz",
+    "deepsonar-mobile",
+  ]) {
+    const policy = withRuntimeTestToolchainPolicy("code", null, imageKey) ?? "";
+    assert.match(policy, /\/opt\/deepsonar\/manuals\/index\.json/);
+    assert.match(policy, /does not grant tools/);
+  }
 
   const keys = SPECIALTY_RUNTIME_IMAGE_POLICIES.map((item) => item.image_key);
   for (const key of [

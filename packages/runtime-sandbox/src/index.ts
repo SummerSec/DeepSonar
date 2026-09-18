@@ -22,6 +22,18 @@ export interface ProvisionInput {
   /** 市场准入时冻结的镜像契约与工具清单摘要；provision 后再次复核。 */
   expectedContract?: string;
   expectedToolsManifestSha256?: string | null;
+  /** Official images must expose the offline Worker tool manual at the fixed path. */
+  requireRuntimeManual?: boolean;
+  /** Manual metadata frozen with the trusted runtime-image version. */
+  expectedRuntimeManual?: {
+    contract?: string;
+    path?: string;
+    version?: string | null;
+    sha256?: string | null;
+    count?: number | null;
+  } | null;
+  /** Product identity frozen with the runtime-image snapshot. */
+  expectedRuntimeImageKey?: string;
   /** 沙箱资源/权限硬限制（SEC-03）；缺省由实现给安全默认 */
   limits?: SandboxLimits;
   /**
@@ -219,10 +231,19 @@ export {
   buildTerminalShellCommand,
   parseHumanInboxWorkspacePath,
   parseToolManifest,
+  assertRuntimeManualLabel,
+  parseRuntimeManualIndex,
+  parseRuntimeManualMetadata,
+  RUNTIME_MANUAL_CONTRACT,
+  RUNTIME_MANUAL_INDEX_PATH,
+  RUNTIME_MANUAL_LABEL,
+  RUNTIME_MANUAL_ROOT_PATH,
+  validateRuntimeManualPair,
   sharedAssetsVolumeBinds,
   terminalShellCommand,
   writeTerminalInput,
 } from "./runtime-shared.js";
+export type { RuntimeManualIndex, RuntimeManualMetadata } from "./runtime-shared.js";
 export {
   createSemanticToolState,
   discardPendingSemanticTools,

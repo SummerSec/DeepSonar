@@ -36,6 +36,9 @@ importers:
 
   apps/image-admission:
     dependencies:
+      '@deepsonar/runtime-manual-contract':
+        specifier: workspace:*
+        version: link:../../packages/runtime-manual-contract
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -172,11 +175,23 @@ importers:
         specifier: ^6.4.3
         version: 6.4.3(@types/node@26.1.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  packages/runtime-manual-contract:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.2
+        version: 26.1.2
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/runtime-sandbox:
     dependencies:
       '@alibaba-group/opensandbox':
         specifier: 0.1.11
         version: 0.1.11
+      '@deepsonar/runtime-manual-contract':
+        specifier: workspace:*
+        version: link:../runtime-manual-contract
       '@deepsonar/shared-types':
         specifier: workspace:*
         version: link:../shared-types

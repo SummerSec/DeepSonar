@@ -113,15 +113,21 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   const pkg = readFileSync(join(root, "package.json"), "utf8");
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(pkg, /ci:smoke:opensandbox-prod-stack/);
-  assert.match(pkg, /ci:smoke:opensandbox-prod-compose": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-prod-official": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-reconcile": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-reaper": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-dispatch": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-api": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-cli-control": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-gvisor": "pnpm --filter @deepsonar\/runtime-sandbox build/);
-  assert.match(pkg, /ci:smoke:opensandbox-k8s-assets": "pnpm --filter @deepsonar\/runtime-sandbox build/);
+  // After #588, smoke scripts build runtime-manual-contract before runtime-sandbox.
+  const smokeBuildPrefix = /pnpm --filter @deepsonar\/runtime-manual-contract build && pnpm --filter @deepsonar\/runtime-sandbox build/;
+  for (const script of [
+    "ci:smoke:opensandbox-prod-compose",
+    "ci:smoke:opensandbox-prod-official",
+    "ci:smoke:opensandbox-reconcile",
+    "ci:smoke:opensandbox-reaper",
+    "ci:smoke:opensandbox-dispatch",
+    "ci:smoke:opensandbox-api",
+    "ci:smoke:opensandbox-cli-control",
+    "ci:smoke:opensandbox-gvisor",
+    "ci:smoke:opensandbox-k8s-assets",
+  ]) {
+    assert.match(pkg, new RegExp(`${script}": ".*${smokeBuildPrefix.source}`));
+  }
   const isolate = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod-isolated.yml"), "utf8");
   assert.match(isolate, /name: \$\{OPEN_SANDBOX_POC_GATEWAY_NET:-os-poc-sandbox-gateway\}/);
   assert.doesNotMatch(isolate, /^\s+name:\s*deepsonar-sandbox-gateway/m);

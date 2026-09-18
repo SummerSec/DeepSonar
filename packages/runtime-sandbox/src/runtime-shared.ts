@@ -4,6 +4,21 @@
 
 import path from "node:path";
 
+import {
+  RUNTIME_MANUAL_CONTRACT,
+  RUNTIME_MANUAL_INDEX_PATH,
+  RUNTIME_MANUAL_LABEL,
+  RUNTIME_MANUAL_ROOT_PATH,
+  RuntimeManualContractError,
+  assertRuntimeManualLabel,
+  validateRuntimeManualIndex,
+  validateRuntimeManualMetadata,
+  validateRuntimeManualPair,
+  type RuntimeManualIndex,
+  type RuntimeManualMetadata,
+} from "@deepsonar/runtime-manual-contract";
+
+
 export const DEEPSONAR_GATEWAY_PROXY_HOST = "deepsonar-gateway-proxy";
 export const SHARED_ASSETS_MOUNT_PATH = "/workspace/.deepsonar/shared";
 export const SHARED_ASSETS_VOLUME_LABEL = "deepsonar.shared_assets.managed";
@@ -36,20 +51,67 @@ export class RuntimeImageContractError extends Error {
   }
 }
 
+export {
+  RUNTIME_MANUAL_CONTRACT,
+  RUNTIME_MANUAL_INDEX_PATH,
+  RUNTIME_MANUAL_LABEL,
+  RUNTIME_MANUAL_ROOT_PATH,
+  assertRuntimeManualLabel,
+  validateRuntimeManualPair,
+  type RuntimeManualIndex,
+  type RuntimeManualMetadata,
+};
+
+function asImageContractError(error: unknown): never {
+  if (error instanceof RuntimeManualContractError) {
+    throw new RuntimeImageContractError(error.message.replace(/^runtime manual: /, "runtime manual "));
+  }
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+/** Parse and validate the manifest's manual metadata, if present. */
+export function parseRuntimeManualMetadata(value: unknown): RuntimeManualMetadata | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return validateRuntimeManualMetadata(value);
+  } catch (error) {
+    asImageContractError(error);
+  }
+}
+
+/** Parse the machine-readable manual index read from a provisioned worker. */
+export function parseRuntimeManualIndex(raw: string): RuntimeManualIndex {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw.replace(/^\uFEFF/, "").trim());
+  } catch (error) {
+    throw new RuntimeImageContractError(`runtime manual index is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return validateRuntimeManualIndex(value);
+  } catch (error) {
+    asImageContractError(error);
+  }
+}
+
 /**
  * 解析运行时 tool-manifest。部分已发布 OH 镜像在合法 JSON 后多了字面量 `\n`
  *（Dockerfile 单引号里写了 +"\\n"），严格 parse 会报
  * "Unexpected non-whitespace character after JSON"。
  */
-export function parseToolManifest(raw: string): { contract?: string } {
+export function parseToolManifest(raw: string): { contract?: string; manual?: RuntimeManualMetadata; [key: string]: unknown } {
   const text = raw.replace(/^\uFEFF/, "").trim();
   try {
-    return JSON.parse(text) as { contract?: string };
+    const manifest = JSON.parse(text) as Record<string, unknown>;
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new RuntimeImageContractError("tool manifest must be an object");
+    return { ...manifest, ...(manifest.manual === undefined ? {} : { manual: parseRuntimeManualMetadata(manifest.manual) }) };
   } catch (first) {
     const stripped = text.replace(/(?:\\n)+\s*$/g, "").trim();
     if (stripped !== text) {
       try {
-        return JSON.parse(stripped) as { contract?: string };
+        const manifest = JSON.parse(stripped) as Record<string, unknown>;
+        if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new RuntimeImageContractError("tool manifest must be an object");
+        return { ...manifest, ...(manifest.manual === undefined ? {} : { manual: parseRuntimeManualMetadata(manifest.manual) }) };
       } catch {
         /* fall through */
       }
@@ -75,7 +137,9 @@ export function parseToolManifest(raw: string): { contract?: string } {
         else if (ch === "}") {
           depth--;
           if (depth === 0) {
-            return JSON.parse(text.slice(start, i + 1)) as { contract?: string };
+            const manifest = JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
+            if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new RuntimeImageContractError("tool manifest must be an object");
+            return { ...manifest, ...(manifest.manual === undefined ? {} : { manual: parseRuntimeManualMetadata(manifest.manual) }) };
           }
         }
       }

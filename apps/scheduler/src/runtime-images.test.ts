@@ -38,6 +38,8 @@ import {
   withSharedAssetsHelperRef,
   RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
   RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
+  OFFICIAL_RUNTIME_IMAGE_KEYS,
+  isOfficialRuntimeImageKey,
   type RuntimeImageRegistry,
 } from "./runtime-images.js";
 
@@ -68,6 +70,13 @@ test("宿主架构映射为运行时镜像平台", () => {
 });
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
+const OFFICIAL_MANUAL = {
+  contract: "deepsonar.runtime.manuals/v1" as const,
+  path: "/opt/deepsonar/manuals/index.json" as const,
+  version: "2026.09.17",
+  sha256: "a".repeat(64),
+  count: 1,
+};
 const BUILTIN_ACR_HOST = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com";
 const baseImage = {
   image_key: "deepsonar-base",
@@ -91,7 +100,7 @@ const acrPolicy = createServerOwnedRuntimeImageRegistryPolicy({
 
 test("legacy official env refs resolve only through their matching registry channel", () => {
   const githubRef = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
-  const version = { version: "configured", image_ref: githubRef, digest: DIGEST };
+  const version = { version: "configured", image_ref: githubRef, digest: DIGEST, manual: OFFICIAL_MANUAL };
   assert.equal(runtimeImageRefForChannel(version, "github"), githubRef);
   assert.equal(runtimeImageRefForChannel(version, "dockerhub"), null);
   assert.equal(runtimeImageRefForChannel(version, "aliyun-acr"), null);
@@ -115,6 +124,7 @@ test("async pull defaults to one latest channel ref per product", () => {
           version: "0.1.33",
           image_ref: `ghcr.io/summersec/deepsonar-base@${older}`,
           digest: older,
+          manual: OFFICIAL_MANUAL,
           registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${older}` },
           platforms: ["linux/amd64", "linux/arm64"],
         },
@@ -122,6 +132,7 @@ test("async pull defaults to one latest channel ref per product", () => {
           version: "0.1.34",
           image_ref: `ghcr.io/summersec/deepsonar-base@${newer}`,
           digest: newer,
+          manual: OFFICIAL_MANUAL,
           registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${newer}` },
           platforms: ["linux/amd64", "linux/arm64"],
         },
@@ -134,6 +145,7 @@ test("async pull defaults to one latest channel ref per product", () => {
           version: "0.1.34",
           image_ref: `ghcr.io/summersec/deepsonar-audit@${armOnly}`,
           digest: armOnly,
+          manual: OFFICIAL_MANUAL,
           registry_refs: { github: `ghcr.io/summersec/deepsonar-audit@${armOnly}` },
           platforms: ["linux/arm64"],
         },
@@ -141,6 +153,7 @@ test("async pull defaults to one latest channel ref per product", () => {
           version: "0.1.33",
           image_ref: `ghcr.io/summersec/deepsonar-audit@${older}`,
           digest: older,
+          manual: OFFICIAL_MANUAL,
           registry_refs: { github: `ghcr.io/summersec/deepsonar-audit@${older}` },
           platforms: ["linux/amd64"],
         },
@@ -164,7 +177,8 @@ test("bulk selection is strict about host platform and selected channel", () => 
       version: "0.1.0",
       digest: DIGEST,
       image_ref: armRef,
-      registry_refs: { github: armRef, "aliyun-acr": acrRef },
+      manual: OFFICIAL_MANUAL,
+          registry_refs: { github: armRef, "aliyun-acr": acrRef },
       platforms: ["linux/amd64"],
     }],
   }], "aliyun-acr", "linux/amd64"), [{ image_key: "deepsonar-base", image_ref: acrRef }]);
@@ -175,7 +189,8 @@ test("bulk selection is strict about host platform and selected channel", () => 
       version: "0.1.0",
       digest: DIGEST,
       image_ref: armRef,
-      registry_refs: { github: armRef },
+      manual: OFFICIAL_MANUAL,
+          registry_refs: { github: armRef },
       platforms: ["linux/arm64"],
     }],
   }], "github", "linux/amd64"), RuntimeImagePlatformUnavailableError);
@@ -186,7 +201,8 @@ test("bulk selection is strict about host platform and selected channel", () => 
       version: "0.1.0",
       digest: DIGEST,
       image_ref: armRef,
-      registry_refs: { github: armRef },
+      manual: OFFICIAL_MANUAL,
+          registry_refs: { github: armRef },
       platforms: ["linux/amd64"],
     }],
   }], "aliyun-acr", "linux/amd64"), /aliyun-acr/);
@@ -197,7 +213,8 @@ test("bulk selection is strict about host platform and selected channel", () => 
       version: "legacy",
       digest: DIGEST,
       image_ref: armRef,
-      registry_refs: { github: armRef },
+      manual: OFFICIAL_MANUAL,
+          registry_refs: { github: armRef },
       platforms: [],
     }],
   }], "github", "linux/amd64"), /platforms explicitly/);
@@ -208,7 +225,7 @@ test("v1 single image_ref is normalized to a known channel without changing the 
     schema: "deepsonar.registry/v1",
     images: [{
       ...baseImage,
-      versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, platforms: ["linux/amd64"], size_bytes: 42 }],
+      versions: [{ version: "0.1.0-linux-amd64", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, platforms: ["linux/amd64"], size_bytes: 42, manual: OFFICIAL_MANUAL }],
     }],
   });
   const version = normalized.images[0]!.versions[0]!;
@@ -218,12 +235,48 @@ test("v1 single image_ref is normalized to a known channel without changing the 
   assert.equal(parseRuntimeImageRegistry({ schema_version: 1, images: [] }).schema, "deepsonar.registry/v1");
 });
 
+test("official runtime versions require strict offline manual metadata", () => {
+  assert.equal(OFFICIAL_RUNTIME_IMAGE_KEYS.length, 13);
+  assert.equal(isOfficialRuntimeImageKey("deepsonar-base"), true);
+  assert.equal(isOfficialRuntimeImageKey("third-party-toolbox"), false);
+  const manual = { ...OFFICIAL_MANUAL, count: 2 };
+  const parsed = parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, manual }],
+    }],
+  });
+  assert.deepEqual(parsed.images[0]!.versions[0]!.manual, manual);
+  assert.throws(() => parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }],
+    }],
+  }), /manual is required/);
+  assert.throws(() => parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, manual: { ...manual, count: 0 } }],
+    }],
+  }), /manual count is invalid/);
+  assert.throws(() => parseRuntimeImageRegistry({
+    schema: "deepsonar.registry/v1",
+    images: [{
+      ...baseImage,
+      versions: [{ version: "0.1.0", image_ref: `ghcr.io/summersec/deepsonar-base@${DIGEST}`, manual: { ...manual, path: "/tmp/index.json" } }],
+    }],
+  }), /manual path is invalid/);
+});
+
 test("the current official ACR-only v1 endpoint is accepted, while arbitrary ACR hosts stay rejected", () => {
   const make = (host: string) => ({
     schema: "deepsonar.registry/v1",
     images: [{
       ...baseImage,
-      versions: [{ version: "0.1.0-linux-amd64", image_ref: `${host}/summersec/deepsonar-base@${DIGEST}`, platforms: ["linux/amd64"], size_bytes: 42 }],
+      versions: [{ version: "0.1.0-linux-amd64", image_ref: `${host}/summersec/deepsonar-base@${DIGEST}`, platforms: ["linux/amd64"], size_bytes: 42, manual: OFFICIAL_MANUAL }],
     }],
   });
   const normalized = parseRuntimeImageRegistry(make(BUILTIN_ACR_HOST));
@@ -272,7 +325,8 @@ test("v2 keeps one canonical digest/platform/size and only emits available chann
         digest: DIGEST,
         platforms: ["linux/amd64", "linux/arm64"],
         size_bytes: 42,
-        registry_refs: refs,
+        manual: OFFICIAL_MANUAL,
+          registry_refs: refs,
         registry_evidence: evidenceFor(refs),
       }],
     }],
@@ -295,7 +349,8 @@ test("v2 requires inspected GitHub evidence before a channel can be consumed", (
         digest: DIGEST,
         platforms: ["linux/amd64"],
         size_bytes: 42,
-        registry_refs: { dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}` },
+        manual: OFFICIAL_MANUAL,
+          registry_refs: { dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}` },
       }],
     }],
   }), /registry_evidence|github/i);
@@ -307,7 +362,8 @@ test("v2 unavailable channel evidence is explicit and cannot smuggle a ref", () 
     digest: DIGEST,
     platforms: ["linux/amd64"],
     size_bytes: 42,
-    registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
+    manual: OFFICIAL_MANUAL,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
     registry_evidence: {
       github: {
         available: true,
@@ -336,7 +392,8 @@ test("v2 catalog exact keys, project_opt_in types, and evidence/ref state fail c
     digest: DIGEST,
     platforms: ["linux/amd64"],
     size_bytes: 42,
-    registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
+    manual: OFFICIAL_MANUAL,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` },
     registry_evidence: {
       github: {
         available: true,
@@ -370,7 +427,8 @@ test("non-builtin ACR requires an explicit server-owned host and namespace polic
         digest: DIGEST,
         platforms: ["linux/amd64"],
         size_bytes: 42,
-        registry_refs: {
+        manual: OFFICIAL_MANUAL,
+          registry_refs: {
           github: `ghcr.io/summersec/deepsonar-base@${DIGEST}`,
           "aliyun-acr": `registry.cn-hangzhou.aliyuncs.com/summersec/deepsonar-base@${DIGEST}`,
         },
@@ -400,8 +458,10 @@ test("v2 rejects channel/host mismatch, digest mismatch, duplicate refs, and unk
   assert.throws(() => parseRuntimeImageRegistry({
     ...make({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }),
     images: [{ ...baseImage, versions: [
-      { version: "0.1.0", digest: DIGEST, platforms: ["linux/amd64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }, registry_evidence: evidenceFor({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }) },
-      { version: "0.1.1", digest: DIGEST, platforms: ["linux/arm64"], size_bytes: 42, registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }, registry_evidence: evidenceFor({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }) },
+      { version: "0.1.0", digest: DIGEST, platforms: ["linux/amd64"], size_bytes: 42, manual: OFFICIAL_MANUAL,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }, registry_evidence: evidenceFor({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }) },
+      { version: "0.1.1", digest: DIGEST, platforms: ["linux/arm64"], size_bytes: 42, manual: OFFICIAL_MANUAL,
+          registry_refs: { github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }, registry_evidence: evidenceFor({ github: `ghcr.io/summersec/deepsonar-base@${DIGEST}` }) },
     ] }],
   }), /duplicate/i);
 });
@@ -410,7 +470,7 @@ test("registry references are globally unique except the proven v1 disjoint-plat
   const ref = `ghcr.io/summersec/deepsonar-base@${DIGEST}`;
   const makeV1 = (images: unknown[]) => ({ schema: "deepsonar.registry/v1", images });
   const image = (imageKey: string, versions: unknown[]) => ({ ...baseImage, image_key: imageKey, versions });
-  const version = (platforms?: string[]) => ({ version: `0.1.0-${platforms?.[0] ?? "unknown"}`, image_ref: ref, ...(platforms ? { platforms } : {}) });
+  const version = (platforms?: string[]) => ({ version: `0.1.0-${platforms?.[0] ?? "unknown"}`, image_ref: ref, manual: OFFICIAL_MANUAL, ...(platforms ? { platforms } : {}) });
 
   const compatible = parseRuntimeImageRegistry(makeV1([image("deepsonar-base", [
     version(["linux/amd64"]),
@@ -422,8 +482,8 @@ test("registry references are globally unique except the proven v1 disjoint-plat
     { ...version(["linux/amd64"]), version: "0.1.0-linux-amd64-duplicate" },
   ])])), /duplicate/i);
   assert.throws(() => parseRuntimeImageRegistry(makeV1([image("deepsonar-base", [
-    { version: "0.1.0-a", image_ref: ref },
-    { version: "0.1.0-b", image_ref: ref },
+    { version: "0.1.0-a", image_ref: ref, manual: OFFICIAL_MANUAL },
+    { version: "0.1.0-b", image_ref: ref, manual: OFFICIAL_MANUAL },
   ])])), /duplicate/i);
   assert.throws(() => parseRuntimeImageRegistry(makeV1([
     image("deepsonar-base", [version(["linux/amd64"])]),
@@ -435,7 +495,8 @@ test("promotion digest projection excludes Docker Hub-only versions", () => {
   const dockerOnly = {
     version: "0.1.0",
     digest: DIGEST,
-    registry_refs: { dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}` },
+    manual: OFFICIAL_MANUAL,
+          registry_refs: { dockerhub: `docker.io/sumsec/deepsonar-base@${DIGEST}` },
     platforms: ["linux/amd64"],
     size_bytes: 42,
   };
@@ -458,7 +519,8 @@ test("catalog admission ref follows the configured deployment registry", () => {
     version: "0.1.0",
     image_ref: githubRef,
     digest: DIGEST,
-    registry_refs: { github: githubRef, "aliyun-acr": acrRef },
+    manual: OFFICIAL_MANUAL,
+          registry_refs: { github: githubRef, "aliyun-acr": acrRef },
   };
   assert.equal(selectRuntimeImageRef("deepsonar-base", version, "crpi.example.com/summersec"), acrRef);
   assert.equal(selectRuntimeImageRef("deepsonar-base", version, ""), githubRef);
@@ -641,7 +703,8 @@ test("清单证据只返回已核实的同 digest 其它通道引用", () => {
       version: "0.1.40",
       digest: DIGEST,
       platforms: ["linux/amd64"],
-      registry_refs: { github: githubRef, dockerhub: dockerhubRef, "aliyun-acr": acrRef },
+      manual: OFFICIAL_MANUAL,
+          registry_refs: { github: githubRef, dockerhub: dockerhubRef, "aliyun-acr": acrRef },
       registry_evidence: evidenceFor({ github: githubRef, dockerhub: dockerhubRef, "aliyun-acr": acrRef }),
     }],
   }], DIGEST, acrRef);

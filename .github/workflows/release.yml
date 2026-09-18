@@ -2905,6 +2905,40 @@ jobs:
         with:
           name: release-changelog
           path: release-changelog
+      - name: 验收最终运行镜像离线手册
+        shell: bash
+        run: |
+          set -euo pipefail
+          for descriptor in release-digests/*.json; do
+            read -r image_key image_ref < <(node -e '
+              const fs = require("node:fs");
+              const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              if (!value.image_key || !value.ghcr_ref) process.exit(2);
+              process.stdout.write(`${value.image_key} ${value.ghcr_ref}\n`);
+            ' "$descriptor")
+            case "$image_key" in
+              deepsonar-base|deepsonar-audit|deepsonar-kali-minimal|deepsonar-chrome-test|deepsonar-chrome-audit|deepsonar-chrome-fuzz|deepsonar-clickhouse-test|deepsonar-clickhouse-audit|deepsonar-clickhouse-fuzz|deepsonar-openharmony-test|deepsonar-openharmony-audit|deepsonar-openharmony-fuzz|deepsonar-mobile) ;;
+              *) continue ;;
+            esac
+            docker pull --platform linux/amd64 "$image_ref"
+            node agent-harness/test-runtime-manuals-runtime.mjs "$image_ref" --image-key "$image_key" --platform linux/amd64
+            runtime_metadata="$(docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+              --platform linux/amd64 "$image_ref" node -e '
+                const fs = require("node:fs");
+                const manifest = JSON.parse(fs.readFileSync("/opt/deepsonar/tool-manifest.json", "utf8"));
+                process.stdout.write(JSON.stringify({ manual: manifest.manual, tools_manifest_sha256: manifest.sha256 }));
+              ')"
+            DESCRIPTOR="$descriptor" RUNTIME_METADATA="$runtime_metadata" EXPECTED_IMAGE_KEY="$image_key" node -e '
+              const fs = require("node:fs");
+              const descriptor = JSON.parse(fs.readFileSync(process.env.DESCRIPTOR, "utf8"));
+              const metadata = JSON.parse(process.env.RUNTIME_METADATA);
+              if (descriptor.image_key !== process.env.EXPECTED_IMAGE_KEY || !metadata.manual || !metadata.tools_manifest_sha256) process.exit(2);
+              descriptor.manual = metadata.manual;
+              descriptor.tools_manifest_sha256 = metadata.tools_manifest_sha256;
+              fs.writeFileSync(process.env.DESCRIPTOR, `${JSON.stringify(descriptor, null, 2)}\n`);
+            '
+            docker image rm "$image_ref" >/dev/null 2>&1 || true
+          done
       - name: 生成 runtime 镜像清单
         env:
           VERSION: ${{ steps.release.outputs.version }}
