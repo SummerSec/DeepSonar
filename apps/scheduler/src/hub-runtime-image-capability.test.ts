@@ -32,6 +32,8 @@ test("Hub catalog capability fields cover official specialty keys Hub must match
   }
   assert.match(hubRuntimeImageCapability("deepsonar-mobile").selection_hints.join(" "), /APK/);
   assert.match(hubRuntimeImageCapability("deepsonar-chrome-test").selection_hints.join(" "), /CDP|Chromium/);
+  assert.ok(hubRuntimeImageCapability("deepsonar-chrome-audit").capabilities.includes("language-server.clangd"));
+  assert.ok(hubRuntimeImageCapability("deepsonar-clickhouse-audit").capabilities.includes("language-server.clangd"));
   assert.match(hubRuntimeImageCapability("deepsonar-clickhouse-test").selection_hints.join(" "), /ClickHouse/);
 });
 

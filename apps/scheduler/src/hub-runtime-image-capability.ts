@@ -97,8 +97,8 @@ const OFFICIAL_HUB_IMAGE_CAPABILITIES: Readonly<Record<string, HubRuntimeImageCa
     not_included: "固定扫描规则包、Chromium 浏览器本体、决策扫描器",
     suited_roles: ["audit", "analyze"],
     suited_evidence: ["C++ 静态检查", "Chrome 源码阅读"],
-    selection_hints: ["审计 Chromium/C++ 树选 chrome-audit", "需要跑浏览器选 chrome-test"],
-    capabilities: ["cpp-toolchain", "clang", "source-inspection"],
+    selection_hints: ["审计 Chromium/C++ 树选 chrome-audit", "需要跑浏览器选 chrome-test", "需要 C/C++ 符号导航时提案 language-server.clangd（需 compile_commands.json）"],
+    capabilities: ["cpp-toolchain", "clang", "source-inspection", "language-server.clangd"],
   },
   "deepsonar-chrome-fuzz": {
     purpose: "V8/Chrome 模糊测试：钉死 d8 + sanitizer/libFuzzer",
@@ -124,8 +124,8 @@ const OFFICIAL_HUB_IMAGE_CAPABILITIES: Readonly<Record<string, HubRuntimeImageCa
     not_included: "本镜像内 CH server、固定扫描脚本、决策扫描器",
     suited_roles: ["audit", "analyze"],
     suited_evidence: ["ClickHouse C++ 静态检查"],
-    selection_hints: ["审计 ClickHouse 源码选 clickhouse-audit；跑官方 binary 选 clickhouse-test"],
-    capabilities: ["cpp-toolchain", "cmake", "clickhouse-source"],
+    selection_hints: ["审计 ClickHouse 源码选 clickhouse-audit；跑官方 binary 选 clickhouse-test", "需要 C/C++ 符号导航时提案 language-server.clangd（需 compile_commands.json）"],
+    capabilities: ["cpp-toolchain", "cmake", "clickhouse-source", "language-server.clangd"],
   },
   "deepsonar-clickhouse-fuzz": {
     purpose: "ClickHouse 模糊/sanitizer：官方 clickhouse-local + fuzz 工具链",

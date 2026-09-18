@@ -190,7 +190,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -587,7 +587,10 @@ export function createEventIngestionSideEffectApplication(
           throw invalidCredential(credPath, allowedCredentialIds);
         }
       }
-      if (phase === "preflight" && (key || intentCli || intentCred)) {
+      const intentLs = typeof intent.language_server_capability_id === "string"
+        ? intent.language_server_capability_id.trim()
+        : "";
+      if (phase === "preflight" && (key || intentCli || intentCred || intentLs)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
@@ -598,6 +601,7 @@ export function createEventIngestionSideEffectApplication(
               runtimeImageKey: key,
               agentCli: intentCli ?? null,
               credentialId: intentCred ?? null,
+              languageServerCapabilityId: intentLs || null,
             },
           );
         } catch (error) {
@@ -1237,7 +1241,7 @@ export function createEventIngestionSideEffectApplication(
               job.project_id as string,
               role,
               snapshotFindingIds,
-              { runtimeImageKey: it.runtime_image_key ?? null, agentCli: it.agent_cli ?? null, credentialId: it.credential_id ?? null },
+              { runtimeImageKey: it.runtime_image_key ?? null, agentCli: it.agent_cli ?? null, credentialId: it.credential_id ?? null, languageServerCapabilityId: it.language_server_capability_id ?? null },
             ),
           );
         } catch (error) {

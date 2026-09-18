@@ -2,6 +2,7 @@ import {
   PlatformToolName,
   rejectNonCurrentAgentCli,
   resolvePlatformTools,
+  type FrozenLanguageServerCapability,
   type PlatformToolConfig,
   type ReasoningValue,
 } from "@deepsonar/shared-types";
@@ -19,6 +20,10 @@ import {
 } from "../../provider-settings.js";
 import { isOfficialRuntimeImageKey, resolveRuntimeImageForJob } from "../../runtime-images.js";
 import { freezeTaskCapabilityPack } from "../capability-pack/index.js";
+import {
+  findLanguageServerCapability,
+  freezeLanguageServerCapability,
+} from "../language-server-capability/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -273,7 +278,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
@@ -419,6 +424,23 @@ async function resolveAgentSnapshotForJobUnchecked(
   }
   const sandboxLimits = resolveEffectiveSandboxLimits(sandboxOverride, config.runtime.sandboxLimits);
 
+  let language_server: FrozenLanguageServerCapability | undefined;
+  const requestedLs = typeof options?.languageServerCapabilityId === "string"
+    ? options.languageServerCapabilityId.trim()
+    : "";
+  if (requestedLs) {
+    const module = findLanguageServerCapability(requestedLs);
+    if (!module) {
+      throw new Error(`language-server capability is not registered: ${requestedLs}`);
+    }
+    if (!module.compatible_images.includes(runtimeImage.image_key)) {
+      throw new Error(
+        `language-server capability ${requestedLs} is incompatible with image ${runtimeImage.image_key}`,
+      );
+    }
+    language_server = freezeLanguageServerCapability({ module, imageKey: runtimeImage.image_key });
+  }
+
   return {
     name: roleName,
     role_kind: roleKind,
@@ -448,6 +470,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       resolvedModules: expanded.resolved_modules,
       moduleContentHash: expanded.content_hash,
     }),
+    ...(language_server ? { language_server } : {}),
     skill_revisions: expanded.revisions,
     skills,
     commands,
@@ -477,7 +500,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

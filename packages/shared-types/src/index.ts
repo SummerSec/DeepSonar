@@ -6,6 +6,21 @@ import {
   SearchCapabilitiesPayload,
   ValidateCompositionPayload,
 } from "./capability-pack.js";
+
+export {
+  LANGUAGE_SERVER_CAPABILITY_SCHEMA,
+  LANGUAGE_SERVER_OPERATIONS,
+  LANGUAGE_SERVER_UNAVAILABLE_CODE,
+  LanguageServerCapabilityId,
+  LanguageServerCapabilityManifest,
+  LanguageServerLimits,
+  LanguageServerOperation,
+  LanguageServerUnavailableReason,
+  LanguageServerFileRange,
+  LanguageServerQueryResult,
+  FrozenLanguageServerCapability,
+} from "./language-server-capability.js";
+export type { LanguageServerOperation as LanguageServerOperationName } from "./language-server-capability.js";
 import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
@@ -1188,6 +1203,14 @@ export const HubIntentPayload = z
     // list_available_providers；省略时用项目软缺省或 RoleConfig 回退。不强制按角色绑死。
     agent_cli: CurrentAgentCliSchema.optional(),
     credential_id: z.string().uuid().optional(),
+    // Hub 可选提案语言服务器能力：只能来自 list_capabilities / describe_capability
+    // 返回的已登记 id（首期 language-server.clangd）。省略则不冻结 language_server。
+    language_server_capability_id: z
+      .string()
+      .min(3)
+      .max(160)
+      .regex(/^[a-z][a-z0-9_.-]*$/)
+      .optional(),
   })
   .strict();
 export type HubIntentPayload = z.infer<typeof HubIntentPayload>;

@@ -1,6 +1,7 @@
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
 import type { FrozenCapabilityPack } from "../capability-pack/catalog.js";
+import type { FrozenLanguageServerCapability } from "@deepsonar/shared-types";
 import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
@@ -47,6 +48,8 @@ export interface RoleRuntimeSnapshotResult {
   module_content_hash: string;
   /** Frozen Capability Pack envelope for this Job; selectors/digest do not follow later source sync. */
   capability_pack?: FrozenCapabilityPack;
+  /** Frozen language-server capability selected for this Job (#604); absent when Hub did not admit one. */
+  language_server?: FrozenLanguageServerCapability;
   skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
   skills: unknown[];
   commands: unknown[];
@@ -99,6 +102,8 @@ export interface RoleRuntimeSnapshotApplication {
       agentCli?: string | null;
       /** Hub 提案的 credential_id；省略时走项目软缺省 / RoleConfig 绑定。 */
       credentialId?: string | null;
+      /** Hub 提案的 language-server capability id（#604）；省略则不冻结。 */
+      languageServerCapabilityId?: string | null;
     },
   ): Promise<RoleRuntimeSnapshotResult>;
 }
