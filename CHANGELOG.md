@@ -6,6 +6,8 @@
 
 ### 新增
 
+- 可插拔 Provider Adapter 与结构化 Model Descriptor 首片（#614）：新增契约 `deepsonar.provider-adapter/v1` / `deepsonar.model-descriptor/v1` / `deepsonar.provider-model-snapshot/v1`（context_window、tools/streaming/structured_output、reasoning、modalities、cost、rate_limits、compatible_agent_clis、health_status、catalog_revision）；Scheduler 登记 anthropic/openai/git 适配器（凭据校验钩子形状、目录发现形状、CLI 兼容声明、Gateway transform stub）；Hub/选型侧提供基于 Descriptor 字段的筛选 helper；Job 快照冻结 `provider_model`（adapter 版本 + descriptor + catalog revision）；Gateway 在 adapter `enforce_frozen_model` 时拒绝快照外模型（passthrough 非默认）。Credential.agent_cli 文档化为软提示（RoleConfig 才是绑定面）；停止 RoleConfig 回写 Credential.agent_cli、全量 Provider 接入、Web 健康态展示与真实 catalog probe 迁入 Adapter 为 follow-up。
+
 - 扩展 / 工具物化注册表首片（#615）：新增统一契约 `deepsonar.extension-materialization/v1`（component_id / type / source / version / digest / 兼容 CLI·镜像 / 网络与说明书等）；Scheduler 登记并冻结组件包进 Job 快照；默认拒绝 Job 内 `npx`/`npm`/`pip`/远程脚本动态安装，失败返回稳定码 `component_materialization_failed`；物化路径仅允许快照已冻结组件。本切片以 Pi Extension 种子目录 + 运行时安装门禁 + 单测为主；UI 展示、全量 Skill 迁入、镜像构建期物化与更多组件类型 follow-up。
 
 - 通用 CLI 基础能力包（#611）：登记 `deepsonar.cli-capability/v1` 十项 phase-1 能力（`text.search.rg` / `file.discovery.fd` / `json.query.jq` / `yaml.query.yq` / `source.control.git` / `file.inspect.file` / `evidence.hash.sha256sum` / `patch.diff` / `execution.timeout` / `archive.extract`）；`list_capabilities` / `describe_capability` 可发现并附带 `cli_capability` 元数据；Scheduler `admitCliCapability(ies)` 拒绝未登记 / 镜像不兼容 / 工具未上架 / 运行时安装；Hub Intent `cli_capability_ids` 可冻结进 Job 快照（含 pack fingerprint）；结果固定 `is_finding: false`。`fd` / `yq` / `diff`/`patch` 本切片仅目录登记（镜像 apt 钉死与手册扩写 follow-up）；不含 curl/binutils 专项。

@@ -486,8 +486,13 @@ export type CredentialAgentCliFollow =
   | { action: "reject"; error: string };
 
 /**
- * RoleConfig 保存时：凭据 `agent_cli` 跟随最新角色配置。
+ * RoleConfig 保存时：凭据 `agent_cli` 跟随最新角色配置（过渡行为）。
  * provider 兼容则同步，不兼容才拒绝。
+ *
+ * #614：Credential.agent_cli 仅为软提示，不是全局 Agent CLI 绑定。
+ * Job 身份以 RoleConfig / Hub 提案为准；同一 Credential 可被不同 agent_cli
+ * 的角色安全复用。停止从 RoleConfig 回写 Credential.agent_cli 的迁移见
+ * CHANGELOG / deferred (#614)；本函数暂保留以兼容现有集成测试。
  */
 export function planCredentialAgentCliFollow(input: {
   roleAgentCli: string;

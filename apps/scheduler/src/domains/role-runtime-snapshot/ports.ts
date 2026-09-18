@@ -5,7 +5,8 @@ import type { FrozenAgentRuntimeProfile,
   FrozenLanguageServerCapability,
   FrozenCliCapability,
   FrozenCliCapabilityPack,
-  FrozenMaterializationPack } from "@deepsonar/shared-types";
+  FrozenMaterializationPack,
+  FrozenProviderModelSnapshot } from "@deepsonar/shared-types";
 import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot, AgentRuntimeLaunchSpecification } from "@deepsonar/runtime-sandbox";
@@ -64,6 +65,8 @@ export interface RoleRuntimeSnapshotResult {
   cli_capability_pack?: FrozenCliCapabilityPack;
   /** Frozen Extension/Tool materialization pack (#615); components + digests at Job create. */
   component_materialization_pack?: FrozenMaterializationPack;
+  /** Frozen Provider Adapter + Model Descriptor snapshot (#614). */
+  provider_model?: FrozenProviderModelSnapshot;
   skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
   skills: unknown[];
   commands: unknown[];

@@ -29,6 +29,11 @@ import {
   bareUpstreamModelId,
   modelCatalogMatchForRequest,
 } from "./provider-effective-model.js";
+import {
+  assertGatewayRequestModelAllowed,
+  gatewayRequestModelFromBody,
+  GatewayFrozenModelMismatchError,
+} from "./domains/provider-adapter/index.js";
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
@@ -738,6 +743,17 @@ export function registerGateway(app: FastifyInstance): void {
         } catch (error) {
           return deny(reply, 413, error instanceof Error ? error.message : String(error), "otlp_rejected");
         }
+      }
+      try {
+        assertGatewayRequestModelAllowed({
+          requestModel: gatewayRequestModelFromBody(rawBody),
+          agentSnapshot: jt.agent_snapshot_json,
+        });
+      } catch (error) {
+        if (error instanceof GatewayFrozenModelMismatchError) {
+          return deny(reply, 403, error.message, "frozen_model_mismatch");
+        }
+        throw error;
       }
       const outboundBody = applyGatewayOutboundModelRewrite(rawBody, jt.agent_snapshot_json);
       const outboundBuf =
