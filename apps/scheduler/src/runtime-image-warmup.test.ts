@@ -98,14 +98,14 @@ test("/health ready fails closed when OpenSandbox server is down", async () => {
   });
   const response = await app.inject({ method: "GET", url: "/health" });
   assert.equal(response.statusCode, 200);
-  assert.equal(response.json().ok, true);
-  assert.equal(response.json().ready, false);
-  assert.deepEqual(response.json().opensandbox, {
-    level: "error",
-    domain: "127.0.0.1:8080",
-    ready: false,
-  });
-  assert.equal(JSON.stringify(response.json()).includes("timed out"), false);
+  const body = response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.ready, false);
+  assert.equal(body.opensandbox.level, "error");
+  assert.equal(body.opensandbox.domain, "127.0.0.1:8080");
+  assert.equal(body.opensandbox.ready, false);
+  assert.equal(body.opensandbox.upload_circuit.state, "closed");
+  assert.equal(JSON.stringify(body).includes("timed out"), false);
   await app.close();
 });
 
