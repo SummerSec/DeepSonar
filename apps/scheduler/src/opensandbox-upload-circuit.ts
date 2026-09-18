@@ -1,11 +1,15 @@
 /**
- * OpenSandbox worker-upload persistent-failure circuit (#605).
+ * OpenSandbox worker-upload persistent-failure circuit (#605 / #609).
  *
- * Per-call isTransientOpenSandboxUploadError + writeFilesWithRetry (3x) only
- * covers transient hostfwd/proxy churn. When canvas/project-scoped waves keep
- * dying on that same classifier, trip a process-local circuit, pause new
- * opensandbox claims, emit an ops alert, and optionally `docker restart` the
- * OpenSandbox server when DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true.
+ * Per-call isTransientOpenSandboxUploadError + writeFilesWithRetry (3x) plus
+ * undici transport recycle (closeTransport + fresh ConnectionConfig reconnect)
+ * covers most client keep-alive / hostfwd churn. When canvas/project-scoped
+ * waves keep dying on that same classifier, trip a process-local circuit,
+ * pause new opensandbox claims, emit an ops alert, and optionally
+ * `docker restart` the **scheduler** process (not opensandbox) when
+ * DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true — root cause is the long-lived
+ * client undici pool inside scheduler (#609); opensandbox container restart
+ * does not heal it. Upload probe remains a health signal only.
  */
 import { isTransientOpenSandboxUploadError } from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
@@ -76,11 +80,12 @@ function autoRestartEnabled(): boolean {
   return Boolean(config.runtime.openSandbox.autoRestart);
 }
 
-function containerName(): string {
-  const fromConfig = config.runtime.openSandbox.containerName?.trim() ?? "";
+function healContainerName(): string {
+  // Prefer explicit scheduler container; #609 root cause is client-pool in scheduler.
+  const fromConfig = config.runtime.openSandbox.schedulerContainerName?.trim() ?? "";
   if (fromConfig) return fromConfig;
-  const fromEnv = (process.env.OPEN_SANDBOX_CONTAINER_NAME ?? "").trim();
-  return fromEnv || "deepsonar-opensandbox";
+  const fromEnv = (process.env.DEEPSONAR_SCHEDULER_CONTAINER_NAME ?? "").trim();
+  return fromEnv || "deepsonar-scheduler-1";
 }
 
 function scopeKey(projectId: string | null | undefined, canvasId: string | null | undefined): string {
@@ -224,17 +229,19 @@ async function attemptSelfHeal(reason: string): Promise<void> {
   if (!autoRestartEnabled()) {
     healResult = "skipped_auto_restart_disabled";
     console.error(
-      `[opensandbox-upload-circuit] self-heal skipped (set DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true to docker restart); reason=${reason}`,
+      `[opensandbox-upload-circuit] self-heal skipped (set DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true to docker restart scheduler); reason=${reason}`,
     );
     inc("deepsonar_opensandbox_upload_self_heal_total", { result: "skipped" });
     return;
   }
-  const name = containerName();
+  // Process-level last resort: restart scheduler to drop corrupted undici pools.
+  // Primary heal is closeTransport + reconnect in runtime-sandbox (#609).
+  const name = healContainerName();
   const restart = dockerRestart ?? defaultDockerRestart;
   try {
     await restart(name);
     healResult = `restarted:${name}`;
-    console.warn(`[opensandbox-upload-circuit] self-heal restarted container ${name}`);
+    console.warn(`[opensandbox-upload-circuit] self-heal restarted scheduler container ${name}`);
     inc("deepsonar_opensandbox_upload_self_heal_total", { result: "restarted" });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240);

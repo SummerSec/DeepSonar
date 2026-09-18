@@ -15,7 +15,8 @@
 
 ### 修复
 
-- OpenSandbox Worker 上传持续性 5xx 熔断与自愈（#605）：在 #548 瞬态重试之上按 canvas/project 统计上传失败波次；连续 ≥2 波全灭或 30 分钟窗口 ≥6 次命中上传 5xx 分类器时打开熔断并暂停新派发；Docker 单机默认 `DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true`（K8s 默认关）对 `OPEN_SANDBOX_CONTAINER_NAME`（默认 `deepsonar-opensandbox`）执行 `docker restart`；可选 `DEEPSONAR_OPENSANDBOX_UPLOAD_PROBE_IMAGE` 做派发前 1KB 上传探针（失败 fail-closed）；告警写入结构化日志 + `audit_logs`（`opensandbox.upload_circuit.alert`）与 Prometheus 指标；readiness/`/health` 暴露熔断状态。
+- OpenSandbox 上传 5xx：纠正 #608 自愈目标并回收 undici 传输（#609，跟进 #605）：根因是长驻 scheduler 内 SDK `ConnectionConfig` 的 undici keep-alive 池腐蚀（同 sandbox 可先 200 再同秒连 500；独立一次性 SDK 进程始终通过；`docker restart` opensandbox 无效、重启 scheduler 有效）。瞬态上传失败重试前 `closeTransport()`，并用**新** `ConnectionConfig` + `Sandbox.connect` 刷新本地适配器（SDK `close()` 不清已关闭 dispatcher 引用）。熔断 / 告警 / 探针保留；进程级自愈改为重启 scheduler（`DEEPSONAR_SCHEDULER_CONTAINER_NAME`，默认 `deepsonar-scheduler-1`）；`DEEPSONAR_OPENSANDBOX_AUTO_RESTART` 开关名保留以免破坏部署，语义改为 scheduler 重启。
+- OpenSandbox Worker 上传持续性 5xx 熔断与自愈（#605）：在 #548 瞬态重试之上按 canvas/project 统计上传失败波次；连续 ≥2 波全灭或 30 分钟窗口 ≥6 次命中上传 5xx 分类器时打开熔断并暂停新派发；Docker 单机默认 `DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true`（K8s 默认关）；可选 `DEEPSONAR_OPENSANDBOX_UPLOAD_PROBE_IMAGE` 做派发前 1KB 上传探针（失败 fail-closed）；告警写入结构化日志 + `audit_logs`（`opensandbox.upload_circuit.alert`）与 Prometheus 指标；readiness/`/health` 暴露熔断状态。自愈目标见上条 #609 更正。
 - Chrome Fuzz 镜像构建：浅克隆钉死的 depot_tools 后显式 `ensure_bootstrap`（保持 `DEPOT_TOOLS_UPDATE=0`），补齐 `python3_bin_reldir.txt`，避免 `gclient sync` 钩子失败（#588 / PR #602）。
 - 官方 `deepsonar-mobile` 将 `droidasc` 钉到 PyPI 已发布版本 `0.1.1.post1`（`0.1.1` 不存在）；v0.4.5 tag 仍为旧 pin，镜像发布需自修复后的 main 重跑或后续补丁发行（#564 / PR #602）。
 - 官方镜像 fail-closed 说明书元数据后，promotion 集成夹具与 env override / 信任合并路径同步要求 `manual`，避免 gate 假失败与不可解析版本进入注册表视图（#588 / PR #602）。

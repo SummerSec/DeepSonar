@@ -147,10 +147,21 @@ async function sleepMs(delayMs: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
+export type WriteFilesWithRetryOptions = {
+  attempts?: number;
+  baseDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Called after a transient upload fault is classified and before the backoff sleep / next attempt.
+   * Used to recycle a corrupted undici keep-alive dispatcher (#609).
+   */
+  onTransientRetry?: () => Promise<void>;
+};
+
 export async function writeFilesWithRetry(
   writeFiles: (files: Array<{ path: string; data: string | Buffer }>) => Promise<unknown>,
   files: Array<{ path: string; data: string | Buffer }>,
-  options?: { attempts?: number; baseDelayMs?: number; sleep?: (ms: number) => Promise<void> },
+  options?: WriteFilesWithRetryOptions,
 ): Promise<void> {
   const attempts = Math.max(1, options?.attempts ?? UPLOAD_RETRY_ATTEMPTS);
   const baseDelayMs = Math.max(0, options?.baseDelayMs ?? UPLOAD_RETRY_BASE_DELAY_MS);
@@ -163,13 +174,39 @@ export async function writeFilesWithRetry(
     } catch (error) {
       lastError = error;
       if (!isTransientOpenSandboxUploadError(error) || attempt >= attempts) throw error;
+      // Recycle local transport before sleeping so the next attempt uses a fresh dispatcher.
+      if (options?.onTransientRetry) await options.onTransientRetry();
       await sleep(baseDelayMs * attempt);
     }
   }
   throw lastError;
 }
 
+/**
+ * Refresh the local SDK transport after a transient upload 5xx (#609).
+ *
+ * SDK `closeTransport()` closes the undici Agent but does NOT clear
+ * `_transportInitialized` / the closed dispatcher reference, so the next
+ * attempt must use a brand-new `ConnectionConfig` + `Sandbox.connect`.
+ * Does not kill the remote sandbox lifecycle — only replaces local adapters.
+ */
+async function recycleSandboxTransport(
+  current: { sandbox: Sandbox },
+  connection: OpenSandboxConnection,
+): Promise<void> {
+  const previous = current.sandbox;
+  await previous.connectionConfig.closeTransport().catch(() => undefined);
+  current.sandbox = await Sandbox.connect({
+    sandboxId: previous.id,
+    connectionConfig: connectionConfig(connection),
+  });
+}
+
 function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenSandboxSession {
+  const current = { sandbox };
+
+  const onTransientUploadRetry = () => recycleSandboxTransport(current, connection);
+
   return {
     id: sandbox.id,
     async run(command, options) {
@@ -177,12 +214,13 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
       if (options?.stdin) {
         const tmp = `/tmp/deepsonar-stdin-${randomUUID()}`;
         await writeFilesWithRetry(
-          (files) => sandbox.files.writeFiles(files),
+          (files) => current.sandbox.files.writeFiles(files),
           [{ path: tmp, data: options.stdin }],
+          { onTransientRetry: onTransientUploadRetry },
         );
         cmd = `sh -c ${shellQuote(command)} < ${shellQuote(tmp)}`;
       }
-      const execution = await sandbox.commands.run(cmd, {
+      const execution = await current.sandbox.commands.run(cmd, {
         workingDirectory: options?.cwd,
         timeoutSeconds: options?.timeoutMs != null ? Math.max(1, Math.ceil(options.timeoutMs / 1000)) : undefined,
         envs: options?.env,
@@ -195,10 +233,11 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
       };
     },
     async runAsync(command, options) {
-      const endpoint = await sandbox.getEndpoint(DEFAULT_EXECD_PORT);
+      const live = current.sandbox;
+      const endpoint = await live.getEndpoint(DEFAULT_EXECD_PORT);
       const headers = ptyHeaders(connection, endpoint.headers);
       return openOpenSandboxPty({
-        httpUrl: `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`,
+        httpUrl: `${live.connectionConfig.protocol}://${endpoint.endpoint}`,
         headers,
       }, {
         cwd: options?.cwd ?? "/workspace",
@@ -210,18 +249,19 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
     },
     async writeFile(destPath, content) {
       await writeFilesWithRetry(
-        (files) => sandbox.files.writeFiles(files),
+        (files) => current.sandbox.files.writeFiles(files),
         [{ path: destPath, data: content }],
+        { onTransientRetry: onTransientUploadRetry },
       );
     },
     async readFile(filePath) {
-      return Buffer.from(await sandbox.files.readBytes(filePath));
+      return Buffer.from(await current.sandbox.files.readBytes(filePath));
     },
     async getState() {
-      return (await sandbox.getInfo()).status.state;
+      return (await current.sandbox.getInfo()).status.state;
     },
-    kill: () => sandbox.kill(),
-    close: () => sandbox.close(),
+    kill: () => current.sandbox.kill(),
+    close: () => current.sandbox.close(),
   };
 }
 

@@ -163,7 +163,7 @@ test("auto-restart stays gated when explicitly disabled via test hook", async ()
   assert.match(openSandboxUploadCircuitStatus().healResult ?? "", /skipped_auto_restart_disabled/);
 });
 
-test("auto-restart runs docker restart when enabled via test hook", async () => {
+test("auto-restart runs docker restart of scheduler when enabled via test hook (#609)", async () => {
   resetOpenSandboxUploadCircuitForTests();
   let restarted = 0;
   let name = "";
@@ -176,8 +176,19 @@ test("auto-restart runs docker restart when enabled via test hook", async () => 
   });
   await tripOpenSandboxUploadCircuit("heal_check");
   assert.equal(restarted, 1);
-  assert.match(name, /opensandbox/);
-  assert.match(openSandboxUploadCircuitStatus().healResult ?? "", /restarted:/);
+  assert.match(name, /scheduler/);
+  assert.doesNotMatch(name, /opensandbox/);
+  assert.match(openSandboxUploadCircuitStatus().healResult ?? "", /restarted:.*scheduler/);
+});
+
+test("upload circuit docs target scheduler heal and undici transport recycle (#609)", () => {
+  const circuit = readFileSync(new URL("./opensandbox-upload-circuit.ts", import.meta.url), "utf8");
+  const cfg = readFileSync(new URL("./config.ts", import.meta.url), "utf8");
+  assert.match(circuit, /scheduler/);
+  assert.match(circuit, /undici|client-pool|closeTransport/);
+  assert.match(circuit, /DEEPSONAR_SCHEDULER_CONTAINER_NAME|healContainerName|schedulerContainerName/);
+  assert.match(cfg, /DEEPSONAR_SCHEDULER_CONTAINER_NAME/);
+  assert.match(cfg, /deepsonar-scheduler-1/);
 });
 
 test("dispatcher and readiness gate on upload circuit", () => {
