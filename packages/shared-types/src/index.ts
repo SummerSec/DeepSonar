@@ -35,6 +35,22 @@ export {
   FrozenCliCapabilityPack,
 } from "./cli-capability.js";
 export {
+  EXTENSION_MATERIALIZATION_SCHEMA,
+  EXTENSION_MATERIALIZATION_PACK_SCHEMA,
+  COMPONENT_MATERIALIZATION_FAILED,
+  FORBIDDEN_RUNTIME_INSTALL_PATTERNS,
+  MaterializationComponentId,
+  MaterializationComponentManifest,
+  MaterializationComponentType,
+  MaterializationSourceKind,
+  MaterializationSecurityLevel,
+  MaterializationMaintStatus,
+  FrozenMaterializationComponent,
+  FrozenMaterializationPack,
+  ComponentMaterializationFailureReason,
+  isForbiddenRuntimeInstallCommand,
+} from "./extension-materialization.js";
+export {
   AGENT_RUNTIME_PROFILE_SCHEMA,
   AGENT_RUNTIME_PROFILE_UNSUPPORTED_CONFIG,
   AgentRuntimeProfile,

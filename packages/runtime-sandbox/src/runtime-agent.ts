@@ -569,7 +569,7 @@ function materializationPaths(
   }
   for (const skill of spec.skills ?? []) {
     const safeName = safeComponentName(skill.name, "skill.name");
-    if (!("files" in skill)) continue; // repo skill is installed by the CLI below
+    if (!("files" in skill)) continue; // repo skill is refused at materialize (#615)
     if (!skill.files || typeof skill.files !== "object" || Array.isArray(skill.files)) {
       throw new Error(`拒绝 embedded skill ${safeName}：files 必须是对象`);
     }
@@ -602,7 +602,7 @@ export function materializationPathCollisions(
  * claude CLI 的本地组件文件（替代 SDK daemon setup 的产物上传）：
  * commands → .claude/commands/<name>.md；subAgents → .claude/agents/<name>.md；
  * embedded skills → 当前 CLI 的标准 skills 目录（Claude `.claude/skills`、
- * Pi `.pi/agent/skills`、DSH `.dsh/skills`）；repo skills 需出网安装，尽力而为。
+ * Pi `.pi/agent/skills`、DSH `.dsh/skills`）；repo skills 禁止 Job 内动态安装（#615）。
  */
 async function materializeAgentFiles(
   host: Pick<RuntimeHost, "run" | "uploadFile">,
@@ -642,17 +642,15 @@ async function materializeAgentFiles(
     await host.run(`mkdir -p -- ${shellQuote(dir)}`);
     await host.uploadFile(content, filePath);
   }
-  // repo 形式 skill：需要出网，失败只告警不阻断
+  // repo 形式 skill：Job 运行时禁止 npx/npm/pip 动态安装（#615）。
+  // 必须在 Job 创建时冻结进 Extension Materialization Registry / 使用 embedded files。
   for (const skill of spec.skills ?? []) {
     if ("files" in skill || !skill.repo) continue;
-    const skillAgent = provider === "claude-code" ? "claude-code" : provider;
-    const res = await host.run(
-      `npx -y skills add ${shellQuote(skill.repo)} -g --skill ${shellQuote(skill.name)} --agent ${shellQuote(skillAgent)} -y`,
-      { timeoutMs: 120_000, env: cliEnv },
-    ).catch(() => null);
-    if (!res || res.exitCode !== 0) {
-      throw new Error(`REPO_SKILL_INSTALL_FAILED: ${skill.name}`);
-    }
+    throw new Error(
+      `component_materialization_failed: runtime_install_forbidden: skill ${skill.name} `
+      + `declares repo=${skill.repo}; Job runtime must not execute npx/npm/pip installs. `
+      + `Register an embedded or image-preinstall component instead.`,
+    );
   }
 }
 

@@ -5,6 +5,7 @@ import {
   resolvePlatformTools,
   type FrozenCliCapability,
   type FrozenCliCapabilityPack,
+  type FrozenMaterializationPack,
   type FrozenLanguageServerCapability,
   type PlatformToolConfig,
   type ReasoningValue,
@@ -35,6 +36,9 @@ import {
 import {
   admitCliCapabilities,
 } from "../cli-capability/index.js";
+import {
+  freezeMaterializationPackAtJobCreate,
+} from "../extension-materialization/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -534,6 +538,23 @@ async function resolveAgentSnapshotForJobUnchecked(
     cli_capability_pack = admitted.pack;
   }
 
+  let component_materialization_pack: FrozenMaterializationPack | undefined;
+  const repoSkills = (skills as { name?: string; repo?: string }[]).filter(
+    (skill) => typeof skill?.repo === "string" && skill.repo.length > 0,
+  ).map((skill) => ({ name: String(skill.name ?? "unnamed"), repo: skill.repo }));
+  const materialization = freezeMaterializationPackAtJobCreate({
+    piExtensionIds: frozenPiExtensions.map((extension) => extension.id),
+    imageKey: runtimeImage.image_key,
+    agentCli: agentCli as "claude-code" | "pi" | "dsh",
+    repoSkills,
+  });
+  if (!materialization.ok) {
+    throw new Error(
+      `component_materialization_failed (${materialization.reason}${materialization.failed_id ? `: ${materialization.failed_id}` : ""}): ${materialization.repair.message}`,
+    );
+  }
+  component_materialization_pack = materialization.pack;
+
   return {
     name: roleName,
     role_kind: roleKind,
@@ -566,6 +587,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     runtime_profile,
     ...(language_server ? { language_server } : {}),
     ...(cli_capabilities ? { cli_capabilities, cli_capability_pack } : {}),
+    component_materialization_pack,
     skill_revisions: expanded.revisions,
     skills,
     commands,
