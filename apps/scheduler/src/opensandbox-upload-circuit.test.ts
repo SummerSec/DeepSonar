@@ -149,17 +149,35 @@ test("probe failure trips circuit fail-closed; probe success closes half-open", 
   assert.equal(openSandboxUploadCircuitStatus().state, "closed");
 });
 
-test("auto-restart stays gated unless DEEPSONAR_OPENSANDBOX_AUTO_RESTART is enabled via config", async () => {
+test("auto-restart stays gated when explicitly disabled via test hook", async () => {
   resetOpenSandboxUploadCircuitForTests();
   let restarted = 0;
   setOpenSandboxUploadCircuitTestHooks({
     dockerRestart: async () => {
       restarted += 1;
     },
+    autoRestart: false,
   });
   await tripOpenSandboxUploadCircuit("gate_check");
   assert.equal(restarted, 0);
   assert.match(openSandboxUploadCircuitStatus().healResult ?? "", /skipped_auto_restart_disabled/);
+});
+
+test("auto-restart runs docker restart when enabled via test hook", async () => {
+  resetOpenSandboxUploadCircuitForTests();
+  let restarted = 0;
+  let name = "";
+  setOpenSandboxUploadCircuitTestHooks({
+    dockerRestart: async (container) => {
+      restarted += 1;
+      name = container;
+    },
+    autoRestart: true,
+  });
+  await tripOpenSandboxUploadCircuit("heal_check");
+  assert.equal(restarted, 1);
+  assert.match(name, /opensandbox/);
+  assert.match(openSandboxUploadCircuitStatus().healResult ?? "", /restarted:/);
 });
 
 test("dispatcher and readiness gate on upload circuit", () => {
