@@ -644,6 +644,9 @@ RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表
 
 ### 8.4 Git 模块源（skill_sources）
 
+项目级启用表 `project_skill_sources`（#603，schema v53）对标 `project_runtime_images`：`(project_id, skill_source_id, enabled)`。Job 展开 `modules_json` 前必须通过项目白名单 fail-closed；首次读取设置时把历史 RoleConfig selector 源种子为启用。Hub `list_available_skill_sources` 为只读目录 stub。RoleConfig 模块勾选保留为过渡绑定。
+
+
 Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 
 - `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存

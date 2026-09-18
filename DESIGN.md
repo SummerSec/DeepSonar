@@ -50,6 +50,17 @@ Canvas  1 ── * task reports / finding research runs / dedupe clusters
 
 Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相，Finding 是对外风险对象，Fact 是证据与观察。SARIF 只在导出或交付给人类时投影，不承担模型内部全部表示责任。
 
+
+### 4.0 Skill / 模块源控制面（#603 首片）
+
+**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单（对标 `project_runtime_images` / CLI·Provider 白名单）。未启用的源不可进入本项目 Job 快照。
+
+**Hub 运行时选型**：`list_available_skill_sources` 提供只读目录 stub（项目已启用 ∩ 平台 trusted+enabled）。本切片 Intent 尚未新增 skill selector 字段；后续 Hub 从该集合声明本次 Job 需要的 selector。发现 ≠ 授权。
+
+**RoleConfig `modules_json` 为过渡态**：仍可勾选，但候选必须 ⊆ 项目白名单；`expandModules` / role-runtime-snapshot 路径在项目范围 fail-closed。迁移：首次读取项目 Skill 设置时，把历史 RoleConfig selector 引用的源种子为启用，禁止静默丢配置。
+
+**非目标（本片）**：移除 RoleConfig 模块 UI、完整 Hub Intent Skill 选择器、重写 Capability Pack（#447/#604）。
+
 ## 4. AI-native 能力模型
 
 ### 4.1 Capability Pack
@@ -255,7 +266,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v52 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v53 |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：

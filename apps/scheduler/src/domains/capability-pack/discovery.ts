@@ -223,6 +223,7 @@ const CAPABILITY_TOKEN_LIST = [
   "list_available_runtime_images",
   "list_available_agent_clis",
   "list_available_providers",
+  "list_available_skill_sources",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",

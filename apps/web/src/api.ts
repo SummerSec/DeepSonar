@@ -767,6 +767,27 @@ export interface SkillSource {
   synced_by?: string | null;
 }
 
+
+export interface ProjectSkillSourceBinding {
+  skill_source_id: string;
+  name: string;
+  repo_url: string;
+  branch: string;
+  trust_status: string;
+  source_enabled: boolean;
+  project_enabled: boolean;
+  module_count: number;
+  last_commit_sha: string | null;
+  last_content_hash: string | null;
+  synced_at: string | null;
+}
+
+export interface ProjectSkillSourcesResponse {
+  configured: boolean;
+  sources: ProjectSkillSourceBinding[];
+}
+
+
 export interface SourceModuleEntry {
   id: string;
   kind: "skill" | "command";
@@ -2593,6 +2614,10 @@ export const api = {
   globalSettings: () => get<GlobalSettings>("/global-settings"),
   patchGlobalSettings: (body: { rules?: Record<string, unknown>; finding_protocol?: FindingProtocolConfig | null }) =>
     send<GlobalSettings>("PATCH", "/global-settings", body),
+  projectSkillSources: (projectId: string) =>
+    get<ProjectSkillSourcesResponse>(`/projects/${projectId}/skill-sources`),
+  setProjectSkillSourceEnabled: (projectId: string, sourceId: string, enabled: boolean) =>
+    send<ProjectSkillSourceBinding>("PUT", `/projects/${projectId}/skill-sources/${sourceId}`, { enabled }),
   skillSources: () => get<SkillSource[]>("/skill-sources"),
   skillSource: (id: string) => get<SkillSourceDetail>(`/skill-sources/${id}`),
   createSkillSource: (s: { name: string; repo_url: string; branch: string }) =>

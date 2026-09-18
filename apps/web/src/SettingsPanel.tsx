@@ -37,6 +37,7 @@ import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { ProjectImagePolicySection } from "./components/ProjectImagePolicySection";
 import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
+import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
 import { inferToastKind, showToast } from "./toast";
 import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
 
@@ -163,6 +164,7 @@ export function SettingsPanel({
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [projectJobQuota, setProjectJobQuota] = useState("");
   const [sources, setSources] = useState<SkillSource[]>([]);
+  const [enabledSkillSourceIds, setEnabledSkillSourceIds] = useState<string[] | null>(null);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
   const [newSource, setNewSource] = useState({ name: "", repo_url: "", branch: "main" });
@@ -178,6 +180,14 @@ export function SettingsPanel({
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   const reload = () => {
+
+      if (projectId) {
+        api.projectSkillSources(projectId)
+          .then((res) => setEnabledSkillSourceIds(res.sources.filter((s) => s.project_enabled).map((s) => s.skill_source_id)))
+          .catch(() => setEnabledSkillSourceIds(null));
+      } else {
+        setEnabledSkillSourceIds(null);
+      }
     if (!projectId && visibleGlobalTabs.length === 0) return;
     setAgentLoadError(null);
     const showAgentLoadError = (label: string, error: unknown) => {
@@ -604,6 +614,7 @@ export function SettingsPanel({
                   : credentials.filter((c) => c.project_id === null)
               }
               sources={sources}
+              enabledSkillSourceIds={projectId ? enabledSkillSourceIds : null}
               sourceDetails={sourceDetails}
               busy={configBusy}
               saved={configSaved}
@@ -810,6 +821,7 @@ export function SettingsPanel({
                   defaultCredentialId={defaultCredentialId}
                   onSaved={reload}
                 />
+                <ProjectSkillSourceAllowlistPanel projectId={projectId} onSaved={reload} />
               </>
             )}
 

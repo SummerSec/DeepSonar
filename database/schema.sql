@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 52);
+INSERT INTO schema_meta (id, version) VALUES ('global', 53);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1267,6 +1267,18 @@ CREATE TABLE project_runtime_images (
   PRIMARY KEY (project_id, runtime_image_id),
   CONSTRAINT project_runtime_images_pin_policy_check CHECK (pin_policy IN ('follow', 'hold'))
 );
+
+
+CREATE TABLE project_skill_sources (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_source_id uuid NOT NULL REFERENCES skill_sources(id) ON DELETE CASCADE,
+  enabled boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, skill_source_id)
+);
+CREATE INDEX project_skill_sources_source_idx ON project_skill_sources (skill_source_id);
+
 
 -- 角色运行配置（全局 project_id IS NULL + 项目级覆盖）
 CREATE TABLE role_configs (

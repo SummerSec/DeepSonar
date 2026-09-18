@@ -55,6 +55,7 @@ import {
   assertCredentialAllowlisted,
   parseProjectAgentAllowlist,
 } from "../project-agent-allowlist/index.js";
+import { assertProjectModulesAllowlisted } from "../project-skill-allowlist/index.js";
 import type {
   RoleRuntimeSnapshotApplication,
   RoleRuntimeSnapshotResult,
@@ -308,6 +309,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     throw new Error("RoleConfig.modules_json 必须是字符串数组");
   }
   const modules = (rawModules as string[] | undefined) ?? [];
+  await assertProjectModulesAllowlisted(db, projectId, modules);
   const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
   const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
   const expanded = await expandModules(modules, db as never, {
