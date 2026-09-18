@@ -1,6 +1,6 @@
 # 角色 × 官方镜像能力矩阵
 
-> **状态：as-built**（#565）。索引：[`README.md`](README.md)。语言工具链细节见 [`RUNTIME_TEST_TOOLCHAINS.md`](RUNTIME_TEST_TOOLCHAINS.md)；镜像 OCI/catalog 契约见 [`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
+> **状态：as-built**（#565 / #611 CLI 能力标签）。索引：[`README.md`](README.md)。语言工具链细节见 [`RUNTIME_TEST_TOOLCHAINS.md`](RUNTIME_TEST_TOOLCHAINS.md)；镜像 OCI/catalog 契约见 [`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
 
 **主目标（#565）**：让运行时 AI（尤其 Hub）能决定给 Worker 提案哪张运行镜像。权威机器目录是 `list_available_runtime_images` 返回字段（`purpose` / `tool_summary` / `not_included` / `suited_*` / `selection_hints` / `capabilities`），实现于 `apps/scheduler/src/hub-runtime-image-capability.ts`。本文是同源中文矩阵，便于人读；与 harness / Role 默认 / Worker AGENTS 边界漂移时以代码为准并回写本文。
 
@@ -36,8 +36,8 @@
 
 | `image_key` | 默认适用角色 | 工具摘要（预装） | 明确不包含 | 缺能力纪律 | Scheduler 边界 |
 | --- | --- | --- | --- | --- | --- |
-| `deepsonar-base` | explore / analyze / review / code / hub / verify / report | Node 22 + 最小通用 CLI（git/rg/jq/…） | JDK/Maven/Go/Rust 完整矩阵、Kali metapackage、专项浏览器/DB/设备协议 | 缺命令 → 说明限制；动态 verify 不得用静态叙述冒充 runtime | 无专项块（verify+非 base 才有 Runtime test 块） |
-| `deepsonar-audit` | audit | Base + binutils 等审计辅助；**不**预装 Semgrep/gitleaks/shellcheck 决策扫描器 | SAST/密钥扫描器、Chrome/ClickHouse/设备协议全家桶 | 同左；Finding 仍须可复查证据 | 无专项块 |
+| `deepsonar-base` | explore / analyze / review / code / hub / verify / report | Node 22 + 受治理通用 CLI 能力 id（`text.search.rg` / `json.query.jq` / `source.control.git` / `file.inspect.file` / `evidence.hash.sha256sum` / `execution.timeout` / `archive.extract` 等，见 #611） | JDK/Maven/Go/Rust 完整矩阵、Kali metapackage、专项浏览器/DB/设备协议；`fd`/`yq`/`diff`/`patch` phase 1 仅目录登记 | 缺命令 → 说明限制 / `capability_unavailable`；动态 verify 不得用静态叙述冒充 runtime | 无专项块（verify+非 base 才有 Runtime test 块） |
+| `deepsonar-audit` | audit | Base 受治理 CLI 能力 + binutils 等审计辅助；**不**预装 Semgrep/gitleaks/shellcheck 决策扫描器 | SAST/密钥扫描器、Chrome/ClickHouse/设备协议全家桶；`fd`/`yq`/`diff`/`patch` 未钉死 | 同左；Finding 仍须可复查证据；CLI 输出不得直接升格 Finding | 无专项块 |
 | `deepsonar-kali-minimal` | test（默认） | Temurin 8/11/17 + Maven 3.9.16、Python 3.10–3.14+uv、Go、Rust；无预置 `.m2` | Kali metapackage/GUI、DinD、完整 DB/Compose | Runtime test 纪律；缺工具 → `inconclusive`/`needs_human` | Runtime test（test / 动态 verify） |
 | `deepsonar-chrome-test` | 项目覆盖 test/verify/… | 钉死 Chromium + CDP（playwright-core connectOverCDP） | 第二套 Chromium、完整 Playwright browsers、Selenium Grid、桌面 GUI | CDP/浏览器不可用 → `needs_human`/`inconclusive`；禁止源码叙述冒充 DOM | **任意角色**注入 Chrome CDP |
 | `deepsonar-chrome-audit` | 项目覆盖 audit/… | git + Clang/LLVM + binutils；Agent 自选检查 | 固定扫描脚本/规则包、Chromium 浏览器本体、决策扫描器 | 缺工具 → `needs_human`/`inconclusive`；禁止把静态 C++ 当浏览器结果 | **任意角色**注入 Chrome/C++ audit |

@@ -705,6 +705,8 @@ export interface HubIntent {
   credential_id?: string;
   /** Hub 提案的 language-server capability id（如 language-server.clangd）；省略则不绑定 LSP。 */
   language_server_capability_id?: string;
+  /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结 cli_capabilities。 */
+  cli_capability_ids?: string[];
 }
 
 export interface HubDecision {

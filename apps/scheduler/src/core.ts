@@ -1665,7 +1665,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,

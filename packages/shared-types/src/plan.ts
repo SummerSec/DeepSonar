@@ -174,6 +174,7 @@ export type HubIntentLike = {
   prompt: string;
   runtime_image_key?: string;
   language_server_capability_id?: string;
+  cli_capability_ids?: readonly string[];
 };
 
 export type HubCompleteLike = {

@@ -1,7 +1,9 @@
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
 import type { FrozenCapabilityPack } from "../capability-pack/catalog.js";
-import type { FrozenLanguageServerCapability } from "@deepsonar/shared-types";
+import type { FrozenLanguageServerCapability,
+  FrozenCliCapability,
+  FrozenCliCapabilityPack } from "@deepsonar/shared-types";
 import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
 import type { AgentCliRuntimeSnapshot } from "@deepsonar/runtime-sandbox";
@@ -50,6 +52,10 @@ export interface RoleRuntimeSnapshotResult {
   capability_pack?: FrozenCapabilityPack;
   /** Frozen language-server capability selected for this Job (#604); absent when Hub did not admit one. */
   language_server?: FrozenLanguageServerCapability;
+  /** Frozen CLI capabilities selected for this Job (#611); absent when Hub did not propose any. */
+  cli_capabilities?: FrozenCliCapability[];
+  /** Pack fingerprint over the selected CLI capability set (#611). */
+  cli_capability_pack?: FrozenCliCapabilityPack;
   skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
   skills: unknown[];
   commands: unknown[];
@@ -104,6 +110,8 @@ export interface RoleRuntimeSnapshotApplication {
       credentialId?: string | null;
       /** Hub 提案的 language-server capability id（#604）；省略则不冻结。 */
       languageServerCapabilityId?: string | null;
+      /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结。 */
+      cliCapabilityIds?: readonly string[] | null;
     },
   ): Promise<RoleRuntimeSnapshotResult>;
 }
