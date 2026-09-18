@@ -341,7 +341,7 @@ export const config = {
        */
       autoRestart: bool(
         "DEEPSONAR_OPENSANDBOX_AUTO_RESTART",
-        false,
+        !bool("OPEN_SANDBOX_KUBERNETES", false),
       ),
       /** 可选：派发前 1KB 上传探针镜像；未设置则跳过主动探针，仍走失败路径熔断。 */
       uploadProbeImage: str("DEEPSONAR_OPENSANDBOX_UPLOAD_PROBE_IMAGE", ""),

@@ -129,6 +129,8 @@ function emitAlert(detail: Record<string, unknown>): void {
 }
 
 async function writeOpsAudit(detail: Record<string, unknown>): Promise<void> {
+  // Unit tests / boot without DATABASE_URL should not attempt Postgres writes.
+  if (!process.env.DATABASE_URL && !process.env.DEEPSONAR_DATABASE_URL) return;
   const { sql } = await import("./db.js");
   await sql`
     INSERT INTO audit_logs (

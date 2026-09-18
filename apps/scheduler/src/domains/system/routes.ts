@@ -7,6 +7,7 @@ import {
   refreshOpenSandboxServerStatus,
   type OpenSandboxServerStatus,
 } from "../../opensandbox-health.js";
+import { openSandboxUploadCircuitStatus } from "../../opensandbox-upload-circuit.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
 import { dispatcherRuntimeStatus } from "../../startup-status.js";
 
@@ -97,6 +98,7 @@ export function registerSystemRoutes(
         level: openSandbox.level,
         domain: openSandbox.domain,
         ready: openSandboxAllowsDispatch(openSandbox),
+        upload_circuit: openSandboxUploadCircuitStatus(),
       },
       ts: Date.now(),
     };

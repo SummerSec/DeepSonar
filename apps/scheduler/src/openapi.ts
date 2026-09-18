@@ -280,6 +280,7 @@ const OPS: Op[] = [
               level: { type: "string", enum: ["ok", "error", "unconfigured", "skipped"] },
               domain: { type: "string" },
               ready: { type: "boolean" },
+              upload_circuit: { type: "object", additionalProperties: true },
             },
           },
           ts: { type: "integer" },

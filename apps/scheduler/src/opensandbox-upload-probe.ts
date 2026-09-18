@@ -6,6 +6,8 @@
  * is unset so local/unit environments are not fail-closed on missing images.
  */
 import {
+  OPENSANDBOX_ATTEMPT_META,
+  OPENSANDBOX_JOB_META,
   createSdkOpenSandboxClient,
   readOpenSandboxPin,
 } from "@deepsonar/runtime-sandbox";
@@ -49,8 +51,8 @@ export async function defaultOpenSandboxUploadProbe(): Promise<void | { skipped:
         env: {},
         metadata: {
           "deepsonar.probe": "upload-circuit",
-          "deepsonar.job": "upload-probe",
-          "deepsonar.attempt": "upload-probe",
+          [OPENSANDBOX_JOB_META]: "upload-probe",
+          [OPENSANDBOX_ATTEMPT_META]: "upload-probe",
         },
         resource: { cpu: "500m", memory: "256Mi" },
         timeoutSeconds: null,
