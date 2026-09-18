@@ -131,6 +131,15 @@ import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
+import {
+  OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
+  openSandboxUploadCircuitAllowsDispatch,
+  openSandboxUploadCircuitStatus,
+  probeOpenSandboxUploadBeforeDispatch,
+  recordOpenSandboxJobOutcome,
+  sealOpenSandboxUploadWave,
+  shouldProbeOpenSandboxUpload,
+} from "./opensandbox-upload-circuit.js";
 import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
 import {
   PI_STREAM_TRUNCATED_REASON,
@@ -598,6 +607,20 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       );
       return [];
     }
+    const uploadCircuit = openSandboxUploadCircuitStatus();
+    if (!openSandboxUploadCircuitAllowsDispatch(uploadCircuit)) {
+      console.error(
+        `[dispatcher] ${OPENSANDBOX_UPLOAD_CIRCUIT_OPEN} state=${uploadCircuit.state} reason=${uploadCircuit.lastTripReason ?? "unknown"}: new claims paused`,
+      );
+      return [];
+    }
+    if (shouldProbeOpenSandboxUpload(uploadCircuit)) {
+      const probe = await probeOpenSandboxUploadBeforeDispatch();
+      if (!probe.ok) {
+        console.error(`[dispatcher] OPENSANDBOX_UPLOAD_PROBE failed: ${probe.error ?? "unknown"}`);
+        return [];
+      }
+    }
   }
   // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
   // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
@@ -910,6 +933,17 @@ async function runJob(jobId: string) {
     }
     const runtimeImage = snapshot.runtime_image?.image_ref;
     if (!runtimeImage) throw new Error(`job ${jobId} 缺少创建期冻结的 runtime_image.image_ref`);
+
+    if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+      if (shouldProbeOpenSandboxUpload()) {
+        const probe = await probeOpenSandboxUploadBeforeDispatch();
+        if (!probe.ok) {
+          throw createOpenSandboxUploadCircuitError();
+        }
+      } else if (!openSandboxUploadCircuitAllowsDispatch()) {
+        throw createOpenSandboxUploadCircuitError();
+      }
+    }
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
     if (useReal) {
       // Capability authentication remains disabled until `running`, but the
@@ -1115,6 +1149,14 @@ async function runJob(jobId: string) {
         payload: { summary: "executor 正常退出" },
       });
     }
+
+    if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+      await recordOpenSandboxJobOutcome({
+        projectId: (job as { project_id?: string | null }).project_id ?? null,
+        canvasId: (job as { canvas_id?: string | null }).canvas_id ?? null,
+        ok: true,
+      }).catch((err) => console.error("[dispatcher] opensandbox upload circuit success record failed:", err));
+    }
   } catch (e) {
     const [current] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
     if (current?.status === "waiting_human") {
@@ -1153,6 +1195,33 @@ async function runJob(jobId: string) {
       if (retried) {
         inc("deepsonar_pi_stream_truncation_retry_total");
         return;
+      }
+    }
+
+    if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+      const [scope] = await sql<{ canvas_id: string | null; project_id: string | null; type: string }[]>`
+        SELECT canvas_id, project_id, type FROM jobs WHERE id = ${jobId}`;
+      const jobType = String(scope?.type ?? "");
+      if (jobType && jobType !== "hub_reason" && jobType !== "report") {
+        await recordOpenSandboxJobOutcome({
+          projectId: scope?.project_id ?? null,
+          canvasId: scope?.canvas_id ?? null,
+          ok: false,
+          error: e,
+        }).catch((err) => console.error("[dispatcher] opensandbox upload circuit record failed:", err));
+        if (scope?.canvas_id) {
+          const [active] = await sql<{ n: number }[]>`
+            SELECT COUNT(*)::int AS n FROM jobs
+            WHERE canvas_id = ${scope.canvas_id}
+              AND status IN ('pending','claimed','provisioning','running','waiting_human')
+              AND type <> ALL(${["hub_reason", "report"]})`;
+          if (Number(active?.n ?? 0) === 0) {
+            await sealOpenSandboxUploadWave({
+              projectId: scope.project_id,
+              canvasId: scope.canvas_id,
+            }).catch((err) => console.error("[dispatcher] opensandbox upload wave seal failed:", err));
+          }
+        }
       }
     }
     inc("deepsonar_jobs_failed_total", { reason: failureReason });

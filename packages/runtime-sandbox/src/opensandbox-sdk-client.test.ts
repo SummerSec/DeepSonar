@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
+import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, classifyOpenSandboxUploadFault, isOpenSandboxUploadFailureMessage, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
 import { OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 
@@ -119,4 +119,16 @@ test("OpenSandbox SDK client routes writeFile and stdin uploads through writeFil
   assert.match(source, /writeFilesWithRetry/);
   assert.match(source, /isTransientOpenSandboxUploadError/);
   assert.equal((source.match(/writeFilesWithRetry\(/g) ?? []).length >= 3, true);
+});
+
+test("classifyOpenSandboxUploadFault distinguishes transient vs persistent_signal after retries", () => {
+  const err = Object.assign(new Error("Upload failed (status=500)"), {
+    statusCode: 500,
+    code: "UNEXPECTED_RESPONSE",
+  });
+  assert.equal(classifyOpenSandboxUploadFault(err), "transient");
+  assert.equal(classifyOpenSandboxUploadFault(err, { retriesExhausted: true }), "persistent_signal");
+  assert.equal(classifyOpenSandboxUploadFault(new Error("forbidden")), "none");
+  assert.equal(isOpenSandboxUploadFailureMessage("Upload failed (status=503) UNEXPECTED_RESPONSE"), true);
+  assert.equal(isOpenSandboxUploadFailureMessage("model 401 unauthorized"), false);
 });

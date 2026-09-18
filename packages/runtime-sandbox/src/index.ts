@@ -164,6 +164,15 @@ export {
   openSandboxDockerContainerName,
   requireOpenSandboxLimits,
 } from "./opensandbox.js";
+export {
+  TRANSIENT_UPLOAD_RE,
+  classifyOpenSandboxUploadFault,
+  isOpenSandboxUploadFailureMessage,
+  isTransientOpenSandboxUploadError,
+  writeFilesWithRetry,
+} from "./opensandbox-sdk-client.js";
+export type { OpenSandboxUploadFaultKind } from "./opensandbox-sdk-client.js";
+
 export type {
   GatewayHostsInjectResult,
   GatewayHostsInjector,

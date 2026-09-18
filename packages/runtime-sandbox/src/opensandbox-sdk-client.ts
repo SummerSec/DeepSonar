@@ -87,29 +87,57 @@ export function commandWithEnv(command: string, env?: Record<string, string>): s
 
 
 /** Transient execd/proxy upload failures under rootless hostfwd / ingress churn (#548). */
-const TRANSIENT_UPLOAD_RE =
+export const TRANSIENT_UPLOAD_RE =
   /Upload failed\s*\(\s*status\s*=\s*5\d\d\s*\)|UNEXPECTED_RESPONSE|Server disconnected without sending a response|An internal error occurred in the proxy|websocket proxy failure|ECONNRESET|EPIPE|socket hang up/i;
 
-export function isTransientOpenSandboxUploadError(error: unknown): boolean {
-  if (error == null) return false;
-  if (typeof error !== "object") return TRANSIENT_UPLOAD_RE.test(String(error));
+export type OpenSandboxUploadFaultKind = "none" | "transient" | "persistent_signal";
+
+function openSandboxUploadErrorText(error: unknown): string {
+  if (error == null) return "";
+  if (typeof error !== "object") return String(error);
   const value = error as Record<string, unknown>;
   const nested = value.error && typeof value.error === "object"
     ? `${(value.error as { code?: string }).code ?? ""} ${(value.error as { message?: string }).message ?? ""}`
     : "";
-  const text = [
+  return [
     "message" in value ? String(value.message ?? "") : "",
     "code" in value ? String(value.code ?? "") : "",
     nested,
     "statusCode" in value ? String(value.statusCode ?? "") : "",
     "status" in value ? String(value.status ?? "") : "",
   ].join(" ");
+}
+
+export function isTransientOpenSandboxUploadError(error: unknown): boolean {
+  if (error == null) return false;
+  if (typeof error !== "object") return TRANSIENT_UPLOAD_RE.test(String(error));
+  const value = error as Record<string, unknown>;
+  const text = openSandboxUploadErrorText(error);
   if (TRANSIENT_UPLOAD_RE.test(text)) return true;
   const status = Number(value.statusCode ?? value.status ?? 0);
   // Multipart upload 5xx without a permanent auth/not-found code.
   if (status === 502 || status === 503 || status === 504) return true;
   if (status === 500 && /Upload failed|UNEXPECTED_RESPONSE|proxy|disconnected/i.test(text)) return true;
   return false;
+}
+
+/**
+ * Job/circuit-level classifier (#605).
+ * - transient: matches #548 upload/proxy 5xx (still eligible for writeFilesWithRetry)
+ * - persistent_signal: same signature after per-call retries are exhausted (feed the circuit breaker)
+ * - none: not an upload-channel fault
+ */
+export function classifyOpenSandboxUploadFault(
+  error: unknown,
+  options?: { retriesExhausted?: boolean },
+): OpenSandboxUploadFaultKind {
+  if (!isTransientOpenSandboxUploadError(error)) return "none";
+  return options?.retriesExhausted ? "persistent_signal" : "transient";
+}
+
+/** Message-form helper for job.error strings already persisted. */
+export function isOpenSandboxUploadFailureMessage(message: string): boolean {
+  return TRANSIENT_UPLOAD_RE.test(message);
 }
 
 const UPLOAD_RETRY_ATTEMPTS = 3;

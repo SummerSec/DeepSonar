@@ -817,4 +817,12 @@ export class OpenSandboxRunner implements SandboxRunner {
   }
 }
 
-export { createSdkOpenSandboxClient } from "./opensandbox-sdk-client.js";
+export {
+  TRANSIENT_UPLOAD_RE,
+  classifyOpenSandboxUploadFault,
+  createSdkOpenSandboxClient,
+  isOpenSandboxUploadFailureMessage,
+  isTransientOpenSandboxUploadError,
+  writeFilesWithRetry,
+} from "./opensandbox-sdk-client.js";
+export type { OpenSandboxUploadFaultKind } from "./opensandbox-sdk-client.js";

@@ -6,6 +6,7 @@
 
 ### 修复
 
+- OpenSandbox Worker 上传持续性 5xx 熔断（#605）：按 canvas/project 统计上传失败波次；连续 ≥2 波或窗口内 ≥6 次命中瞬态上传分类器时打开 `opensandbox_upload_circuit_open`，暂停新派发；可选 `DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true` 触发 `docker restart` 自愈（默认关闭）；派发前可做上传探针，失败 fail-closed；指标与结构化日志告警，ops 通道预留 TODO。
 - Chrome Fuzz 镜像构建：浅克隆钉死的 depot_tools 后显式 `ensure_bootstrap`（保持 `DEPOT_TOOLS_UPDATE=0`），补齐 `python3_bin_reldir.txt`，避免 `gclient sync` 钩子失败（#588 / PR #602）。
 - 官方 `deepsonar-mobile` 将 `droidasc` 钉到 PyPI 已发布版本 `0.1.1.post1`（`0.1.1` 不存在）；v0.4.5 tag 仍为旧 pin，镜像发布需自修复后的 main 重跑或后续补丁发行（#564 / PR #602）。
 - 官方镜像 fail-closed 说明书元数据后，promotion 集成夹具与 env override / 信任合并路径同步要求 `manual`，避免 gate 假失败与不可解析版本进入注册表视图（#588 / PR #602）。

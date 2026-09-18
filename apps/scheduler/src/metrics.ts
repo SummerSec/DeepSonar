@@ -95,6 +95,11 @@ const HELP: Record<string, string> = {
   deepsonar_hub_budget_exhausted_total: "Hub self-drive stopped because the optional round-count guardrail was exhausted",
   deepsonar_report_auto_retry_total: "Task report jobs automatically re-dispatched after a terminal failure",
   deepsonar_report_root_settled_total: "Canvases whose root left reporting after report retry budget exhaustion",
+  deepsonar_opensandbox_upload_failures_total: "OpenSandbox worker upload failures matching the transient-upload classifier after per-call retries",
+  deepsonar_opensandbox_upload_circuit_trips_total: "OpenSandbox upload circuit trips (persistent upload-5xx waves)",
+  deepsonar_opensandbox_upload_alerts_total: "Ops alerts emitted for persistent OpenSandbox upload failures",
+  deepsonar_opensandbox_upload_self_heal_total: "OpenSandbox upload circuit self-heal attempts by result",
+  deepsonar_opensandbox_upload_probe_failures_total: "OpenSandbox pre-dispatch upload probe failures",
 };
 
 const PROCESS_GAUGE_HELP: Record<string, string> = {
@@ -107,6 +112,7 @@ const PROCESS_GAUGE_HELP: Record<string, string> = {
   deepsonar_runtime_image_gc_retained_in_use: "最近一次安全 GC 因容器引用而保留的版本数量",
   deepsonar_host_disk_used_percent: "Scheduler 监控的宿主文件系统已用百分比",
   deepsonar_host_disk_pressure: "宿主文件系统水位：0=ok, 1=warning, 2=error/unknown",
+  deepsonar_opensandbox_upload_circuit_open: "OpenSandbox upload circuit state: 0=closed, 1=half_open, 2=open",
 };
 
 /** Prometheus text exposition */

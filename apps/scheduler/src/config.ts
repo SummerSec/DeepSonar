@@ -334,6 +334,19 @@ export const config = {
       serverImage: str("OPENSANDBOX_SERVER_IMAGE", ""),
       execdImage: str("OPENSANDBOX_EXECD_IMAGE", ""),
       egressImage: str("OPENSANDBOX_EGRESS_IMAGE", ""),
+      /**
+       * #605：上传通道持续性故障熔断后是否 `docker restart` OpenSandbox。
+       * Docker 单机默认开启（事故验证有效）；K8s 默认关闭。可用环境变量强制覆盖。
+       * 容器名：OPEN_SANDBOX_CONTAINER_NAME（默认 deepsonar-opensandbox）。
+       */
+      autoRestart: bool(
+        "DEEPSONAR_OPENSANDBOX_AUTO_RESTART",
+        false,
+      ),
+      /** 可选：派发前 1KB 上传探针镜像；未设置则跳过主动探针，仍走失败路径熔断。 */
+      uploadProbeImage: str("DEEPSONAR_OPENSANDBOX_UPLOAD_PROBE_IMAGE", ""),
+      /** compose 容器名，自愈 restart 目标。 */
+      containerName: str("OPEN_SANDBOX_CONTAINER_NAME", "deepsonar-opensandbox"),
       /** Kubernetes 后端省略 Docker 专有 ResourceName=`pids`；仍要求冻结 pidsLimit。 */
       kubernetes: bool("OPEN_SANDBOX_KUBERNETES", false),
     },
