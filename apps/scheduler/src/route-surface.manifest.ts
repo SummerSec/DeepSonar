@@ -91,6 +91,7 @@ GET /projects/:id/roles
 GET /projects/:id/settings
 GET /projects/:id/shared-assets
 GET /projects/:id/shared-assets/policy
+GET /projects/:id/skill-sources
 GET /readiness
 GET /reports/:id/markdown
 GET /reports/:id/sarif
@@ -209,6 +210,7 @@ POST /workers/register
 PUT /gateway/*
 PUT /projects/:id/role-configs/:roleId
 PUT /projects/:id/runtime-images/:imageId
+PUT /projects/:id/skill-sources/:sourceId
 PUT /role-configs/global/:roleId
 `.trim().split(/\r?\n/);
 
@@ -292,6 +294,7 @@ GET /projects/{id}/roles
 GET /projects/{id}/settings
 GET /projects/{id}/shared-assets
 GET /projects/{id}/shared-assets/policy
+GET /projects/{id}/skill-sources
 GET /readiness
 GET /reports/{id}/markdown
 GET /reports/{id}/sarif
@@ -404,5 +407,6 @@ POST /workers/heartbeat
 POST /workers/register
 PUT /projects/{id}/role-configs/{roleId}
 PUT /projects/{id}/runtime-images/{imageId}
+PUT /projects/{id}/skill-sources/{sourceId}
 PUT /role-configs/global/{roleId}
 `.trim().split(/\r?\n/);

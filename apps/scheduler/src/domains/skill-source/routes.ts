@@ -4,6 +4,10 @@ import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { validationHttpError } from "../../http-validation-error.js";
 import { syncSkillSource, validateSourceUrl } from "../../skill-sources.js";
+import {
+  listProjectSkillSourceBindings,
+  setProjectSkillSourceEnabled,
+} from "../project-skill-allowlist/index.js";
 
 const SkillSourceBody = z.object({
   name: z.string().min(1),
@@ -107,4 +111,46 @@ export function registerSkillSourceRoutes(app: FastifyInstance): void {
     });
     return { ok: true };
   });
+
+  // ---------- 项目 Skill 源启用白名单（#603） ----------
+  // 镜像 / CLI·Provider 同构：平台控制面启用；Hub 从已启用集合选型。
+  app.get("/projects/:id/skill-sources", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (req.actor?.projectId && req.actor.projectId !== id) {
+      return reply.code(403).send({ error: `token 仅限项目 ${req.actor.projectId}` });
+    }
+    const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    try {
+      return await listProjectSkillSourceBindings(sql as never, id);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "skill allowlist read failed" });
+    }
+  });
+
+  app.put("/projects/:id/skill-sources/:sourceId", async (req, reply) => {
+    const { id, sourceId } = req.params as { id: string; sourceId: string };
+    if (req.actor?.projectId && req.actor.projectId !== id) {
+      return reply.code(403).send({ error: `token 仅限项目 ${req.actor.projectId}` });
+    }
+    const body = z.object({ enabled: z.boolean() }).parse(req.body);
+    const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
+    if (!project) return reply.code(404).send({ error: "project not found" });
+    try {
+      const row = await setProjectSkillSourceEnabled(sql as never, id, sourceId, body.enabled);
+      await audit(req, {
+        action: "skill_source.project_binding",
+        resourceType: "skill_source",
+        resourceId: sourceId,
+        projectId: id,
+        after: { enabled: body.enabled },
+      });
+      return row;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "skill allowlist write failed";
+      if (/not found/i.test(message)) return reply.code(404).send({ error: message });
+      return reply.code(400).send({ error: message });
+    }
+  });
+
 }

@@ -2186,6 +2186,31 @@ const OPS: Op[] = [
     },
   },
 
+
+  {
+    method: "get",
+    path: "/projects/{id}/skill-sources",
+    summary: "项目 Skill 源启用白名单",
+    description: "返回平台 Skill 源及本项目启用态；首次读取会把历史 RoleConfig modules_json 引用的源种子为启用（#603）。",
+    scope: "skills:read",
+    tags: ["Skills"],
+  },
+  {
+    method: "put",
+    path: "/projects/{id}/skill-sources/{sourceId}",
+    summary: "启用/停用项目 Skill 源",
+    description: "项目控制面白名单；未启用源不可进入本项目 Job 快照（#603）。",
+    scope: "skills:write",
+    tags: ["Skills"],
+    body: {
+      type: "object",
+      required: ["enabled"],
+      properties: {
+        enabled: { type: "boolean" },
+      },
+    },
+  },
+
   // skill sources
   { method: "get", path: "/skill-sources", summary: "模块源列表", scope: "skills:read", tags: ["Skills"] },
   { method: "get", path: "/skill-sources/{id}", summary: "模块源目录详情", scope: "skills:read", tags: ["Skills"] },

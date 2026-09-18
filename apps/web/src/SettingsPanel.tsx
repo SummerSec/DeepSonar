@@ -37,6 +37,7 @@ import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { ProjectImagePolicySection } from "./components/ProjectImagePolicySection";
 import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
+import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
 import { inferToastKind, showToast } from "./toast";
 import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
 
@@ -622,7 +623,6 @@ export function SettingsPanel({
     );
   };
 
-
   const shellCls =
     variant === "page"
       ? "settings-panel flex h-full w-full flex-col bg-transparent"
@@ -810,6 +810,7 @@ export function SettingsPanel({
                   defaultCredentialId={defaultCredentialId}
                   onSaved={reload}
                 />
+                <ProjectSkillSourceAllowlistPanel projectId={projectId} onSaved={reload} />
               </>
             )}
 

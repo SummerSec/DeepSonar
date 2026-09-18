@@ -49,6 +49,7 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
   list_available_runtime_images: { title: "查询可用镜像", description: "让 Hub 按需获取本项目已启用且可信的镜像目录（含 purpose/tool_summary/not_included/capabilities/selection_hints），按任务匹配后原样复制 image_key，禁止猜测。" },
   list_available_agent_clis: { title: "查询可用 Agent CLI", description: "让 Hub 按需获取本项目白名单内的 Agent CLI；提案须 ∈ 列表，省略时走项目软缺省或角色回退。" },
   list_available_providers: { title: "查询可用 Provider", description: "让 Hub 按需获取本项目白名单内的 Provider/凭据；提案须 ∈ 列表，并发与配额在 Provider 侧，不按角色锁死。" },
+  list_available_skill_sources: { title: "查询可用 Skill 源", description: "让 Hub 按需获取本项目已启用 Skill 源目录（#603 只读 stub）；发现≠授权，下发仍以快照 selector + 白名单为上限。" },
   list_capabilities: { title: "查询能力包", description: "列出本 Job 可见的 Capability Pack 摘要；完整契约用 describe_capability 按需读取。" },
   search_capabilities: { title: "搜索能力包", description: "按任务查询可用 Capability Pack，不依赖预先知道 RoleConfig selector。" },
   describe_capability: { title: "描述能力包", description: "按 id/version/digest 读取 Capability Pack 机器契约。" },
@@ -379,6 +380,7 @@ export function RoleConfigEditor({
   credentials,
   sources,
   sourceDetails,
+  enabledSkillSourceIds = null,
   busy,
   saved = false,
   failed = false,
@@ -397,6 +399,8 @@ export function RoleConfigEditor({
   /** Git 模块源（模块勾选列表用） */
   sources: SkillSource[];
   sourceDetails: Record<string, SkillSourceDetail>;
+  /** 项目已启用 Skill 源；提供时模块候选只显示白名单内源（#603）。 */
+  enabledSkillSourceIds?: string[] | null;
   busy: boolean;
   saved?: boolean;
   failed?: boolean;
@@ -405,6 +409,11 @@ export function RoleConfigEditor({
 }) {
   const [form, setForm] = useState<ConfigForm>(() => formOf(initial));
   const [error, setError] = useState<string | null>(null);
+  const pickerSources = useMemo(() => {
+    if (!enabledSkillSourceIds) return sources;
+    const allow = new Set(enabledSkillSourceIds);
+    return sources.filter((source) => allow.has(source.id));
+  }, [sources, enabledSkillSourceIds]);
   void credentials; // 仍由父组件传入以兼容签名；CLI/凭据/模型改由 Provider 页绑定
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
@@ -724,7 +733,7 @@ export function RoleConfigEditor({
               <strong>
                 Agent 模块目录
                 <HelpTip>
-                  目录由「模块源」同步生成。展开后列表内上下滚动；可挂载整插件/整源，selector 会跟随后续 sync 在下一 Job 纳入新增模块。
+                  目录由「模块源」同步生成。展开后列表内上下滚动；可挂载整插件/整源，selector 会跟随后续 sync 在下一 Job 纳入新增模块。 候选须 ∈ 项目 Skill 源白名单（#603，服务端 fail-closed）；RoleConfig 勾选仅为过渡缺省建议，主路径将迁到 Hub 从项目已启用集合选型。
                 </HelpTip>
               </strong>
             </div>
@@ -734,7 +743,7 @@ export function RoleConfigEditor({
             <CaretDown size={14} />
           </summary>
           <div className="role-config-modules-body">
-            <ModulePicker sources={sources} sourceDetails={sourceDetails} selected={form.modules} onChange={(modules) => setForm({ ...form, modules })} />
+            <ModulePicker sources={pickerSources} sourceDetails={sourceDetails} selected={form.modules} onChange={(modules) => setForm({ ...form, modules })} />
           </div>
         </details>
       </div>

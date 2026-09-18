@@ -664,6 +664,9 @@ export type ListAvailableAgentClisPayload = z.infer<typeof ListAvailableAgentCli
 export const ListAvailableProvidersPayload = z.object({}).strict();
 export type ListAvailableProvidersPayload = z.infer<typeof ListAvailableProvidersPayload>;
 
+export const ListAvailableSkillSourcesPayload = z.object({}).strict();
+export type ListAvailableSkillSourcesPayload = z.infer<typeof ListAvailableSkillSourcesPayload>;
+
 export {
   DEVICE_LEASE_ERROR_CODES,
   DEVICE_LEASE_TOKEN_VERSION,
@@ -1287,6 +1290,7 @@ export const ControlToolPayloadSchemas = {
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
   list_available_agent_clis: ListAvailableAgentClisPayload,
   list_available_providers: ListAvailableProvidersPayload,
+  list_available_skill_sources: ListAvailableSkillSourcesPayload,
   list_capabilities: ListCapabilitiesPayload,
   search_capabilities: SearchCapabilitiesPayload,
   describe_capability: DescribeCapabilityPayload,
@@ -1396,6 +1400,7 @@ export const PlatformToolName = z.enum([
   "list_available_runtime_images",
   "list_available_agent_clis",
   "list_available_providers",
+  "list_available_skill_sources",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",
@@ -1533,6 +1538,7 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "list_available_runtime_images",
   "list_available_agent_clis",
   "list_available_providers",
+  "list_available_skill_sources",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",

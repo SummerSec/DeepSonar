@@ -37,6 +37,12 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: true,
     eventType: null,
   },
+  list_available_skill_sources: {
+    summary: "List Skill sources available to the current Hub Job",
+    description: "Return the project-enabled, trusted Skill source catalog (skill_source_id, name, module_count, content hash). Read-only discovery stub for #603; Hub will select selectors from this set in a later slice. Discovery is not authorization.",
+    readOnly: true,
+    eventType: null,
+  },
   list_capabilities: {
     summary: "List Capability Packs visible to the current Job",
     description: "Return summaries of builtin, trusted-module, and RoleConfig-projected Capability Packs. Results are id/version/digest/scope/summary only; call describe_capability for the full machine contract.",
