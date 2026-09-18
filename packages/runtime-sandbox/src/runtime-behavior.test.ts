@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import http from "node:http";
@@ -1379,4 +1380,11 @@ test("组件 materialize 在任何写入前拒绝路径穿越与控制字符", (
     }),
     [],
   );
+});
+
+
+test("Job runtime refuses repo skill dynamic install (#615)", () => {
+  const source = readFileSync(new URL("./runtime-agent.ts", import.meta.url), "utf8");
+  assert.match(source, /component_materialization_failed: runtime_install_forbidden/);
+  assert.doesNotMatch(source, /npx -y skills add/);
 });
