@@ -180,16 +180,9 @@ export function SettingsPanel({
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   const reload = () => {
-
-      if (projectId) {
-        api.projectSkillSources(projectId)
-          .then((res) => setEnabledSkillSourceIds(res.sources.filter((s) => s.project_enabled).map((s) => s.skill_source_id)))
-          .catch(() => setEnabledSkillSourceIds(null));
-      } else {
-        setEnabledSkillSourceIds(null);
-      }
     if (!projectId && visibleGlobalTabs.length === 0) return;
     setAgentLoadError(null);
+    if (!projectId) setEnabledSkillSourceIds(null);
     const showAgentLoadError = (label: string, error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
       setAgentLoadError(`${label}加载失败：${detail}`);
@@ -217,6 +210,9 @@ export function SettingsPanel({
           setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
         })
         .catch(() => {});
+      api.projectSkillSources(projectId)
+        .then((res) => setEnabledSkillSourceIds(res.sources.filter((s) => s.project_enabled).map((s) => s.skill_source_id)))
+        .catch(() => setEnabledSkillSourceIds(null));
     } else if (globalSection === "agents" && canLoadTab("roles")) {
       // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
       api
