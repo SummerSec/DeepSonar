@@ -69,6 +69,10 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 Job 创建时冻结 capability selector、digest、模块内容 hash、缺失模块和运行配置；运行时物化只能使用这份快照。当前发现 API 会合并内置目录、已信任 skill source 和 Job 的 RoleConfig 投影，因此发现结果本身只是只读目录提示，不是授权。任何组合/物化路径都必须再以快照 selector/digest 为上限，不能把 Job 创建后的 source sync 当成这次执行的新权限；这条上限校验是继续收紧的实现门。当前尚未实现 task/session Pack 的持久化生命周期、Pack 评估晋升和跨任务经验推荐；不要在代码或文档中把这些未来能力写成已存在。
 
+### 4.1.1 Language Server Capability Modules
+
+语言服务器是受治理的 **Capability Module**（契约 `deepsonar.language-server-capability/v1`），不是 Agent 可随意拉取的二进制。Hub 只能从能力目录提出已登记模块（首期 `language-server.clangd`）；Scheduler 校验镜像兼容性与前置条件（如 `compile_commands.json`）后，把 id / version / image_key / config_fingerprint 冻结进 Job 快照。Agent **不得**在任务内 `apt`/`npm` 安装 LSP，也不得把未准入的 raw `clangd` 命令当作静默降级路径；不可用时返回结构化 `capability_unavailable`。完整 LSP JSON-RPC 适配器是后续切片，本阶段只落地目录、准入与快照冻结。
+
 ### 4.2 Plan
 
 当前 Hub 仍以 Intent 驱动，长期目标是把 Intent 适配为 `PlanTask`，由模型声明目的、依赖、输入引用、期望输出、验证路径、完成理由和预算。平台验证 schema、canonical 引用、依赖环、权限、预算和可执行性；模型判断业务上继续、收敛、阻塞或请求人工。

@@ -30,3 +30,8 @@ node agent-harness/test-runtime-manuals-runtime.mjs <image-ref> <image-key>
 ```
 
 仓库级门禁检查 13 个镜像、必填章节、工具和包装入口覆盖、禁止空泛引用以及 Dockerfile 集成。运行时门禁用 `--network none`、丢弃 capabilities 和 `no-new-privileges` 启动实际镜像，重算摘要，并确认全部文档在镜像内物理可读。依赖真机、外部服务或联网下载的示例必须在条目中标为 `device_required`、`service_required` 或 `unverified`，不得标成实测成功。
+
+## Language-server capability modules
+
+`clangd` in `deepsonar-chrome-audit` / `deepsonar-clickhouse-audit` is documented as the governed `language-server.clangd` capability module: Hub proposes, Scheduler freezes id/version/image/config fingerprint, and Agents must not apt-install LSPs or silently fall back to an undeclared clangd process. Missing `compile_commands.json` or an incompatible image yields structured `capability_unavailable`.
+

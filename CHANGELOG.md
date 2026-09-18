@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 语言服务器能力模块首片（#604）：登记受治理的 `language-server.clangd`（C/C++，兼容 `deepsonar-chrome-audit` / `deepsonar-clickhouse-audit`，只读、禁网、需 `compile_commands.json`）；Scheduler 准入拒绝未登记/镜像不兼容/缺前置/运行时安装，并冻结 id/version/image/config fingerprint；`list_capabilities` / `describe_capability` 可发现；Chrome/ClickHouse Audit 离线手册补充 clangd 治理用法。完整 LSP 适配器与其它语言服务器不在本切片。
+
 ### 修复
 
 - Chrome Fuzz 镜像构建：浅克隆钉死的 depot_tools 后显式 `ensure_bootstrap`（保持 `DEPOT_TOOLS_UPDATE=0`），补齐 `python3_bin_reldir.txt`，避免 `gclient sync` 钩子失败（#588 / PR #602）。

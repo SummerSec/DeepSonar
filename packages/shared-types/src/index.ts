@@ -6,6 +6,21 @@ import {
   SearchCapabilitiesPayload,
   ValidateCompositionPayload,
 } from "./capability-pack.js";
+
+export {
+  LANGUAGE_SERVER_CAPABILITY_SCHEMA,
+  LANGUAGE_SERVER_OPERATIONS,
+  LANGUAGE_SERVER_UNAVAILABLE_CODE,
+  LanguageServerCapabilityId,
+  LanguageServerCapabilityManifest,
+  LanguageServerLimits,
+  LanguageServerOperation,
+  LanguageServerUnavailableReason,
+  LanguageServerFileRange,
+  LanguageServerQueryResult,
+  FrozenLanguageServerCapability,
+} from "./language-server-capability.js";
+export type { LanguageServerOperation as LanguageServerOperationName } from "./language-server-capability.js";
 import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);

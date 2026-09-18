@@ -36,6 +36,10 @@ import {
   type CapabilityCatalogRecord,
   type FrozenCapabilityPack,
 } from "./catalog.js";
+import {
+  findLanguageServerCapability,
+  languageServerCapabilityPackRecords,
+} from "../language-server-capability/index.js";
 
 export interface CapabilityJobEnvelope {
   roleName: string;
@@ -80,7 +84,10 @@ export function buildCapabilityCatalog(input: {
   sources?: readonly TrustedSkillSourceCatalog[];
   job?: CapabilityJobEnvelope;
 }): CapabilityCatalogRecord[] {
-  const records: CapabilityCatalogRecord[] = [...BUILTIN_CAPABILITY_PACKS];
+  const records: CapabilityCatalogRecord[] = [
+    ...BUILTIN_CAPABILITY_PACKS,
+    ...languageServerCapabilityPackRecords(),
+  ];
   if (input.job?.frozen) {
     records.push(...projectFrozenSkillModules(input.job.frozen));
   } else {
@@ -154,6 +161,7 @@ export function searchCapabilities(records: readonly CapabilityCatalogRecord[], 
 
 export function describeCapability(records: readonly CapabilityCatalogRecord[], input: DescribeCapabilityPayload): {
   capability: CapabilityPackManifest | null;
+  language_server?: ReturnType<typeof findLanguageServerCapability>;
   repair: RepairFeedback[];
 } {
   const record = findCatalogRecord(records, input);
@@ -163,7 +171,12 @@ export function describeCapability(records: readonly CapabilityCatalogRecord[], 
       repair: [repairCapabilityNotFound(input.id, "id", availableCatalogIds(records))],
     };
   }
-  return { capability: record.manifest, repair: [] };
+  const language_server = findLanguageServerCapability(record.manifest.id);
+  return {
+    capability: record.manifest,
+    ...(language_server ? { language_server } : {}),
+    repair: [],
+  };
 }
 
 export function checkPackPermissions(draft: CapabilityPackDraft, job: CapabilityJobEnvelope): RepairFeedback[] {

@@ -8385,34 +8385,37 @@
           "commands": [
             "clangd"
           ],
-          "usage_scenario": "Provide language-server semantic indexing when an editor or index client is available.",
-          "selection_basis": "Use clangd for symbol and compile-context navigation; use clang-tidy for batch findings.",
+          "usage_scenario": "Use the governed language-server.clangd capability for C/C++ definition, references, hover, symbols, and diagnostics when compile_commands.json exists.",
+          "selection_basis": "Prefer Scheduler-admitted language-server.clangd over raw clangd shell; use clang-tidy for batch findings. Never apt-install clangd or another LSP during a job.",
           "prerequisites": [
-            "Read the frozen job image manifest and work under the job workspace."
+            "Frozen job image deepsonar-chrome-audit or deepsonar-clickhouse-audit",
+            "compile_commands.json under the workspace",
+            "Scheduler-admitted language-server.clangd in the job snapshot"
           ],
           "minimal_invocation": "clangd --version",
           "common_parameters": [
             "--compile-commands-dir",
             "--background-index"
           ],
-          "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
+          "output_interpretation": "LSP navigation and diagnostics are code-context evidence only; they are not security Findings. Retain revision, server version, file ranges, and compile_commands fingerprint.",
           "failure_handling": {
             "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
             "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
             "transient_retryable": "For a busy process, temporary network error, or service startup race, retain logs and retry within the job budget after checking for duplicate side effects.",
-            "missing_condition": "If a required file, device, authorization, service, network permission, or architecture is absent, record inconclusive/needs_human with the missing condition.",
-            "permanent": "For unsupported input, corrupt artifacts, an unavailable binary, or an unrecoverable exit, stop and record permanent_failure with stderr and the exact command."
+            "missing_condition": "If compile_commands.json is absent or language-server.clangd was not admitted, record capability_unavailable / inconclusive; do not fabricate symbols or silently fall back to an undeclared clangd process.",
+            "permanent": "If clangd is missing from the image or the capability is unregistered for this image, stop and report capability_unavailable; do not apt-install an LSP."
           },
-          "composition_flow": "Save the raw output, normalize only with a documented transformation, then pass the artifact to the next tool or verifier.",
+          "composition_flow": "Hub proposes language-server.clangd -> Scheduler admits and freezes snapshot -> Agent uses governed operations with compile_commands.json -> retain evidence -> cleanup index caches.",
           "evidence_retention": [
-            "Exact command and arguments",
-            "image key and digest",
-            "tool version",
-            "stdout/stderr",
-            "exit code",
-            "input and output hashes"
+            "language-server.clangd id/version",
+            "image key",
+            "config fingerprint",
+            "compile_commands.json hash",
+            "request operation",
+            "file path and range",
+            "raw LSP result"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "clangd is image-pinned and read-only with network disabled. Keep indexes under the workspace and remove temporary clangd caches after evidence is retained.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
@@ -12217,6 +12220,51 @@
         },
         {
           "image_key": "deepsonar-clickhouse-audit",
+          "id": "clangd",
+          "kind": "tool",
+          "agent_visible": true,
+          "implementation_only": false,
+          "version": "Debian snapshot (exact version not pinned)",
+          "version_source": "agent-harness/clickhouse-audit-runtime.json#/apt.clangd",
+          "commands": [
+            "clangd"
+          ],
+          "usage_scenario": "Use the governed language-server.clangd capability for ClickHouse C/C++ navigation and diagnostics when compile_commands.json exists.",
+          "selection_basis": "Prefer Scheduler-admitted language-server.clangd; do not treat raw clangd as an undeclared fallback and never apt-install LSPs in-job.",
+          "prerequisites": [
+            "Frozen job image deepsonar-clickhouse-audit",
+            "compile_commands.json under the workspace",
+            "Scheduler-admitted language-server.clangd in the job snapshot"
+          ],
+          "minimal_invocation": "clangd --version",
+          "common_parameters": [
+            "--compile-commands-dir",
+            "--background-index"
+          ],
+          "output_interpretation": "Navigation and diagnostics are contextual evidence only, not Findings. Keep revision, server/image pins, ranges, and compile_commands fingerprint.",
+          "failure_handling": {
+            "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
+            "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
+            "transient_retryable": "For a busy process, temporary network error, or service startup race, retain logs and retry within the job budget after checking for duplicate side effects.",
+            "missing_condition": "If compile_commands.json is absent or language-server.clangd was not admitted, record capability_unavailable / inconclusive; do not invent symbols.",
+            "permanent": "If clangd is unavailable in the image or unregistered for this image, stop with capability_unavailable; do not install an LSP at runtime."
+          },
+          "composition_flow": "Hub proposes language-server.clangd -> Scheduler freezes -> governed query -> evidence retention -> cleanup.",
+          "evidence_retention": [
+            "language-server.clangd id/version",
+            "image key",
+            "config fingerprint",
+            "compile_commands.json hash",
+            "operation",
+            "path/range",
+            "raw result"
+          ],
+          "version_limits_side_effects_cleanup": "Image-pinned, read-only, network disabled. Remove temporary clangd index files after retaining evidence.",
+          "verification_status": "source_declared_unexecuted",
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
+        },
+        {
+          "image_key": "deepsonar-clickhouse-audit",
           "id": "binutils",
           "kind": "tool",
           "agent_visible": true,
@@ -12348,8 +12396,8 @@
           "verification_note": "Wrapper source was reviewed; no Docker image was built or executed by this catalog generation."
         }
       ],
-      "entry_count": 43,
-      "agent_visible_entry_count": 20,
+      "entry_count": 44,
+      "agent_visible_entry_count": 21,
       "implementation_only_entry_count": 23
     },
     {
@@ -26129,8 +26177,8 @@
   ],
   "totals": {
     "image_count": 13,
-    "entry_count": 646,
-    "agent_visible_entry_count": 342,
+    "entry_count": 647,
+    "agent_visible_entry_count": 343,
     "implementation_only_entry_count": 304
   }
 }
