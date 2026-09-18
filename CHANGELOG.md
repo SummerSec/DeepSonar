@@ -6,7 +6,7 @@
 
 ### 新增
 
-- 语言服务器能力模块首片（#604）：登记受治理的 `language-server.clangd`（C/C++，兼容 `deepsonar-chrome-audit` / `deepsonar-clickhouse-audit`，只读、禁网、需 `compile_commands.json`）；Scheduler 准入拒绝未登记/镜像不兼容/缺前置/运行时安装，并冻结 id/version/image/config fingerprint；`list_capabilities` / `describe_capability` 可发现；Chrome/ClickHouse Audit 离线手册补充 clangd 治理用法。完整 LSP 适配器与其它语言服务器不在本切片。
+- 语言服务器能力模块（#604）：登记受治理的 `language-server.clangd`（C/C++，兼容 chrome/clickhouse audit，只读、禁网、需 `compile_commands.json`，含调用/超时/响应限额）；Scheduler 准入拒绝未登记/镜像不兼容/缺前置/运行时安装；Hub 可通过 `language_server_capability_id` 提案并冻结进 Job 快照；`list_capabilities` / `describe_capability` 可发现完整元数据；受控 Adapter（`agent-harness/language-server-adapter.mjs`）提供有界只读查询与证据形状（非 Finding）；Chrome/ClickHouse Audit 离线手册已更新。其它语言服务器与镜像内 Adapter 安装不在本切片。
 
 ### 修复
 

@@ -162,3 +162,11 @@ export function languageServerPackDigest(id: string): string | undefined {
 export function languageServerForImage(imageKey: string) {
   return LANGUAGE_SERVER_CAPABILITY_MANIFESTS.find((item) => item.compatible_images.includes(imageKey));
 }
+
+/** Freeze the first catalog language-server compatible with `imageKey` into Job snapshot shape. */
+export function pinLanguageServerForImage(imageKey: string): FrozenLanguageServerCapability | undefined {
+  const module = languageServerForImage(imageKey);
+  if (!module) return undefined;
+  return freezeLanguageServerCapability({ module, imageKey });
+}
+

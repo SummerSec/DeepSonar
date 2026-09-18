@@ -12,6 +12,7 @@ import {
   freezeLanguageServerCapability,
   languageServerPackDigest,
   listLanguageServerCapabilities,
+  pinLanguageServerForImage,
 } from "./index.js";
 
 test("catalog registers language-server.clangd with clangd metadata for C/C++ audit images", () => {
@@ -34,6 +35,8 @@ test("catalog registers language-server.clangd with clangd metadata for C/C++ au
   assert.equal(module.read_only, true);
   assert.equal(module.network, "disabled");
   assert.ok(module.requires.includes("compile_commands.json"));
+  assert.equal(module.limits.max_calls_per_job, 64);
+  assert.ok(module.limits.timeout_ms >= 1000);
   assert.ok(listLanguageServerCapabilities().some((item) => item.id === LANGUAGE_SERVER_CLANGD_ID));
 });
 
@@ -108,6 +111,7 @@ test("admission freezes id/version/image/config fingerprint into job snapshot sh
   assert.match(frozen.config_fingerprint, /^sha256:[a-f0-9]{64}$/);
   assert.equal(frozen.read_only, true);
   assert.equal(frozen.network, "disabled");
+  assert.equal(frozen.limits.max_calls_per_job, 64);
 
   const module = findLanguageServerCapability(LANGUAGE_SERVER_CLANGD_ID)!;
   const again = freezeLanguageServerCapability({
@@ -115,4 +119,12 @@ test("admission freezes id/version/image/config fingerprint into job snapshot sh
     imageKey: "deepsonar-clickhouse-audit",
   });
   assert.equal(again.config_fingerprint, frozen.config_fingerprint);
+});
+
+test("compatible audit images pin language_server into snapshot shape", () => {
+  const pinned = pinLanguageServerForImage("deepsonar-chrome-audit");
+  assert.ok(pinned);
+  assert.equal(pinned.id, LANGUAGE_SERVER_CLANGD_ID);
+  assert.equal(pinned.image_key, "deepsonar-chrome-audit");
+  assert.equal(pinLanguageServerForImage("deepsonar-base"), undefined);
 });

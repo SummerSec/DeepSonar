@@ -8,6 +8,7 @@ export {
   languageServerPackDigest,
   listLanguageServerCapabilities,
   languageServerForImage,
+  pinLanguageServerForImage,
 } from "./catalog.js";
 export {
   admitLanguageServerCapability,

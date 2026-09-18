@@ -71,7 +71,7 @@ Job 创建时冻结 capability selector、digest、模块内容 hash、缺失模
 
 ### 4.1.1 Language Server Capability Modules
 
-语言服务器是受治理的 **Capability Module**（契约 `deepsonar.language-server-capability/v1`），不是 Agent 可随意拉取的二进制。Hub 只能从能力目录提出已登记模块（首期 `language-server.clangd`）；Scheduler 校验镜像兼容性与前置条件（如 `compile_commands.json`）后，把 id / version / image_key / config_fingerprint 冻结进 Job 快照。Agent **不得**在任务内 `apt`/`npm` 安装 LSP，也不得把未准入的 raw `clangd` 命令当作静默降级路径；不可用时返回结构化 `capability_unavailable`。完整 LSP JSON-RPC 适配器是后续切片，本阶段只落地目录、准入与快照冻结。
+语言服务器是受治理的 **Capability Module**（契约 `deepsonar.language-server-capability/v1`），不是 Agent 可随意拉取的二进制。Hub 只能从能力目录提出已登记模块（首期 `language-server.clangd`）；Scheduler 校验镜像兼容性与前置条件（如 `compile_commands.json`）后，把 id / version / image_key / config_fingerprint 冻结进 Job 快照。Agent **不得**在任务内 `apt`/`npm` 安装 LSP，也不得把未准入的 raw `clangd` 命令当作静默降级路径；不可用时返回结构化 `capability_unavailable`。受控 LSP Adapter（有界操作，禁止自由 JSON-RPC）已落地于 `agent-harness/language-server-adapter.mjs`；其它语言服务器与镜像内安装仍为后续切片。Hub 可通过 Intent 的 `language_server_capability_id` 提案并冻结进 Job 快照。
 
 ### 4.2 Plan
 

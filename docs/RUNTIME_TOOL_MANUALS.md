@@ -35,3 +35,6 @@ node agent-harness/test-runtime-manuals-runtime.mjs <image-ref> <image-key>
 
 `clangd` in `deepsonar-chrome-audit` / `deepsonar-clickhouse-audit` is documented as the governed `language-server.clangd` capability module: Hub proposes, Scheduler freezes id/version/image/config fingerprint, and Agents must not apt-install LSPs or silently fall back to an undeclared clangd process. Missing `compile_commands.json` or an incompatible image yields structured `capability_unavailable`.
 
+## 语言服务器能力（#604）
+
+Chrome Audit / ClickHouse Audit 的 `clangd` 条目绑定受治理能力 `language-server.clangd`。详见 [`LANGUAGE_SERVER_CAPABILITIES.md`](LANGUAGE_SERVER_CAPABILITIES.md)：Scheduler 准入、Job 快照冻结、受控 Adapter；缺 `compile_commands.json` 返回 `capability_unavailable`；禁止运行时安装 LSP；LSP 结果不是 Finding。
