@@ -6,6 +6,7 @@ import {
   type FrozenCliCapability,
   type FrozenCliCapabilityPack,
   type FrozenMaterializationPack,
+  type FrozenProviderModelSnapshot,
   type FrozenLanguageServerCapability,
   type PlatformToolConfig,
   type ReasoningValue,
@@ -39,6 +40,7 @@ import {
 import {
   freezeMaterializationPackAtJobCreate,
 } from "../extension-materialization/index.js";
+import { freezeProviderModelSnapshot } from "../provider-adapter/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -557,6 +559,25 @@ async function resolveAgentSnapshotForJobUnchecked(
   }
   component_materialization_pack = materialization.pack;
 
+  let provider_model: FrozenProviderModelSnapshot | undefined;
+  if (llm) {
+    const rolePassthroughForFreeze = cfg?.allow_model_catalog_passthrough === true;
+    const allowPassthroughForFreeze = config.allowModelCatalogPassthrough || rolePassthroughForFreeze;
+    const frozenPm = freezeProviderModelSnapshot({
+      provider: String(llm.provider ?? ""),
+      cliModelId: providerSnapshot.model,
+      upstreamModelId: snapshotUpstreamModel(providerSnapshot) ?? providerSnapshot.upstream_model,
+      catalogJson: llm.model_catalog_json,
+      catalogRevision: `credential:${String(llm.id)}`,
+      contextWindow: providerSnapshot.context_window_tokens,
+      compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh"
+        ? [agentCli]
+        : undefined,
+      passthrough: allowPassthroughForFreeze,
+    });
+    if (frozenPm) provider_model = frozenPm;
+  }
+
   return {
     name: roleName,
     role_kind: roleKind,
@@ -591,6 +612,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     ...(language_server ? { language_server } : {}),
     ...(cli_capabilities ? { cli_capabilities, cli_capability_pack } : {}),
     component_materialization_pack,
+    ...(provider_model ? { provider_model } : {}),
     skill_revisions: expanded.revisions,
     skills,
     commands,
