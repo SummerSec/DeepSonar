@@ -1,6 +1,12 @@
-import { CURRENT_AGENT_CLIS, isCurrentAgentCli, type CurrentAgentCli } from "@deepsonar/shared-types";
+import {
+  CURRENT_AGENT_CLIS,
+  isCurrentAgentCli,
+  type CurrentAgentCli,
+  type ModelDescriptor,
+} from "@deepsonar/shared-types";
 import { PROVIDER_CATALOG, credentialConcurrencyPolicy } from "../../credentials.js";
 import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/application.js";
+import { resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
 
 export interface ProjectAgentAllowlist {
   /** true once enabled_agent_clis / enabled_credential_ids 已显式落库（含迁移种子）。 */
@@ -10,6 +16,12 @@ export interface ProjectAgentAllowlist {
   /** Hub 省略时的软缺省；必须 ∈ 白名单。 */
   default_agent_cli: CurrentAgentCli | null;
   default_credential_id: string | null;
+  /** Optional model selector paired with default_credential_id. */
+  default_model_ref: string | null;
+  /** Explicit project opt-in for non-catalog model passthrough. */
+  allow_model_catalog_passthrough: boolean;
+  /** Ordered fallback model refs used by Hub/Scheduler selection. */
+  fallback_model_refs: string[];
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,6 +66,22 @@ function parseOptionalCredentialId(value: unknown): string | null {
   return typeof value === "string" && UUID_RE.test(value) ? value : null;
 }
 
+function parseOptionalModelRef(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const ref = value.trim();
+  return ref && ref.length <= 200 && /^\S+$/u.test(ref) ? ref : null;
+}
+
+function parseModelRefList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    const ref = parseOptionalModelRef(item);
+    if (ref && !out.includes(ref)) out.push(ref);
+  }
+  return out.slice(0, 16);
+}
+
 /**
  * 读取项目 config_json 中的 CLI/Provider 白名单。
  * 缺键 = 尚未配置（configured=false）；由迁移种子补齐后才 fail-closed。
@@ -67,11 +95,25 @@ export function parseProjectAgentAllowlist(value: unknown): ProjectAgentAllowlis
   const enabled_credential_ids = creds ?? [];
   let default_agent_cli = parseOptionalCli(cfg.default_agent_cli);
   let default_credential_id = parseOptionalCredentialId(cfg.default_credential_id);
+  let default_model_ref = parseOptionalModelRef(cfg.default_model_ref);
   if (default_agent_cli && !enabled_agent_clis.includes(default_agent_cli)) default_agent_cli = null;
   if (default_credential_id && !enabled_credential_ids.includes(default_credential_id)) {
     default_credential_id = null;
   }
-  return { configured, enabled_agent_clis, enabled_credential_ids, default_agent_cli, default_credential_id };
+  const fallback_model_refs = parseModelRefList(cfg.fallback_model_refs);
+  if (!default_credential_id) {
+    default_model_ref = null;
+  }
+  return {
+    configured,
+    enabled_agent_clis,
+    enabled_credential_ids,
+    default_agent_cli,
+    default_credential_id,
+    default_model_ref,
+    allow_model_catalog_passthrough: cfg.allow_model_catalog_passthrough === true,
+    fallback_model_refs: default_credential_id ? fallback_model_refs : [],
+  };
 }
 
 export interface AllowlistBindingSeed {
@@ -119,6 +161,9 @@ export function applyProjectAgentAllowlistPatch(
     enabled_credential_ids?: string[];
     default_agent_cli?: string | null;
     default_credential_id?: string | null;
+    default_model_ref?: string | null;
+    allow_model_catalog_passthrough?: boolean;
+    fallback_model_refs?: string[];
   },
 ): ProjectAgentAllowlist {
   if (patch.enabled_agent_clis !== undefined) {
@@ -141,6 +186,24 @@ export function applyProjectAgentAllowlistPatch(
       throw new Error("缺省 Provider credential_id 必须是 UUID");
     } else cfg.default_credential_id = patch.default_credential_id;
   }
+  if (patch.default_model_ref !== undefined) {
+    if (patch.default_model_ref === null) delete cfg.default_model_ref;
+    else {
+      const ref = parseOptionalModelRef(patch.default_model_ref);
+      if (!ref) throw new Error("缺省模型引用格式非法");
+      cfg.default_model_ref = ref;
+    }
+  }
+  if (patch.allow_model_catalog_passthrough !== undefined) {
+    cfg.allow_model_catalog_passthrough = patch.allow_model_catalog_passthrough === true;
+  }
+  if (patch.fallback_model_refs !== undefined) {
+    const refs = parseModelRefList(patch.fallback_model_refs);
+    if (patch.fallback_model_refs.length > 16 || refs.length !== patch.fallback_model_refs.length) {
+      throw new Error("fallback_model_refs 包含非法或重复模型引用");
+    }
+    cfg.fallback_model_refs = refs;
+  }
 
   // 确保键存在，标记为 configured。
   if (!Object.prototype.hasOwnProperty.call(cfg, "enabled_agent_clis")) {
@@ -154,6 +217,7 @@ export function applyProjectAgentAllowlistPatch(
   const enabledCreds = parseCredentialIdList(cfg.enabled_credential_ids) ?? [];
   const requestedCli = parseOptionalCli(cfg.default_agent_cli);
   const requestedCred = parseOptionalCredentialId(cfg.default_credential_id);
+  const requestedModel = parseOptionalModelRef(cfg.default_model_ref);
   // 显式 PATCH 缺省到白名单外 → 硬拒绝；仅当启用集合收缩时才静默清除旧缺省。
   if (patch.default_agent_cli !== undefined && patch.default_agent_cli !== null) {
     if (!requestedCli || !enabledClis.includes(requestedCli)) {
@@ -167,6 +231,7 @@ export function applyProjectAgentAllowlistPatch(
   }
   if (requestedCli && !enabledClis.includes(requestedCli)) delete cfg.default_agent_cli;
   if (requestedCred && !enabledCreds.includes(requestedCred)) delete cfg.default_credential_id;
+  if (!requestedCred || !requestedModel) delete cfg.default_model_ref;
   return parseProjectAgentAllowlist(cfg);
 }
 
@@ -213,6 +278,12 @@ export interface HubProviderCatalogEntry {
   compatible_agent_clis: CurrentAgentCli[];
   max_concurrent: number | null;
   model_concurrency: Record<string, number>;
+  models: ModelDescriptor[];
+  model_catalog_revision: string | null;
+  passthrough_allowed: boolean;
+  default_model_ref: string | null;
+  fallback_model_refs: string[];
+  allow_model_catalog_passthrough: boolean;
   is_default: boolean;
 }
 
@@ -235,6 +306,9 @@ export function toHubProviderCatalogEntry(
     provider: string;
     status: string;
     public_metadata_json?: unknown;
+    model_catalog_json?: unknown;
+    model_catalog_fetched_at?: unknown;
+    health_status?: string | null;
   },
   allowlist: ProjectAgentAllowlist,
 ): HubProviderCatalogEntry | null {
@@ -244,6 +318,18 @@ export function toHubProviderCatalogEntry(
   if (compatible.length === 0) return null;
   if (row.status !== "active") return null;
   const policy = credentialConcurrencyPolicy(row.public_metadata_json);
+  const models = resolveModelDescriptorCatalog({
+    provider: row.provider,
+    catalogJson: row.model_catalog_json,
+    catalogRevision: typeof row.model_catalog_fetched_at === "string"
+      ? row.model_catalog_fetched_at
+      : `credential:${row.id}`,
+    compatibleAgentClis: compatible,
+    healthStatus: row.health_status === "ok" ? "verified" : row.health_status === "error" ? "probe_failed" : undefined,
+  });
+  const revision = typeof row.model_catalog_fetched_at === "string"
+    ? row.model_catalog_fetched_at
+    : models[0]?.catalog_revision ?? null;
   return {
     credential_id: row.id,
     name: row.name,
@@ -252,6 +338,12 @@ export function toHubProviderCatalogEntry(
     compatible_agent_clis: compatible,
     max_concurrent: policy.maxConcurrent,
     model_concurrency: policy.modelConcurrency,
+    models,
+    model_catalog_revision: revision,
+    passthrough_allowed: allowlist.allow_model_catalog_passthrough,
+    default_model_ref: allowlist.default_credential_id === row.id ? allowlist.default_model_ref : null,
+    fallback_model_refs: allowlist.default_credential_id === row.id ? allowlist.fallback_model_refs : [],
+    allow_model_catalog_passthrough: allowlist.allow_model_catalog_passthrough,
     is_default: allowlist.default_credential_id === row.id,
   };
 }

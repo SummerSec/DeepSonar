@@ -13,6 +13,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidRuntimeImage: "invalid_runtime_image",
   invalidAgentCli: "invalid_agent_cli",
   invalidCredential: "invalid_credential",
+  invalidModel: "invalid_model",
   runtimeImageNotReady: "runtime_image_not_ready",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
@@ -72,6 +73,7 @@ const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new 
   CONTROL_INPUT_ERROR_CODES.invalidRuntimeImage,
   CONTROL_INPUT_ERROR_CODES.invalidAgentCli,
   CONTROL_INPUT_ERROR_CODES.invalidCredential,
+  CONTROL_INPUT_ERROR_CODES.invalidModel,
   CONTROL_INPUT_ERROR_CODES.runtimeImageNotReady,
   CONTROL_INPUT_ERROR_CODES.invalidVerification,
   CONTROL_INPUT_ERROR_CODES.invalidProgress,
@@ -203,6 +205,18 @@ export function invalidCredential(path = "credential_id", allowed?: readonly str
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidCredential,
     `Hub Provider 必须来自本轮 list_available_providers（项目已启用且 active），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    path,
+    allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
+  );
+}
+
+export function invalidModel(path = "model_ref", allowed?: readonly string[]): ControlInputError {
+  const hint = allowed && allowed.length > 0
+    ? ` 可选模型：${allowed.slice(0, 30).join(", ")}${allowed.length > 30 ? "…" : ""}。`
+    : " 请使用本轮 list_available_providers 返回的 model_ref。";
+  return new ControlInputError(
+    CONTROL_INPUT_ERROR_CODES.invalidModel,
+    `Hub 模型必须来自本轮 Provider capability catalog，字段 ${path} 不合法或不兼容。${hint}`,
     path,
     allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
   );

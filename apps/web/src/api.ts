@@ -12,6 +12,7 @@ import type {
   ReadinessResponse,
   TaskExecutionControlResult,
   TaskExecutionState,
+  ModelDescriptor as SharedModelDescriptor,
 } from "@deepsonar/shared-types";
 
 import { ApiRequestError, parseRetryAfterSec, type ApiErrorBody } from "./login-error";
@@ -1033,6 +1034,9 @@ export interface ProjectSettings {
   default_agent_cli: "claude-code" | "pi" | "dsh" | null;
   /** Hub 省略时的软缺省 Provider。 */
   default_credential_id: string | null;
+  default_model_ref: string | null;
+  fallback_model_refs: string[];
+  allow_model_catalog_passthrough: boolean;
   agent_allowlist_configured?: boolean;
   /** claimed / provisioning / running；waiting_human 不占调度额度。 */
   active_jobs: number;
@@ -1129,12 +1133,6 @@ export interface ApiToken {
   created_by: string | null;
 }
 
-export interface CredentialModels {
-  models: string[];
-  source_url: string;
-  fetched_at: string;
-}
-
 export interface CredentialImpact {
   credential_id: string;
   role_configs: { count: number; items: Array<Record<string, unknown>> };
@@ -1192,6 +1190,17 @@ export interface ApiTokenCreated extends ApiToken {
   rotated_from?: string;
 }
 
+export type ModelCapabilityDescriptor = SharedModelDescriptor;
+
+export interface CredentialModels {
+  models: string[];
+  model_descriptors?: ModelCapabilityDescriptor[];
+  source_url?: string | null;
+  fetched_at: string | null;
+  state?: string;
+  catalog_revision?: string | null;
+}
+
 /** Provider Credential（§6.2）：永不返回密文，只有指纹/last4 */
 export interface ProviderCredential {
   id: string;
@@ -1202,6 +1211,15 @@ export interface ProviderCredential {
   key_version: number;
   public_metadata_json: Record<string, unknown>;
   model_catalog_json?: string[];
+  model_descriptors?: ModelCapabilityDescriptor[];
+  adapter?: {
+    adapter_id: string;
+    adapter_version: string;
+    provider: string;
+    label: string;
+    compatible_agent_clis: string[];
+    gateway: Record<string, unknown>;
+  } | null;
   /** CC Switch-style profile: which CLI this settingsConfig targets. */
   agent_cli?: "claude-code" | "pi" | "dsh" | "codex" | "open-code" | null;
   /** CLI settingsConfig projection. Secret values are returned as [已保存密钥]. */
@@ -1224,7 +1242,9 @@ export interface ProviderCredential {
     error_category: string | null;
     detail: string | null;
     model_catalog: string[];
+    model_descriptors?: ModelCapabilityDescriptor[];
     model_catalog_fetched_at: string | null;
+    catalog_revision?: string | null;
   };
   active_count: number;
   active_by_model: Record<string, number>;
@@ -2174,6 +2194,11 @@ export const api = {
       scheduled_start_at?: string;
       /** 下一北京时间 08:00（Asia/Shanghai）开始。 */
       schedule_beijing_8am?: boolean;
+      runtime_profile?: {
+        model_ref?: string | null;
+        reasoning_effort?: string | null;
+        context_window_tokens?: number | null;
+      };
     },
   ) =>
     send<{ canvas_id: string; job: { id: string; status: string }; scheduled_start_at?: string | null }>(
@@ -2497,6 +2522,9 @@ export const api = {
       enabled_credential_ids?: string[];
       default_agent_cli?: "claude-code" | "pi" | "dsh" | null;
       default_credential_id?: string | null;
+      default_model_ref?: string | null;
+      fallback_model_refs?: string[];
+      allow_model_catalog_passthrough?: boolean;
     },
   ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),
@@ -2786,7 +2814,7 @@ export const api = {
       `/credentials/${id}${opts?.unbind ? "?unbind=true" : ""}`,
     ),
   testCredential: (id: string) =>
-    send<{ ok: boolean; detail: string; category?: string; fetched_at?: string }>("POST", `/credentials/${id}/test`),
+    send<{ ok: boolean; detail: string; category?: string; fetched_at?: string; model_catalog?: string[]; model_descriptors?: ModelCapabilityDescriptor[] }>("POST", `/credentials/${id}/test`),
   credentialModels: (id: string) =>
     send<CredentialModels>("POST", `/credentials/${id}/models`),
   credentialModelsPreview: (input: {

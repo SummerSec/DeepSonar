@@ -36,6 +36,7 @@ import {
   seedProjectAgentAllowlist,
 } from "../project-agent-allowlist/index.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
+import { resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
 const RUNTIME_KNOB_RULE_KEYS = {
@@ -183,6 +184,9 @@ function projectAllowlistResponse(cfg: Record<string, unknown>) {
     enabled_credential_ids: allowlist.enabled_credential_ids,
     default_agent_cli: allowlist.default_agent_cli,
     default_credential_id: allowlist.default_credential_id,
+    default_model_ref: allowlist.default_model_ref,
+    fallback_model_refs: allowlist.fallback_model_refs,
+    allow_model_catalog_passthrough: allowlist.allow_model_catalog_passthrough,
     agent_allowlist_configured: allowlist.configured,
   };
 }
@@ -202,11 +206,61 @@ const SettingsPatchBody = z.object({
   default_agent_cli: z.enum(["claude-code", "pi", "dsh"]).nullable().optional(),
   /** Hub 省略时的软缺省 Provider（必须 ∈ 白名单）。 */
   default_credential_id: z.string().uuid().nullable().optional(),
+  /** Hub/Scheduler soft default model paired with default_credential_id. */
+  default_model_ref: z.string().trim().min(1).max(200).regex(/^\S+$/u).nullable().optional(),
+  /** Ordered model fallback list paired with default_credential_id. */
+  fallback_model_refs: z.array(z.string().trim().min(1).max(200).regex(/^\S+$/u)).max(16).optional(),
+  /** Project opt-in for aliases outside the observed Provider catalog. */
+  allow_model_catalog_passthrough: z.boolean().optional(),
   role_runtime_images: z.record(
     z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
     z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
   ).optional(),
 });
+
+async function validateProjectModelAllowlist(
+  projectId: string,
+  cfg: Record<string, unknown>,
+): Promise<void> {
+  const allowlist = parseProjectAgentAllowlist(cfg);
+  const refs = [
+    ...(allowlist.default_model_ref ? [allowlist.default_model_ref] : []),
+    ...allowlist.fallback_model_refs,
+  ];
+  if (refs.length === 0 || !allowlist.default_credential_id) return;
+  const [credential] = await sql`
+    SELECT id, provider, model_catalog_json, model_catalog_fetched_at, status, project_id
+    FROM credentials
+    WHERE id = ${allowlist.default_credential_id} AND kind = 'llm_provider'
+    LIMIT 1`;
+  if (!credential) throw new Error("缺省模型必须绑定已存在的 LLM Provider");
+  if (credential.status !== "active") throw new Error("缺省模型 Provider 当前不可用");
+  if (credential.project_id && credential.project_id !== projectId) {
+    throw new Error("缺省模型 Provider 不属于当前项目");
+  }
+  const catalog = resolveModelDescriptorCatalog({
+    provider: String(credential.provider),
+    catalogJson: credential.model_catalog_json,
+    catalogRevision: typeof credential.model_catalog_fetched_at === "string"
+      ? credential.model_catalog_fetched_at
+      : `credential:${String(credential.id)}`,
+  });
+  if (!allowlist.allow_model_catalog_passthrough && catalog.length > 0) {
+    const known = new Set(catalog.map((row) => row.model_id));
+    const unknown = refs.find((ref) => !known.has(ref));
+    if (unknown) {
+      throw new Error(`模型 ${unknown} 不在 Provider capability catalog；请先刷新目录或开启项目模型直通`);
+    }
+    const selectedCli = allowlist.default_agent_cli;
+    if (selectedCli) {
+      const incompatible = refs.find((ref) => {
+        const descriptor = catalog.find((row) => row.model_id === ref);
+        return descriptor && !descriptor.compatible_agent_clis.includes(selectedCli);
+      });
+      if (incompatible) throw new Error(`模型 ${incompatible} 与缺省 Agent CLI ${selectedCli} 不兼容`);
+    }
+  }
+}
 const GlobalSettingsPatchBody = z.object({
   rules: GlobalRulesPatch.optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
@@ -515,6 +569,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       || body.enabled_credential_ids !== undefined
       || body.default_agent_cli !== undefined
       || body.default_credential_id !== undefined
+      || body.default_model_ref !== undefined
+      || body.fallback_model_refs !== undefined
+      || body.allow_model_catalog_passthrough !== undefined
     ) {
       try {
         if (!parseProjectAgentAllowlist(cfg).configured) {
@@ -526,7 +583,11 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
           enabled_credential_ids: body.enabled_credential_ids,
           default_agent_cli: body.default_agent_cli,
           default_credential_id: body.default_credential_id,
+          default_model_ref: body.default_model_ref,
+          fallback_model_refs: body.fallback_model_refs,
+          allow_model_catalog_passthrough: body.allow_model_catalog_passthrough,
         });
+        await validateProjectModelAllowlist(id, cfg);
       } catch (error) {
         return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid agent allowlist" });
       }

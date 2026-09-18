@@ -40,7 +40,7 @@ import {
 import {
   freezeMaterializationPackAtJobCreate,
 } from "../extension-materialization/index.js";
-import { freezeProviderModelSnapshot } from "../provider-adapter/index.js";
+import { freezeProviderModelSnapshot, resolveModelDescriptorCatalog, selectModelsForRequirements } from "../provider-adapter/index.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -298,7 +298,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
@@ -347,7 +347,8 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (preferredCredentialId) {
     const [row] = await db`
       SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
-             c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json
+             c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json,
+             c.model_catalog_json, c.model_catalog_fetched_at
       FROM credentials c
       WHERE c.id = ${preferredCredentialId} AND c.kind = 'llm_provider'
       LIMIT 1
@@ -372,10 +373,65 @@ async function resolveAgentSnapshotForJobUnchecked(
   const manualConfigFiles = cfg
     ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
     : [];
+  const requestedModelRef = typeof options?.runtimeProfile?.model_ref === "string" && options.runtimeProfile.model_ref.trim()
+    ? options.runtimeProfile.model_ref.trim()
+    : typeof options?.modelRef === "string" && options.modelRef.trim()
+      ? options.modelRef.trim()
+    : null;
+  const configuredDefaultModel = agentAllowlist.default_model_ref;
+  if (requestedModelRef && !llm) throw new Error(`模型 ${requestedModelRef} 需要可用的 LLM Provider`);
+  let selectedModel = requestedModelRef ?? configuredDefaultModel ?? identity.model;
+  if (llm) {
+    const catalog = resolveModelDescriptorCatalog({
+      provider: String(llm.provider ?? ""),
+      catalogJson: llm.model_catalog_json,
+      catalogRevision: typeof llm.model_catalog_fetched_at === "string"
+        ? llm.model_catalog_fetched_at
+        : `credential:${String(llm.id)}`,
+      compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? [agentCli] : undefined,
+    });
+    const allowPassthrough = config.allowModelCatalogPassthrough
+      || agentAllowlist.allow_model_catalog_passthrough
+      || cfg?.allow_model_catalog_passthrough === true;
+    const requirements = options?.modelRequirements && typeof options.modelRequirements === "object"
+      ? options.modelRequirements
+      : null;
+    const requirementsRecord = requirements ?? {};
+    const normalizedRequirements = {
+      agent_cli: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? agentCli : undefined,
+      min_context_window: typeof requirementsRecord.min_context_window === "number"
+        ? requirementsRecord.min_context_window
+        : typeof requirementsRecord.context_window_tokens === "number" ? requirementsRecord.context_window_tokens : undefined,
+      require_tools: requirementsRecord.require_tools === true || requirementsRecord.supports_tools === true ? true : undefined,
+      require_streaming: requirementsRecord.require_streaming === true || requirementsRecord.supports_streaming === true ? true : undefined,
+      require_structured_output: requirementsRecord.require_structured_output === true || requirementsRecord.supports_structured_output === true ? true : undefined,
+      reasoning_effort: typeof requirementsRecord.reasoning_effort === "string" ? requirementsRecord.reasoning_effort : undefined,
+      max_input_cost_per_1m_usd: typeof requirementsRecord.max_input_cost_per_1m_usd === "number"
+        ? requirementsRecord.max_input_cost_per_1m_usd
+        : typeof requirementsRecord.max_input_cost_per_million === "number" ? requirementsRecord.max_input_cost_per_million : undefined,
+      max_output_cost_per_1m_usd: typeof requirementsRecord.max_output_cost_per_1m_usd === "number"
+        ? requirementsRecord.max_output_cost_per_1m_usd
+        : typeof requirementsRecord.max_output_cost_per_million === "number" ? requirementsRecord.max_output_cost_per_million : undefined,
+      allow_unverified: requirementsRecord.allow_unverified === true,
+      allow_passthrough: allowPassthrough || requirementsRecord.allow_passthrough === true,
+    } as never;
+    const eligible = selectModelsForRequirements(catalog, normalizedRequirements);
+    const eligibleIds = new Set(eligible.map((row) => row.model_id));
+    const fallback = agentAllowlist.fallback_model_refs.find((ref) => eligibleIds.has(ref));
+    if (!selectedModel && fallback) selectedModel = fallback;
+    if (!selectedModel && requirements && eligible.length > 0) selectedModel = eligible[0]!.model_id;
+    if (selectedModel && catalog.length > 0 && !allowPassthrough && !eligibleIds.has(selectedModel)) {
+      if (requestedModelRef) throw new Error(`模型 ${selectedModel} 不满足 Provider capability requirements`);
+      if (fallback) selectedModel = fallback;
+    }
+    if (requirements && selectedModel && !allowPassthrough && !eligibleIds.has(selectedModel)) {
+      throw new Error(`模型 ${selectedModel} 不满足 Provider capability requirements`);
+    }
+  }
   const providerSnapshot = projectProviderRuntimeSnapshot({
     agentCli,
-    roleModel: identity.model,
-    roleContextWindowTokens: cfg?.context_window_tokens,
+    roleModel: selectedModel,
+    roleContextWindowTokens: options?.runtimeProfile?.context_window_tokens ?? cfg?.context_window_tokens,
     settingsConfig,
     manualConfigFiles: manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>,
     defaultModel: PLATFORM_DEFAULT_AGENT_MODEL,
@@ -487,8 +543,8 @@ async function resolveAgentSnapshotForJobUnchecked(
       ? { credential_id: String(llm.id), provider: String(llm.provider) }
       : null,
     model_ref: providerSnapshot.model,
-    reasoning_effort: providerSnapshot.reasoning,
-    context_window_tokens: providerSnapshot.context_window_tokens,
+    reasoning_effort: options?.runtimeProfile?.reasoning_effort ?? providerSnapshot.reasoning,
+    context_window_tokens: options?.runtimeProfile?.context_window_tokens ?? providerSnapshot.context_window_tokens,
     extensions: frozenPiExtensions.map((extension) => ({
       id: extension.id,
       version: extension.version,
@@ -588,7 +644,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     model: providerSnapshot.model,
     upstream_model: providerSnapshot.upstream_model,
     pi_provider: providerSnapshot.pi_provider,
-    reasoning: providerSnapshot.reasoning,
+    reasoning: options?.runtimeProfile?.reasoning_effort ?? providerSnapshot.reasoning,
     env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object" ? cfg.env_vars_json as Record<string, string> : {},
     env_keys: (cfg?.env_keys as string[]) ?? [],
     credential_id: (llm?.id as string) ?? null,
@@ -621,7 +677,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     role_description: (role.description as string) ?? roleName,
     instructions_markdown: withRuntimeTestToolchainPolicy(roleName, (cfg?.instructions_markdown as string) ?? null, runtimeImage.image_key),
     platform_tools: platformTools as PlatformToolName[],
-    context_window_tokens: contextWindowTokens,
+    context_window_tokens: options?.runtimeProfile?.context_window_tokens ?? contextWindowTokens,
     settings_config_json: snapshotSettingsConfig,
     config_files: providerSnapshot.config_files,
     pi_extensions: frozenPiExtensions,
@@ -642,7 +698,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

@@ -85,3 +85,12 @@ const profileBody = {
 export const AgentRuntimeProfile = z.object(profileBody).strict();
 export type AgentRuntimeProfile = z.infer<typeof AgentRuntimeProfile>;
 export type FrozenAgentRuntimeProfile = AgentRuntimeProfile;
+
+/** Safe task/Job overlay applied before the profile is frozen. Secrets and
+ * provider credentials are intentionally excluded; those remain Scheduler-owned. */
+export const RuntimeProfileOverridePayload = z.object({
+  model_ref: z.string().trim().min(1).max(240).nullable().optional(),
+  reasoning_effort: ReasoningEffort.nullable().optional(),
+  context_window_tokens: z.number().int().min(1024).max(10_000_000).nullable().optional(),
+}).strict();
+export type RuntimeProfileOverridePayload = z.infer<typeof RuntimeProfileOverridePayload>;

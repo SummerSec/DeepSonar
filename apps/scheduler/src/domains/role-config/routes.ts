@@ -56,25 +56,6 @@ function rejectUnlessUuid(
   return true;
 }
 
-type AgentCliFollow = { credentialId: string; from: string; to: string };
-
-async function auditCredentialAgentCliFollows(
-  req: FastifyRequest,
-  projectId: string | null,
-  follows: AgentCliFollow[],
-): Promise<void> {
-  for (const follow of follows) {
-    await audit(req, {
-      action: "credential.agent_cli_follow",
-      resourceType: "credential",
-      resourceId: follow.credentialId,
-      projectId,
-      before: { agent_cli: follow.from },
-      after: { agent_cli: follow.to },
-    });
-  }
-}
-
 export function registerRoleConfigRoutes(app: FastifyInstance): void {
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
 
@@ -108,7 +89,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     projectId: string | null,
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
-    follows: AgentCliFollow[] = [],
   ): Promise<string | null> {
     if (projectId && body.runtime_image_key != null) {
       return "项目 RoleConfig 不接受 runtime_image_key，请使用项目镜像策略";
@@ -186,9 +166,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
           provider: String(cred.provider ?? ""),
         });
         if (plan.action === "reject") return plan.error;
-        if (plan.action === "follow") {
-          follows.push({ credentialId: c.credential_id, from: plan.from, to: plan.to });
-        }
       }
     }
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;
@@ -260,13 +237,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       await tx`
         INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
         ON CONFLICT DO NOTHING`;
-      if (c.purpose === "llm") {
-        await tx`
-          UPDATE credentials
-          SET agent_cli = ${body.agent_cli}
-          WHERE id = ${c.credential_id}
-            AND (agent_cli IS NULL OR agent_cli IS DISTINCT FROM ${body.agent_cli})`;
-      }
     }
     await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
     for (const f of body.config_files) {
@@ -293,7 +263,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     projectId: string | null,
     body: z.infer<typeof RoleConfigPutBody>,
     role: { name: string; kind: "role" | "hub" | "system" },
-  ): Promise<{ configId: string; follows: AgentCliFollow[] } | { statusCode: number; error: string }> {
+  ): Promise<{ configId: string } | { statusCode: number; error: string }> {
     return sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
@@ -303,13 +273,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
           return { statusCode: 409, error: `角色 ${role.name} 未在本项目启用` };
         }
       }
-      const follows: AgentCliFollow[] = [];
-      const err = await validateRoleConfigBody(body, projectId, role, tx, follows);
+      const err = await validateRoleConfigBody(body, projectId, role, tx);
       if (err) return { statusCode: 400, error: err };
-      for (const follow of follows) {
-        await tx`UPDATE credentials SET agent_cli = ${follow.to} WHERE id = ${follow.credentialId}`;
-      }
-      return { configId: await upsertRoleConfigInTx(tx, roleId, projectId, body), follows };
+      return { configId: await upsertRoleConfigInTx(tx, roleId, projectId, body) };
     });
   }
 
@@ -401,7 +367,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         WHERE rcb.role_config_id = ${id} AND rcb.purpose = 'llm'
         LIMIT 1
         FOR UPDATE OF c`;
-      const follows: AgentCliFollow[] = [];
       if (binding) {
         const plan = planCredentialAgentCliFollow({
           roleAgentCli: body.agent_cli,
@@ -411,17 +376,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         if (plan.action === "reject") {
           return { error: plan.error };
         }
-        if (plan.action === "follow") {
-          await tx`UPDATE credentials SET agent_cli = ${plan.to} WHERE id = ${binding.id}`;
-          follows.push({ credentialId: String(binding.id), from: plan.from, to: plan.to });
-        }
       }
       const [next] = await tx`
         UPDATE role_configs
         SET agent_cli = ${body.agent_cli}, version = version + 1, updated_at = now()
         WHERE id = ${id}
         RETURNING id, agent_cli, version, project_id, role_id`;
-      return { row: next, follows, synced_credential_id: binding ? String(binding.id) : null };
+      return { row: next };
     });
     if ("error" in patch) {
       return reply.code(409).send({ error: patch.error, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
@@ -434,10 +395,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         agent_cli: body.agent_cli,
         role: row.role_name,
         project_id: row.project_id,
-        synced_credential_id: patch.synced_credential_id,
       },
     });
-    await auditCredentialAgentCliFollows(req, row.project_id ? String(row.project_id) : null, patch.follows);
     return {
       id: patch.row.id,
       agent_cli: patch.row.agent_cli,
@@ -597,7 +556,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       resourceId: configId,
       after: { role: role.name, scope: "global", credentials: body.credentials.length, files: body.config_files.length },
     });
-    await auditCredentialAgentCliFollows(req, null, mutation.follows);
     return roleConfigView(configId, req.actor?.projectId ?? null);
   });
 
@@ -661,7 +619,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       projectId: id,
       after: { role: role.name, scope: "project", credentials: body.credentials.length, files: body.config_files.length },
     });
-    await auditCredentialAgentCliFollows(req, id, mutation.follows);
     return roleConfigView(configId, actorProjectId);
   });
 

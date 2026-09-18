@@ -879,6 +879,8 @@ export interface CreateJobInput {
   followupDepth?: number;
   /** 外部入口幂等键；仅入口 job 使用。 */
   ingressKey?: string;
+  /** Task/Job-level runtime profile overlay, frozen at Job creation. */
+  runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null;
 }
 
 export const MAX_RELATED_FINDING_IDS = 8;
@@ -929,7 +931,11 @@ export async function createJob(input: CreateJobInput) {
   if (input.priority !== undefined && input.priority !== priority) {
     throw new Error(`job priority is fixed for ${input.type}: expected ${priority}`);
   }
-  const payload = { ...schedulingPayload, scheduling_purpose: purpose };
+  const payload = {
+    ...schedulingPayload,
+    scheduling_purpose: purpose,
+    ...(input.runtimeProfile ? { runtime_profile: input.runtimeProfile } : {}),
+  };
   try {
     // 快照读取与 Job 插入必须处于同一事务；Credential provider 迁移会等待本事务结束，
     // 避免生成“快照是旧 provider、执行期已是新 provider”的竞态 Job。
@@ -949,6 +955,7 @@ export async function createJob(input: CreateJobInput) {
             input.projectId,
             input.type,
             snapshotFindingIds,
+            { runtimeProfile: input.runtimeProfile ?? null },
           ),
         ),
       );
@@ -1665,7 +1672,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,

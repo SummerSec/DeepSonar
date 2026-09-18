@@ -98,6 +98,7 @@ export {
   RuntimeProfileProviderRef,
   RuntimeProfileResolutionOrder,
   RuntimeProfileSystemPromptRef,
+  RuntimeProfileOverridePayload,
 } from "./agent-runtime-profile.js";
 export type {
   AgentRuntimeProfile as FrozenAgentRuntimeProfile,
@@ -106,6 +107,7 @@ export type {
   RuntimeProfileNativeOptions as RuntimeProfileNativeOptionsType,
   RuntimeProfileProviderRef as RuntimeProfileProviderRefType,
   RuntimeProfileSystemPromptRef as RuntimeProfileSystemPromptRefType,
+  RuntimeProfileOverridePayload as RuntimeProfileOverridePayloadType,
 } from "./agent-runtime-profile.js";
 import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
@@ -1292,6 +1294,27 @@ export const HubIntentPayload = z
     // list_available_providers；省略时用项目软缺省或 RoleConfig 回退。不强制按角色绑死。
     agent_cli: CurrentAgentCliSchema.optional(),
     credential_id: z.string().uuid().optional(),
+    // Optional model proposal from the current Provider capability catalog.
+    // Scheduler revalidates this selection and freezes the resolved model.
+    model_ref: z.string().trim().min(1).max(240).regex(/^\S+$/u).optional(),
+    /** Capability requirements used by Hub model selection; all fields are rechecked at Job freeze. */
+    model_requirements: z.object({
+      min_context_window: z.number().int().min(1024).max(10_000_000).optional(),
+      context_window_tokens: z.number().int().min(1024).max(10_000_000).optional(),
+      require_tools: z.boolean().optional(),
+      supports_tools: z.boolean().optional(),
+      require_streaming: z.boolean().optional(),
+      supports_streaming: z.boolean().optional(),
+      require_structured_output: z.boolean().optional(),
+      supports_structured_output: z.boolean().optional(),
+      reasoning_effort: z.string().trim().min(1).max(64).optional(),
+      max_input_cost_per_1m_usd: z.number().finite().nonnegative().optional(),
+      max_output_cost_per_1m_usd: z.number().finite().nonnegative().optional(),
+      max_input_cost_per_million: z.number().finite().nonnegative().optional(),
+      max_output_cost_per_million: z.number().finite().nonnegative().optional(),
+      allow_unverified: z.boolean().optional(),
+      allow_passthrough: z.boolean().optional(),
+    }).strict().optional(),
     // Hub 可选提案语言服务器能力：只能来自 list_capabilities / describe_capability
     // 返回的已登记 id（首期 language-server.clangd）。省略则不冻结 language_server。
     language_server_capability_id: z
