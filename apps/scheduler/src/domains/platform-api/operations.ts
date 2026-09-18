@@ -43,6 +43,12 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
     readOnly: true,
     eventType: null,
   },
+  list_available_models: {
+    summary: "List models available to the current Hub Job",
+    description: "Return models allowed by project model policy ∩ enabled credential catalogs ∩ Provider/CLI compatibility, with soft-default and fallback markers. Hub may propose intent.model from this catalog; omitting uses project soft default/fallback or RoleConfig/CLI default. Fail-closed outside the allowlist once the project policy is configured.",
+    readOnly: true,
+    eventType: null,
+  },
   list_capabilities: {
     summary: "List Capability Packs visible to the current Job",
     description: "Return summaries of builtin, trusted-module, and RoleConfig-projected Capability Packs. Results are id/version/digest/scope/summary only; call describe_capability for the full machine contract.",

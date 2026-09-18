@@ -29,6 +29,13 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 边界：只读目录提示，不是授权。真正下发仍以 Job 快照冻结的 selector + 项目白名单 + 内容 hash 为上限。RoleConfig modules_json 仅为过渡绑定，后续由 Hub 从本目录选型（#603）。",
     "- 示例：`{}`",
   ].join("\n"),
+  list_available_models: [
+    "### `list_available_models` — 查询 Hub 当前可提案的模型",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 派发 Worker 前调用；返回项目模型策略 ∩ 已启用凭据 model_catalog ∩ Provider/CLI 兼容的模型，并标记软缺省与 fallback。",
+    "- 边界：intent 可选字段 `model` 只能原样使用返回的 model_id；省略时平台用项目软缺省/fallback 或 RoleConfig/CLI 默认。项目已配置策略后目录外 fail-closed（`invalid_model`）。不返回密钥。",
+    "- 示例：`{}`",
+  ].join("\n"),
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
@@ -175,6 +182,7 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   list_available_agent_clis: "注意：Hub 派发前调用，并原样复制返回的 agent_cli；只能提案项目已启用的 CLI。",
   list_available_providers: "注意：Hub 派发前调用，并原样复制返回的 credential_id；只能提案项目已启用且 active 的 Provider；并发以 Provider 为准。",
   list_available_skill_sources: "注意：Hub 派发前可调用；只能使用项目已启用 Skill 源。本切片为只读目录 stub，Intent 级 selector 提案后续落地（#603）。",
+  list_available_models: "注意：Hub 派发前调用，并原样复制返回的 model_id；只能提案项目策略与凭据目录交集合内的模型。",
   list_capabilities: "注意：只使用返回的 id/digest；需要完整契约时再 describe_capability，不要注入或猜测 SKILL.md 全文。",
   search_capabilities: "注意：query 必须非空；只从本轮结果选择 Pack，不得使用记忆中的 RoleConfig selector。",
   describe_capability: "注意：id 必须来自本轮 list/search；version/digest 不匹配会返回 RepairFeedback。",

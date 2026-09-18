@@ -33,6 +33,7 @@ import {
   invalidRuntimeImage,
   invalidAgentCli,
   invalidCredential,
+  invalidModel,
   invalidVerification,
   isHubRuntimeImageResolutionError,
 } from "../../control-input.js";
@@ -46,6 +47,7 @@ import {
   listHubAgentCliCatalog,
   listHubProviderCatalog,
 } from "../project-agent-allowlist/index.js";
+import { listHubModelCatalog } from "../project-model-policy/index.js";
 import { normalizeFindingProposal } from "../../finding-protocol.js";
 import {
   assertComposeFindingInScope,
@@ -190,7 +192,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; model?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -563,6 +565,9 @@ export function createEventIngestionSideEffectApplication(
     const allowedCredentialIds = providerCatalog.map((entry) => entry.credential_id);
     const allowedCredentialIdSet = new Set(allowedCredentialIds);
     const providerById = new Map(providerCatalog.map((entry) => [entry.credential_id, entry]));
+    const modelCatalog = await listHubModelCatalog(tx as never, job.project_id as string);
+    const allowedModels = [...new Set(modelCatalog.map((entry) => entry.model_id))];
+    const allowedModelSet = new Set(allowedModels);
     for (const [index, intent] of submittedIntents.entries()) {
       const key = intent.runtime_image_key;
       const path = phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key";
@@ -581,6 +586,11 @@ export function createEventIngestionSideEffectApplication(
       if (intentCred && !allowedCredentialIdSet.has(intentCred)) {
         throw invalidCredential(credPath, allowedCredentialIds);
       }
+      const intentModel = typeof intent.model === "string" ? intent.model.trim() : "";
+      const modelPath = phase === "preflight" ? `intents.${index}.model` : "intents.model";
+      if (intentModel && !allowedModelSet.has(intentModel)) {
+        throw invalidModel(modelPath, allowedModels);
+      }
       if (intentCli && intentCred) {
         const provider = providerById.get(intentCred);
         if (provider && !provider.compatible_agent_clis.includes(intentCli as typeof provider.compatible_agent_clis[number])) {
@@ -593,7 +603,7 @@ export function createEventIngestionSideEffectApplication(
       const intentCliCaps = Array.isArray(intent.cli_capability_ids)
         ? intent.cli_capability_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
-      if (phase === "preflight" && (key || intentCli || intentCred || intentLs || intentCliCaps.length > 0)) {
+      if (phase === "preflight" && (key || intentCli || intentCred || intentModel || intentLs || intentCliCaps.length > 0)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
@@ -604,6 +614,7 @@ export function createEventIngestionSideEffectApplication(
               runtimeImageKey: key,
               agentCli: intentCli ?? null,
               credentialId: intentCred ?? null,
+              model: intentModel || null,
               languageServerCapabilityId: intentLs || null,
               cliCapabilityIds: intentCliCaps.length > 0 ? intentCliCaps : null,
             },
@@ -1249,6 +1260,7 @@ export function createEventIngestionSideEffectApplication(
                 runtimeImageKey: it.runtime_image_key ?? null,
                 agentCli: it.agent_cli ?? null,
                 credentialId: it.credential_id ?? null,
+                model: typeof it.model === "string" ? it.model : null,
                 languageServerCapabilityId: it.language_server_capability_id ?? null,
                 cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
               },

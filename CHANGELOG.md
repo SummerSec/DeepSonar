@@ -6,6 +6,8 @@
 
 ### 新增
 
+- 项目模型策略（允许/缺省/fallback）与 Hub 选型门禁首片（#613）：`config_json` 持久化 `enabled_model_ids` / `default_model_id` / `fallback_model_ids`（显式保存后 `configured`，provision/snapshot fail-closed；未配置保持 RoleConfig/凭据目录旧行为）。项目设置新增「模型允许 / 缺省 / Fallback」面板（候选来自已启用凭据的 `model_catalog_json`，不暴露密钥）。Hub 新增只读 `list_available_models`（策略 ∩ 凭据目录 ∩ Provider/CLI 兼容，含软缺省与 fallback 标记）；intent 可选 `model`。本切片不关闭 #613 全量验收。
+
 - 可插拔 Provider Adapter 与结构化 Model Descriptor 首片（#614）：新增契约 `deepsonar.provider-adapter/v1` / `deepsonar.model-descriptor/v1` / `deepsonar.provider-model-snapshot/v1`（context_window、tools/streaming/structured_output、reasoning、modalities、cost、rate_limits、compatible_agent_clis、health_status、catalog_revision）；Scheduler 登记 anthropic/openai/git 适配器（凭据校验钩子形状、目录发现形状、CLI 兼容声明、Gateway transform stub）；Hub/选型侧提供基于 Descriptor 字段的筛选 helper；Job 快照冻结 `provider_model`（adapter 版本 + descriptor + catalog revision）；Gateway 在 adapter `enforce_frozen_model` 时拒绝快照外模型（passthrough 非默认）。Credential.agent_cli 文档化为软提示（RoleConfig 才是绑定面）；停止 RoleConfig 回写 Credential.agent_cli、全量 Provider 接入、Web 健康态展示与真实 catalog probe 迁入 Adapter 为 follow-up。
 
 - 扩展 / 工具物化注册表首片（#615）：新增统一契约 `deepsonar.extension-materialization/v1`（component_id / type / source / version / digest / 兼容 CLI·镜像 / 网络与说明书等）；Scheduler 登记并冻结组件包进 Job 快照；默认拒绝 Job 内 `npx`/`npm`/`pip`/远程脚本动态安装，失败返回稳定码 `component_materialization_failed`；物化路径仅允许快照已冻结组件。本切片以 Pi Extension 种子目录 + 运行时安装门禁 + 单测为主；UI 展示、全量 Skill 迁入、镜像构建期物化与更多组件类型 follow-up。

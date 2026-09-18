@@ -119,6 +119,8 @@ export interface RoleRuntimeSnapshotApplication {
       agentCli?: string | null;
       /** Hub 提案的 credential_id；省略时走项目软缺省 / RoleConfig 绑定。 */
       credentialId?: string | null;
+      /** Hub 提案的 model；省略时走项目软缺省/fallback 或 RoleConfig / CLI 默认。 */
+      model?: string | null;
       /** Hub 提案的 language-server capability id（#604）；省略则不冻结。 */
       languageServerCapabilityId?: string | null;
       /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结。 */

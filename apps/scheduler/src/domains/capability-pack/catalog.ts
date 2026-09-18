@@ -25,6 +25,7 @@ export const CAPABILITY_TOKENS = [
   "list_available_agent_clis",
   "list_available_providers",
   "list_available_skill_sources",
+  "list_available_models",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",

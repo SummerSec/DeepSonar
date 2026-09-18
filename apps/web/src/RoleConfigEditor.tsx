@@ -50,6 +50,7 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
   list_available_agent_clis: { title: "查询可用 Agent CLI", description: "让 Hub 按需获取本项目白名单内的 Agent CLI；提案须 ∈ 列表，省略时走项目软缺省或角色回退。" },
   list_available_providers: { title: "查询可用 Provider", description: "让 Hub 按需获取本项目白名单内的 Provider/凭据；提案须 ∈ 列表，并发与配额在 Provider 侧，不按角色锁死。" },
   list_available_skill_sources: { title: "查询可用 Skill 源", description: "让 Hub 按需获取本项目已启用 Skill 源目录（#603 只读 stub）；发现≠授权，下发仍以快照 selector + 白名单为上限。" },
+  list_available_models: { title: "查询可用模型", description: "让 Hub 按需获取项目模型策略 ∩ 凭据目录 ∩ CLI 兼容的模型；提案须 ∈ 列表，省略时走项目软缺省/fallback 或角色/CLI 回退。" },
   list_capabilities: { title: "查询能力包", description: "列出本 Job 可见的 Capability Pack 摘要；完整契约用 describe_capability 按需读取。" },
   search_capabilities: { title: "搜索能力包", description: "按任务查询可用 Capability Pack，不依赖预先知道 RoleConfig selector。" },
   describe_capability: { title: "描述能力包", description: "按 id/version/digest 读取 Capability Pack 机器契约。" },

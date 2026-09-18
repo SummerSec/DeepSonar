@@ -13,6 +13,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidRuntimeImage: "invalid_runtime_image",
   invalidAgentCli: "invalid_agent_cli",
   invalidCredential: "invalid_credential",
+  invalidModel: "invalid_model",
   runtimeImageNotReady: "runtime_image_not_ready",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
@@ -203,6 +204,18 @@ export function invalidCredential(path = "credential_id", allowed?: readonly str
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidCredential,
     `Hub Provider 必须来自本轮 list_available_providers（项目已启用且 active），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    path,
+    allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
+  );
+}
+
+export function invalidModel(path = "model", allowed?: readonly string[]): ControlInputError {
+  const allowHint = allowed && allowed.length > 0
+    ? ` 允许 model 共 ${allowed.length} 个。`
+    : " 请使用 list_available_models 返回的 model_id。";
+  return new ControlInputError(
+    CONTROL_INPUT_ERROR_CODES.invalidModel,
+    `Hub 模型必须来自本轮 list_available_models（项目策略 ∩ 凭据目录 ∩ CLI 兼容），字段 ${path} 不合法或不在可选集合。${allowHint}`,
     path,
     allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
   );

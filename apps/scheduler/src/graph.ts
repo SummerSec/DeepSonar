@@ -703,6 +703,8 @@ export interface HubIntent {
   agent_cli?: string;
   /** Hub 提案的 credential_id；省略时用项目软缺省 / RoleConfig 绑定。 */
   credential_id?: string;
+  /** Hub 提案的 model；省略时用项目软缺省/fallback 或 RoleConfig / CLI 默认。 */
+  model?: string;
   /** Hub 提案的 language-server capability id（如 language-server.clangd）；省略则不绑定 LSP。 */
   language_server_capability_id?: string;
   /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结 cli_capabilities。 */

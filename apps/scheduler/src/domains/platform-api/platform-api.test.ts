@@ -135,8 +135,8 @@ test("list_available_runtime_images is a registered read-only operation with a s
   assert.equal(projection.operations[0]?.event_type, null);
 });
 
-test("list_available_agent_clis / providers / skill_sources are registered read-only Hub composition ops", () => {
-  for (const operationId of ["list_available_agent_clis", "list_available_providers", "list_available_skill_sources"] as const) {
+test("list_available_agent_clis / providers / skill_sources / models are registered read-only Hub composition ops", () => {
+  for (const operationId of ["list_available_agent_clis", "list_available_providers", "list_available_skill_sources", "list_available_models"] as const) {
     const document = buildPlatformOpenApiDocument({
       jobId: "00000000-0000-4000-8000-000000000001",
       operationIds: [operationId],

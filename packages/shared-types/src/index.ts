@@ -753,6 +753,9 @@ export type ListAvailableProvidersPayload = z.infer<typeof ListAvailableProvider
 export const ListAvailableSkillSourcesPayload = z.object({}).strict();
 export type ListAvailableSkillSourcesPayload = z.infer<typeof ListAvailableSkillSourcesPayload>;
 
+export const ListAvailableModelsPayload = z.object({}).strict();
+export type ListAvailableModelsPayload = z.infer<typeof ListAvailableModelsPayload>;
+
 export {
   DEVICE_LEASE_ERROR_CODES,
   DEVICE_LEASE_TOKEN_VERSION,
@@ -1288,10 +1291,13 @@ export const HubIntentPayload = z
     // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
     // 省略时 Scheduler 按项目镜像策略与 RoleConfig 缺省解析。
     runtime_image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/).optional(),
-    // Hub 可选提案 Agent CLI / Provider：只能来自本轮 list_available_agent_clis /
-    // list_available_providers；省略时用项目软缺省或 RoleConfig 回退。不强制按角色绑死。
+    // Hub 可选提案 Agent CLI / Provider / 模型：只能来自本轮 list_available_agent_clis /
+    // list_available_providers / list_available_models；省略时用项目软缺省或 RoleConfig 回退。不强制按角色绑死。
     agent_cli: CurrentAgentCliSchema.optional(),
     credential_id: z.string().uuid().optional(),
+    // Hub 可选提案模型：只能来自本轮 list_available_models（项目策略 ∩ 凭据目录 ∩ CLI 兼容）；
+    // 省略时用项目软缺省 / fallback 或 RoleConfig / CLI 默认。
+    model: z.string().trim().min(1).max(200).optional(),
     // Hub 可选提案语言服务器能力：只能来自 list_capabilities / describe_capability
     // 返回的已登记 id（首期 language-server.clangd）。省略则不冻结 language_server。
     language_server_capability_id: z
@@ -1389,6 +1395,7 @@ export const ControlToolPayloadSchemas = {
   list_available_agent_clis: ListAvailableAgentClisPayload,
   list_available_providers: ListAvailableProvidersPayload,
   list_available_skill_sources: ListAvailableSkillSourcesPayload,
+  list_available_models: ListAvailableModelsPayload,
   list_capabilities: ListCapabilitiesPayload,
   search_capabilities: SearchCapabilitiesPayload,
   describe_capability: DescribeCapabilityPayload,
@@ -1499,6 +1506,7 @@ export const PlatformToolName = z.enum([
   "list_available_agent_clis",
   "list_available_providers",
   "list_available_skill_sources",
+  "list_available_models",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",
@@ -1637,6 +1645,7 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "list_available_agent_clis",
   "list_available_providers",
   "list_available_skill_sources",
+  "list_available_models",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",

@@ -72,7 +72,13 @@ import {
   assertCredentialAllowlisted,
   parseProjectAgentAllowlist,
 } from "../project-agent-allowlist/index.js";
+import {
+  assertModelAllowlisted,
+  parseProjectModelPolicy,
+  resolveSoftDefaultModel,
+} from "../project-model-policy/index.js";
 import { assertProjectModulesAllowlisted } from "../project-skill-allowlist/index.js";
+import { normalizeModelCatalog } from "../../credentials.js";
 import type {
   RoleRuntimeSnapshotApplication,
   RoleRuntimeSnapshotResult,
@@ -298,7 +304,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; model?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
@@ -307,6 +313,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   const [project] = (await db`SELECT config_json FROM projects WHERE id = ${projectId}`) as Array<Record<string, unknown>>;
   const projectImagePolicy = parseProjectImagePolicy(project?.config_json);
   const agentAllowlist = parseProjectAgentAllowlist(project?.config_json);
+  const modelPolicy = parseProjectModelPolicy(project?.config_json);
   const [projectCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id = ${projectId}`) as Array<Record<string, unknown>>;
   const [globalCfg] = (await db`SELECT * FROM role_configs WHERE role_id = ${role.id as string} AND project_id IS NULL`) as Array<Record<string, unknown>>;
   // Modules / bindings can still come from a leftover project row; model and
@@ -347,7 +354,8 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (preferredCredentialId) {
     const [row] = await db`
       SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
-             c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json
+             c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json,
+             c.model_catalog_json
       FROM credentials c
       WHERE c.id = ${preferredCredentialId} AND c.kind = 'llm_provider'
       LIMIT 1
@@ -369,12 +377,20 @@ async function resolveAgentSnapshotForJobUnchecked(
   assertCredentialAllowlisted(agentAllowlist, (llm?.id as string | undefined) ?? preferredCredentialId);
   const settingsConfig = llm?.settings_config_json ?? {};
   const hasSettings = hasProviderSettingsConfig(settingsConfig);
+  const hubModel = typeof options?.model === "string" && options.model.trim() ? options.model.trim() : null;
+  const credentialCatalog = normalizeModelCatalog(llm?.model_catalog_json);
+  const softDefaultModel = resolveSoftDefaultModel({
+    policy: modelPolicy,
+    prefer: hubModel ?? identity.model,
+    available: credentialCatalog.length > 0 ? credentialCatalog : null,
+  });
+  const resolvedRoleModel = softDefaultModel ?? hubModel ?? identity.model;
   const manualConfigFiles = cfg
     ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
     : [];
   const providerSnapshot = projectProviderRuntimeSnapshot({
     agentCli,
-    roleModel: identity.model,
+    roleModel: resolvedRoleModel,
     roleContextWindowTokens: cfg?.context_window_tokens,
     settingsConfig,
     manualConfigFiles: manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>,
@@ -386,7 +402,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     const rolePassthrough = cfg?.allow_model_catalog_passthrough === true;
     const allowPassthrough = config.allowModelCatalogPassthrough || rolePassthrough;
     const modelSource = resolveModelSource({
-      roleModel: identity.model,
+      roleModel: resolvedRoleModel,
       agentCli,
       settingsConfig,
     });
@@ -422,6 +438,10 @@ async function resolveAgentSnapshotForJobUnchecked(
       throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
     }
   }
+  assertModelAllowlisted(
+    modelPolicy,
+    snapshotUpstreamModel(providerSnapshot) ?? providerSnapshot.model ?? resolvedRoleModel,
+  );
   const roleKind = role.kind as "role" | "hub" | "system";
   const platformTools = resolvePlatformTools(roleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});
   const globalRuntimeImageKey = typeof globalCfg?.runtime_image_key === "string" && globalCfg.runtime_image_key.trim()
@@ -642,7 +662,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; model?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

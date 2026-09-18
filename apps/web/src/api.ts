@@ -1034,6 +1034,13 @@ export interface ProjectSettings {
   /** Hub 省略时的软缺省 Provider。 */
   default_credential_id: string | null;
   agent_allowlist_configured?: boolean;
+  /** 项目启用的模型白名单（#613）。 */
+  enabled_model_ids?: string[];
+  /** Hub / Role 省略 model 时的软缺省。 */
+  default_model_id?: string | null;
+  /** 缺省不可用时的有序 fallback。 */
+  fallback_model_ids?: string[];
+  model_policy_configured?: boolean;
   /** claimed / provisioning / running；waiting_human 不占调度额度。 */
   active_jobs: number;
 }
@@ -2497,6 +2504,9 @@ export const api = {
       enabled_credential_ids?: string[];
       default_agent_cli?: "claude-code" | "pi" | "dsh" | null;
       default_credential_id?: string | null;
+      enabled_model_ids?: string[];
+      default_model_id?: string | null;
+      fallback_model_ids?: string[];
     },
   ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),

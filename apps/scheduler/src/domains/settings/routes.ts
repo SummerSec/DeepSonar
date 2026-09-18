@@ -35,6 +35,10 @@ import {
   parseProjectAgentAllowlist,
   seedProjectAgentAllowlist,
 } from "../project-agent-allowlist/index.js";
+import {
+  applyProjectModelPolicyPatch,
+  parseProjectModelPolicy,
+} from "../project-model-policy/index.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
@@ -178,12 +182,17 @@ const ProjectRulesPatch = RulesPatch.superRefine((rules, ctx) => {
 
 function projectAllowlistResponse(cfg: Record<string, unknown>) {
   const allowlist = parseProjectAgentAllowlist(cfg);
+  const modelPolicy = parseProjectModelPolicy(cfg);
   return {
     enabled_agent_clis: allowlist.enabled_agent_clis,
     enabled_credential_ids: allowlist.enabled_credential_ids,
     default_agent_cli: allowlist.default_agent_cli,
     default_credential_id: allowlist.default_credential_id,
     agent_allowlist_configured: allowlist.configured,
+    enabled_model_ids: modelPolicy.enabled_model_ids,
+    default_model_id: modelPolicy.default_model_id,
+    fallback_model_ids: modelPolicy.fallback_model_ids,
+    model_policy_configured: modelPolicy.configured,
   };
 }
 
@@ -202,6 +211,12 @@ const SettingsPatchBody = z.object({
   default_agent_cli: z.enum(["claude-code", "pi", "dsh"]).nullable().optional(),
   /** Hub 省略时的软缺省 Provider（必须 ∈ 白名单）。 */
   default_credential_id: z.string().uuid().nullable().optional(),
+  /** 项目启用的模型白名单（#613）；显式保存后 Hub/provision fail-closed。 */
+  enabled_model_ids: z.array(z.string().trim().min(1).max(200)).min(1).optional(),
+  /** Hub / Role 省略 model 时的软缺省（必须 ∈ 白名单）。 */
+  default_model_id: z.string().trim().min(1).max(200).nullable().optional(),
+  /** 缺省不可用时的有序 fallback（必须 ∈ 白名单）。 */
+  fallback_model_ids: z.array(z.string().trim().min(1).max(200)).optional(),
   role_runtime_images: z.record(
     z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
     z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
@@ -529,6 +544,21 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         });
       } catch (error) {
         return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid agent allowlist" });
+      }
+    }
+    if (
+      body.enabled_model_ids !== undefined
+      || body.default_model_id !== undefined
+      || body.fallback_model_ids !== undefined
+    ) {
+      try {
+        applyProjectModelPolicyPatch(cfg, {
+          enabled_model_ids: body.enabled_model_ids,
+          default_model_id: body.default_model_id,
+          fallback_model_ids: body.fallback_model_ids,
+        });
+      } catch (error) {
+        return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid model policy" });
       }
     }
     scrubStoredProjectImagePolicy(cfg);
