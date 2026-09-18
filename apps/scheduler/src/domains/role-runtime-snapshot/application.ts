@@ -39,7 +39,7 @@ import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
 import { config } from "../../config.js";
-import { freezeAgentCliRuntime, requireAgentCliRuntimeAdapter } from "@deepsonar/runtime-sandbox";
+import { buildAgentRuntimeLaunchSpecification, freezeAgentCliRuntime, requireAgentCliRuntimeAdapter } from "@deepsonar/runtime-sandbox";
 import { parseSandboxLimitsOverride, resolveEffectiveSandboxLimits } from "./sandbox-limits.js";
 import {
   appendPolicyBlock,
@@ -498,6 +498,8 @@ async function resolveAgentSnapshotForJobUnchecked(
     resolution_order: ["global", "project", "role", "task", "job"],
   });
 
+  const agent_runtime_launch = buildAgentRuntimeLaunchSpecification(runtime_profile, runtimeImage.image_key);
+
   let language_server: FrozenLanguageServerCapability | undefined;
   const requestedLs = typeof options?.languageServerCapabilityId === "string"
     ? options.languageServerCapabilityId.trim()
@@ -564,6 +566,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       moduleContentHash: expanded.content_hash,
     }),
     runtime_profile,
+    agent_runtime_launch,
     ...(language_server ? { language_server } : {}),
     ...(cli_capabilities ? { cli_capabilities, cli_capability_pack } : {}),
     skill_revisions: expanded.revisions,
