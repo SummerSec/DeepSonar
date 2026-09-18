@@ -98,6 +98,28 @@ test("writeFilesWithRetry retries transient upload 500 then succeeds", async () 
   assert.deepEqual(delays, [1, 2]);
 });
 
+test("writeFilesWithRetry invokes onTransientRetry between transient failure and success", async () => {
+  const sequence: string[] = [];
+  await writeFilesWithRetry(
+    async () => {
+      sequence.push("write");
+      if (sequence.filter((s) => s === "write").length < 2) {
+        throw Object.assign(new Error("Upload failed (status=500)"), {
+          statusCode: 500,
+          code: "UNEXPECTED_RESPONSE",
+        });
+      }
+    },
+    [{ path: "/workspace/a.txt", data: "x" }],
+    {
+      baseDelayMs: 1,
+      sleep: async () => { sequence.push("sleep"); },
+      onTransientRetry: async () => { sequence.push("recycle"); },
+    },
+  );
+  assert.deepEqual(sequence, ["write", "recycle", "sleep", "write"]);
+});
+
 test("writeFilesWithRetry does not retry permanent failures", async () => {
   let calls = 0;
   await assert.rejects(
@@ -119,6 +141,17 @@ test("OpenSandbox SDK client routes writeFile and stdin uploads through writeFil
   assert.match(source, /writeFilesWithRetry/);
   assert.match(source, /isTransientOpenSandboxUploadError/);
   assert.equal((source.match(/writeFilesWithRetry\(/g) ?? []).length >= 3, true);
+});
+
+test("wrapSandbox recycles undici transport via closeTransport + fresh ConnectionConfig reconnect on transient upload (#609)", () => {
+  const source = readFileSync(new URL("./opensandbox-sdk-client.ts", import.meta.url), "utf8");
+  assert.match(source, /recycleSandboxTransport/);
+  assert.match(source, /closeTransport\(\)/);
+  assert.match(source, /Sandbox\.connect\(/);
+  assert.match(source, /connectionConfig\(connection\)/);
+  assert.match(source, /onTransientRetry:\s*onTransientUploadRetry/);
+  // Must not only closeTransport and reuse the same ConnectionConfig.
+  assert.match(source, /brand-new `ConnectionConfig`|fresh ConnectionConfig|connectionConfig\(connection\)/);
 });
 
 test("classifyOpenSandboxUploadFault distinguishes transient vs persistent_signal after retries", () => {
