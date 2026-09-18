@@ -1,7 +1,8 @@
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
 import type { FrozenCapabilityPack } from "../capability-pack/catalog.js";
-import type { FrozenLanguageServerCapability,
+import type { FrozenAgentRuntimeProfile,
+  FrozenLanguageServerCapability,
   FrozenCliCapability,
   FrozenCliCapabilityPack } from "@deepsonar/shared-types";
 import type { PlatformToolName, ReasoningValue } from "@deepsonar/shared-types";
@@ -24,6 +25,8 @@ export interface RoleRuntimeSnapshotResult {
   dsh_task_mode: "standard" | "ptc";
   /** Immutable adapter implementation/capability contract captured at Job creation. */
   agent_runtime: AgentCliRuntimeSnapshot;
+  /** Unified provider/CLI/profile projection frozen with this Job (#613). */
+  runtime_profile: FrozenAgentRuntimeProfile;
   model: string | null;
   /** Actual upstream model ID after resolving CLI aliases such as fable. */
   upstream_model: string | null;

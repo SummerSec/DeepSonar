@@ -125,9 +125,10 @@ export function isSnapshotUnresolvableError(error: unknown): error is SnapshotUn
 }
 
 export function currentSnapshotUnresolvableBody(error: unknown) {
+  const errorCode = error instanceof SnapshotUnresolvableError ? error.error_code : SNAPSHOT_STALE;
   return {
     error: "当前受治理运行配置无法解析；请修复 RoleConfig、Credential 或运行镜像配置后重试",
-    error_code: SNAPSHOT_STALE,
+    error_code: errorCode,
     stale_fields: ["current_snapshot_unresolvable"],
     resolution_error: safeResolutionError(error),
     next_action: "fix-current-configuration" as const,

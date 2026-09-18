@@ -34,6 +34,25 @@ export {
   FrozenCliCapability,
   FrozenCliCapabilityPack,
 } from "./cli-capability.js";
+export {
+  AGENT_RUNTIME_PROFILE_SCHEMA,
+  AGENT_RUNTIME_PROFILE_UNSUPPORTED_CONFIG,
+  AgentRuntimeProfile,
+  RuntimeProfileEnvRef,
+  RuntimeProfileExtensionRef,
+  RuntimeProfileNativeOptions,
+  RuntimeProfileProviderRef,
+  RuntimeProfileResolutionOrder,
+  RuntimeProfileSystemPromptRef,
+} from "./agent-runtime-profile.js";
+export type {
+  AgentRuntimeProfile as FrozenAgentRuntimeProfile,
+  RuntimeProfileEnvRef as RuntimeProfileEnvRefType,
+  RuntimeProfileExtensionRef as RuntimeProfileExtensionRefType,
+  RuntimeProfileNativeOptions as RuntimeProfileNativeOptionsType,
+  RuntimeProfileProviderRef as RuntimeProfileProviderRefType,
+  RuntimeProfileSystemPromptRef as RuntimeProfileSystemPromptRefType,
+} from "./agent-runtime-profile.js";
 import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);

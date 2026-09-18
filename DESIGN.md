@@ -92,6 +92,14 @@ Job 创建时冻结 capability selector、digest、模块内容 hash、缺失模
 
 通用 CLI 工具同样是受治理的 **Capability Module**（契约 `deepsonar.cli-capability/v1`，#611）。Phase 1 登记 `text.search.rg`、`json.query.jq`、`source.control.git`、`file.inspect.file`、`evidence.hash.sha256sum`、`execution.timeout`、`archive.extract` 等；`file.discovery.fd` / `yaml.query.yq` / `patch.diff` 已进目录但默认不可用（镜像钉死 follow-up）。Hub 通过 Intent `cli_capability_ids` 提案；Scheduler `admitCliCapabilities` 校验后冻结 `cli_capabilities` 与 pack fingerprint。CLI 输出固定 `is_finding: false`，只作 Evidence/Fact 输入。`curl` 与 binutils 专项工具不纳入本基础包。
 
+### 4.1.3 Agent Runtime Profile（#613 phase 1）
+
+Agent Runtime Profile 的机器契约是 `deepsonar.agent-runtime-profile/v1`，定义于 `packages/shared-types/src/agent-runtime-profile.ts`。它把现有 Provider Credential、RoleConfig 和三种已准入 CLI adapter 的最终运行投影统一为一个只读、无密钥的 Job snapshot 部分：`provider_ref`、`model_ref`、`reasoning_effort`、`context_window_tokens`、`extensions`、`system_prompt_ref`、`env_refs`、严格命名空间的 `native_options` 和 `profile_fingerprint`。
+
+Profile 复用现有配置解析和物化路径，不建立第二个 Provider Gateway 或执行通道。Scheduler 在 Job 创建时生成它；`system_prompt_ref` 只保存角色配置标识、版本和摘要 hash，`env_refs` 只保存环境变量名称及来源，Credential secret、Provider 原文和环境变量值不进入 Profile。`native_options` 只允许 `claude_code`、`pi`、`dsh` 三个已登记命名空间，并按当前 adapter 的最小受支持字段投影。
+
+配置解析继续遵守 **全局默认 → 项目 → 角色 → 任务 → Job** 的固定优先级；运行中的 Job 只消费 `agent_snapshot_json.runtime_profile` 和现有冻结配置。Provider、模型目录、Credential 健康状态、Agent CLI 与镜像兼容性仍由现有 Scheduler 校验负责；不支持的 CLI 或配置必须在现有 snapshot resolution 错误边界 fail-closed，不能 silent no-op。三种 adapter 的实际启动和配置文件物化仍由 `packages/runtime-sandbox` 的既有 adapter registry 执行。
+
 ### 4.2 Plan
 
 当前 Hub 仍以 Intent 驱动，长期目标是把 Intent 适配为 `PlanTask`，由模型声明目的、依赖、输入引用、期望输出、验证路径、完成理由和预算。平台验证 schema、canonical 引用、依赖环、权限、预算和可执行性；模型判断业务上继续、收敛、阻塞或请求人工。
