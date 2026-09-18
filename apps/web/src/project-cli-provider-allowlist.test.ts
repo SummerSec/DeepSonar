@@ -6,7 +6,7 @@ const panel = readFileSync(new URL("./components/ProjectCliProviderAllowlistPane
 const settings = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
 
 test("项目设置挂载 CLI/Provider 启用面板，文案为组合积木与软缺省", () => {
-  assert.match(settings, /ProjectCliProviderAllowlistPanel/);
+  assert.match(settings, /ProjectCompositionPolicyPanels|ProjectCliProviderAllowlistPanel/);
   assert.match(panel, /CLI \/ Provider 启用与缺省/);
   assert.match(panel, /平台只划定启用边界与配额/);
   assert.match(panel, /自由组合 CLI×Provider×镜像/);

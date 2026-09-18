@@ -36,8 +36,7 @@ import { SearchableSelect } from "./SearchableSelect";
 import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { ProjectImagePolicySection } from "./components/ProjectImagePolicySection";
-import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
-import { ProjectModelPolicyPanel } from "./components/ProjectModelPolicyPanel";
+import { ProjectCompositionPolicyPanels } from "./components/ProjectCompositionPolicyPanels";
 import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
 import { inferToastKind, showToast } from "./toast";
 import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
@@ -153,14 +152,6 @@ export function SettingsPanel({
   const [imagePolicyBusy, setImagePolicyBusy] = useState(false);
   const [imagePolicySaved, setImagePolicySaved] = useState(false);
   const [imagePolicyFailed, setImagePolicyFailed] = useState(false);
-  const [enabledAgentClis, setEnabledAgentClis] = useState<Array<"claude-code" | "pi" | "dsh">>(["claude-code"]);
-  const [enabledCredentialIds, setEnabledCredentialIds] = useState<string[]>([]);
-  const [defaultAgentCli, setDefaultAgentCli] = useState<"claude-code" | "pi" | "dsh" | null>(null);
-  const [defaultCredentialId, setDefaultCredentialId] = useState<string | null>(null);
-  const [enabledModelIds, setEnabledModelIds] = useState<string[]>([]);
-  const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
-  const [fallbackModelIds, setFallbackModelIds] = useState<string[]>([]);
-  const [modelPolicyConfigured, setModelPolicyConfigured] = useState(false);
   const [rulesBusy, setRulesBusy] = useState(false);
   const [rulesSaved, setRulesSaved] = useState(false);
   const [rulesFailed, setRulesFailed] = useState(false);
@@ -211,14 +202,6 @@ export function SettingsPanel({
           setRoleRuntimeImages(s.role_runtime_images ?? {});
           const storedQuota = (s.rules as { maxConcurrentJobs?: unknown }).maxConcurrentJobs;
           setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
-          setEnabledAgentClis(s.enabled_agent_clis?.length ? s.enabled_agent_clis : ["claude-code"]);
-          setEnabledCredentialIds(s.enabled_credential_ids ?? []);
-          setDefaultAgentCli(s.default_agent_cli ?? null);
-          setDefaultCredentialId(s.default_credential_id ?? null);
-          setEnabledModelIds(s.enabled_model_ids ?? []);
-          setDefaultModelId(s.default_model_id ?? null);
-          setFallbackModelIds(s.fallback_model_ids ?? []);
-          setModelPolicyConfigured(Boolean(s.model_policy_configured));
         })
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
@@ -814,23 +797,10 @@ export function SettingsPanel({
                   imagePolicyFailed={imagePolicyFailed}
                   onSave={saveImagePolicy}
                 />
-                <ProjectCliProviderAllowlistPanel
+                <ProjectCompositionPolicyPanels
                   projectId={projectId}
                   credentials={credentials}
-                  enabledAgentClis={enabledAgentClis}
-                  enabledCredentialIds={enabledCredentialIds}
-                  defaultAgentCli={defaultAgentCli}
-                  defaultCredentialId={defaultCredentialId}
-                  onSaved={reload}
-                />
-                <ProjectModelPolicyPanel
-                  projectId={projectId}
-                  credentials={credentials}
-                  enabledCredentialIds={enabledCredentialIds}
-                  enabledModelIds={enabledModelIds}
-                  defaultModelId={defaultModelId}
-                  fallbackModelIds={fallbackModelIds}
-                  modelPolicyConfigured={modelPolicyConfigured}
+                  settings={settings}
                   onSaved={reload}
                 />
                 <ProjectSkillSourceAllowlistPanel projectId={projectId} onSaved={reload} />
