@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set",
   }, () => {});
 } else {
-  test("RoleConfig save follows compatible credential agent_cli and rejects incompatible provider", async () => {
+  test("RoleConfig save keeps credential agent_cli unchanged and rejects incompatible provider", async () => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     adminUrl.search = "";
@@ -100,15 +100,14 @@ if (!testDatabaseUrl) {
       });
       assert.equal(followed.statusCode, 200, followed.payload);
       assert.equal(JSON.parse(followed.payload).agent_cli, "pi");
+      // #614: RoleConfig owns agent_cli binding; must not rewrite shared Credential.agent_cli.
       const [synced] = await sql`SELECT agent_cli FROM credentials WHERE id = ${anthropicId}`;
-      assert.equal(synced.agent_cli, "pi");
+      assert.equal(synced.agent_cli, "claude-code");
       const followAudits = await sql`
         SELECT action, before_json, after_json
         FROM audit_logs
         WHERE action = 'credential.agent_cli_follow' AND resource_id = ${anthropicId}`;
-      assert.equal(followAudits.length, 1);
-      assert.equal(followAudits[0].before_json.agent_cli, "claude-code");
-      assert.equal(followAudits[0].after_json.agent_cli, "pi");
+      assert.equal(followAudits.length, 0);
 
       const rejected = await putRoleConfig({
         agent_cli: "claude-code",

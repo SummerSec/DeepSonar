@@ -18,7 +18,9 @@ test("RoleConfig validation and Credential PATCH share the advisory/row-lock bou
   const roleFollow = roleMutation.indexOf("UPDATE credentials SET agent_cli = ${follow.to}");
   assert.ok(roleLock >= 0, "RoleConfig mutation must take the dispatch advisory lock");
   assert.ok(roleValidation > roleLock, "RoleConfig must validate credentials after taking the lock");
-  assert.ok(roleFollow > roleValidation, "compatible credential agent_cli must follow after validation");
+  // #614: Credential is shared across roles; RoleConfig owns agent_cli binding and must not
+  // rewrite credentials.agent_cli after validation.
+  assert.equal(roleFollow, -1, "RoleConfig must not write back credentials.agent_cli after validation");
 
   const validationStart = roleConfigRoutesSource.indexOf("async function validateRoleConfigBody(");
   const validationEnd = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(", validationStart);
