@@ -8,7 +8,13 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
-import { extractBaseUrlFromSettings, extractModelsFromSettings, splitPiModelRef } from "./provider-settings.js";
+import {
+  extractBaseUrlFromSettings,
+  extractInferenceProtocol,
+  extractModelsFromSettings,
+  splitPiModelRef,
+  type InferenceWireProtocol,
+} from "./provider-settings.js";
 
 /** Provider response bytes accepted by model discovery (before JSON parsing). */
 export const CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES = 256 * 1024;
@@ -80,6 +86,19 @@ function safeSourceUrl(url: string): string {
   }
 }
 
+/** Same rule as joinGatewayUpstreamUrl: Base URL ending in /v1 must not become /v1/v1/... (#624). */
+function joinProbeUpstreamUrl(baseUrl: string, upstreamPath: string): string {
+  const base = baseUrl.replace(/\/+$/u, "");
+  const path = upstreamPath.replace(/^\/+/u, "");
+  const baseVer = /\/(v\d+)$/iu.exec(base)?.[1];
+  const pathVer = /^(v\d+)(?=\/|$)/iu.exec(path)?.[1];
+  if (baseVer && pathVer && baseVer.toLowerCase() === pathVer.toLowerCase()) {
+    const rest = path.slice(pathVer.length).replace(/^\/+/u, "");
+    return `${base}${rest ? `/${rest}` : ""}`;
+  }
+  return `${base}/${path}`;
+}
+
 const ANTHROPIC_COMPAT_SUFFIXES = [
   "/api/claudecode",
   "/apps/anthropic",
@@ -120,20 +139,52 @@ function resolveProbeBaseUrl(cred: CredentialRequestInput): string {
   return baseUrl;
 }
 
-function authHeaders(provider: string, secret: string): Record<string, string> {
-  return provider === "anthropic"
+function authHeadersForProtocol(protocol: InferenceWireProtocol, secret: string): Record<string, string> {
+  return protocol === "anthropic-messages"
     ? { Authorization: `Bearer ${secret}`, "x-api-key": secret, "anthropic-version": "2023-06-01" }
     : { Authorization: `Bearer ${secret}` };
 }
 
+/** Prefer wire protocol from settings; fall back to Credential.provider for catalog probes. */
+function resolveProbeProtocol(cred: CredentialRequestInput): InferenceWireProtocol {
+  try {
+    return extractInferenceProtocol(cred.settings_config_json, cred.provider);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不支持的推理协议";
+    throw new CredentialProbeError(message, "configuration");
+  }
+}
+
 function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
-  return { urls: modelUrls(resolveProbeBaseUrl(cred)), headers: authHeaders(cred.provider, secret) };
+  return {
+    urls: modelUrls(resolveProbeBaseUrl(cred)),
+    headers: authHeadersForProtocol(resolveProbeProtocol(cred), secret),
+  };
 }
 
 /** vendor PoC（opensandbox-cli-control.poc.ts）的最小推理调用口径。 */
 const INFERENCE_PROBE_MAX_TOKENS = 8;
 
-type InferenceProbeRequest = { url: string; headers: Record<string, string>; body: string };
+/** Inference probes must cover slow OpenAI-compatible relays (#624 field: chat/completions >10s). */
+const INFERENCE_PROBE_TIMEOUT_MS: Record<InferenceWireProtocol, number> = {
+  "anthropic-messages": 20_000,
+  "openai-completions": 30_000,
+  "openai-responses": 25_000,
+};
+
+const INFERENCE_PROBE_PATH: Record<InferenceWireProtocol, string> = {
+  "anthropic-messages": "/v1/messages",
+  "openai-completions": "/v1/chat/completions",
+  "openai-responses": "/v1/responses",
+};
+
+type InferenceProbeRequest = {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+  protocol: InferenceWireProtocol;
+  timeoutMs: number;
+};
 
 /**
  * 推理探测使用的模型 id：优先 settingsConfig 声明的模型（与真实 Job 同一来源），
@@ -148,18 +199,33 @@ function inferenceProbeModel(cred: CredentialRequestInput): string | null {
   return candidates.find((model) => model.trim().length > 0 && model.trim().length <= CREDENTIAL_MODEL_ID_MAX_LENGTH)?.trim() ?? null;
 }
 
+function inferenceProbeBody(protocol: InferenceWireProtocol, model: string): string {
+  if (protocol === "openai-responses") {
+    return JSON.stringify({
+      model,
+      max_output_tokens: INFERENCE_PROBE_MAX_TOKENS,
+      input: "ping",
+    });
+  }
+  return JSON.stringify({
+    model,
+    max_tokens: INFERENCE_PROBE_MAX_TOKENS,
+    messages: [{ role: "user", content: "ping" }],
+  });
+}
+
 function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): InferenceProbeRequest | null {
   const model = inferenceProbeModel(cred);
   if (!model) return null;
+  const protocol = resolveProbeProtocol(cred);
   const base = safeSourceUrl(resolveProbeBaseUrl(cred));
+  const path = INFERENCE_PROBE_PATH[protocol];
   return {
-    url: cred.provider === "anthropic" ? `${base}/v1/messages` : `${base}/v1/chat/completions`,
-    headers: { "content-type": "application/json", ...authHeaders(cred.provider, secret) },
-    body: JSON.stringify({
-      model,
-      max_tokens: INFERENCE_PROBE_MAX_TOKENS,
-      messages: [{ role: "user", content: "ping" }],
-    }),
+    url: joinProbeUpstreamUrl(base, path),
+    headers: { "content-type": "application/json", ...authHeadersForProtocol(protocol, secret) },
+    body: inferenceProbeBody(protocol, model),
+    protocol,
+    timeoutMs: INFERENCE_PROBE_TIMEOUT_MS[protocol],
   };
 }
 
@@ -174,7 +240,7 @@ function inferenceStatusAccepted(status: number): boolean {
 async function requestInferenceProbe(
   request: InferenceProbeRequest,
   timeoutMs: number,
-): Promise<{ status: number; url: string }> {
+): Promise<{ status: number; url: string; protocol: InferenceWireProtocol }> {
   // 与目录探测同一口径：URL 已由 safeSourceUrl + Provider 允许列表校验（见 inferenceProbeRequest）。
   const url = request.url;
   let response: Response;
@@ -187,10 +253,14 @@ async function requestInferenceProbe(
     });
   } catch (error) {
     const category: CredentialHealthErrorCategory = isAbortError(error) ? "timeout" : "network";
-    throw new CredentialProbeError(detailForCategory(category), category);
+    const pathHint = INFERENCE_PROBE_PATH[request.protocol];
+    const detail = category === "timeout"
+      ? `Provider 推理探测超时（${request.protocol} ${pathHint}）`
+      : detailForCategory(category);
+    throw new CredentialProbeError(detail, category);
   }
   await cancelResponseBody(response);
-  return { status: response.status, url: request.url };
+  return { status: response.status, url: request.url, protocol: request.protocol };
 }
 
 /**
@@ -489,11 +559,11 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
     const inference = inferenceProbeRequest(cred, secret);
     let inferenceMissing: { status: number } | null = null;
     if (inference) {
-      const probed = await requestInferenceProbe(inference, 10_000);
+      const probed = await requestInferenceProbe(inference, inference.timeoutMs);
       if (inferenceStatusAccepted(probed.status)) {
         return {
           ok: true,
-          detail: `推理调用已被 Provider 接受（HTTP ${probed.status}）`,
+          detail: `推理调用已被 Provider 接受（${probed.protocol}，HTTP ${probed.status}）`,
           source_url: safeSourceUrl(probed.url),
           fetched_at: now(),
           probe_path: "inference",
@@ -503,7 +573,7 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
         const category = categoryForStatus(probed.status);
         return {
           ok: false,
-          detail: detailForCategory(category, probed.status),
+          detail: `Provider 推理探测失败（${probed.protocol}，${category}，HTTP ${probed.status}）`,
           category,
           source_url: safeSourceUrl(probed.url),
           fetched_at: now(),

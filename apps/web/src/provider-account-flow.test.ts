@@ -418,6 +418,17 @@ test("provider UI exposes only protocol labels and the two supported OpenCode pr
   assert.match(flow, /providerProtocolLabel/);
 });
 
+test("#624 edit mode allows Provider protocol migration and persists provider", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const flowSource = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(editor, /allow Provider protocol migration on edit/);
+  // Provider fieldset itself must not be locked to create-only.
+  assert.doesNotMatch(editor, /fieldset disabled=\{mode === "edit"\}[\s\S]*?ariaLabel="Provider"/);
+  // Save must send top-level provider so settings api and Credential.provider stay aligned.
+  assert.match(flowSource, /provider:\s*editProvider/);
+  assert.match(flowSource, /api\.updateCredential\(editingCredential\.id/);
+});
+
 test("deleteAccount hard-blocks only pending/active jobs; recoverable is a confirm warning", () => {
   const start = flow.indexOf("const deleteAccount = async");
   const end = flow.indexOf("const testConnection = async", start);

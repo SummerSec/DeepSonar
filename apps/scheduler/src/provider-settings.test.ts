@@ -701,3 +701,27 @@ test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
   const claudeConfig = JSON.parse(claude[0]!.content) as Record<string, unknown>;
   assert.equal(claudeConfig.context_window_tokens, undefined);
 });
+
+test("#624 extractInferenceProtocol prefers settings api and rejects unsupported values", async () => {
+  const {
+    extractDeclaredInferenceProtocol,
+    extractInferenceProtocol,
+    readSettingsWireApi,
+  } = await import("./provider-settings.js");
+  assert.equal(
+    extractInferenceProtocol({ providers: { deepsonar: { api: "openai-responses" } } }, "anthropic"),
+    "openai-responses",
+  );
+  assert.equal(
+    extractInferenceProtocol({ providers: { deepsonar: { api: "openai-completions" } } }, "openai"),
+    "openai-completions",
+  );
+  assert.equal(extractInferenceProtocol({}, "openai"), "openai-responses");
+  assert.equal(extractInferenceProtocol({}, "anthropic"), "anthropic-messages");
+  assert.equal(extractDeclaredInferenceProtocol({}), null);
+  assert.equal(readSettingsWireApi({ providers: { x: { api: "grpc-weird" } } }), "grpc-weird");
+  assert.throws(
+    () => extractInferenceProtocol({ providers: { x: { api: "grpc-weird" } } }, "openai"),
+    /不支持的推理协议：grpc-weird/,
+  );
+});

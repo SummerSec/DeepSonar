@@ -692,12 +692,32 @@ export function CredentialConfigEditor({
           ariaLabel="Agent CLI 类型"
           clearable={false}
         />
-        <fieldset disabled={mode === "edit"} className="contents">
+        {/* #624: allow Provider protocol migration on edit; Scheduler rejects when active Jobs conflict. */}
+        <fieldset className="contents">
           <SearchableSelect
             value={provider}
             onChange={(next) => {
               onProviderChange(next);
               if (agentCli === "dsh") onSettingsJsonChange(defaultDshProviderYaml(next, baseUrl));
+              if (agentCli === "pi") {
+                // Keep Pi api field aligned with the selected Credential.provider.
+                try {
+                  const parsed = JSON.parse(settingsJson || "{}") as Record<string, unknown>;
+                  const providers = parsed.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers)
+                    ? parsed.providers as Record<string, unknown>
+                    : null;
+                  if (providers) {
+                    const api = next === "anthropic" ? "anthropic-messages" : "openai-responses";
+                    for (const [key, raw] of Object.entries(providers)) {
+                      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+                      providers[key] = { ...(raw as Record<string, unknown>), api };
+                    }
+                    onSettingsJsonChange(formatJsonObject({ ...parsed, providers }));
+                  }
+                } catch {
+                  // pasted-as-is / invalid JSON: leave settings alone; probe still reads api when present.
+                }
+              }
               if (!providerCatalog.find((item) => item.provider === next)?.supports_base_url) onBaseUrlChange("");
             }}
             options={compatibleProviders.map((item) => ({

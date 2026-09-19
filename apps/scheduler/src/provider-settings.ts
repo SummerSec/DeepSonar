@@ -606,6 +606,74 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
 }
 
 
+
+/** Wire protocols Credential health probes understand (#624). */
+export const INFERENCE_WIRE_PROTOCOLS = ["anthropic-messages", "openai-completions", "openai-responses"] as const;
+export type InferenceWireProtocol = (typeof INFERENCE_WIRE_PROTOCOLS)[number];
+
+function asInferenceWireProtocol(value: unknown): InferenceWireProtocol | null {
+  return typeof value === "string" && (INFERENCE_WIRE_PROTOCOLS as readonly string[]).includes(value)
+    ? (value as InferenceWireProtocol)
+    : null;
+}
+
+/** Raw `api` / `protocol` string from settingsConfig, if any (may be unsupported). */
+export function readSettingsWireApi(settingsConfig: unknown): string | null {
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official) {
+    const profile = asObject(official.providers[official.route]);
+    const raw = profile.api ?? profile.protocol;
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  }
+  const settings = asObject(settingsConfig);
+  for (const key of ["api", "protocol"] as const) {
+    const value = settings[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  const providers = asObject(settings.providers);
+  for (const rawProvider of Object.values(providers)) {
+    const provider = asObject(rawProvider);
+    for (const key of ["api", "protocol"] as const) {
+      const value = provider[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  if (typeof settings.config === "string" && settings.config.trim()) {
+    try {
+      return parseDshPiAiSettings(settings).protocol;
+    } catch {
+      const match = /^\s*api:\s*["']?([A-Za-z0-9_-]+)["']?/mu.exec(settings.config)
+        ?? /^\s*protocol:\s*["']?([A-Za-z0-9_-]+)["']?/mu.exec(settings.config);
+      if (match?.[1]) return match[1];
+    }
+  }
+  return null;
+}
+
+/**
+ * Read an explicit wire protocol from settingsConfig (Pi / DSH / OpenCode dialects).
+ * Returns null when settings do not declare one; callers then fall back by Credential.provider.
+ */
+export function extractDeclaredInferenceProtocol(settingsConfig: unknown): InferenceWireProtocol | null {
+  return asInferenceWireProtocol(readSettingsWireApi(settingsConfig));
+}
+
+/**
+ * Effective inference wire protocol for Credential health probes (#624).
+ * Prefer settingsConfig declaration; otherwise match create-path defaults:
+ * anthropic → anthropic-messages, openai → openai-responses.
+ * Throws when settings declare an unrecognized api/protocol string.
+ */
+export function extractInferenceProtocol(settingsConfig: unknown, provider: string): InferenceWireProtocol {
+  const raw = readSettingsWireApi(settingsConfig);
+  if (raw) {
+    const declared = asInferenceWireProtocol(raw);
+    if (!declared) throw new Error(`不支持的推理协议：${raw}`);
+    return declared;
+  }
+  return provider === "anthropic" ? "anthropic-messages" : "openai-responses";
+}
+
 /** Collect model IDs declared inside settingsConfig (for binding UI / defaults). */
 export function extractModelsFromSettings(settingsConfig: unknown): string[] {
   const official = readOfficialLlmPiAiSettings(settingsConfig);
