@@ -1,15 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  CheckCircle,
-  GitBranch,
-  Lightning,
-  LockKey,
-  PencilSimple,
-  Plugs,
-  Trash,
-  Warning,
-} from "@phosphor-icons/react";
+import { CheckCircle, GitBranch, Lightning, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
 import {
   api,
   type CredentialImpact,
@@ -125,9 +116,7 @@ export function ProviderAccountFlow({
     }
   }, [catalog, createProvider]);
 
-  useEffect(() => {
-    setCreateProjectId(actorProjectId ?? "");
-  }, [actorProjectId]);
+  useEffect(() => { setCreateProjectId(actorProjectId ?? ""); }, [actorProjectId]);
 
   useEffect(() => {
     if (!selectedCredentialId && credentials.length > 0) {
