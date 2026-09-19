@@ -82,33 +82,24 @@ test("inherit_global project RoleConfig no longer labels leftover stored models"
 
 const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
 const panel = readFileSync(new URL("./CredentialsPanel.tsx", import.meta.url), "utf8");
+const binding = readFileSync(new URL("./RoleCredentialBindingPanel.tsx", import.meta.url), "utf8");
 
-test("Provider account flow keeps the happy path on one surface", () => {
+test("Provider account flow is account CRUD only and does not own binding or effect", () => {
   for (const marker of [
     "createCredential",
     "testCredential",
     "credentialModels",
-    "credentialCompatibility",
-    "bindableRoleConfigs",
-    "bindCredentialsBatch",
     "authMe",
-    "can_bind",
     "supports_base_url",
-    "idempotency_key",
-    "new_jobs_only",
-    "refresh_pending",
-    "refreshed_pending_job_count",
     "原始遗留值不会展示或回传",
     "settings_config",
     "agent_cli",
-    "eligibleRoleConfigs",
-    "modelsFromSettingsConfig",
     "saveEditedConfig",
     "CredentialConfigEditor",
     "openEditCredential",
     "provider-flow-credential-list",
-    "runtimeImageSelectOption",
     "buildSettingsConfigFromEditor",
+    "credentialImpact",
   ]) {
     assert.ok(flow.includes(marker), `flow should expose ${marker}`);
   }
@@ -124,31 +115,28 @@ test("Provider account flow keeps the happy path on one surface", () => {
   );
   assert.ok(editor.includes("item.compatible_agent_cli.includes(agentCli)"));
   assert.match(flow, /setCreateSecret\(\"\"\)/);
-  assert.match(flow, /(?:活跃|运行中)快照保持冻结/);
-  assert.match(flow, /const canToggle = roleConfig\.can_bind && !incompatible/);
-  assert.match(flow, /roleConfig\.role_kind/);
-  assert.match(flow, /roleConfig\.role_builtin/);
-  assert.doesNotMatch(flow, /resolveBindableRoleKind|isBuiltinBindableRole/);
-  assert.doesNotMatch(flow, /selectedCredential\.agent_cli && roleCli !== selectedCredential\.agent_cli/);
-  assert.match(flow, /targetCatalog\s*&&\s*!targetCatalog\.compatible_agent_cli\.includes\(roleCli\)/);
   assert.match(flow, /项目作用域账号只能在本项目内创建 Provider 账号/);
   assert.match(flow, /testCredential\(created\.id\)/);
-  // No model-threshold / model-mapping bind UI.
+  assert.doesNotMatch(flow, /bindCredentialsBatch/);
+  assert.doesNotMatch(flow, /bindableRoleConfigs/);
+  assert.doesNotMatch(flow, /FlowStep|goToStep|canEnterRoles/);
+  assert.doesNotMatch(flow, /02 \/ 角色配置/);
+  assert.doesNotMatch(flow, /03 \/ 生效策略/);
+  assert.doesNotMatch(flow, /01 \/ 账号列表/);
+  assert.doesNotMatch(flow, /请先选择 Provider 账号，再进入/);
+  assert.doesNotMatch(flow, /接入账号，再完成绑定闭环/);
   assert.doesNotMatch(flow, /02 \/ 模型门槛/);
   assert.doesNotMatch(flow, /02 \/ 模型映射/);
   assert.doesNotMatch(flow, /选择统一模型/);
   assert.doesNotMatch(flow, /绑定需要非空的当前模型目录|绑定需要模型目录/);
-  // List first; CC Switch editor expands on edit (not always open).
   assert.doesNotMatch(flow, /模型映射/);
   assert.doesNotMatch(flow, /一键设置/);
   assert.doesNotMatch(flow, /声明支持 1M/);
-  assert.match(flow, /01 \/ 账号列表/);
-  assert.match(flow, /02 \/ 角色配置/);
-  assert.match(flow, /03 \/ 生效策略/);
+  assert.match(flow, /当前被哪些角色引用（只读）/);
+  assert.match(flow, /ROLE_BINDING_HREF/);
   const claudeFields = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
   assert.match(claudeFields, /获取模型列表/);
   assert.match(claudeFields, /模型配置/);
-  assert.match(flow, /配置文件 ·/);
 });
 
 test("Provider create/edit persists a validated top-level context window budget", () => {
@@ -224,12 +212,12 @@ test("Pi uses its native reasoning controls", () => {
 });
 
 test("new RoleConfig CLI options exclude leftover CLIs", () => {
-  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
-  assert.match(flow, /value: "claude-code"/);
-  assert.match(flow, /value: "pi"/);
-  assert.match(flow, /value: "dsh"/);
-  assert.doesNotMatch(flow, /AGENT_CLI_OPTIONS[\s\S]*value: "codex"/);
-  assert.doesNotMatch(flow, /AGENT_CLI_OPTIONS[\s\S]*value: "open-code"/);
+  const helpers = readFileSync(new URL("./provider-account-helpers.ts", import.meta.url), "utf8");
+  assert.match(helpers, /value: "claude-code"/);
+  assert.match(helpers, /value: "pi"/);
+  assert.match(helpers, /value: "dsh"/);
+  assert.doesNotMatch(helpers, /AGENT_CLI_OPTIONS[\s\S]*value: "codex"/);
+  assert.doesNotMatch(helpers, /AGENT_CLI_OPTIONS[\s\S]*value: "open-code"/);
 });
 
 test("credential save no longer silently strips leftover allowed_model_ids", () => {
@@ -362,24 +350,25 @@ test("reasoning is configured on Provider accounts, not RoleConfig", () => {
 
 test("项目角色镜像只能由项目镜像缺省管理", () => {
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
-  assert.match(flow, /roleConfig\.project_id \?/);
-  assert.match(flow, /由项目镜像缺省决定/);
+  assert.match(binding, /roleConfig\.project_id \?/);
+  assert.match(binding, /由项目镜像缺省决定/);
   assert.match(editor, /runtime_image_key: projectId \? null : form\.runtime_image_key\.trim\(\) \|\| null/);
 });
 
 test("Provider account flow user-facing copy is Chinese", () => {
   for (const chinese of [
-    "接入账号，再完成绑定闭环",
+    "管理 Provider 账号本身",
     "测试连接",
     "刷新模型目录",
     "保存配置并添加账号",
-    "应用到所选角色配置",
-    "仅新 Job",
-    "刷新 pending",
+    "当前被哪些角色引用（只读）",
+    "去凭据绑定",
   ]) {
     assert.ok(flow.includes(chinese), `flow should show Chinese copy: ${chinese}`);
   }
-  // Regression: English marketing copy from the initial #63 surface must not return.
+  assert.doesNotMatch(flow, /应用到所选角色配置/);
+  assert.doesNotMatch(flow, /仅新 Job/);
+  assert.doesNotMatch(flow, /刷新 pending/);
   assert.doesNotMatch(flow, /Connect an account, then close the loop/);
   assert.doesNotMatch(flow, /Encrypt and add account/);
   assert.doesNotMatch(flow, /Test connection/);
@@ -426,9 +415,7 @@ test("#624 edit mode allows Provider protocol migration and persists provider", 
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const flowSource = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
   assert.match(editor, /allow Provider protocol migration on edit/);
-  // Provider fieldset itself must not be locked to create-only.
   assert.doesNotMatch(editor, /fieldset disabled=\{mode === "edit"\}[\s\S]*?ariaLabel="Provider"/);
-  // Save must send top-level provider so settings api and Credential.provider stay aligned.
   assert.match(flowSource, /provider:\s*editProvider/);
   assert.match(flowSource, /api\.updateCredential\(editingCredential\.id/);
 });

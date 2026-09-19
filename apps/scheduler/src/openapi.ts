@@ -2437,8 +2437,8 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/credentials/batch-bind",
-    summary: "Atomically bind or migrate one account across multiple RoleConfigs",
-    description: "Validates provider/CLI/model compatibility under the dispatcher lock. Running/frozen Jobs are never changed. effect=new_jobs_only leaves pending snapshots frozen; effect=refresh_pending updates only pending snapshots.",
+    summary: "Bind or migrate RoleConfigs to a Credential (binding domain, not account CRUD)",
+    description: "Binding-domain API: bind or migrate RoleConfigs to one Credential. Not account CRUD. Validates provider/CLI/model compatibility under the dispatcher lock. Running/frozen Jobs are never changed. effect=new_jobs_only leaves pending snapshots frozen; effect=refresh_pending updates only pending snapshots.",
     scope: "agents:write",
     tags: ["Credentials", "RoleConfig"],
     body: { $ref: "#/components/schemas/CredentialBatchBindingRequest" },

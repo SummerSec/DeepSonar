@@ -384,10 +384,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   });
 
   /**
-   * Bind or migrate one Provider account to many global/project RoleConfigs.
-   * The complete operation is serialized with dispatcher claim and committed
-   * as one transaction. Running/frozen Jobs are never mutated; callers may
-   * explicitly choose to refresh pending snapshots only.
+   * Binding-domain API: bind or migrate RoleConfigs to one Credential.
+   * Not account CRUD. Serialized with dispatcher claim and committed as one
+   * transaction. Running/frozen Jobs are never mutated; callers may explicitly
+   * choose to refresh pending snapshots only.
    */
   app.post("/credentials/batch-bind", async (req, reply) => {
     const parsed = CredentialBatchBindingRequest.safeParse(req.body);

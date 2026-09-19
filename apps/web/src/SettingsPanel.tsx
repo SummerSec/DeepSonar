@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
-  type AuthMe,
   type EffectiveRules,
   type GlobalRoleConfigEntry,
   type ProjectRole,
@@ -25,7 +24,16 @@ import { canAccessAnyScope } from "./permissions";
 
 import { TokensPanel } from "./TokensPanel";
 import { CredentialsPanel } from "./CredentialsPanel";
+import { RoleCredentialBindingPanel } from "./RoleCredentialBindingPanel";
 import { RoleConfigEditor } from "./RoleConfigEditor";
+import {
+  type GlobalSettingsSection,
+  type SettingsTab as Tab,
+  resolveSettingsSectionTab,
+  resolveSettingsTab,
+  settingsSectionDataNeeds,
+  settingsTabsForActor,
+} from "./settings-tabs";
 import { TransferPanel } from "./TransferPanel";
 import { UsersPanel } from "./UsersPanel";
 import { AccountPanel } from "./AccountPanel";
@@ -47,52 +55,8 @@ import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
  * 生效语义：下一 job 生效 —— job 创建时冻结快照，改配置不影响已建 job
  */
 
-type Tab = "rules" | "roles" | "sources" | "tokens" | "credentials" | "transfer" | "users" | "account" | "assets";
-export type GlobalSettingsSection = "agents" | "modules" | "access" | "credentials" | "platform";
-
-const PROJECT_TAB_KEYS: readonly Tab[] = ["rules", "roles", "assets"];
-const GLOBAL_TAB_KEYS: readonly Tab[] = ["roles", "sources", "rules", "assets", "account", "users", "transfer", "credentials", "tokens"];
-const GLOBAL_SECTION_TABS: Record<GlobalSettingsSection, readonly Tab[]> = {
-  agents: ["roles"],
-  modules: ["sources"],
-  access: ["account", "users", "tokens"],
-  credentials: ["credentials"],
-  platform: ["rules", "assets", "transfer"],
-};
-const GLOBAL_TAB_SCOPES: Partial<Record<Tab, readonly string[]>> = {
-  roles: ["agents:read"],
-  sources: ["skills:read"],
-  rules: ["agents:read"],
-  account: ["projects:read"],
-  users: ["admin"],
-  transfer: ["exports:read", "imports:read"],
-  credentials: ["agents:read"],
-  tokens: ["tokens:manage"],
-  assets: ["assets:manage"],
-};
-
-export function settingsTabsForActor(section: GlobalSettingsSection, me: AuthMe | null): readonly Tab[] {
-  return GLOBAL_SECTION_TABS[section].filter((tab) => canAccessAnyScope(me, GLOBAL_TAB_SCOPES[tab] ?? ["admin"]));
-}
-
-/** Resolve a URL tab without allowing project pages to expose global-only tabs. */
-export function resolveSettingsTab(projectId: string | null, requested: string | null): Tab {
-  const allowed = projectId ? PROJECT_TAB_KEYS : GLOBAL_TAB_KEYS;
-  return requested && (allowed as readonly string[]).includes(requested) ? requested as Tab : "roles";
-}
-
-export function resolveSettingsSectionTab(section: GlobalSettingsSection, requested: string | null): Tab {
-  const allowed = GLOBAL_SECTION_TABS[section];
-  return requested && (allowed as readonly string[]).includes(requested) ? requested as Tab : allowed[0]!;
-}
-
-export function settingsSectionDataNeeds(projectId: string | null, section: GlobalSettingsSection) {
-  return {
-    agent: Boolean(projectId || section === "agents"),
-    modules: Boolean(projectId || section === "agents" || section === "modules"),
-    roleCredentialBindings: Boolean(projectId || section === "agents"),
-  };
-}
+export type { GlobalSettingsSection, SettingsTab } from "./settings-tabs";
+export { resolveSettingsSectionTab, resolveSettingsTab, settingsSectionDataNeeds, settingsTabsForActor } from "./settings-tabs";
 
 export function nextEnabledRoleNames(roles: ProjectRole[], targetName: string): string[] {
   return roles
@@ -628,6 +592,7 @@ export function SettingsPanel({
   // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
   const globalTabList: { key: Tab; label: string }[] = [
     { key: "roles", label: "角色注册表" },
+    { key: "bindings", label: "凭据绑定" },
     { key: "sources", label: "模块源" },
     { key: "rules", label: "调度策略" },
     { key: "account", label: "我的账号" },
@@ -707,7 +672,7 @@ export function SettingsPanel({
                   项目规则与覆盖说明
                   <HelpTip>
                     各角色的指令 / 平台工具 / 模块在<strong>「角色配置」tab 的项目覆盖</strong>中维护；
-                    CLI / 模型 / 凭据在「凭据」页的 Provider 绑定中配置。未覆盖的角色使用全局缺省。
+                    CLI / 模型 / 凭据绑定在 Agent「凭据绑定」；账号本身在「Provider 凭据」页管理。未覆盖的角色使用全局缺省。
                   </HelpTip>
                 </div>
               </section>
@@ -1141,6 +1106,7 @@ export function SettingsPanel({
         {activeTab === "account" && !projectId && <AccountPanel />}
         {activeTab === "transfer" && !projectId && <TransferPanel projectId={null} scope="platform" />}
 
+        {activeTab === "bindings" && !projectId && <RoleCredentialBindingPanel />}
         {activeTab === "credentials" && !projectId && <CredentialsPanel />}
 
         {activeTab === "tokens" && !projectId && <TokensPanel />}
