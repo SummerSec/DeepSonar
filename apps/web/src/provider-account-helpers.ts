@@ -222,15 +222,14 @@ export function groupBindableRoles(
   return groups;
 }
 
-export function bindingGateReason(credential: ProviderCredential | null): string {
+export function bindingGateReason(credential: Pick<ProviderCredential, "kind" | "status" | "provider_valid" | "health"> | null): string {
   if (!credential) return "";
   if (credential.provider_valid === false) return "请先修复 Provider 映射，再绑定。";
   if (credential.status !== "active") return "请先启用该账号，再绑定。";
-  const healthy = credential.status === "active"
-    && credential.provider_valid !== false
-    && credential.health?.status === "ok"
-    && credential.health.last_tested_at;
-  if (!healthy) return "绑定前需最近一次连通性测试成功。请先到账号页测试连接后重试。";
+  const health = credential.health;
+  if (health?.status !== "ok" || !health.last_tested_at) {
+    return "绑定前需最近一次连通性测试成功。请先到账号页测试连接后重试。";
+  }
   if (credential.kind !== "llm_provider") return "仅 LLM Provider 账号可绑定到角色配置。";
   return "";
 }

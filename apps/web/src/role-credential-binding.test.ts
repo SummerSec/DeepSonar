@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { bindingGateReason } from "./provider-account-helpers";
 
 const binding = readFileSync(new URL("./RoleCredentialBindingPanel.tsx", import.meta.url), "utf8");
 const helpers = readFileSync(new URL("./provider-account-helpers.ts", import.meta.url), "utf8");
@@ -31,11 +32,46 @@ test("role credential binding is an independent Agent surface, not an account wi
   assert.doesNotMatch(binding, /FlowStep|goToStep|canEnterRoles|请先选择 Provider 账号，再进入/);
   assert.doesNotMatch(binding, /01 \/ 账号列表|02 \/ 角色配置|03 \/ 生效策略/);
   assert.doesNotMatch(binding, /createCredential|rotateCredential|setCreateSecret/);
-  assert.match(binding, /tab=bindings/);
+  assert.match(binding, /set\("tab", "bindings"\)/);
+  assert.match(tabs, /\/agents\?tab=bindings/);
   assert.match(tabs, /agents: \["roles", "bindings"\]/);
   assert.match(panel, /RoleCredentialBindingPanel/);
   assert.match(panel, /凭据绑定/);
   assert.doesNotMatch(account, /bindCredentialsBatch/);
+});
+
+test("binding gate is independent of account CRUD and does not require a selected account to browse", () => {
+  assert.equal(bindingGateReason(null), "");
+  assert.equal(bindingGateReason({
+    kind: "llm_provider",
+    status: "active",
+    provider_valid: false,
+    health: { status: "ok", last_tested_at: "2026-01-01T00:00:00.000Z", error_category: null, detail: null, model_catalog: [], model_catalog_fetched_at: null },
+  }), "请先修复 Provider 映射，再绑定。");
+  assert.equal(bindingGateReason({
+    kind: "llm_provider",
+    status: "disabled",
+    provider_valid: true,
+    health: { status: "ok", last_tested_at: "2026-01-01T00:00:00.000Z", error_category: null, detail: null, model_catalog: [], model_catalog_fetched_at: null },
+  }), "请先启用该账号，再绑定。");
+  assert.equal(bindingGateReason({
+    kind: "llm_provider",
+    status: "active",
+    provider_valid: true,
+    health: { status: "error", last_tested_at: "2026-01-01T00:00:00.000Z", error_category: "auth", detail: null, model_catalog: [], model_catalog_fetched_at: null },
+  }), "绑定前需最近一次连通性测试成功。请先到账号页测试连接后重试。");
+  assert.equal(bindingGateReason({
+    kind: "git",
+    status: "active",
+    provider_valid: true,
+    health: { status: "ok", last_tested_at: "2026-01-01T00:00:00.000Z", error_category: null, detail: null, model_catalog: [], model_catalog_fetched_at: null },
+  }), "仅 LLM Provider 账号可绑定到角色配置。");
+  assert.equal(bindingGateReason({
+    kind: "llm_provider",
+    status: "active",
+    provider_valid: true,
+    health: { status: "ok", last_tested_at: "2026-01-01T00:00:00.000Z", error_category: null, detail: null, model_catalog: [], model_catalog_fetched_at: null },
+  }), "");
 });
 
 test("binding compatibility still fail-closes on CLI / Provider mismatch", () => {

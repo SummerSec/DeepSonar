@@ -131,7 +131,7 @@ test("Provider account flow is account CRUD only and does not own binding or eff
   assert.doesNotMatch(flow, /一键设置/);
   assert.doesNotMatch(flow, /声明支持 1M/);
   assert.match(flow, /当前被哪些角色引用（只读）/);
-  assert.match(flow, /tab=bindings/);
+  assert.match(flow, /ROLE_BINDING_HREF/);
   const claudeFields = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
   assert.match(claudeFields, /获取模型列表/);
   assert.match(claudeFields, /模型配置/);

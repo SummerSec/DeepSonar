@@ -734,6 +734,38 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
   assert.equal(projectScopeFix?.scope, "project");
   assert.equal(projectScopeFix?.project_id, null);
   assert.equal(projectScopeFix?.href, "/projects");
+  const bindingRepairCodes = new Set([
+    "CREDENTIAL_BINDING_AMBIGUOUS",
+    "CREDENTIAL_MISSING",
+    "CREDENTIAL_MISSING_FAKE",
+    "CREDENTIAL_SCOPE_MISMATCH",
+    "CREDENTIAL_CLI_INCOMPATIBLE",
+    "CREDENTIAL_CLI_HINT_DRIFT",
+    "CREDENTIAL_KIND_INCOMPATIBLE",
+  ]);
+  const accountRepairCodes = new Set([
+    "CREDENTIAL_PROVIDER_UNKNOWN",
+    "CREDENTIAL_NOT_ACTIVE",
+    "CREDENTIAL_TEST_FAILED",
+    "CREDENTIAL_TEST_FAILED_FAKE",
+    "CREDENTIAL_TEST_EVIDENCE_STALE",
+    "MODEL_DISCOVERY_FAILED",
+    "MODEL_DISCOVERY_EVIDENCE_MISSING",
+    "MODEL_DISCOVERY_EVIDENCE_STALE",
+  ]);
+  for (const { result } of results) {
+    for (const check of result.checks) {
+      if (!check.fix) continue;
+      if (bindingRepairCodes.has(check.code)) {
+        assert.equal(check.fix.href, "/agents?tab=bindings", `${check.code} repair href`);
+        assert.equal(check.fix.target, "role-credential-binding", `${check.code} repair target`);
+      }
+      if (accountRepairCodes.has(check.code)) {
+        assert.equal(check.fix.href, "/settings/credentials", `${check.code} repair href`);
+        assert.equal(check.fix.target, "credentials", `${check.code} repair target`);
+      }
+    }
+  }
   for (const code of [
     "HUB_DISABLED",
     "HUB_ROLE_UNAVAILABLE",
