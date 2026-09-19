@@ -113,8 +113,10 @@ test("Provider account flow keeps the happy path on one surface", () => {
     assert.ok(flow.includes(marker), `flow should expose ${marker}`);
   }
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
+  const credentialSurface = `${editor}\n${settingsHelpers}`;
   for (const marker of ["auth.json", "CcSwitchClaudeFields", "CcSwitchCodexFields", "CcSwitchOpenCodeFields", "ANTHROPIC_AUTH_TOKEN"]) {
-    assert.ok(editor.includes(marker), `editor should expose ${marker}`);
+    assert.ok(credentialSurface.includes(marker), `editor should expose ${marker}`);
   }
   assert.ok(
     editor.indexOf('ariaLabel="Agent CLI 类型"') < editor.indexOf('ariaLabel="Provider"'),
@@ -151,6 +153,8 @@ test("Provider account flow keeps the happy path on one surface", () => {
 
 test("Provider create/edit persists a validated top-level context window budget", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
+  const credentialSurface = `${editor}\n${settingsHelpers}`;
   const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
   const jobDetail = readFileSync(new URL("./JobDetailPanel.tsx", import.meta.url), "utf8");
   for (const marker of [
@@ -162,7 +166,7 @@ test("Provider create/edit persists a validated top-level context window budget"
     "10_000_000",
     "不会提升上游模型能力",
   ]) {
-    assert.ok(editor.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
+    assert.ok(credentialSurface.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
   }
   assert.match(flow, /setEditContextWindowTokens\(extractContextWindowTokens\(settings\)\)/);
   assert.match(flow, /contextWindowTokens: createContextWindowTokens/);
