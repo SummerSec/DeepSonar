@@ -37,6 +37,7 @@ import {
 } from "../../credentials.js";
 import { CredentialProbeError, discoverModelCatalog, listCredentialModelsPreview, testCredential } from "../../credential-test.js";
 import {
+  alignCredentialProviderWithSettings,
   extractBaseUrlFromSettings,
   normalizeProviderSettings,
   parseContextWindowTokens,
@@ -885,33 +886,47 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       if (existing.kind !== "llm_provider" && (body.agent_cli !== undefined || body.settings_config !== undefined || body.meta !== undefined)) {
         return { error: "agent_cli/settings_config/meta 仅适用于 llm_provider" };
       }
-      const providerChanged = body.provider !== undefined && body.provider !== existing.provider;
-      const targetProvider = body.provider ?? String(existing.provider);
-      const targetProjectId = body.project_id !== undefined
-        ? body.project_id
-        : (existing.project_id as string | null) ?? null;
       const submittedSettingsConfig = body.settings_config !== undefined
         ? restoreMaskedSecretValues(existing.settings_config_json, body.settings_config)
         : existing.settings_config_json;
       if (body.settings_config !== undefined && containsSecretMask(submittedSettingsConfig)) {
         return { error: `settings_config 不接受无法恢复的 ${MASKED_SECRET_PLACEHOLDER} 密钥标记` };
       }
+      const alignedProvider = existing.kind === "llm_provider"
+        && (body.provider !== undefined || body.settings_config !== undefined)
+        ? alignCredentialProviderWithSettings({
+          provider: body.provider ?? String(existing.provider),
+          providerExplicit: body.provider !== undefined,
+          settingsConfig: submittedSettingsConfig,
+        })
+        : { provider: body.provider ?? String(existing.provider) };
+      if (alignedProvider.error) return { error: alignedProvider.error };
+      const targetProvider = alignedProvider.provider;
+      const providerChanged = targetProvider !== String(existing.provider);
+      const targetProjectId = body.project_id !== undefined
+        ? body.project_id
+        : (existing.project_id as string | null) ?? null;
+      const targetAgentCli = body.agent_cli !== undefined
+        ? body.agent_cli
+        : (existing.agent_cli as string | null) ?? null;
       let targetSettingsConfig: Record<string, unknown>;
       try {
         targetSettingsConfig = normalizeProviderSettings(
-          body.agent_cli !== undefined ? body.agent_cli : existing.agent_cli,
+          targetAgentCli,
           submittedSettingsConfig,
           targetProvider,
         );
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
-      const targetAgentCli = body.agent_cli !== undefined
-        ? body.agent_cli
-        : (existing.agent_cli as string | null) ?? null;
       if (existing.kind === "llm_provider" && targetAgentCli) {
         const compatibilityError = validateCredentialCompatibility(targetAgentCli, targetProvider);
-        if (compatibilityError) return { error: compatibilityError, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" };
+        if (compatibilityError) {
+          const hint = targetAgentCli === "claude-code" && targetProvider !== "anthropic"
+            ? "。请在同一次保存中把 Agent CLI 改为 pi 或 dsh"
+            : "";
+          return { error: `${compatibilityError}${hint}`, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" };
+        }
       }
       if (actorProjectId && targetProjectId !== actorProjectId) {
         return { scope: true, error: "project-scoped actors may keep credentials only in their own project" };
@@ -979,7 +994,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       }
       const sets: Record<string, unknown> = {};
       if (body.name !== undefined) sets.name = body.name;
-      if (body.provider !== undefined) sets.provider = body.provider;
+      if (body.provider !== undefined || providerChanged) sets.provider = targetProvider;
       if (body.project_id !== undefined) sets.project_id = body.project_id;
       if (body.metadata !== undefined) {
         sets.public_metadata_json = targetMetadata;
@@ -1033,7 +1048,12 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     if (!result) return reply.code(404).send({ error: "credential not found" });
     if ("scope" in result && result.scope) return reply.code(403).send({ error: result.error, error_code: "PROJECT_MISMATCH" });
     if ("conflict" in result && result.conflict) return reply.code(409).send({ error: result.error });
-    if ("error" in result) return reply.code(400).send({ error: result.error });
+    if ("error" in result) {
+      return reply.code(400).send({
+        error: result.error,
+        ...("error_code" in result && result.error_code ? { error_code: result.error_code } : {}),
+      });
+    }
     await audit(req, {
       action: "credential.update",
       resourceType: "credential",

@@ -9,6 +9,15 @@ import { CcSwitchClaudeFields } from "./CcSwitchClaudeFields";
 import { CcSwitchCodexFields } from "./CcSwitchCodexFields";
 import { CcSwitchOpenCodeFields, defaultOpenCodeSettings } from "./CcSwitchOpenCodeFields";
 import { formatJsonObject, validateJsonObjectText } from "./json-text";
+import {
+  defaultDshProviderYaml,
+  dshModelReasoningEfforts,
+  patchDshBaseUrl,
+  preferredCliForProvider,
+  providerFromWireApi,
+  validateDshYamlText,
+  wireApiForProvider,
+} from "./credential-protocol";
 import { SearchableSelect } from "./SearchableSelect";
 import { parseDocument, stringify } from "yaml";
 import { defaultCodexToml, validateTomlText } from "./toml-text";
@@ -68,16 +77,11 @@ export function restoreRedactedSecretText(original: string, edited: string): str
 /** Keep the provider surface protocol-oriented; catalog provider ids stay server-owned. */
 export function providerProtocolLabel(
   provider: string,
-  agentCli: AgentCli,
+  _agentCli: AgentCli,
   providerCatalog: ProviderAccountCatalogItemView[],
 ): string {
   if (!providerCatalog.some((item) => item.provider === provider)) return "未识别协议";
-  if (agentCli === "claude-code") return "Anthropic Messages";
-  if (agentCli === "codex") return "OpenAI Responses";
-  const entry = providerCatalog.find((item) => item.provider === provider);
-  return entry?.provider === "anthropic"
-    ? "Anthropic Messages"
-    : "OpenAI Responses";
+  return provider === "anthropic" ? "Anthropic Messages" : "OpenAI Responses";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -283,65 +287,7 @@ function patchProviderOverrides(
   return settings;
 }
 
-function defaultDshPiAiSettings(provider: string, baseUrl: string): Record<string, unknown> {
-  const anthropic = provider === "anthropic";
-  const route = anthropic ? "anthropic" : "openai";
-  const api = anthropic ? "anthropic-messages" : "openai-responses";
-  const endpoint = baseUrl.trim().replace(/\/+$/u, "") || (anthropic ? "https://api.anthropic.com" : "https://api.openai.com/v1");
-  const model = anthropic ? "claude-sonnet-4-5" : "gpt-5";
-  return {
-    config: stringify({
-      "llm-pi-ai": { providers: { [route]: { api, baseURL: endpoint, models: [{ id: model }] } } },
-      "agent-default-model": { provider: route, model },
-    }, { lineWidth: 0 }),
-  };
-}
-
-function defaultDshProviderYaml(provider: string, baseUrl: string): string {
-  return String(defaultDshPiAiSettings(provider, baseUrl).config ?? "");
-}
-
-function validateDshYamlText(text: string): { ok: boolean; empty: boolean; error?: string } {
-  if (!text.trim()) return { ok: true, empty: true };
-  const document = parseDocument(text, { customTags: [], prettyErrors: false });
-  return document.errors.length > 0
-    ? { ok: false, empty: false, error: document.errors[0]?.message ?? "YAML 解析失败" }
-    : { ok: true, empty: false };
-}
-
-function dshModelReasoningEfforts(text: string): ReadonlySet<string> | null {
-  const document = parseDocument(text, { customTags: [], prettyErrors: false });
-  if (document.errors.length > 0) return null;
-  const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
-  const selected = root["agent-default-model"] as Record<string, unknown> | undefined;
-  const route = typeof selected?.provider === "string" ? selected.provider : "";
-  const modelId = typeof selected?.model === "string" ? selected.model : "";
-  const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
-  const providers = piAi?.providers as Record<string, unknown> | undefined;
-  const profile = providers?.[route] as Record<string, unknown> | undefined;
-  const models = Array.isArray(profile?.models) ? profile.models : [];
-  const model = models.find((entry) => (entry as Record<string, unknown>)?.id === modelId) as Record<string, unknown> | undefined;
-  if (model?.reasoningEfforts === false) return new Set(["off"]);
-  if (!model?.reasoningEfforts || typeof model.reasoningEfforts !== "object" || Array.isArray(model.reasoningEfforts)) return null;
-  return new Set(Object.keys(model.reasoningEfforts));
-}
-
-function patchDshBaseUrl(settingsYaml: string, credentialProvider: string, baseUrl: string): string {
-  if (!settingsYaml.trim()) return defaultDshProviderYaml(credentialProvider, baseUrl);
-  const document = parseDocument(settingsYaml, { customTags: [], prettyErrors: false });
-  if (document.errors.length > 0) return settingsYaml;
-  const root = document.toJS({ maxAliasCount: 0 }) as Record<string, unknown>;
-  const defaultModel = root["agent-default-model"] as Record<string, unknown> | undefined;
-  const route = typeof defaultModel?.provider === "string" ? defaultModel.provider : (credentialProvider === "anthropic" ? "anthropic" : "openai");
-  const piAi = root["llm-pi-ai"] as Record<string, unknown> | undefined;
-  const providers = piAi?.providers as Record<string, unknown> | undefined;
-  const profile = providers?.[route] as Record<string, unknown> | undefined;
-  if (!profile) return settingsYaml;
-  profile.baseURL = baseUrl.trim().replace(/\/+$/u, "");
-  return stringify(root, { lineWidth: 0 });
-}
-
-function patchPiSettingsBaseUrl(settingsText: string, credentialProvider: string, baseUrl: string): string {
+function patchPiSettingsBaseUrl(settingsText: string, credentialProvider: string, baseUrl: string, syncApi = false): string {
   const parsed = parsePiSettingsText(settingsText);
   if (!parsed.ok || parsed.empty) return settingsText;
   const endpoint = baseUrl.trim().replace(/\/+$/u, "");
@@ -354,6 +300,7 @@ function patchPiSettingsBaseUrl(settingsText: string, credentialProvider: string
     const profile = asRecord(asRecord(asRecord(official["llm-pi-ai"])?.providers)?.[route]);
     if (!profile) return settingsText;
     profile.baseURL = endpoint;
+    if (syncApi) profile.api = wireApiForProvider(credentialProvider);
     if (typeof parsed.value.config === "string") {
       return formatJsonObject({ ...parsed.value, config: stringify(official, { lineWidth: 0 }) });
     }
@@ -365,6 +312,7 @@ function patchPiSettingsBaseUrl(settingsText: string, credentialProvider: string
   if (!profile) return settingsText;
   if ("baseURL" in profile && !("baseUrl" in profile)) profile.baseURL = endpoint;
   else profile.baseUrl = endpoint;
+  if (syncApi) profile.api = wireApiForProvider(credentialProvider);
   return formatJsonObject(parsed.value);
 }
 
@@ -373,6 +321,7 @@ function applyPiSettingsPaste(
   onSettingsJsonChange: (value: string) => void,
   onBaseUrlChange: (value: string) => void,
   onSecretChange: (value: string) => void,
+  onProviderChange?: (value: string) => void,
 ): void {
   onSettingsJsonChange(text);
   const parsed = parsePiSettingsText(text);
@@ -381,6 +330,14 @@ function applyPiSettingsPaste(
   if (nextBase) onBaseUrlChange(nextBase);
   const nextSecret = extractSecretFromSettings(parsed.value);
   if (nextSecret && nextSecret !== MASKED_SECRET_PLACEHOLDER) onSecretChange(nextSecret);
+  const official = readOfficialLlmPiAiDocumentClient(parsed.value);
+  const officialApi = official
+    ? asRecord(asRecord(asRecord(official["llm-pi-ai"])?.providers)?.[String(asRecord(official["agent-default-model"])?.provider ?? "")])?.api
+    : undefined;
+  const first = Object.values(asRecord(parsed.value.providers) ?? {}).find((value) => asRecord(value));
+  const api = typeof officialApi === "string" ? officialApi : typeof asRecord(first)?.api === "string" ? String(asRecord(first)?.api) : typeof parsed.value.api === "string" ? parsed.value.api : "";
+  const implied = providerFromWireApi(api);
+  if (implied) onProviderChange?.(implied);
 }
 
 /** Build settingsConfig object from editor state (create & edit share this). */
@@ -461,7 +418,7 @@ export function buildSettingsConfigFromEditor(input: {
       return { ok: true, pastedAsIs: true, settings: patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning) };
     }
     if (input.allowEmptyDefault === false) return { ok: false, error: "settingsConfig 不能为空" };
-    const providerKey = provider === "anthropic" ? "anthropic-messages" : "openai-responses";
+    const providerKey = wireApiForProvider(provider);
     return {
       ok: true,
       pastedAsIs: false,
@@ -597,12 +554,13 @@ export function CredentialConfigEditor({
   const piSettingsValidation = useMemo(() => parsePiSettingsText(settingsJson), [settingsJson]);
   const tomlValidation = useMemo(() => validateTomlText(tomlText), [tomlText]);
   const authValidation = useMemo(() => validateJsonObjectText(authJson), [authJson]);
-  const compatibleProviders = useMemo(() => {
-    const entries = providerCatalog.filter((item) =>
-      item.kind === "llm_provider" && item.compatible_agent_cli.includes(agentCli),
-    );
-    return entries;
-  }, [agentCli, providerCatalog]);
+  const protocolProviders = useMemo(() => {
+    return providerCatalog.filter((item) => {
+      if (item.kind !== "llm_provider") return false;
+      if (mode === "edit") return item.compatible_agent_cli.some((cli) => isCurrentAgentCli(cli));
+      return item.compatible_agent_cli.includes(agentCli);
+    });
+  }, [agentCli, mode, providerCatalog]);
   const dshSupportedReasoning = useMemo(() => agentCli === "dsh" ? dshModelReasoningEfforts(settingsJson) : null, [agentCli, settingsJson]);
   const reasoningOptions = agentCli === "claude-code" ? CLAUDE_CODE_REASONING_EFFORTS
     : agentCli === "codex" ? CODEX_REASONING_EFFORTS
@@ -640,14 +598,14 @@ export function CredentialConfigEditor({
   const hasUsableConfigSecret = Boolean(secretFromConfig && secretFromConfig !== MASKED_SECRET_PLACEHOLDER);
   const canSubmit = Boolean(provider && name.trim() && configValid && (mode === "edit" || secret.trim() || hasUsableConfigSecret));
 
-  const switchCli = (cli: AgentCli) => {
+  const switchCli = (cli: AgentCli, providerOverride?: string) => {
     if (!isCurrentAgentCli(cli)) return;
     const nextProviders = providerCatalog.filter((item) =>
       item.kind === "llm_provider" && item.compatible_agent_cli.includes(cli),
     );
-    const nextProvider = nextProviders.some((item) => item.provider === provider)
-      ? provider
-      : (nextProviders[0]?.provider ?? "");
+    const nextProvider = providerOverride && nextProviders.some((item) => item.provider === providerOverride)
+      ? providerOverride
+      : (nextProviders.some((item) => item.provider === provider) ? provider : (nextProviders[0]?.provider ?? ""));
     onAgentCliChange(cli);
     if (cli === "dsh" && reasoning && !isDshReasoningEffort(reasoning)) onReasoningChange("");
     if (cli === "claude-code" && reasoning && !isClaudeCodeReasoningEffort(reasoning)) onReasoningChange("");
@@ -667,7 +625,7 @@ export function CredentialConfigEditor({
       return;
     }
     if (cli === "pi") {
-      const providerKey = nextProvider === "anthropic" ? "anthropic-messages" : "openai-responses";
+      const providerKey = wireApiForProvider(nextProvider);
       onSettingsJsonChange(formatJsonObject({ providers: { deepsonar: { baseUrl: baseUrl.trim(), api: providerKey, apiKey: secret ? MASKED_SECRET_PLACEHOLDER : "", models: [] } } }));
       return;
     }
@@ -692,25 +650,42 @@ export function CredentialConfigEditor({
           ariaLabel="Agent CLI 类型"
           clearable={false}
         />
-        <fieldset disabled={mode === "edit"} className="contents">
-          <SearchableSelect
-            value={provider}
-            onChange={(next) => {
-              onProviderChange(next);
-              if (agentCli === "dsh") onSettingsJsonChange(defaultDshProviderYaml(next, baseUrl));
-              if (!providerCatalog.find((item) => item.provider === next)?.supports_base_url) onBaseUrlChange("");
-            }}
-            options={compatibleProviders.map((item) => ({
-              value: item.provider,
-              label: providerProtocolLabel(item.provider, agentCli, providerCatalog),
-            }))}
-            placeholder="选择 Provider"
-            ariaLabel="Provider"
-            clearable={false}
-            className="block min-w-0 [&>button]:w-full"
-          />
-        </fieldset>
+        <SearchableSelect
+          value={provider}
+          onChange={(next) => {
+            const entry = providerCatalog.find((item) => item.kind === "llm_provider" && item.provider === next);
+            const compatible = entry?.compatible_agent_cli ?? [];
+            if (!compatible.includes(agentCli)) {
+              const nextCli = preferredCliForProvider(compatible, agentCli);
+              if (isCurrentAgentCli(nextCli)) {
+                switchCli(nextCli, next);
+                return;
+              }
+            }
+            onProviderChange(next);
+            if (agentCli === "dsh") onSettingsJsonChange(defaultDshProviderYaml(next, baseUrl));
+            else if (agentCli === "pi") {
+              const patched = patchPiSettingsBaseUrl(settingsJson, next, baseUrl, true);
+              onSettingsJsonChange(patched === settingsJson && !settingsJson.trim()
+                ? formatJsonObject({ providers: { deepsonar: { baseUrl: baseUrl.trim(), api: wireApiForProvider(next), apiKey: secret ? MASKED_SECRET_PLACEHOLDER : "", models: [] } } })
+                : patched);
+            }
+            if (!entry?.supports_base_url) onBaseUrlChange("");
+          }}
+          options={protocolProviders.map((item) => ({
+            value: item.provider,
+            label: providerProtocolLabel(item.provider, agentCli, providerCatalog)
+              + (mode === "edit" && !item.compatible_agent_cli.includes(agentCli) ? "（将切换 Agent CLI）" : ""),
+          }))}
+          placeholder="选择 Provider"
+          ariaLabel="Provider"
+          clearable={false}
+          className="block min-w-0 [&>button]:w-full"
+        />
       </div>
+      {mode === "edit" && (
+        <p className="text-[11px] text-zinc-500">可迁移协议。Claude Code 仅支持 Anthropic Messages；改为 OpenAI 会同时把 Agent CLI 切到 Pi 并改写 settings.api。有活动 Job 或绑定冲突时保存会被拒绝。</p>
+      )}
       <div className="provider-flow-create-grid">
         <input
           value={name}
@@ -848,7 +823,7 @@ export function CredentialConfigEditor({
           <label className="cc-switch-field"><span className="cc-switch-label">Pi / llm-pi-ai 配置（YAML 或 JSON）</span>
             <textarea
               value={settingsJson}
-              onChange={(event) => applyPiSettingsPaste(event.target.value, onSettingsJsonChange, onBaseUrlChange, onSecretChange)}
+              onChange={(event) => applyPiSettingsPaste(event.target.value, onSettingsJsonChange, onBaseUrlChange, onSecretChange, onProviderChange)}
               rows={12}
               className={`theme-input-surface cc-switch-json ${!piSettingsValidation.ok ? "border-red-700/80" : ""}`}
               spellCheck={false}

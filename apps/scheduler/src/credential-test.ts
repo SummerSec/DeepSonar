@@ -8,7 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
-import { extractBaseUrlFromSettings, extractModelsFromSettings, splitPiModelRef } from "./provider-settings.js";
+import { extractBaseUrlFromSettings, extractInferenceProtocol, extractModelsFromSettings, splitPiModelRef } from "./provider-settings.js";
 
 /** Provider response bytes accepted by model discovery (before JSON parsing). */
 export const CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES = 256 * 1024;
@@ -133,7 +133,25 @@ function modelRequest(cred: CredentialRequestInput, secret: string): { urls: str
 /** vendor PoC（opensandbox-cli-control.poc.ts）的最小推理调用口径。 */
 const INFERENCE_PROBE_MAX_TOKENS = 8;
 
-type InferenceProbeRequest = { url: string; headers: Record<string, string>; body: string };
+type InferenceProbeRequest = { url: string; headers: Record<string, string>; body: string; timeoutMs: number };
+
+function joinProbeUrl(baseUrl: string, upstreamPath: string): string {
+  const base = baseUrl.replace(/\/+$/u, "");
+  const path = upstreamPath.replace(/^\/+/u, "");
+  const baseVer = /\/(v\d+)$/iu.exec(base)?.[1];
+  const pathVer = /^(v\d+)(?=\/|$)/iu.exec(path)?.[1];
+  if (baseVer && pathVer && baseVer.toLowerCase() === pathVer.toLowerCase()) {
+    const rest = path.slice(pathVer.length).replace(/^\/+/u, "");
+    return `${base}${rest ? `/${rest}` : ""}`;
+  }
+  return `${base}/${path}`;
+}
+
+function inferenceProbePath(protocol: ReturnType<typeof extractInferenceProtocol>): string {
+  if (protocol === "anthropic-messages") return "v1/messages";
+  if (protocol === "openai-responses") return "v1/responses";
+  return "v1/chat/completions";
+}
 
 /**
  * 推理探测使用的模型 id：优先 settingsConfig 声明的模型（与真实 Job 同一来源），
@@ -151,15 +169,16 @@ function inferenceProbeModel(cred: CredentialRequestInput): string | null {
 function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): InferenceProbeRequest | null {
   const model = inferenceProbeModel(cred);
   if (!model) return null;
-  const base = safeSourceUrl(resolveProbeBaseUrl(cred));
+  const protocol = extractInferenceProtocol(cred.provider, cred.settings_config_json);
+  const authProvider = protocol === "anthropic-messages" ? "anthropic" : "openai";
+  const responses = protocol === "openai-responses";
   return {
-    url: cred.provider === "anthropic" ? `${base}/v1/messages` : `${base}/v1/chat/completions`,
-    headers: { "content-type": "application/json", ...authHeaders(cred.provider, secret) },
-    body: JSON.stringify({
-      model,
-      max_tokens: INFERENCE_PROBE_MAX_TOKENS,
-      messages: [{ role: "user", content: "ping" }],
-    }),
+    url: joinProbeUrl(safeSourceUrl(resolveProbeBaseUrl(cred)), inferenceProbePath(protocol)),
+    headers: { "content-type": "application/json", ...authHeaders(authProvider, secret) },
+    body: JSON.stringify(responses
+      ? { model, max_output_tokens: INFERENCE_PROBE_MAX_TOKENS, input: "ping" }
+      : { model, max_tokens: INFERENCE_PROBE_MAX_TOKENS, messages: [{ role: "user", content: "ping" }] }),
+    timeoutMs: responses ? 20_000 : 10_000,
   };
 }
 
@@ -489,7 +508,7 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
     const inference = inferenceProbeRequest(cred, secret);
     let inferenceMissing: { status: number } | null = null;
     if (inference) {
-      const probed = await requestInferenceProbe(inference, 10_000);
+      const probed = await requestInferenceProbe(inference, inference.timeoutMs);
       if (inferenceStatusAccepted(probed.status)) {
         return {
           ok: true,

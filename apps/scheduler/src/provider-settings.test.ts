@@ -701,3 +701,37 @@ test("context_window_tokens validates, scrubs, and maps supported CLIs", () => {
   const claudeConfig = JSON.parse(claude[0]!.content) as Record<string, unknown>;
   assert.equal(claudeConfig.context_window_tokens, undefined);
 });
+
+test("health probe protocol follows settings.api and aligns Credential.provider", async () => {
+  const {
+    alignCredentialProviderWithSettings,
+    extractInferenceProtocol,
+    readSettingsWireApi,
+  } = await import("./provider-settings.js");
+  assert.equal(extractInferenceProtocol("openai", {}), "openai-completions");
+  assert.equal(extractInferenceProtocol("anthropic", {}), "anthropic-messages");
+  assert.equal(
+    extractInferenceProtocol("anthropic", { providers: { deepsonar: { api: "openai-responses" } } }),
+    "openai-responses",
+  );
+  assert.equal(
+    readSettingsWireApi({ config: "llm-pi-ai:\n  providers:\n    openai:\n      api: openai-responses\n      baseURL: http://127.0.0.1/v1\n      models:\n        - id: gpt-5\nagent-default-model:\n  provider: openai\n  model: gpt-5\n" }),
+    "openai-responses",
+  );
+  assert.deepEqual(
+    alignCredentialProviderWithSettings({
+      provider: "anthropic",
+      providerExplicit: false,
+      settingsConfig: { providers: { deepsonar: { api: "openai-responses" } } },
+    }),
+    { provider: "openai" },
+  );
+  assert.match(
+    alignCredentialProviderWithSettings({
+      provider: "anthropic",
+      providerExplicit: true,
+      settingsConfig: { providers: { deepsonar: { api: "openai-responses" } } },
+    }).error ?? "",
+    /不一致/,
+  );
+});

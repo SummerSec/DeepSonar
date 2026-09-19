@@ -605,6 +605,61 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
   return null;
 }
 
+export const INFERENCE_WIRE_APIS = ["anthropic-messages", "openai-completions", "openai-responses"] as const;
+export type InferenceWireApi = (typeof INFERENCE_WIRE_APIS)[number];
+
+function asWireApi(value: unknown): InferenceWireApi | null {
+  return typeof value === "string" && (INFERENCE_WIRE_APIS as readonly string[]).includes(value)
+    ? value as InferenceWireApi
+    : null;
+}
+
+/** Read the CLI wire protocol from Pi/DSH settings; Claude Code has no `api` field. */
+export function readSettingsWireApi(settingsConfig: unknown): InferenceWireApi | null {
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official) {
+    const api = asWireApi(official.providers[official.route]?.api);
+    if (api) return api;
+  }
+  const settings = asObject(settingsConfig);
+  const top = asWireApi(settings.api);
+  if (top) return top;
+  for (const raw of Object.values(asObject(settings.providers))) {
+    const api = asWireApi(asObject(raw).api);
+    if (api) return api;
+  }
+  return null;
+}
+
+export function providerForWireApi(api: InferenceWireApi): "anthropic" | "openai" {
+  return api === "anthropic-messages" ? "anthropic" : "openai";
+}
+
+/** Probe path follows settings.api when present; otherwise the coarse provider default. */
+export function extractInferenceProtocol(provider: string, settingsConfig: unknown): InferenceWireApi {
+  return readSettingsWireApi(settingsConfig)
+    ?? (provider === "anthropic" ? "anthropic-messages" : "openai-completions");
+}
+
+/**
+ * Keep Credential.provider aligned with settings wire protocol.
+ * Implicit settings-only saves may migrate provider; an explicit mismatch is rejected.
+ */
+export function alignCredentialProviderWithSettings(input: {
+  provider: string;
+  providerExplicit: boolean;
+  settingsConfig: unknown;
+}): { provider: string; error?: string } {
+  const wire = readSettingsWireApi(input.settingsConfig);
+  if (!wire) return { provider: input.provider };
+  const implied = providerForWireApi(wire);
+  if (implied === input.provider) return { provider: input.provider };
+  if (!input.providerExplicit) return { provider: implied };
+  return {
+    provider: input.provider,
+    error: `settings 线协议 ${wire} 与 provider ${input.provider} 不一致。请把 Provider 改为 ${implied}，或把 settings.api 改为与 ${input.provider} 一致`,
+  };
+}
 
 /** Collect model IDs declared inside settingsConfig (for binding UI / defaults). */
 export function extractModelsFromSettings(settingsConfig: unknown): string[] {
