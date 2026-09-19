@@ -337,23 +337,24 @@ test("inference probe is authoritative while catalog-only failures stay unknown"
     globalThis.fetch = statusQueue([200]);
     const accepted = await testCredential(credential("openai") as never);
     assert.deepEqual(calls.map((call) => [call.url, call.method]), [
-      ["http://127.0.0.1/v1/chat/completions", "POST"],
+      ["http://127.0.0.1/v1/responses", "POST"],
     ]);
     assert.equal(accepted.ok, true);
     assert.equal(accepted.probe_path, "inference");
-    assert.equal(accepted.source_url, "http://127.0.0.1/v1/chat/completions");
+    assert.equal(accepted.source_url, "http://127.0.0.1/v1/responses");
     assert.deepEqual(JSON.parse(String(calls[0].body)), {
       model: "probe-model",
-      max_tokens: 8,
-      messages: [{ role: "user", content: "ping" }],
+      max_output_tokens: 8,
+      input: "ping",
     });
+    assert.match(accepted.detail, /openai-responses/);
 
     // 400 只说明 ping 的模型/参数被拒，认证本身已通过（与 vendor PoC 同口径）。
     calls.length = 0;
     globalThis.fetch = statusQueue([400]);
     const rejectedModel = await testCredential(credential("openai") as never);
     assert.equal(rejectedModel.ok, true);
-    assert.match(rejectedModel.detail, /推理调用已被 Provider 接受（HTTP 400）/);
+    assert.match(rejectedModel.detail, /推理调用已被 Provider 接受（openai-responses，HTTP 400）/);
 
     // 推理路径 401 才是权威的认证失败。
     calls.length = 0;
@@ -368,7 +369,7 @@ test("inference probe is authoritative while catalog-only failures stay unknown"
     globalThis.fetch = statusQueue([404, 401]);
     const issueCase = await testCredential(credential("openai") as never);
     assert.deepEqual(calls.map((call) => call.url), [
-      "http://127.0.0.1/v1/chat/completions",
+      "http://127.0.0.1/v1/responses",
       "http://127.0.0.1/v1/models",
     ]);
     assert.equal(issueCase.ok, false);
@@ -424,6 +425,147 @@ test("unreachable /models soft-degrades to an empty catalog", async () => {
     assert.equal(missing.available, false);
     assert.deepEqual(missing.models, []);
     assert.equal(missing.fetched_at, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#624 openai-responses settings probe /v1/responses without doubling /v1", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; body: unknown; headers: Headers }> = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      calls.push({
+        url: String(input),
+        body: init?.body,
+        headers: new Headers(init?.headers),
+      });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const result = await testCredential({
+      provider: "anthropic",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://relay.example/v1/" },
+      settings_config_json: {
+        providers: {
+          deepsonar: {
+            baseUrl: "https://relay.example/v1/",
+            api: "openai-responses",
+            models: { "deepseek-v4-pro": {} },
+          },
+        },
+      },
+    });
+    assert.deepEqual(calls.map((call) => call.url), ["https://relay.example/v1/responses"]);
+    assert.equal(calls[0].headers.get("authorization"), "Bearer super-secret");
+    assert.equal(calls[0].headers.get("x-api-key"), null);
+    assert.deepEqual(JSON.parse(String(calls[0].body)), {
+      model: "deepseek-v4-pro",
+      max_output_tokens: 8,
+      input: "ping",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.probe_path, "inference");
+    assert.equal(result.source_url, "https://relay.example/v1/responses");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#624 openai-completions and anthropic-messages still probe legacy paths", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  try {
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "openai-completions", models: { "gpt-probe": {} } } },
+      },
+    });
+    assert.deepEqual(urls, ["http://127.0.0.1/v1/chat/completions"]);
+
+    urls.length = 0;
+    await testCredential({
+      provider: "anthropic",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "https://api.anthropic.com" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "anthropic-messages", models: { "claude-probe": {} } } },
+      },
+    });
+    assert.deepEqual(urls, ["https://api.anthropic.com/v1/messages"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#624 distinguishes unsupported protocol, auth failure, and inference timeout", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  try {
+    const unsupported = await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "grpc-weird", models: { "probe-model": {} } } },
+      },
+    });
+    assert.equal(unsupported.ok, false);
+    assert.equal(unsupported.category, "configuration");
+    assert.match(unsupported.detail, /不支持的推理协议：grpc-weird/);
+
+    globalThis.fetch = (async () => new Response("no", { status: 401 })) as typeof fetch;
+    const unauthorized = await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "openai-responses", models: { "probe-model": {} } } },
+      },
+    });
+    assert.equal(unauthorized.ok, false);
+    assert.equal(unauthorized.category, "authentication");
+    assert.equal(unauthorized.probe_path, "inference");
+    assert.match(unauthorized.detail, /openai-responses/);
+
+    globalThis.fetch = (async () => {
+      const error = new Error("aborted");
+      error.name = "TimeoutError";
+      throw error;
+    }) as typeof fetch;
+    const timedOut = await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "openai-responses", models: { "probe-model": {} } } },
+      },
+    });
+    assert.equal(timedOut.ok, false);
+    assert.equal(timedOut.category, "timeout");
+    assert.match(timedOut.detail, /openai-responses \/v1\/responses/);
   } finally {
     globalThis.fetch = originalFetch;
   }
