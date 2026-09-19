@@ -1,7 +1,7 @@
 {
   "schema": "deepsonar.registry/v2",
   "schema_version": 2,
-  "platform_version": "0.4.5",
+  "platform_version": "0.4.6",
   "min_runtime_image": {
     "version": "0.2.7",
     "by_image_key": {}
@@ -17,7 +17,7 @@
       "default_role": "base",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:8dba6db7e8223401c57919903131f1000735ddc73420a95e3009c8c4e83cd832",
           "platforms": [
             "linux/amd64",
@@ -63,7 +63,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:627c0e96e27c03c578009455dc6135dc91d65f09f0a8fa0c838c2d5744ab15e7",
           "platforms": [
             "linux/amd64",
@@ -109,7 +109,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:178ea0ec138eb0055dbea37cbc3d15912750d2016f918ae573e888fa2e611e78",
           "platforms": [
             "linux/amd64",
@@ -155,7 +155,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:93edf24ebad4bee818b46b2be7195039077256abc2abbd0b69faa225dfb95947",
           "platforms": [
             "linux/amd64",
@@ -201,7 +201,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:47425f56c1a50c0b171274efece98240c3c3b8774564571265c9e004d5b5142d",
           "platforms": [
             "linux/amd64",
@@ -247,7 +247,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:e3de06ed81045c2b7c43a1d151577b58795de162141667a437fc7ddb165772c9",
           "platforms": [
             "linux/amd64",
@@ -293,7 +293,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:51d9a7a32fbee8f2ec05e8395855e897f68c969ff50aa43c7384b535d7dc906c",
           "platforms": [
             "linux/amd64",
@@ -339,7 +339,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:699c5bcffe461bb70b6bbe51220aa3a895e621c4b7c5e5ef3700c582600aa58e",
           "platforms": [
             "linux/amd64",
@@ -385,7 +385,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:39c9059a9f409ad31c1a4d611a2c5b340133213f9ecc92d6e3920b550e2e9342",
           "platforms": [
             "linux/amd64",
@@ -431,7 +431,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:49be51293a2402c462fcdc04652929979950a7157c4d7540041fc38e7475cfdf",
           "platforms": [
             "linux/amd64",
@@ -477,7 +477,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:10bb1ad1c58d5a3b60df624238fbf7ef641b1a33320ff5fc8700732e5c221f38",
           "platforms": [
             "linux/amd64",
@@ -523,7 +523,7 @@
       "default_role": "test",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:fa82ae676df4e245260133d68528dff07353f0db200b03e988cd40d376406825",
           "platforms": [
             "linux/amd64",
@@ -570,7 +570,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.4.5",
+          "version": "0.4.6",
           "digest": "sha256:74c1c45bf4dd8831183bf36ba1bbb5ba0ed55b73b49c3313c46ba0c1eafb4fee",
           "platforms": [
             "linux/amd64",

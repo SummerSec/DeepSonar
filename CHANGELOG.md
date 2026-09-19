@@ -4,7 +4,11 @@
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-19
+
 ### 新增
+
+- 受治理 Agent Runtime Profile 首片（#613 / #617 / #621）：统一 Agent CLI、Provider/模型引用、推理强度、上下文预算、扩展与严格 `native_options` 命名空间；固定优先级全局默认 → 项目 → 角色 → 任务 → Job 临时覆盖，Job 启动前解析并冻结 fingerprint，运行中配置变更不影响在途 Job；Claude Code / Pi / DSH 各自 Adapter 负责校验、物化原生配置与启动参数，不支持字段返回稳定 `unsupported_config`（禁止静默忽略）；项目侧补齐模型 allow/default/fallback 与 catalog passthrough 策略（#621），与 Provider Adapter / Model Descriptor（#614）协同。
 
 - 可插拔 Provider Adapter 与结构化 Model Descriptor 首片（#614）：新增契约 `deepsonar.provider-adapter/v1` / `deepsonar.model-descriptor/v1` / `deepsonar.provider-model-snapshot/v1`（context_window、tools/streaming/structured_output、reasoning、modalities、cost、rate_limits、compatible_agent_clis、health_status、catalog_revision）；Scheduler 登记 anthropic/openai/git 适配器（凭据校验钩子形状、目录发现形状、CLI 兼容声明、Gateway transform stub）；Hub/选型侧提供基于 Descriptor 字段的筛选 helper；Job 快照冻结 `provider_model`（adapter 版本 + descriptor + catalog revision）；Gateway 在 adapter `enforce_frozen_model` 时拒绝快照外模型（passthrough 非默认）。Credential.agent_cli 文档化为软提示（RoleConfig 才是绑定面）；停止 RoleConfig 回写 Credential.agent_cli、全量 Provider 接入、Web 健康态展示与真实 catalog probe 迁入 Adapter 为 follow-up。
 
@@ -945,6 +949,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.6]: https://github.com/SummerSec/DeepSonar/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/SummerSec/DeepSonar/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/SummerSec/DeepSonar/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/SummerSec/DeepSonar/compare/v0.4.2...v0.4.3
