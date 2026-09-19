@@ -201,7 +201,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧全局并发上限，不能放宽安全硬门。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
 
-**凭据资产、角色引用与快照生效是三条边界（#626）：** Provider Credential 是秘密资产（创建 / 轮换 / 测试 / 健康）；`role_credentials` 是 RoleConfig 对 Credential 的引用（绑定 / 换绑 / 迁移）；`effect=new_jobs_only | refresh_pending` 是 Job 快照治理，只属于绑定域提交。账号 CRUD 不能要求走完角色勾选和生效步骤。`POST /credentials/batch-bind` 是绑定域 API，不是账号管理向导。运行中与终态快照永远冻结；`refresh_pending` 仅刷新 pending，且必须显式选择。发现 API / 模型目录结果不是授权。
+**凭据资产、角色引用与快照生效是三条边界（#626）：** Provider Credential 是秘密资产（创建 / 轮换 / 测试 / 健康）；`role_credentials` 是 RoleConfig 对 Credential 的引用（绑定 / 换绑 / 迁移）；`effect=new_jobs_only | refresh_pending` 是 Job 快照治理，只属于绑定域提交。账号 CRUD 不能要求走完角色勾选和生效步骤。`POST /credentials/batch-bind` 是绑定域 API，不是账号管理向导。运行中与终态快照永远冻结；`refresh_pending` 仅刷新 pending，且必须显式选择。发现 API / 模型目录结果不是授权。Readiness 把账号健康/连通测试修到 `/settings/credentials`，把未绑定、绑定歧义和 CLI 不兼容修到 `/agents?tab=bindings`；`normalizeFix` 不能因为 action 仍是 `role_config` 就把绑定域 href 改写成角色注册表。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 

@@ -414,9 +414,7 @@ function runtimeImagesFix(
   return readinessFix("runtime_images", targetScope, projectId, href, "runtime-images");
 }
 
-const ROLE_CONFIG_FIX_CODES = new Set([
-  "HUB_ROLE_UNAVAILABLE",
-  "WORKER_ROLE_UNAVAILABLE",
+const ROLE_BINDING_FIX_CODES = new Set([
   "CREDENTIAL_BINDING_AMBIGUOUS",
   "CREDENTIAL_MISSING",
   "CREDENTIAL_MISSING_FAKE",
@@ -424,6 +422,12 @@ const ROLE_CONFIG_FIX_CODES = new Set([
   "CREDENTIAL_CLI_INCOMPATIBLE",
   "CREDENTIAL_CLI_HINT_DRIFT",
   "CREDENTIAL_KIND_INCOMPATIBLE",
+]);
+
+const ROLE_CONFIG_FIX_CODES = new Set([
+  "HUB_ROLE_UNAVAILABLE",
+  "WORKER_ROLE_UNAVAILABLE",
+  ...ROLE_BINDING_FIX_CODES,
 ]);
 
 const CREDENTIAL_FIX_CODES = new Set([
@@ -462,13 +466,22 @@ function normalizeFix(code: string, fix: ReadinessCheck["fix"]): ReadinessCheck[
   const href = action === "credentials"
     ? "/settings/credentials"
     : action === "role_config"
-      ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles"
+      ? ROLE_BINDING_FIX_CODES.has(code) || fix.target === "role-credential-binding"
+        ? "/agents?tab=bindings"
+        : inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles"
       : action === "rules"
         ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/settings/platform?tab=rules"
         : inferredScope === "project"
           ? projectId ? `/projects/${projectId}/images` : "/projects"
           : "/images";
-  return { ...fix, action, scope: inferredScope, project_id: projectId, href };
+  return {
+    ...fix,
+    action,
+    scope: inferredScope,
+    project_id: projectId,
+    href,
+    ...(ROLE_BINDING_FIX_CODES.has(code) ? { target: "role-credential-binding" } : {}),
+  };
 }
 
 /**

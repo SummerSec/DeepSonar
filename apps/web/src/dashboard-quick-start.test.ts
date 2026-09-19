@@ -245,6 +245,14 @@ test("readiness repair actions resolve every global and project route", () => {
     target: "role-credential-binding",
   }, globalScope);
   assert.equal(binding?.href, "/agents?tab=bindings");
+  const bindingFromRoleHref = resolveReadinessFix({
+    action: "role_config",
+    scope: "project",
+    project_id: project.id,
+    href: `/projects/${project.id}/settings?tab=roles`,
+    target: "role-credential-binding",
+  }, { kind: "project", project_id: project.id });
+  assert.equal(bindingFromRoleHref?.href, "/agents?tab=bindings");
 });
 
 test("readiness fixes without action keep the Scheduler href", () => {
