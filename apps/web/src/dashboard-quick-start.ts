@@ -217,8 +217,11 @@ export function resolveReadinessFix(
     return { href: "/settings/credentials", target: fix.target };
   }
   if (action === "role_config") {
+    const binding = fix.target === "role-credential-binding" || /(?:^|[?&])tab=bindings(?:&|$)/.test(fix.href);
     return {
-      href: targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles",
+      href: binding
+        ? "/agents?tab=bindings"
+        : targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles",
       target: fix.target,
     };
   }

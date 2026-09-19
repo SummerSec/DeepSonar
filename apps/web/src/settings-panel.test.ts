@@ -16,6 +16,7 @@ test("project role can be disabled and enabled again", () => {
 test("global settings accepts repair tabs from the URL", () => {
   assert.equal(resolveSettingsTab(null, "credentials"), "credentials");
   assert.equal(resolveSettingsTab(null, "roles"), "roles");
+  assert.equal(resolveSettingsTab(null, "bindings"), "bindings");
   assert.equal(resolveSettingsTab(null, "rules"), "rules");
 });
 
@@ -29,6 +30,7 @@ test("project settings only accepts project-owned tabs and falls back safely", (
 
 test("global settings sections cannot expose another governance domain", () => {
   assert.equal(resolveSettingsSectionTab("agents", "credentials"), "roles");
+  assert.equal(resolveSettingsSectionTab("agents", "bindings"), "bindings");
   assert.equal(resolveSettingsSectionTab("credentials", "roles"), "credentials");
   assert.equal(resolveSettingsSectionTab("access", "tokens"), "tokens");
   assert.equal(resolveSettingsSectionTab("platform", "transfer"), "transfer");
@@ -48,4 +50,5 @@ test("global settings tabs follow the scheduler permission model", () => {
   assert.deepEqual(settingsTabsForActor("access", operator), ["account"]);
   assert.deepEqual(settingsTabsForActor("platform", viewer), ["rules", "transfer"]);
   assert.deepEqual(settingsTabsForActor("credentials", viewer), ["credentials"]);
+  assert.deepEqual(settingsTabsForActor("agents", viewer), ["roles", "bindings"]);
 });

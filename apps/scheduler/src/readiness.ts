@@ -360,6 +360,16 @@ function credentialFix(_scope: ReadinessScopeInput): ReadinessCheck["fix"] {
   return readinessFix("credentials", "global", null, "/settings/credentials", "credentials");
 }
 
+function roleBindingFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
+  return {
+    action: "role_config",
+    scope: scope.projectId ? "project" : "global",
+    project_id: scope.projectId,
+    href: "/agents?tab=bindings",
+    target: "role-credential-binding",
+  };
+}
+
 function roleConfigFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
   const targetScope = scope.projectId ? "project" : "global";
   const projectId = scope.projectId;
@@ -604,15 +614,15 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       checks.push(fail(
         "CREDENTIAL_BINDING_AMBIGUOUS",
         `RoleConfig ${role.name} 绑定了多个 llm Credential，Scheduler 无法安全选择唯一账号。`,
-        roleConfigFix(input.scope),
+        roleBindingFix(input.scope),
         { role: summary },
       ));
     }
     const binding = bindings[0];
     if (!binding || !binding.credential_id) {
       checks.push(input.executionMode === "real"
-        ? fail("CREDENTIAL_MISSING", `${role.name} 未绑定 llm Credential，real 模式无法运行。`, roleConfigFix(input.scope), { role: summary })
-        : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 未绑定 llm Credential；fake 模式可继续，但切换 real 前需要配置账号。`, roleConfigFix(input.scope), { role: summary }));
+        ? fail("CREDENTIAL_MISSING", `${role.name} 未绑定 llm Credential，real 模式无法运行。`, roleBindingFix(input.scope), { role: summary })
+        : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 未绑定 llm Credential；fake 模式可继续，但切换 real 前需要配置账号。`, roleBindingFix(input.scope), { role: summary }));
     } else {
       const credential = credentialSummary(binding);
       const credentialRef = credential ?? undefined;
@@ -626,7 +636,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
           role.configScope === "global"
             ? `${role.name} 的全局 RoleConfig 只能绑定全局 Credential，不能引用项目凭据。`
             : `${role.name} 绑定的 Credential 属于其他项目，不能用于当前作用域。`,
-          roleConfigFix(input.scope),
+          roleBindingFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
       } else if (!binding.project_id && role.configScope === "project") {
@@ -643,12 +653,12 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       } else {
         const compatibility = validateCredentialCompatibility(role.agentCli ?? "", String(binding.provider));
         if (compatibility) {
-          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, roleConfigFix(input.scope), { role: summary, credential: credentialRef }));
+          checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, roleBindingFix(input.scope), { role: summary, credential: credentialRef }));
         } else if (binding.agent_cli && binding.agent_cli !== role.agentCli) {
           checks.push(attention(
             "CREDENTIAL_CLI_HINT_DRIFT",
             `${role.name} 的 Credential 配置文件属于 ${binding.agent_cli}，角色当前为 ${role.agentCli}；解析以角色配置为准。`,
-            roleConfigFix(input.scope),
+            roleBindingFix(input.scope),
             { role: summary, credential: credentialRef },
           ));
         }
@@ -665,7 +675,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         checks.push(fail(
           "CREDENTIAL_KIND_INCOMPATIBLE",
           `${role.name} 的 llm 绑定不是 LLM Provider Credential，Scheduler 不会把其他凭据类型当作模型账号。`,
-          roleConfigFix(input.scope),
+          roleBindingFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
       }

@@ -35,7 +35,7 @@
     },
     "apps/web/src/ProviderAccountFlow.tsx": {
       "class": "web",
-      "maxLines": 1649,
+      "maxLines": 818,
       "issue": "#544"
     },
     "apps/web/src/pages/TaskCanvasPage.tsx": {
@@ -45,7 +45,7 @@
     },
     "apps/web/src/SettingsPanel.tsx": {
       "class": "web",
-      "maxLines": 1311,
+      "maxLines": 1276,
       "issue": "#544"
     },
     "apps/web/src/JobDetailPanel.tsx": {

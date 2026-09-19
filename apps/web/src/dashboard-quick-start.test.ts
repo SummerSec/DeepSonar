@@ -237,6 +237,14 @@ test("readiness repair actions resolve every global and project route", () => {
   assert.equal(projectSelection?.href, "/projects");
   const projectSelectionWithProjectScope = resolveReadinessFix({ action: "runtime_images", scope: "project", project_id: null, href: "/stale", target: "runtime-images" }, projectScope, project.id);
   assert.equal(projectSelectionWithProjectScope?.href, "/projects");
+  const binding = resolveReadinessFix({
+    action: "role_config",
+    scope: "global",
+    project_id: null,
+    href: "/agents?tab=bindings",
+    target: "role-credential-binding",
+  }, globalScope);
+  assert.equal(binding?.href, "/agents?tab=bindings");
 });
 
 test("readiness fixes without action keep the Scheduler href", () => {

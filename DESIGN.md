@@ -201,6 +201,8 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧全局并发上限，不能放宽安全硬门。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
 
+**凭据资产、角色引用与快照生效是三条边界（#626）：** Provider Credential 是秘密资产（创建 / 轮换 / 测试 / 健康）；`role_credentials` 是 RoleConfig 对 Credential 的引用（绑定 / 换绑 / 迁移）；`effect=new_jobs_only | refresh_pending` 是 Job 快照治理，只属于绑定域提交。账号 CRUD 不能要求走完角色勾选和生效步骤。`POST /credentials/batch-bind` 是绑定域 API，不是账号管理向导。运行中与终态快照永远冻结；`refresh_pending` 仅刷新 pending，且必须显式选择。发现 API / 模型目录结果不是授权。
+
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
 **Model Gateway 目录校验与 alias 语义（#570）：** 解析顺序为 RoleConfig.model → Credential `settings_config` → Agent CLI 内置默认（如 Claude Code → `claude-opus-5`）。若凭据 `model_catalog_json` 非空，冻结快照前把解析结果与目录比对：不在目录则 fail-closed，中文错误列出可选项。空目录视为探测软降级，不拦 Job。显式 alias 直通可关闭校验：RoleConfig `allow_model_catalog_passthrough=true`，或平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true`。角色/settings 未指定 model 时，快照冻结 `upstream_model = "cli-default:<name>"`（详情页展示「未指定 → CLI 默认 …（经凭据 alias 转发，实际模型不可观测）」）；运行时 concurrency / Gateway 出站会剥掉 `cli-default:` 前缀。`job_usage_ledger.model` 仍记请求协议值；`model_catalog_match` 标注是否命中目录；可选 `upstream_reporting_model` 尽力从上游响应读取，无字段不强行伪造。
@@ -221,7 +223,9 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 ## 10. 前端信息架构
 
-一级导航是态势、项目、Agent、Agent 市场和镜像。项目内日常路径为任务工作台：
+一级导航是态势、项目、Agent、Agent 市场和镜像。平台设置把治理域拆开：`/settings/credentials` 只管理 Provider 账号资产；`/agents?tab=bindings` 是角色凭据绑定与生效策略；`/agents?tab=roles` 是角色注册与指令/工具配置。三个入口可互相链接，不共享账号向导 step machine，也不能用一次「应用」同时完成账号保存、角色勾选和快照刷新。
+
+项目内日常路径为任务工作台：
 
 1. **总览**：目标、当前阶段、活跃工作、人工介入、质量和下一步动作；
 2. **研究地图**：Finding cluster、canonical anchor、priority 与语义关系；
