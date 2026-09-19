@@ -115,12 +115,8 @@ export function ProviderAccountFlow({
     api.credentialProviders().then(setCatalog).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (notice) showToast(notice, "ok");
-  }, [notice]);
-  useEffect(() => {
-    if (error) showToast(error, "error");
-  }, [error]);
+  useEffect(() => { if (notice) showToast(notice, "ok"); }, [notice]);
+  useEffect(() => { if (error) showToast(error, "error"); }, [error]);
 
   useEffect(() => {
     if (!createProvider) {
@@ -381,6 +377,7 @@ export function ProviderAccountFlow({
       else delete metadata.base_url;
       await api.updateCredential(editingCredential.id, {
         name: editName.trim() || editingCredential.name,
+        provider: editProvider,
         agent_cli: editAgentCli,
         settings_config: settingsToSave,
         metadata,
@@ -786,24 +783,17 @@ export function ProviderAccountFlow({
           {selectedCredential && (
             <div className="provider-flow-card mt-3" aria-label="引用该账号的角色">
               <div className="provider-flow-card-kicker">当前被哪些角色引用（只读）</div>
-              {boundRoles.length === 0 ? (
-                <div className="provider-flow-empty">没有角色引用该账号。绑定、换绑请到凭据绑定页。</div>
-              ) : (
+              {boundRoles.length === 0 && <div className="provider-flow-empty">没有角色引用该账号。绑定、换绑请到凭据绑定页。</div>}
+              {boundRoles.length > 0 && (
                 <ul className="provider-flow-role-list">
-                  {boundRoles.map((item) => {
-                    const roleName = String(item.role_name ?? item.role_config_id ?? "角色");
-                    const scope = item.scope === "project"
-                      ? `项目 ${String(item.project_name ?? item.project_id ?? "")}`
-                      : "全局";
-                    return (
-                      <li key={String(item.role_config_id ?? roleName)} className="provider-flow-role is-disabled-bind">
-                        <span className="provider-flow-role-main">
-                          <strong>{roleName}</strong>
-                          <small>{scope} · {String(item.purpose ?? "llm")}</small>
-                        </span>
-                      </li>
-                    );
-                  })}
+                  {boundRoles.map((item) => (
+                    <li key={String(item.role_config_id ?? item.role_name)} className="provider-flow-role is-disabled-bind">
+                      <span className="provider-flow-role-main">
+                        <strong>{String(item.role_name ?? item.role_config_id ?? "角色")}</strong>
+                        <small>{item.scope === "project" ? `项目 ${String(item.project_name ?? item.project_id ?? "")}` : "全局"} · {String(item.purpose ?? "llm")}</small>
+                      </span>
+                    </li>
+                  ))}
                 </ul>
               )}
               <Link to={bindingHref} className="mt-2 inline-flex text-[12px] text-acc-300">

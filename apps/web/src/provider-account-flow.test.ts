@@ -104,8 +104,10 @@ test("Provider account flow is account CRUD only and does not own binding or eff
     assert.ok(flow.includes(marker), `flow should expose ${marker}`);
   }
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
+  const credentialSurface = `${editor}\n${settingsHelpers}`;
   for (const marker of ["auth.json", "CcSwitchClaudeFields", "CcSwitchCodexFields", "CcSwitchOpenCodeFields", "ANTHROPIC_AUTH_TOKEN"]) {
-    assert.ok(editor.includes(marker), `editor should expose ${marker}`);
+    assert.ok(credentialSurface.includes(marker), `editor should expose ${marker}`);
   }
   assert.ok(
     editor.indexOf('ariaLabel="Agent CLI 类型"') < editor.indexOf('ariaLabel="Provider"'),
@@ -139,6 +141,8 @@ test("Provider account flow is account CRUD only and does not own binding or eff
 
 test("Provider create/edit persists a validated top-level context window budget", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
+  const credentialSurface = `${editor}\n${settingsHelpers}`;
   const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
   const jobDetail = readFileSync(new URL("./JobDetailPanel.tsx", import.meta.url), "utf8");
   for (const marker of [
@@ -150,7 +154,7 @@ test("Provider create/edit persists a validated top-level context window budget"
     "10_000_000",
     "不会提升上游模型能力",
   ]) {
-    assert.ok(editor.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
+    assert.ok(credentialSurface.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
   }
   assert.match(flow, /setEditContextWindowTokens\(extractContextWindowTokens\(settings\)\)/);
   assert.match(flow, /contextWindowTokens: createContextWindowTokens/);
@@ -405,6 +409,15 @@ test("provider UI exposes only protocol labels and the two supported OpenCode pr
   assert.match(openCode, /OpenAI Responses/);
   assert.doesNotMatch(openCode, /OpenAI Compatible|OpenRouter|Google/);
   assert.match(flow, /providerProtocolLabel/);
+});
+
+test("#624 edit mode allows Provider protocol migration and persists provider", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const flowSource = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(editor, /allow Provider protocol migration on edit/);
+  assert.doesNotMatch(editor, /fieldset disabled=\{mode === "edit"\}[\s\S]*?ariaLabel="Provider"/);
+  assert.match(flowSource, /provider:\s*editProvider/);
+  assert.match(flowSource, /api\.updateCredential\(editingCredential\.id/);
 });
 
 test("deleteAccount hard-blocks only pending/active jobs; recoverable is a confirm warning", () => {
