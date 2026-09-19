@@ -49,6 +49,15 @@ test("credential create/update persist even when catalog probe is unavailable", 
   assert.doesNotMatch(patch, /discoverModelCatalog|listCredentialModels/);
 });
 
+test("credential PATCH aligns provider with settings wire protocol and hints CLI migration", () => {
+  const patchStart = routes.indexOf('app.patch("/credentials/:id"');
+  const patchEnd = routes.indexOf('app.post("/credentials/:id/rotate"', patchStart);
+  const patch = routes.slice(patchStart, patchEnd);
+  assert.match(patch, /alignCredentialProviderWithSettings/);
+  assert.match(patch, /请在同一次保存中把 Agent CLI 改为 pi 或 dsh/);
+  assert.match(patch, /providerChanged\) sets\.provider = targetProvider/);
+});
+
 test("explicit catalog refresh soft-degrades empty catalog instead of hard-failing the persist", () => {
   const start = routes.indexOf('app.post("/credentials/:id/models"');
   assert.ok(start >= 0);

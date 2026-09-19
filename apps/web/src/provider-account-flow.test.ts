@@ -313,10 +313,12 @@ test("Pi settings box accepts official llm-pi-ai YAML and JSON and extracts base
 
 test("DSH provider editor exposes machine configuration without TUI surface", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const protocol = readFileSync(new URL("./credential-protocol.ts", import.meta.url), "utf8");
   assert.match(editor, /DeepSeek Harness（JSON-RPC）/u);
   assert.match(editor, /Pi \/ llm-pi-ai 配置（YAML 或 JSON）/u);
   assert.match(editor, /providers/);
-  assert.match(editor, /openai-responses/);
+  assert.match(editor, /wireApiForProvider/);
+  assert.match(protocol, /openai-responses/);
   assert.doesNotMatch(editor, /dsh-cc-tui|dsh-app-tui|dsh-app-web/);
   const settings = buildSettingsConfigFromEditor({
     agentCli: "dsh",
@@ -439,4 +441,19 @@ test("CredentialsPanel only hosts ProviderAccountFlow (no duplicate card grid)",
   assert.doesNotMatch(panel, /credential-toolbar/);
   assert.doesNotMatch(panel, /模型 未限制|个已启用/);
   assert.doesNotMatch(panel, /最近用/);
+});
+
+test("edit mode can migrate Provider protocol and persist it with agent_cli", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const providerBlock = editor.slice(
+    editor.indexOf('ariaLabel="Agent CLI 类型"'),
+    editor.indexOf('ariaLabel="账号作用域"'),
+  );
+  assert.doesNotMatch(providerBlock, /disabled=\{mode === "edit"\}/);
+  assert.match(providerBlock, /preferredCliForProvider/);
+  assert.match(providerBlock, /switchCli\(nextCli, next\)/);
+  assert.match(providerBlock, /将切换 Agent CLI/);
+  assert.match(editor, /可迁移协议/);
+  assert.match(flow, /provider: editProvider/);
+  assert.match(flow, /agent_cli: editAgentCli/);
 });

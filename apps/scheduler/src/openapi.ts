@@ -2314,6 +2314,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/credentials/{id}",
     summary: "更新 Credential 配置（settings_config 中已保存密钥由服务端恢复）",
+    description: "可在同一次 PATCH 中同时迁移 provider 与 agent_cli。settings.api 与顶层 provider 必须一致；仅提交 settings 且线协议与 provider 冲突时按 settings 对齐 provider。Claude Code 不能改为 openai。活动 Job 引用时迁移 provider 返回 409；绑定的 RoleConfig/Job 不兼容时返回 400。",
     scope: "agents:write",
     tags: ["Credentials"],
     body: {
@@ -2401,7 +2402,14 @@ const OPS: Op[] = [
       properties: { status: { type: "string", enum: ["active", "disabled", "rotation_required"] } },
     },
   },
-  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:write", tags: ["Credentials"] },
+  {
+    method: "post",
+    path: "/credentials/{id}/test",
+    summary: "连接测试",
+    description: "推理探测跟 settings.api：anthropic-messages → /v1/messages，openai-responses → /v1/responses，其它 → /v1/chat/completions。base_url 已含 /v1 时不重复拼接。",
+    scope: "agents:write",
+    tags: ["Credentials"],
+  },
   { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:write", tags: ["Credentials"] },
   {
     method: "post",

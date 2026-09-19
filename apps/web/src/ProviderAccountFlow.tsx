@@ -698,6 +698,7 @@ export function ProviderAccountFlow({
       else delete metadata.base_url;
       await api.updateCredential(editingCredential.id, {
         name: editName.trim() || editingCredential.name,
+        provider: editProvider,
         agent_cli: editAgentCli,
         settings_config: settingsToSave,
         metadata,

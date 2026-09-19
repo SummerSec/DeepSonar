@@ -394,6 +394,53 @@ test("inference probe is authoritative while catalog-only failures stay unknown"
   }
 });
 
+test("inference probe uses settings wire protocol and does not double /v1", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  const bodies: string[] = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      urls.push(`${init?.method ?? "GET"} ${String(input)}`);
+      bodies.push(String(init?.body ?? ""));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const responses = await testCredential({
+      provider: "anthropic",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "openai-responses", baseUrl: "http://127.0.0.1/v1", models: [{ id: "gpt-5" }] } },
+      },
+    } as never);
+    assert.deepEqual(urls, ["POST http://127.0.0.1/v1/responses"]);
+    assert.match(bodies[0] ?? "", /max_output_tokens/);
+    assert.doesNotMatch(bodies[0] ?? "", /"messages"/);
+    assert.equal(responses.ok, true);
+    assert.equal(responses.probe_path, "inference");
+
+    urls.length = 0;
+    bodies.length = 0;
+    const completions = await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "openai-completions", models: [{ id: "gpt-5" }] } },
+      },
+    } as never);
+    assert.deepEqual(urls, ["POST http://127.0.0.1/v1/chat/completions"]);
+    assert.match(bodies[0] ?? "", /"messages"/);
+    assert.equal(completions.ok, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("unreachable /models soft-degrades to an empty catalog", async () => {
   const { encryptSecret } = await import("./credentials.js");
   const { discoverModelCatalog, listCredentialModelsPreview } = await import("./credential-test.js");

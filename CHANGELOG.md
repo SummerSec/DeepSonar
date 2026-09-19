@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 已保存 Credential 可迁移 Provider 协议（#624）：编辑页解锁协议选择；Claude Code 改为 OpenAI 时同一次保存切到 Pi/DSH 并改写 `settings.api`。Scheduler 按 settings 线协议探测健康（`openai-responses` → `/v1/responses`，不再拼 `/v1/v1`）；仅改 settings 时对齐顶层 `provider`；活动 Job 仍 409，绑定不兼容仍 400 并提示先改 CLI。
+
 ## [0.4.6] - 2026-09-19
 
 ### 新增
