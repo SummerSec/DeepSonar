@@ -1,5 +1,10 @@
 import { parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
 import { normalizeModelCatalog } from "./credentials.js";
+import {
+  admitModelAgainstCatalog,
+  type ModelCatalogAdmitCode,
+} from "./domains/provider-adapter/model-catalog-admit.js";
+import type { RepairFeedback } from "@deepsonar/shared-types";
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -158,14 +163,24 @@ export function snapshotUpstreamModel(snapshot: { model?: unknown; upstream_mode
 }
 
 export class ModelCatalogMismatchError extends Error {
-  readonly code = "MODEL_CATALOG_MISMATCH" as const;
+  /** Prefer #632 codes; MODEL_CATALOG_MISMATCH kept as legacy alias for older catches. */
+  readonly code: ModelCatalogAdmitCode | "MODEL_CATALOG_MISMATCH";
   readonly resolvedModel: string;
   readonly catalog: string[];
-  constructor(message: string, resolvedModel: string, catalog: string[]) {
+  readonly repair: RepairFeedback;
+  constructor(
+    message: string,
+    resolvedModel: string,
+    catalog: string[],
+    repair: RepairFeedback,
+    code: ModelCatalogAdmitCode | "MODEL_CATALOG_MISMATCH" = "MODEL_CATALOG_MISMATCH",
+  ) {
     super(message);
     this.name = "ModelCatalogMismatchError";
+    this.code = code;
     this.resolvedModel = resolvedModel;
     this.catalog = catalog;
+    this.repair = repair;
   }
 }
 
@@ -192,32 +207,22 @@ export function assertResolvedModelInCredentialCatalog(input: {
   allowPassthrough: boolean;
   modelSource: ModelResolutionSource;
 }): void {
-  if (input.allowPassthrough) return;
-  const catalog = normalizeModelCatalog(input.catalogJson);
-  if (catalog.length === 0) return;
-  const resolved = bareUpstreamModelId(input.resolvedModel) ?? input.resolvedModel?.trim() ?? "";
-  if (resolved && catalog.includes(resolved)) return;
-
-  const options = catalog.slice(0, 30).join("、");
-  const more = catalog.length > 30 ? ` 等 ${catalog.length} 个` : "";
-  if (!resolved) {
-    throw new ModelCatalogMismatchError(
-      `角色未指定 model，且无法解析 CLI/配置默认模型；凭据模型目录非空，可选项：${options}${more}`,
-      "",
-      catalog,
-    );
-  }
-  if (input.modelSource === "cli_default") {
-    throw new ModelCatalogMismatchError(
-      `角色未指定 model，CLI 默认 ${resolved} 不在凭据模型目录，可选项：${options}${more}`,
-      resolved,
-      catalog,
-    );
-  }
+  const admitted = admitModelAgainstCatalog({
+    resolvedModel: input.resolvedModel,
+    catalogJson: input.catalogJson,
+    allowPassthrough: input.allowPassthrough,
+    operation: "assert_resolved_model_in_credential_catalog",
+    modelSourceHint: input.modelSource === "none" ? "unknown" : input.modelSource,
+    // Explicit RoleConfig/settings model outside catalog → passthrough-disabled framing.
+    emphasizePassthrough: input.modelSource === "role" || input.modelSource === "settings",
+  });
+  if (admitted.ok) return;
   throw new ModelCatalogMismatchError(
-    `解析模型 ${resolved} 不在凭据模型目录，可选项：${options}${more}`,
-    resolved,
-    catalog,
+    admitted.repair.message,
+    admitted.resolved,
+    admitted.catalog,
+    admitted.repair,
+    admitted.code,
   );
 }
 

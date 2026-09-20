@@ -116,5 +116,8 @@ test("RoleConfig PUT omits credentials to preserve bindings and surfaces inherit
   assert.match(roleConfigRoutesSource, /ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL/);
   assert.match(roleConfigRoutesSource, /upsert_warnings/);
   assert.match(roleConfigRoutesSource, /body\.credentials\?\.length \?\? "preserved"/);
+  assert.match(roleConfigRoutesSource, /credential_binding_deprecated/);
+  assert.match(roleConfigRoutesSource, /credentialBindingDeprecatedWarning/);
+  assert.match(roleConfigRoutesSource, /DEPRECATED \(#632\)/);
 });
 

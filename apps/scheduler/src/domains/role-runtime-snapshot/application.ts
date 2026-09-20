@@ -1,4 +1,5 @@
 import {
+  buildRepairFeedback,
   PlatformToolName,
   type FrozenAgentRuntimeProfile,
   rejectNonCurrentAgentCli,
@@ -40,7 +41,13 @@ import {
 import {
   freezeMaterializationPackAtJobCreate,
 } from "../extension-materialization/index.js";
-import { freezeProviderModelSnapshot, resolveModelDescriptorCatalog, selectModelsForRequirements } from "../provider-adapter/index.js";
+import {
+  admitModelAgainstCatalog,
+  freezeProviderModelSnapshot,
+  resolveModelDescriptorCatalog,
+  selectModelsForRequirements,
+} from "../provider-adapter/index.js";
+import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
 import { expandModules, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
@@ -80,6 +87,42 @@ import type {
 } from "./ports.js";
 
 export type { RoleRuntimeSnapshotApplication, RoleRuntimeSnapshotResult, RoleRuntimeSnapshotTransaction } from "./ports.js";
+
+/** Structured fail-closed when model is outside eligible catalog SSOT (#632). */
+function throwModelCapabilityMismatch(selectedModel: string, eligibleModelIds: string[]): never {
+  const admitted = admitModelAgainstCatalog({
+    resolvedModel: selectedModel,
+    catalogJson: eligibleModelIds.length > 0 ? eligibleModelIds : ["__empty_eligible__"],
+    allowPassthrough: false,
+    operation: "resolve_role_runtime_model_requirements",
+    modelSourceHint: "hub",
+    emphasizePassthrough: true,
+  });
+  if (!admitted.ok) {
+    throw new ModelCatalogMismatchError(
+      `模型 ${selectedModel} 不满足 Provider capability requirements / 不在目录 SSOT`,
+      admitted.resolved,
+      eligibleModelIds,
+      {
+        ...admitted.repair,
+        message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在目录 SSOT`,
+      },
+      admitted.code,
+    );
+  }
+  const repair = buildRepairFeedback({
+    category: "model_correctable",
+    code: "model_passthrough_disabled",
+    operation: "resolve_role_runtime_model_requirements",
+    path: "model_ref",
+    message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在目录 SSOT`,
+    expected: { kind: "catalog_model_id", sample: eligibleModelIds.slice(0, 12) },
+    observed_shape: { resolved_model: selectedModel, eligible: false },
+    next_action: "select_catalog_model_id_or_enable_emergency_passthrough",
+  });
+  throw new ModelCatalogMismatchError(repair.message, selectedModel, eligibleModelIds, repair, "model_passthrough_disabled");
+}
+
 export type AgentRuntimeSnapshot = RoleRuntimeSnapshotResult;
 export type ReasoningEffort = ReasoningValue;
 
@@ -421,11 +464,13 @@ async function resolveAgentSnapshotForJobUnchecked(
     if (!selectedModel && fallback) selectedModel = fallback;
     if (!selectedModel && requirements && eligible.length > 0) selectedModel = eligible[0]!.model_id;
     if (selectedModel && catalog.length > 0 && !allowPassthrough && !eligibleIds.has(selectedModel)) {
-      if (requestedModelRef) throw new Error(`模型 ${selectedModel} 不满足 Provider capability requirements`);
+      if (requestedModelRef) {
+        throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
+      }
       if (fallback) selectedModel = fallback;
     }
     if (requirements && selectedModel && !allowPassthrough && !eligibleIds.has(selectedModel)) {
-      throw new Error(`模型 ${selectedModel} 不满足 Provider capability requirements`);
+      throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
     }
   }
   const providerSnapshot = projectProviderRuntimeSnapshot({
@@ -440,7 +485,10 @@ async function resolveAgentSnapshotForJobUnchecked(
   const contextWindowTokens = providerSnapshot.context_window_tokens;
   if (llm) {
     const rolePassthrough = cfg?.allow_model_catalog_passthrough === true;
-    const allowPassthrough = config.allowModelCatalogPassthrough || rolePassthrough;
+    // Align with selection gate: env OR project allowlist OR role emergency flag (#632).
+    const allowPassthrough = config.allowModelCatalogPassthrough
+      || agentAllowlist.allow_model_catalog_passthrough
+      || rolePassthrough;
     const modelSource = resolveModelSource({
       roleModel: identity.model,
       agentCli,
@@ -618,7 +666,9 @@ async function resolveAgentSnapshotForJobUnchecked(
   let provider_model: FrozenProviderModelSnapshot | undefined;
   if (llm) {
     const rolePassthroughForFreeze = cfg?.allow_model_catalog_passthrough === true;
-    const allowPassthroughForFreeze = config.allowModelCatalogPassthrough || rolePassthroughForFreeze;
+    const allowPassthroughForFreeze = config.allowModelCatalogPassthrough
+      || agentAllowlist.allow_model_catalog_passthrough
+      || rolePassthroughForFreeze;
     const frozenPm = freezeProviderModelSnapshot({
       provider: String(llm.provider ?? ""),
       cliModelId: providerSnapshot.model,

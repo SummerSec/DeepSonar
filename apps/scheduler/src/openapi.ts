@@ -3317,6 +3317,11 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             runtime_knobs: { $ref: "#/components/schemas/RuntimeKnobOverride" },
             credentials: {
               type: "array",
+              deprecated: true,
+              description:
+                "已弃用（#632）：请改用平台凭据资源 + 项目 Agent/Provider 白名单 default_credential_id。"
+                + "现有 role_credentials 仍会被 Job 运行时尊重；新 Capability Pack 路径不应依赖本字段。"
+                + "Omit=保留绑定；显式 [] 清空（#631）。",
               items: {
                 type: "object",
                 required: ["credential_id", "purpose"],

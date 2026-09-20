@@ -28,3 +28,12 @@ export {
   assertGatewayRequestModelAllowed,
   gatewayRequestModelFromBody,
 } from "./gateway-guard.js";
+
+export {
+  MODEL_NOT_IN_CATALOG,
+  MODEL_PASSTHROUGH_DISABLED,
+  CREDENTIAL_BINDING_DEPRECATED,
+  admitModelAgainstCatalog,
+  credentialBindingDeprecatedWarning,
+  gatewayFrozenModelRepair,
+} from "./model-catalog-admit.js";

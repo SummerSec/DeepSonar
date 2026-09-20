@@ -59,6 +59,10 @@ test("catalog fail-closed when CLI default not in credential catalog", () => {
       assert.match(error.message, /角色未指定 model，CLI 默认 claude-opus-5 不在凭据模型目录/);
       assert.match(error.message, /deepseek-chat/);
       assert.match(error.message, /glm-4\.6/);
+      assert.equal(error.code, "model_not_in_catalog");
+      assert.equal(error.repair.code, "model_not_in_catalog");
+      assert.equal(error.repair.category, "model_correctable");
+      assert.ok(error.repair.next_action);
       return true;
     },
   );
