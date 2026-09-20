@@ -7,6 +7,7 @@ import {
   type PlatformToolName,
 } from "@deepsonar/shared-types";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   type ProviderCredential,
   type RoleConfigInput,
@@ -36,8 +37,7 @@ import {
 
 /**
  * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
- * Agent CLI / Provider 主边界在项目设置「CLI / Provider 启用与缺省」；此处绑定须 ∈ 白名单，并发在凭据页；运行镜像由镜像页承接。
- * 保存时保留已有 agent_cli / credential / model / env / runtime_image 绑定。
+ * LLM 凭据绑定在 Agent「凭据绑定」；账号 CRUD 在 Provider 凭据页；此处不提交绑定或生效策略。
  */
 
 const inputCls =
@@ -72,7 +72,7 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
 // ---------- 表单状态 ----------
 
 interface ConfigForm {
-  /** Provider 闭环字段：UI 不编辑，保存时原样回传。 */
+  /** 绑定域字段：本编辑器只读回传，换绑走凭据绑定页。 */
   agent_cli: string;
   dsh_task_mode: "standard" | "ptc";
   model: string;
@@ -414,13 +414,13 @@ export function RoleConfigEditor({
     const allow = new Set(enabledSkillSourceIds);
     return sources.filter((source) => allow.has(source.id));
   }, [sources, enabledSkillSourceIds]);
-  void credentials; // 仍由父组件传入以兼容签名；CLI/凭据/模型改由 Provider 页绑定
+  void credentials; // 父组件仍传入以兼容签名；换绑走 Agent「凭据绑定」
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
 
   const submit = () => {
     try {
-      // Provider 页管理 CLI、模型、凭据与 settings；这里编辑上下文预算覆盖并原样保留其余字段。
+      // 凭据绑定页管理 CLI / 凭据；这里编辑上下文预算覆盖并原样保留其余字段。
       const body: RoleConfigInput = {
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         dsh_task_mode: form.dsh_task_mode,
@@ -459,6 +459,7 @@ export function RoleConfigEditor({
           <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-acc-400">{title}</span>
           <p>定义这个角色下一次运行时冻结的执行快照。</p>
         </div>
+        <Link to="/agents?tab=bindings" className="font-mono text-[10px] text-acc-300">凭据绑定</Link>
         <span className="role-config-snapshot">NEXT JOB SNAPSHOT</span>
         <button
           onClick={onCancel}
@@ -476,14 +477,14 @@ export function RoleConfigEditor({
             <strong>
               指令与平台工具
               <HelpTip>
-                Agent CLI、LLM 凭据、模型与 settings/env 请在「凭据 / Provider 账号」页配置与绑定；此处仅维护角色职责与平台工具。
+                Agent CLI / LLM 凭据绑定请到「Agent 管理 → 凭据绑定」；账号密钥在「Provider 凭据」页管理。此处仅维护角色职责与平台工具。
                 {!form.model.trim() && (
                   <span className="mt-1 block text-[11px] text-amber-200/90">
                     当前模型为空：将使用 CLI 内置默认模型，建议从凭据目录选择。也可开启下方「允许模型目录直通」以支持 alias 网关。
                   </span>
                 )}
-                {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}（由 Provider 绑定流程维护）。` : ""}
-                {form.credential_id ? " 已绑定 LLM 凭据。" : " 尚未绑定 LLM 凭据。"}
+                {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}。` : ""}
+                {form.credential_id ? " 已绑定 LLM 凭据（换绑请到凭据绑定页）。" : " 尚未绑定 LLM 凭据。"}
               </HelpTip>
             </strong>
           </div>
