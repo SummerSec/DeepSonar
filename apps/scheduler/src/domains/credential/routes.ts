@@ -1410,7 +1410,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const actorProjectId = req.actor?.projectId ?? null;
     const [cred] = await sql`
-      SELECT id, project_id, kind, provider, public_metadata_json, model_catalog_json, model_catalog_fetched_at
+      SELECT id, project_id, kind, provider, public_metadata_json, model_catalog_json, model_catalog_fetched_at,
+             health_status, health_error_category, health_detail, last_tested_at
       FROM credentials
       WHERE id = ${id}
         AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
@@ -1420,18 +1421,38 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     if (!providerProjection.provider_valid) {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
+    const connectionHealth = cred.health_status === "ok" || cred.health_status === "error" ? cred.health_status : "unknown";
+    const catalogHealth =
+      connectionHealth === "ok" ? "verified"
+        : connectionHealth === "error" ? "probe_failed"
+          : cred.model_catalog_fetched_at ? "stale"
+            : "unsupported";
+    const models = normalizeModelCatalog(cred.model_catalog_json);
+    const catalogRevision = typeof cred.model_catalog_fetched_at === "string"
+      ? cred.model_catalog_fetched_at
+      : `credential:${id}`;
+    const modelDescriptors = resolveModelDescriptorCatalog({
+      provider: String(cred.provider),
+      catalogJson: cred.model_catalog_json,
+      catalogRevision,
+      healthStatus: catalogHealth,
+    });
     return {
       credential_id: id,
       ...providerProjection,
-      models: normalizeModelCatalog(cred.model_catalog_json),
-      model_descriptors: resolveModelDescriptorCatalog({
-        provider: String(cred.provider),
-        catalogJson: cred.model_catalog_json,
-        catalogRevision: typeof cred.model_catalog_fetched_at === "string" ? cred.model_catalog_fetched_at : `credential:${id}`,
-      }),
+      models,
+      model_descriptors: modelDescriptors,
       catalog_revision: cred.model_catalog_fetched_at ?? null,
-      state: "verified",
+      /** Catalog-level ModelCatalogHealthStatus (not credential connection ok/error). */
+      catalog_health_status: catalogHealth,
+      state: catalogHealth,
       fetched_at: cred.model_catalog_fetched_at ?? null,
+      connection_health: {
+        status: connectionHealth,
+        last_tested_at: cred.last_tested_at ?? null,
+        error_category: typeof cred.health_error_category === "string" ? cred.health_error_category : null,
+        detail: safeHealthDetail(cred.health_detail),
+      },
     };
   });
 
@@ -1506,6 +1527,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         provider: String(cred.provider),
         catalogJson: models,
         catalogRevision: result.fetched_at ?? `probe:${String(cred.provider)}`,
+        healthStatus: available ? "verified" : "probe_failed",
       });
       const fetchedAt = available ? result.fetched_at : null;
       const testedAt = fetchedAt ?? new Date().toISOString();

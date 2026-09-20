@@ -1,6 +1,11 @@
 import { FloppyDisk } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type ModelCapabilityDescriptor, type ProviderCredential } from "../api";
+import { api, type ProviderCredential } from "../api";
+import {
+  credentialCatalogHealthSummary,
+  modelCatalogHealthLabel,
+  modelDescriptorsForCredential,
+} from "../model-catalog-health";
 import { SearchableMultiSelect, SearchableSelect } from "../SearchableSelect";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
@@ -13,44 +18,12 @@ const ADAPTER_CLIS: Record<string, AgentCli[]> = {
   openai: ["pi", "dsh"],
 };
 
-const MODEL_HEALTH_LABEL: Record<string, string> = {
-  verified: "已验证",
-  stale: "目录过期",
-  probe_failed: "探测失败",
-  unsupported: "不支持",
-  passthrough: "允许直通",
-  passthrough_allowed: "允许直通",
-};
-
-/** Keep legacy string catalogs visible while the structured catalog warms up. */
-export function modelDescriptorsForCredential(credential: ProviderCredential | null | undefined): ModelCapabilityDescriptor[] {
-  if (!credential) return [];
-  const descriptors = credential.model_descriptors ?? credential.health?.model_descriptors ?? [];
-  if (descriptors.length > 0) return descriptors;
-  const legacy = [
-    ...(credential.health?.model_catalog ?? []),
-    ...(credential.model_catalog_json ?? []),
-  ].filter((model): model is string => typeof model === "string" && model.trim().length > 0);
-  return [...new Set(legacy.map((model) => model.trim()))].map((model) => ({
-    schema: "deepsonar.model-descriptor/v1" as const,
-    provider: credential.provider,
-    model_id: model,
-    display_name: model,
-    context_window: null,
-    max_output_tokens: null,
-    supports_tools: true,
-    supports_streaming: true,
-    supports_structured_output: false,
-    reasoning_efforts: [],
-    input_modalities: ["text"],
-    output_modalities: ["text"],
-    cost: null,
-    rate_limits: null,
-    compatible_agent_clis: ADAPTER_CLIS[credential.provider] ?? [],
-    health_status: "stale",
-    catalog_revision: credential.health?.model_catalog_fetched_at ?? "legacy",
-  }));
+/** @deprecated Prefer modelCatalogHealthLabel from model-catalog-health. */
+export function modelHealthLabel(status: string | null | undefined): string {
+  return modelCatalogHealthLabel(status);
 }
+
+export { modelDescriptorsForCredential };
 
 /**
  * Compatibility is an adapter/catalog capability.  `credential.agent_cli` is
@@ -71,22 +44,8 @@ export function credentialSupportsCli(credential: ProviderCredential, cli: Agent
   return compatibleAgentClisForCredential(credential).includes(cli);
 }
 
-export function modelHealthLabel(status: string | null | undefined): string {
-  return status ? MODEL_HEALTH_LABEL[status] ?? status : "未知";
-}
-
 export function credentialCatalogState(credential: ProviderCredential): string {
-  const health = credential.health;
-  if (health?.status === "error") {
-    const category = health.error_category ? ` · ${health.error_category}` : "";
-    return `目录探测失败${category}`;
-  }
-  if (health?.status === "unknown" && !health.last_tested_at) return "尚未测试 / 未探测目录";
-  const descriptors = modelDescriptorsForCredential(credential);
-  if (descriptors.length === 0) return "目录为空（允许软降级）";
-  const statuses = [...new Set(descriptors.map((model) => model.health_status))].map(modelHealthLabel);
-  const revision = descriptors.find((model) => model.catalog_revision)?.catalog_revision;
-  return `目录 ${descriptors.length} 个 · ${statuses.join(" / ")}${revision ? ` · rev ${revision.slice(0, 12)}` : ""}`;
+  return credentialCatalogHealthSummary(credential);
 }
 
 export function credentialHealthMessage(credential: ProviderCredential): string {
@@ -121,7 +80,7 @@ function modelSummary(credential: ProviderCredential): string {
   const models = modelDescriptorsForCredential(credential);
   if (models.length === 0) return "模型目录未探测";
   const names = models.slice(0, 3).map((model) => model.display_name || model.model_id).join("、");
-  const passthrough = models.some((model) => model.health_status === "passthrough_allowed") ? " · 可直通" : "";
+  const passthrough = models.some((model) => model.health_status === "passthrough_allowed") ? " · 应急透传" : "";
   const toolCount = models.filter((model) => model.supports_tools).length;
   const streamCount = models.filter((model) => model.supports_streaming).length;
   const structuredCount = models.filter((model) => model.supports_structured_output).length;

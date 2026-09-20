@@ -2,6 +2,12 @@ import { ArrowClockwise, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type JobSession, type ProviderCredential } from "./api";
 import { formatSnapshotModelField } from "./snapshot-model-label";
+import {
+  formatFrozenProviderModelHealth,
+  modelCatalogHealthBadgeClass,
+  modelCatalogHealthLabel,
+  readFrozenProviderModel,
+} from "./model-catalog-health";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
@@ -419,6 +425,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const model = snapStr(snapshot, "model");
   const upstreamModel = snapStr(snapshot, "upstream_model");
   const modelFields = formatSnapshotModelField(model, upstreamModel);
+  const frozenProviderModel = readFrozenProviderModel(snapshot);
+  const providerModelHealth = formatFrozenProviderModelHealth(frozenProviderModel);
   const contextWindowTokens = snapStr(snapshot, "context_window_tokens");
   const roleName = snapStr(snapshot, "name");
   const credentialId = snapStr(snapshot, "credential_id");
@@ -1143,6 +1151,19 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                       <ConfigField label="模型 (model)" value={modelFields.modelLabel} title={modelFields.title} />
                       <ConfigField label="上游模型 (upstream_model)" value={modelFields.upstreamLabel} title={modelFields.title} />
                       <ConfigField
+                        label="目录健康 (provider_model)"
+                        value={providerModelHealth.healthLabel}
+                        title={providerModelHealth.warning ?? undefined}
+                      />
+                      <ConfigField
+                        label="应急透传"
+                        value={providerModelHealth.passthrough ? "已启用（非默认）" : "关闭"}
+                        title={providerModelHealth.passthrough ? "Gateway 不强制冻结目录内模型" : "fail-closed：仅允许目录内模型"}
+                      />
+                      {providerModelHealth.revision && (
+                        <ConfigField label="catalog_revision" value={providerModelHealth.revision} />
+                      )}
+                      <ConfigField
                         label="CLI 客户端上下文预算"
                         value={contextWindowTokens === "—" ? "Provider / CLI 默认" : `${contextWindowTokens} tokens`}
                         title="创建 Job 时冻结；这是客户端预算，不代表或提升上游模型能力。"
@@ -1167,6 +1188,20 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                         value={snapStr(snapshot, "role_config_id")}
                       />
                     </div>
+                    {providerModelHealth.warning && (
+                      <div className="provider-flow-passthrough-callout mt-2" role="status">
+                        {providerModelHealth.passthrough ? (
+                          <span className={modelCatalogHealthBadgeClass("passthrough_allowed")}>
+                            {modelCatalogHealthLabel("passthrough_allowed")}
+                          </span>
+                        ) : providerModelHealth.healthStatus ? (
+                          <span className={modelCatalogHealthBadgeClass(providerModelHealth.healthStatus)}>
+                            {modelCatalogHealthLabel(providerModelHealth.healthStatus)}
+                          </span>
+                        ) : null}
+                        <span>{providerModelHealth.warning}</span>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- Web 模型目录健康态与应急透传可见（#614）：凭据账号流区分「连接探测」与「模型目录 health_status」，按模型展示已验证 / 目录过期 / 探测失败 / 不支持 / 应急透传徽章；透传使用醒目 callout，不与已验证混淆。Job 运行配置展示冻结 `provider_model` 健康、catalog_revision 与透传标记。GET `/credentials/:id/models` 返回 `catalog_health_status` / `connection_health`（additive）。Job 创建在 `provider_model.passthrough=true` 时写入系统审计 `job.model_catalog_passthrough`。补齐 #619 phase-1 延期的 Web 验收。
+
 ### 修复
 
 - 官方镜像 tool-manifest 双哈希校验：catalog 期望值可匹配 `sha256sum` 文件哈希 **或** 嵌入的 `manifest.sha256`，避免定义漂移导致 provision fail-closed（#629）。

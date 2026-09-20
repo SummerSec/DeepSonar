@@ -1871,6 +1871,99 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .provider-flow-model-meta { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: color-mix(in srgb, var(--accent) 70%, var(--muted)); font: 500 10px var(--font-mono); }
 .provider-flow-catalog-error { display: flex; align-items: flex-start; gap: 6px; margin-top: 9px; border-left: 2px solid #df8177; padding-left: 8px; color: color-mix(in srgb, #e77d72 48%, var(--text)); font: 500 10px var(--font-mono); line-height: 1.5; }
 
+/* Model catalog health_status (#614) — distinct from .provider-health-dot connection probe */
+.provider-flow-catalog-health {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  padding: 11px 12px;
+}
+.provider-flow-catalog-health-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--muted);
+  font: 500 10px var(--font-mono);
+}
+.provider-flow-catalog-model-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow: auto;
+}
+.provider-flow-catalog-model-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+}
+.provider-flow-catalog-model-id strong,
+.provider-flow-catalog-model-id small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-flow-catalog-model-id strong { color: var(--text); font-size: 11px; font-weight: 560; }
+.provider-flow-catalog-model-id small { margin-top: 1px; color: var(--muted); font: 500 9px var(--font-mono); }
+.model-catalog-health-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  font: 600 9px/1.3 var(--font-mono);
+  letter-spacing: .02em;
+}
+.model-catalog-health-badge.is-ok {
+  color: #6ad29a;
+  background: rgb(106 210 154 / .08);
+}
+.model-catalog-health-badge.is-warn {
+  color: #d09a4f;
+  background: rgb(208 154 79 / .09);
+}
+.model-catalog-health-badge.is-danger {
+  color: #e77d72;
+  background: rgb(231 125 114 / .1);
+}
+.model-catalog-health-badge.is-muted {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+}
+.model-catalog-health-badge.is-passthrough {
+  color: #c4a0ff;
+  background: rgb(196 160 255 / .12);
+  border-color: rgb(196 160 255 / .35);
+  box-shadow: 0 0 0 1px rgb(196 160 255 / .12);
+}
+.provider-flow-passthrough-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid rgb(196 160 255 / .32);
+  border-radius: 7px;
+  background: rgb(196 160 255 / .07);
+  padding: 8px 10px;
+  color: color-mix(in srgb, #c4a0ff 55%, var(--text));
+  font-size: 11px;
+  line-height: 1.5;
+}
+html[data-color-scheme="light"] .model-catalog-health-badge.is-ok { color: #177c50; }
+html[data-color-scheme="light"] .model-catalog-health-badge.is-warn { color: #90610f; }
+html[data-color-scheme="light"] .model-catalog-health-badge.is-danger { color: #b4232b; }
+html[data-color-scheme="light"] .model-catalog-health-badge.is-passthrough { color: #6b3fa0; }
+
 /* CC Switch–style Claude form (adapted from Laliet/cc-switch-web, MIT) */
 .cc-switch-form { display: grid; gap: 12px; }
 .cc-switch-field { display: grid; gap: 6px; }
