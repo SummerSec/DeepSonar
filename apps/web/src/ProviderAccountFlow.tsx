@@ -140,6 +140,11 @@ export function ProviderAccountFlow({
     setEditContextWindowTokens(extractContextWindowTokens(settings));
     setEditReasoning(extractProviderReasoning(settings));
     const metadata = credential.public_metadata_json ?? {};
+    // Provider endpoints are stored in public metadata. Keep the existing
+    // endpoint visible in the editor even when the native CLI settings do not
+    // repeat it (for example legacy Claude profiles).
+    const metadataBaseUrl = typeof metadata.base_url === "string" ? metadata.base_url.trim() : "";
+    const existingBaseUrl = metadataBaseUrl || extractBaseUrlFromSettingsClient(settings);
     setEditMaxConcurrent(typeof metadata.max_concurrent === "number" ? String(metadata.max_concurrent) : "");
     if (cli === "codex") {
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
@@ -149,13 +154,13 @@ export function ProviderAccountFlow({
       setEditTomlText(typeof settings.config === "string" ? redactSecretText(settings.config) : "");
       setEditSettingsJson("");
       setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditBaseUrl(existingBaseUrl);
     } else if (cli === "dsh") {
       setEditSettingsJson(typeof settings.config === "string" ? settings.config : "");
       setEditTomlText("");
       setEditAuthJson("");
       setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditBaseUrl(existingBaseUrl);
     } else if (cli === "pi") {
       setEditSettingsJson(
         typeof settings.config === "string" && settings.config.trim()
@@ -167,13 +172,13 @@ export function ProviderAccountFlow({
       setEditTomlText("");
       setEditAuthJson("");
       setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditBaseUrl(existingBaseUrl);
     } else {
       setEditSettingsJson(Object.keys(settings).length > 0 ? formatJsonObject(redactSecretValues(settings) as Record<string, unknown>) : "");
       setEditTomlText("");
       setEditAuthJson("");
       setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditBaseUrl(existingBaseUrl);
     }
   };
 
@@ -371,7 +376,11 @@ export function ProviderAccountFlow({
     try {
       const existingMeta = editingCredential.public_metadata_json ?? {};
       const metadata = { ...existingMeta };
-      if (baseUrl) metadata.base_url = baseUrl;
+      // A blank edit field means "leave the saved endpoint unchanged". The
+      // API key follows the same rule below: only a non-empty value rotates it.
+      const savedBaseUrl = typeof existingMeta.base_url === "string" ? existingMeta.base_url.trim() : "";
+      const effectiveBaseUrl = baseUrl || savedBaseUrl;
+      if (effectiveBaseUrl) metadata.base_url = effectiveBaseUrl;
       else delete metadata.base_url;
       if (maxConcurrent == null) delete metadata.max_concurrent;
       else metadata.max_concurrent = maxConcurrent;

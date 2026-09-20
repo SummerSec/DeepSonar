@@ -1,6 +1,6 @@
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
@@ -119,6 +119,9 @@ export function SettingsPanel({
   const [rulesBusy, setRulesBusy] = useState(false);
   const [rulesSaved, setRulesSaved] = useState(false);
   const [rulesFailed, setRulesFailed] = useState(false);
+  const [projectQuotaBusy, setProjectQuotaBusy] = useState(false);
+  const [projectQuotaSaved, setProjectQuotaSaved] = useState(false);
+  const [projectQuotaFailed, setProjectQuotaFailed] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
   const [configFailed, setConfigFailed] = useState(false);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
@@ -137,6 +140,20 @@ export function SettingsPanel({
   const [syncing, setSyncing] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
+  const projectJobQuotaDirty = useRef(false);
+
+  const applyProjectSettings = (s: ProjectSettings) => {
+    setSettings(s);
+    setRules(s.effective_rules);
+    setFindingProtocol(s.finding_protocol);
+    setEffectiveFindingProtocol(s.effective_finding_protocol);
+    setImageStrategy(s.image_strategy ?? "inherit_global");
+    setRoleRuntimeImages(s.role_runtime_images ?? {});
+    if (!projectJobQuotaDirty.current) {
+      const storedQuota = (s.rules as { maxConcurrentJobs?: unknown }).maxConcurrentJobs;
+      setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
+    }
+  };
 
   const reload = () => {
     if (!projectId && visibleGlobalTabs.length === 0) return;
@@ -157,16 +174,7 @@ export function SettingsPanel({
       api.runtimeImages(projectId).then(setRuntimeImages).catch((error) => showAgentLoadError("运行时镜像", error));
       api
         .settings(projectId)
-        .then((s) => {
-          setSettings(s);
-          setRules(s.effective_rules);
-          setFindingProtocol(s.finding_protocol);
-          setEffectiveFindingProtocol(s.effective_finding_protocol);
-          setImageStrategy(s.image_strategy ?? "inherit_global");
-          setRoleRuntimeImages(s.role_runtime_images ?? {});
-          const storedQuota = (s.rules as { maxConcurrentJobs?: unknown }).maxConcurrentJobs;
-          setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
-        })
+        .then(applyProjectSettings)
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
       // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
@@ -247,9 +255,6 @@ export function SettingsPanel({
       ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.provisionTimeoutSec = rules.provisionTimeoutSec;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
-    } else {
-      const trimmed = projectJobQuota.trim();
-      ruleBody.maxConcurrentJobs = trimmed === "" ? null : Number(trimmed);
     }
     setRulesBusy(true);
     setRulesSaved(false);
@@ -270,6 +275,39 @@ export function SettingsPanel({
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
     } finally {
       setRulesBusy(false);
+    }
+  };
+
+  const saveProjectQuota = async () => {
+    if (!projectId || !rules) return;
+    const trimmed = projectJobQuota.trim();
+    const quota = trimmed === "" ? null : Number(trimmed);
+    if (
+      quota !== null
+      && (!Number.isInteger(quota) || quota < 0 || quota > rules.maxJobsPerProject)
+    ) {
+      setProjectQuotaFailed(true);
+      flash(`项目并发上限必须是 0-${rules.maxJobsPerProject} 的整数，或留空继承全局`);
+      return;
+    }
+    setProjectQuotaBusy(true);
+    setProjectQuotaSaved(false);
+    setProjectQuotaFailed(false);
+    try {
+      await api.patchSettings(projectId, { rules: { maxConcurrentJobs: quota } });
+      // Re-read the server response so the displayed effective limit reflects the
+      // actual project/global cap after the write.
+      const refreshed = await api.settings(projectId);
+      projectJobQuotaDirty.current = false;
+      applyProjectSettings(refreshed);
+      flash("项目调度配额已保存（下一 Job 生效）");
+      setProjectQuotaSaved(true);
+      window.setTimeout(() => setProjectQuotaSaved(false), 2000);
+    } catch (e) {
+      setProjectQuotaFailed(true);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setProjectQuotaBusy(false);
     }
   };
 
@@ -728,9 +766,21 @@ export function SettingsPanel({
                       max={rules.maxJobsPerProject}
                       placeholder={`继承全局 ${rules.maxJobsPerProject}`}
                       value={projectJobQuota}
-                      onChange={(e) => setProjectJobQuota(e.target.value)}
+                      onChange={(e) => {
+                        projectJobQuotaDirty.current = true;
+                        setProjectJobQuota(e.target.value);
+                      }}
                       className={inputCls}
                     />
+                    <button
+                      type="button"
+                      onClick={saveProjectQuota}
+                      disabled={projectQuotaBusy}
+                      className="mt-2 flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[12px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <FloppyDisk size={13} />
+                      {projectQuotaBusy ? "保存中…" : projectQuotaSaved ? "已保存" : projectQuotaFailed ? "保存失败" : "保存项目配额"}
+                    </button>
                   </div>
                   <div>
                     <div className={labelCls}>当前运行 / 有效上限</div>

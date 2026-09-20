@@ -449,6 +449,19 @@ test("provider UI exposes only protocol labels and the two supported OpenCode pr
   assert.match(flow, /providerProtocolLabel/);
 });
 
+test("Provider Base URL input preserves a trailing slash while typing a path", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /onChange=\{\(e\) => onBaseUrlChange\(e\.target\.value\)\}/u);
+  assert.doesNotMatch(editor, /onBaseUrlChange\(e\.target\.value\.trim\(\)\.replace\(\/\\\\\+\$\/u, ""\)\)/u);
+});
+
+test("Provider edit reuses saved Base URL and rotates API key only when replaced", () => {
+  assert.match(flow, /const metadataBaseUrl = typeof metadata\.base_url === "string" \? metadata\.base_url\.trim\(\) : ""/u);
+  assert.match(flow, /const existingBaseUrl = metadataBaseUrl \|\| extractBaseUrlFromSettingsClient\(settings\)/u);
+  assert.match(flow, /const effectiveBaseUrl = baseUrl \|\| savedBaseUrl/u);
+  assert.match(flow, /if \(editApiKey\.trim\(\)\) \{\s*await api\.rotateCredential\(editingCredential\.id, editApiKey\.trim\(\)\)/u);
+});
+
 test("#624 edit mode allows Provider protocol migration and persists provider", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const flowSource = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
