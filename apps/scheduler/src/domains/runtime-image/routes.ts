@@ -40,6 +40,7 @@ import {
   RUNTIME_IMAGE_REGISTRY_CHANNELS,
   type RuntimeImageRegistryChannel,
 } from "../../runtime-images.js";
+import { runRuntimeImageContractSelftest } from "../../runtime-image-contract-selftest.js";
 
 const RuntimeImageImportBody = z.object({
   image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/),
@@ -185,6 +186,15 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     ]);
     const image_status = await listOfficialRuntimeImageStatus(registry, selectedChannel);
     return { ...registry, selected_channel: selectedChannel, image_status };
+  });
+
+  /**
+   * Read-only dual-hash contract selftest (#636): compare catalog tools_manifest_sha256
+   * against local image file-bytes + embedded manifest.sha256. Images not present
+   * locally are reported as skipped_not_local without failing the whole endpoint.
+   */
+  app.get("/runtime-images/contract-selftest", async () => {
+    return runRuntimeImageContractSelftest();
   });
 
   app.patch("/runtime-images/registry/channel", async (req, reply) => {

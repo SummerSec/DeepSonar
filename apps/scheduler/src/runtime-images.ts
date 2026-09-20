@@ -5,6 +5,10 @@ import path from "node:path";
 import { agentCliIdsCompatibleWithImage } from "@deepsonar/runtime-sandbox";
 import { OFFICIAL_RUNTIME_IMAGE_KEYS, isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
 import { inspectLocalRuntimeImage } from "./runtime-image-local-inspection.js";
+import {
+  toolsManifestSha256SyncChange,
+  warnToolsManifestSha256Overwrite,
+} from "./runtime-image-manifest-hash.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import {
@@ -765,6 +769,12 @@ export function sanitizeRuntimeImageError(value: unknown, maxBytes = RUNTIME_IMA
 }
 
 export { inspectLocalRuntimeImage };
+export {
+  coalesceToolsManifestSha256,
+  catalogMatchesDualHash,
+  normalizeToolsManifestSha256,
+  toolsManifestSha256SyncChange,
+} from "./runtime-image-manifest-hash.js";
 export type { RuntimeImageLocalInspection } from "./runtime-image-local-inspection.js";
 
 function fakeSnapshot(imageKey: string): RuntimeImageSnapshot {
@@ -1240,6 +1250,31 @@ export async function rollStaleOfficialProjectPins(
   });
 }
 
+
+async function maybeWarnToolsManifestSha256Overwrite(input: {
+  runtimeImageId: string;
+  imageKey: string;
+  digest: string;
+  nextSha: string | null;
+  insertOnly: boolean;
+}): Promise<void> {
+  const [existing] = await sql`
+    SELECT tools_manifest_sha256 FROM runtime_image_versions
+    WHERE runtime_image_id = ${input.runtimeImageId} AND digest = ${input.digest}
+    LIMIT 1`;
+  const previous = existing?.tools_manifest_sha256 ? String(existing.tools_manifest_sha256) : null;
+  if (toolsManifestSha256SyncChange(previous, input.nextSha) !== "overwrite" || !previous || !input.nextSha) {
+    return;
+  }
+  warnToolsManifestSha256Overwrite({
+    image_key: input.imageKey,
+    digest: input.digest,
+    old: previous,
+    new: input.nextSha,
+    insert_only: input.insertOnly,
+  });
+}
+
 /**
  * 将一份已解析的官方清单写入 DB（bootstrap / 远程同步 / 运维手动上传共用）。
  * env 覆盖仅在「清单里该产品 versions 为空」时补位，不会覆盖已有 digest。
@@ -1322,6 +1357,13 @@ export async function applyOfficialRuntimeCatalog(
             LIMIT 1`;
           if (existing?.id) continue;
         }
+        await maybeWarnToolsManifestSha256Overwrite({
+          runtimeImageId: String(image.id),
+          imageKey: item.image_key,
+          digest,
+          nextSha: version.tools_manifest_sha256 ?? null,
+          insertOnly,
+        });
         const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET
@@ -1359,6 +1401,13 @@ export async function applyOfficialRuntimeCatalog(
         // that exact digest. A revoked row is only re-scanned when the trusted
         // catalog moves its admission pull reference to another registry; a
         // same-ref sync must preserve genuine security revocations.
+        await maybeWarnToolsManifestSha256Overwrite({
+          runtimeImageId: String(image.id),
+          imageKey: item.image_key,
+          digest,
+          nextSha: version.tools_manifest_sha256 ?? null,
+          insertOnly,
+        });
         const [saved] = await sql`
           INSERT INTO runtime_image_versions ${sql(values)}
           ON CONFLICT (runtime_image_id, digest) WHERE digest IS NOT NULL DO UPDATE SET

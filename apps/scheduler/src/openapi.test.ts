@@ -80,7 +80,8 @@ test("/health OpenAPI includes deploy version", () => {
   const paths = document.paths as Record<string, Record<string, any>>;
   const health = paths["/health"]?.get as Record<string, any>;
   const schema = health.responses["200"].content["application/json"].schema;
-  assert.deepEqual(schema.required, ["ok", "ready", "version", "runtime_images", "dispatcher", "opensandbox", "ts"]);
+  assert.deepEqual(schema.required, ["ok", "ready", "version", "git_revision", "runtime_images", "dispatcher", "opensandbox", "ts"]);
+  assert.equal(schema.properties.git_revision.type, "string");
   assert.deepEqual(schema.properties.opensandbox.required, ["level", "domain", "ready"]);
   assert.equal(schema.properties.version.type, "string");
 });

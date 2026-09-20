@@ -10,6 +10,7 @@
 
 ### 修复
 
+- 运行时镜像契约自检与 sync 可观测性（#636）：新增只读 `GET /runtime-images/contract-selftest`（`images:read`），对本机存在的当前 catalog 版本比对 catalog `tools_manifest_sha256` 与镜像内文件字节哈希 / 内嵌 `manifest.sha256`（双口径与 #633 一致；本地缺失为 `skipped_not_local`）。registry sync upsert 在非空 `tools_manifest_sha256` 被不同 catalog 值覆盖时打结构化告警与指标；单测锁定 `COALESCE(EXCLUDED, existing)`。废弃手工 `UPDATE tools_manifest_sha256`。scheduler 镜像可戳 `org.opencontainers.image.revision`，`GET /health` 暴露 `git_revision` 便于对照部署。详见 `docs/RUNTIME_IMAGE_CONTRACT_DEPLOY.md`。
 - 官方镜像 tool-manifest 双哈希校验：catalog 期望值可匹配 `sha256sum` 文件哈希 **或** 嵌入的 `manifest.sha256`，避免定义漂移导致 provision fail-closed（#629）。
 - Gateway 冻结模型门禁：`bareUpstreamModelId` 剥离 Claude Code 尾部上下文标注（如 `[1m]`），请求裸 id 与冻结带标注 id 可互认，修复误报 `GATEWAY_FROZEN_MODEL_MISMATCH` 403（#630）。
 - RoleConfig PUT：`credentials` 改为可选（省略则保留既有绑定，显式 `[]` 才清空）；项目 `inherit_global` 丢弃 model 时在响应中返回 `dropped_fields` / `upsert_warnings`；Web 编辑器保存时不再误发空 `credentials`（#631）。架构层跟踪见 #632（本 PR 不改写）。

@@ -35,6 +35,12 @@ COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
 # 生产制品（§12.1）：workspace 包 main/exports 指向 dist，scheduler 跑 node dist/index.js（不用 tsx）
 RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/runtime-manual-contract --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build
 
+
+ARG GIT_REVISION=
+LABEL org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.revision="${GIT_REVISION}"
+ENV DEEPSONAR_GIT_REVISION=${GIT_REVISION}
+
 ENV NODE_ENV=production
 # Content-addressed blobs (shared assets, evidence) must live on the mounted volume.
 # Compose mounts blob_data at /app/data; without this, cwd-relative ./data/blobs

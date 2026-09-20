@@ -1,6 +1,8 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
 > **状态：运维 as-built**。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
+>
+> Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
 `.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome、ClickHouse 与 Mobile 专项镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，ClickHouse amd64 合同冒烟在 `.github/workflows/clickhouse-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。
 

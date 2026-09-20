@@ -198,6 +198,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "DELETE /projects/:id/role-configs/:roleId": "agents:write",
   "GET /runtime-images": "images:read",
   "GET /runtime-images/registry": "images:read",
+  "GET /runtime-images/contract-selftest": "images:read",
   "PATCH /runtime-images/registry/channel": "images:manage",
   "POST /runtime-images/registry/sync": "images:manage",
   "POST /runtime-images/registry/apply": "images:manage",

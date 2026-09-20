@@ -262,13 +262,17 @@ const OPS: Op[] = [
       "200": {
         type: "object",
         additionalProperties: false,
-        required: ["ok", "ready", "version", "runtime_images", "dispatcher", "opensandbox", "ts"],
+        required: ["ok", "ready", "version", "git_revision", "runtime_images", "dispatcher", "opensandbox", "ts"],
         properties: {
           ok: { type: "boolean" },
           ready: { type: "boolean" },
           version: {
             type: "string",
             description: "部署版本：DEEPSONAR_VERSION，否则 DEEPSONAR_IMAGE_TAG；未设置时为空字符串，不用 workspace package.json",
+          },
+          git_revision: {
+            type: "string",
+            description: "运行中 scheduler 的 git revision（DEEPSONAR_GIT_REVISION / OPENCONTAINERS_IMAGE_REVISION）；用于对照目标 commit 是否已部署生效（#636）",
           },
           runtime_images: { type: "object", additionalProperties: true },
           dispatcher: { type: "object", additionalProperties: true },
@@ -1865,6 +1869,55 @@ const OPS: Op[] = [
     scope: "images:read",
     tags: ["Runtime Images"],
     query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
+  },
+  {
+    method: "get",
+    path: "/runtime-images/contract-selftest",
+    summary: "只读自检：catalog tools_manifest_sha256 与本地镜像双哈希比对",
+    description: "对当前目录每个 image key 的当前版本，尝试在本机 Docker 比对 catalog 登记的 tools_manifest_sha256 与镜像内 /opt/deepsonar/tool-manifest.json 的文件字节哈希及内嵌 manifest.sha256。双口径接受规则与 #633 / OpenSandbox provision 一致（任一匹配即通过）。本地不存在的镜像返回 skipped_not_local，不使整次自检失败。ok 仅在所有非 skipped 项 match 时为 true。禁止把手工 UPDATE tools_manifest_sha256 当作长期缓解。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    responses: {
+      "200": {
+        description: "自检结果",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["ok", "checked_at", "results"],
+              additionalProperties: false,
+              properties: {
+                ok: { type: "boolean" },
+                checked_at: { type: "string", format: "date-time" },
+                results: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["image_key", "catalog_sha256", "match", "status"],
+                    additionalProperties: false,
+                    properties: {
+                      image_key: { type: "string" },
+                      version: { type: "string", nullable: true },
+                      digest: { type: "string", nullable: true },
+                      image_ref: { type: "string", nullable: true },
+                      catalog_sha256: { type: "string", nullable: true },
+                      file_bytes_sha256: { type: "string", nullable: true },
+                      embedded_sha256: { type: "string", nullable: true },
+                      match: { type: "boolean", nullable: true },
+                      status: {
+                        type: "string",
+                        enum: ["ok", "mismatch", "skipped_not_local", "skipped_no_catalog_hash", "error"],
+                      },
+                      detail: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   {
     method: "get",

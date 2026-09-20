@@ -102,6 +102,7 @@ PATCH /role-configs/:id/agent-cli
 PATCH /role-configs/:id/runtime-image
 GET /runtime-images
 GET /runtime-images/:id([0-9a-fA-F-]{36})
+GET /runtime-images/contract-selftest
 GET /runtime-images/registry
 GET /runtime-images/registry/pull-status
 GET /runtime-image-versions/:id/usage
@@ -302,6 +303,7 @@ GET /role-configs/bindable
 GET /role-configs/global
 GET /runtime-image-versions/{id}/usage
 GET /runtime-images
+GET /runtime-images/contract-selftest
 GET /runtime-images/registry
 GET /runtime-images/registry/pull-status
 GET /runtime-images/{id}

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { renderMetrics } from "../../metrics.js";
 import { buildOpenApiDocument, buildSchemaSummary, loadApiMarkdown } from "../../openapi.js";
-import { resolveProductVersion } from "../../product-version.js";
+import { resolveGitRevision, resolveProductVersion } from "../../product-version.js";
 import {
   openSandboxAllowsDispatch,
   refreshOpenSandboxServerStatus,
@@ -89,6 +89,7 @@ export function registerSystemRoutes(
       ok: true,
       ready: runtimeImages.ready && dispatcher.enabled && openSandboxAllowsDispatch(openSandbox),
       version: resolveProductVersion(),
+      git_revision: resolveGitRevision(),
       runtime_images: {
         ...runtimeImages,
         official_trust_warnings: officialTrustWarnings,
