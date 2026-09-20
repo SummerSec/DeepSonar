@@ -767,11 +767,6 @@ export function SettingsPanel({
                   credentials={credentials}
                   enabledAgentClis={settings?.enabled_agent_clis ?? ["claude-code"]}
                   enabledCredentialIds={settings?.enabled_credential_ids ?? []}
-                  defaultAgentCli={settings?.default_agent_cli ?? null}
-                  defaultCredentialId={settings?.default_credential_id ?? null}
-                  defaultModelRef={settings?.default_model_ref ?? null}
-                  fallbackModelRefs={settings?.fallback_model_refs ?? []}
-                  allowModelCatalogPassthrough={settings?.allow_model_catalog_passthrough === true}
                   onSaved={reload}
                 />
                 <ProjectSkillSourceAllowlistPanel projectId={projectId} onSaved={reload} />
