@@ -1197,8 +1197,17 @@ export interface CredentialModels {
   model_descriptors?: ModelCapabilityDescriptor[];
   source_url?: string | null;
   fetched_at: string | null;
+  /** ModelCatalogHealthStatus for the catalog as a whole (verified/stale/probe_failed/…). */
   state?: string;
+  catalog_health_status?: string;
   catalog_revision?: string | null;
+  /** Credential connection probe — distinct from catalog health_status. */
+  connection_health?: {
+    status: "unknown" | "ok" | "error";
+    last_tested_at: string | null;
+    error_category: string | null;
+    detail: string | null;
+  };
 }
 
 /** Provider Credential（§6.2）：永不返回密文，只有指纹/last4 */

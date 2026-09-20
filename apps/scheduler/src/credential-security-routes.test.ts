@@ -59,3 +59,15 @@ test("explicit catalog refresh soft-degrades empty catalog instead of hard-faili
   assert.match(route, /model_catalog_fetched_at = NULL/);
   assert.doesNotMatch(route, /return reply\.code\(502\)/);
 });
+
+test("GET /credentials/:id/models returns catalog_health_status distinct from connection health (#614)", () => {
+  const start = routes.indexOf('app.get("/credentials/:id/models"');
+  assert.ok(start >= 0);
+  const end = routes.indexOf('app.get("/credentials/:id/compatibility"', start);
+  const route = routes.slice(start, end > start ? end : undefined);
+  assert.match(route, /catalog_health_status/);
+  assert.match(route, /connection_health/);
+  assert.match(route, /probe_failed/);
+  assert.match(route, /healthStatus: catalogHealth/);
+  assert.doesNotMatch(route, /state: "verified"/);
+});

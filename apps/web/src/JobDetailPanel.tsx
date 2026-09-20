@@ -2,6 +2,7 @@ import { ArrowClockwise, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type CanvasHumanMessage, type ContextDiagnostics, type JobDetail, type JobEvidence, type JobEvent, type JobSession, type ProviderCredential } from "./api";
 import { formatSnapshotModelField } from "./snapshot-model-label";
+import { FrozenProviderModelHealthSection } from "./FrozenProviderModelHealth";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
@@ -1142,6 +1143,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                       {agentCli === "dsh" && <ConfigField label="DSH 任务模式" value={dshTaskMode} />}
                       <ConfigField label="模型 (model)" value={modelFields.modelLabel} title={modelFields.title} />
                       <ConfigField label="上游模型 (upstream_model)" value={modelFields.upstreamLabel} title={modelFields.title} />
+                      <FrozenProviderModelHealthSection snapshot={snapshot} />
                       <ConfigField
                         label="CLI 客户端上下文预算"
                         value={contextWindowTokens === "—" ? "Provider / CLI 默认" : `${contextWindowTokens} tokens`}
@@ -1158,14 +1160,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                         value={credentialLabel}
                         title={credentialId !== "—" ? `ID: ${credentialId}` : undefined}
                       />
-                      <ConfigField
-                        label="RoleConfig 版本"
-                        value={snapStr(snapshot, "role_config_version")}
-                      />
-                      <ConfigField
-                        label="RoleConfig ID"
-                        value={snapStr(snapshot, "role_config_id")}
-                      />
+                      <ConfigField label="RoleConfig 版本" value={snapStr(snapshot, "role_config_version")} />
+                      <ConfigField label="RoleConfig ID" value={snapStr(snapshot, "role_config_id")} />
                     </div>
                   </div>
                   <div>

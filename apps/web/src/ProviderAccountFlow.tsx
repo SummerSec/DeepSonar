@@ -34,6 +34,8 @@ import {
   rawModelCatalog,
   sameLast4CredentialCount,
 } from "./provider-account-helpers";
+import { credentialCatalogHealthSummary } from "./model-catalog-health";
+import { ModelCatalogHealthPanel } from "./ModelCatalogHealthPanel";
 import { ROLE_BINDING_HREF } from "./settings-tabs";
 
 export {
@@ -607,12 +609,7 @@ export function ProviderAccountFlow({
                       </small>
                     </span>
                     <span className="provider-flow-credential-meta">
-                      {healthStatusLabel(credential.health?.status)}
-                      {" · "}
-                      {credential.agent_cli
-                        ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli)
-                        : "CLI 未设"}
-                      {" · ····"}{credential.last4}
+                      连接 {healthStatusLabel(credential.health?.status)} · {credentialCatalogHealthSummary(credential)} · {credential.agent_cli ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli) : "CLI 未设"} · ····{credential.last4}
                       {sameLast4Count > 1 && ` · ⚠ 同末四位账号 ${sameLast4Count} 个，请核对绑定`}
                     </span>
                   </button>
@@ -709,7 +706,7 @@ export function ProviderAccountFlow({
           {selectedCredential && (
             <div className="provider-flow-health">
               <span className={`provider-health-dot ${selectedCredential.health?.status ?? "unknown"}`} />
-              <strong>{selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
+              <strong title="凭据连接探测（test），与下方模型目录 health_status 不同">连接 {selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
               <span>当前选中 · 被 {boundRoleCount} 个角色引用</span>
               <span>{selectedCredential.health?.last_tested_at ? `最近测试 ${new Date(selectedCredential.health.last_tested_at).toLocaleString()}` : "尚未测试"}</span>
             </div>
@@ -762,11 +759,7 @@ export function ProviderAccountFlow({
             <span>指纹 {selectedCredential?.fingerprint?.slice(0, 8) ?? "--------"}</span>
             {currentCatalog.length > 0 && <span>目录 {currentCatalog.length} 个</span>}
           </div>
-          {selectedCredential && (
-            <div className="provider-flow-warning">
-              <Warning size={13} /> 模型目录和连接测试不代表当前 Key 有调用该模型的权限；以具体调用或任务返回的上游 403 为准。发现不等于授权。
-            </div>
-          )}
+          {selectedCredential && <ModelCatalogHealthPanel credential={selectedCredential} />}
           {catalogError && <div className="provider-flow-catalog-error"><Warning size={13} /> {catalogError}</div>}
 
           {selectedCredential && (

@@ -20,6 +20,7 @@ import {
 import { isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
+import { recordSystemAudit } from "./audit.js";
 import {
   createRoleRuntimeSnapshotApplication,
   freezeAgentSnapshotNetworkPolicy,
@@ -1000,10 +1001,29 @@ export async function createJob(input: CreateJobInput) {
         })}
         RETURNING *`;
       await recordJobSharedAssets(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, created.id as string, snapshot.shared_assets ?? []);
-      return created;
+      return { created, snapshotWithKnobs };
     });
     inc("deepsonar_jobs_created_total", { type: input.type });
-    return { job, duplicated: false };
+    const providerModel = job.snapshotWithKnobs && typeof job.snapshotWithKnobs === "object"
+      ? (job.snapshotWithKnobs as { provider_model?: { passthrough?: boolean; upstream_model_id?: string | null; cli_model_id?: string | null; catalog_revision?: string | null; model_descriptor?: { health_status?: string } | null } }).provider_model
+      : undefined;
+    if (providerModel?.passthrough === true) {
+      void recordSystemAudit({
+        action: "job.model_catalog_passthrough",
+        projectId: input.projectId,
+        resourceType: "job",
+        resourceId: String(job.created.id),
+        after: {
+          passthrough: true,
+          upstream_model_id: providerModel.upstream_model_id ?? null,
+          cli_model_id: providerModel.cli_model_id ?? null,
+          catalog_revision: providerModel.catalog_revision ?? null,
+          health_status: providerModel.model_descriptor?.health_status ?? "passthrough_allowed",
+          job_type: input.type,
+        },
+      });
+    }
+    return { job: job.created, duplicated: false };
   } catch (e: unknown) {
     // ingress_key / 活跃 Verify 等唯一约束：已有冲突 Job
     if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
