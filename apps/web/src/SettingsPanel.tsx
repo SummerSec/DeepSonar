@@ -700,7 +700,7 @@ export function SettingsPanel({
             )}
 
             {projectId && settings && rules && (
-              <ProjectJobQuotaSection
+              <ProjectJobQuotaSection key={projectId}
                 projectId={projectId}
                 settings={settings}
                 rules={rules}
