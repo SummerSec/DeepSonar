@@ -5,6 +5,7 @@ import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import { planCredentialAgentCliFollow, projectCredentialProvider } from "../../credentials.js";
+import { credentialBindingDeprecatedWarning } from "../provider-adapter/index.js";
 import { isUuid } from "../../project-scope.js";
 import {
   CONFIG_FILE_MAX_BYTES,
@@ -79,8 +80,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     /** Project-only numeric sandbox resource overrides; capability flags stay server-owned. */
     sandbox_limits: z.unknown().optional(),
     runtime_knobs: z.unknown().optional(),
-    /** Omit = preserve existing bindings; explicit [] clears (#631). */
-    credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).optional(),
+    /**
+     * @deprecated #632 — prefer project Agent/Provider allowlist `default_credential_id`
+     * (platform-held credential resources). Omit = preserve existing role_credentials;
+     * explicit [] clears (#631). Still honored at runtime for compatibility.
+     */
+    credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).optional()
+      .describe("DEPRECATED (#632): prefer project allowlist default_credential_id; RoleConfig.credentials binding is legacy."),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
     pi_extensions: z.array(z.string()).default([]),
   });
@@ -589,20 +595,32 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       },
     });
     const view = await roleConfigView(configId, req.actor?.projectId ?? null);
+    const upsert_warnings = [
+      ...(mutation.dropped_fields.length > 0
+        ? [{
+          category: "model_correctable" as const,
+          code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
+          field: "model",
+          message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
+        }]
+        : []),
+      ...((() => {
+        if (body.credentials === undefined) return [];
+        const repair = credentialBindingDeprecatedWarning({ bindingCount: body.credentials.length });
+        return [{
+          category: "model_correctable" as const,
+          code: "credential_binding_deprecated" as const,
+          field: "credentials",
+          message: repair.message,
+          repair,
+        }];
+      })()),
+    ];
     return {
       ...view,
       binding_diff: mutation.binding_diff,
       dropped_fields: mutation.dropped_fields,
-      ...(mutation.dropped_fields.length > 0
-        ? {
-          upsert_warnings: [{
-            category: "model_correctable",
-            code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
-            field: "model",
-            message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
-          }],
-        }
-        : {}),
+      ...(upsert_warnings.length > 0 ? { upsert_warnings } : {}),
     };
   });
 
@@ -674,20 +692,32 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       },
     });
     const view = await roleConfigView(configId, actorProjectId);
+    const upsert_warnings = [
+      ...(mutation.dropped_fields.length > 0
+        ? [{
+          category: "model_correctable" as const,
+          code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
+          field: "model",
+          message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
+        }]
+        : []),
+      ...((() => {
+        if (body.credentials === undefined) return [];
+        const repair = credentialBindingDeprecatedWarning({ bindingCount: body.credentials.length });
+        return [{
+          category: "model_correctable" as const,
+          code: "credential_binding_deprecated" as const,
+          field: "credentials",
+          message: repair.message,
+          repair,
+        }];
+      })()),
+    ];
     return {
       ...view,
       binding_diff: mutation.binding_diff,
       dropped_fields: mutation.dropped_fields,
-      ...(mutation.dropped_fields.length > 0
-        ? {
-          upsert_warnings: [{
-            category: "model_correctable",
-            code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
-            field: "model",
-            message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
-          }],
-        }
-        : {}),
+      ...(upsert_warnings.length > 0 ? { upsert_warnings } : {}),
     };
   });
 

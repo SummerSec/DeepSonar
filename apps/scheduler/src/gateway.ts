@@ -751,7 +751,11 @@ export function registerGateway(app: FastifyInstance): void {
         });
       } catch (error) {
         if (error instanceof GatewayFrozenModelMismatchError) {
-          return deny(reply, 403, error.message, "frozen_model_mismatch");
+          return reply.code(403).send({
+            error: { type: "frozen_model_mismatch", message: error.message },
+            error_code: "frozen_model_mismatch",
+            repair: error.repair,
+          });
         }
         throw error;
       }

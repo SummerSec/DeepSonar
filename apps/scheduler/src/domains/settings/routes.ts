@@ -249,7 +249,12 @@ async function validateProjectModelAllowlist(
     const known = new Set(catalog.map((row) => row.model_id));
     const unknown = refs.find((ref) => !known.has(ref));
     if (unknown) {
-      throw new Error(`模型 ${unknown} 不在 Provider capability catalog；请先刷新目录或开启项目模型直通`);
+      const err = new Error(
+        `模型 ${unknown} 不在 Provider capability catalog（SSOT）；请选择目录内 model_id，或仅在 alias 网关应急时开启 allow_model_catalog_passthrough`,
+      ) as Error & { error_code?: string; repair_code?: string };
+      err.error_code = "model_not_in_catalog";
+      err.repair_code = "model_passthrough_disabled";
+      throw err;
     }
     const selectedCli = allowlist.default_agent_cli;
     if (selectedCli) {

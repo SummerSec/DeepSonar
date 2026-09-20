@@ -120,3 +120,12 @@ test("runtime registry channel OpenAPI is strict and project-scope aware", () =>
     ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"],
   );
 });
+
+test("RoleConfigInput.credentials is marked deprecated (#632)", () => {
+  const document = buildOpenApiDocument();
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  const credentials = schemas.RoleConfigInput?.properties?.credentials;
+  assert.ok(credentials);
+  assert.equal(credentials.deprecated, true);
+  assert.match(String(credentials.description ?? ""), /632|弃用/);
+});

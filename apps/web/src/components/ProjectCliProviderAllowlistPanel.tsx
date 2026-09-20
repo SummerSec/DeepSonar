@@ -540,10 +540,10 @@ export function ProjectCliProviderAllowlistPanel({
               aria-label="项目允许模型目录直通"
             />
             <span>
-              项目允许模型目录直通（alias）
+              项目允许模型目录直通（应急 alias，默认关闭）
               <span className="mt-0.5 block text-[11px] leading-5 text-zinc-500">
-                开启后可保存不在 Provider 观测目录中的缺省 / fallback 引用；角色配置仍可单独关闭自己的直通权限。
-                关闭时模型选择 fail-closed。
+                默认关闭：缺省 / fallback 必须是 Provider 目录内的 catalog model_id（#632 SSOT）。
+                仅 alias 网关应急时开启；关闭时模型选择 fail-closed，失败返回结构化 RepairFeedback。
               </span>
             </span>
           </label>
@@ -558,7 +558,7 @@ export function ProjectCliProviderAllowlistPanel({
           <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存启用与缺省"}
         </button>
         <div className="font-mono text-[10px] leading-5 text-zinc-600">
-          解析顺序：Hub 提案 → 项目缺省 CLI / Provider / 模型 → RoleConfig 绑定 → Provider / CLI 内置默认；修改仅影响下一 Job。
+          解析顺序：Hub 提案 → 项目缺省 CLI / Provider / 模型（推荐）→ RoleConfig.credentials（已弃用，仍兼容）→ Provider / CLI 内置默认；修改仅影响下一 Job。
         </div>
       </div>
     </section>

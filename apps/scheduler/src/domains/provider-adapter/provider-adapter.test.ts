@@ -270,6 +270,8 @@ test("gateway guard rejects request models outside Job freeze", () => {
     (error: unknown) => {
       assert.ok(error instanceof GatewayFrozenModelMismatchError);
       assert.equal(error.code, "GATEWAY_FROZEN_MODEL_MISMATCH");
+      assert.equal(error.repair.code, "model_not_in_catalog");
+      assert.equal(error.repair.category, "permanent_failure");
       return true;
     },
   );
@@ -311,6 +313,8 @@ test("gateway guard allows bare model when freeze lists Claude Code [1m] annotat
     (error: unknown) => {
       assert.ok(error instanceof GatewayFrozenModelMismatchError);
       assert.equal(error.code, "GATEWAY_FROZEN_MODEL_MISMATCH");
+      assert.equal(error.repair.code, "model_not_in_catalog");
+      assert.equal(error.repair.category, "permanent_failure");
       return true;
     },
   );

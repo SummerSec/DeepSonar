@@ -1,5 +1,6 @@
-import type { FrozenProviderModelSnapshot } from "@deepsonar/shared-types";
+import type { FrozenProviderModelSnapshot, RepairFeedback } from "@deepsonar/shared-types";
 import { findProviderAdapter } from "./catalog.js";
+import { gatewayFrozenModelRepair } from "./model-catalog-admit.js";
 
 /**
  * Normalize upstream / request model ids for Gateway allowlist checks.
@@ -26,12 +27,14 @@ export class GatewayFrozenModelMismatchError extends Error {
   readonly code = GATEWAY_FROZEN_MODEL_MISMATCH;
   readonly requestModel: string;
   readonly allowed: string[];
+  readonly repair: RepairFeedback;
 
-  constructor(message: string, requestModel: string, allowed: string[]) {
+  constructor(message: string, requestModel: string, allowed: string[], repair?: RepairFeedback) {
     super(message);
     this.name = "GatewayFrozenModelMismatchError";
     this.requestModel = requestModel;
     this.allowed = allowed;
+    this.repair = repair ?? gatewayFrozenModelRepair({ requestModel, allowed });
   }
 }
 
@@ -82,11 +85,8 @@ export function assertGatewayRequestModelAllowed(input: {
   const allowedBare = new Set(allowed.map((item) => bareUpstreamModelId(item) ?? item));
   if (allowedBare.has(bare)) return;
 
-  throw new GatewayFrozenModelMismatchError(
-    `Gateway 拒绝未冻结模型 ${request}；Job 仅允许：${allowed.slice(0, 12).join("、")}`,
-    request,
-    allowed,
-  );
+  const repair = gatewayFrozenModelRepair({ requestModel: request, allowed });
+  throw new GatewayFrozenModelMismatchError(repair.message, request, allowed, repair);
 }
 
 /** Extract request model from a Gateway JSON body when present. */
