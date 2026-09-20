@@ -37,6 +37,8 @@ export function CcSwitchOpenCodeFields({
   canFetchModels = false,
   onNotice,
   onError,
+  showConnectionFields = true,
+  showModelFields = true,
 }: {
   settingsJson: string;
   onSettingsJsonChange: (value: string) => void;
@@ -51,6 +53,8 @@ export function CcSwitchOpenCodeFields({
   canFetchModels?: boolean;
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
+  showConnectionFields?: boolean;
+  showModelFields?: boolean;
 }) {
   const validation = useMemo(() => validateJsonObjectText(settingsJson), [settingsJson]);
   const config = validation.ok && !validation.empty ? validation.value : defaultOpenCodeSettings(apiKey, baseUrl, provider);
@@ -126,6 +130,7 @@ export function CcSwitchOpenCodeFields({
           clearable={false}
         />
       </div>
+      {showConnectionFields && <>
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-opencode-key">API Key</label>
         <div className="cc-switch-secret-wrap">
@@ -138,6 +143,8 @@ export function CcSwitchOpenCodeFields({
         <input id="cc-switch-opencode-url" value={baseUrl} onChange={(event) => changeUrl(event.target.value)}
           className="theme-input-surface cc-switch-input" placeholder="http://127.0.0.1/v1" />
       </div>
+      </>}
+      {showModelFields && <>
       <div className="cc-switch-model-grid">
         <label className="cc-switch-toggle-row">
           <span><strong>Base URL 是完整接口地址</strong><small>模型列表地址需要单独推导时启用</small></span>
@@ -180,6 +187,7 @@ export function CcSwitchOpenCodeFields({
             </div>
           ))}</div>}
       </div>
+      </>}
       <div className="cc-switch-field">
         <div className="cc-switch-field-head"><label className="cc-switch-label" htmlFor="cc-switch-opencode-json">Provider 配置 JSON</label>
           <button type="button" className="secondary-button !min-h-7 !px-2 !text-[10px]" onClick={format}><MagicWand size={13} />格式化</button></div>

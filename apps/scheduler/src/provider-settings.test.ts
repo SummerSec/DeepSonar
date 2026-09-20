@@ -72,13 +72,17 @@ test("materializeProviderSettings writes Claude settings.json", () => {
       },
       reasoning: "medium",
     },
-    overrides: { model: "claude-opus-4", reasoning: "xhigh" },
+    overrides: { model: "claude-opus-4", reasoning: "xhigh", context_window_tokens: 128000 },
   });
   assert.equal(files.length, 1);
   assert.equal(files[0]?.path, ".claude/settings.json");
   const parsed = JSON.parse(files[0]!.content) as { env: Record<string, string>; effortLevel?: string; reasoning?: string };
   assert.equal(parsed.env.ANTHROPIC_API_KEY, "sk-live");
   assert.equal(parsed.env.ANTHROPIC_MODEL, "claude-opus-4");
+  assert.equal(parsed.env.ANTHROPIC_DEFAULT_FABLE_MODEL, "claude-opus-4");
+  assert.equal(parsed.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME, "claude-opus-4");
+  assert.equal(parsed.env.CLAUDE_CODE_SUBAGENT_MODEL, "claude-opus-4");
+  assert.equal(parsed.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "128000");
   assert.equal(parsed.effortLevel, "xhigh");
   assert.equal(parsed.reasoning, undefined);
   assert.match(files[0]!.content_sha256, /^[0-9a-f]{64}$/);
@@ -399,9 +403,13 @@ test("Claude settings persist CC Switch fallback models", () => {
       env: {
         ANTHROPIC_MODEL: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_FABLE_MODEL_NAME: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "claude-sonnet-4-5",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-sonnet-4-5",
+        ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "claude-sonnet-4-5",
         CLAUDE_CODE_SUBAGENT_MODEL: "claude-sonnet-4-5",
       },
     },

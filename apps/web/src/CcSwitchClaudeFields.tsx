@@ -6,25 +6,10 @@
  *
  * Layout only — no shadcn/i18n/presets stack. DeepSonar owns save/bind.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, MagicWand } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { MagicWand } from "@phosphor-icons/react";
 import { formatJsonObjectText, validateJsonObjectText } from "./json-text";
-import { SearchableSelect } from "./SearchableSelect";
 
-export type ClaudeModelField =
-  | "ANTHROPIC_MODEL"
-  | "ANTHROPIC_DEFAULT_FABLE_MODEL"
-  | "ANTHROPIC_DEFAULT_HAIKU_MODEL"
-  | "ANTHROPIC_DEFAULT_SONNET_MODEL"
-  | "ANTHROPIC_DEFAULT_OPUS_MODEL";
-
-const MODEL_FIELDS: Array<{ key: ClaudeModelField; label: string }> = [
-  { key: "ANTHROPIC_MODEL", label: "主模型" },
-  { key: "ANTHROPIC_DEFAULT_FABLE_MODEL", label: "Fable 上游模型" },
-  { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", label: "Haiku 默认模型" },
-  { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", label: "Sonnet 默认模型" },
-  { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", label: "Opus 默认模型" },
-];
 const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 
 function parseConfig(text: string): Record<string, unknown> {
@@ -97,13 +82,9 @@ export function CcSwitchClaudeFields({
   onApiKeyChange,
   baseUrl,
   onBaseUrlChange,
-  modelOptions = [],
-  onFetchModels,
-  fetchingModels = false,
-  canFetchModels = false,
-  fetchModelsHint,
   onNotice,
   onError,
+  showConnectionFields = true,
 }: {
   settingsJson: string;
   onSettingsJsonChange: (value: string) => void;
@@ -111,21 +92,10 @@ export function CcSwitchClaudeFields({
   onApiKeyChange: (value: string) => void;
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
-  modelOptions?: string[];
-  onFetchModels?: () => void;
-  fetchingModels?: boolean;
-  canFetchModels?: boolean;
-  fetchModelsHint?: string;
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
+  showConnectionFields?: boolean;
 }) {
-  const [models, setModels] = useState<Record<ClaudeModelField, string>>({
-    ANTHROPIC_MODEL: "",
-    ANTHROPIC_DEFAULT_FABLE_MODEL: "",
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: "",
-    ANTHROPIC_DEFAULT_SONNET_MODEL: "",
-    ANTHROPIC_DEFAULT_OPUS_MODEL: "",
-  });
   const syncingRef = useRef(false);
   const validation = useMemo(() => validateJsonObjectText(settingsJson), [settingsJson]);
 
@@ -133,27 +103,10 @@ export function CcSwitchClaudeFields({
   useEffect(() => {
     if (syncingRef.current) return;
     const config = parseConfig(settingsJson);
-    const env = readEnv(config);
     const nextKey = extractApiKey(config);
     const nextBase = extractBaseUrl(config);
     if (nextKey && nextKey !== apiKey) onApiKeyChange(nextKey);
     if (nextBase && nextBase !== baseUrl) onBaseUrlChange(nextBase);
-    setModels({
-      ANTHROPIC_MODEL: envString(env, "ANTHROPIC_MODEL"),
-      ANTHROPIC_DEFAULT_FABLE_MODEL:
-        envString(env, "ANTHROPIC_DEFAULT_FABLE_MODEL")
-        || envString(env, "ANTHROPIC_MODEL"),
-      ANTHROPIC_DEFAULT_HAIKU_MODEL:
-        envString(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL")
-        || envString(env, "ANTHROPIC_SMALL_FAST_MODEL")
-        || envString(env, "ANTHROPIC_MODEL"),
-      ANTHROPIC_DEFAULT_SONNET_MODEL:
-        envString(env, "ANTHROPIC_DEFAULT_SONNET_MODEL")
-        || envString(env, "ANTHROPIC_MODEL"),
-      ANTHROPIC_DEFAULT_OPUS_MODEL:
-        envString(env, "ANTHROPIC_DEFAULT_OPUS_MODEL")
-        || envString(env, "ANTHROPIC_MODEL"),
-    });
     // Only re-sync when settingsJson text changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional one-way JSON→fields
   }, [settingsJson]);
@@ -181,26 +134,6 @@ export function CcSwitchClaudeFields({
     writeEnvPatch({ ANTHROPIC_BASE_URL: sanitized || null });
   };
 
-  const handleModelChange = (field: ClaudeModelField, value: string) => {
-    const patch: Record<string, string | null> = {
-      [field]: value,
-      ANTHROPIC_SMALL_FAST_MODEL: null,
-    };
-    if (field === "ANTHROPIC_MODEL") {
-      const previousMain = models.ANTHROPIC_MODEL.trim();
-      const env = readEnv(parseConfig(settingsJson));
-      Object.assign(patch, claudeMainModelPatch(env, previousMain, value));
-    }
-    setModels((current) => ({
-      ...current,
-      [field]: value,
-      ...(patch.ANTHROPIC_DEFAULT_FABLE_MODEL != null
-        ? { ANTHROPIC_DEFAULT_FABLE_MODEL: value }
-        : {}),
-    }));
-    writeEnvPatch(patch);
-  };
-
   const handleFormat = () => {
     if (!settingsJson.trim()) {
       onNotice?.("配置为空，无需格式化。");
@@ -218,6 +151,7 @@ export function CcSwitchClaudeFields({
   return (
     <div className="cc-switch-form">
       {/* API Key is deliberately always masked; provider secrets are never revealed in the UI. */}
+      {showConnectionFields && <>
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-api-key">API Key</label>
         <div className="cc-switch-secret-wrap">
@@ -249,62 +183,7 @@ export function CcSwitchClaudeFields({
           spellCheck={false}
         />
       </div>
-
-      {/* Model selector — cc-switch ClaudeFormFields model block */}
-      <div className="cc-switch-field">
-        <div className="cc-switch-field-head">
-          <span className="cc-switch-label" style={{ marginBottom: 0 }}>模型配置</span>
-          {onFetchModels ? (
-            <button
-              type="button"
-              className="secondary-button !min-h-7 !px-2 !text-[10px]"
-              onClick={onFetchModels}
-              disabled={fetchingModels || !canFetchModels}
-              title={fetchModelsHint ?? (canFetchModels ? "从 Provider 拉取模型列表" : "保存账号并测试连接后可获取")}
-            >
-              <Download size={13} />
-              {fetchingModels ? "获取中…" : "获取模型列表"}
-            </button>
-          ) : null}
-        </div>
-        <div className="cc-switch-model-grid">
-          {MODEL_FIELDS.map((field) => (
-            <div key={field.key} className="cc-switch-model-row">
-              <label className="cc-switch-sublabel" htmlFor={`cc-switch-${field.key}`}>{field.label}</label>
-              <div className="cc-switch-model-controls">
-                <input
-                  id={`cc-switch-${field.key}`}
-                  type="text"
-                  value={models[field.key]}
-                  onChange={(event) => handleModelChange(field.key, event.target.value)}
-                  className="theme-input-surface cc-switch-input"
-                  placeholder="可选"
-                  autoComplete="off"
-                  list={modelOptions.length ? "cc-switch-model-options" : undefined}
-                />
-                {modelOptions.length > 0 ? (
-                  <SearchableSelect
-                    value={modelOptions.includes(models[field.key]) ? models[field.key] : ""}
-                    onChange={(value) => {
-                      if (value) handleModelChange(field.key, value);
-                    }}
-                    options={modelOptions.map((id) => ({ value: id, label: id }))}
-                    placeholder="列表"
-                    ariaLabel={`${field.label} 从列表选择`}
-                    className="cc-switch-model-select min-w-[110px] [&>button]:h-full [&>button]:min-w-0 [&>button]:w-full"
-                  />
-                ) : null}
-              </div>
-            </div>
-          ))}
-        </div>
-        {modelOptions.length > 0 ? (
-          <datalist id="cc-switch-model-options">
-            {modelOptions.map((id) => <option key={id} value={id} />)}
-          </datalist>
-        ) : null}
-        <p className="cc-switch-hint">可选：指定默认 Claude 模型，留空则使用系统默认。字段写入 settingsConfig.env。</p>
-      </div>
+      </>}
 
       {/* Config JSON — cc-switch CommonConfigEditor */}
       <div className="cc-switch-field">

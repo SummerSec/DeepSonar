@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { CheckCircle, GitBranch, Lightning, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
+import { CheckCircle, Lightning, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
 import {
   api,
-  type CredentialImpact,
   type Project,
   type ProviderAccountCatalogItemView,
   type ProviderCredential,
@@ -22,6 +20,7 @@ import {
   redactSecretValues,
   restoreRedactedSecretText,
   restoreRedactedSecrets,
+  parseCredentialConcurrency,
 } from "./CredentialConfigEditor";
 import { formatJsonObject } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
@@ -36,7 +35,6 @@ import {
 } from "./provider-account-helpers";
 import { credentialCatalogHealthSummary } from "./model-catalog-health";
 import { ModelCatalogHealthPanel } from "./ModelCatalogHealthPanel";
-import { ROLE_BINDING_HREF } from "./settings-tabs";
 
 export {
   boundCredentialLabel,
@@ -62,7 +60,6 @@ export function ProviderAccountFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [previewImpact, setPreviewImpact] = useState<CredentialImpact | null>(null);
   const [testing, setTesting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [createDiscovering, setCreateDiscovering] = useState(false);
@@ -71,6 +68,7 @@ export function ProviderAccountFlow({
   const [createProvider, setCreateProvider] = useState("");
   const [createSecret, setCreateSecret] = useState("");
   const [createBaseUrl, setCreateBaseUrl] = useState("");
+  const [createMaxConcurrent, setCreateMaxConcurrent] = useState("");
   const [createAgentCli, setCreateAgentCli] = useState<CurrentAgentCli>("claude-code");
   const [createSettingsJson, setCreateSettingsJson] = useState("");
   const [createTomlText, setCreateTomlText] = useState("");
@@ -91,6 +89,7 @@ export function ProviderAccountFlow({
   const [editReasoning, setEditReasoning] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editMaxConcurrent, setEditMaxConcurrent] = useState("");
   const [editOriginalSettings, setEditOriginalSettings] = useState<Record<string, unknown> | null>(null);
   const [editOriginalAgentCli, setEditOriginalAgentCli] = useState<AgentCli | null>(null);
   const [catalogError, setCatalogError] = useState("");
@@ -99,8 +98,6 @@ export function ProviderAccountFlow({
   const editingCredential = credentials.find((credential) => credential.id === editingCredentialId) ?? null;
   const models = useMemo(() => modelIds(selectedCredential), [selectedCredential]);
   const currentCatalog = useMemo(() => rawModelCatalog(selectedCredential), [selectedCredential]);
-  const boundRoles = previewImpact?.role_configs.items ?? [];
-  const boundRoleCount = selectedCredential?.bound_role_config_count ?? previewImpact?.role_configs.count ?? 0;
   const createCatalog = catalog.find((item) => item.provider === createProvider) ?? null;
 
   useEffect(() => {
@@ -142,6 +139,8 @@ export function ProviderAccountFlow({
     setEditProjectId(credential.project_id ?? "");
     setEditContextWindowTokens(extractContextWindowTokens(settings));
     setEditReasoning(extractProviderReasoning(settings));
+    const metadata = credential.public_metadata_json ?? {};
+    setEditMaxConcurrent(typeof metadata.max_concurrent === "number" ? String(metadata.max_concurrent) : "");
     if (cli === "codex") {
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
         ? settings.auth as Record<string, unknown>
@@ -191,10 +190,6 @@ export function ProviderAccountFlow({
 
   useEffect(() => {
     setCatalogError("");
-    setPreviewImpact(null);
-    if (selectedCredentialId) {
-      api.credentialImpact(selectedCredentialId).then(setPreviewImpact).catch(() => setPreviewImpact(null));
-    }
   }, [selectedCredentialId]);
 
   const createAccount = async () => {
@@ -224,6 +219,10 @@ export function ProviderAccountFlow({
       return;
     }
     const baseUrl = (createBaseUrl.trim() || extractBaseUrlFromSettingsClient(built.settings)).replace(/\/+$/u, "");
+    let maxConcurrent: number | null;
+    try {
+      maxConcurrent = parseCredentialConcurrency(createMaxConcurrent);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
     setBusy(true);
     setError("");
     setNotice("");
@@ -234,7 +233,10 @@ export function ProviderAccountFlow({
         provider: createProvider,
         secret,
         project_id: actorProjectId ?? (createProjectId || null),
-        metadata: createCatalog?.supports_base_url && baseUrl ? { base_url: baseUrl } : {},
+        metadata: {
+          ...(createCatalog?.supports_base_url && baseUrl ? { base_url: baseUrl } : {}),
+          ...(maxConcurrent == null ? {} : { max_concurrent: maxConcurrent }),
+        },
         agent_cli: createAgentCli,
         settings_config: built.settings,
         meta: {},
@@ -242,6 +244,7 @@ export function ProviderAccountFlow({
       setCreateSecret("");
       setCreateName("");
       setCreateBaseUrl("");
+      setCreateMaxConcurrent("");
       setCreateSettingsJson("");
       setCreateTomlText("");
       setCreateAuthJson("");
@@ -252,8 +255,8 @@ export function ProviderAccountFlow({
       setShowCreate(false);
       onChanged();
       setNotice(built.pastedAsIs
-        ? "已按粘贴的完整配置直接保存。正在测试连接…"
-        : "账号已保存。正在测试连接…");
+        ? "配置已原样保存，请重新测试连接。"
+        : "配置已保存，请重新测试连接。");
       setTesting(true);
       try {
         const health = await api.testCredential(created.id);
@@ -267,8 +270,8 @@ export function ProviderAccountFlow({
           setCatalogError("");
           setNotice(
             catalogResult.models.length > 0
-              ? `账号已就绪：连接正常，模型目录 ${catalogResult.models.length} 个。绑定请到 Agent 管理 → 凭据绑定。`
-              : "账号连接正常。绑定请到 Agent 管理 → 凭据绑定。",
+              ? `账号已就绪：连接正常，模型目录 ${catalogResult.models.length} 个。`
+              : "账号连接正常。",
           );
         } catch (catalogErr) {
           setCatalogError(String(catalogErr));
@@ -359,6 +362,10 @@ export function ProviderAccountFlow({
       settingsToSave.config = restoreRedactedSecretText(editOriginalSettings.config, settingsToSave.config);
     }
     const baseUrl = (editBaseUrl.trim() || extractBaseUrlFromSettingsClient(settingsToSave)).replace(/\/+$/u, "");
+    let maxConcurrent: number | null;
+    try {
+      maxConcurrent = parseCredentialConcurrency(editMaxConcurrent);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
     setBusy(true);
     setError("");
     try {
@@ -366,6 +373,8 @@ export function ProviderAccountFlow({
       const metadata = { ...existingMeta };
       if (baseUrl) metadata.base_url = baseUrl;
       else delete metadata.base_url;
+      if (maxConcurrent == null) delete metadata.max_concurrent;
+      else metadata.max_concurrent = maxConcurrent;
       await api.updateCredential(editingCredential.id, {
         name: editName.trim() || editingCredential.name,
         provider: editProvider,
@@ -377,8 +386,8 @@ export function ProviderAccountFlow({
         await api.rotateCredential(editingCredential.id, editApiKey.trim());
       }
       setNotice(built.pastedAsIs
-        ? "配置已原样保存。请重新测试连接。绑定变更请到凭据绑定页提交。"
-        : "配置已保存。请重新测试连接。绑定变更请到凭据绑定页提交。");
+        ? "配置已原样保存，请重新测试连接。"
+        : "配置已保存，请重新测试连接。");
       setEditingCredentialId("");
       setEditOriginalSettings(null);
       setEditOriginalAgentCli(null);
@@ -414,7 +423,6 @@ export function ProviderAccountFlow({
         title: `删除账号 ${credential.name}？`,
         description: [
           "将永久删除该 Provider 账号及其加密密钥，不可撤销。",
-          bound > 0 ? `将同时解除 ${bound} 个角色配置绑定。` : "当前没有角色绑定。",
           recoverable > 0 ? `有 ${recoverable} 条可恢复历史，删除后不能再按原快照 resume。` : "",
           historical > 0 ? `${historical} 条历史 Job 快照会保留，不会被改写。` : "",
         ].filter(Boolean).join("\n"),
@@ -459,8 +467,8 @@ export function ProviderAccountFlow({
       setCatalogError("");
       setNotice(
         result.models.length > 0
-          ? `模型目录已刷新：${result.models.length} 个（参考，发现不等于授权）。`
-          : "模型目录为空。不影响账号保存。",
+          ? `模型目录已刷新：${result.models.length} 个。`
+          : "模型目录为空。",
       );
       onChanged();
     } catch (e) {
@@ -487,24 +495,11 @@ export function ProviderAccountFlow({
     }
   };
 
-  const bindingHref = selectedCredentialId
-    ? `${ROLE_BINDING_HREF}&credential=${encodeURIComponent(selectedCredentialId)}`
-    : ROLE_BINDING_HREF;
-
   return (
     <section className="provider-flow-shell" aria-label="Provider 账号管理">
       <div className="provider-flow-head">
         <div>
           <div className="provider-flow-eyebrow"><LockKey size={13} weight="bold" /> 凭据资产 / 账号管理</div>
-          <h2>管理 Provider 账号本身。</h2>
-          <p>
-            创建、编辑、轮换密钥、测试连接和刷新模型目录都在此完成，不必进入角色绑定或生效策略。
-            角色引用只读展示；绑定、换绑与快照生效在 Agent 管理。
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="provider-flow-lock"><LockKey size={14} /> 密钥仅在创建或轮换时出现</div>
-          <Link to={bindingHref} className="provider-flow-lock"><GitBranch size={13} /> 去凭据绑定</Link>
         </div>
       </div>
 
@@ -546,6 +541,8 @@ export function ProviderAccountFlow({
               onSecretChange={setCreateSecret}
               baseUrl={createBaseUrl}
               onBaseUrlChange={setCreateBaseUrl}
+              maxConcurrent={createMaxConcurrent}
+              onMaxConcurrentChange={setCreateMaxConcurrent}
               settingsJson={createSettingsJson}
               onSettingsJsonChange={setCreateSettingsJson}
               tomlText={createTomlText}
@@ -610,7 +607,7 @@ export function ProviderAccountFlow({
                     </span>
                     <span className="provider-flow-credential-meta">
                       连接 {healthStatusLabel(credential.health?.status)} · {credentialCatalogHealthSummary(credential)} · {credential.agent_cli ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli) : "CLI 未设"} · ····{credential.last4}
-                      {sameLast4Count > 1 && ` · ⚠ 同末四位账号 ${sameLast4Count} 个，请核对绑定`}
+                      {sameLast4Count > 1 && ` · ⚠ 同末四位账号 ${sameLast4Count} 个，请核对`}
                     </span>
                   </button>
                   <div className="provider-flow-credential-actions">
@@ -671,6 +668,8 @@ export function ProviderAccountFlow({
                         onSecretChange={setEditApiKey}
                         baseUrl={editBaseUrl}
                         onBaseUrlChange={setEditBaseUrl}
+                        maxConcurrent={editMaxConcurrent}
+                        onMaxConcurrentChange={setEditMaxConcurrent}
                         settingsJson={editSettingsJson}
                         onSettingsJsonChange={setEditSettingsJson}
                         tomlText={editTomlText}
@@ -706,8 +705,7 @@ export function ProviderAccountFlow({
           {selectedCredential && (
             <div className="provider-flow-health">
               <span className={`provider-health-dot ${selectedCredential.health?.status ?? "unknown"}`} />
-              <strong title="凭据连接探测（test），与下方模型目录 health_status 不同">连接 {selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
-              <span>当前选中 · 被 {boundRoleCount} 个角色引用</span>
+              <strong>连接 {selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
               <span>{selectedCredential.health?.last_tested_at ? `最近测试 ${new Date(selectedCredential.health.last_tested_at).toLocaleString()}` : "尚未测试"}</span>
             </div>
           )}
@@ -762,27 +760,6 @@ export function ProviderAccountFlow({
           {selectedCredential && <ModelCatalogHealthPanel credential={selectedCredential} />}
           {catalogError && <div className="provider-flow-catalog-error"><Warning size={13} /> {catalogError}</div>}
 
-          {selectedCredential && (
-            <div className="provider-flow-card mt-3" aria-label="引用该账号的角色">
-              <div className="provider-flow-card-kicker">当前被哪些角色引用（只读）</div>
-              {boundRoles.length === 0 && <div className="provider-flow-empty">没有角色引用该账号。绑定、换绑请到凭据绑定页。</div>}
-              {boundRoles.length > 0 && (
-                <ul className="provider-flow-role-list">
-                  {boundRoles.map((item) => (
-                    <li key={String(item.role_config_id ?? item.role_name)} className="provider-flow-role is-disabled-bind">
-                      <span className="provider-flow-role-main">
-                        <strong>{String(item.role_name ?? item.role_config_id ?? "角色")}</strong>
-                        <small>{item.scope === "project" ? `项目 ${String(item.project_name ?? item.project_id ?? "")}` : "全局"} · {String(item.purpose ?? "llm")}</small>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <Link to={bindingHref} className="mt-2 inline-flex text-[12px] text-acc-300">
-                去凭据绑定（含生效策略）
-              </Link>
-            </div>
-          )}
         </div>
       </div>
     </section>

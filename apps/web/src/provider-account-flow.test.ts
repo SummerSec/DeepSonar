@@ -6,6 +6,11 @@ import {
   extractBaseUrlFromSettingsClient,
   extractModelsFromSettingsClient,
   extractSecretFromSettings,
+  extractModelIdFromSettings,
+  extractPiModelIdsFromSettings,
+  parseCredentialConcurrency,
+  patchProviderModelId,
+  patchProviderModelIds,
   parsePiSettingsText,
 } from "./CredentialConfigEditor";
 import {
@@ -34,6 +39,42 @@ test("same-last4 warning catches different credentials in the same provider and 
     { provider: "anthropic", agent_cli: "claude-code", last4: "abcd" },
     { provider: "openai", agent_cli: "codex", last4: "abcd" },
   ]), 2);
+});
+
+test("structured Provider quota and native model helpers preserve governed settings", () => {
+  assert.equal(parseCredentialConcurrency("12"), 12);
+  assert.equal(parseCredentialConcurrency(""), null);
+  assert.throws(() => parseCredentialConcurrency("1001"), /并发限制/);
+
+  const claude = patchProviderModelId({ env: {
+    ANTHROPIC_BASE_URL: "https://provider.test",
+    CLAUDE_CODE_EFFORT_LEVEL: "high",
+  } }, "claude-code", "model-x");
+  assert.equal(extractModelIdFromSettings(claude, "claude-code"), "model-x");
+  const env = claude.env as Record<string, string>;
+  for (const key of [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]) assert.equal(env[key], "model-x", key);
+  assert.equal(env.CLAUDE_CODE_EFFORT_LEVEL, "high");
+
+  const pi = {
+    "llm-pi-ai": { providers: { team: { models: [{ id: "native-a", reasoningEfforts: { low: {} } }, { id: "native-b", contextWindow: 128000 }] } } },
+    "agent-default-model": { provider: "team", model: "native-a" },
+  };
+  assert.deepEqual(extractPiModelIdsFromSettings(pi), ["native-a", "native-b"]);
+  const patched = patchProviderModelIds(pi, ["native-b", "new-model"]);
+  const profile = ((patched["llm-pi-ai"] as Record<string, unknown>).providers as Record<string, unknown>).team as Record<string, unknown>;
+  assert.deepEqual((profile.models as Array<Record<string, unknown>>).map((model) => model.id), ["native-b", "new-model"]);
+  assert.equal((profile.models as Array<Record<string, unknown>>)[0].contextWindow, 128000);
 });
 
 test("changing Claude main model preserves explicit Fable and subagent mappings", () => {
@@ -132,11 +173,10 @@ test("Provider account flow is account CRUD only and does not own binding or eff
   assert.doesNotMatch(flow, /模型映射/);
   assert.doesNotMatch(flow, /一键设置/);
   assert.doesNotMatch(flow, /声明支持 1M/);
-  assert.match(flow, /当前被哪些角色引用（只读）/);
-  assert.match(flow, /ROLE_BINDING_HREF/);
+  assert.doesNotMatch(flow, /当前被哪些角色引用（只读）/);
+  assert.doesNotMatch(flow, /ROLE_BINDING_HREF|去凭据绑定/);
   const claudeFields = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
-  assert.match(claudeFields, /获取模型列表/);
-  assert.match(claudeFields, /模型配置/);
+  assert.doesNotMatch(claudeFields, /获取模型列表|模型配置|Fable|Haiku|Sonnet|Opus/);
 });
 
 test("Provider create/edit persists a validated top-level context window budget", () => {
@@ -152,7 +192,6 @@ test("Provider create/edit persists a validated top-level context window budget"
     "delete settings.context_window_tokens",
     "1_024",
     "10_000_000",
-    "不会提升上游模型能力",
   ]) {
     assert.ok(credentialSurface.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
   }
@@ -163,6 +202,7 @@ test("Provider create/edit persists a validated top-level context window budget"
   assert.match(roleEditor, /cfg\.context_window_tokens == null \? "" : String\(cfg\.context_window_tokens\)/);
   assert.match(jobDetail, /snapStr\(snapshot, "context_window_tokens"\)/);
   assert.match(jobDetail, /CLI 客户端上下文预算/);
+  assert.doesNotMatch(editor, /CLI 客户端上下文预算（tokens，可选）/);
 });
 
 test("settings builder patches or removes the top-level context budget for every CLI shape", () => {
@@ -343,8 +383,8 @@ test("DSH provider editor exposes machine configuration without TUI surface", ()
 test("reasoning is configured on Provider accounts, not RoleConfig", () => {
   const providerEditor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
-  assert.match(providerEditor, /模型思考强度（Provider 默认）/);
-  assert.match(providerEditor, /自定义模型 token/);
+  assert.doesNotMatch(providerEditor, /模型思考强度（Provider 默认）|自定义模型 token/);
+  assert.match(providerEditor, /reasoningValid|onReasoningChange/);
   assert.doesNotMatch(roleEditor, /模型思考强度/);
 });
 
@@ -357,12 +397,9 @@ test("项目角色镜像只能由项目镜像缺省管理", () => {
 
 test("Provider account flow user-facing copy is Chinese", () => {
   for (const chinese of [
-    "管理 Provider 账号本身",
     "测试连接",
     "刷新模型目录",
     "保存配置并添加账号",
-    "当前被哪些角色引用（只读）",
-    "去凭据绑定",
   ]) {
     assert.ok(flow.includes(chinese), `flow should show Chinese copy: ${chinese}`);
   }
@@ -382,14 +419,15 @@ test("credential secrets cannot be revealed; login may toggle password visibilit
   const codex = readFileSync(new URL("./CcSwitchCodexFields.tsx", import.meta.url), "utf8");
   const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
   const login = readFileSync(new URL("./pages/LoginPage.tsx", import.meta.url), "utf8");
-  // Provider / Credential API key surfaces must stay non-revealable in the browser.
+  // Advanced native editors keep keys masked; the structured Provider field has an explicit opt-in toggle.
   for (const source of [claude, codex, openCode, editor, flow]) {
-    assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey|显示密码|隐藏密码/iu);
+    assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey/iu);
   }
   assert.match(claude, /id="cc-switch-api-key"\s+type="password"/u);
   assert.match(codex, /id="cc-switch-codex-key" type="password"/u);
   assert.match(openCode, /id="cc-switch-opencode-key" type="password"/u);
-  assert.match(editor, /type="password"/u);
+  assert.match(editor, /type=\{showSecret \? "text" : "password"\}/u);
+  assert.match(editor, /setShowSecret/);
   // Login page (and API Token paste) may offer an explicit show/hide toggle; default remains hidden.
   assert.match(login, /显示密码|隐藏密码|显示 Token|隐藏 Token/u);
   assert.match(login, /type=\{revealed \? "text" : "password"\}/u);
@@ -414,7 +452,6 @@ test("provider UI exposes only protocol labels and the two supported OpenCode pr
 test("#624 edit mode allows Provider protocol migration and persists provider", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const flowSource = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
-  assert.match(editor, /allow Provider protocol migration on edit/);
   assert.doesNotMatch(editor, /fieldset disabled=\{mode === "edit"\}[\s\S]*?ariaLabel="Provider"/);
   assert.match(flowSource, /provider:\s*editProvider/);
   assert.match(flowSource, /api\.updateCredential\(editingCredential\.id/);

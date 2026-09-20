@@ -1831,7 +1831,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .provider-flow-create .provider-flow-apply { margin-top: 1px; }
 .provider-flow-account-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .provider-flow-account-actions .secondary-button { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 6px 9px; font-size: 10px; }
-.provider-flow-credential-list { display: grid; gap: 6px; margin-top: 10px; max-height: 420px; overflow: auto; }
+.provider-flow-credential-list { display: grid; gap: 6px; margin-top: 10px; max-height: 720px; overflow: auto; }
 .provider-flow-credential-row {
   display: grid;
   gap: 8px;
@@ -1866,7 +1866,11 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .provider-flow-credential-title small { margin-top: 2px; color: var(--muted); font: 500 9px var(--font-mono); }
 .provider-flow-credential-meta { color: var(--muted); font: 500 9px var(--font-mono); white-space: nowrap; }
 .provider-flow-credential-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.provider-flow-credential-editor { margin-top: 2px; }
+.provider-flow-credential-editor { margin-top: 8px; }
+.provider-flow-credential-editor .credential-config-editor { width: 100%; min-width: 0; gap: 14px; padding: 16px; }
+.provider-flow-credential-editor .credential-config-editor .cc-switch-json { min-height: 22rem; }
+.provider-flow-create.credential-config-editor { gap: 14px; padding: 16px; }
+.provider-flow-create.credential-config-editor .cc-switch-json { min-height: 22rem; }
 .provider-flow-repair { display: grid; gap: 8px; margin-top: 10px; border-left: 2px solid #d09a4f; background: rgb(208 154 79 / .06); padding: 9px 10px; }
 .provider-flow-model-meta { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: color-mix(in srgb, var(--accent) 70%, var(--muted)); font: 500 10px var(--font-mono); }
 .provider-flow-catalog-error { display: flex; align-items: flex-start; gap: 6px; margin-top: 9px; border-left: 2px solid #df8177; padding-left: 8px; color: color-mix(in srgb, #e77d72 48%, var(--text)); font: 500 10px var(--font-mono); line-height: 1.5; }
