@@ -1,15 +1,23 @@
 import type { FrozenProviderModelSnapshot } from "@deepsonar/shared-types";
 import { findProviderAdapter } from "./catalog.js";
 
-/** Local strip of `cli-default:` — keep this domain free of runtime-sandbox imports. */
-function bareUpstreamModelId(upstreamModel: string | null | undefined): string | null {
+/**
+ * Normalize upstream / request model ids for Gateway allowlist checks.
+ * - strip `cli-default:` (runtime placeholder)
+ * - strip Claude Code trailing context markers like `[1m]` / `[2m]` (#630)
+ * Keep this domain free of runtime-sandbox imports.
+ */
+export function bareUpstreamModelId(upstreamModel: string | null | undefined): string | null {
   const raw = typeof upstreamModel === "string" ? upstreamModel.trim() : "";
   if (!raw) return null;
-  if (raw.startsWith("cli-default:")) {
-    const bare = raw.slice("cli-default:".length).trim();
-    return bare || null;
+  let id = raw;
+  if (id.startsWith("cli-default:")) {
+    id = id.slice("cli-default:".length).trim();
   }
-  return raw;
+  // Claude Code treats trailing [Nm] as a client context annotation and strips it
+  // before the request reaches Model Gateway.
+  id = id.replace(/\[[0-9]+m\]$/i, "").trim();
+  return id || null;
 }
 
 export const GATEWAY_FROZEN_MODEL_MISMATCH = "GATEWAY_FROZEN_MODEL_MISMATCH" as const;
@@ -70,6 +78,9 @@ export function assertGatewayRequestModelAllowed(input: {
 
   const bare = bareUpstreamModelId(request) ?? request;
   if (allowed.includes(request) || allowed.includes(bare)) return;
+  // Freeze may still list annotated ids while the request is already stripped (or vice versa).
+  const allowedBare = new Set(allowed.map((item) => bareUpstreamModelId(item) ?? item));
+  if (allowedBare.has(bare)) return;
 
   throw new GatewayFrozenModelMismatchError(
     `Gateway 拒绝未冻结模型 ${request}；Job 仅允许：${allowed.slice(0, 12).join("、")}`,

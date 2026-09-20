@@ -79,7 +79,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     /** Project-only numeric sandbox resource overrides; capability flags stay server-owned. */
     sandbox_limits: z.unknown().optional(),
     runtime_knobs: z.unknown().optional(),
-    credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).default([]),
+    /** Omit = preserve existing bindings; explicit [] clears (#631). */
+    credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).optional(),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
     pi_extensions: z.array(z.string()).default([]),
   });
@@ -146,26 +147,28 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     for (const tool of requiredPlatformTools(role.kind)) {
       if (body.platform_tools[tool] === false) return `终态必需平台工具不可关闭: ${tool}`;
     }
-    for (const c of body.credentials) {
-      // RoleConfig PUTs run under the same advisory lock as Credential
-      // provider/project/metadata mutations.  Lock each row while reading so
-      // a concurrent Credential PATCH cannot invalidate this validation.
-      const [cred] = await db`
-        SELECT id, project_id, status, provider, public_metadata_json,
-               agent_cli, settings_config_json
-        FROM credentials WHERE id = ${c.credential_id} FOR UPDATE`;
-      if (!cred) return `Credential 不存在: ${c.credential_id}`;
-      if (projectId && cred.project_id && cred.project_id !== projectId) {
-        return `Credential ${c.credential_id} 属于其他项目，不能绑定`;
-      }
-      if (!projectId && cred.project_id) return `全局 RoleConfig 只能绑定全局 Credential`;
-      if (c.purpose === "llm") {
-        const plan = planCredentialAgentCliFollow({
-          roleAgentCli: body.agent_cli,
-          credentialAgentCli: cred.agent_cli as string | null,
-          provider: String(cred.provider ?? ""),
-        });
-        if (plan.action === "reject") return plan.error;
+    if (body.credentials !== undefined) {
+      for (const c of body.credentials) {
+        // RoleConfig PUTs run under the same advisory lock as Credential
+        // provider/project/metadata mutations.  Lock each row while reading so
+        // a concurrent Credential PATCH cannot invalidate this validation.
+        const [cred] = await db`
+          SELECT id, project_id, status, provider, public_metadata_json,
+                 agent_cli, settings_config_json
+          FROM credentials WHERE id = ${c.credential_id} FOR UPDATE`;
+        if (!cred) return `Credential 不存在: ${c.credential_id}`;
+        if (projectId && cred.project_id && cred.project_id !== projectId) {
+          return `Credential ${c.credential_id} 属于其他项目，不能绑定`;
+        }
+        if (!projectId && cred.project_id) return `全局 RoleConfig 只能绑定全局 Credential`;
+        if (c.purpose === "llm") {
+          const plan = planCredentialAgentCliFollow({
+            roleAgentCli: body.agent_cli,
+            credentialAgentCli: cred.agent_cli as string | null,
+            provider: String(cred.provider ?? ""),
+          });
+          if (plan.action === "reject") return plan.error;
+        }
       }
     }
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) return `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`;
@@ -188,10 +191,16 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     roleId: string,
     projectId: string | null,
     body: z.infer<typeof RoleConfigPutBody>,
-  ) {
+  ): Promise<{
+    configId: string;
+    binding_diff: { credentials: "preserved" | "replaced" | "cleared" };
+    dropped_fields: Array<{ field: string; reason: string }>;
+  }> {
     const [existing] = projectId
       ? await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`
       : await tx`SELECT id, version FROM role_configs WHERE role_id = ${roleId} AND project_id IS NULL`;
+    const dropped_fields: Array<{ field: string; reason: string }> = [];
+    const requestedModel = typeof body.model === "string" ? body.model.trim() : "";
     const persistModel = projectId
       ? persistableProjectRoleConfigModel(
         parseProjectImagePolicy(
@@ -200,6 +209,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         body.model,
       )
       : body.model ?? null;
+    if (projectId && persistModel === null && requestedModel !== "") {
+      dropped_fields.push({ field: "model", reason: "inherit_global_ignores_project_model" });
+    }
     const row = {
       role_id: roleId,
       project_id: projectId,
@@ -232,11 +244,17 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       const [ins] = await tx`INSERT INTO role_configs ${tx(row as never)} RETURNING id`;
       configId = ins.id as string;
     }
-    await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId}`;
-    for (const c of body.credentials) {
-      await tx`
-        INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
-        ON CONFLICT DO NOTHING`;
+    let binding_diff: { credentials: "preserved" | "replaced" | "cleared" };
+    if (body.credentials === undefined) {
+      binding_diff = { credentials: "preserved" };
+    } else {
+      await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId}`;
+      for (const c of body.credentials) {
+        await tx`
+          INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
+          ON CONFLICT DO NOTHING`;
+      }
+      binding_diff = { credentials: body.credentials.length === 0 ? "cleared" : "replaced" };
     }
     await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
     for (const f of body.config_files) {
@@ -250,7 +268,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         ON CONFLICT (role_config_id, path) DO UPDATE SET
           content = EXCLUDED.content, content_sha256 = EXCLUDED.content_sha256, updated_at = now()`;
     }
-    return configId;
+    return { configId, binding_diff, dropped_fields };
   }
 
   /**
@@ -263,7 +281,14 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     projectId: string | null,
     body: z.infer<typeof RoleConfigPutBody>,
     role: { name: string; kind: "role" | "hub" | "system" },
-  ): Promise<{ configId: string } | { statusCode: number; error: string }> {
+  ): Promise<
+    | {
+      configId: string;
+      binding_diff: { credentials: "preserved" | "replaced" | "cleared" };
+      dropped_fields: Array<{ field: string; reason: string }>;
+    }
+    | { statusCode: number; error: string }
+  > {
     return sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
@@ -275,7 +300,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       }
       const err = await validateRoleConfigBody(body, projectId, role, tx);
       if (err) return { statusCode: 400, error: err };
-      return { configId: await upsertRoleConfigInTx(tx, roleId, projectId, body) };
+      return await upsertRoleConfigInTx(tx, roleId, projectId, body);
     });
   }
 
@@ -554,9 +579,31 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       action: "role_config.upsert",
       resourceType: "role_config",
       resourceId: configId,
-      after: { role: role.name, scope: "global", credentials: body.credentials.length, files: body.config_files.length },
+      after: {
+        role: role.name,
+        scope: "global",
+        credentials: body.credentials?.length ?? "preserved",
+        files: body.config_files.length,
+        binding_diff: mutation.binding_diff,
+        dropped_fields: mutation.dropped_fields,
+      },
     });
-    return roleConfigView(configId, req.actor?.projectId ?? null);
+    const view = await roleConfigView(configId, req.actor?.projectId ?? null);
+    return {
+      ...view,
+      binding_diff: mutation.binding_diff,
+      dropped_fields: mutation.dropped_fields,
+      ...(mutation.dropped_fields.length > 0
+        ? {
+          upsert_warnings: [{
+            category: "model_correctable",
+            code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
+            field: "model",
+            message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
+          }],
+        }
+        : {}),
+    };
   });
 
   app.get("/projects/:id/role-configs", async (req, reply) => {
@@ -617,9 +664,31 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       resourceType: "role_config",
       resourceId: configId,
       projectId: id,
-      after: { role: role.name, scope: "project", credentials: body.credentials.length, files: body.config_files.length },
+      after: {
+        role: role.name,
+        scope: "project",
+        credentials: body.credentials?.length ?? "preserved",
+        files: body.config_files.length,
+        binding_diff: mutation.binding_diff,
+        dropped_fields: mutation.dropped_fields,
+      },
     });
-    return roleConfigView(configId, actorProjectId);
+    const view = await roleConfigView(configId, actorProjectId);
+    return {
+      ...view,
+      binding_diff: mutation.binding_diff,
+      dropped_fields: mutation.dropped_fields,
+      ...(mutation.dropped_fields.length > 0
+        ? {
+          upsert_warnings: [{
+            category: "model_correctable",
+            code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
+            field: "model",
+            message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
+          }],
+        }
+        : {}),
+    };
   });
 
   app.delete("/projects/:id/role-configs/:roleId", async (req, reply) => {

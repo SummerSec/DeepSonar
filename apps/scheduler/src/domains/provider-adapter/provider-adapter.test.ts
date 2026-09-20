@@ -288,6 +288,34 @@ test("gateway guard rejects request models outside Job freeze", () => {
   );
 });
 
+test("gateway guard allows bare model when freeze lists Claude Code [1m] annotation (#630)", () => {
+  const frozen = freezeProviderModelSnapshot({
+    provider: "anthropic",
+    cliModelId: "DeepSeek-V4.1-Flash[1m]",
+    upstreamModelId: "DeepSeek-V4.1-Flash[1m]",
+    catalogJson: ["DeepSeek-V4.1-Flash[1m]"],
+    catalogRevision: "r-630",
+  });
+  assert.ok(frozen);
+  const snapshot = {
+    provider_model: frozen,
+    upstream_model: "DeepSeek-V4.1-Flash[1m]",
+    model: "DeepSeek-V4.1-Flash[1m]",
+  };
+
+  assert.doesNotThrow(() =>
+    assertGatewayRequestModelAllowed({ requestModel: "DeepSeek-V4.1-Flash", agentSnapshot: snapshot }),
+  );
+  assert.throws(
+    () => assertGatewayRequestModelAllowed({ requestModel: "claude-opus-5", agentSnapshot: snapshot }),
+    (error: unknown) => {
+      assert.ok(error instanceof GatewayFrozenModelMismatchError);
+      assert.equal(error.code, "GATEWAY_FROZEN_MODEL_MISMATCH");
+      return true;
+    },
+  );
+});
+
 test("Credential agent_cli binding note documents RoleConfig ownership", () => {
   assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /RoleConfig/);
   assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /soft profile hint/i);

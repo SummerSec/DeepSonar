@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 官方镜像 tool-manifest 双哈希校验：catalog 期望值可匹配 `sha256sum` 文件哈希 **或** 嵌入的 `manifest.sha256`，避免定义漂移导致 provision fail-closed（#629）。
+- Gateway 冻结模型门禁：`bareUpstreamModelId` 剥离 Claude Code 尾部上下文标注（如 `[1m]`），请求裸 id 与冻结带标注 id 可互认，修复误报 `GATEWAY_FROZEN_MODEL_MISMATCH` 403（#630）。
+- RoleConfig PUT：`credentials` 改为可选（省略则保留既有绑定，显式 `[]` 才清空）；项目 `inherit_global` 丢弃 model 时在响应中返回 `dropped_fields` / `upsert_warnings`；Web 编辑器保存时不再误发空 `credentials`（#631）。架构层跟踪见 #632（本 PR 不改写）。
+
 ## [0.4.6] - 2026-09-19
 
 ### 新增
