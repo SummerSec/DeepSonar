@@ -130,7 +130,6 @@ export function ProjectsPage() {
       <PageHeader
         title="项目空间"
         eyebrow="WORKSPACES"
-        subtitle="一个项目承载稳定的代码边界、Agent 配置和长期证据；每次具体目标则作为独立任务进入同一条闭环。"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <SecondaryButton type="button" onClick={openQuickStartIntent}>

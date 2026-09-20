@@ -239,7 +239,6 @@ export function JobsPage() {
       <PageHeader
         title="调度队列"
         eyebrow="EXECUTION LEDGER"
-        subtitle="用于定位异常、取消活动任务，或恢复失败与待人工任务。筛选结果与全量对比见下方计数条。"
       />
 
       <FilterCountBar

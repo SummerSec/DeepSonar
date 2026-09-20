@@ -57,7 +57,7 @@ export function DashboardPage() {
 
   return (
     <div className="page-scroll">
-      <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" subtitle="先看运营总览，再处理需要你决策的事项。任务的执行、证据与报告始终归档在同一工作台。" />
+      <PageHeader title="运行态势" eyebrow="CONTROL PLANE / LIVE" />
 
       {overview && (
         <>

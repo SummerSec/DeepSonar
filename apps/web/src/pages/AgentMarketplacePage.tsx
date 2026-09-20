@@ -101,7 +101,6 @@ export function AgentMarketplacePage() {
       <PageHeader
         title="Agent 市场"
         eyebrow="CAPABILITY REGISTRY"
-        subtitle="采用受治理的角色配置模板；安装只写角色与运行配置，不导入长期密钥。"
         actions={tab === "catalog" ? (
           <label className={`secondary-button ${!canInstall ? "pointer-events-none opacity-50" : ""}`} title="上传 deepsonar.agentpack/v1 JSON">
             <UploadSimple size={14} /> 上传配置包

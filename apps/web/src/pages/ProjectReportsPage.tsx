@@ -153,7 +153,6 @@ export function ProjectReportsPage({ embedded = false }: { embedded?: boolean } 
         <PageHeader
           title="项目报告"
           eyebrow="交付物"
-          subtitle="先看可阅读结论、生成中或失败的报告，以及已确认但尚未生成的 Finding。任务只作为上下文，不会默认展开。"
         />
       )}
       {embedded && (

@@ -1,7 +1,6 @@
 import { useParams, useSearchParams } from "react-router-dom";
 import {
   PROJECT_DELIVERY_EYEBROW,
-  PROJECT_DELIVERY_SUBTITLE,
   PROJECT_DELIVERY_TITLE,
   readProjectDeliveryPanel,
   writeProjectDeliveryPanel,
@@ -33,7 +32,6 @@ export function ProjectDeliveryPage() {
       <PageHeader
         title={PROJECT_DELIVERY_TITLE}
         eyebrow={PROJECT_DELIVERY_EYEBROW}
-        subtitle={PROJECT_DELIVERY_SUBTITLE}
       />
       <nav
         className="theme-surface mb-4 inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-full p-1 [scrollbar-width:none]"

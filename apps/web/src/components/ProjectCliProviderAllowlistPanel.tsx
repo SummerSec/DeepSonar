@@ -276,7 +276,7 @@ export function ProjectCliProviderAllowlistPanel({
         fallback_model_refs: fallbackModels,
         allow_model_catalog_passthrough: allowPassthrough,
       });
-      showToast("CLI / Provider 启用与缺省已保存（下一 job 生效）", "ok");
+      showToast("已保存，下一 Job 生效", "ok");
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
       onSaved();
@@ -294,8 +294,7 @@ export function ProjectCliProviderAllowlistPanel({
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>CLI / Provider 启用与缺省</span>
           <HelpTip>
-            平台只划定启用边界与配额；Hub 运行时从已启用且就绪的目录中自由组合 CLI×Provider×镜像。
-            此处缺省是软回退（Hub 省略时使用），不是按角色锁死身份。并发表在 Provider / 凭据上配置。
+            启用边界与配额；Hub 从已启用项组合 CLI×Provider×镜像。缺省仅软回退；并发在凭据页。
           </HelpTip>
         </div>
       </div>
@@ -319,7 +318,7 @@ export function ProjectCliProviderAllowlistPanel({
             })}
           </div>
           {clis.length === 0 && (
-            <div className="mt-2 text-[12px] text-amber-400/90">未启用任何 CLI 时无法派发；请至少勾选一种。</div>
+            <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一种 CLI。</div>
           )}
         </div>
 
@@ -327,7 +326,7 @@ export function ProjectCliProviderAllowlistPanel({
           <div className="mb-2 text-[12px] text-zinc-400">启用 Provider 账号</div>
           {filteredByCli.length === 0 ? (
             <div className="rounded-md border border-dashed border-ink-700 px-3 py-4 text-[12px] text-zinc-500">
-              暂无与已启用 CLI 兼容的 LLM Provider。请先在「凭据」页创建或修复账号，再回到此处启用。
+              暂无兼容的 LLM Provider，请先在「凭据」页配置。
             </div>
           ) : (
             <div className="space-y-2">
@@ -382,24 +381,18 @@ export function ProjectCliProviderAllowlistPanel({
           )}
           {probeError && <div role="alert" className="mt-2 rounded-md border border-red-400/20 bg-red-400/[.06] px-3 py-2 text-[11px] leading-5 text-red-200">{probeError}</div>}
           {credIds.length === 0 && (
-            <div className="mt-2 text-[12px] text-amber-400/90">
-              未启用任何 Provider 时 Hub 无法提案账号；非 Hub 路径仍可回退 RoleConfig 绑定（若已在白名单）。
-            </div>
+            <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一个 Provider。</div>
           )}
-          <div className="mt-2 rounded-md border border-ink-700/80 bg-ink-900/30 px-3 py-2 text-[11px] leading-5 text-zinc-500">
-            模型目录直通（alias）同时受项目与角色 opt-in 控制；本页展示 Provider 的目录健康与
-            <code className="mx-1 text-zinc-400">passthrough_allowed</code> 状态，不会通过修改 Credential CLI 提示来绕过能力校验。
-          </div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
           <div>
-            <div className="mb-1 text-[12px] text-zinc-400">缺省 Agent CLI（软回退）</div>
+            <div className="mb-1 text-[12px] text-zinc-400">缺省 CLI</div>
             <SearchableSelect
               value={defaultCli}
               onChange={(next) => setDefaultCli((next as AgentCli | "") || "")}
               options={[
-                { value: "", label: "不设缺省（回退 RoleConfig）" },
+                { value: "", label: "不设（回退角色）" },
                 ...clis.map((cli) => ({ value: cli, label: cli })),
               ]}
               placeholder="选择缺省 CLI"
@@ -408,7 +401,7 @@ export function ProjectCliProviderAllowlistPanel({
             />
           </div>
           <div>
-            <div className="mb-1 text-[12px] text-zinc-400">缺省 Provider（软回退）</div>
+            <div className="mb-1 text-[12px] text-zinc-400">缺省 Provider</div>
             <SearchableSelect
               value={defaultCred}
               onChange={(next) => {
@@ -419,7 +412,7 @@ export function ProjectCliProviderAllowlistPanel({
                 }
               }}
               options={[
-                { value: "", label: "不设缺省（回退 RoleConfig）" },
+                { value: "", label: "不设（回退角色）" },
                 ...llmCredentials
                   .filter((c) => credIds.includes(c.id))
                   .map((c) => ({
@@ -433,12 +426,12 @@ export function ProjectCliProviderAllowlistPanel({
             />
           </div>
           <div>
-            <div className="mb-1 text-[12px] text-zinc-400">缺省模型（随 Provider 冻结）</div>
+            <div className="mb-1 text-[12px] text-zinc-400">缺省模型</div>
             <SearchableSelect
               value={defaultModel}
               onChange={(next) => setDefaultModel(next || "")}
               options={[
-                { value: "", label: "不设缺省（由 RoleConfig / Hub 选择）" },
+                { value: "", label: "不设（Hub / 角色选择）" },
                 ...modelDescriptorsForCredential(llmCredentials.find((credential) => credential.id === defaultCred)).map((model) => ({
                   value: model.model_id,
                   label: `${model.display_name} · ${model.model_id}`,
@@ -454,7 +447,7 @@ export function ProjectCliProviderAllowlistPanel({
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <div className="mb-1 text-[12px] text-zinc-400">项目级 fallback 模型顺序</div>
+            <div className="mb-1 text-[12px] text-zinc-400">Fallback 模型顺序</div>
             <SearchableMultiSelect
               value={fallbackModels}
               onChange={setFallbackModels}
@@ -464,12 +457,12 @@ export function ProjectCliProviderAllowlistPanel({
               className="block [&>button]:w-full"
               emptyText="请先选择缺省 Provider 或刷新模型目录"
             />
-            <div className="mt-1 text-[11px] leading-5 text-zinc-600">仅在 Hub 未显式指定模型、或冻结模型不可用时按顺序尝试；fallback 与缺省模型使用同一 Provider。</div>
+            <div className="mt-1 text-[11px] leading-5 text-zinc-600">未指定或冻结模型不可用时按序尝试（同一 Provider）。</div>
             <div className="mt-2 flex gap-2">
               <input
                 value={fallbackDraft}
                 onChange={(event) => setFallbackDraft(event.target.value)}
-                placeholder="添加 alias / 自定义模型引用"
+                placeholder="添加 alias / 自定义引用"
                 aria-label="添加 fallback 模型引用"
                 className="min-w-0 flex-1 rounded-md border border-ink-700 bg-ink-900/40 px-2.5 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-acc-400/40"
               />
@@ -499,10 +492,9 @@ export function ProjectCliProviderAllowlistPanel({
               aria-label="项目允许模型目录直通"
             />
             <span>
-              项目允许模型目录直通（应急 alias，默认关闭）
+              允许目录直通（默认关）
               <span className="mt-0.5 block text-[11px] leading-5 text-zinc-500">
-                默认关闭：缺省 / fallback 必须是 Provider 目录内的 catalog model_id（#632 SSOT）。
-                仅 alias 网关应急时开启；关闭时模型选择 fail-closed，失败返回结构化 RepairFeedback。
+                关闭时仅可用目录内 model_id；开启仅用于 alias 应急。
               </span>
             </span>
           </label>
@@ -514,11 +506,8 @@ export function ProjectCliProviderAllowlistPanel({
           disabled={busy}
           className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
         >
-          <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存启用与缺省"}
+          <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存"}
         </button>
-        <div className="font-mono text-[10px] leading-5 text-zinc-600">
-          解析顺序：Hub 提案 → 项目缺省 CLI / Provider / 模型（推荐）→ RoleConfig.credentials（已弃用，仍兼容）→ Provider / CLI 内置默认；修改仅影响下一 Job。
-        </div>
       </div>
     </section>
   );

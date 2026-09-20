@@ -1,8 +1,7 @@
-# Changelog
-
-发布条目依据已验证的 Git tag 与仓库变更维护，后续新增发布条目统一使用中文。不可变的 `vX.Y.Z` Git tag 是产品发布版本；根目录与 workspace package 的版本仅为私有内部元数据（`0.1.11`），不是发布标识。
-
 ## [Unreleased]
+
+### 变更
+- 精简 Web 常驻说明文案：去掉「项目策略」页头与各主页面过长 subtitle，压缩 CLI/Provider 启用面板提示；HelpTip 内说明保留。
 
 ### 新增
 

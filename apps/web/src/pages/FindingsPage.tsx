@@ -268,9 +268,6 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
         <PageHeader
           title={scope === "global" ? "发现" : PROJECT_DELIVERY_TITLE}
           eyebrow={scope === "global" ? "EVIDENCE REGISTER" : "PROJECT DELIVERY"}
-          subtitle={scope === "global"
-            ? "跨项目证据检索。进入某个项目后请用「风险与报告」看该项目全部任务的发现与交付结论。"
-            : "本项目全部任务的风险发现，不是单画布工作台。跨项目检索请用「跨项目发现」。"}
         />
       )}
 

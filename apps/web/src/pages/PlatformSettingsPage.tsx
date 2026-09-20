@@ -8,7 +8,6 @@ import { PageHeader } from "../ui";
 const SECTIONS: Record<string, {
   title: string;
   eyebrow: string;
-  subtitle: string;
   section: GlobalSettingsSection;
   icon: typeof ShieldCheck;
   scopes: string[];
@@ -16,7 +15,6 @@ const SECTIONS: Record<string, {
   access: {
     title: "安全与访问",
     eyebrow: "PLATFORM / IAM",
-    subtitle: "管理个人账号、平台用户与 API Token。身份与自动化访问在这里统一审计。",
     section: "access",
     icon: ShieldCheck,
     scopes: ["projects:read", "tokens:manage"],
@@ -24,7 +22,6 @@ const SECTIONS: Record<string, {
   credentials: {
     title: "Provider 凭据",
     eyebrow: "PLATFORM / SECRETS",
-    subtitle: "管理 Provider 账号本身：创建、轮换、测试与健康。角色绑定与快照生效在 Agent 管理，密钥不回显。",
     section: "credentials",
     icon: Key,
     scopes: ["agents:read"],
@@ -32,7 +29,6 @@ const SECTIONS: Record<string, {
   platform: {
     title: "配置中心与调度",
     eyebrow: "PLATFORM / OPERATIONS",
-    subtitle: "维护运行时护栏、全局调度纪律与平台配置包。项目数据仍归各自项目空间管理。",
     section: "platform",
     icon: Database,
     scopes: ["agents:read", "exports:read", "imports:read"],
@@ -52,7 +48,6 @@ export function PlatformSettingsPage() {
         <PageHeader
           title={config.title}
           eyebrow={config.eyebrow}
-          subtitle={config.subtitle}
           actions={<span className="grid size-9 place-items-center rounded-md bg-white/[.035] text-zinc-500 ring-1 ring-white/[.06]"><Icon size={17} /></span>}
         />
         <nav aria-label="平台设置分区" className="mt-5 flex gap-1 overflow-x-auto border-b border-white/[.055]">
