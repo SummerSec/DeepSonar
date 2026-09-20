@@ -1,7 +1,12 @@
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-20
+
 ### 变更
-- 精简 Web 常驻说明文案：去掉「项目策略」页头与各主页面过长 subtitle，压缩 CLI/Provider 启用面板提示；HelpTip 内说明保留。
+- 精简 Web 常驻说明文案（#638）：去掉「项目策略」页头与各主页面过长 subtitle，压缩 CLI/Provider 启用面板提示；HelpTip 内说明保留。
+- Provider 账号配置流理顺（#639）：统一账号名 / Base URL / API Key（可显隐）与并发上限；去掉重复角色引用与冗余模型/预算面；高级区保留 Agent 原生配置。Scheduler 同步 Claude 主模型别名/子代理模型并物化上下文 token 环境变量；保留 Pi 原生多模型描述符。
+- 拆开账号管理、角色绑定与生效策略（#626 / #628）：凭据 CRUD 与角色绑定解耦，不再绑成同一闭环；生效策略独立配置面。
+- 模型目录 SSOT + RoleConfig.credentials 弃用首片（#632 / #634）：平台模型目录为单一事实源；RoleConfig 仅声明能力，凭据绑定面收敛；配套 RepairFeedback。
 
 ### 新增
 
@@ -13,6 +18,7 @@
 - 官方镜像 tool-manifest 双哈希校验：catalog 期望值可匹配 `sha256sum` 文件哈希 **或** 嵌入的 `manifest.sha256`，避免定义漂移导致 provision fail-closed（#629）。
 - Gateway 冻结模型门禁：`bareUpstreamModelId` 剥离 Claude Code 尾部上下文标注（如 `[1m]`），请求裸 id 与冻结带标注 id 可互认，修复误报 `GATEWAY_FROZEN_MODEL_MISMATCH` 403（#630）。
 - RoleConfig PUT：`credentials` 改为可选（省略则保留既有绑定，显式 `[]` 才清空）；项目 `inherit_global` 丢弃 model 时在响应中返回 `dropped_fields` / `upsert_warnings`；Web 编辑器保存时不再误发空 `credentials`（#631）。架构层跟踪见 #632（本 PR 不改写）。
+- Credential 健康探测按 wire protocol 选路径（#624 / #625）：避免协议错配导致误报不健康。
 
 ## [0.4.6] - 2026-09-19
 
@@ -959,6 +965,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.7]: https://github.com/SummerSec/DeepSonar/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/SummerSec/DeepSonar/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/SummerSec/DeepSonar/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/SummerSec/DeepSonar/compare/v0.4.3...v0.4.4
