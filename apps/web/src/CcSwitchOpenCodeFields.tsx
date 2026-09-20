@@ -85,9 +85,9 @@ export function CcSwitchOpenCodeFields({
     updateOptions({ apiKey: value ? MASKED_SECRET_PLACEHOLDER : options.apiKey });
   };
   const changeUrl = (value: string) => {
-    const normalized = value.trim().replace(/\/+$/u, "");
-    onBaseUrlChange(normalized);
-    updateOptions({ baseURL: normalized });
+    // Keep draft as typed; trailing slash is required mid-entry for paths like /v1.
+    onBaseUrlChange(value);
+    updateOptions({ baseURL: value.trim() });
   };
   const addModel = () => {
     let index = Object.keys(models).length + 1;
