@@ -30,13 +30,12 @@ test("credential add surface and searchable select follow console theme tokens",
   const create = styles.slice(styles.indexOf(".provider-flow-create {"), styles.indexOf(".provider-flow-create-grid"));
   assert.match(create, /var\(--bg\)/);
   assert.doesNotMatch(create, /#0a0e10/);
-  const effort = styles.slice(styles.indexOf(".provider-flow-effort {"), styles.indexOf(".provider-flow-create-grid"));
-  assert.match(effort, /var\(--line-strong\)/);
-  assert.match(effort, /var\(--accent\)/);
-
   const editor = readFileSync(path.join(root, "CredentialConfigEditor.tsx"), "utf8");
-  assert.match(editor, /provider-flow-effort-btn/);
-  assert.doesNotMatch(editor, /bg-zinc-950|text-emerald-200|border-zinc-800/);
+  // #639: effort/reasoning chrome removed from credential add surface; keep theme guards.
+  assert.doesNotMatch(editor, /provider-flow-effort-btn/);
+  assert.match(editor, /provider-flow-create/);
+  assert.match(editor, /theme-input-surface/);
+  assert.doesNotMatch(editor, /bg-zinc-950|text-emerald-200|border-zinc-800|bg-black\//);
 
   const select = readFileSync(path.join(root, "SearchableSelect.tsx"), "utf8");
   assert.match(select, /searchable-select-popup/);

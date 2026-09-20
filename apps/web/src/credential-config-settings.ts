@@ -267,6 +267,263 @@ export function parseProviderReasoning(raw: string): string | null {
   return value;
 }
 
+export const CREDENTIAL_CONCURRENCY_MIN = 0;
+export const CREDENTIAL_CONCURRENCY_MAX = 1000;
+
+/** Public credential quota values are bounded integers; blank means unset. */
+export function parseCredentialConcurrency(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < CREDENTIAL_CONCURRENCY_MIN || value > CREDENTIAL_CONCURRENCY_MAX) {
+    throw new Error(`并发限制必须是 ${CREDENTIAL_CONCURRENCY_MIN}–${CREDENTIAL_CONCURRENCY_MAX} 的整数`);
+  }
+  return value;
+}
+
+export function extractModelIdFromSettings(settings: Record<string, unknown> | null | undefined, agentCli?: AgentCli): string {
+  if (!settings) return "";
+  const env = asRecord(settings.env) ?? {};
+  if (agentCli === "claude-code" || typeof env.ANTHROPIC_MODEL === "string") {
+    return typeof env.ANTHROPIC_MODEL === "string" ? env.ANTHROPIC_MODEL.trim() : "";
+  }
+  if (agentCli === "codex" && typeof settings.config === "string") {
+    const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
+    return (match?.[1] || match?.[2] || "").trim();
+  }
+  const official = readOfficialLlmPiAiDocumentClient(settings);
+  const selected = asRecord(official?.["agent-default-model"]);
+  if (typeof selected?.model === "string" && selected.model.trim()) return selected.model.trim();
+  if (typeof settings.model === "string" && settings.model.trim()) return settings.model.trim();
+  return extractModelsFromSettingsClient(settings)[0] ?? "";
+}
+
+/** Return the native Pi model ids for the selected provider profile. */
+export function extractPiModelIdsFromSettings(settings: Record<string, unknown> | null | undefined): string[] {
+  if (!settings) return [];
+  const profile = officialLlmPiAiProfile(settings);
+  const nativeModels = profile?.models;
+  if (Array.isArray(nativeModels)) {
+    return nativeModels
+      .map((model) => asRecord(model)?.id)
+      .filter((id): id is string => typeof id === "string" && Boolean(id.trim()))
+      .map((id) => id.trim());
+  }
+  if (nativeModels && typeof nativeModels === "object") return Object.keys(nativeModels).filter((id) => id.trim());
+  const providers = asRecord(settings.providers);
+  const first = providers
+    ? Object.values(providers).map(asRecord).find((value): value is Record<string, unknown> => Boolean(value))
+    : undefined;
+  const models = first?.models;
+  if (Array.isArray(models)) {
+    return models
+      .map((model) => asRecord(model)?.id)
+      .filter((id): id is string => typeof id === "string" && Boolean(id.trim()))
+      .map((id) => id.trim());
+  }
+  if (models && typeof models === "object" && !Array.isArray(models)) return Object.keys(models).filter((id) => id.trim());
+  return [];
+}
+
+function normalizedModelIds(modelIds: readonly string[]): string[] {
+  return modelIds.map((id) => id.trim()).filter((id, index, all) => id && all.indexOf(id) === index);
+}
+
+/** Return the configured model ids in their native order (used by Pi's editor). */
+export function extractModelIdsFromSettings(settings: Record<string, unknown> | null | undefined): string[] {
+  return extractPiModelIdsFromSettings(settings);
+}
+
+function normalizeModelIds(modelIds: readonly string[]): string[] {
+  return [...new Set(modelIds.map((value) => value.trim()).filter(Boolean))];
+}
+
+function patchModelIdInYaml(text: string, modelId: string): string {
+  const document = parseDocument(text, { customTags: [], prettyErrors: false });
+  if (document.errors.length > 0) return text;
+  const root = asRecord(document.toJS({ maxAliasCount: 0 })) ?? {};
+  const selected = asRecord(root["agent-default-model"]) ?? {};
+  const piAi = asRecord(root["llm-pi-ai"]) ?? {};
+  const providers = asRecord(piAi.providers) ?? {};
+  const route = typeof selected.provider === "string" && selected.provider.trim()
+    ? selected.provider.trim()
+    : Object.keys(providers)[0] ?? "deepsonar";
+  const profile = asRecord(providers[route]) ?? {};
+  const models = Array.isArray(profile.models) ? profile.models.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>> : [];
+  if (modelId && !models.some((item) => item.id === modelId)) models.unshift({ id: modelId });
+  if (modelId) {
+    selected.provider = route;
+    selected.model = modelId;
+    profile.models = models;
+    providers[route] = profile;
+    piAi.providers = providers;
+    root["agent-default-model"] = selected;
+    root["llm-pi-ai"] = piAi;
+  } else if (selected.model !== undefined) {
+    delete selected.model;
+    root["agent-default-model"] = selected;
+  }
+  return stringify(root, { lineWidth: 0 });
+}
+
+/** Apply the structured model id while retaining each CLI's native config shape. */
+export function patchProviderModelId(settings: Record<string, unknown>, agentCli: AgentCli, modelId: string): Record<string, unknown> {
+  const next = structuredClone(settings);
+  const model = modelId.trim();
+  if (agentCli === "claude-code") {
+    const env = asRecord(next.env) ?? {};
+    const modelKeys = [
+      "ANTHROPIC_MODEL",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL",
+      "ANTHROPIC_DEFAULT_FABLE_NAME",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "ANTHROPIC_DEFAULT_HAIKU_NAME",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "ANTHROPIC_DEFAULT_OPUS_NAME",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "ANTHROPIC_DEFAULT_SONNET_NAME",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+      "CLAUDE_CODE_SUBAGENT_MODEL",
+    ];
+    for (const key of modelKeys) {
+      if (model) env[key] = model;
+      else delete env[key];
+    }
+    next.env = env;
+    return next;
+  }
+  if (agentCli === "codex" && typeof next.config === "string") {
+    const line = model ? `model = ${JSON.stringify(model)}` : "";
+    const pattern = /^\s*model\s*=.*$/m;
+    next.config = line ? (pattern.test(next.config) ? next.config.replace(pattern, line) : `${line}\n${next.config}`) : next.config.replace(/^\s*model\s*=.*\r?\n?/m, "");
+    return next;
+  }
+  if (agentCli === "dsh" && typeof next.config === "string") {
+    next.config = patchModelIdInYaml(next.config, model);
+    return next;
+  }
+  if (agentCli === "pi") {
+    const official = readOfficialLlmPiAiDocumentClient(next);
+    if (official) {
+      const yaml = patchModelIdInYaml(stringify(official, { lineWidth: 0 }), model);
+      if (typeof next.config === "string" && next.config.trim()) next.config = yaml;
+      else {
+        const parsed = parsePiSettingsText(yaml);
+        Object.assign(next, parsed.ok ? parsed.value : official);
+      }
+    } else if (model) {
+      next.model = model;
+    } else {
+      delete next.model;
+    }
+    return next;
+  }
+  const models = asRecord(next.models) ?? {};
+  if (model) models[model] = asRecord(models[model]) ?? { name: model };
+  next.models = models;
+  return next;
+}
+
+/**
+ * Replace only Pi's model id list while retaining each existing model descriptor
+ * (reasoning limits, display names, and other native fields) for ids that remain.
+ */
+export function patchProviderModelIds(
+  settings: Record<string, unknown>,
+  modelIds: readonly string[],
+): Record<string, unknown> {
+  const next = structuredClone(settings);
+  const ids = normalizeModelIds(modelIds);
+  const official = readOfficialLlmPiAiDocumentClient(next);
+  const patchRoot = (root: Record<string, unknown>) => {
+    const piAi = asRecord(root["llm-pi-ai"]) ?? {};
+    const providers = asRecord(piAi.providers) ?? {};
+    const selected = asRecord(root["agent-default-model"]) ?? {};
+    const route = typeof selected.provider === "string" && selected.provider.trim()
+      ? selected.provider.trim()
+      : Object.keys(providers)[0] ?? "deepsonar";
+    const profile = asRecord(providers[route]) ?? {};
+    if (Array.isArray(profile.models)) {
+      const existing = profile.models.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+      const byId = new Map(existing.map((item) => [typeof item.id === "string" ? item.id : "", item]));
+      profile.models = ids.map((id) => byId.get(id) ?? { id });
+    } else if (profile.models && typeof profile.models === "object") {
+      const existing = asRecord(profile.models) ?? {};
+      profile.models = Object.fromEntries(ids.map((id) => [id, asRecord(existing[id]) ?? { id }]));
+    } else {
+      profile.models = ids.map((id) => ({ id }));
+    }
+    providers[route] = profile;
+    piAi.providers = providers;
+    root["llm-pi-ai"] = piAi;
+    if (ids.length > 0) {
+      const selectedModel = typeof selected.model === "string" && ids.includes(selected.model) ? selected.model : ids[0];
+      selected.provider = route;
+      selected.model = selectedModel;
+      root["agent-default-model"] = selected;
+    } else if (selected.model !== undefined) {
+      delete selected.model;
+      root["agent-default-model"] = selected;
+    }
+  };
+  if (official) {
+    patchRoot(official);
+    if (typeof next.config === "string" && next.config.trim()) next.config = stringify(official, { lineWidth: 0 });
+    else Object.assign(next, official);
+    return next;
+  }
+  const providers = asRecord(next.providers) ?? {};
+  const route = Object.keys(providers)[0] ?? "deepsonar";
+  const profile = asRecord(providers[route]) ?? {};
+  if (Array.isArray(profile.models)) {
+    const existing = profile.models.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+    const byId = new Map(existing.map((item) => [typeof item.id === "string" ? item.id : "", item]));
+    profile.models = ids.map((id) => byId.get(id) ?? { id });
+  } else if (profile.models && typeof profile.models === "object") {
+    const existing = asRecord(profile.models) ?? {};
+    profile.models = Object.fromEntries(ids.map((id) => [id, asRecord(existing[id]) ?? { id }]));
+  } else {
+    profile.models = ids.map((id) => ({ id }));
+  }
+  providers[route] = profile;
+  next.providers = providers;
+  return next;
+}
+
+/** Keep the structured connection fields authoritative while preserving Pi's native shape. */
+function patchPiConnection(settings: Record<string, unknown>, baseUrl: string, secret: string): Record<string, unknown> {
+  const endpoint = baseUrl.trim().replace(/\/+$/u, "");
+  if (!endpoint && !secret.trim()) return settings;
+  const official = readOfficialLlmPiAiDocumentClient(settings);
+  if (official) {
+    const selected = asRecord(official["agent-default-model"]);
+    const providers = asRecord(asRecord(official["llm-pi-ai"])?.providers) ?? {};
+    const route = typeof selected?.provider === "string" && selected.provider.trim() ? selected.provider.trim() : undefined;
+    const profile = asRecord(route ? providers[route] : undefined)
+      ?? Object.values(providers).map(asRecord).find((value): value is Record<string, unknown> => Boolean(value));
+    if (profile) {
+      if (endpoint) profile.baseURL = endpoint;
+      if (secret.trim()) profile.apiKey = secret.trim();
+    }
+    if (typeof settings.config === "string" && settings.config.trim()) settings.config = stringify(official, { lineWidth: 0 });
+    else Object.assign(settings, official);
+    return settings;
+  }
+  const providers = asRecord(settings.providers) ?? {};
+  const profile = Object.values(providers).map(asRecord).find((value): value is Record<string, unknown> => Boolean(value));
+  if (profile) {
+    if (endpoint) {
+      if ("baseURL" in profile && !("baseUrl" in profile)) profile.baseURL = endpoint;
+      else profile.baseUrl = endpoint;
+    }
+    if (secret.trim()) profile.apiKey = secret.trim();
+    settings.providers = providers;
+  }
+  return settings;
+}
+
 function patchProviderOverrides(
   settings: Record<string, unknown>,
   contextWindowTokens: number | null,
@@ -369,6 +626,7 @@ export function applyPiSettingsPaste(
   onSettingsJsonChange: (value: string) => void,
   onBaseUrlChange: (value: string) => void,
   onSecretChange: (value: string) => void,
+  onModelIdsChange?: (value: string[]) => void,
 ): void {
   onSettingsJsonChange(text);
   const parsed = parsePiSettingsText(text);
@@ -377,6 +635,7 @@ export function applyPiSettingsPaste(
   if (nextBase) onBaseUrlChange(nextBase);
   const nextSecret = extractSecretFromSettings(parsed.value);
   if (nextSecret && nextSecret !== MASKED_SECRET_PLACEHOLDER) onSecretChange(nextSecret);
+  onModelIdsChange?.(extractPiModelIdsFromSettings(parsed.value));
 }
 
 /** Build settingsConfig object from editor state (create & edit share this). */
@@ -388,12 +647,21 @@ export function buildSettingsConfigFromEditor(input: {
   secret: string;
   baseUrl: string;
   provider: string;
+  modelId?: string;
+  modelIds?: readonly string[];
   contextWindowTokens: string;
   reasoning: string;
   /** When empty and settings empty, synthesize default skeleton. */
   allowEmptyDefault?: boolean;
 }): { ok: true; settings: Record<string, unknown>; pastedAsIs: boolean } | { ok: false; error: string } {
-  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider, contextWindowTokens, reasoning } = input;
+  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider, modelId, modelIds, contextWindowTokens, reasoning } = input;
+  const applyModel = (settings: Record<string, unknown>) => {
+    if (agentCli === "pi") {
+      if (modelIds !== undefined) return patchProviderModelIds(settings, modelIds);
+      return modelId === undefined ? settings : patchProviderModelId(settings, agentCli, modelId);
+    }
+    return modelId === undefined ? settings : patchProviderModelId(settings, agentCli, modelId);
+  };
   let parsedContextWindowTokens: number | null;
   let parsedReasoning: string | null;
   try {
@@ -431,7 +699,7 @@ export function buildSettingsConfigFromEditor(input: {
     return {
       ok: true,
       pastedAsIs: !auth.empty || !toml.empty,
-      settings,
+      settings: applyModel(settings),
     };
   }
   if (agentCli === "dsh") {
@@ -441,29 +709,24 @@ export function buildSettingsConfigFromEditor(input: {
     return {
       ok: true,
       pastedAsIs: Boolean(settingsJson.trim()),
-      settings: patchProviderOverrides({ config: config.replace(/\r\n/g, "\n") }, parsedContextWindowTokens, parsedReasoning),
+      settings: applyModel(patchProviderOverrides({ config: config.replace(/\r\n/g, "\n") }, parsedContextWindowTokens, parsedReasoning)),
     };
   }
   if (agentCli === "pi") {
     const parsed = parsePiSettingsText(settingsJson);
     if (!parsed.ok) return { ok: false, error: `Pi Provider 配置无效：${parsed.error}` };
     if (!parsed.empty) {
-      const settings = structuredClone(parsed.value);
-      if (secret.trim() && !readOfficialLlmPiAiDocumentClient(settings)) {
-        const providers = asRecord(settings.providers) ?? {};
-        const first = Object.values(providers).find((value) => asRecord(value));
-        if (asRecord(first)) asRecord(first)!.apiKey = secret.trim();
-      }
-      return { ok: true, pastedAsIs: true, settings: patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning) };
+      const settings = patchPiConnection(structuredClone(parsed.value), baseUrl, secret);
+      return { ok: true, pastedAsIs: true, settings: applyModel(patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning)) };
     }
     if (input.allowEmptyDefault === false) return { ok: false, error: "settingsConfig 不能为空" };
     const providerKey = provider === "anthropic" ? "anthropic-messages" : "openai-responses";
     return {
       ok: true,
       pastedAsIs: false,
-      settings: patchProviderOverrides({
+      settings: applyModel(patchProviderOverrides({
         providers: { deepsonar: { baseUrl: baseUrl.trim(), api: providerKey, apiKey: secret.trim(), models: [] } },
-      }, parsedContextWindowTokens, parsedReasoning),
+      }, parsedContextWindowTokens, parsedReasoning)),
     };
   }
   const validation = validateJsonObjectText(settingsJson);
@@ -488,7 +751,7 @@ export function buildSettingsConfigFromEditor(input: {
         settings.options = options;
       }
     }
-    return { ok: true, pastedAsIs: true, settings: patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning) };
+    return { ok: true, pastedAsIs: true, settings: applyModel(patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning)) };
   }
   if (input.allowEmptyDefault === false) {
     return { ok: false, error: "settingsConfig 不能为空" };
@@ -503,12 +766,12 @@ export function buildSettingsConfigFromEditor(input: {
     const url = baseUrl.trim().replace(/\/+$/u, "");
     if (url) env.ANTHROPIC_BASE_URL = url;
     else if (provider === "anthropic") env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-    return { ok: true, pastedAsIs: false, settings: patchProviderOverrides({ env }, parsedContextWindowTokens, parsedReasoning) };
+    return { ok: true, pastedAsIs: false, settings: applyModel(patchProviderOverrides({ env }, parsedContextWindowTokens, parsedReasoning)) };
   }
   // open-code
   return {
     ok: true,
     pastedAsIs: false,
-    settings: patchProviderOverrides(defaultOpenCodeSettings(secret, baseUrl, provider), parsedContextWindowTokens, parsedReasoning),
+    settings: applyModel(patchProviderOverrides(defaultOpenCodeSettings(secret, baseUrl, provider), parsedContextWindowTokens, parsedReasoning)),
   };
 }

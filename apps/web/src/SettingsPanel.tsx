@@ -678,7 +678,7 @@ export function SettingsPanel({
               </section>
             )}
 
-            {!projectId && (
+            {false && !projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
@@ -696,13 +696,13 @@ export function SettingsPanel({
                     {numField("maxConcurrentProvisioning", "Provisioning并发上限", "同时处于 claimed / provisioning 阶段的 Job 数量；超出的 Job 保持 pending。")}
                   </div>
                   <div className="mt-2 font-mono text-[10px] text-zinc-600">
-                    当前运行 {Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)} / {rules.maxGlobalJobs}
+                      当前运行 {Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)} / {rules?.maxGlobalJobs ?? "不限"}
                   </div>
                 </div>
               </section>
             )}
 
-            {projectId && settings && (
+            {projectId && settings && rules && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
@@ -778,7 +778,7 @@ export function SettingsPanel({
               </>
             )}
 
-            {!projectId && (
+            {false && !projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
@@ -798,7 +798,7 @@ export function SettingsPanel({
                           type="number"
                           min={0}
                           placeholder="不限"
-                          value={rules.maxConcurrentByAgentCli?.[cli] ?? ""}
+                          value={rules?.maxConcurrentByAgentCli?.[cli] ?? ""}
                           onChange={(event) => setCliLimit(cli, event.target.value)}
                           className={inputCls}
                         />

@@ -36,6 +36,8 @@ export function CcSwitchCodexFields({
   canFetchModels = false,
   onNotice,
   onError,
+  showConnectionFields = true,
+  showModelFields = true,
 }: {
   authJson: string;
   onAuthJsonChange: (value: string) => void;
@@ -51,6 +53,8 @@ export function CcSwitchCodexFields({
   canFetchModels?: boolean;
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
+  showConnectionFields?: boolean;
+  showModelFields?: boolean;
 }) {
   const authValidation = useMemo(() => validateJsonObjectText(authJson), [authJson]);
   const tomlValidation = useMemo(() => validateTomlText(tomlText), [tomlText]);
@@ -84,6 +88,7 @@ export function CcSwitchCodexFields({
 
   return (
     <div className="cc-switch-form">
+      {showConnectionFields && <>
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-codex-key">API Key</label>
         <div className="cc-switch-secret-wrap">
@@ -97,6 +102,8 @@ export function CcSwitchCodexFields({
         <input id="cc-switch-codex-url" value={baseUrl} onChange={(event) => changeBaseUrl(event.target.value)}
           className="theme-input-surface cc-switch-input" placeholder="https://api.openai.com/v1" />
       </div>
+      </>}
+      {showModelFields && <>
       <div className="cc-switch-field">
         <div className="cc-switch-field-head">
           <label className="cc-switch-label" htmlFor="cc-switch-codex-model">模型名称</label>
@@ -120,6 +127,7 @@ export function CcSwitchCodexFields({
         </div>
         <p className="cc-switch-hint">模型写入 config.toml；角色绑定该配置文件，不需要单独选择 model。</p>
       </div>
+      </>}
       <div className="cc-switch-field">
         <div className="cc-switch-field-head"><label className="cc-switch-label" htmlFor="cc-switch-codex-auth">auth.json</label>
           <button type="button" className="secondary-button !min-h-7 !px-2 !text-[10px]" onClick={() => format("auth")}><MagicWand size={13} />格式化</button></div>

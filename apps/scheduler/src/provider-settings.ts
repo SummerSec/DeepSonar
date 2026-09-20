@@ -257,6 +257,23 @@ function asObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function syncClaudeModelEnv(env: Record<string, unknown>, model: string): void {
+  const value = model.trim();
+  if (!value) return;
+  for (const key of [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]) env[key] = value;
+}
+
 /** Match CC Switch save semantics for CLI-specific provider fragments. */
 export function normalizeProviderSettings(
   agentCli: string | null | undefined,
@@ -305,6 +322,7 @@ export function normalizeProviderSettings(
   setFallback("ANTHROPIC_DEFAULT_OPUS_MODEL", main ?? smallFast);
   setFallback("ANTHROPIC_DEFAULT_FABLE_MODEL", main ?? smallFast);
   setFallback("CLAUDE_CODE_SUBAGENT_MODEL", main ?? smallFast);
+  if (main) syncClaudeModelEnv(env, main);
   delete env.ANTHROPIC_SMALL_FAST_MODEL;
   clone.env = env;
   return clone;
@@ -398,7 +416,9 @@ export function materializeProviderSettings(input: {
     }
     const env = asObject(clone.env);
     if (input.overrides?.model?.trim()) env.ANTHROPIC_MODEL = input.overrides.model.trim();
-    // Claude Code has no supported absolute context-window setting.
+    if (typeof env.ANTHROPIC_MODEL === "string") syncClaudeModelEnv(env, env.ANTHROPIC_MODEL);
+    if (contextWindowTokens != null) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextWindowTokens);
+    else delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
     clone.env = env;
     const content = `${JSON.stringify(clone, null, 2)}\n`;
     return [file(expectedPath, content)];
