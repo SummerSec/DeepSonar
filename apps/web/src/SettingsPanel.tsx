@@ -939,7 +939,7 @@ export function SettingsPanel({
                 )}
               </div>
               <p className="px-4 pb-4 text-[11px] leading-5 text-zinc-500">
-                保存后写入审计日志。已在跑的 Job 继续使用创建时冻结的快照；新 Job 读取当前数据库值。
+                保存写入审计；在途 Job 不受影响。
               </p>
             </section>
 

@@ -9,7 +9,6 @@ export function AgentsPage() {
         <PageHeader
           title="Agent 管理"
           eyebrow="AGENT GOVERNANCE"
-          subtitle="定义角色能力、凭据绑定与可信运行缺省；账号密钥在 Provider 凭据页，快照生效策略在凭据绑定提交时显式选择。"
         />
       </div>
       <div className="min-h-0 flex-none [&_.settings-content]:flex-none [&_.settings-content]:overflow-visible [&_.settings-panel]:h-auto">

@@ -179,7 +179,6 @@ export function DevicesPage() {
         <PageHeader
           title="设备"
           eyebrow="PLATFORM / DEVICES"
-          subtitle="真实设备经 device broker 暴露为可租借端点；本页需要 tasks:read。"
         />
         <EmptyState title="无权访问设备准入" hint="当前主体的 scope 不包含 tasks:read。" />
       </div>
@@ -191,7 +190,6 @@ export function DevicesPage() {
       <PageHeader
         title="设备"
         eyebrow="PLATFORM / DEVICES"
-        subtitle="平台是设备准入的权威：登记、下架与删除都会把期望集合整集推给 rig 的 broker。有在途租约时不能下架或删除；有租约历史的登记项只能下架。"
       />
 
       <section className="flex flex-col gap-2 rounded-lg border border-zinc-800/70 bg-zinc-900/30 p-4">

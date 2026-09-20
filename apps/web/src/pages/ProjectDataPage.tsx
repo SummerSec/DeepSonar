@@ -16,7 +16,6 @@ export function ProjectDataPage() {
         <PageHeader
           title="项目数据"
           eyebrow="PROJECT DATA"
-          subtitle="导出或导入本项目的配置与任务历史。全局规则与平台配置包请到平台数据与调度处理。"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-10 sm:px-9">
