@@ -129,9 +129,9 @@ export function CcSwitchClaudeFields({
   };
 
   const handleBaseUrlChange = (value: string) => {
-    const sanitized = value.trim().replace(/\/+$/u, "");
-    onBaseUrlChange(sanitized);
-    writeEnvPatch({ ANTHROPIC_BASE_URL: sanitized || null });
+    // Keep draft text intact while typing (trailing "/" is mid-path for /v1); save path normalizes.
+    onBaseUrlChange(value);
+    writeEnvPatch({ ANTHROPIC_BASE_URL: value.trim() || null });
   };
 
   const handleFormat = () => {

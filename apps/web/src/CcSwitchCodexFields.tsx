@@ -70,9 +70,9 @@ export function CcSwitchCodexFields({
   };
 
   const changeBaseUrl = (value: string) => {
-    const normalized = value.trim().replace(/\/+$/u, "");
-    onBaseUrlChange(normalized);
-    onTomlTextChange(patchTomlValue(tomlText || defaultCodexToml(normalized), "base_url", normalized));
+    // Draft keeps trailing slash so "/v1" can be typed; ProviderAccountFlow normalizes on save.
+    onBaseUrlChange(value);
+    onTomlTextChange(patchTomlValue(tomlText || defaultCodexToml(value.trim()), "base_url", value.trim()));
   };
 
   const format = (kind: "auth" | "toml") => {
