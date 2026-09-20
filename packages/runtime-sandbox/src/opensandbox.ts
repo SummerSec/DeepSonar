@@ -595,8 +595,16 @@ export class OpenSandboxRunner implements SandboxRunner {
         throw new RuntimeImageContractError(`runtime contract mismatch: expected ${input.expectedContract}, got ${manifest.contract ?? "missing"}`);
       }
       if (input.expectedToolsManifestSha256) {
+        const expected = input.expectedToolsManifestSha256.replace(/^sha256:/i, "").trim().toLowerCase();
         const hashResult = await host.run("sha256sum /opt/deepsonar/tool-manifest.json | cut -d' ' -f1", { timeoutMs: 5_000 });
-        if (hashResult.exitCode !== 0 || hashResult.stdout.trim() !== input.expectedToolsManifestSha256.replace(/^sha256:/, "")) {
+        const fileHash = hashResult.exitCode === 0 ? hashResult.stdout.trim().toLowerCase() : "";
+        const embeddedRaw = (manifest as { sha256?: unknown }).sha256;
+        const embedded = typeof embeddedRaw === "string"
+          ? embeddedRaw.replace(/^sha256:/i, "").trim().toLowerCase()
+          : "";
+        // Catalog registers the embedded/canonical digest; sha256sum is raw file bytes.
+        // Accept either so official images are not fail-closed on definition drift (#629).
+        if (!expected || (fileHash !== expected && embedded !== expected)) {
           throw new RuntimeImageContractError("tool manifest sha256 mismatch");
         }
       }

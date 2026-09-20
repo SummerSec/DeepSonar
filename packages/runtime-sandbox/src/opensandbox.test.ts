@@ -251,6 +251,85 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
   assert.equal(await runner.isAlive(handle), true);
 });
 
+test("OpenSandbox provision accepts embedded manifest.sha256 when file hash differs (#629)", async () => {
+  const session = fakeSession();
+  const embedded = "bb".repeat(32);
+  const fileHash = "cc".repeat(32);
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", sha256: embedded }),
+        stderr: "",
+      };
+    }
+    if (command.includes("sha256sum")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return { exitCode: 0, stdout: fileHash, stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+    expectedToolsManifestSha256: embedded,
+  });
+  assert.equal(handle.sandboxId, "sbx-1");
+});
+
+test("OpenSandbox provision rejects when neither file nor embedded tool-manifest hash matches (#629)", async () => {
+  const session = fakeSession();
+  const embedded = "bb".repeat(32);
+  const fileHash = "cc".repeat(32);
+  const expected = "dd".repeat(32);
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", sha256: embedded }),
+        stderr: "",
+      };
+    }
+    if (command.includes("sha256sum")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return { exitCode: 0, stdout: fileHash, stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client);
+  await assert.rejects(
+    runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+      expectedToolsManifestSha256: expected,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof RuntimeImageContractError);
+      assert.match(error.message, /tool manifest sha256 mismatch/);
+      return true;
+    },
+  );
+});
+
 test("OpenSandbox official provision reads and verifies the offline runtime manual", async () => {
   const session = fakeSession();
   const manualHash = "b".repeat(64);

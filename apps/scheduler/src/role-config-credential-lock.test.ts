@@ -86,3 +86,35 @@ test("scheduler boot scrubs leftover project RoleConfig identity", () => {
   assert.match(boot, /scrubLeftoverStoredRules\(sql\)/);
   assert.match(boot, /scrubRedundantConfigSurface\(sql\)/);
 });
+
+test("RoleConfig PUT omits credentials to preserve bindings and surfaces inherit_global model drop (#631)", () => {
+  assert.match(
+    roleConfigRoutesSource,
+    /credentials:\s*z\.array\([^\n]+\)\.optional\(\)/,
+    "credentials schema must be optional (omit = preserve), not .default([])",
+  );
+  assert.doesNotMatch(
+    roleConfigRoutesSource,
+    /credentials:\s*z\.array\([^\n]+\)\.default\(\[\]\)/,
+    "credentials must not default to [] (would clear bindings on omit)",
+  );
+
+  const upsertStart = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(");
+  const upsertEnd = roleConfigRoutesSource.indexOf("async function mutateRoleConfig(", upsertStart);
+  assert.ok(upsertStart >= 0 && upsertEnd > upsertStart);
+  const upsert = roleConfigRoutesSource.slice(upsertStart, upsertEnd);
+  assert.match(upsert, /body\.credentials === undefined/);
+  assert.match(upsert, /DELETE FROM role_credentials WHERE role_config_id = \$\{configId\}/);
+  // Delete must sit inside the credentials-provided branch, after the undefined guard.
+  const preserveGuard = upsert.indexOf("body.credentials === undefined");
+  const deleteCreds = upsert.indexOf("DELETE FROM role_credentials WHERE role_config_id = ${configId}");
+  assert.ok(preserveGuard >= 0 && deleteCreds > preserveGuard, "DELETE role_credentials only after omit/preserve guard");
+  assert.match(upsert, /credentials:\s*"preserved"\s*\|\s*"replaced"\s*\|\s*"cleared"/);
+  assert.match(upsert, /inherit_global_ignores_project_model/);
+  assert.match(upsert, /dropped_fields/);
+
+  assert.match(roleConfigRoutesSource, /ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL/);
+  assert.match(roleConfigRoutesSource, /upsert_warnings/);
+  assert.match(roleConfigRoutesSource, /body\.credentials\?\.length \?\? "preserved"/);
+});
+

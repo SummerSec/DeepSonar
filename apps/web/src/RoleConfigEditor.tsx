@@ -439,9 +439,7 @@ export function RoleConfigEditor({
         runtime_image_key: projectId ? null : form.runtime_image_key.trim() || null,
         sandbox_limits: sandboxLimitsFromForm(form),
         runtime_knobs: runtimeKnobsFromForm(form),
-        credentials: form.credential_id
-          ? [{ credential_id: form.credential_id, purpose: "llm" }]
-          : [],
+        // Omit credentials: binding is managed on Agents「凭据绑定」; sending [] would clear (#631).
         config_files: form.config_files,
         pi_extensions: form.agent_cli === "pi" ? form.pi_extensions : [],
       };

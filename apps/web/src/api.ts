@@ -1550,7 +1550,8 @@ export type RoleConfigInput = {
   /** Project-only CPU/memory/PID overrides; blank fields inherit server defaults. */
   sandbox_limits?: SandboxLimitsOverride | null;
   runtime_knobs?: RuntimeKnobOverride | null;
-  credentials: { credential_id: string; purpose: string }[];
+  /** Omit to preserve existing RoleConfig bindings; explicit [] clears (#631). */
+  credentials?: { credential_id: string; purpose: string }[];
   /** Provider 配置文件：路径按 CLI 固定白名单（首期每角色最多 1 个） */
   config_files: { path: string; content: string }[];
   /** 仅 pi：已注册扩展 id，Job 创建时冻结。 */
