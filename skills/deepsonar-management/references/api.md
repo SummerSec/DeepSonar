@@ -265,6 +265,7 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | --- | --- | --- | --- |
 | GET | /runtime-images | images:read | 市场列表；`?search=` / `?project_id=` |
 | GET | /runtime-images/:id | images:read | 产品、不可变版本、工具清单、SBOM/签名和扫描历史 |
+| GET | /runtime-images/contract-selftest | images:read | 只读双哈希自检：catalog `tools_manifest_sha256` vs 本地镜像文件字节哈希 / 内嵌 `manifest.sha256`；本地缺失为 `skipped_not_local`；`ok` 仅非 skipped 全匹配 |
 | GET | /runtime-images/registry | images:read | 官方目录；保留 `schema/images`，并附 `selected_channel`（`github`\|`dockerhub`\|`aliyun-acr`）、`source`、`fallback`、`error`、`checked_at` 诊断 |
 | PATCH | /runtime-images/registry/channel | images:manage | 严格 body `{channel: github\|dockerhub\|aliyun-acr}`；只允许全局/admin actor，项目限定 token 返回 `403 PROJECT_SCOPE_FORBIDDEN`；审计 `runtime_image.registry_channel_update` |
 | POST | /runtime-images/registry/sync | images:manage | 刷新官方/内置 catalog；所选 channel 用于后续镜像引用解析与 pull，不决定 catalog 来源 |

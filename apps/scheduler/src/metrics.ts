@@ -85,6 +85,7 @@ const HELP: Record<string, string> = {
   deepsonar_desired_state_cleanup_failures_total: "Desired-state cleanup failures by managed resource type",
   deepsonar_runtime_image_gc_removed_total: "Runtime image references removed by safe GC",
   deepsonar_runtime_image_gc_failures_total: "Runtime image GC failures by reason",
+  deepsonar_runtime_image_tools_manifest_overwrite_total: "Registry sync overwrote a non-empty tools_manifest_sha256 with a different catalog value",
   deepsonar_host_disk_check_failures_total: "Host filesystem statfs failures",
   deepsonar_graph_snapshots_total: "Bounded graph prompt projections by scope and truncation",
   deepsonar_graph_yaml_chars_total: "Total characters injected through bounded graph projections by scope",

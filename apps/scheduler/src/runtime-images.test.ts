@@ -30,6 +30,7 @@ import {
   selectLatestRuntimeImagePullItems,
   selectRuntimeImageRef,
   officialCatalogWriteMode,
+  coalesceToolsManifestSha256,
   shouldReconcileRuntimeImagePromotions,
   toHubRuntimeImageCatalogEntry,
   validateRuntimeImageRegistryPolicy,
@@ -1305,4 +1306,14 @@ test("Hub catalog entries require a compatible governance CLI and omit executabl
     project_opt_in: true,
     source_kind: "admission",
   }), null);
+});
+
+
+test("bundled/sync COALESCE 在 EXCLUDED 为 null 时保留已有 tools_manifest_sha256 (#636)", () => {
+  const existing = "a".repeat(64);
+  assert.equal(coalesceToolsManifestSha256(null, existing), existing);
+  assert.equal(coalesceToolsManifestSha256(undefined, existing), existing);
+  assert.equal(coalesceToolsManifestSha256("", existing), existing);
+  const next = "b".repeat(64);
+  assert.equal(coalesceToolsManifestSha256(next, existing), next);
 });

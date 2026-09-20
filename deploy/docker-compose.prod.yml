@@ -93,6 +93,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
+      args:
+        GIT_REVISION: ${DEEPSONAR_GIT_REVISION:-}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -119,6 +121,8 @@ services:
       # /health.version：显式传入镜像标签；可用 DEEPSONAR_VERSION 覆盖。
       DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_TAG}
       DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-}
+      # /health.git_revision：镜像构建戳；可用环境变量覆盖以便对照目标 commit（#636）。
+      DEEPSONAR_GIT_REVISION: ${DEEPSONAR_GIT_REVISION:-}
       # stop_grace_period 配合优雅退出（dispatcher drain + fastify close）
     stop_grace_period: 30s
     volumes:

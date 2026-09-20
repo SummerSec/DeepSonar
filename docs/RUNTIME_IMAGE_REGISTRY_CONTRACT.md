@@ -163,3 +163,14 @@ switch. An in-flight pull is shown on the shared progress panel rather than as
 a hard channel-switch failure. It does not accept arbitrary registry URLs or
 source input. Together with exact-channel pull and immutable Job snapshots,
 this completes Issue #70.
+
+## tools_manifest_sha256 口径（#629 / #633 / #636）
+
+官方 catalog 当前登记的是镜像内嵌 `manifest.sha256`（与 `sha256sum` 文件字节哈希可能不同）。
+Scheduler / OpenSandbox provision **接受任一匹配**（双口径）。不要靠手工
+`UPDATE runtime_image_versions.tools_manifest_sha256` 做长期缓解——registry sync 的
+`COALESCE(EXCLUDED, existing)` 会在远端 catalog 带非空值时覆盖。部署后用
+`GET /runtime-images/contract-selftest` 核对；详见
+[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)。
+可选的显式 `tools_manifest_sha256_scope` 字段留作后续发布管线统一，本切片不改 schema。
+
