@@ -55,4 +55,6 @@ test("project rules expose a claim-time concurrent job quota", () => {
   assert.match(panel, /maxConcurrentJobs/);
   assert.match(panel, /当前运行 \/ 有效上限/);
   assert.match(panel, /该项目所有任务共享此额度/);
+  assert.match(panel, /保存项目配额/);
+  assert.match(panel, /saveProjectQuota/);
 });

@@ -1,6 +1,6 @@
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
@@ -48,6 +48,11 @@ import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProvide
 import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
 import { inferToastKind, showToast } from "./toast";
 import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
+import {
+  formatStoredProjectJobQuota,
+  nextProjectJobQuotaOnReload,
+  parseProjectJobQuotaDraft,
+} from "./project-job-quota-draft";
 
 /**
  * 设置面板（§8.1/§8.2/§8.3 + 角色即配置 §4.2）：
@@ -123,6 +128,14 @@ export function SettingsPanel({
   const [configFailed, setConfigFailed] = useState(false);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
   const [projectJobQuota, setProjectJobQuota] = useState("");
+  const [projectJobQuotaBaseline, setProjectJobQuotaBaseline] = useState("");
+  const [quotaBusy, setQuotaBusy] = useState(false);
+  const [quotaSaved, setQuotaSaved] = useState(false);
+  const [quotaFailed, setQuotaFailed] = useState(false);
+  const projectJobQuotaRef = useRef(projectJobQuota);
+  const projectJobQuotaBaselineRef = useRef(projectJobQuotaBaseline);
+  projectJobQuotaRef.current = projectJobQuota;
+  projectJobQuotaBaselineRef.current = projectJobQuotaBaseline;
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
@@ -165,7 +178,14 @@ export function SettingsPanel({
           setImageStrategy(s.image_strategy ?? "inherit_global");
           setRoleRuntimeImages(s.role_runtime_images ?? {});
           const storedQuota = (s.rules as { maxConcurrentJobs?: unknown }).maxConcurrentJobs;
-          setProjectJobQuota(typeof storedQuota === "number" ? String(storedQuota) : "");
+          // 未保存的配额草稿不被其他设置刷新覆盖（#644）
+          const nextQuota = nextProjectJobQuotaOnReload(
+            projectJobQuotaRef.current,
+            projectJobQuotaBaselineRef.current,
+            storedQuota,
+          );
+          setProjectJobQuota(nextQuota.draft);
+          setProjectJobQuotaBaseline(nextQuota.baseline);
         })
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
@@ -209,6 +229,16 @@ export function SettingsPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(reload, [globalSection, projectId, visibleGlobalTabs]);
 
+  // 切换项目时丢弃配额草稿，避免脏草稿跨项目污染（同步清 ref，防止 in-flight reload 读到旧草稿）
+  useEffect(() => {
+    projectJobQuotaRef.current = "";
+    projectJobQuotaBaselineRef.current = "";
+    setProjectJobQuota("");
+    setProjectJobQuotaBaseline("");
+    setQuotaSaved(false);
+    setQuotaFailed(false);
+  }, [projectId]);
+
   useEffect(() => {
     setTab(projectId
       ? resolveSettingsTab(projectId, searchParams.get("tab"))
@@ -247,10 +277,8 @@ export function SettingsPanel({
       ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.provisionTimeoutSec = rules.provisionTimeoutSec;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
-    } else {
-      const trimmed = projectJobQuota.trim();
-      ruleBody.maxConcurrentJobs = trimmed === "" ? null : Number(trimmed);
     }
+    // 项目调度配额由 saveProjectQuota 独立保存（#644），此处不捎带
     setRulesBusy(true);
     setRulesSaved(false);
     setRulesFailed(false);
@@ -270,6 +298,52 @@ export function SettingsPanel({
       flash(`保存失败：${e instanceof Error ? e.message : e}`);
     } finally {
       setRulesBusy(false);
+    }
+  };
+
+  const applyProjectSettingsSnapshot = (s: ProjectSettings) => {
+    setSettings(s);
+    setRules(s.effective_rules);
+    setFindingProtocol(s.finding_protocol);
+    setEffectiveFindingProtocol(s.effective_finding_protocol);
+    setImageStrategy(s.image_strategy ?? "inherit_global");
+    setRoleRuntimeImages(s.role_runtime_images ?? {});
+  };
+
+  const saveProjectQuota = async () => {
+    if (!projectId) return;
+    let maxConcurrentJobs: number | null;
+    try {
+      maxConcurrentJobs = parseProjectJobQuotaDraft(projectJobQuota);
+    } catch (e) {
+      setQuotaFailed(true);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+      return;
+    }
+    setQuotaBusy(true);
+    setQuotaSaved(false);
+    setQuotaFailed(false);
+    try {
+      const result = await api.patchSettings(projectId, { rules: { maxConcurrentJobs } });
+      if ("saved" in result && result.saved === false) {
+        setQuotaFailed(true);
+        flash(`保存失败：运行镜像准备中，请稍后重试`);
+        return;
+      }
+      const saved = result as ProjectSettings;
+      applyProjectSettingsSnapshot(saved);
+      const stored = (saved.rules as { maxConcurrentJobs?: unknown } | undefined)?.maxConcurrentJobs;
+      const baseline = formatStoredProjectJobQuota(stored);
+      setProjectJobQuota(baseline);
+      setProjectJobQuotaBaseline(baseline);
+      flash("项目调度配额已保存（下一 Job claim 生效）");
+      setQuotaSaved(true);
+      window.setTimeout(() => setQuotaSaved(false), 2000);
+    } catch (e) {
+      setQuotaFailed(true);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setQuotaBusy(false);
     }
   };
 
@@ -740,8 +814,21 @@ export function SettingsPanel({
                     <div className="mt-1 font-mono text-[10px] text-zinc-600">
                       来源：{rules.maxConcurrentJobsSource === "project" ? "项目设置" : "继承全局"}
                       · 全局硬上限 {rules.maxJobsPerProject}
+                      · 有效上限 = min(项目设置, 全局硬上限)
                     </div>
                   </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 px-4 pb-4">
+                  <button
+                    type="button"
+                    onClick={saveProjectQuota}
+                    disabled={quotaBusy || projectJobQuota === projectJobQuotaBaseline}
+                    className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FloppyDisk size={13} />{" "}
+                    {quotaBusy ? "保存中…" : quotaSaved ? "已保存" : quotaFailed ? "保存失败" : "保存项目配额"}
+                  </button>
+                  <span className="font-mono text-[10px] text-zinc-600">独立保存；下一 Job claim 生效</span>
                 </div>
               </section>
             )}
