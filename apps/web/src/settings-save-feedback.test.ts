@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const panel = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
+const panel = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8") + readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
 const shell = readFileSync(new URL("./layout/AppShell.tsx", import.meta.url), "utf8");
 const toast = readFileSync(new URL("./toast.tsx", import.meta.url), "utf8");
 
@@ -51,10 +51,11 @@ test("config center exposes batch-1 runtime knobs with toast save feedback", () 
 });
 
 test("project rules expose a claim-time concurrent job quota", () => {
-  assert.match(panel, /最大同时运行 Job 数/);
-  assert.match(panel, /maxConcurrentJobs/);
-  assert.match(panel, /当前运行 \/ 有效上限/);
-  assert.match(panel, /该项目所有任务共享此额度/);
-  assert.match(panel, /保存项目配额/);
-  assert.match(panel, /saveProjectQuota/);
+  const quota = readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
+  assert.match(panel, /ProjectJobQuotaSection/);
+  assert.match(quota, /最大同时运行 Job 数/);
+  assert.match(quota, /maxConcurrentJobs/);
+  assert.match(quota, /当前运行 \/ 有效上限/);
+  assert.match(quota, /该项目所有任务共享此额度/);
+  assert.match(quota, /保存项目配额/);
 });

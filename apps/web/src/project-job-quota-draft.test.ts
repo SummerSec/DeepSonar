@@ -46,14 +46,14 @@ test("parseProjectJobQuotaDraft accepts empty inherit and integer quota", () => 
   assert.throws(() => parseProjectJobQuotaDraft("abc"));
 });
 
-test("SettingsPanel exposes independent quota save and dirty-safe reload (#644)", () => {
+test("SettingsPanel wires ProjectJobQuotaSection and keeps rules save quota-free (#644)", () => {
   const panel = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
-  assert.match(panel, /saveProjectQuota/);
-  assert.match(panel, /保存项目配额/);
-  assert.match(panel, /nextProjectJobQuotaOnReload/);
-  assert.match(panel, /quotaBusy/);
-  // 独立保存：项目规则保存不再捎带 maxConcurrentJobs
-  const saveRulesBlock = panel.slice(panel.indexOf("const saveRules"), panel.indexOf("const applyProjectSettingsSnapshot"));
+  const section = readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
+  assert.match(panel, /ProjectJobQuotaSection/);
+  assert.doesNotMatch(panel, /setProjectJobQuota/);
+  const saveRulesBlock = panel.slice(panel.indexOf("const saveRules"), panel.indexOf("const projectRuntimeImageChoices"));
   assert.doesNotMatch(saveRulesBlock, /maxConcurrentJobs/);
-  assert.match(panel, /rules:\s*\{\s*maxConcurrentJobs\s*\}/);
+  assert.match(section, /保存项目配额/);
+  assert.match(section, /nextProjectJobQuotaOnReload/);
+  assert.match(section, /rules:\s*\{\s*maxConcurrentJobs\s*\}/);
 });
