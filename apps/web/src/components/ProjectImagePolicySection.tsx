@@ -72,38 +72,40 @@ export function ProjectImagePolicySection({
           </label>
         </div>
 
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {imagePolicyRoles.map((role) => {
             const globalImage = globalImageOf(role.id);
             const currentImage = roleRuntimeImages[role.name] ?? "";
             return (
-              <div key={role.id} className="grid gap-2 border-t border-ink-800 pt-2 sm:grid-cols-[minmax(6.5rem,9rem)_minmax(0,1fr)] sm:items-start">
+              <div key={role.id} className="min-w-0 rounded-md border border-ink-800/80 bg-white/[.02] px-3 py-2">
                 <div className="min-w-0">
-                  <div className="text-[13px] text-zinc-300">{role.title || role.name}</div>
-                  <div className="font-mono text-[10px] text-zinc-600">{role.name}</div>
+                  <div className="truncate text-[13px] text-zinc-300">{role.title || role.name}</div>
+                  <div className="truncate font-mono text-[10px] text-zinc-600">{role.name}</div>
                 </div>
                 {imageStrategy === "inherit_global" ? (
-                  <div className="min-w-0 break-words font-mono text-[11px] leading-5 text-zinc-500">全局镜像：{globalImage ?? "全局未绑定（系统默认）"}</div>
+                  <div className="mt-1.5 min-w-0 break-words font-mono text-[11px] leading-5 text-zinc-500">全局镜像：{globalImage ?? "全局未绑定（系统默认）"}</div>
                 ) : (
-                  <SearchableSelect
-                    value={currentImage}
-                    onChange={(next) => setRoleRuntimeImages((current) => ({ ...current, [role.name]: next || null }))}
-                    options={[
-                      { value: "", label: "系统基础环境" },
-                      ...projectRuntimeImageChoices.map((image) => runtimeImageSelectOption(image, projectId)),
-                      ...(currentImage && !projectRuntimeImageChoices.some((image) => image.image_key === currentImage)
-                        ? [{ value: currentImage, label: `${currentImage}（当前 · 需检查启用）` }]
-                        : []),
-                    ]}
-                    placeholder="选择运行镜像"
-                    ariaLabel={`${role.title || role.name} 的运行镜像`}
-                    className="searchable-select-wrap"
-                  />
+                  <div className="mt-1.5 min-w-0">
+                    <SearchableSelect
+                      value={currentImage}
+                      onChange={(next) => setRoleRuntimeImages((current) => ({ ...current, [role.name]: next || null }))}
+                      options={[
+                        { value: "", label: "系统基础环境" },
+                        ...projectRuntimeImageChoices.map((image) => runtimeImageSelectOption(image, projectId)),
+                        ...(currentImage && !projectRuntimeImageChoices.some((image) => image.image_key === currentImage)
+                          ? [{ value: currentImage, label: `${currentImage}（当前 · 需检查启用）` }]
+                          : []),
+                      ]}
+                      placeholder="选择运行镜像"
+                      ariaLabel={`${role.title || role.name} 的运行镜像`}
+                      className="searchable-select-wrap"
+                    />
+                  </div>
                 )}
               </div>
             );
           })}
-          {imagePolicyRoles.length === 0 && <div className="text-[12px] text-zinc-600">暂无可配置角色。</div>}
+          {imagePolicyRoles.length === 0 && <div className="col-span-full text-[12px] text-zinc-600">暂无可配置角色。</div>}
         </div>
 
         <button

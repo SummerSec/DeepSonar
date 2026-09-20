@@ -15,13 +15,14 @@ test("镜像缺省过滤官方专项镜像的项目启用状态", () => {
   assert.match(filter, /image\.project_enabled === true/);
 });
 
-test("角色镜像缺省下拉展示完整产品名并让选择器占满剩余宽度", () => {
+test("角色镜像缺省下拉展示完整产品名并以三列网格排布", () => {
   const start = panel.indexOf("{imagePolicyRoles.map");
   const end = panel.indexOf("{imagePolicyRoles.length === 0");
   const rows = panel.slice(start, end);
+  assert.match(panel, /grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3/);
   assert.match(rows, /runtimeImageSelectOption\(image, projectId\)/);
   assert.doesNotMatch(rows, /\$\{image\.name\} · \$\{image\.image_key\}/);
-  assert.match(rows, /sm:grid-cols-\[minmax\(6\.5rem,9rem\)_minmax\(0,1fr\)\]/);
+  assert.doesNotMatch(rows, /sm:grid-cols-\[minmax\(6\.5rem,9rem\)_minmax\(0,1fr\)\]/);
   assert.doesNotMatch(rows, /minmax\(190px,240px\)/);
   assert.match(rows, /className="searchable-select-wrap"/);
 });
