@@ -6,13 +6,11 @@ import {
   modelCatalogHealthLabel,
   modelDescriptorsForCredential,
 } from "../model-catalog-health";
-import { SearchableMultiSelect, SearchableSelect } from "../SearchableSelect";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
 
 const AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
 type AgentCli = (typeof AGENT_CLIS)[number];
-const MODEL_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
 const ADAPTER_CLIS: Record<string, AgentCli[]> = {
   anthropic: ["claude-code", "pi", "dsh"],
   openai: ["pi", "dsh"],
@@ -92,32 +90,16 @@ export function ProjectCliProviderAllowlistPanel({
   credentials,
   enabledAgentClis,
   enabledCredentialIds,
-  defaultAgentCli,
-  defaultCredentialId,
-  defaultModelRef,
-  fallbackModelRefs,
-  allowModelCatalogPassthrough,
   onSaved,
 }: {
   projectId: string;
   credentials: ProviderCredential[];
   enabledAgentClis: AgentCli[];
   enabledCredentialIds: string[];
-  defaultAgentCli: AgentCli | null;
-  defaultCredentialId: string | null;
-  defaultModelRef: string | null;
-  fallbackModelRefs: string[];
-  allowModelCatalogPassthrough: boolean;
   onSaved: () => void;
 }) {
   const [clis, setClis] = useState<AgentCli[]>(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
   const [credIds, setCredIds] = useState<string[]>(enabledCredentialIds);
-  const [defaultCli, setDefaultCli] = useState<AgentCli | "">(defaultAgentCli ?? "");
-  const [defaultCred, setDefaultCred] = useState<string>(defaultCredentialId ?? "");
-  const [defaultModel, setDefaultModel] = useState<string>(defaultModelRef ?? "");
-  const [fallbackModels, setFallbackModels] = useState<string[]>(fallbackModelRefs);
-  const [allowPassthrough, setAllowPassthrough] = useState(allowModelCatalogPassthrough);
-  const [fallbackDraft, setFallbackDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -127,46 +109,12 @@ export function ProjectCliProviderAllowlistPanel({
   useEffect(() => {
     setClis(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
     setCredIds(enabledCredentialIds);
-    setDefaultCli(defaultAgentCli ?? "");
-    setDefaultCred(defaultCredentialId ?? "");
-    setDefaultModel(defaultModelRef ?? "");
-    setFallbackModels(fallbackModelRefs);
-    setAllowPassthrough(allowModelCatalogPassthrough);
-  }, [
-    enabledAgentClis,
-    enabledCredentialIds,
-    defaultAgentCli,
-    defaultCredentialId,
-    defaultModelRef,
-    fallbackModelRefs,
-    allowModelCatalogPassthrough,
-  ]);
+  }, [enabledAgentClis, enabledCredentialIds]);
 
   const llmCredentials = useMemo(
     () => credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)),
     [credentials, projectId],
   );
-
-  const selectedDefaultCredential = useMemo(
-    () => llmCredentials.find((credential) => credential.id === defaultCred) ?? null,
-    [llmCredentials, defaultCred],
-  );
-
-  const fallbackModelOptions = useMemo(() => {
-    const descriptors = modelDescriptorsForCredential(selectedDefaultCredential);
-    const catalogOptions = descriptors.map((model) => ({
-      value: model.model_id,
-      label: `${model.display_name} · ${model.model_id}`,
-      hint: `${modelHealthLabel(model.health_status)} · CLI ${model.compatible_agent_clis.join(" / ") || "按 adapter"}`,
-    }));
-    const known = new Set(catalogOptions.map((option) => option.value));
-    return [
-      ...catalogOptions,
-      ...fallbackModels
-        .filter((model) => !known.has(model))
-        .map((model) => ({ value: model, label: model, hint: "当前不在已验证目录；需开启项目直通" })),
-    ];
-  }, [selectedDefaultCredential, fallbackModels]);
 
   const filteredByCli = useMemo(() => {
     if (clis.length === 0) return [];
@@ -204,63 +152,19 @@ export function ProjectCliProviderAllowlistPanel({
     setClis((current) => {
       if (current.includes(cli)) {
         if (current.length === 1) return current;
-        const next = current.filter((item) => item !== cli);
-        if (defaultCli === cli) setDefaultCli("");
-        return next;
+        return current.filter((item) => item !== cli);
       }
       return [...current, cli];
     });
   };
 
   const toggleCred = (id: string) => {
-    setCredIds((current) => {
-      if (current.includes(id)) {
-        const next = current.filter((item) => item !== id);
-        if (defaultCred === id) {
-          setDefaultCred("");
-          setDefaultModel("");
-          setFallbackModels([]);
-        }
-        return next;
-      }
-      return [...current, id];
-    });
+    setCredIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   };
 
   const save = async () => {
     if (clis.length === 0) {
       showToast("至少启用一种 Agent CLI", "error");
-      return;
-    }
-    if (defaultCli && !clis.includes(defaultCli)) {
-      showToast("缺省 CLI 必须属于已启用白名单", "error");
-      return;
-    }
-    if (defaultCred && !credIds.includes(defaultCred)) {
-      showToast("缺省 Provider 必须属于已启用白名单", "error");
-      return;
-    }
-    const selectedCredential = selectedDefaultCredential;
-    if (defaultModel && !selectedCredential) {
-      showToast("缺省模型必须随缺省 Provider 一起选择", "error");
-      return;
-    }
-    if (fallbackModels.length > 0 && !selectedCredential) {
-      showToast("fallback 模型必须随缺省 Provider 一起选择", "error");
-      return;
-    }
-    if (defaultCli && selectedCredential && !credentialSupportsCli(selectedCredential, defaultCli)) {
-      showToast("缺省 Provider 没有该 Agent CLI 的模型 / adapter 兼容能力", "error");
-      return;
-    }
-    const modelIds = new Set(modelDescriptorsForCredential(selectedCredential).map((model) => model.model_id));
-    if (defaultModel && !allowPassthrough && !modelIds.has(defaultModel)) {
-      showToast("缺省模型必须来自所选 Provider 的模型目录", "error");
-      return;
-    }
-    const unknownFallback = fallbackModels.find((model) => !modelIds.has(model));
-    if (unknownFallback && !allowPassthrough) {
-      showToast(`fallback 模型 ${unknownFallback} 不在目录中；请先开启项目模型直通`, "error");
       return;
     }
     setBusy(true);
@@ -270,11 +174,12 @@ export function ProjectCliProviderAllowlistPanel({
       await api.patchSettings(projectId, {
         enabled_agent_clis: clis,
         enabled_credential_ids: credIds,
-        default_agent_cli: defaultCli || null,
-        default_credential_id: defaultCred || null,
-        default_model_ref: defaultModel || null,
-        fallback_model_refs: fallbackModels,
-        allow_model_catalog_passthrough: allowPassthrough,
+        // Soft defaults removed from project settings UI; clear so Hub / RoleConfig own selection.
+        default_agent_cli: null,
+        default_credential_id: null,
+        default_model_ref: null,
+        fallback_model_refs: [],
+        allow_model_catalog_passthrough: false,
       });
       showToast("已保存，下一 Job 生效", "ok");
       setSaved(true);
@@ -292,9 +197,9 @@ export function ProjectCliProviderAllowlistPanel({
     <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
       <div className="border-b border-white/[.055] px-4 py-3">
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
-          <span>CLI / Provider 启用与缺省</span>
+          <span>CLI / Provider 启用</span>
           <HelpTip>
-            启用边界与配额；Hub 从已启用项组合 CLI×Provider×镜像。缺省仅软回退；并发在凭据页。
+            启用边界；Hub 从已启用项组合 CLI×Provider×镜像。模型 / CLI 选择由 Hub 与 RoleConfig 负责；并发在凭据页。
           </HelpTip>
         </div>
       </div>
@@ -383,121 +288,6 @@ export function ProjectCliProviderAllowlistPanel({
           {credIds.length === 0 && (
             <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一个 Provider。</div>
           )}
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div>
-            <div className="mb-1 text-[12px] text-zinc-400">缺省 CLI</div>
-            <SearchableSelect
-              value={defaultCli}
-              onChange={(next) => setDefaultCli((next as AgentCli | "") || "")}
-              options={[
-                { value: "", label: "不设（回退角色）" },
-                ...clis.map((cli) => ({ value: cli, label: cli })),
-              ]}
-              placeholder="选择缺省 CLI"
-              ariaLabel="缺省 Agent CLI"
-              className="searchable-select-wrap"
-            />
-          </div>
-          <div>
-            <div className="mb-1 text-[12px] text-zinc-400">缺省 Provider</div>
-            <SearchableSelect
-              value={defaultCred}
-              onChange={(next) => {
-                setDefaultCred(next || "");
-                if (next !== defaultCred) {
-                  setDefaultModel("");
-                  setFallbackModels([]);
-                }
-              }}
-              options={[
-                { value: "", label: "不设（回退角色）" },
-                ...llmCredentials
-                  .filter((c) => credIds.includes(c.id))
-                  .map((c) => ({
-                    value: c.id,
-                    label: `${c.name || "未命名"} · ${c.provider} #${c.id.slice(0, 8)}`,
-                  })),
-              ]}
-              placeholder="选择缺省 Provider"
-              ariaLabel="缺省 Provider"
-              className="searchable-select-wrap"
-            />
-          </div>
-          <div>
-            <div className="mb-1 text-[12px] text-zinc-400">缺省模型</div>
-            <SearchableSelect
-              value={defaultModel}
-              onChange={(next) => setDefaultModel(next || "")}
-              options={[
-                { value: "", label: "不设（Hub / 角色选择）" },
-                ...modelDescriptorsForCredential(llmCredentials.find((credential) => credential.id === defaultCred)).map((model) => ({
-                  value: model.model_id,
-                  label: `${model.display_name} · ${model.model_id}`,
-                  hint: `${modelHealthLabel(model.health_status)} · CLI ${model.compatible_agent_clis.join(" / ") || "按 adapter"}`,
-                })),
-              ]}
-              placeholder="选择缺省模型"
-              ariaLabel="缺省模型"
-              className="searchable-select-wrap"
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <div className="mb-1 text-[12px] text-zinc-400">Fallback 模型顺序</div>
-            <SearchableMultiSelect
-              value={fallbackModels}
-              onChange={setFallbackModels}
-              options={fallbackModelOptions}
-              placeholder="选择目录中的 fallback 模型"
-              ariaLabel="项目级 fallback 模型"
-              className="block [&>button]:w-full"
-              emptyText="请先选择缺省 Provider 或刷新模型目录"
-            />
-            <div className="mt-1 text-[11px] leading-5 text-zinc-600">未指定或冻结模型不可用时按序尝试（同一 Provider）。</div>
-            <div className="mt-2 flex gap-2">
-              <input
-                value={fallbackDraft}
-                onChange={(event) => setFallbackDraft(event.target.value)}
-                placeholder="添加 alias / 自定义引用"
-                aria-label="添加 fallback 模型引用"
-                className="min-w-0 flex-1 rounded-md border border-ink-700 bg-ink-900/40 px-2.5 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-acc-400/40"
-              />
-              <button
-                type="button"
-                className="rounded-md border border-ink-700 px-2.5 py-1.5 text-[11px] text-zinc-400 hover:border-acc-400/40 hover:text-acc-300"
-                onClick={() => {
-                  const ref = fallbackDraft.trim();
-                  if (!MODEL_REF_PATTERN.test(ref)) {
-                    showToast("fallback 模型引用格式非法", "error");
-                    return;
-                  }
-                  setFallbackModels((current) => current.includes(ref) ? current : [...current, ref]);
-                  setFallbackDraft("");
-                }}
-              >
-                添加
-              </button>
-            </div>
-          </div>
-          <label className="flex cursor-pointer items-start gap-2 rounded-md border border-ink-700/80 bg-ink-900/30 px-3 py-3 text-[12px] text-zinc-300">
-            <input
-              type="checkbox"
-              className="mt-0.5 accent-emerald-500"
-              checked={allowPassthrough}
-              onChange={(event) => setAllowPassthrough(event.target.checked)}
-              aria-label="项目允许模型目录直通"
-            />
-            <span>
-              允许目录直通（默认关）
-              <span className="mt-0.5 block text-[11px] leading-5 text-zinc-500">
-                关闭时仅可用目录内 model_id；开启仅用于 alias 应急。
-              </span>
-            </span>
-          </label>
         </div>
 
         <button
