@@ -195,11 +195,17 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在 HTTP 请求失败或参数校验失败后重试。",
 };
 
+/**
+ * Worker 面向的短调用规则——唯一短文案源。传输/发现/幂等/修复细节见 DEEPSONAR_CONTROL_SKILL。
+ */
+export const PLATFORM_CONTROL_CALLING_RULES =
+  "调用规则：只能按静态 `deepsonar-control` Skill，通过 Agent 自身 HTTP 工具直接调用本 Job 已声明并注入的 Job-scoped control API（Runtime Adapter 不代发 HTTP）。决策/Finding/事实/摘要仅以实际 API 调用为准，普通文本不算提交。不得使用其他控制通道、shell 写控制文件或猜测管理路由，也不得在 API 失败后回退。API 返回 `accepted` 只表示 Scheduler 已接收，仍会重验并记账；HTTP/参数错误须修正后重试，不得把失败当作已上报。结束前核对契约要求的每次调用都已返回 accepted。详情见 deepsonar-control Skill。";
+
 export function platformToolGuide(toolNames: string[]): string {
   const enabled = new Set(toolNames);
   const incremental = ["emit_progress", "emit_fact", "emit_finding"].filter((name) => enabled.has(name));
   return [
-    "调用规则：对当前授权 operation，只能使用静态 `deepsonar-control` Skill 所述的 Job-scoped control API，由 Agent 通过自身可用的 HTTP 工具直接调用；Runtime Adapter 只负责驱动 CLI 协议，不会代为发起 HTTP 请求。不得使用其他控制通道、shell 写控制文件或猜测管理路由。API 返回 `accepted` 只表示 Scheduler 已接收输入，仍会重验并记账；收到 HTTP 错误响应或参数校验失败时，修正请求后重试，不得把失败调用当作已上报。",
+    PLATFORM_CONTROL_CALLING_RULES,
     `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 或 API 对应 operation 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
     ...toolNames.flatMap((name) => [PLATFORM_TOOL_USAGE[name], PLATFORM_TOOL_CAUTIONS[name]]).filter((entry): entry is string => Boolean(entry)),
   ].join("\n\n");

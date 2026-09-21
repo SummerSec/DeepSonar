@@ -21,7 +21,7 @@ import {
 } from "./executor-real.js";
 import { ControlInputError } from "./control-input.js";
 import { expandModules } from "./skill-sources.js";
-import { platformToolGuide } from "./platform-tools.js";
+import { platformToolGuide, PLATFORM_CONTROL_CALLING_RULES } from "./platform-tools.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
@@ -341,11 +341,22 @@ test("real executor passes the reserved Skill to the sandbox without putting the
 
 test("平台工具说明只引导 Agent 直接调用 Job-scoped HTTP API", () => {
   const guide = platformToolGuide(["emit_fact", "mark_job_done"]);
-  assert.match(guide, /只能使用静态 `deepsonar-control` Skill 所述的 Job-scoped control API/);
-  assert.match(guide, /Agent 通过自身可用的 HTTP 工具直接调用/);
+  assert.match(guide, /只能按静态 `deepsonar-control` Skill/);
+  assert.match(guide, /Agent 自身 HTTP 工具直接调用/);
   assert.match(guide, /API 返回 `accepted`/);
-  assert.match(guide, /HTTP 错误响应/);
+  assert.match(guide, /HTTP\/参数错误/);
   assert.doesNotMatch(guide, /schema_validated|pending_scheduler_validation|MCP/);
+});
+
+test("PLATFORM_SYSTEM_PROMPT 与 platformToolGuide 共用 PLATFORM_CONTROL_CALLING_RULES", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /PLATFORM_CONTROL_CALLING_RULES/);
+  assert.match(source, /\$\{PLATFORM_CONTROL_CALLING_RULES\}/);
+  assert.doesNotMatch(source, /关键纪律：/);
+  assert.doesNotMatch(source, /对当前授权 operation，只能使用静态/);
+  const guide = platformToolGuide(["emit_fact"]);
+  assert.ok(guide.startsWith(PLATFORM_CONTROL_CALLING_RULES));
+  assert.doesNotMatch(PLATFORM_CONTROL_CALLING_RULES, /\[1m\]|dual-hash|tools_manifest|frozen_model|上下文标注/);
 });
 
 test("deferred Hub terminal events preserve decision-before-done ordering", () => {
