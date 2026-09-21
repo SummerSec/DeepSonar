@@ -185,8 +185,9 @@ export function isSafeWorkspacePayloadFile(value: unknown): value is string {
 }
 
 /** Final summaries are duplicated into durable event/node storage, so bound
- * the Agent-controlled text by its actual UTF-8 storage size, not JS chars. */
-export const DONE_SUMMARY_MAX_BYTES = 8 * 1024;
+ * the Agent-controlled text by its actual UTF-8 storage size, not JS chars.
+ * Max is 8192 UTF-8 bytes (not a character count). */
+export const DONE_SUMMARY_MAX_BYTES = 8 * 1024;  // 8192 UTF-8 bytes
 const utf8ByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
 
 /** Scheduler-governed role colors.  Keep this palette in the shared package
@@ -1680,14 +1681,27 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
 ];
 
 /**
+ * verify / report 系统角色的严格平台工具白名单。
+ * 空 `platform_tools_json` 只在本集合内展开，不得拿到 emit_fact / emit_finding / request_human 等。
+ */
+export const VERIFY_REPORT_PLATFORM_TOOLS: PlatformToolName[] = [
+  "emit_progress",
+  "mark_job_done",
+  "ack_human_message",
+];
+
+/**
  * 一个角色有资格启用的工具。
- * 现策略：平台工具 list 对所有 Agent 开放；未列出的名字仍拒绝。
- * roleName/roleKind 保留入参以兼容调用方，不再按角色裁剪可选集合。
+ * 普通 / Hub 角色：平台工具 list 全开放；未列出的名字仍拒绝。
+ * verify / report 系统角色：仅 VERIFY_REPORT_PLATFORM_TOOLS（代码硬限制）。
  */
 export function allowedPlatformTools(
-  _roleName: string,
+  roleName: string,
   _roleKind: "role" | "hub" | "system",
 ): PlatformToolName[] {
+  if (roleName === "verify" || roleName === "report") {
+    return VERIFY_REPORT_PLATFORM_TOOLS.slice();
+  }
   return ALL_PLATFORM_TOOLS.slice();
 }
 

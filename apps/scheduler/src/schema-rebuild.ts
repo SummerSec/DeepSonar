@@ -334,19 +334,53 @@ export function officialCatalogBackfillSql(schemaSql: string): string[] {
   ];
 }
 
-export function roleConfigBackfillSql(schemaSql: string): string {
+/** #648: overwrite drifted builtin global role prompts from schema seed, then insert missing. */
+export function roleConfigBackfillSql(schemaSql: string): string[] {
   const original = extractStatement(
     schemaSql,
     "INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)",
     "WHERE r.builtin = true;",
   );
-  return original.replace(
+  const insertMissing = original.replace(
     /WHERE r\.builtin = true;$/,
     `WHERE r.builtin = true
   AND NOT EXISTS (
     SELECT 1 FROM role_configs rc
     WHERE rc.role_id = r.id AND rc.project_id IS NULL
   );`,
+  );
+  const overwrite = original
+    .replace(
+      "INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)\nSELECT r.id, 'claude-code', templates.instructions,\n       CASE\n         WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'\n         WHEN r.name = 'audit' THEN 'deepsonar-audit'\n         ELSE NULL\n       END\nFROM agent_roles r\nJOIN (VALUES",
+      `UPDATE role_configs rc
+SET instructions_markdown = templates.instructions,
+    updated_at = now()
+FROM agent_roles r
+JOIN (VALUES`,
+    )
+    .replace(
+      /\) AS templates\(name, instructions\) ON templates\.name = r\.name\nWHERE r\.builtin = true;$/,
+      `) AS templates(name, instructions) ON templates.name = r.name
+WHERE rc.role_id = r.id
+  AND rc.project_id IS NULL
+  AND r.builtin = true;`,
+    );
+  if (overwrite === original) {
+    throw new Error("roleConfigBackfillSql failed to build prompt overwrite UPDATE from schema.sql");
+  }
+  return [overwrite, insertMissing];
+}
+
+/** #648: re-apply builtin system role descriptions after catalog insert. */
+export function agentRoleDescriptionOverwriteSql(schemaSql: string): string[] {
+  const startMarker = "-- 覆盖内置系统角色描述";
+  const start = schemaSql.indexOf(startMarker);
+  if (start < 0) return [];
+  const end = schemaSql.indexOf("-- 首次建库内置一组可编辑的长期指令模板", start);
+  if (end < 0) return [];
+  const block = schemaSql.slice(start, end);
+  return [...block.matchAll(/UPDATE agent_roles SET[\s\S]*?WHERE name = '[^']+' AND builtin = true;/g)].map(
+    (m) => m[0]!,
   );
 }
 
@@ -367,7 +401,12 @@ async function ensureOfficialSeeds(db: MigrationConnection, schemaSql: string): 
   for (const statement of officialCatalogBackfillSql(schemaSql)) {
     await db.unsafe(statement);
   }
-  await db.unsafe(roleConfigBackfillSql(schemaSql));
+  for (const statement of agentRoleDescriptionOverwriteSql(schemaSql)) {
+    await db.unsafe(statement);
+  }
+  for (const statement of roleConfigBackfillSql(schemaSql)) {
+    await db.unsafe(statement);
+  }
   await db.unsafe(roleConfigModuleBackfillSql(schemaSql));
 }
 

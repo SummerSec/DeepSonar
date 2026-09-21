@@ -926,7 +926,7 @@ Finding：${trigger.finding_id ?? "未知"}
 摘要：${trigger.summary ?? "（见画布）"}
 
 你只能：
-1. 派发普通角色（review/test/audit/explore 等）补充独立复核或实测证据；每个 intent 的 prompt 必须写明 finding_id 与证据目标；
+1. 只能派发 review 或 test 补充独立复核或实测证据；每个 intent 绑定一个 Finding（prompt 写明 finding_id）与一种证据类型（review 或 test）；不得派发 audit/explore 或其他角色；
 2. 若卡在凭据/设备/网络/生产环境或业务范围，以 finding_id + subject_revision 的结构化 subject 调用 request_human；预算耗尽或证据不足不要造人工节点，由 Scheduler 写成 inconclusive。
 你不能直接把 Finding 写成 confirmed，也不能下发 verify 或 report 系统角色。`;
     } else if (trigger?.kind === "risk_acceptance_followup") {

@@ -13,6 +13,7 @@ import {
   CATALOG_TABLES,
   intersectColumns,
   officialCatalogBackfillSql,
+  agentRoleDescriptionOverwriteSql,
   roleConfigBackfillSql,
   roleConfigModuleBackfillSql,
   topologicalCopyOrder,
@@ -52,19 +53,29 @@ test("copy INSERT quotes identifiers and overrides identity columns", () => {
   );
 });
 
-test("official catalog backfill stays idempotent and does not wipe custom role_configs", async () => {
+test("official catalog backfill overwrites builtin prompts and keeps project role_configs", async () => {
   const body = await readFile(SCHEMA_FILE, "utf8");
   const statements = officialCatalogBackfillSql(body);
   assert.equal(statements.length, 5);
   assert.match(statements[0] ?? "", /ON CONFLICT \(name\) DO NOTHING/);
   assert.match(statements[1] ?? "", /ON CONFLICT \(image_key\) DO NOTHING/);
   assert.match(statements[3] ?? "", /ON CONFLICT \(name\) DO NOTHING/);
-  const roleInsert = roleConfigBackfillSql(body);
-  assert.match(roleInsert, /AND NOT EXISTS/);
-  assert.match(roleInsert, /rc.project_id IS NULL/);
+  const roleStatements = roleConfigBackfillSql(body);
+  assert.equal(roleStatements.length, 2);
+  const [overwrite, insertMissing] = roleStatements;
+  assert.match(overwrite ?? "", /UPDATE role_configs rc/);
+  assert.match(overwrite ?? "", /instructions_markdown = templates\.instructions/);
+  assert.match(overwrite ?? "", /rc\.project_id IS NULL/);
+  assert.doesNotMatch(overwrite ?? "", /AND NOT EXISTS/);
+  assert.match(insertMissing ?? "", /AND NOT EXISTS/);
+  assert.match(insertMissing ?? "", /rc\.project_id IS NULL/);
+  const roleDesc = agentRoleDescriptionOverwriteSql(body);
+  assert.equal(roleDesc.length, 2);
+  assert.match(roleDesc[0] ?? "", /WHERE name = 'verify'/);
+  assert.match(roleDesc[1] ?? "", /WHERE name = 'report'/);
   const moduleUpdate = roleConfigModuleBackfillSql(body);
-  assert.match(moduleUpdate, /rc.modules_json = '\[\]'::jsonb/);
-  assert.doesNotMatch(moduleUpdate, /AND r.name IN \('audit', 'review'\);$/);
+  assert.match(moduleUpdate, /rc\.modules_json = '\[\]'::jsonb/);
+  assert.doesNotMatch(moduleUpdate, /AND r\.name IN \('audit', 'review'\);$/);
 });
 
 test("rebuild plan treats catalog tables as baseline-owned when source is empty", () => {
