@@ -284,7 +284,7 @@ This Job uses a Scheduler-selected, trusted runtime image. Before testing, read 
 
 - Do **not** install or download JDK, Maven, Gradle, SDKMAN, or compiler toolchains in the sandbox. Do not use apt-get, curl/wget archives, ./mvnw, or equivalent bootstrap fallbacks for those tools.
 - Project dependencies may be fetched only when the frozen DEEPSONAR_ALLOW_EGRESS policy permits it; dependency downloads are not a substitute for the prebuilt toolchain.
-- If a required preinstalled command is missing, stop the dynamic attempt and submit structured inconclusive/needs-human evidence. Never claim a confirmed Finding from a static description alone.
+- If a required preinstalled command is missing, stop the dynamic attempt and submit emit_fact.verification with outcome=inconclusive, recording the missing commands. Never claim a confirmed Finding from a static description alone. Human authorization/credential blockers use request_human; needs_human is mark_job_done.verdict only, not emit_fact.verification.outcome.
 - Record the runtime image key/digest, tool versions, target revision, exact steps, expected result, actual result, and limitations in emit_fact.verification for runtime-test evidence.`;
 
 /** #588: every official runtime image ships offline tool manuals. */
@@ -296,7 +296,7 @@ This Job's runtime image includes offline tool manuals at \`/opt/deepsonar/manua
 - Manuals cover when to use / when not, prerequisites, invocation, output meaning, failure classes, composition, evidence retention, and version limits.
 - Do not rely on host-repo docs or guessed \`--help\` alone. Prefer manuals before first invocation of an unfamiliar tool.
 - The manual does not grant tools, network access, credentials, devices, Job operations, budget, or side-effect permissions; the frozen Job snapshot and Scheduler remain authoritative.
-- Empty results are not automatic \`needs_human\`; missing devices/services must be labeled inconclusive/needs_human without fabricating runtime output.`;
+- Empty results are not automatic \`needs_human\`; missing devices/services must use verification outcome=inconclusive without fabricating runtime output. Human authorization blockers use request_human; needs_human is mark_job_done.verdict only.`;
 
 export function withRuntimeTestToolchainPolicy(
   roleName: string,
