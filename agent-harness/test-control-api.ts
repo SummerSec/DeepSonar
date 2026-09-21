@@ -87,9 +87,9 @@ assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
 const workerGuide = platformToolGuide(["emit_progress", "emit_fact", "mark_job_done", "request_human"]);
 for (const expected of [
   "Job-scoped control API",
-  "Agent 通过自身可用的 HTTP 工具直接调用",
+  "Agent 自身 HTTP 工具直接调用",
   "API 返回 `accepted`",
-  "HTTP 错误响应",
+  "HTTP/参数错误",
   "emit_progress",
   "emit_fact",
   "mark_job_done",
@@ -132,7 +132,7 @@ assert.deepEqual(restrictedTools, [
 const restrictedGuide = platformToolGuide(restrictedTools);
 assert.doesNotMatch(restrictedGuide, /### `emit_progress`/);
 assert.doesNotMatch(restrictedGuide, /### `request_human`/);
-assert.match(restrictedGuide, /只能使用静态 `deepsonar-control` Skill 所述的 Job-scoped control API/);
+assert.match(restrictedGuide, /只能按静态 `deepsonar-control` Skill/);
 
 for (const [adapterId, adapter] of Object.entries(AGENT_CLI_RUNTIME_ADAPTERS)) {
   assert.equal(adapter.capabilities.platformControlApi, true, `${adapterId} 未声明 Job 控制 API`);
