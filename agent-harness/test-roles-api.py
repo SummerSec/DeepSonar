@@ -25,7 +25,7 @@ def expected_hub_enabled() -> bool:
 
 
 def has_job_scoped_http_api_contract(prompt: str) -> bool:
-    """要求内置提示包含 API-only 控制契约。"""
+    """要求内置提示包含 API-only 控制契约（短指针 / 显式 / 遗留长文案均可）。"""
     lowered = prompt.lower()
     if any(
         marker in lowered
@@ -37,7 +37,18 @@ def has_job_scoped_http_api_contract(prompt: str) -> bool:
     ):
         return False
 
-    return (
+    # #650 去重后：角色种子只保留指向动态系统工具段 / deepsonar-control Skill 的短指针
+    short_pointer = "deepsonar-control" in lowered and (
+        "本角色指令不重复" in lowered or "动态系统工具与结果契约" in lowered
+    )
+    # 显式：deepsonar-control + Control API / Job-scoped API 表述
+    explicit = "deepsonar-control" in lowered and (
+        "control api" in lowered
+        or "job-scoped api" in lowered
+        or "job-scoped control" in lowered
+    )
+    # 遗留长文案（去重前种子仍可通过）
+    legacy = (
         ("job-scoped control api" in lowered or "job-scoped http api" in lowered)
         and ("http 工具" in lowered or "http tool" in lowered)
         and "agent" in lowered
@@ -45,6 +56,7 @@ def has_job_scoped_http_api_contract(prompt: str) -> bool:
         and "禁止调用同名 mcp" in lowered
         and "api 失败后回退" in lowered
     )
+    return short_pointer or explicit or legacy
 
 
 def req(method: str, path: str, body=None, expect: int | None = 200):
@@ -104,7 +116,7 @@ def main() -> None:
     assert all(
         has_job_scoped_http_api_contract(c.get("instructions_markdown") or "")
         for c in global_configs
-    ), "每个全局 RoleConfig 都必须说明 Job-scoped HTTP API-only 控制契约及 accepted 语义"
+    ), "每个全局 RoleConfig 都必须说明 Job-scoped HTTP API-only 控制契约（短指针 deepsonar-control Skill / 显式 Control API / 或遗留长文案均可）"
     assert all(c.get("platform_tools_json") == {} for c in global_configs), global_configs
     by_role = {c["role_name"]: c.get("instructions_markdown") or "" for c in global_configs}
     for role in ("explore", "analyze", "review", "test", "code"):
