@@ -118,6 +118,16 @@ test("RoleConfig seed prompts use the dynamic platform contract without embedded
   assert.doesNotMatch(rolePromptSeed, /vuln-definitions/);
 });
 
+test("Hub prompt treats injected YAML as an initial projection and scopes Worker edits", () => {
+  assert.match(schemaSql, /画布（YAML）.*初始投影/);
+  assert.match(schemaSql, /graph_query.*overview/);
+  assert.match(schemaSql, /必须明确目标材料是只读还是允许修改/);
+  assert.match(executorSource, /画布 YAML 是启动时的初始投影/);
+  assert.match(executorSource, /graph_query\(\{kind:\"overview\"\}\)/);
+  assert.match(executorSource, /未明确授权不得修改目标/);
+  assert.match(executorSource, /目标材料只读/);
+});
+
 test("#648 test toolchain policy does not conflate inconclusive with needs_human", () => {
   assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /outcome=inconclusive/);
   assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /mark_job_done\.verdict only/);

@@ -197,7 +197,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 ## 8. 配置、快照和运行时
 
-**提示词组合（#594 首片）：** 业务提示词按 `prompt.composition` v1 解析与预览：平台必需协议始终纳入且不可被业务层覆盖；业务覆盖顺序为 **任务派发 → 项目 RoleConfig → 全局角色/能力默认**。组装结果记录各层版本、内容摘要与注入通道（`system_prompt` / `instruction_files` / `user_message`）；CLI 不支持的通道必须拒绝，不得把普通消息追加展示为已替换 system prompt。自然语言不能扩大工具、网络或凭据权限。Attempt 应冻结组装摘要；「修订重派 / 原输入重跑 / 当前配置重跑 / Hub 重新规划」语义区分，后续切片落 API。
+**提示词组合（#594 首片）：** 业务提示词按 `prompt.composition` v1 解析与预览：平台必需协议始终纳入且不可被业务层覆盖；业务覆盖顺序为 **任务派发 → 项目 RoleConfig → 全局角色/能力默认**。Hub Intent 可通过可选 `role_prompt` 提供任务级角色业务提示词覆盖；Scheduler 只将其冻结到新建 Worker Job，不写回持久化 RoleConfig。组装结果记录各层版本、内容摘要与注入通道（`system_prompt` / `instruction_files` / `user_message`）；CLI 不支持的通道必须拒绝，不得把普通消息追加展示为已替换 system prompt。自然语言不能扩大工具、网络或凭据权限。Attempt 应冻结组装摘要；「修订重派 / 原输入重跑 / 当前配置重跑 / Hub 重新规划」语义区分，后续切片落 API。
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧全局并发上限，不能放宽安全硬门。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
 

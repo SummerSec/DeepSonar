@@ -121,6 +121,8 @@ export interface RoleRuntimeSnapshotApplication {
       credentialId?: string | null;
       /** Hub/Task model proposal; resolved against the selected Provider catalog. */
       modelRef?: string | null;
+      /** Hub task-level business-instruction override; frozen into this Job only. */
+      taskPromptOverride?: string | null;
       /** Capability requirements rechecked before the Job snapshot is frozen. */
       modelRequirements?: Record<string, unknown> | null;
       runtimeProfile?: RuntimeProfileOverridePayload | null;

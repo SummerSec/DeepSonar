@@ -49,6 +49,29 @@ test("HubDecisionPayload still accepts normal intents without payload_file", () 
   assert.equal(parsed.success, true);
 });
 
+test("HubDecisionPayload accepts a task-level role_prompt override", () => {
+  const parsed = HubDecisionPayload.safeParse({
+    intents: [{
+      from: [rootId],
+      role: "explore",
+      description: "12345678",
+      prompt: "p".repeat(40),
+      role_prompt: "For this Job, prioritize the authenticated boundary and submit only new facts.",
+    }],
+  });
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.success && parsed.data.intents?.[0]?.role_prompt?.startsWith("For this Job"), true);
+  assert.equal(HubDecisionPayload.safeParse({
+    intents: [{
+      from: [rootId],
+      role: "explore",
+      description: "12345678",
+      prompt: "p".repeat(40),
+      role_prompt: "x".repeat(100_001),
+    }],
+  }).success, false);
+});
+
 test("HubIntentPayload accepts a marketplace runtime_image_key and rejects OCI references", () => {
   const withKey = HubDecisionPayload.safeParse({
     intents: [

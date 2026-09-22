@@ -342,7 +342,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color FROM agent_roles WHERE name = ${roleName}`) as Array<Record<string, unknown>>;
@@ -357,6 +357,13 @@ async function resolveAgentSnapshotForJobUnchecked(
   // default CLI follow image policy so inherit_global cannot steal identity.
   // Hub 提案 > 项目软缺省 > RoleConfig：角色不是唯一绑定面。
   const cfg = (projectCfg ?? globalCfg) as Record<string, unknown> | undefined;
+  const taskPromptOverride = typeof options?.taskPromptOverride === "string"
+    ? options.taskPromptOverride.trim()
+    : "";
+  if (taskPromptOverride.length > 100_000) {
+    throw new Error("taskPromptOverride exceeds 100000 characters");
+  }
+  const effectiveInstructions = taskPromptOverride || (cfg?.instructions_markdown as string | null | undefined);
   const identity = roleIdentityForProjectPolicy(projectImagePolicy, projectCfg, globalCfg);
   const hubCli = typeof options?.agentCli === "string" && options.agentCli.trim() ? options.agentCli.trim() : null;
   const agentCli = hubCli
@@ -611,7 +618,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       integrity: extension.integrity,
     })),
     system_prompt_ref: profileSystemPromptRef({
-      instructions: cfg?.instructions_markdown as string | null | undefined,
+      instructions: effectiveInstructions,
       roleConfigId: (cfg?.id as string | undefined) ?? null,
       roleConfigVersion: typeof cfg?.version === "number" ? cfg.version : null,
     }),
@@ -737,7 +744,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     mcps: (cfg?.mcps_json as unknown[]) ?? [],
     subagents: (cfg?.subagents_json as unknown[]) ?? [],
     role_description: (role.description as string) ?? roleName,
-    instructions_markdown: withRuntimeTestToolchainPolicy(roleName, (cfg?.instructions_markdown as string) ?? null, runtimeImage.image_key),
+    instructions_markdown: withRuntimeTestToolchainPolicy(roleName, effectiveInstructions ?? null, runtimeImage.image_key),
     platform_tools: platformTools as PlatformToolName[],
     context_window_tokens: options?.runtimeProfile?.context_window_tokens ?? contextWindowTokens,
     settings_config_json: snapshotSettingsConfig,
@@ -760,7 +767,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);
