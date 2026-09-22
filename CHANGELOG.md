@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- 全局信任 Skill Source 默认注入 Worker（#660）：`RoleConfig.modules_json` 未设置或为空时，快照组装默认展开全部 `enabled=true && trust_status='trusted'` 源的 `source:*` 模块；非空列表仍按显式绑定（兼容已 PUT 的项目）。项目 Skill 白名单（#603）仅门禁显式绑定；Hub `list_available_skill_sources` 投影全局信任源清单；无历史绑定时白名单种子改为平台信任源。
+
 ### 变更
 - 账号选定的 Agent CLI 独占绑定（#658）：`credential.agent_cli` 为已保存账号的唯一兼容来源；Web 兼容列表 / 角色绑定与 Scheduler 准入、Hub Provider 目录、readiness 均不再按 Provider 协议矩阵扩到其他 CLI；缺省或非法 fail-closed。Provider 级 catalog 仍仅用于创建时协议选择过滤。
 

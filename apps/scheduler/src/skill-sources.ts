@@ -551,6 +551,43 @@ export interface SkillRevisionRef {
 }
 
 /**
+ * Platform-level trust inventory: every skill_source with enabled=true &&
+ * trust_status='trusted', as `<uuid>:source:*` selectors (stable order).
+ * Used when RoleConfig.modules_json is unset/empty (#660).
+ */
+export async function listTrustedEnabledModuleSelectors(
+  db: typeof sql = sql,
+): Promise<string[]> {
+  const rows = await db`
+    SELECT id FROM skill_sources
+    WHERE enabled = true AND trust_status = 'trusted'
+    ORDER BY created_at ASC, id ASC`;
+  return rows.map((row) => `${String(row.id).toLowerCase()}:source:*`);
+}
+
+/**
+ * Resolve the effective module selector list for snapshot assembly (#660):
+ * - unset / empty → default-inject ALL trusted+enabled sources
+ * - non-empty → explicit RoleConfig allowlist (backward compatible)
+ *
+ * expandModules([]) stays empty on purpose (no implicit DB scan); callers that
+ * want platform defaults must go through this helper first.
+ */
+export async function resolveEffectiveModuleSelectors(
+  modules: string[] | null | undefined,
+  db: typeof sql = sql,
+): Promise<{ modules: string[]; defaulted: boolean }> {
+  const explicit = Array.isArray(modules) ? modules : [];
+  if (explicit.length > 0) {
+    return { modules: explicit, defaulted: false };
+  }
+  return {
+    modules: await listTrustedEnabledModuleSelectors(db),
+    defaulted: true,
+  };
+}
+
+/**
  * 展开 RoleConfig 的模块选择器（历史 module、plugin、source 三种语法）
  * → 沙箱 embedded skills / commands，与 RoleConfig 手写 JSON 合并去重（按 name）
  * 非 trusted 或已禁用来源的模块一律跳过（§5.1：quarantined 未经审批不得下发）

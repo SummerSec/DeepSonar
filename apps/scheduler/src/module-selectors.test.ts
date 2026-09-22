@@ -10,6 +10,8 @@ import {
   contentHashOfSelected,
   expandCatalogSelectors,
   expandModules,
+  listTrustedEnabledModuleSelectors,
+  resolveEffectiveModuleSelectors,
   resolveModuleNameConflicts,
   type SourceModule,
 } from "./skill-sources.js";
@@ -194,4 +196,94 @@ test("transfer validation preserves legal selector bytes and rejects malicious s
     () => sanitizeAgentSnapshot({ module_selectors: [`${SOURCE}:plugin:../escape`] }),
     /不得包含/,
   );
+});
+
+const SOURCE_B = "22222222-2222-4222-8222-222222222222";
+const SOURCE_C = "33333333-3333-4333-8333-333333333333";
+
+function skillSourcesListDb(rows: Array<{ id: string; trust_status: string; enabled: boolean; created_at?: string }>) {
+  return (async (strings: TemplateStringsArray) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM skill_sources") && sql.includes("trust_status")) {
+      return rows
+        .filter((row) => row.enabled && row.trust_status === "trusted")
+        .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || a.id.localeCompare(b.id))
+        .map((row) => ({ id: row.id }));
+    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE id")) {
+      const hit = rows.find((row) => true);
+      return hit ? [{
+        catalog_json: catalog([{ id: "demo/skill", plugin: "demo", name: "demo-skill" }]),
+        trust_status: hit.trust_status,
+        enabled: hit.enabled,
+        last_commit_sha: "abc",
+        last_content_hash: "hash",
+      }] : [];
+    }
+    return [];
+  }) as unknown as Parameters<typeof expandModules>[1];
+}
+
+test("listTrustedEnabledModuleSelectors excludes untrusted and disabled sources (#660)", async () => {
+  const db = skillSourcesListDb([
+    { id: SOURCE, trust_status: "trusted", enabled: true, created_at: "2026-01-01" },
+    { id: SOURCE_B, trust_status: "quarantined", enabled: true, created_at: "2026-01-02" },
+    { id: SOURCE_C, trust_status: "trusted", enabled: false, created_at: "2026-01-03" },
+  ]);
+  assert.deepEqual(await listTrustedEnabledModuleSelectors(db), [`${SOURCE}:source:*`]);
+});
+
+test("resolveEffectiveModuleSelectors: empty → trusted defaults; explicit → unchanged (#660)", async () => {
+  const db = skillSourcesListDb([
+    { id: SOURCE, trust_status: "trusted", enabled: true, created_at: "2026-01-01" },
+    { id: SOURCE_B, trust_status: "trusted", enabled: true, created_at: "2026-01-02" },
+    { id: SOURCE_C, trust_status: "quarantined", enabled: true, created_at: "2026-01-03" },
+  ]);
+
+  const fromEmpty = await resolveEffectiveModuleSelectors([], db);
+  assert.equal(fromEmpty.defaulted, true);
+  assert.deepEqual(fromEmpty.modules, [`${SOURCE}:source:*`, `${SOURCE_B}:source:*`]);
+
+  const fromUnset = await resolveEffectiveModuleSelectors(undefined, db);
+  assert.equal(fromUnset.defaulted, true);
+  assert.deepEqual(fromUnset.modules, fromEmpty.modules);
+
+  const explicit = [`${SOURCE}:plugin:whitebox`];
+  const fromExplicit = await resolveEffectiveModuleSelectors(explicit, db);
+  assert.equal(fromExplicit.defaulted, false);
+  assert.deepEqual(fromExplicit.modules, explicit);
+});
+
+test("expandModules with defaulted trusted selectors injects catalog skills (#660)", async () => {
+  const sourceCatalog = catalog([
+    { id: "whitebox/authz", plugin: "whitebox", name: "authz" },
+    { id: "whitebox/xxe", plugin: "whitebox", name: "xxe" },
+  ]);
+  const fakeDb = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) {
+      return [{ id: SOURCE }];
+    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE id")) {
+      assert.equal(values[0], SOURCE);
+      return [{
+        catalog_json: sourceCatalog,
+        trust_status: "trusted",
+        enabled: true,
+        last_commit_sha: "abc123",
+        last_content_hash: "catalog-hash",
+      }];
+    }
+    return [];
+  }) as unknown as Parameters<typeof expandModules>[1];
+
+  const { modules, defaulted } = await resolveEffectiveModuleSelectors([], fakeDb);
+  assert.equal(defaulted, true);
+  const expanded = await expandModules(modules, fakeDb);
+  assert.deepEqual(expanded.skills.map((s) => (s as { name?: string }).name).sort(), ["authz", "xxe"]);
+  assert.deepEqual(expanded.missing_modules, []);
+
+  // empty expandModules alone still returns nothing (no implicit inject)
+  const bare = await expandModules([], fakeDb);
+  assert.deepEqual(bare.skills, []);
 });

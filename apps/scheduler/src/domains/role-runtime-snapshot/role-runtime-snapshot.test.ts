@@ -423,3 +423,135 @@ test("dsh cannot freeze a Hub chrome-fuzz override", async () => {
       && /AGENT_CLI_IMAGE_INCOMPATIBLE/.test(error.message),
   );
 });
+
+const TRUSTED_SOURCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const UNTRUSTED_SOURCE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+test("empty modules_json default-injects trusted skill modules; explicit list unchanged (#660)", async () => {
+  const catalog = [
+    {
+      id: "whitebox/authz",
+      plugin: "whitebox",
+      kind: "skill",
+      name: "authz",
+      description: "authz skill",
+      files: { "SKILL.md": "# authz" },
+    },
+  ];
+  const projectCfg = {
+    id: "project-audit-cfg",
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [] as string[],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  let projectConfig: Record<string, unknown> = { image_strategy: "project_managed" };
+  const projectSkillSources = new Map<string, boolean>();
+
+  const query = async (strings: TemplateStringsArray | Record<string, unknown>, ...values: unknown[]) => {
+    // postgres.js helper form: sql({ col: value }) used inside INSERT fragments
+    if (!Array.isArray(strings)) return strings;
+    const sql = strings.join("?");
+    if (sql.includes("FROM agent_roles")) {
+      return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
+    }
+    if (sql.includes("UPDATE projects SET config_json")) {
+      projectConfig = { ...(values[0] as Record<string, unknown>) };
+      return [];
+    }
+    if (sql.includes("FROM projects")) {
+      return [{ config_json: projectConfig }];
+    }
+    if (sql.includes("FROM role_configs") && sql.includes("project_id IS NULL")) return [];
+    if (sql.includes("FROM role_configs")) return [projectCfg];
+    if (sql.includes("FROM role_credentials") || (sql.includes("FROM credentials") && sql.includes("kind"))) {
+      return [credential];
+    }
+    if (sql.includes("FROM role_config_files")) return [];
+    if (sql.includes("FROM project_skill_sources") && sql.includes("LIMIT 1")) {
+      return projectSkillSources.size > 0 ? [{ ok: 1 }] : [];
+    }
+    if (sql.includes("FROM project_skill_sources") && sql.includes("enabled = true")) {
+      return [...projectSkillSources.entries()]
+        .filter(([, enabled]) => enabled)
+        .map(([skill_source_id]) => ({ skill_source_id }));
+    }
+    if (sql.includes("INSERT INTO project_skill_sources")) {
+      const row = values[0] as { skill_source_id?: string; enabled?: boolean } | undefined;
+      if (row?.skill_source_id) projectSkillSources.set(String(row.skill_source_id), row.enabled !== false);
+      return [];
+    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) {
+      return [{ id: TRUSTED_SOURCE }];
+    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE id")) {
+      const id = String(values[0] ?? "");
+      if (id === TRUSTED_SOURCE) {
+        return [{
+          catalog_json: catalog,
+          trust_status: "trusted",
+          enabled: true,
+          last_commit_sha: "abc",
+          last_content_hash: "hash-1",
+        }];
+      }
+      if (id === UNTRUSTED_SOURCE) {
+        return [{
+          catalog_json: catalog,
+          trust_status: "quarantined",
+          enabled: true,
+          last_commit_sha: "abc",
+          last_content_hash: "hash-2",
+        }];
+      }
+      return [];
+    }
+    return [];
+  };
+  const db = Object.assign(query, { json: (value: unknown) => value });
+
+  const defaulted = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
+  assert.deepEqual(defaulted.modules, [`${TRUSTED_SOURCE}:source:*`]);
+  assert.equal(defaulted.skills.some((s) => (s as { name?: string }).name === "authz"), true);
+
+  projectConfig = {
+    image_strategy: "project_managed",
+    skill_source_allowlist_configured: true,
+  };
+  projectSkillSources.clear();
+  projectSkillSources.set(TRUSTED_SOURCE, true);
+  projectCfg.modules_json = [`${TRUSTED_SOURCE}:whitebox/authz`];
+  const explicit = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
+  assert.deepEqual(explicit.modules, [`${TRUSTED_SOURCE}:whitebox/authz`]);
+  assert.equal(explicit.skills.some((s) => (s as { name?: string }).name === "authz"), true);
+
+  projectConfig = {
+    image_strategy: "project_managed",
+    skill_source_allowlist_configured: true,
+  };
+  projectSkillSources.clear();
+  projectSkillSources.set(UNTRUSTED_SOURCE, true);
+  projectCfg.modules_json = [`${UNTRUSTED_SOURCE}:whitebox/authz`];
+  const untrusted = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
+  assert.deepEqual(untrusted.modules, [`${UNTRUSTED_SOURCE}:whitebox/authz`]);
+  assert.equal(untrusted.skills.some((s) => (s as { name?: string }).name === "authz"), false);
+  assert.equal(untrusted.missing_modules.some((m) => m.reason === "source-not-trusted"), true);
+});
