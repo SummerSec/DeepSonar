@@ -371,11 +371,10 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (rawModules != null && !Array.isArray(rawModules)) {
     throw new Error("RoleConfig.modules_json 必须是字符串数组");
   }
-  // #660: unset/empty modules_json → default-inject all trusted+enabled sources
-  // (platform-level trust assets). Non-empty → explicit RoleConfig allowlist
-  // (backward compatible for projects that already PUT modules). Project
-  // skill-source allowlist (#603) gates explicit bindings only so empty #603
-  // seeds cannot strip platform trusted defaults.
+  // Empty modules_json deliberately means no business Skill is materialized.
+  // Agents discover capabilities through the Job-scoped catalog; only an
+  // explicit selector is an authorization request and is checked against the
+  // project Skill-source allowlist before it is frozen into the Job snapshot.
   const { modules, defaulted } = await resolveEffectiveModuleSelectors(
     rawModules as string[] | null | undefined,
     db as never,

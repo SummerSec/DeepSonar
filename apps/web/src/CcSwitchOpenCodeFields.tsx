@@ -1,4 +1,4 @@
-import { Download, MagicWand, Plus, Trash } from "@phosphor-icons/react";
+import { MagicWand, Plus, Trash } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { formatJsonObject, formatJsonObjectText, validateJsonObjectText } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
@@ -32,9 +32,6 @@ export function CcSwitchOpenCodeFields({
   onBaseUrlChange,
   provider,
   modelOptions = [],
-  onFetchModels,
-  fetchingModels = false,
-  canFetchModels = false,
   onNotice,
   onError,
   showConnectionFields = true,
@@ -48,9 +45,6 @@ export function CcSwitchOpenCodeFields({
   onBaseUrlChange: (value: string) => void;
   provider: string;
   modelOptions?: string[];
-  onFetchModels?: () => void;
-  fetchingModels?: boolean;
-  canFetchModels?: boolean;
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
   showConnectionFields?: boolean;
@@ -160,10 +154,6 @@ export function CcSwitchOpenCodeFields({
       <div className="cc-switch-field">
         <div className="cc-switch-field-head"><span className="cc-switch-label">Models</span>
           <div className="flex flex-wrap gap-2">
-            {onFetchModels ? <button type="button" className="secondary-button !min-h-7 !px-2 !text-[10px]"
-              onClick={onFetchModels} disabled={fetchingModels || !canFetchModels}>
-              <Download size={13} />{fetchingModels ? "获取中…" : "获取模型列表"}
-            </button> : null}
             <button type="button" className="secondary-button !min-h-7 !px-2 !text-[10px]" onClick={addModel}><Plus size={13} />添加</button>
           </div></div>
         {modelOptions.length > 0 ? <SearchableSelect

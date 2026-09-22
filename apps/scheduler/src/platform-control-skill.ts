@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-/** 平台静态 Skill 的保留名称。 */
+/** 平台控制协议 Skill 的保留名称；它不是业务能力 Skill。 */
 export const DEEPSONAR_CONTROL_SKILL_NAME = "deepsonar-control" as const;
 
 /** 平台注入的固定控制说明，RoleConfig 不能按同名替换。 */

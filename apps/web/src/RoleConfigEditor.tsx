@@ -12,8 +12,6 @@ import {
   type ProviderCredential,
   type RoleConfigInput,
   type RoleConfigView,
-  type RuntimeKnobOverride,
-  type SandboxLimitsOverride,
   type SkillSource,
   type SkillSourceDetail,
 } from "./api";
@@ -36,7 +34,7 @@ import {
 } from "./module-selector-state";
 
 /**
- * 角色配置编辑器：指令 / 平台工具 / 模块 / CLI 客户端上下文预算覆盖。
+ * 角色配置编辑器：指令 / 平台工具 / 模块。
  * LLM 凭据绑定在 Agent「凭据绑定」；账号 CRUD 在 Provider 凭据页；此处不提交绑定或生效策略。
  */
 
@@ -76,8 +74,6 @@ interface ConfigForm {
   agent_cli: string;
   dsh_task_mode: "standard" | "ptc";
   model: string;
-  allow_model_catalog_passthrough: boolean;
-  context_window_tokens: string;
   credential_id: string;
   env_keys: string[];
   env_vars: Record<string, string>;
@@ -85,16 +81,6 @@ interface ConfigForm {
   pi_extensions: string[];
   instructions_markdown: string;
   runtime_image_key: string;
-  sandbox_limits: {
-    cpu: string;
-    memoryMiB: string;
-    pidsLimit: string;
-  };
-  runtime_knobs: {
-    stallSec: string;
-    jobTokenMaxRequests: string;
-    timeoutSec: string;
-  };
   modules: string[];
   skills: string;
   commands: string;
@@ -107,8 +93,6 @@ const EMPTY: ConfigForm = {
   agent_cli: "claude-code",
   dsh_task_mode: "standard",
   model: "",
-  allow_model_catalog_passthrough: false,
-  context_window_tokens: "",
   credential_id: "",
   env_keys: [],
   env_vars: {},
@@ -116,8 +100,6 @@ const EMPTY: ConfigForm = {
   pi_extensions: [],
   instructions_markdown: "",
   runtime_image_key: "",
-  sandbox_limits: { cpu: "", memoryMiB: "", pidsLimit: "" },
-  runtime_knobs: { stallSec: "", jobTokenMaxRequests: "", timeoutSec: "" },
   modules: [],
   skills: "[]",
   commands: "[]",
@@ -133,8 +115,6 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     agent_cli: cfg.agent_cli,
     dsh_task_mode: cfg.dsh_task_mode ?? "standard",
     model: cfg.model ?? "",
-    allow_model_catalog_passthrough: cfg.allow_model_catalog_passthrough === true,
-    context_window_tokens: cfg.context_window_tokens == null ? "" : String(cfg.context_window_tokens),
     credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: cfg.env_keys ?? [],
     env_vars: cfg.env_vars_json ?? {},
@@ -142,77 +122,12 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     pi_extensions: cfg.pi_extensions_json ?? [],
     instructions_markdown: cfg.instructions_markdown ?? "",
     runtime_image_key: cfg.runtime_image_key ?? "",
-    sandbox_limits: {
-      cpu: cfg.sandbox_limits_json?.cpu === undefined ? "" : String(cfg.sandbox_limits_json.cpu),
-      memoryMiB: cfg.sandbox_limits_json?.memoryMiB === undefined ? "" : String(cfg.sandbox_limits_json.memoryMiB),
-      pidsLimit: cfg.sandbox_limits_json?.pidsLimit === undefined ? "" : String(cfg.sandbox_limits_json.pidsLimit),
-    },
-    runtime_knobs: {
-      stallSec: cfg.runtime_knobs_json?.stallSec == null ? "" : String(cfg.runtime_knobs_json.stallSec),
-      jobTokenMaxRequests: cfg.runtime_knobs_json?.jobTokenMaxRequests == null ? "" : String(cfg.runtime_knobs_json.jobTokenMaxRequests),
-      timeoutSec: cfg.runtime_knobs_json?.timeoutSec == null ? "" : String(cfg.runtime_knobs_json.timeoutSec),
-    },
     modules: cfg.modules_json ?? [],
     skills: JSON.stringify(cfg.skills_json ?? [], null, 2),
     commands: JSON.stringify(cfg.commands_json ?? [], null, 2),
     mcps: JSON.stringify(cfg.mcps_json ?? [], null, 2),
     subagents: JSON.stringify(cfg.subagents_json ?? [], null, 2),
     platform_tools: cfg.platform_tools_json ?? {},
-  };
-}
-
-const SANDBOX_LIMIT_FIELDS = [
-  { key: "cpu", label: "CPU", unit: "核", min: 0.25, max: 64, step: 0.25 },
-  { key: "memoryMiB", label: "内存", unit: "MiB", min: 256, max: 131_072, step: 256 },
-  { key: "pidsLimit", label: "进程上限", unit: "个", min: 64, max: 32_768, step: 1 },
-] as const;
-
-function numericSandboxOverride(raw: string, label: string, min: number, max: number, integer: boolean): number | undefined {
-  if (!raw.trim()) return undefined;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || (integer && !Number.isSafeInteger(value)) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}${integer ? " (integer)" : ""}`);
-  }
-  return value;
-}
-
-function contextWindowTokensFromForm(raw: string): number | null {
-  if (!raw.trim()) return null;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 1_024 || value > 10_000_000) {
-    throw new Error("上下文预算必须是 1024–10000000 的整数");
-  }
-  return value;
-}
-
-function optionalKnobInt(raw: string, label: string, min: number, max: number): number | undefined {
-  if (!raw.trim()) return undefined;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new Error(`${label} 必须是 ${min}–${max} 的整数`);
-  }
-  return value;
-}
-
-function runtimeKnobsFromForm(form: ConfigForm): RuntimeKnobOverride {
-  const stallSec = optionalKnobInt(form.runtime_knobs.stallSec, "产出停滞窗口", 0, 172_800);
-  const jobTokenMaxRequests = optionalKnobInt(form.runtime_knobs.jobTokenMaxRequests, "Job Token 请求上限", 0, 1_000_000);
-  const timeoutSec = optionalKnobInt(form.runtime_knobs.timeoutSec, "角色 Job 超时", 60, 172_800);
-  return {
-    ...(stallSec === undefined ? {} : { stallSec }),
-    ...(jobTokenMaxRequests === undefined ? {} : { jobTokenMaxRequests }),
-    ...(timeoutSec === undefined ? {} : { timeoutSec }),
-  };
-}
-
-function sandboxLimitsFromForm(form: ConfigForm): SandboxLimitsOverride {
-  const cpu = numericSandboxOverride(form.sandbox_limits.cpu, "CPU", 0.25, 64, false);
-  const memoryMiB = numericSandboxOverride(form.sandbox_limits.memoryMiB, "Memory MiB", 256, 131_072, true);
-  const pidsLimit = numericSandboxOverride(form.sandbox_limits.pidsLimit, "PIDs", 64, 32_768, true);
-  return {
-    ...(cpu === undefined ? {} : { cpu }),
-    ...(memoryMiB === undefined ? {} : { memoryMiB }),
-    ...(pidsLimit === undefined ? {} : { pidsLimit }),
   };
 }
 
@@ -425,8 +340,6 @@ export function RoleConfigEditor({
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         dsh_task_mode: form.dsh_task_mode,
         model: form.model.trim() || null,
-        allow_model_catalog_passthrough: form.allow_model_catalog_passthrough,
-        context_window_tokens: contextWindowTokensFromForm(form.context_window_tokens),
         env_keys: form.env_keys,
         env_vars: form.env_vars,
         modules: form.modules,
@@ -437,8 +350,6 @@ export function RoleConfigEditor({
         platform_tools: form.platform_tools,
         instructions_markdown: form.instructions_markdown.trim() || null,
         runtime_image_key: projectId ? null : form.runtime_image_key.trim() || null,
-        sandbox_limits: sandboxLimitsFromForm(form),
-        runtime_knobs: runtimeKnobsFromForm(form),
         // Omit credentials: binding is managed on Agents「凭据绑定」; sending [] would clear (#631).
         config_files: form.config_files,
         pi_extensions: form.agent_cli === "pi" ? form.pi_extensions : [],
@@ -605,124 +516,6 @@ export function RoleConfigEditor({
               </div>
             </div>
           )}
-          <div className="mt-4 border-t border-ink-700/60 pt-4">
-            <label className="flex cursor-pointer items-start gap-2.5 text-[12px] text-zinc-300">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={form.allow_model_catalog_passthrough}
-                onChange={(event) => setForm((current) => ({
-                  ...current,
-                  allow_model_catalog_passthrough: event.target.checked,
-                }))}
-                aria-label="允许已配置模型名单直通"
-              />
-              <span>
-                允许已配置模型名单直通（应急 alias，默认关闭）
-                <span className="mt-0.5 block text-[11px] leading-5 text-zinc-500">
-                  默认关闭：账号已填写的 provider 模型 id 非空时，选模必须落在该名单内（SSOT / fail-closed，#656；探测目录仅诊断）。
-                  仅 alias 网关应急时开启以绕过「账号已配置名单」；平台 env <code className="text-zinc-400">DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH</code> 亦可全局放行。
-                </span>
-              </span>
-            </label>
-          </div>
-          <div className="mt-4 border-t border-ink-700/60 pt-4">
-            <label className={labelCls}>
-              CLI 客户端上下文预算（tokens）
-              <HelpTip>
-                可选的 RoleConfig 覆盖，留空继承 Provider 账号 settings_config_json 顶层值，再留空则使用 Provider / CLI 默认。
-                这是 CLI 客户端预算，不会提升上游模型能力；Claude Code 仅冻结并展示该值，不伪造不受支持的绝对窗口设置。
-              </HelpTip>
-            </label>
-            <input
-              type="number"
-              min={1024}
-              max={10_000_000}
-              step={1}
-              value={form.context_window_tokens}
-              onChange={(event) => setForm((current) => ({ ...current, context_window_tokens: event.target.value }))}
-              placeholder="留空继承 Provider / CLI 默认"
-              className={inputCls}
-              aria-label="RoleConfig CLI 客户端上下文预算"
-            />
-            <span className="mt-1 block text-[11px] text-zinc-600">整数范围 1024–10000000；只影响下一 Job 的冻结客户端预算。</span>
-          </div>
-          <div className="mt-4 border-t border-ink-700/60 pt-4">
-            <label className={labelCls}>
-              沙箱资源缺省
-              <HelpTip>
-                角色级资源缺省：仅项目 RoleConfig 可填数字覆盖；留空继承服务端缺省。
-                Job / Hub 快照仍可在治理范围内冻结更具体的值。CPU 以核计、内存以 MiB、进程上限为 PID 数；capability drop 与 no-new-privileges 仍由服务端治理。
-              </HelpTip>
-            </label>
-            <p className="mb-2 text-[11px] leading-5 text-zinc-500">
-              {projectId
-                ? "项目角色覆盖 · 留空继承服务端缺省"
-                : "全局 RoleConfig · 仅服务端缺省（可在项目角色上覆盖）"}
-            </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {SANDBOX_LIMIT_FIELDS.map((field) => (
-                <label key={field.key} className="rounded-md border border-ink-700 bg-ink-850/70 px-2.5 py-2">
-                  <span className="mb-1 block font-mono text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-                    {field.label} <span className="normal-case text-zinc-600">({field.unit})</span>
-                  </span>
-                  <input
-                    type="number"
-                    min={field.min}
-                    max={field.max}
-                    step={field.step}
-                    value={form.sandbox_limits[field.key]}
-                    disabled={!projectId}
-                    onChange={(event) => setForm((current) => ({
-                      ...current,
-                      sandbox_limits: { ...current.sandbox_limits, [field.key]: event.target.value },
-                    }))}
-                    placeholder={`${field.min}–${field.max}`}
-                    className={inputCls}
-                    aria-label={`${field.label} ${field.unit}`}
-                  />
-                  <span className="mt-1 block font-mono text-[10px] text-zinc-600">范围 {field.min}–{field.max}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="mt-4 border-t border-ink-700/60 pt-4">
-            <label className={labelCls}>
-              运行时护栏缺省
-              <HelpTip>
-                角色级护栏缺省：Job / Hub 冻结值优先；此处仅在上层未给出更具体值时生效。
-                留空继承项目规则 / 平台 / 部署 env。0 表示关闭停滞判定或不限制 Token 请求。
-                Chrome 专项镜像仍有 stall 下限，可在此再抬高。优先级：Job &gt; 本角色 &gt; 项目规则 &gt; 平台。
-              </HelpTip>
-            </label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {([
-                { key: "stallSec" as const, label: "停滞窗口", unit: "秒", min: 0, max: 172_800 },
-                { key: "jobTokenMaxRequests" as const, label: "Token 请求上限", unit: "次", min: 0, max: 1_000_000 },
-                { key: "timeoutSec" as const, label: "Job 超时", unit: "秒", min: 60, max: 172_800 },
-              ]).map((field) => (
-                <label key={field.key} className="rounded-md border border-ink-700 bg-ink-850/70 px-2.5 py-2">
-                  <span className="mb-1 block font-mono text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-                    {field.label} <span className="normal-case text-zinc-600">({field.unit})</span>
-                  </span>
-                  <input
-                    type="number"
-                    min={field.min}
-                    max={field.max}
-                    step={1}
-                    value={form.runtime_knobs[field.key]}
-                    onChange={(event) => setForm((current) => ({
-                      ...current,
-                      runtime_knobs: { ...current.runtime_knobs, [field.key]: event.target.value },
-                    }))}
-                    placeholder="继承上层"
-                    className={inputCls}
-                    aria-label={field.label}
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
         </section>
 
         <details className="role-config-section role-config-modules" open>

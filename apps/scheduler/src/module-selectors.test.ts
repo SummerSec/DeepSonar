@@ -233,7 +233,7 @@ test("listTrustedEnabledModuleSelectors excludes untrusted and disabled sources 
   assert.deepEqual(await listTrustedEnabledModuleSelectors(db), [`${SOURCE}:source:*`]);
 });
 
-test("resolveEffectiveModuleSelectors: empty → trusted defaults; explicit → unchanged (#660)", async () => {
+test("resolveEffectiveModuleSelectors: empty → no implicit skills; explicit → unchanged", async () => {
   const db = skillSourcesListDb([
     { id: SOURCE, trust_status: "trusted", enabled: true, created_at: "2026-01-01" },
     { id: SOURCE_B, trust_status: "trusted", enabled: true, created_at: "2026-01-02" },
@@ -241,12 +241,12 @@ test("resolveEffectiveModuleSelectors: empty → trusted defaults; explicit → 
   ]);
 
   const fromEmpty = await resolveEffectiveModuleSelectors([], db);
-  assert.equal(fromEmpty.defaulted, true);
-  assert.deepEqual(fromEmpty.modules, [`${SOURCE}:source:*`, `${SOURCE_B}:source:*`]);
+  assert.equal(fromEmpty.defaulted, false);
+  assert.deepEqual(fromEmpty.modules, []);
 
   const fromUnset = await resolveEffectiveModuleSelectors(undefined, db);
-  assert.equal(fromUnset.defaulted, true);
-  assert.deepEqual(fromUnset.modules, fromEmpty.modules);
+  assert.equal(fromUnset.defaulted, false);
+  assert.deepEqual(fromUnset.modules, []);
 
   const explicit = [`${SOURCE}:plugin:whitebox`];
   const fromExplicit = await resolveEffectiveModuleSelectors(explicit, db);
@@ -254,7 +254,7 @@ test("resolveEffectiveModuleSelectors: empty → trusted defaults; explicit → 
   assert.deepEqual(fromExplicit.modules, explicit);
 });
 
-test("expandModules with defaulted trusted selectors injects catalog skills (#660)", async () => {
+test("expandModules only materializes explicit selectors", async () => {
   const sourceCatalog = catalog([
     { id: "whitebox/authz", plugin: "whitebox", name: "authz" },
     { id: "whitebox/xxe", plugin: "whitebox", name: "xxe" },
@@ -278,10 +278,15 @@ test("expandModules with defaulted trusted selectors injects catalog skills (#66
   }) as unknown as Parameters<typeof expandModules>[1];
 
   const { modules, defaulted } = await resolveEffectiveModuleSelectors([], fakeDb);
-  assert.equal(defaulted, true);
+  assert.equal(defaulted, false);
+  assert.deepEqual(modules, []);
   const expanded = await expandModules(modules, fakeDb);
-  assert.deepEqual(expanded.skills.map((s) => (s as { name?: string }).name).sort(), ["authz", "xxe"]);
+  assert.deepEqual(expanded.skills, []);
   assert.deepEqual(expanded.missing_modules, []);
+
+  const explicit = await expandModules([`${SOURCE}:source:*`], fakeDb);
+  assert.deepEqual(explicit.skills.map((s) => (s as { name?: string }).name).sort(), ["authz", "xxe"]);
+  assert.deepEqual(explicit.missing_modules, []);
 
   // empty expandModules alone still returns nothing (no implicit inject)
   const bare = await expandModules([], fakeDb);

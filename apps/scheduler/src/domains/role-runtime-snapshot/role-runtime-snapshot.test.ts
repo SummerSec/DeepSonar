@@ -427,7 +427,7 @@ test("dsh cannot freeze a Hub chrome-fuzz override", async () => {
 const TRUSTED_SOURCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const UNTRUSTED_SOURCE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
-test("empty modules_json default-injects trusted skill modules; explicit list unchanged (#660)", async () => {
+test("empty modules_json leaves business skills empty; explicit list unchanged", async () => {
   const catalog = [
     {
       id: "whitebox/authz",
@@ -499,9 +499,7 @@ test("empty modules_json default-injects trusted skill modules; explicit list un
       if (row?.skill_source_id) projectSkillSources.set(String(row.skill_source_id), row.enabled !== false);
       return [];
     }
-    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) {
-      return [{ id: TRUSTED_SOURCE }];
-    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) return [];
     if (sql.includes("FROM skill_sources") && sql.includes("WHERE id")) {
       const id = String(values[0] ?? "");
       if (id === TRUSTED_SOURCE) {
@@ -529,8 +527,8 @@ test("empty modules_json default-injects trusted skill modules; explicit list un
   const db = Object.assign(query, { json: (value: unknown) => value });
 
   const defaulted = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
-  assert.deepEqual(defaulted.modules, [`${TRUSTED_SOURCE}:source:*`]);
-  assert.equal(defaulted.skills.some((s) => (s as { name?: string }).name === "authz"), true);
+  assert.deepEqual(defaulted.modules, []);
+  assert.equal(defaulted.skills.some((s) => (s as { name?: string }).name === "authz"), false);
 
   projectConfig = {
     image_strategy: "project_managed",

@@ -568,6 +568,12 @@ function instructionDocument(input: {
 - Provider 配置文件属于本 Job 冻结的模型连接配置，不是目标系统凭据，也不代表获得任务范围外的访问授权。
 - RoleConfig 可注入非敏感变量或经白名单引用的调度器变量；变量不存在时不得臆造。
 
+## Skill 与能力发现
+
+- 不要假设任何业务 Skill 已预装，也不要把平台专用的 deepsonar-control 控制协议当作业务能力。
+- 需要专门能力时，先读取 /workspace/.deepsonar/runtime-manifest.json，再仅使用本 Job 已授权的动态目录操作（如 list_capabilities、search_capabilities、describe_capability、preview_materialization）按返回契约发现；某个操作未出现在动态工具列表时不得调用。
+- 发现不是授权。不得自行安装、下载、执行未准入的 Skill 或猜测 selector；只有 Job 快照和本轮返回且被重新校验的能力可用。缺失能力时如实提交不可用或受治理的阻塞，不要静默降级。
+
 ## 网络边界
 
 ${input.allowEgress
@@ -871,7 +877,7 @@ ${taskGoal}
 
 读取下面的任务画布，判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。
 每个 intent 可按本轮目标需要附加可选字段 agent_cli / credential_id / model_ref 选择 Agent CLI、Provider 与模型：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / credential_id / models.model_id；需要能力约束时附加 model_requirements（如 min_context_window、require_tools、reasoning_effort），Scheduler 会在冻结前再次校验。三者与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省或 RoleConfig 回退。并发以 Provider 配额为准。不得提案未启用目录外的值。
-Skill/模块源：可调用 list_available_skill_sources 查看平台 trusted+enabled 全局清单（#660）；RoleConfig modules_json 为空时快照默认注入全部信任源，非空为显式绑定。本切片 Intent 尚未新增 skill selector 字段。
+Skill/模块源：可调用 list_available_skill_sources 查看项目已启用且平台 trusted+enabled 的只读目录；目录发现不等于授权。业务 Skill 不会因 RoleConfig modules_json 为空而自动注入，只有显式 selector 经项目白名单与 Job 快照校验后才会物化。需要能力时按本 Job 已授权的动态目录操作自行发现，不要猜测或自行安装 Skill。
 每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：需要非缺省工具链时必须先调用 list_available_runtime_images，按返回条目的 purpose、capabilities、selection_hints、tool_summary、not_included 匹配任务（APK/移动端→mobile，Chromium/CDP→chrome-test，ClickHouse SQL→clickhouse-test，hdc/OpenHarmony 设备→openharmony-test，多语言动态 PoC→kali-minimal 等），再原样复制 image_key；同时核对 compatible_agent_clis 覆盖本轮角色 CLI 且 readiness=ready。禁止凭记忆猜测 image_key。省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
 
 画布（YAML）：

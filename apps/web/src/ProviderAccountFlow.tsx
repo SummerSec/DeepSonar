@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, Lightning, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
+import { CheckCircle, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
 import {
   api,
   type Project,
@@ -34,8 +34,6 @@ import {
   rawModelCatalog,
   sameLast4CredentialCount,
 } from "./provider-account-helpers";
-import { credentialCatalogHealthSummary } from "./model-catalog-health";
-import { ModelCatalogHealthPanel } from "./ModelCatalogHealthPanel";
 
 export {
   boundCredentialLabel,
@@ -62,8 +60,6 @@ export function ProviderAccountFlow({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [testing, setTesting] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
-  const [createDiscovering, setCreateDiscovering] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createProvider, setCreateProvider] = useState("");
   const [createSecret, setCreateSecret] = useState("");
@@ -92,7 +88,6 @@ export function ProviderAccountFlow({
   const [editMaxConcurrent, setEditMaxConcurrent] = useState("");
   const [editOriginalSettings, setEditOriginalSettings] = useState<Record<string, unknown> | null>(null);
   const [editOriginalAgentCli, setEditOriginalAgentCli] = useState<AgentCli | null>(null);
-  const [catalogError, setCatalogError] = useState("");
 
   const selectedCredential = credentials.find((credential) => credential.id === selectedCredentialId) ?? null;
   const editingCredential = credentials.find((credential) => credential.id === editingCredentialId) ?? null;
@@ -199,10 +194,6 @@ export function ProviderAccountFlow({
     setEditingCredentialId(credential.id);
   };
 
-  useEffect(() => {
-    setCatalogError("");
-  }, [selectedCredentialId]);
-
   const createAccount = async () => {
     if (actorProjectId && createProjectId !== actorProjectId) {
       setError("项目作用域账号只能在本项目内创建 Provider 账号。");
@@ -275,21 +266,6 @@ export function ProviderAccountFlow({
           setError(`账号已保存，但连接失败：${health.detail}${health.category ? `（${health.category}）` : ""}。请展开编辑修正后重试。`);
           return;
         }
-        setDiscovering(true);
-        try {
-          const catalogResult = await api.credentialModels(created.id);
-          setCatalogError("");
-          setNotice(
-            catalogResult.models.length > 0
-              ? `账号已就绪：连接正常（探测到模型目录 ${catalogResult.models.length} 个，仅作诊断；选模请用账号已填写的模型 id）。`
-              : "账号连接正常。选模请在账号配置中填写 provider 模型 id。",
-          );
-        } catch (catalogErr) {
-          setCatalogError(String(catalogErr));
-          setNotice("账号连接正常。模型目录刷新失败可稍后重试。");
-        } finally {
-          setDiscovering(false);
-        }
       } catch (healthError) {
         setError(`账号已保存，健康检查失败：${String(healthError)}`);
       } finally {
@@ -300,51 +276,6 @@ export function ProviderAccountFlow({
       setError(String(e));
     } finally {
       setBusy(false);
-    }
-  };
-
-  const discoverCreateModels = async () => {
-    if (!createProvider || !createSecret.trim()) {
-      setError("请先填写 Provider 和 API Key");
-      return;
-    }
-    const built = buildSettingsConfigFromEditor({
-      agentCli: createAgentCli,
-      settingsJson: createSettingsJson,
-      tomlText: createTomlText,
-      authJson: createAuthJson,
-      secret: createSecret,
-      baseUrl: createBaseUrl,
-      provider: createProvider,
-      contextWindowTokens: createContextWindowTokens,
-      reasoning: createReasoning,
-      allowEmptyDefault: true,
-    });
-    if (!built.ok) {
-      setError(built.error);
-      return;
-    }
-    const baseUrl = (createBaseUrl.trim() || extractBaseUrlFromSettingsClient(built.settings)).replace(/\/+$/u, "");
-    setCreateDiscovering(true);
-    setError("");
-    try {
-      const result = await api.credentialModelsPreview({
-        agent_cli: createAgentCli,
-        provider: createProvider,
-        secret: createSecret,
-        metadata: createCatalog?.supports_base_url && baseUrl ? { base_url: baseUrl } : {},
-        settings_config: built.settings,
-      });
-      // Probe is diagnostic-only (#656); do not feed probed ids into modelOptions.
-      setNotice(
-        result.models.length > 0
-          ? `连接探测完成：上游目录 ${result.models.length} 个（仅诊断，不作为选模列表）。请在账号配置中填写要使用的 provider 模型 id。`
-          : "连接探测完成：上游目录为空（仅诊断）。请在账号配置中填写 provider 模型 id。",
-      );
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setCreateDiscovering(false);
     }
   };
 
@@ -473,28 +404,6 @@ export function ProviderAccountFlow({
     }
   };
 
-  const discoverModels = async () => {
-    if (!selectedCredential) return;
-    setDiscovering(true);
-    setError("");
-    try {
-      const result = await api.credentialModels(selectedCredential.id);
-      setCatalogError("");
-      setNotice(
-        result.models.length > 0
-          ? `模型目录已刷新（诊断）：${result.models.length} 个。选模仍以账号已填写的模型 id 为准。`
-          : "模型目录为空（诊断）。选模仍以账号已填写的模型 id 为准。",
-      );
-      onChanged();
-    } catch (e) {
-      const detail = String(e);
-      setCatalogError(detail);
-      setError(detail);
-    } finally {
-      setDiscovering(false);
-    }
-  };
-
   const repair = async () => {
     if (!selectedCredential || !repairProvider) return;
     setBusy(true);
@@ -569,9 +478,6 @@ export function ProviderAccountFlow({
               reasoning={createReasoning}
               onReasoningChange={setCreateReasoning}
               modelOptions={createModels}
-              onFetchModels={discoverCreateModels}
-              fetchingModels={createDiscovering}
-              canFetchModels={Boolean(createProvider && createSecret.trim())}
               onNotice={(message) => { setNotice(message); setError(""); }}
               onError={(message) => { if (message) setError(message); else setError(""); }}
               onSubmit={createAccount}
@@ -621,7 +527,7 @@ export function ProviderAccountFlow({
                       </small>
                     </span>
                     <span className="provider-flow-credential-meta">
-                      连接 {healthStatusLabel(credential.health?.status)} · {credentialCatalogHealthSummary(credential)} · {credential.agent_cli ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli) : "CLI 未设"} · ····{credential.last4}
+                      连接 {healthStatusLabel(credential.health?.status)} · {credential.agent_cli ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli) : "CLI 未设"} · ····{credential.last4}
                       {sameLast4Count > 1 && ` · ⚠ 同末四位账号 ${sameLast4Count} 个，请核对`}
                     </span>
                   </button>
@@ -644,7 +550,7 @@ export function ProviderAccountFlow({
                           setTesting(false);
                         }
                       }}
-                      disabled={testing || discovering}
+                      disabled={testing}
                     >
                       <Plugs size={12} /> 测试
                     </button>
@@ -659,7 +565,7 @@ export function ProviderAccountFlow({
                       type="button"
                       className="secondary-button !min-h-7 !px-2 !text-[10px] text-red-300"
                       onClick={() => void deleteAccount(credential)}
-                      disabled={busy || testing || discovering}
+                      disabled={busy || testing}
                     >
                       <Trash size={12} /> 删除
                     </button>
@@ -696,9 +602,6 @@ export function ProviderAccountFlow({
                         reasoning={editReasoning}
                         onReasoningChange={setEditReasoning}
                         modelOptions={models}
-                        onFetchModels={discoverModels}
-                        fetchingModels={discovering}
-                        canFetchModels
                         onNotice={(message) => { setNotice(message); setError(""); }}
                         onError={(message) => { if (message) setError(message); else setError(""); }}
                         onSubmit={saveEditedConfig}
@@ -726,16 +629,13 @@ export function ProviderAccountFlow({
           )}
           {selectedCredential && (
             <div className="provider-flow-account-actions">
-              <button type="button" onClick={testConnection} disabled={testing || discovering} className="secondary-button">
+              <button type="button" onClick={testConnection} disabled={testing} className="secondary-button">
                 <Plugs size={13} /> {testing ? "测试中…" : "测试连接"}
-              </button>
-              <button type="button" onClick={discoverModels} disabled={discovering || testing} className="secondary-button">
-                <Lightning size={13} /> {discovering ? "刷新中…" : "刷新模型目录"}
               </button>
               <button
                 type="button"
                 onClick={() => void deleteAccount(selectedCredential)}
-                disabled={busy || testing || discovering}
+                disabled={busy || testing}
                 className="secondary-button text-red-300"
               >
                 <Trash size={13} /> 删除账号
@@ -772,9 +672,6 @@ export function ProviderAccountFlow({
             <span>指纹 {selectedCredential?.fingerprint?.slice(0, 8) ?? "--------"}</span>
             {currentCatalog.length > 0 && <span>已配置模型 {currentCatalog.length} 个</span>}
           </div>
-          {selectedCredential && <ModelCatalogHealthPanel credential={selectedCredential} />}
-          {catalogError && <div className="provider-flow-catalog-error"><Warning size={13} /> {catalogError}</div>}
-
         </div>
       </div>
     </section>
