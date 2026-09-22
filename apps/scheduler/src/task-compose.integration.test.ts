@@ -233,7 +233,10 @@ if (!testDatabaseUrl) {
       await validateFrozenTaskSeedsForRetry(sql, projectId, frozen);
       const pendingGraph = await (await import("./graph.js")).buildGraphSnapshot(pendingCanvasId, "hub", { maxYamlChars: 12_000 });
       assert.match(pendingGraph.yaml, /compose_scope:/);
-      assert.match(pendingGraph.yaml, /"verify_status":"pending"/);
+      // Large Hub canvases start with L0 overview (no per-finding verify_status rows).
+      assert.match(pendingGraph.yaml, /projection_mode: "L0_overview"/);
+      assert.match(pendingGraph.yaml, /verify_distribution: \{"pending":7\}/);
+      assert.match(pendingGraph.yaml, /query_hint:/);
       assert.doesNotMatch(pendingGraph.yaml, new RegExp(pendingIds[0]));
 
       const mixedCanvasId = await ensureCanvasForTask({
