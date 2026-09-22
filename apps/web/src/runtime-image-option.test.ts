@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isRuntimeImageBelowPlatformMin, isRuntimeImagePinStale, runtimeImageKindHint, runtimeImageOptionLabel, runtimeImagePinLabel, runtimeImageSelectOption } from "./runtime-image-option";
+import { isProjectRuntimeImageAvailable, isRuntimeImageBelowPlatformMin, isRuntimeImagePinStale, runtimeImageKindHint, runtimeImageOptionLabel, runtimeImagePinLabel, runtimeImageSelectOption } from "./runtime-image-option";
 import { officialRuntimeImageBoundary, WEB_SPECIALTY_IMAGE_KEYS } from "./runtime-image-boundary";
 import { optionTitle } from "./searchable-select-model";
 
@@ -16,9 +16,9 @@ test("runtime image options keep the product name intact and put kind in the hin
   const option = runtimeImageSelectOption(openharmony, "project-1");
   assert.equal(option.label, "DeepSonar OpenHarmony Audit");
   assert.ok(option.hint !== undefined);
-  assert.match(option.hint, /^专项·项目启用 · 不包含：/);
-  assert.match(optionTitle(option), /^DeepSonar OpenHarmony Audit · 专项·项目启用 · 不包含：/);
-  assert.equal(runtimeImageOptionLabel(openharmony, "project-1"), "DeepSonar OpenHarmony Audit · 专项·项目启用");
+  assert.match(option.hint, /^专项 · 不包含：/);
+  assert.match(optionTitle(option), /^DeepSonar OpenHarmony Audit · 专项 · 不包含：/);
+  assert.equal(runtimeImageOptionLabel(openharmony, "project-1"), "DeepSonar OpenHarmony Audit · 专项");
   assert.doesNotMatch(option.label, /OpenHarm\.\.\./);
 });
 
@@ -72,7 +72,7 @@ test("below-platform-min flag is an explicit boolean from the scheduler row", ()
   assert.equal(isRuntimeImageBelowPlatformMin({}), false);
 });
 
-test("runtime image kind hint distinguishes specialty opt-in from base", () => {
+test("runtime image kind hint distinguishes specialty from base; official default-on", () => {
   assert.equal(runtimeImageKindHint({
     image_key: "deepsonar-base",
     official: true,
@@ -81,8 +81,16 @@ test("runtime image kind hint distinguishes specialty opt-in from base", () => {
   }, null), "底座");
   assert.equal(runtimeImageKindHint({
     ...openharmony,
+    project_enabled: null,
+  }, "project-1"), "专项");
+  assert.equal(runtimeImageKindHint({
+    ...openharmony,
     project_enabled: false,
-  }, "project-1"), "专项·项目启用 · 未在项目启用");
+  }, "project-1"), "专项 · 已在项目关闭");
+  assert.equal(isProjectRuntimeImageAvailable({ official: true, project_enabled: null }), true);
+  assert.equal(isProjectRuntimeImageAvailable({ official: true, project_enabled: false }), false);
+  assert.equal(isProjectRuntimeImageAvailable({ official: false, project_enabled: null }), false);
+  assert.equal(isProjectRuntimeImageAvailable({ official: false, project_enabled: true }), true);
 });
 
 test("official image boundary one-liners cover specialty keys used by scheduler injection", () => {

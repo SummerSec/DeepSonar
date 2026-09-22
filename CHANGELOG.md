@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### 修复
+- 官方专项运行时镜像默认对项目开启（#667）：Hub `list_available_runtime_images`、Job 解析与 readiness 对官方镜像统一为 `project_enabled !== false`（无 `project_runtime_images` 行 = 可用）；第三方仍 fail-closed 须显式启用。`project_opt_in` 保留为 warmup 等元数据，不再作选图硬门。Web 项目镜像启停态与文案同步。
+
 ## [0.4.8] - 2026-09-22
 
 ### 变更

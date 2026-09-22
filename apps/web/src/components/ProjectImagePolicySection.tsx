@@ -38,7 +38,7 @@ export function ProjectImagePolicySection({
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>镜像启用与角色缺省</span>
           <HelpTip>
-            Hub 可按任务从本项目已启用且可信的镜像中提案；此处只配置启用边界与角色缺省（Hub 省略或非 Hub 建 Job 时使用）。专项镜像须先在项目镜像页启用。
+            Hub 可按任务从本项目可用且可信的镜像中提案；此处只配置启用边界与角色缺省（Hub 省略或非 Hub 建 Job 时使用）。官方镜像默认可用（可在项目镜像页显式关闭）；第三方须先启用。
           </HelpTip>
         </div>
       </div>

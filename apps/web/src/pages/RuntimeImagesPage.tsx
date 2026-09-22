@@ -19,6 +19,7 @@ import {
 } from "../api";
 import { SearchableSelect } from "../SearchableSelect";
 import {
+  isProjectRuntimeImageAvailable,
   isRuntimeImagePinStale,
   runtimeImagePinLabel,
 } from "../runtime-image-option";
@@ -814,10 +815,10 @@ export function RuntimeImagesPage() {
         eyebrow="TRUSTED RUNTIME CATALOG"
         subtitle={
           <span className="inline-flex items-center gap-0.5">
-            {projectId ? "项目启用与固定官方专项 / 第三方镜像" : "系统底座 · 官方专项 · 第三方隔离准入"}
+            {projectId ? "官方镜像启停与第三方启用 / 固定" : "系统底座 · 官方专项 · 第三方隔离准入"}
             <HelpTip label={projectId ? "项目运行镜像说明" : "镜像市场说明"}>
               {projectId
-                ? "系统底座自动用于未绑定专项镜像的角色；此处仅为项目启用/固定官方专项与第三方镜像。任务表单不暴露镜像参数。"
+                ? "系统底座自动用于未绑定专项镜像的角色；官方专项默认对本项目可用（可显式停用），第三方须先启用后才能固定/选用。任务表单不暴露镜像参数。"
                 : "系统运行环境（deepsonar-base）是调度默认底座，与专项镜像（Kali / Audit 等）不同层。「专项」需角色显式绑定；第三方须隔离区准入。共用 digest / 扫描 / 审批证据链，但卡片按类别分区。"}
             </HelpTip>
           </span>
@@ -1158,11 +1159,6 @@ export function RuntimeImagesPage() {
                           第三方
                         </span>
                       )}
-                      {image.project_opt_in && (
-                        <span className="rounded-full bg-amber-400/[.1] px-2 py-1 font-mono text-[8px] tracking-[.12em] text-amber-300">
-                          PROJECT OPT-IN
-                        </span>
-                      )}
                       <TrustBadge status={image.trust_status} />
                       {image.below_platform_min && (
                         <span className="rounded-full bg-rose-400/[.12] px-2 py-1 font-mono text-[8px] tracking-[.12em] text-rose-300">
@@ -1239,19 +1235,19 @@ export function RuntimeImagesPage() {
                   {projectId && image.trust_status === "trusted" && (
                     <>
                       <button
-                        className={image.project_enabled ? "secondary-button" : "primary-button"}
+                        className={isProjectRuntimeImageAvailable(image) ? "secondary-button" : "primary-button"}
                         disabled={busy === image.id}
                         onClick={() => bind(
                           image,
-                          !image.project_enabled,
-                          image.project_enabled
+                          !isProjectRuntimeImageAvailable(image),
+                          isProjectRuntimeImageAvailable(image)
                             ? image.selected_version_id
                             : (projectVersionPick[image.id] || image.selected_version_id || image.latest_version_id),
                         )}
                       >
-                        {image.project_enabled ? "停用" : "启用"}
+                        {isProjectRuntimeImageAvailable(image) ? "停用" : "启用"}
                       </button>
-                      {image.project_enabled && (
+                      {isProjectRuntimeImageAvailable(image) && (
                         <span className={`font-mono text-[9px] ${isRuntimeImagePinStale(image) ? "text-amber-300" : "text-zinc-500"}`}>
                           {runtimeImagePinLabel(image)}
                         </span>

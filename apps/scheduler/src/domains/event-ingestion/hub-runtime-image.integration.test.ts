@@ -49,8 +49,8 @@ if (!testDatabaseUrl) {
 
       // Baseline catalog rows come from schema.sql; only the executable trusted
       // version + selected-channel ref are fixture-owned. deepsonar-chrome-fuzz
-      // stays project_opt_in without a project enable row, so it must be absent
-      // from the Hub catalog.
+      // has no trusted version yet, so it must be absent from the Hub catalog
+      // (official specialty is default-on once a trusted version exists).
       const [kaliVersion] = await sql<{ id: string }[]>`
         INSERT INTO runtime_image_versions (runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
         SELECT id, ${`0.1.0-${randomUUID().slice(0, 8)}`}, ${kaliRef}, ${kaliRef}, ${kaliDigest},
@@ -125,16 +125,16 @@ if (!testDatabaseUrl) {
         WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubDefault}`;
       assert.equal(defaultJob?.snapshot.runtime_image?.image_key, "deepsonar-base");
 
-      // 3) A project-opt-in image the project never enabled is rejected for the whole decision.
-      const hubOptIn = await makeHubJob();
+      // 3) An official specialty image without a trusted executable version is still rejected.
+      const hubNoTrusted = await makeHubJob();
       await assert.rejects(
-        preflightDeferredSemanticEvent(hubOptIn, "hub_decision", {
+        preflightDeferredSemanticEvent(hubNoTrusted, "hub_decision", {
           intents: [intent("dispatch review on chrome fuzz", "deepsonar-chrome-fuzz")],
         }),
         (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image" && error.retryable,
       );
       await assert.rejects(
-        ingestEvent(hubOptIn, {
+        ingestEvent(hubNoTrusted, {
           v: 1,
           event_id: randomUUID(),
           type: "hub_decision",
@@ -142,10 +142,10 @@ if (!testDatabaseUrl) {
         }),
         (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image",
       );
-      const [optInJob] = await sql<{ count: number }[]>`
+      const [noTrustedJob] = await sql<{ count: number }[]>`
         SELECT COUNT(*)::int AS count FROM jobs
-        WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubOptIn}`;
-      assert.equal(optInJob?.count, 0, "rejected image proposal must not create a Worker Job");
+        WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubNoTrusted}`;
+      assert.equal(noTrustedJob?.count, 0, "rejected image proposal must not create a Worker Job");
 
       // 4) Unknown market keys are rejected by the catalog check (not by shape).
       const hubUnknown = await makeHubJob();
@@ -179,9 +179,25 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest)
         VALUES (${chromeVersion.id}, 'aliyun-acr', ${chromeRef}, ${chromeRef}, ${chromeDigest})`;
+      // Official specialty: no project_runtime_images row → default ON in Hub catalog.
+      const catalogDefaultOn = await listHubRuntimeImageCatalog(sql, projectId);
+      assert.ok(
+        catalogDefaultOn.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
+        "official chrome-fuzz with trusted version must appear without project opt-in row",
+      );
       await sql`
         INSERT INTO project_runtime_images (project_id, runtime_image_id, enabled)
-        SELECT ${projectId}, id, true FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz'`;
+        SELECT ${projectId}, id, false FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz'`;
+      const catalogDisabled = await listHubRuntimeImageCatalog(sql, projectId);
+      assert.equal(
+        catalogDisabled.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
+        false,
+        "explicit project disable must hide official specialty from Hub catalog",
+      );
+      await sql`
+        UPDATE project_runtime_images SET enabled = true
+        WHERE project_id = ${projectId}
+          AND runtime_image_id = (SELECT id FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz')`;
       await sql`
         UPDATE projects SET config_json = config_json || ${sql.json({ image_strategy: "project_managed" })}
         WHERE id = ${projectId}`;
@@ -201,7 +217,7 @@ if (!testDatabaseUrl) {
       const catalogWithChrome = await listHubRuntimeImageCatalog(sql, projectId);
       assert.ok(
         catalogWithChrome.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
-        "enabled chrome-fuzz must appear in Hub catalog before the CLI gate",
+        "official chrome-fuzz with trusted version must appear in Hub catalog before the CLI gate",
       );
       const hubCli = await makeHubJob();
       await assert.rejects(

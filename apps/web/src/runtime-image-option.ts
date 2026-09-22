@@ -2,6 +2,15 @@ import { officialRuntimeImageNotIncludedOneLiner } from "./runtime-image-boundar
 import type { RuntimeImageSummary } from "./api";
 import type { SelectOption } from "./searchable-select-model";
 
+/** Official: missing/null project row = available; third-party: require explicit enable. */
+export function isProjectRuntimeImageAvailable(
+  image: Pick<RuntimeImageSummary, "official" | "project_enabled">,
+): boolean {
+  return image.official
+    ? image.project_enabled !== false
+    : image.project_enabled === true;
+}
+
 export function runtimeImageKindHint(
   image: Pick<RuntimeImageSummary, "image_key" | "official" | "project_opt_in" | "project_enabled">,
   projectId: string | null,
@@ -9,13 +18,15 @@ export function runtimeImageKindHint(
   const kind = image.image_key === "deepsonar-base"
     ? "底座"
     : image.official
-      ? image.project_opt_in
-        ? "专项·项目启用"
-        : "专项"
+      ? "专项"
       : "第三方";
-  const needsProject = image.official && image.project_opt_in && projectId && image.project_enabled !== true
+  if (image.official) {
+    if (projectId && image.project_enabled === false) return `${kind} · 已在项目关闭`;
+    return kind;
+  }
+  const needsProject = projectId && image.project_enabled !== true
     ? "未在项目启用"
-    : image.official && image.project_opt_in && !projectId
+    : !projectId
       ? "运行前需项目启用"
       : "";
   return needsProject ? `${kind} · ${needsProject}` : kind;

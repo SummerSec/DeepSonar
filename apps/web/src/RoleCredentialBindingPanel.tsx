@@ -14,7 +14,7 @@ import {
 import { isCurrentAgentCli, isLeftoverAgentCli, type CurrentAgentCli } from "@deepsonar/shared-types";
 import { type AgentCli, providerProtocolLabel } from "./CredentialConfigEditor";
 import { SearchableSelect } from "./SearchableSelect";
-import { runtimeImageSelectOption } from "./runtime-image-option";
+import { isProjectRuntimeImageAvailable, runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { showToast } from "./toast";
 import {
@@ -146,9 +146,8 @@ export function RoleCredentialBindingPanel() {
     runtimeImages
       .filter((image) => {
         if (!image.enabled) return false;
-        if (image.official) return true;
-        if (projectId) return image.project_enabled === true;
-        return false;
+        if (projectId) return isProjectRuntimeImageAvailable(image);
+        return image.official === true;
       })
       .slice()
       .sort((a, b) => {

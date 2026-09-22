@@ -6,7 +6,7 @@ const options = [
   { value: "critical", label: "严重", keywords: ["p0"] },
   { value: "medium", label: "中危" },
   { value: "low", label: "低危" },
-  { value: "oh-audit", label: "DeepSonar OpenHarmony Audit", hint: "专项·项目启用", keywords: ["openharmony"] },
+  { value: "oh-audit", label: "DeepSonar OpenHarmony Audit", hint: "专项", keywords: ["openharmony"] },
 ];
 
 test("searchable select matches labels values and keywords", () => {
@@ -14,7 +14,7 @@ test("searchable select matches labels values and keywords", () => {
   assert.deepEqual(filterSelectOptions(options, "LOW").map((option) => option.value), ["low"]);
   assert.deepEqual(filterSelectOptions(options, "p0").map((option) => option.value), ["critical"]);
   assert.deepEqual(filterSelectOptions(options, "专项").map((option) => option.value), ["oh-audit"]);
-  assert.equal(optionTitle(options[3]!), "DeepSonar OpenHarmony Audit · 专项·项目启用");
+  assert.equal(optionTitle(options[3]!), "DeepSonar OpenHarmony Audit · 专项");
 });
 
 test("multi-select toggle preserves option order and removes selected values", () => {
