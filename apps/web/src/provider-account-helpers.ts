@@ -87,7 +87,7 @@ export function roleModelLabel(
   credential: Pick<ProviderCredential, "settings_config_json"> | null,
 ): string {
   const requested = roleConfig.model?.trim() || modelsFromSettingsConfig(credential)[0] || null;
-  if (!requested) return "未指定模型 · 将使用 CLI 内置默认（建议从凭据目录选择）";
+  if (!requested) return "未指定模型 · 将使用 CLI 内置默认（建议填写账号已配置的 provider 模型 id）";
   const upstream = resolvedUpstreamModel(roleConfig.agent_cli, requested, credential?.settings_config_json);
   if (upstream && upstream !== requested) {
     const aliasHint = ["fable", "sonnet", "opus", "haiku"].includes(requested.toLowerCase())
@@ -98,23 +98,17 @@ export function roleModelLabel(
   return roleConfig.model ? `Role 覆盖 · ${requested}` : `配置文件 · ${requested}`;
 }
 
+/** Account-configured provider model ids only (#656). Probed catalog is diagnostic-only. */
 export function modelIds(credential: ProviderCredential | null): string[] {
-  if (!credential) return [];
-  const catalog = credential.health?.model_catalog ?? credential.model_catalog_json ?? [];
-  const fromCatalog = Array.isArray(catalog)
-    ? catalog.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .map((item) => item.trim())
-    : [];
-  return [...new Set([...fromCatalog, ...modelsFromSettingsConfig(credential)])].sort((a, b) => a.localeCompare(b));
+  return [...new Set(modelsFromSettingsConfig(credential))].sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Selection allowlist: same SSOT as modelIds (settings_config_json), not probed model_catalog_json.
+ * Name retained for call-site compatibility; do not merge health/probe catalogs here.
+ */
 export function rawModelCatalog(credential: ProviderCredential | null): string[] {
-  if (!credential) return [];
-  const catalog = credential.health?.model_catalog ?? credential.model_catalog_json ?? [];
-  const fromCatalog = Array.isArray(catalog)
-    ? catalog.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
-    : [];
-  return [...new Set([...fromCatalog, ...modelsFromSettingsConfig(credential)])];
+  return modelsFromSettingsConfig(credential);
 }
 
 export function asRoleCli(agentCli: string): AgentCli {

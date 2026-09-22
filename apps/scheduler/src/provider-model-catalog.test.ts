@@ -46,7 +46,7 @@ test("projectProviderRuntimeSnapshot freezes cli-default marker when model unspe
   assert.equal(formatCliDefaultUpstreamModel("claude-opus-5"), "cli-default:claude-opus-5");
 });
 
-test("catalog fail-closed when CLI default not in credential catalog", () => {
+test("configured-allowlist fail-closed when CLI default not in account models", () => {
   assert.throws(
     () => assertResolvedModelInCredentialCatalog({
       resolvedModel: "claude-opus-5",
@@ -56,7 +56,7 @@ test("catalog fail-closed when CLI default not in credential catalog", () => {
     }),
     (error: unknown) => {
       assert.ok(error instanceof ModelCatalogMismatchError);
-      assert.match(error.message, /角色未指定 model，CLI 默认 claude-opus-5 不在凭据模型目录/);
+      assert.match(error.message, /角色未指定 model，CLI 默认 claude-opus-5 不在账号已配置模型名单/);
       assert.match(error.message, /deepseek-chat/);
       assert.match(error.message, /glm-4\.6/);
       assert.equal(error.code, "model_not_in_catalog");
@@ -68,7 +68,7 @@ test("catalog fail-closed when CLI default not in credential catalog", () => {
   );
 });
 
-test("catalog allow-passthrough skips fail-closed for alias gateways", () => {
+test("configured-allowlist allow-passthrough skips fail-closed for alias gateways", () => {
   assert.doesNotThrow(() => assertResolvedModelInCredentialCatalog({
     resolvedModel: "claude-opus-5",
     catalogJson: ["deepseek-chat"],
@@ -77,7 +77,7 @@ test("catalog allow-passthrough skips fail-closed for alias gateways", () => {
   }));
 });
 
-test("empty catalog soft-degrades and does not fail closed", () => {
+test("empty configured allowlist soft-degrades and does not fail closed", () => {
   assert.doesNotThrow(() => assertResolvedModelInCredentialCatalog({
     resolvedModel: "claude-opus-5",
     catalogJson: [],
@@ -87,7 +87,7 @@ test("empty catalog soft-degrades and does not fail closed", () => {
   assert.equal(modelMatchesCredentialCatalog("claude-opus-5", []), false);
 });
 
-test("catalog match annotation uses bare model id", () => {
+test("configured-allowlist match annotation uses bare model id", () => {
   assert.equal(
     modelMatchesCredentialCatalog("cli-default:deepseek-chat", ["deepseek-chat", "glm-4.6"]),
     true,

@@ -11,8 +11,8 @@ export function ModelCatalogHealthPanel({ credential }: { credential: ProviderCr
   const descriptors = modelDescriptorsForCredential(credential);
   return (
     <>
-      <div className="provider-flow-catalog-health" aria-label="模型目录健康">
-        <div className="provider-flow-card-kicker">模型目录健康</div>
+      <div className="provider-flow-catalog-health" aria-label="上游模型目录探测（诊断）">
+        <div className="provider-flow-card-kicker">上游目录探测（诊断，非选模依据）</div>
         <div className="provider-flow-catalog-health-summary">
           <span>{credentialCatalogHealthSummary(credential)}</span>
           {credential.health?.model_catalog_fetched_at && (
@@ -21,7 +21,7 @@ export function ModelCatalogHealthPanel({ credential }: { credential: ProviderCr
         </div>
         {descriptors.length === 0 ? (
           <div className="provider-flow-empty">
-            暂无模型描述符。
+            暂无上游探测描述符（不影响使用账号已填写的模型 id 选模）。
           </div>
         ) : (
           <ul className="provider-flow-catalog-model-list">
@@ -42,7 +42,7 @@ export function ModelCatalogHealthPanel({ credential }: { credential: ProviderCr
           </ul>
         )}
         {descriptors.length > 40 && (
-          <div className="text-[10px] text-zinc-500">仅展示前 40 个；完整目录见刷新结果 / API。</div>
+          <div className="text-[10px] text-zinc-500">仅展示前 40 个探测项（诊断）；选模请用账号已填写的模型 id。</div>
         )}
       </div>
 

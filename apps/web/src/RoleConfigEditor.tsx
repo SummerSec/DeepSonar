@@ -478,7 +478,7 @@ export function RoleConfigEditor({
                 Agent CLI / LLM 凭据请优先走「项目设置 → CLI/Provider 白名单」缺省凭据（#632；RoleConfig.credentials 绑定已弃用但仍兼容）。账号密钥在「Provider 凭据」页管理。此处仅维护角色职责与平台工具。
                 {!form.model.trim() && (
                   <span className="mt-1 block text-[11px] text-amber-200/90">
-                    当前模型为空：将使用 CLI 内置默认模型，建议从凭据目录选择。也可开启下方「允许模型目录直通」以支持 alias 网关。
+                    当前模型为空：将使用 CLI 内置默认模型，建议填写账号 settings 中已配置的 provider 模型 id。也可开启下方「允许已配置模型名单直通」以支持 alias 网关。
                   </span>
                 )}
                 {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}。` : ""}
@@ -615,13 +615,13 @@ export function RoleConfigEditor({
                   ...current,
                   allow_model_catalog_passthrough: event.target.checked,
                 }))}
-                aria-label="允许模型目录直通"
+                aria-label="允许已配置模型名单直通"
               />
               <span>
-                允许模型目录直通（应急 alias，默认关闭）
+                允许已配置模型名单直通（应急 alias，默认关闭）
                 <span className="mt-0.5 block text-[11px] leading-5 text-zinc-500">
-                  默认关闭：凭据目录非空时模型必须引用目录 model_id（SSOT / fail-closed，#632）。
-                  仅 alias 网关应急时开启；平台 env <code className="text-zinc-400">DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH</code> 亦可全局放行。
+                  默认关闭：账号已填写的 provider 模型 id 非空时，选模必须落在该名单内（SSOT / fail-closed，#656；探测目录仅诊断）。
+                  仅 alias 网关应急时开启以绕过「账号已配置名单」；平台 env <code className="text-zinc-400">DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH</code> 亦可全局放行。
                 </span>
               </span>
             </label>

@@ -9,7 +9,7 @@ import {
   gatewayFrozenModelRepair,
 } from "./model-catalog-admit.js";
 
-test("admitModelAgainstCatalog soft-degrades on empty catalog", () => {
+test("admitModelAgainstCatalog soft-degrades on empty configured allowlist", () => {
   const result = admitModelAgainstCatalog({
     resolvedModel: "claude-opus-5",
     catalogJson: [],
@@ -27,7 +27,7 @@ test("admitModelAgainstCatalog allows passthrough for emergency alias", () => {
   assert.equal(result.ok, true);
 });
 
-test("admitModelAgainstCatalog fail-closed with model_not_in_catalog", () => {
+test("admitModelAgainstCatalog fail-closed when outside configured allowlist", () => {
   const result = admitModelAgainstCatalog({
     resolvedModel: "claude-opus-5",
     catalogJson: ["deepseek-chat", "glm-4.6"],
@@ -40,7 +40,7 @@ test("admitModelAgainstCatalog fail-closed with model_not_in_catalog", () => {
   assert.equal(result.repair.code, MODEL_NOT_IN_CATALOG);
   assert.equal(result.repair.category, "model_correctable");
   assert.match(result.repair.message, /claude-opus-5/);
-  assert.match(result.repair.next_action ?? "", /catalog_model_id|passthrough/);
+  assert.match(result.repair.next_action ?? "", /account_configured_model_id|passthrough/);
 });
 
 test("admitModelAgainstCatalog uses model_passthrough_disabled when emphasized", () => {
@@ -57,7 +57,7 @@ test("admitModelAgainstCatalog uses model_passthrough_disabled when emphasized",
   assert.equal(result.repair.code, MODEL_PASSTHROUGH_DISABLED);
 });
 
-test("admitModelAgainstCatalog strips [1m] before catalog match", () => {
+test("admitModelAgainstCatalog strips [1m] before configured-allowlist match", () => {
   const result = admitModelAgainstCatalog({
     resolvedModel: "deepseek-chat[1m]",
     catalogJson: ["deepseek-chat"],

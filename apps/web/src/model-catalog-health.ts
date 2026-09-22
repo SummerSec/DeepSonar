@@ -88,19 +88,19 @@ export function modelDescriptorsForCredential(
 
 /** One-line catalog health summary for credential list / detail. */
 export function credentialCatalogHealthSummary(credential: ProviderCredential | null | undefined): string {
-  if (!credential) return "目录未加载";
+  if (!credential) return "探测目录未加载";
   const health = credential.health;
   if (health?.status === "error") {
     const category = health.error_category ? ` · ${health.error_category}` : "";
-    return `目录探测失败${category}`;
+    return `上游目录探测失败${category}（仅诊断，不作为选模依据）`;
   }
-  if (health?.status === "unknown" && !health.last_tested_at) return "尚未测试 / 未探测目录";
+  if (health?.status === "unknown" && !health.last_tested_at) return "尚未测试 / 未探测上游目录（选模以账号已填模型 id 为准）";
   const descriptors = modelDescriptorsForCredential(credential);
-  if (descriptors.length === 0) return "目录为空（允许软降级）";
+  if (descriptors.length === 0) return "上游目录为空（仅诊断；选模以账号已填模型 id 为准）";
   const statuses = [...new Set(descriptors.map((model) => model.health_status))].map(modelCatalogHealthLabel);
   const revision = descriptors.find((model) => model.catalog_revision)?.catalog_revision;
   const passthrough = descriptors.some((model) => model.health_status === "passthrough_allowed");
-  return `目录 ${descriptors.length} 个 · ${statuses.join(" / ")}${passthrough ? " · 含应急透传" : ""}${revision ? ` · rev ${String(revision).slice(0, 12)}` : ""}`;
+  return `上游探测 ${descriptors.length} 个 · ${statuses.join(" / ")}${passthrough ? " · 含应急透传" : ""}${revision ? ` · rev ${String(revision).slice(0, 12)}` : ""}（仅诊断，非选模 SSOT）`;
 }
 
 export function catalogHasPassthrough(credential: ProviderCredential | null | undefined): boolean {
@@ -160,9 +160,9 @@ export function formatFrozenProviderModelHealth(pm: FrozenProviderModelView | nu
   const revision = pm.model_descriptor?.catalog_revision ?? pm.catalog_revision ?? null;
   let warning: string | null = null;
   if (passthrough) {
-    warning = "本 Job 启用了模型目录应急透传：Gateway 不强制目录内模型，请核对上游与权限。";
+    warning = "本 Job 启用了已配置模型名单应急透传：未校验账号已填模型 id，请核对上游与权限。";
   } else if (healthStatus && healthStatus !== "verified") {
-    warning = `冻结模型目录健康为「${modelCatalogHealthLabel(healthStatus)}」，非已验证目录态。`;
+    warning = `冻结上游探测健康为「${modelCatalogHealthLabel(healthStatus)}」（仅观测，非选模依据）。`;
   }
   return {
     healthLabel: healthStatus ? modelCatalogHealthLabel(healthStatus) : "未标注",

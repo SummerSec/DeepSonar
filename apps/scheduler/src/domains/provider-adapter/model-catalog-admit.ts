@@ -40,9 +40,10 @@ function catalogPreview(catalog: readonly string[]): { options: string; more: st
 }
 
 /**
- * Admit a resolved model id against a non-empty credential/provider catalog.
- * Empty catalog soft-degrades (probe may have failed). Passthrough skips the gate
- * for emergency alias gateways only.
+ * Admit a resolved model id against the account-configured model allowlist
+ * (settings_config_json / extractModelsFromSettings), NOT probed model_catalog_json (#656).
+ * Empty allowlist soft-degrades (ask operator to fill provider model id on account when sensible).
+ * Passthrough skips the configured-allowlist gate for emergency alias gateways only.
  */
 export function admitModelAgainstCatalog(input: {
   resolvedModel: string | null | undefined;
@@ -77,11 +78,11 @@ export function admitModelAgainstCatalog(input: {
 
   let message: string;
   if (!resolved) {
-    message = `角色未指定 model，且无法解析 CLI/配置默认模型；凭据模型目录非空，可选项：${options}${more}`;
+    message = `角色未指定 model，且无法解析 CLI/配置默认模型；账号已配置模型名单非空，可选项：${options}${more}。请在 Provider 账号填写 provider 模型 id`;
   } else if (source === "cli_default") {
-    message = `角色未指定 model，CLI 默认 ${resolved} 不在凭据模型目录，可选项：${options}${more}`;
+    message = `角色未指定 model，CLI 默认 ${resolved} 不在账号已配置模型名单，可选项：${options}${more}。请在账号 settings 填写该模型 id，或开启已配置名单应急直通`;
   } else {
-    message = `解析模型 ${resolved} 不在凭据模型目录（catalog SSOT；passthrough 已关闭），可选项：${options}${more}`;
+    message = `解析模型 ${resolved} 不在账号已配置的 provider 模型名单（选模 SSOT；应急直通已关闭），可选项：${options}${more}`;
   }
 
   return {
@@ -96,7 +97,7 @@ export function admitModelAgainstCatalog(input: {
       path: "model_ref",
       message,
       expected: {
-        kind: "catalog_model_id",
+        kind: "account_configured_model_id",
         catalog_size: catalog.length,
         sample: catalog.slice(0, 12),
         allow_model_catalog_passthrough: false,
@@ -104,12 +105,12 @@ export function admitModelAgainstCatalog(input: {
       observed_shape: {
         resolved_model: resolved || null,
         model_source: source,
-        in_catalog: false,
+        in_configured_allowlist: false,
         passthrough: false,
       },
       next_action: resolved
-        ? "select_catalog_model_id_or_enable_emergency_passthrough"
-        : "set_role_or_project_default_model_from_catalog",
+        ? "select_account_configured_model_id_or_enable_emergency_passthrough"
+        : "set_role_or_project_default_model_from_account_configured_ids",
     }),
   };
 }

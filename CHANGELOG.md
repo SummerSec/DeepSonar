@@ -1,6 +1,8 @@
 ## [Unreleased]
 
 ### 变更
+- 选模 SSOT 改为账号已填写的 provider 模型 id（#656）：Web `modelIds`/`rawModelCatalog` 不再合并探测目录；账号流选模列表与文案、角色直通说明、目录健康摘要改为「探测仅诊断」。Scheduler 准入与项目缺省模型校验改为对照 `settings_config_json` 已配置模型名单；空名单仍软降级，应急直通语义改为绕过已配置名单。
+
 - 上下文窗口超限可分类并一次压缩重试（#654）：`Prompt is too long` / `context_length_exceeded` / `maximum context length` / `context window` 稳定归类为 `context_window_exceeded`（不再落 `exception`）。Dispatcher 在沙箱已起来时按预算一次 `retryContextWindowExceeded`（payload 标记 `context_window_compact_retry`，下轮 executor 截断 prompt 中段）；预算耗尽则 fail-closed 并给出含 `estimated_tokens` / `context_window_tokens` 的可操作错误。runtime `classifyCliSessionResumeError` 可识别该原因但不盲续跑（`compaction_required` 跳过）。指标 `deepsonar_agent_context_window_exceeded_total` / `deepsonar_context_window_exceeded_retry_total` + `audit_logs`。同会话真正 compact+resume 仍为 follow-up hook。
 
 ## [0.4.7] - 2026-09-20

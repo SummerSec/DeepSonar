@@ -14,6 +14,7 @@ import {
   extractContextWindowTokens,
   extractProviderReasoning,
   extractBaseUrlFromSettingsClient,
+  extractModelsFromSettingsClient,
   extractSecretFromSettings,
   providerProtocolLabel,
   redactSecretText,
@@ -63,7 +64,6 @@ export function ProviderAccountFlow({
   const [testing, setTesting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [createDiscovering, setCreateDiscovering] = useState(false);
-  const [createModels, setCreateModels] = useState<string[]>([]);
   const [createName, setCreateName] = useState("");
   const [createProvider, setCreateProvider] = useState("");
   const [createSecret, setCreateSecret] = useState("");
@@ -98,6 +98,17 @@ export function ProviderAccountFlow({
   const editingCredential = credentials.find((credential) => credential.id === editingCredentialId) ?? null;
   const models = useMemo(() => modelIds(selectedCredential), [selectedCredential]);
   const currentCatalog = useMemo(() => rawModelCatalog(selectedCredential), [selectedCredential]);
+  const createModels = useMemo(() => {
+    try {
+      const raw = createSettingsJson.trim();
+      if (!raw) return [] as string[];
+      // Draft may be JSON object or YAML/text; extractor accepts parsed object or null.
+      const parsed = raw.startsWith("{") ? JSON.parse(raw) as Record<string, unknown> : null;
+      return extractModelsFromSettingsClient(parsed);
+    } catch {
+      return [] as string[];
+    }
+  }, [createSettingsJson]);
   const createCatalog = catalog.find((item) => item.provider === createProvider) ?? null;
 
   useEffect(() => {
@@ -270,8 +281,8 @@ export function ProviderAccountFlow({
           setCatalogError("");
           setNotice(
             catalogResult.models.length > 0
-              ? `账号已就绪：连接正常，模型目录 ${catalogResult.models.length} 个。`
-              : "账号连接正常。",
+              ? `账号已就绪：连接正常（探测到模型目录 ${catalogResult.models.length} 个，仅作诊断；选模请用账号已填写的模型 id）。`
+              : "账号连接正常。选模请在账号配置中填写 provider 模型 id。",
           );
         } catch (catalogErr) {
           setCatalogError(String(catalogErr));
@@ -324,8 +335,12 @@ export function ProviderAccountFlow({
         metadata: createCatalog?.supports_base_url && baseUrl ? { base_url: baseUrl } : {},
         settings_config: built.settings,
       });
-      setCreateModels(result.models);
-      setNotice(`模型目录已获取：${result.models.length} 个，可在配置中选择。`);
+      // Probe is diagnostic-only (#656); do not feed probed ids into modelOptions.
+      setNotice(
+        result.models.length > 0
+          ? `连接探测完成：上游目录 ${result.models.length} 个（仅诊断，不作为选模列表）。请在账号配置中填写要使用的 provider 模型 id。`
+          : "连接探测完成：上游目录为空（仅诊断）。请在账号配置中填写 provider 模型 id。",
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -467,8 +482,8 @@ export function ProviderAccountFlow({
       setCatalogError("");
       setNotice(
         result.models.length > 0
-          ? `模型目录已刷新：${result.models.length} 个。`
-          : "模型目录为空。",
+          ? `模型目录已刷新（诊断）：${result.models.length} 个。选模仍以账号已填写的模型 id 为准。`
+          : "模型目录为空（诊断）。选模仍以账号已填写的模型 id 为准。",
       );
       onChanged();
     } catch (e) {
@@ -755,7 +770,7 @@ export function ProviderAccountFlow({
             <span><Plugs size={13} /> {selectedCredential?.health?.error_category ?? "无错误类别"}</span>
             <span>末四位 ····{selectedCredential?.last4 ?? "----"}</span>
             <span>指纹 {selectedCredential?.fingerprint?.slice(0, 8) ?? "--------"}</span>
-            {currentCatalog.length > 0 && <span>目录 {currentCatalog.length} 个</span>}
+            {currentCatalog.length > 0 && <span>已配置模型 {currentCatalog.length} 个</span>}
           </div>
           {selectedCredential && <ModelCatalogHealthPanel credential={selectedCredential} />}
           {catalogError && <div className="provider-flow-catalog-error"><Warning size={13} /> {catalogError}</div>}
