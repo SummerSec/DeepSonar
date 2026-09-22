@@ -1,4 +1,4 @@
-import { Download, MagicWand } from "@phosphor-icons/react";
+import { MagicWand } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { formatJsonObject, formatJsonObjectText, validateJsonObjectText } from "./json-text";
 import { defaultCodexToml, formatTomlText, validateTomlText } from "./toml-text";
@@ -31,9 +31,6 @@ export function CcSwitchCodexFields({
   baseUrl,
   onBaseUrlChange,
   modelOptions = [],
-  onFetchModels,
-  fetchingModels = false,
-  canFetchModels = false,
   onNotice,
   onError,
   showConnectionFields = true,
@@ -48,9 +45,6 @@ export function CcSwitchCodexFields({
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
   modelOptions?: string[];
-  onFetchModels?: () => void;
-  fetchingModels?: boolean;
-  canFetchModels?: boolean;
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
   showConnectionFields?: boolean;
@@ -107,10 +101,6 @@ export function CcSwitchCodexFields({
       <div className="cc-switch-field">
         <div className="cc-switch-field-head">
           <label className="cc-switch-label" htmlFor="cc-switch-codex-model">模型名称</label>
-          {onFetchModels ? <button type="button" className="secondary-button !min-h-7 !px-2 !text-[10px]"
-            onClick={onFetchModels} disabled={fetchingModels || !canFetchModels}>
-            <Download size={13} />{fetchingModels ? "获取中…" : "获取模型列表"}
-          </button> : null}
         </div>
         <div className="cc-switch-model-controls">
           <input id="cc-switch-codex-model" value={model}

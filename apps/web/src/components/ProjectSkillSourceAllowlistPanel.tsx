@@ -64,7 +64,7 @@ export function ProjectSkillSourceAllowlistPanel({
           <span>Skill 源启用白名单</span>
           <HelpTip>
             平台只划定项目可启用的 Skill/模块源；Hub 运行时从已启用集合选型（#603）。
-            RoleConfig modules_json 仅为过渡缺省建议，候选必须 ⊆ 本白名单。平台 deepsonar-control 始终强制注入。Job 冻结 selector/digest；创建后 sync 不影响当次执行。首次打开会把历史 RoleConfig 已引用的源自动种子为启用，避免静默丢失。
+            RoleConfig modules_json 仅为过渡缺省建议，候选必须 ⊆ 本白名单。平台控制能力始终由 Scheduler 强制注入，不受本白名单影响。Job 冻结 selector/digest；创建后 sync 不影响当次执行。首次打开会把历史 RoleConfig 已引用的源自动种子为启用，避免静默丢失。
           </HelpTip>
         </div>
       </div>

@@ -129,7 +129,6 @@ test("Provider account flow is account CRUD only and does not own binding or eff
   for (const marker of [
     "createCredential",
     "testCredential",
-    "credentialModels",
     "authMe",
     "supports_base_url",
     "原始遗留值不会展示或回传",
@@ -179,7 +178,7 @@ test("Provider account flow is account CRUD only and does not own binding or eff
   assert.doesNotMatch(claudeFields, /获取模型列表|模型配置|Fable|Haiku|Sonnet|Opus/);
 });
 
-test("Provider create/edit persists a validated top-level context window budget", () => {
+test("Provider create/edit persists the top-level context window budget while RoleConfig delegates it", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
   const credentialSurface = `${editor}\n${settingsHelpers}`;
@@ -198,8 +197,7 @@ test("Provider create/edit persists a validated top-level context window budget"
   assert.match(flow, /setEditContextWindowTokens\(extractContextWindowTokens\(settings\)\)/);
   assert.match(flow, /contextWindowTokens: createContextWindowTokens/);
   assert.match(flow, /contextWindowTokens: editContextWindowTokens/);
-  assert.match(roleEditor, /context_window_tokens: contextWindowTokensFromForm\(form\.context_window_tokens\)/);
-  assert.match(roleEditor, /cfg\.context_window_tokens == null \? "" : String\(cfg\.context_window_tokens\)/);
+  assert.doesNotMatch(roleEditor, /context_window_tokens|contextWindowTokensFromForm/);
   assert.match(jobDetail, /snapStr\(snapshot, "context_window_tokens"\)/);
   assert.match(jobDetail, /CLI 客户端上下文预算/);
   assert.doesNotMatch(editor, /CLI 客户端上下文预算（tokens，可选）/);
@@ -398,11 +396,11 @@ test("项目角色镜像只能由项目镜像缺省管理", () => {
 test("Provider account flow user-facing copy is Chinese", () => {
   for (const chinese of [
     "测试连接",
-    "刷新模型目录",
     "保存配置并添加账号",
   ]) {
     assert.ok(flow.includes(chinese), `flow should show Chinese copy: ${chinese}`);
   }
+  assert.doesNotMatch(flow, /刷新模型目录/);
   assert.doesNotMatch(flow, /应用到所选角色配置/);
   assert.doesNotMatch(flow, /仅新 Job/);
   assert.doesNotMatch(flow, /刷新 pending/);

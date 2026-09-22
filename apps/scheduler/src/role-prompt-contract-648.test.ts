@@ -90,10 +90,22 @@ test("#648 schema seed documents verify terminals and report five sections", () 
   assert.match(schemaSql, /待人工确认/);
   assert.match(schemaSql, /未自动验证/);
   assert.match(schemaSql, /禁止访问 Scheduler 管理 API/);
-  assert.match(schemaSql, /仅允许通过 `deepsonar-control` 调用当前 Job 的 Control API/);
+  assert.match(schemaSql, /结果仅允许通过本 Job 的受治理平台工具提交/);
   assert.doesNotMatch(schemaSql, /行号等细节可以后补/);
   assert.match(schemaSql, /重置令牌可重复使用/);
   assert.match(schemaSql, /成功重置后令牌未失效/);
+});
+
+test("RoleConfig seed prompts do not embed the platform control Skill", () => {
+  const seedStart = schemaSql.indexOf("INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)");
+  const seedEnd = schemaSql.indexOf(") AS templates(name, instructions) ON templates.name = r.name", seedStart);
+  assert.ok(seedStart >= 0 && seedEnd > seedStart, "role config seed block missing");
+  const rolePromptSeed = schemaSql.slice(seedStart, seedEnd);
+  assert.doesNotMatch(rolePromptSeed, /deepsonar-control/);
+  assert.doesNotMatch(rolePromptSeed, /静态[^\n]*Skill/);
+  // The control Skill remains platform-owned in the runtime composition.
+  assert.match(executorSource, /injectPlatformControlSkill\(snapshot\.skills\)/);
+  assert.match(executorSource, /deepsonar-control Skill/);
 });
 
 test("#648 test toolchain policy does not conflate inconclusive with needs_human", () => {

@@ -1,23 +1,12 @@
 import { FloppyDisk } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type ProviderCredential } from "../api";
-import {
-  credentialCatalogHealthSummary,
-  modelCatalogHealthLabel,
-  modelDescriptorsForCredential,
-} from "../model-catalog-health";
 import { isCurrentAgentCli } from "@deepsonar/shared-types";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
 
 const AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
 type AgentCli = (typeof AGENT_CLIS)[number];
-/** @deprecated Prefer modelCatalogHealthLabel from model-catalog-health. */
-export function modelHealthLabel(status: string | null | undefined): string {
-  return modelCatalogHealthLabel(status);
-}
-
-export { modelDescriptorsForCredential };
 
 /**
  * Saved-account CLI compatibility is exclusive (#658): `credential.agent_cli`
@@ -34,16 +23,12 @@ export function credentialSupportsCli(credential: ProviderCredential, cli: Agent
   return compatibleAgentClisForCredential(credential).includes(cli);
 }
 
-export function credentialCatalogState(credential: ProviderCredential): string {
-  return credentialCatalogHealthSummary(credential);
-}
-
 export function credentialHealthMessage(credential: ProviderCredential): string {
   if (credential.provider_valid === false) return "Provider 映射待修复";
   if (credential.status !== "active") return `账号状态：${credential.status}`;
   if (credential.health?.status === "error") {
     const detail = credential.health.detail?.trim();
-    return `连接 / 目录失败${credential.health.error_category ? `（${credential.health.error_category}）` : ""}${detail ? `：${detail}` : ""}`;
+    return `连接失败${credential.health.error_category ? `（${credential.health.error_category}）` : ""}${detail ? `：${detail}` : ""}`;
   }
   if (credential.health?.status === "ok") return "最近一次连接测试成功";
   return "尚未完成连接测试";
@@ -66,17 +51,6 @@ function compatibleClis(credential: ProviderCredential): string {
   return clis.length > 0 ? clis.join(" / ") : "无已注册 CLI 兼容能力";
 }
 
-function modelSummary(credential: ProviderCredential): string {
-  const models = modelDescriptorsForCredential(credential);
-  if (models.length === 0) return "模型目录未探测";
-  const names = models.slice(0, 3).map((model) => model.display_name || model.model_id).join("、");
-  const passthrough = models.some((model) => model.health_status === "passthrough_allowed") ? " · 应急透传" : "";
-  const toolCount = models.filter((model) => model.supports_tools).length;
-  const streamCount = models.filter((model) => model.supports_streaming).length;
-  const structuredCount = models.filter((model) => model.supports_structured_output).length;
-  return `模型 ${names}${models.length > 3 ? ` 等 ${models.length} 个` : ""} · 能力 tools ${toolCount}/${models.length} · stream ${streamCount}/${models.length} · structured ${structuredCount}/${models.length}${passthrough}`;
-}
-
 export function ProjectCliProviderAllowlistPanel({
   projectId,
   credentials,
@@ -95,7 +69,7 @@ export function ProjectCliProviderAllowlistPanel({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [probeAction, setProbeAction] = useState<{ id: string; kind: "test" | "models" } | null>(null);
+  const [probeAction, setProbeAction] = useState<{ id: string; kind: "test" } | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -113,24 +87,15 @@ export function ProjectCliProviderAllowlistPanel({
     return llmCredentials.filter((credential) => clis.some((cli) => credentialSupportsCli(credential, cli)));
   }, [llmCredentials, clis]);
 
-  const probeCredential = async (credential: ProviderCredential, kind: "test" | "models") => {
-    setProbeAction({ id: credential.id, kind });
+  const probeCredential = async (credential: ProviderCredential) => {
+    setProbeAction({ id: credential.id, kind: "test" });
     setProbeError(null);
     try {
-      if (kind === "test") {
-        const result = await api.testCredential(credential.id);
-        if (!result.ok) {
-          setProbeError(`${credential.name || credential.provider}：连接测试失败${result.category ? `（${result.category}）` : ""}${result.detail ? `：${result.detail}` : ""}`);
-        } else {
-          showToast(`${credential.name || credential.provider}：连接测试成功`, "ok");
-        }
+      const result = await api.testCredential(credential.id);
+      if (!result.ok) {
+        setProbeError(`${credential.name || credential.provider}：连接测试失败${result.category ? `（${result.category}）` : ""}${result.detail ? `：${result.detail}` : ""}`);
       } else {
-        const result = await api.credentialModels(credential.id);
-        if (result.models.length === 0) {
-          setProbeError(`${credential.name || credential.provider}：上游模型目录为空（仅诊断）。选模请用账号已填写的模型 id；未填写时请先在 Provider 账号配置中补齐。`);
-        } else {
-          showToast(`${credential.name || credential.provider}：上游探测到 ${result.models.length} 个模型（仅诊断，非选模名单）`, "ok");
-        }
+        showToast(`${credential.name || credential.provider}：连接测试成功`, "ok");
       }
       onSaved();
     } catch (error) {
@@ -246,10 +211,9 @@ export function ProjectCliProviderAllowlistPanel({
                           </strong>
                           <small className="block font-mono text-[11px] leading-5 text-zinc-500">
                             #{credential.id.slice(0, 8)} · 兼容 {compatibleClis(credential)} · {concurrencySummary(credential)}
-                            {` · ${modelSummary(credential)}`}
                             {credential.status !== "active" ? ` · 状态 ${credential.status}` : ""}
                           </small>
-                          <small className="mt-0.5 block text-[11px] leading-5 text-zinc-500">{credentialCatalogState(credential)} · {credentialHealthMessage(credential)}</small>
+                          <small className="mt-0.5 block text-[11px] leading-5 text-zinc-500">{credentialHealthMessage(credential)}</small>
                         </span>
                       </label>
                       <div className="flex shrink-0 gap-1">
@@ -257,17 +221,9 @@ export function ProjectCliProviderAllowlistPanel({
                           type="button"
                           className="rounded border border-ink-700 px-2 py-1 text-[10px] text-zinc-400 hover:border-acc-400/40 hover:text-acc-300 disabled:opacity-50"
                           disabled={probeAction !== null || busy}
-                          onClick={() => void probeCredential(credential, "test")}
+                          onClick={() => void probeCredential(credential)}
                         >
                           {action === "test" ? "测试中…" : "测试"}
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded border border-ink-700 px-2 py-1 text-[10px] text-zinc-400 hover:border-acc-400/40 hover:text-acc-300 disabled:opacity-50"
-                          disabled={probeAction !== null || busy}
-                          onClick={() => void probeCredential(credential, "models")}
-                        >
-                          {action === "models" ? "刷新中…" : "目录"}
                         </button>
                       </div>
                     </div>

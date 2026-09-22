@@ -1875,48 +1875,6 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .provider-flow-model-meta { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: color-mix(in srgb, var(--accent) 70%, var(--muted)); font: 500 10px var(--font-mono); }
 .provider-flow-catalog-error { display: flex; align-items: flex-start; gap: 6px; margin-top: 9px; border-left: 2px solid #df8177; padding-left: 8px; color: color-mix(in srgb, #e77d72 48%, var(--text)); font: 500 10px var(--font-mono); line-height: 1.5; }
 
-/* Model catalog health_status (#614) — distinct from .provider-health-dot connection probe */
-.provider-flow-catalog-health {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  padding: 11px 12px;
-}
-.provider-flow-catalog-health-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  color: var(--muted);
-  font: 500 10px var(--font-mono);
-}
-.provider-flow-catalog-model-list {
-  display: grid;
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  max-height: 220px;
-  overflow: auto;
-}
-.provider-flow-catalog-model-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  padding: 4px 2px;
-}
-.provider-flow-catalog-model-id strong,
-.provider-flow-catalog-model-id small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.provider-flow-catalog-model-id strong { color: var(--text); font-size: 11px; font-weight: 560; }
-.provider-flow-catalog-model-id small { margin-top: 1px; color: var(--muted); font: 500 9px var(--font-mono); }
 .model-catalog-health-badge {
   display: inline-flex;
   width: fit-content;

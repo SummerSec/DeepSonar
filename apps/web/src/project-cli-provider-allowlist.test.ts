@@ -32,6 +32,14 @@ test("Provider 选项按已启用 CLI 过滤，并展示并发摘要", () => {
   assert.match(panel, /暂无兼容的 LLM Provider/);
 });
 
+test("Provider 白名单面板不展示上游模型目录诊断", () => {
+  assert.match(panel, /api\.testCredential/);
+  assert.match(panel, /连接失败/);
+  assert.doesNotMatch(panel, /model-catalog-health|modelHealthLabel|modelDescriptorsForCredential/);
+  assert.doesNotMatch(panel, /modelSummary|credentialCatalogState|credentialModels/);
+  assert.doesNotMatch(panel, /模型目录未探测|上游模型目录|上游探测到|连接 \/ 目录失败|刷新中|目录/);
+});
+
 
 test("compatibleAgentClisForCredential 以 credential.agent_cli 独占，不按 Provider 扩", () => {
   assert.match(panel, /isCurrentAgentCli\(credential\.agent_cli\) \? \[credential\.agent_cli\] : \[\]/);

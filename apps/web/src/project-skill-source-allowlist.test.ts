@@ -11,6 +11,8 @@ test("项目设置挂载 Skill 源白名单面板，并强调控制面/Hub 选�
   assert.match(panel, /Skill 源启用白名单/);
   assert.match(panel, /平台只划定项目可启用/);
   assert.match(panel, /Hub 运行时从已启用集合选型/);
+  assert.match(panel, /平台控制能力始终由 Scheduler 强制注入/);
+  assert.doesNotMatch(panel, /deepsonar-control/);
   assert.match(panel, /历史 RoleConfig/);
   assert.match(panel, /projectSkillSources/);
   assert.match(panel, /setProjectSkillSourceEnabled/);
