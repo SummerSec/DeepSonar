@@ -1,18 +1,22 @@
 ## [Unreleased]
 
-### 修复
-
-- Skill Source catalog 与仓库 HEAD 布局对齐 + resync 悬挂 selector 自愈（#664）：`scanSkillSourceRepo` 以 SKILL.md 相对目录为 module id（裸 `plugin/SKILL.md` → `plugin`，包装 `plugin/skills/name/SKILL.md` → `plugin/skills/name`，不臆造 `skills/`）；sync 成功后对 RoleConfig `modules_json` 做 catalog diff，可推断则迁移（如 `foo/skills/foo` → `foo`、唯一 basename），否则移除悬挂项并写 `skill_source.resync_selector_cleanup` / `skill_source.catalog_diff` 审计。种子改为裸路径 `vuln-definitions`。`auto_follow_head` 无 schema 钩子，延期。
-- 全局信任 Skill Source 默认注入 Worker（#660）：`RoleConfig.modules_json` 未设置或为空时，快照组装默认展开全部 `enabled=true && trust_status='trusted'` 源的 `source:*` 模块；非空列表仍按显式绑定（兼容已 PUT 的项目）。项目 Skill 白名单（#603）仅门禁显式绑定；Hub `list_available_skill_sources` 投影全局信任源清单；无历史绑定时白名单种子改为平台信任源。
+## [0.4.8] - 2026-09-22
 
 ### 变更
-- 升级 OpenSandbox 至统一发行线 1.1.0（#661）：`@alibaba-group/opensandbox` 与 `OPENSANDBOX_SDK_VERSION` 钉到 `1.1.0`；server/execd/egress 改为 Docker Hub `release-1.1.0` 多架构 index digest；compose / `deploy/opensandbox/*.toml` 与单测夹具默认同步。部署须重新 pull 新 digest 镜像后再起 overlay。
+- 升级 OpenSandbox 至统一发行线 1.1.0（#661 / #663）：`@alibaba-group/opensandbox` 与 `OPENSANDBOX_SDK_VERSION` 钉到 `1.1.0`；server/execd/egress 改为 Docker Hub `release-1.1.0` 多架构 index digest；compose / `deploy/opensandbox/*.toml` 与单测夹具默认同步。部署须重新 pull 新 digest 镜像后再起 overlay。
+- 账号选定的 Agent CLI 独占绑定（#658 / #659）：`credential.agent_cli` 为已保存账号的唯一兼容来源；Web 兼容列表 / 角色绑定与 Scheduler 准入、Hub Provider 目录、readiness 均不再按 Provider 协议矩阵扩到其他 CLI；缺省或非法 fail-closed。Provider 级 catalog 仍仅用于创建时协议选择过滤。
+- 选模 SSOT 改为账号已填写的 provider 模型 id（#656 / #657）：Web `modelIds`/`rawModelCatalog` 不再合并探测目录；账号流选模列表与文案、角色直通说明、目录健康摘要改为「探测仅诊断」。Scheduler 准入与项目缺省模型校验改为对照 `settings_config_json` 已配置模型名单；空名单仍软降级，应急直通语义改为绕过已配置名单。
+- 上下文窗口超限可分类并一次压缩重试（#654 / #655）：`Prompt is too long` / `context_length_exceeded` / `maximum context length` / `context window` 稳定归类为 `context_window_exceeded`（不再落 `exception`）。Dispatcher 在沙箱已起来时按预算一次 `retryContextWindowExceeded`（payload 标记 `context_window_compact_retry`，下轮 executor 截断 prompt 中段）；预算耗尽则 fail-closed 并给出含 `estimated_tokens` / `context_window_tokens` 的可操作错误。runtime `classifyCliSessionResumeError` 可识别该原因但不盲续跑（`compaction_required` 跳过）。指标 `deepsonar_agent_context_window_exceeded_total` / `deepsonar_context_window_exceeded_retry_total` + `audit_logs`。同会话真正 compact+resume 仍为 follow-up hook。
 
-- 账号选定的 Agent CLI 独占绑定（#658）：`credential.agent_cli` 为已保存账号的唯一兼容来源；Web 兼容列表 / 角色绑定与 Scheduler 准入、Hub Provider 目录、readiness 均不再按 Provider 协议矩阵扩到其他 CLI；缺省或非法 fail-closed。Provider 级 catalog 仍仅用于创建时协议选择过滤。
-
-- 选模 SSOT 改为账号已填写的 provider 模型 id（#656）：Web `modelIds`/`rawModelCatalog` 不再合并探测目录；账号流选模列表与文案、角色直通说明、目录健康摘要改为「探测仅诊断」。Scheduler 准入与项目缺省模型校验改为对照 `settings_config_json` 已配置模型名单；空名单仍软降级，应急直通语义改为绕过已配置名单。
-
-- 上下文窗口超限可分类并一次压缩重试（#654）：`Prompt is too long` / `context_length_exceeded` / `maximum context length` / `context window` 稳定归类为 `context_window_exceeded`（不再落 `exception`）。Dispatcher 在沙箱已起来时按预算一次 `retryContextWindowExceeded`（payload 标记 `context_window_compact_retry`，下轮 executor 截断 prompt 中段）；预算耗尽则 fail-closed 并给出含 `estimated_tokens` / `context_window_tokens` 的可操作错误。runtime `classifyCliSessionResumeError` 可识别该原因但不盲续跑（`compaction_required` 跳过）。指标 `deepsonar_agent_context_window_exceeded_total` / `deepsonar_context_window_exceeded_retry_total` + `audit_logs`。同会话真正 compact+resume 仍为 follow-up hook。
+### 修复
+- Skill Source catalog 与仓库 HEAD 布局对齐 + resync 悬挂 selector 自愈（#664 / #665）：`scanSkillSourceRepo` 以 SKILL.md 相对目录为 module id（裸 `plugin/SKILL.md` → `plugin`，包装 `plugin/skills/name/SKILL.md` → `plugin/skills/name`，不臆造 `skills/`）；sync 成功后对 RoleConfig `modules_json` 做 catalog diff，可推断则迁移（如 `foo/skills/foo` → `foo`、唯一 basename），否则移除悬挂项并写 `skill_source.resync_selector_cleanup` / `skill_source.catalog_diff` 审计。种子改为裸路径 `vuln-definitions`。`auto_follow_head` 无 schema 钩子，延期。
+- 全局信任 Skill Source 默认注入 Worker（#660 / #662）：`RoleConfig.modules_json` 未设置或为空时，快照组装默认展开全部 `enabled=true && trust_status='trusted'` 源的 `source:*` 模块；非空列表仍按显式绑定（兼容已 PUT 的项目）。项目 Skill 白名单（#603）仅门禁显式绑定；Hub `list_available_skill_sources` 投影全局信任源清单；无历史绑定时白名单种子改为平台信任源。
+- 去重 Worker 调用规则并收敛为单一短文案源（#650 / #651 / #653）：抽取 `PLATFORM_CONTROL_CALLING_RULES` 作为唯一短文案源，压缩 system prompt / guide / seed 中重叠「调用规则」；control-api 与 Roles API 冒烟对齐短指针契约。
+- 对齐角色提示词与证据契约 / 工具白名单（#648 / #649）：Verify 回弹仅 `review`/`test`；终态语义与 outcome 枚举对齐；verify/report 平台工具硬白名单；schema seed 覆盖内置全局 RoleConfig，避免漂移。
+- 项目调度配额独立保存入口（#644 / #647）：「项目调度配额」增加独立保存按钮与反馈；其他设置刷新不再覆盖未保存草稿；保存后刷新有效上限。
+- 项目设置去掉 CLI/Provider/模型软缺省控件（#645）：保留启用白名单与探测；保存时清空软缺省字段，选型交给 Hub / RoleConfig。
+- 镜像角色缺省改为三列网格（#643）：设置页「镜像启用与角色缺省」角色列表改为响应式 `lg:grid-cols-3` / `sm:grid-cols-2`。
+- Provider Base URL 编辑时不再剥尾斜杠（#641 / #642）：受控输入 onChange 不再 `trim` + 剥尾 `/`，逐字输入 `/v1` 可保留；保存阶段仍规范化尾斜杠。
 
 ## [0.4.7] - 2026-09-20
 
@@ -979,6 +983,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.8]: https://github.com/SummerSec/DeepSonar/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/SummerSec/DeepSonar/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/SummerSec/DeepSonar/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/SummerSec/DeepSonar/compare/v0.4.4...v0.4.5
