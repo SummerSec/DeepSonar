@@ -74,12 +74,13 @@ test("binding gate is independent of account CRUD and does not require a selecte
   }), "");
 });
 
-test("binding compatibility still fail-closes on CLI / Provider mismatch", () => {
+test("binding compatibility fail-closes on credential agent_cli exclusive pin", () => {
   assert.match(binding, /const canToggle = roleConfig\.can_bind && !incompatible/);
   assert.match(binding, /roleConfig\.role_kind/);
   assert.match(binding, /roleConfig\.role_builtin/);
   assert.doesNotMatch(binding, /resolveBindableRoleKind|isBuiltinBindableRole/);
-  assert.doesNotMatch(binding, /selectedCredential\.agent_cli && roleCli !== selectedCredential\.agent_cli/);
-  assert.match(binding, /targetCatalog\s*&&\s*!targetCatalog\.compatible_agent_cli\.includes\(roleCli\)/);
+  assert.match(binding, /selectedCredential\.agent_cli !== roleCli/);
+  assert.match(binding, /!isCurrentAgentCli\(selectedCredential\.agent_cli\)/);
+  assert.doesNotMatch(binding, /targetCatalog\.compatible_agent_cli\.includes/);
   assert.match(helpers, /配置文件 ·/);
 });

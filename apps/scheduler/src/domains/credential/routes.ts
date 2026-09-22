@@ -31,6 +31,7 @@ import {
   sanitizeCredentialMetadata,
   UNKNOWN_PROVIDER_ERROR,
   type CredentialHealthErrorCategory,
+  validateCredentialAgentCliExclusive,
   validateCredentialCompatibility,
   validateCredentialRuntimeMutation,
   type Encrypted,
@@ -610,6 +611,13 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         const compatibilityError = validateCredentialCompatibility(String(configRow.agent_cli), String(target.provider));
         if (compatibilityError) {
           return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${compatibilityError}`, body.credential_id, "choose_model", configId);
+        }
+        const exclusiveError = validateCredentialAgentCliExclusive(
+          String(configRow.agent_cli),
+          typeof target.agent_cli === "string" ? target.agent_cli : null,
+        );
+        if (exclusiveError) {
+          return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${exclusiveError}`, body.credential_id, "choose_model", configId);
         }
         let providerSnapshot: ProviderRuntimeSnapshotProjection;
         try {
@@ -1491,9 +1499,11 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       settingsConfig: cred.settings_config_json,
     });
     const compatibilityError = validateCredentialCompatibility(agentCli, String(cred.provider));
-    const profileCliWarning = cred.agent_cli && cred.agent_cli !== agentCli
-      ? `Credential 配置文件属于 ${cred.agent_cli}，角色当前为 ${agentCli}；兼容性以 Provider 矩阵为准`
-      : null;
+    const exclusiveError = validateCredentialAgentCliExclusive(
+      agentCli,
+      typeof cred.agent_cli === "string" ? cred.agent_cli : null,
+    );
+    const error = compatibilityError ?? exclusiveError;
     return {
       credential_id: id,
       ...providerProjection,
@@ -1501,9 +1511,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       model: requestedModel,
       upstream_model: model,
       model_source: query.model ? "role_override" : model ? "credential_settings" : "none",
-      compatible: !compatibilityError,
-      error: compatibilityError,
-      warning: profileCliWarning,
+      compatible: !error,
+      error,
+      warning: null,
     };
   });
 

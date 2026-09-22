@@ -305,6 +305,7 @@ export function toHubProviderCatalogEntry(
     name: string;
     provider: string;
     status: string;
+    agent_cli?: string | null;
     public_metadata_json?: unknown;
     model_catalog_json?: unknown;
     model_catalog_fetched_at?: unknown;
@@ -313,7 +314,9 @@ export function toHubProviderCatalogEntry(
   allowlist: ProjectAgentAllowlist,
 ): HubProviderCatalogEntry | null {
   if (allowlist.configured && !allowlist.enabled_credential_ids.includes(row.id)) return null;
-  const compatible = compatibleAgentClisForProvider(row.provider)
+  // #658: pin saved-credential compatibility to credential.agent_cli (not provider catalog).
+  const pinned = isCurrentAgentCli(row.agent_cli) ? [row.agent_cli] : [];
+  const compatible = pinned
     .filter((cli) => !allowlist.configured || allowlist.enabled_agent_clis.includes(cli));
   if (compatible.length === 0) return null;
   if (row.status !== "active") return null;

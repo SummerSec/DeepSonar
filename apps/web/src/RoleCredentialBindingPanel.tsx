@@ -68,7 +68,6 @@ export function RoleCredentialBindingPanel() {
     const ids = new Set(selectedRoles.map((roleConfig) => roleConfig.credential_id).filter((id): id is string => Boolean(id)));
     return credentials.filter((credential) => ids.has(credential.id));
   }, [credentials, selectedRoles]);
-  const targetCatalog = catalog.find((item) => item.provider === selectedCredential?.provider) ?? null;
   const gateReason = bindingGateReason(selectedCredential);
   const eligibleRoleConfigs = useMemo(
     () => filterEligibleRoleConfigs(roleConfigs, roleScopeFilter, selectedCredential?.project_id ?? null),
@@ -84,7 +83,8 @@ export function RoleCredentialBindingPanel() {
   );
   const incompatibleRoles = selectedRoles.filter((roleConfig) => {
     if (gateReason) return true;
-    if (!targetCatalog || !targetCatalog.compatible_agent_cli.includes(roleConfig.agent_cli)) return true;
+    // #658: saved credential.agent_cli is exclusive — not provider catalog expansion.
+    if (!isCurrentAgentCli(selectedCredential?.agent_cli) || selectedCredential.agent_cli !== roleConfig.agent_cli) return true;
     return false;
   });
   const unbindableSelectedRoles = selectedRoles.filter((roleConfig) => !roleConfig.can_bind);
@@ -324,8 +324,10 @@ export function RoleCredentialBindingPanel() {
                     const roleCli = asRoleCli(roleConfig.agent_cli);
                     const incompatible = Boolean(
                       selectedCredential
-                      && targetCatalog
-                      && !targetCatalog.compatible_agent_cli.includes(roleCli),
+                      && (
+                        !isCurrentAgentCli(selectedCredential.agent_cli)
+                        || selectedCredential.agent_cli !== roleCli
+                      ),
                     );
                     const boundCredential = credentials.find((credential) => credential.id === roleConfig.credential_id) ?? null;
                     const modelCredential = roleConfig.credential_id ? boundCredential : selectedCredential;

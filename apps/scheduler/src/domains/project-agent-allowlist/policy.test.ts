@@ -7,6 +7,7 @@ import {
   parseProjectAgentAllowlist,
   seedProjectAgentAllowlist,
   toHubAgentCliCatalog,
+  compatibleAgentClisForProvider,
   toHubProviderCatalogEntry,
 } from "./policy.js";
 
@@ -120,6 +121,7 @@ test("Hub catalog: CLI 与 Provider 条目含缺省标记与并发摘要", () =>
     name: "main",
     provider: "anthropic",
     status: "active",
+    agent_cli: "claude-code",
     public_metadata_json: { max_concurrent: 2, model_concurrency: { "claude-opus": 1 } },
     model_catalog_json: ["claude-opus"],
   }, allowlist);
@@ -127,15 +129,55 @@ test("Hub catalog: CLI 与 Provider 条目含缺省标记与并发摘要", () =>
   assert.equal(entry!.is_default, true);
   assert.equal(entry!.max_concurrent, 2);
   assert.deepEqual(entry!.model_concurrency, { "claude-opus": 1 });
-  assert.ok(entry!.compatible_agent_clis.includes("claude-code"));
+  assert.deepEqual(entry!.compatible_agent_clis, ["claude-code"]);
   assert.equal(entry!.models[0]?.model_id, "claude-opus");
+  // anthropic provider catalog still supports multiple CLIs, but saved pin stays singleton.
+  assert.deepEqual(
+    toHubProviderCatalogEntry({
+      id: cred,
+      name: "pi-only",
+      provider: "anthropic",
+      status: "active",
+      agent_cli: "pi",
+    }, allowlist)!.compatible_agent_clis,
+    ["pi"],
+  );
+  assert.equal(
+    toHubProviderCatalogEntry({
+      id: cred,
+      name: "missing-cli",
+      provider: "anthropic",
+      status: "active",
+    }, allowlist),
+    null,
+  );
   assert.equal(
     toHubProviderCatalogEntry({
       id: "22222222-2222-4222-8222-222222222222",
       name: "other",
       provider: "anthropic",
       status: "active",
+      agent_cli: "claude-code",
     }, allowlist),
     null,
   );
+});
+
+
+test("provider catalog keeps multi-CLI protocol capability without leaking onto credential pin", () => {
+  assert.deepEqual(compatibleAgentClisForProvider("anthropic"), ["claude-code", "pi", "dsh"]);
+  assert.ok(compatibleAgentClisForProvider("anthropic").includes("pi"));
+  const allowlist = parseProjectAgentAllowlist({
+    enabled_agent_clis: ["claude-code", "pi", "dsh"],
+    enabled_credential_ids: ["11111111-1111-4111-8111-111111111111"],
+  });
+  const pinned = toHubProviderCatalogEntry({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "pi-account",
+    provider: "anthropic",
+    status: "active",
+    agent_cli: "pi",
+  }, allowlist);
+  assert.deepEqual(pinned!.compatible_agent_clis, ["pi"]);
+  assert.ok(!pinned!.compatible_agent_clis.includes("claude-code"));
 });

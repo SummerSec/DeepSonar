@@ -63,6 +63,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         project_id: null,
         status: "active",
         public_metadata_json: {},
+        agent_cli: "claude-code",
       },
       {
         role_config_id: workerConfigId,
@@ -74,6 +75,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         project_id: projectId,
         status: "active",
         public_metadata_json: {},
+        agent_cli: "claude-code",
       },
     ],
     runtimeImages: [
@@ -132,6 +134,11 @@ test("DSH readiness notes the upstream system-message client fingerprint", () =>
     roles: baseInput().roles.map((role) => role.name === "hub_reason"
       ? { ...role, global_agent_cli: "dsh" }
       : role),
+    credentials: baseInput().credentials?.map((credential) => (
+      credential.role_config_id === hubConfigId
+        ? { ...credential, agent_cli: "dsh" }
+        : credential
+    )),
   }));
   assert.equal(result.ready, true);
   const note = result.checks.find((check) => check.code === "DSH_UPSTREAM_CLIENT_FINGERPRINT");
@@ -365,11 +372,12 @@ test("real preflight treats compatible credential CLI drift as attention, not fa
       settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
     })),
   }));
-  assert.equal(result.ready, true);
-  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_CLI_INCOMPATIBLE"), false);
-  const hint = result.checks.find((check) => check.code === "CREDENTIAL_CLI_HINT_DRIFT" && check.role?.name === "audit");
-  assert.ok(hint);
-  assert.equal(hint?.state, "attention");
+  assert.equal(result.ready, false);
+  const incompatible = result.checks.find((check) => check.code === "CREDENTIAL_CLI_INCOMPATIBLE" && check.role?.name === "audit");
+  assert.ok(incompatible);
+  assert.equal(incompatible?.state, "fail");
+  assert.match(incompatible?.message ?? "", /独占绑定|agent_cli=claude-code/);
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_CLI_HINT_DRIFT"), false);
 });
 
 test("real preflight fails closed for CLI/provider and untrusted image mismatches", () => {

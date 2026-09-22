@@ -322,8 +322,8 @@ test("gateway guard allows bare model when freeze lists Claude Code [1m] annotat
 
 test("Credential agent_cli binding note documents RoleConfig ownership", () => {
   assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /RoleConfig/);
-  assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /soft profile hint/i);
-  assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /must not rewrite Credential global/);
+  assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /exclusive Agent CLI pin/i);
+  assert.match(CREDENTIAL_AGENT_CLI_BINDING_NOTE, /must not rewrite Credential\.agent_cli/);
 });
 
 test("adapter credential validate hook checks required secret keys", () => {

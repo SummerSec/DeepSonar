@@ -11,7 +11,7 @@ import {
 import { config, managesHostDockerRuntime } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
-import { isProviderKnown, projectCredentialProvider, validateCredentialCompatibility } from "./credentials.js";
+import { isProviderKnown, projectCredentialProvider, validateCredentialAgentCliExclusive, validateCredentialCompatibility } from "./credentials.js";
 import { getAgentCliRuntimeAdapter, REQUIRED_RUNTIME_CAPABILITIES } from "@deepsonar/runtime-sandbox";
 import {
   classifyRuntimeImagePin,
@@ -667,13 +667,15 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
         const compatibility = validateCredentialCompatibility(role.agentCli ?? "", String(binding.provider));
         if (compatibility) {
           checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", compatibility, roleBindingFix(input.scope), { role: summary, credential: credentialRef }));
-        } else if (binding.agent_cli && binding.agent_cli !== role.agentCli) {
-          checks.push(attention(
-            "CREDENTIAL_CLI_HINT_DRIFT",
-            `${role.name} 的 Credential 配置文件属于 ${binding.agent_cli}，角色当前为 ${role.agentCli}；解析以角色配置为准。`,
-            roleBindingFix(input.scope),
-            { role: summary, credential: credentialRef },
-          ));
+        } else {
+          // #658: credential.agent_cli exclusive pin — drift / missing is fail-closed.
+          const exclusive = validateCredentialAgentCliExclusive(
+            role.agentCli ?? "",
+            typeof binding.agent_cli === "string" ? binding.agent_cli : null,
+          );
+          if (exclusive) {
+            checks.push(fail("CREDENTIAL_CLI_INCOMPATIBLE", exclusive, roleBindingFix(input.scope), { role: summary, credential: credentialRef }));
+          }
         }
       }
       if (binding.status !== "active") {

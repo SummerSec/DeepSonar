@@ -75,7 +75,7 @@ export async function listHubProviderCatalog(
 ): Promise<HubProviderCatalogEntry[]> {
   const { allowlist } = await ensureProjectAgentAllowlist(db, projectId, { persist: true });
   const rows = await db`
-    SELECT id, name, provider, status, public_metadata_json, model_catalog_json,
+    SELECT id, name, provider, status, agent_cli, public_metadata_json, model_catalog_json,
            model_catalog_fetched_at, health_status, project_id, kind
     FROM credentials
     WHERE kind = 'llm_provider'
@@ -86,6 +86,7 @@ export async function listHubProviderCatalog(
     name: string;
     provider: string;
     status: string;
+    agent_cli: string | null;
     public_metadata_json: unknown;
     model_catalog_json: unknown;
     model_catalog_fetched_at: unknown;

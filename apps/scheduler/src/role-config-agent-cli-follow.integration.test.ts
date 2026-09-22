@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set",
   }, () => {});
 } else {
-  test("RoleConfig save keeps credential agent_cli unchanged and rejects incompatible provider", async () => {
+  test("RoleConfig save enforces exclusive credential agent_cli and rejects incompatible provider", async () => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     adminUrl.search = "";
@@ -94,13 +94,13 @@ if (!testDatabaseUrl) {
         return app.inject(options as never) as unknown as Promise<InjectResponse>;
       };
 
-      const followed = await putRoleConfig({
+      // #658: pi role cannot bind claude-code-only credential (exclusive pin).
+      const exclusiveReject = await putRoleConfig({
         agent_cli: "pi",
         credentials: [{ credential_id: anthropicId, purpose: "llm" }],
       });
-      assert.equal(followed.statusCode, 200, followed.payload);
-      assert.equal(JSON.parse(followed.payload).agent_cli, "pi");
-      // #614: RoleConfig owns agent_cli binding; must not rewrite shared Credential.agent_cli.
+      assert.equal(exclusiveReject.statusCode, 400, exclusiveReject.payload);
+      assert.match(JSON.parse(exclusiveReject.payload).error, /独占绑定|agent_cli=claude-code/);
       const [synced] = await sql`SELECT agent_cli FROM credentials WHERE id = ${anthropicId}`;
       assert.equal(synced.agent_cli, "claude-code");
       const followAudits = await sql`
@@ -109,17 +109,27 @@ if (!testDatabaseUrl) {
         WHERE action = 'credential.agent_cli_follow' AND resource_id = ${anthropicId}`;
       assert.equal(followAudits.length, 0);
 
+      // Matching pin succeeds and still must not rewrite Credential.agent_cli.
+      const matched = await putRoleConfig({
+        agent_cli: "claude-code",
+        credentials: [{ credential_id: anthropicId, purpose: "llm" }],
+      });
+      assert.equal(matched.statusCode, 200, matched.payload);
+      assert.equal(JSON.parse(matched.payload).agent_cli, "claude-code");
+      const [syncedAfterMatch] = await sql`SELECT agent_cli FROM credentials WHERE id = ${anthropicId}`;
+      assert.equal(syncedAfterMatch.agent_cli, "claude-code");
+
       const rejected = await putRoleConfig({
         agent_cli: "claude-code",
         credentials: [{ credential_id: openaiId, purpose: "llm" }],
       });
       assert.equal(rejected.statusCode, 400, rejected.payload);
-      assert.match(JSON.parse(rejected.payload).error, /claude-code.*anthropic.*openai/);
+      assert.match(JSON.parse(rejected.payload).error, /claude-code.*anthropic.*openai|独占|缺失或非法/);
       const [unchanged] = await sql`SELECT agent_cli FROM credentials WHERE id = ${openaiId}`;
       assert.equal(unchanged.agent_cli, "codex");
       const [roleAfterReject] = await sql`
         SELECT agent_cli FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`;
-      assert.equal(roleAfterReject.agent_cli, "pi");
+      assert.equal(roleAfterReject.agent_cli, "claude-code");
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);

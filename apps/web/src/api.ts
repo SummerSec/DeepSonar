@@ -1229,7 +1229,7 @@ export interface ProviderCredential {
     compatible_agent_clis: string[];
     gateway: Record<string, unknown>;
   } | null;
-  /** CC Switch-style profile: which CLI this settingsConfig targets. */
+  /** Exclusive Agent CLI pin for this saved account (#658). */
   agent_cli?: "claude-code" | "pi" | "dsh" | "codex" | "open-code" | null;
   /** CLI settingsConfig projection. Secret values are returned as [已保存密钥]. */
   settings_config_json?: Record<string, unknown>;

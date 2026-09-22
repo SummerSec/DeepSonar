@@ -5,6 +5,7 @@
  * `unknown` via `provider-health-dot`): catalog rows use ModelCatalogHealthStatus
  * from shared-types (verified | stale | probe_failed | unsupported | passthrough_allowed).
  */
+import { isCurrentAgentCli } from "@deepsonar/shared-types";
 import type { ModelCapabilityDescriptor, ProviderCredential } from "./api";
 
 export const MODEL_CATALOG_HEALTH_LABEL: Record<string, string> = {
@@ -17,11 +18,6 @@ export const MODEL_CATALOG_HEALTH_LABEL: Record<string, string> = {
 };
 
 export type ModelCatalogHealthTone = "ok" | "warn" | "danger" | "muted" | "passthrough";
-
-const ADAPTER_CLIS: Record<string, Array<"claude-code" | "pi" | "dsh">> = {
-  anthropic: ["claude-code", "pi", "dsh"],
-  openai: ["pi", "dsh"],
-};
 
 /** Chinese label for ModelCatalogHealthStatus (and legacy aliases). */
 export function modelCatalogHealthLabel(status: string | null | undefined): string {
@@ -80,7 +76,7 @@ export function modelDescriptorsForCredential(
     output_modalities: ["text" as const],
     cost: null,
     rate_limits: null,
-    compatible_agent_clis: ADAPTER_CLIS[credential.provider] ?? [],
+    compatible_agent_clis: isCurrentAgentCli(credential.agent_cli) ? [credential.agent_cli] : [],
     health_status: "stale" as const,
     catalog_revision: credential.health?.model_catalog_fetched_at ?? "legacy",
   }));

@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { rejectNonCurrentAgentCli } from "@deepsonar/shared-types";
+import { isCurrentAgentCli, rejectNonCurrentAgentCli } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 
 /**
@@ -486,14 +486,24 @@ export type CredentialAgentCliFollow =
   | { action: "reject"; error: string };
 
 /**
- * RoleConfig 保存时：凭据 `agent_cli` 跟随最新角色配置（过渡行为）。
- * provider 兼容则同步，不兼容才拒绝。
- *
- * #614：Credential.agent_cli 仅为软提示，不是全局 Agent CLI 绑定。
- * Job 身份以 RoleConfig / Hub 提案为准；同一 Credential 可被不同 agent_cli
- * 的角色安全复用。停止从 RoleConfig 回写 Credential.agent_cli 的迁移见
- * CHANGELOG / deferred (#614)；本函数暂保留以兼容现有集成测试。
+ * #658：账号选定的 Agent CLI 独占绑定。
+ * Credential.agent_cli 必须是当前 CLI，且与角色 agent_cli 一致；缺省/非法 fail-closed。
+ * 不再「跟随」改写凭据 CLI，也不再按 Provider 矩阵放行跨 CLI 复用。
+ * `follow` 动作保留类型兼容，但本函数不再返回。
  */
+export function validateCredentialAgentCliExclusive(
+  roleAgentCli: string,
+  credentialAgentCli: string | null | undefined,
+): string | null {
+  if (!isCurrentAgentCli(credentialAgentCli)) {
+    return "Credential.agent_cli 缺失或非法：账号必须独占绑定到已选定的 Agent CLI（fail-closed）";
+  }
+  if (credentialAgentCli !== roleAgentCli) {
+    return `Credential.agent_cli=${credentialAgentCli} 独占绑定，不能用于角色 agent_cli=${roleAgentCli}`;
+  }
+  return null;
+}
+
 export function planCredentialAgentCliFollow(input: {
   roleAgentCli: string;
   credentialAgentCli: string | null | undefined;
@@ -501,12 +511,8 @@ export function planCredentialAgentCliFollow(input: {
 }): CredentialAgentCliFollow {
   const compatibilityError = validateCredentialCompatibility(input.roleAgentCli, input.provider);
   if (compatibilityError) return { action: "reject", error: compatibilityError };
-  const current = typeof input.credentialAgentCli === "string" && input.credentialAgentCli
-    ? input.credentialAgentCli
-    : null;
-  if (current && current !== input.roleAgentCli) {
-    return { action: "follow", from: current, to: input.roleAgentCli };
-  }
+  const exclusiveError = validateCredentialAgentCliExclusive(input.roleAgentCli, input.credentialAgentCli);
+  if (exclusiveError) return { action: "reject", error: exclusiveError };
   return { action: "keep" };
 }
 
@@ -541,10 +547,13 @@ export function validateCredentialRuntimeMutation(input: {
 }): string | null {
   if (!isProviderKnown(input.provider)) return UNKNOWN_PROVIDER_ERROR;
   for (const consumer of input.consumers) {
-    // Credential.agent_cli is a soft hint. A single Provider account may serve
-    // every CLI in the compatibility matrix; Job identity follows RoleConfig.
+    // #658: credential.agent_cli is an exclusive pin when present on the mutation.
     const compatibilityError = validateCredentialCompatibility(consumer.agentCli, input.provider);
     if (compatibilityError) return `${consumer.source} 不兼容：${compatibilityError}`;
+    if (input.credentialAgentCli !== undefined) {
+      const exclusiveError = validateCredentialAgentCliExclusive(consumer.agentCli, input.credentialAgentCli);
+      if (exclusiveError) return `${consumer.source} 不兼容：${exclusiveError}`;
+    }
     if (input.projectId && consumer.projectId !== input.projectId) {
       return `${consumer.source} 属于${consumer.projectId ? `项目 ${consumer.projectId}` : "全局配置"}，不能使用项目 ${input.projectId} 的 Credential`;
     }
@@ -564,7 +573,8 @@ export function validateCredentialRoleConfigBinding(input: CredentialRoleConfigB
     projectId: input.credentialProjectId,
     metadata: input.metadata,
     settingsConfig: input.settingsConfig,
-    credentialAgentCli: input.credentialAgentCli,
+    // Always present for LLM binds so exclusive pin is enforced (null → fail-closed).
+    credentialAgentCli: input.credentialAgentCli ?? null,
     consumers: [{
       source: input.source,
       agentCli: input.agentCli,

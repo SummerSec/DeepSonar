@@ -4,6 +4,7 @@ import {
   UNKNOWN_PROVIDER_ERROR,
   planCredentialAgentCliFollow,
   projectCredentialProviderError,
+  validateCredentialAgentCliExclusive,
   validateCredentialCompatibility,
   validateCredentialRoleConfigBinding,
   validateCredentialRuntimeMutation,
@@ -95,8 +96,8 @@ test("Credential 配置文件 CLI 变更不能破坏已有角色绑定", () => {
   }) ?? "", /RoleConfig role-1.*不兼容.*claude-code/);
 });
 
-test("同一凭据可服务 Provider 矩阵内的多个 CLI", () => {
-  assert.equal(validateCredentialRuntimeMutation({
+test("账号 agent_cli 独占：不可按 Provider 矩阵扩到其他 CLI", () => {
+  assert.match(validateCredentialRuntimeMutation({
     provider: "anthropic",
     projectId: null,
     metadata: {},
@@ -108,8 +109,8 @@ test("同一凭据可服务 Provider 矩阵内的多个 CLI", () => {
       model: null,
       projectId: null,
     }],
-  }), null);
-  assert.equal(validateCredentialRoleConfigBinding({
+  }) ?? "", /独占绑定|agent_cli=claude-code.*pi/);
+  assert.match(validateCredentialRoleConfigBinding({
     source: "RoleConfig imported-role",
     purpose: "llm",
     agentCli: "pi",
@@ -119,18 +120,41 @@ test("同一凭据可服务 Provider 矩阵内的多个 CLI", () => {
     provider: "anthropic",
     metadata: {},
     credentialAgentCli: "claude-code",
+  }) ?? "", /独占绑定|agent_cli=claude-code.*pi/);
+  assert.match(validateCredentialRoleConfigBinding({
+    source: "RoleConfig imported-role",
+    purpose: "llm",
+    agentCli: "claude-code",
+    model: null,
+    credentialProjectId: "project-1",
+    roleConfigProjectId: "project-1",
+    provider: "anthropic",
+    metadata: {},
+    credentialAgentCli: "pi",
+  }) ?? "", /独占绑定|agent_cli=pi.*claude-code/);
+  assert.equal(validateCredentialRoleConfigBinding({
+    source: "RoleConfig imported-role",
+    purpose: "llm",
+    agentCli: "pi",
+    model: null,
+    credentialProjectId: "project-1",
+    roleConfigProjectId: "project-1",
+    provider: "anthropic",
+    metadata: {},
+    credentialAgentCli: "pi",
   }), null);
+  assert.match(validateCredentialAgentCliExclusive("claude-code", null) ?? "", /缺失或非法/);
+  assert.match(validateCredentialAgentCliExclusive("pi", "codex") ?? "", /缺失或非法/);
 });
 
-test("兼容 provider 跟随最新角色 agent_cli", () => {
-  assert.deepEqual(
-    planCredentialAgentCliFollow({
-      roleAgentCli: "pi",
-      credentialAgentCli: "claude-code",
-      provider: "anthropic",
-    }),
-    { action: "follow", from: "claude-code", to: "pi" },
-  );
+test("兼容 provider 仍要求账号 agent_cli 与角色一致（不再跟随改写）", () => {
+  const mismatch = planCredentialAgentCliFollow({
+    roleAgentCli: "pi",
+    credentialAgentCli: "claude-code",
+    provider: "anthropic",
+  });
+  assert.equal(mismatch.action, "reject");
+  assert.match(mismatch.action === "reject" ? mismatch.error : "", /独占绑定|claude-code.*pi/);
   assert.deepEqual(
     planCredentialAgentCliFollow({
       roleAgentCli: "pi",
@@ -139,14 +163,13 @@ test("兼容 provider 跟随最新角色 agent_cli", () => {
     }),
     { action: "keep" },
   );
-  assert.deepEqual(
-    planCredentialAgentCliFollow({
-      roleAgentCli: "pi",
-      credentialAgentCli: null,
-      provider: "openai",
-    }),
-    { action: "keep" },
-  );
+  const missing = planCredentialAgentCliFollow({
+    roleAgentCli: "pi",
+    credentialAgentCli: null,
+    provider: "openai",
+  });
+  assert.equal(missing.action, "reject");
+  assert.match(missing.action === "reject" ? missing.error : "", /缺失或非法/);
 });
 
 test("不兼容 provider 仍拒绝跟随", () => {
@@ -169,6 +192,7 @@ test("RoleConfig 导入绑定复用项目作用域与 provider 校验", () => {
     roleConfigProjectId: "project-1",
     provider: "anthropic",
     metadata: { allowed_model_ids: ["claude-sonnet-4-5"] },
+    credentialAgentCli: "claude-code",
   };
   assert.equal(validateCredentialRoleConfigBinding(base), null);
   assert.equal(validateCredentialRoleConfigBinding({ ...base, model: "claude-opus-4-1" }), null);
