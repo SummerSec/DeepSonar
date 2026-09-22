@@ -139,10 +139,10 @@ test("ready preflight creates a task and keeps the selected network override", a
 });
 
 test("快捷创建新建项目不再附带镜像策略字段", async () => {
-  let createdInput: { name: string; description?: string; image_strategy?: string } | null = null;
+  const createdPayloads: Array<Record<string, unknown>> = [];
   const client: QuickStartApi = {
     createProject: async (input) => {
-      createdInput = input;
+      createdPayloads.push({ ...input });
       return project;
     },
     readiness: async () => readiness(true),
@@ -157,8 +157,9 @@ test("快捷创建新建项目不再附带镜像策略字段", async () => {
     networkOverride: "inherit",
   }, client);
   assert.equal(result.kind, "success");
-  assert.equal(createdInput?.name, "策略项目");
-  assert.equal(createdInput?.image_strategy, undefined);
+  assert.equal(createdPayloads.length, 1);
+  assert.equal(createdPayloads[0]?.name, "策略项目");
+  assert.equal(Object.prototype.hasOwnProperty.call(createdPayloads[0] ?? {}, "image_strategy"), false);
 });
 
 test("readiness failure exposes repair links and prevents task creation", async () => {
