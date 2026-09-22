@@ -201,8 +201,10 @@ export const CLI_SESSION_RESUME_MAX_ATTEMPTS = 3;
 export const CLI_SESSION_RESUME_BASE_DELAY_MS = 1_000;
 export const CLI_SESSION_RESUME_MAX_DELAY_MS = 4_000;
 
-export type CliSessionResumeReason = "http" | "timeout" | "network";
+export type CliSessionResumeReason = "http" | "timeout" | "network" | "context_window_exceeded";
 
+const CONTEXT_WINDOW_EXCEEDED_RE =
+  /prompt\s+is\s+too\s+long|context_length_exceeded|maximum\s+context\s+length|context\s+window/iu;
 const HTTP_PERMANENT_STATUS_RE = /\b(?:400\s+bad\s+request|401\s+unauthorized|403\s+forbidden)\b/iu;
 const HTTP_TRANSIENT_STATUS_RE = /\b(?:408\s+request\s+timeout|429\s+too\s+many\s+requests|500\s+internal\s+server\s+error|502\s+bad\s+gateway|503\s+service\s+unavailable|504\s+gateway\s+timeout)\b/iu;
 const HTTP_CONTEXT_STATUS_RE = (statuses: string): RegExp => new RegExp(
@@ -244,6 +246,11 @@ function runtimeErrorText(error: unknown, depth = 0): string {
 export function classifyCliSessionResumeError(error: unknown): CliSessionResumeReason | undefined {
   const text = runtimeErrorText(error);
   if (!text) return undefined;
+  // Context window exceeds are distinct from generic 400s so callers can compact
+  // before any same-session resume; do not treat them as transient http.
+  if (CONTEXT_WINDOW_EXCEEDED_RE.test(text)) {
+    return "context_window_exceeded";
+  }
   const status = error && typeof error === "object"
     ? (error as { status?: unknown; statusCode?: unknown }).status ??
       (error as { status?: unknown; statusCode?: unknown }).statusCode
@@ -1645,7 +1652,14 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       }
       if (!resumedExec && !semanticError && attemptOutcome.error) {
         const reason = classifyCliSessionResumeError(attemptOutcome.error);
-        if (reason) {
+        if (reason === "context_window_exceeded") {
+          const notice = "context_window_exceeded:compaction_required";
+          if (resumeSkipNotice !== notice) {
+            resumeSkipNotice = notice;
+            spec.onWarning?.({ code: "cli_session_resume_skipped", detail: notice });
+            spec.onEvent?.({ type: "run.retry_skipped", reason, cause: "compaction_required" });
+          }
+        } else if (reason) {
           const canResume = Boolean(sessionId && sessionResumeAttempts < CLI_SESSION_RESUME_MAX_ATTEMPTS);
           if (canResume) {
             sessionResumeAttempts++;

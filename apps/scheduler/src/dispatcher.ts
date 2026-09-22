@@ -71,6 +71,9 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
     return { reason: "device_not_available", message: `device_not_available: ${error.message}` };
   }
   const message = formatDispatcherFailureMessage(error);
+  if (isContextWindowExceededMessage(message)) {
+    return { reason: CONTEXT_WINDOW_EXCEEDED_REASON, message };
+  }
   if (isPiStreamTruncationMessage(message)) {
     return { reason: PI_STREAM_TRUNCATED_REASON, message };
   }
@@ -120,6 +123,11 @@ export function isRetryableProvisionFailure(error: unknown): boolean {
 export function isRetryablePiStreamTruncation(error: unknown): boolean {
   return classifyDispatcherFailure(error).reason === PI_STREAM_TRUNCATED_REASON;
 }
+
+/** Provider context window exceeded after provision; one-shot compact+requeue. */
+export function isRetryableContextWindowExceeded(error: unknown): boolean {
+  return classifyDispatcherFailure(error).reason === CONTEXT_WINDOW_EXCEEDED_REASON;
+}
 import { finalizeReportJob } from "./report.js";
 import { canvasFindingsConverged, collectEvidenceSnapshot, evaluateConfirmGate, resolveFindingSubjectRevision } from "./verify.js";
 import {
@@ -148,6 +156,16 @@ import {
   isPiStreamTruncationMessage,
   planAutomaticPiStreamTruncationRetry,
 } from "./pi-stream-truncation.js";
+import {
+  CONTEXT_WINDOW_COMPACT_RETRY_PAYLOAD_KEY,
+  CONTEXT_WINDOW_EXCEEDED_REASON,
+  buildContextWindowCompactRetryMarker,
+  countConsumedContextWindowRetries,
+  formatContextWindowExceededMessage,
+  isContextWindowExceededMessage,
+  planAutomaticContextWindowRetry,
+} from "./context-window-exceeded.js";
+import { recordSystemAudit } from "./audit.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -897,6 +915,41 @@ async function retryTruncatedExecutionJob(
   return Boolean(retried);
 }
 
+async function retryContextWindowExceededJob(
+  jobId: string,
+  attempt: Record<string, unknown>,
+  errorMessage: string,
+): Promise<boolean> {
+  const retried = await sql.begin(async (txRaw) => {
+    const tx = txRaw as unknown as typeof sql;
+    const [locator] = await tx<{ canvas_id: string | null }[]>`
+      SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+    await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
+    const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
+      SELECT status, outcome_json, state_json
+      FROM job_attempts
+      WHERE job_id = ${jobId} AND status <> 'active'`;
+    const plan = planAutomaticContextWindowRetry(countConsumedContextWindowRetries(previous));
+    if (!plan.retry) return false;
+    const marker = buildContextWindowCompactRetryMarker(errorMessage);
+    await tx`
+      UPDATE jobs
+      SET payload_json = COALESCE(payload_json, '{}'::jsonb) || ${tx.json({
+        [CONTEXT_WINDOW_COMPACT_RETRY_PAYLOAD_KEY]: marker,
+      } as never)}
+      WHERE id = ${jobId}`;
+    const txLifecycle = createSqlJobLifecycleApplication(tx);
+    return txLifecycle.retryContextWindowExceeded(
+      jobId,
+      errorMessage,
+      (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
+      (attempt.resource_labels_json ?? {}) as Record<string, string>,
+    );
+  });
+  if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'context_window_exceeded_retry')`;
+  return Boolean(retried);
+}
+
 async function runJob(jobId: string) {
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
@@ -1177,7 +1230,7 @@ async function runJob(jobId: string) {
       : details?.code === "event_rate_limited"
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
-    const msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
+    let msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
     if (provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
@@ -1195,6 +1248,26 @@ async function runJob(jobId: string) {
       });
       if (retried) {
         inc("deepsonar_pi_stream_truncation_retry_total");
+        return;
+      }
+    }
+    if (failureReason === CONTEXT_WINDOW_EXCEEDED_REASON) {
+      inc("deepsonar_agent_context_window_exceeded_total");
+    }
+    if (handle && attemptId && activeAttempt && isRetryableContextWindowExceeded(e)) {
+      const retried = await retryContextWindowExceededJob(jobId, activeAttempt, msg).catch((retryError) => {
+        console.error(`[dispatcher] context window exceeded retry scheduling failed for ${jobId}:`, retryError);
+        return false;
+      });
+      if (retried) {
+        console.error(`[dispatcher] context_window_exceeded compact-retry scheduled job=${jobId}`);
+        inc("deepsonar_context_window_exceeded_retry_total");
+        void recordSystemAudit({
+          action: "job.context_window_exceeded_retry",
+          resourceType: "job",
+          resourceId: jobId,
+          after: { reason: CONTEXT_WINDOW_EXCEEDED_REASON, retry_scheduled: true, error: msg.slice(0, 500) },
+        });
         return;
       }
     }
@@ -1224,6 +1297,52 @@ async function runJob(jobId: string) {
           }
         }
       }
+    }
+    if (failureReason === CONTEXT_WINDOW_EXCEEDED_REASON) {
+      const [snapRow] = await sql<{
+        project_id: string | null;
+        canvas_id: string | null;
+        agent_snapshot_json: unknown;
+        payload_json: unknown;
+      }[]>`
+        SELECT project_id, canvas_id, agent_snapshot_json, payload_json FROM jobs WHERE id = ${jobId}`;
+      const snapshot = snapRow?.agent_snapshot_json && typeof snapRow.agent_snapshot_json === "object"
+        ? snapRow.agent_snapshot_json as Record<string, unknown>
+        : {};
+      const contextWindowTokens = typeof snapshot.context_window_tokens === "number"
+        ? snapshot.context_window_tokens
+        : null;
+      const payload = snapRow?.payload_json && typeof snapRow.payload_json === "object"
+        ? snapRow.payload_json as Record<string, unknown>
+        : {};
+      const dispatched = typeof payload.dispatched_prompt === "string" ? payload.dispatched_prompt : "";
+      const estimatedPromptTokens = dispatched
+        ? Math.ceil(dispatched.length / 4)
+        : null;
+      msg = formatContextWindowExceededMessage({
+        errorMessage: msg,
+        contextWindowTokens,
+        estimatedPromptTokens,
+        compactRetryExhausted: true,
+      });
+      console.error(
+        `[dispatcher] context_window_exceeded terminal job=${jobId} context_window_tokens=${contextWindowTokens ?? "unknown"} estimated_tokens=${estimatedPromptTokens ?? "unknown"}`,
+      );
+      void recordSystemAudit({
+        action: "job.context_window_exceeded",
+        projectId: snapRow?.project_id ?? undefined,
+        resourceType: "job",
+        resourceId: jobId,
+        result: "error",
+        errorCode: CONTEXT_WINDOW_EXCEEDED_REASON,
+        after: {
+          reason: CONTEXT_WINDOW_EXCEEDED_REASON,
+          context_window_tokens: contextWindowTokens,
+          estimated_prompt_tokens: estimatedPromptTokens,
+          canvas_id: snapRow?.canvas_id ?? null,
+          error: msg.slice(0, 500),
+        },
+      });
     }
     inc("deepsonar_jobs_failed_total", { reason: failureReason });
     // Canvas-first：先锁画布再 fail Job / 写节点 / 推进 Hub，避免和 ingest 交叉成 40P01。

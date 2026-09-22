@@ -87,8 +87,10 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.equal(canTransition("provisioning", "pending"), false);
   assert.equal(canTransition("running", "pending"), false);
   assert.match(lifecycleSource, /retryTruncatedExecution/);
+  assert.match(lifecycleSource, /retryContextWindowExceeded/);
   assert.match(lifecycleSource, /status = 'running' AND started_at IS NOT NULL/);
   assert.match(lifecycleSource, /reason: "pi_stream_truncated"/);
+  assert.match(lifecycleSource, /reason: "context_window_exceeded"/);
   assert.match(lifecycleSource, /reconcileProvisioning/);
   assert.match(lifecycleSource, /WHERE\s+status\s+IN\s*\('claimed','provisioning'\)/);
   assert.match(lifecycleSource, /claimed_at\s*=\s*NULL/);
@@ -102,6 +104,9 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(dispatcherSource, /planAutomaticPiStreamTruncationRetry/);
   assert.match(dispatcherSource, /countConsumedPiStreamTruncationRetries/);
   assert.match(dispatcherSource, /retryTruncatedExecution/);
+  assert.match(dispatcherSource, /retryContextWindowExceeded/);
+  assert.match(dispatcherSource, /planAutomaticContextWindowRetry/);
+  assert.match(dispatcherSource, /countConsumedContextWindowRetries/);
   assert.match(dispatcherSource, /settleUnstartedProvisionEffect/);
   assert.match(dispatcherSource, /lateProvisionExternalUncertain/);
   assert.match(dispatcherSource, /markEffectUnknown/);

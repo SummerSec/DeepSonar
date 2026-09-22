@@ -26,6 +26,10 @@ import {
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import {
+  compactPromptForContextWindowRetry,
+  readContextWindowCompactRetryMarker,
+} from "./context-window-exceeded.js";
 import { runner } from "./runtime.js";
 import {
   assertJobCanPublishSharedAsset,
@@ -1041,6 +1045,20 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
     initialInput += `\n\n本 Job 已冻结 ${snapshot.shared_assets!.length} 个只读共享资产，预挂载到 ${SHARED_ASSETS_READONLY_ROOT}（Scheduler 从本地或 S3 兼容 BlobStore 注入，Agent 无下载工具/无对象存储凭据）。先 list_shared_assets，再按返回的 mount_path/read_path 用普通文件工具读取；可 cp 到 /workspace 普通目录使用，禁止修改共享目录，禁止从共享目录 publish。`;
   }
+  const compactRetry = readContextWindowCompactRetryMarker(payload);
+  let contextWindowCompactMeta: ReturnType<typeof compactPromptForContextWindowRetry> | null = null;
+  if (compactRetry) {
+    contextWindowCompactMeta = compactPromptForContextWindowRetry(
+      initialInput,
+      snapshot.context_window_tokens ?? null,
+    );
+    if (contextWindowCompactMeta.compacted) {
+      initialInput = contextWindowCompactMeta.prompt;
+      console.error(
+        `[real-agent] context_window compact-retry applied job=${jobId} tokens ${contextWindowCompactMeta.estimatedTokensBefore}->${contextWindowCompactMeta.estimatedTokensAfter} budget=${contextWindowCompactMeta.budgetTokens}`,
+      );
+    }
+  }
   const dispatchedPrompt = operatorVisibleDispatchPrompt(initialInput, graph?.yaml ?? null);
 
   const roleDescription = snapshot.role_description;
@@ -1232,6 +1250,17 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     shared_assets_revision: snapshot.shared_assets_revision ?? null,
     shared_asset_count: snapshot.shared_assets?.length ?? 0,
     context: runtimeContext,
+    ...(contextWindowCompactMeta
+      ? {
+          context_window_compact_retry: {
+            requested: true,
+            compacted: contextWindowCompactMeta.compacted,
+            estimated_tokens_before: contextWindowCompactMeta.estimatedTokensBefore,
+            estimated_tokens_after: contextWindowCompactMeta.estimatedTokensAfter,
+            budget_tokens: contextWindowCompactMeta.budgetTokens,
+          },
+        }
+      : {}),
     recorded_at: new Date().toISOString(),
   };
   await sql`
