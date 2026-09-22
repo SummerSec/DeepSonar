@@ -3,18 +3,20 @@ import test from "node:test";
 import Fastify from "fastify";
 import { projectJobQuotaPatchExceedsGlobal, registerSettingsRoutes } from "./routes.js";
 
-test("项目镜像策略 PATCH 的非法请求体返回 400", async () => {
+test("#674 项目镜像策略 PATCH 被拒绝", async () => {
   const app = Fastify({ logger: false });
   registerSettingsRoutes(app);
 
   const response = await app.inject({
     method: "PATCH",
-    url: "/projects/not-a-uuid/settings",
-    payload: { image_strategy: "任意镜像" },
+    url: "/projects/11111111-1111-4111-8111-111111111111/settings",
+    payload: { image_strategy: "inherit_global" },
   });
 
   assert.equal(response.statusCode, 400);
-  assert.match(response.json<{ error: string }>().error, /invalid project settings rules/);
+  const body = response.json<{ error: string; code?: string }>();
+  assert.match(body.error, /项目级镜像策略已移除/);
+  assert.equal(body.code, "project_image_policy_removed");
   await app.close();
 });
 

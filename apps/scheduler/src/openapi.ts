@@ -757,7 +757,6 @@ const OPS: Op[] = [
       properties: {
         name: { type: "string" },
         description: { type: "string" },
-        image_strategy: { type: "string", enum: ["inherit_global", "project_managed"], default: "inherit_global" },
       },
     },
   },
@@ -1712,16 +1711,10 @@ const OPS: Op[] = [
             enabled: { oneOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
           },
         },
-        image_strategy: { type: "string", enum: ["inherit_global", "project_managed"] },
         device_access_enabled: {
           type: "boolean",
           nullable: true,
           description: "真实设备接入（#495）项目级 opt-in；默认关，null 清除。未 opt-in 的项目无法为任务申请设备租约（409 device_not_authorized）。",
-        },
-        role_runtime_images: {
-          type: "object",
-          additionalProperties: { oneOf: [{ type: "string" }, { type: "null" }] },
-          description: "project_managed 策略下的角色镜像选择；null 表示系统基础环境",
         },
       },
     },
@@ -3205,7 +3198,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "dsh_task_mode", "model", "version",
             "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "credential_project_id", "credential_project_name", "scope", "can_bind",
-            "credential_provider_valid", "role_kind", "role_builtin", "image_strategy",
+            "credential_provider_valid", "role_kind", "role_builtin",
           ],
           properties: {
             id: { type: "string", format: "uuid" },
@@ -3232,7 +3225,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             credential_project_id: { type: "string", format: "uuid", nullable: true },
             credential_project_name: { type: "string", nullable: true },
             scope: { type: "string", enum: ["global", "project"] },
-            image_strategy: { type: "string", enum: ["inherit_global", "project_managed"], nullable: true },
+            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },
             can_bind: { type: "boolean" },
             credential_provider_valid: { type: "boolean", nullable: true },
           },

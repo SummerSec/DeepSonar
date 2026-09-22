@@ -112,7 +112,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
       { resource_id: credentialId, action: "credential.test", at: "2026-08-03T12:00:00.000Z", result: "ok", after_json: { ok: true } },
       { resource_id: credentialId, action: "credential.models_discover", at: "2026-08-03T12:00:00.000Z", result: "ok", after_json: { model_count: 1 } },
     ],
-    projectImagePolicy: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
+    projectImagePolicy: { image_strategy: "inherit_global", role_runtime_images: {} },
     ...overrides,
   };
 }
@@ -218,7 +218,8 @@ test("OpenSandbox server probe fails readiness when unreachable or unconfigured"
   assert.equal(JSON.stringify(unavailable).includes("OPEN_SANDBOX_API_KEY="), false);
 });
 
-test("readiness follows strategy and ignores legacy project image column", () => {
+test("readiness uses global RoleConfig image and ignores leftover project strategy/column", () => {
+  // #674: leftover inherit_global mapping + project RoleConfig image column must not override global.
   const inherited = evaluateReadiness(baseInput({
     projectImagePolicy: { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-chrome-audit" } },
     roles: baseInput().roles.map((role) => role.name === "audit"
@@ -233,15 +234,20 @@ test("readiness follows strategy and ignores legacy project image column", () =>
   assert.equal(inheritedAudit?.role?.runtime_image_key, "openharmony");
   assert.equal(inheritedAudit?.runtime_image?.image_key, "openharmony");
 
-  const managed = evaluateReadiness(baseInput({
+  // #674: leftover project_managed + role_runtime_images also ignored; still resolve to global.
+  const leftoverManaged = evaluateReadiness(baseInput({
     projectImagePolicy: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
     roles: baseInput().roles.map((role) => role.name === "audit"
       ? { ...role, project_runtime_image_key: "deepsonar-chrome-audit", global_runtime_image_key: "openharmony" }
       : role),
+    runtimeImages: [
+      ...(baseInput().runtimeImages ?? []).filter((image) => image.image_key === "deepsonar-base"),
+      { ...baseInput().runtimeImages![0], image_key: "openharmony", official: true, project_opt_in: false, project_enabled: null },
+    ],
   }));
-  const managedAudit = managed.checks.find((check) => check.role?.name === "audit" && check.runtime_image);
-  assert.equal(managedAudit?.role?.runtime_image_key, "deepsonar-audit");
-  assert.equal(managedAudit?.runtime_image?.image_key, "deepsonar-audit");
+  const managedAudit = leftoverManaged.checks.find((check) => check.role?.name === "audit" && check.runtime_image);
+  assert.equal(managedAudit?.role?.runtime_image_key, "openharmony");
+  assert.equal(managedAudit?.runtime_image?.image_key, "openharmony");
 });
 
 

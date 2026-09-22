@@ -2,7 +2,6 @@ import type {
   AuthMe,
   AuthStatus,
   Project,
-  ProjectImageStrategy,
 } from "./api";
 import type { ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@deepsonar/shared-types";
 
@@ -108,7 +107,7 @@ export interface QuickStartTaskPayload {
 }
 
 export interface QuickStartApi {
-  createProject: (input: { name: string; description?: string; image_strategy?: ProjectImageStrategy }) => Promise<Project>;
+  createProject: (input: { name: string; description?: string }) => Promise<Project>;
   readiness: (projectId: string, options?: { allow_egress?: boolean }) => Promise<ReadinessResponse>;
   createTask: (projectId: string, payload: QuickStartTaskPayload) => Promise<{ canvas_id: string; job: { id: string; status: string } }>;
 }
@@ -118,7 +117,6 @@ export interface QuickStartInput {
   goal: string;
   project: Project | null;
   newProject?: { name: string; description?: string } | null;
-  imageStrategy?: ProjectImageStrategy;
   networkOverride: NetworkOverride;
 }
 
@@ -257,7 +255,6 @@ export function quickStartTaskPayload(input: Pick<QuickStartInput, "title" | "go
 export interface CreateProjectSpaceInput {
   name: string;
   description?: string;
-  imageStrategy?: ProjectImageStrategy;
 }
 
 export type CreateProjectSpaceResult =
@@ -274,7 +271,6 @@ export async function createProjectSpace(
   const project = await client.createProject({
     name,
     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
-    image_strategy: input.imageStrategy ?? "inherit_global",
   });
   return { kind: "success", project };
 }
@@ -295,8 +291,7 @@ export async function runQuickStart(input: QuickStartInput, client: QuickStartAp
     project = await client.createProject({
       name: input.newProject.name.trim(),
       ...(input.newProject.description?.trim() ? { description: input.newProject.description.trim() } : {}),
-      image_strategy: input.imageStrategy ?? "inherit_global",
-    });
+      });
   }
   if (!project) return { kind: "invalid", message: "请选择一个项目，或创建一个新的项目空间。" };
 

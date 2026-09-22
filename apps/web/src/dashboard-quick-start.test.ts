@@ -91,16 +91,16 @@ test("creating a project is the cold-start path; quick-start rail is only explic
 test("empty project space creates a project without readiness or a task", async () => {
   const calls: string[] = [];
   const client: QuickStartApi = {
-    createProject: async (input) => { calls.push(`project:${input.name}:${input.image_strategy}`); return project; },
+    createProject: async (input) => { calls.push(`project:${input.name}`); return project; },
     readiness: async () => { calls.push("readiness"); return readiness(true); },
     createTask: async () => { calls.push("task"); return { canvas_id: "canvas", job: { id: "job", status: "pending" } }; },
   };
   const invalid = await createProjectSpace({ name: "  " }, client);
   assert.deepEqual(invalid, { kind: "invalid", message: "请填写项目名称。" });
   assert.deepEqual(calls, []);
-  const created = await createProjectSpace({ name: " 空项目 ", description: "边界", imageStrategy: "project_managed" }, client);
+  const created = await createProjectSpace({ name: " 空项目 ", description: "边界" }, client);
   assert.equal(created.kind, "success");
-  assert.deepEqual(calls, ["project:空项目:project_managed"]);
+  assert.deepEqual(calls, ["project:空项目"]);
 });
 
 test("empty quick-start input requires an inline project before any API call", async () => {
@@ -138,11 +138,11 @@ test("ready preflight creates a task and keeps the selected network override", a
   ]);
 });
 
-test("快捷创建把项目镜像缺省策略传给项目 API", async () => {
-  let createdInput: { name: string; description?: string; image_strategy?: string } | null = null;
+test("快捷创建新建项目不再附带镜像策略字段", async () => {
+  const createdPayloads: Array<Record<string, unknown>> = [];
   const client: QuickStartApi = {
     createProject: async (input) => {
-      createdInput = input;
+      createdPayloads.push({ ...input });
       return project;
     },
     readiness: async () => readiness(true),
@@ -151,14 +151,15 @@ test("快捷创建把项目镜像缺省策略传给项目 API", async () => {
 
   const result = await runQuickStart({
     title: "检查镜像策略",
-    goal: "确认项目使用项目托管镜像",
+    goal: "确认项目不再托管镜像缺省",
     project: null,
     newProject: { name: "策略项目" },
-    imageStrategy: "project_managed",
     networkOverride: "inherit",
   }, client);
   assert.equal(result.kind, "success");
-  assert.equal((createdInput as { image_strategy?: string } | null)?.image_strategy, "project_managed");
+  assert.equal(createdPayloads.length, 1);
+  assert.equal(createdPayloads[0]?.name, "策略项目");
+  assert.equal(Object.prototype.hasOwnProperty.call(createdPayloads[0] ?? {}, "image_strategy"), false);
 });
 
 test("readiness failure exposes repair links and prevents task creation", async () => {

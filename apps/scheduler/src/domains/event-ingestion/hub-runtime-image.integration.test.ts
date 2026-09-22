@@ -198,16 +198,16 @@ if (!testDatabaseUrl) {
         UPDATE project_runtime_images SET enabled = true
         WHERE project_id = ${projectId}
           AND runtime_image_id = (SELECT id FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz')`;
-      await sql`
-        UPDATE projects SET config_json = config_json || ${sql.json({ image_strategy: "project_managed" })}
-        WHERE id = ${projectId}`;
       // Composition model: Hub 可显式提案 agent_cli；项目软缺省优先于 RoleConfig。
       // 本用例直接提案 dsh，并写入白名单，验证 chrome-fuzz×dsh 在冻快照时收成 invalid_runtime_image。
-      // 给 model 以免冻快照在镜像/CLI 门之前就被「DSH Provider 配置 YAML 必填」拦住。
+      // #674: model/CLI 身份只认全局 RoleConfig；给全局 model 以免冻快照在镜像/CLI 门之前
+      // 就被「DSH Provider 配置 YAML 必填」拦住。
       await sql`
-        INSERT INTO role_configs (role_id, project_id, agent_cli, model, instructions_markdown)
-        SELECT id, ${projectId}, 'dsh', 'grok-4.6', 'fixture dsh review'
-        FROM agent_roles WHERE name = 'review'`;
+        UPDATE role_configs
+        SET agent_cli = 'dsh', model = 'grok-4.6',
+            instructions_markdown = COALESCE(instructions_markdown, 'fixture dsh review')
+        WHERE project_id IS NULL
+          AND role_id = (SELECT id FROM agent_roles WHERE name = 'review')`;
       await sql`
         UPDATE projects SET config_json = config_json || ${sql.json({
           enabled_agent_clis: ["claude-code", "pi", "dsh"],

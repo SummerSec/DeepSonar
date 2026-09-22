@@ -764,11 +764,12 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     if (input.executionMode === "fake") {
       checks.push(pass("RUNTIME_IMAGE_SKIPPED_FAKE", `${role.name} 在 fake 模式使用 NoopRunner；real 模式才会校验可信 runtime image。`, { role: summary, runtime_image: runtimeSummary }));
     } else if (!image) {
-      const inherited = Boolean(input.scope.projectId && input.projectImagePolicy?.image_strategy !== "project_managed");
+      // #674: 项目不再持有镜像策略；项目作用域一律按全局/平台镜像解释缺失原因。
+      const inherited = Boolean(input.scope.projectId);
       checks.push(fail(
         "RUNTIME_IMAGE_UNAVAILABLE",
         inherited
-          ? `${role.name} 继承全局 RoleConfig 的 runtime image ${imageKey}，该镜像不可用；如需项目镜像请切换 project_managed 并配置角色映射。`
+          ? `${role.name} 继承全局 RoleConfig 的 runtime image ${imageKey}，该镜像不可用；请在全局 RoleConfig 或平台目录选择可用镜像。`
           : `${role.name} 所需 runtime image ${imageKey} 不存在或未被 Scheduler 选中。`,
         runtimeImagesFix(input.scope),
         { role: summary, runtime_image: runtimeSummary },

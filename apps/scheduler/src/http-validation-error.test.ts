@@ -40,11 +40,11 @@ test("ZodError maps to 400 invalid_payload without regex or enum leaks", () => {
   const parsed = z.object({
     name: z.string().min(1),
     project_id: z.string().uuid(),
-    image_strategy: z.enum(["inherit_global", "project_managed"]),
+    mode: z.enum(["inherit_global", "project_managed"]),
   }).safeParse({
     name: 123,
     project_id: "not-a-uuid",
-    image_strategy: "bogus",
+    mode: "bogus",
   });
   assert.equal(parsed.success, false);
   const mapped = validationHttpError(parsed.error);
@@ -57,7 +57,7 @@ test("ZodError maps to 400 invalid_payload without regex or enum leaks", () => {
   assert.doesNotMatch(serialized, /inherit_global|project_managed/);
   assert.doesNotMatch(serialized, /not-a-uuid/);
   const issues = mapped.body.issues as Array<{ path: string; code: string }>;
-  assert.deepEqual(new Set(issues.map((issue) => issue.path)), new Set(["name", "project_id", "image_strategy"]));
+  assert.deepEqual(new Set(issues.map((issue) => issue.path)), new Set(["name", "project_id", "mode"]));
   assert.ok(issues.every((issue) => issue.code && !("message" in issue) && !("expected" in issue)));
 });
 
@@ -182,7 +182,6 @@ test("management API invalid bodies return 400 not 500", async () => {
       { method: "POST", url: "/projects", payload: {}, paths: ["name"] },
       { method: "POST", url: "/projects", payload: { name: "" }, paths: ["name"] },
       { method: "POST", url: "/projects", payload: { name: 123 }, paths: ["name"] },
-      { method: "POST", url: "/projects", payload: { name: "x", image_strategy: "bogus" }, paths: ["image_strategy"] },
       { method: "POST", url: "/jobs", payload: {}, paths: ["project_id", "type"] },
       { method: "POST", url: "/jobs", payload: { project_id: "x", type: "audit" }, paths: ["project_id"] },
       { method: "PATCH", url: `/jobs/${jobId}/priority`, payload: { priority: "high" }, paths: ["priority"] },

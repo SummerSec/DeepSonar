@@ -1024,8 +1024,6 @@ export interface ProjectSettings {
   effective_rules: EffectiveRules;
   finding_protocol: FindingProtocolConfig | null;
   effective_finding_protocol: EffectiveFindingProtocol;
-  image_strategy: ProjectImageStrategy;
-  role_runtime_images: Record<string, string | null>;
   /** 项目启用的 Agent CLI 白名单（组合积木）。 */
   enabled_agent_clis: Array<"claude-code" | "pi" | "dsh">;
   /** 项目启用的 Provider Credential 白名单。 */
@@ -1167,7 +1165,7 @@ export interface BindableRoleConfig {
   model: string | null;
   context_window_tokens: number | null;
   scope: "global" | "project";
-  /** 项目 RoleConfig 所属项目的镜像/模型继承策略；全局行为 null。 */
+  /** #674: 恒为 null；保留字段兼容旧客户端。 */
   image_strategy?: ProjectImageStrategy | null;
   /** null = 系统默认底座（deepsonar-base） */
   runtime_image_key: string | null;
@@ -2167,7 +2165,7 @@ export const api = {
     canvas_id: query.canvas_id,
   })}`),
   projects: () => get<Project[]>("/projects"),
-  createProject: (p: { name: string; description?: string; image_strategy?: ProjectImageStrategy }) =>
+  createProject: (p: { name: string; description?: string }) =>
     send<Project>("POST", "/projects", p),
   updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
     send<Project>("PATCH", `/projects/${id}`, p),
@@ -2526,8 +2524,6 @@ export const api = {
       rules?: Record<string, unknown>;
       roles?: { enabled: string[] | null };
       finding_protocol?: FindingProtocolConfig | null;
-      image_strategy?: ProjectImageStrategy;
-      role_runtime_images?: Record<string, string | null>;
       enabled_agent_clis?: Array<"claude-code" | "pi" | "dsh">;
       enabled_credential_ids?: string[];
       default_agent_cli?: "claude-code" | "pi" | "dsh" | null;

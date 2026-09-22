@@ -15,17 +15,8 @@ import {
 import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
-import {
-  requestRuntimeImagePreparation,
-  resolveRuntimeImageForJob,
-  RuntimeImagePreparationBusyError,
-  sanitizeRuntimeImageError,
-} from "../../runtime-images.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import {
-  parseProjectImagePolicy,
-  PROJECT_IMAGE_STRATEGIES,
-  runtimeImageKeyForProjectPolicy,
   scrubIgnoredProjectRoleConfigIdentity,
   scrubStoredProjectImagePolicy,
 } from "../role-runtime-snapshot/application.js";
@@ -196,7 +187,6 @@ const SettingsPatchBody = z.object({
   rules: ProjectRulesPatch.optional(),
   roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
-  image_strategy: z.enum(PROJECT_IMAGE_STRATEGIES).optional(),
   /** 真实设备接入（#495）项目级 opt-in；null = 清除（默认关）。 */
   device_access_enabled: z.boolean().nullable().optional(),
   /** 项目启用的 Agent CLI 白名单（组合积木）；Hub 只能从中提案。 */
@@ -213,10 +203,6 @@ const SettingsPatchBody = z.object({
   fallback_model_refs: z.array(z.string().trim().min(1).max(200).regex(/^\S+$/u)).max(16).optional(),
   /** Project opt-in for aliases outside the observed Provider catalog. */
   allow_model_catalog_passthrough: z.boolean().optional(),
-  role_runtime_images: z.record(
-    z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
-    z.string().trim().regex(/^[a-z][a-z0-9-]{1,62}$/).nullable(),
-  ).optional(),
 });
 
 async function validateProjectModelAllowlist(
@@ -283,61 +269,6 @@ const ReadinessQuery = z.object({
   allow_egress: z.enum(["true", "false"]).optional(),
   material_source: z.enum(["workspace_or_offline", "external_or_workspace", "declared", "unspecified"]).optional(),
 });
-
-async function validateProjectRuntimeImages(
-  projectId: string,
-  selections: Record<string, string | null>,
-): Promise<void> {
-  const roleNames = Object.keys(selections);
-  if (roleNames.length === 0) return;
-  const roles = await sql`SELECT name FROM agent_roles WHERE name = ANY(${roleNames})`;
-  const knownRoles = new Set(roles.map((role) => String(role.name)));
-  const unknownRole = roleNames.find((name) => !knownRoles.has(name));
-  if (unknownRole) throw new Error(`role_runtime_images 包含未注册角色: ${unknownRole}`);
-
-  for (const [roleName, imageKey] of Object.entries(selections)) {
-    if (imageKey === null) continue;
-    const [image] = await sql`
-      SELECT ri.id, ri.official, ri.project_opt_in, ri.enabled,
-             EXISTS (
-               SELECT 1 FROM runtime_image_versions v
-               WHERE v.runtime_image_id = ri.id AND v.trust_status = 'trusted'
-             ) AS has_trusted,
-             pri.enabled AS project_enabled
-      FROM runtime_images ri
-      LEFT JOIN project_runtime_images pri
-        ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
-      WHERE ri.image_key = ${imageKey}`;
-    if (!image || image.enabled !== true) throw new Error(`runtime_image_key 不存在或已禁用: ${imageKey}`);
-    const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official === true;
-    if (image.has_trusted !== true && !fakeOfficialCatalogImage) {
-      throw new Error(`runtime_image_key 没有可信版本: ${imageKey}`);
-    }
-    if (image.official !== true && image.project_enabled !== true) {
-      throw new Error(`第三方镜像必须先在目标项目显式启用: ${imageKey}`);
-    }
-    await resolveRuntimeImageForJob(sql, projectId, roleName, imageKey);
-  }
-}
-
-async function projectRuntimeImageRefs(projectId: string, cfg: Record<string, unknown>) {
-  if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return [];
-  const policy = parseProjectImagePolicy(cfg);
-  const roles = await sql`
-    SELECT r.name, rc.runtime_image_key
-    FROM agent_roles r
-    LEFT JOIN role_configs rc ON rc.role_id = r.id AND rc.project_id IS NULL
-    ORDER BY r.name`;
-  const refs = new Map<string, { image_key: string; image_ref: string }>();
-  for (const role of roles) {
-    const roleName = String(role.name);
-    const globalKey = typeof role.runtime_image_key === "string" ? role.runtime_image_key : null;
-    const configuredKey = runtimeImageKeyForProjectPolicy(policy, roleName, globalKey);
-    const snapshot = await resolveRuntimeImageForJob(sql, projectId, roleName, configuredKey);
-    refs.set(snapshot.image_ref, { image_key: snapshot.image_key, image_ref: snapshot.image_ref });
-  }
-  return [...refs.values()];
-}
 
 export function registerSettingsRoutes(app: FastifyInstance): void {
   // ---------- 全局设置（§8.1 所有配置落库：规则默认值 → global_settings 单例行） ----------
@@ -477,7 +408,9 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (!p) return reply.code(404).send({ error: "project not found" });
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
     const cfg = (p.config_json ?? {}) as Record<string, unknown>;
-    const imagePolicy = parseProjectImagePolicy(cfg);
+    if (scrubStoredProjectImagePolicy(cfg)) {
+      await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+    }
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
     );
@@ -499,8 +432,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
       effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
-      image_strategy: imagePolicy.image_strategy,
-      role_runtime_images: imagePolicy.role_runtime_images,
       device_access_enabled: cfg.device_access_enabled === true,
       ...projectAllowlistResponse(cfg),
       active_jobs: Number(activeRow?.count ?? 0),
@@ -510,6 +441,18 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
   app.patch("/projects/:id/settings", async (req, reply) => {
     const { id } = req.params as { id: string };
     let body: z.infer<typeof SettingsPatchBody>;
+    // #674: 拒绝遗留镜像策略字段（若客户端仍发送）——在 DB/校验之前返回，便于无库冒烟。
+    if (
+      req.body
+      && typeof req.body === "object"
+      && !Array.isArray(req.body)
+      && ("image_strategy" in (req.body as Record<string, unknown>) || "role_runtime_images" in (req.body as Record<string, unknown>))
+    ) {
+      return reply.code(400).send({
+        error: "项目级镜像策略已移除：Job 镜像只认平台目录与 Hub 提案（list_available_runtime_images）",
+        code: "project_image_policy_removed",
+      });
+    }
     try {
       body = SettingsPatchBody.parse(req.body);
     } catch (error) {
@@ -519,18 +462,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
     const beforeQuota = ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs) ?? null;
-    const currentImagePolicy = parseProjectImagePolicy(cfg);
-    const nextImageStrategy = body.image_strategy ?? currentImagePolicy.image_strategy;
-    if (body.role_runtime_images !== undefined && nextImageStrategy !== "project_managed") {
-      return reply.code(400).send({ error: "仅 project_managed 策略可设置 role_runtime_images" });
-    }
-    if (body.role_runtime_images !== undefined) {
-      try {
-        await validateProjectRuntimeImages(id, body.role_runtime_images);
-      } catch (error) {
-        return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid project runtime images" });
-      }
-    }
     if (body.rules) {
       const currentRules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
       const nextRules = { ...currentRules, ...body.rules };
@@ -562,16 +493,11 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       if (body.finding_protocol === null) delete cfg.finding_protocol;
       else cfg.finding_protocol = body.finding_protocol;
     }
-    if (body.image_strategy !== undefined) {
-      cfg.image_strategy = body.image_strategy;
-      if (body.image_strategy === "inherit_global") delete cfg.role_runtime_images;
-    }
     if (body.device_access_enabled !== undefined) {
       // 默认关：null 清除。设备租约的发放前置就是这里的 opt-in。
       if (body.device_access_enabled === null) delete cfg.device_access_enabled;
       else cfg.device_access_enabled = body.device_access_enabled;
     }
-    if (body.role_runtime_images !== undefined) cfg.role_runtime_images = body.role_runtime_images;
     if (
       body.enabled_agent_clis !== undefined
       || body.enabled_credential_ids !== undefined
@@ -606,33 +532,14 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
     );
     const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
-    const imagePolicy = parseProjectImagePolicy(cfg);
     let effectiveFindingProtocol;
     try {
       effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid finding protocol" });
     }
-    if (body.image_strategy !== undefined || body.role_runtime_images !== undefined) {
-      try {
-        const preparation = await requestRuntimeImagePreparation(
-          await projectRuntimeImageRefs(id, cfg),
-          `project_settings:${id}`,
-        );
-        if (!preparation.ready) {
-          return reply.code(202).send({ status: "preparing", saved: false, task: preparation.task });
-        }
-      } catch (error) {
-        return reply.code(error instanceof RuntimeImagePreparationBusyError ? 409 : 503).send({
-          error: sanitizeRuntimeImageError(error) || "runtime image preparation failed",
-          code: error instanceof RuntimeImagePreparationBusyError ? error.code : "runtime_image_prepare_failed",
-        });
-      }
-    }
     await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
-    if (imagePolicy.image_strategy === "inherit_global") {
-      await scrubIgnoredProjectRoleConfigIdentity(sql, id);
-    }
+    await scrubIgnoredProjectRoleConfigIdentity(sql, id);
     // Project rule changes can alter effective task behavior; wake dispatch so
     // pending jobs do not wait for the next unrelated enqueue event.
     await sql`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;
@@ -660,8 +567,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
       effective_finding_protocol: effectiveFindingProtocol,
-      image_strategy: imagePolicy.image_strategy,
-      role_runtime_images: imagePolicy.role_runtime_images,
       device_access_enabled: cfg.device_access_enabled === true,
       ...projectAllowlistResponse(cfg),
       active_jobs: Number(activeRow?.count ?? 0),
