@@ -68,10 +68,8 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO projects (id, name, config_json)
         VALUES (${projectId}, 'Job rerun integration', ${sql.json({
-          // This fixture hosts its own model/CLI on the leftover project RoleConfig.
-          // inherit_global would ignore those fields; project_managed keeps them
-          // as the governed identity so resume can still 409 on drift.
-          image_strategy: "project_managed",
+          // #674: project image/identity strategy removed; governed model/CLI
+          // live on the global RoleConfig below so resume can still 409 on drift.
         })})`;
       await sql`
         INSERT INTO canvases (id, project_id, title, target_json)
@@ -86,7 +84,7 @@ if (!testDatabaseUrl) {
         VALUES (${roleId}, ${roleName}, 'Rerun fixture', 'Issue 202 fixture', false, 'role', '#c084fc')`;
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
-        VALUES (${roleConfigId}, ${roleId}, ${projectId}, 'claude-code', 'model-a')`;
+        VALUES (${roleConfigId}, ${roleId}, NULL, 'claude-code', 'model-a')`;
 
       const currentSnapshot = async (targetCanvasId = canvasId) =>
         snapshotModule.freezeAgentSnapshotNetworkPolicy(
@@ -146,11 +144,11 @@ if (!testDatabaseUrl) {
       const post = (jobId: string, action: "resume" | "rerun-current") =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${action}` });
 
-      // Model, CLI, and Credential drift all reject old-snapshot resume. The
-      // project is project_managed so leftover RoleConfig.model/agent_cli are
-      // the governed identity (inherit_global would ignore them). After
-      // restoring the exact identity, the same Job is re-enqueued and
-      // Dispatcher creates Attempt 2 without replacing the frozen snapshot.
+      // Model, CLI, and Credential drift all reject old-snapshot resume.
+      // #674: governed identity comes from the global RoleConfig (project rows
+      // no longer supply model/CLI). After restoring the exact identity, the
+      // same Job is re-enqueued and Dispatcher creates Attempt 2 without
+      // replacing the frozen snapshot.
       const resumeJob = await insertJob({ status: "failed", sandboxId: "old-failed-sandbox" });
       const resumeJobId = String(resumeJob.id);
       const firstResumeAttempt = await attemptModule.createAttempt(
