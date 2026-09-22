@@ -185,7 +185,7 @@ if (!testDatabaseUrl) {
           id, name, kind, provider, project_id, ciphertext, nonce, auth_tag,
           fingerprint, last4, status, agent_cli, settings_config_json
         ) VALUES (
-          ${credentialId}, 'rerun credential', 'llm_provider', 'anthropic', ${projectId},
+          ${credentialId}, 'rerun credential', 'llm_provider', 'anthropic', NULL,
           ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
           ${credentialId.slice(0, 16)}, 'cret', 'active', 'claude-code', ${sql.json({})}
         )`;
