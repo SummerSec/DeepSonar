@@ -1039,6 +1039,8 @@ export interface ProjectSettings {
   active_jobs: number;
 }
 
+export type ProjectImageStrategy = "inherit_global" | "project_managed";
+
 /** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='hub' = 唯一决策中枢；kind='system' = 系统角色（verify/report 等） */
 export interface AgentRole {
   id: string;
@@ -1162,7 +1164,6 @@ export interface BindableRoleConfig {
   model: string | null;
   context_window_tokens: number | null;
   scope: "global" | "project";
-  /** #674: 恒为 null；保留字段兼容旧客户端。 */
   /** #674: 恒为 null；保留字段兼容旧客户端。 */
   image_strategy?: ProjectImageStrategy | null;
   /** null = 系统默认底座（deepsonar-base） */
