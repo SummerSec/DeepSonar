@@ -187,8 +187,8 @@ importers:
   packages/runtime-sandbox:
     dependencies:
       '@alibaba-group/opensandbox':
-        specifier: 0.1.11
-        version: 0.1.11
+        specifier: 1.1.0
+        version: 1.1.0
       '@deepsonar/runtime-manual-contract':
         specifier: workspace:*
         version: link:../runtime-manual-contract
@@ -224,8 +224,8 @@ importers:
 
 packages:
 
-  '@alibaba-group/opensandbox@0.1.11':
-    resolution: {integrity: sha512-xDJzs+5yYAPrje+z3GKUmXezpVq3kO/NyP8BM9JwzCbfuSr5vQyHJI3/Pu4FBGdb/xQnxMcWFlsKqC4/80OeiQ==}
+  '@alibaba-group/opensandbox@1.1.0':
+    resolution: {integrity: sha512-Q2d0l8UYajN72AHQxYAU8BCXQxhTyHOJF/5b06A53kAZTcsCmNcQnKaoxAATgH15SCSGFtxuje42DHzrjwYDYA==}
     engines: {node: '>=20'}
 
   '@aws-sdk/checksums@3.1000.26':
@@ -743,6 +743,10 @@ packages:
     engines: {node: ^22.20 || ^24.12 || >=25}
     cpu: [x64]
     os: [linux]
+
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
+    engines: {node: '>=8.0.0'}
 
   '@phosphor-icons/react@2.1.10':
     resolution: {integrity: sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA==}
@@ -1724,8 +1728,9 @@ packages:
 
 snapshots:
 
-  '@alibaba-group/opensandbox@0.1.11':
+  '@alibaba-group/opensandbox@1.1.0':
     dependencies:
+      '@opentelemetry/api': 1.9.1
       openapi-fetch: 0.14.1
       undici: 7.29.0
 
@@ -2219,6 +2224,8 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@opentelemetry/api@1.9.1': {}
 
   '@phosphor-icons/react@2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:

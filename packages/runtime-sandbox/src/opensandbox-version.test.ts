@@ -12,7 +12,7 @@ import {
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 
 test("OpenSandbox upgrades only accept pinned SDK and digest refs", () => {
-  assert.equal(assertOpenSandboxSdkVersion(OPENSANDBOX_SDK_VERSION), "0.1.11");
+  assert.equal(assertOpenSandboxSdkVersion(OPENSANDBOX_SDK_VERSION), "1.1.0");
   assert.throws(() => assertOpenSandboxSdkVersion("latest"), /OPENSANDBOX_SDK_UNPINNED/);
   assert.throws(() => assertOpenSandboxImmutableRef("opensandbox:latest", "server"), /OPENSANDBOX_PIN_UNPINNED/);
   assert.equal(
@@ -22,7 +22,7 @@ test("OpenSandbox upgrades only accept pinned SDK and digest refs", () => {
     ),
     "example.com/opensandbox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
-  const pin = readOpenSandboxPin({ sdk: "0.1.11" });
+  const pin = readOpenSandboxPin({ sdk: "1.1.0" });
   assert.equal(pin.schema, "deepsonar.opensandbox/v1");
   assert.equal(pin.serverImage, OPENSANDBOX_SERVER_IMAGE);
   assert.equal(pin.execdImage, OPENSANDBOX_EXECD_IMAGE);

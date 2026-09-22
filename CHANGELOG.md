@@ -5,6 +5,8 @@
 - 全局信任 Skill Source 默认注入 Worker（#660）：`RoleConfig.modules_json` 未设置或为空时，快照组装默认展开全部 `enabled=true && trust_status='trusted'` 源的 `source:*` 模块；非空列表仍按显式绑定（兼容已 PUT 的项目）。项目 Skill 白名单（#603）仅门禁显式绑定；Hub `list_available_skill_sources` 投影全局信任源清单；无历史绑定时白名单种子改为平台信任源。
 
 ### 变更
+- 升级 OpenSandbox 至统一发行线 1.1.0（#661）：`@alibaba-group/opensandbox` 与 `OPENSANDBOX_SDK_VERSION` 钉到 `1.1.0`；server/execd/egress 改为 Docker Hub `release-1.1.0` 多架构 index digest；compose / `deploy/opensandbox/*.toml` 与单测夹具默认同步。部署须重新 pull 新 digest 镜像后再起 overlay。
+
 - 账号选定的 Agent CLI 独占绑定（#658）：`credential.agent_cli` 为已保存账号的唯一兼容来源；Web 兼容列表 / 角色绑定与 Scheduler 准入、Hub Provider 目录、readiness 均不再按 Provider 协议矩阵扩到其他 CLI；缺省或非法 fail-closed。Provider 级 catalog 仍仅用于创建时协议选择过滤。
 
 - 选模 SSOT 改为账号已填写的 provider 模型 id（#656）：Web `modelIds`/`rawModelCatalog` 不再合并探测目录；账号流选模列表与文案、角色直通说明、目录健康摘要改为「探测仅诊断」。Scheduler 准入与项目缺省模型校验改为对照 `settings_config_json` 已配置模型名单；空名单仍软降级，应急直通语义改为绕过已配置名单。

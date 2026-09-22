@@ -1,5 +1,5 @@
 /**
- * execd PTY/pipe WebSocket client. Official JS SDK 0.1.11 has no helper yet
+ * execd PTY/pipe WebSocket client. Official JS SDK 1.1.0 still has no first-class PTY helper yet
  * (upstream #1078); this module is the DeepSonar-owned mapping to RuntimeProcess.
  */
 import type { OpenSandboxExecHandle } from "./opensandbox.js";

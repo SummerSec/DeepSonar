@@ -10,7 +10,7 @@
 # Do not invent overlay networking; sandbox exec/PTY stays on OPEN_SANDBOX_USE_SERVER_PROXY.
 services:
   opensandbox:
-    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778}
+    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:68ca0212a2749b2c73096ce2ec0264455c64442c45f81007db442f52bf84c9d1}
     container_name: ${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-worker-opensandbox}
     restart: unless-stopped
     extra_hosts:
