@@ -1,7 +1,15 @@
 ## [Unreleased]
 
+## [0.4.9] - 2026-09-23
+
+### 变更
+- 平台镜像目录成为运行时镜像的唯一准入来源，Hub 组合角色并由平台镜像直接下发 Job。
+- Hub Agent 可覆盖项目角色提示词，并创建临时角色或项目级角色。
+- 所有角色默认启用，由 Hub 中枢 Agent 决策是否启用以及派发哪个角色。
+
 ### 修复
-- 官方专项运行时镜像默认对项目开启（#667）：Hub `list_available_runtime_images`、Job 解析与 readiness 对官方镜像统一为 `project_enabled !== false`（无 `project_runtime_images` 行 = 可用）；第三方仍 fail-closed 须显式启用。`project_opt_in` 保留为 warmup 等元数据，不再作选图硬门。Web 项目镜像启停态与文案同步。
+- RoleConfig 提示词不再内置平台控制 Skill，业务 Skill 保持可插拔并通过受治理的 Job 操作拉取。
+- 更新 Roles API smoke 语义，校验角色默认启用与 Hub 派发决策。
 
 ## [0.4.8] - 2026-09-22
 
@@ -986,6 +994,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.9]: https://github.com/SummerSec/DeepSonar/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/SummerSec/DeepSonar/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/SummerSec/DeepSonar/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/SummerSec/DeepSonar/compare/v0.4.5...v0.4.6
