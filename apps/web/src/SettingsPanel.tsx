@@ -14,8 +14,6 @@ import {
   type EffectiveFindingProtocol,
   type RoleConfigInput,
   type RoleConfigView,
-  type ProjectImageStrategy,
-  type RuntimeImageSummary,
   type SkillSource,
   type SkillSourceDetail,
 } from "./api";
@@ -43,7 +41,6 @@ import { SharedAssetsPanel } from "./SharedAssetsPanel";
 import { SearchableSelect } from "./SearchableSelect";
 import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
-import { ProjectImagePolicySection } from "./components/ProjectImagePolicySection";
 import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
 import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
 import { inferToastKind, showToast } from "./toast";
@@ -111,12 +108,6 @@ export function SettingsPanel({
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
-  const [imageStrategy, setImageStrategy] = useState<ProjectImageStrategy>("inherit_global");
-  const [roleRuntimeImages, setRoleRuntimeImages] = useState<Record<string, string | null>>({});
-  const [runtimeImages, setRuntimeImages] = useState<RuntimeImageSummary[]>([]);
-  const [imagePolicyBusy, setImagePolicyBusy] = useState(false);
-  const [imagePolicySaved, setImagePolicySaved] = useState(false);
-  const [imagePolicyFailed, setImagePolicyFailed] = useState(false);
   const [rulesBusy, setRulesBusy] = useState(false);
   const [rulesSaved, setRulesSaved] = useState(false);
   const [rulesFailed, setRulesFailed] = useState(false);
@@ -154,7 +145,6 @@ export function SettingsPanel({
       // 项目模式：角色带启用态 + 角色配置来源（项目覆盖/全局缺省/未配置）
       api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
       api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error));
-      api.runtimeImages(projectId).then(setRuntimeImages).catch((error) => showAgentLoadError("运行时镜像", error));
       api
         .settings(projectId)
         .then((s) => {
@@ -162,8 +152,6 @@ export function SettingsPanel({
           setRules(s.effective_rules);
           setFindingProtocol(s.finding_protocol);
           setEffectiveFindingProtocol(s.effective_finding_protocol);
-          setImageStrategy(s.image_strategy ?? "inherit_global");
-          setRoleRuntimeImages(s.role_runtime_images ?? {});
         })
         .catch(() => {});
     } else if (globalSection === "agents" && canLoadTab("roles")) {
@@ -270,37 +258,6 @@ export function SettingsPanel({
     }
   };
 
-  const projectRuntimeImageChoices = useMemo(() => runtimeImages.filter((image) => {
-    if (!image.enabled || image.trust_status !== "trusted" || !image.digest || !image.resolved_ref) return false;
-    return image.official ? image.project_enabled !== false : image.project_enabled === true;
-  }), [runtimeImages]);
-
-  const saveImagePolicy = async () => {
-    if (!projectId) return;
-    setImagePolicyBusy(true);
-    setImagePolicySaved(false);
-    setImagePolicyFailed(false);
-    try {
-      const result = await api.patchSettings(projectId, {
-        image_strategy: imageStrategy,
-        ...(imageStrategy === "project_managed" ? { role_runtime_images: roleRuntimeImages } : {}),
-      });
-      if ("saved" in result && result.saved === false) {
-        setImagePolicyFailed(true);
-        flash(`正在后台准备 ${result.task.total} 个运行镜像；本次未保存，请在拉取完成后重试`);
-        return;
-      }
-      flash("镜像缺省已保存（下一 job 生效）");
-      setImagePolicySaved(true);
-      window.setTimeout(() => setImagePolicySaved(false), 2000);
-      reload();
-    } catch (e) {
-      setImagePolicyFailed(true);
-      flash(`保存失败：${e instanceof Error ? e.message : e}`);
-    } finally {
-      setImagePolicyBusy(false);
-    }
-  };
 
   // ---------- 角色（hub 可下发清单 + 运行配置） ----------
 
@@ -404,10 +361,6 @@ export function SettingsPanel({
   const globalConfigOf = (roleId: string): RoleConfigView | null =>
     globalConfigs.find((c) => c.role_id === roleId) ?? null;
   const projConfigOf = (roleId: string) => projConfigs.find((c) => c.role_id === roleId) ?? null;
-  const imagePolicyRoles = projConfigs.length > 0
-    ? projConfigs.map((entry) => ({ id: entry.role_id, name: entry.name, title: entry.title }))
-    : roles.map((role) => ({ id: role.id, name: role.name, title: role.title }));
-
   /** kind 只读徽标：Hub 品红 / 系统角色琥珀；普通角色不展示 */
   const kindBadge = (kind: string) =>
     kind === "hub" ? (
@@ -711,28 +664,21 @@ export function SettingsPanel({
                   setRules(saved.effective_rules);
                   setFindingProtocol(saved.finding_protocol);
                   setEffectiveFindingProtocol(saved.effective_finding_protocol);
-                  setImageStrategy(saved.image_strategy ?? "inherit_global");
-                  setRoleRuntimeImages(saved.role_runtime_images ?? {});
                 }}
               />
             )}
 
             {projectId && (
               <>
-                <ProjectImagePolicySection
-                  projectId={projectId}
-                  imageStrategy={imageStrategy}
-                  setImageStrategy={setImageStrategy}
-                  roleRuntimeImages={roleRuntimeImages}
-                  setRoleRuntimeImages={setRoleRuntimeImages}
-                  imagePolicyRoles={imagePolicyRoles}
-                  globalImageOf={(roleId) => globalConfigOf(roleId)?.runtime_image_key}
-                  projectRuntimeImageChoices={projectRuntimeImageChoices}
-                  imagePolicyBusy={imagePolicyBusy}
-                  imagePolicySaved={imagePolicySaved}
-                  imagePolicyFailed={imagePolicyFailed}
-                  onSave={saveImagePolicy}
-                />
+                <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+                  <div className="border-b border-white/[.055] px-4 py-3">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">运行镜像权威</div>
+                  </div>
+                  <div className="space-y-2 px-4 py-4 text-[13px] leading-6 text-zinc-400">
+                    <p>项目不再选择或绑定运行镜像。Job 缺省镜像跟随平台全局 RoleConfig；Hub 可通过 <code className="text-zinc-300">list_available_runtime_images</code> 从平台可信/就绪/CLI 兼容目录提案，创建时冻结不可变 digest。</p>
+                    <p>官方镜像默认可用（可在项目镜像页显式关闭）；第三方须先启用。启用边界仍在「镜像」页管理。</p>
+                  </div>
+                </section>
                 <ProjectCliProviderAllowlistPanel
                   projectId={projectId}
                   credentials={credentials}

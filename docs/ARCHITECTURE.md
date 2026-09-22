@@ -573,17 +573,17 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 | 层 | 位置 | 内容 |
 |----|------|------|
 | 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | RoleConfig 保存 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关与 Credential 引用。Credential 行是秘密资产；`role_credentials` 是绑定关系；绑定提交上的 `effect`（`new_jobs_only` / `refresh_pending`）才改 pending 快照，运行中/终态快照永不改写。Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结，运行时由固定提交的 `dsh-reasoning-settings` 修正 Subagent 继承；全局 RoleConfig 保存可信镜像绑定 |
-| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值，项目镜像策略独立决定 Job 镜像来源 |
+| 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值；Job 镜像只认平台目录与 Hub 提案 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含 CLI selector `model`、实际 `upstream_model`、Provider 配置文件与客户端上下文预算）；Executor 仅用 selector 启动 CLI，所有上游治理使用 `upstream_model ?? model`，不读取旧配置或为缺失快照降级 |
 
-项目镜像策略不改表：`projects.config_json.image_strategy` 缺省为
-`inherit_global`，该策略下每个 Job 角色的镜像只读取全局 RoleConfig 的
-`runtime_image_key`，并且 `model` / 默认 CLI 也只认全局 RoleConfig（再落到账号主模型）；
-遗留项目 RoleConfig 行上的 `model` / `agent_cli` 在解析时忽略。
-`project_managed` 则只读取 `role_runtime_images` 的角色映射，缺项或 `null`
-固定使用系统 `deepsonar-base`，并允许项目 RoleConfig 托管自己的 model / 默认 CLI。非空 key 在项目设置写入时必须命中已启用、可信且符合
-现有准入规则的 runtime image；最终解析的 immutable digest/ref 与工具清单仍只冻结在新 Job。
-Hub 经 `list_available_runtime_images` 提案并提交的 `runtime_image_key`（若存在）优先于上述角色缺省。
+项目级镜像策略已移除（#674）：`projects.config_json` 不再持有
+`image_strategy` / `role_runtime_images`；遗留字段在读取/写入时物理清扫。
+每个 Job 角色的缺省镜像只读取全局 RoleConfig 的 `runtime_image_key`，并且
+`model` / 默认 CLI 也只认全局 RoleConfig（再落到账号主模型）；遗留项目
+RoleConfig 行上的 `model` / `agent_cli` / `runtime_image_key` 在解析时忽略。
+Hub 经 `list_available_runtime_images` 从平台可信/就绪/CLI 兼容目录提案并提交的
+`runtime_image_key`（若存在）优先于角色缺省；最终解析的 immutable digest/ref
+与工具清单仍只冻结在新 Job。
 
 Finding 协议是同一配置层级中的独立规则：全局物理存于
 `global_settings.rules_json.finding_protocol`（API 只认顶层 `finding_protocol`，不进 `rules` 投影），项目存于

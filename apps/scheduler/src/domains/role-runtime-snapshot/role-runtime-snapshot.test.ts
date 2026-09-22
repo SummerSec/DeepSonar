@@ -45,7 +45,7 @@ function snapshotDb(input: {
   return Object.assign(query, { json: (value: unknown) => value });
 }
 
-test("scrubIgnoredProjectRoleConfigIdentity 只清空项目遗留镜像和 inherit_global model", async () => {
+test("#674 scrubIgnoredProjectRoleConfigIdentity 清空项目遗留镜像与 model", async () => {
   const seen: string[] = [];
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const sql = strings.join("?");
@@ -54,7 +54,7 @@ test("scrubIgnoredProjectRoleConfigIdentity 只清空项目遗留镜像和 inher
       assert.equal(values[0], "project-1");
       return [{ id: "cfg-image" }];
     }
-    if (sql.includes("SET model = NULL") && sql.includes("p.id = ?")) {
+    if (sql.includes("SET model = NULL") && sql.includes("project_id = ?") && !sql.includes("FROM projects")) {
       assert.equal(values[0], "project-1");
       return [{ id: "cfg-model" }];
     }
@@ -66,7 +66,7 @@ test("scrubIgnoredProjectRoleConfigIdentity 只清空项目遗留镜像和 inher
   assert.equal(persistableProjectRoleConfigModel(parseProjectImagePolicy({}), "kept"), null);
 });
 
-test("dirty image_strategy and inherit_global role_runtime_images are physically removed", () => {
+test("#674 image_strategy and role_runtime_images are physically removed", () => {
   const dirty = { image_strategy: "whatever", role_runtime_images: { audit: "deepsonar-audit" }, rules: { hubEnabled: true } };
   assert.equal(scrubStoredProjectImagePolicy(dirty), true);
   assert.deepEqual(dirty, { rules: { hubEnabled: true } });
@@ -74,12 +74,14 @@ test("dirty image_strategy and inherit_global role_runtime_images are physically
 
   const inherit = { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-audit" } };
   assert.equal(scrubStoredProjectImagePolicy(inherit), true);
-  assert.deepEqual(inherit, { image_strategy: "inherit_global" });
+  assert.deepEqual(inherit, {});
 
   const managed = { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } };
-  assert.equal(scrubStoredProjectImagePolicy(managed), false);
-  assert.deepEqual(managed.role_runtime_images, { audit: "deepsonar-audit" });
+  assert.equal(scrubStoredProjectImagePolicy(managed), true);
+  assert.deepEqual(managed, {});
+  assert.deepEqual(parseProjectImagePolicy(managed), { image_strategy: "inherit_global", role_runtime_images: {} });
 });
+
 
 test("Hub taskPromptOverride replaces business instructions only in the new snapshot", async () => {
   const globalCfg = {
@@ -195,9 +197,9 @@ test("凭据 agent_cli 与角色不一致时独占绑定 fail-closed", async () 
   await assert.rejects(
     () => resolveAgentSnapshotForJob(
       snapshotDb({
-        projectConfig: { image_strategy: "project_managed" },
-        projectCfg,
-        globalCfg: undefined,
+        projectConfig: {},
+        projectCfg: undefined,
+        globalCfg: projectCfg,
         credential,
       }),
       "project-1",
@@ -244,9 +246,9 @@ test("Pi snapshot freezes the CLI model id when RoleConfig stores a deepsonar/ p
   };
   const snapshot = await resolveAgentSnapshotForJob(
     snapshotDb({
-      projectConfig: { image_strategy: "project_managed" },
-      projectCfg,
-      globalCfg: undefined,
+      projectConfig: {},
+      projectCfg: undefined,
+      globalCfg: projectCfg,
       credential,
     }),
     "project-1",
@@ -288,9 +290,9 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
   };
   const snapshot = await resolveAgentSnapshotForJob(
     snapshotDb({
-      projectConfig: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
-      projectCfg,
-      globalCfg: undefined,
+      projectConfig: {},
+      projectCfg: undefined,
+      globalCfg: projectCfg,
       credential,
     }),
     "project-1",
@@ -300,25 +302,26 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
   assert.equal(snapshot.pi_extensions[0]?.id, "pi-web-access");
   assert.equal(snapshot.pi_extensions[0]?.workspace_path, ".pi/agent/extensions/pi-web-access.ts");
 
+  // pi-web-access 不兼容 base；显式 base 时应 fail-closed。
   await assert.rejects(
     () => resolveAgentSnapshotForJob(
       snapshotDb({
-        projectConfig: { image_strategy: "project_managed" },
-        projectCfg,
-        globalCfg: undefined,
+        projectConfig: {},
+        projectCfg: undefined,
+        globalCfg: { ...projectCfg, runtime_image_key: "deepsonar-base" },
         credential,
       }),
       "project-1",
       "audit",
     ),
-    (error: unknown) => error instanceof SnapshotUnresolvableError && /不兼容/.test(error.message),
+    (error: unknown) => error instanceof SnapshotUnresolvableError && /不兼容|扩展/.test(error.message),
   );
   await assert.rejects(
     () => resolveAgentSnapshotForJob(
       snapshotDb({
-        projectConfig: { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } },
-        projectCfg: { ...projectCfg, pi_extensions_json: ["not-registered"] },
-        globalCfg: undefined,
+        projectConfig: {},
+        projectCfg: undefined,
+        globalCfg: { ...projectCfg, pi_extensions_json: ["not-registered"] },
         credential,
       }),
       "project-1",
@@ -373,7 +376,7 @@ test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", 
   );
 });
 
-test("Hub runtime_image_key 提案压过项目策略缺省，省略时保持策略解析", async () => {
+test("Hub runtime_image_key 提案压过角色缺省，省略时跟随平台/全局 RoleConfig", async () => {
   const globalCfg = {
     id: "global-audit-cfg",
     project_id: null,
@@ -399,10 +402,9 @@ test("Hub runtime_image_key 提案压过项目策略缺省，省略时保持策�
     meta_json: {},
     public_metadata_json: {},
   };
-  // project_managed 缺项固定回退 deepsonar-base；Hub 提案必须能压过它。
-  const managedProject = { image_strategy: "project_managed", role_runtime_images: { audit: null } };
+  // #674: 无项目策略后缺省跟随全局；Hub 提案必须能压过它。
   const overridden = await resolveAgentSnapshotForJob(
-    snapshotDb({ projectConfig: managedProject, projectCfg: undefined, globalCfg, credential }),
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
     "project-1",
     "audit",
     { runtimeImageKey: "deepsonar-kali-minimal" },
@@ -411,19 +413,20 @@ test("Hub runtime_image_key 提案压过项目策略缺省，省略时保持策�
   assert.equal(overridden.runtime_image.image_key, "deepsonar-kali-minimal");
 
   const fallback = await resolveAgentSnapshotForJob(
-    snapshotDb({ projectConfig: managedProject, projectCfg: undefined, globalCfg, credential }),
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
     "project-1",
     "audit",
   );
-  assert.equal(fallback.runtime_image.image_key, "deepsonar-base");
+  // #674: 无项目策略时跟随平台/全局解析（audit 官方缺省为 deepsonar-audit）。
+  assert.equal(fallback.runtime_image.image_key, "deepsonar-audit");
 
   const nullOverride = await resolveAgentSnapshotForJob(
-    snapshotDb({ projectConfig: managedProject, projectCfg: undefined, globalCfg, credential }),
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
     "project-1",
     "audit",
     { runtimeImageKey: null },
   );
-  assert.equal(nullOverride.runtime_image.image_key, "deepsonar-base");
+  assert.equal(nullOverride.runtime_image.image_key, "deepsonar-audit");
 });
 
 test("dsh cannot freeze a Hub chrome-fuzz override", async () => {

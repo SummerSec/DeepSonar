@@ -115,7 +115,7 @@ def main() -> None:
     )
     assert len(filtered) == 1 and filtered[0]["id"] == image_id
 
-    # 项目镜像绑定必须经过项目镜像策略；隔离中的第三方镜像即使通过新接口也不能使用。
+    # #674: 项目级镜像策略已移除；任何 image_strategy / role_runtime_images 写入均 400。
     req(
         "PATCH",
         f"/projects/{project_id}/settings",
@@ -181,38 +181,27 @@ def main() -> None:
     assert verify_job["agent_snapshot_json"]["runtime_image_key"] is None, verify_job["agent_snapshot_json"]
     assert_frozen_runtime(verify_snapshot, "deepsonar-base")
 
-    # Verify 全局仍使用 Base，但项目可通过镜像策略显式选择与 Test 相同的可信动态运行时。
-    # 覆盖只应反映在本项目新 Job 中，不能修改全局 RoleConfig。
-    req(
+    # #674: 项目不能再通过 settings 绑定角色镜像；Verify 继续跟随全局 RoleConfig（Base）。
+    removed = req(
         "PATCH",
         f"/projects/{project_id}/settings",
         {
             "image_strategy": "project_managed",
             "role_runtime_images": {"verify": "deepsonar-kali-minimal"},
         },
-        200,
+        400,
     )
+    assert removed.get("code") == "project_image_policy_removed", removed
     project_settings = req("GET", f"/projects/{project_id}/settings")
-    assert project_settings["image_strategy"] == "project_managed", project_settings
-    assert project_settings["role_runtime_images"] == {"verify": "deepsonar-kali-minimal"}, project_settings
+    assert "image_strategy" not in project_settings, project_settings
+    assert "role_runtime_images" not in project_settings, project_settings
     global_verify = next(item for item in req("GET", "/role-configs/global") if item["role_name"] == "verify")
     assert global_verify["runtime_image_key"] is None, global_verify
-    dynamic_verify_job = req(
-        "POST",
-        "/jobs",
-        {"project_id": project_id, "type": "verify", "title": "explicit dynamic verify runtime smoke"},
-        201,
-    )
-    dynamic_verify_snapshot = dynamic_verify_job["agent_snapshot_json"]["runtime_image"]
-    assert dynamic_verify_job["agent_snapshot_json"]["runtime_image_key"] == "deepsonar-kali-minimal", dynamic_verify_job["agent_snapshot_json"]
-    assert_frozen_runtime(dynamic_verify_snapshot, "deepsonar-kali-minimal")
-    assert "Runtime test toolchain" in (dynamic_verify_job["agent_snapshot_json"].get("instructions_markdown") or "")
-    req("PATCH", f"/projects/{project_id}/settings", {"image_strategy": "inherit_global"}, 200)
 
     usage = req("GET", f"/runtime-image-versions/{version_id}/usage")
     assert usage == {"version_id": version_id, "projects": [], "jobs": [], "findings": []}
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "rejected", "reason": "CI cleanup"})
-    for created_job in (job, test_job, verify_job, dynamic_verify_job):
+    for created_job in (job, test_job, verify_job):
         for attempt in range(3):
             current = req("GET", f"/jobs/{created_job['id']}")
             if current["job"]["status"] not in {"pending", "claimed", "provisioning", "running"}:

@@ -551,7 +551,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       role_builtin: Boolean(row.role_builtin),
       role_ui_color: typeof row.role_ui_color === "string" ? row.role_ui_color : null,
       scope: row.project_id ? "project" : "global",
-      image_strategy: row.project_id ? parseProjectImagePolicy(projectConfigJson).image_strategy : null,
+      image_strategy: null,
       can_bind: !projectScope || String(row.project_id ?? "") === projectScope,
       credential_provider: row.credential_provider
         ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider

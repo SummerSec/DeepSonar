@@ -1,7 +1,7 @@
 import { ArrowRight, Folder, LockKey, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type Project, type ProjectImageStrategy } from "../api";
+import { api, type Project } from "../api";
 import { useAuth } from "../auth";
 import {
   createProjectSpace,
@@ -24,7 +24,6 @@ export function NewProjectForm({ onProjectCreated, onCancel, canCancel = false }
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [imageStrategy, setImageStrategy] = useState<ProjectImageStrategy>("inherit_global");
   const [busy, setBusy] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [technicalError, setTechnicalError] = useState<string | null>(null);
@@ -50,7 +49,7 @@ export function NewProjectForm({ onProjectCreated, onCancel, canCancel = false }
     setPermissionDenied(false);
     try {
       const result = await createProjectSpace(
-        { name, description, imageStrategy },
+        { name, description },
         { createProject: api.createProject },
       );
       if (result.kind === "invalid") {
@@ -78,7 +77,7 @@ export function NewProjectForm({ onProjectCreated, onCancel, canCancel = false }
           <div>
             <div className="eyebrow"><span style={{ background: "var(--accent)" }} />PROJECT SPACE</div>
             <h2 id={`new-project-title-${instanceId}`}>创建一个项目空间</h2>
-            <p>项目只定义长期边界：镜像缺省、角色、凭据与证据。创建后不会铸造画布或派发 Hub，第一项任务可以稍后再下。</p>
+            <p>项目只定义长期边界：角色、凭据、启用镜像与证据。创建后不会铸造画布或派发 Hub，第一项任务可以稍后再下。</p>
           </div>
           <div className="intent-launch-signal" aria-hidden="true"><Folder size={22} weight="light" /><span>NO TASK YET</span></div>
         </div>
@@ -129,17 +128,6 @@ export function NewProjectForm({ onProjectCreated, onCancel, canCancel = false }
               </div>
             </div>
 
-            <fieldset className="intent-launch-project-policy">
-              <legend>镜像启用与角色缺省</legend>
-              <label className={imageStrategy === "inherit_global" ? "is-selected" : ""}>
-                <input type="radio" name={`new-project-image-strategy-${instanceId}`} value="inherit_global" checked={imageStrategy === "inherit_global"} onChange={() => setImageStrategy("inherit_global")} />
-                <span><strong>继承全局</strong><small>缺省跟随各角色全局 RoleConfig 镜像。</small></span>
-              </label>
-              <label className={imageStrategy === "project_managed" ? "is-selected" : ""}>
-                <input type="radio" name={`new-project-image-strategy-${instanceId}`} value="project_managed" checked={imageStrategy === "project_managed"} onChange={() => setImageStrategy("project_managed")} />
-                <span><strong>项目托管</strong><small>缺省使用项目角色映射；未映射角色用系统基础环境（deepsonar-base）。</small></span>
-              </label>
-            </fieldset>
 
             {operationError && (
               <div className="intent-launch-operation-error" role="alert">

@@ -138,62 +138,31 @@ export interface ProjectImagePolicy {
   role_runtime_images: Record<string, string | null>;
 }
 
-const RUNTIME_IMAGE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,62}$/;
-
-/** 读取项目 JSON 中的镜像策略；缺省 inherit_global。脏值由启动清扫删除，解析层暂按 inherit_global 以免中断已排队 Job。 */
-export function parseProjectImagePolicy(value: unknown): ProjectImagePolicy {
-  const configValue = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-  const strategy = PROJECT_IMAGE_STRATEGIES.includes(configValue.image_strategy as ProjectImageStrategy)
-    ? configValue.image_strategy as ProjectImageStrategy
-    : "inherit_global";
-  const rawImages = configValue.role_runtime_images;
-  const images: Array<[string, string | null]> = [];
-  if (rawImages && typeof rawImages === "object" && !Array.isArray(rawImages)) {
-    for (const [roleName, rawKey] of Object.entries(rawImages as Record<string, unknown>)) {
-      if (rawKey === null) {
-        images.push([roleName, null]);
-        continue;
-      }
-      if (typeof rawKey === "string") {
-        const key = rawKey.trim();
-        if (RUNTIME_IMAGE_KEY_PATTERN.test(key)) images.push([roleName, key]);
-      }
-    }
-  }
-  return { image_strategy: strategy, role_runtime_images: Object.fromEntries(images) };
+/** #674: 项目镜像策略已移除；解析层恒返回平台权威占位（忽略遗留字段）。 */
+export function parseProjectImagePolicy(_value: unknown): ProjectImagePolicy {
+  return { image_strategy: "inherit_global", role_runtime_images: {} };
 }
 
-/** inherit_global 不保留 role_runtime_images；未知 image_strategy 物理删除。 */
+/** #674: 项目不再持有镜像策略；物理删除遗留 image_strategy / role_runtime_images。 */
 export function scrubStoredProjectImagePolicy(cfg: Record<string, unknown>): boolean {
   let changed = false;
-  if (
-    Object.prototype.hasOwnProperty.call(cfg, "image_strategy")
-    && !PROJECT_IMAGE_STRATEGIES.includes(cfg.image_strategy as ProjectImageStrategy)
-  ) {
+  if (Object.prototype.hasOwnProperty.call(cfg, "image_strategy")) {
     delete cfg.image_strategy;
     changed = true;
   }
-  const strategy = cfg.image_strategy === "project_managed" ? "project_managed" : "inherit_global";
-  if (strategy === "inherit_global" && Object.prototype.hasOwnProperty.call(cfg, "role_runtime_images")) {
+  if (Object.prototype.hasOwnProperty.call(cfg, "role_runtime_images")) {
     delete cfg.role_runtime_images;
     changed = true;
   }
   return changed;
 }
 
-/** 选择 Job 实际使用的镜像 key；项目托管缺省固定为系统 Base。 */
+/** #674: Job 缺省镜像只认平台/全局 RoleConfig；忽略项目策略（保留参数以兼容旧调用方）。 */
 export function runtimeImageKeyForProjectPolicy(
-  policy: ProjectImagePolicy,
-  roleName: string,
+  _policy: ProjectImagePolicy,
+  _roleName: string,
   globalRuntimeImageKey: string | null,
 ): string | null {
-  if (policy.image_strategy === "project_managed") {
-    return Object.prototype.hasOwnProperty.call(policy.role_runtime_images, roleName)
-      ? policy.role_runtime_images[roleName] ?? "deepsonar-base"
-      : "deepsonar-base";
-  }
   return globalRuntimeImageKey;
 }
 
@@ -207,26 +176,24 @@ function trimmedRoleField(value: unknown): string | null {
  * `scrubIgnoredProjectRoleConfigIdentity` 物理清空。
  */
 export function roleIdentityForProjectPolicy(
-  policy: ProjectImagePolicy,
-  projectCfg: { model?: unknown; agent_cli?: unknown } | undefined,
+  _policy: ProjectImagePolicy,
+  _projectCfg: { model?: unknown; agent_cli?: unknown } | undefined,
   globalCfg: { model?: unknown; agent_cli?: unknown } | undefined,
 ): { model: string | null; agent_cli: string } {
-  const identityCfg = policy.image_strategy === "project_managed"
-    ? (projectCfg ?? globalCfg)
-    : globalCfg;
+  // #674: 项目不再托管镜像/角色身份；model 与默认 CLI 只认全局 RoleConfig。
   return {
-    model: trimmedRoleField(identityCfg?.model),
-    agent_cli: trimmedRoleField(identityCfg?.agent_cli) ?? PLATFORM_DEFAULT_AGENT_CLI,
+    model: trimmedRoleField(globalCfg?.model),
+    agent_cli: trimmedRoleField(globalCfg?.agent_cli) ?? PLATFORM_DEFAULT_AGENT_CLI,
   };
 }
 
 /** inherit_global 项目 RoleConfig 不落库 model；只有 project_managed 才持久化。 */
 export function persistableProjectRoleConfigModel(
-  policy: ProjectImagePolicy,
-  requestedModel: unknown,
+  _policy: ProjectImagePolicy,
+  _requestedModel: unknown,
 ): string | null {
-  if (policy.image_strategy !== "project_managed") return null;
-  return trimmedRoleField(requestedModel);
+  // #674: 项目 RoleConfig 不再持久化 model（与平台镜像权威一致）。
+  return null;
 }
 
 /**
@@ -252,24 +219,20 @@ export async function scrubIgnoredProjectRoleConfigIdentity(
         WHERE project_id IS NOT NULL
           AND runtime_image_key IS NOT NULL
         RETURNING id`) as unknown[];
+  // #674: 所有项目 RoleConfig 的 model 都不再生效，统一清空。
   const models = await Promise.resolve(projectId
     ? db`
-        UPDATE role_configs rc
+        UPDATE role_configs
         SET model = NULL
-        FROM projects p
-        WHERE rc.project_id = p.id
-          AND p.id = ${projectId}
-          AND rc.model IS NOT NULL
-          AND COALESCE(p.config_json->>'image_strategy', 'inherit_global') IS DISTINCT FROM 'project_managed'
-        RETURNING rc.id`
+        WHERE project_id = ${projectId}
+          AND model IS NOT NULL
+        RETURNING id`
     : db`
-        UPDATE role_configs rc
+        UPDATE role_configs
         SET model = NULL
-        FROM projects p
-        WHERE rc.project_id = p.id
-          AND rc.model IS NOT NULL
-          AND COALESCE(p.config_json->>'image_strategy', 'inherit_global') IS DISTINCT FROM 'project_managed'
-        RETURNING rc.id`) as unknown[];
+        WHERE project_id IS NOT NULL
+          AND model IS NOT NULL
+        RETURNING id`) as unknown[];
   return { runtime_image_keys: images.length, inherit_global_models: models.length };
 }
 

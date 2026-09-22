@@ -134,65 +134,38 @@ test("角色×镜像矩阵文档与默认 Role 镜像、专项 policy 对齐", (
   assert.match(toolchains, /RUNTIME_ROLE_IMAGE_MATRIX/);
 });
 
-test("项目镜像策略按全局继承与项目托管分别选择镜像", () => {
+test("#674 项目镜像策略已移除：解析恒为平台权威，缺省只认全局 RoleConfig", () => {
   assert.deepEqual(parseProjectImagePolicy(undefined), {
     image_strategy: "inherit_global",
     role_runtime_images: {},
   });
-  const inherited = parseProjectImagePolicy({
-    image_strategy: "inherit_global",
-    // 项目 RoleConfig 的遗留 runtime_image_key 也不能成为策略输入。
-    runtime_image_key: "deepsonar-chrome-audit",
-    // 遗留项目 RoleConfig 镜像值不在策略输入中，必须继承全局 RoleConfig。
-    role_runtime_images: { audit: "deepsonar-chrome-audit" },
-  });
-  assert.equal(runtimeImageKeyForProjectPolicy(inherited, "audit", "openharmony"), "openharmony");
-
-  const managed = parseProjectImagePolicy({
+  const leftover = parseProjectImagePolicy({
     image_strategy: "project_managed",
     role_runtime_images: { audit: "deepsonar-audit", review: null },
   });
-  assert.equal(runtimeImageKeyForProjectPolicy(managed, "audit", "custom-audit"), "deepsonar-audit");
-  assert.equal(runtimeImageKeyForProjectPolicy(managed, "review", "custom-review"), "deepsonar-base");
-  assert.equal(runtimeImageKeyForProjectPolicy(managed, "test", "custom-test"), "deepsonar-base");
+  assert.deepEqual(leftover, { image_strategy: "inherit_global", role_runtime_images: {} });
+  assert.equal(runtimeImageKeyForProjectPolicy(leftover, "audit", "openharmony"), "openharmony");
+  assert.equal(runtimeImageKeyForProjectPolicy(leftover, "review", "custom-review"), "custom-review");
 });
 
-test("inherit_global 忽略遗留项目 RoleConfig 的 model 与默认 CLI", () => {
+test("#674 项目 RoleConfig 的 model 与默认 CLI 一律忽略，只认全局", () => {
   const leftover = { model: "grok-4.5", agent_cli: "pi" };
   const global = { model: "grok-4.6", agent_cli: "claude-code" };
   const inherited = roleIdentityForProjectPolicy(parseProjectImagePolicy(undefined), leftover, global);
   assert.deepEqual(inherited, { model: "grok-4.6", agent_cli: "claude-code" });
   assert.deepEqual(
-    roleIdentityForProjectPolicy(parseProjectImagePolicy({ image_strategy: "dirty" }), leftover, global),
+    roleIdentityForProjectPolicy(parseProjectImagePolicy({ image_strategy: "project_managed" }), leftover, global),
     inherited,
   );
-  const managed = roleIdentityForProjectPolicy(
-    parseProjectImagePolicy({ image_strategy: "project_managed" }),
-    leftover,
-    global,
-  );
-  assert.deepEqual(managed, { model: "grok-4.5", agent_cli: "pi" });
 });
 
-test("inherit_global 项目 RoleConfig 不落库 model，project_managed 才持久化", () => {
+test("#674 项目 RoleConfig 不再持久化 model", () => {
   assert.equal(
     persistableProjectRoleConfigModel(parseProjectImagePolicy(undefined), "grok-4.5"),
     null,
   );
   assert.equal(
-    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "dirty" }), "grok-4.5"),
-    null,
-  );
-  assert.equal(
-    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "inherit_global" }), "grok-4.5"),
-    null,
-  );
-  assert.equal(
     persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "project_managed" }), "grok-4.5"),
-    "grok-4.5",
-  );
-  assert.equal(
-    persistableProjectRoleConfigModel(parseProjectImagePolicy({ image_strategy: "project_managed" }), "  "),
     null,
   );
 });
