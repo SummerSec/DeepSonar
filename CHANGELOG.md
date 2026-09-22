@@ -2,6 +2,7 @@
 
 ### 修复
 
+- Skill Source catalog 与仓库 HEAD 布局对齐 + resync 悬挂 selector 自愈（#664）：`scanSkillSourceRepo` 以 SKILL.md 相对目录为 module id（裸 `plugin/SKILL.md` → `plugin`，包装 `plugin/skills/name/SKILL.md` → `plugin/skills/name`，不臆造 `skills/`）；sync 成功后对 RoleConfig `modules_json` 做 catalog diff，可推断则迁移（如 `foo/skills/foo` → `foo`、唯一 basename），否则移除悬挂项并写 `skill_source.resync_selector_cleanup` / `skill_source.catalog_diff` 审计。种子改为裸路径 `vuln-definitions`。`auto_follow_head` 无 schema 钩子，延期。
 - 全局信任 Skill Source 默认注入 Worker（#660）：`RoleConfig.modules_json` 未设置或为空时，快照组装默认展开全部 `enabled=true && trust_status='trusted'` 源的 `source:*` 模块；非空列表仍按显式绑定（兼容已 PUT 的项目）。项目 Skill 白名单（#603）仅门禁显式绑定；Hub `list_available_skill_sources` 投影全局信任源清单；无历史绑定时白名单种子改为平台信任源。
 
 ### 变更

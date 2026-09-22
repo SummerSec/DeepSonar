@@ -15,6 +15,7 @@ import {
   type ParsedModuleSelector,
   validateModuleSelectors,
 } from "@deepsonar/shared-types";
+import { recordSystemAudit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 
@@ -388,7 +389,12 @@ function isCatalogModule(value: unknown): value is SourceModule {
 
 const MODULE_COUNT_CAP = 200;
 
-function scanRepo(repoRoot: string): SourceModule[] {
+/**
+ * Scan a checked-out skill repo. Module id = relative directory of SKILL.md
+ * (bare `<plugin>/SKILL.md` → `plugin`; wrapped `<plugin>/skills/<name>/SKILL.md`
+ * → `plugin/skills/name`). Never invents a `skills/` segment.
+ */
+export function scanSkillSourceRepo(repoRoot: string): SourceModule[] {
   const modules: SourceModule[] = [];
   const seenSkills = new Set<string>();
 
@@ -455,6 +461,168 @@ export async function cloneSkillSource(input: {
   }
 }
 
+
+/** Suggest a replacement module id when an old selector no longer exists in catalog (#664). */
+export function suggestMigratedModuleId(
+  oldId: string,
+  newIds: ReadonlySet<string>,
+): string | null {
+  if (newIds.has(oldId)) return oldId;
+
+  // Wrapped → bare: `foo/skills/foo` or `foo/skills/bar` → `foo` when bare plugin dir exists.
+  const skillsMatch = oldId.match(/^(.*)\/skills\/([^/]+)$/);
+  if (skillsMatch) {
+    const parent = skillsMatch[1]!;
+    if (newIds.has(parent)) return parent;
+  }
+
+  // Unique basename match (e.g. stale `…/skills/wb-authz` → `whitebox/authz/skills/wb-authz`).
+  const leaf = oldId.includes("/") ? oldId.slice(oldId.lastIndexOf("/") + 1) : oldId;
+  if (!leaf) return null;
+  const matches = [...newIds].filter((id) => {
+    const base = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+    return base === leaf;
+  });
+  if (matches.length === 1) return matches[0]!;
+  return null;
+}
+
+export interface ModuleSelectorRewrite {
+  selectors: string[];
+  migrated: Array<{ from: string; to: string }>;
+  removed: string[];
+  changed: boolean;
+}
+
+/**
+ * Rewrite RoleConfig.modules_json selectors for one skill source after catalog resync.
+ * Only module-kind selectors are migrated/removed; plugin:/source:* left intact.
+ */
+export function rewriteModuleSelectorsForCatalog(
+  selectors: string[],
+  sourceId: string,
+  newIds: ReadonlySet<string>,
+): ModuleSelectorRewrite {
+  const normalizedSource = sourceId.toLowerCase();
+  const migrated: Array<{ from: string; to: string }> = [];
+  const removed: string[] = [];
+  const out: string[] = [];
+  const seenCanonical = new Set<string>();
+
+  const pushUnique = (raw: string, canonical: string) => {
+    if (seenCanonical.has(canonical)) return;
+    seenCanonical.add(canonical);
+    out.push(raw);
+  };
+
+  for (const raw of selectors) {
+    let parsed: ParsedModuleSelector;
+    try {
+      parsed = parseModuleSelector(raw);
+    } catch {
+      pushUnique(raw, raw);
+      continue;
+    }
+    if (parsed.source_id !== normalizedSource || parsed.kind !== "module" || !parsed.module_id) {
+      pushUnique(raw, parsed.canonical);
+      continue;
+    }
+    if (newIds.has(parsed.module_id)) {
+      pushUnique(raw, parsed.canonical);
+      continue;
+    }
+    const nextId = suggestMigratedModuleId(parsed.module_id, newIds);
+    if (nextId) {
+      const nextRaw = `${parsed.source_id}:${nextId}`;
+      const nextCanonical = `${parsed.source_id}:${nextId}`;
+      migrated.push({ from: raw, to: nextRaw });
+      pushUnique(nextRaw, nextCanonical);
+    } else {
+      removed.push(raw);
+    }
+  }
+
+  const changed = migrated.length > 0 || removed.length > 0
+    || out.length !== selectors.length
+    || out.some((value, index) => value !== selectors[index]);
+  return { selectors: out, migrated, removed, changed };
+}
+
+export interface SkillSourceSelectorCleanupSummary {
+  role_configs_updated: number;
+  migrated: Array<{ role_config_id: string; from: string; to: string }>;
+  removed: Array<{ role_config_id: string; selector: string }>;
+}
+
+/** Persist RoleConfig selector migrations/removals after a successful catalog write (#664). */
+export async function healRoleConfigSelectorsAfterSync(input: {
+  sourceId: string;
+  newCatalogIds: ReadonlySet<string>;
+  db?: typeof sql;
+  recordAudit?: (entry: {
+    action: string;
+    resourceType: string;
+    resourceId: string;
+    projectId?: string | null;
+    after: unknown;
+  }) => Promise<void>;
+}): Promise<SkillSourceSelectorCleanupSummary> {
+  const db = input.db ?? sql;
+  const sourceId = input.sourceId.toLowerCase();
+  const rows = await db`
+    SELECT id, project_id, modules_json FROM role_configs
+    WHERE modules_json IS NOT NULL
+      AND jsonb_typeof(modules_json) = 'array'
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(modules_json) AS sel(value)
+        WHERE lower(split_part(sel.value, ':', 1)) = ${sourceId}
+      )` as Array<{ id: string; project_id: string | null; modules_json: unknown }>;
+
+  const summary: SkillSourceSelectorCleanupSummary = {
+    role_configs_updated: 0,
+    migrated: [],
+    removed: [],
+  };
+
+  for (const row of rows) {
+    const current = Array.isArray(row.modules_json)
+      ? row.modules_json.filter((value): value is string => typeof value === "string")
+      : [];
+    const rewritten = rewriteModuleSelectorsForCatalog(current, sourceId, input.newCatalogIds);
+    if (!rewritten.changed) continue;
+
+    await db`
+      UPDATE role_configs
+      SET modules_json = ${db.json(rewritten.selectors as never)}, updated_at = now()
+      WHERE id = ${row.id}`;
+
+    summary.role_configs_updated += 1;
+    for (const item of rewritten.migrated) {
+      summary.migrated.push({ role_config_id: String(row.id), from: item.from, to: item.to });
+    }
+    for (const selector of rewritten.removed) {
+      summary.removed.push({ role_config_id: String(row.id), selector });
+    }
+
+    if (input.recordAudit) {
+      await input.recordAudit({
+        action: "skill_source.resync_selector_cleanup",
+        resourceType: "role_config",
+        resourceId: String(row.id),
+        projectId: row.project_id,
+        after: {
+          source_id: sourceId,
+          migrated: rewritten.migrated,
+          removed: rewritten.removed,
+          modules_json: rewritten.selectors,
+        },
+      });
+    }
+  }
+
+  return summary;
+}
+
 export interface SkillSourceSyncResult {
   modules: number;
   changed: boolean;
@@ -463,6 +631,8 @@ export interface SkillSourceSyncResult {
   previous_content_hash: string | null;
   last_content_hash: string | null;
   synced_at: string;
+  /** Present after catalog write: RoleConfig selector migrate/remove vs new catalog (#664). */
+  selector_cleanup: SkillSourceSelectorCleanupSummary;
 }
 
 /** 目录是否真的变了：只比 commit sha / 内容哈希，synced_at 刷新不算更新。 */
@@ -509,10 +679,19 @@ export async function syncSkillSource(
       ["-C", tmp, "rev-parse", "HEAD"],
       { timeout: 15_000, signal },
     );
-    const catalog = scanRepo(tmp);
+    const catalog = scanSkillSourceRepo(tmp);
     assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
     const lastCommitSha = commitSha.trim() || null;
     const lastContentHash = contentHashOf(catalog);
+    const previousCatalog = Array.isArray(src.catalog_json)
+      ? (src.catalog_json as unknown[]).filter(isCatalogModule)
+      : [];
+    const previousIds = new Set(previousCatalog.map((module) => module.id));
+    const newIds = new Set(catalog.map((module) => module.id));
+    // Diff retained for audit/observability; healing keys off absences in newIds.
+    const removedCatalogIds = [...previousIds].filter((id) => !newIds.has(id));
+    const addedCatalogIds = [...newIds].filter((id) => !previousIds.has(id));
+
     const [updated] = await sql`
       UPDATE skill_sources SET
         catalog_json = ${sql.json(catalog as never)},
@@ -522,6 +701,32 @@ export async function syncSkillSource(
         synced_by = ${syncedBy ?? null}
       WHERE id = ${sourceId}
       RETURNING synced_at`;
+
+    const selectorCleanup = await healRoleConfigSelectorsAfterSync({
+      sourceId,
+      newCatalogIds: newIds,
+      db: sql,
+      recordAudit: async (entry) => {
+        await recordSystemAudit({
+          ...entry,
+          actorId: syncedBy ?? "skill-source-sync",
+        });
+      },
+    });
+    if (removedCatalogIds.length > 0 || addedCatalogIds.length > 0 || selectorCleanup.role_configs_updated > 0) {
+      await recordSystemAudit({
+        action: "skill_source.catalog_diff",
+        resourceType: "skill_source",
+        resourceId: sourceId,
+        actorId: syncedBy ?? "skill-source-sync",
+        after: {
+          added_module_ids: addedCatalogIds,
+          removed_module_ids: removedCatalogIds,
+          selector_cleanup: selectorCleanup,
+        },
+      });
+    }
+
     return {
       modules: catalog.length,
       changed: skillSourceCatalogChanged({
@@ -537,6 +742,7 @@ export async function syncSkillSource(
       synced_at: updated?.synced_at instanceof Date
         ? updated.synced_at.toISOString()
         : String(updated?.synced_at ?? new Date().toISOString()),
+      selector_cleanup: selectorCleanup,
     };
   } finally {
     rmSync(tmp, { recursive: true, force: true });

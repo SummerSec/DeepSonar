@@ -1892,10 +1892,10 @@ $instructions$)
 WHERE r.builtin = true;
 
 -- 默认给 audit（审计）与 review（复核）挂上 DeepSonar-Skills 的 vuln-definitions：
--- 漏洞类型语义与 severity 定级基线。模块 id = 仓库内 skill 目录相对路径；
--- source id 为官方源稳定 UUID（与上方 skill_sources 行一致）。catalog 仍须 sync 后才可展开下发。
+-- 漏洞类型语义与 severity 定级基线。模块 id = 仓库内 skill 目录相对路径（裸插件为 vuln-definitions，
+-- 非 vuln-definitions/skills/…；#664）。source id 为官方源稳定 UUID。catalog 仍须 sync 后才可展开。
 UPDATE role_configs rc
-SET modules_json = '["f150e774-d237-57e4-847c-4800722f88ee:vuln-definitions/skills/vuln-definitions"]'::jsonb,
+SET modules_json = '["f150e774-d237-57e4-847c-4800722f88ee:vuln-definitions"]'::jsonb,
     updated_at = now()
 FROM agent_roles r
 WHERE rc.role_id = r.id
