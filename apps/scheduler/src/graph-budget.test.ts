@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { config } from "./config.js";
-import { boundGraphSection, graphProjectionMarkers, humanHintProjection, parseHubDecision, projectedQuantities, projectVerifyFinding, serializeFindingStatusIndex } from "./graph.js";
+import { boundGraphSection, graphProjectionMarkers, humanHintProjection, parseHubDecision, projectedQuantities, projectVerifyFinding, serializeFindingStatusIndex, shouldUseHubOverview } from "./graph.js";
 import { buildEvidenceSnapshot } from "./verify.js";
 import { findingVerificationSummaries } from "./verify-summaries.js";
 
@@ -38,6 +38,14 @@ test("graph scope budgets are explicit and ordered for prompt consumers", () => 
   const rows = [{ id: "finding-1", verify_status: "pending" }];
   assert.ok(serializeFindingStatusIndex(rows, config.graph.maxYamlCharsAgent).lines.join("\n").length <= config.graph.maxYamlCharsAgent);
   assert.ok(serializeFindingStatusIndex(rows, config.graph.maxYamlCharsVerify).lines.join("\n").length <= config.graph.maxYamlCharsVerify);
+});
+
+test("large Hub canvases use an overview instead of a full initial projection", () => {
+  assert.equal(shouldUseHubOverview("hub", 40, 80), false);
+  assert.equal(shouldUseHubOverview("hub", 41, 80), true);
+  assert.equal(shouldUseHubOverview("hub", 40, 81), true);
+  assert.equal(shouldUseHubOverview("hub", 40, 80, 16_001, 48_000), true);
+  assert.equal(shouldUseHubOverview("agent", 999, 999), false);
 });
 
 test("finding index falls back to an explicit compact form instead of partial rows", () => {

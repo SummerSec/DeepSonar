@@ -31,6 +31,24 @@ export interface GraphSnapshotOptions {
   minVerifySeverity?: string;
 }
 
+export const HUB_SMALL_GRAPH_MAX_NODES = 40;
+export const HUB_SMALL_GRAPH_MAX_EDGES = 80;
+
+/** Large Hub canvases start with an overview so the model chooses what to read. */
+export function shouldUseHubOverview(
+  scope: GraphScope,
+  nodeCount: number,
+  edgeCount: number,
+  estimatedCanvasChars = 0,
+  maxChars = config.graph.maxYamlCharsHub,
+): boolean {
+  return scope === "hub" && (
+    nodeCount > HUB_SMALL_GRAPH_MAX_NODES ||
+    edgeCount > HUB_SMALL_GRAPH_MAX_EDGES ||
+    estimatedCanvasChars > maxChars / 3
+  );
+}
+
 export interface GraphSnapshot {
   scope: GraphScope;
   goal: string;
@@ -332,15 +350,18 @@ export async function buildGraphSnapshot(
   }, {});
 
   const maxChars = Math.max(512, options.maxYamlChars ?? budgetFor(scope));
-  const contentLimit = Math.max(256, maxChars - 1_024);
+  const estimatedCanvasChars = JSON.stringify(nodes).length + JSON.stringify(edges).length + JSON.stringify(visibleFindingRows).length;
+  const hubOverviewOnly = shouldUseHubOverview(scope, nodes.length, edges.length, estimatedCanvasChars, maxChars);
+  const projectionMaxChars = hubOverviewOnly ? Math.min(maxChars, 2_000) : maxChars;
+  const contentLimit = Math.max(256, projectionMaxChars - (hubOverviewOnly ? 256 : 1_024));
   const omitted: Record<string, number> = {};
   let truncated = false;
   const lines = [
     kv("scope", scope),
     kv("truncated", false),
     kv("omitted", {}),
-    kv("goal", short(goal, 1_200)),
-    kv("target", boundedJson(promptTarget, 2_400)),
+    kv("goal", short(goal, hubOverviewOnly ? 240 : 1_200)),
+    kv("target", boundedJson(promptTarget, hubOverviewOnly ? 480 : 2_400)),
     kv("root_id", root?.id ?? null),
     kv("root_status", root?.status ?? null),
     kv("node_counts", nodeCounts),
@@ -385,7 +406,25 @@ export async function buildGraphSnapshot(
     ]);
   }
 
-  if (scope === "hub") {
+  if (hubOverviewOnly) {
+    const edgeCounts: Record<string, number> = {};
+    for (const edge of edges) edgeCounts[String(edge.edge_type)] = (edgeCounts[String(edge.edge_type)] ?? 0) + 1;
+    const verifyCounts: Record<string, number> = {};
+    for (const finding of visibleFindingRows) {
+      const status = String(finding.verify_status ?? "unknown");
+      verifyCounts[status] = (verifyCounts[status] ?? 0) + 1;
+    }
+    lines.push(
+      kv("projection_mode", "L0_overview"),
+      kv("edge_counts", edgeCounts),
+      kv("verify_distribution", verifyCounts),
+      kv("open_intent_count", openIntents.length),
+      kv("frontier_roles", unique(openIntents.map((intent) => String(((intent.body_json ?? {}) as Record<string, unknown>).role ?? "explore"))).slice(0, 12)),
+      kv("query_hint", "use graph_query kind=overview first, then index|findings|intents|node|edges|evidence; do not pull the whole graph"),
+    );
+    truncated = true;
+    omitted.full_graph = nodes.length + edges.length;
+  } else if (scope === "hub") {
     const index = serializeFindingStatusIndex(
       visibleFindingRows.map((finding) => {
         const summary = verificationSummaries.get(String(finding.id)) ?? {};
@@ -640,10 +679,10 @@ export async function buildGraphSnapshot(
   lines[1] = markers.truncated;
   lines[2] = markers.omitted;
   let yaml = lines.join("\n");
-  if (yaml.length > maxChars) {
+  if (yaml.length > projectionMaxChars) {
     truncated = true;
     omit("overflow");
-    while (lines.length > 8 && lines.join("\n").length > maxChars - 128) lines.pop();
+    while (lines.length > 8 && lines.join("\n").length > projectionMaxChars - 128) lines.pop();
     const overflowMarkers = graphProjectionMarkers(true, omitted);
     lines[1] = overflowMarkers.truncated;
     lines[2] = overflowMarkers.omitted;
