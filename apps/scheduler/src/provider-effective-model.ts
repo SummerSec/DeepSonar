@@ -197,9 +197,9 @@ export function modelMatchesCredentialCatalog(
 }
 
 /**
- * Fail-closed when a non-empty credential catalog does not contain the resolved model.
- * Empty catalog soft-degrades (probe may have failed) and skips the gate.
- * `allowPassthrough` opts out for explicit alias-gateway deployments.
+ * Fail-closed when a non-empty account-configured model allowlist does not contain the resolved model (#656).
+ * Empty allowlist soft-degrades (no configured provider model ids yet) and skips the gate.
+ * `allowPassthrough` opts out of the configured allowlist for explicit alias-gateway deployments.
  */
 export function assertResolvedModelInCredentialCatalog(input: {
   resolvedModel: string | null;
@@ -213,7 +213,7 @@ export function assertResolvedModelInCredentialCatalog(input: {
     allowPassthrough: input.allowPassthrough,
     operation: "assert_resolved_model_in_credential_catalog",
     modelSourceHint: input.modelSource === "none" ? "unknown" : input.modelSource,
-    // Explicit RoleConfig/settings model outside catalog → passthrough-disabled framing.
+    // Explicit RoleConfig/settings model outside configured allowlist → passthrough-disabled framing.
     emphasizePassthrough: input.modelSource === "role" || input.modelSource === "settings",
   });
   if (admitted.ok) return;

@@ -24,6 +24,7 @@ import {
 } from "../../credentials.js";
 import {
   assertResolvedModelInCredentialCatalog,
+  extractModelsFromSettings,
   hasProviderSettingsConfig,
   projectProviderRuntimeSnapshot,
   resolveModelSource,
@@ -100,12 +101,12 @@ function throwModelCapabilityMismatch(selectedModel: string, eligibleModelIds: s
   });
   if (!admitted.ok) {
     throw new ModelCatalogMismatchError(
-      `模型 ${selectedModel} 不满足 Provider capability requirements / 不在目录 SSOT`,
+      `模型 ${selectedModel} 不满足 Provider capability requirements / 不在账号已配置模型名单`,
       admitted.resolved,
       eligibleModelIds,
       {
         ...admitted.repair,
-        message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在目录 SSOT`,
+        message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在账号已配置模型名单`,
       },
       admitted.code,
     );
@@ -115,7 +116,7 @@ function throwModelCapabilityMismatch(selectedModel: string, eligibleModelIds: s
     code: "model_passthrough_disabled",
     operation: "resolve_role_runtime_model_requirements",
     path: "model_ref",
-    message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在目录 SSOT`,
+    message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在账号已配置模型名单`,
     expected: { kind: "catalog_model_id", sample: eligibleModelIds.slice(0, 12) },
     observed_shape: { resolved_model: selectedModel, eligible: false },
     next_action: "select_catalog_model_id_or_enable_emergency_passthrough",
@@ -425,9 +426,12 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (requestedModelRef && !llm) throw new Error(`模型 ${requestedModelRef} 需要可用的 LLM Provider`);
   let selectedModel = requestedModelRef ?? configuredDefaultModel ?? identity.model;
   if (llm) {
+    // Selection/admit SSOT: account-configured model ids from settings_config_json (#656).
+    // Probed model_catalog_json remains diagnostic-only (health panel / descriptors).
+    const configuredModelIds = extractModelsFromSettings(settingsConfig);
     const catalog = resolveModelDescriptorCatalog({
       provider: String(llm.provider ?? ""),
-      catalogJson: llm.model_catalog_json,
+      catalogJson: configuredModelIds,
       catalogRevision: typeof llm.model_catalog_fetched_at === "string"
         ? llm.model_catalog_fetched_at
         : `credential:${String(llm.id)}`,
@@ -496,7 +500,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     });
     assertResolvedModelInCredentialCatalog({
       resolvedModel: snapshotUpstreamModel(providerSnapshot) ?? providerSnapshot.model,
-      catalogJson: llm.model_catalog_json,
+      catalogJson: extractModelsFromSettings(settingsConfig),
       allowPassthrough,
       modelSource,
     });

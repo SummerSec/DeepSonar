@@ -37,6 +37,7 @@ import {
 } from "../project-agent-allowlist/index.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 import { resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
+import { extractModelsFromSettings } from "../../provider-settings.js";
 
 const RULE_CONCURRENCY_KEYS = new Set(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]);
 const RUNTIME_KNOB_RULE_KEYS = {
@@ -229,7 +230,7 @@ async function validateProjectModelAllowlist(
   ];
   if (refs.length === 0 || !allowlist.default_credential_id) return;
   const [credential] = await sql`
-    SELECT id, provider, model_catalog_json, model_catalog_fetched_at, status, project_id
+    SELECT id, provider, model_catalog_json, model_catalog_fetched_at, settings_config_json, status, project_id
     FROM credentials
     WHERE id = ${allowlist.default_credential_id} AND kind = 'llm_provider'
     LIMIT 1`;
@@ -238,19 +239,21 @@ async function validateProjectModelAllowlist(
   if (credential.project_id && credential.project_id !== projectId) {
     throw new Error("缺省模型 Provider 不属于当前项目");
   }
+  // Allowlist SSOT: account-configured model ids (#656), not probed model_catalog_json.
+  const configuredModelIds = extractModelsFromSettings(credential.settings_config_json);
   const catalog = resolveModelDescriptorCatalog({
     provider: String(credential.provider),
-    catalogJson: credential.model_catalog_json,
+    catalogJson: configuredModelIds,
     catalogRevision: typeof credential.model_catalog_fetched_at === "string"
       ? credential.model_catalog_fetched_at
       : `credential:${String(credential.id)}`,
   });
-  if (!allowlist.allow_model_catalog_passthrough && catalog.length > 0) {
-    const known = new Set(catalog.map((row) => row.model_id));
+  if (!allowlist.allow_model_catalog_passthrough && configuredModelIds.length > 0) {
+    const known = new Set(configuredModelIds);
     const unknown = refs.find((ref) => !known.has(ref));
     if (unknown) {
       const err = new Error(
-        `模型 ${unknown} 不在 Provider capability catalog（SSOT）；请选择目录内 model_id，或仅在 alias 网关应急时开启 allow_model_catalog_passthrough`,
+        `模型 ${unknown} 不在账号已配置的 provider 模型名单（选模 SSOT）；请在 Provider 账号填写该模型 id，或仅在 alias 网关应急时开启 allow_model_catalog_passthrough`,
       ) as Error & { error_code?: string; repair_code?: string };
       err.error_code = "model_not_in_catalog";
       err.repair_code = "model_passthrough_disabled";

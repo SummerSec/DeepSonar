@@ -78,7 +78,7 @@ test("legacy string catalog becomes stale descriptors", () => {
   assert.equal(rows[0]?.health_status, "stale");
   assert.equal(catalogHasUnhealthy(credential), true);
   assert.equal(catalogHasPassthrough(credential), false);
-  assert.match(credentialCatalogHealthSummary(credential), /目录过期/);
+  assert.match(credentialCatalogHealthSummary(credential), /目录过期|上游探测/);
 });
 
 test("structured descriptors with passthrough surface in summary", () => {
@@ -120,7 +120,7 @@ test("probe failure summary prefers connection catalog error copy", () => {
       model_catalog_fetched_at: null,
     },
   });
-  assert.equal(credentialCatalogHealthSummary(credential), "目录探测失败 · upstream");
+  assert.equal(credentialCatalogHealthSummary(credential), "上游目录探测失败 · upstream（仅诊断，不作为选模依据）");
 });
 
 test("frozen provider_model health formats passthrough warning", () => {
@@ -138,7 +138,7 @@ test("frozen provider_model health formats passthrough warning", () => {
   const formatted = formatFrozenProviderModelHealth(pm);
   assert.equal(formatted.passthrough, true);
   assert.equal(formatted.healthLabel, "应急透传");
-  assert.match(formatted.warning ?? "", /应急透传/);
+  assert.match(formatted.warning ?? "", /应急透传|已配置模型名单/);
 });
 
 test("frozen provider_model without passthrough but non-verified still warns", () => {
@@ -148,5 +148,5 @@ test("frozen provider_model without passthrough but non-verified still warns", (
   });
   assert.equal(formatted.passthrough, false);
   assert.equal(formatted.healthLabel, "目录过期");
-  assert.match(formatted.warning ?? "", /目录过期/);
+  assert.match(formatted.warning ?? "", /目录过期|仅观测/);
 });

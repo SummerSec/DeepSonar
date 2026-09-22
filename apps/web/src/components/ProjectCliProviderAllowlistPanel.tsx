@@ -135,9 +135,9 @@ export function ProjectCliProviderAllowlistPanel({
       } else {
         const result = await api.credentialModels(credential.id);
         if (result.models.length === 0) {
-          setProbeError(`${credential.name || credential.provider}：模型目录为空。可继续使用 RoleConfig / alias，但目录内模型会 fail-closed。`);
+          setProbeError(`${credential.name || credential.provider}：上游模型目录为空（仅诊断）。选模请用账号已填写的模型 id；未填写时请先在 Provider 账号配置中补齐。`);
         } else {
-          showToast(`${credential.name || credential.provider}：已发现 ${result.models.length} 个模型`, "ok");
+          showToast(`${credential.name || credential.provider}：上游探测到 ${result.models.length} 个模型（仅诊断，非选模名单）`, "ok");
         }
       }
       onSaved();
