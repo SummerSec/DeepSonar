@@ -26,7 +26,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "### `list_available_skill_sources` — 查询 Hub 当前可提案的 Skill 源",
     "- 参数：无参数，调用时传空对象 `{}`。",
     "- 时机：Hub 需要按任务组合 Skill/模块时先调用；返回本项目已启用且平台 trusted+enabled 的 Skill 源摘要（id/name/module_count/content hash）。",
-    "- 边界：只读目录提示，不是授权。真正下发仍以 Job 快照冻结的 selector + 项目白名单 + 内容 hash 为上限。RoleConfig modules_json 仅为过渡绑定，后续由 Hub 从本目录选型（#603）。",
+    "- 边界：只读目录提示，不是授权。返回平台 trusted+enabled 全局清单（#660）。真正下发以 Job 快照冻结的 selector + 内容 hash 为上限；RoleConfig modules_json 为空时默认注入全部信任源，非空为显式绑定（#603 白名单仅门禁显式绑定）。",
     "- 示例：`{}`",
   ].join("\n"),
   list_available_runtime_images: [

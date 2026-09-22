@@ -49,7 +49,7 @@ import {
   selectModelsForRequirements,
 } from "../provider-adapter/index.js";
 import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
-import { expandModules, type MissingModule } from "../../skill-sources.js";
+import { expandModules, resolveEffectiveModuleSelectors, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
 import { config } from "../../config.js";
@@ -371,8 +371,18 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (rawModules != null && !Array.isArray(rawModules)) {
     throw new Error("RoleConfig.modules_json 必须是字符串数组");
   }
-  const modules = (rawModules as string[] | undefined) ?? [];
-  await assertProjectModulesAllowlisted(db, projectId, modules);
+  // #660: unset/empty modules_json → default-inject all trusted+enabled sources
+  // (platform-level trust assets). Non-empty → explicit RoleConfig allowlist
+  // (backward compatible for projects that already PUT modules). Project
+  // skill-source allowlist (#603) gates explicit bindings only so empty #603
+  // seeds cannot strip platform trusted defaults.
+  const { modules, defaulted } = await resolveEffectiveModuleSelectors(
+    rawModules as string[] | null | undefined,
+    db as never,
+  );
+  if (!defaulted) {
+    await assertProjectModulesAllowlisted(db, projectId, modules);
+  }
   const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];
   const manualCommands = (cfg?.commands_json as { name?: string }[]) ?? [];
   const expanded = await expandModules(modules, db as never, {

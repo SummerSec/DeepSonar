@@ -17,6 +17,11 @@ test("role-runtime-snapshot fail-closes on project skill allowlist", () => {
   assert.match(snapshot, /assertProjectModulesAllowlisted/);
 });
 
+test("role-runtime-snapshot default-injects trusted modules when RoleConfig.modules empty (#660)", () => {
+  assert.match(snapshot, /resolveEffectiveModuleSelectors/);
+  assert.match(snapshot, /defaulted/);
+});
+
 test("Hub stub lists available skill sources", () => {
   assert.match(executor, /list_available_skill_sources/);
   assert.match(executor, /listHubSkillSourceCatalog/);

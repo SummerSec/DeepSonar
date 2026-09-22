@@ -51,6 +51,15 @@ async function hasAnyBindingRow(db: SqlLike, projectId: string): Promise<boolean
   return Boolean(row);
 }
 
+/** Platform trusted+enabled skill_source ids (stable order). */
+async function listTrustedEnabledSourceIds(db: SqlLike): Promise<string[]> {
+  const rows = await db`
+    SELECT id FROM skill_sources
+    WHERE enabled = true AND trust_status = 'trusted'
+    ORDER BY created_at ASC, id ASC` as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
 /**
  * Ensure project skill-source allowlist is seeded from historical RoleConfig selectors.
  * First read persists enabled rows + config flag so later expandModules can fail closed
@@ -83,7 +92,10 @@ export async function ensureProjectSkillAllowlist(
     };
   }
 
-  const seedIds = await collectProjectSkillSourceBindings(db, projectId);
+  // Prefer historical RoleConfig bindings; if none, seed platform trusted+enabled
+  // sources so new projects inherit global trust inventory (#660 / #603).
+  const boundIds = await collectProjectSkillSourceBindings(db, projectId);
+  const seedIds = boundIds.length > 0 ? boundIds : await listTrustedEnabledSourceIds(db);
   if (options?.persist === false) {
     return {
       allowlist: { configured: false, enabled_skill_source_ids: seedIds },
@@ -237,21 +249,23 @@ export async function setProjectSkillSourceEnabled(
   };
 }
 
-/** Hub read-only catalog: project-enabled + platform trusted/enabled sources. */
+/**
+ * Hub read-only catalog: global platform trusted+enabled Skill Source inventory (#660).
+ * Project allowlist (#603) still gates explicit RoleConfig.modules bindings; Hub
+ * discovery sees the full trust set so intents can reference any trusted module.
+ */
 export async function listHubSkillSourceCatalog(
   db: SqlLike,
   projectId: string,
 ): Promise<HubSkillSourceCatalogEntry[]> {
-  const { allowlist } = await ensureProjectSkillAllowlist(db, projectId, { persist: true });
-  if (!allowlist.configured) return [];
-  if (allowlist.enabled_skill_source_ids.length === 0) return [];
+  // Keep allowlist seeding side effects for project settings UX.
+  await ensureProjectSkillAllowlist(db, projectId, { persist: true });
   const rows = await db`
     SELECT ss.id, ss.name, ss.trust_status, ss.enabled,
            ss.last_commit_sha, ss.last_content_hash,
            jsonb_array_length(ss.catalog_json) AS module_count
     FROM skill_sources ss
-    WHERE ss.id = ANY(${allowlist.enabled_skill_source_ids})
-      AND ss.enabled = true
+    WHERE ss.enabled = true
       AND ss.trust_status = 'trusted'
     ORDER BY ss.name, ss.id` as Array<{
     id: string;
