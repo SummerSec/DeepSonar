@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { FindingProtocolConfig } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { config } from "../../config.js";
 import { isProviderKnown, projectCredentialProvider, UNKNOWN_PROVIDER_ERROR } from "../../credentials.js";
 import {
   globalRules,
@@ -185,7 +184,6 @@ function projectAllowlistResponse(cfg: Record<string, unknown>) {
 
 const SettingsPatchBody = z.object({
   rules: ProjectRulesPatch.optional(),
-  roles: z.object({ enabled: z.array(z.string()).nullable() }).optional(),
   finding_protocol: FindingProtocolConfig.nullable().optional(),
   /** 真实设备接入（#495）项目级 opt-in；null = 清除（默认关）。 */
   device_access_enabled: z.boolean().nullable().optional(),
@@ -428,7 +426,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     }
     return {
       rules: stripFindingProtocolFromRules(scrubLeftoverRulesJson(cfg.rules ?? {}).rules),
-      roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
       effective_finding_protocol: resolveFindingProtocol(globalProtocol, projectProtocol),
@@ -482,12 +479,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         }
       }
       cfg.rules = stripFindingProtocolFromRules(scrubLeftoverRulesJson(nextRules).rules);
-    }
-    if (body.roles) {
-      const roles = { ...((cfg.roles as Record<string, unknown>) ?? {}) };
-      if (body.roles.enabled === null) delete roles.enabled; // null = 恢复默认（全部内置）
-      else if (body.roles.enabled !== undefined) roles.enabled = body.roles.enabled;
-      cfg.roles = roles;
     }
     if (body.finding_protocol !== undefined) {
       if (body.finding_protocol === null) delete cfg.finding_protocol;
@@ -563,7 +554,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
     return {
       rules: stripFindingProtocolFromRules(scrubLeftoverRulesJson(cfg.rules ?? {}).rules),
-      roles: (cfg.roles ?? { enabled: null }) as Record<string, unknown>,
       effective_rules: await rulesForProject(sql, id),
       finding_protocol: projectProtocol ?? null,
       effective_finding_protocol: effectiveFindingProtocol,

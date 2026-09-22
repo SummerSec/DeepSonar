@@ -128,7 +128,6 @@ export function NewProjectForm({ onProjectCreated, onCancel, canCancel = false }
               </div>
             </div>
 
-
             {operationError && (
               <div className="intent-launch-operation-error" role="alert">
                 <WarningCircle size={16} weight="light" />

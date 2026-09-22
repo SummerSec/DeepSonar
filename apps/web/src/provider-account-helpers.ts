@@ -83,7 +83,7 @@ export function resolvedUpstreamModel(
 }
 
 export function roleModelLabel(
-  roleConfig: Pick<BindableRoleConfig, "agent_cli" | "model"> & Partial<Pick<BindableRoleConfig, "scope" | "project_id" | "image_strategy">>,
+  roleConfig: Pick<BindableRoleConfig, "agent_cli" | "model"> & Partial<Pick<BindableRoleConfig, "scope" | "project_id">>,
   credential: Pick<ProviderCredential, "settings_config_json"> | null,
 ): string {
   const requested = roleConfig.model?.trim() || modelsFromSettingsConfig(credential)[0] || null;

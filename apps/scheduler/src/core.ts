@@ -847,21 +847,19 @@ export interface RoleDef {
 /**
  * 项目可用的角色清单（hub 可下发的 agent）：
  * 每次调用都实时查询 agent_roles；schema 中的内置模板不是运行时固定清单。
- * config_json.roles.enabled 为 null/缺省 = 全部内置角色；数组 = 按 name 白名单（含自定义角色）。
+ * All platform roles and project-owned roles are available to the Hub. The
+ * Hub chooses which governed role to dispatch; project role enablement lists
+ * are retained only as legacy configuration and are not an authorization gate.
  */
 export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
-  const [all, [p]] = await Promise.all([
-    db`SELECT id, name, title, description, builtin, ui_color FROM agent_roles
-       WHERE kind = 'role' ORDER BY builtin DESC, name`,
-    db`SELECT config_json FROM projects WHERE id = ${projectId}`,
-  ]);
-  const enabled = (((p?.config_json as Record<string, unknown>)?.roles as Record<string, unknown> | undefined)
-    ?.enabled ?? null) as string[] | null;
+  const all = await db`SELECT id, name, title, description, builtin, ui_color FROM agent_roles
+      WHERE kind = 'role'
+        AND (project_id IS NULL OR project_id = ${projectId})
+      ORDER BY project_id NULLS FIRST, builtin DESC, name`;
+  // Legacy project role enablement is intentionally ignored. Project-owned
+  // roles are scoped by the owning project_id on the registry row.
   // SAFETY: 上面的 SELECT 列清单固定，行形状就是 RoleDef。
-  const rows = all as unknown as RoleDef[];
-  if (enabled == null) return rows.filter((r) => r.builtin);
-  const set = new Set(enabled);
-  return rows.filter((r) => set.has(r.name));
+  return all as unknown as RoleDef[];
 }
 
 // ---------- Job 创建 ----------
@@ -1692,7 +1690,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,

@@ -291,8 +291,7 @@ export async function runQuickStart(input: QuickStartInput, client: QuickStartAp
     project = await client.createProject({
       name: input.newProject.name.trim(),
       ...(input.newProject.description?.trim() ? { description: input.newProject.description.trim() } : {}),
-      });
-  }
+    });  }
   if (!project) return { kind: "invalid", message: "请选择一个项目，或创建一个新的项目空间。" };
 
   const readiness = await client.readiness(project.id, quickStartNetworkQuery(input.networkOverride));

@@ -91,7 +91,7 @@ test("creating a project is the cold-start path; quick-start rail is only explic
 test("empty project space creates a project without readiness or a task", async () => {
   const calls: string[] = [];
   const client: QuickStartApi = {
-    createProject: async (input) => { calls.push(`project:${input.name}`); return project; },
+    createProject: async (input) => { calls.push(`project:${input.name}:${input.description ?? ""}`); return project; },
     readiness: async () => { calls.push("readiness"); return readiness(true); },
     createTask: async () => { calls.push("task"); return { canvas_id: "canvas", job: { id: "job", status: "pending" } }; },
   };
@@ -100,7 +100,7 @@ test("empty project space creates a project without readiness or a task", async 
   assert.deepEqual(calls, []);
   const created = await createProjectSpace({ name: " 空项目 ", description: "边界" }, client);
   assert.equal(created.kind, "success");
-  assert.deepEqual(calls, ["project:空项目"]);
+  assert.deepEqual(calls, ["project:空项目:边界"]);
 });
 
 test("empty quick-start input requires an inline project before any API call", async () => {

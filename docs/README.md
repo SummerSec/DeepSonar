@@ -96,7 +96,7 @@
 | #39 画布 soft-load / delta | **已关**；画布 soft-load / delta 已落地 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
-| #130 / #146 / #151 | **已关**；项目镜像策略 `inherit_global` / `project_managed`（项目 RoleConfig 不接受独立 `runtime_image_key`） |
+| #130 / #146 / #151 | **已关**；运行镜像统一由平台目录准入，项目不再绑定或选择镜像，Job 创建时冻结平台 digest |
 | #244 / #284 | **#284 修订**：官方 stale pin 在 catalog 提升时自动滚到最新 trusted；`pin_ok` / 第三方 / `pin_policy=hold` 仍不自动换；过期且未滚动时 `RUNTIME_IMAGE_PIN_STALE` + 一键升级 |
 | #286 / #359 本机镜像闸门 | **已修订**：删除 leftover 本机 Docker inspect 调度闸门；建 Job 不再因 Scheduler 本机缺层拒绝。OpenSandbox 按冻结 digest 在 provision 拉取并重验 |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |

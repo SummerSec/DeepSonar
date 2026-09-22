@@ -1020,7 +1020,6 @@ export interface CanvasConvergence {
 
 export interface ProjectSettings {
   rules: Record<string, unknown>;
-  roles: { enabled: string[] | null };
   effective_rules: EffectiveRules;
   finding_protocol: FindingProtocolConfig | null;
   effective_finding_protocol: EffectiveFindingProtocol;
@@ -2522,7 +2521,6 @@ export const api = {
     projectId: string,
     body: {
       rules?: Record<string, unknown>;
-      roles?: { enabled: string[] | null };
       finding_protocol?: FindingProtocolConfig | null;
       enabled_agent_clis?: Array<"claude-code" | "pi" | "dsh">;
       enabled_credential_ids?: string[];
@@ -2532,7 +2530,7 @@ export const api = {
       fallback_model_refs?: string[];
       allow_model_catalog_passthrough?: boolean;
     },
-  ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
+  ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),
   createRole: (r: RoleInput) => send<AgentRole>("POST", "/agent-roles", r),
   updateRole: (id: string, r: Partial<Omit<RoleInput, "name">>) =>

@@ -21,7 +21,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   list_available_runtime_images: {
     summary: "List runtime images available to the current Hub Job",
-    description: "Return the live project-enabled, trusted runtime image catalog visible to this Hub Job: image_key, display fields, compatible_agent_clis, purpose/tool_summary/not_included/suited_roles/suited_evidence/selection_hints/capabilities, and readiness. Entries never include executable OCI refs or digests. Hub must match task needs to these fields and copy image_key verbatim.",
+    description: "Return the live platform-enabled, trusted runtime image catalog visible to this Hub Job: image_key, display fields, compatible_agent_clis, purpose/tool_summary/not_included/suited_roles/suited_evidence/selection_hints/capabilities, and readiness. Entries never include executable OCI refs or digests. Hub must match task needs to these fields and copy image_key verbatim.",
     readOnly: true,
     eventType: null,
   },

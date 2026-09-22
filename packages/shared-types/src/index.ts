@@ -1294,6 +1294,20 @@ export function hubReferenceBudgetViolation(value: unknown): HubReferenceBudgetV
 const HubReferenceList = z.array(GraphNodeReference).max(HUB_REFERENCE_LIMITS.perFrom);
 
 /**
+ * Hub may compose a role profile for one Worker Job or persist it inside the
+ * current project. The selected `role` remains the governed platform role
+ * contract; this definition can only supply business identity/instructions.
+ */
+export const HubRoleDefinitionPayload = z.object({
+  scope: z.enum(["job", "project"]),
+  name: z.string().trim().regex(/^[a-z][a-z0-9_]{0,30}$/u),
+  title: z.string().trim().min(1).max(120).regex(/\S/u),
+  description: z.string().trim().min(1).max(2_000).regex(/\S/u),
+  instructions_markdown: z.string().trim().min(1).max(100_000).regex(/\S/u),
+}).strict();
+export type HubRoleDefinitionPayload = z.infer<typeof HubRoleDefinitionPayload>;
+
+/**
  * Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。
  *
  * description/prompt 设有最小长度：拦截模型流式 tool_use 被截断后仍通过
@@ -1307,6 +1321,8 @@ export const HubIntentPayload = z
     prompt: z.string().min(32).max(20_000).regex(/\S/),
     // Task-level business instructions for this Worker Job; never persisted to RoleConfig.
     role_prompt: z.string().trim().min(1).max(100_000).regex(/\S/u).optional(),
+    // Optional Hub-composed role profile. `role` remains the platform role contract.
+    role_definition: HubRoleDefinitionPayload.optional(),
     // Hub 本轮可选的运行镜像提案：只能来自 list_available_runtime_images 返回的
     // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
     // 省略时 Scheduler 按项目镜像策略与 RoleConfig 缺省解析。

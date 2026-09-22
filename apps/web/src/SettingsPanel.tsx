@@ -39,7 +39,6 @@ import { MarkdownView } from "./MarkdownView";
 import { FindingProtocolEditor } from "./FindingProtocolEditor";
 import { SharedAssetsPanel } from "./SharedAssetsPanel";
 import { SearchableSelect } from "./SearchableSelect";
-import { runtimeImageSelectOption } from "./runtime-image-option";
 import { HelpTip } from "./ui";
 import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
 import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
@@ -258,20 +257,7 @@ export function SettingsPanel({
     }
   };
 
-
   // ---------- 角色（hub 可下发清单 + 运行配置） ----------
-
-  /** 勾选启用：立即保存整个 enabled 清单（首次勾选后从默认模式转为显式清单） */
-  const toggleRole = async (role: ProjectRole) => {
-    if (!projectId) return;
-    const next = nextEnabledRoleNames(roles, role.name);
-    try {
-      await api.patchSettings(projectId, { roles: { enabled: next } });
-      reload();
-    } catch (e) {
-      flash(`保存失败：${e instanceof Error ? e.message : e}`);
-    }
-  };
 
   /** 保存角色运行配置（全局缺省 / 项目覆盖共用；全量声明式 PUT） */
   const saveRoleConfig = async (roleId: string, body: RoleConfigInput) => {
@@ -320,7 +306,7 @@ export function SettingsPanel({
       } else {
         if (!roleForm.name.trim()) return flash("角色标识必填");
         await api.createRole({ name: roleForm.name.trim(), ...body });
-        flash("角色已创建（默认未启用，勾选后 hub 可下发）");
+        flash("角色已创建（默认可用，由 Hub 决定是否派发）");
       }
       setRoleForm(EMPTY_ROLE);
       reload();
@@ -414,16 +400,6 @@ export function SettingsPanel({
         } ${r.kind === "system" ? "shadow-[inset_3px_0_0_#f0a35e]" : r.kind === "hub" ? "shadow-[inset_3px_0_0_#c084fc]" : ""}`}
       >
         <div className="flex flex-wrap items-center gap-2">
-          {/* 启用勾选只对普通角色有意义（hub/system 角色不受启用清单限制） */}
-          {projectId && r.kind === "role" && (
-            <input
-              type="checkbox"
-              checked={r.enabled}
-              onChange={() => toggleRole(r)}
-              className="size-4 accent-emerald-500"
-              title="启用后 hub 可下发此角色"
-            />
-          )}
           {projectId ? (
             <span className="flex items-center gap-1.5">
               {r.kind === "role" && typeof r.ui_color === "string" && ROLE_UI_COLOR_PATTERN.test(r.ui_color) && (
@@ -678,8 +654,7 @@ export function SettingsPanel({
                     <p>项目不再选择或绑定运行镜像。Job 缺省镜像跟随平台全局 RoleConfig；Hub 可通过 <code className="text-zinc-300">list_available_runtime_images</code> 从平台可信/就绪/CLI 兼容目录提案，创建时冻结不可变 digest。</p>
                     <p>官方镜像默认可用（可在项目镜像页显式关闭）；第三方须先启用。启用边界仍在「镜像」页管理。</p>
                   </div>
-                </section>
-                <ProjectCliProviderAllowlistPanel
+                </section>                <ProjectCliProviderAllowlistPanel
                   projectId={projectId}
                   credentials={credentials}
                   enabledAgentClis={settings?.enabled_agent_clis ?? ["claude-code"]}

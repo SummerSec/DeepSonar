@@ -98,7 +98,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     db: typeof sql = sql,
   ): Promise<string | null> {
     if (projectId && body.runtime_image_key != null) {
-      return "项目 RoleConfig 不接受 runtime_image_key，请使用项目镜像策略";
+      return "项目 RoleConfig 不接受 runtime_image_key；运行镜像由平台目录与 Job 快照决定";
     }
     let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
     try {
@@ -462,7 +462,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     }
     const projectId = row.project_id ? String(row.project_id) : null;
     if (projectId) {
-      return reply.code(400).send({ error: "项目 RoleConfig 不接受 runtime_image_key，请使用项目镜像策略" });
+      return reply.code(400).send({ error: "项目 RoleConfig 不接受 runtime_image_key；运行镜像由平台目录与 Job 快照决定" });
     }
     if (!projectId && body.runtime_image_key) {
       const [image] = await sql`
@@ -838,22 +838,22 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  // 项目视角的角色清单：全部角色 + 本项目启用状态
+  // Project view exposes every platform role plus roles owned by this project.
+  // Role enablement is a Hub dispatch decision, so legacy config_json.roles.enabled
+  // is intentionally not an authorization filter.
   app.get("/projects/:id/roles", async (req, reply) => {
     const { id } = req.params as { id: string };
     if (rejectUnlessUuid(reply, id, INVALID_PROJECT_ID)) return;
-    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
+    const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
-    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
-    const enabled = ((cfg.roles as Record<string, unknown> | undefined)?.enabled ?? null) as string[] | null;
     const all = await sql`
-      SELECT id, name, title, description, builtin, kind, ui_color FROM agent_roles
-      WHERE kind = 'role' ORDER BY builtin DESC, name`;
-    const set = enabled == null ? null : new Set(enabled);
-    return (all as unknown as { name: string; builtin: boolean; ui_color: string | null }[]).map((r) => ({
+      SELECT id, name, title, description, builtin, kind, ui_color, project_id FROM agent_roles
+      WHERE kind = 'role' AND (project_id IS NULL OR project_id = ${id})
+      ORDER BY project_id NULLS FIRST, builtin DESC, name`;
+    return (all as unknown as { name: string; builtin: boolean; ui_color: string | null; project_id: string | null }[]).map((r) => ({
       ...r,
-      enabled: set == null ? r.builtin : set.has(r.name),
-      default_enabled: enabled == null,
+      enabled: true,
+      default_enabled: true,
     }));
   });
 }

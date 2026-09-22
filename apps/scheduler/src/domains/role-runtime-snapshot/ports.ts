@@ -74,6 +74,8 @@ export interface RoleRuntimeSnapshotResult {
   subagents: unknown[];
   role_description: string;
   instructions_markdown: string | null;
+  /** Optional Hub-composed role profile frozen into this Job. */
+  role_profile?: import("@deepsonar/shared-types").HubRoleDefinitionPayload;
   platform_tools: PlatformToolName[];
   /** 最终冻结的通用客户端上下文预算；null 表示 Provider/CLI 默认值。 */
   context_window_tokens: number | null;
@@ -123,6 +125,10 @@ export interface RoleRuntimeSnapshotApplication {
       modelRef?: string | null;
       /** Hub task-level business-instruction override; frozen into this Job only. */
       taskPromptOverride?: string | null;
+      /** Hub-composed role profile identity/instructions; permissions still come from the base role. */
+      roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null;
+      /** Governed platform role whose permissions/runtime policy back a composed role. */
+      baseRoleName?: string | null;
       /** Capability requirements rechecked before the Job snapshot is frozen. */
       modelRequirements?: Record<string, unknown> | null;
       runtimeProfile?: RuntimeProfileOverridePayload | null;
