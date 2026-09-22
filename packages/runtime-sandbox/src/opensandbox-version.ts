@@ -1,7 +1,7 @@
-/** OpenSandbox upgrade pin (#162). Bump this file to upgrade; never use mutable latest. */
+/** OpenSandbox upgrade pin (#162; bump #661). Bump this file to upgrade; never use mutable latest. */
 
 export const OPENSANDBOX_PIN_SCHEMA = "deepsonar.opensandbox/v1" as const;
-export const OPENSANDBOX_SDK_VERSION = "0.1.11";
+export const OPENSANDBOX_SDK_VERSION = "1.1.0";
 export const OPENSANDBOX_JOB_META = "deepsonar.job";
 export const OPENSANDBOX_ATTEMPT_META = "deepsonar.attempt";
 
@@ -15,11 +15,11 @@ export function isManagedRuntimeResource(resource: { jobId?: string | null; atte
 
 /** Official multi-arch index digests. Bump with SDK; never latest. */
 export const OPENSANDBOX_SERVER_IMAGE =
-  "docker.io/opensandbox/server@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778";
+  "docker.io/opensandbox/server@sha256:68ca0212a2749b2c73096ce2ec0264455c64442c45f81007db442f52bf84c9d1";
 export const OPENSANDBOX_EXECD_IMAGE =
-  "docker.io/opensandbox/execd@sha256:d358f23cb268779eaa71433ce0654a71cd9d016d429e57d7f245ad8f91b8ff7a";
+  "docker.io/opensandbox/execd@sha256:e11fdd6fa641329a1fe5298e71c8dd2afca742674fe48bc855b2ff6715512829";
 export const OPENSANDBOX_EGRESS_IMAGE =
-  "docker.io/opensandbox/egress@sha256:db7345d567b0970f384b8e3fa7a93a71b7f43d4b16bb2009de34096e9a87b3b5";
+  "docker.io/opensandbox/egress@sha256:56429c89b7175c2a24af62ca93a99776f03ea67a0beb74d63c8ddb34ff16fd97";
 
 const IMMUTABLE_OCI_RE = /^.+@sha256:[0-9a-f]{64}$/;
 

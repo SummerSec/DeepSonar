@@ -6,7 +6,7 @@
 #     docker compose -f deploy/docker-compose.opensandbox.k8s.yml up -d
 services:
   opensandbox-k8s:
-    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778}
+    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:68ca0212a2749b2c73096ce2ec0264455c64442c45f81007db442f52bf84c9d1}
     container_name: ${OPEN_SANDBOX_K8S_CONTAINER_NAME:-deepsonar-opensandbox-k8s}
     restart: unless-stopped
     network_mode: host
