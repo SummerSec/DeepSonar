@@ -69,6 +69,10 @@ DeepSonar 是“最小可信执行内核 + 可组合能力”：
 
 Hub 与 Agent 的上下文采用按需读取模型：启动输入只提供任务目标和有界画布骨架；小图可以提供完整的小投影，大图必须由 Hub 通过当前 Job 的有界只读 `graph_query` 自主读取索引、节点、边或证据。平台只负责 Job scope、查询预算、脱敏、审计和已见引用校验，不把整张画布或业务能力目录默认塞进模型上下文。
 
+### 核心可插拔原则
+
+DeepSonar 的能力、Skill、工具和运行时组件都应保持可插拔。平台负责准入、沙箱、网络、凭据、预算、审计、幂等和结果记账等工程控制；在这些边界以内，Agent 自主发现、选择、拉取、加载和组合所需能力。不要把业务 Skill 预装进角色提示词或 RoleConfig，也不要用固定角色分支替代 Agent 的能力选择。Agent 的自主拉取必须通过受治理的 Job-scoped Skill 操作完成，不能扩大 Job 范围，也不能通过任意安装脚本绕过平台控制。
+
 ### 内核拥有的边界
 
 内核永久拥有沙箱、网络、凭据、镜像 digest、Job/Attempt 生命周期、lease、并发和资源预算、capability token、幂等、Evidence 来源、Proposal/Receipt/Settlement、审计、Reaper、未知外部效果和资源清理。模型和插件不能直接修改数据库、容器、凭据、Job 快照、镜像准入、权限或终态。
@@ -87,13 +91,19 @@ Hub 与 Agent 的上下文采用按需读取模型：启动输入只提供任务
 - `validate_composition`
 - `preview_materialization`
 
-发现不是授权。Scheduler 必须用冻结 Job snapshot、项目 scope、当前 operation allowlist、镜像兼容性和网络策略重新校验。Pack 不能扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。Job 创建时冻结 selector、digest、模块内容 hash 和 missing modules；运行时物化不能把 Job 创建后的 source sync 当成新权限。当前发现接口会读取已信任 catalog，因此任何组合/物化改动都必须显式以冻结 selector/digest 为上限，直到这条边界完全由实现强制前，不得把目录结果直接当授权。
+当前已落地的 Agent 自主 Skill 拉取 operation：
+
+- `list_available_skills`
+- `search_skills`
+- `pull_skill`
+
+目录只用于选择入口；实际授权由对应的 Job-scoped 操作完成。Scheduler 必须用当前 Job 的 operation allowlist、平台 trusted+enabled 源、镜像兼容性和网络策略重新校验。Pack 不能扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。Agent 可在 Job 内自主调用 `list_available_skills` / `search_skills`，再用本轮返回的 selector 与 content hash 调用 `pull_skill` 拉取业务 Skill；拉取结果不能改变 Job 快照的权限边界。
 
 任务级/会话级 Pack 生命周期、评估晋升和跨任务经验推荐属于后续阶段，不能在实现或文档中冒充 as-built。
 
 ### Agent 只提案
 
-真实 Job 注入不可由 RoleConfig 同名覆盖的 `deepsonar-control` Skill。Agent 使用短期 Job capability token，通过 Job 级 HTTP API 提交 `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human` 和能力发现等 operation。语义事件不得来自普通文本、CLI 输出、伪造 MCP tool call、Shell 控制文件或管理 API 猜测；失败不得回退到另一套控制通道。
+真实 Job 注入不可由 RoleConfig 同名覆盖的 `deepsonar-control` Skill。Agent 使用短期 Job capability token，通过 Job 级 HTTP API 提交 `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、能力发现和 Skill 拉取等 operation。Agent 可以在范围内自主选择并拉取业务 Skill；语义事件不得来自普通文本、CLI 输出、伪造 MCP tool call、Shell 控制文件或管理 API 猜测；失败不得回退到另一套控制通道。
 
 Control API 必须经过 shared Zod schema、宿主 handler、event-ingestion/application transaction 三层校验。未知字段默认拒绝；错误要保持稳定 `error_code` 和人类可读消息。`accepted` 只能表示 Scheduler 已接收并建立可查询的 durable receipt 语义，不能表示模型已完成。
 

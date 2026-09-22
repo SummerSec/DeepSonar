@@ -61,6 +61,9 @@ test("#648 verify/report empty platform_tools_json expands to strict allowlist o
     "emit_progress",
     "mark_job_done",
     "ack_human_message",
+    "list_available_skills",
+    "search_skills",
+    "pull_skill",
   ]);
   for (const role of ["verify", "report"] as const) {
     const tools = resolvePlatformTools(role, "system", {});
@@ -108,13 +111,15 @@ test("RoleConfig seed prompts do not embed the platform control Skill", () => {
   assert.match(executorSource, /deepsonar-control Skill/);
 });
 
-test("RoleConfig seed prompts use the dynamic platform contract without embedded Skill", () => {
+test("RoleConfig seed prompts point Agents to self-service Skill pulling", () => {
   const seedStart = schemaSql.indexOf("INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)");
   const seedEnd = schemaSql.indexOf(") AS templates(name, instructions) ON templates.name = r.name", seedStart);
   const rolePromptSeed = schemaSql.slice(seedStart, seedEnd);
   assert.equal((rolePromptSeed.match(/Job-scoped API operation/g) ?? []).length, 9);
   assert.doesNotMatch(rolePromptSeed, /deepsonar-control/);
-  assert.doesNotMatch(rolePromptSeed, /Skill/);
+  assert.match(rolePromptSeed, /list_available_skills/);
+  assert.match(rolePromptSeed, /search_skills/);
+  assert.match(rolePromptSeed, /pull_skill/);
   assert.doesNotMatch(rolePromptSeed, /vuln-definitions/);
 });
 

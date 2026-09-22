@@ -66,6 +66,106 @@ export interface SourceModule {
   files: Record<string, string>;
 }
 
+export interface SkillSourceCatalogView {
+  id: string;
+  last_commit_sha?: string | null;
+  catalog: SourceModule[];
+}
+
+export interface AvailableSkill {
+  selector: string;
+  source_id: string;
+  module_id: string;
+  plugin: string;
+  name: string;
+  description: string;
+  content_hash: string;
+  commit_sha: string | null;
+}
+
+function availableSkillEntries(sources: readonly SkillSourceCatalogView[]): AvailableSkill[] {
+  return sources
+    .flatMap((source) => source.catalog
+      .filter((module) => module.kind === "skill")
+      .map((module) => ({
+        selector: `${source.id}:${module.id}`,
+        source_id: source.id,
+        module_id: module.id,
+        plugin: module.plugin,
+        name: module.name,
+        description: module.description,
+        content_hash: contentHashOf([module]),
+        commit_sha: source.last_commit_sha ?? null,
+      })))
+    .sort((left, right) => left.selector.localeCompare(right.selector));
+}
+
+export function listAvailableSkillsFromCatalog(
+  sources: readonly SkillSourceCatalogView[],
+  input: { limit?: number; offset?: number; query?: string } = {},
+): { skills: AvailableSkill[]; total: number; limit: number; offset: number; next_offset: number | null } {
+  const query = input.query?.trim().toLowerCase();
+  const matched = availableSkillEntries(sources).filter((skill) => !query || [
+    skill.selector,
+    skill.name,
+    skill.description,
+    skill.plugin,
+  ].join(" ").toLowerCase().includes(query));
+  const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+  const offset = Math.max(0, input.offset ?? 0);
+  const skills = matched.slice(offset, offset + limit);
+  return {
+    skills,
+    total: matched.length,
+    limit,
+    offset,
+    next_offset: offset + skills.length < matched.length ? offset + skills.length : null,
+  };
+}
+
+export type PullSkillResult =
+  | { ok: true; skill: AvailableSkill & { files: Record<string, string> } }
+  | { ok: false; error_code: "SKILL_NOT_FOUND" | "SKILL_SELECTOR_INVALID" | "SKILL_HASH_MISMATCH"; message: string };
+
+export function pullSkillFromCatalog(
+  sources: readonly SkillSourceCatalogView[],
+  selector: string,
+  expectedContentHash: string,
+): PullSkillResult {
+  let parsed: ParsedModuleSelector;
+  try {
+    parsed = parseModuleSelector(selector);
+  } catch {
+    return { ok: false, error_code: "SKILL_SELECTOR_INVALID", message: "Skill selector 无效，必须使用 source_uuid:module_path。" };
+  }
+  if (parsed.kind !== "module" || !parsed.module_id) {
+    return { ok: false, error_code: "SKILL_SELECTOR_INVALID", message: "pull_skill 只接受单个 Skill module selector。" };
+  }
+  const source = sources.find((item) => item.id.toLowerCase() === parsed.source_id);
+  const module = source?.catalog.find((item) => item.id === parsed.module_id && item.kind === "skill");
+  if (!source || !module) {
+    return { ok: false, error_code: "SKILL_NOT_FOUND", message: "找不到当前受信任 Skill 源中的目标 Skill。" };
+  }
+  const contentHash = contentHashOf([module]);
+  if (contentHash.toLowerCase() !== expectedContentHash.toLowerCase()) {
+    return { ok: false, error_code: "SKILL_HASH_MISMATCH", message: "Skill 内容已变化，请重新搜索后再拉取。" };
+  }
+  return {
+    ok: true,
+    skill: {
+      selector: `${source.id}:${module.id}`,
+      source_id: source.id,
+      module_id: module.id,
+      plugin: module.plugin,
+      name: module.name,
+      description: module.description,
+      content_hash: contentHash,
+      commit_sha: source.last_commit_sha ?? null,
+      files: module.files,
+    },
+  };
+}
+
 const FILE_CAP = 64 * 1024;
 const MODULE_CAP = 512 * 1024;
 const BINARY_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".woff", ".woff2", ".pyc"]);
@@ -771,14 +871,36 @@ export async function listTrustedEnabledModuleSelectors(
   return rows.map((row) => `${String(row.id).toLowerCase()}:source:*`);
 }
 
+/** Runtime Agent pull catalog: only platform-trusted and enabled sources are visible.
+ * RoleConfig/project selectors are a legacy snapshot path; runtime pulls use this
+ * catalog through the Job-scoped operation allowlist and content hash check. */
+export async function loadTrustedEnabledSkillSourceCatalogs(
+  db: typeof sql = sql,
+): Promise<SkillSourceCatalogView[]> {
+  const rows = await db`
+    SELECT id, last_commit_sha, catalog_json
+    FROM skill_sources
+    WHERE enabled = true AND trust_status = 'trusted'
+    ORDER BY created_at ASC, id ASC` as Array<{
+      id: string;
+      last_commit_sha: string | null;
+      catalog_json: unknown;
+    }>;
+  return rows.map((row) => ({
+    id: String(row.id),
+    last_commit_sha: row.last_commit_sha,
+    catalog: Array.isArray(row.catalog_json) ? row.catalog_json.filter(isCatalogModule) : [],
+  }));
+}
+
 /**
  * Resolve the effective module selector list for snapshot assembly:
  * - unset / empty → no business Skill materialization
  * - non-empty → explicit RoleConfig allowlist (backward compatible)
  *
- * Agent/Hub discovery must happen through the Job-scoped capability catalog.
- * Discovery is not authorization; only an explicit selector frozen into the
- * Job snapshot may be materialized.
+ * Agent runtime discovery and pulling use the Job-scoped list/search/pull
+ * operations above. This legacy resolver remains only for explicit RoleConfig
+ * snapshot compatibility and is not required for Agent-selected Skills.
  */
 export async function resolveEffectiveModuleSelectors(
   modules: string[] | null | undefined,

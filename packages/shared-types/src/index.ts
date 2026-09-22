@@ -756,6 +756,24 @@ export type ListAvailableProvidersPayload = z.infer<typeof ListAvailableProvider
 export const ListAvailableSkillSourcesPayload = z.object({}).strict();
 export type ListAvailableSkillSourcesPayload = z.infer<typeof ListAvailableSkillSourcesPayload>;
 
+export const ListAvailableSkillsPayload = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  offset: z.number().int().min(0).max(1_000_000).optional(),
+}).strict();
+export type ListAvailableSkillsPayload = z.infer<typeof ListAvailableSkillsPayload>;
+
+export const SearchSkillsPayload = z.object({
+  query: z.string().trim().min(1).max(200),
+  limit: z.number().int().min(1).max(50).optional(),
+}).strict();
+export type SearchSkillsPayload = z.infer<typeof SearchSkillsPayload>;
+
+export const PullSkillPayload = z.object({
+  selector: z.string().trim().min(1).max(1024),
+  expected_content_hash: z.string().regex(/^[a-f0-9]{64}$/i),
+}).strict();
+export type PullSkillPayload = z.infer<typeof PullSkillPayload>;
+
 export {
   DEVICE_LEASE_ERROR_CODES,
   DEVICE_LEASE_TOKEN_VERSION,
@@ -1415,6 +1433,9 @@ export const ControlToolPayloadSchemas = {
   list_available_agent_clis: ListAvailableAgentClisPayload,
   list_available_providers: ListAvailableProvidersPayload,
   list_available_skill_sources: ListAvailableSkillSourcesPayload,
+  list_available_skills: ListAvailableSkillsPayload,
+  search_skills: SearchSkillsPayload,
+  pull_skill: PullSkillPayload,
   list_capabilities: ListCapabilitiesPayload,
   search_capabilities: SearchCapabilitiesPayload,
   describe_capability: DescribeCapabilityPayload,
@@ -1525,6 +1546,9 @@ export const PlatformToolName = z.enum([
   "list_available_agent_clis",
   "list_available_providers",
   "list_available_skill_sources",
+  "list_available_skills",
+  "search_skills",
+  "pull_skill",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",
@@ -1663,6 +1687,9 @@ export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
   "list_available_agent_clis",
   "list_available_providers",
   "list_available_skill_sources",
+  "list_available_skills",
+  "search_skills",
+  "pull_skill",
   "list_capabilities",
   "search_capabilities",
   "describe_capability",
@@ -1690,6 +1717,9 @@ export const VERIFY_REPORT_PLATFORM_TOOLS: PlatformToolName[] = [
   "emit_progress",
   "mark_job_done",
   "ack_human_message",
+  "list_available_skills",
+  "search_skills",
+  "pull_skill",
 ];
 
 /**

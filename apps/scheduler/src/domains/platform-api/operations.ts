@@ -39,7 +39,25 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   list_available_skill_sources: {
     summary: "List Skill sources available to the current Hub Job",
-    description: "Return the project-enabled, trusted Skill source catalog (skill_source_id, name, module_count, content hash). Read-only discovery only; empty RoleConfig.modules_json does not grant or materialize business Skills, and any selector still requires project allowlist plus Job snapshot validation.",
+    description: "Return trusted and enabled Skill source summaries. Agents use list_available_skills/search_skills followed by pull_skill to fetch a selected business Skill during the Job; RoleConfig.modules_json does not preload business Skills.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_skills: {
+    summary: "List business Skills the current Job can pull",
+    description: "Return concrete Skill selectors, descriptions, commit hashes, and content hashes from platform-trusted and enabled Skill sources. This is the Agent pull catalog, not a RoleConfig preload.",
+    readOnly: true,
+    eventType: null,
+  },
+  search_skills: {
+    summary: "Search business Skills the current Job can pull",
+    description: "Search concrete Skill modules by selector, name, plugin, or description. Use a returned selector and content hash with pull_skill.",
+    readOnly: true,
+    eventType: null,
+  },
+  pull_skill: {
+    summary: "Pull one business Skill for the current Agent",
+    description: "Fetch the bounded Skill files for a selector returned by list_available_skills or search_skills. The content hash must match; the Agent then reads SKILL.md and any referenced files. This does not install packages or grant platform permissions.",
     readOnly: true,
     eventType: null,
   },
