@@ -384,17 +384,14 @@ export function agentRoleDescriptionOverwriteSql(schemaSql: string): string[] {
   );
 }
 
-export function roleConfigModuleBackfillSql(schemaSql: string): string {
-  const original = extractStatement(
-    schemaSql,
-    "UPDATE role_configs rc\nSET modules_json =",
-    "AND r.name IN ('audit', 'review');",
-  );
-  return original.replace(
-    /AND r\.name IN \('audit', 'review'\);$/,
-    `AND r.name IN ('audit', 'review')
-  AND rc.modules_json = '[]'::jsonb;`,
-  );
+/** Remove the former implicit audit/review business Skill binding once. */
+export function roleConfigModuleBackfillSql(_schemaSql: string): string {
+  return `UPDATE role_configs
+SET modules_json = '[]'::jsonb,
+    version = version + 1,
+    updated_at = now()
+WHERE project_id IS NULL
+  AND modules_json = '["f150e774-d237-57e4-847c-4800722f88ee:vuln-definitions"]'::jsonb;`;
 }
 
 async function ensureOfficialSeeds(db: MigrationConnection, schemaSql: string): Promise<void> {

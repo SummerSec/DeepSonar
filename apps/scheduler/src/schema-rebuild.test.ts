@@ -74,8 +74,9 @@ test("official catalog backfill overwrites builtin prompts and keeps project rol
   assert.match(roleDesc[0] ?? "", /WHERE name = 'verify'/);
   assert.match(roleDesc[1] ?? "", /WHERE name = 'report'/);
   const moduleUpdate = roleConfigModuleBackfillSql(body);
-  assert.match(moduleUpdate, /rc\.modules_json = '\[\]'::jsonb/);
-  assert.doesNotMatch(moduleUpdate, /AND r\.name IN \('audit', 'review'\);$/);
+  assert.match(moduleUpdate, /modules_json = '\[\]'::jsonb/);
+  assert.match(moduleUpdate, /vuln-definitions/);
+  assert.match(moduleUpdate, /project_id IS NULL/);
 });
 
 test("rebuild plan treats catalog tables as baseline-owned when source is empty", () => {

@@ -47,6 +47,13 @@ def has_job_scoped_http_api_contract(prompt: str) -> bool:
         or "job-scoped api" in lowered
         or "job-scoped control" in lowered
     )
+    # Business RoleConfig prompts must point at the dynamic contract without
+    # embedding the platform-owned control Skill itself.
+    dynamic_pointer = (
+        "job-scoped api operation" in lowered
+        and "动态系统工具与结果契约" in prompt
+        and "普通文本不算提交" in prompt
+    )
     # 遗留长文案（去重前种子仍可通过）
     legacy = (
         ("job-scoped control api" in lowered or "job-scoped http api" in lowered)
@@ -56,7 +63,7 @@ def has_job_scoped_http_api_contract(prompt: str) -> bool:
         and "禁止调用同名 mcp" in lowered
         and "api 失败后回退" in lowered
     )
-    return short_pointer or explicit or legacy
+    return short_pointer or explicit or dynamic_pointer or legacy
 
 
 def req(method: str, path: str, body=None, expect: int | None = 200):

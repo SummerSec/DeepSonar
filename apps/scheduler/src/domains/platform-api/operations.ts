@@ -39,7 +39,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   list_available_skill_sources: {
     summary: "List Skill sources available to the current Hub Job",
-    description: "Return the project-enabled, trusted Skill source catalog (skill_source_id, name, module_count, content hash). Read-only discovery stub for #603; Hub will select selectors from this set in a later slice. Discovery is not authorization.",
+    description: "Return the project-enabled, trusted Skill source catalog (skill_source_id, name, module_count, content hash). Read-only discovery only; empty RoleConfig.modules_json does not grant or materialize business Skills, and any selector still requires project allowlist plus Job snapshot validation.",
     readOnly: true,
     eventType: null,
   },

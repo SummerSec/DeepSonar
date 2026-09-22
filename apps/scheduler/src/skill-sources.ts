@@ -759,7 +759,7 @@ export interface SkillRevisionRef {
 /**
  * Platform-level trust inventory: every skill_source with enabled=true &&
  * trust_status='trusted', as `<uuid>:source:*` selectors (stable order).
- * Used when RoleConfig.modules_json is unset/empty (#660).
+ * This is a discovery/catalog helper only; it is never an implicit Job grant.
  */
 export async function listTrustedEnabledModuleSelectors(
   db: typeof sql = sql,
@@ -772,12 +772,13 @@ export async function listTrustedEnabledModuleSelectors(
 }
 
 /**
- * Resolve the effective module selector list for snapshot assembly (#660):
- * - unset / empty → default-inject ALL trusted+enabled sources
+ * Resolve the effective module selector list for snapshot assembly:
+ * - unset / empty → no business Skill materialization
  * - non-empty → explicit RoleConfig allowlist (backward compatible)
  *
- * expandModules([]) stays empty on purpose (no implicit DB scan); callers that
- * want platform defaults must go through this helper first.
+ * Agent/Hub discovery must happen through the Job-scoped capability catalog.
+ * Discovery is not authorization; only an explicit selector frozen into the
+ * Job snapshot may be materialized.
  */
 export async function resolveEffectiveModuleSelectors(
   modules: string[] | null | undefined,
@@ -787,10 +788,8 @@ export async function resolveEffectiveModuleSelectors(
   if (explicit.length > 0) {
     return { modules: explicit, defaulted: false };
   }
-  return {
-    modules: await listTrustedEnabledModuleSelectors(db),
-    defaulted: true,
-  };
+  void db;
+  return { modules: [], defaulted: false };
 }
 
 /**
