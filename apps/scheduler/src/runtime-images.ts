@@ -2367,7 +2367,7 @@ export async function listHubRuntimeImageCatalog(
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
     WHERE ri.enabled = true
-      AND (CASE WHEN ri.official AND NOT ri.project_opt_in
+      AND (CASE WHEN ri.official
                 THEN COALESCE(pri.enabled, true)
                 ELSE COALESCE(pri.enabled, false) END)
       AND EXISTS (
@@ -2419,7 +2419,10 @@ export async function resolveRuntimeImageForJob(
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
     WHERE ri.image_key = ${imageKey}`;
-  const projectAvailable = image?.official && !image.project_opt_in
+  // Official images (base + specialty): missing project_runtime_images row = enabled.
+  // Third-party remains fail-closed (explicit project_enabled === true required).
+  // project_opt_in is metadata only (e.g. startup warmup skip), not an availability gate.
+  const projectAvailable = image?.official
     ? image.project_enabled !== false
     : image?.project_enabled === true;
   if (!image?.enabled || !projectAvailable) {

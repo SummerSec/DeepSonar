@@ -456,7 +456,7 @@ test("credential scope follows global and project RoleConfig boundaries", () => 
   assert.equal(scopeMismatches.some((check) => check.role?.name === "audit"), false);
 });
 
-test("runtime image project opt-in and manual digest admission follow resolver semantics", () => {
+test("runtime image project availability: official default-on, third-party fail-closed", () => {
   const explicitDisabled = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
       ? { ...image, project_opt_in: false, project_enabled: false }
@@ -465,20 +465,28 @@ test("runtime image project opt-in and manual digest admission follow resolver s
   assert.equal(explicitDisabled.ready, false);
   assert.ok(explicitDisabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
 
-  const officialOptInMissing = evaluateReadiness(baseInput({
+  // Official specialty (project_opt_in metadata) with no project row = default ON.
+  const officialSpecialtyMissingRow = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
       ? { ...image, project_opt_in: true, project_enabled: null }
       : image),
   }));
-  assert.equal(officialOptInMissing.ready, false);
-  assert.ok(officialOptInMissing.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
+  assert.equal(officialSpecialtyMissingRow.ready, true);
 
-  const officialOptInEnabled = evaluateReadiness(baseInput({
+  const officialSpecialtyEnabled = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
       ? { ...image, project_opt_in: true, project_enabled: true }
       : image),
   }));
-  assert.equal(officialOptInEnabled.ready, true);
+  assert.equal(officialSpecialtyEnabled.ready, true);
+
+  const officialSpecialtyDisabled = evaluateReadiness(baseInput({
+    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
+      ? { ...image, project_opt_in: true, project_enabled: false }
+      : image),
+  }));
+  assert.equal(officialSpecialtyDisabled.ready, false);
+  assert.ok(officialSpecialtyDisabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
 
   const thirdPartyNotEnabled = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"

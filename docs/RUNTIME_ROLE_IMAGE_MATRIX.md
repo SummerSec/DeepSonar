@@ -30,7 +30,7 @@
 | `hub_reason` | hub | `deepsonar-base` | 画布决策与派发 | 通常不需要专项工具链 |
 | `report` | system | `deepsonar-base` | 任务总报告 | 通常不需要专项工具链 |
 
-项目策略 `inherit_global` / `project_managed` 可覆盖角色镜像；专项镜像均为 `project_opt_in`，须在项目启用后才能冻结进 Job。
+项目策略 `inherit_global` / `project_managed` 可覆盖角色镜像；官方镜像（含 `project_opt_in` 专项）默认对项目可用（无绑定行 = 启用，显式 `enabled=false` 可关闭）；第三方仍须显式启用。`project_opt_in` 仅作元数据（如启动 warmup 跳过重镜像），不再作为 Hub/角色选图硬门。
 
 ## 官方镜像能力表
 

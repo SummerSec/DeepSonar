@@ -272,7 +272,7 @@ export function SettingsPanel({
 
   const projectRuntimeImageChoices = useMemo(() => runtimeImages.filter((image) => {
     if (!image.enabled || image.trust_status !== "trusted" || !image.digest || !image.resolved_ref) return false;
-    return image.official && !image.project_opt_in ? image.project_enabled !== false : image.project_enabled === true;
+    return image.official ? image.project_enabled !== false : image.project_enabled === true;
   }), [runtimeImages]);
 
   const saveImagePolicy = async () => {
