@@ -659,7 +659,7 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 ### 8.5 图语义与 hub 循环（Cairn 式自驱审计）
 
-画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；**hub agent 读整张图做决策**。
+画布升级为 **fact-intent 二分图**（参考 Cairn 的 blackboard 架构）：agent 不直接决定下一步，只把发现写进画布；Hub 只读取当前 Job 可见的有界画布投影，并按需查询最新索引或节点正文后做决策。平台不把整张画布预装进模型上下文。
 
 - 节点：`intent`（意图，与角色 job **1:1**，状态即认领态：pending=未认领 / running=进行中 / succeeded=已结论）、`fact`（事实，角色 agent 的产出）。Schema v31 为 Fact 增加独立 `verification_status` 定列（`unverified/verifying/verified/rejected/needs_human`），非 Fact 必须为 `NULL`；该状态是 Fact 证据信任（#387），不复用节点执行态，不从证据 outcome 推断，也不与 Finding `verify_status`/disposition 合并。人可写 `verified|rejected|needs_human`（`rejected→verified` 须先 reopen）；报告数量门禁只认 `verified`，Finding `confirmed` 不是 Fact 状态。
 - 边：`from`（被引用事实 → 新意图）、`to`（意图 → 产出事实；收敛时 事实 → root）
@@ -680,12 +680,12 @@ Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾�
 
 | Scope | 默认字符硬预算 | 注入内容 |
 |-------|----------------|----------|
-| `hub` | 48,000 | 全 Finding `verify_status` 索引、开放意图、事实索引、近期/触发相关摘要与 hints |
+| `hub` | ≤2,000（大图 L0）/ 48,000（小图 L3） | 大图仅注入 goal/target/root/counts/verify 分布/前沿和查询入口；小图才注入全量有界投影 |
 | `agent` | 16,000 | 自包含 prompt 作为独立主输入；图投影仅提供 intent 元数据、`from` 引用邻域与已确认背景 |
 | `verify` | 24,000 | 目标 Finding 与相关验证证据短字段；硬门权威仍是冻结证据快照 |
 | `report` | 8,000 | 目标与状态元数据；完整输入以 Scheduler 生成的 `report-input.json` 为准 |
 
-预算由 `MAX_GRAPH_YAML_CHARS_HUB/AGENT/VERIFY/REPORT` 配置但由 Scheduler 强制执行。超预算时投影写入顶层 `truncated: true` 与 `omitted` 计数；返回的 `referableIds` 始终来自完整画布，供服务端校验 `intent.from`。每次投影的 scope、字符数、节点计数和截断状态写入 Job runtime evidence，并暴露为 Prometheus 计数器。
+Hub 使用三档按需读图：L0 骨架随 Job 启动注入；Hub 通过有界只读 `graph_query` 获取 L1 索引（`index`、`findings`、`intents`）和 L2 正文（`node`、`edges`、`evidence`）；只有节点不超过 40、边不超过 80 且原始图数据不超过 Hub 字符预算三分之一的小图才走 L3 全量投影。每次查询都受 Job 级调用次数与累计字节预算约束并写入审计轨迹。查询或初始投影返回的 `referableIds` 只包含 Hub 实际见过的节点，`submit_hub_decision` 不允许引用未投影的 UUID。这样平台负责范围、预算、脱敏和一致性，Hub 自主决定何时读取哪一段画布。
 
 `report` Job 的 `payload_json.kind` 区分 `task_report` 与 `finding_report`。前者绑定画布 Root 的 `analysis_complete → reporting → succeeded` 生命周期（报告 Job 终态失败时有界自动再派一次，预算耗尽则 Root 进入 `report_failed`，由人工 `POST /canvases/:id/report/retry` 恢复）并消费 Scheduler 生成的任务级 `report-input.json`；后者只绑定一条已确认 Finding，消费带 SHA-256 校验的冻结输入，不推进 Root，也不改变 Finding 的 `verify_status`。单 Finding 输入由 `MAX_FINDING_REPORT_INPUT_CHARS`（默认 40000）限制；截断时冻结 JSON 显式记录 `input_truncated`、预算与各类省略计数，Executor 在注入模型前再次执行同一上限。
 
