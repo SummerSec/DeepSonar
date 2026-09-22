@@ -169,8 +169,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
           goal,
           project: creatingProject ? null : selectedProject,
           newProject: creatingProject ? { name: newProjectName, description: newProjectDescription } : null,
-                    networkOverride,
-        },
+          networkOverride,        },
         {
           createProject: async (input) => {
             const project = await api.createProject(input);

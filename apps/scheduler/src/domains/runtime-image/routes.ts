@@ -876,6 +876,11 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   });
 
   app.put("/projects/:id/runtime-images/:imageId", async (req, reply) => {
+    return reply.code(410).send({
+      error: "项目运行镜像绑定已移除；请使用平台镜像目录，由 Hub 在 Job 创建时选择",
+      error_code: "PROJECT_RUNTIME_IMAGE_REMOVED",
+    });
+    /* istanbul ignore next -- retained below only for historical source compatibility */
     const { id, imageId } = req.params as { id: string; imageId: string };
     const body = ProjectRuntimeImageBody.parse(req.body);
     const [image] = await sql`SELECT id, enabled FROM runtime_images WHERE id = ${imageId}`;

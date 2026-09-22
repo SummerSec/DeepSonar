@@ -1020,7 +1020,6 @@ export interface CanvasConvergence {
 
 export interface ProjectSettings {
   rules: Record<string, unknown>;
-  roles: { enabled: string[] | null };
   effective_rules: EffectiveRules;
   finding_protocol: FindingProtocolConfig | null;
   effective_finding_protocol: EffectiveFindingProtocol;
@@ -1039,8 +1038,6 @@ export interface ProjectSettings {
   /** claimed / provisioning / running；waiting_human 不占调度额度。 */
   active_jobs: number;
 }
-
-export type ProjectImageStrategy = "inherit_global" | "project_managed";
 
 /** 角色注册表条目（§8.3）：kind='role' = hub 可下发角色；kind='hub' = 唯一决策中枢；kind='system' = 系统角色（verify/report 等） */
 export interface AgentRole {
@@ -1165,6 +1162,7 @@ export interface BindableRoleConfig {
   model: string | null;
   context_window_tokens: number | null;
   scope: "global" | "project";
+  /** #674: 恒为 null；保留字段兼容旧客户端。 */
   /** #674: 恒为 null；保留字段兼容旧客户端。 */
   image_strategy?: ProjectImageStrategy | null;
   /** null = 系统默认底座（deepsonar-base） */
@@ -2522,7 +2520,6 @@ export const api = {
     projectId: string,
     body: {
       rules?: Record<string, unknown>;
-      roles?: { enabled: string[] | null };
       finding_protocol?: FindingProtocolConfig | null;
       enabled_agent_clis?: Array<"claude-code" | "pi" | "dsh">;
       enabled_credential_ids?: string[];
@@ -2532,7 +2529,7 @@ export const api = {
       fallback_model_refs?: string[];
       allow_model_catalog_passthrough?: boolean;
     },
-  ) => send<ProjectSettings | RuntimeImagePreparingResponse>("PATCH", `/projects/${projectId}/settings`, body),
+  ) => send<ProjectSettings>("PATCH", `/projects/${projectId}/settings`, body),
   agentRoles: () => get<AgentRole[]>("/agent-roles"),
   createRole: (r: RoleInput) => send<AgentRole>("POST", "/agent-roles", r),
   updateRole: (id: string, r: Partial<Omit<RoleInput, "name">>) =>

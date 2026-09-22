@@ -1694,7 +1694,7 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/projects/{id}/settings",
-    summary: "更新项目规则、角色启用清单与镜像策略",
+    summary: "更新项目规则与 Agent 配置",
     scope: "agents:write",
     tags: ["Settings"],
     body: {
@@ -1704,12 +1704,6 @@ const OPS: Op[] = [
           type: "object",
           additionalProperties: true,
           description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject）；不得修改全局并发键。",
-        },
-        roles: {
-          type: "object",
-          properties: {
-            enabled: { oneOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
-          },
         },
         device_access_enabled: {
           type: "boolean",
@@ -3225,8 +3219,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             credential_project_id: { type: "string", format: "uuid", nullable: true },
             credential_project_name: { type: "string", nullable: true },
             scope: { type: "string", enum: ["global", "project"] },
-            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },
-            can_bind: { type: "boolean" },
+            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },            can_bind: { type: "boolean" },
             credential_provider_valid: { type: "boolean", nullable: true },
           },
         },

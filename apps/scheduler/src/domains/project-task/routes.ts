@@ -206,8 +206,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       INSERT INTO projects ${sql({
         name: body.name,
         description: body.description,
-        config_json: {} as never,
-      })}
+        config_json: {} as never,      })}
       RETURNING *`;
     await audit(req, {
       action: "project.create",

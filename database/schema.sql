@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 53);
+INSERT INTO schema_meta (id, version) VALUES ('global', 54);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -904,6 +904,7 @@ CREATE TABLE agent_roles (
   description text NOT NULL DEFAULT '',
   builtin boolean NOT NULL DEFAULT false,
   kind text NOT NULL DEFAULT 'role',
+  project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   ui_color text,
@@ -924,6 +925,9 @@ CREATE TABLE agent_roles (
 CREATE UNIQUE INDEX agent_roles_role_ui_color_uniq
   ON agent_roles (lower(ui_color))
   WHERE kind = 'role' AND ui_color IS NOT NULL;
+CREATE INDEX agent_roles_project_idx
+  ON agent_roles (project_id, builtin DESC, name)
+  WHERE kind = 'role';
 
 CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',

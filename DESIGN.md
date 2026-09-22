@@ -53,7 +53,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 ### 4.0 Skill / 模块源控制面（#603 首片）
 
-**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单（对标 `project_runtime_images` / CLI·Provider 白名单）。未启用的源不可进入本项目 Job 快照。CLI × Provider × 镜像 × Skill 从已启用集合自由组合；角色不是主绑定面。
+**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单；未启用的源不可进入本项目 Job 快照。CLI × Provider × 平台镜像 × Skill 从已启用集合自由组合；项目不再绑定或准入运行镜像，角色不是镜像主绑定面。
 
 **Hub / Job 运行时选型**：业务 Skill 不因 RoleConfig 为空而默认注入。Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取并读取 `SKILL.md`；Hub 不需要预先把 Skill 写入 Intent。平台只允许 trusted+enabled 源，拉取操作仍受当前 Job 的 token、预算、网络和审计边界约束。
 

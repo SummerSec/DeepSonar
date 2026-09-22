@@ -51,8 +51,7 @@ test("SettingsPanel wires ProjectJobQuotaSection and keeps rules save quota-free
   const section = readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
   assert.match(panel, /ProjectJobQuotaSection/);
   assert.doesNotMatch(panel, /setProjectJobQuota/);
-  const saveRulesBlock = panel.slice(panel.indexOf("const saveRules"), panel.indexOf("const toggleRole"));
-  assert.doesNotMatch(saveRulesBlock, /maxConcurrentJobs/);
+  const saveRulesBlock = panel.slice(panel.indexOf("const saveRules"), panel.indexOf("const saveRoleConfig"));  assert.doesNotMatch(saveRulesBlock, /maxConcurrentJobs/);
   assert.match(section, /保存项目配额/);
   assert.match(section, /nextProjectJobQuotaOnReload/);
   assert.match(section, /rules:\s*\{\s*maxConcurrentJobs\s*\}/);

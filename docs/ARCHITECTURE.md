@@ -610,6 +610,8 @@ Provision admission 是数据库 claim 事务的一部分，而不是进程内 s
 
 ### 8.3 可信运行镜像与独立市场
 
+Issue #674 当前模型：运行镜像是平台目录维度。项目不再绑定、准入或选择镜像；Hub 只能提出平台目录中的 `image_key`，Scheduler 在 Job 创建时校验可信宿主版本并冻结不可变 digest。项目 RoleConfig 仍可覆盖模型、CLI 和业务配置，但不能改变镜像准入或执行范围。历史 `project_runtime_images` 数据只作兼容保留，不参与新 Job 的可用性判定。
+
 镜像市场是受治理的 OCI 目录，不是任意容器执行入口。`runtime_images` 表示产品身份，`runtime_image_versions` 表示不可变版本，`project_runtime_images` 表示项目显式启用/固定版本，`runtime_image_scans` 保留每次准入或复扫证据。
 
 - 官方 `deepsonar-base` 供 explore/analyze/review/code/hub/report，`deepsonar-audit` 供 audit；两者以固定 digest 的 `node:22-bookworm-slim` 为底（满足当前 Claude Code 的 Node 版本要求），共用 `agent-harness/runtime-images.json` 版本/来源/摘要单一定义，本地 image DSL 与生产 Dockerfile 均消费该约束并由 CI 检测漂移。
