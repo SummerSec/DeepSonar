@@ -67,6 +67,8 @@ DeepSonar 是“最小可信执行内核 + 可组合能力”：
 
 > PostgreSQL 是管理真相，Canvas 是过程真相，Sandbox/Evidence 是执行真相，Scheduler 是唯一有副作用的执行者。
 
+Hub 与 Agent 的上下文采用按需读取模型：启动输入只提供任务目标和有界画布骨架；小图可以提供完整的小投影，大图必须由 Hub 通过当前 Job 的有界只读 `graph_query` 自主读取索引、节点、边或证据。平台只负责 Job scope、查询预算、脱敏、审计和已见引用校验，不把整张画布或业务能力目录默认塞进模型上下文。
+
 ### 内核拥有的边界
 
 内核永久拥有沙箱、网络、凭据、镜像 digest、Job/Attempt 生命周期、lease、并发和资源预算、capability token、幂等、Evidence 来源、Proposal/Receipt/Settlement、审计、Reaper、未知外部效果和资源清理。模型和插件不能直接修改数据库、容器、凭据、Job 快照、镜像准入、权限或终态。

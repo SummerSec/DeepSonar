@@ -141,7 +141,7 @@ finalizeJob：Verify、Research、下一轮 Hub 或 Report
 Task Report / Finding Report / 人工处理
 ```
 
-Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Scheduler 派生的系统 Job。一个 Canvas 同时最多一个活跃 Hub。Hub 只能引用当前画布的 canonical UUID，Finding 绑定必须使用数据库 Finding UUID；字段名、别名、跨画布 ID 和占位符都会被拒绝。
+Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Scheduler 派生的系统 Job。一个 Canvas 同时最多一个活跃 Hub。Hub 启动时只获得有界画布骨架（小图可获得完整小投影），需要细节时自主调用当前 Job 的只读 `graph_query`；平台只校验 Job scope、查询预算、脱敏和已见引用。Hub 只能引用当前画布中已经投影的 canonical UUID，Finding 绑定必须使用数据库 Finding UUID；字段名、别名、跨画布 ID 和占位符都会被拒绝。
 
 真实 Job 注入固定的 `deepsonar-control` Skill。Skill 只说明能力发现、OpenAPI、Bearer 和 Idempotency-Key；不动态授予权限。三类当前新执行 CLI 为 Claude Code、Pi、DSH；历史 Codex/OpenCode 归档仍可只读查看，不作为新执行的默认 adapter。
 
