@@ -435,7 +435,7 @@ expect(schedulerRuntimeSnapshot.includes("Do **not** install or download JDK, Ma
 expect(schedulerDispatcher.includes("禁止 apt-get、下载 JDK/Maven"), "runtime_test intents must prohibit JDK/Maven downloads");
 expect(schema.includes("WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'"), "schema Test RoleConfig default must select Kali Test");
 expect(schema.includes("Runtime test 工具链纪律"), "schema Test instructions must document prebuilt toolchain policy");
-expect(roleSmoke.includes("explicit dynamic verify runtime smoke"), "API smoke must cover explicit dynamic Verify image selection");
+expect(roleSmoke.includes("project_image_policy_removed"), "API smoke must reject removed project image_strategy writes");
 expect(roleSmoke.includes("assert verify_role[\"runtime_image_key\"] is None"), "API smoke must preserve global Verify Base default");
 for (const version of kaliConfig.managed.python.versions) {
   expect(kaliDockerfile.includes(version), `Kali minimal managed Python version drift: ${version}`);
