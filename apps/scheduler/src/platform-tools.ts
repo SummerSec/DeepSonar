@@ -91,6 +91,8 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置后令牌未失效，可再次修改密码。","rule_id":"AUTH-RESET-REPLAY"}`',
   ].join("\n"),
   submit_hub_decision: [
+    "Optional role_prompt overrides the selected Worker's business instructions for that Job only; it never mutates persistent RoleConfig or expands platform permissions.",
+    "Omit role_prompt to inherit the selected role's RoleConfig instructions; when supplied, it is frozen into the newly created Worker Job snapshot.",
     "### `submit_hub_decision` — 提交 Hub 决策",
     "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
     "- `from` 只能填写本 Job 已投影的 root/fact/finding id（YAML 注入或 `graph_query` 返回的 `referable_ids`）；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` / `agent_cli` / `credential_id` 只能原样来自本轮对应 list_available_* 目录；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",

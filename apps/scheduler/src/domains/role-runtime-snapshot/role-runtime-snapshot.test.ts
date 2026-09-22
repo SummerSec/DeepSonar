@@ -81,6 +81,35 @@ test("dirty image_strategy and inherit_global role_runtime_images are physically
   assert.deepEqual(managed.role_runtime_images, { audit: "deepsonar-audit" });
 });
 
+test("Hub taskPromptOverride replaces business instructions only in the new snapshot", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: null,
+    version: 4,
+    instructions_markdown: "Base role instructions",
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectCfg: undefined, globalCfg }),
+    "project-1",
+    "audit",
+    { taskPromptOverride: "Hub-specific role instructions for this Job" },
+  );
+  assert.match(snapshot.instructions_markdown ?? "", /Hub-specific role instructions for this Job/);
+  assert.equal(snapshot.role_config_id, "global-audit-cfg");
+  assert.equal(snapshot.role_config_version, 4);
+  assert.match(snapshot.runtime_profile.system_prompt_ref?.sha256 ?? "", /^sha256:[a-f0-9]{64}$/);
+  assert.equal(snapshot.platform_tools.includes("emit_finding"), true);
+});
+
 test("inherit_global leftover project RoleConfig.model does not steal snapshot model", async () => {
   const leftoverProject = {
     id: "project-audit-cfg",

@@ -192,7 +192,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; taskPromptOverride?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -628,7 +628,7 @@ export function createEventIngestionSideEffectApplication(
       const intentCliCaps = Array.isArray(intent.cli_capability_ids)
         ? intent.cli_capability_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
-      if (phase === "preflight" && (key || intentCli || intentCred || intent.model_ref || intent.model_requirements || intentLs || intentCliCaps.length > 0)) {
+      if (phase === "preflight" && (key || intentCli || intentCred || intent.model_ref || intent.model_requirements || intent.role_prompt || intentLs || intentCliCaps.length > 0)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
@@ -641,6 +641,7 @@ export function createEventIngestionSideEffectApplication(
               credentialId: intentCred ?? null,
               modelRef: intent.model_ref ?? null,
               modelRequirements: intent.model_requirements ?? null,
+              taskPromptOverride: intent.role_prompt ?? null,
               languageServerCapabilityId: intentLs || null,
               cliCapabilityIds: intentCliCaps.length > 0 ? intentCliCaps : null,
             },
@@ -1288,6 +1289,7 @@ export function createEventIngestionSideEffectApplication(
                 credentialId: it.credential_id ?? null,
                 modelRef: it.model_ref ?? null,
                 modelRequirements: it.model_requirements ?? null,
+                taskPromptOverride: it.role_prompt ?? null,
                 languageServerCapabilityId: it.language_server_capability_id ?? null,
                 cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
               },
@@ -1348,6 +1350,7 @@ export function createEventIngestionSideEffectApplication(
               description: it.description,
               prompt: workerPrompt,
               from: it.from,
+              ...(it.role_prompt ? { role_prompt: it.role_prompt } : {}),
               ...(it.model_ref ? { model_ref: it.model_ref } : {}),
               ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
             },

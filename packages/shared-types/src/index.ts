@@ -1287,6 +1287,8 @@ export const HubIntentPayload = z
     role: nonEmptyText(64),
     description: z.string().min(8).max(2_000).regex(/\S/),
     prompt: z.string().min(32).max(20_000).regex(/\S/),
+    // Task-level business instructions for this Worker Job; never persisted to RoleConfig.
+    role_prompt: z.string().trim().min(1).max(100_000).regex(/\S/u).optional(),
     // Hub 本轮可选的运行镜像提案：只能来自 list_available_runtime_images 返回的
     // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
     // 省略时 Scheduler 按项目镜像策略与 RoleConfig 缺省解析。
