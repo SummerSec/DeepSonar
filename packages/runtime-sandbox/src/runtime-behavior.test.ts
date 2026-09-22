@@ -467,6 +467,26 @@ test("CLI 同会话恢复只接受明确的临时上游错误", () => {
   assert.equal(classifyCliSessionResumeError({ status: 401, message: "network error" }), undefined);
 });
 
+test("CLI 将 Prompt is too long 分类为 context_window_exceeded 且不自动 resume", () => {
+  for (const message of [
+    "Prompt is too long",
+    "agent 运行失败: Prompt is too long",
+    "context_length_exceeded",
+    "This model's maximum context length is 128000 tokens",
+    "request exceeds the context window",
+  ]) {
+    assert.equal(classifyCliSessionResumeError(message), "context_window_exceeded", message);
+  }
+  // HTTP 400 wrapping a context-window error is still context_window_exceeded.
+  assert.equal(
+    classifyCliSessionResumeError({ status: 400, message: "Prompt is too long" }),
+    "context_window_exceeded",
+  );
+  const source = readFileSync(new URL("./runtime-agent.ts", import.meta.url), "utf8");
+  assert.match(source, /reason === "context_window_exceeded"/);
+  assert.match(source, /cause: "compaction_required"/);
+});
+
 test("CLI 同会话恢复退避有界且最多三次", () => {
   assert.equal(CLI_SESSION_RESUME_MAX_ATTEMPTS, 3);
   assert.equal(CLI_SESSION_RESUME_BASE_DELAY_MS, 1_000);
