@@ -29,5 +29,5 @@ test("Hub stub lists available skill sources", () => {
 
 test("schema v54 defines project_skill_sources", () => {
   assert.match(schema, /CREATE TABLE project_skill_sources/);
-  assert.match(schema, /VALUES \('global', 53\)/);
+  assert.match(schema, /VALUES \('global', 54\)/);
 });
