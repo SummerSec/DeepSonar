@@ -31,3 +31,11 @@ test("Provider 选项按已启用 CLI 过滤，并展示并发摘要", () => {
   assert.match(panel, /账号并发/);
   assert.match(panel, /暂无兼容的 LLM Provider/);
 });
+
+
+test("compatibleAgentClisForCredential 以 credential.agent_cli 独占，不按 Provider 扩", () => {
+  assert.match(panel, /isCurrentAgentCli\(credential\.agent_cli\) \? \[credential\.agent_cli\] : \[\]/);
+  assert.doesNotMatch(panel, /ADAPTER_CLIS\[credential\.provider\]/);
+  assert.doesNotMatch(panel, /only a profile hint/);
+  assert.match(panel, /exclusive|独占|唯一来源/);
+});

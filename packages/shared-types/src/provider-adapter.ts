@@ -226,12 +226,13 @@ export const ModelSelectionRequirements = z
 export type ModelSelectionRequirements = z.infer<typeof ModelSelectionRequirements>;
 
 /**
- * Credential.agent_cli is a soft profile hint only (#614).
- * Job / RoleConfig agent_cli is the binding surface — never treat Credential
- * columns as the global Agent CLI for every role sharing that credential.
+ * Credential.agent_cli is the exclusive CLI pin for that saved account (#658).
+ * A credential with agent_cli=X may only be bound/served by CLI X; do not expand
+ * via provider protocol matrices. Missing/invalid agent_cli is fail-closed.
+ * Saving one RoleConfig must not rewrite Credential.agent_cli for other roles.
  */
 export const CREDENTIAL_AGENT_CLI_BINDING_NOTE =
-  "Credential.agent_cli is a soft profile hint. Agent CLI, model profile, and reasoning belong on RoleConfig (or Role-Credential binding). The same Credential may serve multiple roles with different Agent CLIs; saving one RoleConfig must not rewrite Credential global run semantics for other roles." as const;
+  "Credential.agent_cli is the exclusive Agent CLI pin for that saved account. RoleConfig may bind the credential only when role agent_cli matches credential.agent_cli; provider protocol catalogs must not expand a saved credential to other CLIs. Missing or invalid credential.agent_cli is fail-closed. Saving one RoleConfig must not rewrite Credential.agent_cli for other roles." as const;
 
 export function isSelectableModelHealth(
   status: ModelCatalogHealthStatus,

@@ -20,10 +20,10 @@
 
 ## Credential vs RoleConfig
 
-`Credential.agent_cli` 仅为软提示。Agent CLI、模型 Profile、reasoning 属于 RoleConfig（或 Role-Credential Binding）。同一 Credential 可被多个不同 Agent CLI 的角色复用；保存一个 RoleConfig **不应**改写 Credential 的全局运行语义（phase-1 仍保留历史 follow 写回以兼容集成测试，迁移见 CHANGELOG deferred）。
+`Credential.agent_cli` 为账号独占 CLI 钉（#658）：账号选定哪个 CLI，就只能给哪个 CLI 用。兼容列表 / 白名单过滤 / 角色绑定 / Job 快照准入均以该字段为唯一来源；缺省或非法 fail-closed，不得再按 Provider 协议矩阵扩到其他 CLI。Provider 级 catalog（协议理论上支持哪些 CLI）仍可用于**创建时** Provider 选择过滤。保存一个 RoleConfig **不应**改写 Credential.agent_cli。
 
 ## Phase-1 vs 延期
 
-已交付：契约、Registry 种子、选型 helper、Job `provider_model` 冻结、Gateway 仅允许冻结模型、单测。
+已交付：契约、Registry 种子、选型 helper、Job `provider_model` 冻结、Gateway 仅允许冻结模型、单测；#658 账号 CLI 独占绑定。
 
-延期：全量 Provider 接入、真实 probe 全部迁入 Adapter、停止 RoleConfig→Credential.agent_cli 回写、Web 健康态 UI、Fallback / 并发限制集成测试扩面。
+延期：全量 Provider 接入、真实 probe 全部迁入 Adapter、Fallback / 并发限制集成测试扩面。

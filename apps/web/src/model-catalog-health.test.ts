@@ -61,8 +61,9 @@ test("passthrough tone is distinct from verified", () => {
   assert.match(modelCatalogHealthBadgeClass("stale"), /warn/);
 });
 
-test("legacy string catalog becomes stale descriptors", () => {
+test("legacy string catalog becomes stale descriptors pinned to credential.agent_cli", () => {
   const credential = baseCredential({
+    agent_cli: "pi",
     model_descriptors: undefined,
     health: {
       status: "ok",
@@ -76,9 +77,25 @@ test("legacy string catalog becomes stale descriptors", () => {
   const rows = modelDescriptorsForCredential(credential);
   assert.equal(rows.length, 2);
   assert.equal(rows[0]?.health_status, "stale");
+  assert.deepEqual(rows[0]?.compatible_agent_clis, ["pi"]);
+  assert.deepEqual(rows[1]?.compatible_agent_clis, ["pi"]);
   assert.equal(catalogHasUnhealthy(credential), true);
   assert.equal(catalogHasPassthrough(credential), false);
   assert.match(credentialCatalogHealthSummary(credential), /目录过期|上游探测/);
+
+  const missingCli = baseCredential({
+    agent_cli: null,
+    model_descriptors: undefined,
+    health: {
+      status: "ok",
+      last_tested_at: "2026-01-01T00:00:00.000Z",
+      error_category: null,
+      detail: null,
+      model_catalog: ["model-a"],
+      model_catalog_fetched_at: "rev-1",
+    },
+  });
+  assert.deepEqual(modelDescriptorsForCredential(missingCli)[0]?.compatible_agent_clis, []);
 });
 
 test("structured descriptors with passthrough surface in summary", () => {

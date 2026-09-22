@@ -137,7 +137,7 @@ test("inherit_global leftover project RoleConfig.model does not steal snapshot m
   }
 });
 
-test("凭据 agent_cli 与角色不一致但 Provider 兼容时按角色解析", async () => {
+test("凭据 agent_cli 与角色不一致时独占绑定 fail-closed", async () => {
   const projectCfg = {
     id: "project-hub-cfg",
     project_id: "project-1",
@@ -163,19 +163,23 @@ test("凭据 agent_cli 与角色不一致但 Provider 兼容时按角色解析",
     meta_json: {},
     public_metadata_json: {},
   };
-  const snapshot = await resolveAgentSnapshotForJob(
-    snapshotDb({
-      projectConfig: { image_strategy: "project_managed" },
-      projectCfg,
-      globalCfg: undefined,
-      credential,
-    }),
-    "project-1",
-    "audit",
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: { image_strategy: "project_managed" },
+        projectCfg,
+        globalCfg: undefined,
+        credential,
+      }),
+      "project-1",
+      "audit",
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      assert.match(error.message, /独占绑定|agent_cli=claude-code.*pi/);
+      return true;
+    },
   );
-  assert.equal(snapshot.agent_cli, "pi");
-  assert.equal(snapshot.credential_id, "cred-local");
-  assert.deepEqual(snapshot.pi_extensions, []);
 });
 
 test("Pi snapshot freezes the CLI model id when RoleConfig stores a deepsonar/ prefix", async () => {

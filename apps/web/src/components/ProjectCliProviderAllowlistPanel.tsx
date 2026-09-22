@@ -6,16 +6,12 @@ import {
   modelCatalogHealthLabel,
   modelDescriptorsForCredential,
 } from "../model-catalog-health";
+import { isCurrentAgentCli } from "@deepsonar/shared-types";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
 
 const AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
 type AgentCli = (typeof AGENT_CLIS)[number];
-const ADAPTER_CLIS: Record<string, AgentCli[]> = {
-  anthropic: ["claude-code", "pi", "dsh"],
-  openai: ["pi", "dsh"],
-};
-
 /** @deprecated Prefer modelCatalogHealthLabel from model-catalog-health. */
 export function modelHealthLabel(status: string | null | undefined): string {
   return modelCatalogHealthLabel(status);
@@ -24,18 +20,14 @@ export function modelHealthLabel(status: string | null | undefined): string {
 export { modelDescriptorsForCredential };
 
 /**
- * Compatibility is an adapter/catalog capability.  `credential.agent_cli` is
- * only a profile hint and must never decide whether an account can be used by
- * a CLI (editing that hint must not mutate the capability matrix).
+ * Saved-account CLI compatibility is exclusive (#658): `credential.agent_cli`
+ * is the only source. Do not expand via ADAPTER_CLIS / descriptor multi-CLI
+ * lists. Missing or non-current agent_cli → empty (fail-closed).
+ * Provider protocol catalogs may still list multiple CLIs for create-time
+ * provider picker filtering (CredentialConfigEditor).
  */
 export function compatibleAgentClisForCredential(credential: ProviderCredential): AgentCli[] {
-  const descriptors = modelDescriptorsForCredential(credential);
-  const descriptorClis = descriptors.flatMap((model) => model.compatible_agent_clis).filter(
-    (cli): cli is AgentCli => AGENT_CLIS.includes(cli as AgentCli),
-  );
-  const adapterClis = credential.adapter?.compatible_agent_clis ?? ADAPTER_CLIS[credential.provider] ?? [];
-  const candidates = descriptorClis.length > 0 ? descriptorClis : adapterClis;
-  return [...new Set(candidates.filter((cli): cli is AgentCli => AGENT_CLIS.includes(cli as AgentCli)))];
+  return isCurrentAgentCli(credential.agent_cli) ? [credential.agent_cli] : [];
 }
 
 export function credentialSupportsCli(credential: ProviderCredential, cli: AgentCli): boolean {

@@ -20,12 +20,12 @@ import {
 import {
   isProviderKnown,
   UNKNOWN_PROVIDER_ERROR,
+  validateCredentialAgentCliExclusive,
   validateCredentialCompatibility,
 } from "../../credentials.js";
 import {
   assertResolvedModelInCredentialCatalog,
   extractModelsFromSettings,
-  hasProviderSettingsConfig,
   projectProviderRuntimeSnapshot,
   resolveModelSource,
   snapshotUpstreamModel,
@@ -413,7 +413,6 @@ async function resolveAgentSnapshotForJobUnchecked(
   }
   assertCredentialAllowlisted(agentAllowlist, (llm?.id as string | undefined) ?? preferredCredentialId);
   const settingsConfig = llm?.settings_config_json ?? {};
-  const hasSettings = hasProviderSettingsConfig(settingsConfig);
   const manualConfigFiles = cfg
     ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
     : [];
@@ -506,14 +505,14 @@ async function resolveAgentSnapshotForJobUnchecked(
     });
     const provider = String(llm.provider ?? "");
     if (!isProviderKnown(provider)) throw new Error(UNKNOWN_PROVIDER_ERROR);
-    // Credential.agent_cli is a hint. A full settingsConfig profile may serve
-    // every CLI the provider matrix allows; Job identity follows RoleConfig.
-    const profileCli = typeof llm.agent_cli === "string" ? llm.agent_cli : null;
-    if (hasSettings && profileCli && profileCli !== agentCli) {
-      console.warn(`[role-config] Credential ${llm.id} agent_cli=${profileCli} 与角色 ${agentCli} 不一致，已按角色配置解析`);
-    }
+    // #658: credential.agent_cli is exclusive — mismatch / missing fail-closed.
     const compatibilityError = validateCredentialCompatibility(agentCli, provider);
     if (compatibilityError) throw new Error(compatibilityError);
+    const exclusiveError = validateCredentialAgentCliExclusive(
+      agentCli,
+      typeof llm.agent_cli === "string" ? llm.agent_cli : null,
+    );
+    if (exclusiveError) throw new Error(exclusiveError);
     const credProject = (llm.cred_project_id as string | null) ?? null;
     // Hub / 项目软缺省可选项目或全局凭据；仅 RoleConfig 绑定路径仍限制全局配置只能绑全局凭据。
     if (preferredCredentialId) {
