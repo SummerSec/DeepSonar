@@ -540,6 +540,7 @@ function instructionDocument(input: {
 
 - 当前目录固定为 \`/workspace\`。
 - 不假设代码位于任何固定路径，不假设任务一定包含代码。
+- 你可以在 \`/workspace\` 内创建和编辑工作文件；是否修改目标材料由本轮 Hub prompt 和角色职责决定。未明确授权时目标材料只读；明确允许时只做范围内最小修改，并在最终工具事件中记录文件、关键 diff 和验证结果。
 - ${input.composeScope
     ? "本任务是组合续挖：只获取 YAML compose_scope.locations 中的种子仓库/模块；禁止浅克隆种子以外的仓，禁止把工作扩成新一轮资产扫描。"
     : "是否使用 git、curl、浏览器、已有文件或完全不下载材料，由你根据本轮 Hub prompt 自行决定。"}
@@ -875,7 +876,8 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     initialInput = `任务内容：
 ${taskGoal}
 
-读取下面的任务画布，判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。若需要为某个 Worker 临时调整角色业务提示词，可在该 intent 添加 role_prompt；它只冻结到新 Job，不会修改持久化 RoleConfig。
+下面注入的画布 YAML 是启动时的初始投影，不保证包含本轮最新状态。每次 Worker、Verify、人工消息或其他画布增量到达后，先调用 graph_query({kind:"overview"}) 获取最新概况，再按需用 index、findings、intents、node、edges、evidence 查询细节。complete、补证和新 intent 必须以最新查询结果为准；from 只能引用本 Job 已通过注入或 graph_query 返回的 referable_ids。
+读取任务画布并判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。每个 prompt 还必须明确该 Worker 对目标材料是只读还是允许修改；允许修改时写明文件范围、修改目的、验证命令和边界，未明确授权不得修改目标。若需要为某个 Worker 临时调整角色业务提示词，可在该 intent 添加 role_prompt；它只冻结到新 Job，不会修改持久化 RoleConfig。
 每个 intent 可按本轮目标需要附加可选字段 agent_cli / credential_id / model_ref 选择 Agent CLI、Provider 与模型：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / credential_id / models.model_id；需要能力约束时附加 model_requirements（如 min_context_window、require_tools、reasoning_effort），Scheduler 会在冻结前再次校验。三者与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省或 RoleConfig 回退。并发以 Provider 配额为准。不得提案未启用目录外的值。
 Skill/模块源：可调用 list_available_skill_sources 查看项目已启用且平台 trusted+enabled 的只读目录；目录发现不等于授权。业务 Skill 不会因 RoleConfig modules_json 为空而自动注入，只有显式 selector 经项目白名单与 Job 快照校验后才会物化。需要能力时按本 Job 已授权的动态目录操作自行发现，不要猜测或自行安装 Skill。
 每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：需要非缺省工具链时必须先调用 list_available_runtime_images，按返回条目的 purpose、capabilities、selection_hints、tool_summary、not_included 匹配任务（APK/移动端→mobile，Chromium/CDP→chrome-test，ClickHouse SQL→clickhouse-test，hdc/OpenHarmony 设备→openharmony-test，多语言动态 PoC→kali-minimal 等），再原样复制 image_key；同时核对 compatible_agent_clis 覆盖本轮角色 CLI 且 readiness=ready。禁止凭记忆猜测 image_key。省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
