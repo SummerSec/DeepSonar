@@ -13,3 +13,4 @@ deploy/master.key
 
 # 本地引导 admin token（敏感临时文件，勿提交）
 .deepsonar-admin-token*
+.workbuddy-ai/
