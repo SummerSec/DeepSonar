@@ -108,6 +108,16 @@ test("RoleConfig seed prompts do not embed the platform control Skill", () => {
   assert.match(executorSource, /deepsonar-control Skill/);
 });
 
+test("RoleConfig seed prompts use the dynamic platform contract without embedded Skill", () => {
+  const seedStart = schemaSql.indexOf("INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)");
+  const seedEnd = schemaSql.indexOf(") AS templates(name, instructions) ON templates.name = r.name", seedStart);
+  const rolePromptSeed = schemaSql.slice(seedStart, seedEnd);
+  assert.equal((rolePromptSeed.match(/Job-scoped API operation/g) ?? []).length, 9);
+  assert.doesNotMatch(rolePromptSeed, /deepsonar-control/);
+  assert.doesNotMatch(rolePromptSeed, /Skill/);
+  assert.doesNotMatch(rolePromptSeed, /vuln-definitions/);
+});
+
 test("#648 test toolchain policy does not conflate inconclusive with needs_human", () => {
   assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /outcome=inconclusive/);
   assert.match(RUNTIME_TEST_TOOLCHAIN_POLICY, /mark_job_done\.verdict only/);
