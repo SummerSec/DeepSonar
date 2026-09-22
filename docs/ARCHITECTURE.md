@@ -9,6 +9,8 @@
 
 **一句话（as-built）**：以**本地库为管理真相**（Web 直接建项目/任务；Plane 为**可选**集成），以任务画布为过程真相，以一次性沙箱为执行真相，以调度器为唯一副作用执行者；多角色 Agent 只提案，系统落地与记账。
 
+**可插拔原则**：能力、Skill、工具和运行时组件都通过准入目录和受治理接口组合。平台负责范围、沙箱、网络、凭据、预算、审计、幂等和结果落地；在这些边界以内，Agent 自主发现、选择、拉取、加载和组合能力。业务 Skill 不作为角色提示词或 RoleConfig 的隐式预装内容，Agent 的运行中拉取必须使用当前 Job 的受治理 Skill 操作。
+
 > 历史分期与早期方案只在明确标注的背景段落保留；当前实现不要求先接入 Plane。
 
 ---
@@ -644,14 +646,14 @@ RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表
 
 ### 8.4 Git 模块源（skill_sources）
 
-项目级启用表 `project_skill_sources`（#603，schema v53）对标 `project_runtime_images`：`(project_id, skill_source_id, enabled)`。Job 展开显式 `modules_json` 前必须通过项目白名单 fail-closed；首次读取设置时把历史 RoleConfig selector 源种子为启用。Hub `list_available_skill_sources` 是只读目录。空 `modules_json` 不再默认展开全部 trusted+enabled 源；Agent/Hub 先按需发现，显式 selector 经白名单、快照 selector/digest 和内容 hash 校验后才会物化。Job 仍冻结 selector/digest/内容 hash；创建后 sync 不影响当次执行。平台 `deepsonar-control` Skill 继续强制注入，不受项目白名单约束。
+项目级启用表 `project_skill_sources`（#603，schema v53）对标 `project_runtime_images`：`(project_id, skill_source_id, enabled)`。RoleConfig `modules_json` 为空时不再预装业务 Skill；Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取具体 Skill 文件并读取 `SKILL.md`。拉取只允许平台 trusted+enabled 源，并由 Job token、操作 allowlist、预算、网络策略和内容 hash 重新校验；Skill 不能扩大 Job 权限。Hub `list_available_skill_sources` 只返回源摘要，不要求 Intent 预先携带 selector。平台 `deepsonar-control` Skill 继续强制注入，不受业务 Skill 拉取路径影响。
 
 
-Agent 的插件/skill 集中托管在 Git 仓库，每个 RoleConfig 按需勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
+Agent 的插件/Skill 集中托管在 Git 仓库，由平台受控同步并缓存；Agent 在 Job 内按需从目录选择并拉取，不要求 RoleConfig 预先勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 
 - `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存
 - 模块归属按最近含 `.claude-plugin/plugin.json` 的祖先目录分组（= 插件）
-- RoleConfig 保存原始 selector：历史 `<source_id>:<module_id>`，以及 `<source_id>:plugin:<plugin_path>`（插件下全部 skill/command）和 `<source_id>:source:*`（整源）。快照时只在 trusted + enabled 的当前 catalog 上展开，和手写 JSON 合并（按 name 去重，手写优先），随 `agent.setup()` 下发到当次 Worker
+- 历史 RoleConfig 仍可保存原始 selector：`<source_id>:<module_id>`、`<source_id>:plugin:<plugin_path>` 或 `<source_id>:source:*`，作为兼容快照入口；新运行时由 Agent 使用 `list_available_skills` / `search_skills` / `pull_skill` 自主选择，不要求 Intent 预先携带 selector
 - `module_selectors`、展开模块元数据、`module_content_hash`、`skill_revisions` 与结构化 `missing_modules` 一并冻结进 Job snapshot；后续 sync 只影响下一 Job，历史 Job 只消费快照内容。插件/整源 selector 会自动纳入 sync 后新增模块，旧的显式 module 列表不会。手写 `skills_json`/`commands_json` 对同 kind/name 的 catalog 模块具有确定性优先级，被屏蔽模块从最终 expanded 集合与 hash 排除并记录 `manual-override`
 - selector 解析固定以 36 字符 source UUID 开头；插件/模块路径拒绝绝对路径、空段、`..` 与 URL 解码后的保留 `:`。未信任/禁用来源、缺失插件、空 catalog、手工覆盖和同一 skill/command 命名空间内的重复名称写入明确 missing；重复名称的全部冲突模块排除，不依赖 catalog 顺序覆盖写入
 - catalog 与最终展开集合的内容哈希覆盖 plugin/name/description 与文件内容；Job 证据 manifest/runtime evidence/API 详情均保留 missing_modules，旧快照按空数组兼容。Runtime materializer 在 mkdir/upload 前对 command/subAgent/skill 名称及 skill 文件相对路径做 normalize/resolve 子树校验，路径穿越、绝对路径和控制字符直接拒绝

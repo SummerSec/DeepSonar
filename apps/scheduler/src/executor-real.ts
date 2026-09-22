@@ -20,6 +20,9 @@ import {
   AckHumanMessagePayload,
   allowedPlatformTools,
   CAPABILITY_DISCOVERY_TOOLS_LIST,
+  ListAvailableSkillsPayload,
+  SearchSkillsPayload,
+  PullSkillPayload,
   type PlatformToolName,
   type VerifyVerdict,
   isSafeWorkspacePayloadFile,
@@ -48,6 +51,11 @@ import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import { listHubAgentCliCatalog, listHubProviderCatalog } from "./domains/project-agent-allowlist/index.js";
 import { listHubSkillSourceCatalog } from "./domains/project-skill-allowlist/index.js";
+import {
+  listAvailableSkillsFromCatalog,
+  loadTrustedEnabledSkillSourceCatalogs,
+  pullSkillFromCatalog,
+} from "./skill-sources.js";
 import {
   PROVIDER_ENV_MAP,
   UNKNOWN_PROVIDER_ERROR,
@@ -572,8 +580,8 @@ function instructionDocument(input: {
 ## Skill 与能力发现
 
 - 不要假设任何业务 Skill 已预装，也不要把平台专用的 deepsonar-control 控制协议当作业务能力。
-- 需要专门能力时，先读取 /workspace/.deepsonar/runtime-manifest.json，再仅使用本 Job 已授权的动态目录操作（如 list_capabilities、search_capabilities、describe_capability、preview_materialization）按返回契约发现；某个操作未出现在动态工具列表时不得调用。
-- 发现不是授权。不得自行安装、下载、执行未准入的 Skill 或猜测 selector；只有 Job 快照和本轮返回且被重新校验的能力可用。缺失能力时如实提交不可用或受治理的阻塞，不要静默降级。
+- 需要专门能力时，先读取 /workspace/.deepsonar/runtime-manifest.json，再调用 list_available_skills 或 search_skills，自主选择本轮返回的 selector 和 content_hash，随后调用 pull_skill 拉取 Skill 文件。
+- pull_skill 成功后先读取返回的 SKILL.md，再按需读取 references；Skill 只影响当前任务的工作方法，不能覆盖平台控制协议、Job 权限、预算或角色边界。不得猜测 selector/hash，也不得用 git clone、npm/pip install 或任意下载脚本替代 pull_skill。
 
 ## 网络边界
 
@@ -879,7 +887,7 @@ ${taskGoal}
 下面注入的画布 YAML 是启动时的初始投影，不保证包含本轮最新状态。每次 Worker、Verify、人工消息或其他画布增量到达后，先调用 graph_query({kind:"overview"}) 获取最新概况，再按需用 index、findings、intents、node、edges、evidence 查询细节。complete、补证和新 intent 必须以最新查询结果为准；from 只能引用本 Job 已通过注入或 graph_query 返回的 referable_ids。
 读取任务画布并判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。每个 prompt 还必须明确该 Worker 对目标材料是只读还是允许修改；允许修改时写明文件范围、修改目的、验证命令和边界，未明确授权不得修改目标。若需要为某个 Worker 临时调整角色业务提示词，可在该 intent 添加 role_prompt；它只冻结到新 Job，不会修改持久化 RoleConfig。
 每个 intent 可按本轮目标需要附加可选字段 agent_cli / credential_id / model_ref 选择 Agent CLI、Provider 与模型：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / credential_id / models.model_id；需要能力约束时附加 model_requirements（如 min_context_window、require_tools、reasoning_effort），Scheduler 会在冻结前再次校验。三者与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省或 RoleConfig 回退。并发以 Provider 配额为准。不得提案未启用目录外的值。
-Skill/模块源：可调用 list_available_skill_sources 查看项目已启用且平台 trusted+enabled 的只读目录；目录发现不等于授权。业务 Skill 不会因 RoleConfig modules_json 为空而自动注入，只有显式 selector 经项目白名单与 Job 快照校验后才会物化。需要能力时按本 Job 已授权的动态目录操作自行发现，不要猜测或自行安装 Skill。
+Skill/模块源：业务 Skill 不会因 RoleConfig modules_json 为空而自动注入。Agent/Worker 需要能力时自行调用 list_available_skills/search_skills，再用返回的 selector/content_hash 调用 pull_skill；Hub 不需要预先把 Skill 写进 Intent。list_available_skill_sources 只用于查看平台 trusted+enabled 源摘要。
 每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：需要非缺省工具链时必须先调用 list_available_runtime_images，按返回条目的 purpose、capabilities、selection_hints、tool_summary、not_included 匹配任务（APK/移动端→mobile，Chromium/CDP→chrome-test，ClickHouse SQL→clickhouse-test，hdc/OpenHarmony 设备→openharmony-test，多语言动态 PoC→kali-minimal 等），再原样复制 image_key；同时核对 compatible_agent_clis 覆盖本轮角色 CLI 且 readiness=ready。禁止凭记忆猜测 image_key。省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
 
 画布（YAML）：
@@ -1517,6 +1525,21 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     if (operation === "list_available_skill_sources") {
       const skill_sources = await listHubSkillSourceCatalog(sql as never, job.project_id as string);
       return { accepted: true, operation, skill_sources };
+    }
+    if (operation === "list_available_skills" || operation === "search_skills") {
+      const sources = await loadTrustedEnabledSkillSourceCatalogs(sql);
+      const result = operation === "list_available_skills"
+        ? listAvailableSkillsFromCatalog(sources, ListAvailableSkillsPayload.parse(context.input ?? {}))
+        : listAvailableSkillsFromCatalog(sources, SearchSkillsPayload.parse(context.input ?? {}));
+      return { accepted: true, operation, ...result };
+    }
+    if (operation === "pull_skill") {
+      const parsed = PullSkillPayload.parse(context.input ?? {});
+      const sources = await loadTrustedEnabledSkillSourceCatalogs(sql);
+      const result = pullSkillFromCatalog(sources, parsed.selector, parsed.expected_content_hash);
+      return result.ok
+        ? { accepted: true, operation, skill: result.skill }
+        : { accepted: false, operation, error_code: result.error_code, error: result.message };
     }
     if (operation === "list_shared_assets") {
       const input = context.input && typeof context.input === "object" && !Array.isArray(context.input)

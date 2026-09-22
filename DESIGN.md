@@ -55,7 +55,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 **平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单（对标 `project_runtime_images` / CLI·Provider 白名单）。未启用的源不可进入本项目 Job 快照。CLI × Provider × 镜像 × Skill 从已启用集合自由组合；角色不是主绑定面。
 
-**Hub / Job 运行时选型**：`list_available_skill_sources` 提供只读目录（项目已启用 ∩ 平台 trusted+enabled）。业务 Skill 不因 RoleConfig 为空而默认注入；Agent/Hub 先按需发现能力，只有显式 selector 经过项目白名单、Job 快照和内容 hash 校验后才会物化。发现 ≠ 授权。
+**Hub / Job 运行时选型**：业务 Skill 不因 RoleConfig 为空而默认注入。Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取并读取 `SKILL.md`；Hub 不需要预先把 Skill 写入 Intent。平台只允许 trusted+enabled 源，拉取操作仍受当前 Job 的 token、预算、网络和审计边界约束。
 
 **Job 快照冻结**：创建时冻结 `module_selectors`、digest、模块内容 hash 与 missing；物化只认快照。Job 创建后的 skill_source sync **不影响**进行中 Job，只影响下一 Job。
 
@@ -79,10 +79,11 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 - 可选 evaluator。
 
 当前已落地的是第一刀：内置 pack、已信任 Git skill module、RoleConfig 生成只读目录投影；Job 级只读发现操作为 `list_capabilities`、`search_capabilities`、`describe_capability`、`validate_composition`、`preview_materialization`。现有 `explore`、`analyze`、`review`、`test`、`code`、`audit` 作为内置 pack 继续工作，`deepsonar-management` 也可以作为平台能力包被发现。
+Agent 运行中拉取业务 Skill 使用 `list_available_skills`、`search_skills`、`pull_skill`；这些操作返回并校验具体模块文件，但不改变 Job 的平台权限边界。
 
 发现不是授权。Scheduler 仍按项目范围、Job 快照、平台工具 allowlist、镜像兼容性和网络策略决定可执行集合。模型不能用 Manifest 扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。
 
-Job 创建时冻结 capability selector、digest、模块内容 hash、缺失模块和运行配置；运行时物化只能使用这份快照。当前发现 API 会合并内置目录、已信任 skill source 和 Job 的 RoleConfig 投影，因此发现结果本身只是只读目录提示，不是授权。任何组合/物化路径都必须再以快照 selector/digest 为上限，不能把 Job 创建后的 source sync 当成这次执行的新权限；这条上限校验是继续收紧的实现门。空 RoleConfig 不再产生业务 Skill 物化，显式 selector 仍保留为兼容入口。当前尚未实现 task/session Pack 的持久化生命周期、Pack 评估晋升和跨任务经验推荐；不要在代码或文档中把这些未来能力写成已存在。
+Job 创建时冻结运行配置和平台控制边界；业务 Skill 不再依赖 RoleConfig selector 预先物化。Agent 可在运行中从 trusted+enabled 目录搜索并通过 `pull_skill` 拉取具体 Skill，拉取时重新校验 selector、内容 hash、Job token、预算和网络策略。Skill 只能影响当前任务的方法，不得扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。当前尚未实现 task/session Pack 的持久化生命周期、Pack 评估晋升和跨任务经验推荐；不要在代码或文档中把这些未来能力写成已存在。
 
 ### 4.1.1 Language Server Capability Modules
 
