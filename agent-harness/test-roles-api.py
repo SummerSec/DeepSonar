@@ -171,7 +171,7 @@ def main() -> None:
         f"实际为 {actual_egress!r}"
     )
 
-    # 2. 项目视角：默认全部内置工作角色启用（库中可能残留历史自定义角色，不纳入集合相等）
+    # 2. 项目视角：平台工作角色默认全部可用（#674：无项目 roles.enabled 门闸）
     proles = req("GET", f"/projects/{pid}/roles")
     print("默认启用:", [(r["name"], r["enabled"], r["default_enabled"]) for r in proles])
     builtin_work = {"explore", "analyze", "review", "test", "code", "audit"}
@@ -179,14 +179,14 @@ def main() -> None:
     assert builtin_work.issubset(by_name.keys()), by_name.keys()
     assert all(by_name[n]["enabled"] and by_name[n]["default_enabled"] for n in builtin_work), by_name
 
-    # 3. 项目只勾选 explore + analyze
+    # 3. 遗留 roles.enabled 写入不再改变可用性（可忽略或无效果）
     req("PATCH", f"/projects/{pid}/settings", {"roles": {"enabled": ["explore", "analyze"]}})
     proles = req("GET", f"/projects/{pid}/roles")
     enabled = {r["name"] for r in proles if r["enabled"]}
-    assert enabled == {"explore", "analyze"}, enabled
-    print("勾选后:", [(r["name"], r["enabled"]) for r in proles])
+    assert builtin_work.issubset(enabled), enabled
+    print("遗留启停写入后仍全部可用:", sorted(enabled & builtin_work))
 
-    # 4. 新建自定义角色
+    # 4. 新建自定义角色（全局注册表；创建后即对项目默认可用）
     code, custom = req(
         "POST",
         "/agent-roles",
@@ -200,12 +200,7 @@ def main() -> None:
     assert code in (200, 201), code
     print("新建角色:", custom["name"], custom["builtin"])
 
-    # 5. 项目启用自定义角色
-    req(
-        "PATCH",
-        f"/projects/{pid}/settings",
-        {"roles": {"enabled": ["explore", custom["name"]]}},
-    )
+    # 5. 自定义角色无需项目启停，列表中直接可用
     proles = req("GET", f"/projects/{pid}/roles")
     enabled = {r["name"] for r in proles if r["enabled"]}
     assert custom["name"] in enabled and "explore" in enabled, enabled
@@ -262,7 +257,6 @@ def main() -> None:
 
     # 8. 清理
     req("DELETE", f"/projects/{pid}/role-configs/{custom['id']}")
-    req("PATCH", f"/projects/{pid}/settings", {"roles": {"enabled": None}})
     # Hub 可下发的 kind=role 均可删除；自定义角色在这里验证并清理。
     req("DELETE", f"/agent-roles/{custom['id']}")
     req("POST", f"/projects/{pid}/archive", None)
