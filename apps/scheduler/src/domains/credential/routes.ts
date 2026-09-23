@@ -55,13 +55,13 @@ import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";
 import {
   containsSecretMask,
   MASKED_SECRET_PLACEHOLDER,
-  redactSecretProjection,
   restoreMaskedSecretValues,
 } from "../../credential-secret-projection.js";
 
 export function registerCredentialRoutes(app: FastifyInstance): void {
-  // ---------- Provider Credential（§6.2/§6.4：加密存储，与 API Token 严格分离） ----------
-  // 列表/详情永不返回密文；明文只在创建/轮换请求体里进、运行时解密用
+  // ---------- Provider Credential（§6.2/§6.4：密钥列 AES-GCM；与 API Token 严格分离） ----------
+  // #689：管理 API 的 settings_config_json 返回明文 API Key，供编辑表单回显；
+  // ciphertext 列仍不对外返回。Job 快照继续走 redactSecretProjection。
   const CRED_SAFE = sql`id, name, kind, provider, project_id, key_version, public_metadata_json,
                         fingerprint, last4, status, last_used_at, rotated_at,
                         last_tested_at, health_status, health_error_category,
@@ -147,7 +147,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         gateway: adapter.gateway,
       } : null,
       agent_cli: row.agent_cli ?? null,
-      settings_config_json: redactSecretProjection(settingsConfig),
+      settings_config_json: settingsConfig,
       meta_json: metaJson,
       scope: row.project_id ? "project" : "global",
       health: {

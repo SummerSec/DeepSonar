@@ -1207,7 +1207,7 @@ export interface CredentialModels {
   };
 }
 
-/** Provider Credential（§6.2）：永不返回密文，只有指纹/last4 */
+/** Provider Credential（§6.2）：ciphertext 不返回；settings_config_json 可含明文 API Key（#689） */
 export interface ProviderCredential {
   id: string;
   name: string;
@@ -1228,7 +1228,7 @@ export interface ProviderCredential {
   } | null;
   /** Exclusive Agent CLI pin for this saved account (#658). */
   agent_cli?: "claude-code" | "pi" | "dsh" | "codex" | "open-code" | null;
-  /** CLI settingsConfig projection. Secret values are returned as [已保存密钥]. */
+  /** CLI settingsConfig（含明文 API Key，供编辑回显；#689）。 */
   settings_config_json?: Record<string, unknown>;
   /** Manager-only meta (apiFormat, fullUrl, …). */
   meta_json?: Record<string, unknown>;

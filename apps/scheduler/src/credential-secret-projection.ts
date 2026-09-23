@@ -1,8 +1,10 @@
 /**
- * Secrets in a CC Switch settings profile stay server-owned.  The API may
- * expose the profile shape, but it never exposes its values.  PATCH accepts
- * the stable marker so an editor can round-trip unchanged secrets without
- * learning them.
+ * Secret projection helpers.
+ *
+ * Credential management APIs (#689) return plaintext settings_config values so
+ * the edit form can reveal saved API keys. Job snapshots and other non-edit
+ * surfaces still call redactSecretProjection. PATCH may still accept the
+ * stable `[已保存密钥]` marker (or empty secret fields) to mean "keep existing".
  */
 export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 

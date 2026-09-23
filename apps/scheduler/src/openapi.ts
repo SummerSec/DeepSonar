@@ -2289,7 +2289,7 @@ const OPS: Op[] = [
   { method: "delete", path: "/skill-sources/{id}", summary: "删除模块源", scope: "skills:write", tags: ["Skills"] },
 
   // credentials
-  { method: "get", path: "/credentials", summary: "凭据列表（无密文）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials", summary: "凭据列表（settings_config 含明文 API Key；ciphertext 不返回）", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "get",
     path: "/credentials/providers",
@@ -2303,7 +2303,7 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；无密文）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；settings_config 含明文 API Key）", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "get",
     path: "/credentials/{id}/impact",
@@ -2353,7 +2353,7 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/credentials/{id}",
-    summary: "更新 Credential 配置（settings_config 中已保存密钥由服务端恢复）",
+    summary: "更新 Credential 配置（空密钥 / [已保存密钥] 表示不修改已有 API Key）",
     scope: "agents:write",
     tags: ["Credentials"],
     body: {
@@ -2364,7 +2364,7 @@ const OPS: Op[] = [
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: { $ref: "#/components/schemas/CredentialMetadata" },
         agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true },
-        settings_config: { type: "object", additionalProperties: true, description: "API 返回的 [已保存密钥] 可原样回传，服务端保留原值" },
+        settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置（可含明文 API Key）；空字段或 [已保存密钥] 表示保留原值" },
         meta: { type: "object", additionalProperties: true },
       },
     },
