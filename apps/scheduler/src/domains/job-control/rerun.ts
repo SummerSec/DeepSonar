@@ -11,6 +11,7 @@ import {
   createSqlJobLifecycleApplication,
   RESUMABLE_JOB_STATUSES,
 } from "../job-lifecycle/index.js";
+import type { RepairFeedback } from "@deepsonar/shared-types";
 import {
   freezeAgentSnapshotNetworkPolicy,
   SnapshotUnresolvableError,
@@ -46,6 +47,8 @@ export type SnapshotStaleDetail = {
   job_id: string;
   stale_fields: string[];
   resolution_error?: string;
+  /** Optional structured RepairFeedback when resolution failed with a correctable cause (#681). */
+  repair?: RepairFeedback;
 };
 
 export type RequeueJobResult =
@@ -124,14 +127,48 @@ export function isSnapshotUnresolvableError(error: unknown): error is SnapshotUn
   return false;
 }
 
-export function currentSnapshotUnresolvableBody(error: unknown) {
-  const errorCode = error instanceof SnapshotUnresolvableError ? error.error_code : SNAPSHOT_STALE;
+/** Prefer SnapshotUnresolvableError.repair, then walk Error.cause for `.repair`. */
+export function repairFromUnresolvableError(error: unknown): RepairFeedback | undefined {
+  for (let current: unknown = error; current; current = current instanceof Error ? current.cause : undefined) {
+    if (current instanceof SnapshotUnresolvableError && current.repair) return current.repair;
+    if (current && typeof current === "object" && "repair" in current) {
+      const repair = (current as { repair?: unknown }).repair;
+      if (
+        repair
+        && typeof repair === "object"
+        && typeof (repair as { category?: unknown }).category === "string"
+        && typeof (repair as { code?: unknown }).code === "string"
+        && typeof (repair as { message?: unknown }).message === "string"
+      ) {
+        return repair as RepairFeedback;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function findSnapshotUnresolvableError(error: unknown): SnapshotUnresolvableError | undefined {
+  for (let current: unknown = error; current; current = current instanceof Error ? current.cause : undefined) {
+    if (current instanceof SnapshotUnresolvableError) return current;
+  }
+  return undefined;
+}
+
+export function currentSnapshotUnresolvableBody(
+  error: unknown,
+  extras?: { repair?: RepairFeedback },
+) {
+  const snap = findSnapshotUnresolvableError(error);
+  const errorCode = snap?.error_code
+    ?? (error instanceof SnapshotUnresolvableError ? error.error_code : SNAPSHOT_STALE);
+  const repair = extras?.repair ?? snap?.repair ?? repairFromUnresolvableError(error);
   return {
     error: "当前受治理运行配置无法解析；请修复 RoleConfig、Credential 或运行镜像配置后重试",
     error_code: errorCode,
     stale_fields: ["current_snapshot_unresolvable"],
     resolution_error: safeResolutionError(error),
     next_action: "fix-current-configuration" as const,
+    ...(repair ? { repair } : {}),
   };
 }
 
@@ -145,10 +182,12 @@ export async function frozenSnapshotStaleDetail(
     const staleFields = snapshotIdentityDrift(job.agent_snapshot_json, currentSnapshot);
     return staleFields.length > 0 ? { job_id: jobId, stale_fields: staleFields } : null;
   } catch (error) {
+    const repair = repairFromUnresolvableError(error);
     return {
       job_id: jobId,
       stale_fields: ["current_snapshot_unresolvable"],
       resolution_error: safeResolutionError(error),
+      ...(repair ? { repair } : {}),
     };
   }
 }
@@ -274,12 +313,14 @@ export async function requeueJob(
     try {
       currentSnapshot = await resolveCurrentSnapshotForExistingJob(tx, job as Record<string, unknown>);
     } catch (error) {
+      const repair = repairFromUnresolvableError(error);
       return {
         kind: "snapshot_stale" as const,
         detail: {
           job_id: jobId,
           stale_fields: ["current_snapshot_unresolvable"],
           resolution_error: safeResolutionError(error),
+          ...(repair ? { repair } : {}),
         },
         provenance,
       };
