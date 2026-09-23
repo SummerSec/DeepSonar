@@ -1769,6 +1769,22 @@ export function resolvePlatformTools(
   return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name) || config[name] !== false);
 }
 
+/**
+ * #697：项目 platform_tools 相对全局解析结果只减不加。
+ * 空项目行不得相对全局收紧结果重新全开（AND / 仅允许追加 false）。
+ */
+export function resolvePlatformToolsTightened(
+  roleName: string,
+  roleKind: "role" | "hub" | "system",
+  globalConfig: PlatformToolConfig = {},
+  projectConfig?: PlatformToolConfig | null,
+): PlatformToolName[] {
+  const globalTools = resolvePlatformTools(roleName, roleKind, globalConfig ?? {});
+  if (projectConfig == null) return globalTools;
+  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, projectConfig));
+  return globalTools.filter((name) => projectAllowed.has(name));
+}
+
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位
 export {
   CompletionPolicy,

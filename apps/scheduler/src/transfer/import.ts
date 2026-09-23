@@ -17,9 +17,16 @@ import {
   scrubStoredProjectImagePolicy,
   type ProjectImagePolicy,
 } from "../domains/role-runtime-snapshot/application.js";
-import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
+import {
+  clampSandboxLimitsOverrideToPlatform,
+  parseSandboxLimitsOverride,
+} from "../domains/role-runtime-snapshot/sandbox-limits.js";
 import { rewriteFindingProtocolMode } from "../finding-protocol.js";
-import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
+import { config } from "../config.js";
+import {
+  parseRuntimeKnobOverride,
+  tightenRuntimeKnobValue,
+} from "../runtime-knobs.js";
 import {
   loadPackFile,
   openDeepsonarPack,
@@ -238,12 +245,12 @@ export async function applyImport(importId: string, body: ApplyBody): Promise<{
       if (!isConfigOnly(modules)) {
         throw Object.assign(new Error("merge_configuration 仅允许配置类模块"), { code: "MODULES_NOT_CONFIG" });
       }
-      const idMap = await mergeConfiguration(body.target_project_id, pack, modules, body);
+      const merged = await mergeConfiguration(body.target_project_id, pack, modules, body);
       await sql`
         UPDATE data_imports SET status = 'succeeded', target_project_id = ${body.target_project_id},
-          id_map_json = ${sql.json(idMap as never)}, finished_at = now(), error = null
+          id_map_json = ${sql.json(merged.id_map as never)}, finished_at = now(), error = null
         WHERE id = ${importId}`;
-      return { project_id: body.target_project_id, id_map: idMap, warnings: [] };
+      return { project_id: body.target_project_id, id_map: merged.id_map, warnings: merged.warnings };
     }
 
     // create_new
@@ -326,11 +333,11 @@ async function createNewProject(
     const projectId = project.id as string;
     id_map.projects[pack.manifest.source.project_id] = projectId;
 
+    const warnings: string[] = [];
     if (modules.includes("roles") || modules.includes("environment")) {
-      await importRoleConfigs(tx as Tx, projectId, pack, id_map, false, parseProjectImagePolicy(config_json));
+      await importRoleConfigs(tx as Tx, projectId, pack, id_map, false, parseProjectImagePolicy(config_json), warnings);
     }
 
-    const warnings: string[] = [];
     if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
       await importTasks(tx as Tx, projectId, pack, modules, id_map, warnings);
     }
@@ -345,12 +352,13 @@ async function mergeConfiguration(
   pack: OpenedPack,
   modules: ModuleKey[],
   body: ApplyBody,
-): Promise<Record<string, unknown>> {
+): Promise<{ id_map: Record<string, unknown>; warnings: string[] }> {
   const [p] = await sql`SELECT * FROM projects WHERE id = ${targetProjectId}`;
   if (!p) throw Object.assign(new Error("target project not found"), { code: "NO_TARGET" });
 
   const policy = body.conflict_policy ?? "use_source";
   const id_map: Record<string, unknown> = { credentials: body.credential_mappings ?? {} };
+  const warnings: string[] = [];
 
   return await sql.begin(async (tx) => {
     const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
@@ -380,12 +388,13 @@ async function mergeConfiguration(
         },
         policy === "keep_target",
         parseProjectImagePolicy(cfg),
+        warnings,
       );
     }
 
     const sanitized = sanitizeImportedProjectConfig(cfg);
     await tx`UPDATE projects SET config_json = ${tx.json(sanitized as never)}, updated_at = now() WHERE id = ${targetProjectId}`;
-    return id_map;
+    return { id_map, warnings };
   });
 }
 
@@ -403,6 +412,7 @@ async function importRoleConfigs(
   },
   skipExisting = false,
   imagePolicy: ProjectImagePolicy = parseProjectImagePolicy(undefined),
+  warnings: string[] = [],
 ) {
   // Keep imported RoleConfig bindings in the same critical section as the
   // Credential provider/project/metadata mutation path.  Credential PATCH
@@ -443,8 +453,56 @@ async function importRoleConfigs(
       : validateModuleSelectors(rc.modules_json, `RoleConfig ${roleName}.modules_json`);
     const piExtErr = validatePiExtensionIds(rc.pi_extensions_json ?? [], agentCli);
     if (piExtErr) throw new Error(`RoleConfig ${roleName}.pi_extensions_json: ${piExtErr}`);
-    const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
-    const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
+    const sandboxLimitsRaw = parseSandboxLimitsOverride(rc.sandbox_limits_json);
+    const sandboxClamp = clampSandboxLimitsOverrideToPlatform(
+      sandboxLimitsRaw,
+      config.runtime.sandboxLimits,
+    );
+    if (sandboxClamp.changed) {
+      warnings.push(
+        `RoleConfig ${roleName}.sandbox_limits 超过目标平台默认，已 clamp 到平台天花板（#697）`,
+      );
+    }
+    const sandboxLimits = sandboxClamp.clamped;
+
+    // #697: runtime_knobs 相对平台 env 只收紧；0=无限不能抬高有限平台预算
+    const runtimeKnobsRaw = parseRuntimeKnobOverride(rc.runtime_knobs_json);
+    const platformKnobCeiling = {
+      stallSec: config.timeouts.stallSec,
+      jobTokenMaxRequests: config.gateway.maxRequests,
+      timeoutSec: config.timeouts.auditSec,
+    };
+    const tightenedStall = runtimeKnobsRaw.stallSec === undefined
+      ? undefined
+      : tightenRuntimeKnobValue(runtimeKnobsRaw.stallSec, platformKnobCeiling.stallSec, { zeroIsUnlimited: true });
+    const tightenedRequests = runtimeKnobsRaw.jobTokenMaxRequests === undefined
+      ? undefined
+      : tightenRuntimeKnobValue(
+        runtimeKnobsRaw.jobTokenMaxRequests,
+        platformKnobCeiling.jobTokenMaxRequests,
+        { zeroIsUnlimited: true },
+      );
+    const tightenedTimeout = runtimeKnobsRaw.timeoutSec === undefined
+      ? undefined
+      : tightenRuntimeKnobValue(runtimeKnobsRaw.timeoutSec, platformKnobCeiling.timeoutSec, { zeroIsUnlimited: false });
+    const runtimeKnobs = {
+      ...(tightenedStall === undefined ? {} : { stallSec: tightenedStall }),
+      ...(tightenedRequests === undefined ? {} : { jobTokenMaxRequests: tightenedRequests }),
+      ...(tightenedTimeout === undefined ? {} : { timeoutSec: tightenedTimeout }),
+    };
+    if (
+      (runtimeKnobsRaw.stallSec !== undefined && tightenedStall !== runtimeKnobsRaw.stallSec)
+      || (runtimeKnobsRaw.jobTokenMaxRequests !== undefined
+        && tightenedRequests !== runtimeKnobsRaw.jobTokenMaxRequests)
+      || (runtimeKnobsRaw.timeoutSec !== undefined && tightenedTimeout !== runtimeKnobsRaw.timeoutSec)
+    ) {
+      warnings.push(`RoleConfig ${roleName}.runtime_knobs 超过目标平台默认，已收紧（#697）`);
+    }
+    if (rc.allow_model_catalog_passthrough === true) {
+      warnings.push(
+        `RoleConfig ${roleName}.allow_model_catalog_passthrough 已丢弃（#697：改走平台 env / 管理员项目设置）`,
+      );
+    }
 
     // upsert 项目覆盖
     await tx`DELETE FROM role_configs WHERE project_id = ${projectId} AND role_id = ${role.id as string}`;
@@ -455,6 +513,7 @@ async function importRoleConfigs(
         agent_cli: agentCli,
         dsh_task_mode: dshTaskMode,
         model,
+        allow_model_catalog_passthrough: false,
         context_window_tokens: contextWindowTokens,
         env_keys: (rc.env_keys as string[]) ?? [],
         env_vars_json: ((rc.env_vars as object) ?? {}) as never,

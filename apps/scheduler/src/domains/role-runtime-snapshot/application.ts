@@ -4,7 +4,7 @@ import {
   type FrozenAgentRuntimeProfile,
   type RepairFeedback,
   rejectNonCurrentAgentCli,
-  resolvePlatformTools,
+  resolvePlatformToolsTightened,
   type FrozenCliCapability,
   type FrozenCliCapabilityPack,
   type FrozenMaterializationPack,
@@ -458,9 +458,10 @@ async function resolveAgentSnapshotForJobUnchecked(
         : `credential:${String(llm.id)}`,
       compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? [agentCli] : undefined,
     });
+    // #697: RoleConfig.allow_model_catalog_passthrough no longer authorizes; only
+    // platform env + admin project Agent allowlist (#679 deviation 1 item 3).
     const allowPassthrough = config.allowModelCatalogPassthrough
-      || agentAllowlist.allow_model_catalog_passthrough
-      || cfg?.allow_model_catalog_passthrough === true;
+      || agentAllowlist.allow_model_catalog_passthrough;
     const requirements = options?.modelRequirements && typeof options.modelRequirements === "object"
       ? options.modelRequirements
       : null;
@@ -517,11 +518,9 @@ async function resolveAgentSnapshotForJobUnchecked(
   const snapshotSettingsConfig = providerSnapshot.settings_config_json;
   const contextWindowTokens = providerSnapshot.context_window_tokens;
   if (llm) {
-    const rolePassthrough = cfg?.allow_model_catalog_passthrough === true;
-    // Align with selection gate: env OR project allowlist OR role emergency flag (#632).
+    // #697: RoleConfig column ignored; env OR admin project allowlist only.
     const allowPassthrough = config.allowModelCatalogPassthrough
-      || agentAllowlist.allow_model_catalog_passthrough
-      || rolePassthrough;
+      || agentAllowlist.allow_model_catalog_passthrough;
     // Treat Hub/project default model refs as explicit requests for empty-catalog fail-fast (#679).
     const modelSource = resolveModelSource({
       roleModel: identity.model ?? requestedModelRef ?? configuredDefaultModel,
@@ -567,7 +566,15 @@ async function resolveAgentSnapshotForJobUnchecked(
   const governedRoleName = typeof options?.baseRoleName === "string" && options.baseRoleName.trim()
     ? roleNameForJobType(options.baseRoleName.trim())
     : roleName;
-  const platformTools = resolvePlatformTools(governedRoleName, roleKind, (cfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {});
+  // #697: project platform_tools AND with global — empty project row must not reopen tools.
+  const platformTools = resolvePlatformToolsTightened(
+    governedRoleName,
+    roleKind,
+    (globalCfg?.platform_tools_json as PlatformToolConfig | undefined) ?? {},
+    projectCfg
+      ? ((projectCfg.platform_tools_json as PlatformToolConfig | undefined) ?? {})
+      : null,
+  );
   const globalRuntimeImageKey = typeof globalCfg?.runtime_image_key === "string" && globalCfg.runtime_image_key.trim()
     ? globalCfg.runtime_image_key.trim()
     : null;
@@ -704,10 +711,8 @@ async function resolveAgentSnapshotForJobUnchecked(
 
   let provider_model: FrozenProviderModelSnapshot | undefined;
   if (llm) {
-    const rolePassthroughForFreeze = cfg?.allow_model_catalog_passthrough === true;
     const allowPassthroughForFreeze = config.allowModelCatalogPassthrough
-      || agentAllowlist.allow_model_catalog_passthrough
-      || rolePassthroughForFreeze;
+      || agentAllowlist.allow_model_catalog_passthrough;
     const frozenPm = freezeProviderModelSnapshot({
       provider: String(llm.provider ?? ""),
       cliModelId: providerSnapshot.model,

@@ -36,6 +36,10 @@ export type {
 export {
   parseSandboxLimitsOverride,
   resolveEffectiveSandboxLimits,
+  platformSandboxResourceCeiling,
+  sandboxLimitsExceedPlatform,
+  clampSandboxLimitsOverrideToPlatform,
+  SANDBOX_LIMITS_EXCEED_PLATFORM,
   SANDBOX_LIMIT_BOUNDS,
   CHROME_RUNTIME_IMAGE_KEYS,
   CLICKHOUSE_RUNTIME_IMAGE_KEYS,

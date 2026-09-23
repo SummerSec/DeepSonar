@@ -1,6 +1,6 @@
 # Database schema
 
-`schema.sql` 是唯一 schema 真相源（当前 **v53**，与 `apps/scheduler/src/schema-version.ts` 同步）。Scheduler 启动时在 reserved
+`schema.sql` 是唯一 schema 真相源（当前 **v54**，与 `apps/scheduler/src/schema-version.ts` 同步）。Scheduler 启动时在 reserved
 PostgreSQL session 上持有 session advisory lock：
 
 - **空数据库**：原子执行 `database/schema.sql`，直接得到当前版本；
@@ -10,6 +10,14 @@ PostgreSQL session 上持有 session advisory lock：
 **没有增量 ALTER 链。** 结构变更 = 改 `schema.sql` + bump
 `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` + **重建数据库**。
 Scheduler 启动路径不会自动升级旧库。
+
+
+## #697 sandbox_limits 防御性 clamp（无 schema bump）
+
+生产预期项目 `sandbox_limits_json` 越权行数为 0。生效路径已对平台 env 默认取 **min**，
+PUT 拒绝 `SANDBOX_LIMITS_EXCEED_PLATFORM`，导入同样 clamp。无需改列或 bump `SCHEMA_VERSION`。
+若运维仍想对历史脏数据做幂等压回，可在运维窗口按当前 `DEEPSONAR_SANDBOX_*` 对
+`role_configs.sandbox_limits_json` 做 JSONB 各维 `LEAST` 更新（本仓库不提供增量 ALTER）。
 
 ## 升级与恢复
 

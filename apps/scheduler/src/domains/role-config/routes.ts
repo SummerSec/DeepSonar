@@ -21,7 +21,11 @@ import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
 import { parseContextWindowTokens } from "../../provider-settings.js";
 import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
-import { parseSandboxLimitsOverride } from "../role-runtime-snapshot/sandbox-limits.js";
+import {
+  parseSandboxLimitsOverride,
+  sandboxLimitsExceedPlatform,
+  SANDBOX_LIMITS_EXCEED_PLATFORM,
+} from "../role-runtime-snapshot/sandbox-limits.js";
 import { parseRuntimeKnobOverride, validateRuntimeKnobOverride } from "../../runtime-knobs.js";
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
@@ -64,7 +68,11 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     agent_cli: AgentCliWriteSchema.default("claude-code"),
     dsh_task_mode: z.enum(["standard", "ptc"]).default("standard"),
     model: z.string().nullish(),
-    /** #570：关闭凭据 model_catalog fail-closed（alias 直通） */
+    /**
+     * @deprecated #697 — RoleConfig 不再授权 model catalog passthrough。
+     * 写入恒落 false；请用平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH`
+     * 或管理员级项目 Agent allowlist。
+     */
     allow_model_catalog_passthrough: z.boolean().optional().default(false),
     context_window_tokens: z.unknown().optional(),
     env_keys: z.array(z.string()).default([]),
@@ -96,7 +104,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     projectId: string | null,
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
-  ): Promise<{ error: string | null; missingCredentialIds: string[] }> {
+  ): Promise<{ error: string | null; error_code?: string; missingCredentialIds: string[] }> {
     if (projectId && body.runtime_image_key != null) {
       return { error: "项目 RoleConfig 不接受 runtime_image_key；运行镜像由平台目录与 Job 快照决定", missingCredentialIds: [] };
     }
@@ -108,6 +116,14 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     }
     if (!projectId && Object.keys(sandboxLimits).length > 0) {
       return { error: "sandbox_limits numeric overrides are only allowed on project RoleConfigs", missingCredentialIds: [] };
+    }
+    // #697 P0: project cannot raise any dimension above platform env defaults.
+    if (projectId && sandboxLimitsExceedPlatform(sandboxLimits, config.runtime.sandboxLimits)) {
+      return {
+        error: "sandbox_limits 任一维度不得超过平台默认（DEEPSONAR_SANDBOX_*）；更高配额请调平台 env / 镜像地板",
+        error_code: SANDBOX_LIMITS_EXCEED_PLATFORM,
+        missingCredentialIds: [],
+      };
     }
     const knobsErr = validateRuntimeKnobOverride(body.runtime_knobs);
     if (knobsErr) return { error: knobsErr, missingCredentialIds: [] };
@@ -238,13 +254,20 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     if (projectId && persistModel === null && requestedModel !== "") {
       dropped_fields.push({ field: "model", reason: "inherit_global_ignores_project_model" });
     }
+    // #697: RoleConfig 不再写入/授权 allow_model_catalog_passthrough（仅平台 env + 管理员项目设置）
+    if (body.allow_model_catalog_passthrough === true) {
+      dropped_fields.push({
+        field: "allow_model_catalog_passthrough",
+        reason: "role_config_passthrough_retired_use_project_allowlist_or_env",
+      });
+    }
     const row = {
       role_id: roleId,
       project_id: projectId,
       agent_cli: body.agent_cli,
       dsh_task_mode: body.dsh_task_mode,
       model: persistModel,
-      allow_model_catalog_passthrough: body.allow_model_catalog_passthrough === true,
+      allow_model_catalog_passthrough: false,
       context_window_tokens: parseContextWindowTokens(body.context_window_tokens),
       env_vars_json: body.env_vars as never,
       env_keys: body.env_keys as never,
@@ -320,7 +343,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       before_allow_model_catalog_passthrough: boolean;
       missing_credential_ids: string[];
     }
-    | { statusCode: number; error: string }
+    | { statusCode: number; error: string; error_code?: string }
   > {
     return sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
@@ -332,7 +355,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         }
       }
       const validation = await validateRoleConfigBody(body, projectId, role, tx);
-      if (validation.error) return { statusCode: 400, error: validation.error };
+      if (validation.error) {
+        return {
+          statusCode: 400,
+          error: validation.error,
+          ...(validation.error_code ? { error_code: validation.error_code } : {}),
+        };
+      }
       const upserted = await upsertRoleConfigInTx(tx, roleId, projectId, body);
       return {
         ...upserted,
@@ -364,6 +393,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       WHERE role_config_id = ${configId} ORDER BY path`;
     return {
       ...(cfg as Record<string, unknown>),
+      // #697: RoleConfig 列保留但 API 恒回报 false（解析侧已忽略）
+      allow_model_catalog_passthrough: false,
       context_window_tokens: cfg.context_window_tokens == null ? null : Number(cfg.context_window_tokens),
       runtime_image_key: cfg.project_id ? null : cfg.runtime_image_key ?? null,
       credentials: creds.map((credential) => ({
@@ -680,7 +711,12 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       name: role.name as string,
       kind: role.kind as "role" | "hub" | "system",
     });
-    if ("error" in mutation) return reply.code(mutation.statusCode).send({ error: mutation.error });
+    if ("error" in mutation) {
+      return reply.code(mutation.statusCode).send({
+        error: mutation.error,
+        ...(mutation.error_code ? { error_code: mutation.error_code } : {}),
+      });
+    }
     const configId = mutation.configId;
     await audit(req, {
       action: "role_config.upsert",
@@ -696,12 +732,13 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         missing_credential_ids: mutation.missing_credential_ids,
       },
     });
+    // #697: RoleConfig 不再能开启 passthrough；保留审计 helper 字符串供测试/检索，after 恒为 false。
     await auditRoleConfigPassthroughEnable(req, {
       configId,
       roleName: role.name,
       scope: "global",
       before: mutation.before_allow_model_catalog_passthrough,
-      after: body.allow_model_catalog_passthrough === true,
+      after: false,
     });
     const view = await roleConfigView(configId, req.actor?.projectId ?? null);
     const upsert_warnings = buildRoleConfigUpsertWarnings({
@@ -769,7 +806,12 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       name: role.name as string,
       kind: role.kind as "role" | "hub" | "system",
     });
-    if ("error" in mutation) return reply.code(mutation.statusCode).send({ error: mutation.error });
+    if ("error" in mutation) {
+      return reply.code(mutation.statusCode).send({
+        error: mutation.error,
+        ...(mutation.error_code ? { error_code: mutation.error_code } : {}),
+      });
+    }
     const configId = mutation.configId;
     await audit(req, {
       action: "role_config.upsert",
@@ -792,7 +834,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       roleName: role.name,
       scope: "project",
       before: mutation.before_allow_model_catalog_passthrough,
-      after: body.allow_model_catalog_passthrough === true,
+      after: false,
     });
     const view = await roleConfigView(configId, actorProjectId);
     const upsert_warnings = buildRoleConfigUpsertWarnings({
