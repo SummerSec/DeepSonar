@@ -3,15 +3,18 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildSettingsConfigFromEditor,
+  effectiveEditorSecret,
   extractBaseUrlFromSettingsClient,
   extractModelsFromSettingsClient,
   extractSecretFromSettings,
   extractModelIdFromSettings,
   extractPiModelIdsFromSettings,
+  MASKED_SECRET_PLACEHOLDER,
   parseCredentialConcurrency,
   patchProviderModelId,
   patchProviderModelIds,
   parsePiSettingsText,
+  resolveCredentialBaseUrl,
 } from "./CredentialConfigEditor";
 import {
   boundCredentialLabel,
@@ -430,8 +433,10 @@ test("credential secrets cannot be revealed; login may toggle password visibilit
   assert.match(login, /显示密码|隐藏密码|显示 Token|隐藏 Token/u);
   assert.match(login, /type=\{revealed \? "text" : "password"\}/u);
   assert.match(login, /authFormErrorMessage|LOGIN_RATE_LIMITED|过于频繁/u);
-  assert.match(flow, /setEditApiKey\(""\)/u);
-  assert.match(editor, /redactSecretValues|restoreRedactedSecrets/u);
+  assert.match(flow, /setEditApiKey\(credential\.last4 \? MASKED_SECRET_PLACEHOLDER : ""\)/u);
+  assert.match(flow, /effectiveEditorSecret\(editApiKey\)/u);
+  assert.match(editor, /已保存（留空不修改）/u);
+  assert.match(editor, /redactSecretValues|restoreRedactedSecrets|MASKED_SECRET_PLACEHOLDER/u);
   assert.doesNotMatch(editor, /return entries\.length > 0 \? entries : .*anthropic/u);
 });
 
@@ -476,4 +481,94 @@ test("CredentialsPanel only hosts ProviderAccountFlow (no duplicate card grid)",
   assert.doesNotMatch(panel, /credential-toolbar/);
   assert.doesNotMatch(panel, /模型 未限制|个已启用/);
   assert.doesNotMatch(panel, /最近用/);
+});
+
+
+test("#677 connection Base URL patches into non-empty Claude settings and edit hydrate falls back to metadata", () => {
+  const pasted = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson: JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-x", ANTHROPIC_AUTH_TOKEN: "sk-x" } }),
+    tomlText: "",
+    authJson: "",
+    secret: "sk-x",
+    baseUrl: "https://custom.example/v1",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(pasted.ok, true);
+  if (!pasted.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(pasted.settings), "https://custom.example/v1");
+
+  const edited = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson: JSON.stringify({
+      env: {
+        ANTHROPIC_API_KEY: MASKED_SECRET_PLACEHOLDER,
+        ANTHROPIC_AUTH_TOKEN: MASKED_SECRET_PLACEHOLDER,
+        ANTHROPIC_BASE_URL: "https://old.example/v1",
+      },
+    }),
+    tomlText: "",
+    authJson: "",
+    secret: MASKED_SECRET_PLACEHOLDER,
+    baseUrl: "https://new.example/v1",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(edited.ok, true);
+  if (!edited.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(edited.settings), "https://new.example/v1");
+  assert.equal(extractSecretFromSettings(edited.settings), MASKED_SECRET_PLACEHOLDER);
+
+  assert.equal(effectiveEditorSecret(""), "");
+  assert.equal(effectiveEditorSecret(MASKED_SECRET_PLACEHOLDER), "");
+  assert.equal(effectiveEditorSecret(" sk-live "), "sk-live");
+
+  assert.equal(resolveCredentialBaseUrl({
+    settings_config_json: { env: {} },
+    public_metadata_json: { base_url: "https://meta.example/v1/" },
+  }), "https://meta.example/v1");
+  assert.equal(resolveCredentialBaseUrl({
+    settings_config_json: { env: { ANTHROPIC_BASE_URL: "https://settings.example/v1" } },
+    public_metadata_json: { base_url: "https://meta.example/v1" },
+  }), "https://settings.example/v1");
+});
+
+test("#677 DSH / Pi Base URL connection field stays authoritative on rebuild", () => {
+  const dsh = buildSettingsConfigFromEditor({
+    agentCli: "dsh",
+    settingsJson: `llm-pi-ai:
+  providers:
+    openai:
+      api: openai-responses
+      baseURL: https://old.example/v1
+      models:
+        - id: gpt-5
+agent-default-model:
+  provider: openai
+  model: gpt-5
+`,
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "https://new-dsh.example/v1",
+    provider: "openai",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(dsh.ok, true);
+  if (!dsh.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(dsh.settings), "https://new-dsh.example/v1");
+
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(flow, /resolveCredentialBaseUrl\(credential\)/);
+  assert.match(flow, /MASKED_SECRET_PLACEHOLDER/);
+  assert.match(flow, /effectiveEditorSecret\(editApiKey\)/);
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /已保存（留空不修改）/);
 });

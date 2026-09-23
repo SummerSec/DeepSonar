@@ -12,6 +12,19 @@ import { defaultCodexToml, validateTomlText } from "./toml-text";
 export type AgentCli = "claude-code" | "pi" | "dsh" | "codex" | "open-code";
 
 export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
+
+/** True when the editor secret field is empty or still showing the saved-key marker. */
+export function isMaskedOrEmptySecret(value: string | null | undefined): boolean {
+  const trimmed = (value ?? "").trim();
+  return !trimmed || trimmed === MASKED_SECRET_PLACEHOLDER;
+}
+
+/** Secret value that should overwrite storage; empty/mask means preserve existing. */
+export function effectiveEditorSecret(value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  return !trimmed || trimmed === MASKED_SECRET_PLACEHOLDER ? "" : trimmed;
+}
+
 const SECRET_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)/iu;
 
 /** Redact server-returned settings before placing them in an editable control. */
@@ -237,6 +250,21 @@ export function extractBaseUrlFromSettingsClient(settings: Record<string, unknow
     if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
   }
   return "";
+}
+
+/**
+ * Resolve Base URL for the edit form: settings_config first, then public metadata.
+ * Base URL is not a secret and must round-trip into the connection field (#677).
+ */
+export function resolveCredentialBaseUrl(input: {
+  settings_config_json?: Record<string, unknown> | null;
+  public_metadata_json?: Record<string, unknown> | null;
+} | null | undefined): string {
+  const fromSettings = extractBaseUrlFromSettingsClient(input?.settings_config_json ?? null);
+  if (fromSettings) return fromSettings;
+  const meta = input?.public_metadata_json ?? {};
+  const raw = meta.base_url;
+  return typeof raw === "string" && raw.trim() ? raw.trim().replace(/\/+$/u, "") : "";
 }
 
 export const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
@@ -638,6 +666,33 @@ export function applyPiSettingsPaste(
   onModelIdsChange?.(extractPiModelIdsFromSettings(parsed.value));
 }
 
+/** Keep the structured Claude Code connection fields authoritative. */
+function patchClaudeConnection(settings: Record<string, unknown>, baseUrl: string, secret: string): Record<string, unknown> {
+  const env = asRecord(settings.env) ?? {};
+  const endpoint = baseUrl.trim().replace(/\/+$/u, "");
+  const key = effectiveEditorSecret(secret);
+  if (endpoint) env.ANTHROPIC_BASE_URL = endpoint;
+  else delete env.ANTHROPIC_BASE_URL;
+  if (key) {
+    env.ANTHROPIC_AUTH_TOKEN = key;
+    env.ANTHROPIC_API_KEY = key;
+  }
+  settings.env = env;
+  return settings;
+}
+
+/** Keep OpenCode options.baseURL / apiKey aligned with the connection fields. */
+function patchOpenCodeConnection(settings: Record<string, unknown>, baseUrl: string, secret: string): Record<string, unknown> {
+  const options = asRecord(settings.options) ?? {};
+  const endpoint = baseUrl.trim().replace(/\/+$/u, "");
+  const key = effectiveEditorSecret(secret);
+  if (endpoint) options.baseURL = endpoint;
+  else delete options.baseURL;
+  if (key) options.apiKey = key;
+  settings.options = options;
+  return settings;
+}
+
 /** Build settingsConfig object from editor state (create & edit share this). */
 export function buildSettingsConfigFromEditor(input: {
   agentCli: AgentCli;
@@ -654,7 +709,8 @@ export function buildSettingsConfigFromEditor(input: {
   /** When empty and settings empty, synthesize default skeleton. */
   allowEmptyDefault?: boolean;
 }): { ok: true; settings: Record<string, unknown>; pastedAsIs: boolean } | { ok: false; error: string } {
-  const { agentCli, settingsJson, tomlText, authJson, secret, baseUrl, provider, modelId, modelIds, contextWindowTokens, reasoning } = input;
+  const { agentCli, settingsJson, tomlText, authJson, baseUrl, provider, modelId, modelIds, contextWindowTokens, reasoning } = input;
+  const secret = effectiveEditorSecret(input.secret);
   const applyModel = (settings: Record<string, unknown>) => {
     if (agentCli === "pi") {
       if (modelIds !== undefined) return patchProviderModelIds(settings, modelIds);
@@ -693,7 +749,7 @@ export function buildSettingsConfigFromEditor(input: {
     const authSettings = auth.empty ? {} : structuredClone(auth.value);
     if (secret.trim()) authSettings.OPENAI_API_KEY = secret.trim();
     const settings = patchProviderOverrides({
-      auth: Object.keys(authSettings).length > 0 ? authSettings : { OPENAI_API_KEY: secret },
+      auth: Object.keys(authSettings).length > 0 ? authSettings : (secret ? { OPENAI_API_KEY: secret } : {}),
       config: configText,
     }, parsedContextWindowTokens, parsedReasoning);
     return {
@@ -703,13 +759,16 @@ export function buildSettingsConfigFromEditor(input: {
     };
   }
   if (agentCli === "dsh") {
-    const config = settingsJson.trim() || defaultDshProviderYaml(provider, baseUrl);
+    const raw = settingsJson.trim() || defaultDshProviderYaml(provider, baseUrl);
+    const config = baseUrl.trim()
+      ? patchDshBaseUrl(raw.replace(/\r\n/g, "\n"), provider, baseUrl)
+      : raw.replace(/\r\n/g, "\n");
     const validation = validateDshYamlText(config);
     if (!validation.ok) return { ok: false, error: `DSH Provider YAML 无效：${validation.error ?? "解析失败"}` };
     return {
       ok: true,
       pastedAsIs: Boolean(settingsJson.trim()),
-      settings: applyModel(patchProviderOverrides({ config: config.replace(/\r\n/g, "\n") }, parsedContextWindowTokens, parsedReasoning)),
+      settings: applyModel(patchProviderOverrides({ config }, parsedContextWindowTokens, parsedReasoning)),
     };
   }
   if (agentCli === "pi") {
@@ -735,21 +794,10 @@ export function buildSettingsConfigFromEditor(input: {
   }
   if (!validation.empty) {
     const settings = structuredClone(validation.value);
-    if (secret.trim()) {
-      if (agentCli === "claude-code") {
-        const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
-          ? settings.env as Record<string, unknown>
-          : {};
-        env.ANTHROPIC_AUTH_TOKEN = secret.trim();
-        env.ANTHROPIC_API_KEY = secret.trim();
-        settings.env = env;
-      } else {
-        const options = settings.options && typeof settings.options === "object" && !Array.isArray(settings.options)
-          ? settings.options as Record<string, unknown>
-          : {};
-        options.apiKey = secret.trim();
-        settings.options = options;
-      }
+    if (agentCli === "claude-code") {
+      patchClaudeConnection(settings, baseUrl, secret);
+    } else {
+      patchOpenCodeConnection(settings, baseUrl, secret);
     }
     return { ok: true, pastedAsIs: true, settings: applyModel(patchProviderOverrides(settings, parsedContextWindowTokens, parsedReasoning)) };
   }
