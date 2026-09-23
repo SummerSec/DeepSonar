@@ -114,3 +114,21 @@ test("settings-declared model still wins over CLI default", () => {
     "settings",
   );
 });
+
+
+test("empty configured allowlist fails closed for explicit RoleConfig model (#679)", () => {
+  assert.throws(
+    () => assertResolvedModelInCredentialCatalog({
+      resolvedModel: "DeepSeek-V4-Pro-0813",
+      catalogJson: [],
+      allowPassthrough: false,
+      modelSource: "role",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ModelCatalogMismatchError);
+      assert.equal(error.code, "model_allowlist_unconfigured");
+      assert.match(error.message, /尚未配置 models/);
+      return true;
+    },
+  );
+});

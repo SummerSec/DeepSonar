@@ -414,9 +414,12 @@ async function resolveAgentSnapshotForJobUnchecked(
   if (requestedModelRef && !llm) throw new Error(`模型 ${requestedModelRef} 需要可用的 LLM Provider`);
   let selectedModel = requestedModelRef ?? configuredDefaultModel ?? identity.model;
   if (llm) {
-    // Selection/admit SSOT: account-configured model ids from settings_config_json (#656).
-    // Probed model_catalog_json remains diagnostic-only (health panel / descriptors).
-    const configuredModelIds = extractModelsFromSettings(settingsConfig);
+    // Selection/admit SSOT: account-configured model ids from settings_config_json (#656/#679).
+    // Parse by credential agent_cli dialect so RoleConfig.model is checked against that shape.
+    const credentialAgentCli = typeof llm.agent_cli === "string" && llm.agent_cli.trim()
+      ? llm.agent_cli.trim()
+      : agentCli;
+    const configuredModelIds = extractModelsFromSettings(settingsConfig, credentialAgentCli);
     const catalog = resolveModelDescriptorCatalog({
       provider: String(llm.provider ?? ""),
       catalogJson: configuredModelIds,
@@ -455,11 +458,19 @@ async function resolveAgentSnapshotForJobUnchecked(
     const fallback = agentAllowlist.fallback_model_refs.find((ref) => eligibleIds.has(ref));
     if (!selectedModel && fallback) selectedModel = fallback;
     if (!selectedModel && requirements && eligible.length > 0) selectedModel = eligible[0]!.model_id;
+    // Prefer first account-configured model when RoleConfig/project default is empty (#679).
+    if (!selectedModel && configuredModelIds.length > 0) selectedModel = configuredModelIds[0]!;
     if (selectedModel && catalog.length > 0 && !allowPassthrough && !eligibleIds.has(selectedModel)) {
       if (requestedModelRef) {
         throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
       }
       if (fallback) selectedModel = fallback;
+      else if (configuredModelIds.includes(selectedModel)) {
+        // selectedModel is an account-configured id; capability filter may have excluded it —
+        // keep it when no fallback exists (admit gate below still validates catalog membership).
+      } else if (configuredModelIds.length > 0 && !requestedModelRef) {
+        selectedModel = configuredModelIds[0]!;
+      }
     }
     if (requirements && selectedModel && !allowPassthrough && !eligibleIds.has(selectedModel)) {
       throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
@@ -481,14 +492,18 @@ async function resolveAgentSnapshotForJobUnchecked(
     const allowPassthrough = config.allowModelCatalogPassthrough
       || agentAllowlist.allow_model_catalog_passthrough
       || rolePassthrough;
+    // Treat Hub/project default model refs as explicit requests for empty-catalog fail-fast (#679).
     const modelSource = resolveModelSource({
-      roleModel: identity.model,
+      roleModel: identity.model ?? requestedModelRef ?? configuredDefaultModel,
       agentCli,
       settingsConfig,
     });
+    const admitCatalogCli = typeof llm.agent_cli === "string" && llm.agent_cli.trim()
+      ? llm.agent_cli.trim()
+      : agentCli;
     assertResolvedModelInCredentialCatalog({
       resolvedModel: snapshotUpstreamModel(providerSnapshot) ?? providerSnapshot.model,
-      catalogJson: extractModelsFromSettings(settingsConfig),
+      catalogJson: extractModelsFromSettings(settingsConfig, admitCatalogCli),
       allowPassthrough,
       modelSource,
     });
