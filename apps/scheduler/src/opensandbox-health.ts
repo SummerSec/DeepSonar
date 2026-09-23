@@ -24,6 +24,8 @@ export type OpenSandboxHealthRuntime = {
 
 const CACHE_MS = 5_000;
 const PROBE_TIMEOUT_MS = 5_000;
+/** Extra attempts after the first failure; total tries = 1 + length. */
+const DEFAULT_PROBE_RETRY_DELAYS_MS = [150, 150] as const;
 
 let current: OpenSandboxServerStatus = {
   level: "skipped",
@@ -91,9 +93,40 @@ async function defaultProbe(): Promise<void> {
   }
 }
 
+export type OpenSandboxHealthRefreshOptions = {
+  /** Delays between retries after a failed probe; empty = single attempt. */
+  retryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
+};
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function probeWithBoundedRetries(
+  probe: () => Promise<void>,
+  options: OpenSandboxHealthRefreshOptions = {},
+): Promise<void> {
+  const delays = options.retryDelaysMs ?? DEFAULT_PROBE_RETRY_DELAYS_MS;
+  const sleep = options.sleep ?? sleepMs;
+  let lastError: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await probe();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= delays.length) break;
+      await sleep(delays[attempt]!);
+    }
+  }
+  throw lastError;
+}
+
 export async function refreshOpenSandboxServerStatus(
   probe: () => Promise<void> = defaultProbe,
   runtime: OpenSandboxHealthRuntime = defaultRuntime(),
+  options: OpenSandboxHealthRefreshOptions = {},
 ): Promise<OpenSandboxServerStatus> {
   if (runtime.agentMode !== "real" || runtime.provider !== "opensandbox") {
     current = { level: "skipped", domain: runtime.domain, checkedAt: null, error: null };
@@ -140,7 +173,7 @@ export async function refreshOpenSandboxServerStatus(
       return { ...current };
     }
     try {
-      await probe();
+      await probeWithBoundedRetries(probe, options);
       current = { level: "ok", domain: runtime.domain, checkedAt, error: null };
     } catch (error) {
       current = {

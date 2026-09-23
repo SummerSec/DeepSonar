@@ -101,6 +101,12 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(overlay, /condition: service_healthy/);
   assert.match(overlay, /127\.0\.0\.1:8080\/health/);
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
+  // #685: opensandbox must also sit on sandbox_gateway while scheduler stays dual-homed
+  // for deepsonar-gateway-proxy upstream DNS/L3; otherwise sandbox_gateway aardvark ENOTFOUND.
+  assert.match(overlay, /sandbox_gateway/);
+  const prodCompose = readFileSync(join(root, "deploy/docker-compose.prod.yml"), "utf8");
+  assert.match(prodCompose, /networks: \[deepsonar, sandbox_gateway\]/);
+  assert.match(prodCompose, /#685/);
   assert.doesNotMatch(overlay, /:latest|network_mode:\s*host/);
   assert.doesNotMatch(overlay, /127\.0\.0\.1:8080:8080/);
   assert.match(deploySh, /SANDBOX_PROVIDER:-opensandbox/);
