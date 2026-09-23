@@ -207,7 +207,7 @@ async function materializeHubProjectRole(
         ${roleId}, ${projectId}, ${String(sourceCfg?.agent_cli ?? "claude-code")},
         ${sourceCfg?.dsh_task_mode === "ptc" ? "ptc" : "standard"},
         ${typeof sourceCfg?.model === "string" ? sourceCfg.model : null},
-        ${sourceCfg?.allow_model_catalog_passthrough === true},
+        false, /* #697: never copy RoleConfig passthrough */
         ${typeof sourceCfg?.context_window_tokens === "number" ? sourceCfg.context_window_tokens : null},
         ${Array.isArray(sourceCfg?.env_keys) ? sourceCfg.env_keys : []},
         ${tx.json((sourceCfg?.env_vars_json ?? {}) as never)},

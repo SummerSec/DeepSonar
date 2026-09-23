@@ -250,9 +250,75 @@ function boundedServerNumber(
 }
 
 /**
- * Merge a project override over the server defaults and return the complete
- * runtime contract consumed by Dispatcher. The capability flags are copied
- * only from the server defaults; overrides cannot alter them.
+ * Platform resource ceiling from env/config. Static SANDBOX_LIMIT_BOUNDS remain
+ * the absolute parse ceiling; projects may only tighten at or below this floor.
+ */
+export function platformSandboxResourceCeiling(
+  serverDefaults: SandboxLimits | null | undefined,
+): Pick<EffectiveSandboxLimits, "cpu" | "memoryMiB" | "pidsLimit"> {
+  const defaults = serverDefaults ?? {};
+  return {
+    cpu: boundedServerNumber(defaults.cpu, SERVER_DEFAULTS.cpu, validCpu),
+    memoryMiB: boundedServerNumber(
+      defaults.memoryMiB,
+      SERVER_DEFAULTS.memoryMiB,
+      (value) => validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.memoryMiB),
+    ),
+    pidsLimit: boundedServerNumber(
+      defaults.pidsLimit,
+      SERVER_DEFAULTS.pidsLimit,
+      (value) => validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.pidsLimit),
+    ),
+  };
+}
+
+export const SANDBOX_LIMITS_EXCEED_PLATFORM = "SANDBOX_LIMITS_EXCEED_PLATFORM" as const;
+
+/**
+ * True when any project override dimension exceeds the platform env default.
+ * Used by RoleConfig PUT and transfer import clamp paths (#697).
+ */
+export function sandboxLimitsExceedPlatform(
+  override: SandboxLimitsOverride,
+  serverDefaults: SandboxLimits | null | undefined,
+): boolean {
+  const ceiling = platformSandboxResourceCeiling(serverDefaults);
+  if (override.cpu !== undefined && override.cpu > ceiling.cpu) return true;
+  if (override.memoryMiB !== undefined && override.memoryMiB > ceiling.memoryMiB) return true;
+  if (override.pidsLimit !== undefined && override.pidsLimit > ceiling.pidsLimit) return true;
+  return false;
+}
+
+/**
+ * Clamp project overrides to the platform ceiling (idempotent). Dimensions
+ * omitted stay omitted; only explicit raises are pressed down.
+ */
+export function clampSandboxLimitsOverrideToPlatform(
+  override: SandboxLimitsOverride,
+  serverDefaults: SandboxLimits | null | undefined,
+): { clamped: SandboxLimitsOverride; changed: boolean } {
+  const ceiling = platformSandboxResourceCeiling(serverDefaults);
+  const clamped: SandboxLimitsOverride = { ...override };
+  let changed = false;
+  if (clamped.cpu !== undefined && clamped.cpu > ceiling.cpu) {
+    clamped.cpu = ceiling.cpu;
+    changed = true;
+  }
+  if (clamped.memoryMiB !== undefined && clamped.memoryMiB > ceiling.memoryMiB) {
+    clamped.memoryMiB = ceiling.memoryMiB;
+    changed = true;
+  }
+  if (clamped.pidsLimit !== undefined && clamped.pidsLimit > ceiling.pidsLimit) {
+    clamped.pidsLimit = ceiling.pidsLimit;
+    changed = true;
+  }
+  return { clamped, changed };
+}
+
+/**
+ * Merge a project override under the platform defaults (per-dimension min) and
+ * return the complete runtime contract consumed by Dispatcher. Capability flags
+ * stay server-owned. Projects can only tighten resources (#697 / DESIGN §8).
  */
 export function resolveEffectiveSandboxLimits(
   override: unknown,
@@ -260,21 +326,11 @@ export function resolveEffectiveSandboxLimits(
 ): EffectiveSandboxLimits {
   const parsed = parseSandboxLimitsOverride(override);
   const defaults = serverDefaults ?? {};
-  const cpu = boundedServerNumber(defaults.cpu, SERVER_DEFAULTS.cpu, validCpu);
-  const memoryMiB = boundedServerNumber(
-    defaults.memoryMiB,
-    SERVER_DEFAULTS.memoryMiB,
-    (value) => validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.memoryMiB),
-  );
-  const pidsLimit = boundedServerNumber(
-    defaults.pidsLimit,
-    SERVER_DEFAULTS.pidsLimit,
-    (value) => validPositiveInteger(value, SANDBOX_LIMIT_BOUNDS.pidsLimit),
-  );
+  const ceiling = platformSandboxResourceCeiling(serverDefaults);
   return {
-    cpu: parsed.cpu ?? cpu,
-    memoryMiB: parsed.memoryMiB ?? memoryMiB,
-    pidsLimit: parsed.pidsLimit ?? pidsLimit,
+    cpu: parsed.cpu === undefined ? ceiling.cpu : Math.min(parsed.cpu, ceiling.cpu),
+    memoryMiB: parsed.memoryMiB === undefined ? ceiling.memoryMiB : Math.min(parsed.memoryMiB, ceiling.memoryMiB),
+    pidsLimit: parsed.pidsLimit === undefined ? ceiling.pidsLimit : Math.min(parsed.pidsLimit, ceiling.pidsLimit),
     capDropAll: defaults.capDropAll ?? SERVER_DEFAULTS.capDropAll,
     noNewPrivileges:
       defaults.noNewPrivileges ?? SERVER_DEFAULTS.noNewPrivileges,

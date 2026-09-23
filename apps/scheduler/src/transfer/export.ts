@@ -345,6 +345,10 @@ async function collectRoles(
       sandbox_limits_json: rc.sandbox_limits_json,
       runtime_knobs_json: rc.runtime_knobs_json,
       pi_extensions_json: rc.pi_extensions_json ?? [],
+      // #697 P2: 项目导出补齐 instructions_markdown（此前静默丢失）
+      instructions_markdown: typeof rc.instructions_markdown === "string" ? rc.instructions_markdown : null,
+      // #697: RoleConfig passthrough 已收回；导出恒 false，避免目标环境误开
+      allow_model_catalog_passthrough: false,
       // 项目镜像仅由 projects.config_json.image_strategy/role_runtime_images 管理。
       runtime_image_key: null,
       version: rc.version,

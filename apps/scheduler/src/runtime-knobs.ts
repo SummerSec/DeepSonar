@@ -200,8 +200,35 @@ export function defaultTimeoutForJobType(jobType: string, layer: RuntimeKnobLaye
 }
 
 /**
- * Resolve batch-1 knobs. Chrome image floors still raise stall unless the
- * winning value is 0 (disabled). An explicit higher override wins over the floor.
+ * Tighten a lower-layer knob against a platform/global ceiling (#697 / DESIGN §8).
+ *
+ * For stallSec / jobTokenMaxRequests: **0 means unlimited / disabled**. Unlimited is the
+ * widest setting, so a project/role `0` cannot widen a finite platform ceiling — it is
+ * clamped back to the ceiling. A finite override under an unlimited (0) ceiling is a
+ * valid tighten. Timeout has no unlimited-zero semantics (min bound ≥ 1 or 60).
+ */
+export function tightenRuntimeKnobValue(
+  override: number | null | undefined,
+  ceiling: number | null | undefined,
+  opts: { zeroIsUnlimited: boolean },
+): number | undefined {
+  // Absent override does not invent a value — callers that want "inherit ceiling"
+  // (RoleConfig merge) use `override ?? ceiling` themselves.
+  if (override === undefined || override === null) return undefined;
+  if (ceiling === undefined || ceiling === null) return override;
+  if (opts.zeroIsUnlimited) {
+    if (ceiling === 0) return override; // platform unlimited: finite override tightens
+    if (override === 0) return ceiling; // project unlimited would widen
+    return Math.min(override, ceiling);
+  }
+  return Math.min(override, ceiling);
+}
+
+/**
+ * Resolve batch-1 knobs. Precedence remains Job > role > project > platform > env, but
+ * role/project layers are clamped to the platform/env ceiling (项目只能收紧, #697).
+ * Chrome image floors still raise stall unless the winning value is 0 (disabled).
+ * Job-layer overrides are not clamped (per-Job intent).
  */
 export function resolveRuntimeKnobs(input: {
   job?: RuntimeKnobOverride;
@@ -226,11 +253,30 @@ export function resolveRuntimeKnobs(input: {
   const project = parseRuntimeKnobLayer(input.project);
   const platform = parseRuntimeKnobLayer(input.platform);
 
+  const stallCeiling = typeof platform.stallSec === "number" ? platform.stallSec : env.stallSec;
+  const requestsCeiling = typeof platform.jobTokenMaxRequests === "number"
+    ? platform.jobTokenMaxRequests
+    : env.jobTokenMaxRequests;
+  const timeoutCeiling = defaultTimeoutForJobType(input.jobType, platform)
+    ?? defaultTimeoutForJobType(input.jobType, env)
+    ?? env.auditTimeoutSec;
+
+  const roleStall = tightenRuntimeKnobValue(role.stallSec, stallCeiling, { zeroIsUnlimited: true });
+  const projectStall = tightenRuntimeKnobValue(project.stallSec, stallCeiling, { zeroIsUnlimited: true });
+  const roleRequests = tightenRuntimeKnobValue(role.jobTokenMaxRequests, requestsCeiling, { zeroIsUnlimited: true });
+  const projectRequests = tightenRuntimeKnobValue(project.jobTokenMaxRequests, requestsCeiling, { zeroIsUnlimited: true });
+  const roleTimeout = tightenRuntimeKnobValue(role.timeoutSec, timeoutCeiling, { zeroIsUnlimited: false });
+  const projectTimeout = tightenRuntimeKnobValue(
+    defaultTimeoutForJobType(input.jobType, project),
+    timeoutCeiling,
+    { zeroIsUnlimited: false },
+  );
+
   const stall = pickLayerValue(
     [
       { value: job.stallSec, source: "job" },
-      { value: role.stallSec, source: "role" },
-      { value: project.stallSec, source: "project" },
+      { value: roleStall, source: "role" },
+      { value: projectStall, source: "project" },
       { value: platform.stallSec, source: "platform" },
     ],
     env.stallSec,
@@ -239,8 +285,8 @@ export function resolveRuntimeKnobs(input: {
   const requests = pickLayerValue(
     [
       { value: job.jobTokenMaxRequests, source: "job" },
-      { value: role.jobTokenMaxRequests, source: "role" },
-      { value: project.jobTokenMaxRequests, source: "project" },
+      { value: roleRequests, source: "role" },
+      { value: projectRequests, source: "project" },
       { value: platform.jobTokenMaxRequests, source: "platform" },
     ],
     env.jobTokenMaxRequests,
@@ -249,8 +295,8 @@ export function resolveRuntimeKnobs(input: {
   const timeout = pickLayerValue(
     [
       { value: job.timeoutSec, source: "job" },
-      { value: role.timeoutSec, source: "role" },
-      { value: defaultTimeoutForJobType(input.jobType, project), source: "project" },
+      { value: roleTimeout, source: "role" },
+      { value: projectTimeout, source: "project" },
       { value: defaultTimeoutForJobType(input.jobType, platform), source: "platform" },
     ],
     defaultTimeoutForJobType(input.jobType, env) ?? env.auditTimeoutSec,
@@ -343,6 +389,10 @@ export function jobTokenQuotaExhausted(usedRequests: number, maxRequests: number
   return usedRequests >= maxRequests;
 }
 
+/**
+ * Merge project RoleConfig knobs over global: project may only tighten (#697).
+ * stallSec / jobTokenMaxRequests treat 0 as unlimited (widest).
+ */
 export function mergeRoleRuntimeKnobOverrides(
   globalKnobs: unknown,
   projectKnobs: unknown,
@@ -350,8 +400,18 @@ export function mergeRoleRuntimeKnobOverrides(
   const global = parseRuntimeKnobOverride(globalKnobs);
   const project = parseRuntimeKnobOverride(projectKnobs);
   return {
-    stallSec: project.stallSec ?? global.stallSec,
-    jobTokenMaxRequests: project.jobTokenMaxRequests ?? global.jobTokenMaxRequests,
-    timeoutSec: project.timeoutSec ?? global.timeoutSec,
+    stallSec: project.stallSec === undefined
+      ? global.stallSec
+      : tightenRuntimeKnobValue(project.stallSec, global.stallSec, { zeroIsUnlimited: true }),
+    jobTokenMaxRequests: project.jobTokenMaxRequests === undefined
+      ? global.jobTokenMaxRequests
+      : tightenRuntimeKnobValue(
+        project.jobTokenMaxRequests,
+        global.jobTokenMaxRequests,
+        { zeroIsUnlimited: true },
+      ),
+    timeoutSec: project.timeoutSec === undefined
+      ? global.timeoutSec
+      : tightenRuntimeKnobValue(project.timeoutSec, global.timeoutSec, { zeroIsUnlimited: false }),
   };
 }
