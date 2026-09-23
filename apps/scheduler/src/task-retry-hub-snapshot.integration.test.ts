@@ -86,7 +86,7 @@ if (!testDatabaseUrl) {
           ${credentialId}, 'hub stale credential', 'llm_provider', 'openai', null,
           ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
           ${credentialId.slice(0, 16)}, 'hubs', 'active', 'pi',
-          ${sql.json({ env: { OPENAI_MODEL: "gpt-5.6" } })}
+          ${sql.json({ provider: "openai", models: [{ id: "gpt-5.6" }] })}
         )`;
       await sql`
         INSERT INTO role_credentials (role_config_id, credential_id, purpose)

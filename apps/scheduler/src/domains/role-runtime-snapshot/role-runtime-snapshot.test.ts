@@ -284,7 +284,11 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
     status: "active",
     cred_project_id: null,
     agent_cli: "pi",
-    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    // #679: Pi dialect allowlist is models[].id (not Claude Code ANTHROPIC_MODEL env).
+    settings_config_json: {
+      provider: "anthropic",
+      models: [{ id: "grok-4.6" }],
+    },
     meta_json: {},
     public_metadata_json: {},
   };
@@ -353,7 +357,12 @@ test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", 
     status: "active",
     cred_project_id: null,
     agent_cli: "pi",
-    settings_config_json: { env: { OPENAI_MODEL: "grok-4.6" } },
+    // #679: admit runs before provider/exclusive checks; Pi must declare models[].id
+    // so this case still reaches the intended CLI×Provider incompatibility error.
+    settings_config_json: {
+      provider: "openai",
+      models: [{ id: "grok-4.6" }],
+    },
     meta_json: {},
     public_metadata_json: {},
   };
