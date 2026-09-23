@@ -426,17 +426,3 @@ export function projectJobActions(input: {
     : null;
   return { actions: projectTaskActions({ jobs: [job] }), repair };
 }
-
-export function projectTaskNextSteps(actions: readonly TaskAction[]): string[] {
-  const seen = new Set<string>();
-  const steps: string[] = [];
-  for (const action of actions) {
-    const step = action.title.trim();
-    if (!step || seen.has(step)) continue;
-    seen.add(step);
-    steps.push(step);
-    if (steps.length >= 4) break;
-  }
-  if (steps.length === 0) steps.push("当前没有需要你处理的事项，系统会按已有证据继续收敛");
-  return steps;
-}

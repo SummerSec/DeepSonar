@@ -7,7 +7,6 @@ import {
   projectFindingActions,
   projectJobActions,
   projectTaskActions,
-  projectTaskNextSteps,
   projectUnknownEffectAction,
   sortTaskActions,
 } from "./task-actions";
@@ -156,9 +155,4 @@ test("sort and dedupe keep a single highest-priority action per evidence", () =>
   ]);
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0]?.id, "x");
-});
-
-test("next steps fall back when there is nothing to decide", () => {
-  assert.deepEqual(projectTaskNextSteps([]), ["当前没有需要你处理的事项，系统会按已有证据继续收敛"]);
-  assert.equal(projectTaskNextSteps([action({ id: "a", kind: "human_decision", priority: "high", title: "先看冲突" })]).length, 1);
 });

@@ -6,8 +6,7 @@ import { TaskActionCard } from "./TaskActionCard";
 import type { TaskWorkbenchView } from "./task-workbench-tabs";
 import type { TaskAction, TaskOutcomeSummary, TaskTraceEntry } from "./types";
 
-const TRACE_LABEL: Record<TaskTraceEntry["kind"], string> = {
-  intent: "目标",
+const TRACE_LABEL: Record<Exclude<TaskTraceEntry["kind"], "intent">, string> = {
   plan: "计划",
   capability: "能力",
   run: "运行",
@@ -16,10 +15,32 @@ const TRACE_LABEL: Record<TaskTraceEntry["kind"], string> = {
   report: "报告",
 };
 
+const TRACE_STATUS_LABEL: Record<string, string> = {
+  active: "已使用",
+  cancelled: "已取消",
+  failed: "失败",
+  idle: "暂无运行",
+  none: "未生成",
+  pending: "待开始",
+  projected: "已汇总",
+  provisioning: "准备中",
+  ready: "已就绪",
+  running: "进行中",
+  succeeded: "成功",
+  timeout: "超时",
+  waiting_human: "等待人工",
+  claimed: "已领取",
+  orphan: "待对账",
+  draft: "草稿",
+};
+
+function traceStatusLabel(status: string): string {
+  return TRACE_STATUS_LABEL[status.toLowerCase()] ?? status;
+}
+
 export function TaskOverview({
   outcome,
   actions,
-  nextSteps,
   trace,
   confirmedFindings,
   onOpenFinding,
@@ -28,25 +49,47 @@ export function TaskOverview({
 }: {
   outcome: TaskOutcomeSummary;
   actions: readonly TaskAction[];
-  nextSteps: readonly string[];
   trace: readonly TaskTraceEntry[];
   confirmedFindings: readonly FindingSummary[];
   onOpenFinding?: (findingId: string) => void;
   onOpenAction?: (action: TaskAction) => void;
   onOpenView?: (view: TaskWorkbenchView) => void;
 }) {
+  const stages = trace.filter((item): item is TaskTraceEntry & { kind: Exclude<TaskTraceEntry["kind"], "intent"> } => item.kind !== "intent");
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6">
-      <section className="grid gap-3 sm:grid-cols-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-6 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6">
+      <header className="max-w-5xl">
+        <div className="text-[11px] font-medium tracking-wide text-zinc-500">任务目标</div>
+        <h1 className="mt-1 max-w-[72ch] text-[18px] font-medium leading-7 tracking-[-0.02em] text-zinc-100">{outcome.objective}</h1>
+        <p className="mt-2 text-[13px] leading-6 text-zinc-400">{outcome.lifecycle_reason}</p>
+      </header>
+
+      <OverviewBlock
+        title={actions.length > 0 ? `当前需要处理（${actions.length}）` : "当前状态"}
+        action={actions.length > 0 && onOpenView ? <ViewLink onClick={() => onOpenView("jobs")}>查看任务运行</ViewLink> : null}
+        className={actions.length > 0 ? "max-w-5xl border-l-2 border-amber-400/70" : "max-w-5xl"}
+      >
+        {actions.length === 0 ? (
+          <p className="text-[13px] leading-6 text-zinc-400">当前没有待处理事项。后台刷新不会把你带离当前视图。</p>
+        ) : (
+          <div className="grid max-w-5xl gap-3 lg:grid-cols-2">
+            {actions.slice(0, 4).map((action) => (
+              <TaskActionCard key={action.id} action={action} onOpen={onOpenAction} />
+            ))}
+          </div>
+        )}
+        {actions.length > 4 && <p className="mt-3 text-[11px] text-zinc-500">按优先级显示前 4 项，共 {actions.length} 项待处理。</p>}
+      </OverviewBlock>
+
+      <section className="grid max-w-5xl gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="验证结果统计">
         <OverviewStat label="已确认" value={outcome.confirmed_count} hint="证据成立的结论" />
         <OverviewStat label="待验证" value={outcome.pending_verification_count} hint="还缺验证" />
         <OverviewStat label="待人工" value={outcome.needs_human_count} hint="需要你判断" />
         <OverviewStat label="冲突" value={outcome.conflict_count} hint="支持与反驳并存" />
       </section>
 
-      <p className="text-[13px] leading-6 text-zinc-400">{outcome.lifecycle_reason}</p>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
+      <div className="grid max-w-5xl gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
         <div className="flex flex-col gap-4">
           <OverviewBlock
             title="得到了什么"
@@ -61,7 +104,7 @@ export function TaskOverview({
                     <button
                       type="button"
                       onClick={() => onOpenFinding?.(finding.id)}
-                      className="w-full rounded-xl bg-white/[.03] px-3 py-2 text-left ring-1 ring-white/[.05] hover:bg-white/[.05]"
+                      className="w-full rounded-xl bg-white/[.03] px-3 py-2 text-left ring-1 ring-white/[.05] hover:bg-white/[.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc-300"
                     >
                       <div className="text-[13px] font-medium text-zinc-100">{finding.title}</div>
                       <div className="mt-1 font-mono text-[10px] text-zinc-600">
@@ -92,55 +135,34 @@ export function TaskOverview({
             )}
           </OverviewBlock>
         </div>
-
-        <OverviewBlock title="我需要做什么">
-          {actions.length === 0 ? (
-            <p className="text-[13px] leading-6 text-zinc-500">没有待决事项。后台刷新不会把你带离当前视图。</p>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {actions.slice(0, 6).map((action) => (
-                <TaskActionCard key={action.id} action={action} onOpen={onOpenAction} />
-              ))}
-            </div>
-          )}
-        </OverviewBlock>
       </div>
 
-      <OverviewBlock title="下一步">
-        <ol className="flex flex-col gap-2">
-          {nextSteps.map((step, index) => (
-            <li key={step} className="flex gap-3 text-[13px] leading-6 text-zinc-300">
-              <span className="font-mono text-[10px] text-zinc-600">{index + 1}</span>
-              <span>{step}</span>
-            </li>
-          ))}
-        </ol>
-      </OverviewBlock>
+      <div className="grid max-w-5xl gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
+        <OverviewBlock title="任务阶段" description="阶段状态汇总，不代表逐条运行事件。">
+          <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {stages.map((item) => (
+              <li key={item.id} className="min-w-0 rounded-lg bg-white/[.025] px-3 py-2 ring-1 ring-white/[.05]">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-medium text-zinc-400">{TRACE_LABEL[item.kind]}</span>
+                  <span className="shrink-0 text-[11px] text-zinc-500">{traceStatusLabel(item.status)}</span>
+                </div>
+                <div className="mt-1 break-words text-[12px] leading-5 text-zinc-200">{item.title}</div>
+              </li>
+            ))}
+          </ol>
+        </OverviewBlock>
 
-      <OverviewBlock
-        title="报告"
-        action={onOpenView ? <ViewLink onClick={() => onOpenView("report")}>打开报告</ViewLink> : null}
-      >
-        <div className="flex flex-wrap items-baseline gap-3 text-[13px] text-zinc-300">
-          <strong>{outcome.current_report_version == null ? "尚未生成" : `v${outcome.current_report_version}`}</strong>
-          <span className="text-zinc-500">{outcome.report_stale ? "已被新证据标为过时" : "与当前证据一致或仍未交付"}</span>
-          <span className="font-mono text-[10px] text-zinc-600">更新 {relativeTime(outcome.last_updated_at)}</span>
-        </div>
-      </OverviewBlock>
-
-      <OverviewBlock title="执行轨迹">
-        <ol className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          {trace.map((item, index) => (
-            <li key={item.id} className="min-w-[10rem] flex-1 rounded-xl bg-white/[.025] px-3 py-2 ring-1 ring-white/[.05]">
-              <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">
-                {index + 1}. {TRACE_LABEL[item.kind]}
-              </div>
-              <div className="mt-1 text-[12px] leading-5 text-zinc-200">{item.title}</div>
-              <div className="mt-1 font-mono text-[10px] text-zinc-600">{item.status}{item.digest ? ` · ${item.digest}` : ""}</div>
-            </li>
-          ))}
-        </ol>
-      </OverviewBlock>
+        <OverviewBlock
+          title="报告"
+          action={onOpenView ? <ViewLink onClick={() => onOpenView("report")}>打开报告</ViewLink> : null}
+        >
+          <div className="flex flex-wrap items-baseline gap-3 text-[13px] text-zinc-300">
+            <strong>{outcome.current_report_version == null ? "尚未生成" : `v${outcome.current_report_version}`}</strong>
+            <span className="text-zinc-500">{outcome.report_stale ? "已被新证据标为过时" : "与当前证据一致或仍未交付"}</span>
+            <span className="font-mono text-[10px] text-zinc-600">更新 {relativeTime(outcome.last_updated_at)}</span>
+          </div>
+        </OverviewBlock>
+      </div>
     </div>
   );
 }
@@ -155,11 +177,14 @@ function OverviewStat({ label, value, hint }: { label: string; value: number; hi
   );
 }
 
-function OverviewBlock({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+function OverviewBlock({ title, description, action, className, children }: { title: string; description?: string; action?: ReactNode; className?: string; children: ReactNode }) {
   return (
-    <section className="rounded-[20px] bg-white/[.02] p-4 ring-1 ring-white/[.05]">
+    <section className={`min-w-0 rounded-[20px] bg-white/[.02] p-4 ring-1 ring-white/[.05] ${className ?? ""}`}>
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-[14px] font-medium text-zinc-100">{title}</h2>
+        <div className="min-w-0">
+          <h2 className="text-[14px] font-medium text-zinc-100">{title}</h2>
+          {description && <p className="mt-1 text-[11px] leading-5 text-zinc-500">{description}</p>}
+        </div>
         {action}
       </div>
       {children}
@@ -169,7 +194,7 @@ function OverviewBlock({ title, action, children }: { title: string; action?: Re
 
 function ViewLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className="inline-flex items-center gap-1 text-[11px] text-acc-300 hover:text-acc-200">
+    <button type="button" onClick={onClick} className="inline-flex items-center gap-1 rounded text-[11px] text-acc-300 hover:text-acc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc-300">
       {children}
       <ArrowRight size={11} />
     </button>

@@ -30,12 +30,26 @@ test("overview pane height is constrained by h-full, not flex-1, so overflow-hid
 
   assert.match(
     overview,
-    /className="flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6"/,
+    /className="flex h-full min-h-0 min-w-0 flex-col gap-6 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6"/,
   );
-  assert.doesNotMatch(overview, /flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto/);
+  assert.doesNotMatch(overview, /flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto/);
 
   assert.match(
     report,
     /className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-5"/,
   );
+});
+
+test("overview leads with actionable work and labels projected phases honestly", () => {
+  const overview = readFileSync(path.resolve(import.meta.dirname, "./TaskOverview.tsx"), "utf8");
+  const actionHeading = overview.indexOf('title={actions.length > 0 ? `当前需要处理');
+  const stats = overview.indexOf('aria-label="验证结果统计"');
+  const findings = overview.indexOf('title="得到了什么"');
+
+  assert.ok(actionHeading >= 0 && actionHeading < stats && stats < findings);
+  assert.match(overview, /title="任务阶段" description="阶段状态汇总，不代表逐条运行事件。"/);
+  assert.match(overview, /max-w-5xl grid|grid max-w-5xl/);
+  assert.match(overview, /succeeded: "成功"/);
+  assert.match(overview, /TRACE_STATUS_LABEL\[status\.toLowerCase\(\)\] \?\? status/);
+  assert.doesNotMatch(overview, /title="执行轨迹"|nextSteps/);
 });
