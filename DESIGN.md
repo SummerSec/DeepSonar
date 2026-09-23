@@ -10,6 +10,14 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 这意味着“一切皆插件”只适用于业务能力和交付投影。沙箱、凭据、镜像准入、Job/Attempt、租约、并发、资源预算、幂等、副作用结算、审计和未知外部效果永远属于内核。插件不能通过第二套控制通道绕过这些边界。
 
+角色能力通过 Capability/Pack 组合声明。Pi 等 CLI 的已注册扩展属于角色能力插件，不是 RoleConfig 的独立配置字段；扩展必须经过平台准入，并把最终解析的非敏感引用冻结到 Job。当前 `RoleConfig.pi_extensions` 字段属于待移出的实现债务（#690）。
+
+### 不向后兼容
+
+所有设计只支持当前目标契约，不为旧版本或旧设计保留向后兼容。删除旧设计时同步删除对应的 schema、API、UI 和运行时路径，不保留双读双写、fallback、shim、legacy 模式、旧配置转换或兼容窗口。旧配置无法满足新契约时 fail closed，要求按新契约重新配置；不得自动迁移旧配置以延续旧语义。
+
+已创建 Job 的冻结快照、Evidence、审计记录和历史结果是不可变历史事实，不作为新运行时的兼容输入。代码中尚未删除的旧路径必须标为实现债务，不能写成受支持的设计。Provider 账号到 RoleConfig 的旧绑定运行路径是当前待清理项（#690）。
+
 当前主路径是可运行的 Loop Graph：`Canvas` 是任务，Hub 根据图状态产生 Intent，Scheduler 创建 Job，Worker 在一次性沙箱中执行，结构化事实进入 Canvas，Verify、Research 和 Report 再将结果收敛。现有角色是内置 capability pack 的默认组合；未来可以由模型组合平台已经准入的能力，也可以在受治理范围内生成任务级临时组合。
 
 ## 2. 四层真相与职责
@@ -202,7 +210,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧全局并发上限，不能放宽安全硬门。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
 
-**凭据资产、角色引用与快照生效是三条边界（#626）：** Provider Credential 是秘密资产（创建 / 轮换 / 测试 / 健康）；`role_credentials` 是 RoleConfig 对 Credential 的引用（绑定 / 换绑 / 迁移）；`effect=new_jobs_only | refresh_pending` 是 Job 快照治理，只属于绑定域提交。账号 CRUD 不能要求走完角色勾选和生效步骤。`POST /credentials/batch-bind` 是绑定域 API，不是账号管理向导。运行中与终态快照永远冻结；`refresh_pending` 仅刷新 pending，且必须显式选择。发现 API / 模型目录结果不是授权。Readiness 把账号健康/连通测试修到 `/settings/credentials`，把未绑定、绑定歧义和 CLI 不兼容修到 `/agents?tab=bindings`；`normalizeFix` 不能因为 action 仍是 `role_config` 就把绑定域 href 改写成角色注册表。
+**凭据与运行时插件边界（#632、#679、#690）：** Provider Credential 是可信内核持有的秘密资产；Provider/模型适配能力应由受治理插件描述，RoleConfig 与 Capability Pack 声明能力需求，不绑定账号 ID。Job 创建时 Scheduler 在项目授权范围内解析 Provider、模型及秘密资源，只冻结非敏感插件/模型引用与策略。Pi 注册扩展也由角色能力插件组合，不由 `RoleConfig.pi_extensions` 管理。当前代码仍保留 `role_credentials`、`POST /credentials/batch-bind`、`RoleConfig.pi_extensions` 与运行时回退，这是未完成的实现债务，不是目标设计；#690 要求删除其 schema/API/UI/运行路径。发现 API / 模型目录结果本身不是授权。运行中与终态 Job 快照永远冻结，不因配置变化改写。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
@@ -224,7 +232,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 ## 10. 前端信息架构
 
-一级导航是态势、项目、Agent、Agent 市场和镜像。平台设置把治理域拆开：`/settings/credentials` 只管理 Provider 账号资产；`/agents?tab=bindings` 是角色凭据绑定与生效策略；`/agents?tab=roles` 是角色注册与指令/工具配置。三个入口可互相链接，不共享账号向导 step machine，也不能用一次「应用」同时完成账号保存、角色勾选和快照刷新。
+一级导航是态势、项目、Agent、Agent 市场和镜像。当前实现把治理域拆为 `/settings/credentials`（Provider 账号资产）、`/agents?tab=bindings`（残留的旧角色凭据绑定入口，#690 要求删除）和 `/agents?tab=roles`（角色注册与指令/工具配置）。旧绑定入口只记录为当前实现债务，不是目标设计或可继续扩展的契约。新目标是项目授权能力插件、角色声明能力需求、Scheduler 在 Job 创建时解析。
 
 项目内日常路径为任务工作台：
 

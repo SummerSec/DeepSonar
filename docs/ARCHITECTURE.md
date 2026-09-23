@@ -11,6 +11,12 @@
 
 **可插拔原则**：能力、Skill、工具和运行时组件都通过准入目录和受治理接口组合。平台负责范围、沙箱、网络、凭据、预算、审计、幂等和结果落地；在这些边界以内，Agent 自主发现、选择、拉取、加载和组合能力。业务 Skill 不作为角色提示词或 RoleConfig 的隐式预装内容，Agent 的运行中拉取必须使用当前 Job 的受治理 Skill 操作。
 
+角色能力通过 Capability/Pack 组合声明。Pi 等 CLI 的已注册扩展归属角色能力插件，不属于 RoleConfig 的独立配置；平台准入扩展，Scheduler 校验 CLI/项目范围并将解析后的非敏感引用冻结到 Job。当前 `RoleConfig.pi_extensions` 是待删除实现债务（#690）。
+
+**不向后兼容**：所有设计只支持当前目标契约。废弃契约应从 schema、API、UI 和运行时直接删除，不保留双读双写、fallback、shim、legacy 模式、旧配置转换或兼容窗口；旧配置必须按新契约重新配置，无法解析时 fail closed，不得自动迁移以延续旧语义。已创建 Job 的冻结快照、Evidence、审计记录和历史结果保持不可变，但不得作为新运行时的兼容输入。
+
+Provider 账号到 RoleConfig 的 `role_credentials` 运行时兼容目前仍存在于实现中；它与本原则冲突，属于待清理债务，由 #690 跟踪。新设计以 Provider 能力插件和项目授权解析凭据，不恢复旧绑定。
+
 > 历史分期与早期方案只在明确标注的背景段落保留；当前实现不要求先接入 Plane。
 
 ---
@@ -574,7 +580,7 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | RoleConfig 保存 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent、平台工具开关与 Credential 引用。Credential 行是秘密资产；`role_credentials` 是绑定关系；绑定提交上的 `effect`（`new_jobs_only` / `refresh_pending`）才改 pending 快照，运行中/终态快照永不改写。Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结，运行时由固定提交的 `dsh-reasoning-settings` 修正 Subagent 继承；全局 RoleConfig 保存可信镜像绑定 |
+| 存储 | `role_configs` / `role_credentials` / `role_config_files` / Credential `settings_config_json` | **当前实现债务（#690）**：RoleConfig 仍保存 Credential 引用和 `pi_extensions`，`role_credentials` 仍被绑定页面与运行时读取；这不属于目标契约，移除后 RoleConfig 只描述职责/稳定配置，Provider 与扩展由授权能力插件在 Job 创建时解析。Credential 行仍是内核持有的秘密资产。RoleConfig 的其它当前字段包括 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent 与平台工具开关。Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结，运行时由固定提交的 `dsh-reasoning-settings` 修正 Subagent 继承；全局 RoleConfig 保存可信镜像绑定 |
 | 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + `projects.config_json` 镜像策略 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值；Job 镜像只认平台目录与 Hub 提案 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含 CLI selector `model`、实际 `upstream_model`、Provider 配置文件与客户端上下文预算）；Executor 仅用 selector 启动 CLI，所有上游治理使用 `upstream_model ?? model`，不读取旧配置或为缺失快照降级 |
 

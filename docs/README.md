@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **当前同步状态（2026-09-19）**：#626 把凭据资产、角色引用与快照生效拆成三条边界；根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
+> **当前同步状态（2026-09-23）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 跟踪 Provider 与 CLI 扩展归入角色能力插件，以及删除 `role_credentials` 和 `RoleConfig.pi_extensions`。当前代码残留的是实现债务，不代表受支持的目标设计。根 README 与架构入口仍以本地库/Web 为主路径。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
