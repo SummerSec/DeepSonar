@@ -31,9 +31,14 @@ export function healthStatusLabel(status: string | null | undefined): string {
   return HEALTH_STATUS_LABEL[status] ?? status;
 }
 
-/** Models declared inside CC Switch settingsConfig (env / toml / official llm-pi-ai / open-code). */
-export function modelsFromSettingsConfig(credential: Pick<ProviderCredential, "settings_config_json"> | null): string[] {
-  return extractModelsFromSettingsClient(credential?.settings_config_json ?? null);
+/** Models declared inside CC Switch settingsConfig, parsed by credential agent_cli dialect (#679). */
+export function modelsFromSettingsConfig(
+  credential: Pick<ProviderCredential, "settings_config_json" | "agent_cli"> | null,
+): string[] {
+  return extractModelsFromSettingsClient(
+    credential?.settings_config_json ?? null,
+    credential?.agent_cli ?? null,
+  );
 }
 
 export function boundCredentialLabel(

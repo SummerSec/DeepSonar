@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   CREDENTIAL_BINDING_DEPRECATED,
+  CREDENTIAL_BINDING_MISSING,
+  MODEL_ALLOWLIST_UNCONFIGURED,
   MODEL_NOT_IN_CATALOG,
   MODEL_PASSTHROUGH_DISABLED,
   admitModelAgainstCatalog,
   credentialBindingDeprecatedWarning,
+  credentialBindingMissingWarning,
   gatewayFrozenModelRepair,
 } from "./model-catalog-admit.js";
 
@@ -83,4 +86,57 @@ test("gatewayFrozenModelRepair is permanent_failure with model_not_in_catalog", 
   assert.equal(repair.code, MODEL_NOT_IN_CATALOG);
   assert.equal(repair.category, "permanent_failure");
   assert.match(repair.message, /other/);
+});
+
+
+test("empty configured allowlist fails when explicit role model is set (#679)", () => {
+  const result = admitModelAgainstCatalog({
+    resolvedModel: "DeepSeek-V4-Pro-0813",
+    catalogJson: [],
+    allowPassthrough: false,
+    modelSourceHint: "role",
+    emphasizePassthrough: true,
+  });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, MODEL_ALLOWLIST_UNCONFIGURED);
+  assert.equal(result.repair.category, "model_correctable");
+  assert.match(result.repair.message, /尚未配置 models/);
+  assert.match(result.repair.message, /DeepSeek-V4-Pro-0813/);
+});
+
+test("empty configured allowlist still soft-degrades for CLI default (#679)", () => {
+  const result = admitModelAgainstCatalog({
+    resolvedModel: "claude-opus-5",
+    catalogJson: [],
+    allowPassthrough: false,
+    modelSourceHint: "cli_default",
+  });
+  assert.equal(result.ok, true);
+});
+
+test("non-empty catalog mismatch lists sample models (#679)", () => {
+  const result = admitModelAgainstCatalog({
+    resolvedModel: "missing-model",
+    catalogJson: ["DeepSeek-V4.1-Flash", "GLM-5.3", "GLM-5.3-Flash"],
+    allowPassthrough: false,
+    modelSourceHint: "role",
+    emphasizePassthrough: true,
+  });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, MODEL_PASSTHROUGH_DISABLED);
+  assert.match(result.repair.message, /DeepSeek-V4\.1-Flash/);
+  assert.match(result.repair.message, /GLM-5\.3/);
+  assert.deepEqual((result.repair.expected as { sample?: string[] } | undefined)?.sample, ["DeepSeek-V4.1-Flash", "GLM-5.3", "GLM-5.3-Flash"]);
+});
+
+test("credentialBindingMissingWarning lists missing ids (#679)", () => {
+  const repair = credentialBindingMissingWarning({
+    missingCredentialIds: ["11111111-1111-1111-1111-111111111111"],
+  });
+  assert.equal(repair.code, CREDENTIAL_BINDING_MISSING);
+  assert.match(repair.message, /已不存在/);
+  assert.match(repair.message, /11111111-1111-1111-1111-111111111111/);
+  assert.match(repair.next_action ?? "", /clear_or_rebind/);
 });

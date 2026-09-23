@@ -694,39 +694,108 @@ export function extractInferenceProtocol(settingsConfig: unknown, provider: stri
   return provider === "anthropic" ? "anthropic-messages" : "openai-responses";
 }
 
-/** Collect model IDs declared inside settingsConfig (for binding UI / defaults). */
-export function extractModelsFromSettings(settingsConfig: unknown): string[] {
+function pushUniqueModelId(found: string[], value: unknown): void {
+  if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());
+}
+
+/** Claude Code settings.json dialect: model ids live under env ANTHROPIC_* / CLAUDE_CODE_*. */
+function extractClaudeCodeModelsFromSettings(settingsConfig: unknown): string[] {
+  const settings = asObject(settingsConfig);
+  const found: string[] = [];
+  const env = asObject(settings.env);
+  for (const key of [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]) {
+    pushUniqueModelId(found, env[key]);
+  }
+  return found;
+}
+
+/**
+ * Pi Coding Agent dialect: models[].id from official llm-pi-ai, providers.<route>.models[],
+ * or a bare Pi models.json-shaped object. Does not read Claude Code env model fields.
+ */
+function extractPiModelsFromSettings(settingsConfig: unknown): string[] {
   const official = readOfficialLlmPiAiSettings(settingsConfig);
   if (official && official.modelIds.length > 0) return official.modelIds;
   const settings = asObject(settingsConfig);
   const found: string[] = [];
-  const push = (value: unknown) => {
-    if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());
-  };
-  const env = asObject(settings.env);
-  push(env.ANTHROPIC_MODEL);
-  push(env.ANTHROPIC_DEFAULT_FABLE_MODEL);
-  push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
-  push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
-  push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
-  push(env.ANTHROPIC_SMALL_FAST_MODEL);
-  push(env.CLAUDE_CODE_SUBAGENT_MODEL);
-  for (const model of Object.keys(asObject(settings.models))) push(model);
   const providers = asObject(settings.providers);
   const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
   for (const rawProvider of providerEntries) {
     const provider = asObject(rawProvider);
     if (Array.isArray(provider.models)) {
-      for (const rawModel of provider.models) push(asObject(rawModel).id);
+      for (const rawModel of provider.models) pushUniqueModelId(found, asObject(rawModel).id);
     } else {
-      for (const model of Object.keys(asObject(provider.models))) push(model);
+      for (const model of Object.keys(asObject(provider.models))) pushUniqueModelId(found, model);
+    }
+  }
+  return found;
+}
+
+/** DSH / llm-pi-ai YAML dialect (same shape as official Pi AI profile). */
+function extractDshModelsFromSettings(settingsConfig: unknown): string[] {
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official && official.modelIds.length > 0) return official.modelIds;
+  try {
+    const parsed = parseDshPiAiSettings(settingsConfig);
+    return parsed.modelIds;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Heuristic cross-dialect extraction when caller has no agent_cli.
+ * Prefer official llm-pi-ai, then Claude env, Pi providers, leftover open-code/codex shapes.
+ */
+function extractModelsFromSettingsHeuristic(settingsConfig: unknown): string[] {
+  const official = readOfficialLlmPiAiSettings(settingsConfig);
+  if (official && official.modelIds.length > 0) return official.modelIds;
+  const settings = asObject(settingsConfig);
+  const found: string[] = [];
+  const env = asObject(settings.env);
+  pushUniqueModelId(found, env.ANTHROPIC_MODEL);
+  pushUniqueModelId(found, env.ANTHROPIC_DEFAULT_FABLE_MODEL);
+  pushUniqueModelId(found, env.ANTHROPIC_DEFAULT_SONNET_MODEL);
+  pushUniqueModelId(found, env.ANTHROPIC_DEFAULT_OPUS_MODEL);
+  pushUniqueModelId(found, env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
+  pushUniqueModelId(found, env.ANTHROPIC_SMALL_FAST_MODEL);
+  pushUniqueModelId(found, env.CLAUDE_CODE_SUBAGENT_MODEL);
+  for (const model of Object.keys(asObject(settings.models))) pushUniqueModelId(found, model);
+  const providers = asObject(settings.providers);
+  const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
+  for (const rawProvider of providerEntries) {
+    const provider = asObject(rawProvider);
+    if (Array.isArray(provider.models)) {
+      for (const rawModel of provider.models) pushUniqueModelId(found, asObject(rawModel).id);
+    } else {
+      for (const model of Object.keys(asObject(provider.models))) pushUniqueModelId(found, model);
     }
   }
   if (typeof settings.config === "string") {
     const match = /^\s*model\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
-    push(match?.[1] || match?.[2]);
+    pushUniqueModelId(found, match?.[1] || match?.[2]);
   }
   return found;
+}
+
+/**
+ * Collect model IDs declared inside settingsConfig (for binding UI / defaults / admit SSOT).
+ * When `agentCli` is provided, parse only that CLI's dialect (#679); omit for legacy heuristic.
+ */
+export function extractModelsFromSettings(settingsConfig: unknown, agentCli?: string | null): string[] {
+  const cli = typeof agentCli === "string" ? agentCli.trim() : "";
+  if (cli === "pi") return extractPiModelsFromSettings(settingsConfig);
+  if (cli === "claude-code") return extractClaudeCodeModelsFromSettings(settingsConfig);
+  if (cli === "dsh") return extractDshModelsFromSettings(settingsConfig);
+  return extractModelsFromSettingsHeuristic(settingsConfig);
 }
 
 export function splitPiModelRef(model: string): { provider?: string; modelId: string } {

@@ -214,7 +214,7 @@ async function validateProjectModelAllowlist(
   ];
   if (refs.length === 0 || !allowlist.default_credential_id) return;
   const [credential] = await sql`
-    SELECT id, provider, model_catalog_json, model_catalog_fetched_at, settings_config_json, status, project_id
+    SELECT id, provider, model_catalog_json, model_catalog_fetched_at, settings_config_json, status, project_id, agent_cli
     FROM credentials
     WHERE id = ${allowlist.default_credential_id} AND kind = 'llm_provider'
     LIMIT 1`;
@@ -223,8 +223,11 @@ async function validateProjectModelAllowlist(
   if (credential.project_id && credential.project_id !== projectId) {
     throw new Error("缺省模型 Provider 不属于当前项目");
   }
-  // Allowlist SSOT: account-configured model ids (#656), not probed model_catalog_json.
-  const configuredModelIds = extractModelsFromSettings(credential.settings_config_json);
+  // Allowlist SSOT: account-configured model ids by credential CLI dialect (#656/#679).
+  const dialectCli = typeof credential.agent_cli === "string" && credential.agent_cli.trim()
+    ? credential.agent_cli.trim()
+    : allowlist.default_agent_cli;
+  const configuredModelIds = extractModelsFromSettings(credential.settings_config_json, dialectCli);
   const catalog = resolveModelDescriptorCatalog({
     provider: String(credential.provider),
     catalogJson: configuredModelIds,
@@ -232,6 +235,14 @@ async function validateProjectModelAllowlist(
       ? credential.model_catalog_fetched_at
       : `credential:${String(credential.id)}`,
   });
+  if (!allowlist.allow_model_catalog_passthrough && configuredModelIds.length === 0 && refs.length > 0) {
+    const err = new Error(
+      `项目已指定缺省/回退模型，但 Provider 账号尚未配置 models[].id（或该 Agent CLI 方言对应的模型字段）；请先在凭据 settings 填写模型名单，或仅在 alias 网关应急时开启 allow_model_catalog_passthrough`,
+    ) as Error & { error_code?: string; repair_code?: string };
+    err.error_code = "model_allowlist_unconfigured";
+    err.repair_code = "model_allowlist_unconfigured";
+    throw err;
+  }
   if (!allowlist.allow_model_catalog_passthrough && configuredModelIds.length > 0) {
     const known = new Set(configuredModelIds);
     const unknown = refs.find((ref) => !known.has(ref));
@@ -458,6 +469,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
+    const beforePassthrough = parseProjectAgentAllowlist(cfg).allow_model_catalog_passthrough;
     const beforeQuota = ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs) ?? null;
     if (body.rules) {
       const currentRules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
@@ -538,6 +550,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const afterQuota = Object.hasOwn(body.rules ?? {}, "maxConcurrentJobs")
       ? ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs ?? null)
       : undefined;
+    const afterPassthrough = parseProjectAgentAllowlist(cfg).allow_model_catalog_passthrough;
     await audit(req, {
       action: "settings.project_update",
       resourceType: "project",
@@ -549,6 +562,16 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         ...(afterQuota === undefined ? {} : { maxConcurrentJobs: afterQuota }),
       },
     });
+    if (afterPassthrough && !beforePassthrough) {
+      await audit(req, {
+        action: "project.model_catalog_passthrough_enabled",
+        resourceType: "project",
+        resourceId: id,
+        projectId: id,
+        before: { allow_model_catalog_passthrough: false },
+        after: { allow_model_catalog_passthrough: true },
+      });
+    }
     const [activeRow] = await sql`
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;

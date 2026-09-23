@@ -733,3 +733,35 @@ test("#624 extractInferenceProtocol prefers settings api and rejects unsupported
     /不支持的推理协议：grpc-weird/,
   );
 });
+
+
+test("extractModelsFromSettings is CLI-dialect aware (#679)", () => {
+  const piSettings = {
+    providers: {
+      deepsonar: {
+        models: [{ id: "DeepSeek-V4.1-Flash" }, { id: "GLM-5.3" }],
+      },
+    },
+    env: { ANTHROPIC_MODEL: "should-not-appear-for-pi" },
+  };
+  assert.deepEqual(extractModelsFromSettings(piSettings, "pi"), ["DeepSeek-V4.1-Flash", "GLM-5.3"]);
+  assert.deepEqual(extractModelsFromSettings(piSettings, "claude-code"), ["should-not-appear-for-pi"]);
+
+  const claudeSettings = {
+    env: {
+      ANTHROPIC_MODEL: "claude-sonnet-4-5",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
+    },
+    providers: { deepsonar: { models: [{ id: "pi-only-id" }] } },
+  };
+  assert.deepEqual(
+    extractModelsFromSettings(claudeSettings, "claude-code"),
+    ["claude-sonnet-4-5", "claude-haiku-4-5"],
+  );
+  assert.deepEqual(extractModelsFromSettings(claudeSettings, "pi"), ["pi-only-id"]);
+
+  // Omitted agentCli keeps heuristic (both dialects).
+  const mixed = extractModelsFromSettings(claudeSettings);
+  assert.ok(mixed.includes("claude-sonnet-4-5"));
+  assert.ok(mixed.includes("pi-only-id"));
+});

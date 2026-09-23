@@ -17,11 +17,14 @@ function bareUpstreamModelId(upstreamModel: string | null | undefined): string |
 
 export const MODEL_NOT_IN_CATALOG = "model_not_in_catalog" as const;
 export const MODEL_PASSTHROUGH_DISABLED = "model_passthrough_disabled" as const;
+export const MODEL_ALLOWLIST_UNCONFIGURED = "model_allowlist_unconfigured" as const;
 export const CREDENTIAL_BINDING_DEPRECATED = "credential_binding_deprecated" as const;
+export const CREDENTIAL_BINDING_MISSING = "credential_binding_missing" as const;
 
 export type ModelCatalogAdmitCode =
   | typeof MODEL_NOT_IN_CATALOG
-  | typeof MODEL_PASSTHROUGH_DISABLED;
+  | typeof MODEL_PASSTHROUGH_DISABLED
+  | typeof MODEL_ALLOWLIST_UNCONFIGURED;
 
 export type ModelCatalogAdmitResult =
   | { ok: true; resolved: string; catalog: string[] }
@@ -42,7 +45,8 @@ function catalogPreview(catalog: readonly string[]): { options: string; more: st
 /**
  * Admit a resolved model id against the account-configured model allowlist
  * (settings_config_json / extractModelsFromSettings), NOT probed model_catalog_json (#656).
- * Empty allowlist soft-degrades (ask operator to fill provider model id on account when sensible).
+ * Empty allowlist: soft-degrade only when no explicit RoleConfig/requested model was set;
+ * an explicit model with empty account models fail-fasts (#679).
  * Passthrough skips the configured-allowlist gate for emergency alias gateways only.
  */
 export function admitModelAgainstCatalog(input: {
@@ -59,19 +63,54 @@ export function admitModelAgainstCatalog(input: {
   const resolved =
     bareUpstreamModelId(input.resolvedModel)
     ?? (typeof input.resolvedModel === "string" ? input.resolvedModel.trim() : "");
+  const source = input.modelSourceHint ?? "unknown";
+  const explicitRequested = Boolean(resolved)
+    && (source === "role" || source === "settings" || source === "project" || source === "hub"
+      || input.emphasizePassthrough === true);
 
   if (input.allowPassthrough) {
     return { ok: true, resolved, catalog };
   }
   if (catalog.length === 0) {
-    return { ok: true, resolved, catalog };
+    if (!explicitRequested) {
+      return { ok: true, resolved, catalog };
+    }
+    const message = resolved
+      ? `角色/请求已指定模型 ${resolved}，但 Provider 账号尚未配置 models[].id（或该 Agent CLI 方言对应的模型字段）；请先在凭据 settings 填写模型名单，或仅在 alias 网关应急时开启 allow_model_catalog_passthrough`
+      : "角色/请求已指定模型，但 Provider 账号尚未配置 models[].id；请先在凭据 settings 填写模型名单";
+    return {
+      ok: false,
+      code: MODEL_ALLOWLIST_UNCONFIGURED,
+      resolved,
+      catalog,
+      repair: buildRepairFeedback({
+        category: "model_correctable",
+        code: MODEL_ALLOWLIST_UNCONFIGURED,
+        operation,
+        path: "model_ref",
+        message,
+        expected: {
+          kind: "account_configured_model_id",
+          catalog_size: 0,
+          sample: [],
+          allow_model_catalog_passthrough: false,
+        },
+        observed_shape: {
+          resolved_model: resolved || null,
+          model_source: source,
+          in_configured_allowlist: false,
+          passthrough: false,
+          account_models_empty: true,
+        },
+        next_action: "fill_provider_account_models_then_retry",
+      }),
+    };
   }
   if (resolved && catalog.includes(resolved)) {
     return { ok: true, resolved, catalog };
   }
 
   const { options, more } = catalogPreview(catalog);
-  const source = input.modelSourceHint ?? "unknown";
   const code: ModelCatalogAdmitCode = input.emphasizePassthrough === true
     ? MODEL_PASSTHROUGH_DISABLED
     : MODEL_NOT_IN_CATALOG;
@@ -136,6 +175,34 @@ export function credentialBindingDeprecatedWarning(input?: {
       binding_count: input?.bindingCount ?? null,
     },
     next_action: "prefer_project_allowlist_credential_and_omit_role_config_credentials",
+  });
+}
+
+/** Warning when RoleConfig PUT drops dangling credential ids instead of 400 (#679). */
+export function credentialBindingMissingWarning(input: {
+  missingCredentialIds: readonly string[];
+  operation?: string;
+}): RepairFeedback {
+  const ids = [...new Set(input.missingCredentialIds.map((id) => id.trim()).filter(Boolean))];
+  const preview = ids.slice(0, 8).join("、");
+  const more = ids.length > 8 ? ` 等 ${ids.length} 个` : "";
+  return buildRepairFeedback({
+    category: "model_correctable",
+    code: CREDENTIAL_BINDING_MISSING,
+    operation: input.operation ?? "role_config.upsert",
+    path: "credentials",
+    message:
+      `RoleConfig 引用的 Credential 已不存在（${preview}${more}）；已自动丢弃悬挂绑定并继续保存其它字段。请清除或重新绑定可用凭据。`,
+    expected: {
+      kind: "existing_credential_id",
+      missing_count: ids.length,
+      sample: ids.slice(0, 12),
+    },
+    observed_shape: {
+      missing_credential_ids: ids.slice(0, 24),
+      dropped: true,
+    },
+    next_action: "clear_or_rebind_missing_credentials",
   });
 }
 

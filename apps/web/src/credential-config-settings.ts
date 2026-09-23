@@ -136,22 +136,69 @@ export function parsePiSettingsText(text: string): { ok: true; empty: boolean; v
   return { ok: true, empty: false, value: root };
 }
 
-export function extractModelsFromSettingsClient(settings: Record<string, unknown> | null | undefined): string[] {
+/**
+ * Collect account-configured model ids from settings.
+ * When `agentCli` is set, parse only that CLI dialect (#679); omit for heuristic fallback.
+ */
+export function extractModelsFromSettingsClient(
+  settings: Record<string, unknown> | null | undefined,
+  agentCli?: AgentCli | string | null,
+): string[] {
   const found: string[] = [];
   const push = (value: unknown) => {
     if (typeof value === "string" && value.trim() && !found.includes(value.trim())) found.push(value.trim());
   };
-  const root = readOfficialLlmPiAiDocumentClient(settings ?? null);
-  if (root) {
+  const cli = typeof agentCli === "string" ? agentCli.trim() : "";
+
+  const extractOfficial = (): string[] => {
+    const root = readOfficialLlmPiAiDocumentClient(settings ?? null);
+    if (!root) return [];
+    const ids: string[] = [];
+    const pushId = (value: unknown) => {
+      if (typeof value === "string" && value.trim() && !ids.includes(value.trim())) ids.push(value.trim());
+    };
     const selected = asRecord(root["agent-default-model"]);
-    push(selected?.model);
+    pushId(selected?.model);
     const providers = asRecord(asRecord(root["llm-pi-ai"])?.providers) ?? {};
     for (const raw of Object.values(providers)) {
       const models = asRecord(raw)?.models;
-      if (Array.isArray(models)) for (const model of models) push(asRecord(model)?.id);
+      if (Array.isArray(models)) for (const model of models) pushId(asRecord(model)?.id);
+    }
+    return ids;
+  };
+
+  if (cli === "claude-code") {
+    if (!settings) return found;
+    const env = asRecord(settings.env) ?? {};
+    push(env.ANTHROPIC_MODEL);
+    push(env.ANTHROPIC_DEFAULT_FABLE_MODEL);
+    push(env.ANTHROPIC_DEFAULT_SONNET_MODEL);
+    push(env.ANTHROPIC_DEFAULT_OPUS_MODEL);
+    push(env.ANTHROPIC_DEFAULT_HAIKU_MODEL);
+    push(env.ANTHROPIC_SMALL_FAST_MODEL);
+    push(env.CLAUDE_CODE_SUBAGENT_MODEL);
+    return found;
+  }
+
+  if (cli === "pi" || cli === "dsh") {
+    const official = extractOfficial();
+    if (official.length > 0) return official;
+    if (!settings || cli === "dsh") return found;
+    const providers = asRecord(settings.providers) ?? {};
+    const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
+    for (const rawProvider of providerEntries) {
+      const models = asRecord(rawProvider)?.models;
+      if (Array.isArray(models)) {
+        for (const rawModel of models) push(asRecord(rawModel)?.id);
+      } else {
+        for (const model of Object.keys(asRecord(models) ?? {})) push(model);
+      }
     }
     return found;
   }
+
+  const official = extractOfficial();
+  if (official.length > 0) return official;
   if (!settings) return found;
   const env = asRecord(settings.env) ?? {};
   push(env.ANTHROPIC_MODEL);

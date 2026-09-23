@@ -121,3 +121,16 @@ test("RoleConfig PUT omits credentials to preserve bindings and surfaces inherit
   assert.match(roleConfigRoutesSource, /DEPRECATED \(#632\)/);
 });
 
+
+
+test("RoleConfig PUT drops missing credential ids with upsert_warnings (#679)", () => {
+  const validationStart = roleConfigRoutesSource.indexOf("async function validateRoleConfigBody(");
+  const validationEnd = roleConfigRoutesSource.indexOf("async function upsertRoleConfigInTx(", validationStart);
+  const validation = roleConfigRoutesSource.slice(validationStart, validationEnd);
+  assert.doesNotMatch(validation, /Credential 不存在:/);
+  assert.match(validation, /missingCredentialIds/);
+  assert.match(validation, /body\.credentials = kept/);
+  assert.match(roleConfigRoutesSource, /credential_binding_missing/);
+  assert.match(roleConfigRoutesSource, /credentialBindingMissingWarning/);
+  assert.match(roleConfigRoutesSource, /role_config\.model_catalog_passthrough_enabled/);
+});
