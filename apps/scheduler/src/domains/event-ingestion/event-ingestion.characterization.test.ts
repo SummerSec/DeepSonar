@@ -43,7 +43,16 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
   assert.match(sideEffectSource, /resolveAgentSnapshotForJob/);
   assert.doesNotMatch(sideEffectSource, /assertFrozenRuntimeImageLocal|blockHubOnMissingLocalImage/);
   assert.match(sideEffectSource, /isHubRuntimeImageResolutionError/);
-  assert.match(sideEffectSource, /phase === "preflight" && key/);
+  assert.match(
+    sideEffectSource,
+    /phase === "preflight" \? `intents\.\$\{index\}\.runtime_image_key` : "intents\.runtime_image_key"/,
+    "preflight must report the per-intent path while apply keeps the shared path (#684)",
+  );
+  assert.match(
+    sideEffectSource,
+    /if \(key && !allowedImageKeySet\.has\(key\)\)[\s\S]{0,120}invalidRuntimeImage\(path, allowedImageKeys\)/,
+    "a proposed runtime_image_key must be rejected before apply instead of failing at provision (#684)",
+  );
   assert.match(sideEffectSource, /invalidRuntimeImage\(`intents\.\$\{index\}\.runtime_image_key`/);
   assert.match(
     sideEffectSource,
