@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [0.4.10] - 2026-09-23
+
+### 修复
+
+- Provider 模型权威校验与悬挂凭据解耦（#679 / #680）：凭据 `settings_config_json` 的模型名单成为选模 SSOT，并按 Agent CLI 方言解析（Claude Code `env.ANTHROPIC_*`、Pi `models[].id` / `providers.*.models`、DSH）。`RoleConfig.model` 必须命中该凭据的名单，**空名单 + 显式模型在派发前 fail-fast**（`model_allowlist_unconfigured` / `model_not_in_catalog`，返回含可用模型列表的 RepairFeedback），不再拖到 Worker 起来后整批 `unrecognized_model`；角色/项目缺省为空时自动取账号已配置模型首个。`allow_model_catalog_passthrough` 开启写专用审计（`project.*` / `role_config.*` / `job.model_catalog_passthrough`）。RoleConfig PUT 引用已删除凭据改为丢弃悬挂绑定 + `upsert_warnings`（`credential_binding_missing`），不再 400 阻断其它字段保存。
+- 模型准入失败保留结构化 RepairFeedback（#681 / #682 / #683）：`SnapshotUnresolvableError` 沿 `cause` 链保留 `repair`，`currentSnapshotUnresolvableBody` additive 增补可选 `repair` 字段（`error_code` / `stale_fields` / `next_action` 语义不变），409 响应体可直接取到候选模型列表，不再只剩被截断到 500 字符的中文串。
+- opensandbox 双挂网与健康探测有界重试（#685 / #687）：scheduler 必须留在 `sandbox_gateway`（`deepsonar-gateway-proxy` 只挂该网、上游为 `http://scheduler:3100/gateway`），而 `opensandbox` 只挂 `deepsonar` 网时该网 aardvark 对它返回 NXDOMAIN，双 nameserver 下间歇 `getaddrinfo ENOTFOUND` → dispatcher 整轮暂停领取、reaper 清理失败。修复：`opensandbox` 一并接入 `sandbox_gateway`（两张网的 aardvark 都能解析），并在探测路径加有界重试，单次解析失败不再立刻暂停领取；compose 内注明不要摘掉 scheduler 的 `sandbox_gateway`。
+- Provider 账号编辑回显与密钥脱敏（#677 / #678）：连接字段 Base URL 在 `settingsJson` 非空时也写回 settings（Claude / DSH / OpenCode），编辑 hydrate 优先 settings、回退 `public_metadata.base_url`；API Key 编辑态显示「已保存密钥」，留空或占位不会轮换、不会覆盖既有密钥。
+
+### 工程
+
+- 测试接线棘轮（#681 / #682）：新增 `ci:unit:ci-test-hook`——未被任何 script / workflow 引用的 `*.test.ts` 必须出现在 allowlist 内，新增未挂测试直接失败，`--update` 只允许缩小基线；同时把漏网的 `model-catalog-admit` / `provider-model-catalog` / `passthrough-audit` / `skill-pull` / `model-catalog-health` 挂入对应 `ci:unit:*`。
+- 守则套件真正进 CI（#684 / #686 / #688）：`ci:unit:bounded-contexts` 与 `ci:unit:ci-test-hook` 挂入 `ci.yml`（此前只有脚本定义、没有任何 workflow 调用，棘轮从未执行）；`event-ingestion` 的源码形状断言（`phase === "preflight" && key`）改为守住不变量（preflight 报 per-intent 路径、提案的 `runtime_image_key` 在 apply 前即被拒），该套件此前在 main 上持续失败。
+
 ## [0.4.9] - 2026-09-23
 
 ### 变更
@@ -994,6 +1008,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.10]: https://github.com/SummerSec/DeepSonar/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/SummerSec/DeepSonar/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/SummerSec/DeepSonar/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/SummerSec/DeepSonar/compare/v0.4.6...v0.4.7
