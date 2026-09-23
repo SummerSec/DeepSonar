@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { buildRepairFeedback } from "@deepsonar/shared-types";
 import test from "node:test";
 import { SnapshotUnresolvableError } from "../role-runtime-snapshot/index.js";
+import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
 import {
   currentSnapshotUnresolvableBody,
   frozenRuntimeImageOverride,
@@ -111,4 +113,40 @@ test("frozen Hub runtime_image_key is the override used to resolve current ident
   );
   assert.equal(frozenRuntimeImageOverride({ runtime_image_key: null }), undefined);
   assert.equal(frozenRuntimeImageOverride({}), undefined);
+});
+
+test("SnapshotUnresolvableError preserves ModelCatalogMismatchError repair for HTTP 409 (#681)", () => {
+  const catalog = ["DeepSeek-V4.1-Flash", "GLM-5.3", "GLM-5.3-Flash"];
+  const repair = buildRepairFeedback({
+    category: "model_correctable",
+    code: "model_not_in_catalog",
+    operation: "admit_model_against_catalog",
+    message: "解析模型 missing-model 不在账号已配置的 provider 模型名单，可选项：DeepSeek-V4.1-Flash、GLM-5.3、GLM-5.3-Flash",
+    expected: { kind: "account_configured_model_id", catalog_size: catalog.length, sample: catalog, allow_model_catalog_passthrough: false },
+    next_action: "select_account_configured_model_id_or_enable_passthrough_for_alias_gateway",
+  });
+  const mismatch = new ModelCatalogMismatchError(
+    repair.message,
+    "missing-model",
+    catalog,
+    repair,
+    "model_not_in_catalog",
+  );
+  const error = new SnapshotUnresolvableError(mismatch);
+  assert.equal(error.error_code, "SNAPSHOT_STALE");
+  assert.equal(error.code, "model_not_in_catalog");
+  assert.ok(error.repair);
+  assert.deepEqual((error.repair.expected as { sample?: string[] }).sample, catalog);
+
+  const body = currentSnapshotUnresolvableBody(error);
+  assert.equal(body.error_code, "SNAPSHOT_STALE");
+  assert.deepEqual(body.stale_fields, ["current_snapshot_unresolvable"]);
+  assert.equal(body.next_action, "fix-current-configuration");
+  assert.ok(body.repair);
+  assert.equal(body.repair.code, "model_not_in_catalog");
+  assert.deepEqual((body.repair.expected as { sample?: string[] }).sample, catalog);
+
+  // Job rerun path: detail.repair extras merge
+  const fromDetail = currentSnapshotUnresolvableBody("解析模型 missing-model …", { repair });
+  assert.deepEqual((fromDetail.repair?.expected as { sample?: string[] } | undefined)?.sample, catalog);
 });

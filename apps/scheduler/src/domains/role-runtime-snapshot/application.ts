@@ -2,6 +2,7 @@ import {
   buildRepairFeedback,
   PlatformToolName,
   type FrozenAgentRuntimeProfile,
+  type RepairFeedback,
   rejectNonCurrentAgentCli,
   resolvePlatformTools,
   type FrozenCliCapability,
@@ -289,15 +290,44 @@ ${text}` : RUNTIME_TOOL_MANUALS_POLICY;
   return text;
 }
 
+/** Walk Error.cause for structured RepairFeedback (#681 HTTP boundary). */
+function repairAndCodeFromCause(cause: unknown): { repair?: RepairFeedback; code?: string } {
+  for (let current: unknown = cause; current; current = current instanceof Error ? current.cause : undefined) {
+    if (!current || typeof current !== "object") continue;
+    const repair = (current as { repair?: unknown }).repair;
+    const code = (current as { code?: unknown }).code;
+    if (
+      repair
+      && typeof repair === "object"
+      && typeof (repair as { category?: unknown }).category === "string"
+      && typeof (repair as { code?: unknown }).code === "string"
+      && typeof (repair as { message?: unknown }).message === "string"
+    ) {
+      return {
+        repair: repair as RepairFeedback,
+        code: typeof code === "string" ? code : (repair as RepairFeedback).code,
+      };
+    }
+  }
+  return {};
+}
+
 /** Current RoleConfig/Credential/runtime identity cannot be frozen into a Job snapshot. */
 export class SnapshotUnresolvableError extends Error {
   readonly stale_fields = ["current_snapshot_unresolvable"] as const;
   readonly error_code: "SNAPSHOT_STALE" | "unsupported_config";
+  /** Structured repair from ModelCatalogMismatchError (and peers) on the cause chain. */
+  readonly repair?: RepairFeedback;
+  /** Domain code from the cause (e.g. model_not_in_catalog); independent of error_code. */
+  readonly code?: string;
   constructor(cause: unknown) {
     const message = cause instanceof Error ? cause.message : String(cause);
     super(message.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, 500) || "current snapshot resolution failed", { cause });
     this.name = "SnapshotUnresolvableError";
     this.error_code = cause instanceof UnsupportedAgentRuntimeProfileError ? "unsupported_config" : "SNAPSHOT_STALE";
+    const extracted = repairAndCodeFromCause(cause);
+    this.repair = extracted.repair;
+    this.code = extracted.code;
   }
 }
 

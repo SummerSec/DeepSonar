@@ -71,7 +71,10 @@ function sendRequeueError(
     || result.detail.stale_fields.includes("current_snapshot_unresolvable");
   if (currentUnresolvable) {
     return reply.code(409).send({
-      ...currentSnapshotUnresolvableBody(result.detail.resolution_error ?? "current snapshot resolution failed"),
+      ...currentSnapshotUnresolvableBody(
+        result.detail.resolution_error ?? "current snapshot resolution failed",
+        { repair: result.detail.repair },
+      ),
       job_ids: [result.detail.job_id],
       stale_fields: result.detail.stale_fields,
       ...(result.provenance ? { provenance: result.provenance } : {}),
