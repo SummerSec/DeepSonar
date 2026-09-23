@@ -17,10 +17,7 @@ import {
   extractModelsFromSettingsClient,
   extractSecretFromSettings,
   effectiveEditorSecret,
-  MASKED_SECRET_PLACEHOLDER,
   providerProtocolLabel,
-  redactSecretText,
-  redactSecretValues,
   resolveCredentialBaseUrl,
   restoreRedactedSecretText,
   restoreRedactedSecrets,
@@ -140,6 +137,7 @@ export function ProviderAccountFlow({
   const loadEditorFromCredential = (credential: ProviderCredential) => {
     const settings = credential.settings_config_json ?? {};
     const cli = (credential.agent_cli as AgentCli | null) ?? "claude-code";
+    const savedApiKey = extractSecretFromSettings(settings);
     setEditOriginalSettings(settings);
     setEditOriginalAgentCli(cli);
     setEditName(credential.name);
@@ -150,38 +148,39 @@ export function ProviderAccountFlow({
     setEditReasoning(extractProviderReasoning(settings));
     const metadata = credential.public_metadata_json ?? {};
     setEditMaxConcurrent(typeof metadata.max_concurrent === "number" ? String(metadata.max_concurrent) : "");
+    // #689: hydrate plaintext API Key for eye-button reveal; empty field still means "do not change".
     if (cli === "codex") {
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
         ? settings.auth as Record<string, unknown>
         : {};
-      setEditAuthJson(Object.keys(auth).length > 0 ? formatJsonObject(redactSecretValues(auth) as Record<string, unknown>) : "");
-      setEditTomlText(typeof settings.config === "string" ? redactSecretText(settings.config) : "");
+      setEditAuthJson(Object.keys(auth).length > 0 ? formatJsonObject(auth) : "");
+      setEditTomlText(typeof settings.config === "string" ? settings.config : "");
       setEditSettingsJson("");
-      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditApiKey(savedApiKey);
       setEditBaseUrl(resolveCredentialBaseUrl(credential));
     } else if (cli === "dsh") {
       setEditSettingsJson(typeof settings.config === "string" ? settings.config : "");
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditApiKey(savedApiKey);
       setEditBaseUrl(resolveCredentialBaseUrl(credential));
     } else if (cli === "pi") {
       setEditSettingsJson(
         typeof settings.config === "string" && settings.config.trim()
           ? settings.config
           : Object.keys(settings).length > 0
-            ? formatJsonObject(redactSecretValues(settings) as Record<string, unknown>)
+            ? formatJsonObject(settings)
             : "",
       );
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditApiKey(savedApiKey);
       setEditBaseUrl(resolveCredentialBaseUrl(credential));
     } else {
-      setEditSettingsJson(Object.keys(settings).length > 0 ? formatJsonObject(redactSecretValues(settings) as Record<string, unknown>) : "");
+      setEditSettingsJson(Object.keys(settings).length > 0 ? formatJsonObject(settings) : "");
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditApiKey(savedApiKey);
       setEditBaseUrl(resolveCredentialBaseUrl(credential));
     }
   };
@@ -332,7 +331,9 @@ export function ProviderAccountFlow({
         metadata,
       });
       const rotatedSecret = effectiveEditorSecret(editApiKey);
-      if (rotatedSecret) {
+      const previousSecret = editOriginalSettings ? extractSecretFromSettings(editOriginalSettings) : "";
+      // Empty / unchanged plaintext must not bump key_version (#689 empty-means-unchanged).
+      if (rotatedSecret && rotatedSecret !== previousSecret) {
         await api.rotateCredential(editingCredential.id, rotatedSecret);
       }
       setNotice(built.pastedAsIs

@@ -150,7 +150,7 @@ export function CcSwitchClaudeFields({
 
   return (
     <div className="cc-switch-form">
-      {/* API Key is deliberately always masked; provider secrets are never revealed in the UI. */}
+      {/* Advanced native field stays type=password; structured Provider field owns eye-toggle reveal (#689). */}
       {showConnectionFields && <>
       <div className="cc-switch-field">
         <label className="cc-switch-label" htmlFor="cc-switch-api-key">API Key</label>

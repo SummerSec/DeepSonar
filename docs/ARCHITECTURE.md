@@ -594,7 +594,7 @@ Finding 协议是同一配置层级中的独立规则：全局物理存于
 
 compose 的种子范围同样是任务级冻结输入，但只有人工任务创建入口拥有选择权限。Scheduler 在创建事务中校验 Finding 属于当前项目且 disposition 为 `open|accepted|human_reproducing|confirmed_vuln`（**不要求** `confirmed`），然后把内容与冻结当时的 `verify_status`/`disposition` 写入 `target_json.seed_findings`：存在最新成功 Finding Report 时冻结其 Markdown，否则回退 Finding summary。随后创建 `job_id=NULL` 的只读 finding 投影节点。Graph 只暴露投影节点 UUID 与 `compose_scope` 位置规则；入口 Hub 与由该投影派生的 Worker 通过 Scheduler 冻结的 Finding scope 获取共享资产。imported seed 不插入新 Finding、不进入本画布收敛门，也不生成 verification follow-up。compose 画布禁止未绑定种子的 explore/audit，且 `emit_finding` 必须落在种子资产范围内。
 
-Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源，管理 API 和 Web 只能看到 `[已保存密钥]` 投影。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
+Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服务端拥有的 CLI 配置源。管理 API / Web 编辑表单可回显 `settings_config_json` 中的明文 API Key（#689）；Job 快照等非编辑面仍投影为 `[已保存密钥]`。Job 创建时只冻结去除长期密钥后的配置结构；执行器物化 CLI 文件时统一改写为 Gateway endpoint 和短期单 Job token。RoleConfig 的 `env_vars` 仍只能保存非敏感值，调度器数据库、平台 API 凭据和长期 Provider 密钥不下发。
 
 `context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
 

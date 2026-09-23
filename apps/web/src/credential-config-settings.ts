@@ -27,7 +27,7 @@ export function effectiveEditorSecret(value: string | null | undefined): string 
 
 const SECRET_KEY_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie)/iu;
 
-/** Redact server-returned settings before placing them in an editable control. */
+/** Optional redact helper (job-like surfaces); credential edit hydrate keeps plaintext (#689). */
 export function redactSecretValues(value: unknown, key?: string): unknown {
   if (typeof value === "string") return key && SECRET_KEY_PATTERN.test(key) && value ? MASKED_SECRET_PLACEHOLDER : value;
   if (Array.isArray(value)) return value.map((item) => redactSecretValues(item));

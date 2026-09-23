@@ -413,14 +413,14 @@ test("Provider account flow user-facing copy is Chinese", () => {
   assert.doesNotMatch(flow, /Apply to selected RoleConfigs/);
 });
 
-test("credential secrets cannot be revealed; login may toggle password visibility", () => {
+test("#689 edit hydrate reveals saved API Key plaintext; empty still means unchanged", () => {
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
   const claude = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
   const codex = readFileSync(new URL("./CcSwitchCodexFields.tsx", import.meta.url), "utf8");
   const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
   const login = readFileSync(new URL("./pages/LoginPage.tsx", import.meta.url), "utf8");
-  // Advanced native editors keep keys masked; the structured Provider field has an explicit opt-in toggle.
+  // Advanced native editors stay type=password; structured Provider field owns eye-toggle reveal.
   for (const source of [claude, codex, openCode, editor, flow]) {
     assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey/iu);
   }
@@ -429,15 +429,32 @@ test("credential secrets cannot be revealed; login may toggle password visibilit
   assert.match(openCode, /id="cc-switch-opencode-key" type="password"/u);
   assert.match(editor, /type=\{showSecret \? "text" : "password"\}/u);
   assert.match(editor, /setShowSecret/);
-  // Login page (and API Token paste) may offer an explicit show/hide toggle; default remains hidden.
+  assert.match(editor, /查看 API Key|隐藏 API Key/u);
+  // Login page may offer an explicit show/hide toggle; default remains hidden.
   assert.match(login, /显示密码|隐藏密码|显示 Token|隐藏 Token/u);
   assert.match(login, /type=\{revealed \? "text" : "password"\}/u);
   assert.match(login, /authFormErrorMessage|LOGIN_RATE_LIMITED|过于频繁/u);
-  assert.match(flow, /setEditApiKey\(credential\.last4 \? MASKED_SECRET_PLACEHOLDER : ""\)/u);
+  // Hydrate from settings plaintext — not the redacted-only marker.
+  assert.match(flow, /setEditApiKey\(savedApiKey\)/u);
+  assert.match(flow, /extractSecretFromSettings\(settings\)/u);
+  assert.doesNotMatch(flow, /setEditApiKey\(credential\.last4 \? MASKED_SECRET_PLACEHOLDER/u);
   assert.match(flow, /effectiveEditorSecret\(editApiKey\)/u);
+  assert.match(flow, /rotatedSecret !== previousSecret/u);
   assert.match(editor, /已保存（留空不修改）/u);
-  assert.match(editor, /redactSecretValues|restoreRedactedSecrets|MASKED_SECRET_PLACEHOLDER/u);
+  assert.match(editor, /MASKED_SECRET_PLACEHOLDER|effectiveEditorSecret/u);
   assert.doesNotMatch(editor, /return entries\.length > 0 \? entries : .*anthropic/u);
+
+  const settings = {
+    env: {
+      ANTHROPIC_AUTH_TOKEN: "sk-live-reveal",
+      ANTHROPIC_API_KEY: "sk-live-reveal",
+      ANTHROPIC_BASE_URL: "https://api.example/v1",
+    },
+  };
+  assert.equal(extractSecretFromSettings(settings), "sk-live-reveal");
+  assert.equal(effectiveEditorSecret(""), "");
+  assert.equal(effectiveEditorSecret(MASKED_SECRET_PLACEHOLDER), "");
+  assert.equal(effectiveEditorSecret(" sk-new "), "sk-new");
 });
 
 test("provider UI exposes only protocol labels and the two supported OpenCode protocols", () => {
@@ -567,8 +584,34 @@ agent-default-model:
 
   const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
   assert.match(flow, /resolveCredentialBaseUrl\(credential\)/);
-  assert.match(flow, /MASKED_SECRET_PLACEHOLDER/);
+  assert.match(flow, /extractSecretFromSettings\(settings\)/);
   assert.match(flow, /effectiveEditorSecret\(editApiKey\)/);
   const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(editor, /已保存（留空不修改）/);
+});
+
+
+test("#689 empty secret on rebuild leaves existing Claude keys intact", () => {
+  const edited = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson: JSON.stringify({
+      env: {
+        ANTHROPIC_API_KEY: "sk-keep",
+        ANTHROPIC_AUTH_TOKEN: "sk-keep",
+        ANTHROPIC_BASE_URL: "https://old.example/v1",
+      },
+    }),
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "https://new.example/v1",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(edited.ok, true);
+  if (!edited.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(edited.settings), "https://new.example/v1");
+  assert.equal(extractSecretFromSettings(edited.settings), "sk-keep");
 });
