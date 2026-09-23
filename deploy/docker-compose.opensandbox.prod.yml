@@ -25,8 +25,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    # Also join sandbox_gateway (#685): scheduler is dual-homed there for the
+    # managed gateway proxy upstream. Without this, sandbox_gateway's aardvark
+    # returns ENOTFOUND for opensandbox and intermittent DNS pauses claims.
     networks:
       - deepsonar
+      - sandbox_gateway
 
   scheduler:
     environment:

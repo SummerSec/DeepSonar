@@ -42,11 +42,44 @@ test("OpenSandbox health probe success and timeout", async () => {
   resetOpenSandboxServerStatusForTests();
   const failed = await refreshOpenSandboxServerStatus(async () => {
     throw new Error(`unauthorized super-secret-opensandbox-key`);
-  }, opensandboxRuntime);
+  }, opensandboxRuntime, { retryDelaysMs: [] });
   assert.equal(failed.level, "error");
   assert.equal(failed.error?.includes("super-secret-opensandbox-key"), false);
   assert.match(failed.error ?? "", /unauthorized/);
   assert.equal(openSandboxAllowsDispatch(failed), false);
+});
+
+test("OpenSandbox health retries transient probe failures before error", async () => {
+  resetOpenSandboxServerStatusForTests();
+  let attempts = 0;
+  const sleeps: number[] = [];
+  const status = await refreshOpenSandboxServerStatus(async () => {
+    attempts += 1;
+    if (attempts < 3) throw new Error("getaddrinfo ENOTFOUND opensandbox");
+  }, opensandboxRuntime, {
+    retryDelaysMs: [5, 5],
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.equal(status.level, "ok");
+  assert.equal(attempts, 3);
+  assert.deepEqual(sleeps, [5, 5]);
+  assert.equal(openSandboxAllowsDispatch(status), true);
+
+  resetOpenSandboxServerStatusForTests();
+  attempts = 0;
+  const exhausted = await refreshOpenSandboxServerStatus(async () => {
+    attempts += 1;
+    throw new Error("getaddrinfo ENOTFOUND opensandbox");
+  }, opensandboxRuntime, {
+    retryDelaysMs: [1, 1],
+    sleep: async () => {},
+  });
+  assert.equal(exhausted.level, "error");
+  assert.equal(attempts, 3);
+  assert.match(exhausted.error ?? "", /ENOTFOUND/);
+  assert.equal(openSandboxAllowsDispatch(exhausted), false);
 });
 
 test("OpenSandbox health errors never echo the API key", () => {
