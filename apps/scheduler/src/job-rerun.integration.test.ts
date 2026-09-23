@@ -180,6 +180,9 @@ if (!testDatabaseUrl) {
       await sql`UPDATE role_configs SET agent_cli = 'claude-code', version = version + 1 WHERE id = ${roleConfigId}`;
       const credentialId = randomUUID();
       const encrypted = credentialsModule.encryptSecret("rerun-integration-secret");
+      // #679: empty account models + explicit RoleConfig.model fail-fast on
+      // snapshot resolve (MODEL_ALLOWLIST_UNCONFIGURED → current_snapshot_unresolvable).
+      // Fixture must admit model-a so resume still exercises credential identity drift.
       await sql`
         INSERT INTO credentials (
           id, name, kind, provider, project_id, ciphertext, nonce, auth_tag,
@@ -187,7 +190,8 @@ if (!testDatabaseUrl) {
         ) VALUES (
           ${credentialId}, 'rerun credential', 'llm_provider', 'anthropic', NULL,
           ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
-          ${credentialId.slice(0, 16)}, 'cret', 'active', 'claude-code', ${sql.json({})}
+          ${credentialId.slice(0, 16)}, 'cret', 'active', 'claude-code',
+          ${sql.json({ env: { ANTHROPIC_MODEL: "model-a" } })}
         )`;
       await sql`
         INSERT INTO role_credentials (role_config_id, credential_id, purpose)
@@ -195,8 +199,14 @@ if (!testDatabaseUrl) {
       const credentialDrift = await post(resumeJobId, "resume");
       assert.equal(credentialDrift.statusCode, 409, credentialDrift.payload);
       assert.equal(credentialDrift.json().error_code, "SNAPSHOT_STALE");
-      assert.ok(credentialDrift.json().stale_fields.includes("credential_id"));
-      assert.ok(credentialDrift.json().stale_fields.includes("credential_provider"));
+      assert.ok(
+        credentialDrift.json().stale_fields.includes("credential_id"),
+        credentialDrift.payload,
+      );
+      assert.ok(
+        credentialDrift.json().stale_fields.includes("credential_provider"),
+        credentialDrift.payload,
+      );
       await sql`DELETE FROM role_credentials WHERE role_config_id = ${roleConfigId}`;
 
       const resumed = await post(resumeJobId, "resume");
