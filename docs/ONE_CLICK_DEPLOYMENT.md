@@ -192,7 +192,7 @@ Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_T
 
 批量脚本严格使用 API 返回的 `selected_channel`；读取静态清单时使用
 `DEEPSONAR_RUNTIME_REGISTRY_CHANNEL`（缺省 `aliyun-acr`）。它只选择宿主平台上每个产品的最新版本，
-所选通道或平台缺失时直接失败，不跨 registry 回退。项目保存 `project_managed` 映射或启用/固定项目镜像时，
+所选通道或平台缺失时直接失败，不跨 registry 回退。项目启用或固定镜像时（`PUT /projects/:id/runtime-images/:imageId`），
 Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准备；配置不落库，完成后需显式重试。
 建任务 / Hub 派生 / resume 只冻结不可变 digest，不再因 Scheduler 本机缺层拒绝。
 OpenSandbox server 按冻结 digest 拉取，并在 provision 后重验合同；Scheduler 不会在 Job 执行期隐式 `docker pull`。

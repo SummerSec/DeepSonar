@@ -61,7 +61,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 ### 4.0 Skill / 模块源控制面（#603 首片）
 
-**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单；未启用的源不可进入本项目 Job 快照。CLI × Provider × 平台镜像 × Skill 从已启用集合自由组合；项目不再绑定或准入运行镜像，角色不是镜像主绑定面。
+**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单；未启用的源不可进入本项目 Job 快照。CLI × Provider × 平台镜像 × Skill 从已启用集合自由组合；项目不再选择镜像来源（`image_strategy` / `role_runtime_images` 已移除，角色不是镜像主绑定面），但项目侧仍持有 `project_runtime_images` 可用性闸门：第三方镜像须项目显式启用，官方镜像默认可用、显式 `enabled=false` 可关闭，并可按项目固定版本。
 
 **Hub / Job 运行时选型**：业务 Skill 不因 RoleConfig 为空而默认注入。Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取并读取 `SKILL.md`；Hub 不需要预先把 Skill 写入 Intent。平台只允许 trusted+enabled 源，拉取操作仍受当前 Job 的 token、预算、网络和审计边界约束。
 
@@ -295,7 +295,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v53 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v54 |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：

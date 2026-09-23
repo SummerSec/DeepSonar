@@ -155,7 +155,7 @@ pending → claimed → provisioning → running
 
 ## 数据库与迁移纪律
 
-- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v51）。
+- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v54）。
 - 空库启动时套用基线；非空库版本或结构不匹配时 fail closed。没有增量 ALTER 链。
 - 改表只能修改 schema 基线、bump `SCHEMA_VERSION`，再运行 `pnpm db:rebuild -- --plan` / `--apply` 并验证备份和列交集回填。
 - 稳定状态、幂等键、外键和权限骨架进定列；开放内容进 JSONB。类型字段使用字符串，不用 Postgres enum 锁死演进。
