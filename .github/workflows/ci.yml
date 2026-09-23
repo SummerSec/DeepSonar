@@ -140,6 +140,9 @@ jobs:
       - name: Test wiring ratchet guard
         run: pnpm ci:unit:ci-test-hook
 
+      - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
+        run: pnpm ci:unit:docs-freshness
+
       - name: Authenticated report download web unit
         run: pnpm ci:unit:web-report-download
 

@@ -52,6 +52,7 @@ pnpm ci:unit:canvas-facts
 pnpm ci:unit:web-facts
 pnpm ci:unit:searchable-selects     # gate 守则：Web 下拉必须用可搜索选择原语
 pnpm ci:unit:file-size              # gate 守则：文件体量棘轮（max-lines）
+pnpm ci:unit:docs-freshness         # gate 守则：文档保鲜（版本字面量 / pnpm 脚本 / 链接 / 已删机制）
 pnpm ci:integration:finding-research
 pnpm ci:integration:platform-api
 pnpm ci:smoke:control-api
@@ -59,7 +60,7 @@ pnpm ci:smoke:hub
 pnpm ci:images
 ```
 
-`gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:file-size` 文件体量棘轮、`ci:unit:bounded-contexts` 固定路由面与 bounded-context 所有权），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。`ci:unit:test-wiring` 保证每个 `*.test.ts` 都被某个 script 引用（未接线的进 `apps/scheduler/src/test-wiring.manifest.json` 基线，只能缩小），但**脚本本身是否被 workflow 调用仍需人工确认**：全量脚本见根目录 `package.json`，已进 CI 的以 `.github/workflows/ci.yml` 为准（`ci:unit:bounded-contexts` 自 #684 起已进 CI）。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
+`gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:file-size` 文件体量棘轮、`ci:unit:bounded-contexts` 固定路由面与 bounded-context 所有权、`ci:unit:docs-freshness` 文档保鲜），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。`ci:unit:test-wiring` 保证每个 `*.test.ts` 都被某个 script 引用（未接线的进 `apps/scheduler/src/test-wiring.manifest.json` 基线，只能缩小），但**脚本本身是否被 workflow 调用仍需人工确认**：全量脚本见根目录 `package.json`，已进 CI 的以 `.github/workflows/ci.yml` 为准（`ci:unit:bounded-contexts` 自 #684 起已进 CI）。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
 
 ## 总体架构纪律
 
@@ -155,7 +156,7 @@ pending → claimed → provisioning → running
 
 ## 数据库与迁移纪律
 
-- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v51）。
+- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v54）。
 - 空库启动时套用基线；非空库版本或结构不匹配时 fail closed。没有增量 ALTER 链。
 - 改表只能修改 schema 基线、bump `SCHEMA_VERSION`，再运行 `pnpm db:rebuild -- --plan` / `--apply` 并验证备份和列交集回填。
 - 稳定状态、幂等键、外键和权限骨架进定列；开放内容进 JSONB。类型字段使用字符串，不用 Postgres enum 锁死演进。
@@ -185,6 +186,26 @@ Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue �
 - 运行时/镜像改动执行 `pnpm ci:images` 和相应 sandbox smoke；
 - UI 改动执行对应 Web tests，并核对 URL、空态、错误态、刷新和权限边界；
 - 文档中的路径、命令、schema 版本、状态和链接重新检查。
+
+## 发布前的文档保鲜（发版硬门）
+
+**每次改 `CHANGELOG.md`、打 `v*` tag、建 release 之前，必须先做一轮文档保鲜。** 未通过不得发版；发现的漂移修在同一个 release 分支里，不留给下一个版本。同一条硬门也写在 `DESIGN.md` §13 与 `docs/ARCHITECTURE.md` §17.5。
+
+检查范围（每版必做，不能因为“本版没动文档”跳过）：
+
+1. **版本字面量**：`apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 与本文件、`DESIGN.md`、`docs/**` 里写的主线数字一致；发布版本号与 `package.json` / `CHANGELOG.md` 标题一致。
+2. **本版删掉/收敛的机制**：代码注释、OpenAPI 描述串、`docs/**`、`skills/**` 全部搜一遍，命中只能是「已移除 / 物理清扫」这类解释性出现（规则自身与 `CHANGELOG.md` 历史条目除外）：
+   ```bash
+   rg -n "project_managed|image_strategy|role_runtime_images|项目镜像策略" \
+     AGENTS.md DESIGN.md docs skills apps/scheduler/src/openapi.ts
+   ```
+3. **as-built 与代码相反**：本版触及的机制逐条核 `DESIGN.md` / `docs/ARCHITECTURE.md`；冲突以代码为准并回写文档，不允许改代码迁就文档。
+4. **状态索引**：`docs/README.md` 的同步状态与日期、专题文档文首状态行、新增/收口的 issue 表。
+5. **命令、路径与链接**：文档里引用的 `pnpm` 脚本、文件路径、schema 版本、交叉链接逐条验证存在（参考：把所有 `pnpm <script>` 与 `package.json` 对账）。
+
+其中 1 的版本字面量、5 的命令与链接、以及 2 的已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检并在 CI 中阻断；**第 3 项（as-built 与代码相反）无法自动化**，必须人工逐条核——这正是本条硬门不能省的理由。
+
+为什么写死成硬门：`docs/PROJECT_REVIEW_2026-08.md` 早就建议加「文档表征测试」断言 schema 版本字面量一致，而该断言一直没落地，于是 v0.4.x 期间本文件与 `DESIGN.md` 的版本号真实漂移了两代，另有一批按已删机制写的段落（PR #696 修正）。**现已落地为 `pnpm ci:unit:docs-freshness`**（版本字面量、文档里的 `pnpm` 脚本存在性、相对链接、已删机制残留），已挂进 CI；但机检覆盖不到语义——「as-built 段落是否与代码相反」仍需人工按上面第 3 项逐条核。
 
 ## 工程原则
 

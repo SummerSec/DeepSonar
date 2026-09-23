@@ -70,6 +70,7 @@
     "ci:integration:compose-tasks": "pnpm --filter @deepsonar/scheduler exec tsx --test src/task-compose.integration.test.ts",
     "ci:unit:searchable-selects": "pnpm --filter @deepsonar/scheduler exec tsx --test ../../apps/web/src/searchable-select-model.test.ts ../../apps/web/src/searchable-select-adoption.test.ts ../../apps/web/src/runtime-image-option.test.ts",
     "ci:unit:file-size": "pnpm --filter @deepsonar/scheduler exec tsx --test src/file-size.test.ts",
+    "ci:unit:docs-freshness": "pnpm --filter @deepsonar/scheduler exec tsx --test src/docs-freshness.test.ts",
     "ci:unit:ci-test-hook": "pnpm --filter @deepsonar/scheduler exec tsx --test src/ci-test-hook.test.ts",
     "ci:integration:canvas-lifecycle": "pnpm --filter @deepsonar/scheduler exec tsx --test src/canvas-lifecycle-projection.integration.test.ts",
     "ci:unit:role-colors": "pnpm --filter @deepsonar/scheduler exec tsx --test src/role-colors.test.ts src/canvas-delta.test.ts && pnpm --filter @deepsonar/web exec tsx --test src/role-colors.test.ts",

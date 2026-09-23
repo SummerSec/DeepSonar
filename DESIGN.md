@@ -61,7 +61,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 ### 4.0 Skill / 模块源控制面（#603 首片）
 
-**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单；未启用的源不可进入本项目 Job 快照。CLI × Provider × 平台镜像 × Skill 从已启用集合自由组合；项目不再绑定或准入运行镜像，角色不是镜像主绑定面。
+**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单；未启用的源不可进入本项目 Job 快照。CLI × Provider × 平台镜像 × Skill 从已启用集合自由组合；项目不再选择镜像来源（`image_strategy` / `role_runtime_images` 已移除，角色不是镜像主绑定面），但项目侧仍持有 `project_runtime_images` 可用性闸门：第三方镜像须项目显式启用，官方镜像默认可用、显式 `enabled=false` 可关闭，并可按项目固定版本。
 
 **Hub / Job 运行时选型**：业务 Skill 不因 RoleConfig 为空而默认注入。Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取并读取 `SKILL.md`；Hub 不需要预先把 Skill 写入 Intent。平台只允许 trusted+enabled 源，拉取操作仍受当前 Job 的 token、预算、网络和审计边界约束。
 
@@ -285,6 +285,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 6. **任何可修正失败都必须给 RepairFeedback**；任何 `accepted` 都必须有 durable receipt 语义；未知外部效果禁止自动猜测重放。
 7. **模型不可提交坐标、镜像 digest、凭据、终态或未授权项目引用**。模型看到的 prompt、Artifact、Finding 和外部输入都按不可信内容处理。
 8. **测试必须覆盖行为边界**：只跑 typecheck 不算完成。按影响范围选择 `ci:unit:*`、`ci:integration:*`、`ci:smoke:*`、镜像检查和前端契约测试。
+9. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag / 建 release 之前，按 [`AGENTS.md`](AGENTS.md) 的「发布前的文档保鲜」清单核一遍——版本字面量、本版已删机制的全仓残留、与代码相反的 as-built 段落、状态索引、命令与链接；未通过不得发版，漂移修在同一个 release 分支。展开见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §17.5。
 
 ## 14. 仓库地图与事实入口
 
@@ -295,7 +296,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v53 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v54 |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：
