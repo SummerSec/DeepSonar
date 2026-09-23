@@ -99,6 +99,28 @@ test("unresolvable current snapshot uses the same SNAPSHOT_STALE contract as req
   assert.match(body.resolution_error, /claude-code.*pi/);
 });
 
+test("unresolvable current snapshot carries RepairFeedback when the cause has one (#681)", () => {
+  const repair = {
+    category: "model_correctable",
+    code: "model_passthrough_disabled",
+    operation: "assert_resolved_model_in_credential_catalog",
+    path: "model_ref",
+    message: "解析模型 model-candidate 不在账号已配置的 provider 模型名单，可选项：model-a、model-b",
+    expected: { kind: "account_configured_model_id", catalog_size: 2, sample: ["model-a", "model-b"] },
+    observed_shape: { resolved_model: "model-candidate", in_configured_allowlist: false },
+    next_action: "select_account_configured_model_id_or_enable_emergency_passthrough",
+  };
+  const cause = Object.assign(new Error(repair.message), { repair, code: repair.code });
+  const body = currentSnapshotUnresolvableBody(new SnapshotUnresolvableError(cause));
+  assert.equal(body.error_code, "SNAPSHOT_STALE");
+  assert.deepEqual(body.repair, repair);
+
+  // 无 repair 的失败保持既有契约，不新增字段。
+  const plain = currentSnapshotUnresolvableBody(new SnapshotUnresolvableError("Credential 已被删除"));
+  assert.equal("repair" in plain, false);
+  assert.equal(plain.next_action, "fix-current-configuration");
+});
+
 test("frozen Hub runtime_image_key is the override used to resolve current identity", () => {
   assert.deepEqual(
     frozenRuntimeImageOverride({

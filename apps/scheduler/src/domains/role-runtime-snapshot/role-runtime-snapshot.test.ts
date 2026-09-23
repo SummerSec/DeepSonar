@@ -335,6 +335,52 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
   );
 });
 
+test("#681 模型不在账号名单时 SnapshotUnresolvableError 保留可用的模型列表", async () => {
+  const globalCfg = {
+    id: "global-hub-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: null,
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "model-a" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+      "project-1",
+      "audit",
+      // Hub-proposed model outside the account list: must fail before dispatch.
+      { modelRef: "model-unchosen" },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      // 结构化 repair 必须穿过 snapshot 包装，否则 HTTP 层只剩 500 字符的中文串。
+      assert.equal(error.repair?.category, "model_correctable");
+      assert.equal(error.repair?.path, "model_ref");
+      assert.match(JSON.stringify(error.repair), /model-a/);
+      assert.equal(typeof error.repair?.next_action, "string");
+      return true;
+    },
+  );
+});
+
 test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", async () => {
   const projectCfg = {
     id: "project-hub-cfg",
