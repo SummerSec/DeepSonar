@@ -186,6 +186,24 @@ Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue �
 - UI 改动执行对应 Web tests，并核对 URL、空态、错误态、刷新和权限边界；
 - 文档中的路径、命令、schema 版本、状态和链接重新检查。
 
+## 发布前的文档保鲜（发版硬门）
+
+**每次改 `CHANGELOG.md`、打 `v*` tag、建 release 之前，必须先做一轮文档保鲜。** 未通过不得发版；发现的漂移修在同一个 release 分支里，不留给下一个版本。同一条硬门也写在 `DESIGN.md` §13 与 `docs/ARCHITECTURE.md` §17.5。
+
+检查范围（每版必做，不能因为“本版没动文档”跳过）：
+
+1. **版本字面量**：`apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION` 与本文件、`DESIGN.md`、`docs/**` 里写的主线数字一致；发布版本号与 `package.json` / `CHANGELOG.md` 标题一致。
+2. **本版删掉/收敛的机制**：代码注释、OpenAPI 描述串、`docs/**`、`skills/**` 全部搜一遍，命中只能是「已移除 / 物理清扫」这类解释性出现（规则自身与 `CHANGELOG.md` 历史条目除外）：
+   ```bash
+   rg -n "project_managed|image_strategy|role_runtime_images|项目镜像策略" \
+     AGENTS.md DESIGN.md docs skills apps/scheduler/src/openapi.ts
+   ```
+3. **as-built 与代码相反**：本版触及的机制逐条核 `DESIGN.md` / `docs/ARCHITECTURE.md`；冲突以代码为准并回写文档，不允许改代码迁就文档。
+4. **状态索引**：`docs/README.md` 的同步状态与日期、专题文档文首状态行、新增/收口的 issue 表。
+5. **命令、路径与链接**：文档里引用的 `pnpm` 脚本、文件路径、schema 版本、交叉链接逐条验证存在（参考：把所有 `pnpm <script>` 与 `package.json` 对账）。
+
+为什么写死成硬门：`docs/PROJECT_REVIEW_2026-08.md` 已建议加「文档表征测试」断言 schema 版本字面量一致，该测试至今未落地，于是 v0.4.x 期间本文件与 `DESIGN.md` 的版本号真实漂移了两代，另有一批按已删机制写的段落（PR #696 修正）。表征测试落地前，这轮人工检查是唯一防线。
+
 ## 工程原则
 
 1. 删除优先，避免无需求的抽象、状态、配置、依赖和兼容层。

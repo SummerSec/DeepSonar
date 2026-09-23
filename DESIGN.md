@@ -285,6 +285,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 6. **任何可修正失败都必须给 RepairFeedback**；任何 `accepted` 都必须有 durable receipt 语义；未知外部效果禁止自动猜测重放。
 7. **模型不可提交坐标、镜像 digest、凭据、终态或未授权项目引用**。模型看到的 prompt、Artifact、Finding 和外部输入都按不可信内容处理。
 8. **测试必须覆盖行为边界**：只跑 typecheck 不算完成。按影响范围选择 `ci:unit:*`、`ci:integration:*`、`ci:smoke:*`、镜像检查和前端契约测试。
+9. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag / 建 release 之前，按 [`AGENTS.md`](AGENTS.md) 的「发布前的文档保鲜」清单核一遍——版本字面量、本版已删机制的全仓残留、与代码相反的 as-built 段落、状态索引、命令与链接；未通过不得发版，漂移修在同一个 release 分支。展开见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §17.5。
 
 ## 14. 仓库地图与事实入口
 

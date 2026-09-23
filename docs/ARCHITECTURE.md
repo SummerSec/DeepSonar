@@ -940,6 +940,22 @@ CANVAS_LAYOUT=auto
 
 总原则：**表结构管"关系和不变量"，JSONB 管"内容"，版本号管"格式"，重建库管"物理变更"。** 真正危险的是把易变内容固化成列，§6 已规避。
 
+### 17.5 发布前的文档保鲜（发版硬门）
+
+**每次改 `CHANGELOG.md`、打 `v*` tag、建 release 之前，必须先做一轮文档保鲜。** 未通过不得发版；发现的漂移修在**同一个 release 分支**里，不留给下一个版本。
+
+为什么是硬门：`docs/PROJECT_REVIEW_2026-08.md:46` 早就建议「加文档表征测试，断言 `SCHEMA_VERSION` 与 AGENTS / DESIGN 中的版本字面量一致」，该断言至今未落地，于是 v0.4.x 期间 `AGENTS.md` / `DESIGN.md` 的 schema 主线数字真实漂移了两代（v51 / v53 对代码 v54），另有一批按 `project_managed` 这种已删机制写的 as-built 段落（PR #696 修正）。在表征测试落地前，这轮人工检查就是唯一的防线。
+
+保鲜范围（至少覆盖）：
+
+1. **版本字面量**：`SCHEMA_VERSION`（`apps/scheduler/src/schema-version.ts`）与 `AGENTS.md`、`DESIGN.md`、`docs/**` 中出现的主线数字一致；发布版本号与 `package.json` / CHANGELOG 标题一致。
+2. **本版删掉或收敛的机制**：全仓搜描述性文字（代码注释、OpenAPI 描述串、`docs/**`、`skills/**`）。命中只允许是「已移除 / 物理清扫」这类解释性出现（规则自身与 `CHANGELOG.md` 历史条目除外），不允许仍被当成 as-built 描述。
+3. **as-built 与代码相反**：本版触及的机制逐条对代码核一遍 `DESIGN.md` 与本文对应段。冲突以代码为准并回写文档，不允许改代码去迁就文档。
+4. **状态索引**：`docs/README.md` 的同步状态与日期、专题文档文首状态行（as-built / 进行中 / 历史）、新增或收口的 issue 表。
+5. **命令、路径与链接**：文档里的 `pnpm` 脚本、文件路径、schema 版本、交叉链接逐条验证存在。
+
+具体命令清单与提交前检查见 [`AGENTS.md`](../AGENTS.md) 的「发布前的文档保鲜」一节。
+
 ### Issue #12 调度语义补充：资格与排序分离
 
 `jobs.priority` 只保存 `fixedPriorityForJob` 生成的固定语义档位；Hub
