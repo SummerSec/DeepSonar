@@ -61,7 +61,7 @@ import { TaskOverview } from "../task-workbench/TaskOverview";
 import { TaskWorkbenchHeader } from "../task-workbench/TaskWorkbenchHeader";
 import { TaskWorkbenchShell } from "../task-workbench/TaskWorkbenchShell";
 import { formatHubDecisionLabel } from "../task-workbench/hub-decision-label";
-import { projectTaskActions, projectTaskNextSteps } from "../task-workbench/task-actions";
+import { projectTaskActions } from "../task-workbench/task-actions";
 import {
   projectCognitionStatus,
   projectDeliveryStatus,
@@ -752,7 +752,6 @@ export function TaskCanvasPage() {
     })),
     reportStale: outcome.report_stale,
   }), [facts, findingsForProjection, jobs, nodes, outcome.report_stale]);
-  const nextSteps = useMemo(() => projectTaskNextSteps(pendingActions), [pendingActions]);
   const trace = useMemo(() => projectTaskTrace({
     objective: outcome.objective,
     createdAt: meta?.created_at ?? outcome.last_updated_at,
@@ -1214,7 +1213,6 @@ export function TaskCanvasPage() {
             <TaskOverview
               outcome={outcome}
               actions={pendingActions}
-              nextSteps={nextSteps}
               trace={trace}
               confirmedFindings={findingsForProjection.filter((finding) => finding.verify_status === "confirmed")}
               onOpenFinding={(findingId) => setQuery("finding", findingId)}

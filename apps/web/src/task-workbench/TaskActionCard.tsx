@@ -46,7 +46,7 @@ export function TaskActionCard({
           <button
             type="button"
             onClick={() => onOpen(action)}
-            className="inline-flex items-center gap-1 rounded-full bg-white/[.05] px-2.5 py-1 text-[11px] text-zinc-200 ring-1 ring-white/[.08] hover:bg-white/[.08]"
+            className="inline-flex items-center gap-1 rounded-full bg-white/[.05] px-2.5 py-1 text-[11px] text-zinc-200 ring-1 ring-white/[.08] hover:bg-white/[.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc-300"
           >
             {action.recommended_action === "reply_to_agent" ? "去回复" : "查看"}
             <ArrowRight size={11} />
