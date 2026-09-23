@@ -16,9 +16,12 @@ import {
   extractBaseUrlFromSettingsClient,
   extractModelsFromSettingsClient,
   extractSecretFromSettings,
+  effectiveEditorSecret,
+  MASKED_SECRET_PLACEHOLDER,
   providerProtocolLabel,
   redactSecretText,
   redactSecretValues,
+  resolveCredentialBaseUrl,
   restoreRedactedSecretText,
   restoreRedactedSecrets,
   parseCredentialConcurrency,
@@ -154,14 +157,14 @@ export function ProviderAccountFlow({
       setEditAuthJson(Object.keys(auth).length > 0 ? formatJsonObject(redactSecretValues(auth) as Record<string, unknown>) : "");
       setEditTomlText(typeof settings.config === "string" ? redactSecretText(settings.config) : "");
       setEditSettingsJson("");
-      setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditBaseUrl(resolveCredentialBaseUrl(credential));
     } else if (cli === "dsh") {
       setEditSettingsJson(typeof settings.config === "string" ? settings.config : "");
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditBaseUrl(resolveCredentialBaseUrl(credential));
     } else if (cli === "pi") {
       setEditSettingsJson(
         typeof settings.config === "string" && settings.config.trim()
@@ -172,14 +175,14 @@ export function ProviderAccountFlow({
       );
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditBaseUrl(resolveCredentialBaseUrl(credential));
     } else {
       setEditSettingsJson(Object.keys(settings).length > 0 ? formatJsonObject(redactSecretValues(settings) as Record<string, unknown>) : "");
       setEditTomlText("");
       setEditAuthJson("");
-      setEditApiKey("");
-      setEditBaseUrl(extractBaseUrlFromSettingsClient(settings));
+      setEditApiKey(credential.last4 ? MASKED_SECRET_PLACEHOLDER : "");
+      setEditBaseUrl(resolveCredentialBaseUrl(credential));
     }
   };
 
@@ -215,7 +218,7 @@ export function ProviderAccountFlow({
       setError(built.error);
       return;
     }
-    const secret = createSecret.trim() || extractSecretFromSettings(built.settings);
+    const secret = effectiveEditorSecret(createSecret) || effectiveEditorSecret(extractSecretFromSettings(built.settings));
     if (!secret) {
       setError("请填写 API Key，或直接粘贴含密钥的完整 settingsConfig（如 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY）。");
       return;
@@ -328,8 +331,9 @@ export function ProviderAccountFlow({
         settings_config: settingsToSave,
         metadata,
       });
-      if (editApiKey.trim()) {
-        await api.rotateCredential(editingCredential.id, editApiKey.trim());
+      const rotatedSecret = effectiveEditorSecret(editApiKey);
+      if (rotatedSecret) {
+        await api.rotateCredential(editingCredential.id, rotatedSecret);
       }
       setNotice(built.pastedAsIs
         ? "配置已原样保存，请重新测试连接。"

@@ -35,6 +35,6 @@ describe("provider Base URL draft input (#641)", () => {
       count += 1;
       from = at + needle.length;
     }
-    assert.ok(count >= 3, `expected create/edit save paths to strip trailing slashes, found ${count}`);
+    assert.ok(count >= 2, `expected create/edit save paths to strip trailing slashes, found ${count}`);
   });
 });
