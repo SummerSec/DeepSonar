@@ -34,6 +34,13 @@ import {
   rawModelCatalog,
   sameLast4CredentialCount,
 } from "./provider-account-helpers";
+import { ModelConcurrencyFields } from "./ModelConcurrencyFields";
+import {
+  formatActiveConcurrencyQuota,
+  modelConcurrencyDraftFromMetadata,
+  parseModelConcurrencyDraft,
+  type ModelConcurrencyDraftRow,
+} from "./provider-account-concurrency";
 
 export {
   boundCredentialLabel,
@@ -86,6 +93,8 @@ export function ProviderAccountFlow({
   const [editApiKey, setEditApiKey] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editMaxConcurrent, setEditMaxConcurrent] = useState("");
+  const [editModelConcurrency, setEditModelConcurrency] = useState<ModelConcurrencyDraftRow[]>([]);
+  const [createModelConcurrency, setCreateModelConcurrency] = useState<ModelConcurrencyDraftRow[]>([]);
   const [editOriginalSettings, setEditOriginalSettings] = useState<Record<string, unknown> | null>(null);
   const [editOriginalAgentCli, setEditOriginalAgentCli] = useState<AgentCli | null>(null);
 
@@ -148,6 +157,7 @@ export function ProviderAccountFlow({
     setEditReasoning(extractProviderReasoning(settings));
     const metadata = credential.public_metadata_json ?? {};
     setEditMaxConcurrent(typeof metadata.max_concurrent === "number" ? String(metadata.max_concurrent) : "");
+    setEditModelConcurrency(modelConcurrencyDraftFromMetadata(metadata));
     // #689: hydrate plaintext API Key for eye-button reveal; empty field still means "do not change".
     if (cli === "codex") {
       const auth = settings.auth && typeof settings.auth === "object" && !Array.isArray(settings.auth)
@@ -224,8 +234,10 @@ export function ProviderAccountFlow({
     }
     const baseUrl = (createBaseUrl.trim() || extractBaseUrlFromSettingsClient(built.settings)).replace(/\/+$/u, "");
     let maxConcurrent: number | null;
+    let modelConcurrency: Record<string, number> | null;
     try {
       maxConcurrent = parseCredentialConcurrency(createMaxConcurrent);
+      modelConcurrency = parseModelConcurrencyDraft(createModelConcurrency, createModels);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
     setBusy(true);
     setError("");
@@ -240,6 +252,7 @@ export function ProviderAccountFlow({
         metadata: {
           ...(createCatalog?.supports_base_url && baseUrl ? { base_url: baseUrl } : {}),
           ...(maxConcurrent == null ? {} : { max_concurrent: maxConcurrent }),
+          ...(modelConcurrency == null ? {} : { model_concurrency: modelConcurrency }),
         },
         agent_cli: createAgentCli,
         settings_config: built.settings,
@@ -249,6 +262,7 @@ export function ProviderAccountFlow({
       setCreateName("");
       setCreateBaseUrl("");
       setCreateMaxConcurrent("");
+      setCreateModelConcurrency([]);
       setCreateSettingsJson("");
       setCreateTomlText("");
       setCreateAuthJson("");
@@ -311,8 +325,10 @@ export function ProviderAccountFlow({
     }
     const baseUrl = (editBaseUrl.trim() || extractBaseUrlFromSettingsClient(settingsToSave)).replace(/\/+$/u, "");
     let maxConcurrent: number | null;
+    let modelConcurrency: Record<string, number> | null;
     try {
       maxConcurrent = parseCredentialConcurrency(editMaxConcurrent);
+      modelConcurrency = parseModelConcurrencyDraft(editModelConcurrency, modelIds(editingCredential));
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
     setBusy(true);
     setError("");
@@ -323,6 +339,8 @@ export function ProviderAccountFlow({
       else delete metadata.base_url;
       if (maxConcurrent == null) delete metadata.max_concurrent;
       else metadata.max_concurrent = maxConcurrent;
+      if (modelConcurrency == null) delete metadata.model_concurrency;
+      else metadata.model_concurrency = modelConcurrency;
       await api.updateCredential(editingCredential.id, {
         name: editName.trim() || editingCredential.name,
         provider: editProvider,
@@ -452,6 +470,7 @@ export function ProviderAccountFlow({
           </div>
 
           {showCreate && (
+            <>
             <CredentialConfigEditor
               mode="create"
               name={createName}
@@ -489,6 +508,14 @@ export function ProviderAccountFlow({
               busy={busy}
               submitLabel="保存配置并添加账号"
             />
+            <div className="mt-3">
+              <ModelConcurrencyFields
+                rows={createModelConcurrency}
+                modelOptions={createModels}
+                onChange={setCreateModelConcurrency}
+              />
+            </div>
+            </>
           )}
 
           <div className="provider-flow-credential-list" role="list">
@@ -531,8 +558,11 @@ export function ProviderAccountFlow({
                       </small>
                     </span>
                     <span className="provider-flow-credential-meta">
-                      连接 {healthStatusLabel(credential.health?.status)} · {credential.agent_cli ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli) : "CLI 未设"} · ····{credential.last4}
+                      连接 {healthStatusLabel(credential.health?.status)} · 占用 {formatActiveConcurrencyQuota(credential)} · {credential.agent_cli ? (CLI_LABEL[credential.agent_cli] ?? credential.agent_cli) : "CLI 未设"} · ····{credential.last4}
                       {sameLast4Count > 1 && ` · ⚠ 同末四位账号 ${sameLast4Count} 个，请核对`}
+                      {credential.agent_cli
+                        ? ` · 该账号只能给 ${CLI_LABEL[credential.agent_cli] ?? credential.agent_cli} 使用`
+                        : " · 该账号尚未绑定 Agent CLI"}
                     </span>
                   </button>
                   <div className="provider-flow-credential-actions">
@@ -617,6 +647,13 @@ export function ProviderAccountFlow({
                         busy={busy}
                         submitLabel="保存配置修改"
                       />
+                      <div className="mt-3">
+                        <ModelConcurrencyFields
+                          rows={editModelConcurrency}
+                          modelOptions={modelIds(editingCredential)}
+                          onChange={setEditModelConcurrency}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -628,7 +665,13 @@ export function ProviderAccountFlow({
             <div className="provider-flow-health">
               <span className={`provider-health-dot ${selectedCredential.health?.status ?? "unknown"}`} />
               <strong>连接 {selectedCredential.provider_valid === false ? "Provider 映射待修复" : healthStatusLabel(selectedCredential.health?.status)}</strong>
+              <span>占用 {formatActiveConcurrencyQuota(selectedCredential)}</span>
               <span>{selectedCredential.health?.last_tested_at ? `最近测试 ${new Date(selectedCredential.health.last_tested_at).toLocaleString()}` : "尚未测试"}</span>
+              <span>
+                {selectedCredential.agent_cli
+                  ? `该账号只能给 ${CLI_LABEL[selectedCredential.agent_cli] ?? selectedCredential.agent_cli} 使用`
+                  : "该账号尚未绑定 Agent CLI"}
+              </span>
             </div>
           )}
           {selectedCredential && (

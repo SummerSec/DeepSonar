@@ -43,6 +43,11 @@ import {
   type ProviderRuntimeSnapshotProjection,
 } from "../../provider-settings.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
+import {
+  accumulateDispatchCounts,
+  activeConcurrencyForCredential,
+  queryActiveDispatchRows,
+} from "../../dispatch-active-concurrency.js";
 import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../role-runtime-snapshot/index.js";
 import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
 import { findProviderAdapter, resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
@@ -296,28 +301,21 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   app.get("/credentials", async (req, reply) => {
     const actorProjectId = req.actor?.projectId ?? null;
     try {
-      const [rows, usage] = await Promise.all([
+      const [rows, activeRows] = await Promise.all([
         sql`
           SELECT ${CRED_SAFE} FROM credentials
           WHERE (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})
           ORDER BY created_at DESC`,
-        sql`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
-                   agent_snapshot_json->>'model' AS model,
-                   COUNT(*)::int AS count
-            FROM jobs
-            WHERE status IN ('claimed','provisioning','running')
-              AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
-              AND agent_snapshot_json->>'credential_id' IS NOT NULL
-            GROUP BY 1, 2`,
+        queryActiveDispatchRows(sql, { projectId: actorProjectId }),
       ]);
+      const counts = accumulateDispatchCounts(activeRows);
       const bindingCounts: Array<{ credential_id: string; count: number }> = [];
       const bindingCountByCredential = new Map(bindingCounts.map((row) => [String(row.credential_id), Number(row.count)]));
       return rows.map((row) => {
-        const own = usage.filter((item) => item.credential_id === row.id);
+        const id = String(row.id);
         return credentialView(row as Record<string, unknown>, {
-          bound_role_config_count: bindingCountByCredential.get(String(row.id)) ?? 0,
-          active_count: own.reduce((total, item) => total + Number(item.count), 0),
-          active_by_model: Object.fromEntries(own.filter((item) => item.model).map((item) => [String(item.model), Number(item.count)])),
+          bound_role_config_count: bindingCountByCredential.get(id) ?? 0,
+          active_concurrency: activeConcurrencyForCredential(id, row.public_metadata_json, counts),
         });
       });
     } catch (error) {
@@ -342,10 +340,15 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       WHERE id = ${id}
         AND (${actorProjectId}::uuid IS NULL OR project_id IS NULL OR project_id = ${actorProjectId})`;
     if (!row) return reply.code(404).send({ error: "credential not found" });
-    const impact = await credentialImpact(sql, id, actorProjectId);
+    const [impact, activeRows] = await Promise.all([
+      credentialImpact(sql, id, actorProjectId),
+      queryActiveDispatchRows(sql, { projectId: actorProjectId }),
+    ]);
+    const counts = accumulateDispatchCounts(activeRows);
     return credentialView(row as Record<string, unknown>, {
       bound_role_config_count: (impact.role_configs as { count: number }).count,
       impact,
+      active_concurrency: activeConcurrencyForCredential(id, row.public_metadata_json, counts),
     });
   });
 

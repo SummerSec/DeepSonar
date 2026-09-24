@@ -14,6 +14,12 @@ import {
 } from "./core.js";
 import { PLATFORM_DEFAULT_AGENT_CLI, type AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { credentialConcurrencyPolicy } from "./credentials.js";
+import {
+  accumulateDispatchCounts,
+  dispatchModelKey,
+  type ActiveDispatchRow,
+  type DispatchCounts,
+} from "./dispatch-active-concurrency.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
 import { assertPiSnapshotLaunchSelection } from "./provider-settings.js";
 import { sql } from "./db.js";
@@ -406,15 +412,8 @@ function parseDispatchPayload(value: unknown): Record<string, unknown> {
   return {};
 }
 
-export type DispatchCounts = {
-  project: Map<string, number>;
-  provider: Map<string, number>;
-  credential: Map<string, number>;
-  model: Map<string, number>;
-  cli: Map<string, number>;
-};
-
-const dispatchModelKey = (credentialId: string, model: string) => `${credentialId}\u0000${model}`;
+export type { DispatchCounts } from "./dispatch-active-concurrency.js";
+export { dispatchModelKey } from "./dispatch-active-concurrency.js";
 
 /** Number of additional active jobs the effective global cap permits. */
 export function dispatchSlots(maxGlobalJobs: number, totalActive: number): number {
@@ -677,24 +676,13 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     );
     if (slots <= 0) return [] as { id: string }[];
 
-    const projectCounts = new Map<string, number>();
-    const providerCounts = new Map<string, number>();
-    const credentialCounts = new Map<string, number>();
-    const modelCounts = new Map<string, number>();
-    const cliCounts = new Map<string, number>();
-    for (const row of active) {
-      const projectId = row.project_id as string;
-      // 历史 Job 可能缺少 agent_cli；仅使用平台常量。
-      const cli = String(row.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
-      const provider = String(row.credential_provider ?? "");
-      const credentialId = String(row.credential_id ?? "");
-      const model = snapshotUpstreamModel(row) ?? "";
-      projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + Number(row.count));
-      if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + Number(row.count));
-      if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + Number(row.count));
-      if (credentialId && model) modelCounts.set(dispatchModelKey(credentialId, model), (modelCounts.get(dispatchModelKey(credentialId, model)) ?? 0) + Number(row.count));
-      cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + Number(row.count));
-    }
+    const {
+      project: projectCounts,
+      provider: providerCounts,
+      credential: credentialCounts,
+      model: modelCounts,
+      cli: cliCounts,
+    } = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
     const claimed: { id: string }[] = [];
     /**
      * Scan pending jobs in bounded pages, advancing a keyset cursor after

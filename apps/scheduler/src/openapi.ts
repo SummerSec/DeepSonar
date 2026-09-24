@@ -2303,7 +2303,7 @@ const OPS: Op[] = [
   { method: "delete", path: "/skill-sources/{id}", summary: "删除模块源", scope: "skills:write", tags: ["Skills"] },
 
   // credentials
-  { method: "get", path: "/credentials", summary: "凭据列表（settings_config 含明文 API Key；ciphertext 不返回）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials", summary: "凭据列表（settings_config 含明文 API Key；ciphertext 不返回；含 active_concurrency 占用）", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "get",
     path: "/credentials/providers",
@@ -2317,7 +2317,7 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录与绑定影响；settings_config 含明文 API Key）", scope: "agents:read", tags: ["Credentials"] },
+  { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录、绑定影响与 active_concurrency；settings_config 含明文 API Key）", scope: "agents:read", tags: ["Credentials"] },
   {
     method: "get",
     path: "/credentials/{id}/impact",
@@ -3125,6 +3125,21 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             count: { type: "integer", minimum: 0 },
             items: { type: "array", items: { type: "object", additionalProperties: true } },
           },
+        },
+        CredentialActiveConcurrency: {
+          type: "object",
+          required: ["in_use", "max_concurrent"],
+          additionalProperties: false,
+          properties: {
+            in_use: { type: "integer", minimum: 0, description: "claimed/provisioning/running Job 占用（与 dispatcher claim 同口径）" },
+            max_concurrent: { type: "integer", minimum: 0, maximum: 1000, nullable: true, description: "账号 max_concurrent；null=未设上限" },
+            model_in_use: {
+              type: "object",
+              additionalProperties: { type: "integer", minimum: 0 },
+              description: "upstream_model → 占用；无占用时省略",
+            },
+          },
+          description: "凭据并发可观测（#707 Phase 2）",
         },
         CredentialMetadata: {
           type: "object",

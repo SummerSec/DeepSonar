@@ -112,6 +112,7 @@ export function SettingsPanel({
   const [configSaved, setConfigSaved] = useState(false);
   const [configFailed, setConfigFailed] = useState(false);
   const [cliActive, setCliActive] = useState<Record<string, number>>({});
+  const [providerActive, setProviderActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
@@ -168,6 +169,7 @@ export function SettingsPanel({
         setFindingProtocol(g.finding_protocol);
         setEffectiveFindingProtocol(g.effective_finding_protocol);
         setCliActive(g.active_by_agent_cli ?? {});
+        setProviderActive(g.active_by_provider ?? {});
       }).catch(() => {});
     }
     if (dataNeeds.roleCredentialBindings && canLoadTab("roles")) api.credentials().then(setCredentials).catch(() => {});
@@ -225,13 +227,14 @@ export function SettingsPanel({
       maxIntentsPerDecision: rules.maxIntentsPerDecision,
       allowEgress: rules.allowEgress,
     };
-    // CLI 并发仅全局可写；Provider 并发在凭据页配置，此处不写
+    // CLI / Provider 协议并发仅全局可写（#707 Phase 2 补入口）
     if (!projectId) {
       ruleBody.maxGlobalJobs = rules.maxGlobalJobs;
       ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
       ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.provisionTimeoutSec = rules.provisionTimeoutSec;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
+      ruleBody.maxConcurrentByProvider = rules.maxConcurrentByProvider ?? {};
     }
     // 项目调度配额由 ProjectJobQuotaSection 独立保存（#644），此处不捎带
     setRulesBusy(true);
@@ -338,6 +341,16 @@ export function SettingsPanel({
       if (raw === "") delete next[cli];
       else next[cli] = Math.max(0, Number(raw));
       return { ...current, maxConcurrentByAgentCli: next };
+    });
+  };
+
+  const setProviderLimit = (provider: "anthropic" | "openai", raw: string) => {
+    setRules((current) => {
+      if (!current) return current;
+      const next = { ...(current.maxConcurrentByProvider ?? {}) };
+      if (raw === "") delete next[provider];
+      else next[provider] = Math.max(0, Number(raw));
+      return { ...current, maxConcurrentByProvider: next };
     });
   };
 
@@ -663,19 +676,19 @@ export function SettingsPanel({
               </>
             )}
 
-            {false && !projectId && (
+            {!projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
                     <span>Agent CLI 全局并发</span>
                     <HelpTip>
-                      Agent CLI 配额是调度 claim 的操作面；同时受上方全局/项目安全 cap 与「凭据」页的 Provider / Credential / Model 限制。
+                      Agent CLI 配额是调度 claim 的操作面；同时受全局/项目安全 cap 与「凭据」页的账号 max_concurrent / model_concurrency 限制。
                       留空表示该 CLI 不单独限额；0 暂停该 CLI 新任务。修改只影响后续 claim，不终止已运行 Job。
                     </HelpTip>
                   </div>
                 </div>
                 <div className="px-4 py-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {(["claude-code", "pi", "dsh"] as const).map((cli) => (
                       <div key={cli}>
                         <label className={labelCls}>{cli}</label>
@@ -689,6 +702,40 @@ export function SettingsPanel({
                         />
                         <div className="mt-1 font-mono text-[10px] text-zinc-600">
                           当前运行 {cliActive[cli] ?? 0}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {!projectId && (
+              <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+                <div className="border-b border-white/[.055] px-4 py-3">
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+                    <span>Provider 协议全局并发</span>
+                    <HelpTip>
+                      协议级收紧（#568 / #707）：同一协议（anthropic / openai）下所有账号共享此上限，是账号 max_concurrent 之外的额外收紧；claim 优先级 Provider → Credential → Model → Agent CLI。
+                      留空不单独限额；0 暂停该协议新任务。修改只影响后续 claim。
+                    </HelpTip>
+                  </div>
+                </div>
+                <div className="px-4 py-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {(["anthropic", "openai"] as const).map((provider) => (
+                      <div key={provider}>
+                        <label className={labelCls}>{provider}</label>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="不限"
+                          value={rules?.maxConcurrentByProvider?.[provider] ?? ""}
+                          onChange={(event) => setProviderLimit(provider, event.target.value)}
+                          className={inputCls}
+                        />
+                        <div className="mt-1 font-mono text-[10px] text-zinc-600">
+                          当前运行 {providerActive[provider] ?? 0}
                         </div>
                       </div>
                     ))}
