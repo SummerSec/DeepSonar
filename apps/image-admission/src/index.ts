@@ -424,10 +424,6 @@ async function checkTrackedTags() {
       AND (
         v.promoted_at IS NOT NULL
         OR EXISTS (
-          SELECT 1 FROM project_runtime_images p
-          WHERE p.selected_version_id = v.id
-        )
-        OR EXISTS (
           SELECT 1 FROM jobs j
           WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = v.id::text
             AND j.status IN ('pending','claimed','provisioning','running','waiting_human','failed','timeout','orphan')
@@ -469,10 +465,6 @@ async function queueContinuousRescans() {
       AND COALESCE(v.scanned_at, '-infinity'::timestamptz) < now() - (${Math.round(continuousRescanMs / 1000)} * interval '1 second')
       AND (
         v.promoted_at IS NOT NULL
-        OR EXISTS (
-          SELECT 1 FROM project_runtime_images p
-          WHERE p.selected_version_id = v.id
-        )
         OR EXISTS (
           SELECT 1 FROM jobs j
           WHERE j.agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' = v.id::text
