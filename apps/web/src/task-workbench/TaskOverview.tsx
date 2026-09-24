@@ -1,5 +1,5 @@
-import { ArrowRight } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import { ArrowRight, CaretDown } from "@phosphor-icons/react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { FindingSummary } from "../api";
 import { EmptyState, relativeTime } from "../ui";
 import { TaskActionCard } from "./TaskActionCard";
@@ -55,13 +55,43 @@ export function TaskOverview({
   onOpenAction?: (action: TaskAction) => void;
   onOpenView?: (view: TaskWorkbenchView) => void;
 }) {
+  const [goalExpanded, setGoalExpanded] = useState(false);
+  const [goalTruncated, setGoalTruncated] = useState(false);
+  const goalRef = useRef<HTMLHeadingElement>(null);
+
+  // Goal 常是整段 markdown（取证步骤 / 包名 / 渠道…），默认只留 1 行。是否被截断用实测
+  // 判定（任何屏宽都准确），而不是字数阀值；展开态不再复测，否则 scrollHeight 等于
+  // clientHeight 会把自己“收起”入口也掉。
+  useEffect(() => {
+    if (goalExpanded) return;
+    const node = goalRef.current;
+    if (!node) return;
+    setGoalTruncated(node.scrollHeight > node.clientHeight + 1);
+  }, [goalExpanded, outcome.objective]);
+
   const stages = trace.filter((item): item is TaskTraceEntry & { kind: Exclude<TaskTraceEntry["kind"], "intent"> } => item.kind !== "intent");
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col gap-6 overflow-x-hidden overflow-y-auto overscroll-contain p-4 sm:p-6">
       <header className="max-w-5xl">
         <div className="text-[11px] font-medium tracking-wide text-zinc-500">任务目标</div>
-        <h1 className="mt-1 max-w-[72ch] text-[18px] font-medium leading-7 tracking-[-0.02em] text-zinc-100">{outcome.objective}</h1>
+        <h1
+          ref={goalRef}
+          className={`mt-1 max-w-[72ch] whitespace-pre-line text-[18px] font-medium leading-7 tracking-[-0.02em] text-zinc-100${goalExpanded ? "" : " line-clamp-1"}`}
+        >
+          {outcome.objective}
+        </h1>
+        {goalTruncated && (
+          <button
+            type="button"
+            aria-expanded={goalExpanded}
+            onClick={() => setGoalExpanded((value) => !value)}
+            className="mt-1 inline-flex items-center gap-1 rounded text-[11px] text-acc-300 hover:text-acc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc-300"
+          >
+            {goalExpanded ? "收起任务目标" : `展开完整目标（${outcome.objective.length} 字）`}
+            <CaretDown size={11} className={`transition-transform${goalExpanded ? " rotate-180" : ""}`} />
+          </button>
+        )}
         <p className="mt-2 text-[13px] leading-6 text-zinc-400">{outcome.lifecycle_reason}</p>
       </header>
 
