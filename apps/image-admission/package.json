@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:registry-ref": "pnpm run build && node --test dist/registry-ref.test.js dist/scanner-config.test.js dist/trust-policy.test.js dist/cosign-verify.test.js dist/runtime-manual.test.js"
+    "test:registry-ref": "pnpm run build && node --test dist/registry-ref.test.js dist/scanner-config.test.js dist/trust-policy.test.js dist/cosign-verify.test.js dist/runtime-manual.test.js dist/deleted-columns-guard.test.js # src/deleted-columns-guard.test.ts"
   },
   "dependencies": {
     "@deepsonar/runtime-manual-contract": "workspace:*",
