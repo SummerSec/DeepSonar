@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("DELETE /credentials/:id unbinds, revokes tokens, and refuses live jobs", async () => {
+  test("DELETE /credentials/:id revokes tokens and refuses live jobs", async () => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -107,31 +107,17 @@ if (!testDatabaseUrl) {
         WHERE action = 'credential.delete' AND resource_id = ${projectCredId}`;
       assert.equal(projectAudit?.project_id, projectId);
 
-      const boundId = await insertCredential("bound-account");
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${roleConfigId}, ${boundId}, 'llm')`;
-      const [versionBefore] = await sql<{ version: number; updated_at: Date }[]>`
-        SELECT version, updated_at FROM role_configs WHERE id = ${roleConfigId}`;
-      const boundRefuse = await request("DELETE", `/credentials/${boundId}`);
-      assert.equal(boundRefuse.statusCode, 409, boundRefuse.payload);
-      assert.equal(json(boundRefuse).error_code, "CREDENTIAL_BOUND");
-      const boundOk = await request("DELETE", `/credentials/${boundId}?unbind=true`);
-      assert.equal(boundOk.statusCode, 200, boundOk.payload);
-      assert.equal(json(boundOk).unbound_role_config_count, 1);
-      const [binding] = await sql`SELECT role_config_id FROM role_credentials WHERE credential_id = ${boundId}`;
-      assert.equal(binding, undefined);
-      const [versionAfter] = await sql<{ version: number; updated_at: Date }[]>`
-        SELECT version, updated_at FROM role_configs WHERE id = ${roleConfigId}`;
-      assert.equal(Number(versionAfter?.version), Number(versionBefore?.version) + 1);
-      assert.ok(versionAfter && versionBefore && versionAfter.updated_at > versionBefore.updated_at);
+      // #690: RoleConfig credential bindings removed — idle credential deletes without unbind.
+      const unboundIdleId = await insertCredential("unbound-idle-account");
+      const unboundIdleDelete = await request("DELETE", `/credentials/${unboundIdleId}`);
+      assert.equal(unboundIdleDelete.statusCode, 200, unboundIdleDelete.payload);
 
       const liveId = await insertCredential("live-account");
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
         VALUES (${randomUUID()}, ${projectId}, ${canvasId}, 'delete_test', 'running',
           ${sql.json({ name: "delete_test", model: "model-a", credential_id: liveId })})`;
-      const liveRefuse = await request("DELETE", `/credentials/${liveId}?unbind=true`);
+      const liveRefuse = await request("DELETE", `/credentials/${liveId}`);
       assert.equal(liveRefuse.statusCode, 409, liveRefuse.payload);
       assert.equal(json(liveRefuse).error_code, "CREDENTIAL_IN_USE");
       const [stillLive] = await sql`SELECT id FROM credentials WHERE id = ${liveId}`;
@@ -142,7 +128,7 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
         VALUES (${randomUUID()}, ${projectId}, ${canvasId}, 'delete_test', 'pending',
           ${sql.json({ name: "delete_test", model: "model-a", credential_id: pendingId })})`;
-      const pendingRefuse = await request("DELETE", `/credentials/${pendingId}?unbind=true`);
+      const pendingRefuse = await request("DELETE", `/credentials/${pendingId}`);
       assert.equal(pendingRefuse.statusCode, 409, pendingRefuse.payload);
       assert.equal(json(pendingRefuse).error_code, "CREDENTIAL_IN_USE");
       const [stillPending] = await sql`SELECT id FROM credentials WHERE id = ${pendingId}`;
@@ -186,7 +172,7 @@ if (!testDatabaseUrl) {
       assert.equal(manyImpact.jobs.pending_unclaimed.count, 0);
       assert.equal(manyImpact.jobs.active_frozen.count, 0);
       assert.equal(manyImpact.jobs.recoverable.count, 7);
-      const manyOk = await request("DELETE", `/credentials/${manyRecoverableId}?unbind=true`);
+      const manyOk = await request("DELETE", `/credentials/${manyRecoverableId}`);
       assert.equal(manyOk.statusCode, 200, manyOk.payload);
       const [goneMany] = await sql`SELECT id FROM credentials WHERE id = ${manyRecoverableId}`;
       assert.equal(goneMany, undefined);

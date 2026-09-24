@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **当前同步状态（2026-09-23）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 跟踪 Provider 与 CLI 扩展归入角色能力插件，以及删除 `role_credentials` 和 `RoleConfig.pi_extensions`（当前代码残留是实现债务，不是目标契约）。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v55**（#691 清除项目级能力配置面）与 `project_managed` 残留。#626 把凭据资产、角色引用与快照生效拆成三条边界；根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
+> **当前同步状态（2026-09-24）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v56**（#690 能力插件运行时；#691 清除项目级能力配置面）。#626 把凭据资产、角色引用与快照生效拆成三条边界；根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  

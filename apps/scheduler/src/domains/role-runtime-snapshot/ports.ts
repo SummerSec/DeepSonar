@@ -119,8 +119,8 @@ export interface RoleRuntimeSnapshotApplication {
       runtimeImageKey?: string | null;
       /** Hub 提案的 agent_cli；省略时走项目软缺省 / RoleConfig。 */
       agentCli?: string | null;
-      /** Hub 提案的 credential_id；省略时走项目软缺省 / RoleConfig 绑定。 */
-      credentialId?: string | null;
+      /** Hub 提案的 Provider 插件 id（credentials.provider）；禁止提交账号 UUID。Scheduler 在授权目录内解析凭据。 */
+      provider?: string | null;
       /** Hub/Task model proposal; resolved against the selected Provider catalog. */
       modelRef?: string | null;
       /** Hub task-level business-instruction override; frozen into this Job only. */
@@ -136,6 +136,8 @@ export interface RoleRuntimeSnapshotApplication {
       languageServerCapabilityId?: string | null;
       /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结。 */
       cliCapabilityIds?: readonly string[] | null;
+      /** Hub 提案的已注册 Pi 扩展 id（#690）；仅能力组合，不来自 RoleConfig.pi_extensions。 */
+      piExtensionIds?: readonly string[] | null;
     },
   ): Promise<RoleRuntimeSnapshotResult>;
 }

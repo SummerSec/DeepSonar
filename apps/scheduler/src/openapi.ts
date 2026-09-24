@@ -2395,11 +2395,10 @@ const OPS: Op[] = [
     method: "delete",
     path: "/credentials/{id}",
     summary: "删除已保存的 Provider 账号",
-    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。仍绑定 RoleConfig 时需 ?unbind=true，并递增受影响 RoleConfig 的 version。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文；项目凭据审计保留 project_id。",
+    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。吊销并删除 job_tokens；不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
     scope: "agents:write",
     tags: ["Credentials"],
     query: {
-      unbind: { type: "string", enum: ["true", "1"], description: "确认后解除 RoleConfig 绑定并删除" },
     },
     responses: {
       "200": {
@@ -2431,7 +2430,7 @@ const OPS: Op[] = [
                   properties: {
                     error_code: {
                       type: "string",
-                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_BOUND", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
+                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
                     },
                     impact: { $ref: "#/components/schemas/CredentialImpact" },
                   },
@@ -2486,41 +2485,6 @@ const OPS: Op[] = [
     query: {
       agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"] },
       model: { type: "string", minLength: 1, maxLength: 200 },
-    },
-  },
-  {
-    method: "post",
-    path: "/credentials/batch-bind",
-    summary: "Bind or migrate RoleConfigs to a Credential (binding domain, not account CRUD)",
-    description: "Binding-domain API: bind or migrate RoleConfigs to one Credential. Not account CRUD. Validates provider/CLI/model compatibility under the dispatcher lock. Running/frozen Jobs are never changed. effect=new_jobs_only leaves pending snapshots frozen; effect=refresh_pending updates only pending snapshots.",
-    scope: "agents:write",
-    tags: ["Credentials", "RoleConfig"],
-    body: { $ref: "#/components/schemas/CredentialBatchBindingRequest" },
-    responses: {
-      "200": {
-        description: "Applied atomically",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingImpact" } } },
-      },
-      "400": {
-        description: "Invalid provider or request; no binding mutation is applied",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "409": {
-        description: "Credential health/catalog/model gate failed; no binding mutation is applied",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "403": {
-        description: "Project scope or binding target is not permitted; no mutation is applied",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "404": {
-        description: "Credential or RoleConfig target was not found",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "500": {
-        description: "Transaction failed or stored idempotency result is invalid",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
     },
   },
 
@@ -3233,95 +3197,9 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             credential_project_id: { type: "string", format: "uuid", nullable: true },
             credential_project_name: { type: "string", nullable: true },
             scope: { type: "string", enum: ["global", "project"] },
-            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },            can_bind: { type: "boolean" },
+            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },
+            can_bind: { type: "boolean" },
             credential_provider_valid: { type: "boolean", nullable: true },
-          },
-        },
-        CredentialBatchBindingRequest: {
-          type: "object",
-          additionalProperties: false,
-          required: ["credential_id", "role_config_ids", "idempotency_key"],
-          properties: {
-            credential_id: { type: "string", format: "uuid" },
-            role_config_ids: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: { type: "string", format: "uuid" } },
-            mode: { type: "string", enum: ["bind", "migrate"], default: "bind" },
-            source_credential_id: { type: "string", format: "uuid" },
-            model: { type: "string", nullable: true, maxLength: 200 },
-            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"], default: "new_jobs_only" },
-            idempotency_key: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" },
-          },
-        },
-        CredentialBatchBindingImpact: {
-          type: "object",
-          additionalProperties: false,
-          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "role_configs"],
-          properties: {
-            mode: { type: "string", enum: ["bind", "migrate"] },
-            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"] },
-            credential_id: { type: "string", format: "uuid" },
-            source_credential_id: { type: "string", format: "uuid", nullable: true },
-            role_config_count: { type: "integer", minimum: 0 },
-            pending_job_count: { type: "integer", minimum: 0 },
-            refreshed_pending_job_count: { type: "integer", minimum: 0 },
-            active_frozen_job_count: { type: "integer", minimum: 0 },
-            terminal_historical_job_count: { type: "integer", minimum: 0 },
-            role_configs: {
-              type: "array",
-              maxItems: 100,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["role_config_id", "role_name", "scope", "project_id", "model", "model_changed"],
-                properties: {
-                  role_config_id: { type: "string", format: "uuid" },
-                  role_name: { type: "string" },
-                  scope: { type: "string", enum: ["global", "project"] },
-                  project_id: { type: "string", format: "uuid", nullable: true },
-                  model: { type: "string", nullable: true },
-                  model_changed: { type: "boolean" },
-                },
-              },
-            },
-          },
-        },
-        CredentialBatchBindingError: {
-          type: "object",
-          additionalProperties: false,
-          required: ["error_code", "error"],
-          properties: {
-            error_code: {
-              type: "string",
-              enum: [
-                "BATCH_REQUEST_INVALID",
-                "BATCH_TRANSACTION_FAILED",
-                "CREDENTIAL_NOT_FOUND",
-                "CREDENTIAL_KIND_INVALID",
-                "CREDENTIAL_NOT_ACTIVE",
-                "CREDENTIAL_PROVIDER_INVALID",
-                "CREDENTIAL_CLI_INCOMPATIBLE",
-                "CREDENTIAL_HEALTH_REQUIRED",
-                "CREDENTIAL_MODEL_CATALOG_REQUIRED",
-                "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED",
-                "CREDENTIAL_MODEL_REQUIRED",
-                "CREDENTIAL_MODEL_NOT_CURRENT",
-                "ROLE_CONFIG_NOT_FOUND",
-                "ROLE_CONFIG_SOURCE_MISMATCH",
-                "PROJECT_SCOPE_FORBIDDEN",
-                "IDEMPOTENCY_KEY_REUSED",
-              ],
-            },
-            error: { type: "string", minLength: 1, maxLength: 300 },
-            field: { type: "string", minLength: 1, maxLength: 80 },
-            repair: {
-              type: "object",
-              additionalProperties: false,
-              required: ["action", "credential_id"],
-              properties: {
-                action: { type: "string", enum: ["activate_credential", "repair_provider", "test_connection", "discover_models", "choose_model", "choose_project_credential", "choose_project_role_config"] },
-                credential_id: { type: "string", format: "uuid" },
-                role_config_id: { type: "string", format: "uuid" },
-              },
-            },
           },
         },
         RuntimeKnobOverride: {
@@ -3368,22 +3246,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并由平台目录与 Hub 提案选择" },
             sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             runtime_knobs: { $ref: "#/components/schemas/RuntimeKnobOverride" },
-            credentials: {
-              type: "array",
-              deprecated: true,
-              description:
-                "已弃用（#632）：请改用平台凭据资源 + 项目 Agent/Provider 白名单 default_credential_id。"
-                + "现有 role_credentials 仍会被 Job 运行时尊重；新 Capability Pack 路径不应依赖本字段。"
-                + "Omit=保留绑定；显式 [] 清空（#631）。",
-              items: {
-                type: "object",
-                required: ["credential_id", "purpose"],
-                properties: {
-                  credential_id: { type: "string", format: "uuid" },
-                  purpose: { type: "string", default: "llm" },
-                },
-              },
-            },
             config_files: {
               type: "array",
               items: {
@@ -3394,12 +3256,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                   content: { type: "string" },
                 },
               },
-            },
-            pi_extensions: {
-              type: "array",
-              items: { type: "string", pattern: "^[a-z][a-z0-9-]{0,62}$" },
-              maxItems: 8,
-              description: "仅 agent_cli=pi：已注册的 Pi 扩展 id。Job 创建时冻结；启动仍带 --no-extensions，只对冻结路径追加 -e。未注册 id 或与 Job 镜像不兼容则拒绝。出网扩展服从任务 allow_egress。pilot pi-web-access 只预置 audit / kali-minimal。",
             },
           },
         },

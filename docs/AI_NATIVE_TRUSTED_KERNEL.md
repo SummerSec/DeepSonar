@@ -15,7 +15,7 @@ DeepSonar 的长期方向是：
 
 所有设计只定义当前目标契约，不为旧 schema、API、配置或运行时行为提供向后兼容。切换到新契约时删除旧字段、旧接口、fallback、双读双写、shim、legacy 运行模式和旧配置转换；旧配置不自动保留旧语义，无法满足新契约时必须 fail closed 并要求重新配置。
 
-已创建 Job 的冻结快照、Evidence 与审计历史属于不可变事实，不是新运行时需要兼容的旧输入。Provider 凭据仍由可信内核持有；“一切皆插件”要求 Provider/模型能力以插件组合，不意味着插件取得密钥或凭据管理权。Pi 等 CLI 的已注册扩展属于角色能力插件，不能作为 RoleConfig 独立字段。当前残留的 `role_credentials` 运行时回退、独立绑定入口与 `RoleConfig.pi_extensions` 属于待删除实现债务（#690）。
+已创建 Job 的冻结快照、Evidence 与审计历史属于不可变事实，不是新运行时需要兼容的旧输入。Provider 凭据仍由可信内核持有；“一切皆插件”要求 Provider/模型能力以插件组合，不意味着插件取得密钥或凭据管理权。Pi 等 CLI 的已注册扩展属于角色能力插件，不能作为 RoleConfig 独立字段。`role_credentials` 运行时回退、独立绑定入口与 `RoleConfig.pi_extensions` 已按 #690 删除；Hub 只提案能力需求，Scheduler 在项目授权目录内解析凭据与扩展。
 
 当前 Hub、Worker、Fact/Finding、Verify、Report 闭环是可运行的 as-built 主路径。本文描述逐步演进的目标边界，不把未来协议误写成现有实现，也不要求一次重写 Scheduler。
 

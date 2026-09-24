@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 55);
+INSERT INTO schema_meta (id, version) VALUES ('global', 56);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1305,7 +1305,6 @@ CREATE TABLE role_configs (
   platform_tools_json jsonb NOT NULL DEFAULT '{}',
   sandbox_limits_json jsonb NOT NULL DEFAULT '{}',
   runtime_knobs_json jsonb NOT NULL DEFAULT '{}',
-  pi_extensions_json jsonb NOT NULL DEFAULT '[]',
   instructions_markdown text,
   runtime_image_key text REFERENCES runtime_images(image_key),
   version int NOT NULL DEFAULT 1,
@@ -1321,13 +1320,6 @@ CREATE UNIQUE INDEX role_configs_global_uniq
 CREATE UNIQUE INDEX role_configs_project_uniq
   ON role_configs (project_id, role_id) WHERE project_id IS NOT NULL;
 
-CREATE TABLE role_credentials (
-  role_config_id uuid NOT NULL REFERENCES role_configs(id) ON DELETE CASCADE,
-  credential_id uuid NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
-  purpose text NOT NULL DEFAULT 'llm',
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (role_config_id, credential_id, purpose)
-);
 
 CREATE TABLE role_config_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

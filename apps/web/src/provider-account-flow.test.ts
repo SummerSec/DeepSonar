@@ -126,7 +126,7 @@ test("inherit_global project RoleConfig no longer labels leftover stored models"
 
 const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
 const panel = readFileSync(new URL("./CredentialsPanel.tsx", import.meta.url), "utf8");
-const binding = readFileSync(new URL("./RoleCredentialBindingPanel.tsx", import.meta.url), "utf8");
+const binding = "";
 
 test("Provider account flow is account CRUD only and does not own binding or effect", () => {
   for (const marker of [
@@ -391,9 +391,7 @@ test("reasoning is configured on Provider accounts, not RoleConfig", () => {
 
 test("项目 RoleConfig 镜像只读跟随平台目录缺省 (#691)", () => {
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
-  assert.match(binding, /roleConfig\.project_id \?/);
-  assert.match(binding, /由平台目录缺省决定/);
-  assert.match(binding, /项目 RoleConfig 的镜像由设置中的角色缺省决定/);
+  // #690: RoleCredentialBindingPanel removed; project RoleConfig still cannot write runtime_image_key.
   assert.match(editor, /runtime_image_key: projectId \? null : form\.runtime_image_key\.trim\(\) \|\| null/);
 });
 

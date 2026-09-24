@@ -88,9 +88,8 @@ if (!testDatabaseUrl) {
           ${credentialId.slice(0, 16)}, 'hubs', 'active', 'pi',
           ${sql.json({ provider: "openai", models: [{ id: "gpt-5.6" }] })}
         )`;
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${hubConfig.id as string}, ${credentialId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
 
       const wake = await app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` });
       assert.equal(wake.statusCode, 409, wake.payload);

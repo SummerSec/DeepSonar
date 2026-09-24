@@ -47,6 +47,8 @@ import {
   admitModelAgainstCatalog,
   freezeProviderModelSnapshot,
   resolveModelDescriptorCatalog,
+  resolveProviderCredentialForJob,
+  ProviderCredentialResolveError,
   selectModelsForRequirements,
 } from "../provider-adapter/index.js";
 import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
@@ -335,7 +337,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color, project_id
@@ -402,35 +404,52 @@ async function resolveAgentSnapshotForJobUnchecked(
   const skills = [...manualSkills, ...expanded.skills.filter((s) => !manualSkills.some((m) => m.name === (s as { name?: string }).name))];
   const commands = [...manualCommands, ...expanded.commands.filter((c) => !manualCommands.some((m) => m.name === (c as { name?: string }).name))];
 
-  const hubCredentialId = typeof options?.credentialId === "string" && options.credentialId.trim()
-    ? options.credentialId.trim()
+  // #690: Hub proposes provider plugin + model needs; Scheduler resolves kernel credentials.
+  // No RoleConfig.role_credentials dual-read / fallback.
+  const hubProvider = typeof options?.provider === "string" && options.provider.trim()
+    ? options.provider.trim()
     : null;
-  const preferredCredentialId = hubCredentialId ?? agentAllowlist.default_credential_id;
+  const earlyModelRef = typeof options?.runtimeProfile?.model_ref === "string" && options.runtimeProfile.model_ref.trim()
+    ? options.runtimeProfile.model_ref.trim()
+    : typeof options?.modelRef === "string" && options.modelRef.trim()
+      ? options.modelRef.trim()
+      : null;
+  const allowPassthroughForResolve = config.allowModelCatalogPassthrough
+    || agentAllowlist.allow_model_catalog_passthrough;
   let llm: Record<string, unknown> | undefined;
-  if (preferredCredentialId) {
-    const [row] = await db`
-      SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
-             c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json,
-             c.model_catalog_json, c.model_catalog_fetched_at
-      FROM credentials c
-      WHERE c.id = ${preferredCredentialId} AND c.kind = 'llm_provider'
-      LIMIT 1
-      FOR SHARE OF c` as Array<Record<string, unknown>>;
-    llm = row;
-    if (!llm) throw new Error(`Credential ${preferredCredentialId} 不存在`);
-  } else if (cfg) {
-    const [row] = await db`
-        SELECT c.id, c.name, c.provider, c.status, c.project_id AS cred_project_id,
-               c.public_metadata_json, c.agent_cli, c.settings_config_json, c.meta_json,
-               c.model_catalog_json
-        FROM role_credentials rc
-        JOIN credentials c ON c.id = rc.credential_id
-        WHERE rc.role_config_id = ${cfg.id as string} AND rc.purpose = 'llm'
-        LIMIT 1
-        FOR SHARE OF c` as Array<Record<string, unknown>>;
-    llm = row;
+  try {
+    const resolved = await resolveProviderCredentialForJob({
+      db,
+      projectId,
+      agentCli,
+      allowlist: agentAllowlist,
+      provider: hubProvider,
+      modelRef: earlyModelRef ?? agentAllowlist.default_model_ref,
+      allowPassthrough: allowPassthroughForResolve,
+    });
+    if (resolved) {
+      llm = {
+        id: resolved.id,
+        name: resolved.name,
+        provider: resolved.provider,
+        status: resolved.status,
+        cred_project_id: resolved.project_id,
+        public_metadata_json: resolved.public_metadata_json,
+        agent_cli: resolved.agent_cli,
+        settings_config_json: resolved.settings_config_json,
+        meta_json: resolved.meta_json,
+        model_catalog_json: resolved.model_catalog_json,
+        model_catalog_fetched_at: resolved.model_catalog_fetched_at,
+        health_status: resolved.health_status,
+      };
+    }
+  } catch (error) {
+    if (error instanceof ProviderCredentialResolveError) {
+      throw error;
+    }
+    throw error;
   }
-  assertCredentialAllowlisted(agentAllowlist, (llm?.id as string | undefined) ?? preferredCredentialId);
+  assertCredentialAllowlisted(agentAllowlist, llm?.id as string | undefined);
   const settingsConfig = llm?.settings_config_json ?? {};
   const manualConfigFiles = cfg
     ? await db`SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${cfg.id as string} ORDER BY path`
@@ -547,16 +566,9 @@ async function resolveAgentSnapshotForJobUnchecked(
     );
     if (exclusiveError) throw new Error(exclusiveError);
     const credProject = (llm.cred_project_id as string | null) ?? null;
-    // Hub / 项目软缺省可选项目或全局凭据；仅 RoleConfig 绑定路径仍限制全局配置只能绑全局凭据。
-    if (preferredCredentialId) {
-      if (credProject && credProject !== projectId) {
-        throw new Error(`Credential ${llm.id} 属于其他项目，不能用于本项目 Job`);
-      }
-    } else {
-      if (cfg?.project_id != null && credProject && credProject !== projectId) {
-        throw new Error(`RoleConfig 引用了其他项目的 Credential ${llm.id}`);
-      }
-      if (cfg?.project_id == null && credProject) throw new Error("全局 RoleConfig 只能绑定全局 Credential");
+    // #690: resolved credentials are already scoped to project|global; reject cross-project.
+    if (credProject && credProject !== projectId) {
+      throw new Error(`Credential ${llm.id} 属于其他项目，不能用于本项目 Job`);
     }
     if ((llm.status as string) !== "active") {
       throw new Error(`Credential ${llm.id} 不可用（status=${String(llm.status)}）`);
@@ -595,7 +607,10 @@ async function resolveAgentSnapshotForJobUnchecked(
   }
   const sandboxLimits = resolveEffectiveSandboxLimits(sandboxOverride, config.runtime.sandboxLimits);
 
-  const frozenPiExtensions = freezePiExtensions(cfg?.pi_extensions_json, agentCli, runtimeImage.image_key);
+  const hubPiExtensionIds = Array.isArray(options?.piExtensionIds)
+    ? options.piExtensionIds.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+  const frozenPiExtensions = freezePiExtensions(hubPiExtensionIds, agentCli, runtimeImage.image_key);
   const providerEnvRefs = Object.keys(
     providerSnapshot.settings_config_json && typeof providerSnapshot.settings_config_json === "object"
       ? ((providerSnapshot.settings_config_json as Record<string, unknown>).env as Record<string, unknown> | undefined) ?? {}
@@ -793,7 +808,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

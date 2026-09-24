@@ -425,20 +425,6 @@ def _credentials_compatibility(pos, f):
     return call("GET", path)
 
 
-def _credentials_batch_bind(_pos, f):
-    body = {
-        "credential_id": need(f.get("credential-id"), "--credential-id"),
-        "role_config_ids": parse_list_arg(f.get("role-config-ids"), "--role-config-ids"),
-        "mode": f.get("mode") or "bind",
-        "effect": f.get("effect") or "new_jobs_only",
-        "idempotency_key": need(f.get("idempotency-key"), "--idempotency-key（至少 8 个字符）"),
-    }
-    if f.get("source-credential-id"):
-        body["source_credential_id"] = f["source-credential-id"]
-    if f.get("model") is not None:
-        body["model"] = f["model"]
-    return call("POST", "/credentials/batch-bind", body)
-
 def _runtime_images_list(_pos, f):
     return call("GET", query_path("/runtime-images", {
         "search": f.get("search"),
@@ -1056,15 +1042,12 @@ COMMANDS = {
         {"status": need(f.get("status"), "--status active|disabled|rotation_required")}),
     "credentials.delete": lambda pos, f: call(
         "DELETE",
-        query_path(f"/credentials/{_p0(pos, 'credentialId')}", {
-            "unbind": "true" if f.get("unbind") in (True, "true", "1") else None,
-        })),
+        f"/credentials/{_p0(pos, 'credentialId')}"),
     "credentials.test": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/test"),
     # 无 body；用于 RoleConfig 选 model 前发现 Provider 真实目录
     "credentials.models": lambda pos, f: call("GET", f"/credentials/{_p0(pos, 'credentialId')}/models"),
     "credentials.models-refresh": lambda pos, f: call("POST", f"/credentials/{_p0(pos, 'credentialId')}/models"),
     "credentials.compatibility": _credentials_compatibility,
-    "credentials.batch-bind": _credentials_batch_bind,
     "credentials.models-preview": _credentials_models_preview,
 }
 

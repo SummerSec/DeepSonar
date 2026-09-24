@@ -155,7 +155,6 @@ POST /credentials/models/preview
 POST /credentials/:id/rotate
 POST /credentials/:id/status
 POST /credentials/:id/test
-POST /credentials/batch-bind
 POST /device-leases/:id/release
 POST /devices
 POST /exports/:id/cancel
@@ -351,7 +350,6 @@ POST /canvases/{id}/messages
 POST /canvases/{id}/report/refresh
 POST /canvases/{id}/report/retry
 POST /credentials
-POST /credentials/batch-bind
 POST /credentials/models/preview
 POST /credentials/{id}/models
 POST /credentials/{id}/rotate

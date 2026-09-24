@@ -113,11 +113,8 @@ if (!testDatabaseUrl) {
 
       // Deliberately malformed legacy bindings.  The project token must not
       // learn any metadata from the other project's credential row.
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${globalRoleConfigId}, ${otherCredentialId}, 'llm'),
-               (${ownRoleConfigId}, ${otherCredentialId}, 'llm'),
-               (${otherRoleConfigId}, ${globalCredentialId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
 
       const scopedToken = generateToken();
       await sql`

@@ -4,10 +4,6 @@ import {
   AgentCliWriteSchema,
   PlatformToolName,
   allowedPlatformTools,
-  CredentialBatchBindingImpact,
-  CredentialBatchBindingErrorCode,
-  CredentialBatchBindingRepairAction,
-  CredentialBatchBindingRequest,
   parseModuleSelector,
   requiredPlatformTools,
 } from "@deepsonar/shared-types";
@@ -183,23 +179,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     actorProjectId: string | null = null,
   ): Promise<Record<string, unknown>> {
     const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans] = await Promise.all([
-      query<{ count: number }[]>`
-        SELECT COUNT(DISTINCT rc2.role_config_id)::int AS count
-        FROM role_credentials rc2
-        JOIN role_configs rc ON rc.id = rc2.role_config_id
-        WHERE rc2.credential_id = ${id}
-          AND (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})`,
-      query`
-        SELECT DISTINCT rc.id AS role_config_id, rc.project_id, rc2.purpose,
-               ar.name AS role_name, p.name AS project_name
-        FROM role_credentials rc2
-        JOIN role_configs rc ON rc.id = rc2.role_config_id
-        JOIN agent_roles ar ON ar.id = rc.role_id
-        LEFT JOIN projects p ON p.id = rc.project_id
-        WHERE rc2.credential_id = ${id}
-          AND (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
-        ORDER BY rc.project_id NULLS FIRST, ar.name
-        LIMIT 50`,
+      query<{ count: number }[]>`SELECT 0::int AS count`,
+      query`SELECT NULL::uuid AS role_config_id WHERE false`,
       query<{ pending_unclaimed: number; active_frozen: number; recoverable: number; terminal_historical: number }[]>`
         SELECT
           COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_unclaimed,
@@ -329,12 +310,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
               AND agent_snapshot_json->>'credential_id' IS NOT NULL
             GROUP BY 1, 2`,
       ]);
-      const bindingCounts = await sql<{ credential_id: string; count: number }[]>`
-        SELECT rc2.credential_id, COUNT(DISTINCT rc2.role_config_id)::int AS count
-        FROM role_credentials rc2
-        JOIN role_configs rc ON rc.id = rc2.role_config_id
-        WHERE (${actorProjectId}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${actorProjectId})
-        GROUP BY rc2.credential_id`;
+      const bindingCounts: Array<{ credential_id: string; count: number }> = [];
       const bindingCountByCredential = new Map(bindingCounts.map((row) => [String(row.credential_id), Number(row.count)]));
       return rows.map((row) => {
         const own = usage.filter((item) => item.credential_id === row.id);
@@ -384,374 +360,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     return credentialImpact(sql, id, actorProjectId);
   });
 
-  /**
-   * Binding-domain API: bind or migrate RoleConfigs to one Credential.
-   * Not account CRUD. Serialized with dispatcher claim and committed as one
-   * transaction. Running/frozen Jobs are never mutated; callers may explicitly
-   * choose to refresh pending snapshots only.
-   */
-  app.post("/credentials/batch-bind", async (req, reply) => {
-    const parsed = CredentialBatchBindingRequest.safeParse(req.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error_code: "BATCH_REQUEST_INVALID",
-        error: "invalid batch credential binding request",
-        field: parsed.error.issues[0]?.path.join(".") || "body",
-      });
-    }
-    const body = parsed.data;
-    if (body.mode === "bind" && body.source_credential_id) {
-      return reply.code(400).send({
-        error_code: "BATCH_REQUEST_INVALID",
-        error: "source_credential_id is only valid for migration",
-        field: "source_credential_id",
-      });
-    }
-    const actorProjectId = req.actor?.projectId ?? null;
-    const roleConfigIds = [...new Set(body.role_config_ids)].sort();
-    const credentialIds = [body.credential_id, ...(body.source_credential_id ? [body.source_credential_id] : [])].sort();
-    const sourceCredentialId = body.mode === "migrate" ? body.source_credential_id ?? null : null;
-    const actorKey = `${req.actor?.type ?? "anonymous"}:${req.actor?.id ?? req.actor?.name ?? "anonymous"}`;
-    const idempotencyRequestId = `credential-batch:${actorKey}:${body.idempotency_key}`;
-    const idempotencyPayload = {
-      credential_id: body.credential_id,
-      role_config_ids: roleConfigIds,
-      mode: body.mode,
-      source_credential_id: body.source_credential_id ?? null,
-      model: body.model ?? null,
-      effect: body.effect,
-    };
-    const idempotencyPayloadSha256 = createHash("sha256")
-      .update(JSON.stringify(idempotencyPayload), "utf8")
-      .digest("hex");
 
-    type BindingErrorCode = z.infer<typeof CredentialBatchBindingErrorCode>;
-    type BatchFailure = {
-      ok: false;
-      statusCode: number;
-      body: {
-        error_code: BindingErrorCode;
-        error: string;
-        field?: string;
-        repair?: { action: z.infer<typeof CredentialBatchBindingRepairAction>; credential_id: string; role_config_id?: string };
-      };
-    };
-    const gateFailure = (
-      statusCode: number,
-      error_code: BindingErrorCode,
-      error: string,
-      credentialId: string,
-      action?: z.infer<typeof CredentialBatchBindingRepairAction>,
-      roleConfigId?: string,
-      field?: string,
-    ): BatchFailure => ({
-      ok: false,
-      statusCode,
-      body: {
-        error_code,
-        error,
-        ...(field ? { field } : {}),
-        ...(action ? { repair: { action, credential_id: credentialId, ...(roleConfigId ? { role_config_id: roleConfigId } : {}) } } : {}),
-      },
-    });
-    type BatchSuccess = {
-      ok: true;
-      impact: Record<string, unknown>;
-      audit: { projectIds: string[]; targetName: string; sourceId: string | null };
-    };
-    let result: BatchFailure | BatchSuccess;
-    try {
-      result = await sql.begin(async (txRaw): Promise<BatchFailure | BatchSuccess> => {
-      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-      const tx = txRaw as unknown as typeof sql;
-      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
 
-      const [prior] = await tx`
-        SELECT action, after_json
-        FROM audit_logs
-        WHERE request_id = ${idempotencyRequestId}
-          AND action IN ('credential.batch_bind', 'credential.batch_migrate')
-        ORDER BY id DESC
-        LIMIT 1`;
-      if (prior) {
-        const priorAfter = prior.after_json && typeof prior.after_json === "object"
-          ? prior.after_json as Record<string, unknown>
-          : {};
-        if (priorAfter.idempotency_payload_sha256 !== idempotencyPayloadSha256) {
-          return {
-            ok: false,
-            statusCode: 409,
-            body: {
-              error_code: "IDEMPOTENCY_KEY_REUSED",
-              error: "idempotency_key was already used with a different binding payload",
-              field: "idempotency_key",
-            },
-          };
-        }
-        const replay = CredentialBatchBindingImpact.safeParse(priorAfter.impact);
-        if (!replay.success) {
-          return {
-            ok: false,
-            statusCode: 500,
-            body: { error_code: "BATCH_TRANSACTION_FAILED", error: "stored idempotency result is invalid" },
-          };
-        }
-        return {
-          ok: true,
-          impact: replay.data,
-          audit: { projectIds: [], targetName: "", sourceId: replay.data.source_credential_id },
-        };
-      }
-
-      const credentials = await tx`
-        SELECT id, name, kind, provider, project_id, status, public_metadata_json,
-               health_status, last_tested_at, model_catalog_json, model_catalog_fetched_at,
-               agent_cli, settings_config_json
-        FROM credentials
-        WHERE id = ANY(${credentialIds}::uuid[])
-        ORDER BY id
-        FOR UPDATE`;
-      const target = credentials.find((credential) => String(credential.id) === body.credential_id);
-      if (!target) return gateFailure(404, "CREDENTIAL_NOT_FOUND", "target credential not found", body.credential_id, undefined, undefined, "credential_id");
-      if (actorProjectId && target.project_id && String(target.project_id) !== actorProjectId) {
-        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "target credential belongs to another project", body.credential_id, "choose_project_credential");
-      }
-      if (String(target.kind) !== "llm_provider") {
-        return gateFailure(400, "CREDENTIAL_KIND_INVALID", "batch binding requires an LLM Provider credential", body.credential_id, undefined, undefined, "credential_id");
-      }
-      const targetProjection = projectCredentialProvider(target.kind, target.provider);
-      if (!targetProjection.provider_valid || !isProviderKnown(String(target.provider))) {
-        return gateFailure(400, "CREDENTIAL_PROVIDER_INVALID", UNKNOWN_PROVIDER_ERROR, body.credential_id, "repair_provider");
-      }
-      if (String(target.status) !== "active") {
-        return gateFailure(409, "CREDENTIAL_NOT_ACTIVE", "Target credential must be active before binding. Activate it, then test the connection again.", body.credential_id, "activate_credential");
-      }
-      if (String(target.health_status) !== "ok" || !target.last_tested_at) {
-        return gateFailure(409, "CREDENTIAL_HEALTH_REQUIRED", "A successful latest connection test is required before binding. Test the connection and retry.", body.credential_id, "test_connection");
-      }
-      // Model catalog is optional reference (CC Switch style). Binding keeps each
-      // inherit_global 项目 RoleConfig 不落库 model。只有 health + CLI 兼容是硬门。
-      const source = body.source_credential_id
-        ? credentials.find((credential) => String(credential.id) === body.source_credential_id)
-        : undefined;
-      if (body.mode === "migrate" && !source) {
-        return gateFailure(404, "CREDENTIAL_NOT_FOUND", "source credential not found", body.source_credential_id ?? body.credential_id, undefined, undefined, "source_credential_id");
-      }
-      if (source && actorProjectId && source.project_id && String(source.project_id) !== actorProjectId) {
-        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "source credential belongs to another project", String(source.id), "choose_project_credential");
-      }
-      if (source?.project_id && target.project_id && String(source.project_id) !== String(target.project_id)) {
-        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "source and target project credentials must belong to the same project", String(source.id), "choose_project_credential");
-      }
-
-      const configs = await tx`
-        SELECT rc.id, rc.role_id, rc.project_id, rc.agent_cli, rc.model, rc.context_window_tokens, rc.version,
-               ar.name AS role_name
-        FROM role_configs rc
-        JOIN agent_roles ar ON ar.id = rc.role_id
-        WHERE rc.id = ANY(${roleConfigIds}::uuid[])
-        ORDER BY rc.id
-        FOR UPDATE OF rc`;
-      if (configs.length !== roleConfigIds.length) {
-        return gateFailure(404, "ROLE_CONFIG_NOT_FOUND", "one or more RoleConfigs were not found", body.credential_id, "choose_project_role_config");
-      }
-      if (actorProjectId && configs.some((config) => String(config.project_id ?? "") !== actorProjectId)) {
-        const offending = configs.find((config) => String(config.project_id ?? "") !== actorProjectId);
-        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "project-scoped actors may bind only their own project RoleConfigs", body.credential_id, "choose_project_role_config", offending ? String(offending.id) : undefined);
-      }
-      if (String(target.project_id ?? "") && configs.some((config) => String(config.project_id ?? "") !== String(target.project_id))) {
-        const offending = configs.find((config) => String(config.project_id ?? "") !== String(target.project_id));
-        return gateFailure(403, "PROJECT_SCOPE_FORBIDDEN", "project credential can only bind RoleConfigs in the same project", body.credential_id, "choose_project_role_config", offending ? String(offending.id) : undefined);
-      }
-
-      const manualConfigFiles = await tx`
-        SELECT role_config_id, path, content, content_sha256
-        FROM role_config_files
-        WHERE role_config_id = ANY(${roleConfigIds}::uuid[])
-        ORDER BY role_config_id, path`;
-      const manualFilesByConfig = new Map<string, Array<{ path: string; content: string; content_sha256: string }>>();
-      for (const row of manualConfigFiles) {
-        const configId = String(row.role_config_id);
-        const files = manualFilesByConfig.get(configId) ?? [];
-        files.push({ path: String(row.path), content: String(row.content), content_sha256: String(row.content_sha256) });
-        manualFilesByConfig.set(configId, files);
-      }
-
-      const existingBindings = await tx`
-        SELECT rc.role_config_id, rc.credential_id, rc.purpose
-        FROM role_credentials rc
-        WHERE rc.role_config_id = ANY(${roleConfigIds}::uuid[])
-        ORDER BY rc.role_config_id, rc.purpose, rc.credential_id`;
-      const llmByConfig = new Map<string, string>();
-      for (const binding of existingBindings) {
-        if (binding.purpose === "llm") llmByConfig.set(String(binding.role_config_id), String(binding.credential_id));
-      }
-
-      const normalizedModel = body.model === undefined ? undefined : body.model?.trim() || null;
-      const projectIds = [...new Set(configs.map((config) => String(config.project_id ?? "")).filter(Boolean))];
-      const projectRows = projectIds.length > 0
-        ? await tx`SELECT id, config_json FROM projects WHERE id = ANY(${projectIds}::uuid[])`
-        : [];
-      const policyByProject = new Map(
-        projectRows.map((row) => [String(row.id), parseProjectImagePolicy(row.config_json)]),
-      );
-      const persistModelFor = (configRow: typeof configs[number]): string | null => {
-        const requested = normalizedModel === undefined ? configRow.model : normalizedModel;
-        const policy = configRow.project_id ? policyByProject.get(String(configRow.project_id)) : undefined;
-        return policy ? persistableProjectRoleConfigModel(policy, requested) : (typeof requested === "string" && requested.trim() ? requested.trim() : null);
-      };
-      const providerSnapshotByConfig = new Map<string, ProviderRuntimeSnapshotProjection>();
-      for (const configRow of configs) {
-        const configId = String(configRow.id);
-        const currentCredentialId = llmByConfig.get(configId) ?? null;
-        if (body.mode === "migrate" && currentCredentialId !== body.source_credential_id) {
-          return gateFailure(409, "ROLE_CONFIG_SOURCE_MISMATCH", `RoleConfig ${configId} is not bound to the source credential`, body.credential_id, "choose_project_role_config", configId);
-        }
-        const model = persistModelFor(configRow);
-        const compatibilityError = validateCredentialCompatibility(String(configRow.agent_cli), String(target.provider));
-        if (compatibilityError) {
-          return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${compatibilityError}`, body.credential_id, "choose_model", configId);
-        }
-        const exclusiveError = validateCredentialAgentCliExclusive(
-          String(configRow.agent_cli),
-          typeof target.agent_cli === "string" ? target.agent_cli : null,
-        );
-        if (exclusiveError) {
-          return gateFailure(409, "CREDENTIAL_CLI_INCOMPATIBLE", `RoleConfig ${configId}: ${exclusiveError}`, body.credential_id, "choose_model", configId);
-        }
-        let providerSnapshot: ProviderRuntimeSnapshotProjection;
-        try {
-          providerSnapshot = projectProviderRuntimeSnapshot({
-            agentCli: String(configRow.agent_cli),
-            roleModel: model,
-            roleContextWindowTokens: configRow.context_window_tokens,
-            settingsConfig: target.settings_config_json,
-            manualConfigFiles: manualFilesByConfig.get(configId) ?? [],
-            defaultModel: PLATFORM_DEFAULT_AGENT_MODEL,
-          });
-        } catch (error) {
-          return gateFailure(409, "CREDENTIAL_MODEL_NOT_CURRENT", `RoleConfig ${configId}: ${error instanceof Error ? error.message : String(error)}`, body.credential_id, "choose_model", configId);
-        }
-        providerSnapshotByConfig.set(configId, providerSnapshot);
-      }
-
-      const refreshedPending: string[] = [];
-      for (const configRow of configs) {
-        const configId = String(configRow.id);
-        const model = persistModelFor(configRow);
-        const nextVersion = Number(configRow.version ?? 0) + 1;
-        await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId} AND purpose = 'llm'`;
-        await tx`
-          INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: body.credential_id, purpose: "llm" })}
-          ON CONFLICT DO NOTHING`;
-        if (configRow.project_id) {
-          await tx`
-            UPDATE role_configs SET
-              model = ${model}, runtime_image_key = NULL, version = ${nextVersion}, updated_at = now()
-            WHERE id = ${configId}`;
-        } else {
-          await tx`
-            UPDATE role_configs SET
-              model = ${model}, version = ${nextVersion}, updated_at = now()
-            WHERE id = ${configId}`;
-        }
-        if (body.effect === "refresh_pending") {
-          const pending = await tx`
-            SELECT id FROM jobs
-            WHERE status = 'pending'
-              AND agent_snapshot_json->>'role_config_id' = ${configId}
-              AND (${sourceCredentialId}::uuid IS NULL
-                   OR agent_snapshot_json->>'credential_id' = ${sourceCredentialId})
-            FOR UPDATE`;
-          if (pending.length > 0) {
-            const providerSnapshot = providerSnapshotByConfig.get(configId)!;
-            const refreshedSnapshot = {
-              credential_id: body.credential_id,
-              credential_name: String(target.name),
-              credential_provider: String(target.provider),
-              model: providerSnapshot.model,
-              upstream_model: providerSnapshot.upstream_model,
-              settings_config_json: providerSnapshot.settings_config_json,
-              config_files: providerSnapshot.config_files,
-              reasoning: providerSnapshot.reasoning,
-              context_window_tokens: providerSnapshot.context_window_tokens,
-              role_config_version: nextVersion,
-            };
-            await tx`
-              UPDATE jobs SET agent_snapshot_json = agent_snapshot_json || ${tx.json(refreshedSnapshot as never)}
-              WHERE id = ANY(${pending.map((job) => job.id)}::uuid[])
-                AND status = 'pending'`;
-            refreshedPending.push(...pending.map((job) => String(job.id)));
-          }
-        }
-      }
-
-      const [stats] = await tx`
-        SELECT
-          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_job_count,
-          COUNT(*) FILTER (WHERE status IN ('claimed','provisioning','running','waiting_human'))::int AS active_frozen_job_count,
-          COUNT(*) FILTER (WHERE status NOT IN ('pending','claimed','provisioning','running','waiting_human'))::int AS terminal_historical_job_count
-        FROM jobs
-        WHERE agent_snapshot_json->>'role_config_id' = ANY(${roleConfigIds}::text[])`;
-      const roleConfigsImpact = configs.map((config) => {
-        const persisted = persistModelFor(config);
-        const previous = typeof config.model === "string" && config.model.trim() ? config.model.trim() : null;
-        return {
-          role_config_id: config.id,
-          role_name: config.role_name,
-          scope: config.project_id ? "project" as const : "global" as const,
-          project_id: config.project_id ?? null,
-          model: persisted,
-          model_changed: persisted !== previous,
-        };
-      });
-      const impact = {
-        mode: body.mode,
-        effect: body.effect,
-        credential_id: body.credential_id,
-        source_credential_id: body.source_credential_id ?? null,
-        role_config_count: configs.length,
-        pending_job_count: Number(stats?.pending_job_count ?? 0),
-        refreshed_pending_job_count: refreshedPending.length,
-        active_frozen_job_count: Number(stats?.active_frozen_job_count ?? 0),
-        terminal_historical_job_count: Number(stats?.terminal_historical_job_count ?? 0),
-        role_configs: roleConfigsImpact,
-      };
-      const impactParsed = CredentialBatchBindingImpact.parse(impact);
-      await tx`
-        INSERT INTO audit_logs ${tx({
-          actor_type: req.actor?.type ?? "anonymous",
-          actor_id: req.actor?.name ?? "anonymous",
-          action: body.mode === "migrate" ? "credential.batch_migrate" : "credential.batch_bind",
-          project_id: projectIds.length === 1 ? projectIds[0] : null,
-          resource_type: "credential",
-          resource_id: body.credential_id,
-          request_id: idempotencyRequestId,
-          ip: req.ip ?? null,
-          user_agent: (req.headers["user-agent"] as string)?.slice(0, 300) ?? null,
-          after_json: tx.json({ idempotency_payload_sha256: idempotencyPayloadSha256, impact: impactParsed } as never),
-          result: "ok",
-          error_code: null,
-        })}`;
-      return {
-        ok: true,
-        impact: impactParsed,
-        audit: { projectIds, targetName: String(target.name), sourceId: body.source_credential_id ?? null },
-      };
-      });
-    } catch (error) {
-      req.log.error({ err: error }, "credential batch binding transaction failed");
-      return reply.code(500).send({
-        error_code: "BATCH_TRANSACTION_FAILED",
-        error: "credential batch binding transaction failed",
-      });
-    }
-
-    if (!result.ok) return reply.code(result.statusCode).send(result.body);
-    return CredentialBatchBindingImpact.parse(result.impact);
-  });
-
-  /** Persist only the server-owned public metadata projection. */
   function normalizeCredentialMeta(raw: Record<string, unknown>, kind: string, provider: string): Record<string, unknown> {
     const metadata = sanitizeCredentialMetadata(raw, { kind, provider, mode: "reject" });
     if (Object.prototype.hasOwnProperty.call(metadata, "base_url") && !providerSupportsBaseUrl(kind, provider)) {
@@ -949,11 +559,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         if (providerChanged && active.length > 0) {
           return { conflict: true, error: "Credential 仍被活动 Job 引用，不能迁移 provider" };
         }
-        const bindings = await tx`
-          SELECT DISTINCT rc.id AS role_config_id, rc.agent_cli, rc.model, rc.project_id
-          FROM role_credentials r
-          JOIN role_configs rc ON rc.id = r.role_config_id
-          WHERE r.credential_id = ${id} AND r.purpose = 'llm'`;
+        const bindings: Array<Record<string, unknown>> = [];
         const runtimeJobs = await tx`
           SELECT id, status, project_id,
                  COALESCE(agent_snapshot_json->>'agent_cli', ${PLATFORM_DEFAULT_AGENT_CLI}) AS agent_cli,
@@ -1152,13 +758,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   app.delete("/credentials/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const actorProjectId = req.actor?.projectId ?? null;
-    const query = z.object({
-      unbind: z.enum(["true", "1", "false", "0"]).optional(),
-    }).safeParse(req.query);
-    if (!query.success) {
-      return reply.code(400).send({ error: "invalid unbind query", error_code: "REQUEST_INVALID", field: "unbind" });
-    }
-    const unbind = query.data.unbind === "true" || query.data.unbind === "1";
+    // #690: RoleConfig credential bindings removed; no unbind query.
 
     type DeleteOk = {
       ok: true;
@@ -1211,7 +811,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         FOR UPDATE`;
 
       const impact = await credentialImpact(tx, id, actorProjectId);
-      const boundCount = Number((impact.role_configs as { count: number }).count ?? 0);
       const jobs = impact.jobs as {
         pending_unclaimed: { count: number };
         active_frozen: { count: number };
@@ -1242,17 +841,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           },
         };
       }
-      if (boundCount > 0 && !unbind) {
-        return {
-          ok: false,
-          statusCode: 409,
-          body: {
-            error: "credential is still bound to RoleConfig; pass unbind=true after confirming",
-            error_code: "CREDENTIAL_BOUND",
-            impact,
-          },
-        };
-      }
 
       const revokedTokens = await tx`
         UPDATE job_tokens
@@ -1260,13 +848,6 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         WHERE credential_id = ${id} AND status = 'active'
         RETURNING id`;
       await tx`DELETE FROM job_tokens WHERE credential_id = ${id}`;
-      if (boundCount > 0) {
-        await tx`
-          UPDATE role_configs
-          SET version = version + 1, updated_at = now()
-          WHERE id IN (SELECT role_config_id FROM role_credentials WHERE credential_id = ${id})`;
-        await tx`DELETE FROM role_credentials WHERE credential_id = ${id}`;
-      }
       const [deleted] = await tx`
         DELETE FROM credentials
         WHERE id = ${id}
@@ -1282,7 +863,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         kind: String(existing.kind),
         provider: String(existing.provider),
         project_id: existing.project_id ? String(existing.project_id) : null,
-        unbound_role_config_count: boundCount,
+        unbound_role_config_count: 0,
         revoked_job_token_count: revokedTokens.length,
         impact,
       };

@@ -193,9 +193,8 @@ if (!testDatabaseUrl) {
           ${credentialId.slice(0, 16)}, 'cret', 'active', 'claude-code',
           ${sql.json({ env: { ANTHROPIC_MODEL: "model-a" } })}
         )`;
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${roleConfigId}, ${credentialId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
       const credentialDrift = await post(resumeJobId, "resume");
       assert.equal(credentialDrift.statusCode, 409, credentialDrift.payload);
       assert.equal(credentialDrift.json().error_code, "SNAPSHOT_STALE");
@@ -207,7 +206,7 @@ if (!testDatabaseUrl) {
         credentialDrift.json().stale_fields.includes("credential_provider"),
         credentialDrift.payload,
       );
-      await sql`DELETE FROM role_credentials WHERE role_config_id = ${roleConfigId}`;
+      await sql`SELECT 1`; // #690
 
       const resumed = await post(resumeJobId, "resume");
       assert.equal(resumed.statusCode, 200, resumed.payload);

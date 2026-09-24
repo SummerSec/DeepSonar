@@ -40,14 +40,6 @@ test("credential batch and picker OpenAPI contracts are strict and typed", () =>
   assert.equal(bindable.responses["200"].content["application/json"].schema.type, "array");
   const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
   assert.equal(schemas.ProviderAccountCatalogItem.additionalProperties, false);
-  assert.equal(schemas.CredentialBatchBindingRequest.additionalProperties, false);
-  assert.ok((schemas.CredentialBatchBindingRequest.required as string[]).includes("idempotency_key"));
-  assert.equal(schemas.CredentialBatchBindingImpact.additionalProperties, false);
-  assert.equal(schemas.CredentialBatchBindingError.additionalProperties, false);
-  assert.equal(schemas.CredentialBatchBindingImpact.properties.role_configs.items.additionalProperties, false);
-  for (const status of ["400", "403", "404", "409", "500"]) {
-    assert.ok((paths["/credentials/batch-bind"]?.post as Record<string, any>).responses[status]);
-  }
 });
 
 test("RoleConfig and role registry OpenAPI documents project-scope boundaries", () => {
@@ -122,11 +114,12 @@ test("runtime registry channel OpenAPI is strict and project-scope aware", () =>
   );
 });
 
-test("RoleConfigInput.credentials is marked deprecated (#632)", () => {
+test("RoleConfigInput no longer accepts credentials or pi_extensions (#690)", () => {
   const document = buildOpenApiDocument();
   const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
-  const credentials = schemas.RoleConfigInput?.properties?.credentials;
-  assert.ok(credentials);
-  assert.equal(credentials.deprecated, true);
-  assert.match(String(credentials.description ?? ""), /632|弃用/);
+  const props = schemas.RoleConfigInput?.properties ?? {};
+  assert.equal(props.credentials, undefined);
+  assert.equal(props.pi_extensions, undefined);
+  assert.equal((document.paths as Record<string, unknown>)["/credentials/batch-bind"], undefined);
+  assert.equal(schemas.CredentialBatchBindingRequest, undefined);
 });

@@ -301,13 +301,8 @@ async function collectRoles(
 
     const filesRows = await db`
       SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${rc.id as string}`;
-    const binds = credMode === "excluded"
-      ? []
-      : await db`
-      SELECT c.id, c.name, c.kind, c.provider, c.fingerprint, c.last4, c.public_metadata_json, rc2.purpose
-      FROM role_credentials rc2
-      JOIN credentials c ON c.id = rc2.credential_id
-      WHERE rc2.role_config_id = ${rc.id as string}`;
+    // #690: RoleConfig no longer binds credentials; export empty bindings.
+    const binds: Array<Record<string, unknown>> = [];
 
     for (const b of binds) {
       if (credMode === "excluded") continue;
@@ -344,7 +339,6 @@ async function collectRoles(
       platform_tools_json: rc.platform_tools_json,
       sandbox_limits_json: rc.sandbox_limits_json,
       runtime_knobs_json: rc.runtime_knobs_json,
-      pi_extensions_json: rc.pi_extensions_json ?? [],
       // #697 P2: 项目导出补齐 instructions_markdown（此前静默丢失）
       instructions_markdown: typeof rc.instructions_markdown === "string" ? rc.instructions_markdown : null,
       // #697: RoleConfig passthrough 已收回；导出恒 false，避免目标环境误开

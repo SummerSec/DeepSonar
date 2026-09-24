@@ -1,6 +1,5 @@
 import { CaretDown, Check, FloppyDisk, MagnifyingGlass, X } from "@phosphor-icons/react";
 import {
-  PI_EXTENSION_REGISTRY,
   allowedPlatformTools,
   requiredPlatformTools,
   type PlatformToolConfig,
@@ -34,8 +33,8 @@ import {
 } from "./module-selector-state";
 
 /**
- * 角色配置编辑器：指令 / 平台工具 / 模块。
- * LLM 凭据绑定在 Agent「凭据绑定」；账号 CRUD 在 Provider 凭据页；此处不提交绑定或生效策略。
+ * 角色配置编辑器：指令 / 平台工具 / 模块（职责面）。
+ * 运行时 CLI/Provider/模型/扩展由项目授权与 Hub 组合；账号 CRUD 在 Provider 凭据页。
  */
 
 const inputCls =
@@ -81,7 +80,6 @@ interface ConfigForm {
   env_keys: string[];
   env_vars: Record<string, string>;
   config_files: Array<{ path: string; content: string }>;
-  pi_extensions: string[];
   instructions_markdown: string;
   runtime_image_key: string;
   modules: string[];
@@ -100,7 +98,6 @@ const EMPTY: ConfigForm = {
   env_keys: [],
   env_vars: {},
   config_files: [],
-  pi_extensions: [],
   instructions_markdown: "",
   runtime_image_key: "",
   modules: [],
@@ -122,7 +119,6 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     env_keys: cfg.env_keys ?? [],
     env_vars: cfg.env_vars_json ?? {},
     config_files: (cfg.config_files ?? []).map((file) => ({ path: file.path, content: file.content })),
-    pi_extensions: cfg.pi_extensions_json ?? [],
     instructions_markdown: cfg.instructions_markdown ?? "",
     runtime_image_key: cfg.runtime_image_key ?? "",
     modules: cfg.modules_json ?? [],
@@ -332,7 +328,7 @@ export function RoleConfigEditor({
     const allow = new Set(enabledSkillSourceIds);
     return sources.filter((source) => allow.has(source.id));
   }, [sources, enabledSkillSourceIds]);
-  void credentials; // 父组件仍传入以兼容签名；换绑走 Agent「凭据绑定」
+  void credentials; // 父组件仍传入以兼容签名；运行时凭据由项目授权解析
   const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
   const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
 
@@ -353,9 +349,8 @@ export function RoleConfigEditor({
         platform_tools: form.platform_tools,
         instructions_markdown: form.instructions_markdown.trim() || null,
         runtime_image_key: projectId ? null : form.runtime_image_key.trim() || null,
-        // Omit credentials: binding is managed on Agents「凭据绑定」; sending [] would clear (#631).
+        // #690: RoleConfig no longer submits credentials bindings.
         config_files: form.config_files,
-        pi_extensions: form.agent_cli === "pi" ? form.pi_extensions : [],
       };
       setError(null);
       onSave(body);
@@ -371,7 +366,6 @@ export function RoleConfigEditor({
           <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-acc-400">{title}</span>
           <p>定义这个角色下一次运行时冻结的执行快照。</p>
         </div>
-        <Link to="/agents?tab=bindings" className="font-mono text-[10px] text-acc-300" title="遗留入口；优先使用项目白名单缺省凭据">凭据绑定（遗留）</Link>
         <span className="role-config-snapshot">NEXT JOB SNAPSHOT</span>
         <button
           onClick={onCancel}
@@ -389,14 +383,14 @@ export function RoleConfigEditor({
             <strong>
               指令与平台工具
               <HelpTip>
-                Agent CLI / LLM 凭据请优先走「项目设置 → CLI/Provider 白名单」缺省凭据（#632；RoleConfig.credentials 绑定已弃用但仍兼容）。账号密钥在「Provider 凭据」页管理。此处仅维护角色职责与平台工具。
+                运行时 CLI / Provider / 模型 / Pi 扩展由项目授权目录与 Hub 能力组合决定（#690）。账号密钥在「Provider 凭据」页管理。此处仅维护角色职责、指令与平台工具。
                 {!form.model.trim() && (
                   <span className="mt-1 block text-[11px] text-amber-200/90">
                     当前模型为空：将使用 CLI 内置默认模型，建议填写账号 settings 中已配置的 provider 模型 id。也可开启下方「允许已配置模型名单直通」以支持 alias 网关。
                   </span>
                 )}
                 {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}。` : ""}
-                {form.credential_id ? " 已绑定 LLM 凭据（换绑请到凭据绑定页）。" : " 尚未绑定 LLM 凭据。"}
+                运行时凭据由项目授权 Provider 解析，不再绑定到角色。
               </HelpTip>
             </strong>
           </div>
@@ -471,33 +465,6 @@ export function RoleConfigEditor({
               })}
             </div>
           </div>
-          {form.agent_cli === "pi" && (
-            <div className="mt-4 border-t border-ink-700/60 pt-4">
-              <label className={labelCls}>
-                Pi 扩展
-                <HelpTip>
-                  仅平台已注册的扩展可声明。启动仍带 --no-extensions，Job 创建时冻结后经 -e 注入镜像预置路径。
-                  出网扩展（如 pi-web-access）服从任务 allow_egress，且只兼容已预置的 audit / kali-minimal 镜像（base 不预装，以控制体积与曝光面）。本路径不向沙箱写入长期密钥。
-                </HelpTip>
-              </label>
-              <SearchableMultiSelect
-                value={form.pi_extensions}
-                onChange={(pi_extensions) => setForm((current) => ({ ...current, pi_extensions }))}
-                options={Object.values(PI_EXTENSION_REGISTRY).map((ext) => ({
-                  value: ext.id,
-                  label: ext.id,
-                  hint: [
-                    ext.requires_egress ? "需要任务允许出网" : null,
-                    ext.compatible_image_keys?.length ? `镜像 ${ext.compatible_image_keys.join(" / ")}` : null,
-                  ].filter(Boolean).join(" · ") || undefined,
-                }))}
-                placeholder="未选择已注册扩展"
-                ariaLabel="已注册的 Pi 扩展"
-                className="block [&>button]:w-full"
-                emptyText="没有已注册的 Pi 扩展"
-              />
-            </div>
-          )}
           {form.agent_cli === "dsh" && (
             <div className="mt-4 border-t border-ink-700/60 pt-4">
               <label className={labelCls}>

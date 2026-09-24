@@ -88,9 +88,8 @@ if (!testDatabaseUrl) {
       const globalCredentialId = await createCredential("scope-global", null);
       const ownCredentialId = await createCredential("scope-own", ownProjectId);
       const otherCredentialId = await createCredential("scope-other", otherProjectId);
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${otherRoleConfigId}, ${globalCredentialId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
       await sql`
         INSERT INTO jobs (id, project_id, type, status, agent_snapshot_json)
         VALUES (${randomUUID()}, ${otherProjectId}, 'scope-audit', 'running', ${sql.json({
@@ -225,57 +224,15 @@ if (!testDatabaseUrl) {
         assert.equal(readOnlyResponse.statusCode, 403, `read-only token ${suffix}: ${readOnlyResponse.payload}`);
       }
 
-      const forbiddenGlobalBinding = await inject("POST", "/credentials/batch-bind", {
-        credential_id: globalCredentialId,
-        role_config_ids: [globalRoleConfigId],
-        mode: "bind",
-        idempotency_key: "scope-global-role-1",
-      });
-      assert.equal(forbiddenGlobalBinding.statusCode, 403, forbiddenGlobalBinding.payload);
-      assert.equal(JSON.parse(forbiddenGlobalBinding.payload).error_code, "PROJECT_SCOPE_FORBIDDEN");
-      assert.equal(JSON.parse(forbiddenGlobalBinding.payload).repair.action, "choose_project_role_config");
-
-      const forbiddenOtherCredential = await inject("POST", "/credentials/batch-bind", {
-        credential_id: otherCredentialId,
-        role_config_ids: [ownRoleConfigId],
-        mode: "bind",
-        idempotency_key: "scope-other-cred-1",
-      });
-      assert.equal(forbiddenOtherCredential.statusCode, 403, forbiddenOtherCredential.payload);
-      assert.equal(JSON.parse(forbiddenOtherCredential.payload).error_code, "PROJECT_SCOPE_FORBIDDEN");
-
-      const allowedGlobalCredential = await inject("POST", "/credentials/batch-bind", {
+      // #690: batch-bind removed.
+      const removed = await inject("POST", "/credentials/batch-bind", {
         credential_id: globalCredentialId,
         role_config_ids: [ownRoleConfigId],
         mode: "bind",
-        idempotency_key: "scope-global-own-role-1",
+        idempotency_key: "scope-removed-1",
       });
-      assert.equal(allowedGlobalCredential.statusCode, 200, allowedGlobalCredential.payload);
-      const [binding] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${ownRoleConfigId} AND purpose = 'llm'`;
-      assert.equal(binding.credential_id, globalCredentialId);
-      const [versionAfterBind] = await sql`SELECT version FROM role_configs WHERE id = ${ownRoleConfigId}`;
-      const bindRetry = await inject("POST", "/credentials/batch-bind", {
-        credential_id: globalCredentialId,
-        role_config_ids: [ownRoleConfigId],
-        mode: "bind",
-        idempotency_key: "scope-global-own-role-1",
-      });
-      assert.equal(bindRetry.statusCode, 200, bindRetry.payload);
-      const [versionAfterBindRetry] = await sql`SELECT version FROM role_configs WHERE id = ${ownRoleConfigId}`;
-      assert.equal(versionAfterBindRetry.version, versionAfterBind.version, "bind retry must not bump RoleConfig version");
+      assert.equal(removed.statusCode, 404, removed.payload);
 
-      const allowedMigration = await inject("POST", "/credentials/batch-bind", {
-        credential_id: ownCredentialId,
-        role_config_ids: [ownRoleConfigId],
-        mode: "migrate",
-        source_credential_id: globalCredentialId,
-        idempotency_key: "scope-own-migrate-global-1",
-      });
-      assert.equal(allowedMigration.statusCode, 200, allowedMigration.payload);
-      const [migratedBinding] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${ownRoleConfigId} AND purpose = 'llm'`;
-      assert.equal(migratedBinding.credential_id, ownCredentialId);
-      const [globalRoleBinding] = await sql`SELECT credential_id FROM role_credentials WHERE role_config_id = ${globalRoleConfigId} AND purpose = 'llm'`;
-      assert.equal(globalRoleBinding, undefined);
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);

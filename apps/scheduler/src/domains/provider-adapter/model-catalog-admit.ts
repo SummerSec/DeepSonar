@@ -18,8 +18,6 @@ function bareUpstreamModelId(upstreamModel: string | null | undefined): string |
 export const MODEL_NOT_IN_CATALOG = "model_not_in_catalog" as const;
 export const MODEL_PASSTHROUGH_DISABLED = "model_passthrough_disabled" as const;
 export const MODEL_ALLOWLIST_UNCONFIGURED = "model_allowlist_unconfigured" as const;
-export const CREDENTIAL_BINDING_DEPRECATED = "credential_binding_deprecated" as const;
-export const CREDENTIAL_BINDING_MISSING = "credential_binding_missing" as const;
 
 export type ModelCatalogAdmitCode =
   | typeof MODEL_NOT_IN_CATALOG
@@ -154,57 +152,7 @@ export function admitModelAgainstCatalog(input: {
   };
 }
 
-/** Warning-only RepairFeedback when RoleConfig.credentials is still supplied (#632). */
-export function credentialBindingDeprecatedWarning(input?: {
-  operation?: string;
-  bindingCount?: number;
-}): RepairFeedback {
-  return buildRepairFeedback({
-    category: "model_correctable",
-    code: CREDENTIAL_BINDING_DEPRECATED,
-    operation: input?.operation ?? "role_config.upsert",
-    path: "credentials",
-    message:
-      "RoleConfig.credentials 绑定已弃用：请改用平台凭据资源 + 项目 Agent/Provider 白名单（default_credential_id）；现有 role_credentials 行仍会被运行时尊重。",
-    expected: {
-      primary_surface: "project_agent_allowlist.default_credential_id",
-      role_config_credentials: "deprecated",
-    },
-    observed_shape: {
-      credentials_provided: true,
-      binding_count: input?.bindingCount ?? null,
-    },
-    next_action: "prefer_project_allowlist_credential_and_omit_role_config_credentials",
-  });
-}
 
-/** Warning when RoleConfig PUT drops dangling credential ids instead of 400 (#679). */
-export function credentialBindingMissingWarning(input: {
-  missingCredentialIds: readonly string[];
-  operation?: string;
-}): RepairFeedback {
-  const ids = [...new Set(input.missingCredentialIds.map((id) => id.trim()).filter(Boolean))];
-  const preview = ids.slice(0, 8).join("、");
-  const more = ids.length > 8 ? ` 等 ${ids.length} 个` : "";
-  return buildRepairFeedback({
-    category: "model_correctable",
-    code: CREDENTIAL_BINDING_MISSING,
-    operation: input.operation ?? "role_config.upsert",
-    path: "credentials",
-    message:
-      `RoleConfig 引用的 Credential 已不存在（${preview}${more}）；已自动丢弃悬挂绑定并继续保存其它字段。请清除或重新绑定可用凭据。`,
-    expected: {
-      kind: "existing_credential_id",
-      missing_count: ids.length,
-      sample: ids.slice(0, 12),
-    },
-    observed_shape: {
-      missing_credential_ids: ids.slice(0, 24),
-      dropped: true,
-    },
-    next_action: "clear_or_rebind_missing_credentials",
-  });
-}
 
 /** Build RepairFeedback for Gateway frozen-model reject (adapter-layer contract). */
 export function gatewayFrozenModelRepair(input: {

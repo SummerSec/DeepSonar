@@ -198,13 +198,13 @@ export function invalidAgentCli(path = "agent_cli", allowed?: readonly string[])
   );
 }
 
-export function invalidCredential(path = "credential_id", allowed?: readonly string[]): ControlInputError {
+export function invalidCredential(path = "provider", allowed?: readonly string[]): ControlInputError {
   const allowHint = allowed && allowed.length > 0
-    ? ` 允许 credential_id 共 ${allowed.length} 个。`
-    : " 请使用 list_available_providers 返回的 credential_id。";
+    ? ` 允许 provider 共 ${allowed.length} 个：${allowed.slice(0, 20).join(", ")}${allowed.length > 20 ? "…" : ""}。`
+    : " 请使用 list_available_providers 返回的 provider 字段（禁止提交 credential/account UUID）。";
   return new ControlInputError(
     CONTROL_INPUT_ERROR_CODES.invalidCredential,
-    `Hub Provider 必须来自本轮 list_available_providers（项目已启用且 active），字段 ${path} 不合法或不在可选集合。${allowHint}`,
+    `Hub Provider 插件必须来自本轮 list_available_providers（项目已启用且 active），字段 ${path} 不合法或不在可选集合。${allowHint}`,
     path,
     allowed && allowed.length > 0 ? { allowed: allowed.slice(0, 50) } : undefined,
   );

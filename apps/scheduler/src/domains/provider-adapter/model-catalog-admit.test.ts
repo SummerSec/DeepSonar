@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  CREDENTIAL_BINDING_DEPRECATED,
-  CREDENTIAL_BINDING_MISSING,
   MODEL_ALLOWLIST_UNCONFIGURED,
   MODEL_NOT_IN_CATALOG,
   MODEL_PASSTHROUGH_DISABLED,
   admitModelAgainstCatalog,
-  credentialBindingDeprecatedWarning,
-  credentialBindingMissingWarning,
   gatewayFrozenModelRepair,
 } from "./model-catalog-admit.js";
 
@@ -71,13 +67,6 @@ test("admitModelAgainstCatalog strips [1m] before configured-allowlist match", (
   assert.equal(result.resolved, "deepseek-chat");
 });
 
-test("credentialBindingDeprecatedWarning uses stable code", () => {
-  const repair = credentialBindingDeprecatedWarning({ bindingCount: 1 });
-  assert.equal(repair.code, CREDENTIAL_BINDING_DEPRECATED);
-  assert.match(repair.message, /弃用/);
-  assert.match(repair.next_action ?? "", /allowlist/);
-});
-
 test("gatewayFrozenModelRepair is permanent_failure with model_not_in_catalog", () => {
   const repair = gatewayFrozenModelRepair({
     requestModel: "other",
@@ -129,14 +118,4 @@ test("non-empty catalog mismatch lists sample models (#679)", () => {
   assert.match(result.repair.message, /DeepSeek-V4\.1-Flash/);
   assert.match(result.repair.message, /GLM-5\.3/);
   assert.deepEqual((result.repair.expected as { sample?: string[] } | undefined)?.sample, ["DeepSeek-V4.1-Flash", "GLM-5.3", "GLM-5.3-Flash"]);
-});
-
-test("credentialBindingMissingWarning lists missing ids (#679)", () => {
-  const repair = credentialBindingMissingWarning({
-    missingCredentialIds: ["11111111-1111-1111-1111-111111111111"],
-  });
-  assert.equal(repair.code, CREDENTIAL_BINDING_MISSING);
-  assert.match(repair.message, /已不存在/);
-  assert.match(repair.message, /11111111-1111-1111-1111-111111111111/);
-  assert.match(repair.next_action ?? "", /clear_or_rebind/);
 });
