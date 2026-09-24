@@ -37,6 +37,7 @@ def main():
     # 1. 登记：返回安全字段（无明文/密文）；库中无明文
     c = req("POST", "/credentials", {
         "name": f"anthropic-{tag}", "provider": "anthropic", "secret": secret,
+        "agent_cli": "claude-code",
         "metadata": {"base_url": "https://api.anthropic.com"},
     }, 201)
     cid = c["id"]

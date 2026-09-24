@@ -4,6 +4,7 @@
  * RoleConfig.role_credentials is gone — no dual-read / fallback.
  */
 import { buildRepairFeedback, type RepairFeedback } from "@deepsonar/shared-types";
+import { validateCredentialCompatibility } from "../../credentials.js";
 import { extractModelsFromSettings } from "../../provider-settings.js";
 import type { ProjectAgentAllowlist } from "../project-agent-allowlist/policy.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
@@ -168,11 +169,50 @@ export async function resolveProviderCredentialForJob(
     });
   }
 
+  // #707 Phase 1 / 方案 A: CLI 归属硬门禁——无软回退到全量 candidates。
+  // null/空 agent_cli 不再视为「兼容所有 CLI」（与 #658 独占绑定一致）。
   const cliCompatible = candidates.filter((row) => {
     const pinned = typeof row.agent_cli === "string" && row.agent_cli.trim() ? row.agent_cli.trim() : null;
-    return !pinned || pinned === input.agentCli;
+    return pinned === input.agentCli;
   });
-  let pool = cliCompatible.length > 0 ? cliCompatible : candidates;
+  if (cliCompatible.length === 0 && candidates.length > 0) {
+    throwResolve("provider_credential_cli_mismatch", {
+      message: `项目授权目录内的 Provider 凭据均未独占绑定到角色 agent_cli=${input.agentCli}`,
+      path: "agent_cli",
+      expected: { agent_cli: input.agentCli, kind: "credential_pinned_to_this_cli" },
+      observed: {
+        candidates: candidates.map((row) => ({
+          credential_id: row.id,
+          agent_cli: typeof row.agent_cli === "string" && row.agent_cli.trim() ? row.agent_cli.trim() : null,
+        })),
+      },
+      next_action: "enable_credential_pinned_to_role_cli_or_change_project_default_credential",
+      category: "permanent_failure",
+    });
+  }
+
+  // 协议级不兼容（如 claude-code × openai）在候选层挡掉，category=model_correctable。
+  const protocolCompatible = cliCompatible.filter((row) => {
+    return validateCredentialCompatibility(input.agentCli, row.provider) === null;
+  });
+  if (protocolCompatible.length === 0 && cliCompatible.length > 0) {
+    throwResolve("provider_credential_protocol_incompatible", {
+      message: `项目授权目录内 CLI=${input.agentCli} 的凭据与其 Provider 协议不兼容`,
+      path: "provider",
+      expected: { agent_cli: input.agentCli, kind: "cli_provider_protocol_compatible" },
+      observed: {
+        candidates: cliCompatible.map((row) => ({
+          credential_id: row.id,
+          agent_cli: row.agent_cli,
+          provider: row.provider,
+        })),
+      },
+      next_action: "change_hub_provider_proposal_or_fix_credential_provider",
+      category: "model_correctable",
+    });
+  }
+
+  let pool = protocolCompatible;
   if (modelNeed) {
     const modelFit = pool.filter((row) => {
       const pinnedCli = typeof row.agent_cli === "string" && row.agent_cli.trim()
@@ -185,7 +225,8 @@ export async function resolveProviderCredentialForJob(
 
   const defaultId = input.allowlist.default_credential_id;
   if (defaultId) {
-    const preferred = pool.find((row) => row.id === defaultId) ?? candidates.find((row) => row.id === defaultId);
+    // #707: default_credential_id 只在 pool 内查找，不再侧路回退到 candidates。
+    const preferred = pool.find((row) => row.id === defaultId);
     if (preferred) return preferred;
   }
 

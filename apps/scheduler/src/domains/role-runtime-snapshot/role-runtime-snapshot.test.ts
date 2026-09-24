@@ -410,12 +410,10 @@ test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", 
     provider: "openai",
     status: "active",
     cred_project_id: null,
-    agent_cli: "pi",
-    // #679: admit runs before provider/exclusive checks; Pi must declare models[].id
-    // so this case still reaches the intended CLI×Provider incompatibility error.
+    // #707: pin 必须与角色 CLI 一致才会进入协议校验；claude-code × openai 在候选层挡掉。
+    agent_cli: "claude-code",
     settings_config_json: {
-      provider: "openai",
-      models: [{ id: "grok-4.6" }],
+      env: { ANTHROPIC_MODEL: "grok-4.6" },
     },
     meta_json: {},
     public_metadata_json: {},
@@ -433,7 +431,12 @@ test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", 
     ),
     (error: unknown) => {
       assert.ok(error instanceof SnapshotUnresolvableError);
-      assert.match(error.message, /agent_cli claude-code 仅兼容 anthropic，不能使用 provider openai/);
+      assert.match(
+        error.message,
+        /协议不兼容|claude-code 仅兼容 anthropic|不能使用 provider openai/,
+      );
+      assert.equal(error.code, "provider_credential_protocol_incompatible");
+      assert.equal(error.repair?.category, "model_correctable");
       return true;
     },
   );
