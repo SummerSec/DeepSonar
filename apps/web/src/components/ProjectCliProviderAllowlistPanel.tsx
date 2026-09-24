@@ -2,6 +2,7 @@ import { FloppyDisk } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type ProviderCredential } from "../api";
 import { isCurrentAgentCli } from "@deepsonar/shared-types";
+import { formatActiveConcurrencyQuota } from "../provider-account-concurrency";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
 
@@ -36,14 +37,13 @@ export function credentialHealthMessage(credential: ProviderCredential): string 
 
 function concurrencySummary(credential: ProviderCredential): string {
   const meta = (credential.public_metadata_json ?? {}) as Record<string, unknown>;
-  const max = typeof meta.max_concurrent === "number" ? meta.max_concurrent : null;
   const models = meta.model_concurrency && typeof meta.model_concurrency === "object" && !Array.isArray(meta.model_concurrency)
     ? Object.keys(meta.model_concurrency as Record<string, unknown>).length
     : 0;
-  const parts: string[] = [];
-  if (max !== null) parts.push(`账号并发 ${max}`);
+  const parts: string[] = [`占用 ${formatActiveConcurrencyQuota(credential)}`];
   if (models > 0) parts.push(`模型并发 ${models} 项`);
-  return parts.length > 0 ? parts.join(" · ") : "并发未单独限额（见凭据页）";
+  if (isCurrentAgentCli(credential.agent_cli)) parts.push(`只能给 ${credential.agent_cli} 使用`);
+  return parts.join(" · ");
 }
 
 function compatibleClis(credential: ProviderCredential): string {

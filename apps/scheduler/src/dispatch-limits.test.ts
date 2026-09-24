@@ -615,3 +615,26 @@ test("a full project quota does not skip another project's candidate", () => {
     "project",
   );
 });
+
+test("credential max_concurrent blocks with skip reason credential, not agent_cli", () => {
+  const counts = emptyCounts();
+  counts.credential.set("credential-a", 1);
+  counts.cli.set("claude-code", 1);
+  const rules = {
+    maxConcurrentByProvider: {},
+    maxConcurrentByAgentCli: { "claude-code": 8 },
+  };
+  const candidate = {
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    credential_provider: "anthropic",
+    credential_id: "credential-a",
+    model: "sonnet",
+    upstream_model: "claude-sonnet",
+    credential_metadata: { max_concurrent: 1 },
+  };
+  assert.equal(dispatchSkipReason(candidate, counts, rules, 8), "credential");
+  // CLI 档有余量时不得误归因到 agent_cli
+  counts.credential.set("credential-a", 0);
+  assert.equal(dispatchSkipReason(candidate, counts, rules, 8), null);
+});

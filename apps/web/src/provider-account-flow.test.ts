@@ -614,3 +614,36 @@ test("#689 empty secret on rebuild leaves existing Claude keys intact", () => {
   assert.equal(extractBaseUrlFromSettingsClient(edited.settings), "https://new.example/v1");
   assert.equal(extractSecretFromSettings(edited.settings), "sk-keep");
 });
+
+import {
+  formatActiveConcurrencyQuota,
+  modelConcurrencyDraftFromMetadata,
+  parseModelConcurrencyDraft,
+} from "./provider-account-concurrency";
+
+test("active concurrency quota formats 占用/上限", () => {
+  assert.equal(
+    formatActiveConcurrencyQuota({
+      active_concurrency: { in_use: 2, max_concurrent: 4 },
+      public_metadata_json: {},
+    }),
+    "2/4",
+  );
+  assert.equal(
+    formatActiveConcurrencyQuota({
+      active_concurrency: { in_use: 0, max_concurrent: null },
+      public_metadata_json: {},
+    }),
+    "0/不限",
+  );
+});
+
+test("model_concurrency draft validates against account model list", () => {
+  assert.deepEqual(modelConcurrencyDraftFromMetadata({ model_concurrency: { "m-a": 2 } }), [
+    { model: "m-a", limit: "2" },
+  ]);
+  assert.deepEqual(parseModelConcurrencyDraft([{ model: "m-a", limit: "3" }], ["m-a", "m-b"]), { "m-a": 3 });
+  assert.equal(parseModelConcurrencyDraft([], ["m-a"]), null);
+  assert.throws(() => parseModelConcurrencyDraft([{ model: "other", limit: "1" }], ["m-a"]), /已配置模型清单/);
+  assert.throws(() => parseModelConcurrencyDraft([{ model: "m-a", limit: "1001" }], ["m-a"]), /并发限制/);
+});

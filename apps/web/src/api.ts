@@ -1248,8 +1248,12 @@ export interface ProviderCredential {
     model_catalog_fetched_at: string | null;
     catalog_revision?: string | null;
   };
-  active_count: number;
-  active_by_model: Record<string, number>;
+  /** Claim-lock 同口径占用（#707 Phase 2）。 */
+  active_concurrency?: {
+    in_use: number;
+    max_concurrent: number | null;
+    model_in_use?: Record<string, number>;
+  };
 }
 
 export interface CredentialUpdateResponse extends ProviderCredential {
