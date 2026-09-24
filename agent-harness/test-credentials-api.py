@@ -55,20 +55,22 @@ def main():
     req("POST", "/credentials", {"name": "x", "provider": "evil-corp", "secret": "y"}, expect=400)
     print("未知 provider 拒绝 OK")
 
-    # 4. RoleConfig 绑定：创建临时角色并绑定 Credential
+    # 4. #690: RoleConfig 不再绑定 Credential；创建临时角色仅写职责配置，并拒收 credentials
     role = req("POST", "/agent-roles", {
         "name": f"cred_test_{tag}", "title": "Credential 测试", "description": "临时验收角色",
     })
     role_id = role["id"]
     role_config = {
-        "agent_cli": "claude-code", "model": None, "reasoning": None,
+        "agent_cli": "claude-code", "model": None,
         "env_keys": [], "env_vars": {}, "modules": [], "skills": [], "commands": [],
         "mcps": [], "subagents": [], "instructions_markdown": None, "runtime_image_key": None,
-        "credentials": [{"credential_id": cid, "purpose": "llm"}], "config_files": [],
+        "config_files": [],
     }
+    rejected = req("PUT", f"/role-configs/global/{role_id}", {**role_config, "credentials": [{"credential_id": cid, "purpose": "llm"}]}, expect=400)
+    assert rejected.get("error_code") == "invalid_payload" or "unrecognized" in str(rejected).lower() or rejected.get("error")
     cfg = req("PUT", f"/role-configs/global/{role_id}", role_config)
-    assert cfg["credentials"][0]["credential_id"] == cid
-    print("RoleConfig 绑定 OK:", role["name"], "→", cfg["credentials"][0]["provider"])
+    assert "credentials" not in cfg or cfg.get("credentials") in (None, [])
+    print("RoleConfig 拒收凭据绑定 OK:", role["name"])
 
     # 5. provider PATCH schema：claude-code 绑定的 Credential 禁止迁移到 openai
     req("PATCH", f"/credentials/{cid}", {"provider": "openai"}, expect=400)
@@ -85,7 +87,7 @@ def main():
     })
     assert updated["public_metadata_json"]["base_url"] == "https://api.anthropic.com/v1"
     assert "allowed_model_ids" not in updated["public_metadata_json"]
-    assert updated["impact"]["role_config_count"] == 1
+    assert updated["impact"]["role_config_count"] == 0  # #690: no RoleConfig bindings
     logs = req("GET", "/audit-logs?action=credential.update&limit=20")
     assert any(log.get("resource_id") == cid for log in logs), "Credential 更新必须写审计日志"
     print("metadata 一致性校验与更新审计 OK")
@@ -109,11 +111,10 @@ def main():
     assert secret not in row and new_secret not in row
     print("轮换 OK: v2，指纹已变")
 
-    # 9. 解绑：RoleConfig 整体 PUT，credentials=[]
-    role_config["credentials"] = []
+    # 9. #690: 无 RoleConfig 绑定可解；再 PUT 职责配置仍成功
     cfg = req("PUT", f"/role-configs/global/{role_id}", role_config)
-    assert cfg["credentials"] == []
-    print("解绑 OK")
+    assert "credentials" not in cfg or cfg.get("credentials") in (None, [])
+    print("RoleConfig 职责 PUT OK（无绑定）")
 
     # 清理
     req("DELETE", f"/agent-roles/{role_id}")

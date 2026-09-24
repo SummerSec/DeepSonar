@@ -182,7 +182,6 @@ def main() -> None:
         "platform_tools": explore["platform_tools_json"],
         "instructions_markdown": explore["instructions_markdown"],
         "runtime_image_key": imported["image"]["image_key"],
-        "credentials": [],
         "config_files": explore["config_files"],
     }
     req("PUT", f"/projects/{project_id}/role-configs/{explore['role_id']}", invalid, 400)
