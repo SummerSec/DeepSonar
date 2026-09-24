@@ -53,3 +53,29 @@ test("overview leads with actionable work and labels projected phases honestly",
   assert.match(overview, /TRACE_STATUS_LABEL\[status\.toLowerCase\(\)\] \?\? status/);
   assert.doesNotMatch(overview, /title="执行轨迹"|nextSteps/);
 });
+
+test("长任务目标默认折叠为 1 行预览，并留有展开入口", () => {
+  const overview = readFileSync(path.resolve(import.meta.dirname, "./TaskOverview.tsx"), "utf8");
+
+  // 未展开时固定 1 行预览（对本来就一行的短目标是无副作用的 no-op）
+  assert.match(overview, /goalExpanded \? "" : " line-clamp-1"/);
+
+  // 是否被截断用实测判定，不用字数阀值：窄屏一行能装的字数远少，阈值会把已截断的
+  // 目标当成“短目标”而不给入口。
+  assert.match(overview, /const goalRef = useRef<HTMLHeadingElement>\(null\)/);
+  assert.match(overview, /setGoalTruncated\(node\.scrollHeight > node\.clientHeight \+ 1\)/);
+  assert.doesNotMatch(overview, /GOAL_PREVIEW_CHARS|goalIsLong/);
+
+  // 展开态必须停止复测，否则 scrollHeight 等于 clientHeight，“收起”入口会在展开后消失
+  assert.match(overview, /if \(goalExpanded\) return;/);
+
+  // 被截断才给入口，且带 aria-expanded 与双向文案
+  assert.match(overview, /\{goalTruncated && \(/);
+  assert.match(overview, /aria-expanded=\{goalExpanded\}/);
+  assert.match(overview, /"收起任务目标"/);
+  assert.match(overview, /展开完整目标（/);
+  assert.match(overview, /\$\{outcome\.objective\.length\} 字/);
+
+  // 目标常是多行 markdown，保留换行才能按行阅读
+  assert.match(overview, /whitespace-pre-line/);
+});
