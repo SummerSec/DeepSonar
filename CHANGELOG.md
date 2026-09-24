@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- image-admission 去除对 v55 已移除列 `project_runtime_images.selected_version_id` 的引用（#704）。#699 删列后 `checkTrackedTags` / `queueContinuousRescans` 漏改，导致 v55 起进程启动即崩（PostgreSQL 42703 undefined_column，生产实测重启 1228 次）。「在用版本」改由 `v.promoted_at` 与 Job 快照引用两个条件判定，并补源码守卫测试避免回归。
+
 ## [0.4.11] - 2026-09-24
 
 ### 变更

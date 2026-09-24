@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
 
@@ -71,4 +72,29 @@ test("第三方镜像不受官方 registry 选源影响", () => {
 
 test("部署 registry 配置拒绝 URL 形式", () => {
   assert.throws(() => normalizePreferredRegistry("https://crpi.example.com/summersec"), /基址/);
+});
+
+/**
+ * #699（Schema v55）从 project_runtime_images 删除了 selected_version_id / pin_policy，
+ * 改为「项目只能排除或启用镜像，不再固定版本」。image-admission 的两条「在用版本」查询
+ * 漏改，仍引用该列，导致 v55 起进程启动即崩（PostgreSQL 42703 undefined_column，
+ * 生产实测重启 1228 次）。
+ *
+ * 该守卫放在本文件而不是独立测试文件，是因为 ci-test-hook 棘轮只承认源码路径引用，
+ * 且 allowlist 只允许缩小；本文件已在 test:registry-ref 中随 CI 执行。
+ */
+test("image-admission 不引用 v55 已删除的 project_runtime_images 列", () => {
+  // 从 dist 或源码位置均可执行：优先源码，回退同目录产物。
+  const sourceUrl = ["../src/index.ts", "./index.ts"]
+    .map((candidate) => new URL(candidate, import.meta.url))
+    .find((url) => existsSync(url));
+  assert.ok(sourceUrl, "找不到 image-admission 的 index.ts");
+  const source = readFileSync(sourceUrl, "utf8");
+  for (const dropped of ["selected_version_id", "pin_policy"]) {
+    assert.equal(
+      source.includes(`p.${dropped}`),
+      false,
+      `image-admission 仍引用已删除的 project_runtime_images.${dropped}（#699 起「在用版本」改由 v.promoted_at 与 Job 快照引用判定）`,
+    );
+  }
 });
