@@ -1801,7 +1801,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/role-configs/{id}/runtime-image",
     summary: "仅更新全局 RoleConfig 的 runtime_image_key（Provider 绑定列表用）",
-    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。项目 RoleConfig 返回 400，项目镜像必须通过项目设置策略管理；全局配置的 null 表示系统默认底座（deepsonar-base）。",
+    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。项目 RoleConfig 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；全局配置的 null 表示系统默认底座（deepsonar-base）。",
     scope: "agents:write",
     tags: ["RoleConfig", "RuntimeImages"],
     body: {
@@ -1834,7 +1834,7 @@ const OPS: Op[] = [
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
-    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目镜像必须通过项目设置策略管理；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。绑定 LLM 凭据的 agent_cli 与角色不一致时，provider 兼容则自动跟随并写审计，不兼容返回 400。",
+    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。绑定 LLM 凭据的 agent_cli 与角色不一致时，provider 兼容则自动跟随并写审计，不兼容返回 400。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
@@ -1852,7 +1852,7 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/runtime-images",
-    summary: "镜像市场列表（可按项目和关键字过滤）。项目作用域返回 selected_version / pin_stale / pin_policy：官方 stale pin 会在 catalog 提升时自动滚到最新 trusted，hold 与第三方除外。",
+    summary: "镜像市场列表（可按项目和关键字过滤）。#691：项目不再钉版本；返回 project_enabled / visible_project_ids，版本跟随平台 channel 最新 trusted。",
     scope: "images:read",
     tags: ["Runtime Images"],
     query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
@@ -2212,7 +2212,7 @@ const OPS: Op[] = [
   {
     method: "put",
     path: "/projects/{id}/runtime-images/{imageId}",
-    summary: "项目启用/停用可信镜像。version_id 省略或 null 表示跟随最新 trusted；显式 UUID 为 pin。官方 stale pin 在 catalog 提升时自动滚到最新 trusted；pin_policy=hold 或第三方 pin 不自动改写。本机缺层时把不可变引用入队（按 digest 去重、串行拉取），返回 202 preparing/saved:false 与整队列 pull-status，不因其它产品正在拉取而 409。该项就绪后才落库；Job 执行期仍只 inspect。",
+    summary: "项目排除/启用可信镜像（#691）。拒绝 version_id / pin_policy。deepsonar-base 不可停用；第三方须在 visible_project_ids 内。本机缺层时把不可变引用入队，返回 202 preparing/saved:false 与整队列 pull-status。该项就绪后才落库；Job 执行期仍只 inspect。",
     scope: "images:manage",
     tags: ["Runtime Images"],
     body: {
@@ -2220,17 +2220,31 @@ const OPS: Op[] = [
       required: ["enabled"],
       properties: {
         enabled: { type: "boolean" },
-        version_id: { type: "string", format: "uuid", nullable: true },
-        pin_policy: { type: "string", enum: ["follow", "hold"], description: "hold 钉死当前官方 pin，catalog 提升时不自动滚动；跟随最新时强制 follow" },
+        version_id: { type: ["string", "null"], format: "uuid", description: "#691 已拒绝：提交此字段返回 RUNTIME_IMAGE_PROJECT_PIN_FORBIDDEN" },
+        pin_policy: { type: "string", enum: ["follow", "hold"], description: "#691 已拒绝：提交此字段返回 RUNTIME_IMAGE_PROJECT_PIN_FORBIDDEN" },
       },
     },
   },
 
 
   {
+    method: "patch",
+    path: "/runtime-images/{id}/visibility",
+    summary: "平台设置第三方镜像可见项目集合（#691）。官方镜像拒绝；变更写 audit_logs。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["visible_project_ids"],
+      properties: {
+        visible_project_ids: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 200 },
+      },
+    },
+  },
+  {
     method: "get",
     path: "/projects/{id}/skill-sources",
-    summary: "项目 Skill 源启用白名单",
+    summary: "项目 Skill 源可用性（#691：trust 源默认可用，仅可显式停用）",
     description: "返回平台 Skill 源及本项目启用态；首次读取会把历史 RoleConfig modules_json 引用的源种子为启用（#603）。",
     scope: "skills:read",
     tags: ["Skills"],
@@ -3351,7 +3365,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
               description: "平台工具启用开关（全量 list 对每个 Agent 可选）；未声明默认启用。仅 mark_job_done 不可关闭。",
             },
             instructions_markdown: { type: "string", nullable: true },
-            runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并通过项目镜像策略选择" },
+            runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并由平台目录与 Hub 提案选择" },
             sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             runtime_knobs: { $ref: "#/components/schemas/RuntimeKnobOverride" },
             credentials: {

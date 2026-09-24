@@ -420,7 +420,7 @@ export function RoleCredentialBindingPanel() {
                             onMouseDown={(event) => event.stopPropagation()}
                           >
                             <span className="provider-flow-role-cli-caption">镜像</span>
-                            <span className="provider-flow-role-image-readonly">由项目镜像缺省决定</span>
+                            <span className="provider-flow-role-image-readonly">由平台目录缺省决定</span>
                           </span>
                         ) : (
                           <div

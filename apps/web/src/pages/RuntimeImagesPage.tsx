@@ -1,6 +1,6 @@
 import { ArrowsClockwise, Cube, DownloadSimple, MagnifyingGlass, Plus, SealCheck, ShieldWarning } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import {
@@ -20,8 +20,6 @@ import {
 import { SearchableSelect } from "../SearchableSelect";
 import {
   isProjectRuntimeImageAvailable,
-  isRuntimeImagePinStale,
-  runtimeImagePinLabel,
 } from "../runtime-image-option";
 import {
   formatPullElapsed,
@@ -243,7 +241,9 @@ function LocalCandidatePanel({
 
 export function RuntimeImagesPage() {
   const confirm = useConfirmDialog();
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId: routeProjectId } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
+  const projectId = routeProjectId || searchParams.get("project_id") || undefined;
   const { me } = useAuth();
   const [rows, setRows] = useState<RuntimeImageSummary[]>([]);
   const [selected, setSelected] = useState<RuntimeImageDetail | null>(null);
@@ -280,14 +280,11 @@ export function RuntimeImagesPage() {
   const [localRefs, setLocalRefs] = useState<Record<string, string>>({});
   const [localCandidates, setLocalCandidates] = useState<Record<string, RuntimeImageLocalCandidate | null>>({});
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
-  const [projectVersionPick, setProjectVersionPick] = useState<Record<string, string>>({});
   const marketplaceRequestGeneration = useRef(0);
   const autoPersistedPullTaskId = useRef<string | null>(null);
   const pendingProjectBinds = useRef(new Map<string, {
     image: RuntimeImageSummary;
     enabled: boolean;
-    versionId?: string | null;
-    pinPolicy?: "follow" | "hold";
   }>());
   const retryingProjectBinds = useRef(new Set<string>());
 
@@ -296,8 +293,6 @@ export function RuntimeImagesPage() {
     pending: {
       image: RuntimeImageSummary;
       enabled: boolean;
-      versionId?: string | null;
-      pinPolicy?: "follow" | "hold";
     } | null,
   ) => {
     if (pending) pendingProjectBinds.current.set(imageId, pending);
@@ -681,15 +676,17 @@ export function RuntimeImagesPage() {
   const bind = async (
     image: RuntimeImageSummary,
     enabled: boolean,
-    versionId?: string | null,
-    pinPolicy?: "follow" | "hold",
   ) => {
     if (!projectId) return;
+    if (image.image_key === "deepsonar-base" && enabled === false) {
+      setError("deepsonar-base 永不可在项目侧停用");
+      return;
+    }
     setBusy(image.id);
     try {
-      const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled, versionId, pinPolicy);
+      const result = await api.bindProjectRuntimeImage(projectId, image.id, enabled);
       if ("saved" in result && result.saved === false) {
-        rememberPendingBind(image.id, { image, enabled, versionId, pinPolicy });
+        rememberPendingBind(image.id, { image, enabled });
         setPullStatus(result.task);
         setNotice(projectBindingQueuedNotice(image.name, result.task));
         return;
@@ -702,7 +699,7 @@ export function RuntimeImagesPage() {
         try {
           const task = await api.runtimeImagesPullStatus();
           setPullStatus(task);
-          rememberPendingBind(image.id, { image, enabled, versionId, pinPolicy });
+          rememberPendingBind(image.id, { image, enabled });
           setNotice(projectBindingQueuedNotice(image.name, task));
         } catch {
           setNotice(projectBindingQueuedNotice(image.name, null));
@@ -727,7 +724,7 @@ export function RuntimeImagesPage() {
       }
       if (item?.status !== "succeeded" || retryingProjectBinds.current.has(imageId)) continue;
       retryingProjectBinds.current.add(imageId);
-      void api.bindProjectRuntimeImage(projectId, pending.image.id, pending.enabled, pending.versionId, pending.pinPolicy)
+      void api.bindProjectRuntimeImage(projectId, pending.image.id, pending.enabled)
         .then(async (result) => {
           if ("saved" in result && result.saved === false) {
             if (result.task.task_id !== pullStatus.task_id) setPullStatus(result.task);
@@ -811,11 +808,11 @@ export function RuntimeImagesPage() {
   return (
     <div className="page-scroll">
       <PageHeader
-        title={projectId ? "项目运行镜像" : "镜像市场"}
+        title={projectId ? "镜像 · 项目视图" : "镜像市场"}
         eyebrow="TRUSTED RUNTIME CATALOG"
         subtitle={
           <span className="inline-flex items-center gap-0.5">
-            {projectId ? "官方镜像启停与第三方启用 / 固定" : "系统底座 · 官方专项 · 第三方隔离准入"}
+            {projectId ? "排除非 base · 启用已绑定第三方（无钉版本）" : "系统底座 · 官方专项 · 第三方隔离准入"}
             <HelpTip label={projectId ? "项目运行镜像说明" : "镜像市场说明"}>
               {projectId
                 ? "系统底座自动用于未绑定专项镜像的角色；官方专项默认对本项目可用（可显式停用），第三方须先启用后才能固定/选用。任务表单不暴露镜像参数。"
@@ -1177,11 +1174,6 @@ export function RuntimeImagesPage() {
                         默认运行环境：角色不绑专项镜像时自动使用（runtime_image_key=null）。
                       </p>
                     )}
-                    {projectId && isRuntimeImagePinStale(image) && (
-                      <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/[.08] px-2 py-1.5 text-[11px] leading-5 text-amber-200">
-                        项目仍固定在 {image.selected_version ?? image.selected_version_id}，该 pin 当前不是可执行的 trusted；市场最新 trusted 为 {image.latest_version ?? "新版本"}。
-                      </p>
-                    )}
                     {image.below_platform_min && (
                       <p className="mt-2 rounded-lg border border-rose-400/25 bg-rose-400/[.08] px-2 py-1.5 text-[11px] leading-5 text-rose-200">
                         当前选中版本低于本平台最低运行时要求，预检与建任务会拒绝冻结。
@@ -1236,40 +1228,15 @@ export function RuntimeImagesPage() {
                     <>
                       <button
                         className={isProjectRuntimeImageAvailable(image) ? "secondary-button" : "primary-button"}
-                        disabled={busy === image.id}
-                        onClick={() => bind(
-                          image,
-                          !isProjectRuntimeImageAvailable(image),
-                          isProjectRuntimeImageAvailable(image)
-                            ? image.selected_version_id
-                            : (projectVersionPick[image.id] || image.selected_version_id || image.latest_version_id),
-                        )}
+                        disabled={busy === image.id || image.image_key === "deepsonar-base"}
+                        onClick={() => void bind(image, !isProjectRuntimeImageAvailable(image))}
                       >
-                        {isProjectRuntimeImageAvailable(image) ? "停用" : "启用"}
+                        {image.image_key === "deepsonar-base"
+                          ? "底座恒可用"
+                          : image.official
+                            ? (isProjectRuntimeImageAvailable(image) ? "排除" : "恢复可用")
+                            : (isProjectRuntimeImageAvailable(image) ? "停用" : "启用")}
                       </button>
-                      {isProjectRuntimeImageAvailable(image) && (
-                        <span className={`font-mono text-[9px] ${isRuntimeImagePinStale(image) ? "text-amber-300" : "text-zinc-500"}`}>
-                          {runtimeImagePinLabel(image)}
-                        </span>
-                      )}
-                      {projectId && isRuntimeImagePinStale(image) && image.latest_version_id && (
-                        <button
-                          className="primary-button"
-                          disabled={busy === image.id}
-                          onClick={() => void bind(image, true, image.latest_version_id)}
-                        >
-                          升级 pin 到 {image.latest_version ?? "最新 trusted"}
-                        </button>
-                      )}
-                      {projectId && isRuntimeImagePinStale(image) && (
-                        <button
-                          className="secondary-button"
-                          disabled={busy === image.id}
-                          onClick={() => void bind(image, true, null, "follow")}
-                        >
-                          改为跟随最新
-                        </button>
-                      )}
                     </>
                   )}
                   {!image.latest_version && (
@@ -1420,91 +1387,12 @@ export function RuntimeImagesPage() {
                   <span className="text-emerald-300">可信版本优先：</span>disabled 版本的扫描/停用诊断仍保留在下方，不会遮蔽当前可用的 trusted 版本。
                 </div>
               )}
-              {projectId && isRuntimeImagePinStale(selected.image) && (
-                <div className="rounded-xl border border-amber-400/25 bg-amber-400/[.08] p-3">
-                  <div className="font-mono text-[9px] tracking-[.14em] text-amber-300">STALE PROJECT PIN</div>
-                  <p className="mt-1 text-[11px] leading-5 text-amber-100/90">
-                    项目仍固定在 {selected.image.selected_version ?? selected.image.selected_version_id}，该版本当前不是可执行的 trusted。最新 trusted 为 {selected.image.latest_version ?? "新版本"}。官方 catalog 提升会自动滚动未 hold 的过期 pin；第三方与 hold 仍需手动升级。
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {selected.image.latest_version_id && (
-                      <button
-                        className="primary-button"
-                        disabled={busy === selected.image.id}
-                        onClick={() => void bind(selected.image, true, selected.image.latest_version_id)}
-                      >
-                        升级 pin 到 {selected.image.latest_version ?? "最新 trusted"}
-                      </button>
-                    )}
-                    <button
-                      className="secondary-button"
-                      disabled={busy === selected.image.id}
-                      onClick={() => void bind(selected.image, true, null, "follow")}
-                    >
-                      改为跟随最新
-                    </button>
-                  </div>
-                </div>
-              )}
-              {projectId && selected.versions.some((v) => v.trust_status === "trusted") && (
+              {projectId && (
                 <div className="rounded-xl border border-acc-400/20 bg-acc-400/[.05] p-3">
-                  <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PIN PLATFORM VERSION</div>
+                  <div className="font-mono text-[9px] tracking-[.14em] text-acc-300">PROJECT AVAILABILITY</div>
                   <p className="theme-muted mt-1 text-[11px] leading-5">
-                    为项目固定某一平台的可信 digest。不固定（version_id=null）时跟随最新 trusted。官方过期 pin 会在 catalog 提升时滚到最新 trusted；需要钉死旧官方版本时选「保持此版本」。
+                    #691：版本永远跟随平台 channel 最新 trusted，项目不能钉版本。官方镜像默认可用（deepsonar-base 不可停用）；其它官方可排除；第三方须平台绑定可见范围后才能启用。
                   </p>
-                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                    <SearchableSelect
-                      value={projectVersionPick[selected.image.id] ?? selected.image.selected_version_id ?? ""}
-                      onChange={(next) => setProjectVersionPick((current) => ({
-                        ...current,
-                        [selected.image.id]: next,
-                      }))}
-                      options={(() => {
-                        const current = projectVersionPick[selected.image.id] ?? selected.image.selected_version_id ?? "";
-                        const available = selected.versions.filter(
-                          (version) => version.trust_status === "trusted" && versionMatchesPlatform(version, platformFilter),
-                        );
-                        return [
-                          { value: "", label: "自动（按平台匹配）" },
-                          ...available.map((version) => ({
-                            value: version.id,
-                            label: `${version.version} · ${platformLabel(version.platforms_json)} · ${shortDigest(version.digest)}`,
-                          })),
-                          ...(current && !available.some((version) => version.id === current)
-                            ? [{ value: current, label: `${current}（当前 · 版本不可用）` }]
-                            : []),
-                        ];
-                      })()}
-                      placeholder="自动（按平台匹配）"
-                      ariaLabel="项目版本与 digest"
-                      className="min-w-0 flex-1"
-                    />
-                    <button
-                      className="primary-button shrink-0"
-                      disabled={busy === selected.image.id}
-                      onClick={() => {
-                        const picked = projectVersionPick[selected.image.id] || selected.image.selected_version_id || null;
-                        const policy = picked && selected.image.pin_policy === "hold" ? "hold" : "follow";
-                        void bind(selected.image, true, picked || null, policy);
-                      }}
-                    >
-                      固定到项目
-                    </button>
-                  </div>
-                  {selected.image.official && selected.image.selected_version_id && (
-                    <button
-                      className="secondary-button mt-2"
-                      disabled={busy === selected.image.id}
-                      onClick={() => void bind(
-                        selected.image,
-                        true,
-                        selected.image.selected_version_id,
-                        selected.image.pin_policy === "hold" ? "follow" : "hold",
-                      )}
-                    >
-                      {selected.image.pin_policy === "hold" ? "取消保持，跟随官方升版" : "保持此版本（官方升版不滚动）"}
-                    </button>
-                  )}
                 </div>
               )}
               {selected.versions.filter((version) => versionMatchesPlatform(version, platformFilter)).length === 0 ? (
@@ -1611,15 +1499,6 @@ export function RuntimeImagesPage() {
                               撤销
                             </button>
                           </>
-                        )}
-                        {projectId && version.trust_status === "trusted" && (
-                          <button
-                            className={isPinned ? "secondary-button" : "primary-button"}
-                            disabled={busy === selected.image.id}
-                            onClick={() => bind(selected.image, true, version.id)}
-                          >
-                            {isPinned ? "已固定此平台版本" : "项目使用此平台版本"}
-                          </button>
                         )}
                       </div>
                       {!projectId && !approve.ok && version.trust_status !== "trusted" && (

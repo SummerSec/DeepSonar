@@ -27,7 +27,7 @@ export function ProjectSkillSourceAllowlistPanel({
       for (const source of res.sources) next[source.skill_source_id] = source.project_enabled;
       setDraft(next);
     } catch (error) {
-      showToast(`加载 Skill 源白名单失败：${error instanceof Error ? error.message : error}`, "error");
+      showToast(`加载 Skill 源可用性失败：${error instanceof Error ? error.message : error}`, "error");
     } finally {
       setLoading(false);
     }

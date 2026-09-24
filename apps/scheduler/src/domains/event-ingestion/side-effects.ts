@@ -66,7 +66,6 @@ import {
 import { runFindingResearchBestEffort } from "../finding-research/index.js";
 import { config } from "../../config.js";
 import { selectModelsForRequirements } from "../provider-adapter/index.js";
-import { allocateRoleUiColor } from "../../role-colors.js";
 
 export interface EventSideEffectServices {
   hubReferenceLookup?: HubReferenceLookup;
@@ -108,152 +107,6 @@ export interface EventProjectRules {
 
 export interface EventRole {
   name: string;
-}
-
-type MaterializedHubProjectRole = {
-  roleName: string;
-  runtimeImageKey: string | null;
-};
-
-/**
- * Materialize a Hub-composed project role once, copying only the governed
- * base RoleConfig and its existing bindings. The Hub supplies identity and
- * instructions; it cannot add tools, credentials, images, or network scope.
- */
-async function materializeHubProjectRole(
-  tx: EventIngestionTransaction,
-  projectId: string,
-  baseRoleName: string,
-  definition: HubRoleDefinitionPayload,
-  jobId: string,
-): Promise<MaterializedHubProjectRole> {
-  const [baseRole] = await tx<Record<string, unknown>[]>`
-    SELECT id, name, kind
-    FROM agent_roles
-    WHERE name = ${baseRoleName}
-      AND kind = 'role'
-      AND (project_id IS NULL OR project_id = ${projectId})
-    ORDER BY project_id NULLS LAST
-    LIMIT 1`;
-  if (!baseRole) throw invalidRole(baseRoleName, "intents.role");
-
-  const [existing] = await tx<Record<string, unknown>[]>`
-    SELECT id, name, title, description, kind, project_id
-    FROM agent_roles
-    WHERE name = ${definition.name}
-    LIMIT 1`;
-  if (existing) {
-    if (existing.kind !== "role" || existing.project_id !== projectId) {
-      throw new ControlInputError(
-        "invalid_payload",
-        "role_definition.name 已被其他平台或项目角色占用。",
-        "intents.role_definition.name",
-      );
-    }
-    if (existing.title !== definition.title || existing.description !== definition.description) {
-      throw new ControlInputError(
-        "invalid_payload",
-        "已存在的项目角色定义与本次 Hub 提案不一致。",
-        "intents.role_definition",
-      );
-    }
-  }
-
-  const [baseProjectCfg] = await tx<Record<string, unknown>[]>`
-    SELECT * FROM role_configs
-    WHERE role_id = ${baseRole.id as string} AND project_id = ${projectId}
-    LIMIT 1`;
-  const [baseGlobalCfg] = await tx<Record<string, unknown>[]>`
-    SELECT * FROM role_configs
-    WHERE role_id = ${baseRole.id as string} AND project_id IS NULL
-    LIMIT 1`;
-  const sourceCfg = baseProjectCfg ?? baseGlobalCfg;
-
-  let roleId = existing?.id as string | undefined;
-  if (!roleId) {
-    const uiColor = await allocateRoleUiColor(tx);
-    const [created] = await tx`
-      INSERT INTO agent_roles (name, title, description, builtin, kind, project_id, ui_color)
-      VALUES (${definition.name}, ${definition.title}, ${definition.description}, false, 'role', ${projectId}, ${uiColor})
-      RETURNING id`;
-    roleId = created?.id as string | undefined;
-    if (!roleId) throw new Error("project role materialization did not return an id");
-  }
-
-  const [projectCfg] = await tx<Record<string, unknown>[]>`
-    SELECT id, instructions_markdown
-    FROM role_configs
-    WHERE role_id = ${roleId} AND project_id = ${projectId}
-    LIMIT 1`;
-  if (projectCfg && projectCfg.instructions_markdown !== definition.instructions_markdown) {
-    throw new ControlInputError(
-      "invalid_payload",
-      "已存在的项目角色提示词与本次 Hub 提案不一致。",
-      "intents.role_definition.instructions_markdown",
-    );
-  }
-
-  let roleConfigId = projectCfg?.id as string | undefined;
-  if (!roleConfigId) {
-    const [createdCfg] = await tx`
-      INSERT INTO role_configs (
-        role_id, project_id, agent_cli, dsh_task_mode, model,
-        allow_model_catalog_passthrough, context_window_tokens, env_keys,
-        env_vars_json, modules_json, skills_json, commands_json, mcps_json,
-        subagents_json, platform_tools_json, sandbox_limits_json,
-        runtime_knobs_json, pi_extensions_json, instructions_markdown,
-        runtime_image_key
-      ) VALUES (
-        ${roleId}, ${projectId}, ${String(sourceCfg?.agent_cli ?? "claude-code")},
-        ${sourceCfg?.dsh_task_mode === "ptc" ? "ptc" : "standard"},
-        ${typeof sourceCfg?.model === "string" ? sourceCfg.model : null},
-        false, /* #697: never copy RoleConfig passthrough */
-        ${typeof sourceCfg?.context_window_tokens === "number" ? sourceCfg.context_window_tokens : null},
-        ${Array.isArray(sourceCfg?.env_keys) ? sourceCfg.env_keys : []},
-        ${tx.json((sourceCfg?.env_vars_json ?? {}) as never)},
-        ${tx.json((sourceCfg?.modules_json ?? []) as never)},
-        ${tx.json((sourceCfg?.skills_json ?? []) as never)},
-        ${tx.json((sourceCfg?.commands_json ?? []) as never)},
-        ${tx.json((sourceCfg?.mcps_json ?? []) as never)},
-        ${tx.json((sourceCfg?.subagents_json ?? []) as never)},
-        ${tx.json((sourceCfg?.platform_tools_json ?? {}) as never)},
-        ${tx.json((sourceCfg?.sandbox_limits_json ?? {}) as never)},
-        ${tx.json((sourceCfg?.runtime_knobs_json ?? {}) as never)},
-        ${tx.json((sourceCfg?.pi_extensions_json ?? []) as never)},
-        ${definition.instructions_markdown},
-        NULL
-      )
-      RETURNING id`;
-    roleConfigId = createdCfg?.id as string | undefined;
-    if (!roleConfigId) throw new Error("project role config materialization did not return an id");
-
-    if (sourceCfg?.id) {
-      await tx`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        SELECT ${roleConfigId}, credential_id, purpose
-        FROM role_credentials
-        WHERE role_config_id = ${sourceCfg.id as string}
-        ON CONFLICT DO NOTHING`;
-      await tx`
-        INSERT INTO role_config_files (role_config_id, path, content, content_sha256)
-        SELECT ${roleConfigId}, path, content, content_sha256
-        FROM role_config_files
-        WHERE role_config_id = ${sourceCfg.id as string}
-        ON CONFLICT DO NOTHING`;
-    }
-  }
-
-  await tx`
-    INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, after_json, result)
-    VALUES ('internal', ${`job:${jobId}`}, 'role.project_create', ${projectId}, 'agent_role', ${roleId},
-      ${tx.json({ name: definition.name, title: definition.title, base_role: baseRoleName, role_config_id: roleConfigId })}, 'ok')`;
-
-  return {
-    roleName: definition.name,
-    runtimeImageKey: typeof sourceCfg?.runtime_image_key === "string" && sourceCfg.runtime_image_key.trim()
-      ? sourceCfg.runtime_image_key.trim()
-      : null,
-  };
 }
 
 export interface HubFindingBinding {
@@ -704,29 +557,10 @@ export function createEventIngestionSideEffectApplication(
           phase === "preflight" ? `intents.${index}.role_definition` : "intents.role_definition",
         );
       }
-      if (intent.role_definition?.scope === "project") {
-        const [existingProjectRole] = await tx<Record<string, unknown>[]>`
-          SELECT kind, project_id, title, description
-          FROM agent_roles
-          WHERE name = ${intent.role_definition.name}
-          LIMIT 1`;
-        if (existingProjectRole && (
-          existingProjectRole.kind !== "role"
-          || existingProjectRole.project_id !== (job.project_id as string)
-          || existingProjectRole.title !== intent.role_definition.title
-          || existingProjectRole.description !== intent.role_definition.description
-        )) {
-          throw new ControlInputError(
-            "invalid_payload",
-            "项目角色名称已存在且定义不一致。",
-            phase === "preflight" ? `intents.${index}.role_definition` : "intents.role_definition",
-          );
-        }
-      }
     }
-    // Hub 可提案本轮可选运行镜像（image_key），但只允许项目已启用、存在可信
-    // 版本、且至少一种治理 CLI 能跑的市场产品。省略时按项目镜像策略与 RoleConfig
-    // 缺省解析。preflight 与 apply 都做目录成员校验；提案了 key 时 preflight
+    // Hub 可提案本轮可选运行镜像（image_key），但只允许平台可见且项目未排除、
+    // 存在可信版本、且至少一种治理 CLI 能跑的市场产品。省略时按平台目录与
+    // RoleConfig 缺省解析（#691）。preflight 与 apply 都做目录成员校验；提案了 key 时 preflight
     // 再冻一次快照，把 CLI 不兼容收成 invalid_runtime_image，避免 apply 变成 500。
     const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
     const allowedImageKeys = catalog.map((entry) => entry.image_key);
@@ -1404,23 +1238,11 @@ export function createEventIngestionSideEffectApplication(
         LIMIT 1`;
         if (dup.length > 0) continue;
 
-        // `role` is the governed platform role contract. A project-scoped
-        // definition materializes an isolated role row, while a Job-scoped
-        // definition stays only in this frozen Job snapshot.
+        // `role` is the governed platform role contract. role_definition is
+        // Job-scoped only (#691): frozen into this Job snapshot, never persisted
+        // as project agent_roles / RoleConfig. Cross-task reuse goes through Skills.
         const baseRole = it.role!;
-        let materializedRuntimeImageKey: string | null = null;
-        let role = baseRole;
-        if (it.role_definition?.scope === "project") {
-          const materialized = await materializeHubProjectRole(
-              tx,
-              job.project_id as string,
-              baseRole,
-              it.role_definition,
-              jobId,
-            );
-          role = materialized.roleName;
-          materializedRuntimeImageKey = materialized.runtimeImageKey;
-        }
+        const role = baseRole;
         const sourceFinding = resolveHubFindingIntent(
           baseRole,
           it.from,
@@ -1475,7 +1297,7 @@ export function createEventIngestionSideEffectApplication(
               role,
               snapshotFindingIds,
               {
-                runtimeImageKey: it.runtime_image_key ?? materializedRuntimeImageKey,
+                runtimeImageKey: it.runtime_image_key ?? null,
                 agentCli: it.agent_cli ?? null,
                 credentialId: it.credential_id ?? null,
                 modelRef: it.model_ref ?? null,

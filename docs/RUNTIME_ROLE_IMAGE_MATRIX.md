@@ -30,7 +30,7 @@
 | `hub_reason` | hub | `deepsonar-base` | 画布决策与派发 | 通常不需要专项工具链 |
 | `report` | system | `deepsonar-base` | 任务总报告 | 通常不需要专项工具链 |
 
-角色镜像来源只由平台决定（#674）：Job 缺省取全局 RoleConfig `runtime_image_key`，为空落到角色官方默认；项目不再持有 `inherit_global` / `project_managed` 策略或角色→镜像映射。项目侧只保留可用性闸门：官方镜像（含 `project_opt_in` 专项）默认对项目可用（无绑定行 = 启用，显式 `enabled=false` 可关闭），第三方须项目显式启用。`project_opt_in` 仅作元数据（如启动 warmup 跳过重镜像），不作为 Hub/角色选图硬门。
+角色镜像来源只由平台决定（#674/#691）：Job 缺省取全局 RoleConfig `runtime_image_key`，为空落到角色官方默认；项目不再持有镜像策略、角色→镜像映射或版本钉死。官方镜像默认可用（`deepsonar-base` 永不可停用，其它官方可排除）；第三方须平台 `visible_project_ids` 绑定后再由项目启用。`project_opt_in` 仅作元数据（如启动 warmup 跳过重镜像），不作为 Hub/角色选图硬门。
 
 ## 官方镜像能力表
 

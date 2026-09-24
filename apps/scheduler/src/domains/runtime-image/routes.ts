@@ -24,8 +24,7 @@ import {
   resolveRuntimeImageForProjectBinding,
   listOfficialRuntimeImageStatus,
   runtimeImagePullStatus,
-  runtimeImagePinPolicy,
-  runtimeImageVersionPin,
+  PLATFORM_BASE_RUNTIME_IMAGE_KEY,
   runtimeImageRegistryWithOverrides,
   readRuntimeRegistryChannel,
   registryChannelPreparationBusyResult,
@@ -51,7 +50,12 @@ const RuntimeImageImportBody = z.object({
   image_ref: z.string().trim().min(3).max(500),
   version: z.string().trim().min(1).max(100).optional(),
   registry_credential_id: z.string().uuid().optional(),
+  /** #691: third-party projects that may enable this image. */
+  visible_project_ids: z.array(z.string().uuid()).max(200).optional(),
 });
+const RuntimeImageVisibilityBody = z.object({
+  visible_project_ids: z.array(z.string().uuid()).max(200),
+}).strict();
 const RuntimeImageStatusBody = z.object({
   status: z.enum(["trusted", "rejected", "disabled", "revoked"]),
   reason: z.string().trim().min(1).max(2_000).optional(),
@@ -84,6 +88,7 @@ const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_cred
 });
 const ProjectRuntimeImageBody = z.object({
   enabled: z.boolean().default(true),
+  // #691: rejected at handler with stable error codes (kept optional so clients get clear errors).
   version_id: z.string().uuid().nullish(),
   pin_policy: z.enum(["follow", "hold"]).optional(),
 });
@@ -115,22 +120,14 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const minRuntimeImage = platformMinRuntimeImage();
     const rows = await sql`
       SELECT ri.id, ri.image_key, ri.name, ri.description, ri.publisher, ri.source_url,
-             ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.created_at, ri.updated_at,
-             pri.enabled AS project_enabled, pri.selected_version_id,
-             COALESCE(pri.pin_policy, 'follow') AS pin_policy,
-             pin.version AS selected_version,
-             pin.trust_status AS selected_trust_status,
-             CASE
-               WHEN pri.selected_version_id IS NULL THEN false
-               WHEN latest.id IS NULL OR latest.trust_status IS DISTINCT FROM 'trusted' THEN false
-               WHEN NOT (COALESCE(latest.platforms_json, '[]'::jsonb) @> ${sql.json([hostPlatform])}) THEN false
-               WHEN ri.official AND latest.registry_channel IS NULL THEN false
-               WHEN pin.id IS NULL THEN true
-               WHEN pin.trust_status <> 'trusted' THEN true
-               WHEN NOT (pin.platforms_json @> ${sql.json([hostPlatform])}) THEN true
-               WHEN ri.official AND pin_ref.id IS NULL THEN true
-               ELSE false
-             END AS pin_stale,
+             ri.source_kind, ri.official, ri.project_opt_in, ri.enabled, ri.visible_project_ids,
+             ri.created_at, ri.updated_at,
+             pri.enabled AS project_enabled,
+             NULL::uuid AS selected_version_id,
+             'follow'::text AS pin_policy,
+             NULL::text AS selected_version,
+             NULL::text AS selected_trust_status,
+             false AS pin_stale,
              latest.id AS latest_version_id, latest.version AS latest_version,
              CASE WHEN ri.official THEN latest.channel_digest ELSE latest.digest END AS digest,
              CASE WHEN ri.official THEN latest.channel_resolved_ref ELSE latest.resolved_ref END AS resolved_ref,
@@ -141,10 +138,6 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       FROM runtime_images ri
       LEFT JOIN project_runtime_images pri
         ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
-      LEFT JOIN runtime_image_versions pin
-        ON pin.id = pri.selected_version_id
-      LEFT JOIN runtime_image_version_refs pin_ref
-        ON pin_ref.version_id = pin.id AND pin_ref.channel = ${selectedChannel}
       LEFT JOIN LATERAL (
         SELECT v.*, selected_ref.digest AS channel_digest,
                selected_ref.resolved_ref AS channel_resolved_ref,
@@ -170,9 +163,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       ...row,
       below_platform_min: isRuntimeImageBelowPlatformMin({
         official: row.official === true,
-        version: row.selected_version_id
-          ? (row.selected_version as string | null)
-          : (row.latest_version as string | null),
+        version: row.latest_version as string | null,
         imageKey: String(row.image_key),
         min: minRuntimeImage,
       }),
@@ -670,12 +661,18 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       ({ image, version } = await sql.begin(async (tx) => {
         const [existing] = await tx`SELECT official FROM runtime_images WHERE image_key = ${body.image_key}`;
         if (existing?.official) throw new Error("官方产品不能通过手动登记绕过官方约束");
+        const visible = body.visible_project_ids ?? [];
         const [savedImage] = await tx`
           INSERT INTO runtime_images ${tx({ image_key: body.image_key, name: body.name, description: body.description,
             publisher: body.publisher, source_url: body.source_url ?? null, source_kind: "third_party", official: false,
-            project_opt_in: true } as never)}
+            project_opt_in: true, visible_project_ids: visible } as never)}
           ON CONFLICT (image_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
-            publisher = EXCLUDED.publisher, source_url = EXCLUDED.source_url, project_opt_in = true, enabled = true, updated_at = now()
+            publisher = EXCLUDED.publisher, source_url = EXCLUDED.source_url, project_opt_in = true, enabled = true,
+            visible_project_ids = CASE
+              WHEN ${visible.length > 0} THEN EXCLUDED.visible_project_ids
+              ELSE runtime_images.visible_project_ids
+            END,
+            updated_at = now()
           RETURNING *`;
         const now = new Date();
         const [savedVersion] = await tx`
@@ -728,11 +725,20 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       const result = await sql.begin(async (tx) => {
         const [existing] = await tx`SELECT id, official FROM runtime_images WHERE image_key = ${body.image_key}`;
         if (existing?.official) throw new Error("不能通过第三方导入 API 覆盖官方镜像");
+        const visibleUpdate = body.visible_project_ids;
         const [image] = existing
-          ? await tx`
-              UPDATE runtime_images SET name = ${body.name}, description = ${body.description},
-                publisher = ${body.publisher}, source_url = ${body.source_url ?? null}, updated_at = now()
-              WHERE id = ${existing.id as string} RETURNING *`
+          ? (visibleUpdate
+              ? await tx`
+                  UPDATE runtime_images SET name = ${body.name}, description = ${body.description},
+                    publisher = ${body.publisher}, source_url = ${body.source_url ?? null},
+                    visible_project_ids = ${visibleUpdate}::uuid[],
+                    updated_at = now()
+                  WHERE id = ${existing.id as string} RETURNING *`
+              : await tx`
+                  UPDATE runtime_images SET name = ${body.name}, description = ${body.description},
+                    publisher = ${body.publisher}, source_url = ${body.source_url ?? null},
+                    updated_at = now()
+                  WHERE id = ${existing.id as string} RETURNING *`)
           : await tx`
               INSERT INTO runtime_images ${tx({
                 image_key: body.image_key,
@@ -743,6 +749,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
                 source_kind: "third_party",
                 official: false,
                 enabled: true,
+                visible_project_ids: body.visible_project_ids ?? [],
               })} RETURNING *`;
         const [version] = await tx`
           INSERT INTO runtime_image_versions ${tx({
@@ -878,32 +885,50 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   app.put("/projects/:id/runtime-images/:imageId", async (req, reply) => {
     const { id, imageId } = req.params as { id: string; imageId: string };
     const body = ProjectRuntimeImageBody.parse(req.body);
-    const [image] = await sql`SELECT id, enabled FROM runtime_images WHERE id = ${imageId}`;
-    if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
-    const selectedVersionId = runtimeImageVersionPin(body.version_id);
-    if (body.pin_policy === "hold" && !selectedVersionId) {
+    if (body.version_id !== undefined && body.version_id !== null) {
       return reply.code(400).send({
-        error: "pin_policy=hold 需要显式 version_id，跟随最新请使用 follow",
-        error_code: "RUNTIME_IMAGE_PIN_POLICY_INVALID",
+        error: "项目不能钉版本；Job 快照在创建时冻结平台 channel 最新 trusted digest（#691）",
+        error_code: "RUNTIME_IMAGE_PROJECT_PIN_FORBIDDEN",
       });
     }
-    const [existing] = await sql`
-      SELECT pin_policy FROM project_runtime_images
-      WHERE project_id = ${id} AND runtime_image_id = ${imageId}`;
-    const pinPolicy = !selectedVersionId
-      ? "follow"
-      : body.pin_policy !== undefined
-        ? runtimeImagePinPolicy(body.pin_policy)
-        : runtimeImagePinPolicy(existing?.pin_policy);
+    if (body.pin_policy !== undefined) {
+      return reply.code(400).send({
+        error: "项目不能设置 pin_policy；版本编排只由平台 channel 决定（#691）",
+        error_code: "RUNTIME_IMAGE_PROJECT_PIN_FORBIDDEN",
+      });
+    }
+    const [image] = await sql`
+      SELECT id, image_key, enabled, official, visible_project_ids
+      FROM runtime_images WHERE id = ${imageId}`;
+    if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
+    const imageKey = String(image.image_key);
+    if (imageKey === PLATFORM_BASE_RUNTIME_IMAGE_KEY && body.enabled === false) {
+      return reply.code(400).send({
+        error: "deepsonar-base 永不可在项目侧停用（#691）",
+        error_code: "RUNTIME_IMAGE_BASE_DISABLE_FORBIDDEN",
+      });
+    }
+    const visibleIds = Array.isArray(image.visible_project_ids)
+      ? (image.visible_project_ids as unknown[]).map(String)
+      : [];
+    if (image.official !== true) {
+      if (!visibleIds.includes(String(id))) {
+        return reply.code(403).send({
+          error: "第三方镜像未绑定到本项目可见范围，不能启用或排除",
+          error_code: "RUNTIME_IMAGE_PROJECT_NOT_VISIBLE",
+        });
+      }
+    }
     try {
       if (body.enabled) {
         if (config.runtime.agentMode === "fake") {
-          const [version] = body.version_id
-            ? await sql`SELECT id FROM runtime_image_versions WHERE id = ${body.version_id} AND runtime_image_id = ${imageId} AND trust_status = 'trusted'`
-            : await sql`SELECT id FROM runtime_image_versions WHERE runtime_image_id = ${imageId} AND trust_status = 'trusted' ORDER BY promoted_at DESC NULLS LAST, created_at DESC LIMIT 1`;
+          const [version] = await sql`
+            SELECT id FROM runtime_image_versions
+            WHERE runtime_image_id = ${imageId} AND trust_status = 'trusted'
+            ORDER BY promoted_at DESC NULLS LAST, created_at DESC LIMIT 1`;
           if (!version) return reply.code(409).send({ error: "镜像没有可启用的可信版本" });
         } else {
-          const snapshot = await resolveRuntimeImageForProjectBinding(sql, imageId, selectedVersionId);
+          const snapshot = await resolveRuntimeImageForProjectBinding(sql, imageId, null);
           if (managesHostDockerRuntime()) {
             const preparation = await requestRuntimeImagePreparation(
               [{ image_key: snapshot.image_key, image_ref: snapshot.image_ref }],
@@ -927,14 +952,10 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       INSERT INTO project_runtime_images ${sql({
         project_id: id,
         runtime_image_id: imageId,
-        selected_version_id: selectedVersionId,
         enabled: body.enabled,
-        pin_policy: pinPolicy,
       } as never)}
       ON CONFLICT (project_id, runtime_image_id) DO UPDATE SET
-        selected_version_id = EXCLUDED.selected_version_id,
         enabled = EXCLUDED.enabled,
-        pin_policy = EXCLUDED.pin_policy,
         updated_at = now()
       RETURNING *`;
     await audit(req, {
@@ -942,8 +963,50 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       resourceType: "runtime_image",
       resourceId: imageId,
       projectId: id,
-      after: { enabled: body.enabled, selected_version_id: selectedVersionId, pin_policy: pinPolicy },
+      after: { enabled: body.enabled },
     });
     return row;
+  });
+
+  /** #691: platform admin sets third-party visible project set (multi-select, mutable). */
+  app.patch("/runtime-images/:id([0-9a-fA-F-]{36})/visibility", async (req, reply) => {
+    const denied = denyProjectScopedCatalog(req, reply);
+    if (denied) return denied;
+    const { id } = req.params as { id: string };
+    const body = RuntimeImageVisibilityBody.parse(req.body);
+    const [image] = await sql`SELECT id, image_key, official, visible_project_ids FROM runtime_images WHERE id = ${id}`;
+    if (!image) return reply.code(404).send({ error: "runtime image not found" });
+    if (image.official === true) {
+      return reply.code(400).send({
+        error: "官方镜像对所有项目默认可见，无需设置 visible_project_ids",
+        error_code: "RUNTIME_IMAGE_VISIBILITY_OFFICIAL",
+      });
+    }
+    const before = Array.isArray(image.visible_project_ids)
+      ? (image.visible_project_ids as unknown[]).map(String)
+      : [];
+    const next = [...new Set(body.visible_project_ids.map(String))].sort();
+    if (next.length > 0) {
+      const found = await sql`SELECT id FROM projects WHERE id = ANY(${next}::uuid[])`;
+      if (found.length !== next.length) {
+        return reply.code(400).send({
+          error: "visible_project_ids 含有不存在的项目",
+          error_code: "RUNTIME_IMAGE_VISIBILITY_INVALID_PROJECT",
+        });
+      }
+    }
+    const [saved] = await sql`
+      UPDATE runtime_images
+      SET visible_project_ids = ${next}::uuid[], updated_at = now()
+      WHERE id = ${id}
+      RETURNING *`;
+    await audit(req, {
+      action: "runtime_image.visibility_update",
+      resourceType: "runtime_image",
+      resourceId: id,
+      before: { visible_project_ids: before },
+      after: { visible_project_ids: next },
+    });
+    return saved;
   });
 }

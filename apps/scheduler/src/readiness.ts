@@ -18,8 +18,10 @@ import {
   defaultRuntimeImageKey,
   hostRuntimePlatform,
   immutableDigest,
+  isProjectRuntimeImageAvailable,
   isRuntimeImageBelowPlatformMin,
   localImageDigest,
+  PLATFORM_BASE_RUNTIME_IMAGE_KEY,
   platformMinRuntimeImage,
   readRuntimeRegistryChannel,
   runtimeImageBelowPlatformMinMessage,
@@ -89,6 +91,7 @@ export interface ReadinessRuntimeImageRow {
   source_kind: "official" | "third_party" | null;
   official: boolean | null;
   project_enabled: boolean | null;
+  visible_project_ids?: string[] | null;
   version_id: string | null;
   digest: string | null;
   resolved_ref: string | null;
@@ -779,10 +782,24 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     } else if (!input.scope.projectId && !(image.official === true && image.project_opt_in === false)) {
       unresolved = true;
       checks.push(attention("RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED", `${role.name} 的 runtime image 需要具体项目启用；请在项目作用域重新执行 real 预检。`, runtimeImagesFix(input.scope, "project"), { role: summary, runtime_image: runtimeSummary }));
-    } else if (input.scope.projectId && image.project_enabled === false) {
-      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 已在当前项目显式禁用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
-    } else if (input.scope.projectId && image.official !== true && image.project_enabled !== true) {
-      checks.push(fail("RUNTIME_IMAGE_PROJECT_NOT_ENABLED", `${role.name} 的 runtime image 尚未在当前项目启用。`, runtimeImagesFix(input.scope), { role: summary, runtime_image: runtimeSummary }));
+    } else if (input.scope.projectId && !isProjectRuntimeImageAvailable({
+      imageKey,
+      official: image.official === true,
+      projectEnabled: image.project_enabled,
+      visibleProjectIds: Array.isArray(image.visible_project_ids) ? image.visible_project_ids.map(String) : [],
+      projectId: input.scope.projectId,
+    })) {
+      const notVisible = image.official !== true && !(Array.isArray(image.visible_project_ids) && image.visible_project_ids.map(String).includes(input.scope.projectId));
+      checks.push(fail(
+        notVisible ? "RUNTIME_IMAGE_PROJECT_NOT_VISIBLE" : "RUNTIME_IMAGE_PROJECT_NOT_ENABLED",
+        notVisible
+          ? `${role.name} 的第三方 runtime image 未绑定到本项目可见范围。`
+          : image.official === true
+            ? `${role.name} 的 runtime image 已在当前项目显式排除。`
+            : `${role.name} 的 runtime image 尚未在当前项目启用。`,
+        runtimeImagesFix(input.scope),
+        { role: summary, runtime_image: runtimeSummary },
+      ));
     } else if (!image.version_id) {
       const pinState = classifyRuntimeImagePin({
         selectedVersionId: image.selected_version_id,
@@ -973,9 +990,10 @@ export async function loadReadiness(
   const selectedChannel = await readRuntimeRegistryChannel(db);
   const images = await db`
     SELECT ri.image_key, ri.id AS runtime_image_id, ri.enabled AS image_enabled, ri.project_opt_in, ri.source_kind, ri.official,
+           ri.visible_project_ids,
            pri.enabled AS project_enabled,
-           pri.selected_version_id,
-           pin.version AS selected_version,
+           NULL::uuid AS selected_version_id,
+           NULL::text AS selected_version,
            v.id AS version_id,
            v.version,
            CASE WHEN ri.official THEN v.channel_digest ELSE v.digest END AS digest,
@@ -989,8 +1007,6 @@ export async function loadReadiness(
     FROM runtime_images ri
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
-    LEFT JOIN runtime_image_versions pin
-      ON pin.id = pri.selected_version_id
     LEFT JOIN LATERAL (
       SELECT v.*, selected_ref.digest AS channel_digest,
              selected_ref.resolved_ref AS channel_resolved_ref
@@ -1000,9 +1016,14 @@ export async function loadReadiness(
       WHERE v.runtime_image_id = ri.id
         AND v.trust_status = 'trusted'
         AND (NOT ri.official OR selected_ref.id IS NOT NULL)
-        AND (pri.selected_version_id IS NULL OR v.id = pri.selected_version_id)
         AND ri.enabled = true
-        AND (CASE WHEN ri.official THEN COALESCE(pri.enabled, true) ELSE COALESCE(pri.enabled, false) END)
+        AND (
+          CASE
+            WHEN ri.image_key = ${PLATFORM_BASE_RUNTIME_IMAGE_KEY} THEN true
+            WHEN ri.official THEN COALESCE(pri.enabled, true)
+            ELSE (${projectId}::uuid = ANY(ri.visible_project_ids) AND COALESCE(pri.enabled, false))
+          END
+        )
       ORDER BY CASE WHEN v.platforms_json @> ${db.json([hostRuntimePlatform()])} THEN 0
                     WHEN v.platforms_json IS NULL OR jsonb_array_length(v.platforms_json) = 0 THEN 1 ELSE 2 END,
                v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
