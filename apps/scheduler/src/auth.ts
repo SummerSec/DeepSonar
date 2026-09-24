@@ -217,6 +217,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /runtime-image-versions/:id/status": "images:approve",
   "GET /runtime-image-versions/:id/usage": "images:read",
   "PUT /projects/:id/runtime-images/:imageId": "images:manage",
+  "PATCH /runtime-images/:id/visibility": "images:manage",
+  "PATCH /runtime-images/:id([0-9a-fA-F-]{36})/visibility": "images:manage",
   "GET /global-settings": "agents:read",
   "PATCH /global-settings": "agents:write",
   "GET /readiness": "agents:read",
