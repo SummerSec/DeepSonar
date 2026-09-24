@@ -368,7 +368,6 @@ export function ProviderAccountFlow({
         setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
         return;
       }
-      const bound = liveImpact.role_configs.count;
       const historical = liveImpact.jobs.terminal_historical.count;
       const confirmed = await confirm({
         title: `删除账号 ${credential.name}？`,
@@ -381,7 +380,7 @@ export function ProviderAccountFlow({
         tone: "danger",
       });
       if (!confirmed) return;
-      await api.deleteCredential(credential.id, { unbind: bound > 0 });
+      await api.deleteCredential(credential.id);
       if (selectedCredentialId === credential.id) setSelectedCredentialId("");
       if (editingCredentialId === credential.id) setEditingCredentialId("");
       setNotice(`已删除账号「${credential.name}」。`);
