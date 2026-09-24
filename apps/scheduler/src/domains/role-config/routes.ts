@@ -316,7 +316,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       allow_model_catalog_passthrough: false,
       context_window_tokens: cfg.context_window_tokens == null ? null : Number(cfg.context_window_tokens),
       runtime_image_key: cfg.project_id ? null : cfg.runtime_image_key ?? null,
-      credentials: [],
       config_files: files,
     };
   }

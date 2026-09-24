@@ -4,7 +4,7 @@ import { ProviderAccountFlow } from "./ProviderAccountFlow";
 
 /**
  * Provider 凭据页：仅托管账号 CRUD / 健康 / 只读引用。
- * 角色绑定与快照生效在 Agent「凭据绑定」，不在此页提交。
+ * 运行时凭据由项目授权目录解析；本页不提交角色绑定。
  */
 export function CredentialsPanel() {
   const [creds, setCreds] = useState<ProviderCredential[]>([]);

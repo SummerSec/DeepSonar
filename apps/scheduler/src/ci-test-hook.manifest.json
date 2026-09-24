@@ -54,7 +54,6 @@
     "apps/web/src/terminal-panel.test.ts",
     "apps/web/src/toml-text.test.ts",
     "packages/runtime-sandbox/src/agent-runtime-profile-adapters.test.ts",
-    "packages/runtime-sandbox/src/runtime-shared.test.ts",
-    "apps/scheduler/src/domains/provider-adapter/resolve-credential.test.ts"
+    "packages/runtime-sandbox/src/runtime-shared.test.ts"
   ]
 }

@@ -55,8 +55,9 @@ test("RoleConfig and role registry OpenAPI documents project-scope boundaries", 
   ] as const) {
     assert.match(String(paths[path]?.[method]?.description), /PROJECT_SCOPE_FORBIDDEN/);
   }
-  assert.match(String(paths["/role-configs/global"]?.get?.description), /Credential/);
-  assert.match(String(paths["/role-configs/bindable"]?.get?.description), /跨项目绑定/);
+  assert.match(String(paths["/role-configs/global"]?.get?.description), /#690/);
+  assert.match(String(paths["/role-configs/bindable"]?.get?.description), /can_bind/);
+  assert.match(String(paths["/role-configs/global"]?.get?.description), /凭据绑定/);
   const globalPut = paths["/role-configs/global/{roleId}"]?.put;
   const roleIdParam = (globalPut.parameters as Array<Record<string, any>>).find((parameter) => parameter.name === "roleId");
   assert.deepEqual(roleIdParam?.schema, { type: "string", format: "uuid" });

@@ -72,11 +72,10 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
 // ---------- 表单状态 ----------
 
 interface ConfigForm {
-  /** 绑定域字段：本编辑器只读回传，换绑走凭据绑定页。 */
+  /** RoleConfig 职责面；运行时 CLI/Provider 由项目授权与 Hub 组合。 */
   agent_cli: string;
   dsh_task_mode: "standard" | "ptc";
   model: string;
-  credential_id: string;
   env_keys: string[];
   env_vars: Record<string, string>;
   config_files: Array<{ path: string; content: string }>;
@@ -94,7 +93,6 @@ const EMPTY: ConfigForm = {
   agent_cli: "claude-code",
   dsh_task_mode: "standard",
   model: "",
-  credential_id: "",
   env_keys: [],
   env_vars: {},
   config_files: [],
@@ -115,7 +113,6 @@ function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
     agent_cli: cfg.agent_cli,
     dsh_task_mode: cfg.dsh_task_mode ?? "standard",
     model: cfg.model ?? "",
-    credential_id: cfg.credentials.find((c) => c.purpose === "llm")?.credential_id ?? "",
     env_keys: cfg.env_keys ?? [],
     env_vars: cfg.env_vars_json ?? {},
     config_files: (cfg.config_files ?? []).map((file) => ({ path: file.path, content: file.content })),
@@ -334,7 +331,7 @@ export function RoleConfigEditor({
 
   const submit = () => {
     try {
-      // 凭据绑定页管理 CLI / 凭据；这里编辑上下文预算覆盖并原样保留其余字段。
+      // RoleConfig 只保存职责/指令/工具；运行时凭据由项目授权解析。
       const body: RoleConfigInput = {
         agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
         dsh_task_mode: form.dsh_task_mode,
@@ -390,7 +387,7 @@ export function RoleConfigEditor({
                   </span>
                 )}
                 {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}。` : ""}
-                运行时凭据由项目授权 Provider 解析，不再绑定到角色。
+                运行时凭据由项目授权 Provider 解析。
               </HelpTip>
             </strong>
           </div>

@@ -191,9 +191,10 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 ambiguous。模型请求统一改写到 Gateway，
 长期密钥不进入 snapshot、workspace、运行清单或 evidence。空 content / 零 usage 视为协议错误。
 
-项目 `.pi` 目录不会自动加载。`--no-extensions` 始终保留。RoleConfig `pi_extensions`
-只接受 `packages/shared-types` 注册表中的扩展 id（当前 pilot：`pi-web-access`）；Job
-创建时冻结包名 / 版本 / integrity / 镜像入口。Executor 把平台生成的 stub 写到
+项目 `.pi` 目录不会自动加载。`--no-extensions` 始终保留。Pi 扩展由 Hub 角色能力组合提案
+`pi_extension_ids`（#690；不再是 `RoleConfig.pi_extensions`），只接受
+`packages/shared-types` 注册表中的已注册扩展 id（当前 pilot：`pi-web-access`）；Job
+创建时 Scheduler 校验 trust/CLI/镜像兼容并把 selector/digest 冻结进快照。Executor 把平台生成的 stub 写到
 `/workspace/.deepsonar-home/.pi/agent/extensions/<id>.ts`，适配器仅对此外前缀追加 `-e`。
 未注册 id、用户上传的扩展源码、以及镜像目录外的 `-e` 路径一律拒绝。出网扩展服从任务
 `allow_egress`；本路径不向快照或工作区写入长期密钥。已注册扩展预置到兼容镜像的

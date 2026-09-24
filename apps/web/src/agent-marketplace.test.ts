@@ -11,13 +11,21 @@ test("agent pack parser accepts a credential-free v1 package", () => {
     description: "独立复核模板",
     publisher: "local",
     version: "1.0.0",
-    config: { agent_cli: "pi", env_vars: {}, credentials: [], config_files: [] },
+    config: { agent_cli: "pi", env_vars: {}, config_files: [] },
   }));
   assert.equal(pack.name, "community_review");
   assert.equal(pack.config.agent_cli, "pi");
-  assert.deepEqual(pack.config.credentials, []);
+  assert.equal("credentials" in pack.config, false);
   assert.equal(pack.config.dsh_task_mode, "standard");
   assert.equal("pi_extensions" in pack.config, false);
+});
+
+test("agent pack rejects credentials field (#690)", () => {
+  const base = {
+    schema: AGENT_PACK_SCHEMA, name: "cred", title: "Cred", description: "x", publisher: "local", version: "1.0.0",
+  };
+  assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "pi", credentials: [] } })));
+  assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { agent_cli: "pi", credentials: [{ credential_id: "11111111-1111-4111-8111-111111111111", purpose: "llm" }] } })));
 });
 
 test("agent pack rejects pi_extensions capability field (#690)", () => {
@@ -69,7 +77,7 @@ test("agent pack parser rejects credentials and secret-like environment keys", (
     publisher: "local",
     version: "1.0.0",
   };
-  assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { credentials: [{ credential_id: "x", purpose: "model" }] } })), /不得携带凭据/);
+  assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { credentials: [{ credential_id: "x", purpose: "model" }] } })), /不得携带 credentials/);
   assert.throws(() => parseAgentPack(JSON.stringify({ ...base, config: { env_vars: { API_TOKEN: "secret" } } })), /长期密钥/);
 });
 

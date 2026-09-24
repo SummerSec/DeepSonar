@@ -959,7 +959,6 @@ export async function loadReadiness(
     ? new Set((await rolesForProject(db, projectId)).map((role) => role.name))
     : null;
   const roles = allRoleRows.filter((role) => role.kind === "hub" || !selectedRoleNames || selectedRoleNames.has(role.name));
-  const configIds = roles.map((role) => role.project_config_id ?? role.global_config_id).filter((id): id is string => Boolean(id));
   // #690: project-authorized Provider credentials (no role_credentials bindings).
   const pool = await db`
     SELECT c.id AS credential_id, c.name, c.kind, c.provider, c.project_id,

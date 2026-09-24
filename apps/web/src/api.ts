@@ -1552,14 +1552,11 @@ export type RoleConfigInput = {
   /** Project-only CPU/memory/PID overrides; blank fields inherit server defaults. */
   sandbox_limits?: SandboxLimitsOverride | null;
   runtime_knobs?: RuntimeKnobOverride | null;
-  /** Omit to preserve existing RoleConfig bindings; explicit [] clears (#631). */
-  credentials?: { credential_id: string; purpose: string }[];
   /** Provider 配置文件：路径按 CLI 固定白名单（首期每角色最多 1 个） */
   config_files: { path: string; content: string }[];
-  /** 仅 pi：已注册扩展 id，Job 创建时冻结。 */
 };
 
-/** RoleConfig 视图 = role_configs 行 + Credential 绑定 + 配置文件（含 sha256） */
+/** RoleConfig 视图 = role_configs 行 + 配置文件（含 sha256）；#690 不再含凭据绑定 */
 export interface RoleConfigView {
   id: string;
   role_id: string;
@@ -1584,14 +1581,6 @@ export interface RoleConfigView {
   version: number;
   created_at: string;
   updated_at: string;
-  credentials: {
-    credential_id: string;
-    purpose: string;
-    name: string;
-    provider: string;
-    status: string;
-    project_id: string | null;
-  }[];
   config_files: { path: string; content: string; content_sha256: string }[];
 }
 
@@ -2804,10 +2793,10 @@ export const api = {
     send<ProviderCredential>("POST", `/credentials/${id}/rotate`, { secret }),
   setCredentialStatus: (id: string, status: "active" | "disabled" | "rotation_required") =>
     send<ProviderCredential>("POST", `/credentials/${id}/status`, { status }),
-  deleteCredential: (id: string, opts?: { unbind?: boolean }) =>
+  deleteCredential: (id: string) =>
     send<{ ok: boolean; id: string; unbound_role_config_count: number; revoked_job_token_count: number }>(
       "DELETE",
-      `/credentials/${id}${opts?.unbind ? "?unbind=true" : ""}`,
+      `/credentials/${id}`,
     ),
   testCredential: (id: string) =>
     send<{ ok: boolean; detail: string; category?: string; fetched_at?: string; model_catalog?: string[]; model_descriptors?: ModelCapabilityDescriptor[] }>("POST", `/credentials/${id}/test`),
