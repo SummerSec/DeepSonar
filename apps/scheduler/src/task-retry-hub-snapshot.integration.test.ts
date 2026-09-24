@@ -85,17 +85,21 @@ if (!testDatabaseUrl) {
         ) VALUES (
           ${credentialId}, 'hub stale credential', 'llm_provider', 'openai', null,
           ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
-          ${credentialId.slice(0, 16)}, 'hubs', 'active', 'pi',
-          ${sql.json({ provider: "openai", models: [{ id: "gpt-5.6" }] })}
+          ${credentialId.slice(0, 16)}, 'hubs', 'active', 'claude-code',
+          ${sql.json({ env: { ANTHROPIC_MODEL: "gpt-5.6" } })}
         )`;
-      // #690: no role_credentials; unique active credential alone makes Hub snapshot unresolvable via CLI/provider mismatch.
+      // #690/#707: no role_credentials; unique active credential with claude-code×openai
+      // fails at resolve (protocol_incompatible) → Hub snapshot unresolvable.
 
       const wake = await app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` });
       assert.equal(wake.statusCode, 409, wake.payload);
       assert.equal(wake.json().error_code, "SNAPSHOT_STALE");
       assert.equal(wake.json().next_action, "fix-current-configuration");
       assert.deepEqual(wake.json().stale_fields, ["current_snapshot_unresolvable"]);
-      assert.match(String(wake.json().resolution_error), /agent_cli claude-code 仅兼容 anthropic，不能使用 provider openai/);
+      assert.match(
+        String(wake.json().resolution_error),
+        /协议不兼容|claude-code 仅兼容 anthropic|不能使用 provider openai/,
+      );
       const [wakeJob] = await sql`SELECT count(*)::int AS count FROM jobs WHERE canvas_id = ${canvasId}`;
       assert.equal(wakeJob.count, 1, "force-wake must not insert a Hub Job when the snapshot is unresolvable");
 
