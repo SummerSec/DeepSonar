@@ -2,6 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { sql } from "../../db.js";
 import { CursorError, pageLimit } from "../../pagination.js";
 import { subscribeThenCatchUp, processStreamItemKey } from "../../process-stream-live.js";
+import {
+  STREAM_WS_UNAVAILABLE_CODE,
+  STREAM_WS_UNAVAILABLE_REASON,
+  shouldCloseStreamWsForVisibility,
+} from "../../process-stream-policy.js";
 import { isUuid } from "../../project-scope.js";
 import { streamCursor, STREAM_SUBSCRIBER_QUEUE_MAX } from "../../stream-bus.js";
 import { consumeWsTicket } from "../../ws-tickets.js";
@@ -138,6 +143,12 @@ export function registerStreamRoutes(app: FastifyInstance): void {
       for (const item of opened.snapshot.items) seen.add(processStreamItemKey(item));
       enqueue(opened.snapshot);
       after = opened.snapshot.next_cursor ?? after;
+      // Non-owner / missing local BLOB_DIR: snapshot already carries
+      // visibility=unavailable. Do not hang on an empty process-local bus.
+      if (shouldCloseStreamWsForVisibility(opened.snapshot.visibility)) {
+        closeStream(STREAM_WS_UNAVAILABLE_CODE, STREAM_WS_UNAVAILABLE_REASON);
+        return;
+      }
       opened.startLive(emitLive);
     } catch (error) {
       const code = error instanceof CursorError ? error.code : "INVALID_CURSOR";

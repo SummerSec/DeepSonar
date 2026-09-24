@@ -1297,7 +1297,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}/evidence/stream",
     summary: "读取已确认的过程流",
     description:
-      "只读本机 BLOB_DIR 上的 evidence NDJSON/manifest。信封为 items；source 恒为 evidence。本副本看不到文件时 visibility=unavailable，不把空页当成零丢失。未落盘窗口标 unpersisted。stream-bus 不是补读源，也不从过程流重放控制副作用。",
+      "只读本机 BLOB_DIR 上的 evidence NDJSON/manifest。信封为 items；source 恒为 evidence。持久化确认点为 appendNormalized 落盘后；游标/去重键为 attempt_id:seq。本副本看不到文件时 visibility=unavailable，不把空页当成零丢失。未落盘窗口标 unpersisted。WS /ws 在 unavailable 时以 4415 STREAM_UNAVAILABLE 关闭。stream-bus 只作非权威投递，不是补读源，也不从过程流重放控制副作用。",
     scope: "tasks:read",
     tags: ["Jobs"],
   },

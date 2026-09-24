@@ -33,7 +33,6 @@
     "apps/scheduler/src/job-capability-revocation.test.ts",
     "apps/scheduler/src/leftover-job-type-aliases.test.ts",
     "apps/scheduler/src/pagination.test.ts",
-    "apps/scheduler/src/query-planes.test.ts",
     "apps/scheduler/src/role-config-project-scope.integration.test.ts",
     "apps/scheduler/src/runtime-registry-channel.test.ts",
     "apps/scheduler/src/verify-gate-590.test.ts",

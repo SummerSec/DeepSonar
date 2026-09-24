@@ -73,7 +73,7 @@
 | [#390](https://github.com/SummerSec/DeepSonar/issues/390) | DSH 方言归 runtime-sandbox adapter | `docs/AGENT_CLI_RUNTIME_ADAPTERS.md` |
 | [#386](https://github.com/SummerSec/DeepSonar/issues/386) | 删除无决策别名；保留项写明权威来源 | `DESIGN.md` §6.0 |
 | [#387](https://github.com/SummerSec/DeepSonar/issues/387) | **保留** Fact 证据信任态（与 Finding Verify 分责） | `DESIGN.md` §4.3 |
-| [#388](https://github.com/SummerSec/DeepSonar/issues/388) | events / evidence / bus 三职责；bus 非权威 | `DESIGN.md` §8 |
+| [#388](https://github.com/SummerSec/DeepSonar/issues/388) | events / evidence / bus 三职责；拓扑可恢复性；bus 非权威 | `DESIGN.md` §9 |
 | [#389](https://github.com/SummerSec/DeepSonar/issues/389) | 解码三类契约与钉死版本夹具；#320/#321 不是完整解码 | `docs/AGENT_CLI_RUNTIME_ADAPTERS.md` |
 
 ---
@@ -92,7 +92,7 @@
 
 | 主题 | 事实 |
 |------|------|
-| #38 / #388 实时流 | **已关**；`ws-ticket` + 本机 evidence 补读。bus 只作非权威投递，见 DESIGN §8 |
+| #38 / #388 实时流 | **#388 收口**：`ws-ticket` + evidence 补读 + `unpersisted`/`visibility`/`4415`；拓扑结论见 DESIGN §9；bus 非权威 |
 | #39 画布 soft-load / delta | **已关**；画布 soft-load / delta 已落地 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
