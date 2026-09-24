@@ -389,10 +389,11 @@ test("reasoning is configured on Provider accounts, not RoleConfig", () => {
   assert.doesNotMatch(roleEditor, /模型思考强度/);
 });
 
-test("项目角色镜像只能由项目镜像缺省管理", () => {
+test("项目 RoleConfig 镜像只读跟随平台目录缺省 (#691)", () => {
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
   assert.match(binding, /roleConfig\.project_id \?/);
-  assert.match(binding, /由项目镜像缺省决定/);
+  assert.match(binding, /由平台目录缺省决定/);
+  assert.match(binding, /项目 RoleConfig 的镜像由设置中的角色缺省决定/);
   assert.match(editor, /runtime_image_key: projectId \? null : form\.runtime_image_key\.trim\(\) \|\| null/);
 });
 
