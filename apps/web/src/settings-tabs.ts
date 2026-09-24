@@ -4,7 +4,6 @@ import { canAccessAnyScope } from "./permissions";
 export type SettingsTab =
   | "rules"
   | "roles"
-  | "bindings"
   | "sources"
   | "tokens"
   | "credentials"
@@ -16,10 +15,10 @@ export type GlobalSettingsSection = "agents" | "modules" | "access" | "credentia
 
 export const PROJECT_TAB_KEYS: readonly SettingsTab[] = ["rules", "roles", "assets"];
 export const GLOBAL_TAB_KEYS: readonly SettingsTab[] = [
-  "roles", "bindings", "sources", "rules", "assets", "account", "users", "transfer", "credentials", "tokens",
+  "roles", "sources", "rules", "assets", "account", "users", "transfer", "credentials", "tokens",
 ];
 export const GLOBAL_SECTION_TABS: Record<GlobalSettingsSection, readonly SettingsTab[]> = {
-  agents: ["roles", "bindings"],
+  agents: ["roles"],
   modules: ["sources"],
   access: ["account", "users", "tokens"],
   credentials: ["credentials"],
@@ -27,7 +26,6 @@ export const GLOBAL_SECTION_TABS: Record<GlobalSettingsSection, readonly Setting
 };
 const GLOBAL_TAB_SCOPES: Partial<Record<SettingsTab, readonly string[]>> = {
   roles: ["agents:read"],
-  bindings: ["agents:read"],
   sources: ["skills:read"],
   rules: ["agents:read"],
   account: ["projects:read"],
@@ -57,9 +55,9 @@ export function settingsSectionDataNeeds(projectId: string | null, section: Glob
   return {
     agent: Boolean(projectId || section === "agents"),
     modules: Boolean(projectId || section === "agents" || section === "modules"),
-    roleCredentialBindings: Boolean(projectId || section === "agents"),
+    roleCredentialBindings: false,
   };
 }
 
-export const ROLE_BINDING_HREF = "/agents?tab=bindings";
+export const ROLE_BINDING_HREF = "/settings/credentials";
 export const CREDENTIAL_ACCOUNT_HREF = "/settings/credentials";

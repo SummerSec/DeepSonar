@@ -78,7 +78,7 @@ DeepSonar 的能力、Skill、工具和运行时组件都应保持可插拔。�
 
 所有设计以当前目标契约为唯一受支持形态，不为旧版本或旧设计保留向后兼容。废弃契约应直接从 schema、API、UI 和运行时移除，不保留双读双写、fallback、shim、legacy 模式、旧配置转换或兼容窗口。旧配置不符合新契约时必须 fail closed，并要求按新契约重新配置；不得自动迁移旧配置以延续旧语义，也不得静默沿用旧行为。
 
-这条规则不要求改写已创建 Job 的冻结快照、Evidence、审计记录或历史结果；这些是不可变历史真相，不是新运行时的兼容输入。已有代码仍读取旧契约时，应如实标注为待删除的实现债务，不能据此把它视为受支持设计。当前 Provider 账号到 RoleConfig 的 `role_credentials` 绑定，以及 `RoleConfig.pi_extensions` 字段都按 #690 清理；Pi 扩展应归入角色能力组合。
+这条规则不要求改写已创建 Job 的冻结快照、Evidence、审计记录或历史结果；这些是不可变历史真相，不是新运行时的兼容输入。已有代码仍读取旧契约时，应如实标注为待删除的实现债务，不能据此把它视为受支持设计。Provider 账号到 RoleConfig 的 `role_credentials` 绑定与 `RoleConfig.pi_extensions` 已按 #690 删除；Pi 扩展归入角色能力组合 / Hub `pi_extension_ids`。
 
 ### 内核拥有的边界
 
@@ -156,7 +156,7 @@ pending → claimed → provisioning → running
 
 ## 数据库与迁移纪律
 
-- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v55）。
+- `database/schema.sql` 是唯一 schema 基线；`apps/scheduler/src/schema-version.ts` 必须与之同步（当前主线 v56）。
 - 空库启动时套用基线；非空库版本或结构不匹配时 fail closed。没有增量 ALTER 链。
 - 改表只能修改 schema 基线、bump `SCHEMA_VERSION`，再运行 `pnpm db:rebuild -- --plan` / `--apply` 并验证备份和列交集回填。
 - 稳定状态、幂等键、外键和权限骨架进定列；开放内容进 JSONB。类型字段使用字符串，不用 Postgres enum 锁死演进。

@@ -744,8 +744,8 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     for (const check of result.checks) {
       if (!check.fix) continue;
       if (bindingRepairCodes.has(check.code)) {
-        assert.equal(check.fix.href, "/agents?tab=bindings", `${check.code} repair href`);
-        assert.equal(check.fix.target, "role-credential-binding", `${check.code} repair target`);
+        assert.equal(check.fix.href, "/settings/credentials", `${check.code} repair href`);
+        assert.equal(check.fix.target, "credentials", `${check.code} repair target`);
       }
       if (accountRepairCodes.has(check.code)) {
         assert.equal(check.fix.href, "/settings/credentials", `${check.code} repair href`);

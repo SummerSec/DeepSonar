@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools, validatePiExtensionIds } from "@deepsonar/shared-types";
+import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
-import { planCredentialAgentCliFollow, projectCredentialProvider } from "../../credentials.js";
-import { credentialBindingDeprecatedWarning, credentialBindingMissingWarning } from "../provider-adapter/index.js";
 import { isUuid } from "../../project-scope.js";
 import {
   CONFIG_FILE_MAX_BYTES,
@@ -88,64 +86,53 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     /** Project-only numeric sandbox resource overrides; capability flags stay server-owned. */
     sandbox_limits: z.unknown().optional(),
     runtime_knobs: z.unknown().optional(),
-    /**
-     * @deprecated #632 — prefer project Agent/Provider allowlist `default_credential_id`
-     * (platform-held credential resources). Omit = preserve existing role_credentials;
-     * explicit [] clears (#631). Still honored at runtime for compatibility.
-     */
-    credentials: z.array(z.object({ credential_id: z.string().uuid(), purpose: z.string().min(1).max(50) })).optional()
-      .describe("DEPRECATED (#632): prefer project allowlist default_credential_id; RoleConfig.credentials binding is legacy."),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
-    pi_extensions: z.array(z.string()).default([]),
-  });
+  }).strict(); // #690: reject credentials / pi_extensions and any unknown RoleConfig fields
 
   async function validateRoleConfigBody(
     body: z.infer<typeof RoleConfigPutBody>,
     projectId: string | null,
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
-  ): Promise<{ error: string | null; error_code?: string; missingCredentialIds: string[] }> {
+  ): Promise<{ error: string | null; error_code?: string }> {
     if (projectId && body.runtime_image_key != null) {
-      return { error: "项目 RoleConfig 不接受 runtime_image_key；运行镜像由平台目录与 Job 快照决定", missingCredentialIds: [] };
+      return { error: "项目 RoleConfig 不接受 runtime_image_key；运行镜像由平台目录与 Job 快照决定" };
     }
     let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
     try {
       sandboxLimits = parseSandboxLimitsOverride(body.sandbox_limits);
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error), missingCredentialIds: [] };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
     if (!projectId && Object.keys(sandboxLimits).length > 0) {
-      return { error: "sandbox_limits numeric overrides are only allowed on project RoleConfigs", missingCredentialIds: [] };
+      return { error: "sandbox_limits numeric overrides are only allowed on project RoleConfigs" };
     }
     // #697 P0: project cannot raise any dimension above platform env defaults.
     if (projectId && sandboxLimitsExceedPlatform(sandboxLimits, config.runtime.sandboxLimits)) {
       return {
         error: "sandbox_limits 任一维度不得超过平台默认（DEEPSONAR_SANDBOX_*）；更高配额请调平台 env / 镜像地板",
         error_code: SANDBOX_LIMITS_EXCEED_PLATFORM,
-        missingCredentialIds: [],
       };
     }
     const knobsErr = validateRuntimeKnobOverride(body.runtime_knobs);
-    if (knobsErr) return { error: knobsErr, missingCredentialIds: [] };
+    if (knobsErr) return { error: knobsErr };
     const envErr = validateEnvVars(body.env_vars);
     try {
       parseContextWindowTokens(body.context_window_tokens);
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error), missingCredentialIds: [] };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
-    if (envErr) return { error: envErr, missingCredentialIds: [] };
+    if (envErr) return { error: envErr };
     for (const key of body.env_keys) {
-      if (!config.runtime.isEnvKeyAllowed(key)) return { error: `env_key 不在白名单: ${key}`, missingCredentialIds: [] };
+      if (!config.runtime.isEnvKeyAllowed(key)) return { error: `env_key 不在白名单: ${key}` };
     }
     for (const selector of body.modules) {
       try {
         parseModuleSelector(selector);
       } catch (error) {
-        return { error: `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}`, missingCredentialIds: [] };
+        return { error: `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}` };
       }
     }
-    const piExtErr = validatePiExtensionIds(body.pi_extensions, body.agent_cli);
-    if (piExtErr) return { error: piExtErr, missingCredentialIds: [] };
     if (!projectId && body.runtime_image_key) {
       const [image] = await db`
         SELECT ri.id, ri.official, ri.project_opt_in,
@@ -154,77 +141,41 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         FROM runtime_images ri
         LEFT JOIN project_runtime_images pri ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
         WHERE ri.image_key = ${body.runtime_image_key} AND ri.enabled = true`;
-      if (!image) return { error: `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}`, missingCredentialIds: [] };
+      if (!image) return { error: `runtime_image_key 不存在或已禁用: ${body.runtime_image_key}` };
       // 这里只校验全局 RoleConfig 的镜像绑定；项目 RoleConfig 已在上方拒绝该字段。
       const fakeOfficialCatalogImage = config.runtime.agentMode === "fake" && image.official;
-      if (!image.has_trusted && !fakeOfficialCatalogImage) return { error: `runtime_image_key 没有可信版本: ${body.runtime_image_key}`, missingCredentialIds: [] };
+      if (!image.has_trusted && !fakeOfficialCatalogImage) return { error: `runtime_image_key 没有可信版本: ${body.runtime_image_key}` };
       if (!image.official && (!projectId || image.project_enabled !== true)) {
-        return { error: `第三方镜像必须先在目标项目显式启用: ${body.runtime_image_key}`, missingCredentialIds: [] };
+        return { error: `第三方镜像必须先在目标项目显式启用: ${body.runtime_image_key}` };
       }
     }
     const allowedTools = new Set<string>(allowedPlatformTools(role.name, role.kind));
     for (const tool of Object.keys(body.platform_tools)) {
-      if (!allowedTools.has(tool)) return { error: `角色 ${role.name} 不支持平台工具: ${tool}`, missingCredentialIds: [] };
+      if (!allowedTools.has(tool)) return { error: `角色 ${role.name} 不支持平台工具: ${tool}` };
     }
     for (const tool of requiredPlatformTools(role.kind)) {
-      if (body.platform_tools[tool] === false) return { error: `终态必需平台工具不可关闭: ${tool}`, missingCredentialIds: [] };
+      if (body.platform_tools[tool] === false) return { error: `终态必需平台工具不可关闭: ${tool}` };
     }
-    const missingCredentialIds: string[] = [];
-    if (body.credentials !== undefined) {
-      const kept: NonNullable<z.infer<typeof RoleConfigPutBody>["credentials"]> = [];
-      for (const c of body.credentials) {
-        // RoleConfig PUTs run under the same advisory lock as Credential
-        // provider/project/metadata mutations.  Lock each row while reading so
-        // a concurrent Credential PATCH cannot invalidate this validation.
-        const [cred] = await db`
-          SELECT id, project_id, status, provider, public_metadata_json,
-                 agent_cli, settings_config_json
-          FROM credentials WHERE id = ${c.credential_id} FOR UPDATE`;
-        // #679: missing credential ids are dropped with upsert_warnings instead of
-        // 400-blocking unrelated RoleConfig field updates (modules/skills/…).
-        if (!cred) {
-          missingCredentialIds.push(c.credential_id);
-          continue;
-        }
-        if (projectId && cred.project_id && cred.project_id !== projectId) {
-          return { error: `Credential ${c.credential_id} 属于其他项目，不能绑定`, missingCredentialIds: [] };
-        }
-        if (!projectId && cred.project_id) {
-          return { error: "全局 RoleConfig 只能绑定全局 Credential", missingCredentialIds: [] };
-        }
-        if (c.purpose === "llm") {
-          const plan = planCredentialAgentCliFollow({
-            roleAgentCli: body.agent_cli,
-            credentialAgentCli: cred.agent_cli as string | null,
-            provider: String(cred.provider ?? ""),
-          });
-          if (plan.action === "reject") {
-            return { error: plan.error, missingCredentialIds: [] };
-          }
-        }
-        kept.push(c);
-      }
-      body.credentials = kept;
-    }
+    // #690: RoleConfig no longer accepts credentials / pi_extensions bindings.
     if (body.config_files.length > CONFIG_FILE_MAX_COUNT) {
-      return { error: `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）`, missingCredentialIds };
+      return { error: `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）` };
     }
     let totalBytes = 0;
     for (const f of body.config_files) {
       const pathErr = validateConfigFilePath(body.agent_cli, f.path);
-      if (pathErr) return { error: `配置文件 ${f.path}: ${pathErr}`, missingCredentialIds };
+      if (pathErr) return { error: `配置文件 ${f.path}: ${pathErr}` };
       const bytes = Buffer.byteLength(f.content, "utf8");
       if (bytes > CONFIG_FILE_MAX_BYTES) {
-        return { error: `配置文件 ${f.path} 超过单文件大小限制`, missingCredentialIds };
+        return { error: `配置文件 ${f.path} 超过单文件大小限制` };
       }
       totalBytes += bytes;
       const secretHit = scanConfigContent(f.content);
       if (secretHit) {
-        return { error: `配置文件 ${f.path} 命中密钥特征（${secretHit}），请改用 Credential`, missingCredentialIds };
+        return { error: `配置文件 ${f.path} 命中密钥特征（${secretHit}），请改用 Credential` };
       }
     }
-    if (totalBytes > CONFIG_FILE_MAX_TOTAL) return { error: `配置文件总大小超限`, missingCredentialIds };
-    return { error: null, missingCredentialIds };
+    if (totalBytes > CONFIG_FILE_MAX_TOTAL) return { error: `配置文件总大小超限` };
+    return { error: null };
   }
 
   async function upsertRoleConfigInTx(
@@ -234,7 +185,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     body: z.infer<typeof RoleConfigPutBody>,
   ): Promise<{
     configId: string;
-    binding_diff: { credentials: "preserved" | "replaced" | "cleared" };
     dropped_fields: Array<{ field: string; reason: string }>;
     before_allow_model_catalog_passthrough: boolean;
   }> {
@@ -279,7 +229,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       platform_tools_json: body.platform_tools as never,
       sandbox_limits_json: parseSandboxLimitsOverride(body.sandbox_limits) as never,
       runtime_knobs_json: parseRuntimeKnobOverride(body.runtime_knobs) as never,
-      pi_extensions_json: body.pi_extensions as never,
       instructions_markdown: body.instructions_markdown ?? null,
       runtime_image_key: projectId ? null : body.runtime_image_key ?? null,
     };
@@ -292,18 +241,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     } else {
       const [ins] = await tx`INSERT INTO role_configs ${tx(row as never)} RETURNING id`;
       configId = ins.id as string;
-    }
-    let binding_diff: { credentials: "preserved" | "replaced" | "cleared" };
-    if (body.credentials === undefined) {
-      binding_diff = { credentials: "preserved" };
-    } else {
-      await tx`DELETE FROM role_credentials WHERE role_config_id = ${configId}`;
-      for (const c of body.credentials) {
-        await tx`
-          INSERT INTO role_credentials ${tx({ role_config_id: configId, credential_id: c.credential_id, purpose: c.purpose })}
-          ON CONFLICT DO NOTHING`;
-      }
-      binding_diff = { credentials: body.credentials.length === 0 ? "cleared" : "replaced" };
     }
     await tx`DELETE FROM role_config_files WHERE role_config_id = ${configId}`;
     for (const f of body.config_files) {
@@ -319,7 +256,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     }
     return {
       configId,
-      binding_diff,
       dropped_fields,
       before_allow_model_catalog_passthrough: existing?.allow_model_catalog_passthrough === true,
     };
@@ -338,10 +274,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
   ): Promise<
     | {
       configId: string;
-      binding_diff: { credentials: "preserved" | "replaced" | "cleared" };
       dropped_fields: Array<{ field: string; reason: string }>;
       before_allow_model_catalog_passthrough: boolean;
-      missing_credential_ids: string[];
     }
     | { statusCode: number; error: string; error_code?: string }
   > {
@@ -362,32 +296,17 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
           ...(validation.error_code ? { error_code: validation.error_code } : {}),
         };
       }
-      const upserted = await upsertRoleConfigInTx(tx, roleId, projectId, body);
-      return {
-        ...upserted,
-        missing_credential_ids: validation.missingCredentialIds,
-      };
+      return await upsertRoleConfigInTx(tx, roleId, projectId, body);
     });
   }
 
-  /**
-   * Return a RoleConfig with Credential bindings projected for the caller's
-   * project.  The RoleConfig row itself is only reached through an endpoint
-   * whose scope has already been checked, but legacy/malformed bindings can
-   * still point at a Credential owned by another project.  Never expose that
-   * binding (or its project/name/provider/status metadata) to a project token.
-   */
+  /** Return a RoleConfig view. #690: no credential bindings / pi_extensions on RoleConfig. */
   async function roleConfigView(
     configId: string,
-    actorProjectId: string | null = null,
+    _actorProjectId: string | null = null,
   ): Promise<Record<string, unknown> | null> {
     const [cfg] = await sql`SELECT * FROM role_configs WHERE id = ${configId}`;
     if (!cfg) return null;
-    const creds = await sql`
-      SELECT rc.credential_id, rc.purpose, c.name, c.kind, c.provider, c.status, c.project_id
-      FROM role_credentials rc JOIN credentials c ON c.id = rc.credential_id
-      WHERE rc.role_config_id = ${configId}
-        AND (${actorProjectId}::uuid IS NULL OR c.project_id IS NULL OR c.project_id = ${actorProjectId})`;
     const files = await sql`
       SELECT path, content, content_sha256 FROM role_config_files
       WHERE role_config_id = ${configId} ORDER BY path`;
@@ -397,10 +316,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       allow_model_catalog_passthrough: false,
       context_window_tokens: cfg.context_window_tokens == null ? null : Number(cfg.context_window_tokens),
       runtime_image_key: cfg.project_id ? null : cfg.runtime_image_key ?? null,
-      credentials: creds.map((credential) => ({
-        ...credential,
-        ...projectCredentialProvider(credential.kind ?? "llm_provider", credential.provider),
-      })),
       config_files: files,
     };
   }
@@ -408,45 +323,14 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   function buildRoleConfigUpsertWarnings(input: {
     dropped_fields: Array<{ field: string; reason: string }>;
-    credentialsProvided: boolean;
-    credentialsCount: number;
-    missingCredentialIds: readonly string[];
   }) {
-    const upsert_warnings = [
-      ...(input.dropped_fields.length > 0
-        ? [{
-          category: "model_correctable" as const,
-          code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
-          field: "model",
-          message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
-        }]
-        : []),
-      ...((() => {
-        if (!input.credentialsProvided) return [];
-        const repair = credentialBindingDeprecatedWarning({ bindingCount: input.credentialsCount });
-        return [{
-          category: "model_correctable" as const,
-          code: "credential_binding_deprecated" as const,
-          field: "credentials",
-          message: repair.message,
-          repair,
-        }];
-      })()),
-      ...((() => {
-        if (input.missingCredentialIds.length === 0) return [];
-        const repair = credentialBindingMissingWarning({
-          missingCredentialIds: input.missingCredentialIds,
-        });
-        return [{
-          category: "model_correctable" as const,
-          code: "credential_binding_missing" as const,
-          field: "credentials",
-          message: repair.message,
-          repair,
-        }];
-      })()),
-    ];
-    return upsert_warnings;
+    if (input.dropped_fields.length === 0) return [];
+    return [{
+      category: "model_correctable" as const,
+      code: "ROLE_CONFIG_MODEL_DROPPED_INHERIT_GLOBAL",
+      field: "model",
+      message: "项目镜像策略 inherit_global（或非 project_managed）时 RoleConfig.model 不会落库",
+    }];
   }
 
   async function auditRoleConfigPassthroughEnable(
@@ -497,7 +381,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   /** Unified binding picker for the Provider account flow. It intentionally
    * returns only RoleConfig identity/health metadata, never secret material. */
-  /** Lightweight CLI update for Provider bind UI (does not rewrite credentials/files). */
+  /** Lightweight CLI update (does not rewrite config files). */
   app.patch("/role-configs/:id/agent-cli", async (req, reply) => {
     const { id } = req.params as { id: string };
     if (rejectUnlessUuid(reply, id, INVALID_ROLE_CONFIG_ID)) return;
@@ -523,23 +407,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const patch = await sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
-      const [binding] = await tx`
-        SELECT c.id, c.provider, c.kind, c.agent_cli
-        FROM role_credentials rcb
-        JOIN credentials c ON c.id = rcb.credential_id
-        WHERE rcb.role_config_id = ${id} AND rcb.purpose = 'llm'
-        LIMIT 1
-        FOR UPDATE OF c`;
-      if (binding) {
-        const plan = planCredentialAgentCliFollow({
-          roleAgentCli: body.agent_cli,
-          credentialAgentCli: binding.agent_cli as string | null,
-          provider: String(binding.provider ?? ""),
-        });
-        if (plan.action === "reject") {
-          return { error: plan.error };
-        }
-      }
       const [next] = await tx`
         UPDATE role_configs
         SET agent_cli = ${body.agent_cli}, version = version + 1, updated_at = now()
@@ -547,9 +414,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         RETURNING id, agent_cli, version, project_id, role_id`;
       return { row: next };
     });
-    if ("error" in patch) {
-      return reply.code(409).send({ error: patch.error, error_code: "CREDENTIAL_CLI_INCOMPATIBLE" });
-    }
     await audit(req, {
       action: "role_config.agent_cli",
       resourceType: "role_config",
@@ -650,23 +514,10 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
              rc.project_id, p.name AS project_name, p.config_json AS project_config_json,
              rc.agent_cli, rc.dsh_task_mode, rc.model,
              rc.context_window_tokens, rc.version,
-             CASE WHEN rc.project_id IS NULL THEN rc.runtime_image_key ELSE NULL END AS runtime_image_key,
-             c.id AS credential_id, c.name AS credential_name, c.kind AS credential_kind,
-             c.provider AS credential_provider, c.status AS credential_status,
-             c.project_id AS credential_project_id, cp.name AS credential_project_name
+             CASE WHEN rc.project_id IS NULL THEN rc.runtime_image_key ELSE NULL END AS runtime_image_key
       FROM role_configs rc
       JOIN agent_roles r ON r.id = rc.role_id
       LEFT JOIN projects p ON p.id = rc.project_id
-      LEFT JOIN LATERAL (
-        SELECT c.id, c.name, c.kind, c.provider, c.status, c.project_id
-        FROM role_credentials rcb
-        JOIN credentials c ON c.id = rcb.credential_id
-        WHERE rcb.role_config_id = rc.id AND rcb.purpose = 'llm'
-          AND (${projectScope}::uuid IS NULL OR c.project_id IS NULL OR c.project_id = ${projectScope})
-        ORDER BY c.created_at DESC
-        LIMIT 1
-      ) c ON true
-      LEFT JOIN projects cp ON cp.id = c.project_id
       WHERE (${projectScope}::uuid IS NULL OR rc.project_id IS NULL OR rc.project_id = ${projectScope})
       ORDER BY
         CASE r.kind WHEN 'system' THEN 0 WHEN 'hub' THEN 1 ELSE 2 END,
@@ -674,7 +525,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         p.name NULLS FIRST,
         r.name`;
     return rows.map((row) => {
-      const { project_config_json: projectConfigJson, ...bindable } = row;
+      const { project_config_json: _projectConfigJson, ...bindable } = row;
       return {
       ...bindable,
       context_window_tokens: row.context_window_tokens == null ? null : Number(row.context_window_tokens),
@@ -684,13 +535,12 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       role_ui_color: typeof row.role_ui_color === "string" ? row.role_ui_color : null,
       scope: row.project_id ? "project" : "global",
       image_strategy: null,
-      can_bind: !projectScope || String(row.project_id ?? "") === projectScope,
-      credential_provider: row.credential_provider
-        ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider
-        : null,
-      credential_provider_valid: row.credential_provider
-        ? projectCredentialProvider(row.credential_kind ?? "llm_provider", row.credential_provider).provider_valid
-        : null,
+      can_bind: false,
+      credential_id: null,
+      credential_name: null,
+      credential_provider: null,
+      credential_provider_valid: null,
+      credential_status: null,
     };
     });
   });
@@ -725,11 +575,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       after: {
         role: role.name,
         scope: "global",
-        credentials: body.credentials?.length ?? "preserved",
-        files: body.config_files.length,
-        binding_diff: mutation.binding_diff,
-        dropped_fields: mutation.dropped_fields,
-        missing_credential_ids: mutation.missing_credential_ids,
+                files: body.config_files.length,
+          dropped_fields: mutation.dropped_fields,
       },
     });
     // #697: RoleConfig 不再能开启 passthrough；保留审计 helper 字符串供测试/检索，after 恒为 false。
@@ -743,13 +590,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const view = await roleConfigView(configId, req.actor?.projectId ?? null);
     const upsert_warnings = buildRoleConfigUpsertWarnings({
       dropped_fields: mutation.dropped_fields,
-      credentialsProvided: body.credentials !== undefined,
-      credentialsCount: body.credentials?.length ?? 0,
-      missingCredentialIds: mutation.missing_credential_ids,
     });
     return {
       ...view,
-      binding_diff: mutation.binding_diff,
       dropped_fields: mutation.dropped_fields,
       ...(upsert_warnings.length > 0 ? { upsert_warnings } : {}),
     };
@@ -821,11 +664,8 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       after: {
         role: role.name,
         scope: "project",
-        credentials: body.credentials?.length ?? "preserved",
-        files: body.config_files.length,
-        binding_diff: mutation.binding_diff,
-        dropped_fields: mutation.dropped_fields,
-        missing_credential_ids: mutation.missing_credential_ids,
+                files: body.config_files.length,
+          dropped_fields: mutation.dropped_fields,
       },
     });
     await auditRoleConfigPassthroughEnable(req, {
@@ -839,13 +679,9 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const view = await roleConfigView(configId, actorProjectId);
     const upsert_warnings = buildRoleConfigUpsertWarnings({
       dropped_fields: mutation.dropped_fields,
-      credentialsProvided: body.credentials !== undefined,
-      credentialsCount: body.credentials?.length ?? 0,
-      missingCredentialIds: mutation.missing_credential_ids,
     });
     return {
       ...view,
-      binding_diff: mutation.binding_diff,
       dropped_fields: mutation.dropped_fields,
       ...(upsert_warnings.length > 0 ? { upsert_warnings } : {}),
     };

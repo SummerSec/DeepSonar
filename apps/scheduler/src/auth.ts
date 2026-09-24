@@ -244,7 +244,6 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /credentials/:id/compatibility": "agents:read",
   "GET /audit-logs": "admin",
   "POST /credentials": "agents:write",
-  "POST /credentials/batch-bind": "agents:write",
   "PATCH /credentials/:id": "agents:write",
   "POST /credentials/:id/rotate": "agents:write",
   "POST /credentials/:id/status": "agents:write",

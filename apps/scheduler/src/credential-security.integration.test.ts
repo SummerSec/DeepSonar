@@ -182,9 +182,8 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${roleConfigId}, ${roleId}, NULL, 'claude-code', 'model-a')`;
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${roleConfigId}, ${credentialId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
       for (const status of ["pending", "running", "succeeded"] as const) {
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
@@ -326,9 +325,8 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${legacyRoleConfigId}, ${legacyRoleId}, NULL, 'codex', 'model-a')`;
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${legacyRoleConfigId}, ${legacyId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
         VALUES (${legacyJobId}, ${projectId}, ${canvasId}, 'legacy_projection', 'running',
@@ -389,12 +387,11 @@ if (!testDatabaseUrl) {
         assert.equal(text.includes(legacyProvider), false, "legacy provider must not cross an outward boundary");
       };
       const [legacyBefore] = await sql<{ provider: string; binding_count: number }[]>`
-        SELECT c.provider, COUNT(rc.credential_id)::int AS binding_count
-        FROM credentials c LEFT JOIN role_credentials rc ON rc.credential_id = c.id
-        WHERE c.id = ${legacyId}
-        GROUP BY c.provider`;
+        SELECT c.provider, 0::int AS binding_count
+        FROM credentials c
+        WHERE c.id = ${legacyId}`;
       assert.equal(legacyBefore?.provider, legacyProvider);
-      assert.equal(legacyBefore?.binding_count, 1);
+      assert.equal(legacyBefore?.binding_count, 0);
 
       const legacyList = await request("GET", "/credentials");
       const legacyListed = (json(legacyList) as unknown as Record<string, any>[]).find((row) => row.id === legacyId);
@@ -549,8 +546,8 @@ if (!testDatabaseUrl) {
       const repaired = await request("PATCH", `/credentials/${legacyId}`, { provider: "openai", metadata: { base_url: "http://127.0.0.1/v1" } });
       assert.equal(repaired.statusCode, 200, repaired.payload);
       const [legacyAfter] = await sql<{ provider: string; binding_count: number }[]>`
-        SELECT c.provider, COUNT(rc.credential_id)::int AS binding_count
-        FROM credentials c LEFT JOIN role_credentials rc ON rc.credential_id = c.id
+        SELECT c.provider, 0::int AS binding_count
+        FROM credentials c /* #690 */
         WHERE c.id = ${legacyId}
         GROUP BY c.provider`;
       assert.equal(legacyAfter?.provider, "openai");

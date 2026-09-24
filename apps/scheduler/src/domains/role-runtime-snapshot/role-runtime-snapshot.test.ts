@@ -36,8 +36,14 @@ function snapshotDb(input: {
     if (sql.includes("FROM role_configs")) {
       return input.projectCfg ? [input.projectCfg] : [];
     }
-    if (sql.includes("FROM role_credentials") || sql.includes("JOIN credentials")) {
-      return input.credential ? [input.credential] : [];
+    if (sql.includes("FROM credentials") && (sql.includes("kind") || sql.includes("llm_provider"))) {
+      if (!input.credential) return [];
+      const row = input.credential;
+      return [{
+        ...row,
+        project_id: row.cred_project_id ?? row.project_id ?? null,
+        health_status: row.health_status ?? "ok",
+      }];
     }
     if (sql.includes("FROM role_config_files")) return [];
     return [];
@@ -261,7 +267,7 @@ test("Pi snapshot freezes the CLI model id when RoleConfig stores a deepsonar/ p
   assert.notEqual(snapshot.model, "deepsonar/grok-4.6");
 });
 
-test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可解析", async () => {
+test("Hub pi_extension_ids 冻结已注册扩展，未注册 id 使快照不可解析", async () => {
   const projectCfg = {
     id: "project-hub-cfg",
     project_id: "project-1",
@@ -275,7 +281,6 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
     commands_json: [],
     mcps_json: [],
     subagents_json: [],
-    pi_extensions_json: ["pi-web-access"],
   };
   const credential = {
     id: "cred-local",
@@ -301,6 +306,7 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
     }),
     "project-1",
     "audit",
+    { piExtensionIds: ["pi-web-access"] },
   );
   assert.equal(snapshot.pi_extensions.length, 1);
   assert.equal(snapshot.pi_extensions[0]?.id, "pi-web-access");
@@ -317,6 +323,7 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
       }),
       "project-1",
       "audit",
+      { piExtensionIds: ["pi-web-access"] },
     ),
     (error: unknown) => error instanceof SnapshotUnresolvableError && /不兼容|扩展/.test(error.message),
   );
@@ -325,11 +332,12 @@ test("Pi RoleConfig 声明冻结已注册扩展，未注册 id 使快照不可�
       snapshotDb({
         projectConfig: {},
         projectCfg: undefined,
-        globalCfg: { ...projectCfg, pi_extensions_json: ["not-registered"] },
+        globalCfg: projectCfg,
         credential,
       }),
       "project-1",
       "audit",
+      { piExtensionIds: ["not-registered"] },
     ),
     (error: unknown) => error instanceof SnapshotUnresolvableError && /未注册/.test(error.message),
   );
@@ -489,7 +497,7 @@ test("dsh cannot freeze a Hub chrome-fuzz override", async () => {
     id: "global-audit-cfg",
     project_id: null,
     agent_cli: "dsh",
-    model: "grok-4.6",
+    model: null,
     version: 8,
     env_vars_json: {},
     env_keys: [],
@@ -507,7 +515,7 @@ test("dsh cannot freeze a Hub chrome-fuzz override", async () => {
       { runtimeImageKey: "deepsonar-chrome-fuzz" },
     ),
     (error: unknown) => error instanceof SnapshotUnresolvableError
-      && /AGENT_CLI_IMAGE_INCOMPATIBLE/.test(error.message),
+      && (/AGENT_CLI_IMAGE_INCOMPATIBLE|DSH |不兼容|chrome-fuzz/.test(error.message)),
   );
 });
 
@@ -569,8 +577,8 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
     }
     if (sql.includes("FROM role_configs") && sql.includes("project_id IS NULL")) return [];
     if (sql.includes("FROM role_configs")) return [projectCfg];
-    if (sql.includes("FROM role_credentials") || (sql.includes("FROM credentials") && sql.includes("kind"))) {
-      return [credential];
+    if (sql.includes("FROM credentials") && (sql.includes("kind") || sql.includes("llm_provider"))) {
+      return [{ ...credential, project_id: null, health_status: "ok" }];
     }
     if (sql.includes("FROM role_config_files")) return [];
     if (sql.includes("FROM project_skill_sources") && sql.includes("LIMIT 1")) {

@@ -37,14 +37,12 @@ const DEFAULT_CONFIG: RoleConfigInput = {
   instructions_markdown: null,
   runtime_image_key: null,
   runtime_knobs: {},
-  credentials: [],
   config_files: [],
-  pi_extensions: [],
 };
 
 const CONFIG_KEYS = new Set([
   "agent_cli", "dsh_task_mode", "model", "context_window_tokens", "env_keys", "env_vars", "modules", "skills", "commands", "mcps",
-  "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "runtime_knobs", "credentials", "config_files", "pi_extensions",
+  "subagents", "platform_tools", "instructions_markdown", "runtime_image_key", "runtime_knobs", "config_files",
 ]);
 const SECRET_FIELD = /^(?:api_?key|access_token|api_token|auth_token|refresh_token|client_secret|private_key|secret|password|authorization|cookie|credential(?:s|_id)?)$/i;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -129,15 +127,16 @@ export function parseAgentPack(input: string): AgentPack {
   const name = text(value.name, "name", 31);
   if (!/^[a-z][a-z0-9_]{0,30}$/.test(name)) throw new Error("name 必须以小写字母开头，且只能使用小写字母、数字和下划线");
   const rawConfig = record(value.config, "config");
-  const unknownKeys = Object.keys(rawConfig).filter((key) => !CONFIG_KEYS.has(key));
+  if (rawConfig.credentials !== undefined) throw new Error("配置包不得携带 credentials（#690：RoleConfig 不再绑定账号）");
+  if (rawConfig.pi_extensions !== undefined) throw new Error("配置包不得携带 pi_extensions（#690：扩展由 Hub 能力组合选择）");
+  const unknownKeys = Object.keys(rawConfig).filter((key) => !CONFIG_KEYS.has(key) && key !== "credentials" && key !== "pi_extensions");
   if (unknownKeys.length > 0) throw new Error(`config 包含未知字段: ${unknownKeys.join(", ")}`);
-  if (rawConfig.credentials !== undefined && !Array.isArray(rawConfig.credentials)) throw new Error("config.credentials 必须是数组");
-  if (rawConfig.config_files !== undefined && !Array.isArray(rawConfig.config_files)) throw new Error("config.config_files 必须是数组");
-  const credentials = rawConfig.credentials ?? [];
-  const configFiles = rawConfig.config_files ?? [];
-  if (credentials.length > 0 || configFiles.length > 0) throw new Error("配置包不得携带凭据绑定或 Provider 配置文件");
+  if (rawConfig.config_files !== undefined && (!Array.isArray(rawConfig.config_files) || rawConfig.config_files.length > 0)) {
+    throw new Error("配置包不得携带 Provider 配置文件");
+  }
   const safeConfig = { ...rawConfig };
   delete safeConfig.credentials;
+  delete safeConfig.pi_extensions;
   delete safeConfig.config_files;
   rejectSecretFields(safeConfig);
   const envKeys = stringArray(rawConfig.env_keys, "config.env_keys");
@@ -171,14 +170,7 @@ export function parseAgentPack(input: string): AgentPack {
     platform_tools: booleanRecord(rawConfig.platform_tools, "config.platform_tools"),
     instructions_markdown: nullableString(rawConfig.instructions_markdown, "config.instructions_markdown", 100_000),
     runtime_image_key: nullableString(rawConfig.runtime_image_key, "config.runtime_image_key"),
-    credentials: [],
     config_files: [],
-    pi_extensions: (() => {
-      const ids = stringArray(rawConfig.pi_extensions, "config.pi_extensions");
-      const error = validatePiExtensionIds(ids, agentCli);
-      if (error) throw new Error(error);
-      return ids;
-    })(),
   };
   return {
     schema: AGENT_PACK_SCHEMA,

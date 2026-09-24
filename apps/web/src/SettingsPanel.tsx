@@ -22,7 +22,6 @@ import { canAccessAnyScope } from "./permissions";
 
 import { TokensPanel } from "./TokensPanel";
 import { CredentialsPanel } from "./CredentialsPanel";
-import { RoleCredentialBindingPanel } from "./RoleCredentialBindingPanel";
 import { RoleConfigEditor } from "./RoleConfigEditor";
 import {
   type GlobalSettingsSection,
@@ -449,7 +448,7 @@ export function SettingsPanel({
           {!projectId && (
             <span className="font-mono text-[9px] text-zinc-600">
               {globalCfg
-                ? `${globalCfg.agent_cli}${globalCfg.model ? ` · ${globalCfg.model}` : ""} · v${globalCfg.version}`
+                ? `职责配置 · v${globalCfg.version}`
                 : "未配置"}
             </span>
           )}
@@ -518,7 +517,6 @@ export function SettingsPanel({
   // 项目数据包在项目模块「数据」页；此处项目设置只做策略。平台包仅在全局 Agent 管理。
   const globalTabList: { key: Tab; label: string }[] = [
     { key: "roles", label: "角色注册表" },
-    { key: "bindings", label: "凭据绑定" },
     { key: "sources", label: "模块源" },
     { key: "rules", label: "调度策略" },
     { key: "account", label: "我的账号" },
@@ -598,7 +596,7 @@ export function SettingsPanel({
                   项目规则与覆盖说明
                   <HelpTip>
                     各角色的指令 / 平台工具 / 模块在<strong>「角色配置」tab 的项目覆盖</strong>中维护；
-                    CLI / 模型 / 凭据绑定在 Agent「凭据绑定」；账号本身在「Provider 凭据」页管理。未覆盖的角色使用全局缺省。
+                    运行时 CLI / Provider / 模型由项目白名单与 Hub 组合决定；账号本身在「Provider 凭据」页管理。RoleConfig 仅维护职责与指令。
                   </HelpTip>
                 </div>
               </section>
@@ -992,8 +990,6 @@ export function SettingsPanel({
         {activeTab === "users" && !projectId && <UsersPanel />}
         {activeTab === "account" && !projectId && <AccountPanel />}
         {activeTab === "transfer" && !projectId && <TransferPanel projectId={null} scope="platform" />}
-
-        {activeTab === "bindings" && !projectId && <RoleCredentialBindingPanel />}
         {activeTab === "credentials" && !projectId && <CredentialsPanel />}
 
         {activeTab === "tokens" && !projectId && <TokensPanel />}

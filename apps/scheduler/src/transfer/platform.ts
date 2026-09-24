@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { validateModuleSelectors, validatePiExtensionIds } from "@deepsonar/shared-types";
+import { validateModuleSelectors } from "@deepsonar/shared-types";
 import {
   projectCredentialMetadata,
   projectCredentialProvider,
@@ -173,11 +173,7 @@ export async function runPlatformExport(exportId: string): Promise<void> {
         const { safe, redacted_keys } = filterEnvVars(rc.env_vars_json as Record<string, unknown>);
         const filesRows = await sql`
           SELECT path, content, content_sha256 FROM role_config_files WHERE role_config_id = ${rc.id as string}`;
-        const binds = await sql`
-          SELECT c.id, c.name, c.kind, c.provider, c.fingerprint, c.last4, rc2.purpose
-          FROM role_credentials rc2
-          JOIN credentials c ON c.id = rc2.credential_id
-          WHERE rc2.role_config_id = ${rc.id as string}`;
+        const binds: Array<Record<string, unknown>> = [];
         out.push({
           source_id: rc.id,
           role_name: rc.role_name,
@@ -196,7 +192,6 @@ export async function runPlatformExport(exportId: string): Promise<void> {
           platform_tools_json: rc.platform_tools_json,
           sandbox_limits_json: rc.sandbox_limits_json,
           runtime_knobs_json: rc.runtime_knobs_json,
-          pi_extensions_json: rc.pi_extensions_json ?? [],
           instructions_markdown: rc.instructions_markdown,
           runtime_image_key: rc.runtime_image_key,
           version: rc.version,
@@ -584,8 +579,6 @@ export async function applyPlatformImport(
         const moduleSelectors = rc.modules_json == null
           ? []
           : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
-        const piExtErr = validatePiExtensionIds(rc.pi_extensions_json ?? [], agentCli);
-        if (piExtErr) throw new Error(`全局 RoleConfig ${roleName}.pi_extensions_json: ${piExtErr}`);
         const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
         const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
         if (Object.keys(sandboxLimits).length > 0) {
@@ -613,7 +606,6 @@ export async function applyPlatformImport(
             platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
             sandbox_limits_json: sandboxLimits as never,
             runtime_knobs_json: runtimeKnobs as never,
-            pi_extensions_json: ((rc.pi_extensions_json as unknown) ?? []) as never,
             instructions_markdown: (rc.instructions_markdown as string) ?? null,
             runtime_image_key: (rc.runtime_image_key as string) ?? null,
             version: 1,
@@ -635,36 +627,7 @@ export async function applyPlatformImport(
               updated_at = now()`;
         }
 
-        const binds = (rc.credentials as { source_credential_id: string; purpose?: string }[]) ?? [];
-        for (const b of binds) {
-          const target = credMap[b.source_credential_id];
-          if (!target) continue;
-          const [credential] = await tx`
-            SELECT id, project_id, provider, public_metadata_json, settings_config_json, agent_cli
-            FROM credentials WHERE id = ${target} FOR UPDATE`;
-          if (!credential) throw new Error(`Credential 不存在: ${target}`);
-          const purpose = b.purpose ?? "llm";
-          const bindingError = validateCredentialRoleConfigBinding({
-            source: `全局 RoleConfig ${roleName} → Credential ${target}`,
-            purpose,
-            agentCli,
-            model,
-            credentialProjectId: (credential.project_id as string | null) ?? null,
-            roleConfigProjectId: null,
-            provider: String(credential.provider ?? ""),
-            metadata: credential.public_metadata_json,
-            settingsConfig: credential.settings_config_json,
-            credentialAgentCli: (credential.agent_cli as string | null) ?? null,
-          });
-          if (bindingError) throw new Error(bindingError);
-          await tx`
-            INSERT INTO role_credentials ${tx({
-              role_config_id: created.id as string,
-              credential_id: target,
-              purpose,
-            })}
-            ON CONFLICT DO NOTHING`;
-        }
+        // #690: ignore legacy RoleConfig.credentials bindings from platform packs.
         cfgN++;
       }
       summary.global_role_configs = cfgN;

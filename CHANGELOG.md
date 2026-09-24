@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 变更
+
+- 按角色能力插件重构运行配置（#690）：删除 `role_credentials`、`RoleConfig.pi_extensions`、`POST /credentials/batch-bind` 与 Agent「凭据绑定」页。Hub 只提案 `provider` / `model_ref` / `pi_extension_ids` 等能力需求（禁止提交账号 UUID）；Scheduler 在项目授权目录内按健康度、CLI/模型兼容与缺省策略解析凭据并 fail closed。Pi 扩展仅经已注册可信能力组合冻结进 Job。Schema **v56**。历史 Job 快照保持不可变，不作新 Job 兼容输入。
+
 ### 修复
 - 收口过程流持久化边界与拓扑可恢复性（#388 / #359）：确认点为 evidence 落盘；补读只认可见 `BLOB_DIR`；跨副本无共享卷时 `visibility=unavailable` 且 WS `4415`；bus 仅非权威投递；不承诺零丢失。
 

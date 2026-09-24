@@ -215,10 +215,10 @@ export function resolveReadinessFix(
     return { href: "/settings/credentials", target: fix.target };
   }
   if (action === "role_config") {
-    const binding = fix.target === "role-credential-binding" || /(?:^|[?&])tab=bindings(?:&|$)/.test(fix.href);
+    const binding = fix.target === "role-credential-binding" || fix.target === "credentials" || /(?:^|[?&])tab=bindings(?:&|$)/.test(fix.href) || fix.href.includes("/settings/credentials");
     return {
       href: binding
-        ? "/agents?tab=bindings"
+        ? "/settings/credentials"
         : targetScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles",
       target: fix.target,
     };

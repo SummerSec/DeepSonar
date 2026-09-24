@@ -193,7 +193,7 @@ export interface EventIngestionSideEffectPorts {
     projectId: string,
     jobType: string,
     findingIds?: string[],
-    options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; taskPromptOverride?: string | null; roleDefinition?: HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; taskPromptOverride?: string | null; roleDefinition?: HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
   ) => Promise<AgentRuntimeSnapshot>;
   recordJobSharedAssets: (
     tx: EventIngestionTransaction,
@@ -570,9 +570,14 @@ export function createEventIngestionSideEffectApplication(
     const allowedAgentClis = agentCliCatalog.map((entry) => entry.agent_cli);
     const allowedAgentCliSet = new Set<string>(allowedAgentClis);
     const providerCatalog = await listHubProviderCatalog(tx as never, job.project_id as string);
-    const allowedCredentialIds = providerCatalog.map((entry) => entry.credential_id);
-    const allowedCredentialIdSet = new Set(allowedCredentialIds);
-    const providerById = new Map(providerCatalog.map((entry) => [entry.credential_id, entry]));
+    const allowedProviders = [...new Set(providerCatalog.map((entry) => entry.provider))];
+    const allowedProviderSet = new Set(allowedProviders);
+    const providersByName = new Map<string, typeof providerCatalog>();
+    for (const entry of providerCatalog) {
+      const list = providersByName.get(entry.provider) ?? [];
+      list.push(entry);
+      providersByName.set(entry.provider, list);
+    }
     for (const [index, intent] of submittedIntents.entries()) {
       const key = intent.runtime_image_key;
       const path = phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key";
@@ -586,21 +591,22 @@ export function createEventIngestionSideEffectApplication(
       if (intentCli && !allowedAgentCliSet.has(intentCli)) {
         throw invalidAgentCli(cliPath, allowedAgentClis);
       }
-      const intentCred = intent.credential_id;
-      const credPath = phase === "preflight" ? `intents.${index}.credential_id` : "intents.credential_id";
-      if (intentCred && !allowedCredentialIdSet.has(intentCred)) {
-        throw invalidCredential(credPath, allowedCredentialIds);
+      const intentProvider = typeof intent.provider === "string" ? intent.provider.trim() : "";
+      const providerPath = phase === "preflight" ? `intents.${index}.provider` : "intents.provider";
+      if (intentProvider && !allowedProviderSet.has(intentProvider)) {
+        throw invalidCredential(providerPath, allowedProviders);
       }
-      if (intentCli && intentCred) {
-        const provider = providerById.get(intentCred);
-        if (provider && !provider.compatible_agent_clis.includes(intentCli as typeof provider.compatible_agent_clis[number])) {
-          throw invalidCredential(credPath, allowedCredentialIds);
+      if (intentCli && intentProvider) {
+        const matches = providersByName.get(intentProvider) ?? [];
+        if (!matches.some((entry) => entry.compatible_agent_clis.includes(intentCli as typeof entry.compatible_agent_clis[number]))) {
+          throw invalidCredential(providerPath, allowedProviders);
         }
       }
       if (intent.model_ref || intent.model_requirements) {
-        const provider = intentCred
-          ? providerById.get(intentCred)
-          : providerCatalog.find((entry) => entry.is_default);
+        const providerEntries = intentProvider
+          ? (providersByName.get(intentProvider) ?? [])
+          : providerCatalog.filter((entry) => entry.is_default);
+        const provider = providerEntries[0];
         const requirements = intent.model_requirements && typeof intent.model_requirements === "object"
           ? intent.model_requirements as Record<string, unknown>
           : {};
@@ -636,7 +642,10 @@ export function createEventIngestionSideEffectApplication(
       const intentCliCaps = Array.isArray(intent.cli_capability_ids)
         ? intent.cli_capability_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
         : [];
-      if (phase === "preflight" && (key || intentCli || intentCred || intent.model_ref || intent.model_requirements || intent.role_prompt || intent.role_definition || intentLs || intentCliCaps.length > 0)) {
+      const intentPiExt = Array.isArray(intent.pi_extension_ids)
+        ? intent.pi_extension_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
+        : [];
+      if (phase === "preflight" && (key || intentCli || intentProvider || intent.model_ref || intent.model_requirements || intent.role_prompt || intent.role_definition || intentLs || intentCliCaps.length > 0 || intentPiExt.length > 0)) {
         try {
           await ports.resolveAgentSnapshotForJob(
             tx,
@@ -646,7 +655,7 @@ export function createEventIngestionSideEffectApplication(
             {
               runtimeImageKey: key,
               agentCli: intentCli ?? null,
-              credentialId: intentCred ?? null,
+              provider: intentProvider || null,
               modelRef: intent.model_ref ?? null,
               modelRequirements: intent.model_requirements ?? null,
               taskPromptOverride: intent.role_prompt ?? null,
@@ -654,6 +663,7 @@ export function createEventIngestionSideEffectApplication(
               baseRoleName: intent.role_definition ? intent.role : null,
               languageServerCapabilityId: intentLs || null,
               cliCapabilityIds: intentCliCaps.length > 0 ? intentCliCaps : null,
+              piExtensionIds: intentPiExt.length > 0 ? intentPiExt : null,
             },
           );
         } catch (error) {
@@ -1299,7 +1309,7 @@ export function createEventIngestionSideEffectApplication(
               {
                 runtimeImageKey: it.runtime_image_key ?? null,
                 agentCli: it.agent_cli ?? null,
-                credentialId: it.credential_id ?? null,
+                provider: it.provider ?? null,
                 modelRef: it.model_ref ?? null,
                 modelRequirements: it.model_requirements ?? null,
                 taskPromptOverride: it.role_prompt ?? null,
@@ -1307,6 +1317,7 @@ export function createEventIngestionSideEffectApplication(
                 baseRoleName: baseRole,
                 languageServerCapabilityId: it.language_server_capability_id ?? null,
                 cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
+                piExtensionIds: Array.isArray(it.pi_extension_ids) ? it.pi_extension_ids : null,
               },
             ),
           );

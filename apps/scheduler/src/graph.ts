@@ -745,8 +745,8 @@ export interface HubIntent {
   runtime_image_key?: string;
   /** Hub 提案的 agent_cli；省略时用项目软缺省 / RoleConfig。 */
   agent_cli?: string;
-  /** Hub 提案的 credential_id；省略时用项目软缺省 / RoleConfig 绑定。 */
-  credential_id?: string;
+  /** Hub 提案的 Provider 插件名（非 credential UUID）；省略时 Scheduler 在项目授权目录内解析。 */
+  provider?: string;
   /** Hub 提案的模型引用；必须来自本轮 Provider capability catalog。 */
   model_ref?: string;
   /** Hub 模型能力要求；Scheduler 在冻结前重新校验。 */
@@ -755,6 +755,8 @@ export interface HubIntent {
   language_server_capability_id?: string;
   /** Hub 提案的通用 CLI 能力 id 列表（#611）；省略则不冻结 cli_capabilities。 */
   cli_capability_ids?: string[];
+  /** Hub 提案的已注册 Pi 扩展 id 列表（#690）；省略则不冻结 pi_extensions。 */
+  pi_extension_ids?: string[];
 }
 
 export interface HubDecision {

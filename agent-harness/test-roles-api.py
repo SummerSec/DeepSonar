@@ -210,7 +210,6 @@ def main() -> None:
     config_body = {
         "agent_cli": "claude-code",
         "model": None,
-        "reasoning": None,
         "env_keys": [],
         "env_vars": {},
         "modules": [],
@@ -226,7 +225,6 @@ def main() -> None:
         },
         "instructions_markdown": "输出必须包含威胁与证据的对应关系。",
         "runtime_image_key": None,
-        "credentials": [],
         "config_files": [],
     }
     cfg = req(

@@ -363,13 +363,14 @@ function credentialFix(_scope: ReadinessScopeInput): ReadinessCheck["fix"] {
   return readinessFix("credentials", "global", null, "/settings/credentials", "credentials");
 }
 
+/** #690: Provider 凭据由项目白名单授权，不再走角色绑定页。 */
 function roleBindingFix(scope: ReadinessScopeInput): ReadinessCheck["fix"] {
   return {
     action: "role_config",
     scope: scope.projectId ? "project" : "global",
     project_id: scope.projectId,
-    href: "/agents?tab=bindings",
-    target: "role-credential-binding",
+    href: "/settings/credentials",
+    target: "credentials",
   };
 }
 
@@ -470,7 +471,7 @@ function normalizeFix(code: string, fix: ReadinessCheck["fix"]): ReadinessCheck[
     ? "/settings/credentials"
     : action === "role_config"
       ? ROLE_BINDING_FIX_CODES.has(code) || fix.target === "role-credential-binding"
-        ? "/agents?tab=bindings"
+        ? "/settings/credentials"
         : inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=roles` : "/agents?tab=roles"
       : action === "rules"
         ? inferredScope === "project" && projectId ? `/projects/${projectId}/settings?tab=rules` : "/settings/platform?tab=rules"
@@ -483,7 +484,7 @@ function normalizeFix(code: string, fix: ReadinessCheck["fix"]): ReadinessCheck[
     scope: inferredScope,
     project_id: projectId,
     href,
-    ...(ROLE_BINDING_FIX_CODES.has(code) ? { target: "role-credential-binding" } : {}),
+    ...(ROLE_BINDING_FIX_CODES.has(code) ? { target: "credentials" } : {}),
   };
 }
 
@@ -629,7 +630,7 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     if (bindings.length > 1) {
       checks.push(fail(
         "CREDENTIAL_BINDING_AMBIGUOUS",
-        `RoleConfig ${role.name} 绑定了多个 llm Credential，Scheduler 无法安全选择唯一账号。`,
+        `项目授权了多个 LLM Provider 凭据且未设置缺省；请在项目 CLI/Provider 白名单中设置 default_credential_id。`,
         roleBindingFix(input.scope),
         { role: summary },
       ));
@@ -637,8 +638,8 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     const binding = bindings[0];
     if (!binding || !binding.credential_id) {
       checks.push(input.executionMode === "real"
-        ? fail("CREDENTIAL_MISSING", `${role.name} 未绑定 llm Credential，real 模式无法运行。`, roleBindingFix(input.scope), { role: summary })
-        : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 未绑定 llm Credential；fake 模式可继续，但切换 real 前需要配置账号。`, roleBindingFix(input.scope), { role: summary }));
+        ? fail("CREDENTIAL_MISSING", `${role.name} 无可用的项目授权 LLM Provider 凭据，real 模式无法运行。`, roleBindingFix(input.scope), { role: summary })
+        : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 无可用的项目授权 LLM Provider 凭据；fake 模式可继续，但切换 real 前需要配置账号。`, roleBindingFix(input.scope), { role: summary }));
     } else {
       const credential = credentialSummary(binding);
       const credentialRef = credential ?? undefined;
@@ -958,16 +959,44 @@ export async function loadReadiness(
     ? new Set((await rolesForProject(db, projectId)).map((role) => role.name))
     : null;
   const roles = allRoleRows.filter((role) => role.kind === "hub" || !selectedRoleNames || selectedRoleNames.has(role.name));
-  const configIds = roles.map((role) => role.project_config_id ?? role.global_config_id).filter((id): id is string => Boolean(id));
-  const credentials = configIds.length === 0
-    ? []
-    : await db`
-      SELECT rc.role_config_id, rc.purpose,
-             c.id AS credential_id, c.name, c.kind, c.provider, c.project_id,
-             c.status, c.public_metadata_json, c.agent_cli, c.settings_config_json
-      FROM role_credentials rc
-      LEFT JOIN credentials c ON c.id = rc.credential_id
-      WHERE rc.role_config_id = ANY(${configIds})`;
+  // #690: project-authorized Provider credentials (no role_credentials bindings).
+  const pool = await db`
+    SELECT c.id AS credential_id, c.name, c.kind, c.provider, c.project_id,
+           c.status, c.public_metadata_json, c.agent_cli, c.settings_config_json
+    FROM credentials c
+    WHERE c.kind = 'llm_provider'
+      AND c.status = 'active'
+      AND (${projectId}::uuid IS NULL OR c.project_id IS NULL OR c.project_id = ${projectId})` as Array<Record<string, unknown>>;
+  const enabledIds = Array.isArray((projectConfig as Record<string, unknown> | null)?.enabled_credential_ids)
+    ? ((projectConfig as Record<string, unknown>).enabled_credential_ids as unknown[]).filter((id): id is string => typeof id === "string")
+    : null;
+  const defaultCred = typeof (projectConfig as Record<string, unknown> | null)?.default_credential_id === "string"
+    ? String((projectConfig as Record<string, unknown>).default_credential_id)
+    : null;
+  const filteredPool = enabledIds && enabledIds.length > 0
+    ? pool.filter((row) => enabledIds.includes(String(row.credential_id)))
+    : pool;
+  const credentials: Array<Record<string, unknown>> = [];
+  for (const role of roles) {
+    const configId = role.project_config_id ?? role.global_config_id;
+    if (!configId) continue;
+    const roleCli = role.project_agent_cli ?? role.global_agent_cli ?? null;
+    const compatible = filteredPool.filter((row) => {
+      const credCli = typeof row.agent_cli === "string" ? row.agent_cli : null;
+      return !roleCli || !credCli || credCli === roleCli;
+    });
+    const preferred = defaultCred
+      ? compatible.find((row) => String(row.credential_id) === defaultCred)
+      : undefined;
+    const chosen = preferred ?? (compatible.length === 1 ? compatible[0] : undefined);
+    if (chosen) {
+      credentials.push({ role_config_id: configId, purpose: "llm", ...chosen });
+    } else if (compatible.length > 1) {
+      for (const row of compatible) {
+        credentials.push({ role_config_id: configId, purpose: "llm", ...row });
+      }
+    }
+  }
   // SAFETY: 上面的 SELECT 列清单固定，行形状即 ReadinessCredentialRow。
   const credentialIds = (credentials as unknown as ReadinessCredentialRow[])
     .map((row) => row.credential_id)

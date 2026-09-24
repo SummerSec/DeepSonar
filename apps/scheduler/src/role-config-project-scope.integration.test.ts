@@ -107,17 +107,14 @@ if (!testDatabaseUrl) {
           )`;
         return id;
       };
-      const globalCredentialId = await createCredential("scope-global", null);
+      await createCredential("scope-global", null);
       const ownCredentialId = await createCredential("scope-own", ownProjectId);
       const otherCredentialId = await createCredential("scope-other", otherProjectId);
 
       // Deliberately malformed legacy bindings.  The project token must not
       // learn any metadata from the other project's credential row.
-      await sql`
-        INSERT INTO role_credentials (role_config_id, credential_id, purpose)
-        VALUES (${globalRoleConfigId}, ${otherCredentialId}, 'llm'),
-               (${ownRoleConfigId}, ${otherCredentialId}, 'llm'),
-               (${otherRoleConfigId}, ${globalCredentialId}, 'llm')`;
+      await sql`SELECT 1`; // #690
+
 
       const scopedToken = generateToken();
       await sql`
@@ -148,7 +145,7 @@ if (!testDatabaseUrl) {
       assert.equal(globalResponse.statusCode, 200, globalResponse.payload);
       const globalView = JSON.parse(globalResponse.payload).find((row: { id: string }) => row.id === globalRoleConfigId);
       assert.ok(globalView);
-      assert.deepEqual(globalView.credentials, [], "malformed global binding must be hidden");
+      assert.equal(globalView.credentials, undefined, "#690: RoleConfig view has no credentials field");
       assert.equal(JSON.stringify(globalView).includes(otherCredentialId), false);
       assert.equal(JSON.stringify(globalView).includes("scope-other"), false);
 
@@ -156,7 +153,7 @@ if (!testDatabaseUrl) {
       assert.equal(projectResponse.statusCode, 200, projectResponse.payload);
       const projectView = JSON.parse(projectResponse.payload).find((row: { role_id: string }) => row.role_id === roleId);
       assert.ok(projectView?.project_config);
-      assert.deepEqual(projectView.project_config.credentials, [], "malformed own binding must be hidden");
+      assert.equal(projectView.project_config.credentials, undefined, "#690: RoleConfig view has no credentials field");
       assert.equal(projectView.project_config.runtime_image_key, null);
       assert.equal(JSON.stringify(projectView).includes(otherCredentialId), false);
       assert.equal(JSON.stringify(projectView).includes("scope-other"), false);
@@ -199,7 +196,6 @@ if (!testDatabaseUrl) {
       const rejectedImagePut = await inject("PUT", `/projects/${ownProjectId}/role-configs/${roleId}`, {
         agent_cli: "claude-code",
         runtime_image_key: "deepsonar-chrome-audit",
-        credentials: [],
       });
       assert.equal(rejectedImagePut.statusCode, 400, rejectedImagePut.payload);
       assert.match(JSON.parse(rejectedImagePut.payload).error, /不接受 runtime_image_key/);
@@ -215,7 +211,6 @@ if (!testDatabaseUrl) {
 
       const ownPut = await inject("PUT", `/projects/${ownProjectId}/role-configs/${roleId}`, {
         agent_cli: "claude-code",
-        credentials: [],
       });
       assert.equal(ownPut.statusCode, 200, ownPut.payload);
       const ownPutView = JSON.parse(ownPut.payload);
@@ -231,12 +226,14 @@ if (!testDatabaseUrl) {
       const ownCredentialStillThere = await sql`SELECT id FROM credentials WHERE id IN (${ownCredentialId}, ${otherCredentialId})`;
       assert.equal(ownCredentialStillThere.length, 2);
 
-      // An unscoped token keeps the legacy/admin view and mutation behavior.
+      // Unscoped token can mutate global RoleConfig; #690 rejects credentials field.
       const unscopedGlobalResponse = await inject("GET", "/role-configs/global", undefined, adminHeaders);
       assert.equal(unscopedGlobalResponse.statusCode, 200, unscopedGlobalResponse.payload);
       const unscopedGlobalView = JSON.parse(unscopedGlobalResponse.payload).find((row: { id: string }) => row.id === globalRoleConfigId);
-      assert.equal(unscopedGlobalView.credentials.some((row: { credential_id: string }) => row.credential_id === otherCredentialId), true);
-      const unscopedPut = await inject("PUT", `/role-configs/global/${roleId}`, { credentials: [] }, adminHeaders);
+      assert.equal(unscopedGlobalView.credentials, undefined);
+      const rejectedCredentials = await inject("PUT", `/role-configs/global/${roleId}`, { credentials: [] }, adminHeaders);
+      assert.equal(rejectedCredentials.statusCode, 400, rejectedCredentials.payload);
+      const unscopedPut = await inject("PUT", `/role-configs/global/${roleId}`, { agent_cli: "claude-code" }, adminHeaders);
       assert.equal(unscopedPut.statusCode, 200, unscopedPut.payload);
       const createdRole = await inject("POST", "/agent-roles", {
         name: `unscoped_${roleId.replaceAll("-", "").slice(0, 20)}`,

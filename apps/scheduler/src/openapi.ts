@@ -1763,15 +1763,15 @@ const OPS: Op[] = [
     method: "get",
     path: "/role-configs/global",
     summary: "全局 RoleConfig 清单",
-    description: "项目限定 token 可读取全局 RoleConfig，但响应中的 Credential 绑定仅包含全局或该 token 所属项目的 Credential；异常跨项目绑定按未绑定处理。",
+    description: "项目限定 token 可读取全局 RoleConfig（#690：响应不再含凭据绑定；credentials 恒为空数组）。",
     scope: "agents:read",
     tags: ["RoleConfig"],
   },
   {
     method: "get",
     path: "/role-configs/bindable",
-    summary: "统一 Provider 绑定选择器（全局/项目 RoleConfig 元数据）",
-    description: "项目限定 token 只能看到全局与本项目 RoleConfig；Credential 元数据也只返回全局或本项目绑定，异常跨项目绑定不返回 Credential 字段。",
+    summary: "RoleConfig 元数据清单（全局/项目）",
+    description: "项目限定 token 只能看到全局与本项目 RoleConfig。#690：can_bind 恒为 false，不再返回凭据绑定字段。",
     scope: "agents:read",
     tags: ["RoleConfig", "Credentials"],
     responses: {
@@ -1784,8 +1784,8 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/role-configs/{id}/agent-cli",
-    summary: "仅更新 RoleConfig 的 agent_cli（Provider 绑定列表用）",
-    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。不改写凭据绑定与配置文件。若已绑定 LLM Credential，会校验 CLI 与 Provider 兼容性；兼容时同步凭据 agent_cli 到角色新值，不兼容返回 409。",
+    summary: "仅更新 RoleConfig 的 agent_cli",
+    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。不改写配置文件。#690：RoleConfig 不再绑定凭据。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: {
@@ -1817,7 +1817,7 @@ const OPS: Op[] = [
     method: "put",
     path: "/role-configs/global/{roleId}",
     summary: "全局 RoleConfig upsert（声明式全量替换）",
-    description: "{roleId} 是 agent_roles.id UUID（GET /agent-roles 的 id，或 GET /role-configs/bindable 的 role_id），不是角色名（如 explore）。非 UUID 返回 400 INVALID_ROLE_ID。仅 unscoped/admin actor 可写全局 RoleConfig；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。绑定 LLM 凭据的 agent_cli 与角色不一致时，provider 兼容则自动跟随并写审计，不兼容返回 400。",
+    description: "{roleId} 是 agent_roles.id UUID（GET /agent-roles 的 id，或 GET /role-configs/bindable 的 role_id），不是角色名（如 explore）。非 UUID 返回 400 INVALID_ROLE_ID。仅 unscoped/admin actor 可写全局 RoleConfig；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。#690：不再接受 credentials / pi_extensions。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
@@ -1826,7 +1826,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/projects/{id}/role-configs",
     summary: "项目 RoleConfig 来源清单",
-    description: "项目限定 token 只能读取所属项目；RoleConfig Credential 绑定仅包含全局或该项目 Credential。",
+    description: "项目限定 token 只能读取所属项目。#690：RoleConfig 响应不再含凭据绑定。",
     scope: "agents:read",
     tags: ["RoleConfig"],
   },
@@ -1834,7 +1834,7 @@ const OPS: Op[] = [
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
-    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。绑定 LLM 凭据的 agent_cli 与角色不一致时，provider 兼容则自动跟随并写审计，不兼容返回 400。",
+    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。#690：不再接受 credentials / pi_extensions。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: { $ref: "#/components/schemas/RoleConfigInput" },
@@ -2395,11 +2395,10 @@ const OPS: Op[] = [
     method: "delete",
     path: "/credentials/{id}",
     summary: "删除已保存的 Provider 账号",
-    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。仍绑定 RoleConfig 时需 ?unbind=true，并递增受影响 RoleConfig 的 version。吊销并删除 job_tokens；不改写历史 Job 快照。响应与审计不含密文；项目凭据审计保留 project_id。",
+    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。吊销并删除 job_tokens；不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
     scope: "agents:write",
     tags: ["Credentials"],
     query: {
-      unbind: { type: "string", enum: ["true", "1"], description: "确认后解除 RoleConfig 绑定并删除" },
     },
     responses: {
       "200": {
@@ -2431,7 +2430,7 @@ const OPS: Op[] = [
                   properties: {
                     error_code: {
                       type: "string",
-                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_BOUND", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
+                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
                     },
                     impact: { $ref: "#/components/schemas/CredentialImpact" },
                   },
@@ -2486,41 +2485,6 @@ const OPS: Op[] = [
     query: {
       agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"] },
       model: { type: "string", minLength: 1, maxLength: 200 },
-    },
-  },
-  {
-    method: "post",
-    path: "/credentials/batch-bind",
-    summary: "Bind or migrate RoleConfigs to a Credential (binding domain, not account CRUD)",
-    description: "Binding-domain API: bind or migrate RoleConfigs to one Credential. Not account CRUD. Validates provider/CLI/model compatibility under the dispatcher lock. Running/frozen Jobs are never changed. effect=new_jobs_only leaves pending snapshots frozen; effect=refresh_pending updates only pending snapshots.",
-    scope: "agents:write",
-    tags: ["Credentials", "RoleConfig"],
-    body: { $ref: "#/components/schemas/CredentialBatchBindingRequest" },
-    responses: {
-      "200": {
-        description: "Applied atomically",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingImpact" } } },
-      },
-      "400": {
-        description: "Invalid provider or request; no binding mutation is applied",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "409": {
-        description: "Credential health/catalog/model gate failed; no binding mutation is applied",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "403": {
-        description: "Project scope or binding target is not permitted; no mutation is applied",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "404": {
-        description: "Credential or RoleConfig target was not found",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
-      "500": {
-        description: "Transaction failed or stored idempotency result is invalid",
-        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialBatchBindingError" } } },
-      },
     },
   },
 
@@ -3233,95 +3197,9 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             credential_project_id: { type: "string", format: "uuid", nullable: true },
             credential_project_name: { type: "string", nullable: true },
             scope: { type: "string", enum: ["global", "project"] },
-            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },            can_bind: { type: "boolean" },
+            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },
+            can_bind: { type: "boolean" },
             credential_provider_valid: { type: "boolean", nullable: true },
-          },
-        },
-        CredentialBatchBindingRequest: {
-          type: "object",
-          additionalProperties: false,
-          required: ["credential_id", "role_config_ids", "idempotency_key"],
-          properties: {
-            credential_id: { type: "string", format: "uuid" },
-            role_config_ids: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: { type: "string", format: "uuid" } },
-            mode: { type: "string", enum: ["bind", "migrate"], default: "bind" },
-            source_credential_id: { type: "string", format: "uuid" },
-            model: { type: "string", nullable: true, maxLength: 200 },
-            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"], default: "new_jobs_only" },
-            idempotency_key: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" },
-          },
-        },
-        CredentialBatchBindingImpact: {
-          type: "object",
-          additionalProperties: false,
-          required: ["mode", "effect", "credential_id", "source_credential_id", "role_config_count", "pending_job_count", "refreshed_pending_job_count", "active_frozen_job_count", "terminal_historical_job_count", "role_configs"],
-          properties: {
-            mode: { type: "string", enum: ["bind", "migrate"] },
-            effect: { type: "string", enum: ["new_jobs_only", "refresh_pending"] },
-            credential_id: { type: "string", format: "uuid" },
-            source_credential_id: { type: "string", format: "uuid", nullable: true },
-            role_config_count: { type: "integer", minimum: 0 },
-            pending_job_count: { type: "integer", minimum: 0 },
-            refreshed_pending_job_count: { type: "integer", minimum: 0 },
-            active_frozen_job_count: { type: "integer", minimum: 0 },
-            terminal_historical_job_count: { type: "integer", minimum: 0 },
-            role_configs: {
-              type: "array",
-              maxItems: 100,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["role_config_id", "role_name", "scope", "project_id", "model", "model_changed"],
-                properties: {
-                  role_config_id: { type: "string", format: "uuid" },
-                  role_name: { type: "string" },
-                  scope: { type: "string", enum: ["global", "project"] },
-                  project_id: { type: "string", format: "uuid", nullable: true },
-                  model: { type: "string", nullable: true },
-                  model_changed: { type: "boolean" },
-                },
-              },
-            },
-          },
-        },
-        CredentialBatchBindingError: {
-          type: "object",
-          additionalProperties: false,
-          required: ["error_code", "error"],
-          properties: {
-            error_code: {
-              type: "string",
-              enum: [
-                "BATCH_REQUEST_INVALID",
-                "BATCH_TRANSACTION_FAILED",
-                "CREDENTIAL_NOT_FOUND",
-                "CREDENTIAL_KIND_INVALID",
-                "CREDENTIAL_NOT_ACTIVE",
-                "CREDENTIAL_PROVIDER_INVALID",
-                "CREDENTIAL_CLI_INCOMPATIBLE",
-                "CREDENTIAL_HEALTH_REQUIRED",
-                "CREDENTIAL_MODEL_CATALOG_REQUIRED",
-                "CREDENTIAL_MODEL_CATALOG_UNSUPPORTED",
-                "CREDENTIAL_MODEL_REQUIRED",
-                "CREDENTIAL_MODEL_NOT_CURRENT",
-                "ROLE_CONFIG_NOT_FOUND",
-                "ROLE_CONFIG_SOURCE_MISMATCH",
-                "PROJECT_SCOPE_FORBIDDEN",
-                "IDEMPOTENCY_KEY_REUSED",
-              ],
-            },
-            error: { type: "string", minLength: 1, maxLength: 300 },
-            field: { type: "string", minLength: 1, maxLength: 80 },
-            repair: {
-              type: "object",
-              additionalProperties: false,
-              required: ["action", "credential_id"],
-              properties: {
-                action: { type: "string", enum: ["activate_credential", "repair_provider", "test_connection", "discover_models", "choose_model", "choose_project_credential", "choose_project_role_config"] },
-                credential_id: { type: "string", format: "uuid" },
-                role_config_id: { type: "string", format: "uuid" },
-              },
-            },
           },
         },
         RuntimeKnobOverride: {
@@ -3368,22 +3246,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并由平台目录与 Hub 提案选择" },
             sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
             runtime_knobs: { $ref: "#/components/schemas/RuntimeKnobOverride" },
-            credentials: {
-              type: "array",
-              deprecated: true,
-              description:
-                "已弃用（#632）：请改用平台凭据资源 + 项目 Agent/Provider 白名单 default_credential_id。"
-                + "现有 role_credentials 仍会被 Job 运行时尊重；新 Capability Pack 路径不应依赖本字段。"
-                + "Omit=保留绑定；显式 [] 清空（#631）。",
-              items: {
-                type: "object",
-                required: ["credential_id", "purpose"],
-                properties: {
-                  credential_id: { type: "string", format: "uuid" },
-                  purpose: { type: "string", default: "llm" },
-                },
-              },
-            },
             config_files: {
               type: "array",
               items: {
@@ -3394,12 +3256,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                   content: { type: "string" },
                 },
               },
-            },
-            pi_extensions: {
-              type: "array",
-              items: { type: "string", pattern: "^[a-z][a-z0-9-]{0,62}$" },
-              maxItems: 8,
-              description: "仅 agent_cli=pi：已注册的 Pi 扩展 id。Job 创建时冻结；启动仍带 --no-extensions，只对冻结路径追加 -e。未注册 id 或与 Job 镜像不兼容则拒绝。出网扩展服从任务 allow_egress。pilot pi-web-access 只预置 audit / kali-minimal。",
             },
           },
         },

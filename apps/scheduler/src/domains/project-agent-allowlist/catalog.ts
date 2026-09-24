@@ -11,21 +11,27 @@ import {
 
 type SqlLike = RoleRuntimeSnapshotTransaction;
 
-/** 收集项目 RoleConfig 当前绑定的 CLI / Credential，供迁移种子使用。 */
+/** #690: seed allowlist from project RoleConfig CLI + visible active Provider credentials (no role_credentials). */
 export async function collectProjectIdentityBindings(
   db: SqlLike,
   projectId: string,
 ): Promise<{ agent_clis: string[]; credential_ids: string[] }> {
-  const rows = await db`
-    SELECT rc.agent_cli, c.id AS credential_id
+  const roleRows = await db`
+    SELECT rc.agent_cli
     FROM role_configs rc
-    LEFT JOIN role_credentials rcb ON rcb.role_config_id = rc.id AND rcb.purpose = 'llm'
-    LEFT JOIN credentials c ON c.id = rcb.credential_id
-    WHERE rc.project_id = ${projectId}` as Array<{ agent_cli: string | null; credential_id: string | null }>;
+    WHERE rc.project_id = ${projectId}` as Array<{ agent_cli: string | null }>;
+  const credRows = await db`
+    SELECT c.id AS credential_id
+    FROM credentials c
+    WHERE c.kind = 'llm_provider'
+      AND c.status = 'active'
+      AND (c.project_id IS NULL OR c.project_id = ${projectId})` as Array<{ credential_id: string }>;
   const agent_clis: string[] = [];
   const credential_ids: string[] = [];
-  for (const row of rows) {
+  for (const row of roleRows) {
     if (typeof row.agent_cli === "string" && row.agent_cli.trim()) agent_clis.push(row.agent_cli.trim());
+  }
+  for (const row of credRows) {
     if (typeof row.credential_id === "string") credential_ids.push(row.credential_id);
   }
   return { agent_clis, credential_ids };

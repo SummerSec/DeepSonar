@@ -54,11 +54,7 @@ export function AgentMarketplacePage() {
       const current = (await api.globalRoleConfigs()).find((item) => item.role_id === role.id);
       await api.putGlobalRoleConfig(role.id, current ? {
         ...pack.config,
-        credentials: current.credentials.map((item) => ({ credential_id: item.credential_id, purpose: item.purpose })),
         config_files: current.config_files.map((item) => ({ path: item.path, content: item.content })),
-        pi_extensions: pack.config.pi_extensions?.length
-          ? pack.config.pi_extensions
-          : (current.pi_extensions_json ?? []),
       } : pack.config);
       setNotice(`${pack.title} ${pack.version} 已安装为全局缺省；既有本机凭据与 Provider 配置文件保持不变`);
       setPendingPack(null);

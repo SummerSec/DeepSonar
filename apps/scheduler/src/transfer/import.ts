@@ -2,7 +2,7 @@
  * 项目导入：预览 + create_new / merge_configuration
  */
 import { randomUUID } from "node:crypto";
-import { FactVerificationStatus, validateModuleSelectors, validatePiExtensionIds } from "@deepsonar/shared-types";
+import { FactVerificationStatus, validateModuleSelectors } from "@deepsonar/shared-types";
 import {
   projectCredentialMetadata,
   projectCredentialProvider,
@@ -451,8 +451,6 @@ async function importRoleConfigs(
     const moduleSelectors = rc.modules_json == null
       ? []
       : validateModuleSelectors(rc.modules_json, `RoleConfig ${roleName}.modules_json`);
-    const piExtErr = validatePiExtensionIds(rc.pi_extensions_json ?? [], agentCli);
-    if (piExtErr) throw new Error(`RoleConfig ${roleName}.pi_extensions_json: ${piExtErr}`);
     const sandboxLimitsRaw = parseSandboxLimitsOverride(rc.sandbox_limits_json);
     const sandboxClamp = clampSandboxLimitsOverrideToPlatform(
       sandboxLimitsRaw,
@@ -525,7 +523,6 @@ async function importRoleConfigs(
         platform_tools_json: ((rc.platform_tools_json as unknown) ?? {}) as never,
         sandbox_limits_json: sandboxLimits as never,
         runtime_knobs_json: runtimeKnobs as never,
-        pi_extensions_json: ((rc.pi_extensions_json as unknown) ?? []) as never,
         instructions_markdown: (rc.instructions_markdown as string) ?? null,
         runtime_image_key: null,
         version: 1,
@@ -549,37 +546,7 @@ async function importRoleConfigs(
           updated_at = now()`;
     }
 
-    // Credential 绑定：仅当 mapping 存在
-    const creds = (rc.credentials as { source_credential_id: string; purpose?: string }[]) ?? [];
-    for (const c of creds) {
-      const targetCred = id_map.credentials[c.source_credential_id];
-      if (!targetCred) continue;
-      const [credential] = await tx`
-        SELECT id, project_id, provider, public_metadata_json, settings_config_json, agent_cli
-        FROM credentials WHERE id = ${targetCred} FOR UPDATE`;
-      if (!credential) throw new Error(`Credential 不存在: ${targetCred}`);
-      const purpose = c.purpose ?? "llm";
-      const bindingError = validateCredentialRoleConfigBinding({
-        source: `RoleConfig ${roleName} → Credential ${targetCred}`,
-        purpose,
-        agentCli,
-        model,
-        credentialProjectId: (credential.project_id as string | null) ?? null,
-        roleConfigProjectId: projectId,
-        provider: String(credential.provider ?? ""),
-        metadata: credential.public_metadata_json,
-        settingsConfig: credential.settings_config_json,
-        credentialAgentCli: (credential.agent_cli as string | null) ?? null,
-      });
-      if (bindingError) throw new Error(bindingError);
-      await tx`
-        INSERT INTO role_credentials ${tx({
-          role_config_id: created.id as string,
-          credential_id: targetCred,
-          purpose,
-        })}
-        ON CONFLICT DO NOTHING`;
-    }
+    // #690: ignore legacy RoleConfig.credentials bindings from packs.
   }
 }
 

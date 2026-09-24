@@ -24,7 +24,7 @@ export interface PiExtensionRegistration {
 
 /**
  * Platform allowlist. New extensions = registry row + image preinstall.
- * RoleConfig may only name these IDs; start path stays `--no-extensions` + `-e`.
+ * Hub/Job capability combo may only name these IDs (#690); start path stays `--no-extensions` + `-e`.
  */
 export const PI_EXTENSION_REGISTRY = {
   "pi-web-access": {
@@ -81,7 +81,7 @@ export function parsePiExtensionIds(value: unknown): string[] {
   return ids;
 }
 
-/** RoleConfig / transfer write gate. Non-Pi CLIs may only store an empty list. */
+/** Job capability / Hub write gate. Non-Pi CLIs may only store an empty list. */
 export function validatePiExtensionIds(ids: unknown, agentCli: string): string | null {
   let parsed: string[];
   try {

@@ -18,7 +18,8 @@ test("DELETE /credentials/:id requires agents:write and serializes with dispatch
   assert.match(handler, /pg_advisory_xact_lock\(hashtext\(\$\{DISPATCH_CLAIM_ADVISORY_KEY\}\)\)/);
   assert.match(handler, /FROM credentials WHERE id = \$\{id\} FOR UPDATE/);
   assert.match(handler, /CREDENTIAL_IN_USE/);
-  assert.match(handler, /CREDENTIAL_BOUND/);
+  assert.doesNotMatch(handler, /CREDENTIAL_BOUND/);
+  assert.doesNotMatch(handler, /role_credentials/);
   assert.match(handler, /CREDENTIAL_SCAN_IN_USE/);
   assert.match(handler, /DELETE FROM job_tokens WHERE credential_id/);
   assert.match(handler, /action: "credential\.delete"/);
@@ -59,9 +60,11 @@ test("web deleteAccount only hard-blocks pending/active, not recoverable", () =>
   assert.match(handler, /请等待结束或取消后再删/);
 });
 
-test("unbind bumps RoleConfig version and audit keeps project_id", () => {
+test("#690 delete no longer unbinds RoleConfig; audit still keeps project_id", () => {
   const handler = deleteHandler();
-  assert.match(handler, /SET version = version \+ 1, updated_at = now\(\)/);
+  assert.doesNotMatch(handler, /SET version = version \+ 1, updated_at = now\(\)/);
+  assert.doesNotMatch(handler, /DELETE FROM role_credentials/);
+  assert.match(handler, /RoleConfig credential bindings removed/);
   assert.match(handler, /project_id: existing\.project_id \? String\(existing\.project_id\) : null/);
   assert.match(handler, /projectId: result\.project_id/);
 });

@@ -33,10 +33,12 @@ export {
   MODEL_NOT_IN_CATALOG,
   MODEL_PASSTHROUGH_DISABLED,
   MODEL_ALLOWLIST_UNCONFIGURED,
-  CREDENTIAL_BINDING_DEPRECATED,
-  CREDENTIAL_BINDING_MISSING,
   admitModelAgainstCatalog,
-  credentialBindingDeprecatedWarning,
-  credentialBindingMissingWarning,
   gatewayFrozenModelRepair,
 } from "./model-catalog-admit.js";
+export {
+  resolveProviderCredentialForJob,
+  ProviderCredentialResolveError,
+  type ResolveProviderCredentialInput,
+  type ResolvedProviderCredential,
+} from "./resolve-credential.js";

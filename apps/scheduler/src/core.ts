@@ -1658,7 +1658,7 @@ export function validateConfigFilePath(agentCli: string, p: string): string | nu
   const allowed = CONFIG_FILE_PATHS[agentCli];
   if (!allowed) return `未知 agent_cli: ${agentCli}`;
   if (agentCli === "pi" && /^\.pi\/agent\/extensions\//u.test(norm)) {
-    return "Pi 扩展只能通过 RoleConfig.pi_extensions 声明已注册扩展，不能上传扩展源码";
+    return "Pi 扩展只能通过 Hub 角色能力组合声明已注册扩展（pi_extension_ids），不能上传扩展源码";
   }
   if (norm !== allowed) return `该 CLI 首期只允许固定配置文件：${allowed}`;
   return null;
@@ -1690,7 +1690,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; credentialId?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null },
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,

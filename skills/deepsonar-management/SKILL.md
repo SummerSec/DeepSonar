@@ -160,12 +160,11 @@ python scripts/deepsonar-api.py credentials models-preview --provider anthropic 
 python scripts/deepsonar-api.py credentials update <id> --data '{"metadata":{"base_url":"http://127.0.0.1/v1"}}'
 python scripts/deepsonar-api.py credentials rotate <id> --secret '...'
 python scripts/deepsonar-api.py credentials status <id> --status active|disabled
-python scripts/deepsonar-api.py credentials delete <id> [--unbind]
+python scripts/deepsonar-api.py credentials delete <id>
 python scripts/deepsonar-api.py credentials test <id>
 python scripts/deepsonar-api.py credentials models <id>   # 已缓存模型目录
 python scripts/deepsonar-api.py credentials models-refresh <id>   # 连接 Provider 刷新目录
 python scripts/deepsonar-api.py credentials compatibility <id> [--agent-cli claude-code] [--model ...]
-python scripts/deepsonar-api.py credentials batch-bind --credential-id <id> --role-config-ids '["<id>"]' --idempotency-key change-20260809
 
 # 运行时镜像市场（images:*）
 python scripts/deepsonar-api.py runtime-images list [--search <kw>] [--project <projectId>]

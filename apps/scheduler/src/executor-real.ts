@@ -886,7 +886,7 @@ ${taskGoal}
 
 下面注入的画布 YAML 是启动时的初始投影，不保证包含本轮最新状态。每次 Worker、Verify、人工消息或其他画布增量到达后，先调用 graph_query({kind:"overview"}) 获取最新概况，再按需用 index、findings、intents、node、edges、evidence 查询细节。complete、补证和新 intent 必须以最新查询结果为准；from 只能引用本 Job 已通过注入或 graph_query 返回的 referable_ids。
 读取任务画布并判断目标是否达成；未达成时先调用 list_available_roles 查询本 Job 可派发角色，再自行选择角色并为每个 Worker 编写完整、自包含的 prompt。每个 prompt 还必须明确该 Worker 对目标材料是只读还是允许修改；允许修改时写明文件范围、修改目的、验证命令和边界，未明确授权不得修改目标。若需要为某个 Worker 临时调整角色业务提示词，可在该 intent 添加 role_prompt；它只冻结到新 Job，不会修改持久化 RoleConfig。
-每个 intent 可按本轮目标需要附加可选字段 agent_cli / credential_id / model_ref 选择 Agent CLI、Provider 与模型：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / credential_id / models.model_id；需要能力约束时附加 model_requirements（如 min_context_window、require_tools、reasoning_effort），Scheduler 会在冻结前再次校验。三者与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省或 RoleConfig 回退。并发以 Provider 配额为准。不得提案未启用目录外的值。
+每个 intent 可按本轮目标需要附加可选字段 agent_cli / provider / model_ref / pi_extension_ids 选择 Agent CLI、Provider 插件、模型与已注册 Pi 扩展：先分别调用 list_available_agent_clis 与 list_available_providers，原样使用返回的 agent_cli / provider / models.model_id（禁止提交 credential/account UUID）；需要能力约束时附加 model_requirements（如 min_context_window、require_tools、reasoning_effort），Scheduler 在项目授权目录内解析凭据并在冻结前再次校验。与 runtime_image_key 在项目已启用集合内可自由组合；省略时平台用项目软缺省解析。并发以 Provider 配额为准。不得提案未启用目录外的值。
 Skill/模块源：${config.skillSources.defaultInject ? "业务 Skill 已按平台 trust 基线默认下发全部 trusted+enabled 源（RoleConfig modules_json 为空时也不为空）" : "业务 Skill 不会因 RoleConfig modules_json 为空而自动注入"}。Agent/Worker 需要能力时自行调用 list_available_skills/search_skills，再用返回的 selector/content_hash 调用 pull_skill；Hub 不需要预先把 Skill 写进 Intent。list_available_skill_sources 只用于查看平台 trusted+enabled 源摘要。
 每个 intent 可按本轮目标需要附加可选字段 runtime_image_key 选择运行镜像：需要非缺省工具链时必须先调用 list_available_runtime_images，按返回条目的 purpose、capabilities、selection_hints、tool_summary、not_included 匹配任务（APK/移动端→mobile，Chromium/CDP→chrome-test，ClickHouse SQL→clickhouse-test，hdc/OpenHarmony 设备→openharmony-test，多语言动态 PoC→kali-minimal 等），再原样复制 image_key；同时核对 compatible_agent_clis 覆盖本轮角色 CLI 且 readiness=ready。禁止凭记忆猜测 image_key。省略该字段时平台按角色缺省镜像解析。不得填写目录之外的 key、OCI 地址或 digest，也不得提案 preparing/unavailable/error 的条目。
 
@@ -1521,7 +1521,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return { accepted: true, operation, agent_clis };
     }
     if (operation === "list_available_providers") {
-      const providers = await listHubProviderCatalog(sql as never, job.project_id as string);
+      const providers = (await listHubProviderCatalog(sql as never, job.project_id as string)).map((entry) => {
+        const { credential_id: _credentialId, ...hubSafe } = entry;
+        return hubSafe;
+      });
       return { accepted: true, operation, providers };
     }
     if (operation === "list_available_skill_sources") {

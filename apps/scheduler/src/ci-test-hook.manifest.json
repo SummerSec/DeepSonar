@@ -10,7 +10,6 @@
     "apps/scheduler/src/canvas-convergence-120.test.ts",
     "apps/scheduler/src/canvas-projection-order.test.ts",
     "apps/scheduler/src/credential-auth-scopes.integration.test.ts",
-    "apps/scheduler/src/credential-batch-bind.integration.test.ts",
     "apps/scheduler/src/credential-health-concurrency.integration.test.ts",
     "apps/scheduler/src/credential-project-scope.integration.test.ts",
     "apps/scheduler/src/credential-secret-projection.test.ts",
