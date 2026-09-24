@@ -2346,7 +2346,7 @@ const OPS: Op[] = [
         provider: { type: "string", description: "LLM 仅允许协议 ID anthropic（Anthropic Messages）或 openai（OpenAI Responses）；OCI 使用 registry host" },
         secret: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
-        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], description: "llm_provider 必填；不可显式置 null（#707）" },
         settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置；运行时物化为 Agent 沙箱配置文件" },
         meta: { type: "object", additionalProperties: true },
         metadata: {
@@ -2377,7 +2377,7 @@ const OPS: Op[] = [
         provider: { type: "string" },
         project_id: { type: "string", format: "uuid", nullable: true },
         metadata: { $ref: "#/components/schemas/CredentialMetadata" },
-        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], description: "llm_provider 必填；不可显式置 null（#707）" },
         settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置（可含明文 API Key）；空字段或 [已保存密钥] 表示保留原值" },
         meta: { type: "object", additionalProperties: true },
       },

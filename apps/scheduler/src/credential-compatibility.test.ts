@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   UNKNOWN_PROVIDER_ERROR,
@@ -204,4 +205,28 @@ test("RoleConfig 导入绑定复用项目作用域与 provider 校验", () => {
     validateCredentialRoleConfigBinding({ ...base, provider: "openai" }) ?? "",
     /不兼容.*claude-code/,
   );
+});
+
+test("#707 Phase 1: credential routes reject null agent_cli and guard in-use affiliation changes", () => {
+  const routes = readFileSync(new URL("./domains/credential/routes.ts", import.meta.url), "utf8");
+  // PATCH schema: no longer AgentCliSchema.nullable().optional()
+  const patchStart = routes.indexOf('app.patch("/credentials/:id"');
+  const patchEnd = routes.indexOf('app.post("/credentials/:id/rotate"', patchStart);
+  const patch = routes.slice(patchStart, patchEnd);
+  assert.match(patch, /agent_cli: AgentCliSchema\.optional\(\)/);
+  assert.doesNotMatch(patch, /agent_cli: AgentCliSchema\.nullable\(\)/);
+  assert.match(patch, /CREDENTIAL_CLI_REQUIRED/);
+  assert.match(patch, /CREDENTIAL_IN_USE_BY_RUNNING_JOBS/);
+  assert.match(patch, /affiliationChanging/);
+  assert.match(patch, /status IN \('claimed','provisioning','running'\)/);
+
+  const createStart = routes.indexOf('app.post("/credentials"');
+  const createEnd = routes.indexOf('app.patch("/credentials/:id"', createStart);
+  const create = routes.slice(createStart, createEnd);
+  assert.match(create, /CREDENTIAL_CLI_REQUIRED/);
+  assert.match(create, /llm_provider Credential 必须指定 agent_cli/);
+  // Create body schema also non-nullable
+  const bodySlice = routes.slice(routes.indexOf("const CredentialBody"), routes.indexOf("const CredentialModelsPreviewBody"));
+  assert.match(bodySlice, /agent_cli: AgentCliSchema\.optional\(\)/);
+  assert.doesNotMatch(bodySlice, /agent_cli: AgentCliSchema\.nullable\(\)/);
 });

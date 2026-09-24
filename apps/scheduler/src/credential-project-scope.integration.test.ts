@@ -173,6 +173,7 @@ if (!testDatabaseUrl) {
         name: "forced-own",
         kind: "llm_provider",
         provider: "anthropic",
+        agent_cli: "claude-code",
         secret: "forced-own-secret",
         project_id: null,
       });
@@ -183,6 +184,7 @@ if (!testDatabaseUrl) {
         name: "omitted-own",
         kind: "llm_provider",
         provider: "anthropic",
+        agent_cli: "claude-code",
         secret: "omitted-own-secret",
       });
       assert.equal(omittedProjectResponse.statusCode, 201, omittedProjectResponse.payload);
@@ -193,6 +195,7 @@ if (!testDatabaseUrl) {
           name: "forbidden-other",
           kind: "llm_provider",
           provider: "anthropic",
+          agent_cli: "claude-code",
           secret: "forbidden-secret",
           project_id: otherProjectId,
         });
@@ -203,6 +206,7 @@ if (!testDatabaseUrl) {
         name: "created-own",
         kind: "llm_provider",
         provider: "anthropic",
+        agent_cli: "claude-code",
         secret: "own-secret",
         project_id: ownProjectId,
       });
@@ -240,4 +244,103 @@ if (!testDatabaseUrl) {
       await admin.end().catch(() => undefined);
     }
   });
+
+  test("#707 Phase 1: PATCH agent_cli refused while credential held by running job", async () => {
+    const adminUrl = new URL(testDatabaseUrl);
+    adminUrl.pathname = "/postgres";
+    const admin = (await import("postgres")).default(adminUrl.toString(), { max: 1 });
+    const databaseName = `deepsonar_cred_inuse_${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const targetUrl = new URL(testDatabaseUrl);
+    targetUrl.pathname = `/${databaseName}`;
+    targetUrl.search = "";
+    let databaseCreated = false;
+    let closeApp: (() => Promise<unknown>) | null = null;
+    let endSql: (() => Promise<unknown>) | null = null;
+    try {
+      await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+      databaseCreated = true;
+      process.env.DATABASE_URL = targetUrl.toString();
+      process.env.DEEPSONAR_AUTH_REQUIRED = "false";
+      process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
+      process.env.AGENT_MODE = "fake";
+
+      const [fastifyModule, websocketModule, dbModule, routesModule, credentialsModule] = await Promise.all([
+        import("fastify"),
+        import("@fastify/websocket"),
+        import("./db.js"),
+        import("./routes.js"),
+        import("./credentials.js"),
+      ]);
+      const { default: Fastify } = fastifyModule;
+      const { default: websocket } = websocketModule;
+      const { migrate, sql } = dbModule;
+      const { registerRoutes } = routesModule;
+      const { encryptSecret } = credentialsModule;
+      endSql = () => sql.end({ timeout: 5 });
+      await migrate();
+      const app = Fastify({ logger: false });
+      await app.register(websocket);
+      registerRoutes(app);
+      await app.ready();
+      closeApp = () => app.close();
+
+      const projectId = randomUUID();
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'inuse')`;
+      const credId = randomUUID();
+      const enc = encryptSecret("inuse-secret");
+      await sql`
+        INSERT INTO credentials (
+          id, name, kind, provider, project_id, ciphertext, nonce, auth_tag, fingerprint, last4,
+          status, agent_cli
+        ) VALUES (
+          ${credId}, 'inuse-account', 'llm_provider', 'anthropic', ${projectId},
+          ${enc.ciphertext}, ${enc.nonce}, ${enc.auth_tag}, 'fp-inuse', 'cret',
+          'active', 'claude-code'
+        )`;
+      await sql`
+        INSERT INTO jobs (id, project_id, type, status, agent_snapshot_json)
+        VALUES (${randomUUID()}, ${projectId}, 'inuse', 'running', ${sql.json({
+          credential_id: credId,
+          agent_cli: 'claude-code',
+          credential_provider: 'anthropic',
+        } as never)})`;
+
+      type InjectResponse = { statusCode: number; payload: string };
+      const patch = await (app.inject({
+        method: "PATCH",
+        url: `/credentials/${credId}`,
+        payload: { agent_cli: "pi" },
+      }) as unknown as Promise<InjectResponse>);
+      assert.equal(patch.statusCode, 409, patch.payload);
+      const body = JSON.parse(patch.payload) as Record<string, unknown>;
+      assert.equal(body.error_code, "CREDENTIAL_IN_USE_BY_RUNNING_JOBS");
+
+      const nullPatch = await (app.inject({
+        method: "PATCH",
+        url: `/credentials/${credId}`,
+        payload: { agent_cli: null },
+      }) as unknown as Promise<InjectResponse>);
+      assert.equal(nullPatch.statusCode, 400, nullPatch.payload);
+      assert.equal(JSON.parse(nullPatch.payload).error_code, "CREDENTIAL_CLI_REQUIRED");
+
+      const createMissing = await (app.inject({
+        method: "POST",
+        url: "/credentials",
+        payload: {
+          name: "missing-cli",
+          kind: "llm_provider",
+          provider: "anthropic",
+          secret: "secret-missing-cli",
+        },
+      }) as unknown as Promise<InjectResponse>);
+      assert.equal(createMissing.statusCode, 400, createMissing.payload);
+      assert.equal(JSON.parse(createMissing.payload).error_code, "CREDENTIAL_CLI_REQUIRED");
+    } finally {
+      if (closeApp) await closeApp().catch(() => undefined);
+      if (endSql) await endSql().catch(() => undefined);
+      if (databaseCreated) await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}"`).catch(() => undefined);
+      await admin.end({ timeout: 5 }).catch(() => undefined);
+    }
+  });
+
 }

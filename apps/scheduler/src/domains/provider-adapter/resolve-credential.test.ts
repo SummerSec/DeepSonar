@@ -158,3 +158,98 @@ test("#690 resolve: model filter narrows pool; default still wins", async () => 
   });
   assert.equal(resolved?.id, CRED_A);
 });
+
+test("#707 resolve: CLI mismatch fail-closed (no soft fallback to candidates)", async () => {
+  const piOnly = { ...baseRow(CRED_A), agent_cli: "pi" };
+  await assert.rejects(
+    () => resolveProviderCredentialForJob({
+      db: dbWith([piOnly]) as never,
+      projectId: "project-1",
+      agentCli: "claude-code",
+      allowlist: allowlist({ enabled_credential_ids: [CRED_A], default_credential_id: CRED_A }),
+      provider: "anthropic",
+    }),
+    (error: unknown) => {
+      if (!(error instanceof ProviderCredentialResolveError)) return false;
+      if (error.code !== "provider_credential_cli_mismatch") return false;
+      assert.equal(error.repair.category, "permanent_failure");
+      assert.equal(
+        error.repair.next_action,
+        "enable_credential_pinned_to_role_cli_or_change_project_default_credential",
+      );
+      const observed = error.repair.observed_shape as {
+        candidates?: Array<{ credential_id?: string; agent_cli?: string | null; name?: string; secret?: string }>;
+      };
+      assert.ok(Array.isArray(observed.candidates));
+      assert.equal(observed.candidates![0]!.credential_id, CRED_A);
+      assert.equal(observed.candidates![0]!.agent_cli, "pi");
+      assert.equal(observed.candidates![0]!.name, undefined);
+      assert.equal(observed.candidates![0]!.secret, undefined);
+      return true;
+    },
+  );
+});
+
+test("#707 resolve: default_credential_id pointing at CLI-mismatched account does not side-path win", async () => {
+  const piDefault = { ...baseRow(CRED_A), agent_cli: "pi" };
+  const claudeAlt = { ...baseRow(CRED_B), agent_cli: "claude-code" };
+  const resolved = await resolveProviderCredentialForJob({
+    db: dbWith([piDefault, claudeAlt]) as never,
+    projectId: "project-1",
+    agentCli: "claude-code",
+    allowlist: allowlist({
+      enabled_credential_ids: [CRED_A, CRED_B],
+      default_credential_id: CRED_A,
+    }),
+    provider: "anthropic",
+  });
+  assert.equal(resolved?.id, CRED_B);
+});
+
+test("#707 resolve: default_credential_id CLI mismatch with no alternative fail-closed", async () => {
+  const piDefault = { ...baseRow(CRED_A), agent_cli: "pi" };
+  await assert.rejects(
+    () => resolveProviderCredentialForJob({
+      db: dbWith([piDefault]) as never,
+      projectId: "project-1",
+      agentCli: "claude-code",
+      allowlist: allowlist({ enabled_credential_ids: [CRED_A], default_credential_id: CRED_A }),
+      provider: "anthropic",
+    }),
+    (error: unknown) => error instanceof ProviderCredentialResolveError
+      && error.code === "provider_credential_cli_mismatch"
+      && error.repair.category === "permanent_failure",
+  );
+});
+
+test("#707 resolve: null agent_cli fail-closed (no longer compatible with every CLI)", async () => {
+  const nullCli = { ...baseRow(CRED_A), agent_cli: null };
+  await assert.rejects(
+    () => resolveProviderCredentialForJob({
+      db: dbWith([nullCli]) as never,
+      projectId: "project-1",
+      agentCli: "claude-code",
+      allowlist: allowlist({ enabled_credential_ids: [CRED_A], default_credential_id: CRED_A }),
+      provider: "anthropic",
+    }),
+    (error: unknown) => error instanceof ProviderCredentialResolveError
+      && error.code === "provider_credential_cli_mismatch",
+  );
+});
+
+test("#707 resolve: protocol incompatible (claude-code × openai) is model_correctable", async () => {
+  // Pin matches role CLI, but provider protocol does not — blocked at resolve layer.
+  const bad = { ...baseRow(CRED_A), agent_cli: "claude-code", provider: "openai" };
+  await assert.rejects(
+    () => resolveProviderCredentialForJob({
+      db: dbWith([bad]) as never,
+      projectId: "project-1",
+      agentCli: "claude-code",
+      allowlist: allowlist({ enabled_credential_ids: [CRED_A], default_credential_id: CRED_A }),
+      provider: "openai",
+    }),
+    (error: unknown) => error instanceof ProviderCredentialResolveError
+      && error.code === "provider_credential_protocol_incompatible"
+      && error.repair.category === "model_correctable",
+  );
+});

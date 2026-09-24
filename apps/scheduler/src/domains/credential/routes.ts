@@ -73,8 +73,8 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     secret: z.string().min(1).max(4096),
     project_id: z.string().uuid().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
-    /** CC Switch agent_cli column for this profile (llm_provider only). */
-    agent_cli: AgentCliSchema.nullable().optional(),
+    /** CC Switch agent_cli column for this profile (llm_provider only). #707: 不可置空. */
+    agent_cli: AgentCliSchema.optional(),
     /** Full CLI settingsConfig (may include plaintext keys); empty = legacy env path. */
     settings_config: z.record(z.string(), z.unknown()).optional().superRefine((value, ctx) => {
       try {
@@ -375,6 +375,12 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   }
 
   app.post("/credentials", async (req, reply) => {
+    // #707: 显式 null 不走 Zod invalid_payload，返回 CREDENTIAL_CLI_REQUIRED。
+    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      && Object.prototype.hasOwnProperty.call(req.body, "agent_cli")
+      && (req.body as { agent_cli?: unknown }).agent_cli === null) {
+      return reply.code(400).send({ error: "Credential.agent_cli 不能为空", error_code: "CREDENTIAL_CLI_REQUIRED" });
+    }
     const body = CredentialBody.parse(req.body);
     if (containsSecretMask(body.secret) || (body.settings_config && containsSecretMask(body.settings_config))) {
       return reply.code(400).send({ error: `创建 Credential 不接受 ${MASKED_SECRET_PLACEHOLDER} 作为密钥` });
@@ -386,6 +392,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const effectiveProjectId = actorProjectId ?? body.project_id ?? null;
     if (!isProviderAllowedForKind(body.kind, body.provider) || (body.kind !== "oci_registry" && !isProviderKnown(body.provider))) {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
+    }
+    // #707 / #658: llm_provider 必须独占绑定 agent_cli，缺省 fail-closed。
+    if (body.kind === "llm_provider" && !body.agent_cli) {
+      return reply.code(400).send({ error: "llm_provider Credential 必须指定 agent_cli", error_code: "CREDENTIAL_CLI_REQUIRED" });
     }
     if (body.kind === "llm_provider" && body.agent_cli) {
       const compatibilityError = validateCredentialCompatibility(body.agent_cli, body.provider);
@@ -439,7 +449,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         fingerprint: fingerprintOf(body.secret),
         last4: last4Of(body.secret),
         created_by: req.actor?.name ?? null,
-        agent_cli: body.kind === "llm_provider" ? (body.agent_cli ?? null) : null,
+        agent_cli: body.kind === "llm_provider" ? body.agent_cli! : null,
         settings_config_json: (body.kind === "llm_provider" ? settingsConfig : {}) as never,
         meta_json: (body.kind === "llm_provider" ? metaJson : {}) as never,
       })}
@@ -466,13 +476,19 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   app.patch("/credentials/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const actorProjectId = req.actor?.projectId ?? null;
+    // #707: 显式 null → CREDENTIAL_CLI_REQUIRED（schema 不再 nullable）。
+    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      && Object.prototype.hasOwnProperty.call(req.body, "agent_cli")
+      && (req.body as { agent_cli?: unknown }).agent_cli === null) {
+      return reply.code(400).send({ error: "Credential.agent_cli 不能为空", error_code: "CREDENTIAL_CLI_REQUIRED" });
+    }
     const body = z
       .object({
         name: z.string().trim().min(1).max(100).optional(),
         provider: z.string().trim().min(1).max(50).optional(),
         project_id: z.string().uuid().nullable().optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
-        agent_cli: AgentCliSchema.nullable().optional(),
+        agent_cli: AgentCliSchema.optional(),
         settings_config: z.record(z.string(), z.unknown()).optional().superRefine((value, ctx) => {
           try {
             parseContextWindowTokens(value?.context_window_tokens);
@@ -551,13 +567,21 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         return { error: "只有 llm_provider Credential 可以迁移 provider" };
       }
       if (runtimeFieldsChanged && existing.kind === "llm_provider") {
+        // #707: 改 agent_cli / provider 时，若仍被在跑 Job 引用则拒绝（要求先排空）。
+        const agentCliChanging = body.agent_cli !== undefined
+          && body.agent_cli !== ((existing.agent_cli as string | null) ?? null);
+        const affiliationChanging = providerChanged || agentCliChanging;
         const active = await tx`
           SELECT id FROM jobs
-          WHERE status IN ('claimed','provisioning','running','waiting_human')
+          WHERE status IN ('claimed','provisioning','running')
             AND agent_snapshot_json->>'credential_id' = ${id}
           LIMIT 1`;
-        if (providerChanged && active.length > 0) {
-          return { conflict: true, error: "Credential 仍被活动 Job 引用，不能迁移 provider" };
+        if (affiliationChanging && active.length > 0) {
+          return {
+            conflict: true,
+            error: "Credential 仍被 claimed/provisioning/running Job 引用，不能修改 agent_cli 或 provider；请先排空在跑任务",
+            error_code: "CREDENTIAL_IN_USE_BY_RUNNING_JOBS",
+          };
         }
         const bindings: Array<Record<string, unknown>> = [];
         const runtimeJobs = await tx`
@@ -646,7 +670,12 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     });
     if (!result) return reply.code(404).send({ error: "credential not found" });
     if ("scope" in result && result.scope) return reply.code(403).send({ error: result.error, error_code: "PROJECT_MISMATCH" });
-    if ("conflict" in result && result.conflict) return reply.code(409).send({ error: result.error });
+    if ("conflict" in result && result.conflict) {
+      return reply.code(409).send({
+        error: result.error,
+        ...(("error_code" in result && result.error_code) ? { error_code: result.error_code } : {}),
+      });
+    }
     if ("error" in result) return reply.code(400).send({ error: result.error });
     await audit(req, {
       action: "credential.update",

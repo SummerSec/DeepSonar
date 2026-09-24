@@ -88,6 +88,7 @@ if (!testDatabaseUrl) {
         name: "reject-secret-metadata",
         kind: "llm_provider",
         provider: "openai",
+        agent_cli: "pi",
         secret,
         metadata: { base_url: "http://127.0.0.1/v1", api_key: secret },
       });
@@ -110,6 +111,7 @@ if (!testDatabaseUrl) {
         name: "legacy-projection",
         kind: "llm_provider",
         provider: "openai",
+        agent_cli: "pi",
         secret,
         metadata: { base_url: "http://127.0.0.1/v1" },
       });
@@ -121,6 +123,7 @@ if (!testDatabaseUrl) {
         name: "openrouter-base-url-rejected",
         kind: "llm_provider",
         provider: "openrouter",
+        agent_cli: "pi",
         secret,
         metadata: { base_url: "http://127.0.0.1/v1" },
       });

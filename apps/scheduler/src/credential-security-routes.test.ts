@@ -71,3 +71,9 @@ test("GET /credentials/:id/models returns catalog_health_status distinct from co
   assert.match(route, /healthStatus: catalogHealth/);
   assert.doesNotMatch(route, /state: "verified"/);
 });
+
+test("#707 Phase 1: create/patch refuse null agent_cli; in-use affiliation guard present", () => {
+  assert.match(routes, /CREDENTIAL_CLI_REQUIRED/);
+  assert.match(routes, /CREDENTIAL_IN_USE_BY_RUNNING_JOBS/);
+  assert.doesNotMatch(routes, /agent_cli: AgentCliSchema\.nullable\(\)/);
+});

@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- Provider 账号 CLI 归属贯通到候选解析层（#707 Phase 1 / 方案 A）：`resolve-credential` 删除软回退与 `default_credential_id` 侧路；CLI 不匹配返回 `provider_credential_cli_mismatch`（`permanent_failure`）；协议不兼容返回 `provider_credential_protocol_incompatible`（`model_correctable`）。凭据 create/PATCH 拒绝空 `agent_cli`（`CREDENTIAL_CLI_REQUIRED`）；在跑 Job 持有账号时禁止改 `agent_cli`/`provider`（`CREDENTIAL_IN_USE_BY_RUNNING_JOBS`）。Schema NOT NULL 留给 Phase 3。
+
 ## [0.4.11] - 2026-09-24
 
 ### 变更
