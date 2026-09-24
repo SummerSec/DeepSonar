@@ -443,10 +443,14 @@ Agent 输入输出是无界数据（单次运行原始事件流可达数十 MB�
   文件的 `sha256=null`，`finalized_at=null`，stream 端点仍按既有读取/解压/记录总预算提供
   过程证据。若沙箱已销毁，manifest 的 `capture_error` 明示 Session 归档不可恢复，
   `session_id=null`，不根据 Attempt 身份伪造文件。
-- 过程流三职责（#388）：`events` 是语义账本，evidence 是过程证据，`stream-bus` 是非权威
-  投递缓存。补读只认本机 `BLOB_DIR`（`BLOB_STORE=s3` 不存过程证据）。本副本看不到文件时
-  `visibility=unavailable`；未落盘窗口标 `unpersisted`。不从过程流重放控制副作用，也不把
-  空页当成零丢失。跨副本 file-tail 未做。
+- 过程流三职责与可恢复性（#388）：`events` 是语义账本，evidence NDJSON/manifest 是过程证据，
+  `stream-bus` 是进程内非权威投递缓存。持久化确认点为 `appendNormalized` 落盘完成；
+  排序/去重游标为 `attempt_id:seq`；HTTP/WS 补读只认本机可见的 `BLOB_DIR`（`BLOB_STORE=s3`
+  不存过程证据）。未落盘标 `unpersisted`；本副本看不到文件标 `visibility=unavailable`，
+  WS 以 `4415 STREAM_UNAVAILABLE` 失败关闭。跨副本 file-tail **不做**（除非共享卷已证明
+  可见）。支持拓扑：单 Scheduler+本地卷（默认）可补齐已确认帧并提供本机 live；多 Scheduler+
+  共享 `BLOB_DIR` 可在任意副本补读已确认帧，live 仍仅 lease 持有者；多 Scheduler+本地卷
+  **不支持**过程流连续性。不从过程流重放控制副作用，不承诺零丢失。
 
 ### 6.3 索引与搜索策略
 

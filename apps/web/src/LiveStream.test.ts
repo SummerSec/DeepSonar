@@ -76,6 +76,9 @@ test("live reconnect catch-up and 4409 archive handoff stay on evidence HTTP", (
   const source = readFileSync(new URL("./LiveStream.tsx", import.meta.url), "utf8");
   assert.match(source, /api\.jobStreamPage\(jobId/);
   assert.match(source, /event\.code === 4409/);
+  assert.match(source, /event\.code === 4415/);
+  assert.match(source, /visibility === "unavailable"/);
+  assert.match(source, /4415/);
   assert.match(source, /jobStreamPage\(jobId, \{ after: cursor, limit: 50 \}\)/);
   assert.match(source, /describeProcessStreamPage/);
 });

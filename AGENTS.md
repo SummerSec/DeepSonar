@@ -160,7 +160,7 @@ pending → claimed → provisioning → running
 - 空库启动时套用基线；非空库版本或结构不匹配时 fail closed。没有增量 ALTER 链。
 - 改表只能修改 schema 基线、bump `SCHEMA_VERSION`，再运行 `pnpm db:rebuild -- --plan` / `--apply` 并验证备份和列交集回填。
 - 稳定状态、幂等键、外键和权限骨架进定列；开放内容进 JSONB。类型字段使用字符串，不用 Postgres enum 锁死演进。
-- `events` 只保存语义事件；原始运行流进 evidence 冷存储；`stream-bus` 只作非权威实时投递。
+- `events` 只保存语义事件；原始运行流进 evidence 冷存储；`stream-bus` 只作非权威实时投递。过程流补读只认可见 `BLOB_DIR`；跨副本无共享卷时 `visibility=unavailable` / WS `4415`（#388）。
 - API Token、Job token、Provider secret、Session artifact 和 `.deepsonarpack` 导入导出必须遵守各自的脱敏、权限和 provenance 规则。
 
 ## Web 与交互事实

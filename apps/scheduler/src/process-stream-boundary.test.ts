@@ -28,6 +28,13 @@ import {
   streamBuffer,
   streamCursor,
 } from "./stream-bus.js";
+import {
+  PROCESS_STREAM_TOPOLOGY_CONCLUSIONS,
+  STREAM_WS_UNAVAILABLE_CODE,
+  STREAM_WS_UNAVAILABLE_REASON,
+  shouldCloseStreamWsForVisibility,
+  processStreamTopologyConclusion,
+} from "./process-stream-policy.js";
 
 const JOB_A = "00000000-0000-0000-0000-000000000388";
 const JOB_B = "00000000-0000-0000-0000-000000000389";
@@ -213,4 +220,55 @@ test("bus queue bound matches the live WS sender", () => {
   assert.equal(STREAM_SUBSCRIBER_QUEUE_MAX, 128);
   const cursor = streamCursor({ attempt_id: "attempt", seq: 1 });
   assert.match(cursor, /^[A-Za-z0-9_-]+$/);
+});
+
+test("shared BLOB_DIR replica can backfill confirmed frames without a local writer", async () => {
+  const shared = "00000000-0000-0000-0000-000000000393";
+  await wipe(shared);
+  const writer = new JobEvidenceWriter(shared, "test", "attempt-shared");
+  await writer.appendNormalized({ type: "text.delta", delta: "shared-disk" });
+  clearJobEvidenceWritersForTests();
+  clearStreamForTests();
+  assert.equal(inspectProcessStreamWriter(shared).active, false);
+  const page = await readNormalizedStreamPage(shared, { expectLocal: true, live: true });
+  assert.equal(page.visibility, "local");
+  assert.equal(page.source, "evidence");
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0]?.delta, "shared-disk");
+  await wipe(shared);
+});
+
+test("WS fail-closed policy for unavailable visibility", () => {
+  assert.equal(shouldCloseStreamWsForVisibility("unavailable"), true);
+  assert.equal(shouldCloseStreamWsForVisibility("local"), false);
+  assert.equal(shouldCloseStreamWsForVisibility(undefined), false);
+  assert.equal(STREAM_WS_UNAVAILABLE_CODE, 4415);
+  assert.equal(STREAM_WS_UNAVAILABLE_REASON, "STREAM_UNAVAILABLE");
+  const source = readFileSync(new URL("./domains/stream/routes.ts", import.meta.url), "utf8");
+  assert.match(source, /shouldCloseStreamWsForVisibility/);
+  assert.match(source, /STREAM_WS_UNAVAILABLE_CODE/);
+  assert.doesNotMatch(source, /file-tail|fileTail/);
+});
+
+test("topology recoverability conclusions are explicit and refuse zero-loss", () => {
+  assert.equal(PROCESS_STREAM_TOPOLOGY_CONCLUSIONS.length, 3);
+  const single = processStreamTopologyConclusion("single_scheduler_local_blob");
+  const shared = processStreamTopologyConclusion("multi_scheduler_shared_blob");
+  const isolated = processStreamTopologyConclusion("multi_scheduler_local_blob");
+  assert.equal(single.supported, true);
+  assert.equal(shared.supported, true);
+  assert.equal(isolated.supported, false);
+  for (const row of PROCESS_STREAM_TOPOLOGY_CONCLUSIONS) {
+    assert.match(row.claim, /no zero-loss claim/i);
+    assert.doesNotMatch(row.claim, /zero loss guaranteed|保证零丢失/);
+  }
+  assert.match(isolated.live_delivery, /4415/);
+  assert.match(isolated.backfill_confirmed, /unavailable/);
+});
+
+test("publish path waits for persistence ack before bus delivery", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /appendNormalized\(e\)/);
+  assert.match(source, /streamPublishTail[\s\S]*?persisted[\s\S]*?publishStream/);
+  assert.match(source, /evidenceSeq/);
 });

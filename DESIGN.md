@@ -224,11 +224,13 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 `buildGraphSnapshot` 按 `GraphScope` 生成有字符预算的 YAML：`hub`、`agent`、`verify`、`report` 看到的内容不同；Job 节点不进入 YAML。Verify scope 隐藏 maker 的 title/summary/severity，只给主体、location 和证据引用。长期方向是让模型用 Job-scoped 查询按需获取节点、邻域、证据和冲突，逐步减少全图投影，但不能改变 Canvas、events 和 Evidence 的权威性。
 
-语义 `events` 是唯一可触发控制副作用的账本；原始过程流写入本机 evidence/冷存储；WS `stream-bus` 只作实时投递。广播账本 `canvas_broadcasts` 记录 `planned`、`injected`、`failed`、`unknown`；`injected` 只证明写入 CLI 输入通道，不证明 Agent 已读。
+语义 `events` 是唯一可触发控制副作用的账本；原始过程流写入本机 evidence NDJSON/manifest；`stream-bus` 只作进程内非权威实时投递，不是补读源，也不从过程流重放控制副作用。广播账本 `canvas_broadcasts` 记录 `planned`、`injected`、`failed`、`unknown`；`injected` 只证明写入 CLI 输入通道，不证明 Agent 已读。
+
+**过程流持久化边界（#388）：** 确认点是 `JobEvidenceWriter.appendNormalized` 落盘完成；`publishStream` 必须等待该 Promise。排序与去重键为 `attempt_id:seq`。补读/订阅交界：先 `subscribeStream`，再读 evidence 快照，再用该键排空竞态。未落盘窗口标 `unpersisted`；本副本看不到期望文件标 `visibility=unavailable`，WS 关闭码 `4415`。可恢复性：单 Scheduler + 本地 `BLOB_DIR`（默认支持）可在重启/重连后补齐已确认帧并提供本机 live；多 Scheduler + 共享 `BLOB_DIR`（可选支持）任意副本可补读已确认帧，live 仍只在 lease 持有者；多 Scheduler + 本地卷（不支持过程流连续性）非持有者显式 unavailable。跨副本 file-tail 在未证明共享可见性前不做；不引入消息中间件；不承诺零丢失。
 
 人工消息进入 durable inbox ledger，附件先写共享资产再按 message UUID 注入 `/workspace/.deepsonar/inbox/`。`injected` 与显式 ACK 分离；waiting-human 回复会关闭旧 Attempt、恢复 Job 为 pending 并重新唤醒 Dispatcher。普通文本、Session 标题和节点名称都不能伪造 ACK。
 
-Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、usage 和广播注入，保留原始归档下载。Session usage 与 Gateway `job_usage_ledger` 是两套口径，不互相冒充定价或对账结果。实时流丢失时只能补读已落盘 evidence；另一 Scheduler 副本没有共享文件系统时必须报告不可见。
+Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、usage 和广播注入，保留原始归档下载。Session usage 与 Gateway `job_usage_ledger` 是两套口径，不互相冒充定价或对账结果。
 
 ## 10. 前端信息架构
 

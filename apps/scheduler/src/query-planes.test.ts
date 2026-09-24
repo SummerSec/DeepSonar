@@ -13,7 +13,10 @@ test("three query planes are distinct and live is not an audit source", () => {
   assert.equal(isAuditQueryPlane("current"), true);
   assert.equal(isAuditQueryPlane("history"), true);
   assert.equal(isAuditQueryPlane("live"), false);
-  assert.equal(queryPlaneContract("live").multi_replica, "not shared across Scheduler replicas");
+  assert.match(queryPlaneContract("live").multi_replica, /visibility=unavailable|4415|shared volume/);
+  assert.match(queryPlaneContract("live").completeness, /no zero-loss claim/);
+  assert.match(queryPlaneContract("live").restart, /confirmed evidence/);
+  assert.equal(queryPlaneContract("live").audit_source, false);
   assert.equal(queryPlaneContract("current").append_only, false);
   assert.equal(queryPlaneContract("history").append_only, true);
 });

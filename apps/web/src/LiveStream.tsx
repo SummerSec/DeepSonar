@@ -6,7 +6,7 @@ import { MarkdownView } from "./MarkdownView";
 /**
  * Agent 过程流视图：HTTP 补读只认 evidence，WS 只投递已落盘帧。
  * - 先 GET /jobs/:id/evidence/stream，再订 /api/ws
- * - 终态 4409 后再补一次归档；未落盘/跨副本不可见要显式报告
+ * - 终态 4409 后再补一次归档；跨副本不可见 4415 / visibility=unavailable 显式停 WS；未落盘要显式报告
  */
 
 export interface StreamItem {
@@ -485,6 +485,12 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         });
         if (!alive) return;
         appendPage(backfill);
+        // Non-owner / missing local evidence: do not open WS just to receive 4415.
+        if (backfill.visibility === "unavailable") {
+          setConnected(false);
+          setStatus(describeProcessStreamPage(backfill) ?? "本副本看不到已确认的过程证据");
+          return;
+        }
         setStatus("正在申请实时流凭证…");
         const ticket = await api.createWsTicket(jobId);
         if (!alive) return;
@@ -500,11 +506,12 @@ export function LiveStream({ jobId, active }: { jobId: string; active: boolean }
         ws.onclose = (event) => {
           if (!alive) return;
           setConnected(false);
-          const terminal = event.code === 4400 || event.code === 4410 || event.code === 4401 || event.code === 4403 || event.code === 4404 || event.code === 4409;
+          const terminal = event.code === 4400 || event.code === 4410 || event.code === 4401 || event.code === 4403 || event.code === 4404 || event.code === 4409 || event.code === 4415;
           if (event.code === 4400) setStatus("实时流游标 INVALID_CURSOR，请刷新归档");
           else if (event.code === 4410) setStatus("实时流游标 CURSOR_GAP，请刷新归档");
           else if (event.code === 4401) setStatus("实时流鉴权失败，请重新登录");
           else if (event.code === 4404) setStatus("Job 不存在，无法读取实时流");
+          else if (event.code === 4415) setStatus("本副本看不到已确认的过程证据（未共享 BLOB_DIR，或 Job 在其他 Scheduler）");
           else if (event.code === 1013) setStatus("实时流背压，正在通过 HTTP 补齐…");
           else if (event.code !== 4409) setStatus("实时流已断开，正在重连…");
           if (event.code === 4409) {
