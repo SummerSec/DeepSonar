@@ -1,11 +1,35 @@
 ## [Unreleased]
 
+## [0.4.11] - 2026-09-24
+
 ### 变更
 
-- 按角色能力插件重构运行配置（#690）：删除 `role_credentials`、`RoleConfig.pi_extensions`、`POST /credentials/batch-bind` 与 Agent「凭据绑定」页。Hub 只提案 `provider` / `model_ref` / `pi_extension_ids` 等能力需求（禁止提交账号 UUID）；Scheduler 在项目授权目录内按健康度、CLI/模型兼容与缺省策略解析凭据并 fail closed。Pi 扩展仅经已注册可信能力组合冻结进 Job。Schema **v56**。历史 Job 快照保持不可变，不作新 Job 兼容输入。
+- 按角色能力插件重构运行配置（#690 / #701）：删除 `role_credentials`、`RoleConfig.pi_extensions`、`POST /credentials/batch-bind` 与 Agent「凭据绑定」页。Hub 只提案 `provider` / `model_ref` / `pi_extension_ids` 等能力需求（禁止提交账号 UUID）；Scheduler 在项目授权目录内按健康度、CLI/模型兼容与缺省策略解析凭据并 fail closed。Pi 扩展仅经已注册可信能力组合冻结进 Job。Schema **v56**。历史 Job 快照保持不可变，不作新 Job 兼容输入。
+- 清除项目级能力配置面（#691 / #699 / #700）：运行镜像由平台 `visible_project_ids` 绑定第三方可见范围，项目只可排除非 base / 启用已绑定第三方，`deepsonar-base` 永不可停用；拒绝项目 `version_id` / `pin_policy`，Job 恒跟平台 channel 最新 digest。Hub 删除 `materializeHubProjectRole` 与 `scope=project`（跨任务复用走 Skill）。Skill：`trusted+enabled` 源默认可用，`project_skill_sources` 仅保留显式停用。Schema **v55**。#700 对齐 residual CI（Skill mock / SCHEMA / 文案 / marketplace 冒烟）。
+- 项目 RoleConfig 只减不加（#697 / #698 / #695）：`sandbox_limits` / `platform_tools` / `runtime_knobs` 相对平台或全局取 min/AND；停写停认 `allow_model_catalog_passthrough`；transfer 导出补 `instructions_markdown` 并 clamp 导入。
+- 架构层写入「禁止向后兼容」硬规则（#693）：新设计不得加双读双写 / fallback / shim / 兼容模式 / 自动配置转换；历史冻结 Job 与 Evidence 只作不可变记录，不作运行时兼容输入。
+- #679 follow-up：短暂落地 trust Skill 源默认下发 opt-in 开关（`DEEPSONAR_SKILL_SOURCE_DEFAULT_INJECT`，5c819c2a）后撤回（02fd06d5）；生产默认本为关闭，行为不变——Skill 仍由 Agent `search_skills` → `pull_skill` 自主拉取，不预注入角色提示词 / RoleConfig。
+
+### 新增
+
+- Provider API Key 已保存后支持明文回显（#689 / #692）：管理 API `settings_config_json` 不再脱敏为「已保存密钥」，编辑表单 hydrate 真实值，眼睛按钮可查看/隐藏；留空保存仍表示不修改，未改动的明文不会触发 rotate。Job 快照等非编辑面继续脱敏。
 
 ### 修复
-- 收口过程流持久化边界与拓扑可恢复性（#388 / #359）：确认点为 evidence 落盘；补读只认可见 `BLOB_DIR`；跨副本无共享卷时 `visibility=unavailable` 且 WS `4415`；bus 仅非权威投递；不承诺零丢失。
+
+- 收口过程流持久化边界与拓扑可恢复性（#388 / #702 / #359）：确认点为 evidence `appendNormalized` 落盘；补读只认可见 `BLOB_DIR`；跨副本无共享卷时 `visibility=unavailable` 且 WS `4415`；`stream-bus` 仅非权威投递；不承诺零丢失。单 Scheduler + 本地卷为默认支持拓扑。
+- 任务总览改为行动导向（#694）：目标与优先待办置顶；用响应式任务阶段摘要替换合成执行轨迹时间线；去掉重复「下一步」投影；补键盘焦点指示。
+
+### 工程
+
+- 发版文档保鲜硬门落地（#696）：校正 as-built 漂移；`AGENTS.md` / `DESIGN.md` / `ARCHITECTURE` 写入保鲜清单；新增 `ci:unit:docs-freshness`（schema 主线字面量、文档 `pnpm` 脚本存在性、相对链接、已删机制残留）并挂入 CI。
+
+### 部署 / 升级说明
+
+- **须重建 / 对齐数据库**：自 v0.4.10 起 schema 经 **v55**（#691）再到 **v56**（#690）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。**无自动迁移。**
+- **v56 破坏性变更（#690）**：`role_credentials` 表已删除；旧账号↔角色绑定与 `RoleConfig.pi_extensions` / `pi_extensions_json` **全部失效**，不会被自动转换。请通过**项目 CLI / Provider 白名单**授权账号目录，并由 **Hub 组合**提案 `provider` / `model_ref` / `pi_extension_ids`；Scheduler 在授权目录内解析凭据。已删 `POST /credentials/batch-bind` 与 Agent「凭据绑定」UI——不要再调用。
+- **v55 配置面收敛（#691）**：项目侧不可再钉镜像版本 / 维护项目角色 / 以 opt-in 白名单打开 Skill 源；第三方镜像可见性改由平台 `PATCH /runtime-images/:id/visibility`；Skill 源默认信任可用，项目仅可显式停用。升级后按平台目录与项目排除清单重新核对。
+- **RoleConfig 收紧（#697）**：项目不可再放宽平台 `sandbox_limits` / `platform_tools` / `runtime_knobs`；超平台默认会 400。导入包会被 clamp。
+- opensandbox 双挂网（#685 / #687）已含于 **v0.4.10**；若现网仍停在更早版本，升级到本版时一并 `compose` 重新 pull/重建，确保 `opensandbox` 接入 `sandbox_gateway`。
 
 ## [0.4.10] - 2026-09-23
 
@@ -1015,6 +1039,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.4.11]: https://github.com/SummerSec/DeepSonar/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/SummerSec/DeepSonar/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/SummerSec/DeepSonar/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/SummerSec/DeepSonar/compare/v0.4.7...v0.4.8
