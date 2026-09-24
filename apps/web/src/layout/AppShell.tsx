@@ -36,7 +36,6 @@ const PROJECT_TABS: { seg: string; label: string; caption: string; icon: Icon }[
   { seg: "findings", label: "风险与报告", caption: "风险发现与交付结论", icon: Bug },
   { seg: "data", label: "项目数据", caption: "导入与导出", icon: Folder },
   { seg: "settings", label: "项目策略", caption: "角色与规则覆盖", icon: Gear },
-  { seg: "images", label: "项目镜像", caption: "启用与版本固定", icon: Cube },
 ];
 
 function initialAccentTheme(): AccentTheme {

@@ -231,7 +231,7 @@ export function resolveReadinessFix(
   }
   if (action === "runtime_images") {
     return {
-      href: targetScope === "project" ? (projectId ? `/projects/${projectId}/images` : "/projects") : "/images",
+      href: targetScope === "project" ? (projectId ? `/images?project_id=${projectId}` : "/projects") : "/images",
       target: fix.target,
     };
   }

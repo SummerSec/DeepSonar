@@ -2750,15 +2750,13 @@ export const api = {
     projectId: string,
     imageId: string,
     enabled: boolean,
-    versionId?: string | null,
-    pinPolicy?: "follow" | "hold",
-  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean; selected_version_id: string | null; pin_policy?: "follow" | "hold" } | RuntimeImagePreparingResponse>(
-    "PUT", `/projects/${projectId}/runtime-images/${imageId}`, {
-      enabled,
-      version_id: versionId ?? null,
-      ...(pinPolicy ? { pin_policy: pinPolicy } : {}),
-    },
+  ) => send<{ project_id: string; runtime_image_id: string; enabled: boolean } | RuntimeImagePreparingResponse>(
+    "PUT", `/projects/${projectId}/runtime-images/${imageId}`, { enabled },
   ),
+  patchRuntimeImageVisibility: (imageId: string, visibleProjectIds: string[]) =>
+    send<RuntimeImageSummary>("PATCH", `/runtime-images/${imageId}/visibility`, {
+      visible_project_ids: visibleProjectIds,
+    }),
   /** 平台 API Token 管理（§6.4，与 Provider Credential 分离） */
   tokens: () => get<ApiToken[]>("/tokens"),
   createToken: (t: { name: string; scopes: string[]; project_id?: string | null; expires_in_days?: number }) =>

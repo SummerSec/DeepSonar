@@ -192,7 +192,7 @@ Verify 系统角色默认 Base，不默认 Kali。工具链矩阵见 [`RUNTIME_T
 
 批量脚本严格使用 API 返回的 `selected_channel`；读取静态清单时使用
 `DEEPSONAR_RUNTIME_REGISTRY_CHANNEL`（缺省 `aliyun-acr`）。它只选择宿主平台上每个产品的最新版本，
-所选通道或平台缺失时直接失败，不跨 registry 回退。项目启用或固定镜像时（`PUT /projects/:id/runtime-images/:imageId`），
+所选通道或平台缺失时直接失败，不跨 registry 回退。项目排除/启用镜像时（`PUT /projects/:id/runtime-images/:imageId`，#691 拒绝钉版本），
 Scheduler 缺图时立即返回 `202 preparing/saved:false` 并启动后台准备；配置不落库，完成后需显式重试。
 建任务 / Hub 派生 / resume 只冻结不可变 digest，不再因 Scheduler 本机缺层拒绝。
 OpenSandbox server 按冻结 digest 拉取，并在 provision 后重验合同；Scheduler 不会在 Job 执行期隐式 `docker pull`。
@@ -254,7 +254,7 @@ git pull
 
 schema 大版本变化时须按基线重建库（无升级路径）。升级前先备份。
 
-官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。权威 catalog apply 会把**已过期**的官方项目 pin 滚到最新 trusted（只改 `selected_version_id`，不改 Job 快照）。`null` 仍跟随最新；`pin_ok` 的显式旧版、第三方 pin 与 `pin_policy=hold` 不会被改写。过期且未滚动的 pin 会在预检/建任务返回 `RUNTIME_IMAGE_PIN_STALE`，可一键升级或改为跟随最新。已提交但无 Job 的空壳任务可在 pin 滚动后 `POST /tasks/:id/retry`。
+官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。#691 起项目不再钉版本，新建 Job 始终按平台 channel 最新 trusted 解析并冻结 digest；已冻结 Job 快照不改写。
 
 ## 8. 常见问题
 

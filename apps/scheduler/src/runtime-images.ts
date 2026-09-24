@@ -1146,108 +1146,11 @@ function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageR
  * explicit pins are left untouched. Frozen Job snapshots are never rewritten.
  */
 export async function rollStaleOfficialProjectPins(
-  db: typeof sql = sql,
-  options: { imageIds?: string[] } = {},
+  _db: typeof sql = sql,
+  _options: { imageIds?: string[] } = {},
 ): Promise<OfficialProjectPinRoll[]> {
-  const imageIds = options.imageIds?.filter(Boolean) ?? [];
-  if (options.imageIds && imageIds.length === 0) return [];
-  const selectedChannel = await readRuntimeRegistryChannel(db, "share");
-  const hostPlatform = hostRuntimePlatform();
-  const platformJson = db.json([hostPlatform]);
-  return db.begin(async (tx) => {
-    const candidates = await tx`
-      SELECT
-        pri.project_id,
-        pri.runtime_image_id,
-        pri.selected_version_id AS from_version_id,
-        pin.version AS from_version,
-        ri.image_key,
-        latest.id AS to_version_id,
-        latest.version AS to_version
-      FROM project_runtime_images pri
-      JOIN runtime_images ri
-        ON ri.id = pri.runtime_image_id
-       AND ri.official = true
-       AND ri.enabled = true
-      LEFT JOIN runtime_image_versions pin
-        ON pin.id = pri.selected_version_id
-      LEFT JOIN LATERAL (
-        SELECT v.id
-        FROM runtime_image_versions v
-        JOIN runtime_image_version_refs channel_ref
-          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
-        WHERE v.id = pri.selected_version_id
-          AND v.runtime_image_id = ri.id
-          AND v.trust_status = 'trusted'
-          AND v.platforms_json @> ${platformJson}
-        LIMIT 1
-      ) pin_ok ON true
-      JOIN LATERAL (
-        SELECT v.id, v.version
-        FROM runtime_image_versions v
-        JOIN runtime_image_version_refs channel_ref
-          ON channel_ref.version_id = v.id AND channel_ref.channel = ${selectedChannel}
-        WHERE v.runtime_image_id = ri.id
-          AND v.trust_status = 'trusted'
-          AND v.platforms_json @> ${platformJson}
-        ORDER BY v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
-        LIMIT 1
-      ) latest ON true
-      WHERE pri.selected_version_id IS NOT NULL
-        AND pri.pin_policy IS DISTINCT FROM 'hold'
-        AND pin_ok.id IS NULL
-        AND latest.id IS DISTINCT FROM pri.selected_version_id
-        AND (${imageIds.length === 0} OR pri.runtime_image_id = ANY(${imageIds}))`;
-    const rolled: OfficialProjectPinRoll[] = [];
-    for (const row of candidates) {
-      const [saved] = await tx`
-        UPDATE project_runtime_images
-        SET selected_version_id = ${row.to_version_id}, updated_at = now()
-        WHERE project_id = ${row.project_id}
-          AND runtime_image_id = ${row.runtime_image_id}
-          AND selected_version_id = ${row.from_version_id}
-          AND pin_policy IS DISTINCT FROM 'hold'
-        RETURNING project_id`;
-      if (!saved) continue;
-      const roll: OfficialProjectPinRoll = {
-        project_id: String(row.project_id),
-        image_id: String(row.runtime_image_id),
-        image_key: String(row.image_key),
-        from_version_id: String(row.from_version_id),
-        from_version: row.from_version ? String(row.from_version) : null,
-        to_version_id: String(row.to_version_id),
-        to_version: row.to_version ? String(row.to_version) : null,
-      };
-      await tx`
-        INSERT INTO audit_logs ${tx({
-          actor_type: "system",
-          actor_id: "scheduler",
-          action: "runtime_image.official_pin_roll",
-          project_id: roll.project_id,
-          resource_type: "project_runtime_image",
-          resource_id: roll.image_id,
-          request_id: null,
-          ip: null,
-          user_agent: null,
-          before_json: tx.json({
-            selected_version_id: roll.from_version_id,
-            version: roll.from_version,
-          } as never),
-          after_json: tx.json({
-            selected_version_id: roll.to_version_id,
-            version: roll.to_version,
-            trigger: OFFICIAL_CATALOG_PIN_ROLL_TRIGGER,
-            image_key: roll.image_key,
-          } as never),
-          result: "ok",
-          error_code: null,
-        })}`.catch((error) => {
-        console.error("[audit] 系统写入失败 runtime_image.official_pin_roll:", error instanceof Error ? error.message : error);
-      });
-      rolled.push(roll);
-    }
-    return rolled;
-  });
+  // #691: project-level version pins removed; platform channel latest is the only authority.
+  return [];
 }
 
 
@@ -2145,6 +2048,31 @@ export type StartupRuntimeImageMeta = {
  * Bootstrap has no project semantics. Only official, globally available images
  * (not project-opt-in) may gate dispatcher readiness.
  */
+
+/** Platform base image key — never project-disableable (#691). */
+export const PLATFORM_BASE_RUNTIME_IMAGE_KEY = "deepsonar-base";
+
+/**
+ * #691 project availability:
+ * - deepsonar-base: always available (cannot be excluded)
+ * - other official: available unless project explicitly enabled=false
+ * - third-party: project must be in platform visible_project_ids AND enabled=true
+ * No version pin: callers always resolve latest trusted for the platform channel.
+ */
+export function isProjectRuntimeImageAvailable(input: {
+  imageKey: string;
+  official: boolean;
+  projectEnabled: boolean | null | undefined;
+  visibleProjectIds?: readonly string[] | null;
+  projectId: string;
+}): boolean {
+  if (input.imageKey === PLATFORM_BASE_RUNTIME_IMAGE_KEY) return true;
+  if (input.official) return input.projectEnabled !== false;
+  const visible = (input.visibleProjectIds ?? []).map(String);
+  if (!visible.includes(String(input.projectId))) return false;
+  return input.projectEnabled === true;
+}
+
 export function isStartupRequiredRuntimeImage(image: StartupRuntimeImageMeta | null): boolean {
   if (!image) return true;
   return image.official === true && image.project_opt_in !== true;
@@ -2220,27 +2148,17 @@ export async function resolveConfiguredRuntimeImagesForChannel(
   if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return [];
   const snapshots = new Map((await resolveStartupRuntimeImages(db, channel)).map((item) => [item.image_ref, item]));
   const projects = await db`SELECT id, config_json FROM projects ORDER BY id`;
-  for (const project of projects) {
-    const cfg = (project.config_json ?? {}) as Record<string, unknown>;
-    if (cfg.image_strategy !== "project_managed") continue;
-    const mappings = cfg.role_runtime_images && typeof cfg.role_runtime_images === "object" && !Array.isArray(cfg.role_runtime_images)
-      ? cfg.role_runtime_images as Record<string, unknown>
-      : {};
-    for (const [roleName, rawKey] of Object.entries(mappings)) {
-      const key = typeof rawKey === "string" ? rawKey : "deepsonar-base";
-      const snapshot = await resolveRuntimeImageForJob(db, String(project.id), roleName, key, channel);
-      snapshots.set(snapshot.image_ref, snapshot);
-    }
-  }
-  const pins = await db`
-    SELECT pri.runtime_image_id, pri.selected_version_id
+  // #691: leftover image_strategy / role_runtime_images / project pins are gone.
+  // Warm enabled project bindings to latest trusted (no selected_version_id).
+  const enabled = await db`
+    SELECT pri.runtime_image_id
     FROM project_runtime_images pri
     WHERE pri.enabled = true`;
-  for (const pin of pins) {
+  for (const row of enabled) {
     const snapshot = await selectRuntimeImageSnapshot(
       db,
-      String(pin.runtime_image_id),
-      pin.selected_version_id ? String(pin.selected_version_id) : null,
+      String(row.runtime_image_id),
+      null,
       channel,
     );
     snapshots.set(snapshot.image_ref, snapshot);
@@ -2367,9 +2285,13 @@ export async function listHubRuntimeImageCatalog(
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
     WHERE ri.enabled = true
-      AND (CASE WHEN ri.official
-                THEN COALESCE(pri.enabled, true)
-                ELSE COALESCE(pri.enabled, false) END)
+      AND (
+        CASE
+          WHEN ri.image_key = ${PLATFORM_BASE_RUNTIME_IMAGE_KEY} THEN true
+          WHEN ri.official THEN COALESCE(pri.enabled, true)
+          ELSE (${projectId}::uuid = ANY(ri.visible_project_ids) AND COALESCE(pri.enabled, false))
+        END
+      )
       AND EXISTS (
         SELECT 1 FROM runtime_image_versions v
         LEFT JOIN runtime_image_version_refs channel_ref
@@ -2413,25 +2335,38 @@ export async function resolveRuntimeImageForJob(
   if (config.runtime.agentMode === "fake") return fakeSnapshot(imageKey);
   const selectedChannel = channelOverride ?? await readRuntimeRegistryChannel(db, "share");
   const [image] = await db`
-    SELECT ri.id, ri.official, ri.enabled, ri.project_opt_in,
-           pri.enabled AS project_enabled, pri.selected_version_id
+    SELECT ri.id, ri.image_key, ri.official, ri.enabled, ri.project_opt_in,
+           ri.visible_project_ids,
+           pri.enabled AS project_enabled
     FROM runtime_images ri
     LEFT JOIN project_runtime_images pri
       ON pri.runtime_image_id = ri.id AND pri.project_id = ${projectId}
     WHERE ri.image_key = ${imageKey}`;
-  // Official images (base + specialty): missing project_runtime_images row = enabled.
-  // Third-party remains fail-closed (explicit project_enabled === true required).
-  // project_opt_in is metadata only (e.g. startup warmup skip), not an availability gate.
-  const projectAvailable = image?.official
-    ? image.project_enabled !== false
-    : image?.project_enabled === true;
+  // #691: platform visibility + project tighten only; always follow latest trusted.
+  // project_opt_in remains metadata (startup warmup skip), not an availability gate.
+  const visibleIds = Array.isArray(image?.visible_project_ids)
+    ? (image.visible_project_ids as unknown[]).map(String)
+    : [];
+  const projectAvailable = image
+    ? isProjectRuntimeImageAvailable({
+        imageKey: String(image.image_key),
+        official: image.official === true,
+        projectEnabled: image.project_enabled as boolean | null,
+        visibleProjectIds: visibleIds,
+        projectId,
+      })
+    : false;
   if (!image?.enabled || !projectAvailable) {
-    throw new Error(`角色 ${roleName} 没有可用的可信运行镜像版本（key=${imageKey}）；请先准入 digest 并为项目启用`);
+    throw new Error(
+      image && !image.official && !visibleIds.includes(String(projectId))
+        ? `角色 ${roleName} 的第三方镜像 ${imageKey} 未绑定到本项目可见范围（#691）`
+        : `角色 ${roleName} 没有可用的可信运行镜像版本（key=${imageKey}）；请检查平台目录与项目排除/启用`,
+    );
   }
   return selectRuntimeImageSnapshot(
     db,
     String(image.id),
-    image.selected_version_id as string | null,
+    null,
     selectedChannel,
     projectId,
   );

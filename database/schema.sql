@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 54);
+INSERT INTO schema_meta (id, version) VALUES ('global', 55);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1111,6 +1111,9 @@ CREATE TABLE runtime_images (
   official boolean NOT NULL DEFAULT false,
   project_opt_in boolean NOT NULL DEFAULT false,
   enabled boolean NOT NULL DEFAULT true,
+  -- #691: third-party visibility is a platform binding (multi-select projects).
+  -- Official images ignore this column (always platform-visible). Empty = visible to no project.
+  visible_project_ids uuid[] NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT runtime_images_key_check CHECK (image_key ~ '^[a-z][a-z0-9-]{1,62}$'),
@@ -1261,15 +1264,12 @@ CREATE TABLE runtime_data_layer_versions (
 CREATE TABLE project_runtime_images (
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   runtime_image_id uuid NOT NULL REFERENCES runtime_images(id) ON DELETE CASCADE,
-  selected_version_id uuid REFERENCES runtime_image_versions(id),
+  -- #691: project may only tighten availability (exclude non-base official / enable
+  -- third-party within platform visible_project_ids). No version pin / hold.
   enabled boolean NOT NULL DEFAULT true,
-  -- follow: official stale pins roll to latest trusted on catalog promote.
-  -- hold: keep this explicit pin even after official catalog promote.
-  pin_policy text NOT NULL DEFAULT 'follow',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (project_id, runtime_image_id),
-  CONSTRAINT project_runtime_images_pin_policy_check CHECK (pin_policy IN ('follow', 'hold'))
+  PRIMARY KEY (project_id, runtime_image_id)
 );
 
 

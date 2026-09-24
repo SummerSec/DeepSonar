@@ -61,7 +61,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 ### 4.0 Skill / 模块源控制面（#603 首片）
 
-**平台是控制面**：项目通过 `project_skill_sources` 启用 Skill 源白名单；未启用的源不可进入本项目 Job 快照。CLI × Provider × 平台镜像 × Skill 从已启用集合自由组合；项目不再选择镜像来源（`image_strategy` / `role_runtime_images` 已移除，角色不是镜像主绑定面），但项目侧仍持有 `project_runtime_images` 可用性闸门：第三方镜像须项目显式启用，官方镜像默认可用、显式 `enabled=false` 可关闭，并可按项目固定版本。
+**平台是控制面**：平台 trusted+enabled Skill 源默认进入项目 Job 快照可见集合（#691）；`project_skill_sources` 只保留显式停用这类收紧。CLI × Provider × 平台镜像 × Skill 从信任基线自由组合；项目不再选择镜像来源（`image_strategy` / `role_runtime_images` 已移除），也不再钉版本。官方镜像平台默认可用（`deepsonar-base` 永不可停用，其它官方可排除）；第三方镜像由平台绑定 `visible_project_ids` 后项目可启用。
 
 **Hub / Job 运行时选型**：业务 Skill 不因 RoleConfig 为空而默认注入。Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取并读取 `SKILL.md`；Hub 不需要预先把 Skill 写入 Intent。平台只允许 trusted+enabled 源，拉取操作仍受当前 Job 的 token、预算、网络和审计边界约束。
 
@@ -216,7 +216,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 **Model Gateway 目录校验与 alias 语义（#570）：** 解析顺序为 RoleConfig.model → Credential `settings_config` → Agent CLI 内置默认（如 Claude Code → `claude-opus-5`）。若凭据 `model_catalog_json` 非空，冻结快照前把解析结果与目录比对：不在目录则 fail-closed，中文错误列出可选项。空目录视为探测软降级，不拦 Job。显式 alias 直通可关闭校验：平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true`，或管理员级项目 Agent allowlist `allow_model_catalog_passthrough`（#697 起 RoleConfig 字段不再授权）。角色/settings 未指定 model 时，快照冻结 `upstream_model = "cli-default:<name>"`（详情页展示「未指定 → CLI 默认 …（经凭据 alias 转发，实际模型不可观测）」）；运行时 concurrency / Gateway 出站会剥掉 `cli-default:` 前缀。`job_usage_ledger.model` 仍记请求协议值；`model_catalog_match` 标注是否命中目录；可选 `upstream_reporting_model` 尽力从上游响应读取，无字段不强行伪造。
 
-运行镜像必须来自已准入市场。第三方镜像先经 `apps/image-admission` 扫描、批准和项目启用；Agent 不能提交任意 OCI 地址。镜像和平台版本分开管理，执行永远使用不可变 digest，不使用可变 `latest`。出网权限在 Canvas/Job 快照中冻结，禁止出网的沙箱只能通过固定 Gateway 访问模型。
+运行镜像必须来自已准入市场。第三方镜像先经 `apps/image-admission` 扫描、批准，再由平台绑定可见项目后项目启用；Agent 不能提交任意 OCI 地址。镜像和平台版本分开管理，执行永远使用不可变 digest，不使用可变 `latest`。出网权限在 Canvas/Job 快照中冻结，禁止出网的沙箱只能通过固定 Gateway 访问模型。
 
 每个官方运行镜像还必须携带与最终工具清单绑定的离线工具手册，固定入口为 `/opt/deepsonar/manuals/index.json`。手册逐项覆盖 Agent 可见工具、包装脚本和能力入口，说明选型、前置条件、调用、输出边界、失败分类、组合流程、证据与版本限制；从基础镜像继承的工具也必须在最终镜像中展开。构建与镜像门禁校验手册摘要和工具覆盖，Worker 启动上下文只注入索引位置并按需读取章节。手册是操作资料，不授予额外工具、网络、凭据或副作用权限。
 
@@ -296,7 +296,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v54 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v55 |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：

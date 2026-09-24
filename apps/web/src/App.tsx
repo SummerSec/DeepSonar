@@ -183,14 +183,7 @@ export default function App() {
               </Deferred>
             }
           />
-          <Route
-            path="images"
-            element={
-              <Deferred>
-                <RuntimeImagesPage />
-              </Deferred>
-            }
-          />
+          {/* #691: 项目镜像一级入口已移除；排除/启用在平台 /images?project_id= 视图 */}
         </Route>
         <Route
           path="*"

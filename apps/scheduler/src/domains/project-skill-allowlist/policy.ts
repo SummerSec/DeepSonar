@@ -3,9 +3,13 @@ import { parseModuleSelector } from "@deepsonar/shared-types";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ProjectSkillAllowlist {
-  /** true once the project skill-source allowlist has been seeded or explicitly saved. */
+  /**
+   * #691: trusted+enabled platform sources are the default baseline.
+   * `configured` remains for UI/audit of whether the project has ever written
+   * an explicit disable/enable row; availability no longer requires opt-in seeding.
+   */
   configured: boolean;
-  /** Skill source IDs enabled for this project (fail-closed when configured). */
+  /** Skill source IDs currently available to this project (trust baseline minus explicit disables). */
   enabled_skill_source_ids: string[];
 }
 
@@ -55,20 +59,20 @@ export function markSkillAllowlistConfigured(configJson: Record<string, unknown>
 }
 
 /**
- * Fail-closed gate: when the project allowlist is configured, every selector
- * source_id must be project-enabled. Clear error — never silently drop.
- * Platform skill deepsonar-control is not a Git skill_source and is unaffected.
+ * Fail-closed gate (#691): every selector source_id must be in the project
+ * available set (platform trusted+enabled minus explicit project disables).
+ * Clear error — never silently drop. Platform skill deepsonar-control is not a
+ * Git skill_source and is unaffected.
  */
 export function assertSkillSourcesProjectEnabled(
   allowlist: ProjectSkillAllowlist,
   sourceIds: Iterable<string>,
 ): void {
-  if (!allowlist.configured) return;
   const enabled = new Set(allowlist.enabled_skill_source_ids.map((id) => id.toLowerCase()));
   for (const sourceId of sourceIds) {
     if (!enabled.has(sourceId.toLowerCase())) {
       throw new Error(
-        `skill_source=${sourceId} 不在本项目已启用 Skill 源白名单内（#603：平台控制面启用，Hub/快照选型；RoleConfig modules_json 仅过渡绑定）`,
+        `skill_source=${sourceId} 不在本项目可用 Skill 源集合内（#691：trust 源默认可用，项目仅可显式停用；RoleConfig modules_json 仅过渡绑定）`,
       );
     }
   }

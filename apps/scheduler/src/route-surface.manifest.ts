@@ -128,6 +128,7 @@ PATCH /projects/:id
 PATCH /projects/:id/settings
 PATCH /projects/:id/shared-assets/policy
 PATCH /runtime-images/registry/channel
+PATCH /runtime-images/:id([0-9a-fA-F-]{36})/visibility
 PATCH /tasks/:canvasId
 PATCH /users/:id
 POST /agent-roles
@@ -329,6 +330,7 @@ PATCH /projects/{id}/shared-assets/policy
 PATCH /role-configs/{id}/agent-cli
 PATCH /role-configs/{id}/runtime-image
 PATCH /runtime-images/registry/channel
+PATCH /runtime-images/{id}/visibility
 PATCH /tasks/{canvasId}
 PATCH /users/{id}
 POST /agent-roles

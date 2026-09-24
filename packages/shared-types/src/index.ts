@@ -1294,12 +1294,14 @@ export function hubReferenceBudgetViolation(value: unknown): HubReferenceBudgetV
 const HubReferenceList = z.array(GraphNodeReference).max(HUB_REFERENCE_LIMITS.perFrom);
 
 /**
- * Hub may compose a role profile for one Worker Job or persist it inside the
- * current project. The selected `role` remains the governed platform role
- * contract; this definition can only supply business identity/instructions.
+ * Hub may compose a role profile for one Worker Job only (#691).
+ * Cross-task reuse goes through governed Skill sources (search_skills → pull_skill),
+ * not project-scoped agent_roles / RoleConfig clones. The selected `role` remains
+ * the governed platform role contract; this definition can only supply business
+ * identity/instructions frozen into the Job snapshot.
  */
 export const HubRoleDefinitionPayload = z.object({
-  scope: z.enum(["job", "project"]),
+  scope: z.literal("job"),
   name: z.string().trim().regex(/^[a-z][a-z0-9_]{0,30}$/u),
   title: z.string().trim().min(1).max(120).regex(/\S/u),
   description: z.string().trim().min(1).max(2_000).regex(/\S/u),
@@ -1325,7 +1327,7 @@ export const HubIntentPayload = z
     role_definition: HubRoleDefinitionPayload.optional(),
     // Hub 本轮可选的运行镜像提案：只能来自 list_available_runtime_images 返回的
     // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
-    // 省略时 Scheduler 按项目镜像策略与 RoleConfig 缺省解析。
+    // 省略时 Scheduler 按平台目录与 RoleConfig 缺省解析（#691：无项目镜像策略）。
     runtime_image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/).optional(),
     // Hub 可选提案 Agent CLI / Provider：只能来自本轮 list_available_agent_clis /
     // list_available_providers；省略时用项目软缺省或 RoleConfig 回退。不强制按角色绑死。

@@ -226,7 +226,7 @@ test("readiness repair actions resolve every global and project route", () => {
     credentials: "/settings/credentials",
     role_config: `/projects/${project.id}/settings?tab=roles`,
     rules: `/projects/${project.id}/settings?tab=rules`,
-    runtime_images: `/projects/${project.id}/images`,
+    runtime_images: `/images?project_id=${project.id}`,
   };
   for (const action of actions) {
     const global = resolveReadinessFix({ action, scope: "global", project_id: null, href: "/stale", target: action }, globalScope);

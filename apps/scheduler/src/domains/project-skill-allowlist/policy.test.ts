@@ -17,15 +17,18 @@ test("configured flag: 缺省 false；mark 后 true", () => {
   assert.equal(parseSkillAllowlistConfiguredFlag(cfg), true);
 });
 
-test("assert: 未配置不阻断；配置后 fail-closed", () => {
-  const open = { configured: false, enabled_skill_source_ids: [] as string[] };
-  assert.doesNotThrow(() => assertSkillSourcesProjectEnabled(open, [SRC_B]));
-
-  const closed = { configured: true, enabled_skill_source_ids: [SRC_A] };
-  assert.doesNotThrow(() => assertSkillSourcesProjectEnabled(closed, [SRC_A]));
+test("assert: #691 trust 基线始终 fail-closed（不再看 configured 开关）", () => {
+  const empty = { configured: false, enabled_skill_source_ids: [] as string[] };
   assert.throws(
-    () => assertSkillSourcesProjectEnabled(closed, [SRC_B]),
-    /不在本项目已启用 Skill 源白名单/,
+    () => assertSkillSourcesProjectEnabled(empty, [SRC_B]),
+    /不在本项目可用 Skill 源集合/,
+  );
+
+  const baseline = { configured: false, enabled_skill_source_ids: [SRC_A] };
+  assert.doesNotThrow(() => assertSkillSourcesProjectEnabled(baseline, [SRC_A]));
+  assert.throws(
+    () => assertSkillSourcesProjectEnabled(baseline, [SRC_B]),
+    /不在本项目可用 Skill 源集合/,
   );
 });
 

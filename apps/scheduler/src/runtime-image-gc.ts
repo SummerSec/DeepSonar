@@ -183,7 +183,9 @@ export async function executeRuntimeImageGcPlan(
 export async function runtimeImageGcOnce(
   executeDocker: DockerCommand = docker,
 ): Promise<RuntimeImageGcExecutionResult> {
-  const [versionRows, projectPins, jobRefs, activeScanRefs] = await Promise.all([
+  // #691: project pins removed; protect only live Job snapshots + active scans + promoted/recent.
+  const projectPins: Array<{ selected_version_id: string }> = [];
+  const [versionRows, jobRefs, activeScanRefs] = await Promise.all([
     sql<Array<{
       id: string;
       runtime_image_id: string;
@@ -206,10 +208,6 @@ export async function runtimeImageGcOnce(
         UNION SELECT r.resolved_ref FROM runtime_image_version_refs r WHERE r.version_id = v.id
       ) known ON true
       GROUP BY v.id`,
-    sql<Array<{ selected_version_id: string }>>`
-      SELECT DISTINCT selected_version_id
-      FROM project_runtime_images
-      WHERE selected_version_id IS NOT NULL`,
     sql<Array<{ version_id: string }>>`
       SELECT DISTINCT agent_snapshot_json #>> '{runtime_image,runtime_image_version_id}' AS version_id
       FROM jobs

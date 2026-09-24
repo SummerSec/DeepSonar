@@ -291,7 +291,7 @@ python scripts/deepsonar-api.py jobs rerun-current <jobId>
 
 1. **清业务数据不要 `TRUNCATE projects CASCADE`**：会连带清空 `credentials` / `role_configs`（FK）。应显式列出业务表，**保留** `credentials`、`agent_roles`、`role_configs`、`skill_sources`、`runtime_images*`、`users`、`schema_meta`、`global_settings`。平台导出包（`.deepsonarpack`）**不含凭据明文**，清掉后只能从 `.env`/密钥管理重新 `credentials create`。平台导出模块可自由勾选（`POST /platform/exports`：`preset=custom` + `modules[]`）。
 2. **git pull 后 schema bump**：先 `pg_dump -Fc`；版本不符时 Scheduler 会 fail closed。无自动升级——备份业务数据后对空库套 `database/schema.sql`（或让 Scheduler 对空库引导），再按需导入 `.deepsonarpack`。
-3. **RoleConfig 镜像**：`runtime_image_key 没有可信版本` = catalog 有 key 但无 trusted version。官方 digest 引导或 import+approve。`PATCH .../runtime-image` 返回 **404** = 调度器未加载新路由，重启后再试。OpenHarmony 等 `project_opt_in` 可 pin 到 RoleConfig，Job 解析仍要求项目启用。
+3. **RoleConfig 镜像**：`runtime_image_key 没有可信版本` = catalog 有 key 但无 trusted version。官方 digest 引导或 import+approve。`PATCH .../runtime-image` 返回 **404** = 调度器未加载新路由，重启后再试。OpenHarmony 等 `project_opt_in` 仅为元数据；Job 解析跟随平台目录，官方默认可用，第三方须平台可见绑定后项目启用（#691：无项目钉版本）。
 4. **多模型分配**：`credentials models` 看各 Provider 真实目录；hub 与 worker 可不同凭证。Job 快照在创建时冻结，改 RoleConfig **不影响**已创建 job。CLI/镜像轻量 PATCH 与 Provider 绑定 UI 等价。
 5. **tsx watch 改 src 会重载**：running job → `orphan`（「调度器重启」）；`jobs resume`（也支持 waiting_human）仅在当前受治理身份与旧快照一致时回 pending，否则返回 `SNAPSHOT_STALE`，应显式使用 `jobs rerun-current`。排障时先确认无 running job 再改代码，或接受重跑。
 6. **`jobs resume` 后若轮询关闭**：依赖 `pg_notify`；schema 触发器须覆盖 pending 恢复路径（基线已含）。

@@ -100,6 +100,7 @@ function baseInput(overrides: Partial<ReadinessEvaluationInput> = {}): Readiness
         source_kind: "third_party",
         official: false,
         project_enabled: true,
+        visible_project_ids: [projectId],
         version_id: imageVersionId,
         digest: `sha256:${"b".repeat(64)}`,
         resolved_ref: `summersec/deepsonar-audit@sha256:${"b".repeat(64)}`,
@@ -462,53 +463,15 @@ test("credential scope follows global and project RoleConfig boundaries", () => 
   assert.equal(scopeMismatches.some((check) => check.role?.name === "audit"), false);
 });
 
-test("runtime image project availability: official default-on, third-party fail-closed", () => {
-  const explicitDisabled = evaluateReadiness(baseInput({
+test("runtime image project availability: official default-on, base never disabled, third-party fail-closed", () => {
+  // #691: deepsonar-base cannot be project-disabled.
+  const baseForcedOff = evaluateReadiness(baseInput({
     runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
       ? { ...image, project_opt_in: false, project_enabled: false }
       : image),
   }));
-  assert.equal(explicitDisabled.ready, false);
-  assert.ok(explicitDisabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
+  assert.equal(baseForcedOff.ready, true);
 
-  // Official specialty (project_opt_in metadata) with no project row = default ON.
-  const officialSpecialtyMissingRow = evaluateReadiness(baseInput({
-    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
-      ? { ...image, project_opt_in: true, project_enabled: null }
-      : image),
-  }));
-  assert.equal(officialSpecialtyMissingRow.ready, true);
-
-  const officialSpecialtyEnabled = evaluateReadiness(baseInput({
-    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
-      ? { ...image, project_opt_in: true, project_enabled: true }
-      : image),
-  }));
-  assert.equal(officialSpecialtyEnabled.ready, true);
-
-  const officialSpecialtyDisabled = evaluateReadiness(baseInput({
-    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-base"
-      ? { ...image, project_opt_in: true, project_enabled: false }
-      : image),
-  }));
-  assert.equal(officialSpecialtyDisabled.ready, false);
-  assert.ok(officialSpecialtyDisabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
-
-  const thirdPartyNotEnabled = evaluateReadiness(baseInput({
-    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
-      ? { ...image, project_enabled: null }
-      : image),
-  }));
-  assert.equal(thirdPartyNotEnabled.ready, false);
-  assert.ok(thirdPartyNotEnabled.checks.some((check) => check.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED"));
-
-  const manualDigest = evaluateReadiness(baseInput({
-    runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit"
-      ? { ...image, project_enabled: true, admission_scan_id: null, admission_bypassed: true }
-      : image),
-  }));
-  assert.equal(manualDigest.ready, true);
-  assert.ok(manualDigest.checks.some((check) => check.code === "RUNTIME_IMAGE_ADMISSION_BYPASSED" && check.severity === "warning"));
 });
 
 test("global real readiness leaves project-scoped runtime images unresolved", () => {
@@ -670,6 +633,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, image_enabled: false } : image) }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, project_enabled: null } : image) }),
+    baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, project_enabled: true, visible_project_ids: [] } : image) }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, trust_status: "quarantined", admission_scan_id: null } : image) }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, digest: `sha256:${"c".repeat(64)}` } : image) }),
     baseInput({ runtimeImages: baseInput().runtimeImages?.map((image) => image.image_key === "deepsonar-audit" ? { ...image, admission_scan_id: null, admission_bypassed: false } : image) }),
@@ -730,6 +694,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     RUNTIME_IMAGE_BELOW_PLATFORM_MIN: "runtime_images",
     RUNTIME_IMAGE_DISABLED: "runtime_images",
     RUNTIME_IMAGE_PROJECT_NOT_ENABLED: "runtime_images",
+    RUNTIME_IMAGE_PROJECT_NOT_VISIBLE: "runtime_images",
     RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED: "runtime_images",
     RUNTIME_IMAGE_NOT_TRUSTED: "runtime_images",
     RUNTIME_IMAGE_DIGEST_INVALID: "runtime_images",
@@ -811,6 +776,7 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
     "RUNTIME_IMAGE_BELOW_PLATFORM_MIN",
     "RUNTIME_IMAGE_DISABLED",
     "RUNTIME_IMAGE_PROJECT_NOT_ENABLED",
+    "RUNTIME_IMAGE_PROJECT_NOT_VISIBLE",
     "RUNTIME_IMAGE_NOT_TRUSTED",
     "RUNTIME_IMAGE_DIGEST_INVALID",
     "RUNTIME_IMAGE_ADMISSION_INCOMPLETE",

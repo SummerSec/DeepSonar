@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **当前同步状态（2026-09-23）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 跟踪 Provider 与 CLI 扩展归入角色能力插件，以及删除 `role_credentials` 和 `RoleConfig.pi_extensions`（当前代码残留是实现债务，不是目标契约）。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；本次保鲜校正 schema 版本字面量（v51/v53 → **v54**）与 `project_managed` 残留。#626 把凭据资产、角色引用与快照生效拆成三条边界；根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
+> **当前同步状态（2026-09-23）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 跟踪 Provider 与 CLI 扩展归入角色能力插件，以及删除 `role_credentials` 和 `RoleConfig.pi_extensions`（当前代码残留是实现债务，不是目标契约）。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v55**（#691 清除项目级能力配置面）与 `project_managed` 残留。#626 把凭据资产、角色引用与快照生效拆成三条边界；根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
@@ -96,7 +96,7 @@
 | #39 画布 soft-load / delta | **已关**；画布 soft-load / delta 已落地 |
 | #144 / #147 | **已关**；长上下文预算、任务定时开始 |
 | #100 / #135 / #145 / #152 | **已关**；五 CLI Runtime Adapter + API-only 控制面（无 MCP 回退） |
-| #130 / #146 / #151 | **已关**；运行镜像统一由平台目录准入：项目不再选择镜像来源（`image_strategy` / `role_runtime_images` 已移除），但 `project_runtime_images` 仍是项目侧可用性闸门（第三方须项目启用、官方可显式关闭、可固定版本）；Job 创建时冻结平台 digest |
+| #130 / #146 / #151 / #691 | **已关**；运行镜像统一由平台目录准入：项目不再选择镜像来源，也不再钉版本；官方默认可用（`deepsonar-base` 不可停用），第三方由平台 `visible_project_ids` 绑定后项目可启用；Job 创建时冻结平台 digest |
 | #244 / #284 | **#284 修订**：官方 stale pin 在 catalog 提升时自动滚到最新 trusted；`pin_ok` / 第三方 / `pin_policy=hold` 仍不自动换；过期且未滚动时 `RUNTIME_IMAGE_PIN_STALE` + 一键升级 |
 | #286 / #359 本机镜像闸门 | **已修订**：删除 leftover 本机 Docker inspect 调度闸门；建 Job 不再因 Scheduler 本机缺层拒绝。OpenSandbox 按冻结 digest 在 provision 拉取并重验 |
 | #133 / #153 / #154 / #155 | **已关**；minVerifySeverity 收敛、Finding 绑定、人工收口入口 |

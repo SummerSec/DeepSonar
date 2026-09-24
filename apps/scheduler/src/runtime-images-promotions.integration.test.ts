@@ -400,13 +400,13 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (id, project_id, canvas_id, type, agent_snapshot_json)
         VALUES (${jobId}, ${staleProjectId}, ${canvasId}, 'hub_reason', ${sql.json(snapshotBefore as never)})`;
       await sql`
-        INSERT INTO project_runtime_images (project_id, runtime_image_id, selected_version_id, enabled, pin_policy)
+        INSERT INTO project_runtime_images (project_id, runtime_image_id, enabled)
         VALUES
-          (${staleProjectId}, ${officialId}, ${oldOfficialVersionId}, true, 'follow'),
-          (${pinOkProjectId}, ${officialId}, ${pinOkVersionId}, true, 'follow'),
-          (${thirdPartyProjectId}, ${thirdPartyId}, ${oldThirdVersionId}, true, 'follow'),
-          (${holdProjectId}, ${officialId}, ${oldOfficialVersionId}, true, 'hold'),
-          (${followLatestProjectId}, ${officialId}, NULL, true, 'follow')`;
+          (${staleProjectId}, ${officialId}, true),
+          (${pinOkProjectId}, ${officialId}, true),
+          (${thirdPartyProjectId}, ${thirdPartyId}, true),
+          (${holdProjectId}, ${officialId}, true),
+          (${followLatestProjectId}, ${officialId}, true)`;
 
       const result = await runtime.applyOfficialRuntimeCatalog({
         schema: "deepsonar.registry/v2",
@@ -435,37 +435,23 @@ if (!testDatabaseUrl) {
         WHERE runtime_image_id = ${officialId} AND digest = ${newDigest}`;
       assert.ok(newVersion?.id);
       assert.equal(newVersion.version, "0.1.43");
-      assert.equal(result.pin_rolls.length, 1);
-      assert.equal(result.pin_rolls[0]?.project_id, staleProjectId);
-      assert.equal(result.pin_rolls[0]?.image_key, officialKey);
-      assert.equal(result.pin_rolls[0]?.from_version_id, oldOfficialVersionId);
-      assert.equal(result.pin_rolls[0]?.from_version, "0.1.41");
-      assert.equal(result.pin_rolls[0]?.to_version_id, String(newVersion.id));
-      assert.equal(result.pin_rolls[0]?.to_version, "0.1.43");
+      // #691: project pins removed — catalog promote never rolls project bindings.
+      assert.deepEqual(result.pin_rolls, []);
 
       const pins = await sql`
-        SELECT project_id, selected_version_id, pin_policy
+        SELECT project_id, enabled
         FROM project_runtime_images
         WHERE runtime_image_id IN (${officialId}, ${thirdPartyId})
         ORDER BY project_id`;
-      const pinByProject = Object.fromEntries(pins.map((row) => [String(row.project_id), row]));
-      assert.equal(String(pinByProject[staleProjectId]?.selected_version_id), String(newVersion.id));
-      assert.equal(String(pinByProject[pinOkProjectId]?.selected_version_id), pinOkVersionId);
-      assert.equal(String(pinByProject[thirdPartyProjectId]?.selected_version_id), oldThirdVersionId);
-      assert.equal(String(pinByProject[holdProjectId]?.selected_version_id), oldOfficialVersionId);
-      assert.equal(pinByProject[holdProjectId]?.pin_policy, "hold");
-      assert.equal(pinByProject[followLatestProjectId]?.selected_version_id, null);
+      assert.equal(pins.length, 5);
+      assert.ok(pins.every((row) => row.enabled === true));
 
       const [audit] = await sql`
-        SELECT action, project_id, before_json, after_json
+        SELECT action
         FROM audit_logs
         WHERE action = 'runtime_image.official_pin_roll' AND project_id = ${staleProjectId}
         ORDER BY id DESC LIMIT 1`;
-      assert.equal(audit?.action, "runtime_image.official_pin_roll");
-      assert.equal(String(audit?.before_json?.selected_version_id), oldOfficialVersionId);
-      assert.equal(String(audit?.after_json?.selected_version_id), String(newVersion.id));
-      assert.equal(audit?.after_json?.trigger, "official_catalog_promote");
-      assert.equal(audit?.after_json?.image_key, officialKey);
+      assert.equal(audit, undefined);
 
       const [frozenJob] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${jobId}`;
       assert.deepEqual(frozenJob?.agent_snapshot_json, snapshotBefore);
@@ -494,9 +480,9 @@ if (!testDatabaseUrl) {
       });
       assert.deepEqual(fallback.pin_rolls, []);
       const [holdPin] = await sql`
-        SELECT selected_version_id FROM project_runtime_images
+        SELECT enabled FROM project_runtime_images
         WHERE project_id = ${holdProjectId} AND runtime_image_id = ${officialId}`;
-      assert.equal(String(holdPin?.selected_version_id), oldOfficialVersionId);
+      assert.equal(holdPin?.enabled, true);
     } finally {
       await sql`DELETE FROM jobs WHERE id = ${jobId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;

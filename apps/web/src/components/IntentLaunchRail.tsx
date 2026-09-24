@@ -317,7 +317,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                         && check.runtime_image.latest_version_id && (
                         <button
                           type="button"
-                          className="intent-launch-pin-upgrade"
+                          className="intent-launch-image-enable"
                           disabled={busy}
                           onClick={async () => {
                             if (!readiness.scope.project_id || !check.runtime_image?.runtime_image_id || !check.runtime_image.latest_version_id) return;
@@ -327,7 +327,6 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                                 readiness.scope.project_id,
                                 check.runtime_image.runtime_image_id,
                                 true,
-                                check.runtime_image.latest_version_id,
                               );
                               setReadiness(null);
                               setOperationError(null);

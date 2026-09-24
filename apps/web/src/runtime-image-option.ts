@@ -2,10 +2,16 @@ import { officialRuntimeImageNotIncludedOneLiner } from "./runtime-image-boundar
 import type { RuntimeImageSummary } from "./api";
 import type { SelectOption } from "./searchable-select-model";
 
-/** Official: missing/null project row = available; third-party: require explicit enable. */
+/**
+ * #691 project availability (UI mirror of scheduler helper):
+ * - deepsonar-base: always available
+ * - other official: available unless project_enabled === false
+ * - third-party: requires project_enabled === true (platform visibility enforced server-side)
+ */
 export function isProjectRuntimeImageAvailable(
-  image: Pick<RuntimeImageSummary, "official" | "project_enabled">,
+  image: Pick<RuntimeImageSummary, "official" | "project_enabled" | "image_key">,
 ): boolean {
+  if (image.image_key === "deepsonar-base") return true;
   return image.official
     ? image.project_enabled !== false
     : image.project_enabled === true;
@@ -20,8 +26,9 @@ export function runtimeImageKindHint(
     : image.official
       ? "专项"
       : "第三方";
+  if (image.image_key === "deepsonar-base") return kind;
   if (image.official) {
-    if (projectId && image.project_enabled === false) return `${kind} · 已在项目关闭`;
+    if (projectId && image.project_enabled === false) return `${kind} · 已在项目排除`;
     return kind;
   }
   const needsProject = projectId && image.project_enabled !== true
@@ -39,10 +46,11 @@ export function runtimeImageOptionLabel(
   return `${image.name} · ${runtimeImageKindHint(image, projectId)}`;
 }
 
+/** @deprecated #691: project pins removed; kept for residual callers. */
 export function isRuntimeImagePinStale(
-  image: Pick<RuntimeImageSummary, "pin_stale" | "selected_version_id">,
+  _image: Pick<RuntimeImageSummary, "pin_stale" | "selected_version_id">,
 ): boolean {
-  return Boolean(image.pin_stale && image.selected_version_id);
+  return false;
 }
 
 export function isRuntimeImageBelowPlatformMin(
@@ -51,23 +59,12 @@ export function isRuntimeImageBelowPlatformMin(
   return image.below_platform_min === true;
 }
 
+/** @deprecated #691: project pins removed. */
 export function runtimeImagePinLabel(
-  image: Pick<RuntimeImageSummary, "selected_version_id" | "selected_version" | "latest_version" | "pin_stale"> &
+  _image: Pick<RuntimeImageSummary, "selected_version_id" | "selected_version" | "latest_version" | "pin_stale"> &
     Partial<Pick<RuntimeImageSummary, "official" | "pin_policy">>,
 ): string {
-  if (!image.selected_version_id) return "自动（跟随最新 trusted）";
-  const pin = image.selected_version ?? "已选版本";
-  if (image.pin_policy === "hold") {
-    return image.pin_stale ? `固定 ${pin} · 保持 · 已过期` : `固定 ${pin} · 保持`;
-  }
-  if (image.pin_stale) return `固定 ${pin} · 已过期`;
-  if (image.official && image.latest_version && image.selected_version === image.latest_version) {
-    return `已随官方升到 ${pin}`;
-  }
-  if (image.latest_version && image.selected_version && image.selected_version !== image.latest_version) {
-    return `固定 ${pin} · 最新 ${image.latest_version}`;
-  }
-  return `固定 ${pin}`;
+  return "跟随平台最新 trusted";
 }
 
 export function runtimeImageSelectOption(
