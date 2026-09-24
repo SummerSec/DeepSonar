@@ -241,17 +241,34 @@ test("resolveEffectiveModuleSelectors: empty → no implicit skills; explicit �
   ]);
 
   const fromEmpty = await resolveEffectiveModuleSelectors([], db);
-  assert.equal(fromEmpty.defaulted, false);
-  assert.deepEqual(fromEmpty.modules, []);
+  assert.deepEqual(fromEmpty, []);
 
   const fromUnset = await resolveEffectiveModuleSelectors(undefined, db);
-  assert.equal(fromUnset.defaulted, false);
-  assert.deepEqual(fromUnset.modules, []);
+  assert.deepEqual(fromUnset, []);
 
   const explicit = [`${SOURCE}:plugin:whitebox`];
   const fromExplicit = await resolveEffectiveModuleSelectors(explicit, db);
-  assert.equal(fromExplicit.defaulted, false);
-  assert.deepEqual(fromExplicit.modules, explicit);
+  assert.deepEqual(fromExplicit, explicit);
+});
+
+test("resolveEffectiveModuleSelectors: defaultInject 开启时注入全部 trusted+enabled 源（#679 AC1 opt-in）", async () => {
+  const db = skillSourcesListDb([
+    { id: SOURCE, trust_status: "trusted", enabled: true, created_at: "2026-01-01" },
+    { id: SOURCE_B, trust_status: "trusted", enabled: true, created_at: "2026-01-02" },
+    { id: SOURCE_C, trust_status: "quarantined", enabled: true, created_at: "2026-01-03" },
+  ]);
+
+  // 信任基线：quarantined 源不得进默认下发
+  assert.deepEqual(
+    await resolveEffectiveModuleSelectors([], db, true),
+    [`${SOURCE}:source:*`, `${SOURCE_B}:source:*`],
+  );
+  // 显式 RoleConfig 永远压过默认注入
+  assert.deepEqual(await resolveEffectiveModuleSelectors([`${SOURCE}:plugin:whitebox`], db, true), [
+    `${SOURCE}:plugin:whitebox`,
+  ]);
+  // 开关关闭时行为不变
+  assert.deepEqual(await resolveEffectiveModuleSelectors([], db, false), []);
 });
 
 test("expandModules only materializes explicit selectors", async () => {
@@ -277,8 +294,7 @@ test("expandModules only materializes explicit selectors", async () => {
     return [];
   }) as unknown as Parameters<typeof expandModules>[1];
 
-  const { modules, defaulted } = await resolveEffectiveModuleSelectors([], fakeDb);
-  assert.equal(defaulted, false);
+  const modules = await resolveEffectiveModuleSelectors([], fakeDb);
   assert.deepEqual(modules, []);
   const expanded = await expandModules(modules, fakeDb);
   assert.deepEqual(expanded.skills, []);

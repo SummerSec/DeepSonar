@@ -385,11 +385,11 @@ async function resolveAgentSnapshotForJobUnchecked(
   // Agents discover capabilities through the Job-scoped catalog; only an
   // explicit selector is an authorization request and is checked against the
   // project Skill-source allowlist before it is frozen into the Job snapshot.
-  const { modules, defaulted } = await resolveEffectiveModuleSelectors(
+  const modules = await resolveEffectiveModuleSelectors(
     rawModules as string[] | null | undefined,
     db as never,
   );
-  if (!defaulted) {
+  if (modules.length > 0) {
     await assertProjectModulesAllowlisted(db, projectId, modules);
   }
   const manualSkills = (cfg?.skills_json as { name?: string }[]) ?? [];

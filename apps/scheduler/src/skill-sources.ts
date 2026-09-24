@@ -895,23 +895,23 @@ export async function loadTrustedEnabledSkillSourceCatalogs(
 
 /**
  * Resolve the effective module selector list for snapshot assembly:
- * - unset / empty → no business Skill materialization
- * - non-empty → explicit RoleConfig allowlist (backward compatible)
+ * - non-empty RoleConfig.modules_json → explicit selectors (unchanged)
+ * - empty / unset → `[]`, unless #679 AC1 opt-in `defaultInject` is on, in which case
+ *   every trusted+enabled source is injected as `<uuid>:source:*` (whole source).
  *
- * Agent runtime discovery and pulling use the Job-scoped list/search/pull
- * operations above. This legacy resolver remains only for explicit RoleConfig
- * snapshot compatibility and is not required for Agent-selected Skills.
+ * Agent runtime discovery and pulling use the Job-scoped list/search/pull operations;
+ * injected defaults always go through the project Skill-source allowlist, so a project
+ * that explicitly disabled a source still wins（trust 源是默认基线，不是隐式授权）。
  */
 export async function resolveEffectiveModuleSelectors(
   modules: string[] | null | undefined,
   db: typeof sql = sql,
-): Promise<{ modules: string[]; defaulted: boolean }> {
+  defaultInject: boolean = config.skillSources.defaultInject,
+): Promise<string[]> {
   const explicit = Array.isArray(modules) ? modules : [];
-  if (explicit.length > 0) {
-    return { modules: explicit, defaulted: false };
-  }
-  void db;
-  return { modules: [], defaulted: false };
+  if (explicit.length > 0) return explicit;
+  if (!defaultInject) return [];
+  return await listTrustedEnabledModuleSelectors(db);
 }
 
 /**

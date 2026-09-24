@@ -496,6 +496,12 @@ export const config = {
     bootSync: bool("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC", true),
     /** 启动同步单次超时（秒）；超时后后台重试，不阻塞 listen。 */
     bootSyncTimeoutSec: int("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC_TIMEOUT_SEC", 20),
+    /**
+     * #679 验收 1（opt-in）：RoleConfig.modules_json 为空时，把全部 trusted+enabled
+     * 源的模块作为 Worker 默认下发。默认 false —— as-built 契约仍是 Agent 侧
+     * search_skills → pull_skill 自主拉取，预注入只作兼容旧项目/AC1 口径的开关。
+     */
+    defaultInject: bool("DEEPSONAR_SKILL_SOURCE_DEFAULT_INJECT", false),
   },
 
   /** 可信运行镜像目录由数据库管理；环境变量只负责引导官方 digest 与 registry 边界。 */
