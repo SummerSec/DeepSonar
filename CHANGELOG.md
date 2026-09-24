@@ -4,9 +4,13 @@
 
 - Provider 账号并发可观测与配置面收口（#707 Phase 2）：凭据列表/详情返回与 dispatcher claim 同口径的 `active_concurrency`（`in_use` / `max_concurrent` / 可选 `model_in_use`）；Web 账号卡片显示占用/上限，表单可编辑 `model_concurrency`；设置页补「Provider 协议全局并发」入口（账号 `max_concurrent` 之外的额外收紧）；文案标明账号 CLI 独占。
 
+### 变更
+
+- Provider 账号 CLI 归属与并发文档收口（#707 Phase 3）：`ARCHITECTURE` 写明六档优先级链、CLI 排他 ⇒ 凭据级 `max_concurrent` 即 CLI 级并发、Provider 档先于 Credential；`DESIGN` 把账号 × CLI 1:1 与使用期四层同口径 fail-closed 写入内核凭据边界。不 bump schema：`credentials.agent_cli` 列保持可空（`git` / `oci_registry` 无 CLI 归属）；`llm_provider` 空值已由 Phase 1 API fail-closed，不做列级 `NOT NULL` / `SCHEMA_VERSION` 重建。
+
 ### 修复
 
-- Provider 账号 CLI 归属贯通到候选解析层（#707 Phase 1 / 方案 A）：`resolve-credential` 删除软回退与 `default_credential_id` 侧路；CLI 不匹配返回 `provider_credential_cli_mismatch`（`permanent_failure`）；协议不兼容返回 `provider_credential_protocol_incompatible`（`model_correctable`）。凭据 create/PATCH 拒绝空 `agent_cli`（`CREDENTIAL_CLI_REQUIRED`）；在跑 Job 持有账号时禁止改 `agent_cli`/`provider`（`CREDENTIAL_IN_USE_BY_RUNNING_JOBS`）。Schema NOT NULL 留给 Phase 3。
+- Provider 账号 CLI 归属贯通到候选解析层（#707 Phase 1 / 方案 A）：`resolve-credential` 删除软回退与 `default_credential_id` 侧路；CLI 不匹配返回 `provider_credential_cli_mismatch`（`permanent_failure`）；协议不兼容返回 `provider_credential_protocol_incompatible`（`model_correctable`）。凭据 create/PATCH 拒绝空 `agent_cli`（`CREDENTIAL_CLI_REQUIRED`）；在跑 Job 持有账号时禁止改 `agent_cli`/`provider`（`CREDENTIAL_IN_USE_BY_RUNNING_JOBS`）。
 
 ## [0.4.11] - 2026-09-24
 
