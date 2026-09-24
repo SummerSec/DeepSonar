@@ -387,10 +387,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   // Agents discover capabilities through the Job-scoped catalog; only an
   // explicit selector is an authorization request and is checked against the
   // project Skill-source allowlist before it is frozen into the Job snapshot.
-  const modules = await resolveEffectiveModuleSelectors(
-    rawModules as string[] | null | undefined,
-    db as never,
-  );
+  const modules = await resolveEffectiveModuleSelectors(rawModules as string[] | null | undefined);
   if (modules.length > 0) {
     await assertProjectModulesAllowlisted(db, projectId, modules);
   }
@@ -531,6 +528,8 @@ async function resolveAgentSnapshotForJobUnchecked(
     roleModel: selectedModel,
     roleContextWindowTokens: options?.runtimeProfile?.context_window_tokens ?? cfg?.context_window_tokens,
     settingsConfig,
+    // SAFETY: manualConfigFiles 由上方 `SELECT path, content, content_sha256` 直接投影（未取 cfg 时为 []），
+    // 形状即查询列；下游只读这三个字段。
     manualConfigFiles: manualConfigFiles as unknown as Array<{ path: string; content: string; content_sha256: string }>,
     defaultModel: PLATFORM_DEFAULT_AGENT_MODEL,
   });
@@ -804,8 +803,12 @@ async function resolveAgentSnapshotForJobUnchecked(
 }
 
 /** The complete frozen runtime input consumed by Dispatcher/Executor. */
+// SAFETY: postgres.js 的 sql 与事务句柄暴露同一套 tagged-template 查询面，
+// 端口只做窄化，以便测试注入假实现。
+const DEFAULT_SNAPSHOT_DB = sql as unknown as RoleRuntimeSnapshotTransaction;
+
 export async function resolveAgentSnapshotForJob(
-  db: RoleRuntimeSnapshotTransaction = sql as unknown as RoleRuntimeSnapshotTransaction,
+  db: RoleRuntimeSnapshotTransaction = DEFAULT_SNAPSHOT_DB,
   projectId: string,
   jobType: string,
   options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
