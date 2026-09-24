@@ -88,8 +88,7 @@ if (!testDatabaseUrl) {
           ${credentialId.slice(0, 16)}, 'hubs', 'active', 'pi',
           ${sql.json({ provider: "openai", models: [{ id: "gpt-5.6" }] })}
         )`;
-      await sql`SELECT 1`; // #690
-
+      // #690: no role_credentials; unique active credential alone makes Hub snapshot unresolvable via CLI/provider mismatch.
 
       const wake = await app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` });
       assert.equal(wake.statusCode, 409, wake.payload);

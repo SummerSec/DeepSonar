@@ -193,8 +193,7 @@ if (!testDatabaseUrl) {
           ${credentialId.slice(0, 16)}, 'cret', 'active', 'claude-code',
           ${sql.json({ env: { ANTHROPIC_MODEL: "model-a" } })}
         )`;
-      await sql`SELECT 1`; // #690
-
+      // #690: no role_credentials; inserting a unique active credential alone drifts identity.
       const credentialDrift = await post(resumeJobId, "resume");
       assert.equal(credentialDrift.statusCode, 409, credentialDrift.payload);
       assert.equal(credentialDrift.json().error_code, "SNAPSHOT_STALE");
@@ -206,7 +205,8 @@ if (!testDatabaseUrl) {
         credentialDrift.json().stale_fields.includes("credential_provider"),
         credentialDrift.payload,
       );
-      await sql`SELECT 1`; // #690
+      // Restore baseline: remove the credential so resolve again yields null identity.
+      await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
 
       const resumed = await post(resumeJobId, "resume");
       assert.equal(resumed.statusCode, 200, resumed.payload);
