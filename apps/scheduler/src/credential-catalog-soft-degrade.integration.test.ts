@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("unreachable /models still saves credential and role config", async () => {
+  test("unreachable /models still saves credential; RoleConfig upsert without bindings", async () => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -110,15 +110,22 @@ if (!testDatabaseUrl) {
       const explore = (json(roles) as unknown as Array<{ id: string; name: string }>).find((role) => role.name === "explore");
       assert.ok(explore, "schema seeds the explore role");
 
-      const roleConfig = await request("PUT", `/role-configs/global/${explore.id}`, {
+      // #690: RoleConfig no longer accepts credential bindings; catalog soft-degrade
+      // must still allow RoleConfig upsert with a model string.
+      const rejectedBind = await request("PUT", `/role-configs/global/${explore.id}`, {
         agent_cli: "claude-code",
         model: "grok-4.6",
         credentials: [{ credential_id: credentialId, purpose: "llm" }],
       });
+      assert.equal(rejectedBind.statusCode, 400, rejectedBind.payload);
+      const roleConfig = await request("PUT", `/role-configs/global/${explore.id}`, {
+        agent_cli: "claude-code",
+        model: "grok-4.6",
+      });
       assert.equal(roleConfig.statusCode, 200, roleConfig.payload);
       const roleBody = json(roleConfig);
       assert.equal(roleBody.model, "grok-4.6");
-      assert.equal(roleBody.credentials?.[0]?.credential_id, credentialId);
+      assert.equal(roleBody.credentials, undefined);
 
       const refresh = await request("POST", `/credentials/${credentialId}/models`, {});
       assert.equal(refresh.statusCode, 200, refresh.payload);

@@ -87,7 +87,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     sandbox_limits: z.unknown().optional(),
     runtime_knobs: z.unknown().optional(),
     config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
-  });
+  }).strict(); // #690: reject credentials / pi_extensions and any unknown RoleConfig fields
 
   async function validateRoleConfigBody(
     body: z.infer<typeof RoleConfigPutBody>,
@@ -381,7 +381,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
 
   /** Unified binding picker for the Provider account flow. It intentionally
    * returns only RoleConfig identity/health metadata, never secret material. */
-  /** Lightweight CLI update for Provider bind UI (does not rewrite credentials/files). */
+  /** Lightweight CLI update (does not rewrite config files). */
   app.patch("/role-configs/:id/agent-cli", async (req, reply) => {
     const { id } = req.params as { id: string };
     if (rejectUnlessUuid(reply, id, INVALID_ROLE_CONFIG_ID)) return;
