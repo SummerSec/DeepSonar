@@ -550,7 +550,7 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
     meta_json: {},
     public_metadata_json: {},
   };
-  let projectConfig: Record<string, unknown> = { image_strategy: "project_managed" };
+  let projectConfig: Record<string, unknown> = {};
   const projectSkillSources = new Map<string, boolean>();
 
   const query = async (strings: TemplateStringsArray | Record<string, unknown>, ...values: unknown[]) => {
@@ -576,9 +576,10 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
     if (sql.includes("FROM project_skill_sources") && sql.includes("LIMIT 1")) {
       return projectSkillSources.size > 0 ? [{ ok: 1 }] : [];
     }
-    if (sql.includes("FROM project_skill_sources") && sql.includes("enabled = true")) {
+    // #691: availability = trusted baseline minus explicit disables
+    if (sql.includes("FROM project_skill_sources") && sql.includes("enabled = false")) {
       return [...projectSkillSources.entries()]
-        .filter(([, enabled]) => enabled)
+        .filter(([, enabled]) => enabled === false)
         .map(([skill_source_id]) => ({ skill_source_id }));
     }
     if (sql.includes("INSERT INTO project_skill_sources")) {
@@ -586,7 +587,9 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
       if (row?.skill_source_id) projectSkillSources.set(String(row.skill_source_id), row.enabled !== false);
       return [];
     }
-    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) return [];
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) {
+      return [{ id: TRUSTED_SOURCE }];
+    }
     if (sql.includes("FROM skill_sources") && sql.includes("WHERE id")) {
       const id = String(values[0] ?? "");
       if (id === TRUSTED_SOURCE) {
@@ -617,26 +620,29 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
   assert.deepEqual(defaulted.modules, []);
   assert.equal(defaulted.skills.some((s) => (s as { name?: string }).name === "authz"), false);
 
-  projectConfig = {
-    image_strategy: "project_managed",
-    skill_source_allowlist_configured: true,
-  };
+  // #691: trusted sources need no project opt-in row
+  projectConfig = { skill_source_allowlist_configured: false };
   projectSkillSources.clear();
-  projectSkillSources.set(TRUSTED_SOURCE, true);
   projectCfg.modules_json = [`${TRUSTED_SOURCE}:whitebox/authz`];
   const explicit = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
   assert.deepEqual(explicit.modules, [`${TRUSTED_SOURCE}:whitebox/authz`]);
   assert.equal(explicit.skills.some((s) => (s as { name?: string }).name === "authz"), true);
 
-  projectConfig = {
-    image_strategy: "project_managed",
-    skill_source_allowlist_configured: true,
-  };
+  // Explicit project disable of a trusted source fail-closes RoleConfig selectors
+  projectSkillSources.set(TRUSTED_SOURCE, false);
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(db as never, "project-1", "audit"),
+    (error: unknown) => error instanceof SnapshotUnresolvableError
+      && /不在本项目可用 Skill 源集合内/.test(String((error as Error).message)),
+  );
+
+  // Non-trusted sources are outside the trust baseline even if a project row enables them
   projectSkillSources.clear();
   projectSkillSources.set(UNTRUSTED_SOURCE, true);
   projectCfg.modules_json = [`${UNTRUSTED_SOURCE}:whitebox/authz`];
-  const untrusted = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
-  assert.deepEqual(untrusted.modules, [`${UNTRUSTED_SOURCE}:whitebox/authz`]);
-  assert.equal(untrusted.skills.some((s) => (s as { name?: string }).name === "authz"), false);
-  assert.equal(untrusted.missing_modules.some((m) => m.reason === "source-not-trusted"), true);
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(db as never, "project-1", "audit"),
+    (error: unknown) => error instanceof SnapshotUnresolvableError
+      && /不在本项目可用 Skill 源集合内/.test(String((error as Error).message)),
+  );
 });

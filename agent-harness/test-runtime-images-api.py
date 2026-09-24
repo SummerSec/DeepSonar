@@ -107,7 +107,42 @@ def main() -> None:
     assert detail["versions"][0]["id"] == version_id
     assert detail["versions"][0]["scans"][0]["status"] == "queued"
     req("POST", f"/runtime-image-versions/{version_id}/status", {"status": "trusted"}, 409)
+    # #691: 第三方未绑定 visible_project_ids 时项目启用 fail-closed（先于「无可信版本」）
+    blocked = req(
+        "PUT",
+        f"/projects/{project_id}/runtime-images/{image_id}",
+        {"enabled": True},
+        403,
+    )
+    assert blocked.get("error_code") == "RUNTIME_IMAGE_PROJECT_NOT_VISIBLE", blocked
+    # 绑定可见范围后，仍因 quarantined 无可信版本而拒绝启用
+    req(
+        "PATCH",
+        f"/runtime-images/{image_id}/visibility",
+        {"visible_project_ids": [project_id]},
+        200,
+    )
     req("PUT", f"/projects/{project_id}/runtime-images/{image_id}", {"enabled": True}, 409)
+    # 项目钉版本 / pin_policy 一律拒绝；deepsonar-base 不可项目停用
+    base = next(item for item in market if item["image_key"] == "deepsonar-base")
+    req(
+        "PUT",
+        f"/projects/{project_id}/runtime-images/{base['id']}",
+        {"enabled": False},
+        400,
+    )
+    req(
+        "PUT",
+        f"/projects/{project_id}/runtime-images/{base['id']}",
+        {"enabled": True, "pin_policy": "hold"},
+        400,
+    )
+    req(
+        "PUT",
+        f"/projects/{project_id}/runtime-images/{image_id}",
+        {"enabled": True, "version_id": version_id},
+        400,
+    )
 
     filtered = req(
         "GET",
@@ -133,7 +168,7 @@ def main() -> None:
     assert explore["runtime_image_key"] is None, explore
     assert test_role["runtime_image_key"] == "deepsonar-kali-minimal", test_role
     assert verify_role["runtime_image_key"] is None, verify_role
-    # 项目 RoleConfig 的旧镜像字段必须继续拒绝，防止绕过项目镜像策略。
+    # 项目 RoleConfig 的旧镜像字段必须继续拒绝，防止项目 RoleConfig 写入 runtime_image_key（#674/#691）。
     invalid = {
         "agent_cli": explore["agent_cli"],
         "model": explore["model"],
