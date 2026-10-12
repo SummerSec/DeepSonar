@@ -475,6 +475,8 @@ expect(reverseConfig.downloads?.ghidra?.version === "12.1.4", "Reverse must pin 
 expect(reverseConfig.downloads?.ghidra?.assets?.all?.sha256 === "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db", "Reverse Ghidra SHA256 drift");
 expect(reverseConfig.managed?.npm?.["rea-agents"]?.version === "6.4.0", "Reverse must pin rea-agents 6.4.0");
 expect(reverseConfig.managed?.npm?.["rea-agents"]?.gitHead === "a56f7bb668ab23fec8d33f7af353ac7ed2fe1895", "Reverse rea-agents gitHead drift");
+expect(reverseConfig.toolsets?.reverse?.maxSizeMiB === 2800, "Reverse size budget must be provisional 2800 MiB pending first OCI docker save");
+expect(reverseConfig.toolsets?.reverse?.job_resource_recommendation?.memory_mib === 4096, "Reverse Job memory recommendation must be 4096 MiB");
 expect(reverseConfig.skill?.id === "deepsonar-rea-cli", "Reverse must declare governed skill id");
 expect(typeof reverseConfig.skill?.content_hash === "string" && reverseConfig.skill.content_hash.startsWith("sha256:"), "Reverse skill content_hash required");
 expect(reverseDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "Reverse must default to local governed base");

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Static gate for deepsonar-reverse definition (#718 PR1).
- * Does not build the image or run REA/Ghidra — those remain follow-up acceptance items.
+ * Static gate for deepsonar-reverse definition (#718).
+ * PR2: also checks amd64 measurement ledger + provisional maxSizeMiB.
+ * Does not build the OCI image (requires docker / workflow scope follow-up).
  */
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
@@ -76,4 +77,20 @@ if (dockerfile.includes("MCP") && dockerfile.toLowerCase().includes("install mcp
 if (!envScript.includes("imageKey == \"deepsonar-reverse\"")) fail("reverse-env must check imageKey");
 if (!envScript.includes("hopper") || !envScript.includes("ida64")) fail("reverse-env must forbid hopper/ida");
 
-console.log("reverse-runtime static gate passed (no image build / no REA execution in this check)");
+if (config.toolsets?.reverse?.maxSizeMiB !== 2800) fail("reverse maxSizeMiB must be provisional 2800 until first OCI docker save");
+if (config.toolsets?.reverse?.job_resource_recommendation?.memory_mib !== 4096) {
+  fail("reverse job memory recommendation must be 4096 MiB (amd64 peak ~3.5 GiB)");
+}
+const measurementsPath = resolve(root, config.measurements?.amd64 ?? "agent-harness/reverse-amd64-measurements.json");
+if (!existsSync(measurementsPath)) fail(`amd64 measurements missing: ${measurementsPath}`);
+const measurements = JSON.parse(readFileSync(measurementsPath, "utf8"));
+if (measurements.schema !== "deepsonar.reverse.amd64-measurements/v1") fail("measurements schema drift");
+if (!Array.isArray(measurements.queries) || measurements.queries.length < 8) fail("measurements must list amd64 query timings");
+if (measurements.image_size?.provisional_maxSizeMiB !== 2800) fail("measurements provisional_maxSizeMiB drift");
+if (measurements.arm64?.status !== "pending") fail("arm64 must remain pending until measured");
+if (!existsSync(resolve(root, "agent-harness/fixtures/reverse-sample/sample.c"))) {
+  fail("public reverse sample source missing");
+}
+
+
+console.log("reverse-runtime static gate passed (measurements ledger present; no OCI image build in this check)");

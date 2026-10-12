@@ -43,6 +43,20 @@ rea inspect-analysis-view /workspace/view.json
 
 伪代码与静态值流 **不等于** 原始源码、动态证明或已验证漏洞。CLI 输出只作 Evidence/Fact 输入（`is_finding: false`），Finding 须走独立 Verify。
 
+
+
+## amd64 实测摘要（#718 PR2）
+
+主机 scratch 工具链（非已发布 OCI digest；本机无 docker）对公开可复现样本 `agent-harness/fixtures/reverse-sample/sample.c` 的实测见 `agent-harness/reverse-amd64-measurements.json`：
+
+- 冷启动 `analyze` ≈ 13s；带 `--snapshot` 的重复 `analyze` ≈ 1.6s
+- `function` / `decompile` / `instructions` / `xrefs` / `search` ≈ 12–13s（仍可能重新导入）
+- 有界 `trace-native-values` ≈ 18s（**不**支持 `--snapshot`）
+- `inspect-analysis-view` 需 `{source:{kind:"inline",evidence},view:{kind:"native",facet,...}}`，≈ 1.3s
+- 峰值 java+node RSS ≈ 3.5 GiB（`GHIDRA_HEADLESS_MAXMEM=1536m`）→ Job 建议内存 **≥ 4096 MiB**
+- SIGTERM 取消 ≈ 4.3s 返回 `cancelled`，无残留 `java`
+- 镜像压缩体积预算暂定 **2800 MiB**（待首次 `docker save` 实测）；**arm64 pending**
+
 ## 失败纪律
 
 - 镜像未准入 / 能力未冻结 / 冻结快照不可解析 → 结构化 `capability_unavailable`，禁止临时 `npm i` / 扩大网络。

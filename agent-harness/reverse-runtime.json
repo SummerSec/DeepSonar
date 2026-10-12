@@ -63,7 +63,7 @@
   "skill": {
     "id": "deepsonar-rea-cli",
     "path": "skills/deepsonar-rea-cli/SKILL.md",
-    "content_hash": "sha256:361324aab38de9d9309cc133e7b0a834182382f0dfd0298a13f89d301724aafa"
+    "content_hash": "sha256:95ad67d5d16a8599e0cb76be111c78337f8dfd922d761072f95276836dd66c4d"
   },
   "toolsets": {
     "reverse": {
@@ -84,7 +84,18 @@
         "IDA",
         "dynamic debugging",
         "device execution"
-      ]
+      ],
+      "maxSizeMiB": 2800,
+      "job_resource_recommendation": {
+        "memory_mib": 4096,
+        "cpu": 2,
+        "timeout_sec": 600,
+        "source": "agent-harness/reverse-amd64-measurements.json"
+      }
     }
+  },
+  "measurements": {
+    "amd64": "agent-harness/reverse-amd64-measurements.json",
+    "arm64": "pending"
   }
 }

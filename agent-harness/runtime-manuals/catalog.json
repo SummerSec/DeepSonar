@@ -37700,8 +37700,8 @@
             "exit code"
           ],
           "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
-          "verification_status": "source_declared_unexecuted",
-          "verification_note": "Catalog pins Ghidra 12.1.4; PR1 did not execute headless analysis on a sample."
+          "verification_status": "source_reviewed_unexecuted",
+          "verification_note": "PR2 amd64 host scratch validated analyzeHeadless via REA (sample_elf/libsample.so); OCI image digest execution still pending first reverse build."
         },
         {
           "image_key": "deepsonar-reverse",
@@ -37756,8 +37756,8 @@
             "truncation flags"
           ],
           "version_limits_side_effects_cleanup": "Pinned to rea-agents@6.4.0 / gitHead a56f7bb668ab23fec8d33f7af353ac7ed2fe1895. Snapshot files are exact-query caches, not persistent Ghidra databases. Keep workspace-local outputs; delete ephemeral provider temps after evidence retention.",
-          "verification_status": "source_declared_unexecuted",
-          "verification_note": "PR1 wires pins and manuals; real REA/Ghidra sample runs remain a follow-up acceptance item."
+          "verification_status": "source_reviewed_unexecuted",
+          "verification_note": "PR2 amd64 scratch toolchain ran analyze/function/decompile/xrefs/trace/inspect-analysis-view; see agent-harness/reverse-amd64-measurements.json. arm64 and OCI digest still pending."
         },
         {
           "image_key": "deepsonar-reverse",

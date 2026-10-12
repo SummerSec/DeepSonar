@@ -20,3 +20,14 @@ export {
   type CliAdmitSetRequest,
   type CliAdmitSetResult,
 } from "./admit.js";
+
+export {
+  REA_CLI_CAPABILITY_ID,
+  REA_TOOL,
+  REA_TOOL_VERSION,
+  buildReaCliCapabilityResult,
+  isReaCliImageAdmitted,
+  planReaCliCleanup,
+  type ReaCliCleanupPlan,
+  type ReaCliObservationInput,
+} from "./rea-cli-evidence.js";
