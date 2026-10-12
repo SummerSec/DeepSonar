@@ -15,7 +15,7 @@ export const REA_TOOL_VERSION = "6.4.0" as const;
 export type ReaCliObservationInput = {
   job_id: string;
   workspace: string;
-  argv: string[];
+  argv: readonly string[];
   /** Process exit code; null when killed before an exit code was observed. */
   exit_code: number | null;
   stdout: string;
@@ -111,7 +111,7 @@ export function buildReaCliCapabilityResult(input: ReaCliObservationInput): CliC
     capability_id: REA_CLI_CAPABILITY_ID,
     tool: REA_TOOL,
     tool_version: REA_TOOL_VERSION,
-    argv: input.argv,
+    argv: [...input.argv],
     exit_code: input.exit_code,
     stdout_truncated: stdoutTruncated,
     stderr_truncated: stderrTruncated,
