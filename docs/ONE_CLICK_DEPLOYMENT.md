@@ -70,6 +70,16 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 
 访问：**http://127.0.0.1:8080**
 
+
+### Podman 与依赖就绪（#726）
+
+部分 Podman / Compose 组合下，依赖服务的 healthcheck 可能长期停在 `starting`，导致 `depends_on: service_healthy` 无限阻塞，`web`/`scheduler` 停在 `Created`、入口端口不可达。
+
+- `DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`（默认 `600`）：`compose up` 墙上时钟上限；超时失败并输出诊断。
+- `DEEPSONAR_READY_TIMEOUT_SEC`（默认 `180`）：postgres/silo 真实探测与入口 `/api/health` 等待上限。
+- `DEEPSONAR_COMPOSE_DEPENDS_ON`：`auto`（默认，检测到 Podman 时启用兼容层）/ `healthy` / `started`。
+- 成功条件不变：web 与 scheduler 必须在跑，且配置的入口端口（默认 8080）可访问。不会在 up 超时后无条件 start 并报告成功。
+
 ### 登录
 
 空库首次启动创建人类管理员（生产必须立刻改密）：
@@ -284,6 +294,7 @@ schema 大版本变化时须按基线重建库（无升级路径）。升级前�
 |------|------|
 | API 401 | 鉴权开启为预期；配置控制台 Token / 人类登录 |
 | 登录 429 像全站一起被锁 | 官方路径是浏览器 → Web(:8080) → Scheduler。Web 用入站 TCP peer 覆盖 `X-Forwarded-For`，Scheduler 默认只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS=1`）。在 Web 前面再加未纳入该 hop 策略的反向代理时，所有浏览器会共享同一 IP 桶（20 次/5 分钟）。不要把 Scheduler HTTP 暴露到公网；需要真实客户端 IP 时让 Web 直接看到浏览器（或该代理终止 TLS 后把真实 peer 交给 Web） |
+| Silo healthcheck 长时间 starting / `up` 卡住（常见于部分 Podman） | #726：`deploy.sh`/`deploy.ps1` 对 `compose up` 有界等待（`DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`，默认 600s），超时非零退出并打印容器状态/健康/日志/版本（脱敏）。Podman 或 `DEEPSONAR_COMPOSE_DEPENDS_ON=started` 时附加 `docker-compose.podman-compat*.yml`（`service_started`），但仍用 postgres/silo 真实探测与入口 `:8080/api/health` 门禁；依赖真实不可用不会因 `service_started` 误报成功。`healthy` 可强制保留原 `service_healthy`。与 #101（silo-init 拆词）不同。 |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
 | real helper 拉取失败 | 官方 `deepsonar-assets-helper:$IMAGE_TAG` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |

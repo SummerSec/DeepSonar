@@ -32,12 +32,102 @@ $ComposeFile = Join-Path $DeployDir "docker-compose.prod.yml"
 $RealComposeFile = Join-Path $DeployDir "docker-compose.real.yml"
 $OpenSandboxComposeFile = Join-Path $DeployDir "docker-compose.opensandbox.prod.yml"
 $WorkerComposeFile = Join-Path $DeployDir "docker-compose.worker.yml"
+$PodmanCompatFile = Join-Path $DeployDir "docker-compose.podman-compat.yml"
+$PodmanCompatOpenSandboxFile = Join-Path $DeployDir "docker-compose.podman-compat.opensandbox.yml"
 $DefaultImageRegistry = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
 $AcrHost = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"
 $DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
 $DefaultSiloImage = "docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
 $ImmutableDigestRe = "^[^@\s]+@sha256:[0-9a-f]{64}$"
+
+function Get-DeployTuningInt([string]$Name, [int]$Default) {
+  $raw = [Environment]::GetEnvironmentVariable($Name)
+  if ([string]::IsNullOrWhiteSpace($raw)) {
+    $raw = Read-EnvValue $Name ""
+  }
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
+  $n = 0
+  if (-not [int]::TryParse($raw, [ref]$n) -or $n -le 0) { return $Default }
+  return $n
+}
+
+function Get-ContainerRuntimeHint {
+  $forced = [Environment]::GetEnvironmentVariable("DEEPSONAR_CONTAINER_RUNTIME")
+  if (-not [string]::IsNullOrWhiteSpace($forced)) { return $forced.Trim().ToLowerInvariant() }
+  try {
+    $info = & docker info 2>$null | Out-String
+    if ($info -match "(?i)podman") { return "podman" }
+  } catch {}
+  $dh = [Environment]::GetEnvironmentVariable("DOCKER_HOST")
+  if ($dh -and $dh -match "(?i)podman") { return "podman" }
+  return "docker"
+}
+
+function Should-UseStartedDepends {
+  $mode = [Environment]::GetEnvironmentVariable("DEEPSONAR_COMPOSE_DEPENDS_ON")
+  if ([string]::IsNullOrWhiteSpace($mode)) {
+    $mode = Read-EnvValue "DEEPSONAR_COMPOSE_DEPENDS_ON" "auto"
+  }
+  switch -Regex ($mode.Trim().ToLowerInvariant()) {
+    "^(started|service_started)$" { return $true }
+    "^(healthy|service_healthy)$" { return $false }
+    default { return ((Get-ContainerRuntimeHint) -eq "podman") }
+  }
+}
+
+function Invoke-DockerComposeUpBounded {
+  param(
+    [string[]]$ComposeArgs,
+    [string[]]$UpArgs,
+    [int]$TimeoutSec
+  )
+  $argList = @($ComposeArgs + @("up") + $UpArgs)
+  $stdout = Join-Path $env:TEMP ("deepsonar-compose-up-{0}.out" -f [guid]::NewGuid().ToString("N"))
+  $stderr = Join-Path $env:TEMP ("deepsonar-compose-up-{0}.err" -f [guid]::NewGuid().ToString("N"))
+  try {
+    $p = Start-Process -FilePath "docker" -ArgumentList $argList -NoNewWindow -PassThru `
+      -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $ok = $p.WaitForExit($TimeoutSec * 1000)
+    if (-not $ok) {
+      try { $p.Kill() } catch {}
+      try { $p.WaitForExit(5000) } catch {}
+      if (Test-Path $stdout) { Get-Content $stdout -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+      if (Test-Path $stderr) { Get-Content $stderr -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+      return 124
+    }
+    if (Test-Path $stdout) { Get-Content $stdout -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+    if (Test-Path $stderr) { Get-Content $stderr -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+    return $p.ExitCode
+  } finally {
+    Remove-Item $stdout, $stderr -ErrorAction SilentlyContinue
+  }
+}
+
+function Write-DeployDiagnostics {
+  param([string[]]$ComposeArgs)
+  Write-Host "[deploy] ===== deploy diagnostics (#726) ====="
+  Write-Host "[deploy] container runtime: $(Get-ContainerRuntimeHint)"
+  try { & docker version 2>$null | Out-Host } catch {}
+  try { & docker compose version 2>$null | Out-Host } catch {}
+  try { & docker @ComposeArgs ps -a 2>$null | Out-Host } catch {}
+  try { & docker @ComposeArgs logs --tail 80 postgres silo silo-init scheduler image-admission web 2>$null | Out-Host } catch {}
+  Write-Host "[deploy] ===== end diagnostics ====="
+}
+
+function Wait-EntryReady {
+  param([string]$Url, [int]$TimeoutSec)
+  Write-Host "[deploy] waiting for entry readiness: $Url (bound ${TimeoutSec}s)"
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    try {
+      $response = Invoke-RestMethod -Uri $Url -TimeoutSec 3
+      if ($response.ok -eq $true) { return $true }
+    } catch {}
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
 
 function Assert-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -286,8 +376,17 @@ if ($Mode -eq "real") {
 }
 # Real mode defaults to OpenSandbox; set SANDBOX_PROVIDER to skip the overlay.
 $sandboxProvider = if ([string]::IsNullOrWhiteSpace($env:SANDBOX_PROVIDER)) { "opensandbox" } else { $env:SANDBOX_PROVIDER }
+$openSandboxOverlay = $false
 if ($Mode -eq "real" -and $sandboxProvider -eq "opensandbox") {
   $ComposeArgs += @("-f", $OpenSandboxComposeFile)
+  $openSandboxOverlay = $true
+}
+if (Should-UseStartedDepends) {
+  Write-Host "[deploy] using service_started depends_on overlay (runtime=$(Get-ContainerRuntimeHint))"
+  $ComposeArgs += @("-f", $PodmanCompatFile)
+  if ($openSandboxOverlay) {
+    $ComposeArgs += @("-f", $PodmanCompatOpenSandboxFile)
+  }
 }
 }
 
@@ -321,13 +420,18 @@ try {
     "up" {
       & docker @ComposeArgs config --quiet
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
+      $upTimeout = Get-DeployTuningInt "DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC" 600
+      $readyTimeout = Get-DeployTuningInt "DEEPSONAR_READY_TIMEOUT_SEC" 180
       if ($Mode -eq "worker-join") {
         if ($Source -eq "build") {
-          & docker @ComposeArgs up -d --build
+          $upRc = Invoke-DockerComposeUpBounded -ComposeArgs $ComposeArgs -UpArgs @("-d", "--build") -TimeoutSec $upTimeout
         } else {
-          & docker @ComposeArgs up -d --pull missing
+          $upRc = Invoke-DockerComposeUpBounded -ComposeArgs $ComposeArgs -UpArgs @("-d", "--pull", "missing") -TimeoutSec $upTimeout
         }
-        if ($LASTEXITCODE -ne 0) { throw "Failed to start worker-join services" }
+        if ($upRc -ne 0) {
+          Write-DeployDiagnostics -ComposeArgs $ComposeArgs
+          throw "Failed to start worker-join services (exit=$upRc; 124=timeout)"
+        }
         Write-Host "[deploy] worker-join started (compose project=deepsonar-worker)"
         Write-Host "[deploy] control-plane=$ControlPlane"
         break
@@ -337,27 +441,22 @@ try {
 
       if ($Source -eq "build") {
         Write-Host "[deploy] Local Dockerfile build mode"
-        & docker @ComposeArgs up -d --build
+        $upRc = Invoke-DockerComposeUpBounded -ComposeArgs $ComposeArgs -UpArgs @("-d", "--build") -TimeoutSec $upTimeout
       } else {
         Pull-AppImages
-        & docker @ComposeArgs up -d --pull missing
+        $upRc = Invoke-DockerComposeUpBounded -ComposeArgs $ComposeArgs -UpArgs @("-d", "--pull", "missing") -TimeoutSec $upTimeout
       }
-      if ($LASTEXITCODE -ne 0) { throw "Failed to start services" }
+      if ($upRc -ne 0) {
+        Write-DeployDiagnostics -ComposeArgs $ComposeArgs
+        throw "Failed to start services within ${upTimeout}s (exit=$upRc; 124=timeout). See diagnostics above."
+      }
 
       $port = Read-EnvValue "DEEPSONAR_WEB_PORT" "8080"
       $health = "http://127.0.0.1:$port/api/health"
-      $ready = $false
-      for ($i = 0; $i -lt 60; $i++) {
-        try {
-          $response = Invoke-RestMethod -Uri $health -TimeoutSec 3
-          if ($response.ok -eq $true) { $ready = $true; break }
-        } catch {}
-        Start-Sleep -Seconds 2
-      }
+      $ready = Wait-EntryReady -Url $health -TimeoutSec $readyTimeout
       if (-not $ready) {
-        & docker @ComposeArgs ps
-        & docker @ComposeArgs logs --tail 100 scheduler image-admission web
-        throw "Services did not become healthy within 120 seconds: $health"
+        Write-DeployDiagnostics -ComposeArgs $ComposeArgs
+        throw "Services did not become healthy within ${readyTimeout}s: $health"
       }
 
       Write-Host "[deploy] DeepSonar is ready: http://127.0.0.1:$port" -ForegroundColor Green

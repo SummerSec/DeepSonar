@@ -58,8 +58,9 @@ test("deploy.ps1 pull/up matches deploy.sh app-image and official-image semantic
   assert.match(text, /function Pull-SharedAssetsHelper/);
   assert.match(text, /falling back to busybox pin/);
   assert.match(text, /pgsty\/silo:RELEASE\.2026-08-06T00-00-00Z/);
-  assert.match(text, /up -d --pull missing/);
-  assert.match(text, /up -d --build/);
+  assert.match(text, /"-d", "--pull", "missing"/);
+  assert.match(text, /"-d", "--build"/);
+  assert.match(text, /Invoke-DockerComposeUpBounded/);
   assert.match(text, /if \(\$NoBuild\) \{ \$Source = "pull" \}/);
   assert.match(text, /IsNullOrWhiteSpace\(\$env:SANDBOX_PROVIDER\)/);
   assert.match(text, /"opensandbox"/);

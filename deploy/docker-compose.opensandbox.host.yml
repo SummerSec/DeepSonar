@@ -44,10 +44,21 @@ services:
     restart: "no"
     network_mode: host
     entrypoint: ["/bin/sh", "-c"]
+    # Retry until Silo accepts connections (#726); keep one-element sh -c script (#101).
     command:
-      - >-
-        mcli alias set local http://127.0.0.1:${SILO_API_PORT:-19000} "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
-        mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"
+      - |
+        set -eu
+        i=0
+        while [ "$$i" -lt 60 ]; do
+          if mcli alias set local http://127.0.0.1:${SILO_API_PORT:-19000} "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" \
+            && mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"; then
+            exit 0
+          fi
+          i=$$((i + 1))
+          sleep 2
+        done
+        echo "silo-init: silo not ready after 120s" >&2
+        exit 1
     environment:
       MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:?set BLOB_S3_ACCESS_KEY_ID}
       MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:?set BLOB_S3_SECRET_ACCESS_KEY}

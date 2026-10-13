@@ -89,6 +89,23 @@ test("OpenSandbox Docker host port pool assertion rejects missing keys and the d
   );
 });
 
+
+test("deploy.sh bounds compose up and keeps final readiness gate (#726)", () => {
+  const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
+  const bounded = readFileSync(join(root, "deploy/bounded-wait.sh"), "utf8");
+  const compat = readFileSync(join(root, "deploy/docker-compose.podman-compat.yml"), "utf8");
+  const prod = readFileSync(join(root, "deploy/docker-compose.prod.yml"), "utf8");
+  assert.match(deploySh, /bounded-wait\.sh/);
+  assert.match(deploySh, /ds_run_bounded/);
+  assert.match(deploySh, /ds_wait_entry_ready/);
+  assert.match(deploySh, /refusing success via service_started alone/);
+  assert.match(bounded, /ds_dump_deploy_diagnostics/);
+  assert.match(compat, /condition: service_started/);
+  // Default prod path still uses service_healthy; compat is opt-in / Podman auto.
+  assert.match(prod, /condition: service_healthy/);
+  assert.match(prod, /silo-init: silo not ready after 120s/);
+});
+
 test("OpenSandbox production overlay is the default real deploy path", () => {
   const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
   const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");

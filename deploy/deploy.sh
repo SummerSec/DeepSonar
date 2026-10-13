@@ -4,6 +4,10 @@ set -eu
 ACTION="${1:-up}"
 MODE="${2:-real}"
 SOURCE="${3:-pull}"
+# Remember which deploy-tuning vars the caller exported (beat .env / defaults).
+[ -n "${DEEPSONAR_COMPOSE_DEPENDS_ON+x}" ] && DEEPSONAR_COMPOSE_DEPENDS_ON_SET=1 || true
+[ -n "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC+x}" ] && DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC_SET=1 || true
+[ -n "${DEEPSONAR_READY_TIMEOUT_SEC+x}" ] && DEEPSONAR_READY_TIMEOUT_SEC_SET=1 || true
 CONTROL_PLANE="${DEEPSONAR_CONTROL_PLANE:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -14,6 +18,11 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.prod.yml"
 REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 OPENSANDBOX_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.opensandbox.prod.yml"
 WORKER_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.worker.yml"
+PODMAN_COMPAT_FILE="$SCRIPT_DIR/docker-compose.podman-compat.yml"
+PODMAN_COMPAT_OS_FILE="$SCRIPT_DIR/docker-compose.podman-compat.opensandbox.yml"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/bounded-wait.sh"
+
 
 if [ "$MODE" = "worker-join" ]; then
   SOURCE="pull"
@@ -213,8 +222,40 @@ else
     set -- "$@" -f "$REAL_COMPOSE_FILE"
   fi
   # real 默认 OpenSandbox；显式 SANDBOX_PROVIDER= 其它值才跳过 overlay。
+  opensandbox_overlay=0
   if [ "$MODE" = "real" ] && [ "${SANDBOX_PROVIDER:-opensandbox}" = "opensandbox" ]; then
     set -- "$@" -f "$OPENSANDBOX_COMPOSE_FILE"
+    opensandbox_overlay=1
+  fi
+  # Podman / stuck-healthcheck: optional service_started overlay (#726). Final probes still gate success.
+  # Process env wins; otherwise adopt deploy/.env (overrides bounded-wait.sh defaults).
+  if [ -z "${DEEPSONAR_COMPOSE_DEPENDS_ON_SET:-}" ]; then
+    _depends=$(awk -F= '$1=="DEEPSONAR_COMPOSE_DEPENDS_ON" {print $2; exit}' "$ENV_FILE" 2>/dev/null || true)
+    if [ -n "$_depends" ]; then
+      DEEPSONAR_COMPOSE_DEPENDS_ON="$_depends"
+      export DEEPSONAR_COMPOSE_DEPENDS_ON
+    fi
+  fi
+  _up_to=$(awk -F= '$1=="DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC" {print $2; exit}' "$ENV_FILE" 2>/dev/null || true)
+  if [ -n "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC_SET:-}" ]; then
+    :
+  elif [ -n "$_up_to" ]; then
+    DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC="$_up_to"
+    export DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC
+  fi
+  _ready_to=$(awk -F= '$1=="DEEPSONAR_READY_TIMEOUT_SEC" {print $2; exit}' "$ENV_FILE" 2>/dev/null || true)
+  if [ -n "${DEEPSONAR_READY_TIMEOUT_SEC_SET:-}" ]; then
+    :
+  elif [ -n "$_ready_to" ]; then
+    DEEPSONAR_READY_TIMEOUT_SEC="$_ready_to"
+    export DEEPSONAR_READY_TIMEOUT_SEC
+  fi
+  if ds_should_use_started_depends; then
+    echo "[deploy] using service_started depends_on overlay (runtime=$(ds_detect_container_runtime); DEEPSONAR_COMPOSE_DEPENDS_ON=${DEEPSONAR_COMPOSE_DEPENDS_ON:-auto})"
+    set -- "$@" -f "$PODMAN_COMPAT_FILE"
+    if [ "$opensandbox_overlay" = "1" ]; then
+      set -- "$@" -f "$PODMAN_COMPAT_OS_FILE"
+    fi
   fi
 fi
 
@@ -363,47 +404,85 @@ case "$ACTION" in
     "$@" config --quiet
     if [ "$MODE" = "worker-join" ]; then
       if [ "$SOURCE" = "build" ]; then
-        "$@" up -d --build
+        if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
+          rc=$?
+          ds_dump_deploy_diagnostics "$@"
+          echo "[deploy] worker-join compose up failed or timed out (exit=$rc)" >&2
+          exit "$rc"
+        fi
       else
-        "$@" up -d --pull missing
+        if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --pull missing; then
+          rc=$?
+          ds_dump_deploy_diagnostics "$@"
+          echo "[deploy] worker-join compose up failed or timed out (exit=$rc)" >&2
+          exit "$rc"
+        fi
       fi
       attach_opensandbox_default_bridge
       echo "[deploy] worker-join 已启动（compose project=deepsonar-worker）"
-      echo "[deploy] control-plane=$CONTROL_PLANE endpoint=\${DEEPSONAR_WORKER_ENDPOINT:-unset}"
+      echo "[deploy] control-plane=$CONTROL_PLANE endpoint=${DEEPSONAR_WORKER_ENDPOINT:-unset}"
       echo "[deploy] 单机控制面仍用 ./deploy/deploy.sh up real；同宿主即一个 local worker"
       break_worker=1
     fi
     if [ "${break_worker:-}" != "1" ]; then
     pull_official_silo
     pull_shared_assets_helper
+    up_rc=0
     if [ "$SOURCE" = "build" ]; then
       echo "[deploy] 本地 Dockerfile 构建模式"
-      "$@" up -d --build
+      if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
+        up_rc=$?
+      fi
     else
       pull_app_images
       # 不传 --build：优先使用已拉取的 image: 标签，避免强制本地构建
-      "$@" up -d --pull missing
+      if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --pull missing; then
+        up_rc=$?
+      fi
+    fi
+    if [ "$up_rc" -ne 0 ]; then
+      echo "[deploy] compose up exited $up_rc (124=timeout); checking whether infra is actually ready (#726)" >&2
+      ds_dump_deploy_diagnostics "$@"
+      if [ "$up_rc" -eq 124 ] && ds_infra_really_ready "$@"; then
+        echo "[deploy] infra real probes passed despite compose health wait timeout; taking controlled path"
+        if ! ds_ensure_app_services_started "$@"; then
+          ds_dump_deploy_diagnostics "$@"
+          echo "[deploy] controlled path failed to start app services; blocker is compose health / dependency chain" >&2
+          exit 1
+        fi
+      else
+        echo "[deploy] compose up failed within ${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}s; dependency not ready or healthcheck stuck" >&2
+        exit "$up_rc"
+      fi
     fi
     attach_opensandbox_default_bridge
-    port=$(awk -F= '$1=="DEEPSONAR_WEB_PORT" {print $2; exit}' "$ENV_FILE")
-    port=${port:-8080}
-    health="http://127.0.0.1:$port/api/health"
-    ready=0
-    i=0
-    while [ "$i" -lt 60 ]; do
-      if command -v curl >/dev/null 2>&1 && curl -fsS "$health" >/dev/null 2>&1; then
-        ready=1
-        break
-      fi
-      sleep 2
-      i=$((i + 1))
-    done
-    if [ "$ready" -ne 1 ]; then
-      "$@" ps
-      "$@" logs --tail 100 scheduler image-admission web
-      echo "服务未在 120 秒内通过健康检查：$health" >&2
+    # Real readiness (Running ≠ ready): postgres + silo, then entry port.
+    if ! ds_wait_infra_ready "$@"; then
+      ds_dump_deploy_diagnostics "$@"
+      echo "[deploy] postgres/silo real probes failed; refusing success via service_started alone" >&2
       exit 1
     fi
+    port=$(awk -F= '$1=="DEEPSONAR_WEB_PORT" {print $2; exit}' "$ENV_FILE")
+    port=${port:-8080}
+    if ! ds_wait_entry_ready "$port" "${DEEPSONAR_READY_TIMEOUT_SEC:-180}"; then
+      ds_dump_deploy_diagnostics "$@"
+      # Name likely blockers for operators.
+      ds_compose_blocker_hint "$@"
+      echo "[deploy] entry readiness failed: web/scheduler not reachable on :$port within ${DEEPSONAR_READY_TIMEOUT_SEC:-180}s" >&2
+      exit 1
+    fi
+    # Confirm web + scheduler containers are up (not merely Created).
+    for svc in scheduler web; do
+      state=$(docker inspect --format '{{.State.Status}}' "$("$@" ps -q "$svc" 2>/dev/null | head -1)" 2>/dev/null || echo missing)
+      case "$state" in
+        running) ;;
+        *)
+          ds_dump_deploy_diagnostics "$@"
+          echo "[deploy] required service $svc is not running (state=$state)" >&2
+          exit 1
+          ;;
+      esac
+    done
     echo "[deploy] DeepSonar 已启动：http://127.0.0.1:$port"
     echo "[deploy] 应用镜像：${IMAGE_REGISTRY}/*:${IMAGE_TAG}"
     echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DEEPSONAR_ADMIN_TOKEN，请勿提交该文件。"

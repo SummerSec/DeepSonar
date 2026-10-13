@@ -9,6 +9,7 @@
 ### 修复
 
 - runtime image GC 把“目标镜像已不存在”归为幂等成功（#725）：Docker `No such image` / `reference does not exist` 与 Podman `image not known` 在每条错误行都能确认时计入 `alreadyAbsent`，不再计入 `failed`；检查后被并发删除、ancestor 过滤因镜像缺失报错、多引用中其余引用已随首个引用移除的场景同样幂等，重复执行 GC 不再累积失败。权限不足、运行时不可达、CLI 缺失/超时与多错误汇总中混入的未知错误仍 fail closed 计入 `failed` 并保留诊断（日志带分类）；Podman 的 `image is in use by a container` 与 Docker 占用冲突一样计入 `retainedInUse`。汇总改为 `deleted` / `alreadyAbsent` / `retainedInUse` / `failed` / `unsafeRef`，仅有 `alreadyAbsent` 时降为 debug 级别；新增计数器 `deepsonar_runtime_image_gc_already_absent_total`。引用保护、GC 选择规则与非 force 删除不变。
+- 避免 Podman 部署被 `service_healthy` 无限阻塞（#726）：`deploy.sh` / `deploy.ps1` 为 `compose up` 增加有界等待（`DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`，默认 600s），超时非零退出并输出脱敏诊断（容器状态、健康、最近日志、Docker/Podman/Compose 版本）。启动后以 postgres/silo 真实探测与入口 `/api/health` 作为成功门禁（`DEEPSONAR_READY_TIMEOUT_SEC`，默认 180s）。检测到 Podman 或显式 `DEEPSONAR_COMPOSE_DEPENDS_ON=started` 时附加受控 `docker-compose.podman-compat*.yml`（`service_started`），`silo-init` 增加有界重试；依赖真实不可用时不会因 `service_started` 误报成功。默认 Docker 路径仍保留 `service_healthy`。与 #101（silo-init 命令拆词）根因不同。
 
 ## [0.5.3] - 2026-10-12
 
