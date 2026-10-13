@@ -2038,7 +2038,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/runtime-images/registry/reconcile",
     summary: "对账运行时镜像在各节点的本地版本",
-    description: "默认只读：比对平台当前所需的不可变 digest 与各节点本地已有镜像，返回缺失项。请求体 `repair: true` 时对缺失 digest 发起受治理的定向拉取（digest 不变，返回 202 与拉取任务）。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    description: "默认只读：从受信 Worker registry 枚举远端节点（含离线/过期节点），本地节点检查平台当前所需的不可变 digest；远端尚无镜像 inspect 平面，明确返回 unsupported，不用 Scheduler 宿主结果冒充。请求体 `repair: true` 仅对本地缺失 digest 发起受治理的定向拉取（digest 不变，返回 202 与拉取任务）；远端检查与修复尚未实现。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
     scope: "images:manage",
     tags: ["Runtime Images"],
   },

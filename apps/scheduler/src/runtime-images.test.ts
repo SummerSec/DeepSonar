@@ -45,6 +45,7 @@ import {
   OFFICIAL_RUNTIME_IMAGE_KEYS,
   isOfficialRuntimeImageKey,
   type RuntimeImageRegistry,
+  type RuntimeImagePullTask,
 } from "./runtime-images.js";
 
 const registry = (fallback: boolean): RuntimeImageRegistry => ({
@@ -644,7 +645,7 @@ test("ACR pull 超时后改拉同 digest 的 dockerhub 引用并标记 ready", a
   const dockerhubRef = `docker.io/sumsec/deepsonar@${DIGEST}`;
   const pulled: string[] = [];
   const present = new Set<string>();
-  await ensureRuntimeImageAvailable(acrRef, {
+  const result = await ensureRuntimeImageAvailable(acrRef, {
     inspect: async (ref) => {
       if (present.has(dockerhubRef) && (ref === dockerhubRef || ref === DIGEST)) {
         return { exists: true, repo_digests: [dockerhubRef] };
@@ -661,6 +662,9 @@ test("ACR pull 超时后改拉同 digest 的 dockerhub 引用并标记 ready", a
     sameDigestRefs: () => [dockerhubRef],
   });
   assert.deepEqual(pulled, [acrRef, dockerhubRef]);
+  assert.equal(result.attempts, 2);
+  assert.equal(result.retry_count, 1);
+  assert.ok(result.timeout_budget_sec > 0);
 });
 
 test("通道超时且同 digest 兜底失败时错误文案可与 digest not found 区分", async () => {
@@ -989,10 +993,12 @@ test("abnormal preparation exit leaves queued/running", async () => {
       return items;
     },
   };
-  await runRuntimeImagePreparationTask(task, async () => {});
+  await runRuntimeImagePreparationTask(task, async () => successfulPreparation());
   assert.equal(task.status, "failed");
   assert.ok(task.finished_at);
 });
+
+const successfulPreparation = () => ({ attempts: 1, retry_count: 0, failure_class: null, timeout_budget_sec: 300 });
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -1005,14 +1011,14 @@ test("channel switch reuses an in-flight prep for the same digest on another hos
     const first = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `cr.example.invalid/base@${digest}` }],
       "admin_bulk",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(first.ready, false);
     if (first.ready) return;
     const second = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `ghcr.io/example/base@${digest}` }],
       "registry_channel:github",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(second.ready, false);
     if (second.ready) return;
@@ -1033,21 +1039,21 @@ test("channel switch enqueues onto in-flight admin_bulk instead of dropping queu
     const admin = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `cr.example.invalid/base@sha256:${"e".repeat(64)}` }],
       "admin_bulk",
-      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked.then(successfulPreparation) },
     );
     assert.equal(admin.ready, false);
     if (admin.ready) return;
     const kali = await requestRuntimeImagePreparation(
       [{ image_key: "kali", image_ref: `ghcr.io/example/kali@sha256:${"c".repeat(64)}` }],
       "project_binding:p:kali",
-      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked.then(successfulPreparation) },
     );
     assert.equal(kali.ready, false);
     if (kali.ready) return;
     const channel = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `ghcr.io/example/base@sha256:${"f".repeat(64)}` }],
       "registry_channel:github",
-      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => adminBlocked.then(successfulPreparation) },
     );
     assert.equal(channel.ready, false);
     if (channel.ready) return;
@@ -1071,14 +1077,14 @@ test("channel switch observes a non-preemptable in-flight task instead of throwi
     const binding = await requestRuntimeImagePreparation(
       [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"1".repeat(64)}` }],
       "project_binding:p:i",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(binding.ready, false);
     if (binding.ready) return;
     const channel = await requestRuntimeImagePreparation(
       [{ image_key: "base", image_ref: `ghcr.io/example/base@sha256:${"2".repeat(64)}` }],
       "registry_channel:github",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(channel.ready, false);
     if (channel.ready) return;
@@ -1102,14 +1108,14 @@ test("project enablement enqueues a second product and dedupes the same digest",
     const first = await requestRuntimeImagePreparation(
       [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"1".repeat(64)}` }],
       "project_binding:p:chrome",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(first.ready, false);
     if (first.ready) return;
     const second = await requestRuntimeImagePreparation(
       [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"3".repeat(64)}` }],
       "project_binding:p:audit",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(second.ready, false);
     if (second.ready) return;
@@ -1121,7 +1127,7 @@ test("project enablement enqueues a second product and dedupes the same digest",
     const duplicate = await requestRuntimeImagePreparation(
       [{ image_key: "audit", image_ref: `cr.example.invalid/audit@sha256:${"3".repeat(64)}` }],
       "project_binding:p:audit-again",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(duplicate.ready, false);
     if (duplicate.ready) return;
@@ -1145,8 +1151,8 @@ test("a failed pull does not stop a later queued image", async () => {
       [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"a".repeat(64)}` }],
       "project_binding:p:chrome",
       { inspect: async () => ({ exists: false }), prepare: async (ref) => {
-        if (ref.includes("chrome")) return chromeBlocked;
-        return auditBlocked;
+        if (ref.includes("chrome")) return chromeBlocked.then(successfulPreparation);
+        return auditBlocked.then(successfulPreparation);
       } },
     );
     assert.equal(first.ready, false);
@@ -1155,8 +1161,8 @@ test("a failed pull does not stop a later queued image", async () => {
       [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"b".repeat(64)}` }],
       "project_binding:p:audit",
       { inspect: async () => ({ exists: false }), prepare: async (ref) => {
-        if (ref.includes("chrome")) return chromeBlocked;
-        return auditBlocked;
+        if (ref.includes("chrome")) return chromeBlocked.then(successfulPreparation);
+        return auditBlocked.then(successfulPreparation);
       } },
     );
     assert.equal(second.ready, false);
@@ -1189,8 +1195,8 @@ test("a failed digest can be queued again while the task is still running", asyn
       [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"a".repeat(64)}` }],
       "project_binding:p:chrome",
       { inspect: async () => ({ exists: false }), prepare: async (ref) => {
-        if (ref.includes("chrome")) return chromeBlocked;
-        return auditBlocked;
+        if (ref.includes("chrome")) return chromeBlocked.then(successfulPreparation);
+        return auditBlocked.then(successfulPreparation);
       } },
     );
     assert.equal(first.ready, false);
@@ -1199,8 +1205,8 @@ test("a failed digest can be queued again while the task is still running", asyn
       [{ image_key: "audit", image_ref: `ghcr.io/example/audit@sha256:${"b".repeat(64)}` }],
       "project_binding:p:audit",
       { inspect: async () => ({ exists: false }), prepare: async (ref) => {
-        if (ref.includes("chrome")) return chromeBlocked;
-        return auditBlocked;
+        if (ref.includes("chrome")) return chromeBlocked.then(successfulPreparation);
+        return auditBlocked.then(successfulPreparation);
       } },
     );
     assert.equal(second.ready, false);
@@ -1211,7 +1217,7 @@ test("a failed digest can be queued again while the task is still running", asyn
     const retry = await requestRuntimeImagePreparation(
       [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"a".repeat(64)}` }],
       "project_binding:p:chrome-retry",
-      { inspect: async () => ({ exists: false }), prepare: async () => auditBlocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => auditBlocked.then(successfulPreparation) },
     );
     assert.equal(retry.ready, false);
     if (retry.ready) return;
@@ -1235,7 +1241,7 @@ test("a locally ready image is not blocked by an unrelated in-flight pull", asyn
     const first = await requestRuntimeImagePreparation(
       [{ image_key: "chrome", image_ref: `ghcr.io/example/chrome@sha256:${"4".repeat(64)}` }],
       "project_binding:p:chrome",
-      { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(first.ready, false);
     if (first.ready) return;
@@ -1243,7 +1249,7 @@ test("a locally ready image is not blocked by an unrelated in-flight pull", asyn
     const ready = await requestRuntimeImagePreparation(
       [{ image_key: "audit", image_ref: `ghcr.io/example/audit@${auditDigest}` }],
       "project_binding:p:audit",
-      { inspect: async () => ({ exists: true, image_id: auditDigest }), prepare: async () => blocked },
+      { inspect: async () => ({ exists: true, image_id: auditDigest }), prepare: async () => blocked.then(successfulPreparation) },
     );
     assert.equal(ready.ready, true);
     assert.equal(first.task.items.length, 1);
@@ -1395,6 +1401,7 @@ test("preparation task recounts succeeded and failed for partial batch", async (
   };
   await runRuntimeImagePreparationTask(task, async (ref) => {
     if (ref === bad) throw new Error("docker pull 超时");
+    return successfulPreparation();
   });
   assert.equal(task.status, "failed");
   assert.equal(task.succeeded, 1);
@@ -1406,3 +1413,113 @@ test("preparation task recounts succeeded and failed for partial batch", async (
   assert.equal(classifyRuntimeImagePullFailure("docker pull 超时"), "timeout");
   resetRuntimeImagePullTask();
 });
+
+test("preparation task persists actual pull counters for first, retried and local success", async (t) => {
+  for (const scenario of [
+    { name: "first pull", local: false, retry: false, attempts: 1 },
+    { name: "retry succeeds", local: false, retry: true, attempts: 2 },
+    { name: "already local", local: true, retry: false, attempts: 0 },
+  ]) {
+    await t.test(scenario.name, async () => {
+      resetRuntimeImagePullTask();
+      const task = counterTestTask();
+      const imageRef = task.items[0]!.image_ref;
+      let present = scenario.local;
+      let pulls = 0;
+      await runRuntimeImagePreparationTask(task, (ref) => ensureRuntimeImageAvailable(ref, {
+        inspect: async () => ({ exists: present, repo_digests: present ? [imageRef] : [] }),
+        pull: async (pullRef) => {
+          assert.equal(pullRef, imageRef);
+          pulls += 1;
+          if (scenario.retry && pulls === 1) throw new Error("connection reset by peer");
+          present = true;
+        },
+      }));
+      assert.equal(pulls, scenario.attempts);
+      assert.equal(task.status, "succeeded");
+      await assertPersistedCounters(task, scenario.attempts);
+      resetRuntimeImagePullTask();
+    });
+  }
+});
+
+test("shared in-flight preparation preserves one operation's counters for both observers", async () => {
+  resetRuntimeImagePullTask();
+  const task = counterTestTask();
+  const imageRef = task.items[0]!.image_ref;
+  let present = false;
+  let pulls = 0;
+  let release!: () => void;
+  let entered!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const pulling = new Promise<void>((resolve) => { entered = resolve; });
+  const dependencies = {
+    inspect: async () => ({ exists: present, repo_digests: present ? [imageRef] : [] }),
+    pull: async () => {
+      pulls += 1;
+      if (pulls === 1) throw new Error("connection reset by peer");
+      entered();
+      await blocked;
+      present = true;
+    },
+  };
+  const first = ensureRuntimeImageAvailable(imageRef, dependencies);
+  await pulling;
+  let joined!: () => void;
+  const joining = new Promise<void>((resolve) => { joined = resolve; });
+  const second = runRuntimeImagePreparationTask(task, (ref) => {
+    const operation = ensureRuntimeImageAvailable(ref, dependencies);
+    joined();
+    return operation;
+  });
+  await joining;
+  release();
+  const result = await first;
+  await second;
+  assert.equal(pulls, 2);
+  assert.equal(result.attempts, 2);
+  assert.equal(result.retry_count, 1);
+  await assertPersistedCounters(task, 2);
+  assert.equal(task.items[0]?.timeout_budget_sec, result.timeout_budget_sec);
+  resetRuntimeImagePullTask();
+});
+
+test("post-pull digest mismatch preserves consumed attempts and timeout budget", async () => {
+  resetRuntimeImagePullTask();
+  const task = counterTestTask();
+  let pulls = 0;
+  await runRuntimeImagePreparationTask(task, (ref) => ensureRuntimeImageAvailable(ref, {
+    inspect: async () => ({ exists: true, repo_digests: [`ghcr.io/example/base@sha256:${"f".repeat(64)}`] }),
+    pull: async () => { pulls += 1; },
+  }));
+  assert.equal(pulls, 1);
+  assert.equal(task.status, "failed");
+  assert.equal(task.items[0]?.failure_class, "digest_missing");
+  await assertPersistedCounters(task, 1);
+  resetRuntimeImagePullTask();
+});
+
+function counterTestTask(): RuntimeImagePullTask {
+  return {
+    task_id: "counter-test", status: "queued", started_at: null, finished_at: null,
+    total: 1, completed: 0, succeeded: 0, failed: 0,
+    items: [{
+      image_key: "deepsonar-base", image_ref: `ghcr.io/example/base@${DIGEST}`,
+      status: "queued", error: null, attempts: 0, retry_count: 0, timeout_budget_sec: null,
+    }],
+  };
+}
+
+async function assertPersistedCounters(task: RuntimeImagePullTask, attempts: number): Promise<void> {
+  const { loadLatestRuntimeImagePullTask } = await import("./runtime-image-pull-status.js");
+  const persisted = await loadLatestRuntimeImagePullTask();
+  assert.ok(persisted);
+  assert.equal(persisted.task_id, task.task_id);
+  for (const item of [task.items[0]!, toRuntimeImagePullStatusView(persisted).items[0]!]) {
+    assert.equal(item.attempts, attempts);
+    assert.equal(item.retry_count, Math.max(0, attempts - 1));
+    if (attempts === 0) assert.equal(item.timeout_budget_sec, 0);
+    else assert.ok(typeof item.timeout_budget_sec === "number" && item.timeout_budget_sec > 0);
+    assert.equal(item.target_digest, DIGEST);
+  }
+}

@@ -99,7 +99,15 @@ type EnsureCatalog = { images: Array<{
     }>>;
   }>;
 }> };
-const runtimeImageEnsureInFlight = new Map<string, Promise<void>>();
+/** Counters describe the shared preparation operation, including for in-flight joiners. */
+export interface RuntimeImagePreparationResult {
+  attempts: number;
+  retry_count: number;
+  failure_class: RuntimeImagePullFailureClass | null;
+  timeout_budget_sec: number;
+}
+
+const runtimeImageEnsureInFlight = new Map<string, Promise<RuntimeImagePreparationResult>>();
 let sameDigestCatalogCache: { at: number; images: EnsureCatalog["images"] } | null = null;
 
 function defaultRuntimeImageEnsureDependencies(): RuntimeImageEnsureDependencies {
@@ -274,7 +282,7 @@ async function ensureRuntimeImageAvailableOnce(
   imageRef: string,
   expectedDigest: string,
   dependencies: RuntimeImageEnsureDependencies,
-): Promise<{ attempts: number; retry_count: number; failure_class: RuntimeImagePullFailureClass | null; timeout_budget_sec: number }> {
+): Promise<RuntimeImagePreparationResult> {
   let inspection = await inspectFrozenDigest(imageRef, expectedDigest, dependencies);
   if (localRuntimeImageMatchesRef(inspection, imageRef, expectedDigest)) {
     return { attempts: 0, retry_count: 0, failure_class: null, timeout_budget_sec: 0 };
@@ -371,7 +379,12 @@ async function ensureRuntimeImageAvailableOnce(
   inspection = await inspectFrozenDigest(imageRef, expectedDigest, dependencies);
   if (!localRuntimeImageMatchesRef(inspection, imageRef, expectedDigest)) {
     const detail = sanitizeRuntimeImageError(inspection.error) || "本地镜像未包含请求的不可变 digest";
-    throw new Error(`冻结 runtime image 不可用（${expectedDigest}）：${RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR}: ${detail}`);
+    throw Object.assign(new Error(`冻结 runtime image 不可用（${expectedDigest}）：${RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR}: ${detail}`), {
+      failure_class: "digest_missing",
+      attempts,
+      retry_count: Math.max(0, attempts - 1),
+      timeout_budget_sec: timeoutResolution.timeout_sec,
+    });
   }
   return {
     attempts,
@@ -385,17 +398,17 @@ async function ensureRuntimeImageAvailableOnce(
 export async function prepareRuntimeImage(
   imageRef: string,
   dependencies: RuntimeImageEnsureDependencies = defaultRuntimeImageEnsureDependencies(),
-): Promise<void> {
+): Promise<RuntimeImagePreparationResult> {
   const normalizedRef = imageRef.trim();
   const expectedDigest = immutableDigest(normalizedRef);
   if (!expectedDigest) throw new Error("冻结 runtime image 必须使用不可变 digest 引用");
 
   const existing = runtimeImageEnsureInFlight.get(normalizedRef);
   if (existing) return existing;
-  const operation = ensureRuntimeImageAvailableOnce(normalizedRef, expectedDigest, dependencies).then(() => undefined);
+  const operation = ensureRuntimeImageAvailableOnce(normalizedRef, expectedDigest, dependencies);
   runtimeImageEnsureInFlight.set(normalizedRef, operation);
   try {
-    await operation;
+    return await operation;
   } finally {
     if (runtimeImageEnsureInFlight.get(normalizedRef) === operation) runtimeImageEnsureInFlight.delete(normalizedRef);
   }

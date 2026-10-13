@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -86,4 +87,99 @@ test("pwsh parser accepts deploy.ps1 when a PowerShell host is installed", (t) =
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+function runFunctions(t, script, options = {}) {
+  const cmd = firstPwsh();
+  if (!cmd) {
+    assert.ok(!process.env.CI, "CI must provide pwsh/powershell for deployment behavior tests");
+    t.skip("pwsh/powershell is not installed on this runner");
+    return null;
+  }
+  const loadFunctions = `
+$ErrorActionPreference = 'Stop'
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(${JSON.stringify(scriptPath)}, [ref]$null, [ref]$errors)
+if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+$ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | ForEach-Object { Invoke-Expression $_.Extent.Text }
+`;
+  const result = spawnSync(cmd, ["-NoProfile", "-Command", loadFunctions + script], {
+    encoding: "utf8", timeout: 20_000, ...options,
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr + String(result.error ?? ""));
+  return result;
+}
+
+test("PowerShell entry rejects live-only, malformed and string-valued readiness", (t) => {
+  runFunctions(t, `
+function Invoke-RestMethod { return $script:Health }
+foreach ($json in @('{"ok":true}', '{"ok":true,"ready":false}', '{"ok":true,"ready":"true"}', '{"ok":true,"nested":{"ready":true}}', '{"ok":false,"ready":true}')) {
+  $script:Health = $json | ConvertFrom-Json
+  if (Wait-EntryReady -Url 'http://127.0.0.1:8080/api/health' -TimeoutSec 1) { throw "Accepted $json" }
+}
+$script:Health = '{"ok":true,"ready":true}' | ConvertFrom-Json
+if (-not (Wait-EntryReady -Url 'http://127.0.0.1:8080/api/health' -TimeoutSec 1)) { throw 'Rejected ready response' }
+`);
+});
+
+test("PowerShell dependencies and required containers fail closed", (t) => {
+  runFunctions(t, `
+$script:Calls = @()
+$script:FailSilo = $false
+$script:Created = $false
+function Invoke-DockerBounded {
+  param([string[]]$DockerArgs, [int]$TimeoutSec = 3)
+  $line = $DockerArgs -join ' '
+  $script:Calls += $line
+  $rc = 0
+  $output = ''
+  if ($line -match 'silo healthcheck' -and $script:FailSilo) { $rc = 1 }
+  if ($line -match 'ps -a -q') { $output = 'test-container' }
+  if ($line -match '^inspect') { $output = if ($script:Created) { 'created' } else { 'running' } }
+  return [pscustomobject]@{ExitCode=$rc; Output=$output}
+}
+if (-not (Wait-InfraReady -ComposeArgs @('compose') -TimeoutSec 3)) { throw 'Healthy dependencies rejected' }
+if (-not (($script:Calls -join ';') -match 'exec -T postgres pg_isready')) { throw 'Postgres not probed' }
+if (-not (($script:Calls -join ';') -match 'exec -T silo silo healthcheck ready')) { throw 'Silo not probed' }
+$script:FailSilo = $true
+if (Wait-InfraReady -ComposeArgs @('compose') -TimeoutSec 2) { throw 'Failed Silo accepted' }
+if (-not (Test-RequiredServicesRunning -ComposeArgs @('compose'))) { throw 'Running containers rejected' }
+$script:Created = $true
+if (Test-RequiredServicesRunning -ComposeArgs @('compose')) { throw 'Created containers accepted' }
+`);
+});
+
+test("PowerShell diagnostics redact secrets and pass bounded command budgets", (t) => {
+  const result = runFunctions(t, `
+function Invoke-DockerBounded {
+  param([string[]]$DockerArgs, [int]$TimeoutSec)
+  if ($TimeoutSec -ne 3) { throw 'Diagnostic command is not bounded' }
+  return [pscustomobject]@{ExitCode=0; Output='PASSWORD=fake-secret {"token":"fake-token"} Authorization: Bearer fake-bearer postgresql://u:fake-password@h/db'}
+}
+Write-DeployDiagnostics -ComposeArgs @('compose')
+`);
+  if (result) assert.doesNotMatch(result.stdout + result.stderr, /fake-secret|fake-token|fake-bearer|fake-password/);
+});
+
+test("PowerShell bounded process preserves quoted args, failure codes, and kills hangs", (t) => {
+  if (process.platform === "win32") { t.skip("Unix fake docker fixture; exercised by Ubuntu pwsh CI"); return; }
+  const dir = mkdtempSync(join(tmpdir(), "ds-pwsh-"));
+  try {
+    writeFileSync(join(dir, "docker"), `#!/bin/sh
+case "$1" in
+  fail) exit 29 ;;
+  hang) trap '' TERM; while :; do sleep 1; done ;;
+  *) printf '<%s>' "$@" ;;
+esac
+`, { mode: 0o755 });
+    runFunctions(t, `
+$result = Invoke-DockerBounded -DockerArgs @('path with spaces', 'quote"inside', 'trailing\\') -TimeoutSec 3
+if ($result.ExitCode -ne 0 -or $result.Output -ne '<path with spaces><quote"inside><trailing\\>') { throw "Argument corruption: $($result.Output)" }
+$result = Invoke-DockerBounded -DockerArgs @('fail') -TimeoutSec 3
+if ($result.ExitCode -ne 29) { throw "Lost exit code: $($result.ExitCode)" }
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$result = Invoke-DockerBounded -DockerArgs @('hang') -TimeoutSec 1
+if ($result.ExitCode -ne 124 -or $clock.Elapsed.TotalSeconds -gt 4) { throw 'Unbounded child' }
+`, { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

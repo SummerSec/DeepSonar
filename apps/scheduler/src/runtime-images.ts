@@ -54,6 +54,7 @@ import {
   prepareRuntimeImage,
   verifiedSameDigestChannelRefs,
   type RuntimeImageEnsureDependencies,
+  type RuntimeImagePreparationResult,
   type StartRuntimeImagePullInput,
 } from "./runtime-image-ensure.js";
 export {
@@ -68,6 +69,7 @@ export {
 export type {
   RuntimeImageEnsureDependencies,
   RuntimeImageEnsureInspection,
+  RuntimeImagePreparationResult,
   RuntimeImagePullOptions,
 } from "./runtime-image-ensure.js";
 import {
@@ -1584,7 +1586,7 @@ export function registryChannelPreparationBusyResult(
 
 export async function runRuntimeImagePreparationTask(
   task: RuntimeImagePullTask,
-  prepare: (imageRef: string) => Promise<void>,
+  prepare: (imageRef: string) => Promise<RuntimeImagePreparationResult>,
 ): Promise<void> {
   try {
     task.status = "running";
@@ -1607,13 +1609,14 @@ export async function runRuntimeImagePreparationTask(
       await persistRuntimeImagePullTask(task);
       try {
         item.target_digest = item.target_digest ?? immutableDigest(item.image_ref);
-        await prepare(item.image_ref);
+        const result = await prepare(item.image_ref);
         item.status = "succeeded";
         item.failure_class = null;
         item.error = null;
         item.error_code = null;
-        item.attempts = item.attempts ?? 1;
-        item.retry_count = item.retry_count ?? 0;
+        item.attempts = result.attempts;
+        item.retry_count = result.retry_count;
+        item.timeout_budget_sec = result.timeout_budget_sec;
       } catch (error) {
         item.status = "failed";
         item.error = sanitizeRuntimeImageError(error) || "runtime image preparation failed";
@@ -1712,7 +1715,7 @@ export function enqueueRuntimeImagePreparation(
 function startRuntimeImagePreparationTask(
   refs: readonly { image_key: string; image_ref: string }[],
   purpose: string,
-  prepare: (imageRef: string) => Promise<void> = prepareRuntimeImage,
+  prepare: (imageRef: string) => Promise<RuntimeImagePreparationResult> = prepareRuntimeImage,
 ): RuntimeImagePullTask {
   const uniqueRefs = uniqueRuntimeImagePreparationRefs(refs);
   if (runtimeImagePullTask && (runtimeImagePullTask.status === "queued" || runtimeImagePullTask.status === "running")) {
@@ -1749,7 +1752,7 @@ export async function requestRuntimeImagePreparation(
   purpose: string,
   dependencies: {
     inspect?: RuntimeImageEnsureDependencies["inspect"];
-    prepare?: (imageRef: string) => Promise<void>;
+    prepare?: (imageRef: string) => Promise<RuntimeImagePreparationResult>;
   } = {},
 ): Promise<{ ready: true } | { ready: false; task: RuntimeImagePullTask }> {
   const missing: Array<{ image_key: string; image_ref: string }> = [];

@@ -115,7 +115,7 @@ test("warmup starts without blocking liveness and enables dispatch only after pr
   let dispatchStarts = 0;
   const coordinator = createRuntimeImageWarmupCoordinator({
     resolveRefs: async () => [{ image_ref: "base" }],
-    prepare: async () => blocked,
+    prepare: async () => blocked.then(() => ({ attempts: 1, retry_count: 0, failure_class: null, timeout_budget_sec: 300 })),
     onReady: () => { dispatchStarts += 1; },
   });
   coordinator.start();
@@ -286,7 +286,7 @@ test("async preparation returns immediately and leaves persistence to an explici
   const result = await requestRuntimeImagePreparation(
     [{ image_key: "runtime", image_ref: imageRef }],
     "test",
-    { inspect: async () => ({ exists: false }), prepare: async () => blocked },
+    { inspect: async () => ({ exists: false }), prepare: async () => blocked.then(() => ({ attempts: 1, retry_count: 0, failure_class: null, timeout_budget_sec: 300 })) },
   );
   assert.equal(result.ready, false);
   if (result.ready) return;

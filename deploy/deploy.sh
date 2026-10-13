@@ -404,14 +404,18 @@ case "$ACTION" in
     "$@" config --quiet
     if [ "$MODE" = "worker-join" ]; then
       if [ "$SOURCE" = "build" ]; then
-        if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
+        if ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
+          :
+        else
           rc=$?
           ds_dump_deploy_diagnostics "$@"
           echo "[deploy] worker-join compose up failed or timed out (exit=$rc)" >&2
           exit "$rc"
         fi
       else
-        if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --pull missing; then
+        if ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --pull missing; then
+          :
+        else
           rc=$?
           ds_dump_deploy_diagnostics "$@"
           echo "[deploy] worker-join compose up failed or timed out (exit=$rc)" >&2
@@ -430,13 +434,17 @@ case "$ACTION" in
     up_rc=0
     if [ "$SOURCE" = "build" ]; then
       echo "[deploy] 本地 Dockerfile 构建模式"
-      if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
+      if ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
+        up_rc=0
+      else
         up_rc=$?
       fi
     else
       pull_app_images
       # 不传 --build：优先使用已拉取的 image: 标签，避免强制本地构建
-      if ! ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --pull missing; then
+      if ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --pull missing; then
+        up_rc=0
+      else
         up_rc=$?
       fi
     fi
@@ -464,7 +472,7 @@ case "$ACTION" in
     fi
     port=$(awk -F= '$1=="DEEPSONAR_WEB_PORT" {print $2; exit}' "$ENV_FILE")
     port=${port:-8080}
-    if ! ds_wait_entry_ready "$port" "${DEEPSONAR_READY_TIMEOUT_SEC:-180}"; then
+    if ! ds_wait_entry_ready "$port" "${DEEPSONAR_READY_TIMEOUT_SEC:-180}" "$@"; then
       ds_dump_deploy_diagnostics "$@"
       # Name likely blockers for operators.
       ds_compose_blocker_hint "$@"
@@ -473,9 +481,9 @@ case "$ACTION" in
     fi
     # Confirm web + scheduler containers are up (not merely Created).
     for svc in scheduler web; do
-      state=$(docker inspect --format '{{.State.Status}}' "$("$@" ps -q "$svc" 2>/dev/null | head -1)" 2>/dev/null || echo missing)
+      state=$(ds_service_state "$svc" "$@" || echo missing)
       case "$state" in
-        running) ;;
+        running\ *) ;;
         *)
           ds_dump_deploy_diagnostics "$@"
           echo "[deploy] required service $svc is not running (state=$state)" >&2
@@ -495,7 +503,7 @@ case "$ACTION" in
         echo "[deploy] SANDBOX_PROVIDER=opensandbox overlay enabled (docker-compose.opensandbox.prod.yml)"
       fi
     fi
-    echo "[deploy] Scheduler is live; runtime image readiness is reported by /api/health (Dispatcher waits until ready)"
+    echo "[deploy] Scheduler is ready; /api/health reports ready=true (runtime images and Dispatcher ready)"
     fi
     ;;
 esac

@@ -56,7 +56,8 @@ function Get-ContainerRuntimeHint {
   $forced = [Environment]::GetEnvironmentVariable("DEEPSONAR_CONTAINER_RUNTIME")
   if (-not [string]::IsNullOrWhiteSpace($forced)) { return $forced.Trim().ToLowerInvariant() }
   try {
-    $info = & docker info 2>$null | Out-String
+    $result = Invoke-DockerBounded -DockerArgs @("info")
+    $info = $result.Output
     if ($info -match "(?i)podman") { return "podman" }
   } catch {}
   $dh = [Environment]::GetEnvironmentVariable("DOCKER_HOST")
@@ -76,55 +77,108 @@ function Should-UseStartedDepends {
   }
 }
 
-function Invoke-DockerComposeUpBounded {
-  param(
-    [string[]]$ComposeArgs,
-    [string[]]$UpArgs,
-    [int]$TimeoutSec
-  )
-  $argList = @($ComposeArgs + @("up") + $UpArgs)
-  $stdout = Join-Path $env:TEMP ("deepsonar-compose-up-{0}.out" -f [guid]::NewGuid().ToString("N"))
-  $stderr = Join-Path $env:TEMP ("deepsonar-compose-up-{0}.err" -f [guid]::NewGuid().ToString("N"))
+function Protect-DeployOutput([string]$Text) {
+  $Text = $Text -replace '(?i)([a-z0-9_]*(?:PASSWORD|SECRET|TOKEN|ACCESS_KEY|API_KEY|MASTER_KEY|BOOTSTRAP)[a-z0-9_]*["'']?\s*[:=]\s*["'']?)[^"''\s,}]+', '$1***'
+  $Text = $Text -replace '(?i)(Authorization:\s*Bearer\s+)[^\s]+', '$1***'
+  return ($Text -replace '(?i)(postgres(?:ql)?://[^:]+:)[^@]+@', '$1***@')
+}
+
+function ConvertTo-NativeArgument([string]$Value) {
+  # Start-Process joins ArgumentList on PS 5.1: quote paths/JSON/Go templates safely.
+  return '"' + ([regex]::Replace(([regex]::Replace($Value, '(\\*)"', '$1$1\"')), '(\\+)$', '$1$1')) + '"'
+}
+
+function Invoke-DockerBounded {
+  param([string[]]$DockerArgs, [int]$TimeoutSec = 3)
+  if ($TimeoutSec -le 0) { throw "Timeout must be positive" }
+  $stdout = [IO.Path]::GetTempFileName()
+  $stderr = [IO.Path]::GetTempFileName()
   try {
-    $p = Start-Process -FilePath "docker" -ArgumentList $argList -NoNewWindow -PassThru `
+    $nativeArgs = @($DockerArgs | ForEach-Object { ConvertTo-NativeArgument $_ })
+    $p = Start-Process -FilePath "docker" -ArgumentList $nativeArgs -NoNewWindow -PassThru `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $ok = $p.WaitForExit($TimeoutSec * 1000)
+    $rc = 124
     if (-not $ok) {
-      try { $p.Kill() } catch {}
-      try { $p.WaitForExit(5000) } catch {}
-      if (Test-Path $stdout) { Get-Content $stdout -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
-      if (Test-Path $stderr) { Get-Content $stderr -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
-      return 124
+      # PS 7 supports tree kill; Windows PS 5.1 uses taskkill /T for compose plugins.
+      try { $p.Kill($true) } catch {
+        if ($env:OS -eq "Windows_NT") {
+          try {
+            $killer = Start-Process taskkill -ArgumentList @("/PID", $p.Id, "/T", "/F") -PassThru -NoNewWindow
+            if (-not $killer.WaitForExit(1000)) { $killer.Kill() }
+          } catch {}
+        }
+        try { $p.Kill() } catch {}
+      }
+      $null = $p.WaitForExit(1000)
+    } else {
+      $rc = $p.ExitCode
     }
-    if (Test-Path $stdout) { Get-Content $stdout -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
-    if (Test-Path $stderr) { Get-Content $stderr -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
-    return $p.ExitCode
+    $output = [IO.File]::ReadAllText($stdout) + [IO.File]::ReadAllText($stderr)
+    return [pscustomobject]@{ ExitCode = $rc; Output = $output }
   } finally {
     Remove-Item $stdout, $stderr -ErrorAction SilentlyContinue
   }
 }
 
+function Invoke-DockerComposeUpBounded {
+  param([string[]]$ComposeArgs, [string[]]$UpArgs, [int]$TimeoutSec)
+  $result = Invoke-DockerBounded -DockerArgs ($ComposeArgs + @("up") + $UpArgs) -TimeoutSec $TimeoutSec
+  Write-Host (Protect-DeployOutput $result.Output)
+  return $result.ExitCode
+}
+
 function Write-DeployDiagnostics {
   param([string[]]$ComposeArgs)
   Write-Host "[deploy] ===== deploy diagnostics (#726) ====="
-  Write-Host "[deploy] container runtime: $(Get-ContainerRuntimeHint)"
-  try { & docker version 2>$null | Out-Host } catch {}
-  try { & docker compose version 2>$null | Out-Host } catch {}
-  try { & docker @ComposeArgs ps -a 2>$null | Out-Host } catch {}
-  try { & docker @ComposeArgs logs --tail 80 postgres silo silo-init scheduler image-admission web 2>$null | Out-Host } catch {}
+  foreach ($argsToRun in @(@("version"), @("compose", "version"), @($ComposeArgs + @("ps", "-a")), @($ComposeArgs + @("logs", "--tail", "80", "postgres", "silo", "silo-init", "scheduler", "image-admission", "web", "opensandbox")))) {
+    try {
+      $result = Invoke-DockerBounded -DockerArgs $argsToRun -TimeoutSec 3
+      Write-Host (Protect-DeployOutput $result.Output)
+    } catch { Write-Host "[deploy] diagnostic command unavailable" }
+  }
   Write-Host "[deploy] ===== end diagnostics ====="
+}
+
+function Wait-InfraReady {
+  param([string[]]$ComposeArgs, [int]$TimeoutSec)
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  foreach ($probe in @(@("exec", "-T", "postgres", "pg_isready", "-U", "deepsonar", "-d", "deepsonar"), @("exec", "-T", "silo", "silo", "healthcheck", "ready"))) {
+    while ($true) {
+      $remaining = $TimeoutSec - [int][Math]::Ceiling($clock.Elapsed.TotalSeconds)
+      if ($remaining -le 0) { return $false }
+      $result = Invoke-DockerBounded -DockerArgs ($ComposeArgs + $probe) -TimeoutSec ([Math]::Min(3, $remaining))
+      if ($result.ExitCode -eq 0) { break }
+      $remainingMs = [int](($TimeoutSec * 1000) - $clock.Elapsed.TotalMilliseconds)
+      if ($remainingMs -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(2000, $remainingMs)) }
+    }
+  }
+  return $true
+}
+
+function Test-RequiredServicesRunning {
+  param([string[]]$ComposeArgs)
+  foreach ($service in @("scheduler", "web")) {
+    $ids = Invoke-DockerBounded -DockerArgs ($ComposeArgs + @("ps", "-a", "-q", $service))
+    if ($ids.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($ids.Output)) { return $false }
+    $state = Invoke-DockerBounded -DockerArgs @("inspect", "--format", "{{.State.Status}}", $ids.Output.Trim())
+    if ($state.ExitCode -ne 0 -or $state.Output.Trim() -ne "running") { return $false }
+  }
+  return $true
 }
 
 function Wait-EntryReady {
   param([string]$Url, [int]$TimeoutSec)
   Write-Host "[deploy] waiting for entry readiness: $Url (bound ${TimeoutSec}s)"
-  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
-  while ([DateTime]::UtcNow -lt $deadline) {
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  while ($clock.Elapsed.TotalSeconds -lt $TimeoutSec) {
+    $remaining = $TimeoutSec - [int][Math]::Floor($clock.Elapsed.TotalSeconds)
     try {
-      $response = Invoke-RestMethod -Uri $Url -TimeoutSec 3
-      if ($response.ok -eq $true) { return $true }
+      $response = Invoke-RestMethod -Uri $Url -TimeoutSec ([Math]::Min(3, $remaining))
+      if (($response.ok -is [bool]) -and $response.ok -and ($response.ready -is [bool]) -and $response.ready) { return $true }
     } catch {}
-    Start-Sleep -Seconds 2
+    $remainingMs = [int](($TimeoutSec * 1000) - $clock.Elapsed.TotalMilliseconds)
+    if ($remainingMs -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(2000, $remainingMs)) }
   }
   return $false
 }
@@ -451,6 +505,10 @@ try {
         throw "Failed to start services within ${upTimeout}s (exit=$upRc; 124=timeout). See diagnostics above."
       }
 
+      if (-not (Wait-InfraReady -ComposeArgs $ComposeArgs -TimeoutSec $readyTimeout)) {
+        Write-DeployDiagnostics -ComposeArgs $ComposeArgs
+        throw "Postgres/Silo real probes failed; refusing success via service_started alone"
+      }
       $port = Read-EnvValue "DEEPSONAR_WEB_PORT" "8080"
       $health = "http://127.0.0.1:$port/api/health"
       $ready = Wait-EntryReady -Url $health -TimeoutSec $readyTimeout
@@ -459,6 +517,10 @@ try {
         throw "Services did not become healthy within ${readyTimeout}s: $health"
       }
 
+      if (-not (Test-RequiredServicesRunning -ComposeArgs $ComposeArgs)) {
+        Write-DeployDiagnostics -ComposeArgs $ComposeArgs
+        throw "Required scheduler/web containers are not running"
+      }
       Write-Host "[deploy] DeepSonar is ready: http://127.0.0.1:$port" -ForegroundColor Green
       Write-Host "[deploy] App images: $(Read-EnvValue 'DEEPSONAR_IMAGE_REGISTRY' $DefaultImageRegistry)/*:$(Read-EnvValue 'DEEPSONAR_IMAGE_TAG' (Get-DefaultImageTag))"
       Write-Host "[deploy] The bootstrap admin token is stored as DEEPSONAR_ADMIN_TOKEN in deploy/.env."

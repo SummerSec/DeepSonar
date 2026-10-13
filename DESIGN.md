@@ -220,6 +220,10 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 运行镜像必须来自已准入市场。第三方镜像先经 `apps/image-admission` 扫描、批准，再由平台绑定可见项目后项目启用；Agent 不能提交任意 OCI 地址。镜像和平台版本分开管理，执行永远使用不可变 digest，不使用可变 `latest`。出网权限在 Canvas/Job 快照中冻结，禁止出网的沙箱只能通过固定 Gateway 访问模型。
 
+部署成功门（#726）：`deploy.sh` / `deploy.ps1` 必须保留 Compose 失败语义和原始错误码诊断（shell 以原码退出，PowerShell 抛错并非零退出），并在有界等待内验证初始化任务、依赖服务、Web/Scheduler 容器及入口健康 JSON 的顶层 `ok=true` 与 `ready=true`；HTTP 200 或容器 Running 只证明存活，不能替代就绪。探针与诊断子命令也须受超时约束，日志脱敏。
+
+运行时镜像恢复（#724）：拉取任务按真实 preparation 结果记录 `attempts`、`retry_count` 与 `timeout_budget_sec`；本地已满足 digest 时为零次 pull，共享 in-flight 调用者观察同一次操作，重试成功仍保留实际次数。节点对账从 Worker registry 枚举远端（含离线/过期节点），仅本地执行 inspect / repair；远端明确 `unsupported`，不得省略后冒充全节点就绪。远端镜像检查与修复平面尚未实现，见 [运维 runbook](docs/runbooks/runtime-image-pull-partial-failure.md)。
+
 每个官方运行镜像还必须携带与最终工具清单绑定的离线工具手册，固定入口为 `/opt/deepsonar/manuals/index.json`。手册逐项覆盖 Agent 可见工具、包装脚本和能力入口，说明选型、前置条件、调用、输出边界、失败分类、组合流程、证据与版本限制；从基础镜像继承的工具也必须在最终镜像中展开。构建与镜像门禁校验手册摘要和工具覆盖，Worker 启动上下文只注入索引位置并按需读取章节。手册是操作资料，不授予额外工具、网络、凭据或副作用权限。
 
 ## 9. 读图、事件与证据

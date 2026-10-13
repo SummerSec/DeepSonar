@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, symlinkSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -167,4 +167,153 @@ test("ONE_CLICK_DEPLOYMENT documents Podman healthcheck hang and tuning knobs", 
   const doc = readFileSync(join(root, "docs/ONE_CLICK_DEPLOYMENT.md"), "utf8");
   assert.match(doc, /#726|service_healthy|Podman/);
   assert.match(doc, /DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC|DEEPSONAR_COMPOSE_DEPENDS_ON|有界/);
+});
+
+function runShell(script, options = {}) {
+  return spawnSync("sh", ["-c", `set -eu\n. "${boundedWait}"\n${script}`], {
+    encoding: "utf8", timeout: 15_000, ...options,
+  });
+}
+
+test("compose failures retain their exit code; only 124 with healthy infra can recover", () => {
+  const source = readFileSync(deploySh, "utf8");
+  const branch = source.slice(source.indexOf("    up_rc=0"), source.indexOf("    attach_opensandbox_default_bridge", source.indexOf("    up_rc=0")));
+  for (const mode of ["build", "pull"]) {
+    for (const code of [0, 23, 124]) {
+      for (const infra of [0, 1]) {
+        const result = runShell(`
+SOURCE=${mode}
+pull_app_images() { :; }
+ds_run_bounded() { return ${code}; }
+ds_dump_deploy_diagnostics() { :; }
+ds_infra_really_ready() { return ${infra}; }
+ds_ensure_app_services_started() { echo recovered; }
+${branch}
+echo passed
+`);
+        const success = code === 0 || (code === 124 && infra === 0);
+        assert.equal(result.status, success ? 0 : code, result.stderr);
+        assert.equal(result.stdout.includes("recovered"), code === 124 && infra === 0);
+        assert.equal(result.stdout.includes("passed"), success);
+      }
+    }
+  }
+});
+
+test("entry requires parsed top-level boolean ok and ready, including runtime warmup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ds-ready-"));
+  try {
+    writeFileSync(join(dir, "curl"), '#!/bin/sh\nprintf "%s" "$HEALTH_BODY"\n', { mode: 0o755 });
+    writeFileSync(join(dir, "compose"), '#!/bin/sh\nshift 3\nexec "$@"\n', { mode: 0o755 });
+    for (const body of [
+      '{"ok":true,"ready":true}',
+      '{"ok":true,"ready":false}',
+      '{"ok":true}',
+      '{"ok":true,"ready":"true"}',
+      '{"ok":true,"nested":{"ready":true}}',
+      'not json',
+      '{"ok":false,"ready":true}',
+    ]) {
+      const result = runShell('ds_wait_entry_ready 8080 1 compose', {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, HEALTH_BODY: body },
+      });
+      assert.equal(result.status === 0, body === '{"ok":true,"ready":true}', `${body}: ${result.stderr}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("readiness commands that hang or resist TERM cannot escape their deadline", () => {
+  const started = Date.now();
+  const result = runShell(`ds_wait_cmd 1 stuck -- sh -c 'trap "" TERM; while :; do sleep 1; done'`);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /readiness timeout/);
+  assert.ok(Date.now() - started < 4000);
+  const code = runShell(`ds_run_bounded 1 sh -c 'trap "" TERM; while :; do sleep 1; done'`);
+  assert.equal(code.status, 124);
+});
+
+test("nested infra probes do not reset the shared timeout; Silo is probed inside the stack", () => {
+  const source = readFileSync(boundedWait, "utf8");
+  assert.doesNotMatch(source, /ds_probe_silo_http/);
+  assert.match(source, /exec -T silo silo healthcheck ready/);
+  const result = runShell(`
+DEEPSONAR_READY_TIMEOUT_SEC=1
+ds_wait_cmd() { sleep 2; return 0; }
+ds_wait_infra_ready docker compose
+`);
+  assert.notEqual(result.status, 0);
+});
+
+test("controlled recovery will not start scheduler after silo-init failure", () => {
+  const result = runShell(`
+ds_run_bounded() {
+  shift
+  case "$*" in
+    *config*) printf 'silo-init\\nscheduler\\nweb\\n' ;;
+    *up*) echo "$*" ;;
+  esac
+}
+ds_service_state() { echo 'exited 17'; }
+ds_ensure_app_services_started docker compose
+`);
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stdout, /up -d --no-deps scheduler/);
+  assert.match(result.stderr, /silo-init failed/);
+});
+
+test("JSON-shaped diagnostics and postgres URLs redact secret values", () => {
+  const result = runShell(`printf '%s\\n' '{"BLOB_S3_SECRET_ACCESS_KEY":"fake-private-value","token":"fake-token-value"} postgresql://u:fake-password@h/db' | ds_redact_secrets`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /fake-private-value|fake-token-value|fake-password/);
+});
+
+test("bounded runner preserves ordinary exit 137 instead of treating it as a recoverable timeout", () => {
+  const result = runShell("ds_run_bounded 3 sh -c 'exit 137'");
+  assert.equal(result.status, 137, result.stderr);
+});
+
+test("portable watchdog without setsid bounds TERM-resistant descendants", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ds-portable-"));
+  try {
+    for (const cmd of ["sh", "mktemp", "sleep", "ps", "awk", "rm"]) {
+      const resolved = spawnSync("sh", ["-c", `command -v ${cmd}`], { encoding: "utf8" }).stdout.trim();
+      symlinkSync(resolved, join(dir, cmd));
+    }
+    const start = Date.now();
+    const result = runShell(`ds_run_bounded 1 sh -c 'trap "" TERM; sleep 10'`, { env: { ...process.env, PATH: dir } });
+    assert.equal(result.status, 124, result.stderr);
+    assert.ok(Date.now() - start < 4000, "watchdog must kill descendants holding output pipes open");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("all diagnostic engine queries carry a finite budget", () => {
+  const result = runShell(`
+docker() { echo 'unexpected unbounded docker' >&2; return 91; }
+podman() { echo 'unexpected unbounded podman' >&2; return 91; }
+ds_run_bounded() { [ "$1" -eq 3 ] || return 92; return 124; }
+ds_dump_deploy_diagnostics docker compose
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /unexpected unbounded/);
+});
+
+test("worker-join preserves failures/timeouts for build and pull and never reports success", () => {
+  const source = readFileSync(deploySh, "utf8");
+  const start = source.indexOf('    if [ "$MODE" = "worker-join" ]; then', source.indexOf('  up)'));
+  const branch = source.slice(start, source.indexOf('    if [ "${break_worker:-}"', start));
+  for (const mode of ["build", "pull"]) {
+    for (const code of [0, 31, 124]) {
+      const result = runShell(`
+MODE=worker-join
+SOURCE=${mode}
+CONTROL_PLANE=http://127.0.0.1:3100
+ds_run_bounded() { return ${code}; }
+ds_dump_deploy_diagnostics() { :; }
+attach_opensandbox_default_bridge() { :; }
+${branch}
+`);
+      assert.equal(result.status, code, result.stderr);
+      assert.equal(result.stdout.includes("worker-join 已启动"), code === 0);
+    }
+  }
 });

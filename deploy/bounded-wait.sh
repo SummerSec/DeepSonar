@@ -11,9 +11,9 @@
 ds_redact_secrets() {
   # Redact common secret shapes from diagnostic streams (stdin → stdout).
   sed -E \
-    -e 's/(PASSWORD|SECRET|TOKEN|ACCESS_KEY|SECRET_ACCESS_KEY|API_KEY|MASTER_KEY|BOOTSTRAP)[=:][[:space:]]*[^[:space:]]+/\1=***/Ig' \
+    -e 's/([[:alnum:]_]*(PASSWORD|SECRET|TOKEN|ACCESS_KEY|API_KEY|MASTER_KEY|BOOTSTRAP)[[:alnum:]_]*["]?[[:space:]]*[=:][[:space:]]*["]?)[^"[:space:],}]+/\1***/Ig' \
     -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1***/I' \
-    -e 's/(postgres:\/\/[^:]+:)[^@]+@/\1***@/g'
+    -e 's/(postgres(ql)?:\/\/[^:]+:)[^@]+@/\1***@/Ig'
 }
 
 ds_detect_container_runtime() {
@@ -22,7 +22,7 @@ ds_detect_container_runtime() {
     printf '%s\n' "$DEEPSONAR_CONTAINER_RUNTIME"
     return 0
   fi
-  info=$(docker info 2>/dev/null || true)
+  info=$(ds_run_bounded 3 docker info 2>/dev/null || true)
   case "$info" in
     *[Pp]odman*) printf 'podman\n'; return 0 ;;
   esac
@@ -48,100 +48,107 @@ ds_should_use_started_depends() {
   esac
 }
 
-ds_run_bounded() {
-  # ds_run_bounded TIMEOUT_SEC COMMAND [ARGS...]
-  # Runs COMMAND with a wall-clock bound. Exit 124 on timeout (GNU timeout convention).
+ds_run_bounded() (
+  # Subshell scope prevents nested probes from overwriting the caller's deadline.
   timeout_sec=$1
   shift
-  if [ "$timeout_sec" -le 0 ]; then
-    "$@"
-    return $?
+  case "$timeout_sec" in ''|*[!0-9]*|0) return 2 ;; esac
+  # Use a marker to distinguish an actual deadline from a child that exits 124/137.
+  # setsid lets the watchdog kill compose and its plugin as one process group.
+  marker=$(mktemp) || return 1
+  grouped=0
+  exec 3<&0
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" <&3 3<&- &
+    grouped=1
+  else
+    "$@" <&3 3<&- &
   fi
-  if command -v timeout >/dev/null 2>&1; then
-    # --foreground keeps signals with the child when available (GNU coreutils).
-    if timeout --help 2>&1 | grep -q -- '--foreground'; then
-      timeout --foreground "$timeout_sec" "$@"
-    else
-      timeout "$timeout_sec" "$@"
-    fi
-    return $?
-  fi
-  # Portable fallback: background + poll.
-  "$@" &
   cmd_pid=$!
-  elapsed=0
-  while kill -0 "$cmd_pid" 2>/dev/null; do
-    if [ "$elapsed" -ge "$timeout_sec" ]; then
-      kill "$cmd_pid" 2>/dev/null || true
-      wait "$cmd_pid" 2>/dev/null || true
-      return 124
-    fi
-    sleep 1
-    elapsed=$((elapsed + 1))
-  done
-  wait "$cmd_pid"
-  return $?
-}
-
-ds_wait_http() {
-  # ds_wait_http URL TIMEOUT_SEC [LABEL]
-  url=$1
-  timeout_sec=${2:-$DEEPSONAR_READY_TIMEOUT_SEC}
-  label=${3:-$url}
-  interval=${DEEPSONAR_PROBE_INTERVAL_SEC:-2}
-  elapsed=0
-  while [ "$elapsed" -lt "$timeout_sec" ]; do
-    if command -v curl >/dev/null 2>&1; then
-      if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
-        return 0
+  (
+    timer_pid=""
+    trap '[ -z "$timer_pid" ] || kill "$timer_pid" 2>/dev/null || true; [ -z "$timer_pid" ] || wait "$timer_pid" 2>/dev/null || true; exit 0' TERM INT HUP
+    sleep "$timeout_sec" &
+    timer_pid=$!
+    wait "$timer_pid" || exit 0
+    if kill -0 "$cmd_pid" 2>/dev/null; then
+      echo timeout > "$marker"
+      if [ "$grouped" -eq 1 ]; then
+        kill -TERM -"$cmd_pid" 2>/dev/null || true
+        sleep 1
+        kill -KILL -"$cmd_pid" 2>/dev/null || true
+      else
+        # macOS has no setsid: snapshot descendants before terminating their parent.
+        descendants=$(ps -eo pid=,ppid= | awk -v root="$cmd_pid" '
+          { parent[$1]=$2 }
+          function child(pid, p) { p=parent[pid]; return p==root || (p>1 && p!=pid && child(p)) }
+          END { for (pid in parent) if (child(pid)) print pid }')
+        kill -TERM "$cmd_pid" $descendants 2>/dev/null || true
+        sleep 1
+        kill -KILL "$cmd_pid" $descendants 2>/dev/null || true
       fi
-    elif command -v wget >/dev/null 2>&1; then
-      if wget -q -O /dev/null --timeout=3 "$url" 2>/dev/null; then
-        return 0
-      fi
-    else
-      echo "[deploy] curl/wget missing; cannot probe $label" >&2
-      return 1
     fi
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
-  done
-  echo "[deploy] readiness timeout after ${timeout_sec}s: $label ($url)" >&2
-  return 1
-}
+  ) >/dev/null 2>&1 &
+  watchdog=$!
+  rc=0
+  wait "$cmd_pid" || rc=$?
+  if [ ! -s "$marker" ]; then kill "$watchdog" 2>/dev/null || true; fi
+  wait "$watchdog" 2>/dev/null || true
+  [ ! -s "$marker" ] || rc=124
+  rm -f "$marker"
+  return "$rc"
+)
 
-ds_wait_cmd() {
-  # ds_wait_cmd TIMEOUT_SEC LABEL -- COMMAND...
+ds_wait_cmd() (
+  # One wall-clock deadline includes time spent in the command, not just sleeps.
   timeout_sec=$1
   label=$2
   shift 2
   if [ "$1" = "--" ]; then shift; fi
-  interval=${DEEPSONAR_PROBE_INTERVAL_SEC:-2}
-  elapsed=0
-  while [ "$elapsed" -lt "$timeout_sec" ]; do
-    if "$@" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
+  deadline=$(($(date +%s) + timeout_sec))
+  while :; do
+    remaining=$((deadline - $(date +%s)))
+    [ "$remaining" -gt 0 ] || break
+    probe_bound=$remaining
+    [ "$probe_bound" -le 3 ] || probe_bound=3
+    if ds_run_bounded "$probe_bound" "$@" >/dev/null 2>&1; then return 0; fi
+    remaining=$((deadline - $(date +%s)))
+    [ "$remaining" -gt 0 ] || break
+    pause=${DEEPSONAR_PROBE_INTERVAL_SEC:-2}
+    [ "$pause" -le "$remaining" ] || pause=$remaining
+    sleep "$pause"
   done
   echo "[deploy] readiness timeout after ${timeout_sec}s: $label" >&2
   return 1
-}
+)
+
+ds_wait_http() (
+  url=$1
+  timeout_sec=${2:-$DEEPSONAR_READY_TIMEOUT_SEC}
+  label=${3:-$url}
+  if command -v curl >/dev/null 2>&1; then
+    ds_wait_cmd "$timeout_sec" "$label" -- curl -fsS --max-time 3 "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    ds_wait_cmd "$timeout_sec" "$label" -- wget -q -O /dev/null --timeout=3 "$url"
+  else
+    echo "[deploy] curl/wget missing; cannot probe $label" >&2
+    return 1
+  fi
+)
 
 ds_compose_blocker_hint() {
   # Best-effort: name services still in health=starting / created / exited.
   # Args: docker compose prefix as "$@"
   {
     echo "[deploy] container status:"
-    "$@" ps -a 2>/dev/null || "$@" ps 2>/dev/null || true
+    ds_run_bounded 3 "$@" ps -a 2>/dev/null || ds_run_bounded 3 "$@" ps 2>/dev/null || true
   } | ds_redact_secrets
   # Inspect health where possible (Compose v2 JSON may vary; keep best-effort).
   for svc in postgres silo silo-init opensandbox scheduler image-admission web; do
-    cid=$("$@" ps -q "$svc" 2>/dev/null | head -1 || true)
+    cid=$(ds_run_bounded 3 "$@" ps -q "$svc" 2>/dev/null | head -1 || true)
     if [ -n "$cid" ]; then
-      health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo unknown)
-      state=$(docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || echo unknown)
+      health=$(ds_run_bounded 3 docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo unknown)
+      state=$(ds_run_bounded 3 docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || echo unknown)
       echo "[deploy]   $svc: state=$state health=$health"
       if [ "$health" = "starting" ] || [ "$state" = "created" ]; then
         echo "[deploy] blocker candidate: $svc (state=$state health=$health)"
@@ -161,101 +168,112 @@ ds_dump_deploy_diagnostics() {
   echo "[deploy] DEEPSONAR_READY_TIMEOUT_SEC=${DEEPSONAR_READY_TIMEOUT_SEC:-180}"
   if command -v docker >/dev/null 2>&1; then
     echo "[deploy] docker:"
-    docker version 2>/dev/null | ds_redact_secrets || true
-    docker compose version 2>/dev/null || true
+    ds_run_bounded 3 docker version 2>/dev/null | ds_redact_secrets || true
+    ds_run_bounded 3 docker compose version 2>/dev/null | ds_redact_secrets || true
   fi
   if command -v podman >/dev/null 2>&1; then
     echo "[deploy] podman:"
-    podman version 2>/dev/null | ds_redact_secrets || true
+    ds_run_bounded 3 podman version 2>/dev/null | ds_redact_secrets || true
   fi
   ds_compose_blocker_hint "$@"
   echo "[deploy] recent logs (tail 80, redacted):"
   {
-    "$@" logs --tail 80 postgres silo silo-init scheduler image-admission web opensandbox 2>/dev/null \
-      || "$@" logs --tail 80 2>/dev/null \
+    ds_run_bounded 3 "$@" logs --tail 80 postgres silo silo-init scheduler image-admission web opensandbox 2>/dev/null \
+      || ds_run_bounded 3 "$@" logs --tail 80 2>/dev/null \
       || true
   } | ds_redact_secrets
   echo "[deploy] ===== end diagnostics ====="
 }
 
-ds_probe_postgres() {
-  # Args: compose prefix "$@"
-  "$@" exec -T postgres pg_isready -U deepsonar -d deepsonar
-}
+ds_infra_really_ready() (
+  # Probe the actual compose services; a host port can belong to another stack.
+  ds_run_bounded 3 "$@" exec -T postgres pg_isready -U deepsonar -d deepsonar >/dev/null 2>&1 || return 1
+  ds_run_bounded 3 "$@" exec -T silo silo healthcheck ready >/dev/null 2>&1
+)
 
-ds_probe_silo_http() {
-  # Host-published Silo API (default 127.0.0.1:9000).
-  bind=${SILO_API_BIND:-127.0.0.1:9000}
-  hostport=${bind##*:}
-  case "$bind" in
-    *:*) ;;
-    *) hostport=9000 ;;
-  esac
-  url="http://127.0.0.1:${hostport}/minio/health/live"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsS --max-time 3 "$url" >/dev/null 2>&1
-  else
-    return 1
-  fi
-}
+ds_wait_infra_ready() (
+  # Both dependencies share the same deadline.
+  deadline=$(($(date +%s) + ${DEEPSONAR_READY_TIMEOUT_SEC:-180}))
+  ds_wait_cmd "${DEEPSONAR_READY_TIMEOUT_SEC:-180}" postgres -- "$@" exec -T postgres pg_isready -U deepsonar -d deepsonar || return 1
+  remaining=$((deadline - $(date +%s)))
+  [ "$remaining" -gt 0 ] || return 1
+  ds_wait_cmd "$remaining" silo -- "$@" exec -T silo silo healthcheck ready || return 1
+  echo "[deploy] infra readiness ok (postgres + silo real probes)"
+)
 
-ds_probe_silo_exec() {
-  # Args: compose prefix "$@"
-  "$@" exec -T silo silo healthcheck ready
-}
-
-ds_infra_really_ready() {
-  # True when postgres + silo accept real probes (health label may still be wrong).
-  # Args: compose prefix "$@"
-  if ! ds_probe_postgres "$@" >/dev/null 2>&1; then
-    return 1
-  fi
-  if ds_probe_silo_http; then
-    return 0
-  fi
-  ds_probe_silo_exec "$@" >/dev/null 2>&1
-}
-
-ds_wait_infra_ready() {
-  # Args: compose prefix "$@"
-  timeout_sec=${DEEPSONAR_READY_TIMEOUT_SEC:-180}
-  interval=${DEEPSONAR_PROBE_INTERVAL_SEC:-2}
-  elapsed=0
-  while [ "$elapsed" -lt "$timeout_sec" ]; do
-    if ds_infra_really_ready "$@"; then
-      echo "[deploy] infra readiness ok (postgres + silo real probes)"
-      return 0
-    fi
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
-  done
-  echo "[deploy] infra readiness timeout after ${timeout_sec}s (postgres/silo)" >&2
-  return 1
-}
-
-ds_wait_entry_ready() {
-  # Final success gate: configured entry port /api/health.
-  port=${1:-8080}
-  timeout_sec=${2:-$DEEPSONAR_READY_TIMEOUT_SEC}
+ds_wait_entry_ready() (
+  port=$1
+  timeout_sec=$2
+  shift 2
   url="http://127.0.0.1:${port}/api/health"
   echo "[deploy] waiting for entry readiness: $url (bound ${timeout_sec}s)"
-  ds_wait_http "$url" "$timeout_sec" "web entry :${port}/api/health"
-}
+  deadline=$(($(date +%s) + timeout_sec))
+  body=$(mktemp) || return 1
+  trap 'rm -f "$body"' EXIT HUP INT TERM
+  while :; do
+    remaining=$((deadline - $(date +%s)))
+    [ "$remaining" -gt 0 ] || break
+    bound=$remaining
+    [ "$bound" -le 3 ] || bound=3
+    fetched=1
+    if command -v curl >/dev/null 2>&1; then
+      ds_run_bounded "$bound" curl -fsS --max-time "$bound" "$url" > "$body" 2>/dev/null && fetched=0
+    elif command -v wget >/dev/null 2>&1; then
+      ds_run_bounded "$bound" wget -q -O - --timeout="$bound" "$url" > "$body" 2>/dev/null && fetched=0
+    else
+      echo "[deploy] curl/wget missing; cannot probe entry" >&2
+      return 1
+    fi
+    remaining=$((deadline - $(date +%s)))
+    if [ "$fetched" -eq 0 ] && [ "$remaining" -gt 0 ]; then
+      bound=$remaining
+      [ "$bound" -le 3 ] || bound=3
+      # Invoke the parser directly under the watchdog (functions are not execs).
+      if ds_run_bounded "$bound" "$@" exec -T scheduler node -e 'let s=""; process.stdin.setEncoding("utf8"); process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{try{const h=JSON.parse(s); process.exit(h && h.ok===true && h.ready===true ? 0 : 1)}catch{process.exit(1)}})' < "$body" >/dev/null 2>&1; then return 0; fi
+    fi
+    remaining=$((deadline - $(date +%s)))
+    [ "$remaining" -gt 0 ] || break
+    pause=${DEEPSONAR_PROBE_INTERVAL_SEC:-2}
+    [ "$pause" -le "$remaining" ] || pause=$remaining
+    sleep "$pause"
+  done
+  echo "[deploy] readiness timeout after ${timeout_sec}s: $url (requires ok=true and ready=true)" >&2
+  return 1
+)
 
-ds_ensure_app_services_started() {
-  # After a timed-out service_healthy up, if infra is really ready, start remaining
-  # app services without waiting on Compose health gates (--no-deps).
-  # Args: compose prefix "$@"
-  echo "[deploy] controlled path: infra probes passed; starting app services without health gates"
-  # Order: opensandbox before scheduler; silo-init before scheduler; web last.
+ds_service_state() (
+  service=$1
+  shift
+  bound=${DS_SERVICE_TIMEOUT_SEC:-3}
+  [ "$bound" -le 3 ] || bound=3
+  deadline=$(($(date +%s) + bound))
+  cid=$(ds_run_bounded "$bound" "$@" ps -a -q "$service" 2>/dev/null) || return 1
+  [ -n "$cid" ] || return 1
+  remaining=$((deadline - $(date +%s)))
+  [ "$remaining" -gt 0 ] || return 1
+  ds_run_bounded "$remaining" docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$cid" 2>/dev/null
+)
+
+ds_ensure_app_services_started() (
+  echo "[deploy] controlled path: infra probes passed; starting app services with explicit dependency gates"
+  services=$(ds_run_bounded 3 "$@" config --services) || return 1
   for svc in opensandbox silo-init image-admission scheduler web; do
-    if "$@" config --services 2>/dev/null | grep -qx "$svc"; then
-      echo "[deploy]   up -d --no-deps $svc"
-      if ! ds_run_bounded 120 "$@" up -d --no-deps "$svc"; then
-        echo "[deploy] failed to start $svc on controlled path" >&2
-        return 1
+    if printf '%s\n' "$services" | grep -qx "$svc"; then
+      ds_run_bounded 120 "$@" up -d --no-deps "$svc" || return 1
+      if [ "$svc" = silo-init ]; then
+        deadline=$(($(date +%s) + ${DEEPSONAR_READY_TIMEOUT_SEC:-180}))
+        while :; do
+          remaining=$((deadline - $(date +%s)))
+          [ "$remaining" -gt 0 ] || return 1
+          state=$(DS_SERVICE_TIMEOUT_SEC=$remaining ds_service_state silo-init "$@") || return 1
+          case "$state" in
+            'exited 0') break ;;
+            exited*|dead*) echo "[deploy] silo-init failed: $state" >&2; return 1 ;;
+          esac
+          [ "$(date +%s)" -lt "$deadline" ] || return 1
+          sleep 1
+        done
       fi
     fi
   done
-  return 0
-}
+)

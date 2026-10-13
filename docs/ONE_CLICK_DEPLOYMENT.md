@@ -78,7 +78,10 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 - `DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`（默认 `600`）：`compose up` 墙上时钟上限；超时失败并输出诊断。
 - `DEEPSONAR_READY_TIMEOUT_SEC`（默认 `180`）：postgres/silo 真实探测与入口 `/api/health` 等待上限。
 - `DEEPSONAR_COMPOSE_DEPENDS_ON`：`auto`（默认，检测到 Podman 时启用兼容层）/ `healthy` / `started`。
-- 成功条件不变：web 与 scheduler 必须在跑，且配置的入口端口（默认 8080）可访问。不会在 up 超时后无条件 start 并报告成功。
+- 成功门禁：postgres 与 Silo 必须通过所属 Compose 服务内的真实探测，web 与 scheduler 容器必须为 `running`，且配置入口端口（默认 8080）的 `/api/health` JSON 顶层必须同时为 `ok: true`、`ready: true`。HTTP 200、`ok: true` 或 `runtime_images.ready` 单独为真都不代表平台已就绪；runtime warmup / OpenSandbox / Dispatcher 未就绪时继续等待，耗尽预算非零退出。
+- 此预算只约束 `compose up`、就绪门禁与诊断，不是整个部署脚本的总 deadline；前置 config/pull 和已有桥接配置不在此计时范围内。每个依赖探测、容器状态查询及诊断命令都有独立上限；依赖循环按墙上时钟 deadline 计算（包含 exec 时间），超时清理最多另加 1 秒。入口 JSON 通过 scheduler 容器内的 Node 解析，宿主无需安装 JSON 解析器。日志中的凭据形态会脱敏。
+- sh 的 `compose up` 普通失败保留原退出码；只有超时 `124` 且基础依赖真实就绪时允许受控恢复，恢复仍须等待 `silo-init` 成功退出，再启动 scheduler，最后通过同一入口与容器门禁。PowerShell 对 `compose up` 失败直接停止并输出有界诊断；不会因 `service_started` 跳过依赖探测或误报成功。
+- `pnpm ci:unit:deploy-ps1` 包含 sh 行为回归及 PowerShell 函数行为/原生命令超时回归；CI 必须提供 PowerShell。测试夹具不代替 Docker/Podman 真机部署验收。
 
 ### 登录
 

@@ -14,6 +14,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 - `total` / `succeeded` / `failed` / `completed`
 - `items[]`：`image_key`、`image_ref`、`target_digest`、`status`、`failure_class`、`error`、`attempts`、`retry_count`、`timeout_budget_sec`
 
+计数描述一次实际准备操作：首次 pull 成功为 `attempts=1, retry_count=0`；失败后第二次成功为 `2/1`；已经本地可用、不执行 pull 为 `0/0`。`timeout_budget_sec` 是最后一次 pull 的预算，无 pull 时为 `0`。并发等待同一 in-flight 操作的调用者共享该操作结果，不会额外拉取；不能把各观察者的计数相加当作全局 pull 次数。pull 返回成功后若精确 digest 校验失败，仍保留已消耗的次数及预算并报告 `digest_missing`。
+
 示例：13 项里仅 1 项失败 → `total=13, succeeded=12, failed=1`，并保留失败项原因。
 
 ## 2. 确认失败项、目标 digest 与执行节点，定向重拉
@@ -62,7 +64,9 @@ curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application
 
 - 对账集合 = 各产品最新 trusted + 项目 pin + 受保护 Job 冻结的旧 digest。
 - 本地节点会做 detect（只读）；`repair` 走定向 pull task，不是手动 pull。
-- 远端 worker 若尚无 image inspect 平面，会返回 `inspect: "unsupported"`，**不得**用 Scheduler 宿主状态冒充该节点。
+- Scheduler 从已有受信 `worker_nodes` 注册表枚举所有远端 worker，包括 stale / unavailable 节点；注册表读取失败会使对账失败，不静默伪装成没有远端节点。
+- 当前远端 image inspect / repair 平面**尚未实现**。每个已注册远端节点返回 `inspect: "unsupported"`，`items=[]` / `missing=[]` 表示未检测，不能理解为镜像齐全。这里不会访问远端 endpoint、传送凭据或以 Scheduler 宿主状态冒充该节点。
+- `repair:true` 只修复 Scheduler 本地缺失版本；`repair_task` 成功不代表远端已就绪。远端逐节点镜像检测及受治理拉取仍需后续实现。
 
 ## 4. 复核 readiness
 
@@ -71,7 +75,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
   "$SCHEDULER/runtime-images/registry" | jq '.image_status'
 ```
 
-对应 `image_key` 的 `readiness` 应为 `ready`。仍不满足时按 `failure_class` 继续处理。
+对应本地 `image_key` 的 `readiness` 应为 `ready`。仍不满足时按 `failure_class` 继续处理。这个结果不能证明 `inspect: "unsupported"` 的远端 worker 已就绪。
 
 ## 超时与环境变量
 

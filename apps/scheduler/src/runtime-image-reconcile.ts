@@ -7,7 +7,8 @@
  */
 import { config } from "./config.js";
 import { sql } from "./db.js";
-import { LOCAL_WORKER_ID } from "./domains/worker-nodes/model.js";
+import { listWorkerNodes } from "./domains/worker-nodes/registry.js";
+import { LOCAL_WORKER_ID, type WorkerNodeRecord } from "./domains/worker-nodes/model.js";
 import {
   assertRuntimeImageAvailable,
   immutableDigest,
@@ -215,7 +216,7 @@ async function inspectNeedLocal(
 export async function reconcileRuntimeImagesOnNodes(input: {
   repair?: boolean;
   inspect?: RuntimeImageEnsureDependencies["inspect"];
-  listRemoteNodeIds?: () => Promise<readonly string[]> | readonly string[];
+  listWorkers?: () => Promise<readonly Pick<WorkerNodeRecord, "id" | "kind">[]> | readonly Pick<WorkerNodeRecord, "id" | "kind">[];
   loadNeeds?: () => Promise<readonly RuntimeImageReconcileNeed[]> | readonly RuntimeImageReconcileNeed[];
 } = {}): Promise<RuntimeImageReconcileResult> {
   const needs = [...await Promise.resolve(input.loadNeeds ? input.loadNeeds() : loadNeededRuntimeImageRefs())];
@@ -237,9 +238,10 @@ export async function reconcileRuntimeImagesOnNodes(input: {
     missing,
   }];
 
-  const remoteIds = input.listRemoteNodeIds
-    ? [...await Promise.resolve(input.listRemoteNodeIds())]
-    : [];
+  // Enumerate the admitted registry, including stale/unavailable nodes. No remote
+  // endpoint or credentials are read into an image-inspect request.
+  const workers = await (input.listWorkers ?? listWorkerNodes)();
+  const remoteIds = new Set(workers.filter((worker) => worker.kind === "remote").map((worker) => worker.id));
   for (const nodeId of remoteIds) {
     if (nodeId === localNodeId) continue;
     nodes.push({

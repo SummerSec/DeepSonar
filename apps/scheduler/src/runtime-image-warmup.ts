@@ -15,7 +15,7 @@ export const DISPATCHER_DISABLED_LOG_AFTER = 3;
 
 interface WarmupDependencies {
   resolveRefs: () => Promise<Array<{ image_ref: string; image_key?: string }>>;
-  prepare: (imageRef: string) => Promise<void>;
+  prepare: (imageRef: string) => Promise<unknown>;
   afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void>;
   onReady: () => void;
   sleep?: (ms: number) => Promise<void>;
