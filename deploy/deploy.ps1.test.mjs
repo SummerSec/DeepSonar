@@ -161,25 +161,61 @@ Write-DeployDiagnostics -ComposeArgs @('compose')
   if (result) assert.doesNotMatch(result.stdout + result.stderr, /fake-secret|fake-token|fake-bearer|fake-password/);
 });
 
-test("PowerShell bounded process preserves quoted args, failure codes, and kills hangs", (t) => {
+function withFakeDocker(t, check) {
   if (process.platform === "win32") { t.skip("Unix fake docker fixture; exercised by Ubuntu pwsh CI"); return; }
   const dir = mkdtempSync(join(tmpdir(), "ds-pwsh-"));
+  const capture = join(dir, "received args.bin");
   try {
     writeFileSync(join(dir, "docker"), `#!/bin/sh
 case "$1" in
   fail) exit 29 ;;
   hang) trap '' TERM; while :; do sleep 1; done ;;
-  *) printf '<%s>' "$@" ;;
+  *) printf '%s\\0' "$@" > "$ARG_CAPTURE_FILE"; printf '<%s>' "$@" ;;
 esac
 `, { mode: 0o755 });
+    check({ env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, ARG_CAPTURE_FILE: capture } }, capture);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test("PowerShell bounded process preserves exact native argv and reports exit zero", (t) => {
+  withFakeDocker(t, (options, capture) => {
+    const args = ["path with spaces", 'quote"inside', "trailing\\", "  padded  ", "", 'slash\\"quote'];
+    const psArgs = args.map(value => `'${value.replaceAll("'", "''")}'`).join(", ");
+    const result = runFunctions(t, `
+$result = Invoke-DockerBounded -DockerArgs @(${psArgs}) -TimeoutSec 3
+if ($null -eq $result.ExitCode) { throw 'Missing native exit code (null)' }
+if ($result.ExitCode -ne 0) { throw "Expected exit zero, got $($result.ExitCode)" }
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($result.Output))
+`, options);
+    if (!result) return;
+    // Verify what the executable actually received, independently of stdout capture.
+    assert.deepEqual(readFileSync(capture), Buffer.from(args.join("\0") + "\0"), "Native argv bytes changed");
+    // Unix Start-Process redirects via StdOutputHandler -> StreamWriter.WriteLine,
+    // which appends a newline even when the executable uses printf without one.
+    // https://github.com/PowerShell/PowerShell/blob/v7.5.3/src/Microsoft.PowerShell.Commands.Management/commands/management/Process.cs#L2104-L2109
+    const capturedOutput = Buffer.from(result.stdout.trim(), "base64").toString("utf8");
+    assert.equal(capturedOutput, args.map(value => `<${value}>`).join("") + "\n", "Unexpected redirected stdout bytes");
+  });
+});
+
+test("PowerShell bounded process preserves native exit 29", (t) => {
+  withFakeDocker(t, (options) => {
     runFunctions(t, `
-$result = Invoke-DockerBounded -DockerArgs @('path with spaces', 'quote"inside', 'trailing\\') -TimeoutSec 3
-if ($result.ExitCode -ne 0 -or $result.Output -ne '<path with spaces><quote"inside><trailing\\>') { throw "Argument corruption: $($result.Output)" }
 $result = Invoke-DockerBounded -DockerArgs @('fail') -TimeoutSec 3
+if ($null -eq $result.ExitCode) { throw 'Missing failure exit code (null)' }
 if ($result.ExitCode -ne 29) { throw "Lost exit code: $($result.ExitCode)" }
+`, options);
+  });
+});
+
+test("PowerShell bounded process kills a TERM-resistant child and reports 124", (t) => {
+  withFakeDocker(t, (options) => {
+    runFunctions(t, `
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $result = Invoke-DockerBounded -DockerArgs @('hang') -TimeoutSec 1
-if ($result.ExitCode -ne 124 -or $clock.Elapsed.TotalSeconds -gt 4) { throw 'Unbounded child' }
-`, { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+if ($null -eq $result.ExitCode) { throw 'Missing timeout exit code (null)' }
+if ($result.ExitCode -ne 124) { throw "Expected timeout 124, got $($result.ExitCode)" }
+if ($clock.Elapsed.TotalSeconds -gt 4) { throw "Unbounded child: $($clock.Elapsed.TotalSeconds)s" }
+`, options);
+  });
 });
