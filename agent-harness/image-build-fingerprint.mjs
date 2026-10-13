@@ -260,7 +260,11 @@ export const PRESETS = {
     dockerfile: "deploy/Dockerfile.agent-reverse",
     paths: [
       "agent-harness/reverse-runtime.json",
+      "agent-harness/rea-runtime/package.json",
+      "agent-harness/rea-runtime/package-lock.json",
       "deploy/reverse-env.sh",
+      "agent-harness/reverse-ghidra-native.sh",
+      "agent-harness/reverse-toolchain-check.mjs",
       "skills/deepsonar-rea-cli/SKILL.md",
       "agent-harness/runtime-manuals",
       "agent-harness/materialize-runtime-manuals.mjs",

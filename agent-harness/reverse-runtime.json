@@ -57,13 +57,14 @@
     "node": {
       "minimum": "22.19.0",
       "inherited_from": "deepsonar-base",
-      "verify_at_build": true
+      "verify_at_build": true,
+      "engines": "^22.19.0 || ^24.11.0 || >=26.0.0"
     }
   },
   "skill": {
     "id": "deepsonar-rea-cli",
     "path": "skills/deepsonar-rea-cli/SKILL.md",
-    "content_hash": "sha256:95ad67d5d16a8599e0cb76be111c78337f8dfd922d761072f95276836dd66c4d"
+    "content_hash": "sha256:8c104178b67bd2abb207e3b932e2d35309eb88920328e023ee9c1eba6c44c01a"
   },
   "toolsets": {
     "reverse": {
@@ -90,12 +91,27 @@
         "memory_mib": 4096,
         "cpu": 2,
         "timeout_sec": 600,
-        "source": "agent-harness/reverse-amd64-measurements.json"
+        "source": "agent-harness/reverse-amd64-measurements.json",
+        "ghidra_headless_maxmem": "1536m"
       }
     }
   },
   "measurements": {
     "amd64": "agent-harness/reverse-amd64-measurements.json",
     "arm64": "pending"
+  },
+  "validation": {
+    "workflow": ".github/workflows/reverse-runtime.yml",
+    "native_runners": {
+      "amd64": "ubuntu-24.04",
+      "arm64": "ubuntu-24.04-arm"
+    },
+    "image_smoke": "agent-harness/reverse-native-smoke.mjs",
+    "job_e2e": "agent-harness/opensandbox/opensandbox-rea-job.e2e.ts",
+    "evidence_artifacts": [
+      "reverse-native-evidence-<arch>",
+      "reverse-job-evidence-<arch>"
+    ],
+    "status": "gates_defined_execution_and_first_publication_required"
   }
 }

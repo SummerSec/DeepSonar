@@ -113,6 +113,8 @@ jobs:
             checkout_ref="${GITHUB_SHA}"
           fi
 
+          # Freeze resolved source identity; downstream jobs must never re-checkout a moving branch.
+          checkout_ref="$(git rev-parse HEAD)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
           printf 'checkout_ref=%s\n' "$checkout_ref" >> "$GITHUB_OUTPUT"
@@ -1038,30 +1040,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          amd64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-amd64.json")"
-          arm64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-arm64.json")"
-          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
-            echo "image build unchanged; version kept" >> "$GITHUB_STEP_SUMMARY"
-            node agent-harness/reuse-catalog-descriptor.mjs \
-              --image-key "deepsonar-${{ matrix.name }}" \
-              --out "release-digests/${{ matrix.name }}.json"
-            digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-            printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           amd64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-amd64.json")"
           arm64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-arm64.json")"
           [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          amd64_source="${IMAGE_NAME}@${amd64_digest}"
-          arm64_source="${IMAGE_NAME}@${arm64_digest}"
-          mapfile -t amd64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$amd64_source" "linux/amd64")
-          mapfile -t arm64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$arm64_source" "linux/arm64")
-          [[ ${#amd64_sources[@]} -eq 1 ]]
-          [[ ${#arm64_sources[@]} -eq 1 ]]
-          source_refs=("${amd64_sources[0]}" "${arm64_sources[0]}")
+          platform_args=(
+            --source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"
+            --source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"
+          )
+          # Resolve before reuse; command substitution preserves inspect failures.
+          selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"
+          mapfile -t source_refs <<< "$selected_sources_text"
+          [[ ${#source_refs[@]} -eq 2 ]]
+          amd64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            if node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              "${platform_args[@]}" \
+              --out "release-digests/${{ matrix.name }}.json"; then
+              echo "image build unchanged; tested platform manifests match; version kept" >> "$GITHUB_STEP_SUMMARY"
+              digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+              printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              reuse_status=$?
+              # Only a proven identity miss may publish; inspect/errors abort.
+              [[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"
+            fi
+            echo "cached children differ from previous catalog; assembling tested platform manifests" >> "$GITHUB_STEP_SUMMARY"
+          fi
           annotation_args=(
             --annotation "index:org.opencontainers.image.title=${{ matrix.title }}"
             --annotation "index:org.opencontainers.image.description=${{ matrix.description }}"
@@ -1493,30 +1503,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          amd64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
-          arm64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
-          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
-            echo "image build unchanged; version kept" >> "$GITHUB_STEP_SUMMARY"
-            node agent-harness/reuse-catalog-descriptor.mjs \
-              --image-key "deepsonar-${{ matrix.name }}" \
-              --out "release-digests/${{ matrix.name }}.json"
-            digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-            printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           amd64_digest="$(jq -r '.digest' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
           arm64_digest="$(jq -r '.digest' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
           [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          amd64_source="${IMAGE_NAME}@${amd64_digest}"
-          arm64_source="${IMAGE_NAME}@${arm64_digest}"
-          mapfile -t amd64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$amd64_source" "linux/amd64")
-          mapfile -t arm64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$arm64_source" "linux/arm64")
-          [[ ${#amd64_sources[@]} -eq 1 ]]
-          [[ ${#arm64_sources[@]} -eq 1 ]]
-          source_refs=("${amd64_sources[0]}" "${arm64_sources[0]}")
+          platform_args=(
+            --source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"
+            --source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"
+          )
+          # Resolve before reuse; command substitution preserves inspect failures.
+          selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"
+          mapfile -t source_refs <<< "$selected_sources_text"
+          [[ ${#source_refs[@]} -eq 2 ]]
+          amd64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            if node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              "${platform_args[@]}" \
+              --out "release-digests/${{ matrix.name }}.json"; then
+              echo "image build unchanged; tested platform manifests match; version kept" >> "$GITHUB_STEP_SUMMARY"
+              digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+              printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              reuse_status=$?
+              # Only a proven identity miss may publish; inspect/errors abort.
+              [[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"
+            fi
+            echo "cached children differ from previous catalog; assembling tested platform manifests" >> "$GITHUB_STEP_SUMMARY"
+          fi
           annotation_args=(
             --annotation "index:org.opencontainers.image.title=${{ matrix.title }}"
             --annotation "index:org.opencontainers.image.description=${{ matrix.description }}"
@@ -2871,10 +2889,460 @@ jobs:
           path: release-digests/mobile.json
           if-no-files-found: error
 
+  # Reverse native execution is required on both architectures before any
+  # version/index/catalog publication; cached children run identical gates.
+  reverse-image-builds:
+    needs: base-image
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: reverse
+            toolset: reverse
+            dockerfile: deploy/Dockerfile.agent-reverse
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+            title: DeepSonar Reverse
+            description: Project-opt-in pinned REA CLI and Ghidra deep native analysis runtime.
+          - name: reverse
+            toolset: reverse
+            dockerfile: deploy/Dockerfile.agent-reverse
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Reverse
+            description: Project-opt-in pinned REA CLI and Ghidra deep native analysis runtime.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install Job integration dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deepsonar/shared-types build
+          pnpm --filter @deepsonar/runtime-manual-contract build
+          pnpm --filter @deepsonar/runtime-sandbox build
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused Reverse image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; version kept" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platform }}
+          build-args: BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }},mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+      - id: image
+        name: Final digest and pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Install native sample compilers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc gcc-mingw-w64-x86-64
+      - name: Smoke native Reverse child from immutable digest
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull --platform "${{ matrix.platform }}" "$image_ref"
+          node agent-harness/test-runtime-manuals-runtime.mjs "$image_ref" --image-key deepsonar-reverse --platform "${{ matrix.platform }}"
+          node agent-harness/reverse-native-smoke.mjs --image "$image_ref" --arch "${{ matrix.arch }}" --evidence-dir "reverse-evidence/${{ matrix.arch }}"
+      - name: Start pinned OpenSandbox for real Job acceptance
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/docker-compose.opensandbox.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/health; then exit 0; fi
+            sleep 2
+          done
+          echo "Pinned OpenSandbox server did not become healthy" >&2
+          exit 1
+      - name: Real dispatched REA Job, Evidence, Fact and independent Verify
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+          OPEN_SANDBOX_DOMAIN: 127.0.0.1:18081
+          REA_JOB_REPORT_DIR: ${{ github.workspace }}/reverse-job-evidence/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          export REA_JOB_IMAGE="${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-reverse@${{ steps.image.outputs.digest }}"
+          pnpm ci:integration:rea-job
+      - name: Pin verified native Reverse src cache
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-reverse
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: bash agent-harness/resolve-image-src-cache.sh pin
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: reverse-native-evidence-${{ matrix.arch }}
+          path: reverse-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Save native Reverse child digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          mkdir -p reverse-arch
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; const unchanged=process.env.SKIP==="true"; fs.writeFileSync("reverse-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest,unchanged})+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reverse-arch-${{ matrix.name }}-${{ matrix.arch }}
+          path: reverse-arch/${{ matrix.name }}-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: reverse-job-evidence-${{ matrix.arch }}
+          path: reverse-job-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Clean real Job acceptance services
+        if: ${{ always() }}
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v
+
+  reverse-images:
+    needs: [base-image, reverse-image-builds]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: reverse
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Reverse
+            description: Project-opt-in pinned REA CLI and Ghidra deep native analysis runtime.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" && -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reverse-arch-${{ matrix.name }}-*
+          path: reverse-arch
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=raw,value=${{ needs.base-image.outputs.version }}
+            type=sha,prefix=sha-
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=reverse-${{ needs.base-image.outputs.version }}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.base-image.outputs.version }}
+            type=sha,prefix=sha-
+      - id: image
+        name: Assemble and publish Reverse multi-arch index
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          amd64_digest="$(jq -r '.digest' "reverse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_digest="$(jq -r '.digest' "reverse-arch/${{ matrix.name }}-arm64.json")"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_args=(
+            --source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"
+            --source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"
+          )
+          # Resolve before reuse; command substitution preserves inspect failures.
+          selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"
+          mapfile -t source_refs <<< "$selected_sources_text"
+          [[ ${#source_refs[@]} -eq 2 ]]
+          amd64_unchanged="$(jq -r '.unchanged // false' "reverse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "reverse-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            if node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              "${platform_args[@]}" \
+              --out "release-digests/${{ matrix.name }}.json"; then
+              echo "image build unchanged; tested platform manifests match; version kept" >> "$GITHUB_STEP_SUMMARY"
+              digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+              printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              reuse_status=$?
+              # Only a proven identity miss may publish; inspect/errors abort.
+              [[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"
+            fi
+            echo "cached children differ from previous catalog; assembling tested platform manifests" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          node agent-harness/publish-reverse-runtime.mjs "${platform_args[@]}"
+      - name: Save Reverse manifest digest
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.image.outputs.unchanged }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
+
   release:
-    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile]
+    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile, reverse-images]
     runs-on: ubuntu-latest
     env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
       ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
       ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
@@ -2903,6 +3371,52 @@ jobs:
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
+          pattern: chrome-arch-*
+          path: chrome-arch
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clickhouse-arch-*
+          path: clickhouse-arch
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reverse-arch-*
+          path: reverse-arch
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reverse-*-evidence-*
+          path: reverse-release-evidence
+      - name: Bind Reverse measurements to this release's native-tested children
+        run: |
+          set -euo pipefail
+          node agent-harness/verify-reverse-release-evidence.mjs \
+            "$(git rev-parse HEAD)" "ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-reverse" \
+            reverse-arch reverse-release-evidence reverse-release-evidence/summary.json
+      - uses: docker/setup-buildx-action@v3
+      - name: Login GHCR for final payload verification
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login Docker Hub for final payload verification
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR for final payload verification
+        if: ${{ env.ALIYUN_REGISTRY != '' && env.ALIYUN_REGISTRY_NAMESPACE != '' && env.ALIYUN_REGISTRY_USERNAME != '' && env.ALIYUN_REGISTRY_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - uses: actions/download-artifact@v4
+        with:
           name: release-changelog
           path: release-changelog
       - name: 验收最终运行镜像离线手册
@@ -2917,7 +3431,7 @@ jobs:
               process.stdout.write(`${value.image_key} ${value.ghcr_ref}\n`);
             ' "$descriptor")
             case "$image_key" in
-              deepsonar-base|deepsonar-audit|deepsonar-kali-minimal|deepsonar-chrome-test|deepsonar-chrome-audit|deepsonar-chrome-fuzz|deepsonar-clickhouse-test|deepsonar-clickhouse-audit|deepsonar-clickhouse-fuzz|deepsonar-openharmony-test|deepsonar-openharmony-audit|deepsonar-openharmony-fuzz|deepsonar-mobile) ;;
+              deepsonar-base|deepsonar-audit|deepsonar-kali-minimal|deepsonar-chrome-test|deepsonar-chrome-audit|deepsonar-chrome-fuzz|deepsonar-clickhouse-test|deepsonar-clickhouse-audit|deepsonar-clickhouse-fuzz|deepsonar-openharmony-test|deepsonar-openharmony-audit|deepsonar-openharmony-fuzz|deepsonar-mobile|deepsonar-reverse) ;;
               *) continue ;;
             esac
             docker pull --platform linux/amd64 "$image_ref"
@@ -2950,6 +3464,15 @@ jobs:
         run: |
           set -euo pipefail
           node agent-harness/generate-runtime-image-registry.mjs --check deploy/runtime-image-registry.json
+      - name: Verify final catalog matches native-smoke platform manifests
+        env:
+          REPOSITORY_PREFIX: ghcr.io/${{ steps.release.outputs.owner }}
+        run: |
+          set -euo pipefail
+          node agent-harness/check-runtime-catalog-platforms.mjs \
+            --catalog deploy/runtime-image-registry.json \
+            --repository-prefix "$REPOSITORY_PREFIX" \
+            --artifacts chrome-arch --artifacts clickhouse-arch --artifacts reverse-arch
       - name: 准备 v2 Release asset
         run: |
           set -euo pipefail
@@ -3009,6 +3532,10 @@ jobs:
           # 只更新清单文件；推到默认分支不会再次触发本 workflow（仅 tag 触发）
           git push origin "HEAD:${DEFAULT_BRANCH}"
           echo "已将 $registry_file 和 $env_file 回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve Reverse acceptance evidence in release assets
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: tar -czf "deepsonar-reverse-evidence-${VERSION}.tar.gz" -C reverse-release-evidence .
       - name: 打包 Management Skill
         shell: bash
         run: |
@@ -3038,6 +3565,7 @@ jobs:
           tag_name: v${{ needs.base-image.outputs.version }}
           body_path: release-body.md
           files: |
+            deepsonar-reverse-evidence-*.tar.gz
             deepsonar-management-skill-*.tar.gz
             deploy/runtime-image-registry.json
             runtime-image-registry-v2.json

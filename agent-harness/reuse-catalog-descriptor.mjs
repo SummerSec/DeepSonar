@@ -1,6 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  inspectRuntimePlatformDigests,
+  parsePlatformSources,
+  resolveRuntimePlatformSources,
+  samePlatformDigests,
+} from "./runtime-platform-manifests.mjs";
 
 export const CATALOG_REUSE_MISS_EXIT = 2;
 
@@ -52,17 +58,31 @@ export function descriptorFromCatalogVersion(imageKey, version) {
   };
 }
 
-export function reuseCatalogDescriptor({ catalog, imageKey, digest }) {
+export function reuseCatalogDescriptor({ catalog, imageKey, digest, platformSources, inspectManifest }) {
+  if (Boolean(digest) === Boolean(platformSources)) fail("provide exactly one digest or platform sources identity");
+  if (digest && !/^sha256:[0-9a-f]{64}$/.test(digest)) fail("invalid digest identity");
+  const expected = platformSources
+    ? resolveRuntimePlatformSources(platformSources, inspectManifest).platformDigests
+    : null;
   const image = catalog?.images?.find((item) => item.image_key === imageKey);
   if (!image) miss(`${imageKey} is not in the previous catalog`);
   const versions = Array.isArray(image.versions) ? image.versions : [];
-  const match = digest
-    ? versions.find((version) => version.digest === digest)
-    : versions[0];
+  const match = versions.find((version) => {
+    if (digest) return version.digest === digest;
+    const ref = version.image_ref ?? version.registry_refs?.github;
+    if (!ref?.endsWith(`@${version.digest}`)) fail(`${imageKey} catalog reference/digest mismatch`);
+    if (!Array.isArray(version.platforms) || version.platforms.length !== Object.keys(expected).length ||
+        new Set(version.platforms).size !== version.platforms.length ||
+        version.platforms.some((platform) => !Object.hasOwn(expected, platform))) {
+      fail(`${imageKey} catalog platforms do not match tested platforms`);
+    }
+    const actual = inspectRuntimePlatformDigests(ref, version.platforms, inspectManifest);
+    return samePlatformDigests(actual, expected);
+  });
   if (!match) {
     miss(digest
       ? `${imageKey} previous catalog has no version with digest ${digest}`
-      : `${imageKey} previous catalog has no version to reuse`);
+      : `${imageKey} previous catalog has no version with matching tested platform manifests`);
   }
   if (digest && match.digest !== digest) fail(`${imageKey} reused digest mismatch`);
   return descriptorFromCatalogVersion(imageKey, match);
@@ -76,8 +96,9 @@ function main(argv = process.argv.slice(2)) {
     const catalogPath = optionalArg("--catalog", argv)
       ?? fileURLToPath(new URL("../deploy/runtime-image-registry.json", import.meta.url));
     const digest = optionalArg("--digest", argv);
+    const platformSources = parsePlatformSources(argv);
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
-    const descriptor = reuseCatalogDescriptor({ catalog, imageKey, digest });
+    const descriptor = reuseCatalogDescriptor({ catalog, imageKey, digest, platformSources });
     if (probe && !output) {
       console.log(`reusable: ${imageKey} ${descriptor.version}`);
       return;

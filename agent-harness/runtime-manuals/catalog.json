@@ -37701,7 +37701,7 @@
           ],
           "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
           "verification_status": "source_reviewed_unexecuted",
-          "verification_note": "PR2 amd64 host scratch validated analyzeHeadless via REA (sample_elf/libsample.so); OCI image digest execution still pending first reverse build."
+          "verification_note": "Historical amd64 host measurements are in reverse-amd64-measurements.json. Native amd64/arm64 OCI and real OpenSandbox Job gates run in reverse-runtime.yml and release.yml; successful run artifacts are required before claiming image validation or publication. The compressed image budget is 2800 MiB; actual bytes come from docker save | gzip."
         },
         {
           "image_key": "deepsonar-reverse",
@@ -37757,7 +37757,7 @@
           ],
           "version_limits_side_effects_cleanup": "Pinned to rea-agents@6.4.0 / gitHead a56f7bb668ab23fec8d33f7af353ac7ed2fe1895. Snapshot files are exact-query caches, not persistent Ghidra databases. Keep workspace-local outputs; delete ephemeral provider temps after evidence retention.",
           "verification_status": "source_reviewed_unexecuted",
-          "verification_note": "PR2 amd64 scratch toolchain ran analyze/function/decompile/xrefs/trace/inspect-analysis-view; see agent-harness/reverse-amd64-measurements.json. arm64 and OCI digest still pending."
+          "verification_note": "Historical amd64 host measurements are in reverse-amd64-measurements.json. Native amd64/arm64 OCI and real OpenSandbox Job gates run in reverse-runtime.yml and release.yml; successful run artifacts are required before claiming image validation or publication. The compressed image budget is 2800 MiB; actual bytes come from docker save | gzip."
         },
         {
           "image_key": "deepsonar-reverse",

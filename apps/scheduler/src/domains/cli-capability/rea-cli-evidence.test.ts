@@ -164,3 +164,25 @@ test("missing capability / unadmitted image: capability_unavailable", () => {
     assert.equal(ok.frozen.tool_version, "6.4.0");
   }
 });
+
+
+test("empty/whitespace stdout and unknown exit never become conclusive observations", () => {
+  for (const stdout of ["", " \n\t"]) {
+    const result = buildReaCliCapabilityResult({ ...baseObs, exit_code: 0, stdout, stderr: "" });
+    assert.equal(result.inconclusive, true);
+    assert.equal(result.unavailable_reason, "inconclusive");
+  }
+  const result = buildReaCliCapabilityResult({ ...baseObs, exit_code: null, stdout: "{}", stderr: "" });
+  assert.equal(result.unavailable_code, CLI_UNAVAILABLE_CODE);
+});
+
+test("UTF-8 output caps count bytes instead of JavaScript characters", () => {
+  const stdout = JSON.stringify({ text: "界".repeat(30) });
+  assert.ok(stdout.length < 64 && Buffer.byteLength(stdout) > 64);
+  const result = buildReaCliCapabilityResult({ ...baseObs, exit_code: 0, stdout, stderr: "", max_output_bytes: 64 });
+  assert.equal(result.stdout_truncated, true);
+  assert.equal(result.inconclusive, true);
+  const stderr = buildReaCliCapabilityResult({ ...baseObs, exit_code: 0, stdout: "{}", stderr: "界".repeat(30), max_output_bytes: 64 });
+  assert.equal(stderr.stderr_truncated, true);
+  assert.equal(stderr.inconclusive, true);
+});

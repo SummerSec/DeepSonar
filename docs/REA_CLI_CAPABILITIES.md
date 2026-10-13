@@ -1,6 +1,6 @@
 # REA CLI 深度二进制解析能力（#718）
 
-> **状态：进行中（PR3 已完成项目目录种子与 Job 路径门禁；PR2 已完成 amd64 实跑与行为门禁）**。镜像矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)；通用 CLI 包见 [`CLI_CAPABILITIES.md`](CLI_CAPABILITIES.md)；工具手册契约见 [`RUNTIME_TOOL_MANUALS.md`](RUNTIME_TOOL_MANUALS.md)。
+> **状态：原生双架构 CI / 发布 / 真实 OpenSandbox Job 门禁已接线；首次成功运行、OCI 发布与平台准入仍须实际证据（2026-10-13）**。镜像矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)；通用 CLI 包见 [`CLI_CAPABILITIES.md`](CLI_CAPABILITIES.md)；工具手册契约见 [`RUNTIME_TOOL_MANUALS.md`](RUNTIME_TOOL_MANUALS.md)。
 
 ## 目标
 
@@ -19,7 +19,7 @@
 | rea-agents | `6.4.0`，gitHead `a56f7bb668ab23fec8d33f7af353ac7ed2fe1895`，npm integrity 构建期校验 |
 | Ghidra | `12.1.4` PUBLIC zip，SHA-256 `ddac49f9…d4db` |
 | JDK | 完整 64 位 Temurin 21（`JAVA_HOME=/opt/deepsonar/jdks/21`） |
-| Node | ≥ `22.19.0`（继承 base，构建期校验） |
+| Node | `^22.19.0 || ^24.11.0 || >=26.0.0`（继承 base，严格匹配发布包 engines） |
 
 ## 受治理能力
 
@@ -35,7 +35,7 @@ Hub 通过 Intent `cli_capability_ids` 提案；Scheduler `admitCliCapabilities`
 - 内容哈希：见 `agent-harness/reverse-runtime.json` → `skill.content_hash`（静态门禁校验）
 - 用途：指导 Agent 在 `deepsonar-reverse` 内按 CLI/证据边界调用 REA；**不是** MCP 注册说明书
 
-## amd64 实测（PR2）
+## 历史 amd64 主机实测（PR2）
 
 验证方式：validation host 无 docker，在 scratch 目录安装与镜像相同的钉死工具链（Node 22.20 / Temurin 21 / Ghidra 12.1.4 / rea-agents@6.4.0），对公开样本 `agent-harness/fixtures/reverse-sample/sample.c` 实跑。完整数字见 [`agent-harness/reverse-amd64-measurements.json`](../agent-harness/reverse-amd64-measurements.json)。
 
@@ -58,7 +58,7 @@ Hub 通过 Intent `cli_capability_ids` 提案；Scheduler `admitCliCapabilities`
 - `trace-native-values` / `inspect-analysis-view` 不接受 `--snapshot`。
 - `inspect-analysis-view` 输入必须是 `{source:{kind:"inline"|"retained-evidence"}, view:{...}}`。
 - 伪代码 / 静态值流 ≠ 原始源码 / 动态证明 / 已验证漏洞。
-- 完整镜像内冷启动与 OCI 压缩体积仍待首次 reverse 镜像构建。
+- 上表只记录历史主机实测；当前 OCI 的实测来自下述原生 CI artifact，不能把历史结果当作当前镜像通过。
 
 ## 项目启用（PR3）
 
@@ -90,9 +90,28 @@ node agent-harness/test-reverse-runtime.mjs
 pnpm ci:images
 ```
 
-## 仍待 follow-up
+## 运行期归档绑定
 
-- `.github/workflows/reverse-runtime.yml` 与 `release.yml` reverse 发布 job（需 GitHub `workflow` scope）
-- 首次发布 `deepsonar-reverse` digest 后回填 registry `versions` 并用 `docker save` 校准 `maxSizeMiB`
-- arm64 native decompiler 对等实测
-- 首个 digest 发布后在真实沙箱跑一次 Job（契约门禁已由 PR3 覆盖，真实镜像内实跑仍待 OCI 镜像）
+`deepsonar.rea-observation/v1` 将原始 stdout、脱敏 stderr、exit/截断/超时/取消状态、实际限制、样本摘要、工具版本、Job/Attempt 和冻结镜像写入普通工作区文件。Agent 经已有 `publish_shared_asset` 将其存为同项目不可变版本，再以 `artifact.extensions["binary.rea-cli"].evidence_key` 调用 `emit_fact`。Host 验证发布归属、活动 Attempt、CAS 摘要、冻结能力/镜像/预算后生成 unknown-only Fact/Artifact；完整可执行示例见受治理 Skill。
+
+这条链认证归档来源和完整性，不认证 Agent 所报告的 argv/工具输出为可信执行凭证；不得将其视为 runtime proof。缺失/跨 Job/旧 Attempt/内容损坏/不匹配快照/越权 verification 都拒绝。取消/超时前应主动归档前缀；token 撤销后不能补传，未完成前缀持续 inconclusive。
+
+## 原生 OCI 与真实 Job 门禁
+
+`.github/workflows/reverse-runtime.yml` 在 `ubuntu-24.04` / `ubuntu-24.04-arm` 分别从当前 checkout 构建 base 与 reverse，PR 不获取 registry 写凭据、不发布标签、不通过 QEMU 代替原生验证。release 的 `reverse-image-builds` 使用本次 `base-image` 输出的不可变 digest；缓存命中也必须执行相同真实门禁。
+
+- 官方 Ghidra 12.1.4 PUBLIC zip 没有 Linux arm64 decompiler。arm64 builder 从同一个 SHA-256 校验过的 zip 的 bundled C++ 源码运行 `ghidra_opt` 原生构建；不运行 Gradle 下载、不回退到其它版本。最终镜像不包含编译对象和构建工具；ELF64 machine header 与宿主架构都必须匹配。
+- REA 的下载 tarball 本身校验固定 SHA-512 integrity，安装后的 lock entry 再核对；仅比较 `npm view` 元数据不算完整性验证。Node engines 与完整 JDK 21 在构建和运行期校验。
+- `agent-harness/reverse-native-smoke.mjs` 在真实 OCI 内运行公开源代码编译的 ELF / `.so` / PE（PE 只静态解析、不执行），覆盖首期八种 CLI 命令、函数 dossier 与有界 view/trace，执行环境检查与离线手册校验。
+- 真实压缩体积来自 `docker save | gzip`，不是上游包大小。记录样本/编译器/工具/源码 revision/OCI 身份、冷启动、重复与不同查询、cgroup 峰值、SIGTERM 响应和残留进程。生产镜像默认 `GHIDRA_HEADLESS_MAXMEM=1536m`，与 4096 MiB、2 CPU 的测试口径一致；2800 MiB 是拒绝超限的预算，不是声称实测结果。
+- `pnpm ci:integration:rea-job` 使用独立测试数据库、仓库已钉死 OpenSandbox server/execd/egress、真实 Scheduler dispatcher / executor / Claude CLI；本地确定性模型只发出测试指令，REA/Ghidra 是真实执行。经 Skill 拉取、Evidence 归档、Control API `emit_fact` 与独立 Verify 校验实际闭环。测试环境不需要真实 Provider 密钥。
+- PR 本地镜像 ID 测试只证明该 rootfs 的行为；release Job 使用实际 `repository@sha256` 引用。隔离测试快照不代表生产 registry/admission 扫描批准，也不改变任何项目或全局默认。
+- 每架构保留 `reverse-native-evidence-<arch>` 和 `reverse-job-evidence-<arch>`，失败时也上传已取得的材料；未执行、非零、缺失或部分结果不能标为成功。具体通过结论须指向对应 commit 的成功 Actions run 与 artifact。
+
+## 发布与启用边界
+
+`reverse-images` 只有在双架构真实门禁成功后，才从这两个已测试 child manifest 组装 canonical index，写 `reverse.json` 并走既有 GHCR / 已配置 Docker Hub / 已配置 ACR 镜像发布和 inspect 证据链。已有版本标签只能复用相同的 index digest，不能因为子 payload 一致而移动到另一个 wrapper digest；无法 inspect、冲突或已配置通道失败一律阻止生成完整发布清单。
+
+最终 Release job 包含 reverse 依赖、离线手册和 catalog/platform payload 一致性检查（7 个专项产品、14 个原生 child），生成器继续强制要求 `reverse.json`。不得以空 descriptor、手写 digest、复制其它产品记录或删必需产品绕过首次发布。
+
+此提交建立可执行门禁，不等于这些外部运行已经完成。关闭 #718 前仍须核实：两架构真实镜像/Job evidence、最终 canonical OCI digest 和所有已配置通道 inspect、registry `versions` 回填，以及既有平台准入边界。没有这些证据时不得宣称 reverse 可在生产项目执行；不自动启用、部署或更改全局默认。

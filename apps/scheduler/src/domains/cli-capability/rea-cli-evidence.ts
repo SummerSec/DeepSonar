@@ -57,17 +57,17 @@ function tryParseJson(text: string): { ok: true; value: unknown } | { ok: false;
  * Never sets is_finding true. Partial / truncated / timed-out / cancelled → inconclusive.
  */
 export function buildReaCliCapabilityResult(input: ReaCliObservationInput): CliCapabilityResult {
-  const stdoutTruncated = Boolean(input.stdout_truncated) || input.stdout.length > input.max_output_bytes;
-  const stderrTruncated = Boolean(input.stderr_truncated) || input.stderr.length > input.max_output_bytes;
+  const stdoutTruncated = Boolean(input.stdout_truncated) || Buffer.byteLength(input.stdout, "utf8") > input.max_output_bytes;
+  const stderrTruncated = Boolean(input.stderr_truncated) || Buffer.byteLength(input.stderr, "utf8") > input.max_output_bytes;
   const truncated = stdoutTruncated || stderrTruncated;
   const truncationNotes: string[] = [];
   if (stdoutTruncated) truncationNotes.push("stdout exceeded max_output_bytes or collector truncation flag");
   if (stderrTruncated) truncationNotes.push("stderr exceeded max_output_bytes or collector truncation flag");
 
   const parsed = tryParseJson(
-    stdoutTruncated ? input.stdout.slice(0, input.max_output_bytes) : input.stdout,
+    stdoutTruncated ? Buffer.from(input.stdout, "utf8").subarray(0, input.max_output_bytes).toString("utf8") : input.stdout,
   );
-  const partialJson = !parsed.ok && input.stdout.trim().length > 0;
+  const partialJson = !parsed.ok;
   if (partialJson) truncationNotes.push(`stdout JSON incomplete or invalid: ${parsed.reason}`);
 
   const timedOut = Boolean(input.timed_out);
@@ -78,7 +78,7 @@ export function buildReaCliCapabilityResult(input: ReaCliObservationInput): CliC
   if (timedOut) unavailableReason = "timeout";
   else if (truncated || partialJson) unavailableReason = truncated ? "truncated" : "inconclusive";
   else if (cancelled) unavailableReason = "inconclusive";
-  else if (nonZero) unavailableReason = "inconclusive";
+  else if (nonZero || input.exit_code === null) unavailableReason = "inconclusive";
 
   const inconclusive =
     timedOut || cancelled || truncated || partialJson || nonZero || input.exit_code === null;

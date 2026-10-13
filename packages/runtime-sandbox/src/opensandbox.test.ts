@@ -17,7 +17,12 @@ import {
   mapOpenSandboxCreateInput,
   mapOpenSandboxNetworkPolicy,
   openSandboxDockerContainerName,
+  repairSharedAssetsParentViaDockerExec,
   requireOpenSandboxLimits,
+  SHARED_ASSETS_PARENT_PATH,
+  sharedAssetsParentDockerExecArgs,
+  sharedAssetsParentRepairCommand,
+  sharedAssetsParentWritableProbeCommand,
   type GatewayHostsInjectResult,
   type OpenSandboxClient,
   type OpenSandboxCreateInput,
@@ -798,6 +803,138 @@ test("OpenSandbox provision fail-closes when the shared assets volume is not mou
     limits,
     sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
   }), /shared assets volume was not mounted/);
+});
+
+function sharedAssetsSession(options: { writableAfterRepair: boolean; initiallyWritable?: boolean }) {
+  const session = fakeSession();
+  let writable = Boolean(options.initiallyWritable);
+  const base = session.run.bind(session);
+  session.run = async (command, runOptions) => {
+    if (command === sharedAssetsParentWritableProbeCommand()) {
+      session.commands.push(command);
+      session.runs.push({ command, options: runOptions });
+      return { exitCode: writable ? 0 : 1, stdout: "", stderr: "" };
+    }
+    if (command === "id -u && id -g") {
+      session.commands.push(command);
+      session.runs.push({ command, options: runOptions });
+      return { exitCode: 0, stdout: "1001\n1001\n", stderr: "" };
+    }
+    if (command.includes("chmod 1777")) {
+      session.commands.push(command);
+      session.runs.push({ command, options: runOptions });
+      if (isGatewayHostsRootRun(runOptions) && options.writableAfterRepair) writable = true;
+      return { exitCode: isGatewayHostsRootRun(runOptions) ? 0 : 1, stdout: "", stderr: "" };
+    }
+    if (command === "cat /proc/mounts") {
+      session.commands.push(command);
+      return { exitCode: 0, stdout: "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n", stderr: "" };
+    }
+    return base(command, runOptions);
+  };
+  return { session, markWritable: () => { writable = true; } };
+}
+
+const sharedProvisionInput = {
+  jobId: "11111111-1111-4111-8111-111111111111",
+  attemptId: "22222222-2222-4222-8222-222222222222",
+  image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  network: "none" as const,
+  limits,
+  sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+};
+
+test("shared assets parent repair targets only the mount parent and tolerates dropped CAP_CHOWN", () => {
+  assert.equal(SHARED_ASSETS_PARENT_PATH, "/workspace/.deepsonar");
+  const command = sharedAssetsParentRepairCommand({ uid: 1001, gid: 1001 });
+  assert.match(command, /test ! -L '\/workspace\/\.deepsonar'/);
+  assert.match(command, /chown 1001:1001 '\/workspace\/\.deepsonar' 2>\/dev\/null \|\| chmod 1777 '\/workspace\/\.deepsonar'/);
+  assert.doesNotMatch(command, /-R|\/workspace\/\.deepsonar\/shared/);
+  assert.throws(() => sharedAssetsParentRepairCommand({ uid: Number.NaN, gid: 0 }), RuntimeImageContractError);
+  assert.deepEqual(sharedAssetsParentDockerExecArgs("sandbox-sbx-1", "true"), ["exec", "-u", "0:0", "sandbox-sbx-1", "sh", "-c", "true"]);
+});
+
+test("Docker shared assets repair runs through Engine docker exec as root", async () => {
+  const calls: string[][] = [];
+  const ok = await repairSharedAssetsParentViaDockerExec({
+    sandboxId: "sbx-1",
+    command: "true",
+    exec: async (...args) => { calls.push(args); return ""; },
+  });
+  assert.equal(ok.exitCode, 0);
+  assert.deepEqual(calls[0], ["exec", "-u", "0:0", "sandbox-sbx-1", "sh", "-c", "true"]);
+  const failed = await repairSharedAssetsParentViaDockerExec({
+    sandboxId: "sbx-1",
+    command: "true",
+    exec: async () => { throw new Error("chmod: Operation not permitted"); },
+  });
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.stderr, /Operation not permitted/);
+});
+
+test("OpenSandbox Docker provision makes the root-created shared assets parent writable for a non-root guest", async () => {
+  const { session, markWritable } = sharedAssetsSession({ writableAfterRepair: false });
+  const repairs: Array<{ sandboxId: string; command: string }> = [];
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    inspectSharedAssetsVolume: async () => {},
+    repairSharedAssetsParent: async (input) => {
+      repairs.push(input);
+      markWritable();
+      return { method: "docker-exec", exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.deepEqual(await runner.provision(sharedProvisionInput), { sandboxId: "sbx-1" });
+  assert.equal(repairs.length, 1);
+  assert.equal(repairs[0]!.sandboxId, "sbx-1");
+  assert.match(repairs[0]!.command, /chown 1001:1001 .* \|\| chmod 1777/);
+  const probes = session.runs.filter((run) => run.command === sharedAssetsParentWritableProbeCommand());
+  assert.equal(probes.length, 2, "probe as guest before and after repair");
+  assert.ok(probes.every((run) => run.options?.uid === undefined), "writability is proven for the guest user");
+});
+
+test("OpenSandbox provision skips repair when the guest can already write the shared assets parent", async () => {
+  const { session } = sharedAssetsSession({ writableAfterRepair: false, initiallyWritable: true });
+  let repaired = 0;
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    inspectSharedAssetsVolume: async () => {},
+    repairSharedAssetsParent: async () => {
+      repaired += 1;
+      return { method: "docker-exec", exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+  await runner.provision(sharedProvisionInput);
+  assert.equal(repaired, 0);
+  assert.ok(!session.commands.includes("id -u && id -g"));
+});
+
+test("OpenSandbox provision fail-closes with a contract error when the shared assets parent stays unwritable", async () => {
+  const { session } = sharedAssetsSession({ writableAfterRepair: false });
+  const client = fakeClient(session);
+  let destroyed = 0;
+  client.destroy = async () => { destroyed += 1; };
+  const runner = new OpenSandboxRunner(client, undefined, {
+    inspectSharedAssetsVolume: async () => {},
+    repairSharedAssetsParent: async () => ({ method: "docker-exec", exitCode: 1, stdout: "", stderr: "chmod: Operation not permitted" }),
+  });
+  await assert.rejects(runner.provision(sharedProvisionInput), (error: unknown) => {
+    assert.ok(error instanceof RuntimeImageContractError);
+    assert.match(String((error as Error).message), /\/workspace\/\.deepsonar is not writable by the sandbox user .*uid=1001 gid=1001 .*Operation not permitted/);
+    return true;
+  });
+  assert.ok(destroyed >= 1, "failed provision must destroy the sandbox");
+});
+
+test("OpenSandbox Kubernetes provision repairs the shared assets parent through execd uid 0", async () => {
+  const { session } = sharedAssetsSession({ writableAfterRepair: true });
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    kubernetesResources: true,
+    repairSharedAssetsParent: async () => {
+      throw new Error("Docker repair must not run on Kubernetes");
+    },
+  });
+  await runner.provision(sharedProvisionInput);
+  const repair = session.runs.find((run) => run.command.includes("chmod 1777"));
+  assert.ok(repair && isGatewayHostsRootRun(repair.options));
 });
 
 test("OpenSandbox isAlive requires lifecycle Running and a healthy exec probe", async () => {

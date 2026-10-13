@@ -1,28 +1,66 @@
 # Official runtime-image registry contract (Issue #70, Slices A+B+C)
 
-> **Status: as-built.** Index: [`README.md`](README.md). Release procedure:
+> **Status: as-built (2026-10-13); v0.5.4 release preparation is pending.**
+> Index: [`README.md`](README.md). Release procedure:
 > [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md).
 
 Slices A+B define the catalog trust boundary and the release evidence that
 feeds it. Slice C adds a Scheduler-owned global channel selector and makes
-pull/resolution consume that channel exactly. A missing reference on the
-selected channel is a hard failure; the Scheduler never substitutes a Docker
-Hub, ACR, or GitHub reference from another channel.
+resolution and Job snapshots consume that channel's immutable reference. A
+missing reference on the selected channel is a hard failure. During real image
+preparation, a transient pull transport error (such as timeout/EOF/OSS) may
+retry another channel reference only when the catalog already carries inspect
+evidence for the same canonical digest; the resulting local image is checked
+against that frozen digest. This transport fallback does not change the global
+channel, selected version, or historical Job snapshot. A missing digest or
+unverified/different-digest reference cannot use this fallback and fails closed.
 
 ## v2 shape
 
 The payload uses `schema: "deepsonar.registry/v2"` (or
-`schema_version: 2`) and keeps one canonical version record. Top-level
+`schema_version: 2`) and keeps one canonical multi-platform record per product
+version; unselected historical versions may remain. Top-level
 `platform_version` is the GitHub Release / scheduler / web / admission tag
 and is independent of each product's `versions[].version`.
 `min_runtime_image` is the platform floor (`version` plus optional
 `by_image_key` overrides). Official selected versions below that floor fail
 closed with `RUNTIME_IMAGE_BELOW_PLATFORM_MIN` before a task or Job snapshot
-is frozen. Unchanged fingerprints reuse the previous version row and digest
-when that digest is already in the catalog; they do not invent a new
-catalog version equal to `platform_version`. A src-cache hit whose
-digest was never cataloged still inspects published channels and
-records a real row instead of failing closed.
+is frozen. Catalog reuse requires an exact canonical digest match, or proof
+that the immutable candidate index contains exactly the tested runnable
+platform manifest digests. A source-cache/fingerprint hit alone does not prove
+reuse and must never select the first catalog row without content comparison.
+For Chrome and ClickHouse Audit/Test/Fuzz with both architecture caches hit,
+the release resolves each tested wrapper/index to one runnable manifest for
+its platform, then compares the exact `linux/amd64` / `linux/arm64` manifest
+digest map against the immutable catalog candidate. Attestation descriptors
+are excluded from this payload comparison; missing, duplicate, ambiguous, or
+unexpected runnable platforms and inspect/parse errors fail closed. Equal
+payloads retain the candidate version and canonical digest, even when wrapper
+or attestation metadata differs. A payload mismatch or no catalog match uses
+the tested cached children to assemble a new index, publish all configured
+channels, and collect fresh inspect evidence. The final selected catalog
+digest must contain the tested child manifests. Other callers retain the
+exact-canonical-digest reuse path. Reuse does not invent a product version equal
+to `platform_version`.
+
+The independent final gate, `agent-harness/check-runtime-catalog-platforms.mjs`,
+requires all 12 native-smoke artifacts (these six products times both target
+platforms). It uses the Scheduler's exact latest-version ordering to resolve
+the selected row for each channel/platform; a matching historical row alone
+does not prove which payload the Scheduler will select. Within each available
+channel, amd64 and arm64 must select the same canonical two-platform row;
+split-platform selection explicitly fails closed. This gate validates catalog
+bulk/latest selection only and never overrides existing frozen/pinned Job
+digests. Unselected historical rows remain valid. The gate resolves the tested runnable manifests and
+re-inspects the generated catalog's selected immutable GHCR index and every
+available optional-channel index. Missing or ambiguous selections, a stale
+selected payload on any available channel, missing/duplicate artifacts, and
+inspect/parse failures fail the release before asset upload or bundled
+writeback.
+Cache-hit flags, version labels, and descriptor-provided digests are not proof.
+This catalog correction leaves runtime-image inputs and fingerprints unchanged.
+Other v0.5.4 changes, including #718 shared manual inputs, may still require
+rebuilds; cache reuse is determined by the actual fingerprint and smoke gates.
 
 ```json
 {
@@ -33,7 +71,7 @@ records a real row instead of failing closed.
 }
 ```
 
-Each product still keeps one canonical version record:
+Each product version uses one canonical multi-platform record:
 
 ```json
 {
@@ -99,13 +137,23 @@ For every available channel the recorder runs
 requires its human-readable `Digest:` to equal the build canonical digest.
 Only that inspected digest reference is emitted. The recorder also records
 the GHCR platform descriptor/size evidence used by the size gate. The release
-job merges six descriptors into one v2 version per image (all platforms in a
-single `versions[]` entry), validates the result, uploads
+job requires one descriptor for each of the 14 official products and emits
+one canonical v2 record per product version (all platforms in a single
+`versions[]` entry). It may preserve historical versions on a digest hit; it
+validates the result, uploads
 `runtime-image-registry-v2.json` as a release asset, and updates the bundled
 v2 fallback. The parser requires inspected GitHub evidence for a public v2
 catalog; the Scheduler's apply path also defensively demotes a stale legacy
 GitHub promotion if an internally supplied channel-only item has no
 `image_ref`, rather than selecting another channel.
+
+Current release blocker: `deepsonar-reverse` is already a required product,
+but `release.yml` has no reverse publisher and cannot supply `reverse.json`.
+Its empty bundled `versions` array and amd64 scratch/Job contract tests do not
+provide the missing multi-architecture OCI/registry evidence. v0.5.4 remains
+pending until that publisher and its real smoke, digest, and channel inspect
+evidence are complete; the catalog must not silently omit the product or use
+fabricated descriptors.
 
 The pure validator lives in
 `apps/scheduler/src/runtime-image-registry-contract.ts`. Its OCI parser rejects
@@ -137,8 +185,9 @@ platforms into one canonical version.
 
 ## Slice C channel selector
 
-The singleton `global_settings.runtime_registry_channel` defaults to `github`
-and is changed only through the authenticated Scheduler API:
+The singleton `global_settings.runtime_registry_channel` defaults to
+`aliyun-acr` in the current database baseline and is changed only through the
+authenticated Scheduler API:
 
 | Method | Path | Scope | Contract |
 | --- | --- | --- | --- |

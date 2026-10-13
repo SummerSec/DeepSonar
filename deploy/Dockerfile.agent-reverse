@@ -6,6 +6,26 @@ ARG BASE_IMAGE=deepsonar-base:local
 ARG JDK21_IMAGE=eclipse-temurin:21-jdk@sha256:3e3c176ffed168beb42c607be9bc1639b466cf00261a0fb04425562c9d0c5c2b
 
 FROM ${JDK21_IMAGE} AS jdk21
+# Native decompiler is built only on its matching runner, from checksum-pinned bundled source.
+# Build tools and objects stay in this stage; no Gradle/network source fallback.
+FROM ${BASE_IMAGE} AS ghidra-native
+USER root
+ARG TARGETARCH
+ARG GHIDRA_VERSION=12.1.4
+ARG GHIDRA_URL=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip
+ARG GHIDRA_SHA256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
+COPY agent-harness/reverse-ghidra-native.sh agent-harness/reverse-toolchain-check.mjs /tmp/reverse-build/
+RUN set -eux; \
+  apt-get -o Acquire::Retries=3 update; \
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates curl unzip g++ make; \
+  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 "$GHIDRA_URL" -o /tmp/ghidra.zip; \
+  echo "$GHIDRA_SHA256  /tmp/ghidra.zip" | sha256sum -c -; \
+  unzip -q /tmp/ghidra.zip -d /tmp; \
+  test -d "/tmp/ghidra_${GHIDRA_VERSION}_PUBLIC"; \
+  bash /tmp/reverse-build/reverse-ghidra-native.sh "/tmp/ghidra_${GHIDRA_VERSION}_PUBLIC" "$TARGETARCH"; \
+  install -d /opt/deepsonar/ghidra; \
+  cp -a "/tmp/ghidra_${GHIDRA_VERSION}_PUBLIC/." /opt/deepsonar/ghidra/
+
 FROM ${BASE_IMAGE} AS runtime-rootfs
 
 USER root
@@ -17,14 +37,18 @@ ARG GHIDRA_VERSION=12.1.4
 ARG GHIDRA_URL=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip
 ARG GHIDRA_SHA256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
 ARG NODE_MIN_VERSION=22.19.0
+ARG REA_NODE_ENGINES="^22.19.0 || ^24.11.0 || >=26.0.0"
 
 COPY --from=jdk21 /opt/java/openjdk /opt/deepsonar/jdks/21
 COPY deploy/reverse-env.sh /tmp/reverse-env.sh
+COPY agent-harness/reverse-toolchain-check.mjs /opt/deepsonar/bin/reverse-toolchain-check.mjs
+COPY --from=ghidra-native /opt/deepsonar/ghidra /opt/deepsonar/ghidra
+COPY agent-harness/rea-runtime/package.json agent-harness/rea-runtime/package-lock.json /opt/deepsonar/rea/
 
 RUN set -eux; \
   apt-get -o Acquire::Retries=3 update; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-    ca-certificates curl unzip xz-utils fontconfig libfreetype6; \
+    ca-certificates curl unzip xz-utils fontconfig libfreetype6 procps; \
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*; \
   install -d -m 0755 \
@@ -32,33 +56,28 @@ RUN set -eux; \
     /opt/deepsonar/ghidra \
     /opt/deepsonar/rea \
     /opt/deepsonar/jdks/21; \
-  node -e 'const min=process.argv[1].split(".").map(Number); const cur=process.versions.node.split(".").map(Number); for (let i=0;i<3;i++){ if((cur[i]||0)>(min[i]||0)) process.exit(0); if((cur[i]||0)<(min[i]||0)){ console.error("Node "+process.versions.node+" < "+process.argv[1]); process.exit(1);} }' \
-    "$NODE_MIN_VERSION"; \
+  node /opt/deepsonar/bin/reverse-toolchain-check.mjs --node-version "$(node -p 'process.versions.node')"; \
   test -x /opt/deepsonar/jdks/21/bin/java; \
   /opt/deepsonar/jdks/21/bin/java -version 2>&1 | head -n1 | grep -E 'version "21[\."]' >/dev/null; \
-  ghidra_zip="/tmp/ghidra_${GHIDRA_VERSION}.zip"; \
-  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 \
-    "$GHIDRA_URL" -o "$ghidra_zip"; \
-  echo "$GHIDRA_SHA256  $ghidra_zip" | sha256sum -c -; \
-  unzip -q "$ghidra_zip" -d /tmp; \
-  ghidra_dir="$(find /tmp -maxdepth 1 -type d -name 'ghidra_*PUBLIC*' | head -n1)"; \
-  test -n "$ghidra_dir"; \
-  test -x "$ghidra_dir/support/analyzeHeadless"; \
   case "$TARGETARCH" in \
     amd64) decomp_os=linux_x86_64 ;; \
     arm64) decomp_os=linux_arm_64 ;; \
     *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
   esac; \
-  decomp_bin="$(find "$ghidra_dir/Ghidra/Features/Decompiler" -type f -path "*/os/${decomp_os}/decompile" | head -n1)"; \
-  test -n "$decomp_bin" && test -x "$decomp_bin"; \
-  mv "$ghidra_dir"/* /opt/deepsonar/ghidra/; \
-  rmdir "$ghidra_dir" || true; \
-  rm -f "$ghidra_zip"; \
+  decomp_bin="/opt/deepsonar/ghidra/Ghidra/Features/Decompiler/os/${decomp_os}/decompile"; \
+  test -x "$decomp_bin"; \
+  node /opt/deepsonar/bin/reverse-toolchain-check.mjs --elf "$decomp_bin" "$TARGETARCH"; \
   ln -sf /opt/deepsonar/ghidra/support/analyzeHeadless /opt/deepsonar/bin/analyzeHeadless; \
   test "$(npm view rea-agents@${REA_AGENTS_VERSION} dist.integrity)" = "$REA_AGENTS_INTEGRITY"; \
   test "$(npm view rea-agents@${REA_AGENTS_VERSION} gitHead)" = "$REA_AGENTS_GIT_HEAD"; \
-  npm install --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/rea \
-    rea-agents@${REA_AGENTS_VERSION}; \
+  install -d /tmp/rea-download; \
+  npm pack "rea-agents@${REA_AGENTS_VERSION}" --ignore-scripts --pack-destination /tmp/rea-download --json > /tmp/rea-pack.json; \
+  rea_tarball="/tmp/rea-download/rea-agents-${REA_AGENTS_VERSION}.tgz"; \
+  node /opt/deepsonar/bin/reverse-toolchain-check.mjs --integrity "$rea_tarball" "$REA_AGENTS_INTEGRITY"; \
+  npm cache add "$rea_tarball"; \
+  npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix /opt/deepsonar/rea; \
+  node -e 'const fs=require("node:fs"); const p=require("/opt/deepsonar/rea/node_modules/rea-agents/package.json"); if(p.engines.node!==process.argv[1])throw Error("REA engine pin drift"); const lock=require("/opt/deepsonar/rea/package-lock.json"); if(lock.packages["node_modules/rea-agents"].integrity!==process.argv[2])throw Error("installed tarball integrity drift"); fs.writeFileSync("/opt/deepsonar/rea/download-integrity.json",JSON.stringify({version:p.version,integrity:process.argv[2],artifact_verified:true})+"\n")' "$REA_NODE_ENGINES" "$REA_AGENTS_INTEGRITY"; \
+  rm -rf /tmp/rea-download /tmp/rea-pack.json; \
   test "$(node -e 'process.stdout.write(require("/opt/deepsonar/rea/node_modules/rea-agents/package.json").version)')" = "$REA_AGENTS_VERSION"; \
   ln -sf /opt/deepsonar/rea/node_modules/rea-agents/scripts/rea.mjs /opt/deepsonar/bin/rea; \
   ln -sf /opt/deepsonar/rea/node_modules/rea-agents/scripts/rea.mjs /opt/deepsonar/bin/rea-agents; \
@@ -68,7 +87,7 @@ RUN set -eux; \
   npm cache clean --force; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"reverse",imageKey:"deepsonar-reverse",project_opt_in:true,tools:["java","javac","rea","rea-agents","analyzeHeadless","jq","node","claude"],ghidra:{version:"12.1.4",install_dir:"/opt/deepsonar/ghidra",analyze_headless:"/opt/deepsonar/ghidra/support/analyzeHeadless"},rea:{version:"6.4.0",gitHead:"a56f7bb668ab23fec8d33f7af353ac7ed2fe1895",integrity:"sha512-Vj1zWfSlna5bphGoaoI/TcVBuYvze9u+OyPC3Shz8YkBqaCTqB4COnnRoX7XDwMpwI24ZlFEel2yEj0k8LTWEQ==",cli_only:true,mcp:false},jdk:{major:"21",home:"/opt/deepsonar/jdks/21"},entrypoints:{check:"/opt/deepsonar/bin/reverse-env.sh"},not_included:["mcp","hopper","ida","resident-rea-service"]}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"reverse",imageKey:"deepsonar-reverse",project_opt_in:true,tools:["java","javac","rea","rea-agents","analyzeHeadless","jq","node","claude"],ghidra:{version:"12.1.4",native_decompiler_arch:process.argv[1],install_dir:"/opt/deepsonar/ghidra",analyze_headless:"/opt/deepsonar/ghidra/support/analyzeHeadless"},rea:{version:"6.4.0",gitHead:"a56f7bb668ab23fec8d33f7af353ac7ed2fe1895",integrity:"sha512-Vj1zWfSlna5bphGoaoI/TcVBuYvze9u+OyPC3Shz8YkBqaCTqB4COnnRoX7XDwMpwI24ZlFEel2yEj0k8LTWEQ==",cli_only:true,mcp:false},jdk:{major:"21",home:"/opt/deepsonar/jdks/21"},entrypoints:{check:"/opt/deepsonar/bin/reverse-env.sh"},not_included:["mcp","hopper","ida","resident-rea-service"]}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")' "$TARGETARCH"; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   JAVA_HOME=/opt/deepsonar/jdks/21 \
   GHIDRA_INSTALL_DIR=/opt/deepsonar/ghidra \
@@ -86,6 +105,7 @@ RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
   && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
 
 ENV IS_SANDBOX=1 \
+    GHIDRA_HEADLESS_MAXMEM=1536m \
     JAVA_HOME=/opt/deepsonar/jdks/21 \
     GHIDRA_INSTALL_DIR=/opt/deepsonar/ghidra \
     PATH=/opt/deepsonar/bin:/opt/deepsonar/jdks/21/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -105,6 +125,7 @@ LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
       org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
       org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
 ENV IS_SANDBOX=1 \
+    GHIDRA_HEADLESS_MAXMEM=1536m \
     JAVA_HOME=/opt/deepsonar/jdks/21 \
     GHIDRA_INSTALL_DIR=/opt/deepsonar/ghidra \
     PATH=/opt/deepsonar/bin:/opt/deepsonar/jdks/21/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

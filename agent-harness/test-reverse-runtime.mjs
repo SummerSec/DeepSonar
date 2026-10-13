@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Static gate for deepsonar-reverse definition (#718).
- * PR2: also checks amd64 measurement ledger + provisional maxSizeMiB.
- * PR3: also checks the schema.sql official catalog seed (project opt-in).
- * Does not build the OCI image (requires docker / workflow scope follow-up).
+ * Retains the historical amd64 host ledger and checks the project-scoped seed.
+ * Real native OCI and Job acceptance run separately in reverse-runtime/release.
+ * This static gate never claims those external checks have passed.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
@@ -89,7 +89,20 @@ const measurements = JSON.parse(readFileSync(measurementsPath, "utf8"));
 if (measurements.schema !== "deepsonar.reverse.amd64-measurements/v1") fail("measurements schema drift");
 if (!Array.isArray(measurements.queries) || measurements.queries.length < 8) fail("measurements must list amd64 query timings");
 if (measurements.image_size?.provisional_maxSizeMiB !== 2800) fail("measurements provisional_maxSizeMiB drift");
-if (measurements.arm64?.status !== "pending") fail("arm64 must remain pending until measured");
+// Historical host measurements are not rewritten to pretend they measured OCI/arm64.
+if (measurements.arm64?.status !== "pending") fail("historical amd64-only ledger must remain honest");
+for (const path of [config.validation?.workflow, config.validation?.image_smoke, config.validation?.job_e2e,
+  "agent-harness/reverse-ghidra-native.sh", "agent-harness/reverse-toolchain-check.mjs",
+  "agent-harness/rea-runtime/package.json", "agent-harness/rea-runtime/package-lock.json"]) {
+  if (!path || !existsSync(resolve(root, path))) fail(`missing native validation input: ${path}`);
+}
+if (config.managed.node.engines !== "^22.19.0 || ^24.11.0 || >=26.0.0") fail("Node engines drift");
+if (config.toolsets.reverse.job_resource_recommendation.ghidra_headless_maxmem !== "1536m") fail("production heap limit drift");
+const workflow = readFileSync(resolve(root, config.validation.workflow), "utf8");
+for (const required of ["ubuntu-24.04-arm", "reverse-native-smoke.mjs", "pnpm ci:integration:rea-job", "if: ${{ always() }}"]) {
+  if (!workflow.includes(required)) fail(`native workflow missing ${required}`);
+}
+if (workflow.includes("setup-qemu-action") || workflow.includes("packages: write")) fail("native PR gate must not use emulation or registry writes");
 const seedLine = schemaSql.split("\n").find((line) => line.trimStart().startsWith("('deepsonar-reverse',"));
 if (!seedLine) fail("schema.sql must seed deepsonar-reverse (PR3 project opt-in catalog)");
 if (!/'official',\s*true,\s*true,\s*true\),?$/.test(seedLine)) fail("deepsonar-reverse seed must be official + project_opt_in + enabled");
@@ -98,4 +111,4 @@ if (!existsSync(resolve(root, "agent-harness/fixtures/reverse-sample/sample.c"))
 }
 
 
-console.log("reverse-runtime static gate passed (measurements ledger + schema seed present; no OCI image build in this check)");
+console.log("reverse-runtime static gate passed (measurements ledger + schema seed present; native/Job CI wired; this check does not execute OCI)");

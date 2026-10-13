@@ -378,6 +378,92 @@ export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): Runti
   };
 }
 
+/**
+ * Docker/kubelet create the missing parents of the read-only shared-assets
+ * mount target as root:root 0755. Non-root runtime images (USER deepsonar)
+ * then cannot write `/workspace/.deepsonar/*` (runtime manifest, shared
+ * assets catalog), and execd reports the EACCES as `Upload failed (status=500)`.
+ * Only this parent is repaired; the mount itself stays read-only and root-owned.
+ */
+export const SHARED_ASSETS_PARENT_PATH = path.posix.dirname(SHARED_ASSETS_MOUNT_PATH);
+
+export function sharedAssetsParentWritableProbeCommand(): string {
+  const dir = shellQuote(SHARED_ASSETS_PARENT_PATH);
+  return `test -d ${dir} && test ! -L ${dir} && test -w ${dir} && test -x ${dir}`;
+}
+
+/**
+ * Run as uid 0 inside the sandbox. drop_capabilities=ALL removes CAP_CHOWN, so
+ * chown may fail; root still owns the Docker-created directory and can chmod
+ * it without capabilities. Sticky 1777 keeps it like /tmp for the single guest.
+ */
+export function sharedAssetsParentRepairCommand(owner: { uid: number; gid: number }): string {
+  if (!Number.isInteger(owner.uid) || owner.uid < 0 || !Number.isInteger(owner.gid) || owner.gid < 0) {
+    throw new RuntimeImageContractError("shared assets parent repair needs a numeric guest uid/gid");
+  }
+  const dir = shellQuote(SHARED_ASSETS_PARENT_PATH);
+  return `set -eu; test -d ${dir}; test ! -L ${dir}; chown ${owner.uid}:${owner.gid} ${dir} 2>/dev/null || chmod 1777 ${dir}`;
+}
+
+export function sharedAssetsParentDockerExecArgs(container: string, command: string): string[] {
+  return ["exec", "-u", `${GATEWAY_HOSTS_ROOT_UID}:${GATEWAY_HOSTS_ROOT_GID}`, container, "sh", "-c", command];
+}
+
+export type SharedAssetsParentRepairResult = { method: string; exitCode: number; stdout: string; stderr: string };
+
+export type SharedAssetsParentRepairer = (input: {
+  sandboxId: string;
+  command: string;
+}) => Promise<SharedAssetsParentRepairResult>;
+
+export async function repairSharedAssetsParentViaDockerExec(input: {
+  sandboxId: string;
+  command: string;
+  exec?: (...args: string[]) => Promise<string>;
+}): Promise<SharedAssetsParentRepairResult> {
+  const run = input.exec ?? docker;
+  try {
+    const stdout = await run(...sharedAssetsParentDockerExecArgs(openSandboxDockerContainerName(input.sandboxId), input.command));
+    return { method: "docker-exec", exitCode: 0, stdout, stderr: "" };
+  } catch (error) {
+    return { method: "docker-exec", exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Make the shared-assets mount parent writable for the guest user before the
+ * executor uploads workspace files into it. Root images and images that ship
+ * a guest-owned `/workspace/.deepsonar` pass the first probe untouched.
+ */
+export async function ensureSharedAssetsParentWritable(
+  session: OpenSandboxSession,
+  host: RuntimeHost,
+  input: { repair: SharedAssetsParentRepairer | "execd" },
+): Promise<void> {
+  const probe = sharedAssetsParentWritableProbeCommand();
+  if ((await host.run(probe, { timeoutMs: 5_000 })).exitCode === 0) return;
+  const ids = await host.run("id -u && id -g", { timeoutMs: 5_000 });
+  const [uidText, gidText] = ids.stdout.trim().split(/\s+/);
+  const uid = Number(uidText);
+  const gid = Number(gidText);
+  if (ids.exitCode !== 0 || !/^\d+$/.test(uidText ?? "") || !/^\d+$/.test(gidText ?? "")) {
+    throw new RuntimeImageContractError("shared assets parent probe could not read the guest uid/gid");
+  }
+  const command = sharedAssetsParentRepairCommand({ uid, gid });
+  const repaired = input.repair === "execd"
+    ? {
+        method: "execd",
+        ...(await session.run(command, { timeoutMs: 5_000, uid: GATEWAY_HOSTS_ROOT_UID, gid: GATEWAY_HOSTS_ROOT_GID })),
+      }
+    : await input.repair({ sandboxId: session.id, command });
+  if (repaired.exitCode !== 0 || (await host.run(probe, { timeoutMs: 5_000 })).exitCode !== 0) {
+    const detail = [repaired.stderr, repaired.stdout].map((part) => part?.trim()).filter(Boolean).join(" ");
+    throw new RuntimeImageContractError(
+      `shared assets parent ${SHARED_ASSETS_PARENT_PATH} is not writable by the sandbox user (method=${repaired.method} exit=${repaired.exitCode} uid=${uid} gid=${gid}${detail ? ` ${detail}` : ""})`,
+    );
+  }
+}
+
 export type OpenSandboxGatewayBinder = (input: {
   sandboxId: string;
   upstreamUrl: string;
@@ -524,6 +610,11 @@ export interface OpenSandboxRunnerOptions {
   /** Docker 路径：create 前校验 Scheduler 已准备的 labeled volume，避免引擎自动建空卷。 */
   inspectSharedAssetsVolume?: (volumeName: string, jobId: string) => Promise<void>;
   /**
+   * Docker 路径默认走 Engine `docker exec -u 0` 修复 shared-assets 挂载父目录
+   * （/workspace/.deepsonar）对 guest 的写权限；单测可替换。Kubernetes 用 execd uid=0。
+   */
+  repairSharedAssetsParent?: SharedAssetsParentRepairer;
+  /**
    * Docker 路径默认走 Engine `docker exec -u 0` 写 /etc/hosts。
    * 单测可替换；Kubernetes 忽略此项，仍用 execd uid=0。
    */
@@ -589,6 +680,11 @@ export class OpenSandboxRunner implements SandboxRunner {
         const mounts = await host.run("cat /proc/mounts", { timeoutMs: 5_000 });
         if (mounts.exitCode !== 0) throw new RuntimeImageContractError("shared assets mount probe failed");
         assertSharedAssetsGuestMount(mounts.stdout);
+        await ensureSharedAssetsParentWritable(live, host, {
+          repair: kubernetes
+            ? "execd"
+            : (this.options.repairSharedAssetsParent ?? ((repair) => repairSharedAssetsParentViaDockerExec(repair))),
+        });
       }
       const manifest = parseToolManifest(contractResult.stdout);
       if (input.expectedContract && manifest.contract !== input.expectedContract) {

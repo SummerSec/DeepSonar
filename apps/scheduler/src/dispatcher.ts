@@ -1,3 +1,4 @@
+import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { config, managesHostDockerRuntime } from "./config.js";
@@ -37,6 +38,7 @@ import {
   type DeviceLeaseHandle,
 } from "./domains/device/index.js";
 import { activateProvisionedJobCapabilityTokens, revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
+import { revokeJobTokens } from "./gateway.js";
 import {
   beginEffect,
   createOrGetActiveAttempt,
@@ -963,6 +965,7 @@ async function runJob(jobId: string) {
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    assertFrozenCliCapabilities(snapshot);
     // Fail closed before sandbox provision when a Pi catalog id cannot be
     // mapped to one authenticated models.json route.
     assertPiSnapshotLaunchSelection(snapshot);
@@ -1389,6 +1392,10 @@ async function runJob(jobId: string) {
       await releaseDeviceLeasesForJobQuietly(jobId, "attempt_terminal").catch(() => {});
       void lease;
     }
+    // Pair model-gateway tokens with platform capability tokens. finalizeJob
+    // already revokes both on mark_job_done; executor failures go through
+    // failExecution without that path, so finally must revoke model tokens too.
+    await revokeJobTokens(jobId, "dispatcher_cleanup").catch(() => {});
     if (platformCapability) {
       await revokeJobCapabilityTokens(jobId).catch(() => {});
       platformCapability = null;

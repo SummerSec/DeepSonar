@@ -317,6 +317,7 @@ test("real executor passes the reserved Skill to the sandbox without putting the
   assert.match(dispatcher, /platformCapability = await preparePlatformCapability\(jobId, snapshot\)/);
   assert.match(dispatcher, /DEEPSONAR_ALLOW_EGRESS:[\s\S]*\.\.\.platformCapability!\.env/);
   assert.match(dispatcher, /transitionJob\(jobId, "running"[\s\S]*activateProvisionedJobCapabilityTokens\(jobId\)/);
+  assert.match(dispatcher, /finally \{[\s\S]*revokeJobTokens\(jobId, "dispatcher_cleanup"\)/);
   assert.match(dispatcher, /finally \{[\s\S]*revokeJobCapabilityTokens\(jobId\)/);
   assert.doesNotMatch(source, /env\.DEEPSONAR_API_TOKEN\s*=\s*platformToken/);
   assert.match(source, /from "\.\/platform-control\.js"/);

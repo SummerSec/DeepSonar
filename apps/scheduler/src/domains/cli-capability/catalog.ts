@@ -388,7 +388,11 @@ export function cliConfigFingerprint(input: {
     tool_version: input.tool_version,
     image_key: input.image_key,
     binaries: [...input.binaries].sort(),
-    limits: input.limits ?? null,
+    limits: input.limits && typeof input.limits === "object" ? {
+      max_calls_per_job: (input.limits as Record<string, unknown>).max_calls_per_job,
+      timeout_ms: (input.limits as Record<string, unknown>).timeout_ms,
+      max_output_bytes: (input.limits as Record<string, unknown>).max_output_bytes,
+    } : null,
     network: input.network,
     permissions: [...input.permissions].sort(),
   };

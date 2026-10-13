@@ -43,6 +43,11 @@ test("terminal paths revoke gateway and platform capability tokens together", as
       gateway: 'revokeJobTokens(job.id as string, "runtime_image_revoked")',
       capability: 'revokeJobCapabilityTokens(job.id as string, "runtime_image_revoked")',
     },
+    {
+      file: "./dispatcher.ts",
+      gateway: 'revokeJobTokens(jobId, "dispatcher_cleanup")',
+      capability: "revokeJobCapabilityTokens(jobId)",
+    },
   ];
 
   for (const item of cases) {
@@ -56,4 +61,18 @@ test("priority-drain cancellation revokes platform capability tokens", async () 
   const body = await source("./core.ts");
   assert.ok(body.includes("UPDATE jobs j SET status = 'cancelled'"));
   assert.ok(body.includes('revokeJobCapabilityTokens(row.id as string, "drain-priority")'));
+});
+
+test("dispatcher finally revokes gateway and platform capability tokens together", async () => {
+  const body = await source("./dispatcher.ts");
+  const finallyBlock = body.match(/\} finally \{[\s\S]*?\n  \}\n\}/);
+  assert.ok(finallyBlock, "dispatcher attempt finally block must exist");
+  assert.ok(
+    finallyBlock[0].includes('revokeJobTokens(jobId, "dispatcher_cleanup")'),
+    "dispatcher finally must revoke model gateway tokens after executor failures",
+  );
+  assert.ok(
+    finallyBlock[0].includes("revokeJobCapabilityTokens(jobId)"),
+    "dispatcher finally must keep platform capability token revocation",
+  );
 });

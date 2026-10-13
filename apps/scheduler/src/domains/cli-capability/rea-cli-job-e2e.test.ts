@@ -1,3 +1,5 @@
+import { normalizeArchivedReaFact } from "./rea-cli-fact.js";
+import { assertFrozenCliCapabilities } from "./frozen.js";
 /**
  * #718 PR3: governed Job path for deepsonar-reverse without docker.
  * Skill discovery/pull (selector + content hash) → admit binary.rea.cli → Evidence
@@ -13,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import {
   CLI_UNAVAILABLE_CODE,
   CliCapabilityResult,
+  ControlEventEnvelope,
   EmitFactDirectPayload,
   EmitFactPayload,
   EmitFindingPayload,
@@ -225,4 +228,86 @@ test("Verify independence: an REA observation Fact is neither structured verific
   assert.deepEqual(gate.missing, ["structured_supporting_fact"]);
   // exit_code 0 + argv alone is not runtime proof (needs revision + steps + env/digest).
   assert.equal(isRuntimeProof({ exit_code: result.exit_code, artifact_refs: [{ uri: result.evidence_ref }] }), false);
+});
+
+
+test("frozen CLI admission rejects tampering, stale catalog, image mismatch and malformed packs", () => {
+  const admitted = admitCliCapabilities({ ids: [REA_CLI_CAPABILITY_ID], imageKey: "deepsonar-reverse" });
+  assert.ok(admitted.ok);
+  const snapshot = { runtime_image: { image_key: "deepsonar-reverse" }, cli_capabilities: admitted.frozen, cli_capability_pack: admitted.pack };
+  assert.doesNotThrow(() => assertFrozenCliCapabilities(snapshot));
+  // PostgreSQL JSONB changes key order; that must not change a fingerprint.
+  const reordered = JSON.parse(JSON.stringify(snapshot), (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).reverse()) : value);
+  assert.doesNotThrow(() => assertFrozenCliCapabilities(reordered));
+  assert.throws(() => assertFrozenCliCapabilities({ ...snapshot, cli_capability_pack: undefined }), /SNAPSHOT_INVALID/);
+  assert.throws(() => assertFrozenCliCapabilities({ ...snapshot, runtime_image: { image_key: "deepsonar-base" } }), /IMAGE/);
+  assert.throws(() => assertFrozenCliCapabilities({ ...snapshot, cli_capabilities: [{ ...admitted.frozen[0], tool_version: "0.0.0" }] }), /FINGERPRINT/);
+  assert.throws(() => assertFrozenCliCapabilities({ ...snapshot, cli_capability_pack: { ...admitted.pack, pack_fingerprint: `sha256:${"0".repeat(64)}` } }), /PACK_FINGERPRINT/);
+  assert.throws(() => assertFrozenCliCapabilities({ ...snapshot, cli_capabilities: "binary.rea.cli" }), /SNAPSHOT_INVALID/);
+});
+
+
+test("archive-backed REA Fact guard binds provenance, hashes and unknown-only claims", async () => {
+  const jobId = "11111111-1111-4111-8111-111111111111";
+  const attemptId = "22222222-2222-4222-8222-222222222222";
+  const admitted = admitCliCapabilities({ ids: [REA_CLI_CAPABILITY_ID], imageKey: "deepsonar-reverse" });
+  assert.ok(admitted.ok);
+  const snapshot = { runtime_image: { image_key: "deepsonar-reverse", image_digest: imageDigest }, cli_capabilities: admitted.frozen, cli_capability_pack: admitted.pack };
+  const archive = {
+    schema: "deepsonar.rea-observation/v1", job_id: jobId, attempt_id: attemptId,
+    operation: "function", sample_path: "/workspace/sample", sample_sha256: sampleSha,
+    image_digest: imageDigest, tool_versions: { rea: "6.4.0", ghidra: "12.1.4", java: "openjdk 21" },
+    argv: ["rea", "function", "/workspace/sample", "main", "--json"], exit_code: 0,
+    stdout: "{}", stderr: "", stdout_truncated: false, stderr_truncated: false, timed_out: false, cancelled: false,
+    analysis_limits: { timeout_ms: 1000, max_output_bytes: 1024, note: "fixture observation, never tool attestation" },
+  };
+  const proposal = { title: "REA archive observation", description: "Normalize an immutable archive as an unknown observation.", artifact: { extensions: { "binary.rea-cli": { evidence_key: "rea/sample.json" } } } };
+  const invoke = async (body: unknown, payload: unknown = proposal, badAsset: Record<string, unknown> = {}, missing = false) => {
+    const bytes = Buffer.from(JSON.stringify(body));
+    const queries: string[] = [];
+    const db = (async (strings: TemplateStringsArray) => {
+      queries.push(strings.join("?"));
+      return queries.length === 1
+        ? [{ agent_snapshot_json: snapshot, attempt_id: attemptId, attempt_started_at: new Date() }]
+        : missing ? [] : [{ id: "33333333-3333-4333-8333-333333333333", blob_uri: "shared-assets/fixture", bytes: bytes.length, content_sha256: createHash("sha256").update(bytes).digest("hex"), ...badAsset }];
+    }) as unknown as NonNullable<Parameters<typeof normalizeArchivedReaFact>[2]>["db"];
+    const result = await normalizeArchivedReaFact(jobId, payload, { db, readBlob: async () => bytes });
+    if (queries.length > 1) {
+      assert.match(queries[1], /s\.scope_type='project'/);
+      assert.match(queries[1], /s\.project_id=j\.project_id/);
+      assert.match(queries[1], /v\.created_by_job_id=j\.id/);
+      assert.match(queries[1], /v\.created_at >=/);
+    }
+    return EmitFactDirectPayload.parse(result);
+  };
+  const normalized = await invoke(archive);
+  assert.equal(normalized.artifact!.claims![0]!.status, "unknown");
+  assert.equal(normalized.artifact!.evidence![0]!.polarity, "unknown");
+  assert.equal(normalized.artifact!.evidence![0]!.sha256, createHash("sha256").update(JSON.stringify(archive)).digest("hex"));
+  assert.equal(normalized.verification, undefined);
+  for (const patch of [
+    { job_id: attemptId }, { attempt_id: jobId }, { image_digest: `sha256:${"c".repeat(64)}` },
+    { sample_path: "/workspace/../etc/passwd" }, { tool_versions: { ...archive.tool_versions, rea: "0.0.0" } },
+    { analysis_limits: { ...archive.analysis_limits, timeout_ms: 600001 } },
+  ]) await assert.rejects(invoke({ ...archive, ...patch }));
+  await assert.rejects(invoke(archive, proposal, { content_sha256: "0".repeat(64) }), /digest mismatch/);
+  await assert.rejects(invoke(archive, proposal, { bytes: 10_000_001 }), /archive limit/);
+  await assert.rejects(invoke(archive, proposal, {}, true), /published by this Job/);
+  await assert.rejects(invoke(archive, { ...proposal, artifact: { extensions: { "binary.rea-cli": { evidence_key: "../x" } } } }), /canonical/);
+  for (const status of ["supported", "contradicted"]) {
+    const proposed = EmitFactDirectPayload.parse({ ...proposal, artifact: { ...proposal.artifact,
+      claims: [{ statement: "Not verified", status, evidence_refs: [] }] } });
+    await assert.rejects(invoke(archive, proposed), /REA claims and evidence must stay unknown/);
+  }
+  for (const polarity of ["supports", "contradicts"]) {
+    const proposed = EmitFactDirectPayload.parse({ ...proposal, artifact: { ...proposal.artifact,
+      evidence: [{ statement: "Cannot self-verify this observation", polarity }] } });
+    await assert.rejects(invoke(archive, proposed), /REA claims and evidence must stay unknown/);
+  }
+  const invalid = { ...proposal, artifact: { ...proposal.artifact,
+    evidence: [{ statement: "Invalid enum remains a Control schema error", polarity: "refutes" }] } };
+  const unnormalized = await normalizeArchivedReaFact(jobId, invalid);
+  assert.equal(unnormalized, invalid);
+  assert.throws(() => ControlEventEnvelope.parse({ v: 1, event_id: jobId, type: "fact", payload: unnormalized }));
 });

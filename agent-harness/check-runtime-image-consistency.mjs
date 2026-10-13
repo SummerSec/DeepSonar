@@ -974,9 +974,11 @@ const chromeReleaseBlock = releaseWorkflow.slice(
   releaseWorkflow.indexOf("  clickhouse-image-builds:"),
 );
 expect(
-  chromeReleaseBlock.includes('mapfile -t amd64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$amd64_source" "linux/amd64")') &&
-    chromeReleaseBlock.includes('mapfile -t arm64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$arm64_source" "linux/arm64")') &&
-    chromeReleaseBlock.includes('source_refs=("${amd64_sources[0]}" "${arm64_sources[0]}")') &&
+  chromeReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
+    chromeReleaseBlock.includes('--source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"') &&
+    chromeReleaseBlock.includes('--source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"') &&
+    chromeReleaseBlock.includes('mapfile -t source_refs <<< "$selected_sources_text"') &&
+    chromeReleaseBlock.includes('[[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"') &&
     chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"') &&
     chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"') &&
     !chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
@@ -987,9 +989,11 @@ const clickhouseReleaseBlock = releaseWorkflow.slice(
   releaseWorkflow.indexOf("  kali-minimal:"),
 );
 expect(
-  clickhouseReleaseBlock.includes('mapfile -t amd64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$amd64_source" "linux/amd64")') &&
-    clickhouseReleaseBlock.includes('mapfile -t arm64_sources < <(bash agent-harness/select-runtime-platform-sources.sh "$arm64_source" "linux/arm64")') &&
-    clickhouseReleaseBlock.includes('source_refs=("${amd64_sources[0]}" "${arm64_sources[0]}")') &&
+  clickhouseReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
+    clickhouseReleaseBlock.includes('--source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"') &&
+    clickhouseReleaseBlock.includes('--source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"') &&
+    clickhouseReleaseBlock.includes('mapfile -t source_refs <<< "$selected_sources_text"') &&
+    clickhouseReleaseBlock.includes('[[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"') &&
     clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"') &&
     clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"') &&
     !clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
@@ -1012,12 +1016,26 @@ expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || r
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
 expect(releaseWorkflow.includes("  mobile:") && releaseWorkflow.includes("Dockerfile.agent-mobile"), "release workflow 必须发布 Mobile 专项镜像");
-// #718 PR1: reverse-runtime.yml / release reverse job need `workflow` OAuth scope to land; follow-up before first v* that publishes reverse.
+// #718: Reverse must execute real native Ghidra and dispatched Job gates
+// before assembling an index; CI validation never replaces release evidence.
+const reverseWorkflow = readFileSync(new URL("../.github/workflows/reverse-runtime.yml", import.meta.url), "utf8");
+const reverseReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("  reverse-image-builds:"), releaseWorkflow.indexOf("\n  release:"));
+expect(reverseWorkflow.includes("ubuntu-24.04-arm") && reverseWorkflow.includes("ubuntu-24.04") &&
+  !reverseWorkflow.includes("setup-qemu-action") && !reverseWorkflow.includes("packages: write") &&
+  reverseWorkflow.includes("reverse-native-smoke.mjs") && reverseWorkflow.includes("pnpm ci:integration:rea-job"),
+  "Reverse PR CI must use both native runners, real REA and dispatched Job tests without publishing");
+expect(reverseReleaseBlock.includes("needs: [base-image, reverse-image-builds]") &&
+  reverseReleaseBlock.includes("BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}") &&
+  reverseReleaseBlock.includes("reverse-native-smoke.mjs") && reverseReleaseBlock.includes("pnpm ci:integration:rea-job") &&
+  reverseReleaseBlock.includes("test-runtime-manuals-runtime.mjs") &&
+  reverseReleaseBlock.indexOf("Smoke native Reverse child") < reverseReleaseBlock.indexOf("Pin verified native Reverse src cache") &&
+  !reverseReleaseBlock.includes("setup-qemu-action"),
+  "Reverse release must derive from this release base and pass native/manual/Job gates before cache/index publication");
 expect(
   /mobile:[\s\S]*setup-qemu-action@v3[\s\S]*Dockerfile\.agent-mobile/.test(releaseWorkflow),
   "release mobile job must set up QEMU before the multi-arch build",
 );
-expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
+expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile, reverse-images]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
 for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
   expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);
 }
@@ -1076,6 +1094,22 @@ expect(
     && reuseCatalogDescriptor.includes("CatalogReuseMiss")
     && reuseCatalogDescriptor.includes("process.exitCode = CATALOG_REUSE_MISS_EXIT"),
   "catalog reuse miss must be distinguishable from a broken catalog row",
+);
+expect(
+  !reuseCatalogDescriptor.includes("versions[0]") && reuseCatalogDescriptor.includes("samePlatformDigests(actual, expected)") &&
+    releaseWorkflow.includes("agent-harness/check-runtime-catalog-platforms.mjs") &&
+    releaseWorkflow.includes("--artifacts chrome-arch --artifacts clickhouse-arch --artifacts reverse-arch"),
+  "catalog reuse and final release must prove equality with native-smoke platform manifests",
+);
+const finalReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("\n  release:"));
+expect(
+  finalReleaseBlock.includes("Login GHCR for final payload verification") &&
+    finalReleaseBlock.includes("Login Docker Hub for final payload verification") &&
+    finalReleaseBlock.includes("Login Aliyun ACR for final payload verification") &&
+    finalReleaseBlock.includes("DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}") &&
+    finalReleaseBlock.indexOf("Login Aliyun ACR for final payload verification") <
+      finalReleaseBlock.indexOf("agent-harness/check-runtime-catalog-platforms.mjs"),
+  "final payload verification must authenticate configured registries in its own job",
 );
 expect(!releaseWorkflow.includes("release still republishes and inspects every configured channel"), "unchanged runtime products must not republish platform-version tags");
 expect(!releaseWorkflow.includes("Kali build unchanged; retag"), "unchanged Kali must keep its existing version instead of retagging");

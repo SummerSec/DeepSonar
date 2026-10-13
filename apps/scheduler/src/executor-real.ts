@@ -1,3 +1,5 @@
+import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
+import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   contextIdentity,
@@ -657,6 +659,7 @@ export async function executeReal(
 
   const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
   if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+  assertFrozenCliCapabilities(snapshot);
   const snapshotAllowEgress = requireFrozenSnapshotAllowEgress(snapshot, jobId);
   const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");
   assertChromeRuntimeEgressAllowed(runtimeImageKey, snapshotAllowEgress);
@@ -1095,6 +1098,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
     v: 1,
+    job_id: jobId,
+    cli_capabilities: snapshot.cli_capabilities ?? [],
+    cli_capability_pack: snapshot.cli_capability_pack ?? null,
     role: type,
     role_name: snapshot.name,
     role_kind: snapshot.role_kind,
@@ -1184,6 +1190,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
      LIMIT 1`;
   if (!activeAttempt?.id) throw new Error(`job ${jobId} 没有活动 Attempt，拒绝启动真实 Agent`);
   const attemptId = String(activeAttempt.id);
+  Object.assign(componentManifest, { attempt_id: attemptId });
+  workspaceFiles["/workspace/.deepsonar/runtime-manifest.json"] = JSON.stringify(componentManifest, null, 2);
   const snapshotDigest = activeAttempt?.snapshot_identity_json && typeof activeAttempt.snapshot_identity_json === "object"
     ? (activeAttempt.snapshot_identity_json as Record<string, unknown>).snapshot_sha256
     : null;
@@ -1309,6 +1317,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           runtimeControl,
         );
       }
+      if (raw.type === "fact") payload = await normalizeArchivedReaFact(jobId, payload);
       if (raw.type === "hub_decision") payload = parseHubDecisionPayload(payload, graph ? hubProjectedIds : undefined);
       event = ControlEventEnvelope.parse({ ...raw, payload });
       assertSemanticEventPayloadSize(event.type, event.payload);
