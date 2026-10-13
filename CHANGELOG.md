@@ -6,6 +6,10 @@
 - #718 PR2：amd64 实跑钉死 REA CLI + Ghidra（公开可复现 ELF/.so 样本），记录冷启动/重复查询/峰值 RSS/取消响应，并设定镜像压缩预算暂定 2800 MiB 与 Job 内存建议 ≥4 GiB（见 `agent-harness/reverse-amd64-measurements.json`）。新增 `binary.rea.cli` Evidence 归一化与行为单测（成功/非零/截断/部分 JSON/超时/取消/清理、缺失能力与未准入镜像拒绝），接入 `pnpm ci:unit:cli-capability`。同步 Skill/手册/矩阵/DESIGN/文档索引。arm64、OCI digest 实测、reverse-runtime workflow 与 Job 端到端闭环仍 follow-up；**不**默认启用任何项目镜像。
 - #718 PR3：在 `database/schema.sql` 官方目录种子中加入 `deepsonar-reverse`（official、project_opt_in、enabled；描述与 registry 一致），重建回填同步带上该行；Image Admission 一致性门禁与 `test-reverse-runtime.mjs` 校验种子。补齐受治理 Job 路径门禁（不依赖 docker）：Skill `deepsonar-rea-cli` 发现/拉取（selector + content hash，钉死 SKILL.md 字节）→ `binary.rea.cli` 仅在 `deepsonar-reverse` 准入冻结 → Evidence 归一化 → `emit_fact` 提案（新增 `buildReaCliFactProposal`，claim/evidence 一律 `unknown`、不带 `verification`）→ Verify 独立（REA 观察 Fact 不是结构化验证 Fact，也不是 runtime proof）。项目侧覆盖全局作用域 `RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED`、项目作用域默认可用与显式排除 `RUNTIME_IMAGE_PROJECT_NOT_ENABLED`、启动 warmup 跳过与 Hub 目录投影；全局默认镜像（base/audit/kali-minimal）不变。arm64 实测、reverse workflow/release job 与首个 OCI digest 仍 follow-up。
 
+### 修复
+
+- runtime image GC 把“目标镜像已不存在”归为幂等成功（#725）：Docker `No such image` / `reference does not exist` 与 Podman `image not known` 在每条错误行都能确认时计入 `alreadyAbsent`，不再计入 `failed`；检查后被并发删除、ancestor 过滤因镜像缺失报错、多引用中其余引用已随首个引用移除的场景同样幂等，重复执行 GC 不再累积失败。权限不足、运行时不可达、CLI 缺失/超时与多错误汇总中混入的未知错误仍 fail closed 计入 `failed` 并保留诊断（日志带分类）；Podman 的 `image is in use by a container` 与 Docker 占用冲突一样计入 `retainedInUse`。汇总改为 `deleted` / `alreadyAbsent` / `retainedInUse` / `failed` / `unsafeRef`，仅有 `alreadyAbsent` 时降为 debug 级别；新增计数器 `deepsonar_runtime_image_gc_already_absent_total`。引用保护、GC 选择规则与非 force 删除不变。
+
 ## [0.5.3] - 2026-10-12
 
 ### 修复

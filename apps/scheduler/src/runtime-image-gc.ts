@@ -97,25 +97,121 @@ async function docker(...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-function isNoSuchImage(error: unknown): boolean {
-  const value = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
-  const detail = [value?.stderr, value?.stdout, value?.message, error]
-    .map((part) => String(part ?? ""))
-    .join("\n");
-  return /no such image|image .* (?:not found|does not exist)/i.test(detail);
+/**
+ * #725: 删除错误分类。只有能够可靠确认“目标镜像已不存在”时才归为 `absent`（幂等成功）；
+ * 进程级错误（CLI 缺失、超时/被杀）、权限不足与运行时不可达优先判定为真实失败，
+ * 无法确认的输出一律 `unknown`（fail closed，仍计入 failed）。
+ */
+export type RuntimeImageGcErrorKind =
+  | "absent"
+  | "in_use"
+  | "permission"
+  | "unreachable"
+  | "timeout"
+  | "unknown";
+
+interface CommandErrorShape {
+  code?: unknown;
+  killed?: unknown;
+  signal?: unknown;
+  stderr?: unknown;
+  stdout?: unknown;
+  message?: unknown;
 }
 
-function isImageInUse(error: unknown): boolean {
-  const value = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
-  const detail = [value?.stderr, value?.stdout, value?.message, error]
+function commandErrorDetail(error: unknown): string {
+  const value = (error ?? {}) as CommandErrorShape;
+  return [value.stderr, value.stdout, value.message, typeof error === "string" ? error : ""]
     .map((part) => String(part ?? ""))
     .join("\n");
-  return /image is being used by|used by (?:running )?container|conflict: unable to delete/i.test(detail);
+}
+
+/** Docker：`No such image` / `reference does not exist`；Podman：`image not known`（旧版 `no such image`）。 */
+const ABSENT_LINE_PATTERN = /\bno such image\b|\bimage not known\b|\breference does not exist\b/i;
+/** Podman 多错误汇总头，例如 `Error: 2 errors occurred:`，本身不携带语义。 */
+const MULTI_ERROR_HEADER_PATTERN = /^(?:error:\s*)?\d+ errors? occurred:?$/i;
+const PERMISSION_PATTERN = /permission denied|operation not permitted|access denied|\beacces\b|\beperm\b/i;
+const UNREACHABLE_PATTERN = new RegExp(
+  [
+    "cannot connect to (?:the )?docker daemon",
+    "is the docker daemon running",
+    "error during connect",
+    "unable to connect to podman",
+    "cannot connect to podman",
+    "connection refused",
+    "dial unix",
+    "no such file or directory",
+    "context deadline exceeded",
+    "i/o timeout",
+  ].join("|"),
+  "i",
+);
+const IN_USE_PATTERN = new RegExp(
+  [
+    // Docker
+    "image is being used by",
+    "used by (?:running |stopped )?container",
+    "conflict: unable to delete",
+    // Podman
+    "image is in use by a container",
+    "image used by [0-9a-f]{12,}",
+  ].join("|"),
+  "i",
+);
+
+/**
+ * “不存在”必须由运行时的每一条错误行共同确认；混入任何其他错误（例如 Podman 多错误汇总里
+ * 夹带的权限或存储错误）都不算已不存在。
+ */
+function isConfirmedAbsent(error: unknown): boolean {
+  const value = (error ?? {}) as CommandErrorShape;
+  const stderr = String(value.stderr ?? "").trim();
+  const source = stderr || String(value.message ?? (typeof error === "string" ? error : "")).trim();
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[\s*•-]+/, "").trim())
+    .filter((line) => line.length > 0)
+    // Node execFile 的 message 首行是 `Command failed: <cmd>`，不是运行时输出。
+    .filter((line) => !/^command failed:/i.test(line))
+    .filter((line) => !MULTI_ERROR_HEADER_PATTERN.test(line));
+  return lines.length > 0 && lines.every((line) => ABSENT_LINE_PATTERN.test(line));
+}
+
+export function classifyRuntimeImageGcError(error: unknown): RuntimeImageGcErrorKind {
+  const value = (error ?? {}) as CommandErrorShape;
+  if (value.killed === true || (typeof value.signal === "string" && value.signal) || value.code === "ETIMEDOUT") {
+    return "timeout";
+  }
+  // 字符串 code 是 spawn/系统调用失败（ENOENT=CLI 不存在、EACCES 等），从来不是运行时“镜像不存在”。
+  if (typeof value.code === "string") {
+    if (value.code === "EACCES" || value.code === "EPERM") return "permission";
+    if (value.code === "ENOENT" || value.code === "ECONNREFUSED") return "unreachable";
+    return "unknown";
+  }
+  if (typeof value.code === "number" && value.code === 0) return "unknown";
+  const detail = commandErrorDetail(error);
+  if (PERMISSION_PATTERN.test(detail)) return "permission";
+  if (UNREACHABLE_PATTERN.test(detail)) return "unreachable";
+  if (IN_USE_PATTERN.test(detail)) return "in_use";
+  if (isConfirmedAbsent(error)) return "absent";
+  return "unknown";
+}
+
+class RuntimeImageGcCommandError extends Error {
+  constructor(
+    readonly kind: RuntimeImageGcErrorKind,
+    readonly original: unknown,
+  ) {
+    super(original instanceof Error ? original.message : String(original));
+  }
 }
 
 export interface RuntimeImageGcExecutionResult {
   candidates: number;
-  removed: number;
+  /** 本轮确实删除了至少一个 DB 已知不可变引用的版本数。 */
+  deleted: number;
+  /** 所有已知引用都被运行时明确确认为不存在的版本数（幂等成功，不计入 failed）。 */
+  alreadyAbsent: number;
   retainedInUse: number;
   failed: number;
   unsafeRef: number;
@@ -125,10 +221,18 @@ export async function executeRuntimeImageGcPlan(
   plan: RuntimeImageGcPlan,
   executeDocker: DockerCommand = docker,
 ): Promise<RuntimeImageGcExecutionResult> {
-  let removed = 0;
+  let deleted = 0;
+  let alreadyAbsent = 0;
   let retainedInUse = 0;
   let failed = 0;
   let unsafeRef = 0;
+  const run = async (...args: string[]): Promise<string> => {
+    try {
+      return await executeDocker(...args);
+    } catch (error) {
+      throw new RuntimeImageGcCommandError(classifyRuntimeImageGcError(error), error);
+    }
+  };
   for (const candidate of plan.candidates) {
     const refs = safeKnownRefs(candidate);
     if (refs.length === 0) {
@@ -139,7 +243,16 @@ export async function executeRuntimeImageGcPlan(
     try {
       let inUse = false;
       for (const ref of refs) {
-        if ((await executeDocker("ps", "-aq", "--filter", `ancestor=${ref}`)).trim()) {
+        let containers: string;
+        try {
+          containers = await run("ps", "-aq", "--filter", `ancestor=${ref}`);
+        } catch (error) {
+          // 镜像已不存在时部分运行时会让 ancestor 过滤报错；继续走非 force 删除，
+          // 真实占用仍由运行时拒绝删除来兜底。
+          if (error instanceof RuntimeImageGcCommandError && error.kind === "absent") continue;
+          throw error;
+        }
+        if (containers.trim()) {
           inUse = true;
           break;
         }
@@ -148,36 +261,72 @@ export async function executeRuntimeImageGcPlan(
         retainedInUse += 1;
         continue;
       }
-      let removedAny = false;
+      let removedRefs = 0;
       for (const ref of refs) {
         try {
-          await executeDocker("image", "rm", ref);
-          removedAny = true;
+          await run("image", "rm", ref);
+          removedRefs += 1;
         } catch (error) {
-          if (!isNoSuchImage(error)) throw error;
+          // 检查后被并发删除，或同一镜像的另一个引用已在前一步一并移除。
+          if (error instanceof RuntimeImageGcCommandError && error.kind === "absent") continue;
+          throw error;
         }
       }
-      if (removedAny) {
-        removed += 1;
+      if (removedRefs > 0) {
+        deleted += 1;
         inc("deepsonar_runtime_image_gc_removed_total");
+      } else {
+        alreadyAbsent += 1;
+        inc("deepsonar_runtime_image_gc_already_absent_total");
       }
     } catch (error) {
+      const kind = error instanceof RuntimeImageGcCommandError ? error.kind : "unknown";
+      const message = error instanceof Error ? error.message : String(error);
       // docker image rm is intentionally non-force; a container race therefore retains the image.
-      if (isImageInUse(error)) {
+      if (kind === "in_use") {
         retainedInUse += 1;
+        console.warn(`[runtime-image-gc] retained ${candidate.id} (in_use):`, message);
       } else {
         failed += 1;
         inc("deepsonar_runtime_image_gc_failures_total", { reason: "docker" });
+        console.error(`[runtime-image-gc] retained ${candidate.id} (${kind}):`, message);
       }
-      console.error(
-        `[runtime-image-gc] retained ${candidate.id}:`,
-        error instanceof Error ? error.message : error,
-      );
     }
   }
   setGauge("deepsonar_runtime_image_gc_candidates", plan.candidates.length);
   setGauge("deepsonar_runtime_image_gc_retained_in_use", retainedInUse);
-  return { candidates: plan.candidates.length, removed, retainedInUse, failed, unsafeRef };
+  return {
+    candidates: plan.candidates.length,
+    deleted,
+    alreadyAbsent,
+    retainedInUse,
+    failed,
+    unsafeRef,
+  };
+}
+
+/**
+ * 汇总日志级别：真实失败/不安全引用用 warn；有实际删除或占用保留用 info；
+ * 只有 alreadyAbsent（重复启动的常态）降为 debug，避免把已达成的清理目标报成故障。
+ */
+export function runtimeImageGcSummaryLevel(
+  result: RuntimeImageGcExecutionResult,
+): "warn" | "info" | "debug" | null {
+  if (result.failed + result.unsafeRef > 0) return "warn";
+  if (result.deleted + result.retainedInUse > 0) return "info";
+  if (result.alreadyAbsent > 0) return "debug";
+  return null;
+}
+
+export function formatRuntimeImageGcSummary(result: RuntimeImageGcExecutionResult): string {
+  return [
+    `candidates=${result.candidates}`,
+    `deleted=${result.deleted}`,
+    `alreadyAbsent=${result.alreadyAbsent}`,
+    `retainedInUse=${result.retainedInUse}`,
+    `failed=${result.failed}`,
+    `unsafeRef=${result.unsafeRef}`,
+  ].join(" ");
 }
 
 export async function runtimeImageGcOnce(
@@ -249,9 +398,12 @@ export function startRuntimeImageGc(): () => void {
     gcRunning = true;
     void runtimeImageGcOnce()
       .then((result) => {
-        if (result.candidates + result.failed + result.unsafeRef > 0) {
-          console.log("[runtime-image-gc]", result);
-        }
+        const level = runtimeImageGcSummaryLevel(result);
+        if (!level) return;
+        const line = `[runtime-image-gc] summary ${formatRuntimeImageGcSummary(result)}`;
+        if (level === "warn") console.warn(line);
+        else if (level === "info") console.log(line);
+        else console.debug(line);
       })
       .catch((error) => {
         inc("deepsonar_runtime_image_gc_failures_total", { reason: "reconcile" });

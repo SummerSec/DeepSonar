@@ -86,6 +86,7 @@ const HELP: Record<string, string> = {
   deepsonar_shared_assets_cleanup_failed_total: "共享资产卷清理失败次数",
   deepsonar_desired_state_cleanup_failures_total: "Desired-state cleanup failures by managed resource type",
   deepsonar_runtime_image_gc_removed_total: "Runtime image references removed by safe GC",
+  deepsonar_runtime_image_gc_already_absent_total: "Runtime image GC candidates whose known refs were already absent (idempotent success)",
   deepsonar_runtime_image_gc_failures_total: "Runtime image GC failures by reason",
   deepsonar_runtime_image_tools_manifest_overwrite_total: "Registry sync overwrote a non-empty tools_manifest_sha256 with a different catalog value",
   deepsonar_host_disk_check_failures_total: "Host filesystem statfs failures",
