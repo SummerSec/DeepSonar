@@ -15,6 +15,7 @@ import {
   splitPiModelRef,
   type InferenceWireProtocol,
 } from "./provider-settings.js";
+import { agentCliClientHeaders } from "./agent-cli-client-fingerprint.js";
 
 /** Provider response bytes accepted by model discovery (before JSON parsing). */
 export const CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES = 256 * 1024;
@@ -22,6 +23,8 @@ export const CREDENTIAL_PROVIDER_RESPONSE_MAX_BYTES = 256 * 1024;
 type CredentialProbe = {
   provider: string;
   kind?: string;
+  /** 凭据绑定的 Agent CLI；决定探测请求携带哪套客户端指纹（#736）。 */
+  agent_cli?: string | null;
   ciphertext: string;
   nonce: string;
   auth_tag: string;
@@ -34,7 +37,7 @@ type CredentialProbe = {
 
 type CredentialRequestInput = Pick<
   CredentialProbe,
-  "provider" | "kind" | "public_metadata_json" | "settings_config_json" | "model_catalog_json"
+  "provider" | "kind" | "agent_cli" | "public_metadata_json" | "settings_config_json" | "model_catalog_json"
 >;
 
 export type CredentialProbeResult = {
@@ -139,9 +142,22 @@ function resolveProbeBaseUrl(cred: CredentialRequestInput): string {
   return baseUrl;
 }
 
-function authHeadersForProtocol(protocol: InferenceWireProtocol, secret: string): Record<string, string> {
+/**
+ * 探测请求的鉴权头。anthropic-messages 除协议头外还要带 Agent CLI 客户端指纹：
+ * 上游中转可能按 UA 前缀判定客户端，缺指纹会被误报成凭据认证失败（#736）。
+ */
+function authHeadersForProtocol(
+  protocol: InferenceWireProtocol,
+  secret: string,
+  agentCli: string | null | undefined,
+): Record<string, string> {
   return protocol === "anthropic-messages"
-    ? { Authorization: `Bearer ${secret}`, "x-api-key": secret, "anthropic-version": "2023-06-01" }
+    ? {
+        Authorization: `Bearer ${secret}`,
+        "x-api-key": secret,
+        "anthropic-version": "2023-06-01",
+        ...agentCliClientHeaders(agentCli, protocol),
+      }
     : { Authorization: `Bearer ${secret}` };
 }
 
@@ -158,7 +174,7 @@ function resolveProbeProtocol(cred: CredentialRequestInput): InferenceWireProtoc
 function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
   return {
     urls: modelUrls(resolveProbeBaseUrl(cred)),
-    headers: authHeadersForProtocol(resolveProbeProtocol(cred), secret),
+    headers: authHeadersForProtocol(resolveProbeProtocol(cred), secret, cred.agent_cli),
   };
 }
 
@@ -222,7 +238,7 @@ function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): In
   const path = INFERENCE_PROBE_PATH[protocol];
   return {
     url: joinProbeUpstreamUrl(base, path),
-    headers: { "content-type": "application/json", ...authHeadersForProtocol(protocol, secret) },
+    headers: { "content-type": "application/json", ...authHeadersForProtocol(protocol, secret, cred.agent_cli) },
     body: inferenceProbeBody(protocol, model),
     protocol,
     timeoutMs: INFERENCE_PROBE_TIMEOUT_MS[protocol],

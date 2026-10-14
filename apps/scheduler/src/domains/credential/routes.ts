@@ -989,6 +989,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const result = await listCredentialModelsPreview({
         provider: body.provider,
         kind: "llm_provider",
+        agent_cli: body.agent_cli,
         public_metadata_json: normalizedMetadata,
         settings_config_json: body.settings_config ?? {},
       }, body.secret);

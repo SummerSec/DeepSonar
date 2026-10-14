@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CLAUDE_CODE_VERSION } from "./agent-cli-client-fingerprint.js";
 
 process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
 
@@ -510,6 +511,79 @@ test("#624 openai-completions and anthropic-messages still probe legacy paths", 
       },
     });
     assert.deepEqual(urls, ["https://api.anthropic.com/v1/messages"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#736 anthropic-messages probes carry the claude-cli client fingerprint", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers) });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    const credential = (agentCli?: string) => ({
+      provider: "anthropic",
+      kind: "llm_provider",
+      ...(agentCli === undefined ? {} : { agent_cli: agentCli }),
+      ...encrypted,
+      public_metadata_json: { base_url: "https://relay.example" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "anthropic-messages", models: { "claude-probe": {} } } },
+      },
+    });
+
+    // claude-code 绑定，以及未绑定 CLI 的存量凭据（按平台默认）都要带指纹。
+    for (const agentCli of ["claude-code", undefined]) {
+      calls.length = 0;
+      await testCredential(credential(agentCli));
+      assert.deepEqual(calls.map((call) => call.url), ["https://relay.example/v1/messages"]);
+      assert.equal(calls[0].headers.get("user-agent"), `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`);
+      assert.equal(calls[0].headers.get("x-app"), "cli");
+    }
+
+    // Pi 绑定走自己的客户端标识，不冒充 claude-cli；原有协议头不受影响。
+    calls.length = 0;
+    await testCredential(credential("pi"));
+    assert.equal(calls[0].headers.get("user-agent"), null);
+    assert.equal(calls[0].headers.get("x-app"), null);
+    assert.equal(calls[0].headers.get("x-api-key"), "super-secret");
+    assert.equal(calls[0].headers.get("anthropic-version"), "2023-06-01");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#736 openai protocol probes never carry the claude-cli fingerprint", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers) });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    await testCredential({
+      provider: "openai",
+      kind: "llm_provider",
+      agent_cli: "claude-code",
+      ...encrypted,
+      public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+      settings_config_json: {
+        providers: { deepsonar: { api: "openai-completions", models: { "gpt-probe": {} } } },
+      },
+    });
+    assert.deepEqual(calls.map((call) => call.url), ["http://127.0.0.1/v1/chat/completions"]);
+    assert.equal(calls[0].headers.get("user-agent"), null);
+    assert.equal(calls[0].headers.get("x-app"), null);
+    assert.equal(calls[0].headers.get("authorization"), "Bearer super-secret");
   } finally {
     globalThis.fetch = originalFetch;
   }

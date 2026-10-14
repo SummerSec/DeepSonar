@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CLAUDE_CODE_VERSION } from "./agent-cli-client-fingerprint.js";
 import {
   applyGatewayOutboundModelRewrite,
   createGatewayUsageScanner,
@@ -37,12 +38,23 @@ test("入站 Job token 同时认 Bearer 与 Anthropic x-api-key", () => {
   }), null);
 });
 
-test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {
-  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test"), {
+test("Anthropic 上游同时注入 Bearer 与 x-api-key，并按 Agent CLI 附带客户端指纹", () => {
+  const anthropicAuth = {
     authorization: "Bearer sk-test",
     "x-api-key": "sk-test",
     "anthropic-version": "2023-06-01",
-  });
+  };
+  const claudeFingerprint = {
+    "user-agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+    "x-app": "cli",
+  };
+  // #736：claude-code 绑定（含未绑定 CLI 的存量凭据，按平台默认处理）要带 claude-cli 指纹。
+  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test"), { ...anthropicAuth, ...claudeFingerprint });
+  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test", "claude-code"), { ...anthropicAuth, ...claudeFingerprint });
+  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test", null), { ...anthropicAuth, ...claudeFingerprint });
+  // Pi / DSH 有各自的客户端标识，不冒充 claude-cli。
+  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test", "pi"), anthropicAuth);
+  assert.deepEqual(upstreamAuthHeaders("anthropic", "sk-test", "dsh"), anthropicAuth);
   assert.deepEqual(upstreamAuthHeaders("openai", "sk-test"), {
     authorization: "Bearer sk-test",
   });

@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **凭据探测与模型目录发现补上 Claude CLI 客户端指纹（#736）**：部分第三方中转（new-api 架构）在 Anthropic Messages 路径上只按 `user-agent` 是否以 `claude-cli` 开头识别客户端，与凭据本身是否有效无关。Scheduler 自发的推理探测与目录发现此前只发鉴权头，被上游防滥用层判成 `401 unauthorized client detected`，于是账号管理页把一把**实际可用**的凭据落成 `health_error_category=authentication`、UI 显示「连接异常」；同一把凭据在真实沙箱 Job 里并不会因此 401 —— 差异来自 Claude Code CLI 自带 `user-agent: claude-cli/<semver> (external, cli)`，真实链路靠网关透传补齐，只有 Scheduler 自发的探测 / 目录请求会撞。现新增 `agent-cli-client-fingerprint.ts`，按凭据绑定的 `agent_cli` 决定指纹：claude-code（含未绑定 CLI 的存量凭据，按平台默认处理）在 anthropic-messages 路径上携带 `user-agent` + `x-app: cli`，Pi / DSH 保持各自客户端标识、不冒充 claude-cli（否则会制造假的通过）；`credential-test.ts` 的 `authHeadersForProtocol()` 与 `gateway.ts` 的 `upstreamAuthHeaders()` 两处口径一起改，`POST /credentials/models/preview` 也把 `agent_cli` 传给目录发现。指纹版本与 `deploy/Dockerfile.agent` 的 `CLAUDE_CODE_VERSION` 对齐（做法同 `packages/runtime-sandbox/src/dsh-profile.ts` 的 `DSH_VERSION`）。网关侧沙箱请求头仍按原透传优先级覆盖本默认值，真实链路行为不变。
+
 ### 文档
 
 - #718：确认 v0.5.5 已发布 `deepsonar-reverse`（canonical `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`，GHCR / Docker Hub / ACR 三通道 inspect + registry 回写；Release 附件含双架构 native 与 `published-manifest` Job evidence）。同步 REA / 发布 / 矩阵 / 架构文档状态；增加 hermetic 准入单测，绑定 bundled `0.5.5` digest → `selectRuntimeImageRef` 与 `static-registry` trusted 契约。关闭 #718。全局默认镜像不变，reverse 仍为 `project_opt_in`。

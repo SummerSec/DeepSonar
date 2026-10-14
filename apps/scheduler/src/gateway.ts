@@ -25,6 +25,7 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
+import { agentCliClientHeaders } from "./agent-cli-client-fingerprint.js";
 import {
   bareUpstreamModelId,
   modelCatalogMatchForRequest,
@@ -369,8 +370,17 @@ export async function revokeJobTokens(jobId: string, reason: string): Promise<vo
   }
 }
 
-/** 按 provider 注入真实认证头（与 credential-test.ts 行为一致） */
-export function upstreamAuthHeaders(provider: string, secret: string): Record<string, string> {
+/**
+ * 按 provider 注入真实认证头（与 credential-test.ts 行为一致）。
+ * `agentCli` 决定是否附带客户端指纹（#736）：部分中转在 Anthropic Messages 路径上
+ * 按 UA 前缀识别客户端，缺指纹会被判成 401。真实链路里沙箱请求头会覆盖这里的值
+ * （见下方透传逻辑），此处只保证 Scheduler 自发请求与探测口径一致。
+ */
+export function upstreamAuthHeaders(
+  provider: string,
+  secret: string,
+  agentCli?: string | null,
+): Record<string, string> {
   switch (provider) {
     case "anthropic":
       // 官方 Anthropic 认 x-api-key；第三方兼容代理（及本机 Claude Code）认 Bearer。
@@ -378,6 +388,7 @@ export function upstreamAuthHeaders(provider: string, secret: string): Record<st
         authorization: `Bearer ${secret}`,
         "x-api-key": secret,
         "anthropic-version": "2023-06-01",
+        ...agentCliClientHeaders(agentCli, "anthropic-messages"),
       };
     case "openai":
       return { authorization: `Bearer ${secret}` };
@@ -827,7 +838,7 @@ export function registerGateway(app: FastifyInstance): void {
       const headers: Record<string, string> = {
         "content-type": (req.headers["content-type"] as string) ?? "application/json",
         accept: (req.headers.accept as string) ?? "application/json",
-        ...upstreamAuthHeaders(safeProvider, secret),
+        ...upstreamAuthHeaders(safeProvider, secret, cred.agent_cli as string | null),
       };
       // 透传 anthropic-version 等协议头（过滤 hop-by-hop 与安全头）
       for (const [k, v] of Object.entries(req.headers)) {
