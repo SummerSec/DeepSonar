@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **Reverse 发布通道重试（#718）**：`v0.5.4` Release 中 `reverse-images` 已把 canonical index 推到 GHCR（`deepsonar-reverse:0.5.4` → `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`），但向 ACR / Docker Hub 跨 registry 复制多 GiB 层时 `docker buildx imagetools create` 失败且日志只有一句“registry index publication failed”。`agent-harness/publish-reverse-runtime.mjs` 现与其他发布 job 对齐：强制 `GODEBUG=http2client=0`、每次尝试 15 分钟上限、最多 3 次指数退避重试，并输出 registry 错误尾部便于诊断；重试同源同字节、幂等，写入后仍重新 inspect digest，失败依旧 fail closed，不产出 descriptor。
+
 ## [0.5.4] - 2026-10-14
 
 ### 发布状态
