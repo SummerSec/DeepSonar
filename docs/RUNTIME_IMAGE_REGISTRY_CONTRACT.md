@@ -1,6 +1,6 @@
 # Official runtime-image registry contract (Issue #70, Slices A+B+C)
 
-> **Status: as-built (2026-10-13); v0.5.4 release preparation is pending.**
+> **Status: as-built (2026-10-14); v0.5.4 is pending its first successful tag-triggered Release.**
 > Index: [`README.md`](README.md). Release procedure:
 > [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md).
 
@@ -147,13 +147,16 @@ catalog; the Scheduler's apply path also defensively demotes a stale legacy
 GitHub promotion if an internally supplied channel-only item has no
 `image_ref`, rather than selecting another channel.
 
-Current release blocker: `deepsonar-reverse` is already a required product,
-but `release.yml` has no reverse publisher and cannot supply `reverse.json`.
-Its empty bundled `versions` array and amd64 scratch/Job contract tests do not
-provide the missing multi-architecture OCI/registry evidence. v0.5.4 remains
-pending until that publisher and its real smoke, digest, and channel inspect
-evidence are complete; the catalog must not silently omit the product or use
-fabricated descriptors.
+Current release gate: `deepsonar-reverse` is a required product, and
+`release.yml` now wires its publisher (#723): `reverse-image-builds` builds and
+gates native amd64/arm64 children (REA/Ghidra smoke plus a real OpenSandbox
+Job), and `reverse-images` assembles the canonical index, publishes and
+inspects every configured channel, and writes `reverse.json`; the final
+Release job depends on it. Wiring is not evidence. The bundled entry keeps
+`versions: []` until a tag-triggered Release actually succeeds and the
+workflow writes the first real reverse version back; amd64 scratch/Job
+contract tests do not substitute for that OCI/registry evidence. The catalog
+must not silently omit the product or use fabricated descriptors.
 
 The pure validator lives in
 `apps/scheduler/src/runtime-image-registry-contract.ts`. Its OCI parser rejects

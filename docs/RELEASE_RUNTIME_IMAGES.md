@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> **状态：运维 as-built（2026-10-13）**。v0.5.4 为发布准备，`deepsonar-reverse` 原生双架构 / 真实 Job / 发布门禁已接线；成功实测与首次 OCI 证据仍是发布硬门，见下文。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
+> **状态：运维 as-built（2026-10-14）**。v0.5.4 待发布，`deepsonar-reverse` 原生双架构 / 真实 Job / 发布门禁已接线且 main 的 `reverse-runtime` 已通过；tag 触发 Release 的成功运行与首次 OCI / registry 证据仍是硬门，见下文。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
 >
 > Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
@@ -37,7 +37,7 @@ pnpm ci:images
 
 先按 `AGENTS.md` 的发版硬门完成人工 as-built 文档核对，再等待最终 `main` 提交的 CI 通过，才创建并推送新的不可变 `vX.Y.Z` tag。`ci:unit:changelog` 验证校验器本身的用例，上面的 `validate-changelog.mjs` 命令才验证真实待发布区段；每次发布需改为本次目标和实际前一 tag。`ci.yml` 的 `push@main` 会跳过纯文档提交，因此文档版 release-prep 合入后，应在 Actions 手动触发 `ci` 的 `workflow_dispatch` 并核对运行 SHA 为最终待打 tag 的提交。纯文档 PR 仍运行核心 CI；专项 workflow 是否触发由各自 paths 决定。运行镜像输入及 `BASE_IMAGE` digest 未变且 immutable `src-*` cache 可用时，核心 CI 可复用既有构建，仍执行规定的真实冒烟；不要为缩短发版时间改动 fingerprint 或跳过门禁。Release workflow 会在镜像构建前再次校验 tag、目标 changelog 区段和 compare link；校验失败时不会构建或发布镜像。工作流将经过校验的精确 changelog 区段写入 GitHub Release，同时保留许可证声明、runtime registry、Management Skill 附件和 GitHub 生成的 compare notes。
 
-**v0.5.4 当前发布阻塞**：main 的 `deepsonar-reverse` 已进入 `generate-runtime-image-registry.mjs` 的必需产品集合，生成器必须读取 `reverse.json`；`release.yml` 已有 `reverse-image-builds`（原生双架构+真实 Job）和 `reverse-images`（canonical index / 镜像通道 / `reverse.json`）。须实际通过双架构 CI / 发布前门禁，才可打 tag；tag 触发的 Release 还须完成真实不可变 digest、各配置通道发布和 inspect 证据，才可生成完整清单并宣称发布完成。`versions: []`、已有 amd64 scratch 实跑和 Job 契约测试都不是发布证据。不得用空 descriptor、手写 digest、复制其他产品证据或从必需产品集合静默删除 reverse 来绕过阻塞；当前 changelog 日期 / compare link 仅用于发布准备，不证明 tag 已存在。
+**v0.5.4 剩余发布硬门**：main 的 `deepsonar-reverse` 已进入 `generate-runtime-image-registry.mjs` 的必需产品集合，生成器必须读取 `reverse.json`；`release.yml` 已有 `reverse-image-builds`（原生双架构+真实 Job）和 `reverse-images`（canonical index / 镜像通道 / `reverse.json`），缺的不是 workflow 接线。打 tag 前须最终 main 提交的 CI（含 `reverse-runtime` 双架构）实际通过；tag 触发的 Release 还须完成真实不可变 digest、各配置通道发布和 inspect 证据，才可生成完整清单并宣称发布完成。`versions: []`、已有 amd64 scratch 实跑和 Job 契约测试都不是发布证据。不得用空 descriptor、手写 digest、复制其他产品证据或从必需产品集合静默删除 reverse 来绕过阻塞；当前 changelog 日期 / compare link 仅用于发布准备，不证明 tag 已存在。
 
 ## 可选发布凭据
 

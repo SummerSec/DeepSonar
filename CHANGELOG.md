@@ -1,20 +1,17 @@
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-14
+
+### 发布状态
+
+- **发布说明**：本节在打 `v0.5.4` tag 前写定，本身不证明 GitHub Release 或镜像已发布完成。`deepsonar-reverse` 的发布路径已在 main 接线（#723）：`release.yml` 含 `reverse-image-builds`（原生 amd64 / arm64 构建、REA/Ghidra 冒烟与真实 OpenSandbox Job）与 `reverse-images`（canonical index、各配置通道发布与 inspect、`reverse.json`），最终 Release job 依赖 reverse 并强制要求其 descriptor；打 tag 前 main（`ee5a9d38`）的 `ci` 与 `reverse-runtime` 双架构已通过。剩余硬门是本 tag 触发的 Release 实际成功：产出真实不可变 digest、`reverse.json`、各通道 inspect 证据，并由 workflow 把 `deepsonar-reverse` 版本回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。以上任一未完成即不得宣称发布完成，也不得伪造 digest / inspect 证据或静默排除 reverse；#718 在首个已发布并准入的 reverse digest 及其证据落地后关闭。
+
 ### 修复
 
 - REA Job 验收的 cancel 路径改为对齐生产 `POST /jobs/:id/cancel` 副作用（#718）：lifecycle `cancelJob` 只改库状态；验收在取消后立即 `runner.destroy` 并吊销模型/capability token，否则 OpenSandbox 仍被 300s sleep 的 REA actor 占用，`drainInFlight` 超时后被误判为 sandbox leaked。timeout 仍走 Reaper（本就会销毁沙箱）。
 - 修复 Dispatcher 在 executor 异常终态（例如 Agent 未调用 `mark_job_done` 走 `failExecution`）只吊销平台 capability token、不吊销模型网关短期 `job_tokens` 的问题（#718）：`finalizeJob` 成功路径本来会成对吊销两者，但失败路径此前仅在 `finally` 里吊销 capability。现于 attempt `finally` 中无条件调用 `revokeJobTokens(..., "dispatcher_cleanup")`，与 capability 吊销配对；重复吊销对已非 active 的 token 是幂等的。同步强化 `job-capability-revocation` / `executor-real` 源码契约测试，并将前者接入 `ci:unit:executor-real`。
 - 修复非 root 运行镜像（如 `deepsonar-reverse`，`USER deepsonar`）挂载共享资产后 Job 在写入 workspace 文件时报 `Upload failed (status=500)` 的问题（#718）：Docker / kubelet 为只读挂载点 `/workspace/.deepsonar/shared` 自动创建的父目录 `/workspace/.deepsonar` 属 root:root 0755，guest 无法写入 `runtime-manifest.json` 与 `shared-assets-catalog.json`。OpenSandbox provision 现以 guest 身份探测该父目录可写性，不可写时仅对该目录做 root 修复（Docker 走 Engine `docker exec -u 0`，Kubernetes 走 execd uid 0；先尝试 chown 到 guest uid/gid，`drop_capabilities=ALL` 下回退为属主可执行的 `chmod 1777`），修复后复测失败则以 `RuntimeImageContractError` fail closed，不再暴露为误导性的上传 5xx。共享资产挂载本身保持只读、root 所有，root 镜像与已自带可写父目录的镜像不触发修复。
 - REA Job 验收（`opensandbox-rea-job.e2e.ts`）的一次性画布通过生产收敛控制 `hub_paused` 暂停 Hub：Verify rework / 失败会强制唤醒 Hub，而隔离验收库不准入 Hub 运行镜像 `deepsonar-base`；不伪造镜像准入，并在 `does_not_prove` 中声明 `hub-wake-after-verify`，断言验收期间未派发 Hub。
-
-## [0.5.4] - 2026-10-13
-
-### 发布状态
-
-- **待发布**：本节是 v0.5.4 发布准备记录，不代表 tag、GitHub Release 或镜像已发布。当前 main 已纳入 `deepsonar-reverse`，清单生成器要求全部 14 个官方产品的 descriptor，但 `release.yml` 尚无 reverse 发布 job，缺少 `reverse.json` 与双架构发布证据；发布路径补齐并通过最终 CI / 发布前门禁前不得打 tag，完整发布证据通过前不得宣称 Release 完成，也不得伪造 digest / inspect 证据或静默排除 reverse。
-
-### 修复
-
 - 修复 Chrome / ClickHouse Audit、Test、Fuzz 两个架构同时命中 source-cache 时直接复用旧 catalog 首行、导致最终发布 digest 与本轮测试 payload 不一致的问题：先将本轮 amd64 / arm64 wrapper 解析为各平台唯一可运行 manifest，再按候选 catalog 的不可变 digest 比较精确平台 → manifest digest 映射，忽略 attestation descriptor；只有 payload 完全相同才复用旧 version + canonical digest。source-cache 命中本身不是复用证明。payload 不同或 catalog 无匹配行时，使用已测试缓存子镜像重新组装 index，并重新发布、inspect 各配置通道，收集真实 registry evidence；解析或 inspect 错误仍 fail closed。其他调用方按精确 canonical digest 复用的契约保持有效。
 - 新增最终清单 payload 门禁 `check-runtime-catalog-platforms.mjs`：要求六个产品 × 两个平台的全部 12 份 native-smoke artifact，重新 inspect 生成清单中的 GHCR 与每个 available 可选通道的不可变 index，逐个平台核对实际测试子 manifest；缺件、重复、解析失败或任意通道 mismatch 均阻断 Release asset 上传与 bundled 回写。运行镜像输入与 fingerprint 不变。
 - runtime image GC 把“目标镜像已不存在”归为幂等成功（#725）：Docker `No such image` / `reference does not exist` 与 Podman `image not known` 在每条错误行都能确认时计入 `alreadyAbsent`，不再计入 `failed`；检查后被并发删除、ancestor 过滤因镜像缺失报错、多引用中其余引用已随首个引用移除的场景同样幂等，重复执行 GC 不再累积失败。权限不足、运行时不可达、CLI 缺失/超时与多错误汇总中混入的未知错误仍 fail closed 计入 `failed` 并保留诊断（日志带分类）；Podman 的 `image is in use by a container` 与 Docker 占用冲突一样计入 `retainedInUse`。汇总改为 `deleted` / `alreadyAbsent` / `retainedInUse` / `failed` / `unsafeRef`，仅有 `alreadyAbsent` 时降为 debug 级别；新增计数器 `deepsonar_runtime_image_gc_already_absent_total`。引用保护、GC 选择规则与非 force 删除不变。
@@ -26,6 +23,7 @@
 - 接入 project opt-in 深度二进制解析镜像 `deepsonar-reverse`（#718 PR1）：从 `deepsonar-base` 派生，钉死 `rea-agents@6.4.0`（gitHead `a56f7bb…` + npm integrity）、Ghidra 12.1.4（checksum）与完整 JDK 21；构建期校验 Node ≥ 22.19 与 arch 匹配 native decompiler。CLI-only（无 MCP/Hopper/IDA/常驻服务），不改变全局默认，也不把 Ghidra 塞进 `deepsonar-mobile`。同步 runtime manifest、离线手册、fingerprint、registry（首发 `versions: []`）、Image Admission 一致性门禁、Hub 能力表、Scheduler 专项边界、受治理 CLI 能力 `binary.rea.cli` 与 Skill `deepsonar-rea-cli`（content hash）。
 - #718 PR2：amd64 实跑钉死 REA CLI + Ghidra（公开可复现 ELF/.so 样本），记录冷启动/重复查询/峰值 RSS/取消响应，并设定镜像压缩预算暂定 2800 MiB 与 Job 内存建议 ≥4 GiB（见 `agent-harness/reverse-amd64-measurements.json`）。新增 `binary.rea.cli` Evidence 归一化与行为单测（成功/非零/截断/部分 JSON/超时/取消/清理、缺失能力与未准入镜像拒绝），接入 `pnpm ci:unit:cli-capability`。同步 Skill/手册/矩阵/DESIGN/文档索引。arm64、OCI digest 实测、reverse-runtime workflow 与 Job 端到端闭环仍 follow-up；**不**默认启用任何项目镜像。
 - #718 PR3：在 `database/schema.sql` 官方目录种子中加入 `deepsonar-reverse`（official、project_opt_in、enabled；描述与 registry 一致），重建回填同步带上该行；Image Admission 一致性门禁与 `test-reverse-runtime.mjs` 校验种子。补齐受治理 Job 路径门禁（不依赖 docker）：Skill `deepsonar-rea-cli` 发现/拉取（selector + content hash，钉死 SKILL.md 字节）→ `binary.rea.cli` 仅在 `deepsonar-reverse` 准入冻结 → Evidence 归一化 → `emit_fact` 提案（新增 `buildReaCliFactProposal`，claim/evidence 一律 `unknown`、不带 `verification`）→ Verify 独立（REA 观察 Fact 不是结构化验证 Fact，也不是 runtime proof）。项目侧覆盖全局作用域 `RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED`、项目作用域默认可用与显式排除 `RUNTIME_IMAGE_PROJECT_NOT_ENABLED`、启动 warmup 跳过与 Hub 目录投影；全局默认镜像（base/audit/kali-minimal）不变。arm64 实测、reverse workflow/release job 与首个 OCI digest 仍 follow-up。
+- #718 PR4（#723）：为 `deepsonar-reverse` 补齐 REA 6.4.0 / Ghidra 12.1.4 原生 amd64 / arm64 运行时（arm64 从同一校验过的 Ghidra zip 原生构建 decompiler，不用 QEMU 代替），新增 `.github/workflows/reverse-runtime.yml`（ELF / `.so` / PE 冒烟、`docker save` 压缩体积、cgroup / 取消测量与 `pnpm ci:integration:rea-job` 真实 OpenSandbox Job 验收，含失败、取消、超时与出网隔离证明），`binary.rea-cli` Evidence 经 `publish_shared_asset` + `emit_fact` 接入；`release.yml` 新增 `reverse-image-builds` / `reverse-images` 与 `verify-reverse-release-evidence.mjs`，最终 catalog payload 门禁覆盖 reverse。同时并入 #722 的 catalog payload 一致性修复。PR2 / PR3 中“arm64 实测、reverse workflow / release job 仍 follow-up”的部分已由本项接线；首个实际发布的 OCI digest 以本版 Release 证据为准。
 
 ### 部署 / 升级说明
 

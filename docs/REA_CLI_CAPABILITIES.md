@@ -1,6 +1,6 @@
 # REA CLI 深度二进制解析能力（#718）
 
-> **状态：原生双架构 CI / 发布 / 真实 OpenSandbox Job 门禁已接线；首次成功运行、OCI 发布与平台准入仍须实际证据（2026-10-13）**。镜像矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)；通用 CLI 包见 [`CLI_CAPABILITIES.md`](CLI_CAPABILITIES.md)；工具手册契约见 [`RUNTIME_TOOL_MANUALS.md`](RUNTIME_TOOL_MANUALS.md)。
+> **状态：原生双架构 CI / 发布 / 真实 OpenSandbox Job 门禁已接线，main 的 `reverse-runtime` 双架构已通过；首次 tag 触发 Release 的 OCI 发布、registry 回写与平台准入仍须实际证据（2026-10-14）**。镜像矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)；通用 CLI 包见 [`CLI_CAPABILITIES.md`](CLI_CAPABILITIES.md)；工具手册契约见 [`RUNTIME_TOOL_MANUALS.md`](RUNTIME_TOOL_MANUALS.md)。
 
 ## 目标
 
