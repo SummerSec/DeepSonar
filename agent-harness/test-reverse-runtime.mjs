@@ -110,5 +110,22 @@ if (!existsSync(resolve(root, "agent-harness/fixtures/reverse-sample/sample.c"))
   fail("public reverse sample source missing");
 }
 
+const registry = JSON.parse(readFileSync(resolve(root, "deploy/runtime-image-registry.json"), "utf8"));
+const reverseImage = registry.images?.find((image) => image.image_key === "deepsonar-reverse");
+if (!reverseImage) fail("registry must include deepsonar-reverse");
+if (reverseImage.project_opt_in !== true) fail("registry reverse must stay project_opt_in");
+if (!Array.isArray(reverseImage.versions) || reverseImage.versions.length < 1) {
+  fail("registry reverse versions must be backfilled after v0.5.5 Release (was [])");
+}
+const reverseVersion = reverseImage.versions[0];
+const reverseDigest = "sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8";
+if (reverseVersion.version !== "0.5.5") fail(`expected reverse version 0.5.5, got ${reverseVersion.version}`);
+if (reverseVersion.digest !== reverseDigest) fail(`reverse digest drift: ${reverseVersion.digest}`);
+if ((reverseVersion.platforms || []).join(",") !== "linux/amd64,linux/arm64") fail("reverse platforms must be amd64+arm64");
+for (const channel of ["github", "dockerhub", "aliyun-acr"]) {
+  const evidence = reverseVersion.registry_evidence?.[channel];
+  if (!evidence?.available) fail(`${channel} evidence must be available`);
+  if (evidence.inspect_digest !== reverseDigest) fail(`${channel} inspect_digest must match canonical digest`);
+}
 
 console.log("reverse-runtime static gate passed (measurements ledger + schema seed present; native/Job CI wired; this check does not execute OCI)");

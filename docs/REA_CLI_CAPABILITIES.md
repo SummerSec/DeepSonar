@@ -1,6 +1,6 @@
 # REA CLI 深度二进制解析能力（#718）
 
-> **状态：原生双架构 CI / 发布 / 真实 OpenSandbox Job 门禁已接线，main 的 `reverse-runtime` 双架构已通过；首次 tag 触发 Release 的 OCI 发布、registry 回写与平台准入仍须实际证据（2026-10-14）**。镜像矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)；通用 CLI 包见 [`CLI_CAPABILITIES.md`](CLI_CAPABILITIES.md)；工具手册契约见 [`RUNTIME_TOOL_MANUALS.md`](RUNTIME_TOOL_MANUALS.md)。
+> **状态：v0.5.5 已发布 `deepsonar-reverse`（2026-10-14）**：canonical digest `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8` 已回写 bundled registry，GHCR / Docker Hub / ACR 三通道 inspect 通过；Release 附件含双架构 native + published-manifest Job evidence。官方目录同步将该 digest 记为 `static-registry` trusted 版本；**全局默认不变**，仍须项目 opt-in 启用。镜像矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)；通用 CLI 包见 [`CLI_CAPABILITIES.md`](CLI_CAPABILITIES.md)；工具手册契约见 [`RUNTIME_TOOL_MANUALS.md`](RUNTIME_TOOL_MANUALS.md)。
 
 ## 目标
 
@@ -65,7 +65,7 @@ Hub 通过 Intent `cli_capability_ids` 提案；Scheduler `admitCliCapabilities`
 - `database/schema.sql` 官方目录种子包含 `deepsonar-reverse`：`official=true`、`project_opt_in=true`、`enabled=true`，描述与 `deploy/runtime-image-registry.json` 一致；`db:rebuild` 回填同一条种子。`DEFAULT_RUNTIME_IMAGE_BY_ROLE` 不变（Test→kali-minimal、Audit→audit、其余→base），reverse 永不成为角色默认。
 - 按 #691 当前模型，`project_opt_in` 是元数据：启动 warmup 跳过（`isStartupRequiredRuntimeImage=false`），全局作用域 real 预检返回 `RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED`，必须在具体项目内评估。
 - 项目作用域内官方镜像缺行即默认可用；项目可经 `PUT /projects/:id/runtime-images/:imageId` 显式排除，排除后预检返回 `RUNTIME_IMAGE_PROJECT_NOT_ENABLED`，Job 创建 `resolveRuntimeImageForJob` 同样拒绝。
-- 真正可执行仍取决于平台目录中存在 trusted digest；首个 reverse digest 发布前 registry `versions: []`，预检会如实报告镜像不可用。
+- 真正可执行仍取决于平台目录中存在 trusted digest。v0.5.5 已把 `deepsonar-reverse@0.5.5`（canonical `sha256:45b53827…`）回写 bundled registry；`applyOfficialRuntimeCatalog` 同步后写入 `trust_status=trusted`、`scan_summary.source=static-registry`（官方信任根是 Release catalog digest，不是第三方 Trivy 门禁）。无 trusted 版本时预检仍会如实报告镜像不可用。
 
 ## 受治理 Job 路径（PR3）
 
@@ -114,4 +114,4 @@ pnpm ci:images
 
 最终 Release job 包含 reverse 依赖、离线手册和 catalog/platform payload 一致性检查（7 个专项产品、14 个原生 child），生成器继续强制要求 `reverse.json`。不得以空 descriptor、手写 digest、复制其它产品记录或删必需产品绕过首次发布。
 
-此提交建立可执行门禁，不等于这些外部运行已经完成。关闭 #718 前仍须核实：两架构真实镜像/Job evidence、最终 canonical OCI digest 和所有已配置通道 inspect、registry `versions` 回填，以及既有平台准入边界。没有这些证据时不得宣称 reverse 可在生产项目执行；不自动启用、部署或更改全局默认。
+v0.5.5 Release（run [38506851988](https://github.com/SummerSec/DeepSonar/actions/runs/38506851988)、附件 `deepsonar-reverse-evidence-0.5.5.tar.gz`）已满足关闭条件：双架构 native + `identity_kind=published-manifest` 真实 Job（success/verify/failure/cancel/timeout；独立 Verify `final_outcome=rework`）、canonical index digest 与三通道 inspect、registry `versions` 回写，以及官方 catalog → trusted 准入边界（见 `reverse-runtime-project-opt-in.test.ts`）。项目须显式启用；**不**自动改全局默认。

@@ -13,14 +13,19 @@ import {
   defaultRuntimeImageKey,
   isProjectRuntimeImageAvailable,
   isStartupRequiredRuntimeImage,
+  parseRuntimeImageRegistry,
+  selectRuntimeImageRef,
   toHubRuntimeImageCatalogEntry,
 } from "./runtime-images.js";
 import { officialCatalogBackfillSql } from "./schema-rebuild.js";
 
 const schema = readFileSync(new URL("../../../database/schema.sql", import.meta.url), "utf8");
-const registry = JSON.parse(readFileSync(new URL("../../../deploy/runtime-image-registry.json", import.meta.url), "utf8")) as {
-  images: Array<{ image_key: string; description: string; project_opt_in: boolean; versions: unknown[] }>;
-};
+const registryRaw = JSON.parse(readFileSync(new URL("../../../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
+const registry = parseRuntimeImageRegistry(registryRaw);
+
+/** v0.5.5 Release canonical multi-arch index for deepsonar-reverse (GHCR/Docker Hub/ACR). */
+const REVERSE_0_5_5_DIGEST = "sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8";
+const BUILTIN_ACR_NAMESPACE = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const hubRoleId = "22222222-2222-4222-8222-222222222222";
@@ -173,4 +178,56 @@ test("readiness: project scope resolves reverse unless the project excluded it",
   const check = excluded.result.checks.find((item) => item.code === "RUNTIME_IMAGE_PROJECT_NOT_ENABLED");
   assert.match(check?.message ?? "", /显式排除/);
   assert.equal(check?.fix?.action, "runtime_images");
+});
+
+test("bundled reverse 0.5.5 digest binds official catalog admission (static-registry trusted)", () => {
+  const reverse = registry.images.find((image) => image.image_key === "deepsonar-reverse");
+  assert.ok(reverse, "bundled registry must include deepsonar-reverse");
+  assert.equal(reverse.project_opt_in, true);
+  assert.equal(reverse.versions.length, 1, "v0.5.5 Release must have backfilled exactly one reverse version");
+  const version = reverse.versions[0]!;
+  assert.equal(version.version, "0.5.5");
+  assert.equal(version.digest, REVERSE_0_5_5_DIGEST);
+  assert.deepEqual(version.platforms, ["linux/amd64", "linux/arm64"]);
+  assert.equal(
+    version.image_ref,
+    `ghcr.io/summersec/deepsonar-reverse@${REVERSE_0_5_5_DIGEST}`,
+  );
+  assert.equal(
+    version.registry_refs?.github,
+    `ghcr.io/summersec/deepsonar-reverse@${REVERSE_0_5_5_DIGEST}`,
+  );
+  assert.equal(
+    version.registry_refs?.dockerhub,
+    `docker.io/sumsec/deepsonar@${REVERSE_0_5_5_DIGEST}`,
+  );
+  assert.equal(
+    version.registry_refs?.["aliyun-acr"],
+    `${BUILTIN_ACR_NAMESPACE}/deepsonar-reverse@${REVERSE_0_5_5_DIGEST}`,
+  );
+  for (const channel of ["github", "dockerhub", "aliyun-acr"] as const) {
+    const evidence = version.registry_evidence?.[channel];
+    assert.ok(evidence, `${channel} registry_evidence required`);
+    assert.equal(evidence.available, true, `${channel} must be available`);
+    assert.equal(evidence.inspect_digest, REVERSE_0_5_5_DIGEST, `${channel} inspect must match canonical digest`);
+  }
+  // applyOfficialRuntimeCatalog selects deployment ref then inserts trust_status=trusted
+  // with scan_summary.source=static-registry (Release catalog digest is the trust root).
+  assert.equal(selectRuntimeImageRef("deepsonar-reverse", version, ""), version.image_ref);
+  assert.equal(
+    selectRuntimeImageRef("deepsonar-reverse", version, BUILTIN_ACR_NAMESPACE),
+    version.registry_refs!["aliyun-acr"],
+  );
+  const admissionScanSummary = {
+    source: "static-registry" as const,
+    contract: "declared" as const,
+    ...(version.manual ? { manual: version.manual } : {}),
+  };
+  assert.equal(admissionScanSummary.source, "static-registry");
+  assert.ok(version.manual, "official reverse version must carry offline manuals for trusted resolve");
+  assert.equal(version.manual?.contract, "deepsonar.runtime.manuals/v1");
+  // Global defaults unchanged; reverse stays project_opt_in only.
+  for (const role of Object.keys(DEFAULT_RUNTIME_IMAGE_BY_ROLE)) {
+    assert.notEqual(DEFAULT_RUNTIME_IMAGE_BY_ROLE[role as keyof typeof DEFAULT_RUNTIME_IMAGE_BY_ROLE], "deepsonar-reverse");
+  }
 });
