@@ -1,6 +1,6 @@
 # Official runtime-image registry contract (Issue #70, Slices A+B+C)
 
-> **Status: as-built (2026-10-14); v0.5.4 is pending its first successful tag-triggered Release.**
+> **Status: as-built (2026-10-14); v0.5.5 is pending its first successful tag-triggered Release (the v0.5.4 Release failed to publish Reverse to ACR / Docker Hub).**
 > Index: [`README.md`](README.md). Release procedure:
 > [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md).
 

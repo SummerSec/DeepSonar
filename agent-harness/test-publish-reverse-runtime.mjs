@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { publishReverseRuntime } from "./publish-reverse-runtime.mjs";
+import { createIndex, publishReverseRuntime } from "./publish-reverse-runtime.mjs";
 const digest = (n) => `sha256:${n.toString(16).padStart(64, "0")}`;
 const root = digest(20);
 const tags = ["ghcr.io/example/deepsonar-reverse:0.1.0", "docker.io/example/deepsonar:reverse-0.1.0"];
@@ -47,4 +47,24 @@ test("a tag appearing with a different digest before write is rejected", () => {
   const f = fixture(new Map([[tags[0], root]])); let reads = 0;
   f.readTag = (tag) => tag === tags[0] ? root : ++reads === 1 ? null : digest(30);
   assert.throws(() => publishReverseRuntime(f), /appeared with another immutable digest/); assert.equal(f.creates.length, 0);
+});
+test("index creation retries transient registry failures over HTTP/1.1 and then succeeds", () => {
+  const calls = []; const sleeps = []; const logs = [];
+  const results = [{ status: 1, stdout: "", stderr: "stream error: stream ID 7; INTERNAL_ERROR" }, { status: 0, stdout: "", stderr: "" }];
+  createIndex({ tags: [tags[1]], sources: [`ghcr.io/example/deepsonar-reverse@${root}`] }, {
+    run: (cmd, args, options) => { calls.push({ cmd, args, options }); return results.shift(); },
+    sleep: (ms) => sleeps.push(ms), log: (line) => logs.push(line), initialDelayMs: 7,
+  });
+  assert.equal(calls.length, 2); assert.deepEqual(sleeps, [7]);
+  assert.equal(calls[0].options.env.GODEBUG, "http2client=0");
+  assert.deepEqual(calls[0].args, ["buildx", "imagetools", "create", "--prefer-index=false", "--tag", tags[1], `ghcr.io/example/deepsonar-reverse@${root}`]);
+  assert.match(logs.join("\n"), /attempt 1\/3 failed[\s\S]*INTERNAL_ERROR/);
+});
+test("index creation fails closed with registry detail after exhausting attempts", () => {
+  const logs = []; let calls = 0;
+  assert.throws(() => createIndex({ tags: [tags[1]], sources: [`ghcr.io/example/deepsonar-reverse@${root}`] }, {
+    run: () => { calls += 1; return { status: 1, stdout: "", stderr: "denied: requested access to the resource is denied" }; },
+    sleep: () => {}, log: (line) => logs.push(line), attempts: 2,
+  }), /after 2 attempts; no descriptor may be emitted/);
+  assert.equal(calls, 2); assert.match(logs.join("\n"), /requested access to the resource is denied/);
 });

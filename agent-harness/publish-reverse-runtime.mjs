@@ -26,12 +26,39 @@ export function inspectTag(tag) {
   fail(`cannot inspect intended tag ${tag}; refusing to treat an inspection failure as absence`);
 }
 
-function createIndex({ tags, sources, annotations = [] }) {
+function tail(text, lines = 40) {
+  return String(text ?? "").split(/\r?\n/).filter(Boolean).slice(-lines).join("\n");
+}
+
+const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+// Cross-registry copies of the multi-GiB Reverse layers (GHCR -> ACR / Docker Hub)
+// hit transient HTTP/2 stream resets; mirror the other release jobs: force
+// HTTP/1.1, bound each attempt, back off and retry, and surface the registry
+// error instead of a bare failure. Re-running an identical create is
+// idempotent (same sources, same index bytes); the caller still re-reads the
+// tag digest afterwards, so a retry can never publish different content.
+export function createIndex({ tags, sources, annotations = [] }, {
+  run = spawnSync, sleep = sleepMs, log = (line) => console.error(line),
+  attempts = 3, attemptTimeoutMs = 15 * 60_000, initialDelayMs = 10_000,
+} = {}) {
   const args = ["buildx", "imagetools", "create", "--prefer-index=false",
     ...annotations.flatMap((value) => ["--annotation", value]),
     ...tags.flatMap((value) => ["--tag", value]), ...sources];
-  const result = spawnSync("docker", args, { encoding: "utf8", timeout: 20 * 60_000, maxBuffer: 1024 * 1024 });
-  if (result.status !== 0 || result.error) fail("registry index publication failed; no descriptor may be emitted");
+  let delay = initialDelayMs;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = run("docker", args, {
+      encoding: "utf8", timeout: attemptTimeoutMs, maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GODEBUG: "http2client=0" },
+    });
+    if (result.status === 0 && !result.error) return;
+    const reason = result.error ? String(result.error.message ?? result.error) : `exit ${result.status ?? "signal " + result.signal}`;
+    log(`publish-reverse-runtime: imagetools create ${tags.join(", ")} attempt ${attempt}/${attempts} failed (${reason})`);
+    const detail = tail(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+    if (detail) log(detail);
+    if (attempt < attempts) { sleep(delay); delay *= 2; }
+  }
+  fail(`registry index publication failed for ${tags.join(", ")} after ${attempts} attempts; no descriptor may be emitted`);
 }
 
 // Existing version/SHA tags are immutable, including their index wrapper.

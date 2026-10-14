@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-14
+
+### 发布状态
+
+- **发布说明**：本节在打 `v0.5.5` tag 前写定，本身不证明 GitHub Release 或镜像已发布完成。`v0.5.4` tag 触发的 Release（run `38492699161`）中 `reverse-images` 已把 `deepsonar-reverse:0.5.4` canonical index 推到 GHCR，但向 ACR / Docker Hub 发布失败；最终 Release job 强制依赖 reverse descriptor，截至本节写定时该 run 未产出 GitHub Release；`v0.5.4` tag 不移动、不重写。本版只带上 reverse 发布通道的重试修复，剩余硬门不变：本 tag 触发的 Release 实际成功，产出真实不可变 digest、`reverse.json`、各配置通道 inspect 证据，并由 workflow 把 `deepsonar-reverse` 版本回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。以上任一未完成即不得宣称发布完成，也不得伪造 digest / inspect 证据或静默排除 reverse；#718 在首个已发布并准入的 reverse digest 及其证据落地后关闭。
+
+### 修复
+
+- **Reverse 发布通道重试（#718，#732）**：`v0.5.4` Release 中 `reverse-images` 已把 canonical index 推到 GHCR（`deepsonar-reverse:0.5.4` → `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`），但向 ACR / Docker Hub 跨 registry 复制多 GiB 层时 `docker buildx imagetools create` 失败且日志只有一句“registry index publication failed”。`agent-harness/publish-reverse-runtime.mjs` 现与其他发布 job 对齐：强制 `GODEBUG=http2client=0`、每次尝试 15 分钟上限、最多 3 次指数退避重试，并输出 registry 错误尾部便于诊断；重试同源同字节、幂等，写入后仍重新 inspect digest，失败依旧 fail closed，不产出 descriptor。
+
+### 部署 / 升级说明
+
+- 本版不修改数据库 schema，主线保持 v56；不改变运行镜像输入或 fingerprint，命中不可变 `src-*` 缓存时复用既有构建，仍执行规定的原生冒烟。准备期间不手写 bundled 清单中的运行镜像 digest，仅由本 tag 的 Release 实际发布证据通过后由 workflow 回写。
+
 ## [0.5.4] - 2026-10-14
 
 ### 发布状态
@@ -1122,6 +1136,7 @@
 
 - The bundled runtime registry was synchronized for the `v0.1.18` release.
 
+[0.5.5]: https://github.com/SummerSec/DeepSonar/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/SummerSec/DeepSonar/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/SummerSec/DeepSonar/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/SummerSec/DeepSonar/compare/v0.5.1...v0.5.2

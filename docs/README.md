@@ -2,7 +2,7 @@
 
 > **当前同步状态（2026-10-13）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v56**（#690 能力插件运行时；#691 清除项目级能力配置面）。#626 把凭据资产、角色引用与快照生效拆成三条边界。当前 DSH 迁移选定官方 `@deepseek-ai/dsh@0.2.0-rc.2`：隔离 lockfile + `dsh --profile`、显式 `bundles: []` profile、Gateway-only 短期 token、PTC `run_code`、v4 Session 归档；跨进程持久 resume 明确不支持。根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
 
-> **运行镜像发布核对（2026-10-14）**：Chrome / ClickHouse 双架构缓存复用以 runnable 平台 manifest 精确相等为证明，source-cache 命中本身不能复用旧 catalog 首行。v0.5.4 待发布：`deepsonar-reverse` 的 `reverse-image-builds` / `reverse-images` 已在 `release.yml` 接线（#723），main 的 `reverse-runtime` 双架构已通过；完整 14 产品清单仍以 tag 触发 Release 实际产出真实 digest、`reverse.json` 与通道 inspect 证据为准，registry 回写前 reverse 保持 `versions: []`，详见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md)。
+> **运行镜像发布核对（2026-10-14）**：Chrome / ClickHouse 双架构缓存复用以 runnable 平台 manifest 精确相等为证明，source-cache 命中本身不能复用旧 catalog 首行。v0.5.5 待发布：`deepsonar-reverse` 的 `reverse-image-builds` / `reverse-images` 已在 `release.yml` 接线（#723），main 的 `reverse-runtime` 双架构已通过；v0.5.4 Release 中 reverse 的 GHCR index 已推送但 ACR / Docker Hub 发布失败，v0.5.5 带上发布通道重试修复（#732）；完整 14 产品清单仍以 tag 触发 Release 实际产出真实 digest、`reverse.json` 与通道 inspect 证据为准，registry 回写前 reverse 保持 `versions: []`，详见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md)。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
@@ -44,7 +44,7 @@
 | [REA CLI 深度二进制解析](REA_CLI_CAPABILITIES.md) | **门禁已接线，实测/首发待证据**（#718）：原生双架构 OCI、真实 OpenSandbox Job、reverse 发布与不可变 catalog 链；保持项目边界 |
 | [Agent Runtime Profiles](AGENT_RUNTIME_PROFILES.md) | #613 Provider / 模型 / CLI 统一运行时 Profile（`deepsonar.agent-runtime-profile/v1`，phase 1） |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
-| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；双架构缓存复用须证明 runnable payload 一致；v0.5.4 待发布；reverse 发布 job 已接线，成功运行 / OCI / 准入证据仍是硬门 |
+| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；双架构缓存复用须证明 runnable payload 一致；v0.5.5 待发布（v0.5.4 reverse 通道发布失败）；reverse 发布 job 已接线，成功运行 / OCI / 准入证据仍是硬门 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
 | [RELEASE_READINESS_POST_v0.4.4.md](RELEASE_READINESS_POST_v0.4.4.md) | **运维/发布** | v0.4.4→当前 main 升级/部署/合并后验收闭环（#582）；区分代码/CI 已核实与实机延期 |
