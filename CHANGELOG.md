@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 文档
+
+- #718：确认 v0.5.5 已发布 `deepsonar-reverse`（canonical `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`，GHCR / Docker Hub / ACR 三通道 inspect + registry 回写；Release 附件含双架构 native 与 `published-manifest` Job evidence）。同步 REA / 发布 / 矩阵 / 架构文档状态；增加 hermetic 准入单测，绑定 bundled `0.5.5` digest → `selectRuntimeImageRef` 与 `static-registry` trusted 契约。关闭 #718。全局默认镜像不变，reverse 仍为 `project_opt_in`。
+
 ## [0.5.5] - 2026-10-14
 
 ### 发布状态

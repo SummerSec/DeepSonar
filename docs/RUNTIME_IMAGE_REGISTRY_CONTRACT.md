@@ -148,15 +148,15 @@ GitHub promotion if an internally supplied channel-only item has no
 `image_ref`, rather than selecting another channel.
 
 Current release gate: `deepsonar-reverse` is a required product, and
-`release.yml` now wires its publisher (#723): `reverse-image-builds` builds and
+`release.yml` wires its publisher (#723): `reverse-image-builds` builds and
 gates native amd64/arm64 children (REA/Ghidra smoke plus a real OpenSandbox
 Job), and `reverse-images` assembles the canonical index, publishes and
 inspects every configured channel, and writes `reverse.json`; the final
-Release job depends on it. Wiring is not evidence. The bundled entry keeps
-`versions: []` until a tag-triggered Release actually succeeds and the
-workflow writes the first real reverse version back; amd64 scratch/Job
-contract tests do not substitute for that OCI/registry evidence. The catalog
-must not silently omit the product or use fabricated descriptors.
+Release job depends on it. v0.5.5 succeeded and wrote reverse `0.5.5`
+(`sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`)
+back to the bundled registry with three-channel inspect evidence. Wiring alone
+is still not evidence for future releases; the catalog must not silently omit
+the product or use fabricated descriptors.
 
 The pure validator lives in
 `apps/scheduler/src/runtime-image-registry-contract.ts`. Its OCI parser rejects

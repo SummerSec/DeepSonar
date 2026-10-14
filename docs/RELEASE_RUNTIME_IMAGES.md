@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> **状态：运维 as-built（2026-10-14）**。v0.5.5 待发布（v0.5.4 Release 的 reverse ACR / Docker Hub 通道发布失败，#732 已补重试），`deepsonar-reverse` 原生双架构 / 真实 Job / 发布门禁已接线且 main 的 `reverse-runtime` 已通过；tag 触发 Release 的成功运行与首次 OCI / registry 证据仍是硬门，见下文。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
+> **状态：运维 as-built（2026-10-14）**。**v0.5.5 已发布**（GitHub Release + run [38506851988](https://github.com/SummerSec/DeepSonar/actions/runs/38506851988) 全绿）：`deepsonar-reverse` canonical `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8` 已回写 bundled registry，GHCR / Docker Hub / ACR 三通道 inspect 通过；v0.5.4 曾因 ACR / Docker Hub 通道失败未完成 Release（tag 不移动），v0.5.5 带上 #732 重试后成功。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
 >
 > Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
@@ -37,7 +37,7 @@ pnpm ci:images
 
 先按 `AGENTS.md` 的发版硬门完成人工 as-built 文档核对，再等待最终 `main` 提交的 CI 通过，才创建并推送新的不可变 `vX.Y.Z` tag。`ci:unit:changelog` 验证校验器本身的用例，上面的 `validate-changelog.mjs` 命令才验证真实待发布区段；每次发布需改为本次目标和实际前一 tag。`ci.yml` 的 `push@main` 会跳过纯文档提交，因此文档版 release-prep 合入后，应在 Actions 手动触发 `ci` 的 `workflow_dispatch` 并核对运行 SHA 为最终待打 tag 的提交。纯文档 PR 仍运行核心 CI；专项 workflow 是否触发由各自 paths 决定。运行镜像输入及 `BASE_IMAGE` digest 未变且 immutable `src-*` cache 可用时，核心 CI 可复用既有构建，仍执行规定的真实冒烟；不要为缩短发版时间改动 fingerprint 或跳过门禁。Release workflow 会在镜像构建前再次校验 tag、目标 changelog 区段和 compare link；校验失败时不会构建或发布镜像。工作流将经过校验的精确 changelog 区段写入 GitHub Release，同时保留许可证声明、runtime registry、Management Skill 附件和 GitHub 生成的 compare notes。
 
-**v0.5.5 剩余发布硬门**（v0.5.4 tag 不移动；其 Release 中 `reverse-images` 的 GHCR index 已推送，但 ACR / Docker Hub `imagetools create` 失败，`publish-reverse-runtime.mjs` 现按 HTTP/1.1、每次 15 分钟、最多 3 次重试并输出 registry 错误）：main 的 `deepsonar-reverse` 已进入 `generate-runtime-image-registry.mjs` 的必需产品集合，生成器必须读取 `reverse.json`；`release.yml` 已有 `reverse-image-builds`（原生双架构+真实 Job）和 `reverse-images`（canonical index / 镜像通道 / `reverse.json`），缺的不是 workflow 接线。打 tag 前须最终 main 提交的 CI（含 `reverse-runtime` 双架构）实际通过；tag 触发的 Release 还须完成真实不可变 digest、各配置通道发布和 inspect 证据，才可生成完整清单并宣称发布完成。`versions: []`、已有 amd64 scratch 实跑和 Job 契约测试都不是发布证据。不得用空 descriptor、手写 digest、复制其他产品证据或从必需产品集合静默删除 reverse 来绕过阻塞；当前 changelog 日期 / compare link 仅用于发布准备，不证明 tag 已存在。
+**v0.5.5 发布结果**（v0.5.4 tag 不移动；其 Release 中 `reverse-images` 曾把 GHCR index 推送成功但 ACR / Docker Hub `imagetools create` 失败；#732 为 `publish-reverse-runtime.mjs` 补上 HTTP/1.1、每次 15 分钟、最多 3 次重试）：v0.5.5 tag 触发的 Release 已全部成功——真实不可变 digest、`reverse.json`、三通道 inspect、证据附件 `deepsonar-reverse-evidence-0.5.5.tar.gz`，并由 workflow 把 `deepsonar-reverse` `0.5.5` 回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。后续发版仍不得用空 descriptor、手写 digest、复制其他产品证据或从必需产品集合静默删除 reverse 来绕过阻塞。
 
 ## 可选发布凭据
 
@@ -59,7 +59,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出或经证明可复用的真实 digest 生成，必需产品集合包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz、ClickHouse Audit、ClickHouse Test、ClickHouse Fuzz、Mobile 与 Reverse 十四项。尚未首发的产品在源码内置 bundled 清单中保持 `versions: []`（当前为 Reverse）；只有 Release 对两个平台完成真实构建 / 缓存复用验收、发布和 inspect 后，生成器才会写入版本与 digest。空版本条目不能代替 Release 要求的真实 descriptor。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出或经证明可复用的真实 digest 生成，必需产品集合包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz、ClickHouse Audit、ClickHouse Test、ClickHouse Fuzz、Mobile 与 Reverse 十四项。尚未首发的产品在源码内置 bundled 清单中保持 `versions: []`；`deepsonar-reverse` 已在 v0.5.5 由 Release 回写 `0.5.5` + canonical digest。只有 Release 对两个平台完成真实构建 / 缓存复用验收、发布和 inspect 后，生成器才会写入版本与 digest。空版本条目不能代替 Release 要求的真实 descriptor。
 
 **一版本多平台**：v2 多架构发布时，每条 canonical 版本记录的 `platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限；不能按架构拆成两条同版本 alias。生成器可保留既有历史版本数组，最终 payload 门禁按 Scheduler 的通道 / 平台 latest-version 排序核对实际选中的版本，见下文。旧 v1 清单仍按一平台一版本解析（当前代码残留的兼容路径，非新发布契约）；Scheduler 消费平台全局 `runtime_registry_channel` 对应的 v2 不可变引用，缺少选定通道引用时 fail closed。
 
