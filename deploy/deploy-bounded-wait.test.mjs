@@ -9,13 +9,14 @@ import { fileURLToPath } from "node:url";
 const deployDir = dirname(fileURLToPath(import.meta.url));
 const root = join(deployDir, "..");
 const boundedWait = join(deployDir, "bounded-wait.sh");
+const platformImages = join(deployDir, "platform-images.sh");
 const deploySh = join(deployDir, "deploy.sh");
 const prodCompose = join(deployDir, "docker-compose.prod.yml");
 const podmanCompat = join(deployDir, "docker-compose.podman-compat.yml");
 const podmanCompatOs = join(deployDir, "docker-compose.podman-compat.opensandbox.yml");
 
 test("bounded-wait.sh and deploy.sh are POSIX-sh parseable", () => {
-  for (const file of [boundedWait, deploySh]) {
+  for (const file of [boundedWait, platformImages, deploySh]) {
     const r = spawnSync("sh", ["-n", file], { encoding: "utf8" });
     assert.equal(r.status, 0, `${file}: ${r.stderr}`);
   }
@@ -170,7 +171,7 @@ test("ONE_CLICK_DEPLOYMENT documents Podman healthcheck hang and tuning knobs", 
 });
 
 function runShell(script, options = {}) {
-  return spawnSync("sh", ["-c", `set -eu\n. "${boundedWait}"\n${script}`], {
+  return spawnSync("sh", ["-c", `set -eu\n. "${boundedWait}"\n. "${platformImages}"\n${script}`], {
     encoding: "utf8", timeout: 15_000, ...options,
   });
 }

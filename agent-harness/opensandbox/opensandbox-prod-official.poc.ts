@@ -22,6 +22,7 @@ import {
   runOpenSandboxOfficialImagesPoc,
   shouldRunOpenSandboxPoc,
 } from "@deepsonar/runtime-sandbox/poc";
+import { platformImageEnvLines } from "./platform-image-env.ts";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox official prod PoC (set OPEN_SANDBOX_POC=1)");
@@ -80,8 +81,7 @@ writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(deployDir,
 writeFileSync(masterKeyFile, `${"00".repeat(32)}\n`, { mode: 0o600 });
 writeFileSync(envFile, [
   "POSTGRES_PASSWORD=poc-opensandbox-official",
-  "DEEPSONAR_IMAGE_TAG=0.1.46",
-  "DEEPSONAR_VERSION=0.1.46-os-official",
+  ...platformImageEnvLines(repoRoot, { versionSuffix: "-os-official" }),
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
   "OPEN_SANDBOX_DOMAIN=opensandbox:8080",
   `OPEN_SANDBOX_HOST_PORT=${osHostPort}`,

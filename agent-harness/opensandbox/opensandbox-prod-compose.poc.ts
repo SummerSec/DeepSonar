@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GATEWAY_PROXY_SCRIPT } from "@deepsonar/runtime-sandbox";
 import { shouldRunOpenSandboxPoc } from "@deepsonar/runtime-sandbox/poc";
+import { platformImageEnvLines } from "./platform-image-env.ts";
 
 if (!shouldRunOpenSandboxPoc()) {
   console.log("skip: OpenSandbox prod-compose PoC (set OPEN_SANDBOX_POC=1)");
@@ -60,8 +61,7 @@ if (!existingOpenSandboxRunning()) {
 writeFileSync(masterKeyFile, `${"00".repeat(32)}\n`, { mode: 0o600 });
 writeFileSync(envFile, [
   "POSTGRES_PASSWORD=poc-opensandbox-compose",
-  "DEEPSONAR_IMAGE_TAG=0.1.46",
-  "DEEPSONAR_VERSION=0.1.46-os-compose",
+  ...platformImageEnvLines(repoRoot, { versionSuffix: "-os-compose", localBuild: true }),
   "DEEPSONAR_ADMIN_TOKEN=poc-admin-token",
   `OPEN_SANDBOX_API_KEY=${apiKey}`,
   "OPEN_SANDBOX_DOMAIN=127.0.0.1:18081",

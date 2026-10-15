@@ -2,21 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveGitRevision, resolveProductVersion } from "./product-version.js";
 
-test("product version prefers DEEPSONAR_VERSION over image tag", () => {
+test("product version is the explicit DEEPSONAR_VERSION", () => {
+  assert.equal(resolveProductVersion({ DEEPSONAR_VERSION: " 0.1.40 " }), "0.1.40");
+});
+
+test("product version never falls back to the removed DEEPSONAR_IMAGE_TAG (#740)", () => {
+  assert.equal(resolveProductVersion({ DEEPSONAR_IMAGE_TAG: "0.1.37" }), "");
+  assert.equal(resolveProductVersion({ DEEPSONAR_VERSION: "  ", DEEPSONAR_IMAGE_TAG: "0.1.37" }), "");
   assert.equal(
     resolveProductVersion({ DEEPSONAR_VERSION: "0.1.40", DEEPSONAR_IMAGE_TAG: "0.1.37" }),
     "0.1.40",
-  );
-});
-
-test("product version falls back to DEEPSONAR_IMAGE_TAG", () => {
-  assert.equal(resolveProductVersion({ DEEPSONAR_IMAGE_TAG: "0.1.37" }), "0.1.37");
-});
-
-test("blank DEEPSONAR_VERSION falls through to image tag", () => {
-  assert.equal(
-    resolveProductVersion({ DEEPSONAR_VERSION: "  ", DEEPSONAR_IMAGE_TAG: "0.1.37" }),
-    "0.1.37",
   );
 });
 

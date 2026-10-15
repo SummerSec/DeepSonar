@@ -38,11 +38,9 @@ test("/health remains live and reports ready=false while warmup is pending", asy
   await app.close();
 });
 
-test("/health version uses DEEPSONAR_IMAGE_TAG when DEEPSONAR_VERSION is unset", async () => {
+test("/health version is DEEPSONAR_VERSION only and ignores DEEPSONAR_IMAGE_TAG (#740)", async () => {
   const previousTag = process.env.DEEPSONAR_IMAGE_TAG;
   const previousVersion = process.env.DEEPSONAR_VERSION;
-  delete process.env.DEEPSONAR_VERSION;
-  process.env.DEEPSONAR_IMAGE_TAG = "0.1.37";
   const app = Fastify();
   registerSystemRoutes(app, {
     runtimeImageStatus: () => ({
@@ -52,9 +50,14 @@ test("/health version uses DEEPSONAR_IMAGE_TAG when DEEPSONAR_VERSION is unset",
     officialImageWarnings: () => [],
   });
   try {
-    const response = await app.inject({ method: "GET", url: "/health" });
-    assert.equal(response.statusCode, 200);
-    assert.equal(response.json().version, "0.1.37");
+    delete process.env.DEEPSONAR_VERSION;
+    process.env.DEEPSONAR_IMAGE_TAG = "0.1.37";
+    const legacyOnly = await app.inject({ method: "GET", url: "/health" });
+    assert.equal(legacyOnly.statusCode, 200);
+    assert.equal(legacyOnly.json().version, "");
+    process.env.DEEPSONAR_VERSION = "0.5.6";
+    const explicit = await app.inject({ method: "GET", url: "/health" });
+    assert.equal(explicit.json().version, "0.5.6");
   } finally {
     await app.close();
     if (previousTag === undefined) delete process.env.DEEPSONAR_IMAGE_TAG;

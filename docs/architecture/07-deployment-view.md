@@ -3,7 +3,7 @@
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
 > 同步日期：2026-10-15
 
-部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 等平台服务通过 `DEEPSONAR_IMAGE_TAG` 选择 Release 同步的应用镜像标签；OpenSandbox/Worker 的基础服务可由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 新增的 `platform` catalog 结构目前只用于版本发现和管理员提示，不能据此宣称平台 Compose 已按 digest 部署。
+部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 新增的 `platform` catalog 结构目前只用于版本发现和管理员提示；按清单 digest 自动切换平台镜像（`upgrade apply`）仍属 #740 后续片。
 
 ## 生产 Compose 拓扑
 

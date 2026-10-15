@@ -39,10 +39,14 @@ test("deploy.ps1 stays ASCII-only (no smart quotes or fullwidth punctuation)", (
   assert.equal(hit, null, hit ? `fragile punctuation at index ${hit.index}: ${JSON.stringify(hit[0])}` : "");
 });
 
-test("deploy.ps1 resolves the platform image tag from catalog platform_version", () => {
+test("deploy.ps1 pins platform images by digest and never derives a platform tag (#740)", () => {
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(3));
-  assert.match(text, /\$registry\.platform_version/);
-  assert.doesNotMatch(text, /images\[0\]\.versions\[0\]\.version/);
+  for (const key of ["DEEPSONAR_SCHEDULER_IMAGE", "DEEPSONAR_WEB_IMAGE", "DEEPSONAR_IMAGE_ADMISSION_IMAGE"]) {
+    assert.match(text, new RegExp(key));
+  }
+  assert.match(text, /function Assert-PlatformImageContract/);
+  assert.match(text, /@sha256:\[0-9a-f\]\{64\}/);
+  assert.doesNotMatch(text, /\$registry\.platform_version|Get-DefaultImageTag|images\[0\]\.versions\[0\]\.version/);
 });
 
 test("deploy.ps1 pull/up matches deploy.sh app-image and official-image semantics", () => {

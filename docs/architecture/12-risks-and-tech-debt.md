@@ -36,7 +36,7 @@ Web 当前对可见投影使用 elkjs，服务端节点坐标只作 placement/ex
 
 ### 3.2 平台自动更新的后续阶段（#740）
 
-P1 第 1–2 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。仍未落地的是仅以不可变 digest 驱动的 Compose 升级、`upgrade check/apply/rollback`、Release 写出并核对真实 platform digests、签名和无人值守补丁升级；当前 Compose 仍使用发布文档规定的 tag 流程。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
+P1 第 1–3 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。Compose 已改为每个平台镜像一个不可变 digest 引用并要求显式 `DEEPSONAR_VERSION`（`DEEPSONAR_IMAGE_TAG` 已删除，部署脚本 fail closed）。仍未落地的是 `upgrade check/apply/rollback`（当前由运维从目标版本 `deploy/.env.example` 复制 digest 行）、Release 写出并核对 `platform` 段真实 digests、签名和无人值守补丁升级。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
 
 ### 3.3 可冻结的安全漏洞证明契约
 

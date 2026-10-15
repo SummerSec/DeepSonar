@@ -206,6 +206,8 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 平台版本发现（#740 P1 第 2 片）：官方清单同步后比较当前部署版本与 `platform` 段（或 legacy `platform_version`），结果写入 `platform_update_checks`；`GET /platform/updates` 仅管理员可读，GitHub 不可达只记错误。Web 管理端提示新版本 / 检查失败；升级 apply 仍由宿主机后续片完成。
 
+平台镜像部署契约（#740 P1 第 3 片）：生产 Compose 的 scheduler / web / image-admission 只接受 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；当前部署版本只来自显式 `DEEPSONAR_VERSION`（`/health.version` 与版本发现均不再回退镜像 tag）。`DEEPSONAR_IMAGE_TAG` 已删除且不保留兼容：`deploy.sh` / `deploy.ps1` 发现旧变量、可变 tag、仓库名不符或缺版本时 fail closed 并提示从目标版本 `deploy/.env.example` 复制四行；本地 `build` 临时使用 `deepsonar-*:local-build`。
+
 取消、超时、迟到回调、容器创建和销毁都走幂等路径。`timeout/orphan` 只有在没有待结算效果且策略允许时才可安全重试；否则必须让操作员确认。Job resume 使用创建期冻结快照，`rerun-current` 才重新解析当前配置并完整重冻，身份漂移返回 `SNAPSHOT_STALE`。
 
 ## 8. 配置、快照和运行时
@@ -284,7 +286,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 （#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
 | 项目报告工作台（#484 / #561） | Phase 1 已落地：统一 `ReportDeliverable` 投影；#561 并入项目「风险与报告」台（`/findings` + `?panel=reports`，旧 `/reports` redirect）；任务工作台报告 tab 与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
-| 平台自动更新（#740） | P1 第 1–2 片已落地：全局暂停领取（schema v57）+ 清单 `platform` 契约与版本发现 / Web 管理端提示（schema v58）；Compose 仍用 `DEEPSONAR_IMAGE_TAG`，Release 尚未写出真实 platform digests | Compose 改按 digest 引用并删除 `DEEPSONAR_IMAGE_TAG`；`deploy.sh` / `deploy.ps1` 的 `upgrade check / apply / rollback`；Release 写出并 inspect 核对 `platform` digests；P2 签名与无人值守补丁升级 |
+| 平台自动更新（#740） | P1 第 1–3 片已落地：全局暂停领取（schema v57）+ 清单 `platform` 契约与版本发现 / Web 管理端提示（schema v58）+ digest Compose 契约（每个平台镜像一个 `@sha256:` 引用变量，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`，部署脚本对旧变量 / 非 digest fail closed）；Release 尚未写出 `platform` 段真实 digests | `deploy.sh` / `deploy.ps1` 的 `upgrade check / apply / rollback`；Release 写出并 inspect 核对 `platform` digests；P2 签名与无人值守补丁升级 |
 | 真实设备接入（#494/#495，多 rig #505 后续） | Phase 1 已落地：device broker 把物理设备暴露为可租借网络端点（沙箱不直连设备），租约绑 Attempt、项目 opt-in + 任务级授权、`device_events` 审计、Reaper 回收过期租约；多 rig 准入（平台按 `devices.rig_id` 分组整集推送、按需 rig 选 broker 端点，schema v50）与平台设备视图也已落地；细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md) | 真机 rig 验收、Phase 2 hdc/串口/电源控制、跨 rig 调度（一个 Job 只用一个 rig 的设备）、同 rig 多设备池的策略 |
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
