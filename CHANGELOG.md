@@ -6,6 +6,7 @@
 
 ### 文档
 
+- **系统规格与追溯矩阵首批（#741 PR 2）**：新增 `docs/architecture/01-system-specification.md`（首批贯通任务→Hub→Job/Attempt→报告、非法提案→RepairFeedback、超时/崩溃/未知效果→对账清理三条链路；条目结构为规范要求 / 决策来源 / 实现状态 / 代码入口 / 验证证据）与 `traceability.md`（仅关系矩阵）。`README.md` 明确 Canvas / Fact / Artifact / Device / 资产的前缀归属，并更新实施进度。`docs-freshness` 修复 Windows 下 `path.join` 反斜杠导致必需文件误报缺失的问题，并新增需求定义唯一、矩阵覆盖与悬空引用机检。不改 schema、OpenAPI 与运行时行为；其余视图与 ADR 由后续 PR 补齐。
 - **系统架构设计目录骨架（#741 PR 1）**：新增 `docs/architecture/`，`README.md` 定义目录索引、阅读路径、文档状态（文首「状态 + 同步日期」）、文件 / 需求 ID（`FR-<域>-NNN` / `NFR-<属性>-NNN` / `IR-NNN` / `CON-NNN`）编号规则与维护流程；`adr/README.md` 给出 ADR 模板（背景 / 决策 / 状态 / 后果 / 替代方案）、四位编号与状态规则及首批 6 条回填索引。`docs/README.md` 新增「系统架构设计」分区；`pnpm ci:unit:docs-freshness` 新增断言：新目录纳入相对链接 / 脚本 / 已删机制扫描，且每个文件文首标注状态与同步日期。不改代码、schema、OpenAPI 与运行时行为；系统规格、视图与 ADR 正文由 #741 后续 PR 补齐。
 
 ### 部署 / 升级说明

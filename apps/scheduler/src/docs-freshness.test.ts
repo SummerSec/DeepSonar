@@ -48,11 +48,16 @@ const DEAD_TOKENS = ["project_managed", "image_strategy", "role_runtime_images",
 /** `pnpm` 后面不是脚本名的常见写法。 */
 const NON_SCRIPT_TOKENS = new Set(["install", "exec", "dlx", "add", "run", "workspace"]);
 
+/** Normalize to POSIX separators so Windows `path.join` results match forward-slash literals / Set keys. */
+function toPosixRelative(relative: string): string {
+  return relative.split(path.sep).join("/");
+}
+
 function relativeFiles(dir: string, extensions: string[]): string[] {
   const absolute = path.join(ROOT, dir);
   if (!existsSync(absolute)) return [];
   return readdirSync(absolute, { withFileTypes: true }).flatMap((entry) => {
-    const relative = path.join(dir, entry.name);
+    const relative = toPosixRelative(path.join(dir, entry.name));
     if (entry.isDirectory()) return relativeFiles(relative, extensions);
     return extensions.some((extension) => entry.name.endsWith(extension)) ? [relative] : [];
   });
@@ -188,5 +193,93 @@ test("#741 docs/architecture 纳入保鲜扫描且文首标注状态与同步日
   assert.ok(
     read("docs/README.md").includes("](architecture/README.md)"),
     "docs/README.md 必须在「系统架构设计」分区链接 docs/architecture/README.md",
+  );
+});
+
+/**
+ * #741 PR 2：需求定义格式与追溯机检。
+ *
+ * 定义部位：`01-system-specification.md` 中独立成行的三级标题
+ * `### FR-JOB-001` / `### IR-001` 等形式（标题本身即完整 ID；正文与矩阵中的引用不算定义）。
+ * 不得对全文出现的 ID 简单去重——合法引用会重复。
+ */
+const SPEC_PATH = `${ARCHITECTURE_DIR}/01-system-specification.md`;
+const TRACE_PATH = `${ARCHITECTURE_DIR}/traceability.md`;
+/** 完整 ID：`FR|NFR-<域>-NNN` 或 `IR|CON-NNN`（不含仅前缀如 `FR-CAP`）。 */
+const REQUIREMENT_ID_RE = /^(?:(?:FR|NFR)-[A-Z][A-Z0-9]*-\d{3}|(?:IR|CON)-\d{3})$/;
+const REQUIREMENT_DEF_RE = /^### ((?:(?:FR|NFR)-[A-Z][A-Z0-9]*-\d{3}|(?:IR|CON)-\d{3}))\s*$/gm;
+const REQUIREMENT_REF_RE = /\b((?:(?:FR|NFR)-[A-Z][A-Z0-9]*-\d{3}|(?:IR|CON)-\d{3}))\b/g;
+
+/** 已废弃、禁止复用的需求 ID。本期尚无废弃条目；废弃时在此登记并保留规格中的「已废弃」条目。 */
+const DEPRECATED_REQUIREMENT_IDS = new Set<string>([]);
+
+function definedRequirementIds(spec: string): string[] {
+  return [...spec.matchAll(REQUIREMENT_DEF_RE)].map((match) => match[1]!);
+}
+
+function matrixRequirementIds(matrix: string): string[] {
+  // 追溯矩阵表：首列是需求 ID（允许链接形式 `[FR-…](…)` 或裸 ID）。
+  const ids: string[] = [];
+  for (const line of matrix.split("\n")) {
+    const cell = /^\|\s*(.*?)\s*\|/.exec(line)?.[1];
+    if (!cell || cell.includes("---") || /需求\s*ID/i.test(cell)) continue;
+    const bare = cell.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").trim();
+    if (REQUIREMENT_ID_RE.test(bare)) {
+      ids.push(bare);
+    }
+  }
+  return ids;
+}
+
+test("#741 需求 ID 定义唯一、追溯矩阵覆盖且无悬空引用", () => {
+  assert.ok(existsSync(path.join(ROOT, SPEC_PATH)), `缺少 ${SPEC_PATH}`);
+  assert.ok(existsSync(path.join(ROOT, TRACE_PATH)), `缺少 ${TRACE_PATH}`);
+
+  const spec = read(SPEC_PATH);
+  // 围栏内的「### FR-…」示例不是定义；引用检查同样忽略示例块。
+  const specBody = stripFences(spec);
+  const defined = definedRequirementIds(specBody);
+  assert.ok(defined.length > 0, `${SPEC_PATH} 必须至少用「### FR-…」形式定义一条需求`);
+
+  const duplicates = defined.filter((id, index) => defined.indexOf(id) !== index);
+  assert.deepEqual(
+    [...new Set(duplicates)].sort(),
+    [],
+    "01-system-specification.md 中以「### ID」定义的需求 ID 必须全局唯一（引用处重复不算）",
+  );
+
+  const reusedDeprecated = defined.filter((id) => DEPRECATED_REQUIREMENT_IDS.has(id));
+  assert.deepEqual(
+    reusedDeprecated.sort(),
+    [],
+    "已废弃的需求 ID 不得作为新定义复用（见 docs-freshness DEPRECATED_REQUIREMENT_IDS）",
+  );
+
+  const definedSet = new Set(defined);
+  const matrix = read(TRACE_PATH);
+  const matrixIds = matrixRequirementIds(matrix);
+  const matrixSet = new Set(matrixIds);
+
+  assert.deepEqual(
+    defined.filter((id) => !matrixSet.has(id)).sort(),
+    [],
+    "traceability.md 必须覆盖 01-system-specification.md 中全部已定义需求 ID",
+  );
+  assert.deepEqual(
+    [...matrixSet].filter((id) => !definedSet.has(id)).sort(),
+    [],
+    "traceability.md 不得引用未在 01-system-specification.md 中以「### ID」定义的需求 ID",
+  );
+
+  // 规格正文里出现的引用不得指向未定义 ID（定义标题已计入 definedSet）。
+  const danglingInSpec = [...new Set(
+    [...specBody.matchAll(REQUIREMENT_REF_RE)]
+      .map((match) => match[1]!)
+      .filter((id) => !definedSet.has(id)),
+  )].sort();
+  assert.deepEqual(
+    danglingInSpec,
+    [],
+    "01-system-specification.md 正文引用的需求 ID 必须已有「### ID」定义",
   );
 });
