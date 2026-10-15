@@ -61,10 +61,9 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 
 1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo 凭据）；
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
-3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
-   `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. 优先拉取同 registry/tag 的 `deepsonar-silo`，将 RepoDigest（或 tag）写成 `SILO_IMAGE`；该标签不存在时回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。已覆盖为其它镜像时不改写；
-5. real 模式优先拉取同 registry/tag 的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
+3. 校验平台镜像部署契约（#740）：`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE` 必须是对应仓库的完整不可变引用 `<registry>/<name>@sha256:<64 位小写 hex>`，且显式声明 `DEEPSONAR_VERSION`（无 `v` 前缀）；`deploy/.env` 或进程环境仍有已删除的 `DEEPSONAR_IMAGE_TAG`、可变 tag、仓库名不符或缺版本时直接 fail closed，并打印应从 `deploy/.env.example` 复制的四行。随后按这三条 digest 引用从阿里云 ACR 拉取；
+4. 优先拉取同 registry、`DEEPSONAR_VERSION` 标签的 `deepsonar-silo`，将 RepoDigest（或 tag）写成 `SILO_IMAGE`；该标签不存在时回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。已覆盖为其它镜像时不改写；
+5. real 模式优先拉取同 registry、`DEEPSONAR_VERSION` 标签的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
 6. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
 7. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
 
@@ -94,16 +93,22 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 
 容器部署 `DEEPSONAR_AUTH_REQUIRED=true`。`DEEPSONAR_ADMIN_TOKEN` 为 API/本机调用引导 Token，与人类会话账号独立。
 
-### 镜像标签
+### 平台镜像引用（#740 digest 契约）
 
-- 平台镜像用 Release 版本号（ACR 标签**无** `v` 前缀，不发 `latest`）。
-- `deploy/.env.example` 与 `runtime-image-registry.json` 随 Release 回写。
-- 固定版本时显式设置：
+- 平台镜像（scheduler / web / image-admission）只按不可变 digest 部署；`DEEPSONAR_IMAGE_TAG` 已删除，不保留兼容。Compose 缺任一变量直接失败，`deploy.sh` / `deploy.ps1` 另拒绝旧变量与非 digest 引用。
+- `/health.version` 只认 `DEEPSONAR_VERSION`，不再回退镜像 tag；未设置时为空。
+- `deploy/.env.example` 的这四行与 `runtime-image-registry.json` 随 Release 回写，不要手改成 tag：
 
 ```dotenv
-DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-DEEPSONAR_IMAGE_TAG=<release-version-without-v>
+DEEPSONAR_VERSION=<release-version-without-v>
+DEEPSONAR_SCHEDULER_IMAGE=<registry>/deepsonar-scheduler@sha256:<digest>
+DEEPSONAR_WEB_IMAGE=<registry>/deepsonar-web@sha256:<digest>
+DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<digest>
 ```
+
+- 已有部署升级到本契约：先删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，再从目标版本的 `deploy/.env.example` 复制上面四行（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）。schema 变化仍按本文先停 Scheduler 再 `pnpm db:rebuild`。`deploy.sh upgrade check / apply / rollback` 属于 #740 后续片，届时由脚本写入这些行。
+- `DEEPSONAR_IMAGE_REGISTRY` 仍保留，只用于按 `DEEPSONAR_VERSION` 解析官方 `deepsonar-assets-helper` / `deepsonar-silo` 并固定为 RepoDigest。
+- `up real build` 本地构建时脚本临时把三个平台镜像标记为 `deepsonar-*:local-build`（Compose 不能把构建产物标记为 `name@sha256:`），不改写 `deploy/.env` 中的 digest 引用；`DEEPSONAR_VERSION` 仍须显式设置。
 
 ## 3.1 平台矩阵（控制面 vs 运行时）
 
@@ -148,7 +153,7 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 ### 4.1 共享资产 helper 与 provision admission（#158）
 
 real 模式写入共享资产只读卷时，`deploy.sh` / `deploy.ps1` 的 `up`/`pull` 优先拉取
-`$IMAGE_REGISTRY/deepsonar-assets-helper:$IMAGE_TAG`（与 scheduler/web 同一发布通道），
+`$IMAGE_REGISTRY/deepsonar-assets-helper:$DEEPSONAR_VERSION`（与 scheduler/web 同一发布通道），
 `docker image inspect` 取其 RepoDigest 并导出为 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`。
 该官方标签在下一正式 Release 才首次发布；当前 v0.1.40 及更旧版本回退
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
@@ -200,7 +205,7 @@ nameserver 顺序不能根治，健康探测的有界重试只作瞬态保护。
 - `DEEPSONAR_TRIVY_IMAGE`
 - `DEEPSONAR_CLAMAV_IMAGE`
 
-未设或留空（含仅空白）时回退 `apps/image-admission` 内置的官方 pin（与 `deploy/.env.example` 相同）。显式覆盖必须仍是 digest；tag 或非法值会 fail closed，进程拒绝启动。Release 回写 `.env.example` 只改 `DEEPSONAR_IMAGE_TAG`，这四行 pin 会原样保留。
+未设或留空（含仅空白）时回退 `apps/image-admission` 内置的官方 pin（与 `deploy/.env.example` 相同）。显式覆盖必须仍是 digest；tag 或非法值会 fail closed，进程拒绝启动。Release 回写 `.env.example` 只改 `DEEPSONAR_VERSION` 与三条平台镜像 digest 引用，这四行 scanner pin 会原样保留。
 
 Cosign 3 默认不对官方 catalog digest 验签（`signature: skipped`）。要强制验签时同时配置 `DEEPSONAR_COSIGN_KEY`，或 Cosign 3 keyless 的 `DEEPSONAR_COSIGN_CERTIFICATE_IDENTITY`（或 `_REGEXP`）加上 `DEEPSONAR_COSIGN_CERTIFICATE_OIDC_ISSUER`（或 `_REGEXP`）。缺 identity/`--key` 时不会发出 `cosign verify`。
 
@@ -315,8 +320,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/
 | Silo healthcheck 长时间 starting / `up` 卡住（常见于部分 Podman） | #726：`deploy.sh`/`deploy.ps1` 对 `compose up` 有界等待（`DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`，默认 600s），超时非零退出并打印容器状态/健康/日志/版本（脱敏）。Podman 或 `DEEPSONAR_COMPOSE_DEPENDS_ON=started` 时附加 `docker-compose.podman-compat*.yml`（`service_started`），但仍用 postgres/silo 真实探测与入口 `:8080/api/health` 门禁；依赖真实不可用不会因 `service_started` 误报成功。`healthy` 可强制保留原 `service_healthy`。与 #101（silo-init 拆词）不同。 |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
-| real helper 拉取失败 | 官方 `deepsonar-assets-helper:$IMAGE_TAG` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
-| Silo 拉取失败 | 官方 `deepsonar-silo:$IMAGE_TAG` 不存在时应回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；自定义 `SILO_IMAGE` 覆盖仍有效 |
+| 部署报 `DEEPSONAR_IMAGE_TAG` / 非 digest 平台镜像引用 | #740 已删除 tag 部署：删除该行，从目标版本 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用；不要删除整个 `deploy/.env` |
+| real helper 拉取失败 | 官方 `deepsonar-assets-helper:$DEEPSONAR_VERSION` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
+| Silo 拉取失败 | 官方 `deepsonar-silo:$DEEPSONAR_VERSION` 不存在时应回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；自定义 `SILO_IMAGE` 覆盖仍有效 |
 | image-admission Restarting (1) / 缺 scanner digest | 四个 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。未设或留空会回退官方默认；填了 tag 或非法值仍会启动失败 |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |

@@ -1,7 +1,13 @@
 # Production scheduler+web+silo images attached to an already-running OpenSandbox.
 # Host network for postgres/scheduler/silo because this VM's compose bridge
 # drops inter-container TCP (ping/wget on a user bridge lose all packets).
-#   OPEN_SANDBOX_API_KEY=... docker compose -f deploy/docker-compose.opensandbox.host.yml up -d --build
+#   OPEN_SANDBOX_API_KEY=... DEEPSONAR_VERSION=X.Y.Z \
+#   DEEPSONAR_SCHEDULER_IMAGE=<registry>/deepsonar-scheduler@sha256:... \
+#   DEEPSONAR_WEB_IMAGE=<registry>/deepsonar-web@sha256:... \
+#   docker compose -f deploy/docker-compose.opensandbox.host.yml up -d
+# Local source build: point both image vars at plain local names
+# (e.g. deepsonar-scheduler:local-build) and add --build; Compose cannot tag a
+# build as name@sha256:... (#740).
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
@@ -68,7 +74,8 @@ services:
         condition: service_healthy
 
   scheduler:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:-0.1.46}
+    # #740: platform images are immutable digest refs only; no tag default.
+    image: ${DEEPSONAR_SCHEDULER_IMAGE:?set DEEPSONAR_SCHEDULER_IMAGE=<registry>/deepsonar-scheduler@sha256 digest ref}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
@@ -88,8 +95,7 @@ services:
       DEEPSONAR_AUTH_REQUIRED: "true"
       DEEPSONAR_ADMIN_TOKEN: ${DEEPSONAR_ADMIN_TOKEN:?set DEEPSONAR_ADMIN_TOKEN}
       DEEPSONAR_MASTER_KEY_FILE: /run/secrets/deepsonar_master_key
-      DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:-0.1.46}
-      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-0.1.46-os-compose}
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:?set DEEPSONAR_VERSION (only source of /health.version)}
       BLOB_STORE: s3
       BLOB_S3_ENDPOINT: http://127.0.0.1:${SILO_API_PORT:-19000}
       BLOB_S3_REGION: ${BLOB_S3_REGION:-us-east-1}
@@ -117,7 +123,7 @@ services:
       retries: 20
 
   web:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:-0.1.46}
+    image: ${DEEPSONAR_WEB_IMAGE:?set DEEPSONAR_WEB_IMAGE=<registry>/deepsonar-web@sha256 digest ref}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web

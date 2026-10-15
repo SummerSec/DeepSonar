@@ -918,8 +918,8 @@ const siloPinDigest = "docker.io/pgsty/silo@sha256:29a498b24669cae1fed11c1a2fb2b
 expect(assetsHelperDockerfile.includes(`FROM ${busyboxHelperPin}`), "assets-helper Dockerfile 必须 FROM 当前 busybox pin");
 expect(siloDockerfile.includes(`FROM ${siloPinDigest}`) && siloDockerfile.includes(siloPinTag), "silo Dockerfile 必须 FROM 已解析的上游 pin，并注明对应 Release tag");
 expect(sharedAssetsVolume.includes(busyboxHelperPin), "runtime 默认 helper 在官方 digest 发布前必须仍是 busybox pin");
-expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-assets-helper:${IMAGE_TAG}") && deployScript.includes(busyboxHelperPin), "deploy.sh 必须优先拉官方 helper 并在缺失时回退 busybox pin");
-expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-silo:${IMAGE_TAG}") && deployScript.includes(siloPinTag), "deploy.sh 必须优先拉官方 Silo 并在缺失时回退当前 pgsty tag");
+expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-assets-helper:${PLATFORM_VERSION}") && deployScript.includes(busyboxHelperPin), "deploy.sh 必须按 DEEPSONAR_VERSION 优先拉官方 helper 并在缺失时回退 busybox pin");
+expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-silo:${PLATFORM_VERSION}") && deployScript.includes(siloPinTag), "deploy.sh 必须按 DEEPSONAR_VERSION 优先拉官方 Silo 并在缺失时回退当前 pgsty tag");
 expect(releaseWorkflow.includes("resolve-image-src-cache.sh"), "release workflow 必须解析 GHCR src-* 内容寻址缓存");
 expect(releaseWorkflow.includes("steps.resolve.outputs.skip"), "release workflow 必须在构建输入未变时跳过 rebuild");
 expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
@@ -1115,7 +1115,7 @@ expect(!releaseWorkflow.includes("release still republishes and inspects every c
 expect(!releaseWorkflow.includes("Kali build unchanged; retag"), "unchanged Kali must keep its existing version instead of retagging");
 expect(schedulerRegistryContract.includes("min_runtime_image") && schedulerRegistryContract.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN") === false, "catalog parser owns min_runtime_image; HTTP error code lives in runtime-images");
 expect(schedulerRuntimeImages.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN"), "Scheduler must fail closed with RUNTIME_IMAGE_BELOW_PLATFORM_MIN");
-expect(deploySh.includes('"platform_version"'), "deploy.sh must resolve DEEPSONAR_IMAGE_TAG from catalog platform_version");
+expect(!/DEEPSONAR_IMAGE_TAG=|\$\{IMAGE_TAG\}/.test(deploySh) && deploySh.includes("ds_check_platform_image_contract"), "deploy.sh must not resolve or write DEEPSONAR_IMAGE_TAG; platform images use digest refs (#740)");
 expect(!deploySh.includes('/"version"[[:space:]]*:/'), "deploy.sh must not take the first catalog version as the platform tag");
 expect(openHarmonyRegistry.images.every((image) => image.versions.every((version) => Array.isArray(version.platforms) && version.platforms.length >= 2 || image.versions.length === 0)), "bundled v2 catalog must consolidate platforms");
 expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");

@@ -1,5 +1,9 @@
-/** Deploy/runtime product version. Never fall back to drifted workspace package.json. */
-const VERSION_ENV_KEYS = ["DEEPSONAR_VERSION", "DEEPSONAR_IMAGE_TAG"] as const;
+/**
+ * Deploy/runtime product version: only the explicit DEEPSONAR_VERSION (#740).
+ * The removed DEEPSONAR_IMAGE_TAG is never consulted, and drifted workspace
+ * package.json is never used.
+ */
+const VERSION_ENV_KEYS = ["DEEPSONAR_VERSION"] as const;
 const GIT_REVISION_ENV_KEYS = ["DEEPSONAR_GIT_REVISION", "OPENCONTAINERS_IMAGE_REVISION"] as const;
 
 export function resolveProductVersion(

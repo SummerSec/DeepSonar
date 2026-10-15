@@ -83,7 +83,7 @@ const PlatformUpdateStatusSchema = {
   ],
   properties: {
     checked_at: { type: "string", format: "date-time", nullable: true },
-    current_version: { type: "string", description: "当前部署版本核心（X.Y.Z）；来自 DEEPSONAR_VERSION / DEEPSONAR_IMAGE_TAG" },
+    current_version: { type: "string", description: "当前部署版本核心（X.Y.Z）；只来自 DEEPSONAR_VERSION" },
     available_version: { type: "string", nullable: true, description: "清单中的可升级平台版本；无更新或检查失败时为 null" },
     available_commit_sha: { type: "string", nullable: true },
     available_schema_version: { type: "integer", nullable: true, minimum: 1, description: "目标 Release 的 DeepSonar SCHEMA_VERSION" },
@@ -330,7 +330,7 @@ const OPS: Op[] = [
           ready: { type: "boolean" },
           version: {
             type: "string",
-            description: "部署版本：DEEPSONAR_VERSION，否则 DEEPSONAR_IMAGE_TAG；未设置时为空字符串，不用 workspace package.json",
+            description: "部署版本：只认 DEEPSONAR_VERSION（不回退镜像 tag）；未设置时为空字符串，不用 workspace package.json",
           },
           git_revision: {
             type: "string",

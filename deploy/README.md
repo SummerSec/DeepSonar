@@ -6,6 +6,23 @@
 
 控制面镜像（`scheduler` / `web` / `image-admission`）与再发布依赖（`assets-helper` / `silo`）随 Release 发布 `linux/amd64` + `linux/arm64` 多架构 index；运行时镜像此前已多架构。详见 [`docs/ONE_CLICK_DEPLOYMENT.md`](../docs/ONE_CLICK_DEPLOYMENT.md) §3.1 与 [`docs/RELEASE_RUNTIME_IMAGES.md`](../docs/RELEASE_RUNTIME_IMAGES.md)。
 
+## 平台镜像引用（#740）
+
+`docker-compose.prod.yml` 与 `docker-compose.opensandbox.host.yml` 的平台镜像只接受完整不可变 digest 引用，
+`/health.version` 只认显式 `DEEPSONAR_VERSION`；`DEEPSONAR_IMAGE_TAG` 已删除：
+
+```dotenv
+DEEPSONAR_VERSION=<release-version-without-v>
+DEEPSONAR_SCHEDULER_IMAGE=<registry>/deepsonar-scheduler@sha256:<digest>
+DEEPSONAR_WEB_IMAGE=<registry>/deepsonar-web@sha256:<digest>
+DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<digest>
+```
+
+四行随 Release 回写到 `.env.example`。`deploy.sh` / `deploy.ps1`（共享校验见 `platform-images.sh` 与
+`Assert-PlatformImageContract`）发现旧变量、可变 tag、仓库名不符或缺版本时 fail closed，并打印应复制的四行；
+不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量。`up real build` 临时把平台镜像标记为
+`deepsonar-*:local-build`，不改写 `.env`。`upgrade check / apply / rollback` 属于 #740 后续片。
+
 ## 快速开始
 
 ```bash
@@ -28,13 +45,13 @@ pwsh -NoProfile -File .\deploy\deploy.ps1
 ```
 
 real 模式使用 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 写入共享资产只读卷。`up`/`pull`
-优先拉取 `$IMAGE_REGISTRY/deepsonar-assets-helper:$IMAGE_TAG` 并导出 RepoDigest；
+优先拉取 `$IMAGE_REGISTRY/deepsonar-assets-helper:$DEEPSONAR_VERSION` 并导出 RepoDigest；
 该官方标签在下一正式 Release 才存在，当前版本回退
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
 覆盖值必须仍是 immutable digest；失败即停止部署。fake 模式不使用 helper。
 
 `SILO_IMAGE` 默认是 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。`up`/`pull` 优先拉取
-`$IMAGE_REGISTRY/deepsonar-silo:$IMAGE_TAG` 并尽量写入 RepoDigest；该官方标签在下一正式
+`$IMAGE_REGISTRY/deepsonar-silo:$DEEPSONAR_VERSION` 并尽量写入 RepoDigest；该官方标签在下一正式
 Release 才存在。已覆盖为其它镜像时不改写。Silo 的 command / healthcheck / `mcli` 契约不变。
 
 real compose 将 `DEEPSONAR_HOST_DISK_SOURCE`（默认 `/var/lib/docker`）只读挂载为

@@ -40,6 +40,15 @@ $DefaultSharedAssetsHelperImage = "docker.io/library/busybox@sha256:fc6dddc4c44b
 $DefaultSiloImage = "docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
 $ImmutableDigestRe = "^[^@\s]+@sha256:[0-9a-f]{64}$"
+# Platform images (#740): one full immutable digest ref per image, plus an explicit
+# DEEPSONAR_VERSION. The removed DEEPSONAR_IMAGE_TAG and mutable tags fail closed.
+$PlatformImageSpecs = [ordered]@{
+  DEEPSONAR_SCHEDULER_IMAGE = "deepsonar-scheduler"
+  DEEPSONAR_WEB_IMAGE = "deepsonar-web"
+  DEEPSONAR_IMAGE_ADMISSION_IMAGE = "deepsonar-image-admission"
+}
+$PlatformVersionRe = "^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$"
+$LocalBuildTag = "local-build"
 
 function Get-DeployTuningInt([string]$Name, [int]$Default) {
   $raw = [Environment]::GetEnvironmentVariable($Name)
@@ -202,25 +211,6 @@ function Write-EnvFileRaw([string]$Raw) {
   [IO.File]::WriteAllText($EnvFile, $Raw, $Utf8NoBom)
 }
 
-function Get-DefaultImageTag {
-  $registryFile = Join-Path $DeployDir "runtime-image-registry.json"
-  if (Test-Path -LiteralPath $registryFile) {
-    try {
-      $registry = [IO.File]::ReadAllText($registryFile, $Utf8NoBom) | ConvertFrom-Json
-      $version = [string]$registry.platform_version
-      if ($version -match "^[0-9]") { return $version }
-    } catch {}
-  }
-  $exampleTag = [IO.File]::ReadAllLines($EnvExample, $Utf8NoBom) |
-    Where-Object { $_ -match "^DEEPSONAR_IMAGE_TAG=(.+)$" } |
-    Select-Object -First 1
-  if ($exampleTag -match "^DEEPSONAR_IMAGE_TAG=(.+)$") {
-    $value = $Matches[1].Trim().TrimStart("v")
-    if ($value) { return $value }
-  }
-  throw "Cannot resolve the current release version from deploy/runtime-image-registry.json or deploy/.env.example"
-}
-
 function Ensure-EnvKv([string]$Name, [string]$Value) {
   $raw = Read-EnvFileRaw
   $pattern = "(?m)^$([regex]::Escape($Name))="
@@ -295,16 +285,13 @@ function Initialize-Env {
     throw "deploy/.env still contains change-me placeholders"
   }
 
-  $defaultImageTag = Get-DefaultImageTag
+  # No auto-fill and no tag fallback: worker-join runs no platform image, so it
+  # only rejects the removed variable.
+  $requirePlatform = -not ($Mode -eq "worker-join" -and $Action -ne "pull")
+  Assert-PlatformImageContract $requirePlatform
   Ensure-EnvKv "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
-  Ensure-EnvKv "DEEPSONAR_IMAGE_TAG" $defaultImageTag
   Ensure-EnvKv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" $DefaultSharedAssetsHelperImage
   Ensure-EnvKv "SILO_IMAGE" $DefaultSiloImage
-  $raw = Read-EnvFileRaw
-  if ($raw -match "(?m)^DEEPSONAR_IMAGE_TAG=latest$") {
-    Ensure-EnvValue "DEEPSONAR_IMAGE_TAG" $defaultImageTag
-    Write-Host "[deploy] Normalized legacy latest image tag to $defaultImageTag"
-  }
   Ensure-AllowedImageRegistries
 
   if (-not (Test-Path -LiteralPath $MasterKeyFile)) {
@@ -319,6 +306,85 @@ function Read-EnvValue([string]$Name, [string]$Default = "") {
     Select-Object -First 1
   if (-not $line) { return $Default }
   return ($line -split "=", 2)[1].Trim()
+}
+
+function Get-EffectiveEnvValue([string]$Name) {
+  # Process env beats deploy/.env, matching Docker Compose interpolation.
+  $fromProcess = [Environment]::GetEnvironmentVariable($Name)
+  if ($null -ne $fromProcess) { return $fromProcess.Trim() }
+  if (-not (Test-Path -LiteralPath $EnvFile)) { return "" }
+  return Read-EnvValue $Name ""
+}
+
+function Test-PlatformImageRef([string]$Ref, [string]$Repo) {
+  return $Ref -cmatch ("^[^@\s]+/" + [regex]::Escape($Repo) + "@sha256:[0-9a-f]{64}$")
+}
+
+function Get-PlatformImageContractErrors([bool]$RequirePlatform) {
+  $errors = New-Object System.Collections.Generic.List[string]
+  if (Test-Path -LiteralPath $EnvFile) {
+    if ((Read-EnvFileRaw) -match "(?m)^[ \t]*(export[ \t]+)?DEEPSONAR_IMAGE_TAG[ \t]*=") {
+      $errors.Add("deploy/.env contains the removed DEEPSONAR_IMAGE_TAG (platform images are no longer deployed by tag)")
+    }
+  }
+  if ($null -ne [Environment]::GetEnvironmentVariable("DEEPSONAR_IMAGE_TAG")) {
+    $errors.Add("process environment sets the removed DEEPSONAR_IMAGE_TAG; unset it and retry")
+  }
+  if ($RequirePlatform) {
+    foreach ($key in $PlatformImageSpecs.Keys) {
+      $repo = $PlatformImageSpecs[$key]
+      $value = Get-EffectiveEnvValue $key
+      if ([string]::IsNullOrWhiteSpace($value)) {
+        $errors.Add("missing $key (must be <registry>/$repo@sha256:<64 lowercase hex>)")
+      } elseif (-not (Test-PlatformImageRef $value $repo)) {
+        $errors.Add("$key=$value is not an immutable digest ref for $repo (must be <registry>/$repo@sha256:<64 lowercase hex>; tags are rejected)")
+      }
+    }
+    $version = Get-EffectiveEnvValue "DEEPSONAR_VERSION"
+    if ([string]::IsNullOrWhiteSpace($version)) {
+      $errors.Add("missing DEEPSONAR_VERSION (the only source of /health.version; no image tag fallback)")
+    } elseif ($version -cnotmatch $PlatformVersionRe) {
+      $errors.Add("DEEPSONAR_VERSION=$version must be X.Y.Z without a v prefix (optional -/+ suffix)")
+    }
+  }
+  return $errors.ToArray()
+}
+
+function Write-PlatformContractHint {
+  Write-Host "[deploy] Platform images are now pinned by immutable digest (#740); DEEPSONAR_IMAGE_TAG and mutable tags are no longer accepted." -ForegroundColor Yellow
+  Write-Host "[deploy] Remove DEEPSONAR_IMAGE_TAG from deploy/.env and copy these lines from the Release-synced deploy/.env.example, then retry:" -ForegroundColor Yellow
+  if (Test-Path -LiteralPath $EnvExample) {
+    [IO.File]::ReadAllLines($EnvExample, $Utf8NoBom) |
+      Where-Object { $_ -match "^(DEEPSONAR_VERSION|DEEPSONAR_SCHEDULER_IMAGE|DEEPSONAR_WEB_IMAGE|DEEPSONAR_IMAGE_ADMISSION_IMAGE)=" } |
+      ForEach-Object { Write-Host "  $_" }
+  }
+  Write-Host "[deploy] Do not delete the whole deploy/.env (it holds database passwords and keys); a later deploy.ps1 upgrade will regenerate these lines." -ForegroundColor Yellow
+}
+
+function Assert-PlatformImageContract([bool]$RequirePlatform) {
+  $errors = @(Get-PlatformImageContractErrors $RequirePlatform)
+  if ($errors.Count -eq 0) { return }
+  foreach ($message in $errors) { Write-Host "[deploy] $message" -ForegroundColor Red }
+  Write-PlatformContractHint
+  throw "deploy/.env violates the platform image digest contract (#740); see the messages above"
+}
+
+function Get-PlatformImageRefs {
+  return @($PlatformImageSpecs.Keys | ForEach-Object { Get-EffectiveEnvValue $_ })
+}
+
+function Write-PlatformImages {
+  Write-Host "[deploy] Platform version: DEEPSONAR_VERSION=$(Get-EffectiveEnvValue 'DEEPSONAR_VERSION')"
+  foreach ($key in $PlatformImageSpecs.Keys) {
+    Write-Host "[deploy] ${key}: $(Get-EffectiveEnvValue $key)"
+  }
+}
+
+function Set-LocalBuildPlatformImages {
+  # Compose cannot tag a local build as name@sha256:...; deploy/.env stays untouched.
+  foreach ($key in $PlatformImageSpecs.Keys) {
+    [Environment]::SetEnvironmentVariable($key, "$($PlatformImageSpecs[$key]):$LocalBuildTag")
+  }
 }
 
 function Get-SharedAssetsHelperImage {
@@ -341,8 +407,8 @@ function Get-ImageRepoDigest([string]$Tag, [string]$NameNeedle) {
 function Pull-SharedAssetsHelper {
   if ($Mode -ne "real") { return }
   $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
-  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
-  if ($registry) {
+  $tag = Get-EffectiveEnvValue "DEEPSONAR_VERSION"
+  if ($registry -and $tag) {
     $official = "$registry/deepsonar-assets-helper:$tag"
     Write-Host "[deploy] Trying official shared-assets helper: $official"
     & docker pull $official
@@ -377,8 +443,8 @@ function Pull-OfficialSilo {
     return
   }
   $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
-  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
-  if ($registry) {
+  $tag = Get-EffectiveEnvValue "DEEPSONAR_VERSION"
+  if ($registry -and $tag) {
     $official = "$registry/deepsonar-silo:$tag"
     Write-Host "[deploy] Trying official Silo: $official"
     & docker pull $official
@@ -398,11 +464,8 @@ function Pull-OfficialSilo {
 }
 
 function Pull-AppImages {
-  $registry = Read-EnvValue "DEEPSONAR_IMAGE_REGISTRY" $DefaultImageRegistry
-  $tag = Read-EnvValue "DEEPSONAR_IMAGE_TAG" (Get-DefaultImageTag)
-  Write-Host "[deploy] Pulling app images from ${registry} tag=${tag}"
-  foreach ($name in @("deepsonar-scheduler", "deepsonar-web", "deepsonar-image-admission")) {
-    $ref = "${registry}/${name}:${tag}"
+  Write-Host "[deploy] Pulling platform images by immutable digest (DEEPSONAR_VERSION=$(Get-EffectiveEnvValue 'DEEPSONAR_VERSION'))"
+  foreach ($ref in (Get-PlatformImageRefs)) {
     Write-Host "[deploy] pull $ref"
     & docker pull $ref
     if ($LASTEXITCODE -ne 0) { throw "Failed to pull $ref" }
@@ -452,7 +515,7 @@ try {
       if ($LASTEXITCODE -ne 0) { throw "Docker Compose validation failed" }
       if ($Mode -eq "real") { $null = Get-SharedAssetsHelperImage }
       Write-Host "[deploy] Compose configuration is valid." -ForegroundColor Green
-      Write-Host "[deploy] Image source: $(Read-EnvValue 'DEEPSONAR_IMAGE_REGISTRY' $DefaultImageRegistry) / $(Read-EnvValue 'DEEPSONAR_IMAGE_TAG' (Get-DefaultImageTag))"
+      if (-not ($Mode -eq "worker-join")) { Write-PlatformImages }
     }
     "pull" {
       Pull-AppImages
@@ -494,7 +557,8 @@ try {
       Pull-SharedAssetsHelper
 
       if ($Source -eq "build") {
-        Write-Host "[deploy] Local Dockerfile build mode"
+        Write-Host "[deploy] Local Dockerfile build mode (platform images tagged *:$LocalBuildTag; deploy/.env digest refs unchanged)"
+        Set-LocalBuildPlatformImages
         $upRc = Invoke-DockerComposeUpBounded -ComposeArgs $ComposeArgs -UpArgs @("-d", "--build") -TimeoutSec $upTimeout
       } else {
         Pull-AppImages
@@ -522,7 +586,11 @@ try {
         throw "Required scheduler/web containers are not running"
       }
       Write-Host "[deploy] DeepSonar is ready: http://127.0.0.1:$port" -ForegroundColor Green
-      Write-Host "[deploy] App images: $(Read-EnvValue 'DEEPSONAR_IMAGE_REGISTRY' $DefaultImageRegistry)/*:$(Read-EnvValue 'DEEPSONAR_IMAGE_TAG' (Get-DefaultImageTag))"
+      if ($Source -eq "build") {
+        Write-Host "[deploy] Platform images: local build *:$LocalBuildTag (DEEPSONAR_VERSION=$(Get-EffectiveEnvValue 'DEEPSONAR_VERSION'))"
+      } else {
+        Write-PlatformImages
+      }
       Write-Host "[deploy] The bootstrap admin token is stored as DEEPSONAR_ADMIN_TOKEN in deploy/.env."
       Write-Host "[deploy] Human default admin: admin / Deep@Sonar66. Change the password (and preferably the username) immediately in production."
       if ($Mode -eq "fake") {
