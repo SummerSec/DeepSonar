@@ -72,6 +72,30 @@ const TaskExecutionControlResponseSchema = {
   },
 };
 
+
+const PlatformUpdateStatusSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "checked_at", "current_version", "available_version", "available_commit_sha",
+    "available_schema_version", "changelog_url", "update_available", "schema_rebuild_needed",
+    "check_error", "registry_source", "missing",
+  ],
+  properties: {
+    checked_at: { type: "string", format: "date-time", nullable: true },
+    current_version: { type: "string", description: "当前部署版本核心（X.Y.Z）；来自 DEEPSONAR_VERSION / DEEPSONAR_IMAGE_TAG" },
+    available_version: { type: "string", nullable: true, description: "清单中的可升级平台版本；无更新或检查失败时为 null" },
+    available_commit_sha: { type: "string", nullable: true },
+    available_schema_version: { type: "integer", nullable: true, minimum: 1, description: "目标 Release 的 DeepSonar SCHEMA_VERSION" },
+    changelog_url: { type: "string", nullable: true, maxLength: 500 },
+    update_available: { type: "boolean", description: "仅当可用版本严格大于当前版本时为 true" },
+    schema_rebuild_needed: { type: "boolean", description: "有可用更新且目标 schema_version 大于当前 SCHEMA_VERSION" },
+    check_error: { type: "string", nullable: true, maxLength: 500, description: "GitHub 不可达等检查错误；不影响领取与业务" },
+    registry_source: { type: "string", nullable: true, description: "remote / bundled / upload" },
+    missing: { type: "boolean", description: "尚未写入过检查结果" },
+  },
+};
+
 const PlatformClaimsStatusSchema = {
   type: "object",
   additionalProperties: false,
@@ -1701,6 +1725,15 @@ const OPS: Op[] = [
         },
       },
     },
+  },
+  {
+    method: "get",
+    path: "/platform/updates",
+    summary: "平台版本发现：最近一次清单同步检查结果",
+    description: "#740 P1 第 2 片：只读。比较当前部署版本与 runtime-image-registry.json 的 platform 段（或 legacy platform_version）。GitHub 不可达时只返回 check_error。项目级 token 拒绝（403 PLATFORM_UPDATE_PROJECT_TOKEN_FORBIDDEN）。不提供升级 apply。",
+    scope: "admin",
+    tags: ["Settings"],
+    responses: { "200": PlatformUpdateStatusSchema },
   },
   {
     method: "get",

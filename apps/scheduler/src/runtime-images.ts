@@ -96,6 +96,7 @@ import {
   type RuntimeImageRegistryVersion as RuntimeImageRegistryVersionContract,
 } from "./runtime-image-registry-contract.js";
 import { type HubRuntimeImageCapability, type HubRuntimeImageCatalogEntry, hubRuntimeImageCapability, officialHubRuntimeImageCapabilityKeys, toHubRuntimeImageCatalogEntry } from "./hub-runtime-image-capability.js";
+import { recordPlatformUpdateCheckFromRegistry } from "./domains/platform-updates/index.js";
 export type { HubRuntimeImageCapability, HubRuntimeImageCatalogEntry };
 export { hubRuntimeImageCapability, officialHubRuntimeImageCapabilityKeys, toHubRuntimeImageCatalogEntry };
 
@@ -106,6 +107,8 @@ export {
   legacyRuntimeImageRef,
   parseOciDigestRef,
   parseRuntimeImageRegistry,
+  parsePlatformReleaseManifest,
+  compareSemverCore,
   runtimeImageVersionCore,
   RUNTIME_IMAGE_REGISTRY_CHANNELS,
   RUNTIME_IMAGE_REGISTRY_METADATA_SOURCES,
@@ -116,6 +119,8 @@ export {
 } from "./runtime-image-registry-contract.js";
 export type {
   MinRuntimeImageRequirement,
+  PlatformReleaseManifest,
+  PlatformReleaseImage,
   ParsedOciDigestRef,
   RuntimeImageRegistryChannel,
   RuntimeImageRegistryChannelPolicy,
@@ -1467,7 +1472,10 @@ export async function applyOfficialRuntimeCatalog(
 /** 从 GitHub Release / bundled 拉取官方清单并写入 DB。 */
 export async function syncOfficialRuntimeCatalog(): Promise<RuntimeImageCatalogSyncResult> {
   const loadedRegistry = await loadRuntimeImageRegistry({ refreshRemote: true });
-  return applyOfficialRuntimeCatalog(loadedRegistry, { applyEnvOverrides: true });
+  const result = await applyOfficialRuntimeCatalog(loadedRegistry, { applyEnvOverrides: true });
+  // #740：版本发现复用同一清单同步路径；失败只记日志，不影响官方目录同步与领取。
+  await recordPlatformUpdateCheckFromRegistry(result.registry);
+  return result;
 }
 
 /**
@@ -1488,7 +1496,9 @@ export async function applyUploadedRuntimeCatalog(
     checked_at: new Date().toISOString(),
   };
   remoteRegistryCache = { registry: tagged, checked_at: Date.now(), error: null };
-  return applyOfficialRuntimeCatalog(tagged, { applyEnvOverrides: false });
+  const result = await applyOfficialRuntimeCatalog(tagged, { applyEnvOverrides: false });
+  await recordPlatformUpdateCheckFromRegistry(result.registry);
+  return result;
 }
 
 export function startRuntimeImageRegistrySync(): () => void {

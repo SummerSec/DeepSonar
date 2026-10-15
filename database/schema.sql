@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 57);
+INSERT INTO schema_meta (id, version) VALUES ('global', 58);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -961,6 +961,36 @@ CREATE TABLE global_settings (
       AND claims_paused_at IS NOT NULL
       AND (claims_pause_note IS NULL OR char_length(claims_pause_note) BETWEEN 1 AND 500)
     )
+  )
+);
+
+
+-- #740 P1 slice 2：平台版本发现结果（单例）。Scheduler 在官方清单同步后写入；
+-- GitHub 不可达只记 check_error，不影响领取与业务。不存 token。
+CREATE TABLE platform_update_checks (
+  id text PRIMARY KEY DEFAULT 'latest',
+  checked_at timestamptz NOT NULL DEFAULT now(),
+  current_version text NOT NULL DEFAULT '',
+  available_version text,
+  available_commit_sha text,
+  available_schema_version integer,
+  changelog_url text,
+  update_available boolean NOT NULL DEFAULT false,
+  schema_rebuild_needed boolean NOT NULL DEFAULT false,
+  check_error text,
+  registry_source text,
+  CONSTRAINT platform_update_checks_id_check CHECK (id = 'latest'),
+  CONSTRAINT platform_update_checks_current_version_len CHECK (char_length(current_version) <= 64),
+  CONSTRAINT platform_update_checks_available_version_len CHECK (available_version IS NULL OR char_length(available_version) BETWEEN 1 AND 64),
+  CONSTRAINT platform_update_checks_commit_len CHECK (available_commit_sha IS NULL OR char_length(available_commit_sha) BETWEEN 7 AND 64),
+  CONSTRAINT platform_update_checks_changelog_len CHECK (changelog_url IS NULL OR char_length(changelog_url) BETWEEN 1 AND 500),
+  CONSTRAINT platform_update_checks_error_len CHECK (check_error IS NULL OR char_length(check_error) BETWEEN 1 AND 500),
+  CONSTRAINT platform_update_checks_source_len CHECK (registry_source IS NULL OR char_length(registry_source) BETWEEN 1 AND 32),
+  CONSTRAINT platform_update_checks_schema_version_check CHECK (
+    available_schema_version IS NULL OR available_schema_version >= 1
+  ),
+  CONSTRAINT platform_update_checks_update_implies_version CHECK (
+    update_available = false OR available_version IS NOT NULL
   )
 );
 

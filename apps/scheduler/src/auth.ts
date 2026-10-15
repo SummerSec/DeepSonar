@@ -226,6 +226,8 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /platform/claims": "tasks:read",
   "POST /platform/claims/pause": "admin",
   "POST /platform/claims/resume": "admin",
+  // #740 P1 slice 2：平台版本发现只读；仅平台管理员，项目级 token 拒绝。
+  "GET /platform/updates": "admin",
   "GET /readiness": "agents:read",
   "GET /projects/:id/readiness": "agents:read",
   "GET /tokens": "tokens:manage",

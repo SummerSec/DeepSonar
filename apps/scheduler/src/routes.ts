@@ -24,6 +24,7 @@ import { registerWorkerNodeRoutes } from "./domains/worker-nodes/index.js";
 import { registerTransferRoutes } from "./domains/transfer/routes.js";
 import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js";
 import { registerPlatformClaimsRoutes } from "./domains/platform-claims/index.js";
+import { registerPlatformUpdateRoutes } from "./domains/platform-updates/index.js";
 import { registerDeviceRoutes } from "./domains/device/routes.js";
 import { validationHttpError } from "./http-validation-error.js";
 import { runtimeImageHttpError } from "./runtime-images.js";
@@ -66,6 +67,7 @@ export function registerRoutes(app: FastifyInstance) {
 
   registerSettingsRoutes(app);
   registerPlatformClaimsRoutes(app);
+  registerPlatformUpdateRoutes(app);
 
   registerCanvasRoutes(app);
 

@@ -2,7 +2,9 @@
 
 ### 新增
 
-- **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、活跃 Attempt 上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。版本发现、digest 部署契约与 `deploy.sh` / `deploy.ps1` 的 `upgrade` 子命令属于 #740 后续 PR。
+- **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION` / `DEEPSONAR_IMAGE_TAG`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 生成 `platform` digests 与最终 payload inspect 门禁扩展仍为 TODO；Compose 仍用 `DEEPSONAR_IMAGE_TAG`，digest 契约与 `deploy.sh upgrade` 留给后续片。
+
+- **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、活跃 Attempt 上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。digest 部署契约与 `deploy.sh` / `deploy.ps1` 的 `upgrade` 子命令属于 #740 后续片（版本发现见本区第 2 片）。
 
 ### 文档
 
@@ -10,7 +12,7 @@
 
 ### 部署 / 升级说明
 
-- 本次改动修改数据库 schema：主线 **v56 → v57**（`global_settings` 新增暂停列）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用本次不变，仍为 `DEEPSONAR_IMAGE_TAG`。
+- 本次改动修改数据库 schema：主线 **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用本次不变，仍为 `DEEPSONAR_IMAGE_TAG`；`upgrade` 子命令与 digest 契约见 #740 后续片。
 
 ## [0.5.6] - 2026-10-15
 

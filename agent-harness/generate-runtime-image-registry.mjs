@@ -438,7 +438,7 @@ export function versionsForUnchangedDigest(previousVersions, nextVersion) {
 
 export function assertRegistry(registry) {
   if (!registry || typeof registry !== "object" || Array.isArray(registry)) fail("registry 必须是对象");
-  assertKnownKeys(registry, ["schema", "schema_version", "images", "source", "platform_version", "min_runtime_image"], "registry");
+  assertKnownKeys(registry, ["schema", "schema_version", "images", "source", "platform_version", "platform", "min_runtime_image"], "registry");
   const schema = registry.schema;
   const schemaVersion = registry.schema_version;
   const isV1 = schema === "deepsonar.registry/v1" || schemaVersion === 1;
@@ -449,6 +449,17 @@ export function assertRegistry(registry) {
     assertSemverCore(registry.platform_version, "platform_version");
     if (!registry.min_runtime_image) fail("v2 registry 必须声明 min_runtime_image");
     assertMinRuntimeImage(registry.min_runtime_image);
+    // TODO(#740 P1 slice 2+): when Release emits `platform` digests, validate with the
+    // Scheduler contract (index + linux/amd64 + linux/arm64 child digests + channel evidence)
+    // and extend the final payload inspect gate. Omitting `platform` remains valid.
+    if (registry.platform !== undefined) {
+      if (!registry.platform || typeof registry.platform !== "object" || Array.isArray(registry.platform)) {
+        fail("platform 必须是对象");
+      }
+      if (registry.platform.version && registry.platform.version !== registry.platform_version) {
+        fail("platform.version 必须与 platform_version 一致");
+      }
+    }
   }
   if (isV1) assertV1Registry(registry);
   else assertV2Registry(registry);

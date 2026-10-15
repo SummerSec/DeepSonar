@@ -10,6 +10,7 @@ import { canAccessAnyScope } from "../permissions";
 import { formatHealthOpenSandbox, healthOpenSandboxDegraded, type HealthOpenSandbox } from "../health-status";
 import { formatHealthVersion, githubReleaseUrlForVersion } from "../product-version";
 import { platformClaimsBanner, type PlatformClaimsStatus } from "../platform-claims";
+import { platformUpdatePrompt, type PlatformUpdateStatus } from "../platform-updates";
 import { ACCENT_THEMES, accentThemeById, persistAccentTheme, readAccentTheme, type AccentTheme } from "../accent-themes";
 
 const WORKSPACE_NAV: { to: string; end: boolean; label: string; caption: string; icon: Icon }[] = [
@@ -127,6 +128,50 @@ function usePlatformClaims() {
   return status;
 }
 
+
+/** #740 slice 2: admin-only platform version prompt (never shown to non-admins). */
+function usePlatformUpdates() {
+  const { me } = useAuth();
+  const canAdmin = canAccessAnyScope(me, ["admin"]);
+  const [status, setStatus] = useState<PlatformUpdateStatus | null>(null);
+  useEffect(() => {
+    if (!canAdmin) {
+      setStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = () => {
+      api.platformUpdates()
+        .then((next) => { if (!cancelled) setStatus(next); })
+        .catch(() => { /* advisory only */ });
+    };
+    tick();
+    const timer = window.setInterval(tick, 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [canAdmin]);
+  return status;
+}
+
+function PlatformUpdatePromptView({ status }: { status: PlatformUpdateStatus | null }) {
+  const prompt = platformUpdatePrompt(status);
+  if (!prompt) return null;
+  const tone = prompt.kind === "error"
+    ? "bg-rose-400/[.08] ring-rose-300/25 text-rose-200"
+    : "bg-sky-400/[.08] ring-sky-300/25 text-sky-200";
+  return <section role="status" aria-live="polite" aria-label="平台版本更新" className={`relative z-20 mx-3 mt-3 rounded-2xl px-4 py-2 ring-1 ${tone}`}>
+    <strong className="block text-sm font-medium">{prompt.title}</strong>
+    <small className="block text-xs text-zinc-400">{prompt.detail}</small>
+    {prompt.changelog_url && (
+      <a href={prompt.changelog_url} target="_blank" rel="noreferrer noopener" className="mt-1 inline-block text-xs text-sky-300 underline-offset-2 hover:underline">
+        查看 changelog
+      </a>
+    )}
+  </section>;
+}
+
 function PlatformClaimsBannerView({ status }: { status: PlatformClaimsStatus | null }) {
   const banner = platformClaimsBanner(status);
   if (!banner) return null;
@@ -142,6 +187,7 @@ export function AppShell() {
   const projectId = projectMatch?.params.projectId;
   const schedulerHealth = useSchedulerHealth();
   const platformClaims = usePlatformClaims();
+  const platformUpdates = usePlatformUpdates();
   const versionLabel = schedulerHealth.version ?? "—";
   const versionHref = githubReleaseUrlForVersion(schedulerHealth.version);
   const openSandboxLabel = formatHealthOpenSandbox(schedulerHealth.openSandbox);
@@ -236,7 +282,7 @@ export function AppShell() {
     <header className="mobile-island"><div className="brand-lockup compact"><div className="brand-mark"><DeepSonarMark /></div><div className="brand-copy"><strong>DeepSonar</strong><span>深流循迹</span></div></div><button className="mobile-search" onClick={() => setCommandOpen(true)} aria-label="搜索与跳转"><MagnifyingGlass size={17} weight="light" /></button><button className={`menu-trigger ${menuOpen ? "is-open" : ""}`} onClick={() => setMenuOpen((value) => !value)} aria-label={menuOpen ? "关闭导航" : "打开导航"} aria-expanded={menuOpen}><span /><span /></button></header>
     <div className={`mobile-menu ${menuOpen ? "is-open" : ""}`} aria-hidden={!menuOpen}><div className="mobile-menu-head"><span>CONTROL PLANE</span><button onClick={() => setMenuOpen(false)} aria-label="关闭"><X size={18} /></button></div><MainNav projectId={projectId} onNavigate={() => setMenuOpen(false)} /><UserRailFooter collapsed={false} /><div className={`mobile-menu-foot${statusDegraded ? " is-degraded" : ""}`} title={statusTitle}><span className="deepsonar-live-dot" /> 调度器在线 {versionMark}{openSandboxLabel ? ` · ${openSandboxLabel}` : ""}</div></div>
     {commandOpen && <CommandMenu projectId={projectId} onClose={() => setCommandOpen(false)} onNavigate={(to) => { navigate(to); setCommandOpen(false); }} />}
-    <main id="main-content" className="app-stage"><PlatformClaimsBannerView status={platformClaims} /><Outlet /></main>
+    <main id="main-content" className="app-stage"><PlatformClaimsBannerView status={platformClaims} /><PlatformUpdatePromptView status={platformUpdates} /><Outlet /></main>
   </div>;
 }
 

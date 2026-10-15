@@ -442,3 +442,5 @@ python -X utf8 -c "import json; print(json.load(open('schema.json',encoding='utf
 # 3) 或拉 Markdown
 curl -s "$DEEPSONAR_BASE_URL/schema.md"
 ```
+
+- `GET /platform/updates`（admin）：#740 平台版本发现最近一次检查结果（可更新版本、schema 是否需重建、check_error）；项目级 token 拒绝。

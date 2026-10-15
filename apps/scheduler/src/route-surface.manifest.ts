@@ -76,6 +76,7 @@ GET /jobs/:id/evidence/stream
 GET /metrics
 GET /openapi.json
 GET /platform/claims
+GET /platform/updates
 GET /platform/exports
 GET /platform/shared-assets
 GET /projects
@@ -284,6 +285,7 @@ GET /jobs/{id}/evidence/stream
 GET /metrics
 GET /openapi.json
 GET /platform/claims
+GET /platform/updates
 GET /platform/exports
 GET /platform/shared-assets
 GET /projects

@@ -119,6 +119,11 @@ export interface RuntimeImageRegistry {
   schema_version?: 1 | 2;
   /** Platform Release version (scheduler/web/admission). Independent of image versions. */
   platform_version?: string;
+  /**
+   * Structured platform upgrade info (#740). Optional for backward compatibility;
+   * when present, fail closed on unknown keys / malformed digests.
+   */
+  platform?: PlatformReleaseManifest;
   /** Platform-declared minimum official runtime-image version. */
   min_runtime_image?: MinRuntimeImageRequirement;
   images: RuntimeImageRegistryImage[];
@@ -127,6 +132,31 @@ export interface RuntimeImageRegistry {
   fallback?: boolean;
   error?: string | null;
   checked_at?: string;
+}
+
+
+export const PLATFORM_RELEASE_IMAGE_KEYS = ["scheduler", "web", "image-admission"] as const;
+export type PlatformReleaseImageKey = (typeof PLATFORM_RELEASE_IMAGE_KEYS)[number];
+
+/** Per-image platform digests: index + child digests + multi-channel refs (mirrors runtime v2). */
+export interface PlatformReleaseImage {
+  digest: string;
+  platforms: string[];
+  child_digests: Readonly<Record<string, string>>;
+  registry_refs: Partial<Record<RuntimeImageRegistryChannel, string>>;
+  registry_evidence: Partial<Record<RuntimeImageRegistryChannel, RuntimeImageRegistryChannelEvidence>>;
+}
+
+/**
+ * Release-time platform upgrade block inside runtime-image-registry.json.
+ * `version` is X.Y.Z (no leading v); `schema_version` is DeepSonar DB SCHEMA_VERSION at release.
+ */
+export interface PlatformReleaseManifest {
+  version: string;
+  commit_sha: string;
+  schema_version: number;
+  changelog_url?: string;
+  images: Readonly<Record<PlatformReleaseImageKey, PlatformReleaseImage>>;
 }
 
 export interface RuntimeImageRegistryPolicyInput {
@@ -141,6 +171,8 @@ const IMAGE_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/;
 const UNAVAILABLE_REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SEMVER_CORE_RE = /^\d+\.\d+\.\d+$/;
 const VERSION_CORE_PREFIX_RE = /^v?(\d+\.\d+\.\d+)/;
+const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/;
+const PLATFORM_CHANGELOG_URL_RE = /^https:\/\/github\.com\/SummerSec\/DeepSonar\/(?:blob|releases)\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/;
 
 function invalid(message: string): never {
   throw new Error(`runtime image registry contract: ${message}`);
@@ -371,7 +403,8 @@ export function isRuntimeImageBelowPlatformMin(input: {
   return compareSemverCore(core, floor) < 0;
 }
 
-function compareSemverCore(left: string, right: string): number {
+/** Compare X.Y.Z cores; negative if left < right. Used by platform update discovery. */
+export function compareSemverCore(left: string, right: string): number {
   const parse = (value: string): [number, number, number] => {
     const [major, minor, patch] = value.split(".").map((part) => Number(part));
     return [major ?? 0, minor ?? 0, patch ?? 0];
@@ -602,6 +635,133 @@ function detectSchema(value: Record<string, unknown>): 1 | 2 {
   return detected;
 }
 
+
+const PLATFORM_IMAGE_REPO: Readonly<Record<PlatformReleaseImageKey, string>> = Object.freeze({
+  scheduler: "deepsonar-scheduler",
+  web: "deepsonar-web",
+  "image-admission": "deepsonar-image-admission",
+});
+
+function parseCommitSha(value: unknown): string {
+  if (typeof value !== "string" || !COMMIT_SHA_RE.test(value)) invalid("platform.commit_sha must be 7–40 lowercase hex");
+  return value;
+}
+
+function parseDbSchemaVersion(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) invalid("platform.schema_version must be a positive integer");
+  return value as number;
+}
+
+function parseChangelogUrl(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length > 500 || !PLATFORM_CHANGELOG_URL_RE.test(value)) {
+    invalid("platform.changelog_url must be an https://github.com/SummerSec/DeepSonar blob or releases URL");
+  }
+  return value;
+}
+
+function assertPlatformImageRepo(parsed: ParsedOciDigestRef, imageKey: PlatformReleaseImageKey, channel: RuntimeImageRegistryChannel): void {
+  const expected = PLATFORM_IMAGE_REPO[imageKey];
+  const segments = parsed.path.split("/");
+  const name = segments[segments.length - 1] ?? "";
+  if (name !== expected) {
+    invalid(`platform.images.${imageKey} ${channel} ref repository must end with ${expected}`);
+  }
+}
+
+function parsePlatformReleaseImage(
+  value: unknown,
+  imageKey: PlatformReleaseImageKey,
+  policy: RuntimeImageRegistryPolicy,
+): PlatformReleaseImage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid(`platform.images.${imageKey} must be an object`);
+  const raw = value as Record<string, unknown>;
+  assertKnownKeys(raw, ["digest", "platforms", "child_digests", "registry_refs", "registry_evidence"], `platform.images.${imageKey}`);
+  const digest = typeof raw.digest === "string" && DIGEST_RE.test(raw.digest) ? raw.digest : "";
+  if (!digest) invalid(`platform.images.${imageKey} digest is invalid`);
+  const platforms = parsePlatforms(raw.platforms, true, `platform.${imageKey}`, digest)!;
+  if (!raw.child_digests || typeof raw.child_digests !== "object" || Array.isArray(raw.child_digests)) {
+    invalid(`platform.images.${imageKey} child_digests must be an object`);
+  }
+  const childRaw = raw.child_digests as Record<string, unknown>;
+  const childKeys = Object.keys(childRaw);
+  if (childKeys.length !== platforms.length || platforms.some((p) => !Object.prototype.hasOwnProperty.call(childRaw, p))) {
+    invalid(`platform.images.${imageKey} child_digests must cover exactly the declared platforms`);
+  }
+  const child_digests: Record<string, string> = {};
+  for (const platform of platforms) {
+    const child = childRaw[platform];
+    if (typeof child !== "string" || !DIGEST_RE.test(child)) invalid(`platform.images.${imageKey} child_digests.${platform} is invalid`);
+    child_digests[platform] = child;
+  }
+  const refsRaw = raw.registry_refs;
+  if (!refsRaw || typeof refsRaw !== "object" || Array.isArray(refsRaw)) invalid(`platform.images.${imageKey} registry_refs must be an object`);
+  const refs: Partial<Record<RuntimeImageRegistryChannel, string>> = {};
+  const seen = new Set<string>();
+  for (const [rawChannel, rawRef] of Object.entries(refsRaw as Record<string, unknown>)) {
+    if (!RUNTIME_IMAGE_REGISTRY_CHANNELS.includes(rawChannel as RuntimeImageRegistryChannel)) {
+      invalid(`platform.images.${imageKey} has an unknown channel`);
+    }
+    const channel = rawChannel as RuntimeImageRegistryChannel;
+    if (typeof rawRef !== "string") invalid(`platform.images.${imageKey} ${channel} ref must be a string`);
+    const parsed = parseOciDigestRef(rawRef);
+    if (!policyMatches(channel, parsed, policy)) {
+      invalid(`platform.images.${imageKey} ${channel} ref is outside the server-owned host/namespace policy`);
+    }
+    assertPlatformImageRepo(parsed, imageKey, channel);
+    if (parsed.digest !== digest) invalid(`platform.images.${imageKey} ${channel} digest does not match canonical digest`);
+    if (seen.has(parsed.normalized)) invalid(`platform.images.${imageKey} contains duplicate normalized registry refs`);
+    seen.add(parsed.normalized);
+    refs[channel] = parsed.normalized;
+  }
+  if (Object.keys(refs).length === 0) invalid(`platform.images.${imageKey} must provide at least one available registry channel`);
+  const registryEvidence = parseRegistryEvidence(raw.registry_evidence, `platform.${imageKey}`, digest, digest, refs, policy);
+  if (!registryEvidence || Object.keys(registryEvidence).length !== RUNTIME_IMAGE_REGISTRY_CHANNELS.length
+    || RUNTIME_IMAGE_REGISTRY_CHANNELS.some((channel) => registryEvidence[channel] === undefined)) {
+    invalid(`platform.images.${imageKey} registry_evidence must contain exactly github, dockerhub, and aliyun-acr channels`);
+  }
+  if (registryEvidence.github?.available !== true) {
+    invalid(`platform.images.${imageKey} github registry_evidence must be available and inspected`);
+  }
+  return {
+    digest,
+    platforms,
+    child_digests: Object.freeze({ ...child_digests }),
+    registry_refs: refs,
+    registry_evidence: registryEvidence,
+  };
+}
+
+/** Parse and freeze the optional `platform` upgrade block. Absent → undefined (legacy catalogs). */
+export function parsePlatformReleaseManifest(
+  value: unknown,
+  policy: RuntimeImageRegistryPolicy = SERVER_OWNED_RUNTIME_IMAGE_REGISTRY_POLICY,
+): PlatformReleaseManifest {
+  const validatedPolicy = validateRuntimeImageRegistryPolicy(policy);
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid("platform must be an object");
+  const raw = value as Record<string, unknown>;
+  assertKnownKeys(raw, ["version", "commit_sha", "schema_version", "changelog_url", "images"], "platform");
+  const version = parseSemverCore(raw.version, "platform.version");
+  const commit_sha = parseCommitSha(raw.commit_sha);
+  const schema_version = parseDbSchemaVersion(raw.schema_version);
+  const changelog_url = parseChangelogUrl(raw.changelog_url);
+  if (!raw.images || typeof raw.images !== "object" || Array.isArray(raw.images)) invalid("platform.images must be an object");
+  const imagesRaw = raw.images as Record<string, unknown>;
+  assertKnownKeys(imagesRaw, PLATFORM_RELEASE_IMAGE_KEYS, "platform.images");
+  const images = {} as Record<PlatformReleaseImageKey, PlatformReleaseImage>;
+  for (const key of PLATFORM_RELEASE_IMAGE_KEYS) {
+    if (imagesRaw[key] === undefined) invalid(`platform.images.${key} is required`);
+    images[key] = parsePlatformReleaseImage(imagesRaw[key], key, validatedPolicy);
+  }
+  return {
+    version,
+    commit_sha,
+    schema_version,
+    ...(changelog_url ? { changelog_url } : {}),
+    images: Object.freeze(images),
+  };
+}
+
 /** Normalize v1/v2 payloads into one in-memory shape used by Scheduler. */
 export function parseRuntimeImageRegistry(
   raw: unknown,
@@ -610,11 +770,17 @@ export function parseRuntimeImageRegistry(
   const validatedPolicy = validateRuntimeImageRegistryPolicy(policy);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalid("registry must be an object");
   const value = raw as Record<string, unknown>;
-  assertKnownKeys(value, ["schema", "schema_version", "images", "source", "platform_version", "min_runtime_image"], "registry");
+  assertKnownKeys(value, ["schema", "schema_version", "images", "source", "platform_version", "platform", "min_runtime_image"], "registry");
   const schemaVersion = detectSchema(value);
   if (!Array.isArray(value.images)) invalid("registry images must be an array");
   const source = parseMetadataSource(value.source);
   const platformVersion = parsePlatformVersion(value.platform_version);
+  const platform = value.platform === undefined
+    ? undefined
+    : parsePlatformReleaseManifest(value.platform, validatedPolicy);
+  if (platform && platformVersion && platform.version !== platformVersion) {
+    invalid("platform.version must equal platform_version when both are present");
+  }
   const minRuntimeImage = parseMinRuntimeImage(value.min_runtime_image);
   const seenImages = new Set<string>();
   const seenNormalizedRefs = new Map<string, {
@@ -667,6 +833,7 @@ export function parseRuntimeImageRegistry(
     schema: schemaVersion === 1 ? RUNTIME_IMAGE_REGISTRY_SCHEMA_V1 : RUNTIME_IMAGE_REGISTRY_SCHEMA_V2,
     ...(schemaVersion === 2 ? { schema_version: 2 as const } : {}),
     ...(platformVersion ? { platform_version: platformVersion } : {}),
+    ...(platform ? { platform } : {}),
     ...(minRuntimeImage ? { min_runtime_image: minRuntimeImage } : {}),
     images,
     ...(source ? { source } : {}),
