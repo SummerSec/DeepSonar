@@ -491,17 +491,28 @@ export function editorModelTextFromRaw(agentCli: AgentCli, settingsText: string)
  * Translate the structured model field into buildSettingsConfigFromEditor input.
  * Empty means "leave the native config's model keys unchanged"; Pi takes a model id list.
  */
-export function editorModelPatch(agentCli: AgentCli, modelText: string): { modelId?: string; modelIds?: string[] } {
+export function editorModelPatch(agentCli: AgentCli, modelText: string, previousModelText?: string): { modelId?: string; modelIds?: string[] } {
   const value = modelText.trim();
   if (!value || !hasStructuredModelField(agentCli)) return {};
+  if (previousModelText !== undefined) {
+    const previous = previousModelText.trim();
+    if (agentCli === "pi") {
+      const nextIds = normalizeModelIds(value.split(/[,，\n]/u));
+      const previousIds = normalizeModelIds(previous.split(/[,，\n]/u));
+      if (nextIds.length === previousIds.length && nextIds.every((id, index) => id === previousIds[index])) return {};
+    } else if (value === previous) {
+      return {};
+    }
+  }
   if (agentCli === "pi") return { modelIds: normalizeModelIds(value.split(/[,，\n]/u)) };
   return { modelId: value };
 }
 
 /** Claude Code model keys in the raw settings whose value differs from the structured model. */
-export function claudeModelKeyMismatches(settingsText: string, modelText: string): string[] {
+export function claudeModelKeyMismatches(settingsText: string, modelText: string, previousModelText?: string): string[] {
   const model = modelText.trim();
   if (!model) return [];
+  if (previousModelText !== undefined && model === previousModelText.trim()) return [];
   const env = asRecord(editorTextToSettings("claude-code", settingsText)?.env) ?? {};
   return CLAUDE_CODE_MODEL_KEYS.filter((key) => typeof env[key] === "string" && (env[key] as string).trim() !== model);
 }

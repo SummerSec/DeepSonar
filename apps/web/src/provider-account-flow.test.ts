@@ -89,6 +89,13 @@ test("structured Provider quota and native model helpers preserve governed setti
   assert.equal((profile.models as Array<Record<string, unknown>>)[0].contextWindow, 128000);
 });
 
+test("unchanged structured model fields do not rewrite native model routing", () => {
+  assert.deepEqual(editorModelPatch("claude-code", "main-model", "main-model"), {});
+  assert.deepEqual(editorModelPatch("claude-code", "new-model", "main-model"), { modelId: "new-model" });
+  assert.deepEqual(editorModelPatch("pi", "model-a, model-b", "model-a,model-b"), {});
+  assert.deepEqual(editorModelPatch("pi", "model-a, model-c", "model-a,model-b"), { modelIds: ["model-a", "model-c"] });
+});
+
 test("changing Claude main model preserves explicit Fable and subagent mappings", () => {
   assert.deepEqual(
     claudeMainModelPatch({
@@ -673,6 +680,13 @@ test("#749 structured model field syncs every Claude Code model key on create an
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "CLAUDE_CODE_SUBAGENT_MODEL",
   ]);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "old-main", "old-main"), []);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "new-main", "old-main"), [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]);
   assert.deepEqual(claudeModelKeyMismatches(settingsJson, ""), []);
   const built = buildSettingsConfigFromEditor({
     agentCli: "claude-code",
@@ -747,7 +761,7 @@ test("#749 structured model field maps DSH to modelId and Pi to modelIds; codex/
 
 test("#749 create and edit pass the structured model into buildSettingsConfigFromEditor and prefill on edit", () => {
   assert.match(flow, /\.\.\.editorModelPatch\(createAgentCli, createModelId\)/);
-  assert.match(flow, /\.\.\.editorModelPatch\(editAgentCli, editModelId\)/);
+  assert.match(flow, /\.\.\.editorModelPatch\(\s*editAgentCli,\s*editModelId/);
   assert.match(flow, /setEditModelId\(editorModelTextFromSettings\(settings, cli\)\)/);
   assert.match(flow, /modelId=\{createModelId\}\s+onModelIdChange=\{setCreateModelId\}/);
   assert.match(flow, /modelId=\{editModelId\}\s+onModelIdChange=\{setEditModelId\}/);

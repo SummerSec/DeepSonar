@@ -105,7 +105,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   });
 
   function safeHealthDetail(value: unknown): string | null {
-    if (typeof value !== "string" || value.length > 300 || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+    if (typeof value !== "string" || value.length > 300 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return null;
     return value;
   }
 
@@ -954,6 +954,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         AND key_version = ${cred.key_version}
         AND provider = ${cred.provider}
         AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        AND settings_config_json IS NOT DISTINCT FROM ${sql.json(cred.settings_config_json as never)}
+        AND agent_cli IS NOT DISTINCT FROM ${cred.agent_cli}
+        AND project_id IS NOT DISTINCT FROM ${cred.project_id}
         AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
       RETURNING id`;
     if (!updated) {
@@ -1177,6 +1180,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
           AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+          AND settings_config_json IS NOT DISTINCT FROM ${sql.json(cred.settings_config_json as never)}
+          AND agent_cli IS NOT DISTINCT FROM ${cred.agent_cli}
+          AND project_id IS NOT DISTINCT FROM ${cred.project_id}
           AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         RETURNING id`;
       if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
@@ -1212,6 +1218,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
           AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+          AND settings_config_json IS NOT DISTINCT FROM ${sql.json(cred.settings_config_json as never)}
+          AND agent_cli IS NOT DISTINCT FROM ${cred.agent_cli}
+          AND project_id IS NOT DISTINCT FROM ${cred.project_id}
           AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         RETURNING id`;
       if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });

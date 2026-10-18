@@ -67,10 +67,14 @@ if (!testDatabaseUrl) {
           VALUES (${id}, ${name}, 'llm_provider', 'openai', ${encrypted.ciphertext}, ${encrypted.nonce},
             ${encrypted.auth_tag}, ${sql.json({ base_url: "http://127.0.0.1/v1" } as never)},
             ${`${name}-fingerprint`}, 'cret')`;
+        await sql`
+          UPDATE credentials
+          SET settings_config_json = ${sql.json({ models: { "model-original": {} } } as never)}
+          WHERE id = ${id}`;
         return id;
       };
 
-      const runStaleWrite = async (endpoint: "/test" | "/models", mutation: "patch" | "rotate") => {
+      const runStaleWrite = async (endpoint: "/test" | "/models", mutation: "patch" | "rotate" | "settings") => {
         const id = await createCredential(`${endpoint.slice(1)}-${mutation}`);
         let releaseFetch!: () => void;
         let markFetchStarted!: () => void;
@@ -89,29 +93,38 @@ if (!testDatabaseUrl) {
             metadata: { base_url: "http://127.0.0.1:18083/v1" },
           });
           assert.equal(patched.statusCode, 200, patched.payload);
-        } else {
+        } else if (mutation === "rotate") {
           const rotated = await request("POST", `/credentials/${id}/rotate`, { secret: "rotated-secret" });
           assert.equal(rotated.statusCode, 200, rotated.payload);
+        } else {
+          const patched = await request("PATCH", `/credentials/${id}`, {
+            settings_config: { models: { "model-new": {} } },
+          });
+          assert.equal(patched.statusCode, 200, patched.payload);
         }
         releaseFetch();
         const stale = await healthRequest;
         assert.equal(stale.statusCode, 409, `${endpoint}/${mutation}: ${stale.payload}`);
         const [row] = await sql`
-          SELECT key_version, provider, public_metadata_json, health_status, model_catalog_json
+          SELECT key_version, provider, public_metadata_json, settings_config_json, health_status, model_catalog_json
           FROM credentials WHERE id = ${id}`;
         assert.equal(row.provider, "openai");
         if (mutation === "patch") {
           assert.deepEqual(row.public_metadata_json, { base_url: "http://127.0.0.1:18083/v1" });
-        } else {
+        } else if (mutation === "rotate") {
           assert.equal(Number(row.key_version), 2);
           assert.deepEqual(row.public_metadata_json, { base_url: "http://127.0.0.1/v1" });
+        } else {
+          assert.equal(Number(row.key_version), 1);
+          assert.deepEqual(row.public_metadata_json, { base_url: "http://127.0.0.1/v1" });
+          assert.deepEqual(row.settings_config_json, { models: { "model-new": {} } });
         }
         assert.equal(row.health_status, "unknown");
         assert.deepEqual(row.model_catalog_json, []);
       };
 
       for (const endpoint of ["/test", "/models"] as const) {
-        for (const mutation of ["patch", "rotate"] as const) {
+        for (const mutation of ["patch", "rotate", "settings"] as const) {
           await runStaleWrite(endpoint, mutation);
         }
       }

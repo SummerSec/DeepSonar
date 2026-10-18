@@ -2582,7 +2582,7 @@ const OPS: Op[] = [
       properties: { status: { type: "string", enum: ["active", "disabled", "rotation_required"] } },
     },
   },
-  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", scope: "agents:write", tags: ["Credentials"] },
+  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", description: "推理失败返回脱敏、有界的上游错误摘要，清理 C0/C1 控制字符。可补充模型目录；回写核对密钥版本、settings、CLI 与项目，探测期间配置变化返回 409。", scope: "agents:write", tags: ["Credentials"] },
   { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:write", tags: ["Credentials"] },
   {
     method: "post",

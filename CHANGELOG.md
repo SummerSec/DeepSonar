@@ -4,7 +4,7 @@
 
 - **Windows 数据库基线重建**：角色提示词回填在匹配 SQL 模板前统一 CRLF/LF，避免 v58 → v59 重建在 Windows 检出时中断；新增跨换行回归并验证真实 PostgreSQL 回填。
 
-- **凭据推理探测保留上游错误并补做模型目录发现（#748）**：`credential-test.ts` 推理探测失败时用有界前缀（`ERROR_BODY_PREFIX_MAX_BYTES = 4096`）读取上游正文，提取 `error.type` / `error.message`（兼容 OpenAI / Anthropic / new-api 与纯文本正文，截断 JSON 尽力解析），去控制字符、截断并对凭据原值、`Bearer` / `sk-` 类 token、密钥赋值与 URL 查询串脱敏后写入 `health_detail` 与 `upstream_error`。`CredentialHealthErrorCategory` 新增 `model_unavailable`（403 且上游指向模型，或目录中不含当前模型）与 `quota_exhausted`（402，或 403 / 429 正文带 quota / budget / 余额等额度信号）；以往 403 一律 `authorization`、402 落 `unknown`。推理因 402 / 403 / 额度耗尽失败时仍补一次 `GET /v1/models` 目录发现，成功即回填 `model_catalog_json` / `model_catalog_fetched_at` 并在明细中提示「当前模型不可用，可用：…」；目录发现失败不清空已有目录。路由侧类别白名单改为复用 `CREDENTIAL_HEALTH_ERROR_CATEGORIES`。
+- **凭据推理探测保留上游错误并补做模型目录发现（#748）**：`credential-test.ts` 推理探测失败时用有界前缀（`ERROR_BODY_PREFIX_MAX_BYTES = 4096`）读取上游正文，提取 `error.type` / `error.message`（兼容 OpenAI / Anthropic / new-api 与纯文本正文，截断 JSON 尽力解析），清理 C0/C1 控制字符、截断并对主密钥、原生配置中的其他秘密值、`Bearer` / `sk-` 类 token、密钥赋值以及 URL 用户信息/查询串脱敏后写入 `health_detail` 与 `upstream_error`。`CredentialHealthErrorCategory` 新增 `model_unavailable`（403 且上游指向模型，或目录中不含当前模型）与 `quota_exhausted`（402，或 403 / 429 正文带 quota / budget / 余额等额度信号）；以往 403 一律 `authorization`、402 落 `unknown`。推理因 402 / 403 / 额度耗尽失败时仍补一次 `GET /v1/models` 目录发现，成功即回填 `model_catalog_json` / `model_catalog_fetched_at` 并在明细中提示「当前模型不可用，可用：…」；目录发现失败不清空已有目录。路由侧类别白名单改为复用 `CREDENTIAL_HEALTH_ERROR_CATEGORIES`；探测回写同时核对 settings、CLI 与项目，配置变更后拒绝陈旧结果。
 
 ### 新增
 
@@ -14,7 +14,7 @@
 
 ### 修复
 
-- **凭据页恢复模型输入入口（#749）**：账号管理新建 / 编辑 Provider 账号时，「Provider 连接与模型路由」区新增结构化「模型」字段（Claude Code / DSH 单模型，Pi 为逗号分隔的模型 ID 列表），编辑时按已保存配置预填；粘贴或修改原生配置中的主模型时自动回填。`createAccount` / `saveEditedConfig` 现把 `modelId`（Pi 为 `modelIds`）传给 `buildSettingsConfigFromEditor`，`patchProviderModelId()` / `patchProviderModelIds()` 不再是死代码：Claude Code 保存时把 `ANTHROPIC_MODEL`、`ANTHROPIC_DEFAULT_{FABLE,SONNET,OPUS,HAIKU}_*` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 全部 14 个模型键统一为该模型，原生配置中存在不一致键时页面明确提示将被统一；字段留空则保留原生配置的模型键不变。Codex / OpenCode 高级配置恢复内置模型字段（直接写入原生配置）。不改 schema、OpenAPI 与 Scheduler 行为。
+- **凭据页恢复模型输入入口（#749）**：账号管理新建 / 编辑 Provider 账号时，「Provider 连接与模型路由」区新增结构化「模型」字段（Claude Code / DSH 单模型，Pi 为逗号分隔的模型 ID 列表），编辑时按已保存配置预填；粘贴或修改原生配置中的主模型时自动回填。`createAccount` / `saveEditedConfig` 现把 `modelId`（Pi 为 `modelIds`）传给 `buildSettingsConfigFromEditor`，`patchProviderModelId()` / `patchProviderModelIds()` 不再是死代码：Claude Code 显式修改主模型时把 `ANTHROPIC_MODEL`、`ANTHROPIC_DEFAULT_{FABLE,SONNET,OPUS,HAIKU}_*` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 全部 14 个模型键统一为该模型，原生配置中存在不一致键且显式改模时页面提示将被统一；普通编辑保留独立 tier 与 subagent 路由；字段留空则保留原生配置的模型键不变。Codex / OpenCode 高级配置恢复内置模型字段（直接写入原生配置）。不改 schema、OpenAPI 与 Scheduler 行为。
 
 ### 文档
 

@@ -8,7 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { claudeCliFingerprintHeaders } from "./claude-cli-fingerprint.js";
-import { redactSecretAssignments } from "./credential-secret-projection.js";
+import { collectSecretValues, redactSecretAssignments } from "./credential-secret-projection.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
 import {
   extractBaseUrlFromSettings,
@@ -382,7 +382,7 @@ function detailForCategory(category: CredentialHealthErrorCategory, status?: num
   return labels[category];
 }
 
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]+/gu;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]+/gu;
 const UPSTREAM_ERROR_TYPE_MAX_CHARS = 64;
 const UPSTREAM_ERROR_MESSAGE_MAX_CHARS = 120;
 /** credentials.health_detail 的库约束上限（≤300 且无控制字符）。 */
@@ -391,7 +391,7 @@ const HEALTH_DETAIL_MAX_CHARS = 300;
 const QUOTA_EXHAUSTED_PATTERN = /quota|budget|insufficient[_\s-]?(?:balance|credit|funds)|billing|余额|额度|配额|欠费/iu;
 const MODEL_REFERENCE_PATTERN = /model|模型/iu;
 
-function boundedText(value: string, max: number): string {
+function cleanText(value: string, max: number): string {
   const flattened = value.replace(CONTROL_CHARACTERS, " ").replace(/\s+/gu, " ").trim();
   return flattened.length > max ? `${flattened.slice(0, max - 1)}…` : flattened;
 }
@@ -400,11 +400,20 @@ function boundedText(value: string, max: number): string {
 function redactUpstreamText(value: string, secrets: readonly string[]): string {
   let redacted = value;
   for (const secret of secrets) {
-    if (secret.length >= 4) redacted = redacted.split(secret).join("[REDACTED]");
+    if (secret.length < 4) continue;
+    redacted = redacted.split(secret).join("[REDACTED]");
+    for (let prefixLength = Math.min(secret.length - 1, redacted.length); prefixLength >= 4; prefixLength -= 1) {
+      const prefix = secret.slice(0, prefixLength);
+      if (redacted.endsWith(prefix)) {
+        redacted = `${redacted.slice(0, -prefixLength)}[REDACTED]`;
+        break;
+      }
+    }
   }
   return redactSecretAssignments(redacted)
     .replace(/\b(Bearer|Basic)\s+[^\s"',;)]+/giu, "$1 [REDACTED]")
     .replace(/\b(?:sk|ak|pk|rk)-[A-Za-z0-9_-]{6,}/gu, "[REDACTED]")
+    .replace(/(https?:\/\/)[^@\s/?#"'<>]+@/giu, "$1")
     .replace(/(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/giu, "$1");
 }
 
@@ -461,10 +470,10 @@ export function summarizeUpstreamError(body: string, secrets: readonly string[] 
     message = text;
   }
   const safeType = type
-    ? boundedText(redactUpstreamText(type, secrets), UPSTREAM_ERROR_TYPE_MAX_CHARS)
+    ? cleanText(redactUpstreamText(type, secrets), UPSTREAM_ERROR_TYPE_MAX_CHARS)
     : "";
   const safeMessage = message
-    ? boundedText(redactUpstreamText(message, secrets), UPSTREAM_ERROR_MESSAGE_MAX_CHARS)
+    ? cleanText(redactUpstreamText(message, secrets), UPSTREAM_ERROR_MESSAGE_MAX_CHARS)
     : "";
   if (!safeType && !safeMessage) return undefined;
   return {
@@ -525,7 +534,7 @@ async function summarizeInferenceFailure(
   model: string,
   probed: InferenceProbeOutcome,
 ): Promise<CredentialProbeResult> {
-  const upstream = summarizeUpstreamError(probed.errorBody, [secret]);
+  const upstream = summarizeUpstreamError(probed.errorBody, [secret, ...collectSecretValues(cred.settings_config_json)]);
   let category = inferenceFailureCategory(probed.status, upstream, model);
   const clientHint = probed.clientRejected
     ? "；上游返回 unauthorized client：按客户端指纹拒绝，不一定是凭据无效（见 #736 / #321）"
@@ -544,7 +553,7 @@ async function summarizeInferenceFailure(
   const detail = catalog ? `${head}${catalogHint(model, catalog, HEALTH_DETAIL_MAX_CHARS - head.length)}` : head;
   return {
     ok: false,
-    detail: boundedText(detail, HEALTH_DETAIL_MAX_CHARS),
+    detail: cleanText(detail, HEALTH_DETAIL_MAX_CHARS),
     category,
     source_url: safeSourceUrl(probed.url),
     fetched_at: now(),

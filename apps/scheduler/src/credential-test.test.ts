@@ -815,3 +815,58 @@ test("#748 upstream error summary handles truncated JSON, plain text and HTML bo
   // 非标识符形态的 type 不回显。
   assert.deepEqual(summarizeUpstreamError('{"error":{"type":"has space","message":"m"}}'), { message: "m" });
 });
+
+test("#748 upstream summaries redact native and text-config secrets, including a truncated secret prefix", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("primary-probe-secret");
+  const nativeSecret = "ordinary-token-without-provider-prefix";
+  const yamlSecret = "yaml-config-token";
+  const tomlSecret = "toml-config-token";
+  const boundarySecret = `boundary-secret-${"x".repeat(4200)}`;
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const message of [
+      `model unavailable ${nativeSecret} ${yamlSecret} ${tomlSecret} https://alice:${yamlSecret}@relay.example.test/path?token=${nativeSecret}`,
+      `model unavailable ${boundarySecret}`,
+    ]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({
+        error: {
+          type: `provider-${nativeSecret}`,
+          message,
+        },
+      }), { status: 401 })) as typeof fetch;
+      const result = await testCredential({
+        provider: "openai",
+        kind: "llm_provider",
+        ...encrypted,
+        public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+        settings_config_json: {
+          models: { "probe-model": {} },
+          env: { API_TOKEN: nativeSecret },
+          config: `apiKey: ${yamlSecret}\ntoken = "${tomlSecret}"\nsecret: ${boundarySecret}\n`,
+        },
+      });
+      const serialized = JSON.stringify(result);
+      for (const secret of [nativeSecret, yamlSecret, tomlSecret, boundarySecret.slice(0, 24)]) {
+        assert.equal(serialized.includes(secret), false, `summary leaked ${secret.slice(0, 12)}`);
+      }
+      assert.equal(serialized.includes("alice:"), false);
+      assert.equal(serialized.includes("?token="), false);
+      assert.match(result.detail, /model unavailable/u);
+      assert.equal(result.upstream_error?.type, undefined);
+      }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#748 upstream summaries clean C0, C1 and DEL controls", async () => {
+  const { summarizeUpstreamError } = await import("./credential-test.js");
+  const result = summarizeUpstreamError(JSON.stringify({
+    error: { message: "model denied\u0001\u0085\u009f\u007f" },
+  }));
+  assert.ok(result);
+  assert.match(result?.message ?? "", /model denied/u);
+  assert.doesNotMatch(result?.message ?? "", /[\u0000-\u001f\u007f-\u009f]/u);
+});

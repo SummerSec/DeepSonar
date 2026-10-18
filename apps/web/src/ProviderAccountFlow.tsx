@@ -317,7 +317,13 @@ export function ProviderAccountFlow({
       secret: editApiKey,
       baseUrl: editBaseUrl,
       provider: editProvider,
-      ...editorModelPatch(editAgentCli, editModelId),
+      ...editorModelPatch(
+        editAgentCli,
+        editModelId,
+        editOriginalSettings && editOriginalAgentCli === editAgentCli
+          ? editorModelTextFromSettings(editOriginalSettings, editAgentCli)
+          : undefined,
+      ),
       contextWindowTokens: editContextWindowTokens,
       reasoning: editReasoning,
       allowEmptyDefault: true,
@@ -648,6 +654,9 @@ export function ProviderAccountFlow({
                         onReasoningChange={setEditReasoning}
                         modelId={editModelId}
                         onModelIdChange={setEditModelId}
+                        initialModelId={editOriginalSettings && editOriginalAgentCli === editAgentCli
+                          ? editorModelTextFromSettings(editOriginalSettings, editAgentCli)
+                          : undefined}
                         modelOptions={models}
                         onNotice={(message) => { setNotice(message); setError(""); }}
                         onError={(message) => { if (message) setError(message); else setError(""); }}
