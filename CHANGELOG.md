@@ -6,6 +6,10 @@
 
 - **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、活跃 Attempt 上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。digest 部署契约与 `deploy.sh` / `deploy.ps1` 的 `upgrade` 子命令属于 #740 后续片（版本发现见本区第 2 片）。
 
+### 修复
+
+- **凭据页恢复模型输入入口（#749）**：账号管理新建 / 编辑 Provider 账号时，「Provider 连接与模型路由」区新增结构化「模型」字段（Claude Code / DSH 单模型，Pi 为逗号分隔的模型 ID 列表），编辑时按已保存配置预填；粘贴或修改原生配置中的主模型时自动回填。`createAccount` / `saveEditedConfig` 现把 `modelId`（Pi 为 `modelIds`）传给 `buildSettingsConfigFromEditor`，`patchProviderModelId()` / `patchProviderModelIds()` 不再是死代码：Claude Code 保存时把 `ANTHROPIC_MODEL`、`ANTHROPIC_DEFAULT_{FABLE,SONNET,OPUS,HAIKU}_*` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 全部 14 个模型键统一为该模型，原生配置中存在不一致键时页面明确提示将被统一；字段留空则保留原生配置的模型键不变。Codex / OpenCode 高级配置恢复内置模型字段（直接写入原生配置）。不改 schema、OpenAPI 与 Scheduler 行为。
+
 ### 文档
 
 - **系统规格与追溯矩阵首批（#741 PR 2）**：新增 `docs/architecture/01-system-specification.md`（首批贯通任务→Hub→Job/Attempt→报告、非法提案→RepairFeedback、超时/崩溃/未知效果→对账清理三条链路；条目结构为规范要求 / 决策来源 / 实现状态 / 代码入口 / 验证证据）与 `traceability.md`（仅关系矩阵）。`README.md` 明确 Canvas / Fact / Artifact / Device / 资产的前缀归属，并更新实施进度。`docs-freshness` 修复 Windows 下 `path.join` 反斜杠导致必需文件误报缺失的问题，并新增需求定义唯一、矩阵覆盖与悬空引用机检。不改 schema、OpenAPI 与运行时行为；其余视图与 ADR 由后续 PR 补齐。
