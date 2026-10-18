@@ -440,29 +440,79 @@ function patchModelIdInYaml(text: string, modelId: string): string {
   return stringify(root, { lineWidth: 0 });
 }
 
+/** Every Claude Code env key that names a model; the structured model field keeps them in sync (#749). */
+export const CLAUDE_CODE_MODEL_KEYS = [
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_NAME",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_NAME",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_NAME",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_NAME",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+] as const;
+
+/** CLIs whose model is edited through the structured editor field (codex / open-code edit it in native config). */
+export function hasStructuredModelField(agentCli: AgentCli): boolean {
+  return agentCli === "claude-code" || agentCli === "dsh" || agentCli === "pi";
+}
+
+/** Parse the raw editor text into the settings shape the model extractors understand. */
+function editorTextToSettings(agentCli: AgentCli, settingsText: string): Record<string, unknown> | null {
+  if (!settingsText.trim()) return null;
+  if (agentCli === "dsh") return { config: settingsText };
+  if (agentCli === "pi") {
+    const parsed = parsePiSettingsText(settingsText);
+    return parsed.ok && !parsed.empty ? parsed.value : null;
+  }
+  const json = validateJsonObjectText(settingsText);
+  return json.ok && !json.empty ? json.value : null;
+}
+
+/** Structured model field text for a saved settings object (Pi: comma separated model ids). */
+export function editorModelTextFromSettings(settings: Record<string, unknown> | null | undefined, agentCli: AgentCli): string {
+  if (!settings || !hasStructuredModelField(agentCli)) return "";
+  if (agentCli === "pi") return extractPiModelIdsFromSettings(settings).join(", ");
+  return extractModelIdFromSettings(settings, agentCli);
+}
+
+/** Structured model field text derived from the raw native config being edited. */
+export function editorModelTextFromRaw(agentCli: AgentCli, settingsText: string): string {
+  return editorModelTextFromSettings(editorTextToSettings(agentCli, settingsText), agentCli);
+}
+
+/**
+ * Translate the structured model field into buildSettingsConfigFromEditor input.
+ * Empty means "leave the native config's model keys unchanged"; Pi takes a model id list.
+ */
+export function editorModelPatch(agentCli: AgentCli, modelText: string): { modelId?: string; modelIds?: string[] } {
+  const value = modelText.trim();
+  if (!value || !hasStructuredModelField(agentCli)) return {};
+  if (agentCli === "pi") return { modelIds: normalizeModelIds(value.split(/[,，\n]/u)) };
+  return { modelId: value };
+}
+
+/** Claude Code model keys in the raw settings whose value differs from the structured model. */
+export function claudeModelKeyMismatches(settingsText: string, modelText: string): string[] {
+  const model = modelText.trim();
+  if (!model) return [];
+  const env = asRecord(editorTextToSettings("claude-code", settingsText)?.env) ?? {};
+  return CLAUDE_CODE_MODEL_KEYS.filter((key) => typeof env[key] === "string" && (env[key] as string).trim() !== model);
+}
+
 /** Apply the structured model id while retaining each CLI's native config shape. */
 export function patchProviderModelId(settings: Record<string, unknown>, agentCli: AgentCli, modelId: string): Record<string, unknown> {
   const next = structuredClone(settings);
   const model = modelId.trim();
   if (agentCli === "claude-code") {
     const env = asRecord(next.env) ?? {};
-    const modelKeys = [
-      "ANTHROPIC_MODEL",
-      "ANTHROPIC_DEFAULT_FABLE_MODEL",
-      "ANTHROPIC_DEFAULT_FABLE_NAME",
-      "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-      "ANTHROPIC_DEFAULT_HAIKU_NAME",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
-      "ANTHROPIC_DEFAULT_OPUS_MODEL",
-      "ANTHROPIC_DEFAULT_OPUS_NAME",
-      "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
-      "ANTHROPIC_DEFAULT_SONNET_MODEL",
-      "ANTHROPIC_DEFAULT_SONNET_NAME",
-      "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
-      "CLAUDE_CODE_SUBAGENT_MODEL",
-    ];
-    for (const key of modelKeys) {
+    for (const key of CLAUDE_CODE_MODEL_KEYS) {
       if (model) env[key] = model;
       else delete env[key];
     }

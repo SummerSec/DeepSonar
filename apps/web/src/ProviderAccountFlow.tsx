@@ -11,6 +11,8 @@ import {
   type AgentCli,
   buildSettingsConfigFromEditor,
   CredentialConfigEditor,
+  editorModelPatch,
+  editorModelTextFromSettings,
   extractContextWindowTokens,
   extractProviderReasoning,
   extractBaseUrlFromSettingsClient,
@@ -78,6 +80,7 @@ export function ProviderAccountFlow({
   const [createAuthJson, setCreateAuthJson] = useState("");
   const [createContextWindowTokens, setCreateContextWindowTokens] = useState("");
   const [createReasoning, setCreateReasoning] = useState("");
+  const [createModelId, setCreateModelId] = useState("");
   const [createProjectId, setCreateProjectId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [editingCredentialId, setEditingCredentialId] = useState("");
@@ -90,6 +93,7 @@ export function ProviderAccountFlow({
   const [editAuthJson, setEditAuthJson] = useState("");
   const [editContextWindowTokens, setEditContextWindowTokens] = useState("");
   const [editReasoning, setEditReasoning] = useState("");
+  const [editModelId, setEditModelId] = useState("");
   const [editApiKey, setEditApiKey] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editMaxConcurrent, setEditMaxConcurrent] = useState("");
@@ -155,6 +159,8 @@ export function ProviderAccountFlow({
     setEditProjectId(credential.project_id ?? "");
     setEditContextWindowTokens(extractContextWindowTokens(settings));
     setEditReasoning(extractProviderReasoning(settings));
+    // #749: prefill the structured model field from the saved native config.
+    setEditModelId(editorModelTextFromSettings(settings, cli));
     const metadata = credential.public_metadata_json ?? {};
     setEditMaxConcurrent(typeof metadata.max_concurrent === "number" ? String(metadata.max_concurrent) : "");
     setEditModelConcurrency(modelConcurrencyDraftFromMetadata(metadata));
@@ -219,6 +225,7 @@ export function ProviderAccountFlow({
       secret: createSecret,
       baseUrl: createBaseUrl,
       provider: createProvider,
+      ...editorModelPatch(createAgentCli, createModelId),
       contextWindowTokens: createContextWindowTokens,
       reasoning: createReasoning,
       allowEmptyDefault: true,
@@ -268,6 +275,7 @@ export function ProviderAccountFlow({
       setCreateAuthJson("");
       setCreateContextWindowTokens("");
       setCreateReasoning("");
+      setCreateModelId("");
       setSelectedCredentialId(created.id);
       setEditingCredentialId("");
       setShowCreate(false);
@@ -309,6 +317,7 @@ export function ProviderAccountFlow({
       secret: editApiKey,
       baseUrl: editBaseUrl,
       provider: editProvider,
+      ...editorModelPatch(editAgentCli, editModelId),
       contextWindowTokens: editContextWindowTokens,
       reasoning: editReasoning,
       allowEmptyDefault: true,
@@ -500,6 +509,8 @@ export function ProviderAccountFlow({
               onContextWindowTokensChange={setCreateContextWindowTokens}
               reasoning={createReasoning}
               onReasoningChange={setCreateReasoning}
+              modelId={createModelId}
+              onModelIdChange={setCreateModelId}
               modelOptions={createModels}
               onNotice={(message) => { setNotice(message); setError(""); }}
               onError={(message) => { if (message) setError(message); else setError(""); }}
@@ -635,6 +646,8 @@ export function ProviderAccountFlow({
                         onContextWindowTokensChange={setEditContextWindowTokens}
                         reasoning={editReasoning}
                         onReasoningChange={setEditReasoning}
+                        modelId={editModelId}
+                        onModelIdChange={setEditModelId}
                         modelOptions={models}
                         onNotice={(message) => { setNotice(message); setError(""); }}
                         onError={(message) => { if (message) setError(message); else setError(""); }}
