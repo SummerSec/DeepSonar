@@ -2,6 +2,8 @@
 
 ### 修复
 
+- **Windows 数据库基线重建**：角色提示词回填在匹配 SQL 模板前统一 CRLF/LF，避免 v58 → v59 重建在 Windows 检出时中断；新增跨换行回归并验证真实 PostgreSQL 回填。
+
 - **凭据推理探测保留上游错误并补做模型目录发现（#748）**：`credential-test.ts` 推理探测失败时用有界前缀（`ERROR_BODY_PREFIX_MAX_BYTES = 4096`）读取上游正文，提取 `error.type` / `error.message`（兼容 OpenAI / Anthropic / new-api 与纯文本正文，截断 JSON 尽力解析），去控制字符、截断并对凭据原值、`Bearer` / `sk-` 类 token、密钥赋值与 URL 查询串脱敏后写入 `health_detail` 与 `upstream_error`。`CredentialHealthErrorCategory` 新增 `model_unavailable`（403 且上游指向模型，或目录中不含当前模型）与 `quota_exhausted`（402，或 403 / 429 正文带 quota / budget / 余额等额度信号）；以往 403 一律 `authorization`、402 落 `unknown`。推理因 402 / 403 / 额度耗尽失败时仍补一次 `GET /v1/models` 目录发现，成功即回填 `model_catalog_json` / `model_catalog_fetched_at` 并在明细中提示「当前模型不可用，可用：…」；目录发现失败不清空已有目录。路由侧类别白名单改为复用 `CREDENTIAL_HEALTH_ERROR_CATEGORIES`。
 
 ### 新增
