@@ -337,7 +337,7 @@ export function officialCatalogBackfillSql(schemaSql: string): string[] {
 /** #648: overwrite drifted builtin global role prompts from schema seed, then insert missing. */
 export function roleConfigBackfillSql(schemaSql: string): string[] {
   const original = extractStatement(
-    schemaSql,
+    schemaSql.replace(/\r\n/g, "\n"),
     "INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)",
     "WHERE r.builtin = true;",
   );

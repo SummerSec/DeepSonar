@@ -91,6 +91,11 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
   assert.equal(SCHEMA_VERSION, 59);
 });
 
+test("role prompt backfill accepts LF and Windows CRLF baselines", async () => {
+  const body = (await readFile(SCHEMA_FILE, "utf8")).replace(/\r\n/g, "\n");
+  assert.deepEqual(roleConfigBackfillSql(body.replace(/\n/g, "\r\n")), roleConfigBackfillSql(body));
+});
+
 /** 基线 CREATE TABLE 里声明了 serial / IDENTITY 的列（information_schema 投影）。 */
 function ownedSequenceDeclarations(schemaSql: string): Array<{
   table: string;
