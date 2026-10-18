@@ -296,16 +296,24 @@ export function normalizeModelCatalog(input: unknown): string[] {
 }
 
 export type CredentialHealthStatus = "unknown" | "ok" | "error";
-export type CredentialHealthErrorCategory =
-  | "configuration"
-  | "authentication"
-  | "authorization"
-  | "rate_limited"
-  | "timeout"
-  | "network"
-  | "upstream"
-  | "invalid_response"
-  | "unknown";
+/**
+ * 与 database/schema.sql `credentials_health_error_category_check` 同一集合。
+ * `model_unavailable`：凭据可用但当前模型无权限 / 不在目录；`quota_exhausted`：额度或预算耗尽（#748）。
+ */
+export const CREDENTIAL_HEALTH_ERROR_CATEGORIES = [
+  "configuration",
+  "authentication",
+  "authorization",
+  "model_unavailable",
+  "quota_exhausted",
+  "rate_limited",
+  "timeout",
+  "network",
+  "upstream",
+  "invalid_response",
+  "unknown",
+] as const;
+export type CredentialHealthErrorCategory = typeof CREDENTIAL_HEALTH_ERROR_CATEGORIES[number];
 
 /**
  * Scheduler-owned model catalog capability (CC Switch style probe).

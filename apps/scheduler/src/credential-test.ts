@@ -8,6 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { claudeCliFingerprintHeaders } from "./claude-cli-fingerprint.js";
+import { redactSecretAssignments } from "./credential-secret-projection.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
 import {
   extractBaseUrlFromSettings,
@@ -46,6 +47,17 @@ export type CredentialProbeResult = {
   fetched_at: string;
   /** Which probe path produced this verdict; inference is the authoritative one. */
   probe_path?: CredentialProbePath;
+  /** 推理探测失败时上游错误正文中的 error.type / error.message（已脱敏、截断，#748）。 */
+  upstream_error?: UpstreamErrorSummary;
+  /** 模型级失败（402/403/配额）后补做的目录发现结果；仅在目录可达时出现，由路由回填 model_catalog_json。 */
+  model_catalog?: string[];
+  model_catalog_source_url?: string;
+  model_catalog_fetched_at?: string;
+};
+
+export type UpstreamErrorSummary = {
+  type?: string;
+  message?: string;
 };
 
 /** 推理路径能证明「凭据可运行 Job」；目录路径只是补充证据。 */
@@ -193,6 +205,7 @@ const INFERENCE_PROBE_PATH: Record<InferenceWireProtocol, string> = {
 
 type InferenceProbeRequest = {
   url: string;
+  model: string;
   headers: Record<string, string>;
   body: string;
   protocol: InferenceWireProtocol;
@@ -235,6 +248,7 @@ function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): In
   const path = INFERENCE_PROBE_PATH[protocol];
   return {
     url: joinProbeUpstreamUrl(base, path),
+    model,
     headers: { "content-type": "application/json", ...authHeadersForProtocol(protocol, secret) },
     body: inferenceProbeBody(protocol, model),
     protocol,
@@ -250,10 +264,19 @@ function inferenceStatusAccepted(status: number): boolean {
   return (status >= 200 && status < 300) || status === 400;
 }
 
+type InferenceProbeOutcome = {
+  status: number;
+  url: string;
+  protocol: InferenceWireProtocol;
+  clientRejected: boolean;
+  /** 失败响应正文的有界前缀（≤ ERROR_BODY_PREFIX_MAX_BYTES），只在进程内解析，不直接回显。 */
+  errorBody: string;
+};
+
 async function requestInferenceProbe(
   request: InferenceProbeRequest,
   timeoutMs: number,
-): Promise<{ status: number; url: string; protocol: InferenceWireProtocol; clientRejected: boolean }> {
+): Promise<InferenceProbeOutcome> {
   // 与目录探测同一口径：URL 已由 safeSourceUrl + Provider 允许列表校验（见 inferenceProbeRequest）。
   const url = request.url;
   let response: Response;
@@ -272,16 +295,17 @@ async function requestInferenceProbe(
       : detailForCategory(category);
     throw new CredentialProbeError(detail, category);
   }
-  const clientRejected = response.status === 401 && UNAUTHORIZED_CLIENT_PATTERN.test(await readBodyPrefix(response));
+  const errorBody = inferenceStatusAccepted(response.status) ? "" : await readBodyPrefix(response);
   await cancelResponseBody(response);
-  return { status: response.status, url: request.url, protocol: request.protocol, clientRejected };
+  const clientRejected = response.status === 401 && UNAUTHORIZED_CLIENT_PATTERN.test(errorBody);
+  return { status: response.status, url: request.url, protocol: request.protocol, clientRejected, errorBody };
 }
 
 /** 上游防滥用层的客户端识别拒绝文案（new-api 类中转，#321 / #736）。 */
 const UNAUTHORIZED_CLIENT_PATTERN = /unauthorized client/iu;
 const ERROR_BODY_PREFIX_MAX_BYTES = 4096;
 
-/** 只读取错误正文的有界前缀用于分类，不回显到结果里；读取失败按空串处理。 */
+/** 只读取错误正文的有界前缀用于分类与摘要（摘要须经 summarizeUpstreamError 脱敏）；读取失败按空串处理。 */
 async function readBodyPrefix(response: Response): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return "";
@@ -332,6 +356,7 @@ function discoveryDetail(status: number, category: CredentialHealthErrorCategory
 
 function categoryForStatus(status: number): CredentialHealthErrorCategory {
   if (status === 401) return "authentication";
+  if (status === 402) return "quota_exhausted";
   if (status === 403) return "authorization";
   if (status === 408 || status === 504) return "timeout";
   if (status === 429) return "rate_limited";
@@ -345,6 +370,8 @@ function detailForCategory(category: CredentialHealthErrorCategory, status?: num
     configuration: "Provider 配置无效",
     authentication: "Provider 身份验证失败",
     authorization: "Provider 权限不足",
+    model_unavailable: "当前模型不可用",
+    quota_exhausted: "Provider 额度或预算已耗尽",
     rate_limited: "Provider 请求频率受限",
     timeout: "Provider 请求超时",
     network: "Provider 网络连接失败",
@@ -353,6 +380,184 @@ function detailForCategory(category: CredentialHealthErrorCategory, status?: num
     unknown: "Provider 连接失败",
   };
   return labels[category];
+}
+
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]+/gu;
+const UPSTREAM_ERROR_TYPE_MAX_CHARS = 64;
+const UPSTREAM_ERROR_MESSAGE_MAX_CHARS = 120;
+/** credentials.health_detail 的库约束上限（≤300 且无控制字符）。 */
+const HEALTH_DETAIL_MAX_CHARS = 300;
+/** 402/403/429 正文中的额度 / 预算耗尽信号（OpenAI `insufficient_quota`、new-api `Budget pool quota` 等）。 */
+const QUOTA_EXHAUSTED_PATTERN = /quota|budget|insufficient[_\s-]?(?:balance|credit|funds)|billing|余额|额度|配额|欠费/iu;
+const MODEL_REFERENCE_PATTERN = /model|模型/iu;
+
+function boundedText(value: string, max: number): string {
+  const flattened = value.replace(CONTROL_CHARACTERS, " ").replace(/\s+/gu, " ").trim();
+  return flattened.length > max ? `${flattened.slice(0, max - 1)}…` : flattened;
+}
+
+/** 上游错误文本可能回显 Authorization、带查询串的 URL 或 key 本身；落库/回传前一律脱敏。 */
+function redactUpstreamText(value: string, secrets: readonly string[]): string {
+  let redacted = value;
+  for (const secret of secrets) {
+    if (secret.length >= 4) redacted = redacted.split(secret).join("[REDACTED]");
+  }
+  return redactSecretAssignments(redacted)
+    .replace(/\b(Bearer|Basic)\s+[^\s"',;)]+/giu, "$1 [REDACTED]")
+    .replace(/\b(?:sk|ak|pk|rk)-[A-Za-z0-9_-]{6,}/gu, "[REDACTED]")
+    .replace(/(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/giu, "$1");
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const field = (value as Record<string, unknown>)[key];
+  if (typeof field === "string" && field.trim()) return field;
+  if (typeof field === "number" && Number.isFinite(field)) return String(field);
+  return undefined;
+}
+
+/** 截断后的 JSON 前缀无法 JSON.parse；按字段名做尽力提取。 */
+function jsonStringFieldFallback(body: string, key: string): string | undefined {
+  const match = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`, "u").exec(body);
+  if (!match?.[1]) return undefined;
+  try {
+    return JSON.parse(`"${match[1]}"`) as string;
+  } catch {
+    return match[1];
+  }
+}
+
+/**
+ * 从推理失败正文的有界前缀（readBodyPrefix）提取 error.type / error.message：兼容
+ * OpenAI / Anthropic / new-api 的 `{error:{type,message}}`、`{error:"..."}`、顶层
+ * `{type,message}` 与纯文本正文。结果已脱敏并截断，可直接写入 health_detail。
+ */
+export function summarizeUpstreamError(body: string, secrets: readonly string[] = []): UpstreamErrorSummary | undefined {
+  const text = body.trim();
+  if (!text) return undefined;
+  let type: string | undefined;
+  let message: string | undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed && typeof parsed === "object") {
+    const error = (parsed as Record<string, unknown>).error;
+    if (error && typeof error === "object") {
+      type = stringField(error, "type") ?? stringField(error, "code");
+      message = stringField(error, "message");
+    } else if (typeof error === "string" && error.trim()) {
+      message = error;
+    }
+    type ??= stringField(parsed, "type") ?? stringField(parsed, "code");
+    message ??= stringField(parsed, "message") ?? stringField(parsed, "detail");
+  } else if (text.startsWith("{")) {
+    type = jsonStringFieldFallback(text, "type") ?? jsonStringFieldFallback(text, "code");
+    message = jsonStringFieldFallback(text, "message");
+  } else if (!text.startsWith("<")) {
+    // HTML 错误页没有可读摘要；其余纯文本按 message 处理。
+    message = text;
+  }
+  const safeType = type
+    ? boundedText(redactUpstreamText(type, secrets), UPSTREAM_ERROR_TYPE_MAX_CHARS)
+    : "";
+  const safeMessage = message
+    ? boundedText(redactUpstreamText(message, secrets), UPSTREAM_ERROR_MESSAGE_MAX_CHARS)
+    : "";
+  if (!safeType && !safeMessage) return undefined;
+  return {
+    ...(/^[\w.:-]+$/u.test(safeType) ? { type: safeType } : {}),
+    ...(safeMessage ? { message: safeMessage } : {}),
+  };
+}
+
+/**
+ * 推理失败的类别：402 或正文带额度信号 → quota_exhausted；403 且正文指向模型 →
+ * model_unavailable；其余沿用状态码映射（#748）。
+ */
+function inferenceFailureCategory(
+  status: number,
+  upstream: UpstreamErrorSummary | undefined,
+  model: string,
+): CredentialHealthErrorCategory {
+  const text = `${upstream?.type ?? ""} ${upstream?.message ?? ""}`;
+  if (status === 402 || ((status === 403 || status === 429) && QUOTA_EXHAUSTED_PATTERN.test(text))) {
+    return "quota_exhausted";
+  }
+  if (status === 403 && (text.toLowerCase().includes(model.toLowerCase()) || MODEL_REFERENCE_PATTERN.test(text))) {
+    return "model_unavailable";
+  }
+  return categoryForStatus(status);
+}
+
+/** 402/403 与额度类失败属于「这把 key 对这个模型不可用」，值得补一次目录发现。 */
+function isModelLevelFailure(status: number, category: CredentialHealthErrorCategory): boolean {
+  return status === 402 || status === 403 || category === "quota_exhausted";
+}
+
+function formatModelList(models: readonly string[], budget: number): string {
+  let output = "";
+  for (let index = 0; index < models.length; index += 1) {
+    const next = output ? `${output}、${models[index]}` : models[index];
+    const rest = models.length - index - 1;
+    const suffix = rest > 0 ? ` 等 ${models.length} 个` : "";
+    if (next.length + suffix.length > budget) {
+      return output ? `${output} 等 ${models.length} 个` : `共 ${models.length} 个`;
+    }
+    output = next;
+  }
+  return output;
+}
+
+function catalogHint(model: string, catalog: ModelCatalogDiscovery, budget: number): string {
+  if (!catalog.available) return `；模型目录发现失败（${catalog.category ?? "unknown"}）`;
+  if (catalog.models.length === 0) return "；模型目录为空";
+  if (catalog.models.includes(model)) return `；当前模型 ${model} 在可用目录中（共 ${catalog.models.length} 个）`;
+  const prefix = `；当前模型 ${model} 不可用，可用：`;
+  return `${prefix}${formatModelList(catalog.models, Math.max(0, budget - prefix.length))}`;
+}
+
+async function summarizeInferenceFailure(
+  cred: CredentialRequestInput,
+  secret: string,
+  model: string,
+  probed: InferenceProbeOutcome,
+): Promise<CredentialProbeResult> {
+  const upstream = summarizeUpstreamError(probed.errorBody, [secret]);
+  let category = inferenceFailureCategory(probed.status, upstream, model);
+  const clientHint = probed.clientRejected
+    ? "；上游返回 unauthorized client：按客户端指纹拒绝，不一定是凭据无效（见 #736 / #321）"
+    : "";
+  // 客户端指纹拒绝已有固定提示，不再重复上游原文。
+  const upstreamText = upstream && !probed.clientRejected
+    ? `；上游${upstream.type ? ` ${upstream.type}` : ""}：${upstream.message ?? upstream.type ?? ""}`
+    : "";
+  const catalog = isModelLevelFailure(probed.status, category)
+    ? await discoverModelCatalogWithSecret(cred, secret, 10_000)
+    : null;
+  if (category === "authorization" && catalog?.available && catalog.models.length > 0 && !catalog.models.includes(model)) {
+    category = "model_unavailable";
+  }
+  const head = `Provider 推理探测失败（${probed.protocol}，${category}，HTTP ${probed.status}${clientHint}）${upstreamText}`;
+  const detail = catalog ? `${head}${catalogHint(model, catalog, HEALTH_DETAIL_MAX_CHARS - head.length)}` : head;
+  return {
+    ok: false,
+    detail: boundedText(detail, HEALTH_DETAIL_MAX_CHARS),
+    category,
+    source_url: safeSourceUrl(probed.url),
+    fetched_at: now(),
+    probe_path: "inference",
+    ...(upstream ? { upstream_error: upstream } : {}),
+    ...(catalog?.available && catalog.fetched_at
+      ? {
+        model_catalog: catalog.models,
+        ...(catalog.source_url ? { model_catalog_source_url: catalog.source_url } : {}),
+        model_catalog_fetched_at: catalog.fetched_at,
+      }
+      : {}),
+  };
 }
 
 function responseTooLarge(response: Response): boolean {
@@ -518,12 +723,13 @@ function catalogUnavailable(
 async function discoverModelCatalogWithSecret(
   cred: CredentialRequestInput,
   secret: string,
+  timeoutMs = 15_000,
 ): Promise<ModelCatalogDiscovery> {
   if (!["anthropic", "openai"].includes(cred.provider)) {
     return catalogUnavailable("configuration", "该 Provider 暂不支持模型目录");
   }
   try {
-    const result = await requestModelCandidate(modelRequest(cred, secret), 15_000);
+    const result = await requestModelCandidate(modelRequest(cred, secret), timeoutMs);
     if (!result.ok) {
       const category = discoveryCategoryForStatus(result.status);
       return catalogUnavailable(category, discoveryDetail(result.status, category), safeSourceUrl(result.url));
@@ -580,8 +786,10 @@ export async function listCredentialModelsPreview(
 }
 
 /**
- * Credential connection test.  The returned detail is platform-generated;
- * upstream body text, URL query strings and credentials never leave process.
+ * Credential connection test.  The returned detail is platform-generated; the
+ * only upstream text it carries is the inference error's error.type /
+ * error.message, redacted and truncated by summarizeUpstreamError (#748).
+ * Raw bodies, URL query strings and credentials never leave process.
  */
 export async function testCredential(cred: CredentialProbe): Promise<CredentialProbeResult> {
   const mapping = PROVIDER_ENV_MAP[cred.provider];
@@ -621,18 +829,7 @@ export async function testCredential(cred: CredentialProbe): Promise<CredentialP
         };
       }
       if (probed.status !== 404 && probed.status !== 405) {
-        const category = categoryForStatus(probed.status);
-        const clientHint = probed.clientRejected
-          ? "；上游返回 unauthorized client：按客户端指纹拒绝，不一定是凭据无效（见 #736 / #321）"
-          : "";
-        return {
-          ok: false,
-          detail: `Provider 推理探测失败（${probed.protocol}，${category}，HTTP ${probed.status}${clientHint}）`,
-          category,
-          source_url: safeSourceUrl(probed.url),
-          fetched_at: now(),
-          probe_path: "inference",
-        };
+        return await summarizeInferenceFailure(cred, secret, inference.model, probed);
       }
       // 404/405 说明该推理路径不存在（供应商计划不同），交回目录路径复核。
       inferenceMissing = probed;

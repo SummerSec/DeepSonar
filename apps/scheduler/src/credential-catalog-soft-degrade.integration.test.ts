@@ -140,6 +140,49 @@ if (!testDatabaseUrl) {
       assert.deepEqual(refreshed?.model_catalog_json, []);
       assert.equal(refreshed?.model_catalog_fetched_at, null);
       assert.equal(refreshed?.health_status, "error");
+
+      // #748: 推理 403（模型无权限）保留脱敏上游正文，并补一次目录发现回填 model_catalog_json。
+      globalThis.fetch = (async (_input, init) => {
+        if (init?.method === "POST") {
+          return new Response(JSON.stringify({
+            error: { message: "该令牌无权访问模型 grok-4.6 key=local-gateway-key", type: "new_api_error" },
+          }), { status: 403 });
+        }
+        return Response.json({ data: [{ id: "model-c" }, { id: "model-b" }] });
+      }) as typeof fetch;
+      const forbidden = await request("POST", `/credentials/${credentialId}/test`, {});
+      assert.equal(forbidden.statusCode, 200, forbidden.payload);
+      assert.equal(json(forbidden).ok, false);
+      assert.equal(json(forbidden).category, "model_unavailable");
+      assert.deepEqual(json(forbidden).model_catalog, ["model-b", "model-c"]);
+      assert.equal(forbidden.payload.includes("local-gateway-key"), false);
+      const [forbiddenRow] = await sql<{
+        health_error_category: string;
+        health_detail: string;
+        model_catalog_json: unknown;
+        model_catalog_fetched_at: string | null;
+      }[]>`
+        SELECT health_error_category, health_detail, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.equal(forbiddenRow?.health_error_category, "model_unavailable");
+      assert.match(forbiddenRow?.health_detail ?? "", /new_api_error：该令牌无权访问模型 grok-4\.6/u);
+      assert.match(forbiddenRow?.health_detail ?? "", /当前模型 grok-4\.6 不可用，可用：model-b、model-c/u);
+      assert.equal(forbiddenRow?.health_detail.includes("local-gateway-key"), false);
+      assert.deepEqual(forbiddenRow?.model_catalog_json, ["model-b", "model-c"]);
+      assert.notEqual(forbiddenRow?.model_catalog_fetched_at, null);
+
+      // 402 配额耗尽写入新的 quota_exhausted 类别（schema v59 约束）。
+      globalThis.fetch = (async (_input, init) => (init?.method === "POST"
+        ? new Response(JSON.stringify({ error: { message: "Budget pool quota has been exhausted", type: "bad_response_status_code" } }), { status: 402 })
+        : new Response("down", { status: 503 }))) as typeof fetch;
+      const quota = await request("POST", `/credentials/${credentialId}/test`, {});
+      assert.equal(quota.statusCode, 200, quota.payload);
+      assert.equal(json(quota).category, "quota_exhausted");
+      // 目录发现失败不清空上一次成功的目录。
+      const [quotaRow] = await sql<{ health_error_category: string; model_catalog_json: unknown; model_catalog_fetched_at: string | null }[]>`
+        SELECT health_error_category, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.equal(quotaRow?.health_error_category, "quota_exhausted");
+      assert.deepEqual(quotaRow?.model_catalog_json, ["model-b", "model-c"]);
+      assert.equal(String(quotaRow?.model_catalog_fetched_at), String(forbiddenRow?.model_catalog_fetched_at));
     } finally {
       globalThis.fetch = originalFetch;
       if (closeApp) await closeApp().catch(() => undefined);

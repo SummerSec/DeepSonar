@@ -327,7 +327,7 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | POST | /credentials/:id/rotate | agents:write | `{secret}` 轮换密钥 |
 | POST | /credentials/:id/status | agents:write | `{status: active\|disabled\|rotation_required}` |
 | DELETE | /credentials/:id | agents:write | 删除已保存账号；pending/active Job 拒绝（`CREDENTIAL_IN_USE`）；failed/timeout/orphan 可恢复历史不挡删除；活动扫描拒绝（`CREDENTIAL_SCAN_IN_USE`）；吊销 `job_tokens`；不改写历史 Job 快照（#690：不再存在 RoleConfig 凭据绑定） |
-| POST | /credentials/:id/test | agents:write | 连接测试（无 body；会更新健康证据）。优先按 vendor 口径做最小推理调用（`POST /v1/chat/completions`，Anthropic 为 `POST /v1/messages`，`max_tokens=8`）：`2xx\|400` = 账号可用（400 只是 ping 参数被拒）；推理路径 `401/403` 才是认证失败。只能走模型目录时，目录侧 `401/403/404/405` 记为 `unknown`（该路径不可用 ≠ 账号不可用），响应带 `probe_path` 标明结论来自哪条路径 |
+| POST | /credentials/:id/test | agents:write | 连接测试（无 body；会更新健康证据）。优先按 vendor 口径做最小推理调用（`POST /v1/chat/completions`，Anthropic 为 `POST /v1/messages`，`max_tokens=8`）：`2xx\|400` = 账号可用（400 只是 ping 参数被拒）；推理路径 `401/403` 才是认证失败。只能走模型目录时，目录侧 `401/403/404/405` 记为 `unknown`（该路径不可用 ≠ 账号不可用），响应带 `probe_path` 标明结论来自哪条路径。推理失败时 `upstream_error` / `detail` 携带脱敏截断的上游 `error.type` / `error.message`；`402` 或额度类正文 → `quota_exhausted`，`403` 指向模型 → `model_unavailable`；402 / 403 / 额度失败会补一次模型目录发现，成功时返回 `model_catalog` 并回填 `model_catalog_json`（#748） |
 | POST | /credentials/:id/models | agents:write | 实时拉取 Provider 模型目录（无 body；用于配置文件模型字段的参考） |
 | POST | /credentials/models/preview | agents:write | `{agent_cli, provider, secret, base_url?, settings_config?}`；未保存账号一键获取模型目录，不落库/审计/回显密钥 |
 | GET | /credentials/:id/models | agents:read | 读取已持久化的有界模型 ID 目录 |

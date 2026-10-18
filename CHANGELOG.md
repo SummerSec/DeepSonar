@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **凭据推理探测保留上游错误并补做模型目录发现（#748）**：`credential-test.ts` 推理探测失败时用有界前缀（`ERROR_BODY_PREFIX_MAX_BYTES = 4096`）读取上游正文，提取 `error.type` / `error.message`（兼容 OpenAI / Anthropic / new-api 与纯文本正文，截断 JSON 尽力解析），去控制字符、截断并对凭据原值、`Bearer` / `sk-` 类 token、密钥赋值与 URL 查询串脱敏后写入 `health_detail` 与 `upstream_error`。`CredentialHealthErrorCategory` 新增 `model_unavailable`（403 且上游指向模型，或目录中不含当前模型）与 `quota_exhausted`（402，或 403 / 429 正文带 quota / budget / 余额等额度信号）；以往 403 一律 `authorization`、402 落 `unknown`。推理因 402 / 403 / 额度耗尽失败时仍补一次 `GET /v1/models` 目录发现，成功即回填 `model_catalog_json` / `model_catalog_fetched_at` 并在明细中提示「当前模型不可用，可用：…」；目录发现失败不清空已有目录。路由侧类别白名单改为复用 `CREDENTIAL_HEALTH_ERROR_CATEGORIES`。
+
 ### 新增
 
 - **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION` / `DEEPSONAR_IMAGE_TAG`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 生成 `platform` digests 与最终 payload inspect 门禁扩展仍为 TODO；Compose 仍用 `DEEPSONAR_IMAGE_TAG`，digest 契约与 `deploy.sh upgrade` 留给后续片。
@@ -13,6 +17,7 @@
 
 ### 部署 / 升级说明
 
+- #748 修改数据库 schema：主线 **v58 → v59**（`credentials_health_error_category_check` 新增 `model_unavailable` / `quota_exhausted`）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。
 - 本次改动修改数据库 schema：主线 **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用本次不变，仍为 `DEEPSONAR_IMAGE_TAG`；`upgrade` 子命令与 digest 契约见 #740 后续片。
 
 ## [0.5.6] - 2026-10-15
