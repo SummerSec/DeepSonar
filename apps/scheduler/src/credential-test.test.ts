@@ -855,7 +855,7 @@ test("#748 upstream summaries redact native and text-config secrets, including a
       assert.equal(serialized.includes("?token="), false);
       assert.match(result.detail, /model unavailable/u);
       assert.equal(result.upstream_error?.type, undefined);
-      }
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
