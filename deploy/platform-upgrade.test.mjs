@@ -322,3 +322,60 @@ test('Compose stop runs only after the local database confirms pause and drain',
   assert.ok(calls[0].includes('psql'));
   assert.deepEqual(calls[1].slice(-4), ['stop', 'scheduler', 'image-admission', 'web']);
 });
+
+test('isolated programmatic project and release seams do not weaken default registry policy', async () => {
+  const calls = [], target = {version: '0.0.2', schema_version: 59};
+  const io = hostAdapter({projectName: 'pr747-upgrade-test', releaseProvider: async () => target, run: args => {
+    calls.push(args); return Buffer.from(JSON.stringify(pausedResponse));
+  }});
+  assert.equal(await io.release(), target);
+  await io.stop();
+  assert.equal(calls[0][2], 'pr747-upgrade-test');
+  assert.throws(() => hostAdapter({projectName: '../production'}), /invalid Compose project/);
+  const local = ['DEEPSONAR_VERSION=0.0.1', ...['SCHEDULER', 'WEB', 'IMAGE_ADMISSION'].map(key => `DEEPSONAR_${key}_IMAGE=127.0.0.1:55000/summersec/deepsonar-${key.toLowerCase().replaceAll('_', '-')}@sha256:${'a'.repeat(64)}`)].join('\n');
+  assert.throws(() => platformValues(local), /official registry/);
+  const source = readFileSync(join(deployDirectory, 'platform-upgrade-host.mjs'), 'utf8');
+  const cli = source.slice(source.indexOf('if (process.argv[1]'));
+  assert.doesNotMatch(cli, /releaseProvider|parsePlatformValues|projectName/);
+});
+
+test('recovery journal binds Compose project, config paths and actual Docker context endpoint', async () => {
+  const temp = mkdtempSync(join(tmpdir(), 'ds-target-binding-'));
+  const previousHost = process.env.DOCKER_HOST, previousContext = process.env.DOCKER_CONTEXT;
+  delete process.env.DOCKER_HOST; delete process.env.DOCKER_CONTEXT;
+  let endpoint = 'tcp://fixture-user:fixture-password@127.0.0.1:2376';
+  const run = args => {
+    assert.equal(args[0], 'context');
+    return Buffer.from(args[1] === 'show' ? 'isolated-fixture' : JSON.stringify(endpoint));
+  };
+  const composeContents = 'services: {}\n';
+  writeFileSync(join(temp, 'compose.yml'), composeContents);
+  writeFileSync(join(temp, 'other.yml'), composeContents);
+  const opts = {directory: temp, projectName: 'pr747-upgrade-binding', composeFiles: ['compose.yml'], run};
+  try {
+    const io = hostAdapter(opts);
+    await io.lock(() => io.writeState({format: 1, stage: 'stopping'}));
+    const saved = JSON.parse(readFileSync(join(temp, '.upgrade', 'state.json'), 'utf8'));
+    assert.equal(saved.deploymentTarget.projectName, opts.projectName);
+    assert.deepEqual(saved.deploymentTarget.composeFiles, [join(temp, 'compose.yml')]);
+    assert.equal(saved.deploymentTarget.envPath, join(temp, '.env'));
+    assert.equal(saved.deploymentTarget.composeFileHashes.length, 1);
+    assert.match(saved.deploymentTarget.composeFileHashes[0], /^[a-f0-9]{64}$/);
+    assert.match(saved.deploymentTarget.dockerIdentity, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(JSON.stringify(saved), /fixture-password|fixture-user/);
+    assert.equal((await hostAdapter(opts).readState()).stage, 'stopping');
+    await assert.rejects(hostAdapter({...opts, projectName: 'pr747-upgrade-other'}).readState(), /deployment target missing or different/);
+    await assert.rejects(hostAdapter({...opts, composeFiles: ['other.yml']}).readState(), /deployment target missing or different/);
+    writeFileSync(join(temp, 'compose.yml'), 'services: {web: {image: other}}\n');
+    await assert.rejects(hostAdapter(opts).readState(), /deployment target missing or different/, 'same-path topology replacement must fail closed');
+    writeFileSync(join(temp, 'compose.yml'), composeContents);
+    endpoint = 'unix:///other-docker.sock';
+    await assert.rejects(hostAdapter(opts).readState(), /deployment target missing or different/);
+    writeFileSync(join(temp, '.upgrade', 'state.json'), JSON.stringify({format: 1, stage: 'stopping'}));
+    await assert.rejects(hostAdapter(opts).readState(), /deployment target missing or different/);
+  } finally {
+    if (previousHost === undefined) delete process.env.DOCKER_HOST; else process.env.DOCKER_HOST = previousHost;
+    if (previousContext === undefined) delete process.env.DOCKER_CONTEXT; else process.env.DOCKER_CONTEXT = previousContext;
+    rmSync(temp, {recursive: true, force: true});
+  }
+});

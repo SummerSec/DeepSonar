@@ -23,6 +23,7 @@
 ## 后果
 
 - 保留暂停期间新写入，避免未知外部效果与恢复领取响应丢失导致重复执行。
+- 恢复记录必须匹配原 Compose 项目、配置内容与 Docker 目标；身份变化时拒绝恢复。
 - 中断后需要显式 rollback 或人工对账，不能保证自动恢复可用性；备份处理上限 512 MiB。
 - 验收：[升级故障注入测试](../../../deploy/platform-upgrade.test.mjs) 接入 `pnpm ci:unit:deploy-ps1`；[真实数据库排空回归](../../../apps/scheduler/src/domains/platform-claims/platform-claims.integration.test.ts) 接入 `pnpm ci:integration:dispatch-limits`。真实双版本部署演练仍需独立环境，不能由 mock 通过推定。
 

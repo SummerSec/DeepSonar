@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **平台升级核查（2026-10-20，#740 / #747）**：已接通发布平台 digest 生成/inspect、严格 dotenv 校验、终态 Attempt 未结算效果排空门禁，以及单控制面同 schema 的受控升级和保留数据库的暂停回滚。跨 schema、完整配置 preflight、多节点升级和自动续做仍未完成；验证入口与限制见 [部署说明](../deploy/README.md)。
+> **平台升级核查（2026-10-20，#740 / #747）**：已接通发布平台 digest 生成/inspect、严格 dotenv 校验、终态 Attempt 未结算效果排空门禁，以及单控制面同 schema 的受控升级和保留数据库的暂停回滚。跨 schema、完整配置 preflight、多节点升级和自动续做仍未完成；验证入口与限制见 [部署说明](../deploy/README.md) 和 [隔离升级演练](../deploy/UPGRADE_REHEARSAL.md)。
 
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) §8.2。
 

@@ -2,7 +2,9 @@
 // Requires Node >=22, Docker Compose/buildx, and DEEPSONAR_ADMIN_TOKEN in process env.
 // No automatic schema rebuild; rollback deliberately leaves claims paused.
 import { readFile, writeFile, rename, mkdir, rm, open, chmod } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +39,11 @@ async function atomic(path, contents) {
 }
 
 export function hostAdapter(options = {}) {
+  // Programmatic seams support isolated integration fixtures. The CLI below
+  // never maps arguments or environment variables to these trust dependencies.
+  const parseValues = options.parsePlatformValues ?? platformValues;
+  const projectName = options.projectName ?? 'deepsonar';
+  if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(projectName)) throw new Error('invalid Compose project name');
   const root = options.directory ?? dir;
   const envPath = resolve(root, '.env');
   const recovery = resolve(root, '.upgrade');
@@ -46,15 +53,29 @@ export function hostAdapter(options = {}) {
   for (const key of ['DEEPSONAR_VERSION', 'DEEPSONAR_IMAGE_TAG', ...Object.values(keys)]) {
     if (Object.hasOwn(commandEnv, key)) throw new Error(`unset ${key} before upgrade`);
   }
-  const compose = ['compose', '-p', 'deepsonar', '--env-file', envPath];
-  for (const file of options.composeFiles ?? ['docker-compose.prod.yml', 'docker-compose.real.yml', 'docker-compose.opensandbox.prod.yml']) {
-    compose.push('-f', resolve(root, file));
-  }
+  const composeFiles = (options.composeFiles ?? ['docker-compose.prod.yml', 'docker-compose.real.yml', 'docker-compose.opensandbox.prod.yml']).map(file => resolve(root, file));
+  const compose = ['compose', '-p', projectName, '--env-file', envPath];
+  for (const file of composeFiles) compose.push('-f', file);
   const run = options.run ?? ((args, input, env = commandEnv) => {
     const output = spawnSync('docker', args, { env, input, maxBuffer, timeout: 600_000 });
     if (output.error || output.status !== 0) throw new Error(`docker ${args[0]} failed (status ${output.status ?? 'unknown'}); inspect local Docker logs`);
     return output.stdout;
   });
+  let boundTarget;
+  const deploymentTarget = () => {
+    const context = commandEnv.DOCKER_CONTEXT || (commandEnv.DOCKER_HOST ? null : run(['context', 'show']).toString().trim());
+    const endpoint = context
+      ? JSON.parse(run(['context', 'inspect', context, '--format', '{{json .Endpoints.docker.Host}}']).toString())
+      : commandEnv.DOCKER_HOST;
+    if (!endpoint || (context !== null && !context)) throw new Error('cannot identify Docker deployment target');
+    // Hash the endpoint/context identity: never persist URLs that might contain credentials.
+    const dockerIdentity = createHash('sha256').update(JSON.stringify({context, endpoint})).digest('hex');
+    const composeFileHashes = composeFiles.map(path => createHash('sha256').update(readFileSync(path)).digest('hex'));
+    const current = {projectName, envPath, composeFiles, composeFileHashes, dockerIdentity};
+    if (boundTarget && JSON.stringify(current) !== JSON.stringify(boundTarget)) throw new Error('Docker deployment target changed during upgrade');
+    boundTarget = current;
+    return current;
+  };
   const dc = (args, input, env) => run([...compose, ...args], input, env);
   const sql = query => dc(['exec', '-T', 'postgres', 'psql', '-U', 'deepsonar', '-d', 'deepsonar', '-v', 'ON_ERROR_STOP=1', '-Atc', query]).toString().trim();
   const base = new URL(options.api ?? 'http://127.0.0.1:8080/api/');
@@ -88,9 +109,18 @@ export function hostAdapter(options = {}) {
       try { await writeFile(resolve(lockPath, 'pid'), String(process.pid)); return await fn(); }
       finally { await rm(lockPath, { recursive: true }); }
     },
-    async readState() { try { return JSON.parse(await readFile(journal, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
-    writeState: state => atomic(journal, JSON.stringify(state, null, 2)),
+    async readState() {
+      let state;
+      try { state = JSON.parse(await readFile(journal, 'utf8')); }
+      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      if (JSON.stringify(state.deploymentTarget) !== JSON.stringify(deploymentTarget())) {
+        throw new Error('recovery deployment target missing or different; refusing to operate on another project, configuration or Docker endpoint');
+      }
+      return state;
+    },
+    writeState: state => atomic(journal, JSON.stringify({...state, deploymentTarget: deploymentTarget()}, null, 2)),
     async release() {
+      if (options.releaseProvider) return options.releaseProvider();
       const version = options.version?.replace(/^v/, '');
       if (version && !/^\d+\.\d+\.\d+$/.test(version)) throw new Error('version must be stable X.Y.Z');
       const url = `https://github.com/SummerSec/DeepSonar/releases/${version ? `download/v${version}` : 'latest/download'}/runtime-image-registry.json`;
@@ -102,7 +132,7 @@ export function hostAdapter(options = {}) {
       return catalog.platform;
     },
     async current() {
-      const values = platformValues(await readFile(envPath, 'utf8'));
+      const values = parseValues(await readFile(envPath, 'utf8'));
       const schema = Number(sql("SELECT version FROM schema_meta WHERE id='global'"));
       if (!Number.isSafeInteger(schema) || schema < 1) throw new Error('invalid current schema');
       const health = await request('/health');
@@ -111,7 +141,7 @@ export function hostAdapter(options = {}) {
       verifyImages(current);
       return current;
     },
-    async pull(target) { for (const service of services) run(['pull', target.images[service].registry_refs.github]); },
+    async pull(target) { for (const service of services) run(['pull', imageValues(target)[keys[service]]]); },
     async preflight(target) {
       if (sql("SELECT count(*) FROM worker_nodes WHERE kind='remote'") !== '0') throw new Error('remote workers require a coordinated upgrade; this CLI supports one Compose host only');
       const values = imageValues(target);
@@ -168,9 +198,9 @@ export function hostAdapter(options = {}) {
       assertDrained(await adapter.recoveryClaims());
     },
     async configure(target) {
-      let contents = await readFile(envPath, 'utf8'); platformValues(contents);
+      let contents = await readFile(envPath, 'utf8'); parseValues(contents);
       for (const [key, value] of Object.entries(imageValues(target))) contents = contents.replace(new RegExp(`^${key}=.*$`, 'gm'), `${key}=${value}`);
-      platformValues(contents); await atomic(envPath, contents);
+      parseValues(contents); await atomic(envPath, contents);
     },
     start: async () => { dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]); },
     async verify(target) {

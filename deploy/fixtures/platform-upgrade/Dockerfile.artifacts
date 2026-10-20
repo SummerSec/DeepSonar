@@ -1,0 +1,17 @@
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81
+# Isolated rehearsal only: build each source checkout with its frozen lockfile
+# first. This packages real compiled applications; it is not a release image.
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY node_modules node_modules
+COPY apps apps
+COPY packages packages
+COPY database database
+COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
+COPY deploy/web-server.mjs web-server.mjs
+COPY agent-harness/demo-repo agent-harness/demo-repo
+RUN cp -a apps/web/dist /app/public
+ARG SERVICE
+ARG GIT_REVISION
+ENV TEST_SERVICE=${SERVICE} DEEPSONAR_GIT_REVISION=${GIT_REVISION} NODE_ENV=production
+CMD ["sh", "-c", "if [ \"$TEST_SERVICE\" = web ]; then exec node /app/web-server.mjs; else exec node /app/apps/$TEST_SERVICE/dist/index.js; fi"]

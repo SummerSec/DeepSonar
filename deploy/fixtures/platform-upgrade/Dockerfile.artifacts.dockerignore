@@ -1,0 +1,9 @@
+.git
+.env
+deploy/.env
+data
+*.log
+**/.env
+**/.env.local
+**/*.key
+**/.upgrade

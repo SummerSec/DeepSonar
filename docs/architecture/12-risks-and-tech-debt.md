@@ -38,6 +38,8 @@ Web 当前对可见投影使用 elkjs，服务端节点坐标只作 placement/ex
 
 P1 第 1–3 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。Compose 已改为每个平台镜像一个不可变 digest 引用并要求显式 `DEEPSONAR_VERSION`（`DEEPSONAR_IMAGE_TAG` 已删除，部署脚本 fail closed）。Release 已生成并 inspect 核对 `platform` digests；宿主 `upgrade check/apply/rollback` 已支持单控制面、同 schema 的稳定版本升级，回滚保持暂停且保留数据库。仍未落地的是跨 schema 自动重建、完整配置兼容性 preflight、多节点顺序/版本保护、自动中断续做、签名和无人值守补丁升级。恢复领取结果不明需人工对账，不能宣称完整 #740 已完成。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
 
+逐项验收边界与隔离容器证据入口见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。跨 schema、完整 preflight、多节点和续做是明确缺实现，不能误记为仅缺测试。恢复旧数据库前必须确定全写入冻结、恢复点后合法写入的处理及旧节点隔离协议。
+
 ### 3.3 可冻结的安全漏洞证明契约
 
 通用 Fact-first v1 已是当前 Verify 主路径；`security.vulnerability.proof` 的更严格静态/动态证明契约是可选设计，默认不启用。缺少工具、目标或设备时，运行结果应为 `inconclusive` 或进入人工路径；文本描述、危险函数命中或单纯行号不能被写成运行证明。只有安全 profile 的明确需求和对应的 Artifact/Evidence 规范稳定后，才能推进强制门禁。
