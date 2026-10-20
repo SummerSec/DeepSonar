@@ -83,3 +83,29 @@ Final mobile images and arm64 execution require their own complete acceptance
 run. Host tests, a dedicated ASC test container, and QEMU execution must not be
 described as native dual-architecture final-image validation. No speed/RSS
 benchmark or device/application execution was performed.
+
+## Read-only upstream license review
+
+The fixed radguard revision `290de20c925c4a2c7642b1a63c9997185a06e130`
+was checked against its complete six-commit history (not a shallow checkout),
+root and nested paths, README/docs/source headers, Cargo package metadata,
+annotated tags v0.1.0–v0.1.3, and release packaging workflow. No LICENSE,
+COPYING, NOTICE, SPDX statement, `license`/`license-file`, or other express
+permission covering radguard was found. The v0.1.3 public release page only
+links its generated changelog and does not add a license grant. Release
+attachments were not separately inspected.
+
+The parent rust_ASC root LICENSE, Cargo.toml and README say Apache-2.0, but
+no text explicitly covering the separately versioned radguard submodule was
+found. This review does not establish distribution authorization. Clarification
+covering the pinned revision remains required before distribution; no upstream
+message was sent.
+
+## CI dependency resolution correction
+
+The first final-head main CI (`39395048111`) exposed an existing base/audit
+build issue: jq `1.6-2.1+deb12u2` requires exactly matching libjq1, while APT
+selected security candidate `deb12u3` for the unpinned library. Debian bookworm's
+package index still contains both jq and libjq1 `deb12u2`. The Dockerfile now
+pins libjq1 to the existing `JQ_VERSION`, with a consistency regression check.
+No tool version or #747 deployment upgrade contract was changed.

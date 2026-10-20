@@ -295,6 +295,7 @@ expect(kaliDockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${kaliPiWeb.version}`)
 expect(dockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && dockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Dockerfile.agent must integrity-check and prefix-install Pi extensions");
 expect(kaliDockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && kaliDockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Kali Dockerfile must integrity-check and prefix-install Pi extensions");
 expect(localDefinition.includes("piExtensions") && localDefinition.includes("/opt/deepsonar/pi-extensions"), "image.mjs must preinstall registered Pi extensions to the fixed prefix");
+expect(dockerfile.includes("jq=${JQ_VERSION} libjq1=${JQ_VERSION}"), "Base/audit must pin libjq1 to the exact jq version");
 const aptArgs = {
   git: "GIT", python3: "PYTHON", "ca-certificates": "CA_CERTIFICATES",
   curl: "CURL", ripgrep: "RIPGREP", jq: "JQ", file: "FILE", unzip: "UNZIP", "xz-utils": "XZ", binutils: "BINUTILS",
