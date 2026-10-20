@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 58);
+INSERT INTO schema_meta (id, version) VALUES ('global', 59);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1048,8 +1048,9 @@ CREATE TABLE credentials (
     CHECK (health_status IN ('unknown', 'ok', 'error')),
   CONSTRAINT credentials_health_error_category_check
     CHECK (health_error_category IS NULL OR health_error_category IN (
-      'configuration', 'authentication', 'authorization', 'rate_limited',
-      'timeout', 'network', 'upstream', 'invalid_response', 'unknown'
+      'configuration', 'authentication', 'authorization', 'model_unavailable',
+      'quota_exhausted', 'rate_limited', 'timeout', 'network', 'upstream',
+      'invalid_response', 'unknown'
     )),
   CONSTRAINT credentials_health_detail_check
     CHECK (health_detail IS NULL OR (length(health_detail) <= 300 AND health_detail !~ '[[:cntrl:]]')),

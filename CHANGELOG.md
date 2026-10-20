@@ -3,12 +3,21 @@
 ### 变更
 
 - **平台镜像改按不可变 digest 部署（#740 P1 第 3 片，不兼容）**：`deploy/docker-compose.prod.yml` 与 `docker-compose.opensandbox.host.yml` 的 scheduler / web / image-admission 改为每个镜像一个完整引用变量 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；删除 `DEEPSONAR_IMAGE_TAG`，不保留兼容。`/health.version` 与版本发现只认显式 `DEEPSONAR_VERSION`，不再回退镜像 tag。`deploy.sh`（新增共享校验 `deploy/platform-images.sh`）与 `deploy.ps1` 发现 `deploy/.env` 或进程环境中的旧变量、可变 tag、仓库名不符的 digest、缺失或带 `v` 前缀的 `DEEPSONAR_VERSION` 时 fail closed，逐项列出问题并打印应从 `deploy/.env.example` 复制的四行；不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量；`up real build` 临时把平台镜像标记为 `deepsonar-*:local-build`，不改写 `.env`。官方 helper / Silo 改按 `DEEPSONAR_VERSION` 标签解析后固定为 RepoDigest。`deploy/.env.example` 写入 v0.5.6 的真实 index digest（ACR / GHCR 一致）。新增 `deploy/deploy-platform-images.test.mjs`，对 sh 与 PowerShell 两侧用假 docker 端到端覆盖首次生成、按 digest 拉取与各类拒绝路径；OpenSandbox PoC 夹具改读 `.env.example` 的 digest 行。`upgrade check / apply / rollback` 仍属 #740 后续片。
+### 修复
+
+- **Windows 数据库基线重建**：角色提示词回填在匹配 SQL 模板前统一 CRLF/LF，避免 v58 → v59 重建在 Windows 检出时中断；新增跨换行回归并验证真实 PostgreSQL 回填。
+
+- **凭据推理探测保留上游错误并补做模型目录发现（#748）**：`credential-test.ts` 推理探测失败时用有界前缀（`ERROR_BODY_PREFIX_MAX_BYTES = 4096`）读取上游正文，提取 `error.type` / `error.message`（兼容 OpenAI / Anthropic / new-api 与纯文本正文，截断 JSON 尽力解析），清理 C0/C1 控制字符、截断并对主密钥、原生配置中的其他秘密值、`Bearer` / `sk-` 类 token、密钥赋值以及 URL 用户信息/查询串脱敏后写入 `health_detail` 与 `upstream_error`。`CredentialHealthErrorCategory` 新增 `model_unavailable`（403 且上游指向模型，或目录中不含当前模型）与 `quota_exhausted`（402，或 403 / 429 正文带 quota / budget / 余额等额度信号）；以往 403 一律 `authorization`、402 落 `unknown`。推理因 402 / 403 / 额度耗尽失败时仍补一次 `GET /v1/models` 目录发现，成功即回填 `model_catalog_json` / `model_catalog_fetched_at` 并在明细中提示「当前模型不可用，可用：…」；目录发现失败不清空已有目录。路由侧类别白名单改为复用 `CREDENTIAL_HEALTH_ERROR_CATEGORIES`；探测回写同时核对 settings、CLI 与项目，配置变更后拒绝陈旧结果。
 
 ### 新增
 
 - **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 生成 `platform` digests 与最终 payload inspect 门禁扩展仍为 TODO；digest Compose 契约见本区第 3 片，`deploy.sh upgrade` 留给后续片。
 
 - **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、活跃 Attempt 上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。`deploy.sh` / `deploy.ps1` 的 `upgrade` 子命令属于 #740 后续片（版本发现见本区第 2 片，digest 部署契约见第 3 片）。
+
+### 修复
+
+- **凭据页恢复模型输入入口（#749）**：账号管理新建 / 编辑 Provider 账号时，「Provider 连接与模型路由」区新增结构化「模型」字段（Claude Code / DSH 单模型，Pi 为逗号分隔的模型 ID 列表），编辑时按已保存配置预填；粘贴或修改原生配置中的主模型时自动回填。`createAccount` / `saveEditedConfig` 现把 `modelId`（Pi 为 `modelIds`）传给 `buildSettingsConfigFromEditor`，`patchProviderModelId()` / `patchProviderModelIds()` 不再是死代码：Claude Code 显式修改主模型时把 `ANTHROPIC_MODEL`、`ANTHROPIC_DEFAULT_{FABLE,SONNET,OPUS,HAIKU}_*` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 全部 14 个模型键统一为该模型，原生配置中存在不一致键且显式改模时页面提示将被统一；普通编辑保留独立 tier 与 subagent 路由；字段留空则保留原生配置的模型键不变。Codex / OpenCode 高级配置恢复内置模型字段（直接写入原生配置）。不改 schema、OpenAPI 与 Scheduler 行为。
 
 ### 文档
 
@@ -19,6 +28,7 @@
 
 - **平台镜像引用契约变更（#740 P1 第 3 片）**：已有部署升级前须删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，并从目标版本的 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）；否则 `deploy.sh` / `deploy.ps1` 与 Compose 直接拒绝启动。不改数据库 schema。Release 回写 `deploy/.env.example` 同步改为写入 `DEEPSONAR_VERSION` 与按 inspect 得到的 digest 引用。
 - 本次改动修改数据库 schema：主线 **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用契约见上一条（#740 第 3 片）；`upgrade` 子命令见 #740 后续片。
+- #748 修改数据库 schema：主线 **v58 → v59**（`credentials_health_error_category_check` 新增 `model_unavailable` / `quota_exhausted`）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。
 
 ## [0.5.6] - 2026-10-15
 

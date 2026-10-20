@@ -26,6 +26,7 @@ import {
   PROVIDER_CATALOG,
   sanitizeCredentialMetadata,
   UNKNOWN_PROVIDER_ERROR,
+  CREDENTIAL_HEALTH_ERROR_CATEGORIES,
   type CredentialHealthErrorCategory,
   validateCredentialAgentCliExclusive,
   validateCredentialCompatibility,
@@ -104,7 +105,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
   });
 
   function safeHealthDetail(value: unknown): string | null {
-    if (typeof value !== "string" || value.length > 300 || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+    if (typeof value !== "string" || value.length > 300 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return null;
     return value;
   }
 
@@ -937,16 +938,25 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: UNKNOWN_PROVIDER_ERROR });
     }
     const result = await testCredential(cred as never);
+    // 模型级失败（402/403/配额）补做的目录发现结果一并回填，UI 才能提示可用模型（#748）。
+    const discoveredCatalog = result.model_catalog && result.model_catalog_fetched_at
+      ? normalizeModelCatalog(result.model_catalog)
+      : null;
     const [updated] = await sql`
       UPDATE credentials SET
         last_tested_at = ${result.fetched_at},
         health_status = ${result.ok ? "ok" : "error"},
         health_error_category = ${result.ok ? null : (result.category ?? "unknown")},
-        health_detail = ${result.detail.slice(0, 300)}
+        health_detail = ${result.detail.slice(0, 300)},
+        model_catalog_json = COALESCE(${discoveredCatalog ? sql.json(discoveredCatalog as never) : null}::jsonb, model_catalog_json),
+        model_catalog_fetched_at = COALESCE(${discoveredCatalog ? (result.model_catalog_fetched_at ?? null) : null}::timestamptz, model_catalog_fetched_at)
       WHERE id = ${id}
         AND key_version = ${cred.key_version}
         AND provider = ${cred.provider}
         AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+        AND settings_config_json IS NOT DISTINCT FROM ${sql.json(cred.settings_config_json as never)}
+        AND agent_cli IS NOT DISTINCT FROM ${cred.agent_cli}
+        AND project_id IS NOT DISTINCT FROM ${cred.project_id}
         AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
       RETURNING id`;
     if (!updated) {
@@ -1013,10 +1023,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         fetched_at: result.available ? result.fetched_at : null,
       };
     } catch (error) {
-      const validCategories = new Set<CredentialHealthErrorCategory>([
-        "configuration", "authentication", "authorization", "rate_limited", "timeout",
-        "network", "upstream", "invalid_response", "unknown",
-      ]);
+      const validCategories = new Set<CredentialHealthErrorCategory>(CREDENTIAL_HEALTH_ERROR_CATEGORIES);
       const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
       const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
       const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
@@ -1173,6 +1180,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
           AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+          AND settings_config_json IS NOT DISTINCT FROM ${sql.json(cred.settings_config_json as never)}
+          AND agent_cli IS NOT DISTINCT FROM ${cred.agent_cli}
+          AND project_id IS NOT DISTINCT FROM ${cred.project_id}
           AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         RETURNING id`;
       if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });
@@ -1192,10 +1202,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         fetched_at: fetchedAt,
       };
     } catch (error) {
-      const validCategories = new Set<CredentialHealthErrorCategory>([
-        "configuration", "authentication", "authorization", "rate_limited", "timeout",
-        "network", "upstream", "invalid_response", "unknown",
-      ]);
+      const validCategories = new Set<CredentialHealthErrorCategory>(CREDENTIAL_HEALTH_ERROR_CATEGORIES);
       const categoryCandidate = error instanceof CredentialProbeError ? error.category : "unknown";
       const category = validCategories.has(categoryCandidate) ? categoryCandidate : "unknown";
       const message = error instanceof CredentialProbeError ? error.message.slice(0, 300) : "模型目录获取失败";
@@ -1211,6 +1218,9 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND key_version = ${cred.key_version}
           AND provider = ${cred.provider}
           AND public_metadata_json = ${sql.json(cred.public_metadata_json as never)}
+          AND settings_config_json IS NOT DISTINCT FROM ${sql.json(cred.settings_config_json as never)}
+          AND agent_cli IS NOT DISTINCT FROM ${cred.agent_cli}
+          AND project_id IS NOT DISTINCT FROM ${cred.project_id}
           AND (${actorProjectId}::uuid IS NULL OR project_id = ${actorProjectId})
         RETURNING id`;
       if (!updated) return reply.code(409).send({ error: "Credential 在模型发现期间已变更，请重试" });

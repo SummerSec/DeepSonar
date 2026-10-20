@@ -675,3 +675,198 @@ test("#736 inference 401 unauthorized client is labelled as client-fingerprint r
     globalThis.fetch = originalFetch;
   }
 });
+
+test("#748 inference 403/402 keep redacted upstream error and backfill the model catalog", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("sk-live-super-secret");
+  const originalFetch = globalThis.fetch;
+  const credential = (model: string) => ({
+    provider: "anthropic",
+    kind: "llm_provider" as const,
+    ...encrypted,
+    public_metadata_json: { base_url: "https://relay.example.test" },
+    settings_config_json: {
+      providers: { deepsonar: { api: "anthropic-messages", models: { [model]: {} } } },
+    },
+  });
+  const urls: string[] = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/models")) return Response.json({ data: [{ id: "model-c" }, { id: "model-b" }] });
+      const model = String(JSON.parse(String(init?.body)).model);
+      if (model === "model-a") {
+        return new Response(JSON.stringify({
+          error: {
+            message: "该令牌无权访问模型 model-a (request id: 2026101815) key=sk-live-super-secret\nnext",
+            type: "new_api_error",
+          },
+        }), { status: 403 });
+      }
+      return new Response(JSON.stringify({
+        error: { message: "Budget pool quota has been exhausted", type: "bad_response_status_code" },
+      }), { status: 402 });
+    }) as typeof fetch;
+
+    const forbidden = await testCredential(credential("model-a"));
+    assert.deepEqual(urls, ["https://relay.example.test/v1/messages", "https://relay.example.test/v1/models"]);
+    assert.equal(forbidden.ok, false);
+    assert.equal(forbidden.category, "model_unavailable");
+    assert.equal(forbidden.probe_path, "inference");
+    assert.equal(forbidden.upstream_error?.type, "new_api_error");
+    assert.match(forbidden.upstream_error?.message ?? "", /无权访问模型 model-a/u);
+    assert.match(forbidden.detail, /HTTP 403/u);
+    assert.match(forbidden.detail, /上游 new_api_error：该令牌无权访问模型 model-a/u);
+    assert.match(forbidden.detail, /当前模型 model-a 不可用，可用：model-b、model-c/u);
+    assert.deepEqual(forbidden.model_catalog, ["model-b", "model-c"]);
+    assert.equal(forbidden.model_catalog_source_url, "https://relay.example.test/v1/models");
+    assert.ok(forbidden.model_catalog_fetched_at);
+    assert.equal(JSON.stringify(forbidden).includes("super-secret"), false);
+    assert.doesNotMatch(forbidden.detail, /[\u0000-\u001f]/u);
+    assert.ok(forbidden.detail.length <= 300);
+
+    urls.length = 0;
+    const quota = await testCredential(credential("model-b"));
+    assert.equal(urls.length, 2);
+    assert.equal(quota.ok, false);
+    assert.equal(quota.category, "quota_exhausted");
+    assert.equal(quota.upstream_error?.type, "bad_response_status_code");
+    assert.match(quota.detail, /quota_exhausted，HTTP 402/u);
+    assert.match(quota.detail, /Budget pool quota has been exhausted/u);
+    assert.match(quota.detail, /当前模型 model-b 在可用目录中（共 2 个）/u);
+    assert.deepEqual(quota.model_catalog, ["model-b", "model-c"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#748 non model-level failures skip catalog discovery but still surface upstream text", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("super-secret");
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  const cred = {
+    provider: "openai",
+    kind: "llm_provider" as const,
+    ...encrypted,
+    public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+    settings_config_json: { providers: { deepsonar: { api: "openai-completions", models: { "gpt-probe": {} } } } },
+  };
+  try {
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({
+        error: { message: "Incorrect API key provided: Bearer super-secret see https://x.test/a?token=abc", code: "invalid_api_key" },
+      }), { status: 401 });
+    }) as typeof fetch;
+    const invalid = await testCredential(cred);
+    assert.deepEqual(urls, ["http://127.0.0.1/v1/chat/completions"]);
+    assert.equal(invalid.category, "authentication");
+    assert.equal(invalid.upstream_error?.type, "invalid_api_key");
+    assert.match(invalid.detail, /上游 invalid_api_key：Incorrect API key provided/u);
+    assert.equal(invalid.detail.includes("super-secret"), false);
+    assert.equal(invalid.detail.includes("token=abc"), false);
+    assert.equal(invalid.model_catalog, undefined);
+
+    // OpenAI 风格 429 insufficient_quota 也是额度耗尽，同样补做目录发现。
+    urls.length = 0;
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      if (String(input).endsWith("/models")) return new Response("nope", { status: 401 });
+      return new Response(JSON.stringify({
+        error: { message: "You exceeded your current quota", type: "insufficient_quota" },
+      }), { status: 429 });
+    }) as typeof fetch;
+    const quota = await testCredential(cred);
+    assert.deepEqual(urls, ["http://127.0.0.1/v1/chat/completions", "http://127.0.0.1/v1/models"]);
+    assert.equal(quota.category, "quota_exhausted");
+    assert.match(quota.detail, /模型目录发现失败（unknown）/u);
+    assert.equal(quota.model_catalog, undefined);
+
+    urls.length = 0;
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ error: { message: "slow down", type: "rate_limit_error" } }), { status: 429 });
+    }) as typeof fetch;
+    const limited = await testCredential(cred);
+    assert.equal(urls.length, 1);
+    assert.equal(limited.category, "rate_limited");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#748 upstream error summary handles truncated JSON, plain text and HTML bodies", async () => {
+  const { summarizeUpstreamError } = await import("./credential-test.js");
+  assert.equal(summarizeUpstreamError(""), undefined);
+  assert.equal(summarizeUpstreamError("<html><body>403 Forbidden</body></html>"), undefined);
+  assert.deepEqual(summarizeUpstreamError("invalid api key"), { message: "invalid api key" });
+  assert.deepEqual(
+    summarizeUpstreamError(`{"error":{"type":"permission_error","message":"model not allowed ${"x".repeat(5000)}`),
+    { type: "permission_error", message: `model not allowed ${"x".repeat(101)}…` },
+  );
+  assert.deepEqual(summarizeUpstreamError('{"error":"forbidden for my-secret-key","type":"oops"}', ["my-secret-key"]), {
+    type: "oops",
+    message: "forbidden for [REDACTED]",
+  });
+  // 非标识符形态的 type 不回显。
+  assert.deepEqual(summarizeUpstreamError('{"error":{"type":"has space","message":"m"}}'), { message: "m" });
+});
+
+test("#748 upstream summaries redact native and text-config secrets, including a truncated secret prefix", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("primary-probe-secret");
+  const nativeSecret = "ordinary-token-without-provider-prefix";
+  const yamlSecret = "yaml-config-token";
+  const tomlSecret = "toml-config-token";
+  const boundarySecret = `boundary-secret-${"x".repeat(4200)}`;
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const message of [
+      `model unavailable ${nativeSecret} ${yamlSecret} ${tomlSecret} https://alice:${yamlSecret}@relay.example.test/path?token=${nativeSecret}`,
+      `model unavailable ${boundarySecret}`,
+    ]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({
+        error: {
+          type: `provider-${nativeSecret}`,
+          message,
+        },
+      }), { status: 401 })) as typeof fetch;
+      const result = await testCredential({
+        provider: "openai",
+        kind: "llm_provider",
+        ...encrypted,
+        public_metadata_json: { base_url: "http://127.0.0.1/v1" },
+        settings_config_json: {
+          models: { "probe-model": {} },
+          env: { API_TOKEN: nativeSecret },
+          config: `apiKey: ${yamlSecret}\ntoken = "${tomlSecret}"\nsecret: ${boundarySecret}\n`,
+        },
+      });
+      const serialized = JSON.stringify(result);
+      for (const secret of [nativeSecret, yamlSecret, tomlSecret, boundarySecret.slice(0, 24)]) {
+        assert.equal(serialized.includes(secret), false, `summary leaked ${secret.slice(0, 12)}`);
+      }
+      assert.equal(serialized.includes("alice:"), false);
+      assert.equal(serialized.includes("?token="), false);
+      assert.match(result.detail, /model unavailable/u);
+      assert.equal(result.upstream_error?.type, undefined);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("#748 upstream summaries clean C0, C1 and DEL controls", async () => {
+  const { summarizeUpstreamError } = await import("./credential-test.js");
+  const result = summarizeUpstreamError(JSON.stringify({
+    error: { message: "model denied\u0001\u0085\u009f\u007f" },
+  }));
+  assert.ok(result);
+  assert.match(result?.message ?? "", /model denied/u);
+  assert.doesNotMatch(result?.message ?? "", /[\u0000-\u001f\u007f-\u009f]/u);
+});

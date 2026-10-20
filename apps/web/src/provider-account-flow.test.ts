@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   buildSettingsConfigFromEditor,
+  CLAUDE_CODE_MODEL_KEYS,
+  claudeModelKeyMismatches,
+  CredentialConfigEditor,
+  editorModelPatch,
+  editorModelTextFromRaw,
+  editorModelTextFromSettings,
+  hasStructuredModelField,
   effectiveEditorSecret,
   extractBaseUrlFromSettingsClient,
   extractModelsFromSettingsClient,
@@ -78,6 +87,13 @@ test("structured Provider quota and native model helpers preserve governed setti
   const profile = ((patched["llm-pi-ai"] as Record<string, unknown>).providers as Record<string, unknown>).team as Record<string, unknown>;
   assert.deepEqual((profile.models as Array<Record<string, unknown>>).map((model) => model.id), ["native-b", "new-model"]);
   assert.equal((profile.models as Array<Record<string, unknown>>)[0].contextWindow, 128000);
+});
+
+test("unchanged structured model fields do not rewrite native model routing", () => {
+  assert.deepEqual(editorModelPatch("claude-code", "main-model", "main-model"), {});
+  assert.deepEqual(editorModelPatch("claude-code", "new-model", "main-model"), { modelId: "new-model" });
+  assert.deepEqual(editorModelPatch("pi", "model-a, model-b", "model-a,model-b"), {});
+  assert.deepEqual(editorModelPatch("pi", "model-a, model-c", "model-a,model-b"), { modelIds: ["model-a", "model-c"] });
 });
 
 test("changing Claude main model preserves explicit Fable and subagent mappings", () => {
@@ -646,4 +662,136 @@ test("model_concurrency draft validates against account model list", () => {
   assert.equal(parseModelConcurrencyDraft([], ["m-a"]), null);
   assert.throws(() => parseModelConcurrencyDraft([{ model: "other", limit: "1" }], ["m-a"]), /已配置模型清单/);
   assert.throws(() => parseModelConcurrencyDraft([{ model: "m-a", limit: "1001" }], ["m-a"]), /并发限制/);
+});
+
+test("#749 structured model field syncs every Claude Code model key on create and edit", () => {
+  const settingsJson = JSON.stringify({ env: {
+    ANTHROPIC_BASE_URL: "https://relay.test",
+    ANTHROPIC_MODEL: "old-main",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "edited-sonnet",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "old-main",
+    CLAUDE_CODE_SUBAGENT_MODEL: "old-main",
+  } });
+  assert.equal(CLAUDE_CODE_MODEL_KEYS.length, 14);
+  assert.equal(editorModelTextFromRaw("claude-code", settingsJson), "old-main");
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "new-main"), [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "old-main", "old-main"), []);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "new-main", "old-main"), [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, ""), []);
+  const built = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson,
+    tomlText: "",
+    authJson: "",
+    secret: "sk-test",
+    baseUrl: "https://relay.test",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    ...editorModelPatch("claude-code", "  new-main  "),
+  });
+  assert.equal(built.ok, true);
+  if (!built.ok) return;
+  const env = built.settings.env as Record<string, string>;
+  for (const key of CLAUDE_CODE_MODEL_KEYS) assert.equal(env[key], "new-main", key);
+  assert.equal(extractModelIdFromSettings(built.settings, "claude-code"), "new-main");
+  assert.equal(env.ANTHROPIC_BASE_URL, "https://relay.test");
+
+  // Empty field leaves the native model keys untouched instead of deleting them.
+  assert.deepEqual(editorModelPatch("claude-code", "   "), {});
+  const untouched = buildSettingsConfigFromEditor({
+    agentCli: "claude-code", settingsJson, tomlText: "", authJson: "", secret: "", baseUrl: "https://relay.test",
+    provider: "anthropic", contextWindowTokens: "", reasoning: "", ...editorModelPatch("claude-code", ""),
+  });
+  assert.equal(untouched.ok, true);
+  if (untouched.ok) assert.equal((untouched.settings.env as Record<string, string>).ANTHROPIC_DEFAULT_SONNET_MODEL, "edited-sonnet");
+});
+
+test("#749 structured model field maps DSH to modelId and Pi to modelIds; codex/open-code stay native", () => {
+  assert.deepEqual(editorModelPatch("pi", "a, b，a\nc"), { modelIds: ["a", "b", "c"] });
+  assert.deepEqual(editorModelPatch("dsh", "deepseek-chat"), { modelId: "deepseek-chat" });
+  assert.deepEqual(editorModelPatch("codex", "gpt-5"), {});
+  assert.deepEqual(editorModelPatch("open-code", "gpt-5"), {});
+  assert.equal(hasStructuredModelField("codex"), false);
+
+  const dsh = buildSettingsConfigFromEditor({
+    agentCli: "dsh", settingsJson: "", tomlText: "", authJson: "", secret: "", baseUrl: "https://api.deepseek.test/v1",
+    provider: "openai", contextWindowTokens: "", reasoning: "", ...editorModelPatch("dsh", "deepseek-chat"),
+  });
+  assert.equal(dsh.ok, true);
+  if (dsh.ok) {
+    assert.equal(extractModelIdFromSettings(dsh.settings, "dsh"), "deepseek-chat");
+    assert.equal(editorModelTextFromSettings(dsh.settings, "dsh"), "deepseek-chat");
+  }
+
+  const piText = [
+    "llm-pi-ai:",
+    "  providers:",
+    "    team:",
+    "      baseURL: https://pi.test/v1",
+    "      models:",
+    "        - id: native-a",
+    "          contextWindow: 128000",
+    "agent-default-model:",
+    "  provider: team",
+    "  model: native-a",
+    "",
+  ].join("\n");
+  assert.equal(editorModelTextFromRaw("pi", piText), "native-a");
+  const pi = buildSettingsConfigFromEditor({
+    agentCli: "pi", settingsJson: piText, tomlText: "", authJson: "", secret: "", baseUrl: "https://pi.test/v1",
+    provider: "openai", contextWindowTokens: "", reasoning: "", ...editorModelPatch("pi", "native-a, native-b"),
+  });
+  assert.equal(pi.ok, true);
+  if (pi.ok) {
+    assert.deepEqual(extractPiModelIdsFromSettings(pi.settings), ["native-a", "native-b"]);
+    assert.equal(editorModelTextFromSettings(pi.settings, "pi"), "native-a, native-b");
+  }
+});
+
+test("#749 create and edit pass the structured model into buildSettingsConfigFromEditor and prefill on edit", () => {
+  assert.match(flow, /\.\.\.editorModelPatch\(createAgentCli, createModelId\)/);
+  assert.match(flow, /\.\.\.editorModelPatch\(\s*editAgentCli,\s*editModelId/);
+  assert.match(flow, /setEditModelId\(editorModelTextFromSettings\(settings, cli\)\)/);
+  assert.match(flow, /modelId=\{createModelId\}\s+onModelIdChange=\{setCreateModelId\}/);
+  assert.match(flow, /modelId=\{editModelId\}\s+onModelIdChange=\{setEditModelId\}/);
+  assert.match(flow, /setCreateModelId\(""\)/);
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(editor, /showModelFields=\{false\}/);
+});
+
+test("#749 CredentialConfigEditor renders the model input for every CLI", () => {
+  const base = {
+    name: "acct", onNameChange: () => {}, provider: "anthropic", onProviderChange: () => {}, onAgentCliChange: () => {},
+    projectId: "", onProjectIdChange: () => {}, projects: [], actorProjectId: null, providerCatalog: [], secret: "",
+    onSecretChange: () => {}, baseUrl: "", onBaseUrlChange: () => {}, maxConcurrent: "", onMaxConcurrentChange: () => {},
+    onSettingsJsonChange: () => {}, tomlText: 'model = "gpt-5"\n', onTomlTextChange: () => {}, authJson: "", onAuthJsonChange: () => {},
+    contextWindowTokens: "", onContextWindowTokensChange: () => {}, reasoning: "", onReasoningChange: () => {},
+    onModelIdChange: () => {}, onSubmit: () => {},
+  };
+  const render = (props: Partial<Parameters<typeof CredentialConfigEditor>[0]>) => renderToStaticMarkup(
+    createElement(CredentialConfigEditor, { ...base, mode: "edit", agentCli: "claude-code", settingsJson: "", modelId: "", ...props }),
+  );
+  const claude = render({
+    settingsJson: JSON.stringify({ env: { ANTHROPIC_MODEL: "old-main", ANTHROPIC_DEFAULT_SONNET_MODEL: "old-main" } }),
+    modelId: "new-main",
+  });
+  assert.match(claude, /aria-label="Provider 模型"/);
+  assert.match(claude, /value="new-main"/);
+  assert.match(claude, /全部 14 个模型键/);
+  assert.match(claude, /有 2 个模型键与此不一致/);
+  assert.match(render({ agentCli: "pi", modelId: "a, b" }), /模型 ID（多个用逗号分隔）/);
+  assert.match(render({ agentCli: "dsh", modelId: "deepseek-chat" }), /aria-label="Provider 模型"/);
+  assert.match(render({ agentCli: "codex" }), /id="cc-switch-codex-model"/);
+  assert.match(render({ agentCli: "open-code", settingsJson: "{}" }), /cc-switch-opencode-models-url/);
 });

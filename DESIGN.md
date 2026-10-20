@@ -212,6 +212,8 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 ## 8. 配置、快照和运行时
 
+账号模型与探测（#748 / #749）：Claude Code 只有显式改主模型时才同步 tier / subagent 模型键，普通编辑保留独立路由。推理错误摘要有界读取，并对主密钥、原生配置中的其他秘密值和 URL 凭据脱敏，清理 C0/C1 控制字符；目录补充发现不授予 Job 选模资格。探测回写核对当前密钥版本、配置、CLI 与项目作用域，配置变化后拒绝陈旧结果。Windows 的基线重建支持 CRLF 和 LF，不改变已创建 Job 的冻结快照。
+
 **提示词组合（#594 首片）：** 业务提示词按 `prompt.composition` v1 解析与预览：平台必需协议始终纳入且不可被业务层覆盖；业务覆盖顺序为 **任务派发 → 项目 RoleConfig → 全局角色/能力默认**。Hub Intent 可通过可选 `role_prompt` 提供任务级角色业务提示词覆盖；Scheduler 只将其冻结到新建 Worker Job，不写回持久化 RoleConfig。组装结果记录各层版本、内容摘要与注入通道（`system_prompt` / `instruction_files` / `user_message`）；CLI 不支持的通道必须拒绝，不得把普通消息追加展示为已替换 system prompt。自然语言不能扩大工具、网络或凭据权限。Attempt 应冻结组装摘要；「修订重派 / 原输入重跑 / 当前配置重跑 / Hub 重新规划」语义区分，后续切片落 API。
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧（`sandbox_limits` / `platform_tools` / `runtime_knobs` 相对平台或全局取 min / AND），不能放宽安全硬门；更高沙箱配额由平台 env / 镜像地板抬高，不开放项目放宽（#697）。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
@@ -312,7 +314,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v58 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v59 |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：

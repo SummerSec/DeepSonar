@@ -10,9 +10,38 @@ export const MASKED_SECRET_PLACEHOLDER = "[已保存密钥]";
 
 const SECRET_FIELD_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie|credential)/iu;
 const SECRET_ASSIGNMENT_PATTERN = /((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie|credential)\s*(?:=|:)\s*["'])([^"']*)(["'])/giu;
+const SECRET_TEXT_ASSIGNMENT_PATTERN = /(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token|authorization|cookie|credential)\s*(?:=|:)\s*(?:"([^"]*)"|'([^']*)'|([^\r\n#}]+))/giu;
 
 export function redactSecretAssignments(value: string): string {
   return value.replace(SECRET_ASSIGNMENT_PATTERN, `$1${MASKED_SECRET_PLACEHOLDER}$3`);
+}
+
+function textSecretValues(value: string): string[] {
+  const values: string[] = [];
+  for (const match of value.matchAll(SECRET_TEXT_ASSIGNMENT_PATTERN)) {
+    const candidate = (match[1] ?? match[2] ?? match[3] ?? "").trim().replace(/\s+#.*$/u, "").trim();
+    if (!candidate || candidate === MASKED_SECRET_PLACEHOLDER) continue;
+    values.push(candidate);
+    const bearer = /^(?:Bearer|Basic)\s+(.+)$/iu.exec(candidate)?.[1]?.trim();
+    if (bearer) values.push(bearer);
+  }
+  return values;
+}
+
+/** Collect secret values from an editable native settings object for upstream error redaction. */
+export function collectSecretValues(value: unknown, key?: string): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const values = key && SECRET_FIELD_PATTERN.test(key) && trimmed && trimmed !== MASKED_SECRET_PLACEHOLDER
+      ? [trimmed]
+      : [];
+    if (key === "config") values.push(...textSecretValues(value));
+    return [...new Set(values)];
+  }
+  if (Array.isArray(value)) return [...new Set(value.flatMap((item) => collectSecretValues(item)))];
+  if (!value || typeof value !== "object") return [];
+  return [...new Set(Object.entries(value as Record<string, unknown>).flatMap(([entryKey, entryValue]) =>
+    collectSecretValues(entryValue, entryKey)))];
 }
 
 function restoreSecretAssignments(original: string, incoming: string): string {
