@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+> **平台升级核查（2026-10-20，#740 / #747）**：已接通发布平台 digest 生成/inspect、严格 dotenv 校验、终态 Attempt 未结算效果排空门禁，以及单控制面同 schema 的受控升级和保留数据库的暂停回滚。跨 schema、完整配置 preflight、多节点升级和自动续做仍未完成；验证入口与限制见 [部署说明](../deploy/README.md)。
+
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) §8.2。
 
 > **当前同步状态（2026-10-18）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v59**（#690 能力插件运行时；#691 清除项目级能力配置面；#740 平台级全局暂停领取与版本发现；#748 凭据健康类别新增 `model_unavailable` / `quota_exhausted`）；#740 平台镜像按不可变 digest 引用，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`。#626 把凭据资产、角色引用与快照生效拆成三条边界。当前 DSH 迁移选定官方 `@deepseek-ai/dsh@0.2.0-rc.2`：隔离 lockfile + `dsh --profile`、显式 `bundles: []` profile、Gateway-only 短期 token、PTC `run_code`、v4 Session 归档；跨进程持久 resume 明确不支持。根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。

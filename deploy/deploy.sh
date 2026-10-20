@@ -1,6 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
+# Upgrade uses a shared host implementation so Shell and PowerShell have the same recovery rules.
+if [ "${1:-}" = "upgrade" ]; then
+  shift
+  command -v node >/dev/null 2>&1 || { echo "upgrade requires Node.js >=22" >&2; exit 1; }
+  exec node "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/platform-upgrade-host.mjs" "$@"
+fi
+
 ACTION="${1:-up}"
 MODE="${2:-real}"
 SOURCE="${3:-pull}"

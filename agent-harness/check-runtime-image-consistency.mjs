@@ -949,9 +949,9 @@ expect(releaseWorkflow.includes("generate-runtime-image-registry.mjs"), "release
 expect(releaseWorkflow.includes("deploy/runtime-image-registry.json"), "release workflow 未发布 runtime registry");
 expect(releaseWorkflow.includes("回写 bundled 清单到默认分支"), "release workflow 必须在发布后回写 deploy/runtime-image-registry.json");
 expect(releaseWorkflow.includes('env_file="deploy/.env.example"'), "release workflow 必须同步 deploy/.env.example");
-expect(releaseWorkflow.includes('DEEPSONAR_IMAGE_TAG=[^[:space:]]+'), "release workflow 必须校验 DEEPSONAR_IMAGE_TAG 配置行");
+expect(!releaseWorkflow.includes("DEEPSONAR_IMAGE_TAG"), "release workflow 不得引用已删除的平台镜像 tag 变量");
 expect(releaseWorkflow.includes('[[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]'), "release workflow 必须校验 ACR 标签使用无 v 的数字版本");
-expect(releaseWorkflow.includes('print "DEEPSONAR_IMAGE_TAG=" ENVIRON["VERSION"]'), "release workflow 必须把 ACR 镜像标签同步为无 v 的 VERSION");
+expect(releaseWorkflow.includes('check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"'), "release workflow 必须回写经过校验的平台版本和完整 digest 引用");
 expect(releaseWorkflow.includes('git add -- "$registry_file" "$env_file"'), "release workflow 必须同时暂存 runtime registry 和 deploy/.env.example");
 expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.repository }}"), "release workflow 必须跨 tag 串行执行");
 expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");

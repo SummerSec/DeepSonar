@@ -4,11 +4,11 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("up", "down", "status", "logs", "check", "pull")]
+  [ValidateSet("up", "down", "status", "logs", "check", "pull", "upgrade")]
   [string]$Action = "up",
 
   [Parameter(Position = 1)]
-  [ValidateSet("fake", "real", "worker-join")]
+  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback")]
   [string]$Mode = "real",
 
   [Parameter(Position = 2)]
@@ -17,10 +17,25 @@ param(
 
   [string]$ControlPlane = $env:DEEPSONAR_CONTROL_PLANE,
 
+  [string]$UpgradeVersion,
+  [string]$ApiUrl,
+  [string]$WebUrl,
+
   [switch]$NoBuild
 )
 
 $ErrorActionPreference = "Stop"
+if ($Action -eq "upgrade") {
+  if ($Mode -notin @("check", "apply", "rollback")) { throw "upgrade requires check, apply or rollback" }
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "upgrade requires Node.js >=22" }
+  $upgradeArgs = @((Join-Path $PSScriptRoot "platform-upgrade-host.mjs"), $Mode)
+  if ($UpgradeVersion) { $upgradeArgs += @("--to", $UpgradeVersion) }
+  if ($ApiUrl) { $upgradeArgs += @("--api", $ApiUrl) }
+  if ($WebUrl) { $upgradeArgs += @("--web-url", $WebUrl) }
+  & node @upgradeArgs
+  exit $LASTEXITCODE
+}
+if ($Mode -notin @("fake", "real", "worker-join")) { throw "invalid deployment mode" }
 if ($NoBuild) { $Source = "pull" }
 
 $DeployDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -311,19 +326,19 @@ function Read-EnvValue([string]$Name, [string]$Default = "") {
 function Get-EffectiveEnvValue([string]$Name) {
   # Process env beats deploy/.env, matching Docker Compose interpolation.
   $fromProcess = [Environment]::GetEnvironmentVariable($Name)
-  if ($null -ne $fromProcess) { return $fromProcess.Trim() }
+  if ($null -ne $fromProcess) { return $fromProcess }
   if (-not (Test-Path -LiteralPath $EnvFile)) { return "" }
   return Read-EnvValue $Name ""
 }
 
 function Test-PlatformImageRef([string]$Ref, [string]$Repo) {
-  return $Ref -cmatch ("^[^@\s]+/" + [regex]::Escape($Repo) + "@sha256:[0-9a-f]{64}$")
+  return $Ref -cmatch ("^[a-z0-9][a-z0-9._:/-]*/" + [regex]::Escape($Repo) + "@sha256:[0-9a-f]{64}$")
 }
 
 function Get-PlatformImageContractErrors([bool]$RequirePlatform) {
   $errors = New-Object System.Collections.Generic.List[string]
   if (Test-Path -LiteralPath $EnvFile) {
-    if ((Read-EnvFileRaw) -match "(?m)^[ \t]*(export[ \t]+)?DEEPSONAR_IMAGE_TAG[ \t]*=") {
+    if ((Read-EnvFileRaw) -match "(?m)^[ \t]*(export[ \t]+)?DEEPSONAR_IMAGE_TAG([ \t]*[=:]|[ \t]*\r?$)") {
       $errors.Add("deploy/.env contains the removed DEEPSONAR_IMAGE_TAG (platform images are no longer deployed by tag)")
     }
   }
@@ -331,6 +346,16 @@ function Get-PlatformImageContractErrors([bool]$RequirePlatform) {
     $errors.Add("process environment sets the removed DEEPSONAR_IMAGE_TAG; unset it and retry")
   }
   if ($RequirePlatform) {
+    if (Test-Path -LiteralPath $EnvFile) {
+      foreach ($key in @("DEEPSONAR_VERSION") + @($PlatformImageSpecs.Keys)) {
+        $escaped = [regex]::Escape($key)
+        $assignments = @([IO.File]::ReadAllLines($EnvFile, $Utf8NoBom) |
+          Where-Object { $_ -cmatch "^[ \t]*(export[ \t]+)?${escaped}([ \t]*[=:]|[ \t]*$)" })
+        if ($assignments.Count -gt 1 -or ($assignments.Count -eq 1 -and -not $assignments[0].StartsWith("${key}="))) {
+          $errors.Add("$key must have at most one canonical KEY=value assignment in deploy/.env")
+        }
+      }
+    }
     foreach ($key in $PlatformImageSpecs.Keys) {
       $repo = $PlatformImageSpecs[$key]
       $value = Get-EffectiveEnvValue $key

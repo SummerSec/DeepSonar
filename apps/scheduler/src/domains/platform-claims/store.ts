@@ -37,13 +37,13 @@ export async function loadPlatformClaimsWorkload(db: Db): Promise<PlatformClaims
       COUNT(*) FILTER (WHERE status = 'waiting_human')::int AS waiting_human
     FROM jobs
     WHERE status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
+  // Terminal Attempt status does not prove its external effects have settled.
   const [effects] = await db`
     SELECT
       COUNT(DISTINCT e.attempt_id) FILTER (WHERE e.status = 'effect_pending')::int AS effect_pending_attempts,
       COUNT(DISTINCT e.attempt_id) FILTER (WHERE e.status = 'unknown')::int AS unknown_effect_attempts
     FROM job_attempt_effects e
-    JOIN job_attempts a ON a.id = e.attempt_id
-    WHERE a.status = 'active' AND e.status IN ('effect_pending', 'unknown')`;
+    WHERE e.status IN ('effect_pending', 'unknown')`;
   const claimed = Number(jobs?.claimed ?? 0);
   const provisioning = Number(jobs?.provisioning ?? 0);
   const running = Number(jobs?.running ?? 0);

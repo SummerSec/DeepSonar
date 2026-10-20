@@ -19,9 +19,31 @@ DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<dig
 ```
 
 四行随 Release 回写到 `.env.example`。`deploy.sh` / `deploy.ps1`（共享校验见 `platform-images.sh` 与
-`Assert-PlatformImageContract`）发现旧变量、可变 tag、仓库名不符或缺版本时 fail closed，并打印应复制的四行；
+`Assert-PlatformImageContract`）发现旧变量、可变 tag、仓库名不符、重复/非规范平台变量或缺版本时 fail closed，并打印应复制的四行；
 不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量。`up real build` 临时把平台镜像标记为
-`deepsonar-*:local-build`，不改写 `.env`。`upgrade check / apply / rollback` 属于 #740 后续片。
+`deepsonar-*:local-build`，不改写 `.env`。同 schema 的受控升级入口见下节。
+
+## 受控升级与中断恢复（#740）
+
+Shell 和 PowerShell 共享 `platform-upgrade-host.mjs` / `platform-upgrade.mjs`，宿主需 Node.js >=22、Docker Compose/buildx、管理员进程环境变量 `DEEPSONAR_ADMIN_TOKEN`。只支持单控制面 Compose、无远程 worker、稳定版本向前且 schema 相同的升级；跨 schema 在暂停前拒绝，完整配置兼容性 preflight、自动 schema 重建和多节点编排尚未实现。默认使用 prod + real + OpenSandbox overlay，其他布局需用 Node CLI 的重复 `--compose-file` 明确指定。
+
+```bash
+./deploy/deploy.sh upgrade check --to vX.Y.Z
+./deploy/deploy.sh upgrade apply --to vX.Y.Z
+./deploy/deploy.sh upgrade rollback
+```
+
+```powershell
+.\deploy\deploy.ps1 upgrade check -UpgradeVersion vX.Y.Z
+.\deploy\deploy.ps1 upgrade apply -UpgradeVersion vX.Y.Z
+.\deploy\deploy.ps1 upgrade rollback
+```
+
+API 默认 `http://127.0.0.1:3100`，Shell 可传 `--api` / `--web-url`，PowerShell 对应 `-ApiUrl` / `-WebUrl`。API 使用 HTTPS 或本机 HTTP；token 不写日志或恢复记录。升级前取消进程环境中的四个平台版本/镜像变量，避免覆盖 `.env`。目标来自官方 Release 清单，逐通道 inspect 双架构 payload，拉取目标 GHCR digest；检查 Compose 配置与目标镜像 schema，然后通过管理 API 暂停并排空所有未结算效果，不杀 Job。
+
+备份处理限制为 512 MiB 内存缓冲，超过上限安全中止并保持暂停。暂停后生成 gzip 包装的 PostgreSQL custom dump，验证 SHA-256、解压内容及 `pg_restore --list` 中的控制/schema 数据；失败保持暂停。`.upgrade/` 保存本地互斥锁、逐步记录和备份，已排除 Git。硬中断留下锁时，先确认没有升级进程，再人工移除 `.upgrade/lock`；同一未完成记录不会被新 apply 覆盖。服务切换后核对健康、ready、schema、版本、实际容器 digest 和 Web HTTP，全部通过才恢复领取。
+
+中断或失败不会自动恢复领取；执行 `rollback` 前必须确认数据库仍暂停且已排空。回滚只恢复记录中的镜像配置，保留数据库及暂停期间新入队/管理写入；备份供人工离线灾难恢复，**不会自动恢复旧数据库**。回滚完成仍暂停，管理员核验后调用 `/platform/claims/resume`。一旦记录到恢复领取意图但结果不明，拒绝自动回滚，必须先人工对账；已完成升级也不支持自动降级。
 
 ## 快速开始
 

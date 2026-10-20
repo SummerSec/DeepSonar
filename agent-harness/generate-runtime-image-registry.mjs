@@ -449,21 +449,63 @@ export function assertRegistry(registry) {
     assertSemverCore(registry.platform_version, "platform_version");
     if (!registry.min_runtime_image) fail("v2 registry 必须声明 min_runtime_image");
     assertMinRuntimeImage(registry.min_runtime_image);
-    // TODO(#740 P1 slice 2+): when Release emits `platform` digests, validate with the
-    // Scheduler contract (index + linux/amd64 + linux/arm64 child digests + channel evidence)
-    // and extend the final payload inspect gate. Omitting `platform` remains valid.
-    if (registry.platform !== undefined) {
-      if (!registry.platform || typeof registry.platform !== "object" || Array.isArray(registry.platform)) {
-        fail("platform 必须是对象");
-      }
-      if (registry.platform.version && registry.platform.version !== registry.platform_version) {
-        fail("platform.version 必须与 platform_version 一致");
-      }
-    }
+    if (registry.platform !== undefined) assertPlatformManifest(registry.platform, registry.platform_version);
   }
   if (isV1) assertV1Registry(registry);
   else assertV2Registry(registry);
   return true;
+}
+
+export const PLATFORM_IMAGE_KEYS = ["scheduler", "web", "image-admission"];
+
+export function assertPlatformManifest(platform, version) {
+  if (!platform || typeof platform !== "object" || Array.isArray(platform)) fail("platform must be an object");
+  assertKnownKeys(platform, ["version", "commit_sha", "schema_version", "changelog_url", "images"], "platform");
+  assertSemverCore(platform.version, "platform.version");
+  if (platform.version !== version) fail("platform.version must match platform_version");
+  if (typeof platform.commit_sha !== "string" || !/^[0-9a-f]{7,40}$/.test(platform.commit_sha)) fail("platform.commit_sha is invalid");
+  if (!Number.isSafeInteger(platform.schema_version) || platform.schema_version < 1) fail("platform.schema_version is invalid");
+  if (platform.changelog_url !== undefined && (typeof platform.changelog_url !== "string" || platform.changelog_url.length > 500 || !/^https:\/\/github\.com\/SummerSec\/DeepSonar\/(?:blob|releases)\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$/.test(platform.changelog_url))) fail("platform.changelog_url is invalid");
+  if (!platform.images || typeof platform.images !== "object" || Array.isArray(platform.images)) fail("platform.images is invalid");
+  assertKnownKeys(platform.images, PLATFORM_IMAGE_KEYS, "platform.images");
+  for (const key of PLATFORM_IMAGE_KEYS) {
+    const image = platform.images[key];
+    if (!image || typeof image !== "object" || Array.isArray(image)) fail(`platform.images.${key} is required`);
+    assertKnownKeys(image, ["digest", "platforms", "child_digests", "registry_refs", "registry_evidence"], `platform.images.${key}`);
+    assertDigest(image.digest, key);
+    const platforms = assertPlatforms(image.platforms, key);
+    if (platforms.length !== 2 || !platforms.includes("linux/amd64") || !platforms.includes("linux/arm64")) fail(`${key} must cover amd64 and arm64`);
+    if (!image.child_digests || typeof image.child_digests !== "object" || Array.isArray(image.child_digests)) fail(`${key} child_digests is required`);
+    assertKnownKeys(image.child_digests, platforms, `${key}.child_digests`);
+    for (const arch of platforms) assertDigest(image.child_digests[arch], `${key}.${arch}`);
+    if (!image.registry_refs) fail(`${key} registry_refs is required`);
+    const records = recordsForDescriptor({ ...image, image_key: key });
+    for (const record of Object.values(records)) {
+      if (record.available && repositoryFromRef(record.ref).split("/").at(-1) !== `deepsonar-${key}`) fail(`${key} incorrect image repository`);
+    }
+  }
+  return platform;
+}
+
+function buildPlatformManifest(descriptorDir, version) {
+  const schemaSource = readFileSync(new URL("../apps/scheduler/src/schema-version.ts", import.meta.url), "utf8");
+  const platform = {
+    version, commit_sha: process.env.PLATFORM_RELEASE_COMMIT,
+    schema_version: Number(schemaSource.match(/export const SCHEMA_VERSION = (\d+);/)?.[1]),
+    images: {},
+  };
+  for (const key of PLATFORM_IMAGE_KEYS) {
+    const descriptor = parse(`${descriptorDir}/${key}.json`);
+    if (descriptor.image_key !== `deepsonar-${key}` || descriptor.version !== version) fail(`${key} release descriptor identity mismatch`);
+    const records = recordsForDescriptor(descriptor);
+    platform.images[key] = {
+      digest: descriptor.digest, platforms: descriptor.platforms,
+      child_digests: descriptor.platform_digests,
+      registry_refs: Object.fromEntries(Object.entries(records).filter(([, record]) => record.available).map(([channel, record]) => [channel, record.ref])),
+      registry_evidence: records,
+    };
+  }
+  return assertPlatformManifest(platform, version);
 }
 
 function expectedImagesFromTemplate(template) {
@@ -526,6 +568,7 @@ function main(argv = process.argv.slice(2)) {
     schema: "deepsonar.registry/v2",
     schema_version: 2,
     platform_version: platformVersion,
+    platform: buildPlatformManifest(descriptorDir, platformVersion),
     min_runtime_image: minRuntimeImage,
     images,
     source: "remote",

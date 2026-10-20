@@ -165,6 +165,16 @@ for (const kind of Object.keys(RUNNERS)) {
     assert.equal(r.pulls.length, 0);
   });
 
+  for (const declaration of ["DEEPSONAR_IMAGE_TAG: mutable", "export DEEPSONAR_IMAGE_TAG = mutable", "DEEPSONAR_IMAGE_TAG"]) {
+    scenario(kind, `rejects obsolete dotenv declaration ${declaration}`, (copy) => {
+      writeFileSync(join(copy.dir, ".env"), baseEnv() + "\n" + declaration + "\n");
+      const r = run(kind, copy, ["check", "fake"]);
+      assert.notEqual(r.status, 0, r.out);
+      assert.match(r.out, /DEEPSONAR_IMAGE_TAG/);
+      assert.equal(r.pulls.length, 0);
+    });
+  }
+
   scenario(kind, "legacy DEEPSONAR_IMAGE_TAG in the process environment fails closed", (copy) => {
     writeFileSync(join(copy.dir, ".env"), baseEnv());
     const r = run(kind, copy, ["check", "fake"], { DEEPSONAR_IMAGE_TAG: VERSION });
@@ -189,6 +199,25 @@ for (const kind of Object.keys(RUNNERS)) {
       assert.ok(r.out.includes(key), r.out);
     });
   }
+
+  for (const key of ["DEEPSONAR_VERSION", ...Object.keys(REPOS)]) {
+    for (const assignment of [`${key}=mutable`, ` export ${key} = mutable`, `${key}: mutable`, key]) {
+      scenario(kind, `rejects ambiguous duplicate ${JSON.stringify(assignment)} before pulls`, (copy) => {
+        writeFileSync(join(copy.dir, ".env"), baseEnv() + assignment + "\n");
+        const r = run(kind, copy, ["pull", "fake"]);
+        assert.notEqual(r.status, 0, r.out);
+        assert.match(r.out, /canonical KEY=value/);
+        assert.equal(r.pulls.length, 0);
+      });
+    }
+  }
+
+  scenario(kind, "rejects interpolated registry names before Compose can change the validated ref", (copy) => {
+    writeFileSync(join(copy.dir, ".env"), baseEnv({ DEEPSONAR_WEB_IMAGE: `$REGISTRY/deepsonar-web@sha256:${"a".repeat(64)}` }));
+    const r = run(kind, copy, ["pull", "fake"]);
+    assert.notEqual(r.status, 0, r.out);
+    assert.equal(r.pulls.length, 0);
+  });
 
   scenario(kind, "process env wins over deploy/.env and is validated too", (copy) => {
     writeFileSync(join(copy.dir, ".env"), baseEnv());

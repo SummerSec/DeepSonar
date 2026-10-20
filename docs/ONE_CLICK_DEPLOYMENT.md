@@ -106,7 +106,7 @@ DEEPSONAR_WEB_IMAGE=<registry>/deepsonar-web@sha256:<digest>
 DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<digest>
 ```
 
-- 已有部署升级到本契约：先删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，再从目标版本的 `deploy/.env.example` 复制上面四行（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）。schema 变化仍按本文先停 Scheduler 再 `pnpm db:rebuild`。`deploy.sh upgrade check / apply / rollback` 属于 #740 后续片，届时由脚本写入这些行。
+- 已有部署升级到本契约：先删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，再从目标版本的 `deploy/.env.example` 复制上面四行（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）。schema 变化仍按本文先停 Scheduler 再 `pnpm db:rebuild`。同 schema 的受控 `upgrade` 入口会写入这些行，限制与中断恢复见 [部署脚本说明](../deploy/README.md)。
 - `DEEPSONAR_IMAGE_REGISTRY` 仍保留，只用于按 `DEEPSONAR_VERSION` 解析官方 `deepsonar-assets-helper` / `deepsonar-silo` 并固定为 RepoDigest。
 - `up real build` 本地构建时脚本临时把三个平台镜像标记为 `deepsonar-*:local-build`（Compose 不能把构建产物标记为 `name@sha256:`），不改写 `deploy/.env` 中的 digest 引用；`DEEPSONAR_VERSION` 仍须显式设置。
 
@@ -307,7 +307,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/
   -d '{"reason":"platform_upgrade"}' http://127.0.0.1:8080/api/platform/claims/resume
 ```
 
-暂停持久化在 PostgreSQL，Scheduler 重启后保持；`db:rebuild` 按列交集回填 `global_settings`，从 v57 起暂停状态也会被保留。不会自动取消或杀 Job；排空超时由管理员决定继续等待或手动取消。受控 `upgrade check / apply / rollback` 子命令与按 digest 的部署契约属于 #740 后续 PR，尚未落地。
+暂停持久化在 PostgreSQL，Scheduler 重启后保持；`db:rebuild` 按列交集回填 `global_settings`，从 v57 起暂停状态也会被保留。不会自动取消或杀 Job；排空超时由管理员决定继续等待或手动取消。digest 部署与单控制面、同 schema 的受控 `upgrade check / apply / rollback` 已接通；跨 schema、完整配置 preflight 和多节点升级仍未完成。中断保持暂停，同 schema 回滚保留数据库和期间入队写入，详见 [受控升级](../deploy/README.md)。
 
 官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。#691 起项目不再钉版本，新建 Job 始终按平台 channel 最新 trusted 解析并冻结 digest；已冻结 Job 快照不改写。
 

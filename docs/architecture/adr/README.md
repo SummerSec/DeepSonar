@@ -54,6 +54,7 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 | [0004](0004-fact-and-finding-verification.md) | Fact 证据信任态与 Finding Verify 分责 | 已采纳（历史回填） | #387 / [`verify.ts`](../../../apps/scheduler/src/verify.ts) |
 | [0005](0005-event-evidence-stream.md) | events / evidence / stream-bus 三职责，bus 非权威 | 已采纳（历史回填） | #388 / [`process-stream-policy.ts`](../../../apps/scheduler/src/process-stream-policy.ts) |
 | [0006](0006-runtime-image-admission.md) | 运行镜像统一由平台目录准入，Job 冻结 digest | 已采纳（历史回填） | #674 / #676 / #691 / [`runtime-images.ts`](../../../apps/scheduler/src/runtime-images.ts) |
+| [0007](0007-paused-upgrade-recovery.md) | 同 schema 升级回滚保留数据库并保持暂停 | 已采纳 | #740 / #747 |
 
 ---
 

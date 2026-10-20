@@ -335,11 +335,15 @@ jobs:
       - name: OpenSandbox production compose merge
         run: |
           tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
           printf '%s\n' \
             "POSTGRES_PASSWORD=ci-opensandbox" \
+            "DEEPSONAR_VERSION=0.1.46" \
+            "DEEPSONAR_SCHEDULER_IMAGE=ghcr.io/summersec/deepsonar-scheduler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_WEB_IMAGE=ghcr.io/summersec/deepsonar-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_IMAGE_ADMISSION_IMAGE=ghcr.io/summersec/deepsonar-image-admission@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             "BLOB_S3_ACCESS_KEY_ID=ci" \
             "BLOB_S3_SECRET_ACCESS_KEY=ci-secret" \
-            "DEEPSONAR_IMAGE_TAG=0.1.46" \
             "OPEN_SANDBOX_API_KEY=ci-opensandbox" \
             > "$tmp/.env"
           rendered="$(docker compose --project-directory "$tmp" --env-file "$tmp/.env" \
@@ -347,14 +351,29 @@ jobs:
             -f deploy/docker-compose.real.yml \
             -f deploy/docker-compose.opensandbox.prod.yml \
             config)"
+          for service in scheduler web image-admission; do
+            printf '%s\n' "$rendered" | grep -Eq "image: ghcr.io/summersec/deepsonar-${service}@sha256:[0-9a-f]{64}$"
+          done
           printf '%s\n' "$rendered" | grep -F "SANDBOX_PROVIDER: opensandbox"
           printf '%s\n' "$rendered" | grep -F 'published: "18081"'
+          grep -Ev '^DEEPSONAR_(SCHEDULER_IMAGE|WEB_IMAGE|IMAGE_ADMISSION_IMAGE)=' "$tmp/.env" > "$tmp/legacy.env"
+          printf '%s\n' 'DEEPSONAR_IMAGE_TAG=0.1.46' >> "$tmp/legacy.env"
+          if docker compose --project-directory "$tmp" --env-file "$tmp/legacy.env" -f deploy/docker-compose.prod.yml config > "$tmp/legacy.out" 2>&1; then
+            echo 'legacy tag-only environment unexpectedly rendered' >&2
+            exit 1
+          fi
+          grep -E 'required variable DEEPSONAR_(SCHEDULER_IMAGE|WEB_IMAGE|IMAGE_ADMISSION_IMAGE)' "$tmp/legacy.out"
 
       - name: OpenSandbox host overlay gateway upstream
         run: |
           tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
           printf '%s\n' \
             "POSTGRES_PASSWORD=ci-opensandbox" \
+            "DEEPSONAR_VERSION=0.1.46" \
+            "DEEPSONAR_SCHEDULER_IMAGE=ghcr.io/summersec/deepsonar-scheduler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_WEB_IMAGE=ghcr.io/summersec/deepsonar-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_IMAGE_ADMISSION_IMAGE=ghcr.io/summersec/deepsonar-image-admission@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             "BLOB_S3_ACCESS_KEY_ID=ci" \
             "BLOB_S3_SECRET_ACCESS_KEY=ci-secret" \
             "DEEPSONAR_ADMIN_TOKEN=ci-admin" \
@@ -363,6 +382,9 @@ jobs:
             > "$tmp/.env"
           rendered="$(docker compose --project-directory deploy --env-file "$tmp/.env" \
             -f deploy/docker-compose.opensandbox.host.yml config)"
+          for service in scheduler web; do
+            printf '%s\n' "$rendered" | grep -Eq "image: ghcr.io/summersec/deepsonar-${service}@sha256:[0-9a-f]{64}$"
+          done
           printf '%s\n' "$rendered" | grep -F "http://host.docker.internal:14100/gateway"
           ! printf '%s\n' "$rendered" | grep -F "http://127.0.0.1:14100/gateway"
           ! printf '%s\n' "$rendered" | grep -F "http://127.0.0.1:13100/gateway"

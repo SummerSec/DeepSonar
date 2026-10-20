@@ -37,9 +37,23 @@ ds_effective_env_value() {
   ds_env_file_value "$1" "$2"
 }
 
+# Reject ambiguous dotenv syntax instead of validating a different value from
+# Compose (which accepts export, whitespace, colon delimiters and last-wins keys).
+ds_platform_env_file_unambiguous() {
+  [ -f "$1" ] || return 0
+  awk -v k="$2" '
+    { sub(/\r$/, "") }
+    $0 ~ "^[ \t]*(export[ \t]+)?" k "([ \t]*[=:]|[ \t]*$)" {
+      count++
+      if (index($0, k "=") != 1) bad=1
+    }
+    END { exit (count > 1 || bad) ? 1 : 0 }
+  ' "$1"
+}
+
 ds_platform_image_ref_valid() {
   # ds_platform_image_ref_valid REF REPO_NAME
-  printf '%s\n' "$1" | grep -Eq "^[^@[:space:]]+/$2@sha256:[0-9a-f]{64}\$"
+  printf '%s\n' "$1" | grep -Eq "^[a-z0-9][a-z0-9._:/-]*/$2@sha256:[0-9a-f]{64}\$"
 }
 
 ds_platform_contract_hint() {
@@ -60,7 +74,7 @@ ds_check_platform_image_contract() {
   example="$2"
   require="$3"
   bad=0
-  if [ -f "$env_file" ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?DEEPSONAR_IMAGE_TAG[[:space:]]*=' "$env_file"; then
+  if [ -f "$env_file" ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?DEEPSONAR_IMAGE_TAG([[:space:]]*[=:]|[[:space:]]*$)' "$env_file"; then
     echo "[deploy] deploy/.env 含已删除的 DEEPSONAR_IMAGE_TAG（平台镜像不再按 tag 部署）" >&2
     bad=1
   fi
@@ -69,6 +83,13 @@ ds_check_platform_image_contract() {
     bad=1
   fi
   if [ "$require" = "1" ]; then
+    for spec in DEEPSONAR_VERSION=version $DS_PLATFORM_IMAGE_SPECS; do
+      key=${spec%%=*}
+      if ! ds_platform_env_file_unambiguous "$env_file" "$key"; then
+        echo "[deploy] $key must have at most one canonical KEY=value assignment in deploy/.env" >&2
+        bad=1
+      fi
+    done
     for spec in $DS_PLATFORM_IMAGE_SPECS; do
       key=${spec%%=*}
       repo=${spec#*=}

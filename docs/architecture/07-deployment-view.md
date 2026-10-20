@@ -1,9 +1,9 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-20
 
-部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 新增的 `platform` catalog 结构目前只用于版本发现和管理员提示；按清单 digest 自动切换平台镜像（`upgrade apply`）仍属 #740 后续片。
+部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 新增的 `platform` catalog 结构目前只用于版本发现和管理员提示；宿主 `upgrade apply` 只在单控制面、无远程 worker、同 schema 条件下切换平台镜像。
 
 ## 生产 Compose 拓扑
 
@@ -56,7 +56,7 @@ flowchart LR
 
 ## 平台版本发现与部署状态
 
-Scheduler 在 catalog 同步路径比较当前部署版本与 registry 的 `platform` 段（没有该段时使用 `platform_version`），把最近一次结果写入 `platform_update_checks` 单例；管理员可通过只读 `GET /platform/updates` 读取最近一次检查结果，Web 只显示版本提示。该域不执行 `upgrade`、`apply` 或 `rollback`。Release workflow 写出并核对真实 platform digests、仅以不可变 digest 驱动 Compose，以及 `deploy.sh upgrade` 仍未实现；当前平台 Compose 继续使用发布 tag 流程。相关后续和边界见 [平台自动更新后续阶段](12-risks-and-tech-debt.md)。
+Scheduler 在 catalog 同步路径比较当前部署版本与 registry 的 `platform` 段（没有该段时使用 `platform_version`），把最近一次结果写入 `platform_update_checks` 单例；管理员可通过只读 `GET /platform/updates` 读取最近一次检查结果，Web 只显示版本提示。该域不执行 `upgrade`、`apply` 或 `rollback`。Release workflow 从平台镜像 descriptor 生成并重新 inspect 核对各通道真实 platform digests；Compose 只接受不可变 digest 引用。部署脚本同时拒绝重复或非规范平台变量，防止校验值与 Compose 插值结果不一致。宿主升级在暂停/排空、备份校验后切换；中断保留暂停，同 schema 回滚只恢复镜像配置且保留期间数据库写入，恢复领取结果不明时拒绝自动回滚。跨 schema、完整配置 preflight、多节点及自动续做仍未实现，入口见 [部署脚本](../../deploy/README.md)。相关后续和边界见 [平台自动更新后续阶段](12-risks-and-tech-debt.md)。
 
 ## 多副本和共享存储限制
 

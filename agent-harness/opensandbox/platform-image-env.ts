@@ -13,7 +13,11 @@ const PLATFORM_IMAGE_REPOS = {
 } as const;
 
 function exampleValue(lines: string[], key: string): string {
-  const line = lines.find((entry) => entry.startsWith(`${key}=`));
+  const assignments = lines.filter((entry) => new RegExp(`^\\s*(export\\s+)?${key}(\\s*[=:]|\\s*$)`).test(entry));
+  if (assignments.length !== 1 || !assignments[0]!.startsWith(`${key}=`)) {
+    throw new Error(`deploy/.env.example must have exactly one canonical ${key}=value assignment`);
+  }
+  const line = assignments[0];
   const value = line?.slice(key.length + 1).trim() ?? "";
   if (!value) throw new Error(`deploy/.env.example is missing ${key}`);
   return value;
@@ -36,7 +40,7 @@ export function platformImageEnvLines(
       continue;
     }
     const ref = exampleValue(lines, key);
-    if (!new RegExp(`^[^@\\s]+/${repo}@sha256:[0-9a-f]{64}$`).test(ref)) {
+    if (!new RegExp(`^[a-z0-9][a-z0-9._:/-]*/${repo}@sha256:[0-9a-f]{64}$`).test(ref)) {
       throw new Error(`deploy/.env.example ${key} must be an immutable ${repo} digest ref`);
     }
     out.push(`${key}=${ref}`);

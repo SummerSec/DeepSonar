@@ -1,8 +1,13 @@
 ## [Unreleased]
 
+### 平台部署安全修复（#740 / #747）
+
+- 修复 CI OpenSandbox Compose 的 digest 环境夹具、`.env` 重复/非规范赋值校验和 Release 四行 digest 回写；发布清单生成与逐通道双架构 inspect 已接通，保留既有部署通道。
+- 排空包括所有终态 Attempt 的未结算/未知效果。新增共享宿主 `upgrade` 程序：单控制面、同 schema 稳定版本升级，备份/健康校验与中断记录；回滚只恢复镜像配置、保留期间数据库写入并保持暂停。跨 schema、多节点、完整配置 preflight 和自动续做仍未完成；恢复领取结果不明时拒绝自动回滚。
+
 ### 变更
 
-- **平台镜像改按不可变 digest 部署（#740 P1 第 3 片，不兼容）**：`deploy/docker-compose.prod.yml` 与 `docker-compose.opensandbox.host.yml` 的 scheduler / web / image-admission 改为每个镜像一个完整引用变量 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；删除 `DEEPSONAR_IMAGE_TAG`，不保留兼容。`/health.version` 与版本发现只认显式 `DEEPSONAR_VERSION`，不再回退镜像 tag。`deploy.sh`（新增共享校验 `deploy/platform-images.sh`）与 `deploy.ps1` 发现 `deploy/.env` 或进程环境中的旧变量、可变 tag、仓库名不符的 digest、缺失或带 `v` 前缀的 `DEEPSONAR_VERSION` 时 fail closed，逐项列出问题并打印应从 `deploy/.env.example` 复制的四行；不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量；`up real build` 临时把平台镜像标记为 `deepsonar-*:local-build`，不改写 `.env`。官方 helper / Silo 改按 `DEEPSONAR_VERSION` 标签解析后固定为 RepoDigest。`deploy/.env.example` 写入 v0.5.6 的真实 index digest（ACR / GHCR 一致）。新增 `deploy/deploy-platform-images.test.mjs`，对 sh 与 PowerShell 两侧用假 docker 端到端覆盖首次生成、按 digest 拉取与各类拒绝路径；OpenSandbox PoC 夹具改读 `.env.example` 的 digest 行。`upgrade check / apply / rollback` 仍属 #740 后续片。
+- **平台镜像改按不可变 digest 部署（#740 P1 第 3 片，不兼容）**：`deploy/docker-compose.prod.yml` 与 `docker-compose.opensandbox.host.yml` 的 scheduler / web / image-admission 改为每个镜像一个完整引用变量 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；删除 `DEEPSONAR_IMAGE_TAG`，不保留兼容。`/health.version` 与版本发现只认显式 `DEEPSONAR_VERSION`，不再回退镜像 tag。`deploy.sh`（新增共享校验 `deploy/platform-images.sh`）与 `deploy.ps1` 发现 `deploy/.env` 或进程环境中的旧变量、可变 tag、仓库名不符的 digest、缺失或带 `v` 前缀的 `DEEPSONAR_VERSION` 时 fail closed，逐项列出问题并打印应从 `deploy/.env.example` 复制的四行；不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量；`up real build` 临时把平台镜像标记为 `deepsonar-*:local-build`，不改写 `.env`。官方 helper / Silo 改按 `DEEPSONAR_VERSION` 标签解析后固定为 RepoDigest。`deploy/.env.example` 写入 v0.5.6 的真实 index digest（ACR / GHCR 一致）。新增 `deploy/deploy-platform-images.test.mjs`，对 sh 与 PowerShell 两侧用假 docker 端到端覆盖首次生成、按 digest 拉取与各类拒绝路径；OpenSandbox PoC 夹具改读 `.env.example` 的 digest 行。同 schema 受控升级与剩余限制见本区安全修复条目。
 ### 修复
 
 - **Windows 数据库基线重建**：角色提示词回填在匹配 SQL 模板前统一 CRLF/LF，避免 v58 → v59 重建在 Windows 检出时中断；新增跨换行回归并验证真实 PostgreSQL 回填。
@@ -11,9 +16,9 @@
 
 ### 新增
 
-- **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 生成 `platform` digests 与最终 payload inspect 门禁扩展仍为 TODO；digest Compose 契约见本区第 3 片，`deploy.sh upgrade` 留给后续片。
+- **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 平台 digests 与最终 inspect 门禁已补齐；受控升级限制见本区安全修复条目。
 
-- **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、活跃 Attempt 上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。`deploy.sh` / `deploy.ps1` 的 `upgrade` 子命令属于 #740 后续片（版本发现见本区第 2 片，digest 部署契约见第 3 片）。
+- **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、所有 Attempt（包括终态）上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。同 schema `upgrade` 子命令已接通，跨 schema 等剩余限制见本区安全修复条目。
 
 ### 修复
 
@@ -27,7 +32,7 @@
 ### 部署 / 升级说明
 
 - **平台镜像引用契约变更（#740 P1 第 3 片）**：已有部署升级前须删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，并从目标版本的 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）；否则 `deploy.sh` / `deploy.ps1` 与 Compose 直接拒绝启动。不改数据库 schema。Release 回写 `deploy/.env.example` 同步改为写入 `DEEPSONAR_VERSION` 与按 inspect 得到的 digest 引用。
-- 本次改动修改数据库 schema：主线 **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用契约见上一条（#740 第 3 片）；`upgrade` 子命令见 #740 后续片。
+- 本次改动修改数据库 schema：主线 **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用契约见上一条（#740 第 3 片）；受控升级与剩余限制见本区安全修复条目。
 - #748 修改数据库 schema：主线 **v58 → v59**（`credentials_health_error_category_check` 新增 `model_unavailable` / `quota_exhausted`）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。
 
 ## [0.5.6] - 2026-10-15
