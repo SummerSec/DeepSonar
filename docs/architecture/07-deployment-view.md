@@ -1,7 +1,7 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-20
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 等平台服务通过 `DEEPSONAR_IMAGE_TAG` 选择 Release 同步的应用镜像标签；OpenSandbox/Worker 的基础服务可由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 新增的 `platform` catalog 结构目前只用于版本发现和管理员提示，不能据此宣称平台 Compose 已按 digest 部署。
 
@@ -53,6 +53,12 @@ flowchart LR
 ```
 
 镜像准入按 `DEEPSONAR_COSIGN_*` 配置检查签名或 keyless identity/issuer、扫描结果、不可变摘要和运行时工具手册契约；未启用签名策略时，官方 catalog 可记录 `signature: skipped`，这不等于已完成签名验证。第三方镜像的 critical/secret 扫描失败会阻止信任；官方镜像的结果也会记录和告警。`image-admission` 直接拉取并检查 Registry，然后把 digest、扫描和 trust 状态写入 PostgreSQL；Scheduler 读取这些管理表，创建 Job 时把可用镜像选择冻结。Agent、Hub、导入包和任意管理文本不能提交新的 OCI 源。实现参考 [`trust-policy.ts`](../../apps/image-admission/src/trust-policy.ts)、[`cosign-verify.ts`](../../apps/image-admission/src/cosign-verify.ts) 和 [`runtime-manual-contract`](../../packages/runtime-manual-contract/src/index.ts)。
+
+## Mobile ASC 工具供应链（#754）
+
+`deepsonar-mobile` 的 ASC 默认实现为固定源码与 submodule 的 rust_ASC v0.1.1，以锁定依赖、`--no-default-features` 构建 CLI。`rust-asc` 与 `droidasc` 兼容入口使用同一 Rust 实现；`droidasc-python` 显式选择保留的 Python 版本，不自动回退。JADX/apktool、其他工具需要的 Python 仍保留，未引入 MCP 服务或新的执行通道。来源和调用契约见 [运行时工具链](../RUNTIME_TEST_TOOLCHAINS.md)。
+
+镜像定义、环境 smoke 与真实 APK 验收是不同证据。amd64/arm64 构建和执行须分别留证，arm64 QEMU smoke 不代表原生验收；当前真实兼容性和性能仍需专项证据，见 [风险登记](12-risks-and-tech-debt.md)。此变更不更新已准入或运行中的镜像 digest。
 
 ## 平台版本发现与部署状态
 

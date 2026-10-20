@@ -7,6 +7,19 @@
 ARG BASE_IMAGE=deepsonar-base:local
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
 
+# Target-platform build; no MCP dependencies or Rust toolchain in runtime.
+FROM rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f AS asc-builder
+ARG RUST_ASC_COMMIT=236dd096669c99eb30f6e1af0b24e668eff55dd5
+ARG RADGUARD_COMMIT=290de20c925c4a2c7642b1a63c9997185a06e130
+ARG RUST_ASC_LOCK_SHA256=06052ead70d1b755306a048fcbfa664cd0da789d6edb5f982f4a013cb3ca0293
+RUN git clone https://github.com/MG1937/rust_ASC.git /src/rust_ASC && \
+    cd /src/rust_ASC && git checkout "$RUST_ASC_COMMIT" && \
+    test "$(git rev-parse HEAD)" = "$RUST_ASC_COMMIT" && \
+    git submodule update --init --recursive && \
+    test "$(git -C radguard rev-parse HEAD)" = "$RADGUARD_COMMIT" && \
+    echo "$RUST_ASC_LOCK_SHA256  Cargo.lock" | sha256sum -c - && \
+    cargo build --release --locked --no-default-features
+
 FROM ${JDK17_IMAGE} AS jdk17
 FROM ${BASE_IMAGE} AS runtime-rootfs
 
@@ -52,6 +65,9 @@ ARG FRIDA_SERVER_ARM64_SHA256=09d1fad867b27d69562a79289f4c412e85867f5d38ab728770
 ARG FRIDA_SERVER_X64_SHA256=5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c
 
 COPY --from=jdk17 /opt/java/openjdk /opt/deepsonar/jdks/17
+COPY --from=asc-builder /src/rust_ASC/target/release/rust_ASC /opt/deepsonar/rust-asc/rust_ASC
+COPY --from=asc-builder /src/rust_ASC/LICENSE /opt/deepsonar/rust-asc/LICENSE
+COPY deploy/mobile-asc.sh /opt/deepsonar/bin/rust-asc
 COPY deploy/mobile-env.sh /tmp/mobile-env.sh
 COPY deploy/mobile-adb.sh /tmp/mobile-adb.sh
 COPY deploy/mobile-adb-bin.sh /tmp/mobile-adb-bin.sh
@@ -186,7 +202,9 @@ RUN set -eux; \
   ln -s /opt/deepsonar/mobile-venv/bin/frida /opt/deepsonar/bin/frida; \
   ln -s /opt/deepsonar/mobile-venv/bin/objection /opt/deepsonar/bin/objection; \
   ln -s /opt/deepsonar/mobile-venv/bin/androguard /opt/deepsonar/bin/androguard; \
-  ln -s /opt/deepsonar/mobile-venv/bin/droidasc /opt/deepsonar/bin/droidasc; \
+  ln -s /opt/deepsonar/mobile-venv/bin/droidasc /opt/deepsonar/bin/droidasc-python; \
+  chmod 0755 /opt/deepsonar/bin/rust-asc; \
+  ln -s /opt/deepsonar/bin/rust-asc /opt/deepsonar/bin/droidasc; \
   uv cache clean; \
   for pair in \
     "android-arm:${FRIDA_SERVER_ARM_SHA256}" \
@@ -206,7 +224,7 @@ RUN set -eux; \
   done; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","droidasc","apkcheckpack","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,asc:{implementation:"rust_ASC",version:"0.1.1",commit:"236dd096669c99eb30f6e1af0b24e668eff55dd5",radguard_commit:"290de20c925c4a2c7642b1a63c9997185a06e130",cargo_lock_sha256:"06052ead70d1b755306a048fcbfa664cd0da789d6edb5f982f4a013cb3ca0293",cli_only:true,default:"rust-asc",compatibility:"droidasc",python_fallback:"droidasc-python",python_version:"0.1.1.post1"},tools:["java","jadx","apktool","bundletool","apkeep","androguard","rust-asc","droidasc","droidasc-python","apkcheckpack","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
 

@@ -26,7 +26,7 @@ function spawnWsl(args, options = {}) {
 }
 
 function runHelper(helper, args, env) {
-  const pathKeys = new Set(["ADB_BIN", "HDC_BIN", "IDEVICE_ID_BIN", "APKCHECKPACK_BIN", "MOBILE_PYTHON"]);
+  const pathKeys = new Set(["ADB_BIN", "HDC_BIN", "IDEVICE_ID_BIN", "APKCHECKPACK_BIN", "MOBILE_PYTHON", "RUST_ASC_BIN"]);
   const pathDirs = [bashSupportDir, ...String(env.BASH_PATH_DIRS ?? "").split(";").filter(Boolean)].map(toBashPath);
   const normalizedEnv = Object.fromEntries(Object.entries(env)
     .filter(([key]) => key !== "PATH" && key !== "BASH_PATH_DIRS")
@@ -320,29 +320,45 @@ if (!mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1") || !mobileDoc
 if (!mobileDockerfile.includes("/opt/deepsonar/bin/droidasc")) {
   throw new Error("Dockerfile.agent-mobile must symlink /opt/deepsonar/bin/droidasc");
 }
-const liveDroidasc = spawnSync("bash", ["-lc", "command -v droidasc >/dev/null && droidasc --help"], { encoding: "utf8" });
-if (liveDroidasc.status === 0) {
-  if (!liveDroidasc.stdout.includes("getclass") || !liveDroidasc.stdout.includes("findrefs")) {
-    throw new Error(`droidasc --help must mention getclass/findrefs\n${liveDroidasc.stdout}\n${liveDroidasc.stderr}`);
+const livePresent = spawnSync("bash", ["-lc", "command -v droidasc"], { encoding: "utf8" });
+if (livePresent.status === 0) {
+  const live = spawnSync("bash", ["-lc", "droidasc --help"], { encoding: "utf8" });
+  if (live.status !== 0 || !live.stdout.includes("getclass") || !live.stdout.includes("findrefs")) {
+    throw new Error(`installed droidasc help failed: ${live.status}\n${live.stdout}\n${live.stderr}`);
   }
 } else {
-  // Image not present on the host: fake PATH presence check for harness unit smoke.
-  const fakeDroidasc = writeFake("mobile-droidasc-", "droidasc", `#!/usr/bin/env bash
-if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-  echo 'usage: droidasc [-h] {getclass,getmanifest,findrefs} ...'
-  echo 'getclass'
-  echo 'findrefs'
-  exit 0
-fi
-echo "unexpected $*" >&2
-exit 1
-`);
-  const fakeHelp = process.platform === "win32"
-    ? spawnWsl(["--exec", "bash", toBashPath(fakeDroidasc), "--help"], { encoding: "utf8" })
-    : spawnSync(fakeDroidasc, ["--help"], { encoding: "utf8" });
-  if (fakeHelp.status !== 0 || !fakeHelp.stdout.includes("getclass") || !fakeHelp.stdout.includes("findrefs")) {
-    throw new Error(`droidasc --help presence smoke failed: status=${fakeHelp.status}\n${fakeHelp.stdout}\n${fakeHelp.stderr}`);
-  }
+  console.log("SKIP installed ASC check: absent on host; adapter tests below use mocks, not APK validation");
 }
+const asc = writeFake("mobile-asc-", "rust_ASC", `#!/usr/bin/env bash
+if [[ $# == 0 ]]; then echo 'getclass getmanifest findrefs'; exit 0; fi
+if [[ "$1" == fail ]]; then echo 'backend failure' >&2; exit 23; fi
+printf '<%s>\\n' "$@"
+`);
+const ascApk = join(mkdtempSync(join(tmpdir(), "asc-apk-")), "a.apk");
+writeFileSync(ascApk, Buffer.from("504b0304140000000000f843545d21e7d7880f0000000f00000008000000746573742e747874616461707465722066697874757265504b01021403140000000000f843545d21e7d7880f0000000f000000080000000000000000000000800100000000746573742e747874504b0506000000000100010036000000350000000000", "hex"));
+const callAsc = (args, bin = asc) => runHelper("deploy/mobile-asc.sh", args, { RUST_ASC_BIN: bin });
+for (const args of [[], ["-h"], ["--help"]]) {
+  const result = callAsc(args);
+  if (result.status !== 0 || !result.stdout.includes("findrefs")) throw new Error("ASC help adapter failed");
+}
+for (const [args, expected] of [
+  [["getclass", ascApk, "Ltest/Main;", "--threads", "2"], "<--thread>\n<2>"],
+  [["getclass", "--threads=2", ascApk, "test.Main"], "<--thread=2>"],
+  [["findrefs", ascApk, "string", "--", "--threads"], "<-->\n<--threads>"],
+  [["getclass", ascApk, "test.Main", "-o", "--threads"], "<-o>\n<--threads>"],
+]) {
+  const result = callAsc(args);
+  if (result.status !== 0 || !result.stdout.includes(expected)) throw new Error(`ASC args failed: ${result.stdout}`);
+}
+const brokenApk = join(dirname(ascApk), "broken.apk");
+writeFileSync(brokenApk, "not a ZIP");
+const brokenResult = callAsc(["findrefs", brokenApk, "string", "token"]);
+if (brokenResult.status !== 2 || !brokenResult.stderr.includes("corrupt APK")) throw new Error("ASC accepted corrupt input as no matches");
+const fail = callAsc(["fail", "--help"]);
+if (fail.status !== 23 || !fail.stderr.includes("backend failure")) throw new Error("ASC hid backend failure");
+if (callAsc(["--help"], join(tmpdir(), "absent-rust-asc")).status !== 127) throw new Error("ASC hid missing binary");
+if (!callAsc(["--version"]).stdout.includes("rust_ASC v0.1.1")) throw new Error("ASC version identity missing");
+const rustPin = mobileRuntime.downloads["rust-asc"];
+if (rustPin.commit !== "236dd096669c99eb30f6e1af0b24e668eff55dd5" || !rustPin.build_flags.includes("--no-default-features")) throw new Error("Rust source/CLI-only pin missing");
 
 console.log("mobile runtime helper smoke ok");

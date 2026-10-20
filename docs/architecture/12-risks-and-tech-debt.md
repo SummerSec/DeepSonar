@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-20
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -25,6 +25,12 @@
 | D-05 | 低 | Artifact-first Phase 1 已把 Fact/Finding 提案转换为 Artifact，并将 Finding/SARIF/报告作为投影；Claim/Evidence/Evaluation/Projection 的长期扩展和旧投影路径清理仍未完成。 | 投影种类增加时需要维持 Artifact、Fact、Finding 和报告的版本/来源一致，重复事实源会增加审计成本。 | 继续以 Artifact 为内部写入真相；Verify 只消费结构化 Fact、Artifact、Evidence 和独立 Evaluation。任何新字段先进入现有 schema/共享契约和投影测试。 |
 | D-06 | 低 | 质量指标和 Hub replay 已有只读投影；Experience 经验存储为空，尚未有跨任务经验召回、成本感知计划和策略评估闭环。 | 不能把质量投影或人工标签解读为模型准确率承诺，也不能自动把历史结果当作当前事实。 | 关联长期评估路线；没有冻结数据集、来源、版本和过期策略前，不新增经验写入或推荐路径。 |
 | D-07 | 中 | [`runtime-image-registry-contract.ts`](../../apps/scheduler/src/runtime-image-registry-contract.ts) 仍保留 schema v1 的兼容解析、旧 `image_ref` 投影和历史重复 digest alias；当前新目录契约以最新形态为准。 | 旧输入/输出路径继续存在会增加发布审计和移除成本，也可能让历史投影被误认为受支持的新契约。 | 仅在历史材料、迁移证据和发布窗口确认不再依赖后物理清扫；新生成内容不得依赖兼容投影，兼容解析不能扩大新运行时输入范围。 |
+
+## 2.1 ASC 迁移验收证据（#754）
+
+源码审查另发现：rust_ASC 根许可证为 Apache-2.0，但固定的 radguard 子模块 `290de20c925c4a2c7642b1a63c9997185a06e130` 没有 LICENSE 文件或 Cargo `license` 字段。根许可证不能单独证明子模块分发许可；正式分发前须澄清。
+
+Mobile 默认 rust_ASC 的源码固定、CLI 兼容入口和 Python 显式回退属于实现契约，不能单独证明对真实 APK 的行为等价或性能提升。Manifest、类/引用查询、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件的输出/退出码，以及 amd64/arm64 构建与执行，须由已获许可的 fixture 实测留证。仅 `--help`、mock 或 QEMU 运行不得写为全面兼容或原生双架构验证。验收完成前保留显式 `droidasc-python` 选择，Rust 真实错误不得自动掩盖；详见 [工具链契约](../RUNTIME_TEST_TOOLCHAINS.md)。
 
 ## 3. 有意暂缓的设计
 

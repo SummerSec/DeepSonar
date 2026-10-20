@@ -165,13 +165,13 @@ const OFFICIAL_HUB_IMAGE_CAPABILITIES: Readonly<Record<string, HubRuntimeImageCa
   },
   "deepsonar-mobile": {
     purpose: "移动端审计/测试：Android / iOS 宿主 / OpenHarmony HAP+hdc",
-    tool_summary: "Android JADX/apktool/androguard/droidasc/apkcheckpack/adb/Frida；iOS idevice*；OH HAP/hdc；native .so radare2/LIEF",
+    tool_summary: "Android JADX/apktool/androguard/rust-asc（droidasc 兼容入口；droidasc-python 显式回退）/apkcheckpack/adb/Frida；iOS idevice*；OH HAP/hdc；native .so radare2/LIEF",
     not_included: "MobSF/jadx-gui/Burp/IDA/Ghidra/DevEco/第三方 MCP/mitmproxy；禁止 droidasc --gui",
     suited_roles: ["audit", "test", "verify", "explore"],
     suited_evidence: ["APK/AAB 静态", "adb/Frida 动态", "IPA/HAP", "mobile native"],
     selection_hints: [
       "APK/AAB/移动端包或 adb/Frida → mobile",
-      "大包按需 class/xref 用 droidasc；完整反编译用 JADX；勿用 ASC 叙述冒充设备/流量",
+      "按需 class/manifest/xref 默认 rust-asc；droidasc 适配 --threads；droidasc-python 仅显式回退，不自动切换；完整反编译用 JADX；勿用 ASC 叙述冒充设备/流量",
       "纯 OH 设备协议也可选 openharmony-test；通用源码审计不要用 mobile",
       "需要 Ghidra/REA 深度反编译选 deepsonar-reverse，不要用 mobile",
     ],

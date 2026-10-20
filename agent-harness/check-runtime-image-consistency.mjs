@@ -505,6 +505,14 @@ expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin ap
 expect(mobileConfig.downloads?.bundletool?.version === "1.18.3", "Mobile must pin bundletool 1.18.3");
 expect(mobileConfig.downloads?.apkeep?.version === "1.0.0", "Mobile must pin apkeep 1.0.0");
 expect(mobileConfig.managed?.pip?.androguard?.version === "4.1.4", "Mobile must pin androguard 4.1.4");
+const ascSource = mobileConfig.downloads?.["rust-asc"];
+expect(ascSource?.version === "0.1.1" && ascSource?.license === "Apache-2.0", "Mobile Rust ASC source/version/license required");
+for (const field of ["commit", "radguard_commit", "cargo_lock_sha256"]) {
+  expect(mobileDockerfile.includes(ascSource?.[field]), `Mobile ASC ${field} must match Dockerfile`);
+}
+expect(mobileDockerfile.includes("--locked --no-default-features"), "Mobile ASC must build locked CLI without MCP");
+expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc-python"), "Mobile Python ASC must remain explicit");
+expect(PRESETS["deepsonar-mobile"].paths.includes("deploy/mobile-asc.sh"), "ASC adapter must affect image fingerprint");
 expect(mobileConfig.managed?.pip?.droidasc?.version === "0.1.1.post1", "Mobile must pin droidasc 0.1.1.post1");
 expect(mobileConfig.managed?.pip?.droidasc?.license === "Apache-2.0", "Mobile droidasc must be Apache-2.0");
 expect(mobileConfig.managed?.pip?.droidasc?.capabilities?.includes("apk-xref-search"), "Mobile droidasc must declare apk-xref-search");
@@ -542,7 +550,7 @@ expect(mobileConfig.toolsets?.mobile?.maxSizeMiB === 2400, "Mobile size budget m
 expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
 expect(mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1"), "Mobile Dockerfile must pin DROIDASC_VERSION=0.1.1.post1");
 expect(mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}"), "Mobile Dockerfile must install pinned droidasc");
-expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc"), "Mobile must symlink /opt/deepsonar/bin/droidasc");
+expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc"), "Mobile must install /opt/deepsonar/bin/droidasc");
 expect(mobileDockerfile.includes('"droidasc"') && mobileDockerfile.includes('tools:["java"'), "Mobile tool-manifest must list droidasc");
 expect(mobileDockerfile.includes("ARG APKCHECKPACK_SHA256=c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"), "Mobile Dockerfile ApkCheckPack checksum drift");
 expect(mobileDockerfile.includes("APKCHECKPACK_URL") && mobileDockerfile.includes("moyuwa/ApkCheckPack"), "Mobile Dockerfile must download pinned ApkCheckPack from GitHub Release");

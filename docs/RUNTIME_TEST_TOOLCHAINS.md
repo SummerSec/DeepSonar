@@ -22,7 +22,7 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 - 不在 Job 内用 `apt-get`、JDK/Maven 压缩包、SDKMAN、`./mvnw` 或其它 bootstrap fallback 安装或下载工具链。项目依赖是否可下载仍由冻结的 `DEEPSONAR_ALLOW_EGRESS` 决定。
 - 工具缺失时停止动态尝试；绑定目标 Finding 的普通补证 Worker 提交 `emit_fact.verification.outcome=inconclusive`，没有目标 Finding 的普通 Test 提交普通 Fact（title/description），不传 verification、不编造 finding_id。Verify 只消费证据，缺口通过 `mark_job_done(verdict=rework, missing_evidence=[...])` 提案，人工授权/凭据/业务判断阻塞通过 `mark_job_done(verdict=needs_human)`；Verify 不调用 `emit_fact` 或 `request_human`。普通 Worker 的人工阻塞才用带 reason 与显式 subject 的 `request_human`。不得用静态叙述冒充运行时结果。
 - OpenHarmony Test 的设备协议是官方 `hdc`（`list targets` / `shell` / `file send|recv` / `install` / `hilog` / `fport` / `tconn`）。无 target 时必须按上述角色边界报告缺口，禁止把主机构建日志或源码叙述写成设备结果。audit/fuzz 仍可使用主机 Clang/ASan/libFuzzer；不要把 gdb/strace 或 Kali 进程工具当成 OH 的设备协议。
-- 移动端专项镜像 `deepsonar-mobile`：Android 设备协议是官方 `adb`；iOS Linux 宿主是 `idevice_id` / `ideviceinstaller` / `iproxy`（无 Xcode/Simulator）；OpenHarmony 设备协议是官方 `hdc`（与 OH Test 同一 vendor 二进制），HAP 静态检查用 unzip + `pack.info` / `module.json`。Android 静态检查：Java/Kotlin 用 JADX CLI、apktool、bundletool、apkeep、androguard、钉死的 `droidasc`（Droid ASC：大包按需 `getclass`/`getmanifest`/`findrefs`，与 JADX 互补；禁止 `--gui`），以及 Agent 可调用的钉死 `apkcheckpack`（加固/SDK 指纹，不是平台扫描入口）；`.so` 用 `readelf`/`objdump`/`nm`、radare2 与 LIEF（`mobile-so.sh inspect`）。运行时插桩用 Frida/Objection 与 `/opt/deepsonar/frida-server`。不预装 mitmproxy/Burp。无 adb / hdc / idevice 目标时必须按上述角色边界报告缺口，禁止把 JADX/droidasc 反编译或 HAP/IPA 解压叙述写成设备、流量或原生结果。不预装 MobSF / jadx-gui / Burp / IDA / Ghidra / DevEco / 第三方 MCP。
+- 移动端专项镜像 `deepsonar-mobile`：Android 设备协议是官方 `adb`；iOS Linux 宿主是 `idevice_id` / `ideviceinstaller` / `iproxy`（无 Xcode/Simulator）；OpenHarmony 设备协议是官方 `hdc`（与 OH Test 同一 vendor 二进制），HAP 静态检查用 unzip + `pack.info` / `module.json`。Android 静态检查：Java/Kotlin 用 JADX CLI、apktool、bundletool、apkeep、androguard、钉死的 `rust-asc`（rust_ASC v0.1.1：默认按需 `getclass`/`getmanifest`/`findrefs`，`droidasc` 为薄兼容入口，`droidasc-python` 显式选择 Python 回退；与 JADX 互补；禁止 `--gui` 和 MCP），以及 Agent 可调用的钉死 `apkcheckpack`（加固/SDK 指纹，不是平台扫描入口）；`.so` 用 `readelf`/`objdump`/`nm`、radare2 与 LIEF（`mobile-so.sh inspect`）。运行时插桩用 Frida/Objection 与 `/opt/deepsonar/frida-server`。不预装 mitmproxy/Burp。无 adb / hdc / idevice 目标时必须按上述角色边界报告缺口，禁止把 JADX/droidasc 反编译或 HAP/IPA 解压叙述写成设备、流量或原生结果。不预装 MobSF / jadx-gui / Burp / IDA / Ghidra / DevEco / 第三方 MCP。
 - 合格计入配对库存的 test 证据至少要有 `subject_revision`、完整 `steps`、`expected`，以及 `actual` 或 `artifact_refs`，来源 Job 必须成功结束，且 test 与 review 来自不同 Job 时才算配对完整；该配对在 Fact-first v1 下对 CTF/general 为 advisory；对 security.vulnerability 等安全 profile（#590）升为 confirmed 必需项，不得抹空 missing 放行。
 
 ## 冒烟与真实证据
@@ -38,3 +38,13 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 
 
 安全漏洞证明契约（#578）：profile `security.vulnerability` 可启用 `security.vulnerability.proof` v1。静态路径保留文件位置、片段摘要与可达路径依据；动态路径须满足运行证明（revision + steps + environment/runtime_digest + exit_code/产物摘要）。TODO/注释/危险函数存在/单纯行号命中不能单独过门；缺工具/目标/设备按上述角色边界报告缺口，不得用源码叙述冒充执行观察。该契约默认不启用；fact_first v1 仍是通用确认硬门。
+
+## ASC 默认实现与验证边界（#754）
+
+`rust-asc` 默认使用 [rust_ASC v0.1.1](https://github.com/MG1937/rust_ASC/tree/236dd096669c99eb30f6e1af0b24e668eff55dd5)，源码固定为 `236dd096669c99eb30f6e1af0b24e668eff55dd5`；构建固定 submodule 与 Cargo.lock，并使用 `--no-default-features` 禁用上游默认 MCP。`droidasc` 提供 CLI 兼容入口，将 `--threads` 映射到 Rust 的 `--thread`，并将顶层 `--help` 转为上游成功的无参数帮助（子命令帮助仍保留上游退出码 1）；分析命令的真实失败不得被忽略。
+
+`droidasc-python` 显式调用保留的 Python Droid ASC `0.1.1.post1`。Rust 失败后不自动重跑 Python；Agent 若需要回退，应明确记录所选实现、版本、APK 哈希、参数、stdout/stderr、退出码与输出文件。JADX、apktool 继续承担完整反编译及资源/smali 工作。Python 仍供 Frida、Objection、androguard、LIEF 等工具使用，本次迁移不意味着可移除全部 Python。
+
+实现契约与验收证据分开：`--help` 或 mock 通过不证明 APK 兼容。需用已获许可的 fixture 验证 Manifest、类查询、引用搜索、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件，并逐项保留输出和退出码。amd64/arm64 的构建与实际运行应分别报告，QEMU 运行不能标为原生运行；当前不能据此宣称双架构真实 APK 兼容或性能提升已经验证。
+
+已发布 registry 的 immutable digest 保持原样，不把源码工具迁移伪写为既有镜像内容。新镜像须独立构建验收后再经发布流程登记；本 PR 不发布镜像。

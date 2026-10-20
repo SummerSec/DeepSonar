@@ -47,7 +47,7 @@ const OFFICIAL_RUNTIME_IMAGE_BOUNDARIES: Readonly<Record<string, RuntimeImageBou
     not_included: "DevEco、toy harness",
   },
   "deepsonar-mobile": {
-    toolset: "Android/iOS/OH：JADX/droidasc/apktool/adb/Frida 等",
+    toolset: "Android/iOS/OH：rust-asc 默认（droidasc 兼容；droidasc-python 显式回退）、JADX/apktool/adb/Frida 等",
     not_included: "MobSF/GUI/Ghidra/IDA/DevEco/MCP；禁止 droidasc --gui",
   },
   "deepsonar-reverse": {

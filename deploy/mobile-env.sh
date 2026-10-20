@@ -51,7 +51,7 @@ smoke_hdc() {
 
 check_tools() {
   local command_name
-  for command_name in java jadx apktool bundletool apkeep androguard droidasc apkcheckpack readelf objdump nm r2 adb hdc idevice_id ideviceinstaller plistutil iproxy frida objection jq unzip; do
+  for command_name in java jadx apktool bundletool apkeep androguard rust-asc droidasc droidasc-python apkcheckpack readelf objdump nm r2 adb hdc idevice_id ideviceinstaller plistutil iproxy frida objection jq unzip; do
     command -v "$command_name" >/dev/null 2>&1 || {
       printf 'Mobile 环境检查失败：缺少命令 %s\n' "$command_name" >&2
       return 1
@@ -63,7 +63,9 @@ check_tools() {
   bundletool version >/dev/null
   apkeep --help >/dev/null
   androguard --help >/dev/null
+  rust-asc --version
   droidasc --help >/dev/null
+  droidasc-python --help >/dev/null
   apkcheckpack -h >/dev/null
   readelf --version >/dev/null
   objdump --version >/dev/null
