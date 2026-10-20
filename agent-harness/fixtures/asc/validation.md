@@ -48,8 +48,34 @@ remain different from Python.
 
 Raw host evidence was retained at `/tmp/asc-host-results/results.json` with
 stdout, stderr, exit status and output hashes for every case (report SHA-256
-`a3400495879884955fe3a36fb8075d1f00113da831628a403d7aa699524a94e4`).
+`0e93524c63037d108bf1e2ade4a1205b8e254a69264fe2109b221668781871c0`).
 The reusable matrix writes equivalent evidence for image executions.
+
+## Dedicated offline ASC container
+
+The unmodified image acceptance entrypoint also passed all **59 invocations**
+using `docker --network none` on linux/amd64:
+
+```bash
+node agent-harness/test-asc-apk.mjs deepsonar-asc-test:amd64 linux/amd64 /tmp/asc-offline-results
+```
+
+This is a dedicated test image, **not the final mobile image**. It was built
+offline from the already pulled Python 3.12 bookworm image
+(`sha256:5560e9ab8709f459489e5b8aa696eda8a07ef821e14bb122be62d91234bfa98b`),
+the compiled Rust binary, this change's adapter, the real host unzip executable,
+and the already installed Python venv dependencies. Its local image ID is
+`sha256:20aa6f97d282918d3fc60b4d0982140fb23edea43ec77f54d95460fd47c3b093`.
+It was not pushed to any registry.
+
+Evidence is retained under `/tmp/asc-offline-results`, including image inspect,
+invocation metadata, output files and the complete JSON report (SHA-256
+`2e284ed697758a80f987703134a89b467644a3adb5641b0cb824e9db37aa8b12`).
+The report records actual Python package versions and x86_64 execution.
+Earlier attempts to install dependencies inside the test build could not resolve
+the configured network/proxy; they were stopped. Copying the host's already
+installed dependencies allowed isolated execution without claiming that the
+final mobile Dockerfile built successfully.
 
 ## Remaining validation
 
