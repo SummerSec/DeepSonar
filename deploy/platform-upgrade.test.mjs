@@ -200,3 +200,125 @@ test('host recovery guard is read-only and does not overwrite operator pause', a
   assert.match(queries[0], /^SELECT /);
   assert.doesNotMatch(queries[0], /UPDATE|DELETE/);
 });
+
+import { createServer } from 'node:http';
+
+async function withManagementServer(handler, fn) {
+  const server = createServer(handler);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const previousToken = process.env.DEEPSONAR_ADMIN_TOKEN;
+  process.env.DEEPSONAR_ADMIN_TOKEN = 'upgrade-test-admin-token';
+  try { return await fn(`http://127.0.0.1:${server.address().port}/api`); }
+  finally {
+    if (previousToken === undefined) delete process.env.DEEPSONAR_ADMIN_TOKEN;
+    else process.env.DEEPSONAR_ADMIN_TOKEN = previousToken;
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+function verificationRun(args) {
+  if (args.includes('psql')) return Buffer.from('59');
+  if (args.includes('ps')) return Buffer.from(`container-${args.at(-1)}`);
+  if (args[0] === 'inspect') {
+    const service = args.at(-1).replace('container-', '');
+    return Buffer.from(`ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`);
+  }
+  return Buffer.alloc(0);
+}
+const verificationTarget = {
+  version: '1.2.3', schema_version: 59,
+  images: Object.fromEntries(['scheduler', 'web', 'image-admission'].map(service => [service, {
+    registry_refs: {github: `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`},
+  }])),
+};
+const pausedResponse = {claims_paused: true, reason: 'platform_upgrade', drained: true, in_flight: {total: 0}, effect_pending_attempts: 0, unknown_effect_attempts: 0};
+
+test('host HTTP requests preserve Web /api prefix and wait for asynchronous readiness', async () => {
+  const paths = []; let healthRequests = 0;
+  await withManagementServer((req, res) => {
+    paths.push(req.url);
+    assert.equal(req.headers.authorization, 'Bearer upgrade-test-admin-token');
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/health') {
+      healthRequests++;
+      res.end(JSON.stringify({ok: true, ready: healthRequests >= 3, version: '1.2.3'}));
+    } else if (req.url === '/api/platform/claims') res.end(JSON.stringify(pausedResponse));
+    else { res.statusCode = 404; res.end('{}'); }
+  }, async api => {
+    const io = hostAdapter({api, run: verificationRun, readyTimeoutMs: 1000, readyIntervalMs: 5});
+    await io.verify(verificationTarget);
+  });
+  assert.equal(healthRequests, 3);
+  assert.deepEqual(paths, ['/api/health', '/api/health', '/api/health', '/api/platform/claims']);
+});
+
+test('host readiness retries transient HTTP failures but never resumes on timeout', async () => {
+  const paths = []; let requests = 0;
+  await withManagementServer((req, res) => {
+    paths.push(req.url); requests++;
+    res.statusCode = requests === 1 ? 503 : 200;
+    res.end(JSON.stringify({ok: true, ready: false, version: '1.2.3'}));
+  }, async api => {
+    const io = hostAdapter({api: `${api}/`, run: verificationRun, readyTimeoutMs: 60, readyIntervalMs: 5});
+    await assert.rejects(io.verify(verificationTarget), /readiness timeout; claims remain paused/);
+  });
+  assert.ok(requests > 1);
+  assert.ok(paths.every(path => path === '/api/health'));
+});
+
+test('host pause and resume retain the configured API prefix', async () => {
+  const paths = [];
+  await withManagementServer((req, res) => {
+    paths.push([req.method, req.url]); res.end(JSON.stringify(pausedResponse));
+  }, async api => {
+    const io = hostAdapter({api});
+    await io.pause(); await io.resume();
+  });
+  assert.deepEqual(paths, [['POST', '/api/platform/claims/pause'], ['POST', '/api/platform/claims/resume']]);
+});
+
+test('a paused API on the wrong deployment cannot authorize stopping the local running platform', async () => {
+  const calls = [], requests = [];
+  await withManagementServer((req, res) => {
+    requests.push(req.url);
+    res.end(JSON.stringify(pausedResponse));
+  }, async api => {
+    const io = hostAdapter({api, run: args => {
+      calls.push(args);
+      if (!args.includes('psql')) throw new Error('must not execute Compose stop');
+      return Buffer.from(JSON.stringify({...pausedResponse, claims_paused: false, reason: null}));
+    }});
+    assertDrained(await io.pause()); // Wrong remote API reports a successful pause.
+    assertDrained(await io.claims()); // It even reports a drained platform.
+    await assert.rejects(io.stop(), /not safely paused/);
+  });
+  assert.deepEqual(requests, ['/api/platform/claims/pause', '/api/platform/claims']);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].includes('psql'));
+  assert.equal(calls.some(args => args.includes('stop')), false);
+});
+
+test('local unresolved effects prohibit stop even when claims are paused', async () => {
+  for (const patch of [{effect_pending_attempts: 1}, {unknown_effect_attempts: 1}, {in_flight: {total: 1}}]) {
+    const calls = [];
+    const io = hostAdapter({run: args => {
+      calls.push(args);
+      return Buffer.from(JSON.stringify({...pausedResponse, ...patch}));
+    }});
+    await assert.rejects(io.stop(), /not safely paused/);
+    assert.equal(calls.some(args => args.includes('stop')), false);
+  }
+});
+
+test('Compose stop runs only after the local database confirms pause and drain', async () => {
+  const calls = [];
+  const io = hostAdapter({run: args => {
+    calls.push(args);
+    return Buffer.from(JSON.stringify(pausedResponse));
+  }});
+  await io.stop();
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].includes('psql'));
+  assert.deepEqual(calls[1].slice(-4), ['stop', 'scheduler', 'image-admission', 'web']);
+});

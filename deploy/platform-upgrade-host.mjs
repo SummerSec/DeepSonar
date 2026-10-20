@@ -57,12 +57,14 @@ export function hostAdapter(options = {}) {
   });
   const dc = (args, input, env) => run([...compose, ...args], input, env);
   const sql = query => dc(['exec', '-T', 'postgres', 'psql', '-U', 'deepsonar', '-d', 'deepsonar', '-v', 'ON_ERROR_STOP=1', '-Atc', query]).toString().trim();
-  const base = new URL(options.api ?? 'http://127.0.0.1:3100');
+  const base = new URL(options.api ?? 'http://127.0.0.1:8080/api/');
+  // Treat --api as a directory so the production Web proxy's /api prefix survives.
+  if (!base.pathname.endsWith('/')) base.pathname += '/';
   if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(base.hostname))) throw new Error('API must use HTTPS or loopback HTTP');
-  const request = async (path, body) => {
+  const request = async (path, body, timeoutMs = 15_000) => {
     const token = process.env.DEEPSONAR_ADMIN_TOKEN;
     if (!token) throw new Error('DEEPSONAR_ADMIN_TOKEN is required in process environment');
-    const response = await fetch(new URL(path, base), { method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(15_000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const response = await fetch(new URL(path.replace(/^\/+/, ''), base), { method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(Math.max(1, timeoutMs)), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     if (!response.ok) throw new Error(`management API ${path} failed (${response.status})`);
     return response.json();
   };
@@ -145,7 +147,12 @@ export function hostAdapter(options = {}) {
       if (!/TABLE DATA public global_settings/.test(list) || !/TABLE DATA public schema_meta/.test(list)) throw new Error('backup lacks required control/schema data');
       return dump;
     },
-    stop: async () => { dc(['stop', 'scheduler', 'image-admission', 'web']); },
+    async stop() {
+      // --api can point at the wrong deployment. Never trust its pause/drain
+      // response as authority to stop this Compose project's running services.
+      assertDrained(await adapter.recoveryClaims());
+      dc(['stop', 'scheduler', 'image-admission', 'web']);
+    },
     async recoveryClaims() {
       const value = sql(`SELECT json_build_object(
         'claims_paused', claims_paused, 'reason', claims_pause_reason,
@@ -167,8 +174,18 @@ export function hostAdapter(options = {}) {
     },
     start: async () => { dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]); },
     async verify(target) {
-      const health = await request('/health');
-      if (!health.ok || health.ready !== true || health.version !== target.version) throw new Error('health/version verification failed');
+      // Compose health only proves HTTP 200. Scheduler runtime-image/gateway
+      // warmup is asynchronous and can still be preparing after compose --wait.
+      const deadline = Date.now() + (options.readyTimeoutMs ?? 180_000);
+      while (true) {
+        try {
+          const health = await request('/health', undefined, Math.min(15_000, Math.max(1, deadline - Date.now())));
+          if (health.ok === true && health.ready === true && health.version === target.version) break;
+        } catch { /* Retry bounded transport/HTTP errors during service restart. */ }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error('health/version readiness timeout; claims remain paused');
+        await new Promise(resolve => setTimeout(resolve, Math.min(options.readyIntervalMs ?? 2000, remaining)));
+      }
       if (Number(sql("SELECT version FROM schema_meta WHERE id='global'")) !== (target.schema_version ?? target.schema)) throw new Error('schema verification failed');
       verifyImages(target);
       dc(['exec', '-T', 'web', 'node', '-e', "fetch('http://127.0.0.1:8080/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]);

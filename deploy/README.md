@@ -39,9 +39,9 @@ Shell 和 PowerShell 共享 `platform-upgrade-host.mjs` / `platform-upgrade.mjs`
 .\deploy\deploy.ps1 upgrade rollback
 ```
 
-API 默认 `http://127.0.0.1:3100`，Shell 可传 `--api` / `--web-url`，PowerShell 对应 `-ApiUrl` / `-WebUrl`。API 使用 HTTPS 或本机 HTTP；token 不写日志或恢复记录。升级前取消进程环境中的四个平台版本/镜像变量，避免覆盖 `.env`。目标来自官方 Release 清单，逐通道 inspect 双架构 payload，拉取目标 GHCR digest；检查 Compose 配置与目标镜像 schema，然后通过管理 API 暂停并排空所有未结算效果，不杀 Job。
+API 默认使用生产 Web 代理 `http://127.0.0.1:8080/api/`（保留自定义 API 路径前缀），Shell 可传 `--api` / `--web-url`，PowerShell 对应 `-ApiUrl` / `-WebUrl`。API 使用 HTTPS 或本机 HTTP；token 不写日志或恢复记录。升级前取消进程环境中的四个平台版本/镜像变量，避免覆盖 `.env`。目标来自官方 Release 清单，逐通道 inspect 双架构 payload，拉取目标 GHCR digest；检查 Compose 配置与目标镜像 schema，然后通过管理 API 暂停并排空所有未结算效果，不杀 Job。
 
-备份处理限制为 512 MiB 内存缓冲，超过上限安全中止并保持暂停。暂停后生成 gzip 包装的 PostgreSQL custom dump，验证 SHA-256、解压内容及 `pg_restore --list` 中的控制/schema 数据；失败保持暂停。`.upgrade/` 保存本地互斥锁、逐步记录和备份，已排除 Git。硬中断留下锁时，先确认没有升级进程，再人工移除 `.upgrade/lock`；同一未完成记录不会被新 apply 覆盖。服务切换后核对健康、ready、schema、版本、实际容器 digest 和 Web HTTP，全部通过才恢复领取。
+备份处理限制为 512 MiB 内存缓冲，超过上限安全中止并保持暂停。暂停后生成 gzip 包装的 PostgreSQL custom dump，验证 SHA-256、解压内容及 `pg_restore --list` 中的控制/schema 数据；失败保持暂停。`.upgrade/` 保存本地互斥锁、逐步记录和备份，已排除 Git。硬中断留下锁时，先确认没有升级进程，再人工移除 `.upgrade/lock`；同一未完成记录不会被新 apply 覆盖。服务切换后最多等待 180 秒达到 ready，允许启动期间的暂态连接/HTTP 失败；随后核对 schema、版本、实际容器 digest 和 Web HTTP，全部通过才恢复领取。超时保持暂停。停止本地服务前再次直接核对本地数据库的暂停与排空状态，避免 API 地址误指其他部署。
 
 中断或失败不会自动恢复领取；执行 `rollback` 前必须确认数据库仍暂停且已排空。回滚只恢复记录中的镜像配置，保留数据库及暂停期间新入队/管理写入；备份供人工离线灾难恢复，**不会自动恢复旧数据库**。回滚完成仍暂停，管理员核验后调用 `/platform/claims/resume`。一旦记录到恢复领取意图但结果不明，拒绝自动回滚，必须先人工对账；已完成升级也不支持自动降级。
 
