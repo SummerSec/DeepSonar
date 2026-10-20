@@ -77,6 +77,14 @@ assert.match(
 );
 assert.match(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /rust_ASC/,
+);
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
+  /explicit droidasc-python fallback, never as a silent retry after a Rust failure/,
+);
+assert.match(
+  withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
   /Never invent device, traffic, or native\/OLLVM results from JADX, droidasc, or apkcheckpack/,
 );
 assert.doesNotMatch(

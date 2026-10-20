@@ -47,8 +47,8 @@ const OFFICIAL_RUNTIME_IMAGE_BOUNDARIES: Readonly<Record<string, RuntimeImageBou
     not_included: "DevEco、toy harness",
   },
   "deepsonar-mobile": {
-    toolset: "Android/iOS/OH：JADX/droidasc/apktool/adb/Frida 等",
-    not_included: "MobSF/GUI/Ghidra/IDA/DevEco/MCP；禁止 droidasc --gui",
+    toolset: "Android/iOS/OH：JADX/droidasc（默认 rust_ASC）/apktool/adb/Frida 等",
+    not_included: "MobSF/GUI/Ghidra/IDA/DevEco/MCP；rust_ASC 为 CLI-only；禁止 droidasc --gui",
   },
   "deepsonar-reverse": {
     toolset: "REA CLI 6.4.0 + Ghidra 12.1.4 + JDK 21",

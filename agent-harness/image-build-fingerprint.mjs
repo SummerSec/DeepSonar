@@ -248,6 +248,8 @@ export const PRESETS = {
       "deploy/mobile-hap.sh",
       "deploy/mobile-so.sh",
       "deploy/mobile-apkcheckpack-bin.sh",
+      "deploy/mobile-droidasc.sh",
+      "deploy/mobile-droidasc-python.sh",
       "deploy/openharmony-hdc-bin.sh",
       "deploy/vendor/openharmony-hdc/hdc",
       "deploy/vendor/openharmony-hdc/libusb_shared.so",

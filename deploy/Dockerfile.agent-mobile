@@ -1,13 +1,73 @@
 # DeepSonar 官方移动端审计运行时。project opt-in。
-# Android：JADX CLI + apktool + bundletool + apkeep + androguard + droidasc + ApkCheckPack + 官方 ADB + Frida/Objection
+# Android：JADX CLI + apktool + bundletool + apkeep + androguard + rust_ASC（默认 ASC；droidasc 兼容入口，Python ASC 仅 droidasc-python 显式回退）+ ApkCheckPack + 官方 ADB + Frida/Objection
 # Native .so：binutils + 官方 radare2 + LIEF（不装 Ghidra / IDA / Cutter）
 # iOS：Linux 宿主 libimobiledevice（无 Xcode / Simulator）
 # OpenHarmony：HAP 静态检查 + 官方 hdc（不烘焙完整 SDK / DevEco）
 # 不预装 jadx-gui、MobSF、Burp、mitmproxy、IDA、Ghidra、决策扫描器或第三方 MCP/GUI。
 ARG BASE_IMAGE=deepsonar-base:local
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
+ARG RUST_BUILDER_IMAGE=rust:1.99.1-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29
 
 FROM ${JDK17_IMAGE} AS jdk17
+
+# rust_ASC（MG1937/rust_ASC，Apache-2.0）：固定 tag/commit、radguard 子模块修订与 Cargo.lock，
+# 在构建平台上以 --locked --no-default-features 交叉编译 CLI-only 二进制（不启用上游默认的 MCP feature，
+# 因此不使用上游 release 产物）。最终运行阶段仍使用目标平台，并在镜像自检中实际执行该二进制。
+FROM --platform=$BUILDPLATFORM ${RUST_BUILDER_IMAGE} AS rust-asc-builder
+ARG TARGETARCH
+ARG RUST_ASC_VERSION=0.1.1
+ARG RUST_ASC_TAG=v0.1.1
+ARG RUST_ASC_REPO=https://github.com/MG1937/rust_ASC.git
+ARG RUST_ASC_COMMIT=236dd096669c99eb30f6e1af0b24e668eff55dd5
+ARG RUST_ASC_RADGUARD_COMMIT=290de20c925c4a2c7642b1a63c9997185a06e130
+ARG RUST_ASC_CARGO_LOCK_SHA256=06052ead70d1b755306a048fcbfa664cd0da789d6edb5f982f4a013cb3ca0293
+RUN set -eux; \
+  case "$TARGETARCH" in \
+    amd64) rust_target=x86_64-unknown-linux-gnu; gcc_prefix=x86_64-linux-gnu; cross_pkgs="gcc-x86-64-linux-gnu libc6-dev-amd64-cross" ;; \
+    arm64) rust_target=aarch64-unknown-linux-gnu; gcc_prefix=aarch64-linux-gnu; cross_pkgs="gcc-aarch64-linux-gnu libc6-dev-arm64-cross" ;; \
+    *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  host_target="$(rustc -vV | sed -n 's/^host: //p')"; \
+  if [ "$host_target" != "$rust_target" ]; then \
+    apt-get -o Acquire::Retries=3 update; \
+    apt-get -o Acquire::Retries=3 install -y --no-install-recommends $cross_pkgs; \
+    rm -rf /var/lib/apt/lists/*; \
+    rustup target add "$rust_target"; \
+    target_env="$(echo "$rust_target" | tr 'a-z-' 'A-Z_')"; \
+    export "CARGO_TARGET_${target_env}_LINKER=${gcc_prefix}-gcc"; \
+    export "CC_$(echo "$rust_target" | tr '-' '_')=${gcc_prefix}-gcc"; \
+    export "AR_$(echo "$rust_target" | tr '-' '_')=${gcc_prefix}-ar"; \
+  fi; \
+  git init -q /src/rust_ASC; \
+  cd /src/rust_ASC; \
+  git remote add origin "$RUST_ASC_REPO"; \
+  git fetch -q --depth 1 origin "refs/tags/${RUST_ASC_TAG}:refs/tags/${RUST_ASC_TAG}"; \
+  test "$(git rev-parse "${RUST_ASC_TAG}^{commit}")" = "$RUST_ASC_COMMIT"; \
+  git checkout -q --detach "$RUST_ASC_COMMIT"; \
+  test "$(git ls-tree HEAD radguard | awk '{print $3}')" = "$RUST_ASC_RADGUARD_COMMIT"; \
+  git -c protocol.file.allow=never submodule update -q --init --depth 1 radguard; \
+  test "$(git -C radguard rev-parse HEAD)" = "$RUST_ASC_RADGUARD_COMMIT"; \
+  echo "$RUST_ASC_CARGO_LOCK_SHA256  Cargo.lock" | sha256sum -c -; \
+  cargo build --release --locked --no-default-features --target "$rust_target"; \
+  install -d /out; \
+  install -m 0755 "target/${rust_target}/release/rust_ASC" /out/rust_ASC; \
+  install -m 0644 LICENSE /out/LICENSE; \
+  { \
+    echo "implementation=rust_ASC"; \
+    echo "version=${RUST_ASC_VERSION}"; \
+    echo "tag=${RUST_ASC_TAG}"; \
+    echo "source=${RUST_ASC_REPO}"; \
+    echo "commit=${RUST_ASC_COMMIT}"; \
+    echo "radguard_source=https://github.com/MG1937/radguard"; \
+    echo "radguard_commit=${RUST_ASC_RADGUARD_COMMIT}"; \
+    echo "cargo_lock_sha256=${RUST_ASC_CARGO_LOCK_SHA256}"; \
+    echo "cargo_features=--locked --no-default-features"; \
+    echo "target=${rust_target}"; \
+    echo "rustc=$(rustc --version)"; \
+    echo "license=Apache-2.0"; \
+    echo "binary_sha256=$(sha256sum /out/rust_ASC | cut -d' ' -f1)"; \
+  } > /out/BUILDINFO; \
+  cat /out/BUILDINFO
 FROM ${BASE_IMAGE} AS runtime-rootfs
 
 USER root
@@ -52,6 +112,9 @@ ARG FRIDA_SERVER_ARM64_SHA256=09d1fad867b27d69562a79289f4c412e85867f5d38ab728770
 ARG FRIDA_SERVER_X64_SHA256=5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c
 
 COPY --from=jdk17 /opt/java/openjdk /opt/deepsonar/jdks/17
+COPY --from=rust-asc-builder /out/ /opt/deepsonar/rust-asc/
+COPY deploy/mobile-droidasc.sh /tmp/mobile-droidasc.sh
+COPY deploy/mobile-droidasc-python.sh /tmp/mobile-droidasc-python.sh
 COPY deploy/mobile-env.sh /tmp/mobile-env.sh
 COPY deploy/mobile-adb.sh /tmp/mobile-adb.sh
 COPY deploy/mobile-adb-bin.sh /tmp/mobile-adb-bin.sh
@@ -157,9 +220,12 @@ RUN set -eux; \
   chmod 0755 /opt/deepsonar/apkcheckpack/ApkCheckPack; \
   install -m 0755 /tmp/mobile-apkcheckpack-bin.sh /opt/deepsonar/bin/apkcheckpack; \
   install -m 0755 /tmp/mobile-env.sh /opt/deepsonar/bin/mobile-env.sh; \
+  ln -s /opt/deepsonar/rust-asc/rust_ASC /opt/deepsonar/bin/rust_ASC; \
+  install -m 0755 /tmp/mobile-droidasc.sh /opt/deepsonar/bin/droidasc; \
+  install -m 0755 /tmp/mobile-droidasc-python.sh /opt/deepsonar/bin/droidasc-python; \
   rm -f /tmp/mobile-env.sh /tmp/mobile-adb.sh /tmp/mobile-adb-bin.sh \
     /tmp/mobile-hdc.sh /tmp/mobile-ios.sh /tmp/mobile-hap.sh /tmp/mobile-so.sh \
-    /tmp/mobile-apkcheckpack-bin.sh \
+    /tmp/mobile-apkcheckpack-bin.sh /tmp/mobile-droidasc.sh /tmp/mobile-droidasc-python.sh \
     /tmp/openharmony-hdc-bin.sh /tmp/hdc /tmp/libusb_shared.so; \
   arch="$(dpkg --print-architecture)"; \
   case "$arch" in \
@@ -186,7 +252,16 @@ RUN set -eux; \
   ln -s /opt/deepsonar/mobile-venv/bin/frida /opt/deepsonar/bin/frida; \
   ln -s /opt/deepsonar/mobile-venv/bin/objection /opt/deepsonar/bin/objection; \
   ln -s /opt/deepsonar/mobile-venv/bin/androguard /opt/deepsonar/bin/androguard; \
-  ln -s /opt/deepsonar/mobile-venv/bin/droidasc /opt/deepsonar/bin/droidasc; \
+  install -d -m 0755 /opt/deepsonar/droidasc-python; \
+  { \
+    echo "implementation=droidasc-python"; \
+    echo "package=droidasc"; \
+    echo "version=${DROIDASC_VERSION}"; \
+    echo "source=PyPI droidasc (MG1937/ASC)"; \
+    echo "license=Apache-2.0"; \
+    echo "binary=/opt/deepsonar/mobile-venv/bin/droidasc"; \
+    echo "role=explicit-fallback"; \
+  } > /opt/deepsonar/droidasc-python/BUILDINFO; \
   uv cache clean; \
   for pair in \
     "android-arm:${FRIDA_SERVER_ARM_SHA256}" \
@@ -206,7 +281,7 @@ RUN set -eux; \
   done; \
   if ! getent group deepsonar >/dev/null; then groupadd --gid 1001 deepsonar; fi; \
   if ! id deepsonar >/dev/null 2>&1; then useradd --uid 1001 --gid deepsonar --create-home --shell /bin/bash deepsonar; fi; \
-  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","droidasc","apkcheckpack","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
+  node -e 'const fs=require("node:fs"); const m={contract:"deepsonar.runtime.contract/v1",toolset:"mobile",imageKey:"deepsonar-mobile",project_opt_in:true,tools:["java","jadx","apktool","bundletool","apkeep","androguard","rust_ASC","droidasc","droidasc-python","apkcheckpack","readelf","objdump","r2","adb","hdc","idevice_id","ideviceinstaller","plistutil","iproxy","frida","objection","jq","unzip","node","claude"],device:{android:{protocol:"adb",binary:"/opt/deepsonar/platform-tools/adb",wrapper:"/opt/deepsonar/bin/adb",companion:["frida-server-android-arm","frida-server-android-arm64","frida-server-android-x86_64"],commands:["devices","shell","push","pull","install","forward","reverse"]},ios:{protocol:"usbmuxd",commands:["idevice_id","ideviceinstaller","plistutil","iproxy"]},openharmony:{protocol:"hdc",binary:"/opt/deepsonar/hdc/hdc",wrapper:"/opt/deepsonar/bin/hdc",companion:["libusb_shared.so"],commands:["list targets","shell","file send","file recv","install","hilog","fport","tconn"]}},asc:{default:"rust_ASC",compat:"droidasc",fallback:"droidasc-python",rust_buildinfo:"/opt/deepsonar/rust-asc/BUILDINFO",python_buildinfo:"/opt/deepsonar/droidasc-python/BUILDINFO"},entrypoints:{check:"/opt/deepsonar/bin/mobile-env.sh",adb:"/opt/deepsonar/bin/mobile-adb.sh",hdc:"/opt/deepsonar/bin/mobile-hdc.sh",ios:"/opt/deepsonar/bin/mobile-ios.sh",hap:"/opt/deepsonar/bin/mobile-hap.sh",so:"/opt/deepsonar/bin/mobile-so.sh"}}; fs.writeFileSync("/opt/deepsonar/tool-manifest.json",JSON.stringify(m,null,2)+"\n")'; \
   chown -R deepsonar:deepsonar /opt/deepsonar /workspace; \
   PATH="/opt/deepsonar/bin:/opt/deepsonar/jdks/17/bin:$PATH" /opt/deepsonar/bin/mobile-env.sh --check
 

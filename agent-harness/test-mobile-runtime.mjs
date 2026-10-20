@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -313,36 +314,190 @@ if (droidascPin?.version !== "0.1.1.post1" || droidascPin?.license !== "Apache-2
 if (!Array.isArray(droidascPin.capabilities) || !droidascPin.capabilities.includes("apk-xref-search")) {
   throw new Error(`droidasc capabilities must include apk-xref-search: ${JSON.stringify(droidascPin.capabilities)}`);
 }
+if (droidascPin.role !== "explicit-fallback" || droidascPin.entrypoint !== "droidasc-python") {
+  throw new Error(`Python droidasc must be the explicit droidasc-python fallback: ${JSON.stringify(droidascPin)}`);
+}
+const rustAscPin = mobileRuntime.sourceBuilds?.rust_ASC;
+if (rustAscPin?.version !== "0.1.1" || rustAscPin?.license !== "Apache-2.0" || rustAscPin?.commit !== "236dd096669c99eb30f6e1af0b24e668eff55dd5") {
+  throw new Error(`mobile-runtime.json must pin rust_ASC 0.1.1 @236dd096 Apache-2.0, got ${JSON.stringify(rustAscPin)}`);
+}
+if (!rustAscPin.capabilities?.includes("apk-xref-search") || rustAscPin.entrypoints?.default !== "rust_ASC") {
+  throw new Error(`rust_ASC must be the default apk-xref-search implementation: ${JSON.stringify(rustAscPin)}`);
+}
 const mobileDockerfile = readFileSync(join(root, "deploy/Dockerfile.agent-mobile"), "utf8");
 if (!mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1") || !mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}")) {
-  throw new Error("Dockerfile.agent-mobile must pin and install droidasc==${DROIDASC_VERSION}");
+  throw new Error("Dockerfile.agent-mobile must pin and install droidasc==${DROIDASC_VERSION} for the explicit fallback");
 }
-if (!mobileDockerfile.includes("/opt/deepsonar/bin/droidasc")) {
-  throw new Error("Dockerfile.agent-mobile must symlink /opt/deepsonar/bin/droidasc");
+if (!mobileDockerfile.includes("/opt/deepsonar/bin/droidasc-python") || !mobileDockerfile.includes("/opt/deepsonar/bin/rust_ASC")) {
+  throw new Error("Dockerfile.agent-mobile must install rust_ASC and the droidasc-python fallback entry");
 }
-const liveDroidasc = spawnSync("bash", ["-lc", "command -v droidasc >/dev/null && droidasc --help"], { encoding: "utf8" });
-if (liveDroidasc.status === 0) {
-  if (!liveDroidasc.stdout.includes("getclass") || !liveDroidasc.stdout.includes("findrefs")) {
-    throw new Error(`droidasc --help must mention getclass/findrefs\n${liveDroidasc.stdout}\n${liveDroidasc.stderr}`);
+if (!mobileDockerfile.includes("--locked --no-default-features")) {
+  throw new Error("Dockerfile.agent-mobile must build rust_ASC with --locked --no-default-features");
+}
+
+function runBash(script, env) {
+  if (process.platform === "win32") {
+    const envArgs = Object.entries(env).map(([key, value]) => `${key}=${value}`);
+    return spawnWsl(["--exec", "env", ...envArgs, "bash", "-c", script], { encoding: "utf8" });
   }
-} else {
-  // Image not present on the host: fake PATH presence check for harness unit smoke.
-  const fakeDroidasc = writeFake("mobile-droidasc-", "droidasc", `#!/usr/bin/env bash
-if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-  echo 'usage: droidasc [-h] {getclass,getmanifest,findrefs} ...'
-  echo 'getclass'
-  echo 'findrefs'
+  return spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, ...env } });
+}
+
+const ascDir = mkdtempSync(join(tmpdir(), "mobile-asc-"));
+const pythonMarker = join(ascDir, "python-ran");
+const rustAscFakeSource = `#!/usr/bin/env bash
+# Fake rust_ASC 0.1.1 mirroring upstream clap behavior: help on stderr with exit 1.
+case "\${1:-}" in
+  --help|-h|help)
+    printf 'Error: ASC tooling entry.\\n\\nUsage: rust_ASC <COMMAND>\\n\\nCommands:\\n  getclass\\n  listclass\\n  export\\n  getmanifest\\n  findrefs\\n' >&2
+    exit 1
+    ;;
+  mcp)
+    printf "Error: error: unrecognized subcommand 'mcp'\\n\\nUsage: rust_ASC <COMMAND>\\n" >&2
+    exit 1
+    ;;
+esac
+for arg in "$@"; do
+  if [[ "$arg" == --threads || "$arg" == --threads=* ]]; then
+    printf "Error: error: unexpected argument '--threads' found\\n" >&2
+    exit 1
+  fi
+  if [[ "$arg" == "Lfail;" ]]; then
+    printf 'Error: Class Lfail; not found in APK.\\n' >&2
+    exit 3
+  fi
+done
+printf 'ARGS:%s\\n' "$*"
+`;
+const rustAscHome = join(ascDir, "rust-asc");
+mkdirSync(rustAscHome);
+const rustAscFake = join(rustAscHome, "rust_ASC");
+writeFileSync(rustAscFake, rustAscFakeSource);
+chmodSync(rustAscFake, 0o755);
+if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(rustAscFake)]);
+const rustAscSha = createHash("sha256").update(readFileSync(rustAscFake)).digest("hex");
+const rustBuildinfo = (sha) => [
+  "implementation=rust_ASC",
+  "version=0.1.1",
+  "tag=v0.1.1",
+  "commit=236dd096669c99eb30f6e1af0b24e668eff55dd5",
+  "radguard_commit=290de20c925c4a2c7642b1a63c9997185a06e130",
+  "cargo_features=--locked --no-default-features",
+  `binary_sha256=${sha}`,
+  "",
+].join("\n");
+writeFileSync(join(rustAscHome, "BUILDINFO"), rustBuildinfo(rustAscSha));
+
+const pythonHome = join(ascDir, "droidasc-python");
+mkdirSync(pythonHome);
+writeFileSync(join(pythonHome, "BUILDINFO"), "implementation=droidasc-python\npackage=droidasc\nversion=0.1.1.post1\nrole=explicit-fallback\n");
+const pythonFake = writeFake("mobile-droidasc-py-", "droidasc", `#!/usr/bin/env bash
+: > ${JSON.stringify(toBashPath(pythonMarker))}
+if [[ "\${1:-}" == "--help" ]]; then
+  echo 'usage: droidasc [-h] {getclass,listclass,getmanifest,findrefs} ...'
   exit 0
 fi
-echo "unexpected $*" >&2
-exit 1
+printf 'PY:%s\\n' "$*"
 `);
-  const fakeHelp = process.platform === "win32"
-    ? spawnWsl(["--exec", "bash", toBashPath(fakeDroidasc), "--help"], { encoding: "utf8" })
-    : spawnSync(fakeDroidasc, ["--help"], { encoding: "utf8" });
-  if (fakeHelp.status !== 0 || !fakeHelp.stdout.includes("getclass") || !fakeHelp.stdout.includes("findrefs")) {
-    throw new Error(`droidasc --help presence smoke failed: status=${fakeHelp.status}\n${fakeHelp.stdout}\n${fakeHelp.stderr}`);
+
+// Minimal valid ZIP (empty archive: end-of-central-directory record only) and a corrupt one.
+const goodApk = join(ascDir, "fixture.apk");
+writeFileSync(goodApk, Buffer.concat([Buffer.from("PK\x05\x06", "latin1"), Buffer.alloc(18)]));
+const corruptApk = join(ascDir, "corrupt.apk");
+writeFileSync(corruptApk, "PK\x03\x04not-a-zip");
+const missingApk = join(ascDir, "missing.apk");
+
+const ascEnv = {
+  RUST_ASC_HOME: toBashPath(rustAscHome),
+  DROIDASC_PYTHON_HOME: toBashPath(pythonHome),
+  DROIDASC_PYTHON_BIN: toBashPath(pythonFake),
+};
+const droidasc = (args, extra = {}) => runHelper("deploy/mobile-droidasc.sh", args, { ...ascEnv, ...extra });
+const droidascPython = (args) => runHelper("deploy/mobile-droidasc-python.sh", args, ascEnv);
+const bashApk = (value) => toBashPath(value);
+const assertNoPython = (label) => {
+  if (existsSync(pythonMarker)) throw new Error(`${label}: droidasc must never fall back to Python ASC`);
+};
+
+const ascHelp = droidasc(["--help"]);
+if (ascHelp.status !== 0 || !ascHelp.stdout.includes("Usage: rust_ASC") || ascHelp.stdout.startsWith("Error:") || !ascHelp.stderr.includes("implementation=rust_ASC")) {
+  throw new Error(`droidasc --help must normalize rust_ASC help to stdout/exit 0: status=${ascHelp.status}\n${ascHelp.stdout}\n${ascHelp.stderr}`);
+}
+const ascThreads = droidasc(["listclass", "--threads", "4", bashApk(goodApk)]);
+if (ascThreads.status !== 0 || !ascThreads.stdout.includes(`ARGS:listclass --thread 4 ${bashApk(goodApk)}`) || !ascThreads.stderr.includes("renamed_threads=1") || !ascThreads.stderr.includes("version=0.1.1")) {
+  throw new Error(`droidasc must rename --threads to --thread in place: status=${ascThreads.status}\n${ascThreads.stdout}\n${ascThreads.stderr}`);
+}
+const ascThreadsEq = droidasc(["findrefs", "--threads=2", bashApk(goodApk), "string", "token"]);
+if (ascThreadsEq.status !== 0 || !ascThreadsEq.stdout.includes(`ARGS:findrefs --thread=2 ${bashApk(goodApk)} string token`)) {
+  throw new Error(`droidasc must rename --threads=N to --thread=N: status=${ascThreadsEq.status}\n${ascThreadsEq.stdout}\n${ascThreadsEq.stderr}`);
+}
+const ascPlain = droidasc(["getclass", "--thread", "8", "-o", "Main.java", bashApk(goodApk), "Lcom/poc/Main;"]);
+if (ascPlain.status !== 0 || !ascPlain.stdout.includes("ARGS:getclass --thread 8 -o Main.java") || !ascPlain.stderr.includes("renamed_threads=0")) {
+  throw new Error(`droidasc must pass native rust_ASC arguments unchanged: status=${ascPlain.status}\n${ascPlain.stdout}\n${ascPlain.stderr}`);
+}
+for (const [label, apk, message] of [["corrupt", corruptApk, "EOCD not found"], ["missing", missingApk, "No such file"]]) {
+  const result = droidasc(["findrefs", bashApk(apk), "string", "token"]);
+  if (result.status !== 1 || result.stdout.includes("ARGS:") || !result.stderr.includes("preflight=failed") || !result.stderr.includes(message)) {
+    throw new Error(`droidasc must fail the ${label} APK preflight instead of returning an empty exit-0 findrefs: status=${result.status}\n${result.stdout}\n${result.stderr}`);
   }
+}
+const ascFailure = droidasc(["getclass", bashApk(goodApk), "Lfail;"]);
+if (ascFailure.status !== 3 || !ascFailure.stderr.includes("not found in APK")) {
+  throw new Error(`droidasc must propagate rust_ASC failures unchanged: status=${ascFailure.status}\n${ascFailure.stdout}\n${ascFailure.stderr}`);
+}
+assertNoPython("rust failure");
+const ascMissingBin = droidasc(["listclass", bashApk(goodApk)], { RUST_ASC_BIN: toBashPath(join(ascDir, "missing-rust-asc")) });
+if (ascMissingBin.status !== 127 || !ascMissingBin.stderr.includes("droidasc-python")) {
+  throw new Error(`missing rust_ASC must exit 127 without fallback: status=${ascMissingBin.status}\n${ascMissingBin.stdout}\n${ascMissingBin.stderr}`);
+}
+assertNoPython("missing rust_ASC");
+const ascGui = droidasc([bashApk(goodApk), "--gui"]);
+if (ascGui.status !== 2) throw new Error(`droidasc --gui must be rejected: status=${ascGui.status}\n${ascGui.stderr}`);
+const ascInfo = droidasc(["--impl-info"]);
+if (ascInfo.status !== 0 || !ascInfo.stdout.includes("entry=droidasc") || !ascInfo.stdout.includes("implementation=rust_ASC") || !ascInfo.stdout.includes("commit=236dd096669c99eb30f6e1af0b24e668eff55dd5")) {
+  throw new Error(`droidasc --impl-info must report rust_ASC provenance: status=${ascInfo.status}\n${ascInfo.stdout}\n${ascInfo.stderr}`);
+}
+
+const pyRun = droidascPython(["getclass", bashApk(goodApk), "Lcom/poc/Main;", "--threads", "16"]);
+if (pyRun.status !== 0 || !pyRun.stdout.includes("--threads 16") || !pyRun.stderr.includes("implementation=droidasc-python version=0.1.1.post1")) {
+  throw new Error(`droidasc-python must run Python ASC explicitly with original arguments: status=${pyRun.status}\n${pyRun.stdout}\n${pyRun.stderr}`);
+}
+if (!existsSync(pythonMarker)) throw new Error("droidasc-python did not execute the Python ASC binary");
+const pyGui = droidascPython([bashApk(goodApk), "--gui"]);
+if (pyGui.status !== 2) throw new Error(`droidasc-python --gui must be rejected: status=${pyGui.status}\n${pyGui.stderr}`);
+const pyInfo = droidascPython(["--impl-info"]);
+if (pyInfo.status !== 0 || !pyInfo.stdout.includes("entry=droidasc-python") || !pyInfo.stdout.includes("version=0.1.1.post1")) {
+  throw new Error(`droidasc-python --impl-info must report Python provenance: status=${pyInfo.status}\n${pyInfo.stdout}\n${pyInfo.stderr}`);
+}
+
+// mobile-env.sh rust_ASC help self-check: upstream --help exits 1, so smoke_rust_asc must accept 0/1 with
+// complete help text, but still fail on launch errors, an MCP-enabled build, or a binary/record mismatch.
+const mobileEnvSource = readFileSync(join(root, "deploy/mobile-env.sh"), "utf8");
+const smokeStart = mobileEnvSource.indexOf("buildinfo_value() {");
+const smokeEnd = mobileEnvSource.indexOf("smoke_droidasc_entries() {");
+if (smokeStart < 0 || smokeEnd < 0) throw new Error("mobile-env.sh must define buildinfo_value and smoke_rust_asc before smoke_droidasc_entries");
+const smokeFunctions = mobileEnvSource.slice(smokeStart, smokeEnd);
+const runSmokeRustAsc = (home) => runBash(`set -euo pipefail\n${smokeFunctions}\nsmoke_rust_asc`, { RUST_ASC_HOME: toBashPath(home) });
+const smokeOk = runSmokeRustAsc(rustAscHome);
+if (smokeOk.status !== 0) throw new Error(`mobile-env.sh rust_ASC help smoke must accept upstream exit-1 help: status=${smokeOk.status}\n${smokeOk.stderr}`);
+const variantHome = (name, source, sha) => {
+  const home = join(ascDir, name);
+  mkdirSync(home);
+  const bin = join(home, "rust_ASC");
+  writeFileSync(bin, source);
+  chmodSync(bin, 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(bin)]);
+  writeFileSync(join(home, "BUILDINFO"), rustBuildinfo(sha ?? createHash("sha256").update(readFileSync(bin)).digest("hex")));
+  return home;
+};
+// Same help text and MCP-free behavior, but --help aborts (exit 134, e.g. panic=abort): only the exit-code gate can catch it.
+const crashingHome = variantHome("rust-asc-crash", rustAscFakeSource.replace("<COMMAND>\\n\\nCommands:\\n  getclass\\n  listclass\\n  export\\n  getmanifest\\n  findrefs\\n' >&2\n    exit 1", "<COMMAND>\\n\\nCommands:\\n  getclass\\n  listclass\\n  export\\n  getmanifest\\n  findrefs\\n' >&2\n    exit 134"));
+if (!readFileSync(join(crashingHome, "rust_ASC"), "utf8").includes("exit 134")) throw new Error("crash fixture did not switch the help exit code");
+const mcpHome = variantHome("rust-asc-mcp", rustAscFakeSource.replace("unrecognized subcommand 'mcp'", "Serve MCP tools over stdio."));
+const shaMismatchHome = variantHome("rust-asc-sha", rustAscFakeSource, "0".repeat(64));
+for (const [label, home] of [["crash exit 134", crashingHome], ["MCP-enabled build", mcpHome], ["binary SHA mismatch", shaMismatchHome]]) {
+  const result = runSmokeRustAsc(home);
+  if (result.status === 0) throw new Error(`mobile-env.sh rust_ASC help smoke must fail on ${label}\n${result.stdout}\n${result.stderr}`);
 }
 
 console.log("mobile runtime helper smoke ok");

@@ -144,6 +144,35 @@
       }
     }
   },
+  "sourceBuilds": {
+    "rust_ASC": {
+      "version": "0.1.1",
+      "tag": "v0.1.1",
+      "license": "Apache-2.0",
+      "capabilities": ["apk-decompile", "apk-xref-search", "apk-manifest-decode", "apk-class-list"],
+      "role": "default",
+      "entrypoints": { "default": "rust_ASC", "compat": "droidasc", "fallback": "droidasc-python" },
+      "source": "https://github.com/MG1937/rust_ASC",
+      "commit": "236dd096669c99eb30f6e1af0b24e668eff55dd5",
+      "cargoLockSha256": "06052ead70d1b755306a048fcbfa664cd0da789d6edb5f982f4a013cb3ca0293",
+      "cargoPackageVersion": "0.1.0",
+      "submodules": {
+        "radguard": {
+          "source": "https://github.com/MG1937/radguard",
+          "commit": "290de20c925c4a2c7642b1a63c9997185a06e130",
+          "license": "NOASSERTION"
+        }
+      },
+      "build": {
+        "builderImage": "rust:1.99.1-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29",
+        "command": "cargo build --release --locked --no-default-features --target <x86_64|aarch64>-unknown-linux-gnu",
+        "features": [],
+        "crossCompile": "builder runs on BUILDPLATFORM; arm64 uses gcc-aarch64-linux-gnu, amd64 uses gcc-x86-64-linux-gnu when the build host differs",
+        "record": "/opt/deepsonar/rust-asc/BUILDINFO"
+      },
+      "notes": "CLI only: upstream default feature mcp is disabled and upstream release binaries (built with MCP) are not used. Cargo.toml still says 0.1.0 at tag v0.1.1; provenance uses tag + commit. radguard has no LICENSE file or SPDX field at the pinned revision (recorded as NOASSERTION pending upstream clarification). --help exits 1 with help on stderr upstream; the droidasc entry (default Agent entry, always Rust) normalizes help to exit 0, renames --threads to --thread without moving it, and rejects a missing/unreadable/non-ZIP APK with exit 1 because rust_ASC 0.1.1 findrefs returns exit 0 with no output for such input."
+    }
+  },
   "managed": {
     "python": {
       "source": "astral/python-build-standalone",
@@ -162,7 +191,9 @@
         "version": "0.1.1.post1",
         "license": "Apache-2.0",
         "capabilities": ["apk-decompile", "apk-xref-search", "apk-manifest-decode"],
-        "source": "PyPI droidasc (MG1937/ASC); CLI only — do not use --gui"
+        "role": "explicit-fallback",
+        "entrypoint": "droidasc-python",
+        "source": "PyPI droidasc (MG1937/ASC); explicit fallback only via droidasc-python (the droidasc command now runs rust_ASC); CLI only — do not use --gui"
       },
       "lief": { "version": "1.0.0", "license": "Apache-2.0", "capabilities": ["elf-parse"] }
     },
@@ -178,7 +209,7 @@
   "toolsets": {
     "mobile": {
       "imageKey": "deepsonar-mobile",
-      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned droidasc (Droid ASC) for on-demand APK class/manifest/xref CLI and pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes a pinned CLI-only rust_ASC source build as the default on-demand APK class/manifest/xref CLI (droidasc is a Rust compat entry; Python Droid ASC stays as the explicit droidasc-python fallback) and pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
       "maxSizeMiB": 2400
     }
   }
