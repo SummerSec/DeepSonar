@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 59);
+INSERT INTO schema_meta (id, version) VALUES ('global', 61);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -932,6 +932,25 @@ CREATE INDEX agent_roles_project_idx
 -- #740：平台级全局暂停领取（管理员控制，持久化在单例行）。所有 Scheduler 副本在
 -- dispatch claim advisory lock 内读取；暂停只阻止新的 pending → claimed，不杀在途 Job。
 -- 暂停字段与 rules_json 分开存储：PATCH /global-settings、平台数据包导入不会改写它。
+-- Upgrade maintenance is separate from claims pause. Host-owned generation and
+-- database identity fence old processes; this row gates trusted new processes.
+CREATE TABLE platform_upgrade_state (
+  id text PRIMARY KEY DEFAULT 'global' CHECK (id = 'global'),
+  generation text NOT NULL DEFAULT '',
+  runtime_role text NOT NULL DEFAULT '',
+  target_version text NOT NULL DEFAULT '',
+  phase text NOT NULL DEFAULT 'active' CHECK (phase IN ('preparing', 'active')),
+  worker_generation_token_hash text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT platform_upgrade_generation_check CHECK (
+    (generation = '' AND phase = 'active' AND runtime_role = '' AND target_version = '' AND worker_generation_token_hash = '')
+    OR (generation ~ '^[a-f0-9-]{36}$' AND char_length(runtime_role) BETWEEN 1 AND 63
+        AND target_version ~ '^[0-9]+[.][0-9]+[.][0-9]+$'
+        AND worker_generation_token_hash ~ '^[a-f0-9]{64}$')
+  )
+);
+INSERT INTO platform_upgrade_state (id) VALUES ('global');
+
 CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',
   rules_json jsonb NOT NULL DEFAULT '{}',
@@ -2120,6 +2139,9 @@ CREATE TABLE worker_nodes (
   protocol text NOT NULL DEFAULT 'http',
   kind text NOT NULL DEFAULT 'remote',
   status text NOT NULL DEFAULT 'online',
+  protocol_version integer NOT NULL DEFAULT 0 CHECK (protocol_version >= 0),
+  platform_version text NOT NULL DEFAULT '',
+  deployment_generation text NOT NULL DEFAULT '',
   api_key_fingerprint text NOT NULL,
   node_token_hash text NOT NULL,
   node_token_prefix text NOT NULL,

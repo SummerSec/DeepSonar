@@ -8,6 +8,7 @@ COPY apps apps
 COPY packages packages
 COPY database database
 COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
+COPY deploy/worker-register.mjs deploy/worker-register-contract.mjs deploy/
 COPY deploy/web-server.mjs web-server.mjs
 COPY agent-harness/demo-repo agent-harness/demo-repo
 RUN cp -a apps/web/dist /app/public

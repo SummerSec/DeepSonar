@@ -16,6 +16,7 @@ export interface PreflightSnapshot {
   database_schema_version: number;
   target_schema_version: number;
   environment: Record<string, string>;
+  host_files?: import("./platform-upgrade-preflight-environment.js").HostFileEvidence[];
   global_settings: PreflightRow[];
   projects: PreflightRow[];
   agent_roles: PreflightRow[];

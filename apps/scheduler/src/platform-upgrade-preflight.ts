@@ -1,3 +1,4 @@
+import { validatePreflightEnvironment, validateNativeProviderStructure } from "./platform-upgrade-preflight-environment.js";
 import { z } from "zod";
 import { AgentCliWriteSchema, FindingProtocolConfig, CURRENT_AGENT_CLIS } from "@deepsonar/shared-types";
 import { config, configInputErrors } from "./config.js";
@@ -6,13 +7,14 @@ import { GlobalRulesPatch, SettingsPatchBody } from "./settings-validation.js";
 import { RoleConfigPutBody } from "./role-config-schema.js";
 import { validateRoleConfigValues } from "./role-config-values.js";
 import { providerCatalogEntry, sanitizeCredentialMetadata, validateCredentialCompatibility, validateCredentialAgentCliExclusive } from "./credentials.js";
-import { normalizeProviderSettings, extractModelsFromSettings } from "./provider-settings.js";
+import { normalizeProviderSettings, materializeProviderSettings, extractModelsFromSettings } from "./provider-settings.js";
 import { PREFLIGHT_SCHEMA, PREFLIGHT_RESULT_SCHEMA, PREFLIGHT_TABLES, type PreflightSnapshot, type PreflightResult, type PreflightRow } from "./platform-upgrade-preflight-contract.js";
 
 const Row = z.record(z.string(), z.unknown());
 const Snapshot = z.object({
   schema: z.literal(PREFLIGHT_SCHEMA), database_schema_version: z.number().int(), target_schema_version: z.number().int(),
   environment: z.record(z.string(), z.string()),
+  host_files: z.array(z.object({ key: z.string(), path: z.string(), exists: z.boolean(), regular_file: z.boolean(), readable: z.boolean(), read_only: z.boolean(), mode: z.number().int().min(0).max(4095) }).strict()).max(100).optional(),
   ...Object.fromEntries(PREFLIGHT_TABLES.map((table) => [table, z.array(Row)])),
 }).strict();
 const ProjectConfig = SettingsPatchBody.extend({ skill_source_allowlist_configured: z.boolean().optional() }).strict();
@@ -45,8 +47,8 @@ function record(value: unknown): value is PreflightRow {
 export function validatePlatformUpgradeSnapshot(input: unknown): PreflightResult {
   const result: PreflightResult = {
     schema: PREFLIGHT_RESULT_SCHEMA, ok: false, blocking_errors: [],
-    coverage: ["schema_versions", "environment_bootstrap", "platform_rules", "project_settings", "role_configuration", "role_config_files", "credential_configuration", "configuration_references"],
-    not_checked: ["credential_authentication", "registry_availability", "historical_job_snapshots", "environment_unknown_extensions", "environment_string_semantics", "credential_secrets_and_key_files", "native_provider_extension_fields", "skill_source_contents"],
+    coverage: ["schema_versions", "environment_bootstrap", "environment_semantics", "required_host_file_metadata", "platform_rules", "project_settings", "role_configuration", "role_config_files", "credential_configuration", "configuration_references"],
+    not_checked: ["credential_authentication", "registry_availability", "historical_job_snapshots", "environment_unknown_extensions", "credential_decryption_and_file_key_format", "external_service_authentication", "native_provider_extension_fields", "skill_source_contents"],
   };
   const block = (code: string, location: string) => result.blocking_errors.push({ code, location, message: "Configuration is incompatible with the target scheduler contract" });
   const check = (code: string, location: string, fn: () => unknown) => {
@@ -56,6 +58,7 @@ export function validatePlatformUpgradeSnapshot(input: unknown): PreflightResult
   const snapshot = input as PreflightSnapshot;
   if (snapshot.database_schema_version !== SCHEMA_VERSION) block("DATABASE_SCHEMA_MISMATCH", "database_schema_version");
   if (snapshot.target_schema_version !== SCHEMA_VERSION) block("TARGET_SCHEMA_MISMATCH", "target_schema_version");
+  validatePreflightEnvironment(snapshot, block);
   for (const key of configInputErrors) block("INVALID_BOOTSTRAP_VALUE", `environment.${key}`);
   if (!["real", "fake"].includes(config.runtime.agentMode)) block("INVALID_AGENT_MODE", "environment.AGENT_MODE");
   if (config.device.invalidRigEntries.length) block("INVALID_DEVICE_RIGS", "environment.DEEPSONAR_DEVICE_RIGS");
@@ -102,8 +105,9 @@ export function validatePlatformUpgradeSnapshot(input: unknown): PreflightResult
       check("INVALID_AGENT_CLI", location + ".agent_cli", () => AgentCliWriteSchema.parse(row.agent_cli));
       check("CREDENTIAL_CLI_INCOMPATIBLE", location + ".agent_cli", () => validateCredentialCompatibility(String(row.agent_cli), String(row.provider)) === null);
       check("INVALID_PROVIDER_SETTINGS", location + ".settings_config_json", () => {
-        if (!record(row.settings_config_json)) return false;
+        if (!record(row.settings_config_json) || !validateNativeProviderStructure(row.settings_config_json)) return false;
         normalizeProviderSettings(String(row.agent_cli), row.settings_config_json, String(row.provider));
+        materializeProviderSettings({ agentCli: String(row.agent_cli), settingsConfig: row.settings_config_json });
         return true;
       });
     }

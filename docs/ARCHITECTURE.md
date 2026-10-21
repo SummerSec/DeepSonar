@@ -623,7 +623,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 `context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
 
-账号模型编辑与探测回写（#748 / #749）：只有显式改 Claude 主模型才统一各 tier / subagent 的模型键，普通编辑保留原生配置中的独立路由。探测失败的有界摘要对独立密钥列、配置中的其他秘密值及 URL 凭据脱敏，并清除 C0/C1 控制字符。HTTP 402 / 额度类错误归入 `quota_exhausted`，模型不可用归入 `model_unavailable`；补充目录只作为诊断和编辑参考。健康与目录回写必须核对创建探测时的 settings、CLI、项目、Provider、公开元数据和 key version，变更后返回 409，不能把旧模型的结果写回新配置。基线重建的角色模板匹配统一 LF/CRLF，schema 仍以 v59 为唯一受支持版本。
+账号模型编辑与探测回写（#748 / #749）：只有显式改 Claude 主模型才统一各 tier / subagent 的模型键，普通编辑保留原生配置中的独立路由。探测失败的有界摘要对独立密钥列、配置中的其他秘密值及 URL 凭据脱敏，并清除 C0/C1 控制字符。HTTP 402 / 额度类错误归入 `quota_exhausted`，模型不可用归入 `model_unavailable`；补充目录只作为诊断和编辑参考。健康与目录回写必须核对创建探测时的 settings、CLI、项目、Provider、公开元数据和 key version，变更后返回 409，不能把旧模型的结果写回新配置。基线重建的角色模板匹配统一 LF/CRLF，schema 仍以 `database/schema.sql` 与 `schema-version.ts` 一致的单一基线为准。
 
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 

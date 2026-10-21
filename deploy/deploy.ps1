@@ -8,7 +8,7 @@ param(
   [string]$Action = "up",
 
   [Parameter(Position = 1)]
-  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback")]
+  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback", "resume-rollback")]
   [string]$Mode = "real",
 
   [Parameter(Position = 2)]
@@ -20,18 +20,24 @@ param(
   [string]$UpgradeVersion,
   [string]$ApiUrl,
   [string]$WebUrl,
+  [string]$ApprovePlanHash,
+  [string]$Nodes,
+  [switch]$ResetRoleIdentity,
 
   [switch]$NoBuild
 )
 
 $ErrorActionPreference = "Stop"
 if ($Action -eq "upgrade") {
-  if ($Mode -notin @("check", "apply", "rollback")) { throw "upgrade requires check, apply or rollback" }
+  if ($Mode -notin @("check", "apply", "rollback", "resume-rollback")) { throw "upgrade requires check, apply, rollback or resume-rollback" }
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "upgrade requires Node.js >=22" }
   $upgradeArgs = @((Join-Path $PSScriptRoot "platform-upgrade-host.mjs"), $Mode)
   if ($UpgradeVersion) { $upgradeArgs += @("--to", $UpgradeVersion) }
   if ($ApiUrl) { $upgradeArgs += @("--api", $ApiUrl) }
   if ($WebUrl) { $upgradeArgs += @("--web-url", $WebUrl) }
+  if ($ApprovePlanHash) { $upgradeArgs += @("--approve-plan-hash", $ApprovePlanHash) }
+  if ($Nodes) { $upgradeArgs += @("--nodes", $Nodes) }
+  if ($ResetRoleIdentity) { $upgradeArgs += "--reset-role-identity" }
   & node @upgradeArgs
   exit $LASTEXITCODE
 }

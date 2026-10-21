@@ -1,3 +1,4 @@
+import { AdmissionMaintenanceBlocked, createAdmissionMaintenanceGate, type AdmissionUpgradeState } from "./maintenance.js";
 import { execFile, spawn } from "node:child_process";
 import { createDecipheriv, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -90,6 +91,7 @@ function requireImmutableScanner(name: ScannerName): string {
 }
 
 async function docker(args: string[], timeout = 15 * 60_000, maxBuffer = 64 * 1024 * 1024): Promise<string> {
+  await maintenance.requireActive();
   const { stdout } = await execFileP("docker", args, { timeout, maxBuffer });
   return stdout.trim();
 }
@@ -146,6 +148,7 @@ async function verifyImageSignature(resolvedRef: string) {
 }
 
 async function claimScan(): Promise<Record<string, unknown> | null> {
+  await maintenance.requireActive();
   return sql.begin(async (tx) => {
     const [scan] = await tx`
       SELECT s.id, s.runtime_image_version_id
@@ -277,6 +280,7 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   if (!vulnPolicy.ok) throw new Error(vulnPolicy.message);
 
   const platforms = [`${String(inspect.Os ?? "linux")}/${String(inspect.Architecture ?? "unknown")}`];
+  await maintenance.requireActive();
   const scanSummary = {
     contract: "passed",
     signature: signatureScan.status,
@@ -410,7 +414,10 @@ async function tick() {
   const row = await claimScan();
   if (!row) return;
   try { await inspectAndScan(row); }
-  catch (error) { await fail(row, error); }
+  catch (error) {
+    if (error instanceof AdmissionMaintenanceBlocked || !await maintenance.authorized()) return;
+    await fail(row, error);
+  }
 }
 
 /** 只发现新 digest，不自动替换；新版本仍从 quarantined 开始。 */
@@ -477,19 +484,36 @@ async function queueContinuousRescans() {
       )`;
 }
 
+const maintenance = createAdmissionMaintenanceGate({
+  identity: { generation: process.env.DEEPSONAR_UPGRADE_GENERATION ?? "", version: process.env.DEEPSONAR_VERSION ?? "" },
+  readState: async () => {
+    const [row] = await sql`
+      SELECT phase, generation, runtime_role, target_version, CURRENT_USER AS current_role
+      FROM platform_upgrade_state WHERE id = 'global'`;
+    return row ? row as unknown as AdmissionUpgradeState : null;
+  },
+  start: (registerStop) => {
+    const launch = (task: () => Promise<unknown>) => {
+      void (async () => { if (await maintenance.authorized()) await task(); })().catch((error) => {
+        if (!(error instanceof AdmissionMaintenanceBlocked)) console.error("[image-admission] background task failed");
+      });
+    };
+    for (const [task, interval] of [
+      [tick, pollMs], [checkTrackedTags, updateCheckMs],
+      [queueContinuousRescans, continuousRescanMs], [cleanupAdmissionProbes, 5 * 60_000],
+    ] as const) {
+      const timer = setInterval(() => launch(task), interval);
+      registerStop(() => clearInterval(timer));
+    }
+    launch(tick); launch(queueContinuousRescans); launch(cleanupAdmissionProbes);
+  },
+});
 console.log(`[image-admission] worker=${workerId} poll=${pollMs}ms`);
-const timer = setInterval(() => void tick().catch((error) => console.error("[image-admission] tick failed", error)), pollMs);
-const updateTimer = setInterval(() => void checkTrackedTags().catch((error) => console.error("[image-admission] update check failed", error)), updateCheckMs);
-const rescanTimer = setInterval(() => void queueContinuousRescans().catch((error) => console.error("[image-admission] rescan queue failed", error)), continuousRescanMs);
-const cleanupTimer = setInterval(() => void cleanupAdmissionProbes().catch((error) => console.error("[image-admission] probe cleanup failed", error)), 5 * 60_000);
-void tick();
-void queueContinuousRescans();
-void cleanupAdmissionProbes().catch((error) => console.error("[image-admission] probe cleanup failed", error));
+const maintenanceTimer = setInterval(() => void maintenance.refresh(), 1_000);
+void maintenance.refresh();
 const shutdown = async () => {
-  clearInterval(timer);
-  clearInterval(updateTimer);
-  clearInterval(rescanTimer);
-  clearInterval(cleanupTimer);
+  clearInterval(maintenanceTimer);
+  maintenance.close();
   await sql.end();
   process.exit(0);
 };

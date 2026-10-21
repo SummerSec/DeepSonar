@@ -95,6 +95,16 @@ jobs:
       - name: Target image offline upgrade configuration preflight
         run: pnpm ci:unit:platform-upgrade-preflight
 
+      - name: Maintenance and managed node upgrade unit
+        run: pnpm ci:unit:platform-upgrade-maintenance
+
+      - name: Isolated database upgrade and worker fencing
+        env:
+          DEEPSONAR_FENCE_PG_TEST: "1"
+          UPGRADE_SCHEMA_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:platform-upgrade
+
       - name: Scheduler startup gate unit
         run: pnpm ci:unit:startup-gate
 

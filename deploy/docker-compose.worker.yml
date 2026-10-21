@@ -39,6 +39,9 @@ services:
       opensandbox:
         condition: service_healthy
     environment:
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:?set the control-plane release version}
+      DEEPSONAR_DEPLOYMENT_GENERATION: ${DEEPSONAR_DEPLOYMENT_GENERATION:-}
+      DEEPSONAR_WORKER_GENERATION_TOKEN: ${DEEPSONAR_WORKER_GENERATION_TOKEN:-}
       DEEPSONAR_CONTROL_PLANE: ${DEEPSONAR_CONTROL_PLANE:?set the Scheduler base URL}
       DEEPSONAR_WORKER_BOOTSTRAP_TOKEN: ${DEEPSONAR_WORKER_BOOTSTRAP_TOKEN:?set the control-plane bootstrap token}
       DEEPSONAR_WORKER_NODE_ID: ${DEEPSONAR_WORKER_NODE_ID:-}
@@ -52,6 +55,7 @@ services:
       OPEN_SANDBOX_PROTOCOL: ${OPEN_SANDBOX_PROTOCOL:-http}
     volumes:
       - ./worker-register.mjs:/agent/worker-register.mjs:ro
+      - ./worker-register-contract.mjs:/agent/worker-register-contract.mjs:ro
       - worker-agent-state:/var/lib/deepsonar-worker
     command: ["node", "/agent/worker-register.mjs"]
 

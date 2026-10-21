@@ -1,6 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const WORKER_NODE_STALE_DEFAULT_SEC = 45;
+/** Registration-agent protocol; unrelated to the OpenSandbox server version. */
+export const WORKER_PROTOCOL_VERSION = 1;
 export const LOCAL_WORKER_ID = "local";
 export const RESERVED_WORKER_NODE_IDS = [LOCAL_WORKER_ID] as const;
 
@@ -32,6 +34,9 @@ export interface WorkerNodeRecord {
   protocol: WorkerProtocol;
   kind: WorkerKind;
   status: WorkerStatus;
+  protocolVersion: number;
+  platformVersion: string;
+  deploymentGeneration: string;
   apiKeyFingerprint: string;
   nodeTokenHash: string;
   nodeTokenPrefix: string;
@@ -205,6 +210,9 @@ export function localWorkerFromEnv(input: {
     protocol: input.protocol,
     kind: "local",
     status: "online",
+    protocolVersion: WORKER_PROTOCOL_VERSION,
+    platformVersion: process.env.DEEPSONAR_VERSION?.trim() ?? "",
+    deploymentGeneration: process.env.DEEPSONAR_DEPLOYMENT_GENERATION?.trim() ?? "",
     apiKeyFingerprint: fingerprintApiKey(input.apiKey),
     capacity: parseWorkerCapacity({
       maxSandboxes: input.maxSandboxes,
@@ -226,6 +234,9 @@ export function publicWorkerView(node: DispatchableWorker, now: number, staleAft
     endpoint: node.endpoint,
     protocol: node.protocol,
     kind: node.kind,
+    protocol_version: node.protocolVersion,
+    platform_version: node.platformVersion,
+    deployment_generation: node.deploymentGeneration,
     status: effectiveWorkerStatus(node, now, staleAfterMs),
     capacity: {
       max_sandboxes: node.capacity.maxSandboxes,

@@ -32,14 +32,16 @@ services:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      PGPASSWORD: ${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD:?}}
+      PGUSER: ${DEEPSONAR_DATABASE_USER:-deepsonar}
+      PGDATABASE: ${DEEPSONAR_DATABASE_NAME:-deepsonar}
     volumes:
       - backup_data:/backups
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         while true; do
-          pg_dump -h postgres -U deepsonar deepsonar | gzip > "/backups/deepsonar-$$(date +%Y%m%d-%H%M%S).sql.gz"
+          pg_dump -h postgres | gzip > "/backups/deepsonar-$$(date +%Y%m%d-%H%M%S).sql.gz"
           echo "[backup] done $$(date)"
           find /backups -name 'deepsonar-*.sql.gz' -mtime +7 -delete
           sleep 86400
@@ -112,7 +114,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${DEEPSONAR_DATABASE_NAME:-deepsonar}
       SCHEDULER_HOST: 0.0.0.0
       SCHEDULER_PORT: 3100
       DEEPSONAR_AUTH_REQUIRED: "true"
@@ -175,7 +178,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${DEEPSONAR_DATABASE_NAME:-deepsonar}
       DEEPSONAR_IMAGE_REGISTRY: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}
       DEEPSONAR_IMAGE_SCAN_VOLUME: deepsonar_admission_scan
     volumes:

@@ -143,7 +143,7 @@ import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
-import { bindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
+import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { readPlatformClaimsControl } from "./domains/platform-claims/store.js";
@@ -1804,10 +1804,12 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
  * jobs 表触发器 pg_notify('deepsonar_jobs') → LISTEN 收到即跑一轮 dispatchOnce。
  * 重入保护：运行中再来事件只标记补跑，不并发抢。
  */
+let dispatcherStopped = false;
 let kickRunning = false;
 let kickAgain = false;
 
 export function kickDispatcher() {
+  if (dispatcherStopped) return;
   if (kickRunning) {
     kickAgain = true;
     return;
@@ -1818,7 +1820,7 @@ export function kickDispatcher() {
       do {
         kickAgain = false;
         await dispatchOnce();
-      } while (kickAgain);
+      } while (kickAgain && !dispatcherStopped);
     } catch (e) {
       console.error("[dispatcher]", e);
     } finally {
@@ -1828,14 +1830,17 @@ export function kickDispatcher() {
 }
 
 export function startDispatcher() {
+  dispatcherStopped = false;
+  let stopped = false;
   // Wire schedule wake before any kick so future start_at can re-arm safely.
-  bindScheduleWake(kickDispatcher);
+  bindScheduleWake(() => { if (!stopped) kickDispatcher(); });
 
   // 事件源：DB LISTEN/NOTIFY（0005_job_events.sql；NOTIFY 提交后投递，与事务可见性一致）
-  const listenPromise = sql.listen("deepsonar_jobs", () => kickDispatcher());
+  const listenPromise = sql.listen("deepsonar_jobs", () => { if (!stopped) kickDispatcher(); });
   // 启动补跑： scheduler 停机期间堆积的 pending job 不会产生新事件，先清一次
   void listenPromise
     .then(() => {
+      if (stopped) return;
       kickDispatcher();
       void refreshScheduleWakeFromDb();
     })
@@ -1848,6 +1853,10 @@ export function startDispatcher() {
     console.log(`[dispatcher] 兜底轮询已开启：${config.timeouts.dispatchPollSec}s（默认应关闭，事件驱动）`);
   }
   return () => {
+    stopped = true;
+    dispatcherStopped = true;
+    kickAgain = false;
+    unbindScheduleWake();
     if (timer) clearInterval(timer);
     void listenPromise.then((l) => l.unlisten()).catch(() => {});
   };

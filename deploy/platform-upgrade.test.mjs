@@ -172,11 +172,11 @@ for (const shell of ['sh', 'pwsh']) {
       const log = join(temp, 'args');
       writeFileSync(join(bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$UPGRADE_ARG_LOG"\nexit 17\n', { mode: 0o755 });
       const args = shell === 'sh'
-        ? [entry, 'upgrade', 'apply', '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080']
-        : ['-NoProfile', '-File', entry, 'upgrade', 'apply', '-UpgradeVersion', 'v1.2.3', '-ApiUrl', 'http://127.0.0.1:3100', '-WebUrl', 'http://127.0.0.1:8080'];
+        ? [entry, 'upgrade', 'apply', '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']
+        : ['-NoProfile', '-File', entry, 'upgrade', 'apply', '-UpgradeVersion', 'v1.2.3', '-ApiUrl', 'http://127.0.0.1:3100', '-WebUrl', 'http://127.0.0.1:8080', '-ApprovePlanHash', 'abc', '-Nodes', 'node inventory.json', '-ResetRoleIdentity'];
       const result = spawnSync(shell, args, { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, UPGRADE_ARG_LOG: log }, encoding: 'utf8' });
       assert.equal(result.status, 17, result.stderr);
-      assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [join(temp, 'platform-upgrade-host.mjs'), 'apply', '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080']);
+      assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [join(temp, 'platform-upgrade-host.mjs'), 'apply', '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']);
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
 }

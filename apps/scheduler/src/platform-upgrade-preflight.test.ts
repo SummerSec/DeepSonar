@@ -139,3 +139,22 @@ test("offline local dependency graph never imports DB, routes, core or schema in
   }
   visit(new URL("./platform-upgrade-preflight.ts", import.meta.url));
 });
+
+test("offline environment semantics reject malformed URLs, enums and key encodings without echoing secrets", () => {
+  for (const [key, value] of Object.entries({ DATABASE_URL: "https://secret.invalid", OPEN_SANDBOX_DOMAIN: "host/path", BLOB_STORE: "unexpected", BLOB_S3_FORCE_PATH_STYLE: "typo", DEEPSONAR_MASTER_KEY: "secret-invalid-key", DEEPSONAR_API_SANDBOX_URL: "file:///private" })) {
+    const snapshot = fixture(); snapshot.environment[key] = value;
+    const report = validatePlatformUpgradeSnapshot(snapshot);
+    assert.ok(report.blocking_errors.some(error => error.code === "INVALID_ENVIRONMENT_VALUE"));
+    assert.ok(!JSON.stringify(report).includes(value));
+  }
+});
+test("required mounted master key needs matching read-only readable regular-file evidence", () => {
+  const snapshot = fixture(); snapshot.environment.DEEPSONAR_MASTER_KEY_FILE = "/run/secrets/master";
+  assert.ok(codes(snapshot).includes("REQUIRED_HOST_FILE_UNVERIFIED"));
+  const evidence = {key: "DEEPSONAR_MASTER_KEY_FILE", path: "/run/secrets/master", exists: true, regular_file: true, readable: true, read_only: true, mode: 0o600};
+  snapshot.host_files = [evidence]; assert.deepEqual(codes(snapshot), []);
+  for (const change of [{exists: false}, {regular_file: false}, {readable: false}, {read_only: false}, {mode: 0o666}, {path: "/other"}]) {
+    snapshot.host_files = [{...evidence, ...change}];
+    assert.ok(codes(snapshot).includes("REQUIRED_HOST_FILE_UNVERIFIED"));
+  }
+});

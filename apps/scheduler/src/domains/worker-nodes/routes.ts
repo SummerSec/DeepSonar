@@ -20,7 +20,14 @@ const CapacityBody = z.object({
   cpu: z.number().int().min(1).max(512),
 }).strict();
 
+const ReleaseIdentity = {
+  protocol_version: z.number().int().positive(),
+  platform_version: z.string().trim().min(1).max(128),
+  deployment_generation: z.string().max(128),
+};
+
 const RegisterBody = z.object({
+  ...ReleaseIdentity,
   node_id: z.string().trim().min(1).max(64),
   endpoint: z.string().trim().min(1).max(256),
   protocol: z.enum(["http", "https"]).optional(),
@@ -30,6 +37,9 @@ const RegisterBody = z.object({
 }).strict();
 
 const HeartbeatBody = z.object({
+  protocol_version: ReleaseIdentity.protocol_version.optional(),
+  platform_version: ReleaseIdentity.platform_version.optional(),
+  deployment_generation: ReleaseIdentity.deployment_generation.optional(),
   node_id: z.string().trim().min(1).max(64).optional(),
   endpoint: z.string().trim().min(1).max(256).optional(),
   protocol: z.enum(["http", "https"]).optional(),
@@ -138,6 +148,11 @@ export function registerWorkerNodeRoutes(app: FastifyInstance): void {
       const body = RegisterBody.parse(req.body);
       nodeId = body.node_id;
       const { node, nodeToken } = await registerRemoteWorker({
+        generationToken: z.string().max(512).optional().parse(req.headers["x-deepsonar-worker-generation-token"]),
+        existingNodeToken: z.string().max(512).optional().parse(req.headers["x-deepsonar-worker-node-token"]),
+        protocolVersion: body.protocol_version,
+        platformVersion: body.platform_version,
+        deploymentGeneration: body.deployment_generation,
         nodeId: body.node_id,
         endpoint: body.endpoint,
         protocol: body.protocol,
@@ -185,6 +200,9 @@ export function registerWorkerNodeRoutes(app: FastifyInstance): void {
       nodeId = body.node_id;
       const node = await heartbeatWorker({
         token,
+        protocolVersion: body.protocol_version,
+        platformVersion: body.platform_version,
+        deploymentGeneration: body.deployment_generation,
         nodeId: body.node_id,
         endpoint: body.endpoint,
         protocol: body.protocol,
@@ -201,7 +219,7 @@ export function registerWorkerNodeRoutes(app: FastifyInstance): void {
         });
         return reply.code(401).send({ error: "invalid worker node token", error_code: "WORKER_NODE_TOKEN_INVALID" });
       }
-      return { node_id: node.id, status: "online" };
+      return { node_id: node.id, status: node.status };
     } catch (error) {
       const mapped = workerNodeHttpError(error);
       await auditWorker(req, {

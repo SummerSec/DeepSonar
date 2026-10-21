@@ -31,6 +31,7 @@ COPY packages packages
 COPY database database
 COPY agent-harness/demo-repo agent-harness/demo-repo
 COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
+COPY deploy/worker-register.mjs deploy/worker-register-contract.mjs deploy/
 
 # 生产制品（§12.1）：workspace 包 main/exports 指向 dist，scheduler 跑 node dist/index.js（不用 tsx）
 RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/runtime-manual-contract --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build

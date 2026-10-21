@@ -42,9 +42,11 @@ Web 当前对可见投影使用 elkjs，服务端节点坐标只作 placement/ex
 
 ### 3.2 平台自动更新的后续阶段（#740）
 
-P1 第 1–3 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。Compose 已改为每个平台镜像一个不可变 digest 引用并要求显式 `DEEPSONAR_VERSION`（`DEEPSONAR_IMAGE_TAG` 已删除，部署脚本 fail closed）。Release 已生成并 inspect 核对 `platform` digests；宿主 `upgrade check/apply/rollback` 已支持单控制面、同 schema 的稳定版本升级，回滚保持暂停且保留数据库。P1 仍缺跨 schema 自动重建、多节点顺序/版本保护与自动中断续做；P2 的签名和无人值守补丁升级尚未实现，P3 Web 发起是可选阶段。恢复领取结果不明需人工对账，不能宣称完整 #740 已完成。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
+P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspect、dotenv 唯一性和终态 Attempt 效果排空已有实现。维护模式已获用户授权；数据库身份隔离、候选库恢复/重建、只读 schema plan、同目标续做状态机和服务 preparing 门禁已有模块。隔离 PostgreSQL 身份测试、候选重建和状态机故障注入已有执行证据，不能再笼统写成全部缺实现。
 
-逐项验收边界与隔离容器证据入口见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。跨 schema、多节点和续做是明确缺实现；离线 preflight 的覆盖与不检查项见部署说明；密钥文件、任意字符串环境语义及原生 Provider 扩展字段仍未完整验证。这些剩余项不能误记为仅缺测试。恢复旧数据库前必须确定全写入冻结、恢复点后合法写入的处理及旧节点隔离协议。
+尚未验收的闭环：宿主生产入口与私有恢复文件、受管 SSH 多节点顺序/版本保护、激活响应丢失、显式回滚恢复领取，以及最终双版本 Compose 故障矩阵。这些正在接线，不表示真实部署已通过。历史同 schema 演练不能覆盖新维护代码。P2 签名与无人值守升级、P3 Web 发起未完成；不得宣称完整 #740 已交付。
+
+离线配置 preflight 明确未检凭据真实认证、registry 可拉取性、历史 Job 快照语义、未知环境扩展与任意字符串语义、凭据秘密/密钥文件、原生 Provider 扩展字段和 Skill 源内容。跨 schema 计划需要明确审批删除数据与角色身份重置风险；当前集成 schema 编号不能当成已发布编号或同编号 DDL 等价证明。决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)，既有演练边界见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
 
 ### 3.3 可冻结的安全漏洞证明契约
 

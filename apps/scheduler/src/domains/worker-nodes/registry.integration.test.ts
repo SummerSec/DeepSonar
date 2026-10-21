@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import Fastify from "fastify";
 
+process.env.DEEPSONAR_VERSION = "0.5.6";
+const identity = { protocolVersion: 1, platformVersion: "0.5.6", deploymentGeneration: "" };
+const wireIdentity = { protocol_version: 1, platform_version: "0.5.6", deployment_generation: "" };
+
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 if (testDatabaseUrl && !process.env.DEEPSONAR_WORKER_BOOTSTRAP_TOKEN) {
   process.env.DEEPSONAR_WORKER_BOOTSTRAP_TOKEN = `it-${randomUUID()}`;
@@ -37,20 +41,20 @@ if (!testDatabaseUrl) {
     const deadJobId = randomUUID();
     try {
       clearWorkerApiKeysForTests();
-      const first = await registerRemoteWorker({
+      const first = await registerRemoteWorker({ ...identity,
         nodeId: ids[0]!,
         endpoint: "10.0.0.11:18081",
         apiKey: "worker-b-key",
         capacity: { maxSandboxes: 1, memoryMib: 1024, cpu: 1 },
       });
-      const second = await registerRemoteWorker({
+      const second = await registerRemoteWorker({ ...identity,
         nodeId: ids[1]!,
         endpoint: "10.0.0.12:18081",
         apiKey: "worker-a-key",
         capacity: { maxSandboxes: 1, memoryMib: 1024, cpu: 1 },
       });
       assert.match(first.nodeToken, /^deepsonar_wnode_/);
-      const beat = await heartbeatWorker({ token: first.nodeToken, apiKey: "worker-b-key" });
+      const beat = await heartbeatWorker({ ...identity, token: first.nodeToken, apiKey: "worker-b-key" });
       assert.equal(beat?.id, ids[0]);
 
       const picked1 = await claimWorkerForDispatch();
@@ -106,7 +110,7 @@ if (!testDatabaseUrl) {
     const nodeId = `${prefix}-cap`;
     try {
       clearWorkerApiKeysForTests();
-      await registerRemoteWorker({
+      await registerRemoteWorker({ ...identity,
         nodeId,
         endpoint: "10.0.0.21:18081",
         apiKey: "worker-cap-key",
@@ -149,7 +153,7 @@ if (!testDatabaseUrl) {
     try {
       clearWorkerApiKeysForTests();
       await assert.rejects(
-        () => registerRemoteWorker({
+        () => registerRemoteWorker({ ...identity,
           nodeId: "local",
           endpoint: "10.0.0.8:18081",
           apiKey: "attacker-key",
@@ -158,7 +162,7 @@ if (!testDatabaseUrl) {
         (error: unknown) => error instanceof WorkerNodeError && error.code === "WORKER_NODE_RESERVED",
       );
       await assert.rejects(
-        () => registerRemoteWorker({
+        () => registerRemoteWorker({ ...identity,
           nodeId: "LOCAL",
           endpoint: "10.0.0.8:18081",
           apiKey: "attacker-key",
@@ -167,7 +171,7 @@ if (!testDatabaseUrl) {
         (error: unknown) => error instanceof WorkerNodeError && error.code === "WORKER_NODE_RESERVED",
       );
       await assert.rejects(
-        () => registerRemoteWorker({
+        () => registerRemoteWorker({ ...identity,
           nodeId: nodeId,
           endpoint: "169.254.169.254:80",
           apiKey: "attacker-key",
@@ -176,7 +180,7 @@ if (!testDatabaseUrl) {
         (error: unknown) => error instanceof WorkerNodeError && error.code === "WORKER_ENDPOINT_FORBIDDEN",
       );
       await assert.rejects(
-        () => registerRemoteWorker({
+        () => registerRemoteWorker({ ...identity,
           nodeId: nodeId,
           endpoint: "127.0.0.1:3100",
           apiKey: "attacker-key",
@@ -185,14 +189,14 @@ if (!testDatabaseUrl) {
         (error: unknown) => error instanceof WorkerNodeError && error.code === "WORKER_ENDPOINT_FORBIDDEN",
       );
 
-      const first = await registerRemoteWorker({
+      const first = await registerRemoteWorker({ ...identity,
         nodeId,
         endpoint: "10.0.0.21:18081",
         apiKey: "owner-key",
         capacity: { maxSandboxes: 1, memoryMib: 1024, cpu: 1 },
       });
       await assert.rejects(
-        () => registerRemoteWorker({
+        () => registerRemoteWorker({ ...identity,
           nodeId,
           endpoint: "10.0.0.99:18081",
           apiKey: "attacker-key",
@@ -205,7 +209,7 @@ if (!testDatabaseUrl) {
       assert.equal(afterTakeover?.nodeTokenHash, first.node.nodeTokenHash);
 
       await assert.rejects(
-        () => heartbeatWorker({
+        () => heartbeatWorker({ ...identity,
           token: first.nodeToken,
           endpoint: "10.0.0.99:18081",
         }),
@@ -215,7 +219,7 @@ if (!testDatabaseUrl) {
       assert.equal(afterHeartbeat?.endpoint, "10.0.0.21:18081");
       assert.equal(afterHeartbeat?.kind, "remote");
 
-      const sameBeat = await heartbeatWorker({
+      const sameBeat = await heartbeatWorker({ ...identity,
         token: first.nodeToken,
         endpoint: "10.0.0.21:18081",
         apiKey: "owner-key",
@@ -225,7 +229,7 @@ if (!testDatabaseUrl) {
 
       const forgotten = await forgetWorkerNode(nodeId);
       assert.equal(forgotten?.id, nodeId);
-      const reclaimed = await registerRemoteWorker({
+      const reclaimed = await registerRemoteWorker({ ...identity,
         nodeId,
         endpoint: "10.0.0.22:18081",
         apiKey: "new-owner-key",
@@ -253,7 +257,7 @@ if (!testDatabaseUrl) {
       assert.equal(seeded.kind, "local");
       assert.equal(seeded.endpoint, "opensandbox:8080");
       assert.notEqual(seeded.nodeTokenHash, "attacker-hash");
-      const beatStolen = await heartbeatWorker({
+      const beatStolen = await heartbeatWorker({ ...identity,
         token: "not-the-new-token",
         endpoint: "10.0.0.66:18081",
       });
@@ -288,7 +292,7 @@ if (!testDatabaseUrl) {
         method: "POST",
         url: "/workers/register",
         headers: { authorization: `Bearer ${bootstrap}` },
-        payload: {
+        payload: { ...wireIdentity,
           node_id: "local",
           endpoint: "10.0.0.8:18081",
           opensandbox_api_key: "k",
@@ -302,7 +306,7 @@ if (!testDatabaseUrl) {
         method: "POST",
         url: "/workers/register",
         headers: { authorization: `Bearer ${bootstrap}` },
-        payload: {
+        payload: { ...wireIdentity,
           node_id: nodeId,
           endpoint: "10.0.0.31:18081",
           opensandbox_api_key: "k",
@@ -316,7 +320,7 @@ if (!testDatabaseUrl) {
         method: "POST",
         url: "/workers/register",
         headers: { authorization: `Bearer ${bootstrap}` },
-        payload: {
+        payload: { ...wireIdentity,
           node_id: nodeId,
           endpoint: "10.0.0.32:18081",
           opensandbox_api_key: "other",
@@ -330,7 +334,7 @@ if (!testDatabaseUrl) {
         method: "POST",
         url: "/workers/heartbeat",
         headers: { authorization: `Bearer ${nodeToken}` },
-        payload: { node_id: nodeId, endpoint: "10.0.0.32:18081" },
+        payload: { ...wireIdentity, node_id: nodeId, endpoint: "10.0.0.32:18081" },
       });
       assert.equal(steal.statusCode, 409);
       assert.equal(steal.json<{ error_code: string }>().error_code, "WORKER_HEARTBEAT_OWNERSHIP");
@@ -351,4 +355,81 @@ if (!testDatabaseUrl) {
       clearWorkerApiKeysForTests();
     }
   });
+  test("upgrade fencing preserves leases and rejects old heartbeat/new-ID enrollment bypass", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    process.env.DEEPSONAR_VERSION = "0.5.6";
+    const { migrate, sql } = await import("../../db.js");
+    const { registerRemoteWorker, heartbeatWorker, claimWorkerForDispatch, forgetWorkerNode,
+      finalizeSandboxLease, clearWorkerApiKeysForTests } = await import("./registry.js");
+    const { hashWorkerToken } = await import("./model.js");
+    await migrate();
+    const nodeId = `fence-${randomUUID().slice(0, 8)}`;
+    const generation = randomUUID();
+    const generationToken = `test-generation-${randomUUID()}`;
+    const registration = { ...identity, nodeId, endpoint: "10.0.0.44:18081", apiKey: "fixture-key",
+      capacity: { maxSandboxes: 4, memoryMib: 1024, cpu: 1 } };
+    const next = { protocolVersion: 1, platformVersion: "0.5.7", deploymentGeneration: generation };
+    try {
+      clearWorkerApiKeysForTests();
+      await assert.rejects(() => registerRemoteWorker({ ...registration, protocolVersion: undefined }), /not admitted/);
+      const original = await registerRemoteWorker(registration);
+      const lease = await claimWorkerForDispatch();
+      assert.ok(lease);
+      await sql`UPDATE worker_nodes SET last_heartbeat_at = now() - interval '1 minute' WHERE id = ${nodeId}`;
+      await sql`UPDATE platform_upgrade_state SET generation = ${generation}, phase = 'preparing',
+        target_version = '0.5.7', runtime_role = 'scheduler', worker_generation_token_hash = ${hashWorkerToken(generationToken)} WHERE id = 'global'`;
+      const stale = await heartbeatWorker({ token: original.nodeToken });
+      assert.equal(stale?.status, "unavailable");
+      assert.ok(stale!.lastHeartbeatAt > Date.now() - 10_000, "fenced authenticated heartbeat retains liveness");
+      assert.equal(await claimWorkerForDispatch(), null);
+      await assert.rejects(() => registerRemoteWorker({ ...registration, ...next, generationToken }), /paused/);
+      // A late provisioning result settles its existing lease during maintenance.
+      await finalizeSandboxLease({ reservationId: lease.reservationId, sandboxId: `${nodeId}-late`, workerId: nodeId });
+      await assert.rejects(() => forgetWorkerNode(nodeId), /still owns sandbox leases/);
+      process.env.DEEPSONAR_VERSION = "0.5.7";
+      await sql`UPDATE platform_upgrade_state SET phase = 'active' WHERE id = 'global'`;
+      assert.equal((await heartbeatWorker({ ...next, token: original.nodeToken }))?.status, "unavailable", "heartbeat cannot enroll a new generation");
+      for (const patch of [{}, { generationToken: "wrong" }, { generationToken, protocolVersion: 99 }, { generationToken, platformVersion: "0.5.6" }]) {
+        await assert.rejects(() => registerRemoteWorker({ ...registration, ...next, nodeId: `${nodeId}-new`, ...patch }), /not admitted/);
+      }
+      await assert.rejects(() => registerRemoteWorker({ ...registration, ...next, generationToken }), /authenticated re-enrollment/);
+      await assert.rejects(() => registerRemoteWorker({ ...registration, ...next, generationToken, existingNodeToken: "wrong" }), /authenticated re-enrollment/);
+      await assert.rejects(() => registerRemoteWorker({ ...registration, ...next, generationToken,
+        existingNodeToken: original.nodeToken, endpoint: "10.0.0.45:18081" }), /cannot change worker endpoint/);
+      // Even a stale status=online cannot bypass the transactional generation filter.
+      await sql`UPDATE worker_nodes SET status = 'online' WHERE id = ${nodeId}`;
+      assert.equal(await claimWorkerForDispatch(), null);
+      const enrolled = await registerRemoteWorker({ ...registration, ...next, generationToken, existingNodeToken: original.nodeToken });
+      assert.equal(enrolled.nodeToken, original.nodeToken);
+      assert.equal(enrolled.node.deploymentGeneration, generation);
+      assert.equal(enrolled.node.status, "online");
+      assert.equal(enrolled.node.activeSandboxes, 1);
+      assert.equal((await heartbeatWorker({ ...next, token: original.nodeToken }))?.status, "online");
+      assert.equal((await claimWorkerForDispatch())?.id, nodeId);
+      const leases = await sql`SELECT sandbox_id FROM worker_sandbox_leases WHERE worker_id = ${nodeId}`;
+      assert.ok(leases.some(row => row.sandbox_id === `${nodeId}-late`));
+      // A subsequent old heartbeat fences again, and a good heartbeat cannot clear it.
+      assert.equal((await heartbeatWorker({ ...identity, token: original.nodeToken }))?.status, "unavailable");
+      assert.equal((await heartbeatWorker({ ...next, token: original.nodeToken }))?.status, "unavailable");
+      assert.equal(await claimWorkerForDispatch(), null);
+      await registerRemoteWorker({ ...registration, ...next, generationToken, existingNodeToken: original.nodeToken });
+      let pendingClaim: ReturnType<typeof claimWorkerForDispatch> | undefined;
+      let settled = false;
+      await sql.begin(async (tx) => {
+        await tx`SELECT id FROM platform_upgrade_state WHERE id = 'global' FOR UPDATE`;
+        pendingClaim = claimWorkerForDispatch().finally(() => { settled = true; });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(settled, false, "claim must share the maintenance-state transaction lock");
+        await tx`UPDATE platform_upgrade_state SET phase = 'preparing' WHERE id = 'global'`;
+      });
+      assert.equal(await pendingClaim, null, "claim waiting on maintenance transition cannot reserve a lease");
+    } finally {
+      await sql`DELETE FROM worker_sandbox_leases WHERE worker_id LIKE ${`${nodeId}%`}`;
+      await sql`DELETE FROM worker_nodes WHERE id LIKE ${`${nodeId}%`}`;
+      await sql`UPDATE platform_upgrade_state SET generation = '', runtime_role = '', target_version = '', phase = 'active', worker_generation_token_hash = '' WHERE id = 'global'`;
+      process.env.DEEPSONAR_VERSION = "0.5.6";
+      clearWorkerApiKeysForTests();
+    }
+  });
+
 }

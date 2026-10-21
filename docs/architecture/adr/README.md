@@ -1,7 +1,7 @@
 # 架构决策记录（ADR）
 
 > 状态：**as-built（#741 PR 5 历史回填）**。首批六条 ADR 只回填已有定案，不新增决策；历史原决策日期未在本次工作中核实，正文注明回填日期。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-21
 
 ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」不再只留在 issue 讨论和索引表格里。目录总览与维护流程见 [`../README.md`](../README.md)。事实仍以 [`docs/architecture/README.md`](../README.md)、相关架构视图、代码、schema、OpenAPI 和测试为准；`DESIGN.md` 与 [`docs/README.md`](../../README.md) 提供摘要和专题状态。
 
@@ -55,6 +55,7 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 | [0005](0005-event-evidence-stream.md) | events / evidence / stream-bus 三职责，bus 非权威 | 已采纳（历史回填） | #388 / [`process-stream-policy.ts`](../../../apps/scheduler/src/process-stream-policy.ts) |
 | [0006](0006-runtime-image-admission.md) | 运行镜像统一由平台目录准入，Job 冻结 digest | 已采纳（历史回填） | #674 / #676 / #691 / [`runtime-images.ts`](../../../apps/scheduler/src/runtime-images.ts) |
 | [0007](0007-paused-upgrade-recovery.md) | 同 schema 升级回滚保留数据库并保持暂停 | 已采纳 | #740 / #747 |
+| [0008](0008-maintenance-candidate-upgrade.md) | 维护升级以身份隔离、候选库和激活回执保护写入 | 已采纳；接线/端到端验收进行中，扩展 0007 的适用限制 | #740 / #747 / 用户维护授权 |
 
 ---
 

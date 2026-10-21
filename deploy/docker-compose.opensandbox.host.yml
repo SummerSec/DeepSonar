@@ -81,7 +81,8 @@ services:
       dockerfile: deploy/Dockerfile.scheduler
     network_mode: host
     environment:
-      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_BIND_PORT:-15432}/deepsonar
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@127.0.0.1:${POSTGRES_BIND_PORT:-15432}/${DEEPSONAR_DATABASE_NAME:-deepsonar}
       SCHEDULER_HOST: 0.0.0.0
       SCHEDULER_PORT: ${SCHEDULER_HOST_PORT:-13100}
       AGENT_MODE: real

@@ -204,7 +204,9 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 平台级全局暂停领取（#740 P1 第一片）：管理员通过 `POST /platform/claims/pause`（`reason=platform_upgrade|maintenance`）把暂停持久化到 `global_settings` 单例行，所有 Scheduler 副本在 dispatch claim advisory lock 内读取，重启后保持；单例行缺失 fail closed 视为暂停。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。`GET /platform/claims` 返回 `running` / `pausing` / `paused` 与 claimed、provisioning、running 在途数，以及所有 Attempt（包括终态）上 `effect_pending` / `unknown` 效果数；三者归零才算排空（`waiting_human` 单独列出，不计入）。`POST /platform/claims/resume` 可带 `reason` 只解除对应原因的暂停，并 `pg_notify` 唤醒调度。暂停与恢复只允许平台管理员，项目级 token 一律拒绝，写审计。Web 全局横幅读取同一状态。
 
-平台版本发现（#740 P1 第 2 片）：官方清单同步后比较当前部署版本与 `platform` 段（或 legacy `platform_version`），结果写入 `platform_update_checks`；`GET /platform/updates` 仅管理员可读，GitHub 不可达只记错误。Web 管理端提示新版本 / 检查失败；同 schema 升级由宿主机受控程序执行，跨 schema / 多节点仍未实现。
+维护升级（#740，接线与验收进行中）与普通暂停领取不同：用户已允许维护期间拒绝新任务和其他业务写入。独立维护身份使旧运行角色 NOLOGIN 并清退会话；验证备份切点后，仅恢复/重建候选库，源库保持冻结。目标服务 preparing 阶段关闭业务入口和后台执行，同目标续做绑定原始 digest/计划/世代/部署身份；激活已发生或结果不明时不得自动切回旧数据。激活前回滚保持暂停，恢复领取要求显式操作；受管 SSH 节点和该恢复入口正在接线。配置离线预检不包含凭据认证、历史 Job 语义、密钥文件及任意原生扩展的完整验证。
+
+平台版本发现（#740 P1 第 2 片）：官方清单同步后比较当前部署版本与 `platform` 段（或 legacy `platform_version`），结果写入 `platform_update_checks`；`GET /platform/updates` 仅管理员可读，GitHub 不可达只记错误。Web 管理端提示新版本 / 检查失败；升级由宿主机受控程序执行；维护模式的身份隔离、候选库跨 schema 重建与同目标续做已有基础模块，生产接线、多节点和真实端到端验收仍在进行，见 [ADR 0008](docs/architecture/adr/0008-maintenance-candidate-upgrade.md)。
 
 平台镜像部署契约（#740 P1 第 3 片）：生产 Compose 的 scheduler / web / image-admission 只接受 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；当前部署版本只来自显式 `DEEPSONAR_VERSION`（`/health.version` 与版本发现均不再回退镜像 tag）。`DEEPSONAR_IMAGE_TAG` 已删除且不保留兼容：`deploy.sh` / `deploy.ps1` 发现旧变量、可变 tag、仓库名不符或缺版本时 fail closed 并提示从目标版本 `deploy/.env.example` 复制四行；本地 `build` 临时使用 `deepsonar-*:local-build`。
 
@@ -290,7 +292,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 （#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
 | 项目报告工作台（#484 / #561） | Phase 1 已落地：统一 `ReportDeliverable` 投影；#561 并入项目「风险与报告」台（`/findings` + `?panel=reports`，旧 `/reports` redirect）；任务工作台报告 tab 与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
-| 平台自动更新（#740） | P1 第 1–3 片已落地：全局暂停领取（schema v57）+ 清单 `platform` 契约与版本发现 / Web 管理端提示（schema v58）+ digest Compose 契约（每个平台镜像一个 `@sha256:` 引用变量，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`，部署脚本对旧变量 / 非 digest fail closed）；Release 已生成并重新 inspect 校验 `platform` 段各通道真实 digests；宿主同 schema 升级 / 保留数据库的暂停回滚已接通（停机前校验本地暂停排空，readiness 有界等待，恢复记录绑定部署目标；目标镜像离线配置预检在暂停前输出阻断报告） | 跨 schema 重建、多节点升级、自动续做；P2 签名与无人值守补丁升级 |
+| 平台自动更新（#740） | P1 第 1–3 片已落地：全局暂停领取（schema v57）+ 清单 `platform` 契约与版本发现 / Web 管理端提示（schema v58）+ digest Compose 契约（每个平台镜像一个 `@sha256:` 引用变量，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`，部署脚本对旧变量 / 非 digest fail closed）；Release 已生成并重新 inspect 校验 `platform` 段各通道真实 digests；宿主同 schema 升级 / 保留数据库的暂停回滚已接通（停机前校验本地暂停排空，readiness 有界等待，恢复记录绑定部署目标；目标镜像离线配置预检在暂停前输出阻断报告） | 维护身份隔离/候选库跨 schema 重建/同目标续做基础模块已实现，生产接线、受管 SSH 多节点和显式回滚恢复待最终端到端验证；P2 签名/无人值守与 P3 Web 发起未完成 |
 | 真实设备接入（#494/#495，多 rig #505 后续） | Phase 1 已落地：device broker 把物理设备暴露为可租借网络端点（沙箱不直连设备），租约绑 Attempt、项目 opt-in + 任务级授权、`device_events` 审计、Reaper 回收过期租约；多 rig 准入（平台按 `devices.rig_id` 分组整集推送、按需 rig 选 broker 端点，schema v50）与平台设备视图也已落地；细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md) | 真机 rig 验收、Phase 2 hdc/串口/电源控制、跨 rig 调度（一个 Job 只用一个 rig 的设备）、同 rig 多设备池的策略 |
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
@@ -316,7 +318,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v59 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v61（当前集成基线，非发布版本；合入并行 schema 变更后重新核对） |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：
