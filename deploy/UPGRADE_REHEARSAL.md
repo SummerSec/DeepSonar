@@ -96,13 +96,33 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
 | 原 issue 要求 | 当前实现与证据边界 |
 | --- | --- |
 | 同 schema 单控制面升级与回滚 | 历史入口及历史容器证据已存在；不能覆盖新维护路径。 |
-| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；真实 59 → 61 单机/多节点成功场景已通过；选定 9 项中断/排空场景已通过；最终 schema 62 组合镜像与剩余备份/多节点恢复场景待验收。 |
+| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；历史 59 → 61 与最终 61 → 62 组合镜像已分别验收；最终 16 项 Compose 场景及独立知识后台停写场景通过，具体基线和范围见最终快照。 |
 | 配置 preflight | 校验声明字段、引用、URL/枚举、主密钥文件身份与格式、全部已存凭据 AES-GCM 认证及 credential-first 默认选择；不认证外部服务或证明模型可用性，详见 [部署说明](README.md)。 |
 | 显式角色身份重置 | #758 已接 reset flag 与审批 hash；仅清角色 CLI / 项目 model，历史快照与全局 model 保留；没有明确选择时拒绝。 |
-| 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；真实升级与旧身份拒绝已通过；完整远程恢复矩阵仍待验收，旧源缺维护契约时不能恢复远程节点。 |
+| 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；最终组合镜像已通过真实升级、旧身份与公开 generation 冒充拒绝，以及第二代失败回滚/显式恢复；旧源缺维护契约时不能恢复远程节点。 |
 | 中断后同目标续做 | journal 固定目标与实际回执驱动；已实现，本轮 6 个真实 actor SIGKILL 场景已通过；范围与目标基线见下方快照。 |
 | 失败恢复与激活边界 | [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md) 保留冻结源库，激活前可回源保持暂停；激活后/结果不明不切旧库，不能抹掉已接受写入。 |
-| Windows 原生宿主 | 已实现 NTFS 内核锁、借用句柄、私有 DACL 与持久写入；原生 CI 正在验收，Windows Docker 完整演练未运行。Linux PowerShell 证据不能替代原生验收。 |
+| Windows 原生宿主 | NTFS 内核锁、借用句柄、私有 DACL 与持久写入的原生 CI 已通过（15 passed，1 项 Linux 专用测试 skipped）；含真实孤儿借锁、主进程终止、竞争拒绝与释放后重新获取。Windows Docker 完整演练、断电和原生 cosign 验收未运行。 |
 | Release 实际发布、P2/P3 | 已实现签名验证、默认关闭的补丁自动升级和禁用调度模板；真实 keyless 发布权限与正向链路验收待处理，详见 [P2 说明](UPGRADE_AUTOMATION.md)。P3 Web 发起为可选且未实现；发布生成/inspect 门禁不等于已发布。 |
 
 验收进行中不等于没有实现，也不等于 #740 已完成。新增真实结果应另附最终提交和镜像 digest，不覆盖或扩大历史证据的含义。
+
+## Windows 原生后端证据（2026-10-21）
+
+提交 `b6efe3cfc733539885aa3f5fc27e605ba0e3107a` 与 main `04911713c22c24c71c0ddcc8a96bed7f1a8322a6` 的 [Windows CI](https://github.com/SummerSec/DeepSonar/actions/runs/39557826149/job/119081800248) 在 Windows Server 2025 / Node 24 执行 16 项：15 passed、0 failed、1 skipped（Linux 专用 missing-flock）。真实孤儿 I/O helper 测试在主进程终止后确认 helper 存活、竞争锁被拒绝，终止 helper 后重新获取成功；不是 mock 或提前退出判通过。此前失败来自夹具程序与受保护状态目录混用；修复只隔离夹具目录并保全首个异常、有界清理，未削弱产品锁或互斥断言。此证据不覆盖 Windows Docker 全流程、断电持久性或 Windows 原生 cosign。
+
+## 最终 schema 62 组合镜像快照（2026-10-21）
+
+`schema62-full-matrix/summary.json` 于 **2026-10-21T07:15:08.832Z** 正常完成：选定 **16/16 passed、0 failed，全部 cleanedUp=true**。独立 `schema62-knowledge-first/summary.json` 于 `2026-10-21T05:50:26.473Z` 完成知识后台停写场景，passed 且 cleanedUp=true；它在 16 项运行中明确记为 `not_run`，不能称同一次 17 项运行。
+
+源镜像来自实际 #756 提交 `a01eb3948fa773d93361c703b8fdde7f56ab50f2`、真实 schema 61；没有修改 schema_meta 冒充历史结构。目标及冻结演练宿主为 `5b534b7905042a39a3dc9afb61c761bb3ae4d8f0` 的唯一 schema 62。PR 已包含 main `04911713c22c24c71c0ddcc8a96bed7f1a8322a6`；提交 `b6efe3cfc733539885aa3f5fc27e605ba0e3107a` 与冻结基线逐项比较 673 个生产文件，仅 Windows 后端有后续修正，已另经原生 CI 验证；Linux 应用、数据库与维护宿主生产代码一致。报告 `schema62-build/full-matrix-provenance.json`、`actual-image-provenance.json` 和 `combined-production-files.json` 分别保留宿主、实际镜像文件与源文件指纹。
+
+| 目标镜像 | 实际本地 registry OCI digest（amd64） |
+| --- | --- |
+| Scheduler | `sha256:195d8094d5df02ed3f0c64352b70aafa09735e15d1bf9f3576f861420c350b27` |
+| Web | `sha256:28d2905d74d9bd4c032f15cb97894055da4546ed0446447838a904603e972108` |
+| image-admission | `sha256:763c2771f5b04f5eeb810d86807a309144de826c961eb69214f891b4719cab0f` |
+
+16 项覆盖计划审批、单机 preparing 门禁、多节点成功及第二代失败恢复、真实备份损坏拒绝、Scheduler/Web 健康失败回滚、六处真实 SIGKILL 同目标续做，以及 Job/终态 Attempt 未结算效果/扫描排空。排空阻断保留原服务和登录，显式结算后同代续做；激活后中断恢复拒绝回旧库。多节点采用实际源镜像中的旧 worker，核验旧 token 和公开 generation 冒充均不能获得新代准入。知识场景保留实际源库知识、receipt、历史及后台 work；preparing 阶段观察真实 Scheduler 不推进待办，激活后恢复推进，不据此宣称真实模型效果通过。
+
+上述镜像使用实际编译应用及锁定依赖的离线演练构建、隔离 PostgreSQL/Compose/SSH 和 loopback registry，未执行生产 Dockerfile 的三渠道双架构 Release 验收。最小 OpenSandbox health 夹具不代表真实模型或沙箱 Job 验收。源码提交的 [CI](https://github.com/SummerSec/DeepSonar/actions/runs/39557826149) 与 [Reverse](https://github.com/SummerSec/DeepSonar/actions/runs/39557826216) 合计 **9/9 job success**；实际运行构建、类型检查、配置预检、维护/知识 PostgreSQL、迁移、签名临时密钥与篡改拒绝、API 冒烟。条件跳过步骤不能视作已执行；生产 keyless 身份链、真实发布、Windows Docker 全流程仍未运行。P2 保持显式启用，生产签名权限待审批；P3 为可选且未实现。

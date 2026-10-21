@@ -44,7 +44,7 @@ Web 当前对可见投影使用 elkjs，服务端节点坐标只作 placement/ex
 
 P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspect、dotenv 唯一性和终态 Attempt 效果排空已有实现。维护模式已获用户授权；数据库身份隔离、候选库恢复/重建、只读 schema plan、同目标续做状态机和服务 preparing 门禁已有模块。隔离 PostgreSQL 身份测试、候选重建和状态机故障注入已有执行证据，不能再笼统写成全部缺实现。
 
-宿主入口、私有恢复文件和受管 SSH 编排已接线；真实单机/多节点成功路径及旧 worker 身份隔离已通过隔离演练。本轮 6 个真实 SIGKILL、3 个排空场景及备份损坏拒绝、多节点恢复均已通过并清理；含 #756 的最终组合基线镜像正在独立集成验收。Windows 原生锁、私有 ACL 与持久文件后端已实现，原生 CI 验收单独记录，未宣称真实 Windows Docker 部署或断电验收；隔离演练不等于真实部署验收。历史同 schema 演练不能覆盖新维护代码。P2 默认关闭的宿主策略、签名验证和禁用调度模板已接线，生产 keyless 签名链待审批及验收；P3 Web 发起为可选且未实现；不得宣称完整 #740 已交付。
+宿主入口、私有恢复文件和受管 SSH 编排已接线；真实单机/多节点成功路径及旧 worker 身份隔离已通过隔离演练。最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。Windows 原生锁、私有 ACL 与持久文件后端的原生 CI 已通过（15 passed、1 项 Linux 专用 skipped），未宣称真实 Windows Docker 部署或断电验收；隔离演练不等于真实部署验收。历史同 schema 演练不能覆盖新维护代码。P2 默认关闭的宿主策略、签名验证和禁用调度模板已接线，生产 keyless 签名链待审批及验收；P3 Web 发起为可选且未实现；不得宣称完整 #740 已交付。
 
 离线配置 preflight 已检查声明字段的 URL/枚举语义、主密钥只读文件身份与内容格式、全部已存凭据（含 disabled）的 AES-GCM 认证，并复用 credential-first resolver 检查当前持久默认组合；明确未检凭据及外部服务真实认证、模型可用性、未来 Job provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段和 Skill 源内容。跨 schema 计划需要明确审批删除数据与角色身份重置风险；当前集成 schema 编号不能当成已发布编号或同编号 DDL 等价证明。决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)，既有演练边界见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
 
