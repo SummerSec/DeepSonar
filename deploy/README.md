@@ -25,7 +25,7 @@ DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<dig
 
 ## 受控升级与中断恢复（#740）
 
-Shell 和 PowerShell 共享 `platform-upgrade-host.mjs` / `platform-upgrade.mjs`，宿主需 Node.js >=22、Docker Compose/buildx、管理员进程环境变量 `DEEPSONAR_ADMIN_TOKEN`。只支持单控制面 Compose、无远程 worker、稳定版本向前且 schema 相同的升级；跨 schema 在暂停前拒绝，完整配置兼容性 preflight、自动 schema 重建和多节点编排尚未实现。默认使用 prod + real + OpenSandbox overlay，其他布局需用 Node CLI 的重复 `--compose-file` 明确指定。
+Shell 和 PowerShell 共享 `platform-upgrade-host.mjs` / `platform-upgrade.mjs`，宿主需 Node.js >=22、Docker Compose/buildx、管理员进程环境变量 `DEEPSONAR_ADMIN_TOKEN`。只支持单控制面 Compose、无远程 worker、稳定版本向前且 schema 相同的升级；跨 schema 在暂停前拒绝，目标配置离线 preflight 已接线，自动 schema 重建和多节点编排尚未实现。默认使用 prod + real + OpenSandbox overlay，其他布局需用 Node CLI 的重复 `--compose-file` 明确指定。
 
 ```bash
 ./deploy/deploy.sh upgrade check --to vX.Y.Z
@@ -39,7 +39,9 @@ Shell 和 PowerShell 共享 `platform-upgrade-host.mjs` / `platform-upgrade.mjs`
 .\deploy\deploy.ps1 upgrade rollback
 ```
 
-API 默认使用生产 Web 代理 `http://127.0.0.1:8080/api/`（保留自定义 API 路径前缀），Shell 可传 `--api` / `--web-url`，PowerShell 对应 `-ApiUrl` / `-WebUrl`。API 使用 HTTPS 或本机 HTTP；token 不写日志或恢复记录。升级前取消进程环境中的四个平台版本/镜像变量，避免覆盖 `.env`。目标来自官方 Release 清单，逐通道 inspect 双架构 payload，拉取目标 GHCR digest；检查 Compose 配置与目标镜像 schema，然后通过管理 API 暂停并排空所有未结算效果，不杀 Job。
+API 默认使用生产 Web 代理 `http://127.0.0.1:8080/api/`（保留自定义 API 路径前缀），Shell 可传 `--api` / `--web-url`，PowerShell 对应 `-ApiUrl` / `-WebUrl`。API 使用 HTTPS 或本机 HTTP；token 不写日志或恢复记录。升级前取消进程环境中的四个平台版本/镜像变量，避免覆盖 `.env`。目标来自官方 Release 清单，逐通道 inspect 双架构 payload，拉取目标 GHCR digest；读取数据库配置的一致性只读快照及目标 Compose 环境，经 stdin 交给目标 digest 的一次性 Scheduler 容器；该容器禁止网络、只读文件系统且无挂载，不连接数据库或初始化 schema。`check` 返回 `preflight.ok`、脱敏 `blocking_errors`、`coverage` 与 `not_checked`；`apply` 遇到阻断或无有效报告时在暂停前停止。通过后才通过管理 API 暂停并排空所有未结算效果，不杀 Job。
+
+离线预检复用目标版本的 RoleConfig、配置文件、Settings、Credential 校验器，检查 schema、显式数值/布尔 env、全局规则/Finding protocol、项目 CLI/账号白名单和默认值、角色资源/工具/环境/模块 selector，以及配置引用。它不解密凭据、不请求 Provider 或 registry、不改写历史 Job 快照；密钥文件可读性、任意字符串环境语义、原生 Provider 扩展字段和 Skill 源内容仍列在 `not_checked`，不能把 `ok=true` 理解为外部服务或全部配置可用性保证。配置快照只驻留内存，不写 journal 或日志；错误用表行索引定位，不回显输入值。
 
 备份处理限制为 512 MiB 内存缓冲，超过上限安全中止并保持暂停。暂停后生成 gzip 包装的 PostgreSQL custom dump，验证 SHA-256、解压内容及 `pg_restore --list` 中的控制/schema 数据；失败保持暂停。`.upgrade/` 保存本地互斥锁、逐步记录和备份，已排除 Git。硬中断留下锁时，先确认没有升级进程，再人工移除 `.upgrade/lock`；同一未完成记录不会被新 apply 覆盖。恢复记录绑定 Compose 项目、配置文件内容及 Docker 目标；缺失绑定或目标变化时拒绝恢复，不能把记录移到其他部署继续。服务切换后最多等待 180 秒达到 ready，允许启动期间的暂态连接/HTTP 失败；随后核对 schema、版本、实际容器 digest 和 Web HTTP，全部通过才恢复领取。超时保持暂停。停止本地服务前再次直接核对本地数据库的暂停与排空状态，避免 API 地址误指其他部署。
 

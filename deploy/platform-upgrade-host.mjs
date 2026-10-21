@@ -9,6 +9,7 @@ import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { upgrade, assertDrained, verifyBackup } from './platform-upgrade.mjs';
+import { CONFIG_SNAPSHOT_SQL, preflightBlock, targetConfigurationPreflight } from './platform-upgrade-preflight.mjs';
 import { verifyPlatformRelease } from '../agent-harness/check-platform-release.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
@@ -56,10 +57,10 @@ export function hostAdapter(options = {}) {
   const composeFiles = (options.composeFiles ?? ['docker-compose.prod.yml', 'docker-compose.real.yml', 'docker-compose.opensandbox.prod.yml']).map(file => resolve(root, file));
   const compose = ['compose', '-p', projectName, '--env-file', envPath];
   for (const file of composeFiles) compose.push('-f', file);
-  const run = options.run ?? ((args, input, env = commandEnv) => {
+  const run = options.run ?? ((args, input, env = commandEnv, allowedStatuses = [0]) => {
     const output = spawnSync('docker', args, { env, input, maxBuffer, timeout: 600_000 });
-    if (output.error || output.status !== 0) throw new Error(`docker ${args[0]} failed (status ${output.status ?? 'unknown'}); inspect local Docker logs`);
-    return output.stdout;
+    if (output.error || !allowedStatuses.includes(output.status)) throw new Error(`docker ${args[0]} failed (status ${output.status ?? 'unknown'}); inspect local Docker logs`);
+    return allowedStatuses.length > 1 ? {stdout: output.stdout, status: output.status} : output.stdout;
   });
   let boundTarget;
   const deploymentTarget = () => {
@@ -143,14 +144,11 @@ export function hostAdapter(options = {}) {
     },
     async pull(target) { for (const service of services) run(['pull', imageValues(target)[keys[service]]]); },
     async preflight(target) {
-      if (sql("SELECT count(*) FROM worker_nodes WHERE kind='remote'") !== '0') throw new Error('remote workers require a coordinated upgrade; this CLI supports one Compose host only');
-      const values = imageValues(target);
-      dc(['config', '--quiet'], undefined, { ...commandEnv, ...values });
-      // Isolated read-only image inspection: no DB access, sockets, mounts, or startup side effects.
-      const version = run(['run', '--rm', '--network=none', '--read-only', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE,
-        '--input-type=module', '-e', "import {SCHEMA_VERSION} from '/app/apps/scheduler/dist/schema-version.js'; process.stdout.write(String(SCHEMA_VERSION));"]).toString();
-      if (Number(version) !== target.schema_version) throw new Error('image schema does not match manifest');
-      sql('BEGIN READ ONLY; SELECT version FROM schema_meta; COMMIT;');
+      let remoteCount;
+      try { remoteCount = sql("SELECT count(*) FROM worker_nodes WHERE kind='remote'"); }
+      catch { return preflightBlock('HOST_WORKER_SNAPSHOT_FAILED', 'host.worker_nodes', 'Could not verify the single-host upgrade prerequisite.'); }
+      if (remoteCount !== '0') return preflightBlock('HOST_REMOTE_WORKERS_UNSUPPORTED', 'host.worker_nodes', 'Remote workers require a coordinated upgrade; this CLI supports one Compose host only.');
+      return targetConfigurationPreflight({target, values: imageValues(target), commandEnv, dc, run, snapshotSql: CONFIG_SNAPSHOT_SQL});
     },
     async schemaPlan() { throw new Error('schema differs: review target schema-rebuild-cli --plan with a read-only database role; automatic rebuild is not supported'); },
     claims: () => request('/platform/claims'),
@@ -239,5 +237,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (key === 'composeFiles') (options[key] ??= []).push(args[i + 1]); else options[key] = args[i + 1];
   }
   try { console.log(JSON.stringify(await upgrade(action, hostAdapter(options)), null, 2)); }
-  catch (error) { console.error(`[upgrade] ${error.message}; interrupted upgrades retain pause and recovery state in deploy/.upgrade`); process.exitCode = 1; }
+  catch (error) { if (error.preflight) console.error(JSON.stringify(error.preflight, null, 2)); console.error(`[upgrade] ${error.message}; interrupted upgrades retain pause and recovery state in deploy/.upgrade`); process.exitCode = 1; }
 }

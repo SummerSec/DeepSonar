@@ -80,6 +80,7 @@ export async function rehearse(configPath, output) {
       const adapter = fixtureAdapter(config, fixture);
       const plan = await upgrade('check', adapter);
       assert.equal(plan.schemaRebuildRequired, false);
+      assert.equal(plan.preflight.ok, true, JSON.stringify(plan.preflight));
       assert.equal((await api(fixture, 'platform/claims')).claims_paused, false);
       const backupMarker = randomUUID();
       sql(fixture, `INSERT INTO projects (id, name) VALUES ('${backupMarker}', 'backup restore rehearsal marker')`);
@@ -161,11 +162,28 @@ export async function rehearse(configPath, output) {
       evidence.finalClaims = claims;
     });
 
+    await scenario('preflight-blocked', async (fixture, evidence) => {
+      const project = randomUUID();
+      sql(fixture, `INSERT INTO projects (id,name,config_json) VALUES ('${project}','invalid target configuration','{"enabled_agent_clis":["removed-cli"]}')`);
+      const adapter = fixtureAdapter(config, fixture);
+      const plan = await upgrade('check', adapter);
+      assert.equal(plan.preflight.ok, false);
+      assert.ok(plan.preflight.blocking_errors.length > 0);
+      await assert.rejects(upgrade('apply', adapter), /configuration preflight blocked/);
+      assert.equal((await api(fixture, 'platform/claims')).claims_paused, false);
+      evidence.after = containerEvidence(config, fixture, '0.0.1');
+      assert.deepEqual(evidence.after, evidence.before, 'invalid config must not pause or restart services');
+      evidence.preflight = plan.preflight;
+      sql(fixture, `UPDATE projects SET config_json='{}' WHERE id='${project}'`);
+      const repaired = await upgrade('check', adapter);
+      assert.equal(repaired.preflight.ok, true, JSON.stringify(repaired.preflight));
+    });
+
     await scenario('cross-schema', async (fixture, evidence) => {
       // Both real builds use schema 59. Change the *observed database marker* to
       // exercise mismatch refusal; this is not a claim of a tested v58 upgrade.
       sql(fixture, "UPDATE schema_meta SET version=58 WHERE id='global'");
-      await assert.rejects(upgrade('apply', fixtureAdapter(config, fixture)), /schema differs/);
+      await assert.rejects(upgrade('apply', fixtureAdapter(config, fixture)), /configuration preflight blocked/);
       assert.equal((await api(fixture, 'platform/claims')).claims_paused, false);
       evidence.after = containerEvidence(config, fixture, '0.0.1');
       assert.deepEqual(evidence.after, evidence.before);
@@ -175,7 +193,7 @@ export async function rehearse(configPath, output) {
     await scenario('remote-worker', async (fixture, evidence) => {
       sql(fixture, `INSERT INTO worker_nodes (id,endpoint,kind,api_key_fingerprint,node_token_hash,node_token_prefix)
         VALUES ('rehearsal-remote','127.0.0.1:1','remote','test','test','test')`);
-      await assert.rejects(upgrade('apply', fixtureAdapter(config, fixture)), /remote workers require/);
+      await assert.rejects(upgrade('apply', fixtureAdapter(config, fixture)), /configuration preflight blocked/);
       assert.equal((await api(fixture, 'platform/claims')).claims_paused, false);
       evidence.after = containerEvidence(config, fixture, '0.0.1');
       assert.deepEqual(evidence.after, evidence.before);

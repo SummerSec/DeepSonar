@@ -92,6 +92,9 @@ jobs:
 
       - run: pnpm -r build
 
+      - name: Target image offline upgrade configuration preflight
+        run: pnpm ci:unit:platform-upgrade-preflight
+
       - name: Scheduler startup gate unit
         run: pnpm ci:unit:startup-gate
 

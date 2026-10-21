@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-20
+> 同步日期：2026-10-21
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -42,9 +42,9 @@ Web 当前对可见投影使用 elkjs，服务端节点坐标只作 placement/ex
 
 ### 3.2 平台自动更新的后续阶段（#740）
 
-P1 第 1–3 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。Compose 已改为每个平台镜像一个不可变 digest 引用并要求显式 `DEEPSONAR_VERSION`（`DEEPSONAR_IMAGE_TAG` 已删除，部署脚本 fail closed）。Release 已生成并 inspect 核对 `platform` digests；宿主 `upgrade check/apply/rollback` 已支持单控制面、同 schema 的稳定版本升级，回滚保持暂停且保留数据库。仍未落地的是跨 schema 自动重建、完整配置兼容性 preflight、多节点顺序/版本保护、自动中断续做、签名和无人值守补丁升级。恢复领取结果不明需人工对账，不能宣称完整 #740 已完成。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
+P1 第 1–3 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。Compose 已改为每个平台镜像一个不可变 digest 引用并要求显式 `DEEPSONAR_VERSION`（`DEEPSONAR_IMAGE_TAG` 已删除，部署脚本 fail closed）。Release 已生成并 inspect 核对 `platform` digests；宿主 `upgrade check/apply/rollback` 已支持单控制面、同 schema 的稳定版本升级，回滚保持暂停且保留数据库。P1 仍缺跨 schema 自动重建、多节点顺序/版本保护与自动中断续做；P2 的签名和无人值守补丁升级尚未实现，P3 Web 发起是可选阶段。恢复领取结果不明需人工对账，不能宣称完整 #740 已完成。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
 
-逐项验收边界与隔离容器证据入口见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。跨 schema、完整 preflight、多节点和续做是明确缺实现，不能误记为仅缺测试。恢复旧数据库前必须确定全写入冻结、恢复点后合法写入的处理及旧节点隔离协议。
+逐项验收边界与隔离容器证据入口见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。跨 schema、多节点和续做是明确缺实现；离线 preflight 的覆盖与不检查项见部署说明；密钥文件、任意字符串环境语义及原生 Provider 扩展字段仍未完整验证。这些剩余项不能误记为仅缺测试。恢复旧数据库前必须确定全写入冻结、恢复点后合法写入的处理及旧节点隔离协议。
 
 ### 3.3 可冻结的安全漏洞证明契约
 

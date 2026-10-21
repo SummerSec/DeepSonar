@@ -307,7 +307,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/
   -d '{"reason":"platform_upgrade"}' http://127.0.0.1:8080/api/platform/claims/resume
 ```
 
-暂停持久化在 PostgreSQL，Scheduler 重启后保持；`db:rebuild` 按列交集回填 `global_settings`，从 v57 起暂停状态也会被保留。不会自动取消或杀 Job；排空超时由管理员决定继续等待或手动取消。digest 部署与单控制面、同 schema 的受控 `upgrade check / apply / rollback` 已接通；跨 schema、完整配置 preflight 和多节点升级仍未完成。中断保持暂停，同 schema 回滚保留数据库和期间入队写入，详见 [受控升级](../deploy/README.md)。
+暂停持久化在 PostgreSQL，Scheduler 重启后保持；`db:rebuild` 按列交集回填 `global_settings`，从 v57 起暂停状态也会被保留。不会自动取消或杀 Job；排空超时由管理员决定继续等待或手动取消。digest 部署与单控制面、同 schema 的受控 `upgrade check / apply / rollback` 已接通；目标配置离线 preflight 已接线；跨 schema 和多节点升级仍未完成。中断保持暂停，同 schema 回滚保留数据库和期间入队写入，详见 [受控升级](../deploy/README.md)。
 
 官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。#691 起项目不再钉版本，新建 Job 始终按平台 channel 最新 trusted 解析并冻结 digest；已冻结 Job 快照不改写。
 

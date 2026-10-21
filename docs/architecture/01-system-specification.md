@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-21
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -1064,8 +1064,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：删除或修订契约时必须同步删除旧 schema/API/UI/运行时路径；不得保留双读双写、fallback、shim、legacy mode 或自动旧配置转换。旧输入不满足当前契约时必须 fail closed；不可变历史快照/Evidence/审计记录不作为新运行时兼容输入。
 - **决策来源**：兼容层会让权限、schema 和语义出现双重真相。
 - **实现状态**：部分达标；当前导入 schema mismatch 和不支持 CLI 都 fail closed、历史结果只读保留，但 runtime registry contract 仍保留 schema v1 兼容解析、旧 `image_ref` 投影和历史 digest alias（D-07），不能把物理清扫前的实现写成全量 as-built。
-- **代码入口**：[设计不向后兼容](../../DESIGN.md)、[Transfer schema validation](../../apps/scheduler/src/transfer/pack.ts)、[runtime CLI boundary](../../apps/scheduler/src/transfer/sanitize.ts)。
-- **验证证据**：`pnpm ci:test:transfer-schema`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:docs-freshness`；人工检查新代码没有兼容 shim。
+- **代码入口**：[设计不向后兼容](../../DESIGN.md)、[升级配置预检](../../apps/scheduler/src/platform-upgrade-preflight.ts)、[Transfer schema validation](../../apps/scheduler/src/transfer/pack.ts)、[runtime CLI boundary](../../apps/scheduler/src/transfer/sanitize.ts)。
+- **验证证据**：`pnpm ci:unit:platform-upgrade-preflight`、`pnpm ci:unit:deploy-ps1`、`pnpm ci:test:transfer-schema`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:docs-freshness`；人工检查新代码没有兼容 shim。
 
 ### CON-003 单一 schema 基线
 

@@ -1,6 +1,7 @@
 // Shared host upgrade state machine. Node >= 22; no Scheduler/Job execution path.
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
+import { preflightBlock } from './platform-upgrade-preflight.mjs';
 
 export function forwardVersion(current, target) {
   const parse = value => {
@@ -43,9 +44,15 @@ export async function upgrade(action, io) {
     const current = await io.current();
     if (!forwardVersion(current.version, target.version)) throw new Error('target must be newer than the current deployment');
     await io.pull(target);
-    await io.preflight(target);
-    const plan = { current, target, schemaRebuildRequired: current.schema !== target.schema_version };
+    const result = await io.preflight(target);
+    const preflight = typeof result?.ok === 'boolean' ? result : preflightBlock('HOST_PREFLIGHT_RESULT_MISSING', 'host.target_validator', 'Configuration validation did not return an explicit result.');
+    const plan = { current, target, preflight, schemaRebuildRequired: current.schema !== target.schema_version };
     if (action === 'check') return plan;
+    if (preflight.ok !== true) {
+      const error = new Error('configuration preflight blocked; inspect blocking_errors before retrying');
+      error.preflight = preflight;
+      throw error;
+    }
     if (plan.schemaRebuildRequired) {
       await io.schemaPlan(target);
       throw new Error('schema rebuild requires reviewed plan and manual rebuild; no automatic schema migration');

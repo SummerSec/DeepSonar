@@ -21,6 +21,7 @@ function fixture(fail) {
       if (name === 'pause' || name === 'forcePaused') paused = true;
       if (name === fail) throw new Error(`interrupted:${name}`);
       if (name === 'resume') paused = false;
+      if (name === 'preflight') return {schema: 'deepsonar.platform-upgrade-preflight-result/v1', ok: true, blocking_errors: [], coverage: [], not_checked: []};
       if (name === 'backup') return { file: 'database-1.dump.gz', hash: 'a'.repeat(64) };
     };
   }
@@ -184,7 +185,9 @@ for (const shell of ['sh', 'pwsh']) {
 test('host preflight rejects remote workers before starting any container', async () => {
   const calls = [];
   const io = hostAdapter({run: args => { calls.push(args); return Buffer.from('1'); }});
-  await assert.rejects(io.preflight({}), /coordinated upgrade/);
+  const report = await io.preflight({});
+  assert.equal(report.ok, false);
+  assert.equal(report.blocking_errors[0].code, 'HOST_REMOTE_WORKERS_UNSUPPORTED');
   assert.equal(calls.length, 1);
   assert.match(calls[0].at(-1), /worker_nodes WHERE kind='remote'/);
 });
@@ -377,5 +380,80 @@ test('recovery journal binds Compose project, config paths and actual Docker con
     if (previousHost === undefined) delete process.env.DOCKER_HOST; else process.env.DOCKER_HOST = previousHost;
     if (previousContext === undefined) delete process.env.DOCKER_CONTEXT; else process.env.DOCKER_CONTEXT = previousContext;
     rmSync(temp, {recursive: true, force: true});
+  }
+});
+
+import { CONFIG_SNAPSHOT_SQL, PREFLIGHT_RESULT_SCHEMA } from './platform-upgrade-preflight.mjs';
+const configReport = (ok = true) => ({schema: PREFLIGHT_RESULT_SCHEMA, ok, blocking_errors: ok ? [] : [{code: 'INVALID_GLOBAL_RULES', location: 'global_settings[0].rules_json', message: 'Configuration does not match the target contract.'}], coverage: ['global_settings'], not_checked: ['credential_authentication']});
+
+test('host sends read-only config snapshot and resolved target environment only through isolated validator stdin', async () => {
+  const calls = [], secret = 'preflight-secret-not-for-argv';
+  const snapshot = {database_schema_version: 59, global_settings: [{id: 'global', rules_json: {obsolete: true}}], credentials: [{settings_config_json: {token: secret}}]};
+  const run = (args, input, env, statuses) => {
+    calls.push({args, input, env, statuses});
+    if (args.includes('-Atc')) return Buffer.from('0');
+    if (args.includes('psql')) return Buffer.from(JSON.stringify(snapshot));
+    if (args.includes('config')) return Buffer.from(JSON.stringify({services: {scheduler: {environment: {DATABASE_URL: `postgres://user:${secret}@postgres/db`, DEEPSONAR_VERSION: env.DEEPSONAR_VERSION}}}}));
+    assert.equal(args[0], 'run');
+    return {stdout: Buffer.from(JSON.stringify(configReport(false))), status: 1};
+  };
+  const target = {schema_version: 59, values: {DEEPSONAR_VERSION: '1.2.3', DEEPSONAR_SCHEDULER_IMAGE: `ghcr.io/summersec/deepsonar-scheduler@sha256:${'a'.repeat(64)}`}};
+  const result = await hostAdapter({run}).preflight(target);
+  assert.deepEqual(result, configReport(false));
+  const read = calls.find(call => call.args.includes('psql') && !call.args.includes('-Atc'));
+  assert.match(read.input, /^BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;/);
+  assert.match(read.input, /COMMIT;$/);
+  assert.doesNotMatch(CONFIG_SNAPSHOT_SQL, /ciphertext|nonce|auth_tag|health_detail|master_key/);
+  const validate = calls.find(call => call.args[0] === 'run');
+  assert.ok(validate.args.includes('--network=none') && validate.args.includes('--read-only') && validate.args.includes('-i'));
+  assert.ok(!validate.args.includes('-v') && !validate.args.includes('--mount') && !validate.args.includes('-e'));
+  assert.deepEqual(validate.statuses, [0, 1]);
+  assert.equal(validate.args.at(-1), '/app/apps/scheduler/dist/platform-upgrade-preflight-cli.js');
+  const payload = JSON.parse(validate.input);
+  assert.equal(payload.environment.DEEPSONAR_VERSION, '1.2.3');
+  assert.equal(payload.global_settings[0].rules_json.obsolete, true);
+  assert.equal(payload.credentials[0].settings_config_json.token, secret);
+  assert.ok(!JSON.stringify(calls.map(call => call.args)).includes(secret));
+  assert.ok(!JSON.stringify(result).includes(secret));
+});
+
+test('check returns configuration blockers while apply refuses before pause or any journal mutation', async () => {
+  const f = fixture(); f.io.preflight = async () => configReport(false);
+  const plan = await upgrade('check', f.io);
+  assert.deepEqual(plan.preflight, configReport(false));
+  await assert.rejects(upgrade('apply', f.io), error => {
+    assert.match(error.message, /configuration preflight blocked/);
+    assert.deepEqual(error.preflight, configReport(false)); return true;
+  });
+  assert.equal(f.state(), null); assert.equal(f.paused(), false);
+  assert.equal(f.calls.includes('pause'), false);
+});
+
+test('preflight subprocess failures, malformed output and status disagreement fail closed without leaking input', async () => {
+  for (const failure of ['snapshot', 'compose', 'execution', 'output', 'status']) {
+    const secret = 'secret-value-from-process-output';
+    const run = (args) => {
+      if (args.includes('-Atc')) return Buffer.from('0');
+      if (args.includes('psql')) { if (failure === 'snapshot') throw new Error(secret); return Buffer.from('{}'); }
+      if (args.includes('config')) { if (failure === 'compose') throw new Error(secret); return Buffer.from('{"services":{"scheduler":{"environment":{}}}}'); }
+      if (failure === 'execution') throw new Error(secret);
+      if (failure === 'output') return {stdout: Buffer.from(secret), status: 1};
+      return {stdout: Buffer.from(JSON.stringify(configReport(true))), status: 1};
+    };
+    const report = await hostAdapter({run}).preflight({schema_version: 59, values: {DEEPSONAR_SCHEDULER_IMAGE: 'test@sha256:unused'}});
+    assert.equal(report.ok, false, failure);
+    assert.ok(!JSON.stringify(report).includes(secret));
+  }
+});
+
+
+test('missing or malformed preflight success cannot authorize apply', async () => {
+  for (const result of [undefined, null, {}, {ok: 'true'}]) {
+    const f = fixture(); f.io.preflight = async () => result;
+    const plan = await upgrade('check', f.io);
+    assert.equal(plan.preflight.ok, false);
+    assert.equal(plan.preflight.blocking_errors[0].code, 'HOST_PREFLIGHT_RESULT_MISSING');
+    await assert.rejects(upgrade('apply', f.io), /configuration preflight blocked/);
+    assert.equal(f.paused(), false); assert.equal(f.state(), null);
   }
 });

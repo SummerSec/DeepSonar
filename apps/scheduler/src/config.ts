@@ -7,6 +7,8 @@ const DEFAULT_SHARED_ASSETS_HELPER_IMAGE =
 
 /** 无依赖 .env 加载（Node 20+；不覆盖已有环境变量） */
 function loadEnvFile() {
+  // The offline upgrade CLI supplies the entire Compose environment via stdin.
+  if (process.env.DEEPSONAR_OFFLINE_PREFLIGHT === "1") return;
   const candidates = [
     path.resolve(process.cwd(), ".env"),
     path.resolve(process.cwd(), "../../.env"), // 从 apps/scheduler 启动时
@@ -23,11 +25,19 @@ function loadEnvFile() {
 }
 loadEnvFile();
 
+// Record malformed explicit bootstrap values without changing normal fallback
+// behavior. The offline preflight reports only names, never raw values.
+export const configInputErrors = new Set<string>();
+function recordConfigInput(name: string, valid: boolean): void {
+  if (process.env[name] !== undefined && process.env[name] !== "" && !valid) configInputErrors.add(name);
+}
+
 function str(name: string, dflt = ""): string {
   return process.env[name] ?? dflt;
 }
 function int(name: string, dflt: number): number {
   const v = Number(process.env[name]);
+  recordConfigInput(name, Number.isFinite(v) && v > 0);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
 /**
@@ -39,6 +49,7 @@ function hubMaxRounds(name: string, dflt: number): number {
   const raw = process.env[name];
   if (raw === undefined) return dflt;
   const trimmed = raw.trim();
+  recordConfigInput(name, /^unlimited$/i.test(trimmed) || (Number.isSafeInteger(Number(raw)) && Number(raw) >= 0 && Number(raw) <= 10_000));
   if (trimmed.length === 0) {
     console.warn(`[config] ${name} 为空，回落 ${dflt === 0 ? "unlimited" : dflt}`);
     return dflt;
@@ -52,6 +63,7 @@ function hubMaxRounds(name: string, dflt: number): number {
 /** Bounded positive integer configuration; invalid or out-of-range values use the safe default. */
 function boundedInt(name: string, dflt: number, max: number): number {
   const v = Number(process.env[name]);
+  recordConfigInput(name, Number.isSafeInteger(v) && v > 0 && v <= max);
   return Number.isSafeInteger(v) && v > 0 && v <= max ? v : dflt;
 }
 function boundedNonNegativeInt(
@@ -60,15 +72,18 @@ function boundedNonNegativeInt(
   max: number,
 ): number {
   const v = Number(process.env[name]);
+  recordConfigInput(name, Number.isSafeInteger(v) && v >= 0 && v <= max);
   return Number.isSafeInteger(v) && v >= 0 && v <= max ? v : dflt;
 }
 function percent(name: string, dflt: number): number {
   const v = Number(process.env[name]);
+  recordConfigInput(name, Number.isFinite(v) && v > 0 && v <= 100);
   return Number.isFinite(v) && v > 0 && v <= 100 ? v : dflt;
 }
 function bool(name: string, dflt: boolean): boolean {
   const v = process.env[name];
   if (v === undefined || v === "") return dflt;
+  recordConfigInput(name, ["1", "true", "yes", "on", "0", "false", "no", "off"].includes(v.toLowerCase()));
   return ["1", "true", "yes", "on"].includes(v.toLowerCase());
 }
 /** Comma-separated allowlist. Empty/missing means "not configured". */
@@ -107,6 +122,7 @@ function trustProxyHops(name: string, dflt: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return dflt;
   const v = Number(raw);
+  recordConfigInput(name, Number.isSafeInteger(v) && v >= 0 && v <= 8);
   return Number.isSafeInteger(v) && v >= 0 && v <= 8 ? v : dflt;
 }
 

@@ -1,9 +1,11 @@
 # 隔离 Compose 升级演练（#740）
 
 > 状态：测试入口与验收边界
-> 同步日期：2026-10-20
+> 同步日期：2026-10-21
 
 演练使用真实 PostgreSQL、Scheduler、Web 和 ImageAdmission 容器，以及两个源码提交构建的不同不可变镜像。Scheduler 使用 `AGENT_MODE=fake`、文件 blob 存储；不连接模型、OpenSandbox 或真实部署。它验证宿主升级状态机与实际 Compose/数据库/API 的组合，不代替真实沙箱、多架构生产部署或 Release 发布验收。
+
+P1 的跨 schema 重建、同目标中断续做、多节点编排与版本隔离仍是必须补齐的验收项；P2 才是签名和无人值守补丁更新，P3 Web 发起为可选。
 
 ## 镜像准备
 
@@ -53,7 +55,7 @@ node deploy/platform-upgrade-compose.integration.mjs \
 | --- | --- |
 | 同 schema 单控制面升级与回滚 | 已实现；用本演练补真实容器证据。 |
 | 含 schema 重建的升级 | 宿主程序拒绝；尚未接入新镜像 plan、风险确认与 apply。独立 rebuild 工具存在，不等于升级流程已接通。 |
-| 完整配置 preflight | 目前检查 Compose、schema 与 remote worker；未覆盖目标版本全部配置契约。 |
+| 配置 preflight | 已用目标镜像的离线校验器检查配置快照；非法项目 CLI 的 check/apply 阻断及修正后成功纳入容器演练。覆盖与不检查项见 [部署说明](README.md)，不等于所有配置和外部依赖已验证。 |
 | 多节点升级和版本不匹配拒领 | 当前拒绝 remote worker；尚无跨节点版本 fencing 与编排。 |
 | 中断后同目标自动续做 | 当前保留日志并要求显式回滚；恢复领取响应不明须人工对账。 |
 | 失败后自动恢复旧数据库 | [ADR 0007](../docs/architecture/adr/0007-paused-upgrade-recovery.md) 禁止覆盖暂停期间合法写入。需先决定全写入冻结、恢复点后写入处理与跨节点隔离协议。 |

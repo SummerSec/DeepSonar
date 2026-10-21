@@ -67,7 +67,7 @@ test("扩展入口与 RoleConfig 上传路径均拒绝穿越", () => {
     () => piExtensionLoaderSource("/opt/deepsonar/pi-extensions/node_modules/../escape.ts"),
     /PI_EXTENSION_ENTRY_PATH_INVALID/,
   );
-  const core = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
+  const core = readFileSync(new URL("./role-config-validation.ts", import.meta.url), "utf8");
   assert.match(core, /Pi 扩展只能通过 Hub 角色能力组合声明已注册扩展（pi_extension_ids），不能上传扩展源码/);
   assert.match(core, /\.pi\\\/agent\\\/extensions/);
   const executor = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");

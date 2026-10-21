@@ -1,19 +1,15 @@
+import { validateRoleConfigValues } from "../../role-config-values.js";
+import { RoleConfigPutBody } from "../../role-config-schema.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { AgentCliWriteSchema, PlatformToolName, allowedPlatformTools, parseModuleSelector, requiredPlatformTools } from "@deepsonar/shared-types";
+import { AgentCliWriteSchema } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import { isUuid } from "../../project-scope.js";
 import {
-  CONFIG_FILE_MAX_BYTES,
-  CONFIG_FILE_MAX_COUNT,
-  CONFIG_FILE_MAX_TOTAL,
   DISPATCH_CLAIM_ADVISORY_KEY,
-  scanConfigContent,
   rolesForProject,
-  validateConfigFilePath,
-  validateEnvVars,
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
@@ -21,10 +17,8 @@ import { parseContextWindowTokens } from "../../provider-settings.js";
 import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
 import {
   parseSandboxLimitsOverride,
-  sandboxLimitsExceedPlatform,
-  SANDBOX_LIMITS_EXCEED_PLATFORM,
 } from "../role-runtime-snapshot/sandbox-limits.js";
-import { parseRuntimeKnobOverride, validateRuntimeKnobOverride } from "../../runtime-knobs.js";
+import { parseRuntimeKnobOverride } from "../../runtime-knobs.js";
 const RoleBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/, "小写字母开头的标识符"),
   title: z.string().default(""),
@@ -62,77 +56,14 @@ function rejectUnlessUuid(
 export function registerRoleConfigRoutes(app: FastifyInstance): void {
   // ---------- RoleConfig（§4.2：角色即配置；全局缺省 + 项目级覆盖） ----------
 
-  const RoleConfigPutBody = z.object({
-    agent_cli: AgentCliWriteSchema.default("claude-code"),
-    dsh_task_mode: z.enum(["standard", "ptc"]).default("standard"),
-    model: z.string().nullish(),
-    /**
-     * @deprecated #697 — RoleConfig 不再授权 model catalog passthrough。
-     * 写入恒落 false；请用平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH`
-     * 或管理员级项目 Agent allowlist。
-     */
-    allow_model_catalog_passthrough: z.boolean().optional().default(false),
-    context_window_tokens: z.unknown().optional(),
-    env_keys: z.array(z.string()).default([]),
-    env_vars: z.record(z.string(), z.string()).default({}),
-    modules: z.array(z.string()).default([]),
-    skills: z.array(z.record(z.string(), z.unknown())).default([]),
-    commands: z.array(z.record(z.string(), z.unknown())).default([]),
-    mcps: z.array(z.record(z.string(), z.unknown())).default([]),
-    subagents: z.array(z.record(z.string(), z.unknown())).default([]),
-    platform_tools: z.partialRecord(PlatformToolName, z.boolean()).default({}),
-    instructions_markdown: z.string().max(100_000).nullish(),
-    runtime_image_key: z.string().nullish(),
-    /** Project-only numeric sandbox resource overrides; capability flags stay server-owned. */
-    sandbox_limits: z.unknown().optional(),
-    runtime_knobs: z.unknown().optional(),
-    config_files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
-  }).strict(); // #690: reject credentials / pi_extensions and any unknown RoleConfig fields
-
   async function validateRoleConfigBody(
     body: z.infer<typeof RoleConfigPutBody>,
     projectId: string | null,
     role: { name: string; kind: "role" | "hub" | "system" },
     db: typeof sql = sql,
   ): Promise<{ error: string | null; error_code?: string }> {
-    if (projectId && body.runtime_image_key != null) {
-      return { error: "项目 RoleConfig 不接受 runtime_image_key；运行镜像由平台目录与 Job 快照决定" };
-    }
-    let sandboxLimits: ReturnType<typeof parseSandboxLimitsOverride>;
-    try {
-      sandboxLimits = parseSandboxLimitsOverride(body.sandbox_limits);
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
-    }
-    if (!projectId && Object.keys(sandboxLimits).length > 0) {
-      return { error: "sandbox_limits numeric overrides are only allowed on project RoleConfigs" };
-    }
-    // #697 P0: project cannot raise any dimension above platform env defaults.
-    if (projectId && sandboxLimitsExceedPlatform(sandboxLimits, config.runtime.sandboxLimits)) {
-      return {
-        error: "sandbox_limits 任一维度不得超过平台默认（DEEPSONAR_SANDBOX_*）；更高配额请调平台 env / 镜像地板",
-        error_code: SANDBOX_LIMITS_EXCEED_PLATFORM,
-      };
-    }
-    const knobsErr = validateRuntimeKnobOverride(body.runtime_knobs);
-    if (knobsErr) return { error: knobsErr };
-    const envErr = validateEnvVars(body.env_vars);
-    try {
-      parseContextWindowTokens(body.context_window_tokens);
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
-    }
-    if (envErr) return { error: envErr };
-    for (const key of body.env_keys) {
-      if (!config.runtime.isEnvKeyAllowed(key)) return { error: `env_key 不在白名单: ${key}` };
-    }
-    for (const selector of body.modules) {
-      try {
-        parseModuleSelector(selector);
-      } catch (error) {
-        return { error: `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}` };
-      }
-    }
+    const values = validateRoleConfigValues(body, projectId, role, config.runtime);
+    if (values.error) return values;
     if (!projectId && body.runtime_image_key) {
       const [image] = await db`
         SELECT ri.id, ri.official, ri.project_opt_in,
@@ -149,32 +80,6 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         return { error: `第三方镜像必须先在目标项目显式启用: ${body.runtime_image_key}` };
       }
     }
-    const allowedTools = new Set<string>(allowedPlatformTools(role.name, role.kind));
-    for (const tool of Object.keys(body.platform_tools)) {
-      if (!allowedTools.has(tool)) return { error: `角色 ${role.name} 不支持平台工具: ${tool}` };
-    }
-    for (const tool of requiredPlatformTools(role.kind)) {
-      if (body.platform_tools[tool] === false) return { error: `终态必需平台工具不可关闭: ${tool}` };
-    }
-    // #690: RoleConfig no longer accepts credentials / pi_extensions bindings.
-    if (body.config_files.length > CONFIG_FILE_MAX_COUNT) {
-      return { error: `配置文件数量超限（>${CONFIG_FILE_MAX_COUNT}）` };
-    }
-    let totalBytes = 0;
-    for (const f of body.config_files) {
-      const pathErr = validateConfigFilePath(body.agent_cli, f.path);
-      if (pathErr) return { error: `配置文件 ${f.path}: ${pathErr}` };
-      const bytes = Buffer.byteLength(f.content, "utf8");
-      if (bytes > CONFIG_FILE_MAX_BYTES) {
-        return { error: `配置文件 ${f.path} 超过单文件大小限制` };
-      }
-      totalBytes += bytes;
-      const secretHit = scanConfigContent(f.content);
-      if (secretHit) {
-        return { error: `配置文件 ${f.path} 命中密钥特征（${secretHit}），请改用 Credential` };
-      }
-    }
-    if (totalBytes > CONFIG_FILE_MAX_TOTAL) return { error: `配置文件总大小超限` };
     return { error: null };
   }
 
