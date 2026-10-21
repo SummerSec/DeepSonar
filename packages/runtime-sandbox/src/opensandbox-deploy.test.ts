@@ -405,7 +405,8 @@ test("worker-join compose keeps server-proxy and does not change single-host pro
   const register = readFileSync(join(root, "deploy/worker-register.mjs"), "utf8");
   assert.match(register, /DEEPSONAR_WORKER_TOKEN_FILE/);
   assert.match(register, /WORKER_NODE_EXISTS/);
-  assert.match(register, /DELETE \/workers\//);
+  assert.match(register, /reuse the persisted node token with the current generation credentials for re-enrollment/);
+  assert.doesNotMatch(register, /DELETE \/workers\//);
   const heartbeatFn = register.match(/async function heartbeat\([\s\S]*?\n\}/);
   assert.ok(heartbeatFn);
   assert.doesNotMatch(heartbeatFn[0], /\bendpoint\b/);
