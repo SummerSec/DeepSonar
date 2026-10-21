@@ -59,33 +59,51 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
   // This watchdog has its own event loop; unlike a test timeout it still fires
   // if the test process blocks in a native call or filesystem operation.
   const watchdog=spawn(process.execPath,['-e',`
-    const targets=new Set([Number(process.argv[1])]);
-    process.on('message',message=>{if(message.add)targets.add(message.add);if(message.remove)targets.delete(message.remove);});
-    setTimeout(()=>{process.stderr.write('native borrower fixture watchdog deadline\\n');for(const pid of [...targets].reverse())try{process.kill(pid,'SIGKILL');}catch{}process.exit(79);},45000);
-  `,String(process.pid)],{stdio:['ignore','ignore','inherit','ipc']});
+    const targets=new Set([Number(process.argv[1])]),started=Date.now(),stages={};
+    process.on('message',message=>{
+      if(message.add)targets.add(message.add);if(message.remove)targets.delete(message.remove);
+      if(['test','owner'].includes(message.source)&&/^[a-z_]+$/.test(message.stage??''))stages[message.source]={stage:message.stage,elapsed_ms:Date.now()-started};
+    });
+    setTimeout(async()=>{
+      const native=await Promise.race([
+        require('node:fs/promises').readFile(process.argv[2],'utf8').then(text=>{const value=JSON.parse(text);return {stage:/^[a-z_]+$/.test(value.stage??'')?value.stage:'invalid',hresult:Number.isInteger(value.hresult)?value.hresult:undefined};}).catch(()=>({stage:'unavailable'})),
+        new Promise(resolve=>setTimeout(()=>resolve({stage:'read_timeout'}),1000)),
+      ]);
+      const processes=[...targets].map(pid=>{try{process.kill(pid,0);return {pid,alive:true};}catch{return {pid,alive:false};}});
+      process.stderr.write('native borrower fixture watchdog '+JSON.stringify({elapsed_ms:Date.now()-started,stages,native,processes})+'\\n');
+      for(const pid of [...targets].reverse())try{process.kill(pid,'SIGKILL');}catch{}process.exit(79);
+    },45000);
+  `,String(process.pid),diagnosticFile],{stdio:['ignore','ignore','inherit','ipc']});
   const watch=message=>{if(watchdog.connected)watchdog.send(message);};
+  const mark=stage=>new Promise(resolve=>{if(watchdog.connected)watchdog.send({source:'test',stage},()=>resolve());else resolve();});
+  await mark('compile_completed');
+  await mark('owner_spawn_begin');
   const owner=spawn(process.execPath,['--input-type=module','-e',`
     import {spawn} from 'node:child_process';
     import {writeFile} from 'node:fs/promises';
     import {windowsUpgradeOperation,withWindowsUpgradeLock} from ${JSON.stringify(windowsUrl)};
-    const diagnostic=(stage,extra={})=>process.stderr.write(JSON.stringify({stage,...extra})+'\\n');
+    const stage=value=>new Promise(resolve=>process.send({type:'stage',stage:value},()=>resolve()));
     let lease;const operation=request=>{const result=windowsUpgradeOperation(request);if(request.action==='acquire')lease=result;return result;};
+    await stage('acquire_begin');
     await withWindowsUpgradeLock(process.argv[1],async()=>{
-      diagnostic('owner_acquired');
+      await stage('acquired');
       await writeFile(process.argv[3],[process.pid,lease.handle,lease.owner_creation].join('\\n'));
+      await stage('helper_spawn_begin');
       const helper=spawn(process.argv[2],[process.argv[3],process.argv[4],process.argv[5]],{stdio:'ignore',detached:true,windowsHide:true});
-      helper.on('spawn',()=>process.send({type:'helper_spawned',pid:helper.pid}));
+      helper.on('spawn',()=>{process.send({type:'helper_spawned',pid:helper.pid});stage('helper_spawned');});
       helper.on('error',error=>process.send({type:'helper_error',code:error.code??null}));
       helper.on('exit',(code,signal)=>process.send({type:'helper_exit',pid:helper.pid,code,signal}));
       await new Promise(()=>setInterval(()=>{},1000));
     },{operation});`,file,executable,requestFile,readyFile,diagnosticFile],{stdio:['ignore','ignore','pipe','ipc']});
   watch({add:owner.pid});
+  watch({source:'test',stage:'owner_spawned'});
   let borrower,spawnedHelper,helperExit,ownerExit,ownerError;
   let diagnostics='';owner.stderr.on('data',data=>{diagnostics+=data.toString();});
   owner.on('exit',(code,signal)=>{ownerExit={code,signal};watch({remove:owner.pid});});
   owner.on('error',error=>{ownerError=error.code;});
   owner.on('message',message=>{
-    if(message?.type==='helper_spawned' && Number.isSafeInteger(message.pid) && message.pid>0){spawnedHelper=message.pid;watch({add:message.pid});}
+    if(message?.type==='stage')watch({source:'owner',stage:message.stage});
+    if(message?.type==='helper_spawned' && Number.isSafeInteger(message.pid) && message.pid>0){spawnedHelper=message.pid;watch({add:message.pid});watch({source:'test',stage:'helper_pid_received'});}
     if(message?.type==='helper_exit'){helperExit={code:message.code,signal:message.signal};if(message.pid===spawnedHelper){watch({remove:message.pid});spawnedHelper=undefined;}}
     if(message?.type==='helper_error')helperExit={code:message.code};
   });
@@ -100,13 +118,14 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     throw new Error('isolated borrower did not exit within cleanup deadline');
   };
   t.after(async()=>{
+    await mark('cleanup_begin');
     try {if(!helperExit)await stopHelper(spawnedHelper??borrower);}
     finally {
       if(borrower)watch({remove:borrower});if(spawnedHelper)watch({remove:spawnedHelper});
       borrower=spawnedHelper=undefined;
       try{owner.kill('SIGKILL');}catch{}
       owner.stderr.destroy();if(owner.connected)owner.disconnect();
-      try {await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});}
+      try {await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});await mark('cleanup_completed');}
       finally {watchdog.kill('SIGKILL');if(watchdog.connected)watchdog.disconnect();}
     }
   });
@@ -114,6 +133,7 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     try{return JSON.parse(await readFile(path,'utf8'));}catch(error){if(error.code==='ENOENT'||error instanceof SyntaxError)return null;throw error;}
   };
   const deadline=Date.now()+15000;
+  await mark('ready_wait');
   while(!borrower){
     const ready=await readJson(readyFile);
     if(ready&&spawnedHelper){assert.equal(ready,spawnedHelper);borrower=ready;break;}
@@ -123,11 +143,20 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     }
     await new Promise(resolve=>setTimeout(resolve,50));
   }
+  await mark('ready');
   assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must be alive before owner termination');
+  await mark('owner_kill_begin');
   const exited=once(owner,'exit');owner.kill('SIGKILL');await exited;
+  await mark('owner_exited');
   assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must survive owner termination');
   const {withUpgradeLock}=await import('./platform-upgrade-lock.mjs');
+  await mark('competing_lock_begin');
   await assert.rejects(withUpgradeLock(file,async()=>assert.fail('orphan helper still owns the lock')),/another upgrade/);
+  await mark('competing_lock_rejected');
+  await mark('helper_stop_begin');
   await stopHelper(borrower);watch({remove:borrower});borrower=spawnedHelper=undefined;
+  await mark('helper_stopped');
+  await mark('reacquire_begin');
   await withUpgradeLock(file,async()=>{});
+  await mark('reacquire_completed');
 });
