@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload } from "./project-knowledge.js";
+export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
 import {
   DescribeCapabilityPayload,
@@ -259,7 +261,7 @@ export type JobStatus = z.infer<typeof JobStatus>;
 export const JobType = z.string().min(1);
 export type JobType = z.infer<typeof JobType>;
 
-export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision", "plan", "plan_result"]);
+export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision", "plan", "plan_result", "knowledge"]);
 export type EventType = z.infer<typeof EventType>;
 
 export const Severity = z.enum(["low", "medium", "high", "critical"]);
@@ -1375,6 +1377,7 @@ export const AckHumanMessagePayload = z.object({
 export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 
 export const ControlToolPayloadSchemas = {
+  ...KnowledgeControlPayloadSchemas,
   list_available_roles: ListAvailableRolesPayload,
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
   list_available_agent_clis: ListAvailableAgentClisPayload,
@@ -1466,6 +1469,7 @@ export type ControlEventEnvelope = z.infer<typeof ControlEventEnvelope>;
 /** Internal payloads may carry scheduler-owned fields, but every side effect
  * revalidates the corresponding strict schema before writing. */
 export const EventEnvelope = z.discriminatedUnion("type", [
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("knowledge"), payload: KnowledgeMutationPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: FindingPayload }).strict(),
   z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
@@ -1488,6 +1492,7 @@ export type EventEnvelopeInput = {
 // ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
 
 export const PlatformToolName = z.enum([
+  ...KNOWLEDGE_OPERATION_IDS,
   "list_available_roles",
   "list_available_runtime_images",
   "list_available_agent_clis",
@@ -1629,6 +1634,7 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
  * 每个 Agent 默认都可勾选其中任意项；是否真正注入以 RoleConfig 开关 + Job 快照为准。
  */
 export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
+  ...KNOWLEDGE_OPERATION_IDS,
   "list_available_roles",
   "list_available_runtime_images",
   "list_available_agent_clis",

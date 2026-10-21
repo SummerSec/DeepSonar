@@ -1,0 +1,19 @@
+{
+  "api": "http://127.0.0.1:3100/",
+  "relay": "http://127.0.0.1:4318",
+  "upstream": "https://api.anthropic.com",
+  "provider": "anthropic",
+  "model": "USER_MUST_SELECT_MODEL",
+  "port": 4318,
+  "journal": "/tmp/knowledge-live-budget.jsonl",
+  "report": "/tmp/knowledge-live-report.json",
+  "maxJobs": 66,
+  "maxRequests": 0,
+  "requestsPerJob": 20,
+  "maxOutputTokens": 8192,
+  "maxInputBytes": 262144,
+  "maxUsd": 0,
+  "providerHardLimitUsd": 0,
+  "reserveUsdPerRequest": 0,
+  "seconds": 3600
+}

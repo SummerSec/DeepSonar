@@ -75,7 +75,7 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
 
 `maintenance-remaining/summary.json` 的 `success-preparing` 后续也已通过并清理：第一代激活后，在同一 fixture 以相同镜像 digest、测试版本 `0.0.7` 执行第二代 61 → 61，真实停止 Web 触发回滚，验证安全暂停与显式 `resumeRollback`、持久维护身份、新 rollback role/generation、active 且 claims 恢复、旧源角色仍 NOLOGIN。这证明连续代协议与支持维护契约的源代恢复，不是不同源码版本的连续升级。
 
-这些是明确的场景子集，不代表完整矩阵通过。本轮选定中断/排空矩阵的后续结果见下方 UTC 快照；最终合入基线仍必须重新构建并演练。#756 的临时本地提交 `6f61fff8577c0a0701d93504b97b6096c927d267` 已用实际 #756 提交 `a01eb394` 的 schema 61 执行 custom `pg_dump` → 私有文件 SHA-256/TOC 校验 → template0 候选 `pg_restore`，恢复后 plan hash 与源库一致，再实际重建到 62，知识、receipt、偏好及历史 Job 保留；独立传输测试 1/1、相关回归 13/13 与类型检查通过，数据库/备份已清理。此证据取代早期 TEMPLATE 克隆和手工 CHECK 重解析的传输限制，**不是 Compose 验收，也不是已发布基线**；最终编号以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准。Windows 原生维护升级尚未实现，Linux 上的 PowerShell 函数测试也不证明 Windows 原生升级通过。
+这些是明确的场景子集，不代表完整矩阵通过。本轮选定中断/排空矩阵的后续结果见下方 UTC 快照；最终合入基线仍必须重新构建并演练。#756 的临时本地提交 `6f61fff8577c0a0701d93504b97b6096c927d267` 已用实际 #756 提交 `a01eb394` 的 schema 61 执行 custom `pg_dump` → 私有文件 SHA-256/TOC 校验 → template0 候选 `pg_restore`，恢复后 plan hash 与源库一致，再实际重建到 62，知识、receipt、偏好及历史 Job 保留；独立传输测试 1/1、相关回归 13/13 与类型检查通过，数据库/备份已清理。此证据取代早期 TEMPLATE 克隆和手工 CHECK 重解析的传输限制，**不是 Compose 验收，也不是已发布基线**；最终编号以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准。以上历史运行尚未包含 Windows 后端；当前原生后端已经实现，验收状态独立记录，Linux 上的 PowerShell 函数测试不证明 Windows 原生升级通过。
 
 新增密钥内容/密文认证和 credential-first 解析属于后续源码增强；上述旧镜像 Compose 结果不覆盖这些检查。对应新镜像预检证据见下方 UTC 快照，不能由既有旧镜像成功场景推定通过。
 
@@ -89,7 +89,7 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
 
 同一目标镜像的实际 dist 离线预检 **8/8** 通过，报告 `final-image-offline-preflight.json`：合法输入、错误密钥、错误 auth tag、非法 nonce、默认 CLI 不匹配、文件密钥优先、非法文件内容、跨 schema 错误密钥；均在断网/只读根文件系统运行且无秘密输出。该证据覆盖新增密钥/密文认证及持久默认组合解析，仍不证明上游认证或模型可用性。宿主提交对应 [CI](https://github.com/SummerSec/DeepSonar/actions/runs/39545204186) 与 [另一工作流](https://github.com/SummerSec/DeepSonar/actions/runs/39545204193) 合计 8/8 job 成功，无失败、取消、跳过或等待。
 
-这是上述 UTC 时刻的证据快照，不是全部场景通过：`backup-integrity-rejection` 与 `multinode-recovery` 将单独运行，未计入这 9 项。最终 #756 合入后的唯一 schema 62 组合镜像尚待验收；Windows 原生维护后端、P2 签名/无人值守仍未完成，P3 Web 发起为可选。没有执行真实部署、公共镜像发布或 Release。
+这是上述 UTC 时刻的证据快照，不是全部场景通过：`backup-integrity-rejection` 与 `multinode-recovery` 将单独运行，未计入这 9 项。最终 #756 合入后的唯一 schema 62 组合镜像尚待验收；该时刻 Windows 原生维护后端与 P2 尚未完成；后续实现见下方当前边界，P3 Web 发起为可选。没有执行真实部署、公共镜像发布或 Release。
 
 ## #740 当前验收边界
 
@@ -102,6 +102,7 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
 | 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；真实升级与旧身份拒绝已通过；完整远程恢复矩阵仍待验收，旧源缺维护契约时不能恢复远程节点。 |
 | 中断后同目标续做 | journal 固定目标与实际回执驱动；已实现，本轮 6 个真实 actor SIGKILL 场景已通过；范围与目标基线见下方快照。 |
 | 失败恢复与激活边界 | [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md) 保留冻结源库，激活前可回源保持暂停；激活后/结果不明不切旧库，不能抹掉已接受写入。 |
-| Release 实际发布、P2/P3 | 发布生成/inspect 门禁不等于已发布；P2 签名/无人值守未完成，P3 Web 发起为可选且未实现，不能未经授权触发发布补证据。 |
+| Windows 原生宿主 | 已实现 NTFS 内核锁、借用句柄、私有 DACL 与持久写入；原生 CI 正在验收，Windows Docker 完整演练未运行。Linux PowerShell 证据不能替代原生验收。 |
+| Release 实际发布、P2/P3 | 已实现签名验证、默认关闭的补丁自动升级和禁用调度模板；真实 keyless 发布权限与正向链路验收待处理，详见 [P2 说明](UPGRADE_AUTOMATION.md)。P3 Web 发起为可选且未实现；发布生成/inspect 门禁不等于已发布。 |
 
 验收进行中不等于没有实现，也不等于 #740 已完成。新增真实结果应另附最终提交和镜像 digest，不覆盖或扩大历史证据的含义。

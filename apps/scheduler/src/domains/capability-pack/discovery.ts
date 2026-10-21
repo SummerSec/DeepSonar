@@ -15,6 +15,8 @@ import {
   type MissingModule,
   type SourceModule,
 } from "../../skill-sources.js";
+import { loadJobSkillCatalog, type FrozenJobSkillCatalog } from "../../job-skill-catalog.js";
+import { visibleKnowledgeEntries, projectSkillSelector, type FrozenKnowledgeCatalog } from "../project-knowledge/catalog-snapshot.js";
 import {
   BUILTIN_CAPABILITY_PACKS,
   availableCatalogIds,
@@ -68,22 +70,6 @@ export interface TrustedSkillSourceCatalog {
 
 type CatalogDb = typeof import("../../db.js").sql;
 
-export async function loadTrustedSkillSources(db: CatalogDb): Promise<TrustedSkillSourceCatalog[]> {
-  const rows = await db`
-    SELECT id, trust_status, enabled, catalog_json, last_commit_sha, last_content_hash
-    FROM skill_sources
-    WHERE enabled = true AND trust_status = 'trusted'
-    ORDER BY created_at ASC`;
-  return (rows as Array<Record<string, unknown>>).map((row) => ({
-    id: String(row.id),
-    trust_status: String(row.trust_status),
-    enabled: Boolean(row.enabled),
-    last_commit_sha: typeof row.last_commit_sha === "string" ? row.last_commit_sha : null,
-    last_content_hash: typeof row.last_content_hash === "string" ? row.last_content_hash : null,
-    catalog: Array.isArray(row.catalog_json) ? row.catalog_json as SourceModule[] : [],
-  }));
-}
-
 export function buildCapabilityCatalog(input: {
   sources?: readonly TrustedSkillSourceCatalog[];
   job?: CapabilityJobEnvelope;
@@ -127,8 +113,16 @@ export function buildCapabilityCatalog(input: {
   });
 }
 
-export async function loadCapabilityCatalog(db: CatalogDb, job?: CapabilityJobEnvelope): Promise<CapabilityCatalogRecord[]> {
-  return buildCapabilityCatalog({ sources: await loadTrustedSkillSources(db), job });
+/** Runtime catalog loading requires the Job's frozen inventory and project scope. */
+export async function loadCapabilityCatalog(
+  db: CatalogDb,
+  projectId: string,
+  frozen: FrozenJobSkillCatalog | undefined,
+  job?: CapabilityJobEnvelope,
+): Promise<CapabilityCatalogRecord[]> {
+  const sources = (await loadJobSkillCatalog(db as never, projectId, frozen))
+    .map((source) => ({ ...source, trust_status: "trusted", enabled: true }));
+  return buildCapabilityCatalog({ sources, job: job ? { ...job, frozen: null } : undefined });
 }
 
 function page<T>(items: readonly T[], limit = 50, offset = 0): { items: T[]; total: number; limit: number; offset: number; next_offset: number | null } {
@@ -391,6 +385,8 @@ export function jobEnvelopeFromSnapshot(snapshot: {
   module_content_hash?: unknown;
   network_policy?: unknown;
   capability_pack?: unknown;
+  job_skill_catalog?: unknown;
+  project_knowledge_catalog?: unknown;
 }): CapabilityJobEnvelope {
   const network = snapshot.network_policy && typeof snapshot.network_policy === "object" && !Array.isArray(snapshot.network_policy)
     ? snapshot.network_policy as { allow_egress?: unknown }
@@ -421,13 +417,29 @@ export async function handleCapabilityDiscovery(input: {
   operation: string;
   payload: unknown;
   snapshot: Parameters<typeof jobEnvelopeFromSnapshot>[0];
+  projectId: string;
   db: CatalogDb;
 }): Promise<Record<string, unknown>> {
   const job = jobEnvelopeFromSnapshot(input.snapshot);
-  const [records, sources] = await Promise.all([
-    loadCapabilityCatalog(input.db, job),
-    loadTrustedSkillSources(input.db),
-  ]);
+  const sources = (await loadJobSkillCatalog(
+    input.db as never,
+    input.projectId,
+    input.snapshot.job_skill_catalog as FrozenJobSkillCatalog | undefined,
+  )).map((source) => ({ ...source, trust_status: "trusted", enabled: true }));
+  // The Job-wide frozen catalog is the runtime upper bound. The role's selected
+  // capability pack remains a separate frozen proposal, not a live-source gate.
+  const runtimeJob = { ...job, frozen: null };
+  const records = buildCapabilityCatalog({ sources, job: runtimeJob });
+  if (input.snapshot.project_knowledge_catalog) {
+    const entries = await visibleKnowledgeEntries(input.db, input.projectId, input.snapshot.project_knowledge_catalog as FrozenKnowledgeCatalog);
+    for (const entry of entries.filter((item) => item.kind === "skill")) {
+      const record = manifestFromSkillModule({
+        sourceId: entry.owner_project_id, commitSha: String(entry.version), contentHash: entry.hash, scope: "project",
+        module: { id: entry.item_id, kind: "skill", plugin: "project", name: entry.title, description: entry.keywords.join(" "), files: {} },
+      });
+      records.push({ ...record, selector: projectSkillSelector(entry) });
+    }
+  }
   if (input.operation === "list_capabilities") {
     const parsed = ListCapabilitiesPayload.parse(input.payload ?? {});
     return { accepted: true, operation: input.operation, ...listCapabilities(records, parsed) };
@@ -443,12 +455,12 @@ export async function handleCapabilityDiscovery(input: {
   }
   if (input.operation === "validate_composition") {
     const parsed = ValidateCompositionPayload.parse(input.payload ?? {});
-    const result = validateComposition(records, job, parsed, sources);
+    const result = validateComposition(records, runtimeJob, parsed, sources);
     return { accepted: result.ok, operation: input.operation, ...result };
   }
   if (input.operation === "preview_materialization") {
     const parsed = PreviewMaterializationPayload.parse(input.payload ?? {});
-    const result = previewMaterialization(records, job, parsed, sources);
+    const result = previewMaterialization(records, runtimeJob, parsed, sources);
     return { accepted: result.ok, operation: input.operation, ...result };
   }
   throw new Error(`unknown capability discovery operation: ${input.operation}`);

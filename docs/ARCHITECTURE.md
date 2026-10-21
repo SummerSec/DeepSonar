@@ -686,6 +686,8 @@ RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表
 项目级表 `project_skill_sources`（#603/#691）只保留显式停用：平台 trusted+enabled 源默认进入本项目 Job 快照可见集合。RoleConfig `modules_json` 为空时不再预装业务 Skill；Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取具体 Skill 文件并读取 `SKILL.md`。拉取只允许平台 trusted+enabled 且未被项目停用的源，并由 Job token、操作 allowlist、预算、网络策略和内容 hash 重新校验；Skill 不能扩大 Job 权限。Hub `list_available_skill_sources` 只返回源摘要。平台 `deepsonar-control` Skill 继续强制注入。跨任务业务身份复用写成受治理 Skill，而不是项目级 `agent_roles`。
 
 
+#752 在全局源之外增加项目 Memory/Skill 版本目录。Job 只冻结 active 或精确授权的版本，普通目录不含候选；运行时再次与不可逆 source/project epoch、版本和授权 revoke 取交集。项目 Skill 默认私有，跨项目授权不附带来源 Memory/Evidence、未来版本或内核权限。知识 work 的独立标准 Job、case×arm 隔离、event/receipt 事务、自动结算和历史保留见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。平台发现 Skill 只指导 Agent，授权由 Scheduler 执行。
+
 Agent 的插件/Skill 集中托管在 Git 仓库，由平台受控同步并缓存；Agent 在 Job 内按需从目录选择并拉取，不要求 RoleConfig 预先勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 
 - `POST /skill-sources/:id/sync`：浅克隆 → 扫描 `SKILL.md`（skill）与 `commands/*.md`（slash 命令）→ catalog（含文件内容）落库缓存

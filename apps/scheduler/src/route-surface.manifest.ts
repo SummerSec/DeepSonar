@@ -6,6 +6,16 @@
  */
 
 export const REGISTERED_ROUTE_SURFACE = `
+GET /projects/:id/knowledge/:itemId/versions
+GET /projects/:id/knowledge
+GET /projects/:id/knowledge/receipts
+GET /projects/:id/knowledge/receipts/:receiptId
+GET /projects/:id/knowledge/:itemId
+GET /projects/:id/knowledge/:itemId/versions/:versionId
+GET /projects/:id/knowledge/:itemId/versions/:versionId/grants
+POST /projects/:id/knowledge/:itemId/versions/:versionId/grants
+POST /projects/:id/knowledge/grants/:grantId/revoke
+POST /projects/:id/knowledge/:itemId/versions/:versionId/revoke
 DELETE /agent-roles/:id
 DELETE /credentials/:id
 DELETE /devices/:id
@@ -221,6 +231,16 @@ PUT /role-configs/global/:roleId
 `.trim().split(/\r?\n/);
 
 export const OPENAPI_OPERATION_SURFACE = `
+GET /projects/{id}/knowledge/{itemId}/versions
+GET /projects/{id}/knowledge
+GET /projects/{id}/knowledge/receipts
+GET /projects/{id}/knowledge/receipts/{receiptId}
+GET /projects/{id}/knowledge/{itemId}
+GET /projects/{id}/knowledge/{itemId}/versions/{versionId}
+GET /projects/{id}/knowledge/{itemId}/versions/{versionId}/grants
+POST /projects/{id}/knowledge/{itemId}/versions/{versionId}/grants
+POST /projects/{id}/knowledge/grants/{grantId}/revoke
+POST /projects/{id}/knowledge/{itemId}/versions/{versionId}/revoke
 DELETE /agent-roles/{id}
 DELETE /credentials/{id}
 DELETE /devices/{id}

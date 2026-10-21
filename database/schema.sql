@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 61);
+INSERT INTO schema_meta (id, version) VALUES ('global', 62);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -881,11 +881,14 @@ CREATE INDEX job_usage_ledger_job_idx ON job_usage_ledger (job_id, observed_at D
 CREATE INDEX job_usage_ledger_project_idx ON job_usage_ledger (project_id, observed_at DESC);
 
 CREATE TABLE skill_sources (
+  source_instance_id uuid NOT NULL DEFAULT gen_random_uuid(),
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL UNIQUE,
   repo_url text NOT NULL,
   branch text NOT NULL DEFAULT 'main',
   catalog_json jsonb NOT NULL DEFAULT '[]',
+  catalog_snapshot_hash text REFERENCES shared_asset_blobs(content_sha256),
+  revocation_epoch bigint NOT NULL DEFAULT 0 CHECK (revocation_epoch >= 0),
   trust_status text NOT NULL DEFAULT 'quarantined',
   enabled boolean NOT NULL DEFAULT false,
   last_commit_sha text,
@@ -1352,6 +1355,7 @@ CREATE TABLE project_skill_sources (
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   skill_source_id uuid NOT NULL REFERENCES skill_sources(id) ON DELETE CASCADE,
   enabled boolean NOT NULL DEFAULT true,
+  revocation_epoch bigint NOT NULL DEFAULT 0 CHECK (revocation_epoch >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, skill_source_id)
@@ -2240,5 +2244,233 @@ CREATE TABLE device_events (
 );
 CREATE INDEX device_events_device_idx ON device_events (device_id, created_at DESC);
 CREATE INDEX device_events_lease_idx ON device_events (lease_id, created_at DESC);
+
+-- #752: immutable project knowledge and Scheduler-owned governance bookkeeping.
+CREATE FUNCTION deepsonar_skill_source_epoch() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.source_instance_id := OLD.source_instance_id;
+  NEW.revocation_epoch := OLD.revocation_epoch;
+  IF (OLD.enabled AND NOT NEW.enabled) OR (OLD.trust_status = 'trusted' AND NEW.trust_status <> 'trusted') THEN
+    NEW.revocation_epoch := OLD.revocation_epoch + 1;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER skill_sources_revoke_epoch BEFORE UPDATE ON skill_sources
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_skill_source_epoch();
+CREATE FUNCTION deepsonar_project_skill_epoch() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.revocation_epoch := CASE WHEN NEW.enabled THEN 0 ELSE 1 END;
+    RETURN NEW;
+  END IF;
+  NEW.revocation_epoch := OLD.revocation_epoch;
+  IF OLD.enabled AND NOT NEW.enabled THEN NEW.revocation_epoch := OLD.revocation_epoch + 1; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER project_skill_sources_revoke_epoch BEFORE INSERT OR UPDATE ON project_skill_sources
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_project_skill_epoch();
+
+CREATE TABLE project_knowledge_work (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  origin_job_id uuid REFERENCES jobs(id),
+  canvas_id text REFERENCES canvases(id),
+  trigger_key text NOT NULL CHECK (length(trigger_key) BETWEEN 1 AND 240),
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','completed','blocked','cancelled')),
+  stage text NOT NULL DEFAULT 'maker' CHECK (stage IN ('maker','evaluator','reviewer','settle')),
+  generation bigint NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  active_job_id uuid REFERENCES jobs(id),
+  claim_expires_at timestamptz,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  job_count int NOT NULL DEFAULT 0 CHECK (job_count BETWEEN 0 AND 32),
+  revision_count int NOT NULL DEFAULT 0 CHECK (revision_count BETWEEN 0 AND 2),
+  run_seconds int NOT NULL DEFAULT 0 CHECK (run_seconds >= 0),
+  input_manifest_json jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(input_manifest_json) = 'array'),
+  governance_hash text NOT NULL CHECK (governance_hash ~ '^[a-f0-9]{64}$'),
+  reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id,id), UNIQUE (project_id,trigger_key)
+);
+CREATE UNIQUE INDEX project_knowledge_work_one_running ON project_knowledge_work(project_id) WHERE state = 'running';
+CREATE INDEX project_knowledge_work_pending ON project_knowledge_work(next_attempt_at) WHERE state = 'pending';
+
+CREATE TABLE project_knowledge_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  kind text NOT NULL CHECK (kind IN ('memory','skill')),
+  logical_key text NOT NULL CHECK (length(logical_key) BETWEEN 1 AND 160),
+  title text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+  keywords_json jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(keywords_json) = 'array'),
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','stale','retired','revoked')),
+  active_version_id uuid,
+  generation bigint NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id,id), UNIQUE (project_id,kind,logical_key),
+  CHECK (status <> 'active' OR active_version_id IS NOT NULL)
+);
+CREATE TABLE project_knowledge_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  item_id uuid NOT NULL,
+  version int NOT NULL CHECK (version > 0),
+  content_sha256 text NOT NULL REFERENCES shared_asset_blobs(content_sha256),
+  creator_job_id uuid NOT NULL REFERENCES jobs(id),
+  creator_attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  sources_json jsonb NOT NULL CHECK (jsonb_typeof(sources_json) = 'array'),
+  governance_hash text NOT NULL CHECK (governance_hash ~ '^[a-f0-9]{64}$'),
+  revoked_at timestamptz,
+  revoked_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id,id), UNIQUE (project_id,item_id,id), UNIQUE (item_id,version),
+  FOREIGN KEY (project_id,item_id) REFERENCES project_knowledge_items(project_id,id)
+);
+ALTER TABLE project_knowledge_items ADD CONSTRAINT project_knowledge_active_version_fk
+  FOREIGN KEY (project_id,id,active_version_id) REFERENCES project_knowledge_versions(project_id,item_id,id)
+  DEFERRABLE INITIALLY DEFERRED;
+CREATE FUNCTION deepsonar_knowledge_version_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (to_jsonb(NEW) - 'revoked_at' - 'revoked_reason') IS DISTINCT FROM (to_jsonb(OLD) - 'revoked_at' - 'revoked_reason')
+     OR (OLD.revoked_at IS NOT NULL AND (NEW.revoked_at IS DISTINCT FROM OLD.revoked_at OR NEW.revoked_reason IS DISTINCT FROM OLD.revoked_reason)) THEN
+    RAISE EXCEPTION 'knowledge_version_immutable';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER project_knowledge_versions_immutable BEFORE UPDATE ON project_knowledge_versions
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_knowledge_version_immutable();
+
+CREATE TABLE project_knowledge_proposals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  work_id uuid NOT NULL,
+  action text NOT NULL CHECK (action IN ('reuse','revise','create','merge','retire')),
+  state text NOT NULL DEFAULT 'candidate' CHECK (state IN ('candidate','evaluating','review_pending','active','needs_eval','blocked','rejected','retired')),
+  revision int NOT NULL CHECK (revision BETWEEN 1 AND 3),
+  parent_proposal_id uuid,
+  candidate_version_id uuid,
+  maker_job_id uuid NOT NULL REFERENCES jobs(id),
+  idempotency_key uuid NOT NULL,
+  request_digest text NOT NULL CHECK (request_digest ~ '^[a-f0-9]{64}$'),
+  input_digest text NOT NULL CHECK (input_digest ~ '^[a-f0-9]{64}$'),
+  base_refs_json jsonb NOT NULL DEFAULT '[]',
+  evaluation_plan_json jsonb NOT NULL DEFAULT '[]',
+  reason text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id,id), UNIQUE (maker_job_id,idempotency_key),
+  FOREIGN KEY (project_id,work_id) REFERENCES project_knowledge_work(project_id,id),
+  FOREIGN KEY (project_id,parent_proposal_id) REFERENCES project_knowledge_proposals(project_id,id),
+  FOREIGN KEY (project_id,candidate_version_id) REFERENCES project_knowledge_versions(project_id,id)
+);
+CREATE TABLE project_knowledge_job_assignments (
+  job_id uuid PRIMARY KEY REFERENCES jobs(id),
+  project_id uuid NOT NULL,
+  work_id uuid NOT NULL,
+  proposal_id uuid,
+  stage text NOT NULL CHECK (stage IN ('maker','evaluator','reviewer','trial')),
+  case_id text,
+  arm text CHECK (arm IN ('without','baseline','candidate')),
+  input_digest text CHECK (input_digest ~ '^[a-f0-9]{64}$'),
+  input_manifest_json jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id,job_id),
+  FOREIGN KEY (project_id,work_id) REFERENCES project_knowledge_work(project_id,id),
+  FOREIGN KEY (project_id,proposal_id) REFERENCES project_knowledge_proposals(project_id,id),
+  CHECK ((stage = 'trial') = (case_id IS NOT NULL AND arm IS NOT NULL))
+);
+CREATE UNIQUE INDEX project_knowledge_one_assignment_trial ON project_knowledge_job_assignments(proposal_id,case_id,arm) WHERE stage='trial';
+CREATE TABLE project_knowledge_evaluations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  proposal_id uuid NOT NULL,
+  proposal_revision int NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('behavior','review')),
+  actor_job_id uuid NOT NULL,
+  actor_attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  input_digest text NOT NULL CHECK (input_digest ~ '^[a-f0-9]{64}$'),
+  result_json jsonb NOT NULL CHECK (jsonb_typeof(result_json)='object'),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(project_id,id), UNIQUE(proposal_id,kind,actor_job_id),
+  FOREIGN KEY (project_id,proposal_id) REFERENCES project_knowledge_proposals(project_id,id),
+  FOREIGN KEY (project_id,actor_job_id) REFERENCES project_knowledge_job_assignments(project_id,job_id)
+);
+CREATE FUNCTION deepsonar_knowledge_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'knowledge_record_append_only'; END $$;
+CREATE TRIGGER project_knowledge_versions_no_delete BEFORE DELETE ON project_knowledge_versions
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_knowledge_append_only();
+CREATE TRIGGER project_knowledge_evaluations_immutable BEFORE UPDATE OR DELETE ON project_knowledge_evaluations
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_knowledge_append_only();
+CREATE TABLE project_knowledge_receipts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  job_id uuid NOT NULL REFERENCES jobs(id),
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  operation text NOT NULL,
+  idempotency_key uuid NOT NULL,
+  input_digest text NOT NULL CHECK (input_digest ~ '^[a-f0-9]{64}$'),
+  state text NOT NULL DEFAULT 'settled' CHECK (state='settled'),
+  event_id uuid NOT NULL,
+  result_json jsonb NOT NULL CHECK (jsonb_typeof(result_json)='object'),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  settled_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(project_id,id), UNIQUE(job_id,idempotency_key)
+);
+CREATE TRIGGER project_knowledge_receipts_immutable BEFORE UPDATE OR DELETE ON project_knowledge_receipts
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_knowledge_append_only();
+CREATE TABLE project_knowledge_grants (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_project_id uuid NOT NULL,
+  item_id uuid NOT NULL,
+  version_id uuid NOT NULL,
+  grantee_project_id uuid NOT NULL REFERENCES projects(id),
+  granted_by text NOT NULL,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(owner_project_id,id),
+  FOREIGN KEY (owner_project_id,item_id,version_id) REFERENCES project_knowledge_versions(project_id,item_id,id),
+  CHECK(owner_project_id <> grantee_project_id)
+);
+CREATE UNIQUE INDEX project_knowledge_grants_active ON project_knowledge_grants(version_id,grantee_project_id) WHERE revoked_at IS NULL;
+CREATE FUNCTION deepsonar_knowledge_grant_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
+    OR (to_jsonb(NEW) - 'revoked_at') IS DISTINCT FROM (to_jsonb(OLD) - 'revoked_at') THEN
+    RAISE EXCEPTION 'knowledge grant is immutable; create a new exact grant';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER project_knowledge_grant_immutable BEFORE UPDATE OR DELETE ON project_knowledge_grants
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_knowledge_grant_immutable();
+CREATE TABLE project_knowledge_usages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  job_id uuid NOT NULL REFERENCES jobs(id),
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  selector text NOT NULL,
+  content_sha256 text NOT NULL CHECK (content_sha256 ~ '^[a-f0-9]{64}$'),
+  owner_project_id uuid,
+  version_id uuid,
+  feedback_json jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(project_id,id),
+  FOREIGN KEY (owner_project_id,version_id) REFERENCES project_knowledge_versions(project_id,id)
+);
+CREATE UNIQUE INDEX project_knowledge_usage_once ON project_knowledge_usages(job_id,attempt_id,selector,content_sha256);
+CREATE INDEX project_knowledge_usages_job_idx ON project_knowledge_usages(job_id,created_at);
+
+-- Composite references stop forged Job/Attempt provenance at the database boundary.
+ALTER TABLE jobs ADD CONSTRAINT jobs_project_id_id_key UNIQUE(project_id,id);
+ALTER TABLE job_attempts ADD CONSTRAINT job_attempts_job_id_id_key UNIQUE(job_id,id);
+ALTER TABLE project_knowledge_work ADD FOREIGN KEY(project_id,origin_job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_work ADD FOREIGN KEY(project_id,active_job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_versions ADD FOREIGN KEY(project_id,creator_job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_versions ADD FOREIGN KEY(creator_job_id,creator_attempt_id) REFERENCES job_attempts(job_id,id);
+ALTER TABLE project_knowledge_proposals ADD FOREIGN KEY(project_id,maker_job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_job_assignments ADD FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_evaluations ADD FOREIGN KEY(actor_job_id,actor_attempt_id) REFERENCES job_attempts(job_id,id);
+ALTER TABLE project_knowledge_receipts ADD FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_receipts ADD FOREIGN KEY(job_id,attempt_id) REFERENCES job_attempts(job_id,id);
+ALTER TABLE project_knowledge_usages ADD FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id);
+ALTER TABLE project_knowledge_usages ADD FOREIGN KEY(job_id,attempt_id) REFERENCES job_attempts(job_id,id);
 
 COMMIT;

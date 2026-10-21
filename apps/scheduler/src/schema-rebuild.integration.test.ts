@@ -239,3 +239,35 @@ if (testDatabaseUrl) {
     }
   });
 }
+
+if (testDatabaseUrl) {
+  test("#752 v60 identity provenance survives v61 rebuild without explicit reset", async () => {
+    const adminUrl = new URL(testDatabaseUrl); adminUrl.pathname = "/postgres";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const target = await createDatabase(admin);
+    const db = postgres(target.url, { max: 2 });
+    try {
+      await withReserved(db, (conn) => runMigrations(conn));
+      const { jobId } = await seedHighIdHistory(db);
+      await db`UPDATE role_configs SET agent_cli = 'pi', model = 'explicit-model' WHERE project_id IS NULL`;
+      await db`UPDATE schema_meta SET version = 60 WHERE id = 'global'`;
+      const result = await rebuildSchemaOnReservedSession(
+        () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void | Promise<void> }>,
+        { mode: "apply", dump: false, keepStaging: true, terminateScheduler: false },
+      );
+      assert.equal(result.applied, true);
+      const [version] = await db`SELECT version FROM schema_meta WHERE id = 'global'`;
+      assert.equal(version.version, 61);
+      const configs = await db`SELECT agent_cli, model FROM role_configs WHERE project_id IS NULL`;
+      assert.ok(configs.length > 0 && configs.every(row => row.agent_cli === 'pi' && row.model === 'explicit-model'));
+      const [history] = await db`SELECT id FROM jobs WHERE id = ${jobId}`;
+      assert.equal(history.id, jobId);
+      await db`SELECT id FROM project_knowledge_work LIMIT 0`;
+      await db`SELECT id FROM project_knowledge_receipts LIMIT 0`;
+    } finally {
+      await db.end();
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
+      await admin.end();
+    }
+  });
+}

@@ -1,4 +1,8 @@
 import { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
+import { persistPreparedJob } from "./job-creation.js";
+import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
+import { onKnowledgeJobTerminal } from "./domains/project-knowledge/recovery.js";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import {
   FindingProtocolConfig as FindingProtocolConfigSchema,
@@ -897,7 +901,7 @@ export function parseRelatedFindingIds(payload: Record<string, unknown>): string
   return ids;
 }
 
-export async function createJob(input: CreateJobInput) {
+export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assignment?: import("@deepsonar/shared-types").KnowledgeJobAssignment) {
   const requestedPayload = { ...(input.payload ?? {}) };
   const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
   const schedulingPayload = systemType
@@ -930,72 +934,31 @@ export async function createJob(input: CreateJobInput) {
     scheduling_purpose: purpose,
     ...(input.runtimeProfile ? { runtime_profile: input.runtimeProfile } : {}),
   };
-  try {
-    // 快照读取与 Job 插入必须处于同一事务；Credential provider 迁移会等待本事务结束，
-    // 避免生成“快照是旧 provider、执行期已是新 provider”的竞态 Job。
-    const job = await sql.begin(async (tx) => {
+  // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+  const snapshot = await freezeSnapshotDeviceRequirement(
+    tx as unknown as typeof sql,
+    input.projectId,
+    input.canvasId,
+    await freezeAgentSnapshotNetworkPolicy(
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-      const snapshot = await freezeSnapshotDeviceRequirement(
+      tx as unknown as typeof sql,
+      input.canvasId,
+      await resolveAgentSnapshotForJob(
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
         tx as unknown as typeof sql,
         input.projectId,
-        input.canvasId,
-        await freezeAgentSnapshotNetworkPolicy(
-          // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-          tx as unknown as typeof sql,
-          input.canvasId,
-          await resolveAgentSnapshotForJob(
-            // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-            tx as unknown as typeof sql,
-            input.projectId,
-            input.type,
-            snapshotFindingIds,
-            { runtimeProfile: input.runtimeProfile ?? null },
-          ),
-        ),
-      );
-      const [projectRow, globalRow] = await Promise.all([
-        tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`,
-        tx`SELECT rules_json FROM global_settings WHERE id = 'global'`,
-      ]);
-      const projectRulesRaw = (((projectRow[0]?.config_json as Record<string, unknown> | undefined)?.rules ?? {}) ?? {}) as Record<string, unknown>;
-      const platformRulesRaw = ((globalRow[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
-      const roleKnobs = mergeRoleRuntimeKnobOverrides(
-        snapshot.role_runtime_knobs?.global,
-        snapshot.role_runtime_knobs?.project,
-      );
-      const resolvedKnobs = resolveRuntimeKnobs({
-        jobType: input.type,
-        imageKey: snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key,
-        job: {
-          timeoutSec: input.timeoutSec,
-          stallSec: input.stallSec,
-          jobTokenMaxRequests: input.maxRequests,
-        },
-        role: roleKnobs,
-        project: projectRulesRaw,
-        platform: platformRulesRaw,
-      });
-      const frozenKnobs = freezeRuntimeKnobs(resolvedKnobs);
-      const { role_runtime_knobs: _roleKnobs, ...snapshotBase } = snapshot;
-      const snapshotWithKnobs = { ...snapshotBase, runtime_knobs: frozenKnobs };
-      const [created] = await tx`
-        INSERT INTO jobs ${tx({
-          project_id: input.projectId,
-          canvas_id: input.canvasId ?? null,
-          agent_snapshot_json: snapshotWithKnobs as never,
-          parent_job_id: input.parentJobId ?? null,
-          finding_id: input.findingId ?? null,
-          type: input.type,
-          priority,
-          payload_json: payload as never,
-          timeout_sec: resolvedKnobs.timeoutSec,
-          followup_depth: input.followupDepth ?? 0,
-          ingress_key: input.ingressKey ?? null,
-        })}
-        RETURNING *`;
-      await recordJobSharedAssets(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, created.id as string, snapshot.shared_assets ?? []);
-      return { created, snapshotWithKnobs };
-    });
+        input.type,
+        snapshotFindingIds,
+        { runtimeProfile: input.runtimeProfile ?? null },
+      ),
+    ),
+  );
+  return persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
+}
+
+export async function createJob(input: CreateJobInput) {
+  try {
+    const job = await sql.begin((tx) => createJobInTransaction(tx as unknown as Tx, input));
     inc("deepsonar_jobs_created_total", { type: input.type });
     const providerModel = job.snapshotWithKnobs && typeof job.snapshotWithKnobs === "object"
       ? (job.snapshotWithKnobs as { provider_model?: { passthrough?: boolean; upstream_model_id?: string | null; cli_model_id?: string | null; catalog_revision?: string | null; model_descriptor?: { health_status?: string } | null } }).provider_model
@@ -1055,98 +1018,100 @@ export function stripFindingProtocolFromRules(rules: Record<string, unknown>): R
  * 新建时同事务写 root 节点（body_json 带目标）。返回 canvas_id。
  */
 export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
-  return sql.begin(async (tx) => {
-    const requestedPolicy = (input.target.network_policy ?? {}) as Record<string, unknown>;
-    const effectiveRules = await rulesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, input.projectId);
-    const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const [project] = await tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`;
-    if (!project) throw new Error(`project ${input.projectId} 不存在`);
-    const globalConfig = parseStoredFindingProtocolConfig(
-      ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
-    );
-    const projectConfig = parseStoredFindingProtocolConfig(
-      ((project.config_json ?? {}) as Record<string, unknown>).finding_protocol,
-    );
-    const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
-    const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
-    const target = await freezeTaskSeedTarget(
-      /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
-      input.projectId,
-      {
-        ...input.target,
-        effective_finding_protocol: effectiveFindingProtocol,
-        network_policy: {
-          allow_egress:
-            typeof requestedPolicy.allow_egress === "boolean" ? requestedPolicy.allow_egress : effectiveRules.allowEgress,
-        },
+  return sql.begin((tx) => ensureCanvasForTaskInTransaction(tx as unknown as Tx, input));
+}
+
+export async function ensureCanvasForTaskInTransaction(tx: Tx, input: EnsureCanvasInput): Promise<string> {
+  const requestedPolicy = (input.target.network_policy ?? {}) as Record<string, unknown>;
+  const effectiveRules = await rulesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, input.projectId);
+  const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const [project] = await tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`;
+  if (!project) throw new Error(`project ${input.projectId} 不存在`);
+  const globalConfig = parseStoredFindingProtocolConfig(
+    ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+  );
+  const projectConfig = parseStoredFindingProtocolConfig(
+    ((project.config_json ?? {}) as Record<string, unknown>).finding_protocol,
+  );
+  const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
+  const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
+  const target = await freezeTaskSeedTarget(
+    /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
+    input.projectId,
+    {
+      ...input.target,
+      effective_finding_protocol: effectiveFindingProtocol,
+      network_policy: {
+        allow_egress:
+          typeof requestedPolicy.allow_egress === "boolean" ? requestedPolicy.allow_egress : effectiveRules.allowEgress,
       },
-      input.allowComposeSeeds === true,
-    );
-    let canvasId: string | null = null;
-    let created = false;
+    },
+    input.allowComposeSeeds === true,
+  );
+  let canvasId: string | null = null;
+  let created = false;
 
-    if (input.triggerSource && input.triggerEventId) {
-      const inserted = await tx`
-        INSERT INTO canvases ${tx({
-          project_id: input.projectId,
-          title: input.title,
-          target_json: target as never,
-          trigger_source: input.triggerSource,
-          trigger_event_id: input.triggerEventId,
-          trigger_payload_json: (input.triggerPayload ?? {}) as never,
-        })}
-        ON CONFLICT (project_id, trigger_source, trigger_event_id)
-          WHERE trigger_event_id IS NOT NULL DO NOTHING
-        RETURNING id`;
-      if (inserted.length > 0) {
-        canvasId = inserted[0].id as string;
-        created = true;
-      } else {
-        const [existing] = await tx`
-          SELECT id FROM canvases
-          WHERE project_id = ${input.projectId}
-            AND trigger_source = ${input.triggerSource}
-            AND trigger_event_id = ${input.triggerEventId}`;
-        canvasId = existing.id as string;
-      }
-    } else {
-      const [row] = await tx`
-        INSERT INTO canvases ${tx({
-          project_id: input.projectId,
-          title: input.title,
-          target_json: target as never,
-        })}
-        RETURNING id`;
-      canvasId = row.id as string;
+  if (input.triggerSource && input.triggerEventId) {
+    const inserted = await tx`
+      INSERT INTO canvases ${tx({
+        project_id: input.projectId,
+        title: input.title,
+        target_json: target as never,
+        trigger_source: input.triggerSource,
+        trigger_event_id: input.triggerEventId,
+        trigger_payload_json: (input.triggerPayload ?? {}) as never,
+      })}
+      ON CONFLICT (project_id, trigger_source, trigger_event_id)
+        WHERE trigger_event_id IS NOT NULL DO NOTHING
+      RETURNING id`;
+    if (inserted.length > 0) {
+      canvasId = inserted[0].id as string;
       created = true;
+    } else {
+      const [existing] = await tx`
+        SELECT id FROM canvases
+        WHERE project_id = ${input.projectId}
+          AND trigger_source = ${input.triggerSource}
+          AND trigger_event_id = ${input.triggerEventId}`;
+      canvasId = existing.id as string;
     }
+  } else {
+    const [row] = await tx`
+      INSERT INTO canvases ${tx({
+        project_id: input.projectId,
+        title: input.title,
+        target_json: target as never,
+      })}
+      RETURNING id`;
+    canvasId = row.id as string;
+    created = true;
+  }
 
-    if (created) {
-      // root 节点：任务目标挂在 body_json.target；canvas_nodes_root_uniq 保证并发安全
-      const [rootNode] = await tx`
-        INSERT INTO canvas_nodes ${tx({
-          canvas_id: canvasId,
-          job_id: null,
-          node_type: "root",
-          title: input.title,
-          body_json: { target } as never,
-          x: 100,
-          y: 100,
-          status: "active",
-        })}
-        ON CONFLICT DO NOTHING
-        RETURNING id`;
-      if (rootNode) {
-        await insertTaskSeedProjections(
-          /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
-          canvasId,
-          rootNode.id as string,
-          target,
-        );
-      }
+  if (created) {
+    // root 节点：任务目标挂在 body_json.target；canvas_nodes_root_uniq 保证并发安全
+    const [rootNode] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: null,
+        node_type: "root",
+        title: input.title,
+        body_json: { target } as never,
+        x: 100,
+        y: 100,
+        status: "active",
+      })}
+      ON CONFLICT DO NOTHING
+      RETURNING id`;
+    if (rootNode) {
+      await insertTaskSeedProjections(
+        /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
+        canvasId,
+        rootNode.id as string,
+        target,
+      );
     }
-    return canvasId;
-  });
+  }
+  return canvasId;
 }
 
 async function findingProtocolForJob(tx: Tx, job: Record<string, unknown>): Promise<EffectiveFindingProtocol> {
@@ -1424,6 +1389,8 @@ export async function finalizeJob(
     }
   }
 
+  if (job && await onKnowledgeJobTerminal(tx as unknown as typeof sql, job as { id: unknown }, status)) return true;
+
   // Report Job：成功写产物并把 Root 置 succeeded；失败走有界再派或 Root report_failed
   if (job?.type === "report") {
     if (status === "succeeded") {
@@ -1544,6 +1511,7 @@ export async function advanceCanvasAfterTerminalJob(
   terminalStatus: CanvasJobTerminalStatus,
   opts: { sourceNodeIds?: string[]; trigger?: Record<string, unknown> } = {},
 ): Promise<"report" | "hub" | "noop"> {
+  if (await onKnowledgeJobTerminal(tx as unknown as typeof sql, job as { id: unknown }, terminalStatus)) return "noop";
   return hubOrchestrationApplication.advanceCanvasAfterTerminalJob(tx, job, terminalStatus, opts);
 }
 
@@ -1616,5 +1584,6 @@ export async function resolveAgentSnapshotForJob(
     ...snapshot,
     shared_assets_revision: selection.revision,
     shared_assets: selection.assets,
+    project_knowledge_catalog: await freezeProjectKnowledgeCatalog(db, projectId),
   };
 }

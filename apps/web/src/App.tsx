@@ -13,6 +13,7 @@ const ProjectLayout = lazy(() => import("./pages/ProjectLayout").then((module) =
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const ProjectDataPage = lazy(() => import("./pages/ProjectDataPage").then((module) => ({ default: module.ProjectDataPage })));
+const ProjectKnowledgePage = lazy(() => import("./pages/ProjectKnowledgePage").then((module) => ({ default: module.ProjectKnowledgePage })));
 const ProjectUsagePage = lazy(() => import("./pages/ProjectUsagePage").then((module) => ({ default: module.ProjectUsagePage })));
 const ProjectDeliveryPage = lazy(() => import("./pages/ProjectDeliveryPage").then((module) => ({ default: module.ProjectDeliveryPage })));
 const TaskCanvasRoute = lazy(() => import("./pages/TaskCanvasRoute").then((module) => ({ default: module.TaskCanvasRoute })));
@@ -172,6 +173,14 @@ export default function App() {
             element={
               <Deferred>
                 <ProjectDataPage />
+              </Deferred>
+            }
+          />
+          <Route
+            path="knowledge"
+            element={
+              <Deferred>
+                <ProjectKnowledgePage />
               </Deferred>
             }
           />

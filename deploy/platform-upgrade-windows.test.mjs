@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
@@ -46,58 +46,86 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
   const directory=await mkdtemp(join(tmpdir(),'upgrade-windows-borrow-')),file=join(directory,'lock');
   const windowsUrl=new URL('./platform-upgrade-windows.mjs',import.meta.url).href;
   const library=new URL('./platform-upgrade-windows.cs',import.meta.url);
-  const helperScript=join(directory,'borrow-helper.ps1');
-  // Match the production bridge's -File entry point. A detached Windows
-  // PowerShell -Command child exited 0 without running its command in CI.
+  const helperScript=join(directory,'borrow-helper.ps1'),requestFile=join(directory,'request.json');
+  const readyFile=join(directory,'ready.json'),diagnosticFile=join(directory,'stage.json');
+  // Detached Windows consoles did not execute the redirected-stdio fixture
+  // reliably. Only isolated OS lease metadata crosses these temporary files;
+  // production requests and secrets still use the unchanged stdin bridge.
   await writeFile(helperScript,`
-    $ErrorActionPreference='Stop'
-    $stage='input';$h=[IntPtr]::Zero
+    param([string]$RequestPath,[string]$ReadyPath,[string]$DiagnosticPath)
+    $ErrorActionPreference='Stop';$stage='input';$h=[IntPtr]::Zero
     try {
-      [Console]::Error.WriteLine('{"stage":"helper_started"}')
-      $r=[Console]::In.ReadToEnd()|ConvertFrom-Json
+      [IO.File]::WriteAllText($DiagnosticPath,'{"stage":"helper_started"}')
+      $r=[IO.File]::ReadAllText($RequestPath)|ConvertFrom-Json
       $stage='compile';Add-Type -Path $r.library
       $stage='borrow';$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation)
-      $stage='ready';[Console]::Out.WriteLine((@{borrower=$PID}|ConvertTo-Json -Compress))
+      $stage='ready';[IO.File]::WriteAllText($ReadyPath,(@{borrower=$PID}|ConvertTo-Json -Compress))
       $stage='sleep';Start-Sleep -Seconds 90
     } catch {
-      [Console]::Error.WriteLine((@{stage=$stage;type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult}|ConvertTo-Json -Compress));exit 74
+      [IO.File]::WriteAllText($DiagnosticPath,(@{stage=$stage;type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult}|ConvertTo-Json -Compress));exit 74
     } finally {if($h -ne [IntPtr]::Zero){[UpgradeWindows]::CloseLease($h)}}
   `);
   const owner=spawn(process.execPath,['--input-type=module','-e',`
     import {spawn} from 'node:child_process';import {win32} from 'node:path';import {fileURLToPath} from 'node:url';
+    import {writeFile} from 'node:fs/promises';
     import {windowsUpgradeOperation,withWindowsUpgradeLock} from ${JSON.stringify(windowsUrl)};
     const diagnostic=(stage,extra={})=>process.stderr.write(JSON.stringify({stage,...extra})+'\\n');
-    process.on('uncaughtException',error=>{diagnostic('owner_exception',{code:error.code??null,name:error.name});process.exit(1);});
-    process.on('beforeExit',code=>diagnostic('owner_before_exit',{code}));
     let lease;const operation=request=>{const result=windowsUpgradeOperation(request);if(request.action==='acquire')lease=result;return result;};
     await withWindowsUpgradeLock(process.argv[1],async()=>{
       diagnostic('owner_acquired');
-      // Keep the helper's output connected directly to the test reader. An
-      // owner-owned forwarding pipe would close when we kill that owner and
-      // could terminate PowerShell before testing the borrowed lock.
-      // Windows/libuv ties ordinary children to the owner's lifetime. Detach
-      // this test helper so there really is a live orphan after owner death.
-      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',process.argv[2]],{stdio:['pipe','inherit','inherit'],detached:true,windowsHide:true});
-      helper.on('spawn',()=>diagnostic('helper_spawned'));
-      helper.on('error',error=>diagnostic('helper_error',{code:error.code??null}));
-      helper.on('exit',(code,signal)=>diagnostic('helper_exit',{code,signal}));
-      helper.stdin.on('error',error=>diagnostic('helper_stdin_error',{code:error.code??null}));
-      helper.stdin.end(JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})}));
-      await new Promise(()=>{});
-    },{operation});`,file,helperScript],{stdio:['pipe','pipe','pipe']});
+      await writeFile(process.argv[3],JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})}));
+      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',process.argv[2],process.argv[3],process.argv[4],process.argv[5]],{stdio:'ignore',detached:true,windowsHide:true});
+      helper.on('spawn',()=>process.send({type:'helper_spawned',pid:helper.pid}));
+      helper.on('error',error=>process.send({type:'helper_error',code:error.code??null}));
+      helper.on('exit',(code,signal)=>process.send({type:'helper_exit',pid:helper.pid,code,signal}));
+      await new Promise(()=>setInterval(()=>{},1000));
+    },{operation});`,file,helperScript,requestFile,readyFile,diagnosticFile],{stdio:['ignore','ignore','pipe','ipc']});
+  let borrower,spawnedHelper,helperExit,ownerExit,ownerError;
   let diagnostics='';owner.stderr.on('data',data=>{diagnostics+=data.toString();});
-  const safeDiagnostics=()=>diagnostics.split(/\r?\n/).flatMap(line=>{
-    try {const {stage,code,signal,type,hresult,name}=JSON.parse(line);return typeof stage==='string'?[{stage,code,signal,type,hresult,name}]:[];}catch{return [];}
-  }).slice(-12);
-  let borrower;
-  t.after(async()=>{try{owner.kill('SIGKILL');}catch{}if(borrower)try{process.kill(borrower,'SIGKILL');}catch{}await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});});
-  const data=await Promise.race([once(owner.stdout,'data'),once(owner,'exit').then(([code,signal])=>{throw new Error('native owner failed before borrowing: '+JSON.stringify({code,signal,diagnostics:safeDiagnostics()}));})]);
-  borrower=JSON.parse(data[0].toString()).borrower;
+  owner.on('exit',(code,signal)=>{ownerExit={code,signal};});
+  owner.on('error',error=>{ownerError=error.code;});
+  owner.on('message',message=>{
+    if(message?.type==='helper_spawned' && Number.isSafeInteger(message.pid) && message.pid>0)spawnedHelper=message.pid;
+    if(message?.type==='helper_exit'){helperExit={code:message.code,signal:message.signal};if(message.pid===spawnedHelper)spawnedHelper=undefined;}
+    if(message?.type==='helper_error')helperExit={code:message.code};
+  });
+  const stopHelper=async pid=>{
+    if(!pid)return;
+    try{process.kill(pid,'SIGKILL');}catch(error){if(error.code==='ESRCH')return;throw error;}
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline){
+      try{process.kill(pid,0);}catch(error){if(error.code==='ESRCH')return;throw error;}
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    throw new Error('isolated borrower did not exit within cleanup deadline');
+  };
+  t.after(async()=>{
+    try {if(!helperExit)await stopHelper(spawnedHelper??borrower);}
+    finally {
+      borrower=spawnedHelper=undefined;
+      try{owner.kill('SIGKILL');}catch{}
+      owner.stderr.destroy();if(owner.connected)owner.disconnect();
+      await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});
+    }
+  });
+  const readJson=async path=>{
+    try{return JSON.parse(await readFile(path,'utf8'));}catch(error){if(error.code==='ENOENT'||error instanceof SyntaxError)return null;throw error;}
+  };
+  const deadline=Date.now()+30000;
+  while(!borrower){
+    const ready=await readJson(readyFile);
+    if(ready&&spawnedHelper){assert.equal(ready.borrower,spawnedHelper);borrower=ready.borrower;break;}
+    if(t.signal.aborted||Date.now()>=deadline||ownerExit||ownerError||helperExit){
+      const native=await readJson(diagnosticFile);
+      throw new Error('native borrow readiness failed: '+JSON.stringify({ownerExit,ownerError,helperExit,helper_spawned:!!spawnedHelper,stage:native?.stage,type:native?.type,hresult:native?.hresult}));
+    }
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
   assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must be alive before owner termination');
   const exited=once(owner,'exit');owner.kill('SIGKILL');await exited;
   assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must survive owner termination');
   const {withUpgradeLock}=await import('./platform-upgrade-lock.mjs');
   await assert.rejects(withUpgradeLock(file,async()=>assert.fail('orphan helper still owns the lock')),/another upgrade/);
-  process.kill(borrower,'SIGKILL');borrower=null;
+  await stopHelper(borrower);borrower=spawnedHelper=undefined;
   await withUpgradeLock(file,async()=>{});
 });

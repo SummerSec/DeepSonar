@@ -193,6 +193,7 @@ export function manifestFromSkillModule(input: {
   module: SourceModule;
   commitSha?: string | null;
   contentHash: string;
+  scope?: "global" | "project";
 }): CapabilityCatalogRecord {
   const selector = `${input.sourceId}:${input.module.id}`;
   const summary = (input.module.description.trim() || `${input.module.kind} ${input.module.name}`).slice(0, 400);
@@ -200,7 +201,7 @@ export function manifestFromSkillModule(input: {
   const manifest = freezeCapabilityPackManifest(draft({
     id: moduleCapabilityId(input.sourceId, input.module.id),
     version: (input.commitSha ?? "0.0.0").slice(0, 40),
-    scope: "global",
+    scope: input.scope ?? "global",
     summary: padded,
     capabilities: ["read_workspace"],
     inputs: [{ name: "workspace", schema: "string", required: false }],

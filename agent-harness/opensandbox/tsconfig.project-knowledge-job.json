@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "typeRoots": ["../../apps/scheduler/node_modules/@types"]
+  },
+  "include": [
+    "project-knowledge-job.e2e.ts",
+    "project-knowledge-job-model.ts",
+    "../../apps/scheduler/src/auth.ts"
+  ]
+}

@@ -108,6 +108,15 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
   ack_human_message: false,
 });
 assert.deepEqual(restrictedTools, [
+  "request_project_knowledge",
+  "search_project_knowledge",
+  "read_project_memory",
+  "read_knowledge_input",
+  "propose_project_knowledge",
+  "submit_knowledge_evaluation",
+  "review_project_knowledge",
+  "record_knowledge_feedback",
+  "get_knowledge_receipt",
   "list_available_roles",
   "list_available_runtime_images",
   "list_available_agent_clis",

@@ -185,7 +185,7 @@ async function closeOrphanJob(
         failed: true,
         error: (job.error as string) ?? "orphan_reconcile",
       });
-    } else if (job.canvas_id && job.type !== "report" && !options.deferCanvasAdvance) {
+    } else if (job.canvas_id && job.type !== "report" && (!options.deferCanvasAdvance || Boolean((job.agent_snapshot_json as Record<string, unknown> | undefined)?.knowledge_assignment))) {
       await advanceCanvasAfterTerminalJob(tx, job, "orphan");
     }
   }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));

@@ -13,6 +13,15 @@ export interface PlatformOperationDefinition {
 }
 
 const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: string; readOnly: boolean; eventType: string | null }> = {
+  request_project_knowledge: { summary: "Request bounded project knowledge work", description: "Freeze authorized current-Job sources and enqueue durable governance work.", readOnly: false, eventType: "knowledge" },
+  search_project_knowledge: { summary: "Search the frozen authorized knowledge catalog", description: "Return only Job-frozen metadata intersected with current revocations, before pagination.", readOnly: true, eventType: null },
+  read_project_memory: { summary: "Read one frozen Memory version", description: "Read exact hash and version in this project's Job snapshot.", readOnly: true, eventType: null },
+  read_knowledge_input: { summary: "Read an assigned governance input", description: "Read only the frozen manifest for the current work and stage.", readOnly: true, eventType: null },
+  propose_project_knowledge: { summary: "Propose a knowledge change", description: "Assigned maker only. Creates immutable candidate content and a durable receipt.", readOnly: false, eventType: "knowledge" },
+  submit_knowledge_evaluation: { summary: "Submit isolated trial evaluation", description: "Assigned evaluator only; results bind exact case, arm, Job, Attempt and evidence.", readOnly: false, eventType: "knowledge" },
+  review_project_knowledge: { summary: "Review and settle a proposal", description: "Independent assigned reviewer; activation requires complete evaluations and stable baseline.", readOnly: false, eventType: "knowledge" },
+  record_knowledge_feedback: { summary: "Record feedback on an actual usage", description: "Bind feedback to this Job's persistent usage reference and enqueue bounded work.", readOnly: false, eventType: "knowledge" },
+  get_knowledge_receipt: { summary: "Read a durable knowledge receipt", description: "Read only this Job's receipts; terminal-history access uses project management authentication.", readOnly: true, eventType: null },
   list_available_roles: {
     summary: "List roles available to the current Hub Job",
     description: "Return the Scheduler-governed role catalog visible to this Job.",

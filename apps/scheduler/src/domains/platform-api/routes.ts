@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { ControlToolPayloadSchemas } from "@deepsonar/shared-types";
+import { ControlToolPayloadSchemas, KNOWLEDGE_OPERATION_IDS } from "@deepsonar/shared-types";
 import {
   authenticateJobCapabilityToken,
   CapabilityTokenError,
@@ -295,6 +295,12 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
     return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
   }
 
+  // Read authorization can shrink after a successful request. Knowledge mutations
+  // use durable receipts inside the event transaction, including after restart.
+  if (definition.readOnly || (KNOWLEDGE_OPERATION_IDS as readonly string[]).includes(definition.operationId)) {
+    const result = await executeInvocation(principal, jobId, definition.operationId, parsed.input, parsed.eventId, key);
+    return reply.code(result.statusCode).send(result.body);
+  }
   const cacheKey = idempotencyCacheKey(jobId, key);
   const requestHash = inputHash(parsed.input);
   const previous = idempotencyCache.get(cacheKey);

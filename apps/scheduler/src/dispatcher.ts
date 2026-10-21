@@ -1,3 +1,4 @@
+import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -865,6 +866,9 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
 }
 
 export async function dispatchOnce(): Promise<number> {
+  const generation = dispatcherGeneration;
+  const stopped = () => dispatcherStopped || dispatcherGeneration !== generation;
+  if (!await tickKnowledgeBeforeDispatch(stopped, async () => (await import("./project-knowledge-scheduler.js")).projectKnowledgeScheduler)) return 0;
   const claimedJobs = await claimPendingJobs();
 
   for (const job of claimedJobs) {
@@ -1805,6 +1809,7 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
  * 重入保护：运行中再来事件只标记补跑，不并发抢。
  */
 let dispatcherStopped = false;
+let dispatcherGeneration = 0;
 let kickRunning = false;
 let kickAgain = false;
 
@@ -1831,6 +1836,7 @@ export function kickDispatcher() {
 
 export function startDispatcher() {
   dispatcherStopped = false;
+  dispatcherGeneration++;
   let stopped = false;
   // Wire schedule wake before any kick so future start_at can re-arm safely.
   bindScheduleWake(() => { if (!stopped) kickDispatcher(); });
@@ -1855,6 +1861,7 @@ export function startDispatcher() {
   return () => {
     stopped = true;
     dispatcherStopped = true;
+    dispatcherGeneration++;
     kickAgain = false;
     unbindScheduleWake();
     if (timer) clearInterval(timer);

@@ -32,7 +32,7 @@ export const CapabilityPackOutput = z.object({
 export type CapabilityPackOutput = z.infer<typeof CapabilityPackOutput>;
 
 export const CapabilityPackPermissions = z.object({
-  platform_tools: z.array(z.string().min(1).max(80)).max(32),
+  platform_tools: z.array(z.string().min(1).max(80)).max(64),
   allow_egress: z.boolean(),
 }).strict();
 export type CapabilityPackPermissions = z.infer<typeof CapabilityPackPermissions>;

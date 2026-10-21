@@ -8,6 +8,7 @@ const TABS = [
   { to: "usage", label: "账本" },
   { to: "findings", label: "风险报告" },
   { to: "data", label: "数据" },
+  { to: "knowledge", label: "知识" },
   { to: "settings", label: "设置" },
   { to: "images", label: "镜像" },
 ];

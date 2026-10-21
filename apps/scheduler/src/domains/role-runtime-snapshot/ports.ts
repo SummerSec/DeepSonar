@@ -9,6 +9,7 @@ import type { FrozenAgentRuntimeProfile,
   FrozenProviderModelSnapshot } from "@deepsonar/shared-types";
 import type { PlatformToolName, ReasoningValue, RuntimeProfileOverridePayload } from "@deepsonar/shared-types";
 import type { SharedAssetSelection } from "../shared-assets/application.js";
+import type { FrozenJobSkillCatalog } from "../../job-skill-catalog.js";
 import type { AgentCliRuntimeSnapshot, AgentRuntimeLaunchSpecification } from "@deepsonar/runtime-sandbox";
 import type { EffectiveSandboxLimits, FrozenNetworkPolicy } from "./sandbox-limits.js";
 import type { FrozenRuntimeKnobs, RuntimeKnobOverride } from "../../runtime-knobs.js";
@@ -68,6 +69,10 @@ export interface RoleRuntimeSnapshotResult {
   /** Frozen Provider Adapter + Model Descriptor snapshot (#614). */
   provider_model?: FrozenProviderModelSnapshot;
   skill_revisions: { source_id: string; commit_sha: string | null; content_hash: string | null }[];
+  /** Immutable Job-wide Skill inventory; source bytes live in CAS. */
+  job_skill_catalog: FrozenJobSkillCatalog;
+  project_knowledge_catalog?: import("../project-knowledge/catalog-snapshot.js").FrozenKnowledgeCatalog;
+  knowledge_assignment?: import("@deepsonar/shared-types").KnowledgeJobAssignment;
   skills: unknown[];
   commands: unknown[];
   mcps: unknown[];
