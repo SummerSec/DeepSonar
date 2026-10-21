@@ -30,6 +30,7 @@ import {
   shouldRunOpenSandboxPoc,
 } from "../packages/runtime-sandbox/poc/index.ts";
 import { parseAgentSession } from "../apps/web/src/session-viewer/parseAgentSession.ts";
+import { platformImageEnvLines } from "./opensandbox/platform-image-env.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -106,7 +107,7 @@ function runProdConfigCase(): string {
     "POSTGRES_PASSWORD=poc-opensandbox",
     "BLOB_S3_ACCESS_KEY_ID=poc",
     "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
-    "DEEPSONAR_IMAGE_TAG=0.1.45",
+    ...platformImageEnvLines(repoRoot),
     "OPEN_SANDBOX_API_KEY=poc-opensandbox",
     "",
   ].join("\n"));
@@ -168,7 +169,7 @@ async function runProdUpCase(): Promise<string> {
     "POSTGRES_PASSWORD=poc-opensandbox",
     "BLOB_S3_ACCESS_KEY_ID=poc",
     "BLOB_S3_SECRET_ACCESS_KEY=poc-secret",
-    "DEEPSONAR_IMAGE_TAG=0.1.45",
+    ...platformImageEnvLines(repoRoot),
     `OPEN_SANDBOX_API_KEY=${apiKey}`,
     `OPEN_SANDBOX_HOST_PORT=${hostPort}`,
     `OPEN_SANDBOX_CONTAINER_NAME=${containerName}`,

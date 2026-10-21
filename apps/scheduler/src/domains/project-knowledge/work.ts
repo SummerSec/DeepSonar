@@ -382,21 +382,23 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     });
   }
 
-  async function claimPending(): Promise<void> {
+  async function claimPending(stopped: () => boolean): Promise<void> {
     const candidates = await db`SELECT id FROM project_knowledge_work w
       WHERE state='pending' AND next_attempt_at<=now()
         AND NOT EXISTS(SELECT 1 FROM project_knowledge_work r WHERE r.project_id=w.project_id AND r.state='running')
       ORDER BY next_attempt_at,id LIMIT 8`;
     for (const candidate of candidates) {
+      if (stopped()) return;
       try {
         await db.begin(async (tx) => {
+          if (stopped()) return;
           const [locked] = await tx`SELECT id,project_id FROM project_knowledge_work
             WHERE id=${String(candidate.id)} AND state='pending' AND next_attempt_at<=now()
             FOR UPDATE SKIP LOCKED`;
-          if (!locked) return;
+          if (stopped() || !locked) return;
           const active = await tx`SELECT 1 FROM project_knowledge_work
             WHERE project_id=${String(locked.project_id)} AND state='running' LIMIT 1`;
-          if (active.length) return;
+          if (stopped() || active.length) return;
           await tx`UPDATE project_knowledge_work SET state='running',
             claim_expires_at=now()+interval '30 seconds',updated_at=now()
             WHERE id=${String(locked.id)}`;
@@ -407,23 +409,29 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     }
   }
 
-  async function tick(): Promise<number> {
-    await claimPending();
+  async function tick(stopped: () => boolean = () => false): Promise<number> {
+    if (stopped()) return 0;
+    await claimPending(stopped);
+    if (stopped()) return 0;
     const rows = await db`SELECT id FROM project_knowledge_work WHERE state='running'
       ORDER BY updated_at,id LIMIT 16`;
     let progressed = 0;
     for (const row of rows) {
+      if (stopped()) break;
       try {
         const workId = String(row.id);
         const prepared = await prepareTrialEvidence(workId);
+        if (stopped()) break;
         if (await drive(workId, prepared)) progressed++;
       } catch (error) {
+        if (stopped()) break;
         const marker = typeof (error as { code?: unknown } | null)?.code === "string"
           ? String((error as { code: string }).code).slice(0, 40)
           : error instanceof Error ? error.name : "unknown";
         // generation is a domain revision marker, not a retry counter.
         const [current] = await db`SELECT reason FROM project_knowledge_work
           WHERE id=${String(row.id)} AND state='running' AND active_job_id IS NULL`;
+        if (stopped()) break;
         if (!current) continue;
         const retries = Number(/^scheduler_admission_retry:(\d+):/.exec(String(current.reason ?? ""))?.[1] ?? 0) + 1;
         await db`UPDATE project_knowledge_work SET state=${retries >= 3 ? "blocked" : "pending"},

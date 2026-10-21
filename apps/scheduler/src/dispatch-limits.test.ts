@@ -463,7 +463,9 @@ test("scheduler boot and transfer persist leftover rules scrub", async () => {
   assert.match(importSource, /rewriteFindingProtocolMode/);
   assert.match(platformSource, /scrubLeftoverRulesJson/);
   assert.match(platformSource, /rewriteFindingProtocolMode/);
-  assert.match(settingsSource, /LEFTOVER_RULE_ALIAS_KEYS/);
+  assert.match(settingsSource, /from "..\/..\/settings-validation.js"/);
+  const settingsValidation = readFileSync(new URL("./settings-validation.ts", import.meta.url), "utf8");
+  assert.match(settingsValidation, /LEFTOVER_RULE_ALIAS_KEYS/);
   assert.doesNotMatch(routesSource, /export \{ parseConcurrencyRulesPatch \}/);
   assert.doesNotMatch(routesSource, /export \{ RuntimeImageRegistryChannelBody \}/);
 });

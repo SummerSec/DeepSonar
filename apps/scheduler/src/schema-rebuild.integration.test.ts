@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { MIGRATE_LOCK_ID, runMigrations, type MigrationConnection } from "./migration-runner.js";
 import { readOwnedSequenceState } from "./owned-sequences.js";
 import { rebuildSchemaOnReservedSession } from "./schema-rebuild.js";
+import { SCHEMA_VERSION } from "./schema-version.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -241,7 +242,7 @@ if (testDatabaseUrl) {
 }
 
 if (testDatabaseUrl) {
-  test("#752 v60 identity provenance survives v61 rebuild without explicit reset", async () => {
+  test("#752 current-layout fixture marked v60 preserves identity provenance on rebuild", async () => {
     const adminUrl = new URL(testDatabaseUrl); adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.toString(), { max: 1 });
     const target = await createDatabase(admin);
@@ -257,7 +258,7 @@ if (testDatabaseUrl) {
       );
       assert.equal(result.applied, true);
       const [version] = await db`SELECT version FROM schema_meta WHERE id = 'global'`;
-      assert.equal(version.version, 61);
+      assert.equal(version.version, SCHEMA_VERSION);
       const configs = await db`SELECT agent_cli, model FROM role_configs WHERE project_id IS NULL`;
       assert.ok(configs.length > 0 && configs.every(row => row.agent_cli === 'pi' && row.model === 'explicit-model'));
       const [history] = await db`SELECT id FROM jobs WHERE id = ${jobId}`;

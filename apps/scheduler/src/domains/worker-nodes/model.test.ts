@@ -21,6 +21,7 @@ import { parseRemoteWorkerEndpoint, parseWorkerCidr } from "./endpoint.js";
 
 function worker(partial: Partial<DispatchableWorker> & Pick<DispatchableWorker, "id">): DispatchableWorker {
   return {
+    protocolVersion: 1, platformVersion: "0.5.6", deploymentGeneration: "",
     endpoint: "127.0.0.1:18081",
     protocol: "http",
     kind: "remote",
@@ -160,4 +161,24 @@ test("single-node mode always returns the only ready worker", () => {
   const only = worker({ id: "local", kind: "local" });
   assert.equal(pickRoundRobinWorker([only], now, 45_000)?.id, "local");
   assert.equal(pickRoundRobinWorker([worker({ id: "full", kind: "local", activeSandboxes: 2 })], now, 45_000), null);
+});
+
+
+test("worker admission requires active state and exact agent protocol, release and generation", async () => {
+  const { workerAdmissionMatches, workerGenerationTokenMatches } = await import("./admission.js");
+  const state = { generation: "gen", runtime_role: "scheduler", target_version: "0.5.7", phase: "active" as const,
+    worker_generation_token_hash: hashWorkerToken("enrollment") };
+  const current = { protocolVersion: 1, platformVersion: "0.5.7", deploymentGeneration: "gen" };
+  assert.equal(workerAdmissionMatches(state, current, "0.5.7"), true);
+  for (const patch of [{ protocolVersion: undefined }, { protocolVersion: 99 }, { platformVersion: "0.5.6" }, { deploymentGeneration: "old" }]) {
+    assert.equal(workerAdmissionMatches(state, { ...current, ...patch }, "0.5.7"), false);
+  }
+  assert.equal(workerAdmissionMatches(undefined, current, "0.5.7"), false);
+  assert.equal(workerAdmissionMatches({ ...state, phase: "preparing" }, current, "0.5.7"), false);
+  assert.equal(workerAdmissionMatches(state, current, "0.5.6"), false);
+  assert.equal(workerAdmissionMatches(state, current, ""), false);
+  assert.equal(workerGenerationTokenMatches(state, "enrollment"), true);
+  assert.equal(workerGenerationTokenMatches(state, "old-bootstrap"), false);
+  assert.equal(workerGenerationTokenMatches(state, undefined), false);
+  assert.equal(workerGenerationTokenMatches({ ...state, generation: "" }, undefined), true);
 });

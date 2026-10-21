@@ -1,8 +1,9 @@
+import { createPlatformMaintenanceGate, registerPlatformMaintenanceGuard, type PlatformUpgradeState } from "./platform-maintenance.js";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { getSharedAssetBlobStore } from "./blob-store/index.js";
 import { config, managesHostDockerRuntime } from "./config.js";
-import { migrate, sql } from "./db.js";
+import { migrate, sql, SCHEMA_VERSION } from "./db.js";
 import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
@@ -20,7 +21,7 @@ import {
   preheatManagedGateway,
 } from "@deepsonar/runtime-sandbox";
 import { relayTargetHost, startGatewayUpstreamSocket } from "./gateway-upstream-socket.js";
-import { startRuntimeImageWarmupOnBoot } from "./runtime-image-warmup.js";
+import { startRuntimeImageWarmupOnBoot, prepareRuntimeImageWarmupForMaintenance } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
 import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status.js";
 import { normalizePendingJobPriorities, scrubLeftoverStoredRules, scrubRedundantConfigSurface } from "./core.js";
@@ -50,6 +51,41 @@ async function main() {
   const applied = await migrate();
   if (applied.length > 0) console.log(`[boot] 已应用: ${applied.join(", ")}`);
   else   console.log("[boot] schema 已就绪");
+  const identity = {
+    generation: process.env.DEEPSONAR_UPGRADE_GENERATION ?? "",
+    version: process.env.DEEPSONAR_VERSION ?? "",
+  };
+  let stopRuntimeImageWarmup = () => {};
+  let stopGatewayUpstreamSocket: () => Promise<void> = async () => {};
+  const maintenance = createPlatformMaintenanceGate({
+    identity,
+    readState: async () => {
+      const [state] = await sql`
+        SELECT phase, generation, runtime_role, target_version, CURRENT_USER AS current_role,
+               (SELECT version FROM schema_meta WHERE id = 'global') AS schema_version
+        FROM platform_upgrade_state WHERE id = 'global'`;
+      if (!state || Number(state.schema_version) !== SCHEMA_VERSION) return null;
+      return state as unknown as PlatformUpgradeState;
+    },
+    onClose: () => {
+      markDispatcherEnabled(false);
+      if (!maintenance.identityMatches()) stopRuntimeImageWarmup();
+    },
+    start: (registerStop) => {
+      registerStop(startSkillSourceBootSync());
+      registerStop(startReaper());
+      registerStop(startTransferWorker());
+      registerStop(startRuntimeImageRegistrySync());
+      registerStop(startRuntimeImageGc());
+      registerStop(managesHostDockerRuntime() ? startHostDiskMonitor(() => {
+        if (dispatcherRuntimeStatus().enabled) kickDispatcher();
+      }) : () => {});
+      registerStop(startDispatcher());
+      markDispatcherEnabled(true);
+    },
+  });
+  await maintenance.refresh();
+  if (!maintenance.identityMatches()) throw new Error("platform upgrade state does not authorize this runtime");
   const localWorker = await seedLocalWorkerNode();
   if (localWorker) {
     console.log(`[boot] execution-plane local worker ${localWorker.id} @ ${localWorker.endpoint}`);
@@ -78,12 +114,12 @@ async function main() {
   await reconcileRuntimeImagePullTasksOnBoot();
   await bootstrapOfficialRuntimeImages();
   if (managesHostDockerRuntime()) await refreshHostDiskPressure();
-  const stopSkillSourceBootSync = startSkillSourceBootSync();
 
   const app = Fastify({
     logger: { level: "info" },
     trustProxy: config.http.trustProxyHops > 0 ? config.http.trustProxyHops : false,
   });
+  registerPlatformMaintenanceGuard(app, maintenance, identity.version);
   await app.register(websocket);
   registerRoutes(app);
 
@@ -101,30 +137,14 @@ async function main() {
     console.warn(`[boot] normalized ${normalizedPriorities.updated}/${normalizedPriorities.examined} pending Job priorities`);
   }
 
-  let stopDispatcher = () => {};
-  let stopRuntimeImageWarmup = () => {};
-  let stopGatewayUpstreamSocket: () => Promise<void> = async () => {};
-  const stopReaper = startReaper();
-  const stopTransfer = startTransferWorker();
-  const stopRuntimeImageRegistrySync = startRuntimeImageRegistrySync();
-  const stopRuntimeImageGc = startRuntimeImageGc();
-  const stopHostDiskMonitor = managesHostDockerRuntime()
-    ? startHostDiskMonitor(() => {
-        if (dispatcherRuntimeStatus().enabled) kickDispatcher();
-      })
-    : () => {};
+  const maintenanceTimer = setInterval(() => void maintenance.refresh(), 1_000);
+  maintenanceTimer.unref();
 
   const shutdown = async () => {
-    stopDispatcher();
-    markDispatcherEnabled(false);
+    clearInterval(maintenanceTimer);
+    maintenance.close();
     await stopGatewayUpstreamSocket().catch(() => {});
     stopRuntimeImageWarmup();
-    stopReaper();
-    stopTransfer();
-    stopRuntimeImageRegistrySync();
-    stopRuntimeImageGc();
-    stopHostDiskMonitor();
-    stopSkillSourceBootSync();
     // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
     await drainInFlight(15_000);
     await app.close();
@@ -152,24 +172,30 @@ async function main() {
     }
   } catch (error) {
     console.error("[gateway-upstream] 无法创建 proxy 上游 socket，沙箱 Gateway/Control API 将不可达:", error);
+    if (identity.generation) throw error;
   }
-  stopRuntimeImageWarmup = startRuntimeImageWarmupOnBoot(() => {
-    stopDispatcher = startDispatcher();
-    markDispatcherEnabled(true);
-    console.log("[runtime-images] startup image set ready; dispatcher enabled");
-  }, {
-    afterPrepare: async (refs) => {
-      if (config.runtime.agentMode === "fake") return;
-      if (config.runtime.provider !== "opensandbox") return;
-      const base = refs.find((item) => item.image_key === "deepsonar-base") ?? refs[0];
-      if (!base) return;
-      await preheatManagedGateway({
-        upstreamUrl: config.gateway.proxyUpstreamUrl,
-        image: base.image_ref,
-        createTimeoutMs: config.gateway.createTimeoutSec * 1000,
-      });
-    },
-  });
+  const afterPrepare = async (refs: Array<{ image_ref: string; image_key?: string }>) => {
+    if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return;
+    const base = refs.find((item) => item.image_key === "deepsonar-base") ?? refs[0];
+    if (!base) return;
+    await preheatManagedGateway({
+      upstreamUrl: config.gateway.proxyUpstreamUrl,
+      image: base.image_ref,
+      createTimeoutMs: config.gateway.createTimeoutSec * 1000,
+    });
+  };
+  const bootReady = () => {
+    maintenance.setBootReady();
+    void maintenance.refresh();
+  };
+  if (identity.generation) {
+    await prepareRuntimeImageWarmupForMaintenance(afterPrepare);
+    bootReady();
+  } else {
+    // Preserve ordinary startup retries; the dispatcher still starts only after
+    // warmup and a fresh successful DB authorization read.
+    stopRuntimeImageWarmup = startRuntimeImageWarmupOnBoot(bootReady, { afterPrepare });
+  }
 }
 
 main().catch((e) => {

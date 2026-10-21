@@ -43,6 +43,7 @@ export interface Op {
   bodyContentType?: string;
   query?: Record<string, unknown>;
   requiredQuery?: readonly string[];
+  headers?: Record<string, unknown>;
   responses?: Record<string, unknown>;
   successStatus?: "200" | "201" | "202";
 }
@@ -84,7 +85,7 @@ const PlatformUpdateStatusSchema = {
   ],
   properties: {
     checked_at: { type: "string", format: "date-time", nullable: true },
-    current_version: { type: "string", description: "当前部署版本核心（X.Y.Z）；来自 DEEPSONAR_VERSION / DEEPSONAR_IMAGE_TAG" },
+    current_version: { type: "string", description: "当前部署版本核心（X.Y.Z）；只来自 DEEPSONAR_VERSION" },
     available_version: { type: "string", nullable: true, description: "清单中的可升级平台版本；无更新或检查失败时为 null" },
     available_commit_sha: { type: "string", nullable: true },
     available_schema_version: { type: "integer", nullable: true, minimum: 1, description: "目标 Release 的 DeepSonar SCHEMA_VERSION" },
@@ -326,13 +327,23 @@ const OPS: Op[] = [
       "200": {
         type: "object",
         additionalProperties: false,
-        required: ["ok", "ready", "version", "git_revision", "runtime_images", "dispatcher", "opensandbox", "ts"],
+        required: ["ok", "ready", "version"],
+        oneOf: [
+          { required: ["git_revision", "runtime_images", "dispatcher", "opensandbox", "ts"] },
+          { required: ["maintenance", "maintenance_ready", "upgrade_phase", "upgrade_generation", "upgrade_runtime_role", "upgrade_target_version"] },
+        ],
         properties: {
           ok: { type: "boolean" },
           ready: { type: "boolean" },
+          maintenance: { type: "boolean", enum: [true] },
+          maintenance_ready: { type: "boolean", description: "候选启动检查完成；不表示已接受业务写入" },
+          upgrade_phase: { type: "string" },
+          upgrade_generation: { type: "string" },
+          upgrade_runtime_role: { type: "string" },
+          upgrade_target_version: { type: "string" },
           version: {
             type: "string",
-            description: "部署版本：DEEPSONAR_VERSION，否则 DEEPSONAR_IMAGE_TAG；未设置时为空字符串，不用 workspace package.json",
+            description: "部署版本：只认 DEEPSONAR_VERSION（不回退镜像 tag）；未设置时为空字符串，不用 workspace package.json",
           },
           git_revision: {
             type: "string",
@@ -370,15 +381,22 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/workers/register",
-    summary: "Worker 持 bootstrap token 注册并领取节点 token；不能占用 local 或接管已有 node_id",
+    summary: "Worker 持 bootstrap 与升级准入凭据注册；同 identity 重登记必须验证原节点 token 并保留租约",
+    headers: {
+      "X-DeepSonar-Worker-Generation-Token": { type: "string", description: "受管 generation 非空时必需；独立于 bootstrap token，只由宿主分发" },
+      "X-DeepSonar-Worker-Node-Token": { type: "string", description: "同 node_id 重新准入时必需，不能改 endpoint/protocol/kind" },
+    },
     scope: null,
     tags: ["Runtime"],
     body: {
       type: "object",
       additionalProperties: false,
-      required: ["node_id", "endpoint", "opensandbox_api_key", "capacity"],
+      required: ["node_id", "endpoint", "opensandbox_api_key", "capacity", "protocol_version", "platform_version", "deployment_generation"],
       properties: {
-        node_id: { type: "string", description: "非保留 id；已存在节点须先 DELETE /workers/:id" },
+        node_id: { type: "string", description: "非保留 id；已有节点重新准入须提供原节点 token" },
+        protocol_version: { type: "integer", minimum: 1, description: "注册 agent 协议版本，不是 OpenSandbox 版本" },
+        platform_version: { type: "string", description: "注册 agent 所属平台 Release 版本" },
+        deployment_generation: { type: "string", description: "宿主分发的升级 generation，初始部署为空" },
         endpoint: {
           type: "string",
           description: "host:port，无 scheme。拒绝 loopback / link-local / 169.254.0.0/16 / 不可路由地址；可选 CIDR/hostname allowlist",
@@ -402,14 +420,16 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/workers/heartbeat",
-    summary: "Worker 持节点 token 心跳；不能改写 endpoint/kind/所有权",
+    summary: "Worker 持节点 token 心跳；旧版本/generation 仅记存活并保持 unavailable，不得自行解除 fence",
+    description: "请求可带 protocol_version、platform_version、deployment_generation。受管代次心跳还须携当前 generation token；缺失或不匹配不得新领任务。公开版本/代次与旧节点 token 不能冒充新代。恢复准入必须携原节点 token 与当前 generation token 显式重新注册。",
+    headers: { "X-DeepSonar-Worker-Generation-Token": { type: "string", maxLength: 512 } },
     scope: null,
     tags: ["Runtime"],
   },
   {
     method: "delete",
     path: "/workers/{id}",
-    summary: "管理员显式 forget 节点，之后才能用同一 node_id 重新注册",
+    summary: "管理员显式 forget 无租约节点；仍有租约返回 409，不得级联删除执行证据",
     scope: "admin",
     tags: ["Runtime"],
   },
@@ -3078,6 +3098,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     const item = paths[op.path] ?? (paths[op.path] = {});
     const parameters = [
       ...pathParams(op.path),
+      ...Object.entries(op.headers ?? {}).map(([name, schema]) => ({name, in: "header" as const, required: false, schema})),
       ...Object.entries(op.query ?? {}).map(([name, schema]) => ({
         name,
         in: "query" as const,
@@ -3113,6 +3134,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         "403": { description: "权限不足", content: { "application/json": { schema: ErrorSchema } } },
         "404": { description: "不存在", content: { "application/json": { schema: ErrorSchema } } },
         "409": { description: "冲突", content: { "application/json": { schema: ErrorSchema } } },
+        "503": { description: "维护模式拒绝业务访问（PLATFORM_MAINTENANCE）；GET /health 返回维护状态", content: { "application/json": { schema: ErrorSchema } } },
         ...Object.fromEntries(Object.entries(declaredResponses).filter(([status]) => status !== successStatus)),
       },
     };

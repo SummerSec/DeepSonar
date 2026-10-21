@@ -36,6 +36,17 @@ permissions:
   packages: read
 
 jobs:
+  windows-upgrade-backend:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Native Windows upgrade locking and private durable files
+        run: node --test deploy/platform-upgrade-lock.test.mjs deploy/platform-upgrade-windows.test.mjs deploy/platform-upgrade-filesystem.test.mjs deploy/platform-upgrade-preflight-windows.test.mjs
+
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -52,6 +63,8 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -91,6 +104,33 @@ jobs:
       - run: pnpm -r typecheck
 
       - run: pnpm -r build
+
+      - name: Target image offline upgrade configuration preflight
+        run: pnpm ci:unit:platform-upgrade-preflight
+
+      - name: Pinned cosign ephemeral-key verification (no production identity)
+        shell: bash
+        run: |
+          set -euo pipefail
+          verifier="$RUNNER_TEMP/deepsonar-test-cosign"
+          verifier_sha=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+          curl --fail --silent --show-error --location --retry 3 --max-time 180 \
+            https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 -o "$verifier"
+          echo "$verifier_sha  $verifier" | sha256sum --check --strict
+          chmod 700 "$verifier"
+          DEEPSONAR_TEST_COSIGN="$verifier" DEEPSONAR_TEST_COSIGN_SHA256="$verifier_sha" \
+            node --test deploy/platform-upgrade-signature.integration.test.mjs
+
+      - name: Maintenance and managed node upgrade unit
+        run: pnpm ci:unit:platform-upgrade-maintenance
+
+      - name: Isolated database upgrade and worker fencing
+        env:
+          DEEPSONAR_FENCE_PG_TEST: "1"
+          UPGRADE_SCHEMA_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          UPGRADE_SCHEMA_TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:platform-upgrade
 
       - name: Scheduler startup gate unit
         run: pnpm ci:unit:startup-gate
@@ -341,11 +381,15 @@ jobs:
       - name: OpenSandbox production compose merge
         run: |
           tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
           printf '%s\n' \
             "POSTGRES_PASSWORD=ci-opensandbox" \
+            "DEEPSONAR_VERSION=0.1.46" \
+            "DEEPSONAR_SCHEDULER_IMAGE=ghcr.io/summersec/deepsonar-scheduler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_WEB_IMAGE=ghcr.io/summersec/deepsonar-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_IMAGE_ADMISSION_IMAGE=ghcr.io/summersec/deepsonar-image-admission@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             "BLOB_S3_ACCESS_KEY_ID=ci" \
             "BLOB_S3_SECRET_ACCESS_KEY=ci-secret" \
-            "DEEPSONAR_IMAGE_TAG=0.1.46" \
             "OPEN_SANDBOX_API_KEY=ci-opensandbox" \
             > "$tmp/.env"
           rendered="$(docker compose --project-directory "$tmp" --env-file "$tmp/.env" \
@@ -353,14 +397,29 @@ jobs:
             -f deploy/docker-compose.real.yml \
             -f deploy/docker-compose.opensandbox.prod.yml \
             config)"
+          for service in scheduler web image-admission; do
+            printf '%s\n' "$rendered" | grep -Eq "image: ghcr.io/summersec/deepsonar-${service}@sha256:[0-9a-f]{64}$"
+          done
           printf '%s\n' "$rendered" | grep -F "SANDBOX_PROVIDER: opensandbox"
           printf '%s\n' "$rendered" | grep -F 'published: "18081"'
+          grep -Ev '^DEEPSONAR_(SCHEDULER_IMAGE|WEB_IMAGE|IMAGE_ADMISSION_IMAGE)=' "$tmp/.env" > "$tmp/legacy.env"
+          printf '%s\n' 'DEEPSONAR_IMAGE_TAG=0.1.46' >> "$tmp/legacy.env"
+          if docker compose --project-directory "$tmp" --env-file "$tmp/legacy.env" -f deploy/docker-compose.prod.yml config > "$tmp/legacy.out" 2>&1; then
+            echo 'legacy tag-only environment unexpectedly rendered' >&2
+            exit 1
+          fi
+          grep -E 'required variable DEEPSONAR_(SCHEDULER_IMAGE|WEB_IMAGE|IMAGE_ADMISSION_IMAGE)' "$tmp/legacy.out"
 
       - name: OpenSandbox host overlay gateway upstream
         run: |
           tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
           printf '%s\n' \
             "POSTGRES_PASSWORD=ci-opensandbox" \
+            "DEEPSONAR_VERSION=0.1.46" \
+            "DEEPSONAR_SCHEDULER_IMAGE=ghcr.io/summersec/deepsonar-scheduler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_WEB_IMAGE=ghcr.io/summersec/deepsonar-web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+            "DEEPSONAR_IMAGE_ADMISSION_IMAGE=ghcr.io/summersec/deepsonar-image-admission@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
             "BLOB_S3_ACCESS_KEY_ID=ci" \
             "BLOB_S3_SECRET_ACCESS_KEY=ci-secret" \
             "DEEPSONAR_ADMIN_TOKEN=ci-admin" \
@@ -369,6 +428,9 @@ jobs:
             > "$tmp/.env"
           rendered="$(docker compose --project-directory deploy --env-file "$tmp/.env" \
             -f deploy/docker-compose.opensandbox.host.yml config)"
+          for service in scheduler web; do
+            printf '%s\n' "$rendered" | grep -Eq "image: ghcr.io/summersec/deepsonar-${service}@sha256:[0-9a-f]{64}$"
+          done
           printf '%s\n' "$rendered" | grep -F "http://host.docker.internal:14100/gateway"
           ! printf '%s\n' "$rendered" | grep -F "http://127.0.0.1:14100/gateway"
           ! printf '%s\n' "$rendered" | grep -F "http://127.0.0.1:13100/gateway"

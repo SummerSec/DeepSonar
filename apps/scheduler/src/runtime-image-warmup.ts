@@ -108,3 +108,23 @@ export function startRuntimeImageWarmupOnBoot(
   startupCoordinator.start();
   return () => startupCoordinator?.stop();
 }
+
+
+/** Candidate boot validation: one awaited attempt, no retry timer or dispatcher. */
+export async function prepareRuntimeImageWarmupForMaintenance(
+  afterPrepare?: (refs: Array<{ image_ref: string; image_key?: string }>) => Promise<void>,
+): Promise<void> {
+  let state: RuntimeImageWarmupStatus = { status: "preparing", ready: false, attempt: 1, required: 0, error: null, retry_at: null };
+  startupCoordinator = { start() {}, stop() {}, status: () => ({ ...state }) };
+  try {
+    const hostPull = config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox";
+    const refs = hostPull ? withSharedAssetsHelperRef(await resolveStartupRuntimeImages()) : [];
+    state.required = new Set(refs.map((item) => item.image_ref)).size;
+    for (const ref of new Set(refs.map((item) => item.image_ref))) await prepareRuntimeImage(ref);
+    await afterPrepare?.(refs);
+    state = { ...state, status: "ready", ready: true };
+  } catch (error) {
+    state = { ...state, status: "failed", error: sanitizeRuntimeImageError(error) };
+    throw error;
+  }
+}

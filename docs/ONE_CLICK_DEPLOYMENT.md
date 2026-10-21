@@ -61,10 +61,9 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 
 1. 从 `deploy/.env.example` 生成 `deploy/.env`（随机库密码、引导 Token、Silo 凭据）；
 2. 生成 `deploy/master.key`（凭据加密主密钥，勿提交）；
-3. 按 `DEEPSONAR_IMAGE_TAG`（无 `v` 前缀）从阿里云 ACR 拉取  
-   `deepsonar-scheduler` / `deepsonar-web` / `deepsonar-image-admission`；
-4. 优先拉取同 registry/tag 的 `deepsonar-silo`，将 RepoDigest（或 tag）写成 `SILO_IMAGE`；该标签不存在时回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。已覆盖为其它镜像时不改写；
-5. real 模式优先拉取同 registry/tag 的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
+3. 校验平台镜像部署契约（#740）：`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE` 必须是对应仓库的完整不可变引用 `<registry>/<name>@sha256:<64 位小写 hex>`，且显式声明 `DEEPSONAR_VERSION`（无 `v` 前缀）；`deploy/.env` 或进程环境仍有已删除的 `DEEPSONAR_IMAGE_TAG`、可变 tag、仓库名不符或缺版本时直接 fail closed，并打印应从 `deploy/.env.example` 复制的四行。随后按这三条 digest 引用从阿里云 ACR 拉取；
+4. 优先拉取同 registry、`DEEPSONAR_VERSION` 标签的 `deepsonar-silo`，将 RepoDigest（或 tag）写成 `SILO_IMAGE`；该标签不存在时回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`。已覆盖为其它镜像时不改写；
+5. real 模式优先拉取同 registry、`DEEPSONAR_VERSION` 标签的 `deepsonar-assets-helper`，将 RepoDigest 写成 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`；该标签不存在时回退 busybox pin。覆盖值必须仍是 immutable sha256 digest，拉取失败则停止部署；
 6. 启动 Compose（real 时叠加 `docker-compose.real.yml`）；
 7. Scheduler 先监听 `/health`（liveness，含 `runtime_images` 与 `dispatcher.enabled`），再后台准备当前通道的官方默认 digest（Base/Audit/Kali）；`project_opt_in` 专项镜像不阻塞 dispatcher。`ready=false` 时不启用 Dispatcher，失败保持服务存活并退避重试。real 模式在启用 Dispatcher 前预热 managed gateway。
 
@@ -94,16 +93,22 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 
 容器部署 `DEEPSONAR_AUTH_REQUIRED=true`。`DEEPSONAR_ADMIN_TOKEN` 为 API/本机调用引导 Token，与人类会话账号独立。
 
-### 镜像标签
+### 平台镜像引用（#740 digest 契约）
 
-- 平台镜像用 Release 版本号（ACR 标签**无** `v` 前缀，不发 `latest`）。
-- `deploy/.env.example` 与 `runtime-image-registry.json` 随 Release 回写。
-- 固定版本时显式设置：
+- 平台镜像（scheduler / web / image-admission）只按不可变 digest 部署；`DEEPSONAR_IMAGE_TAG` 已删除，不保留兼容。Compose 缺任一变量直接失败，`deploy.sh` / `deploy.ps1` 另拒绝旧变量与非 digest 引用。
+- `/health.version` 只认 `DEEPSONAR_VERSION`，不再回退镜像 tag；未设置时为空。
+- `deploy/.env.example` 的这四行与 `runtime-image-registry.json` 随 Release 回写，不要手改成 tag：
 
 ```dotenv
-DEEPSONAR_IMAGE_REGISTRY=crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec
-DEEPSONAR_IMAGE_TAG=<release-version-without-v>
+DEEPSONAR_VERSION=<release-version-without-v>
+DEEPSONAR_SCHEDULER_IMAGE=<registry>/deepsonar-scheduler@sha256:<digest>
+DEEPSONAR_WEB_IMAGE=<registry>/deepsonar-web@sha256:<digest>
+DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<digest>
 ```
+
+- 已有部署升级到本契约：先删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，再从目标版本的 `deploy/.env.example` 复制上面四行（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）。受控维护 `upgrade` 会在审批、数据库身份隔离和备份验证后更新这些行，跨 schema 仅重建候选库而保留源库；不要以手动改镜像替代维护流程。限制与中断恢复见 [部署脚本说明](../deploy/README.md)。
+- `DEEPSONAR_IMAGE_REGISTRY` 仍保留，只用于按 `DEEPSONAR_VERSION` 解析官方 `deepsonar-assets-helper` / `deepsonar-silo` 并固定为 RepoDigest。
+- `up real build` 本地构建时脚本临时把三个平台镜像标记为 `deepsonar-*:local-build`（Compose 不能把构建产物标记为 `name@sha256:`），不改写 `deploy/.env` 中的 digest 引用；`DEEPSONAR_VERSION` 仍须显式设置。
 
 ## 3.1 平台矩阵（控制面 vs 运行时）
 
@@ -148,7 +153,7 @@ CLI / model / 长期密钥：**不在**部署 env 里选；用 Credentials + Rol
 ### 4.1 共享资产 helper 与 provision admission（#158）
 
 real 模式写入共享资产只读卷时，`deploy.sh` / `deploy.ps1` 的 `up`/`pull` 优先拉取
-`$IMAGE_REGISTRY/deepsonar-assets-helper:$IMAGE_TAG`（与 scheduler/web 同一发布通道），
+`$IMAGE_REGISTRY/deepsonar-assets-helper:$DEEPSONAR_VERSION`（与 scheduler/web 同一发布通道），
 `docker image inspect` 取其 RepoDigest 并导出为 `DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE`。
 该官方标签在下一正式 Release 才首次发布；当前 v0.1.40 及更旧版本回退
 `docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23`。
@@ -200,7 +205,7 @@ nameserver 顺序不能根治，健康探测的有界重试只作瞬态保护。
 - `DEEPSONAR_TRIVY_IMAGE`
 - `DEEPSONAR_CLAMAV_IMAGE`
 
-未设或留空（含仅空白）时回退 `apps/image-admission` 内置的官方 pin（与 `deploy/.env.example` 相同）。显式覆盖必须仍是 digest；tag 或非法值会 fail closed，进程拒绝启动。Release 回写 `.env.example` 只改 `DEEPSONAR_IMAGE_TAG`，这四行 pin 会原样保留。
+未设或留空（含仅空白）时回退 `apps/image-admission` 内置的官方 pin（与 `deploy/.env.example` 相同）。显式覆盖必须仍是 digest；tag 或非法值会 fail closed，进程拒绝启动。Release 回写 `.env.example` 只改 `DEEPSONAR_VERSION` 与三条平台镜像 digest 引用，这四行 scanner pin 会原样保留。
 
 Cosign 3 默认不对官方 catalog digest 验签（`signature: skipped`）。要强制验签时同时配置 `DEEPSONAR_COSIGN_KEY`，或 Cosign 3 keyless 的 `DEEPSONAR_COSIGN_CERTIFICATE_IDENTITY`（或 `_REGEXP`）加上 `DEEPSONAR_COSIGN_CERTIFICATE_OIDC_ISSUER`（或 `_REGEXP`）。缺 identity/`--key` 时不会发出 `cosign verify`。
 
@@ -239,7 +244,7 @@ OpenSandbox server 按冻结 digest 拉取，并在 provision 后重验合同；
 - **唯一基线**：`database/schema.sql` + `apps/scheduler/src/schema-version.ts` 的 `SCHEMA_VERSION`
 - 空库启动：套用基线；非空：校验版本与表结构，不符 **fail closed**
 - **无增量 ALTER 链**；改表 = 改基线 + bump 版本 + **重建库**
-- 已有数据升级：先停 Scheduler，再 `pnpm db:rebuild -- --plan` / `pnpm db:rebuild -- --apply`（备份 + 套最新 `schema.sql` + 列交集回填；见 `database/README.md`）。生产 Compose 的 Postgres 默认不对外暴露，需从本机经 `deepsonar` Docker 网络连 `postgres:5432`，或临时 `docker compose port`。
+- 已有数据升级：使用下文维护 `upgrade check/apply`，审核计划后冻结源库并重建候选；独立 `pnpm db:rebuild` 是人工基线重建工具，不具备宿主升级的身份隔离/激活恢复闭环，不应直接代替受控流程。Postgres 默认不对外暴露，维护 CLI 使用绑定的 Compose PostgreSQL。
 - 手工空库：`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql`
 
 ## 6. 对象存储
@@ -282,27 +287,22 @@ docker compose -p deepsonar --env-file deploy/.env \
 
 ### 升级
 
-```bash
-git pull
-./deploy/deploy.sh up            # pull 模式：拉新 tag；build 模式：重建
-```
-
-schema 大版本变化时须按基线重建库（无升级路径）。升级前先备份。
-
-升级前可先用平台级全局暂停领取（#740）排空在途 Job，避免长时 Agent Job 在重启时被判 orphan：
+生产平台升级使用固定官方目标，不以 `git pull` 后直接重启服务代替维护流程：
 
 ```bash
-# 需平台管理员 token；新任务仍可入队但不会被领取
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"reason":"platform_upgrade"}' http://127.0.0.1:8080/api/platform/claims/pause
-# 轮询直到 state=paused（drained=true：在途与未结算外部效果都已归零）
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/platform/claims
-# 升级、健康检查通过后解除
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"reason":"platform_upgrade"}' http://127.0.0.1:8080/api/platform/claims/resume
+./deploy/deploy.sh upgrade check --to vX.Y.Z
+# 审核返回风险，使用该计划的 hash
+./deploy/deploy.sh upgrade apply --to vX.Y.Z --approve-plan-hash <reviewed-plan-hash>
+# 激活前失败后的安全回滚与显式恢复
+./deploy/deploy.sh upgrade rollback
+./deploy/deploy.sh upgrade resume-rollback
 ```
 
-暂停持久化在 PostgreSQL，Scheduler 重启后保持；`db:rebuild` 按列交集回填 `global_settings`，从 v57 起暂停状态也会被保留。不会自动取消或杀 Job；排空超时由管理员决定继续等待或手动取消。受控 `upgrade check / apply / rollback` 子命令与按 digest 的部署契约属于 #740 后续 PR，尚未落地。
+普通 `/platform/claims/pause` 只暂停领取，仍允许入队，不能建立数据库备份的写入隔离边界。维护控制器在预检后排空任务和全部未结算效果，再关闭旧数据库身份，验证备份并恢复/重建独立候选库；源库保持冻结。目标服务/受管节点 preparing 验证后才激活，激活后或结果不明时禁止切回旧库。不要在维护回滚后绕过 `resume-rollback` 直接调用 claims/resume。
+
+旧角色身份需清理时必须明确加 `--reset-role-identity`（PowerShell `-ResetRoleIdentity`），重新取得并批准计划 hash；它仅清角色 CLI 与项目 model，保留全局 model 和历史快照。`--nodes` / `-Nodes` 绑定受管 SSH 节点清单；旧源缺少维护契约时不能安全恢复远程节点。配置预检覆盖声明的 URL/枚举、主密钥文件只读绑定与内容格式、已存凭据的 AES-GCM 认证及 当前持久默认组合的 credential-first 选择；仍不证明外部认证或模型可用性，详见部署说明。
+
+维护模块与入口已实现，真实单机/多节点成功场景已通过，选定 11 项中断、排空、备份损坏与多节点恢复场景已通过，最终组合基线镜像待验收；不能据历史同 schema 测试或部分场景宣布当前路径全面通过。详细参数、权限、恢复限制和覆盖范围见 [受控升级](../deploy/README.md)；证据与执行命令见 [隔离演练](../deploy/UPGRADE_REHEARSAL.md)。
 
 官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。#691 起项目不再钉版本，新建 Job 始终按平台 channel 最新 trusted 解析并冻结 digest；已冻结 Job 快照不改写。
 
@@ -315,8 +315,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/
 | Silo healthcheck 长时间 starting / `up` 卡住（常见于部分 Podman） | #726：`deploy.sh`/`deploy.ps1` 对 `compose up` 有界等待（`DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`，默认 600s），超时非零退出并打印容器状态/健康/日志/版本（脱敏）。Podman 或 `DEEPSONAR_COMPOSE_DEPENDS_ON=started` 时附加 `docker-compose.podman-compat*.yml`（`service_started`），但仍用 postgres/silo 真实探测与入口 `:8080/api/health` 门禁；依赖真实不可用不会因 `service_started` 误报成功。`healthy` 可强制保留原 `service_healthy`。与 #101（silo-init 拆词）不同。 |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
-| real helper 拉取失败 | 官方 `deepsonar-assets-helper:$IMAGE_TAG` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
-| Silo 拉取失败 | 官方 `deepsonar-silo:$IMAGE_TAG` 不存在时应回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；自定义 `SILO_IMAGE` 覆盖仍有效 |
+| 部署报 `DEEPSONAR_IMAGE_TAG` / 非 digest 平台镜像引用 | #740 已删除 tag 部署：删除该行，从目标版本 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用；不要删除整个 `deploy/.env` |
+| real helper 拉取失败 | 官方 `deepsonar-assets-helper:$DEEPSONAR_VERSION` 不存在时应回退 busybox pin；覆盖值必须是可达的 immutable digest，脚本会 fail closed |
+| Silo 拉取失败 | 官方 `deepsonar-silo:$DEEPSONAR_VERSION` 不存在时应回退 `docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z`；自定义 `SILO_IMAGE` 覆盖仍有效 |
 | image-admission Restarting (1) / 缺 scanner digest | 四个 `DEEPSONAR_{COSIGN,SYFT,TRIVY,CLAMAV}_IMAGE` 必须是 `@sha256:` digest。未设或留空会回退官方默认；填了 tag 或非法值仍会启动失败 |
 | real 无法建 Job | 官方 digest 未准入/未 pull；在镜像市场检查通道与版本 |
 | 彻底清数据 | 备份后手工 `docker compose … down --volumes`（不可恢复） |

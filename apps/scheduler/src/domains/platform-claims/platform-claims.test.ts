@@ -50,7 +50,7 @@ test("missing or unknown pause state fails closed as paused", () => {
   });
 });
 
-test("state projection: pausing until in-flight Jobs and active-attempt effects drain", () => {
+test("state projection: pausing until in-flight Jobs and all unsettled Attempt effects drain", () => {
   const paused = readPlatformClaimsControlRow({ claims_paused: true, claims_pause_reason: "maintenance", claims_paused_by: "x", claims_paused_at: "t" });
   const running = readPlatformClaimsControlRow({ claims_paused: false });
   assert.equal(projectPlatformClaimsStatus(running, idle).state, "running");

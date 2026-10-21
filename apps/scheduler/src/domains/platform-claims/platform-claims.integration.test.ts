@@ -181,6 +181,29 @@ if (!testDatabaseUrl) {
       const stillEffect = await status();
       assert.equal(stillEffect.in_flight.total, 0);
       assert.equal(stillEffect.state, "pausing", "an unsettled external effect blocks the drained state");
+      // Closing an Attempt is not evidence that its external effects settled.
+      // Count Attempts, not effect rows, and keep both unresolved categories visible.
+      await sql`
+        INSERT INTO job_attempt_effects (attempt_id, job_id, effect_id, effect_kind, status)
+        VALUES
+          (${attemptId}, ${runningId}, 'run', 'agent_run', 'effect_pending'),
+          (${attemptId}, ${runningId}, 'cleanup', 'sandbox_destroy', 'unknown')`;
+      for (const terminalStatus of ["succeeded", "failed", "cancelled", "timeout", "orphan", "interrupted", "unknown"]) {
+        await sql`UPDATE job_attempts SET status = ${terminalStatus}, finished_at = now() WHERE id = ${attemptId}`;
+        const unresolved = await status();
+        assert.equal(unresolved.in_flight.total, 0);
+        assert.equal(unresolved.effect_pending_attempts, 1, terminalStatus);
+        assert.equal(unresolved.unknown_effect_attempts, 1, terminalStatus);
+        assert.equal(unresolved.state, "pausing", terminalStatus);
+        assert.equal(unresolved.drained, false, terminalStatus);
+      }
+      await sql`
+        UPDATE job_attempt_effects SET status = 'settled', settled_at = now()
+        WHERE attempt_id = ${attemptId} AND status = 'effect_pending'`;
+      const unknownOnly = await status();
+      assert.equal(unknownOnly.effect_pending_attempts, 0);
+      assert.equal(unknownOnly.unknown_effect_attempts, 1);
+      assert.equal(unknownOnly.drained, false, "unknown effects alone still block drain");
       await sql`
         UPDATE job_attempt_effects SET status = 'settled', settled_at = now()
         WHERE attempt_id = ${attemptId}`;

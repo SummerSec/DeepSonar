@@ -5,7 +5,10 @@
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
+平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：基础机制已有代码，受管节点和显式回滚恢复正在接线，最终真实端到端验收未完成；不能把该决策等同于 #740 全部交付。
+
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
+
 
 ## 1. 阅读路径与目录
 
@@ -24,7 +27,7 @@
 | [11 工程规范](11-engineering-specs.md) | 变更怎样验证、同步文档和发布？ | 现行规范 |
 | [12 风险与技术债](12-risks-and-tech-debt.md) | 哪些能力暂缓，哪些事实仍需验证？ | 持续维护 |
 | [追溯矩阵](traceability.md) | 需求如何对应视图、决策、代码和验收？ | 全量需求索引 |
-| [ADR](adr/README.md) | 六项既有决策为什么成立？ | 回填记录 |
+| [ADR](adr/README.md) | 既有决策与升级恢复边界为什么成立？ | 回填记录与当前决策 |
 
 - 新成员：DESIGN → 02 → 03 → 05 → 06 → 按需专题。
 - 实施变更：01 中受影响需求 → 追溯矩阵 → 相关视图 / 专题 → 代码、schema、OpenAPI、测试。

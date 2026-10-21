@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { resolveProductVersion } from "../../product-version.js";
+import { workerAdmissionMatches, workerGenerationTokenMatches, WORKER_PROTOCOL_VERSION, type WorkerAdmission, type WorkerUpgradeState } from "./admission.js";
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
 import { parseRemoteWorkerEndpoint, type WorkerEndpointPolicy } from "./endpoint.js";
@@ -40,6 +42,9 @@ type WorkerRow = {
   protocol: WorkerProtocol;
   kind: WorkerKind;
   status: WorkerStatus;
+  protocol_version: number;
+  platform_version: string;
+  deployment_generation: string;
   api_key_fingerprint: string;
   node_token_hash: string;
   node_token_prefix: string;
@@ -65,6 +70,9 @@ function fromRow(row: WorkerRow, activeSandboxes = 0): DispatchableWorker {
     protocol: row.protocol,
     kind: row.kind,
     status: row.status,
+    protocolVersion: row.protocol_version,
+    platformVersion: row.platform_version,
+    deploymentGeneration: row.deployment_generation,
     apiKeyFingerprint: row.api_key_fingerprint,
     nodeTokenHash: row.node_token_hash,
     nodeTokenPrefix: row.node_token_prefix,
@@ -175,23 +183,6 @@ function capacityJson(capacity: WorkerCapacity) {
   };
 }
 
-async function insertNode(input: PersistNodeInput): Promise<DispatchableWorker> {
-  rememberWorkerApiKey(input.id, input.apiKey);
-  const [row] = await sql<WorkerRow[]>`
-    INSERT INTO worker_nodes (
-      id, endpoint, protocol, kind, status, api_key_fingerprint,
-      node_token_hash, node_token_prefix, capacity_json, labels_json,
-      last_heartbeat_at, updated_at
-    ) VALUES (
-      ${input.id}, ${input.endpoint}, ${input.protocol}, ${input.kind}, 'online',
-      ${fingerprintApiKey(input.apiKey)}, ${input.token.hash}, ${input.token.prefix},
-      ${sql.json(capacityJson(input.capacity))}, ${sql.json(input.labels)}, now(), now()
-    )
-    RETURNING *`;
-  const counts = await leaseCounts();
-  return fromRow(row, counts.get(row.id) ?? 0);
-}
-
 /** Scheduler-owned local seed only. Remote register must not take this path. */
 async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWorker> {
   rememberWorkerApiKey(input.id, input.apiKey);
@@ -199,11 +190,12 @@ async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWor
     INSERT INTO worker_nodes (
       id, endpoint, protocol, kind, status, api_key_fingerprint,
       node_token_hash, node_token_prefix, capacity_json, labels_json,
-      last_heartbeat_at, updated_at
+      last_heartbeat_at, updated_at, protocol_version, platform_version, deployment_generation
     ) VALUES (
       ${input.id}, ${input.endpoint}, ${input.protocol}, ${input.kind}, 'online',
       ${fingerprintApiKey(input.apiKey)}, ${input.token.hash}, ${input.token.prefix},
-      ${sql.json(capacityJson(input.capacity))}, ${sql.json(input.labels)}, now(), now()
+      ${sql.json(capacityJson(input.capacity))}, ${sql.json(input.labels)}, now(), now(),
+      ${WORKER_PROTOCOL_VERSION}, ${resolveProductVersion()}, ${process.env.DEEPSONAR_UPGRADE_GENERATION ?? ""}
     )
     ON CONFLICT (id) DO UPDATE SET
       endpoint = excluded.endpoint,
@@ -215,51 +207,72 @@ async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWor
       node_token_prefix = excluded.node_token_prefix,
       capacity_json = excluded.capacity_json,
       labels_json = excluded.labels_json,
-      last_heartbeat_at = now(),
+      protocol_version = excluded.protocol_version, platform_version = excluded.platform_version,
+      deployment_generation = excluded.deployment_generation, last_heartbeat_at = now(),
       updated_at = now()
     RETURNING *`;
   const counts = await leaseCounts();
   return fromRow(row, counts.get(row.id) ?? 0);
 }
 
-export async function registerRemoteWorker(input: {
+export async function registerRemoteWorker(input: WorkerAdmission & {
   nodeId: string;
   endpoint: string;
   protocol?: WorkerProtocol;
   apiKey: string;
   capacity: WorkerCapacity;
   labels?: Record<string, string>;
+  generationToken?: string;
+  existingNodeToken?: string;
 }): Promise<{ node: DispatchableWorker; nodeToken: string }> {
   const id = parseWorkerNodeId(input.nodeId);
   if (isReservedWorkerNodeId(id, [config.runtime.workerNodes.localNodeId])) {
     throw new WorkerNodeError("WORKER_NODE_RESERVED", "reserved worker node id cannot be registered remotely", 403);
   }
-  const existing = await getWorkerNode(id);
-  if (existing) {
-    throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists; forget it before reclaiming", 409);
-  }
+  const endpoint = parseRemoteWorkerEndpoint(input.endpoint, remoteWorkerEndpointPolicy());
+  const protocol = input.protocol ?? "http";
   const token = generateWorkerNodeToken();
   try {
-    const node = await insertNode({
-      id,
-      endpoint: parseRemoteWorkerEndpoint(input.endpoint, remoteWorkerEndpointPolicy()),
-      protocol: input.protocol ?? "http",
-      kind: "remote",
-      apiKey: input.apiKey,
-      capacity: input.capacity,
-      labels: parseWorkerLabels(input.labels),
-      token,
+    const result = await sql.begin(async (tx) => {
+      const [state] = await tx<WorkerUpgradeState[]>`SELECT * FROM platform_upgrade_state WHERE id = 'global' FOR SHARE`;
+      if (!state || state.phase !== "active") throw new WorkerNodeError("WORKER_UPGRADE_FENCED", "worker enrollment is paused", 503);
+      if (!workerAdmissionMatches(state, input, resolveProductVersion()) || !workerGenerationTokenMatches(state, input.generationToken)) {
+        throw new WorkerNodeError("WORKER_GENERATION_REJECTED", "worker release, protocol or enrollment generation is not admitted", 403);
+      }
+      const [existing] = await tx<WorkerRow[]>`SELECT * FROM worker_nodes WHERE id = ${id} FOR UPDATE`;
+      if (existing && (!input.existingNodeToken || existing.kind !== "remote" ||
+        !workerTokensEqual(hashWorkerToken(input.existingNodeToken), existing.node_token_hash))) {
+        throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists; authenticated re-enrollment required", 409);
+      }
+      if (existing && (existing.endpoint !== endpoint || existing.protocol !== protocol)) {
+        throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "re-enrollment cannot change worker endpoint or ownership", 409);
+      }
+      const [row] = await tx<WorkerRow[]>`
+        INSERT INTO worker_nodes (id, endpoint, protocol, kind, status, api_key_fingerprint,
+          node_token_hash, node_token_prefix, capacity_json, labels_json, protocol_version, platform_version, deployment_generation)
+        VALUES (${id}, ${endpoint}, ${protocol}, 'remote', 'online', ${fingerprintApiKey(input.apiKey)},
+          ${existing?.node_token_hash ?? token.hash}, ${existing?.node_token_prefix ?? token.prefix},
+          ${sql.json(capacityJson(input.capacity))}, ${sql.json(parseWorkerLabels(input.labels))},
+          ${input.protocolVersion!}, ${input.platformVersion!}, ${input.deploymentGeneration!})
+        ON CONFLICT (id) DO UPDATE SET status = 'online', api_key_fingerprint = excluded.api_key_fingerprint,
+          capacity_json = excluded.capacity_json, labels_json = excluded.labels_json,
+          protocol_version = excluded.protocol_version, platform_version = excluded.platform_version,
+          deployment_generation = excluded.deployment_generation, last_heartbeat_at = now(), updated_at = now()
+        WHERE worker_nodes.node_token_hash = excluded.node_token_hash
+        RETURNING *`;
+      if (!row) throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists", 409);
+      return { row, nodeToken: existing ? input.existingNodeToken! : token.plaintext };
     });
-    return { node, nodeToken: token.plaintext };
+    rememberWorkerApiKey(id, input.apiKey);
+    const counts = await leaseCounts();
+    return { node: fromRow(result.row, counts.get(id) ?? 0), nodeToken: result.nodeToken };
   } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists; forget it before reclaiming", 409);
-    }
+    if (isUniqueViolation(error)) throw new WorkerNodeError("WORKER_NODE_EXISTS", "worker node already exists", 409);
     throw error;
   }
 }
 
-export async function heartbeatWorker(input: {
+export async function heartbeatWorker(input: WorkerAdmission & {
   token: string;
   nodeId?: string;
   endpoint?: string;
@@ -268,47 +281,57 @@ export async function heartbeatWorker(input: {
   capacity?: WorkerCapacity;
   labels?: Record<string, string>;
 }): Promise<DispatchableWorker | null> {
-  const hash = hashWorkerToken(input.token);
-  const [row] = await sql<WorkerRow[]>`SELECT * FROM worker_nodes WHERE node_token_hash = ${hash}`;
-  if (!row) return null;
-  if (input.nodeId && input.nodeId !== row.id) return null;
-  if (input.apiKey) rememberWorkerApiKey(row.id, input.apiKey);
-  if (input.endpoint) {
-    const endpoint = row.kind === "remote"
-      ? parseRemoteWorkerEndpoint(input.endpoint, remoteWorkerEndpointPolicy())
-      : parseWorkerEndpoint(input.endpoint);
-    if (endpoint !== row.endpoint) {
+  const result = await sql.begin(async (tx) => {
+    const [state] = await tx<WorkerUpgradeState[]>`SELECT * FROM platform_upgrade_state WHERE id = 'global' FOR SHARE`;
+    const hash = hashWorkerToken(input.token);
+    const [row] = await tx<WorkerRow[]>`SELECT * FROM worker_nodes WHERE node_token_hash = ${hash} FOR UPDATE`;
+    if (!row) return null;
+    if (input.nodeId && input.nodeId !== row.id) return null;
+
+    if (input.endpoint) {
+      const endpoint = row.kind === "remote"
+        ? parseRemoteWorkerEndpoint(input.endpoint, remoteWorkerEndpointPolicy())
+        : parseWorkerEndpoint(input.endpoint);
+      if (endpoint !== row.endpoint) {
+        throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
+      }
+    }
+    if (input.protocol && input.protocol !== row.protocol) {
       throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
     }
-  }
-  if (input.protocol && input.protocol !== row.protocol) {
-    throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
-  }
-  const capacity = input.capacity ?? parseWorkerCapacity({
-    maxSandboxes: row.capacity_json?.max_sandboxes,
-    memoryMib: row.capacity_json?.memory_mib,
-    cpu: row.capacity_json?.cpu,
+    const admitted = row.status !== "unavailable" && workerAdmissionMatches(state, input, resolveProductVersion()) &&
+      Boolean(state && workerGenerationTokenMatches(state, input.generationToken)) &&
+      row.protocol_version === input.protocolVersion && row.platform_version === input.platformVersion &&
+      row.deployment_generation === input.deploymentGeneration;
+    const capacity = input.capacity ?? parseWorkerCapacity({
+      maxSandboxes: row.capacity_json?.max_sandboxes,
+      memoryMib: row.capacity_json?.memory_mib,
+      cpu: row.capacity_json?.cpu,
+    });
+    const labels = input.labels ? parseWorkerLabels(input.labels) : (row.labels_json ?? {});
+    const [updated] = await tx<WorkerRow[]>`
+      UPDATE worker_nodes SET
+        status = ${admitted ? 'online' : 'unavailable'},
+        api_key_fingerprint = ${admitted && input.apiKey ? fingerprintApiKey(input.apiKey) : row.api_key_fingerprint},
+        capacity_json = ${sql.json({
+          max_sandboxes: capacity.maxSandboxes,
+          memory_mib: capacity.memoryMib,
+          cpu: capacity.cpu,
+        })},
+        labels_json = ${sql.json(labels)},
+        last_heartbeat_at = now(),
+        updated_at = now()
+       WHERE id = ${row.id} AND kind = ${row.kind}
+       RETURNING *`;
+    if (!updated) {
+      throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
+    }
+    return updated;
   });
-  const labels = input.labels ? parseWorkerLabels(input.labels) : (row.labels_json ?? {});
-  const [updated] = await sql<WorkerRow[]>`
-    UPDATE worker_nodes SET
-      status = 'online',
-      api_key_fingerprint = ${input.apiKey ? fingerprintApiKey(input.apiKey) : row.api_key_fingerprint},
-      capacity_json = ${sql.json({
-        max_sandboxes: capacity.maxSandboxes,
-        memory_mib: capacity.memoryMib,
-        cpu: capacity.cpu,
-      })},
-      labels_json = ${sql.json(labels)},
-      last_heartbeat_at = now(),
-      updated_at = now()
-     WHERE id = ${row.id} AND kind = ${row.kind}
-     RETURNING *`;
-  if (!updated) {
-    throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
-  }
+  if (!result) return null;
+  if (result.status === "online" && input.apiKey) rememberWorkerApiKey(result.id, input.apiKey);
   const counts = await leaseCounts();
-  return fromRow(updated, counts.get(updated.id) ?? 0);
+  return fromRow(result, counts.get(result.id) ?? 0);
 }
 
 export async function applyLocalWorkerSeed(
@@ -352,7 +375,12 @@ export async function seedLocalWorkerNode(now = Date.now()): Promise<WorkerNodeR
 export async function forgetWorkerNode(id: string): Promise<DispatchableWorker | null> {
   const node = await getWorkerNode(id);
   if (!node) return null;
-  await sql`DELETE FROM worker_nodes WHERE id = ${id}`;
+  await sql.begin(async (tx) => {
+    await tx`SELECT id FROM worker_nodes WHERE id = ${id} FOR UPDATE`;
+    const [lease] = await tx`SELECT sandbox_id FROM worker_sandbox_leases WHERE worker_id = ${id} LIMIT 1`;
+    if (lease) throw new WorkerNodeError("WORKER_NODE_BUSY", "worker still owns sandbox leases", 409);
+    await tx`DELETE FROM worker_nodes WHERE id = ${id}`;
+  });
   apiKeys.delete(id);
   return node;
 }
@@ -371,6 +399,9 @@ export async function claimWorkerForDispatch(
   const attemptId = options.attemptId ?? null;
 
   return sql.begin(async (tx) => {
+    const [state] = await tx<WorkerUpgradeState[]>`SELECT * FROM platform_upgrade_state WHERE id = 'global' FOR SHARE`;
+    const serverVersion = resolveProductVersion();
+    if (!state || state.phase !== "active" || (state.target_version && state.target_version !== serverVersion)) return null;
     const skipped: string[] = [];
     for (;;) {
       const [row] = await tx<WorkerRow[]>`
@@ -390,6 +421,10 @@ export async function claimWorkerForDispatch(
          FOR UPDATE OF w
          LIMIT 1`;
       if (!row) return null;
+      if (row.kind === "remote" && !workerAdmissionMatches(state, {
+        protocolVersion: row.protocol_version, platformVersion: row.platform_version,
+        deploymentGeneration: row.deployment_generation,
+      }, serverVersion)) { skipped.push(row.id); continue; }
 
       const [{ n }] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM worker_sandbox_leases WHERE worker_id = ${row.id}`;

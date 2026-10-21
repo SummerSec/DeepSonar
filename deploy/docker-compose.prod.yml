@@ -1,5 +1,8 @@
-# 默认从阿里云 ACR 拉取已发布镜像（DEEPSONAR_IMAGE_REGISTRY / DEEPSONAR_IMAGE_TAG）。
-# 本地源码构建：./deploy/deploy.sh up real build
+# 平台镜像（scheduler / web / image-admission）只按 Release 同步的不可变 digest 引用（#740）：
+#   DEEPSONAR_SCHEDULER_IMAGE / DEEPSONAR_WEB_IMAGE / DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>
+#   DEEPSONAR_VERSION=X.Y.Z（/health.version 唯一来源）
+# 已删除 DEEPSONAR_IMAGE_TAG；缺任一变量 Compose 直接失败，deploy.sh / deploy.ps1 另拒绝旧变量与非 digest 引用。
+# 本地源码构建：./deploy/deploy.sh up real build（脚本临时把平台镜像标记为 *:local-build）
 
 services:
   postgres:
@@ -29,14 +32,16 @@ services:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      PGPASSWORD: ${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD:?}}
+      PGUSER: ${DEEPSONAR_DATABASE_USER:-deepsonar}
+      PGDATABASE: ${DEEPSONAR_DATABASE_NAME:-deepsonar}
     volumes:
       - backup_data:/backups
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         while true; do
-          pg_dump -h postgres -U deepsonar deepsonar | gzip > "/backups/deepsonar-$$(date +%Y%m%d-%H%M%S).sql.gz"
+          pg_dump -h postgres | gzip > "/backups/deepsonar-$$(date +%Y%m%d-%H%M%S).sql.gz"
           echo "[backup] done $$(date)"
           find /backups -name 'deepsonar-*.sql.gz' -mtime +7 -delete
           sleep 86400
@@ -99,8 +104,8 @@ services:
     networks: [deepsonar]
 
   scheduler:
-    # 默认拉阿里云已发布镜像；仅在 deploy.sh 传 build 时本地构建
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-scheduler:${DEEPSONAR_IMAGE_TAG:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_TAG}
+    # 默认按 digest 拉已发布镜像；仅在 deploy.sh 传 build 时本地构建
+    image: ${DEEPSONAR_SCHEDULER_IMAGE:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_SCHEDULER_IMAGE（registry/deepsonar-scheduler@sha256 digest 引用）}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.scheduler
@@ -109,7 +114,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${DEEPSONAR_DATABASE_NAME:-deepsonar}
       SCHEDULER_HOST: 0.0.0.0
       SCHEDULER_PORT: 3100
       DEEPSONAR_AUTH_REQUIRED: "true"
@@ -133,9 +139,8 @@ services:
       DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_DIR: /run/deepsonar-gateway
       # vfs/rootless cold create can take 4-8 minutes; keep the runtime timeout explicit.
       PROVISION_TIMEOUT_SEC: ${PROVISION_TIMEOUT_SEC:-900}
-      # /health.version：显式传入镜像标签；可用 DEEPSONAR_VERSION 覆盖。
-      DEEPSONAR_IMAGE_TAG: ${DEEPSONAR_IMAGE_TAG:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_TAG}
-      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:-}
+      # /health.version 只认 DEEPSONAR_VERSION（不再回退镜像 tag）。
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_VERSION}
       # /health.git_revision：镜像构建戳；可用环境变量覆盖以便对照目标 commit（#636）。
       DEEPSONAR_GIT_REVISION: ${DEEPSONAR_GIT_REVISION:-}
       # stop_grace_period 配合优雅退出（dispatcher drain + fastify close）
@@ -166,14 +171,15 @@ services:
 
   # 第三方镜像只在独立准入 Worker 中执行自检；Scheduler 只管理状态与审批。
   image-admission:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-image-admission:${DEEPSONAR_IMAGE_TAG:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_TAG}
+    image: ${DEEPSONAR_IMAGE_ADMISSION_IMAGE:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_ADMISSION_IMAGE（registry/deepsonar-image-admission@sha256 digest 引用）}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.image-admission
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://deepsonar:${POSTGRES_PASSWORD}@postgres:5432/deepsonar
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${DEEPSONAR_DATABASE_NAME:-deepsonar}
       DEEPSONAR_IMAGE_REGISTRY: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}
       DEEPSONAR_IMAGE_SCAN_VOLUME: deepsonar_admission_scan
     volumes:
@@ -188,7 +194,7 @@ services:
     networks: [deepsonar]
 
   web:
-    image: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}/deepsonar-web:${DEEPSONAR_IMAGE_TAG:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_TAG}
+    image: ${DEEPSONAR_WEB_IMAGE:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_WEB_IMAGE（registry/deepsonar-web@sha256 digest 引用）}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web

@@ -11,6 +11,7 @@ import type { DispatchableWorker } from "./model.js";
 
 function worker(id: string, extra: Partial<DispatchableWorker> = {}): DispatchableWorker {
   return {
+    protocolVersion: 1, platformVersion: "0.5.6", deploymentGeneration: "",
     id,
     endpoint: `${id}.example:8080`,
     protocol: "http",

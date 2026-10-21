@@ -7,6 +7,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { hostname } from "node:os";
+import { workerReleaseIdentity } from "./worker-register-contract.mjs";
+
+const identity = workerReleaseIdentity(process.env);
 
 const controlPlane = required("DEEPSONAR_CONTROL_PLANE").replace(/\/+$/, "");
 const bootstrap = required("DEEPSONAR_WORKER_BOOTSTRAP_TOKEN");
@@ -54,14 +57,16 @@ function persistToken(token) {
   writeFileSync(tokenFile, `${token}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
-async function post(path, token, body) {
+async function post(path, token, body, extraHeaders = {}) {
   const response = await fetch(`${controlPlane}${path}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
+      ...identity.headers,
+      ...extraHeaders,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, ...identity.body }),
   });
   const text = await response.text();
   let json = {};
@@ -76,14 +81,15 @@ async function post(path, token, body) {
 }
 
 async function heartbeat(token) {
-  await post("/workers/heartbeat", token, {
+  const result = await post("/workers/heartbeat", token, {
     node_id: nodeId,
     opensandbox_api_key: apiKey,
     capacity,
   });
+  if (result.status !== "online") await register(token);
 }
 
-async function register() {
+async function register(existingNodeToken) {
   const registered = await post("/workers/register", bootstrap, {
     node_id: nodeId,
     endpoint,
@@ -91,7 +97,7 @@ async function register() {
     opensandbox_api_key: apiKey,
     capacity,
     labels: { kind: "remote" },
-  });
+  }, existingNodeToken ? { "x-deepsonar-worker-node-token": existingNodeToken } : {});
   const nodeToken = registered.node_token;
   if (!nodeToken) throw new Error("register did not return node_token");
   persistToken(nodeToken);
@@ -114,14 +120,22 @@ async function resolveToken() {
     return await register();
   } catch (error) {
     if (error?.code === "WORKER_NODE_EXISTS" || error?.status === 409) {
-      throw new Error(`${nodeId} already registered; reuse the persisted node token or admin DELETE /workers/${nodeId} before reclaiming`);
+      throw new Error(`${nodeId} already registered; reuse the persisted node token with the current generation credentials for re-enrollment`);
     }
     throw error;
   }
 }
 
 async function main() {
-  const nodeToken = await resolveToken();
+  let nodeToken;
+  for (;;) {
+    try { nodeToken = await resolveToken(); break; }
+    catch (error) {
+      if (!["WORKER_UPGRADE_FENCED", "PLATFORM_MAINTENANCE"].includes(error?.code)) throw error;
+      console.log("[worker-agent] waiting for platform generation activation");
+      await new Promise(resolve => setTimeout(resolve, intervalSec * 1000));
+    }
+  }
   console.log(`[worker-agent] online ${nodeId} -> ${controlPlane}`);
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, intervalSec * 1000));

@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-20
+> 同步日期：2026-10-21
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -42,7 +42,11 @@ Web 当前对可见投影使用 elkjs，服务端节点坐标只作 placement/ex
 
 ### 3.2 平台自动更新的后续阶段（#740）
 
-P1 第 1–2 片已落地：全局暂停领取/恢复已持久化并接线，官方清单的 `platform` 版本发现已写入检查结果并由 Web 管理端提示；实现见 [`platform-claims`](../../apps/scheduler/src/domains/platform-claims) 和 [`platform-updates`](../../apps/scheduler/src/domains/platform-updates)。仍未落地的是仅以不可变 digest 驱动的 Compose 升级、`upgrade check/apply/rollback`、Release 写出并核对真实 platform digests、签名和无人值守补丁升级；当前 Compose 仍使用发布文档规定的 tag 流程。此项不影响现有 Job/Attempt 副作用边界，也不能通过“自动更新”名义跳过镜像准入和发布证据。事实来源：[`DESIGN.md`](../../DESIGN.md) 的平台自动更新段。
+P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspect、dotenv 唯一性和终态 Attempt 效果排空已有实现。维护模式已获用户授权；数据库身份隔离、候选库恢复/重建、只读 schema plan、同目标续做状态机和服务 preparing 门禁已有模块。隔离 PostgreSQL 身份测试、候选重建和状态机故障注入已有执行证据，不能再笼统写成全部缺实现。
+
+宿主入口、私有恢复文件和受管 SSH 编排已接线；真实单机/多节点成功路径及旧 worker 身份隔离已通过隔离演练。最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。Windows 原生锁、私有 ACL 与持久文件后端的原生 CI 已通过（15 passed、1 项 Linux 专用 skipped），未宣称真实 Windows Docker 部署或断电验收；隔离演练不等于真实部署验收。历史同 schema 演练不能覆盖新维护代码。P2 默认关闭的宿主策略、签名验证和禁用调度模板已接线，生产 keyless 签名链待审批及验收；P3 Web 发起为可选且未实现；不得宣称完整 #740 已交付。
+
+离线配置 preflight 已检查声明字段的 URL/枚举语义、主密钥只读文件身份与内容格式、全部已存凭据（含 disabled）的 AES-GCM 认证，并复用 credential-first resolver 检查当前持久默认组合；明确未检凭据及外部服务真实认证、模型可用性、未来 Job provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段和 Skill 源内容。跨 schema 计划需要明确审批删除数据与角色身份重置风险；当前集成 schema 编号不能当成已发布编号或同编号 DDL 等价证明。决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)，既有演练边界见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
 
 ### 3.3 可冻结的安全漏洞证明契约
 

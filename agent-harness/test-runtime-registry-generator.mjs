@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { assertPlatformManifest } from "./generate-runtime-image-registry.mjs";
+import { verifyPlatformRelease, platformEnvExample } from "./check-platform-release.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -60,8 +62,17 @@ function writeDescriptors({ optional = "all", mutate } = {}) {
 }
 
 function runGenerator(env = {}) {
+  for (const key of ["scheduler", "web", "image-admission"]) {
+    const imageKey = `deepsonar-${key}`;
+    writeFileSync(path.join(descriptorDir, `${key}.json`), JSON.stringify({
+      image_key: imageKey, version: (env.VERSION ?? "0.1.0").replace(/^v/, ""), digest,
+      platforms: ["linux/amd64", "linux/arm64"],
+      platform_digests: { "linux/amd64": digest, "linux/arm64": `sha256:${"b".repeat(64)}` },
+      registry_records: Object.fromEntries(Object.keys(channels).map(channel => [channel, recordFor(imageKey, channel)])),
+    }));
+  }
   return execFileSync(process.execPath, [generator, descriptorDir, outputPath], {
-    env: { ...process.env, VERSION: "0.1.0", ...env },
+    env: { ...process.env, VERSION: "0.1.0", PLATFORM_RELEASE_COMMIT: "a".repeat(40), ...env },
     stdio: "pipe",
   });
 }
@@ -249,6 +260,63 @@ try {
   assert.equal(byKey["deepsonar-base"].digest, changedDigest);
   assert.equal(byKey["deepsonar-audit"].version, "0.1.0");
   assert.equal(byKey["deepsonar-audit"].digest, digest);
+  const workflow = readFileSync(path.join(root, ".github/workflows/release.yml"), "utf8");
+  assert.ok(!workflow.includes("DEEPSONAR_IMAGE_TAG"));
+  assert.ok(workflow.indexOf("check-platform-release.mjs --check") < workflow.indexOf("准备 v2 Release asset"));
+  assert.ok(workflow.includes('export PLATFORM_RELEASE_COMMIT="$(git rev-parse HEAD)"'));
+  assert.ok(workflow.includes('git show "origin/${DEFAULT_BRANCH}:$env_file" > "$tmp_env"'));
+  assert.ok(workflow.includes('check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"'));
+  const platform = mixed.platform;
+  assert.equal(platform.version, "0.2.0");
+  assert.equal(platform.commit_sha, "a".repeat(40));
+  assert.ok(platform.schema_version > 0);
+  const inspect = () => ({ manifests: Object.entries(platform.images.scheduler.child_digests).map(([arch, digest]) => ({
+    mediaType: "application/vnd.oci.image.manifest.v1+json", digest,
+    platform: { os: "linux", architecture: arch.split("/")[1] },
+  })) });
+  let inspections = 0;
+  verifyPlatformRelease(mixed, () => { inspections++; return inspect(); });
+  assert.equal(inspections, 9, "all three channels of all three platform images must be inspected");
+  assert.throws(() => verifyPlatformRelease(mixed, () => { const value = inspect(); value.manifests[0].digest = `sha256:${"f".repeat(64)}`; return value; }), /payload mismatch/);
+  for (const mutate of [
+    value => { delete value.images.web; },
+    value => { value.version = "9.0.0"; },
+    value => { value.commit_sha = "not-a-commit"; },
+    value => { value.commit_sha = 1234567; },
+    value => { value.changelog_url = "https://github.com/SummerSec/DeepSonar/blob/has space"; },
+    value => { value.schema_version = 0; },
+    value => { delete value.images.web.child_digests["linux/arm64"]; },
+    value => { value.images.web.registry_refs.github = channels.github; },
+    value => { value.images.web.registry_evidence.github.inspect_digest = `sha256:${"f".repeat(64)}`; },
+    value => { value.images.web.extra = true; },
+  ]) {
+    const invalid = structuredClone(platform); mutate(invalid);
+    assert.throws(() => assertPlatformManifest(invalid, mixed.platform_version));
+    const invalidPath = path.join(tempRoot, "invalid-platform.json");
+    writeFileSync(invalidPath, JSON.stringify({ ...mixed, platform: invalid }));
+    assert.throws(() => execFileSync(process.execPath, [generator, "--check", invalidPath], { stdio: "pipe" }));
+  }
+  const example = "# preserve\nDEEPSONAR_VERSION=old\n" + Object.entries(platform.images).map(([key, image]) =>
+    `DEEPSONAR_${key.replaceAll("-", "_").toUpperCase()}_IMAGE=${image.registry_refs["aliyun-acr"]}\n`).join("") + "UNRELATED=keep\n";
+  const updated = platformEnvExample(mixed, example);
+  assert.ok(platformEnvExample(mixed, example.replaceAll("\n", "\r\n")).includes("DEEPSONAR_VERSION=0.2.0"));
+  assert.ok(updated.includes(`DEEPSONAR_WEB_IMAGE=${platform.images.web.registry_refs["aliyun-acr"]}`));
+  assert.ok(updated.includes("UNRELATED=keep"));
+  for (const channel of ["github", "dockerhub", "aliyun-acr"]) {
+    const input = example.replace(platform.images.web.registry_refs["aliyun-acr"], platform.images.web.registry_refs[channel].replace(digest, `sha256:${"f".repeat(64)}`));
+    assert.ok(platformEnvExample(mixed, input).includes(`DEEPSONAR_WEB_IMAGE=${platform.images.web.registry_refs[channel]}`));
+  }
+  assert.throws(() => platformEnvExample(mixed, example.replace("/summersec/deepsonar-web@", "/other/deepsonar-web@")), /channel is unavailable/);
+  const noAcr = structuredClone(mixed);
+  delete noAcr.platform.images.web.registry_refs["aliyun-acr"];
+  noAcr.platform.images.web.registry_evidence["aliyun-acr"] = { available: false, provenance: "unavailable", reason: "credentials_missing" };
+  assert.throws(() => platformEnvExample(noAcr, example), /channel is unavailable/);
+  for (const declaration of ["DEEPSONAR_WEB_IMAGE=duplicate", "export DEEPSONAR_WEB_IMAGE=duplicate", "  DEEPSONAR_WEB_IMAGE = duplicate", "DEEPSONAR_WEB_IMAGE: duplicate", "DEEPSONAR_WEB_IMAGE", "export DEEPSONAR_VERSION: duplicate"]) {
+    assert.throws(() => platformEnvExample(mixed, example + declaration + "\n"), /exactly one canonical/);
+  }
+  for (const declaration of ["DEEPSONAR_IMAGE_TAG=old", "export DEEPSONAR_IMAGE_TAG=old", "  DEEPSONAR_IMAGE_TAG : old", "DEEPSONAR_IMAGE_TAG"]) {
+    assert.throws(() => platformEnvExample(mixed, example + declaration + "\n"), /obsolete/);
+  }
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

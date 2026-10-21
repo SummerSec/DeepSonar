@@ -50,9 +50,9 @@ export type PlatformClaimsWorkload = {
   in_flight: PlatformClaimsInFlight;
   pending: number;
   waiting_human: number;
-  /** 活跃 Attempt 中仍有 `effect_pending` 外部效果的数量。 */
+  /** 所有 Attempt（含终态）中仍有 `effect_pending` 外部效果的数量。 */
   effect_pending_attempts: number;
-  /** 活跃 Attempt 中有 `unknown` 外部效果的数量；不得在此状态下继续升级。 */
+  /** 所有 Attempt（含终态）中有 `unknown` 外部效果的数量；不得在此状态下继续升级。 */
   unknown_effect_attempts: number;
 };
 

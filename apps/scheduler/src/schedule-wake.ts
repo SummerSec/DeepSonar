@@ -24,6 +24,12 @@ export function bindScheduleWake(kickDispatcher: () => void): void {
   kick = kickDispatcher;
 }
 
+/** Freeze must also prevent an in-flight refresh from rearming the timer. */
+export function unbindScheduleWake(): void {
+  kick = null;
+  clearArmedTimer();
+}
+
 function fireKick(): void {
   kick?.();
 }
@@ -83,6 +89,7 @@ export async function refreshScheduleWakeFromDb(): Promise<void> {
 }
 
 function armTimer(targetMs: number): void {
+  if (!kick) return;
   clearArmedTimer();
   armedUntilMs = targetMs;
   const delay = Math.min(Math.max(targetMs - Date.now() + WAKE_SLACK_MS, 1), MAX_TIMER_MS);

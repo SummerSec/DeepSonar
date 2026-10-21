@@ -1,0 +1,17 @@
+{
+  "schema": "deepsonar.auto-upgrade-policy/v1",
+  "enabled": false,
+  "window": {
+    "timezone": "Etc/UTC",
+    "days": [7],
+    "start": "02:00",
+    "end": "04:00"
+  },
+  "signature": {
+    "enabled": false,
+    "cosignPath": "/absolute/path/to/cosign",
+    "cosignSha256": "REPLACE_WITH_VERIFIED_BINARY_SHA256",
+    "trustedRootPath": "/absolute/path/to/trusted_root.json",
+    "trustedRootSha256": "REPLACE_WITH_VERIFIED_TRUSTED_ROOT_SHA256"
+  }
+}

@@ -1,6 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
+# Upgrade uses a shared host implementation so Shell and PowerShell have the same recovery rules.
+if [ "${1:-}" = "upgrade" ]; then
+  shift
+  command -v node >/dev/null 2>&1 || { echo "upgrade requires Node.js >=22" >&2; exit 1; }
+  exec node "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/platform-upgrade-host.mjs" "$@"
+fi
+
 ACTION="${1:-up}"
 MODE="${2:-real}"
 SOURCE="${3:-pull}"
@@ -22,6 +29,8 @@ PODMAN_COMPAT_FILE="$SCRIPT_DIR/docker-compose.podman-compat.yml"
 PODMAN_COMPAT_OS_FILE="$SCRIPT_DIR/docker-compose.podman-compat.opensandbox.yml"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/bounded-wait.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/platform-images.sh"
 
 
 if [ "$MODE" = "worker-join" ]; then
@@ -58,19 +67,6 @@ fi
 DEFAULT_IMAGE_REGISTRY="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec"
 DEFAULT_SHARED_ASSETS_HELPER_IMAGE="docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23"
 DEFAULT_SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z"
-REGISTRY_FILE="$SCRIPT_DIR/runtime-image-registry.json"
-DEFAULT_IMAGE_TAG=""
-if [ -f "$REGISTRY_FILE" ]; then
-  DEFAULT_IMAGE_TAG=$(awk -F'"' '/"platform_version"[[:space:]]*:/ {print $4; exit}' "$REGISTRY_FILE")
-fi
-if [ -z "$DEFAULT_IMAGE_TAG" ] && [ -f "$ENV_EXAMPLE" ]; then
-  DEFAULT_IMAGE_TAG=$(awk -F= '$1=="DEEPSONAR_IMAGE_TAG" {print $2; exit}' "$ENV_EXAMPLE")
-fi
-DEFAULT_IMAGE_TAG=${DEFAULT_IMAGE_TAG#v}
-if [ -z "$DEFAULT_IMAGE_TAG" ]; then
-  echo "无法从 deploy/runtime-image-registry.json 或 deploy/.env.example 解析当前 Release 版本" >&2
-  exit 1
-fi
 
 case "$ACTION" in up|down|status|logs|check|pull) ;; *)
   echo "用法: $0 [up|down|status|logs|check|pull] [real|fake|worker-join] [pull|build]" >&2
@@ -164,17 +160,20 @@ if ! grep -q '^DEEPSONAR_MASTER_KEY_FILE=' "$ENV_FILE"; then
   printf '\nDEEPSONAR_MASTER_KEY_FILE=/run/secrets/deepsonar_master_key\n' >> "$ENV_FILE"
 fi
 
-# 默认镜像源：阿里云 ACR + 当前发布标签
+# 平台镜像按不可变 digest 引用（#740）：旧 DEEPSONAR_IMAGE_TAG / 可变 tag / 缺 DEEPSONAR_VERSION 一律 fail closed，
+# 不自动补写、不回退 tag。worker-join 不运行平台镜像，只拒绝旧变量。
+require_platform_images=1
+if [ "$MODE" = "worker-join" ] && [ "$ACTION" != "pull" ]; then
+  require_platform_images=0
+fi
+if ! ds_check_platform_image_contract "$ENV_FILE" "$ENV_EXAMPLE" "$require_platform_images"; then
+  exit 1
+fi
+
+# 官方 helper / Silo 仍按 Release 版本标签解析后固定为 RepoDigest
 ensure_env_kv "DEEPSONAR_IMAGE_REGISTRY" "$DEFAULT_IMAGE_REGISTRY"
-ensure_env_kv "DEEPSONAR_IMAGE_TAG" "$DEFAULT_IMAGE_TAG"
 ensure_env_kv "DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" "$DEFAULT_SHARED_ASSETS_HELPER_IMAGE"
 ensure_env_kv "SILO_IMAGE" "$DEFAULT_SILO_IMAGE"
-# A previous generated env used latest; normalize only that legacy default.
-if grep -q '^DEEPSONAR_IMAGE_TAG=latest$' "$ENV_FILE"; then
-  tmp=$(mktemp)
-  sed "s|^DEEPSONAR_IMAGE_TAG=latest$|DEEPSONAR_IMAGE_TAG=${DEFAULT_IMAGE_TAG}|" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
-  echo "[deploy] 已将旧的 latest 镜像标签规范为 ${DEFAULT_IMAGE_TAG}"
-fi
 # 允许运行时从 ACR 拉官方 Agent 镜像（只检查 ALLOWED 行，避免被 IMAGE_REGISTRY 误匹配）
 ACR_HOST="crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com"
 if grep -q '^DEEPSONAR_ALLOWED_IMAGE_REGISTRIES=' "$ENV_FILE"; then
@@ -201,11 +200,13 @@ fi
 
 # shellcheck disable=SC1090
 IMAGE_REGISTRY=$(awk -F= '$1=="DEEPSONAR_IMAGE_REGISTRY" {print $2; exit}' "$ENV_FILE")
-IMAGE_TAG=$(awk -F= '$1=="DEEPSONAR_IMAGE_TAG" {print $2; exit}' "$ENV_FILE")
+PLATFORM_VERSION=$(ds_effective_env_value "$ENV_FILE" DEEPSONAR_VERSION)
+SCHEDULER_IMAGE=$(ds_effective_env_value "$ENV_FILE" DEEPSONAR_SCHEDULER_IMAGE)
+WEB_IMAGE=$(ds_effective_env_value "$ENV_FILE" DEEPSONAR_WEB_IMAGE)
+IMAGE_ADMISSION_IMAGE=$(ds_effective_env_value "$ENV_FILE" DEEPSONAR_IMAGE_ADMISSION_IMAGE)
 SHARED_ASSETS_HELPER_IMAGE=$(awk -F= '$1=="DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE" {print $2; exit}' "$ENV_FILE")
 SILO_IMAGE=$(awk -F= '$1=="SILO_IMAGE" {print $2; exit}' "$ENV_FILE")
 IMAGE_REGISTRY=${IMAGE_REGISTRY:-$DEFAULT_IMAGE_REGISTRY}
-IMAGE_TAG=${IMAGE_TAG:-$DEFAULT_IMAGE_TAG}
 SILO_IMAGE=${SILO_IMAGE:-$DEFAULT_SILO_IMAGE}
 
 if [ "$MODE" = "worker-join" ]; then
@@ -291,12 +292,18 @@ relax_bridge_forward() {
 cd "$REPO_ROOT"
 
 pull_app_images() {
-  echo "[deploy] 从阿里云拉取应用镜像：${IMAGE_REGISTRY} tag=${IMAGE_TAG}"
-  for name in deepsonar-scheduler deepsonar-web deepsonar-image-admission; do
-    ref="${IMAGE_REGISTRY}/${name}:${IMAGE_TAG}"
+  echo "[deploy] 按不可变 digest 拉取平台镜像（DEEPSONAR_VERSION=${PLATFORM_VERSION}）"
+  for ref in "$SCHEDULER_IMAGE" "$WEB_IMAGE" "$IMAGE_ADMISSION_IMAGE"; do
     echo "[deploy] pull $ref"
     docker pull "$ref"
   done
+}
+
+print_platform_images() {
+  echo "[deploy] 平台版本: DEEPSONAR_VERSION=${PLATFORM_VERSION}"
+  echo "[deploy] scheduler: ${SCHEDULER_IMAGE}"
+  echo "[deploy] web: ${WEB_IMAGE}"
+  echo "[deploy] image-admission: ${IMAGE_ADMISSION_IMAGE}"
 }
 
 HELPER_IMAGE_DIGEST_RE='^[^@[:space:]]+@sha256:[0-9a-f]{64}$'
@@ -320,7 +327,7 @@ resolve_repo_digest() {
 
 pull_shared_assets_helper() {
   [ "$MODE" = "real" ] || return 0
-  official_tag="${IMAGE_REGISTRY}/deepsonar-assets-helper:${IMAGE_TAG}"
+  official_tag="${IMAGE_REGISTRY}/deepsonar-assets-helper:${PLATFORM_VERSION}"
   echo "[deploy] 尝试拉取官方共享资产 helper：$official_tag"
   if docker pull "$official_tag"; then
     official_digest=$(resolve_repo_digest "$official_tag" "deepsonar-assets-helper@")
@@ -354,7 +361,7 @@ pull_official_silo() {
     docker pull "$SILO_IMAGE"
     return 0
   fi
-  official_tag="${IMAGE_REGISTRY}/deepsonar-silo:${IMAGE_TAG}"
+  official_tag="${IMAGE_REGISTRY}/deepsonar-silo:${PLATFORM_VERSION}"
   echo "[deploy] 尝试拉取官方 Silo：$official_tag"
   if docker pull "$official_tag"; then
     official_digest=$(resolve_repo_digest "$official_tag" "deepsonar-silo@")
@@ -381,7 +388,9 @@ case "$ACTION" in
       validate_shared_assets_helper_image
     fi
     echo "[deploy] Compose 配置有效"
-    echo "[deploy] 镜像源: ${IMAGE_REGISTRY} / ${IMAGE_TAG}（默认阿里云 ACR）"
+    if [ "$require_platform_images" = "1" ]; then
+      print_platform_images
+    fi
     ;;
   status)
     "$@" ps
@@ -433,7 +442,8 @@ case "$ACTION" in
     pull_shared_assets_helper
     up_rc=0
     if [ "$SOURCE" = "build" ]; then
-      echo "[deploy] 本地 Dockerfile 构建模式"
+      echo "[deploy] 本地 Dockerfile 构建模式（平台镜像临时标记为 *:${DS_LOCAL_BUILD_TAG}，不改写 deploy/.env 的 digest 引用）"
+      ds_export_local_build_platform_images
       if ds_run_bounded "${DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC:-600}" "$@" up -d --build; then
         up_rc=0
       else
@@ -492,7 +502,11 @@ case "$ACTION" in
       esac
     done
     echo "[deploy] DeepSonar 已启动：http://127.0.0.1:$port"
-    echo "[deploy] 应用镜像：${IMAGE_REGISTRY}/*:${IMAGE_TAG}"
+    if [ "$SOURCE" = "build" ]; then
+      echo "[deploy] 平台镜像：本地构建 *:${DS_LOCAL_BUILD_TAG}（DEEPSONAR_VERSION=${PLATFORM_VERSION}）"
+    else
+      print_platform_images
+    fi
     echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DEEPSONAR_ADMIN_TOKEN，请勿提交该文件。"
     echo "[deploy] 人类默认管理员：admin / Deep@Sonar66；生产首次登录后必须立即修改密码并建议修改登录名。"
     if [ "$MODE" = "fake" ]; then
