@@ -18,6 +18,7 @@ import {
 import { recordSystemAudit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
+import { persistSkillSourceManifest } from "./job-skill-catalog.js";
 
 export {
   parseModuleSelector,
@@ -83,7 +84,7 @@ export interface AvailableSkill {
   commit_sha: string | null;
 }
 
-function availableSkillEntries(sources: readonly SkillSourceCatalogView[]): AvailableSkill[] {
+export function availableSkillEntries(sources: readonly SkillSourceCatalogView[]): AvailableSkill[] {
   return sources
     .flatMap((source) => source.catalog
       .filter((module) => module.kind === "skill")
@@ -783,6 +784,10 @@ export async function syncSkillSource(
     assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
     const lastCommitSha = commitSha.trim() || null;
     const lastContentHash = contentHashOf(catalog);
+    const catalogSnapshotHash = await persistSkillSourceManifest(sql as never, {
+      sourceId, commitSha: lastCommitSha, catalog,
+    });
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
     const previousCatalog = Array.isArray(src.catalog_json)
       ? (src.catalog_json as unknown[]).filter(isCatalogModule)
       : [];
@@ -798,6 +803,7 @@ export async function syncSkillSource(
         synced_at = now(),
         last_commit_sha = ${lastCommitSha},
         last_content_hash = ${lastContentHash},
+        catalog_snapshot_hash = ${catalogSnapshotHash},
         synced_by = ${syncedBy ?? null}
       WHERE id = ${sourceId}
       RETURNING synced_at`;

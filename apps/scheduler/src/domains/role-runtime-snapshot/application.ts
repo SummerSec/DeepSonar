@@ -54,6 +54,7 @@ import {
 import { resolveCredentialModelRef } from "../provider-adapter/resolve-credential.js";
 import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
 import { expandModules, resolveEffectiveModuleSelectors, type MissingModule } from "../../skill-sources.js";
+import { freezeJobSkillCatalog } from "../../job-skill-catalog.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
 import { sql } from "../../db.js";
 import { config } from "../../config.js";
@@ -766,6 +767,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     if (frozenPm) provider_model = frozenPm;
   }
 
+  const jobSkillCatalog = await freezeJobSkillCatalog(db, projectId);
   return {
     name: roleName,
     role_kind: roleKind,
@@ -802,6 +804,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     component_materialization_pack,
     ...(provider_model ? { provider_model } : {}),
     skill_revisions: expanded.revisions,
+    job_skill_catalog: jobSkillCatalog,
     skills,
     commands,
     mcps: (cfg?.mcps_json as unknown[]) ?? [],

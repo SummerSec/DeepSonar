@@ -89,6 +89,8 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 当前已落地的是第一刀：内置 pack、已信任 Git skill module、RoleConfig 生成只读目录投影；Job 级只读发现操作为 `list_capabilities`、`search_capabilities`、`describe_capability`、`validate_composition`、`preview_materialization`。现有 `explore`、`analyze`、`review`、`test`、`code`、`audit` 作为内置 pack 继续工作，`deepsonar-management` 也可以作为平台能力包被发现。
 Agent 运行中拉取业务 Skill 使用 `list_available_skills`、`search_skills`、`pull_skill`；这些操作返回并校验具体模块文件，但不改变 Job 的平台权限边界。
 
+#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。
+
 发现不是授权。Scheduler 仍按项目范围、Job 快照、平台工具 allowlist、镜像兼容性和网络策略决定可执行集合。模型不能用 Manifest 扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。
 
 Job 创建时冻结运行配置和平台控制边界；业务 Skill 不再依赖 RoleConfig selector 预先物化。Agent 可在运行中从 trusted+enabled 目录搜索并通过 `pull_skill` 拉取具体 Skill，拉取时重新校验 selector、内容 hash、Job token、预算和网络策略。Skill 只能影响当前任务的方法，不得扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。当前尚未实现 task/session Pack 的持久化生命周期、Pack 评估晋升和跨任务经验推荐；不要在代码或文档中把这些未来能力写成已存在。
@@ -220,7 +222,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
 
-v60 旧库升级不能从 CLI 值猜测种子来源：重建默认要求身份复核，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job；须有备份或明确保留 staging。详见[数据库升级说明](database/README.md#v60-角色身份复核757)。
+v61 旧库升级不能从 CLI 值猜测种子来源：重建默认要求身份复核，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job；须有备份或明确保留 staging。详见[数据库升级说明](database/README.md#v61-角色身份复核757)。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
@@ -318,7 +320,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v60 |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v61 |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：

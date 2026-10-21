@@ -1,4 +1,5 @@
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
+import { loadJobSkillCatalog, type FrozenJobSkillCatalog } from "../../job-skill-catalog.js";
 import {
   assertSkillSourcesProjectEnabled,
   isSkillSourceUuid,
@@ -229,32 +230,22 @@ export async function setProjectSkillSourceEnabled(
   };
 }
 
-/**
- * Hub read-only catalog: global platform trusted+enabled Skill Source inventory (#660/#691).
- * Project may only tighten via explicit disables; Hub discovery sees the full trust set.
- */
+/** Hub sees the same frozen, currently unrevoked source set as Agent pull. */
 export async function listHubSkillSourceCatalog(
   db: SqlLike,
   projectId: string,
+  frozen: FrozenJobSkillCatalog | undefined,
 ): Promise<HubSkillSourceCatalogEntry[]> {
-  await ensureProjectSkillAllowlist(db, projectId, { persist: false });
-  const rows = await db`
-    SELECT ss.id, ss.name, ss.trust_status, ss.enabled,
-           ss.last_commit_sha, ss.last_content_hash,
-           jsonb_array_length(ss.catalog_json) AS module_count
-    FROM skill_sources ss
-    WHERE ss.enabled = true
-      AND ss.trust_status = 'trusted'
-    ORDER BY ss.name, ss.id` as Array<{
-    id: string;
-    name: string;
-    trust_status: string;
-    enabled: boolean;
-    last_commit_sha: string | null;
-    last_content_hash: string | null;
-    module_count: number | string | null;
-  }>;
-  return rows.map(toHubSkillSourceCatalogEntry);
+  const available = new Set((await loadJobSkillCatalog(db, projectId, frozen)).map((source) => source.id));
+  return frozen!.sources.filter((source) => available.has(source.source_id)).map((source) => toHubSkillSourceCatalogEntry({
+    id: source.source_id,
+    name: source.name,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: source.commit_sha,
+    last_content_hash: source.content_hash,
+    module_count: source.module_count,
+  }));
 }
 
 export async function assertProjectModulesAllowlisted(

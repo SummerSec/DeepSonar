@@ -21,6 +21,10 @@ Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allo
 
 Control operation 分为两类：`list/search/describe/validate/preview` 能力发现、graph 查询和 Skill 拉取是只读 operation；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 以及 Plan/PlanResult 是语义提交，其中 Plan/PlanResult 当前 Phase 1 只记录版本化输入/结果，不派发 Worker、不改变 Hub convergence。所有 operation 都不直接暴露数据库写入、容器命令、凭据、Job 快照或终态修改；只有语义提交由 event-ingestion/application transaction 产生受审计的领域结果。
 
+## 项目知识接口（#752 分支）
+
+Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
+
 ## Gateway、流和导入接口
 
 - **Model Gateway：** Provider 选择、凭据、网络、模型和用量归 Scheduler 所有。Gateway 上游请求/响应体不落库（usage 计数除外）；Job 执行流由 Evidence writer 归档并对已登记的运行时 secret 脱敏。Provider 错误不成为 Agent 可伪造的语义事件。实现见 [`gateway.ts`](../../apps/scheduler/src/gateway.ts) 与 [`evidence.ts`](../../apps/scheduler/src/evidence.ts)。

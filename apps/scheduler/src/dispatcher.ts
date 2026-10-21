@@ -865,6 +865,9 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
 }
 
 export async function dispatchOnce(): Promise<number> {
+  // Enqueue only standard Jobs; the normal claimant retains pause/quota gates.
+  const { projectKnowledgeScheduler } = await import("./project-knowledge-scheduler.js");
+  await projectKnowledgeScheduler.tick();
   const claimedJobs = await claimPendingJobs();
 
   for (const job of claimedJobs) {

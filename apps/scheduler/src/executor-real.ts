@@ -21,9 +21,6 @@ import {
   AckHumanMessagePayload,
   allowedPlatformTools,
   CAPABILITY_DISCOVERY_TOOLS_LIST,
-  ListAvailableSkillsPayload,
-  SearchSkillsPayload,
-  PullSkillPayload,
   type PlatformToolName,
   type VerifyVerdict,
   isSafeWorkspacePayloadFile,
@@ -52,11 +49,9 @@ import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import { listHubAgentCliCatalog, listHubProviderCatalog } from "./domains/project-agent-allowlist/index.js";
 import { listHubSkillSourceCatalog } from "./domains/project-skill-allowlist/index.js";
-import {
-  listAvailableSkillsFromCatalog,
-  loadTrustedEnabledSkillSourceCatalogs,
-  pullSkillFromCatalog,
-} from "./skill-sources.js";
+import { JobSkillCatalogError } from "./job-skill-catalog.js";
+import { createKnowledgeRuntime } from "./domains/project-knowledge/runtime.js";
+import { PROJECT_KNOWLEDGE_GOVERNANCE_HASH, injectKnowledgePlatformSkills } from "./domains/project-knowledge/platform-skills.js";
 import {
   PROVIDER_ENV_MAP,
   UNKNOWN_PROVIDER_ERROR,
@@ -693,7 +688,7 @@ export async function executeReal(
   }
   // The platform skill is reserved by name. Never pass a RoleConfig copy into
   // the sandbox, otherwise a role module could shadow control instructions.
-  const runtimeSkills = injectPlatformControlSkill(snapshot.skills);
+  const runtimeSkills = injectKnowledgePlatformSkills(injectPlatformControlSkill(snapshot.skills), snapshot.knowledge_assignment);
   const canSubmitHubDecision = controlToolNames.includes("submit_hub_decision");
   const contract = resultContract(controlToolNames, isHub, isRole, isVerify, isAudit);
   const toolGuide = platformToolGuide(controlToolNames);
@@ -1060,6 +1055,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
   initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
   initialInput += `\n\n${CONTROL_TRANSPORT_POINTER} 完整调用规则见 /workspace/AGENTS.md「调用规则」与 deepsonar-control Skill。`;
+  if (snapshot.knowledge_assignment) {
+    initialInput += "\n\nScheduler 分配的知识工作（只读冻结引用）：" + JSON.stringify(snapshot.knowledge_assignment);
+  }
   if ((snapshot.shared_assets?.length ?? 0) > 0) {
     initialInput += `\n\n本 Job 已冻结 ${snapshot.shared_assets!.length} 个只读共享资产，预挂载到 ${SHARED_ASSETS_READONLY_ROOT}（Scheduler 从本地或 S3 兼容 BlobStore 注入，Agent 无下载工具/无对象存储凭据）。先 list_shared_assets，再按返回的 mount_path/read_path 用普通文件工具读取；可 cp 到 /workspace 普通目录使用，禁止修改共享目录，禁止从共享目录 publish。`;
   }
@@ -1514,9 +1512,23 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   try {
   registerJobEvidenceSecrets(jobId, [platformToken]);
 
+  const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
   const runtimePlatformHandler = async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
     const operation = context.operationId;
     if (!platformOperations.includes(operation)) throw new Error("operation is not enabled for this Job");
+    const knowledgeResult = await knowledgeRuntime(context);
+    if (knowledgeResult !== undefined) return knowledgeResult;
+    const withSkillCatalogFailure = async (run: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> => {
+      try { return await run(); }
+      catch (error) {
+        if (error instanceof JobSkillCatalogError) {
+          throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
+            statusCode: 409, errorCode: error.error_code, retryable: false,
+          });
+        }
+        throw error;
+      }
+    };
     if (operation === "list_available_roles") {
       return { accepted: true, operation, roles: availableHubRoleCatalog };
     }
@@ -1536,23 +1548,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return { accepted: true, operation, providers };
     }
     if (operation === "list_available_skill_sources") {
-      const skill_sources = await listHubSkillSourceCatalog(sql as never, job.project_id as string);
-      return { accepted: true, operation, skill_sources };
-    }
-    if (operation === "list_available_skills" || operation === "search_skills") {
-      const sources = await loadTrustedEnabledSkillSourceCatalogs(sql);
-      const result = operation === "list_available_skills"
-        ? listAvailableSkillsFromCatalog(sources, ListAvailableSkillsPayload.parse(context.input ?? {}))
-        : listAvailableSkillsFromCatalog(sources, SearchSkillsPayload.parse(context.input ?? {}));
-      return { accepted: true, operation, ...result };
-    }
-    if (operation === "pull_skill") {
-      const parsed = PullSkillPayload.parse(context.input ?? {});
-      const sources = await loadTrustedEnabledSkillSourceCatalogs(sql);
-      const result = pullSkillFromCatalog(sources, parsed.selector, parsed.expected_content_hash);
-      return result.ok
-        ? { accepted: true, operation, skill: result.skill }
-        : { accepted: false, operation, error_code: result.error_code, error: result.message };
+      return withSkillCatalogFailure(async () => {
+        const skill_sources = await listHubSkillSourceCatalog(sql as never, job.project_id as string, snapshot.job_skill_catalog);
+        return { accepted: true, operation, skill_sources };
+      });
     }
     if (operation === "list_shared_assets") {
       const input = context.input && typeof context.input === "object" && !Array.isArray(context.input)
@@ -1563,12 +1562,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return { accepted: true, operation, ...filterFrozenSharedAssets(sharedAssetCatalog as unknown as Record<string, unknown>, input) };
     }
     if ((CAPABILITY_DISCOVERY_TOOLS_LIST as readonly string[]).includes(operation)) {
-      return handleCapabilityDiscovery({
+      return withSkillCatalogFailure(() => handleCapabilityDiscovery({
         operation,
         payload: context.input,
         snapshot,
+        projectId: job.project_id as string,
         db: sql,
-      });
+      }));
     }
     if (operation === "graph_query") {
       return { ...await executeGraphQuery({

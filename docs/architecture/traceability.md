@@ -1,12 +1,14 @@
 # DeepSonar 需求追溯矩阵
 
-> 状态：**as-built + 追溯登记**（#741 PR 2）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
+> 状态：**as-built + 追溯登记**（#741 基线；#752 独立试验分支同步）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
 > 同步日期：2026-10-21
 
-矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。除文档 freshness 与 file-size 门禁外，本次未执行行为测试。
+矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
 
 | 需求 ID | 架构视图 | ADR | 代码入口 | 测试或人工验收 |
 |---|---|---|---|---|
+| FR-KNOW-001 | [构件视图](05-building-blocks.md)；[运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0003](adr/0003-api-only-control.md)；[ADR-0005](adr/0005-event-evidence-stream.md) | [知识域](../../apps/scheduler/src/domains/project-knowledge/)；[schema](../../database/schema.sql) | `pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下 `pnpm ci:integration:project-knowledge`；真实沙箱与模型效果另需试验，当前未验证。 |
+| FR-KNOW-002 | [接口规格](09-interface-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [grant policy](../../apps/scheduler/src/domains/project-knowledge/grant-policy.ts)；[冻结目录](../../apps/scheduler/src/domains/project-knowledge/catalog-snapshot.ts)；[全局源快照](../../apps/scheduler/src/job-skill-catalog.ts) | `pnpm ci:integration:project-knowledge`；人工双项目校验未审批版本拒授、撤销后拒读及旧 Job 不扩权，生产未执行。 |
 | FR-TASK-001 | [上下文与范围](02-context-and-scope.md) | — | [task 路由](../../apps/scheduler/src/domains/project-task/routes.ts) | `pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`；人工核对 `POST /projects/{id}/tasks` 的 project scope 和 Canvas 行。 |
 | FR-TASK-002 | [上下文与范围](02-context-and-scope.md)；[运行时视图](06-runtime-view.md) | — | [任务编排](../../apps/scheduler/src/task-compose.ts)；[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/) | `pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`、`pnpm ci:smoke:hub`；人工核对新任务首个 Job 为 `hub_reason`，不得由用户 API 绕过 Hub。 |
 | FR-TASK-005 | [上下文与范围](02-context-and-scope.md) | [ADR-0001](adr/0001-no-backward-compatibility.md) | [任务意图模型](../../apps/scheduler/src/task-intent.ts) | `pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`；人工核对进行中 Job 的 snapshot 与 PATCH 前后不变。 |

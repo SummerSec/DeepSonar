@@ -138,11 +138,14 @@ try {
   await sql`INSERT INTO credentials (id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,status,agent_cli,public_metadata_json)
     VALUES (${credentialId},'Disposable local model fixture','llm_provider','anthropic',${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
       ${credentials.fingerprintOf(secret)},${credentials.last4Of(secret)},'active','claude-code',${sql.json({ base_url: model.url })})`;
+  const { persistSkillSourceManifest, freezeJobSkillCatalog } = await import("../../apps/scheduler/src/job-skill-catalog.js");
+  const { freezeProjectKnowledgeCatalog } = await import("../../apps/scheduler/src/domains/project-knowledge/catalog-snapshot.js");
   const sourceId = randomUUID();
   const catalog = scanSkillSourceRepo(path.join(root, "skills"));
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  await sql`INSERT INTO skill_sources (id,name,repo_url,trust_status,enabled,catalog_json,last_commit_sha)
-    VALUES (${sourceId},'REA acceptance source','https://github.com/SummerSec/DeepSonar','trusted',true,${sql.json(catalog)},${commit})`;
+  const sourceManifest = await persistSkillSourceManifest(sql, { sourceId, commitSha: commit, catalog });
+  await sql`INSERT INTO skill_sources (id,name,repo_url,trust_status,enabled,catalog_json,last_commit_sha,catalog_snapshot_hash)
+    VALUES (${sourceId},'REA acceptance source','https://github.com/SummerSec/DeepSonar','trusted',true,${sql.json(catalog)},${commit},${sourceManifest})`;
   const skill = await readFile(path.join(root, "skills/deepsonar-rea-cli/SKILL.md"), "utf8");
   const worker = await readFile(path.join(root, "agent-harness/opensandbox/rea-job-actor.py"), "utf8");
   const samplePath = path.join(reportDir, "sample_elf");
@@ -185,7 +188,10 @@ try {
         })})`;
       await sql`INSERT INTO canvas_nodes (canvas_id,node_type,title,status,body_json) VALUES (${canvasId},'root','REA acceptance','active','{}')`;
     }
-    const snapshot: any = makeSnapshot(mode, extra);
+    const snapshot: any = { ...makeSnapshot(mode, extra),
+      job_skill_catalog: await freezeJobSkillCatalog(sql, projectId),
+      project_knowledge_catalog: await freezeProjectKnowledgeCatalog(sql, projectId),
+    };
     if (shared) Object.assign(snapshot, { shared_assets: shared.assets, shared_assets_revision: shared.revision });
     await sql`INSERT INTO jobs (id,project_id,canvas_id,finding_id,type,status,agent_snapshot_json,payload_json,timeout_sec)
       VALUES (${id},${projectId},${canvasId},${finding?.id ?? null},${mode === "verify" ? "verify_finding" : "audit"},'pending',

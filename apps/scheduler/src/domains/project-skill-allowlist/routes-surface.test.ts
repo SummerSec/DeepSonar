@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { SCHEMA_VERSION } from "../../schema-version.js";
 
 const routes = readFileSync(new URL("../skill-source/routes.ts", import.meta.url), "utf8");
 const snapshot = readFileSync(new URL("../role-runtime-snapshot/application.ts", import.meta.url), "utf8");
@@ -29,5 +30,5 @@ test("Hub stub lists available skill sources", () => {
 
 test("schema defines project_skill_sources", () => {
   assert.match(schema, /CREATE TABLE project_skill_sources/);
-  assert.match(schema, /VALUES \('global', 60\)/);
+  assert.match(schema, new RegExp(`VALUES \\('global', ${SCHEMA_VERSION}\\)`));
 });

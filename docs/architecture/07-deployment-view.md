@@ -66,6 +66,8 @@ Scheduler 在 catalog 同步路径比较当前部署版本与 registry 的 `plat
 
 ## 多副本和共享存储限制
 
+#752 分支的项目知识版本与 work 元数据在 PostgreSQL v61 基线，候选正文、冻结输入和试验证据经现有内容寻址 Blob/共享资产路径保存；没有单独的知识服务、执行集群或自动 GC。部署前须按基线重建流程验证备份与列交集回填，不能让非空 v59 库由启动代码自动升级。知识 case×arm 使用现有 Dispatcher 和沙箱资源，真实环境试验与生产部署状态应另行记录，不能从集成夹具推定。独立分支的试运行流水线仅在前置检查和真实授权冒烟通过后上传 `linux/amd64` 控制面归档，不推 registry、不打 tag、不发布，也不证明完整 maker→reviewer 模型效果；实际运行结果尚待核对。详见[项目知识专题](../PROJECT_KNOWLEDGE.md)与[试运行产物说明](../ISSUE_752_TRIAL.md)。
+
 PostgreSQL 是跨 Scheduler 副本的管理真相，Silo/S3 是生产 Blob 存储；副本不应依赖各自本地磁盘保存可见 Evidence。过程流的实时总线只做非权威投递。Evidence catch-up 读取当前副本的本地 `BLOB_DIR`；若请求落到没有同一文件的副本，响应必须标注 `visibility=unavailable` 并按协议关闭 WS（代码使用 4415），不能从另一副本猜测或伪造补读。
 
 Compose 测试保证业务服务只加入 `deepsonar`、共享网关 socket 不被错误公开、DNS 不产生不明确的多宿主路径；见 [`compose-network-topology.test.ts`](../../packages/runtime-sandbox/src/compose-network-topology.test.ts)。多副本部署因此需要共享的对象存储和明确的 Worker/OpenSandbox 路由；不能把进程内 stream-bus、临时文件或本地 socket 当成跨副本一致性机制。没有共享卷时，系统应诚实显示不可见，而不是承诺强一致过程流。

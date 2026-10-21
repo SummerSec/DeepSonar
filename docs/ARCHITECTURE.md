@@ -625,7 +625,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 `context_window_tokens` 的合法范围统一为 1024–10000000，表示 CLI 客户端的上下文/自动压缩预算，而不是上游能力声明。模型目录只保存 Provider 返回的模型 ID；Provider 是否开放某个长上下文变体、账号是否有权限、模型真实硬上限仍由上游决定，配置更大的客户端预算不会提升它们。物化落点为 Codex `model_auto_compact_token_limit`、OpenCode 模型 `limit.context`、Pi `models.json.contextWindow`；Claude Code 当前没有受支持的绝对窗口落点，只把值冻结进 Job 快照供审计和 UI 展示，不伪造设置。
 
-账号模型编辑与探测回写（#748 / #749）：只有显式改 Claude 主模型才统一各 tier / subagent 的模型键，普通编辑保留原生配置中的独立路由。探测失败的有界摘要对独立密钥列、配置中的其他秘密值及 URL 凭据脱敏，并清除 C0/C1 控制字符。HTTP 402 / 额度类错误归入 `quota_exhausted`，模型不可用归入 `model_unavailable`；补充目录只作为诊断和编辑参考。健康与目录回写必须核对创建探测时的 settings、CLI、项目、Provider、公开元数据和 key version，变更后返回 409，不能把旧模型的结果写回新配置。基线重建的角色模板匹配统一 LF/CRLF，schema 仍以 v60 为唯一受支持版本。
+账号模型编辑与探测回写（#748 / #749）：只有显式改 Claude 主模型才统一各 tier / subagent 的模型键，普通编辑保留原生配置中的独立路由。探测失败的有界摘要对独立密钥列、配置中的其他秘密值及 URL 凭据脱敏，并清除 C0/C1 控制字符。HTTP 402 / 额度类错误归入 `quota_exhausted`，模型不可用归入 `model_unavailable`；补充目录只作为诊断和编辑参考。健康与目录回写必须核对创建探测时的 settings、CLI、项目、Provider、公开元数据和 key version，变更后返回 409，不能把旧模型的结果写回新配置。基线重建的角色模板匹配统一 LF/CRLF，schema 仍以 v61 为唯一受支持版本。
 
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 
@@ -684,6 +684,8 @@ RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表
 
 项目级表 `project_skill_sources`（#603/#691）只保留显式停用：平台 trusted+enabled 源默认进入本项目 Job 快照可见集合。RoleConfig `modules_json` 为空时不再预装业务 Skill；Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取具体 Skill 文件并读取 `SKILL.md`。拉取只允许平台 trusted+enabled 且未被项目停用的源，并由 Job token、操作 allowlist、预算、网络策略和内容 hash 重新校验；Skill 不能扩大 Job 权限。Hub `list_available_skill_sources` 只返回源摘要。平台 `deepsonar-control` Skill 继续强制注入。跨任务业务身份复用写成受治理 Skill，而不是项目级 `agent_roles`。
 
+
+#752 在全局源之外增加项目 Memory/Skill 版本目录。Job 只冻结 active 或精确授权的版本，普通目录不含候选；运行时再次与不可逆 source/project epoch、版本和授权 revoke 取交集。项目 Skill 默认私有，跨项目授权不附带来源 Memory/Evidence、未来版本或内核权限。知识 work 的独立标准 Job、case×arm 隔离、event/receipt 事务、自动结算和历史保留见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。平台发现 Skill 只指导 Agent，授权由 Scheduler 执行。
 
 Agent 的插件/Skill 集中托管在 Git 仓库，由平台受控同步并缓存；Agent 在 Job 内按需从目录选择并拉取，不要求 RoleConfig 预先勾选。数据库基线内置受信任且启用的 `DeepSonar-Skills`（`https://github.com/SummerSec/DeepSonar-Skills.git`，`main`），并使用由仓库 URL 派生的稳定 UUID；catalog 不固化到 schema，仍由受控同步接口获取并缓存：
 

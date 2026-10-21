@@ -97,6 +97,12 @@ jobs:
 
       - name: Capability Pack contract and discovery unit
         run: pnpm ci:unit:capability-pack
+      - name: Project knowledge strict contracts and scope unit
+        run: pnpm ci:unit:project-knowledge
+      - name: Project knowledge PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:project-knowledge
 
       - name: Scheduler public Job role enablement gate
         run: pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/job-control/routes.test.ts

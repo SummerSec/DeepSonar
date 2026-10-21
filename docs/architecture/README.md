@@ -1,6 +1,6 @@
 # DeepSonar 系统架构设计
 
-> 状态：**as-built 文档基线（#741）**。覆盖现有实现与工程约束；暂缓能力及证据缺口单独列出，不构成新增运行时承诺。
+> 状态：**as-built 文档基线（#741；#752 独立试验分支同步）**。覆盖现有实现与工程约束；暂缓能力及证据缺口单独列出，不构成新增运行时承诺。
 > 同步日期：2026-10-21
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
@@ -48,6 +48,7 @@
 | 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md) | §8.3、§9 资源 | 已迁入概览，专题保留细则 |
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
+| 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 分支实现与验证范围分开记录；专题拥有工作流和字段细则 |
 | 风险、路线与取舍 | 12、ADR；[长期提案](../AI_NATIVE_TRUSTED_KERNEL.md) | §10、§13–16 | 旧开工顺序与 MVP 结论只作历史 |
 | 工程与发布 | 11；[发布硬门](../RELEASE_RUNTIME_IMAGES.md)、AGENTS 执行摘要 | §17.5 | 入口已迁入，发布专题与执行红线保持有效 |
 

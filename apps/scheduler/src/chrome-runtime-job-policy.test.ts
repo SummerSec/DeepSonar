@@ -14,6 +14,7 @@ import {
 } from "./domains/job-lifecycle/stall-policy.js";
 
 const coreSource = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
+const jobCreationSource = readFileSync(new URL("./job-creation.ts", import.meta.url), "utf8");
 const projectTaskSource = readFileSync(new URL("./domains/project-task/routes.ts", import.meta.url), "utf8");
 const reportSource = readFileSync(new URL("./report.ts", import.meta.url), "utf8");
 const verifySource = readFileSync(new URL("./verify.ts", import.meta.url), "utf8");
@@ -96,13 +97,18 @@ test("malformed canvas policy and missing Job snapshot fail closed", async () =>
 });
 
 test("normal createJob validates the frozen canvas policy before insertion", () => {
-  const createJob = coreSource.slice(coreSource.indexOf("export async function createJob"));
+  const createJob = coreSource.slice(
+    coreSource.indexOf("export async function createJobInTransaction"),
+    coreSource.indexOf("export async function createJob("),
+  );
   const guard = createJob.indexOf("freezeAgentSnapshotNetworkPolicy");
-  const insert = createJob.indexOf("INSERT INTO jobs");
+  const insert = createJob.indexOf("persistPreparedJob(");
   assert.ok(guard >= 0, "createJob must use the shared snapshot policy freezer");
-  assert.ok(insert > guard, "createJob must validate before inserting the Job");
+  assert.ok(insert > guard, "createJob must validate before handing off to the Job insertion primitive");
   assert.match(createJob.slice(0, insert), /resolveAgentSnapshotForJob/);
   assert.match(createJob.slice(0, insert), /freezeAgentSnapshotNetworkPolicy[\s\S]*input\.canvasId/);
+  assert.match(coreSource, /export async function createJob\(input: CreateJobInput\)[\s\S]*?sql\.begin\(\(tx\) => createJobInTransaction\(/);
+  assert.match(jobCreationSource, /export async function persistPreparedJob[\s\S]*?INSERT INTO jobs/);
   assert.equal(createJob.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
 

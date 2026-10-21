@@ -1,10 +1,12 @@
 # DeepSonar 文档索引
 
+> **项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录、项目 Memory/Skill 生命周期、精确跨项目 Skill 授权、独立 case×arm 评测、持久回执与管理页见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。实现状态与模型效果试验分开记录。
+
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) §8.2。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
-> **当前同步状态（2026-10-18）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v60**（#690 能力插件运行时；#691 清除项目级能力配置面；#740 平台级全局暂停领取与版本发现；#748 凭据健康类别新增 `model_unavailable` / `quota_exhausted`）。#626 把凭据资产、角色引用与快照生效拆成三条边界。当前 DSH 迁移选定官方 `@deepseek-ai/dsh@0.2.0-rc.2`：隔离 lockfile + `dsh --profile`、显式 `bundles: []` profile、Gateway-only 短期 token、PTC `run_code`、v4 Session 归档；跨进程持久 resume 明确不支持。根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
+> **当前同步状态（2026-10-18）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 主线 **v61**（#690 能力插件运行时；#691 清除项目级能力配置面；#740 平台级全局暂停领取与版本发现；#748 凭据健康类别新增 `model_unavailable` / `quota_exhausted`）。#626 把凭据资产、角色引用与快照生效拆成三条边界。当前 DSH 迁移选定官方 `@deepseek-ai/dsh@0.2.0-rc.2`：隔离 lockfile + `dsh --profile`、显式 `bundles: []` profile、Gateway-only 短期 token、PTC `run_code`、v4 Session 归档；跨进程持久 resume 明确不支持。根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
 
 > **运行镜像发布核对（2026-10-15）**：Chrome / ClickHouse 双架构缓存复用以 runnable 平台 manifest 精确相等为证明，source-cache 命中本身不能复用旧 catalog 首行。**v0.5.5 已发布**：`deepsonar-reverse` canonical digest `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8` 已写入 bundled registry（三通道 inspect 通过）；v0.5.4 曾因 ACR / Docker Hub 通道失败未完成 Release，v0.5.5 带上 #732 重试修复后全部成功（run `38506851988`）。**v0.5.6 发版准备中**（#736 Anthropic 探测客户端指纹、#730 部署就绪门禁与镜像恢复统计、#734 失败发布恢复守则）：本节日期与 compare link 仅用于发布准备，不证明 `v0.5.6` tag 已存在。详见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md) / [`REA_CLI_CAPABILITIES.md`](REA_CLI_CAPABILITIES.md)。
 

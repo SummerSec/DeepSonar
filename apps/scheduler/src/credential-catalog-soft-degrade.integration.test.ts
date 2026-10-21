@@ -170,7 +170,7 @@ if (!testDatabaseUrl) {
       assert.deepEqual(forbiddenRow?.model_catalog_json, ["model-b", "model-c"]);
       assert.notEqual(forbiddenRow?.model_catalog_fetched_at, null);
 
-      // 402 配额耗尽写入新的 quota_exhausted 类别（schema v59 约束）。
+      // 402 配额耗尽写入 schema 约束的 quota_exhausted 类别。
       globalThis.fetch = (async (_input, init) => (init?.method === "POST"
         ? new Response(JSON.stringify({ error: { message: "Budget pool quota has been exhausted", type: "bad_response_status_code" } }), { status: 402 })
         : new Response("down", { status: 503 }))) as typeof fetch;

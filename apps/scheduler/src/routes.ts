@@ -26,6 +26,7 @@ import { registerPlatformControlRoutes } from "./domains/platform-api/routes.js"
 import { registerPlatformClaimsRoutes } from "./domains/platform-claims/index.js";
 import { registerPlatformUpdateRoutes } from "./domains/platform-updates/index.js";
 import { registerDeviceRoutes } from "./domains/device/routes.js";
+import { registerProjectKnowledgeRoutes } from "./domains/project-knowledge/routes.js";
 import { validationHttpError } from "./http-validation-error.js";
 import { runtimeImageHttpError } from "./runtime-images.js";
 
@@ -59,6 +60,7 @@ export function registerRoutes(app: FastifyInstance) {
   registerStreamRoutes(app);
 
   registerProjectTaskRoutes(app);
+  registerProjectKnowledgeRoutes(app);
   registerDashboardRoutes(app);
   registerSkillSourceRoutes(app);
   registerRuntimeImageRoutes(app);

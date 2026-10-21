@@ -333,6 +333,22 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[Plan protocol](../../apps/scheduler/src/domains/plan-protocol/application.ts)、[Plan tests](../../apps/scheduler/src/plan-protocol.test.ts)、[设计边界](../../DESIGN.md)。
 - **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；人工核对 PlanResult 不绕过 Hub/Job 状态机。
 
+### FR-KNOW-001 项目知识的受治理生命周期
+
+- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理必须由有来源的当前 Job 请求，经 maker 提案、独立 case×arm Job 试验、evaluator 与 reviewer 审查后才可原子激活；失败、缺证或未知效果不得晋升，旧 active 保留。每阶段只读取冻结且适合其 audience 的输入，实际使用须留下 usage/feedback 与持久 receipt；治理方法的项目 Skill 版本只影响后续 work，不得修改平台硬门。
+- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
+- **实现状态**：#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
+- **代码入口**：[知识域](../../apps/scheduler/src/domains/project-knowledge/)；[schema 基线](../../database/schema.sql)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
+- **验证证据**：`pnpm ci:unit:project-knowledge`、配置独立 `TEST_DATABASE_URL` 后 `pnpm ci:integration:project-knowledge`；真实沙箱和长期模型效果需独立试验记录（本条未完成）。
+
+### FR-KNOW-002 跨项目 Skill 精确授权
+
+- **规范要求**：项目知识默认私有；来源项目有 `projects:write` 权限的管理者只能授予接收项目已审批的精确 Skill 版本。授权不得审批草稿/候选、扩及未来版本，亦不得传递来源 Memory、Evidence、凭据或执行权限。Job 创建时冻结精确目录，读取时与当前版本/授权撤销及全局源和项目禁用的不可逆 epoch、源 instance 身份取交集；重新启用或重新授权不得扩大旧 Job 的冻结范围。
+- **决策来源**：发现目录不是授权，跨项目复用只能以最小范围、可撤销的内容许可实现；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
+- **实现状态**：#752 独立试验分支已实现精确 grant、批准版本校验、冻结目录和读取复核；真实多副本和生产权限试验尚未执行。
+- **代码入口**：[授权策略](../../apps/scheduler/src/domains/project-knowledge/grant-policy.ts)、[目录冻结](../../apps/scheduler/src/domains/project-knowledge/catalog-snapshot.ts)、[全局源快照](../../apps/scheduler/src/job-skill-catalog.ts)。
+- **验证证据**：`pnpm ci:integration:project-knowledge`；人工以两个项目核对未审批版本拒授、旧 Job 不见新授权、撤销后拒读（生产环境未执行）。
+
 ### FR-CANVAS-001 Canvas 过程图与只读节点
 
 - **规范要求**：Canvas 必须保存 root、Intent、Fact、Finding、Job 节点及有向边和 durable revision；Agent/Web 不得提交节点坐标或直接改写过程状态，坐标和投影由服务端/Web 布局逻辑生成。

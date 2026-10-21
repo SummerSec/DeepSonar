@@ -1,0 +1,172 @@
+name: issue-752-trial
+
+# Branch-only, artifact-only trial build. Never publishes a registry tag or Release.
+on:
+  push:
+    branches: [codex/issue-752-project-knowledge]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-752-trial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.ref == 'refs/heads/codex/issue-752-project-knowledge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: postgres://deepsonar:trial-ci-pass@127.0.0.1:57520/deepsonar
+      TEST_DATABASE_URL: postgres://deepsonar:trial-ci-pass@127.0.0.1:57520/deepsonar
+      AGENT_MODE: fake
+      DEEPSONAR_HUB_ENABLED: "false"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: trial-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["57520:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r typecheck
+      - run: pnpm ci:unit:job-lifecycle
+      - run: pnpm ci:unit:credential-compatibility
+      - run: pnpm ci:smoke:control-api
+      - run: pnpm ci:unit:project-knowledge
+      - run: pnpm ci:integration:project-knowledge
+      - run: pnpm ci:unit:web-facts
+      - run: pnpm ci:unit:bounded-contexts
+      - run: pnpm ci:unit:executor-real
+      - run: pnpm ci:images
+      - run: pnpm ci:unit:searchable-selects
+      - run: pnpm ci:unit:file-size
+      - run: pnpm ci:unit:docs-freshness
+      - run: node --test deploy/issue752-package-trial.test.mjs
+
+  live-authorization:
+    needs: checks
+    if: github.ref == 'refs/heads/codex/issue-752-project-knowledge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    env:
+      TEST_DATABASE_URL: postgres://deepsonar:trial-live-pass@127.0.0.1:57520/postgres
+      OPEN_SANDBOX_API_KEY: issue752-ci-ephemeral-fixture-key
+      OPEN_SANDBOX_DOMAIN: 127.0.0.1:18081
+      KNOWLEDGE_JOB_REPORT_DIR: ${{ github.workspace }}/knowledge-job-evidence
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: trial-live-pass
+          POSTGRES_DB: postgres
+        ports: ["57520:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build live Job dependencies
+        run: |
+          pnpm --filter @deepsonar/shared-types build
+          pnpm --filter @deepsonar/runtime-manual-contract build
+          pnpm --filter @deepsonar/runtime-sandbox build
+      - name: Typecheck the real authorization smoke
+        run: pnpm exec tsc -p agent-harness/opensandbox/tsconfig.project-knowledge-job.json
+      - name: Pull approved immutable native Reverse runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$(node -e 'const r=require("./deploy/runtime-image-registry.json");const i=r.images.find(x=>x.image_key==="deepsonar-reverse");if(!i?.versions?.[0]?.image_ref)process.exit(1);process.stdout.write(i.versions[0].image_ref)')"
+          [[ "$ref" =~ @sha256:[a-f0-9]{64}$ ]]
+          docker pull "$ref"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$ref")" = 'linux/amd64'
+          printf 'PROJECT_KNOWLEDGE_JOB_IMAGE=%s\n' "$ref" >> "$GITHUB_ENV"
+      - name: Start pinned OpenSandbox on the clean runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/docker-compose.opensandbox.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/health; then exit 0; fi
+            sleep 2
+          done
+          echo 'OpenSandbox did not become healthy' >&2
+          exit 1
+      - name: Real Job cross-project authorization and revocation
+        run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/opensandbox/project-knowledge-job.e2e.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue752-${{ github.sha }}-live-authorization
+          path: knowledge-job-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove disposable OpenSandbox resources
+        if: always()
+        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v
+
+  archive:
+    needs: [checks, live-authorization]
+    if: github.ref == 'refs/heads/codex/issue-752-project-knowledge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify branch source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = 'refs/heads/codex/issue-752-project-knowledge'
+      - name: Build and save linux/amd64 control-plane images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p trial-bundle/images
+          tag="issue752-${GITHUB_SHA}"
+          for component in scheduler web image-admission; do
+            image="issue752/deepsonar-${component}:${tag}"
+            docker build --platform linux/amd64 --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+              -f "deploy/Dockerfile.${component}" -t "$image" .
+            test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'
+            docker image inspect --format '{{.Id}}' "$image" > "trial-bundle/images/deepsonar-${component}.id"
+            docker save --output "trial-bundle/images/deepsonar-${component}.tar" "$image"
+          done
+      - name: Verify archives and package offline trial material
+        run: node deploy/issue752-package-trial.mjs --out trial-bundle --source-sha "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue752-${{ github.sha }}-linux-amd64
+          path: trial-bundle/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: true

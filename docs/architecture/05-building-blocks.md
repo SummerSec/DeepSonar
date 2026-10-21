@@ -1,7 +1,7 @@
 # 05 构建块与所有权
 
 > 状态：**as-built**（#741）。列出四个应用、三个共享包和 Scheduler 域的责任边界及依赖方向；领域状态机由专题文档维护。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-20
 
 构建块按照“入口组装、领域负责规则、基础设施负责外部效果”分层。所有权以目录、注册入口和运行时依赖为事实；完整 bounded-context 说明见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -62,6 +62,7 @@ flowchart LR
 | `platform-api` | Job-scoped Control operation registry、token、动态接口和反馈 | → 所有允许 Agent 提案的域 |
 | `platform-claims` | 平台级暂停/恢复等 claim | → dispatcher、settings、audit |
 | `platform-updates` | 从 registry catalog 做平台版本/结构化 manifest 的只读发现，并写入 `platform_update_checks` 单例；不执行升级或 apply | → runtime-image、settings、audit；Web 只读展示管理员提示 |
+| `project-knowledge` | #752 项目 Memory/Skill 的版本、来源、work、阶段分配、试验评测、审查结算、精确授权、usage/feedback 和持久 receipt；平台硬门在 Scheduler | → event-ingestion、job-lifecycle、shared-assets、platform-api、role-runtime-snapshot；Web 仅用管理 API。详见[项目知识专题](../PROJECT_KNOWLEDGE.md) |
 | `project-agent-allowlist` | 项目 Agent CLI/Provider allowlist、默认选择和 Hub 安全目录；Job 创建时由 snapshot 域重新校验 | → role-runtime-snapshot、provider-adapter、platform-api |
 | `project-skill-allowlist` | 项目 Skill 来源和选择约束 | → skill-source、extension-materialization |
 | `project-task` | 项目任务入口、Canvas 根和 ingress 幂等 | → canvas、hub、job-lifecycle |
