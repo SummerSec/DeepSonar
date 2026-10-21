@@ -97,7 +97,7 @@ public static class UpgradeWindows {
   }
   public static void AssertPrivateFile(string path) {
     path=CheckPath(path);IntPtr handle=Open(path,0x00020000,7,3,0);
-    try {if(Directory.Exists(path))throw Failure();PrivateHandle(handle);}finally{CloseHandle(handle);}
+    try {if((File.GetAttributes(path)&FileAttributes.Directory)!=0)throw Failure();PrivateHandle(handle);}finally{CloseHandle(handle);}
   }
   static IntPtr Parent(int pid,string expected,out string created) {
     ProcessInfo info; int length;

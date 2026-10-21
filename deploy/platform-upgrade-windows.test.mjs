@@ -51,17 +51,21 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     import {windowsUpgradeOperation,withWindowsUpgradeLock} from ${JSON.stringify(windowsUrl)};
     let lease;const operation=request=>{const result=windowsUpgradeOperation(request);if(request.action==='acquire')lease=result;return result;};
     await withWindowsUpgradeLock(process.argv[1],async()=>{
-      const command="$ErrorActionPreference='Stop';$r=[Console]::In.ReadLine()|ConvertFrom-Json;Add-Type -Path $r.library;$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation);try{[Console]::Out.WriteLine('HELD');Start-Sleep -Seconds 90}finally{[UpgradeWindows]::CloseLease($h)}";
-      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',command],{stdio:['pipe','pipe','pipe']});
-      helper.stdin.write(JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})})+'\\n');
-      helper.stdout.once('data',()=>process.stdout.write(JSON.stringify({borrower:helper.pid})+'\\n'));
+      const command="$ErrorActionPreference='Stop';$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;Add-Type -Path $r.library;$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation);try{[Console]::Out.WriteLine((@{borrower=$PID}|ConvertTo-Json -Compress));Start-Sleep -Seconds 90}finally{[UpgradeWindows]::CloseLease($h)}";
+      // Keep the helper's output connected directly to the test reader. An
+      // owner-owned forwarding pipe would close when we kill that owner and
+      // could terminate PowerShell before testing the borrowed lock.
+      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',command],{stdio:['pipe','inherit','inherit']});
+      helper.stdin.end(JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})}));
       await new Promise(()=>{});
     },{operation});`,file],{stdio:['pipe','pipe','pipe']});
   let borrower;
   t.after(async()=>{try{owner.kill('SIGKILL');}catch{}if(borrower)try{process.kill(borrower,'SIGKILL');}catch{}await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});});
   const data=await Promise.race([once(owner.stdout,'data'),once(owner,'exit').then(()=>{throw new Error('native owner failed before borrowing');})]);
   borrower=JSON.parse(data[0].toString()).borrower;
+  assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must be alive before owner termination');
   const exited=once(owner,'exit');owner.kill('SIGKILL');await exited;
+  assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must survive owner termination');
   const {withUpgradeLock}=await import('./platform-upgrade-lock.mjs');
   await assert.rejects(withUpgradeLock(file,async()=>assert.fail('orphan helper still owns the lock')),/another upgrade/);
   process.kill(borrower,'SIGKILL');borrower=null;

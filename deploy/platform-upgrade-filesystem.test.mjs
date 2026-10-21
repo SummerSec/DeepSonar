@@ -33,3 +33,19 @@ test('native Windows rejects reparse ancestors before reading or replacing a pri
   await assert.rejects(assertDirectoryDurability(link));
   assert.equal(await readFile(join(real,'identity.json'),'utf8'),'{}');
 });
+test('native Windows unreadable existing journal is an error, never an absent journal', {skip:process.platform!=='win32',timeout:120000},async t=>{
+  const directory=await fixture(t),file=join(directory,'journal.json');
+  await durablePrivateWrite(file,'{"generation":"existing"}');
+  const identity=spawnSync('whoami.exe',['/user','/fo','csv','/nh'],{encoding:'utf8',windowsHide:true});
+  assert.equal(identity.status,0);
+  const sid=identity.stdout.match(/S-1-[0-9-]+/)?.[0];assert.ok(sid);
+  const deny=spawnSync('icacls.exe',[file,'/deny',`*${sid}:(R)`],{encoding:'utf8',windowsHide:true});
+  try {
+    assert.equal(deny.status,0);
+    await assert.rejects(readPrivateJson(file),/Windows upgrade backend failed/);
+  } finally {
+    const restore=spawnSync('icacls.exe',[file,'/remove:d',`*${sid}`],{encoding:'utf8',windowsHide:true});
+    assert.equal(restore.status,0);
+  }
+  assert.deepEqual(await readPrivateJson(file),{generation:'existing'});
+});
