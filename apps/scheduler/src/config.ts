@@ -449,6 +449,7 @@ export const config = {
       forcePathStyle: (() => {
         const raw = process.env.BLOB_S3_FORCE_PATH_STYLE;
         if (raw !== undefined && raw !== "") {
+          recordConfigInput("BLOB_S3_FORCE_PATH_STYLE", ["1", "0", "true", "false", "yes", "no", "on", "off"].includes(raw.toLowerCase()));
           return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
         }
         return Boolean(str("BLOB_S3_ENDPOINT"));

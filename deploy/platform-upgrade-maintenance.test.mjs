@@ -93,3 +93,50 @@ test('explicit rollback may omit target and preserves no-effect original running
   assert.equal(result.paused, false);
   assert.equal(result.unchanged, true);
 });
+test('unchanged recovery preserves and reports an existing operator pause', async () => {
+  const {io, state} = fixture();
+  io.pauseAndDrain = async () => {throw new Error('operator pause belongs to another workflow');};
+  io.rollbackPreparing = async value => ({unchanged: true, paused: true, reason: 'maintenance', receipt_id: value.generation});
+  await assert.rejects(runMaintenanceUpgrade(io, options));
+  assert.equal(state().status, 'rolled_back');
+  assert.deepEqual({unchanged: state().rollback.unchanged, paused: state().rollback.paused, reason: state().rollback.reason}, {unchanged: true, paused: true, reason: 'maintenance'});
+  const result = await runMaintenanceUpgrade(io, {action: 'rollback'});
+  assert.equal(result.unchanged, true); assert.equal(result.paused, true);
+});
+test('reapply after rollback rereads source plan and preserves explicit reset selection', async () => {
+  const {io, state} = fixture(); let fail = true;
+  io.plan = async (_target, settings) => ({plan_hash: planHash, risks: [{code: 'RESET_ROLE_IDENTITY'}], blocking_errors: [], reset_role_identity: settings ? settings.resetRoleIdentity : true, source_environment_sha256: settings ? 'new' : 'old'});
+  const backup = io.backup;
+  io.backup = async value => {if (fail) {fail = false; throw new Error('backup interrupted');} return backup(value);};
+  await assert.rejects(runMaintenanceUpgrade(io, options));
+  assert.equal(state().plan.source_environment_sha256, 'old');
+  await runMaintenanceUpgrade(io, options);
+  assert.equal(state().plan.source_environment_sha256, 'new'); assert.equal(state().plan.reset_role_identity, true);
+});
+test('drain timeout keeps the same generation paused with original services and resumes draining', async () => {
+  const {io, state, calls} = fixture(); let settled = false;
+  const drain = io.pauseAndDrain;
+  io.pauseAndDrain = async value => {if (!settled) throw new Error('unknown effect remains'); return drain(value);};
+  io.rollbackPreparing = async value => ({awaiting_drain: true, paused: true, services_unchanged: true, receipt_id: value.generation});
+  await assert.rejects(runMaintenanceUpgrade(io, options));
+  const generation = state().generation;
+  assert.equal(state().status, 'awaiting_drain');
+  assert.equal(calls.includes('fence'), false); assert.equal(calls.includes('backup'), false);
+  settled = true;
+  await runMaintenanceUpgrade(io, options);
+  assert.equal(state().generation, generation); assert.equal(state().status, 'complete');
+});
+test('safe rollback replan can be inspected and approved when its structural hash changed', async () => {
+  const {io, state} = fixture(); let failed = false;
+  const originalBackup = io.backup;
+  io.backup = async value => {if (!failed) {failed = true; throw new Error('backup error');} return originalBackup(value);};
+  await assert.rejects(runMaintenanceUpgrade(io, options));
+  const changed = 'b'.repeat(64);
+  io.plan = async (_target, settings) => {assert.equal(settings.recovery, true); return {plan_hash: changed, risks: [{code: 'DDL_CHANGE'}], blocking_errors: []};};
+  const check = await runMaintenanceUpgrade(io, {...options, action: 'check'});
+  assert.equal(check.plan.plan_hash, changed);
+  await assert.rejects(runMaintenanceUpgrade(io, options), /APPROVAL_REQUIRED/);
+  assert.equal(state().status, 'rolled_back');
+  await runMaintenanceUpgrade(io, {...options, approvedPlanHash: changed});
+  assert.equal(state().status, 'complete'); assert.equal(state().plan.plan_hash, changed);
+});

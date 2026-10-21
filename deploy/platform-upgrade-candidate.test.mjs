@@ -84,3 +84,12 @@ test('rebuilt candidate verifies target evidence and does not run destructive ap
   assert.equal(result.plan_hash, digest);
   assert.deepEqual(calls.map(call => call.action), ['plan']);
 });
+test('explicit reset selection survives rebuilt receipt and cannot silently fall back to false', async () => {
+  const marker = JSON.stringify({operation_id: operationId, source_database: 'deepsonar', backup_sha256: digest, phase: 'rebuilt', plan_hash: digest, target_sql_sha256: digest, reset_role_identity: true});
+  const calls = [];
+  const {manager} = fixture({runSql: async () => [{marker}], runTargetCli: async args => {calls.push(args); return {ok: true, plan: {source_schema_version: 1000, target_schema_version: 1000, target_sql_sha256: digest, claims_paused: true}};}});
+  await assert.rejects(manager.apply('backup', digest), /approval mismatch/);
+  const result = await manager.apply('backup', digest, {reset_role_identity: true});
+  assert.equal(result.resumed, true);
+  assert.equal(calls[0].reset_role_identity, true);
+});

@@ -1,3 +1,4 @@
+import { resolveCredentialModelRef } from "./domains/provider-adapter/resolve-credential.js";
 import { validatePreflightEnvironment, validateNativeProviderStructure } from "./platform-upgrade-preflight-environment.js";
 import { z } from "zod";
 import { AgentCliWriteSchema, FindingProtocolConfig, CURRENT_AGENT_CLIS } from "@deepsonar/shared-types";
@@ -6,7 +7,7 @@ import { SCHEMA_VERSION } from "./schema-version.js";
 import { GlobalRulesPatch, SettingsPatchBody } from "./settings-validation.js";
 import { RoleConfigPutBody } from "./role-config-schema.js";
 import { validateRoleConfigValues } from "./role-config-values.js";
-import { providerCatalogEntry, sanitizeCredentialMetadata, validateCredentialCompatibility, validateCredentialAgentCliExclusive } from "./credentials.js";
+import { providerCatalogEntry, sanitizeCredentialMetadata, validateCredentialCompatibility } from "./credentials.js";
 import { normalizeProviderSettings, materializeProviderSettings, extractModelsFromSettings } from "./provider-settings.js";
 import { PREFLIGHT_SCHEMA, PREFLIGHT_RESULT_SCHEMA, PREFLIGHT_TABLES, type PreflightSnapshot, type PreflightResult, type PreflightRow } from "./platform-upgrade-preflight-contract.js";
 
@@ -120,18 +121,18 @@ export function validatePlatformUpgradeSnapshot(input: unknown): PreflightResult
     const cfg = parsed.data;
     if (cfg.rules != null) checkRules(cfg.rules, location + ".rules");
     const ids = cfg.enabled_credential_ids ?? [];
-    for (const id of ids) {
+    const referencedIds = [...new Set([...ids, ...(cfg.default_credential_id ? [cfg.default_credential_id] : [])])];
+    for (const id of referencedIds) {
       const credential = credentials.get(id);
-      if (!credential || credential.kind !== "llm_provider" || (credential.project_id != null && credential.project_id !== row.id)) block("PROJECT_CREDENTIAL_UNAVAILABLE", location + ".enabled_credential_ids");
+      if (!credential || credential.kind !== "llm_provider" || credential.status !== "active" || (credential.project_id != null && credential.project_id !== row.id)) block("PROJECT_CREDENTIAL_UNAVAILABLE", location + ".enabled_credential_ids");
     }
     if (cfg.default_agent_cli && !(cfg.enabled_agent_clis ?? [...CURRENT_AGENT_CLIS]).includes(cfg.default_agent_cli)) block("DEFAULT_CLI_OUTSIDE_ALLOWLIST", location + ".default_agent_cli");
-    if (cfg.default_credential_id && !ids.includes(cfg.default_credential_id)) block("DEFAULT_CREDENTIAL_OUTSIDE_ALLOWLIST", location + ".default_credential_id");
+    if (cfg.enabled_credential_ids !== undefined && cfg.default_credential_id && !ids.includes(cfg.default_credential_id)) block("DEFAULT_CREDENTIAL_OUTSIDE_ALLOWLIST", location + ".default_credential_id");
     if ((cfg.default_model_ref || cfg.fallback_model_refs?.length) && !cfg.default_credential_id) block("MODEL_REQUIRES_DEFAULT_CREDENTIAL", location + ".default_model_ref");
     const credential = credentials.get(cfg.default_credential_id);
     if (credential) {
-      if (cfg.default_agent_cli) check("DEFAULT_CREDENTIAL_CLI_MISMATCH", location + ".default_agent_cli", () => validateCredentialAgentCliExclusive(cfg.default_agent_cli!, String(credential.agent_cli)) === null);
       const models = [cfg.default_model_ref, ...cfg.fallback_model_refs ?? []].filter((v): v is string => typeof v === "string");
-      check("MODEL_NOT_CONFIGURED", location + ".default_model_ref", () => cfg.allow_model_catalog_passthrough || models.every((model) => extractModelsFromSettings(credential.settings_config_json, String(credential.agent_cli)).includes(model)));
+      check("MODEL_NOT_CONFIGURED", location + ".default_model_ref", () => cfg.allow_model_catalog_passthrough || models.every((model) => extractModelsFromSettings(credential.settings_config_json, String(credential.agent_cli)).includes(resolveCredentialModelRef(credential.settings_config_json, String(credential.agent_cli), model) ?? "")));
     }
   });
   snapshot.role_configs.forEach((row, i) => {

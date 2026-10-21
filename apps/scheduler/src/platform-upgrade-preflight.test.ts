@@ -1,3 +1,4 @@
+import { validateNativeProviderStructure } from "./platform-upgrade-preflight-environment.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -133,7 +134,9 @@ test("offline local dependency graph never imports DB, routes, core or schema in
     assert.doesNotMatch(file.pathname, /\/(?:db|core|schema-rebuild|schema-rebuild-cli)\.ts$|\/routes\.ts$/);
     const source = readFileSync(file, "utf8");
     assert.doesNotMatch(source, /\binitSchema\s*\(/);
-    for (const match of source.matchAll(/(?:from\s*|import\s*\()\s*["'](\.[^"']+\.js)["']/g)) {
+    // Type-only edges are erased and cannot initialize database modules.
+    const runtimeSource = source.replace(/import\s+type\b[\s\S]*?from\s*["'][^"']+["'];?/g, "");
+    for (const match of runtimeSource.matchAll(/(?:from\s*|import\s*\()\s*["'](\.[^"']+\.js)["']/g)) {
       visit(new URL(match[1].replace(/\.js$/, ".ts"), file));
     }
   }
@@ -156,5 +159,41 @@ test("required mounted master key needs matching read-only readable regular-file
   for (const change of [{exists: false}, {regular_file: false}, {readable: false}, {read_only: false}, {mode: 0o666}, {path: "/other"}]) {
     snapshot.host_files = [{...evidence, ...change}];
     assert.ok(codes(snapshot).includes("REQUIRED_HOST_FILE_UNVERIFIED"));
+  }
+});
+
+test("provider extensions are preserved while known malformed native fields fail", () => {
+  const settings = { providers: { vendor: { baseUrl: "https://api.example.test/v1", models: [{id: "model"}], vendorExtension: { future: true } } }, arbitraryNativeExtension: [1, 2] };
+  const original = structuredClone(settings);
+  assert.equal(validateNativeProviderStructure(settings), true);
+  assert.deepEqual(settings, original);
+  for (const invalid of [{ env: [] }, {env: {API_KEY: 3}}, {env: {OPENAI_BASE_URL: "file:///secret"}}, {providers: {vendor: null}}, {providers: {vendor: {baseUrl: "bad", models: []}}}, {options: {baseURL: 5}}]) assert.equal(validateNativeProviderStructure(invalid), false);
+});
+
+test("credential-first defaults distinguish absent and empty allowlist and permit CLI preferences", () => {
+  const snapshot = fixture();
+  const id = "44444444-4444-4444-8444-444444444444";
+  snapshot.environment.DEEPSONAR_MASTER_KEY = "a".repeat(64);
+  snapshot.role_configs[0].agent_cli = null;
+  snapshot.credentials = [{ id, kind: "llm_provider", provider: "anthropic", project_id: null, status: "active", agent_cli: "claude-code", public_metadata_json: {}, settings_config_json: { env: { ANTHROPIC_MODEL: "example-model" } }, meta_json: {} }];
+  const settings = {default_credential_id: id, default_agent_cli: "pi", default_model_ref: "example-model"};
+  snapshot.projects[0].config_json = settings;
+  assert.deepEqual(codes(snapshot), []);
+  snapshot.projects[0].config_json = {...settings, enabled_credential_ids: []};
+  assert.ok(codes(snapshot).includes("DEFAULT_CREDENTIAL_OUTSIDE_ALLOWLIST"));
+  snapshot.projects[0].config_json = settings; snapshot.credentials[0].status = "disabled";
+  assert.ok(codes(snapshot).includes("PROJECT_CREDENTIAL_UNAVAILABLE"));
+});
+
+test("preflight uses canonical Pi route and Claude selector model resolution", () => {
+  for (const [agent_cli, settings_config_json, model] of [
+    ["pi", { providers: { deepsonar: { models: [{ id: "example-model" }] } } }, "deepsonar/example-model"],
+    ["claude-code", { env: { ANTHROPIC_MODEL: "other-model", ANTHROPIC_DEFAULT_SONNET_MODEL: "example-model" } }, "sonnet"],
+  ] as const) {
+    const snapshot = fixture(); const id = "44444444-4444-4444-8444-444444444444";
+    snapshot.environment.DEEPSONAR_MASTER_KEY = "a".repeat(64);
+    snapshot.credentials = [{id, kind: "llm_provider", provider: "anthropic", project_id: null, status: "active", agent_cli, public_metadata_json: {}, meta_json: {}, settings_config_json}];
+    snapshot.projects[0].config_json = {default_credential_id: id, default_model_ref: model};
+    assert.deepEqual(codes(snapshot), []);
   }
 });

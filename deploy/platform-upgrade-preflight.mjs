@@ -1,4 +1,4 @@
-import { stat, realpath, access } from "node:fs/promises";
+import { stat, lstat, realpath, access } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 // Host transport for the target image's offline validator. Never persist or log
@@ -41,12 +41,13 @@ export async function collectPreflightHostFiles(compose, {directory = process.cw
   if (!target) return [];
   const evidence = {key: 'DEEPSONAR_MASTER_KEY_FILE', path: target, exists: false, regular_file: false, readable: false, read_only: false, mode: 0};
   if (typeof target !== 'string' || !path.posix.isAbsolute(target) || path.posix.normalize(target) !== target) return [evidence];
-  let source;
-  const binds = (service.volumes ?? []).filter(v => v.type === 'bind' && typeof v.target === 'string' && (target === v.target || target.startsWith(v.target.replace(/\/$/, '') + '/'))).sort((a, b) => b.target.length - a.target.length);
+  let source, relative = "";
+  const binds = (service.volumes ?? []).filter(v => typeof v.target === 'string' && (target === v.target || target.startsWith(v.target.replace(/\/$/, '') + '/'))).sort((a, b) => b.target.length - a.target.length);
   if (binds.length) {
     const bind = binds[0];
-    if (typeof bind.source !== 'string') return [evidence];
-    source = path.resolve(directory, bind.source, path.posix.relative(bind.target, target));
+    if (bind.type !== 'bind' || typeof bind.source !== 'string' || (binds[1]?.target === bind.target)) return [evidence];
+    source = path.resolve(directory, bind.source);
+    relative = path.posix.relative(bind.target, target);
     evidence.read_only = bind.read_only === true;
   } else {
     const secret = (service.secrets ?? []).find(v => typeof v === 'object' && (v.target?.startsWith('/') ? v.target : '/run/secrets/' + (v.target || v.source)) === target);
@@ -56,7 +57,20 @@ export async function collectPreflightHostFiles(compose, {directory = process.cw
     evidence.read_only = true;
   }
   try {
-    const canonical = await realpath(source);
+    // Docker resolves the bind source itself; links below its root are interpreted
+    // in the container namespace and cannot be proven by host realpath.
+    let canonical = await realpath(source);
+    const directories = [];
+    if (relative) {
+      directories.push(await stat(canonical));
+      const parts = relative.split('/');
+      for (const [index, part] of parts.entries()) {
+        canonical = path.join(canonical, part);
+        const entry = await lstat(canonical);
+        if (entry.isSymbolicLink()) return [evidence];
+        if (index < parts.length - 1) directories.push(entry);
+      }
+    }
     const info = await stat(canonical);
     evidence.exists = true; evidence.regular_file = info.isFile(); evidence.mode = info.mode & 0o7777;
     const identity = String(service.user ?? '0:0');
@@ -65,7 +79,8 @@ export async function collectPreflightHostFiles(compose, {directory = process.cw
     // Prove both host access and the target numeric identity's read permission.
     await access(canonical, constants.R_OK);
     const readable = (entry) => uid === 0 || Boolean(entry.mode & (entry.uid === uid ? 0o400 : entry.gid === gid ? 0o040 : 0o004));
-    evidence.readable = readable(info);
+    const traversable = (entry) => entry.isDirectory() && (uid === 0 || Boolean(entry.mode & (entry.uid === uid ? 0o100 : entry.gid === gid ? 0o010 : 0o001)));
+    evidence.readable = readable(info) && directories.every(traversable);
   } catch { /* Missing/unreadable metadata remains a blocking precondition. */ }
   return [evidence];
 }

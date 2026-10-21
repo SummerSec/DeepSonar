@@ -143,7 +143,9 @@ export async function remoteNodeAction(request, testDependencies = {}) {
       evidence.images = {};
       for (const service of services) {
         const ref = request.images?.[service];
-        if (typeof ref !== "string" || !new RegExp(`^[a-z0-9.-]+/[a-z0-9._/-]+/deepsonar-${service}@sha256:[a-f0-9]{64}$`).test(ref)) throw new Error("candidate platform digest references are required");
+        if (typeof ref !== "string" || !new RegExp(`^[a-z0-9.-]+(?::[0-9]{1,5})?/[a-z0-9._/-]+/deepsonar-${service}@sha256:[a-f0-9]{64}$`).test(ref)) throw new Error("candidate platform digest references are required");
+        const registryPort = ref.split("/")[0].split(":")[1];
+        if (registryPort && (Number(registryPort) < 1 || Number(registryPort) > 65535)) throw new Error("invalid registry port");
         evidence.images[service] = ref;
         overlay.services[service] = { image: ref, environment };
       }
@@ -195,13 +197,24 @@ export async function remoteNodeAction(request, testDependencies = {}) {
 // Neither credentials nor executable module text appear in SSH argv.
 export const NODE_ACTOR_BOOTSTRAP = "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{try{const p=JSON.parse(s);const c=await import('node:crypto');if(c.createHash('sha256').update(p.module).digest('hex')!==p.module_sha256)throw Error();const m=await import('data:text/javascript;base64,'+Buffer.from(p.module).toString('base64'));console.log(JSON.stringify(await m.execute(p.request)))}catch{console.error('managed node action failed');process.exit(1)}})";
 
-export function createManagedNodeRunner({ inventory, registeredWorkerIds, transport }) {
+export function createManagedNodeRunner({ inventory, registeredWorkerIds, transport, sshOptions = {} }) {
   if (!Array.isArray(registeredWorkerIds)) throw new Error("registered remote worker IDs are required to bind the inventory");
   const { nodes, bindingHash } = validateNodeInventory(inventory, registeredWorkerIds);
   const module = `import {createHash} from 'node:crypto';\nconst validateNodeInventory = ${validateNodeInventory.toString()};\nexport const execute = ${remoteNodeAction.toString()};`;
   const module_sha256 = createHash("sha256").update(module).digest("hex");
+  const sshArgs = [];
+  if (Object.keys(sshOptions).some(key => !["port", "identityFile", "knownHostsFile", "isolatedConfig"].includes(key))) throw new Error("invalid SSH transport option");
+  if (sshOptions.isolatedConfig !== undefined && typeof sshOptions.isolatedConfig !== "boolean") throw new Error("invalid SSH isolation option");
+  if (sshOptions.isolatedConfig) sshArgs.push("-F", "/dev/null");
+  if (sshOptions.port !== undefined) {
+    if (!Number.isInteger(sshOptions.port) || sshOptions.port < 1 || sshOptions.port > 65535) throw new Error("invalid SSH port");
+    sshArgs.push("-p", String(sshOptions.port));
+  }
+  for (const key of ["identityFile", "knownHostsFile"]) if (sshOptions[key] !== undefined && (typeof sshOptions[key] !== "string" || !/^\/[A-Za-z0-9._/-]+$/.test(sshOptions[key]))) throw new Error("invalid SSH file path");
+  if (sshOptions.identityFile) sshArgs.push("-i", sshOptions.identityFile, "-o", "IdentitiesOnly=yes");
+  if (sshOptions.knownHostsFile) sshArgs.push("-o", `UserKnownHostsFile=${sshOptions.knownHostsFile}`);
   const send = transport ?? (async ({ node, envelope }) => new Promise((resolve, reject) => {
-    const child = execFile("ssh", ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "--", node.ssh_host,
+    const child = execFile("ssh", [...sshArgs, "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "--", node.ssh_host,
       `node -e '${NODE_ACTOR_BOOTSTRAP.replaceAll("'", "'\\''")}'`], { timeout: 240_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error) return reject(new Error(`managed node ${node.id} SSH action failed; no target expansion attempted`));
       try { resolve(JSON.parse(stdout)); } catch { reject(new Error(`managed node ${node.id} returned invalid evidence`)); }

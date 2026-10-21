@@ -178,3 +178,21 @@ test("remote control database identity preserves its configured endpoint and que
     assert.equal(result.database_sha256, createHash("sha256").update(value).digest("hex"));
   } finally { await f.cleanup(); }
 });
+
+test('structured SSH options reject shell arguments, invalid ports and ambiguous paths', () => {
+  for (const sshOptions of [{port: '22'}, {port: 0}, {port: 65536}, {identityFile: '/tmp/key\nProxyCommand=bad'}, {knownHostsFile: 'relative'}, {extraArgs: ['-o', 'ProxyCommand=bad']}, {isolatedConfig: 'yes'}]) {
+    assert.throws(() => createManagedNodeRunner({inventory: {nodes: []}, registeredWorkerIds: [], sshOptions}), /invalid SSH/);
+  }
+});
+
+test('control digest references support bounded registry ports without relaxing service repository or digest', async () => {
+  const f = await fixture('control');
+  try {
+    const input = {id: 'fixture', generation, version: '0.5.7', runtimeRole: 'candidate', databaseUrl: 'postgres://candidate:fixture@db/candidate'};
+    for (const ref of [`127.0.0.1:65536/team/deepsonar-scheduler@sha256:${'a'.repeat(64)}`, `127.0.0.1:55000/team/other@sha256:${'a'.repeat(64)}`, '127.0.0.1:55000/team/deepsonar-scheduler:latest']) {
+      await assert.rejects(() => f.runner.prepareControl({...input, images: {...images, scheduler: ref}}), /registry port|digest references/);
+    }
+    const portImages = Object.fromEntries(Object.entries(images).map(([service, ref]) => [service, ref.replace(/^[^/]+/, '127.0.0.1:55000')]));
+    assert.deepEqual((await f.runner.prepareControl({...input, images: portImages})).images, portImages);
+  } finally { await f.cleanup(); }
+});

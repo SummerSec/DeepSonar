@@ -50,10 +50,11 @@ test("candidate identity and explicit plan approval are mandatory", async () => 
   await assert.rejects(runUpgradeSchema(db, {action: "apply", candidate_database: "ds_upgrade_" + "a".repeat(32), verified_backup_sha256: "b".repeat(64), expected_plan_hash: "c".repeat(64)}), /PLAN_MISMATCH/);
   assert.equal(queries.some(sql => /DROP|CREATE|ALTER/.test(sql)), false);
 });
-test("role identity reset is explicit, hash-bound and unavailable until target implementation exists", async () => {
+test("role identity reset is explicit and hash-bound", async () => {
   const normal = await readUpgradePlan(fixture().db);
   const reset = await readUpgradePlan(fixture().db, {reset_role_identity: true});
   assert.notEqual(normal.plan_hash, reset.plan_hash);
   assert.ok(reset.risks.some(risk => risk.code === 'RESET_ROLE_IDENTITY'));
-  assert.ok(reset.blocking_errors.some(error => error.code === 'RESET_ROLE_IDENTITY_NOT_AVAILABLE'));
+  assert.equal(reset.reset_role_identity, true);
+  assert.equal(reset.blocking_errors.some(error => error.code === 'RESET_ROLE_IDENTITY_NOT_AVAILABLE'), false);
 });

@@ -31,7 +31,7 @@ export async function resumeRollback({state, saved, scalar, rows, saveJournal, s
   await saveSecrets(saved);
   const previous_comment = await scalar({database: 'postgres', sql: `SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=${literal(saved.source.database)}`});
   const receipt = {schema: 'deepsonar.rollback-activation/v1', active: true, operation_generation: state.generation,
-    generation: saved.rollbackGeneration, runtime_role: saved.rollbackRuntime.role, version: saved.source.values.DEEPSONAR_VERSION, previous_comment};
+    generation: saved.rollbackGeneration, runtime_role: saved.rollbackRuntime.role, version: saved.source.values.DEEPSONAR_VERSION, previous_comment_sha256: createHash('sha256').update(previous_comment ?? '').digest('hex')};
   await saveJournal({...state, status: 'rollback_resuming', intent: 'activateSource', source_activation_intent: receipt});
   await configure(maintenance);
   const phase = maintenance ? `UPDATE platform_upgrade_state SET phase='active',generation=${literal(saved.rollbackGeneration)},runtime_role=${literal(saved.rollbackRuntime.role)},target_version=${literal(receipt.version)},worker_generation_token_hash=${literal(createHash('sha256').update(saved.rollbackWorkerToken).digest('hex'))} WHERE id='global';` : '';

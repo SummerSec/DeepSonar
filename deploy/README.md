@@ -21,33 +21,50 @@ DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<dig
 四行随 Release 回写到 `.env.example`。`deploy.sh` / `deploy.ps1`（共享校验见 `platform-images.sh` 与
 `Assert-PlatformImageContract`）发现旧变量、可变 tag、仓库名不符、重复/非规范平台变量或缺版本时 fail closed，并打印应复制的四行；
 不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量。`up real build` 临时把平台镜像标记为
-`deepsonar-*:local-build`，不改写 `.env`。同 schema 的受控升级入口见下节。
+`deepsonar-*:local-build`，不改写 `.env`。受控维护升级入口见下节。
 
 ## 受控升级与中断恢复（#740）
 
-Shell 和 PowerShell 共享 `platform-upgrade-host.mjs` / `platform-upgrade.mjs`，宿主需 Node.js >=22、Docker Compose/buildx、管理员进程环境变量 `DEEPSONAR_ADMIN_TOKEN`。只支持单控制面 Compose、无远程 worker、稳定版本向前且 schema 相同的升级；跨 schema 在暂停前拒绝，目标配置离线 preflight 已接线，自动 schema 重建和多节点编排尚未实现。默认使用 prod + real + OpenSandbox overlay，其他布局需用 Node CLI 的重复 `--compose-file` 明确指定。
+Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**最终真实双版本/多节点端到端演练仍在进行，不能将入口存在当作验收通过**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
+
+当前维护控制器需要 Linux `flock` 和文件/目录 `fsync` 能力，在任何数据库动作前检查。操作系统锁由宿主进程的文件描述符持有，进程崩溃后自动释放，不需手删锁文件。Windows 尚缺经过验证的原生锁后端，当前会在执行升级前明确拒绝；Linux 上的 `pwsh` 参数转发测试不能证明 Windows 原生升级可用。
 
 ```bash
 ./deploy/deploy.sh upgrade check --to vX.Y.Z
-./deploy/deploy.sh upgrade apply --to vX.Y.Z
+# 查看 plan.risks / plan.blocking_errors 后，使用返回的 plan.plan_hash
+./deploy/deploy.sh upgrade apply --to vX.Y.Z --approve-plan-hash <reviewed-plan-hash>
 ./deploy/deploy.sh upgrade rollback
+# 回滚核验后显式恢复源代业务；不要绕过控制器直接调用 claims/resume
+./deploy/deploy.sh upgrade resume-rollback
 ```
 
 ```powershell
 .\deploy\deploy.ps1 upgrade check -UpgradeVersion vX.Y.Z
-.\deploy\deploy.ps1 upgrade apply -UpgradeVersion vX.Y.Z
+.\deploy\deploy.ps1 upgrade apply -UpgradeVersion vX.Y.Z -ApprovePlanHash <reviewed-plan-hash>
 .\deploy\deploy.ps1 upgrade rollback
+.\deploy\deploy.ps1 upgrade resume-rollback
 ```
 
-API 默认使用生产 Web 代理 `http://127.0.0.1:8080/api/`（保留自定义 API 路径前缀），Shell 可传 `--api` / `--web-url`，PowerShell 对应 `-ApiUrl` / `-WebUrl`。API 使用 HTTPS 或本机 HTTP；token 不写日志或恢复记录。升级前取消进程环境中的四个平台版本/镜像变量，避免覆盖 `.env`。目标来自官方 Release 清单，逐通道 inspect 双架构 payload，拉取目标 GHCR digest；读取数据库配置的一致性只读快照及目标 Compose 环境，经 stdin 交给目标 digest 的一次性 Scheduler 容器；该容器禁止网络、只读文件系统且无挂载，不连接数据库或初始化 schema。`check` 返回 `preflight.ok`、脱敏 `blocking_errors`、`coverage` 与 `not_checked`；`apply` 遇到阻断或无有效报告时在暂停前停止。通过后才通过管理 API 暂停并排空所有未结算效果，不杀 Job。
+API 默认 `http://127.0.0.1:8080/api/`，保留自定义路径前缀。Shell 使用 `--api` / `--web-url`，PowerShell 使用 `-ApiUrl` / `-WebUrl`。API 仅使用 HTTPS 或本机 HTTP。升级前清除进程环境中的平台镜像/版本及数据库身份/generation 覆盖变量，避免覆盖 `.env`。token、数据库密码和主密钥不进入诊断输出或普通 journal。
 
-离线预检复用目标版本的 RoleConfig、配置文件、Settings、Credential 校验器，检查 schema、显式数值/布尔 env、全局规则/Finding protocol、项目 CLI/账号白名单和默认值、角色资源/工具/环境/模块 selector，以及配置引用。它不解密凭据、不请求 Provider 或 registry、不改写历史 Job 快照；密钥文件可读性、任意字符串环境语义、原生 Provider 扩展字段和 Skill 源内容仍列在 `not_checked`，不能把 `ok=true` 理解为外部服务或全部配置可用性保证。配置快照只驻留内存，不写 journal 或日志；错误用表行索引定位，不回显输入值。
+`check` 拉取并核对官方 manifest/digest 后，读取数据库一致性只读配置快照和目标 Compose 环境。离线配置验证通过 stdin 交给无网络、只读且无宿主挂载的目标容器；schema 计划则使用受控 PostgreSQL 连接和只读事务。返回 `plan.plan_hash`、`plan.risks`、`plan.blocking_errors` 及 `plan.preflight` 的覆盖/未检报告。阻断在暂停前处理；普通运维暂停不应被升级覆盖。风险批准必须匹配本次固定目标与结构计划，不能复用其他计划 hash。
 
-备份处理限制为 512 MiB 内存缓冲，超过上限安全中止并保持暂停。暂停后生成 gzip 包装的 PostgreSQL custom dump，验证 SHA-256、解压内容及 `pg_restore --list` 中的控制/schema 数据；失败保持暂停。`.upgrade/` 保存本地互斥锁、逐步记录和备份，已排除 Git。硬中断留下锁时，先确认没有升级进程，再人工移除 `.upgrade/lock`；同一未完成记录不会被新 apply 覆盖。恢复记录绑定 Compose 项目、配置文件内容及 Docker 目标；缺失绑定或目标变化时拒绝恢复，不能把记录移到其他部署继续。服务切换后最多等待 180 秒达到 ready，允许启动期间的暂态连接/HTTP 失败；随后核对 schema、版本、实际容器 digest 和 Web HTTP，全部通过才恢复领取。超时保持暂停。停止本地服务前再次直接核对本地数据库的暂停与排空状态，避免 API 地址误指其他部署。
+离线预检检查 RoleConfig、Settings、Credential 配置结构与引用，以及已声明环境变量的数值、布尔、URL 协议/主机和枚举语义。必需 `DEEPSONAR_MASTER_KEY_FILE` 由宿主提供绑定到目标容器路径的文件元数据：存在、普通文件、可读与只读挂载；缺失/不符阻断，但不读取文件内容。仍**不验证**密文解密、文件内密钥格式、外部 Provider/服务认证、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段与 Skill 源内容。`ok=true` 不是全部配置或外部依赖可用性承诺。
 
-中断或失败不会自动恢复领取；执行 `rollback` 前必须确认数据库仍暂停且已排空。回滚只恢复记录中的镜像配置，保留数据库及暂停期间新入队/管理写入；备份供人工离线灾难恢复，**不会自动恢复旧数据库**。回滚完成仍暂停，管理员核验后调用 `/platform/claims/resume`。一旦记录到恢复领取意图但结果不明，拒绝自动回滚，必须先人工对账；已完成升级也不支持自动降级。
+#758 的旧角色 CLI 来源不明或项目 model 需要单独审核。只有明确选择 Shell `--reset-role-identity` / PowerShell `-ResetRoleIdentity`，并重新 `check`、批准该选项对应的 hash，才能清除所有角色 CLI 偏好和项目级 model；全局 model、其他配置及历史 Job 快照保留。普通维护授权不包含该清除动作。源配置预检只对明确计划中的重置作内存投影；候选完成重建后必须执行未经投影的目标配置验证。没有该选项时默认拒绝旧身份，不通过 force 绕过。
 
-真实容器演练入口、隔离要求与 #740 验收缺口见 [升级演练](UPGRADE_REHEARSAL.md)。
+```bash
+./deploy/deploy.sh upgrade check --to vX.Y.Z --reset-role-identity
+./deploy/deploy.sh upgrade apply --to vX.Y.Z --reset-role-identity --approve-plan-hash <reviewed-reset-plan-hash>
+```
+
+通过预检后暂停领取并排空 Job 与全部 Attempt 的未结算/未知效果，不自动杀 Job。独立维护身份禁止旧数据库运行角色登录并清退会话，建立备份切点；验证 gzip custom dump 后恢复到本操作的候选库，只重建候选，源库冻结保全。备份当前使用至多 512 MiB 内存缓冲。目标 preparing 阶段关闭业务入口和后台执行，全部目标服务/节点验证后才激活。激活前失败回源并保持暂停；激活已经发生或结果不明时，不回旧数据，保留当前代并对账/前向修复。
+
+`.upgrade/` 保存私有逐步记录、身份文件和备份，已排除 Git；恢复绑定 Compose 内容、PostgreSQL 存储、Docker 目标、节点清单、目标 digest、计划和 generation。中断后同目标 `apply` 根据实际回执续做，不能移植 journal 到另一部署。硬中断遗留锁时先确认无活跃升级进程，再处理 `.upgrade/lock`。回滚后通过 `resume-rollback` 明确激活源代的新受限身份；已激活后的响应丢失只能续验当前源代，不能再次恢复旧数据。
+
+受管多节点使用 Shell `--nodes /path/to/nodes.json` / PowerShell `-Nodes`；check、apply 和后续恢复须提供同一份绑定清单。清单须准确列出全部登记 remote worker，并显式指定受管 control 节点、SSH 主机、规范目录、Compose 项目和文件；SSH 固定主机身份，缺节点或版本/generation 不符阻断。升级与恢复均先准备/核验全部节点，再激活。旧源版本没有维护状态契约且含受管节点时，`resume-rollback` 仍保持隔离并拒绝放行；支持维护契约的源代已有多节点恢复接线，但真实 SSH 闭环尚待最终验收。
+
+历史同 schema 演练不能覆盖本维护路径。新命令、证据要求和剩余项见 [升级演练](UPGRADE_REHEARSAL.md) 与 [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md)。
 
 ## 快速开始
 

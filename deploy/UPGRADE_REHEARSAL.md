@@ -9,7 +9,7 @@ P1 的跨 schema 重建、同目标中断续做、多节点编排与版本隔离
 
 ## 镜像准备
 
-使用两个独立干净源码目录，以各自 frozen lockfile 安装依赖并编译。两份源码的 schema 必须相同。优先用各自生产 Dockerfile 构建；网络不可用时可用 [测试产物 Dockerfile](fixtures/platform-upgrade/Dockerfile.artifacts) 打包已编译的真实应用和锁定依赖，必须把这种差异写入证据，不能称为生产镜像构建通过。
+使用两个独立干净源码目录，以各自 frozen lockfile 安装依赖并编译。历史同 schema 入口要求两份源码 schema 相同；下文维护入口要求真实旧基线与较新的目标基线，不能只改 schema_meta 冒充重建。优先用各自生产 Dockerfile 构建；网络不可用时可用 [测试产物 Dockerfile](fixtures/platform-upgrade/Dockerfile.artifacts) 打包已编译的真实应用和锁定依赖，必须把这种差异写入证据，不能称为生产镜像构建通过。
 
 测试产物 Dockerfile 需要 Node 24 的固定基础镜像、源码目录中的 `node_modules`、各 workspace 的 `dist`。对 `scheduler`、`web`、`image-admission` 分别设置 `SERVICE` 和实际 `GIT_REVISION` 构建。只推入绑定 `127.0.0.1` 的独立测试 registry；本地暂存 tag 不用于部署，配置文件必须填写 registry 返回的真实 `repo@sha256:…`。不创建 Git tag 或公共 Release。
 
@@ -25,7 +25,7 @@ docker push 127.0.0.1:55000/summersec/deepsonar-scheduler:old
 
 对另两个服务和新源码重复，保存构建日志、来源 SHA、manifest digest 与镜像 ID。不要仅改版本环境变量并复用同一套镜像。
 
-## 执行与隔离
+## 历史同 schema 入口与隔离
 
 配置 JSON 包含 `registry`（仅 loopback）、`schemaVersion`、`postgresImage`，以及 `versions` 下 `0.0.1` / `0.0.2` 各三个服务的真实 digest 引用。演练版本号只是测试标识，不是已发布产品版本。
 
@@ -49,16 +49,35 @@ node deploy/platform-upgrade-compose.integration.mjs \
 
 生产 Dockerfile 构建曾受本环境 Alpine HTTP 403 和 npm DNS 失败阻塞；最终演练使用上述测试产物 Dockerfile。测试使用本地 registry 来源注入，不验证官方 Release 发布或第二架构。宿主回归 135 项、文档与文件体量门禁通过。早期诊断运行因过程中增加记录绑定而拒绝旧格式记录；最终六项完整运行始终使用同一版代码，二者证据分开。
 
-## #740 尚未完成的要求
+## 新维护路径演练（进行中，尚未完成最终验收）
 
-| 原 issue 要求 | 当前边界 / 后续决策 |
+新入口运行真实 Compose/PostgreSQL/Scheduler/Web/ImageAdmission，验证数据库身份隔离、候选重建和激活边界。它与上面的历史同 schema 证据分开；旧六场景通过不能推定新路径通过。
+
+```bash
+node deploy/platform-upgrade-maintenance.integration.mjs \
+  --config /path/to/maintenance-refs.json \
+  --output /path/to/maintenance-evidence
+```
+
+配置需包含 `registry`（loopback）、`postgresImage`、`oldVersion`、`newVersion`、`oldSchema`、`newSchema`，以及 `versions` 按版本映射的 scheduler/web/image-admission 真实 digest。当前夹具要求 `oldSchema=59` 且旧镜像实际自行初始化该基线；`newSchema` 必须取目标源码/镜像的真实值，不能把临时集成编号当发布编号。新旧各服务须不同 digest。旧配置需要 #758 重置时显式填写 `resetRoleIdentity: true`；演练先验证未选择时拒绝，再验证相应计划审批。不能默认用维护授权代替此选择。
+
+脚本使用随机 `pr747-maint-*` 隔离项目与卷，生成私有证据，结束时只清理本项目。它只消费准备好的镜像，不构建/推送公共版本。可选 `scenarios` 是明确的场景子集；未选场景记录 `not_run`，不能将子集称为完整通过。生产 Dockerfile 与离线产物打包的区别仍须记录。
+
+当前脚本包含只读 plan/审批、preparing HTTP 拒绝与后台停写、旧角色持有会话清退、成功激活、Scheduler/Web 故障后回滚及显式恢复、backup/candidate/rebuild/configurePreparing/activate 后真实 SIGKILL 续做，以及 Job/effect/scan 排空阻断。结果以本次输出 `summary.json` 和各场景证据为准；本段不声明这些场景已经跑完。受管 SSH 多节点、连续升级以及源代版本不同的恢复仍需对应真实环境证据，不能由本地场景或 mock 替代。
+
+单元及独立数据库门禁已接 `pnpm ci:unit:platform-upgrade-maintenance`、`pnpm ci:unit:platform-upgrade-preflight`、`pnpm ci:integration:platform-upgrade`；这不意味着上述 Compose 演练默认在 CI 运行。每次修改代码/镜像后，重新记录该最终提交的已通过、失败、未运行和清理状态。
+
+## #740 当前验收边界
+
+| 原 issue 要求 | 当前实现与证据边界 |
 | --- | --- |
-| 同 schema 单控制面升级与回滚 | 已实现；用本演练补真实容器证据。 |
-| 含 schema 重建的升级 | 宿主程序拒绝；尚未接入新镜像 plan、风险确认与 apply。独立 rebuild 工具存在，不等于升级流程已接通。 |
-| 配置 preflight | 已用目标镜像的离线校验器检查配置快照；非法项目 CLI 的 check/apply 阻断及修正后成功纳入容器演练。覆盖与不检查项见 [部署说明](README.md)，不等于所有配置和外部依赖已验证。 |
-| 多节点升级和版本不匹配拒领 | 当前拒绝 remote worker；尚无跨节点版本 fencing 与编排。 |
-| 中断后同目标自动续做 | 当前保留日志并要求显式回滚；恢复领取响应不明须人工对账。 |
-| 失败后自动恢复旧数据库 | [ADR 0007](../docs/architecture/adr/0007-paused-upgrade-recovery.md) 禁止覆盖暂停期间合法写入。需先决定全写入冻结、恢复点后写入处理与跨节点隔离协议。 |
-| Release 平台 payload 实际发布验收 | 生成与 inspect 门禁已接线；不能未经授权触发发布来补证据。 |
+| 同 schema 单控制面升级与回滚 | 历史入口及历史容器证据已存在；不能覆盖新维护路径。 |
+| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；真实最终双版本演练进行中。 |
+| 配置 preflight | 校验声明字段的结构、引用、URL/枚举及必需主密钥只读文件元数据；不解密、不认证外部服务，详见 [部署说明](README.md)。 |
+| 显式角色身份重置 | #758 已接 reset flag 与审批 hash；仅清角色 CLI / 项目 model，历史快照与全局 model 保留；没有明确选择时拒绝。 |
+| 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；真实多节点验收未完成，旧源缺维护契约时不能恢复远程节点。 |
+| 中断后同目标续做 | journal 固定目标与实际回执驱动；已实现，仍需最终实际 actor SIGKILL 矩阵证据。 |
+| 失败恢复与激活边界 | [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md) 保留冻结源库，激活前可回源保持暂停；激活后/结果不明不切旧库，不能抹掉已接受写入。 |
+| Release 实际发布、P2/P3 | 发布生成/inspect 门禁不等于已发布；签名/无人值守与 Web 发起未完成，不能未经授权触发发布补证据。 |
 
-上述未实现项仍是 #740 缺口，不能通过缩小文档描述宣布 issue 完成。
+验收进行中不等于没有实现，也不等于 #740 已完成。新增真实结果应另附最终提交和镜像 digest，不覆盖或扩大历史证据的含义。

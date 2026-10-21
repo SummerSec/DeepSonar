@@ -32,7 +32,7 @@
 - 备份切点后、激活前没有已接受的业务写入，源库因而是可核验的回滚依据；激活后不再作此假设。
 - 增加维护身份、每代受限运行凭据、候选存储、私有恢复文件和节点清单的运维成本。密钥不写入 journal、命令参数或诊断输出。
 - 受管 SSH 清单必须与登记节点、固定主机身份、部署路径及目标版本绑定；不允许旧节点自动重新登记为当前代。未受管节点不是可安全自动升级的节点。
-- 配置 preflight 只验证声明覆盖范围；不验证凭据真实认证、registry 可拉取性、历史 Job 快照语义、任意环境字符串、密钥文件、原生 Provider 扩展或 Skill 源内容。未知项不标记为完整兼容性通过。
+- 配置 preflight 只验证声明覆盖范围，已检查声明字段 URL/枚举和必需主密钥只读文件元数据；不验证密文解密、文件密钥内容/格式、凭据或外部服务真实认证、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展或 Skill 源内容。未知项不标记为完整兼容性通过。
 - 验收入口：[维护状态机测试](../../../deploy/platform-upgrade-maintenance.test.mjs)、[数据库身份实测](../../../deploy/platform-upgrade-database.integration.test.mjs)、[候选测试](../../../deploy/platform-upgrade-candidate.test.mjs)、[schema 实测](../../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts)、[维护 Compose 演练](../../../deploy/platform-upgrade-maintenance.integration.mjs)。当前验收状态见[风险记录](../12-risks-and-tech-debt.md)。
 
 ## 替代方案

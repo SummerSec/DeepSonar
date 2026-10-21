@@ -8,11 +8,11 @@ import {assertDrained, forwardVersion, verifyBackup} from './platform-upgrade.mj
 import {createDatabaseFence, databaseIdentity} from './platform-upgrade-database.mjs';
 import {createCandidateManager} from './platform-upgrade-candidate.mjs';
 import {runMaintenanceUpgrade} from './platform-upgrade-maintenance.mjs';
-import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult} from './platform-upgrade-preflight.mjs';
+import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult, preflightBlock, collectPreflightHostFiles} from './platform-upgrade-preflight.mjs';
 import {verifyMaintenanceWeb, assertMaintenanceDatabase} from './platform-upgrade-maintenance-health.mjs';
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
-import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson} from './platform-upgrade-maintenance-transport.mjs';
+import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson, assertDirectoryDurability} from './platform-upgrade-maintenance-transport.mjs';
 
 const services = ['scheduler', 'web', 'image-admission'];
 const imageKeys = ['DEEPSONAR_SCHEDULER_IMAGE', 'DEEPSONAR_WEB_IMAGE', 'DEEPSONAR_IMAGE_ADMISSION_IMAGE'];
@@ -37,6 +37,17 @@ export function maintenanceHostAdapter(options = {}) {
   const {run, dc} = transport;
   const parseValues = options.parsePlatformValues ?? platformValues;
   const rendered = values => JSON.parse(dc(['config', '--format', 'json'], undefined, {...commandEnv, ...values}).toString());
+  const configurationPreflight = async ({target, identity, resetProjection = false}) => {
+    const values = valuesFor(target);
+    const snapshot = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...identity, sql: CONFIG_SNAPSHOT_SQL});
+    if (resetProjection) snapshot.role_configs = snapshot.role_configs.map(row => ({...row, agent_cli: null, ...(row.project_id !== null ? {model: null} : {})}));
+    const composeConfig = rendered(values), environment = composeConfig.services.scheduler.environment;
+    const host_files = await collectPreflightHostFiles(composeConfig, {directory: root});
+    const result = run(['run', '--rm', '-i', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE, '/app/apps/scheduler/dist/platform-upgrade-preflight-cli.js'], JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment, host_files}), commandEnv, [0, 1]);
+    const report = parsePreflightResult(result.stdout ?? result);
+    if (result.status !== undefined && result.status !== (report.ok ? 0 : 1)) return preflightBlock('HOST_PREFLIGHT_STATUS_MISMATCH', 'host.target_validator', 'Target validator exit status disagrees with its structured report.');
+    return report;
+  };
   const source = async () => {
     const env = await readFile(envPath, 'utf8'), values = parseValues(env);
     const config = rendered(values), url = new URL(config.services.scheduler.environment.DATABASE_URL);
@@ -105,7 +116,7 @@ export function maintenanceHostAdapter(options = {}) {
         const {dump} = verifyBackup(await readFile(resolve(recovery, backup.file)), backup.sha256);
         transport.archive({action: 'pg_restore', ...saved.admin, port: saved.source.port, database, input: dump});
       },
-      runTargetCli: input => transport.schema({image: image(state), ...saved.admin, port: saved.source.port, database: input.candidate_database, source_schema_sha256: state.plan.source_schema_sha256, ...input}),
+      runTargetCli: input => transport.schema({image: image(state), ...saved.admin, port: saved.source.port, database: input.candidate_database, reset_role_identity: state.plan.reset_role_identity === true, source_schema_sha256: state.plan.source_schema_sha256, ...input}),
     });
   };
   const health = () => JSON.parse(dc(['exec', '-T', 'scheduler', 'node', '-e', "fetch('http://127.0.0.1:'+(process.env.SCHEDULER_PORT||'3100')+'/health').then(async r=>{if(!r.ok)throw Error();console.log(await r.text())}).catch(()=>process.exit(1))"]).toString());
@@ -122,7 +133,13 @@ export function maintenanceHostAdapter(options = {}) {
     }
   };
   const adapter = {
-    lock: legacy.lock,
+    async lock(fn) {
+      await mkdir(recovery, {recursive: true, mode: 0o700}); await chmod(recovery, 0o700);
+      await assertDirectoryDurability(root); await assertDirectoryDurability(recovery);
+      // The independent OS-lock actor releases automatically when this process dies.
+      const {withUpgradeLock} = await import('./platform-upgrade-lock.mjs');
+      return withUpgradeLock(resolve(recovery, 'upgrade.lock'), fn);
+    },
     readJournal: () => readPrivateJson(resolve(recovery, 'maintenance.json')),
     writeJournal: async state => {await mkdir(recovery, {recursive: true, mode: 0o700}); await chmod(recovery, 0o700); await durablePrivateWrite(resolve(recovery, 'maintenance.json'), JSON.stringify(state));},
     async deploymentBinding() {
@@ -135,24 +152,22 @@ export function maintenanceHostAdapter(options = {}) {
       return {root, projectName, postgresStorageHash: hash(JSON.stringify(postgresStorage)), inventoryHash: hash(JSON.stringify(await loadManagedInventory(options.nodes))), composeFiles, composeHashes: await Promise.all(composeFiles.map(async path => hash(await readFile(path)))), dockerIdentity: hash(JSON.stringify({context, endpoint}))};
     },
     async resolveTarget() {const target = await legacy.release(); await legacy.pull(target); return target;},
-    async plan(target) {
+    async plan(target, {recovery: recovering = false, resetRoleIdentity = options.resetRoleIdentity === true} = {}) {
       const prior = await source(), values = valuesFor(target);
-      verifyContainers({target: {values: prior.values}});
+      if (!recovering) verifyContainers({target: {values: prior.values}});
       const source_schema_sha256 = run(['run', '--rm', '--network=none', '--read-only', '--entrypoint=node', prior.values.DEEPSONAR_SCHEDULER_IMAGE, '-e', "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync('/app/database/schema.sql')).digest('hex'))"]).toString().trim();
       if (!/^[a-f0-9]{64}$/.test(source_schema_sha256)) throw new Error('source schema fingerprint invalid');
-      const cli = await transport.schema({image: values.DEEPSONAR_SCHEDULER_IMAGE, role: prior.role, password: prior.password, database: prior.database, port: prior.port, action: 'plan', source_database: prior.database, source_schema_sha256});
+      const cli = await transport.schema({image: values.DEEPSONAR_SCHEDULER_IMAGE, role: prior.role, password: prior.password, database: prior.database, port: prior.port, action: 'plan', source_database: prior.database, source_schema_sha256, reset_role_identity: resetRoleIdentity});
       if (!cli.plan) throw new Error('target schema planning failed');
-      const snapshot = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...prior, sql: CONFIG_SNAPSHOT_SQL});
-      const environment = rendered(values).services.scheduler.environment;
-      const result = run(['run', '--rm', '-i', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE, '/app/apps/scheduler/dist/platform-upgrade-preflight-cli.js'], JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment}), commandEnv, [0, 1]);
-      const preflight = parsePreflightResult(result.stdout ?? result);
+      const preflight = await configurationPreflight({target, identity: prior, resetProjection: resetRoleIdentity});
       const registeredWorkerIds = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...prior, sql: "SELECT coalesce(json_agg(id ORDER BY id),'[]'::json) FROM worker_nodes WHERE kind='remote'"});
       const inventory = await loadManagedInventory(options.nodes);
+      const sourceClaims = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...prior, sql: claimsSql});
       const blocking_errors = [...cli.plan.blocking_errors, ...preflight.blocking_errors.filter(error => error.code !== 'DATABASE_SCHEMA_MISMATCH')];
       try {maintenanceNodes({inventory, registeredWorkerIds, transport: options.nodeTransport, run, commandEnv});} catch {blocking_errors.push({code: 'MANAGED_NODE_INVENTORY_MISMATCH'});}
       if (!forwardVersion(prior.values.DEEPSONAR_VERSION, target.version)) blocking_errors.push({code: 'TARGET_NOT_NEWER'});
-      if (options.resetRoleIdentity) blocking_errors.push({code: 'RESET_ROLE_IDENTITY_NOT_AVAILABLE'});
-      return {...cli.plan, source_schema_sha256, source_environment_sha256: hash(prior.env), blocking_errors, preflight};
+      if (sourceClaims.claims_paused && !recovering) blocking_errors.push({code: 'SOURCE_ALREADY_PAUSED'});
+      return {...cli.plan, reset_role_identity: resetRoleIdentity, source_schema_sha256, source_environment_sha256: hash(prior.env), blocking_errors, preflight, preflight_projection: resetRoleIdentity ? 'planned_role_identity_reset' : 'none'};
     },
     async prepareIdentity(state) {
       let saved = await readPrivateJson(secretPath(state));
@@ -160,7 +175,7 @@ export function maintenanceHostAdapter(options = {}) {
         const prior = await source();
         if (hash(prior.env) !== state.plan.source_environment_sha256) throw new Error('source deployment changed after the approved plan');
         const cluster = await readPrivateJson(resolve(recovery, 'cluster-admin.json'));
-        saved = {generation: state.generation, bindingHash: hash(JSON.stringify(state.binding)), source: prior,
+        saved = {generation: state.generation, bindingHash: hash(JSON.stringify(state.binding)), source: prior, sourceClaims: await transport.scalar({image: image(state), ...prior, sql: claimsSql}),
           admin: cluster?.admin ?? databaseIdentity('ds_maintenance'), adminOperationId: cluster?.operationId ?? state.generation, clusterId: cluster?.clusterId,
           candidateDatabase: `ds_upgrade_${state.generation.replaceAll('-', '')}`, runtime: databaseIdentity('ds_runtime'), rollbackRuntime: databaseIdentity('ds_rollback'),
           workerToken: randomBytes(32).toString('hex'), inventory: await loadManagedInventory(options.nodes),
@@ -177,7 +192,9 @@ export function maintenanceHostAdapter(options = {}) {
       return receipt;
     },
     async pauseAndDrain(state) {
-      if (state.receipts.fence) {await checkClaims(state); return {paused: true};}
+      try {await (await fenceFor(state)).verify(); await checkClaims(state); return {paused: true};} catch { /* An unfenced source still drains through its live API. */ }
+      const saved = await secrets(state);
+      if (state.previousGeneration && saved.sourceClaims.claims_paused && saved.sourceClaims.reason === 'platform_upgrade') {await checkClaims(state); return {paused: true};}
       const claims = await legacy.claims();
       if (claims.claims_paused && claims.reason !== 'platform_upgrade') throw new Error('operator pause must be preserved');
       if (!claims.claims_paused) await legacy.pause();
@@ -212,7 +229,7 @@ export function maintenanceHostAdapter(options = {}) {
     },
     async rebuild(state) {
       const manager = await candidateManager(state); await manager.restore(state.receipts.backup);
-      const result = await manager.apply(state.receipts.backup, state.plan.plan_hash);
+      const result = await manager.apply(state.receipts.backup, state.plan.plan_hash, {reset_role_identity: state.plan.reset_role_identity === true});
       if (!result.ok) throw new Error('candidate schema rebuild blocked');
       return {ok: true, plan_hash: state.plan.plan_hash};
     },
@@ -232,7 +249,11 @@ export function maintenanceHostAdapter(options = {}) {
         if (Date.now() >= deadline) throw new Error('maintenance readiness timeout');
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
-      await verifyDatabase(state, 'preparing'); await verifyMaintenanceWeb({dc, webUrl: options.webUrl});
+      await verifyDatabase(state, 'preparing');
+      const saved = await secrets(state);
+      const preflight = await configurationPreflight({target: state.target, identity: {...saved.admin, port: saved.source.port, database: saved.candidateDatabase}});
+      if (!preflight.ok) throw new Error('candidate configuration preflight blocked');
+      await verifyMaintenanceWeb({dc, webUrl: options.webUrl});
       verifyContainers(state); const nodes = await (await nodesFor(state)).verify({generation: state.generation, target: state.target, active: false}); return {ok: true, nodes};
     },
     async inspectActivation(state) {
@@ -242,13 +263,23 @@ export function maintenanceHostAdapter(options = {}) {
         const sourceActivation = await readSourceActivation({state, saved, scalar: input => adminScalar(state, input)});
         if (sourceActivation) return {status: 'active', generation: state.generation, receipt_id: sourceActivation.generation, source_resumed: true};
         const exists = await adminScalar(state, {database: 'postgres', sql: `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=${literal(saved.candidateDatabase)})`});
-        if (!exists) return {status: 'inactive', generation: state.generation};
+        if (!exists) {
+          const runtimeExists = await adminScalar(state, {database: 'postgres', sql: `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=${literal(saved.runtime.role)})`});
+          return {status: runtimeExists ? 'unknown' : 'inactive', generation: state.generation};
+        }
         const table = await adminScalar(state, {database: saved.candidateDatabase, sql: "SELECT to_regclass('public.platform_upgrade_state') IS NOT NULL"});
-        if (!table) return {status: 'inactive', generation: state.generation};
+        if (!table) {
+          const runtimeExists = await adminScalar(state, {database: 'postgres', sql: `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=${literal(saved.runtime.role)})`});
+          return {status: runtimeExists ? 'unknown' : 'inactive', generation: state.generation};
+        }
         const rows = await adminRows(state, {database: saved.candidateDatabase, sql: "SELECT phase,generation,runtime_role,target_version FROM platform_upgrade_state WHERE id='global'"});
         const row = rows[0];
         if (row?.phase === 'active' && row.generation === state.generation && row.runtime_role === saved.runtime.role && row.target_version === state.target.version) return {status: 'active', generation: state.generation, receipt_id: state.generation};
-        if (!row || row.phase === 'preparing' || row.generation !== state.generation) return {status: 'inactive', generation: state.generation};
+        if (row?.phase === 'preparing' && row.generation === state.generation && row.runtime_role === saved.runtime.role && row.target_version === state.target.version) return {status: 'inactive', generation: state.generation};
+        const runtimeExists = await adminScalar(state, {database: 'postgres', sql: `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=${literal(saved.runtime.role)})`});
+        // A restored source state may still describe its previous generation,
+        // but only before this operation has ever created a business identity.
+        if (runtimeExists === false) return {status: 'inactive', generation: state.generation};
       } catch {
         try {
           const absent = await transport.scalar({image: image(state), role: saved.source.role, password: saved.source.password, database: 'postgres', sql: `SELECT NOT EXISTS(SELECT 1 FROM pg_database WHERE datname=${literal(saved.candidateDatabase)})`});
@@ -337,6 +368,25 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
       const saved = await readPrivateJson(secretPath(state));
       if (!saved) return {unchanged: true, paused: false, receipt_id: state.generation};
       const databaseFence = await fenceFor(state);
+      let sourceClaims, sourceRoleLogin;
+      try {
+        sourceClaims = await adminScalar(state, {database: saved.source.database, sql: claimsSql});
+        sourceRoleLogin = await adminScalar(state, {database: 'postgres', sql: `SELECT rolcanlogin FROM pg_roles WHERE rolname=${literal(saved.source.role)}`});
+      } catch {
+        sourceClaims = await transport.scalar({image: image(state), ...saved.source, sql: claimsSql});
+        sourceRoleLogin = true; // Successful authentication by the original role proves it remains usable.
+      }
+      if (sourceRoleLogin && (!sourceClaims.claims_paused || sourceClaims.reason !== 'platform_upgrade')) {
+        if (state.receipts.pauseAndDrain || state.receipts.fence || state.receipts.backup) throw new Error('operator changed pause ownership; preserve their state');
+        return {unchanged: true, paused: sourceClaims.claims_paused === true, reason: sourceClaims.reason, receipt_id: state.generation};
+      }
+      if (sourceRoleLogin && sourceClaims.claims_paused && sourceClaims.reason === 'platform_upgrade') {
+        try {await checkClaims(state);} catch {
+          // Pause is reversible; an unresolved drain is not permission to kill
+          // jobs or revoke their DB identity. Keep the old processes settling.
+          return {awaiting_drain: true, paused: true, services_unchanged: true, receipt_id: state.generation};
+        }
+      }
       // Even a failed pause response may have taken effect. Preserve the source,
       // stop all writers, retire target identity and leave rollback apps stopped.
       stop(); await (await nodesFor(state)).fence(state.generation); await databaseFence.bootstrap(); await databaseFence.fence(); await databaseFence.revokeRuntime(saved.runtime.role);
@@ -358,7 +408,7 @@ export async function runHostMaintenance(action, options = {}) {
       return io.resumeRollback(state);
     }
     const prior = await io.readJournal();
-    if (action === 'apply' && prior && ['complete', 'rollback_resumed'].includes(prior.status) && options.version && prior.requestedTarget !== options.version) {
+    if (action === 'apply' && prior && ['complete', 'rollback_resumed'].includes(prior.status) && (prior.status === 'rollback_resumed' || (options.version && prior.requestedTarget !== options.version))) {
       if (JSON.stringify(prior.binding) !== JSON.stringify(await io.deploymentBinding())) throw new Error('completed deployment binding mismatch');
       await io.archiveCompleted(prior);
     }

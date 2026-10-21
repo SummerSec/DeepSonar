@@ -51,3 +51,7 @@ test('ambiguous PostgreSQL container selection fails closed', async () => {
   const transport = createMaintenanceTransport({compose: ['compose'], commandEnv: {}, run: () => Buffer.from('one\ntwo')});
   await assert.rejects(transport.rows({image: 'target', role: 'admin', password: 'hidden', database: 'source', sql: 'SELECT 1'}), /one running/);
 });
+test('schema CLI exit status must agree with its structured success report', async () => {
+  const transport = createMaintenanceTransport({compose: ['compose'], commandEnv: {}, run: args => args.includes('ps') ? Buffer.from('c'.repeat(64)) : {status: 1, stdout: Buffer.from(JSON.stringify({schema: 'deepsonar.schema-upgrade-result/v1', ok: true}))}});
+  await assert.rejects(transport.schema({image: 'target', role: 'admin', password: 'hidden', database: 'source', action: 'plan', source_database: 'source'}), /invalid schema CLI response/);
+});

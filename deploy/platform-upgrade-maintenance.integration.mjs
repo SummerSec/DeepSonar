@@ -8,7 +8,7 @@ import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {maintenanceHostAdapter} from './platform-upgrade-maintenance-host.mjs';
 import {runMaintenanceUpgrade} from './platform-upgrade-maintenance.mjs';
-import {loadConfig, createFixture, target, parseValues, inspectFixtureRef, docker, dc, query, request, health} from './platform-upgrade-maintenance.fixture.mjs';
+import {loadConfig, createFixture, target, parseValues, inspectFixtureRef, docker, dc, query, request, health, fixtureRun, cleanupRunners} from './platform-upgrade-maintenance.fixture.mjs';
 const script = fileURLToPath(import.meta.url);
 const snapshotSql = `SELECT json_build_object('projects',(SELECT count(*) FROM projects),'jobs',(SELECT count(*) FROM jobs),
 'attempts',(SELECT count(*) FROM job_attempts),'effects',(SELECT count(*) FROM job_attempt_effects),'events',(SELECT count(*) FROM events),
@@ -17,9 +17,18 @@ const snapshot = (fixture, identity) => JSON.parse(query(fixture, snapshotSql, i
 const stateOf = async fixture => JSON.parse(await readFile(join(fixture.directory,'.upgrade','maintenance.json'),'utf8'));
 const secretsOf = async (fixture,state) => JSON.parse(await readFile(join(fixture.directory,'.upgrade',`identity-${state.generation}.json`),'utf8'));
 function actors(config, fixture, extra = {}) {
-  return maintenanceHostAdapter({directory:fixture.directory, projectName:fixture.project, composeFiles:['compose.yml'], api:fixture.api,
-    version:config.newVersion, readyTimeoutMs:30_000, drainTimeoutMs:1500, parsePlatformValues:parseValues(config),
+  const adapter = maintenanceHostAdapter({directory:fixture.directory, projectName:fixture.project, composeFiles:['compose.yml'], api:fixture.api,
+    version:config.newVersion, resetRoleIdentity:config.resetRoleIdentity===true, ...(config.reuseRunners ? {run:fixtureRun(fixture)} : {}), readyTimeoutMs:30_000, drainTimeoutMs:1500, parsePlatformValues:parseValues(config),
     releaseProvider:async()=>{for(const ref of Object.values(config.versions[config.newVersion])) await inspectFixtureRef(config,ref); return target(config);}, ...extra});
+  for (const key of ['plan','prepareIdentity','pauseAndDrain','fence','backup','candidate','rebuild','configurePreparing','startPreparing','verifyPreparing','activate','verifyActive','rollbackPreparing','resumeRollback']) {
+    if (typeof adapter[key] !== 'function') continue;
+    const original=adapter[key]; adapter[key]=async(...args)=>{
+      console.log(`[${new Date().toISOString()}] ${fixture.project} actor ${key} started`);
+      try {const value=await original(...args); console.log(`[${new Date().toISOString()}] ${fixture.project} actor ${key} completed`);return value;}
+      catch(error){console.log(`[${new Date().toISOString()}] ${fixture.project} actor ${key} failed`);throw error;}
+    };
+  }
+  return adapter;
 }
 const execute = (io,config,action,hash) => io.lock(()=>runMaintenanceUpgrade(io,{action,target:config.newVersion,approvedPlanHash:hash}));
 async function approved(io,config) {
@@ -58,13 +67,14 @@ async function crashChild(path) {
 }
 export async function rehearse(configPath,output) {
   const config=await loadConfig(configPath); await mkdir(output,{recursive:true,mode:0o700});
-  const report={startedAt:new Date().toISOString(),oldSchema:config.oldSchema,newSchema:config.newSchema,images:[],cases:[]};
+  const report={startedAt:new Date().toISOString(),oldSchema:config.oldSchema,newSchema:config.newSchema,runnerReuse:config.reuseRunners===true,images:[],cases:[]};
   for(const images of Object.values(config.versions)) for(const ref of Object.values(images)) {report.images.push(await inspectFixtureRef(config,ref)); docker(['pull',ref]);}
   const priorToken=process.env.DEEPSONAR_ADMIN_TOKEN;
   async function scenario(name,fn) {
     if (config.scenarios && !config.scenarios.includes(name)) {report.cases.push({name,status:'not_run',reason:'explicit scenario selection'}); return;}
     const fixture=await createFixture(config,output,name), evidence={name,project:fixture.project,status:'not_run'};
     process.env.DEEPSONAR_ADMIN_TOKEN=fixture.token;
+    console.log(`[${new Date().toISOString()}] scenario ${name} started`);
     try {
       dc(fixture,['up','-d','--wait','--wait-timeout','180']); await health(fixture,config.oldVersion);
       assert.equal(query(fixture,"SELECT version FROM schema_meta WHERE id='global'"),String(config.oldSchema),'old image must create its own schema, never spoof schema_meta');
@@ -72,13 +82,21 @@ export async function rehearse(configPath,output) {
       await fn(fixture,evidence,marker); evidence.status='passed';
     } catch(error) {evidence.status='failed'; evidence.error=error.message;}
     finally {
-      try {dc(fixture,['down','--volumes','--remove-orphans']); evidence.cleanedUp=true;} catch {evidence.cleanup='failed';}
+      try {cleanupRunners(fixture); dc(fixture,['down','--volumes','--remove-orphans']); evidence.cleanedUp=true;} catch {evidence.cleanup='failed';}
+      console.log(`[${new Date().toISOString()}] scenario ${name} ${evidence.status}`);
       report.cases.push(evidence); await writeFile(join(output,'summary.json'),JSON.stringify(report,null,2),{mode:0o600});
     }
   }
   try {
     await scenario('plan-approval',async fixture=>{
-      const before=snapshot(fixture),io=actors(config,fixture),check=await execute(io,config,'check');
+      const before=snapshot(fixture);
+      if (config.resetRoleIdentity===true) {
+        const blocked=await execute(actors(config,fixture,{resetRoleIdentity:false}),config,'check');
+        assert.equal(blocked.ok,false);
+        assert.ok(blocked.plan.blocking_errors.some(error=>error.code==='ROLE_CONFIG_IDENTITY_REVIEW_REQUIRED'));
+        assert.deepEqual(snapshot(fixture),before);
+      }
+      const io=actors(config,fixture),check=await execute(io,config,'check');
       assert.deepEqual(snapshot(fixture),before,'plan cannot change business rows or pause');
       assert.equal(check.ok,true,JSON.stringify(check.plan.blocking_errors));
       assert.ok(check.plan.risks.length>0,'cross-schema fixture must exercise explicit risk approval');
@@ -125,36 +143,57 @@ export async function rehearse(configPath,output) {
       assert.equal((await resume.lock(async()=>resume.resumeRollback(await stateOf(fixture)))).status,'rollback_resumed');
       evidence.sourceResumed=true;
     });
-    for(const step of ['backup','candidate','rebuild','configurePreparing','activate']) await scenario(`crash-${step.toLowerCase()}`,async(fixture,evidence,marker)=>{
+    for(const step of ['fence','backup','candidate','rebuild','configurePreparing','activate']) await scenario(`crash-${step.toLowerCase()}`,async(fixture,evidence,marker)=>{
       const io=actors(config,fixture),hash=await approved(io,config),descriptor=join(fixture.directory,'crash.json');
       await writeFile(descriptor,JSON.stringify({configPath,fixture,step,hash}),{mode:0o600});
       const child=spawnSync(process.execPath,[script,'--crash-child',descriptor],{env:process.env,timeout:600_000,maxBuffer:1024*1024});
       await rm(descriptor); assert.equal(child.signal,'SIGKILL','real actor must finish before injected host crash');
       const interrupted=await stateOf(fixture); assert.equal(interrupted.intent,step);
-      // Remove only this proven-dead child's exact lock; never clear a live coordinator's lock.
-      await rm(join(fixture.directory,'.upgrade','lock'),{recursive:true});
+      // A real host crash must release the production process lock without test repair.
       evidence.activation=await assertActive(config,fixture,await execute(actors(config,fixture),config,'apply',hash),marker);
       assert.equal(evidence.activation.generation,interrupted.generation,'same-target resume retains generation');
       if(step==='activate') await assert.rejects(execute(actors(config,fixture),config,'rollback',hash),/FORWARD_REPAIR/);
     });
     for(const blocker of ['job','effect','scan']) await scenario(`drain-${blocker}`,async(fixture,evidence,marker)=>{
-      const id=randomUUID(),attempt=randomUUID();
-      if(blocker==='scan') {
-        const version=query(fixture,'SELECT id FROM runtime_image_versions LIMIT 1'); assert.match(version,/^[a-f0-9-]{36}$/,'real admitted image version fixture required');
-        query(fixture,`INSERT INTO runtime_image_scans(id,runtime_image_version_id,status,started_at) VALUES('${id}','${version}','running',now())`);
-      } else {
-        query(fixture,`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json) VALUES('${id}','${marker}','explore','${blocker==='job'?'running':'failed'}','{}')`);
-        if(blocker==='effect') query(fixture,`INSERT INTO job_attempts(id,job_id,attempt_no,status) VALUES('${attempt}','${id}',1,'failed'); INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status) VALUES('${attempt}','${id}','unknown','agent_run','unknown')`);
-      }
-      const io=actors(config,fixture),check=await execute(io,config,'check');
-      if(check.ok) await assert.rejects(execute(io,config,'apply',check.plan.plan_hash));
-      else assert.ok(check.plan.blocking_errors.length>0);
-      assert.equal(query(fixture,"SELECT rolcanlogin FROM pg_roles WHERE rolname='deepsonar'"),'t','blocked drain must not fence source identity');
-      assert.equal(query(fixture,"SELECT version FROM schema_meta WHERE id='global'"),String(config.oldSchema)); evidence.blockedBeforeFence=true;
+      const id=randomUUID(),attempt=randomUUID(),io=actors(config,fixture),hash=await approved(io,config);
+      const scheduler=dc(fixture,['ps','-q','scheduler']);
+      const started=docker(['inspect','--format','{{.State.StartedAt}}',scheduler]);
+      const drain=io.pauseAndDrain;
+      io.pauseAndDrain=async state=>{
+        const paused=await request(fixture,'platform/claims/pause',{reason:'platform_upgrade'}); assert.equal(paused.status,200);
+        if(blocker==='scan') {
+          const image=randomUUID(),version=randomUUID();
+          query(fixture,`INSERT INTO runtime_images(id,image_key,name,publisher) VALUES('${image}','fixture-${image.slice(0,8)}','inflight fixture','test'); INSERT INTO runtime_image_versions(id,runtime_image_id,version) VALUES('${version}','${image}','1'); INSERT INTO runtime_image_scans(id,runtime_image_version_id,status,started_at) VALUES('${id}','${version}','running',now())`);
+        } else {
+          query(fixture,`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json) VALUES('${id}','${marker}','explore','${blocker==='job'?'running':'failed'}','{}')`);
+          if(blocker==='effect') query(fixture,`INSERT INTO job_attempts(id,job_id,attempt_no,status) VALUES('${attempt}','${id}',1,'failed'); INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status) VALUES('${attempt}','${id}','unknown','agent_run','unknown')`);
+        }
+        return drain(state);
+      };
+      await assert.rejects(execute(io,config,'apply',hash));
+      const pausedState=await stateOf(fixture); assert.equal(pausedState.status,'awaiting_drain');
+      assert.equal(query(fixture,"SELECT rolcanlogin FROM pg_roles WHERE rolname='deepsonar'"),'t');
+      assert.equal(query(fixture,"SELECT claims_paused FROM global_settings WHERE id='global'"),'t');
+      assert.equal(dc(fixture,['ps','-q','scheduler']),scheduler);
+      assert.equal(docker(['inspect','--format','{{.State.StartedAt}}',scheduler]),started);
+      assert.equal(docker(['inspect','--format','{{.State.Running}}',scheduler]),'true');
+      assert.equal(query(fixture,"SELECT version FROM schema_meta WHERE id='global'"),String(config.oldSchema));
+      const unfinished=blocker==='scan' ? `SELECT status FROM runtime_image_scans WHERE id='${id}'` : blocker==='effect' ? `SELECT status FROM job_attempt_effects WHERE attempt_id='${attempt}'` : `SELECT status FROM jobs WHERE id='${id}'`;
+      assert.equal(query(fixture,unfinished),blocker==='effect'?'unknown':'running');
+      evidence.blockedBeforeFence=true; evidence.schedulerUnchanged=true;
+      // Explicit fixture settlement models a completed external actor; upgrade must never cancel it.
+      if(blocker==='scan') query(fixture,`UPDATE runtime_image_scans SET status='succeeded',finished_at=now() WHERE id='${id}'`);
+      else if(blocker==='effect') query(fixture,`UPDATE job_attempt_effects SET status='settled',settled_at=now(),settlement_json='{"fixture":"explicit external settlement"}' WHERE attempt_id='${attempt}'`);
+      else query(fixture,`UPDATE jobs SET status='succeeded' WHERE id='${id}'`);
+      io.pauseAndDrain=drain;
+      evidence.activation=await assertActive(config,fixture,await execute(io,config,'apply',hash),marker);
+      assert.equal(evidence.activation.generation,pausedState.generation);
     });
   } finally {
     if(priorToken===undefined) delete process.env.DEEPSONAR_ADMIN_TOKEN; else process.env.DEEPSONAR_ADMIN_TOKEN=priorToken;
   }
+  report.finishedAt=new Date().toISOString();
+  await writeFile(join(output,'summary.json'),JSON.stringify(report,null,2),{mode:0o600});
   return report;
 }
 if(resolve(process.argv[1]??'')===script) {

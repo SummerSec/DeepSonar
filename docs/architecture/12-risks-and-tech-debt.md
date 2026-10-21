@@ -46,7 +46,7 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 尚未验收的闭环：宿主生产入口与私有恢复文件、受管 SSH 多节点顺序/版本保护、激活响应丢失、显式回滚恢复领取，以及最终双版本 Compose 故障矩阵。这些正在接线，不表示真实部署已通过。历史同 schema 演练不能覆盖新维护代码。P2 签名与无人值守升级、P3 Web 发起未完成；不得宣称完整 #740 已交付。
 
-离线配置 preflight 明确未检凭据真实认证、registry 可拉取性、历史 Job 快照语义、未知环境扩展与任意字符串语义、凭据秘密/密钥文件、原生 Provider 扩展字段和 Skill 源内容。跨 schema 计划需要明确审批删除数据与角色身份重置风险；当前集成 schema 编号不能当成已发布编号或同编号 DDL 等价证明。决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)，既有演练边界见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
+离线配置 preflight 已检查声明字段的 URL/枚举语义，以及必需主密钥文件的存在、类型、可读性和只读挂载元数据；明确未检密文解密、文件密钥内容/格式、凭据及外部服务真实认证、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段和 Skill 源内容。跨 schema 计划需要明确审批删除数据与角色身份重置风险；当前集成 schema 编号不能当成已发布编号或同编号 DDL 等价证明。决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)，既有演练边界见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
 
 ### 3.3 可冻结的安全漏洞证明契约
 

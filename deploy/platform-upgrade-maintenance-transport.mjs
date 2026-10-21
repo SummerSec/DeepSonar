@@ -2,6 +2,13 @@ import {open, rename, mkdir, chmod, readFile, lstat} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
+export async function assertDirectoryDurability(path) {
+  let handle;
+  try {handle = await open(path, 'r'); await handle.sync();}
+  catch {throw new Error('HOST_DIRECTORY_DURABILITY_UNSUPPORTED: directory fsync is required before maintenance');}
+  finally {await handle?.close();}
+}
+
 export async function durablePrivateWrite(path, contents) {
   await mkdir(dirname(path), {recursive: true, mode: 0o700});
   const temporary = `${path}.${process.pid}.tmp`;
@@ -51,7 +58,7 @@ export function createMaintenanceTransport({compose, commandEnv, run: injectedRu
     schema: async ({image, role, password, database, port = 5432, ...payload}) => {
       const result = invoke({image, connection: {username: role, password, database, port}, args: ['/app/apps/scheduler/dist/platform-upgrade-schema-cli.js'], payload: {schema: 'deepsonar.schema-upgrade/v1', ...payload}, allowed: [0, 1]});
       const value = JSON.parse((result.stdout ?? result).toString());
-      if (value.schema !== 'deepsonar.schema-upgrade-result/v1' || typeof value.ok !== 'boolean') throw new Error('invalid schema CLI response');
+      if (value.schema !== 'deepsonar.schema-upgrade-result/v1' || typeof value.ok !== 'boolean' || (result.status !== undefined && result.status !== (value.ok ? 0 : 1))) throw new Error('invalid schema CLI response');
       return value;
     },
     archive: ({action, role, password, database, port = 5432, input}) => run(['exec', '-i', '-e', 'PGPASSWORD', pgContainer(), action, '-h', '127.0.0.1', '-p', String(port), '-U', role, '-d', database,

@@ -162,8 +162,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const deployDirectory = dirname(fileURLToPath(import.meta.url));
 const pwshAvailable = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).status === 0;
-for (const shell of ['sh', 'pwsh']) {
-  test(`${shell} upgrade wrapper forwards target/API/Web and failure status to shared engine`, { skip: shell === 'pwsh' && !pwshAvailable ? 'pwsh unavailable' : false }, () => {
+for (const shell of ['sh', 'pwsh']) for (const mode of ['apply', 'resume-rollback']) {
+  test(`${shell} ${mode} upgrade wrapper forwards target/API/Web and failure status to shared engine`, { skip: shell === 'pwsh' && !pwshAvailable ? 'pwsh unavailable' : false }, () => {
     const temp = mkdtempSync(join(tmpdir(), 'ds upgrade entry '));
     try {
       const bin = join(temp, 'bin'); mkdirSync(bin);
@@ -172,11 +172,11 @@ for (const shell of ['sh', 'pwsh']) {
       const log = join(temp, 'args');
       writeFileSync(join(bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$UPGRADE_ARG_LOG"\nexit 17\n', { mode: 0o755 });
       const args = shell === 'sh'
-        ? [entry, 'upgrade', 'apply', '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']
-        : ['-NoProfile', '-File', entry, 'upgrade', 'apply', '-UpgradeVersion', 'v1.2.3', '-ApiUrl', 'http://127.0.0.1:3100', '-WebUrl', 'http://127.0.0.1:8080', '-ApprovePlanHash', 'abc', '-Nodes', 'node inventory.json', '-ResetRoleIdentity'];
+        ? [entry, 'upgrade', mode, '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']
+        : ['-NoProfile', '-File', entry, 'upgrade', mode, '-UpgradeVersion', 'v1.2.3', '-ApiUrl', 'http://127.0.0.1:3100', '-WebUrl', 'http://127.0.0.1:8080', '-ApprovePlanHash', 'abc', '-Nodes', 'node inventory.json', '-ResetRoleIdentity'];
       const result = spawnSync(shell, args, { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, UPGRADE_ARG_LOG: log }, encoding: 'utf8' });
       assert.equal(result.status, 17, result.stderr);
-      assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [join(temp, 'platform-upgrade-host.mjs'), 'apply', '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']);
+      assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [join(temp, 'platform-upgrade-host.mjs'), mode, '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']);
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
 }
@@ -263,7 +263,7 @@ test('host readiness retries transient HTTP failures but never resumes on timeou
     res.statusCode = requests === 1 ? 503 : 200;
     res.end(JSON.stringify({ok: true, ready: false, version: '1.2.3'}));
   }, async api => {
-    const io = hostAdapter({api: `${api}/`, run: verificationRun, readyTimeoutMs: 60, readyIntervalMs: 5});
+    const io = hostAdapter({api: `${api}/`, run: verificationRun, readyTimeoutMs: 1000, readyIntervalMs: 5});
     await assert.rejects(io.verify(verificationTarget), /readiness timeout; claims remain paused/);
   });
   assert.ok(requests > 1);

@@ -146,3 +146,34 @@ volumes:
   postgres_data: {}
   blob_data: {}
 `;
+
+// Isolated VFS optimization: same immutable image, network and runtime restrictions;
+// each invocation still runs a new real Node process with independent stdin.
+export function fixtureRun(fixture) {
+  const runners = new Map();
+  return (args, input, env = process.env, allowed = [0]) => {
+    let command = args;
+    if (args[0] === 'run' && args.includes('--rm')) {
+      const imageAt = args.findIndex(value => /@sha256:[a-f0-9]{64}$/.test(value));
+      assert.ok(imageAt > 0, 'fixture runner requires immutable image');
+      const flags = args.slice(1,imageAt).filter(value => !['--rm','-i'].includes(value));
+      assert.ok(flags.includes('--read-only') && flags.includes('--entrypoint=node'));
+      const key = JSON.stringify([args[imageAt],flags]);
+      let name = runners.get(key);
+      if (!name) {
+        name = `${fixture.project}-runner-${randomUUID().slice(0,8)}`;
+        docker(['run','-d','--name',name,'--label',`pr747.maintenance.runner=${fixture.project}`,...flags,args[imageAt],'-e','setInterval(()=>{},3600000)']);
+        runners.set(key,name);
+      }
+      command = ['exec','-i',name,'node',...args.slice(imageAt+1)];
+    }
+    const result=spawnSync('docker',command,{input,env,maxBuffer:512*1024*1024,timeout:600_000});
+    if(result.error || !allowed.includes(result.status)) throw new Error('maintenance fixture transport failed; raw output suppressed');
+    return allowed.length>1 ? {stdout:result.stdout,status:result.status} : result.stdout;
+  };
+}
+export function cleanupRunners(fixture) {
+  assert.match(fixture.project,/^pr747-maint-[a-z0-9-]+$/);
+  const ids=docker(['ps','-aq','--filter',`label=pr747.maintenance.runner=${fixture.project}`]).split(/\s+/).filter(Boolean);
+  if(ids.length) docker(['rm','-f',...ids]);
+}

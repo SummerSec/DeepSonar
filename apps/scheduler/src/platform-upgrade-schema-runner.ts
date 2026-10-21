@@ -27,7 +27,7 @@ export async function runUpgradeSchema(db: MigrationConnection, input: UpgradeSc
     if (input.expected_plan_hash !== plan.plan_hash) throw new Error("APPROVED_PLAN_MISMATCH");
     if (!plan.claims_paused) plan.blocking_errors.push({code: "SOURCE_CLAIMS_NOT_PAUSED"});
     if (plan.blocking_errors.length) return {ok: false, plan, applied: false};
-    const result = await rebuildSchemaToLatest(db, {mode: "apply", dump: false, terminateScheduler: false, keepStaging: true});
+    const result = await rebuildSchemaToLatest(db, {mode: "apply", dump: false, terminateScheduler: false, keepStaging: true, resetRoleIdentity: input.reset_role_identity === true});
     // Re-enable triggers explicitly: rebuild suppresses them while copying.
     // NOT VALID + VALIDATE forces a check even for catalog-marked-valid FKs.
     const foreignKeys = await db<{ table_name: string; constraint_name: string; definition: string }>`
