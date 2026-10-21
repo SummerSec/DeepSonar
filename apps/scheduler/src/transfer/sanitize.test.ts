@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
+import { archiveJobStatus, assertProjectRoleIdentityAbsent, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
 
 test("active imported Jobs archive to cancelled and keep original_status", () => {
   assert.deepEqual(archiveJobStatus("running"), { status: "cancelled", original_status: "running" });
@@ -16,8 +16,8 @@ test("transfer preserves valid DSH task modes and defaults legacy packs", () => 
 });
 
 test("RoleConfig import accepts current CLIs and defaults missing values", () => {
-  assert.equal(parseTransferredAgentCli(undefined, "role"), "claude-code");
-  assert.equal(parseTransferredAgentCli("", "role"), "claude-code");
+  assert.equal(parseTransferredAgentCli(undefined, "role"), null);
+  assert.equal(parseTransferredAgentCli("", "role"), null);
   assert.equal(parseTransferredAgentCli("pi", "role"), "pi");
   assert.equal(parseTransferredAgentCli("dsh", "全局 RoleConfig hub_reason"), "dsh");
 });
@@ -36,11 +36,21 @@ test("project and platform rules import physically scrub leftover keys", () => {
   assert.doesNotMatch(importSource, /cfg\.rules = \{ \.\.\.\(\(cfg\.rules as object\) \?\? \{\}\), \.\.\.rulesFile\.rules \}/);
 });
 
-test("project and platform RoleConfig import share the fail-closed CLI parser", () => {
+test("project import rejects identity and platform imports explicit nullable CLI preference", () => {
   const importSource = readFileSync(new URL("./import.ts", import.meta.url), "utf8");
   const platformSource = readFileSync(new URL("./platform.ts", import.meta.url), "utf8");
-  assert.match(importSource, /parseTransferredAgentCli\(rc\.agent_cli, `RoleConfig \$\{roleName\}`\)/);
+  assert.match(importSource, /assertProjectRoleIdentityAbsent\(rc\)/);
   assert.match(platformSource, /parseTransferredAgentCli\(rc\.agent_cli, `全局 RoleConfig \$\{roleName\}`\)/);
   assert.doesNotMatch(importSource, /typeof rc\.agent_cli === "string" && rc\.agent_cli \? rc\.agent_cli : "claude-code"/);
   assert.doesNotMatch(platformSource, /typeof rc\.agent_cli === "string" && rc\.agent_cli \? rc\.agent_cli : "claude-code"/);
+});
+
+
+test("project role imports reject identity fields including null instead of ignoring them", () => {
+  assert.doesNotThrow(() => assertProjectRoleIdentityAbsent({ instructions_markdown: "fixture" }));
+  for (const value of [{ agent_cli: "pi" }, { agent_cli: null }, { model: "fake-model" }, { model: null }]) {
+    assert.throws(() => assertProjectRoleIdentityAbsent(value), /不接受 agent_cli \/ model/);
+  }
+  assert.equal(parseTransferredAgentCli(null, "global"), null);
+  assert.equal(parseTransferredAgentCli("claude-code", "global"), "claude-code");
 });

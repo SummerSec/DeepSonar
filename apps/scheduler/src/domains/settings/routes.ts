@@ -21,9 +21,7 @@ import {
 } from "../role-runtime-snapshot/application.js";
 import {
   applyProjectAgentAllowlistPatch,
-  collectProjectIdentityBindings,
   parseProjectAgentAllowlist,
-  seedProjectAgentAllowlist,
 } from "../project-agent-allowlist/index.js";
 import { RUNTIME_KNOB_BOUNDS } from "../../runtime-knobs.js";
 import { resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
@@ -179,6 +177,7 @@ function projectAllowlistResponse(cfg: Record<string, unknown>) {
     fallback_model_refs: allowlist.fallback_model_refs,
     allow_model_catalog_passthrough: allowlist.allow_model_catalog_passthrough,
     agent_allowlist_configured: allowlist.configured,
+    credential_ids_configured: allowlist.credential_ids_configured,
   };
 }
 
@@ -427,14 +426,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [activeRow] = await sql`
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE project_id = ${id} AND status IN ('claimed','provisioning','running')`;
-    // 迁移：首次读取时把当前 RoleConfig 绑定种子进白名单，避免旧项目静默不可派发。
-    {
-      const seed = await collectProjectIdentityBindings(sql as never, id);
-      const seeded = seedProjectAgentAllowlist(cfg, seed);
-      if (seeded.changed) {
-        await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
-      }
-    }
     return {
       rules: stripFindingProtocolFromRules(scrubLeftoverRulesJson(cfg.rules ?? {}).rules),
       effective_rules: await rulesForProject(sql, id),
@@ -511,10 +502,6 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       || body.allow_model_catalog_passthrough !== undefined
     ) {
       try {
-        if (!parseProjectAgentAllowlist(cfg).configured) {
-          const seed = await collectProjectIdentityBindings(sql as never, id);
-          seedProjectAgentAllowlist(cfg, seed);
-        }
         applyProjectAgentAllowlistPatch(cfg, {
           enabled_agent_clis: body.enabled_agent_clis,
           enabled_credential_ids: body.enabled_credential_ids,

@@ -670,6 +670,8 @@ export function SettingsPanel({
                   credentials={credentials}
                   enabledAgentClis={settings?.enabled_agent_clis ?? ["claude-code"]}
                   enabledCredentialIds={settings?.enabled_credential_ids ?? []}
+                  credentialIdsConfigured={settings?.credential_ids_configured ?? false}
+                  defaultCredentialId={settings?.default_credential_id ?? null}
                   onSaved={reload}
                 />
                 <ProjectSkillSourceAllowlistPanel projectId={projectId} onSaved={reload} />

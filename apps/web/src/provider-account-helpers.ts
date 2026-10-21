@@ -93,7 +93,7 @@ export function roleModelLabel(
 ): string {
   const requested = roleConfig.model?.trim() || modelsFromSettingsConfig(credential)[0] || null;
   if (!requested) return "未指定模型 · 将使用 CLI 内置默认（建议填写账号已配置的 provider 模型 id）";
-  const upstream = resolvedUpstreamModel(roleConfig.agent_cli, requested, credential?.settings_config_json);
+  const upstream = resolvedUpstreamModel(roleConfig.agent_cli ?? "", requested, credential?.settings_config_json);
   if (upstream && upstream !== requested) {
     const aliasHint = ["fable", "sonnet", "opus", "haiku"].includes(requested.toLowerCase())
       ? "（由别名映射决定）"

@@ -29,6 +29,7 @@ export type RebuildMode = "plan" | "apply";
 export type RebuildOptions = {
   mode?: RebuildMode;
   force?: boolean;
+  resetRoleIdentity?: boolean;
   keepStaging?: boolean;
   dump?: boolean;
   dumpDir?: string;
@@ -130,6 +131,7 @@ export function buildCopyInsertSql(options: {
   columns: string[];
   identityColumns: string[];
   sourceSchema?: string;
+  resetRoleIdentity?: boolean;
 }): string {
   if (options.columns.length === 0) {
     throw new Error(`table ${options.table} has no overlapping columns to copy`);
@@ -140,9 +142,13 @@ export function buildCopyInsertSql(options: {
   const overriding = options.identityColumns.some((column) => columns.includes(column))
     ? " OVERRIDING SYSTEM VALUE"
     : "";
+  const projection = options.resetRoleIdentity && options.table === "role_configs"
+    ? columns.map((column) => column === "agent_cli" ? "NULL"
+      : column === "model" ? 'CASE WHEN "project_id" IS NULL THEN "model" ELSE NULL END' : quoteIdent(column)).join(", ")
+    : quotedColumns;
   return (
     `INSERT INTO public.${quoteIdent(options.table)} (${quotedColumns})${overriding} ` +
-    `SELECT ${quotedColumns} FROM ${quoteIdent(sourceSchema)}.${quoteIdent(options.table)}`
+    `SELECT ${projection} FROM ${quoteIdent(sourceSchema)}.${quoteIdent(options.table)}`
   );
 }
 
@@ -351,7 +357,7 @@ export function roleConfigBackfillSql(schemaSql: string): string[] {
   );
   const overwrite = original
     .replace(
-      "INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)\nSELECT r.id, 'claude-code', templates.instructions,\n       CASE\n         WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'\n         WHEN r.name = 'audit' THEN 'deepsonar-audit'\n         ELSE NULL\n       END\nFROM agent_roles r\nJOIN (VALUES",
+      "INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)\nSELECT r.id, NULL, templates.instructions,\n       CASE\n         WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'\n         WHEN r.name = 'audit' THEN 'deepsonar-audit'\n         ELSE NULL\n       END\nFROM agent_roles r\nJOIN (VALUES",
       `UPDATE role_configs rc
 SET instructions_markdown = templates.instructions,
     updated_at = now()
@@ -492,7 +498,8 @@ export async function rebuildSchemaToLatest(
   const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
   const schemaFile = options.schemaFile ?? SCHEMA_FILE;
   const schemaSql = readFileSync(schemaFile, "utf8");
-  const warnings: string[] = [];
+  const warnings: string[] = options.resetRoleIdentity
+    ? ["explicit role identity reset: CLI preferences and project models will not be copied; reconfigure after rebuild"] : [];
   const plan = await planSchemaRebuild(db, options);
 
   if (plan.unknownStructure && !options.force) {
@@ -515,12 +522,33 @@ export async function rebuildSchemaToLatest(
     return { plan, applied: false, dumpPath: null, copiedTables: [], warnings };
   }
 
+  // #757: pre-v60 CLI values have no provenance (seed and explicit choices look
+  // identical). Never promote them to explicit preferences through column copy.
+  // Operators must explicitly opt into discarding obsolete identity fields.
+  if ((plan.currentVersion === null || plan.currentVersion < 60) && targetVersion >= 60
+      && plan.tables.some((table) => table.table === "role_configs" && table.action === "copy")) {
+    const identityColumns = plan.tables.find((table) => table.table === "role_configs")!.copied;
+    if (!["agent_cli", "model", "project_id"].every((column) => identityColumns.includes(column))) {
+      throw new Error("role_config_identity_review_required: unknown RoleConfig structure cannot safely reset identity");
+    }
+    const [identity] = await db<{ count: number }>`SELECT count(*)::int AS count FROM role_configs
+      WHERE agent_cli IS NOT NULL OR (project_id IS NOT NULL AND model IS NOT NULL)`;
+    if (Number(identity?.count ?? 0) > 0 && !options.resetRoleIdentity) {
+      throw new Error("role_config_identity_review_required: pre-v60 CLI preferences have unknown provenance; " +
+        "review and explicitly choose --reset-role-identity to discard old CLI/project model preferences during copy, " +
+        "then reconfigure global CLI preferences; --force cannot bypass this check");
+    }
+  }
+
   if (options.terminateScheduler !== false) {
     const terminated = await terminateSchedulerBackends(db);
     if (terminated > 0) warnings.push(`terminated ${terminated} deepsonar-scheduler connection(s)`);
   }
 
   const dumpPath = await maybeDump(options, warnings);
+  if (options.resetRoleIdentity && !dumpPath && !options.keepStaging) {
+    throw new Error("role identity reset requires a successful backup or explicit --keep-staging");
+  }
   const sourceTables = await movePublicTablesToStaging(db);
   await recreatePublicSchema(db);
   const applied = await runMigrations(db, { schemaFile, targetVersion });
@@ -552,6 +580,7 @@ export async function rebuildSchemaToLatest(
           columns,
           identityColumns: [...target.identity],
           sourceSchema: REBUILD_STAGING_SCHEMA,
+          resetRoleIdentity: options.resetRoleIdentity,
         }),
       );
       copiedTables.push(table);

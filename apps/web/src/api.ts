@@ -1027,6 +1027,7 @@ export interface ProjectSettings {
   enabled_agent_clis: Array<"claude-code" | "pi" | "dsh">;
   /** 项目启用的 Provider Credential 白名单。 */
   enabled_credential_ids: string[];
+  credential_ids_configured: boolean;
   /** Hub 省略时的软缺省 CLI。 */
   default_agent_cli: "claude-code" | "pi" | "dsh" | null;
   /** Hub 省略时的软缺省 Provider。 */
@@ -1157,9 +1158,9 @@ export interface BindableRoleConfig {
   role_ui_color?: string | null;
   project_id: string | null;
   project_name: string | null;
-  agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
+  agent_cli?: "claude-code" | "pi" | "dsh" | null;
   dsh_task_mode: "standard" | "ptc";
-  model: string | null;
+  model?: string | null;
   context_window_tokens: number | null;
   scope: "global" | "project";
   /** #674: 恒为 null；保留字段兼容旧客户端。 */
@@ -1541,7 +1542,7 @@ export interface RuntimeKnobOverride {
 }
 
 export type RoleConfigInput = {
-  agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
+  agent_cli?: "claude-code" | "pi" | "dsh" | null;
   dsh_task_mode?: "standard" | "ptc";
   model?: string | null;
   /** #570：关闭凭据模型目录 fail-closed（alias 直通） */
@@ -1574,9 +1575,9 @@ export interface RoleConfigView {
   id: string;
   role_id: string;
   project_id: string | null;
-  agent_cli: "claude-code" | "pi" | "dsh" | "codex" | "open-code";
+  agent_cli?: "claude-code" | "pi" | "dsh" | null;
   dsh_task_mode: "standard" | "ptc";
-  model: string | null;
+  model?: string | null;
   allow_model_catalog_passthrough?: boolean;
   context_window_tokens: number | null;
   env_keys: string[];
@@ -2782,7 +2783,7 @@ export const api = {
   credentialProviders: () => get<ProviderAccountCatalogItemView[]>("/credentials/providers"),
   bindableRoleConfigs: () => get<BindableRoleConfig[]>("/role-configs/bindable"),
   /** Provider 绑定列表：仅改 RoleConfig.agent_cli，不整表替换 */
-  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: CurrentAgentCli) =>
+  updateRoleConfigAgentCli: (roleConfigId: string, agent_cli: CurrentAgentCli | null) =>
     send<{ id: string; agent_cli: string; version: number; role_id: string; project_id: string | null }>(
       "PATCH",
       `/role-configs/${roleConfigId}/agent-cli`,

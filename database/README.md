@@ -1,6 +1,6 @@
 # Database schema
 
-`schema.sql` 是唯一 schema 真相源（当前 **v59**，与 `apps/scheduler/src/schema-version.ts` 同步）。Scheduler 启动时在 reserved
+`schema.sql` 是唯一 schema 真相源（当前 **v60**，与 `apps/scheduler/src/schema-version.ts` 同步）。Scheduler 启动时在 reserved
 PostgreSQL session 上持有 session advisory lock：
 
 - **空数据库**：原子执行 `database/schema.sql`，直接得到当前版本；
@@ -31,6 +31,18 @@ pnpm db:rebuild -- --plan
 # 停 Scheduler / 确认没有活跃 Job 后再执行
 pnpm db:rebuild -- --apply
 ```
+
+### v60 角色身份复核（#757）
+
+v60 以前的 `role_configs.agent_cli` 是 NOT NULL，旧系统种子和用户显式选择没有来源标记，不能仅凭 `claude-code` 值判断用户意图。`pnpm db:rebuild -- --plan` 只读展示复制计划；`--apply` 检测到旧库任何非空角色 CLI 或项目角色模型时，以 `role_config_identity_review_required` 在破坏性复制前拒绝，`--force` 不能绕过。
+
+管理员应先复核并记录需要重新配置的全局 CLI 偏好。明确同意丢弃旧身份字段后，才执行：
+
+```bash
+pnpm db:rebuild -- --apply --reset-role-identity
+```
+
+此选项在向新基线复制时把所有 RoleConfig CLI、项目 RoleConfig model 投影为 NULL；全局 model、其余配置及已有 Job 快照保留。工具必须取得成功的备份，或由管理员明确使用 `--keep-staging` 保留源 schema，否则拒绝重置。备份/保留源数据中仍有原值；完成后按复核结果重新显式设置全局 CLI 偏好，项目模型使用项目 Agent 设置。它不修改旧表约束，不猜测种子来源，也不是自动配置迁移。未指定该选项不会默默把旧种子升级成显式偏好。
 
 两套库不要同时占 `5432`：
 

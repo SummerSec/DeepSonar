@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set",
   }, () => {});
 } else {
-  test("RoleConfig save enforces exclusive credential agent_cli and rejects incompatible provider", async () => {
+  test("RoleConfig global explicit preference and project identity rejection preserve credentials", async () => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     adminUrl.search = "";
@@ -94,16 +94,32 @@ if (!testDatabaseUrl) {
         return app.inject(options as never) as unknown as Promise<InjectResponse>;
       };
 
-      // #690: RoleConfig no longer binds credentials; CLI exclusive pin is enforced at Job resolve.
-      const putPi = await putRoleConfig({ agent_cli: "pi" });
-      assert.equal(putPi.statusCode, 200, putPi.payload);
-      assert.equal(JSON.parse(putPi.payload).agent_cli, "pi");
+      // New baseline has no implicit global preference.
+      const seeds = await sql`SELECT agent_cli FROM role_configs WHERE project_id IS NULL`;
+      assert.ok(seeds.length > 0);
+      assert.ok(seeds.every((row) => row.agent_cli === null));
+      for (const payload of [{ agent_cli: "pi" }, { agent_cli: null }, { model: "fake-model" }, { model: null }]) {
+        const response = await putRoleConfig(payload);
+        assert.equal(response.statusCode, 400, response.payload);
+      }
+      const saved = await putRoleConfig({ instructions_markdown: "Test-only role instructions" });
+      assert.equal(saved.statusCode, 200, saved.payload);
+      const savedBody = JSON.parse(saved.payload);
+      assert.equal("agent_cli" in savedBody, false);
+      assert.equal("model" in savedBody, false);
+      const [stored] = await sql`SELECT agent_cli, model FROM role_configs WHERE id = ${savedBody.id}`;
+      assert.deepEqual({ agent_cli: stored.agent_cli, model: stored.model }, { agent_cli: null, model: null });
+      const projectPatch = await app.inject({ method: "PATCH", url: `/role-configs/${savedBody.id}/agent-cli`, payload: { agent_cli: "pi" } });
+      assert.equal(projectPatch.statusCode, 400, projectPatch.payload);
+      assert.equal(projectPatch.json().error_code, "PROJECT_ROLE_IDENTITY_FORBIDDEN");
+      const globalSave = await app.inject({ method: "PUT", url: `/role-configs/global/${roleId}`, payload: { agent_cli: "claude-code" } });
+      assert.equal(globalSave.statusCode, 200, globalSave.payload);
+      assert.equal(globalSave.json().agent_cli, "claude-code", "explicit Claude preference is distinct from seed NULL");
+      const clear = await app.inject({ method: "PATCH", url: `/role-configs/${globalSave.json().id}/agent-cli`, payload: { agent_cli: null } });
+      assert.equal(clear.statusCode, 200, clear.payload);
+      assert.equal(clear.json().agent_cli, null);
       const [credStill] = await sql`SELECT agent_cli FROM credentials WHERE id = ${anthropicId}`;
-      assert.equal(credStill.agent_cli, "claude-code", "RoleConfig PUT must not rewrite Credential.agent_cli");
-
-      const putClaude = await putRoleConfig({ agent_cli: "claude-code" });
-      assert.equal(putClaude.statusCode, 200, putClaude.payload);
-      assert.equal(JSON.parse(putClaude.payload).agent_cli, "claude-code");
+      assert.equal(credStill.agent_cli, "claude-code", "RoleConfig writes must not rewrite Credential.agent_cli");
 
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);

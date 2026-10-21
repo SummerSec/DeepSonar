@@ -111,7 +111,7 @@ test("#690 resolve: cross-project credential excluded", async () => {
       provider: "anthropic",
     }),
     (error: unknown) => error instanceof ProviderCredentialResolveError
-      && error.code === "provider_credential_no_match",
+      && error.code === "provider_credential_allowlist_stale",
   );
 });
 
@@ -125,7 +125,7 @@ test("#690 resolve: inactive/revoked credential excluded", async () => {
       provider: "anthropic",
     }),
     (error: unknown) => error instanceof ProviderCredentialResolveError
-      && error.code === "provider_credential_no_match",
+      && error.code === "provider_credential_allowlist_stale",
   );
 });
 
@@ -252,4 +252,133 @@ test("#707 resolve: protocol incompatible (claude-code × openai) is model_corre
       && error.code === "provider_credential_protocol_incompatible"
       && error.repair.category === "model_correctable",
   );
+});
+
+test("#757 unique credential supplies CLI despite a different soft preference", async () => {
+  const resolved = await resolveProviderCredentialForJob({
+    db: dbWith([{ ...baseRow(CRED_A), agent_cli: "pi" }]) as never,
+    projectId: "project-1",
+    preferredAgentCli: "claude-code",
+    allowlist: parseProjectAgentAllowlist({}),
+  });
+  assert.equal(resolved?.agent_cli, "pi");
+});
+
+test("#757 cross-CLI ambiguity requires an explicit preference", async () => {
+  const input = {
+    db: dbWith([baseRow(CRED_A), { ...baseRow(CRED_B), agent_cli: "pi" }]) as never,
+    projectId: "project-1",
+    allowlist: parseProjectAgentAllowlist({}),
+  };
+  await assert.rejects(() => resolveProviderCredentialForJob(input), (error: unknown) =>
+    error instanceof ProviderCredentialResolveError
+      && error.code === "provider_credential_multi_match"
+      && error.repair.category === "model_correctable");
+  assert.equal((await resolveProviderCredentialForJob({ ...input, preferredAgentCli: "pi" }))?.id, CRED_B);
+  assert.equal((await resolveProviderCredentialForJob({ ...input, preferredAgentCli: "claude-code" }))?.id, CRED_A);
+  assert.equal((await resolveProviderCredentialForJob({
+    ...input, allowlist: parseProjectAgentAllowlist({ default_agent_cli: "pi" }),
+  }))?.id, CRED_B);
+});
+
+test("#757 provider and model narrow candidates before CLI preference", async () => {
+  const rows = [baseRow(CRED_A), {
+    ...baseRow(CRED_B, "openai"), agent_cli: "pi",
+    settings_config_json: { providers: { openai: { models: [{ id: "selected-model" }] } } },
+  }];
+  const input = { db: dbWith(rows) as never, projectId: "project-1", allowlist: parseProjectAgentAllowlist({}), preferredAgentCli: "claude-code" };
+  assert.equal((await resolveProviderCredentialForJob({ ...input, provider: "openai" }))?.id, CRED_B);
+  assert.equal((await resolveProviderCredentialForJob({ ...input, modelRef: "selected-model" }))?.id, CRED_B);
+  await assert.rejects(() => resolveProviderCredentialForJob({ ...input, modelRef: "missing-model" }), (error: unknown) =>
+    error instanceof ProviderCredentialResolveError && error.code === "provider_credential_no_match");
+});
+
+test("#757 CLI-only restriction does not implicitly deny every credential", async () => {
+  const resolved = await resolveProviderCredentialForJob({
+    db: dbWith([baseRow(CRED_A), { ...baseRow(CRED_B), agent_cli: "pi" }]) as never,
+    projectId: "project-1",
+    allowlist: parseProjectAgentAllowlist({ enabled_agent_clis: ["pi"] }),
+  });
+  assert.equal(resolved?.id, CRED_B);
+});
+
+test("#757 stale explicit restrictions require administrator repair without widening", async () => {
+  for (const restriction of [{ enabled_credential_ids: [CRED_A] }, { default_credential_id: CRED_A }]) {
+    await assert.rejects(() => resolveProviderCredentialForJob({
+      db: dbWith([baseRow(CRED_B)]) as never,
+      projectId: "project-1",
+      allowlist: parseProjectAgentAllowlist(restriction),
+    }), (error: unknown) => error instanceof ProviderCredentialResolveError
+      && error.code === "provider_credential_allowlist_stale"
+      && error.repair.category === "permanent_failure"
+      && error.repair.next_action === "repair_project_credential_allowlist");
+  }
+});
+
+test("#757 unconfigured scope follows replacement credentials without mutating policy", async () => {
+  const cfg = {};
+  const policy = parseProjectAgentAllowlist(cfg);
+  const input = { projectId: "project-1", allowlist: policy };
+  assert.equal((await resolveProviderCredentialForJob({ ...input, db: dbWith([baseRow(CRED_A)]) as never }))?.id, CRED_A);
+  assert.equal((await resolveProviderCredentialForJob({ ...input, db: dbWith([{ ...baseRow(CRED_B), agent_cli: "dsh" }]) as never }))?.id, CRED_B);
+  assert.deepEqual(cfg, {});
+  assert.equal(policy.credential_ids_configured, false);
+});
+
+test("#757 project preference precedes global preference; explicit Hub precedes both", async () => {
+  const input = {
+    db: dbWith([baseRow(CRED_A), { ...baseRow(CRED_B), agent_cli: "pi" }]) as never,
+    projectId: "project-1", preferredAgentCli: "claude-code",
+    allowlist: parseProjectAgentAllowlist({ default_agent_cli: "pi" }),
+  };
+  assert.equal((await resolveProviderCredentialForJob(input))?.id, CRED_B);
+  assert.equal((await resolveProviderCredentialForJob({ ...input, agentCli: "claude-code" }))?.id, CRED_A);
+});
+
+test("#757 global readiness scope excludes project-owned credentials", async () => {
+  const resolved = await resolveProviderCredentialForJob({
+    db: dbWith([baseRow(CRED_A), { ...baseRow(CRED_B), project_id: "other-project" }]) as never,
+    projectId: null,
+    allowlist: parseProjectAgentAllowlist({}),
+  });
+  assert.equal(resolved?.id, CRED_A);
+});
+
+test("#757 model candidate filter preserves Claude configured selectors", async () => {
+  for (const selector of ["fable", "sonnet", "opus", "haiku"]) {
+    const resolved = await resolveProviderCredentialForJob({
+      db: dbWith([{ ...baseRow(CRED_A), settings_config_json: { env: {
+        ANTHROPIC_MODEL: "default-model", [`ANTHROPIC_DEFAULT_${selector.toUpperCase()}_MODEL`]: "mapped-model",
+      } } }]) as never,
+      projectId: "project-1", modelRef: selector,
+      allowlist: parseProjectAgentAllowlist({}),
+    });
+    assert.equal(resolved?.id, CRED_A);
+  }
+});
+
+test("#757 Pi model candidate filter handles route prefixes and exact slash ids", async () => {
+  for (const [requested, id] of [["deepsonar/grok-4.6", "grok-4.6"], ["openrouter/model", "openrouter/model"]]) {
+    const resolved = await resolveProviderCredentialForJob({
+      db: dbWith([{ ...baseRow(CRED_A), agent_cli: "pi", settings_config_json: {
+        providers: { deepsonar: { models: [{ id }] } },
+      } }]) as never,
+      projectId: "project-1", modelRef: requested,
+      allowlist: parseProjectAgentAllowlist({}),
+    });
+    assert.equal(resolved?.id, CRED_A);
+  }
+});
+
+test("#757 rejected model includes a bounded configured catalog repair sample", async () => {
+  await assert.rejects(() => resolveProviderCredentialForJob({
+    db: dbWith([baseRow(CRED_A)]) as never,
+    projectId: "project-1", modelRef: "unconfigured-model",
+    allowlist: parseProjectAgentAllowlist({}),
+  }), (error: unknown) => {
+    assert.ok(error instanceof ProviderCredentialResolveError);
+    assert.equal(error.repair.path, "model_ref");
+    assert.deepEqual((error.repair.expected as { sample: string[] }).sample, ["claude-sonnet-4"]);
+    return true;
+  });
 });

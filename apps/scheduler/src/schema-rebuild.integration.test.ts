@@ -184,3 +184,58 @@ if (!testDatabaseUrl) {
     }
   });
 }
+
+if (testDatabaseUrl) {
+  test("#757 upgrade rejects unproven CLI preferences before copy and preserves reviewed history", async () => {
+    const adminUrl = new URL(testDatabaseUrl);
+    adminUrl.pathname = "/postgres";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const target = await createDatabase(admin);
+    const db = postgres(target.url, { max: 2 });
+    try {
+      await withReserved(db, (conn) => runMigrations(conn));
+      const { jobId } = await seedHighIdHistory(db);
+      const historical = { agent_cli: "claude-code", model: "historical-model" };
+      await db`UPDATE jobs SET agent_snapshot_json = ${db.json(historical)} WHERE id = ${jobId}`;
+      await db`UPDATE role_configs SET agent_cli = 'claude-code', model = 'reviewed-global-model' WHERE project_id IS NULL`;
+      await db`UPDATE schema_meta SET version = 59 WHERE id = 'global'`;
+      const rebuild = (mode: "plan" | "apply", resetRoleIdentity = false) => rebuildSchemaOnReservedSession(
+        () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void | Promise<void> }>,
+        { mode, force: true, dump: false, keepStaging: true, resetRoleIdentity, terminateScheduler: false },
+      );
+      const plan = await rebuild("plan");
+      assert.equal(plan.applied, false);
+      assert.equal(plan.plan.currentVersion, 59);
+      await assert.rejects(() => rebuild("apply"), /role_config_identity_review_required/);
+      const [unchanged] = await db`SELECT version FROM schema_meta WHERE id = 'global'`;
+      assert.equal(unchanged.version, 59, "rejection precedes destructive schema work, even with force");
+      await db`DELETE FROM schema_meta WHERE id = 'global'`;
+      await assert.rejects(() => rebuild("apply"), /role_config_identity_review_required/);
+      await db`INSERT INTO schema_meta (id, version) VALUES ('global', 59)`;
+      await db`ALTER TABLE role_configs ALTER COLUMN agent_cli SET NOT NULL`;
+      await db`INSERT INTO role_configs (role_id, project_id, agent_cli, model, instructions_markdown)
+        SELECT r.id, j.project_id, 'pi', 'obsolete-project-model', 'preserve project instructions'
+        FROM agent_roles r CROSS JOIN jobs j WHERE r.name = 'audit' AND j.id = ${jobId}`;
+      await assert.rejects(() => rebuild("apply"), /role_config_identity_review_required/);
+      await assert.rejects(() => rebuildSchemaOnReservedSession(
+        () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void | Promise<void> }>,
+        { mode: "apply", force: true, dump: false, resetRoleIdentity: true, terminateScheduler: false },
+      ), /requires a successful backup/);
+      const result = await rebuild("apply", true);
+      assert.equal(result.applied, true);
+      const [backup] = await db`SELECT agent_cli, model FROM deepsonar_rebuild_src.role_configs WHERE project_id IS NOT NULL`;
+      assert.deepEqual({ ...backup }, { agent_cli: "pi", model: "obsolete-project-model" });
+      const [stored] = await db`SELECT agent_snapshot_json FROM jobs WHERE id = ${jobId}`;
+      assert.deepEqual(stored.agent_snapshot_json, historical);
+      const configs = await db`SELECT agent_cli, model FROM role_configs WHERE project_id IS NULL`;
+      assert.ok(configs.every((row) => row.agent_cli === null));
+      assert.ok(configs.every((row) => row.model === 'reviewed-global-model'));
+      const [projectConfig] = await db`SELECT agent_cli, model, instructions_markdown FROM role_configs WHERE project_id IS NOT NULL`;
+      assert.deepEqual({ ...projectConfig }, { agent_cli: null, model: null, instructions_markdown: 'preserve project instructions' });
+    } finally {
+      await db.end();
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
+      await admin.end();
+    }
+  });
+}

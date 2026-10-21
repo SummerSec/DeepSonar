@@ -51,6 +51,7 @@ import {
   ProviderCredentialResolveError,
   selectModelsForRequirements,
 } from "../provider-adapter/index.js";
+import { resolveCredentialModelRef } from "../provider-adapter/resolve-credential.js";
 import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
 import { expandModules, resolveEffectiveModuleSelectors, type MissingModule } from "../../skill-sources.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
@@ -174,19 +175,18 @@ function trimmedRoleField(value: unknown): string | null {
 }
 
 /**
- * inherit_global（缺省 / 脏值）忽略遗留项目 RoleConfig 的 model 与默认 CLI；
- * 只有 project_managed 才采用项目身份字段。解析层仍作纵深，历史行由
- * `scrubIgnoredProjectRoleConfigIdentity` 物理清空。
+ * 项目 RoleConfig 不持有运行身份。全局 NULL CLI 表示未指定偏好；
+ * 只有用户显式配置的 CLI 才能用于多候选消歧。
  */
 export function roleIdentityForProjectPolicy(
   _policy: ProjectImagePolicy,
   _projectCfg: { model?: unknown; agent_cli?: unknown } | undefined,
   globalCfg: { model?: unknown; agent_cli?: unknown } | undefined,
-): { model: string | null; agent_cli: string } {
+): { model: string | null; agent_cli: string | null } {
   // #674: 项目不再托管镜像/角色身份；model 与默认 CLI 只认全局 RoleConfig。
   return {
     model: trimmedRoleField(globalCfg?.model),
-    agent_cli: trimmedRoleField(globalCfg?.agent_cli) ?? PLATFORM_DEFAULT_AGENT_CLI,
+    agent_cli: trimmedRoleField(globalCfg?.agent_cli),
   };
 }
 
@@ -226,15 +226,15 @@ export async function scrubIgnoredProjectRoleConfigIdentity(
   const models = await Promise.resolve(projectId
     ? db`
         UPDATE role_configs
-        SET model = NULL
+        SET model = NULL, agent_cli = NULL
         WHERE project_id = ${projectId}
-          AND model IS NOT NULL
+          AND (model IS NOT NULL OR agent_cli IS NOT NULL)
         RETURNING id`
     : db`
         UPDATE role_configs
-        SET model = NULL
+        SET model = NULL, agent_cli = NULL
         WHERE project_id IS NOT NULL
-          AND model IS NOT NULL
+          AND (model IS NOT NULL OR agent_cli IS NOT NULL)
         RETURNING id`) as unknown[];
   return { runtime_image_keys: images.length, inherit_global_models: models.length };
 }
@@ -394,12 +394,8 @@ async function resolveAgentSnapshotForJobUnchecked(
     || (cfg?.instructions_markdown as string | null | undefined);
   const identity = roleIdentityForProjectPolicy(parseProjectImagePolicy(undefined), projectCfg, globalCfg);
   const hubCli = typeof options?.agentCli === "string" && options.agentCli.trim() ? options.agentCli.trim() : null;
-  const agentCli = hubCli
-    ?? agentAllowlist.default_agent_cli
-    ?? identity.agent_cli;
-  assertAgentCliAllowlisted(agentAllowlist, agentCli);
-  const leftoverCli = rejectNonCurrentAgentCli(agentCli);
-  if (leftoverCli) throw new Error(leftoverCli);
+  const preferredAgentCli = agentAllowlist.default_agent_cli ?? identity.agent_cli;
+  let agentCli = hubCli ?? preferredAgentCli ?? PLATFORM_DEFAULT_AGENT_CLI;
   const dshTaskMode = cfg?.dsh_task_mode === "ptc" ? "ptc" : "standard";
 
   const rawModules = cfg?.modules_json;
@@ -441,13 +437,15 @@ async function resolveAgentSnapshotForJobUnchecked(
     const resolved = await resolveProviderCredentialForJob({
       db,
       projectId,
-      agentCli,
+      agentCli: hubCli,
+      preferredAgentCli,
       allowlist: agentAllowlist,
       provider: hubProvider,
-      modelRef: earlyModelRef ?? agentAllowlist.default_model_ref,
+      modelRef: earlyModelRef ?? agentAllowlist.default_model_ref ?? identity.model,
       allowPassthrough: allowPassthroughForResolve,
     });
     if (resolved) {
+      agentCli = resolved.agent_cli!;
       llm = {
         id: resolved.id,
         name: resolved.name,
@@ -469,6 +467,9 @@ async function resolveAgentSnapshotForJobUnchecked(
     }
     throw error;
   }
+  assertAgentCliAllowlisted(agentAllowlist, agentCli);
+  const leftoverCli = rejectNonCurrentAgentCli(agentCli);
+  if (leftoverCli) throw new Error(leftoverCli);
   assertCredentialAllowlisted(agentAllowlist, llm?.id as string | undefined);
   const settingsConfig = llm?.settings_config_json ?? {};
   const manualConfigFiles = cfg
@@ -530,7 +531,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     if (!selectedModel && requirements && eligible.length > 0) selectedModel = eligible[0]!.model_id;
     // Prefer first account-configured model when RoleConfig/project default is empty (#679).
     if (!selectedModel && configuredModelIds.length > 0) selectedModel = configuredModelIds[0]!;
-    if (selectedModel && catalog.length > 0 && !allowPassthrough && !eligibleIds.has(selectedModel)) {
+    if (selectedModel && catalog.length > 0 && !allowPassthrough && !eligibleIds.has(resolveCredentialModelRef(settingsConfig, agentCli, selectedModel) ?? selectedModel)) {
       if (requestedModelRef) {
         throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
       }
@@ -542,7 +543,7 @@ async function resolveAgentSnapshotForJobUnchecked(
         selectedModel = configuredModelIds[0]!;
       }
     }
-    if (requirements && selectedModel && !allowPassthrough && !eligibleIds.has(selectedModel)) {
+    if (requirements && selectedModel && !allowPassthrough && !eligibleIds.has(resolveCredentialModelRef(settingsConfig, agentCli, selectedModel) ?? selectedModel)) {
       throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
     }
   }

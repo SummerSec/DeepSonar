@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 59);
+INSERT INTO schema_meta (id, version) VALUES ('global', 60);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1345,7 +1345,8 @@ CREATE TABLE role_configs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   role_id uuid NOT NULL REFERENCES agent_roles(id) ON DELETE CASCADE,
   project_id uuid REFERENCES projects(id) ON DELETE CASCADE,
-  agent_cli text NOT NULL DEFAULT 'claude-code',
+  -- NULL means no explicit global CLI preference; project roles carry no identity.
+  agent_cli text,
   dsh_task_mode text NOT NULL DEFAULT 'standard',
   model text,
   -- #570: alias-passthrough opt-out for credential model_catalog fail-closed
@@ -1701,7 +1702,7 @@ WHERE name = 'report' AND builtin = true;
 -- 合成为 /workspace/AGENTS.md 和 /workspace/CLAUDE.md；任务正文只经 CLI prompt 注入。
 -- 运行时不读取代码中的固定角色清单，Hub 始终从数据库查询当前可下发角色。
 INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)
-SELECT r.id, 'claude-code', templates.instructions,
+SELECT r.id, NULL, templates.instructions,
        CASE
          WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'
          WHEN r.name = 'audit' THEN 'deepsonar-audit'

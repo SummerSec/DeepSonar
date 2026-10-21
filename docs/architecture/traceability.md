@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**（#741 PR 2）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
-> 同步日期：2026-10-20
+> 同步日期：2026-10-21
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。除文档 freshness 与 file-size 门禁外，本次未执行行为测试。
 
@@ -81,7 +81,7 @@
 | FR-IMG-003 | [运行时视图](06-runtime-view.md)；[部署视图](07-deployment-view.md) | [ADR-0006](adr/0006-runtime-image-admission.md) | [Hub image capability](../../apps/scheduler/src/hub-runtime-image-capability.ts) | `pnpm ci:unit:runtime-images`、`pnpm ci:integration:hub-runtime-image`、`pnpm ci:unit:bounded-contexts`。 |
 | FR-IMG-004 | [部署视图](07-deployment-view.md)；[运行时视图](06-runtime-view.md) | [ADR-0006](adr/0006-runtime-image-admission.md) | [pull timeout](../../apps/scheduler/src/runtime-image-pull-timeout.ts) | `pnpm ci:unit:runtime-images`、`pnpm ci:smoke:opensandbox-reconcile`、`pnpm ci:unit:runtime-cleanup`。 |
 | FR-CRED-001 | [安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [credentials schema](../../database/schema.sql) | `pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:credential-delete`、`pnpm ci:unit:authz`。 |
-| FR-CRED-002 | [安全与信任边界](10-security-and-trust-boundaries.md)；[数据架构](08-data-architecture.md) | [ADR-0003](adr/0003-api-only-control.md) | [Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`。 |
+| FR-CRED-002 | [运行时视图](06-runtime-view.md)；[接口规范](09-interface-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md)；[数据架构](08-data-architecture.md) | [ADR-0003](adr/0003-api-only-control.md) | [Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)；[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)；[readiness](../../apps/scheduler/src/readiness.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（隔离库 #757）。 |
 | FR-CRED-003 | [接口规格](09-interface-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [Gateway](../../apps/scheduler/src/gateway.ts) | `pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。 |
 | FR-CRED-004 | [接口规格](09-interface-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [Gateway token lifecycle](../../apps/scheduler/src/gateway.ts) | `pnpm ci:unit:executor-real`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:job-lifecycle`。 |
 | FR-CRED-005 | [部署视图](07-deployment-view.md)；[接口规格](09-interface-specs.md) | [ADR-0001](adr/0001-no-backward-compatibility.md) | [CLI adapters](../../packages/runtime-sandbox/src) | `pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`。 |

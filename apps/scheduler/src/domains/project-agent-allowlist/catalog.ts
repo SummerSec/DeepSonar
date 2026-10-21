@@ -1,7 +1,6 @@
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
 import {
   parseProjectAgentAllowlist,
-  seedProjectAgentAllowlist,
   toHubAgentCliCatalog,
   toHubProviderCatalogEntry,
   type HubAgentCliCatalogEntry,
@@ -11,67 +10,24 @@ import {
 
 type SqlLike = RoleRuntimeSnapshotTransaction;
 
-/** #690: seed allowlist from project RoleConfig CLI + visible active Provider credentials (no role_credentials). */
-export async function collectProjectIdentityBindings(
-  db: SqlLike,
-  projectId: string,
-): Promise<{ agent_clis: string[]; credential_ids: string[] }> {
-  const roleRows = await db`
-    SELECT rc.agent_cli
-    FROM role_configs rc
-    WHERE rc.project_id = ${projectId}` as Array<{ agent_cli: string | null }>;
-  const credRows = await db`
-    SELECT c.id AS credential_id
-    FROM credentials c
-    WHERE c.kind = 'llm_provider'
-      AND c.status = 'active'
-      AND (c.project_id IS NULL OR c.project_id = ${projectId})` as Array<{ credential_id: string }>;
-  const agent_clis: string[] = [];
-  const credential_ids: string[] = [];
-  for (const row of roleRows) {
-    if (typeof row.agent_cli === "string" && row.agent_cli.trim()) agent_clis.push(row.agent_cli.trim());
-  }
-  for (const row of credRows) {
-    if (typeof row.credential_id === "string") credential_ids.push(row.credential_id);
-  }
-  return { agent_clis, credential_ids };
-}
-
-function jsonParam(db: SqlLike, value: unknown): unknown {
-  return typeof db.json === "function" ? db.json(value) : value;
-}
-
-/**
- * 确保项目白名单已种子化。返回解析后的 allowlist；若写回了种子则 persisted=true。
- */
+/** Read optional restrictions without turning the visible catalog into stored authorization. */
 export async function ensureProjectAgentAllowlist(
   db: SqlLike,
   projectId: string,
-  options?: { persist?: boolean },
 ): Promise<{ allowlist: ProjectAgentAllowlist; persisted: boolean; config_json: Record<string, unknown> }> {
   const [project] = await db`SELECT config_json FROM projects WHERE id = ${projectId}` as Array<{
     config_json: unknown;
   }>;
   if (!project) throw new Error(`project not found: ${projectId}`);
   const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
-  const before = parseProjectAgentAllowlist(cfg);
-  if (before.configured) {
-    return { allowlist: before, persisted: false, config_json: cfg };
-  }
-  const seed = await collectProjectIdentityBindings(db, projectId);
-  const { changed, allowlist } = seedProjectAgentAllowlist(cfg, seed);
-  if (changed && options?.persist !== false) {
-    await db`UPDATE projects SET config_json = ${jsonParam(db, cfg) as never} WHERE id = ${projectId}`;
-    return { allowlist, persisted: true, config_json: cfg };
-  }
-  return { allowlist, persisted: false, config_json: cfg };
+  return { allowlist: parseProjectAgentAllowlist(cfg), persisted: false, config_json: cfg };
 }
 
 export async function listHubAgentCliCatalog(
   db: SqlLike,
   projectId: string,
 ): Promise<HubAgentCliCatalogEntry[]> {
-  const { allowlist } = await ensureProjectAgentAllowlist(db, projectId, { persist: true });
+  const { allowlist } = await ensureProjectAgentAllowlist(db, projectId);
   return toHubAgentCliCatalog(allowlist);
 }
 
@@ -79,7 +35,7 @@ export async function listHubProviderCatalog(
   db: SqlLike,
   projectId: string,
 ): Promise<HubProviderCatalogEntry[]> {
-  const { allowlist } = await ensureProjectAgentAllowlist(db, projectId, { persist: true });
+  const { allowlist } = await ensureProjectAgentAllowlist(db, projectId);
   const rows = await db`
     SELECT id, name, provider, status, agent_cli, public_metadata_json, model_catalog_json,
            model_catalog_fetched_at, health_status, project_id, kind
@@ -112,6 +68,6 @@ export async function loadProjectAgentAllowlist(
   db: SqlLike,
   projectId: string,
 ): Promise<ProjectAgentAllowlist> {
-  const { allowlist } = await ensureProjectAgentAllowlist(db, projectId, { persist: false });
+  const { allowlist } = await ensureProjectAgentAllowlist(db, projectId);
   return allowlist;
 }

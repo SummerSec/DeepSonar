@@ -10,6 +10,6 @@ test("项目 settings 暴露并持久化 CLI/Provider 白名单与软缺省", ()
   assert.match(routes, /default_agent_cli/);
   assert.match(routes, /default_credential_id/);
   assert.match(routes, /applyProjectAgentAllowlistPatch/);
-  assert.match(routes, /seedProjectAgentAllowlist/);
+  assert.doesNotMatch(routes, /seedProjectAgentAllowlist|collectProjectIdentityBindings/);
   assert.match(routes, /projectAllowlistResponse/);
 });
