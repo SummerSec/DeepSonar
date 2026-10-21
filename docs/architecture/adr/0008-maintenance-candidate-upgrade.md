@@ -1,6 +1,6 @@
 # 0008. 维护升级以数据库身份隔离、候选库与激活回执保护已接受写入
 
-> 状态：**已采纳；实现已接线，完整故障矩阵验收进行中**
+> 状态：**已采纳；实现已接线，选定 9 项中断/排空场景已通过，最终组合基线验收待完成**
 > 决策日期：2026-10-21
 > 同步日期：2026-10-21
 > 来源：#740 / #747；用户明确允许维护模式暂时拒绝新任务入队及其他业务写入
@@ -25,14 +25,14 @@
 
 已实现基础模块：数据库身份隔离、候选恢复/重建、只读 plan CLI、维护状态机、服务维护门禁及受管节点执行模块；宿主入口、受管 SSH 节点编排和显式回滚恢复领取已接线。源码中 schema 编号是当前集成基线，不表示已发布版本；合入并行 schema 变更后须重新核对唯一编号及 DDL 指纹。
 
-候选模块单测、状态机故障注入、隔离 PostgreSQL 重建及真实单机/多节点成功场景已有执行证据，见 [升级演练](../../../deploy/UPGRADE_REHEARSAL.md)；完整故障矩阵、最终基线镜像及恢复领取的验收仍须逐项记录。P2 签名/无人值守升级未完成；P3 Web 发起为可选且未实现。
+候选模块单测、状态机故障注入、隔离 PostgreSQL 重建及真实单机/多节点成功场景已有执行证据，见 [升级演练](../../../deploy/UPGRADE_REHEARSAL.md)；选定 9 项中断/排空场景已通过；备份损坏、多节点恢复与最终组合基线镜像仍须单独验收。P2 签名/无人值守升级未完成；P3 Web 发起为可选且未实现。
 
 ## 后果
 
 - 备份切点后、激活前没有已接受的业务写入，源库因而是可核验的回滚依据；激活后不再作此假设。
 - 增加维护身份、每代受限运行凭据、候选存储、私有恢复文件和节点清单的运维成本。密钥不写入 journal、命令参数或诊断输出。
 - 受管 SSH 清单必须与登记节点、固定主机身份、部署路径及目标版本绑定；不允许旧节点自动重新登记为当前代。未受管节点不是可安全自动升级的节点。
-- 配置 preflight 只验证声明覆盖范围，已检查声明字段 URL/枚举、主密钥只读文件身份及内容格式、全部已存凭据的 AES-GCM 认证与 credential-first 默认选择；秘密仅经 stdin 传入断网目标，不持久化。不验证凭据或外部服务真实认证、模型可用性、未来 Job provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展或 Skill 源内容。未知项不标记为完整兼容性通过。
+- 配置 preflight 只验证声明覆盖范围，已检查声明字段 URL/枚举、主密钥只读文件身份及内容格式、全部已存凭据的 AES-GCM 认证与 当前持久默认组合的 credential-first 选择；秘密仅经 stdin 传入断网目标，不持久化。不验证凭据或外部服务真实认证、模型可用性、未来 Job provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展或 Skill 源内容。未知项不标记为完整兼容性通过。
 - 验收入口：[维护状态机测试](../../../deploy/platform-upgrade-maintenance.test.mjs)、[数据库身份实测](../../../deploy/platform-upgrade-database.integration.test.mjs)、[候选测试](../../../deploy/platform-upgrade-candidate.test.mjs)、[schema 实测](../../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts)、[维护 Compose 演练](../../../deploy/platform-upgrade-maintenance.integration.mjs)。当前验收状态见[风险记录](../12-risks-and-tech-debt.md)。
 
 ## 替代方案

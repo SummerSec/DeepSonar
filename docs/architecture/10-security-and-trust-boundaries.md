@@ -54,4 +54,4 @@ flowchart LR
 
 升级管理员与业务运行身份分离。旧运行身份即使是初始化超级用户，也必须禁止 LOGIN 并清退现有会话；只改 HTTP 或只读默认值不能构成隔离证明。新代使用受限且不继承旧超级用户能力的身份；候选恢复后收敛 PUBLIC CONNECT/CREATE，运行时不能执行 schema 重建。秘密只保存在宿主私有恢复文件和受控 stdin，不进入 journal 或诊断输出。
 
-受管 SSH 使用清单中的固定主机身份、工作目录和服务范围；worker 登记/心跳校验协议、平台版本与升级 generation，登记与心跳另校验独立的当前代秘密（数据库仅保存 hash）；旧节点持有原 node token 并伪报公开的新版本/generation 也不得重新获得当前代执行权。准备/激活/回滚都需要真实身份和状态证据，不能用模型判断、节点名称或进程存活替代。真实多节点成功及旧身份/公开世代伪报拒绝已有证据，完整恢复矩阵仍待验收，见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
+受管 SSH 使用清单中的固定主机身份、工作目录和服务范围；worker 登记/心跳校验协议、平台版本与升级 generation，登记与心跳另校验独立的当前代秘密（数据库仅保存 hash）；旧节点持有原 node token 并伪报公开的新版本/generation 也不得重新获得当前代执行权。准备/激活/回滚都需要真实身份和状态证据，不能用模型判断、节点名称或进程存活替代。真实多节点成功及旧身份/公开世代伪报拒绝已有证据，选定 9 项中断/排空场景已通过，剩余恢复场景及最终组合基线镜像待验收，见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。

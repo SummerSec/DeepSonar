@@ -300,9 +300,9 @@ docker compose -p deepsonar --env-file deploy/.env \
 
 普通 `/platform/claims/pause` 只暂停领取，仍允许入队，不能建立数据库备份的写入隔离边界。维护控制器在预检后排空任务和全部未结算效果，再关闭旧数据库身份，验证备份并恢复/重建独立候选库；源库保持冻结。目标服务/受管节点 preparing 验证后才激活，激活后或结果不明时禁止切回旧库。不要在维护回滚后绕过 `resume-rollback` 直接调用 claims/resume。
 
-旧角色身份需清理时必须明确加 `--reset-role-identity`（PowerShell `-ResetRoleIdentity`），重新取得并批准计划 hash；它仅清角色 CLI 与项目 model，保留全局 model 和历史快照。`--nodes` / `-Nodes` 绑定受管 SSH 节点清单；旧源缺少维护契约时不能安全恢复远程节点。配置预检覆盖声明的 URL/枚举、主密钥文件只读绑定与内容格式、已存凭据的 AES-GCM 认证及 credential-first 默认选择；仍不证明外部认证或模型可用性，详见部署说明。
+旧角色身份需清理时必须明确加 `--reset-role-identity`（PowerShell `-ResetRoleIdentity`），重新取得并批准计划 hash；它仅清角色 CLI 与项目 model，保留全局 model 和历史快照。`--nodes` / `-Nodes` 绑定受管 SSH 节点清单；旧源缺少维护契约时不能安全恢复远程节点。配置预检覆盖声明的 URL/枚举、主密钥文件只读绑定与内容格式、已存凭据的 AES-GCM 认证及 当前持久默认组合的 credential-first 选择；仍不证明外部认证或模型可用性，详见部署说明。
 
-维护模块与入口已实现，真实单机/多节点成功场景已通过，完整故障矩阵仍在验收；不能据历史同 schema 测试或部分场景宣布当前路径全面通过。详细参数、权限、恢复限制和覆盖范围见 [受控升级](../deploy/README.md)；证据与执行命令见 [隔离演练](../deploy/UPGRADE_REHEARSAL.md)。
+维护模块与入口已实现，真实单机/多节点成功场景已通过，选定 9 项中断/排空场景已通过，备份损坏/多节点恢复及最终组合基线镜像待验收；不能据历史同 schema 测试或部分场景宣布当前路径全面通过。详细参数、权限、恢复限制和覆盖范围见 [受控升级](../deploy/README.md)；证据与执行命令见 [隔离演练](../deploy/UPGRADE_REHEARSAL.md)。
 
 官方 runtime image 升版（例如 `0.1.38` → `0.1.39`）并完成 registry sync 后，市场会列出新的 trusted digest。#691 起项目不再钉版本，新建 Job 始终按平台 channel 最新 trusted 解析并冻结 digest；已冻结 Job 快照不改写。
 

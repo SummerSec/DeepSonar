@@ -1063,7 +1063,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：删除或修订契约时必须同步删除旧 schema/API/UI/运行时路径；不得保留双读双写、fallback、shim、legacy mode 或自动旧配置转换。旧输入不满足当前契约时必须 fail closed；不可变历史快照/Evidence/审计记录不作为新运行时兼容输入。
 - **决策来源**：兼容层会让权限、schema 和语义出现双重真相。
-- **实现状态**：部分达标；当前导入 schema mismatch 和不支持 CLI 都 fail closed、历史结果只读保留，升级离线预检复用 credential-first 默认解析并认证已存密文（覆盖边界见 [部署说明](../../deploy/README.md)）；但 runtime registry contract 仍保留 schema v1 兼容解析、旧 `image_ref` 投影和历史 digest alias（D-07），不能把物理清扫前的实现写成全量 as-built。
+- **实现状态**：部分达标；当前导入 schema mismatch 和不支持 CLI 都 fail closed、历史结果只读保留，升级离线预检复用 当前持久默认组合的 credential-first 解析并认证已存密文（覆盖边界见 [部署说明](../../deploy/README.md)）；但 runtime registry contract 仍保留 schema v1 兼容解析、旧 `image_ref` 投影和历史 digest alias（D-07），不能把物理清扫前的实现写成全量 as-built。
 - **代码入口**：[设计不向后兼容](../../DESIGN.md)、[升级配置预检](../../apps/scheduler/src/platform-upgrade-preflight.ts)、[Transfer schema validation](../../apps/scheduler/src/transfer/pack.ts)、[runtime CLI boundary](../../apps/scheduler/src/transfer/sanitize.ts)。
 - **验证证据**：`pnpm ci:unit:platform-upgrade-preflight`、`pnpm ci:unit:deploy-ps1`、`pnpm ci:test:transfer-schema`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:docs-freshness`；人工检查新代码没有兼容 shim。
 
@@ -1071,9 +1071,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：`database/schema.sql` 必须是唯一 schema 基线且与 `SCHEMA_VERSION` 同步；改表必须修改基线、bump 版本并重建/验证，不得添加启动时增量 ALTER 链或按旧版本隐式迁移。
 - **决策来源**：稳定列、外键、唯一约束和权限骨架需要可审计的单一来源。
-- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，完整故障矩阵验收进行中。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
+- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，选定 9 项中断/排空场景已通过，最终组合基线验收待完成。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
 - **代码入口**：[schema version](../../apps/scheduler/src/schema-version.ts)、[schema rebuild](../../apps/scheduler/src/schema-rebuild.ts)、[database baseline](../../database/schema.sql)、[维护升级状态机](../../deploy/platform-upgrade-maintenance.mjs)、[候选库管理](../../deploy/platform-upgrade-candidate.mjs)、[只读计划](../../apps/scheduler/src/platform-upgrade-schema-plan.ts)。
-- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，真实单机及多节点成功场景已通过，完整恢复矩阵仍待验收，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
+- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，真实单机及多节点成功场景已通过，选定 9 项中断/排空场景已通过，剩余恢复场景及最终组合基线镜像待验收，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
 
 ### CON-004 API-only Control 面
 

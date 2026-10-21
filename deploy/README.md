@@ -25,7 +25,7 @@ DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<dig
 
 ## 受控升级与中断恢复（#740）
 
-Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**真实单机/多节点成功场景已通过，完整故障矩阵仍在验收；证据范围见 [隔离演练](UPGRADE_REHEARSAL.md)**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
+Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**真实单机/多节点成功场景已通过，选定 9 项中断/排空场景已通过，备份损坏/多节点恢复及最终组合基线镜像待验收；证据范围见 [隔离演练](UPGRADE_REHEARSAL.md)**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
 
 当前维护控制器需要 Linux `flock` 和文件/目录 `fsync` 能力，在任何数据库动作前检查。操作系统锁由宿主进程的文件描述符持有，进程崩溃后自动释放，不需手删锁文件。Windows 尚缺经过验证的原生锁后端，当前会在执行升级前明确拒绝；Linux 上的 `pwsh` 参数转发测试不能证明 Windows 原生升级可用。
 
@@ -49,7 +49,7 @@ API 默认 `http://127.0.0.1:8080/api/`，保留自定义路径前缀。Shell �
 
 `check` 拉取并核对官方 manifest/digest 后，读取数据库一致性只读配置快照和目标 Compose 环境。离线配置验证通过 stdin 交给无网络、只读且无宿主挂载的目标容器；schema 计划则使用受控 PostgreSQL 连接和只读事务。返回 `plan.plan_hash`、`plan.risks`、`plan.blocking_errors` 及 `plan.preflight` 的覆盖/未检报告。阻断在暂停前处理；普通运维暂停不应被升级覆盖。风险批准必须匹配本次固定目标与结构计划，不能复用其他计划 hash。
 
-离线预检检查 RoleConfig、Settings、Credential 配置结构与引用，以及已声明环境变量的数值、布尔、URL 协议/主机和枚举语义。必需 `DEEPSONAR_MASTER_KEY_FILE` 由宿主提供绑定到目标容器路径的文件元数据：存在、普通文件、可读与只读挂载；缺失/不符阻断。宿主在核验权限、只读绑定与文件身份后有界读取密钥内容，通过 stdin 送入断网目标容器；与运行时共用密钥解析及 AES-GCM 解密，认证全部已存凭据（含 disabled）。文件密钥优先于内联密钥。密钥和密文不进入 argv、日志或预检持久化产物，明文不返回。预检还复用 credential-first resolver，校验项目授权下全局角色/项目默认与 fallback model、CLI 的账号选择；只有数据库版本差异时仍继续这些检查，由独立 schema plan 判断重建。仍**不验证**外部 Provider/服务认证、模型实际可用性、未来 Job 的 provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段与 Skill 源内容。`ok=true` 不是全部配置或外部依赖可用性承诺。
+离线预检检查 RoleConfig、Settings、Credential 配置结构与引用，以及已声明环境变量的数值、布尔、URL 协议/主机和枚举语义。必需 `DEEPSONAR_MASTER_KEY_FILE` 由宿主提供绑定到目标容器路径的文件元数据：存在、普通文件、可读与只读挂载；缺失/不符阻断。宿主在核验权限、只读绑定与文件身份后有界读取密钥内容，通过 stdin 送入断网目标容器；与运行时共用密钥解析及 AES-GCM 解密，认证全部已存凭据（含 disabled）。文件密钥优先于内联密钥。密钥和密文不进入 argv、日志或预检持久化产物，明文不返回。预检还复用 credential-first resolver，校验当前持久默认账号/模型及 fallback 与全局角色显式 model 组合的账号选择；仅 CLI 偏好或无默认模型的项目不被强行要求唯一账号；只有数据库版本差异时仍继续这些检查，由独立 schema plan 判断重建。仍**不验证**外部 Provider/服务认证、模型实际可用性、未来 Job 的 provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段与 Skill 源内容。`ok=true` 不是全部配置或外部依赖可用性承诺。
 
 #758 的旧角色 CLI 来源不明或项目 model 需要单独审核。只有明确选择 Shell `--reset-role-identity` / PowerShell `-ResetRoleIdentity`，并重新 `check`、批准该选项对应的 hash，才能清除所有角色 CLI 偏好和项目级 model；全局 model、其他配置及历史 Job 快照保留。普通维护授权不包含该清除动作。源配置预检只对明确计划中的重置作内存投影；候选完成重建后必须执行未经投影的目标配置验证。没有该选项时默认拒绝旧身份，不通过 force 绕过。
 

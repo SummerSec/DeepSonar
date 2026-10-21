@@ -124,6 +124,10 @@ export async function rehearse(configPath,output) {
       const {rehearseMultinodeRecovery}=await import('./platform-upgrade-maintenance-multinode-recovery.fixture.mjs');
       await rehearseMultinodeRecovery({config,fixture,evidence,marker,actors,approved,execute,assertActive,assertSource,stateOf,secretsOf});
     });
+    await scenario('backup-integrity-rejection',async(fixture,evidence,marker)=>{
+      const {rehearseBackupRejection}=await import('./platform-upgrade-maintenance-backup-rejection.fixture.mjs');
+      await rehearseBackupRejection({config,fixture,evidence,marker,actors,approved,execute,assertSource,stateOf,secretsOf,snapshot});
+    });
     await scenario('success-preparing',async(fixture,evidence,marker)=>{
       const io=actors(config,fixture),hash=await approved(io,config),activate=io.activate;
       io.activate=async state=>{

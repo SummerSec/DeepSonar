@@ -75,20 +75,32 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
 
 `maintenance-remaining/summary.json` 的 `success-preparing` 后续也已通过并清理：第一代激活后，在同一 fixture 以相同镜像 digest、测试版本 `0.0.7` 执行第二代 61 → 61，真实停止 Web 触发回滚，验证安全暂停与显式 `resumeRollback`、持久维护身份、新 rollback role/generation、active 且 claims 恢复、旧源角色仍 NOLOGIN。这证明连续代协议与支持维护契约的源代恢复，不是不同源码版本的连续升级。
 
-这些是明确的场景子集，不代表完整矩阵通过。实际 actor 中断续做及完整恢复矩阵仍在运行；最终合入基线必须重新构建并演练。#756 的临时本地提交 `6f61fff8577c0a0701d93504b97b6096c927d267` 已用实际 #756 提交 `a01eb394` 的 schema 61 执行 custom `pg_dump` → 私有文件 SHA-256/TOC 校验 → template0 候选 `pg_restore`，恢复后 plan hash 与源库一致，再实际重建到 62，知识、receipt、偏好及历史 Job 保留；独立传输测试 1/1、相关回归 13/13 与类型检查通过，数据库/备份已清理。此证据取代早期 TEMPLATE 克隆和手工 CHECK 重解析的传输限制，**不是 Compose 验收，也不是已发布基线**；最终编号以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准。Windows 原生维护升级尚未实现，Linux 上的 PowerShell 函数测试也不证明 Windows 原生升级通过。
+这些是明确的场景子集，不代表完整矩阵通过。本轮选定中断/排空矩阵的后续结果见下方 UTC 快照；最终合入基线仍必须重新构建并演练。#756 的临时本地提交 `6f61fff8577c0a0701d93504b97b6096c927d267` 已用实际 #756 提交 `a01eb394` 的 schema 61 执行 custom `pg_dump` → 私有文件 SHA-256/TOC 校验 → template0 候选 `pg_restore`，恢复后 plan hash 与源库一致，再实际重建到 62，知识、receipt、偏好及历史 Job 保留；独立传输测试 1/1、相关回归 13/13 与类型检查通过，数据库/备份已清理。此证据取代早期 TEMPLATE 克隆和手工 CHECK 重解析的传输限制，**不是 Compose 验收，也不是已发布基线**；最终编号以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准。Windows 原生维护升级尚未实现，Linux 上的 PowerShell 函数测试也不证明 Windows 原生升级通过。
 
-新增密钥内容/密文认证和 credential-first 解析属于后续源码增强；上述旧镜像 Compose 结果不覆盖这些检查。对应源码测试和最终重建镜像的验收须单独记录，不能由既有成功场景推定通过。
+新增密钥内容/密文认证和 credential-first 解析属于后续源码增强；上述旧镜像 Compose 结果不覆盖这些检查。对应新镜像预检证据见下方 UTC 快照，不能由既有旧镜像成功场景推定通过。
+
+## 验收快照：截至 2026-10-21 05:19:07 UTC
+
+本轮 `maintenance-final-boundaries/summary.json` 记录选定 **9/9 passed、0 failed，全部 cleanedUp=true**，结束时间 `2026-10-21T05:19:07.774Z`。与上述 `8e12c588` 历史成功/多节点证据分开：宿主提交为 `772d907564d68a64979cfe06c3361524544b1fd6`，目标镜像由 `59d256c689b14bc7d636043a3bea134f3e07a27b` 编译，两提交仅相差三个测试夹具/入口文件，生产代码等价。`maintenance-build/final-boundaries-provenance.json` 记录宿主文件 hash；`maintenance-build/final-image-provenance.json` 核对实际镜像内 13 个关键文件与编译工作区 hash 全部一致。
+
+目标 Scheduler digest 为 `sha256:fcdf646bfe3ee4a7fb9e3114ffa06a73a408a1f494e8d6d8f62878a9a8aa7f17`，Web 为 `sha256:408a1d097e21b541077002f25f7565acb2a2ac601fcbec4f8c99a8753f9fde49`，ImageAdmission 为 `sha256:df421a26bfa9deb698d7a2258cdc2b16172654632b8d0d0a39ac43b4878db4e4`；全部为隔离 loopback registry 的 amd64 测试产物镜像。真实旧基线仍为 59，目标为当前集成 61，不是最终含 #756 的 62 镜像验收。
+
+六个真实 SIGKILL 场景为 `crash-fence`、`crash-backup`、`crash-candidate`、`crash-rebuild`、`crash-configurepreparing`、`crash-activate`：在实际 actor 边界中断后，使用原目标和 generation 续做并核验激活。三个排空场景为 `drain-job`、`drain-effect`、`drain-scan`：先确认阻断在身份隔离之前、旧服务和状态保持，再显式结算阻断项后续做激活。等待期间允许正常结算，因此不承诺所有数据库行 hash 不变。actor 日志中的 `rollbackPreparing` 名称在排空分支返回 `awaiting_drain` 回执，不代表已执行数据库回滚。
+
+同一目标镜像的实际 dist 离线预检 **8/8** 通过，报告 `final-image-offline-preflight.json`：合法输入、错误密钥、错误 auth tag、非法 nonce、默认 CLI 不匹配、文件密钥优先、非法文件内容、跨 schema 错误密钥；均在断网/只读根文件系统运行且无秘密输出。该证据覆盖新增密钥/密文认证及持久默认组合解析，仍不证明上游认证或模型可用性。宿主提交对应 [CI](https://github.com/SummerSec/DeepSonar/actions/runs/39545204186) 与 [另一工作流](https://github.com/SummerSec/DeepSonar/actions/runs/39545204193) 合计 8/8 job 成功，无失败、取消、跳过或等待。
+
+这是上述 UTC 时刻的证据快照，不是全部场景通过：`backup-integrity-rejection` 与 `multinode-recovery` 将单独运行，未计入这 9 项。最终 #756 合入后的唯一 schema 62 组合镜像尚待验收；Windows 原生维护后端、P2 签名/无人值守仍未完成，P3 Web 发起为可选。没有执行真实部署、公共镜像发布或 Release。
 
 ## #740 当前验收边界
 
 | 原 issue 要求 | 当前实现与证据边界 |
 | --- | --- |
 | 同 schema 单控制面升级与回滚 | 历史入口及历史容器证据已存在；不能覆盖新维护路径。 |
-| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；真实 59 → 61 单机/多节点成功场景已通过；最终基线镜像与完整故障矩阵仍待验收。 |
+| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；真实 59 → 61 单机/多节点成功场景已通过；选定 9 项中断/排空场景已通过；最终 schema 62 组合镜像与剩余备份/多节点恢复场景待验收。 |
 | 配置 preflight | 校验声明字段、引用、URL/枚举、主密钥文件身份与格式、全部已存凭据 AES-GCM 认证及 credential-first 默认选择；不认证外部服务或证明模型可用性，详见 [部署说明](README.md)。 |
 | 显式角色身份重置 | #758 已接 reset flag 与审批 hash；仅清角色 CLI / 项目 model，历史快照与全局 model 保留；没有明确选择时拒绝。 |
 | 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；真实升级与旧身份拒绝已通过；完整远程恢复矩阵仍待验收，旧源缺维护契约时不能恢复远程节点。 |
-| 中断后同目标续做 | journal 固定目标与实际回执驱动；已实现，仍需最终实际 actor SIGKILL 矩阵证据。 |
+| 中断后同目标续做 | journal 固定目标与实际回执驱动；已实现，本轮 6 个真实 actor SIGKILL 场景已通过；范围与目标基线见下方快照。 |
 | 失败恢复与激活边界 | [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md) 保留冻结源库，激活前可回源保持暂停；激活后/结果不明不切旧库，不能抹掉已接受写入。 |
 | Release 实际发布、P2/P3 | 发布生成/inspect 门禁不等于已发布；P2 签名/无人值守未完成，P3 Web 发起为可选且未实现，不能未经授权触发发布补证据。 |
 
