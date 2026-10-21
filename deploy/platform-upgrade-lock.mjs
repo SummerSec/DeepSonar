@@ -7,6 +7,10 @@ import {spawnSync} from 'node:child_process';
 // remains its sole owner; close(), process exit and SIGKILL all release the lock.
 // Never unlink the file: another opener could otherwise lock a different inode.
 export async function withUpgradeLock(file, action) {
+  if (process.platform === 'win32') {
+    const {withWindowsUpgradeLock} = await import('./platform-upgrade-windows.mjs');
+    return withWindowsUpgradeLock(resolve(file), action);
+  }
   if (process.platform !== 'linux') {
     throw new Error('automatic upgrade locking requires Linux flock; this platform has no supported crash-safe lock backend');
   }

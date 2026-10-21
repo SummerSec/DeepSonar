@@ -1049,6 +1049,14 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[platform-updates discovery](../../apps/scheduler/src/domains/platform-updates/discovery.ts)、[model/store/routes](../../apps/scheduler/src/domains/platform-updates/)、[runtime registry contract](../../apps/scheduler/src/runtime-image-registry-contract.ts)、[OpenAPI](../../apps/scheduler/src/openapi.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:control-plane-platforms`、`pnpm ci:unit:runtime-registry`、`pnpm ci:unit:authz`；人工核对 registry 缺失、版本相同、可用更新和 check_error 四种投影。
 
+### IR-012 宿主补丁自动升级与签名授权
+
+- **规范要求**：无人值守升级默认关闭，只有明确启用的宿主策略及维护窗口允许新一代操作；目标须为同 major/minor 的向前稳定补丁、相同 schema 与 DDL 指纹，完整预检无阻断、计划无风险。三个平台镜像的签名须绑定官方 Release workflow、tag、commit、版本、schema 和完整目标集合；失败不得降级为无签名执行。
+- **决策来源**：#740 P2；用户授权产品实现及隔离测试，没有授权开启真实定时任务、生产签名权限或真实升级。
+- **实现状态**：策略、签名验证和既有维护状态机接线正在验收；生产 keyless 发布签名及宿主调度默认未启用。签名信任根和验证器由宿主显式钉死，不从待验证清单取信任设置。
+- **代码入口**：[自动策略](../../deploy/platform-upgrade-auto-policy.mjs)、[自动状态机](../../deploy/platform-upgrade-auto.mjs)、[宿主接线](../../deploy/platform-upgrade-auto-host.mjs)、[签名验证](../../deploy/platform-upgrade-signature.mjs)、[签名运维](../../deploy/UPGRADE_AUTOMATION.md)。
+- **验证证据**：`pnpm ci:unit:platform-upgrade-maintenance`；临时密钥验签与生产 Fulcio/Rekor 身份验收分别记录，不能互相替代。同目标恢复依赖持久授权和实际激活回执；回滚及结果不明不自动开启新一代。
+
 ## 5. 设计约束
 
 ### CON-001 四层真相和唯一副作用执行者

@@ -25,9 +25,11 @@ DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<dig
 
 ## 受控升级与中断恢复（#740）
 
-Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**真实单机/多节点成功场景已通过，选定 9 项中断/排空场景已通过，备份损坏/多节点恢复及最终组合基线镜像待验收；证据范围见 [隔离演练](UPGRADE_REHEARSAL.md)**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
+Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**真实单机/多节点成功场景已通过，选定 11 项中断、排空、备份损坏与多节点恢复场景已通过，最终组合基线镜像待验收；证据范围见 [隔离演练](UPGRADE_REHEARSAL.md)**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
 
-当前维护控制器需要 Linux `flock` 和文件/目录 `fsync` 能力，在任何数据库动作前检查。操作系统锁由宿主进程的文件描述符持有，进程崩溃后自动释放，不需手删锁文件。Windows 尚缺经过验证的原生锁后端，当前会在执行升级前明确拒绝；Linux 上的 `pwsh` 参数转发测试不能证明 Windows 原生升级可用。
+Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地 NTFS 的独占内核句柄、受保护私有 DACL、write-through 替换及 flush。锁由宿主进程持有，写文件的子进程借用同一锁直到 I/O 结束，避免宿主崩溃后孤儿写入与下一代交错；不需手删锁文件。Windows 拒绝网络盘、非 NTFS 与 reparse 路径。原生 Windows CI 单独验证锁竞争、进程终止、ACL 与文件替换；Linux PowerShell 测试不代替原生证据，也不证明真实 Windows Docker 部署或断电恢复验收。
+
+默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 
 ```bash
 ./deploy/deploy.sh upgrade check --to vX.Y.Z
@@ -62,7 +64,7 @@ API 默认 `http://127.0.0.1:8080/api/`，保留自定义路径前缀。Shell �
 
 `.upgrade/` 保存私有逐步记录、身份文件和备份，已排除 Git；恢复绑定 Compose 内容、PostgreSQL 存储、Docker 目标、节点清单、目标 digest、计划和 generation。中断后同目标 `apply` 根据实际回执续做，不能移植 journal 到另一部署。硬中断遗留锁时先确认无活跃升级进程，再处理 `.upgrade/lock`。回滚后通过 `resume-rollback` 明确激活源代的新受限身份；已激活后的响应丢失只能续验当前源代，不能再次恢复旧数据。
 
-受管多节点使用 Shell `--nodes /path/to/nodes.json` / PowerShell `-Nodes`；check、apply 和后续恢复须提供同一份绑定清单。清单须准确列出全部登记 remote worker，并显式指定受管 control 节点、SSH 主机、规范目录、Compose 项目和文件；SSH 固定主机身份，缺节点或版本/generation 不符阻断。升级与恢复均先准备/核验全部节点，再激活。旧源版本没有维护状态契约且含受管节点时，`resume-rollback` 仍保持隔离并拒绝放行；支持维护契约的源代已有多节点恢复接线，但真实 SSH 闭环尚待最终验收。
+受管多节点使用 Shell `--nodes /path/to/nodes.json` / PowerShell `-Nodes`；check、apply 和后续恢复须提供同一份绑定清单。清单须准确列出全部登记 remote worker，并显式指定受管 control 节点、SSH 主机、规范目录、Compose 项目和文件；SSH 固定主机身份，缺节点或版本/generation 不符阻断。升级与恢复均先准备/核验全部节点，再激活。旧源版本没有维护状态契约且含受管节点时，`resume-rollback` 仍保持隔离并拒绝放行；支持维护契约的源代已有多节点恢复接线，实际 SSH 连续代故障恢复已通过隔离验收。
 
 历史同 schema 演练不能覆盖本维护路径。新命令、证据要求和剩余项见 [升级演练](UPGRADE_REHEARSAL.md) 与 [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md)。
 

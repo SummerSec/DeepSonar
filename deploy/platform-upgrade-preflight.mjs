@@ -66,6 +66,14 @@ export async function collectPreflightHostFiles(compose, {directory = process.cw
     evidence.read_only = true;
   }
   try {
+    if (process.platform === 'win32') {
+      if (!evidence.read_only) return [evidence];
+      const {probeWindowsMasterKey} = await import('./platform-upgrade-preflight-windows.mjs');
+      const result = await probeWindowsMasterKey({file: path.resolve(source, relative), image: decode(service.image), user: String(service.user ?? '0:0')});
+      Object.assign(evidence, {exists: true, regular_file: true, readable: true, mode: result.mode, permission_model: 'windows_acl', private_acl: true});
+      readKey?.(result.content);
+      return [evidence];
+    }
     // Docker resolves the bind source itself; links below its root are interpreted
     // in the container namespace and cannot be proven by host realpath.
     let canonical = await realpath(source);

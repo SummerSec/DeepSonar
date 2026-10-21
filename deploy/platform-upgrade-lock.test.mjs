@@ -9,6 +9,7 @@ import {withUpgradeLock} from './platform-upgrade-lock.mjs';
 
 const moduleUrl = new URL('./platform-upgrade-lock.mjs', import.meta.url).href;
 const linux = {skip: process.platform !== 'linux', timeout: 15000};
+const supported = {skip: !['linux', 'win32'].includes(process.platform), timeout: 120000};
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'upgrade-lock-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
@@ -36,7 +37,7 @@ async function contender(file) {
   `, file], {stdio: 'ignore'});
   return (await once(child, 'exit'))[0];
 }
-test('flock child exits but parent fd retains cross-process exclusion', linux, async t => {
+test('native helper exits but parent handle retains cross-process exclusion', supported, async t => {
   const file = await fixture(t), child = owner(file);
   t.after(() => child.kill('SIGKILL'));
   await ready(child);
@@ -47,7 +48,7 @@ test('flock child exits but parent fd retains cross-process exclusion', linux, a
   assert.equal(await contender(file), 0);
   assert.equal((await stat(file)).isFile(), true);
 });
-test('SIGKILL releases kernel lock without deleting stale file', linux, async t => {
+test('SIGKILL releases kernel lock without deleting stale file', supported, async t => {
   const file = await fixture(t), child = owner(file);
   t.after(() => child.kill('SIGKILL'));
   await ready(child);
@@ -56,7 +57,7 @@ test('SIGKILL releases kernel lock without deleting stale file', linux, async t 
   assert.equal((await exited)[1], 'SIGKILL');
   assert.equal(await contender(file), 0);
 });
-test('callback failure releases lock and same-process parallel call is excluded', linux, async t => {
+test('callback failure releases lock and same-process parallel call is excluded', supported, async t => {
   const file = await fixture(t);
   await assert.rejects(withUpgradeLock(file, async () => {
     await assert.rejects(withUpgradeLock(file, async () => assert.fail('must not run')), /another upgrade/);

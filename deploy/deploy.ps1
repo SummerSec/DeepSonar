@@ -8,7 +8,7 @@ param(
   [string]$Action = "up",
 
   [Parameter(Position = 1)]
-  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback", "resume-rollback")]
+  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback", "resume-rollback", "auto", "auto-template")]
   [string]$Mode = "real",
 
   [Parameter(Position = 2)]
@@ -22,6 +22,9 @@ param(
   [string]$WebUrl,
   [string]$ApprovePlanHash,
   [string]$Nodes,
+  [string]$Policy,
+  [string]$Scheduler,
+  [string]$NodePath,
   [switch]$ResetRoleIdentity,
 
   [switch]$NoBuild
@@ -29,7 +32,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ($Action -eq "upgrade") {
-  if ($Mode -notin @("check", "apply", "rollback", "resume-rollback")) { throw "upgrade requires check, apply, rollback or resume-rollback" }
+  if ($Mode -notin @("check", "apply", "rollback", "resume-rollback", "auto", "auto-template")) { throw "upgrade requires check, apply, rollback, resume-rollback or auto" }
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "upgrade requires Node.js >=22" }
   $upgradeArgs = @((Join-Path $PSScriptRoot "platform-upgrade-host.mjs"), $Mode)
   if ($UpgradeVersion) { $upgradeArgs += @("--to", $UpgradeVersion) }
@@ -37,6 +40,9 @@ if ($Action -eq "upgrade") {
   if ($WebUrl) { $upgradeArgs += @("--web-url", $WebUrl) }
   if ($ApprovePlanHash) { $upgradeArgs += @("--approve-plan-hash", $ApprovePlanHash) }
   if ($Nodes) { $upgradeArgs += @("--nodes", $Nodes) }
+  if ($Policy) { $upgradeArgs += @("--policy", $Policy) }
+  if ($Scheduler) { $upgradeArgs += @("--scheduler", $Scheduler) }
+  if ($NodePath) { $upgradeArgs += @("--node-path", $NodePath) }
   if ($ResetRoleIdentity) { $upgradeArgs += "--reset-role-identity" }
   & node @upgradeArgs
   exit $LASTEXITCODE

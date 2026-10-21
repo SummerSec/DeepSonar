@@ -1,31 +1,5 @@
-import {open, rename, mkdir, chmod, readFile, lstat} from 'node:fs/promises';
-import {dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
-
-export async function assertDirectoryDurability(path) {
-  let handle;
-  try {handle = await open(path, 'r'); await handle.sync();}
-  catch {throw new Error('HOST_DIRECTORY_DURABILITY_UNSUPPORTED: directory fsync is required before maintenance');}
-  finally {await handle?.close();}
-}
-
-export async function durablePrivateWrite(path, contents) {
-  await mkdir(dirname(path), {recursive: true, mode: 0o700});
-  const temporary = `${path}.${process.pid}.tmp`;
-  const file = await open(temporary, 'wx', 0o600);
-  try { await file.writeFile(contents); await file.sync(); } finally { await file.close(); }
-  await rename(temporary, path);
-  await chmod(path, 0o600);
-  const directory = await open(dirname(path), 'r');
-  try { await directory.sync(); } finally { await directory.close(); }
-}
-export async function readPrivateJson(path) {
-  try {
-    const info = await lstat(path);
-    if (!info.isFile() || (info.mode & 0o077) !== 0) throw new Error('private recovery file has unsafe permissions');
-    return JSON.parse(await readFile(path, 'utf8'));
-  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
+export {assertDirectoryDurability, durablePrivateWrite, readPrivateJson} from './platform-upgrade-filesystem.mjs';
 // Constant program; all connection credentials and SQL arrive on stdin. Never
 // interpolate them in command arguments or surface PostgreSQL diagnostics.
 export const SQL_PROGRAM = `const postgres=require('/app/apps/scheduler/node_modules/postgres');

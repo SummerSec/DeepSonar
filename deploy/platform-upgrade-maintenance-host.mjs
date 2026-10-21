@@ -1,4 +1,5 @@
-import {readFile, mkdir, chmod, rename, open} from 'node:fs/promises';
+import {readFile, mkdir, chmod} from 'node:fs/promises';
+import {durableRename} from './platform-upgrade-filesystem.mjs';
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash, randomBytes} from 'node:crypto';
@@ -327,8 +328,7 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
       if (state.status === 'complete') await adapter.verifyActive(state);
       else if (state.status === 'rollback_resumed') await adapter.resumeRollback(state);
       else throw new Error('unfinished maintenance generation cannot be archived');
-      await rename(resolve(recovery, 'maintenance.json'), resolve(recovery, `maintenance-${state.generation}.completed.json`));
-      const directory = await open(recovery, 'r'); try {await directory.sync();} finally {await directory.close();}
+      await durableRename(resolve(recovery, 'maintenance.json'), resolve(recovery, `maintenance-${state.generation}.completed.json`));
     },
     async resumeRollback(state) {
       const saved = await secrets(state), nodes = await nodesFor(state);
@@ -438,6 +438,10 @@ ${maintenance ? ",p.phase,p.generation,p.runtime_role,p.target_version FROM plat
   return adapter;
 }
 export async function runHostMaintenance(action, options = {}) {
+  if (action === 'auto') {
+    const {runHostAutomatic} = await import('./platform-upgrade-auto-host.mjs');
+    return runHostAutomatic(options);
+  }
   const io = maintenanceHostAdapter(options);
   return io.lock(async () => {
     if (action === 'resume-rollback') {

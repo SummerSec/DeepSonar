@@ -229,17 +229,23 @@ export function hostAdapter(options = {}) {
   return adapter;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Do not await the dynamic maintenance import at module top level: maintenance
+// imports this module's adapter, so top-level await would deadlock the CLI cycle.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) void (async () => {
   const [action, ...args] = process.argv.slice(2), options = {};
   for (let i = 0; i < args.length; i += 2) {
     if (args[i] === '--reset-role-identity') {options.resetRoleIdentity = true; i -= 1; continue;}
-    const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes' }[args[i]];
-    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback [--to vX.Y.Z] [--api URL] [--web-url URL] [--compose-file FILE ...]');
+    const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes', '--policy': 'policy', '--scheduler': 'scheduler', '--node-path': 'nodePath' }[args[i]];
+    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...]');
     if (key === 'composeFiles') (options[key] ??= []).push(args[i + 1]); else options[key] = args[i + 1];
   }
   try {
+    if (action === 'auto-template') {
+      const {generateAutomaticTask} = await import('./platform-upgrade-auto-template.mjs');
+      console.log(JSON.stringify(generateAutomaticTask(options), null, 2));return;
+    }
     const {runHostMaintenance} = await import('./platform-upgrade-maintenance-host.mjs');
     console.log(JSON.stringify(await runHostMaintenance(action, options), null, 2));
   }
   catch (error) { if (error.preflight) console.error(JSON.stringify(error.preflight, null, 2)); console.error(`[upgrade] ${error.message}; interrupted upgrades retain pause and recovery state in deploy/.upgrade`); process.exitCode = 1; }
-}
+})();
