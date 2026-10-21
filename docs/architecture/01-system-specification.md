@@ -1071,9 +1071,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：`database/schema.sql` 必须是唯一 schema 基线且与 `SCHEMA_VERSION` 同步；改表必须修改基线、bump 版本并重建/验证，不得添加启动时增量 ALTER 链或按旧版本隐式迁移。
 - **决策来源**：稳定列、外键、唯一约束和权限骨架需要可审计的单一来源。
-- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，生产接线及真实双版本/多节点验收进行中。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
+- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，完整故障矩阵验收进行中。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
 - **代码入口**：[schema version](../../apps/scheduler/src/schema-version.ts)、[schema rebuild](../../apps/scheduler/src/schema-rebuild.ts)、[database baseline](../../database/schema.sql)、[维护升级状态机](../../deploy/platform-upgrade-maintenance.mjs)、[候选库管理](../../deploy/platform-upgrade-candidate.mjs)、[只读计划](../../apps/scheduler/src/platform-upgrade-schema-plan.ts)。
-- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，真实双版本 Compose/多节点/显式恢复领取仍待最终验收。
+- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，真实单机及多节点成功场景已通过，完整恢复矩阵仍待验收，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
 
 ### CON-004 API-only Control 面
 

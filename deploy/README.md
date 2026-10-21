@@ -25,7 +25,7 @@ DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/deepsonar-image-admission@sha256:<dig
 
 ## 受控升级与中断恢复（#740）
 
-Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**最终真实双版本/多节点端到端演练仍在进行，不能将入口存在当作验收通过**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
+Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-host.mjs`，宿主需 Node.js >=22、Docker Compose/buildx，以及进程环境中的 `DEEPSONAR_ADMIN_TOKEN`。目标必须是官方清单的不可变平台镜像和向前的稳定版本。维护路径已接入数据库身份隔离、候选库 schema 重建、同目标续做和受管 SSH 节点；**真实单机/多节点成功场景已通过，完整故障矩阵仍在验收；证据范围见 [隔离演练](UPGRADE_REHEARSAL.md)**。默认使用 prod + real + OpenSandbox overlay；其他布局由 Node CLI 重复 `--compose-file` 明确绑定。
 
 当前维护控制器需要 Linux `flock` 和文件/目录 `fsync` 能力，在任何数据库动作前检查。操作系统锁由宿主进程的文件描述符持有，进程崩溃后自动释放，不需手删锁文件。Windows 尚缺经过验证的原生锁后端，当前会在执行升级前明确拒绝；Linux 上的 `pwsh` 参数转发测试不能证明 Windows 原生升级可用。
 

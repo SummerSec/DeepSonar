@@ -5,7 +5,7 @@
 
 演练使用真实 PostgreSQL、Scheduler、Web 和 ImageAdmission 容器，以及两个源码提交构建的不同不可变镜像。Scheduler 使用 `AGENT_MODE=fake`、文件 blob 存储；不连接模型、OpenSandbox 或真实部署。它验证宿主升级状态机与实际 Compose/数据库/API 的组合，不代替真实沙箱、多架构生产部署或 Release 发布验收。
 
-P1 的跨 schema 重建、同目标中断续做、多节点编排与版本隔离仍是必须补齐的验收项；P2 才是签名和无人值守补丁更新，P3 Web 发起为可选。
+P1 的跨 schema 重建、同目标中断续做、多节点编排与版本隔离已接线；已执行场景与剩余故障矩阵分别记录如下；P2 才是签名和无人值守补丁更新，P3 Web 发起为可选。
 
 ## 镜像准备
 
@@ -63,19 +63,27 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
 
 脚本使用随机 `pr747-maint-*` 隔离项目与卷，生成私有证据，结束时只清理本项目。它只消费准备好的镜像，不构建/推送公共版本。可选 `scenarios` 是明确的场景子集；未选场景记录 `not_run`，不能将子集称为完整通过。生产 Dockerfile 与离线产物打包的区别仍须记录。
 
-当前脚本包含只读 plan/审批、preparing HTTP 拒绝与后台停写、旧角色持有会话清退、成功激活、Scheduler/Web 故障后回滚及显式恢复、backup/candidate/rebuild/configurePreparing/activate 后真实 SIGKILL 续做，以及 Job/effect/scan 排空阻断。结果以本次输出 `summary.json` 和各场景证据为准；本段不声明这些场景已经跑完。受管 SSH 多节点、连续升级以及源代版本不同的恢复仍需对应真实环境证据，不能由本地场景或 mock 替代。
+当前脚本包含只读 plan/审批、preparing HTTP 拒绝与后台停写、旧角色持有会话清退、成功激活、Scheduler/Web 故障后回滚及显式恢复、backup/candidate/rebuild/configurePreparing/activate 后真实 SIGKILL 续做，以及 Job/effect/scan 排空阻断。结果以本次输出 `summary.json` 和各场景证据为准；本段不声明这些场景已经跑完。受管 SSH 多节点成功场景已有下述证据；连续升级以及源代版本不同的恢复仍需对应真实环境证据，不能由本地场景或 mock 替代。
 
 单元及独立数据库门禁已接 `pnpm ci:unit:platform-upgrade-maintenance`、`pnpm ci:unit:platform-upgrade-preflight`、`pnpm ci:integration:platform-upgrade`；这不意味着上述 Compose 演练默认在 CI 运行。每次修改代码/镜像后，重新记录该最终提交的已通过、失败、未运行和清理状态。
+
+## 已执行维护路径证据（2026-10-21）
+
+隔离测试的真实旧基线 59 → 集成基线 61 已完成单机 `success-preparing` 与受管 SSH `multinode-success`，两者均 `passed` 且 `cleanedUp: true`。运行报告分别为 `maintenance-canonical/summary.json` 与 `maintenance-remaining/summary.json`（本次本地证据目录 `/workspace/740-artifacts`）。单机确认 preparing HTTP 503 后激活；多节点运行使用源码 `8e12c588` 的测试入口，经过真实 loopback SSH 操作独立 control/worker Compose 项目，核验控制面 preparing/ready、数据库 schema/generation/phase、worker 当前代准入，以及旧 generation 和持原 node token 伪报公开新 generation 的领取拒绝。多节点的 OpenSandbox 仅为最小健康服务，未执行真实沙箱 Job。
+
+多节点旧测试镜像没有内置 worker 脚本，因此配置显式使用 `oldWorkerSourceRevision=a7f7e1eab27103037814a2742bba2cd108d2593f`，提取该历史脚本并记录 SHA-256 `f429c80fec450f313b3f9081284eed70b3b94935d2bc96910b5f91161b56a5e6`；没有用当前脚本冒充旧 worker。旧来源和新镜像 digest 由运行配置及私有证据保存。早期多节点运行在激活后因夹具误读 active health 的 generation 字段失败；修正为数据库核验后，上述独立重跑通过，不能把早期失败报告改记通过。
+
+这些是明确的场景子集，不代表完整矩阵通过。连续升级、实际 actor 中断续做及恢复领取矩阵仍在运行；最终合入基线必须重新构建并演练。#756 的临时本地提交 `ac26e328` 已完成实际 61 → 62 SQL 重建及 gate 验证（13 项测试与类型检查），**不是 Compose 验收，也不是已发布基线**；最终编号以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准。Windows 原生维护升级尚未实现，Linux 上的 PowerShell 函数测试也不证明 Windows 原生升级通过。
 
 ## #740 当前验收边界
 
 | 原 issue 要求 | 当前实现与证据边界 |
 | --- | --- |
 | 同 schema 单控制面升级与回滚 | 历史入口及历史容器证据已存在；不能覆盖新维护路径。 |
-| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；真实最终双版本演练进行中。 |
+| 含 schema 重建的升级 | 只读计划、显式风险审批、身份隔离、验证备份、候选重建与源库保全已接线；真实 59 → 61 单机/多节点成功场景已通过；最终基线镜像与完整故障矩阵仍待验收。 |
 | 配置 preflight | 校验声明字段的结构、引用、URL/枚举及必需主密钥只读文件元数据；不解密、不认证外部服务，详见 [部署说明](README.md)。 |
 | 显式角色身份重置 | #758 已接 reset flag 与审批 hash；仅清角色 CLI / 项目 model，历史快照与全局 model 保留；没有明确选择时拒绝。 |
-| 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；真实多节点验收未完成，旧源缺维护契约时不能恢复远程节点。 |
+| 多节点升级与旧节点隔离 | 已有受管 SSH 编排、版本/generation 准入和维护源代回滚恢复；真实升级与旧身份拒绝已通过；完整远程恢复矩阵仍待验收，旧源缺维护契约时不能恢复远程节点。 |
 | 中断后同目标续做 | journal 固定目标与实际回执驱动；已实现，仍需最终实际 actor SIGKILL 矩阵证据。 |
 | 失败恢复与激活边界 | [ADR 0008](../docs/architecture/adr/0008-maintenance-candidate-upgrade.md) 保留冻结源库，激活前可回源保持暂停；激活后/结果不明不切旧库，不能抹掉已接受写入。 |
 | Release 实际发布、P2/P3 | 发布生成/inspect 门禁不等于已发布；签名/无人值守与 Web 发起未完成，不能未经授权触发发布补证据。 |

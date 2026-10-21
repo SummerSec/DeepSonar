@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **平台升级核查（2026-10-21，#740 / #747）**：官方 digest 清单、严格 dotenv 校验和终态 Attempt 效果排空已接通；维护升级新增数据库身份隔离、源库保全、候选库重建与同目标续做模块。宿主入口、受管 SSH 节点和显式回滚恢复正在整合，最终真实端到端验证未完成。配置 preflight 有明确不检查项，P2/P3 未完成。决策见 [ADR 0008](architecture/adr/0008-maintenance-candidate-upgrade.md)，验收边界见 [风险记录](architecture/12-risks-and-tech-debt.md)。
+> **平台升级核查（2026-10-21，#740 / #747）**：官方 digest 清单、严格 dotenv 校验和终态 Attempt 效果排空已接通；维护升级新增数据库身份隔离、源库保全、候选库重建与同目标续做模块。宿主入口、受管 SSH 节点和显式回滚恢复已接线，真实单机/多节点成功场景已通过；完整故障矩阵仍在验收，见 [升级演练](../deploy/UPGRADE_REHEARSAL.md)。配置 preflight 有明确不检查项，P2/P3 未完成。决策见 [ADR 0008](architecture/adr/0008-maintenance-candidate-upgrade.md)，验收边界见 [风险记录](architecture/12-risks-and-tech-debt.md)。
 
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) §8.2。
 
