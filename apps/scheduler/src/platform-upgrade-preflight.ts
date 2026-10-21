@@ -18,7 +18,7 @@ const Snapshot = z.object({
   schema: z.literal(PREFLIGHT_SCHEMA), database_schema_version: z.number().int(), target_schema_version: z.number().int(),
   environment: z.record(z.string(), z.string()),
   master_key_file_content: z.string().max(4096).optional(),
-  host_files: z.array(z.object({ key: z.string(), path: z.string(), exists: z.boolean(), regular_file: z.boolean(), readable: z.boolean(), read_only: z.boolean(), mode: z.number().int().min(0).max(4095) }).strict()).max(100).optional(),
+  host_files: z.array(z.object({ key: z.string(), path: z.string(), exists: z.boolean(), regular_file: z.boolean(), readable: z.boolean(), read_only: z.boolean(), mode: z.number().int().min(0).max(4095), permission_model: z.literal("windows_acl").optional(), private_acl: z.boolean().optional() }).strict()).max(100).optional(),
   ...Object.fromEntries(PREFLIGHT_TABLES.map((table) => [table, z.array(Row)])),
 }).strict();
 const ProjectConfig = SettingsPatchBody.extend({ skill_source_allowlist_configured: z.boolean().optional() }).strict();

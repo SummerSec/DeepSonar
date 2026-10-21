@@ -254,6 +254,12 @@ test("required mounted master key needs matching read-only readable regular-file
     snapshot.host_files = [{...evidence, ...change}];
     assert.ok(codes(snapshot).includes("REQUIRED_HOST_FILE_UNVERIFIED"));
   }
+  snapshot.host_files = [{...evidence, mode: 0o777, permission_model: "windows_acl", private_acl: true}];
+  assert.deepEqual(codes(snapshot), []);
+  for (const change of [{private_acl: false}, {private_acl: undefined}, {readable: false}, {read_only: false}]) {
+    snapshot.host_files = [{...evidence, mode: 0o777, permission_model: "windows_acl", private_acl: true, ...change}];
+    assert.ok(codes(snapshot).includes("REQUIRED_HOST_FILE_UNVERIFIED"));
+  }
 });
 
 test("provider extensions are preserved while known malformed native fields fail", () => {

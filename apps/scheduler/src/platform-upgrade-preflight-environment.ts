@@ -2,7 +2,7 @@ import { parseOciDigestRef } from "./runtime-image-registry-contract.js";
 import {parseCredentialMasterKey} from "./credential-crypto.js";
 import type { PreflightSnapshot } from "./platform-upgrade-preflight-contract.js";
 
-export type HostFileEvidence = { key: string; path: string; exists: boolean; regular_file: boolean; readable: boolean; read_only: boolean; mode: number };
+export type HostFileEvidence = { key: string; path: string; exists: boolean; regular_file: boolean; readable: boolean; read_only: boolean; mode: number; permission_model?: "windows_acl"; private_acl?: boolean };
 const URL_KEYS = ["DATABASE_URL", "DEEPSONAR_GATEWAY_SANDBOX_URL", "DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL", "DEEPSONAR_API_SANDBOX_URL", "DEEPSONAR_DEVICE_BROKER_URL", "BLOB_S3_ENDPOINT"];
 export function validConfigurationUrl(value: unknown, protocols = ["http:", "https:"]): boolean {
   if (typeof value !== "string" || value !== value.trim() || /[\s\x00-\x1f]/.test(value)) return false;
@@ -34,7 +34,8 @@ export function validatePreflightEnvironment(snapshot: PreflightSnapshot, block:
   const file = env.DEEPSONAR_MASTER_KEY_FILE;
   if (file) {
     const evidence = (snapshot.host_files ?? []).filter(item => item.key === "DEEPSONAR_MASTER_KEY_FILE" && item.path === file);
-    if (evidence.length !== 1 || !evidence[0].exists || !evidence[0].regular_file || !evidence[0].readable || !evidence[0].read_only || (evidence[0].mode & 0o022)) {
+    if (evidence.length !== 1 || !evidence[0].exists || !evidence[0].regular_file || !evidence[0].readable || !evidence[0].read_only
+        || (evidence[0].permission_model === "windows_acl" ? evidence[0].private_acl !== true : (evidence[0].mode & 0o022))) {
       block("REQUIRED_HOST_FILE_UNVERIFIED", "environment.DEEPSONAR_MASTER_KEY_FILE");
     }
   } else if (env.DEEPSONAR_MASTER_KEY) {
