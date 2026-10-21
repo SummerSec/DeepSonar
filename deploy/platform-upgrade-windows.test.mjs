@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
@@ -46,6 +46,23 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
   const directory=await mkdtemp(join(tmpdir(),'upgrade-windows-borrow-')),file=join(directory,'lock');
   const windowsUrl=new URL('./platform-upgrade-windows.mjs',import.meta.url).href;
   const library=new URL('./platform-upgrade-windows.cs',import.meta.url);
+  const helperScript=join(directory,'borrow-helper.ps1');
+  // Match the production bridge's -File entry point. A detached Windows
+  // PowerShell -Command child exited 0 without running its command in CI.
+  await writeFile(helperScript,`
+    $ErrorActionPreference='Stop'
+    $stage='input';$h=[IntPtr]::Zero
+    try {
+      [Console]::Error.WriteLine('{"stage":"helper_started"}')
+      $r=[Console]::In.ReadToEnd()|ConvertFrom-Json
+      $stage='compile';Add-Type -Path $r.library
+      $stage='borrow';$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation)
+      $stage='ready';[Console]::Out.WriteLine((@{borrower=$PID}|ConvertTo-Json -Compress))
+      $stage='sleep';Start-Sleep -Seconds 90
+    } catch {
+      [Console]::Error.WriteLine((@{stage=$stage;type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult}|ConvertTo-Json -Compress));exit 74
+    } finally {if($h -ne [IntPtr]::Zero){[UpgradeWindows]::CloseLease($h)}}
+  `);
   const owner=spawn(process.execPath,['--input-type=module','-e',`
     import {spawn} from 'node:child_process';import {win32} from 'node:path';import {fileURLToPath} from 'node:url';
     import {windowsUpgradeOperation,withWindowsUpgradeLock} from ${JSON.stringify(windowsUrl)};
@@ -55,20 +72,19 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     let lease;const operation=request=>{const result=windowsUpgradeOperation(request);if(request.action==='acquire')lease=result;return result;};
     await withWindowsUpgradeLock(process.argv[1],async()=>{
       diagnostic('owner_acquired');
-      const command="$ErrorActionPreference='Stop';$stage='input';$h=[IntPtr]::Zero;try{$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;$stage='compile';Add-Type -Path $r.library;$stage='borrow';$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation);$stage='ready';[Console]::Out.WriteLine((@{borrower=$PID}|ConvertTo-Json -Compress));$stage='sleep';Start-Sleep -Seconds 90}catch{[Console]::Error.WriteLine((@{stage=$stage;type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult}|ConvertTo-Json -Compress));exit 74}finally{if($h -ne [IntPtr]::Zero){[UpgradeWindows]::CloseLease($h)}}";
       // Keep the helper's output connected directly to the test reader. An
       // owner-owned forwarding pipe would close when we kill that owner and
       // could terminate PowerShell before testing the borrowed lock.
       // Windows/libuv ties ordinary children to the owner's lifetime. Detach
       // this test helper so there really is a live orphan after owner death.
-      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',command],{stdio:['pipe','inherit','inherit'],detached:true,windowsHide:true});
+      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',process.argv[2]],{stdio:['pipe','inherit','inherit'],detached:true,windowsHide:true});
       helper.on('spawn',()=>diagnostic('helper_spawned'));
       helper.on('error',error=>diagnostic('helper_error',{code:error.code??null}));
       helper.on('exit',(code,signal)=>diagnostic('helper_exit',{code,signal}));
       helper.stdin.on('error',error=>diagnostic('helper_stdin_error',{code:error.code??null}));
       helper.stdin.end(JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})}));
       await new Promise(()=>{});
-    },{operation});`,file],{stdio:['pipe','pipe','pipe']});
+    },{operation});`,file,helperScript],{stdio:['pipe','pipe','pipe']});
   let diagnostics='';owner.stderr.on('data',data=>{diagnostics+=data.toString();});
   const safeDiagnostics=()=>diagnostics.split(/\r?\n/).flatMap(line=>{
     try {const {stage,code,signal,type,hresult,name}=JSON.parse(line);return typeof stage==='string'?[{stage,code,signal,type,hresult,name}]:[];}catch{return [];}
