@@ -46,6 +46,10 @@ test('native Windows unreadable existing journal is an error, never an absent jo
   } finally {
     const restore=spawnSync('icacls.exe',[file,'/remove:d',`*${sid}`],{encoding:'utf8',windowsHide:true});
     assert.equal(restore.status,0);
+    // icacls /deny also removes these rights from existing allow entries;
+    // removing the deny ACE alone does not restore the original private ACL.
+    const allow=spawnSync('icacls.exe',[file,'/grant:r',`*${sid}:(F)`],{encoding:'utf8',windowsHide:true});
+    assert.equal(allow.status,0);
   }
   assert.deepEqual(await readPrivateJson(file),{generation:'existing'});
 });

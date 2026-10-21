@@ -55,7 +55,9 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
       // Keep the helper's output connected directly to the test reader. An
       // owner-owned forwarding pipe would close when we kill that owner and
       // could terminate PowerShell before testing the borrowed lock.
-      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',command],{stdio:['pipe','inherit','inherit']});
+      // Windows/libuv ties ordinary children to the owner's lifetime. Detach
+      // this test helper so there really is a live orphan after owner death.
+      const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',command],{stdio:['pipe','inherit','inherit'],detached:true,windowsHide:true});
       helper.stdin.end(JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})}));
       await new Promise(()=>{});
     },{operation});`,file],{stdio:['pipe','pipe','pipe']});
