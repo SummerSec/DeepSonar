@@ -86,21 +86,35 @@ export async function createMaintenanceMultinodeFixture(config, root) {
         assert.equal(response.status,200);assert.equal(response.data.ready,false);assert.equal(response.data.maintenance_ready,true);assert.equal(response.data.upgrade_generation,state.generation);
         return {remoteControlPreparing:true};
       },
-      async assertActive(state,saved) {
+      async assertStopped() {
+        for (const [index,names] of [[0,['scheduler','web','image-admission']],[1,['worker-agent']]]) {
+          for (const name of names) {
+            const id=docker([...projects[index],'ps','--all','-q',name]);
+            assert.ok(id,`managed ${name} container must remain inspectable`);
+            assert.equal(inspect(id).State.Running,false,`managed ${name} must remain stopped after rollback`);
+          }
+        }
+        return {remoteControlStopped:true,workerStopped:true};
+      },
+      async assertActive(state,saved,{expectedVersion=config.newVersion,expectedSchema=config.newSchema,expectedDatabase=saved.candidateDatabase,expectedRuntimeRole=saved.runtime.role,verifyOldIdentity=true}={}) {
         const remoteScheduler=docker([...projects[0],'ps','-q','scheduler']);
         const remoteHealth=JSON.parse(docker(['exec','-i',remoteScheduler,'node','--input-type=module','-e',command],JSON.stringify({url:'http://127.0.0.1:3100/health'})));
-        assert.equal(remoteHealth.status,200);assert.equal(remoteHealth.data.ready,true);assert.equal(remoteHealth.data.version,config.newVersion);
+        assert.equal(remoteHealth.status,200);assert.equal(remoteHealth.data.ready,true);assert.equal(remoteHealth.data.version,expectedVersion);
         // Active health has no maintenance identity fields; verify them through the actual remote DB connection below.
-        const schemaCode="const {sql}=await import('/app/apps/scheduler/dist/db.js');try{const [r]=await sql`SELECT (SELECT version FROM schema_meta WHERE id='global') AS version,generation,phase FROM platform_upgrade_state WHERE id='global'`;console.log(JSON.stringify(r));}finally{await sql.end({timeout:5})}";
+        const schemaCode="const {sql}=await import('/app/apps/scheduler/dist/db.js');try{const [r]=await sql`SELECT (SELECT version FROM schema_meta WHERE id='global') AS version,current_database() AS database,current_user AS role,generation,phase FROM platform_upgrade_state WHERE id='global'`;console.log(JSON.stringify(r));}finally{await sql.end({timeout:5})}";
         const remoteState=JSON.parse(docker(['exec',remoteScheduler,'node','--input-type=module','-e',schemaCode]));
-        assert.equal(remoteState.version,config.newSchema);assert.equal(remoteState.generation,state.generation);assert.equal(remoteState.phase,'active');
+        assert.equal(remoteState.version,expectedSchema);assert.equal(remoteState.generation,state.generation);assert.equal(remoteState.phase,'active');
+        assert.equal(remoteState.database,expectedDatabase);assert.equal(remoteState.role,expectedRuntimeRole);
+        const remoteEnvironment=envOf(inspect(remoteScheduler));
+        assert.equal(remoteEnvironment.DEEPSONAR_VERSION,expectedVersion);assert.equal(remoteEnvironment.DEEPSONAR_UPGRADE_GENERATION,state.generation);
         const rootId=rootSchedulerId();
         const claimCode="let raw='';for await(const b of process.stdin)raw+=b;const p=JSON.parse(raw);const r=await import('/app/apps/scheduler/dist/domains/worker-nodes/registry.js');const {sql}=await import('/app/apps/scheduler/dist/db.js');try{r.clearWorkerApiKeysForTests();r.rememberWorkerApiKey(p.id,p.key);const claim=await r.claimWorkerForDispatch();if(claim)await r.releaseSandboxLease(claim.reservationId);console.log(JSON.stringify({claimed:claim?.id??null}));}finally{await sql.end({timeout:5})}";
         const claim=()=>JSON.parse(docker(['exec','-i',rootId,'node','--input-type=module','-e',claimCode],JSON.stringify({id:workerId,key:apiKey})));
         assert.equal(claim().claimed,workerId,'admitted current generation must be dispatchable');
+        if(!verifyOldIdentity)return {remoteControlReady:true,workerAdmitted:true,oldGenerationFenced:null,publicGenerationSpoofFenced:null,network};
         docker(['stop',workerContainer()]);
         // Test the public identity spoof while the worker is still online, not after another request already fenced it.
-        const spoof=JSON.parse(docker(['exec','-i',rootId,'node','--input-type=module','-e',command],JSON.stringify({url:'http://127.0.0.1:3100/workers/heartbeat',token:oldNodeToken,body:{node_id:workerId,protocol_version:1,platform_version:config.newVersion,deployment_generation:state.generation}})));
+        const spoof=JSON.parse(docker(['exec','-i',rootId,'node','--input-type=module','-e',command],JSON.stringify({url:'http://127.0.0.1:3100/workers/heartbeat',token:oldNodeToken,body:{node_id:workerId,protocol_version:1,platform_version:expectedVersion,deployment_generation:state.generation}})));
         assert.equal(spoof.data.status,'unavailable');assert.equal(claim().claimed,null);
         const response=JSON.parse(docker(['exec','-i',rootId,'node','--input-type=module','-e',command],JSON.stringify({url:'http://127.0.0.1:3100/workers/heartbeat',token:oldNodeToken,body:{node_id:workerId,protocol_version:1,platform_version:config.oldVersion,deployment_generation:''}})));
         assert.equal(response.status,200);assert.equal(response.data.status,'unavailable');assert.equal(claim().claimed,null,'old generation cannot claim work');

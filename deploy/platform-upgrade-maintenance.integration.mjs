@@ -120,6 +120,10 @@ export async function rehearse(configPath,output) {
         evidence.managedNodes=true;
       } finally {await nodes.close();}
     });
+    await scenario('multinode-recovery',async(fixture,evidence,marker)=>{
+      const {rehearseMultinodeRecovery}=await import('./platform-upgrade-maintenance-multinode-recovery.fixture.mjs');
+      await rehearseMultinodeRecovery({config,fixture,evidence,marker,actors,approved,execute,assertActive,assertSource,stateOf,secretsOf});
+    });
     await scenario('success-preparing',async(fixture,evidence,marker)=>{
       const io=actors(config,fixture),hash=await approved(io,config),activate=io.activate;
       io.activate=async state=>{
