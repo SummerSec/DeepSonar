@@ -12,7 +12,11 @@ import {loadConfig, createFixture, target, parseValues, inspectFixtureRef, docke
 const script = fileURLToPath(import.meta.url);
 const snapshotSql = `SELECT json_build_object('projects',(SELECT count(*) FROM projects),'jobs',(SELECT count(*) FROM jobs),
 'attempts',(SELECT count(*) FROM job_attempts),'effects',(SELECT count(*) FROM job_attempt_effects),'events',(SELECT count(*) FROM events),
-'scans',(SELECT count(*) FROM runtime_image_scans),'paused',(SELECT claims_paused FROM global_settings WHERE id='global'))`;
+'scans',(SELECT count(*) FROM runtime_image_scans),
+'projects_hash',(SELECT md5(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id)::text,'[]')) FROM projects t),
+'jobs_hash',(SELECT md5(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id)::text,'[]')) FROM jobs t),
+'effects_hash',(SELECT md5(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id)::text,'[]')) FROM job_attempt_effects t),
+'events_hash',(SELECT md5(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id)::text,'[]')) FROM events t),'paused',(SELECT claims_paused FROM global_settings WHERE id='global'))`;
 const snapshot = (fixture, identity) => JSON.parse(query(fixture, snapshotSql, identity));
 const stateOf = async fixture => JSON.parse(await readFile(join(fixture.directory,'.upgrade','maintenance.json'),'utf8'));
 const secretsOf = async (fixture,state) => JSON.parse(await readFile(join(fixture.directory,'.upgrade',`identity-${state.generation}.json`),'utf8'));
@@ -104,6 +108,18 @@ export async function rehearse(configPath,output) {
       await assert.rejects(execute(io,config,'apply','0'.repeat(64)));
       assert.deepEqual(snapshot(fixture),before,'rejected approval must precede pause');
     });
+    await scenario('multinode-success',async(fixture,evidence,marker)=>{
+      const {createMaintenanceMultinodeFixture}=await import('./platform-upgrade-maintenance-multinode.fixture.mjs');
+      const nodes=await createMaintenanceMultinodeFixture(config,fixture);
+      evidence.oldWorkerSource=nodes.oldWorkerSource;
+      try {
+        const io=actors(config,fixture,nodes.options),hash=await approved(io,config),activate=io.activate;
+        io.activate=async state=>{await nodes.assertPreparing(state); evidence.remotePreparing=true;return activate(state);};
+        evidence.activation=await assertActive(config,fixture,await execute(io,config,'apply',hash),marker);
+        const state=await stateOf(fixture); Object.assign(evidence,await nodes.assertActive(state,await secretsOf(fixture,state)));
+        evidence.managedNodes=true;
+      } finally {await nodes.close();}
+    });
     await scenario('success-preparing',async(fixture,evidence,marker)=>{
       const io=actors(config,fixture),hash=await approved(io,config),activate=io.activate;
       io.activate=async state=>{
@@ -126,12 +142,45 @@ export async function rehearse(configPath,output) {
         evidence.activation=await assertActive(config,fixture,await execute(io,config,'apply',hash),marker);
         const saved=await secretsOf(fixture,await stateOf(fixture));
         assert.equal(query(fixture,"SELECT count(*) FROM pg_stat_activity WHERE application_name='maintenance-old-client'",{role:saved.admin.role,database:'postgres'}),'0');
+        const nextVersion=config.newVersion.replace(/(\d+)$/,number=>String(Number(number)+1));
+        const nextConfig={...config,oldVersion:config.newVersion,newVersion:nextVersion,oldSchema:config.newSchema,resetRoleIdentity:false,
+          versions:{[config.newVersion]:config.versions[config.newVersion],[nextVersion]:config.versions[config.newVersion]}};
+        const next=actors(nextConfig,fixture,{readyTimeoutMs:1500}),nextHash=await approved(next,nextConfig),start=next.startPreparing;
+        let secondFaultInjected=false;
+        next.startPreparing=async second=>{
+          const receipt=await start(second),current=await secretsOf(fixture,second);
+          assert.equal(query(fixture,`SELECT rolcanlogin FROM pg_roles WHERE rolname='${current.source.role}'`,{role:current.admin.role,database:'postgres'}),'f');
+          assert.equal(query(fixture,"SELECT phase FROM platform_upgrade_state WHERE id='global'",{role:current.admin.role,database:current.candidateDatabase}),'preparing');
+          dc(fixture,['stop','web']);secondFaultInjected=true;return receipt;
+        };
+        await assert.rejects(next.lock(async()=>{
+          await next.archiveCompleted(await stateOf(fixture));
+          return runMaintenanceUpgrade(next,{action:'apply',target:nextVersion,approvedPlanHash:nextHash});
+        }));
+        assert.equal(secondFaultInjected,true,'second generation must reach the actual preparing web fault');
+        const rolled=await stateOf(fixture); assert.equal(rolled.status,'rolled_back');
+        const second=await assertSource(nextConfig,fixture,rolled,marker);
+        assert.equal(second.admin.role,saved.admin.role,'maintenance admin must retain the verified cluster binding');
+        assert.notEqual(second.generation,saved.generation);
+        assert.equal(query(fixture,"SELECT claims_paused FROM global_settings WHERE id='global'",{role:second.admin.role,database:second.source.database}),'t');
+        assert.equal(dc(fixture,['ps','--status','running','-q','scheduler','web','image-admission']),'');
+        const resumed=await next.lock(()=>next.resumeRollback(rolled));assert.equal(resumed.status,'rollback_resumed');
+        await health(fixture,config.newVersion);
+        const restored=await secretsOf(fixture,await stateOf(fixture)),db={role:restored.admin.role,database:restored.source.database};
+        assert.equal(query(fixture,`SELECT rolcanlogin FROM pg_roles WHERE rolname='${restored.source.role}'`,db),'f');
+        assert.equal(query(fixture,"SELECT runtime_role FROM platform_upgrade_state WHERE id='global'",db),restored.rollbackRuntime.role);
+        assert.equal(query(fixture,"SELECT generation FROM platform_upgrade_state WHERE id='global'",db),restored.rollbackGeneration);
+        assert.equal(query(fixture,"SELECT phase FROM platform_upgrade_state WHERE id='global'",db),'active');
+        assert.equal(query(fixture,"SELECT claims_paused FROM global_settings WHERE id='global'",db),'f');
+        evidence.secondGeneration={sameDigests:true,schema:config.newSchema,fixtureVersion:nextVersion,status:'rollback_resumed'};
       } finally {if(oldSession.exitCode===null) oldSession.kill();}
     });
     for (const stoppedService of ['scheduler','web']) await scenario(`${stoppedService}-health-rollback`,async(fixture,evidence,marker)=>{
       const io=actors(config,fixture,{readyTimeoutMs:1200}),hash=await approved(io,config),start=io.startPreparing;
-      io.startPreparing=async state=>{const receipt=await start(state); dc(fixture,['stop',stoppedService]); return receipt;};
+      let faultInjected=false;
+      io.startPreparing=async state=>{const receipt=await start(state); dc(fixture,['stop',stoppedService]); faultInjected=true; return receipt;};
       await assert.rejects(execute(io,config,'apply',hash));
+      assert.equal(faultInjected,true,'must reach the actual preparing service fault');
       const state=await stateOf(fixture); assert.equal(state.status,'rolled_back'); const saved=await assertSource(config,fixture,state,marker);
       assert.equal(query(fixture,"SELECT claims_paused FROM global_settings WHERE id='global'",{role:saved.admin.role,database:saved.source.database}),'t');
       assert.equal(dc(fixture,['ps','--status','running','-q','scheduler','web','image-admission']),''); evidence.appsStopped=true;
@@ -170,7 +219,7 @@ export async function rehearse(configPath,output) {
         }
         return drain(state);
       };
-      await assert.rejects(execute(io,config,'apply',hash));
+      await assert.rejects(execute(io,config,'apply',hash),{code:'MAINTENANCE_AWAITING_DRAIN'});
       const pausedState=await stateOf(fixture); assert.equal(pausedState.status,'awaiting_drain');
       assert.equal(query(fixture,"SELECT rolcanlogin FROM pg_roles WHERE rolname='deepsonar'"),'t');
       assert.equal(query(fixture,"SELECT claims_paused FROM global_settings WHERE id='global'"),'t');

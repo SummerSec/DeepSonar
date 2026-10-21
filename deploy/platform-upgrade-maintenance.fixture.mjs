@@ -149,8 +149,10 @@ volumes:
 
 // Isolated VFS optimization: same immutable image, network and runtime restrictions;
 // each invocation still runs a new real Node process with independent stdin.
+const fixtureRunnerCaches = new Map();
 export function fixtureRun(fixture) {
-  const runners = new Map();
+  const runners = fixtureRunnerCaches.get(fixture.project) ?? new Map();
+  fixtureRunnerCaches.set(fixture.project,runners);
   return (args, input, env = process.env, allowed = [0]) => {
     let command = args;
     if (args[0] === 'run' && args.includes('--rm')) {
@@ -168,6 +170,15 @@ export function fixtureRun(fixture) {
       command = ['exec','-i',name,'node',...args.slice(imageAt+1)];
     }
     const result=spawnSync('docker',command,{input,env,maxBuffer:512*1024*1024,timeout:600_000});
+    if (args.includes('/app/apps/scheduler/dist/platform-upgrade-schema-cli.js')) {
+      try {
+        const request=JSON.parse(input),value=JSON.parse(result.stdout.toString());
+        const errors=[...(value.blocking_errors??[]),...(value.plan?.blocking_errors??[])];
+        const sqlstates=errors.map(item=>item.sqlstate).filter(code=>typeof code==='string'&&/^[0-9A-Z]{5}$/.test(code));
+        const codes=errors.map(item=>item.code).filter(code=>typeof code==='string'&&/^[A-Z][A-Z0-9_]+$/.test(code));
+        console.log(JSON.stringify({fixture:fixture.project,actor:'schema-cli',action:request.action,status:result.status,ok:value.ok,applied:value.applied,codes,sqlstates,sourceSchema:value.plan?.source_schema_version,targetSchema:value.plan?.target_schema_version,planHash:value.plan?.plan_hash}));
+      } catch {console.log(JSON.stringify({fixture:fixture.project,actor:'schema-cli',report:'invalid or absent'}));}
+    }
     if(result.error || !allowed.includes(result.status)) throw new Error('maintenance fixture transport failed; raw output suppressed');
     return allowed.length>1 ? {stdout:result.stdout,status:result.status} : result.stdout;
   };
@@ -176,4 +187,5 @@ export function cleanupRunners(fixture) {
   assert.match(fixture.project,/^pr747-maint-[a-z0-9-]+$/);
   const ids=docker(['ps','-aq','--filter',`label=pr747.maintenance.runner=${fixture.project}`]).split(/\s+/).filter(Boolean);
   if(ids.length) docker(['rm','-f',...ids]);
+  fixtureRunnerCaches.delete(fixture.project);
 }
