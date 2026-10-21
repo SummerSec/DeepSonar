@@ -173,6 +173,8 @@ function withFakeDocker(t, check) {
     writeFileSync(join(dir, "docker"), `#!/bin/sh
 case "$1" in
   fail) exit 29 ;;
+  burst) head -c 262144 /dev/zero | tr '\\000' x; head -c 262144 /dev/zero | tr '\\000' y >&2 ;;
+  held-stream) sleep 10 & printf '%s' "$!" > "$ARG_CAPTURE_FILE"; exit 0 ;;
   hang) trap '' TERM; while :; do sleep 1; done ;;
   *) printf '%s\\0' "$@" > "$ARG_CAPTURE_FILE"; printf '<%s>' "$@" ;;
 esac
@@ -194,11 +196,9 @@ if ($result.ExitCode -ne 0) { throw "Expected exit zero, got $($result.ExitCode)
     if (!result) return;
     // Verify what the executable actually received, independently of stdout capture.
     assert.deepEqual(readFileSync(capture), Buffer.from(args.join("\0") + "\0"), "Native argv bytes changed");
-    // Unix Start-Process redirects via StdOutputHandler -> StreamWriter.WriteLine,
-    // which appends a newline even when the executable uses printf without one.
-    // https://github.com/PowerShell/PowerShell/blob/v7.5.3/src/Microsoft.PowerShell.Commands.Management/commands/management/Process.cs#L2104-L2109
+    // Preserve exact native bytes, including output without a trailing newline.
     const capturedOutput = Buffer.from(result.stdout.trim(), "base64").toString("utf8");
-    assert.equal(capturedOutput, args.map(value => `<${value}>`).join("") + "\n", "Unexpected redirected stdout bytes");
+    assert.equal(capturedOutput, args.map(value => `<${value}>`).join(""), "Unexpected redirected stdout bytes");
   });
 });
 
@@ -221,5 +221,34 @@ if ($null -eq $result.ExitCode) { throw 'Missing timeout exit code (null)' }
 if ($result.ExitCode -ne 124) { throw "Expected timeout 124, got $($result.ExitCode)" }
 if ($clock.Elapsed.TotalSeconds -gt 4) { throw "Unbounded child: $($clock.Elapsed.TotalSeconds)s" }
 `, options);
+  });
+});
+
+test("PowerShell bounded process drains both large unterminated streams before reporting success", (t) => {
+  withFakeDocker(t, (options) => {
+    const result = runFunctions(t, `
+$result = Invoke-DockerBounded -DockerArgs @('burst') -TimeoutSec 3
+if ($result.ExitCode -ne 0) { throw "Expected exit zero, got $($result.ExitCode)" }
+if ($result.Output.Length -ne 524288) { throw "Truncated redirected output: $($result.Output.Length)" }
+if ($result.Output.Substring(0,262144) -cne ('x' * 262144)) { throw 'stdout bytes changed' }
+if ($result.Output.Substring(262144) -cne ('y' * 262144)) { throw 'stderr bytes changed' }
+`, options);
+    if (result) assert.equal(result.stdout, "");
+  });
+});
+
+test("PowerShell bounded process includes inherited-pipe EOF in the original deadline", (t) => {
+  withFakeDocker(t, (options, capture) => {
+    try {
+      runFunctions(t, `
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$result = Invoke-DockerBounded -DockerArgs @('held-stream') -TimeoutSec 1
+if ($result.ExitCode -ne 124) { throw 'Successful parent exit must not bypass missing stream EOF' }
+if ($clock.Elapsed.TotalSeconds -gt 2.5) { throw 'EOF drain exceeded the original deadline' }
+`, options);
+    } finally {
+      // This fixture deliberately lets the parent exit; own the surviving child explicitly.
+      try { const pid = Number(readFileSync(capture, "utf8")); if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH" && error.code !== "ENOENT") throw error; }
+    }
   });
 });

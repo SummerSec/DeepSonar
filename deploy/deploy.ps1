@@ -114,40 +114,61 @@ function Protect-DeployOutput([string]$Text) {
 }
 
 function ConvertTo-NativeArgument([string]$Value) {
-  # Start-Process joins ArgumentList on PS 5.1: quote paths/JSON/Go templates safely.
+  # ProcessStartInfo.Arguments also works on PS 5.1: quote native arguments safely.
   return '"' + ([regex]::Replace(([regex]::Replace($Value, '(\\*)"', '$1$1\"')), '(\\+)$', '$1$1')) + '"'
 }
 
 function Invoke-DockerBounded {
   param([string[]]$DockerArgs, [int]$TimeoutSec = 3)
   if ($TimeoutSec -le 0) { throw "Timeout must be positive" }
-  $stdout = [IO.Path]::GetTempFileName()
-  $stderr = [IO.Path]::GetTempFileName()
+  $p = New-Object System.Diagnostics.Process
+  $stopProcess = {
+    try { if ($p.HasExited) { return } } catch { return }
+    # PS 7 supports tree kill; Windows PS 5.1 uses taskkill /T for compose plugins.
+    try { $p.Kill($true) } catch {
+      if ($env:OS -eq "Windows_NT") {
+        try {
+          $killer = Start-Process taskkill -ArgumentList @("/PID", $p.Id, "/T", "/F") -PassThru -NoNewWindow
+          if (-not $killer.WaitForExit(1000)) { $killer.Kill() }
+        } catch {}
+      }
+      try { $p.Kill() } catch {}
+    }
+  }
   try {
-    $nativeArgs = @($DockerArgs | ForEach-Object { ConvertTo-NativeArgument $_ })
-    $p = Start-Process -FilePath "docker" -ArgumentList $nativeArgs -NoNewWindow -PassThru `
-      -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    $ok = $p.WaitForExit($TimeoutSec * 1000)
+    $p.StartInfo.FileName = "docker"
+    $p.StartInfo.Arguments = (@($DockerArgs | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " ")
+    $p.StartInfo.UseShellExecute = $false
+    $p.StartInfo.CreateNoWindow = $true
+    $p.StartInfo.RedirectStandardOutput = $true
+    $p.StartInfo.RedirectStandardError = $true
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $null = $p.Start()
+    # Drain both pipes concurrently. Native exit alone does not imply stream EOF.
+    # Start-Process uses asynchronous line callbacks and can leave its files empty
+    # after WaitForExit(int), as well as changing unterminated output bytes.
+    $stdout = $p.StandardOutput.ReadToEndAsync()
+    $stderr = $p.StandardError.ReadToEndAsync()
+    $remaining = [Math]::Max(0, $TimeoutSec * 1000 - [int]$clock.ElapsedMilliseconds)
+    $ok = $p.WaitForExit($remaining)
     $rc = 124
     if (-not $ok) {
-      # PS 7 supports tree kill; Windows PS 5.1 uses taskkill /T for compose plugins.
-      try { $p.Kill($true) } catch {
-        if ($env:OS -eq "Windows_NT") {
-          try {
-            $killer = Start-Process taskkill -ArgumentList @("/PID", $p.Id, "/T", "/F") -PassThru -NoNewWindow
-            if (-not $killer.WaitForExit(1000)) { $killer.Kill() }
-          } catch {}
-        }
-        try { $p.Kill() } catch {}
-      }
+      & $stopProcess
       $null = $p.WaitForExit(1000)
     } else {
       $rc = $p.ExitCode
     }
-    $output = [IO.File]::ReadAllText($stdout) + [IO.File]::ReadAllText($stderr)
-    return [pscustomobject]@{ ExitCode = $rc; Output = $output }
+    # A descendant may retain a pipe after the parent exits: never wait forever,
+    # and never claim success before both complete output streams are available.
+    $remaining = [Math]::Max(0, $TimeoutSec * 1000 - [int]$clock.ElapsedMilliseconds)
+    $drained = [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), $remaining)
+    if (-not $drained) { & $stopProcess; return [pscustomobject]@{ ExitCode = 124; Output = "" } }
+    return [pscustomobject]@{ ExitCode = $rc; Output = $stdout.Result + $stderr.Result }
+  } catch {
+    & $stopProcess
+    throw
   } finally {
-    Remove-Item $stdout, $stderr -ErrorAction SilentlyContinue
+    $p.Dispose()
   }
 }
 
