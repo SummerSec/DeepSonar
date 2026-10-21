@@ -58,7 +58,7 @@ API 默认 `http://127.0.0.1:8080/api/`，保留自定义路径前缀。Shell �
 ./deploy/deploy.sh upgrade apply --to vX.Y.Z --reset-role-identity --approve-plan-hash <reviewed-reset-plan-hash>
 ```
 
-通过预检后暂停领取并排空 Job 与全部 Attempt 的未结算/未知效果，不自动杀 Job。独立维护身份禁止旧数据库运行角色登录并清退会话，建立备份切点；验证 gzip custom dump 后恢复到本操作的候选库，只重建候选，源库冻结保全。备份当前使用至多 512 MiB 内存缓冲。目标 preparing 阶段关闭业务入口和后台执行，全部目标服务/节点验证后才激活。激活前失败回源并保持暂停；激活已经发生或结果不明时，不回旧数据，保留当前代并对账/前向修复。
+通过预检后暂停领取并排空 Job 与全部 Attempt 的未结算/未知效果，不自动杀 Job。排空超时返回 `MAINTENANCE_AWAITING_DRAIN`，保留原服务和暂停状态，结算后可对同一目标续做；此时尚未回滚或隔离旧数据库身份。独立维护身份禁止旧数据库运行角色登录并清退会话，建立备份切点；验证 gzip custom dump 后恢复到本操作的候选库，只重建候选，源库冻结保全。备份当前使用至多 512 MiB 内存缓冲。目标 preparing 阶段关闭业务入口和后台执行，全部目标服务/节点验证后才激活。激活前失败回源并保持暂停；激活已经发生或结果不明时，不回旧数据，保留当前代并对账/前向修复。
 
 `.upgrade/` 保存私有逐步记录、身份文件和备份，已排除 Git；恢复绑定 Compose 内容、PostgreSQL 存储、Docker 目标、节点清单、目标 digest、计划和 generation。中断后同目标 `apply` 根据实际回执续做，不能移植 journal 到另一部署。硬中断遗留锁时先确认无活跃升级进程，再处理 `.upgrade/lock`。回滚后通过 `resume-rollback` 明确激活源代的新受限身份；已激活后的响应丢失只能续验当前源代，不能再次恢复旧数据。
 

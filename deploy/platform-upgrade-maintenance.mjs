@@ -99,7 +99,8 @@ export async function runMaintenanceUpgrade(io, {action, target, approvedPlanHas
   } catch (error) {
     // inspectActivation must consult durable DB authority even after a lost
     // activate response; host absence of a receipt never proves inactivity.
-    await rollback();
+    const recovery = await rollback();
+    if (recovery.status === 'awaiting_drain') throw fail('MAINTENANCE_AWAITING_DRAIN');
     throw fail(error?.code ?? 'MAINTENANCE_STEP_FAILED_ROLLED_BACK');
   }
 }

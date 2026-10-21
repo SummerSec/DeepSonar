@@ -118,7 +118,7 @@ test('drain timeout keeps the same generation paused with original services and 
   const drain = io.pauseAndDrain;
   io.pauseAndDrain = async value => {if (!settled) throw new Error('unknown effect remains'); return drain(value);};
   io.rollbackPreparing = async value => ({awaiting_drain: true, paused: true, services_unchanged: true, receipt_id: value.generation});
-  await assert.rejects(runMaintenanceUpgrade(io, options));
+  await assert.rejects(runMaintenanceUpgrade(io, options), {code: 'MAINTENANCE_AWAITING_DRAIN'});
   const generation = state().generation;
   assert.equal(state().status, 'awaiting_drain');
   assert.equal(calls.includes('fence'), false); assert.equal(calls.includes('backup'), false);

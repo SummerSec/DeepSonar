@@ -11,3 +11,15 @@ export function assertMaintenanceDatabase(row, {state, saved, phase}) {
       || row.runtime_role !== saved.runtime.role || row.target_version !== state.target.version
       || row.claims_paused !== (phase === 'preparing')) throw new Error('target database schema, generation or maintenance phase mismatch');
 }
+
+export function assertRollbackConnection(actual, saved) {
+  if (actual.role !== saved.rollbackRuntime.role || actual.password !== saved.rollbackRuntime.password
+      || actual.database !== saved.source.database || actual.port !== saved.source.port) throw new Error('rollback source database connection mismatch');
+}
+
+export function assertRollbackDatabase(row, {state, saved, preparing, maintenance}) {
+  if (!row || row.schema_version !== state.plan.source_schema_version || row.claims_paused !== preparing
+      || row.old_role_login !== false || row.runtime_login !== true || row.runtime_superuser !== false) throw new Error('rollback source schema, claims or database role mismatch');
+  if (maintenance && (row.phase !== (preparing ? 'preparing' : 'active') || row.generation !== saved.rollbackGeneration
+      || row.runtime_role !== saved.rollbackRuntime.role || row.target_version !== saved.source.values.DEEPSONAR_VERSION)) throw new Error('rollback source maintenance identity mismatch');
+}

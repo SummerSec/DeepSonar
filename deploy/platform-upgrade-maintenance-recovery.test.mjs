@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
+import {assertRollbackConnection} from './platform-upgrade-maintenance-health.mjs';
 function fixture() {
   let comment = null;
   const calls = [], state = {generation: 'original-generation', status: 'rolled_back', receipts: {}}, saved = {source: {database: 'source', values: {DEEPSONAR_VERSION: '1.0.0'}}, rollbackRuntime: {role: 'new_role'}, inventory: {nodes: []}, workerToken: 'token'};
@@ -27,6 +28,17 @@ test('lost post-activation response resumes forward and never executes source ac
   await assert.rejects(resumeRollback(io), /lost response/);
   assert.equal(io.state.status, 'rollback_resuming');
   assert.equal((await resumeRollback(io)).status, 'rollback_resumed');
+  assert.equal(calls.filter(value => value === 'commit').length, 1);
+});
+test('lost activation response plus changed same-version database cannot complete rollback recovery', async () => {
+  const {io, calls} = fixture();
+  io.saved.source.port = 5432; io.saved.rollbackRuntime.password = 'private';
+  io.start = async () => {throw new Error('lost response');};
+  await assert.rejects(resumeRollback(io), /lost response/);
+  io.start = async () => assertRollbackConnection({role: 'new_role', password: 'private', database: 'another_same_version_database', port: 5432}, io.saved);
+  await assert.rejects(resumeRollback(io), /connection mismatch/);
+  assert.equal(io.state.status, 'rollback_resuming');
+  assert.equal(calls.includes('verify'), false);
   assert.equal(calls.filter(value => value === 'commit').length, 1);
 });
 test('unknown/active target authority never unlocks source writes', async () => {

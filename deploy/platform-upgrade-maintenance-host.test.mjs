@@ -7,6 +7,18 @@ import {createHash} from 'node:crypto';
 import {maintenanceHostAdapter} from './platform-upgrade-maintenance-host.mjs';
 import {durablePrivateWrite} from './platform-upgrade-maintenance-transport.mjs';
 
+test('exported database overrides are rejected before any deployment operation', () => {
+  for (const key of ['DEEPSONAR_DATABASE_USER', 'DEEPSONAR_DATABASE_PASSWORD', 'DEEPSONAR_DATABASE_NAME', 'DEEPSONAR_UPGRADE_GENERATION']) {
+    const previous = process.env[key];
+    try {
+      process.env[key] = 'old-value';
+      assert.throws(() => maintenanceHostAdapter({run: () => {throw new Error('unexpected Docker execution');}}), /unset deployment database\/generation overrides/);
+    } finally {
+      if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+    }
+  }
+});
+
 test('source planning rejects duplicate and noncanonical database assignments before Docker execution', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'maintenance-source-env-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
@@ -41,6 +53,30 @@ test('source planning decodes Compose dollar escaping exactly once before passin
   const io = maintenanceHostAdapter({directory, run, parsePlatformValues: () => ({DEEPSONAR_SCHEDULER_IMAGE: 'source-image'})});
   await assert.rejects(io.plan({version: '2.0.0', values: {DEEPSONAR_SCHEDULER_IMAGE: 'target-image'}}, {recovery: true}), /fixture reached readonly schema planning/);
   assert.deepEqual(received, {host: '127.0.0.1', port: 5432, username: 'deepsonar', password: 'p$a$$word', database: 'deepsonar'});
+});
+
+test('host refuses changed same-version source database after a lost rollback activation response before starting services', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'maintenance-resume-binding-'));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  const state = {generation: '11111111-1111-4111-8111-111111111111', binding: {}, status: 'rollback_resuming', receipts: {}, target: {version: '2.0.0', values: {DEEPSONAR_SCHEDULER_IMAGE: 'target'}}};
+  const saved = {generation: state.generation, bindingHash: createHash('sha256').update('{}').digest('hex'),
+    source: {database: 'source', port: 5432, values: {DEEPSONAR_VERSION: '1.0.0'}}, admin: {role: 'admin', password: 'private'},
+    rollbackRuntime: {role: 'replacement', password: 'private'}, rollbackGeneration: 'rollback-generation', inventory: {nodes: []}, registeredWorkerIds: []};
+  await durablePrivateWrite(join(directory, '.upgrade', `identity-${state.generation}.json`), JSON.stringify(saved));
+  await writeFile(join(directory, '.env'), 'DEEPSONAR_DATABASE_NAME=another\n');
+  let started = false;
+  const run = (args, input) => {
+    if (args.includes('up')) {started = true; throw new Error('unexpected service start');}
+    if (args.includes('config')) return Buffer.from(JSON.stringify({services: {scheduler: {environment: {DATABASE_URL: 'postgres://replacement:private@postgres:5432/another'}}, postgres: {}}}));
+    if (args.includes('ps')) return Buffer.from('a'.repeat(64));
+    if (args.includes('inspect')) return Buffer.from('bridge');
+    if (input && JSON.parse(input).sql.includes('shobj_description')) return Buffer.from(JSON.stringify([{value: JSON.stringify({schema: 'deepsonar.rollback-activation/v1', operation_generation: state.generation, runtime_role: 'replacement', active: true, generation: saved.rollbackGeneration})}]));
+    throw new Error('unexpected operation');
+  };
+  const io = maintenanceHostAdapter({directory, run, parsePlatformValues: () => ({DEEPSONAR_VERSION: '1.0.0'})});
+  await assert.rejects(io.resumeRollback(state), /rollback source database connection mismatch/);
+  assert.equal(started, false);
+  assert.equal(state.status, 'rollback_resuming');
 });
 async function probe(t, {row, runtimeExists = true, exists = true, table = true, claims, scans = 0}) {
   const directory = await mkdtemp(join(tmpdir(), 'maintenance-authority-'));

@@ -9,7 +9,7 @@ import {createDatabaseFence, databaseIdentity} from './platform-upgrade-database
 import {createCandidateManager} from './platform-upgrade-candidate.mjs';
 import {runMaintenanceUpgrade} from './platform-upgrade-maintenance.mjs';
 import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult, preflightBlock, collectPreflightHostFiles, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
-import {verifyMaintenanceWeb, assertMaintenanceDatabase} from './platform-upgrade-maintenance-health.mjs';
+import {verifyMaintenanceWeb, assertMaintenanceDatabase, assertRollbackConnection, assertRollbackDatabase} from './platform-upgrade-maintenance-health.mjs';
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
 import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson, assertDirectoryDurability} from './platform-upgrade-maintenance-transport.mjs';
@@ -65,7 +65,7 @@ export function maintenanceHostAdapter(options = {}) {
     if (hostMode ? containerNetwork !== 'host' || url.hostname !== '127.0.0.1' || (url.port || '5432') !== boundPort : url.hostname !== 'postgres' || (url.port && url.port !== '5432')) throw new Error('maintenance supports only the bound Compose PostgreSQL endpoint');
     const role = decodeURIComponent(url.username), database = decodeURIComponent(url.pathname.slice(1)), password = decodeURIComponent(url.password);
     if (![role, database].every(value => /^[a-z][a-z0-9_]{0,62}$/.test(value))) throw new Error('unsupported database identity');
-    return {env, values, role, password, database, port: Number(url.port || 5432)};
+    return {env, values, role, password, database, host: url.hostname, port: Number(url.port || 5432)};
   };
   const secretPath = state => resolve(recovery, `identity-${state.generation}.json`);
   const secrets = async state => {
@@ -333,7 +333,12 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
     async resumeRollback(state) {
       const saved = await secrets(state), nodes = await nodesFor(state);
       const sourceTarget = {version: saved.source.values.DEEPSONAR_VERSION, values: saved.source.values};
-      const startSource = async () => {dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]);};
+      const startSource = async () => {
+        // Existing activation receipts authorize forward repair, never a changed
+        // .env pointing the same source image at a different database.
+        assertRollbackConnection(await source(), saved);
+        dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]);
+      };
       const waitSource = async preparing => {
         const deadline = Date.now() + (options.readyTimeoutMs ?? 180000);
         while (true) {
@@ -341,6 +346,30 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
           if (Date.now() >= deadline) throw new Error('source readiness failed; preserve recorded activation boundary');
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
+        const maintenance = await adminScalar(state, {database: saved.source.database, sql: "SELECT to_regclass('public.platform_upgrade_state') IS NOT NULL"});
+        const configured = await source();
+        assertRollbackConnection(configured, saved);
+        for (const service of ['scheduler', 'image-admission']) {
+          const id = dc(['ps', '-q', service]).toString().trim();
+          if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('rollback source container missing');
+          const entries = JSON.parse(run(['inspect', '--format', '{{json .Config.Env}}', id]).toString());
+          const urls = entries.filter(entry => entry.startsWith('DATABASE_URL='));
+          if (urls.length !== 1) throw new Error('rollback source database connection mismatch');
+          let url;
+          try {url = new URL(urls[0].slice('DATABASE_URL='.length));} catch {throw new Error('rollback source database connection mismatch');}
+          if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.hostname !== configured.host) throw new Error('rollback source database connection mismatch');
+          assertRollbackConnection({role: decodeURIComponent(url.username), password: decodeURIComponent(url.password), database: decodeURIComponent(url.pathname.slice(1)), port: Number(url.port || 5432)}, saved);
+          const generations = entries.filter(entry => entry.startsWith('DEEPSONAR_UPGRADE_GENERATION='));
+          if (maintenance && (generations.length !== 1 || generations[0] !== `DEEPSONAR_UPGRADE_GENERATION=${saved.rollbackGeneration}`)) throw new Error('rollback source container generation mismatch');
+        }
+        const rows = await adminRows(state, {database: saved.source.database, sql: `SELECT
+(SELECT version FROM schema_meta WHERE id='global') AS schema_version,
+(SELECT claims_paused FROM global_settings WHERE id='global') AS claims_paused,
+(SELECT rolcanlogin FROM pg_roles WHERE rolname=${literal(saved.source.role)}) AS old_role_login,
+(SELECT rolcanlogin FROM pg_roles WHERE rolname=${literal(saved.rollbackRuntime.role)}) AS runtime_login,
+(SELECT rolsuper FROM pg_roles WHERE rolname=${literal(saved.rollbackRuntime.role)}) AS runtime_superuser
+${maintenance ? ",p.phase,p.generation,p.runtime_role,p.target_version FROM platform_upgrade_state p WHERE p.id='global'" : ''}`});
+        assertRollbackDatabase(rows[0], {state, saved, preparing, maintenance});
         await verifyMaintenanceWeb({dc, webUrl: options.webUrl}); verifyContainers({target: sourceTarget});
         await nodes.verify({generation: saved.rollbackGeneration, target: sourceTarget, active: !preparing});
       };
