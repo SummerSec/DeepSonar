@@ -49,21 +49,33 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
   const owner=spawn(process.execPath,['--input-type=module','-e',`
     import {spawn} from 'node:child_process';import {win32} from 'node:path';import {fileURLToPath} from 'node:url';
     import {windowsUpgradeOperation,withWindowsUpgradeLock} from ${JSON.stringify(windowsUrl)};
+    const diagnostic=(stage,extra={})=>process.stderr.write(JSON.stringify({stage,...extra})+'\\n');
+    process.on('uncaughtException',error=>{diagnostic('owner_exception',{code:error.code??null,name:error.name});process.exit(1);});
+    process.on('beforeExit',code=>diagnostic('owner_before_exit',{code}));
     let lease;const operation=request=>{const result=windowsUpgradeOperation(request);if(request.action==='acquire')lease=result;return result;};
     await withWindowsUpgradeLock(process.argv[1],async()=>{
-      const command="$ErrorActionPreference='Stop';$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;Add-Type -Path $r.library;$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation);try{[Console]::Out.WriteLine((@{borrower=$PID}|ConvertTo-Json -Compress));Start-Sleep -Seconds 90}finally{[UpgradeWindows]::CloseLease($h)}";
+      diagnostic('owner_acquired');
+      const command="$ErrorActionPreference='Stop';$stage='input';$h=[IntPtr]::Zero;try{$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;$stage='compile';Add-Type -Path $r.library;$stage='borrow';$h=[UpgradeWindows]::BorrowLease([int]$r.owner_pid,$r.handle,$r.owner_creation);$stage='ready';[Console]::Out.WriteLine((@{borrower=$PID}|ConvertTo-Json -Compress));$stage='sleep';Start-Sleep -Seconds 90}catch{[Console]::Error.WriteLine((@{stage=$stage;type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult}|ConvertTo-Json -Compress));exit 74}finally{if($h -ne [IntPtr]::Zero){[UpgradeWindows]::CloseLease($h)}}";
       // Keep the helper's output connected directly to the test reader. An
       // owner-owned forwarding pipe would close when we kill that owner and
       // could terminate PowerShell before testing the borrowed lock.
       // Windows/libuv ties ordinary children to the owner's lifetime. Detach
       // this test helper so there really is a live orphan after owner death.
       const helper=spawn(win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),['-NoProfile','-NonInteractive','-Command',command],{stdio:['pipe','inherit','inherit'],detached:true,windowsHide:true});
+      helper.on('spawn',()=>diagnostic('helper_spawned'));
+      helper.on('error',error=>diagnostic('helper_error',{code:error.code??null}));
+      helper.on('exit',(code,signal)=>diagnostic('helper_exit',{code,signal}));
+      helper.stdin.on('error',error=>diagnostic('helper_stdin_error',{code:error.code??null}));
       helper.stdin.end(JSON.stringify({...lease,owner_pid:process.pid,library:fileURLToPath(${JSON.stringify(library.href)})}));
       await new Promise(()=>{});
     },{operation});`,file],{stdio:['pipe','pipe','pipe']});
+  let diagnostics='';owner.stderr.on('data',data=>{diagnostics+=data.toString();});
+  const safeDiagnostics=()=>diagnostics.split(/\r?\n/).flatMap(line=>{
+    try {const {stage,code,signal,type,hresult,name}=JSON.parse(line);return typeof stage==='string'?[{stage,code,signal,type,hresult,name}]:[];}catch{return [];}
+  }).slice(-12);
   let borrower;
   t.after(async()=>{try{owner.kill('SIGKILL');}catch{}if(borrower)try{process.kill(borrower,'SIGKILL');}catch{}await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});});
-  const data=await Promise.race([once(owner.stdout,'data'),once(owner,'exit').then(()=>{throw new Error('native owner failed before borrowing');})]);
+  const data=await Promise.race([once(owner.stdout,'data'),once(owner,'exit').then(([code,signal])=>{throw new Error('native owner failed before borrowing: '+JSON.stringify({code,signal,diagnostics:safeDiagnostics()}));})]);
   borrower=JSON.parse(data[0].toString()).borrower;
   assert.doesNotThrow(()=>process.kill(borrower,0),'borrower must be alive before owner termination');
   const exited=once(owner,'exit');owner.kill('SIGKILL');await exited;
