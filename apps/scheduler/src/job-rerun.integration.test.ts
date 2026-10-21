@@ -86,6 +86,27 @@ if (!testDatabaseUrl) {
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${roleConfigId}, ${roleId}, NULL, 'claude-code', 'model-a')`;
 
+      // #757: explicit models require actual eligible credentials. Two CLI pins
+      // make the global CLI preference meaningful without changing account ownership.
+      const baselineCredentialId = randomUUID();
+      const piCredentialId = randomUUID();
+      const encrypted = credentialsModule.encryptSecret("rerun-integration-secret");
+      for (const [id, cli, provider, settings] of [
+        [baselineCredentialId, "claude-code", "anthropic", { env: {
+          ANTHROPIC_MODEL: "model-a", ANTHROPIC_DEFAULT_SONNET_MODEL: "model-b",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "model-current",
+        } }],
+        [piCredentialId, "pi", "openai", { provider: "openai", api: "openai-responses",
+          baseUrl: "http://127.0.0.1:9", models: [{ id: "model-a" }] }],
+      ] as const) {
+        await sql`INSERT INTO credentials (
+          id, name, kind, provider, project_id, ciphertext, nonce, auth_tag,
+          fingerprint, last4, status, agent_cli, settings_config_json
+        ) VALUES (${id}, ${`rerun-${cli}`}, 'llm_provider', ${provider}, ${projectId},
+          ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
+          ${id.slice(0, 16)}, 'cret', 'active', ${cli}, ${sql.json(settings)})`;
+      }
+
       const currentSnapshot = async (targetCanvasId = canvasId) =>
         snapshotModule.freezeAgentSnapshotNetworkPolicy(
           sql,
@@ -178,22 +199,9 @@ if (!testDatabaseUrl) {
       assert.ok(cliDrift.json().stale_fields.includes("agent_cli"));
 
       await sql`UPDATE role_configs SET agent_cli = 'claude-code', version = version + 1 WHERE id = ${roleConfigId}`;
-      const credentialId = randomUUID();
-      const encrypted = credentialsModule.encryptSecret("rerun-integration-secret");
-      // #679: empty account models + explicit RoleConfig.model fail-fast on
-      // snapshot resolve (MODEL_ALLOWLIST_UNCONFIGURED → current_snapshot_unresolvable).
-      // Fixture must admit model-a so resume still exercises credential identity drift.
-      await sql`
-        INSERT INTO credentials (
-          id, name, kind, provider, project_id, ciphertext, nonce, auth_tag,
-          fingerprint, last4, status, agent_cli, settings_config_json
-        ) VALUES (
-          ${credentialId}, 'rerun credential', 'llm_provider', 'anthropic', NULL,
-          ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag},
-          ${credentialId.slice(0, 16)}, 'cret', 'active', 'claude-code',
-          ${sql.json({ env: { ANTHROPIC_MODEL: "model-a" } })}
-        )`;
-      // #690: no role_credentials; inserting a unique active credential alone drifts identity.
+      // Disable the baseline account: the sole remaining Pi/OpenAI credential
+      // now determines identity, including provider, regardless of soft CLI preference.
+      await sql`UPDATE credentials SET status = 'disabled' WHERE id = ${baselineCredentialId}`;
       const credentialDrift = await post(resumeJobId, "resume");
       assert.equal(credentialDrift.statusCode, 409, credentialDrift.payload);
       assert.equal(credentialDrift.json().error_code, "SNAPSHOT_STALE");
@@ -205,8 +213,8 @@ if (!testDatabaseUrl) {
         credentialDrift.json().stale_fields.includes("credential_provider"),
         credentialDrift.payload,
       );
-      // Restore baseline: remove the credential so resolve again yields null identity.
-      await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
+      // Restore the exact baseline credential without rewriting historical snapshots.
+      await sql`UPDATE credentials SET status = 'active' WHERE id = ${baselineCredentialId}`;
 
       const resumed = await post(resumeJobId, "resume");
       assert.equal(resumed.statusCode, 200, resumed.payload);
