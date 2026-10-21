@@ -195,7 +195,7 @@ async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWor
       ${input.id}, ${input.endpoint}, ${input.protocol}, ${input.kind}, 'online',
       ${fingerprintApiKey(input.apiKey)}, ${input.token.hash}, ${input.token.prefix},
       ${sql.json(capacityJson(input.capacity))}, ${sql.json(input.labels)}, now(), now(),
-      ${WORKER_PROTOCOL_VERSION}, ${resolveProductVersion()}, ${process.env.DEEPSONAR_DEPLOYMENT_GENERATION ?? ""}
+      ${WORKER_PROTOCOL_VERSION}, ${resolveProductVersion()}, ${process.env.DEEPSONAR_UPGRADE_GENERATION ?? ""}
     )
     ON CONFLICT (id) DO UPDATE SET
       endpoint = excluded.endpoint,
@@ -300,6 +300,7 @@ export async function heartbeatWorker(input: WorkerAdmission & {
       throw new WorkerNodeError("WORKER_HEARTBEAT_OWNERSHIP", "heartbeat cannot change worker endpoint or ownership", 409);
     }
     const admitted = row.status !== "unavailable" && workerAdmissionMatches(state, input, resolveProductVersion()) &&
+      Boolean(state && workerGenerationTokenMatches(state, input.generationToken)) &&
       row.protocol_version === input.protocolVersion && row.platform_version === input.platformVersion &&
       row.deployment_generation === input.deploymentGeneration;
     const capacity = input.capacity ?? parseWorkerCapacity({

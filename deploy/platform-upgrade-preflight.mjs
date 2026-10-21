@@ -33,11 +33,19 @@ export function parsePreflightResult(output) {
 }
 
 
+// Compose config JSON re-escapes literal dollars for a subsequent Compose parse.
+export function resolveComposeEnvironment(environment) {
+  if (!environment || typeof environment !== 'object' || Array.isArray(environment) || Object.values(environment).some(value => typeof value !== 'string')) throw new Error('invalid rendered Compose environment');
+  return Object.fromEntries(Object.entries(environment).map(([key, value]) => [key, value.replaceAll('$$', '$')]));
+}
+
 // No content reads: evidence is bound to the rendered target container path.
 // The scheduler image runs as root unless Compose supplies a numeric identity.
 export async function collectPreflightHostFiles(compose, {directory = process.cwd()} = {}) {
-  const service = compose.services?.scheduler ?? {};
-  const target = service.environment?.DEEPSONAR_MASTER_KEY_FILE;
+  const raw = compose.services?.scheduler ?? {};
+  const decode = value => typeof value === 'string' ? value.replaceAll('$$', '$') : value;
+  const service = {...raw, volumes: (raw.volumes ?? []).map(v => ({...v, source: decode(v.source), target: decode(v.target)})), secrets: (raw.secrets ?? []).map(v => typeof v === 'object' ? {...v, source: decode(v.source), target: decode(v.target)} : v)};
+  const target = service.environment ? resolveComposeEnvironment(service.environment).DEEPSONAR_MASTER_KEY_FILE : undefined;
   if (!target) return [];
   const evidence = {key: 'DEEPSONAR_MASTER_KEY_FILE', path: target, exists: false, regular_file: false, readable: false, read_only: false, mode: 0};
   if (typeof target !== 'string' || !path.posix.isAbsolute(target) || path.posix.normalize(target) !== target) return [evidence];
@@ -53,7 +61,7 @@ export async function collectPreflightHostFiles(compose, {directory = process.cw
     const secret = (service.secrets ?? []).find(v => typeof v === 'object' && (v.target?.startsWith('/') ? v.target : '/run/secrets/' + (v.target || v.source)) === target);
     const definition = secret && compose.secrets?.[secret.source];
     if (typeof definition?.file !== 'string') return [evidence];
-    source = path.resolve(directory, definition.file);
+    source = path.resolve(directory, decode(definition.file));
     evidence.read_only = true;
   }
   try {
@@ -100,7 +108,7 @@ export async function targetConfigurationPreflight({target, values, commandEnv, 
     const rendered = dc(['config', '--format', 'json'], undefined, {...commandEnv, ...values});
     if (rendered.length > MAX_BYTES) throw new Error();
     const compose = JSON.parse(rendered.toString());
-    environment = compose.services?.scheduler?.environment;
+    environment = resolveComposeEnvironment(compose.services?.scheduler?.environment);
     host_files = await collectPreflightHostFiles(compose);
     if (!environment || typeof environment !== 'object' || Array.isArray(environment)
         || Object.values(environment).some(value => typeof value !== 'string')) throw new Error();

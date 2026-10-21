@@ -404,13 +404,19 @@ if (!testDatabaseUrl) {
       assert.equal(enrolled.node.deploymentGeneration, generation);
       assert.equal(enrolled.node.status, "online");
       assert.equal(enrolled.node.activeSandboxes, 1);
-      assert.equal((await heartbeatWorker({ ...next, token: original.nodeToken }))?.status, "online");
+      assert.equal((await heartbeatWorker({ ...next, generationToken, token: original.nodeToken }))?.status, "online");
       assert.equal((await claimWorkerForDispatch())?.id, nodeId);
       const leases = await sql`SELECT sandbox_id FROM worker_sandbox_leases WHERE worker_id = ${nodeId}`;
       assert.ok(leases.some(row => row.sandbox_id === `${nodeId}-late`));
+      // Public release/generation values do not authorize a retired agent.
+      assert.equal((await heartbeatWorker({ ...next, token: original.nodeToken }))?.status, "unavailable");
+      assert.equal(await claimWorkerForDispatch(), null);
+      await registerRemoteWorker({ ...registration, ...next, generationToken, existingNodeToken: original.nodeToken });
+      assert.equal((await heartbeatWorker({ ...next, generationToken: "wrong", token: original.nodeToken }))?.status, "unavailable");
+      await registerRemoteWorker({ ...registration, ...next, generationToken, existingNodeToken: original.nodeToken });
       // A subsequent old heartbeat fences again, and a good heartbeat cannot clear it.
       assert.equal((await heartbeatWorker({ ...identity, token: original.nodeToken }))?.status, "unavailable");
-      assert.equal((await heartbeatWorker({ ...next, token: original.nodeToken }))?.status, "unavailable");
+      assert.equal((await heartbeatWorker({ ...next, generationToken, token: original.nodeToken }))?.status, "unavailable");
       assert.equal(await claimWorkerForDispatch(), null);
       await registerRemoteWorker({ ...registration, ...next, generationToken, existingNodeToken: original.nodeToken });
       let pendingClaim: ReturnType<typeof claimWorkerForDispatch> | undefined;

@@ -25,7 +25,7 @@ test("host Docker lifecycle follows OpenSandbox Docker, not Kata or deleted prov
   assert.equal(managesHostDockerRuntime({ agentMode: "real", provider: "local-docker" }), false);
   assert.match(
     readFileSync(new URL("./index.ts", import.meta.url), "utf8"),
-    /const stopHostDiskMonitor = managesHostDockerRuntime\(\)/,
+    /registerStop\(managesHostDockerRuntime\(\) \? startHostDiskMonitor\(/,
   );
 });
 

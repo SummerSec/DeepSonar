@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, writeFile, chmod, rm, symlink, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {collectPreflightHostFiles} from './platform-upgrade-preflight.mjs';
+import {collectPreflightHostFiles, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
 test('host evidence binds exact rendered secret path and preserves unavailable evidence', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'preflight-files-'));
   try {
@@ -47,5 +47,15 @@ test('directory bind rejects internal symlinks and requires traversable parents 
     service.volumes[0].source = path.join(directory, 'linked-directory');
     service.environment.DEEPSONAR_MASTER_KEY_FILE = '/secrets/key';
     [proof] = await collectPreflightHostFiles(compose); assert.equal(proof.readable, true);
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
+test('rendered Compose dollar escaping is decoded exactly once for values and secret paths', async () => {
+  assert.deepEqual(resolveComposeEnvironment({DATABASE_URL: 'postgres://u:p$$a$$$$word@db/test'}), {DATABASE_URL: 'postgres://u:p$a$$word@db/test'});
+  const directory = await mkdtemp(path.join(tmpdir(), 'preflight-dollar-'));
+  try {
+    const source = path.join(directory, 'key'); await writeFile(source, 'not-read', {mode: 0o600});
+    const [proof] = await collectPreflightHostFiles({services: {scheduler: {environment: {DEEPSONAR_MASTER_KEY_FILE: '/run/key$$literal'}, volumes: [{type: 'bind', source, target: '/run/key$$literal', read_only: true}]}}});
+    assert.equal(proof.path, '/run/key$literal'); assert.equal(proof.readable, true);
   } finally { await rm(directory, {recursive: true, force: true}); }
 });

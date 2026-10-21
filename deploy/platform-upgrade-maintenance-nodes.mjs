@@ -7,8 +7,8 @@ export async function loadManagedInventory(path) {
   const raw = JSON.parse(await readFile(path, 'utf8'));
   return {nodes: validateNodeInventory(raw).nodes};
 }
-export function maintenanceNodes({inventory, registeredWorkerIds, transport, run, commandEnv}) {
-  const runner = createManagedNodeRunner({inventory, registeredWorkerIds, transport});
+export function maintenanceNodes({inventory, registeredWorkerIds, transport, run, commandEnv, sshOptions}) {
+  const runner = createManagedNodeRunner({inventory, registeredWorkerIds, transport, sshOptions});
   return {
     bindingHash: runner.bindingHash,
     async fence(generation) {for (const node of runner.nodes) await runner.fence({id: node.id, generation});},

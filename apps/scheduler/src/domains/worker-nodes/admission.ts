@@ -5,6 +5,7 @@ export interface WorkerAdmission {
   protocolVersion?: number;
   platformVersion?: string;
   deploymentGeneration?: string;
+  generationToken?: string;
 }
 export interface WorkerUpgradeState {
   generation: string;

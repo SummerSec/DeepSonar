@@ -200,6 +200,7 @@ export function registerWorkerNodeRoutes(app: FastifyInstance): void {
       nodeId = body.node_id;
       const node = await heartbeatWorker({
         token,
+        generationToken: z.string().max(512).optional().parse(req.headers["x-deepsonar-worker-generation-token"]),
         protocolVersion: body.protocol_version,
         platformVersion: body.platform_version,
         deploymentGeneration: body.deployment_generation,

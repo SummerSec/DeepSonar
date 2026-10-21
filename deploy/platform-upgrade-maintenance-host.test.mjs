@@ -1,11 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {maintenanceHostAdapter} from './platform-upgrade-maintenance-host.mjs';
 import {durablePrivateWrite} from './platform-upgrade-maintenance-transport.mjs';
+
+test('source planning rejects duplicate and noncanonical database assignments before Docker execution', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'maintenance-source-env-'));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  let calls = 0;
+  const io = maintenanceHostAdapter({directory, parsePlatformValues: () => ({}), run: () => {calls++; throw new Error('unexpected Docker execution');}});
+  for (const key of ['DEEPSONAR_DATABASE_USER', 'DEEPSONAR_DATABASE_PASSWORD', 'DEEPSONAR_DATABASE_NAME', 'DEEPSONAR_UPGRADE_GENERATION']) {
+    for (const contents of [`${key}=first\n${key}=second\n`, `export ${key}=value\n`, ` ${key}=value\n`, `${key} =value\n`, `${key}: value\n`]) {
+      await writeFile(join(directory, '.env'), contents);
+      await assert.rejects(io.plan({version: '2.0.0'}, {recovery: true}), /ambiguous deployment database configuration/);
+    }
+  }
+  assert.equal(calls, 0);
+});
+
+test('source planning decodes Compose dollar escaping exactly once before passing credentials on stdin', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'maintenance-source-dollar-'));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  await writeFile(join(directory, '.env'), 'DEEPSONAR_DATABASE_PASSWORD=p$a$$word\n');
+  let received;
+  const run = (args, input) => {
+    assert.equal(args.some(arg => arg.includes('p$a$$word')), false);
+    if (args.includes('config')) return Buffer.from(JSON.stringify({services: {scheduler: {environment: {DATABASE_URL: 'postgres://deepsonar:p$$a$$$$word@postgres:5432/deepsonar'}}, postgres: {}}}));
+    if (args.includes('ps')) return Buffer.from('a'.repeat(64));
+    if (args.includes('inspect')) return Buffer.from('bridge');
+    if (args.includes('/app/apps/scheduler/dist/platform-upgrade-schema-cli.js')) {
+      received = JSON.parse(input).connection;
+      throw new Error('fixture reached readonly schema planning');
+    }
+    if (args.includes('--network=none')) return Buffer.from('b'.repeat(64));
+    throw new Error('unexpected Docker operation');
+  };
+  const io = maintenanceHostAdapter({directory, run, parsePlatformValues: () => ({DEEPSONAR_SCHEDULER_IMAGE: 'source-image'})});
+  await assert.rejects(io.plan({version: '2.0.0', values: {DEEPSONAR_SCHEDULER_IMAGE: 'target-image'}}, {recovery: true}), /fixture reached readonly schema planning/);
+  assert.deepEqual(received, {host: '127.0.0.1', port: 5432, username: 'deepsonar', password: 'p$a$$word', database: 'deepsonar'});
+});
 async function probe(t, {row, runtimeExists = true, exists = true, table = true, claims, scans = 0}) {
   const directory = await mkdtemp(join(tmpdir(), 'maintenance-authority-'));
   t.after(() => rm(directory, {recursive: true, force: true}));

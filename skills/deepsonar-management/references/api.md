@@ -49,7 +49,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | GET | /metrics | admin | Prometheus 文本 |
 | GET | /workers | admin | 执行面 worker 注册表（无凭据） |
 | POST | /workers/register | 豁免（bootstrap token） | `{node_id,endpoint,opensandbox_api_key,capacity,protocol_version,platform_version,deployment_generation}`；返回一次性 `node_token`。不能占用保留 `local`（及 `DEEPSONAR_WORKER_LOCAL_ID`），已有节点重新准入必须携 `X-DeepSonar-Worker-Node-Token` 验证原身份；受管 generation 还必须携独立 `X-DeepSonar-Worker-Generation-Token`，不能仅凭 bootstrap token 换 id 绕过；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址。按 IP 限流并写审计 |
-| POST | /workers/heartbeat | 豁免（node token） | 刷新存活与容量；版本/generation 缺失或不匹配时保持 unavailable，正确心跳也不能自行解除已有 fence；不能改 endpoint / protocol / kind。拒绝改写所有权时 `409 WORKER_HEARTBEAT_OWNERSHIP`。按 IP 限流；拒绝写入审计 |
+| POST | /workers/heartbeat | 豁免（node token） | 刷新存活与容量；版本/generation 或受管代次的 X-DeepSonar-Worker-Generation-Token 缺失或不匹配时保持 unavailable，正确心跳也不能自行解除已有 fence；不能改 endpoint / protocol / kind。拒绝改写所有权时 `409 WORKER_HEARTBEAT_OWNERSHIP`。按 IP 限流；拒绝写入审计 |
 | DELETE | /workers/:id | admin | 显式 forget 无租约节点；存在租约时 `409`，不得删除执行证据。升级重新准入使用 register 并保留原 token/leases |
 
 ### 项目

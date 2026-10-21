@@ -22,8 +22,13 @@ try {
     process.stdout.write(JSON.stringify({schema: "deepsonar.schema-upgrade-result/v1", ...result}) + "\n");
     process.exitCode = result.ok ? 0 : 1;
   } finally { reserved.release(); }
-} catch {
+} catch (error) {
+  const safeCodes = new Set(["INVALID_INPUT", "INPUT_LIMIT", "INVALID_CONNECTION", "INVALID_CANDIDATE_REQUEST", "CANDIDATE_IDENTITY_MISMATCH", "INVALID_RESET_OPTION", "INVALID_SOURCE_SCHEMA_HASH", "VERIFIED_BACKUP_REQUIRED", "APPROVED_PLAN_MISMATCH", "CANDIDATE_PAUSE_LOST"]);
+  const message = error instanceof Error ? error.message : "";
+  const code = safeCodes.has(message) ? message : "CANDIDATE_SCHEMA_OPERATION_FAILED";
+  const driverCode = (error as {code?: unknown} | null)?.code;
+  const sqlstate = typeof driverCode === "string" && /^[0-9A-Z]{5}$/.test(driverCode) ? driverCode : undefined;
   process.stdout.write(JSON.stringify({schema: "deepsonar.schema-upgrade-result/v1", ok: false, applied: false,
-    blocking_errors: [{code: "CANDIDATE_SCHEMA_OPERATION_FAILED"}]}) + "\n");
+    blocking_errors: [{code, ...(sqlstate ? {sqlstate} : {})}]}) + "\n");
   process.exitCode = 1;
 } finally { await connection?.end({timeout: 5}); }

@@ -8,7 +8,7 @@ import {assertDrained, forwardVersion, verifyBackup} from './platform-upgrade.mj
 import {createDatabaseFence, databaseIdentity} from './platform-upgrade-database.mjs';
 import {createCandidateManager} from './platform-upgrade-candidate.mjs';
 import {runMaintenanceUpgrade} from './platform-upgrade-maintenance.mjs';
-import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult, preflightBlock, collectPreflightHostFiles} from './platform-upgrade-preflight.mjs';
+import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult, preflightBlock, collectPreflightHostFiles, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
 import {verifyMaintenanceWeb, assertMaintenanceDatabase} from './platform-upgrade-maintenance-health.mjs';
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
@@ -41,7 +41,7 @@ export function maintenanceHostAdapter(options = {}) {
     const values = valuesFor(target);
     const snapshot = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...identity, sql: CONFIG_SNAPSHOT_SQL});
     if (resetProjection) snapshot.role_configs = snapshot.role_configs.map(row => ({...row, agent_cli: null, ...(row.project_id !== null ? {model: null} : {})}));
-    const composeConfig = rendered(values), environment = composeConfig.services.scheduler.environment;
+    const composeConfig = rendered(values), environment = resolveComposeEnvironment(composeConfig.services.scheduler.environment);
     const host_files = await collectPreflightHostFiles(composeConfig, {directory: root});
     const result = run(['run', '--rm', '-i', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE, '/app/apps/scheduler/dist/platform-upgrade-preflight-cli.js'], JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment, host_files}), commandEnv, [0, 1]);
     const report = parsePreflightResult(result.stdout ?? result);
@@ -50,7 +50,11 @@ export function maintenanceHostAdapter(options = {}) {
   };
   const source = async () => {
     const env = await readFile(envPath, 'utf8'), values = parseValues(env);
-    const config = rendered(values), url = new URL(config.services.scheduler.environment.DATABASE_URL);
+    for (const key of ['DEEPSONAR_DATABASE_USER', 'DEEPSONAR_DATABASE_PASSWORD', 'DEEPSONAR_DATABASE_NAME', 'DEEPSONAR_UPGRADE_GENERATION']) {
+      const entries = env.split(/\r?\n/).filter(line => new RegExp(`^\\s*(?:export\\s+)?${key}(?:\\s*[=:]|\\s*$)`).test(line));
+      if (entries.length > 1 || (entries.length === 1 && !entries[0].startsWith(`${key}=`))) throw new Error('ambiguous deployment database configuration');
+    }
+    const config = rendered(values), url = new URL(resolveComposeEnvironment(config.services.scheduler.environment).DATABASE_URL);
     const postgres = config.services.postgres;
     const hostMode = postgres?.network_mode === 'host' && config.services.scheduler.network_mode === 'host';
     const containerNetwork = run(['inspect', '--format', '{{.HostConfig.NetworkMode}}', transport.pgContainer()]).toString().trim();
@@ -80,7 +84,7 @@ export function maintenanceHostAdapter(options = {}) {
   };
   const nodesFor = async state => {
     const saved = await secrets(state);
-    return maintenanceNodes({inventory: saved.inventory, registeredWorkerIds: saved.registeredWorkerIds, transport: options.nodeTransport, run, commandEnv});
+    return maintenanceNodes({inventory: saved.inventory, registeredWorkerIds: saved.registeredWorkerIds, transport: options.nodeTransport, sshOptions: options.sshOptions, run, commandEnv});
   };
   const checkClaims = async state => {const saved = await secrets(state); const result = await adminScalar(state, {database: saved.source.database, sql: claimsSql}); assertDrained(result);
     const scans = await adminScalar(state, {database: saved.source.database, sql: "SELECT count(*)::int FROM runtime_image_scans WHERE status IN ('claimed','running')"});
@@ -164,7 +168,7 @@ export function maintenanceHostAdapter(options = {}) {
       const inventory = await loadManagedInventory(options.nodes);
       const sourceClaims = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...prior, sql: claimsSql});
       const blocking_errors = [...cli.plan.blocking_errors, ...preflight.blocking_errors.filter(error => error.code !== 'DATABASE_SCHEMA_MISMATCH')];
-      try {maintenanceNodes({inventory, registeredWorkerIds, transport: options.nodeTransport, run, commandEnv});} catch {blocking_errors.push({code: 'MANAGED_NODE_INVENTORY_MISMATCH'});}
+      try {maintenanceNodes({inventory, registeredWorkerIds, transport: options.nodeTransport, sshOptions: options.sshOptions, run, commandEnv});} catch {blocking_errors.push({code: 'MANAGED_NODE_INVENTORY_MISMATCH'});}
       if (!forwardVersion(prior.values.DEEPSONAR_VERSION, target.version)) blocking_errors.push({code: 'TARGET_NOT_NEWER'});
       if (sourceClaims.claims_paused && !recovering) blocking_errors.push({code: 'SOURCE_ALREADY_PAUSED'});
       return {...cli.plan, reset_role_identity: resetRoleIdentity, source_schema_sha256, source_environment_sha256: hash(prior.env), blocking_errors, preflight, preflight_projection: resetRoleIdentity ? 'planned_role_identity_reset' : 'none'};
@@ -230,7 +234,12 @@ export function maintenanceHostAdapter(options = {}) {
     async rebuild(state) {
       const manager = await candidateManager(state); await manager.restore(state.receipts.backup);
       const result = await manager.apply(state.receipts.backup, state.plan.plan_hash, {reset_role_identity: state.plan.reset_role_identity === true});
-      if (!result.ok) throw new Error('candidate schema rebuild blocked');
+      if (!result.ok) {
+        const reported = result.blocking_errors?.[0]?.code ?? result.plan?.blocking_errors?.[0]?.code;
+        const allowed = new Set(['APPROVED_PLAN_MISMATCH', 'ROLE_CONFIG_IDENTITY_REVIEW_REQUIRED', 'STRUCTURE_VERSION_ALIAS', 'UNKNOWN_SOURCE_STRUCTURE', 'ACTIVE_SOURCE_JOBS', 'UNSETTLED_SOURCE_EFFECTS', 'SOURCE_CLAIMS_NOT_PAUSED', 'CANDIDATE_PAUSE_LOST', 'VERIFIED_BACKUP_REQUIRED', 'CANDIDATE_SCHEMA_OPERATION_FAILED']);
+        const code = allowed.has(reported) ? reported : 'CANDIDATE_SCHEMA_OPERATION_FAILED';
+        throw Object.assign(new Error(code), {code});
+      }
       return {ok: true, plan_hash: state.plan.plan_hash};
     },
     async configurePreparing(state) {

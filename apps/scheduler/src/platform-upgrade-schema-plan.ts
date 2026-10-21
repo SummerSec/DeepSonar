@@ -15,7 +15,10 @@ export async function readUpgradePlan(db: MigrationConnection, {reset_role_ident
     const plan = await planSchemaRebuild(db);
     const columns = await db`SELECT table_name,column_name,data_type,udt_name,is_nullable,column_default
       FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name,ordinal_position`;
-    const constraints = await db`SELECT c.relname AS table_name,k.conname,pg_get_constraintdef(k.oid) AS definition
+    // PostgreSQL's pretty deparser removes redundant associative Boolean
+    // grouping introduced by BETWEEN expansion. pg_dump/restore reparses those
+    // expressions, so the non-pretty spelling is not a stable structural proof.
+    const constraints = await db`SELECT c.relname AS table_name,k.conname,pg_get_constraintdef(k.oid, true) AS definition
       FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='public' ORDER BY c.relname,k.conname`;
     const effects = await db<{ count: number }>`SELECT count(*)::int AS count FROM job_attempt_effects WHERE status IN ('effect_pending','unknown')`;
