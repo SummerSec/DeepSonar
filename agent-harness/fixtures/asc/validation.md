@@ -77,16 +77,21 @@ the configured network/proxy; they were stopped. Copying the host's already
 installed dependencies allowed isolated execution without claiming that the
 final mobile Dockerfile built successfully.
 
-## Remaining validation
+## Final mobile image CI and remaining validation
 
-Final mobile images and arm64 execution require their own complete acceptance
-run. Host tests, a dedicated ASC test container, and QEMU execution must not be
-described as native dual-architecture final-image validation. No speed/RSS
-benchmark or device/application execution was performed.
+[Mobile CI run 39395573082](https://github.com/SummerSec/DeepSonar/actions/runs/39395573082)
+validated commit [`a46138f497df8394805c3774281a4eaa8d228712`](https://github.com/SummerSec/DeepSonar/commit/a46138f497df8394805c3774281a4eaa8d228712).
+Both linux/amd64 and linux/arm64 final mobile image builds passed, with all
+**59 real command invocations passing on each platform**. The arm64 execution
+used QEMU; this is not native dual-architecture validation.
+
+Native arm64 execution, speed/RSS benchmarks, and device/application execution
+remain untested. The successful fixture matrix does not establish general APK
+compatibility or a performance improvement.
 
 ## Read-only upstream license review
 
-The fixed radguard revision `290de20c925c4a2c7642b1a63c9997185a06e130`
+The fixed [radguard revision `290de20c925c4a2c7642b1a63c9997185a06e130`](https://github.com/MG1937/radguard/tree/290de20c925c4a2c7642b1a63c9997185a06e130)
 was checked against its complete six-commit history (not a shallow checkout),
 root and nested paths, README/docs/source headers, Cargo package metadata,
 annotated tags v0.1.0–v0.1.3, and release packaging workflow. No LICENSE,
@@ -95,11 +100,17 @@ permission covering radguard was found. The v0.1.3 public release page only
 links its generated changelog and does not add a license grant. Release
 attachments were not separately inspected.
 
-The parent rust_ASC root LICENSE, Cargo.toml and README say Apache-2.0, but
-no text explicitly covering the separately versioned radguard submodule was
-found. This review does not establish distribution authorization. Clarification
-covering the pinned revision remains required before distribution; no upstream
-message was sent.
+The pinned rust_ASC revision explicitly declares Apache-2.0 in its
+[root LICENSE](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/LICENSE)
+and [Cargo.toml](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/Cargo.toml).
+Its [.gitmodules](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/.gitmodules)
+identifies the separately versioned radguard repository; the pinned submodule's
+[Cargo.toml](https://github.com/MG1937/radguard/blob/290de20c925c4a2c7642b1a63c9997185a06e130/Cargo.toml)
+has no independent license declaration. Submodule license coverage remains
+unclear and unverified. This absence does not establish a definite prohibition
+on distribution, and is not treated as a hard blocker for PR #755; it also does
+not establish explicit authorization covering radguard. No upstream message
+was sent.
 
 ## CI dependency resolution correction
 

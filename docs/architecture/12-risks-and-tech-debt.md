@@ -28,9 +28,9 @@
 
 ## 2.1 ASC 迁移验收证据（#754）
 
-源码审查另发现：rust_ASC 根许可证为 Apache-2.0，但固定的 radguard 子模块 `290de20c925c4a2c7642b1a63c9997185a06e130` 没有 LICENSE 文件或 Cargo `license` 字段。根许可证不能单独证明子模块分发许可；正式分发前须澄清。
+源码审查确认：rust_ASC 固定提交 `236dd096669c99eb30f6e1af0b24e668eff55dd5` 的 [LICENSE](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/LICENSE) 与 [Cargo.toml](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/Cargo.toml) 明确声明 Apache-2.0。[.gitmodules](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/.gitmodules) 指向的 [radguard 固定源码树](https://github.com/MG1937/radguard/tree/290de20c925c4a2c7642b1a63c9997185a06e130) 没有独立许可证声明，其 [Cargo.toml](https://github.com/MG1937/radguard/blob/290de20c925c4a2c7642b1a63c9997185a06e130/Cargo.toml) 亦无 `license` 字段。子模块许可覆盖尚未明确、未核实；这不足以断言确定禁止分发，也不作为 PR #755 的硬阻塞，同时不宣称已取得明确覆盖 radguard 的授权。
 
-Mobile 默认 rust_ASC 的源码固定、CLI 兼容入口和 Python 显式回退属于实现契约，不能单独证明对真实 APK 的行为等价或性能提升。Manifest、类/引用查询、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件的输出/退出码，以及 amd64/arm64 构建与执行，须由已获许可的 fixture 实测留证。仅 `--help`、mock 或 QEMU 运行不得写为全面兼容或原生双架构验证。验收完成前保留显式 `droidasc-python` 选择，Rust 真实错误不得自动掩盖；详见 [工具链契约](../RUNTIME_TEST_TOOLCHAINS.md)。
+Mobile 最终镜像已在提交 `a46138f497df8394805c3774281a4eaa8d228712` 的 [CI 39395573082](https://github.com/SummerSec/DeepSonar/actions/runs/39395573082) 完成 amd64/arm64 构建与 fixture 验收，每个平台各 59 次真实命令均通过；Manifest、类/引用查询、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件的覆盖见 [验证记录](../../agent-harness/fixtures/asc/validation.md)。arm64 运行使用 QEMU，原生 arm64 与性能尚未验证，fixture 通过不证明一般 APK 兼容或性能提升。`droidasc-python` 显式选择是固定契约，Rust 真实错误不得自动掩盖；详见 [工具链契约](../RUNTIME_TEST_TOOLCHAINS.md)。
 
 ## 3. 有意暂缓的设计
 

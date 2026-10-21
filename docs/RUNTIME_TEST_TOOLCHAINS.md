@@ -45,6 +45,6 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 
 `droidasc-python` 显式调用保留的 Python Droid ASC `0.1.1.post1`。Rust 失败后不自动重跑 Python；Agent 若需要回退，应明确记录所选实现、版本、APK 哈希、参数、stdout/stderr、退出码与输出文件。JADX、apktool 继续承担完整反编译及资源/smali 工作。Python 仍供 Frida、Objection、androguard、LIEF 等工具使用，本次迁移不意味着可移除全部 Python。
 
-实现契约与验收证据分开：`--help` 或 mock 通过不证明 APK 兼容。需用已获许可的 fixture 验证 Manifest、类查询、引用搜索、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件，并逐项保留输出和退出码。amd64/arm64 的构建与实际运行应分别报告，QEMU 运行不能标为原生运行；当前不能据此宣称双架构真实 APK 兼容或性能提升已经验证。
+实现契约与验收证据分开：`--help` 或 mock 通过不证明 APK 兼容。需用已获许可的 fixture 验证 Manifest、类查询、引用搜索、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件，并逐项保留输出和退出码。amd64/arm64 的构建与实际运行应分别报告，QEMU 运行不能标为原生运行；[已记录的验收证据](../agent-harness/fixtures/asc/validation.md)覆盖最终 amd64 和 arm64（QEMU）镜像，各通过 59 次真实命令检查；不代表原生 arm64、复杂 APK 的普遍兼容或性能提升已验证。
 
 已发布 registry 的 immutable digest 保持原样，不把源码工具迁移伪写为既有镜像内容。新镜像须独立构建验收后再经发布流程登记；本 PR 不发布镜像。

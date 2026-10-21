@@ -11,7 +11,7 @@
       "source": "https://github.com/MG1937/rust_ASC",
       "commit": "236dd096669c99eb30f6e1af0b24e668eff55dd5",
       "radguard_commit": "290de20c925c4a2c7642b1a63c9997185a06e130",
-      "license_scope": "Apache-2.0 is the rust_ASC root license; pinned radguard has no LICENSE or Cargo license field, requiring clarification before distribution",
+      "license_scope": "rust_ASC explicitly declares Apache-2.0; the pinned radguard submodule has no independent license declaration, and its license coverage remains unclear and unverified",
       "cargo_lock_sha256": "06052ead70d1b755306a048fcbfa664cd0da789d6edb5f982f4a013cb3ca0293",
       "license": "Apache-2.0",
       "build_flags": ["--release", "--locked", "--no-default-features"],

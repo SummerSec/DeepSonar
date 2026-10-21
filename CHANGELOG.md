@@ -8,7 +8,7 @@
 
 ### 新增
 
-- **Mobile ASC 默认 Rust（#754）**：固定 rust_ASC v0.1.1 源码、radguard 修订与 Cargo.lock，CLI-only 编译；`rust-asc` / `droidasc` 默认 Rust，保留 `--threads` 参数转换和显式 `droidasc-python`。损坏 ZIP 拒绝作为空引用结果；保留 JADX/apktool 和其它工具所需 Python。新增自建双 DEX APK 行为验收；最终镜像双架构证据仍须门禁验证，不宣称全面兼容或性能提升。
+- **Mobile ASC 默认 Rust（#754）**：固定 rust_ASC v0.1.1 源码、radguard 修订与 Cargo.lock，CLI-only 编译；`rust-asc` / `droidasc` 默认 Rust，保留 `--threads` 参数转换和显式 `droidasc-python`。损坏 ZIP 拒绝作为空引用结果；保留 JADX/apktool 和其它工具所需 Python。新增自建双 DEX APK 行为验收；最终 amd64 / arm64（QEMU）镜像各通过 59 次真实命令检查，不宣称原生双架构验证、全面兼容或性能提升。
 
 - **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION` / `DEEPSONAR_IMAGE_TAG`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 生成 `platform` digests 与最终 payload inspect 门禁扩展仍为 TODO；Compose 仍用 `DEEPSONAR_IMAGE_TAG`，digest 契约与 `deploy.sh upgrade` 留给后续片。
 
