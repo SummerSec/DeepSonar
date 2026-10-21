@@ -49,7 +49,7 @@ API 默认 `http://127.0.0.1:8080/api/`，保留自定义路径前缀。Shell �
 
 `check` 拉取并核对官方 manifest/digest 后，读取数据库一致性只读配置快照和目标 Compose 环境。离线配置验证通过 stdin 交给无网络、只读且无宿主挂载的目标容器；schema 计划则使用受控 PostgreSQL 连接和只读事务。返回 `plan.plan_hash`、`plan.risks`、`plan.blocking_errors` 及 `plan.preflight` 的覆盖/未检报告。阻断在暂停前处理；普通运维暂停不应被升级覆盖。风险批准必须匹配本次固定目标与结构计划，不能复用其他计划 hash。
 
-离线预检检查 RoleConfig、Settings、Credential 配置结构与引用，以及已声明环境变量的数值、布尔、URL 协议/主机和枚举语义。必需 `DEEPSONAR_MASTER_KEY_FILE` 由宿主提供绑定到目标容器路径的文件元数据：存在、普通文件、可读与只读挂载；缺失/不符阻断，但不读取文件内容。仍**不验证**密文解密、文件内密钥格式、外部 Provider/服务认证、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段与 Skill 源内容。`ok=true` 不是全部配置或外部依赖可用性承诺。
+离线预检检查 RoleConfig、Settings、Credential 配置结构与引用，以及已声明环境变量的数值、布尔、URL 协议/主机和枚举语义。必需 `DEEPSONAR_MASTER_KEY_FILE` 由宿主提供绑定到目标容器路径的文件元数据：存在、普通文件、可读与只读挂载；缺失/不符阻断。宿主在核验权限、只读绑定与文件身份后有界读取密钥内容，通过 stdin 送入断网目标容器；与运行时共用密钥解析及 AES-GCM 解密，认证全部已存凭据（含 disabled）。文件密钥优先于内联密钥。密钥和密文不进入 argv、日志或预检持久化产物，明文不返回。预检还复用 credential-first resolver，校验项目授权下全局角色/项目默认与 fallback model、CLI 的账号选择；只有数据库版本差异时仍继续这些检查，由独立 schema plan 判断重建。仍**不验证**外部 Provider/服务认证、模型实际可用性、未来 Job 的 provider/model 约束、registry 可拉取性、历史 Job 快照语义、未知环境扩展、原生 Provider 扩展字段与 Skill 源内容。`ok=true` 不是全部配置或外部依赖可用性承诺。
 
 #758 的旧角色 CLI 来源不明或项目 model 需要单独审核。只有明确选择 Shell `--reset-role-identity` / PowerShell `-ResetRoleIdentity`，并重新 `check`、批准该选项对应的 hash，才能清除所有角色 CLI 偏好和项目级 model；全局 model、其他配置及历史 Job 快照保留。普通维护授权不包含该清除动作。源配置预检只对明确计划中的重置作内存投影；候选完成重建后必须执行未经投影的目标配置验证。没有该选项时默认拒绝旧身份，不通过 force 绕过。
 

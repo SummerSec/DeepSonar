@@ -3,7 +3,25 @@ import assert from 'node:assert/strict';
 import {mkdtemp, writeFile, chmod, rm, symlink, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {collectPreflightHostFiles, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
+import {collectPreflightHostFiles, collectPreflightKeyInput, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
+test('private key content is read only after mount, permission and bounded regular-file checks', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'preflight-private-key-'));
+  try {
+    const source = path.join(directory, 'key'), content = 'a'.repeat(64);
+    await writeFile(source, content, {mode: 0o600});
+    const service = {environment: {DEEPSONAR_MASTER_KEY_FILE: '/run/key'}, volumes: [{type: 'bind', source, target: '/run/key', read_only: true}]}, compose = {services: {scheduler: service}};
+    const input = await collectPreflightKeyInput(compose);
+    assert.equal(input.master_key_file_content, content);
+    assert.equal(JSON.stringify(input.host_files).includes(content), false);
+    service.volumes[0].read_only = false;
+    assert.equal((await collectPreflightKeyInput(compose)).master_key_file_content, undefined);
+    service.volumes[0].read_only = true;
+    await chmod(source, 0o622);
+    assert.equal((await collectPreflightKeyInput(compose)).master_key_file_content, undefined);
+    await chmod(source, 0o600); await writeFile(source, 'x'.repeat(4097));
+    assert.equal((await collectPreflightKeyInput(compose)).master_key_file_content, undefined);
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
 test('host evidence binds exact rendered secret path and preserves unavailable evidence', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'preflight-files-'));
   try {

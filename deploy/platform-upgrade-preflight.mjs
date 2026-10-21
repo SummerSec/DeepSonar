@@ -1,4 +1,4 @@
-import { stat, lstat, realpath, access } from "node:fs/promises";
+import { stat, lstat, realpath, access, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 // Host transport for the target image's offline validator. Never persist or log
@@ -39,9 +39,10 @@ export function resolveComposeEnvironment(environment) {
   return Object.fromEntries(Object.entries(environment).map(([key, value]) => [key, value.replaceAll('$$', '$')]));
 }
 
-// No content reads: evidence is bound to the rendered target container path.
+// Metadata evidence is bound to the rendered target container path. Only the
+// explicit private-input callback enables a bounded read after validation.
 // The scheduler image runs as root unless Compose supplies a numeric identity.
-export async function collectPreflightHostFiles(compose, {directory = process.cwd()} = {}) {
+export async function collectPreflightHostFiles(compose, {directory = process.cwd(), readKey} = {}) {
   const raw = compose.services?.scheduler ?? {};
   const decode = value => typeof value === 'string' ? value.replaceAll('$$', '$') : value;
   const service = {...raw, volumes: (raw.volumes ?? []).map(v => ({...v, source: decode(v.source), target: decode(v.target)})), secrets: (raw.secrets ?? []).map(v => typeof v === 'object' ? {...v, source: decode(v.source), target: decode(v.target)} : v)};
@@ -89,12 +90,31 @@ export async function collectPreflightHostFiles(compose, {directory = process.cw
     const readable = (entry) => uid === 0 || Boolean(entry.mode & (entry.uid === uid ? 0o400 : entry.gid === gid ? 0o040 : 0o004));
     const traversable = (entry) => entry.isDirectory() && (uid === 0 || Boolean(entry.mode & (entry.uid === uid ? 0o100 : entry.gid === gid ? 0o010 : 0o001)));
     evidence.readable = readable(info) && directories.every(traversable);
+    if (readKey && evidence.readable && evidence.regular_file && evidence.read_only && !(evidence.mode & 0o022)) {
+      const file = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const bytes = Buffer.alloc(4097);
+      try {
+        const before = await file.stat();
+        if (!before.isFile() || before.dev !== info.dev || before.ino !== info.ino || before.mode !== info.mode || before.size > 4096) throw new Error();
+        const {bytesRead} = await file.read(bytes, 0, bytes.length, 0);
+        const after = await file.stat();
+        if (bytesRead > 4096 || before.size !== after.size || before.mtimeMs !== after.mtimeMs || bytesRead !== after.size) throw new Error();
+        readKey(bytes.subarray(0, bytesRead).toString('utf8'));
+      } finally {bytes.fill(0); await file.close();}
+    }
   } catch { /* Missing/unreadable metadata remains a blocking precondition. */ }
   return [evidence];
 }
 
+// Private key content is separate from public metadata and travels only on stdin.
+export async function collectPreflightKeyInput(compose, options = {}) {
+  let master_key_file_content;
+  const host_files = await collectPreflightHostFiles(compose, {...options, readKey: value => {master_key_file_content = value;}});
+  return {host_files, ...(master_key_file_content === undefined ? {} : {master_key_file_content})};
+}
+
 export async function targetConfigurationPreflight({target, values, commandEnv, dc, run, snapshotSql}) {
-  let snapshot, environment, host_files;
+  let snapshot, environment, keyInput;
   try {
     // SQL is sent via stdin too; -X ignores psqlrc and -q suppresses BEGIN/COMMIT
     // command tags. A single repeatable-read transaction captures all inputs.
@@ -109,13 +129,13 @@ export async function targetConfigurationPreflight({target, values, commandEnv, 
     if (rendered.length > MAX_BYTES) throw new Error();
     const compose = JSON.parse(rendered.toString());
     environment = resolveComposeEnvironment(compose.services?.scheduler?.environment);
-    host_files = await collectPreflightHostFiles(compose);
+    keyInput = await collectPreflightKeyInput(compose);
     if (!environment || typeof environment !== 'object' || Array.isArray(environment)
         || Object.values(environment).some(value => typeof value !== 'string')) throw new Error();
   } catch {
     return preflightBlock('HOST_COMPOSE_CONFIG_FAILED', 'host.scheduler_environment', 'Could not resolve the target Scheduler environment from Compose.');
   }
-  const input = JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment, host_files});
+  const input = JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment, ...keyInput});
   if (Buffer.byteLength(input) > MAX_BYTES) return preflightBlock('HOST_PREFLIGHT_INPUT_TOO_LARGE', 'host.database_snapshot', 'Configuration snapshot exceeds the bounded offline validation input size.');
   try {
     const result = run(['run', '--rm', '-i', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE,
@@ -129,7 +149,7 @@ export async function targetConfigurationPreflight({target, values, commandEnv, 
 }
 
 // Keep full config rows so obsolete/unknown persisted keys cannot disappear in
-// a host-side projection. Credential encryption material is never selected.
+// a host-side projection. Encryption material is private stdin input only.
 export const CONFIG_SNAPSHOT_SQL = `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SELECT jsonb_build_object(
   'database_schema_version', (SELECT version FROM schema_meta WHERE id='global'),
@@ -143,6 +163,6 @@ SELECT jsonb_build_object(
   'runtime_image_versions', (SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY runtime_image_id), '[]'::jsonb) FROM
     (SELECT runtime_image_id, trust_status FROM runtime_image_versions) t),
   'credentials', (SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM
-    (SELECT id, kind, provider, project_id, status, agent_cli, public_metadata_json, settings_config_json, meta_json FROM credentials) t)
+    (SELECT id, kind, provider, project_id, status, agent_cli, public_metadata_json, settings_config_json, meta_json, ciphertext, nonce, auth_tag FROM credentials) t)
 );
 COMMIT;`;

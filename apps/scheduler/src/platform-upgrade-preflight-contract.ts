@@ -16,6 +16,8 @@ export interface PreflightSnapshot {
   database_schema_version: number;
   target_schema_version: number;
   environment: Record<string, string>;
+  /** Private stdin only: never include in reports, logs, plans or journals. */
+  master_key_file_content?: string;
   host_files?: import("./platform-upgrade-preflight-environment.js").HostFileEvidence[];
   global_settings: PreflightRow[];
   projects: PreflightRow[];

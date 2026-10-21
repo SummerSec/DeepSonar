@@ -403,7 +403,8 @@ test('host sends read-only config snapshot and resolved target environment only 
   const read = calls.find(call => call.args.includes('psql') && !call.args.includes('-Atc'));
   assert.match(read.input, /^BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;/);
   assert.match(read.input, /COMMIT;$/);
-  assert.doesNotMatch(CONFIG_SNAPSHOT_SQL, /ciphertext|nonce|auth_tag|health_detail|master_key/);
+  assert.match(CONFIG_SNAPSHOT_SQL, /ciphertext, nonce, auth_tag/);
+  assert.doesNotMatch(CONFIG_SNAPSHOT_SQL, /health_detail|master_key|FROM jobs|FROM job_attempts/);
   const validate = calls.find(call => call.args[0] === 'run');
   assert.ok(validate.args.includes('--network=none') && validate.args.includes('--read-only') && validate.args.includes('-i'));
   assert.ok(!validate.args.includes('-v') && !validate.args.includes('--mount') && !validate.args.includes('-e'));

@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { parseCredentialMasterKey, decryptCredentialWithKey } from "./credential-crypto.js";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { isCurrentAgentCli, rejectNonCurrentAgentCli } from "@deepsonar/shared-types";
@@ -35,8 +36,8 @@ function masterKey(): Buffer {
     cachedKey = null;
     throw new Error("未配置主密钥（DEEPSONAR_MASTER_KEY_FILE），凭据功能不可用");
   }
-  const buf = /^[0-9a-f]{64}$/i.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
-  if (buf.length !== 32) throw new Error("主密钥必须是 32 字节（64 hex 或 base64）");
+  let buf: Buffer;
+  try {buf = parseCredentialMasterKey(raw);} catch {throw new Error("主密钥必须是 32 字节（64 hex 或 base64）");}
   cachedKey = buf;
   return buf;
 }
@@ -59,12 +60,7 @@ export function encryptSecret(plaintext: string): Encrypted {
 }
 
 export function decryptSecret(e: Pick<Encrypted, "ciphertext" | "nonce" | "auth_tag">): string {
-  const decipher = createDecipheriv("aes-256-gcm", masterKey(), Buffer.from(e.nonce, "base64"));
-  decipher.setAuthTag(Buffer.from(e.auth_tag, "base64"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(e.ciphertext, "base64")),
-    decipher.final(),
-  ]).toString("utf8");
+  return decryptCredentialWithKey(masterKey(), e);
 }
 
 export function fingerprintOf(plaintext: string): string {

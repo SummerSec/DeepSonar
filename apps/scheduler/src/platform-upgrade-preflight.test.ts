@@ -1,6 +1,7 @@
 import { validateNativeProviderStructure } from "./platform-upgrade-preflight-environment.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import {createCipheriv} from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { SCHEMA_VERSION } from "./schema-version.js";
 import { PREFLIGHT_SCHEMA, type PreflightSnapshot } from "./platform-upgrade-preflight-contract.js";
-import { validatePlatformUpgradeSnapshot } from "./platform-upgrade-preflight.js";
+import { validatePlatformUpgradeSnapshot, validatePlatformUpgradeConfiguration } from "./platform-upgrade-preflight.js";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const roleId = "22222222-2222-4222-8222-222222222222";
@@ -27,6 +28,99 @@ function fixture(): PreflightSnapshot {
 function codes(snapshot: PreflightSnapshot): string[] {
   return validatePlatformUpgradeSnapshot(snapshot).blocking_errors.map((error) => error.code);
 }
+function encryptedFixture(plaintext = "private-credential", key = Buffer.from("a".repeat(64), "hex")) {
+  const nonce = Buffer.alloc(12, 3), cipher = createCipheriv("aes-256-gcm", key, nonce);
+  return {ciphertext: Buffer.concat([cipher.update(plaintext), cipher.final()]).toString("base64"), nonce: nonce.toString("base64"), auth_tag: cipher.getAuthTag().toString("base64")};
+}
+
+test("offline defaults use the complete credential-first resolver and never mutate stored inputs", async () => {
+  const snapshot = fixture(), id = "44444444-4444-4444-8444-444444444444";
+  snapshot.environment.DEEPSONAR_MASTER_KEY = "a".repeat(64);
+  snapshot.credentials = [{id, kind: "llm_provider", provider: "anthropic", project_id: null, status: "active", agent_cli: "claude-code", public_metadata_json: {}, meta_json: {}, settings_config_json: {env: {ANTHROPIC_MODEL: "model"}}, ...encryptedFixture()}];
+  snapshot.projects[0].config_json = {enabled_agent_clis: ["pi"], default_credential_id: id, default_model_ref: "model"};
+  assert.ok((await validatePlatformUpgradeConfiguration(snapshot)).blocking_errors.some(error => error.code === "PROVIDER_CREDENTIAL_CLI_MISMATCH"));
+  const cliMismatch = runCli(JSON.stringify(snapshot));
+  assert.equal(cliMismatch.status, 1);
+  assert.ok(JSON.parse(cliMismatch.stdout).blocking_errors.some((error: {code: string}) => error.code === "PROVIDER_CREDENTIAL_CLI_MISMATCH"));
+  snapshot.projects[0].config_json = {default_agent_cli: "pi", default_credential_id: id, default_model_ref: "model"};
+  const before = JSON.stringify(snapshot);
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true); // preference is not a hard CLI restriction
+  assert.equal(JSON.stringify(snapshot), before);
+  snapshot.credentials[0].status = "disabled";
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, false);
+  snapshot.credentials[0].status = "active";
+  snapshot.projects[0].config_json = {default_credential_id: id, default_model_ref: "missing-model"};
+  assert.ok((await validatePlatformUpgradeConfiguration(snapshot)).blocking_errors.some(error => error.code === "PROVIDER_CREDENTIAL_NO_MATCH"));
+  assert.ok((await validatePlatformUpgradeConfiguration(snapshot)).not_checked.includes("historical_job_snapshots"));
+});
+
+test("projects without an account or model default retain future Job selection, and default resolution stays scoped", async () => {
+  const snapshot = fixture(); snapshot.environment.DEEPSONAR_MASTER_KEY = "a".repeat(64);
+  const credential = (id: string, extra = {}) => ({id, kind: "llm_provider", provider: "anthropic", project_id: null, status: "active", agent_cli: "claude-code", public_metadata_json: {}, meta_json: {}, settings_config_json: {env: {ANTHROPIC_MODEL: "model"}}, ...encryptedFixture(), ...extra});
+  const first = "44444444-4444-4444-8444-444444444444", second = "55555555-5555-4555-8555-555555555555";
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true);
+  snapshot.credentials = [credential(first), credential(second)];
+  snapshot.projects[0].config_json = {enabled_credential_ids: [first, second], default_agent_cli: "claude-code"};
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true);
+  snapshot.projects[0].config_json = {};
+  snapshot.role_configs[0].model = "model";
+  assert.ok((await validatePlatformUpgradeConfiguration(snapshot)).blocking_errors.some(error => error.code === "PROVIDER_CREDENTIAL_MULTI_MATCH"));
+  snapshot.credentials[1].status = "disabled";
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true);
+  snapshot.credentials[1].status = "active";
+  const otherProject = "66666666-6666-4666-8666-666666666666";
+  snapshot.projects.push({id: otherProject, config_json: {}});
+  snapshot.credentials[1].project_id = otherProject;
+  // The other project has both accounts, so assert the first project has no ambiguity.
+  let result = await validatePlatformUpgradeConfiguration(snapshot);
+  assert.equal(result.blocking_errors.some(error => error.location === "projects[0].config_json"), false);
+  snapshot.credentials[0].status = "disabled";
+  result = await validatePlatformUpgradeConfiguration(snapshot);
+  assert.ok(result.blocking_errors.some(error => error.location === "projects[0].config_json" && error.code === "PROVIDER_CREDENTIAL_NO_MATCH"));
+});
+
+test("offline GCM authenticates stored credentials without reporting key, plaintext or ciphertext", async () => {
+  const snapshot = fixture(); snapshot.environment.DEEPSONAR_MASTER_KEY = "a".repeat(64);
+  snapshot.credentials = [{id: "44444444-4444-4444-8444-444444444444", kind: "llm_provider", provider: "anthropic", project_id: null, status: "disabled", agent_cli: "claude-code", public_metadata_json: {}, meta_json: {}, settings_config_json: {}, ...encryptedFixture()}];
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true);
+  for (const change of [{auth_tag: Buffer.alloc(16).toString("base64")}, {nonce: ""}, {ciphertext: "broken-private-value"}]) {
+    const bad = structuredClone(snapshot); Object.assign(bad.credentials[0], change);
+    const result = await validatePlatformUpgradeConfiguration(bad);
+    assert.ok(result.blocking_errors.some(error => error.code === "CREDENTIAL_DECRYPTION_FAILED"));
+    const output = JSON.stringify(result);
+    for (const value of ["private-credential", "broken-private-value", snapshot.environment.DEEPSONAR_MASTER_KEY, String(snapshot.credentials[0].ciphertext)]) assert.equal(output.includes(value), false);
+  }
+  snapshot.environment.DEEPSONAR_MASTER_KEY = "b".repeat(64);
+  assert.ok((await validatePlatformUpgradeConfiguration(snapshot)).blocking_errors.some(error => error.code === "CREDENTIAL_DECRYPTION_FAILED"));
+  snapshot.database_schema_version = SCHEMA_VERSION - 1;
+  const crossSchema = await validatePlatformUpgradeConfiguration(snapshot);
+  assert.ok(crossSchema.blocking_errors.some(error => error.code === "DATABASE_SCHEMA_MISMATCH"));
+  assert.ok(crossSchema.blocking_errors.some(error => error.code === "CREDENTIAL_DECRYPTION_FAILED"));
+  snapshot.database_schema_version = SCHEMA_VERSION;
+  snapshot.environment.DEEPSONAR_MASTER_KEY_FILE = "/run/secrets/master";
+  snapshot.host_files = [{key: "DEEPSONAR_MASTER_KEY_FILE", path: "/run/secrets/master", exists: true, regular_file: true, readable: true, read_only: true, mode: 0o600}];
+  snapshot.master_key_file_content = "a".repeat(64) + "\n";
+  assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true); // FILE wins over wrong inline key
+  const cliSuccess = runCli(JSON.stringify(snapshot));
+  assert.equal(cliSuccess.status, 0);
+  snapshot.credentials[0].auth_tag = Buffer.alloc(16).toString("base64");
+  const cliFailure = runCli(JSON.stringify(snapshot));
+  assert.equal(cliFailure.status, 1);
+  assert.ok(JSON.parse(cliFailure.stdout).blocking_errors.some((error: {code: string}) => error.code === "CREDENTIAL_DECRYPTION_FAILED"));
+  for (const secret of ["private-credential", snapshot.master_key_file_content.trim(), String(snapshot.credentials[0].ciphertext)]) assert.equal((cliSuccess.stdout + cliSuccess.stderr + cliFailure.stdout + cliFailure.stderr).includes(secret), false);
+  for (const invalid of [undefined, "", "private-invalid-format"]) {
+    snapshot.master_key_file_content = invalid;
+    assert.ok((await validatePlatformUpgradeConfiguration(snapshot)).blocking_errors.some(error => error.code === "CREDENTIAL_MASTER_KEY_INVALID"));
+  }
+});
+
+test("existing credential encrypt/decrypt API preserves hex and base64 key compatibility", () => {
+  for (const key of ["a".repeat(64), Buffer.from("a".repeat(64), "hex").toString("base64"), Buffer.from("a".repeat(64), "hex").toString("base64").replace(/=+$/, "")]) {
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", "const {encryptSecret,decryptSecret}=await import('./src/credentials.ts'); if(decryptSecret(encryptSecret('private-roundtrip'))!=='private-roundtrip')process.exit(1);"], {cwd: fileURLToPath(new URL("../", import.meta.url)), env: {...process.env, DEEPSONAR_OFFLINE_PREFLIGHT: "1", DEEPSONAR_MASTER_KEY: key, DEEPSONAR_MASTER_KEY_FILE: ""}, encoding: "utf8"});
+    assert.equal(child.status, 0, "runtime crypto API roundtrip failed");
+    assert.equal((child.stdout + child.stderr).includes("private-roundtrip"), false);
+  }
+});
 
 test("current project marker and canonical role defaults pass without a database", () => {
   assert.deepEqual(codes(fixture()), []);

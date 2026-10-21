@@ -8,7 +8,7 @@ import {assertDrained, forwardVersion, verifyBackup} from './platform-upgrade.mj
 import {createDatabaseFence, databaseIdentity} from './platform-upgrade-database.mjs';
 import {createCandidateManager} from './platform-upgrade-candidate.mjs';
 import {runMaintenanceUpgrade} from './platform-upgrade-maintenance.mjs';
-import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult, preflightBlock, collectPreflightHostFiles, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
+import {CONFIG_SNAPSHOT_SQL, PREFLIGHT_INPUT_SCHEMA, parsePreflightResult, preflightBlock, collectPreflightKeyInput, resolveComposeEnvironment} from './platform-upgrade-preflight.mjs';
 import {verifyMaintenanceWeb, assertMaintenanceDatabase, assertRollbackConnection, assertRollbackDatabase} from './platform-upgrade-maintenance-health.mjs';
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
@@ -42,8 +42,8 @@ export function maintenanceHostAdapter(options = {}) {
     const snapshot = await transport.scalar({image: values.DEEPSONAR_SCHEDULER_IMAGE, ...identity, sql: CONFIG_SNAPSHOT_SQL});
     if (resetProjection) snapshot.role_configs = snapshot.role_configs.map(row => ({...row, agent_cli: null, ...(row.project_id !== null ? {model: null} : {})}));
     const composeConfig = rendered(values), environment = resolveComposeEnvironment(composeConfig.services.scheduler.environment);
-    const host_files = await collectPreflightHostFiles(composeConfig, {directory: root});
-    const result = run(['run', '--rm', '-i', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE, '/app/apps/scheduler/dist/platform-upgrade-preflight-cli.js'], JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment, host_files}), commandEnv, [0, 1]);
+    const keyInput = await collectPreflightKeyInput(composeConfig, {directory: root});
+    const result = run(['run', '--rm', '-i', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m', '--entrypoint=node', values.DEEPSONAR_SCHEDULER_IMAGE, '/app/apps/scheduler/dist/platform-upgrade-preflight-cli.js'], JSON.stringify({...snapshot, schema: PREFLIGHT_INPUT_SCHEMA, target_schema_version: target.schema_version, environment, ...keyInput}), commandEnv, [0, 1]);
     const report = parsePreflightResult(result.stdout ?? result);
     if (result.status !== undefined && result.status !== (report.ok ? 0 : 1)) return preflightBlock('HOST_PREFLIGHT_STATUS_MISMATCH', 'host.target_validator', 'Target validator exit status disagrees with its structured report.');
     return report;

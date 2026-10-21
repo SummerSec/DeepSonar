@@ -36,8 +36,8 @@ try {
     console.log = console.warn = console.error = () => {};
     // The target container is read-only and has no application .env; production
     // host additionally runs --network=none and supplies no volumes or secrets.
-    const { validatePlatformUpgradeSnapshot } = await import("./platform-upgrade-preflight.js");
-    const result = validatePlatformUpgradeSnapshot(snapshot);
+    const { validatePlatformUpgradeConfiguration } = await import("./platform-upgrade-preflight.js");
+    const result = await validatePlatformUpgradeConfiguration(snapshot);
     process.stdout.write(JSON.stringify(result) + "\n");
     process.exitCode = result.ok ? 0 : 1;
   }

@@ -1063,7 +1063,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：删除或修订契约时必须同步删除旧 schema/API/UI/运行时路径；不得保留双读双写、fallback、shim、legacy mode 或自动旧配置转换。旧输入不满足当前契约时必须 fail closed；不可变历史快照/Evidence/审计记录不作为新运行时兼容输入。
 - **决策来源**：兼容层会让权限、schema 和语义出现双重真相。
-- **实现状态**：部分达标；当前导入 schema mismatch 和不支持 CLI 都 fail closed、历史结果只读保留，但 runtime registry contract 仍保留 schema v1 兼容解析、旧 `image_ref` 投影和历史 digest alias（D-07），不能把物理清扫前的实现写成全量 as-built。
+- **实现状态**：部分达标；当前导入 schema mismatch 和不支持 CLI 都 fail closed、历史结果只读保留，升级离线预检复用 credential-first 默认解析并认证已存密文（覆盖边界见 [部署说明](../../deploy/README.md)）；但 runtime registry contract 仍保留 schema v1 兼容解析、旧 `image_ref` 投影和历史 digest alias（D-07），不能把物理清扫前的实现写成全量 as-built。
 - **代码入口**：[设计不向后兼容](../../DESIGN.md)、[升级配置预检](../../apps/scheduler/src/platform-upgrade-preflight.ts)、[Transfer schema validation](../../apps/scheduler/src/transfer/pack.ts)、[runtime CLI boundary](../../apps/scheduler/src/transfer/sanitize.ts)。
 - **验证证据**：`pnpm ci:unit:platform-upgrade-preflight`、`pnpm ci:unit:deploy-ps1`、`pnpm ci:test:transfer-schema`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:docs-freshness`；人工检查新代码没有兼容 shim。
 

@@ -1,4 +1,6 @@
-import { resolveCredentialModelRef } from "./domains/provider-adapter/resolve-credential.js";
+import { ProviderCredentialResolveError, resolveProviderCredentialForJob, type ResolveProviderCredentialInput } from "./domains/provider-adapter/resolve-credential.js";
+import { parseProjectAgentAllowlist } from "./domains/project-agent-allowlist/policy.js";
+import {parseCredentialMasterKey, decryptCredentialWithKey} from "./credential-crypto.js";
 import { validatePreflightEnvironment, validateNativeProviderStructure } from "./platform-upgrade-preflight-environment.js";
 import { z } from "zod";
 import { AgentCliWriteSchema, FindingProtocolConfig, CURRENT_AGENT_CLIS } from "@deepsonar/shared-types";
@@ -8,13 +10,14 @@ import { GlobalRulesPatch, SettingsPatchBody } from "./settings-validation.js";
 import { RoleConfigPutBody } from "./role-config-schema.js";
 import { validateRoleConfigValues } from "./role-config-values.js";
 import { providerCatalogEntry, sanitizeCredentialMetadata, validateCredentialCompatibility } from "./credentials.js";
-import { normalizeProviderSettings, materializeProviderSettings, extractModelsFromSettings } from "./provider-settings.js";
+import { normalizeProviderSettings, materializeProviderSettings } from "./provider-settings.js";
 import { PREFLIGHT_SCHEMA, PREFLIGHT_RESULT_SCHEMA, PREFLIGHT_TABLES, type PreflightSnapshot, type PreflightResult, type PreflightRow } from "./platform-upgrade-preflight-contract.js";
 
 const Row = z.record(z.string(), z.unknown());
 const Snapshot = z.object({
   schema: z.literal(PREFLIGHT_SCHEMA), database_schema_version: z.number().int(), target_schema_version: z.number().int(),
   environment: z.record(z.string(), z.string()),
+  master_key_file_content: z.string().max(4096).optional(),
   host_files: z.array(z.object({ key: z.string(), path: z.string(), exists: z.boolean(), regular_file: z.boolean(), readable: z.boolean(), read_only: z.boolean(), mode: z.number().int().min(0).max(4095) }).strict()).max(100).optional(),
   ...Object.fromEntries(PREFLIGHT_TABLES.map((table) => [table, z.array(Row)])),
 }).strict();
@@ -34,7 +37,7 @@ const ROW_KEYS: Record<string, string> = {
   role_config_files: "id role_config_id path content content_sha256 created_at updated_at",
   runtime_images: "id image_key enabled official",
   runtime_image_versions: "runtime_image_id trust_status",
-  credentials: "id kind provider project_id status agent_cli public_metadata_json settings_config_json meta_json",
+  credentials: "id kind provider project_id status agent_cli public_metadata_json settings_config_json meta_json ciphertext nonce auth_tag",
 };
 const ROLE_JSON_FIELDS = ["env_vars", "modules", "skills", "commands", "mcps", "subagents", "platform_tools", "sandbox_limits", "runtime_knobs"];
 const ROLE_METADATA = new Set("id role_id project_id version created_at updated_at".split(" "));
@@ -129,11 +132,6 @@ export function validatePlatformUpgradeSnapshot(input: unknown): PreflightResult
     if (cfg.default_agent_cli && !(cfg.enabled_agent_clis ?? [...CURRENT_AGENT_CLIS]).includes(cfg.default_agent_cli)) block("DEFAULT_CLI_OUTSIDE_ALLOWLIST", location + ".default_agent_cli");
     if (cfg.enabled_credential_ids !== undefined && cfg.default_credential_id && !ids.includes(cfg.default_credential_id)) block("DEFAULT_CREDENTIAL_OUTSIDE_ALLOWLIST", location + ".default_credential_id");
     if ((cfg.default_model_ref || cfg.fallback_model_refs?.length) && !cfg.default_credential_id) block("MODEL_REQUIRES_DEFAULT_CREDENTIAL", location + ".default_model_ref");
-    const credential = credentials.get(cfg.default_credential_id);
-    if (credential) {
-      const models = [cfg.default_model_ref, ...cfg.fallback_model_refs ?? []].filter((v): v is string => typeof v === "string");
-      check("MODEL_NOT_CONFIGURED", location + ".default_model_ref", () => cfg.allow_model_catalog_passthrough || models.every((model) => extractModelsFromSettings(credential.settings_config_json, String(credential.agent_cli)).includes(resolveCredentialModelRef(credential.settings_config_json, String(credential.agent_cli), model) ?? "")));
-    }
   });
   snapshot.role_configs.forEach((row, i) => {
     const location = `role_configs[${i}]`;
@@ -161,6 +159,68 @@ export function validatePlatformUpgradeSnapshot(input: unknown): PreflightResult
   snapshot.role_config_files.forEach((row, i) => {
     if (!roleConfigs.has(row.role_config_id)) block("ROLE_CONFIG_NOT_FOUND", `role_config_files[${i}].role_config_id`);
   });
+  result.ok = result.blocking_errors.length === 0;
+  return result;
+}
+
+/** Resolve configured defaults through the same credential-first policy as Job
+ * creation. The injected query reads only the supplied snapshot; neither the DB
+ * client nor an upstream credential probe is imported or invoked. */
+export async function validatePlatformUpgradeConfiguration(input: unknown): Promise<PreflightResult> {
+  const result = validatePlatformUpgradeSnapshot(input);
+  // The host separately plans a supported schema rebuild. A source schema
+  // mismatch must not skip configuration/secret checks that still apply before
+  // pausing the old deployment.
+  if (result.blocking_errors.some(error => error.code !== "DATABASE_SCHEMA_MISMATCH")) return result;
+  const snapshot = input as PreflightSnapshot;
+  const fileSelected = Boolean(snapshot.environment.DEEPSONAR_MASTER_KEY_FILE);
+  const rawKey = fileSelected ? snapshot.master_key_file_content : snapshot.environment.DEEPSONAR_MASTER_KEY;
+  let key: Buffer | undefined;
+  if (rawKey !== undefined || fileSelected || snapshot.credentials.length) {
+    try {key = parseCredentialMasterKey(rawKey ?? "");}
+    catch {result.blocking_errors.push({code: "CREDENTIAL_MASTER_KEY_INVALID", location: fileSelected ? "environment.DEEPSONAR_MASTER_KEY_FILE" : "environment.DEEPSONAR_MASTER_KEY", message: "Credential master key could not be validated"});}
+  }
+  if (key) for (const [index, row] of snapshot.credentials.entries()) {
+    try {
+      if (![row.ciphertext, row.nonce, row.auth_tag].every(value => typeof value === "string")) throw new Error();
+      // AES-GCM authenticates every stored credential, including disabled rows.
+      // Plaintext is discarded immediately and never returned to the host.
+      decryptCredentialWithKey(key, row as unknown as {ciphertext: string; nonce: string; auth_tag: string});
+    } catch {result.blocking_errors.push({code: "CREDENTIAL_DECRYPTION_FAILED", location: `credentials[${index}]`, message: "Stored credential could not be authenticated with the target master key"});}
+  }
+  key?.fill(0);
+  result.coverage.push("credential_master_key_format", "credential_ciphertext_authentication");
+  result.not_checked = result.not_checked.filter(value => value !== "credential_decryption_and_file_key_format");
+  for (const [index, project] of snapshot.projects.entries()) {
+    const allowlist = parseProjectAgentAllowlist(project.config_json);
+    const globals = snapshot.role_configs.filter(row => row.project_id == null && snapshot.agent_roles.some(role => role.id === row.role_id && (role.project_id == null || role.project_id === project.id)));
+    const choices = globals.length ? globals : [{}];
+    const seen = new Set<string>();
+    for (const role of choices) {
+      const models = [allowlist.default_model_ref ?? (typeof role.model === "string" ? role.model : null), ...allowlist.fallback_model_refs];
+      for (const modelRef of models) {
+        // A CLI preference alone does not require an LLM account. Projects may
+        // intentionally leave account/model selection to each future Job.
+        if (!allowlist.default_credential_id && !modelRef) continue;
+        const preferredAgentCli = allowlist.default_agent_cli ?? (typeof role.agent_cli === "string" ? role.agent_cli : null);
+        const key = JSON.stringify([modelRef, preferredAgentCli]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const db = (async () => snapshot.credentials.filter(row => row.kind === "llm_provider" && row.status === "active"
+          && (row.project_id == null || row.project_id === project.id))) as unknown as ResolveProviderCredentialInput["db"];
+        try {
+          await resolveProviderCredentialForJob({db, projectId: String(project.id), allowlist, preferredAgentCli, modelRef,
+            allowPassthrough: config.allowModelCatalogPassthrough || allowlist.allow_model_catalog_passthrough});
+        } catch (error) {
+          const known = new Set(["provider_credential_allowlist_stale", "provider_credential_no_match", "provider_credential_cli_mismatch", "provider_credential_protocol_incompatible", "provider_credential_multi_match"]);
+          const code = error instanceof ProviderCredentialResolveError && known.has(error.code) ? error.code.toUpperCase() : "CREDENTIAL_RESOLUTION_FAILED";
+          result.blocking_errors.push({code, location: `projects[${index}].config_json`, message: "Configured defaults cannot resolve a project-authorized credential in the target scheduler"});
+        }
+      }
+    }
+  }
+  result.coverage.push("credential_default_resolution");
+  result.not_checked.push("future_job_provider_model_constraints");
   result.ok = result.blocking_errors.length === 0;
   return result;
 }

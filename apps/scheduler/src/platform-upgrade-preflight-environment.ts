@@ -1,4 +1,5 @@
 import { parseOciDigestRef } from "./runtime-image-registry-contract.js";
+import {parseCredentialMasterKey} from "./credential-crypto.js";
 import type { PreflightSnapshot } from "./platform-upgrade-preflight-contract.js";
 
 export type HostFileEvidence = { key: string; path: string; exists: boolean; regular_file: boolean; readable: boolean; read_only: boolean; mode: number };
@@ -37,8 +38,7 @@ export function validatePreflightEnvironment(snapshot: PreflightSnapshot, block:
       block("REQUIRED_HOST_FILE_UNVERIFIED", "environment.DEEPSONAR_MASTER_KEY_FILE");
     }
   } else if (env.DEEPSONAR_MASTER_KEY) {
-    const raw = env.DEEPSONAR_MASTER_KEY.trim();
-    if (!/^[a-fA-F0-9]{64}$/.test(raw) && !(Buffer.from(raw, "base64").length === 32 && Buffer.from(raw, "base64").toString("base64") === raw)) invalid("DEEPSONAR_MASTER_KEY");
+    try {parseCredentialMasterKey(env.DEEPSONAR_MASTER_KEY).fill(0);} catch {invalid("DEEPSONAR_MASTER_KEY");}
   } else if (snapshot.credentials.length) block("CREDENTIAL_MASTER_KEY_MISSING", "environment.DEEPSONAR_MASTER_KEY");
 }
 
