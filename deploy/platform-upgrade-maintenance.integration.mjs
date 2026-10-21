@@ -108,6 +108,10 @@ export async function rehearse(configPath,output) {
       await assert.rejects(execute(io,config,'apply','0'.repeat(64)));
       assert.deepEqual(snapshot(fixture),before,'rejected approval must precede pause');
     });
+    await scenario('knowledge-background-fence',async(fixture,evidence,marker)=>{
+      const {rehearseKnowledgeFence}=await import('./platform-upgrade-knowledge.fixture.mjs');
+      await rehearseKnowledgeFence({config,fixture,evidence,marker,actors,approved,execute,assertActive,stateOf,secretsOf});
+    });
     await scenario('multinode-success',async(fixture,evidence,marker)=>{
       const {createMaintenanceMultinodeFixture}=await import('./platform-upgrade-maintenance-multinode.fixture.mjs');
       const nodes=await createMaintenanceMultinodeFixture(config,fixture);

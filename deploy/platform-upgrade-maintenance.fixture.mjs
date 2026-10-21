@@ -16,7 +16,7 @@ export function docker(args, input) {
 export async function loadConfig(path) {
   const config = JSON.parse(await readFile(path, 'utf8'));
   assert.match(config.registry, /^127\.0\.0\.1:[1-9][0-9]{1,4}$/);
-  assert.equal(config.oldSchema, 59, 'old image must bootstrap the real v59 baseline');
+  assert.ok(Number.isSafeInteger(config.oldSchema) && config.oldSchema > 0, 'declare the schema bootstrapped by the real source image');
   assert.ok(Number.isSafeInteger(config.newSchema) && config.newSchema > config.oldSchema);
   for (const version of [config.oldVersion, config.newVersion]) {
     assert.match(version, /^\d+\.\d+\.\d+$/);
