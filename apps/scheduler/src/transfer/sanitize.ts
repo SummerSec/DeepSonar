@@ -1,6 +1,5 @@
 /** 环境变量 / 文本 Secret 扫描（导出红线） */
 import {
-  CURRENT_AGENT_CLI_DEFAULT,
   rejectNonCurrentAgentCli,
   validateModuleSelectors,
   type CurrentAgentCli,
@@ -86,12 +85,19 @@ export function parseTransferredDshTaskMode(value: unknown, label: string): "sta
   throw new Error(`${label}.dsh_task_mode 非法`);
 }
 
-/** RoleConfig 导入是写路径：缺省当前 CLI，leftover / 未知 fail closed。历史 Job 快照不走这里。 */
-export function parseTransferredAgentCli(value: unknown, label: string): CurrentAgentCli {
-  if (value === undefined || value === null || value === "") return CURRENT_AGENT_CLI_DEFAULT;
+/** RoleConfig 导入是写路径：未指定偏好为 NULL，leftover / 未知 fail closed。历史 Job 快照不走这里。 */
+export function parseTransferredAgentCli(value: unknown, label: string): CurrentAgentCli | null {
+  if (value === undefined || value === null || value === "") return null;
   const leftover = rejectNonCurrentAgentCli(value);
   if (leftover) throw new Error(`${label}.agent_cli: ${leftover}`);
   return value as CurrentAgentCli;
+}
+
+/** Project RoleConfig import has the same identity-free contract as its API. */
+export function assertProjectRoleIdentityAbsent(value: Record<string, unknown>): void {
+  if (Object.hasOwn(value, "agent_cli") || Object.hasOwn(value, "model")) {
+    throw new Error("项目 RoleConfig 不接受 agent_cli / model；请使用项目 Agent 偏好");
+  }
 }
 
 export const ACTIVE_JOB_STATUSES = [

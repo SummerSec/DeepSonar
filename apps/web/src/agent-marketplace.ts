@@ -22,7 +22,7 @@ export function canInstallAgentPack(me: AuthMe | null): boolean {
 }
 
 const DEFAULT_CONFIG: RoleConfigInput = {
-  agent_cli: "claude-code",
+  agent_cli: null,
   dsh_task_mode: "standard",
   model: null,
   context_window_tokens: null,
@@ -141,8 +141,8 @@ export function parseAgentPack(input: string): AgentPack {
   rejectSecretFields(safeConfig);
   const envKeys = stringArray(rawConfig.env_keys, "config.env_keys");
   const envVars = validateEnvironment(envKeys, record(rawConfig.env_vars ?? {}, "config.env_vars"));
-  const agentCliValue = String(rawConfig.agent_cli ?? DEFAULT_CONFIG.agent_cli);
-  if (!["claude-code", "pi", "dsh"].includes(agentCliValue)) throw new Error("config.agent_cli 不受支持；codex / open-code 已停用，请迁移到 claude-code、pi 或 dsh");
+  const agentCliValue = rawConfig.agent_cli == null ? null : String(rawConfig.agent_cli);
+  if (agentCliValue !== null && !["claude-code", "pi", "dsh"].includes(agentCliValue)) throw new Error("config.agent_cli 不受支持；codex / open-code 已停用，请迁移到 claude-code、pi 或 dsh");
   const agentCli = agentCliValue as RoleConfigInput["agent_cli"];
   const dshTaskMode = String(rawConfig.dsh_task_mode ?? DEFAULT_CONFIG.dsh_task_mode);
   if (!["standard", "ptc"].includes(dshTaskMode)) throw new Error("config.dsh_task_mode 不受支持");

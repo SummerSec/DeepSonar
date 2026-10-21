@@ -7,6 +7,9 @@
 
 平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：基础机制已有代码，受管节点和显式回滚恢复正在接线，最终真实端到端验收未完成；不能把该决策等同于 #740 全部交付。
 
+#757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
+
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |

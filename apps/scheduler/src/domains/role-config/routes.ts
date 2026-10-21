@@ -14,7 +14,6 @@ import {
 import { sql } from "../../db.js";
 import { allocateRoleUiColor } from "../../role-colors.js";
 import { parseContextWindowTokens } from "../../provider-settings.js";
-import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
 import {
   parseSandboxLimitsOverride,
 } from "../role-runtime-snapshot/sandbox-limits.js";
@@ -97,18 +96,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
       ? await tx`SELECT id, version, allow_model_catalog_passthrough FROM role_configs WHERE role_id = ${roleId} AND project_id = ${projectId}`
       : await tx`SELECT id, version, allow_model_catalog_passthrough FROM role_configs WHERE role_id = ${roleId} AND project_id IS NULL`;
     const dropped_fields: Array<{ field: string; reason: string }> = [];
-    const requestedModel = typeof body.model === "string" ? body.model.trim() : "";
-    const persistModel = projectId
-      ? persistableProjectRoleConfigModel(
-        parseProjectImagePolicy(
-          (await tx`SELECT config_json FROM projects WHERE id = ${projectId}`)[0]?.config_json,
-        ),
-        body.model,
-      )
-      : body.model ?? null;
-    if (projectId && persistModel === null && requestedModel !== "") {
-      dropped_fields.push({ field: "model", reason: "inherit_global_ignores_project_model" });
-    }
+    const persistModel = projectId ? null : body.model ?? null;
     // #697: RoleConfig 不再写入/授权 allow_model_catalog_passthrough（仅平台 env + 管理员项目设置）
     if (body.allow_model_catalog_passthrough === true) {
       dropped_fields.push({
@@ -119,7 +107,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const row = {
       role_id: roleId,
       project_id: projectId,
-      agent_cli: body.agent_cli,
+      agent_cli: projectId ? null : body.agent_cli ?? null,
       dsh_task_mode: body.dsh_task_mode,
       model: persistModel,
       allow_model_catalog_passthrough: false,
@@ -215,8 +203,10 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const files = await sql`
       SELECT path, content, content_sha256 FROM role_config_files
       WHERE role_config_id = ${configId} ORDER BY path`;
+    const view = { ...cfg } as Record<string, unknown>;
+    if (cfg.project_id) { delete view.agent_cli; delete view.model; }
     return {
-      ...(cfg as Record<string, unknown>),
+      ...view,
       // #697: RoleConfig 列保留但 API 恒回报 false（解析侧已忽略）
       allow_model_catalog_passthrough: false,
       context_window_tokens: cfg.context_window_tokens == null ? null : Number(cfg.context_window_tokens),
@@ -291,7 +281,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     if (rejectUnlessUuid(reply, id, INVALID_ROLE_CONFIG_ID)) return;
     const body = z.object({
-      agent_cli: AgentCliWriteSchema,
+      agent_cli: AgentCliWriteSchema.nullable(),
     }).parse(req.body);
     const actorProjectId = req.actor?.projectId ?? null;
     const [row] = await sql`
@@ -309,6 +299,10 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         });
       }
     }
+    if (row.project_id) return reply.code(400).send({
+      error: "项目 RoleConfig 不接受 agent_cli；请设置项目 Agent CLI 偏好",
+      error_code: "PROJECT_ROLE_IDENTITY_FORBIDDEN",
+    });
     const patch = await sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
@@ -431,6 +425,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         r.name`;
     return rows.map((row) => {
       const { project_config_json: _projectConfigJson, ...bindable } = row;
+      if (row.project_id) { delete bindable.agent_cli; delete bindable.model; }
       return {
       ...bindable,
       context_window_tokens: row.context_window_tokens == null ? null : Number(row.context_window_tokens),
@@ -545,7 +540,7 @@ export function registerRoleConfigRoutes(app: FastifyInstance): void {
         error_code: "PROJECT_SCOPE_FORBIDDEN",
       });
     }
-    const body = RoleConfigPutBody.parse(req.body);
+    const body = RoleConfigPutBody.omit({ agent_cli: true, model: true }).parse(req.body);
     const [p] = await sql`SELECT id FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const [role] = await sql`SELECT id, name, kind FROM agent_roles WHERE id = ${roleId}`;

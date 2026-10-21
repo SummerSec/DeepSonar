@@ -206,10 +206,8 @@ def main() -> None:
     assert custom["name"] in enabled and "explore" in enabled, enabled
     print("含自定义:", [(r["name"], r["enabled"]) for r in proles if r["enabled"]])
 
-    # 6. 角色运行配置直接写 RoleConfig
+    # 6. 项目 RoleConfig 仅保存角色职责；CLI/model 由项目 Agent 偏好配置
     config_body = {
-        "agent_cli": "claude-code",
-        "model": None,
         "env_keys": [],
         "env_vars": {},
         "modules": [],
@@ -233,6 +231,9 @@ def main() -> None:
         config_body,
     )
     assert cfg["role_id"] == custom["id"]
+    assert "agent_cli" not in cfg and "model" not in cfg
+    for identity in ({"agent_cli": "pi"}, {"agent_cli": None}, {"model": "fixture-model"}, {"model": None}):
+        req("PUT", f"/projects/{pid}/role-configs/{custom['id']}", {**config_body, **identity}, 400)
     assert cfg["platform_tools_json"] == config_body["platform_tools"]
     project_configs = req("GET", f"/projects/{pid}/role-configs")
     custom_entry = next(c for c in project_configs if c["role_id"] == custom["id"])

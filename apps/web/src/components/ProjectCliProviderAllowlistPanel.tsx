@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type ProviderCredential } from "../api";
 import { isCurrentAgentCli } from "@deepsonar/shared-types";
 import { formatActiveConcurrencyQuota } from "../provider-account-concurrency";
+import { credentialSelectionPatch, defaultCredentialUnavailable } from "../project-provider-selection";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
 
@@ -56,16 +57,22 @@ export function ProjectCliProviderAllowlistPanel({
   credentials,
   enabledAgentClis,
   enabledCredentialIds,
+  credentialIdsConfigured,
+  defaultCredentialId,
   onSaved,
 }: {
   projectId: string;
   credentials: ProviderCredential[];
   enabledAgentClis: AgentCli[];
   enabledCredentialIds: string[];
+  credentialIdsConfigured: boolean;
+  defaultCredentialId: string | null;
   onSaved: () => void;
 }) {
   const [clis, setClis] = useState<AgentCli[]>(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
   const [credIds, setCredIds] = useState<string[]>(enabledCredentialIds);
+  const [credentialSelectionChanged, setCredentialSelectionChanged] = useState(false);
+  const [clearDefaultCredential, setClearDefaultCredential] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -75,12 +82,21 @@ export function ProjectCliProviderAllowlistPanel({
   useEffect(() => {
     setClis(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
     setCredIds(enabledCredentialIds);
-  }, [enabledAgentClis, enabledCredentialIds]);
+    setCredentialSelectionChanged(false);
+    setClearDefaultCredential(false);
+  }, [enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
 
   const llmCredentials = useMemo(
     () => credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)),
     [credentials, projectId],
   );
+
+  const unavailableDefault = defaultCredentialUnavailable(defaultCredentialId, llmCredentials);
+  const unavailableIds = credIds.filter((id) => !llmCredentials.some((credential) => credential.id === id && credential.status === "active"));
+  const removeUnavailableReferences = () => {
+    setCredIds((current) => current.filter((id) => !unavailableIds.includes(id)));
+    setCredentialSelectionChanged(true);
+  };
 
   const filteredByCli = useMemo(() => {
     if (clis.length === 0) return [];
@@ -116,7 +132,10 @@ export function ProjectCliProviderAllowlistPanel({
   };
 
   const toggleCred = (id: string) => {
-    setCredIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+    const current = credentialIdsConfigured || credentialSelectionChanged
+      ? credIds : llmCredentials.filter((credential) => credential.status === "active").map((credential) => credential.id);
+    setCredIds(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    setCredentialSelectionChanged(true);
   };
 
   const save = async () => {
@@ -130,13 +149,7 @@ export function ProjectCliProviderAllowlistPanel({
     try {
       await api.patchSettings(projectId, {
         enabled_agent_clis: clis,
-        enabled_credential_ids: credIds,
-        // Soft defaults removed from project settings UI; clear so Hub / RoleConfig own selection.
-        default_agent_cli: null,
-        default_credential_id: null,
-        default_model_ref: null,
-        fallback_model_refs: [],
-        allow_model_catalog_passthrough: false,
+        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential }),
       });
       showToast("已保存，下一 Job 生效", "ok");
       setSaved(true);
@@ -156,7 +169,7 @@ export function ProjectCliProviderAllowlistPanel({
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>CLI / Provider 启用</span>
           <HelpTip>
-            启用边界；Hub 从已启用项组合 CLI×Provider×镜像。模型 / CLI 选择由 Hub 与 RoleConfig 负责；并发在凭据页。
+            启用边界；Hub 从已启用项组合 CLI×Provider×镜像。模型 / CLI 选择由 Hub 与 RoleConfig 负责；账号并发在凭据页。
           </HelpTip>
         </div>
       </div>
@@ -193,7 +206,8 @@ export function ProjectCliProviderAllowlistPanel({
           ) : (
             <div className="space-y-2">
               {filteredByCli.map((credential) => {
-                const on = credIds.includes(credential.id);
+                const on = credentialIdsConfigured || credentialSelectionChanged
+                  ? credIds.includes(credential.id) : credential.status === "active";
                 const action = probeAction?.id === credential.id ? probeAction.kind : null;
                 return (
                   <div
@@ -232,8 +246,25 @@ export function ProjectCliProviderAllowlistPanel({
               })}
             </div>
           )}
+          {(credentialIdsConfigured || credentialSelectionChanged) && unavailableIds.length > 0 && (
+            <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
+              白名单中有 {unavailableIds.length} 个账号已删除、停用或不再可访问；请修复引用后保存。
+              <button type="button" onClick={removeUnavailableReferences} disabled={busy}
+                className="ml-2 underline">移除失效引用</button>
+            </div>
+          )}
+          {unavailableDefault && (
+            <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
+              默认账号已删除、停用或不再可访问。
+              <button type="button" onClick={() => setClearDefaultCredential(true)} disabled={busy || clearDefaultCredential}
+                className="ml-2 underline">{clearDefaultCredential ? "默认引用将在保存时清除" : "清除失效默认引用"}</button>
+            </div>
+          )}
           {probeError && <div role="alert" className="mt-2 rounded-md border border-red-400/20 bg-red-400/[.06] px-3 py-2 text-[11px] leading-5 text-red-200">{probeError}</div>}
-          {credIds.length === 0 && (
+          {!credentialIdsConfigured && !credentialSelectionChanged && (
+            <p className="mt-2 text-[12px] text-zinc-400">未收紧凭据范围：自动使用项目可访问的有效账号。勾选变更后保存会建立显式白名单。</p>
+          )}
+          {(credentialIdsConfigured || credentialSelectionChanged) && credIds.length === 0 && (
             <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一个 Provider。</div>
           )}
         </div>

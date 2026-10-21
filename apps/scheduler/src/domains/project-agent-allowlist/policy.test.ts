@@ -5,7 +5,6 @@ import {
   assertAgentCliAllowlisted,
   assertCredentialAllowlisted,
   parseProjectAgentAllowlist,
-  seedProjectAgentAllowlist,
   toHubAgentCliCatalog,
   compatibleAgentClisForProvider,
   toHubProviderCatalogEntry,
@@ -16,35 +15,6 @@ test("parse: 缺键视为未配置，CLI 全集，凭据空", () => {
   assert.equal(allowlist.configured, false);
   assert.deepEqual(allowlist.enabled_agent_clis, ["claude-code", "pi", "dsh"]);
   assert.deepEqual(allowlist.enabled_credential_ids, []);
-});
-
-test("seed: 从未配置迁移到绑定集合，不静默丢弃", () => {
-  const cfg: Record<string, unknown> = {};
-  const cred = "11111111-1111-4111-8111-111111111111";
-  const { changed, allowlist } = seedProjectAgentAllowlist(cfg, {
-    agent_clis: ["pi", "leftover"],
-    credential_ids: [cred],
-  });
-  assert.equal(changed, true);
-  assert.equal(allowlist.configured, true);
-  assert.ok(allowlist.enabled_agent_clis.includes("claude-code"));
-  assert.ok(allowlist.enabled_agent_clis.includes("pi"));
-  assert.ok(!allowlist.enabled_agent_clis.includes("leftover" as never));
-  assert.deepEqual(allowlist.enabled_credential_ids, [cred]);
-  assert.equal(allowlist.default_credential_id, cred);
-});
-
-test("seed: 已配置不再改写", () => {
-  const cfg: Record<string, unknown> = {
-    enabled_agent_clis: ["claude-code"],
-    enabled_credential_ids: [],
-  };
-  const { changed } = seedProjectAgentAllowlist(cfg, {
-    agent_clis: ["pi"],
-    credential_ids: ["11111111-1111-4111-8111-111111111111"],
-  });
-  assert.equal(changed, false);
-  assert.deepEqual(cfg.enabled_agent_clis, ["claude-code"]);
 });
 
 test("patch: 缺省必须 ∈ 白名单；至少一种 CLI", () => {
@@ -180,4 +150,53 @@ test("provider catalog keeps multi-CLI protocol capability without leaking onto 
   }, allowlist);
   assert.deepEqual(pinned!.compatible_agent_clis, ["pi"]);
   assert.ok(!pinned!.compatible_agent_clis.includes("claude-code"));
+});
+
+test("CLI-only restrictions and preference patches do not freeze credential authorization", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const cfg: Record<string, unknown> = {};
+  const policy = applyProjectAgentAllowlistPatch(cfg, {
+    enabled_agent_clis: ["pi"], default_agent_cli: "pi", default_credential_id: id,
+  });
+  assert.equal(policy.configured, true);
+  assert.equal(policy.credential_ids_configured, false);
+  assert.equal(Object.hasOwn(cfg, "enabled_credential_ids"), false);
+  assert.equal(policy.default_credential_id, id);
+  assert.doesNotThrow(() => assertCredentialAllowlisted(policy, id));
+  assert.ok(toHubProviderCatalogEntry({ id, name: "fake", provider: "anthropic", status: "active", agent_cli: "pi" }, policy));
+  assert.equal(toHubProviderCatalogEntry({ id, name: "fake", provider: "anthropic", status: "disabled", agent_cli: "pi" }, policy), null);
+});
+
+test("explicit empty or stale credential restrictions remain closed and unchanged", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  for (const ids of [[], [id]]) {
+    const cfg = { enabled_credential_ids: ids };
+    const policy = parseProjectAgentAllowlist(cfg);
+    assert.equal(policy.credential_ids_configured, true);
+    assert.throws(() => assertCredentialAllowlisted(policy, "22222222-2222-4222-8222-222222222222"));
+    assert.deepEqual(cfg, { enabled_credential_ids: ids });
+  }
+});
+
+test("catalog reads remain dynamic and never persist current credentials", async () => {
+  const { listHubProviderCatalog, listHubAgentCliCatalog, loadProjectAgentAllowlist } = await import("./catalog.js");
+  const cfg: Record<string, unknown> = {};
+  let rows = [{ id: "11111111-1111-4111-8111-111111111111", name: "fake", provider: "anthropic", status: "active", agent_cli: "pi" }];
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    queries.push(query);
+    if (query.includes("FROM projects")) return [{ config_json: cfg }];
+    if (query.includes("FROM credentials")) return rows;
+    throw new Error(`unexpected query: ${query}`);
+  }) as unknown as Parameters<typeof loadProjectAgentAllowlist>[0];
+  assert.equal((await listHubProviderCatalog(db, "project"))[0]?.credential_id, rows[0].id);
+  rows = [{ ...rows[0], id: "22222222-2222-4222-8222-222222222222" }];
+  assert.equal((await listHubProviderCatalog(db, "project"))[0]?.credential_id, rows[0].id);
+  rows = [];
+  assert.deepEqual(await listHubProviderCatalog(db, "project"), []);
+  assert.equal((await loadProjectAgentAllowlist(db, "project")).configured, false);
+  assert.ok((await listHubAgentCliCatalog(db, "project")).every((entry) => !entry.is_default));
+  assert.deepEqual(cfg, {});
+  assert.ok(queries.every((query) => !/UPDATE|INSERT/.test(query)));
 });

@@ -2,7 +2,7 @@ import { AgentCliWriteSchema, PlatformToolName } from "@deepsonar/shared-types";
 import { z } from "zod";
 
 export const RoleConfigPutBody = z.object({
-    agent_cli: AgentCliWriteSchema.default("claude-code"),
+    agent_cli: AgentCliWriteSchema.nullish(),
     dsh_task_mode: z.enum(["standard", "ptc"]).default("standard"),
     model: z.string().nullish(),
     /**

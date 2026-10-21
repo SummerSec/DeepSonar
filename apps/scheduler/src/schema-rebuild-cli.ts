@@ -18,9 +18,11 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 function parseArgs(argv: string[]): RebuildOptions {
   const options: RebuildOptions = { mode: "plan" };
   for (const arg of argv) {
+    if (arg === "--") continue;
     if (arg === "--apply") options.mode = "apply";
     else if (arg === "--plan") options.mode = "plan";
     else if (arg === "--force") options.force = true;
+    else if (arg === "--reset-role-identity") options.resetRoleIdentity = true;
     else if (arg === "--keep-staging") options.keepStaging = true;
     else if (arg === "--no-dump") options.dump = false;
     else if (arg === "--no-terminate") options.terminateScheduler = false;
@@ -91,6 +93,7 @@ Flags:
   --apply            rebuild public from database/schema.sql and copy data
   --force            allow rebuild when already current, structure is unknown,
                      or jobs are still active
+  --reset-role-identity explicitly discard old role CLI/project model preferences during copy
   --keep-staging     keep schema ${REBUILD_STAGING_SCHEMA} after success
   --no-dump          skip pg_dump (in-database staging still happens first)
   --dump-dir=DIR     custom dump directory (default data/backups)

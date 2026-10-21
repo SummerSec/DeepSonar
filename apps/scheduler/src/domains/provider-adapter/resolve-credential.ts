@@ -3,16 +3,19 @@
  * Provider plugins + Hub capability needs. Hub never submits credential/account IDs;
  * RoleConfig.role_credentials is gone — no dual-read / fallback.
  */
-import { buildRepairFeedback, type RepairFeedback } from "@deepsonar/shared-types";
+import { buildRepairFeedback, isCurrentAgentCli, type RepairFeedback } from "@deepsonar/shared-types";
 import { validateCredentialCompatibility } from "../../credentials.js";
-import { extractModelsFromSettings } from "../../provider-settings.js";
+import { extractModelsFromSettings, resolveEffectiveModel, resolvePiCliModelSelection } from "../../provider-settings.js";
 import type { ProjectAgentAllowlist } from "../project-agent-allowlist/policy.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
 
 export type ResolveProviderCredentialInput = {
   db: RoleRuntimeSnapshotTransaction;
-  projectId: string;
-  agentCli: string;
+  projectId: string | null;
+  /** Explicit Hub constraint; never pass a platform seed here. */
+  agentCli?: string | null;
+  /** Explicit project/global preference, used only to break cross-CLI ties. */
+  preferredAgentCli?: string | null;
   allowlist: ProjectAgentAllowlist;
   /** Hub-proposed Provider plugin id (credentials.provider); never a credential UUID. */
   provider?: string | null;
@@ -71,22 +74,37 @@ function throwResolve(
   throw new ProviderCredentialResolveError(code, repair);
 }
 
+/** Shared candidate/capability-gate normalization; preserves each runtime dialect. */
+export function resolveCredentialModelRef(
+  settings: unknown,
+  agentCli: string,
+  modelRef: string,
+): string | null {
+  if (agentCli === "pi") {
+    try {
+      return resolvePiCliModelSelection({ model: modelRef, settingsConfig: settings }).cliModel;
+    } catch {
+      return null;
+    }
+  }
+  return resolveEffectiveModel({ roleModel: modelRef, agentCli, settingsConfig: settings });
+}
+
 function modelMatches(
   settings: unknown,
   agentCli: string,
   modelRef: string | null | undefined,
   allowPassthrough: boolean,
 ): boolean {
-  if (!modelRef) return true;
-  if (allowPassthrough) return true;
+  if (!modelRef || allowPassthrough) return true;
   const ids = extractModelsFromSettings(settings, agentCli);
-  if (ids.length === 0) return false;
-  return ids.includes(modelRef);
+  const resolved = resolveCredentialModelRef(settings, agentCli, modelRef);
+  return resolved !== null && ids.includes(resolved);
 }
 
 /**
- * Pick exactly one active, project-authorized, CLI-compatible credential.
- * Fail closed on zero or ambiguous matches (unless project default uniquely wins).
+ * Resolve provider/model/project authorization before choosing a CLI.
+ * A Hub CLI is a hard constraint; configuration preferences only break ties.
  */
 export async function resolveProviderCredentialForJob(
   input: ResolveProviderCredentialInput,
@@ -123,29 +141,28 @@ export async function resolveProviderCredentialForJob(
     health_status: string | null;
   }>;
 
-  const candidates: ResolvedProviderCredential[] = [];
-  for (const row of rows) {
-    if (row.project_id && row.project_id !== input.projectId) continue;
-    if (input.allowlist.configured && !input.allowlist.enabled_credential_ids.includes(row.id)) {
-      continue;
-    }
-    if (providerNeed && row.provider !== providerNeed) continue;
-    // Model compatibility is re-checked after credential selection (catalog admit / exclusive pin).
-    candidates.push({
-      id: row.id,
-      name: row.name,
-      provider: row.provider,
-      status: row.status,
-      project_id: row.project_id,
-      agent_cli: row.agent_cli,
-      settings_config_json: row.settings_config_json,
-      public_metadata_json: row.public_metadata_json,
-      meta_json: row.meta_json,
-      model_catalog_json: row.model_catalog_json,
-      model_catalog_fetched_at: row.model_catalog_fetched_at,
-      health_status: row.health_status,
+  // A stale explicit restriction must be repaired by an administrator, never widened.
+  const visibleRows = rows.filter((row) => row.status === "active"
+    && (!row.project_id || row.project_id === input.projectId));
+  const referencedIds = input.allowlist.credential_ids_configured
+    ? input.allowlist.enabled_credential_ids
+    : input.allowlist.default_credential_id ? [input.allowlist.default_credential_id] : [];
+  const missingIds = referencedIds.filter((id) => !visibleRows.some((row) => row.id === id));
+  if (missingIds.length > 0) {
+    throwResolve("provider_credential_allowlist_stale", {
+      message: "项目凭据白名单包含不存在、停用或不可访问的凭据；请管理员修复白名单",
+      path: input.allowlist.credential_ids_configured ? "enabled_credential_ids" : "default_credential_id",
+      expected: { kind: "active_project_authorized_credentials" },
+      observed: { unavailable_count: missingIds.length },
+      next_action: "repair_project_credential_allowlist",
+      category: "permanent_failure",
     });
   }
+  const candidates = visibleRows.filter((row) => {
+    if (input.allowlist.credential_ids_configured && !input.allowlist.enabled_credential_ids.includes(row.id)) return false;
+    if (providerNeed && row.provider !== providerNeed) return false;
+    return true;
+  });
 
   if (candidates.length === 0) {
     // No LLM needed when Hub/project did not ask for provider/model and RoleConfig has no identity.
@@ -160,7 +177,7 @@ export async function resolveProviderCredentialForJob(
       expected: {
         kind: "project_authorized_active_credential",
         provider: providerNeed,
-        agent_cli: input.agentCli,
+        agent_cli: input.agentCli ?? null,
         model_ref: modelNeed,
         enabled_credential_ids: input.allowlist.enabled_credential_ids,
       },
@@ -169,17 +186,15 @@ export async function resolveProviderCredentialForJob(
     });
   }
 
-  // #707 Phase 1 / 方案 A: CLI 归属硬门禁——无软回退到全量 candidates。
-  // null/空 agent_cli 不再视为「兼容所有 CLI」（与 #658 独占绑定一致）。
-  const cliCompatible = candidates.filter((row) => {
-    const pinned = typeof row.agent_cli === "string" && row.agent_cli.trim() ? row.agent_cli.trim() : null;
-    return pinned === input.agentCli;
-  });
+  // Validate each account’s exclusive CLI pin and project authorization before preference.
+  // A missing or retired pin is never treated as compatible with every CLI.
+  const cliCompatible = candidates.filter((row) => isCurrentAgentCli(row.agent_cli)
+    && input.allowlist.enabled_agent_clis.includes(row.agent_cli));
   if (cliCompatible.length === 0 && candidates.length > 0) {
     throwResolve("provider_credential_cli_mismatch", {
-      message: `项目授权目录内的 Provider 凭据均未独占绑定到角色 agent_cli=${input.agentCli}`,
+      message: "项目授权目录内没有绑定当前已启用 Agent CLI 的凭据",
       path: "agent_cli",
-      expected: { agent_cli: input.agentCli, kind: "credential_pinned_to_this_cli" },
+      expected: { agent_cli: input.agentCli ?? null, kind: "credential_pinned_to_this_cli" },
       observed: {
         candidates: candidates.map((row) => ({
           credential_id: row.id,
@@ -193,13 +208,13 @@ export async function resolveProviderCredentialForJob(
 
   // 协议级不兼容（如 claude-code × openai）在候选层挡掉，category=model_correctable。
   const protocolCompatible = cliCompatible.filter((row) => {
-    return validateCredentialCompatibility(input.agentCli, row.provider) === null;
+    return validateCredentialCompatibility(row.agent_cli!, row.provider) === null;
   });
   if (protocolCompatible.length === 0 && cliCompatible.length > 0) {
     throwResolve("provider_credential_protocol_incompatible", {
-      message: `项目授权目录内 CLI=${input.agentCli} 的凭据与其 Provider 协议不兼容`,
+      message: "项目授权目录内的凭据与其绑定 CLI 的 Provider 协议不兼容",
       path: "provider",
-      expected: { agent_cli: input.agentCli, kind: "cli_provider_protocol_compatible" },
+      expected: { agent_cli: input.agentCli ?? null, kind: "cli_provider_protocol_compatible" },
       observed: {
         candidates: cliCompatible.map((row) => ({
           credential_id: row.id,
@@ -212,15 +227,41 @@ export async function resolveProviderCredentialForJob(
     });
   }
 
-  let pool = protocolCompatible;
-  if (modelNeed) {
-    const modelFit = pool.filter((row) => {
-      const pinnedCli = typeof row.agent_cli === "string" && row.agent_cli.trim()
-        ? row.agent_cli.trim()
-        : input.agentCli;
-      return modelMatches(row.settings_config_json, pinnedCli, modelNeed, allowPassthrough);
+  let pool = protocolCompatible.filter((row) => modelMatches(
+    row.settings_config_json, row.agent_cli!, modelNeed, allowPassthrough,
+  ));
+  if (pool.length === 0) {
+    throwResolve("provider_credential_no_match", {
+      message: "项目授权目录内没有满足模型要求的 Provider 凭据",
+      path: "model_ref",
+      expected: {
+        kind: "project_authorized_model",
+        model_ref: modelNeed,
+        sample: [...new Set(protocolCompatible.flatMap((row) =>
+          extractModelsFromSettings(row.settings_config_json, row.agent_cli)))].slice(0, 12),
+      },
+      observed: { match_count: 0 },
+      next_action: "enable_healthy_provider_credential_or_relax_model_requirements",
     });
-    if (modelFit.length > 0) pool = modelFit;
+  }
+  const explicitCli = input.agentCli?.trim() || null;
+  if (explicitCli) {
+    const constrained = pool.filter((row) => row.agent_cli === explicitCli);
+    if (constrained.length === 0) {
+      throwResolve("provider_credential_cli_mismatch", {
+        message: `项目授权目录内的 Provider 凭据均未独占绑定到角色 agent_cli=${explicitCli}`,
+        path: "agent_cli",
+        expected: { agent_cli: explicitCli, kind: "credential_pinned_to_this_cli" },
+        observed: { candidates: pool.map((row) => ({ credential_id: row.id, agent_cli: row.agent_cli })) },
+        next_action: "enable_credential_pinned_to_role_cli_or_change_project_default_credential",
+        category: "permanent_failure",
+      });
+    }
+    pool = constrained;
+  } else if (new Set(pool.map((row) => row.agent_cli)).size > 1) {
+    const preference = input.allowlist.default_agent_cli ?? (input.preferredAgentCli?.trim() || null);
+    const preferred = preference ? pool.filter((row) => row.agent_cli === preference) : [];
+    if (preferred.length > 0) pool = preferred;
   }
 
   const defaultId = input.allowlist.default_credential_id;
@@ -231,7 +272,6 @@ export async function resolveProviderCredentialForJob(
   }
 
   if (pool.length === 1) return pool[0]!;
-  if (candidates.length === 1) return candidates[0]!;
 
   throwResolve("provider_credential_multi_match", {
     message: `项目授权目录内有 ${pool.length} 个匹配 Provider 凭据，无法唯一解析；请设置项目缺省凭据或收窄白名单`,

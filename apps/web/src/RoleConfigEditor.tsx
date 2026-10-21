@@ -15,7 +15,7 @@ import {
   type SkillSourceDetail,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
-import { SearchableMultiSelect } from "./SearchableSelect";
+import { SearchableMultiSelect, SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 import {
   countIncludedModules,
@@ -90,7 +90,7 @@ interface ConfigForm {
 }
 
 const EMPTY: ConfigForm = {
-  agent_cli: "claude-code",
+  agent_cli: "",
   dsh_task_mode: "standard",
   model: "",
   env_keys: [],
@@ -110,7 +110,7 @@ const EMPTY: ConfigForm = {
 function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
   if (!cfg) return EMPTY;
   return {
-    agent_cli: cfg.agent_cli,
+    agent_cli: cfg.agent_cli ?? "",
     dsh_task_mode: cfg.dsh_task_mode ?? "standard",
     model: cfg.model ?? "",
     env_keys: cfg.env_keys ?? [],
@@ -333,9 +333,11 @@ export function RoleConfigEditor({
     try {
       // RoleConfig 只保存职责/指令/工具；运行时凭据由项目授权解析。
       const body: RoleConfigInput = {
-        agent_cli: form.agent_cli as RoleConfigInput["agent_cli"],
+        ...(!projectId ? {
+          agent_cli: (form.agent_cli || null) as RoleConfigInput["agent_cli"],
+          model: form.model.trim() || null,
+        } : {}),
         dsh_task_mode: form.dsh_task_mode,
-        model: form.model.trim() || null,
         env_keys: form.env_keys,
         env_vars: form.env_vars,
         modules: form.modules,
@@ -381,16 +383,21 @@ export function RoleConfigEditor({
               指令与平台工具
               <HelpTip>
                 运行时 CLI / Provider / 模型 / Pi 扩展由项目授权目录与 Hub 能力组合决定（#690）。账号密钥在「Provider 凭据」页管理。此处仅维护角色职责、指令与平台工具。
-                {!form.model.trim() && (
-                  <span className="mt-1 block text-[11px] text-amber-200/90">
-                    当前模型为空：将使用 CLI 内置默认模型，建议填写账号 settings 中已配置的 provider 模型 id。也可开启下方「允许已配置模型名单直通」以支持 alias 网关。
-                  </span>
-                )}
-                {form.agent_cli ? ` 当前 RoleConfig agent_cli=${form.agent_cli}。` : ""}
                 运行时凭据由项目授权 Provider 解析。
               </HelpTip>
             </strong>
           </div>
+          {!projectId && (
+            <div className="space-y-3">
+              <label className={labelCls}>跨 CLI 候选的全局偏好</label>
+              <SearchableSelect value={form.agent_cli} onChange={(agent_cli) => setForm({ ...form, agent_cli })}
+                options={[{ value: "claude-code", label: "Claude Code" }, { value: "pi", label: "Pi" }, { value: "dsh", label: "DSH" }]}
+                placeholder="未指定（由可用凭据决定）" ariaLabel="全局 CLI 偏好" clearable />
+              <label className={labelCls}>全局模型偏好</label>
+              <input className={inputCls} value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}
+                placeholder="未指定（使用凭据配置）" />
+            </div>
+          )}
           <details className="role-config-instructions">
             <summary className="role-config-instructions-summary">
               <span className="role-config-instructions-title">

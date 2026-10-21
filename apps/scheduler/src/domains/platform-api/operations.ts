@@ -27,13 +27,13 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   list_available_agent_clis: {
     summary: "List Agent CLIs available to the current Hub Job",
-    description: "Return the project-enabled Agent CLI allowlist (claude-code / pi / dsh) with soft-default markers. Hub may propose agent_cli from this catalog; omitting uses project soft default or RoleConfig fallback.",
+    description: "Return the project-enabled Agent CLI allowlist (claude-code / pi / dsh) with soft-default markers. Hub may propose agent_cli from this catalog; omitting lets authorized provider/model candidates determine the CLI, with explicit project/global preferences used only to resolve cross-CLI ambiguity.",
     readOnly: true,
     eventType: null,
   },
   list_available_providers: {
     summary: "List Providers available to the current Hub Job",
-    description: "Return project-enabled, active LLM Provider credentials (credential_id, provider, compatible_agent_clis, concurrency summary). Hub may propose credential_id from this catalog; concurrency gates remain on the Provider.",
+    description: "Return project-enabled, active LLM Provider credentials (credential_id, provider, compatible_agent_clis, concurrency summary). Hub may propose only the provider plugin and model requirements, never credential_id; Scheduler resolves credentials and owns concurrency gates.",
     readOnly: true,
     eventType: null,
   },

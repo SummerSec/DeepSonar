@@ -68,6 +68,8 @@ test("official catalog backfill overwrites builtin prompts and keeps project rol
   assert.match(overwrite ?? "", /rc\.project_id IS NULL/);
   assert.doesNotMatch(overwrite ?? "", /AND NOT EXISTS/);
   assert.match(insertMissing ?? "", /AND NOT EXISTS/);
+  assert.match(insertMissing ?? "", /SELECT r\.id, NULL, templates\.instructions/);
+  assert.doesNotMatch(overwrite ?? "", /SELECT r\.id/);
   assert.match(insertMissing ?? "", /rc\.project_id IS NULL/);
   const roleDesc = agentRoleDescriptionOverwriteSql(body);
   assert.equal(roleDesc.length, 2);
@@ -88,7 +90,7 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
-  assert.equal(SCHEMA_VERSION, 59);
+  assert.equal(SCHEMA_VERSION, 60);
 });
 
 test("role prompt backfill accepts LF and Windows CRLF baselines", async () => {

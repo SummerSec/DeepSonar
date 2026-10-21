@@ -8,6 +8,7 @@ import {
   type ReadinessRoleSummary,
   type ReadinessRuntimeImageSummary,
 } from "@deepsonar/shared-types";
+import { resolveReadinessCredentials, type ReadinessCredentialResolution } from "./readiness-credentials.js";
 import { config, managesHostDockerRuntime } from "./config.js";
 import { sql } from "./db.js";
 import { globalRules, rolesForProject, rulesForProject, type ProjectRules } from "./core.js";
@@ -68,6 +69,9 @@ export interface ReadinessRoleRow {
   global_agent_cli: string | null;
   global_model: string | null;
   global_runtime_image_key: string | null;
+  /** Kernel-resolved identity; project RoleConfig identity fields are not authoritative. */
+  resolved_agent_cli?: string | null;
+  resolved_model?: string | null;
 }
 
 export interface ReadinessCredentialRow {
@@ -131,6 +135,7 @@ export interface ReadinessEvaluationInput {
   /** 项目镜像策略；项目 RoleConfig 的遗留 runtime_image_key 不参与解析。 */
   projectImagePolicy?: ProjectImagePolicy;
   credentials?: ReadinessCredentialRow[];
+  credentialResolutions?: ReadinessCredentialResolution[];
   runtimeImages?: ReadinessRuntimeImageRow[];
   audits?: ReadinessAuditRow[];
   hostDisk?: HostDiskPressureStatus;
@@ -353,8 +358,8 @@ function effectiveRole(row: ReadinessRoleRow, projectImagePolicy?: ProjectImageP
     ...row,
     configId: project ? row.project_config_id : row.global_config_id,
     configScope: project ? "project" : global ? "global" : "platform_default",
-    agentCli: project ? row.project_agent_cli : row.global_agent_cli ?? "claude-code",
-    model: project ? row.project_model : row.global_model,
+    agentCli: row.resolved_agent_cli ?? row.global_agent_cli ?? "claude-code",
+    model: row.resolved_model !== undefined ? row.resolved_model : row.global_model,
     runtimeImageKey,
   };
 }
@@ -627,6 +632,10 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
     const bindings = role.configId
       ? (credentialByConfig.get(role.configId) ?? []).filter((row) => row.purpose === "llm")
       : [];
+    const resolution = input.credentialResolutions?.find((item) => item.roleId === role.role_id);
+    if (resolution?.error) {
+      checks.push({ ...fail(resolution.code, resolution.error.message, roleBindingFix(input.scope), { role: summary }), repair: resolution.error.repair });
+    }
     if (bindings.length > 1) {
       checks.push(fail(
         "CREDENTIAL_BINDING_AMBIGUOUS",
@@ -636,7 +645,9 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       ));
     }
     const binding = bindings[0];
-    if (!binding || !binding.credential_id) {
+    if (resolution?.error) {
+      // The resolver already supplies the precise, actionable failure.
+    } else if (!binding || !binding.credential_id) {
       checks.push(input.executionMode === "real"
         ? fail("CREDENTIAL_MISSING", `${role.name} 无可用的项目授权 LLM Provider 凭据，real 模式无法运行。`, roleBindingFix(input.scope), { role: summary })
         : attention("CREDENTIAL_MISSING_FAKE", `${role.name} 无可用的项目授权 LLM Provider 凭据；fake 模式可继续，但切换 real 前需要配置账号。`, roleBindingFix(input.scope), { role: summary }));
@@ -644,15 +655,13 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       const credential = credentialSummary(binding);
       const credentialRef = credential ?? undefined;
       const expectedProject = input.scope.projectId;
-      const credentialScopeMismatch = role.configScope === "global"
-        ? Boolean(binding.project_id)
-        : Boolean(binding.project_id && (!expectedProject || binding.project_id !== expectedProject));
+      const credentialScopeMismatch = Boolean(binding.project_id && binding.project_id !== expectedProject);
       if (credentialScopeMismatch) {
         checks.push(fail(
           "CREDENTIAL_SCOPE_MISMATCH",
-          role.configScope === "global"
-            ? `${role.name} 的全局 RoleConfig 只能绑定全局 Credential，不能引用项目凭据。`
-            : `${role.name} 绑定的 Credential 属于其他项目，不能用于当前作用域。`,
+          !expectedProject
+            ? `${role.name} 的全局预检不能引用项目凭据。`
+            : `${role.name} 的 Credential 属于其他项目，不能用于当前作用域。`,
           roleBindingFix(input.scope),
           { role: summary, credential: credentialRef },
         ));
@@ -966,46 +975,10 @@ export async function loadReadiness(
     ? new Set((await rolesForProject(db, projectId)).map((role) => role.name))
     : null;
   const roles = allRoleRows.filter((role) => role.kind === "hub" || !selectedRoleNames || selectedRoleNames.has(role.name));
-  // #690: project-authorized Provider credentials (no role_credentials bindings).
-  const pool = await db`
-    SELECT c.id AS credential_id, c.name, c.kind, c.provider, c.project_id,
-           c.status, c.public_metadata_json, c.agent_cli, c.settings_config_json
-    FROM credentials c
-    WHERE c.kind = 'llm_provider'
-      AND c.status = 'active'
-      AND (${projectId}::uuid IS NULL OR c.project_id IS NULL OR c.project_id = ${projectId})` as Array<Record<string, unknown>>;
-  const enabledIds = Array.isArray((projectConfig as Record<string, unknown> | null)?.enabled_credential_ids)
-    ? ((projectConfig as Record<string, unknown>).enabled_credential_ids as unknown[]).filter((id): id is string => typeof id === "string")
-    : null;
-  const defaultCred = typeof (projectConfig as Record<string, unknown> | null)?.default_credential_id === "string"
-    ? String((projectConfig as Record<string, unknown>).default_credential_id)
-    : null;
-  const filteredPool = enabledIds && enabledIds.length > 0
-    ? pool.filter((row) => enabledIds.includes(String(row.credential_id)))
-    : pool;
-  const credentials: Array<Record<string, unknown>> = [];
-  for (const role of roles) {
-    const configId = role.project_config_id ?? role.global_config_id;
-    if (!configId) continue;
-    const roleCli = role.project_agent_cli ?? role.global_agent_cli ?? null;
-    const compatible = filteredPool.filter((row) => {
-      const credCli = typeof row.agent_cli === "string" ? row.agent_cli : null;
-      return !roleCli || !credCli || credCli === roleCli;
-    });
-    const preferred = defaultCred
-      ? compatible.find((row) => String(row.credential_id) === defaultCred)
-      : undefined;
-    const chosen = preferred ?? (compatible.length === 1 ? compatible[0] : undefined);
-    if (chosen) {
-      credentials.push({ role_config_id: configId, purpose: "llm", ...chosen });
-    } else if (compatible.length > 1) {
-      for (const row of compatible) {
-        credentials.push({ role_config_id: configId, purpose: "llm", ...row });
-      }
-    }
-  }
-  // SAFETY: 上面的 SELECT 列清单固定，行形状即 ReadinessCredentialRow。
-  const credentialIds = (credentials as unknown as ReadinessCredentialRow[])
+  const { credentials, resolutions: credentialResolutions } = await resolveReadinessCredentials(
+    db, projectId, projectConfig, roles, config.allowModelCatalogPassthrough,
+  );
+  const credentialIds = credentials
     .map((row) => row.credential_id)
     .filter((id): id is string => Boolean(id));
   const audits = credentialIds.length === 0
@@ -1094,8 +1067,8 @@ export async function loadReadiness(
     materialSource: options.materialSource,
     roles,
     projectImagePolicy: imagePolicy,
-    // SAFETY: 四份行集都来自本文件固定列清单的查询，形状即对应 Readiness*Row。
-    credentials: credentials as unknown as ReadinessCredentialRow[],
+    credentials,
+    credentialResolutions,
     // SAFETY: 同上，镜像行集形状即 ReadinessRuntimeImageRow。
     runtimeImages: images as unknown as ReadinessRuntimeImageRow[],
     // SAFETY: 同上，审计行集形状即 ReadinessAuditRow。

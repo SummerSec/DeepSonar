@@ -15,6 +15,7 @@ if (!testDatabaseUrl) {
     // cannot redirect this integration run to an existing database.
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.AGENT_MODE = "fake";
+    process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
 
     const { migrate, sql } = await import("../../db.js");
     const { ingestEvent, preflightDeferredSemanticEvent } = await import("../../core.js");
@@ -24,6 +25,7 @@ if (!testDatabaseUrl) {
     await migrate();
 
     const projectId = randomUUID();
+    const credentialId = randomUUID();
     const canvasId = `hub-runtime-image-${randomUUID()}`;
     const kaliDigest = `sha256:${createHash("sha256").update(`fixture:${canvasId}:kali`).digest("hex")}`;
     const kaliRef = `cr.example.invalid/deepsonar-kali-minimal@${kaliDigest}`;
@@ -200,14 +202,18 @@ if (!testDatabaseUrl) {
           AND runtime_image_id = (SELECT id FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz')`;
       // Composition model: Hub 可显式提案 agent_cli；项目软缺省优先于 RoleConfig。
       // 本用例直接提案 dsh，并写入白名单，验证 chrome-fuzz×dsh 在冻快照时收成 invalid_runtime_image。
-      // #674: model/CLI 身份只认全局 RoleConfig；给全局 model 以免冻快照在镜像/CLI 门之前
-      // 就被「DSH Provider 配置 YAML 必填」拦住。
-      await sql`
-        UPDATE role_configs
-        SET agent_cli = 'dsh', model = 'grok-4.6',
-            instructions_markdown = COALESCE(instructions_markdown, 'fixture dsh review')
-        WHERE project_id IS NULL
-          AND role_id = (SELECT id FROM agent_roles WHERE name = 'review')`;
+      // #757: provide a valid project-owned DSH credential so this proposal
+      // reaches the image admission gate; never mutate shared global RoleConfig.
+      const { encryptSecret } = await import("../../credentials.js");
+      const { legacySettingsConfig } = await import("../../provider-settings.js");
+      const encrypted = encryptSecret("fixture-dsh-secret");
+      const settings = legacySettingsConfig({ provider: "openai", secret: "fixture-dsh-secret",
+        agentCli: "dsh", model: "grok-4.6", metadata: { base_url: "http://127.0.0.1:9" } });
+      await sql`INSERT INTO credentials (id, name, kind, provider, project_id,
+        ciphertext, nonce, auth_tag, fingerprint, last4, status, agent_cli, settings_config_json)
+        VALUES (${credentialId}, 'hub image dsh fixture', 'llm_provider', 'openai', ${projectId},
+        ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag}, ${credentialId}, 'fake',
+        'active', 'dsh', ${sql.json(settings as never)})`;
       await sql`
         UPDATE projects SET config_json = config_json || ${sql.json({
           enabled_agent_clis: ["claude-code", "pi", "dsh"],
@@ -263,6 +269,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET parent_job_id = NULL WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
+      await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
       await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 });
     }

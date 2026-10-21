@@ -63,7 +63,9 @@ export function validateRoleConfigValues(
     }
     let totalBytes = 0;
     for (const f of body.config_files) {
-      const pathErr = validateConfigFilePath(body.agent_cli, f.path);
+      const pathErrors = (body.agent_cli ? [body.agent_cli] : ["claude-code", "pi", "dsh"])
+        .map((cli) => validateConfigFilePath(cli, f.path));
+      const pathErr = pathErrors.some((error) => error === null) ? null : pathErrors[0];
       if (pathErr) return { error: `配置文件 ${f.path}: ${pathErr}` };
       const bytes = Buffer.byteLength(f.content, "utf8");
       if (bytes > CONFIG_FILE_MAX_BYTES) {

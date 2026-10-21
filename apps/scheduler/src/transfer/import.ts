@@ -12,10 +12,7 @@ import { DISPATCH_CLAIM_ADVISORY_KEY, scrubLeftoverRulesJson, stripFindingProtoc
 import { sql } from "../db.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../domains/role-runtime-snapshot/index.js";
 import {
-  parseProjectImagePolicy,
-  persistableProjectRoleConfigModel,
   scrubStoredProjectImagePolicy,
-  type ProjectImagePolicy,
 } from "../domains/role-runtime-snapshot/application.js";
 import {
   clampSandboxLimitsOverrideToPlatform,
@@ -36,7 +33,7 @@ import {
   type OpenedPack,
 } from "./pack.js";
 import { CONFIG_MODULES, MODULE_DEPS, isConfigOnly, type ModuleKey } from "./modules.js";
-import { archiveJobStatus, parseTransferredAgentCli, parseTransferredDshTaskMode } from "./sanitize.js";
+import { archiveJobStatus, assertProjectRoleIdentityAbsent, parseTransferredDshTaskMode } from "./sanitize.js";
 
 function sanitizeImportedProjectConfig(cfg: Record<string, unknown>): Record<string, unknown> {
   const next = { ...cfg };
@@ -335,7 +332,7 @@ async function createNewProject(
 
     const warnings: string[] = [];
     if (modules.includes("roles") || modules.includes("environment")) {
-      await importRoleConfigs(tx as Tx, projectId, pack, id_map, false, parseProjectImagePolicy(config_json), warnings);
+      await importRoleConfigs(tx as Tx, projectId, pack, id_map, false, warnings);
     }
 
     if (modules.includes("tasks") || modules.includes("findings") || modules.includes("events")) {
@@ -387,7 +384,6 @@ async function mergeConfiguration(
           credentials: (id_map.credentials as Record<string, string>) ?? {},
         },
         policy === "keep_target",
-        parseProjectImagePolicy(cfg),
         warnings,
       );
     }
@@ -411,7 +407,6 @@ async function importRoleConfigs(
     credentials: Record<string, string>;
   },
   skipExisting = false,
-  imagePolicy: ProjectImagePolicy = parseProjectImagePolicy(undefined),
   warnings: string[] = [],
 ) {
   // Keep imported RoleConfig bindings in the same critical section as the
@@ -421,16 +416,12 @@ async function importRoleConfigs(
   await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
   const configs = readJsonl(pack.files, "data/role-configs.jsonl");
   for (const rc of configs) {
+    assertProjectRoleIdentityAbsent(rc);
     const roleName = String(rc.role_name);
     const [role] = await tx`SELECT id FROM agent_roles WHERE name = ${roleName}`;
     if (!role) continue; // 自定义角色未创建时跳过（builtin 名应存在）
 
-    const agentCli = parseTransferredAgentCli(rc.agent_cli, `RoleConfig ${roleName}`);
     const dshTaskMode = parseTransferredDshTaskMode(rc.dsh_task_mode, `RoleConfig ${roleName}`);
-    const model = persistableProjectRoleConfigModel(
-      imagePolicy,
-      typeof rc.model === "string" && rc.model ? rc.model : null,
-    );
     const rawContextWindowTokens = rc.context_window_tokens ?? null;
     if (rawContextWindowTokens !== null && (
       typeof rawContextWindowTokens !== "number"
@@ -508,9 +499,9 @@ async function importRoleConfigs(
       INSERT INTO role_configs ${tx({
         role_id: role.id as string,
         project_id: projectId,
-        agent_cli: agentCli,
+        agent_cli: null,
         dsh_task_mode: dshTaskMode,
-        model,
+        model: null,
         allow_model_catalog_passthrough: false,
         context_window_tokens: contextWindowTokens,
         env_keys: (rc.env_keys as string[]) ?? [],

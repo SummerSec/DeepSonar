@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
 import {
   DescribeCapabilityPayload,
   ListCapabilitiesPayload,
@@ -1103,6 +1104,7 @@ export const ReadinessCheck = z.object({
   credential: ReadinessCredentialSummary.nullish(),
   runtime_image: ReadinessRuntimeImageSummary.nullish(),
   evidence: ReadinessEvidenceSummary.nullish(),
+  repair: ReadinessRepairFeedback.optional(),
 });
 export type ReadinessCheck = z.infer<typeof ReadinessCheck>;
 

@@ -599,15 +599,17 @@ Runtime Adapter 只有在收到包含完整上下文身份、revision、链 dige
 
 | 层 | 位置 | 内容 |
 |----|------|------|
-| 存储 | `role_configs` / `role_config_files` / Credential `settings_config_json` | RoleConfig 只描述职责/稳定配置（#690 已删除 `role_credentials` 与 `pi_extensions`）。Provider 与扩展由项目授权能力插件在 Job 创建时解析。Credential 行仍是内核持有的秘密资产。RoleConfig 的其它当前字段包括 CLI、模型覆盖、`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent 与平台工具开关。Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结；全局 RoleConfig 保存可信镜像绑定 |
+| 存储 | `role_configs` / `role_config_files` / Credential `settings_config_json` | RoleConfig 只描述职责/稳定配置（#690 已删除 `role_credentials` 与 `pi_extensions`）。Provider 与扩展由项目授权能力插件在 Job 创建时解析。Credential 行仍是内核持有的秘密资产。全局 RoleConfig 可声明 CLI 偏好、模型覆盖；项目 RoleConfig 不暴露这两项。其它当前字段包括`context_window_tokens` 客户端预算、长期指令、env、模块、skill、command、MCP、subagent 与平台工具开关。Provider-owned reasoning 与 CLI/DSH profile 只存在 Credential 配置；DSH 规范档位及模型 `reasoningEfforts` 映射随 Credential 冻结；全局 RoleConfig 保存可信镜像绑定 |
 | 决策 | 全局 RoleConfig + 项目 RoleConfig + Credential `settings_config_json` + `projects.config_json.rules` + 平台镜像目录 / `visible_project_ids` + 项目排除/启用 | `RoleConfig.context_window_tokens` 优先于 Credential 顶层基准；reasoning 只读 Credential 顶层值；Claude Code 的 RoleConfig 模型可保留 `fable` / `sonnet` / `opus` / `haiku` CLI selector，但模型白名单、Gateway token 与模型并发门禁统一使用对应 `ANTHROPIC_DEFAULT_*_MODEL` 的实际上游 ID。Claude Code 物化为官方 `effortLevel` 四档，Codex 冻结为 `model_reasoning_effort`，Pi 冻结为 `--thinking`，OpenCode 冻结为 Provider 自定义 `--variant`，DSH 只接受 Pi-AI 规范档位且第三方 wire value 由模型 YAML 映射；字段为空时使用 Provider / CLI 默认。项目只覆盖确有差异的角色配置；规则控制 Hub 护栏与 Worker 出网默认值；Job 镜像只认平台目录与 Hub 提案 |
 | 执行 | `jobs.agent_snapshot_json` | 建 Job 时必须冻结完整运行快照（含 CLI selector `model`、实际 `upstream_model`、Provider 配置文件与客户端上下文预算）；Executor 仅用 selector 启动 CLI，所有上游治理使用 `upstream_model ?? model`，不读取旧配置或为缺失快照降级 |
 
 项目级镜像策略已移除（#674）：`projects.config_json` 不再持有
 `image_strategy` / `role_runtime_images`；遗留字段在读取/写入时物理清扫。
 每个 Job 角色的缺省镜像只读取全局 RoleConfig 的 `runtime_image_key`，并且
-`model` / 默认 CLI 也只认全局 RoleConfig（再落到账号主模型）；遗留项目
-RoleConfig 行上的 `model` / `agent_cli` / `runtime_image_key` 在解析时忽略。
+模型缺省读取项目 Agent 设置、全局 RoleConfig（再落到账号主模型）。CLI 由
+授权候选凭据决定；全局 RoleConfig 的非空 CLI 仅作跨 CLI 多候选偏好，种子 NULL
+不代表 Claude Code 偏好。项目 RoleConfig 的 `model` / `agent_cli` 已停止写入和
+暴露并清空，遗留 `runtime_image_key` 仍清扫。
 Hub 经 `list_available_runtime_images` 从平台可信/就绪/CLI 兼容目录提案并提交的
 `runtime_image_key`（若存在）优先于角色缺省；最终解析的 immutable digest/ref
 与工具清单仍只冻结在新 Job。
@@ -625,6 +627,7 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 
 账号模型编辑与探测回写（#748 / #749）：只有显式改 Claude 主模型才统一各 tier / subagent 的模型键，普通编辑保留原生配置中的独立路由。探测失败的有界摘要对独立密钥列、配置中的其他秘密值及 URL 凭据脱敏，并清除 C0/C1 控制字符。HTTP 402 / 额度类错误归入 `quota_exhausted`，模型不可用归入 `model_unavailable`；补充目录只作为诊断和编辑参考。健康与目录回写必须核对创建探测时的 settings、CLI、项目、Provider、公开元数据和 key version，变更后返回 409，不能把旧模型的结果写回新配置。基线重建的角色模板匹配统一 LF/CRLF，schema 仍以 `database/schema.sql` 与 `schema-version.ts` 一致的单一基线为准。
 
+
 **Model Gateway 上游纪律：** Scheduler 的上游单次超时默认 3,000 秒（`DEEPSONAR_GATEWAY_UPSTREAM_TIMEOUT_MS=3000000`），但每次 attempt 都受 Job `started_at + timeout_sec` 的绝对截止时间约束，实际 timeout 为两者较小值；退避等待也不得跨过该截止时间。只有在 Scheduler 尚未向沙箱客户端发送响应头或响应体时，网络/超时与 HTTP `408/429/500/502/503/504` 才可最多执行 3 次 attempt，使用指数退避和 jitter；`400/401/403` 等永久错误不重试。取得最终 Response 后沿用流式直通，SSE 或普通响应体读取失败不触发重放。`job_tokens.used_requests` 仍按一次客户端请求只加一次；上游 attempt/retry/exhausted 指标只带 provider/reason 等低基数标签，禁止请求体、URL 和 Job ID。网络/超时耗尽固定返回 `502` 的 `upstream_unreachable`，最终上游 HTTP 状态和响应体原样透传。
 
 每次 Gateway 请求写入 `job_usage_ledger`，通过 `attempt_id + effect_id` 幂等关联 Job Attempt；只保留 provider/model、请求序号、输入/输出/总 token、缓存读/写 token 及 `settled|unknown|not_reported`，不落 prompt、响应正文、请求头和凭据。跨 chunk 的 SSE usage 只在完整记录边界解析并去重。响应已经发给 Worker 后账本写入失败不抛出未处理异常，同时递增低基数失败指标并留下 effect 对账线索。
@@ -634,6 +637,8 @@ Credential 独立密钥列使用 AES-GCM；完整 `settings_config_json` 是服�
 Provision admission 是数据库 claim 事务的一部分，而不是进程内 semaphore：effective `global_settings.maxConcurrentProvisioning` 先检查当前 provisioning 资源占用，超额 Job 保持 `pending`，不写入或消耗 `claimed_at`；槽位释放后调度器显式唤醒 pending 队列，重新 claim 并推进到 `running`。`.env` 的 `PROVISION_CONCURRENCY=2` 只在该全局配置缺失时作为 fallback，不能绕过数据库门禁，也不改变其他全局/项目/Provider/凭据配额。
 
 平台控制 capability 也属于角色注册/RoleConfig：当前 UI 仍以平台工具 list 对每个 Agent 全量可选，开关随 Job 快照冻结。冻结 capability 只派生 API operation allowlist；关闭项不会出现在动态 `AGENTS.md` / `CLAUDE.md`、运行清单、capabilities 或动态 OpenAPI 中，执行器接收语义事件时还会再次校验授权。`event-ingestion` side-effect application（`core.applySideEffects` 仅为兼容 facade）是 fake/direct/recovery 路径的最终授权边界。仅 `mark_job_done` 是不可关闭的终态 capability；其余进度、事实、Finding、Hub 决策、人工请求与共享资产能力均可按全局缺省或项目覆盖启停。Job 离开 `running` 后的新语义事件稳定拒绝（历史导入/恢复批量写入既有 events 是唯一例外）。所有治理 CLI 的控制能力只走 HTTP API；冻结 adapter 缺少 `platformControlApi` 或 operation 时执行前 fail closed。Pi 恢复必须使用 `get_state` 返回的精确 `sessionFile`，不选择 latest。
+
+凭据解析顺序（#757）以[运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)为权威：先 Provider/model/项目授权候选，后凭据排他 CLI；Hub 显式 CLI 硬约束优先，软偏好仅在跨 CLI 多候选时消歧。readiness 和 Job 共用 resolver。读取项目设置或 Hub 目录不种凭据 ID；显式悬空/停用名单返回修复反馈，不扩大授权。
 
 ### 8.3 可信运行镜像与独立市场
 

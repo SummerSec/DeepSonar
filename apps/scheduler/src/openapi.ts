@@ -1803,7 +1803,7 @@ const OPS: Op[] = [
       "409": { description: "暂停原因不一致，未解除", content: { "application/json": { schema: ErrorSchema } } },
     },
   },
-  { method: "get", path: "/projects/{id}/settings", summary: "项目规则、角色启用与镜像策略", scope: "agents:read", tags: ["Settings"] },
+  { method: "get", path: "/projects/{id}/settings", summary: "项目规则与 Agent 配置", description: "credential_ids_configured 表示 enabled_credential_ids 是否显式收紧；false 时数组为空但范围动态继承项目可访问凭据，读取不写入配置。", scope: "agents:read", tags: ["Settings"] },
   {
     method: "get",
     path: "/readiness",
@@ -1839,6 +1839,11 @@ const OPS: Op[] = [
     body: {
       type: "object",
       properties: {
+        enabled_agent_clis: { type: "array", minItems: 1, items: { type: "string", enum: ["claude-code", "pi", "dsh"] } },
+        enabled_credential_ids: { type: "array", items: { type: "string", format: "uuid" }, description: "显式收紧凭据范围；省略不改变，空数组禁止所有凭据。" },
+        default_agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true, description: "仅跨CLI候选的明确偏好；null清除" },
+        default_credential_id: { type: "string", format: "uuid", nullable: true },
+        default_model_ref: { type: "string", nullable: true },
         rules: {
           type: "object",
           additionalProperties: true,
@@ -1923,8 +1928,8 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/role-configs/{id}/agent-cli",
-    summary: "仅更新 RoleConfig 的 agent_cli",
-    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。不改写配置文件。#690：RoleConfig 不再绑定凭据。",
+    summary: "仅更新全局 RoleConfig 的 CLI 偏好（null 清除）",
+    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。项目 RoleConfig 返回 400 PROJECT_ROLE_IDENTITY_FORBIDDEN。不改写配置文件。#690：RoleConfig 不再绑定凭据。",
     scope: "agents:write",
     tags: ["RoleConfig"],
     body: {
@@ -1932,7 +1937,7 @@ const OPS: Op[] = [
       additionalProperties: false,
       required: ["agent_cli"],
       properties: {
-        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"] },
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true },
       },
     },
   },
@@ -1973,10 +1978,10 @@ const OPS: Op[] = [
     method: "put",
     path: "/projects/{id}/role-configs/{roleId}",
     summary: "项目 RoleConfig 覆盖 upsert",
-    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。#690：不再接受 credentials / pi_extensions。",
+    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。#757：不接受 agent_cli / model；请使用项目 Agent 偏好。#690：不再接受 credentials / pi_extensions。",
     scope: "agents:write",
     tags: ["RoleConfig"],
-    body: { $ref: "#/components/schemas/RoleConfigInput" },
+    body: { allOf: [{ $ref: "#/components/schemas/RoleConfigInput" }, { not: { anyOf: [{ required: ["agent_cli"] }, { required: ["model"] }] } }] },
   },
   {
     method: "delete",
@@ -3331,7 +3336,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           type: "object",
           additionalProperties: false,
           required: [
-            "id", "role_id", "role_name", "role_title", "project_id", "project_name", "agent_cli", "dsh_task_mode", "model", "version",
+            "id", "role_id", "role_name", "role_title", "project_id", "project_name", "dsh_task_mode", "version",
             "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
             "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "credential_project_id", "credential_project_name", "scope", "can_bind",
             "credential_provider_valid", "role_kind", "role_builtin",
@@ -3346,7 +3351,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             role_ui_color: { type: "string", nullable: true },
             project_id: { type: "string", format: "uuid", nullable: true },
             project_name: { type: "string", nullable: true },
-            agent_cli: { type: "string" },
+            agent_cli: { type: "string", nullable: true, description: "仅全局 RoleConfig 暴露；null 表示未指定偏好" },
             dsh_task_mode: { type: "string", enum: ["standard", "ptc"], description: "DSH tool presentation preset; ignored by other CLIs" },
             model: { type: "string", nullable: true },
             context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "通用客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
@@ -3387,9 +3392,9 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         RoleConfigInput: {
           type: "object",
           properties: {
-            agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"] },
+            agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true, description: "仅全局；null/省略清除显式CLI偏好" },
             dsh_task_mode: { type: "string", enum: ["standard", "ptc"], default: "standard" },
-            model: { type: "string", nullable: true },
+            model: { type: "string", nullable: true, description: "仅全局模型偏好；项目 RoleConfig 不接受" },
             context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
             env_vars: { type: "object", additionalProperties: { type: "string" } },
             modules: {

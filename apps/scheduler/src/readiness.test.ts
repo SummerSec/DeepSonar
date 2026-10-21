@@ -368,10 +368,10 @@ test("real preflight accepts a bare immutable digest from the runtime resolver",
   assert.equal(result.checks.some((check) => check.code === "RUNTIME_IMAGE_DIGEST_INVALID"), false);
 });
 
-test("real preflight treats compatible credential CLI drift as attention, not fail", () => {
+test("real preflight rejects drift from the kernel-resolved CLI", () => {
   const result = evaluateReadiness(baseInput({
     roles: baseInput().roles.map((role) => role.name === "audit"
-      ? { ...role, project_agent_cli: "pi" }
+      ? { ...role, resolved_agent_cli: "pi" }
       : role),
     credentials: baseInput().credentials?.map((credential) => ({
       ...credential,
@@ -450,17 +450,20 @@ test("task network override is explicit and does not mutate project scope", () =
   assert.equal(result.scope.project_id, projectId);
 });
 
-test("credential scope follows global and project RoleConfig boundaries", () => {
+test("credential scope follows the requested project regardless of RoleConfig origin", () => {
   const credentials = baseInput().credentials ?? [];
   const result = evaluateReadiness(baseInput({
     credentials: credentials.map((credential) => credential.role_config_id === hubConfigId
       ? { ...credential, project_id: projectId }
       : { ...credential, project_id: null }),
   }));
-  assert.equal(result.ready, false);
-  const scopeMismatches = result.checks.filter((check) => check.code === "CREDENTIAL_SCOPE_MISMATCH");
-  assert.ok(scopeMismatches.some((check) => check.role?.name === "hub_reason"));
-  assert.equal(scopeMismatches.some((check) => check.role?.name === "audit"), false);
+  assert.equal(result.ready, true);
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_SCOPE_MISMATCH"), false);
+  const global = evaluateReadiness(baseInput({
+    scope: { kind: "global", projectId: null },
+    credentials: credentials.map((credential) => ({ ...credential, project_id: projectId })),
+  }));
+  assert.ok(global.checks.some((check) => check.code === "CREDENTIAL_SCOPE_MISMATCH"));
 });
 
 test("runtime image project availability: official default-on, base never disabled, third-party fail-closed", () => {
@@ -791,4 +794,66 @@ test("all actionable readiness checks carry stable repair metadata by scope", ()
   ]) {
     assert.equal(actionableCodes.has(code), true, `${code} should be covered by repair metadata checks`);
   }
+});
+
+// #757: exercise the same resolver that Job snapshot creation calls, then project it.
+async function credentialFirstReadiness(
+  candidates: Array<Record<string, unknown>>,
+  projectConfig: Record<string, unknown> = {},
+  globalPreference: string | null = null,
+) {
+  const { resolveReadinessCredentials } = await import("./readiness-credentials.js");
+  const input = baseInput();
+  input.roles = input.roles.map((role) => ({ ...role, global_agent_cli: globalPreference, global_model: null }));
+  const db = async () => candidates;
+  const resolved = await resolveReadinessCredentials(db, projectId, projectConfig, input.roles, false);
+  return evaluateReadiness({ ...input, credentials: resolved.credentials, credentialResolutions: resolved.resolutions });
+}
+
+function readinessCandidate(id: string, agentCli: string, project: string | null = null) {
+  return {
+    id, name: "Fake provider", provider: "anthropic", status: "active", project_id: project,
+    agent_cli: agentCli, settings_config_json: {}, public_metadata_json: {}, meta_json: {},
+    model_catalog_json: [], model_catalog_fetched_at: null, health_status: "ok",
+  };
+}
+
+test("#757 readiness adopts a unique credential CLI and ignores stale project RoleConfig identity", async () => {
+  const result = await credentialFirstReadiness([readinessCandidate(credentialId, "pi")], {}, "claude-code");
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_MISSING" || check.code === "CREDENTIAL_CLI_INCOMPATIBLE"), false);
+  assert.ok(result.checks.filter((check) => check.role).every((check) => check.role?.agent_cli === "pi"));
+});
+
+test("#757 readiness reports credential ambiguity with resolver RepairFeedback", async () => {
+  const result = await credentialFirstReadiness([
+    readinessCandidate(credentialId, "pi"), readinessCandidate(scanId, "claude-code"),
+  ]);
+  const ambiguous = result.checks.find((check) => check.code === "CREDENTIAL_BINDING_AMBIGUOUS");
+  assert.equal(ambiguous?.repair?.code, "provider_credential_multi_match");
+  assert.equal(ambiguous?.repair?.category, "model_correctable");
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_MISSING"), false);
+});
+
+test("#757 readiness resolves project preference before explicit global preference", async () => {
+  const candidates = [readinessCandidate(credentialId, "pi"), readinessCandidate(scanId, "claude-code")];
+  const global = await credentialFirstReadiness(candidates, {}, "claude-code");
+  assert.ok(global.checks.filter((check) => check.role).every((check) => check.role?.agent_cli === "claude-code"));
+  const project = await credentialFirstReadiness(candidates, { default_agent_cli: "pi" }, "claude-code");
+  assert.ok(project.checks.filter((check) => check.role).every((check) => check.role?.agent_cli === "pi"));
+});
+
+test("#757 readiness preserves explicit empty and stale credential restrictions", async () => {
+  const candidates = [readinessCandidate(credentialId, "pi")];
+  const empty = await credentialFirstReadiness(candidates, { enabled_credential_ids: [] });
+  assert.ok(empty.checks.some((check) => check.code === "CREDENTIAL_MISSING"));
+  const stale = await credentialFirstReadiness(candidates, { enabled_credential_ids: [scanId] });
+  const check = stale.checks.find((item) => item.code === "CREDENTIAL_ALLOWLIST_STALE");
+  assert.equal(check?.repair?.code, "provider_credential_allowlist_stale");
+  assert.equal(check?.repair?.category, "permanent_failure");
+  assert.ok(check?.repair?.next_action);
+});
+
+test("#757 a project credential can satisfy an inherited global RoleConfig within that project", async () => {
+  const result = await credentialFirstReadiness([readinessCandidate(credentialId, "pi", projectId)]);
+  assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_SCOPE_MISMATCH"), false);
 });

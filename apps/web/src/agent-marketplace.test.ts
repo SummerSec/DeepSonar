@@ -116,3 +116,11 @@ test("agent pack install rejects project-scoped actors", () => {
   assert.equal(canInstallAgentPack(globalActor), true);
   assert.equal(canInstallAgentPack(projectActor), false);
 });
+
+
+test("unconfigured agent packs do not create an explicit Claude preference", () => {
+  const pack = parseAgentPack(JSON.stringify({
+    schema: AGENT_PACK_SCHEMA, name: "no_preference", title: "No preference", description: "Fixture", publisher: "local", version: "1.0.0", config: {},
+  }));
+  assert.equal(pack.config.agent_cli, null);
+});

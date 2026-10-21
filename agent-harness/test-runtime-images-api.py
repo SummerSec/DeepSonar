@@ -170,8 +170,6 @@ def main() -> None:
     assert verify_role["runtime_image_key"] is None, verify_role
     # 项目 RoleConfig 的旧镜像字段必须继续拒绝，防止项目 RoleConfig 写入 runtime_image_key（#674/#691）。
     invalid = {
-        "agent_cli": explore["agent_cli"],
-        "model": explore["model"],
         "env_keys": explore["env_keys"],
         "env_vars": explore["env_vars_json"],
         "modules": explore["modules_json"],
@@ -184,7 +182,8 @@ def main() -> None:
         "runtime_image_key": imported["image"]["image_key"],
         "config_files": explore["config_files"],
     }
-    req("PUT", f"/projects/{project_id}/role-configs/{explore['role_id']}", invalid, 400)
+    rejected_image = req("PUT", f"/projects/{project_id}/role-configs/{explore['role_id']}", invalid, 400)
+    assert "runtime_image_key" in str(rejected_image), rejected_image
 
     job = req(
         "POST",

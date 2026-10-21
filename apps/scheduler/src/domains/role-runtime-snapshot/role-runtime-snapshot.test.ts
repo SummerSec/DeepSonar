@@ -69,6 +69,7 @@ test("#674 scrubIgnoredProjectRoleConfigIdentity 清空项目遗留镜像与 mod
   const result = await scrubIgnoredProjectRoleConfigIdentity(db, "project-1");
   assert.deepEqual(result, { runtime_image_keys: 1, inherit_global_models: 1 });
   assert.equal(seen.length, 2);
+  assert.match(seen[1]!, /agent_cli = NULL/);
   assert.equal(persistableProjectRoleConfigModel(parseProjectImagePolicy({}), "kept"), null);
 });
 
@@ -174,7 +175,7 @@ test("inherit_global leftover project RoleConfig.model does not steal snapshot m
   }
 });
 
-test("凭据 agent_cli 与角色不一致时独占绑定 fail-closed", async () => {
+test("#757 单凭据覆盖软偏好，Hub 显式 CLI 冲突仍 fail-closed", async () => {
   const projectCfg = {
     id: "project-hub-cfg",
     project_id: "project-1",
@@ -200,6 +201,16 @@ test("凭据 agent_cli 与角色不一致时独占绑定 fail-closed", async () 
     meta_json: {},
     public_metadata_json: {},
   };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg: projectCfg, credential }),
+    "project-1", "audit",
+  );
+  assert.equal(snapshot.agent_cli, "claude-code");
+  const unconfigured = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg: { ...projectCfg, agent_cli: null }, credential }),
+    "project-1", "audit",
+  );
+  assert.equal(unconfigured.agent_cli, "claude-code");
   await assert.rejects(
     () => resolveAgentSnapshotForJob(
       snapshotDb({
@@ -210,6 +221,7 @@ test("凭据 agent_cli 与角色不一致时独占绑定 fail-closed", async () 
       }),
       "project-1",
       "audit",
+      { agentCli: "pi" },
     ),
     (error: unknown) => {
       assert.ok(error instanceof SnapshotUnresolvableError);
@@ -656,4 +668,24 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
     (error: unknown) => error instanceof SnapshotUnresolvableError
       && /不在本项目可用 Skill 源集合内/.test(String((error as Error).message)),
   );
+});
+
+test("#757 Hub model selectors use the same normalization for credential and capability admission", async () => {
+  const globalCfg = { id: "global-audit-cfg", version: 1, agent_cli: null, model: null, modules_json: [] };
+  for (const [cli, modelRef, settings] of [
+    ["claude-code", "sonnet", { env: { ANTHROPIC_DEFAULT_SONNET_MODEL: "model-a" } }],
+    ["pi", "deepsonar/model-a", { provider: "anthropic", models: [{ id: "model-a" }] }],
+  ] as const) {
+    const credential = {
+      id: "cred-model", name: "model", provider: "anthropic", status: "active",
+      project_id: null, agent_cli: cli, settings_config_json: settings,
+      meta_json: {}, public_metadata_json: {},
+    };
+    const result = await resolveAgentSnapshotForJob(
+      snapshotDb({ projectCfg: undefined, globalCfg, credential }),
+      "project-1", "audit", { modelRef },
+    );
+    assert.equal(result.agent_cli, cli);
+    assert.equal(result.credential_id, "cred-model");
+  }
 });
