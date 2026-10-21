@@ -74,6 +74,8 @@ assert.match(
 assert.match(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",
   /droidasc/,
+  /rust_ASC/,
+  /droidasc-python/,
 );
 assert.match(
   withRuntimeTestToolchainPolicy("test", null, "deepsonar-mobile") ?? "",

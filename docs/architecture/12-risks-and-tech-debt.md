@@ -26,6 +26,12 @@
 | D-06 | 低 | 质量指标和 Hub replay 已有只读投影；Experience 经验存储为空，尚未有跨任务经验召回、成本感知计划和策略评估闭环。 | 不能把质量投影或人工标签解读为模型准确率承诺，也不能自动把历史结果当作当前事实。 | 关联长期评估路线；没有冻结数据集、来源、版本和过期策略前，不新增经验写入或推荐路径。 |
 | D-07 | 中 | [`runtime-image-registry-contract.ts`](../../apps/scheduler/src/runtime-image-registry-contract.ts) 仍保留 schema v1 的兼容解析、旧 `image_ref` 投影和历史重复 digest alias；当前新目录契约以最新形态为准。 | 旧输入/输出路径继续存在会增加发布审计和移除成本，也可能让历史投影被误认为受支持的新契约。 | 仅在历史材料、迁移证据和发布窗口确认不再依赖后物理清扫；新生成内容不得依赖兼容投影，兼容解析不能扩大新运行时输入范围。 |
 
+## 2.1 ASC 迁移验收证据（#754）
+
+源码审查确认：rust_ASC 固定提交 `236dd096669c99eb30f6e1af0b24e668eff55dd5` 的 [LICENSE](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/LICENSE) 与 [Cargo.toml](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/Cargo.toml) 明确声明 Apache-2.0。[.gitmodules](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/.gitmodules) 指向的 [radguard 固定源码树](https://github.com/MG1937/radguard/tree/290de20c925c4a2c7642b1a63c9997185a06e130) 没有独立许可证声明，其 [Cargo.toml](https://github.com/MG1937/radguard/blob/290de20c925c4a2c7642b1a63c9997185a06e130/Cargo.toml) 亦无 `license` 字段。子模块许可覆盖尚未明确、未核实；这不足以断言确定禁止分发，也不作为 PR #755 的硬阻塞，同时不宣称已取得明确覆盖 radguard 的授权。
+
+Mobile 最终镜像已在提交 `a46138f497df8394805c3774281a4eaa8d228712` 的 [CI 39395573082](https://github.com/SummerSec/DeepSonar/actions/runs/39395573082) 完成 amd64/arm64 构建与 fixture 验收，每个平台各 59 次真实命令均通过；Manifest、类/引用查询、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件的覆盖见 [验证记录](../../agent-harness/fixtures/asc/validation.md)。arm64 运行使用 QEMU，原生 arm64 与性能尚未验证，fixture 通过不证明一般 APK 兼容或性能提升。`droidasc-python` 显式选择是固定契约，Rust 真实错误不得自动掩盖；详见 [工具链契约](../RUNTIME_TEST_TOOLCHAINS.md)。
+
 ## 3. 有意暂缓的设计
 
 ### 3.1 全图服务端权威布局（#148）

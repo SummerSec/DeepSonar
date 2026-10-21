@@ -241,6 +241,7 @@ export const PRESETS = {
     paths: [
       "agent-harness/mobile-runtime.json",
       "deploy/mobile-env.sh",
+      "deploy/mobile-asc.sh",
       "deploy/mobile-adb.sh",
       "deploy/mobile-adb-bin.sh",
       "deploy/mobile-hdc.sh",

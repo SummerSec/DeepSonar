@@ -234,6 +234,8 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 每个官方运行镜像还必须携带与最终工具清单绑定的离线工具手册，固定入口为 `/opt/deepsonar/manuals/index.json`。手册逐项覆盖 Agent 可见工具、包装脚本和能力入口，说明选型、前置条件、调用、输出边界、失败分类、组合流程、证据与版本限制；从基础镜像继承的工具也必须在最终镜像中展开。构建与镜像门禁校验手册摘要和工具覆盖，Worker 启动上下文只注入索引位置并按需读取章节。手册是操作资料，不授予额外工具、网络、凭据或副作用权限。
 
+移动端 ASC 工具入口（#754）：`deepsonar-mobile` 默认 `rust-asc` CLI，`droidasc` 薄适配线程参数和帮助行为，`droidasc-python` 仅显式选择 Python 实现，不因 Rust 失败自动切换。构建禁用 MCP，JADX/apktool 与其他工具所需 Python 保留；这不改变 Job 权限或镜像准入。来源、已完成的 fixture 验证及尚未验证的边界见 [工具链边界](docs/RUNTIME_TEST_TOOLCHAINS.md)。
+
 ## 9. 读图、事件与证据
 
 `buildGraphSnapshot` 按 `GraphScope` 生成有字符预算的 YAML：`hub`、`agent`、`verify`、`report` 看到的内容不同；Job 节点不进入 YAML。Verify scope 隐藏 maker 的 title/summary/severity，只给主体、location 和证据引用。长期方向是让模型用 Job-scoped 查询按需获取节点、邻域、证据和冲突，逐步减少全图投影，但不能改变 Canvas、events 和 Evidence 的权威性。

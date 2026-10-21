@@ -5,6 +5,19 @@
   "project_opt_in": true,
   "toolset": "mobile",
   "downloads": {
+    "rust-asc": {
+      "version": "0.1.1",
+      "tag": "v0.1.1",
+      "source": "https://github.com/MG1937/rust_ASC",
+      "commit": "236dd096669c99eb30f6e1af0b24e668eff55dd5",
+      "radguard_commit": "290de20c925c4a2c7642b1a63c9997185a06e130",
+      "license_scope": "rust_ASC explicitly declares Apache-2.0; the pinned radguard submodule has no independent license declaration, and its license coverage remains unclear and unverified",
+      "cargo_lock_sha256": "06052ead70d1b755306a048fcbfa664cd0da789d6edb5f982f4a013cb3ca0293",
+      "license": "Apache-2.0",
+      "build_flags": ["--release", "--locked", "--no-default-features"],
+      "entrypoints": ["rust-asc", "droidasc"],
+      "capabilities": ["apk-class-query", "apk-manifest", "apk-xref-search"]
+    },
     "jdk": {
       "major": "17",
       "version": "17.0.19+10",
@@ -162,7 +175,7 @@
         "version": "0.1.1.post1",
         "license": "Apache-2.0",
         "capabilities": ["apk-decompile", "apk-xref-search", "apk-manifest-decode"],
-        "source": "PyPI droidasc (MG1937/ASC); CLI only — do not use --gui"
+        "source": "PyPI droidasc (MG1937/ASC); explicit droidasc-python fallback only; no automatic retry; CLI only — do not use --gui"
       },
       "lief": { "version": "1.0.0", "license": "Apache-2.0", "capabilities": ["elf-parse"] }
     },
@@ -178,7 +191,7 @@
   "toolsets": {
     "mobile": {
       "imageKey": "deepsonar-mobile",
-      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned droidasc (Droid ASC) for on-demand APK class/manifest/xref CLI and pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
+      "description": "Project-opt-in mobile audit/test runtime for Android, iOS host tools, OpenHarmony HAP/hdc, and lightweight .so analysis (binutils/radare2/LIEF). Includes pinned rust_ASC (rust-asc/droidasc; explicit droidasc-python fallback) for on-demand APK class/manifest/xref CLI and pinned ApkCheckPack as an Agent-invoked packer/SDK fingerprint CLI. No MobSF, GUI, Burp, IDA, Ghidra, DevEco, MCP servers, or full OH SDK.",
       "maxSizeMiB": 2400
     }
   }

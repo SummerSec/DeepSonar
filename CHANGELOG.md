@@ -18,6 +18,8 @@
 
 ### 新增
 
+- **Mobile ASC 默认 Rust（#754）**：固定 rust_ASC v0.1.1 源码、radguard 修订与 Cargo.lock，CLI-only 编译；`rust-asc` / `droidasc` 默认 Rust，保留 `--threads` 参数转换和显式 `droidasc-python`。损坏 ZIP 拒绝作为空引用结果；保留 JADX/apktool 和其它工具所需 Python。新增自建双 DEX APK 行为验收；最终 amd64 / arm64（QEMU）镜像各通过 59 次真实命令检查，不宣称原生双架构验证、全面兼容或性能提升。
+
 - **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 平台 digests 与最终 inspect 门禁已补齐；受控升级限制见本区安全修复条目。
 
 - **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、所有 Attempt（包括终态）上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。同 schema `upgrade` 子命令已接通，跨 schema 等剩余限制见本区安全修复条目。

@@ -9,6 +9,8 @@ on:
       - "deploy/vendor/openharmony-hdc/**"
       - "agent-harness/mobile-runtime.json"
       - "agent-harness/test-mobile-runtime.mjs"
+      - "agent-harness/test-asc-apk.mjs"
+      - "agent-harness/fixtures/asc/**"
       - "agent-harness/runtime-manuals/**"
       - "agent-harness/materialize-runtime-manuals.mjs"
       - "agent-harness/test-runtime-manuals.mjs"
@@ -26,6 +28,8 @@ on:
       - "deploy/vendor/openharmony-hdc/**"
       - "agent-harness/mobile-runtime.json"
       - "agent-harness/test-mobile-runtime.mjs"
+      - "agent-harness/test-asc-apk.mjs"
+      - "agent-harness/fixtures/asc/**"
       - "agent-harness/runtime-manuals/**"
       - "agent-harness/materialize-runtime-manuals.mjs"
       - "agent-harness/test-runtime-manuals.mjs"
@@ -73,6 +77,7 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
+        if: ${{ github.event_name != 'pull_request' }}
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -139,16 +144,22 @@ jobs:
           cache-from: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }}
             type=gha,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
-          cache-to: |
-            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci-${{ matrix.arch }},mode=max,ignore-error=true
-            type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=runtime-${{ matrix.toolset }}-${{ matrix.arch }}
       - name: Offline environment smoke
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         run: docker run --rm --network none deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.check }} ${{ matrix.check_args }}
       - name: Offline runtime manual smoke
         run: node agent-harness/test-runtime-manuals-runtime.mjs deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci --image-key deepsonar-${{ matrix.toolset }} --platform ${{ matrix.platform }}
+      - name: Offline real APK acceptance (arm64 uses QEMU)
+        run: node agent-harness/test-asc-apk.mjs deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci ${{ matrix.platform }} /tmp/asc-results
+      - name: Retain APK behavior evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asc-${{ matrix.arch }}-${{ github.sha }}
+          path: /tmp/asc-results
       - name: Pin single-arch src cache
-        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        if: ${{ github.event_name != 'pull_request' && steps.resolve.outputs.skip != 'true' }}
         shell: bash
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}

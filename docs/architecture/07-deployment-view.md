@@ -54,6 +54,12 @@ flowchart LR
 
 镜像准入按 `DEEPSONAR_COSIGN_*` 配置检查签名或 keyless identity/issuer、扫描结果、不可变摘要和运行时工具手册契约；未启用签名策略时，官方 catalog 可记录 `signature: skipped`，这不等于已完成签名验证。第三方镜像的 critical/secret 扫描失败会阻止信任；官方镜像的结果也会记录和告警。`image-admission` 直接拉取并检查 Registry，然后把 digest、扫描和 trust 状态写入 PostgreSQL；Scheduler 读取这些管理表，创建 Job 时把可用镜像选择冻结。Agent、Hub、导入包和任意管理文本不能提交新的 OCI 源。实现参考 [`trust-policy.ts`](../../apps/image-admission/src/trust-policy.ts)、[`cosign-verify.ts`](../../apps/image-admission/src/cosign-verify.ts) 和 [`runtime-manual-contract`](../../packages/runtime-manual-contract/src/index.ts)。
 
+## Mobile ASC 工具供应链（#754）
+
+`deepsonar-mobile` 的 ASC 默认实现为固定源码与 submodule 的 rust_ASC v0.1.1，以锁定依赖、`--no-default-features` 构建 CLI。`rust-asc` 与 `droidasc` 兼容入口使用同一 Rust 实现；`droidasc-python` 显式选择保留的 Python 版本，不自动回退。JADX/apktool、其他工具需要的 Python 仍保留，未引入 MCP 服务或新的执行通道。来源和调用契约见 [运行时工具链](../RUNTIME_TEST_TOOLCHAINS.md)。
+
+镜像定义、环境 smoke 与真实 APK 验收是不同证据。amd64/arm64 构建和执行须分别留证，arm64 QEMU smoke 不代表原生验收；当前真实兼容性和性能仍需专项证据，见 [风险登记](12-risks-and-tech-debt.md)。此变更不更新已准入或运行中的镜像 digest。
+
 ## 平台版本发现与部署状态
 
 Scheduler 在 catalog 同步路径比较当前部署版本与 registry 的 `platform` 段（没有该段时使用 `platform_version`），把最近一次结果写入 `platform_update_checks` 单例；管理员可通过只读 `GET /platform/updates` 读取最近一次检查结果，Web 只显示版本提示。该域不执行 `upgrade`、`apply` 或 `rollback`。Release workflow 从平台镜像 descriptor 生成并重新 inspect 核对各通道真实 platform digests；Compose 只接受不可变 digest 引用。部署脚本同时拒绝重复或非规范平台变量，防止校验值与 Compose 插值结果不一致。宿主升级在暂停/排空、备份校验后切换；恢复记录绑定项目、Compose 文件内容和 Docker 目标，身份变化拒绝恢复；中断保留暂停，同 schema 回滚只恢复镜像配置且保留期间数据库写入，恢复领取结果不明时拒绝自动回滚。跨 schema、完整配置 preflight、多节点及自动续做仍未实现，入口见 [部署脚本](../../deploy/README.md)。相关后续和边界见 [平台自动更新后续阶段](12-risks-and-tech-debt.md)。

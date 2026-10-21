@@ -31676,6 +31676,7 @@
         "agent-harness/mobile-runtime.json",
         "deploy/Dockerfile.agent-mobile",
         "deploy/mobile-env.sh",
+        "deploy/mobile-asc.sh",
         "deploy/mobile-adb.sh",
         "deploy/mobile-hdc.sh",
         "deploy/mobile-ios.sh",
@@ -34007,23 +34008,25 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "0.1.1.post1",
-          "version_source": "agent-harness/mobile-runtime.json#/managed.pip.droidasc",
+          "version": "0.1.1",
+          "version_source": "agent-harness/mobile-runtime.json#/downloads.rust-asc",
           "commands": [
+            "rust-asc",
             "droidasc"
           ],
-          "usage_scenario": "Query classes, manifest data, and references in a large APK without materializing a full decompilation.",
-          "selection_basis": "Prefer droidasc for targeted lookup and reference queries; use JADX when complete source-like views are needed. The pinned CLI exposes getmanifest, getclass, and findrefs; do not use its GUI mode.",
+          "usage_scenario": "Query APK classes, Manifest and cross-DEX references with pinned Rust ASC CLI.",
+          "selection_basis": "Rust is the default; droidasc is the compatibility entry and translates --threads to --thread. Use droidasc-python explicitly if comparison or fallback is needed; Rust failures never trigger automatic fallback. Keep JADX for broader decompilation and apktool for resources/smali.",
           "prerequisites": [
             "Read the frozen job image manifest and work under the job workspace."
           ],
-          "minimal_invocation": "droidasc getmanifest app.apk -o AndroidManifest.xml; droidasc getclass app.apk 'Lcom/poc/Main;' -o Main.java --threads 16; droidasc findrefs app.apk string token -o string_refs.txt",
+          "minimal_invocation": "droidasc getmanifest app.apk -o AndroidManifest.xml; droidasc getclass app.apk 'Lcom/poc/Main;' -o Main.java --thread 16; droidasc findrefs app.apk string token -o string_refs.txt",
           "common_parameters": [
             "getmanifest APK [-o FILE]",
-            "getclass APK CLASS [-o FILE] [--threads N]",
-            "findrefs APK {string,type,method,field} TERM [--class NAME] [--fuzzy-class] [-o FILE]"
+            "getclass APK CLASS [-o FILE] [--thread N]",
+            "findrefs APK {string,type,method,field} TERM [--class NAME] [--fuzzy-class] [-o FILE]",
+            "--version"
           ],
-          "output_interpretation": "getmanifest writes decoded AndroidManifest.xml; getclass writes source-like code for one class; findrefs reports matching string/type/method/field references across DEX entries. A no-match result is scoped to the queried APK and term and does not prove absence of behavior.",
+          "output_interpretation": "Output is static pseudocode/reference evidence, not device behavior. No matches do not prove absence; retain exit code and stderr. Rust/Python output and ordering need not be identical.",
           "failure_handling": {
             "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
             "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
@@ -34031,19 +34034,60 @@
             "missing_condition": "If a required file, device, authorization, service, network permission, or architecture is absent, record inconclusive/needs_human with the missing condition.",
             "permanent": "For unsupported input, corrupt artifacts, an unavailable binary, or an unrecoverable exit, stop and record permanent_failure with stderr and the exact command."
           },
-          "composition_flow": "file/hash app.apk -> getmanifest -> findrefs for a narrow term -> getclass for the relevant class -> JADX/apktool for broader or resource-aware confirmation.",
+          "composition_flow": "file/hash APK -> getmanifest -> findrefs -> getclass -> JADX/apktool confirmation.",
           "evidence_retention": [
             "APK SHA-256",
-            "droidasc version",
-            "subcommand and query type/term",
-            "class filter and fuzzy flag",
-            "output files and hashes",
-            "stdout/stderr",
-            "exit code"
+            "implementation/version/source commit",
+            "entrypoint and exact arguments",
+            "stdout/stderr and exit code",
+            "output files and hashes"
           ],
-          "version_limits_side_effects_cleanup": "Droid ASC 0.1.1.post1 is on-demand and read-only for the APK; it is not a runtime/device observation and does not replace full decompilation. Do not pass --gui in the Agent image. Keep this catalog version synchronized with the image's runtime source pin.",
+          "version_limits_side_effects_cleanup": "rust_ASC v0.1.1 source commit 236dd096669c99eb30f6e1af0b24e668eff55dd5, locked CLI-only build without MCP. Top-level --help uses the successful upstream no-argument help path; subcommand help preserves upstream status 1. No GUI/MCP. No independently verified speedup claim.",
           "verification_status": "source_declared_unexecuted",
-          "verification_note": "Catalog follows the intended droidasc 0.1.1.post1 release; synchronize agent-harness/mobile-runtime.json and the Dockerfile pin before merge."
+          "verification_note": "Adapter unit mocks are not APK compatibility evidence. Run test-asc-apk.mjs on the final image for each architecture; QEMU runs are not native arm64 verification."
+        },
+        {
+          "image_key": "deepsonar-mobile",
+          "id": "droidasc-python",
+          "kind": "tool",
+          "agent_visible": true,
+          "implementation_only": false,
+          "version": "0.1.1.post1",
+          "version_source": "agent-harness/mobile-runtime.json#/managed.pip.droidasc",
+          "commands": [
+            "droidasc-python"
+          ],
+          "usage_scenario": "Explicit Python ASC fallback or comparison for targeted APK queries.",
+          "selection_basis": "Select explicitly and retain implementation identity; never silently retry Rust failures. Python also remains necessary for Frida, Objection, androguard and LIEF.",
+          "prerequisites": [
+            "Read the frozen job image manifest and work under the job workspace."
+          ],
+          "minimal_invocation": "droidasc-python getmanifest app.apk -o python-manifest.xml",
+          "common_parameters": [
+            "getmanifest APK [-o FILE]",
+            "getclass APK CLASS [--threads N]",
+            "findrefs APK {string,type,method,field} TERM"
+          ],
+          "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
+          "failure_handling": {
+            "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
+            "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
+            "transient_retryable": "For a busy process, temporary network error, or service startup race, retain logs and retry within the job budget after checking for duplicate side effects.",
+            "missing_condition": "If a required file, device, authorization, service, network permission, or architecture is absent, record inconclusive/needs_human with the missing condition.",
+            "permanent": "For unsupported input, corrupt artifacts, an unavailable binary, or an unrecoverable exit, stop and record permanent_failure with stderr and the exact command."
+          },
+          "composition_flow": "Save the raw output, normalize only with a documented transformation, then pass the artifact to the next tool or verifier.",
+          "evidence_retention": [
+            "Exact command and arguments",
+            "image key and digest",
+            "tool version",
+            "stdout/stderr",
+            "exit code",
+            "input and output hashes"
+          ],
+          "version_limits_side_effects_cleanup": "Python Droid ASC 0.1.1.post1; CLI only, no --gui. Static results do not establish device or traffic behavior.",
+          "verification_status": "source_declared_unexecuted",
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
         {
           "image_key": "deepsonar-mobile",
@@ -35458,8 +35502,8 @@
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         }
       ],
-      "entry_count": 94,
-      "agent_visible_entry_count": 49,
+      "entry_count": 95,
+      "agent_visible_entry_count": 50,
       "implementation_only_entry_count": 45
     },
     {
@@ -37701,7 +37745,7 @@
           ],
           "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
           "verification_status": "source_reviewed_unexecuted",
-          "verification_note": "Historical amd64 host measurements are in reverse-amd64-measurements.json. Native amd64/arm64 OCI and real OpenSandbox Job gates run in reverse-runtime.yml and release.yml; successful run artifacts are required before claiming image validation or publication. The compressed image budget is 2800 MiB; actual bytes come from docker save | gzip."
+          "verification_note": "PR2 amd64 host scratch validated analyzeHeadless via REA (sample_elf/libsample.so); OCI image digest execution still pending first reverse build."
         },
         {
           "image_key": "deepsonar-reverse",
@@ -37757,7 +37801,7 @@
           ],
           "version_limits_side_effects_cleanup": "Pinned to rea-agents@6.4.0 / gitHead a56f7bb668ab23fec8d33f7af353ac7ed2fe1895. Snapshot files are exact-query caches, not persistent Ghidra databases. Keep workspace-local outputs; delete ephemeral provider temps after evidence retention.",
           "verification_status": "source_reviewed_unexecuted",
-          "verification_note": "Historical amd64 host measurements are in reverse-amd64-measurements.json. Native amd64/arm64 OCI and real OpenSandbox Job gates run in reverse-runtime.yml and release.yml; successful run artifacts are required before claiming image validation or publication. The compressed image budget is 2800 MiB; actual bytes come from docker save | gzip."
+          "verification_note": "PR2 amd64 scratch toolchain ran analyze/function/decompile/xrefs/trace/inspect-analysis-view; see agent-harness/reverse-amd64-measurements.json. arm64 and OCI digest still pending."
         },
         {
           "image_key": "deepsonar-reverse",
@@ -37855,8 +37899,8 @@
   ],
   "totals": {
     "image_count": 14,
-    "entry_count": 983,
-    "agent_visible_entry_count": 362,
+    "entry_count": 984,
+    "agent_visible_entry_count": 363,
     "implementation_only_entry_count": 621
   }
 }
