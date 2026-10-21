@@ -13,6 +13,17 @@ export function docker(args, input) {
   if (result.error || result.status !== 0) throw new Error(`maintenance fixture docker ${args[0]} failed (${result.status}); raw output suppressed`);
   return result.stdout.toString().trim();
 }
+/** Decide applicability before creating fixtures or contacting Docker. */
+export function maintenanceScenarioSelection(config, name) {
+  if (config.scenarios && !config.scenarios.includes(name)) return {name, status: 'not_run', reason: 'explicit scenario selection'};
+  if (name === 'knowledge-background-fence' && (config.oldSchema !== 61 || config.newSchema !== 62)) {
+    return config.scenarios
+      ? {name, status: 'failed', code: 'KNOWLEDGE_BACKGROUND_FENCE_SCHEMA_UNSUPPORTED', error: 'knowledge-background-fence requires actual schema 61 to 62 images'}
+      : {name, status: 'not_run', reason: 'not_applicable'};
+  }
+  return {name, status: 'run'};
+}
+
 export async function loadConfig(path) {
   const config = JSON.parse(await readFile(path, 'utf8'));
   assert.match(config.registry, /^127\.0\.0\.1:[1-9][0-9]{1,4}$/);

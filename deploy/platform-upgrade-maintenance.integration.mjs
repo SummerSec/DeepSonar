@@ -8,7 +8,7 @@ import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {maintenanceHostAdapter} from './platform-upgrade-maintenance-host.mjs';
 import {runMaintenanceUpgrade} from './platform-upgrade-maintenance.mjs';
-import {loadConfig, createFixture, target, parseValues, inspectFixtureRef, docker, dc, query, request, health, fixtureRun, cleanupRunners} from './platform-upgrade-maintenance.fixture.mjs';
+import {maintenanceScenarioSelection, loadConfig, createFixture, target, parseValues, inspectFixtureRef, docker, dc, query, request, health, fixtureRun, cleanupRunners} from './platform-upgrade-maintenance.fixture.mjs';
 const script = fileURLToPath(import.meta.url);
 const snapshotSql = `SELECT json_build_object('projects',(SELECT count(*) FROM projects),'jobs',(SELECT count(*) FROM jobs),
 'attempts',(SELECT count(*) FROM job_attempts),'effects',(SELECT count(*) FROM job_attempt_effects),'events',(SELECT count(*) FROM events),
@@ -72,10 +72,17 @@ async function crashChild(path) {
 export async function rehearse(configPath,output) {
   const config=await loadConfig(configPath); await mkdir(output,{recursive:true,mode:0o700});
   const report={startedAt:new Date().toISOString(),oldSchema:config.oldSchema,newSchema:config.newSchema,runnerReuse:config.reuseRunners===true,images:[],cases:[]};
+  const knowledgeSelection=maintenanceScenarioSelection(config,'knowledge-background-fence');
+  if (knowledgeSelection.status==='failed') {
+    report.cases.push(knowledgeSelection); report.finishedAt=new Date().toISOString();
+    await writeFile(join(output,'summary.json'),JSON.stringify(report,null,2),{mode:0o600});
+    return report;
+  }
   for(const images of Object.values(config.versions)) for(const ref of Object.values(images)) {report.images.push(await inspectFixtureRef(config,ref)); docker(['pull',ref]);}
   const priorToken=process.env.DEEPSONAR_ADMIN_TOKEN;
   async function scenario(name,fn) {
-    if (config.scenarios && !config.scenarios.includes(name)) {report.cases.push({name,status:'not_run',reason:'explicit scenario selection'}); return;}
+    const selection=maintenanceScenarioSelection(config,name);
+    if (selection.status!=='run') {report.cases.push(selection); return;}
     const fixture=await createFixture(config,output,name), evidence={name,project:fixture.project,status:'not_run'};
     process.env.DEEPSONAR_ADMIN_TOKEN=fixture.token;
     console.log(`[${new Date().toISOString()}] scenario ${name} started`);

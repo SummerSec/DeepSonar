@@ -59,7 +59,7 @@ node deploy/platform-upgrade-maintenance.integration.mjs \
   --output /path/to/maintenance-evidence
 ```
 
-配置需包含 `registry`（loopback）、`postgresImage`、`oldVersion`、`newVersion`、`oldSchema`、`newSchema`，以及 `versions` 按版本映射的 scheduler/web/image-admission 真实 digest。当前夹具要求 `oldSchema=59` 且旧镜像实际自行初始化该基线；`newSchema` 必须取目标源码/镜像的真实值，不能把临时集成编号当发布编号。新旧各服务须不同 digest。旧配置需要 #758 重置时显式填写 `resetRoleIdentity: true`；演练先验证未选择时拒绝，再验证相应计划审批。不能默认用维护授权代替此选择。
+配置需包含 `registry`（loopback）、`postgresImage`、`oldVersion`、`newVersion`、`oldSchema`、`newSchema`，以及 `versions` 按版本映射的 scheduler/web/image-admission 真实 digest。`oldSchema` 必须来自真实旧镜像自行初始化的基线；`newSchema` 必须取目标源码/镜像的真实值，不能把临时集成编号当发布编号。新旧各服务须不同 digest。`knowledge-background-fence` 专门验证知识基线 61 → 62：其他基线默认记录 `not_run` / `not_applicable`，显式选中不支持组合时在创建容器前报错，不伪造知识表。旧配置需要 #758 重置时显式填写 `resetRoleIdentity: true`；演练先验证未选择时拒绝，再验证相应计划审批。不能默认用维护授权代替此选择。
 
 脚本使用随机 `pr747-maint-*` 隔离项目与卷，生成私有证据，结束时只清理本项目。它只消费准备好的镜像，不构建/推送公共版本。可选 `scenarios` 是明确的场景子集；未选场景记录 `not_run`，不能将子集称为完整通过。生产 Dockerfile 与离线产物打包的区别仍须记录。
 
