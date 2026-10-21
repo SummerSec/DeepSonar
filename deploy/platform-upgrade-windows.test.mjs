@@ -44,7 +44,9 @@ test('uncertain release response is not retried', async () => {
 });
 
 test('native Windows orphaned I/O helper retains the kernel lock after owner termination', {skip:process.platform!=='win32',timeout:120000}, async t => {
-  const directory=await mkdtemp(join(tmpdir(),'upgrade-windows-borrow-')),file=join(directory,'lock');
+  const directory=await mkdtemp(join(tmpdir(),'upgrade-windows-borrow-')),file=join(directory,'state','lock');
+  // The production lock protects its recovery directory's ACL. Keep fixture
+  // executables outside it so rewriting inherited ACLs cannot disable them.
   const windowsUrl=new URL('./platform-upgrade-windows.mjs',import.meta.url).href;
   const executable=join(directory,'borrow-helper.exe'),requestFile=join(directory,'request.txt');
   const readyFile=join(directory,'ready.txt'),diagnosticFile=join(directory,'stage.json');
@@ -123,9 +125,21 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     finally {
       if(borrower)watch({remove:borrower});if(spawnedHelper)watch({remove:spawnedHelper});
       borrower=spawnedHelper=undefined;
-      try{owner.kill('SIGKILL');}catch{}
+      await mark('cleanup_owner_stop');
+      if(!ownerExit){
+        const exited=once(owner,'exit');try{owner.kill('SIGKILL');}catch{}
+        await Promise.race([exited,new Promise(resolve=>setTimeout(resolve,3000))]);
+        if(!ownerExit)process.stderr.write('native fixture cleanup owner exit not confirmed\n');
+      }
       owner.stderr.destroy();if(owner.connected)owner.disconnect();
-      try {await rm(directory,{recursive:true,force:true,maxRetries:20,retryDelay:100});await mark('cleanup_completed');}
+      await mark('cleanup_directory_remove');
+      try {
+        await Promise.race([
+          rm(directory,{recursive:true,force:true,maxRetries:2,retryDelay:100}),
+          new Promise((_,reject)=>setTimeout(()=>reject(Object.assign(new Error('cleanup deadline'),{code:'CLEANUP_TIMEOUT'})),3000)),
+        ]);
+        await mark('cleanup_completed');
+      } catch(error){process.stderr.write('native fixture cleanup failed: '+JSON.stringify({code:error.code??'UNKNOWN'})+'\n');throw error;}
       finally {watchdog.kill('SIGKILL');if(watchdog.connected)watchdog.disconnect();}
     }
   });
@@ -139,7 +153,9 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
     if(ready&&spawnedHelper){assert.equal(ready,spawnedHelper);borrower=ready;break;}
     if(t.signal.aborted||Date.now()>=deadline||ownerExit||ownerError||helperExit){
       const native=await readJson(diagnosticFile);
-      throw new Error('native borrow readiness failed: '+JSON.stringify({elapsed_ms:Math.round(performance.now()-started),ownerExit,ownerError,helperExit,helper_spawned:!!spawnedHelper,stage:native?.stage,type:native?.type,hresult:native?.hresult}));
+      const failure='native borrow readiness failed: '+JSON.stringify({elapsed_ms:Math.round(performance.now()-started),ownerExit,ownerError,helperExit,helper_spawned:!!spawnedHelper,stage:native?.stage,type:native?.type,hresult:native?.hresult});
+      process.stderr.write(failure+'\n');
+      throw new Error(failure);
     }
     await new Promise(resolve=>setTimeout(resolve,50));
   }
