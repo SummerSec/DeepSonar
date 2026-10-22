@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> **状态：运维 as-built（2026-10-15）**。**v0.5.5 已发布**（GitHub Release + run [38506851988](https://github.com/SummerSec/DeepSonar/actions/runs/38506851988) 全绿）：`deepsonar-reverse` canonical `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8` 已回写 bundled registry，GHCR / Docker Hub / ACR 三通道 inspect 通过；v0.5.4 曾因 ACR / Docker Hub 通道失败未完成 Release（tag 不移动），v0.5.5 带上 #732 重试后成功。**v0.5.6 发版准备中**（#736 Anthropic 探测客户端指纹、#730 部署就绪门禁与镜像恢复统计、#734 失败发布恢复守则）：本节日期与 compare link 仅用于发布准备，不证明 tag 已存在；`v0.5.6` tag 触发的 Release 真实成功与各通道 inspect 证据仍是硬门。改 CLI 钉死版本后须打 `v*` 才会重建官方 Agent 镜像。索引：[`README.md`](README.md)。
+> **状态：运维 as-built（2026-10-22）**。最新已发布版本为 [v0.5.6](https://github.com/SummerSec/DeepSonar/releases/tag/v0.5.6)；本轮准备 **v0.6.0**，集成 schema 62、项目知识、凭据优先解析、维护升级与正式 tag 的平台 keyless 签名。发布准备和 CI 不证明新版已发布；最终三渠道双架构 inspect、签名与 Release 附件必须在正式 workflow 实际通过。历史失败 tag 不移动，现网不自动升级。
 >
 > Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
@@ -39,7 +39,7 @@ pnpm ci:images
 
 **v0.5.5 发布结果**（v0.5.4 tag 不移动；其 Release 中 `reverse-images` 曾把 GHCR index 推送成功但 ACR / Docker Hub `imagetools create` 失败；#732 为 `publish-reverse-runtime.mjs` 补上 HTTP/1.1、每次 15 分钟、最多 3 次重试）：v0.5.5 tag 触发的 Release 已全部成功——真实不可变 digest、`reverse.json`、三通道 inspect、证据附件 `deepsonar-reverse-evidence-0.5.5.tar.gz`，并由 workflow 把 `deepsonar-reverse` `0.5.5` 回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。后续发版仍不得用空 descriptor、手写 digest、复制其他产品证据或从必需产品集合静默删除 reverse 来绕过阻塞。
 
-**v0.5.6 发版准备**（2026-10-15）：本版为补丁版，内容为 #736（Anthropic Messages 推理探测与网关认证头携带受治理的 Claude CLI 客户端指纹）、#730（部署就绪门禁、运行镜像恢复统计与远端对账边界）、#734（失败发布同名 tag 恢复守则）以及 #718 的 v0.5.5 准入证据绑定与文档收口。上述准备项本身不修改数据库 schema；后续主线已由 #740 的平台级暂停领取与版本发现变更更新 schema，当前版本以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准，发布验收须覆盖最终合并内容。上述准备项不改变运行镜像输入与 fingerprint，命中不可变 `src-*` 缓存时复用既有构建并仍执行规定的原生冒烟；控制面镜像因 Scheduler 源码变更随本次发布重建。剩余硬门与上一版相同：`v0.5.6` tag 触发的 Release 必须实际成功，产出真实不可变 digest、每个配置通道的 descriptor / inspect 证据、必需产品集合完整的 catalog 并通过最终双平台 payload 门禁，再由 workflow 回写 bundled registry 与部署 tag；tag 存在、CI 通过或部分镜像推送成功都不等于发布完成。
+**历史 v0.5.6 发版准备记录**（2026-10-15）：本版为补丁版，内容为 #736（Anthropic Messages 推理探测与网关认证头携带受治理的 Claude CLI 客户端指纹）、#730（部署就绪门禁、运行镜像恢复统计与远端对账边界）、#734（失败发布同名 tag 恢复守则）以及 #718 的 v0.5.5 准入证据绑定与文档收口。上述准备项本身不修改数据库 schema；后续主线已由 #740 的平台级暂停领取与版本发现变更更新 schema，当前版本以 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 为准，发布验收须覆盖最终合并内容。上述准备项不改变运行镜像输入与 fingerprint，命中不可变 `src-*` 缓存时复用既有构建并仍执行规定的原生冒烟；控制面镜像因 Scheduler 源码变更随本次发布重建。剩余硬门与上一版相同：`v0.5.6` tag 触发的 Release 必须实际成功，产出真实不可变 digest、每个配置通道的 descriptor / inspect 证据、必需产品集合完整的 catalog 并通过最终双平台 payload 门禁，再由 workflow 回写 bundled registry 与部署 tag；tag 存在、CI 通过或部分镜像推送成功都不等于发布完成。
 
 ## 可选发布凭据
 
@@ -213,3 +213,7 @@ all three OpenHarmony products.
 - 首期预算仍为 2800 MiB；每个成功 run 的 `reverse-native-evidence-<arch>/measurements.json` 才是 OCI 实测。`reverse-job-evidence-<arch>` 证明隔离测试环境中的实际 Job 路径，不冒充生产准入。
 - 既有版本标签包含 index wrapper 在内不可变。手动触发使用已验证的 release version；若已有标签与本次测试 payload 不同，或多个目的地已有不同 index digest，发布直接拒绝。匹配时保留旧 index bytes，仅补缺失目的地；不能靠改注释重打同版本。
 - 最终 catalog 检查 reverse 及 Chrome/ClickHouse 的 14 个原生 child，并重验所有可用通道。没有真实 `reverse.json` 或通道证据不得发布完整 catalog；不改动任何生产项目启用状态。
+
+## v0.6.0 签名发布门禁
+
+本轮版本来自未使用的 `v0.6.0` tag，私有 package 版本不作为产品版本。正式 tag 必须指向已通过 CI 的 main；签名身份、目标 commit、CHANGELOG、schema 与最终平台镜像必须一致。`prepare-release` 的冻结产物经 `platform-signatures` 三张 GHCR index 签名及独立验证后，`release` 才能发布与回写。仅签名 job 新增 `id-token: write`，不创建持久凭据；信任根、签名 metadata 与默认关闭的宿主自动升级规则见 [签名运维](../deploy/UPGRADE_AUTOMATION.md)。生产正例以本版 Release 的公开回执和 workflow 为准；不能用测试密钥或 tag 存在代替。

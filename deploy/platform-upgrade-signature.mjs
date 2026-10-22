@@ -16,8 +16,8 @@ export function assertPlatformSignatureOutput(stdout, target, service) {
   if (!rows.length || rows.length > 32) signatureError('signature_output_invalid');
   const digest = target.images[service].split('@sha256:')[1];
   const expected = platformSignatureAnnotations(target, service);
-  // Cosign 3 emits verified DSSE envelopes here. `verify` alone transforms them
-  // and discards annotations, so it cannot enforce this full metadata contract.
+  // Cosign 3 verify-attestation emits verified DSSE envelopes, preserving
+  // the signed statement and annotations needed for the full metadata contract.
   for (const envelope of rows) {
     let statement;
     try {

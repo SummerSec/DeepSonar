@@ -1,12 +1,22 @@
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-22
+
+### 发布与升级边界
+
+- 正式稳定 tag 的平台发布增加 GHCR keyless 签名门禁：在最终清单和双架构摘要核验后，独立 `platform-signatures` job 使用 GitHub 短期 OIDC/Fulcio/Rekor，仅签 scheduler、web、image-admission 三个不可变 index。精确 workflow/tag/commit、版本、schema 与完整目标集合均须验签通过，才可发布 Release 和回写 bundled 清单；不创建长期密钥或新增全局权限。
+- 产品版本由 `v0.6.0` tag 唯一确定，目标数据库基线为 schema 62，包含凭据优先解析、项目知识结构与维护世代；跨 schema 升级使用计划审批、数据库写入隔离及候选重建，不原地恢复旧备份覆盖新写入。角色身份重置仍须显式选择，`--force` 不隐含重置。
+- 项目知识支持 Job 冻结目录、Memory/Skill 生命周期、幂等治理回执及后台应用；凭据配置成为 CLI/provider/model 默认解析的优先来源，保留历史 Job 快照。本轮仅做隔离行为与数据安全验收，不做真实模型效果验收。
+- 宿主无人值守升级仍默认关闭，仅管理员明确配置策略、信任根及调度后才可运行；签名不是部署授权。P3 Web 发起升级为可选且未实现。正式签名正例、镜像通道与最终 payload 的运行结果以本版本 Release 证据为准，准备提交和 CI 通过不等于发布完成。
+
+
 ### 平台部署安全修复（#740 / #747）
 
 - 修复 CI OpenSandbox Compose 的 digest 环境夹具、`.env` 重复/非规范赋值校验和 Release 四行 digest 回写；发布清单生成与逐通道双架构 inspect 已接通，保留既有部署通道。
 - 升级恢复记录绑定 Compose 项目、文件内容与 Docker 目标，拒绝误用其他部署的记录；补隔离双源码版本真实容器演练入口和备份恢复验收。
 - 修复原生 Reverse 构建的 jq/libjq1 版本冲突：两包共同固定到 Debian 安全更新；工具清单与一致性门禁同步。
 - 目标配置预检复用凭据优先的运行时解析，阻止默认凭据、CLI 与模型组合不兼容；同时验证主密钥文件内容及全部已存凭据的 AES-GCM 认证。密钥和密文仅经 stdin 传入断网目标容器，不写入升级记录或诊断；外部认证和模型实际可用性仍不属于离线检查。
-- 排空包括所有终态 Attempt 的未结算/未知效果。共享宿主 `upgrade` 已接只读计划和风险审批、目标配置离线预检、旧数据库身份隔离、备份校验、独立候选库跨 schema 重建、同目标中断续做及显式清单绑定的受管 SSH 控制面/worker 升级。worker 登记、心跳和领取共同校验版本/generation，换代登记及心跳另需当前代秘密，旧身份不能凭公开版本信息恢复执行权。激活前回滚保全源库并保持暂停；激活已发生或结果不明时不自动切回旧数据。真实单机与多节点成功场景已通过，完整故障矩阵仍在验收；Windows 原生维护升级未实现，preflight 的 `not_checked` 不算兼容性通过。具体证据与边界见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。
+- 排空包括所有终态 Attempt 的未结算/未知效果。共享宿主 `upgrade` 已接只读计划和风险审批、目标配置离线预检、旧数据库身份隔离、备份校验、独立候选库跨 schema 重建、同目标中断续做及显式清单绑定的受管 SSH 控制面/worker 升级。worker 登记、心跳和领取共同校验版本/generation，换代登记及心跳另需当前代秘密，旧身份不能凭公开版本信息恢复执行权。激活前回滚保全源库并保持暂停；激活已发生或结果不明时不自动切回旧数据。最终 schema 61 → 62 的 16 项 Compose 演练及独立知识后台停写场景已通过并清理；Windows 原生锁、私有 ACL 与文件后端已实现并通过原生 CI，但 Windows Docker 完整升级和断电测试未运行，preflight 的 `not_checked` 不算兼容性通过。具体证据与边界见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。
 
 ### 变更
 
@@ -36,7 +46,7 @@
 
 ### 部署 / 升级说明
 
-- **维护升级基线（#740 / #747）**：新增维护世代、运行身份与 worker 准入字段；最终唯一基线以 [`schema-version.ts`](apps/scheduler/src/schema-version.ts) 和 [`schema.sql`](database/schema.sql) 为准。下述 v57 → v58 / v58 → v59 是历史分片，不是本 PR 最终升级目标；并行 schema 变更合入后须重新核对编号、DDL 指纹并重跑目标镜像演练。
+- **维护升级基线（#740 / #747）**：新增维护世代、运行身份与 worker 准入字段；最终唯一基线以 [`schema-version.ts`](apps/scheduler/src/schema-version.ts) 和 [`schema.sql`](database/schema.sql) 为准。下述 v57 → v58 / v58 → v59 是历史分片，不是本 PR 最终升级目标；本轮已集成 schema 62 并完成隔离目标镜像演练；未来并行变更仍须重新核对编号和 DDL 指纹。
 
 - **平台镜像引用契约变更（#740 P1 第 3 片）**：已有部署升级前须删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，并从目标版本的 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）；否则 `deploy.sh` / `deploy.ps1` 与 Compose 直接拒绝启动。不改数据库 schema。Release 回写 `deploy/.env.example` 同步改为写入 `DEEPSONAR_VERSION` 与按 inspect 得到的 digest 引用。
 - **历史分片：#740 P1 第 2 片**修改数据库 schema **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用契约见上一条（#740 第 3 片）；受控升级与剩余限制见本区安全修复条目。
@@ -1259,3 +1269,5 @@
 [0.1.20]: https://github.com/SummerSec/DeepSonar/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/SummerSec/DeepSonar/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/SummerSec/DeepSonar/compare/v0.1.17...v0.1.18
+
+[0.6.0]: https://github.com/SummerSec/DeepSonar/compare/v0.5.6...v0.6.0

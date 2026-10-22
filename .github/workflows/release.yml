@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（如 0.1.16 或 v0.1.16；留空=自动用仓库最新 v* tag）"
+        description: "匹配当前正式 tag 的版本号；留空使用当前 tag"
         required: false
         type: string
         default: ""
       ref:
-        description: "检出的 git ref（分支/tag/sha）；留空=触发时所选分支的最新 commit（GITHUB_SHA）"
+        description: "当前正式 tag 或其固定 SHA；必须从该 tag 触发 workflow"
         required: false
         type: string
         default: ""
@@ -41,7 +41,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       owner: ${{ steps.release.outputs.owner }}
-      # 下游 job 统一 checkout 此 ref；手动触发且未填 ref 时为触发分支 HEAD 的 commit sha
+      # 下游 job 统一 checkout 已验证正式 tag 的固定 commit sha
       checkout_ref: ${{ steps.release.outputs.checkout_ref }}
       # base 镜像 digest（openharmony 指纹与 BASE_IMAGE 钉死用）
       digest: ${{ steps.image.outputs.digest }}
@@ -54,71 +54,25 @@ jobs:
       ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
       ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # 先拉全量 tags，便于解析「最新 v*」版本号；源码默认用触发 commit。
-          fetch-depth: 0
-          fetch-tags: true
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.ref }}
-      - id: release
-        name: 解析发布版本
+      - name: Reject non-stable-tag publisher before checkout or builds
         shell: bash
         run: |
           set -euo pipefail
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          [[ -n "$owner" ]]
-          git fetch --tags --force origin 2>/dev/null || true
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            raw="${{ inputs.version }}"
-            if [[ -z "$raw" ]]; then
-              # 默认：仓库最新 v* tag（版本排序，如 v0.1.16）——只作镜像/Release 版本号
-              raw="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
-              if [[ -z "$raw" ]]; then
-                echo "未找到任何 v* tag，请填写 version 输入项" >&2
-                exit 1
-              fi
-              echo "手动触发未填 version，自动使用最新 tag 作为版本号: ${raw}" >> "$GITHUB_STEP_SUMMARY"
-            fi
-            version="${raw#v}"
-            if [[ -z "$version" || ! "$version" =~ ^[0-9] ]]; then
-              echo "version 不合法（期望如 0.1.16 / v0.1.16），当前: ${version:-empty}" >&2
-              exit 1
-            fi
-            # 未指定 ref：用触发时所选分支的最新 commit（GITHUB_SHA），不回退到 v* tag
-            if [[ -z "${{ inputs.ref }}" ]]; then
-              checkout_ref="${GITHUB_SHA}"
-              echo "手动触发未填 ref，使用触发分支最新 commit: ${checkout_ref} (${GITHUB_REF_NAME})" >> "$GITHUB_STEP_SUMMARY"
-            else
-              checkout_ref="${{ inputs.ref }}"
-              git fetch --force origin "${checkout_ref}" 2>/dev/null || true
-              if git rev-parse -q --verify "${checkout_ref}^{commit}" >/dev/null 2>&1 \
-                || git rev-parse -q --verify "refs/tags/${checkout_ref}" >/dev/null 2>&1 \
-                || git rev-parse -q --verify "refs/remotes/origin/${checkout_ref}" >/dev/null 2>&1; then
-                git checkout --force "${checkout_ref}" 2>/dev/null \
-                  || git checkout --force "refs/tags/${checkout_ref}" 2>/dev/null \
-                  || git checkout --force "origin/${checkout_ref}"
-                echo "checkout ${checkout_ref} for release build" >> "$GITHUB_STEP_SUMMARY"
-              else
-                echo "无法解析 ref: ${checkout_ref}" >&2
-                exit 1
-              fi
-            fi
-          else
-            version="${GITHUB_REF_NAME#v}"
-            if [[ "$version" == "$GITHUB_REF_NAME" || -z "$version" ]]; then
-              echo "tag 推送须为 v* 格式，当前 GITHUB_REF_NAME=${GITHUB_REF_NAME}" >&2
-              exit 1
-            fi
-            checkout_ref="${GITHUB_SHA}"
-          fi
-
-          # Freeze resolved source identity; downstream jobs must never re-checkout a moving branch.
-          checkout_ref="$(git rev-parse HEAD)"
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
-          printf 'checkout_ref=%s\n' "$checkout_ref" >> "$GITHUB_OUTPUT"
-          echo "release version=${version} checkout_ref=${checkout_ref} (event=${{ github.event_name }})" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$GITHUB_REPOSITORY" == 'SummerSec/DeepSonar' ]]
+          [[ "$GITHUB_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$GITHUB_WORKFLOW_REF" == "SummerSec/DeepSonar/.github/workflows/release.yml@${GITHUB_REF}" ]]
+      - uses: actions/checkout@v4
+        with:
+          # 拉全量 tags 验证正式 tag 与触发 commit 一致。
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.sha }}
+      - id: release
+        name: Bind stable tag, source commit and publisher identity
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: node agent-harness/platform-signature-publication.mjs identity
       - id: changelog
         name: 校验 tag 与 CHANGELOG
         env:
@@ -3337,7 +3291,9 @@ jobs:
           path: release-digests/${{ matrix.name }}.json
           if-no-files-found: error
 
-  release:
+  prepare-release:
+    outputs:
+      freeze_sha256: ${{ steps.freeze.outputs.freeze_sha256 }}
     needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile, reverse-images]
     runs-on: ubuntu-latest
     env:
@@ -3488,14 +3444,132 @@ jobs:
             deploy/runtime-image-registry.json
             runtime-image-registry-v2.json
           if-no-files-found: error
+      - name: Preserve Reverse acceptance evidence in release assets
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: tar -czf "deepsonar-reverse-evidence-${VERSION}.tar.gz" -C reverse-release-evidence .
+      - name: 打包 Management Skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.base-image.outputs.version }}"
+          tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
+      - name: 生成 Release 正文
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+          PREVIOUS_VERSION: ${{ needs.base-image.outputs.previous_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -s release-changelog/release-notes.md ]]
+          {
+            cat <<EOF
+          > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/THIRD_PARTY_NOTICES.md).
+
+          EOF
+            cat release-changelog/release-notes.md
+            printf '\n[Full Changelog](https://github.com/SummerSec/DeepSonar/compare/v%s...v%s)\n' "$PREVIOUS_VERSION" "$VERSION"
+          } > release-body.md
+      - id: freeze
+        name: Freeze exact validated release payload
+        run: node agent-harness/platform-signature-publication.mjs freeze .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-release-payload
+          path: |
+            platform-release-freeze.json
+            deploy/runtime-image-registry.json
+            runtime-image-registry-v2.json
+            release-body.md
+            deepsonar-reverse-evidence-*.tar.gz
+            deepsonar-management-skill-*.tar.gz
+          if-no-files-found: error
+
+  platform-signatures:
+    needs: [base-image, prepare-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      receipt_sha256: ${{ steps.sign.outputs.receipt_sha256 }}
+    env:
+      FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-release-payload
+          path: frozen-release
+      - name: Prepare private registry credentials directory
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/platform-signatures-docker"
+          printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/platform-signatures-docker" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: sign
+        name: Sign frozen GHCR indexes and verify positive and tampered metadata
+        run: node agent-harness/platform-signature-publication.mjs sign frozen-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-signature-evidence
+          path: platform-signature-evidence.json
+          if-no-files-found: error
+
+  release:
+    needs: [base-image, prepare-release, platform-signatures]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
+      RECEIPT_SHA256: ${{ needs.platform-signatures.outputs.receipt_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-release-payload
+          path: frozen-release
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-signature-evidence
+          path: signature-evidence
+      - name: Require signed frozen payload before publication or bundled writeback
+        run: node agent-harness/platform-signature-publication.mjs gate frozen-release
+      - name: Refuse to overwrite an existing public Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.repos.getReleaseByTag({...context.repo, tag: context.ref.replace('refs/tags/', '')});
+              core.setFailed('Release already exists; refusing overwrite');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
       - name: 回写 bundled 清单到默认分支
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.base-image.outputs.version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           registry_file="deploy/runtime-image-registry.json"
           env_file="deploy/.env.example"
+          cp frozen-release/deploy/runtime-image-registry.json "$registry_file"
           [[ -f "$registry_file" ]]
           [[ -f "$env_file" ]]
           [[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]
@@ -3524,41 +3598,16 @@ jobs:
           # 只更新清单文件；推到默认分支不会再次触发本 workflow（仅 tag 触发）
           git push origin "HEAD:${DEFAULT_BRANCH}"
           echo "已将 $registry_file 和 $env_file 回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
-      - name: Preserve Reverse acceptance evidence in release assets
+      - name: Create Release and frozen assets without updating an existing Release
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.base-image.outputs.version }}
-        run: tar -czf "deepsonar-reverse-evidence-${VERSION}.tar.gz" -C reverse-release-evidence .
-      - name: 打包 Management Skill
-        shell: bash
         run: |
           set -euo pipefail
-          VERSION="${{ needs.base-image.outputs.version }}"
-          tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
-      - name: 生成 Release 正文
-        env:
-          VERSION: ${{ needs.base-image.outputs.version }}
-          PREVIOUS_VERSION: ${{ needs.base-image.outputs.previous_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ -s release-changelog/release-notes.md ]]
-          {
-            cat <<EOF
-          > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/THIRD_PARTY_NOTICES.md).
-
-          EOF
-            cat release-changelog/release-notes.md
-            printf '\n[Full Changelog](https://github.com/SummerSec/DeepSonar/compare/v%s...v%s)\n' "$PREVIOUS_VERSION" "$VERSION"
-          } > release-body.md
-      - name: 发布 Release 与附件
-        uses: softprops/action-gh-release@v2
-        with:
-          # 手动触发时 GITHUB_REF 是分支，必须显式指定已有 v* tag
-          tag_name: v${{ needs.base-image.outputs.version }}
-          body_path: release-body.md
-          files: |
-            deepsonar-reverse-evidence-*.tar.gz
-            deepsonar-management-skill-*.tar.gz
-            deploy/runtime-image-registry.json
-            runtime-image-registry-v2.json
-          generate_release_notes: true
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            --notes-file frozen-release/release-body.md \
+            "frozen-release/deepsonar-reverse-evidence-${VERSION}.tar.gz" \
+            "frozen-release/deepsonar-management-skill-${VERSION}.tar.gz" \
+            frozen-release/deploy/runtime-image-registry.json \
+            frozen-release/runtime-image-registry-v2.json \
+            signature-evidence/platform-signature-evidence.json
