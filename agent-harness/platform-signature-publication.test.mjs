@@ -63,7 +63,10 @@ test('workflow grants OIDC only to signing job and gates both release and writeb
   assert.equal(workflow.match(/id-token: write/g)?.length, 1);
   const signature = workflow.split('\n  platform-signatures:\n')[1].split('\n  release:\n')[0];
   assert.match(signature, /contents: read\n      packages: write\n      id-token: write/);
-  assert.match(signature, /DOCKER_CONFIG: \$\{\{ runner.temp \}\}\/platform-signatures-docker/);
+  assert.doesNotMatch(signature.split('    steps:')[0], /runner\./);
+  assert.ok(signature.includes('"$RUNNER_TEMP/platform-signatures-docker" >> "$GITHUB_ENV"'));
+  assert.ok(signature.indexOf('>> "$GITHUB_ENV"') < signature.indexOf('docker/login-action'));
+  assert.ok(signature.indexOf('docker/login-action') < signature.indexOf('publication.mjs sign'));
   assert.match(signature, /platform-signature-publication.mjs sign frozen-release/);
   const release = workflow.split('\n  release:\n')[1];
   assert.match(release, /needs: \[base-image, prepare-release, platform-signatures\]/);

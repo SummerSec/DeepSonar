@@ -3495,7 +3495,6 @@ jobs:
     outputs:
       receipt_sha256: ${{ steps.sign.outputs.receipt_sha256 }}
     env:
-      DOCKER_CONFIG: ${{ runner.temp }}/platform-signatures-docker
       FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
     steps:
       - uses: actions/checkout@v4
@@ -3509,7 +3508,9 @@ jobs:
           name: platform-release-payload
           path: frozen-release
       - name: Prepare private registry credentials directory
-        run: install -d -m 700 "$DOCKER_CONFIG"
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/platform-signatures-docker"
+          printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/platform-signatures-docker" >> "$GITHUB_ENV"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
