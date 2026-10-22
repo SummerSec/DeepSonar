@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-21
+> 同步日期：2026-10-22
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -1068,8 +1068,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### IR-012 宿主补丁自动升级与签名授权
 
 - **规范要求**：无人值守升级默认关闭，只有明确启用的宿主策略及维护窗口允许新一代操作；目标须为同 major/minor 的向前稳定补丁、相同 schema 与 DDL 指纹，完整预检无阻断、计划无风险。三个平台镜像的签名须绑定官方 Release workflow、tag、commit、版本、schema 和完整目标集合；失败不得降级为无签名执行。
-- **决策来源**：#740 P2；用户授权产品实现及隔离测试，没有授权开启真实定时任务、生产签名权限或真实升级。
-- **实现状态**：策略、签名验证和既有维护状态机接线正在验收；生产 keyless 发布签名及宿主调度默认未启用。签名信任根和验证器由宿主显式钉死，不从待验证清单取信任设置。
+- **决策来源**：#740 P2；用户授权产品实现及隔离测试，并于 2026-10-22 明确批准正式 tag 发布 job 的短期 OIDC 签名；没有授权开启真实定时任务或升级现网。
+- **实现状态**：策略、签名验证和既有维护状态机已完成隔离验收；正式 tag 的生产 keyless 发布已接线，仅签名 job 新增 id-token:write，验签成功才发布。每版正例以 Release 证据为准，宿主调度仍默认未启用。签名信任根和验证器由宿主显式钉死，不从待验证清单取信任设置。
 - **代码入口**：[自动策略](../../deploy/platform-upgrade-auto-policy.mjs)、[自动状态机](../../deploy/platform-upgrade-auto.mjs)、[宿主接线](../../deploy/platform-upgrade-auto-host.mjs)、[签名验证](../../deploy/platform-upgrade-signature.mjs)、[签名运维](../../deploy/UPGRADE_AUTOMATION.md)。
 - **验证证据**：`pnpm ci:unit:platform-upgrade-maintenance`；临时密钥验签与生产 Fulcio/Rekor 身份验收分别记录，不能互相替代。同目标恢复依赖持久授权和实际激活回执；回滚及结果不明不自动开启新一代。
 

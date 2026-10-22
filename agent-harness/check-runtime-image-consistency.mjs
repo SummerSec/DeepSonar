@@ -1110,7 +1110,7 @@ expect(
     releaseWorkflow.includes("--artifacts chrome-arch --artifacts clickhouse-arch --artifacts reverse-arch"),
   "catalog reuse and final release must prove equality with native-smoke platform manifests",
 );
-const finalReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("\n  release:"));
+const finalReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("\n  prepare-release:"), releaseWorkflow.indexOf("\n  platform-signatures:"));
 expect(
   finalReleaseBlock.includes("Login GHCR for final payload verification") &&
     finalReleaseBlock.includes("Login Docker Hub for final payload verification") &&

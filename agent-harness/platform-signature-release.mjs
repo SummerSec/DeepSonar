@@ -19,7 +19,7 @@ export async function releasePlatformSignatures({target, policy, execute = false
     .filter(key => environment[key]).map(key => [key, environment[key]]));
   // OIDC request credentials are inherited only by the signer, never argv/report/persistent files.
   await withPinnedPlatformCosign(policy, async run => {
-    for (const command of plan.commands) await run(command.args);
+    for (const command of plan.commands) await run(rootPath => [...command.args.slice(0, -1), '--trusted-root', rootPath, command.args.at(-1)]);
   }, signingEnvironment);
   // Successful publication is not acceptance until all signatures/metadata are independently verified.
   return {status: 'signed_and_verified', verification: await verifyPlatformSignatures({target, policy})};
