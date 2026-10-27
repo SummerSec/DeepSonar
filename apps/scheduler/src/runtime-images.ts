@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { agentCliIdsCompatibleWithImage } from "@deepsonar/runtime-sandbox";
-import { OFFICIAL_RUNTIME_IMAGE_KEYS, isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
+import { isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
 import { inspectLocalRuntimeImage } from "./runtime-image-local-inspection.js";
 import {
   toolsManifestSha256SyncChange,
@@ -19,24 +18,9 @@ import {
   type RuntimeImagePullItem,
   type RuntimeImagePullTask,
 } from "./runtime-image-pull-status.js";
-import {
-  RUNTIME_IMAGE_PULL_MAX_ATTEMPTS,
-  classifyRuntimeImagePullFailure,
-  isRetryableRuntimeImagePullFailure,
-  logRuntimeImagePullAttempt,
-  recordRuntimeImagePullSpeed,
-  resolveRuntimeImagePullTimeoutSec,
-  type RuntimeImagePullFailureClass,
-} from "./runtime-image-pull-timeout.js";
+import { classifyRuntimeImagePullFailure } from "./runtime-image-pull-timeout.js";
 
-import {
-  RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
-  RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
-  RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES,
-  immutableDigest,
-  localImageDigest,
-  sanitizeRuntimeImageError,
-} from "./runtime-image-oci.js";
+import { immutableDigest, localImageDigest, sanitizeRuntimeImageError } from "./runtime-image-oci.js";
 export {
   RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
   RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
@@ -47,12 +31,7 @@ export {
 import {
   assertRuntimeImageAvailable,
   configureRuntimeImageEnsureCatalogLoader,
-  ensureRuntimeImageAvailable,
-  isDigestNotFoundError,
-  isTransientRegistryTransportError,
-  localRuntimeImageMatchesRef,
   prepareRuntimeImage,
-  verifiedSameDigestChannelRefs,
   type RuntimeImageEnsureDependencies,
   type RuntimeImagePreparationResult,
   type StartRuntimeImagePullInput,
@@ -76,7 +55,6 @@ import {
   classifyRuntimeImageReadinessFromState,
   hostManagesRuntimeImageLayers,
   toRuntimeImageStatusEntry,
-  type RuntimeImageReadiness,
   type RuntimeImageReadinessView,
   type RuntimeImageStatusEntry,
 } from "./runtime-image-readiness.js";
@@ -1938,7 +1916,6 @@ export async function resolveConfiguredRuntimeImagesForChannel(
 ): Promise<RuntimeImageSnapshot[]> {
   if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return [];
   const snapshots = new Map((await resolveStartupRuntimeImages(db, channel)).map((item) => [item.image_ref, item]));
-  const projects = await db`SELECT id, config_json FROM projects ORDER BY id`;
   // #691: leftover image_strategy / role_runtime_images / project pins are gone.
   // Warm enabled project bindings to latest trusted (no selected_version_id).
   const enabled = await db`
