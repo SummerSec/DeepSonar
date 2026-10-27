@@ -2076,6 +2076,9 @@ const OPS: Op[] = [
                 source: { type: "string", enum: ["remote", "bundled", "upload"] },
                 fallback: { type: "boolean" },
                 error: { type: "string", nullable: true },
+                stale: { type: "boolean", description: "#761：本次拉取瞬时失败，响应仍为上次成功清单；不单独触发平台更新失败提示。" },
+                consecutive_failures: { type: "integer", minimum: 0, description: "#761：连续拉取失败次数。" },
+                last_success_at: { type: "string", format: "date-time", description: "#761：最近一次成功拉取时间。" },
                 checked_at: { type: "string", format: "date-time" },
                 image_status: {
                   type: "array",

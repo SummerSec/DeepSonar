@@ -40,6 +40,10 @@ export async function recordPlatformUpdateCheckFromRegistry(
   db: Db = sql,
 ): Promise<PlatformUpdateDecision | null> {
   try {
+    // #761：单次瞬时拉取失败（超时/限流）不得把已知良好的检查结果降级成错误。
+    // 服务的是上次成功清单时保留上一行，横幅不因一次抖动翻转；只有真正降级到
+    // bundled（fallback=true）才写入 check_error。
+    if (registry.stale === true) return null;
     const decision = discoverPlatformUpdateFromRegistry(registry);
     await writePlatformUpdateCheck(db, decision);
     return decision;

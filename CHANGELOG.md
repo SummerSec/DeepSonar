@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- 官方运行时镜像清单拉取不再因单次链路抖动失败（#761）：`github.com/.../releases/latest/download` 会 302 到 `release-assets.githubusercontent.com`，部分网络下首跳常超过 10s；原先每次请求只有一次 10s 硬超时且零重试，表现为 `remote registry request timed out` 反复出现。现在：① 仅对瞬时错误（超时/连接重置/429/5xx）做有界重试（默认 3 次，`DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS` 可调 1–5），鉴权/主机/载荷/体积错误立即失败；② 无 token 时公开通道失败后回退 `api.github.com` 的 release asset；③ 瞬时失败**保留上次成功清单**（`stale`/`consecutive_failures`/`last_success_at`），连续 3 次才降级到 bundled，`stale` 期间不写平台更新检查，横幅不再随单次抖动翻转。不 bump schema。
+
 ## [0.6.0] - 2026-10-22
 
 ### 发布与升级边界
