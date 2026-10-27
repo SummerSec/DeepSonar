@@ -56,6 +56,8 @@ const maybeSkipRuntimeVersionTags = readFileSync(new URL("./maybe-skip-runtime-v
 const reuseCatalogDescriptor = readFileSync(new URL("./reuse-catalog-descriptor.mjs", import.meta.url), "utf8");
 const schedulerRegistryContract = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-contract.ts", import.meta.url), "utf8");
 const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
+/** #761：抓取层已从 runtime-images.ts 抽出，官方 URL/重试策略的断言改为读该模块。 */
+const schedulerRegistryFetch = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-fetch.ts", import.meta.url), "utf8");
 const schedulerRuntimeImageRoutes = readFileSync(
   new URL("../apps/scheduler/src/domains/runtime-image/routes.ts", import.meta.url),
   "utf8",
@@ -943,7 +945,9 @@ expect(descriptorScript.includes("platform_size_bytes"), "release descriptor 必
 expect(descriptorScript.includes("platform_digests"), "release descriptor 必须保留各平台 child digest");
 expect(registryScript.includes("expandDescriptorVersions") || registryScript.includes("一平台一版本"), "runtime registry 必须按平台展开版本");
 expect(registryScript.includes("platforms.length !== 1") || registryScript.includes("恰好包含一个 platform"), "runtime registry 校验必须要求一平台一版本");
-expect(schedulerRuntimeImages.includes("releases/latest/download/runtime-image-registry.json"), "Scheduler 必须从固定官方 latest Release 同步清单");
+expect(schedulerRegistryFetch.includes("releases/latest/download/runtime-image-registry.json"), "Scheduler 必须从固定官方 latest Release 同步清单");
+expect(schedulerRegistryFetch.includes("AbortSignal.timeout(timeoutMs)") && schedulerRegistryFetch.includes("DEFAULT_REGISTRY_FETCH_ATTEMPTS = 3"), "清单抓取必须保留有界超时与重试（#761）");
+expect(!schedulerRuntimeImages.includes("releases/latest/download/"), "runtime-images.ts 不得再内联官方 URL（#761 已抽到抓取层）");
 expect(schedulerRuntimeImages.includes("image.versions.length > 0"), "正式清单已有版本时不能被环境变量旧版本覆盖");
 expect(schedulerRuntimeImages.includes("SET promoted_at = NULL"), "同步最新版本后必须取消旧版本默认 promoted 状态");
 const runtimeImageListRoute = schedulerRuntimeImageRoutes.slice(
