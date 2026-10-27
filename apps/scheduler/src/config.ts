@@ -526,6 +526,8 @@ export const config = {
       .replace(/\/+$/, ""),
     /** 私有 GitHub Release 清单的短期/部署级读取凭据；永不返回 API。 */
     registryGithubToken: str("DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN"),
+    /** #761：清单拉取尝试次数（包含首次），夹到 1–5；1 等于关闭重试。 */
+    registryFetchAttempts: boundedInt("DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS", 3, 5),
     registrySyncSec: int("DEEPSONAR_RUNTIME_REGISTRY_SYNC_SEC", 3600),
     /** 0 disables safe DB-known runtime image GC. */
     gcIntervalSec: boundedNonNegativeInt(

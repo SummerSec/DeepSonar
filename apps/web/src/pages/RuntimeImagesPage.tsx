@@ -899,8 +899,8 @@ export function RuntimeImagesPage() {
                 目录来源：{registry ? registrySourceLabel(registry) : registryLoading ? "加载中…" : "暂不可用"}
               </div>
               <div className="mt-2 text-xs text-zinc-500">
-                {registry?.fallback ? <span className="text-amber-300">当前为内置回退清单</span> : registry ? <span className="text-emerald-300">当前为受信目录</span> : registryLoadError ? <span className="text-red-300">{registryLoadError}</span> : <span>等待清单响应</span>}
-                {registry?.error && <span className="ml-2 text-amber-200/80">诊断：{registry.error}</span>}
+                {registry?.fallback ? <span className="text-amber-300">当前为内置回退清单</span> : registry ? <span className={registry.stale ? "text-amber-300" : "text-emerald-300"}>{registry.stale ? "当前为受信目录（沿用上次成功清单）" : "当前为受信目录"}</span> : registryLoadError ? <span className="text-red-300">{registryLoadError}</span> : <span>等待清单响应</span>}
+                {registry?.error && <span className="ml-2 text-amber-200/80">诊断：{registry.error}{registry.stale && registry.consecutive_failures ? `（连续 ${registry.consecutive_failures} 次）` : ""}</span>}
               </div>
               {registry?.image_status && registry.image_status.length > 0 && (
                 <div className="mt-3 space-y-1 text-[11px] text-zinc-500">
