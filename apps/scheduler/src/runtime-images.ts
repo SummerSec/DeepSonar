@@ -863,10 +863,22 @@ async function fetchOfficialRuntimeRegistry(): Promise<RuntimeImageRegistry> {
   return parseRegistry(JSON.parse(text) as unknown);
 }
 
+/**
+ * #763：缓存命中与失败分支必须共用同一「是否可服务 last-known-good」判断，
+ * 否则连续失败达到降级阈值后，缓存有效期内的普通读取会把已降级的清单放行回来。
+ */
+function servableRemoteRegistry(
+  cache: RemoteRegistryCache | null,
+): cache is RemoteRegistryCache & { registry: RuntimeImageRegistry } {
+  if (!cache?.registry) return false;
+  return cache.consecutive_failures < RUNTIME_IMAGE_REGISTRY_STALE_FAILURE_LIMIT;
+}
+
 async function loadRemoteRuntimeImageRegistry(force = false): Promise<RuntimeImageRegistry | null> {
   const now = Date.now();
   if (!force && remoteRegistryCache && now - remoteRegistryCache.checked_at < RUNTIME_IMAGE_REGISTRY_CACHE_MS) {
-    return remoteRegistryCache.registry;
+    // 已降级时缓存命中直接按 bundled 处理，且不额外抓取，避免与强制刷新的结论矛盾。
+    return servableRemoteRegistry(remoteRegistryCache) ? remoteRegistryCache.registry : null;
   }
   try {
     const registry = await fetchOfficialRuntimeRegistry();
@@ -890,7 +902,7 @@ async function loadRemoteRuntimeImageRegistry(force = false): Promise<RuntimeIma
       last_success_at: remoteRegistryCache?.last_success_at ?? null,
     };
     // 单次瞬时失败不得把已知良好的清单降级：保留上次成功结果，只累计失败次数。
-    const serveStale = previous !== null && consecutiveFailures < RUNTIME_IMAGE_REGISTRY_STALE_FAILURE_LIMIT;
+    const serveStale = servableRemoteRegistry(remoteRegistryCache) && previous !== null;
     console.warn(
       `[runtime-images] official registry unavailable (${consecutiveFailures}/${RUNTIME_IMAGE_REGISTRY_STALE_FAILURE_LIMIT}); `
         + `${serveStale ? "serving last known good catalog" : "using bundled fallback"} (${safeError})`,
@@ -1068,33 +1080,22 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       }
     }
   }
-  return {
-    schema: registry.schema,
-    ...(registry.schema_version ? { schema_version: registry.schema_version } : {}),
-    images,
-    ...(registry.source ? { source: registry.source } : {}),
-    ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
-    ...(registry.error !== undefined ? { error: registry.error } : {}),
-    ...(registry.checked_at ? { checked_at: registry.checked_at } : {}),
-  };
+  // #763：只替换 images，其余顶层字段（stale / consecutive_failures / last_success_at /
+  // platform / platform_version / min_runtime_image）原样保留，否则诊断状态与平台元数据会被静默丢弃。
+  return { ...registry, images };
 }
 
-function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
+/** 导出仅为覆盖 override 投影的字段保留语义（#763）。 */
+export function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
   const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
     console.warn(`[runtime-images] skip env override for ${override.image_key}: no offline manual metadata`);
   }
-  return {
-    schema: registry.schema,
-    ...(registry.schema_version ? { schema_version: registry.schema_version } : {}),
-    images,
-    ...(registry.source ? { source: registry.source } : {}),
-    ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
-    ...(registry.error !== undefined ? { error: registry.error } : {}),
-    ...(registry.checked_at ? { checked_at: registry.checked_at } : {}),
-  };
+  // #763：只替换 images，其余顶层字段（stale / consecutive_failures / last_success_at /
+  // platform / platform_version / min_runtime_image）原样保留，否则诊断状态与平台元数据会被静默丢弃。
+  return { ...registry, images };
 }
 
 /**
