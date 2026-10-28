@@ -276,3 +276,116 @@ test("stale 清单不写平台更新检查，避免横幅随单次抖动翻转",
   assert.equal(skipped, null);
   assert.equal(dbCalls, 0, "stale 检查不得覆盖上一行结果");
 });
+test("#763 降级后缓存命中仍按 bundled 处理，且不再额外抓取", async () => {
+  const { loadRuntimeImageRegistry, resetRemoteRuntimeImageRegistryCacheForTests } = await import("./runtime-images.js");
+  const bundled = await readFile(path.resolve(process.cwd(), "../../deploy/runtime-image-registry.json"), "utf8");
+  resetRemoteRuntimeImageRegistryCacheForTests();
+  let healthy = true;
+  const mock = installFetchMock(() => {
+    if (!healthy) throw timeoutError();
+    return new Response(bundled, { status: 200 });
+  });
+  try {
+    await loadRuntimeImageRegistry({ refreshRemote: true });
+    healthy = false;
+    for (let i = 0; i < 3; i += 1) await loadRuntimeImageRegistry({ refreshRemote: true });
+    const callsAfterDegrade = mock.calls.length;
+
+    // 缓存有效期内的普通读取不得把已降级的清单放行回来。
+    const cached = await loadRuntimeImageRegistry();
+    assert.equal(cached.source, "bundled", "降级后缓存命中仍必须是 bundled");
+    assert.equal(cached.fallback, true);
+    assert.equal(mock.calls.length, callsAfterDegrade, "降级后的缓存命中不得触发额外抓取");
+
+    // 再次普通读取同样保持降级，状态不得来回翻转。
+    const again = await loadRuntimeImageRegistry();
+    assert.equal(again.source, "bundled");
+    assert.equal(mock.calls.length, callsAfterDegrade);
+  } finally {
+    mock.restore();
+    resetRemoteRuntimeImageRegistryCacheForTests();
+  }
+});
+
+test("#763 降级后成功刷新可清零失败次数并恢复 remote 非 stale", async () => {
+  const { loadRuntimeImageRegistry, resetRemoteRuntimeImageRegistryCacheForTests } = await import("./runtime-images.js");
+  const bundled = await readFile(path.resolve(process.cwd(), "../../deploy/runtime-image-registry.json"), "utf8");
+  resetRemoteRuntimeImageRegistryCacheForTests();
+  let healthy = true;
+  const mock = installFetchMock(() => {
+    if (!healthy) throw timeoutError();
+    return new Response(bundled, { status: 200 });
+  });
+  try {
+    await loadRuntimeImageRegistry({ refreshRemote: true });
+    healthy = false;
+    for (let i = 0; i < 3; i += 1) await loadRuntimeImageRegistry({ refreshRemote: true });
+    assert.equal((await loadRuntimeImageRegistry()).source, "bundled");
+
+    healthy = true;
+    const recovered = await loadRuntimeImageRegistry({ refreshRemote: true });
+    assert.equal(recovered.source, "remote");
+    assert.equal(recovered.fallback, false);
+    assert.equal(recovered.stale, undefined);
+    assert.equal(recovered.consecutive_failures, undefined);
+    assert.equal(recovered.error, null);
+  } finally {
+    mock.restore();
+    resetRemoteRuntimeImageRegistryCacheForTests();
+  }
+});
+
+test("#763 override 投影保留 stale 诊断与平台元数据", async () => {
+  const { registryWithEnvOverrides } = await import("./runtime-images.js");
+  const source = {
+    schema: "deepsonar.registry/v1",
+    schema_version: 1,
+    platform_version: "0.6.0",
+    platform: { version: "0.6.0", schema_version: 56 },
+    min_runtime_image: { image_key: "deepsonar-base", version: "0.6.0" },
+    images: [],
+    source: "remote",
+    fallback: false,
+    error: "remote registry request timed out",
+    stale: true,
+    consecutive_failures: 2,
+    last_success_at: "2026-10-28T00:00:00.000Z",
+    checked_at: "2026-10-28T00:05:00.000Z",
+  } as unknown as Parameters<typeof registryWithEnvOverrides>[0];
+  const projected = registryWithEnvOverrides(source);
+  for (const key of [
+    "stale",
+    "consecutive_failures",
+    "last_success_at",
+    "platform_version",
+    "platform",
+    "min_runtime_image",
+    "source",
+    "fallback",
+    "error",
+    "checked_at",
+  ] as const) {
+    assert.deepEqual(projected[key], (source as unknown as Record<string, unknown>)[key], `投影不得丢失 ${key}`);
+  }
+  assert.deepEqual(projected.images, [], "images 仍按 override 结果输出");
+});
+
+test("#763 经 override 投影后的 stale 清单仍不写平台更新检查", async () => {
+  const { registryWithEnvOverrides } = await import("./runtime-images.js");
+  let dbCalls = 0;
+  const fakeDb = (async () => { dbCalls += 1; return []; }) as unknown as Parameters<typeof recordPlatformUpdateCheckFromRegistry>[1];
+  const projected = registryWithEnvOverrides({
+    schema: "deepsonar.registry/v1",
+    images: [],
+    source: "remote",
+    fallback: false,
+    error: "remote registry request timed out",
+    stale: true,
+    consecutive_failures: 2,
+    last_success_at: "2026-10-28T00:00:00.000Z",
+  } as unknown as Parameters<typeof registryWithEnvOverrides>[0]);
+  assert.equal(projected.stale, true, "投影必须保留 stale，否则更新保护失效");
+  const skipped = await recordPlatformUpdateCheckFromRegistry(projected, fakeDb);
+  assert.equal(skipped, null);
+  assert.equal(dbCalls, 0, "投影后的 stale 检查不得覆盖上一行结果");
+});
