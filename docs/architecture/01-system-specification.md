@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -1172,3 +1172,12 @@ Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effe
 ## 7. 事实核查边界
 
 本文件已以 `DESIGN.md`、`docs/ARCHITECTURE.md`、`database/schema.sql`、`apps/scheduler/src/openapi.ts`、现行 bounded context 代码和 package.json 测试脚本逐项反查。测试命令只表示验证入口，不表示本次执行通过；未连接真实 Provider、OpenSandbox、registry、device broker、多副本共享 BlobStore 或 GitHub Release 的项目环境，不在本 PR 声称已验证范围内。长期设计（完整 Proposal/Receipt/Settlement、Plan 驱动派发、全图权威布局、任务/会话 Pack 生命周期）若在代码中只有 Phase 1/骨架，会保留“进行中/暂缓”状态，不写成 as-built。
+
+
+### FR-FIND-007 可重建特征与关联质量边界
+
+- **规范要求**：项目特征必须保留来源摘要、提取器版本与 provenance；未知权威身份保持未知。派生失败不得改变来源，读取必须核对当前来源和权限，旧代不能覆盖新代。强关系上线前必须通过独立质量门。
+- **决策来源**：#770 分期实施与来源完整性约束。
+- **实现状态**：C 持久扫描、特征重建和状态元数据待评审；D 仅离线合成行为策略，不上线关系边或同问题建议。
+- **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
+- **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。

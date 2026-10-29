@@ -1439,7 +1439,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings/{id}",
     summary: "Finding 完整详情与结构化验证追踪",
-    description: "trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
+    description: "project_research_features 仅显示当前来源匹配的特征计算状态/字段覆盖；权威身份不足且关系质量门未验收，不返回跨任务同问题建议。trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
     scope: "findings:read",
     tags: ["Findings"],
   },

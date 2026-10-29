@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 63);
+INSERT INTO schema_meta (id, version) VALUES ('global', 64);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -361,6 +361,38 @@ CREATE TABLE findings (
     disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
   )
 );
+-- Rebuildable C projection. Generation work is durable; no relationship truth lives here.
+CREATE TABLE project_finding_feature_scan (
+  id text PRIMARY KEY CHECK (id = 'global'),
+  cursor_id uuid
+);
+INSERT INTO project_finding_feature_scan (id) VALUES ('global');
+CREATE TABLE project_finding_feature_work (
+  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL DEFAULT gen_random_uuid(),
+  active_generation uuid,
+  extractor_version text NOT NULL,
+  cursor_id uuid,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  attempts int NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+  error_code text,
+  next_run_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX project_finding_feature_work_due ON project_finding_feature_work(next_run_at, project_id) WHERE status <> 'failed';
+CREATE TABLE project_finding_features (
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL,
+  extractor_version text NOT NULL,
+  input_digest text NOT NULL,
+  features_json jsonb NOT NULL,
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (finding_id, generation)
+);
+CREATE INDEX project_finding_features_project ON project_finding_features(project_id, generation, finding_id);
+CREATE INDEX findings_project_scan_idx ON findings(project_id, id);
+
 CREATE INDEX findings_artifact_idx ON findings (artifact_id) WHERE artifact_id IS NOT NULL;
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);
 CREATE INDEX findings_profile_category_idx ON findings (project_id, profile, category, verify_status);

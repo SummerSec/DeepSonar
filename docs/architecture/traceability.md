@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**（#741 基线；#752 独立试验分支同步）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
 
@@ -65,6 +65,7 @@
 | FR-FIND-003 | [质量属性](04-quality-attributes.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Finding state matrix](../../apps/scheduler/src/finding-state-matrix.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-protocol`、`pnpm ci:integration:verify-eligibility`。 |
 | FR-FIND-004 | [接口规格](09-interface-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Finding routes](../../apps/scheduler/src/domains/finding-verification/routes.ts) | `pnpm ci:unit:authz`、`pnpm ci:unit:web-facts`、`pnpm ci:integration:finding-protocol`。 |
 | FR-FIND-005 | [接口规格](09-interface-specs.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [OpenAPI Finding operations](../../apps/scheduler/src/openapi.ts) | `pnpm ci:unit:finding-protocol`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:web-facts`。 |
+| FR-FIND-007 | [数据架构](08-data-architecture.md)；[接口规格](09-interface-specs.md)；[项目特征研究](../PROJECT_FINDING_RESEARCH.md) | — | [特征投影](../../apps/scheduler/src/domains/project-finding-research/) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；D 人工标注与质量门待验收。 |
 | FR-VERIFY-001 | [质量属性](04-quality-attributes.md)；[运行时视图](06-runtime-view.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Verify](../../apps/scheduler/src/verify.ts)；[Finding verification](../../apps/scheduler/src/domains/finding-verification/)；[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:verify-eligibility`；人工核对无独立 Verify Job 时不能 confirmed。 |
 | FR-VERIFY-006 | [质量属性](04-quality-attributes.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Fact-first gate](../../apps/scheduler/src/verify-fact-gate.ts)；[Verify tests](../../apps/scheduler/src/verify-fact-first.test.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:verify-eligibility`。 |
 | FR-VERIFY-002 | [质量属性](04-quality-attributes.md)；[运行时视图](06-runtime-view.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Verify gate](../../apps/scheduler/src/verify-fact-gate.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:finding-protocol`。 |

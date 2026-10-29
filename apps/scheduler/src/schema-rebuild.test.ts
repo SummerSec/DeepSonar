@@ -90,7 +90,7 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
-  assert.equal(SCHEMA_VERSION, 63);
+  assert.equal(SCHEMA_VERSION, 64);
 });
 
 test("role prompt backfill accepts LF and Windows CRLF baselines", async () => {

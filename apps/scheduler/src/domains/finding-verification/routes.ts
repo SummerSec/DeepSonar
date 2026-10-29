@@ -1,3 +1,4 @@
+import { readFeatureStatus } from "../project-finding-research/store.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
@@ -614,6 +615,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     const fact_evidence_trace = await loadFactEvidenceTrace(sql, finding, verification_rounds);
     return {
       finding: { ...finding, ...research },
+      project_research_features: await readFeatureStatus(id, String(finding.project_id)),
       research,
       cluster_members: clusterMembers,
       last_research_run: lastRun ?? null,
