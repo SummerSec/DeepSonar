@@ -22,10 +22,17 @@ runtime snapshots, feedback prose, session text and evidence bodies.
 
 ```sh
 psql "$TEST_DATABASE_URL" -X -qAt -v project_id='<isolated-project-UUID>' -f agent-harness/capability-evidence/export.sql > export.json
-node --input-type=module -e 'import {readFileSync} from "node:fs"; import {sourceDigest} from "./agent-harness/capability-evidence/report.mjs"; console.log(sourceDigest(JSON.parse(readFileSync("export.json", "utf8"))))'
+node --input-type=module -e 'import {readBoundedInput} from "./agent-harness/capability-evidence/bounded-input.mjs"; import {sourceDigest} from "./agent-harness/capability-evidence/report.mjs"; console.log(sourceDigest(JSON.parse(readBoundedInput("export.json"))))'
 node agent-harness/capability-evidence/report.mjs export.json <recorded-source-digest> > report.json
-node --test agent-harness/capability-evidence/report.test.mjs
+node --test agent-harness/capability-evidence/report.test.mjs agent-harness/capability-evidence/bounded-input.test.mjs
 ```
+
+The CLI opens input nonblocking and checks the opened descriptor is a regular file
+no larger than 16 MiB before reading. It reads at most 16 MiB plus one byte to
+detect growth after the size check, handles short reads, and closes the descriptor
+on success or failure. Rejections expose only the fixed error code, not paths,
+input bytes or filesystem errors. Tests use temporary regular/sparse files and
+directories plus mocked I/O; no real devices are read.
 
 Record the digest with the study manifest before analysis. It detects changed
 input, not malicious provenance: only a trusted export can establish provenance.

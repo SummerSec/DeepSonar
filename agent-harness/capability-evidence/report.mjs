@@ -1,6 +1,6 @@
 /** Read-only audit projection. Never a catalog, permission decision or effectiveness evaluator. */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readBoundedInput } from './bounded-input.mjs';
 import { pathToFileURL } from 'node:url';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -88,8 +88,7 @@ export function buildEvidenceReport(input, expectedDigest) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const bytes = readFileSync(process.argv[2]);
-    check(bytes.length <= 16 * 1024 * 1024, 'EXPORT_LIMIT');
+    const bytes = readBoundedInput(process.argv[2]);
     console.log(JSON.stringify(buildEvidenceReport(JSON.parse(bytes), process.argv[3]), null, 2));
   } catch { console.error('CAPABILITY_EVIDENCE_REPORT_REJECTED'); process.exitCode = 1; }
 }
