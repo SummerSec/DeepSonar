@@ -27,8 +27,9 @@ export function buildDshProfilePatch(options: {
   rows.push({ id: "timer", name: "@deepseek-ai/cordis-plugin-timer" });
   for (const id of ["llm", "session", "session-projection", "agent", "llm-retry", "mcp-resources"]) add(id);
   add("jobs", "jobs-local");
-  add("invariants");
-  for (const id of ["session", "agent", "scope", "agent-loop"]) add(`${id}-invariant`, `${id}/invariant`);
+  // DSH 0.2.1-rc.2 起上游移除了 invariant 插件族（`@deepseek-ai/dsh-invariants` 与
+  // dsh-{session,agent,scope,agent-loop} 的 `./invariant` 子路径），声明它们会让
+  // profile 启动即失败（required plugin did not activate），因此不再加入。
   add("system-prompt", "system-prompt", {
     includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: "__DEEPSONAR_DSH_SYSTEM_PROMPT__",
   });
