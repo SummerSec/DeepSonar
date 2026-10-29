@@ -19,7 +19,7 @@ export function prepareStudy(protocol, fixtures, locks = null) {
   const errors = [];
   const check = (condition, code) => { if (!condition) errors.push(code); };
   check(protocol.schema === 'deepsonar.knowledge-study/v1', 'protocol_schema');
-  check(Number.isSafeInteger(protocol.repeats) && protocol.repeats >= 2 && protocol.repeats <= 20, 'repeats');
+  check(Number.isSafeInteger(protocol.repeats) && protocol.repeats >= 3 && protocol.repeats <= 18 && protocol.repeats % 3 === 0, 'repeats');
   check(protocol.fixture_digest === digest(fixtures), 'fixture_digest');
   check(protocol.thresholds?.max_quality_regression === 0 && protocol.thresholds?.max_safety_failures === 0,
     'quality_and_safety_hard_gates');
@@ -40,7 +40,15 @@ export function prepareStudy(protocol, fixtures, locks = null) {
     check(typeof item.input === 'string' && item.input.length > 0, 'case_input');
     check(item.oracle?.type === 'exact_json' && Object.hasOwn(item.oracle, 'expected'), 'independent_oracle');
   }
+  for (const family of families.keys()) {
+    const cases = fixtures.filter(item => item.family === family);
+    check(cases.length === kinds.length && new Set(cases.map(item => item.kind)).size === kinds.length,
+      'incomplete_family');
+    check(new Set(cases.map(item => item.category)).size === 1, 'mixed_family_category');
+  }
   for (const split of ['debug', 'holdout']) {
+    for (const category of ['environment', 'validation', 'version'])
+      check(fixtures.some(item => item.split === split && item.category === category), `missing_${split}_${category}`);
     for (const kind of kinds) check(fixtures.some(x => x.split === split && x.kind === kind), `missing_${split}_${kind}`);
   }
   // Missing deployment/model locks are a readiness result; malformed protocol never yields a report.

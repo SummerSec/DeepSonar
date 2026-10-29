@@ -50,3 +50,12 @@ test('independent JSON oracle rejects plausible extra claims and incorrect concl
     assert.equal(checkOracle(fixture, null), false);
   }
 });
+
+test('each family retains all four cases and each split retains three categories', () => {
+  for (const rows of [fixtures.slice(1), fixtures.filter(row => row.category === 'environment')])
+    assert.throws(() => prepareStudy({ ...protocol, fixture_digest: digest(rows) }, rows), /incomplete_family|missing_/);
+});
+test('per-case order balancing requires complete three-repeat cycles', () => {
+  for (const repeats of [2, 4, 20]) assert.throws(() => prepareStudy({ ...protocol, repeats }, fixtures), /repeats/);
+  assert.equal(prepareStudy({ ...protocol, repeats: 6 }, fixtures).planned_trials, 432);
+});
