@@ -158,6 +158,8 @@ Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Schedule
 
 ## 6. Finding、Verify、Research 和报告
 
+项目交付页使用服务端多选/文本筛选与游标分页，汇总共用查询条件，URL 保存筛选与选择；当前来源 `updated_at` 单独展示。#770 切片 B 的权限、当前读一致性与后续范围见[接口规格](docs/architecture/09-interface-specs.md#finding-项目查询770-切片-b)，不代表跨任务来源修复或关联质量已验收。
+
 ### 6.1 Verify
 
 review/test/worker 的复核结果必须作为结构化 Fact 提交，至少引用 `finding_id`、`subject_revision`、`ownership`、`expected`、`actual` 和 `outcome`。Scheduler 校验项目/画布归属、版本和 Fact 间冲突；普通文本 verdict 不计入门禁。
@@ -332,3 +334,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - [`database/schema.sql`](database/schema.sql)：唯一数据库基线；
 - `/api/openapi.json`：当前 HTTP API；
 - [`AGENTS.md`](AGENTS.md)：编码 Agent 的操作纪律。
+
+### Pi 大输出证据边界（#765）
+
+RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。

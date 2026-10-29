@@ -5,7 +5,7 @@
 
 ## 基线与交付边界
 
-核对 main `9cb1524a`，以及独立草稿 [#782](https://github.com/SummerSec/DeepSonar/pull/782)（A 审计可见性）、[#785](https://github.com/SummerSec/DeepSonar/pull/785)（A 操作员判据/留存证据绑定）。这两片尚未合并；以下引用是后续实现依赖，不把其能力冒充 main as-built。
+核对 main `7bc29cba`（已含 #768/#769/#773），以及独立草稿 [#782](https://github.com/SummerSec/DeepSonar/pull/782)（A 审计可见性）、[#785](https://github.com/SummerSec/DeepSonar/pull/785)（A 操作员判据/留存证据绑定）。这两片尚未合并；以下引用是后续实现依赖，不把其能力冒充 main as-built。
 
 [Plan](../packages/shared-types/src/plan.ts) 已有目标、CompletionPolicy、依赖、预算、结果与审计。`submit_plan` / `submit_plan_result` 当前只记账；[Hub 决策处理](../apps/scheduler/src/domains/event-ingestion/side-effects.ts) 才通过既有 Intent 派发，且派发前重做引用、角色、镜像与快照校验。B 不使 submit_plan 单独执行，也不新增第二套 Plan/Job/执行引擎。
 
