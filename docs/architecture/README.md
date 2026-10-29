@@ -10,6 +10,8 @@
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
 
 
+#770 A 来源身份独立写入与历史保留规则见[数据架构](08-data-architecture.md#finding-来源身份770-a)，对应 FR-FIND-002；关联建议仍为后续切片。
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |

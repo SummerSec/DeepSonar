@@ -272,3 +272,10 @@ if (testDatabaseUrl) {
     }
   });
 }
+
+if (testDatabaseUrl) {
+  test("#770 v62 Finding shape rebuild preserves history and backup before accepting an independent source", async () => {
+    const { runFindingSourceRebuildFixture } = await import("./schema-rebuild-finding-fixture.js");
+    await runFindingSourceRebuildFixture(testDatabaseUrl);
+  });
+}
