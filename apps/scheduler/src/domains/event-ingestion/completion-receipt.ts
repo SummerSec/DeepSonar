@@ -71,6 +71,9 @@ export async function recordCompletionProposal(input: {
     const [attempt] = await tx`SELECT id,cancel_requested FROM job_attempts
       WHERE job_id=${input.jobId} AND status='active' FOR UPDATE`;
     if (!attempt || attempt.cancel_requested) return reject("COMPLETION_ATTEMPT_INACTIVE", "Completion repair requires the active, uncancelled Attempt");
+    const [knowledgeOwner] = await tx`SELECT id FROM project_knowledge_receipts
+      WHERE job_id=${input.jobId} AND idempotency_key=${input.key}`;
+    if (knowledgeOwner) return reject("IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a knowledge operation");
     const [used] = await tx`SELECT event_id FROM events WHERE job_id=${input.jobId} AND event_id=${input.key}`;
     if (used) return reject("IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a semantic event");
     const history = await tx`SELECT payload_json FROM events WHERE job_id=${input.jobId}
@@ -114,7 +117,9 @@ export async function recordCompletionProposal(input: {
     const receipt: CompletionReceipt = { v: 1, operation: "mark_job_done", idempotency_key: input.key,
       input_digest: digest, proposal_revision: input.revision, attempt_id: String(attempt.id),
       snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result };
-    await consumeEventRateLimit(tx, input.jobId, "control_receipt", new Date());
+    // Accepted completion must remain available when ordinary semantic output exhausts its bucket.
+    // Rejected proposals stay bounded by the standard bucket and persistent repair limit.
+    await consumeEventRateLimit(tx, input.jobId, accepted ? "done" : "control_receipt", new Date());
     const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${input.jobId}`;
     await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${receiptRef},${input.jobId})`;
     await tx`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type,payload_json)

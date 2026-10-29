@@ -55,6 +55,9 @@ Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、p
 语义修正用新 Idempotency-Key 和反馈要求的下一 revision；同一提交的传输重试保持原 key、revision、payload。
 不要另设不同的事件 ID。响应丢失先调用
 \`GET $DEEPSONAR_API_BASE_URL/operations/mark_job_done?receipt_key=<原UUID>\` 查询；查询受原 Job 权限约束。
+查询只读取持久结果，不恢复执行器本地完成门。若查询返回 \`persisted_deferred\` 且原 Job 仍活动，
+必须使用原 key、revision 和完全相同 payload 再 POST 一次，让原活动执行器接收该提案；
+这不会新建提案或重新执行外部效果。原执行器/会话不可用时停止并交诊断，不启动新会话。
 没有查到回执不证明没有外部效果，未知效果先对账，不换 key 猜测重发。
 
 \`receipt_status=persisted_deferred\` 表示完成提案已持久接收，不等于 Job 成功、效果结算或模型已处理。

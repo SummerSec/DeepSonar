@@ -388,7 +388,7 @@ export function buildPlatformOpenApiDocument(input: {
         security: [{ capabilityBearer: [] }],
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
-          ...(definition.operationId === "mark_job_done" ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result without executing the handler; requires the active Job capability." }] : []),
+          ...(definition.operationId === "mark_job_done" ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore the live completion gate. After response loss and persisted_deferred lookup, POST the unchanged original key/revision/payload to restore the original active handler. Requires the active Job capability." }] : []),
         ],
         responses: {
           "200": {
