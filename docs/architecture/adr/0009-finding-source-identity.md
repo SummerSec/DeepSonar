@@ -20,3 +20,6 @@ Control 提交幂等独立于来源身份。保留现有 profile/title/location/
 ## 验证
 
 现有 Artifact 集成套件覆盖同提交并发重放、同源新提交键、内容冲突、同任务/跨任务独立 Job、Artifact 修订链独立以及状态不继承。schema baseline/rebuild 流程验证旧 UUID、Artifact key、Verify/disposition 保留；此验证不证明历史来源已补全或关联质量达标。
+
+
+可复验的 CI 重建回归位于 [schema-rebuild 集成测试](../../../apps/scheduler/src/schema-rebuild.integration.test.ts)，由 `pnpm ci:unit:migrations` 执行。夹具仅从当前基线还原 v62 的 Finding 列/唯一约束差异，不代表完整历史 v62 基线。测试实际生成并恢复 pg_dump 文件，比较原 UUID、Job、画布节点/边、Artifact claims/evidence、状态和事件幂等记录，再验证新 Job 同文本独立写入。该测试要求 PostgreSQL 测试库及 pg_dump/pg_restore 客户端（CI 已安装），临时数据库和备份结束后清理。
