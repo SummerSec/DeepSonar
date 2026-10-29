@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> **#775 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将现有计划审计纳入冻结任务报告；完成判断保守为 unknown，A 的权威证据绑定与 B/C 仍未交付。
+> **#775 A 部分实现**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；整体完成仍为 unknown，真实任务评测与 B/C 未交付。
 
 > **平台升级核查（2026-10-21，#740 / #747）**：官方 digest 清单、严格 dotenv 校验和终态 Attempt 效果排空已接通；维护升级新增数据库身份隔离、源库保全、候选库重建与同目标续做模块。宿主入口、受管 SSH 节点和显式回滚恢复已接线，真实单机/多节点成功场景已通过；最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，见 [升级演练](../deploy/UPGRADE_REHEARSAL.md)。配置 preflight 已接密钥格式/密文认证与 当前持久默认组合的 credential-first 解析，外部认证等仍列为未检查；P2 宿主实现已接线，正式 tag 签名发布已获授权并接线，生产验收见对应 Release 证据，P3 Web 发起为可选。决策见 [ADR 0008](architecture/adr/0008-maintenance-candidate-upgrade.md)，验收边界见 [风险记录](architecture/12-risks-and-tech-debt.md)。
 > **项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录、项目 Memory/Skill 生命周期、精确跨项目 Skill 授权、独立 case×arm 评测、持久回执与管理页见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。实现状态与模型效果试验分开记录。
