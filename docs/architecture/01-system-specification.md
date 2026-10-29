@@ -97,9 +97,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 提交每个 Intent 时必须提供非空、自包含 prompt 和合法引用；首次决策不得在没有执行证据时直接宣称完成，完成、继续、阻塞和请求人工必须走结构化决策。
 - **决策来源**：模型输出是提案，平台需要可审计的意图和可执行输入，不能把自然语言结论当终态。
-- **实现状态**：as-built；`submit_hub_decision` 和 Intent schema 在 Scheduler 端拒绝缺 prompt/非法引用。
+- **实现状态**：as-built；`submit_hub_decision` 和 Intent schema 在 Scheduler 端拒绝缺 prompt/非法引用。显式 Plan 的可选 plan_basis 首片绑定当前版本和来源，一次补证后必须停止或基于全判据正向操作员授权完成；不替代语义评测。
 - **代码入口**：[Control 输入](../../apps/scheduler/src/control-input.ts)、[Hub application](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[任务契约测试](../../apps/scheduler/src/task-intent.contract.test.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:smoke:hub`；人工提交空 prompt 或无证据 complete 应得到稳定错误。
+- **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；`pnpm ci:unit:bounded-contexts`、`pnpm ci:smoke:hub`；人工提交空 prompt 或无证据 complete 应得到稳定错误。
 
 ### FR-JOB-001 Job 生命周期与 Attempt
 

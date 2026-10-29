@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import test from 'node:test';
-import {GraphQueryPayload,HubDecisionPayload,HumanPayload,PlanDecisionBasis} from '@deepsonar/shared-types';
+import {GraphQueryPayload,HubDecisionPayload,HumanPayload,PlanDecisionBasis,repairCategoryForControlFailure} from '@deepsonar/shared-types';
 import {criteriaAuthorizeCompletion} from './domains/plan-protocol/decision.js';
 import {mergePlanRead} from './domains/plan-protocol/gap-query.js';
 import {taskInputSha256} from './domains/plan-protocol/task-input.js';
@@ -15,6 +15,7 @@ const basis=PlanDecisionBasis.parse({v:1,plan_job_id:randomUUID(),plan_sha256:'a
 const intent={role:'review',description:'Review scoped execution',prompt:'Review the scoped evidence and retain the missing execution record.',from:[fact]};
 
 test('versioned Plan metadata stays on the existing decision path',()=>{
+  assert.equal(repairCategoryForControlFailure({code:'plan_unknown_effect',retryable:false}), 'unknown_external_effect');
   const decision={intents:[intent],plan_basis:basis};
   assert.equal(HubDecisionPayload.safeParse(decision).success,true);
   assert.deepEqual(parseHubDecisionPayload(decision).plan_basis,basis);
@@ -33,7 +34,7 @@ test('versioned Plan metadata stays on the existing decision path',()=>{
 
 test('complete truth table requires every necessary positively authorized criterion',()=>{
   const positive={id:'completion',text:'Scoped completion',state:'satisfied',truncated:false,
-    bindings:[{state:'satisfied',reasons:[],binding:{authority:'operator_attestation',assessment:'satisfies',observation:'negative'}}]} as CriterionProjection;
+    bindings:[{state:'satisfied',reasons:[],binding:{v:1,binding_id:randomUUID(),fact_id:fact,plan_job_id:basis.plan_job_id,plan_sha256:basis.plan_sha256,criterion_id:'completion',criterion_sha256:'e'.repeat(64),expected_source_sha256:'d'.repeat(64),verification_epoch:'epoch',rationale:'Reviewed current scoped evidence',source:{job_id:randomUUID(),attempt_id:randomUUID(),event_id:randomUUID(),artifact_id:randomUUID(),artifact_revision:1,evidence_ids:[randomUUID()]},authority:'operator_attestation',assessment:'satisfies',observation:'negative'}}]} as CriterionProjection;
   assert.equal(criteriaAuthorizeCompletion([positive],['completion']),true);
   for(const state of ['unbound','insufficient','contradicted','conflict','stale','blocked'] as CriterionState[]){
     assert.equal(criteriaAuthorizeCompletion([{...positive,state}],['completion']),false,state);
@@ -64,4 +65,19 @@ test('task input baseline includes saved intent and scope, excludes runtime conv
   assert.equal(taskInputSha256('Task',target),taskInputSha256('Task',{...target,convergence:{paused_at:'now',hub_paused:true}}));
   assert.notEqual(taskInputSha256('Task',target),taskInputSha256('Task',{...target,goal:'Changed objective'}));
   assert.notEqual(taskInputSha256('Task',target),taskInputSha256('Task',{...target,network_policy:{allow_egress:true}}));
+});
+
+
+test('deferred runtime events preserve Plan basis for dispatch, completion and human stop',async()=>{
+  const {buildDeferredSemanticTerminalEvents}=await import('./executor-real.js');
+  const done={eventId:randomUUID(),summary:'Scoped execution completed'};
+  const build=(decision: ReturnType<typeof parseHubDecisionPayload>)=>buildDeferredSemanticTerminalEvents({
+    state:{done,hub:{eventId:randomUUID(),payload:decision},human:null},isHub:true,isVerify:false,hubDecision:decision,maxIntentsPerDecision:1,factCount:0,findingCount:0,
+  });
+  assert.deepEqual((build(parseHubDecisionPayload({intents:[intent],plan_basis:basis}))[0].payload as any).plan_basis,basis);
+  const complete={...basis,outcome:'complete',expected_gain:undefined};
+  assert.deepEqual((build(parseHubDecisionPayload({complete:{from:[fact],description:'Reviewed all current criteria'},plan_basis:complete}))[0].payload as any).plan_basis,complete);
+  const stop={...basis,outcome:'needs_human' as const,expected_gain:undefined};
+  const events=buildDeferredSemanticTerminalEvents({state:{done:null,hub:null,human:{eventId:randomUUID(),reason:'Need operator assessment',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:stop}},isHub:true,isVerify:false,hubDecision:null,maxIntentsPerDecision:1,factCount:0,findingCount:0});
+  assert.deepEqual((events[0].payload as any).plan_basis,stop);
 });

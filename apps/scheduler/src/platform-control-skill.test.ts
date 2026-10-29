@@ -28,9 +28,11 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /所有 CLI 都只能使用 .*HTTP.*API/);
   assert.match(content, /Agent.*HTTP 工具.*Runtime Adapter 只负责驱动 CLI 协议/);
   assert.match(content, /不要先尝试 MCP.*不要在 API 失败后回退到 MCP/);
+  assert.match(content, /plan_basis/);
+  assert.match(content, /plan_gap/);
   assert.match(content, /repair/);
   assert.match(content, /model_correctable/);
-  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "456f09e063440d8146add73a521bd975b2ec03695c25218873fbda1846ece7f3");
+  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "fa440318a243525ed5dcd1bc7db3c5c49ca437c35e08c387595055a0651b4757");
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {

@@ -16,6 +16,10 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 
 这是平台注入的静态 Skill，每个真实 Job 都有一份。RoleConfig 不能按同名替换它。
 
+## 有界 Plan 决策
+
+显式 submit_plan 后，可用 graph_query(kind=plan_gap,id=Plan Job UUID,ids=最多四个 Fact UUID,cursor=返回游标,limit=最多4)读取当前判据、来源、revision 与内容 SHA。沿用查询预算和本 Job 已见引用；翻页读完必要判据后才能提交 complete。plan_basis 使用返回版本，continue 仅可携带一个既有 Intent，并写明 rationale/expected_gain；每任务仅一次补证，改标题、Plan 或 Job 不能重置。全部必要判据必须具有当前有效的操作员 satisfies 评价；verified、阴性观察、模型 done 都不能单独证明完成。预算耗尽或无法确认时使用 request_human；带依据的停止使用 blocked/needs_human 与 platform_blocker.business_decision。依据过期先重读，unknown effect 禁止重放；查询预算耗尽仍可普通 request_human。
+
 ## 传输方式
 
 所有 CLI 都只能使用 Job 级 HTTP 控制 API；它是所有治理 CLI 的唯一平台控制传输。不要先尝试 MCP，也不要在 API 失败后回退到 MCP。
