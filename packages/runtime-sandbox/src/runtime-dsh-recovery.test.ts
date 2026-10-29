@@ -44,7 +44,7 @@ test("DSH transient error fails once without starting unsupported persisted resu
   };
   const result = await runRealAgent(host, {
     provider: "dsh", env: {}, input: "original task", model: "smoke", onEvent: (event) => { events.push(event); },
-    contextIdentity: { context_id: "ctx_dsh_recovery", context_revision: 0, adapter_id: "dsh", adapter_version: "0.2.0-rc.2", runtime_identity: "runtime", transform_chain_digest: `sha256:${"a".repeat(64)}` },
+    contextIdentity: { context_id: "ctx_dsh_recovery", context_revision: 0, adapter_id: "dsh", adapter_version: "0.2.1-rc.2", runtime_identity: "runtime", transform_chain_digest: `sha256:${"a".repeat(64)}` },
     dshProvider: { provider: "gateway", model: "smoke", config: { providers: { gateway: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN", baseURL: "http://127.0.0.1:1", models: [{ id: "smoke" }] } } } },
   });
   assert.equal(result.terminalOutcome, "failure");

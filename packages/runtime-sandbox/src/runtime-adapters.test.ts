@@ -174,7 +174,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   assert.match(startCommand, /DSH_SYSTEM_PROMPT="\$\( \{ printf '%s\\n\\n' 'You are an expert coding assistant operating inside pi, a coding agent harness\. You help users by reading files, executing commands, editing code, and writing new files\.'; cat '\/workspace\/\.deepsonar\/system-prompt\.txt'; \} \)" node \/opt\/deepsonar\/dsh\/node_modules\/@deepseek-ai\/dsh\/lib\/bin\.js --profile deepsonar/);
   assert.match(startCommand, /operating inside pi/);
   assert.doesNotMatch(startCommand, /DSH_SYSTEM_PROMPT="\$\(cat /);
-  assert.equal(adapter.version, "0.2.0-rc.2");
+  assert.equal(adapter.version, "0.2.1-rc.2");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
   assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, undefined);
@@ -207,7 +207,7 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const state = { sessionId: undefined as string | undefined, contextIdentity: {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
-    adapter_id: "dsh", adapter_version: "0.2.0-rc.2", runtime_identity: "runtime",
+    adapter_id: "dsh", adapter_version: "0.2.1-rc.2", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
   }, model: "gpt-5.6", modelProvider: "xxxx", cwd: "/workspace" };
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
@@ -722,7 +722,7 @@ function loadJsonlFixture(name: string): Record<string, unknown>[] {
 
 test("Pi terminal-error runtime fixture covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
-  assert.equal(adapter.version, "1.1.0");
+  assert.equal(adapter.version, "1.4.0");
   const state: Record<string, unknown> = {};
   const decoded = loadJsonlFixture("pi-0.84.4.runtime.jsonl").flatMap((line) => adapter.decodeOutput(line, state));
   assert.equal(state.sessionId, "pi-sess-0844");
@@ -738,9 +738,9 @@ test("Pi terminal-error runtime fixture covers required decode fields and unknow
   assert.throws(() => parsePiJsonlRecord(JSON.stringify({ type: "future_unknown_event" })), /PI_RPC_UNEXPECTED_EVENT/);
 });
 
-test("DSH 0.2.0-rc.2 runtime fixture covers required decode fields and unknown frames", () => {
+test("DSH runtime fixture（录制于 0.2.0-rc.2）covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  assert.equal(adapter.version, "0.2.0-rc.2");
+  assert.equal(adapter.version, "0.2.1-rc.2");
   const state = {
     sessionId: "session-dsh-020rc2",
     dshInitializeRequestId: "deepsonar-initialize-1",

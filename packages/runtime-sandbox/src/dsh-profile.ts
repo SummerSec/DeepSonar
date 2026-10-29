@@ -1,7 +1,7 @@
 import { stringify } from "yaml";
 import { DSH_PI_COMPAT_SYSTEM_PROMPT } from "./dsh-request-frame.js";
 
-export const DSH_VERSION = "0.2.0-rc.2";
+export const DSH_VERSION = "0.2.1-rc.2";
 export const DSH_HOME = "/workspace/.deepsonar-home/.dsh";
 export const DSH_PROFILE = "deepsonar";
 export const DSH_BIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js";
