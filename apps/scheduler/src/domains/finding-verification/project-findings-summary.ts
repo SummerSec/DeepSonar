@@ -1,3 +1,4 @@
+import { findingQueryPredicate, parseFindingQuery, type FindingQuery } from "./finding-query.js";
 import { sql } from "../../db.js";
 import { FINDING_DISPOSITIONS, FINDINGS_LIST_WINDOW } from "../../finding-disposition.js";
 
@@ -30,6 +31,7 @@ export interface ProjectFindingsSummary {
   list_window: number;
   truncated: boolean;
   severity: CountBucket[];
+  profiles: CountBucket[];
   verify_status: CountBucket[];
   disposition: CountBucket[];
   canvases: ProjectFindingCanvasBucket[];
@@ -62,6 +64,7 @@ export function buildProjectFindingsSummary(input: {
   disposition: Iterable<{ key: string; count: number }>;
   canvases: readonly ProjectFindingCanvasBucket[];
   listWindow?: number;
+  profiles?: CountBucket[];
 }): ProjectFindingsSummary {
   const listWindow = input.listWindow ?? FINDINGS_LIST_WINDOW;
   const total = Math.max(0, Math.floor(input.total || 0));
@@ -72,6 +75,7 @@ export function buildProjectFindingsSummary(input: {
     project_total: projectTotal,
     list_window: listWindow,
     truncated: projectTotal > listWindow,
+    profiles: input.profiles ?? [],
     severity: fillCountBuckets(FINDING_SEVERITY_KEYS, input.severity),
     verify_status: fillCountBuckets(FINDING_VERIFY_KEYS, input.verifyStatus),
     disposition: fillCountBuckets(FINDING_DISPOSITIONS, input.disposition),
@@ -88,60 +92,41 @@ export function buildProjectFindingsSummary(input: {
 
 export async function loadProjectFindingsSummary(
   projectId: string,
-  canvasIds: readonly string[] = [],
+  filters: FindingQuery = parseFindingQuery({ project_id: projectId }),
 ): Promise<ProjectFindingsSummary | null> {
   const [project] = await sql`SELECT id FROM projects WHERE id = ${projectId}`;
   if (!project) return null;
-  const scopedCanvasIds = canvasIds.filter(Boolean);
-  const canvasFilter = scopedCanvasIds.length ? scopedCanvasIds : null;
-  const [severityRows, verifyRows, dispositionRows, canvasRows, projectTotalRow] = await Promise.all([
-    sql<{ key: string; count: number }[]>`
-      SELECT COALESCE(NULLIF(f.severity, ''), 'unset') AS key, COUNT(*)::int AS count
+  // One statement/snapshot for all buckets, including during concurrent writes.
+  const rows = await sql`
+    WITH matching AS MATERIALIZED (
+      SELECT f.*, j.canvas_id, c.title AS canvas_title
       FROM findings f
-      JOIN jobs j ON j.id = f.job_id
-      WHERE f.project_id = ${projectId}::uuid
-        AND (${canvasFilter}::text[] IS NULL OR j.canvas_id = ANY(${canvasFilter}::text[]))
-      GROUP BY 1`,
-    sql<{ key: string; count: number }[]>`
-      SELECT COALESCE(NULLIF(f.verify_status, ''), 'pending') AS key, COUNT(*)::int AS count
-      FROM findings f
-      JOIN jobs j ON j.id = f.job_id
-      WHERE f.project_id = ${projectId}::uuid
-        AND (${canvasFilter}::text[] IS NULL OR j.canvas_id = ANY(${canvasFilter}::text[]))
-      GROUP BY 1`,
-    sql<{ key: string; count: number }[]>`
-      SELECT COALESCE(NULLIF(f.disposition, ''), 'open') AS key, COUNT(*)::int AS count
-      FROM findings f
-      JOIN jobs j ON j.id = f.job_id
-      WHERE f.project_id = ${projectId}::uuid
-        AND (${canvasFilter}::text[] IS NULL OR j.canvas_id = ANY(${canvasFilter}::text[]))
-      GROUP BY 1`,
-    sql<{ id: string; title: string; count: number }[]>`
-      SELECT j.canvas_id AS id, c.title, COUNT(*)::int AS count
-      FROM findings f
-      JOIN jobs j ON j.id = f.job_id
-      JOIN canvases c ON c.id = j.canvas_id
-      WHERE f.project_id = ${projectId}::uuid
-        AND (${canvasFilter}::text[] IS NULL OR j.canvas_id = ANY(${canvasFilter}::text[]))
-      GROUP BY j.canvas_id, c.title`,
-    sql<{ count: number }[]>`
-      SELECT COUNT(*)::int AS count
-      FROM findings f
-      JOIN jobs j ON j.id = f.job_id
-      WHERE f.project_id = ${projectId}::uuid`,
-  ]);
-  const severity = severityRows.map((row) => ({ key: asText(row.key), count: asCount(row.count) }));
+      JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
+      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
+      WHERE ${findingQueryPredicate(filters)}
+    )
+    SELECT 'severity' AS dimension, COALESCE(NULLIF(severity, ''), 'unset') AS key, '' AS title, COUNT(*)::int AS count FROM matching GROUP BY 2
+    UNION ALL SELECT 'verify', verify_status, '', COUNT(*)::int FROM matching GROUP BY 2
+    UNION ALL SELECT 'disposition', disposition, '', COUNT(*)::int FROM matching GROUP BY 2
+    UNION ALL SELECT 'profile', profile, '', COUNT(*)::int FROM matching GROUP BY 2
+    UNION ALL SELECT 'canvas', canvas_id, canvas_title, COUNT(*)::int FROM matching GROUP BY 2, 3
+    UNION ALL SELECT 'project', '', '', COUNT(*)::int FROM findings f
+      JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
+      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
+      WHERE f.project_id = ${projectId}::uuid`;
+  const buckets = (dimension: string) => rows.filter((row) => row.dimension === dimension)
+    .map((row) => ({ key: asText(row.key), count: asCount(row.count) }));
+  const severity = buckets("severity");
   return buildProjectFindingsSummary({
     projectId,
     total: severity.reduce((sum, row) => sum + row.count, 0),
-    projectTotal: asCount(projectTotalRow[0]?.count),
+    projectTotal: buckets("project")[0]?.count ?? 0,
     severity,
-    verifyStatus: verifyRows.map((row) => ({ key: asText(row.key), count: asCount(row.count) })),
-    disposition: dispositionRows.map((row) => ({ key: asText(row.key), count: asCount(row.count) })),
-    canvases: canvasRows.map((row) => ({
-      id: asText(row.id),
-      title: asText(row.title),
-      count: asCount(row.count),
+    verifyStatus: buckets("verify"),
+    disposition: buckets("disposition"),
+    profiles: buckets("profile"),
+    canvases: rows.filter((row) => row.dimension === "canvas").map((row) => ({
+      id: asText(row.key), title: asText(row.title), count: asCount(row.count),
     })),
   });
 }

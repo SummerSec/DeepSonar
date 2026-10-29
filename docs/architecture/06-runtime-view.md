@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-10-21
+> 同步日期：2026-10-29
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -88,3 +88,11 @@ Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有�
 普通平台暂停仍允许入队；[维护升级](adr/0008-maintenance-candidate-upgrade.md) 增加真正的数据库身份隔离。顺序是只读核验 → 暂停/排空 → 旧身份 NOLOGIN 与会话清退 → 验证备份 → 候选重建 → preparing 服务与节点验证 → 激活。不能通过中止 Job 来伪造排空。目标 preparing 状态关闭业务 HTTP/WebSocket 与后台任务，世代或版本不匹配也保持关闭；数据库隔离仍是旧节点不能写入的依据。
 
 中断续做读取固定目标 journal，重复步骤前核对实际回执。激活前失败回源并保持暂停；激活成功或结果不明时不允许自动回旧数据。维护状态机、宿主/受管 SSH 和显式恢复领取已有实现；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体历史基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，不能据此推定 Windows Docker 全流程、断电或真实模型验证已完成。
+
+## Pi 大输出捕获（#765）
+
+RPC 按帧有界扫描，默认 8MiB 硬上限（可配置至 64MiB）；超过 1MiB 的受支持事件保存完整脱敏 JSON 到 workspace 与 Attempt evidence 后，再生成有界文本预览。控制字段不丢弃，错误响应不得变为成功；每次运行含恢复共用 128MiB 保存预算，写盘背压、超额与损坏明确失败且记录 capture_complete=false。元数据及 hash 范围见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。不改变数据库、Job 授权或 Pi 内部模型上下文；真实生产重跑未验证。
+
+## DSH 子代理与完成门（#766）
+
+对应 FR-CRED-005。DSH 父会话 idle 时若仍存在受认证谱系下的活跃子代理，不触发完成门、催促或 shutdown。只有对应 `subagent.finished` 结束该轮子代理活动；子 idle 不是完成依据，恢复 running 会重新计入活动。全部子代理完成后等待父会话接收结果并再次 idle，再按原完成回执契约结算。父错误、Job 超时与取消仍可终止运行。验证入口是现有 `ci:unit:runtime-sandbox` 中的 `runtime-dsh-recovery.test.ts`（新版真实协议回放）及 CI 的 DSH Cordis Docker smoke。
