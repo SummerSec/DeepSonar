@@ -10,6 +10,7 @@ import {
   ARTIFACT_KIND_OBSERVATION,
   factProposalToArtifact,
   findingArtifactKey,
+  findingSourceDigest,
   findingProposalToArtifact,
 } from "./model.js";
 
@@ -110,5 +111,14 @@ test("findingProposalToArtifact is deterministic and keeps Finding as a namespac
   assert.equal(first.claims[0]?.subject?.location, finding.location);
   assert.equal(first.evidence[0]?.uri, "src/auth/reset.ts:88");
   assert.equal(first.extensions["security.vulnerability"]?.rule_id, "AUTH-RESET-REPLAY");
-  assert.equal(findingArtifactKey("abc123"), "finding:abc123");
+  assert.equal(findingArtifactKey("job-a", "abc123"), "finding:job-a:abc123");
+});
+
+
+test("Finding source digest ignores object order, preserves conflicting provenance and evidence", () => {
+  const proposal = { title: "same title", profile: "general", raw: { environment: "a", version: "1" } };
+  assert.equal(findingSourceDigest(proposal), findingSourceDigest({ ...proposal, raw: { version: "1", environment: "a" } }));
+  assert.notEqual(findingSourceDigest(proposal), findingSourceDigest({ ...proposal, raw: { environment: "b", version: "1" } }));
+  assert.notEqual(findingSourceDigest(proposal), findingSourceDigest({ ...proposal, evidence_refs: ["evidence:2"] }));
+  assert.notEqual(findingArtifactKey("job-a", "same"), findingArtifactKey("job-b", "same"));
 });

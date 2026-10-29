@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { findingSourceDigest } from "../artifacts/model.js";
 import {
   DonePayload,
   FactPayload,
@@ -58,7 +59,6 @@ import {
 import { frozenTaskSeeds, TaskSeedInputError } from "../../task-compose.js";
 import {
   bindArtifactNode,
-  deleteArtifact,
   factProposalToArtifact,
   findingArtifactKey,
   findingProposalToArtifact,
@@ -981,9 +981,16 @@ export function createEventIngestionSideEffectApplication(
           (normalized.rule_id ?? "").trim(),
         ].join("|"),
       );
-      const [existingFinding] = await tx<{ id: string }[]>`
-        SELECT id FROM findings WHERE project_id = ${job.project_id} AND fingerprint = ${fingerprint}`;
-      if (existingFinding) return; // fingerprint 去重命中：同一 finding 不重复上图、不重复派生
+      const sourceDigest = findingSourceDigest(normalized);
+      // The Job row is locked above: same-source submissions serialize before artifacts.
+      const [existingFinding] = await tx<{ id: string; source_digest: string | null }[]>`
+        SELECT id, source_digest FROM findings WHERE job_id = ${jobId} AND fingerprint = ${fingerprint}`;
+      if (existingFinding) {
+        if (existingFinding.source_digest !== sourceDigest) {
+          throw invalidControlPayload("Finding 来源身份已存在但内容不同或历史来源摘要不可用；emit_finding 不支持修订，请保留原记录并在独立 Job 提交新来源。", "title");
+        }
+        return;
+      }
 
       const artifact = await persistArtifact(tx, {
         projectId: job.project_id as string,
@@ -991,7 +998,7 @@ export function createEventIngestionSideEffectApplication(
         jobId,
         sourceEventId: services.eventId ?? null,
         sourceOperation: "emit_finding",
-        artifactKey: findingArtifactKey(fingerprint),
+        artifactKey: findingArtifactKey(jobId, fingerprint),
         document: findingProposalToArtifact(normalized),
       });
       const [finding] = await tx`
@@ -1000,6 +1007,7 @@ export function createEventIngestionSideEffectApplication(
         job_id: jobId,
         artifact_id: artifact.id,
         fingerprint,
+        source_digest: sourceDigest,
         title: normalized.title,
         severity,
         profile: normalized.profile,
@@ -1015,12 +1023,8 @@ export function createEventIngestionSideEffectApplication(
           ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
         } as never,
       })}
-      ON CONFLICT (project_id, fingerprint) DO NOTHING
       RETURNING *`;
-      if (!finding) {
-        await deleteArtifact(tx, artifact.id);
-        return;
-      }
+      if (!finding) throw new Error("Finding source insert returned no row");
 
       // 画布：finding 节点挂在 job 节点下，坐标服务端分配（§3.2）
       const [jobNode] = await tx`

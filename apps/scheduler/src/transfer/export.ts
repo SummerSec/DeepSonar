@@ -510,6 +510,7 @@ async function collectTasks(
           source_job_id: f.job_id,
           source_node_id: f.node_id,
           fingerprint: f.fingerprint,
+          source_digest: f.source_digest,
           title: f.title,
           severity: f.severity,
           location: f.location,
