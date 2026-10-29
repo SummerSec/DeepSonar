@@ -220,3 +220,40 @@ test("owned sequence reset is over all public base tables after official seeds",
   assert.doesNotMatch(source, /resetOwnedSequences\(db, copiedTables\)/);
   assert.doesNotMatch(source, /pg_get_serial_sequence/);
 });
+
+test("Finding backup restore uses private connection environment and redacts child-process failures", async () => {
+  const { restoreFindingSourceBackup } = await import("./schema-rebuild-finding-fixture.js");
+  const target = new URL("postgres://fixture-user:fixture%3Asecret@127.0.0.1:55471/fixture-backup?sslmode=require");
+  let called = false;
+  restoreFindingSourceBackup(target, "/tmp/fixture.dump", (command, args, options) => {
+    called = true;
+    assert.equal(command, "pg_restore");
+    assert.deepEqual(args, ["--exit-on-error", "--dbname", "fixture-backup", "/tmp/fixture.dump"]);
+    assert.equal(options.env?.PGHOST, "127.0.0.1");
+    assert.equal(options.env?.PGPORT, "55471");
+    assert.equal(options.env?.PGUSER, "fixture-user");
+    assert.equal(options.env?.PGPASSWORD, "fixture:secret");
+    assert.equal(options.env?.PGSSLMODE, "require");
+    assert.equal(options.stdio, "pipe");
+    assert.equal(options.timeout, 30_000);
+  });
+  assert.equal(called, true);
+  assert.throws(() => restoreFindingSourceBackup(target, "/tmp/fixture.dump", () => {
+    throw Object.assign(new Error(`Command failed: ${target}`), { stderr: "fixture:secret", stdout: "fixture-user" });
+  }), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /backup restore failed/);
+    assert.doesNotMatch(error.message, /fixture|postgres:\/\//);
+    assert.equal(error.cause, undefined);
+    assert.deepEqual(Object.keys(error), []);
+    return true;
+  });
+});
+
+test("CI dump and restore clients are pinned to the PostgreSQL 16 service", async () => {
+  const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(workflow, /image: postgres:16-alpine/);
+  assert.match(workflow, /apt-get install -y postgresql-client-16\b/);
+  assert.match(workflow, /echo "\/usr\/lib\/postgresql\/16\/bin" >> "\$GITHUB_PATH"/);
+  assert.doesNotMatch(workflow, /apt-get install -y postgresql-client\s*$/m);
+});
