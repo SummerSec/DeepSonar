@@ -230,7 +230,7 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
     const ingestion = createEventIngestionApplication(sql, async (_tx, id) => { applied.set(id, (applied.get(id) ?? 0) + 1); });
     assert.notEqual(completionDoneEventId(a.jobId, acceptedKey), completionDoneEventId(b.jobId, acceptedKey));
     for (const owner of [a, b]) {
-      const event = { v: 1 as const, type: "done" as const, event_id: completionDoneEventId(owner.jobId, acceptedKey), payload: { summary: "test final completion" } };
+      const event = { v: 1 as const, type: "done" as const, event_id: completionDoneEventId(owner.jobId, acceptedKey), payload: { summary: owner === a ? "valid now" : "first time valid" } };
       assert.equal((await ingestion.ingestEvent(owner.jobId, event)).deduped, false);
       assert.equal((await ingestion.ingestEvent(owner.jobId, event)).deduped, true);
       assert.equal(applied.get(owner.jobId), 1);

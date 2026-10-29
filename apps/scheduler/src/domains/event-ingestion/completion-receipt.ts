@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { DonePayload, type RepairFeedback } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
+import { ControlInputError } from "../../control-input.js";
 import { consumeEventRateLimit } from "./rate-limit.js";
 
 export const COMPLETION_REPAIR_LIMIT = 8;
 export type CompletionResult = { statusCode: number; body: Record<string, unknown> };
 export type CompletionReceipt = {
   v: 1; operation: "mark_job_done"; idempotency_key: string; input_digest: string;
+  /** Digest of the validated, executor-normalized final done payload; accepted receipts only. */
+  settlement_digest?: string;
   proposal_revision: number; attempt_id: string; snapshot_digest: string;
   status: "rejected" | "persisted_deferred"; result: CompletionResult;
 };
@@ -26,6 +29,34 @@ export function completionInputDigest(input: unknown): string {
   };
   return createHash("sha256").update(canonical(input)).digest("hex");
 }
+/** Match the executor's final payload without retaining either request or summary text. */
+function completionSettlementDigest(input: unknown): string {
+  const parsed = DonePayload.parse(input);
+  return completionInputDigest({ ...parsed, summary: parsed.summary.trim() });
+}
+
+/** Called only after semantic ingestion acquired the Job lock and event dedup gate. */
+export async function hasPrepaidCompletion(
+  tx: typeof sql, jobId: string, attemptId: string | null, eventId: string, payload: unknown,
+): Promise<boolean> {
+  if (!attemptId) return false;
+  const rows = await tx`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
+    AND attempt_id=${attemptId} AND type='control_receipt'
+    AND payload_json->>'status'='persisted_deferred' LIMIT 1`;
+  const row = rows[0];
+  const receipt = row?.payload_json as CompletionReceipt | undefined;
+  if (!receipt || receipt.v !== 1 || receipt.operation !== "mark_job_done"
+    || receipt.status !== "persisted_deferred" || receipt.attempt_id !== attemptId
+    || typeof receipt.idempotency_key !== "string" || receipt.result?.statusCode !== 200
+    || receipt.result?.body?.accepted !== true
+    || row.event_id !== completionReceiptId(jobId, receipt.idempotency_key)
+    || eventId !== completionDoneEventId(jobId, receipt.idempotency_key)) return false;
+  if (receipt.settlement_digest !== completionSettlementDigest(payload)) {
+    throw new ControlInputError("invalid_done", "Final completion does not match the durably accepted proposal");
+  }
+  return true;
+}
+
 function reject(code: string, message: string): CompletionResult {
   return { statusCode: 409, body: { accepted: false, error_code: code, error: message, retryable: false } };
 }
@@ -116,6 +147,7 @@ export async function recordCompletionProposal(input: {
     }
     const receipt: CompletionReceipt = { v: 1, operation: "mark_job_done", idempotency_key: input.key,
       input_digest: digest, proposal_revision: input.revision, attempt_id: String(attempt.id),
+      ...(accepted ? { settlement_digest: completionSettlementDigest(input.rawInput) } : {}),
       snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result };
     // Accepted completion must remain available when ordinary semantic output exhausts its bucket.
     // Rejected proposals stay bounded by the standard bucket and persistent repair limit.
