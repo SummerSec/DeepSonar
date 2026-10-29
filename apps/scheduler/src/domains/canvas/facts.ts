@@ -256,7 +256,8 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
     const result = await sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
       if (parsed.data.plan_binding) {
-        // Pin the current Plan before taking the Fact lock; Plan replacement waits for this attestation.
+        // Match event ingestion/report lock order: Canvas → Plan Job → Fact.
+        await tx`SELECT id FROM canvases WHERE id = ${id} FOR UPDATE`;
         await tx`SELECT id FROM jobs WHERE id = ${parsed.data.plan_binding.plan_job_id}
           AND canvas_id = ${id} FOR SHARE`;
       }
@@ -265,7 +266,7 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         FROM canvas_nodes n
         JOIN canvases c ON c.id = n.canvas_id
         WHERE n.id = ${nodeId} AND n.canvas_id = ${id}
-        FOR UPDATE`;
+        FOR UPDATE OF n`;
       if (!node) return { kind: "not_found" as const };
       if (node.node_type !== "fact") return { kind: "not_fact" as const };
       const beforeStatus = String(node.verification_status);

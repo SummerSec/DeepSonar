@@ -73,6 +73,31 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
     assert.ok(JSON.stringify(jobDetail.json()).includes(model.contentSha256(plan)));
     assert.equal((await criteria())[0]?.state,"unbound");
     const body = await request(first.fact);
+    // Ingestion/report owns Canvas before Job. Hold that lock while a real binding request starts.
+    let waitingPatch: ReturnType<typeof patch> | undefined;
+    const writerError = await sql.begin(async tx => {
+      await tx`SET LOCAL deadlock_timeout = '100ms'`;
+      await tx`SELECT id FROM canvases WHERE id=${canvas} FOR UPDATE`;
+      waitingPatch = patch(first.fact,body);
+      let observedWait = false;
+      for (let tries=0; tries<100; tries++) {
+        await tx`SELECT pg_stat_clear_snapshot()`;
+        const waiting = await tx`SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+          AND pid <> pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%canvases%'`;
+        if (waiting.length) { observedWait=true; break; }
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      assert.ok(observedWait,"binding request must wait behind Canvas writer");
+      await tx`SELECT id FROM jobs WHERE id=${planJob} FOR UPDATE`;
+      await tx`UPDATE jobs SET payload_json=${tx.json({plan_protocol:mergePlanAudit(null,{source:"submit_plan",raw:{...plan,goal:"Concurrent revised scope"}})} as never)} WHERE id=${planJob}`;
+    }).then(()=>null,(error: unknown)=>error);
+    const raced = await waitingPatch!;
+    assert.equal(writerError,null,"Canvas→Job writer must not deadlock with Fact binding");
+    assert.equal(raced.statusCode,409,raced.payload);
+    assert.equal(raced.json().error_code,"PLAN_BINDING_STALE_PLAN");
+    assert.equal((await detail(first.fact)).fact.verification_status,"unverified");
+    assert.equal((await detail(first.fact)).plan_bindings.records.length,0);
+    await sql`UPDATE jobs SET payload_json=${sql.json({plan_protocol:mergePlanAudit(null,{source:"submit_plan",raw:plan,trimmed:plan})} as never)} WHERE id=${planJob}`;
     assert.equal((await detail(first.fact)).plan_criterion_source.eligible,true);
     assert.equal((await patch(first.fact,body,reader.plaintext)).statusCode,403);
     assert.equal((await patch(first.fact,{ ...body, plan_binding: { ...body.plan_binding, plan_sha256: "a".repeat(64) } })).statusCode,409);
