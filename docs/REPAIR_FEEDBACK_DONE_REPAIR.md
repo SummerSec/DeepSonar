@@ -35,6 +35,14 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 `executor-real-terminal-race.test.ts` 调用真实 `executeReal`、其注册的 Control handler、完成门及终态事件选择，以有界 barrier 固定交错。数据库预检/写入、运行器传输和 Evidence 是离线替身；这不等于真实 HTTP/数据库并发、实际 CLI 或模型验收。持久回执事务仍由 B1 的 PostgreSQL 集成测试覆盖。测试接入 `pnpm ci:unit:executor-real`，在独立 Node module-mock 进程运行。
 
+## 受 scope 约束的引用刷新指引（C0）
+
+只有 `submit_hub_decision` 的 `model_correctable/invalid_node_ref` 拒绝会附加指引。宿主以已鉴权 principal 的 Job 身份生成 `current_state_ref`，且必须同时有绑定 Canvas 与当前 token 的 `graph_query` 权限；不采纳 handler 提供的 URL、动作或效果账本。缺少前提时不提供链接，明确停止猜测并走既有人工/失败路径，不自动授权。
+
+链接指向现有 operation：GET 只描述 Schema，POST `{"kind":"overview"}` 才读取当前 Job 的有界图投影，后续可按需查询并使用 `referable_ids` 修正后以新 key 重提。查询自身仍检查 token、Job scope、allowlist 和预算；旧指引不能绕过后续收紧的权限。图查询没有统一 revision/version lease，读取后并发变化仍可能使重提失败；已见引用、当前画布归属和最终业务/证据门继续重新校验。C0 不新增 Hub 持久 revision/修正计数，不编造 `accepted_effects`，也不承诺完整完成门或模型恢复率。
+
+`reference-refresh.integration.test.ts` 使用真实 Fastify 注入、短期 token、隔离 PostgreSQL、`executeGraphQuery`、实际 Hub 已见引用解析与数据库预检。夹具 handler 只返回预检结果，不运行真实 executor/CLI，也不结算 Hub 副作用。测试证明跨 Job/项目和伪造 canvas 输入被拒绝、恶意 details 不成为指引、无权限/Canvas 不获得链接，以及已查询后删除的引用仍被拒绝；合法引用仍不能绕过缺少证据的完成门。
+
 ## 验收边界
 
 行为验证必须包含首次拒绝后接受、旧 key 重放、冲突/旧 revision、响应丢失、重启、预算耗尽、取消/租约失效、未知效果、scope 和数据库写失败。实际通过项以 PR 记录为准，本文件不把规划当作通过证据。

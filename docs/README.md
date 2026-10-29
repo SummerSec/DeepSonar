@@ -84,7 +84,7 @@
 
 [#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；作为 B 前历史基线保留。
 
-[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C 和真实模型效果仍待交付。
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 仅有 scoped 引用刷新指引，完整 C 和真实模型效果仍待交付。
 
 ## 进行中 / 部分落地
 
