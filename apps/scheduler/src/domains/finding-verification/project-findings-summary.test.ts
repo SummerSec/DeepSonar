@@ -50,3 +50,16 @@ test("empty project findings summary fills known buckets with zeros", () => {
   ]);
   assert.equal(summary.canvases.length, 0);
 });
+
+
+test("finding filters are bounded multi-selects and search treats SQL wildcards literally", async () => {
+  const { parseFindingQuery } = await import("./finding-query.js");
+  const filters = parseFindingQuery({ severity: "high,medium,high", q: "漏洞%_\\x" });
+  assert.deepEqual(filters.severity, ["high", "medium"]);
+  assert.equal(filters.q, "%漏洞\\%\\_\\\\x%");
+  assert.equal(parseFindingQuery({ q: "   " }).q, null);
+  assert.equal(parseFindingQuery({ project_id: null }).project_id, null);
+  for (const query of [{ canvas_id: "bad" }, { severity: ["high"] }, { q: "x".repeat(201) }, { severity: "high,,low" }]) {
+    assert.throws(() => parseFindingQuery(query), /invalid query parameter/);
+  }
+});

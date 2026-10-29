@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { FindingSummary, ProjectFindingsSummary } from "./api";
+import { api, type FindingSummary } from "./api";
+import { clearFindingQuery, findingQueryFilters, updateFindingQuery } from "./finding-query-state";
 import {
-  canvasScopedTotal,
   dispositionBadgeTone,
-  filterProjectFindings,
-  findingsListTruncated,
   PROJECT_DELIVERY_CAPTION,
   PROJECT_DELIVERY_TITLE,
   projectReportsRedirectPath,
@@ -15,31 +13,6 @@ import {
   researchDedupeLabel,
   researchPriorityLabel,
 } from "./findings-risk-desk";
-
-function finding(overrides: Partial<FindingSummary> = {}): FindingSummary {
-  return {
-    id: "finding-1",
-    project_id: "project-1",
-    job_id: "job-1",
-    node_id: null,
-    fingerprint: "fp-1",
-    title: "Cache primitive",
-    severity: "high",
-    profile: "security.vulnerability",
-    category: null,
-    tags_json: [],
-    evidence_refs_json: [],
-    scoring_json: {},
-    location: null,
-    summary: "from canvas A",
-    verify_status: "pending",
-    disposition: "open",
-    created_at: "2026-01-01T00:00:00.000Z",
-    canvas_id: "canvas-a",
-    canvas_title: "任务 A",
-    ...overrides,
-  };
-}
 
 test("project delivery desk merges risk and reports and stays distinct from cross-project findings", () => {
   const shell = readFileSync(new URL("./layout/AppShell.tsx", import.meta.url), "utf8");
@@ -60,7 +33,7 @@ test("project delivery desk merges risk and reports and stays distinct from cros
   assert.match(delivery, /FindingsPage scope="project" hidePageChrome/);
   assert.match(delivery, /ProjectReportsPage embedded/);
   assert.match(page, /PROJECT_DELIVERY_TITLE/);
-  assert.match(page, /projectFindingsSummary/);
+  assert.match(page, /useFindingsQuery/);
   assert.doesNotMatch(page, /title=\{scope === "global" \? "发现" : "项目发现"\}/);
 });
 
@@ -72,38 +45,78 @@ test("delivery panel query helpers keep risk default and reports bookmarkable", 
   assert.equal(projectReportsRedirectPath("proj-1"), "/projects/proj-1/findings?panel=reports");
 });
 
-test("project list keeps findings from every canvas and can filter by source task", () => {
-  const rows = [
-    finding(),
-    finding({ id: "finding-2", canvas_id: "canvas-b", canvas_title: "任务 B", disposition: "human_reproducing" }),
-  ];
-  assert.equal(filterProjectFindings(rows, {}).length, 2);
-  assert.deepEqual(filterProjectFindings(rows, { canvasIds: ["canvas-b"] }).map((row) => row.id), ["finding-2"]);
-  assert.deepEqual(
-    filterProjectFindings(rows, { dispositions: ["human_reproducing"] }).map((row) => row.id),
-    ["finding-2"],
-  );
+test("finding URL filters are translated once for server list and summary", () => {
+  const params = new URLSearchParams("panel=risk&severity=high,low&profile=security.vulnerability&verify=confirmed&disposition=open&canvas=task-b&q=中文%25&finding=old&cursor=page-11");
+  assert.deepEqual(findingQueryFilters(params, "project", "project-a"), {
+    project_id: "project-a", severity: "high,low", profile: "security.vulnerability", verify_status: "confirmed",
+    disposition: "open", canvas_id: "task-b", q: "中文%",
+  });
+  const changed = updateFindingQuery(params, "canvas", ["task-c"]);
+  assert.equal(changed.get("cursor"), null, "filter changes restart pagination");
+  assert.equal(changed.get("finding"), "old", "selected detail survives filtering");
+  assert.equal(changed.get("panel"), "risk");
+  const detail = updateFindingQuery(params, "finding", "new");
+  assert.equal(detail.get("cursor"), "page-11", "opening a detail preserves current page");
+  const restored = new URLSearchParams(detail.toString());
+  assert.deepEqual(findingQueryFilters(restored, "project", "project-a"), findingQueryFilters(params, "project", "project-a"));
+  const cleared = clearFindingQuery(params);
+  assert.equal(cleared.get("cursor"), null);
+  assert.equal(cleared.get("finding"), "old");
+  assert.equal(cleared.get("panel"), "risk");
+  assert.equal(params.get("cursor"), "page-11", "helpers do not mutate router state");
 });
 
-test("risk desk totals prefer the project aggregate when the list window truncates", () => {
-  const summary: ProjectFindingsSummary = {
-    project_id: "project-1",
-    total: 512,
-    project_total: 512,
-    list_window: 500,
-    truncated: true,
-    severity: [],
-    verify_status: [],
-    disposition: [],
-    canvases: [
-      { id: "canvas-a", title: "任务 A", count: 400 },
-      { id: "canvas-b", title: "任务 B", count: 112 },
-    ],
-  };
-  assert.equal(findingsListTruncated(500, summary.total), true);
-  assert.equal(canvasScopedTotal(summary, []), 512);
-  assert.equal(canvasScopedTotal(summary, ["canvas-b"]), 112);
+test("global query sends project multiselect and does not apply a task scope", () => {
+  const filters = findingQueryFilters(new URLSearchParams("project=p1,p2&canvas=c1"), "global");
+  assert.equal(filters.project_id, "p1,p2");
+  assert.equal(filters.canvas_id, undefined);
   assert.match(dispositionBadgeTone("human_reproducing"), /violet/);
+});
+
+test("page wiring uses server filters, bounded pages and fail-closed refresh", () => {
+  const page = readFileSync(new URL("./pages/FindingsPage.tsx", import.meta.url), "utf8");
+  const hook = readFileSync(new URL("./useFindingsQuery.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /filterProjectFindings|api\.findings\(/);
+  assert.match(page, /aria-label="发现分页"/);
+  assert.match(page, /changePage\(nextCursor\)/);
+  assert.match(page, /f\.updated_at \?\? f\.created_at/);
+  assert.match(page, /facets\?\.canvases/);
+  assert.match(page, /selectedFinding && !error/, "query access failure also unmounts an open detail");
+  assert.match(hook, /api\.findingsPage/);
+  assert.match(hook, /projectFindingsSummary\(query\.projectId, summaryFilters\)/);
+  assert.match(hook, /setState\(\{ \.\.\.emptyState\(key\), error/);
+  assert.match(hook, /setTimeout\(tick, 5000\)/);
+});
+
+test("finding API preserves cursor and all filters across pages beyond 500 rows", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: URL[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), "http://127.0.0.1");
+    urls.push(url);
+    const offset = Number(url.searchParams.get("after") || 0);
+    const items = Array.from({ length: Math.min(50, 551 - offset) }, (_, index) => ({ id: `finding-${offset + index}` }));
+    return new Response(JSON.stringify({ items, next_cursor: offset + items.length < 551 ? String(offset + items.length) : null, has_more: offset + items.length < 551, after: String(offset), watermark: "now", live: false }), { status: 200 });
+  };
+  try {
+    const filters = { severity: "high,low", canvas_id: "task-a,task-b", verify_status: "confirmed", disposition: "open", q: "历史%记录" };
+    const ids: string[] = [];
+    let after: string | null = null;
+    do {
+      const page = await api.findingsPage({ ...filters, after, limit: 50 });
+      ids.push(...page.items.map((row) => row.id));
+      after = page.next_cursor;
+    } while (after);
+    assert.equal(ids.length, 551);
+    assert.equal(new Set(ids).size, 551);
+    assert.equal(ids.at(-1), "finding-550");
+    for (const url of urls) {
+      assert.equal(url.searchParams.get("limit"), "50");
+      for (const [key, value] of Object.entries(filters)) assert.equal(url.searchParams.get(key), value);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("research badges stay independent from verify and severity", () => {
