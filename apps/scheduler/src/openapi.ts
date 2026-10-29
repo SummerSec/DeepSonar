@@ -1438,7 +1438,7 @@ const OPS: Op[] = [
       profile: { type: "string" },
       category: { type: "string" },
       verify_status: { type: "string" },
-      disposition: { type: "string", description: "逗号分隔的处置状态" },
+      disposition: { type: "string", description: `逗号分隔的处置状态：${FINDING_DISPOSITIONS.join(", ")}` },
       q: { type: "string", maxLength: 200, description: "标题、位置、摘要、指纹的不区分大小写字面子串；%/_ 不作通配符" },
       limit: { type: "integer", minimum: 1, maximum: 50 },
       cursor: { type: "string" },
