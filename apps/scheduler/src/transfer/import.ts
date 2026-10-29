@@ -674,6 +674,7 @@ async function importTasks(
             job_id: jobId,
             node_id: nodeId,
             fingerprint: f.fingerprint as string,
+            source_digest: (f.source_digest as string) ?? null,
             title: f.title as string,
             severity: f.severity as string,
             location: (f.location as string) ?? null,
@@ -682,7 +683,7 @@ async function importTasks(
             raw_json: ((f.raw_json as object) ?? {}) as never,
           })}`;
       } catch {
-        // fingerprint 冲突则跳过
+        throw new Error("invalid imported Finding source identity; import was rolled back");
       }
     }
   }
