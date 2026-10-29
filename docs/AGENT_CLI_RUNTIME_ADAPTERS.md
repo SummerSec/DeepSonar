@@ -1,12 +1,20 @@
 # Governed Agent CLI Runtime Adapters
 
-> **Status: as-built (Issue #100 + Pi #140; DSH 0.2.0-rc.2 migration).** Pinned
+> **Status: as-built (Issue #100 + Pi #140; DSH 0.2.1-rc.2 migration).** Pinned
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
+
+### DSH 异步子代理完成边界（#766）
+
+DSH 0.2.1-rc.2 的 `subagent` 立即返回 activation，父会话首次 idle 不表示任务结束。适配器只接受已知父会话的 `subagent.started`，并记录子会话谱系；活跃子会话的 `session.status=idle` 不能释放完成门，必须收到对应父子关系的 `subagent.finished`。可继续的子会话再次 running 会重新进入活跃集合。全部子代理完成后，仍等待父会话处理回传并再次 idle，才允许执行 `mark_job_done` 完成门及最多三次催促。父会话显式错误仍立即失败；取消、超时与清理由原 Job/RuntimeHost 边界负责。
+
+`dsh-0.2.1-rc.2.subagent-lifecycle.json` 是新版真实 SDK + governed profile + 本地 mock Gateway 的协议投影，用于 `runtime-dsh-recovery.test.ts` 回放真实 `runRealAgent`。录制命令为 `DEEPSONAR_DSH_CAPTURE=<path> node agent-harness/dsh-sdk-smoke-driver.mjs <pinned-dsh-bin>`；initial 保留子代理阶段的 session status、started/finished、assistant/user message、turn/end，移除 timestamps、stream、source 和 reasoning，归一化父子 ID 与临时 workspace 路径。followup 来自同一版本的真实 SDK 催促回合（本地 mock 不提交完成回执），不是手写协议。夹具不宣称覆盖全部模型输出或生产任务。
+
+真实 SDK smoke 以父 idle 事件释放子响应，确定性覆盖父先 idle 的顺序，不使用固定 sleep；验证 child finished、子结果内容、父收到结果并再次 idle 后才 shutdown。旧版本夹具保留历史格式证据，新运行时子代理结算只使用上述新版夹具。
 
 ## Contract
 
@@ -45,9 +53,9 @@ The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLI
 
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code` | Claude Code 2.1.296 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
+| `claude-code` | Claude Code 2.1.312 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
 | `pi` | Pi Coding Agent 1.1.0 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
-| `dsh` | DeepSeek Harness 0.2.0-rc.2 | 官方 `dsh --profile` SDK JSON-RPC launcher，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（`run_code`） | yes | `compaction-basic` 自动压缩；同进程 `session/prompt` follow-up；跨进程持久 Session resume 不支持 | DSH profile / Gateway model 配置 | `session.event` 的结构化 reasoning 事件 |
+| `dsh` | DeepSeek Harness 0.2.1-rc.2 | 官方 `dsh --profile` SDK JSON-RPC launcher，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（`run_code`） | yes | `compaction-basic` 自动压缩；同进程 `session/prompt` follow-up；跨进程持久 Session resume 不支持 | DSH profile / Gateway model 配置 | `session.event` 的结构化 reasoning 事件 |
 
 DSH 的首条 system 消息由适配器通过 `DSH_SYSTEM_PROMPT` 投影到 pi-compatible
 `input[0]`，以兼容会按客户端身份过滤的 OpenAI-compatible Gateway；平台 system prompt
@@ -64,7 +72,7 @@ Job 启动前按冻结值物化 `deepsonar` profile，`standard` 配置 native t
 和遥测不进入治理 profile。Skills 只从 Scheduler 物化的 `${DSH_HOME}/skills` 根发现，仓库
 不能添加 discovery root。
 
-官方 CLI 的 package closure 统一固定为 `@deepseek-ai/dsh@0.2.0-rc.2`，锁在
+官方 CLI 的 package closure 统一固定为 `@deepseek-ai/dsh@0.2.1-rc.2`，锁在
 `agent-harness/dsh-runtime/package-lock.json`，镜像在 `/opt/deepsonar/dsh` 执行
 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund`。profile manifest 明确
 `bundles: []`，`packages/runtime-sandbox/src/dsh-profile.ts` 显式列出 core/services,
@@ -73,10 +81,10 @@ agent-spine、UI/web、settings/credential、native-provider、plugin-manager �
 `dsh-reasoning-settings` 不是运行时依赖。安装包虽包含 dormant UI 依赖，profile 不会启动 UI
 或 web server，也不读取 home-level overrides；每次 Job 都重物化 profile/home 配置。
 
-截至 2026-10-10，选择的是官方 [`dsh-v0.2.0-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2)；`0.2.1-alpha.2`（Oct 9）存在但未选。官方源码入口为
-[`apps/cli`](https://github.com/deepseek-ai/deepseek-harness/tree/dsh-v0.2.0-rc.2/apps/cli)、
-[`server.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.0-rc.2/packages/sdk/server/src/server.ts)
-和 [`protocol/types.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.0-rc.2/packages/sdk/protocol/src/types.ts)。
+截至 2026-10-10，选择的是官方 [`dsh-v0.2.1-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-rc.2)；`0.2.1-alpha.2`（Oct 9）存在但未选。官方源码入口为
+[`apps/cli`](https://github.com/deepseek-ai/deepseek-harness/tree/dsh-v0.2.1-rc.2/apps/cli)、
+[`server.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/packages/sdk/server/src/server.ts)
+和 [`protocol/types.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.2/packages/sdk/protocol/src/types.ts)。
 此前的 `dsh-sdk-jsonrpc-demo` entrypoint 已退休；唯一 launcher 是官方 `dsh --profile`。历史纠偏：旧 `0.1.1-rc.2` 路径同样总是调用 `agents.create`，并不支持已持久 Session 的跨进程恢复；此前把它写成“恢复复用精确 session ID”是错误的历史描述。当前 adapter 已明确 `persistentSessionResume: false`，终态返回 `CONTEXT_RESUME_UNSUPPORTED`。
 
 通用 `context_window_tokens` 范围为 1024–10000000。Credential 顶层值是客户端基准，RoleConfig 同名值优先；两者为空时保留 Provider / CLI 默认，建 Job 时冻结解析结果。它只控制客户端预算/压缩落点，不提高 Provider、模型 ID 或账号实际开放的上游窗口；模型目录也只登记 ID，不根据名称或营销标签推断长上下文能力。
@@ -144,7 +152,7 @@ never infers or fabricates reasoning from ordinary text, tool output, or
 terminal lines. If the selected CLI/model does not emit a supported reasoning
 event, the live and archived stream simply contains no reasoning block.
 
-Claude partial frames are enabled only for the pinned 2.1.296 governed minimum
+Claude partial frames are enabled only for the pinned 2.1.312 governed minimum
 above. `content_block_delta` `thinking_delta`/`text_delta` frames are
 normalized to `reasoning.delta`/`text.delta`; the later complete assistant
 message remains accepted for compatibility but is de-duplicated against those
@@ -194,7 +202,7 @@ untrusted general-purpose RPC endpoint is unsupported.
 
 Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensions`，使用
 隔离 HOME `/workspace/.deepsonar-home` 下默认的 `.pi/agent/sessions/<cwd>/` 会话布局；
-不覆盖 `--session-dir`，避免 Pi 1.1.0 返回的会话路径与实际写入路径不一致而在恢复时新建会话。
+不覆盖 `--session-dir`，避免 Pi 1.4.0 返回的会话路径与实际写入路径不一致而在恢复时新建会话。
 每次启动或重启均先发送带请求 ID 的 `get_state`，取得并校验 `sessionId` 与精确
 `sessionFile` 后才允许输入；恢复时两者必须与已绑定身份一致。
 
@@ -215,7 +223,7 @@ U+2028/U+2029 仍保留为数据。
 
 `agent-harness/test-pi-rpc.mjs` 使用确定性 mock provider 驱动真实 Pi 进程，覆盖首次回合、
 空闲 nudge、无效 RPC、SIGKILL 后精确会话恢复及恢复后的回合；同时确认显式扩展生命周期
-与项目 `.pi` 扩展禁止自动加载。可用 `DEEPSONAR_PI_BINARY` 指定本地 Pi 1.1.0 二进制运行，
+与项目 `.pi` 扩展禁止自动加载。可用 `DEEPSONAR_PI_BINARY` 指定本地 Pi 1.4.0 二进制运行，
 未指定时使用官方镜像。2026-10-10 已通过本地真实 CLI 路径；这不代替容器构建、镜像体积、
 沙箱网络隔离或真实厂商模型 E2E。
 
@@ -238,7 +246,7 @@ ambiguous。模型请求统一改写到 Gateway，
 未注册 id、用户上传的扩展源码、以及镜像目录外的 `-e` 路径一律拒绝。出网扩展服从任务
 `allow_egress`；本路径不向快照或工作区写入长期密钥。已注册扩展预置到兼容镜像的
 `/opt/deepsonar/pi-extensions/node_modules/`（pilot `pi-web-access` 只进 audit / kali-minimal，
-不进 size-gated 的 base），与 `@earendil-works/pi-coding-agent@1.1.0` 一样按 version + integrity 校验。
+不进 size-gated 的 base），与 `@earendil-works/pi-coding-agent@1.4.0` 一样按 version + integrity 校验。
 
 ## Verification
 
@@ -265,8 +273,8 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 
 | 契约 | 输入 | 输出 | 家 | 钉死版本 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| 请求兼容投影 | 平台 system prompt | 进入上游 `input[0]` 的 pi-compatible 首帧 | `dsh-request-frame.ts` | DSH `0.2.0-rc.2` | **已完整**。证据：`projectDshSystemPrompt` + `runtime-adapters.test.ts`「DSH request frame」 |
-| 运行事件解码 | CLI 结构化 stdout（Pi RPC JSONL / DSH JSON-RPC） | 宿主归一化事件（`assistant` / `user` / `result` / `unknown_runtime` / `agent_settled`） | `runtime-adapters.ts` `decodePi` / `decodeDsh` | Pi `1.1.0` · DSH `0.2.0-rc.2` | **产品字段已齐**。错误、未知帧、独立 `tool/call` / `tool/result` 均保留可诊断结果 |
+| 请求兼容投影 | 平台 system prompt | 进入上游 `input[0]` 的 pi-compatible 首帧 | `dsh-request-frame.ts` | DSH `0.2.1-rc.2` | **已完整**。证据：`projectDshSystemPrompt` + `runtime-adapters.test.ts`「DSH request frame」 |
+| 运行事件解码 | CLI 结构化 stdout（Pi RPC JSONL / DSH JSON-RPC） | 宿主归一化事件（`assistant` / `user` / `result` / `unknown_runtime` / `agent_settled`） | `runtime-adapters.ts` `decodePi` / `decodeDsh` | Pi `1.4.0` · DSH `0.2.1-rc.2` | **产品字段已齐**。错误、未知帧、独立 `tool/call` / `tool/result` 均保留可诊断结果 |
 | Session 归档 / 查看器 | 沙箱内本次 session artifact | 时间线 / usage / 工具统计 / 原始下载 | `cli-session-adapters.ts` + `apps/web/src/session-viewer/` | 同上 | **已完整**。归档失败显式 `captureError`；查看器 `skipped` + `other` 诊断未知/损坏行；「下载原始文件」不改写字节 |
 
 产品必需字段与真实缺口（只填缺口，已齐层不重写）：
@@ -283,7 +291,8 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 
 版本锁定脱敏夹具：
 
-- 运行事件：`packages/runtime-sandbox/src/fixtures/cli-decode/pi-0.84.4.runtime.jsonl`、`dsh-0.2.0-rc.2.runtime.jsonl`
+- 运行事件（录制时 CLI 为 Pi 1.1.0 / DSH 0.2.0-rc.2；当前钉版本已抬到 Pi 1.4.0 / DSH 0.2.1-rc.2，格式证据沿用，真机录制待重取）：
+  `packages/runtime-sandbox/src/fixtures/cli-decode/pi-0.84.4.runtime.jsonl`、`dsh-0.2.0-rc.2.runtime.jsonl`
 - Session 归档：`apps/web/src/session-viewer/fixtures/cli-decode/pi-0.84.4.session.jsonl`、`dsh-0.2.0-rc.2.session.jsonl`
 - 历史 DSH 夹具 `dsh-0.1.1-rc.2.*` 仅用于旧归档/解码回归，不代表当前 launcher 或 live capture。
 
