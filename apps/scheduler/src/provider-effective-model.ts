@@ -16,7 +16,7 @@ export const CLI_DEFAULT_MODEL_PREFIX = "cli-default:" as const;
 
 /**
  * Built-in model each Agent CLI uses when RoleConfig and settings leave model empty.
- * Keep in sync with the governed CLI pin (Claude Code 2.1.296 → claude-opus-5).
+ * Keep in sync with the governed CLI pin (Claude Code 2.1.312 → claude-opus-5).
  */
 export const AGENT_CLI_BUILTIN_DEFAULT_MODELS: Readonly<Record<string, string>> = Object.freeze({
   "claude-code": "claude-opus-5",

@@ -1,5 +1,5 @@
 // Structural parity with production dsh-profile.ts is checked by runtime-adapters.test.ts.
-export const DSH_VERSION = "0.2.0-rc.2";
+export const DSH_VERSION = "0.2.1-rc.2";
 export const DSH_HOME = "/workspace/.deepsonar-home/.dsh";
 export const DSH_PROFILE = "deepsonar";
 export const DSH_BIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js";
@@ -18,8 +18,9 @@ export function buildDshProfilePatch(options) {
   rows.push({ id: "timer", name: "@deepseek-ai/cordis-plugin-timer" });
   for (const id of ["llm", "session", "session-projection", "agent", "llm-retry", "mcp-resources"]) add(id);
   add("jobs", "jobs-local");
-  add("invariants");
-  for (const id of ["session", "agent", "scope", "agent-loop"]) add(`${id}-invariant`, `${id}/invariant`);
+  // DSH 0.2.1-rc.2 起上游移除了 invariant 插件族（`@deepseek-ai/dsh-invariants` 与
+  // dsh-{session,agent,scope,agent-loop} 的 `./invariant` 子路径），声明它们会让
+  // profile 启动即失败（required plugin did not activate），因此不再加入。
   add("system-prompt", "system-prompt", {
     includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: "__DEEPSONAR_DSH_SYSTEM_PROMPT__",
   });
@@ -32,6 +33,10 @@ export function buildDshProfilePatch(options) {
   add("shell-env");
   add("bash-local", "bash-local", { cwd: options.cwd, timeoutMs: 300000 });
   add("fs-local", "fs-local", { cwd: options.cwd });
+  // DSH 0.2.1-rc.2 起 `workingDirectory` 是独立服务（inject: fs / sessionProjections / systemPrompt），
+  // 不再由旧插件顺带提供：漏声明会让 tool-bash / tool-fs / tool-skill / subagent 与
+  // 必选的 sdk-jsonrpc-server 全部卡在 "Missing services"。
+  add("working-directory", "working-directory", { defaultDirectory: options.cwd });
   add("tool-bash", "tool-bash", { enableRunInBackground: true });
   add("fs-observation-policy");
   add("tool-fs");

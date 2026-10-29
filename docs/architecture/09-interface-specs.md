@@ -13,6 +13,14 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
 
+### Finding 项目查询（#770 切片 B）
+
+现有项目交付页使用 `GET /findings` 的最多 50 条游标页，按创建时间与 UUID 降序；游标保留 PostgreSQL 微秒精度。项目/任务/严重度/profile/类别/验证/处置同维度多选 OR、跨维度 AND；`q` 是标题、位置、摘要、指纹的不区分大小写字面子串，保留中文且转义 SQL 通配符。项目 token 在分页前约束所有项目和任务过滤项；列表与汇总复用同一条件和同项目来源 JOIN。汇总各桶在同一 SQL 快照计算，`total` 表示匹配数，`project_total` 明示为项目全量。列表与汇总为独立请求的当前读视图，不承诺跨请求快照一致；新建/删除/状态更新后需刷新首屏。
+
+任务/profile 选项从未筛选的授权汇总取得，不以当前页推断。URL 保存筛选、游标、详情与交付视图；查询失败隐藏旧列表、计数和详情，重试仍保留 URL。记录展示源 `updated_at`，不虚构异步计算状态。证据内容、任务详情和报告仍由各自 scope 校验，列表权限不扩大证据读取；普通 Job 无新增查询通道。
+
+本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
+
 ## Job-scoped Control API
 
 Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allowlist。Agent 持有短期 capability Bearer token，调用 `/control/v1/jobs/{jobId}/capabilities`、`/openapi.json` 和 operation 入口。宿主依次校验 token hash/Job/project/canvas、Job active 状态、过期/撤销、snapshot hash、operation allowlist、共享 Zod schema、可见引用和业务状态；Job 终态后 token 失效。只读 graph/capability/Skill 查询也受 Job 预算和脱敏约束。

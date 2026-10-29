@@ -1,6 +1,13 @@
 ## [Unreleased]
 
+### 变更
+
+- Agent CLI 治理 pin 抬到当前上游版本（无数据库变更）：Claude Code `2.1.296` → `2.1.312`、Pi Coding Agent `1.1.0` → `1.4.0`、官方 DSH `0.2.0-rc.2` → `0.2.1-rc.2`。base / kali-minimal 两个 Dockerfile 的 ARG 与 npm `sha512` integrity 同步更新；`agent-harness/dsh-runtime` 冻结 lockfile 重生成（新版上游移除了 `@deepseek-ai/dsh-invariants`，清单与 runtime manual 目录一并删除该条目）；`agent-harness/runtime-images.json`、`kali-minimal-runtime.json` 与 `runtime-manuals/catalog.json` 跟着重建，adapter 声明的 `version` 与夹具用例断言同步。Pi 1.4.0 要求 node ≥ 22.19.0，base 镜像的 `node:22-bookworm-slim` 满足。Pi rpc 模式与 DSH `lib/bin.js` 入口在新版本中仍存在；旧夹具录制于 Pi 1.1.0 / DSH 0.2.0-rc.2，仅作格式证据，新版本的 live 解码需真机 Job 复核。治理 profile 同步去掉上游已删除的 invariant 插件族，并补上 0.2.1-rc.2 起独立出来的 `working-directory` 插件（`workingDirectory` 服务原来的提供者不再顺带提供它）（`@deepseek-ai/dsh-invariants` 与 dsh-{session,agent,scope,agent-loop} 的 `./invariant` 子路径），否则 DSH 启动即报 required plugin did not activate（base 镜像的 DSH Cordis 真实容器启动门禁发现）。
+
 ### 修复
+
+- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。无需 schema 变更；生产 17 个 Job 未重跑。
+
 
 - 官方运行时镜像清单拉取不再因单次链路抖动失败（#761）：`github.com/.../releases/latest/download` 会 302 到 `release-assets.githubusercontent.com`，部分网络下首跳常超过 10s；原先每次请求只有一次 10s 硬超时且零重试，表现为 `remote registry request timed out` 反复出现。现在：① 仅对瞬时错误（超时/连接重置/429/5xx）做有界重试（默认 3 次，`DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS` 可调 1–5），鉴权/主机/载荷/体积错误立即失败；② 无 token 时公开通道失败后回退 `api.github.com` 的 release asset；③ 瞬时失败**保留上次成功清单**（`stale`/`consecutive_failures`/`last_success_at`），连续 3 次才降级到 bundled，`stale` 期间不写平台更新检查，横幅不再随单次抖动翻转。不 bump schema。
 - 收口 #761 的两处消抖缺口（#763）：① 清单缓存命中与失败分支改为共用同一个「是否可服务 last-known-good」判断，否则连续失败达到降级阈值后，缓存有效期内的普通读取会把已降级的清单重新放行（`source=remote`/`fallback=false`），与强制刷新结论矛盾；现在降级后缓存命中直接按 bundled 处理且不额外抓取，成功刷新即清零失败次数恢复 remote。② `runtimeImageRegistryWithOverrides` 与 `registryWithEnvOverrides` 两份投影改为只替换 `images`，保留 `stale`/`consecutive_failures`/`last_success_at` 与 `platform`/`platform_version`/`min_runtime_image`——此前 `stale` 在同步链路上被丢弃，导致 stale 清单仍会覆盖上一条平台更新检查记录，`GET /runtime-images/registry` 也无法向前端暴露「沿用上次成功清单」状态。新增 4 个回归用例，反向验证旧实现全红。不 bump schema。
@@ -22,6 +29,9 @@
 - 修复原生 Reverse 构建的 jq/libjq1 版本冲突：两包共同固定到 Debian 安全更新；工具清单与一致性门禁同步。
 - 目标配置预检复用凭据优先的运行时解析，阻止默认凭据、CLI 与模型组合不兼容；同时验证主密钥文件内容及全部已存凭据的 AES-GCM 认证。密钥和密文仅经 stdin 传入断网目标容器，不写入升级记录或诊断；外部认证和模型实际可用性仍不属于离线检查。
 - 排空包括所有终态 Attempt 的未结算/未知效果。共享宿主 `upgrade` 已接只读计划和风险审批、目标配置离线预检、旧数据库身份隔离、备份校验、独立候选库跨 schema 重建、同目标中断续做及显式清单绑定的受管 SSH 控制面/worker 升级。worker 登记、心跳和领取共同校验版本/generation，换代登记及心跳另需当前代秘密，旧身份不能凭公开版本信息恢复执行权。激活前回滚保全源库并保持暂停；激活已发生或结果不明时不自动切回旧数据。最终 schema 61 → 62 的 16 项 Compose 演练及独立知识后台停写场景已通过并清理；Windows 原生锁、私有 ACL 与文件后端已实现并通过原生 CI，但 Windows Docker 完整升级和断电测试未运行，preflight 的 `not_checked` 不算兼容性通过。具体证据与边界见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。
+
+### 修复
+
 
 ### 变更
 

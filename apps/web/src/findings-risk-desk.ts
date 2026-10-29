@@ -1,5 +1,3 @@
-import type { FindingSummary, ProjectFindingsSummary } from "./api";
-
 /** 项目侧合并后的「风险与报告」交付台文案（#561）。 */
 export const PROJECT_DELIVERY_TITLE = "风险与报告";
 export const PROJECT_DELIVERY_CAPTION = "风险发现与交付结论";
@@ -33,46 +31,6 @@ export const PROJECT_RISK_TITLE = PROJECT_DELIVERY_TITLE;
 export const PROJECT_RISK_CAPTION = PROJECT_DELIVERY_CAPTION;
 export const PROJECT_RISK_EYEBROW = PROJECT_DELIVERY_EYEBROW;
 export const PROJECT_RISK_SUBTITLE = PROJECT_DELIVERY_SUBTITLE;
-
-export function findingsListTruncated(loaded: number, total: number): boolean {
-  return total > loaded;
-}
-
-export function canvasScopedTotal(
-  summary: ProjectFindingsSummary | null | undefined,
-  canvasIds: readonly string[],
-): number | null {
-  if (!summary) return null;
-  if (!canvasIds.length) return summary.total;
-  return summary.canvases
-    .filter((canvas) => canvasIds.includes(canvas.id))
-    .reduce((sum, canvas) => sum + canvas.count, 0);
-}
-
-export function filterProjectFindings(
-  rows: readonly FindingSummary[],
-  filters: {
-    severities?: readonly string[];
-    profiles?: readonly string[];
-    verifyStatuses?: readonly string[];
-    dispositions?: readonly string[];
-    canvasIds?: readonly string[];
-    q?: string;
-  },
-): FindingSummary[] {
-  const needle = filters.q?.trim().toLowerCase() ?? "";
-  return rows.filter((finding) => {
-    if (filters.severities?.length && !filters.severities.includes(finding.severity || "unset")) return false;
-    if (filters.profiles?.length && !filters.profiles.includes(finding.profile)) return false;
-    if (filters.verifyStatuses?.length && !filters.verifyStatuses.includes(finding.verify_status ?? "pending")) return false;
-    if (filters.dispositions?.length && !filters.dispositions.includes(String(finding.disposition ?? "open"))) return false;
-    if (filters.canvasIds?.length && !filters.canvasIds.includes(finding.canvas_id ?? "")) return false;
-    if (!needle) return true;
-    const hay =
-      `${finding.title} ${finding.profile} ${finding.category ?? ""} ${finding.summary ?? ""} ${finding.location ?? ""} ${finding.project_name ?? ""} ${finding.canvas_title ?? ""} ${finding.tags_json.join(" ")} ${finding.fingerprint ?? ""}`.toLowerCase();
-    return hay.includes(needle);
-  });
-}
 
 export function researchPriorityLabel(score: number | null | undefined): string | null {
   if (score == null || Number.isNaN(Number(score))) return null;

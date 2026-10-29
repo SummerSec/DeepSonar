@@ -473,7 +473,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须提供按 project、profile、severity、verify_status、disposition 查询 Finding、证据链和项目汇总的管理 API；查询结果不得把 Research priority 或 Fact verification 状态混写成 Finding 技术状态。
 - **决策来源**：管理面需要可筛选的风险对象，维度独立才能正确解释结果。
-- **实现状态**：as-built；Finding、Fact、Research 各自投影字段。
+- **实现状态**：as-built；Finding、Fact、Research 各自投影字段。 #770 切片 B 在现有项目页接通游标分页与服务端多选/字面文本查询，列表和汇总共用筛选口径；资产/版本特征与跨任务关系尚未交付。
 - **代码入口**：[OpenAPI Finding operations](../../apps/scheduler/src/openapi.ts)、[Finding summary](../../apps/scheduler/src/domains/finding-verification/project-findings-summary.ts)、[数据库索引](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:finding-protocol`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:web-facts`。
 

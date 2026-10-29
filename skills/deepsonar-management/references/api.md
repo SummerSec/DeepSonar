@@ -230,7 +230,7 @@ PUT body：
 
 `platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会进入当次 Job 控制 API allowlist，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
 
-DSH 运行时固定为官方 `@deepseek-ai/dsh@0.2.0-rc.2`，由隔离 `agent-harness/dsh-runtime/package-lock.json` 冻结，镜像在 `/opt/deepsonar/dsh` 使用 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，入口为 `dsh --profile`。Job 创建时将 `dsh_task_mode=standard|ptc` 冻结：standard 使用 native tools，ptc 使用 `run_code`。`deepsonar` profile 的 `bundles: []` 与显式 allowlist 不启动 UI/web，不使用 settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 或 home overrides；skills 只从 Scheduler 物化的 `.dsh/skills` 根发现。Provider route/model 只经 Model Gateway，沙箱仅获得短期 Gateway token。官方 JSON-RPC 仅支持 initialize/prompt/shutdown，同进程 follow-up 可用；跨进程持久 resume 不支持，不会静默新建会话或重试。
+DSH 运行时固定为官方 `@deepseek-ai/dsh@0.2.1-rc.2`，由隔离 `agent-harness/dsh-runtime/package-lock.json` 冻结，镜像在 `/opt/deepsonar/dsh` 使用 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，入口为 `dsh --profile`。Job 创建时将 `dsh_task_mode=standard|ptc` 冻结：standard 使用 native tools，ptc 使用 `run_code`。`deepsonar` profile 的 `bundles: []` 与显式 allowlist 不启动 UI/web，不使用 settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 或 home overrides；skills 只从 Scheduler 物化的 `.dsh/skills` 根发现。Provider route/model 只经 Model Gateway，沙箱仅获得短期 Gateway token。官方 JSON-RPC 仅支持 initialize/prompt/shutdown，同进程 follow-up 可用；跨进程持久 resume 不支持，不会静默新建会话或重试。
 
 `runtime_image_key`：
 - `null` = 系统底座（调度默认 deepsonar-base）
