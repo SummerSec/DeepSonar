@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type FindingSummary, type ProjectFindingsSummary, type FindingQueryFilters } from "./api";
 import { FINDING_PAGE_SIZE } from "./finding-query-state";
 
@@ -19,6 +19,7 @@ function emptyState(key: string): QueryState {
 /** Sequential polling avoids overlapping responses; query changes invalidate all visible cached rows. */
 export function useFindingsQuery(scope: "project" | "global", projectId: string | undefined, filters: FindingQueryFilters, after: string | null) {
   const key = JSON.stringify({ scope, projectId, filters, after });
+  const pendingState = useMemo(() => emptyState(key), [key]);
   const [state, setState] = useState<QueryState>(() => emptyState(key));
   useEffect(() => {
     let stopped = false;
@@ -48,5 +49,5 @@ export function useFindingsQuery(scope: "project" | "global", projectId: string 
     void tick();
     return () => { stopped = true; clearTimeout(timer); };
   }, [key]);
-  return state.key === key ? state : emptyState(key);
+  return state.key === key ? state : pendingState;
 }

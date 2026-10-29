@@ -184,9 +184,10 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
     return next;
   });
   useEffect(() => {
-    setSelectedIds((current) => new Set(
-      [...current].filter((id) => rows.some((finding) => finding.id === id && isComposeSeedCandidate(finding))),
-    ));
+    setSelectedIds((current) => {
+      const retained = [...current].filter((id) => rows.some((finding) => finding.id === id && isComposeSeedCandidate(finding)));
+      return retained.length === current.size ? current : new Set(retained);
+    });
   }, [rows]);
 
   if (loading) return <PageSkeleton rows={5} />;
