@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ArtifactClaimInput,
   ArtifactEvidenceInput,
@@ -39,8 +40,23 @@ export interface ArtifactWrite {
   body: Record<string, unknown>;
 }
 
-export function findingArtifactKey(fingerprint: string): string {
-  return `finding:${fingerprint}`;
+export function findingArtifactKey(jobId: string, fingerprint: string): string {
+  return `finding:${jobId}:${fingerprint}`;
+}
+
+/** Full normalized proposal, including raw provenance. Object order is irrelevant;
+ * array order is retained. This digest checks a source conflict, not problem identity. */
+export function findingSourceDigest(finding: NormalizedFindingProposal): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([k, v]) => [k, canonical(v)]));
+    }
+    return value;
+  };
+  return `v1:${createHash("sha256").update(JSON.stringify(canonical(finding))).digest("hex")}`;
 }
 
 function compact<T extends Record<string, unknown>>(value: T): T {
