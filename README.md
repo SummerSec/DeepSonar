@@ -181,6 +181,8 @@ pnpm db:up
 pnpm dev
 ```
 
+`pnpm dev` 与 `pnpm dev:web` 会先通过各自的 `predev` 脚本构建 shared-types、runtime-manual-contract 和 runtime-sandbox，再启动服务。首次启动请等待依赖构建完成；从仓库根目录运行以上命令。
+
 另开终端启动 Web：
 
 ```bash
