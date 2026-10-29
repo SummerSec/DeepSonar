@@ -1504,7 +1504,21 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           }
           const lines: string[] = [];
           if (piFramer) {
-            lines.push(...piFramer.push(chunk.chunk ?? ""));
+            for (const frame of piFramer.pushFrames(chunk.chunk ?? "")) {
+              if (!frame.truncated) {
+                lines.push(frame.line);
+                continue;
+              }
+              // #765：单条事件超过上限时降级为诊断事件，保留后续帧与 Job 本身。
+              spec.onWarning?.({ code: "pi_rpc_event_too_large", detail: `bytes=${frame.bytes};cap=${piFramer.limit}` });
+              spec.onEvent?.({
+                type: "runtime.diagnostic",
+                code: "pi_rpc_event_too_large",
+                bytes: frame.bytes,
+                cap: piFramer.limit,
+                preview: frame.line.slice(0, 512),
+              });
+            }
           } else {
             stdoutBuffer += chunk.chunk ?? "";
             // 其他 CLI 按行解析，未完成的行留给下一个 chunk。

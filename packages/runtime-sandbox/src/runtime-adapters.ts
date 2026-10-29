@@ -163,6 +163,38 @@ export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)
   "platformControlApi",
 ];
 
+/**
+ * 单个 Pi RPC 事件的字节上限（#765）。
+ *
+ * 1MB 的旧上限会让 `cat large.js` / `curl` 整页 / `rg` 全仓这类大输出把 Job 直接判失败
+ * （`PI_RPC_MESSAGE_TOO_LARGE`），而这正是审计最需要证据的维度。默认放宽到 8MB，
+ * 并允许 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖。
+ */
+export const PI_RPC_MAX_EVENT_BYTES_DEFAULT = 8 * 1024 * 1024;
+export const PI_RPC_MAX_EVENT_BYTES_LIMIT = 64 * 1024 * 1024;
+
+export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DEEPSONAR_PI_RPC_MAX_EVENT_BYTES?.trim();
+  if (!raw) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (!/^\d+$/.test(raw)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (value < 1024 * 1024 || value > PI_RPC_MAX_EVENT_BYTES_LIMIT) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  return value;
+}
+
+/** 按 UTF-8 字节上限截断，且不留下半个代理对。 */
+function truncateUtf8(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let sliced = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
+  const last = sliced.charCodeAt(sliced.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) sliced = sliced.slice(0, -1);
+  return sliced;
+}
+
+/** 单帧：超过上限时 `truncated` 为真，`line` 已截到上限，调用方不得再按 JSON 解析。 */
+export interface PiJsonlFrame { line: string; bytes: number; truncated: boolean }
+
 /** Pi 官方 RPC 只按 LF 分隔 JSONL；U+2028/U+2029 始终是字符串数据。 */
 export class PiJsonlFramer {
   private buffer = "";
@@ -170,12 +202,23 @@ export class PiJsonlFramer {
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
   private readonly maxBytes: number;
 
-  constructor(maxBytes = 1024 * 1024) {
+  constructor(maxBytes = piRpcMaxEventBytes()) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("PI_RPC_MAX_BYTES_INVALID");
     this.maxBytes = maxBytes;
   }
 
   push(chunk: string | Uint8Array): string[] {
+    return this.pushFrames(chunk).map((frame) => {
+      if (frame.truncated) throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
+      return frame.line;
+    });
+  }
+
+  /**
+   * #765：超限单帧不再中断整条流，而是标记 `truncated` 交给调用方降级处理
+   * （记诊断事件后跳过解析），其余帧照常返回。
+   */
+  pushFrames(chunk: string | Uint8Array): PiJsonlFrame[] {
     if (this.ended) throw new Error("PI_RPC_FRAMER_ENDED");
     if (typeof chunk === "string") {
       this.buffer += chunk;
@@ -188,7 +231,7 @@ export class PiJsonlFramer {
         throw new Error("PI_RPC_INVALID_UTF8");
       }
     }
-    const lines: string[] = [];
+    const frames: PiJsonlFrame[] = [];
     while (true) {
       const index = this.buffer.indexOf("\n");
       if (index < 0) break;
@@ -200,19 +243,26 @@ export class PiJsonlFramer {
         this.buffer = "";
         throw new Error("PI_RPC_EMPTY_FRAME");
       }
-      if (Buffer.byteLength(normalized, "utf8") > this.maxBytes) {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
-      }
-      lines.push(normalized);
+      frames.push(this.frame(normalized));
     }
+    // 未闭合行超过上限时只保留前缀，避免无界内存增长；完成时照样标记为截断帧。
     if (Buffer.byteLength(this.buffer, "utf8") > this.maxBytes) {
-      this.ended = true;
-      this.buffer = "";
-      throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
+      this.buffer = truncateUtf8(this.buffer, this.maxBytes);
+      this.truncating = true;
     }
-    return lines;
+    return frames;
+  }
+
+  /** 当前单帧字节上限；用于诊断事件与运维排查。 */
+  get limit(): number { return this.maxBytes; }
+
+  private truncating = false;
+
+  private frame(line: string): PiJsonlFrame {
+    const bytes = Buffer.byteLength(line, "utf8");
+    if (!this.truncating && bytes <= this.maxBytes) return { line, bytes, truncated: false };
+    this.truncating = false;
+    return { line: truncateUtf8(line, this.maxBytes), bytes, truncated: true };
   }
 
   finish(): string[] {
@@ -269,7 +319,7 @@ const PI_RPC_EVENT_TYPES = new Set([
   "follow_up",
 ]);
 
-export function parsePiJsonlRecord(line: string, maxBytes = 1024 * 1024): Record<string, unknown> {
+export function parsePiJsonlRecord(line: string, maxBytes = piRpcMaxEventBytes()): Record<string, unknown> {
   if (Buffer.byteLength(line, "utf8") > maxBytes) throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
   if (!line) throw new Error("PI_RPC_EMPTY_FRAME");
   let value: unknown;

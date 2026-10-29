@@ -23,6 +23,18 @@
 - 目标配置预检复用凭据优先的运行时解析，阻止默认凭据、CLI 与模型组合不兼容；同时验证主密钥文件内容及全部已存凭据的 AES-GCM 认证。密钥和密文仅经 stdin 传入断网目标容器，不写入升级记录或诊断；外部认证和模型实际可用性仍不属于离线检查。
 - 排空包括所有终态 Attempt 的未结算/未知效果。共享宿主 `upgrade` 已接只读计划和风险审批、目标配置离线预检、旧数据库身份隔离、备份校验、独立候选库跨 schema 重建、同目标中断续做及显式清单绑定的受管 SSH 控制面/worker 升级。worker 登记、心跳和领取共同校验版本/generation，换代登记及心跳另需当前代秘密，旧身份不能凭公开版本信息恢复执行权。激活前回滚保全源库并保持暂停；激活已发生或结果不明时不自动切回旧数据。最终 schema 61 → 62 的 16 项 Compose 演练及独立知识后台停写场景已通过并清理；Windows 原生锁、私有 ACL 与文件后端已实现并通过原生 CI，但 Windows Docker 完整升级和断电测试未运行，preflight 的 `not_checked` 不算兼容性通过。具体证据与边界见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。
 
+### 修复
+
+- Pi RPC 单条事件超过上限不再直接判 Job 失败（#765）：`PiJsonlFramer` 的 1MB 硬上限会让
+  `cat large.js` / `curl` 整页 / `rg` 全仓 / 完整构建日志这类大输出以 `PI_RPC_MESSAGE_TOO_LARGE`
+  终止 Job，而失败集中的审计维度（XSS、SQLi、认证绕过、RCE、密钥导出链）恰恰最需要大证据输出。
+  现在：① 单帧上限默认放宽到 8MB，可用 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖；
+  ② 新增 `PiJsonlFramer.pushFrames()`，超限帧标记 `truncated` 并截到上限，由 runtime 记录
+  `runtime.diagnostic`（code `pi_rpc_event_too_large`，带原始字节数与 cap）与 `spec.onWarning`，
+  跳过该帧解析但保留同批其余帧与整条流；未闭合行超限时只保留前缀，避免无界内存增长；
+  ③ 旧 `push()` 仍对超限帧抛 `PI_RPC_MESSAGE_TOO_LARGE`，既有契约不变；`parsePiJsonlRecord` 的默认上限同步放宽。
+  不 bump schema。
+
 ### 变更
 
 - **平台镜像改按不可变 digest 部署（#740 P1 第 3 片，不兼容）**：`deploy/docker-compose.prod.yml` 与 `docker-compose.opensandbox.host.yml` 的 scheduler / web / image-admission 改为每个镜像一个完整引用变量 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；删除 `DEEPSONAR_IMAGE_TAG`，不保留兼容。`/health.version` 与版本发现只认显式 `DEEPSONAR_VERSION`，不再回退镜像 tag。`deploy.sh`（新增共享校验 `deploy/platform-images.sh`）与 `deploy.ps1` 发现 `deploy/.env` 或进程环境中的旧变量、可变 tag、仓库名不符的 digest、缺失或带 `v` 前缀的 `DEEPSONAR_VERSION` 时 fail closed，逐项列出问题并打印应从 `deploy/.env.example` 复制的四行；不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量；`up real build` 临时把平台镜像标记为 `deepsonar-*:local-build`，不改写 `.env`。官方 helper / Silo 改按 `DEEPSONAR_VERSION` 标签解析后固定为 RepoDigest。`deploy/.env.example` 写入 v0.5.6 的真实 index digest（ACR / GHCR 一致）。新增 `deploy/deploy-platform-images.test.mjs`，对 sh 与 PowerShell 两侧用假 docker 端到端覆盖首次生成、按 digest 拉取与各类拒绝路径；OpenSandbox PoC 夹具改读 `.env.example` 的 digest 行。当前维护升级与验收边界见本区安全修复条目。

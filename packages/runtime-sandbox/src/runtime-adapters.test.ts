@@ -16,6 +16,7 @@ import {
   resolvePiCliModelId,
   splitPiModelRef,
   PiJsonlFramer,
+  piRpcMaxEventBytes,
   agentCliIdsCompatibleWithImage,
   applyRuntimeOutput,
   applyRuntimeOutputText,
@@ -838,4 +839,37 @@ test("DSH RC rejects unscoped lifecycle and keeps child status separate", () => 
   const tool = adapter.decodeOutput({ jsonrpc: "2.0", method: "session.event", params: { sessionId: "session-parent", event: { type: "tool/result", data: { message: { id: "message-id", toolCallId: "call-id", isError: true, content: [{ type: "text", text: "failure" }] } } } } }, state);
   assert.match(JSON.stringify(tool), /"tool_use_id":"call-id"/);
   assert.match(JSON.stringify(tool), /"is_error":true/);
+});
+
+test("#765 单帧超过上限时降级为截断帧，其余帧与流不受影响", () => {
+  const cap = 1024 * 1024;
+  const framer = new PiJsonlFramer(cap);
+  const big = JSON.stringify({ type: "message_update", text: "x".repeat(cap + 10) });
+  const frames = framer.pushFrames(`${big}\n{"type":"agent_settled"}\n`);
+  assert.equal(frames.length, 2);
+  assert.equal(frames[0]!.truncated, true, "超限帧必须标记 truncated");
+  assert.ok(frames[0]!.bytes > cap);
+  assert.ok(Buffer.byteLength(frames[0]!.line, "utf8") <= cap, "载荷截到上限");
+  assert.equal(frames[1]!.truncated, false, "后续帧照常返回");
+  assert.equal(frames[1]!.line, '{"type":"agent_settled"}');
+  assert.equal(framer.limit, cap);
+});
+
+test("#765 旧 push() 仍对超限帧抛 PI_RPC_MESSAGE_TOO_LARGE（兼容既有契约）", () => {
+  const framer = new PiJsonlFramer(8);
+  assert.throws(() => framer.push('{"type":"message_update","text":"0123456789"}\n'), /PI_RPC_MESSAGE_TOO_LARGE/);
+});
+
+test("#765 上限默认 8MB 且可由环境变量在 1MB–64MB 内覆盖", () => {
+  assert.equal(piRpcMaxEventBytes({}), 8 * 1024 * 1024);
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(2 * 1024 * 1024) }), 2 * 1024 * 1024);
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: "1024" }), 8 * 1024 * 1024, "低于下限回落默认");
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: "abc" }), 8 * 1024 * 1024);
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(128 * 1024 * 1024) }), 8 * 1024 * 1024, "高于上限回落默认");
+});
+
+test("#765 2MB 级事件在默认上限下不再被判超限", () => {
+  const record = { type: "message_update", text: "y".repeat(2 * 1024 * 1024) };
+  const line = JSON.stringify(record);
+  assert.equal(parsePiJsonlRecord(line).type, "message_update");
 });
