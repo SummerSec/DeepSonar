@@ -55,7 +55,7 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 | [0005](0005-event-evidence-stream.md) | events / evidence / stream-bus 三职责，bus 非权威 | 已采纳（历史回填） | #388 / [`process-stream-policy.ts`](../../../apps/scheduler/src/process-stream-policy.ts) |
 | [0006](0006-runtime-image-admission.md) | 运行镜像统一由平台目录准入，Job 冻结 digest | 已采纳（历史回填） | #674 / #676 / #691 / [`runtime-images.ts`](../../../apps/scheduler/src/runtime-images.ts) |
 | [0007](0007-paused-upgrade-recovery.md) | 同 schema 升级回滚保留数据库并保持暂停 | 已采纳 | #740 / #747 |
-| [0008](0008-maintenance-candidate-upgrade.md) | 维护升级以身份隔离、候选库和激活回执保护写入 | 已采纳；接线/端到端验收进行中，扩展 0007 的适用限制 | #740 / #747 / 用户维护授权 |
+| [0008](0008-maintenance-candidate-upgrade.md) | 维护升级以身份隔离、候选库和激活回执保护写入 | 已采纳；接线及隔离 Compose 演练已有证据，范围见 [升级演练](../../../deploy/UPGRADE_REHEARSAL.md)；扩展 0007 的适用限制 | #740 / #747 / 用户维护授权 |
 
 ---
 
@@ -94,3 +94,5 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 
 逐条列出被考虑过的方案，以及不选的理由。
 ```
+
+#770 A 的独立评审提议见 [0009 Finding 来源身份](0009-finding-source-identity.md)。

@@ -48,7 +48,7 @@ jobs:
         run: node --test deploy/platform-upgrade-lock.test.mjs deploy/platform-upgrade-windows.test.mjs deploy/platform-upgrade-filesystem.test.mjs deploy/platform-upgrade-preflight-windows.test.mjs
 
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
       postgres:
@@ -73,8 +73,18 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Select PostgreSQL 16 client (matches the service)
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client-16
+          fi
+          dump_version="$(/usr/lib/postgresql/16/bin/pg_dump --version)"
+          restore_version="$(/usr/lib/postgresql/16/bin/pg_restore --version)"
+          echo "$dump_version"
+          echo "$restore_version"
+          [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]]
+          [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]]
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
 
       - run: pnpm install --frozen-lockfile
 

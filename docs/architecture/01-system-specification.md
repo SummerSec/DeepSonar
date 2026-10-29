@@ -455,9 +455,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-FIND-002 Finding 唯一性与证据引用
 
-- **规范要求**：同一项目的 Finding 必须以稳定 fingerprint 幂等，保留来源 Job、Artifact、Canvas node 和 evidence_refs；不允许用标题文本替代 canonical Finding UUID 或跨项目引用。
-- **决策来源**：去重、Verify、Report 和人工处置都依赖稳定身份。
-- **实现状态**：as-built；项目+fingerprint 唯一索引和 canonical UUID 校验已落地。
+- **规范要求**：同一 Job 的 Finding 必须以稳定 fingerprint 保留来源幂等；不同 Job/任务必须保留独立来源，保留来源 Job、Artifact、Canvas node 和 evidence_refs；不允许用标题文本替代 canonical Finding UUID 或跨项目引用。
+- **决策来源**：来源、Verify、Report 和人工处置依赖稳定身份；#770 评审要求跨任务关联不得提前抹去独立来源。
+- **实现状态**：as-built（#770 A）；Job+fingerprint 唯一索引和 canonical UUID 校验已落地；提交幂等与来源身份独立，同来源内容冲突拒绝，历史记录保留。
 - **代码入口**：[Finding schema](../../database/schema.sql)、[Finding trace](../../apps/scheduler/src/finding-trace.ts)、[Graph reference validation](../../apps/scheduler/src/graph.ts)。
 - **验证证据**：`pnpm ci:unit:finding-protocol`、`pnpm ci:unit:graph-references`、`pnpm ci:integration:finding-protocol`。
 
@@ -481,7 +481,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须提供按 project、profile、severity、verify_status、disposition 查询 Finding、证据链和项目汇总的管理 API；查询结果不得把 Research priority 或 Fact verification 状态混写成 Finding 技术状态。
 - **决策来源**：管理面需要可筛选的风险对象，维度独立才能正确解释结果。
-- **实现状态**：as-built；Finding、Fact、Research 各自投影字段。
+- **实现状态**：as-built；Finding、Fact、Research 各自投影字段。 #770 切片 B 在现有项目页接通游标分页与服务端多选/字面文本查询，列表和汇总共用筛选口径；资产/版本特征与跨任务关系尚未交付。
 - **代码入口**：[OpenAPI Finding operations](../../apps/scheduler/src/openapi.ts)、[Finding summary](../../apps/scheduler/src/domains/finding-verification/project-findings-summary.ts)、[数据库索引](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:finding-protocol`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:web-facts`。
 
@@ -1103,9 +1103,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：`database/schema.sql` 必须是唯一 schema 基线且与 `SCHEMA_VERSION` 同步；改表必须修改基线、bump 版本并重建/验证，不得添加启动时增量 ALTER 链或按旧版本隐式迁移。
 - **决策来源**：稳定列、外键、唯一约束和权限骨架需要可审计的单一来源。
-- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，选定 9 项中断/排空场景已通过，最终组合基线验收待完成。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
+- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，最终 schema 61 → 62 组合镜像的隔离演练已有通过记录，具体范围见下述验证证据。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
 - **代码入口**：[schema version](../../apps/scheduler/src/schema-version.ts)、[schema rebuild](../../apps/scheduler/src/schema-rebuild.ts)、[database baseline](../../database/schema.sql)、[维护升级状态机](../../deploy/platform-upgrade-maintenance.mjs)、[候选库管理](../../deploy/platform-upgrade-candidate.mjs)、[只读计划](../../apps/scheduler/src/platform-upgrade-schema-plan.ts)。
-- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，真实单机及多节点成功场景已通过，选定 9 项中断/排空场景已通过，剩余恢复场景及最终组合基线镜像待验收，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
+- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，包含单机、多节点、回滚恢复、中断续做及排空阻断。历史输入版本、隔离环境与未执行项见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；这些记录不代表当前提交重跑通过，也不证明 Windows Docker 全流程或真实模型效果。
 
 ### CON-004 API-only Control 面
 

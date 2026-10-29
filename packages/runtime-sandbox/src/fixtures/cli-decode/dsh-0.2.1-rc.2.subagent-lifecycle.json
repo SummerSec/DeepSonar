@@ -1,0 +1,469 @@
+{
+  "initial": [
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "parent-recorded",
+        "status": "running"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "user/message",
+          "seq": 5,
+          "data": {
+            "content": [
+              {
+                "type": "text",
+                "text": "subagent smoke"
+              }
+            ],
+            "role": "user",
+            "id": "df504610-619c-4bf2-9d46-389e6338b39d"
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "user/message",
+          "seq": 6,
+          "data": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent working directory: \"/workspace\"."
+              }
+            ],
+            "role": "user",
+            "id": "0101ee6d-18a2-4e6e-ae6e-7ac7570f94f8"
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "assistant/message",
+          "seq": 9,
+          "data": {
+            "turn": 1,
+            "step": 1,
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "tool-call",
+                  "id": "smoke-call",
+                  "name": "subagent",
+                  "arguments": "{\"description\":\"Check inherited gateway route\",\"prompt\":\"child-smoke\"}"
+                }
+              ],
+              "id": "7681e329-f0e8-4b68-bab9-f9f5a2e61772"
+            },
+            "usage": {
+              "inputTokens": 12,
+              "outputTokens": 3,
+              "totalTokens": 15
+            }
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "subagent.started",
+      "params": {
+        "parentSessionId": "parent-recorded",
+        "childSessionId": "child-recorded"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "child-recorded",
+        "status": "running"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "child-recorded",
+        "event": {
+          "type": "user/message",
+          "seq": 6,
+          "data": {
+            "content": [
+              {
+                "type": "text",
+                "text": "child-smoke"
+              },
+              {
+                "type": "text",
+                "text": "Your parent agent id is \"parent-recorded\". Before you finish, send your result to that agent with send_message({ agent_id: \"parent-recorded\", message: \"<self-contained result>\" }). The parent shares your workspace but does not automatically receive your transcript, tool output, or reasoning. Send earlier messages as well when a finding changes what the parent should do next; sending a message does not end your turn."
+              }
+            ],
+            "role": "user",
+            "id": "09d3f50f-1d0f-48c9-96ed-1d79e98c19b7"
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "child-recorded",
+        "event": {
+          "type": "user/message",
+          "seq": 7,
+          "data": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent working directory: \"/workspace\"."
+              }
+            ],
+            "role": "user",
+            "id": "f33927f5-0674-4b56-ac79-d767128f41f8"
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "assistant/message",
+          "seq": 15,
+          "data": {
+            "turn": 1,
+            "step": 2,
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "subagent-final"
+                }
+              ],
+              "id": "6b5c0f6b-86e9-4d19-9fe6-1d81f2d7e6b7"
+            },
+            "usage": {
+              "inputTokens": 12,
+              "outputTokens": 3,
+              "totalTokens": 15
+            }
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "turn/end",
+          "seq": 17,
+          "data": {
+            "turn": 1,
+            "reason": {
+              "kind": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "parent-recorded",
+        "status": "idle"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "child-recorded",
+        "event": {
+          "type": "assistant/message",
+          "seq": 10,
+          "data": {
+            "turn": 1,
+            "step": 1,
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "child-verified"
+                }
+              ],
+              "id": "50d9efcd-6df6-40c8-805f-8b7a59a6a912"
+            },
+            "usage": {
+              "inputTokens": 12,
+              "outputTokens": 3,
+              "totalTokens": 15
+            }
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "child-recorded",
+        "event": {
+          "type": "turn/end",
+          "seq": 12,
+          "data": {
+            "turn": 1,
+            "reason": {
+              "kind": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "child-recorded",
+        "status": "idle"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "parent-recorded",
+        "status": "running"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "subagent.finished",
+      "params": {
+        "provider": "spawn",
+        "agentId": "child-recorded",
+        "parentSessionId": "parent-recorded",
+        "childSessionId": "child-recorded",
+        "status": "ok",
+        "stopReason": "completed",
+        "lastAssistantMessage": [
+          {
+            "type": "reasoning",
+            "text": "smoke reasoning"
+          },
+          {
+            "type": "text",
+            "text": "child-verified"
+          }
+        ]
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "user/message",
+          "seq": 22,
+          "data": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Background subagent child-recorded finished and will do no further work unless you send it more."
+              },
+              {
+                "type": "text",
+                "text": "Its closing message:"
+              },
+              {
+                "type": "text",
+                "text": "child-verified"
+              }
+            ],
+            "role": "user",
+            "id": "e5a793ea-c053-4b8a-b683-d0318116791f"
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "assistant/message",
+          "seq": 23,
+          "data": {
+            "turn": 2,
+            "step": 1,
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "subagent-final"
+                }
+              ],
+              "id": "6f7e1e38-439b-48aa-ab2b-04d38b829792"
+            },
+            "usage": {
+              "inputTokens": 12,
+              "outputTokens": 3,
+              "totalTokens": 15
+            }
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "turn/end",
+          "seq": 25,
+          "data": {
+            "turn": 2,
+            "reason": {
+              "kind": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "parent-recorded",
+        "status": "idle"
+      }
+    }
+  ],
+  "followup": [
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "parent-recorded",
+        "status": "running"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "user/message",
+          "seq": 38,
+          "data": {
+            "content": [
+              {
+                "type": "text",
+                "text": "协议要求的系统工具调用还没有完成。请立即通过 Job 控制 API 提交（不要只用文本描述），然后结束本轮。"
+              }
+            ],
+            "role": "user",
+            "id": "6a421f3a-d91a-4bcd-817b-05c1bf0899a3"
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "assistant/message",
+          "seq": 39,
+          "data": {
+            "turn": 4,
+            "step": 1,
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "subagent-final"
+                }
+              ],
+              "id": "a2d0763e-02bf-402d-b2ac-8ab3fff621b3"
+            },
+            "usage": {
+              "inputTokens": 12,
+              "outputTokens": 3,
+              "totalTokens": 15
+            }
+          },
+          "surfaceOp": "append"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.event",
+      "params": {
+        "sessionId": "parent-recorded",
+        "event": {
+          "type": "turn/end",
+          "seq": 41,
+          "data": {
+            "turn": 4,
+            "reason": {
+              "kind": "completed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session.status",
+      "params": {
+        "sessionId": "parent-recorded",
+        "status": "idle"
+      }
+    }
+  ]
+}

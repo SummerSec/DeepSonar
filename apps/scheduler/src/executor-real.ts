@@ -1512,7 +1512,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let platformToken: string | null = platformCapability.token;
   let platformRuntimeRegistered = false;
   try {
-  registerJobEvidenceSecrets(jobId, [platformToken]);
+  registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken].filter((value): value is string => Boolean(value)));
 
   const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
   const runtimePlatformHandler = async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
@@ -1730,6 +1730,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         inc("deepsonar_control_input_warnings_total", { reason: warning.code });
         console.warn(`[real-agent] ${warning.code} in job ${jobId}: ${warning.detail ?? ""}`);
       },
+      onRuntimeArtifact: (artifact) => evidenceWriter.appendRuntimeArtifact(artifact),
       onEvent: (e) => {
         const type = String(e.type ?? "");
         const persisted = evidenceWriter.appendNormalized(e);
