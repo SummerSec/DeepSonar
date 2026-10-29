@@ -332,3 +332,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - [`database/schema.sql`](database/schema.sql)：唯一数据库基线；
 - `/api/openapi.json`：当前 HTTP API；
 - [`AGENTS.md`](AGENTS.md)：编码 Agent 的操作纪律。
+
+### 项目知识独立研究准备（#777）
+
+[离线对照协议](agent-harness/knowledge-live/STUDY.md) 提供冻结样本、独立 oracle、预算/版本预检和待执行报告模板；复用现有知识 Job/work/receipt，不新增执行通道。#752 的实现验收保持完成，真实模型闭环和收益研究尚未执行。
