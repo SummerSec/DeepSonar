@@ -56,6 +56,10 @@ python scripts/deepsonar-api.py tasks pause <canvasId>   # drain pause；不强�
 python scripts/deepsonar-api.py tasks start <canvasId>   # 不清 schedule、不重试失败 Job
 python scripts/deepsonar-api.py tasks retry <canvasId>
 
+# 下发前先过检查表：共用规则 references/task-dispatch.md（八项要求、拆分依据、可选 task_contract、
+# 创建/派发前校验）；白盒 references/whitebox-checklist.md；黑盒/灰盒 references/blackbox-checklist.md。
+# 说明写全不等于具备执行条件：材料、凭据引用、账号/租户、构建入口未知时写「缺失」，不要补写成已确认。
+
 # Job
 python scripts/deepsonar-api.py jobs list [--project <projectId>]
 python scripts/deepsonar-api.py jobs get <jobId>
