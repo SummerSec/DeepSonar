@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -86,3 +86,7 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 ## 6. 维护入口
 
 风险登记与专题事实的交叉索引在 [`docs/README.md`](../README.md) 和 [`DESIGN.md`](../../DESIGN.md)；架构文档变更按照 [`11-engineering-specs.md`](11-engineering-specs.md) 和 [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 的完整变更面处理。新增风险应优先引用代码/测试入口，避免只引用旧计划或未核实的历史结论。
+
+## #775：有界补证仍未实现
+
+当前 Plan 审计不能证明目标完成，也不派发工作。A 的独立草稿与 B 后续切片状态见 [有界 Intent 设计](../PLAN_BOUNDED_INTENT_DESIGN.md)；版本 CAS、当前来源校验、单步预算与控制 API 到既有 Intent 的真实 DB 回归通过前，不得宣称 B 已交付。真实模型收益和 C 仍待受控验收。
