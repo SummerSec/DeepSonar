@@ -131,6 +131,15 @@ export interface RuntimeImageRegistry {
   source?: RuntimeImageRegistryMetadataSource;
   fallback?: boolean;
   error?: string | null;
+  /**
+   * #761：服务的是「上次成功清单」而非本次拉取结果。
+   * 仅当拉取瞬时失败且未达降级阈值时为 true；平台更新检查据此不降级。
+   */
+  stale?: boolean;
+  /** #761：连续拉取失败次数；成功时为 0/undefined。 */
+  consecutive_failures?: number;
+  /** #761：最近一次成功拉取时间（ISO 8601）。 */
+  last_success_at?: string;
   checked_at?: string;
 }
 

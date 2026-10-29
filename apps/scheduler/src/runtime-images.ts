@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { agentCliIdsCompatibleWithImage } from "@deepsonar/runtime-sandbox";
-import { OFFICIAL_RUNTIME_IMAGE_KEYS, isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
+import { isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
 import { inspectLocalRuntimeImage } from "./runtime-image-local-inspection.js";
 import {
   toolsManifestSha256SyncChange,
@@ -19,24 +18,9 @@ import {
   type RuntimeImagePullItem,
   type RuntimeImagePullTask,
 } from "./runtime-image-pull-status.js";
-import {
-  RUNTIME_IMAGE_PULL_MAX_ATTEMPTS,
-  classifyRuntimeImagePullFailure,
-  isRetryableRuntimeImagePullFailure,
-  logRuntimeImagePullAttempt,
-  recordRuntimeImagePullSpeed,
-  resolveRuntimeImagePullTimeoutSec,
-  type RuntimeImagePullFailureClass,
-} from "./runtime-image-pull-timeout.js";
+import { classifyRuntimeImagePullFailure } from "./runtime-image-pull-timeout.js";
 
-import {
-  RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
-  RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
-  RUNTIME_IMAGE_PULL_MAX_ERROR_BYTES,
-  immutableDigest,
-  localImageDigest,
-  sanitizeRuntimeImageError,
-} from "./runtime-image-oci.js";
+import { immutableDigest, localImageDigest, sanitizeRuntimeImageError } from "./runtime-image-oci.js";
 export {
   RUNTIME_IMAGE_CHANNEL_TIMEOUT_FALLBACK_ERROR,
   RUNTIME_IMAGE_DIGEST_NOT_FOUND_ERROR,
@@ -47,12 +31,7 @@ export {
 import {
   assertRuntimeImageAvailable,
   configureRuntimeImageEnsureCatalogLoader,
-  ensureRuntimeImageAvailable,
-  isDigestNotFoundError,
-  isTransientRegistryTransportError,
-  localRuntimeImageMatchesRef,
   prepareRuntimeImage,
-  verifiedSameDigestChannelRefs,
   type RuntimeImageEnsureDependencies,
   type RuntimeImagePreparationResult,
   type StartRuntimeImagePullInput,
@@ -76,7 +55,6 @@ import {
   classifyRuntimeImageReadinessFromState,
   hostManagesRuntimeImageLayers,
   toRuntimeImageStatusEntry,
-  type RuntimeImageReadiness,
   type RuntimeImageReadinessView,
   type RuntimeImageStatusEntry,
 } from "./runtime-image-readiness.js";
@@ -97,6 +75,8 @@ import {
 } from "./runtime-image-registry-contract.js";
 import { type HubRuntimeImageCapability, type HubRuntimeImageCatalogEntry, hubRuntimeImageCapability, officialHubRuntimeImageCapabilityKeys, toHubRuntimeImageCatalogEntry } from "./hub-runtime-image-capability.js";
 import { recordPlatformUpdateCheckFromRegistry } from "./domains/platform-updates/index.js";
+import { fetchGithubResource, fetchOfficialRegistryText, isRetryableRegistryFetchError } from "./runtime-image-registry-fetch.js";
+export { fetchGithubResource, isRetryableRegistryFetchError };
 export type { HubRuntimeImageCapability, HubRuntimeImageCatalogEntry };
 export { hubRuntimeImageCapability, officialHubRuntimeImageCapabilityKeys, toHubRuntimeImageCatalogEntry };
 
@@ -134,12 +114,10 @@ export { OFFICIAL_RUNTIME_IMAGE_KEYS, isOfficialRuntimeImageKey } from "./runtim
 export const RUNTIME_IMAGE_CONTRACT = "deepsonar.runtime.contract/v1";
 /** Legacy schema constant retained for existing callers; v2 is accepted by the parser. */
 export const RUNTIME_IMAGE_REGISTRY_SCHEMA = RUNTIME_IMAGE_REGISTRY_SCHEMA_V1;
-const OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL = "https://github.com/SummerSec/DeepSonar/releases/latest/download/runtime-image-registry.json";
-const OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS = new Set(["github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"]);
-const OFFICIAL_RUNTIME_IMAGE_REGISTRY_AUTH_HOSTS = new Set(["github.com", "api.github.com"]);
-const RUNTIME_IMAGE_REGISTRY_MAX_BYTES = 1024 * 1024;
 const RUNTIME_IMAGE_REGISTRY_CACHE_MS = 5 * 60_000;
 const RUNTIME_IMAGE_REGISTRY_RETRY_MS = 60_000;
+/** #761：连续失败到此阈值才真降级到 bundled，避免单次瞬时失败翻状态。 */
+const RUNTIME_IMAGE_REGISTRY_STALE_FAILURE_LIMIT = 3;
 
 export type RuntimeImageRegistryVersion = RuntimeImageRegistryVersionContract;
 export type RuntimeImageRegistry = RuntimeImageRegistryContract;
@@ -205,7 +183,22 @@ export type {
 export { assertHubRuntimeImageReady } from "./runtime-image-readiness.js";
 
 let runtimeImagePullTask: RuntimeImagePullTask | null = null;
-let remoteRegistryCache: { registry: RuntimeImageRegistry | null; checked_at: number; error: string | null } | null = null;
+type RemoteRegistryCache = {
+  registry: RuntimeImageRegistry | null;
+  checked_at: number;
+  /** 最近一次失败原因；成功时为 null。 */
+  error: string | null;
+  /** #761：连续失败次数，用于「保留上次成功清单」的阈值判定。 */
+  consecutive_failures: number;
+  /** #761：最近一次成功拉取时间；首次成功前为 null。 */
+  last_success_at: number | null;
+};
+let remoteRegistryCache: RemoteRegistryCache | null = null;
+
+/** Test-only: drop the process-wide remote registry cache. */
+export function resetRemoteRuntimeImageRegistryCacheForTests(): void {
+  remoteRegistryCache = null;
+}
 
 export interface RuntimeImageSnapshot {
   runtime_image_id: string | null;
@@ -860,108 +853,61 @@ function registryFetchError(error: unknown): string {
 }
 
 /** Exported for deterministic backend tests; host/redirect guards stay inside. */
-export async function fetchGithubResource(target: URL, accept: string, token?: string): Promise<string> {
-  let authorization = token ? `Bearer ${token}` : undefined;
-  for (let redirects = 0; redirects <= 5; redirects += 1) {
-    if (target.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(target.hostname)) {
-      throw new Error("official registry host rejected");
-    }
-    const headers: Record<string, string> = { accept, "user-agent": "DeepSonar-Scheduler/1" };
-    // Never carry the GitHub token to release-assets/objects or an arbitrary
-    // redirect target. Only the fixed github.com/api.github.com trust boundary
-    // may receive Authorization.
-    if (authorization && OFFICIAL_RUNTIME_IMAGE_REGISTRY_AUTH_HOSTS.has(target.hostname)) headers.authorization = authorization;
-    const response = await fetch(target, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(10_000),
-      headers,
-    });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (!location || redirects >= 5) throw new Error("official registry redirect rejected");
-      const next = new URL(location, target);
-      // A redirect to release-assets/objects is allowed for GitHub release
-      // assets, but the token is deliberately dropped on the next request.
-      if (next.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(next.hostname)) {
-        throw new Error("official registry redirect host rejected");
-      }
-      target = next;
-      authorization = undefined;
-      continue;
-    }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const finalUrl = new URL(response.url || target.toString());
-    if (finalUrl.protocol !== "https:" || !OFFICIAL_RUNTIME_IMAGE_REGISTRY_HOSTS.has(finalUrl.hostname)) {
-      throw new Error("official registry final host rejected");
-    }
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredLength) && declaredLength > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
-      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
-    }
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
-      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
-    }
-    return text;
-  }
-  throw new Error("official registry redirect rejected");
+async function fetchOfficialRuntimeRegistry(): Promise<RuntimeImageRegistry> {
+  // #761：有界重试 + 无 token 时的 api.github.com 备选通道都由 fetch 层负责；
+  // 这里只保留「解析并校验契约」这一件事。
+  const text = await fetchOfficialRegistryText({
+    token: config.images.registryGithubToken,
+    attempts: config.images.registryFetchAttempts,
+  });
+  return parseRegistry(JSON.parse(text) as unknown);
 }
 
-async function fetchOfficialRuntimeRegistry(): Promise<RuntimeImageRegistry> {
-  const githubToken = config.images.registryGithubToken.trim();
-  if (githubToken) {
-    // GitHub's private release `latest/download` endpoint returns 404 even for
-    // a valid token. Resolve the release through api.github.com first, then use
-    // the authenticated asset API URL. The helper drops Authorization before
-    // following any redirect to release-assets/objects.
-    const releaseText = await fetchGithubResource(
-      new URL("https://api.github.com/repos/SummerSec/DeepSonar/releases/latest"),
-      "application/vnd.github+json",
-      githubToken,
-    );
-    if (Buffer.byteLength(releaseText, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
-      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
-    }
-    let release: unknown;
-    try {
-      release = JSON.parse(releaseText) as unknown;
-    } catch {
-      throw new Error("official release metadata invalid");
-    }
-    const assets = release && typeof release === "object" && Array.isArray((release as Record<string, unknown>).assets)
-      ? (release as Record<string, unknown>).assets as unknown[]
-      : [];
-    const asset = assets.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).name === "runtime-image-registry.json") as Record<string, unknown> | undefined;
-    const assetUrl = typeof asset?.url === "string" ? asset.url : typeof asset?.api_url === "string" ? asset.api_url : "";
-    if (!assetUrl) throw new Error("official registry asset missing");
-    const assetTarget = new URL(assetUrl);
-    if (assetTarget.protocol !== "https:" || assetTarget.hostname !== "api.github.com") {
-      throw new Error("official registry asset host rejected");
-    }
-    const assetText = await fetchGithubResource(assetTarget, "application/octet-stream", githubToken);
-    if (Buffer.byteLength(assetText, "utf8") > RUNTIME_IMAGE_REGISTRY_MAX_BYTES) {
-      throw new Error(`official registry exceeds ${RUNTIME_IMAGE_REGISTRY_MAX_BYTES} bytes`);
-    }
-    return parseRegistry(JSON.parse(assetText) as unknown);
-  }
-  const publicText = await fetchGithubResource(new URL(OFFICIAL_RUNTIME_IMAGE_REGISTRY_URL), "application/json");
-  return parseRegistry(JSON.parse(publicText) as unknown);
+/**
+ * #763：缓存命中与失败分支必须共用同一「是否可服务 last-known-good」判断，
+ * 否则连续失败达到降级阈值后，缓存有效期内的普通读取会把已降级的清单放行回来。
+ */
+function servableRemoteRegistry(
+  cache: RemoteRegistryCache | null,
+): cache is RemoteRegistryCache & { registry: RuntimeImageRegistry } {
+  if (!cache?.registry) return false;
+  return cache.consecutive_failures < RUNTIME_IMAGE_REGISTRY_STALE_FAILURE_LIMIT;
 }
 
 async function loadRemoteRuntimeImageRegistry(force = false): Promise<RuntimeImageRegistry | null> {
   const now = Date.now();
   if (!force && remoteRegistryCache && now - remoteRegistryCache.checked_at < RUNTIME_IMAGE_REGISTRY_CACHE_MS) {
-    return remoteRegistryCache.registry;
+    // 已降级时缓存命中直接按 bundled 处理，且不额外抓取，避免与强制刷新的结论矛盾。
+    return servableRemoteRegistry(remoteRegistryCache) ? remoteRegistryCache.registry : null;
   }
   try {
     const registry = await fetchOfficialRuntimeRegistry();
-    remoteRegistryCache = { registry, checked_at: now, error: null };
+    remoteRegistryCache = {
+      registry,
+      checked_at: now,
+      error: null,
+      consecutive_failures: 0,
+      last_success_at: now,
+    };
     return registry;
   } catch (error) {
     const safeError = registryFetchError(error);
-    remoteRegistryCache = { registry: null, checked_at: now, error: safeError };
-    console.warn(`[runtime-images] official registry unavailable; using bundled fallback (${safeError})`);
-    return null;
+    const previous = remoteRegistryCache?.registry ?? null;
+    const consecutiveFailures = (remoteRegistryCache?.consecutive_failures ?? 0) + 1;
+    remoteRegistryCache = {
+      registry: previous,
+      checked_at: now,
+      error: safeError,
+      consecutive_failures: consecutiveFailures,
+      last_success_at: remoteRegistryCache?.last_success_at ?? null,
+    };
+    // 单次瞬时失败不得把已知良好的清单降级：保留上次成功结果，只累计失败次数。
+    const serveStale = servableRemoteRegistry(remoteRegistryCache) && previous !== null;
+    console.warn(
+      `[runtime-images] official registry unavailable (${consecutiveFailures}/${RUNTIME_IMAGE_REGISTRY_STALE_FAILURE_LIMIT}); `
+        + `${serveStale ? "serving last known good catalog" : "using bundled fallback"} (${safeError})`,
+    );
+    return serveStale ? previous : null;
   }
 }
 
@@ -987,7 +933,13 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
       images,
       source: "remote" as const,
       fallback: false,
-      error: null,
+      // 服务上次成功清单时带上诊断与 stale 标记；平台更新检查据此不降级。
+      error: remoteRegistryCache?.error ?? null,
+      stale: remoteRegistryCache?.error ? true : undefined,
+      consecutive_failures: remoteRegistryCache?.error ? remoteRegistryCache.consecutive_failures : undefined,
+      last_success_at: remoteRegistryCache?.last_success_at
+        ? new Date(remoteRegistryCache.last_success_at).toISOString()
+        : undefined,
       checked_at: checkedAt,
     };
     rememberAppliedMinRuntimeImage(merged.min_runtime_image ?? null);
@@ -999,6 +951,11 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
     source: "bundled",
     fallback: true,
     error: remoteRegistryCache?.error ?? "remote registry unavailable",
+    stale: undefined,
+    consecutive_failures: remoteRegistryCache?.consecutive_failures,
+    last_success_at: remoteRegistryCache?.last_success_at
+      ? new Date(remoteRegistryCache.last_success_at).toISOString()
+      : undefined,
     checked_at: checkedAt,
   };
 }
@@ -1123,33 +1080,22 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
       }
     }
   }
-  return {
-    schema: registry.schema,
-    ...(registry.schema_version ? { schema_version: registry.schema_version } : {}),
-    images,
-    ...(registry.source ? { source: registry.source } : {}),
-    ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
-    ...(registry.error !== undefined ? { error: registry.error } : {}),
-    ...(registry.checked_at ? { checked_at: registry.checked_at } : {}),
-  };
+  // #763：只替换 images，其余顶层字段（stale / consecutive_failures / last_success_at /
+  // platform / platform_version / min_runtime_image）原样保留，否则诊断状态与平台元数据会被静默丢弃。
+  return { ...registry, images };
 }
 
-function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
+/** 导出仅为覆盖 override 投影的字段保留语义（#763）。 */
+export function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
   const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
     console.warn(`[runtime-images] skip env override for ${override.image_key}: no offline manual metadata`);
   }
-  return {
-    schema: registry.schema,
-    ...(registry.schema_version ? { schema_version: registry.schema_version } : {}),
-    images,
-    ...(registry.source ? { source: registry.source } : {}),
-    ...(registry.fallback !== undefined ? { fallback: registry.fallback } : {}),
-    ...(registry.error !== undefined ? { error: registry.error } : {}),
-    ...(registry.checked_at ? { checked_at: registry.checked_at } : {}),
-  };
+  // #763：只替换 images，其余顶层字段（stale / consecutive_failures / last_success_at /
+  // platform / platform_version / min_runtime_image）原样保留，否则诊断状态与平台元数据会被静默丢弃。
+  return { ...registry, images };
 }
 
 /**
@@ -1495,7 +1441,13 @@ export async function applyUploadedRuntimeCatalog(
     error: null,
     checked_at: new Date().toISOString(),
   };
-  remoteRegistryCache = { registry: tagged, checked_at: Date.now(), error: null };
+  remoteRegistryCache = {
+    registry: tagged,
+    checked_at: Date.now(),
+    error: null,
+    consecutive_failures: 0,
+    last_success_at: Date.now(),
+  };
   const result = await applyOfficialRuntimeCatalog(tagged, { applyEnvOverrides: false });
   await recordPlatformUpdateCheckFromRegistry(result.registry);
   return result;
@@ -1965,7 +1917,6 @@ export async function resolveConfiguredRuntimeImagesForChannel(
 ): Promise<RuntimeImageSnapshot[]> {
   if (config.runtime.agentMode === "fake" || config.runtime.provider !== "opensandbox") return [];
   const snapshots = new Map((await resolveStartupRuntimeImages(db, channel)).map((item) => [item.image_ref, item]));
-  const projects = await db`SELECT id, config_json FROM projects ORDER BY id`;
   // #691: leftover image_strategy / role_runtime_images / project pins are gone.
   // Warm enabled project bindings to latest trusted (no selected_version_id).
   const enabled = await db`

@@ -1404,6 +1404,12 @@ export interface RuntimeImageRegistry {
   source?: "remote" | "bundled" | "upload" | string | { kind?: string; url?: string; fetched_at?: string; [key: string]: unknown } | null;
   fallback?: boolean;
   error?: string | null;
+  /** #761：本次拉取瞬时失败，响应仍为上次成功清单。 */
+  stale?: boolean;
+  /** #761：连续拉取失败次数。 */
+  consecutive_failures?: number;
+  /** #761：最近一次成功拉取时间。 */
+  last_success_at?: string;
   checked_at?: string;
   selected_channel: RuntimeImageRegistryChannel;
   image_status?: RuntimeImageStatusEntry[];
@@ -1438,7 +1444,7 @@ export interface RuntimeImagePreparingResponse {
 
 export type RuntimeImageRegistryCatalog = Omit<
   RuntimeImageRegistry,
-  "metadata" | "fallback" | "error" | "checked_at" | "selected_channel" | "image_status"
+  "metadata" | "fallback" | "error" | "stale" | "consecutive_failures" | "last_success_at" | "checked_at" | "selected_channel" | "image_status"
 >;
 
 /** Project a GET response back to the strict catalog payload accepted by apply. */
@@ -1447,6 +1453,9 @@ export function runtimeImageRegistryCatalog(registry: RuntimeImageRegistry): Run
     metadata: _metadata,
     fallback: _fallback,
     error: _error,
+    stale: _stale,
+    consecutive_failures: _consecutiveFailures,
+    last_success_at: _lastSuccessAt,
     checked_at: _checkedAt,
     selected_channel: _selectedChannel,
     image_status: _imageStatus,
