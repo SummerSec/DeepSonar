@@ -1,5 +1,6 @@
 import type { CapabilityPrincipal } from "./tokens.js";
 import { sql } from "../../db.js";
+import { EventRateLimitError } from "../event-ingestion/rate-limit.js";
 import { PlatformRuntimeHandlerError, invokeRuntimeHandler } from "./registry.js";
 import { controlPlatformFailure, controlRuntimeRejection } from "./repair.js";
 import { recordCompletionProposal, readCompletionReceipt, completionInputDigest, completionDoneEventId, type CompletionResult } from "../event-ingestion/completion-receipt.js";
@@ -32,13 +33,21 @@ export async function invokeDurableCompletion(input: {
           code: "HANDLER_UNAVAILABLE", message: "Completion preparation unavailable; no completion accepted", idempotencyKey: key }) } };
       }
     },
-  }).catch(async () => {
+  }).catch(async error => {
+    let confirmedMissing = false;
     // Reacquiring the Job lock waits for the original transaction to finish.
     // If reconciliation itself fails, preserve the live reservation: its outcome is unknown.
     try {
       const receipt = await database.begin(async tx => {
         await tx`SELECT id FROM jobs WHERE id=${principal.jobId} FOR UPDATE`;
-        return readCompletionReceipt(tx as unknown as typeof sql, principal.jobId, key);
+        const stored = await readCompletionReceipt(tx as unknown as typeof sql, principal.jobId, key);
+        // Keep absence check and abort under one Job lock. Releasing it first
+        // lets a same-key retry prepare a new reservation that this old abort
+        // would incorrectly clear. Abort is a pure local registry operation.
+        if (!stored && preparedAttempt) {
+          await invokeRuntimeHandler({ ...context, completionPhase: "abort", completionAttemptId: preparedAttempt }).catch(() => {});
+        }
+        return stored;
       });
       if (receipt) {
         if (receipt.input_digest !== completionInputDigest(payload) || receipt.proposal_revision !== revision
@@ -48,8 +57,14 @@ export async function invokeDurableCompletion(input: {
         }
         return { ...receipt.result, receipt };
       }
-      if (preparedAttempt) await invokeRuntimeHandler({ ...context, completionPhase: "abort", completionAttemptId: preparedAttempt }).catch(() => {});
+      confirmedMissing = true;
     } catch { /* Fail closed; a missing response is not proof of a missing receipt. */ }
+    if (confirmedMissing && error instanceof EventRateLimitError) {
+      return { statusCode: 429, body: { ...controlRuntimeRejection({ operation: "mark_job_done",
+        code: error.code, message: error.message, retryable: true, statusCode: 429,
+        details: { ...error.metadata }, idempotencyKey: key,
+      }) }, receipt: undefined };
+    }
     // Commit acknowledgement can be lost: never claim no effect or recommend a new key.
     return { statusCode: 503, body: { accepted: false, error_code: "COMPLETION_RECEIPT_UNCERTAIN",
       error: "Receipt persistence outcome is unknown; query receipt_key before retrying the unchanged key/revision/payload",

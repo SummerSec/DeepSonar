@@ -159,6 +159,71 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       payload: { summary: "attacker changed the original completion" } }, failBeforeLookup);
     assert.equal(mismatch.statusCode, 409); assert.equal(mismatch.body.error_code, "IDEMPOTENCY_KEY_CONFLICT");
     assert.equal(lost.calls.commit, commitsBeforeConflict); assert.equal(lost.calls.abort, 0);
+    // Deterministically interleave an old rollback with a same-key new prepare.
+    // The abort must run under the reconciliation Job lock, before it is released.
+    const raced = await setup(); const raceKey = randomUUID();
+    const racePrincipal = await api.authenticateJobCapabilityToken(raced.jobId, raced.grant.token);
+    const barrier = () => {
+      let resolve!: () => void;
+      const ready = new Promise<void>(done => { resolve = done; });
+      return { ready, resolve };
+    };
+    const reconciliationReleased = barrier(); const secondPrepared = barrier(); const finishSecond = barrier();
+    const bounded = async <T>(work: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([work, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("completion concurrency barrier timed out")), 3000);
+        })]);
+      } finally { clearTimeout(timer); }
+    };
+    let generation = 0; let reservation: number | null = null;
+    const aborted: Array<number | null> = [];
+    api.registerRuntimeHandler(raced.jobId, async context => {
+      if (context.completionPhase === "prepare") {
+        reservation = ++generation;
+        if (generation === 2) { secondPrepared.resolve(); await bounded(finishSecond.ready); }
+        return { completion_prepared: true };
+      }
+      if (context.completionPhase === "abort") { aborted.push(reservation); reservation = null; return {}; }
+      if (context.completionPhase === "commit") { raced.calls.commit++; return {}; }
+      assert.fail("unexpected completion phase");
+    }, ["mark_job_done"]);
+    let transactionNo = 0;
+    const racingDb = new Proxy(sql, { get(target, property) {
+      if (property === "begin") return async (callback: (tx: typeof sql) => Promise<unknown>) => {
+        transactionNo++;
+        if (transactionNo === 1) return sql.begin(async tx => {
+          await callback(tx as unknown as typeof sql);
+          throw new Error("synthetic pre-commit rollback");
+        });
+        const value = await sql.begin(callback as never);
+        // This point is after the real Job lock was released, before the caller resumes.
+        reconciliationReleased.resolve();
+        await bounded(secondPrepared.ready);
+        return value;
+      };
+      return Reflect.get(target, property);
+    } });
+    const proposal = { principal: racePrincipal, key: raceKey, revision: 0, payload: { summary: "same-key completion concurrency" } };
+    const oldRequest = invokeDurableCompletion(proposal, racingDb);
+    let newRequest: ReturnType<typeof invokeDurableCompletion> | undefined;
+    let reservationAfterOld: number | null = null;
+    try {
+      await bounded(reconciliationReleased.ready);
+      newRequest = invokeDurableCompletion(proposal);
+      await bounded(secondPrepared.ready);
+      assert.equal((await bounded(oldRequest)).statusCode, 503);
+      reservationAfterOld = reservation;
+    } finally {
+      finishSecond.resolve(); secondPrepared.resolve();
+      await oldRequest;
+      if (newRequest) assert.equal((await newRequest).statusCode, 200);
+    }
+    assert.equal(reservationAfterOld, 2, "old abort must not erase the newer same-key reservation");
+    assert.deepEqual(aborted, [1], "only the rolled-back generation may be aborted");
+    assert.equal(raced.calls.commit, 1);
+    assert.equal((await raced.get(raceKey)).json().receipt_status, "persisted_deferred");
     // The final done path uses the existing ingestion transaction and dedup gate.
     const { createEventIngestionApplication } = await import("../event-ingestion/application.js");
     const applied = new Map<string, number>();
