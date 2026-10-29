@@ -128,6 +128,42 @@ if (!testDatabaseUrl) {
       assert.equal(wildcard.json().items.length, 0);
       const invalid = await app.inject({ method: "GET", url: `/findings?project_id=${projectId}&canvas_id=${canvasA},bad&limit=50` });
       assert.equal(invalid.statusCode, 400);
+      // Read semantics must also handle legacy empty severities. Loosen only this
+      // test constraint while seeding that otherwise-unwritable historical shape.
+      const severityFixture = `unrated-${randomUUID()}`;
+      await sql`ALTER TABLE findings DROP CONSTRAINT findings_severity_check`;
+      try {
+        await sql`INSERT INTO findings(project_id,job_id,fingerprint,title,severity)
+          SELECT ${projectId}::uuid,${jobA}::uuid,${severityFixture} || n,'unrated-fixture ' || n,
+            CASE WHEN n<=65 THEN NULL WHEN n<=72 THEN '' ELSE 'high' END
+          FROM generate_series(1,75) n`;
+        for (const [severity, expected] of [["unset",72],["unset,high",75]] as const) {
+          const seen = new Set<string>();
+          let after = "";
+          do {
+            const filter = new URLSearchParams({ project_id:projectId,severity,q:"unrated-fixture",limit:"25",cursor:after });
+            const response = await app.inject({method:"GET",url:`/findings?${filter}`});
+            assert.equal(response.statusCode,200,response.payload);
+            const result=response.json();
+            for(const row of result.items) {
+              assert.ok(!seen.has(row.id)); seen.add(row.id);
+              assert.ok(row.severity===null || row.severity==="" || (severity.includes("high") && row.severity==="high"));
+            }
+            after=result.next_cursor ?? "";
+          } while(after);
+          assert.equal(seen.size,expected);
+          const response=await app.inject({method:"GET",url:`/projects/${projectId}/findings/summary?${new URLSearchParams({severity,q:"unrated-fixture"})}`});
+          assert.equal(response.statusCode,200,response.payload);
+          assert.equal(response.json().total,expected);
+          assert.equal(response.json().severity.find((bucket:{key:string})=>bucket.key==="unset").count,72);
+        }
+        const raw = await sql`SELECT severity,count(*)::int AS n FROM findings WHERE fingerprint LIKE ${severityFixture+'%'} GROUP BY severity`;
+        assert.equal(raw.find(row=>row.severity===null)?.n,65);
+        assert.equal(raw.find(row=>row.severity==='')?.n,7);
+      } finally {
+        await sql`DELETE FROM findings WHERE fingerprint LIKE ${severityFixture+'%'}`;
+        await sql`ALTER TABLE findings ADD CONSTRAINT findings_severity_check CHECK (severity IS NULL OR severity IN ('low','medium','high','critical'))`;
+      }
       // Explicit credentials are checked even in optional-auth local mode.
       const { generateToken } = await import("../../auth.js");
       const token = generateToken();

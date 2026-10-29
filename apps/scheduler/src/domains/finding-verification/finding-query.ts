@@ -11,7 +11,7 @@ export function parseFindingQuery(query: Record<string, unknown>): FindingQuery 
   const result = {} as FindingQuery;
   for (const key of FILTER_KEYS) {
     const raw = query[key];
-    if (raw === undefined || raw === "") { result[key] = null; continue; }
+    if (raw === undefined || raw === null || raw === "") { result[key] = null; continue; }
     if (typeof raw !== "string" || raw.length > 4000) throw new QueryParameterError(key);
     const values = [...new Set(raw.split(",").map((value) => value.trim()))];
     if (values.length > 100 || values.some((value) => !value || value.length > 200)) throw new QueryParameterError(key);
@@ -29,7 +29,7 @@ export function findingQueryPredicate(query: FindingQuery) {
   return sql`
     (${query.project_id}::uuid[] IS NULL OR f.project_id = ANY(${query.project_id}::uuid[]))
     AND (${query.canvas_id}::text[] IS NULL OR j.canvas_id = ANY(${query.canvas_id}::text[]))
-    AND (${query.severity}::text[] IS NULL OR f.severity = ANY(${query.severity}::text[]))
+    AND (${query.severity}::text[] IS NULL OR COALESCE(NULLIF(f.severity, ''), 'unset') = ANY(${query.severity}::text[]))
     AND (${query.profile}::text[] IS NULL OR f.profile = ANY(${query.profile}::text[]))
     AND (${query.category}::text[] IS NULL OR f.category = ANY(${query.category}::text[]))
     AND (${query.verify_status}::text[] IS NULL OR f.verify_status = ANY(${query.verify_status}::text[]))
