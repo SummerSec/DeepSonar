@@ -35,7 +35,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     const grant=await api.mintJobCapabilityToken(hub);
     await sql`UPDATE jobs SET status='running',started_at=now() WHERE id=${hub}`;
     await api.activateProvisionedJobCapabilityTokens(hub);
-    let activeJob=hub, token=grant.token;
+    let activeJob:string=hub, token=grant.token;
     const handler: import("./domains/platform-api/index.js").PlatformRuntimeHandler = async (context: import("./domains/platform-api/index.js").PlatformRuntimeHandlerContext)=>{
       if(context.operationId==='graph_query') return executeGraphQuery({jobId:context.jobId,canvasId:canvas,payload:context.input,maxCalls:100,maxBytes:1024*1024});
       const type=({submit_plan:'plan',submit_hub_decision:'hub_decision',mark_job_done:'done',request_human:'human',emit_fact:'fact'} as const)[context.operationId as 'submit_plan'|'submit_hub_decision'|'mark_job_done'|'request_human'|'emit_fact'];
