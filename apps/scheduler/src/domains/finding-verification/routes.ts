@@ -14,8 +14,9 @@ import { loadFindingTrace } from "../../finding-trace.js";
 import { loadFactEvidenceTrace } from "../../fact-evidence-trace.js";
 import { FINDINGS_LIST_WINDOW } from "../../finding-disposition.js";
 import { isUuid } from "../../project-scope.js";
-import { decodeCursor, cursorForRow, page, pageLimit } from "../../pagination.js";
+import { decodeCursor, encodeCursor, page, pageLimit } from "../../pagination.js";
 import { createVerifyRound, markFindingNeedsHuman } from "../../verify.js";
+import { findingQueryPredicate, parseFindingQuery } from "./finding-query.js";
 import { loadProjectFindingsSummary } from "./project-findings-summary.js";
 import { projectFindingResearch } from "../finding-research/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
@@ -80,27 +81,10 @@ async function resumeWaitingHumanHub(tx: typeof sql, canvasId: string, notificat
 /** Finding/verification 路由注册。 */
 export function registerFindingVerificationRoutes(app: FastifyInstance): void {
   app.get("/findings", async (req, reply) => {
-    const q = req.query as {
-      project_id?: string;
-      severity?: string;
-      profile?: string;
-      category?: string;
-      verify_status?: string;
-      disposition?: string;
-      canvas_id?: string;
-      cursor?: string;
-      after?: string;
-      limit?: string;
-    };
-    const projectId = q.project_id || req.actor?.projectId || null;
-    const severity = q.severity || null;
-    const profile = q.profile || null;
-    const category = q.category || null;
-    const verifyStatus = q.verify_status || null;
-    const canvasId = q.canvas_id || null;
-    const disposition = q.disposition || null;
+    const q = req.query as Record<string, string | undefined>;
+    const filters = parseFindingQuery({ ...q, project_id: q.project_id || req.actor?.projectId });
     const after = q.cursor ?? q.after ?? null;
-    const paginated = Boolean(canvasId || after || q.limit || q.cursor);
+    const paginated = Boolean(filters.canvas_id || after || q.limit || q.cursor);
     const cursor = after ? decodeCursor(after, "findings") : null;
     if (after && (!cursor?.created_at || !cursor.id)) {
       return reply.code(400).send({ error: "invalid findings cursor", error_code: "INVALID_CURSOR" });
@@ -109,6 +93,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     const rows = await sql`
       SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
              f.profile, f.category, f.tags_json, f.evidence_refs_json, f.scoring_json,
+             to_char(f.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at,
              f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
              f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
              p.name AS project_name, j.canvas_id, c.title AS canvas_title,
@@ -123,31 +108,25 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
              ) AS has_waiting_human
       FROM findings f
       JOIN projects p ON p.id = f.project_id
-      JOIN jobs j ON j.id = f.job_id
-      JOIN canvases c ON c.id = j.canvas_id
+      JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
+      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
       LEFT JOIN finding_research r ON r.finding_id = f.id
-      WHERE (${projectId}::uuid IS NULL OR f.project_id = ${projectId}::uuid)
-        AND (${severity}::text IS NULL OR f.severity = ${severity})
-        AND (${profile}::text IS NULL OR f.profile = ${profile})
-        AND (${category}::text IS NULL OR f.category = ${category})
-        AND (${verifyStatus}::text IS NULL OR f.verify_status = ${verifyStatus})
-        AND (${disposition}::text IS NULL OR f.disposition = ${disposition})
-        AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId})
-        AND (${cursor?.created_at ?? null}::timestamptz IS NULL
-          OR f.created_at < ${cursor?.created_at ?? null}::timestamptz
-          OR (f.created_at = ${cursor?.created_at ?? null}::timestamptz AND f.id < ${cursor?.id ?? null}::uuid))
+      WHERE ${findingQueryPredicate(filters)}
+        AND (${cursor?.created_at ?? null}::text::timestamptz IS NULL
+          OR f.created_at < ${cursor?.created_at ?? null}::text::timestamptz
+          OR (f.created_at = ${cursor?.created_at ?? null}::text::timestamptz AND f.id < ${cursor?.id ?? null}::uuid))
       ORDER BY f.created_at DESC, f.id DESC
       LIMIT ${paginated ? limit + 1 : limit}`;
-    const items = rows.slice(0, limit).map((row) => ({
+    const items = rows.slice(0, limit).map(({ cursor_created_at: _cursorCreatedAt, ...row }) => ({
       ...row,
       research: projectFindingResearch(row as Record<string, unknown>),
     }));
     if (!paginated) return items;
-    const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
+    const last = rows[Math.min(rows.length, limit) - 1];
     const hasMore = rows.length > limit;
     return page(items, {
       after,
-      nextCursor: hasMore && last ? cursorForRow("findings", last) : null,
+      nextCursor: hasMore && last ? encodeCursor({ kind: "findings", id: String(last.id), created_at: String(last.cursor_created_at) }) : null,
       hasMore,
       live: false,
     });
@@ -158,15 +137,8 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     if (!isUuid(id)) {
       return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
     }
-    const q = req.query as { canvas_id?: string };
-    const canvasIds = String(q.canvas_id ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (canvasIds.some((value) => !isUuid(value))) {
-      return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
-    }
-    const summary = await loadProjectFindingsSummary(id, canvasIds);
+    const filters = parseFindingQuery({ ...(req.query as Record<string, unknown>), project_id: id });
+    const summary = await loadProjectFindingsSummary(id, filters);
     if (!summary) return reply.code(404).send({ error: "project not found", error_code: "NOT_FOUND" });
     return summary;
   });

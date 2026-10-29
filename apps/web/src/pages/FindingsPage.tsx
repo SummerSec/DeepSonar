@@ -4,17 +4,16 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { api, type FindingSummary, type Project, type ProjectFindingsSummary } from "../api";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { SearchableMultiSelect } from "../SearchableSelect";
-import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
+import { readMultiSearchParam } from "../searchable-select-model";
 import { composeSeedTaskUrl, isComposeSeedCandidate, MAX_COMPOSE_SEEDS } from "../composeTaskModel";
 import {
-  canvasScopedTotal,
   dispositionBadgeTone,
-  filterProjectFindings,
-  findingsListTruncated,
   PROJECT_DELIVERY_TITLE,
   researchDedupeLabel,
   researchPriorityLabel,
 } from "../findings-risk-desk";
+import { clearFindingQuery, findingQueryFilters, updateFindingQuery } from "../finding-query-state";
+import { useFindingsQuery } from "../useFindingsQuery";
 import {
   DataTable,
   DISPOSITION_OPTIONS,
@@ -36,6 +35,8 @@ const VERIFY_OPTIONS = [
   { value: "confirmed", label: "已确认" },
   { value: "false_positive", label: "已排除" },
   { value: "needs_human", label: "待人工" },
+  { value: "refuted", label: "已反驳" },
+  { value: "inconclusive", label: "无定论" },
 ] as const;
 const VERIFY_LABELS = Object.fromEntries(VERIFY_OPTIONS.map((option) => [option.value, option.label]));
 const DISPOSITION_LABELS = Object.fromEntries(DISPOSITION_OPTIONS.map((option) => [option.value, option.label]));
@@ -91,11 +92,11 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
   const q = searchParams.get("q") ?? "";
   const selectedFinding = searchParams.get("finding");
 
-  const [rows, setRows] = useState<FindingSummary[]>([]);
-  const [summary, setSummary] = useState<ProjectFindingsSummary | null>(null);
+  const cursor = searchParams.get("cursor");
+  const { rows, summary, facets, nextCursor, error, loading } = useFindingsQuery(
+    scope, projectId, findingQueryFilters(searchParams, scope, projectId), cursor,
+  );
   const [projects, setProjects] = useState<Project[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [searchDraft, setSearchDraft] = useState(q);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
@@ -108,58 +109,20 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
     api.projects().then(setProjects).catch(() => {});
   }, [scope]);
 
-  // 项目页另拉 Scheduler 聚合，避免 500 条列表窗口静默截断全量计数
-  useEffect(() => {
-    let stop = false;
-    const tick = () => {
-      const list = api.findings({
-        project_id: scope === "project" ? projectId : undefined,
-      });
-      const rollup = scope === "project" && projectId
-        ? api.projectFindingsSummary(projectId)
-        : Promise.resolve(null);
-      Promise.all([list, rollup])
-        .then(([items, nextSummary]) => {
-          if (!stop) {
-            setRows(items);
-            setSummary(nextSummary);
-            setError(null);
-            setLoading(false);
-          }
-        })
-        .catch((e) => {
-          if (!stop) {
-            setError(String(e));
-            setLoading(false);
-          }
-        });
-    };
-    tick();
-    const t = setInterval(tick, 5000);
-    return () => {
-      stop = true;
-      clearInterval(t);
-    };
-  }, [scope, projectId]);
-
   const setParam = (key: "q", value: string) => {
-    const next = new URLSearchParams(searchParams);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setSearchParams(next, { replace: true });
+    setSearchParams(updateFindingQuery(searchParams, key, value), { replace: true });
   };
 
   const setMultiParam = (key: "severity" | "profile" | "verify" | "disposition" | "project" | "canvas", values: string[]) => {
-    const next = new URLSearchParams(searchParams);
-    writeMultiSearchParam(next, key, values);
-    setSearchParams(next, { replace: true });
+    setSearchParams(updateFindingQuery(searchParams, key, values), { replace: true });
   };
 
   const openFinding = (id: string | null) => {
-    const next = new URLSearchParams(searchParams);
-    if (id) next.set("finding", id);
-    else next.delete("finding");
-    setSearchParams(next, { replace: true });
+    setSearchParams(updateFindingQuery(searchParams, "finding", id), { replace: true });
+  };
+
+  const changePage = (nextCursor: string | null) => {
+    setSearchParams(updateFindingQuery(searchParams, "cursor", nextCursor));
   };
 
   const projectOptions = useMemo(() => {
@@ -178,47 +141,21 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
       .sort((a, b) => a.name.localeCompare(b.name, "zh"));
   }, [projects, rows]);
 
-  const canvasOptions = useMemo(() => {
-    if (summary?.canvases.length) {
-      return summary.canvases.map((canvas) => ({ id: canvas.id, name: canvas.title, count: canvas.count }));
-    }
-    const map = new Map<string, { name: string; count: number }>();
-    for (const finding of rows) {
-      if (!finding.canvas_id) continue;
-      const current = map.get(finding.canvas_id);
-      map.set(finding.canvas_id, {
-        name: finding.canvas_title ?? finding.canvas_id.slice(0, 8),
-        count: (current?.count ?? 0) + 1,
-      });
-    }
-    return [...map.entries()]
-      .map(([id, value]) => ({ id, name: value.name, count: value.count }))
-      .sort((a, b) => a.name.localeCompare(b.name, "zh"));
-  }, [summary, rows]);
-
-  const visible = useMemo(() => {
-    const scoped = filterProjectFindings(rows, {
-      severities,
-      profiles,
-      verifyStatuses,
-      dispositions,
-      canvasIds: scope === "project" ? canvasFilters : undefined,
-      q,
-    });
-    if (scope !== "global" || !projectFilters.length) return scoped;
-    return scoped.filter((finding) => projectFilters.includes(finding.project_id));
-  }, [rows, severities, profiles, verifyStatuses, dispositions, canvasFilters, projectFilters, q, scope]);
+  const canvasOptions = (facets?.canvases ?? []).map((canvas) => ({ id: canvas.id, name: canvas.title }));
+  const profileOptions = [...new Set([
+    ...(facets?.profiles ?? []).map((profile) => profile.key),
+    ...profiles,
+    ...(scope === "global" ? rows.map((finding) => finding.profile) : []),
+  ])].sort().map((value) => ({ value, label: value }));
+  const visible = rows;
 
   const filterActive = Boolean(
     severities.length || profiles.length || verifyStatuses.length || dispositions.length || q.trim()
       || (scope === "global" && projectFilters.length)
       || (scope === "project" && canvasFilters.length),
   );
-  const projectTotal = summary?.project_total ?? summary?.total ?? rows.length;
-  const rollupTotal = canvasScopedTotal(summary, canvasFilters) ?? projectTotal;
-  const listTruncated = scope === "project" && findingsListTruncated(rows.length, projectTotal);
-  const totalCount = scope === "project" ? rollupTotal : rows.length;
-  const filteredCount = visible.length;
+  const totalCount = summary?.project_total ?? rows.length;
+  const filteredCount = summary?.total ?? rows.length;
   const filterChips = [
     ...severities.map((value) => `风险 ${value}`),
     ...profiles.map((value) => `协议 ${value}`),
@@ -230,16 +167,8 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
   ];
 
   const clearFilters = () => {
-    const next = new URLSearchParams(searchParams);
-    next.delete("severity");
-    next.delete("profile");
-    next.delete("verify");
-    next.delete("disposition");
-    next.delete("q");
-    next.delete("project");
-    next.delete("canvas");
     setSearchDraft("");
-    setSearchParams(next, { replace: true });
+    setSearchParams(clearFindingQuery(searchParams), { replace: true });
   };
 
   const commitSearch = () => {
@@ -283,20 +212,21 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
         />
       )}
 
-      <FilterCountBar
+      {scope === "project" && <FilterCountBar
         filtered={filteredCount}
         total={totalCount}
         unit="条发现"
         active={filterActive}
         filters={filterChips}
         onClear={clearFilters}
-      />
+      />}
 
-      {listTruncated && (
-        <p className="mb-4 font-mono text-[11px] text-amber-300/90">
-          列表窗口显示 {rows.length} 条，项目全量 {projectTotal} 条。上方计数来自项目聚合，不是当前页。
-        </p>
-      )}
+      <div className="mb-4 flex flex-wrap items-center gap-3 font-mono text-[11px] text-zinc-500" aria-label="发现分页">
+        <span>当前页 {rows.length} 条{scope === "global" ? " · 服务端筛选" : ""}</span>
+        <button type="button" disabled={!cursor} onClick={() => changePage(null)} className="hover:text-zinc-200 disabled:opacity-40">回到首页</button>
+        <button type="button" disabled={!nextCursor || Boolean(error)} onClick={() => changePage(nextCursor)} className="hover:text-zinc-200 disabled:opacity-40">下一页</button>
+        {scope === "global" && filterActive && <button type="button" onClick={clearFilters} className="hover:text-zinc-200">清除筛选</button>}
+      </div>
 
       {scope === "project" && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-y border-white/[.05] py-3">
@@ -371,7 +301,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                     <SearchableMultiSelect
                       value={profiles}
                       onChange={(values) => setMultiParam("profile", values)}
-                      options={Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))}
+                      options={profileOptions}
                       placeholder="全部 profile"
                       ariaLabel="按 Finding profile 筛选"
                       className="contents"
@@ -379,6 +309,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                     <div className="table-head-search">
                       <MagnifyingGlass size={12} />
                       <input
+                        maxLength={200}
                         value={searchDraft}
                         onChange={(e) => setSearchDraft(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && commitSearch()}
@@ -453,7 +384,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                     />
                   </div>
                 </th>
-                <th className="table-head-cell">时间</th>
+                <th className="table-head-cell">更新时间</th>
               </tr>
             </thead>
             <tbody>
@@ -465,9 +396,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                   >
                     {error
                       ? error
-                      : rows.length
-                        ? `没有匹配当前筛选的发现（0 / 全量 ${totalCount}），可在表头调整条件`
-                        : "暂无发现 · 审计产出 finding 后会汇总到这里"}
+                      : cursor ? "本页暂无发现，可回到首页" : filterActive ? "没有匹配当前筛选的发现，可在表头调整条件" : "暂无发现 · 审计产出 finding 后会汇总到这里"}
                   </td>
                 </tr>
               ) : (
@@ -533,7 +462,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                     )}
                     {scope === "project" && (
                       <td className={`${tdCls} max-w-[180px] truncate font-mono text-[13px] text-zinc-500`}>
-                        {f.canvas_title || f.canvas_id?.slice(0, 8) || "—"}
+                        {f.canvas_id ? <Link to={`/projects/${f.project_id}/tasks/${f.canvas_id}`} onClick={(event) => event.stopPropagation()} className="hover:text-acc-400">{f.canvas_title || f.canvas_id.slice(0, 8)}</Link> : "—"}
                       </td>
                     )}
                     <td className={`${tdCls} max-w-[220px] truncate font-mono text-[13px] text-zinc-500`}>
@@ -542,9 +471,9 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                     <td className={tdCls}><FindingStateBadges finding={f} /></td>
                     <td
                       className={`${tdCls} font-mono text-[13px] text-zinc-500`}
-                      title={formatTime(f.created_at)}
+                      title={formatTime(f.updated_at ?? f.created_at)}
                     >
-                      {relativeTime(f.created_at)}
+                      {relativeTime(f.updated_at ?? f.created_at)}
                     </td>
                   </tr>
                 ))
@@ -564,6 +493,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                 className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600"
               />
               <input
+                maxLength={200}
                 value={searchDraft}
                 onChange={(e) => setSearchDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && commitSearch()}
@@ -587,7 +517,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
             </div>
             <div className={`grid gap-2 ${scope === "global" ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2"}`}>
               <SearchableMultiSelect value={severities} onChange={(values) => setMultiParam("severity", values)} options={SEVERITIES.map((value) => ({ value, label: value }))} placeholder="全部风险" ariaLabel="Severity" className="contents" />
-              <SearchableMultiSelect value={profiles} onChange={(values) => setMultiParam("profile", values)} options={Array.from(new Set(rows.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} placeholder="全部 profile" ariaLabel="Finding profile" className="contents" />
+              <SearchableMultiSelect value={profiles} onChange={(values) => setMultiParam("profile", values)} options={profileOptions} placeholder="全部 profile" ariaLabel="Finding profile" className="contents" />
               {scope === "global" && <SearchableMultiSelect value={projectFilters} onChange={(values) => setMultiParam("project", values)} options={projectOptions.map((project) => ({ value: project.id, label: project.name }))} placeholder="全部项目" ariaLabel="项目" className="contents" />}
               {scope === "project" && <SearchableMultiSelect value={canvasFilters} onChange={(values) => setMultiParam("canvas", values)} options={canvasOptions.map((canvas) => ({ value: canvas.id, label: canvas.name }))} placeholder="全部任务" ariaLabel="来源任务" className="contents" />}
               <SearchableMultiSelect value={verifyStatuses} onChange={(values) => setMultiParam("verify", values)} options={VERIFY_OPTIONS} placeholder="全部验证" ariaLabel="验证状态" className="contents" />
@@ -597,8 +527,8 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
         </div>
         {visible.length === 0 ? (
           <EmptyState
-            title={rows.length ? `没有匹配当前筛选的发现（0 / 全量 ${totalCount}）` : "暂无发现"}
-            hint={rows.length ? "调整上方筛选条件，或清除筛选查看全量" : "审计产出 finding 后会汇总到这里"}
+            title={error ? "发现读取失败" : cursor ? "本页暂无发现" : filterActive ? "没有匹配当前筛选的发现" : "暂无发现"}
+            hint={error ? "请重试；当前不展示缓存结果" : cursor ? "可回到首页重新查看" : filterActive ? "调整上方筛选条件，或清除筛选" : "审计产出 finding 后会汇总到这里"}
           />
         ) : (
           <div className="grid gap-3">
@@ -619,7 +549,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                       )}
                       <SeverityBadge severity={finding.severity} />
                     </div>
-                    <span className="font-mono text-[8px] text-zinc-700">{relativeTime(finding.created_at)}</span>
+                    <span className="font-mono text-[8px] text-zinc-700">更新 {relativeTime(finding.updated_at ?? finding.created_at)}</span>
                   </div>
                   <button type="button" onClick={() => openFinding(finding.id)} className="mt-3 block text-left text-[14px] font-medium leading-6 text-zinc-100 hover:text-acc-300">
                     {finding.title}
@@ -630,7 +560,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
                   </div>
                   {finding.summary && <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-zinc-600">{finding.summary}</p>}
                   <div className="mt-3 flex items-center gap-2 border-t border-white/[.045] pt-3 text-[9px] text-zinc-600">
-                    <span className="truncate">{scope === "project" ? (finding.canvas_title || "未标注任务") : finding.project_name}</span><span>·</span>
+                    <span className="truncate">{scope === "project" && finding.canvas_id ? <Link to={`/projects/${finding.project_id}/tasks/${finding.canvas_id}`} className="hover:text-acc-400">{finding.canvas_title || finding.canvas_id.slice(0, 8)}</Link> : finding.project_name}</span><span>·</span>
                     <span className="truncate font-mono">{finding.location || "无位置"}</span>
                     <div className="ml-auto shrink-0"><FindingStateBadges finding={finding} /></div>
                   </div>
@@ -640,7 +570,7 @@ export function FindingsPage({ scope, hidePageChrome = false }: { scope: "global
           </div>
         )}
       </div>
-      {selectedFinding && (
+      {selectedFinding && !error && (
         <FindingDetailPanel findingId={selectedFinding} onClose={() => openFinding(null)} />
       )}
     </>
@@ -674,7 +604,7 @@ function ProjectRiskSummary({
   return (
     <section className="mb-4 rounded-2xl bg-white/[.035] px-4 py-3.5 ring-1 ring-white/[.08] sm:px-5" aria-label="项目风险汇总">
       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
-        项目全量 {summary.total} 条 · 不受列表窗口截断
+        当前筛选 {summary.total} 条 · 全项目 {summary.project_total} 条
       </div>
       <div className="grid gap-3 lg:grid-cols-3">
         <SummaryChipRow

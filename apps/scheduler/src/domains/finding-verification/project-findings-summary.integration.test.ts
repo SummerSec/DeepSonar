@@ -100,6 +100,55 @@ if (!testDatabaseUrl) {
       const after = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary` });
       assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "human_reproducing")?.count, 1);
 
+      // More than the former 500-row window; tie timestamps exercise UUID ordering.
+      await sql`
+        INSERT INTO findings (project_id, job_id, fingerprint, title, severity, verify_status, disposition, created_at)
+        SELECT ${projectId}::uuid, ${jobA}::uuid, 'paged-' || n, '历史漏洞 ' || n,
+          CASE WHEN n % 2 = 0 THEN 'high' ELSE 'low' END, 'pending', 'open', '2020-01-01T00:00:00.123456Z'::timestamptz
+        FROM generate_series(1, 620) AS n`;
+      const ids = new Set<string>();
+      let cursor = "";
+      do {
+        const res = await app.inject({ method: "GET", url: `/findings?project_id=${projectId}&limit=50&cursor=${cursor}` });
+        assert.equal(res.statusCode, 200, res.payload);
+        const page = res.json();
+        for (const row of page.items) { assert.ok(!ids.has(row.id)); ids.add(row.id); }
+        cursor = page.next_cursor ?? "";
+      } while (cursor);
+      assert.equal(ids.size, 622);
+      const query = new URLSearchParams({ canvas_id: `${canvasA},${canvasB}`, severity: "high,low", verify_status: "pending", disposition: "open", q: "历史漏洞 620", limit: "50" });
+      const searched = await app.inject({ method: "GET", url: `/findings?project_id=${projectId}&${query}` });
+      assert.equal(searched.statusCode, 200, searched.payload);
+      assert.equal(searched.json().items.length, 1);
+      const counted = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary?${query}` });
+      assert.equal(counted.statusCode, 200, counted.payload);
+      assert.equal(counted.json().total, 1);
+      assert.equal(counted.json().project_total, 622);
+      const wildcard = await app.inject({ method: "GET", url: `/findings?project_id=${projectId}&q=%25&limit=50` });
+      assert.equal(wildcard.json().items.length, 0);
+      const invalid = await app.inject({ method: "GET", url: `/findings?project_id=${projectId}&canvas_id=${canvasA},bad&limit=50` });
+      assert.equal(invalid.statusCode, 400);
+      // Explicit credentials are checked even in optional-auth local mode.
+      const { generateToken } = await import("../../auth.js");
+      const token = generateToken();
+      const [tokenRow] = await sql`INSERT INTO api_tokens (name, project_id, token_prefix, token_hash, scopes)
+        VALUES ('query-test', ${projectId}, ${token.prefix}, ${token.hash}, ${["findings:read"]}) RETURNING id`;
+      const headers = { authorization: `Bearer ${token.plaintext}` };
+      try {
+        const scoped = await app.inject({ method: "GET", url: "/findings?limit=50", headers });
+        assert.equal(scoped.statusCode, 200, scoped.payload);
+        assert.ok(scoped.json().items.every((row: {project_id: string}) => row.project_id === projectId));
+        for (const url of [`/findings?project_id=${projectId},${emptyProjectId}&limit=50`, `/projects/${emptyProjectId}/findings/summary`]) {
+          const denied = await app.inject({ method: "GET", url, headers });
+          assert.equal(denied.statusCode, 403, denied.payload);
+        }
+        await sql`UPDATE api_tokens SET revoked_at = now() WHERE id = ${tokenRow.id}`;
+        const revoked = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary`, headers });
+        assert.equal(revoked.statusCode, 401, revoked.payload);
+      } finally {
+        await sql`DELETE FROM api_tokens WHERE id = ${tokenRow.id}`;
+      }
+
     } finally {
       // PATCH /findings/:id/disposition 会写 audit_logs(project_id)。
       // 该表 append-only（禁止 DELETE/UPDATE），因此不能先清审计再删项目。
@@ -109,6 +158,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await deleteProjectsLeavingAuditShells(sql, [projectId, emptyProjectId]);
       await app.close();
+      await sql.end({ timeout: 5 });
     }
   });
 }

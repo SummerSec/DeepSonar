@@ -138,7 +138,7 @@ export function decodeCursor(raw: unknown, kind: string): CursorPayload | null {
     // casts.  Validate the exact wire shape before a query is constructed so
     // malformed-but-decodable cursors become a deterministic 400 rather than
     // a database cast error (500).
-    if (!canonicalTimestamp(value.created_at)) return null;
+    if (!canonicalTimestamp(value.created_at) && !(kind === "findings" && postgresTimestamp(value.created_at))) return null;
     if (kind === "jobs" || kind === "findings" || kind === "facts") {
       if (typeof value.id !== "string" || !UUID_RE.test(value.id)) return null;
       return value as CursorPayload;
@@ -164,6 +164,12 @@ function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 40) return false;
   const date = new Date(value);
   return Number.isFinite(date.getTime()) && date.toISOString() === value;
+}
+
+// Finding keysets preserve PostgreSQL microseconds; Date truncation could skip rows.
+function postgresTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value)) return false;
+  return canonicalTimestamp(value.slice(0, 23) + "Z");
 }
 
 function positiveBigIntString(value: unknown): string | null {
