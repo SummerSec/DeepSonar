@@ -1,6 +1,6 @@
 # AI-native 可信执行内核与插件组合工作流
 
-> 状态：长期设计提案，尚未整体落地。当前实现仍以 `DESIGN.md`、`docs/ARCHITECTURE.md`、代码、schema 与 OpenAPI 为准。
+> 状态：长期设计提案，尚未整体落地。当前实现按 [DESIGN.md](../DESIGN.md)、[架构归属表](architecture/README.md)、代码、schema 与 OpenAPI 核对；旧 `docs/ARCHITECTURE.md` 仅作历史对照。
 > 关联：[#443](https://github.com/SummerSec/DeepSonar/issues/443)、[#444](https://github.com/SummerSec/DeepSonar/issues/444)、[#445](https://github.com/SummerSec/DeepSonar/issues/445)、[#446](https://github.com/SummerSec/DeepSonar/issues/446)。
 
 ## 1. 设计判断
@@ -290,4 +290,4 @@ proposed
 - #444 负责 Artifact-first、Claim/Evidence 和 Projection；本文补足插件准入和副作用一致性。
 - #445 负责跨任务 Experience、指标、回放和成本感知；本文把失败反馈和修正轨迹纳入经验来源。
 - #446 是本设计总单；后续实现、代码事实、阶段验收和失败复盘应在该 Issue 评论或关联 PR 中追加。
-- `DESIGN.md` §5.1 的 Job/Attempt/effect、§8 的 events/evidence/bus 分层和 §13 的 D1–D6 是当前可信边界；本文只能在这些边界之上演进，不能以插件化绕过它们。
+- [DESIGN.md](../DESIGN.md) §7 的 Job/Attempt/effect、§9 的 events/evidence/bus 分层和 §13 的实现硬约束是当前可信边界；本文只能在这些边界之上演进，不能以插件化绕过它们。

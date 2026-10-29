@@ -3,14 +3,14 @@
 > **平台升级核查（2026-10-21，#740 / #747）**：官方 digest 清单、严格 dotenv 校验和终态 Attempt 效果排空已接通；维护升级新增数据库身份隔离、源库保全、候选库重建与同目标续做模块。宿主入口、受管 SSH 节点和显式回滚恢复已接线，真实单机/多节点成功场景已通过；最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，见 [升级演练](../deploy/UPGRADE_REHEARSAL.md)。配置 preflight 已接密钥格式/密文认证与 当前持久默认组合的 credential-first 解析，外部认证等仍列为未检查；P2 宿主实现已接线，正式 tag 签名发布已获授权并接线，生产验收见对应 Release 证据，P3 Web 发起为可选。决策见 [ADR 0008](architecture/adr/0008-maintenance-candidate-upgrade.md)，验收边界见 [风险记录](architecture/12-risks-and-tech-debt.md)。
 > **项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录、项目 Memory/Skill 生命周期、精确跨项目 Skill 授权、独立 case×arm 评测、持久回执与管理页见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。实现状态与模型效果试验分开记录。
 
-> **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) §8.2。
+> **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [凭据解析运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
 > **当前同步状态（2026-10-18）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 当前集成编号以 `schema-version.ts` 为准（不作为发布版本承诺）（#690 能力插件运行时；#691 清除项目级能力配置面；#740 平台级全局暂停领取与版本发现；#748 凭据健康类别新增 `model_unavailable` / `quota_exhausted`）；#740 平台镜像按不可变 digest 引用，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`。#626 把凭据资产、角色引用与快照生效拆成三条边界。当前 DSH 迁移选定官方 `@deepseek-ai/dsh@0.2.0-rc.2`：隔离 lockfile + `dsh --profile`、显式 `bundles: []` profile、Gateway-only 短期 token、PTC `run_code`、v4 Session 归档；跨进程持久 resume 明确不支持。根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
 
 
-> **运行镜像发布核对（2026-10-15）**：Chrome / ClickHouse 双架构缓存复用以 runnable 平台 manifest 精确相等为证明，source-cache 命中本身不能复用旧 catalog 首行。**v0.5.5 已发布**：`deepsonar-reverse` canonical digest `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8` 已写入 bundled registry（三通道 inspect 通过）；v0.5.4 曾因 ACR / Docker Hub 通道失败未完成 Release，v0.5.5 带上 #732 重试修复后全部成功（run `38506851988`）。**v0.5.6 发版准备中**（#736 Anthropic 探测客户端指纹、#730 部署就绪门禁与镜像恢复统计、#734 失败发布恢复守则）：本节日期与 compare link 仅用于发布准备，不证明 `v0.5.6` tag 已存在。详见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md) / [`REA_CLI_CAPABILITIES.md`](REA_CLI_CAPABILITIES.md)。
+> **发布状态核对（2026-10-29）**：[v0.6.0](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.0) 已于 2026-10-22 正式发布（非 draft / prerelease），包含两份 runtime registry、平台签名证据、Reverse 证据和 Management Skill 附件。本次核对 Release 元数据及附件清单，没有重新执行 registry inspect、验签或部署；发布存在不代表任意部署已升级或已通过运行验收。镜像内容版本与平台 Release 版本分别管理，缓存复用仍须核对 runnable 平台 manifest。发布契约与历史记录见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md)，Reverse 专题见 [`REA_CLI_CAPABILITIES.md`](REA_CLI_CAPABILITIES.md)。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
@@ -39,7 +39,7 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [architecture/README.md](architecture/README.md) | **文档基线（#741；2026-10-15）** | 十二篇规格与视图、主题权威归属、逐章迁移、[追溯矩阵](architecture/traceability.md)和[开发 Skill](../.agents/skills/architecture-doc-sync/SKILL.md)；实现事实、规范与验证证据分开 |
-| [architecture/adr/README.md](architecture/adr/README.md) | **六条既有决策回填（#741；2026-10-15）** | 不向后兼容、schema 基线、API-only、Fact/Verify 分责、三流存储与镜像准入；回填不新增决策 |
+| [architecture/adr/README.md](architecture/adr/README.md) | **已采纳决策索引** | 0001–0006 为历史回填；0007–0008 记录暂停回滚及维护身份隔离/候选库升级，验收范围见各条状态与演练记录 |
 
 ---
 
@@ -61,7 +61,7 @@
 | [REA CLI 深度二进制解析](REA_CLI_CAPABILITIES.md) | **v0.5.5 已发布**（#718）：`deepsonar-reverse` canonical digest 与三通道 inspect 证据已回写 bundled registry；原生双架构 OCI、真实 OpenSandbox Job、reverse 发布与不可变 catalog 链；保持项目 opt-in 边界 |
 | [Agent Runtime Profiles](AGENT_RUNTIME_PROFILES.md) | #613 Provider / 模型 / CLI 统一运行时 Profile（`deepsonar.agent-runtime-profile/v1`，phase 1） |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
-| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；双架构缓存复用须证明 runnable payload 一致；v0.5.5 已发布（含 `deepsonar-reverse` digest 与三通道证据）；v0.5.6 发版准备中；后续发版仍以真实 Release 证据为准 |
+| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；v0.6.0 正式 Release 与附件已核对，镜像验签和部署验收分别留证；双架构缓存复用须证明 runnable payload 一致 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
 | [RELEASE_READINESS_POST_v0.4.4.md](RELEASE_READINESS_POST_v0.4.4.md) | **运维/发布** | v0.4.4→当前 main 升级/部署/合并后验收闭环（#582）；区分代码/CI 已核实与实机延期 |
@@ -92,8 +92,8 @@
 | Issue | 结论 | 事实入口 |
 |------|------|----------|
 | [#390](https://github.com/SummerSec/DeepSonar/issues/390) | DSH 方言归 runtime-sandbox adapter | `docs/AGENT_CLI_RUNTIME_ADAPTERS.md` |
-| [#386](https://github.com/SummerSec/DeepSonar/issues/386) | 删除无决策别名；保留项写明权威来源 | `DESIGN.md` §6.0 |
-| [#387](https://github.com/SummerSec/DeepSonar/issues/387) | **保留** Fact 证据信任态（与 Finding Verify 分责） | `DESIGN.md` §4.3 |
+| [#386](https://github.com/SummerSec/DeepSonar/issues/386) | 删除无决策别名；保留项写明权威来源 | `DESIGN.md` §4.1 |
+| [#387](https://github.com/SummerSec/DeepSonar/issues/387) | **保留** Fact 证据信任态（与 Finding Verify 分责） | `DESIGN.md` §6.1 |
 | [#388](https://github.com/SummerSec/DeepSonar/issues/388) | events / evidence / bus 三职责；拓扑可恢复性；bus 非权威 | `DESIGN.md` §9 |
 | [#389](https://github.com/SummerSec/DeepSonar/issues/389) | 解码三类契约与钉死版本夹具；当前 DSH 为 0.2.0-rc.2，旧代夹具仅作历史 viewer 回归 | `docs/AGENT_CLI_RUNTIME_ADAPTERS.md` |
 
@@ -145,4 +145,4 @@
 1. 功能落地后：改 `DESIGN.md`，并更新本索引与对应专题文首 **状态** 行。  
 2. 历史方案稿**不要删正文推演**（可当设计考古），但必须在顶部写清 as-built。  
 3. 禁止在文首写「待实现」而代码已交付超过一版。  
-4. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag 之前，按 [`../AGENTS.md`](../AGENTS.md)「发布前的文档保鲜」清单核一遍（版本字面量、已删机制残留、as-built 与代码一致性、本索引状态行与日期、命令与链接），并同步本文件顶部的「当前同步状态」。其中版本字面量、命令、链接与已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检阻断（`as-built 与代码相反` 仍需人工）；漂移修在同一个 release 分支，不留给下一个版本；展开见 [`ARCHITECTURE.md`](ARCHITECTURE.md) §17.5。
+4. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag 之前，按 [`../AGENTS.md`](../AGENTS.md)「发布前的文档保鲜」清单核一遍（版本字面量、已删机制残留、as-built 与代码一致性、本索引状态行与日期、命令与链接），并同步本文件顶部的「当前同步状态」。其中版本字面量、命令、链接与已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检阻断（`as-built 与代码相反` 仍需人工）；漂移修在同一个 release 分支，不留给下一个版本；展开见 [工程规范](architecture/11-engineering-specs.md)与[发布流程](RELEASE_RUNTIME_IMAGES.md)。
