@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import {
   JobEvidenceWriter,
+  readSessionArtifact,
   MAX_STREAM_RETAINED_BYTES,
   appendOtlpEnvelope,
   clearJobEvidenceSecrets,
@@ -354,4 +356,23 @@ test("tail keeps the newest records when one file exceeds the record cap", async
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("#765 large RPC artifact survives finalization with an attempt-scoped hash and path", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000765";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const writer = new JobEvidenceWriter(jobId, "pi", "rpc-capture");
+  const artifact = { name: "pi-rpc-12345678-1234-4000-8000-123456789012-1.json", content: JSON.stringify({ type: "message_update", text: "中".repeat(400_000) }) };
+  try {
+    const reference = await writer.appendRuntimeArtifact(artifact);
+    assert.equal(await readFile(path.join(root, reference), "utf8"), artifact.content);
+    const { manifest } = await writer.finalize();
+    const entry = manifest.files.find(f => f.path === reference)!;
+    assert.equal(entry.bytes, Buffer.byteLength(artifact.content));
+    assert.equal(entry.sha256, createHash("sha256").update(artifact.content).digest("hex"));
+    assert.equal(entry.kind, "vendor_export");
+    assert.equal((await readSessionArtifact(jobId, reference))?.content.toString("utf8"), artifact.content);
+    assert.equal(await readSessionArtifact(jobId, "attempts/other/runtime/unknown.json"), null);
+    await assert.rejects(writer.appendRuntimeArtifact({ ...artifact, name: "../other-attempt/secret.json" }), /Invalid runtime artifact name/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
