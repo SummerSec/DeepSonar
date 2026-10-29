@@ -121,7 +121,13 @@ async function run(taskMode, home, sessionId) {
       const result = events.find((event) => event.type === "tool/result");
       assert.ok(result, "real tool result missing");
       assert.ok(!result.data.error, `tool failed: ${JSON.stringify(result.data)}`);
-      assert.match(JSON.stringify(result), phase === "ptc" ? /ptc-verified/ : phase === "subagent" ? /child-verified/ : /standard-verified/);
+      if (phase === "subagent") {
+        // 0.2.1-rc.2 起 governed `subagent` 是 continuable：tool/result 只回
+        // "started subagent <id>"，子代理的最终文本随子会话事件到达，因此改查整条记录流。
+        assert.match(JSON.stringify(records), /child-verified/, "subagent child result missing from the event stream");
+      } else {
+        assert.match(JSON.stringify(result), phase === "ptc" ? /ptc-verified/ : /standard-verified/);
+      }
     }
     return events;
   } finally { clearTimeout(timeout); child.kill("SIGKILL"); }
