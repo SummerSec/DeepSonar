@@ -255,9 +255,10 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
     const actor = req.actor?.name ?? "anonymous";
     const result = await sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
+      // Every trust mutation serializes with report freezing and event ingestion.
+      await tx`SELECT id FROM canvases WHERE id = ${id} FOR UPDATE`;
       if (parsed.data.plan_binding) {
-        // Match event ingestion/report lock order: Canvas → Plan Job → Fact.
-        await tx`SELECT id FROM canvases WHERE id = ${id} FOR UPDATE`;
+        // Canvas → Plan Job → Fact.
         await tx`SELECT id FROM jobs WHERE id = ${parsed.data.plan_binding.plan_job_id}
           AND canvas_id = ${id} FOR SHARE`;
       }

@@ -72,13 +72,7 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
     assert.equal(jobDetail.statusCode,200,jobDetail.payload);
     assert.ok(JSON.stringify(jobDetail.json()).includes(model.contentSha256(plan)));
     assert.equal((await criteria())[0]?.state,"unbound");
-    const body = await request(first.fact);
-    // Ingestion/report owns Canvas before Job. Hold that lock while a real binding request starts.
-    let waitingPatch: ReturnType<typeof patch> | undefined;
-    const writerError = await sql.begin(async tx => {
-      await tx`SET LOCAL deadlock_timeout = '100ms'`;
-      await tx`SELECT id FROM canvases WHERE id=${canvas} FOR UPDATE`;
-      waitingPatch = patch(first.fact,body);
+    const waitForCanvasWait = async (tx: typeof sql) => {
       let observedWait = false;
       for (let tries=0; tries<100; tries++) {
         await tx`SELECT pg_stat_clear_snapshot()`;
@@ -87,7 +81,16 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
         if (waiting.length) { observedWait=true; break; }
         await new Promise(resolve=>setTimeout(resolve,100));
       }
-      assert.ok(observedWait,"binding request must wait behind Canvas writer");
+      assert.ok(observedWait,"trust mutation must wait behind Canvas writer");
+    };
+    const body = await request(first.fact);
+    // Ingestion/report owns Canvas before Job. Hold that lock while a real binding request starts.
+    let waitingPatch: ReturnType<typeof patch> | undefined;
+    const writerError = await sql.begin(async tx => {
+      await tx`SET LOCAL deadlock_timeout = '100ms'`;
+      await tx`SELECT id FROM canvases WHERE id=${canvas} FOR UPDATE`;
+      waitingPatch = patch(first.fact,body);
+      await waitForCanvasWait(tx as unknown as typeof sql);
       await tx`SELECT id FROM jobs WHERE id=${planJob} FOR UPDATE`;
       await tx`UPDATE jobs SET payload_json=${tx.json({plan_protocol:mergePlanAudit(null,{source:"submit_plan",raw:{...plan,goal:"Concurrent revised scope"}})} as never)} WHERE id=${planJob}`;
     }).then(()=>null,(error: unknown)=>error);
@@ -133,6 +136,22 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
     assert.deepEqual(original[0].state,"satisfied","historical projection remains unchanged");
     const secondBinding = (await detail(second.fact)).plan_bindings.records[0].after_json.binding_id;
     assert.equal((await patch(second.fact,await request(second.fact,{expected_binding_id:secondBinding}))).statusCode,200);
+    assert.equal((await criteria())[0]?.state,"satisfied");
+    // Ordinary revoke/reverify also serializes with a report transaction holding Canvas.
+    for (const [status, frozenState] of [["needs_human","satisfied"],["verified","stale"]] as const) {
+      let pendingTrust: ReturnType<typeof patch> | undefined;
+      await sql.begin(async tx => {
+        await tx`SELECT id FROM canvases WHERE id=${canvas} FOR UPDATE`;
+        pendingTrust=patch(first.fact,{status});
+        await waitForCanvasWait(tx as unknown as typeof sql);
+        const report=await buildReportInput(canvas,tx as unknown as typeof sql);
+        assert.equal(report.plan_gaps?.entries[0]?.audit?.criteria[0]?.state,frozenState);
+      });
+      const changed=await pendingTrust!;
+      assert.equal(changed.statusCode,200,changed.payload);
+    }
+    assert.equal((await criteria())[0]?.state,"stale");
+    assert.equal((await patch(first.fact,await request(first.fact,{expected_binding_id:await latestId()}))).statusCode,200);
     assert.equal((await criteria())[0]?.state,"satisfied");
     await writeFile(path.join(blob,"jobs",sourceJob,first.uri),"tampered");
     assert.equal((await criteria())[0]?.state,"blocked");
