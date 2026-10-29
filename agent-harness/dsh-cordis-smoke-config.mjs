@@ -33,6 +33,10 @@ export function buildDshProfilePatch(options) {
   add("shell-env");
   add("bash-local", "bash-local", { cwd: options.cwd, timeoutMs: 300000 });
   add("fs-local", "fs-local", { cwd: options.cwd });
+  // DSH 0.2.1-rc.2 起 `workingDirectory` 是独立服务（inject: fs / sessionProjections / systemPrompt），
+  // 不再由旧插件顺带提供：漏声明会让 tool-bash / tool-fs / tool-skill / subagent 与
+  // 必选的 sdk-jsonrpc-server 全部卡在 "Missing services"。
+  add("working-directory", "working-directory", { defaultDirectory: options.cwd });
   add("tool-bash", "tool-bash", { enableRunInBackground: true });
   add("fs-observation-policy");
   add("tool-fs");
