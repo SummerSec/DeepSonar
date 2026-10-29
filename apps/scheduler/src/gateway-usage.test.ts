@@ -42,7 +42,7 @@ test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {
     authorization: "Bearer sk-test",
     "x-api-key": "sk-test",
     "anthropic-version": "2023-06-01",
-    "user-agent": "claude-cli/2.1.296 (external, cli)",
+    "user-agent": "claude-cli/2.1.312 (external, cli)",
     "x-app": "cli",
   });
   assert.deepEqual(upstreamAuthHeaders("openai", "sk-test"), {

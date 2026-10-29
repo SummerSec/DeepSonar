@@ -63,7 +63,7 @@ export function resolvePiCliModelId(model: string | undefined | null): string | 
 }
 
 /**
- * Pi 1.1.0 rejects a bare catalog id when it exists on multiple built-in
+ * Pi rejects a bare catalog id when it exists on multiple built-in
  * providers. Pass `--provider <route> --model <id>` (not `--model provider/id`).
  */
 export function resolvePiCliLaunchFlags(
@@ -124,6 +124,8 @@ export interface AdapterRuntimeState {
   dshTurnError?: string;
   dshInitialInput?: string;
   dshChildSessionIds?: Set<string>;
+  dshChildParents?: Map<string, string>;
+  dshActiveChildren?: Set<string>;
   failed?: boolean;
   errorDetail?: string;
 }
@@ -163,73 +165,27 @@ export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)
   "platformControlApi",
 ];
 
-/** Pi 官方 RPC 只按 LF 分隔 JSONL；U+2028/U+2029 始终是字符串数据。 */
-export class PiJsonlFramer {
-  private buffer = "";
-  private ended = false;
-  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
-  private readonly maxBytes: number;
+/**
+ * 单个 Pi RPC 事件的字节上限（#765）。
+ *
+ * 1MB 的旧上限会让 `cat large.js` / `curl` 整页 / `rg` 全仓这类大输出把 Job 直接判失败
+ * （`PI_RPC_MESSAGE_TOO_LARGE`），而这正是审计最需要证据的维度。默认放宽到 8MB，
+ * 并允许 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖。
+ */
+export const PI_RPC_MAX_EVENT_BYTES_DEFAULT = 8 * 1024 * 1024;
+export const PI_RPC_MAX_EVENT_BYTES_LIMIT = 64 * 1024 * 1024;
 
-  constructor(maxBytes = 1024 * 1024) {
-    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("PI_RPC_MAX_BYTES_INVALID");
-    this.maxBytes = maxBytes;
-  }
-
-  push(chunk: string | Uint8Array): string[] {
-    if (this.ended) throw new Error("PI_RPC_FRAMER_ENDED");
-    if (typeof chunk === "string") {
-      this.buffer += chunk;
-    } else {
-      try {
-        this.buffer += this.decoder.decode(chunk, { stream: true });
-      } catch {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_INVALID_UTF8");
-      }
-    }
-    const lines: string[] = [];
-    while (true) {
-      const index = this.buffer.indexOf("\n");
-      if (index < 0) break;
-      const line = this.buffer.slice(0, index);
-      this.buffer = this.buffer.slice(index + 1);
-      const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
-      if (!normalized) {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_EMPTY_FRAME");
-      }
-      if (Buffer.byteLength(normalized, "utf8") > this.maxBytes) {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
-      }
-      lines.push(normalized);
-    }
-    if (Buffer.byteLength(this.buffer, "utf8") > this.maxBytes) {
-      this.ended = true;
-      this.buffer = "";
-      throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
-    }
-    return lines;
-  }
-
-  finish(): string[] {
-    if (this.ended) return [];
-    this.ended = true;
-    try {
-      this.buffer += this.decoder.decode();
-    } catch {
-      this.buffer = "";
-      throw new Error("PI_RPC_INVALID_UTF8");
-    }
-    if (!this.buffer) return [];
-    const length = this.buffer.length;
-    this.buffer = "";
-    throw new Error(`PI_RPC_TRUNCATED_FRAME: ${length}`);
-  }
+export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DEEPSONAR_PI_RPC_MAX_EVENT_BYTES?.trim();
+  if (!raw) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (!/^\d+$/.test(raw)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (value < 1024 * 1024 || value > PI_RPC_MAX_EVENT_BYTES_LIMIT) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  return value;
 }
+
+export { PiJsonlFramer } from "./pi-jsonl-framer.js";
 
 const PI_RPC_EVENT_TYPES = new Set([
   "response",
@@ -269,7 +225,7 @@ const PI_RPC_EVENT_TYPES = new Set([
   "follow_up",
 ]);
 
-export function parsePiJsonlRecord(line: string, maxBytes = 1024 * 1024): Record<string, unknown> {
+export function parsePiJsonlRecord(line: string, maxBytes = piRpcMaxEventBytes()): Record<string, unknown> {
   if (Buffer.byteLength(line, "utf8") > maxBytes) throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
   if (!line) throw new Error("PI_RPC_EMPTY_FRAME");
   let value: unknown;
@@ -445,11 +401,11 @@ function sandboxClaude(
 
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
-  version: "2.1.296",
+  version: "2.1.312",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  // Claude Code 2.1.296 is the governed pin (npm latest). That
+  // Claude Code 2.1.312 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
   // an adapter whose pinned minimum does not support it.
   start: (context) => sandboxClaude(context.host, context),
@@ -664,7 +620,7 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
 
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
-  version: "1.1.0",
+  version: "1.4.0",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
@@ -819,16 +775,35 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
   const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
   if (method === "subagent.started") {
     const parent = params.parentSessionId, child = params.childSessionId;
-    if (typeof child !== "string" || !child || (parent !== dshSessionId(state) && !state.dshChildSessionIds?.has(String(parent)))) {
+    if (typeof child !== "string" || !child || child === dshSessionId(state) || child === parent || (parent !== dshSessionId(state) && !state.dshChildSessionIds?.has(String(parent)))) {
       return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
     }
+    if (state.dshChildParents?.has(child) && state.dshChildParents.get(child) !== parent) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    if (!state.dshChildSessionIds?.has(child)) (state.dshActiveChildren ??= new Set()).add(child);
     (state.dshChildSessionIds ??= new Set()).add(child);
+    (state.dshChildParents ??= new Map()).set(child, String(parent));
+    return [];
+  }
+  if (method === "subagent.finished") {
+    const child = params.childSessionId;
+    if (typeof child !== "string" || !state.dshChildParents?.has(child) || state.dshChildParents.get(child) !== params.parentSessionId) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    state.dshActiveChildren?.delete(child);
+    // Completion is delivered to the parent by DSH. Wait for its next idle;
+    // a finished child alone must not settle the parent's previous turn.
     return [];
   }
   if (method === "session.event" || method === "session.status") {
     // The official server broadcasts child sessions too. Only a preceding
     // authenticated lineage notification admits their non-authoritative stream.
-    if (sessionId && state.dshChildSessionIds?.has(sessionId)) return unknownRuntimeEvent();
+    if (sessionId && state.dshChildSessionIds?.has(sessionId)) {
+      // Continuable children can start another epoch without session/created.
+      if (method === "session.status" && params.status === "running") (state.dshActiveChildren ??= new Set()).add(sessionId);
+      return unknownRuntimeEvent();
+    }
     if (!sessionId || sessionId !== dshSessionId(state)) {
       return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
     }
@@ -882,6 +857,9 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
   if (method === "session.status") {
     if (params.status === "idle") {
       if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
+      // Parent idle is a pause while descendants run, not a completion-gate
+      // attempt. Child idle precedes parent delivery; only finished clears it.
+      if (state.dshActiveChildren?.size) return [];
       return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
     }
     return [];

@@ -36,6 +36,10 @@
 
 每个主题的权威正文及旧章节迁移状态见[归属表](docs/architecture/README.md)。旧 `docs/ARCHITECTURE.md` 保留作历史对照，不能单独作为现行实现依据。`CLAUDE.md` 是指向本文件的 Git 符号链接；Windows 禁用符号链接时检出为目标路径文本，不另维护副本。
 
+## 平台任务下发必须加载 Skill（#767）
+
+创建、拆分或重新下发 DeepSonar 平台任务前，必须加载并执行 [deepsonar-management](skills/deepsonar-management/SKILL.md)，按其中指向的任务下发流程完成整理与复核。详细规则只在该 Skill 维护，不在本文件复制。普通仓库代码修改、代码评审和编码子任务委派不属于平台任务下发，不因此套用业务任务模板。
+
 ## 常用命令
 
 ```bash
