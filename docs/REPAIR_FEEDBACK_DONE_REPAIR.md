@@ -33,6 +33,8 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 `request_human` 的异步预检结束后，执行器再次核对完成预留和已接受的 human/done/Hub 状态，再保存人工请求。这样，预检等待期间完成提案已经 commit 并释放预留时，迟到人工请求仍被拒绝；两个人工请求并发预检时，后接受者也不能覆盖先接受者。匹配事件身份的 abort 才能释放完成预留，未知结果仍保留预留。
 
+`submit_hub_decision` 也在异步预检后重新检查人工请求和已接受的 Hub 槽位，拒绝迟到的冲突或覆盖；Hub 与 done 仍允许共存，最终事件保持 Hub 在 done 之前。该复查由 Hub 等待期间 human 先接受、双 Hub 交错，以及等待期间完成提交的离线测试覆盖。
+
 `executor-real-terminal-race.test.ts` 调用真实 `executeReal`、其注册的 Control handler、完成门及终态事件选择，以有界 barrier 固定交错。数据库预检/写入、运行器传输和 Evidence 是离线替身；这不等于真实 HTTP/数据库并发、实际 CLI 或模型验收。持久回执事务仍由 B1 的 PostgreSQL 集成测试覆盖。测试接入 `pnpm ci:unit:executor-real`，在独立 Node module-mock 进程运行。
 
 ## 验收边界
