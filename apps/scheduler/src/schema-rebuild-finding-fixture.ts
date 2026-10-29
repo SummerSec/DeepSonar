@@ -2,7 +2,7 @@
  * differences restored (project fingerprint unique, no source_digest). This is
  * deliberately NOT a claim to recreate the entire historical v62 baseline. */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +25,28 @@ function priorFindingShape(): string {
     schema = schema.replace(before, after);
   }
   return schema;
+}
+
+/** Keep connection credentials out of process arguments and surfaced command errors. */
+export function restoreFindingSourceBackup(
+  backupUrl: URL,
+  dumpPath: string,
+  run: (command: string, args: readonly string[], options: ExecFileSyncOptions) => unknown = execFileSync,
+): void {
+  try {
+    run("pg_restore", ["--exit-on-error", "--dbname", decodeURIComponent(backupUrl.pathname.slice(1)), dumpPath], {
+      stdio: "pipe", timeout: 30_000,
+      env: {
+        ...process.env,
+        PGHOST: backupUrl.hostname, PGPORT: backupUrl.port || "5432",
+        PGUSER: decodeURIComponent(backupUrl.username), PGPASSWORD: decodeURIComponent(backupUrl.password),
+        ...(backupUrl.searchParams.has("sslmode") ? { PGSSLMODE: backupUrl.searchParams.get("sslmode")! } : {}),
+      },
+    });
+  } catch {
+    // Do not attach the child-process error/cause/stdout/stderr: it may contain credentials.
+    throw new Error("Finding rebuild backup restore failed; check matching PostgreSQL client/server versions and test database availability.");
+  }
 }
 
 export async function runFindingSourceRebuildFixture(testUrl: string): Promise<void> {
@@ -95,7 +117,7 @@ export async function runFindingSourceRebuildFixture(testUrl: string): Promise<v
     assert.equal(result.applied, true);
     assert.ok(result.dumpPath, "CI requires a real pg_dump backup, not just retained staging");
     assert.equal(readFileSync(result.dumpPath).subarray(0, 5).toString(), "PGDMP");
-    execFileSync("pg_restore", ["--exit-on-error", "--dbname", backupUrl.toString(), result.dumpPath], { stdio: "pipe" });
+    restoreFindingSourceBackup(backupUrl, result.dumpPath);
     assert.equal((await backup`SELECT version FROM schema_meta WHERE id='global'`)[0].version, 62);
     assert.deepEqual(await capture(backup), history, "restored on-disk backup must preserve the full source chain");
     assert.deepEqual(await capture(db), history, "column intersection copy must preserve all original rows");

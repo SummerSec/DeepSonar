@@ -73,8 +73,12 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install PostgreSQL 16 client (matches the service)
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/16/bin/pg_dump --version
+          /usr/lib/postgresql/16/bin/pg_restore --version
 
       - run: pnpm install --frozen-lockfile
 
