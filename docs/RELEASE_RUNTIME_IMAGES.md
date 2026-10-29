@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> **状态：运维 as-built（2026-10-22）**。最新已发布版本为 [v0.5.6](https://github.com/SummerSec/DeepSonar/releases/tag/v0.5.6)；本轮准备 **v0.6.0**，集成 schema 62、项目知识、凭据优先解析、维护升级与正式 tag 的平台 keyless 签名。发布准备和 CI 不证明新版已发布；最终三渠道双架构 inspect、签名与 Release 附件必须在正式 workflow 实际通过。历史失败 tag 不移动，现网不自动升级。
+> **状态：运维 as-built；发布元数据核对于 2026-10-29**。[v0.6.0](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.0) 已于 2026-10-22T06:02:52Z 正式发布（非 draft / prerelease），Release 附有 `runtime-image-registry.json`、`runtime-image-registry-v2.json`、`platform-signature-evidence.json`、`deepsonar-reverse-evidence-0.6.0.tar.gz` 和 Management Skill。本次只核对 Release 元数据及附件清单，未重新 inspect 镜像、验签或部署；附件存在不替代签名内容校验，发布完成不等于现网已经升级。下次发布仍须按本文完成目标版本的双架构、各通道 inspect、签名和验收门禁；历史正式 tag 保持不可变。
 >
 > Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
