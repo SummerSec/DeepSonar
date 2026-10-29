@@ -5,7 +5,7 @@
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
-平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：基础机制已有代码，受管节点和显式回滚恢复正在接线，最终真实端到端验收未完成；不能把该决策等同于 #740 全部交付。
+平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：宿主、受管 SSH 节点和显式回滚恢复已接线；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；Windows Docker 全流程、断电及真实模型验证不能由这些记录推定，P3 Web 发起仍未实现，不能把该决策等同于 #740 全部交付。
 
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
 

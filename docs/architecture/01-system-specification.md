@@ -1095,9 +1095,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：`database/schema.sql` 必须是唯一 schema 基线且与 `SCHEMA_VERSION` 同步；改表必须修改基线、bump 版本并重建/验证，不得添加启动时增量 ALTER 链或按旧版本隐式迁移。
 - **决策来源**：稳定列、外键、唯一约束和权限骨架需要可审计的单一来源。
-- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，选定 9 项中断/排空场景已通过，最终组合基线验收待完成。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
+- **实现状态**：as-built（单一基线纪律）；受控维护升级已新增只读计划、身份隔离与候选重建模块，宿主与受管 SSH 已接线，最终 schema 61 → 62 组合镜像的隔离演练已有通过记录，具体范围见下述验证证据。维护授权不允许清除未审批配置或回滚激活后的合法写入；计划绑定源/目标 DDL 指纹，源库冻结保全，见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
 - **代码入口**：[schema version](../../apps/scheduler/src/schema-version.ts)、[schema rebuild](../../apps/scheduler/src/schema-rebuild.ts)、[database baseline](../../database/schema.sql)、[维护升级状态机](../../deploy/platform-upgrade-maintenance.mjs)、[候选库管理](../../deploy/platform-upgrade-candidate.mjs)、[只读计划](../../apps/scheduler/src/platform-upgrade-schema-plan.ts)。
-- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，真实单机及多节点成功场景已通过，选定 9 项中断/排空场景已通过，剩余恢复场景及最终组合基线镜像待验收，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)。
+- **验证证据**：`pnpm ci:unit:migrations`、`pnpm ci:unit:docs-freshness`、`pnpm db:rebuild -- --plan`；[维护故障注入](../../deploy/platform-upgrade-maintenance.test.mjs) 与 [候选库实测](../../apps/scheduler/src/platform-upgrade-schema-integration.test.ts) 已有隔离证据，schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，包含单机、多节点、回滚恢复、中断续做及排空阻断。历史输入版本、隔离环境与未执行项见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；这些记录不代表当前提交重跑通过，也不证明 Windows Docker 全流程或真实模型效果。
 
 ### CON-004 API-only Control 面
 
