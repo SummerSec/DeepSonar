@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 变更
+
+- Agent CLI 治理 pin 抬到当前上游版本（无数据库变更）：Claude Code `2.1.296` → `2.1.312`、Pi Coding Agent `1.1.0` → `1.4.0`、官方 DSH `0.2.0-rc.2` → `0.2.1-rc.2`。base / kali-minimal 两个 Dockerfile 的 ARG 与 npm `sha512` integrity 同步更新；`agent-harness/dsh-runtime` 冻结 lockfile 重生成（新版上游移除了 `@deepseek-ai/dsh-invariants`，清单与 runtime manual 目录一并删除该条目）；`agent-harness/runtime-images.json`、`kali-minimal-runtime.json` 与 `runtime-manuals/catalog.json` 跟着重建，adapter 声明的 `version` 与夹具用例断言同步。Pi 1.4.0 要求 node ≥ 22.19.0，base 镜像的 `node:22-bookworm-slim` 满足。Pi rpc 模式与 DSH `lib/bin.js` 入口在新版本中仍存在；旧夹具录制于 Pi 1.1.0 / DSH 0.2.0-rc.2，仅作格式证据，新版本的 live 解码需真机 Job 复核。治理 profile 同步去掉上游已删除的 invariant 插件族，并补上 0.2.1-rc.2 起独立出来的 `working-directory` 插件（`workingDirectory` 服务原来的提供者不再顺带提供它）（`@deepseek-ai/dsh-invariants` 与 dsh-{session,agent,scope,agent-loop} 的 `./invariant` 子路径），否则 DSH 启动即报 required plugin did not activate（base 镜像的 DSH Cordis 真实容器启动门禁发现）。
+
 ### 修复
 
 - Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。无需 schema 变更；生产 17 个 Job 未重跑。

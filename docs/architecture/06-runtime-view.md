@@ -92,3 +92,7 @@ Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有�
 ## Pi 大输出捕获（#765）
 
 RPC 按帧有界扫描，默认 8MiB 硬上限（可配置至 64MiB）；超过 1MiB 的受支持事件保存完整脱敏 JSON 到 workspace 与 Attempt evidence 后，再生成有界文本预览。控制字段不丢弃，错误响应不得变为成功；每次运行含恢复共用 128MiB 保存预算，写盘背压、超额与损坏明确失败且记录 capture_complete=false。元数据及 hash 范围见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。不改变数据库、Job 授权或 Pi 内部模型上下文；真实生产重跑未验证。
+
+## DSH 子代理与完成门（#766）
+
+对应 FR-CRED-005。DSH 父会话 idle 时若仍存在受认证谱系下的活跃子代理，不触发完成门、催促或 shutdown。只有对应 `subagent.finished` 结束该轮子代理活动；子 idle 不是完成依据，恢复 running 会重新计入活动。全部子代理完成后等待父会话接收结果并再次 idle，再按原完成回执契约结算。父错误、Job 超时与取消仍可终止运行。验证入口是现有 `ci:unit:runtime-sandbox` 中的 `runtime-dsh-recovery.test.ts`（新版真实协议回放）及 CI 的 DSH Cordis Docker smoke。

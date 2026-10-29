@@ -63,7 +63,7 @@ export function resolvePiCliModelId(model: string | undefined | null): string | 
 }
 
 /**
- * Pi 1.1.0 rejects a bare catalog id when it exists on multiple built-in
+ * Pi rejects a bare catalog id when it exists on multiple built-in
  * providers. Pass `--provider <route> --model <id>` (not `--model provider/id`).
  */
 export function resolvePiCliLaunchFlags(
@@ -124,6 +124,8 @@ export interface AdapterRuntimeState {
   dshTurnError?: string;
   dshInitialInput?: string;
   dshChildSessionIds?: Set<string>;
+  dshChildParents?: Map<string, string>;
+  dshActiveChildren?: Set<string>;
   failed?: boolean;
   errorDetail?: string;
 }
@@ -399,11 +401,11 @@ function sandboxClaude(
 
 const claude = Object.freeze<RuntimeAdapter>({
   id: "claude-code",
-  version: "2.1.296",
+  version: "2.1.312",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({ streamEvents: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
   compatibleImageKeys: ALL_IMAGE_KEYS,
-  // Claude Code 2.1.296 is the governed pin (npm latest). That
+  // Claude Code 2.1.312 is the governed pin (npm latest). That
   // contract supports partial stream-json frames; do not pass this flag to
   // an adapter whose pinned minimum does not support it.
   start: (context) => sandboxClaude(context.host, context),
@@ -618,7 +620,7 @@ function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?
 
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
-  version: "1.1.0",
+  version: "1.4.0",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,
@@ -773,16 +775,35 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
   const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
   if (method === "subagent.started") {
     const parent = params.parentSessionId, child = params.childSessionId;
-    if (typeof child !== "string" || !child || (parent !== dshSessionId(state) && !state.dshChildSessionIds?.has(String(parent)))) {
+    if (typeof child !== "string" || !child || child === dshSessionId(state) || child === parent || (parent !== dshSessionId(state) && !state.dshChildSessionIds?.has(String(parent)))) {
       return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
     }
+    if (state.dshChildParents?.has(child) && state.dshChildParents.get(child) !== parent) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    if (!state.dshChildSessionIds?.has(child)) (state.dshActiveChildren ??= new Set()).add(child);
     (state.dshChildSessionIds ??= new Set()).add(child);
+    (state.dshChildParents ??= new Map()).set(child, String(parent));
+    return [];
+  }
+  if (method === "subagent.finished") {
+    const child = params.childSessionId;
+    if (typeof child !== "string" || !state.dshChildParents?.has(child) || state.dshChildParents.get(child) !== params.parentSessionId) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    state.dshActiveChildren?.delete(child);
+    // Completion is delivered to the parent by DSH. Wait for its next idle;
+    // a finished child alone must not settle the parent's previous turn.
     return [];
   }
   if (method === "session.event" || method === "session.status") {
     // The official server broadcasts child sessions too. Only a preceding
     // authenticated lineage notification admits their non-authoritative stream.
-    if (sessionId && state.dshChildSessionIds?.has(sessionId)) return unknownRuntimeEvent();
+    if (sessionId && state.dshChildSessionIds?.has(sessionId)) {
+      // Continuable children can start another epoch without session/created.
+      if (method === "session.status" && params.status === "running") (state.dshActiveChildren ??= new Set()).add(sessionId);
+      return unknownRuntimeEvent();
+    }
     if (!sessionId || sessionId !== dshSessionId(state)) {
       return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
     }
@@ -836,6 +857,9 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
   if (method === "session.status") {
     if (params.status === "idle") {
       if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
+      // Parent idle is a pause while descendants run, not a completion-gate
+      // attempt. Child idle precedes parent delivery; only finished clears it.
+      if (state.dshActiveChildren?.size) return [];
       return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
     }
     return [];
