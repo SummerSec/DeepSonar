@@ -158,6 +158,8 @@ export class JobEvidenceWriter {
   private queue: Promise<void> = Promise.resolve();
   private session: SessionBundle | undefined;
   private sequence = 0;
+  private runtimeFiles: EvidenceFileMeta[] = [];
+  private runtimeBytes = 0;
   private pending = 0;
   private readonly safeAttemptId: string;
 
@@ -201,6 +203,20 @@ export class JobEvidenceWriter {
     return this.safeAttemptId;
   }
 
+  /** Redacted RPC files are durable before returning their attempt-scoped evidence reference. */
+  async appendRuntimeArtifact(artifact: { name: string; content: string }): Promise<string> {
+    if (!/^pi-rpc-[a-f0-9-]+-[0-9]+\.json$/.test(artifact.name)) throw new Error("Invalid runtime artifact name");
+    const bytes = Buffer.byteLength(artifact.content);
+    if (this.runtimeFiles.length >= 128 || this.runtimeBytes + bytes > 128 * 1024 * 1024) throw new Error("Runtime artifact budget exceeded");
+    this.runtimeBytes += bytes;
+    const target = path.join(this.attemptRoot, "runtime", artifact.name);
+    await atomicWrite(target, artifact.content);
+    const meta: EvidenceFileMeta = { name: artifact.name, path: path.relative(this.root, target).split(path.sep).join("/"),
+      kind: "vendor_export", bytes, sha256: sha256(artifact.content) };
+    this.runtimeFiles.push(meta);
+    return meta.path;
+  }
+
   setSession(session: SessionBundle | undefined): void {
     this.session = session;
   }
@@ -210,7 +226,7 @@ export class JobEvidenceWriter {
     await (otlpQueues.get(this.jobId) ?? Promise.resolve());
     await mkdir(this.attemptRoot, { recursive: true });
     const previous = await readEvidenceManifest(this.jobId);
-    const files: EvidenceFileMeta[] = [];
+    const files: EvidenceFileMeta[] = [...this.runtimeFiles];
 
     if (existsSync(this.streamPath)) {
       const raw = await readFile(this.streamPath);

@@ -667,12 +667,24 @@ export type FindingDisposition =
   | "resolved"
   | "archived";
 
+export interface FindingQueryFilters {
+  project_id?: string;
+  severity?: string;
+  profile?: string;
+  category?: string;
+  verify_status?: string;
+  disposition?: string;
+  canvas_id?: string;
+  q?: string;
+}
+
 export interface ProjectFindingsSummary {
   project_id: string;
   total: number;
   project_total: number;
   list_window: number;
   truncated: boolean;
+  profiles: Array<{ key: string; count: number }>;
   severity: Array<{ key: string; count: number }>;
   verify_status: Array<{ key: string; count: number }>;
   disposition: Array<{ key: string; count: number }>;
@@ -2399,6 +2411,7 @@ export const api = {
     severity?: string;
     profile?: string;
     category?: string;
+    q?: string;
     verify_status?: string;
     disposition?: string;
     /** 只拉某任务画布的发现，不混其它任务 */
@@ -2411,6 +2424,7 @@ export const api = {
         severity: opts?.severity,
         profile: opts?.profile,
         category: opts?.category,
+        q: opts?.q,
         verify_status: opts?.verify_status,
         disposition: opts?.disposition,
         canvas_id: opts?.canvas_id,
@@ -2435,8 +2449,8 @@ export const api = {
     disposition: opts?.disposition,
     canvas_id: opts?.canvas_id,
   })}`)),
-  projectFindingsSummary: (projectId: string, opts?: { canvas_id?: string }) =>
-    get<ProjectFindingsSummary>(`/projects/${projectId}/findings/summary${qs({ canvas_id: opts?.canvas_id })}`),
+  projectFindingsSummary: (projectId: string, opts?: Omit<FindingQueryFilters, "project_id">) =>
+    get<ProjectFindingsSummary>(`/projects/${projectId}/findings/summary${qs({ ...opts })}`),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
   projectSharedAssets: (projectId: string, page: { limit?: number; offset?: number } = {}) =>
     get<SharedAssetPage>(`/projects/${projectId}/shared-assets${qs({ limit: page.limit?.toString(), offset: page.offset?.toString() })}`),

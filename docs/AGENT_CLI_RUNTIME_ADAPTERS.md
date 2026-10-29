@@ -215,7 +215,32 @@ Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensi
 
 每个输入块都交给同一个持久 `TextDecoder`，再按 LF 分帧；CRLF 会去掉回车，
 U+2028/U+2029 仍保留为数据。
-半帧、非法 UTF-8、空行、超大行和未知事件均 fail closed，`finish()` 会显式拒绝尾部残帧。
+半帧、非法 UTF-8、空行、超过硬上限的行和未知事件均 fail closed，`finish()` 会显式拒绝尾部残帧。
+
+### Pi 大输出与证据（#765）
+
+Framer 按 LF 逐帧累计字节，惰性消费每帧；单次 SDK chunk 再大也只按 16Ki 字符/字节切片扫描。
+帧硬上限默认 8MiB，`DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 可配置 1–64MiB；parser 使用同一实例上限。
+缓冲只保留一帧，JSON 解析和保存时会有有界副本（硬上限不是进程 RSS 承诺）。SDK 已分配的输入 chunk 不计入 framer 缓冲。
+不根据前缀、正则或嵌套 `type` 猜类型，不丢弃合法控制事件。
+
+超过 1MiB 且在硬上限内的完整帧先通过 JSON/事件类型校验，保存完整**脱敏后的 JSON 事件**到
+`/workspace/.deepsonar-rpc-output/pi-rpc-<run UUID>-<sequence>.json`，同时在 Scheduler 写入
+`attempts/<attempt>/runtime/` evidence 文件，成功后才向适配器交付预览投影。
+`text/delta/output/result/error/errorMessage/message` 字符串各保留至 4096 字节完整码点边界并加截断提示；
+身份、响应 ID、command、stopReason、isError、toolCallId 及对象/数组结构保持。
+投影仍超过 1MiB、深度超过 64 或无法保存时明确失败，不以省略结构绕过控制校验。
+小于等于 1MiB 的帧保持既有行为。这里不改变 Pi 内部或模型上下文；模型原有工具输出仍由 Pi 处理。
+
+每次运行（含恢复）最多保存 128 个文件、合计 128MiB 脱敏 JSON；workspace 与 evidence 各一份。
+诊断包含 `truncated: true`、`original_bytes`（原始帧，不含 CRLF）、`retained_bytes`、
+`sha256`、`hash_scope: redacted_json`、`path`、`evidence_path`、`capture_complete: true`。
+hash 对应实际存储的完整脱敏 JSON，不是原始秘密或 UTF-8 预览。诊断不包含原始内容。
+workspace 文件可用现有 shell/read 工具按字节/行读取；清理沙箱前 evidence 已持久化，按现有 Job 权限下载。
+写盘必须 await，形成输出消费背压；每次 workspace/evidence 写入分别有 15 秒超时，期间暂停 Provider ACK/start 计时。超时不声称底层 I/O 已取消，迟到写入不能再发布捕获完成。无法归档、超额、损坏或超硬上限均发出 `capture_complete: false` 并失败，
+即使之前出现过结算也不能掩盖捕获失败。超限帧不声称拥有完整 hash/字节数。
+生产 SecureDrop 17 个 Job 的重跑、覆盖完成与真实沙箱验收仍须单独执行，单元测试不能替代。
+
 
 `agent_end`、进程退出和普通响应都不能宣告成功，只有 `agent_settled` 提供 Agent 侧静止
 信号；Scheduler 仍要求已授权的 `mark_job_done` 通过完成门。临时网络错误在同一沙箱内最多
