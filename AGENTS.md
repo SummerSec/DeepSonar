@@ -36,6 +36,10 @@
 
 每个主题的权威正文及旧章节迁移状态见[归属表](docs/architecture/README.md)。旧 `docs/ARCHITECTURE.md` 保留作历史对照，不能单独作为现行实现依据。`CLAUDE.md` 是指向本文件的 Git 符号链接；Windows 禁用符号链接时检出为目标路径文本，不另维护副本。
 
+## 平台任务下发必须加载 Skill（#767）
+
+创建、拆分或重新下发 DeepSonar 平台任务前，必须加载并执行 [deepsonar-management](skills/deepsonar-management/SKILL.md)，按其中指向的任务下发流程完成整理与复核。详细规则只在该 Skill 维护，不在本文件复制。普通仓库代码修改、代码评审和编码子任务委派不属于平台任务下发，不因此套用业务任务模板。
+
 ## 常用命令
 
 ```bash
@@ -176,13 +180,13 @@ pending → claimed → provisioning → running
 
 前端是 React 19、`@xyflow/react`、elkjs、Tailwind 4。任务工作台固定提供总览、研究地图、事实证据、任务发现、任务运行和报告六个一级视图；URL 的 `tab` 是当前视图真相，后台刷新不能强制切换。
 
-Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue 风格展示 disposition、评论、验证追踪和证据链。Job 详情展示 Attempt、Session、过程流、工具调用、广播账本、人工消息和用量。`injected` 只表示写入 Agent 输入，不代表模型已读；ACK 必须来自显式受治理 operation。
+Canvas 只读，Web 对当前可见投影使用 elkjs 布局，超阈值或失败时采用固定列布局；服务端 `x/y` 只作 placement/exchange hint，全图服务端权威布局按 #148 暂缓。Finding 详情按 Issue 风格展示 disposition、评论、验证追踪和证据链。Job 详情展示 Attempt、Session、过程流、工具调用、广播账本、人工消息和用量。`injected` 只表示写入 Agent 输入，不代表模型已读；ACK 必须来自显式受治理 operation。
 
 ## 开发与变更检查清单
 
 提交实现前：
 
-1. 先确认 DESIGN、ARCHITECTURE、schema、OpenAPI 和现有测试的事实；
+1. 先确认 DESIGN、docs/architecture 归属表与相关视图、schema、OpenAPI 和现有测试的事实；
 2. 复用已有领域、shared-types、runtime sandbox 和成熟依赖；
 3. 设计权限、项目 scope、快照、幂等、失败反馈和未知效果路径；
 4. 若涉及结构性边界，更新 DESIGN、专题文档和状态表；
@@ -198,7 +202,7 @@ Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue �
 
 ## 发布前的文档保鲜（发版硬门）
 
-**每次改 `CHANGELOG.md`、打 `v*` tag、建 release 之前，必须先做一轮文档保鲜。** 未通过不得发版；发现的漂移修在同一个 release 分支里，不留给下一个版本。同一条硬门也写在 `DESIGN.md` §13 与 `docs/ARCHITECTURE.md` §17.5。
+**每次改 `CHANGELOG.md`、打 `v*` tag、建 release 之前，必须先做一轮文档保鲜。** 未通过不得发版；发现的漂移修在同一个 release 分支里，不留给下一个版本。同一条硬门也写在 `DESIGN.md` §13 与 `docs/architecture/11-engineering-specs.md`；旧 `docs/ARCHITECTURE.md` §17.5 仅作历史对照。
 
 检查范围（每版必做，不能因为“本版没动文档”跳过）：
 
@@ -208,7 +212,7 @@ Canvas 只读，节点坐标由服务端布局生成。Finding 详情按 Issue �
    rg -n "project_managed|image_strategy|role_runtime_images|项目镜像策略" \
      AGENTS.md DESIGN.md docs skills apps/scheduler/src/openapi.ts
    ```
-3. **as-built 与代码相反**：本版触及的机制逐条核 `DESIGN.md` / `docs/ARCHITECTURE.md`；冲突以代码为准并回写文档，不允许改代码迁就文档。
+3. **as-built 与代码相反**：本版触及的机制逐条核 `DESIGN.md`、`docs/architecture/README.md` 归属表指定的视图与专题；描述错误时回写文档，实现违反已采纳约束时登记缺陷，不通过修改规范掩盖违约。
 4. **状态索引**：`docs/README.md` 的同步状态与日期、专题文档文首状态行、新增/收口的 issue 表。
 5. **命令、路径与链接**：文档里引用的 `pnpm` 脚本、文件路径、schema 版本、交叉链接逐条验证存在（参考：把所有 `pnpm <script>` 与 `package.json` 对账）。
 
