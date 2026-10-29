@@ -81,3 +81,9 @@ test('deferred runtime events preserve Plan basis for dispatch, completion and h
   const events=buildDeferredSemanticTerminalEvents({state:{done:null,hub:null,human:{eventId:randomUUID(),reason:'Need operator assessment',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:stop}},isHub:true,isVerify:false,hubDecision:null,maxIntentsPerDecision:1,factCount:0,findingCount:0});
   assert.deepEqual((events[0].payload as any).plan_basis,stop);
 });
+
+
+test('report availability names Plan blockers without blaming unrelated Findings',async()=>{
+  const {classifyTaskReportAvailability}=await import('./report.js');
+  assert.equal(classifyTaskReportAvailability({rootStatus:'analysis_complete',minVerifySeverity:null,blockers:['plan_criteria_unproven'],problems:[]}).reason,'plan_not_ready');
+});

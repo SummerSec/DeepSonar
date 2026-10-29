@@ -2,7 +2,7 @@ import { PlanDecisionBasis } from "@deepsonar/shared-types";
 import type { sql } from "../../db.js";
 import { ControlInputError } from "../../control-input.js";
 import { planCriteria, type CriterionProjection } from "./criterion-model.js";
-import { activePlanBasis, readPlanObjective } from "./objective.js";
+import { activePlanBasis, explicitPlanOwner, readPlanObjective } from "./objective.js";
 
 /** Positive authorization only; a negative observation is not an authorization by itself. */
 export function criteriaAuthorizeCompletion(criteria: readonly CriterionProjection[], required: readonly string[]): boolean {
@@ -22,7 +22,8 @@ export async function validatePlanDecision(
   if (basisInput===undefined) {
     // A plain human stop remains available even if the graph budget is exhausted.
     if (kind==='human') return null;
-    if (await activePlanBasis(db,canvasId,String(job.project_id),options.eventId)) {
+    if (await activePlanBasis(db,canvasId,String(job.project_id),options.eventId)
+      || await explicitPlanOwner(db,canvasId,String(job.project_id))) {
       throw new ControlInputError('plan_context_required','该任务已启用目标依据，Hub 决策不得省略当前 plan_basis。','plan_basis');
     }
     return null;
@@ -88,9 +89,10 @@ export async function planCompletionBlockers(db:typeof sql,canvasId:string):Prom
   if (!canvas) return [];
   try {
     const active=await activePlanBasis(db,canvasId,String(canvas.project_id));
-    if (!active) return [];
+    const owner=active?.plan_job_id ?? await explicitPlanOwner(db,canvasId,String(canvas.project_id));
+    if (!owner) return [];
     if (await hasUnknownPlanEffects(db,canvasId,String(canvas.project_id))) return ["plan_unknown_effect"];
-    const current=await readPlanObjective(db,active.plan_job_id,canvasId,active.plan_job_id);
+    const current=await readPlanObjective(db,owner,canvasId,owner);
     return !current.staleObjective && criteriaAuthorizeCompletion(current.criteria,planCriteria(current.plan).map(c=>c.id))
       ? [] : ['plan_criteria_unproven'];
   } catch (error) {

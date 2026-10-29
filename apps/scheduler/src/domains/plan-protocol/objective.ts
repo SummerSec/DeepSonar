@@ -21,6 +21,24 @@ export async function activePlanBasis(db: typeof sql, canvasId: string, projectI
   return parsed.data;
 }
 
+/** Explicit Plan submission enables the guard before the first basis-bearing decision. */
+export async function explicitPlanOwner(db:typeof sql,canvasId:string,projectId:string):Promise<string|null> {
+  const [row]=await db`SELECT e.job_id FROM events e JOIN jobs j ON j.id=e.job_id
+    WHERE j.canvas_id=${canvasId} AND j.project_id=${projectId} AND j.type<>'report' AND e.type='plan'
+    ORDER BY e.id ASC LIMIT 1`;
+  return row ? String(row.job_id) : null;
+}
+
+export async function planContext(db:typeof sql,canvasId:string,projectId:string) {
+  const active=await activePlanBasis(db,canvasId,projectId);
+  if(active) return {plan_job_id:active.plan_job_id,plan_sha256:active.plan_sha256};
+  const owner=await explicitPlanOwner(db,canvasId,projectId);
+  if(!owner) return null;
+  const [row]=await db`SELECT payload_json FROM jobs WHERE id=${owner}`;
+  const audit=readPlanAudit(row?.payload_json);
+  return {plan_job_id:owner,plan_sha256:audit?.raw ? contentSha256(audit.raw) : null};
+}
+
 export async function readPlanObjective(
   db: typeof sql, jobId: string, canvasId: string, requestedPlanId?: string,
   sourceIds: readonly string[] = [], excludeEventId?: string,
@@ -31,8 +49,9 @@ export async function readPlanObjective(
   if (!job) throw new ControlInputError("invalid_payload", "计划读取必须在当前 Job 的 Canvas 内。", "plan_basis");
   const projectId=String(job.project_id);
   const active=await activePlanBasis(db,canvasId,projectId,excludeEventId);
-  const planJobId=requestedPlanId ?? active?.plan_job_id ?? jobId;
-  if (active && active.plan_job_id!==planJobId) throw new ControlInputError("invalid_payload", "当前任务已绑定另一个目标，不得重置补证预算。", "plan_basis.plan_job_id");
+  const ownerId=active?.plan_job_id ?? await explicitPlanOwner(db,canvasId,projectId);
+  const planJobId=requestedPlanId ?? ownerId ?? jobId;
+  if (ownerId && ownerId!==planJobId) throw new ControlInputError("invalid_payload", "当前任务已绑定另一个目标，不得重置补证预算。", "plan_basis.plan_job_id");
   const [owner]=await db`SELECT payload_json FROM jobs WHERE id=${planJobId}
     AND canvas_id=${canvasId} AND project_id=${projectId} AND type <> 'report'`;
   const audit=readPlanAudit(owner?.payload_json);

@@ -41,9 +41,9 @@ Fact 的来源由 body.artifact_id → 当前 emit_fact Artifact → 同 Canvas/
 
 submit_hub_decision 的可选 plan_basis 是新版本化决策元数据，不是第二套派发契约。它绑定 Plan Job/SHA、criterion_id、最新已提交事件 revision、任务输入 SHA、当前 projection SHA、最多四个已读 Fact 内容版本，以及 outcome/rationale；continue 还要求 expected_gain。仅允许一个既有 Intent，继续使用当前角色、镜像、权限、引用与快照准入。最终事务持有 Canvas→Job 锁后重新核验版本，拒绝旧提案。首片不执行 Plan 依赖图。
 
-第一次接纳依据后固定该 Canvas 的目标身份和输入版本。每 Canvas 至多一次补证；更换标题、Job、Plan 或 Idempotency-Key 不重置预算。已有去重使相同事件不会再次写入；HTTP 进程缓存丢失后的旧版本请求会 fail closed，不保证返回原成功响应。此限制不是持久 HTTP receipt 已实现的声明。后续 Hub 的 plan_context 由既有编排派生，不修改历史快照、不增加轮询或模型通道。
+首次显式 submit_plan 即启用该 Canvas 的完成/派发依据门禁，省略 plan_basis 或尚未接受首次依据不能绕过；按最早 Plan 事件固定目标 Job，第一次接纳依据后再固定 Plan 内容与输入版本。每 Canvas 至多一次补证；更换标题、Job、Plan 或 Idempotency-Key 不重置预算。已有去重使相同事件不会再次写入；HTTP 进程缓存丢失后的旧版本请求会 fail closed，不保证返回原成功响应。此限制不是持久 HTTP receipt 已实现的声明。后续 Hub 的 plan_context 由既有编排派生，不修改历史快照、不增加轮询或模型通道。
 
-complete 要求所有必要判据非空、当前 satisfied、未截断，且每个绑定均为 operator_attestation/satisfies；Job 必须已读完该 projection 的全部必要判据，并声明全部贡献 Fact 的当前版本。unbound/insufficient/contradicted/conflict/stale/blocked/unknown/missing 均拒绝。中央自动完成/报告门禁也检查全判据，不能通过轮数耗尽绕过。任何同任务 unknown effect（或终态 Job 遗留 pending effect）阻止补证和完成，返回 unknown_external_effect，不自动重放。
+complete 要求所有必要判据非空、当前 satisfied、未截断，且每个绑定均为 operator_attestation/satisfies；Job 必须已读完该 projection 的全部必要判据，并声明全部贡献 Fact 的当前版本。unbound/insufficient/contradicted/conflict/stale/blocked/unknown/missing 均拒绝。中央自动完成/报告门禁也检查全判据，不能通过轮数耗尽绕过。报告被 Plan 阻塞时返回 plan_not_ready，不伪称 Finding 未收敛，也不 force 回弹另一个 Hub。任何同任务 unknown effect（或终态 Job 遗留 pending effect）阻止补证和完成，返回 unknown_external_effect，不自动重放。
 
 blocked/needs_human 使用现有 request_human 的 business_decision；不新增 Job 终态。普通 request_human 保持可用，避免查询预算耗尽后无法停止。运行器延迟终态提交保留 plan_basis，最终落库再次校验。
 

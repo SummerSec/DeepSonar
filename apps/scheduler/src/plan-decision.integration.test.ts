@@ -60,6 +60,9 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
       expected_task_input_sha256:gap.task_input_sha256,expected_projection_sha256:gap.projection_sha256,source_refs:[],outcome,rationale:'Current evidence does not authorize completion',...(outcome==='continue'?{expected_gain:'Retain the missing scoped execution record'}:{})});
     const intent={from:[root.id],role:'review',description:'Collect scoped execution evidence',prompt:'Review the saved scope and retain a concrete execution record.'};
     const gap=await read();assert.ok(gap);assert.equal(gap.criteria[0].state,'unbound');
+    const bypass=await invoke('submit_hub_decision',{intents:[intent]});
+    assert.equal(bypass.statusCode,422,bypass.payload);assert.equal(bypass.json().error_code,'plan_context_required');
+    assert.deepEqual(await decision.planCompletionBlockers(sql,canvas),['plan_criteria_unproven'],'explicit Plan gates automatic completion before any basis decision');
     const complete=await invoke('submit_hub_decision',{complete:{from:[root.id],description:'Claim completion without evidence'},plan_basis:basis(gap,'complete')});
     assert.equal(complete.statusCode,422,complete.payload);assert.equal(complete.json().error_code,'plan_completion_unproven');
     const rejected=await invoke('submit_hub_decision',{intents:[{...intent,role:'not-admitted-role'}],plan_basis:basis(gap)});

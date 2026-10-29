@@ -1619,6 +1619,7 @@ const OPS: Op[] = [
               "root_not_ready",
               "active_work",
               "no_role_work",
+              "plan_not_ready",
               "findings_not_converged",
               "report_not_dispatched",
               "report_failed",

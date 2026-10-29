@@ -285,8 +285,9 @@ if (!testDatabaseUrl) {
         SELECT ${projectId}, ${canvasId}, 'report', 'succeeded', '{}'::jsonb,
           ${sql.json({ plan_protocol: audit } as never)} FROM generate_series(1, 33)`;
       assert.deepEqual(await buildReportInput(canvasId, sql), beforeReportAudit);
-      assert.deepEqual(await refreshTaskReport(canvasId), { ok: true, reason: "already_succeeded" });
-      assert.deepEqual(await refreshTaskReport(canvasId), { ok: true, reason: "already_succeeded" });
+      assert.deepEqual(await refreshTaskReport(canvasId), { ok: false, reason: "plan_criteria_unproven" });
+      assert.deepEqual(await refreshTaskReport(canvasId), { ok: false, reason: "plan_criteria_unproven" });
+      assert.deepEqual(await buildReportInput(canvasId, sql), beforeReportAudit, "blocked refresh must neither append Report audits nor bounce a new Hub");
       const [versions] = await sql`SELECT count(*)::int AS count FROM task_reports WHERE canvas_id = ${canvasId}`;
       assert.equal(versions!.count, 1);
 
