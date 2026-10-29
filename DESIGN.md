@@ -282,6 +282,10 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - 审计日志 append-only；过程流、Session、运行产物和错误反馈不得泄露长期密钥或完整 Provider 响应。
 - 物理设备接入走 broker（沙箱不直连设备），设备按不可信输入对待，设备租约与授权细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md)。rig 端点与入站凭据只来自平台配置（`DEEPSONAR_DEVICE_BROKER_URL` / `DEEPSONAR_DEVICE_RIGS`），`devices.rig_id` 只存归属标识（schema v50），不存地址与密钥。
 
+### #778 离线适用证据校验
+
+[适用证据 preflight](agent-harness/capability-applicability/README.md)只对单个本项目 Skill 的精确 CAS 内容、原始冻结目录、撤权导出和作者声明做离线一致性检查，并比较独立标识的 expected/actual JSON。compatible 仅表示该冻结案例匹配；不鉴别导出身份，不提供实时授权、排序或推荐，不能推定方法有效。
+
 ## 12. 当前状态与开放演进
 
 | 方向 | 当前状态 | 下一步 |

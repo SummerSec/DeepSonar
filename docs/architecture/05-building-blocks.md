@@ -1,7 +1,7 @@
 # 05 构建块与所有权
 
 > 状态：**as-built**（#741）。列出四个应用、三个共享包和 Scheduler 域的责任边界及依赖方向；领域状态机由专题文档维护。
-> 同步日期：2026-10-20
+> 同步日期：2026-10-29
 
 构建块按照“入口组装、领域负责规则、基础设施负责外部效果”分层。所有权以目录、注册入口和运行时依赖为事实；完整 bounded-context 说明见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -80,3 +80,7 @@ flowchart LR
 | `worker-nodes` | 远程 Worker 注册、心跳和节点能力 | → dispatcher、runtime-sandbox、audit |
 
 领域之间不共享私有表写入规则；跨域写入由拥有者提供事务入口。锁顺序、Canvas-first 规则和禁止的反向依赖以 [Scheduler bounded contexts](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) 的锁序章节为单一权威。
+
+### #778 适用证据离线 preflight
+
+[capability-applicability](../../agent-harness/capability-applicability/README.md)是开发研究工具，消费现有 Job 字段的脱敏投影、完整知识目录和版本/CAS，再以 sidecar 作者条件及 expected/actual JSON 检查单案例一致性。它不连接数据库或执行 Skill；不增加账本、运行时路由、授权或推荐。FR-CAP-003/FR-CAP-004 的在线拉取与权限边界保持原实现；离线 compatible 不能替代这些边界。
