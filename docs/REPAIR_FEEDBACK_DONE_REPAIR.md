@@ -9,7 +9,7 @@
 
 POST 原 `operations/mark_job_done` 需要 UUID `Idempotency-Key` 与 `X-DeepSonar-Proposal-Revision`：首次 revision 为 0，修正使用反馈要求的下一 revision 和新 key。同一提交的传输重试保留 key、revision 和 payload；缺少 revision 明确拒绝，不静默补 0。显式事件 ID 必须等于 key。
 
-回执记录保存 input digest、原 key、revision、Attempt 和快照身份、原 HTTP 结果；无效正文不落库。宿主 `control_receipt` 语义事件使用独立确定性 event ID，为最终 `done` 事件保留原 key。Agent 不能通过事件提交接口伪造 receipt。
+回执记录保存 input digest、原 key、revision、Attempt 和快照身份、原 HTTP 结果；无效正文不落库。原 key 始终是 HTTP 幂等身份；宿主 `control_receipt` 与最终 `done` 分别使用绑定 Job/key 的不同确定性 event ID，避免不同 Job 复用同 key 时碰撞全局去重。Agent 不能通过事件提交接口伪造 receipt。
 
 | 阶段 | 权威动作 | 对外含义 |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ POST 原 `operations/mark_job_done` 需要 UUID `Idempotency-Key` 与 `X-DeepSon
 
 拒绝计数存于语义事件，进程内 Map 清空不重置。最多保存 8 次拒绝，首次拒绝也计入；耗尽后不能再提交新完成提案。重复旧 key 原结果不再消耗额度，同 key 改内容/revision、旧 revision、另一 Attempt 接续均拒绝。正常首次有效提交仍只需一次 HTTP。
 
-Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未知外部效果须先对账，不得通过修正清空账本。已有总 token 与事件预算仍适用，**独立 repair-token 成本核算未交付**，不能宣称满足 #776 的全部预算验收。接收回执不能授予新权限或修改镜像准入。
+Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未知外部效果须先对账，不得通过修正清空账本。已有总 token 与事件预算仍适用，**独立 repair-token 成本核算与跨 operation 的 accepted_effects 汇总未交付**，不能宣称满足 #776 的全部预算验收。接收回执不能授予新权限或修改镜像准入。
 
 本切片通过同一运行会话内的 Control HTTP 响应交付反馈，未引入新的 stdin、Shell 控制文件或通用重试引擎。跨进程查询持久回执不等于恢复原模型会话；DSH 不支持持久 resume 时仍明确停止。保留 #766 可信父子谱系和父等待子任务语义；不修改 #768 framing、控制事件保留或 evidence 保存失败的结论。
 
