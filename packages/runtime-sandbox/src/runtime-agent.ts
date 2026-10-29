@@ -1514,9 +1514,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
               spec.onEvent?.({
                 type: "runtime.diagnostic",
                 code: "pi_rpc_event_too_large",
+                event_type: frame.eventType,
                 bytes: frame.bytes,
                 cap: piFramer.limit,
-                preview: frame.line.slice(0, 512),
+                truncated_bytes: Math.max(0, frame.bytes - piFramer.limit),
               });
             }
           } else {

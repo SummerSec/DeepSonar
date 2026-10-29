@@ -183,17 +183,41 @@ export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number
   return value;
 }
 
-/** 按 UTF-8 字节上限截断，且不留下半个代理对。 */
+/** 按 UTF-8 字节上限截断：退到完整码点边界，结果字节数不超过 maxBytes，也不产生 U+FFFD。 */
 function truncateUtf8(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  let sliced = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
-  const last = sliced.charCodeAt(sliced.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) sliced = sliced.slice(0, -1);
-  return sliced;
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0) {
+    const tail = buf[end - 1]!;
+    if ((tail & 0b1000_0000) === 0) break; // ASCII：边界完整
+    let start = end - 1;
+    while (start > 0 && (buf[start]! & 0b1100_0000) === 0b1000_0000) start -= 1;
+    const lead = buf[start]!;
+    const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    if (start + need <= end) break; // 该码点完整
+    end = start; // 否则截到该码点之前
+  }
+  return buf.subarray(0, end).toString("utf8");
+}
+
+/**
+ * 只有「流式大载荷」可以截断降级；控制帧（message_end / response / agent_end /
+ * agent_settled / 身份与 ACK 等）一旦超限仍 fail closed，避免吞掉错误终态与控制语义。
+ */
+const PI_RPC_TRUNCATABLE_EVENT_TYPES = new Set([
+  "message_update",
+  "tool_execution_update",
+  "bash_execution_update",
+]);
+
+function piRpcEventTypeOf(prefix: string): string | null {
+  const match = /"type"\s*:\s*"([a-z_.]+)"/.exec(prefix);
+  return match?.[1] ?? null;
 }
 
 /** 单帧：超过上限时 `truncated` 为真，`line` 已截到上限，调用方不得再按 JSON 解析。 */
-export interface PiJsonlFrame { line: string; bytes: number; truncated: boolean }
+export interface PiJsonlFrame { line: string; bytes: number; truncated: boolean; eventType?: string }
 
 /** Pi 官方 RPC 只按 LF 分隔 JSONL；U+2028/U+2029 始终是字符串数据。 */
 export class PiJsonlFramer {
@@ -201,6 +225,10 @@ export class PiJsonlFramer {
   private ended = false;
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
   private readonly maxBytes: number;
+  /** 当前帧自上次 LF 起累计的原始字节数（含被丢弃部分），不随分块变化。 */
+  private frameBytes = 0;
+  /** 帧起始前缀（最多 512 字符），独立于 buffer 截断，用来判定该帧能否截断。 */
+  private framePrefix = "";
 
   constructor(maxBytes = piRpcMaxEventBytes()) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("PI_RPC_MAX_BYTES_INVALID");
@@ -220,17 +248,22 @@ export class PiJsonlFramer {
    */
   pushFrames(chunk: string | Uint8Array): PiJsonlFrame[] {
     if (this.ended) throw new Error("PI_RPC_FRAMER_ENDED");
+    let text: string;
     if (typeof chunk === "string") {
-      this.buffer += chunk;
+      text = chunk;
     } else {
       try {
-        this.buffer += this.decoder.decode(chunk, { stream: true });
+        text = this.decoder.decode(chunk, { stream: true });
       } catch {
         this.ended = true;
         this.buffer = "";
         throw new Error("PI_RPC_INVALID_UTF8");
       }
     }
+    if (this.frameBytes === 0 && this.buffer.length === 0) this.framePrefix = "";
+    if (this.framePrefix.length < 512) this.framePrefix += text.slice(0, 512 - this.framePrefix.length);
+    this.buffer += text;
+    this.frameBytes += Buffer.byteLength(text, "utf8");
     const frames: PiJsonlFrame[] = [];
     while (true) {
       const index = this.buffer.indexOf("\n");
@@ -238,12 +271,15 @@ export class PiJsonlFramer {
       const line = this.buffer.slice(0, index);
       this.buffer = this.buffer.slice(index + 1);
       const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
+      // LF 与可选 CR 不属于载荷；剩余部分即该帧原始字节数。
+      const rawBytes = Math.max(0, this.frameBytes - 1 - (line.endsWith("\r") ? 1 : 0));
+      this.frameBytes = 0;
       if (!normalized) {
         this.ended = true;
         this.buffer = "";
         throw new Error("PI_RPC_EMPTY_FRAME");
       }
-      frames.push(this.frame(normalized));
+      frames.push(this.frame(normalized, rawBytes));
     }
     // 未闭合行超过上限时只保留前缀，避免无界内存增长；完成时照样标记为截断帧。
     if (Buffer.byteLength(this.buffer, "utf8") > this.maxBytes) {
@@ -258,11 +294,20 @@ export class PiJsonlFramer {
 
   private truncating = false;
 
-  private frame(line: string): PiJsonlFrame {
-    const bytes = Buffer.byteLength(line, "utf8");
-    if (!this.truncating && bytes <= this.maxBytes) return { line, bytes, truncated: false };
+  private frame(line: string, rawBytes: number): PiJsonlFrame {
+    const bytes = Math.max(rawBytes, Buffer.byteLength(line, "utf8"));
+    const type = piRpcEventTypeOf(this.framePrefix || line.slice(0, 512));
+    const eventType = type ?? undefined;
+    if (!this.truncating && bytes <= this.maxBytes) return { line, bytes, truncated: false, ...(eventType ? { eventType } : {}) };
     this.truncating = false;
-    return { line: truncateUtf8(line, this.maxBytes), bytes, truncated: true };
+    this.framePrefix = "";
+    if (type === null || !PI_RPC_TRUNCATABLE_EVENT_TYPES.has(type)) {
+      // 控制帧或无法判定类型的帧：保持 fail closed，不回落到「跳过继续」。
+      this.ended = true;
+      this.buffer = "";
+      throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
+    }
+    return { line: truncateUtf8(line, this.maxBytes), bytes, truncated: true, ...(eventType ? { eventType } : {}) };
   }
 
   finish(): string[] {

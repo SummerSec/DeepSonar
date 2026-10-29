@@ -873,3 +873,35 @@ test("#765 2MB 级事件在默认上限下不再被判超限", () => {
   const line = JSON.stringify(record);
   assert.equal(parsePiJsonlRecord(line).type, "message_update");
 });
+
+test("#765 控制帧超限仍 fail closed，不静默跳过", () => {
+  const framer = new PiJsonlFramer(64);
+  const control = JSON.stringify({ type: "message_end", message: { stopReason: "error", text: "z".repeat(200) } });
+  assert.throws(() => framer.pushFrames(`${control}\n`), /PI_RPC_MESSAGE_TOO_LARGE/);
+});
+
+test("#765 分块输入保持原始字节计数（不因分块变小）", () => {
+  const cap = 8;
+  const payload = JSON.stringify({ type: "message_update", text: "0123456789abcdef" });
+  const whole = new PiJsonlFramer(cap).pushFrames(`${payload}\n`)[0]!;
+  const chunked = new PiJsonlFramer(cap);
+  chunked.pushFrames(payload.slice(0, 10));
+  const tail = chunked.pushFrames(`${payload.slice(10)}\n`)[0]!;
+  assert.equal(whole.truncated, true);
+  assert.equal(chunked && tail.truncated, true);
+  assert.equal(tail.bytes, whole.bytes, "分块与整块的原始字节数必须一致");
+  assert.ok(tail.bytes > cap);
+});
+
+test("#765 UTF-8 截断不越过上限，也不产生替换字符", () => {
+  const cap = 8;
+  const payload = JSON.stringify({ type: "message_update", text: "中中中" });
+  const frame = new PiJsonlFramer(cap).pushFrames(`${payload}\n`)[0]!;
+  assert.equal(frame.truncated, true);
+  assert.ok(Buffer.byteLength(frame.line, "utf8") <= cap, `截断结果必须 ≤ cap，实际 ${Buffer.byteLength(frame.line, "utf8")}`);
+  assert.ok(!frame.line.includes("\uFFFD"), "不得以 U+FFFD 结尾");
+  const emoji = "😀😀😀";
+  const frame2 = new PiJsonlFramer(cap).pushFrames(`${JSON.stringify({ type: "message_update", text: emoji })}\n`)[0]!;
+  assert.ok(Buffer.byteLength(frame2.line, "utf8") <= cap);
+  assert.ok(!frame2.line.includes("\uFFFD"));
+});
