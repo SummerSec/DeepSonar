@@ -358,12 +358,27 @@ test("equivalent English status headings enforce the same per-ID coverage", () =
 });
 
 
-test("scheduler appends frozen plan gaps to both accepted and fallback markdown", () => {
+test("scheduler prepends frozen plan gaps to both accepted and fallback markdown", () => {
   const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 } });
   const fallback = finalizeTaskReportMarkdown(input, "");
   assert.match(fallback.markdown, /目标与缺口/);
   assert.match(fallback.markdown, /unknown/);
-  const accepted = finalizeTaskReportMarkdown(input, fallback.markdown.split("## 目标与缺口")[0]!);
+  const accepted = finalizeTaskReportMarkdown(input, fallback.markdown.slice(fallback.markdown.indexOf("# 任务报告")));
   assert.match(accepted.markdown, /目标与缺口/);
   assert.equal(accepted.usedDefault, null);
+});
+
+
+test("coverage-valid model tails cannot swallow the mandatory leading gap section", () => {
+  const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 } });
+  const baseline = finalizeTaskReportMarkdown(input, "").markdown;
+  const body = baseline.slice(baseline.indexOf("# 任务报告"));
+  for (const tail of ["<!--", "```", "````json", "~~~html", "<div hidden>"]) {
+    const candidate = `${body}\n\n${tail}`;
+    assert.equal(taskReportCoverageOk(input, candidate), true, "reproduce accepted malformed tail");
+    const final = finalizeTaskReportMarkdown(input, candidate);
+    assert.equal(final.usedDefault, null);
+    assert.ok(final.markdown.trimStart().startsWith("## 目标与缺口"));
+    assert.ok(final.markdown.endsWith(tail));
+  }
 });

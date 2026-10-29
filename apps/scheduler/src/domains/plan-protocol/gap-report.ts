@@ -11,6 +11,7 @@ export async function loadPlanGapReport(
     SELECT id, payload_json->'plan_protocol' AS plan_protocol
     FROM jobs
     WHERE canvas_id = ${canvasId} AND project_id = ${projectId}
+      AND type <> 'report'
       AND payload_json ? 'plan_protocol'
     ORDER BY created_at DESC, id DESC
     LIMIT ${LIMIT + 1}`;

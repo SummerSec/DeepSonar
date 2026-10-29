@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { PlanResult, SubmitPlanPayload } from "@deepsonar/shared-types";
 import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
@@ -261,6 +261,35 @@ if (!testDatabaseUrl) {
           return true;
         },
       );
+      const { buildReportInput, refreshTaskReport } = await import("../../report.js");
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE canvas_id = ${canvasId}`;
+      await sql`UPDATE canvas_nodes SET status = 'analysis_complete' WHERE id = ${rootId}`;
+      const beforeReportAudit = await buildReportInput(canvasId, sql);
+      const frozenHash = createHash("sha256").update(JSON.stringify(beforeReportAudit, null, 2)).digest("hex");
+      await sql`INSERT INTO task_reports (canvas_id, project_id, version, status, input_uri, input_sha256)
+        VALUES (${canvasId}, ${projectId}, 1, 'succeeded', 'fixture/report-input.json', ${frozenHash})`;
+      const reportJobId = randomUUID();
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${reportJobId}, ${projectId}, ${canvasId}, 'report', 'running',
+          ${sql.json({ name: "report", role_kind: "system", platform_tools: ["submit_plan"] })}, '{}'::jsonb)`;
+      // The current static system-role allowlist rejects this even when the snapshot asks for it.
+      await assert.rejects(
+        ingestEvent(reportJobId, { v: 1, event_id: randomUUID(), type: "plan", payload: { plan: audit!.raw } }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "tool_not_allowed",
+      );
+      const [reportAudit] = await sql`SELECT payload_json FROM jobs WHERE id = ${reportJobId}`;
+      assert.equal(readPlanAudit(reportAudit!.payload_json), null);
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE id = ${reportJobId}`;
+      // Synthetic durable historical rows exercise projection isolation; not reachable via current ingestion.
+      await sql`INSERT INTO jobs (project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        SELECT ${projectId}, ${canvasId}, 'report', 'succeeded', '{}'::jsonb,
+          ${sql.json({ plan_protocol: audit } as never)} FROM generate_series(1, 33)`;
+      assert.deepEqual(await buildReportInput(canvasId, sql), beforeReportAudit);
+      assert.deepEqual(await refreshTaskReport(canvasId), { ok: true, reason: "already_succeeded" });
+      assert.deepEqual(await refreshTaskReport(canvasId), { ok: true, reason: "already_succeeded" });
+      const [versions] = await sql`SELECT count(*)::int AS count FROM task_reports WHERE canvas_id = ${canvasId}`;
+      assert.equal(versions!.count, 1);
+
       await sql`
         INSERT INTO jobs (project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
         SELECT ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', '{}'::jsonb,
@@ -280,6 +309,7 @@ if (!testDatabaseUrl) {
       assert.equal(byteCapped.truncated, true);
     } finally {
       const canvasIds = [canvasId, hubCanvasId];
+      await sql`DELETE FROM task_reports WHERE canvas_id = ANY(${canvasIds})`;
       await sql`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ${projectId})`;
       await sql`DELETE FROM canvas_edges WHERE canvas_id = ANY(${canvasIds})`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ANY(${canvasIds})`;

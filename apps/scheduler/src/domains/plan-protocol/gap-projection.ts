@@ -52,7 +52,7 @@ export interface PlanGapReport {
   limit: number;
 }
 
-/** Always appended by the scheduler, including when model markdown passes other gates. */
+/** Always prepended by the scheduler, including when model markdown passes other gates. */
 export function renderPlanGapReport(report: PlanGapReport | undefined): string {
   if (!report) return ""; // Immutable historical report inputs do not contain this projection.
   const body = JSON.stringify(report, null, 2);
@@ -66,4 +66,9 @@ export function renderPlanGapReport(report: PlanGapReport | undefined): string {
     report.entries.length ? "" : "本范围没有可用计划审计，不能由此断言任务未执行或无发现。",
     `${fence}json`, body, fence,
   ].join("\n");
+}
+
+/** Start in a fresh Markdown context: an unclosed model tail cannot swallow this section. */
+export function withPlanGapReport(markdown: string, report: PlanGapReport | undefined): string {
+  return report ? `${renderPlanGapReport(report)}\n\n${markdown}` : markdown;
 }

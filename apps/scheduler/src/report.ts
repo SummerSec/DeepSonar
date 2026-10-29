@@ -41,7 +41,7 @@ import {
 } from "./report-numeric-fidelity.js";
 
 import { loadPlanGapReport } from "./domains/plan-protocol/gap-report.js";
-import { renderPlanGapReport, type PlanGapReport } from "./domains/plan-protocol/gap-projection.js";
+import { withPlanGapReport, type PlanGapReport } from "./domains/plan-protocol/gap-projection.js";
 
 type Tx = typeof sql;
 
@@ -795,7 +795,7 @@ export function finalizeTaskReportMarkdown(
     usedDefault = "numeric";
     numeric = checkReportNumericFidelity(declared, { markdown });
   }
-  markdown += renderPlanGapReport(input.plan_gaps);
+  markdown = withPlanGapReport(markdown, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }
 
