@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**（#741 基线；#752 独立试验分支同步）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
 
@@ -119,7 +119,7 @@
 | NFR-PERF-003 | [质量属性](04-quality-attributes.md)；[部署视图](07-deployment-view.md) | — | [sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts) | `pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:dispatch-limits`。 |
 | NFR-PERF-004 | [质量属性](04-quality-attributes.md)；[部署视图](07-deployment-view.md) | — | [Gateway constants](../../apps/scheduler/src/gateway.ts) | `pnpm ci:unit:executor-real`、`pnpm ci:unit:recovery`、`pnpm ci:unit:runtime-sandbox`。 |
 | NFR-OBS-001 | [工程规格](11-engineering-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [audit routes](../../apps/scheduler/src/domains/audit/routes.ts) | `pnpm ci:unit:authz`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:dashboard-overview`。 |
-| NFR-OBS-002 | [工程规格](11-engineering-specs.md)；[部署视图](07-deployment-view.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [Evidence](../../apps/scheduler/src/evidence.ts) | `pnpm ci:unit:recovery`、`pnpm ci:unit:web-facts`；人工核对跨副本和超预算状态。 |
+| NFR-OBS-002 | [工程规格](11-engineering-specs.md)；[部署视图](07-deployment-view.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [Evidence](../../apps/scheduler/src/evidence.ts) | `pnpm ci:unit:recovery`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:runtime-sandbox`（#765 分帧/脱敏文件/控制信息回归）；人工核对跨副本和超预算状态，生产重跑另验。 |
 | NFR-OBS-003 | [工程规格](11-engineering-specs.md)；[接口规格](09-interface-specs.md) | [ADR-0003](adr/0003-api-only-control.md) | [Control input](../../apps/scheduler/src/control-input.ts) | `pnpm ci:smoke:control-api`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:authz`。 |
 | NFR-EVO-001 | [约束与原则](03-constraints-and-principles.md)；[工程规格](11-engineering-specs.md) | [ADR-0001](adr/0001-no-backward-compatibility.md) | [shared types](../../packages/shared-types/src) | `pnpm ci:unit:capability-pack`、`pnpm ci:test:transfer-schema`、`pnpm ci:unit:docs-freshness`。 |
 | NFR-EVO-002 | [构件视图](05-building-blocks.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [Capability Pack](../../apps/scheduler/src/domains/capability-pack) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:bounded-contexts`；人工审查新增能力不注册第二执行器。 |

@@ -841,25 +841,6 @@ test("DSH RC rejects unscoped lifecycle and keeps child status separate", () => 
   assert.match(JSON.stringify(tool), /"is_error":true/);
 });
 
-test("#765 单帧超过上限时降级为截断帧，其余帧与流不受影响", () => {
-  const cap = 1024 * 1024;
-  const framer = new PiJsonlFramer(cap);
-  const big = JSON.stringify({ type: "message_update", text: "x".repeat(cap + 10) });
-  const frames = framer.pushFrames(`${big}\n{"type":"agent_settled"}\n`);
-  assert.equal(frames.length, 2);
-  assert.equal(frames[0]!.truncated, true, "超限帧必须标记 truncated");
-  assert.ok(frames[0]!.bytes > cap);
-  assert.ok(Buffer.byteLength(frames[0]!.line, "utf8") <= cap, "载荷截到上限");
-  assert.equal(frames[1]!.truncated, false, "后续帧照常返回");
-  assert.equal(frames[1]!.line, '{"type":"agent_settled"}');
-  assert.equal(framer.limit, cap);
-});
-
-test("#765 旧 push() 仍对超限帧抛 PI_RPC_MESSAGE_TOO_LARGE（兼容既有契约）", () => {
-  const framer = new PiJsonlFramer(8);
-  assert.throws(() => framer.push('{"type":"message_update","text":"0123456789"}\n'), /PI_RPC_MESSAGE_TOO_LARGE/);
-});
-
 test("#765 上限默认 8MB 且可由环境变量在 1MB–64MB 内覆盖", () => {
   assert.equal(piRpcMaxEventBytes({}), 8 * 1024 * 1024);
   assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(2 * 1024 * 1024) }), 2 * 1024 * 1024);
@@ -874,34 +855,75 @@ test("#765 2MB 级事件在默认上限下不再被判超限", () => {
   assert.equal(parsePiJsonlRecord(line).type, "message_update");
 });
 
-test("#765 控制帧超限仍 fail closed，不静默跳过", () => {
+test("#765 hard-limit control frames fail closed", () => {
   const framer = new PiJsonlFramer(64);
   const control = JSON.stringify({ type: "message_end", message: { stopReason: "error", text: "z".repeat(200) } });
-  assert.throws(() => framer.pushFrames(`${control}\n`), /PI_RPC_MESSAGE_TOO_LARGE/);
+  assert.throws(() => framer.push(`${control}\n`), /PI_RPC_MESSAGE_TOO_LARGE/);
 });
 
-test("#765 分块输入保持原始字节计数（不因分块变小）", () => {
-  const cap = 8;
-  const payload = JSON.stringify({ type: "message_update", text: "0123456789abcdef" });
-  const whole = new PiJsonlFramer(cap).pushFrames(`${payload}\n`)[0]!;
-  const chunked = new PiJsonlFramer(cap);
-  chunked.pushFrames(payload.slice(0, 10));
-  const tail = chunked.pushFrames(`${payload.slice(10)}\n`)[0]!;
-  assert.equal(whole.truncated, true);
-  assert.equal(chunked && tail.truncated, true);
-  assert.equal(tail.bytes, whole.bytes, "分块与整块的原始字节数必须一致");
-  assert.ok(tail.bytes > cap);
+// Framing no longer truncates JSON. Large payload projection is covered through the real runner.
+test("#765 frame bytes and identity never depend on transport chunks", () => {
+  const payloads = [
+    { type: "message_update", text: "x".repeat(40) },
+    { nested: { type: "message_update" }, type: "message_end", message: { stopReason: "error" } },
+    { type: "message_update", text: "中文😀\\\"".repeat(20) },
+  ].map((value) => JSON.stringify(value));
+  const input = Buffer.from(payloads.join("\r\n") + "\r\n");
+  for (const stride of [1, 2, 3, 7, 75, input.length]) {
+    const framer = new PiJsonlFramer(1024);
+    const frames = [];
+    for (let i = 0; i < input.length; i += stride) frames.push(...framer.frames(input.subarray(i, i + stride)));
+    assert.deepEqual(frames.map((frame) => frame.line), payloads);
+    assert.deepEqual(frames.map((frame) => frame.bytes), payloads.map((line) => Buffer.byteLength(line)));
+    assert.deepEqual(framer.finish(), []);
+  }
 });
 
-test("#765 UTF-8 截断不越过上限，也不产生替换字符", () => {
-  const cap = 8;
-  const payload = JSON.stringify({ type: "message_update", text: "中中中" });
-  const frame = new PiJsonlFramer(cap).pushFrames(`${payload}\n`)[0]!;
-  assert.equal(frame.truncated, true);
-  assert.ok(Buffer.byteLength(frame.line, "utf8") <= cap, `截断结果必须 ≤ cap，实际 ${Buffer.byteLength(frame.line, "utf8")}`);
-  assert.ok(!frame.line.includes("\uFFFD"), "不得以 U+FFFD 结尾");
-  const emoji = "😀😀😀";
-  const frame2 = new PiJsonlFramer(cap).pushFrames(`${JSON.stringify({ type: "message_update", text: emoji })}\n`)[0]!;
-  assert.ok(Buffer.byteLength(frame2.line, "utf8") <= cap);
-  assert.ok(!frame2.line.includes("\uFFFD"));
+test("#765 two legal 75-byte frames in one chunk stay legal at cap 100", () => {
+  const line = JSON.stringify({ type: "message_update", text: "x".repeat(40) });
+  assert.equal(Buffer.byteLength(line), 75);
+  assert.deepEqual(new PiJsonlFramer(100).push(`${line}\n${line}\n`), [line, line]);
+});
+
+test("#765 earlier and nested types cannot authorize dropping an oversized control frame", () => {
+  const small = JSON.stringify({ type: "message_update" });
+  for (const control of [
+    { type: "message_end", message: { stopReason: "error", text: "x".repeat(200) } },
+    { nested: { type: "message_update" }, type: "response", id: "ack", padding: "x".repeat(200) },
+  ]) {
+    const framer = new PiJsonlFramer(100);
+    assert.deepEqual(framer.push(small + "\n"), [small]);
+    assert.throws(() => framer.push(JSON.stringify(control) + "\n"), /PI_RPC_MESSAGE_TOO_LARGE/);
+  }
+});
+
+test("#765 bounded no-LF accumulation, CRLF boundary and UTF-16 split", () => {
+  const framer = new PiJsonlFramer(100);
+  for (let i = 0; i < 100; i++) assert.deepEqual(framer.push("x"), []);
+  assert.throws(() => framer.push("x".repeat(10000)), /PI_RPC_MESSAGE_TOO_LARGE/);
+  assert.throws(() => framer.push("ok\n"), /PI_RPC_FRAMER_ENDED/);
+  const crlf = new PiJsonlFramer(4);
+  assert.deepEqual(crlf.push("1234\r"), []);
+  assert.deepEqual(crlf.push("\n"), ["1234"]);
+  const unicode = new PiJsonlFramer(4);
+  assert.deepEqual(unicode.push("\ud83d"), []);
+  assert.deepEqual(unicode.push("\ude00\n"), ["😀"]);
+});
+
+test("#765 default 8MiB framing is invariant for batched 5MiB records and control prefixes", () => {
+  const first = JSON.stringify({ type: "agent_start" });
+  const large = JSON.stringify({ type: "message_update", text: "x".repeat(5 * 1024 * 1024) });
+  const stream = `${first}\n${large}\n${large}\n`;
+  for (const step of [4093, 1024 * 1024, stream.length]) {
+    const f = new PiJsonlFramer();
+    const frames = [];
+    for (let i = 0; i < stream.length; i += step) frames.push(...f.frames(stream.slice(i, i + step)));
+    assert.deepEqual(frames.map(v => v.line), [first, large, large]);
+    assert.deepEqual(frames.map(v => v.bytes), [first, large, large].map(v => Buffer.byteLength(v)));
+  }
+  const control = JSON.stringify({ type: "message_end", message: { stopReason: "error", text: "x".repeat(9 * 1024 * 1024) } });
+  const f = new PiJsonlFramer();
+  assert.deepEqual(f.push(first + "\n" + control.slice(0, 20)), [first]);
+  assert.throws(() => f.push(control.slice(20) + "\n"), /PI_RPC_MESSAGE_TOO_LARGE/);
+  assert.throws(() => new PiJsonlFramer().push(control + "\n"), /PI_RPC_MESSAGE_TOO_LARGE/);
 });

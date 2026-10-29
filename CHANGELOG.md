@@ -2,6 +2,9 @@
 
 ### 修复
 
+- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。无需 schema 变更；生产 17 个 Job 未重跑。
+
+
 - 官方运行时镜像清单拉取不再因单次链路抖动失败（#761）：`github.com/.../releases/latest/download` 会 302 到 `release-assets.githubusercontent.com`，部分网络下首跳常超过 10s；原先每次请求只有一次 10s 硬超时且零重试，表现为 `remote registry request timed out` 反复出现。现在：① 仅对瞬时错误（超时/连接重置/429/5xx）做有界重试（默认 3 次，`DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS` 可调 1–5），鉴权/主机/载荷/体积错误立即失败；② 无 token 时公开通道失败后回退 `api.github.com` 的 release asset；③ 瞬时失败**保留上次成功清单**（`stale`/`consecutive_failures`/`last_success_at`），连续 3 次才降级到 bundled，`stale` 期间不写平台更新检查，横幅不再随单次抖动翻转。不 bump schema。
 - 收口 #761 的两处消抖缺口（#763）：① 清单缓存命中与失败分支改为共用同一个「是否可服务 last-known-good」判断，否则连续失败达到降级阈值后，缓存有效期内的普通读取会把已降级的清单重新放行（`source=remote`/`fallback=false`），与强制刷新结论矛盾；现在降级后缓存命中直接按 bundled 处理且不额外抓取，成功刷新即清零失败次数恢复 remote。② `runtimeImageRegistryWithOverrides` 与 `registryWithEnvOverrides` 两份投影改为只替换 `images`，保留 `stale`/`consecutive_failures`/`last_success_at` 与 `platform`/`platform_version`/`min_runtime_image`——此前 `stale` 在同步链路上被丢弃，导致 stale 清单仍会覆盖上一条平台更新检查记录，`GET /runtime-images/registry` 也无法向前端暴露「沿用上次成功清单」状态。新增 4 个回归用例，反向验证旧实现全红。不 bump schema。
 
@@ -25,15 +28,6 @@
 
 ### 修复
 
-- Pi RPC 单条事件超过上限不再直接判 Job 失败（#765）：`PiJsonlFramer` 的 1MB 硬上限会让
-  `cat large.js` / `curl` 整页 / `rg` 全仓 / 完整构建日志这类大输出以 `PI_RPC_MESSAGE_TOO_LARGE`
-  终止 Job，而失败集中的审计维度（XSS、SQLi、认证绕过、RCE、密钥导出链）恰恰最需要大证据输出。
-  现在：① 单帧上限默认放宽到 8MB，可用 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖；
-  ② 新增 `PiJsonlFramer.pushFrames()`，超限帧标记 `truncated` 并截到上限，由 runtime 记录
-  `runtime.diagnostic`（code `pi_rpc_event_too_large`，带原始字节数与 cap）与 `spec.onWarning`，
-  跳过该帧解析但保留同批其余帧与整条流；未闭合行超限时只保留前缀，避免无界内存增长；
-  ③ 旧 `push()` 仍对超限帧抛 `PI_RPC_MESSAGE_TOO_LARGE`，既有契约不变；`parsePiJsonlRecord` 的默认上限同步放宽。
-  不 bump schema。
 
 ### 变更
 

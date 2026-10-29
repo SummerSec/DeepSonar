@@ -2,6 +2,7 @@
  * Provider-neutral Agent execution. Scheduler and OpenSandbox hosts
  * call runRealAgent(host, spec).
  */
+import { PI_RPC_INLINE_BYTES, PiRpcOutputCapture, type RuntimeArtifactWriter } from "./pi-rpc-output.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { CLI_SESSION_ADAPTERS, type SessionBundle } from "./cli-session-adapters.js";
@@ -15,6 +16,7 @@ import type {
 import {
   applyRuntimeOutput,
   parsePiJsonlRecord,
+  piRpcMaxEventBytes,
   PiJsonlFramer,
   requireAgentCliRuntimeAdapter,
   type AgentCliRuntimeSnapshot,
@@ -98,6 +100,8 @@ export interface RealAgentSpec {
   onSessionIdentity?: (input: { sessionId: string; sessionFile?: string }) => void | Promise<void>;
   /** telemetry/evidence/session 输出前必须精确脱敏的短期密钥。 */
   secretValues?: readonly string[];
+  /** Persist redacted large RPC payload before its control event is consumed. */
+  onRuntimeArtifact?: RuntimeArtifactWriter;
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
   onWarning?: (warning: { code: string; detail?: string }) => void;
   /**
@@ -1430,6 +1434,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let sessionResumeAttempts = 0;
   let resumeSkipNotice: string | undefined;
   const sessionResumeMessage = "上游请求暂时失败，请在当前会话中继续完成原任务，不要开启新会话；不要重复已成功的工具调用或副作用，只继续未完成的步骤。";
+  const piOutput = new PiRpcOutputCapture(host, secretValues, spec.onRuntimeArtifact, (e) => spec.onEvent?.(e));
+  let fatalOutputError: string | undefined;
   const stderrEvidence = new BoundedRuntimeStderrEvidence(
     secretValues,
     (event) => spec.onEvent?.(event),
@@ -1481,7 +1487,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       let resumedExec: typeof exec | undefined;
       let resumedInput: string | undefined;
       let processError: unknown;
-      const piFramer = spec.provider === "pi" ? new PiJsonlFramer() : undefined;
+      const piFramer = spec.provider === "pi" ? new PiJsonlFramer(piRpcMaxEventBytes()) : undefined;
       try {
         for await (const chunk of exec) {
           if (chunk.type === "stderr") {
@@ -1503,24 +1509,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             continue;
           }
           const lines: string[] = [];
-          if (piFramer) {
-            for (const frame of piFramer.pushFrames(chunk.chunk ?? "")) {
-              if (!frame.truncated) {
-                lines.push(frame.line);
-                continue;
-              }
-              // #765：单条事件超过上限时降级为诊断事件，保留后续帧与 Job 本身。
-              spec.onWarning?.({ code: "pi_rpc_event_too_large", detail: `bytes=${frame.bytes};cap=${piFramer.limit}` });
-              spec.onEvent?.({
-                type: "runtime.diagnostic",
-                code: "pi_rpc_event_too_large",
-                event_type: frame.eventType,
-                bytes: frame.bytes,
-                cap: piFramer.limit,
-                truncated_bytes: Math.max(0, frame.bytes - piFramer.limit),
-              });
-            }
-          } else {
+          if (!piFramer) {
             stdoutBuffer += chunk.chunk ?? "";
             // 其他 CLI 按行解析，未完成的行留给下一个 chunk。
             let idx: number;
@@ -1529,15 +1518,19 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
               stdoutBuffer = stdoutBuffer.slice(idx + 1);
             }
           }
-          for (const rawLine of lines) {
+          const frames = piFramer ? piFramer.frames(chunk.chunk ?? "") : lines.map((line) => ({ line, bytes: Buffer.byteLength(line) }));
+          for (const frame of frames) {
+            const rawLine = frame.line;
             const line = piFramer ? rawLine : rawLine.trim();
             if (!line) continue;
-            const parsedLine = piFramer ? { parsed: parsePiJsonlRecord(line) } : parseRuntimeLine(line);
+            const parsedLine = piFramer ? { parsed: parsePiJsonlRecord(line, piFramer.limit) } : parseRuntimeLine(line);
             if (!parsedLine.parsed) {
               if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
               continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
             }
-            const rawParsed = parsedLine.parsed;
+            const rawParsed = piFramer && frame.bytes > PI_RPC_INLINE_BYTES
+              ? await piDriver!.whileCapturing(() => piOutput.prepare(parsedLine.parsed!, frame.bytes))
+              : parsedLine.parsed;
             if (piDriver && !await piDriver.observe(rawParsed)) continue;
             const decodedEvents = applyRuntimeOutput(adapter, rawParsed, adapterState);
             await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
@@ -1639,6 +1632,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         }
       } catch (error) {
         processError = error;
+        if (error instanceof Error && error.message.startsWith("PI_RPC_")) fatalOutputError = error.message;
         await exec.kill().catch(() => {});
       } finally {
         processError ??= piDriver?.finishError();
@@ -1649,6 +1643,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             piFramer.finish();
           } catch (error) {
             processError ??= error;
+            if (error instanceof Error && error.message.startsWith("PI_RPC_")) fatalOutputError = error.message;
           }
         }
       }
@@ -1773,6 +1768,11 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await disposeSource();
   }
   stderrEvidence.finish();
+  if (fatalOutputError) {
+    runError = fatalOutputError;
+    terminalOutcome = "failure";
+    spec.onEvent?.({ type: "runtime.diagnostic", code: fatalOutputError.split(":")[0], capture_complete: false });
+  }
 
   // 4. 读回结果文件
   const files: Record<string, string> = {};
