@@ -13,6 +13,7 @@ import {
   type EffectiveFindingProtocol,
   type HubRoleDefinitionPayload,
 } from "@deepsonar/shared-types";
+import { validatePlanDecision } from "../plan-protocol/decision.js";
 import { applyHubPlanAdapter, applySubmitPlan, applySubmitPlanResult } from "../plan-protocol/index.js";
 import type { SharedAssetSelection } from "../shared-assets/index.js";
 import {
@@ -506,6 +507,10 @@ export function createEventIngestionSideEffectApplication(
     const rules = await ports.rulesForProject(tx, job.project_id as string);
     const roles = decision.complete ? [] : await ports.rolesForProject(tx, job.project_id as string);
     const submittedIntents = decision.intents ?? [];
+    await validatePlanDecision(tx,jobId,job,decision.plan_basis,'hub_decision',{
+      eventId:services.eventId,final:phase==='apply',maxIntents:rules.maxIntentsPerDecision,
+      references:decision.complete?.from ?? submittedIntents[0]?.from ?? [],
+    });
     const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as HubDecisionTrigger;
     const findingByNodeId = new Map<string, HubFindingBinding>();
     const ambiguousFindingNodeIds = new Set<string>();
@@ -803,6 +808,7 @@ export function createEventIngestionSideEffectApplication(
       const parsed = HumanPayload.safeParse(payload);
       if (!parsed.success) throw new ControlInputError("invalid_human", "request_human 参数不符合严格契约。");
       await validateHumanSubject(tx, job as Record<string, unknown>, parsed.data);
+      await validatePlanDecision(tx,jobId,job,parsed.data.plan_basis,'human',{eventId:services.eventId});
       return;
     }
     await validateHubDecision(tx, jobId, job as Record<string, unknown>, payload, services, "preflight");
@@ -1182,7 +1188,7 @@ export function createEventIngestionSideEffectApplication(
         await (services.hubEdgeBatchInsert ?? ports.insertEdgesIfAbsentBatch)(edgeTx, uniqueEdges);
       };
 
-      await applyHubPlanAdapter(
+      if (!p.plan_basis) await applyHubPlanAdapter(
         tx,
         jobId,
         job as Record<string, unknown>,
@@ -1346,6 +1352,7 @@ export function createEventIngestionSideEffectApplication(
         });
       }
 
+      if (p.plan_basis && preparedIntents.length!==1) throw new ControlInputError('plan_budget_exhausted','单步补证不得被重复 Intent 跳过或部分派发；请重读当前工作。','intents');
       for (const prepared of preparedIntents) {
         const {
           it,
@@ -1372,6 +1379,7 @@ export function createEventIngestionSideEffectApplication(
             purpose: schedulingPurpose,
           }),
           payload_json: {
+            ...(p.plan_basis ? {plan_context:{plan_job_id:p.plan_basis.plan_job_id,plan_sha256:p.plan_basis.plan_sha256,decision_event_id:services.eventId,scheduler_owned:true}} : {}),
             scheduling_purpose: schedulingPurpose,
             intent: {
               description: it.description,
@@ -1458,6 +1466,7 @@ export function createEventIngestionSideEffectApplication(
       const p = validatedPayload as HumanPayload;
       const canvasId = (job.canvas_id as string | null) ?? null;
       await validateHumanSubject(tx, job as Record<string, unknown>, p);
+      await validatePlanDecision(tx,jobId,job,p.plan_basis,'human',{eventId:services.eventId,final:true});
       await markJobWaitingHuman(tx, jobId);
       const [jobNode] = await tx`
       SELECT id, canvas_id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;

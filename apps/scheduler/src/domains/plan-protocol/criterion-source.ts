@@ -1,4 +1,5 @@
 import type { sql } from "../../db.js";
+import { taskInputSha256 } from "./task-input.js";
 import { contentSha256 } from "./criterion-model.js";
 import { criterionEvidenceBudget, inspectCriterionEvidence, type EvidenceReadBudget } from "./criterion-evidence.js";
 
@@ -7,7 +8,7 @@ export async function loadCriterionSource(
   budget: EvidenceReadBudget = criterionEvidenceBudget(),
 ) {
   const [row] = await db`
-    SELECT n.id, n.title, n.body_json - 'manual_verification' AS content,
+    SELECT n.id, n.title, c.title AS task_title, c.target_json AS task_target, n.body_json - 'manual_verification' AS content,
       n.verification_status, n.body_json->'manual_verification'->>'updated_at' AS verification_epoch,
       a.id AS artifact_id, a.revision, a.status AS artifact_status, a.body_json AS artifact_body,
       a.source_event_id, j.id AS job_id, j.status AS job_status, j.type AS job_type, j.agent_snapshot_json,
@@ -45,7 +46,9 @@ export async function loadCriterionSource(
   };
   return {
     fact_id: factId,
+    task_input_sha256: taskInputSha256(row.task_title, row.task_target),
     source_sha256: contentSha256({
+      task_input_sha256: taskInputSha256(row.task_title, row.task_target),
       title: row.title, content: row.content, artifact_body: row.artifact_body, source,
       event_row_id: row.event_row_id, event_payload: row.event_payload,
       snapshot: row.agent_snapshot_json, attempt_snapshot: row.snapshot_identity_json,

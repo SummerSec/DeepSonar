@@ -7,6 +7,7 @@
  */
 import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
+import { planCompletionBlockers } from "./domains/plan-protocol/decision.js";
 import { invalidVerification } from "./control-input.js";
 import {
   careSeverities,
@@ -1622,7 +1623,7 @@ export async function evaluateAnalysisCompleteGate(
   opts?: { excludeJobId?: string | null },
 ): Promise<{ ok: boolean; blockers: string[]; problems: FindingStatusProblem[] }> {
   const conv = await canvasFindingsConverged(tx, canvasId);
-  const blockers = [...conv.blockers];
+  const blockers = [...conv.blockers, ...await planCompletionBlockers(tx as unknown as typeof sql,canvasId)];
   const problems = [...conv.problems];
 
   if (await hasActiveWorkJobs(tx, canvasId, opts?.excludeJobId)) {
