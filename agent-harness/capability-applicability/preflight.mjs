@@ -1,7 +1,7 @@
 /** Pure offline evidence comparison. No network, execution, ranking, cache or database writes. */
-import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { canonical, contentHash, digest, fail, validate } from './contract.mjs';
+import { readBoundedInput } from './bounded-input.mjs';
 
 const result = (status, reasons, details = {}) => ({
   schema: 'deepsonar.skill-applicability-report/v1', status, reasons,
@@ -104,8 +104,7 @@ export function preflight(input, expectedSourceDigest) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const bytes = readFileSync(process.argv[2]);
-    if (bytes.length > 1048576) fail('INPUT_LIMIT');
+    const bytes = readBoundedInput(process.argv[2]);
     const report = preflight(JSON.parse(bytes.toString('utf8')), process.argv[3]);
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = report.status === 'compatible' ? 0 : report.status === 'incompatible' ? 1 : 2;

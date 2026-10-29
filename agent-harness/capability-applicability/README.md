@@ -17,7 +17,7 @@ current authorization. A matching synthetic case is engineering evidence only.
 node agent-harness/capability-applicability/fixture.mjs > /tmp/applicability-input.json
 node agent-harness/capability-applicability/fixture.mjs --digest
 node agent-harness/capability-applicability/preflight.mjs /tmp/applicability-input.json <recorded-digest>
-node --test agent-harness/capability-applicability/preflight.test.mjs
+node --test agent-harness/capability-applicability/*.test.mjs
 ```
 
 `fixture.mjs` specifies an ASCII whitespace example, a manually fixed expected
@@ -36,7 +36,10 @@ untrusted names, text, raw expected/actual values and errors are not echoed.
 structured level, including sidecars and candidate metadata. Missing data is not
 silently defaulted. All hashes are lowercase SHA-256. A `seal` binds canonical JSON
 body bytes; the separately supplied envelope digest must match before analysis.
-Limits: 1 MiB canonical envelope, 1,000 catalog/version entries, 20 safe Skill text
+The CLI opens with `O_NONBLOCK`, checks `fstat` for a regular file and size,
+then reads at most 1 MiB + 1 byte to detect growth after the check. It closes the
+descriptor on every path and never prints path/OS errors. FIFOs and devices are
+not supported. Limits: 1 MiB input file and canonical envelope, 1,000 catalog/version entries, 20 safe Skill text
 paths / 128 KiB path-and-content bytes, 64 KiB per JSON byte string, depth 24.
 
 | Input | Existing source / explicit research input |
@@ -114,7 +117,9 @@ catalog is returned. The original platform live revocation checks still own read
 
 ## Validation and next gates
 
-Behavior tests cover synthetic equality, unknown fields, missing inputs, exact
+Reader/CLI tests cover regular and sparse oversized files, directories, injected
+nonregular files, short reads, growth after stat, I/O errors and descriptor closure
+without opening actual devices or FIFOs. Behavior tests cover synthetic equality, unknown fields, missing inputs, exact
 identity, preserved mixed catalogs, historical versions, input/runtime/tool/network/
 budget mismatches, revocation, cross-project suppression, changed hashes, producer
 separation, raw JSON differences and unknown effects. The suite is added to
