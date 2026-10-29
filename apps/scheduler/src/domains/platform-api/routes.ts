@@ -1,3 +1,6 @@
+import { sql } from "../../db.js";
+import { invokeDurableCompletion } from "./completion.js";
+import { readCompletionReceipt } from "../event-ingestion/completion-receipt.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ControlToolPayloadSchemas, KNOWLEDGE_OPERATION_IDS } from "@deepsonar/shared-types";
@@ -282,6 +285,26 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   if (!key) return sendError(reply, 400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required");
   if (!isUuid(key)) return sendError(reply, 400, "IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must be a UUID");
   const parsed = parseOperationInput(req, definition, key);
+  if (definition.operationId === "mark_job_done") {
+    const existing = idempotencyCache.get(idempotencyCacheKey(jobId, key));
+    if (existing && existing.operationId !== "mark_job_done") return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key belongs to another operation");
+    const revision = headerValue(req, "x-deepsonar-proposal-revision");
+    if (!revision || !/^(0|[1-9][0-9]{0,3})$/.test(revision)) {
+      return sendError(reply, 400, "COMPLETION_REVISION_REQUIRED", "mark_job_done requires X-DeepSonar-Proposal-Revision (initial 0)");
+    }
+    if (parsed.eventId !== key) return sendError(reply, 400, "COMPLETION_EVENT_ID_CONFLICT", "Completion event id must equal Idempotency-Key");
+    if (parsed.error && !parsed.error.body) return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
+    const invocation = invokeDurableCompletion({ principal, key, revision: Number(revision), payload: parsed.input,
+      ...(parsed.error ? { schemaFailure: { statusCode: parsed.error.statusCode, body: parsed.error.body as Record<string, unknown> } } : {}) });
+    // Reserve synchronously before yielding, so concurrent process-local mutations cannot reuse this key.
+    idempotencyCache.set(idempotencyCacheKey(jobId, key), { operationId: "mark_job_done", inputHash: inputHash(parsed.input),
+      result: invocation.then(result => ({ ...result, cacheable: true })) });
+    const result = await invocation;
+    return reply.code(result.statusCode).send(result.body);
+  }
+  if (await readCompletionReceipt(sql, jobId, key)) {
+    return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to mark_job_done");
+  }
   if (parsed.error) {
     if (parsed.error.retryable) {
       return reply.code(parsed.error.statusCode).send(parsed.error.body ?? {
@@ -354,6 +377,13 @@ export function registerPlatformControlRoutes(app: FastifyInstance): void {
     const definition = operationForRequest(typed);
     if (!definition) return sendError(reply, 404, "OPERATION_NOT_FOUND", "Operation is not registered");
     if (!isAllowed(principal, definition.operationId)) return sendError(reply, 403, "OPERATION_NOT_ALLOWED", "Operation is not allowed for this Job");
+    const receiptKey = (typed.query as { receipt_key?: unknown })?.receipt_key;
+    if (receiptKey !== undefined) {
+      if (definition.operationId !== "mark_job_done" || !isUuid(receiptKey)) return sendError(reply, 400, "INVALID_RECEIPT_KEY", "Receipt lookup requires mark_job_done and a UUID receipt_key");
+      const receipt = await readCompletionReceipt(sql, principal.jobId, receiptKey);
+      if (!receipt) return sendError(reply, 404, "COMPLETION_RECEIPT_NOT_FOUND", "Completion receipt not found");
+      return reply.header("cache-control", "no-store").send(receipt.result.body);
+    }
     return reply.header("cache-control", "no-store").send(operationDescription(definition));
   });
 

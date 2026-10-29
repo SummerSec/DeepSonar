@@ -134,6 +134,8 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
 
+[#776 B](docs/REPAIR_FEEDBACK_DONE_REPAIR.md)仅为 mark_job_done 增加原 Control 通道上的持久拒绝/接受回执与 revision；persisted_deferred 不等于效果结算，完整完成门与真实模型质量尚未验收。
+
 ## 5. 当前执行闭环
 
 ```text

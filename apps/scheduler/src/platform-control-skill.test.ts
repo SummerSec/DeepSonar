@@ -30,7 +30,10 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /不要先尝试 MCP.*不要在 API 失败后回退到 MCP/);
   assert.match(content, /repair/);
   assert.match(content, /model_correctable/);
-  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "456f09e063440d8146add73a521bd975b2ec03695c25218873fbda1846ece7f3");
+  assert.match(content, /X-DeepSonar-Proposal-Revision.*首次为 0/);
+  assert.match(content, /receipt_key/);
+  assert.match(content, /persisted_deferred/);
+  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "d8f911b303e73b310b546e2e539b501502846ef789f2d01139a08e48de41e2f1");
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {

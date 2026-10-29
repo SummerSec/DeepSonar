@@ -70,6 +70,8 @@ if (!testDatabaseUrl) {
           now(), 3600, now() + interval '1 hour'
         )`;
 
+      const { createAttempt } = await import("../job-attempt/application.js");
+      await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
       const grant = await mintJobCapabilityToken(jobId);
       const auth = { authorization: `Bearer ${grant.token}` };
       const base = `/control/v1/jobs/${jobId}`;
@@ -79,7 +81,8 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET status = 'running', started_at = now() WHERE id = ${jobId}`;
       assert.equal(await activateProvisionedJobCapabilityTokens(jobId), 1);
       const calls: Array<{ operationId: string; eventId: string; input: unknown }> = [];
-      const handler = async (context: { operationId: string; eventId: string; input: unknown }) => {
+      const handler = async (context: { operationId: string; eventId: string; input: unknown; completionPhase?: string }) => {
+        if (context.completionPhase === "prepare") return { completion_prepared: true };
         calls.push(context);
         return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
       };
@@ -95,10 +98,11 @@ if (!testDatabaseUrl) {
       }
       assert.equal("token" in projection, false);
 
+      let completionRevision = 0;
       const invoke = (operationId: string, key: string, payload: unknown) => app.inject({
         method: "POST",
         url: `${base}/operations/${operationId}`,
-        headers: { ...auth, "idempotency-key": key },
+        headers: { ...auth, "idempotency-key": key, ...(operationId === "mark_job_done" ? { "x-deepsonar-proposal-revision": String(completionRevision++) } : {}) },
         payload,
       } as never) as unknown as Promise<InjectResponse>;
       const oversizedDone = await invoke("mark_job_done", randomUUID(), {

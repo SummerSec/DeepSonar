@@ -266,3 +266,15 @@ test("runtime handler registry preserves safe semantic rejection metadata", asyn
   );
   unregisterRuntimeHandler(jobId);
 });
+
+
+test("only completion requires explicit revision and offers scoped receipt lookup", () => {
+  const document = buildPlatformOpenApiDocument({ jobId: "00000000-0000-4000-8000-000000000001", operationIds: ["mark_job_done", "emit_progress"] });
+  const paths = document.paths as Record<string, any>;
+  const done = paths["/control/v1/jobs/{jobId}/operations/mark_job_done"];
+  const progress = paths["/control/v1/jobs/{jobId}/operations/emit_progress"];
+  assert.equal(done.post.parameters.find((p: any) => p.name === "X-DeepSonar-Proposal-Revision").required, true);
+  assert.equal(done.get.parameters.find((p: any) => p.name === "receipt_key").required, false);
+  assert.equal(progress.post.parameters.some((p: any) => p.name === "X-DeepSonar-Proposal-Revision"), false);
+  assert.equal(progress.get.parameters.some((p: any) => p.name === "receipt_key"), false);
+});

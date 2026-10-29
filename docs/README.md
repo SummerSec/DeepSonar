@@ -78,6 +78,8 @@
 
 ---
 
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C 和真实模型效果仍待交付。
+
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |

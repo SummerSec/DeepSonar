@@ -49,12 +49,26 @@ Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、p
 按反馈修正后使用新的 Idempotency-Key 重提；\`transient_retryable\` 等待后用同一 key 重试；
 \`unknown_external_effect\` 与 \`permanent_failure\` 不要猜测重放。
 
+## 完成提交的持久回执
+
+仅 \`mark_job_done\` 必须带 \`X-DeepSonar-Proposal-Revision\` 请求头：首次为 0。
+语义修正用新 Idempotency-Key 和反馈要求的下一 revision；同一提交的传输重试保持原 key、revision、payload。
+不要另设不同的事件 ID。响应丢失先调用
+\`GET $DEEPSONAR_API_BASE_URL/operations/mark_job_done?receipt_key=<原UUID>\` 查询；查询受原 Job 权限约束。
+没有查到回执不证明没有外部效果，未知效果先对账，不换 key 猜测重发。
+
+\`receipt_status=persisted_deferred\` 表示完成提案已持久接收，不等于 Job 成功、效果结算或模型已处理。
+同 key 改内容或 revision 会冲突；已接受后不要新建另一个完成提案。拒绝计数跨进程保留，
+最多记录 8 次拒绝；额度耗尽、无进展、取消、租约或总预算到期时停止修正并按既有人工/失败路径处理。
+回执查询不启动 CLI、不创建新 Attempt；不支持原会话续接时停止，不能把重新下发称作同会话恢复。
+Job 终态后 Control token 不再可用，由管理面按项目权限查看既有事件记录。
+
 ## 操作与完成
 
 只能调用能力发现和本 Job 冻结的 \`platform_tools\` 操作，遵守返回的参数 Schema、相对
 \`/workspace\` 的 \`payload_file\`、当前 YAML UUID 引用和 Hub 角色约束。Hub 必须先提交
-决策再完成。API 返回 \`accepted\` 只表示 Scheduler 已接收输入；完成必要工作后必须恰好一次调用已授权的
-\`mark_job_done\`。
+决策再完成。完成必要工作后提交已授权的 \`mark_job_done\`，只有明确拒绝且允许修正时才提交新 revision；
+其它操作的 \`accepted\` 语义按该操作契约判断，不能据此推定整个 Job 成功。
 `,
   },
 } as const;
