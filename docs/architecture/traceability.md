@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**（#741 基线；#752 独立试验分支同步）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
 
@@ -74,7 +74,7 @@
 | FR-RSCH-001 | [构件视图](05-building-blocks.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Research policy](../../apps/scheduler/src/domains/finding-research/policy.ts) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。 |
 | FR-RSCH-002 | [质量属性](04-quality-attributes.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Research ranking](../../apps/scheduler/src/domains/finding-research/policy.ts) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。 |
 | FR-RSCH-003 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Research best effort](../../apps/scheduler/src/domains/finding-research/application.ts) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`、`pnpm ci:unit:bounded-contexts`。 |
-| FR-RPT-001 | [构件视图](05-building-blocks.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Report implementation](../../apps/scheduler/src/report.ts)；[Report version](../../apps/scheduler/src/task-report-version.ts)；[Report routes](../../apps/scheduler/src/domains/report-convergence/routes.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:finding-report`、`pnpm ci:integration:report-download`；人工核对精确 Finding ID 覆盖。 |
+| FR-RPT-001 | [构件视图](05-building-blocks.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Report implementation](../../apps/scheduler/src/report.ts)；[Report version](../../apps/scheduler/src/task-report-version.ts)；[Report routes](../../apps/scheduler/src/domains/report-convergence/routes.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:finding-report`、`pnpm ci:integration:report-download`；`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；人工核对精确 Finding ID 覆盖及 [Plan 缺口审计](../PLAN_GAP_PROJECTION.md) 的 unknown 边界。 |
 | FR-RPT-002 | [数据架构](08-data-architecture.md)；[接口规格](09-interface-specs.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Report implementation](../../apps/scheduler/src/report.ts) | `pnpm ci:integration:finding-report`、`pnpm ci:unit:verify-eligibility`。 |
 | FR-RPT-003 | [运行时视图](06-runtime-view.md)；[质量属性](04-quality-attributes.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Report failure recovery](../../apps/scheduler/src/report-failure-recovery.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:report-download`。 |
 | FR-RPT-004 | [接口规格](09-interface-specs.md)；[上下文与范围](02-context-and-scope.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [OpenAPI report operations](../../apps/scheduler/src/openapi.ts) | `pnpm ci:unit:report-download-openapi`、`pnpm ci:integration:report-download`、`pnpm ci:unit:web-report-download`。 |

@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -550,6 +550,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **验证证据**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`、`pnpm ci:unit:bounded-contexts`。
 
 ### FR-RPT-001 Task Report 冻结输入与版本
+
+#775 审计可见性切片将同 Canvas/项目的 Plan 提案纳入冻结报告。缺少判据证据绑定时必须明确 unknown，模型 done/complete 不构成满足证明；详见 [实现范围](../PLAN_GAP_PROJECTION.md)。
 
 - **规范要求**：Finding 确认后必须能生成冻结输入的 Finding Report；Canvas 收敛后必须能生成带 `report-input.json` 和 SHA-256 的版本化 Task Report。相同输入幂等复用，输入变化追加版本；报告投影失败不得改写内部 Fact/Finding/Artifact，覆盖门必须按精确 Finding ID 核对章节。
 - **决策来源**：报告是投影，不应改变产生它的事实；版本和摘要是可重建、可审计的交付身份。

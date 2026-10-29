@@ -1560,6 +1560,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/canvases/{id}/report",
     summary: "画布最新任务报告元数据",
+    description: "新任务报告的冻结输入包含有界 Plan 审计缺口，Markdown 附带只读说明；模型完成声明不构成判据满足，缺少证据绑定为 unknown。历史报告不回写。",
     scope: "tasks:read",
     tags: ["Reports"],
     responses: {

@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-10-21
+> 同步日期：2026-10-29
 
 ## Schema 基线纪律
 
@@ -87,3 +87,7 @@ Verify round 有 pending/running/rework/confirmed/needs_human/failed/refuted/inc
 维护授权允许暂时拒绝业务写入，但不允许丢弃激活后的合法写入。数据库身份隔离完成后生成不可变备份切点；候选库从经校验的备份恢复，再由目标镜像基线重建，源库始终保留。候选 COMMENT 绑定操作、源库、备份 hash 和 restoring/rebuilding/rebuilt 阶段；不能依据半完成 schema_meta 推断重建成功。只读计划包含源结构及目标 DDL 指纹，明确审批删除字段/表等风险，历史 Job 快照语义不在当前自动验证范围。
 
 同 schema 编号不证明相同 DDL：宿主从已验证的当前不可变镜像取得 baseline SHA，目标 CLI 计算目标 SHA；不一致须拒绝版本别名，不能仅凭版本号跳过。角色身份重置必须是独立显式选择并绑定计划，不由维护许可或 force 自动授权。维护记录和激活证据需与本地 journal 对账；未知激活不能触发旧库恢复。代码入口：[候选库管理](../../deploy/platform-upgrade-candidate.mjs)、[schema 计划](../../apps/scheduler/src/platform-upgrade-schema-plan.ts)、[ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
+
+## Plan 审计的报告投影（#775 首片）
+
+现有 jobs.payload_json.plan_protocol 被按 Canvas/项目读取并冻结到报告输入，数量上限与截断显式可见。内容 SHA 只标识审计快照，不充当 revision/Attempt 或判据证据绑定；缺少绑定时完成判断为 unknown。未新增权威表或执行账本，见 [范围及待办](../PLAN_GAP_PROJECTION.md)。

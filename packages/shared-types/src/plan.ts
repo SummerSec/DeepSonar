@@ -317,8 +317,8 @@ export function mergePlanAudit(
     raw: patch.raw !== undefined ? patch.raw : base.raw,
     trimmed: patch.trimmed !== undefined ? patch.trimmed : base.trimmed,
     trim_reasons: patch.trim_reasons ?? base.trim_reasons,
-    result: patch.result !== undefined ? patch.result : base.result,
-    termination_reason: patch.termination_reason !== undefined ? patch.termination_reason : base.termination_reason,
+    result: patch.result !== undefined ? patch.result : patch.raw !== undefined ? null : base.result,
+    termination_reason: patch.termination_reason !== undefined ? patch.termination_reason : patch.raw !== undefined ? null : base.termination_reason,
     updated_at: updatedAt,
   });
 }

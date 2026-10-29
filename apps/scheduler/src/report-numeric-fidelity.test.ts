@@ -356,3 +356,14 @@ test("equivalent English status headings enforce the same per-ID coverage", () =
   assert.equal(result.coverageOk, true);
   assert.equal(taskReportCoverageOk(input, text.replace("Confirmed Findings", "Refuted Findings")), false);
 });
+
+
+test("scheduler appends frozen plan gaps to both accepted and fallback markdown", () => {
+  const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 } });
+  const fallback = finalizeTaskReportMarkdown(input, "");
+  assert.match(fallback.markdown, /目标与缺口/);
+  assert.match(fallback.markdown, /unknown/);
+  const accepted = finalizeTaskReportMarkdown(input, fallback.markdown.split("## 目标与缺口")[0]!);
+  assert.match(accepted.markdown, /目标与缺口/);
+  assert.equal(accepted.usedDefault, null);
+});
