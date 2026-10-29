@@ -40,16 +40,21 @@ test("completion retains terminal capacity and definite rate rejection stays ret
         headers: { authorization: `Bearer ${grant.token}`, "idempotency-key": key, "x-deepsonar-proposal-revision": "0" }, payload: { summary } });
       return { jobId, post, state };
     };
-    const valid = await setup(120, 0);
+    const valid = await setup(120, 7);
     const key = randomUUID();
-    const accepted = await valid.post(key, "finished with valid summary");
+    const accepted = await valid.post(key, "  finished with valid summary  ");
     assert.equal(accepted.statusCode, 200, accepted.body);
     assert.equal(valid.state.done, true);
     const ingestion = createEventIngestionApplication(sql, async () => {});
+    await assert.rejects(ingestion.ingestEvent(valid.jobId, { v: 1, event_id: completionDoneEventId(valid.jobId, key),
+      type: "done", payload: { summary: "different unaccepted summary" } }),
+      (error: unknown) => (error as { code?: string }).code === "invalid_done",
+      "a changed payload cannot borrow the accepted proposal's reserved quota");
+    await ingestion.ingestEvent(valid.jobId, { v: 1, event_id: completionDoneEventId(valid.jobId, key), type: "done", payload: { summary: "finished with valid summary" } });
     await ingestion.ingestEvent(valid.jobId, { v: 1, event_id: completionDoneEventId(valid.jobId, key), type: "done", payload: { summary: "finished with valid summary" } });
     const [budget] = await sql`SELECT standard_count,terminal_count FROM job_event_rate_limits WHERE job_id=${valid.jobId}`;
     assert.equal(budget.standard_count, 120);
-    assert.equal(budget.terminal_count, 2, "receipt and final done use the reserved terminal budget");
+    assert.equal(budget.terminal_count, 8, "receipt reserves the last terminal slot; final done and replay do not double charge");
     const [events] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${valid.jobId}`;
     assert.equal(events.count, 2);
 

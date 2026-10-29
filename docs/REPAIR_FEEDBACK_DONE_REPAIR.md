@@ -25,7 +25,7 @@ POST 原 `operations/mark_job_done` 需要 UUID `Idempotency-Key` 与 `X-DeepSon
 
 拒绝计数存于语义事件，进程内 Map 清空不重置。最多保存 8 次拒绝，首次拒绝也计入；耗尽后不能再提交新完成提案。重复旧 key 原结果不再消耗额度，同 key 改内容/revision、旧 revision、另一 Attempt 接续均拒绝。正常首次有效提交仍只需一次 HTTP。
 
-Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未知外部效果须先对账，不得通过修正清空账本。合法完成的接受回执消耗 terminal 保留额度（最终 done 按既有路径另计一次）；拒绝回执消耗 standard 额度，普通事件耗尽不能阻断合法完成。确定回滚的限流返回 429/退避，不能冒充未知提交。已有总 token 与事件预算仍适用，**独立 repair-token 成本核算与跨 operation 的 accepted_effects 汇总未交付**，不能宣称满足 #776 的全部预算验收。接收回执不能授予新权限或修改镜像准入。
+Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未知外部效果须先对账，不得通过修正清空账本。合法完成的接受回执预留一次 terminal 额度；最终 done 在 Job 锁内核对宿主接受回执、Attempt、派生事件身份及规范化 payload 摘要后复用该名额，不重复计费；拒绝回执消耗 standard 额度，普通事件耗尽不能阻断合法完成。确定回滚的限流返回 429/退避，不能冒充未知提交。已有总 token 与事件预算仍适用，**独立 repair-token 成本核算与跨 operation 的 accepted_effects 汇总未交付**，不能宣称满足 #776 的全部预算验收。接收回执不能授予新权限或修改镜像准入。
 
 本切片通过同一运行会话内的 Control HTTP 响应交付反馈，未引入新的 stdin、Shell 控制文件或通用重试引擎。跨进程查询持久回执不等于恢复原模型会话；DSH 不支持持久 resume 时仍明确停止。保留 #766 可信父子谱系和父等待子任务语义；不修改 #768 framing、控制事件保留或 evidence 保存失败的结论。
 
