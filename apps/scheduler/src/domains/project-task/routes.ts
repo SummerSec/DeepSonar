@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { DeviceRequirement, FindingProtocolConfig, RuntimeProfileOverridePayload } from "@deepsonar/shared-types";
+import { DeviceRequirement, FindingProtocolConfig, RuntimeProfileOverridePayload, TaskContract, normalizeTaskContract, taskContractWarnings } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config } from "../../config.js";
@@ -9,6 +9,7 @@ import {
   ensureCanvasForTask,
   fixedPriorityForJob,
   globalRules,
+  rulesForProject,
   maybeTriggerHub,
   normalizePendingJobPriority,
   patchCanvasConvergence,
@@ -65,6 +66,8 @@ import {
   validateFrozenTaskSeedsForRetry,
 } from "../../task-compose.js";
 
+import { taskContractPreflight } from "../../task-contract-preflight.js";
+
 const CreateProjectBody = z.object({
   name: z.string().min(1),
   description: z.string().default(""),
@@ -78,6 +81,7 @@ const CreateTaskBody = z.object({
   title: z.string().trim().min(1).max(200),
   content: z.string().trim().min(1).max(20_000),
   allow_egress: z.boolean().optional(),
+  task_contract: TaskContract.optional(),
   finding_protocol: FindingProtocolConfig.optional(),
   kind: z.enum(TASK_KINDS).default("standard"),
   /** 真实设备接入（#495）：声明设备需求，冻结进 Job 快照；需项目先 opt-in。 */
@@ -268,6 +272,18 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     if (!project) return reply.code(404).send({ error: "project not found" });
     if (project.status !== "active") return reply.code(409).send({ error: "项目已归档，不能新建任务" });
 
+    const taskContract = body.task_contract ? normalizeTaskContract(body.task_contract) : undefined;
+    const warnings = taskContractWarnings(taskContract);
+    if (taskContract) {
+      const currentRules = await rulesForProject(sql, id);
+      const blockers = await taskContractPreflight(sql, id, taskContract,
+        currentRules.allowEgress && body.allow_egress !== false);
+      if (blockers.length) return reply.code(409).send({
+        error: "任务所需前置条件尚未满足", error_code: "task_contract_blocked",
+        task_contract_warnings: warnings, task_contract_blockers: blockers,
+      });
+    }
+
     let schedule;
     try {
       schedule = resolveCreateTaskSchedule({
@@ -306,6 +322,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           content: body.content,
           goal: body.content,
           kind: body.kind,
+          ...(taskContract ? { task_contract: taskContract } : {}),
           ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
           ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
           ...(body.allow_egress !== undefined
@@ -373,6 +390,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     return reply.code(201).send({
       canvas_id: canvasId,
       job,
+      task_contract_warnings: warnings,
+      task_contract_blockers: [],
       scheduled_start_at: schedule?.start_at ?? null,
     });
   });

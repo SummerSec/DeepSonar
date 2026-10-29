@@ -62,3 +62,11 @@ export function composeRetryErrorMessage(error: unknown): string {
   }
   return `重试失败：${message}`;
 }
+
+export const SEED_SEVERITY_OPTIONS = [
+  { value: "critical", label: "严重" },
+  { value: "high", label: "高危" },
+  { value: "medium", label: "中危" },
+  { value: "low", label: "低危" },
+  { value: "info", label: "信息" },
+] as const;

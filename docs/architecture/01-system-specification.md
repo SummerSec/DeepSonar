@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -52,6 +52,14 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。
 - **代码入口**：[项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Job 重跑集成测试](../../apps/scheduler/src/job-rerun.integration.test.ts)、[恢复集成测试](../../apps/scheduler/src/recovery-issue186.integration.test.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）。
+
+### FR-TASK-006 版本化任务契约与派发前校验
+
+- **规范要求**：系统必须支持可选版本化任务契约，保留原始需求及采用的模板版本/规范化快照；缺项返回字段级建议，不通过固定标题或字数评定质量。显式契约必须严格校验版本、结构与未知字段；契约只能收窄平台权限，不得自行证明身份、授权或前置条件。派发前必须按当前可信事实复核必要条件，不能沿用创建时的过期通过结果。
+- **决策来源**：#767；减少不同创建者与入口造成的遗漏，同时保留非审计工程任务和自由文本输入。
+- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；没有契约时返回未评估提示。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
+- **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
+- **验证证据**：契约规范化、变形输入与安全边界行为测试；人工核对 API/Web/CLI 对同一结构化意图返回一致缺项/阻塞，并核对创建后撤销权限时派发拒绝。实际运行结果见 PR 验收记录，不以字段校验冒充模型效果评测。
 
 ### FR-HUB-001 Scheduler 派生 Hub Job
 

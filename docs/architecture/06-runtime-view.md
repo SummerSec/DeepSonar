@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-10-21
+> 同步日期：2026-10-29
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -53,6 +53,10 @@ sequenceDiagram
 ```
 
 任务入口创建 Canvas 根和 Hub Job；Hub 不直接写 Job 终态，而是提交经过引用和预算校验的意图。Dispatcher 按冻结快照领取 Job、创建唯一 active Attempt、登记 provisioning/agent 外部效果，并在 Agent 结束后由 Scheduler 收敛。所有 Control operation 先由 [`executor-real.ts`](../../apps/scheduler/src/executor-real.ts) 和 Control registry 做入口校验；只读 discovery 返回有界投影，不进入 event-ingestion 语义事件事务。改变语义或外部效果的 operation 再由 event-ingestion 在持久化事务中锁 Job 并重复检查角色、scope、引用、状态和协议；非法输入会回滚该事务的所有副作用。`submit_plan`/`submit_plan_result` 在当前 Phase 1 只记录版本化输入/结果，不派发 Worker，也不改变 Hub convergence 或 Job 终态。`emit_fact`/`emit_finding` 的 side-effects 会调用 Artifact model/persistence，再绑定 Canvas Fact/Finding；Artifact 的 source operation 和绑定关系由 [`side-effects.ts`](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts) 保存。Verify 只消费 Fact、Artifact、Evidence 和独立 Evaluation。Research 只写其语义结果，Report 只把冻结输入投影给用户。
+
+### 任务契约派发门（#767）
+
+显式契约在创建前校验，必要条件阻塞返回 409 且不建任务；通过后规范化并保存到 Canvas 和新 Job 冻结快照；同一画布的新 Job 在沙箱 provisioning 前重新检查当前项目边界与凭据可用性。契约自声明不构成当前授权。所需动作被禁止、必要身份/权限未知或凭据失效时，停止整个依赖执行链，沿用既有失败处理，不新建 Job 状态。当前没有安全拆分任意自然语言任务的能力，因此不自动把写入链改成只读并宣称原目标完成；应由创建者重新下发明确的较窄目标。
 
 ## 项目知识工作链（#752 分支）
 

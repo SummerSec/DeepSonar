@@ -1,9 +1,10 @@
+import type { TaskContractFeedback } from "./task-contract-editor";
 import type {
   AuthMe,
   AuthStatus,
   Project,
 } from "./api";
-import type { ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@deepsonar/shared-types";
+import type { TaskContract, ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@deepsonar/shared-types";
 
 export const NEW_PROJECT = "__new_project__" as const;
 export const LAST_PROJECT_STORAGE_KEY = "deepsonar:last-project-id";
@@ -103,13 +104,14 @@ export type QuickStartPresetId = (typeof QUICK_START_PRESETS)[number]["id"];
 export interface QuickStartTaskPayload {
   title: string;
   content: string;
+  task_contract?: TaskContract;
   allow_egress?: boolean;
 }
 
 export interface QuickStartApi {
   createProject: (input: { name: string; description?: string }) => Promise<Project>;
   readiness: (projectId: string, options?: { allow_egress?: boolean }) => Promise<ReadinessResponse>;
-  createTask: (projectId: string, payload: QuickStartTaskPayload) => Promise<{ canvas_id: string; job: { id: string; status: string } }>;
+  createTask: (projectId: string, payload: QuickStartTaskPayload) => Promise<{ canvas_id: string; job: { id: string; status: string } } & TaskContractFeedback>;
 }
 
 export interface QuickStartInput {
@@ -118,12 +120,13 @@ export interface QuickStartInput {
   project: Project | null;
   newProject?: { name: string; description?: string } | null;
   networkOverride: NetworkOverride;
+  task_contract?: TaskContract;
 }
 
 export type QuickStartResult =
   | { kind: "invalid"; message: string }
   | { kind: "readiness_failed"; project: Project; readiness: ReadinessResponse }
-  | { kind: "success"; project: Project; task: { canvas_id: string; job: { id: string; status: string } } };
+  | { kind: "success"; project: Project; task: { canvas_id: string; job: { id: string; status: string } } & TaskContractFeedback };
 
 /** 只有任务边界可以从快捷入口进入；角色、镜像和凭据仍由服务端治理。 */
 export function networkOverrideValue(value: NetworkOverride): boolean | undefined {
@@ -243,11 +246,12 @@ export function quickStartNetworkQuery(value: NetworkOverride): { allow_egress?:
   return allow_egress === undefined ? {} : { allow_egress };
 }
 
-export function quickStartTaskPayload(input: Pick<QuickStartInput, "title" | "goal" | "networkOverride">): QuickStartTaskPayload {
+export function quickStartTaskPayload(input: Pick<QuickStartInput, "title" | "goal" | "networkOverride" | "task_contract">): QuickStartTaskPayload {
   const allow_egress = networkOverrideValue(input.networkOverride);
   return {
     title: input.title.trim(),
     content: input.goal.trim(),
+    ...(input.task_contract ? { task_contract: input.task_contract } : {}),
     ...(allow_egress === undefined ? {} : { allow_egress }),
   };
 }
@@ -297,6 +301,6 @@ export async function runQuickStart(input: QuickStartInput, client: QuickStartAp
   const readiness = await client.readiness(project.id, quickStartNetworkQuery(input.networkOverride));
   if (!readiness.ready) return { kind: "readiness_failed", project, readiness };
 
-  const task = await client.createTask(project.id, quickStartTaskPayload({ title, goal, networkOverride: input.networkOverride }));
+  const task = await client.createTask(project.id, quickStartTaskPayload({ title, goal, networkOverride: input.networkOverride, task_contract: input.task_contract }));
   return { kind: "success", project, task };
 }

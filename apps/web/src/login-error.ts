@@ -1,10 +1,12 @@
+import type { TaskContractFeedback } from "./task-contract-editor";
+
 /**
  * Login / auth request error shaping for the Web console.
  * Backend already emits 429 LOGIN_RATE_LIMITED with retry_after_sec;
  * this module turns that into a clear Chinese UX message.
  */
 
-export type ApiErrorBody = {
+export type ApiErrorBody = TaskContractFeedback & {
   error?: string;
   message?: string;
   error_code?: string;
@@ -12,6 +14,7 @@ export type ApiErrorBody = {
 };
 
 export class ApiRequestError extends Error {
+  readonly taskContractFeedback: TaskContractFeedback;
   readonly status: number;
   readonly method: string;
   readonly path: string;
@@ -20,6 +23,7 @@ export class ApiRequestError extends Error {
   readonly serverMessage: string | null;
 
   constructor(input: {
+    taskContractFeedback?: TaskContractFeedback;
     method: string;
     path: string;
     status: number;
@@ -42,6 +46,7 @@ export class ApiRequestError extends Error {
       retryAfterSec,
     }));
     this.name = "ApiRequestError";
+    this.taskContractFeedback = input.taskContractFeedback ?? {};
     this.status = input.status;
     this.method = input.method;
     this.path = input.path;

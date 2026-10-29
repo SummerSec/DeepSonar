@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-10-21
+> 同步日期：2026-10-29
 
 ## Schema 基线纪律
 
@@ -27,6 +27,10 @@
 | `credentials`、`api_tokens`、`audit_logs` | 凭据、管理身份和 append-only 审计 | 密文/nonce/tag 与安全 projection 分离；审计触发器防止更新/删除 |
 | `runtime_images*`、`devices*` | 镜像信任目录和设备租约/事件 | 信任状态、摘要、租约和设备状态由对应域持有 |
 | `platform_update_checks` | 平台 catalog 与当前部署版本的最近一次只读比较结果 | 单例行；由 `platform-updates` 写入，管理员读取；不触发升级或 Compose 变更 |
+
+### 任务契约快照（#767）
+
+`canvases.target_json.task_contract` 保存规范化后的版本化契约，包含 schema 与模板版本；`content` 保留原始用户需求。Job 的 `agent_snapshot_json.task_contract` 冻结该契约用于执行提示；未提交契约的 Job 不增加此字段。模板升级不会重写既有契约。沿用现有 JSONB，不新增数据库表/列或第二份任务真相。派发时读取当前权限只用于撤销/收窄检查，不改变历史 Job 冻结运行快照。
 
 ## 运行身份与可选白名单（#757）
 

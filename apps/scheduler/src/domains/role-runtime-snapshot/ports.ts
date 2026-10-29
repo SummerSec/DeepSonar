@@ -20,6 +20,7 @@ export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ..
 };
 
 export interface RoleRuntimeSnapshotResult {
+  task_contract?: import("@deepsonar/shared-types").TaskContract;
   name: string;
   role_kind: "role" | "hub" | "system";
   ui_color: string | null;

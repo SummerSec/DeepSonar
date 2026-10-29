@@ -1,9 +1,15 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-10-21
+> 同步日期：2026-10-29
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
+
+## 任务下发契约（#767）
+
+`POST /projects/{id}/tasks` 可选提交 `task_contract`；类型/版本错误按既有校验错误处理。共享 [TaskContract schema](../../packages/shared-types/src/task-contract.ts) 是字段与模板的唯一机器来源。201 成功返回 `task_contract_warnings`；必要条件阻塞返回 `409 task_contract_blocked`、`task_contract_blockers` 和 warnings，且不创建 Canvas/Job。每项有 `code/path/message/suggestion`，用于明确补充什么、哪些条件尚不能执行；它们不是完整度分数，也不代表自然语言意图已被理解。未提交契约的自由文本任务继续接受并返回未评估提示，工程场景不强套审计模板。
+
+`workspace_write` 仅表示沙箱工作区变更，不包含外部业务写入或代码推送；后者属于需要目标核验的 `write`。客户端不得把 `allowed_actions`、身份字段或前置条件声明当作授权证明。服务端对可核验的当前项目网络限制、凭据存在/启用/项目范围做复核；真实目标身份、写权限和任意材料的可用性无可信核验结果时保持未知。契约及提示只能使用凭据引用，不能放入密码、cookie、token；schema 不提供秘密字段，但也不能保证自由文本没有秘密。详细管理工作流见[任务下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
 ## Management API
 

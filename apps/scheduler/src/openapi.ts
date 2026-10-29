@@ -4,6 +4,8 @@
  * 与 skills/deepsonar-management/references/api.md 对齐；改路由时请同步更新本文件与该 md。
  */
 import { existsSync, readFileSync } from "node:fs";
+import { z } from "zod";
+import { TaskContract } from "@deepsonar/shared-types";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
@@ -11,6 +13,16 @@ import { config } from "./config.js";
 import { FINDING_DISPOSITIONS } from "./finding-disposition.js";
 import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
 import { KNOWLEDGE_MANAGEMENT_OPERATIONS } from "./domains/project-knowledge/openapi.js";
+
+const TaskContractFeedbackSchema = {
+  type: "object",
+  required: ["code", "path", "message", "suggestion"],
+  properties: {
+    code: { type: "string" }, path: { type: "string" },
+    message: { type: "string" }, suggestion: { type: "string" },
+  },
+};
+const TaskContractFeedbackListSchema = { type: "array", items: TaskContractFeedbackSchema };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -901,6 +913,31 @@ const OPS: Op[] = [
     method: "post",
     path: "/projects/{id}/tasks",
     summary: "创建任务（铸画布 + 入口 job）",
+    description: "可选 task_contract 使用共享版本化 schema；原始 content 保留。非安全缺项返回字段级 warning，必要条件阻塞返回 409 且不创建 Canvas/Job；派发前重新核验当前边界。自由文本未提供契约时返回未评估提示，不按 Markdown 标题拒绝。",
+    successStatus: "201",
+    responses: {
+      "201": {
+        description: "任务已创建；warning 不表示失败，不应因此重复创建",
+        content: { "application/json": { schema: {
+          type: "object", required: ["canvas_id", "job", "task_contract_warnings"],
+          properties: {
+            canvas_id: { type: "string" }, job: { type: "object" },
+            scheduled_start_at: { type: "string", format: "date-time", nullable: true },
+            task_contract_warnings: TaskContractFeedbackListSchema,
+          },
+        } } },
+      },
+      "409": {
+        description: "必要契约条件阻塞或既有任务/配置冲突；task_contract_blocked 时未创建任务",
+        content: { "application/json": { schema: {
+          type: "object", properties: {
+            error: { type: "string" }, error_code: { type: "string" },
+            task_contract_warnings: TaskContractFeedbackListSchema,
+            task_contract_blockers: TaskContractFeedbackListSchema,
+          },
+        } } },
+      },
+    },
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -909,6 +946,10 @@ const OPS: Op[] = [
       properties: {
         title: { type: "string" },
         content: { type: "string" },
+        task_contract: {
+          ...z.toJSONSchema(TaskContract, { target: "openapi-3.0", io: "input" }),
+          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。模板建议不自动成为验收承诺；状态不接受 verified。权限仅能收窄，凭据仅引用；预算为规划字段。未知目标身份/写授权/必要前置条件保持未核验并阻塞。",
+        },
         allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
         kind: {
           type: "string",
