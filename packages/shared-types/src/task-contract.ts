@@ -103,7 +103,7 @@ export function normalizeTaskContract(input: unknown): TaskContract {
     allowed_actions: uniqueSorted(value.allowed_actions),
     required_actions: uniqueSorted(value.required_actions),
     forbidden_actions: uniqueSorted(value.forbidden_actions),
-    credential_refs: uniqueSorted(value.credential_refs),
+    credential_refs: uniqueSorted(value.credential_refs.map((id) => id.toLowerCase())),
     prerequisites: [...value.prerequisites].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   };
 }

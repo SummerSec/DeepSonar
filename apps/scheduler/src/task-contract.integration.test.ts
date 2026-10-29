@@ -174,6 +174,27 @@ if (!testDatabaseUrl) {
         assert.equal(canvas.target_json.task_contract, undefined);
         assert.equal(job.agent_snapshot_json.task_contract, undefined);
       });
+      await t.test("read-only contracts cannot leave an orphan canvas when the Hub runtime requires egress", async () => {
+        await sql`UPDATE projects SET config_json = ${sql.json({ enabled_credential_ids: [], rules: { allowEgress: true } })} WHERE id = ${projectId}`;
+        const [hub] = await sql`SELECT id, runtime_image_key FROM role_configs WHERE project_id IS NULL
+          AND role_id = (SELECT id FROM agent_roles WHERE name = 'hub_reason' AND project_id IS NULL)`;
+        try {
+          for (const imageKey of ["deepsonar-chrome-audit", "deepsonar-clickhouse-audit"]) {
+            await sql`UPDATE role_configs SET runtime_image_key = ${imageKey} WHERE id = ${hub.id}`;
+            const legacy = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`, headers,
+              payload: { title: `Legacy ${imageKey}`, content: "Inspect target", allow_egress: true } });
+            assert.equal(legacy.statusCode, 201, legacy.payload);
+            assert.equal(legacy.json().job.agent_snapshot_json.network_policy.allow_egress, true);
+            const before = await counts();
+            const response = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`, headers,
+              payload: { title: `Read-only ${imageKey}`, content: "Read fixture only", allow_egress: true, task_contract: contract() } });
+            assert.equal(response.statusCode, 409, response.payload);
+            assert.deepEqual(await counts(), before);
+          }
+        } finally {
+          await sql`UPDATE role_configs SET runtime_image_key = ${hub.runtime_image_key} WHERE id = ${hub.id}`;
+        }
+      });
       await t.test("cross-project management submission is still forbidden before contract handling", async () => {
         const response = await app.inject({ method: "POST", url: `/projects/${otherProjectId}/tasks`, headers,
           payload: { title: "Other project", content: "Review fixture", task_contract: contract() } });

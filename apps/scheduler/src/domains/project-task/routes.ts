@@ -66,7 +66,7 @@ import {
   validateFrozenTaskSeedsForRetry,
 } from "../../task-compose.js";
 
-import { taskContractPreflight } from "../../task-contract-preflight.js";
+import { taskContractPreflight, taskContractRuntimeBlockers } from "../../task-contract-preflight.js";
 
 const CreateProjectBody = z.object({
   name: z.string().min(1),
@@ -274,10 +274,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
     const taskContract = body.task_contract ? normalizeTaskContract(body.task_contract) : undefined;
     const warnings = taskContractWarnings(taskContract);
+    let taskAllowEgress = false;
     if (taskContract) {
       const currentRules = await rulesForProject(sql, id);
-      const blockers = await taskContractPreflight(sql, id, taskContract,
-        currentRules.allowEgress && body.allow_egress !== false);
+      taskAllowEgress = currentRules.allowEgress && body.allow_egress !== false;
+      const blockers = await taskContractPreflight(sql, id, taskContract, taskAllowEgress);
       if (blockers.length) return reply.code(409).send({
         error: "任务所需前置条件尚未满足", error_code: "task_contract_blocked",
         task_contract_warnings: warnings, task_contract_blockers: blockers,
@@ -295,13 +296,18 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     }
 
     try {
-      await resolveAgentSnapshotForJob(
+      const initialSnapshot = await resolveAgentSnapshotForJob(
         sql,
         id,
         "hub_reason",
         body.kind === "compose" ? body.seed_finding_ids ?? [] : [],
         { runtimeProfile: body.runtime_profile ?? null },
       );
+      const blockers = taskContract ? taskContractRuntimeBlockers(taskContract, initialSnapshot, taskAllowEgress) : [];
+      if (blockers.length) return reply.code(409).send({
+        error: "任务运行镜像与网络限制不匹配", error_code: "task_contract_blocked",
+        task_contract_warnings: warnings, task_contract_blockers: blockers,
+      });
     } catch (error) {
       if (isSnapshotUnresolvableError(error)) {
         return reply.code(409).send(currentSnapshotUnresolvableBody(error));
