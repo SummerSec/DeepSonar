@@ -17,7 +17,24 @@
 
 输入基线从现有 Canvas/task 冻结输入、被引用 Artifact revision、Job/Attempt 快照和留存 Evidence 内容身份取得；不存在的目标代码 commit、外部环境版本或账号授权不得由模型补造。缺少完成所需基线时可提补证或 needs_human，不能宣布 complete。无需 #767 新 task_contract，#770 项目关联不参与证据与授权。
 
-A 的 operator_attestation 是操作员语义评价，不能升级为模型评价器。B 可因已有证据不足而派发工作；若要提出有证据的 complete，则必须读取非截断、无 stale/blocked/conflict 的当前判据集合，并仍通过原有 Finding/Verify/Task 完成门。没有可用语义权威时停止为 needs_human；不能用 raw PlanResult 的 complete 绕过。
+A 的 operator_attestation 是操作员语义评价，不能升级为模型评价器。B 可因已有证据不足而派发工作；若要提出有证据的 complete，则必须读取完整、非截断且全部必要判据均为当前授权 satisfied 的判据集合，并仍通过原有 Finding/Verify/Task 完成门。没有可用语义权威时停止为 needs_human；不能用 raw PlanResult 的 complete 绕过。
+
+### complete 的完整真值表
+
+complete 采用正向允许规则，不能只列少数禁止态：必须覆盖冻结 CompletionPolicy 的全部必要判据（completion 与所有 required_outputs），逐项为 **satisfied**，且该满足来自当前有效、明确授权的语义评价。criterion 集合为空、未知格式、分页未读完、任意截断或缺项都不允许 complete；不得挑选一个满足的子集代替全部判据。服务端最终事务重新读取完整集合，不能仅信模型已读页面。
+
+| 当前必要判据状态 | complete | 后续提案 |
+| --- | --- | --- |
+| 全部 satisfied，且权威/版本/来源/完整性门均通过 | 仅可提案；仍须原有 Finding/Verify/Task 完成门通过 | 原完成路径，不直接改状态 |
+| unbound | 拒绝 | continue（预算内）或 needs_human |
+| insufficient（包括 inconclusive 评价） | 拒绝 | continue（预算内）或 needs_human |
+| contradicted | 拒绝，即使反驳本身具有语义权威 | continue（预算内）、blocked 或 needs_human |
+| conflict | 拒绝 | 补反证或人工处理 |
+| stale | 拒绝 | 重读当前版本，显式重新评价 |
+| blocked | 拒绝 | 记录前置条件，不推断阴性 |
+| unknown/缺项/空集合/截断 | 拒绝 | 补读或 needs_human |
+
+`observation=negative` 与 `assessment=satisfies` 是两个独立维度：只有“所执行的测试未观察到指定现象”本身是该判据需要的结果，且授权评价明确 satisfies，才可满足该判据；negative 字面量从不自行打开完成门。contradicts/inconclusive 也是有来源的语义评价，但均不是正向完成授权。
 
 ## 契约扩展位置
 
