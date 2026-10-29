@@ -1,7 +1,7 @@
 # 05 构建块与所有权
 
 > 状态：**as-built**（#741）。列出四个应用、三个共享包和 Scheduler 域的责任边界及依赖方向；领域状态机由专题文档维护。
-> 同步日期：2026-10-20
+> 同步日期：2026-10-29
 
 构建块按照“入口组装、领域负责规则、基础设施负责外部效果”分层。所有权以目录、注册入口和运行时依赖为事实；完整 bounded-context 说明见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -80,3 +80,7 @@ flowchart LR
 | `worker-nodes` | 远程 Worker 注册、心跳和节点能力 | → dispatcher、runtime-sandbox、audit |
 
 领域之间不共享私有表写入规则；跨域写入由拥有者提供事务入口。锁顺序、Canvas-first 规则和禁止的反向依赖以 [Scheduler bounded contexts](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) 的锁序章节为单一权威。
+
+### #778 离线审计构件
+
+[capability-evidence](../../agent-harness/capability-evidence/README.md)从既有快照、usage、版本与 receipt 导出生成可重建报告；属于开发研究工具，不挂运行时路由、不提供候选授权或执行入口。配置组合、拉取和模型反馈与独立质量分别呈现；后者目前未知。
