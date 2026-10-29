@@ -31,6 +31,8 @@ Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、�
 - **过程流：** WS 使用一次性 ticket、项目/Job scope 和本地 Evidence catch-up。stream-bus 只做实时投递；本地副本不可见时返回 `visibility=unavailable`，不能从另一副本补造原始流。终端 WS 另有更严格的 control/admin scope、lease、帧大小和空闲限制。
 - **导入/导出：** transfer 域校验格式、hash、版本/计数、项目 scope、路径和 provenance。导入可以保留历史 Job 的终态、旧 Attempt/effect 和 provenance，但不能恢复历史 token、沙箱或 secret，也不能直接授权新的 active execution；需要重跑时必须按当前 admission 和 snapshot 重新治理。导入与导出均审计。
 
+[#776 A 基线](../REPAIR_FEEDBACK_BASELINE.md)冻结当前字段完整性与 operation/error/effect 恢复矩阵；进程内幂等缓存和广告预算不构成持久修正链。
+
 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)给 mark_job_done 增加必填 proposal revision header、原 key 的只读回执查询和持久拒绝计数。原 Control 权限仍有效；accepted/persisted_deferred 不是终态或效果结算。
 
 ## 稳定错误和 RepairFeedback

@@ -133,8 +133,8 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
     const { invokeDurableCompletion } = await import("./completion.js");
     const principal = await api.authenticateJobCapabilityToken(lost.jobId, lost.grant.token);
     const ambiguousDb = new Proxy(sql, { get(target, property) {
-      if (property === "begin") return async (callback: Parameters<typeof sql.begin>[0]) => {
-        await sql.begin(callback); throw new Error("synthetic commit acknowledgement loss");
+      if (property === "begin") return async (callback: (tx: typeof sql) => Promise<unknown>) => {
+        await sql.begin(callback as never); throw new Error("synthetic commit acknowledgement loss");
       };
       return Reflect.get(target, property);
     } });
