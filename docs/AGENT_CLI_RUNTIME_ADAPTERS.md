@@ -8,6 +8,14 @@
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
 
+### DSH 异步子代理完成边界（#766）
+
+DSH 0.2.1-rc.2 的 `subagent` 立即返回 activation，父会话首次 idle 不表示任务结束。适配器只接受已知父会话的 `subagent.started`，并记录子会话谱系；活跃子会话的 `session.status=idle` 不能释放完成门，必须收到对应父子关系的 `subagent.finished`。可继续的子会话再次 running 会重新进入活跃集合。全部子代理完成后，仍等待父会话处理回传并再次 idle，才允许执行 `mark_job_done` 完成门及最多三次催促。父会话显式错误仍立即失败；取消、超时与清理由原 Job/RuntimeHost 边界负责。
+
+`dsh-0.2.1-rc.2.subagent-lifecycle.json` 是新版真实 SDK + governed profile + 本地 mock Gateway 的协议投影，用于 `runtime-dsh-recovery.test.ts` 回放真实 `runRealAgent`。录制命令为 `DEEPSONAR_DSH_CAPTURE=<path> node agent-harness/dsh-sdk-smoke-driver.mjs <pinned-dsh-bin>`；initial 保留子代理阶段的 session status、started/finished、assistant/user message、turn/end，移除 timestamps、stream、source 和 reasoning，归一化父子 ID 与临时 workspace 路径。followup 来自同一版本的真实 SDK 催促回合（本地 mock 不提交完成回执），不是手写协议。夹具不宣称覆盖全部模型输出或生产任务。
+
+真实 SDK smoke 以父 idle 事件释放子响应，确定性覆盖父先 idle 的顺序，不使用固定 sleep；验证 child finished、子结果内容、父收到结果并再次 idle 后才 shutdown。旧版本夹具保留历史格式证据，新运行时子代理结算只使用上述新版夹具。
+
 ## Contract
 
 `packages/runtime-sandbox/src/runtime-adapters.ts` is the single registry for

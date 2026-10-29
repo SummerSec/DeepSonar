@@ -785,17 +785,18 @@ test("DSH unknown session.event and methods are diagnosable and do not become co
 
 test("DSH actual native-subagent transcript admits lineage before child events without settling its parent", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  const state = { sessionId: "session-dsh-subagent" };
-  const decoded = loadJsonlFixture("dsh-0.2.0-rc.2.subagent.jsonl").flatMap((line) => {
+  const state = { sessionId: "parent-recorded" };
+  const records = JSON.parse(readFileSync(new URL("./fixtures/cli-decode/dsh-0.2.1-rc.2.subagent-lifecycle.json", import.meta.url), "utf8")).initial as Record<string, unknown>[];
+  const decoded = records.flatMap((line) => {
     const result = adapter.decodeOutput(line, state);
-    if ((line.params as { sessionId?: string } | undefined)?.sessionId === "session-dsh-child") {
+    if ((line.params as { sessionId?: string } | undefined)?.sessionId === "child-recorded") {
       assert.deepEqual(result, [{ type: "unknown_runtime" }]);
     }
     return result;
   });
   assert.equal(decoded.some((event) => event.is_error === true), false);
   assert.deepEqual(decoded.filter((event) => event.type === "agent_settled").map((event) => event.result), ["subagent-final"]);
-  assert.ok(decoded.some((event) => contentType(event) === "tool_result" && JSON.stringify(event).includes("child-verified")));
+  assert.ok(decoded.some((event) => event.type === "user" && JSON.stringify(event).includes("child-verified")));
 });
 
 for (const record of [
@@ -838,4 +839,52 @@ test("DSH RC rejects unscoped lifecycle and keeps child status separate", () => 
   const tool = adapter.decodeOutput({ jsonrpc: "2.0", method: "session.event", params: { sessionId: "session-parent", event: { type: "tool/result", data: { message: { id: "message-id", toolCallId: "call-id", isError: true, content: [{ type: "text", text: "failure" }] } } } } }, state);
   assert.match(JSON.stringify(tool), /"tool_use_id":"call-id"/);
   assert.match(JSON.stringify(tool), /"is_error":true/);
+});
+
+test("DSH waits for authenticated nested and resumed child epochs, never child idle", () => {
+  const state = { sessionId: "root" };
+  const decode = (method: string, params: Record<string, unknown>) => AGENT_CLI_RUNTIME_ADAPTERS.dsh.decodeOutput({ jsonrpc: "2.0", method, params }, state);
+  const rootIdle = () => decode("session.status", { sessionId: "root", status: "idle" });
+  const start = (parentSessionId: string, childSessionId: string) => decode("subagent.started", { parentSessionId, childSessionId });
+  const finish = (parentSessionId: string, childSessionId: string) => decode("subagent.finished", { parentSessionId, childSessionId, status: "ok", stopReason: "completed" });
+  assert.deepEqual(start("root", "child"), []);
+  assert.deepEqual(start("child", "grandchild"), []);
+  assert.deepEqual(rootIdle(), []);
+  decode("session.status", { sessionId: "child", status: "idle" });
+  assert.deepEqual(rootIdle(), []);
+  assert.deepEqual(finish("root", "child"), []);
+  assert.deepEqual(rootIdle(), [], "grandchild remains active");
+  assert.equal(finish("root", "grandchild")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.equal(finish("root", "unknown")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.deepEqual(rootIdle(), [], "forged finishes cannot release the gate");
+  assert.deepEqual(finish("child", "grandchild"), []);
+  assert.equal(rootIdle()[0]?.type, "agent_settled");
+  assert.deepEqual(finish("child", "grandchild"), [], "duplicate finish is harmless");
+  decode("session.status", { sessionId: "child", status: "running" });
+  assert.deepEqual(rootIdle(), [], "continuable child resumed without another started notification");
+  assert.deepEqual(finish("root", "child"), []);
+  assert.equal(rootIdle()[0]?.type, "agent_settled");
+  assert.equal(start("root", "root")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.equal(start("child", "child")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.equal(start("other", "child")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+});
+
+test("DSH parent failure is terminal even while a child is active", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh, state = { sessionId: "root" };
+  adapter.decodeOutput({ method: "subagent.started", params: { parentSessionId: "root", childSessionId: "child" } }, state);
+  adapter.decodeOutput({ method: "session.event", params: { sessionId: "root", event: { type: "turn/end", data: { reason: { kind: "error", message: "parent failed" } } } } }, state);
+  const output = adapter.decodeOutput({ method: "session.status", params: { sessionId: "root", status: "idle" } }, state);
+  assert.equal(output[0]?.is_error, true);
+});
+
+test("DSH failed/cancelled children release only their own work and leave recovery to the parent", () => {
+  for (const stopReason of ["error", "cancelled", "max-tokens"]) {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh, state = { sessionId: "root" };
+    const decode = (method: string, params: Record<string, unknown>) => adapter.decodeOutput({ method, params }, state);
+    for (const childSessionId of ["slow", "failed"]) decode("subagent.started", { parentSessionId: "root", childSessionId });
+    assert.deepEqual(decode("subagent.finished", { parentSessionId: "root", childSessionId: "failed", status: "error", stopReason }), []);
+    assert.deepEqual(decode("session.status", { sessionId: "root", status: "idle" }), []);
+    decode("subagent.finished", { parentSessionId: "root", childSessionId: "slow", status: "ok", stopReason: "completed" });
+    assert.equal(decode("session.status", { sessionId: "root", status: "idle" })[0]?.type, "agent_settled");
+  }
 });

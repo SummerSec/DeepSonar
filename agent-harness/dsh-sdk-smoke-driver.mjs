@@ -13,6 +13,8 @@ const records = [];
 const requests = [];
 let phase = "standard";
 let requestIndex = 0;
+let releaseChildResponse;
+const parentPaused = new Promise((resolve) => { releaseChildResponse = resolve; });
 const server = createServer(async (req, res) => {
   try {
     assert.equal(req.headers.authorization, `Bearer ${token}`);
@@ -25,14 +27,15 @@ const server = createServer(async (req, res) => {
     assert.equal(data.reasoning_effort, "high");
     const names = (data.tools ?? []).map((tool) => tool.function.name);
     assert.ok(!names.some((name) => /ask_user|web_|plugin|schedule/.test(name)), `unexpected tool: ${names}`);
-    const child = phase === "subagent" && data.messages.some((message) => message.role === "user" && message.content === "child-smoke");
+    const child = phase === "subagent" && data.messages.some((message) => message.role === "user" && typeof message.content === "string" && message.content.startsWith("child-smoke"));
+    if (child) await parentPaused; // Force parent idle before the slow child finishes, without sleeping.
     const callTool = !child && phase !== "restore" && phase !== "followup" && requestIndex++ === 0;
     let delta;
     if (callTool) {
       const name = phase === "ptc" ? "run_code" : phase === "subagent" ? "subagent" : "bash";
       assert.ok(names.includes(name), `missing ${name}: ${names}`);
       if (phase === "ptc") assert.ok(!names.includes("bash"));
-      const args = phase === "subagent" ? { description: "Check inherited gateway route", prompt: "child-smoke", run_in_background: false } : phase === "ptc"
+      const args = phase === "subagent" ? { description: "Check inherited gateway route", prompt: "child-smoke" } : phase === "ptc"
         ? { code: "console.log('ptc-verified')", description: "Check the isolated PTC runtime" }
         : { command: "printf standard-verified", description: "Check the isolated SDK shell" };
       delta = { role: "assistant", tool_calls: [{ index: 0, id: "smoke-call", type: "function", function: { name, arguments: JSON.stringify(args) } }] };
@@ -66,6 +69,9 @@ async function run(taskMode, home, sessionId) {
   });
   const pending = new Map();
   let stderr = "", buffer = "", sequence = 0;
+  const children = new Set();
+  const activeChildren = new Set();
+  const finishedChildren = new Set();
   let settled;
   let idle = new Promise((resolve, reject) => { settled = { resolve, reject }; });
   const timeout = setTimeout(() => { settled.reject(new Error(`SDK smoke timed out: ${stderr}`)); child.kill("SIGKILL"); }, 20_000);
@@ -80,7 +86,23 @@ async function run(taskMode, home, sessionId) {
           const waiter = pending.get(record.id);
           if (waiter) { pending.delete(record.id); record.error ? waiter.reject(new Error(JSON.stringify(record.error))) : waiter.resolve(record.result); }
         }
-        if (record.method === "session.status" && record.params.sessionId === sessionId && record.params.status === "idle") settled.resolve();
+        if (record.method === "subagent.started" && record.params.parentSessionId === sessionId) {
+          children.add(record.params.childSessionId);
+          activeChildren.add(record.params.childSessionId);
+        }
+        if (record.method === "subagent.finished" && record.params.parentSessionId === sessionId) {
+          assert.ok(children.has(record.params.childSessionId), "unannounced child completion");
+          assert.equal(record.params.status, "ok", "subagent failed");
+          activeChildren.delete(record.params.childSessionId);
+          finishedChildren.add(record.params.childSessionId);
+        }
+        if (record.method === "session.status") {
+          if (children.has(record.params.sessionId) && record.params.status === "running") activeChildren.add(record.params.sessionId);
+          if (record.params.sessionId === sessionId && record.params.status === "idle") {
+            if (activeChildren.size) releaseChildResponse();
+            else settled.resolve(); // After child delivery, the parent must reach idle again.
+          }
+        }
       } catch (error) { settled.reject(error); }
     }
   });
@@ -122,9 +144,11 @@ async function run(taskMode, home, sessionId) {
       assert.ok(result, "real tool result missing");
       assert.ok(!result.data.error, `tool failed: ${JSON.stringify(result.data)}`);
       if (phase === "subagent") {
-        // 0.2.1-rc.2 起 governed `subagent` 是 continuable：tool/result 只回
-        // "started subagent <id>"，子代理的最终文本随子会话事件到达，因此改查整条记录流。
-        assert.match(JSON.stringify(records), /child-verified/, "subagent child result missing from the event stream");
+        assert.equal(children.size, 1);
+        assert.equal(finishedChildren.size, 1);
+        const completion = records.find((record) => record.method === "subagent.finished" && record.params.parentSessionId === sessionId);
+        assert.ok(completion.params.lastAssistantMessage.some((block) => block.type === "text" && block.text === "child-verified"), "subagent child result missing");
+        assert.ok(events.some((event) => event.type === "user/message" && JSON.stringify(event.data).includes("child-verified")), "parent never received the child result");
       } else {
         assert.match(JSON.stringify(result), phase === "ptc" ? /ptc-verified/ : /standard-verified/);
       }
