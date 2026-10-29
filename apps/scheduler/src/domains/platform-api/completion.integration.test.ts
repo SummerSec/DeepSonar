@@ -16,7 +16,7 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
     import("fastify"), import("../../db.js"), import("./index.js"),
   ]);
   const { createAttempt } = await import("../job-attempt/application.js");
-  const { completionReceiptId } = await import("../event-ingestion/completion-receipt.js");
+  const { completionReceiptId, completionDoneEventId } = await import("../event-ingestion/completion-receipt.js");
   const { EventEnvelope, ControlEventEnvelope } = await import("@deepsonar/shared-types");
   const app = Fastify();
   try {
@@ -32,7 +32,7 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       const grant = await api.mintJobCapabilityToken(jobId);
       const calls = { prepare: 0, commit: 0, abort: 0, done: false };
       api.registerRuntimeHandler(jobId, context => {
-        if (context.completionPhase === "prepare") { calls.prepare++; return { completion_prepared: true }; }
+        if (context.completionPhase === "prepare") { calls.prepare++; assert.equal(context.eventId, completionDoneEventId(jobId, context.idempotencyKey!)); return { completion_prepared: true }; }
         if (context.completionPhase === "commit") { calls.commit++; calls.done = true; return {}; }
         if (context.completionPhase === "abort") { calls.abort++; return {}; }
         assert.fail("completion must use host-only prepared acceptance");
@@ -146,6 +146,30 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
     assert.equal((await lost.get(lostKey)).json().receipt_status, "persisted_deferred");
     assert.equal((await lost.post(lostKey, 0, { summary: "commit happened but acknowledgement was lost" })).statusCode, 200);
     assert.equal(lost.calls.prepare, 1); assert.equal(lost.calls.commit, 1);
+    let failedBeforeRead = false;
+    const failBeforeLookup = new Proxy(sql, { get(target, property) {
+      if (property === "begin") return async (callback: (tx: typeof sql) => Promise<unknown>) => {
+        if (!failedBeforeRead) { failedBeforeRead = true; throw new Error("synthetic lookup failure"); }
+        return sql.begin(callback as never);
+      };
+      return Reflect.get(target, property);
+    } });
+    const commitsBeforeConflict = lost.calls.commit;
+    const mismatch = await invokeDurableCompletion({ principal, key: lostKey, revision: 0,
+      payload: { summary: "attacker changed the original completion" } }, failBeforeLookup);
+    assert.equal(mismatch.statusCode, 409); assert.equal(mismatch.body.error_code, "IDEMPOTENCY_KEY_CONFLICT");
+    assert.equal(lost.calls.commit, commitsBeforeConflict); assert.equal(lost.calls.abort, 0);
+    // The final done path uses the existing ingestion transaction and dedup gate.
+    const { createEventIngestionApplication } = await import("../event-ingestion/application.js");
+    const applied = new Map<string, number>();
+    const ingestion = createEventIngestionApplication(sql, async (_tx, id) => { applied.set(id, (applied.get(id) ?? 0) + 1); });
+    assert.notEqual(completionDoneEventId(a.jobId, acceptedKey), completionDoneEventId(b.jobId, acceptedKey));
+    for (const owner of [a, b]) {
+      const event = { v: 1 as const, type: "done" as const, event_id: completionDoneEventId(owner.jobId, acceptedKey), payload: { summary: "test final completion" } };
+      assert.equal((await ingestion.ingestEvent(owner.jobId, event)).deduped, false);
+      assert.equal((await ingestion.ingestEvent(owner.jobId, event)).deduped, true);
+      assert.equal(applied.get(owner.jobId), 1);
+    }
     const [receipt] = await sql`SELECT payload_json FROM events WHERE job_id=${failed.jobId} AND event_id=${completionReceiptId(failed.jobId, failKey)}`;
     assert.equal(receipt.payload_json.status, "persisted_deferred");
     assert.equal(JSON.stringify(receipt.payload_json).includes('"summary"'), false, "receipt stores input digest, not untrusted request contents");

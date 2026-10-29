@@ -11,11 +11,13 @@ export type CompletionReceipt = {
   status: "rejected" | "persisted_deferred"; result: CompletionResult;
 };
 
-/** A separate event identity leaves the original key available for the final done event. */
-export function completionReceiptId(jobId: string, key: string): string {
-  const hex = createHash("sha256").update(`deepsonar:completion-receipt:v1:${jobId}:${key}`).digest("hex");
+/** Both identities are Job-scoped because event_dedup has a global primary key. */
+function completionIdentity(kind: "receipt" | "done", jobId: string, key: string): string {
+  const hex = createHash("sha256").update(`deepsonar:completion-${kind}:v1:${jobId}:${key}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
+export const completionReceiptId = (jobId: string, key: string): string => completionIdentity("receipt", jobId, key);
+export const completionDoneEventId = (jobId: string, key: string): string => completionIdentity("done", jobId, key);
 export function completionInputDigest(input: unknown): string {
   const canonical = (value: unknown): string => {
     if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -86,7 +88,8 @@ export async function recordCompletionProposal(input: {
     if (input.revision !== expectedRevision) return reject("COMPLETION_REVISION_CONFLICT", `Expected proposal revision ${expectedRevision}`);
     // Unknown effects cannot be cleared or replayed by a corrected completion.
     const [unknown] = await tx`SELECT id FROM job_attempt_effects WHERE job_id=${input.jobId}
-      AND (status='unknown' OR (status='effect_pending' AND effect_kind NOT IN ('agent_run','agent_resume'))) LIMIT 1`;
+      AND (status='unknown' OR (status='effect_pending' AND NOT
+        (attempt_id=${attempt.id} AND effect_kind IN ('agent_run','agent_resume')))) LIMIT 1`;
     if (unknown) return reject("COMPLETION_EFFECT_UNKNOWN", "Unknown external effect requires reconciliation before completion repair");
     let result = input.schemaFailure ?? await input.prepare(String(attempt.id));
     if (result.statusCode >= 500 || result.statusCode === 429) return result;

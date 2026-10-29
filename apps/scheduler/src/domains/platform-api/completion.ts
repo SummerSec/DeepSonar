@@ -2,7 +2,7 @@ import type { CapabilityPrincipal } from "./tokens.js";
 import { sql } from "../../db.js";
 import { PlatformRuntimeHandlerError, invokeRuntimeHandler } from "./registry.js";
 import { controlPlatformFailure, controlRuntimeRejection } from "./repair.js";
-import { recordCompletionProposal, readCompletionReceipt, completionInputDigest, type CompletionResult } from "../event-ingestion/completion-receipt.js";
+import { recordCompletionProposal, readCompletionReceipt, completionInputDigest, completionDoneEventId, type CompletionResult } from "../event-ingestion/completion-receipt.js";
 
 export async function invokeDurableCompletion(input: {
   principal: CapabilityPrincipal; key: string; revision: number; payload: unknown;
@@ -10,7 +10,7 @@ export async function invokeDurableCompletion(input: {
 }, database: typeof sql = sql): Promise<CompletionResult> {
   const { principal, key, revision, payload } = input;
   const context = { jobId: principal.jobId, projectId: principal.projectId, canvasId: principal.canvasId,
-    operationId: "mark_job_done", input: payload, eventId: key, tokenId: principal.tokenId, idempotencyKey: key };
+    operationId: "mark_job_done", input: payload, eventId: completionDoneEventId(principal.jobId, key), tokenId: principal.tokenId, idempotencyKey: key };
   let preparedAttempt: string | undefined;
   const result = await recordCompletionProposal({ db: database, jobId: principal.jobId, projectId: principal.projectId,
     snapshotDigest: principal.snapshotSha256, key, revision, rawInput: payload,
@@ -63,7 +63,7 @@ export async function invokeDurableCompletion(input: {
       AND NOT a.cancel_requested AND j.status='running' AND j.lease_expires_at>clock_timestamp()
       AND j.started_at+j.timeout_sec*interval '1 second'>clock_timestamp()
       AND NOT EXISTS (SELECT 1 FROM job_attempt_effects e WHERE e.job_id=j.id AND (e.status='unknown'
-        OR (e.status='effect_pending' AND e.effect_kind NOT IN ('agent_run','agent_resume'))))`;
+        OR (e.status='effect_pending' AND NOT (e.attempt_id=a.id AND e.effect_kind IN ('agent_run','agent_resume')))))`;
     if (active) {
       await invokeRuntimeHandler({ ...context, completionPhase: "commit", completionAttemptId: String(active.id) }).catch(() => {
         // Durable acceptance is not settlement or proof that the original model processed it.
