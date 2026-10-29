@@ -25,11 +25,11 @@
 
 ## 冻结回放与完整性
 
-[夹具](../apps/scheduler/src/fixtures/repair-feedback/baseline.json) 是人工构造、符合实际 Control JSON 格式的 8 个请求/host 拒绝样本；来源版本写在 provenance 中，非生产日志、非 CLI transcript。前三项经过真实 DonePayload schema；其余重放实际 host feedback 构造器，不冒充 executor 或事务集成测试。[测试](../apps/scheduler/src/repair-feedback-baseline.test.ts) 对 JSON wire round-trip、精确字段集合、category/code/path、UTF-8 shape、key、秘密标记不回显及重复调用结果做断言。另测首次有效提交和精确 8192 字节边界。
+[夹具](../apps/scheduler/src/fixtures/repair-feedback/baseline.json) 是人工构造、符合实际 Control JSON 格式的 8 个请求/host 拒绝样本；来源版本写在 provenance 中，非生产日志、非 CLI transcript。前三项经过真实 DonePayload schema；其余按实际路由参数重放 host feedback 构造器：OPERATION_REJECTED 携带 rawInput，HANDLER_FAILED 走不携带输入的 controlPlatformFailure，不冒充 executor 或事务集成测试。[测试](../apps/scheduler/src/repair-feedback-baseline.test.ts) 对 JSON wire round-trip、精确字段集合、category/code/path、UTF-8 shape、key、秘密标记不回显及重复调用结果做断言。另测首次有效提交和精确 8192 字节边界。
 
-完整性基线：8/8 样本有版本/category/code/operation/message/key/next_action；3/8 有 expected/observed_shape；0/8 有可信 current_state_ref/accepted_effects。所有样本 revision/repair_attempt 为 0，可修正样本每次广告 attempts=8；这些是**已知缺口的刻画**，不是持久额度验收。未来修复时必须同时更新基线与证据，不长期保留错误行为作为规范。
+完整性基线：8/8 样本有版本/category/code/operation/message/key/next_action；3/8 有 expected、7/8 有 observed_shape；0/8 有可信 current_state_ref/accepted_effects。所有样本 revision/repair_attempt 为 0，可修正样本每次广告 attempts=8；这些是**已知缺口的刻画**，不是持久额度验收。未来修复时必须同时更新基线与证据，不长期保留错误行为作为规范。
 
-接入 `pnpm ci:unit:capability-pack`，由 `.github/workflows/ci.yml` gate 调用。现有字节、限流和 hostile-details 测试继续保留。本测试不统计运行器恢复率：没有真实修复轮次、token 成本或人工介入的有效分母，全部标待评测；不能把 8 个拒绝回放算成 8 次修复成功。
+单元回放接入 `pnpm ci:unit:capability-pack`，由 `.github/workflows/ci.yml` gate 调用。另在已有 [Platform API integration](../apps/scheduler/src/domains/platform-api/platform-api.integration.test.ts) 中使用全部 8 个样本，通过真实 HTTP 路由、Job token 与隔离 PostgreSQL 核对 rawInput/observed_shape 接线；handler 仍为合成拒绝，不能据此声称执行器或同会话修复已验收。现有字节、限流和 hostile-details 测试继续保留。本测试不统计运行器恢复率：没有真实修复轮次、token 成本或人工介入的有效分母，全部标待评测；不能把 8 个拒绝回放算成 8 次修复成功。
 
 ## B/C 进入条件
 

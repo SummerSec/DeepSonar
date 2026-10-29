@@ -73,10 +73,22 @@
       "operation": "submit_hub_decision",
       "code": "invalid_node_ref",
       "message": "Hub 图引用必须使用当前画布 YAML 中 root/fact/finding 节点的 canonical UUID（YAML root_id 的值）；禁止字段名 root_id、别名或占位符。",
-      "path": "from",
+      "path": "complete.from",
       "retryable": true,
       "category": "model_correctable",
-      "accepted_effect": "none-for-rejection"
+      "accepted_effect": "none-for-rejection",
+      "payload": {
+        "complete": {
+          "from": [
+            "00000000-0000-4000-8000-000000000777"
+          ],
+          "description": "fixture-private-marker"
+        }
+      },
+      "observed_shape": {
+        "type": "array",
+        "length": 1
+      }
     },
     {
       "id": "verify-missing-verdict",
@@ -87,7 +99,13 @@
       "path": "verdict",
       "retryable": true,
       "category": "model_correctable",
-      "accepted_effect": "none-for-rejection"
+      "accepted_effect": "none-for-rejection",
+      "payload": {
+        "summary": "fixture-private-marker"
+      },
+      "observed_shape": {
+        "type": "undefined"
+      }
     },
     {
       "id": "forbidden",
@@ -98,7 +116,14 @@
       "path": null,
       "retryable": false,
       "category": "permanent_failure",
-      "accepted_effect": "none-for-rejection"
+      "accepted_effect": "none-for-rejection",
+      "payload": {
+        "summary": "fixture-private-marker"
+      },
+      "observed_shape": {
+        "type": "object",
+        "keys": 1
+      }
     },
     {
       "id": "cancelled",
@@ -109,11 +134,18 @@
       "path": null,
       "retryable": false,
       "category": "permanent_failure",
-      "accepted_effect": "prior-effects-require-reconciliation"
+      "accepted_effect": "prior-effects-require-reconciliation",
+      "payload": {
+        "summary": "fixture-private-marker"
+      },
+      "observed_shape": {
+        "type": "object",
+        "keys": 1
+      }
     },
     {
       "id": "handler-outcome-unknown",
-      "source": "runtime",
+      "source": "platform_failure",
       "operation": "mark_job_done",
       "code": "HANDLER_FAILED",
       "message": "Platform operation failed",

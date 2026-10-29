@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { DonePayload, RepairFeedback } from "@deepsonar/shared-types";
-import { controlRuntimeRejection, controlSchemaRejection } from "./domains/platform-api/repair.js";
+import { controlPlatformFailure, controlRuntimeRejection, controlSchemaRejection } from "./domains/platform-api/repair.js";
 
 // Frozen, synthetic requests in the real Control JSON format. No model or DB.
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/repair-feedback/baseline.json", import.meta.url), "utf8"));
@@ -19,8 +19,13 @@ for (const sample of fixture.cases) {
         return controlSchemaRejection({ operation: sample.operation, code: sample.code,
           issues: parsed.error.issues, rawInput: sample.payload, idempotencyKey: fixture.idempotency_key });
       }
+      if (sample.source === "platform_failure") {
+        return controlPlatformFailure({ operation: sample.operation, code: sample.code,
+          message: sample.message, idempotencyKey: fixture.idempotency_key });
+      }
       return controlRuntimeRejection({ operation: sample.operation, code: sample.code,
         message: sample.message, path: sample.path ?? undefined, retryable: sample.retryable,
+        rawInput: sample.payload,
         idempotencyKey: fixture.idempotency_key });
     };
     // JSON round-trip matches the wire, omitting undefined optional properties.
@@ -33,12 +38,13 @@ for (const sample of fixture.cases) {
     assert.equal(body.repair.idempotency_key, fixture.idempotency_key);
     assert.equal(body.repair.path, sample.path ?? undefined);
     const fields = [...common, ...(sample.path ? ["path"] : []),
-      ...(sample.source === "schema" ? ["expected", "observed_shape"] : [])];
+      ...(sample.source === "schema" ? ["expected"] : []),
+      ...(sample.observed_shape ? ["observed_shape"] : [])];
     assert.deepEqual(Object.keys(body.repair).sort(), fields.sort());
     if (sample.source === "schema") {
       assert.deepEqual(body.repair.expected, sample.expected);
-      assert.deepEqual(body.repair.observed_shape, sample.observed_shape);
     }
+    assert.deepEqual(body.repair.observed_shape, sample.observed_shape);
     assert.equal(JSON.stringify(body).includes("fixture-private-marker"), false);
     // Characterization, NOT a persistent repair budget: repeated calls reset to 0/8.
     assert.equal(body.repair.proposal_revision, 0);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import postgres from "postgres";
 
@@ -191,6 +192,29 @@ if (!testDatabaseUrl) {
       assert.equal(hostile.json().repair.category, "model_correctable");
       assert.equal(hostile.json().details?.error_code, undefined);
       assert.equal(JSON.stringify(hostile.json()).includes("sk-live-should-not-leak"), false);
+      // #776: exercise the frozen baseline through the real route argument wiring.
+      // OPERATION_REJECTED carries rawInput; HANDLER_FAILED deliberately does not.
+      const baseline = JSON.parse(readFileSync(new URL("../../fixtures/repair-feedback/baseline.json", import.meta.url), "utf8"));
+      for (const sample of baseline.cases) {
+        registerRuntimeHandler(jobId, async () => {
+          assert.notEqual(sample.source, "schema", "invalid schema must not reach handler");
+          if (sample.source === "platform_failure") throw new Error("fixture-private-marker");
+          throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", sample.message, {
+            statusCode: 422, errorCode: sample.code, retryable: sample.retryable,
+            path: sample.path ?? undefined,
+          });
+        }, operations);
+        const key = randomUUID();
+        const replay = await invoke(sample.operation, key, sample.payload ?? { summary: "fixture-private-marker" });
+        assert.equal(replay.statusCode, sample.source === "platform_failure" ? 500 : 422, sample.id);
+        const body = replay.json();
+        assert.equal(body.accepted, false, sample.id);
+        assert.equal(body.repair.category, sample.category, sample.id);
+        assert.equal(body.repair.idempotency_key, key, sample.id);
+        assert.deepEqual(body.repair.observed_shape, sample.observed_shape, sample.id);
+        assert.deepEqual(body.repair.expected, sample.expected, sample.id);
+        assert.equal(JSON.stringify(body).includes("fixture-private-marker"), false, sample.id);
+      }
       registerRuntimeHandler(jobId, handler, operations);
       assert.equal((await invoke("emit_finding", findingKey, finding)).statusCode, 200, "503 不得污染幂等缓存");
 
