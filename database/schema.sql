@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 62);
+INSERT INTO schema_meta (id, version) VALUES ('global', 63);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -330,6 +330,8 @@ CREATE TABLE findings (
   artifact_id uuid REFERENCES artifacts(id) ON DELETE SET NULL,
   node_id uuid,
   fingerprint text NOT NULL,
+  -- Nullable only for preserved historical rows; new submissions always store a digest.
+  source_digest text,
   title text NOT NULL,
   severity text,
   location text,
@@ -349,7 +351,8 @@ CREATE TABLE findings (
   tags_json jsonb NOT NULL DEFAULT '[]',
   evidence_refs_json jsonb NOT NULL DEFAULT '[]',
   scoring_json jsonb NOT NULL DEFAULT '{}',
-  CONSTRAINT findings_project_id_fingerprint_key UNIQUE (project_id, fingerprint),
+  CONSTRAINT findings_job_id_fingerprint_key UNIQUE (job_id, fingerprint),
+  CONSTRAINT findings_source_digest_check CHECK (source_digest IS NULL OR source_digest ~ '^v1:[a-f0-9]{64}$'),
   CONSTRAINT findings_severity_check CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
   CONSTRAINT findings_verify_status_check CHECK (
     verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human', 'refuted', 'inconclusive')
