@@ -10,7 +10,9 @@ export class PiRpcDriver {
   private bootstrap = "";
   private beforePrompt?: () => Promise<void>;
   private commands = new Map<string, string>();
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private timers = new Map<string, ReturnType<typeof setTimeout> | undefined>();
+  private captureDepth = 0;
+  private startPending = false;
   private startTimer?: ReturnType<typeof setTimeout>;
   error?: Error;
 
@@ -22,7 +24,27 @@ export class PiRpcDriver {
   ) {}
 
   private watch(id: string, code: string): void {
-    this.timers.set(id, setTimeout(() => this.fail(code), this.timeoutMs));
+    this.timers.set(id, this.captureDepth ? undefined : setTimeout(() => this.fail(code), this.timeoutMs));
+  }
+
+  private watchStart(): void {
+    this.startPending = true;
+    this.startTimer = this.captureDepth ? undefined : setTimeout(() => this.fail("PI_RPC_START_TIMEOUT"), this.timeoutMs);
+  }
+
+  /** Host output persistence is bounded separately; it must not count as missing provider ACK time. */
+  async whileCapturing<T>(capture: () => Promise<T>): Promise<T> {
+    this.captureDepth++;
+    for (const [id, timer] of this.timers) { clearTimeout(timer); this.timers.set(id, undefined); }
+    clearTimeout(this.startTimer);
+    try { return await capture(); }
+    finally {
+      this.captureDepth--;
+      if (!this.captureDepth && !this.error) {
+        for (const id of this.timers.keys()) this.watch(id, `PI_RPC_ACK_TIMEOUT: ${this.commands.get(id)}`);
+        if (this.startPending) this.watchStart();
+      }
+    }
   }
 
   private fail(code: string): void {
@@ -56,7 +78,7 @@ export class PiRpcDriver {
       this.active = true;
       this.started = false;
       this.resetTurn();
-      this.startTimer = setTimeout(() => this.fail("PI_RPC_START_TIMEOUT"), this.timeoutMs);
+      this.watchStart();
     }
     await this.command({ type: "prompt", message: content, streamingBehavior: "steer" });
   }
@@ -74,7 +96,7 @@ export class PiRpcDriver {
         const disposition = (record.data as { disposition?: unknown } | undefined)?.disposition;
         if (disposition !== "started" && disposition !== "queued") throw new Error("PI_RPC_INPUT_NOT_STARTED");
         if (!this.active && disposition === "started") {
-          this.startTimer = setTimeout(() => this.fail("PI_RPC_START_TIMEOUT"), this.timeoutMs);
+          this.watchStart();
         }
       }
       if (record.command === "get_state") {
@@ -97,6 +119,7 @@ export class PiRpcDriver {
       this.active = true;
       clearTimeout(this.startTimer);
       this.startTimer = undefined;
+      this.startPending = false;
     } else if (record.type === "agent_settled") {
       if (!this.started) throw new Error("PI_RPC_SETTLED_WITHOUT_START");
       this.active = false;
@@ -118,5 +141,6 @@ export class PiRpcDriver {
     this.commands.clear();
     clearTimeout(this.startTimer);
     this.startTimer = undefined;
+    this.startPending = false;
   }
 }

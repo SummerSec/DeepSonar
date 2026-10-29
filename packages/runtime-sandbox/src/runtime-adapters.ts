@@ -165,73 +165,27 @@ export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)
   "platformControlApi",
 ];
 
-/** Pi 官方 RPC 只按 LF 分隔 JSONL；U+2028/U+2029 始终是字符串数据。 */
-export class PiJsonlFramer {
-  private buffer = "";
-  private ended = false;
-  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
-  private readonly maxBytes: number;
+/**
+ * 单个 Pi RPC 事件的字节上限（#765）。
+ *
+ * 1MB 的旧上限会让 `cat large.js` / `curl` 整页 / `rg` 全仓这类大输出把 Job 直接判失败
+ * （`PI_RPC_MESSAGE_TOO_LARGE`），而这正是审计最需要证据的维度。默认放宽到 8MB，
+ * 并允许 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖。
+ */
+export const PI_RPC_MAX_EVENT_BYTES_DEFAULT = 8 * 1024 * 1024;
+export const PI_RPC_MAX_EVENT_BYTES_LIMIT = 64 * 1024 * 1024;
 
-  constructor(maxBytes = 1024 * 1024) {
-    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("PI_RPC_MAX_BYTES_INVALID");
-    this.maxBytes = maxBytes;
-  }
-
-  push(chunk: string | Uint8Array): string[] {
-    if (this.ended) throw new Error("PI_RPC_FRAMER_ENDED");
-    if (typeof chunk === "string") {
-      this.buffer += chunk;
-    } else {
-      try {
-        this.buffer += this.decoder.decode(chunk, { stream: true });
-      } catch {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_INVALID_UTF8");
-      }
-    }
-    const lines: string[] = [];
-    while (true) {
-      const index = this.buffer.indexOf("\n");
-      if (index < 0) break;
-      const line = this.buffer.slice(0, index);
-      this.buffer = this.buffer.slice(index + 1);
-      const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
-      if (!normalized) {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_EMPTY_FRAME");
-      }
-      if (Buffer.byteLength(normalized, "utf8") > this.maxBytes) {
-        this.ended = true;
-        this.buffer = "";
-        throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
-      }
-      lines.push(normalized);
-    }
-    if (Buffer.byteLength(this.buffer, "utf8") > this.maxBytes) {
-      this.ended = true;
-      this.buffer = "";
-      throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
-    }
-    return lines;
-  }
-
-  finish(): string[] {
-    if (this.ended) return [];
-    this.ended = true;
-    try {
-      this.buffer += this.decoder.decode();
-    } catch {
-      this.buffer = "";
-      throw new Error("PI_RPC_INVALID_UTF8");
-    }
-    if (!this.buffer) return [];
-    const length = this.buffer.length;
-    this.buffer = "";
-    throw new Error(`PI_RPC_TRUNCATED_FRAME: ${length}`);
-  }
+export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DEEPSONAR_PI_RPC_MAX_EVENT_BYTES?.trim();
+  if (!raw) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (!/^\d+$/.test(raw)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (value < 1024 * 1024 || value > PI_RPC_MAX_EVENT_BYTES_LIMIT) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  return value;
 }
+
+export { PiJsonlFramer } from "./pi-jsonl-framer.js";
 
 const PI_RPC_EVENT_TYPES = new Set([
   "response",
@@ -271,7 +225,7 @@ const PI_RPC_EVENT_TYPES = new Set([
   "follow_up",
 ]);
 
-export function parsePiJsonlRecord(line: string, maxBytes = 1024 * 1024): Record<string, unknown> {
+export function parsePiJsonlRecord(line: string, maxBytes = piRpcMaxEventBytes()): Record<string, unknown> {
   if (Buffer.byteLength(line, "utf8") > maxBytes) throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
   if (!line) throw new Error("PI_RPC_EMPTY_FRAME");
   let value: unknown;

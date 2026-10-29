@@ -64,10 +64,36 @@ export async function projectScopeHook(req: FastifyRequest, reply: FastifyReply)
     return reply.code(400).send({ error: "invalid token id", error_code: "INVALID_ID" });
   }
   const query = (req.query ?? {}) as { project_id?: string; canvas_id?: string };
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/dashboard/overview" || routeUrl === "/dashboard/ops" || routeUrl === "/runtime-images") && query.project_id && !isUuid(query.project_id)) {
+  // Finding multi-select filters are authorized as a set before query/count.
+  if (routeUrl === "/findings") {
+    const splitIds = (raw: unknown): string[] | null => {
+      if (raw === undefined || raw === "") return [];
+      if (typeof raw !== "string" || raw.length > 4000) return null;
+      const ids = raw.split(",").map((id) => id.trim());
+      return ids.length <= 100 && ids.every(isUuid) ? ids : null;
+    };
+    const projectIds = splitIds(query.project_id);
+    const canvasIds = splitIds(query.canvas_id);
+    if (!projectIds || !canvasIds) return reply.code(400).send({ error: "invalid finding filter id", error_code: "INVALID_ID" });
+    const actorProjectId = req.actor?.projectId;
+    if (projectIds.some((id) => !projectScopeAllows(actorProjectId, id))) {
+      return reply.code(403).send({ error: "project mismatch", error_code: PROJECT_MISMATCH });
+    }
+    if (canvasIds.length) {
+      const canvases = await sql`SELECT id, project_id FROM canvases WHERE id = ANY(${canvasIds}::text[])`;
+      if (canvases.some((canvas) => !projectScopeAllows(actorProjectId, canvas.project_id as string)
+        || (projectIds.length && !projectIds.some((id) => id.toLowerCase() === String(canvas.project_id).toLowerCase())))) {
+        return reply.code(403).send({ error: "canvas project mismatch", error_code: PROJECT_MISMATCH });
+      }
+      if (canvases.length !== new Set(canvasIds).size) return reply.code(404).send({ error: "canvas not found", error_code: "NOT_FOUND" });
+    }
+    return;
+  }
+
+  if ((routeUrl === "/jobs" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/dashboard/overview" || routeUrl === "/dashboard/ops" || routeUrl === "/runtime-images") && query.project_id && !isUuid(query.project_id)) {
     return reply.code(400).send({ error: "invalid project id", error_code: "INVALID_ID" });
   }
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/dashboard/overview" || routeUrl === "/dashboard/ops" || routeUrl === "/runtime-images" || routeUrl === "/projects/:id/quality" || routeUrl === "/projects/:id/quality/replay") && query.canvas_id && !isUuid(query.canvas_id)) {
+  if ((routeUrl === "/jobs" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay" || routeUrl === "/dashboard/overview" || routeUrl === "/dashboard/ops" || routeUrl === "/runtime-images" || routeUrl === "/projects/:id/quality" || routeUrl === "/projects/:id/quality/replay") && query.canvas_id && !isUuid(query.canvas_id)) {
     return reply.code(400).send({ error: "invalid canvas id", error_code: "INVALID_ID" });
   }
   const actorProjectId = req.actor?.projectId;
@@ -83,7 +109,7 @@ export async function projectScopeHook(req: FastifyRequest, reply: FastifyReply)
       error_code: PROJECT_SCOPE_FORBIDDEN,
     });
   }
-  if ((routeUrl === "/jobs" || routeUrl === "/findings" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay") && query.canvas_id) {
+  if ((routeUrl === "/jobs" || routeUrl === "/dashboard/usage" || routeUrl === "/dashboard/quality" || routeUrl === "/dashboard/quality/replay") && query.canvas_id) {
     const [canvas] = await sql`SELECT project_id FROM canvases WHERE id = ${query.canvas_id}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found", error_code: "NOT_FOUND" });
     if (query.project_id && query.project_id.toLowerCase() !== String(canvas.project_id).toLowerCase()) {
@@ -177,7 +203,7 @@ export async function projectScopeHook(req: FastifyRequest, reply: FastifyReply)
     }
     return;
   }
-  if ((routeUrl === "/jobs" || routeUrl === "/findings") && query.project_id && query.project_id !== actorProjectId) {
+  if ((routeUrl === "/jobs") && query.project_id && query.project_id !== actorProjectId) {
     return reply.code(403).send({ error: "token 仅限项目 " + actorProjectId, error_code: "PROJECT_MISMATCH" });
   }
 }
