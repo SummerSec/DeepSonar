@@ -208,9 +208,9 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 平台级全局暂停领取（#740 P1 第一片）：管理员通过 `POST /platform/claims/pause`（`reason=platform_upgrade|maintenance`）把暂停持久化到 `global_settings` 单例行，所有 Scheduler 副本在 dispatch claim advisory lock 内读取，重启后保持；单例行缺失 fail closed 视为暂停。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。`GET /platform/claims` 返回 `running` / `pausing` / `paused` 与 claimed、provisioning、running 在途数，以及所有 Attempt（包括终态）上 `effect_pending` / `unknown` 效果数；三者归零才算排空（`waiting_human` 单独列出，不计入）。`POST /platform/claims/resume` 可带 `reason` 只解除对应原因的暂停，并 `pg_notify` 唤醒调度。暂停与恢复只允许平台管理员，项目级 token 一律拒绝，写审计。Web 全局横幅读取同一状态。
 
-维护升级（#740，已接线，选定 9 项中断/排空场景已通过，最终组合基线验收待完成）与普通暂停领取不同：用户已允许维护期间拒绝新任务和其他业务写入。独立维护身份使旧运行角色 NOLOGIN 并清退会话；验证备份切点后，仅恢复/重建候选库，源库保持冻结。目标服务 preparing 阶段关闭业务入口和后台执行，同目标续做绑定原始 digest/计划/世代/部署身份；激活已发生或结果不明时不得自动切回旧数据。激活前回滚保持暂停，恢复领取要求显式操作；受管 SSH 节点和该恢复入口已接线；已执行范围见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。配置离线预检覆盖声明字段 URL/枚举、只读密钥文件身份与内容格式、全部已存凭据的 AES-GCM 认证，并复用 credential-first resolver 检查当前持久默认组合；秘密仅经 stdin 传入断网目标容器，不持久化。外部认证、模型可用性、未来 Job 约束、历史 Job 语义及任意原生扩展仍未验证，详见 [预检边界](deploy/README.md)。
+维护升级（#740，已接线；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，验收范围限于记录中的隔离环境）与普通暂停领取不同：用户已允许维护期间拒绝新任务和其他业务写入。独立维护身份使旧运行角色 NOLOGIN 并清退会话；验证备份切点后，仅恢复/重建候选库，源库保持冻结。目标服务 preparing 阶段关闭业务入口和后台执行，同目标续做绑定原始 digest/计划/世代/部署身份；激活已发生或结果不明时不得自动切回旧数据。激活前回滚保持暂停，恢复领取要求显式操作；受管 SSH 节点和该恢复入口已接线；已执行范围见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。配置离线预检覆盖声明字段 URL/枚举、只读密钥文件身份与内容格式、全部已存凭据的 AES-GCM 认证，并复用 credential-first resolver 检查当前持久默认组合；秘密仅经 stdin 传入断网目标容器，不持久化。外部认证、模型可用性、未来 Job 约束、历史 Job 语义及任意原生扩展仍未验证，详见 [预检边界](deploy/README.md)。
 
-平台版本发现（#740 P1 第 2 片）：官方清单同步后比较当前部署版本与 `platform` 段（或 legacy `platform_version`），结果写入 `platform_update_checks`；`GET /platform/updates` 仅管理员可读，GitHub 不可达只记错误。Web 管理端提示新版本 / 检查失败；升级由宿主机受控程序执行；维护模式的身份隔离、候选库跨 schema 重建与同目标续做已有基础模块，宿主及受管 SSH 已接线，真实单机/多节点成功场景已通过，选定 11 项中断、排空、备份损坏与多节点恢复场景已通过，最终组合基线镜像待验收，见 [ADR 0008](docs/architecture/adr/0008-maintenance-candidate-upgrade.md)。
+平台版本发现（#740 P1 第 2 片）：官方清单同步后比较当前部署版本与 `platform` 段（或 legacy `platform_version`），结果写入 `platform_update_checks`；`GET /platform/updates` 仅管理员可读，GitHub 不可达只记错误。Web 管理端提示新版本 / 检查失败；升级由宿主机受控程序执行；维护模式的身份隔离、候选库跨 schema 重建与同目标续做已有基础模块，宿主及受管 SSH 已接线，真实单机/多节点成功及最终组合基线演练已有记录；具体输入版本、场景和未验证边界见 [升级演练](deploy/UPGRADE_REHEARSAL.md)，恢复决策见 [ADR 0008](docs/architecture/adr/0008-maintenance-candidate-upgrade.md)。
 
 平台镜像部署契约（#740 P1 第 3 片）：生产 Compose 的 scheduler / web / image-admission 只接受 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；当前部署版本只来自显式 `DEEPSONAR_VERSION`（`/health.version` 与版本发现均不再回退镜像 tag）。`DEEPSONAR_IMAGE_TAG` 已删除且不保留兼容：`deploy.sh` / `deploy.ps1` 发现旧变量、可变 tag、仓库名不符或缺版本时 fail closed 并提示从目标版本 `deploy/.env.example` 复制四行；本地 `build` 临时使用 `deepsonar-*:local-build`。
 
@@ -228,7 +228,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
 
-v61 旧库升级不能从 CLI 值猜测种子来源：重建默认要求身份复核，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job；须有备份或明确保留 staging。详见[数据库升级说明](database/README.md#v61-角色身份复核757)。
+旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
@@ -271,7 +271,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 5. **任务运行**：Job、Attempt、Session、流、广播和用量；
 6. **报告**：任务工作台报告 tab 仍展示 Finding Report、Task Report、版本、输入 checksum 和正文。项目侧「风险与报告」统一台（`/projects/:id/findings`，`?panel=reports` 切报告区）复用同一 `ReportDeliverable` 投影（可阅读 / 生成中 / 失败 / 尚未生成 / 已过时），任务只作上下文，不默认展开；旧 `/projects/:id/reports` redirect 到合并页。
 
-选中的 `tab` / `panel` 写入 URL，后台刷新不能强制切换视图。Canvas 是高级审计视图，默认只读；节点布局由服务端 elkjs 计算。列表筛选使用服务端分页和可搜索多选；不同维度按 AND，同一维度按 OR。项目账本与「风险与报告」是独立项目视图，不塞进任务工作台的运行列表。
+选中的 `tab` / `panel` 写入 URL，后台刷新不能强制切换视图。Canvas 是高级审计视图，默认只读；Web 对当前可见投影使用 elkjs 布局，超阈值或计算失败时使用固定列布局。服务端 `x/y` 只作 placement/exchange hint，全图服务端权威布局仍按 #148 暂缓，见 [布局边界](docs/architecture/12-risks-and-tech-debt.md#31-全图服务端权威布局148)。列表筛选使用服务端分页和可搜索多选；不同维度按 AND，同一维度按 OR。项目账本与「风险与报告」是独立项目视图，不塞进任务工作台的运行列表。
 
 ## 11. 安全与授权硬门
 
@@ -294,10 +294,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | Capability Pack（#447/#459） | Manifest、Job 级发现和快照 selector/digest 已落地；目录发现仍需严格受冻结 selector/digest 上限约束 | live catalog 漂移门禁、task/session 生命周期、准入评估、临时组合、经验推荐 |
 | Plan / 模型主导收敛（#443） | 当前仍由 Hub Intent + 硬护栏运行 | PlanTask、模型完成声明、预算化验证和回放 |
 | Finding Research（#448） | 语义去重、canonical anchor、相对 priority 已落地 | 更强评估集、跨任务聚类和人工反馈闭环 |
-| Quality / Replay
-
-人工标注审计回归集（#580）：变更模型/prompt/策略前相对冻结基线对比；人工标签为真值，平台 confirmed 不是独立真值；缺少 PoC ≠ 误报；门禁区分质量退化与环境失败，不发明准确率承诺。
-（#445/#456） | 只读指标与 Hub replay 基线已落地，经验召回为空 | Experience、成本感知计划和策略评估 |
+| Quality / Replay（#445/#456/#580） | 只读指标与 Hub replay 基线已落地，经验召回为空；审计回归以人工标签为真值，平台 confirmed 不是独立真值，缺少 PoC 不等于误报 | 变更模型/prompt/策略前相对冻结基线对比，区分质量退化与环境失败；Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
 | 项目报告工作台（#484 / #561） | Phase 1 已落地：统一 `ReportDeliverable` 投影；#561 并入项目「风险与报告」台（`/findings` + `?panel=reports`，旧 `/reports` redirect）；任务工作台报告 tab 与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |
 | 平台自动更新（#740） | P1 第 1–3 片已落地：全局暂停领取（schema v57）+ 清单 `platform` 契约与版本发现 / Web 管理端提示（schema v58）+ digest Compose 契约（每个平台镜像一个 `@sha256:` 引用变量，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`，部署脚本对旧变量 / 非 digest fail closed）；Release 已生成并重新 inspect 校验 `platform` 段各通道真实 digests；宿主同 schema 升级 / 保留数据库的暂停回滚已接通（停机前校验本地暂停排空，readiness 有界等待，恢复记录绑定部署目标；目标镜像离线配置预检在暂停前输出阻断报告） | 维护身份隔离/候选库跨 schema 重建/同目标续做基础模块已实现，宿主与 SSH 已接线，单机/多节点成功场景已通过；最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理；P2 默认关闭的宿主策略和签名验证已接线，正式 tag 的生产 keyless 签名已获授权并接线，实际发布验收见对应 Release 证据；P3 Web 发起为可选且未实现 |
@@ -327,7 +324,6 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
 | `database/schema.sql` | 唯一 schema 基线；当前主线 v62（当前集成基线，非发布版本；合入并行 schema 变更后重新核对） |
-
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：
