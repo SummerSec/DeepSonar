@@ -45,7 +45,7 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
-assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "456f09e063440d8146add73a521bd975b2ec03695c25218873fbda1846ece7f3");
+assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "fa440318a243525ed5dcd1bc7db3c5c49ca437c35e08c387595055a0651b4757");
 assert.match(skillContent, /所有 CLI 都只能使用 Job 级 HTTP 控制 API/);
 assert.match(skillContent, /Agent 通过当前 CLI 可用的 HTTP 工具/);
 assert.match(skillContent, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
