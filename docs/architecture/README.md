@@ -12,6 +12,9 @@
 
 #770 A 来源身份独立写入与历史保留规则见[数据架构](08-data-architecture.md#finding-来源身份770-a)，对应 FR-FIND-002；关联建议仍为后续切片。
 
+
+#767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；自由文本兼容、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |

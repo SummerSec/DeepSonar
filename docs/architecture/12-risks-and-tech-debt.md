@@ -26,6 +26,10 @@
 | D-06 | 低 | 质量指标和 Hub replay 已有只读投影；Experience 经验存储为空，尚未有跨任务经验召回、成本感知计划和策略评估闭环。 | 不能把质量投影或人工标签解读为模型准确率承诺，也不能自动把历史结果当作当前事实。 | 关联长期评估路线；没有冻结数据集、来源、版本和过期策略前，不新增经验写入或推荐路径。 |
 | D-07 | 中 | [`runtime-image-registry-contract.ts`](../../apps/scheduler/src/runtime-image-registry-contract.ts) 仍保留 schema v1 的兼容解析、旧 `image_ref` 投影和历史重复 digest alias；当前新目录契约以最新形态为准。 | 旧输入/输出路径继续存在会增加发布审计和移除成本，也可能让历史投影被误认为受支持的新契约。 | 仅在历史材料、迁移证据和发布窗口确认不再依赖后物理清扫；新生成内容不得依赖兼容投影，兼容解析不能扩大新运行时输入范围。 |
 
+### 任务下发校验的证据边界（#767）
+
+共享契约已减少结构化字段与场景要求的入口漂移，但字段齐全不证明描述真实、目标可执行或模型结果一致。当前没有通用目标账号/租户/角色/资源归属与外部业务写权限探测器，也不从凭据公开元数据推断目标授权；相关必要条件未知时 fail closed。模板预算是规划信息，不替代既有内核资源预算。对任意自然语言的语义归一化、自动安全拆分和真实模型质量提升仍需单独评测。此边界不允许靠客户端 `verified` 或模板默认权限绕过。
+
 ## 2.1 ASC 迁移验收证据（#754）
 
 源码审查确认：rust_ASC 固定提交 `236dd096669c99eb30f6e1af0b24e668eff55dd5` 的 [LICENSE](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/LICENSE) 与 [Cargo.toml](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/Cargo.toml) 明确声明 Apache-2.0。[.gitmodules](https://github.com/MG1937/rust_ASC/blob/236dd096669c99eb30f6e1af0b24e668eff55dd5/.gitmodules) 指向的 [radguard 固定源码树](https://github.com/MG1937/radguard/tree/290de20c925c4a2c7642b1a63c9997185a06e130) 没有独立许可证声明，其 [Cargo.toml](https://github.com/MG1937/radguard/blob/290de20c925c4a2c7642b1a63c9997185a06e130/Cargo.toml) 亦无 `license` 字段。子模块许可覆盖尚未明确、未核实；这不足以断言确定禁止分发，也不作为 PR #755 的硬阻塞，同时不宣称已取得明确覆盖 radguard 的授权。

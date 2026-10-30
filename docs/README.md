@@ -1,5 +1,6 @@
 # DeepSonar 文档索引
 
+> **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
 > **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。真实模型评测与 C 未交付。
 
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。

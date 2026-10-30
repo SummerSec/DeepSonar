@@ -1,3 +1,6 @@
+import { TaskContractEditor, TaskContractFeedbackView } from "./TaskContractEditor";
+import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
+import { ApiRequestError } from "../login-error";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -87,6 +90,10 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
   const activeProjects = useMemo(() => projects.filter((project) => project.status === "active"), [projects]);
   const [selectedProjectId, setSelectedProjectId] = useState(forcedNewProject ? NEW_PROJECT : "");
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
+  const [contractDraft, setContractDraft] = useState("");
+  const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
+  const [createdTaskHref, setCreatedTaskHref] = useState<string | null>(null);
+  const parsedContract = parseTaskContractDraft(contractDraft);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
   const [preset, setPreset] = useState<(typeof QUICK_START_PRESETS)[number]["id"]>("custom");
@@ -149,7 +156,9 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || createdTaskHref) return;
+    if (parsedContract.error) return setOperationError(parsedContract.error);
+    setContractFeedback({});
     if (!canStart) {
       setPermissionDenied(true);
       return;
@@ -169,7 +178,9 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
           goal,
           project: creatingProject ? null : selectedProject,
           newProject: creatingProject ? { name: newProjectName, description: newProjectDescription } : null,
-          networkOverride,        },
+          networkOverride,
+          task_contract: parsedContract.contract,
+        },
         {
           createProject: async (input) => {
             const project = await api.createProject(input);
@@ -197,8 +208,13 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
       }
       rememberProject(result.project.id);
       setStage("handoff");
-      navigate(`/projects/${result.project.id}/tasks/${result.task.canvas_id}?handoff=1`);
+      const href = `/projects/${result.project.id}/tasks/${result.task.canvas_id}?handoff=1`;
+      if (taskFeedbackItems(result.task).length) {
+        setContractFeedback(result.task);
+        setCreatedTaskHref(href);
+      } else navigate(href);
     } catch (error) {
+      if (error instanceof ApiRequestError) setContractFeedback(error.taskContractFeedback);
       if (isPermissionError(error)) {
         setPermissionDenied(true);
       } else {
@@ -255,6 +271,9 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                 <textarea id={`quick-start-goal-${instanceId}`} value={goal} onChange={(event) => { setGoal(event.target.value); setPreset("custom"); }} maxLength={20_000} rows={4} placeholder="告诉平台要解决什么、已知边界是什么，以及什么证据能让你相信结果。" required />
               </div>
             </div>
+
+            <TaskContractEditor value={contractDraft} onChange={setContractDraft} disabled={busy || Boolean(createdTaskHref)} />
+            <TaskContractFeedbackView feedback={contractFeedback} />
 
             <div className="intent-launch-presets" aria-label="目标预设">
               <span className="intent-launch-field-caption">快速填入意图</span>
@@ -351,7 +370,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
 
             <div className="intent-launch-submit-row">
               <div><span className="intent-launch-submit-note"><span className="intent-launch-live-dot" />预检通过后才会创建任务与 Job</span><span className="intent-launch-submit-note">{networkOverrideLabel(networkOverride)}</span></div>
-              <PrimaryButton type="submit" busy={busy} disabled={!canStart || permissionLoading}>{busy ? "检查并进入画布" : <><span>开始任务</span><ArrowRight size={15} weight="light" /></>}</PrimaryButton>
+              {createdTaskHref ? <PrimaryButton type="button" onClick={() => navigate(createdTaskHref)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={busy} disabled={!canStart || permissionLoading || Boolean(parsedContract.error)}>{busy ? "检查并进入画布" : <><span>开始任务</span><ArrowRight size={15} weight="light" /></>}</PrimaryButton>}
             </div>
           </form>
         )}

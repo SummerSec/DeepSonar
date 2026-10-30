@@ -1,3 +1,4 @@
+import { normalizeTaskContract, type TaskContract } from "@deepsonar/shared-types";
 import type { SandboxLimits } from "@deepsonar/runtime-sandbox";
 
 type NetworkPolicyQuery = (
@@ -93,7 +94,7 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
   db: NetworkPolicyQuery,
   canvasId: string | null | undefined,
   snapshot: T,
-): Promise<T & { network_policy: FrozenNetworkPolicy }> {
+): Promise<T & { network_policy: FrozenNetworkPolicy; task_contract?: TaskContract }> {
   if (!canvasId)
     throw new Error(
       "Job 创建缺少 canvas_id，无法冻结 network_policy.allow_egress",
@@ -111,12 +112,16 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
     throw new Error(
       `canvas ${canvasId} 不存在，无法冻结 network_policy.allow_egress`,
     );
-  const allowEgress = frozenCanvasAllowEgress(canvas.target_json);
+  let allowEgress = frozenCanvasAllowEgress(canvas.target_json);
   if (typeof allowEgress !== "boolean") {
     throw new Error(
       `canvas ${canvasId} 缺少合法的 network_policy.allow_egress`,
     );
   }
+  const rawContract = (canvas.target_json as Record<string, unknown>).task_contract;
+  const taskContract = rawContract === undefined ? undefined : normalizeTaskContract(rawContract);
+  if (taskContract) allowEgress = allowEgress
+    && taskContract.allowed_actions.includes("egress") && !taskContract.forbidden_actions.includes("egress");
   assertChromeRuntimeEgressAllowed(
     snapshotRuntimeImageKey(snapshot),
     allowEgress,
@@ -124,6 +129,7 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
   return {
     ...snapshot,
     network_policy: { allow_egress: allowEgress },
+    ...(taskContract ? { task_contract: taskContract } : {}),
   };
 }
 

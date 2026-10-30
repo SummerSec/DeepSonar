@@ -222,3 +222,21 @@ export function scheduleTimeIssue(localValue: string, nowMs = Date.now()): strin
   }
   return null;
 }
+
+/** Consistent scheduled-task time label across creation and task lists. */
+export function formatBeijingTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleString("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }) + "（北京时间）";
+  } catch {
+    return iso;
+  }
+}

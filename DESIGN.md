@@ -31,6 +31,8 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 固定原则：**本地库是管理真相，画布是过程真相，沙箱是执行真相，调度器是唯一有副作用的执行者。** Web 是管理平面，画布是只读投影；真实 Job 的语义写入只能来自按 Job 授权的 Control API。
 
+任务下发支持可选版本化 `task_contract`（#767）：共享 schema/场景模板统一 API、Web 与管理 CLI 的结构化输入，Canvas 保存解析后的契约与模板版本；原始需求继续保留。创建反馈区分缺项提示与执行阻塞，Dispatcher 在沙箱创建前按当前可验证事实复核。契约不授予身份、写权限或出网权限；无法验证必要条件时停止派发，不把声明当证明。自由文本仍是受支持输入，不以 Markdown 标题验收。详见 [任务下发指南](skills/deepsonar-management/references/task-dispatch.md)及 [FR-TASK-006](docs/architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。
+
 ## 3. 核心实体
 
 ```text

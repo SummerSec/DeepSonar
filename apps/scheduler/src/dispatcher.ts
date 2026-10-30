@@ -1,3 +1,4 @@
+import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
 import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { randomUUID } from "node:crypto";
@@ -7,6 +8,7 @@ import {
   advanceCanvasAfterTerminalJob,
   DISPATCH_CLAIM_ADVISORY_KEY,
   globalRules,
+  rulesForProject,
   ingestEvent,
   lockCanvasForConvergence,
   projectJobQuotaFromConfig,
@@ -70,6 +72,7 @@ function nonEmptyDispatcherFailureMessage(error: unknown, composed: string): str
 }
 
 export function classifyDispatcherFailure(error: unknown): { reason: string; message: string } {
+  if (error instanceof TaskContractBlockedError) return { reason: error.code, message: error.message };
   if (error instanceof RuntimeImageNotReadyError) {
     return { reason: "runtime_image_not_ready", message: `runtime_image_not_ready: ${error.imageRef}` };
   }
@@ -999,6 +1002,13 @@ async function runJob(jobId: string) {
     // mapped to one authenticated models.json route.
     assertPiSnapshotLaunchSelection(snapshot);
     const snapshotAllowEgress = requireFrozenSnapshotAllowEgress(snapshot, jobId);
+    const taskContract = frozenTaskContract(snapshot);
+    if (taskContract) {
+      const currentRules = await rulesForProject(sql, String(job.project_id));
+      const blockers = await taskContractPreflight(sql, String(job.project_id), taskContract,
+        snapshotAllowEgress && currentRules.allowEgress);
+      if (blockers.length) throw new TaskContractBlockedError(blockers);
+    }
     const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");
     // Hub 与 Worker 共用 Job 创建时冻结的 allow_egress。
     const allowEgress = useReal && snapshotAllowEgress;

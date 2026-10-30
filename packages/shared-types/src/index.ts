@@ -1819,3 +1819,5 @@ export async function computeFingerprint(
   );
   return digest(norm);
 }
+
+export * from "./task-contract.js";

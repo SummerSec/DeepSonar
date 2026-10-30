@@ -39,6 +39,8 @@ curl -s "$DEEPSONAR_BASE_URL/schema?format=summary"
 
 Windows 注意：部分环境下 curl 响应带 UTF-8 BOM，用 Python 解析时 `encoding="utf-8-sig"`；本机常无 `jq`，用 `python -X utf8 -c "import json; ..."`。
 
+任务下发先按 [任务设计与下发指南](references/task-dispatch.md) 明确目标、权限与验收；白盒和黑盒检查表由该指南按需引用。可选契约通过 `tasks create --task-contract @contract.json` 提交，模板不授予权限。
+
 ## 常用命令
 
 ```bash

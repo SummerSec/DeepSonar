@@ -53,6 +53,14 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Job 重跑集成测试](../../apps/scheduler/src/job-rerun.integration.test.ts)、[恢复集成测试](../../apps/scheduler/src/recovery-issue186.integration.test.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）。
 
+### FR-TASK-006 版本化任务契约与派发前校验
+
+- **规范要求**：系统必须支持可选版本化任务契约，保留原始需求及采用的模板版本/规范化快照；缺项返回字段级建议，不通过固定标题或字数评定质量。显式契约必须严格校验版本、结构与未知字段；契约只能收窄平台权限，不得自行证明身份、授权或前置条件。派发前必须按当前可信事实复核必要条件，不能沿用创建时的过期通过结果。
+- **决策来源**：#767；减少不同创建者与入口造成的遗漏，同时保留非审计工程任务和自由文本输入。
+- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；没有契约时返回未评估提示。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
+- **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
+- **验证证据**：契约规范化、变形输入与安全边界行为测试；人工核对 API/Web/CLI 对同一结构化意图返回一致缺项/阻塞，并核对创建后撤销权限时派发拒绝。实际运行结果见 PR 验收记录，不以字段校验冒充模型效果评测。
+
 ### FR-HUB-001 Scheduler 派生 Hub Job
 
 - **规范要求**：系统必须由 Scheduler 在 Canvas 锁边界内派生 `hub_reason` Job；同一 Canvas 同时最多一个活跃 Hub。`verify_finding` 与 `report` 必须由 Scheduler 从 `finalizeJob`/画布状态派生，不得由 Hub Intent 直接扮演或改变收敛状态。

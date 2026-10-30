@@ -11,6 +11,7 @@ import type {
   PlatformToolConfig,
   ReadinessResponse,
   TaskExecutionControlResult,
+  TaskContract,
   TaskExecutionState,
   ModelDescriptor as SharedModelDescriptor,
 } from "@deepsonar/shared-types";
@@ -2040,6 +2041,7 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
       errorCode: errorBody?.error_code ?? null,
       serverMessage: errorBody?.error ?? errorBody?.message ?? null,
       retryAfterSec: parseRetryAfterSec(errorBody, res.headers.get("retry-after")),
+      taskContractFeedback: errorBody ?? undefined,
     });
   }
   return res.json() as Promise<T>;
@@ -2211,6 +2213,7 @@ export const api = {
     t: {
       title: string;
       content: string;
+      task_contract?: TaskContract;
       /** 省略则继承项目设置；服务端在任务创建时冻结。 */
       allow_egress?: boolean;
       finding_protocol?: FindingProtocolConfig;
@@ -2227,7 +2230,7 @@ export const api = {
       };
     },
   ) =>
-    send<{ canvas_id: string; job: { id: string; status: string }; scheduled_start_at?: string | null }>(
+    send<{ canvas_id: string; job: { id: string; status: string }; scheduled_start_at?: string | null } & import("./task-contract-editor").TaskContractFeedback>(
       "POST",
       `/projects/${projectId}/tasks`,
       t,

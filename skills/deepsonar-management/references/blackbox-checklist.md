@@ -59,3 +59,13 @@ LLM / Agent 形态的流程（配置生命周期、节点参数、提示注入�
 - [ ] 支持成立 / negative / inconclusive 三类候选观察判据可判定，明确提交独立 Verify，不直接设置平台 confirmed
 - [ ] 停止条件与预算已写
 - [ ] 凭据只写引用，无明文
+
+## 7. 可选结构化契约与当前平台限制
+
+先执行[共用下发流程](task-dispatch.md)，选择 `blackbox`；有源码时可用 `graybox` 并补[白盒基线](whitebox-checklist.md)。凭据仅使用 UUID 引用；`identity` 是待核验声明，不是授权。
+
+例如只读任务可观察已提供的脱敏 HAR/JS，声明 read 并禁止 write/egress，验收为“列出观察、证据引用、无法动态核验的步骤”。若需要访问授权目标则声明 egress，并受实际网络策略检查。不要在只读任务中要求创建或发布测试资源。
+
+动态链需要 write、实际目标身份与资源边界、清理条件及可信授权核验。当前 Scheduler 没有通用目标身份/写权限探测器，因此此类必要条件保持未核验并阻塞；仅把 allowed_actions 改成 write 不会通过。人工补充说明也不等同于平台已经验证。
+
+LLM flow 的 post_process、stream 仅为具体实现示例，不作为全部平台固定字段；漏洞成立标准沿用执行层规则。

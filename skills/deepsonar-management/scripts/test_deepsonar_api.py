@@ -1,3 +1,5 @@
+import json
+import tempfile
 import runpy
 import unittest
 from pathlib import Path
@@ -72,6 +74,19 @@ class DeepSonarApiCliTest(unittest.TestCase):
                 },
             )],
         )
+
+    def test_task_contract_file_preserves_explicit_input(self):
+        contract = {"schema_version": 1, "template_id": "engineering", "template_version": 1,
+                    "objective": "修复解析", "allowed_actions": ["read"], "acceptance": ["回归测试通过"]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            path.write_text(json.dumps(contract), encoding="utf-8")
+            self.run_command("tasks.create", ["project-id"], {
+                "title": "修复解析", "content": "保留原始需求", "task-contract": "@" + str(path),
+            })
+        self.assertEqual(self.calls[0][2]["task_contract"], contract)
+        self.assertEqual(self.calls[0][2]["content"], "保留原始需求")
+        self.assertNotIn("identity", self.calls[0][2]["task_contract"])
 
     def test_task_creation_rejects_invalid_seed_combinations(self):
         with self.assertRaisesRegex(self.module["ApiError"], "standard 任务禁止"):

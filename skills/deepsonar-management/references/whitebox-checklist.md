@@ -47,3 +47,11 @@
 - [ ] 静态与动态的完成标准分别可判定
 - [ ] 禁止动作、停止条件、证据要求已写
 - [ ] 未把凭据明文写进任务说明
+
+## 6. 可选结构化契约与当前平台限制
+
+先执行[共用下发流程](task-dispatch.md)，选择 `whitebox`；灰盒选择 `graybox` 并组合[黑盒边界](blackbox-checklist.md)。`baseline` 缺失会提示，但填写提交号本身不证明源码可访问。
+
+可从 Web 的白盒模板开始，填 `objective/targets/baseline/scope/exclusions/stop_conditions/acceptance/evidence/budget`，明确 `required_actions`。例如本地静态审查可声明 read、禁止 write/egress；验收是“报告指定基线的观察、证据和未验证限制”。构建或修改沙箱缓存时据实声明 `workspace_write`；访问/修改外部目标需要额外 `egress`/`write` 并受实际边界约束，不能把执行测试默认为只读。
+
+必要构建环境可写入 `prerequisites`，状态只能是 declared、missing 或 not_applicable。required=true 的条件若没有当前可信核验会阻塞；若动态环境不属于本次目标，应明确改为静态任务，而不是把缺环境写为已验证。
