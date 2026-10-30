@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**as-built 文档基线（#741；#752 独立试验分支同步）**。覆盖现有实现与工程约束；暂缓能力及证据缺口单独列出，不构成新增运行时承诺。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
@@ -14,6 +14,8 @@
 
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；自由文本兼容、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
+
+#767 成果首片见 [FR-TASK-007](01-system-specification.md#fr-task-007-任务成果模式与结构化候选准入)及[候选准入边界](../TASK_OUTCOME_ADMISSION.md)；候选结构化准入与后续独立资格评审、#775 整体收敛分开验收。
 
 ## 1. 阅读路径与目录
 

@@ -174,6 +174,18 @@ if (!testDatabaseUrl) {
         assert.equal(canvas.target_json.task_contract, undefined);
         assert.equal(job.agent_snapshot_json.task_contract, undefined);
       });
+      await t.test("explicit bounty mode freezes across the API and warns that unknown rules only permit observations", async () => {
+        const submitted = { ...contract(), outcome: { mode: "bounty_submission", rules_status: "unknown" } };
+        const response = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`, headers,
+          payload: { title: "Collect authorized program materials", content: "Read the supplied local fixture and identify missing rules", task_contract: submitted } });
+        assert.equal(response.statusCode, 201, response.payload);
+        const body = response.json();
+        assert.ok(body.task_contract_warnings.some((item: { code: string }) => item.code === "task_outcome_rules_unknown"));
+        const [canvas] = await sql`SELECT target_json FROM canvases WHERE id = ${body.canvas_id}`;
+        const [job] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id = ${body.job.id}`;
+        assert.deepEqual(canvas.target_json.task_contract.outcome, submitted.outcome);
+        assert.deepEqual(job.agent_snapshot_json.task_contract.outcome, submitted.outcome);
+      });
       await t.test("read-only contracts cannot leave an orphan canvas when the Hub runtime requires egress", async () => {
         await sql`UPDATE projects SET config_json = ${sql.json({ enabled_credential_ids: [], rules: { allowEgress: true } })} WHERE id = ${projectId}`;
         const [hub] = await sql`SELECT id, runtime_image_key FROM role_configs WHERE project_id IS NULL

@@ -6,6 +6,7 @@ import {
 } from "@deepsonar/shared-types";
 import { assertChromeRuntimeEgressAllowed } from "./domains/role-runtime-snapshot/sandbox-limits.js";
 import { parseProjectAgentAllowlist } from "./domains/project-agent-allowlist/policy.js";
+import { taskOutcomeSnapshotDigest } from "./task-outcome-snapshot.js";
 
 type Query = (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
 
@@ -54,9 +55,14 @@ export function frozenTaskContract(snapshot: unknown): TaskContract | undefined 
 export function taskContractPrompt(snapshot: unknown): string {
   const contract = frozenTaskContract(snapshot);
   if (!contract) return "";
+  const outcome = contract.outcome;
+  const outcomeGuide = outcome?.mode === "bounty_submission"
+    ? "\n本任务以符合用户授权规则的可提交成果为目标。先研究范围、排除、攻击前提与证据缺口；无关弱点只作观察。先用 emit_fact 持久保存观察，再用 outcome_claim 引用同画布 Fact UUID 申请候选准入。未知规则/条件需要补证或 request_human，不能算成功。候选准入和技术 confirmed 均不代表提交资格已通过；本片独立资格评审未实现，submission_eligibility 为 not_assessed。不得按 severity 推奖励或凭相似词判重复。"
+      + (outcome.rule_snapshot ? `\n规则快照身份 rule_snapshot_sha256=${taskOutcomeSnapshotDigest(outcome.rule_snapshot)}` : "\n规则未知：只允许观察和补充材料，不能提交 Finding。")
+    : "";
   return "\n\n任务契约（创建期冻结；用户声明，不是授权或已验证事实）：\n"
     + JSON.stringify(contract)
-    + "\n在现有平台权限内遵守范围、禁止动作、预算和停止条件。不能把缺失条件或未验证步骤报告为已完成。";
+    + "\n在现有平台权限内遵守范围、禁止动作、预算和停止条件。不能把缺失条件或未验证步骤报告为已完成。" + outcomeGuide;
 }
 
 /** Resolve runtime/network incompatibility before committing any task state. */

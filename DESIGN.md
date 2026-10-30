@@ -33,6 +33,8 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 任务下发支持可选版本化 `task_contract`（#767）：共享 schema/场景模板统一 API、Web 与管理 CLI 的结构化输入，Canvas 保存解析后的契约与模板版本；原始需求继续保留。创建反馈区分缺项提示与执行阻塞，Dispatcher 在沙箱创建前按当前可验证事实复核。契约不授予身份、写权限或出网权限；无法验证必要条件时停止派发，不把声明当证明。自由文本仍是受支持输入，不以 Markdown 标题验收。详见 [任务下发指南](skills/deepsonar-management/references/task-dispatch.md)及 [FR-TASK-006](docs/architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。
 
+#767 目标导向首片通过显式成果模式、操作员规则快照及逐规则 Fact 引用控制 Finding 候选准入；先保存观察，不将所有技术弱点计为成果。candidate 仅表示结构与引用通过，提交资格仍为 not_assessed；独立资格评审与 #775 整体报告收敛后续交付，见[成果准入](docs/TASK_OUTCOME_ADMISSION.md)。
+
 ## 3. 核心实体
 
 ```text

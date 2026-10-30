@@ -327,3 +327,5 @@ python scripts/deepsonar-api.py jobs rerun-current <jobId>
 - `references/api.md` — 端点契约（与 `/schema.md` 同步）
 - `references/permissions.md` — 最小 scope（角色/凭据用 `agents:*`；镜像用 `images:*`）
 - 运行时权威：`GET /openapi.json`、`GET /schema?format=summary`
+
+成果模式需要区分任务定义与赏金提交时，按[下发指南第 9 节](references/task-dispatch.md#9-显式成果模式与候选边界767-首片)填写可选 outcome；结构化候选准入不是独立提交资格或目标完成。

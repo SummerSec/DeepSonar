@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -79,3 +79,7 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 ## Plan 决策元数据（#775 B 首片）
 
 Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/request_human 可带严格版本化 plan_basis。字段、只读证明、单步预算、错误/重试边界见 [Plan 协议范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)；OpenAPI 输入 schema 由 shared-types 派生，无新写入 API。
+
+## 成果候选入口（#767）
+
+TaskContract 可选 outcome 显式选择 task_defined 或 bounty_submission；后者引用操作员提供的版本化规则快照。emit_finding 的 outcome_claim 绑定服务端规范化快照 SHA、目标/基线、前提/影响及逐规则 Fact 引用。所有引用核对当前项目/Canvas 的 Fact 与关联 Artifact；blocked/observation_only 拒绝 Finding，先经 emit_fact 留存观察。candidate 仍为 submission_eligibility:not_assessed，不是提交资格。详见[成果准入边界](../TASK_OUTCOME_ADMISSION.md)。

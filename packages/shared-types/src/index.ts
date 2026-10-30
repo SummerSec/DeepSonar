@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { CandidateOutcomeClaim } from "./task-outcome.js";
+export * from "./task-outcome.js";
 import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload } from "./project-knowledge.js";
 export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
@@ -495,6 +497,7 @@ export const FindingPayload = z
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
     quantities: optionalQuantities,
     impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
   })
   .strict()
@@ -521,6 +524,7 @@ export const EmitFindingDirectPayload = z
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
     impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
   })
   .strict();
 export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
@@ -539,6 +543,7 @@ export const EmitFindingPayload = z
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
     impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
   .strict()

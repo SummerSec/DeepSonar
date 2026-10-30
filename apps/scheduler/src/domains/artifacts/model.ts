@@ -145,7 +145,7 @@ export function factProposalToArtifact(fact: {
   };
 }
 
-export function findingProposalToArtifact(finding: NormalizedFindingProposal): ArtifactWrite {
+export function findingProposalToArtifact(finding: NormalizedFindingProposal, outcomeAdmission?: Record<string, unknown>): ArtifactWrite {
   const profile = finding.profile;
   const evidenceRefs = finding.evidence_refs ?? [];
   return {
@@ -171,6 +171,7 @@ export function findingProposalToArtifact(finding: NormalizedFindingProposal): A
     })),
     relations: [],
     extensions: {
+      ...(outcomeAdmission ? { task_outcome_admission: outcomeAdmission } : {}),
       [profile]: compact({
         title: finding.title,
         category: finding.category,

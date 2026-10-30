@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**（#741 基线；#752 独立试验分支同步）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
 
@@ -15,6 +15,7 @@
 | FR-TASK-003 | [上下文与范围](02-context-and-scope.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts) | `pnpm ci:integration:event-ingestion`、`pnpm ci:integration:event-authorization`；人工重复发送相同 `event_id` 并核对返回身份。 |
 | FR-TASK-004 | [上下文与范围](02-context-and-scope.md) | [ADR-0001](adr/0001-no-backward-compatibility.md) | [项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts) | `pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（行为测试验证入口，本次未执行）。 |
 | FR-TASK-006 | [接口规范](09-interface-specs.md)；[运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | — | [共享契约](../../packages/shared-types/src/task-contract.ts)；[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)；[Dispatcher](../../apps/scheduler/src/dispatcher.ts) | 契约规范化与派发门禁行为测试；人工比较 API/Web/CLI 的缺项反馈及权限撤销后的拒绝。实际执行结果见 PR。 |
+| FR-TASK-007 | [接口规范](09-interface-specs.md)；[运行时视图](06-runtime-view.md)；[成果准入](../TASK_OUTCOME_ADMISSION.md) | — | [成果契约](../../packages/shared-types/src/task-outcome.ts)；[事件摄入](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts) | 模式/规则快照/来源引用与候选准入行为测试；独立资格评审及整体收敛未交付，结果见 PR。 |
 | FR-HUB-001 | [运行时视图](06-runtime-view.md) | [ADR-0003](adr/0003-api-only-control.md) | [Hub 编排应用](../../apps/scheduler/src/domains/hub-orchestration/application.ts) | `pnpm ci:unit:bounded-contexts`、`pnpm ci:smoke:hub`、`pnpm ci:integration:convergence-recovery`。 |
 | FR-HUB-002 | [运行时视图](06-runtime-view.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [Intent admission](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)；[能力准入](../../apps/scheduler/src/domains/capability-pack/)；[镜像边界](../../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:platform-api`；人工提交扩大工具/凭据/镜像/出网/项目范围的 Intent 并核对拒绝。 |
 | FR-HUB-003 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0003](adr/0003-api-only-control.md) | [图与引用校验](../../apps/scheduler/src/graph.ts)；[Hub Intent](../../apps/scheduler/src/domains/hub-orchestration/application.ts)；[任务编排](../../apps/scheduler/src/task-compose.ts) | `pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`、`pnpm ci:integration:task-intent`；人工提交别名、占位符和跨画布 UUID。 |

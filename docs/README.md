@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+> **任务成果准入（2026-10-30，#767 首片）**：[成果模式与候选准入](TASK_OUTCOME_ADMISSION.md) 记录规则来源/快照、观察与候选边界；candidate 不代表提交资格或目标达成。独立资格评审及 #775 整体收敛未交付，真实模型效果未验证且不作为本次交付门槛。
+
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
 > **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。真实模型评测与 C 未交付。
 

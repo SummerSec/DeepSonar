@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CONTEXT_WINDOW_EXCEEDED_REASON,
+  TaskContractPromptBudgetExceededError,
   compactPromptForContextWindowRetry,
   countConsumedContextWindowRetries,
   estimatePromptTokens,
@@ -92,4 +93,64 @@ test("same-session compaction resume hook is deferred stub", () => {
     planSameSessionContextCompactionResume({ hasSessionId: true, adapterSupportsCompaction: true }),
     { resume: false, cause: "compaction_hook_deferred" },
   );
+});
+
+
+test("compact retry preserves complete frozen rules for every execution role within budget", () => {
+  const frozenRules = "\n\n任务契约：" + JSON.stringify({
+    objective: "验证授权范围内的结论",
+    outcome: { mode: "evidence_required", rule_version: 1, acceptance: ["不得把未知项视为完成"], digest: "sha256:frozen" },
+  });
+  for (const role of ["hub_reason", "worker", "verify", "report"]) {
+    const body = `${role} instructions\n` + "evidence ".repeat(80_000) + "tool guide".repeat(2_000);
+    const result = compactPromptForContextWindowRetry(body, 8_000, frozenRules);
+    assert.equal(result.compacted, true, role);
+    assert.ok(result.prompt.endsWith(frozenRules), role);
+    assert.equal(result.prompt.split(frozenRules).length, 2, "frozen rules appear exactly once");
+    assert.ok(result.estimatedTokensAfter <= Math.floor(8_000 * 0.55));
+    assert.equal(result.estimatedTokensBefore, estimatePromptTokens(body + frozenRules));
+  }
+});
+
+test("protected rules remain in a short retry prompt and empty rules preserve generic behavior", () => {
+  const body = "short task";
+  const rules = "\nfrozen acceptance rules";
+  const result = compactPromptForContextWindowRetry(body, 8_000, rules);
+  assert.equal(result.compacted, false);
+  assert.equal(result.prompt, body + rules);
+  const large = "ordinary task evidence ".repeat(10_000);
+  assert.deepEqual(compactPromptForContextWindowRetry(large, 8_000, ""), compactPromptForContextWindowRetry(large, 8_000));
+});
+
+test("protected-rule overflow fails explicitly without exposing rule content or retry classification", () => {
+  const protectedRules = "sensitive-user-task-content".repeat(1_000);
+  assert.throws(() => compactPromptForContextWindowRetry("history".repeat(10_000), 1_024, protectedRules), (error: unknown) => {
+    assert.ok(error instanceof TaskContractPromptBudgetExceededError);
+    assert.equal(error.code, "task_contract_prompt_budget_exceeded");
+    assert.ok(error.requiredTokens > error.targetTokens);
+    assert.equal(error.message.includes("sensitive-user-task-content"), false);
+    assert.equal(isContextWindowExceededMessage(error.message), false);
+    return true;
+  });
+});
+
+test("protected-rule admission boundary budgets both marker and retained context", () => {
+  const body = "evidence".repeat(10_000);
+  // Locate the exact boundary without relying on marker formatting constants.
+  let largestAccepted = 0;
+  for (let low = 0, high = 4_096; low <= high;) {
+    const size = Math.floor((low + high) / 2);
+    try {
+      const result = compactPromptForContextWindowRetry(body, 1_024, "r".repeat(size));
+      assert.ok(result.estimatedTokensAfter <= 1_024);
+      largestAccepted = size;
+      low = size + 1;
+    } catch (error) {
+      assert.ok(error instanceof TaskContractPromptBudgetExceededError);
+      high = size - 1;
+    }
+  }
+  assert.ok(largestAccepted > 0 && largestAccepted < 4_096);
+  assert.ok(compactPromptForContextWindowRetry(body, 1_024, "r".repeat(largestAccepted)).prompt.endsWith("r".repeat(largestAccepted)));
+  assert.throws(() => compactPromptForContextWindowRetry(body, 1_024, "r".repeat(largestAccepted + 1)), TaskContractPromptBudgetExceededError);
 });

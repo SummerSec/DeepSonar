@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -104,3 +104,7 @@ RPC 按帧有界扫描，默认 8MiB 硬上限（可配置至 64MiB）；超过 
 ## Plan 单步决策（#775 B 首片）
 
 既有 Hub Intent 可携带 plan_basis，绑定当前 Plan/任务输入/证据/事件 revision；graph_query plan_gap 保存有界已读证明。Canvas 最多一次补证，完成需要全部判据当前正向操作员授权；自动完成亦受该门禁。延迟终态事件保留依据，最终事务重验。假执行回归与真实质量验收限制见 [Plan 范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)。
+
+## 目标约束传播与候选准入（#767）
+
+成果规则随 Job 冻结并传播至各角色，输入压缩保留约束段。先持久观察 Fact/Artifact，再对 Finding 提案执行结构化候选检查；通过后继续既有技术 Verify，准入不替代独立资格判断。规则未知允许补证观察但不接纳 Finding；拒绝不会自动保存尚未提交的观察。详见[成果准入边界](../TASK_OUTCOME_ADMISSION.md)。

@@ -168,3 +168,40 @@ Scheduler 在沙箱创建前再次核对当前项目网络策略、引用凭据�
 | 429 | 区分临时限流与额度耗尽，遵守等待提示和预算 |
 | 未提交完成回执 | 可能已完成或部分完成，先对账，不只补一句完成标准 |
 | 401/403/scope | 区分过期凭据、错误身份、范围不匹配和禁止；补齐条件须真实授权，不自动提权 |
+
+## 9. 显式成果模式与候选边界（#767 首片）
+
+先区分本任务要交付什么。只有用户目标是按指定项目规则形成可提交成果时才选择 bounty_submission，不从“漏洞”、项目名或严重度猜测模式；工程/一般审计可使用 task_defined。该模式不提供任何新增授权。详见[成果准入契约与限制](../../../docs/TASK_OUTCOME_ADMISSION.md)。
+
+以下为可选 task_contract.outcome 子对象示例，不是完整创建请求：
+
+```json
+{"mode":"task_defined"}
+```
+
+```json
+{"mode":"bounty_submission","rules_status":"unknown"}
+```
+
+unknown 允许创建补证/观察任务，但不能提交 Finding。规则齐备后使用 supplied 与版本化 rule_snapshot；由用户授权选择材料来源，记录 source 的 operator_supplied/reference/sha256，以及 program_id/version、targets 的 id/type/reference/baseline、rules 的 id/kind/description。不得把操作者提供的 hash 说成已核验官方规则。不要通过临时删除成果模式绕过阻塞；规则更新应重新创建/冻结明确的新任务上下文，不能改写既有快照。
+
+执行者先 emit_fact 留存观察与 Artifact/Evidence，再通过现有 Job Control API 的 emit_finding 提交 outcome_claim；管理 CLI 不代替 Agent 伪造该控制事件。其结构如下（尖括号必须替换为真实上下文，不可直接执行）：
+
+```text
+outcome_claim:
+  schema_version: 1
+  rule_snapshot_sha256: <本 Job 服务端给出的规范化规则快照 sha256，不是 source.sha256>
+  target_id: <快照中的目标 ID>
+  baseline: <该目标的冻结基线>
+  attack_prerequisites: [<有依据的攻击前提>]
+  impact_summary: <影响及其与任务目标的关系>
+  evidence_refs: [<同项目/Canvas 且关联 Artifact 的 Fact UUID>]
+  rule_assessments:
+    - rule_id: <逐条覆盖快照规则>
+      result: <matches | does_not_match | unknown>
+      evidence_refs: [<支持该声明的 Fact UUID>]
+```
+
+requirement 的 does_not_match 或 exclusion 的 matches 不能产出目标 Finding；unknown/缺项返回补证阻塞。所有声明与引用通过只得到 admitted_for_verification 候选，仍进入既有技术 Verify，submission_eligibility 保持 not_assessed。Fact 存在不证明它支持规则结论；独立资格评审与 #775 目标报告收敛是后续片。无关弱点留作过程观察，不以候选数或 confirmed 数宣称成果达标。
+
+按用户要求，所有 issue 均不要求真实模型试验，效果未验证须保留说明；不能把免除试验解释为独立资格与整体完成链已实现。

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TaskOutcomeSpec, normalizeTaskOutcomeSpec } from "./task-outcome.js";
 
 export const TASK_CONTRACT_ACTIONS = ["read", "workspace_write", "write", "egress"] as const;
 export const TASK_CONTRACT_TEMPLATE_IDS = ["engineering", "whitebox", "blackbox", "graybox"] as const;
@@ -12,6 +13,7 @@ export const TaskContract = z.object({
   template_id: z.enum(TASK_CONTRACT_TEMPLATE_IDS),
   template_version: z.literal(1),
   objective: text.optional(),
+  outcome: TaskOutcomeSpec.optional(),
   targets: texts,
   baseline: text.optional(),
   scope: texts,
@@ -91,6 +93,7 @@ export function normalizeTaskContract(input: unknown): TaskContract {
   const value = TaskContract.parse(input);
   return {
     ...value,
+    ...(value.outcome ? { outcome: normalizeTaskOutcomeSpec(value.outcome) } : {}),
     targets: uniqueSorted(value.targets),
     scope: uniqueSorted(value.scope),
     exclusions: uniqueSorted(value.exclusions),
@@ -114,6 +117,9 @@ const feedback = (code: string, path: string, message: string, suggestion: strin
 export function taskContractWarnings(contract?: TaskContract | null): TaskContractFeedback[] {
   if (!contract) return [feedback("task_contract_not_assessed", "task_contract", "未提供任务契约，未评估文本完整性或执行前置条件。", "可使用场景模板补充结构化契约；原始需求仍会保留。")];
   const result: TaskContractFeedback[] = [];
+  if (contract.outcome?.mode === "bounty_submission" && contract.outcome.rules_status === "unknown") {
+    result.push(feedback("task_outcome_rules_unknown", "task_contract.outcome.rules_status", "成果规则未知：可先观察和补证，但不能提交 Finding 或认定成果达标。", "由授权创建者补充可追溯规则后重新下发；已冻结 Job 不自动采用新规则。"));
+  }
   for (const field of TASK_CONTRACT_TEMPLATES[contract.template_id].required_fields) {
     const value = contract[field];
     if (value === undefined || (Array.isArray(value) && value.length === 0)) {

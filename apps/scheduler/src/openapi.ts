@@ -954,7 +954,7 @@ const OPS: Op[] = [
         content: { type: "string" },
         task_contract: {
           ...z.toJSONSchema(TaskContract, { target: "openapi-3.0", io: "input" }),
-          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。模板建议不自动成为验收承诺；状态不接受 verified。权限仅能收窄，凭据仅引用；预算为规划字段。未知目标身份/写授权/必要前置条件保持未核验并阻塞。",
+          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。outcome 显式选择 task_defined 或 bounty_submission；赏金规则 unknown 可下发观察/补证，但禁止 Finding 准入。supplied 规则来源为 operator_supplied，不认证官方真实性；Job 冻结规则版本和内容，候选须引用同任务 Fact 与精确快照摘要。准入不等于独立提交资格或任务成功。模板建议不自动成为验收承诺；权限仅能收窄，凭据仅引用，预算为规划字段。",
         },
         allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
         kind: {

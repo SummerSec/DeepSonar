@@ -1,4 +1,4 @@
-import { normalizeTaskContract, TASK_CONTRACT_TEMPLATES } from "@deepsonar/shared-types";
+import { normalizeTaskContract, TASK_CONTRACT_TEMPLATES, type TaskContract, type TaskOutcomeSpec } from "@deepsonar/shared-types";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 
 export function TaskContractFeedbackView({ feedback }: { feedback: TaskContractFeedback }) {
@@ -10,6 +10,16 @@ export function TaskContractFeedbackView({ feedback }: { feedback: TaskContractF
       <code>{item.path}</code>：{item.message} {item.suggestion}
     </li>)}</ul>
   </div>;
+}
+
+/** Choosing a mode declares intent, never supplies or verifies program rules. */
+export function taskContractWithOutcomeMode(contract: TaskContract, mode?: TaskOutcomeSpec["mode"]): string {
+  const { outcome, ...rest } = contract;
+  return JSON.stringify(normalizeTaskContract({
+    ...rest,
+    ...(mode === "task_defined" ? { outcome: { mode } } : mode === "bounty_submission"
+      ? { outcome: outcome?.mode === mode ? outcome : { mode, rules_status: "unknown" } } : {}),
+  }), null, 2);
 }
 
 /** One optional editor shared by full task creation and quick start. */
@@ -27,6 +37,18 @@ export function TaskContractEditor({ value, onChange, disabled = false }: {
       {Object.entries(TASK_CONTRACT_TEMPLATES).map(([id, template]) => <button key={id} type="button" disabled={disabled || Boolean(value.trim())} className="rounded border border-white/10 px-3 py-1 text-xs text-zinc-300 disabled:opacity-50" onClick={() => onChange(JSON.stringify(normalizeTaskContract({ schema_version: 1, template_id: id, template_version: template.version }), null, 2))}>{template.label}</button>)}
       <button type="button" disabled={disabled || !value} className="text-xs text-zinc-400" onClick={() => onChange("")}>清空契约</button>
     </div>
+    {parsed.contract && <fieldset className="mb-3 border-0 p-0">
+      <legend className="text-xs text-zinc-300">成果模式（显式选择，不从任务关键词推断）</legend>
+      <div className="my-2 flex flex-wrap gap-2" role="radiogroup" aria-label="成果模式">
+        {([
+          { mode: undefined, label: "未指定" },
+          { mode: "task_defined", label: "任务自定" },
+          { mode: "bounty_submission", label: "赏金提交" },
+        ] as const).map(({ mode, label }) => <button key={mode ?? "unspecified"} type="button" role="radio" aria-checked={parsed.contract?.outcome?.mode === mode} disabled={disabled} className="rounded border border-white/10 px-3 py-1 text-xs text-zinc-300 aria-checked:border-acc-400 disabled:opacity-50" onClick={() => onChange(taskContractWithOutcomeMode(parsed.contract!, mode))}>{label}</button>)}
+      </div>
+      <p className="text-xs leading-6 text-zinc-400">普通工程任务可选“任务自定”，不套用赏金规则。首次选择赏金模式时规则状态为 unknown，不自动填入项目规则。切换至任务自定或未指定会移除当前成果规则材料，请先保留需要的内容。赏金模式可在 JSON 的 outcome.rule_snapshot 中补充真实规则来源、版本、目标基线及要求；核对后将 rules_status 改为 supplied，仍只是创建者提供的材料。</p>
+      {parsed.contract.outcome?.mode === "bounty_submission" && parsed.contract.outcome.rules_status === "unknown" && <p className="mt-1 text-xs leading-6 text-amber-200" role="status">成果规则未知：当前仅可观察和补证，不能计为 Finding 或声称已满足提交条件。</p>}
+    </fieldset>}
     {parsed.contract && <div className="mb-3 text-xs leading-6 text-zinc-400">
       <p>验收建议（请按实际任务填写，不会自动加入契约）：</p>
       <ul className="list-disc pl-5">{TASK_CONTRACT_TEMPLATES[parsed.contract.template_id].acceptance_suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>

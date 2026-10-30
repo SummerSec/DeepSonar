@@ -1,3 +1,4 @@
+import { taskContractWithOutcomeMode } from "./components/TaskContractEditor";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeTaskContract } from "@deepsonar/shared-types";
@@ -37,4 +38,37 @@ test("successful and rejected create responses retain field feedback", () => {
   const error = new ApiRequestError({ method: "POST", path: "/projects/p/tasks", status: 409, taskContractFeedback: feedback });
   assert.deepEqual(taskFeedbackItems(error.taskContractFeedback), [blocker]);
   assert.deepEqual(taskFeedbackItems({ task_contract_warnings: [blocker] }), [blocker]);
+});
+
+
+test("explicit bounty mode stays unknown across editor and API payload without invented rules", () => {
+  const base = normalizeTaskContract({ schema_version: 1, template_id: "engineering", template_version: 1 });
+  assert.equal(base.outcome, undefined);
+  const draft = taskContractWithOutcomeMode(base, "bounty_submission");
+  const parsed = parseTaskContractDraft(draft);
+  assert.equal(parsed.error, undefined);
+  assert.deepEqual(parsed.contract?.outcome, { mode: "bounty_submission", rules_status: "unknown" });
+  const payload = quickStartTaskPayload({ title: "观察目标", goal: "规则待补充", networkOverride: "inherit", task_contract: parsed.contract });
+  assert.deepEqual(payload.task_contract?.outcome, { mode: "bounty_submission", rules_status: "unknown" });
+  assert.ok(payload.task_contract?.outcome?.mode === "bounty_submission");
+  assert.equal(payload.task_contract.outcome.rule_snapshot, undefined);
+  assert.equal(parseTaskContractDraft(taskContractWithOutcomeMode(parsed.contract!, undefined)).contract?.outcome, undefined);
+});
+
+test("supplied outcome snapshot stays intact across mode selection and Web API transport", () => {
+  const snapshot = {
+    schema_version: 1, program_id: "fixture-program", version: "2026-10",
+    source: { provenance: "operator_supplied", reference: "provided-rules.txt", sha256: `sha256:${"a".repeat(64)}` },
+    targets: [{ id: "target", type: "api", reference: "http://127.0.0.1:8080", baseline: "fixture-v1" }],
+    rules: [{ id: "impact", kind: "requirement", description: "提供影响证据" }],
+  };
+  const base = normalizeTaskContract({ schema_version: 1, template_id: "blackbox", template_version: 1, outcome: { mode: "bounty_submission", rules_status: "supplied", rule_snapshot: snapshot } });
+  const parsed = parseTaskContractDraft(taskContractWithOutcomeMode(base, "bounty_submission"));
+  assert.equal(parsed.error, undefined);
+  assert.ok(parsed.contract?.outcome?.mode === "bounty_submission");
+  assert.deepEqual(parsed.contract.outcome.rule_snapshot, snapshot);
+  assert.equal(parsed.contract.outcome.rules_status, "supplied");
+  assert.deepEqual(parseTaskContractDraft(taskContractWithOutcomeMode(base, "task_defined")).contract?.outcome, { mode: "task_defined" });
+  const payload = quickStartTaskPayload({ title: "核对", goal: "保留真实材料", networkOverride: "inherit", task_contract: parsed.contract });
+  assert.deepEqual(payload.task_contract, parsed.contract);
 });
