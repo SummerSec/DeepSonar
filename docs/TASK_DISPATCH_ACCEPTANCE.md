@@ -88,3 +88,9 @@
 ### 可信权限适配器仍需的输入
 
 下一片若推进真实身份/写授权正向核验，需明确目标系统、租户/资源边界、权威只读身份与动作权限接口、权限撤销/过期规则，以及对应脱敏 fixture。不能用任务声明、公开元数据或凭据存在替代这些权威事实；在输入与适配器未落实前保持未核验并阻塞依赖步骤，不声称原 issue 的获授权完整动态链已验收。
+
+## 证据追踪修复（基于 #803）
+
+管理 Finding evidence-trace/详情诊断精确绑定 Artifact source_event 与来源 Attempt，在当前来源约束下使用宿主实际字节检查、exact URI 和共享 8MiB 预算，不用 manifest 声明冒充 observed。execution_assurance=not_attested；runtime_claim_structured 与 retained_bytes_verified 分离，runtime_proof=false，replay.kind=evidence_integrity_check。该修复不执行命令，不改 Verify/Plan/eligibility/历史。真正独立复现与攻击链未完成；Verify runtimeProof 仍 Agent 声明，knownness helper 未运行时接入，不是 novel 权威。前片通过数不作为本片证据，验收范围见[专题](EVIDENCE_TRACE.md)。
+
+证据追踪本片实际证据：真实 route/SQL 11/11（已含于 `ci:integration:verify-eligibility` 12/12），verify 单元 157 + authz 78 = 235，完整 build 通过；helper 真实 FS 3 项已计入 157。覆盖来源/范围/角色、共享预算、超量/非法引用、鉴权和历史不变，见[测试](../apps/scheduler/src/fact-evidence-trace.integration.test.ts)。最终 Scheduler TypeScript、docs 10/10 与 file-size 10/10 已通过；helper 已实测拒绝 Job 内外符号链接，仍为 3 项，不重复增加总数。下一关键能力是宿主命令 receipt 与可复核攻击链，以及有来源范围/时间/适用性的 knownness 查验；无这些输入不能推出 novel/eligible。未改 Verify 判决 consumer，不把诊断完整性当独立复现。

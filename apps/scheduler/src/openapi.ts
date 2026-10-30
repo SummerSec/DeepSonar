@@ -1520,7 +1520,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings/{id}/evidence-trace",
     summary: "Finding Fact↔Evidence 只读溯源（确认依据可复查）",
-    description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；content_integrity_digest 与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
+    description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；source_event 绑定真实当前成功 Attempt，精确 URI 以共享 8 MiB 预算重读保留字节，不以 manifest 摘要或后缀匹配冒充观测。facts.retained_bytes_verified 仅表示字节核验；runtime_claim_structured 表示 Agent 声明形状，execution_assurance 固定 not_attested，runtime_proof=false。replay.kind=evidence_integrity_check，不运行命令，也不改写 Verify、Plan 或提交资格。content_integrity_digest 为历史冻结摘要，与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
     scope: "findings:read",
     tags: ["Findings"],
   },
