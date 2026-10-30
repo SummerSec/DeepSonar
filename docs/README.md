@@ -1,7 +1,5 @@
 # DeepSonar 文档索引
 
-> **#775 B 设计（未实现）**：[通过现有 Intent 完成一次有界补证](PLAN_BOUNDED_INTENT_DESIGN.md) 固定目标/证据版本、原子派发、单步预算及离线验收；不代表运行时能力或模型效果。
-
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
@@ -154,3 +152,7 @@
 4. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag 之前，按 [`../AGENTS.md`](../AGENTS.md)「发布前的文档保鲜」清单核一遍（版本字面量、已删机制残留、as-built 与代码一致性、本索引状态行与日期、命令与链接），并同步本文件顶部的「当前同步状态」。其中版本字面量、命令、链接与已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检阻断（`as-built 与代码相反` 仍需人工）；漂移修在同一个 release 分支，不留给下一个版本；展开见 [工程规范](architecture/11-engineering-specs.md)与[发布流程](RELEASE_RUNTIME_IMAGES.md)。
 
 #770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；跨任务关系仍待后续交付，不能由查询上线推定已完成。
+
+## #775 设计目标与实现差额
+
+[有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久成功回执、真实模型收益与 C 尚未验收。A/B 实现入口由 #791 的索引说明维护，本设计入口补充验收差额，不替代其实现说明，也不表示相关 PR 已合入 main。
