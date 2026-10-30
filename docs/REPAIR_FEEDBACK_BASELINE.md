@@ -1,6 +1,6 @@
 # RepairFeedback 冻结基线（#776 A）
 
-> 状态：A 阶段合成契约回放；B 持久同会话闭环、C 引用/完成门扩展未交付。
+> 状态：A 阶段历史合成契约基线；后续 B/C 已实现，当前验收见独立矩阵。
 > 同步日期：2026-10-29
 
 核对 main `9cb1524a`（包含 #766）；#768 尚未合并，本切片不修改运行器、framing、DSH 生命周期或 schema。对应 FR-CTRL-001/002/005、风险 D-03。规范保持不变，缺失字段不是被豁免的要求。
@@ -31,10 +31,12 @@
 
 单元回放接入 `pnpm ci:unit:capability-pack`，由 `.github/workflows/ci.yml` gate 调用。另在已有 [Platform API integration](../apps/scheduler/src/domains/platform-api/platform-api.integration.test.ts) 中使用全部 8 个样本，通过真实 HTTP 路由、Job token 与隔离 PostgreSQL 核对 rawInput/observed_shape 接线；handler 仍为合成拒绝，不能据此声称执行器或同会话修复已验收。现有字节、限流和 hostile-details 测试继续保留。本测试不统计运行器恢复率：没有真实修复轮次、token 成本或人工介入的有效分母，全部标待评测；不能把 8 个拒绝回放算成 8 次修复成功。
 
-## B/C 进入条件
+## B/C 历史进入条件
 
 B 只选 mark_job_done，复用 Control/event/Attempt，补持久拒绝与 revision/key/预算关联和可查询 receipt，再接同 Session 输入；注入不等于模型已处理。重复、冲突、旧 revision、并发、接受后丢响应、重启、取消、超时、CLI 退出、迟到输入及未知效果均要有真实运行器合成测试。修正次数、token、wall time、event 分别计数且不超过 Job 总预算；预算耗尽使用既有失败/人工路径，不新增 Job 状态。
 
 Claude/Pi/DSH 按 adapter 的实际续接能力验证；DSH 跨进程持久 resume 不支持时停止并保存诊断。保留 #766 可信父子谱系、父 idle 有子任务不结算和子 finish 后等待父处理；运行器变更前核对 #768 最新修复，不能回退控制语义或将 evidence 保存失败变成功。
 
 C 才扩展引用与完成门；#767 的失败后重新下发不算同会话修复。真实模型理解反馈的质量须独立受控评测，本切片不调用模型、不操作生产、不自动重跑 Job。
+
+以上缺口与进入条件冻结于 A 阶段，不代表当前实现仍缺失；最新逐项状态及用户效果豁免见 [验收矩阵](REPAIR_FEEDBACK_ACCEPTANCE.md)。
