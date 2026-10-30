@@ -205,7 +205,8 @@ async function checkBoundedQueueRecovery(
     const [stillPending] = await db`SELECT * FROM project_finding_feature_work WHERE project_id=${currentPending}`;
     assert.deepEqual(stillPending, before.find((row) => row.project_id === currentPending));
   } finally {
-    await db`DELETE FROM projects WHERE id = ANY(${projects}::uuid[])`;
+    const { deleteProjectsLeavingAuditShells } = await import("../../test-project-teardown.js");
+    await deleteProjectsLeavingAuditShells(db, projects);
     await db`UPDATE project_finding_feature_scan SET cursor_id = NULL WHERE id='global'`;
   }
 }
