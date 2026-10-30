@@ -15,7 +15,7 @@ interface LexicalCursor {
   v: 1; kind: typeof CURSOR_KIND; project: string; subject: string; digest: string;
   after: string; rule: string; normalization: string;
 }
-interface DeclarationRow {
+export interface DeclarationRow {
   id: string; project_id: string; job_id: string; canvas_id: string | null;
   title: string; location: string | null; summary: string | null; profile: string; category: string | null;
   updated_at: string; declaration_stamp: string; text_truncated: boolean;
@@ -67,7 +67,7 @@ function declarationColumns(db: TransactionSql) {
     encode(sha256(convert_to(jsonb_build_array(f.title, f.location, f.summary, f.profile, f.category)::text, 'UTF8')), 'hex') AS declaration_stamp,
     char_length(f.title) + coalesce(char_length(f.location), 0) + coalesce(char_length(f.summary), 0) > ${TEXT_LIMIT} AS text_truncated`;
 }
-function toFeatures(row: DeclarationRow) {
+export function lexicalFeatures(row: DeclarationRow) {
   const source: FindingFeatureSource = {
     id: row.id, project_id: row.project_id, job_id: row.job_id, canvas_id: row.canvas_id!,
     artifact_id: null, artifact_revision: null, title: row.title, location: row.location, summary: row.summary,
@@ -96,23 +96,35 @@ export function lexicalWindowQuery(db: TransactionSql, projectId: string, after:
   ORDER BY f.id`;
 }
 
+export async function loadLexicalSubject(tx: TransactionSql, id: string, authorizedProjectId?: string | null): Promise<DeclarationRow | null> {
+    const [subject] = await tx`SELECT ${declarationColumns(tx)}
+      FROM findings f JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
+      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
+      WHERE f.id = ${id}::uuid
+        AND (${authorizedProjectId ?? null}::uuid IS NULL OR f.project_id = ${authorizedProjectId ?? null}::uuid)`;
+  return subject ? subject as unknown as DeclarationRow : null;
+}
+
 /** Management authorization must precede this call; the optional project fence
  * repeats a scoped Actor restriction inside the same read-only snapshot. */
 export async function searchFindingLexical(
   id: string, cursorValue: unknown, db = sql, authorizedProjectId?: string | null,
 ): Promise<LexicalSearchResult | null> {
   if (!isUuid(id)) throw new QueryParameterError('id', 'invalid finding id');
-  const cursor = parseLexicalCursor(cursorValue);
+  parseLexicalCursor(cursorValue);
   return db.begin('isolation level repeatable read read only', async (tx) => {
     await tx`SET LOCAL statement_timeout = '3000ms'`;
-    const [subject] = await tx`SELECT ${declarationColumns(tx)}
-      FROM findings f JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
-      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
-      WHERE f.id = ${id}::uuid
-        AND (${authorizedProjectId ?? null}::uuid IS NULL OR f.project_id = ${authorizedProjectId ?? null}::uuid)`;
+    return searchFindingLexicalSnapshot(tx, id, cursorValue, authorizedProjectId);
+  });
+}
+
+/** Internal reuse inside the candidate worker transaction; no independent snapshot. */
+export async function searchFindingLexicalSnapshot(tx: TransactionSql, id: string, cursorValue: unknown, authorizedProjectId?: string | null): Promise<LexicalSearchResult | null> {
+  const cursor = parseLexicalCursor(cursorValue);
+    const subject = await loadLexicalSubject(tx, id, authorizedProjectId);
     if (!subject) return null;
     const subjectRow = subject as unknown as DeclarationRow;
-    const subjectFeatures = toFeatures(subjectRow);
+    const subjectFeatures = lexicalFeatures(subjectRow);
     if (cursor && (cursor.project.toLowerCase() !== subjectRow.project_id || cursor.subject.toLowerCase() !== subjectRow.id)) {
       throw new QueryParameterError('cursor', 'lexical search cursor scope mismatch');
     }
@@ -122,7 +134,7 @@ export async function searchFindingLexical(
     const window = allRows.slice(0, LEXICAL_SCAN_LIMIT);
     const eligible = window.filter((row) => row.valid_chain && row.id !== subjectRow.id && row.job_id !== subjectRow.job_id)
       .map((row) => row as unknown as DeclarationRow);
-    const features = eligible.map(toFeatures);
+    const features = eligible.map(lexicalFeatures);
     const ranked = rankLexicalCandidates(subjectFeatures, features, { limit: LEXICAL_RESULT_LIMIT, scanBudget: LEXICAL_SCAN_LIMIT });
     const items = ranked.candidates.map((candidate) => {
       const index = eligible.findIndex((row) => row.id === candidate.finding_id);
@@ -148,5 +160,4 @@ export async function searchFindingLexical(
         after: String(last.id), rule: RELATION_RULE_VERSION, normalization: NORMALIZATION_VERSION }) : null,
       items, identity_status: 'insufficient_information', query_plane: 'current',
     };
-  });
 }

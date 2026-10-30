@@ -1,3 +1,4 @@
+import { readCandidatePage } from "../project-finding-research/candidate-read.js";
 import { searchFindingLexical } from "../project-finding-research/lexical-search.js";
 import { readFeatureStatus } from "../project-finding-research/store.js";
 import type { FastifyInstance } from "fastify";
@@ -533,6 +534,26 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       role: result.role,
       resumed_job_id: result.resumed_job_id,
     });
+  });
+
+  app.get("/findings/:id/candidates", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as Record<string, unknown>;
+    if (Object.keys(query).some((key) => key !== "cursor")) throw new QueryParameterError("query");
+    reply.header("Cache-Control", "no-store");
+    try {
+      const result = await readCandidatePage(id, query.cursor, undefined, req.actor?.projectId);
+      if (!result) return reply.code(404).send({ error: "finding not found" });
+      return result;
+    } catch (error) {
+      if (error instanceof CursorError) {
+        return reply.code(cursorErrorHttpStatus(error.code)).send({ error: "candidate inputs changed; restart query", error_code: error.code });
+      }
+      if ((error as { code?: string }).code === "57014") {
+        return reply.code(503).send({ error: "candidate query exceeded statement budget", error_code: "CANDIDATE_QUERY_BUDGET_EXCEEDED" });
+      }
+      throw error;
+    }
   });
 
   app.get("/findings/:id/lexical-search", async (req, reply) => {

@@ -1713,6 +1713,22 @@ export class TaskReportUnavailableError extends Error {
   }
 }
 
+export interface FindingCandidatePage {
+  subject_id: string; project_id: string; subject_digest: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "stale";
+  rebuilding: boolean; active_generation: string | null; rule_version: string;
+  processed_at: string | null; error_code: string | null; attempts: number;
+  examined: number; scan_limit: 25; limit: 25; next_cursor: string | null;
+  window_limited: true; stale_results_omitted: boolean;
+  source_window: { examined: number | null; scan_limit: 128; limit: 25; rank_truncated: boolean | null };
+  identity_status: "insufficient_information"; query_plane: "durable_candidates";
+  items: Array<{
+    finding_id: string; job_id: string; canvas_id: string; title: string; lexical_digest: string;
+    kind: "similar" | "insufficient_information"; matched_fields: string[]; score: number;
+    processed_at: string; text_truncated: boolean;
+  }>;
+}
+
 export interface FindingLexicalSearchResult {
   subject_id: string;
   project_id: string;
@@ -2479,6 +2495,11 @@ export const api = {
   projectFindingsSummary: (projectId: string, opts?: Omit<FindingQueryFilters, "project_id">) =>
     get<ProjectFindingsSummary>(`/projects/${projectId}/findings/summary${qs({ ...opts })}`),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
+  findingCandidates: async (id: string, cursor?: string | null, signal?: AbortSignal): Promise<FindingCandidatePage> => {
+    const response = await fetch(`/api/findings/${encodeURIComponent(id)}/candidates${qs({ cursor })}`, { headers: authHeaders(), signal });
+    if (!response.ok) throw Object.assign(new Error("候选读取失败"), { status: response.status });
+    return response.json() as Promise<FindingCandidatePage>;
+  },
   findingLexicalSearch: async (id: string, cursor?: string | null, signal?: AbortSignal): Promise<FindingLexicalSearchResult> => {
     const response = await fetch(`/api/findings/${encodeURIComponent(id)}/lexical-search${qs({ cursor })}`, { headers: authHeaders(), signal });
     if (!response.ok) throw Object.assign(new Error("词法检索读取失败"), { status: response.status });

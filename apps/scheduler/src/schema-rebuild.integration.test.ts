@@ -286,3 +286,10 @@ if (testDatabaseUrl) {
     await runFeatureSchemaRebuildFixture(testDatabaseUrl);
   });
 }
+
+if (testDatabaseUrl) {
+  test("#770 durable candidates upgrade exact v64 without changing source or feature generations", async () => {
+    const { runCandidateSchemaRebuildFixture } = await import("./schema-rebuild-candidate-fixture.js");
+    await runCandidateSchemaRebuildFixture(testDatabaseUrl);
+  });
+}

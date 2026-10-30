@@ -109,3 +109,6 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 ## 项目 Finding 特征（#770 C）
 
 schema64 的 project_finding_feature_scan/work/features 是可重建派生数据：持久游标、generation、重试和输入摘要不替代 Finding/Artifact 真相。权威资产/版本/根因字段保持未知，读时核对当前来源与规则；详情状态不授予 Evidence 读取。细节、质量门与验证见[项目 Finding 特征研究](../PROJECT_FINDING_RESEARCH.md)。
+
+
+schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canonical 双端弱候选及完整来源摘要。候选与来源进度为可重建派生数据；读前核对当前双端来源，旧代不覆盖新代。真实 v64→65 备份/恢复夹具与运维清理边界见[专题](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。

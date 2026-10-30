@@ -1510,6 +1510,15 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/findings/{id}/candidates",
+    summary: "当前有效的持久词法候选",
+    description: "只读活动代的规范双端词法候选；每次复核当前来源摘要与权限，隐藏过期端点。25条关系窗口加1条lookahead，失效过滤后不补扫；next_cursor推进原关系窗口。游标绑定主体与活动代/规则，变化409要求刷新。明确pending/running/succeeded/failed/stale与重建中；没有同问题/同根因、传递分组或自动处置。内部证据元信息摘要只用于失效，不返回证据内容或证据摘要；声明哈希仍读取原文，行数预算不是严格字节上限。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: { cursor: { type: "string", maxLength: 2048, description: "前页游标；省略从当前活动代首窗口读取" } },
+  },
+  {
+    method: "get",
     path: "/findings/{id}/lexical-search",
     summary: "跨任务 Finding 有界词法检索",
     description: "仅对当前项目按 UUID seek 的128条来源窗口排名，另读1条判断后续窗口，返回最多25项；不是全项目top-K或持久关系。相似仅为声明文本线索，身份/版本/根因仍未知；不读取Evidence或共享资产。每次请求重新鉴权。cursor绑定主体声明摘要与规则，主体变化返回409 CURSOR_GAP，需刷新。rank_truncated标记窗口内结果截断；无结果不表示明确不同。",

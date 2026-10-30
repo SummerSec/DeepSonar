@@ -47,7 +47,7 @@ test('actual knowledge schema 61 upgrades to integrated maintenance schema witho
     try {plan=await runUpgradeSchema(db as unknown as MigrationConnection,{action:'plan',source_database:sourceName,candidate_database:candidateName,source_schema_sha256:sourceHash});}finally{db.release();}
     assert.equal(plan.ok,true,JSON.stringify(plan.plan.blocking_errors));
     assert.equal(plan.plan.source_schema_version,61);
-    assert.equal(SCHEMA_VERSION,64);
+    assert.equal(SCHEMA_VERSION,65);
     await source.end();source=undefined;
     const dump=execFileSync('docker',['exec',container,'pg_dump','-U',databaseUser,'-d',sourceName,'--format=custom','--no-owner','--no-acl'],{maxBuffer:64*1024*1024,timeout:30000});
     assert.equal(dump.subarray(0,5).toString(),'PGDMP');
@@ -73,7 +73,7 @@ test('actual knowledge schema 61 upgrades to integrated maintenance schema witho
       assert.equal(result.ok,true,JSON.stringify(result.plan.blocking_errors));
       await runMigrations(reserved as unknown as MigrationConnection);
     }finally{reserved.release();}
-    assert.equal((await candidate`SELECT version FROM schema_meta WHERE id='global'`)[0].version,64);
+    assert.equal((await candidate`SELECT version FROM schema_meta WHERE id='global'`)[0].version,65);
     assert.deepEqual((await candidate`SELECT config_json FROM projects WHERE id=${project}`)[0].config_json,preference);
     assert.equal((await candidate`SELECT active_version_id FROM project_knowledge_items WHERE id=${item}`)[0].active_version_id,version);
     assert.equal((await candidate`SELECT content_sha256 FROM project_knowledge_versions WHERE id=${version}`)[0].content_sha256,digest);

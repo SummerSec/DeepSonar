@@ -87,3 +87,6 @@ Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/req
 ## Finding 词法检索（#770 D 检索首片）
 
 `GET /findings/:id/lexical-search` 使用既有 `findings:read` 与项目鉴权，当前声明文本按128来源窗口seek后排名最多25项，返回游标、窗口/排名截断、声明摘要与规则版本。主体变更使游标409失效；无缓存关系、Evidence内容或资产权限扩张。详情只展示待核验词法候选，不作全项目top-K或同问题判定。字段、权限矩阵、来源跳转及完整D缺口见[专题](../PROJECT_FINDING_RESEARCH.md#当前声明文本检索770-d-检索首片)。
+
+
+`GET /findings/:id/candidates` 沿用 findings:read/项目权限，以25条边窗口读取当前有效持久词法候选。活动代/主体输入改变使游标409失效；失效记录不补扫，可能返回有下一页的空窗口。Web 区分待计算、失败、过期、成功零项与重建。无关系写 API、强关系或处置传播，见[持久候选协议](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。

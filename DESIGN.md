@@ -166,7 +166,7 @@ Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Schedule
 
 ## 6. Finding、Verify、Research 和报告
 
-#770 D 检索首片在既有详情内提供当前声明文本的有界跨 Job 窗口检索，展示来源与匹配依据；不持久化关系、不确认同问题，权限逐请求复查。
+#770 D 检索首片在既有详情内提供当前声明文本的有界跨 Job 窗口检索，展示来源与匹配依据；同步检索不保存关系。另有按代构建的持久词法候选账本，读取复查双端来源与权限，失效即隐藏；不确认同问题或传播处置。
 
 #770 C 在 Scheduler 内维护可重建特征与持久扫描检查点，详情只显示当前来源匹配的状态/字段覆盖。权威目标/版本字段未知，D 关系质量门未验收；不发布同问题建议，见[项目 Finding 特征研究](docs/PROJECT_FINDING_RESEARCH.md)。
 
@@ -341,7 +341,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v64（当前集成基线，非发布版本；合入并行 schema 变更后重新核对） |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v65（当前集成基线，非发布版本；合入并行 schema 变更后重新核对） |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：
