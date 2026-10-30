@@ -30,6 +30,7 @@ let scenario: () => Promise<void>;
 let preflight: (type: string) => Promise<void> = async () => {};
 let events: EventEnvelopeInput[] = [];
 let runnerCalls = 0;
+let omitRunnerDispose = false;
 let gate: (() => boolean) | undefined;
 const fakeSql = Object.assign(async (strings: TemplateStringsArray) => {
   const query = strings.join("?").replace(/\s+/g, " ").trim();
@@ -98,7 +99,10 @@ mock.module("@deepsonar/runtime-sandbox", { namedExports: { ...runtime,
       sendMessage: async () => {}, writeWorkspaceFile: async () => {},
       readWorkspaceFile: async () => { throw new Error("No workspace reads in terminal race test"); },
     } as Parameters<NonNullable<typeof options.onRunReady>>[0]);
-    try { await scenario(); } finally { await dispose?.(); }
+    try { await scenario(); } finally {
+      if (omitRunnerDispose) assert.ok(listRuntimeHandlers(jobId).length > 0, "handler remains live before executor fallback cleanup");
+      else await dispose?.();
+    }
     return { exitCode: 0, session: null };
   },
 } });
@@ -112,7 +116,8 @@ export function call(operationId: string, input: unknown, options: Partial<Platf
     eventId: randomUUID(), tokenId: "offline-token", idempotencyKey: null,
     completionAttemptId: attemptId, ...options });
 }
-export async function runExecutor(act: () => Promise<void>, roleKind = "role") {
+export async function runExecutor(act: () => Promise<void>, roleKind = "role", skipRunnerDispose = false) {
+  omitRunnerDispose = skipRunnerDispose;
   snapshot.role_kind = roleKind;
   events = []; runnerCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";

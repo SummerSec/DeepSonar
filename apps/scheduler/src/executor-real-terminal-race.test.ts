@@ -162,11 +162,12 @@ test("executeReal: completion during Hub preflight still permits the Hub decisio
 
 test("executeReal: runner failure unregisters a prepared handler and rejects late input", { timeout: 5000 }, async () => {
   const failure = new Error("offline runner exited unexpectedly");
+  // The runner deliberately omits its disposer: exercise executeReal outer finally.
   await assert.rejects(runExecutor(async () => {
     await call("mark_job_done", done, { completionPhase: "prepare" });
     assert.equal(completionReady(), false);
     throw failure;
-  }), error => error === failure);
+  }, "role", true), error => error === failure);
   await assert.rejects(call("mark_job_done", done, { completionPhase: "commit" }),
     error => error instanceof PlatformRuntimeHandlerError && error.code === "HANDLER_NOT_REGISTERED");
   assert.equal(completionReady(), false, "late input cannot open the old completion gate");
