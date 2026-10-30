@@ -1211,3 +1211,12 @@ FR-TASK-007 / FR-RPT-001 的程序规则评审扩展复用 goal_review，仅 sup
 ## 证据追踪诊断修复
 
 Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Attempt，并宿主重读实际字节；runtime_proof=false，replay 为完整性检查，不改变 Verify verdict、Plan 或资格。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
+
+### FR-FIND-007 可重建特征与关联质量边界
+
+- **规范要求**：项目特征必须保留来源摘要、提取器版本与 provenance；未知权威身份保持未知。派生失败不得改变来源，读取必须核对当前来源和权限，旧代不能覆盖新代。强关系上线前必须通过独立质量门。
+- **决策来源**：#770 分期实施与来源完整性约束。
+- **实现状态**：C 持久扫描、特征重建和状态元数据待评审；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
+- **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
+- **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。

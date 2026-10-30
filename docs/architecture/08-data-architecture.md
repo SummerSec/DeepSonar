@@ -129,3 +129,10 @@ task.result 保存声明与事件派生身份，task.goal_evaluation 保存宿�
 Artifact source_event 对应真实证据来源 Attempt，最新 Attempt 仅用于有效性核验，不能替代来源。manifest 声明 hash 与宿主 observed hash 分开，历史不回写。详见[证据追踪](../EVIDENCE_TRACE.md)。
 
 补证执行投影复用 events/jobs/job_attempts/job_attempt_effects/canvas_nodes，不新增 schema。固定排序、无 wall-clock/heartbeat 字段；当前报告刷新冻结新投影，历史不回写。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
+
+## 项目 Finding 特征（#770 C）
+
+schema64 的 project_finding_feature_scan/work/features 是可重建派生数据：持久游标、generation、重试和输入摘要不替代 Finding/Artifact 真相。权威资产/版本/根因字段保持未知，读时核对当前来源与规则；详情状态不授予 Evidence 读取。细节、质量门与验证见[项目 Finding 特征研究](../PROJECT_FINDING_RESEARCH.md)。
+
+
+schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canonical 双端弱候选及完整来源摘要。候选与来源进度为可重建派生数据；读前核对当前双端来源，旧代不覆盖新代。真实 v64→65 备份/恢复夹具与运维清理边界见[专题](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。

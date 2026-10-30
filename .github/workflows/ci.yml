@@ -227,6 +227,9 @@ jobs:
       - name: Finding protocol and CVSS unit
         run: pnpm ci:unit:finding-protocol
 
+      - name: Finding offline evaluation unit
+        run: pnpm ci:unit:finding-offline-evaluation
+
       - name: Finding research ranking unit
         run: pnpm ci:unit:finding-research
 
@@ -235,6 +238,10 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:finding-protocol
 
+      - name: Finding durable candidate Web behavior
+        run: pnpm ci:unit:finding-candidates-web
+      - name: Finding lexical search Web behavior
+        run: pnpm ci:unit:finding-lexical-web
       - name: Finding research PostgreSQL integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}

@@ -179,3 +179,8 @@
 #767 程序规则附加评审已接线：仅 supplied bounty Finding，通过 program_rule:<ruleid> 独立评价材料规则；不改变通用任务判据，不授予提交资格。见[任务判据评审](TASK_GOAL_REVIEW.md)与[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 [Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
+
+
+#770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C与D词法检索/持久弱候选基础待评审，强关系建议未发布）。
+
+#770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具待评审，独立人工质量验收未完成）。

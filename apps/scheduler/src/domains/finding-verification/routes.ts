@@ -1,3 +1,6 @@
+import { readCandidatePage } from "../project-finding-research/candidate-read.js";
+import { searchFindingLexical } from "../project-finding-research/lexical-search.js";
+import { readFeatureStatus } from "../project-finding-research/store.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
@@ -14,7 +17,7 @@ import { loadFindingTrace } from "../../finding-trace.js";
 import { loadFactEvidenceTrace } from "../../fact-evidence-trace.js";
 import { FINDINGS_LIST_WINDOW } from "../../finding-disposition.js";
 import { isUuid } from "../../project-scope.js";
-import { decodeCursor, encodeCursor, page, pageLimit } from "../../pagination.js";
+import { decodeCursor, encodeCursor, page, pageLimit, QueryParameterError, CursorError, cursorErrorHttpStatus } from "../../pagination.js";
 import { createVerifyRound, markFindingNeedsHuman } from "../../verify.js";
 import { findingQueryPredicate, parseFindingQuery } from "./finding-query.js";
 import { loadProjectFindingsSummary } from "./project-findings-summary.js";
@@ -533,6 +536,46 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     });
   });
 
+  app.get("/findings/:id/candidates", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as Record<string, unknown>;
+    if (Object.keys(query).some((key) => key !== "cursor")) throw new QueryParameterError("query");
+    reply.header("Cache-Control", "no-store");
+    try {
+      const result = await readCandidatePage(id, query.cursor, undefined, req.actor?.projectId);
+      if (!result) return reply.code(404).send({ error: "finding not found" });
+      return result;
+    } catch (error) {
+      if (error instanceof CursorError) {
+        return reply.code(cursorErrorHttpStatus(error.code)).send({ error: "candidate inputs changed; restart query", error_code: error.code });
+      }
+      if ((error as { code?: string }).code === "57014") {
+        return reply.code(503).send({ error: "candidate query exceeded statement budget", error_code: "CANDIDATE_QUERY_BUDGET_EXCEEDED" });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/findings/:id/lexical-search", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as Record<string, unknown>;
+    if (Object.keys(query).some((key) => key !== "cursor")) throw new QueryParameterError("query");
+    reply.header("Cache-Control", "no-store");
+    try {
+      const result = await searchFindingLexical(id, query.cursor, undefined, req.actor?.projectId);
+      if (!result) return reply.code(404).send({ error: "finding not found" });
+      return result;
+    } catch (error) {
+      if (error instanceof CursorError) {
+        return reply.code(cursorErrorHttpStatus(error.code)).send({ error: "lexical search cursor changed; restart search", error_code: error.code });
+      }
+      if ((error as { code?: string }).code === "57014") {
+        return reply.code(503).send({ error: "lexical search exceeded query budget", error_code: "SEARCH_BUDGET_EXCEEDED" });
+      }
+      throw error;
+    }
+  });
+
   app.get("/findings/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [finding] = await sql`
@@ -586,6 +629,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     const fact_evidence_trace = await loadFactEvidenceTrace(sql, finding, verification_rounds);
     return {
       finding: { ...finding, ...research },
+      project_research_features: await readFeatureStatus(id, String(finding.project_id)),
       research,
       cluster_members: clusterMembers,
       last_research_run: lastRun ?? null,

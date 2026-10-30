@@ -91,3 +91,5 @@
 #767 后续目标证据链见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)：研究候选、非 Finding 结果、来源隔离评审与确定性报告已接线；可选 Plan 关联已接线，原操作员 authority 保持不变。对应 FR-TASK-007、FR-RPT-001；资格与授权适配器缺口不得以结构校验冒充完成。
 
 FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的来源与字节完整性，不改变 Verify verdict 或赋予执行/资格 authority。
+
+#770 C 特征投影的字段来源、恢复和未完成的 D 质量门见[专题](../PROJECT_FINDING_RESEARCH.md)；对应 FR-FIND-007。
