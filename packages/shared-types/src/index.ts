@@ -1,5 +1,7 @@
 import { TaskGoalReviewRequest, TaskGoalReviewResult } from "./task-goal-review.js";
 export * from "./task-goal-review.js";
+import { TaskResultProposal } from "./task-result.js";
+export * from "./task-result.js";
 import { z } from "zod";
 import { CandidateOutcomeClaim } from "./task-outcome.js";
 export * from "./task-outcome.js";
@@ -643,6 +645,7 @@ export const ARTIFACT_RELATION_MAX = 20;
 export const ArtifactInput = z
   .object({
     goal_review: TaskGoalReviewResult.optional(),
+    task_result: TaskResultProposal.optional(),
     kind: ArtifactKind.optional(),
     schema_version: ArtifactSchemaVersion.optional(),
     artifact_key: ArtifactKey.optional(),

@@ -33,6 +33,7 @@ const REJECTION_DETAIL_ALLOWLIST = [
   "bytes_left",
   "task_outcome_admission",
   "task_goal_review",
+  "task_result",
 ] as const;
 
 const DETAIL_STRING_MAX = 240;

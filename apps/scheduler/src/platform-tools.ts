@@ -90,6 +90,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_fact: [
     "### `emit_fact` — 增量提交可验证事实",
+    "- 无 Finding 的工程交付或有界阴性结果用 artifact.task_result：schema_version:1、kind(delivery/negative_result/blocked/not_executed)、task_contract_sha256、target、与契约一致的baseline、criterion_ids、method、observed、limitations、evidence_refs。先保存本 Job/Attempt 含留存文件 URI/hash 的原始证据，再引用其 Fact；delivery/negative_result 必须有证据，未执行或受阻写对应 kind 和限制。结果是待评声明，不是成功；不得将预算耗尽、工具失败写成阴性，也不必创建假 Finding。不能混用 goal_review/verification 或自选 artifact_key。",
     "- 独立目标评审使用冻结 task_goal_review 指派，通过 artifact.goal_review 提交整个指定判据的 expected/actual/rationale、限制和本 Job Fact 引用；先保存含本 Attempt 保留文件 URI/hash 的独立证据。没有指派不能自评，satisfied 不等于整体完成或赏金资格。",
     "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`artifact`（可选，通用 Artifact：kind/schema_version/claims/evidence/relations/extensions）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
     "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",

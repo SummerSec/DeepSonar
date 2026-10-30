@@ -2,7 +2,7 @@ import { TaskGoalReviewAssignment, TaskGoalReviewResult, normalizeTaskGoalReview
 import type { sql } from "./db.js";
 import { ControlInputError } from "./control-input.js";
 import { goalReviewDigest, loadGoalReviewSource } from "./task-goal-review-source.js";
-import { criterionEvidenceBudget } from "./domains/plan-protocol/criterion-evidence.js";
+import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { loadGoalReviewEvidence, type GoalReviewEvidenceBinding } from "./task-goal-review-evidence.js";
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -43,8 +43,8 @@ export function validateGoalReviewResult(assignment: TaskGoalReviewAssignment, r
   if (result.criteria.some((item) => item.assessment === "satisfied" && (item.limitations.length || !item.evidence_refs.length))) denied("goal_review_satisfied_without_complete_evidence");
   return result;
 }
-async function currentSource(db: typeof sql, assignment: TaskGoalReviewAssignment, jobId: string) {
-  const source = await loadGoalReviewSource(db, assignment.project_id, assignment.canvas_id, assignment.request);
+async function currentSource(db: typeof sql, assignment: TaskGoalReviewAssignment, jobId: string, budget?: EvidenceReadBudget) {
+  const source = await loadGoalReviewSource(db, assignment.project_id, assignment.canvas_id, assignment.request, budget);
   if (source.source_sha256 !== assignment.source_sha256 || source.candidate_revision !== assignment.candidate_revision ||
     goalReviewDigest(source.forbidden_job_ids) !== goalReviewDigest(assignment.forbidden_job_ids)) denied("goal_review_source_changed");
   if (source.forbidden_job_ids.includes(jobId)) denied("goal_review_self_review_forbidden");
@@ -88,7 +88,7 @@ export async function prepareTaskGoalReview(db: typeof sql, job: Record<string, 
 }
 
 /** Every reviewer is retained; aggregation/conflict decisions belong to the report layer. */
-export async function loadTaskGoalReviews(db: typeof sql, projectId: string, canvasId: string, findingIds?: readonly string[]): Promise<{
+export async function loadTaskGoalReviews(db: typeof sql, projectId: string, canvasId: string, findingIds?: readonly string[], budget: EvidenceReadBudget = criterionEvidenceBudget()): Promise<{
   reviews: TaskGoalReviewRecord[]; blockedReasons: string[];
 }> {
   const limit = findingIds === undefined ? 100 : 20;
@@ -104,7 +104,6 @@ export async function loadTaskGoalReviews(db: typeof sql, projectId: string, can
       AND (${findingIds === undefined} OR j.agent_snapshot_json->'task_goal_review'->'request'->>'finding_id'=ANY(${[...(findingIds ?? [])].slice(0, 100)}::text[]))
     ORDER BY a.id LIMIT ${limit + 1}`;
   const blockedReasons: string[] = rows.length > limit || (findingIds?.length ?? 0) > 100 ? ["goal_review_projection_truncated"] : [];
-  const budget = criterionEvidenceBudget();
   const reviews: TaskGoalReviewRecord[] = [];
   for (const row of rows.slice(0, limit)) {
     const review: TaskGoalReviewRecord = { artifactId: String(row.id), jobId: String(row.job_id), attemptId: String(row.attempt_id ?? ""),
@@ -123,7 +122,7 @@ export async function loadTaskGoalReviews(db: typeof sql, projectId: string, can
         submission_sha256 !== goalReviewDigest(body) || goalReviewDigest(eventResult) !== goalReviewDigest(result) ||
         row.artifact_key !== `goal-review:${review.jobId}:${review.attemptId}`) denied("goal_review_host_binding_mismatch");
       await currentAttempt(db, review.jobId, review.attemptId, true);
-      await currentSource(db, assignment, review.jobId);
+      await currentSource(db, assignment, review.jobId, budget);
       const evidence = await loadGoalReviewEvidence(db, projectId, canvasId, review.jobId, review.attemptId, factRefs(result), true, budget);
       // The shared reader deliberately combines unavailable bytes and budget exhaustion.
       // Either means this bounded scan may have missed contrary evidence. Do not let
@@ -136,6 +135,7 @@ export async function loadTaskGoalReviews(db: typeof sql, projectId: string, can
       review.criteria = result.criteria;
     } catch (error) {
       const code = error instanceof ControlInputError ? object(error.details?.task_goal_review).code : undefined;
+      if (code === "goal_review_evidence_unavailable_or_budget_exceeded" && !blockedReasons.includes("goal_review_evidence_scan_incomplete")) blockedReasons.push("goal_review_evidence_scan_incomplete");
       review.blockedReasons.push(typeof code === "string" ? code : "goal_review_validation_unavailable");
     }
     reviews.push(review);

@@ -914,7 +914,7 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
   if (reviewRequest && !reviewRequest.success) throw invalidControlPayload("goal_review 请求结构无效。", "payload.goal_review");
   if (reviewRequest && (!input.canvasId || systemType)) throw invalidControlPayload("目标评审必须使用同 Canvas 的普通受治理 Job。", "payload.goal_review");
   const relatedFindingIds = parseRelatedFindingIds(schedulingPayload);
-  if (reviewRequest?.success) {
+  if (reviewRequest?.success && reviewRequest.data.finding_id) {
     relatedFindingIds.push(reviewRequest.data.finding_id.toLowerCase());
     schedulingPayload.related_finding_ids = [...new Set(relatedFindingIds)];
     if (new Set(relatedFindingIds).size > MAX_RELATED_FINDING_IDS) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "payload.related_finding_ids");

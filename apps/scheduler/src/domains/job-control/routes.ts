@@ -163,11 +163,16 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     let canvasId: string;
     try {
       if (reviewRequest?.success) {
-        const [source] = await sql`SELECT c.id FROM findings f JOIN jobs j ON j.id=f.job_id
+        const [source] = reviewRequest.data.finding_id ? await sql`SELECT c.id FROM findings f JOIN jobs j ON j.id=f.job_id
           JOIN canvases c ON c.id=j.canvas_id JOIN artifacts a ON a.id=f.artifact_id
           WHERE f.id=${reviewRequest.data.finding_id} AND a.id=${reviewRequest.data.candidate_artifact_id}
             AND f.project_id=${projectId} AND j.project_id=${projectId} AND c.project_id=${projectId}
-            AND a.project_id=${projectId} AND a.canvas_id=c.id AND a.job_id=j.id`;
+            AND a.project_id=${projectId} AND a.canvas_id=c.id AND a.job_id=j.id` : await sql`
+          SELECT c.id FROM canvas_nodes n JOIN jobs j ON j.id=n.job_id
+          JOIN canvases c ON c.id=n.canvas_id JOIN artifacts a ON a.node_id=n.id AND a.id::text=n.body_json->>'artifact_id'
+          WHERE n.id=${reviewRequest.data.fact_id!} AND n.node_type='fact' AND a.id=${reviewRequest.data.candidate_artifact_id}
+            AND j.project_id=${projectId} AND c.project_id=${projectId} AND j.canvas_id=c.id
+            AND a.project_id=${projectId} AND a.canvas_id=c.id AND a.job_id=j.id AND a.source_operation='emit_fact'`;
         if (!source) return reply.code(404).send({
           error: "目标评审候选在当前项目不可用。", error_code: "GOAL_REVIEW_SOURCE_NOT_FOUND", field: "payload.goal_review",
         });

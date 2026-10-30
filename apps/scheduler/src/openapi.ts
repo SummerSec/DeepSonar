@@ -1342,7 +1342,8 @@ const OPS: Op[] = [
         title: { type: "string" },
         payload: { type: "object", additionalProperties: true, properties: {
           goal_review: { ...z.toJSONSchema(TaskGoalReviewRequest, { target: "openapi-3.0", io: "input" }),
-            description: "Independent execution-source goal review request. Reuses the candidate Canvas in this project; the host freezes candidate/contract/evidence versions. This does not grant permissions or submission eligibility." },
+            oneOf: [{ required: ["finding_id"], not: { required: ["fact_id"] } }, { required: ["fact_id"], not: { required: ["finding_id"] } }],
+            description: "Independent execution-source goal review request. Exactly one finding_id or task-result fact_id with candidate_artifact_id. Reuses the source Canvas in this project; the host freezes source/contract/evidence versions. This does not grant permissions or submission eligibility." },
         } },
         priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },
         timeout_sec: { type: "integer" },
