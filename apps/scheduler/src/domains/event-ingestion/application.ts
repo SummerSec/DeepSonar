@@ -1,3 +1,4 @@
+import { hasPrepaidCompletion } from "./completion-receipt.js";
 import {
   EventEnvelope as EventEnvelopeSchema,
   SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
@@ -337,7 +338,10 @@ async function appendAndApplyBundle(
         : (await tx<{ now: Date }[]>`SELECT statement_timestamp() AS now`)[0]?.now;
       if (!now) throw new Error("event rate-limit clock unavailable");
       try {
-        await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
+        // Only the host's matching durable completion can reuse its already-paid terminal slot.
+        if (!(envelope.type === "done" && await hasPrepaidCompletion(tx, jobId, ingest.attemptId, envelope.event_id, envelope.payload))) {
+          await consumeEventRateLimit(tx, jobId, envelope.type, new Date(now), options.rateLimit);
+        }
       } catch (error) {
         if (error instanceof EventRateLimitError) options.onRateLimited?.(error, jobId);
         throw error;

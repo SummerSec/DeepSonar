@@ -16,6 +16,9 @@ export interface PlatformRuntimeHandlerContext {
   eventId: string;
   tokenId: string;
   idempotencyKey: string | null;
+  /** Host-only phases; commit only restores validated done state after durable receipt. */
+  completionPhase?: "prepare" | "commit" | "abort";
+  completionAttemptId?: string;
 }
 
 export type PlatformRuntimeHandler = (context: PlatformRuntimeHandlerContext) => Promise<unknown> | unknown;
