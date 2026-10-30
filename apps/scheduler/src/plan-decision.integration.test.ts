@@ -32,11 +32,15 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     const [root]=await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json) VALUES(${canvas},'root','Scoped objective','active','{}') RETURNING id`;
     await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
       VALUES(${hub},${project},${canvas},'hub_reason','provisioning',${sql.json({name:'hub_reason',role_kind:'hub',platform_tools:operations})},'{}')`;
+    const {createAttempt}=await import("./domains/job-attempt/application.js");
+    await createAttempt(sql,hub);
     const grant=await api.mintJobCapabilityToken(hub);
-    await sql`UPDATE jobs SET status='running',started_at=now() WHERE id=${hub}`;
+    await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '5 minutes' WHERE id=${hub}`;
     await api.activateProvisionedJobCapabilityTokens(hub);
     let activeJob:string=hub, token=grant.token;
     const handler: import("./domains/platform-api/index.js").PlatformRuntimeHandler = async (context: import("./domains/platform-api/index.js").PlatformRuntimeHandlerContext)=>{
+      // Completion prepare holds the Job lock: it must not ingest or settle.
+      if(context.operationId==='mark_job_done' && context.completionPhase!=='commit') return {completion_prepared:context.completionPhase==='prepare'};
       if(context.operationId==='graph_query') return executeGraphQuery({jobId:context.jobId,canvasId:canvas,payload:context.input,maxCalls:100,maxBytes:1024*1024});
       const type=({submit_plan:'plan',submit_hub_decision:'hub_decision',mark_job_done:'done',request_human:'human',emit_fact:'fact'} as const)[context.operationId as 'submit_plan'|'submit_hub_decision'|'mark_job_done'|'request_human'|'emit_fact'];
       try{
@@ -49,7 +53,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
       }
     };
     api.registerRuntimeHandler(hub,handler,operations);
-    const invoke=(operation:string,payload:unknown,key=randomUUID())=>app.inject({method:'POST',url:`/control/v1/jobs/${activeJob}/operations/${operation}`,headers:{authorization:`Bearer ${token}`,'idempotency-key':key},payload:payload as never});
+    const invoke=(operation:string,payload:unknown,key=randomUUID())=>app.inject({method:'POST',url:`/control/v1/jobs/${activeJob}/operations/${operation}`,headers:{authorization:`Bearer ${token}`,'idempotency-key':key,...(operation==='mark_job_done'?{'x-deepsonar-proposal-revision':'0'}:{})},payload:payload as never});
     const plan=Plan.parse({v:1,goal:'Verify scoped behavior',tasks:[{id:'sample',title:'Collect evidence',role:'review',description:'Scoped review',prompt:'Review only the saved scope and retain execution evidence.',expected_outputs:['Execution record']}],completion:{mode:'explicit_result',description:'Scoped behavior verified',required_outputs:[]}});
     const submitted=await invoke('submit_plan',{plan});assert.equal(submitted.statusCode,200,submitted.payload);
     const read=async()=>{
@@ -96,12 +100,13 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     // Fake executor lifecycle on the actual derived Intent Job, with real evidence and ingestion.
     const parentDone=await invoke('mark_job_done',{summary:'Dispatched one scoped supplementation'});
     assert.equal(parentDone.statusCode,200,parentDone.payload);
+    assert.equal(parentDone.json().receipt_status,'persisted_deferred');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND type='done'`).length,1);
     const worker=String(children[0].id);
-    const {createAttempt}=await import("./domains/job-attempt/application.js");
     const attempt=String((await createAttempt(sql,worker)).id);
     await sql`UPDATE jobs SET status='provisioning' WHERE id=${worker}`;
     const workerGrant=await api.mintJobCapabilityToken(worker);
-    await sql`UPDATE jobs SET status='running',started_at=now() WHERE id=${worker}`;
+    await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '5 minutes' WHERE id=${worker}`;
     await api.activateProvisionedJobCapabilityTokens(worker);api.registerRuntimeHandler(worker,handler,operations);
     activeJob=worker;token=workerGrant.token;
     const uri=`attempts/${attempt}/execution.txt`,bytes=Buffer.from('Scoped fake execution retained; this is not real model evidence');
@@ -116,6 +121,8 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     await sql`UPDATE projects SET config_json=${sql.json({rules:{hubEnabled:true,maxHubRounds:5}})} WHERE id=${project}`;
     const workerDone=await invoke('mark_job_done',{summary:'Retained scoped execution evidence for operator assessment'});
     assert.equal(workerDone.statusCode,200,workerDone.payload);
+    assert.equal(workerDone.json().receipt_status,'persisted_deferred');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${worker} AND type='done'`).length,1);
     const [derivedHub]=await sql`SELECT id,payload_json FROM jobs WHERE canvas_id=${canvas} AND type='hub_reason' AND id<>${hub} ORDER BY created_at DESC LIMIT 1`;
     assert.ok(derivedHub,'worker terminal must use existing idle Hub wakeup');
     assert.equal(derivedHub.payload_json.plan_context.plan_job_id,hub);
