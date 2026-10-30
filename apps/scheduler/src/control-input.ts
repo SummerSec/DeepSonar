@@ -1,6 +1,12 @@
 /** Stable business errors for inputs crossing the Agent/Scheduler boundary. */
 export const CONTROL_INPUT_ERROR_CODES = {
   invalidPayload: "invalid_payload",
+  planStale: "plan_stale_revision",
+  planContext: "plan_context_required",
+  planBudget: "plan_budget_exhausted",
+  planUnproven: "plan_completion_unproven",
+  planSource: "plan_source_unavailable",
+  planUnknownEffect: "plan_unknown_effect",
   unknownField: "unknown_field",
   unknownTool: "unknown_tool",
   toolNotAllowed: "tool_not_allowed",
@@ -63,6 +69,11 @@ function inputShape(value: unknown): string {
 /** Host-side control validation the Worker can usually fix by retrying the tool. */
 const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new Set([
   CONTROL_INPUT_ERROR_CODES.invalidPayload,
+  CONTROL_INPUT_ERROR_CODES.planStale,
+  CONTROL_INPUT_ERROR_CODES.planContext,
+  CONTROL_INPUT_ERROR_CODES.planBudget,
+  CONTROL_INPUT_ERROR_CODES.planUnproven,
+  CONTROL_INPUT_ERROR_CODES.planSource,
   CONTROL_INPUT_ERROR_CODES.unknownField,
   CONTROL_INPUT_ERROR_CODES.duplicateToolCall,
   CONTROL_INPUT_ERROR_CODES.toolLimit,

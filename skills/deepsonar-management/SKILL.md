@@ -1,12 +1,16 @@
 ---
 name: deepsonar-management
-description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场与平台导入导出。当需要以程序化方式操作 DeepSonar 时使用。
+description: 通过 DeepSonar API 管理调度平台：先拉 OpenAPI/schema 再操作；项目、standard/compose/定时任务、Job 生命周期，画布 Fact/广播/人工消息、Finding/报告，RoleConfig、Provider、Skill 模块源、凭据、运行时镜像市场与平台导入导出。创建、拆分或重新下发平台任务前必须使用；普通仓库代码工作不套业务模板。当需要以程序化方式操作 DeepSonar 时使用。
 ---
 
 # DeepSonar Management
 
 让外部 Agent（Codex / Claude Code / CI）通过最小权限 API Token 管理 DeepSonar，
 不依赖浏览器。除报告下载与 Markdown schema 外，动作输出结构化 JSON（stdout）。
+
+## 平台任务下发入口（必须执行）
+
+创建、拆分、重新下发平台任务时，先读并执行 [任务下发流程](references/task-dispatch.md)，再选择白盒/黑盒检查表。该流程覆盖请求理解、有界上下文、方式选择、关键缺口、完整说明和统一复核；不能只填检查表或直接复制命令。生成说明使用其中模板，按需参考 [完整示例](references/task-dispatch-examples.md)；维护此 Skill 时运行 [场景验收](references/task-dispatch-acceptance.md)。普通仓库代码工作不触发此业务流程。
 
 ## 使用方式
 
@@ -35,6 +39,8 @@ curl -s "$DEEPSONAR_BASE_URL/schema?format=summary"
 
 Windows 注意：部分环境下 curl 响应带 UTF-8 BOM，用 Python 解析时 `encoding="utf-8-sig"`；本机常无 `jq`，用 `python -X utf8 -c "import json; ..."`。
 
+任务下发先按 [任务设计与下发指南](references/task-dispatch.md) 明确目标、权限与验收；白盒和黑盒检查表由该指南按需引用。可选契约通过 `tasks create --task-contract @contract.json` 提交，模板不授予权限。
+
 ## 常用命令
 
 ```bash
@@ -55,6 +61,10 @@ python scripts/deepsonar-api.py tasks update <canvasId> --title "更正标题" -
 python scripts/deepsonar-api.py tasks pause <canvasId>   # drain pause；不强杀已运行 Job
 python scripts/deepsonar-api.py tasks start <canvasId>   # 不清 schedule、不重试失败 Job
 python scripts/deepsonar-api.py tasks retry <canvasId>
+
+# 下发前执行 references/task-dispatch.md 完整流程（八项要求、拆分依据、可选 task_contract、
+# 创建/派发前校验）；白盒 references/whitebox-checklist.md；黑盒/灰盒 references/blackbox-checklist.md。
+# 说明写全不等于具备执行条件：材料、凭据引用、账号/租户、构建入口未知时写「缺失」，不要补写成已确认。
 
 # Job
 python scripts/deepsonar-api.py jobs list [--project <projectId>]

@@ -4,6 +4,8 @@
  * 与 skills/deepsonar-management/references/api.md 对齐；改路由时请同步更新本文件与该 md。
  */
 import { existsSync, readFileSync } from "node:fs";
+import { z } from "zod";
+import { TaskContract } from "@deepsonar/shared-types";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
@@ -11,6 +13,16 @@ import { config } from "./config.js";
 import { FINDING_DISPOSITIONS } from "./finding-disposition.js";
 import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
 import { KNOWLEDGE_MANAGEMENT_OPERATIONS } from "./domains/project-knowledge/openapi.js";
+
+const TaskContractFeedbackSchema = {
+  type: "object",
+  required: ["code", "path", "message", "suggestion"],
+  properties: {
+    code: { type: "string" }, path: { type: "string" },
+    message: { type: "string" }, suggestion: { type: "string" },
+  },
+};
+const TaskContractFeedbackListSchema = { type: "array", items: TaskContractFeedbackSchema };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -849,11 +861,17 @@ const OPS: Op[] = [
     method: "get",
     path: "/projects/{id}/findings/summary",
     summary: "项目风险聚合（不受 Finding 列表窗口截断）",
-    description: "按严重度、verify_status、disposition 与来源任务计数；可选 canvas_id 收窄。列表窗口仍由 GET /findings 限制。",
+    description: "与 Finding 列表共用筛选，按严重度、verify_status、disposition、profile 与来源任务计数。total 为匹配数；project_total 为项目全量。聚合在同一数据库快照计算。",
     scope: "findings:read",
     tags: ["Findings"],
     query: {
       canvas_id: { type: "string", description: "逗号分隔的来源画布 UUID，收窄聚合范围" },
+      severity: { type: "string" },
+      profile: { type: "string" },
+      category: { type: "string" },
+      verify_status: { type: "string" },
+      disposition: { type: "string" },
+      q: { type: "string", maxLength: 200 },
     },
   },
   {
@@ -901,6 +919,31 @@ const OPS: Op[] = [
     method: "post",
     path: "/projects/{id}/tasks",
     summary: "创建任务（铸画布 + 入口 job）",
+    description: "可选 task_contract 使用共享版本化 schema；原始 content 保留。非安全缺项返回字段级 warning，必要条件阻塞返回 409 且不创建 Canvas/Job；派发前重新核验当前边界。自由文本未提供契约时返回未评估提示，不按 Markdown 标题拒绝。",
+    successStatus: "201",
+    responses: {
+      "201": {
+        description: "任务已创建；warning 不表示失败，不应因此重复创建",
+        content: { "application/json": { schema: {
+          type: "object", required: ["canvas_id", "job", "task_contract_warnings"],
+          properties: {
+            canvas_id: { type: "string" }, job: { type: "object" },
+            scheduled_start_at: { type: "string", format: "date-time", nullable: true },
+            task_contract_warnings: TaskContractFeedbackListSchema,
+          },
+        } } },
+      },
+      "409": {
+        description: "必要契约条件阻塞或既有任务/配置冲突；task_contract_blocked 时未创建任务",
+        content: { "application/json": { schema: {
+          type: "object", properties: {
+            error: { type: "string" }, error_code: { type: "string" },
+            task_contract_warnings: TaskContractFeedbackListSchema,
+            task_contract_blockers: TaskContractFeedbackListSchema,
+          },
+        } } },
+      },
+    },
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -909,6 +952,10 @@ const OPS: Op[] = [
       properties: {
         title: { type: "string" },
         content: { type: "string" },
+        task_contract: {
+          ...z.toJSONSchema(TaskContract, { target: "openapi-3.0", io: "input" }),
+          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。模板建议不自动成为验收承诺；状态不接受 verified。权限仅能收窄，凭据仅引用；预算为规划字段。未知目标身份/写授权/必要前置条件保持未核验并阻塞。",
+        },
         allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
         kind: {
           type: "string",
@@ -1140,6 +1187,8 @@ const OPS: Op[] = [
           },
           finding: FactFindingSchema,
           job: FactJobSchema,
+          plan_criterion_source: { type: "object", nullable: true, additionalProperties: true, description: "当前 Artifact/Job/Attempt 与留存文件内容版本、eligible 和不可用原因；不包含文件原文。" },
+          plan_bindings: { type: "object", additionalProperties: true, description: "最近 32 条操作员判据绑定审计及 truncated；完整决策留在 append-only audit_logs。" },
           trace: {
             type: "object",
             additionalProperties: false,
@@ -1157,7 +1206,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/canvases/{id}/facts/{nodeId}/verification",
     summary: "人工更新 Fact 验证态",
-    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。",
+    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。可选 plan_binding 必须同时提供 verified 和 note；它是明确操作员判据评价，不改变派发或 Finding 状态。来源必须为同 Canvas 的成功 Job/Attempt、当前 Artifact 和实际留存证据；版本冲突返回 409。",
     scope: "jobs:control",
     tags: ["Tasks"],
     body: {
@@ -1167,6 +1216,19 @@ const OPS: Op[] = [
       properties: {
         status: { type: "string", enum: ["verified", "rejected", "needs_human"] },
         note: { type: "string", minLength: 1, maxLength: 2000 },
+        plan_binding: {
+          type: "object", additionalProperties: false,
+          required: ["plan_job_id", "plan_sha256", "criterion_id", "expected_source_sha256", "expected_binding_id", "assessment", "observation"],
+          properties: {
+            plan_job_id: { type: "string", format: "uuid" },
+            plan_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            criterion_id: { type: "string", pattern: "^(completion|output-(?:[0-9]|[12][0-9]|3[01]))$" },
+            expected_source_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            expected_binding_id: { type: "string", format: "uuid", nullable: true },
+            assessment: { type: "string", enum: ["satisfies", "contradicts", "inconclusive"] },
+            observation: { type: "string", enum: ["positive", "negative", "unspecified"] },
+          },
+        },
       },
     },
     responses: {
@@ -1177,7 +1239,7 @@ const OPS: Op[] = [
         properties: { fact: FactSummarySchema },
       },
       "409": {
-        description: "非 Fact 节点或非法迁移（如 rejected→verified）",
+        description: "非 Fact 节点、非法迁移、Plan/证据版本过期、来源不可用或绑定修订冲突",
         content: { "application/json": { schema: ErrorSchema } },
       },
     },
@@ -1325,7 +1387,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}",
     summary: "Job 详情（含事件）",
     description:
-      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。",
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
     scope: "tasks:read",
     tags: ["Jobs"],
   },
@@ -1422,17 +1484,20 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings",
     summary: "Finding 列表（SARIF 对齐）",
-    description: "技术验证、严重度与语义研究排序分列返回：research / dedupe_cluster_id / canonical_finding_id / priority_score 不改写 verify_status。",
+    description: "筛选字段支持逗号分隔多选；不同维度 AND。带 limit/cursor 返回游标页，按 created_at/id 降序，列表为当前可变视图。技术验证、严重度与语义研究排序分列返回：research / dedupe_cluster_id / canonical_finding_id / priority_score 不改写 verify_status。",
     scope: "findings:read",
     tags: ["Findings"],
     query: {
-      project_id: { type: "string", format: "uuid" },
+      project_id: { type: "string", description: "逗号分隔的项目 UUID（同维度 OR）" },
       canvas_id: { type: "string" },
       severity: { type: "string" },
       profile: { type: "string" },
       category: { type: "string" },
       verify_status: { type: "string" },
-      disposition: { type: "string", enum: [...FINDING_DISPOSITIONS] },
+      disposition: { type: "string", description: `逗号分隔的处置状态：${FINDING_DISPOSITIONS.join(", ")}` },
+      q: { type: "string", maxLength: 200, description: "标题、位置、摘要、指纹的不区分大小写字面子串；%/_ 不作通配符" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
+      cursor: { type: "string" },
     },
   },
   {
@@ -1560,6 +1625,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/canvases/{id}/report",
     summary: "画布最新任务报告元数据",
+    description: "新任务报告的冻结输入包含有界 Plan 审计缺口，Markdown 附带只读说明；模型完成声明不构成判据满足，缺少证据绑定为 unknown。历史报告不回写。",
     scope: "tasks:read",
     tags: ["Reports"],
     responses: {
@@ -1594,6 +1660,7 @@ const OPS: Op[] = [
               "root_not_ready",
               "active_work",
               "no_role_work",
+              "plan_not_ready",
               "findings_not_converged",
               "report_not_dispatched",
               "report_failed",

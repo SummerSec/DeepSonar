@@ -280,3 +280,22 @@ test("ProjectsPage creates an empty project without hijacking new-project into a
   assert.match(form, /不会创建任务、画布或 Job/);
   assert.doesNotMatch(form, /createTask/);
 });
+
+test("a legacy create with contract warning remains a successful handoff", async () => {
+  const warning = { code: "task_contract_not_assessed", path: "task_contract", message: "未评估", suggestion: "可补充契约" };
+  let creates = 0;
+  const result = await runQuickStart({ title: "目标", goal: "原始需求", project, networkOverride: "inherit" }, {
+    createProject: async () => project,
+    readiness: async () => readiness(true),
+    createTask: async (_id, payload) => {
+      creates += 1;
+      assert.equal(payload.task_contract, undefined);
+      return { canvas_id: "created-canvas", job: { id: "created-job", status: "pending" }, task_contract_warnings: [warning] };
+    },
+  });
+  assert.equal(creates, 1);
+  assert.equal(result.kind, "success");
+  if (result.kind !== "success") assert.fail("created task must remain available");
+  assert.equal(result.task.canvas_id, "created-canvas");
+  assert.deepEqual(result.task.task_contract_warnings, [warning]);
+});

@@ -244,6 +244,8 @@ def _tasks_create(pos, f):
         raise ApiError("compose 任务必须提供 --seed-finding-ids")
     if f.get("allow-egress") is not None:
         body["allow_egress"] = parse_bool(f["allow-egress"], "--allow-egress")
+    if f.get("task-contract") is not None:
+        body["task_contract"] = parse_json_arg(str(f["task-contract"]), "--task-contract")
     if f.get("finding-protocol"):
         body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
     if f.get("scheduled-start-at"):

@@ -31,6 +31,8 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 固定原则：**本地库是管理真相，画布是过程真相，沙箱是执行真相，调度器是唯一有副作用的执行者。** Web 是管理平面，画布是只读投影；真实 Job 的语义写入只能来自按 Job 授权的 Control API。
 
+任务下发支持可选版本化 `task_contract`（#767）：共享 schema/场景模板统一 API、Web 与管理 CLI 的结构化输入，Canvas 保存解析后的契约与模板版本；原始需求继续保留。创建反馈区分缺项提示与执行阻塞，Dispatcher 在沙箱创建前按当前可验证事实复核。契约不授予身份、写权限或出网权限；无法验证必要条件时停止派发，不把声明当证明。自由文本仍是受支持输入，不以 Markdown 标题验收。详见 [任务下发指南](skills/deepsonar-management/references/task-dispatch.md)及 [FR-TASK-006](docs/architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。
+
 ## 3. 核心实体
 
 ```text
@@ -113,6 +115,8 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 ### 4.2 Plan
 
+#775 A 在报告冻结 Plan 审计，并通过现有 Fact 人工验证 API 接纳版本化操作员判据绑定。平台核对同任务 Job/Attempt、Artifact 与实际留存字节，刷新时显式标记过期、冲突和不足；报告机器整体判断仍为 unknown。B 首片可在既有 Hub Intent 上携带版本化 plan_basis，以当前任务输入、来源版本与单步预算检查一次补证；只有全判据当前正向操作员评价且已读完整，才允许明确 complete。没有另造执行通道。真实语义评测与 C 未验收；见 [Plan 缺口投影](docs/PLAN_GAP_PROJECTION.md)。
+
 当前 Hub 仍以 Intent 驱动，长期目标是把 Intent 适配为 `PlanTask`，由模型声明目的、依赖、输入引用、期望输出、验证路径、完成理由和预算。平台验证 schema、canonical 引用、依赖环、权限、预算和可执行性；模型判断业务上继续、收敛、阻塞或请求人工。
 
 `maxHubRounds`、follow-up 深度、token、wall time、并发和沙箱限制都是不同的护栏。它们可以阻止失控，但不能单独代替模型说明“为什么已经完成”。Plan 协议全面落地前，现有 Hub 和固定角色闭环仍是唯一生产主路径。
@@ -133,6 +137,10 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 当前 Phase 1 已接入 Control API 的严格 schema/字节约束和标准错误路径。模型收到 `model_correctable` 后应重新读取能力目录、节点引用或当前状态，再以新的提案 revision 和 Idempotency-Key 提交。预算耗尽必须明确进入 `blocked` 或 `needs_human`，不能重复发送相同错误后静默结束。
 
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
+
+A 阶段错误矩阵、冻结契约回放及持久性缺口见 [#776 基线](docs/REPAIR_FEEDBACK_BASELINE.md)；不代表同会话修复或模型质量已验收。
+
+[#776 B](docs/REPAIR_FEEDBACK_DONE_REPAIR.md)仅为 mark_job_done 增加原 Control 通道上的持久拒绝/接受回执与 revision；persisted_deferred 不等于效果结算，完整完成门与真实模型质量尚未验收。C0 仅对已获图查询权限的 Hub 无效引用提供 scoped 刷新指引，不引入图版本锁或自动授权。 C1 将既有 Hub complete 预检的完成门缺失项投影为有界反馈，不改变门判定或 Verify 技术结论，也不将该投影当作已接受效果回执。
 
 ## 5. 当前执行闭环
 
@@ -161,6 +169,8 @@ Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Schedule
 #770 C 在 Scheduler 内维护可重建特征与持久扫描检查点，详情只显示当前来源匹配的状态/字段覆盖。权威目标/版本字段未知，D 关系质量门未验收；不发布同问题建议，见[项目 Finding 特征研究](docs/PROJECT_FINDING_RESEARCH.md)。
 
 #770 A 的来源身份使用 `(job_id, fingerprint)`，独立于 Control 提交幂等键；不同 Job 的相同文本保留独立 Finding/Artifact，不继承验证或人工处置。相同来源身份的内容冲突明确拒绝，当前没有修订协议。历史 UUID 和 Artifact key 保留，历史丢失来源不自动重建。具体规则见 [数据架构](docs/architecture/08-data-architecture.md#finding-来源身份770-a)。此切片不实现跨任务关联。
+
+项目交付页使用服务端多选/文本筛选与游标分页，汇总共用查询条件，URL 保存筛选与选择；当前来源 `updated_at` 单独展示。#770 切片 B 的权限、当前读一致性与后续范围见[接口规格](docs/architecture/09-interface-specs.md#finding-项目查询770-切片-b)，不代表跨任务来源修复或关联质量已验收。
 
 ### 6.1 Verify
 
@@ -234,7 +244,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
-**DSH 当前 as-built（2026-10-10）：** 新执行版本是官方 `@deepseek-ai/dsh@0.2.0-rc.2`，选择官方 [`dsh-v0.2.0-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2)；`0.2.1-alpha.2`（Oct 9）未选。版本与完整 npm closure 锁在 `agent-harness/dsh-runtime/package-lock.json`，镜像在 `/opt/deepsonar/dsh` 以 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，唯一 launcher 是官方 `dsh --profile`。`packages/runtime-sandbox/src/dsh-profile.ts` 为 `deepsonar` profile 写入 `bundles: []` 和显式 plugin allowlist，移除 spine、UI/web、settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 与 home overrides；安装包内 dormant UI 依赖不会启动服务。Standard 使用 native tools，PTC 使用 `ptc` 与 `@deepseek-ai/dsh-ptc-runtime-node` 的 `run_code`。Provider route/model 强制经 Model Gateway，沙箱只得到短期 token；skills 只从 Scheduler home 的 `${DSH_HOME}/skills` 根发现。`session.v4.jsonl` 是当前精确归档路径，历史 v0–v3 仅供 viewer 读取。官方 JSON-RPC 只提供 initialize/prompt/shutdown；同进程 follow-up 可用，跨进程持久 resume 不支持，adapter 以 `persistentSessionResume: false` 返回 `CONTEXT_RESUME_UNSUPPORTED`，不静默新建或重试。
+**DSH 当前 as-built（2026-10-10）：** 新执行版本是官方 `@deepseek-ai/dsh@0.2.1-rc.2`，选择官方 [`dsh-v0.2.1-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-rc.2)；`0.2.1-alpha.2`（Oct 9）未选。版本与完整 npm closure 锁在 `agent-harness/dsh-runtime/package-lock.json`，镜像在 `/opt/deepsonar/dsh` 以 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，唯一 launcher 是官方 `dsh --profile`。`packages/runtime-sandbox/src/dsh-profile.ts` 为 `deepsonar` profile 写入 `bundles: []` 和显式 plugin allowlist，移除 spine、UI/web、settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 与 home overrides；安装包内 dormant UI 依赖不会启动服务。Standard 使用 native tools，PTC 使用 `ptc` 与 `@deepseek-ai/dsh-ptc-runtime-node` 的 `run_code`。Provider route/model 强制经 Model Gateway，沙箱只得到短期 token；skills 只从 Scheduler home 的 `${DSH_HOME}/skills` 根发现。`session.v4.jsonl` 是当前精确归档路径，历史 v0–v3 仅供 viewer 读取。父会话 idle 时只要受认证谱系下仍有活跃子代理就不催促或关闭；子代理 finished 后等待父处理回传并再次 idle 才进入完成门。官方 JSON-RPC 只提供 initialize/prompt/shutdown；同进程 follow-up 可用，跨进程持久 resume 不支持，adapter 以 `persistentSessionResume: false` 返回 `CONTEXT_RESUME_UNSUPPORTED`，不静默新建或重试。
 
 **Model Gateway 目录校验与 alias 语义（#570 / #656 / #679 / #707）：** 选模准入只认账号 `settings_config_json` 按其 Agent CLI 方言解析的模型 ID，探测 `model_catalog_json` 不授予选模资格。Job 先解析 Hub/runtime profile 的 `model_ref`、项目缺省和全局角色模型，并应用受治理的候选、能力与 fallback 规则；未指定时优先取账号已配置模型首项，再由 Provider/CLI 投影补缺省。显式模型没有符合账号配置清单的候选时以 `provider_credential_no_match` 返回结构化 RepairFeedback；选中后的模型准入继续 fail closed。仅无显式模型且名单为空的 CLI 缺省路径允许软降级。应急直通只可由平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true` 或管理员级项目 Agent allowlist `allow_model_catalog_passthrough` 授权，RoleConfig 字段不再授权。真正使用 CLI 内置缺省时，快照以 `cli-default:<name>` 标记，运行时 concurrency / Gateway 出站剥掉前缀；`job_usage_ledger.model`、`model_catalog_match` 与尽力读取的 `upstream_reporting_model` 保持各自口径，无上游报告字段不伪造。
 
@@ -286,6 +296,10 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - 审计日志 append-only；过程流、Session、运行产物和错误反馈不得泄露长期密钥或完整 Provider 响应。
 - 物理设备接入走 broker（沙箱不直连设备），设备按不可信输入对待，设备租约与授权细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md)。rig 端点与入站凭据只来自平台配置（`DEEPSONAR_DEVICE_BROKER_URL` / `DEEPSONAR_DEVICE_RIGS`），`devices.rig_id` 只存归属标识（schema v50），不存地址与密钥。
 
+### #778 离线适用证据校验
+
+[适用证据 preflight](agent-harness/capability-applicability/README.md)只对单个本项目 Skill 的精确 CAS 内容、原始冻结目录、撤权导出和作者声明做离线一致性检查，并比较独立标识的 expected/actual JSON。compatible 仅表示该冻结案例匹配；不鉴别导出身份，不提供实时授权、排序或推荐，不能推定方法有效。
+
 ## 12. 当前状态与开放演进
 
 | 方向 | 当前状态 | 下一步 |
@@ -336,3 +350,15 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - [`database/schema.sql`](database/schema.sql)：唯一数据库基线；
 - `/api/openapi.json`：当前 HTTP API；
 - [`AGENTS.md`](AGENTS.md)：编码 Agent 的操作纪律。
+
+### #778 离线能力证据审计
+
+[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
+
+### 项目知识独立研究准备（#777）
+
+[离线对照协议](agent-harness/knowledge-live/STUDY.md) 提供冻结样本、独立 oracle、预算/版本预检和待执行报告模板；复用现有知识 Job/work/receipt，不新增执行通道。#752 的实现验收保持完成，真实模型闭环和收益研究尚未执行。
+
+### Pi 大输出证据边界（#765）
+
+RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。

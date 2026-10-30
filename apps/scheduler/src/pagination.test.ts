@@ -67,3 +67,11 @@ test("cursor errors use bad-request for malformed cursors and conflict for gaps"
   assert.equal(cursorErrorHttpStatus("INVALID_CURSOR"), 400);
   assert.equal(cursorErrorHttpStatus("CURSOR_GAP"), 409);
 });
+
+
+test("finding cursors retain PostgreSQL microseconds and reject invalid calendar dates", () => {
+  const id = "00000000-0000-0000-0000-000000000001";
+  const stamp = "2026-08-04T00:00:00.123456Z";
+  assert.equal(decodeCursor(encodeCursor({ kind: "findings", id, created_at: stamp }), "findings")?.created_at, stamp);
+  assert.equal(decodeCursor(encodeCursor({ kind: "findings", id, created_at: "2026-02-30T00:00:00.123456Z" }), "findings"), null);
+});

@@ -1,3 +1,6 @@
+import { TaskContractEditor, TaskContractFeedbackView } from "../components/TaskContractEditor";
+import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
+import { ApiRequestError } from "../login-error";
 import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowUpRight, Clock, GitMerge, Pause, Play, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -8,8 +11,8 @@ import { SearchableMultiSelect } from "../SearchableSelect";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
-import { nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
-import { composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
+import { formatBeijingTime, nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
+import { SEED_SEVERITY_OPTIONS, composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
 import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatDate, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived";
@@ -18,35 +21,11 @@ type ScheduleMode = "immediate" | "at";
 const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
 const labelCls = "mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
-const SEED_SEVERITY_OPTIONS = [
-  { value: "critical", label: "严重" },
-  { value: "high", label: "高危" },
-  { value: "medium", label: "中危" },
-  { value: "low", label: "低危" },
-  { value: "info", label: "信息" },
-] as const;
 const NETWORK_OPTIONS = [
   { value: "project" as const, label: "继承项目设置" },
   { value: "allow" as const, label: "允许出网" },
   { value: "deny" as const, label: "禁止出网" },
 ];
-
-function formatBeijingTime(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  try {
-    return new Date(iso).toLocaleString("zh-CN", {
-      timeZone: "Asia/Shanghai",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }) + "（北京时间）";
-  } catch {
-    return iso;
-  }
-}
 
 function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
   const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
@@ -57,6 +36,10 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
     schedule: "immediate",
     startAtLocal: nextBeijing8amLocalValue(),
   });
+  const [contractDraft, setContractDraft] = useState("");
+  const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
+  const [createdCanvasId, setCreatedCanvasId] = useState<string | null>(null);
+  const parsedContract = parseTaskContractDraft(contractDraft);
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -130,6 +113,9 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
         className="surface-core p-5 sm:p-6"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (submitting || createdCanvasId) return;
+          if (parsedContract.error) return flash(parsedContract.error);
+          setContractFeedback({});
           if (!form.title.trim()) return flash("请写明希望得到的结果");
           if (!form.content.trim()) return flash("请补充必要背景或边界");
           if (form.kind === "compose" && selectedSeedIds.size === 0) {
@@ -147,6 +133,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           setSubmitting(true);
           try {
             const result = await api.createTask(projectId, {
+              ...(parsedContract.contract ? { task_contract: parsedContract.contract } : {}),
               title: form.title.trim(),
               content: form.content.trim(),
               kind: form.kind,
@@ -160,8 +147,12 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             } else {
               flash("任务已入队，Hub 正在决定执行路径");
             }
-            onDone(result.canvas_id);
+            if (taskFeedbackItems(result).length) {
+              setContractFeedback(result);
+              setCreatedCanvasId(result.canvas_id);
+            } else onDone(result.canvas_id);
           } catch (error) {
+            if (error instanceof ApiRequestError) setContractFeedback(error.taskContractFeedback);
             flash(`创建失败：${error instanceof Error ? error.message : error}`);
           } finally {
             setSubmitting(false);
@@ -207,6 +198,9 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
               rows={5}
             />
           </label>
+
+          <TaskContractEditor value={contractDraft} onChange={setContractDraft} disabled={submitting || Boolean(createdCanvasId)} />
+          <TaskContractFeedbackView feedback={contractFeedback} />
 
           <fieldset className="m-0 min-w-0 border-0 p-0">
             <legend className={`${labelCls} px-0`}>任务类型</legend>
@@ -454,9 +448,9 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           </div>
           <div className="flex gap-2 sm:ml-auto">
             <SecondaryButton type="button" onClick={onCancel}>稍后再说</SecondaryButton>
-            <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue)}>
+            {createdCanvasId ? <PrimaryButton type="button" onClick={() => onDone(createdCanvasId)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue || parsedContract.error)}>
               交给系统
-            </PrimaryButton>
+            </PrimaryButton>}
           </div>
         </div>
       </form>

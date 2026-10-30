@@ -31,3 +31,7 @@
 ## 验证策略
 
 行为测试优先于 typecheck：Control、Job 生命周期、Finding Research、Canvas fact、Web fact 和镜像信任各有对应单元/集成/Smoke 入口。CI 的 Test wiring ratchet guard 检查 `*.test.ts` 是否被脚本接线；CI 是否调用每个脚本以 `.github/workflows/ci.yml` 为准。本文没有把未运行的命令宣称为已通过，完成本次文档变更后只执行文档、链接、diff 和适用的 gate 检查。
+
+## 知识效果研究证据（#777）
+
+FR-KNOW-001 的状态机测试不证明模型收益。[离线研究协议](../../agent-harness/knowledge-live/STUDY.md) 冻结家族分组、样本 hash、独立 oracle 和质量硬门，模板逐例保留分母/失败/成本。当前观测分母为零，真实模型闭环 pending；任何低成本或模型自评均不能抵消关键质量退化。

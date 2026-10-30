@@ -192,7 +192,7 @@ export async function runOpenSandboxArchPoc(
 }
 
 export async function runOpenSandboxContractFailPoc(
-  runner: { provision: (input: import("./index.js").ProvisionInput) => Promise<unknown>; listResources: (filter?: { jobId?: string; attemptId?: string }) => Promise<Array<{ resourceId: string }>> },
+  runner: { provision: (input: import("../src/index.js").ProvisionInput) => Promise<unknown>; listResources: (filter?: { jobId?: string; attemptId?: string }) => Promise<Array<{ resourceId: string }>> },
   input: { jobId: string; attemptId: string; image?: string },
 ): Promise<{ rejected: true; leftovers: number }> {
   await runner.provision({

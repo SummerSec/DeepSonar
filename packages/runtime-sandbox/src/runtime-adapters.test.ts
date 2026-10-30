@@ -16,6 +16,7 @@ import {
   resolvePiCliModelId,
   splitPiModelRef,
   PiJsonlFramer,
+  piRpcMaxEventBytes,
   agentCliIdsCompatibleWithImage,
   applyRuntimeOutput,
   applyRuntimeOutputText,
@@ -174,7 +175,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   assert.match(startCommand, /DSH_SYSTEM_PROMPT="\$\( \{ printf '%s\\n\\n' 'You are an expert coding assistant operating inside pi, a coding agent harness\. You help users by reading files, executing commands, editing code, and writing new files\.'; cat '\/workspace\/\.deepsonar\/system-prompt\.txt'; \} \)" node \/opt\/deepsonar\/dsh\/node_modules\/@deepseek-ai\/dsh\/lib\/bin\.js --profile deepsonar/);
   assert.match(startCommand, /operating inside pi/);
   assert.doesNotMatch(startCommand, /DSH_SYSTEM_PROMPT="\$\(cat /);
-  assert.equal(adapter.version, "0.2.0-rc.2");
+  assert.equal(adapter.version, "0.2.1-rc.2");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
   assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, undefined);
@@ -207,7 +208,7 @@ test("DSH JSON-RPC initializes, continues one session, and shuts down", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const state = { sessionId: undefined as string | undefined, contextIdentity: {
     context_id: "ctx_0123456789abcdef0123456789abcdef", context_revision: 0,
-    adapter_id: "dsh", adapter_version: "0.2.0-rc.2", runtime_identity: "runtime",
+    adapter_id: "dsh", adapter_version: "0.2.1-rc.2", runtime_identity: "runtime",
     transform_chain_digest: `sha256:${"a".repeat(64)}`,
   }, model: "gpt-5.6", modelProvider: "xxxx", cwd: "/workspace" };
   const init = JSON.parse(adapter.encodeInput("first", state).trim()) as Record<string, unknown>;
@@ -722,7 +723,7 @@ function loadJsonlFixture(name: string): Record<string, unknown>[] {
 
 test("Pi terminal-error runtime fixture covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
-  assert.equal(adapter.version, "1.1.0");
+  assert.equal(adapter.version, "1.4.0");
   const state: Record<string, unknown> = {};
   const decoded = loadJsonlFixture("pi-0.84.4.runtime.jsonl").flatMap((line) => adapter.decodeOutput(line, state));
   assert.equal(state.sessionId, "pi-sess-0844");
@@ -738,9 +739,9 @@ test("Pi terminal-error runtime fixture covers required decode fields and unknow
   assert.throws(() => parsePiJsonlRecord(JSON.stringify({ type: "future_unknown_event" })), /PI_RPC_UNEXPECTED_EVENT/);
 });
 
-test("DSH 0.2.0-rc.2 runtime fixture covers required decode fields and unknown frames", () => {
+test("DSH runtime fixture（录制于 0.2.0-rc.2）covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  assert.equal(adapter.version, "0.2.0-rc.2");
+  assert.equal(adapter.version, "0.2.1-rc.2");
   const state = {
     sessionId: "session-dsh-020rc2",
     dshInitializeRequestId: "deepsonar-initialize-1",
@@ -785,17 +786,18 @@ test("DSH unknown session.event and methods are diagnosable and do not become co
 
 test("DSH actual native-subagent transcript admits lineage before child events without settling its parent", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  const state = { sessionId: "session-dsh-subagent" };
-  const decoded = loadJsonlFixture("dsh-0.2.0-rc.2.subagent.jsonl").flatMap((line) => {
+  const state = { sessionId: "parent-recorded" };
+  const records = JSON.parse(readFileSync(new URL("./fixtures/cli-decode/dsh-0.2.1-rc.2.subagent-lifecycle.json", import.meta.url), "utf8")).initial as Record<string, unknown>[];
+  const decoded = records.flatMap((line) => {
     const result = adapter.decodeOutput(line, state);
-    if ((line.params as { sessionId?: string } | undefined)?.sessionId === "session-dsh-child") {
+    if ((line.params as { sessionId?: string } | undefined)?.sessionId === "child-recorded") {
       assert.deepEqual(result, [{ type: "unknown_runtime" }]);
     }
     return result;
   });
   assert.equal(decoded.some((event) => event.is_error === true), false);
   assert.deepEqual(decoded.filter((event) => event.type === "agent_settled").map((event) => event.result), ["subagent-final"]);
-  assert.ok(decoded.some((event) => contentType(event) === "tool_result" && JSON.stringify(event).includes("child-verified")));
+  assert.ok(decoded.some((event) => event.type === "user" && JSON.stringify(event).includes("child-verified")));
 });
 
 for (const record of [
@@ -838,4 +840,139 @@ test("DSH RC rejects unscoped lifecycle and keeps child status separate", () => 
   const tool = adapter.decodeOutput({ jsonrpc: "2.0", method: "session.event", params: { sessionId: "session-parent", event: { type: "tool/result", data: { message: { id: "message-id", toolCallId: "call-id", isError: true, content: [{ type: "text", text: "failure" }] } } } } }, state);
   assert.match(JSON.stringify(tool), /"tool_use_id":"call-id"/);
   assert.match(JSON.stringify(tool), /"is_error":true/);
+});
+
+test("#765 上限默认 8MB 且可由环境变量在 1MB–64MB 内覆盖", () => {
+  assert.equal(piRpcMaxEventBytes({}), 8 * 1024 * 1024);
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(2 * 1024 * 1024) }), 2 * 1024 * 1024);
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: "1024" }), 8 * 1024 * 1024, "低于下限回落默认");
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: "abc" }), 8 * 1024 * 1024);
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(128 * 1024 * 1024) }), 8 * 1024 * 1024, "高于上限回落默认");
+});
+
+test("#765 2MB 级事件在默认上限下不再被判超限", () => {
+  const record = { type: "message_update", text: "y".repeat(2 * 1024 * 1024) };
+  const line = JSON.stringify(record);
+  assert.equal(parsePiJsonlRecord(line).type, "message_update");
+});
+
+test("#765 hard-limit control frames fail closed", () => {
+  const framer = new PiJsonlFramer(64);
+  const control = JSON.stringify({ type: "message_end", message: { stopReason: "error", text: "z".repeat(200) } });
+  assert.throws(() => framer.push(`${control}\n`), /PI_RPC_MESSAGE_TOO_LARGE/);
+});
+
+// Framing no longer truncates JSON. Large payload projection is covered through the real runner.
+test("#765 frame bytes and identity never depend on transport chunks", () => {
+  const payloads = [
+    { type: "message_update", text: "x".repeat(40) },
+    { nested: { type: "message_update" }, type: "message_end", message: { stopReason: "error" } },
+    { type: "message_update", text: "中文😀\\\"".repeat(20) },
+  ].map((value) => JSON.stringify(value));
+  const input = Buffer.from(payloads.join("\r\n") + "\r\n");
+  for (const stride of [1, 2, 3, 7, 75, input.length]) {
+    const framer = new PiJsonlFramer(1024);
+    const frames = [];
+    for (let i = 0; i < input.length; i += stride) frames.push(...framer.frames(input.subarray(i, i + stride)));
+    assert.deepEqual(frames.map((frame) => frame.line), payloads);
+    assert.deepEqual(frames.map((frame) => frame.bytes), payloads.map((line) => Buffer.byteLength(line)));
+    assert.deepEqual(framer.finish(), []);
+  }
+});
+
+test("#765 two legal 75-byte frames in one chunk stay legal at cap 100", () => {
+  const line = JSON.stringify({ type: "message_update", text: "x".repeat(40) });
+  assert.equal(Buffer.byteLength(line), 75);
+  assert.deepEqual(new PiJsonlFramer(100).push(`${line}\n${line}\n`), [line, line]);
+});
+
+test("#765 earlier and nested types cannot authorize dropping an oversized control frame", () => {
+  const small = JSON.stringify({ type: "message_update" });
+  for (const control of [
+    { type: "message_end", message: { stopReason: "error", text: "x".repeat(200) } },
+    { nested: { type: "message_update" }, type: "response", id: "ack", padding: "x".repeat(200) },
+  ]) {
+    const framer = new PiJsonlFramer(100);
+    assert.deepEqual(framer.push(small + "\n"), [small]);
+    assert.throws(() => framer.push(JSON.stringify(control) + "\n"), /PI_RPC_MESSAGE_TOO_LARGE/);
+  }
+});
+
+test("#765 bounded no-LF accumulation, CRLF boundary and UTF-16 split", () => {
+  const framer = new PiJsonlFramer(100);
+  for (let i = 0; i < 100; i++) assert.deepEqual(framer.push("x"), []);
+  assert.throws(() => framer.push("x".repeat(10000)), /PI_RPC_MESSAGE_TOO_LARGE/);
+  assert.throws(() => framer.push("ok\n"), /PI_RPC_FRAMER_ENDED/);
+  const crlf = new PiJsonlFramer(4);
+  assert.deepEqual(crlf.push("1234\r"), []);
+  assert.deepEqual(crlf.push("\n"), ["1234"]);
+  const unicode = new PiJsonlFramer(4);
+  assert.deepEqual(unicode.push("\ud83d"), []);
+  assert.deepEqual(unicode.push("\ude00\n"), ["😀"]);
+});
+
+test("#765 default 8MiB framing is invariant for batched 5MiB records and control prefixes", () => {
+  const first = JSON.stringify({ type: "agent_start" });
+  const large = JSON.stringify({ type: "message_update", text: "x".repeat(5 * 1024 * 1024) });
+  const stream = `${first}\n${large}\n${large}\n`;
+  for (const step of [4093, 1024 * 1024, stream.length]) {
+    const f = new PiJsonlFramer();
+    const frames = [];
+    for (let i = 0; i < stream.length; i += step) frames.push(...f.frames(stream.slice(i, i + step)));
+    assert.deepEqual(frames.map(v => v.line), [first, large, large]);
+    assert.deepEqual(frames.map(v => v.bytes), [first, large, large].map(v => Buffer.byteLength(v)));
+  }
+  const control = JSON.stringify({ type: "message_end", message: { stopReason: "error", text: "x".repeat(9 * 1024 * 1024) } });
+  const f = new PiJsonlFramer();
+  assert.deepEqual(f.push(first + "\n" + control.slice(0, 20)), [first]);
+  assert.throws(() => f.push(control.slice(20) + "\n"), /PI_RPC_MESSAGE_TOO_LARGE/);
+  assert.throws(() => new PiJsonlFramer().push(control + "\n"), /PI_RPC_MESSAGE_TOO_LARGE/);
+});
+
+test("DSH waits for authenticated nested and resumed child epochs, never child idle", () => {
+  const state = { sessionId: "root" };
+  const decode = (method: string, params: Record<string, unknown>) => AGENT_CLI_RUNTIME_ADAPTERS.dsh.decodeOutput({ jsonrpc: "2.0", method, params }, state);
+  const rootIdle = () => decode("session.status", { sessionId: "root", status: "idle" });
+  const start = (parentSessionId: string, childSessionId: string) => decode("subagent.started", { parentSessionId, childSessionId });
+  const finish = (parentSessionId: string, childSessionId: string) => decode("subagent.finished", { parentSessionId, childSessionId, status: "ok", stopReason: "completed" });
+  assert.deepEqual(start("root", "child"), []);
+  assert.deepEqual(start("child", "grandchild"), []);
+  assert.deepEqual(rootIdle(), []);
+  decode("session.status", { sessionId: "child", status: "idle" });
+  assert.deepEqual(rootIdle(), []);
+  assert.deepEqual(finish("root", "child"), []);
+  assert.deepEqual(rootIdle(), [], "grandchild remains active");
+  assert.equal(finish("root", "grandchild")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.equal(finish("root", "unknown")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.deepEqual(rootIdle(), [], "forged finishes cannot release the gate");
+  assert.deepEqual(finish("child", "grandchild"), []);
+  assert.equal(rootIdle()[0]?.type, "agent_settled");
+  assert.deepEqual(finish("child", "grandchild"), [], "duplicate finish is harmless");
+  decode("session.status", { sessionId: "child", status: "running" });
+  assert.deepEqual(rootIdle(), [], "continuable child resumed without another started notification");
+  assert.deepEqual(finish("root", "child"), []);
+  assert.equal(rootIdle()[0]?.type, "agent_settled");
+  assert.equal(start("root", "root")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.equal(start("child", "child")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+  assert.equal(start("other", "child")[0]?.result, "DSH_JSONRPC_SESSION_MISMATCH");
+});
+
+test("DSH parent failure is terminal even while a child is active", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh, state = { sessionId: "root" };
+  adapter.decodeOutput({ method: "subagent.started", params: { parentSessionId: "root", childSessionId: "child" } }, state);
+  adapter.decodeOutput({ method: "session.event", params: { sessionId: "root", event: { type: "turn/end", data: { reason: { kind: "error", message: "parent failed" } } } } }, state);
+  const output = adapter.decodeOutput({ method: "session.status", params: { sessionId: "root", status: "idle" } }, state);
+  assert.equal(output[0]?.is_error, true);
+});
+
+test("DSH failed/cancelled children release only their own work and leave recovery to the parent", () => {
+  for (const stopReason of ["error", "cancelled", "max-tokens"]) {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh, state = { sessionId: "root" };
+    const decode = (method: string, params: Record<string, unknown>) => adapter.decodeOutput({ method, params }, state);
+    for (const childSessionId of ["slow", "failed"]) decode("subagent.started", { parentSessionId: "root", childSessionId });
+    assert.deepEqual(decode("subagent.finished", { parentSessionId: "root", childSessionId: "failed", status: "error", stopReason }), []);
+    assert.deepEqual(decode("session.status", { sessionId: "root", status: "idle" }), []);
+    decode("subagent.finished", { parentSessionId: "root", childSessionId: "slow", status: "ok", stopReason: "completed" });
+    assert.equal(decode("session.status", { sessionId: "root", status: "idle" })[0]?.type, "agent_settled");
+  }
 });

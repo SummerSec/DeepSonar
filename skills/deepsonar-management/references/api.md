@@ -73,9 +73,11 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 ### 任务 / 事件 / 画布
 
+可选 `task_contract` 的版本、模板、字段与准入语义见[下发指南](task-dispatch.md)。201 返回字段级 `task_contract_warnings`；创建前存在必要条件阻塞时返回 `409 task_contract_blocked`、`task_contract_blockers` 及 warnings，且不创建 Canvas/Job。每条反馈包含 `code/path/message/suggestion`。未提供契约仍接受自由文本，不按 Markdown 标题拒绝。
+
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?, device?}`；`device` = 真实设备需求 `{transport, key?, model?, exclusive?, ttl_sec?, roles?}`（缺省 `roles:["test"]`），冻结进 Job 快照并需要项目先 `device_access_enabled=true`，否则 `409 device_not_authorized`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
+| POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?, device?, task_contract?}`；`device` = 真实设备需求 `{transport, key?, model?, exclusive?, ttl_sec?, roles?}`（缺省 `roles:["test"]`），冻结进 Job 快照并需要项目先 `device_access_enabled=true`，否则 `409 device_not_authorized`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
 | PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?}`（至少一项）；同步 `canvases.title` 与 `target_json.title/content/goal` 及 root 节点。只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`。归档返回 `409 TASK_ARCHIVED` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |
@@ -230,7 +232,7 @@ PUT body：
 
 `platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会进入当次 Job 控制 API allowlist，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
 
-DSH 运行时固定为官方 `@deepseek-ai/dsh@0.2.0-rc.2`，由隔离 `agent-harness/dsh-runtime/package-lock.json` 冻结，镜像在 `/opt/deepsonar/dsh` 使用 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，入口为 `dsh --profile`。Job 创建时将 `dsh_task_mode=standard|ptc` 冻结：standard 使用 native tools，ptc 使用 `run_code`。`deepsonar` profile 的 `bundles: []` 与显式 allowlist 不启动 UI/web，不使用 settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 或 home overrides；skills 只从 Scheduler 物化的 `.dsh/skills` 根发现。Provider route/model 只经 Model Gateway，沙箱仅获得短期 Gateway token。官方 JSON-RPC 仅支持 initialize/prompt/shutdown，同进程 follow-up 可用；跨进程持久 resume 不支持，不会静默新建会话或重试。
+DSH 运行时固定为官方 `@deepseek-ai/dsh@0.2.1-rc.2`，由隔离 `agent-harness/dsh-runtime/package-lock.json` 冻结，镜像在 `/opt/deepsonar/dsh` 使用 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，入口为 `dsh --profile`。Job 创建时将 `dsh_task_mode=standard|ptc` 冻结：standard 使用 native tools，ptc 使用 `run_code`。`deepsonar` profile 的 `bundles: []` 与显式 allowlist 不启动 UI/web，不使用 settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 或 home overrides；skills 只从 Scheduler 物化的 `.dsh/skills` 根发现。Provider route/model 只经 Model Gateway，沙箱仅获得短期 Gateway token。官方 JSON-RPC 仅支持 initialize/prompt/shutdown，同进程 follow-up 可用；跨进程持久 resume 不支持，不会静默新建会话或重试。
 
 `runtime_image_key`：
 - `null` = 系统底座（调度默认 deepsonar-base）
