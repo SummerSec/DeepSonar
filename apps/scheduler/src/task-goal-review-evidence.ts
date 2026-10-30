@@ -3,6 +3,7 @@ import { criterionEvidenceBudget, inspectCriterionEvidence, type EvidenceReadBud
 import { goalReviewDigest } from "./task-goal-review-source.js";
 
 export interface GoalReviewEvidenceBinding {
+  content_schema_version: 2;
   fact_id: string;
   artifact_id: string;
   evidence_id: string;
@@ -13,6 +14,13 @@ export interface GoalReviewEvidenceBinding {
 export interface GoalReviewEvidenceResult {
   bindings: GoalReviewEvidenceBinding[];
   blockedReasons: string[];
+}
+/** Trust annotations do not change executed evidence; rejected Facts remain filtered by SQL. */
+export function goalReviewExecutionFact(fact: Record<string, unknown>): Record<string, unknown> {
+  const { verification_status: _status, body_json, ...content } = fact;
+  const body = body_json && typeof body_json === "object" && !Array.isArray(body_json) ? body_json as Record<string, unknown> : {};
+  const { manual_verification: _manual, ...executionBody } = body;
+  return { ...content, ...(body_json === undefined ? {} : { body_json: executionBody }) };
 }
 /** No remote URI reads. Active submissions bind metadata; completed reads inspect retained bytes. */
 export async function loadGoalReviewEvidence(
@@ -51,8 +59,8 @@ export async function loadGoalReviewEvidence(
         relative.split("/").some((part) => !part || part === "." || part === "..") || !/^[a-f0-9]{64}$/.test(item.sha256 ?? "")) {
         blockedReasons.push("goal_review_evidence_binding_invalid"); continue;
       }
-      bindings.push({ fact_id: String(fact.id), artifact_id: String(fact.artifact_id), evidence_id: item.id,
-        uri, sha256: item.sha256!, content_sha256: goalReviewDigest({ fact, evidence: item }) });
+      bindings.push({ content_schema_version: 2, fact_id: String(fact.id), artifact_id: String(fact.artifact_id), evidence_id: item.id,
+        uri, sha256: item.sha256!, content_sha256: goalReviewDigest({ fact: goalReviewExecutionFact(fact), evidence: item }) });
     }
     if (inspectBytes) {
       const retained = await inspectCriterionEvidence(jobId, attemptId, evidence, budget);

@@ -6,6 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
@@ -1189,6 +1190,7 @@ const OPS: Op[] = [
           job: FactJobSchema,
           plan_criterion_source: { type: "object", nullable: true, additionalProperties: true, description: "当前 Artifact/Job/Attempt 与留存文件内容版本、eligible 和不可用原因；不包含文件原文。" },
           plan_bindings: { type: "object", additionalProperties: true, description: "最近 32 条操作员判据绑定审计及 truncated；完整决策留在 append-only audit_logs。" },
+          goal_review_options: { type: "object", additionalProperties: true, description: "最多20条可显式关联的目标评审身份、判据、expected_review_sha256及阻塞原因；与证据来源共享8MiB预算。可选项不是操作员授权。" },
           trace: {
             type: "object",
             additionalProperties: false,
@@ -1227,6 +1229,8 @@ const OPS: Op[] = [
             expected_binding_id: { type: "string", format: "uuid", nullable: true },
             assessment: { type: "string", enum: ["satisfies", "contradicts", "inconclusive"] },
             observation: { type: "string", enum: ["positive", "negative", "unspecified"] },
+            goal_review: { ...z.toJSONSchema(PlanGoalReviewBinding, { target: "openapi-3.0", io: "input" }),
+              description: "可选的显式附加证明。操作员确认目标判据如何覆盖当前Plan判据；Plan必须冻结同一任务契约，关联评审与原始证据持续重验，不授予新的完成authority。" },
           },
         },
       },

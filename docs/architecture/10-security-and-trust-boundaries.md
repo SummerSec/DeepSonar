@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -68,3 +68,7 @@ flowchart LR
 B 首片的 plan_basis 只允许既有 Intent 内一次补证，不新增权限。Task 输入、Plan、来源、已读 projection 与事件 revision 在最终 Canvas→Job 事务重验；完成须所有必要判据当前正向操作员授权。未知外部效果禁止补证和自动完成；普通 request_human 始终可停止。来源 SHA 纳入保存的 Task 输入，不伪造外部目标版本，详见 [Plan 范围](../PLAN_GAP_PROJECTION.md)。
 
 Plan 回执只绑定原 Job/Attempt、冻结快照及请求内容；查询不恢复执行。未知效果阻止 Hub 提案恢复，人工停止不受该阻断；普通调用不能借相同 event_id 穿过宿主预留。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。
+
+## 目标结果与 Plan 显式关联（#767）
+
+任务声明、证据真实来源、判据评价及完成 authority 是独立边界。目标评审是执行来源隔离而非不同人/模型认证；blocked/not_executed、失效、冲突、截断或预算不足不得贡献满足。Plan 可选关联只增加已选择绑定的持续来源约束，不给所有任务新增人工门，不自动赋予 operator_attestation 或赏金资格。详见[结果评审](../TASK_RESULT_REVIEW.md)、[Plan 关联](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)及[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。

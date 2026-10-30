@@ -33,6 +33,9 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 任务下发支持可选版本化 `task_contract`（#767）：共享 schema/场景模板统一 API、Web 与管理 CLI 的结构化输入，Canvas 保存解析后的契约与模板版本；原始需求继续保留。创建反馈区分缺项提示与执行阻塞，Dispatcher 在沙箱创建前按当前可验证事实复核。契约不授予身份、写权限或出网权限；无法验证必要条件时停止派发，不把声明当证明。自由文本仍是受支持输入，不以 Markdown 标题验收。详见 [任务下发指南](skills/deepsonar-management/references/task-dispatch.md)及 [FR-TASK-006](docs/architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。
 
+目标成果分层为研究候选、技术验证与任务判据评价，不以 Finding 数量或 severity 计目标完成。工程 delivery、合法 negative_result 使用 Fact 的 task.result Artifact，无须构造 Finding；blocked/not_executed 仅保留缺口。来源隔离评审复核实际证据、完整评价集合、冲突与失效，不认证不同人/模型或赏金资格。Plan 可选显式关联此评审，仍由操作员保有语义绑定 authority 与 verified 原始 Fact，不按索引映射，不替代原完成门；显式关联与失效完成门已接线，验证见验收矩阵。见[结果评审](docs/TASK_RESULT_REVIEW.md)、[Plan 绑定](docs/PLAN_GAP_PROJECTION.md)、[验收矩阵](docs/TASK_DISPATCH_ACCEPTANCE.md)。无契约是原可选设计，明确 unassessed，不以强制迁移作为本 issue 必须关闭条件。
+
+
 已提供契约执行通用基本完整性与整契约绑定的研究候选检查；省略 outcome 或 task_defined 不绕过，赏金只追加筛选。通过为 admitted_for_research，非目标达标或高置信提交资格。无契约入口仍 unassessed，独立复核/资格与 #775 整体收敛未完成，见[首片边界](docs/TASK_OUTCOME_ADMISSION.md)。
 
 ## 3. 核心实体

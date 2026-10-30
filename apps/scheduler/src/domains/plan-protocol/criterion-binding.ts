@@ -1,8 +1,10 @@
+import { evaluateGoalReviewBinding, loadGoalReviewBindingContext, planGoalReviewContractMatches } from "./goal-review-binding.js";
+import { criterionEvidenceBudget } from "./criterion-evidence.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import type { sql } from "../../db.js";
 import { readPlanAudit } from "./application.js";
-import { contentSha256, planCriteria, PLAN_BINDING_ACTION, StoredPlanCriterionBinding, type PlanCriterionBindingRequest } from "./criterion-model.js";
+import { contentSha256, planCriteria, PLAN_BINDING_ACTION, StoredPlanCriterionBinding, PlanCriterionBindingRequest } from "./criterion-model.js";
 import { loadCriterionSource } from "./criterion-source.js";
 
 export class CriterionBindingError extends Error {
@@ -23,15 +25,22 @@ export async function attestPlanCriterion(
   db: typeof sql, req: FastifyRequest, canvasId: string, projectId: string, factId: string,
   request: PlanCriterionBindingRequest, verificationEpoch: string, rationale: string,
 ): Promise<void> {
-  const [job] = await db`SELECT payload_json FROM jobs WHERE id = ${request.plan_job_id}
+  request = PlanCriterionBindingRequest.parse(request);
+  const budget = criterionEvidenceBudget();
+  const [job] = await db`SELECT payload_json,agent_snapshot_json FROM jobs WHERE id = ${request.plan_job_id}
     AND canvas_id = ${canvasId} AND project_id = ${projectId} AND type <> 'report'`;
   const plan = readPlanAudit(job?.payload_json)?.raw;
   if (!plan || contentSha256(plan) !== request.plan_sha256) throw new CriterionBindingError("PLAN_BINDING_STALE_PLAN");
   const criterion = planCriteria(plan).find((item) => item.id === request.criterion_id);
   if (!criterion) throw new CriterionBindingError("PLAN_BINDING_INVALID_CRITERION");
-  const source = await loadCriterionSource(db, canvasId, projectId, factId);
+  const source = await loadCriterionSource(db, canvasId, projectId, factId, budget);
   if (!source?.eligible || !source.source.attempt_id || !source.source.event_id) throw new CriterionBindingError("PLAN_BINDING_SOURCE_UNAVAILABLE");
   if (source.source_sha256 !== request.expected_source_sha256) throw new CriterionBindingError("PLAN_BINDING_STALE_SOURCE");
+  if (request.goal_review) {
+    if (!planGoalReviewContractMatches(job?.agent_snapshot_json, request.goal_review.task_contract_sha256)) throw new CriterionBindingError("PLAN_BINDING_GOAL_REVIEW_CONTRACT_MISMATCH");
+    const context = await loadGoalReviewBindingContext(db, projectId, canvasId, budget);
+    if (!evaluateGoalReviewBinding(request.goal_review, factId, request.assessment, context).ok) throw new CriterionBindingError("PLAN_BINDING_GOAL_REVIEW_UNAVAILABLE");
+  }
   const [latest] = await db`SELECT after_json FROM audit_logs WHERE project_id = ${projectId}
     AND resource_id = ${factId} AND action = ${PLAN_BINDING_ACTION} AND result = 'ok'
     AND after_json->>'plan_job_id' = ${request.plan_job_id}
@@ -43,6 +52,7 @@ export async function attestPlanCriterion(
   if (previous.success && previous.data.plan_sha256 === request.plan_sha256
     && previous.data.expected_source_sha256 === request.expected_source_sha256
     && previous.data.assessment === request.assessment && previous.data.observation === request.observation
+    && contentSha256(previous.data.goal_review ?? null) === contentSha256(request.goal_review ?? null)
     && previous.data.verification_epoch === verificationEpoch && previous.data.rationale === rationale) return;
   if ((previous.success ? previous.data.binding_id : null) !== request.expected_binding_id) {
     throw new CriterionBindingError("PLAN_BINDING_REVISION_CONFLICT");

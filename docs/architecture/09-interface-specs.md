@@ -85,3 +85,7 @@ Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/req
 ## 成果候选入口（#767）
 
 已提供 TaskContract 的 objective/targets/scope/evidence/acceptance 在创建和派发时检查基本完整性，不因 outcome 省略或 task_defined 而绕过。emit_finding 的 outcome_claim 绑定整个冻结 task_contract_sha256、target、可选 baseline 及逐判据 Fact 引用；赏金 rule_assessments 只是附加筛选。objective/scope/evidence/exclusion:N 必评，acceptance:N 至少一项 matches 表示贡献关联，不是全任务完成。通过仅 admitted_for_research，submission_eligibility:not_assessed；无契约旧入口仍 unassessed。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。
+
+## 目标结果与 Plan 显式关联（#767）
+
+emit_fact.artifact.task_result 接收 delivery/negative_result/blocked/not_executed；goal_review 请求恰好选 finding_id 或 fact_id，均绑定 candidate_artifact_id。Plan verification PATCH 本轮加入可选 plan_binding.goal_review 显式引用，不按索引映射，不替代 verified+note、jobs:control 或原绑定。详见[结果评审](../TASK_RESULT_REVIEW.md)、[Plan 关联](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)及[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。

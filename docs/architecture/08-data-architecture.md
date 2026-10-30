@@ -96,7 +96,7 @@ Verify round 有 pending/running/rework/confirmed/needs_human/failed/refuted/inc
 
 ## Plan 审计与判据绑定（#775 A）
 
-jobs.payload_json.plan_protocol 按 Canvas/项目冻结到报告输入。规范化 raw Plan SHA 与 criterion_id 标识判据；现有 append-only audit_logs 的 canvas.fact.plan_binding 保存操作员评价、来源内容 SHA、Fact 验证 epoch 与 Job/Attempt/event/Artifact revision/Evidence IDs。该审计与 Fact 信任更新原子提交；expected_binding_id 串行 CAS，重复决定幂等。刷新重新核对实际留存内容与来源状态，失效不能自动恢复；历史报告不回写。未新增 schema 或执行账本，整体完成仍 unknown；见 [来源、限额及范围](../PLAN_GAP_PROJECTION.md)。
+jobs.payload_json.plan_protocol 按 Canvas/项目冻结到报告输入。规范化 raw Plan SHA 与 criterion_id 标识判据；现有 append-only audit_logs 的 canvas.fact.plan_binding 保存操作员评价、来源内容 SHA、Fact 验证 epoch 与 Job/Attempt/event/Artifact revision/Evidence IDs。该审计与 Fact 信任更新原子提交；expected_binding_id 串行 CAS，重复决定幂等。刷新重新核对实际留存内容与来源状态，失效不能自动恢复；历史报告不回写。未新增 schema 或执行账本；A 投影本身不决定整体完成，B 的 complete 仍受完整判据门约束；见 [来源、限额及范围](../PLAN_GAP_PROJECTION.md)。
 
 ## Finding 来源身份（#770 A）
 
@@ -111,3 +111,9 @@ Plan 成功响应复用 events.control_receipt；operation、key、原请求/展
 ## 成果规则与候选依据（#767）
 
 规范化后的整个任务契约由服务端计算 task_contract_sha256，候选绑定目标/可选基线与逐判据 Fact；赏金源材料 source.sha256 是另外的操作员声明身份，不可混用。Finding raw_json 和 Artifact 保存准入依据，status为 admitted_for_research且submission_eligibility:not_assessed。历史冻结不回写，观察先独立落库。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。
+
+## 目标结果与 Plan 显式关联（#767）
+
+task.result 保存声明与事件派生身份，task.goal_evaluation 保存宿主绑定；原文留 Artifact，报告使用有界引用。可选 plan_binding.goal_review 关联 review_artifact_id、task_contract_sha256、criterion_ids、expected_review_sha256（已接线），不增加表或 authority。执行证明摘要不含仅改变人工验证注释的字段；rejected 与 Plan verified 权限仍分别检查。详见[结果评审](../TASK_RESULT_REVIEW.md)、[Plan 关联](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)及[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+执行证据绑定的 `content_schema_version: 2` 摘要排除 `manual_verification`/`verification_status`，拒绝状态与 Plan verified 授权仍独立校验。旧 v1 摘要可能失效，严格拒绝而不自动转换；历史记录不回写，必要时重新产出结果与评审，不能静默改绑旧 assignment。部署边界见[Plan 来源版本](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)。

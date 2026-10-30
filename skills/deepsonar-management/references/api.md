@@ -432,6 +432,14 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 - schema 版本：以运行中 `/schema` 为准；远端 `origin/main` 最新基线为 v24，当前未同步 checkout 仍可能是 v23。空库套对应 checkout 的 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
+## 将目标评审显式关联到 Plan 判据
+
+`GET /canvases/:id/facts/:nodeId` 返回 `plan_criterion_source`、`plan_bindings` 和 `goal_review_options`。后者最多 20 项，提供可选评审 Artifact、契约摘要、目标判据与 `expected_review_sha256`；`blocked` 或 `truncated` 不能当作完成依据，列表本身也不授予权限。
+
+现有 `PATCH /canvases/:id/facts/:nodeId/verification` 的 `plan_binding` 可附加 `goal_review: {review_artifact_id, task_contract_sha256, criterion_ids, expected_review_sha256}`。仍须 `jobs:control`、`status: verified`、明确的操作员说明，以及原 Plan/来源/绑定版本字段。操作员须说明这些目标判据如何覆盖完整的 Plan 判据，不按数组序号推导映射。Plan owner 必须冻结同一任务契约；所绑定 Fact 必须是相应评审使用的原始证据，评审 Artifact 自身不能代替执行证据。
+
+关联后每次投影与最终结算都重验评审、来源和证据；冲突、不足、过期、撤销或预算截断仍阻断。原有未选择关联的合法操作员绑定保持原规则，不新增通用人工审批节点。`accepted` 回执只表示持久接纳，不表示 Plan 已完成。
+
 ## 发现契约（推荐流程）
 
 ```bash

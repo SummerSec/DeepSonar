@@ -61,3 +61,9 @@ criteria:
 验证关注真实创建/Hub Intent 入口、宿主 assignment 不可伪造、maker/证据源不能自评、entire_criterion、幂等与冲突、当前成功 Attempt、unknown effects、实际留存字节/hash、无人工 verified 前提、失效保留、有效矛盾、截断及报告版本。测试入口见 [评审测试](../apps/scheduler/src/task-goal-review.test.ts)和[证据测试](../apps/scheduler/src/task-goal-review-evidence.test.ts)，实际 SQL、运行时转发与报告结果以 PR 验收记录为准。
 
 不新增数据库表、Control operation、核心状态或执行通道。来源隔离不等于独立人/模型认证，也不自动完成目标适用性、knownness、赏金资格或 #775 整体闭环。用户免除真实模型验收，效果仍未验证，不以模型试验作为交付门槛。
+
+## Plan 显式关联
+
+操作员可在原 Plan Fact 绑定中选择 goal_review 来源及任务判据，明确其对 Plan 判据的自然语言覆盖，不按索引自动映射。原 verified Fact、jobs:control、operator_attestation 与全判据完成门保留；未选择关联的合法绑定不变，选择后须持续复核同契约及完整有效评价集合，失效不能静默退回无关联。详见[Plan 关联字段与来源](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。这不是赏金资格或新增所有任务人工门。
+
+执行证据绑定采用 `content_schema_version:2`，摘要排除 `manual_verification` 与 `verification_status`，但 rejected 仍拒绝，Plan verified 授权另行校验。旧 v1 摘要可能失效，保留历史并严格拒绝，不自动转换；需重新产出结果/独立评审时，旧 assignment 不得静默改绑。此变更有部署版本边界，详见[Plan 来源版本](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。

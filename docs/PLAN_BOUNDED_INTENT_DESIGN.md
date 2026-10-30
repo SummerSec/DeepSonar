@@ -17,7 +17,7 @@
 
 最小目标引用为 `plan_job_id + canonical raw Plan SHA`；判据复用 CompletionPolicy 的 `completion` / `output-N`，不让调用者额外写一份完成标准。它说明“该计划的这版判据”，不自动证明计划等于用户全部需求。
 
-实现现状的输入身份来自已保存 Canvas title/target_json（排除 convergence 运行记账）、被引用 Artifact revision、Job/Attempt 冻结快照和留存 Evidence 内容；它不是另一个用户目标修订协议。不存在的目标代码 commit、外部环境版本或账号授权不得由模型补造。缺少完成所需基线时可提补证或 needs_human，不能宣布 complete。无需 #767 新 task_contract，#770 项目关联不参与证据与授权。
+实现现状的输入身份来自已保存 Canvas title/target_json（排除 convergence 运行记账）、被引用 Artifact revision、Job/Attempt 冻结快照和留存 Evidence 内容；它不是另一个用户目标修订协议。不存在的目标代码 commit、外部环境版本或账号授权不得由模型补造。缺少完成所需基线时可提补证或 needs_human，不能宣布 complete。原 Plan 绑定无需 task_contract；可选目标评审关联要求同契约及持续有效来源，见[关联边界](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。#770 项目关联不参与证据与授权。
 
 A 的 operator_attestation 是操作员语义评价，不能升级为模型评价器。B 可因已有证据不足而派发工作；若要提出有证据的 complete，则必须读取完整、非截断且全部必要判据均为当前授权 satisfied 的判据集合，并仍通过原有 Finding/Verify/Task 完成门。没有可用语义权威时停止为 needs_human；不能用 raw PlanResult 的 complete 绕过。
 

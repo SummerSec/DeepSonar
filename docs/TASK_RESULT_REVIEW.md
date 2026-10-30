@@ -59,10 +59,16 @@ evidence_refs: [<本 Job 本 Attempt 的证明 Fact UUID>]
 
 未完成验收继续保留：
 
-- 未提供契约入口的迁移决策；unassessed 不能冒充统一标准覆盖。
+- 未提供契约按原可选设计保持 unassessed；是否提高准入要求属另行产品决策，不作为本 issue 必须迁移项。
 - 目标身份/租户、写授权及必要前置条件的可信适配器；fail-closed 不代表获准动态链已验收。
 - 高门槛安全提交候选的可复现证据、适用攻击链、knownness 对目标版本的适用性与独立程序资格。
-- #775 的目标 revision、剩余证据、下一步、停止与整体完成接线；不得自动映射本片评价 authority。
-- 跨入口至报告的离线/模拟端到端验收，以及架构追溯、视图与索引的协调同步。
+- #775 的更广目标 revision/后续策略范围另行验收；本轮已接可选显式 Plan 关联，不自动映射评价 authority。
+- 当前离线/数据库端到端证据覆盖明确样本，不代表任意目标或所有动态授权链；跨切片验收与未完成项见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 用户已免除真实模型验收，不以模型或生产试验阻碍交付；质量效果、提交接受率和奖励收益仍未验证，不作收益承诺。
+
+## Plan 显式关联
+
+操作员可在原 Plan Fact 绑定中选择 goal_review 来源及任务判据，明确其对 Plan 判据的自然语言覆盖，不按索引自动映射。原 verified Fact、jobs:control、operator_attestation 与全判据完成门保留；未选择关联的合法绑定不变，选择后须持续复核同契约及完整有效评价集合，失效不能静默退回无关联。详见[Plan 关联字段与来源](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。这不是赏金资格或新增所有任务人工门。
+
+执行证据绑定采用 `content_schema_version:2`，摘要排除 `manual_verification` 与 `verification_status`，但 rejected 仍拒绝，Plan verified 授权另行校验。旧 v1 摘要可能失效，保留历史并严格拒绝，不自动转换；需重新产出结果/独立评审时，旧 assignment 不得静默改绑。此变更有部署版本边界，详见[Plan 来源版本](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。
