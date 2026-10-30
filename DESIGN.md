@@ -343,6 +343,10 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - `/api/openapi.json`：当前 HTTP API；
 - [`AGENTS.md`](AGENTS.md)：编码 Agent 的操作纪律。
 
+### 项目知识独立研究准备（#777）
+
+[离线对照协议](agent-harness/knowledge-live/STUDY.md) 提供冻结样本、独立 oracle、预算/版本预检和待执行报告模板；复用现有知识 Job/work/receipt，不新增执行通道。#752 的实现验收保持完成，真实模型闭环和收益研究尚未执行。
+
 ### Pi 大输出证据边界（#765）
 
 RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。
