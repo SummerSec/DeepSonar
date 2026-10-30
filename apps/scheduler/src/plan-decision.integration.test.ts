@@ -105,6 +105,8 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     assert.equal(original.receipt_status,'persisted_deferred');
     assert.equal(original.operation,'submit_hub_decision');
     assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0,'durable acceptance alone creates no child');
+    const pendingGap=await read();
+    assert.equal(pendingGap.supplementation_execution.state,'not_dispatched','receipt alone is not committed dispatch');
     const cached=await invoke('submit_hub_decision',requestProposal,key);assert.equal(cached.statusCode,200,cached.payload);
     assert.deepEqual(cached.json(),original);
     api.clearPlatformApiIdempotencyCache();api.unregisterRuntimeHandler(hub);
@@ -156,6 +158,90 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     const children=await sql`SELECT * FROM jobs WHERE parent_job_id=${hub}`;assert.equal(children.length,1);
     assert.equal(children[0].payload_json.plan_context.plan_job_id,hub);
     assert.equal(children[0].agent_snapshot_json.runtime_image.image_key,'deepsonar-base');
+    // Execution lifecycle is an independently sourced projection, never criterion authority.
+    const {loadPlanExecution}=await import('./domains/plan-protocol/execution-projection.js');
+    const {loadPlanGapReport}=await import('./domains/plan-protocol/gap-report.js');
+    const {contentSha256}=await import('./domains/plan-protocol/criterion-model.js');
+    const childId=String(children[0].id);
+    const execution=()=>loadPlanExecution(sql,canvas,project,hub,gap.plan_sha256);
+    const queuedGap=await read();
+    assert.equal(queuedGap.supplementation_execution.state,'queued');
+    assert.equal(queuedGap.supplementation_execution.source.job_id,childId);
+    assert.equal(queuedGap.supplementation_execution.source.decision_event_id,key);
+    assert.equal(queuedGap.supplementation_execution.completion_assessment,'unknown');
+    const frozenReport=await loadPlanGapReport(sql,canvas,project);
+    const frozenHash=contentSha256(frozenReport);
+    assert.equal(contentSha256(await loadPlanGapReport(sql,canvas,project)),frozenHash,'same lifecycle facts yield stable report input');
+    const historicalAttempt=randomUUID(),latestAttempt=randomUUID();
+    await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase) VALUES
+      (${historicalAttempt},${childId},1,'failed','terminal'),(${latestAttempt},${childId},2,'active','preparing')`;
+    for(const [jobStatus,attemptStatus,phase,expected] of [
+      ['claimed','active','preparing','queued'],['provisioning','active','provisioned','preparing'],
+      ['running','active','agent.ready','running'],['waiting_human','active','agent.suspended','waiting_human'],
+      ['succeeded','succeeded','terminal','succeeded'],['failed','failed','terminal','failed'],
+      ['cancelled','cancelled','terminal','cancelled'],['timeout','timeout','terminal','timeout'],
+      ['running','succeeded','terminal','unknown'],['orphan','orphan','terminal','unknown'],
+    ] as const){
+      await sql`UPDATE jobs SET status=${jobStatus} WHERE id=${childId}`;
+      await sql`UPDATE job_attempts SET status=${attemptStatus},phase=${phase} WHERE id=${latestAttempt}`;
+      const projected=await execution();
+      assert.equal(projected.state,expected,`${jobStatus}/${attemptStatus}`);
+      assert.equal(projected.source?.attempt_id,latestAttempt);
+      assert.equal(projected.completion_assessment,'unknown');
+    }
+    await sql`UPDATE jobs SET status='waiting_human' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='active',phase='agent.suspended' WHERE id=${latestAttempt}`;
+    const humanEvent=randomUUID();
+    await sql`INSERT INTO events(job_id,event_id,attempt_id,job_seq,type,payload_json)
+      VALUES(${childId},${humanEvent},${latestAttempt},1,'human',${sql.json({reason:'Credential unavailable; do not expose this free-form reason',subject:{type:'platform_blocker',kind:'credential'}})})`;
+    const waiting=await execution();
+    assert.deepEqual(waiting.reported_blocker,{event_id:humanEvent,authority:'agent_report',kind:'credential'});
+    assert.ok(!JSON.stringify(waiting).includes('free-form'));
+    await sql`DELETE FROM events WHERE event_id=${humanEvent}`;
+    await sql`UPDATE jobs SET status='succeeded' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${latestAttempt}`;
+    await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status)
+      VALUES(${historicalAttempt},${childId},'historical-unresolved','execution','unknown')`;
+    assert.equal((await execution()).state,'unknown','a later success cannot hide historical unknown effects');
+    assert.equal((await execution()).reason,'unknown_external_effect');
+    await sql`UPDATE jobs SET status='running' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='active',phase='agent.ready' WHERE id=${latestAttempt}`;
+    await sql`UPDATE job_attempt_effects SET status='effect_pending' WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await execution()).state,'unknown','terminal historical Attempt with an unclosed effect remains unknown while a later Attempt runs');
+    await sql`UPDATE jobs SET status='succeeded' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${latestAttempt}`;
+    await sql`UPDATE job_attempt_effects SET status='settled' WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await execution()).state,'succeeded');
+    const successGap=await read();
+    assert.equal(successGap.projection_sha256,queuedGap.projection_sha256,'lifecycle projection does not change criterion authorization identity');
+    const refreshed=await loadPlanGapReport(sql,canvas,project);
+    assert.notEqual(contentSha256(refreshed),frozenHash,'execution change refreshes report input');
+    assert.equal(contentSha256(frozenReport),frozenHash,'previous report input stays frozen');
+    const refreshedEntry=refreshed.entries.find(entry=>entry.job_id===hub);
+    assert.ok(refreshedEntry);
+    assert.equal(refreshedEntry.supplementation_execution?.state,'succeeded');
+    assert.ok(refreshedEntry.audit?.criteria.every(criterion=>criterion.state==='unbound'),'execution success is not positive criterion authority');
+    const wrongChild=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,parent_job_id,type,status,agent_snapshot_json,payload_json)
+      SELECT ${wrongChild},project_id,canvas_id,parent_job_id,type,'pending',agent_snapshot_json,
+        jsonb_set(payload_json,'{plan_context,decision_event_id}',${sql.json(randomUUID())}) FROM jobs WHERE id=${childId}`;
+    assert.equal((await execution()).source?.job_id,childId,'wrong decision context cannot attach another child');
+    assert.equal((await execution()).state,'succeeded');
+    await sql`UPDATE jobs SET payload_json=${sql.json(children[0].payload_json)} WHERE id=${wrongChild}`;
+    const duplicate=await execution();assert.equal(duplicate.state,'unknown');assert.equal(duplicate.truncated,true);
+    await sql`UPDATE jobs SET canvas_id=NULL WHERE id=${wrongChild}`;
+    assert.equal((await execution()).source?.job_id,childId,'cross-Canvas context never joins');
+    await sql`UPDATE job_attempt_effects SET job_id=${wrongChild},status='unknown' WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await execution()).reason,'unknown_external_effect','mismatched effect ownership is not silently ignored');
+    await sql`DELETE FROM job_attempt_effects WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await loadPlanExecution(sql,canvas,project,hub,'f'.repeat(64))).state,'unknown','different Plan version is not unexecuted');
+    await sql`UPDATE jobs SET payload_json=jsonb_set(payload_json,'{plan_context,scheduler_owned}','false') WHERE id=${childId}`;
+    assert.equal((await execution()).reason,'dispatch_link_unavailable');
+    await sql`UPDATE jobs SET payload_json=${sql.json(children[0].payload_json)} WHERE id=${childId}`;
+    await sql`DELETE FROM jobs WHERE id=${wrongChild}`;
+    await sql`DELETE FROM job_attempts WHERE job_id=${childId}`;
+    await sql`UPDATE jobs SET status='pending' WHERE id=${childId}`;
+    assert.equal((await execution()).state,'queued');
     // A second Job exercises final revision CAS without the first Job's terminal-history guard.
     const contender=randomUUID();
     await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json,started_at,lease_expires_at)

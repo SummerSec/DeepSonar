@@ -1,3 +1,4 @@
+import { loadPlanExecution } from "./execution-projection.js";
 import type { GraphQueryPayload } from "@deepsonar/shared-types";
 import type { sql } from "../../db.js";
 import { readPlanObjective } from "./objective.js";
@@ -23,6 +24,7 @@ export async function queryPlanGap(db:typeof sql,jobId:string,canvasId:string,in
       task_input_sha256:objective.baseline,projection_sha256:objective.projectionSha,
       goal:objective.plan.goal,stale_objective:objective.staleObjective,supplementation_remaining:objective.spent?0:1,
       required_criterion_count:objective.criteria.length,
+      supplementation_execution:await loadPlanExecution(db,canvasId,objective.projectId,objective.planJobId,objective.planSha),
       criteria:selected.map(c=>({...c,bindings:c.bindings.slice(0,4).map(({binding,...state})=>({
         ...state,binding_id:binding.binding_id,fact_id:binding.fact_id,authority:binding.authority,
         assessment:binding.assessment,observation:binding.observation,rationale:binding.rationale.slice(0,500),

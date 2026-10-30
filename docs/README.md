@@ -3,7 +3,7 @@
 > **任务目标证据（#767）**：契约与研究候选、确定性报告、来源隔离判据评审、非 Finding 交付/负结果已接线；Plan 可选显式关联已接线，保留原操作员 authority 与完整完成门。赏金资格正向闭环未交付，无契约按原可选设计标为 unassessed。见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)、[任务判据评审](TASK_GOAL_REVIEW.md)、[执行结果评审](TASK_RESULT_REVIEW.md)与[报告](TASK_OUTCOME_REPORT.md)。
 
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
-> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。持久 Plan 接纳回执可只读恢复；真实效果未验证且不作为本批验收前置，C 不启用。
+> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。持久 Plan 接纳回执可只读恢复；一次补证执行状态按持久来源只读重建，与判据满足分离；真实效果未验证且不作为本批验收前置，C 不启用。
 
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 

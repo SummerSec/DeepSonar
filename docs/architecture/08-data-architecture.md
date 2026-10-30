@@ -127,3 +127,5 @@ task.result 保存声明与事件派生身份，task.goal_evaluation 保存宿�
 ## 证据追踪诊断修复
 
 Artifact source_event 对应真实证据来源 Attempt，最新 Attempt 仅用于有效性核验，不能替代来源。manifest 声明 hash 与宿主 observed hash 分开，历史不回写。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
+补证执行投影复用 events/jobs/job_attempts/job_attempt_effects/canvas_nodes，不新增 schema。固定排序、无 wall-clock/heartbeat 字段；当前报告刷新冻结新投影，历史不回写。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。

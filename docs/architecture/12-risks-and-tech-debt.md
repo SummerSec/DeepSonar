@@ -108,3 +108,5 @@ Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失�
 ## 证据追踪诊断修复
 
 证据追踪此前混淆 manifest 声明摘要与 observed、路径后缀与精确 URI、最新 Attempt 与来源 Attempt；本片已修正只读完整性诊断并完成行为验收。仍无宿主命令 receipt 或真正独立复现/攻击链；knownness helper 未运行时接入，不可视为 novel authority。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
+#775 已补一次补证的持久执行状态投影，不能代表所有目标/PlanTask 的执行覆盖；自动环境原因认证、目标修订、依赖图调度与有界自适应仍非本片实现。C 不启用，真实效果未验证且不作为本批验收前置。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
