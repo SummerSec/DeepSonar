@@ -156,7 +156,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   mark_job_done: {
     summary: "Mark the current Job done",
-    description: "Submit the final Job summary and optional verification verdict.",
+    description: "Submit the final Job summary and optional verification verdict with X-DeepSonar-Proposal-Revision (initial 0). Corrected semantics require a new key and next revision; transport retries retain key/revision/payload. Acceptance returns a durable persisted_deferred receipt, not settlement. Query this operation with receipt_key while the original Job capability remains active.",
     readOnly: false,
     eventType: "done",
   },
@@ -388,13 +388,14 @@ export function buildPlatformOpenApiDocument(input: {
         security: [{ capabilityBearer: [] }],
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          ...(definition.operationId === "mark_job_done" ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore the live completion gate. After response loss and persisted_deferred lookup, POST the unchanged original key/revision/payload to restore the original active handler. Requires the active Job capability." }] : []),
         ],
         responses: {
           "200": {
-            description: "Operation contract",
+            description: definition.operationId === "mark_job_done" ? "Operation contract without receipt_key; original accepted/rejected result with receipt_key" : "Operation contract",
             content: {
               "application/json": {
-                schema: {
+                schema: definition.operationId === "mark_job_done" ? { type: "object", additionalProperties: true } : {
                   type: "object",
                   required: ["operation_id", "summary", "description", "input_schema", "read_only"],
                   properties: {
@@ -422,7 +423,8 @@ export function buildPlatformOpenApiDocument(input: {
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", format: "uuid" } },
-          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" } },
+          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" }, description: "For mark_job_done this must equal Idempotency-Key when supplied." },
+          ...(definition.operationId === "mark_job_done" ? [{ name: "X-DeepSonar-Proposal-Revision", in: "header", required: true, schema: { type: "integer", minimum: 0, maximum: 9999 }, description: "Initial 0; use the next revision from rejection feedback for corrected semantics, retaining the original revision for transport retries." }] : []),
         ],
         requestBody: {
           required: true,
@@ -433,7 +435,7 @@ export function buildPlatformOpenApiDocument(input: {
           },
         },
         responses: {
-          "200": { description: "Handler result", content: { "application/json": { schema: { type: "object", additionalProperties: true } } } },
+          "200": { description: definition.operationId === "mark_job_done" ? "Durable completion receipt: accepted, operation, receipt_ref, receipt_status=persisted_deferred, proposal_revision. This is not effect settlement." : "Handler result", content: { "application/json": { schema: { type: "object", additionalProperties: true } } } },
           "400": { description: "Input or idempotency key is invalid", content: { "application/json": { schema: errorSchema() } } },
           "403": { description: "Operation is not in the token allowlist", content: { "application/json": { schema: errorSchema() } } },
           "409": { description: "Idempotency key conflicts or Job is no longer active", content: { "application/json": { schema: errorSchema() } } },

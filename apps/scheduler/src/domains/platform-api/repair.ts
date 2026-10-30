@@ -1,3 +1,4 @@
+import type { CapabilityPrincipal } from "./tokens.js";
 import {
   type RepairFeedback,
   repairFeedbackFromControlRejection,
@@ -143,4 +144,22 @@ function rejectionBody(repair: RepairFeedback, retryable: boolean): ControlOpera
     ...(repair.path ? { path: repair.path } : {}),
     repair,
   };
+}
+
+/** A host-owned query instruction, not a snapshot/version promise or new authority. */
+export function withScopedReferenceRefresh(
+  body: ControlOperationRejectionBody,
+  principal: Pick<CapabilityPrincipal, "jobId" | "canvasId" | "operationIds">,
+): ControlOperationRejectionBody {
+  if (body.repair.operation !== "submit_hub_decision" || body.repair.code !== "invalid_node_ref"
+    || body.repair.category !== "model_correctable") return body;
+  if (!principal.canvasId || !principal.operationIds.includes("graph_query")) {
+    return { ...body, repair: { ...body.repair,
+      next_action: "当前 Job 没有可用的画布查询权限；停止猜测引用并按既有人工/失败路径处理，不扩大授权。",
+    } };
+  }
+  const ref = `/control/v1/jobs/${principal.jobId}/operations/graph_query`;
+  return { ...body, repair: { ...body.repair, current_state_ref: ref,
+    next_action: 'GET current_state_ref 只读取操作 Schema；使用当前 Job token 和新 Idempotency-Key 向该地址 POST {"kind":"overview"}，再按需查询并只使用返回的 referable_ids。查询仍受权限和预算限制；失败时停止。读取结果不是版本锁，修正后以新 Idempotency-Key 重提，服务端仍重新检查引用与状态。',
+  } };
 }

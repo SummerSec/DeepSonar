@@ -236,9 +236,9 @@ try {
     const expectedStatus = mode === "cancel" ? "cancelled" : mode === "timeout" ? "timeout" : mode === "failure" ? "failed" : "succeeded";
     if (row.status !== expectedStatus) {
       const [actorFail] = await sql`SELECT payload_json FROM events WHERE job_id=${id}
-        AND (payload_json->>'message' LIKE 'REA_ACTOR_FAILED%' OR payload_json->>'message' LIKE 'REA_EGRESS%')
+        AND payload_json->>'message' LIKE 'REA_ACTOR_FAILED%'
         ORDER BY created_at DESC LIMIT 1`;
-      const detail = actorFail?.payload_json?.message ?? row.error ?? row.status;
+      const detail = JSON.stringify({ actor: actorFail?.payload_json?.message ?? null, error: row.error ?? null, status: row.status });
       assert.equal(row.status, expectedStatus, `${mode}: ${detail}`);
     }
     assert.equal((await runner.listResources({ jobId: id })).length, 0, `${mode}: sandbox leaked`);

@@ -71,6 +71,8 @@ if (!testDatabaseUrl) {
           now(), 3600, now() + interval '1 hour'
         )`;
 
+      const { createAttempt } = await import("../job-attempt/application.js");
+      await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
       const grant = await mintJobCapabilityToken(jobId);
       const auth = { authorization: `Bearer ${grant.token}` };
       const base = `/control/v1/jobs/${jobId}`;
@@ -80,7 +82,8 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET status = 'running', started_at = now() WHERE id = ${jobId}`;
       assert.equal(await activateProvisionedJobCapabilityTokens(jobId), 1);
       const calls: Array<{ operationId: string; eventId: string; input: unknown }> = [];
-      const handler = async (context: { operationId: string; eventId: string; input: unknown }) => {
+      const handler = async (context: { operationId: string; eventId: string; input: unknown; completionPhase?: string }) => {
+        if (context.completionPhase === "prepare") return { completion_prepared: true };
         calls.push(context);
         return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
       };
@@ -96,10 +99,11 @@ if (!testDatabaseUrl) {
       }
       assert.equal("token" in projection, false);
 
+      let completionRevision = 0;
       const invoke = (operationId: string, key: string, payload: unknown) => app.inject({
         method: "POST",
         url: `${base}/operations/${operationId}`,
-        headers: { ...auth, "idempotency-key": key },
+        headers: { ...auth, "idempotency-key": key, ...(operationId === "mark_job_done" ? { "x-deepsonar-proposal-revision": String(completionRevision++) } : {}) },
         payload,
       } as never) as unknown as Promise<InjectResponse>;
       const oversizedDone = await invoke("mark_job_done", randomUUID(), {
@@ -196,7 +200,12 @@ if (!testDatabaseUrl) {
       // OPERATION_REJECTED carries rawInput; HANDLER_FAILED deliberately does not.
       const baseline = JSON.parse(readFileSync(new URL("../../fixtures/repair-feedback/baseline.json", import.meta.url), "utf8"));
       for (const sample of baseline.cases) {
-        registerRuntimeHandler(jobId, async () => {
+        const fixtureJob = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+          VALUES(${fixtureJob},${projectId},${canvasId},'audit','running',${sql.json(snapshot)},now(),3600,now()+interval '1 hour')`;
+        await sql.begin(tx => createAttempt(tx as unknown as typeof sql, fixtureJob));
+        const fixtureGrant = await mintJobCapabilityToken(fixtureJob);
+        registerRuntimeHandler(fixtureJob, async () => {
           assert.notEqual(sample.source, "schema", "invalid schema must not reach handler");
           if (sample.source === "platform_failure") throw new Error("fixture-private-marker");
           throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", sample.message, {
@@ -205,8 +214,10 @@ if (!testDatabaseUrl) {
           });
         }, operations);
         const key = randomUUID();
-        const replay = await invoke(sample.operation, key, sample.payload ?? { summary: "fixture-private-marker" });
-        assert.equal(replay.statusCode, sample.source === "platform_failure" ? 500 : 422, sample.id);
+        const replay = await app.inject({ method: "POST", url: `/control/v1/jobs/${fixtureJob}/operations/${sample.operation}`,
+          headers: { authorization: `Bearer ${fixtureGrant.token}`, "idempotency-key": key, "x-deepsonar-proposal-revision": "0" },
+          payload: sample.payload ?? { summary: "fixture-private-marker" } });
+        assert.equal(replay.statusCode, sample.source === "platform_failure" ? 503 : 422, sample.id);
         const body = replay.json();
         assert.equal(body.accepted, false, sample.id);
         assert.equal(body.repair.category, sample.category, sample.id);
@@ -214,6 +225,7 @@ if (!testDatabaseUrl) {
         assert.deepEqual(body.repair.observed_shape, sample.observed_shape, sample.id);
         assert.deepEqual(body.repair.expected, sample.expected, sample.id);
         assert.equal(JSON.stringify(body).includes("fixture-private-marker"), false, sample.id);
+        unregisterRuntimeHandler(fixtureJob);
       }
       registerRuntimeHandler(jobId, handler, operations);
       assert.equal((await invoke("emit_finding", findingKey, finding)).statusCode, 200, "503 不得污染幂等缓存");
