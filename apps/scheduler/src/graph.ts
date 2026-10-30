@@ -9,6 +9,7 @@ import {
   HubDecisionPayload as HubDecisionPayloadSchema,
   parseDeclaredQuantities,
   type QuantityAnchor,
+  type PlanDecisionBasis,
   type HubRoleDefinitionPayload,
 } from "@deepsonar/shared-types";
 import {
@@ -760,6 +761,7 @@ export interface HubIntent {
 }
 
 export interface HubDecision {
+  plan_basis?: PlanDecisionBasis;
   complete?: { from: string[]; description: string };
   intents?: HubIntent[];
 }
@@ -871,6 +873,7 @@ export function parseHubDecisionPayload(
         })),
       };
 
+  if (data.plan_basis) decision.plan_basis=data.plan_basis;
   if (referableIds !== undefined) assertHubDecisionReferableIds(decision, referableIds);
   return decision;
 }

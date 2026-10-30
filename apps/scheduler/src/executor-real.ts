@@ -1,3 +1,4 @@
+import { prepareCompletionPayload } from "./completion-payload.js";
 import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -305,7 +306,7 @@ export function recordFirstSemanticDone<T>(state: { done: T | null }, proposal: 
 export interface DeferredSemanticState {
   done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
   hub: { eventId: string; payload: unknown } | null;
-  human: { eventId: string; reason: string; subject: HumanPayload["subject"] } | null;
+  human: { eventId: string; reason: string; subject: HumanPayload["subject"]; plan_basis?: HumanPayload["plan_basis"] } | null;
 }
 
 /**
@@ -329,7 +330,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
       v: 1,
       event_id: state.human.eventId,
       type: "human",
-      payload: { reason: state.human.reason, subject: state.human.subject },
+      payload: { reason: state.human.reason, subject: state.human.subject, ...(state.human.plan_basis ? {plan_basis:state.human.plan_basis} : {}) },
     }];
   }
   if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
@@ -343,7 +344,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
         v: 1,
         event_id: state.hub.eventId,
         type: "hub_decision",
-        payload: { complete: decision.complete },
+        payload: { complete: decision.complete, ...(decision.plan_basis ? {plan_basis:decision.plan_basis} : {}) },
       });
     } else {
       const intents = (decision.intents ?? []).slice(0, input.maxIntentsPerDecision);
@@ -352,7 +353,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
           v: 1,
           event_id: state.hub.eventId,
           type: "hub_decision",
-          payload: { intents },
+          payload: { intents, ...(decision.plan_basis ? {plan_basis:decision.plan_basis} : {}) },
         });
       }
     }
@@ -1297,10 +1298,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let findingCount = 0;
   let factCount = 0;
   const semanticState: DeferredSemanticState = { done: null, hub: null, human: null };
+  let completionReservation: string | null = null;
 
   const onSemanticEvent = async (
     raw: Record<string, unknown>,
-    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer> },
+    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>; completionPhase?: "prepare" | "commit" },
   ) => {
     let event: ControlEventEnvelope;
     try {
@@ -1438,6 +1440,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         );
       }
       await preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload);
+      // Other Control calls can be accepted while the read-only preflight awaits.
+      assertSemanticTerminalExclusivity(semanticState, "hub_decision");
+      if (semanticState.hub) throw toolBoundaryError("duplicateToolCall", "submit_hub_decision 已成功接受一次；每个 Job 只能成功提交一次。");
       semanticState.hub = { eventId, payload: event.payload };
       return;
     }
@@ -1445,19 +1450,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       // 首个 accepted 完成提案具有权威性。父会话及其子 Agent 共享同一个控制边界，
       // 不允许迟到的完成提案再次校验、覆盖或使 Job 失败。
       if (semanticState.done) return;
-      const parsed = DonePayload.safeParse(event.payload);
-      if (!parsed.success) throw invalidToolPayload("mark_job_done", "mark_job_done 参数非法");
-      const p = parsed.data;
-      const verdict = p.verdict;
-      const missingEvidence = p.missing_evidence;
-      if (isVerify && !verdict) throw invalidToolPayload("mark_job_done", "verify 必须提供 verdict", "verdict");
-      if (!isVerify && (verdict || missingEvidence)) {
-        throw invalidToolPayload("mark_job_done", "非 verify Job 不得提供 verdict 或 missing_evidence");
-      }
-      if (isVerify && verdict === "rework" && (!missingEvidence || missingEvidence.length === 0)) {
-        throw invalidToolPayload("mark_job_done", "verdict=rework 必须列出 missing_evidence", "missing_evidence");
-      }
+      const p = prepareCompletionPayload(event.payload, isVerify);
+      const { verdict, missing_evidence: missingEvidence } = p;
       assertSemanticTerminalExclusivity(semanticState, "done");
+      if (runtimeControl.completionPhase === "prepare") { completionReservation = eventId; return; }
       recordFirstSemanticDone(semanticState, {
         eventId,
         summary: p.summary.trim(),
@@ -1467,12 +1463,15 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return;
     }
     if (event.type === "human") {
+      if (completionReservation) throw toolBoundaryError("duplicateToolCall", "Completion acceptance is pending; reconcile its receipt first");
       const parsed = HumanPayload.safeParse(event.payload);
       if (!parsed.success) throw invalidToolPayload("request_human", "request_human 参数非法");
       assertSemanticTerminalExclusivity(semanticState, "human");
       const p = parsed.data;
       await preflightDeferredSemanticEvent(jobId, "human", p);
-      semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject };
+      if (completionReservation) throw toolBoundaryError("duplicateToolCall", "Completion acceptance is pending; reconcile its receipt first");
+      assertSemanticTerminalExclusivity(semanticState, "human");
+      semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject, ...(p.plan_basis ? {plan_basis:p.plan_basis} : {}) };
       return;
     }
     throw new Error("不支持的语义事件");
@@ -1515,7 +1514,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
   const runtimePlatformHandler = async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
     const operation = context.operationId;
+    if (operation === "mark_job_done" && context.completionAttemptId !== attemptId) {
+      throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "Completion Attempt changed", {
+        statusCode: 409, errorCode: "COMPLETION_ATTEMPT_CHANGED", retryable: false,
+      });
+    }
     if (!platformOperations.includes(operation)) throw new Error("operation is not enabled for this Job");
+    if (context.completionPhase === "abort") { if (completionReservation === context.eventId) completionReservation = null; return {}; }
     const knowledgeResult = await knowledgeRuntime(context);
     if (knowledgeResult !== undefined) return knowledgeResult;
     const withSkillCatalogFailure = async (run: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> => {
@@ -1588,6 +1593,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         payload: context.input,
       }, {
         readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFileForRuntime(filePath, maxBytes),
+        completionPhase: context.completionPhase,
       });
     } catch (error) {
       if (error instanceof EventRateLimitError) {
@@ -1612,6 +1618,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       }
       throw error;
     }
+    if (operation === "mark_job_done" && context.completionPhase === "prepare") {
+      return { completion_prepared: true };
+    }
+    if (operation === "mark_job_done" && context.completionPhase === "commit") completionReservation = null;
     return { accepted: true, operation, completion_ready: Boolean(semanticState.done) };
   };
 
@@ -1803,7 +1813,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       v: 1,
       event_id: semanticState.human.eventId,
       type: "human",
-      payload: { reason: semanticState.human.reason, subject: semanticState.human.subject },
+      payload: { reason: semanticState.human.reason, subject: semanticState.human.subject, ...(semanticState.human.plan_basis ? {plan_basis:semanticState.human.plan_basis} : {}) },
     });
     return;
   }

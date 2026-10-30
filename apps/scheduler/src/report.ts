@@ -40,6 +40,9 @@ import {
   type NumericFidelityResult,
 } from "./report-numeric-fidelity.js";
 
+import { loadPlanGapReport } from "./domains/plan-protocol/gap-report.js";
+import { withPlanGapReport, type PlanGapReport } from "./domains/plan-protocol/gap-projection.js";
+
 type Tx = typeof sql;
 
 function sha256(data: string | Buffer): string {
@@ -114,6 +117,7 @@ export interface ReportInputFinding {
 }
 
 export interface ReportInput {
+  plan_gaps?: PlanGapReport;
   task: {
     canvas_id: string;
     title: string;
@@ -431,6 +435,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     inconclusive_findings: inconclusive,
     excluded_findings: excluded,
     seed_findings: reportSeedFindings,
+    plan_gaps: await loadPlanGapReport(db, canvasId, String(canvas.project_id)),
     scope_and_coverage: {
       goal: String(target.goal ?? ""),
       task_kind: target.kind === "compose" ? "compose" : "standard",
@@ -790,6 +795,7 @@ export function finalizeTaskReportMarkdown(
     usedDefault = "numeric";
     numeric = checkReportNumericFidelity(declared, { markdown });
   }
+  markdown = withPlanGapReport(markdown, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }
 
@@ -1100,6 +1106,8 @@ export async function maybeDispatchReport(
     excludeJobId: opts?.excludeJobId ?? null,
   });
   if (!gate.ok) {
+    const planBlocker=gate.blockers.find(reason=>reason.startsWith('plan_'));
+    if(planBlocker) return {dispatched:false,reason:planBlocker,problems:gate.problems};
     // active_work：保持 analysis_complete，等当前 Job 终态后再派（不 bounce）
     if (gate.blockers.includes("active_work")) {
       return { dispatched: false, reason: "active_work", problems: gate.problems };
@@ -1601,6 +1609,7 @@ export type TaskReportAvailabilityReason =
   | "root_not_ready"
   | "active_work"
   | "no_role_work"
+  | "plan_not_ready"
   | "findings_not_converged"
   | "report_not_dispatched"
   | "report_failed";
@@ -1641,6 +1650,7 @@ export function classifyTaskReportAvailability(input: {
   else if (input.rootStatus === ROOT_STATUS_REPORT_FAILED) reason = "report_failed";
   else if (input.blockers.includes("active_work")) reason = "active_work";
   else if (input.blockers.includes("no_role_work")) reason = "no_role_work";
+  else if (input.blockers.some(reason=>reason.startsWith("plan_"))) reason = "plan_not_ready";
   else if (input.blockers.length > 0) reason = "findings_not_converged";
 
   const seen = new Set<string>();

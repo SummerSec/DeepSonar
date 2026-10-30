@@ -114,6 +114,7 @@ export function repairCategoryForControlFailure(input: {
   retryable?: boolean;
   statusCode?: number;
 }): RepairFeedbackCategory {
+  if (input.code === "plan_unknown_effect") return "unknown_external_effect";
   if (
     TRANSIENT_CONTROL_CODES.has(input.code)
     || input.statusCode === 429

@@ -1,4 +1,5 @@
 import { sql } from "../../db.js";
+import { planContext } from "../plan-protocol/objective.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
 import { inc } from "../../metrics.js";
@@ -531,7 +532,8 @@ export function createHubOrchestrationApplication(
       await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
     );
     const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
-    const hubPayload = { trigger, scheduling_purpose: "hub" };
+    const plan=await planContext(tx as unknown as typeof sql,canvasId,projectId);
+    const hubPayload = { trigger, scheduling_purpose: "hub", ...(plan?{plan_context:{plan_job_id:plan.plan_job_id,plan_sha256:plan.plan_sha256,scheduler_owned:true}}:{}) };
     const [hubJob] = await tx`
       INSERT INTO jobs ${tx({
         project_id: projectId,

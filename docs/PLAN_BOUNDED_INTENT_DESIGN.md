@@ -5,7 +5,7 @@
 
 ## 基线与交付边界
 
-本次对照基线为 main `b5103143`，A 审计可见性 [#782](https://github.com/SummerSec/DeepSonar/pull/782)（`d3e6631d`）、A 操作员判据/留存证据绑定 [#785](https://github.com/SummerSec/DeepSonar/pull/785)（`9016e34d`）和 B 首片 [#791](https://github.com/SummerSec/DeepSonar/pull/791)（`1c04804e`）。以下“实现现状”仅指这些已核验提交，不把尚未合并的代码称作 main 已上线能力。代码栈顺序为 #782 → #785 → #791；本设计文档独立维护。
+本次整合基线为已含 #776 的 main `6e71f418`，A 审计可见性 [#782](https://github.com/SummerSec/DeepSonar/pull/782)（`1b1a1d7a`）、A 操作员判据/留存证据绑定 [#785](https://github.com/SummerSec/DeepSonar/pull/785)（`98fec5cc`）和 B 首片 [#791](https://github.com/SummerSec/DeepSonar/pull/791)（`c15bca91`）。以下“实现现状”仅指这些已核验提交，不把尚未合并的代码称作 main 已上线能力。代码栈顺序为 #782 → #785 → #791；本设计文档独立维护。
 
 #791 的 [实现范围](https://github.com/SummerSec/DeepSonar/blob/1c04804e364e7c55522857c1f060bf9f308ace81/docs/PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证) 是当前行为说明；本文保留设计目标及未交付差额，不能通过修改措辞将缺口视为已完成。
 
@@ -73,7 +73,7 @@ complete 采用正向允许规则，不能只列少数禁止态：必须覆盖�
 
 设计要求事务内先完成所有准备校验，再经既有 Intent 路径原子写入唯一 child Job 与接纳事件。#791 已实现该事务边界；child payload 保存 Scheduler-owned Plan Job/SHA 与决策事件关联，判据/理由可追溯到事件，不改写旧 Job 快照；取消仍走既有生命周期。不同 key 不能重置单步预算，同 expected_revision 并发提案只有一个接纳。
 
-**未交付的回执目标保留：**相同 Idempotency-Key 在进程重启后应可读取持久成功回执并返回原结果。#791 尚未实现此项；现有 HTTP 幂等缓存是进程内的，缓存丢失后已提交的旧 Plan 提案会被版本门禁拒绝，不保证返回原成功响应。持久事件去重、版本和预算检查防止重复派发，但“不重复执行”不等于“恢复原成功回执”。后续仍需补持久回执/响应绑定、重启恢复及冲突输入回归；本次文档修订不降低该设计要求，也不把首片测试当作该项验收。
+**未交付的回执目标保留：**#776 的 mark_job_done 持久完成回执与这里的 Plan 决策成功响应是不同操作；前者不能证明后者已实现。相同 Idempotency-Key 在进程重启后应可读取持久成功回执并返回原结果。#791 尚未实现此项；现有 HTTP 幂等缓存是进程内的，缓存丢失后已提交的旧 Plan 提案会被版本门禁拒绝，不保证返回原成功响应。持久事件去重、版本和预算检查防止重复派发，但“不重复执行”不等于“恢复原成功回执”。后续仍需补持久回执/响应绑定、重启恢复及冲突输入回归；本次文档修订不降低该设计要求，也不把首片测试当作该项验收。
 
 不能把现有“裁剪至 maxIntentsPerDecision”当作 B 的接受方式：首片恰好一项，预算不足明确拒绝，禁止部分派发。补证上限和业务停止理由分别记账；maxHubRounds、Job token/时间预算、项目并发/配额仍有效，不跨任务借预算。
 
