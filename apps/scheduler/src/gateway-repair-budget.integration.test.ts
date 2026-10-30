@@ -22,16 +22,18 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
   ]);
   const upstream = Fastify(), app = Fastify();
   let calls = 0, responseTokens = 6, responseStatus = 200, malformed = false;
+  let responseSequence: Array<{ status: number; tokens: number }> = [];
   let lastOutputLimit: unknown;
   let entered: (() => void) | undefined, release: Promise<void> | undefined;
-  upstream.post("/v1/chat/completions", async req => {
+  upstream.post("/v1/chat/completions", async (req, reply) => {
     lastOutputLimit = (req.body as Record<string, unknown>).max_completion_tokens;
+    const response = responseSequence.shift() ?? { status: responseStatus, tokens: responseTokens };
+    reply.code(response.status);
     calls++; entered?.(); await release;
     return malformed ? { choices: [{ message: { content: '{"usage":{"total_tokens":0}}' } }] }
       : { object: "chat.completion", choices: [{ index: 0, finish_reason: "stop", message: { content: "fixture" } }],
-        usage: { prompt_tokens: responseTokens, completion_tokens: 0, total_tokens: responseTokens } };
+        usage: { prompt_tokens: response.tokens, completion_tokens: 0, total_tokens: response.tokens } };
   });
-  upstream.addHook("onSend", async (_req, reply) => { reply.code(responseStatus); });
   try {
     await migrate(); await upstream.listen({ port: 0, host: "127.0.0.1" });
     gateway.registerGateway(app); api.registerPlatformControlRoutes(app); await app.ready();
@@ -153,6 +155,33 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     const beforeFailure = calls; await failed.request(); await failed.settle(1); responseStatus = 200;
     assert.equal(calls, beforeFailure + 1, "repair performs one upstream attempt, not hidden potentially billable retries");
     assert.equal((await failed.read())?.usage_status, "unknown");
+
+    // Ordinary Job: a successful business response is not proof that an earlier attempt was free.
+    const ordinaryRetry = await setup();
+    responseSequence = [{ status: 503, tokens: 0 }, { status: 200, tokens: 6 }];
+    const beforeRetry = calls;
+    const businessSuccess = await ordinaryRetry.request(); await ordinaryRetry.settle(1);
+    assert.equal(businessSuccess.statusCode, 200);
+    assert.equal(businessSuccess.json().choices[0].message.content, "fixture");
+    assert.equal(calls, beforeRetry + 2, "ordinary request retains its existing bounded retry behavior");
+    const [uncertainCost] = await sql`SELECT l.total_tokens,l.settlement_status,e.status AS effect_status
+      FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
+      WHERE l.job_id=${ordinaryRetry.jobId}`;
+    assert.equal(uncertainCost.total_tokens, "6", "retain observed final usage without claiming earlier calls were free");
+    assert.equal(uncertainCost.settlement_status, "unknown"); assert.equal(uncertainCost.effect_status, "unknown");
+    const cannotSettle = await ordinaryRetry.propose(0, "business response received");
+    assert.equal(cannotSettle.json().error_code, "COMPLETION_EFFECT_UNKNOWN");
+    const [ordinaryJob] = await sql`SELECT status FROM jobs WHERE id=${ordinaryRetry.jobId}`;
+    assert.equal(ordinaryJob.status, "running", "uncertain cost does not overwrite business execution with failure or success");
+    assert.equal(await ordinaryRetry.read(), null, "no repair charge or receipt is fabricated before reconciliation");
+
+    const ordinaryZero = await setup(); responseTokens = 0;
+    assert.equal((await ordinaryZero.request()).statusCode, 200); await ordinaryZero.settle(1);
+    const [knownZero] = await sql`SELECT total_tokens,settlement_status FROM job_usage_ledger WHERE job_id=${ordinaryZero.jobId}`;
+    assert.equal(knownZero.total_tokens, "0"); assert.equal(knownZero.settlement_status, "settled");
+    assert.equal((await ordinaryZero.propose(0, "single successful request with authoritative zero usage")).statusCode, 200);
+    const [notAdmitted] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${unconfigured.jobId}`;
+    assert.equal(notAdmitted.n, 0, "denied-before-send is known not to have issued a new billable request");
 
     for (const kind of ["cancel", "lease", "timeout"]) {
       const stopped = await setup(); await stopped.propose(0, "x".repeat(8193));

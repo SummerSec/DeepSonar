@@ -39,6 +39,8 @@ Gateway 与拒绝/接受回执使用同一 Job 锁。一次修正请求占用剩
 
 只接受 OpenAI Chat/Completions、Responses、Anthropic Messages 协议根位置的完整 usage（JSON/SSE），不扫描 assistant/tool 正文或模型自报。缓存按协议处理：Anthropic 缓存另加，OpenAI 缓存已在 input 中。帧/JSON 超过 1MiB、总流超过 16MiB、截断、缺终态、非法计数、未知协议或错误结果均保留未知。原宽松解析 helper 不再用于 Gateway 持久用量；正常请求若有内部重试，也不能把此前尝试的未知成本归零。
 
+现有 Provider 配置入口 `INFERENCE_WIRE_PROTOCOLS` 的三种协议（anthropic-messages / openai-completions / openai-responses）均有严格解析夹具。自定义兼容服务若缺少协议根计数、结束事件或返回不支持的 envelope，响应仍可传回，但用量为未知，不能广告已结算。没有单独的 Provider“失败请求确定未收费”契约；普通请求 503→200 时即使前一个错误正文自报零，也保留最后 200 业务响应和观测用量，把整个 effect 的成本标 unknown，首次完成被既有效果门拒绝，Job 不因此直接改成 failed。单次完整成功响应的权威零计数可结算并正常完成；准入前拒绝则没有发起新请求，不制造收费记录。这些区别由真实 loopback 回归验证。
+
 修正 Gateway 请求最多一次上游尝试，禁止隐藏的潜在收费重试。输出上限由宿主限制到剩余 token，Chat SSE 请求开启 usage 返回，n/best_of 多候选与批量 prompt 在出站前拒绝。已有 `job_tokens.max_tokens` 若明确设置，则修正准入还核对整个 Job 的原 usage ledger，未知总用量停止，较小总额度优先；Job 请求数、事件与时间上限仍有效。当前 executor 不自动设置 Job `max_tokens`，不能声称普通 Job 已有全局 token 硬上限。
 
 **边界：这是累计结算后的熔断，不是精确的调用前总成本保证。** 输入/缓存 token 只有上游响应后才能确认，单次已准入请求仍可能超出剩余额度；保留实际超额计数并阻止后续请求/修正完成，不截断账本或伪装成功。若产品要求绝对不超额，需要额外受信的调用前输入计数/计价契约；当前不以字符数或模型自报代替。此限制与未决定的默认付费额度分开记录。
