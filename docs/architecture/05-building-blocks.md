@@ -84,3 +84,7 @@ flowchart LR
 ### #778 适用证据离线 preflight
 
 [capability-applicability](../../agent-harness/capability-applicability/README.md)是开发研究工具，消费现有 Job 字段的脱敏投影、完整知识目录和版本/CAS，再以 sidecar 作者条件及 expected/actual JSON 检查单案例一致性。它不连接数据库或执行 Skill；不增加账本、运行时路由、授权或推荐。FR-CAP-003/FR-CAP-004 的在线拉取与权限边界保持原实现；离线 compatible 不能替代这些边界。
+
+### #778 离线审计构件
+
+[capability-evidence](../../agent-harness/capability-evidence/README.md)从既有快照、usage、版本与 receipt 导出生成可重建报告；属于开发研究工具，不挂运行时路由、不提供候选授权或执行入口。配置组合、拉取和模型反馈与独立质量分别呈现；后者目前未知。

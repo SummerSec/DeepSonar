@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。真实模型评测与 C 未交付。
+
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
@@ -82,6 +84,10 @@
 
 ---
 
+[#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；作为 B 前历史基线保留。
+
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；完整 C 和真实模型效果仍待交付。
+
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |
@@ -153,4 +159,14 @@
 
 - [Skill 适用证据离线校验](../agent-harness/capability-applicability/README.md)：#778 A 补强/B 前置工程切片；合成断言与真实效果分开，不提供推荐。
 
+- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 A 部分实现；仅合成行为测试，实际导出、独立质量评测与推荐接口未验收。
+
+独立研究 #777 的 [离线协议与报告准备](../agent-harness/knowledge-live/STUDY.md) 已提供；真实模型对照尚未运行，不改变 #752 已完成的实现验收范围。
+
 #770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；跨任务关系仍待后续交付，不能由查询上线推定已完成。
+
+## #775 设计目标与实现差额
+
+[有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久成功回执、真实模型收益与 C 尚未验收。A/B 实现入口由 #791 的索引说明维护，本设计入口补充验收差额，不替代其实现说明，也不表示相关 PR 已合入 main。
+
+[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。

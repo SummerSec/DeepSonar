@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { attestPlanCriterion, CriterionBindingError, listFactPlanBindings } from "../plan-protocol/criterion-binding.js";
+import { loadCriterionSource } from "../plan-protocol/criterion-source.js";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { cursorForRow, decodeCursor, page } from "../../pagination.js";
@@ -160,7 +162,7 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
   app.get("/canvases/:id/facts/:nodeId", async (req, reply) => {
     const { id, nodeId } = req.params as { id: string; nodeId: string };
     const [fact] = await sql`
-      SELECT n.id, n.canvas_id, n.title,
+      SELECT n.id, n.canvas_id, c.project_id AS source_project_id, n.title,
              COALESCE(n.body_json->>'description', '') AS description,
              n.body_json, n.verification_status, n.job_id, n.created_at, n.updated_at,
              CASE WHEN f.id IS NULL THEN NULL ELSE jsonb_build_object(
@@ -238,8 +240,10 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         ORDER BY created_at, id
         LIMIT 100`,
     ]);
-    const { finding, job, ...factBody } = fact;
-    return { fact: factBody, finding, job, trace: { nodes: traceNodes, edges: traceEdges } };
+    const { finding, job, source_project_id, ...factBody } = fact;
+    const plan_criterion_source = await loadCriterionSource(sql, id, String(source_project_id), nodeId);
+    const plan_bindings = await listFactPlanBindings(sql, String(source_project_id), nodeId);
+    return { fact: factBody, finding, job, plan_criterion_source, plan_bindings, trace: { nodes: traceNodes, edges: traceEdges } };
   });
 
   app.patch("/canvases/:id/facts/:nodeId/verification", async (req, reply) => {
@@ -251,18 +255,25 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
     const actor = req.actor?.name ?? "anonymous";
     const result = await sql.begin(async (txRaw) => {
       const tx = txRaw as unknown as typeof sql;
+      // Every trust mutation serializes with report freezing and event ingestion.
+      await tx`SELECT id FROM canvases WHERE id = ${id} FOR UPDATE`;
+      if (parsed.data.plan_binding) {
+        // Canvas → Plan Job → Fact.
+        await tx`SELECT id FROM jobs WHERE id = ${parsed.data.plan_binding.plan_job_id}
+          AND canvas_id = ${id} FOR SHARE`;
+      }
       const [node] = await tx`
-        SELECT n.id, n.node_type, n.verification_status, c.project_id
+        SELECT n.id, n.node_type, n.verification_status, n.body_json, c.project_id
         FROM canvas_nodes n
         JOIN canvases c ON c.id = n.canvas_id
         WHERE n.id = ${nodeId} AND n.canvas_id = ${id}
-        FOR UPDATE`;
+        FOR UPDATE OF n`;
       if (!node) return { kind: "not_found" as const };
       if (node.node_type !== "fact") return { kind: "not_fact" as const };
       const beforeStatus = String(node.verification_status);
       const decision = evaluateFactVerificationTransition(beforeStatus, parsed.data.status);
       if (!decision.ok) return { kind: "illegal" as const, error: decision.error, error_code: decision.error_code };
-      if (decision.idempotent) {
+      if (decision.idempotent && !parsed.data.plan_binding) {
         return {
           kind: "ok" as const,
           fact: await loadFactSummary(tx, id, nodeId),
@@ -271,11 +282,16 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
           idempotent: true,
         };
       }
+      const previousManual = (node.body_json as { manual_verification?: { updated_at?: string } } | null)?.manual_verification;
       const manualVerification = {
         note: parsed.data.note ?? null,
         actor,
-        updated_at: new Date().toISOString(),
+        updated_at: beforeStatus === "verified" && parsed.data.plan_binding && previousManual?.updated_at
+          ? previousManual.updated_at : new Date(Math.max(Date.now(), (Date.parse(previousManual?.updated_at ?? "") || 0) + 1)).toISOString(),
       };
+      if (parsed.data.plan_binding) {
+        await attestPlanCriterion(tx, req, id, String(node.project_id), nodeId, parsed.data.plan_binding, manualVerification.updated_at, parsed.data.note!);
+      }
       await tx`
         UPDATE canvas_nodes
         SET verification_status = ${parsed.data.status},
@@ -289,7 +305,13 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         beforeStatus,
         idempotent: false,
       };
+    }).catch((error: unknown) => {
+      if (error instanceof CriterionBindingError) return { kind: "binding_conflict" as const, code: error.code };
+      throw error;
     });
+    if (result.kind === "binding_conflict") {
+      return reply.code(409).send({ error: "判据或证据来源已变化、不可用或修订冲突，请重新读取。", error_code: result.code });
+    }
     if (result.kind === "not_found") {
       return reply.code(404).send({ error: "canvas node not found", error_code: "NODE_NOT_FOUND" });
     }

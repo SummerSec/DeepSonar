@@ -1,0 +1,158 @@
+{
+  "provenance": {
+    "kind": "synthetic-real-contract",
+    "base": "10d5ec2d0e4ce67be2e62baed0c2826148ebdc03",
+    "production_capture": false,
+    "scope": "Control schema and host rejection projection; not CLI execution"
+  },
+  "idempotency_key": "00000000-0000-4000-8000-000000000776",
+  "cases": [
+    {
+      "id": "summary-utf8-overflow",
+      "source": "schema",
+      "operation": "mark_job_done",
+      "payload": {
+        "summary": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"
+      },
+      "code": "invalid_done",
+      "category": "model_correctable",
+      "path": "summary",
+      "expected": {
+        "kind": "utf8_bytes_max",
+        "max": 8192
+      },
+      "observed_shape": {
+        "type": "string",
+        "length": 2731,
+        "utf8_bytes": 8193
+      },
+      "accepted_effect": "none-before-handler"
+    },
+    {
+      "id": "summary-type",
+      "source": "schema",
+      "operation": "mark_job_done",
+      "payload": {
+        "summary": 42
+      },
+      "code": "invalid_done",
+      "category": "model_correctable",
+      "path": "summary",
+      "expected": {
+        "kind": "type",
+        "type": "string"
+      },
+      "observed_shape": {
+        "type": "number"
+      },
+      "accepted_effect": "none-before-handler"
+    },
+    {
+      "id": "unknown-field",
+      "source": "schema",
+      "operation": "mark_job_done",
+      "payload": {
+        "summary": "completed",
+        "untrusted": "fixture-private-marker"
+      },
+      "code": "invalid_done",
+      "category": "model_correctable",
+      "path": null,
+      "expected": {
+        "kind": "unknown_field"
+      },
+      "observed_shape": {
+        "type": "object",
+        "keys": 2
+      },
+      "accepted_effect": "none-before-handler"
+    },
+    {
+      "id": "stale-node",
+      "source": "runtime",
+      "operation": "submit_hub_decision",
+      "code": "invalid_node_ref",
+      "message": "Hub 图引用必须使用当前画布 YAML 中 root/fact/finding 节点的 canonical UUID（YAML root_id 的值）；禁止字段名 root_id、别名或占位符。",
+      "path": "complete.from",
+      "retryable": true,
+      "category": "model_correctable",
+      "accepted_effect": "none-for-rejection",
+      "payload": {
+        "complete": {
+          "from": [
+            "00000000-0000-4000-8000-000000000777"
+          ],
+          "description": "fixture-private-marker"
+        }
+      },
+      "observed_shape": {
+        "type": "array",
+        "length": 1
+      }
+    },
+    {
+      "id": "verify-missing-verdict",
+      "source": "runtime",
+      "operation": "mark_job_done",
+      "code": "invalid_done",
+      "message": "verify 必须提供 verdict",
+      "path": "verdict",
+      "retryable": true,
+      "category": "model_correctable",
+      "accepted_effect": "none-for-rejection",
+      "payload": {
+        "summary": "fixture-private-marker"
+      },
+      "observed_shape": {
+        "type": "undefined"
+      }
+    },
+    {
+      "id": "forbidden",
+      "source": "runtime",
+      "operation": "mark_job_done",
+      "code": "tool_not_allowed",
+      "message": "Tool is not allowed",
+      "path": null,
+      "retryable": false,
+      "category": "permanent_failure",
+      "accepted_effect": "none-for-rejection",
+      "payload": {
+        "summary": "fixture-private-marker"
+      },
+      "observed_shape": {
+        "type": "object",
+        "keys": 1
+      }
+    },
+    {
+      "id": "cancelled",
+      "source": "runtime",
+      "operation": "mark_job_done",
+      "code": "job_not_running",
+      "message": "Job is no longer running",
+      "path": null,
+      "retryable": false,
+      "category": "permanent_failure",
+      "accepted_effect": "prior-effects-require-reconciliation",
+      "payload": {
+        "summary": "fixture-private-marker"
+      },
+      "observed_shape": {
+        "type": "object",
+        "keys": 1
+      }
+    },
+    {
+      "id": "handler-outcome-unknown",
+      "source": "platform_failure",
+      "operation": "mark_job_done",
+      "code": "HANDLER_FAILED",
+      "message": "Platform operation failed",
+      "path": null,
+      "retryable": true,
+      "category": "transient_retryable",
+      "accepted_effect": "unknown-not-proven-absent"
+    }
+  ]
+}

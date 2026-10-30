@@ -16,6 +16,10 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 
 这是平台注入的静态 Skill，每个真实 Job 都有一份。RoleConfig 不能按同名替换它。
 
+## 有界 Plan 决策
+
+显式 submit_plan 后，可用 graph_query(kind=plan_gap,id=Plan Job UUID,ids=最多四个 Fact UUID,cursor=返回游标,limit=最多4)读取当前判据、来源、revision 与内容 SHA。沿用查询预算和本 Job 已见引用；翻页读完必要判据后才能提交 complete。plan_basis 使用返回版本，continue 仅可携带一个既有 Intent，并写明 rationale/expected_gain；每任务仅一次补证，改标题、Plan 或 Job 不能重置。全部必要判据必须具有当前有效的操作员 satisfies 评价；verified、阴性观察、模型 done 都不能单独证明完成。预算耗尽或无法确认时使用 request_human；带依据的停止使用 blocked/needs_human 与 platform_blocker.business_decision。依据过期先重读，unknown effect 禁止重放；查询预算耗尽仍可普通 request_human。
+
 ## 传输方式
 
 所有 CLI 都只能使用 Job 级 HTTP 控制 API；它是所有治理 CLI 的唯一平台控制传输。不要先尝试 MCP，也不要在 API 失败后回退到 MCP。
@@ -49,12 +53,29 @@ Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、p
 按反馈修正后使用新的 Idempotency-Key 重提；\`transient_retryable\` 等待后用同一 key 重试；
 \`unknown_external_effect\` 与 \`permanent_failure\` 不要猜测重放。
 
+## 完成提交的持久回执
+
+仅 \`mark_job_done\` 必须带 \`X-DeepSonar-Proposal-Revision\` 请求头：首次为 0。
+语义修正用新 Idempotency-Key 和反馈要求的下一 revision；同一提交的传输重试保持原 key、revision、payload。
+不要另设不同的事件 ID。响应丢失先调用
+\`GET $DEEPSONAR_API_BASE_URL/operations/mark_job_done?receipt_key=<原UUID>\` 查询；查询受原 Job 权限约束。
+查询只读取持久结果，不恢复执行器本地完成门。若查询返回 \`persisted_deferred\` 且原 Job 仍活动，
+必须使用原 key、revision 和完全相同 payload 再 POST 一次，让原活动执行器接收该提案；
+这不会新建提案或重新执行外部效果。原执行器/会话不可用时停止并交诊断，不启动新会话。
+没有查到回执不证明没有外部效果，未知效果先对账，不换 key 猜测重发。
+
+\`receipt_status=persisted_deferred\` 表示完成提案已持久接收，不等于 Job 成功、效果结算或模型已处理。
+同 key 改内容或 revision 会冲突；已接受后不要新建另一个完成提案。拒绝计数跨进程保留，
+最多记录 8 次拒绝；额度耗尽、无进展、取消、租约或总预算到期时停止修正并按既有人工/失败路径处理。
+回执查询不启动 CLI、不创建新 Attempt；不支持原会话续接时停止，不能把重新下发称作同会话恢复。
+Job 终态后 Control token 不再可用，由管理面按项目权限查看既有事件记录。
+
 ## 操作与完成
 
 只能调用能力发现和本 Job 冻结的 \`platform_tools\` 操作，遵守返回的参数 Schema、相对
 \`/workspace\` 的 \`payload_file\`、当前 YAML UUID 引用和 Hub 角色约束。Hub 必须先提交
-决策再完成。API 返回 \`accepted\` 只表示 Scheduler 已接收输入；完成必要工作后必须恰好一次调用已授权的
-\`mark_job_done\`。
+决策再完成。完成必要工作后提交已授权的 \`mark_job_done\`，只有明确拒绝且允许修正时才提交新 revision；
+其它操作的 \`accepted\` 语义按该操作契约判断，不能据此推定整个 Job 成功。
 `,
   },
 } as const;

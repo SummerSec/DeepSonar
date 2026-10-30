@@ -75,6 +75,11 @@ export async function applySubmitPlanResult(
       "result",
     );
   }
+  const knownTasks = new Set(existing?.raw?.tasks.map((task) => task.id) ?? []);
+  const executionIds = result.execution.map((entry) => entry.task_id);
+  if (new Set(executionIds).size !== executionIds.length || executionIds.some((id) => !knownTasks.has(id))) {
+    throw new ControlInputError("invalid_payload", "PlanResult execution 必须唯一引用本 Job 当前计划中的 task_id。", "execution");
+  }
   return persistPlanAudit(tx, jobId, job.payload_json, {
     source: existing?.source ?? "submit_plan",
     result,

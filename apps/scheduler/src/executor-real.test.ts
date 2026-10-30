@@ -417,7 +417,7 @@ test("Hub and Human authoritative preflight runs before claiming the deferred sl
   );
   assert.ok(
     source.indexOf('preflightDeferredSemanticEvent(jobId, "human", p)')
-      < source.indexOf("semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject }"),
+      < source.indexOf("semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject,"),
   );
 });
 
