@@ -34,7 +34,7 @@ test("task result source fails closed when scoped host Artifact is absent", asyn
   await assert.rejects(loadTaskResultSource(db, id, "canvas", { ...request, finding_id: id }), /task_result_fact_required/);
 });
 
-test("retained non-execution is not reviewable and host/event tampering fails closed", async () => {
+test("source rejects non-execution, tampered provenance and preserves incomplete-scan errors", async () => {
   const { createHash } = await import("node:crypto");
   const { goalReviewDigest } = await import("./task-goal-review-source.js");
   const { taskContractDigest } = await import("./task-outcome-snapshot.js");
@@ -65,6 +65,22 @@ test("retained non-execution is not reviewable and host/event tampering fails cl
   const forbiddenDb = (async () => ++queries === 1 ? [executedRow] : [{ id }]) as unknown as typeof sql;
   await assert.rejects(loadTaskResultSource(forbiddenDb, id, "canvas", { ...request, fact_id: id, task_contract_sha256: hash }), /task_result_evidence_is_evaluation_or_declaration/);
   await assert.rejects(load({ ...row, attempt_id: undefined }), /task_result_source_unavailable/);
+  // One missing Fact precedes an unreadable/over-budget retained evidence error.
+  // The global incomplete-scan reason must survive rather than hiding behind the first local gap.
+  const mixed = { ...executed, evidence_refs: ["00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"] };
+  const mixedBody = { ...body, proposal: mixed };
+  const mixedHost = { ...mixedBody, submission_sha256: goalReviewDigest(mixedBody) };
+  const mixedRow = { ...row, extensions_json: { task_result: mixedHost }, body_json: { task_result: mixedHost }, payload_json: { artifact: { task_result: mixed } } };
+  let mixedQueries = 0;
+  const mixedDb = (async () => {
+    mixedQueries++;
+    if (mixedQueries === 1) return [mixedRow];
+    if (mixedQueries === 2) return [];
+    if (mixedQueries === 3) return [{ id: mixed.evidence_refs[0], artifact_id: id, revision: 1, body_json: {}, artifact_body: {}, event_payload: {} }];
+    return [{ id, uri: `attempts/${id}/proof.txt`, sha256: "a".repeat(64), ordinal: 0 }];
+  }) as unknown as typeof sql;
+  await assert.rejects(loadTaskResultSource(mixedDb, id, "canvas", { ...request, fact_id: id, task_contract_sha256: hash }, { bytes: 0 }), /goal_review_evidence_unavailable_or_budget_exceeded/);
+
 
   await assert.rejects(load({ ...row, body_json: { task_result: { ...host, attempt_id: "wrong" } } }), /task_result_host_binding_mismatch/);
   await assert.rejects(load({ ...row, payload_json: { artifact: { task_result: { ...result, observed: "Changed after declaration" } } } }), /task_result_source_invalid/);

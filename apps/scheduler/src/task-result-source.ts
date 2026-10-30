@@ -66,6 +66,10 @@ export async function loadTaskResultSource(db: typeof sql, projectId: string, ca
       OR a.extensions_json ? 'task_goal_review' OR a.extensions_json ? 'task_result') LIMIT 1`;
   if (forbidden.length) return denied("task_result_evidence_is_evaluation_or_declaration");
   const evidence = await loadGoalReviewEvidence(db, projectId, canvasId, String(row.job_id), String(row.attempt_id), proposal.evidence_refs, true, budget);
+  // A local missing reference must not hide an incomplete bounded scan: the
+  // report must invalidate earlier positive assessments when any read was incomplete.
+  const incomplete = "goal_review_evidence_unavailable_or_budget_exceeded";
+  if (evidence.blockedReasons.includes(incomplete)) return denied(incomplete);
   if (evidence.blockedReasons.length) return denied(evidence.blockedReasons[0]);
   if (goalReviewDigest(evidence.bindings) !== goalReviewDigest(host.evidence_bindings)) return denied("task_result_evidence_changed");
   return { contract, proposal, fact_id: String(row.id), artifact_id: String(row.artifact_id),

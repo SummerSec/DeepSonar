@@ -202,6 +202,73 @@ if (!databaseUrl) {
         await assert.rejects(prepareTaskGoalReview(sql, { id: candidate.jobId, project_id: candidate.projectId, canvas_id: candidate.canvasId,
           status: "running", agent_snapshot_json: frozen }, candidate.attemptId, {}), /self_review_forbidden/);
       });
+      await t.test("mixed missing evidence cannot hide shared-budget exhaustion under either source scan order", async (budgetTest) => {
+        // Only this isolated database uses deterministic task-result IDs; all documents
+        // still pass through real emit_fact ingestion and its host bindings.
+        await sql`CREATE TABLE fixture_result_order(job_id uuid PRIMARY KEY, artifact_id uuid NOT NULL)`;
+        await sql.unsafe(`CREATE FUNCTION fixture_result_order_id() RETURNS trigger LANGUAGE plpgsql AS $$
+          DECLARE chosen uuid;
+          BEGIN
+            IF NEW.kind='task.result' THEN
+              SELECT artifact_id INTO chosen FROM fixture_result_order WHERE job_id=NEW.job_id;
+              IF chosen IS NOT NULL THEN NEW.id=chosen; END IF;
+            END IF;
+            RETURN NEW;
+          END $$`);
+        await sql.unsafe(`CREATE TRIGGER fixture_result_order BEFORE INSERT ON artifacts FOR EACH ROW EXECUTE FUNCTION fixture_result_order_id()`);
+        const makeSizedSource = async (base: Source, artifactId: string, sizes: number[], rejectSmall: boolean) => {
+          const jobId = randomUUID();
+          await sql`INSERT INTO fixture_result_order VALUES(${jobId},${artifactId})`;
+          await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
+            VALUES(${jobId},${base.projectId},${base.canvasId},'audit','pending',${sql.json(snapshot as never)},'{}'::jsonb)`;
+          await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status) VALUES(${base.canvasId},${jobId},'intent','Budget source fixture','pending')`;
+          const job = await start(jobId, base.projectId, base.canvasId), directory = path.join(blobDir, "jobs", jobId);
+          const files = [];
+          for (const [index, size] of sizes.entries()) {
+            assert.ok(size > 0 && size <= 2 * 1024 * 1024);
+            const relative = `attempts/${job.attemptId}/sized-${index}.txt`, bytes = Buffer.alloc(size, 65 + index);
+            await mkdir(path.dirname(path.join(directory, relative)), { recursive: true }); await writeFile(path.join(directory, relative), bytes);
+            files.push({ path: relative, bytes: size, sha256: createHash("sha256").update(bytes).digest("hex") });
+          }
+          await writeFile(path.join(directory, "manifest.json"), JSON.stringify({ v: 1, job_id: jobId, finalized_at: new Date().toISOString(), files }));
+          const refs: string[] = [];
+          for (const file of files) refs.push((await emit(job, { evidence: [{ kind: "runtime.result", statement: "Retained bounded evidence file",
+            uri: `jobs/${jobId}/${file.path}`, sha256: file.sha256 }] })).factId);
+          const result = await emit(job, { task_result: { ...base.proposal, evidence_refs: refs } });
+          await finish(job);
+          if (rejectSmall) await sql`UPDATE canvas_nodes SET verification_status='rejected' WHERE id=${refs[0]}`;
+          assert.equal(result.artifactId, artifactId); assert.ok(refs.length <= 8);
+          return { ...job, ...result, refs };
+        };
+        try {
+          for (const order of ["large-first", "mixed-first"] as const) await budgetTest.test(order, async (scenario) => {
+            const positive = await source(); await evaluate(positive);
+            // The v4 UUID bounds bracket the independently generated positive source.
+            const lower = order === "large-first" ? "00000000-0000-4000-8000-000000000001" : "00000000-0000-4000-8000-000000000002";
+            const upper = order === "large-first" ? "ffffffff-ffff-4fff-bfff-fffffffffff1" : "ffffffff-ffff-4fff-bfff-fffffffffff2";
+            const large = await makeSizedSource(positive, order === "large-first" ? lower : upper, [2 * 1024 * 1024, 2 * 1024 * 1024, 2 * 1024 * 1024], false);
+            const mixed = await makeSizedSource(positive, order === "large-first" ? upper : lower, [16, 2 * 1024 * 1024], true);
+            const scan = await sql`SELECT id FROM artifacts WHERE canvas_id=${positive.canvasId} AND extensions_json ? 'task_result' ORDER BY id`;
+            assert.deepEqual(scan.map((row) => String(row.id)), order === "large-first"
+              ? [large.artifactId, positive.artifactId, mixed.artifactId] : [mixed.artifactId, positive.artifactId, large.artifactId]);
+            const { loadGoalReviewEvidence } = await import("./task-goal-review-evidence.js");
+            const remaining = { bytes: 2 * 1024 * 1024 - 4096 };
+            const errors = await loadGoalReviewEvidence(sql, mixed.projectId, mixed.canvasId, mixed.jobId, mixed.attemptId, mixed.refs, true, remaining);
+            assert.deepEqual(errors.blockedReasons, ["goal_review_evidence_not_owned_or_unavailable", "goal_review_evidence_unavailable_or_budget_exceeded"]);
+            assert.ok(remaining.bytes > 1024 * 1024, "a refused oversized read must leave enough budget for the small reviewer");
+            const report = await loadTaskOutcomeReport(sql, positive.canvasId, positive.projectId);
+            scenario.diagnostic(JSON.stringify({ order, goal_assessment: report.goal_assessment, truncated: report.truncated,
+              mixed_gaps: report.task_results?.find((item) => item.fact_id === mixed.factId)?.gaps, gaps: report.gaps }));
+            assert.equal(report.truncated, true, "any exhausted source scan must block the whole report even when another source is positively reviewed");
+            assert.equal(report.goal_assessment, "blocked");
+            assert.ok(report.criteria.every((criterion) => criterion.assessment === "insufficient"));
+          });
+        } finally {
+          await sql.unsafe(`DROP TRIGGER fixture_result_order ON artifacts`);
+          await sql.unsafe(`DROP FUNCTION fixture_result_order_id()`);
+          await sql`DROP TABLE fixture_result_order`;
+        }
+      });
       await t.test("truncated task-result source scan cannot retain an otherwise positive task assessment", async () => {
         const candidate = await source(); await evaluate(candidate);
         await sql`UPDATE jobs SET status='running' WHERE id=${candidate.jobId}`;
