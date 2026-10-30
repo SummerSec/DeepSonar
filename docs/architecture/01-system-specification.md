@@ -65,7 +65,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：已提供的任务契约必须在创建与派发前检查目标、资产、范围、证据与验收要求的基本完整性，不能通过省略 outcome 或选择 task_defined 绕过。研究候选必须绑定整个冻结契约与判据 Fact 引用；观察须独立保留，unknown/无关观察不计成果。赏金规则只作可选附加筛选，不由严重度或相似文本推导资格。
 - **决策来源**：#767 / #794 通用任务下发主轴；#775 拥有目标版本、证据缺口和整体报告收敛。
-- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约旧入口仍 unassessed，迁移未完成。报告防误报已接确定性目标投影，不能将技术 confirmed 计为任务达标；独立复核、可复现证据、攻击链、knownness适用性、资格与整体报告收敛仍后续交付；真实模型验收不作为交付门槛，效果未验证。
+- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约旧入口仍 unassessed，迁移未完成。报告防误报已接确定性目标投影，不能将技术 confirmed 计为任务达标；来源隔离的普通 Job 判据评审已接宿主分配、自有 Fact/留存字节与冲突失效检查，不认证不同人/模型。攻击链、knownness适用性、资格与整体报告收敛仍有后续范围；真实模型验收不作为交付门槛，效果未验证。
 - **代码入口**：[研究候选契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
 - **验证证据**：通用完整性、outcome 不绕过、整契约版本、判据与 Fact/Artifact 来源、依据保存及冻结压缩传播行为测试；实际运行结果见 PR，不以研究候选计目标完成。
 
@@ -578,9 +578,11 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Finding 确认后必须能生成冻结输入的 Finding Report；Canvas 收敛后必须能生成带 `report-input.json` 和 SHA-256 的版本化 Task Report。相同输入幂等复用，输入变化追加版本；报告投影失败不得改写内部 Fact/Finding/Artifact，覆盖门必须按精确 Finding ID 核对章节。
 - **决策来源**：报告是投影，不应改变产生它的事实；版本和摘要是可重建、可审计的交付身份。
-- **实现状态**：as-built；相同成功输入返回已有版本，失败/进行中同输入可复用版本。#767 报告片将完整任务契约/摘要、来源快照、研究准入/技术状态与判据缺口纳入冻结输入与 hash，变化追加版本。新报告统一确定性正文；无独立目标评审权威时有契约保持 blocked，无契约明确 not_assessed；技术数据仅作附录，模型不得覆盖目标结论。历史无投影输入不回写，见[报告防误报](../TASK_OUTCOME_REPORT.md)。
+- **实现状态**：as-built；相同成功输入返回已有版本，失败/进行中同输入可复用版本。#767 报告片将完整任务契约/摘要、来源快照、研究准入/技术状态与判据缺口纳入冻结输入与 hash，变化追加版本。新报告统一确定性正文；接入来源隔离的普通 Job 评审后，逐判据区分 satisfied/contradicted/insufficient/conflict/not_assessed，整体可表示部分/全部判据已评价满足但不授权 Plan 完成；无有效依据时仍 blocked/not_assessed，无契约明确未评估；技术数据仅作附录，模型不得覆盖目标结论。历史无投影输入不回写，见[报告防误报](../TASK_OUTCOME_REPORT.md)。
 - **代码入口**：[Report implementation](../../apps/scheduler/src/report.ts)、[Report version](../../apps/scheduler/src/task-report-version.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:report-download`。
+
+来源隔离评审通过既有 Job/HubIntent 请求和 emit_fact.artifact.goal_review 保存版本化 Artifact；maker 与候选证据源 Job 不得自评，最新成功 Attempt、无未知效果及实际留存字节必须重核。有效矛盾为 conflict，失效记录保留缺口；不要求普通 Fact 先人工 verified，不新增整体完成门。详见[判据评审](../TASK_GOAL_REVIEW.md)。
 
 ### FR-RPT-002 Finding Report 独立轨
 

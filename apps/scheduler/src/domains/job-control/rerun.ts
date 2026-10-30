@@ -1,3 +1,8 @@
+import { normalizeTaskContract, normalizeTaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { taskContractDigest } from "../../task-outcome-snapshot.js";
+import { freezeGoalReviewAssignment, goalReviewDigest } from "../../task-goal-review-source.js";
+import { validateGoalReviewAssignment } from "../../task-goal-review.js";
+import { ControlInputError } from "../../control-input.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   parseRelatedFindingIds,
@@ -209,7 +214,7 @@ export async function resolveCurrentSnapshotForExistingJob(
       ...parseRelatedFindingIds(payload),
     ]),
   ];
-  return freezeAgentSnapshotNetworkPolicy(
+  const current = await freezeAgentSnapshotNetworkPolicy(
     tx,
     String(job.canvas_id),
     await resolveAgentSnapshotForJob(
@@ -220,6 +225,21 @@ export async function resolveCurrentSnapshotForExistingJob(
       frozenRuntimeImageOverride(job.agent_snapshot_json),
     ),
   );
+  const previous = objectValue(job.agent_snapshot_json).task_goal_review;
+  if (previous === undefined && payload.goal_review === undefined) return current;
+  // The existing assignment is the authority, never the mutable rerun payload.
+  // Re-resolve current permissions first, then prove that the original source,
+  // contract and reviewer identity still describe exactly the same assignment.
+  const assignment = validateGoalReviewAssignment(previous, String(job.project_id), String(job.canvas_id), String(job.id));
+  if (taskContractDigest(normalizeTaskContract(objectValue(job.agent_snapshot_json).task_contract)) !== assignment.request.task_contract_sha256 ||
+    (payload.goal_review !== undefined && goalReviewDigest(normalizeTaskGoalReviewRequest(payload.goal_review)) !== goalReviewDigest(assignment.request))) {
+    throw new ControlInputError("invalid_payload", "goal_review_rerun_assignment_mismatch", "goal_review", { task_goal_review: { code: "goal_review_rerun_assignment_mismatch" } });
+  }
+  const refreshed = await freezeGoalReviewAssignment(tx, String(job.project_id), String(job.canvas_id), current, assignment.request);
+  if (refreshed.task_goal_review.assignment_sha256 !== assignment.assignment_sha256) {
+    throw new ControlInputError("invalid_payload", "goal_review_source_changed", "goal_review", { task_goal_review: { code: "goal_review_source_changed" } });
+  }
+  return refreshed;
 }
 
 export async function revokeOldRuntimeGrants(tx: typeof sql, jobId: string, reason: string): Promise<void> {

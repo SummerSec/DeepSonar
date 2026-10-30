@@ -1,3 +1,6 @@
+import { freezeGoalReviewAssignment } from "../../task-goal-review-source.js";
+import { prepareTaskGoalReview } from "../../task-goal-review.js";
+import { assertNoGoalReviewAuthority } from "../../task-goal-review-input.js";
 import { analysisCompleteGateExpected } from "./completion-feedback.js";
 import { createHash } from "node:crypto";
 import { findingSourceDigest } from "../artifacts/model.js";
@@ -1100,6 +1103,15 @@ export function createEventIngestionSideEffectApplication(
       }
       if (!canvasId) return;
 
+      assertNoGoalReviewAuthority(p.artifact);
+      const review = p.artifact?.goal_review ? await prepareTaskGoalReview(tx, job, services.attemptId ?? null, p.artifact.goal_review) : undefined;
+      if (review?.duplicate) return;
+      const document = factProposalToArtifact({ title: p.title ?? p.description.slice(0, 60), description: p.description,
+        quantities: p.quantities, verification: p.verification, artifact: p.artifact });
+      if (review) {
+        document.kind = "task.goal_evaluation";
+        document.extensions.task_goal_review = { ...review.extension };
+      }
       const [{ count }] = await tx<[{ count: number }]>`
       SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact'`;
       const artifact = await persistArtifact(tx, {
@@ -1108,13 +1120,8 @@ export function createEventIngestionSideEffectApplication(
         jobId,
         sourceEventId: services.eventId ?? null,
         sourceOperation: "emit_fact",
-        document: factProposalToArtifact({
-          title: p.title ?? p.description.slice(0, 60),
-          description: p.description,
-          quantities: p.quantities,
-          verification: p.verification,
-          artifact: p.artifact,
-        }),
+        ...(review ? { artifactKey: review.artifactKey } : {}),
+        document,
       });
       const [node] = await tx`
       INSERT INTO canvas_nodes ${tx({
@@ -1125,6 +1132,7 @@ export function createEventIngestionSideEffectApplication(
         body_json: {
           description: p.description,
           artifact_id: artifact.id,
+          ...(review ? { goal_review: p.artifact?.goal_review } : {}),
           ...(p.quantities && p.quantities.length > 0 ? { quantities: p.quantities } : {}),
         } as never,
         x: ((intentNode?.x as number) ?? 100) + 340,
@@ -1299,9 +1307,11 @@ export function createEventIngestionSideEffectApplication(
           : ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, baseRole);
         const followupFindingId =
           typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
-        const snapshotFindingIds = followupFindingId
-          ? [followupFindingId]
-          : relatedImportedIds;
+        const snapshotFindingIds = [...new Set([
+          ...(followupFindingId ? [followupFindingId] : relatedImportedIds),
+          ...(it.goal_review ? [it.goal_review.finding_id.toLowerCase()] : []),
+        ])];
+        if (it.goal_review && snapshotFindingIds.length > 8) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "intents.goal_review");
         let snapshot;
         try {
           snapshot = await freezeAgentSnapshotNetworkPolicy(
@@ -1334,6 +1344,7 @@ export function createEventIngestionSideEffectApplication(
           }
           throw error;
         }
+        if (it.goal_review) snapshot = await freezeGoalReviewAssignment(tx, String(job.project_id), canvasId, snapshot, it.goal_review);
         // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
         const applyHubFollowup = hubFollowup && !verificationFollowup;
         const schedulingPurpose: SchedulingPurpose = verificationFollowup ? "convergence_evidence" : "discovery";
@@ -1390,7 +1401,7 @@ export function createEventIngestionSideEffectApplication(
               ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
-            ...(relatedImportedIds.length > 0 ? { related_finding_ids: relatedImportedIds } : {}),
+            ...((relatedImportedIds.length > 0 || it.goal_review) ? { related_finding_ids: [...new Set([...relatedImportedIds, ...(it.goal_review ? [it.goal_review.finding_id.toLowerCase()] : [])])] } : {}),
             ...(verificationFollowup
               ? {
                   verification_followup: {

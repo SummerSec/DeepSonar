@@ -90,6 +90,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_fact: [
     "### `emit_fact` — 增量提交可验证事实",
+    "- 独立目标评审使用冻结 task_goal_review 指派，通过 artifact.goal_review 提交整个指定判据的 expected/actual/rationale、限制和本 Job Fact 引用；先保存含本 Attempt 保留文件 URI/hash 的独立证据。没有指派不能自评，satisfied 不等于整体完成或赏金资格。",
     "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`artifact`（可选，通用 Artifact：kind/schema_version/claims/evidence/relations/extensions）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
     "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
     "- `verification` 字段：`finding_id`、`evidence_kind`（review|test）、`outcome`（supports|refutes|inconclusive）、`subject_revision` 必填；test 还应含 `steps`、`expected`、`actual`（或 artifact_refs）。review/test 用 `attempted_refutation` 字符串数组记录实际尝试的反例或阴性对照；不得从 limitations 推断反证尝试。没有目标 Finding 的普通测试提交普通 Fact，不传 verification、不编造 finding_id。",

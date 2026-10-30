@@ -1,3 +1,5 @@
+import { TaskGoalReviewRequest, TaskGoalReviewResult } from "./task-goal-review.js";
+export * from "./task-goal-review.js";
 import { z } from "zod";
 import { CandidateOutcomeClaim } from "./task-outcome.js";
 export * from "./task-outcome.js";
@@ -640,6 +642,7 @@ export const ARTIFACT_RELATION_MAX = 20;
 
 export const ArtifactInput = z
   .object({
+    goal_review: TaskGoalReviewResult.optional(),
     kind: ArtifactKind.optional(),
     schema_version: ArtifactSchemaVersion.optional(),
     artifact_key: ArtifactKey.optional(),
@@ -1257,6 +1260,7 @@ export type HubRoleDefinitionPayload = z.infer<typeof HubRoleDefinitionPayload>;
  */
 export const HubIntentPayload = z
   .object({
+    goal_review: TaskGoalReviewRequest.optional(),
     from: HubReferenceList,
     role: nonEmptyText(64),
     description: z.string().min(8).max(2_000).regex(/\S/),
