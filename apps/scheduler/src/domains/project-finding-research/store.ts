@@ -4,6 +4,7 @@ import { EXTRACTOR_VERSION, extractFindingFeatures, sourceInputDigest, type Find
 import { maintenanceIdentityMatches } from "../../platform-maintenance.js";
 
 export const FEATURE_BATCH_SIZE = 20;
+export const FEATURE_PROJECT_SCAN_SIZE = 25;
 export const FEATURE_RESCAN_SECONDS = 30;
 type Db = typeof sql;
 
@@ -34,6 +35,25 @@ export async function requestFeatureRebuild(projectId: string, db: Db = sql): Pr
       cursor_id = NULL, status = 'pending', attempts = 0, error_code = NULL, next_run_at = now(), updated_at = now()`;
 }
 
+/** Durable, bounded registration also recovers obsolete failures without scanning
+ * failed rows in every due-work query. Current-version work keeps its retry budget. */
+export async function scanFeatureProjects(tx: TransactionSql): Promise<number> {
+  const [scan] = await tx`SELECT cursor_id FROM project_finding_feature_scan WHERE id = 'global' FOR UPDATE SKIP LOCKED`;
+  if (!scan) return 0;
+  const projects = await tx`SELECT id FROM projects WHERE ${scan.cursor_id ? tx`id > ${scan.cursor_id}::uuid` : tx`true`}
+    ORDER BY id LIMIT ${FEATURE_PROJECT_SCAN_SIZE}`;
+  for (const project of projects) {
+    await tx`INSERT INTO project_finding_feature_work (project_id, extractor_version)
+      VALUES (${project.id}::uuid, ${EXTRACTOR_VERSION})
+      ON CONFLICT (project_id) DO UPDATE SET generation = gen_random_uuid(), extractor_version = EXCLUDED.extractor_version,
+        cursor_id = NULL, status = 'pending', attempts = 0, error_code = NULL, next_run_at = now(), updated_at = now()
+      WHERE project_finding_feature_work.extractor_version IS DISTINCT FROM EXCLUDED.extractor_version`;
+  }
+  await tx`UPDATE project_finding_feature_scan
+    SET cursor_id = ${projects.length < FEATURE_PROJECT_SCAN_SIZE ? null : projects.at(-1)?.id}::uuid WHERE id = 'global'`;
+  return projects.length;
+}
+
 /** One locked batch is atomic: process crashes roll back to its durable checkpoint. */
 export async function processFeatureBatch(db: Db = sql, enabled = () => true): Promise<number> {
   if (!enabled()) return 0;
@@ -45,18 +65,9 @@ export async function processFeatureBatch(db: Db = sql, enabled = () => true): P
     if (!enabled() || !maintenance || maintenance.phase !== 'active' || !maintenanceIdentityMatches(maintenance as never, {
       generation: process.env.DEEPSONAR_UPGRADE_GENERATION ?? '', version: process.env.DEEPSONAR_VERSION ?? '',
     })) return 0;
-    const [scan] = await tx`SELECT cursor_id FROM project_finding_feature_scan WHERE id = 'global' FOR UPDATE SKIP LOCKED`;
-    if (scan) {
-      const projects = await tx`SELECT id FROM projects WHERE ${scan.cursor_id ? tx`id > ${scan.cursor_id}::uuid` : tx`true`}
-        ORDER BY id LIMIT 25`;
-      for (const project of projects) {
-        await tx`INSERT INTO project_finding_feature_work (project_id, extractor_version)
-          VALUES (${project.id}::uuid, ${EXTRACTOR_VERSION}) ON CONFLICT DO NOTHING`;
-      }
-      await tx`UPDATE project_finding_feature_scan SET cursor_id = ${projects.length < 25 ? null : projects.at(-1)?.id}::uuid WHERE id = 'global'`;
-    }
+    await scanFeatureProjects(raw);
     const [work] = await tx`SELECT * FROM project_finding_feature_work
-      WHERE (status <> 'failed' OR extractor_version <> ${EXTRACTOR_VERSION}) AND next_run_at <= now()
+      WHERE status <> 'failed' AND next_run_at <= now()
       ORDER BY next_run_at, project_id LIMIT 1 FOR UPDATE SKIP LOCKED`;
     if (!work) return 0;
     const projectId = String(work.project_id);

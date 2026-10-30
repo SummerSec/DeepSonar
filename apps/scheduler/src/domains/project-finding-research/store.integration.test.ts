@@ -4,7 +4,7 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import postgres from 'postgres';
+import postgres, { type Sql, type TransactionSql } from 'postgres';
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 if (!databaseUrl) {
@@ -29,7 +29,7 @@ if (!databaseUrl) {
 
 async function runFeatureFixture(databaseUrl: string): Promise<void> {
     process.env.DATABASE_URL = databaseUrl;
-    const [{ migrate, sql }, { processFeatureBatch, requestFeatureRebuild, readFeatureStatus, loadFeatureSource }, { sourceInputDigest }, { default: Fastify }, { default: websocket }, { registerRoutes }, { generateToken }] = await Promise.all([
+    const [{ migrate, sql }, { processFeatureBatch, requestFeatureRebuild, readFeatureStatus, loadFeatureSource, scanFeatureProjects }, { sourceInputDigest, EXTRACTOR_VERSION }, { default: Fastify }, { default: websocket }, { registerRoutes }, { generateToken }] = await Promise.all([
       import('../../db.js'), import('./store.js'), import('./model.js'), import('fastify'), import('@fastify/websocket'), import('../../routes.js'), import('../../auth.js'),
     ]);
     await migrate();
@@ -139,6 +139,7 @@ async function runFeatureFixture(databaseUrl: string): Promise<void> {
       await sql`DELETE FROM findings WHERE id=${sourceId}`;
       assert.equal(await readFeatureStatus(sourceId,project),null);
       assert.equal((await sql`SELECT count(*)::int AS n FROM project_finding_features WHERE finding_id=${sourceId}`)[0].n,0);
+      await checkBoundedQueueRecovery(sql, scanFeatureProjects, processFeatureBatch, EXTRACTOR_VERSION);
     } finally {
       await sql`UPDATE platform_upgrade_state SET phase='active',generation='',runtime_role='',target_version='',worker_generation_token_hash='' WHERE id='global'`;
       await sql`DELETE FROM api_tokens WHERE token_hash=${token.hash}`;
@@ -152,4 +153,59 @@ async function runFeatureFixture(databaseUrl: string): Promise<void> {
       await deleteProjectsLeavingAuditShells(sql,[project,other]);
       await app.close(); await sql.end({timeout:5});
     }
+}
+
+
+async function checkBoundedQueueRecovery(
+  db: Sql,
+  scan: (tx: TransactionSql) => Promise<number>,
+  processBatch: () => Promise<number>,
+  currentVersion: string,
+): Promise<void> {
+  const projects = Array.from({ length: 29 }, () => randomUUID());
+  const currentFailed = projects[0], currentPending = projects[1], activeGeneration = randomUUID();
+  try {
+    for (const project of projects) {
+      await db`INSERT INTO projects (id, name) VALUES (${project}, 'bounded queue fixture')`;
+      await db`INSERT INTO project_finding_feature_work
+        (project_id, extractor_version, status, attempts, cursor_id, active_generation, error_code, next_run_at)
+        VALUES (${project}, ${project === currentFailed || project === currentPending ? currentVersion : 'obsolete/v0'},
+          ${project === currentPending ? 'pending' : 'failed'}, ${project === currentPending ? 1 : 3}, ${randomUUID()},
+          ${activeGeneration}, 'fixture_error', CASE WHEN ${project === currentPending} THEN now() + interval '1 hour' ELSE now() - interval '1 hour' END)`;
+    }
+    const snapshot = () => db`SELECT * FROM project_finding_feature_work WHERE project_id = ANY(${projects}::uuid[]) ORDER BY project_id`;
+    const before = await snapshot();
+    await db`UPDATE project_finding_feature_scan SET cursor_id = NULL WHERE id = 'global'`;
+    // Losing the process before commit must lose both registration updates and its checkpoint.
+    await assert.rejects(db.begin(async (tx) => { await scan(tx); throw new Error('fixture crash'); }), /fixture crash/);
+    assert.deepEqual(await snapshot(), before);
+    assert.equal((await db`SELECT cursor_id FROM project_finding_feature_scan WHERE id='global'`)[0].cursor_id, null);
+    const [firstCount, secondCount] = [await db.begin(scan), await db.begin(scan)];
+    assert.equal(firstCount, 25, 'one registration call reads only the fixed project budget');
+    assert.ok(secondCount > 0 && secondCount <= 25);
+    const after = await snapshot();
+    for (const row of after) {
+      const previous = before.find((item) => item.project_id === row.project_id)!;
+      if (row.project_id === currentFailed || row.project_id === currentPending) {
+        assert.deepEqual(row, previous, 'current-version work must not reset status, retries, generation or cursor');
+      } else {
+        assert.equal(row.extractor_version, currentVersion);
+        assert.equal(row.status, 'pending');
+        assert.equal(row.attempts, 0);
+        assert.equal(row.cursor_id, null);
+        assert.equal(row.error_code, null);
+        assert.notEqual(row.generation, previous.generation);
+        assert.equal(row.active_generation, activeGeneration, 'recovery must retain the last active generation');
+      }
+    }
+    // Repeated complete registry passes and worker ticks cannot replenish a current failed row's budget.
+    for (let index = 0; index < 4; index += 1) { await db.begin(scan); await processBatch(); }
+    const [stillFailed] = await db`SELECT * FROM project_finding_feature_work WHERE project_id=${currentFailed}`;
+    assert.deepEqual(stillFailed, before.find((row) => row.project_id === currentFailed));
+    const [stillPending] = await db`SELECT * FROM project_finding_feature_work WHERE project_id=${currentPending}`;
+    assert.deepEqual(stillPending, before.find((row) => row.project_id === currentPending));
+  } finally {
+    await db`DELETE FROM projects WHERE id = ANY(${projects}::uuid[])`;
+    await db`UPDATE project_finding_feature_scan SET cursor_id = NULL WHERE id='global'`;
+  }
 }
