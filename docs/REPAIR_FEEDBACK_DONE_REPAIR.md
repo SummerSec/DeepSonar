@@ -29,6 +29,12 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 本切片通过同一运行会话内的 Control HTTP 响应交付反馈，未引入新的 stdin、Shell 控制文件或通用重试引擎。跨进程查询持久回执不等于恢复原模型会话；DSH 不支持持久 resume 时仍明确停止。保留 #766 可信父子谱系和父等待子任务语义；不修改 #768 framing、控制事件保留或 evidence 保存失败的结论。
 
+## 人工请求与完成提交的并发边界（B2）
+
+`request_human` 的异步预检结束后，执行器再次核对完成预留和已接受的 human/done/Hub 状态，再保存人工请求。这样，预检等待期间完成提案已经 commit 并释放预留时，迟到人工请求仍被拒绝；两个人工请求并发预检时，后接受者也不能覆盖先接受者。匹配事件身份的 abort 才能释放完成预留，未知结果仍保留预留。
+
+`executor-real-terminal-race.test.ts` 调用真实 `executeReal`、其注册的 Control handler、完成门及终态事件选择，以有界 barrier 固定交错。数据库预检/写入、运行器传输和 Evidence 是离线替身；这不等于真实 HTTP/数据库并发、实际 CLI 或模型验收。持久回执事务仍由 B1 的 PostgreSQL 集成测试覆盖。测试接入 `pnpm ci:unit:executor-real`，在独立 Node module-mock 进程运行。
+
 ## 验收边界
 
 行为验证必须包含首次拒绝后接受、旧 key 重放、冲突/旧 revision、响应丢失、重启、预算耗尽、取消/租约失效、未知效果、scope 和数据库写失败。实际通过项以 PR 记录为准，本文件不把规划当作通过证据。

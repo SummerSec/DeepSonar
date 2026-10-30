@@ -267,7 +267,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：错误反馈需要足够修复信息又不能扩大泄密面；模型应重新读状态并用新 revision/key 修正。
 - **实现状态**：部分达标（Phase 1）；当前共享类型和部分 Control 拒绝路径具备完整 envelope，Hub、Verify、Completion Gate 和完整 Proposal/Receipt/Settlement 仍未统一。 #776 B 为 mark_job_done 增加持久 revision/key 回执与拒绝额度，仍不代表通用完成门或独立修正 token 预算完成；见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 - **代码入口**：[RepairFeedback shared types](../../packages/shared-types/src/repair-feedback.ts)、[平台修复构造](../../apps/scheduler/src/domains/platform-api/repair.ts)、[Repair tests](../../apps/scheduler/src/repair-feedback.test.ts)。
-- **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:canvas-facts`、`pnpm ci:integration:platform-api`；人工核对反馈只含形状/摘要。
+- **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:canvas-facts`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:executor-real`；人工核对反馈只含形状/摘要。
 
 ### FR-CTRL-006 失败分类与无控制通道回退
 

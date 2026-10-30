@@ -1467,6 +1467,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       const p = parsed.data;
       await preflightDeferredSemanticEvent(jobId, "human", p);
       if (completionReservation) throw toolBoundaryError("duplicateToolCall", "Completion acceptance is pending; reconcile its receipt first");
+      assertSemanticTerminalExclusivity(semanticState, "human");
       semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject };
       return;
     }
