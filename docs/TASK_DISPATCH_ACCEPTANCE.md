@@ -60,4 +60,4 @@
 | Executor 与 terminal-race 回归 | 75/75 + 11/11 |
 | `ci:unit:docs-freshness` | 10/10 |
 
-上述完整链直接覆盖[真实路由测试](../apps/scheduler/src/task-plan-review.integration.test.ts)，终态竞态回归见[terminal-race 测试](../apps/scheduler/src/executor-real-terminal-race.test.ts)。构建仍待主线程最后 Scheduler TypeScript 步骤确认，未在此提前记为通过。
+上述完整链直接覆盖[真实路由测试](../apps/scheduler/src/task-plan-review.integration.test.ts)，终态竞态回归见[terminal-race 测试](../apps/scheduler/src/executor-real-terminal-race.test.ts)。完整 `pnpm build`（含 Scheduler TypeScript 与 Web Vite）已通过；Web 仍提示现有大 chunk 警告。
