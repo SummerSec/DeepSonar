@@ -325,6 +325,13 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[LSP admission](../../apps/scheduler/src/domains/language-server-capability/admit.ts)、[CLI admission](../../apps/scheduler/src/domains/cli-capability/admit.ts)、[能力契约测试](../../apps/scheduler/src/domains/language-server-capability/language-server-capability.test.ts)。
 - **验证证据**：`pnpm ci:unit:language-server`、`pnpm ci:unit:capability-pack`、`pnpm ci:images`。
 
+### FR-CAP-008 能力选择证据审计
+
+- **规范要求**：精确版本/hash 的配置选择、拉取、声明使用和独立结果应分别呈现；不得将 Job 成功、模型反馈或组合成功解释为单能力有效性，不建立第二经验账本。
+- **实现状态**：#778 A 部分实现；离线报告关联本项目未撤销 Skill 与配置 Pack，实际使用、独立质量、成本归因和在线推荐仍未实现。
+- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)。
+- **验证证据**：`pnpm ci:unit:project-knowledge` 的合成行为测试；数据库导出与真实模型评测未执行。
+
 ### FR-CAP-006 Plan 协议的当前边界
 
 - **规范要求**：系统若接收 Plan/PlanResult，必须版本化保存并校验 goal、任务、依赖、完成策略和预算；在尚未实现 Plan 驱动 Worker 派发前不得把 PlanResult 当作替代 Hub 收敛或 Job 终态。
