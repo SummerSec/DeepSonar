@@ -5,7 +5,7 @@ import {
 } from "@deepsonar/shared-types";
 import type { PlatformRuntimeHandlerContext } from "../platform-api/registry.js";
 import { createEventIngestionApplication } from "../event-ingestion/application.js";
-import { readCompletionReceipt } from "../event-ingestion/completion-receipt.js";
+import { readControlReceiptByKey } from "../event-ingestion/control-receipt.js";
 import { canonical, KnowledgeOperationError, knowledgeEventId, reject, sha256, type KnowledgeDb } from "./types.js";
 import { resolveKnowledgeSource, recheckKnowledgeSources, readManifestInput, type KnowledgeActor } from "./inputs.js";
 import { enqueueKnowledgeWork } from "./requests.js";
@@ -162,8 +162,8 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
         if (envelope.type !== "knowledge" || jobId !== actor.jobId || ingest?.jobStatusAtLock !== "running" || ingest.attemptId !== actor.attemptId) return reject("KNOWLEDGE_JOB_INACTIVE", "Job changed before knowledge settlement");
         // The ingestion transaction already owns the Job lock. An earlier read
         // outside this boundary cannot reserve a key against concurrent completion.
-        if (await readCompletionReceipt(tx, jobId, key)) {
-          return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a completion proposal");
+        if (await readControlReceiptByKey(tx, jobId, key)) {
+          return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a control receipt");
         }
         const [current] = await tx`SELECT lease_expires_at,agent_snapshot_json FROM jobs WHERE id=${jobId}`;
         if (!current || !current.lease_expires_at || new Date(current.lease_expires_at as string).getTime() <= Date.now()) return reject("KNOWLEDGE_JOB_INACTIVE", "Job lease expired");

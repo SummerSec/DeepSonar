@@ -80,6 +80,8 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 
 Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/request_human 可带严格版本化 plan_basis。字段、只读证明、单步预算、错误/重试边界见 [Plan 协议范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)；OpenAPI 输入 schema 由 shared-types 派生，无新写入 API。
 
+带 plan_basis 的 submit_hub_decision/request_human（含 payload_file）返回 persisted_deferred 接纳回执；GET receipt_key 只读原响应，完全相同 POST 仅尝试恢复原活动 Attempt。changed input/operation 返回409；权限仍受原 Job capability 限制。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。
+
 ## 成果候选入口（#767）
 
 已提供 TaskContract 的 objective/targets/scope/evidence/acceptance 在创建和派发时检查基本完整性，不因 outcome 省略或 task_defined 而绕过。emit_finding 的 outcome_claim 绑定整个冻结 task_contract_sha256、target、可选 baseline 及逐判据 Fact 引用；赏金 rule_assessments 只是附加筛选。objective/scope/evidence/exclusion:N 必评，acceptance:N 至少一项 matches 表示贡献关联，不是全任务完成。通过仅 admitted_for_research，submission_eligibility:not_assessed；无契约旧入口仍 unassessed。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。

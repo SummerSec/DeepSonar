@@ -138,7 +138,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   submit_hub_decision: {
     summary: "Submit a Hub decision proposal",
-    description: "Submit the current Hub round's complete or intent decision.",
+    description: "Submit the current Hub round's complete or intent decision. With plan_basis (including payload_file), acceptance returns a durable persisted_deferred receipt. GET receipt_key reads it without execution; unchanged POST may restore only the original active Attempt.",
     readOnly: false,
     eventType: "hub_decision",
   },
@@ -388,14 +388,14 @@ export function buildPlatformOpenApiDocument(input: {
         security: [{ capabilityBearer: [] }],
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
-          ...(definition.operationId === "mark_job_done" ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore the live completion gate. After response loss and persisted_deferred lookup, POST the unchanged original key/revision/payload to restore the original active handler. Requires the active Job capability." }] : []),
+          ...(["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore live state. After response loss and persisted_deferred lookup, POST the unchanged original key/payload (and completion revision when applicable) to restore only the original active Attempt handler. Plan receipts require plan_basis on the accepted proposal. Requires the active Job capability." }] : []),
         ],
         responses: {
           "200": {
-            description: definition.operationId === "mark_job_done" ? "Operation contract without receipt_key; original accepted/rejected result with receipt_key" : "Operation contract",
+            description: ["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? "Operation contract without receipt_key; original accepted/rejected result with receipt_key" : "Operation contract",
             content: {
               "application/json": {
-                schema: definition.operationId === "mark_job_done" ? { type: "object", additionalProperties: true } : {
+                schema: ["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? { type: "object", additionalProperties: true } : {
                   type: "object",
                   required: ["operation_id", "summary", "description", "input_schema", "read_only"],
                   properties: {
@@ -423,7 +423,7 @@ export function buildPlatformOpenApiDocument(input: {
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", format: "uuid" } },
-          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" }, description: "For mark_job_done this must equal Idempotency-Key when supplied." },
+          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" }, description: "For mark_job_done and Plan decisions this must equal Idempotency-Key when supplied." },
           ...(definition.operationId === "mark_job_done" ? [{ name: "X-DeepSonar-Proposal-Revision", in: "header", required: true, schema: { type: "integer", minimum: 0, maximum: 9999 }, description: "Initial 0; use the next revision from rejection feedback for corrected semantics, retaining the original revision for transport retries." }] : []),
         ],
         requestBody: {

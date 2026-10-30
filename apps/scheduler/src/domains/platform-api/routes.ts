@@ -1,3 +1,5 @@
+import { invokeDurablePlanDecision, readPlanReceipt, PLAN_RECEIPT_OPERATIONS, type PlanReceiptOperation } from "./plan-receipt.js";
+import { readControlReceiptByKey, controlInputDigest } from "../event-ingestion/control-receipt.js";
 import { sql } from "../../db.js";
 import { invokeDurableCompletion } from "./completion.js";
 import { readCompletionReceipt } from "../event-ingestion/completion-receipt.js";
@@ -224,7 +226,32 @@ async function executeInvocation(
     idempotencyKey: key,
   };
   try {
-    const result = await invokeRuntimeHandler(context);
+    const requestInput=input;
+    if(key && operationId==='submit_hub_decision' && input && typeof input==='object' && 'payload_file' in input) {
+      try {
+        const resolved=await invokeRuntimeHandler({...context,planPhase:'resolve'}) as {resolved_plan_input:unknown};
+        const parsed=ControlToolPayloadSchemas.submit_hub_decision.safeParse(resolved.resolved_plan_input);
+        if(!parsed.success) return {statusCode:422,cacheable:false,body:controlSchemaRejection({operation:operationId,code:controlInputCodeForOperation(operationId),issues:parsed.error.issues,rawInput:resolved.resolved_plan_input,idempotencyKey:key})};
+        if('payload_file' in parsed.data) throw new Error('Invalid expanded Plan input');
+        input=parsed.data;
+      }catch(error) {
+        if(error instanceof PlatformRuntimeHandlerError && error.code==='HANDLER_NOT_REGISTERED') {
+          const receipt=await readPlanReceipt(sql,jobId,key);
+          if(receipt && receipt.operation===operationId && receipt.input_digest===controlInputDigest(requestInput)
+            && receipt.snapshot_digest===principal.snapshotSha256) return {...receipt.result,cacheable:false};
+          if(receipt) return {statusCode:409,cacheable:false,body:{accepted:false,error_code:'IDEMPOTENCY_KEY_CONFLICT',error:'Key belongs to a different input or snapshot',retryable:false}};
+        }
+        throw error;
+      }
+      const owner=await readControlReceiptByKey(sql,jobId,key);
+      if(owner && !(input && typeof input==='object' && 'plan_basis' in input)) return {statusCode:409,cacheable:false,body:{accepted:false,error_code:'IDEMPOTENCY_KEY_CONFLICT',error:'Key already belongs to a durable Plan input',retryable:false}};
+    }
+    if (key && PLAN_RECEIPT_OPERATIONS.includes(operationId as PlanReceiptOperation)
+      && input && typeof input === "object" && "plan_basis" in input) {
+      const result = await invokeDurablePlanDecision({principal,operation:operationId as PlanReceiptOperation,key,payload:input,requestInput});
+      return {...result,cacheable:false};
+    }
+    const result = await invokeRuntimeHandler({...context,input});
     return { statusCode: 200, body: result === undefined ? null : result, cacheable: true };
   } catch (error) {
     if (error instanceof PlatformRuntimeHandlerError) {
@@ -302,8 +329,11 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
     const result = await invocation;
     return reply.code(result.statusCode).send(result.body);
   }
-  if (await readCompletionReceipt(sql, jobId, key)) {
-    return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to mark_job_done");
+  const owned = await readControlReceiptByKey(sql, jobId, key);
+  const planRequest = PLAN_RECEIPT_OPERATIONS.includes(definition.operationId as PlanReceiptOperation)
+    && parsed.input && typeof parsed.input === "object" && ("plan_basis" in parsed.input || "payload_file" in parsed.input);
+  if (owned && (!planRequest || owned.operation !== definition.operationId)) {
+    return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a durable control receipt");
   }
   if (parsed.error) {
     if (parsed.error.retryable) {
@@ -316,6 +346,16 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
       });
     }
     return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
+  }
+
+  if (planRequest) {
+    if (parsed.eventId !== key) return sendError(reply,400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
+    const previous=idempotencyCache.get(idempotencyCacheKey(jobId,key));
+    if(!owned && previous && (previous.operationId!==definition.operationId || previous.inputHash!==inputHash(parsed.input))) return sendError(reply,409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to another input or operation");
+    if(!owned && previous) {const cached=await previous.result;return reply.code(cached.statusCode).send(cached.body);}
+    const result=await executeInvocation(principal,jobId,definition.operationId,parsed.input,parsed.eventId,key);
+    if(result.cacheable) idempotencyCache.set(idempotencyCacheKey(jobId,key),{operationId:definition.operationId,inputHash:inputHash(parsed.input),result:Promise.resolve(result)});
+    return reply.code(result.statusCode).send(result.body);
   }
 
   // Read authorization can shrink after a successful request. Knowledge mutations
@@ -379,6 +419,12 @@ export function registerPlatformControlRoutes(app: FastifyInstance): void {
     if (!isAllowed(principal, definition.operationId)) return sendError(reply, 403, "OPERATION_NOT_ALLOWED", "Operation is not allowed for this Job");
     const receiptKey = (typed.query as { receipt_key?: unknown })?.receipt_key;
     if (receiptKey !== undefined) {
+      if (PLAN_RECEIPT_OPERATIONS.includes(definition.operationId as PlanReceiptOperation) && isUuid(receiptKey)) {
+        const receipt=await readPlanReceipt(sql,principal.jobId,receiptKey);
+        if(!receipt || receipt.operation!==definition.operationId) return sendError(reply,404,"PLAN_RECEIPT_NOT_FOUND","Plan receipt not found");
+        if(receipt.snapshot_digest!==principal.snapshotSha256) return sendError(reply,409,"PLAN_RECEIPT_SCOPE_INVALID","Plan snapshot changed");
+        return reply.header("cache-control","no-store").send(receipt.result.body);
+      }
       if (definition.operationId !== "mark_job_done" || !isUuid(receiptKey)) return sendError(reply, 400, "INVALID_RECEIPT_KEY", "Receipt lookup requires mark_job_done and a UUID receipt_key");
       const receipt = await readCompletionReceipt(sql, principal.jobId, receiptKey);
       if (!receipt) return sendError(reply, 404, "COMPLETION_RECEIPT_NOT_FOUND", "Completion receipt not found");

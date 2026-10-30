@@ -1302,10 +1302,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let factCount = 0;
   const semanticState: DeferredSemanticState = { done: null, hub: null, human: null };
   let completionReservation: string | null = null;
+  let planReservation: {eventId:string;type:string} | null = null;
 
   const onSemanticEvent = async (
     raw: Record<string, unknown>,
-    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>; completionPhase?: "prepare" | "commit" },
+    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>; completionPhase?: "prepare" | "commit"; planPhase?: "validate" | "prepare" | "commit" },
   ) => {
     let event: ControlEventEnvelope;
     try {
@@ -1421,6 +1422,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       await ingestSemanticEventObserved(jobId, { ...event, payload: event.payload });
       return;
     }
+    if (planReservation && !(runtimeControl.planPhase === "commit" && event.event_id === planReservation.eventId && event.type === planReservation.type)
+      && (["hub_decision","human"].includes(event.type) || (event.type==="done" && planReservation.type==="human"))) {
+      throw toolBoundaryError("duplicateToolCall", "Plan acceptance is pending; reconcile its receipt first");
+    }
     if (event.type === "hub_decision") {
       assertSemanticTerminalExclusivity(semanticState, "hub_decision");
       const decision = event.payload;
@@ -1442,10 +1447,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           "submit_hub_decision 已成功接受一次；每个 Job 成功提交后只能一次。仅当上一次 HTTP 请求失败或参数校验失败时才可重试，不要在成功后为“补全参数”再次调用。",
         );
       }
-      await preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload);
+      if(!runtimeControl.planPhase || runtimeControl.planPhase==="validate") await preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload);
       // Other Control calls can be accepted while the read-only preflight awaits.
       assertSemanticTerminalExclusivity(semanticState, "hub_decision");
       if (semanticState.hub) throw toolBoundaryError("duplicateToolCall", "submit_hub_decision 已成功接受一次；每个 Job 只能成功提交一次。");
+      if(planReservation && !(runtimeControl.planPhase==="commit" && planReservation.eventId===eventId && planReservation.type===event.type)) throw toolBoundaryError("duplicateToolCall","Plan acceptance is pending");
+      if(runtimeControl.planPhase==="validate") return;
+      if(runtimeControl.planPhase==="prepare") {planReservation={eventId,type:event.type};return;}
       semanticState.hub = { eventId, payload: event.payload };
       return;
     }
@@ -1471,9 +1479,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if (!parsed.success) throw invalidToolPayload("request_human", "request_human 参数非法");
       assertSemanticTerminalExclusivity(semanticState, "human");
       const p = parsed.data;
-      await preflightDeferredSemanticEvent(jobId, "human", p);
+      if(!runtimeControl.planPhase || runtimeControl.planPhase==="validate") await preflightDeferredSemanticEvent(jobId, "human", p);
       if (completionReservation) throw toolBoundaryError("duplicateToolCall", "Completion acceptance is pending; reconcile its receipt first");
       assertSemanticTerminalExclusivity(semanticState, "human");
+      if(planReservation && !(runtimeControl.planPhase==="commit" && planReservation.eventId===eventId && planReservation.type===event.type)) throw toolBoundaryError("duplicateToolCall","Plan acceptance is pending");
+      if(runtimeControl.planPhase==="validate") return;
+      if(runtimeControl.planPhase==="prepare") {planReservation={eventId,type:event.type};return;}
       semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject, ...(p.plan_basis ? {plan_basis:p.plan_basis} : {}) };
       return;
     }
@@ -1517,12 +1528,18 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
   const runtimePlatformHandler = async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
     const operation = context.operationId;
+    if (!platformOperations.includes(operation)) throw new Error("operation is not enabled for this Job");
+    if(context.planPhase==="resolve" && operation==="submit_hub_decision") return {resolved_plan_input:await expandWorkspacePayloadFile("submit_hub_decision",context.input,{readWorkspaceFile:(filePath,maxBytes)=>readSandboxWorkspaceFileForRuntime(filePath,maxBytes)})};
+    if(context.planPhase) {
+      if(context.planAttemptId!==attemptId) throw new PlatformRuntimeHandlerError("HANDLER_FAILED","Plan Attempt changed");
+      if(context.planPhase==="abort") {if(planReservation?.eventId===context.eventId) planReservation=null;return {};}
+      if(context.planPhase==="commit" && (semanticState.hub?.eventId===context.eventId || semanticState.human?.eventId===context.eventId)) return {accepted:true};
+    }
     if (operation === "mark_job_done" && context.completionAttemptId !== attemptId) {
       throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "Completion Attempt changed", {
         statusCode: 409, errorCode: "COMPLETION_ATTEMPT_CHANGED", retryable: false,
       });
     }
-    if (!platformOperations.includes(operation)) throw new Error("operation is not enabled for this Job");
     if (context.completionPhase === "abort") { if (completionReservation === context.eventId) completionReservation = null; return {}; }
     const knowledgeResult = await knowledgeRuntime(context);
     if (knowledgeResult !== undefined) return knowledgeResult;
@@ -1597,6 +1614,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       }, {
         readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFileForRuntime(filePath, maxBytes),
         completionPhase: context.completionPhase,
+        planPhase: context.planPhase === "resolve" ? undefined : context.planPhase,
       });
     } catch (error) {
       if (error instanceof EventRateLimitError) {
@@ -1621,6 +1639,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       }
       throw error;
     }
+    if(context.planPhase==="prepare") return {plan_prepared:true};
+    if(context.planPhase==="commit") planReservation=null;
     if (operation === "mark_job_done" && context.completionPhase === "prepare") {
       return { completion_prepared: true };
     }
