@@ -136,6 +136,9 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 当前 Phase 1 已接入 Control API 的严格 schema/字节约束和标准错误路径。模型收到 `model_correctable` 后应重新读取能力目录、节点引用或当前状态，再以新的提案 revision 和 Idempotency-Key 提交。预算耗尽必须明确进入 `blocked` 或 `needs_human`，不能重复发送相同错误后静默结束。
 
+#776 的完成拒绝可冻结独立 repair-token 限额；Gateway 按原 effect/usage ledger 在 Job 锁内累计、预留并对未知用量停止。管理员未配置时不发起新增修正模型请求；不代表精确调用前费用上界，详见 [修正用量与额度](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
+
+
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
 
 A 阶段错误矩阵、冻结契约回放及持久性缺口见 [#776 基线](docs/REPAIR_FEEDBACK_BASELINE.md)；不代表同会话修复或模型质量已验收。
