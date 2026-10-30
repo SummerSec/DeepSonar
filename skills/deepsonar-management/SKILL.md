@@ -328,4 +328,4 @@ python scripts/deepsonar-api.py jobs rerun-current <jobId>
 - `references/permissions.md` — 最小 scope（角色/凭据用 `agents:*`；镜像用 `images:*`）
 - 运行时权威：`GET /openapi.json`、`GET /schema?format=summary`
 
-成果模式需要区分任务定义与赏金提交时，按[下发指南第 9 节](references/task-dispatch.md#9-显式成果模式与候选边界767-首片)填写可选 outcome；结构化候选准入不是独立提交资格或目标完成。
+已提供任务契约须满足通用完整性，按[下发指南第 9 节](references/task-dispatch.md#9-通用任务标准与研究候选767--794-首片)绑定整契约与逐判据 Fact；task_defined 不绕过，赏金只追加筛选，研究候选不代表高置信提交资格或目标完成。

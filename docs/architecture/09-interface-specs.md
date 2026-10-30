@@ -7,7 +7,7 @@
 
 ## 任务下发契约（#767）
 
-`POST /projects/{id}/tasks` 可选提交 `task_contract`；类型/版本错误按既有校验错误处理。共享 [TaskContract schema](../../packages/shared-types/src/task-contract.ts) 是字段与模板的唯一机器来源。201 成功返回 `task_contract_warnings`；必要条件阻塞返回 `409 task_contract_blocked`、`task_contract_blockers` 和 warnings，且不创建 Canvas/Job。每项有 `code/path/message/suggestion`，用于明确补充什么、哪些条件尚不能执行；它们不是完整度分数，也不代表自然语言意图已被理解。未提交契约的自由文本任务继续接受并返回未评估提示，工程场景不强套审计模板。
+`POST /projects/{id}/tasks` 可选提交 `task_contract`；类型/版本错误按既有校验错误处理。共享 [TaskContract schema](../../packages/shared-types/src/task-contract.ts) 是字段与模板的唯一机器来源。201 成功返回 `task_contract_warnings`；已提供契约的 objective/targets/scope/evidence/acceptance 基本完整性或必要条件阻塞返回 `409 task_contract_blocked`、`task_contract_blockers` 和 warnings，且不创建 Canvas/Job。每项有 `code/path/message/suggestion`，用于明确补充什么、哪些条件尚不能执行；它们不是完整度分数，也不代表自然语言意图已被理解。未提交契约的自由文本任务继续接受并返回未评估提示，工程场景不强套审计模板。
 
 `workspace_write` 仅表示沙箱工作区变更，不包含外部业务写入或代码推送；后者属于需要目标核验的 `write`。客户端不得把 `allowed_actions`、身份字段或前置条件声明当作授权证明。服务端对可核验的当前项目网络限制、凭据存在/启用/项目范围做复核；真实目标身份、写权限和任意材料的可用性无可信核验结果时保持未知。契约及提示只能使用凭据引用，不能放入密码、cookie、token；schema 不提供秘密字段，但也不能保证自由文本没有秘密。详细管理工作流见[任务下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
@@ -82,4 +82,4 @@ Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/req
 
 ## 成果候选入口（#767）
 
-TaskContract 可选 outcome 显式选择 task_defined 或 bounty_submission；后者引用操作员提供的版本化规则快照。emit_finding 的 outcome_claim 绑定服务端规范化快照 SHA、目标/基线、前提/影响及逐规则 Fact 引用。所有引用核对当前项目/Canvas 的 Fact 与关联 Artifact；blocked/observation_only 拒绝 Finding，先经 emit_fact 留存观察。candidate 仍为 submission_eligibility:not_assessed，不是提交资格。详见[成果准入边界](../TASK_OUTCOME_ADMISSION.md)。
+已提供 TaskContract 的 objective/targets/scope/evidence/acceptance 在创建和派发时检查基本完整性，不因 outcome 省略或 task_defined 而绕过。emit_finding 的 outcome_claim 绑定整个冻结 task_contract_sha256、target、可选 baseline 及逐判据 Fact 引用；赏金 rule_assessments 只是附加筛选。objective/scope/evidence/exclusion:N 必评，acceptance:N 至少一项 matches 表示贡献关联，不是全任务完成。通过仅 admitted_for_research，submission_eligibility:not_assessed；无契约旧入口仍 unassessed。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。

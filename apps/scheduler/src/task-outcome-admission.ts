@@ -6,7 +6,7 @@ import {
 import { ControlInputError } from "./control-input.js";
 import { frozenTaskContract } from "./task-contract-preflight.js";
 import type { EventIngestionTransaction } from "./domains/event-ingestion/application.js";
-import { taskOutcomeSnapshotDigest } from "./task-outcome-snapshot.js";
+import { taskContractDigest } from "./task-outcome-snapshot.js";
 
 /** Candidate admission is not an independent submission-eligibility verdict. */
 export async function admitTaskOutcomeCandidate(
@@ -14,9 +14,9 @@ export async function admitTaskOutcomeCandidate(
   job: Record<string, unknown>,
   claim: CandidateOutcomeClaim | undefined,
 ) {
-  const outcome = frozenTaskContract(job.agent_snapshot_json)?.outcome;
-  if (!outcome || outcome.mode !== "bounty_submission") {
-    if (claim) throw new ControlInputError("invalid_payload", "当前冻结任务没有赏金候选模式，不能提交 outcome_claim。", "outcome_claim");
+  const contract = frozenTaskContract(job.agent_snapshot_json);
+  if (!contract) {
+    if (claim) throw new ControlInputError("invalid_payload", "当前 Job 未冻结任务契约，不能声明已通过目标候选准入。", "outcome_claim");
     return undefined;
   }
   if (typeof job.project_id !== "string" || typeof job.canvas_id !== "string") {
@@ -27,7 +27,8 @@ export async function admitTaskOutcomeCandidate(
   // rolls back only this proposal, never the already durable observation/evidence.
   const refs = [...new Set([
     ...(claim?.evidence_refs ?? []),
-    ...(claim?.rule_assessments.flatMap((item) => item.evidence_refs) ?? []),
+    ...(claim?.criterion_assessments.flatMap((item) => item.evidence_refs) ?? []),
+    ...(claim?.rule_assessments?.flatMap((item) => item.evidence_refs) ?? []),
   ])];
   const facts = refs.length === 0 ? [] : await tx<{ id: string }[]>`
     SELECT n.id FROM canvas_nodes n
@@ -39,12 +40,12 @@ export async function admitTaskOutcomeCandidate(
       AND a.node_id = n.id AND a.source_operation = 'emit_fact'
       AND a.status = 'submitted' AND a.superseded_at IS NULL
       AND n.verification_status <> 'rejected'`;
-  const digest = outcome.rule_snapshot ? taskOutcomeSnapshotDigest(outcome.rule_snapshot) : "";
-  const decision = evaluateTaskOutcomeAdmission(outcome, claim, {
+  const digest = taskContractDigest(contract);
+  const decision = evaluateTaskOutcomeAdmission(contract, claim, {
     availableEvidenceRefs: facts.map((fact) => fact.id),
-    ruleSnapshotSha256: digest,
+    taskContractSha256: digest,
   });
-  if (decision.status !== "admitted_for_verification") {
+  if (decision.status !== "admitted_for_research") {
     throw new ControlInputError("invalid_payload",
       decision.status === "observation_only"
         ? "目标规则不接纳此 Finding；保留已提交 Fact/证据作为过程观察，不计任务成果。"
@@ -60,9 +61,9 @@ export async function admitTaskOutcomeCandidate(
   }
   return {
     ...decision,
-    rule_snapshot_sha256: digest,
+    task_contract_sha256: digest,
     claim,
     submission_eligibility: "not_assessed" as const,
-    assessment_basis: "structured_candidate_checks_only" as const,
+    assessment_basis: "structured_goal_relevance_only" as const,
   };
 }

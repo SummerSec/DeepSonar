@@ -99,7 +99,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_finding: [
     "### `emit_finding` — 增量提交通用 Finding",
-    "- 赏金成果模式：先用 emit_fact 保存观察，再提供 outcome_claim（schema_version:1、rule_snapshot_sha256、target_id、baseline、attack_prerequisites、impact_summary、evidence_refs、rule_assessments）。evidence_refs 仅使用本任务已持久化 Fact UUID；逐条 rule_assessments 提供 rule_id、result(matches/does_not_match/unknown) 和 Fact 引用。未知规则/前提先补证，明确排除只留观察。准入只允许进入验证，不代表提交资格通过或任务成果达标。",
+    "- 已冻结任务契约时，先 emit_fact 保存观察，再提交 outcome_claim（schema_version:1、task_contract_sha256、target、可选baseline、criterion_assessments、evidence_refs；赏金附加rule_assessments）。criterion_assessments 使用 criterion_id、result(matches/does_not_match/unknown) 和同任务 Fact UUID。目标、范围、证据及排除项必须评估，至少关联一项 acceptance 判据；matches 仅表示贡献关联，不代表完成全部判据。未知补证，无关或排除只留观察；准入仅产生研究候选。高置信提交资格另需独立复核、可复现证据、攻击链和已知问题适用性，不能用分数替代。",
     "- 来源身份限定在本 Job 的 profile/title/location/rule_id；相同来源重复提交须保持内容一致，内容冲突明确拒绝。当前不支持修订，补充验证证据请用 emit_fact 引用已有 Finding；不要改标题伪造修订或继承其它 Job 的验证状态。",
     "- 直接参数：`title` 至少 8 个非空白字符、`summary` 至少 32 个非空白字符；severity 只能是 `low|medium|high|critical`。`location`、`rule_id`、`quantities`（可选数值口径）可选。安全 Finding 确认需要结构化 `impact`（attacker_entry / victim_resource / impact_flow 或有依据的 impact_waiver），不能只把影响写进 summary。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
     "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { canonicalTaskOutcomeSnapshot, type TaskOutcomeRuleSnapshot } from "@deepsonar/shared-types";
+import { canonicalTaskContract, type TaskContract } from "@deepsonar/shared-types";
 
 /** Content identity of operator-supplied rules; never a claim of official provenance. */
-export function taskOutcomeSnapshotDigest(snapshot: TaskOutcomeRuleSnapshot): string {
-  return `sha256:${createHash("sha256").update(canonicalTaskOutcomeSnapshot(snapshot)).digest("hex")}`;
+export function taskContractDigest(contract: TaskContract): string {
+  return `sha256:${createHash("sha256").update(canonicalTaskContract(contract)).digest("hex")}`;
 }

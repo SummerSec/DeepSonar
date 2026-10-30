@@ -57,17 +57,17 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须支持可选版本化任务契约，保留原始需求及采用的模板版本/规范化快照；缺项返回字段级建议，不通过固定标题或字数评定质量。显式契约必须严格校验版本、结构与未知字段；契约只能收窄平台权限，不得自行证明身份、授权或前置条件。派发前必须按当前可信事实复核必要条件，不能沿用创建时的过期通过结果。
 - **决策来源**：#767；减少不同创建者与入口造成的遗漏，同时保留非审计工程任务和自由文本输入。
-- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；没有契约时返回未评估提示。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
+- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；已提供契约的 objective/targets/scope/evidence/acceptance 缺项在创建/派发阻塞，其他缺项给具体建议。没有契约时返回未评估提示，这条旧入口迁移尚未完成。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
 - **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 - **验证证据**：契约规范化、变形输入与安全边界行为测试；人工核对 API/Web/CLI 对同一结构化意图返回一致缺项/阻塞，并核对创建后撤销权限时派发拒绝。实际运行结果见 PR 验收记录，不以字段校验冒充模型效果评测。
 
-### FR-TASK-007 任务成果模式与结构化候选准入
+### FR-TASK-007 通用任务标准与研究候选准入
 
-- **规范要求**：任务成果模式必须显式确定；赏金模式必须引用用户授权提供的规则来源、版本/摘要及目标基线，不得从技术严重度或相似文本推导提交资格。观察须可独立持久保留；缺规则、证据或适用性时不得把 unknown 计为成果，无关观察不得直接升级为目标成果。
-- **决策来源**：#767 目标导向补充；#775 拥有目标版本、证据缺口和整体报告收敛，不复制其 Plan/完成状态机。
-- **实现状态**：首片提供 task_defined/bounty_submission、操作员规则快照和 Finding 前结构化候选准入；unknown 或不符规则拒绝 Finding，并提示先保存 Fact。通过者仅为 candidate，submission_eligibility 保持 not_assessed，继续既有技术 Verify。独立资格评审、整体目标报告接线和完整端到端验收仍未交付；按用户要求，真实模型验收不作为 issue 交付门槛，效果未验证。
-- **代码入口**：[成果契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
-- **验证证据**：模式、版本/摘要、规则声明、Fact/Artifact 来源边界、候选依据保留与角色上下文传播的行为测试；结果见 PR。检查 candidate 不被解释为已满足目标或已获奖励。
+- **规范要求**：已提供的任务契约必须在创建与派发前检查目标、资产、范围、证据与验收要求的基本完整性，不能通过省略 outcome 或选择 task_defined 绕过。研究候选必须绑定整个冻结契约与判据 Fact 引用；观察须独立保留，unknown/无关观察不计成果。赏金规则只作可选附加筛选，不由严重度或相似文本推导资格。
+- **决策来源**：#767 / #794 通用任务下发主轴；#775 拥有目标版本、证据缺口和整体报告收敛。
+- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约旧入口仍 unassessed，迁移未完成。独立复核、可复现证据、攻击链、knownness适用性、资格与报告收敛后续交付；真实模型验收不作为交付门槛，效果未验证。
+- **代码入口**：[研究候选契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
+- **验证证据**：通用完整性、outcome 不绕过、整契约版本、判据与 Fact/Artifact 来源、依据保存及冻结压缩传播行为测试；实际运行结果见 PR，不以研究候选计目标完成。
 
 ### FR-HUB-001 Scheduler 派生 Hub Job
 

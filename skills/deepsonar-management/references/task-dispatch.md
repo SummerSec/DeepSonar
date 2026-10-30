@@ -89,7 +89,7 @@ content:
 
 `POST /projects/:id/tasks` 保留 `title/content`，可另提交 `task_contract`。Web 的可选契约编辑器与管理 CLI `tasks create --task-contract @contract.json` 走相同 API。未提供契约时继续接受自由文本并返回 `task_contract_not_assessed`；这不等于完成了前置条件检查。
 
-场景模板和版本的唯一机器来源是 [TaskContract](../../../packages/shared-types/src/task-contract.ts)；API/Web 复用此定义，CLI 传递同一契约，文档示例不构成另一套自动填值。契约必须声明 `schema_version: 1`、`template_id`（engineering/whitebox/blackbox/graybox）和 `template_version: 1`。共享 schema 严格拒绝未知字段/版本/类型和重复前置条件 ID；空白裁剪、集合排序/去重不分析原始需求。缺少非安全信息返回 `task_contract_warnings`，每项含 `code/path/message/suggestion`。创建前已知安全阻塞返回 `409 task_contract_blocked` 与 `task_contract_blockers`，不创建任务。无阻塞时返回 201；不要因为 warning 重复创建。
+场景模板和版本的唯一机器来源是 [TaskContract](../../../packages/shared-types/src/task-contract.ts)；API/Web 复用此定义，CLI 传递同一契约，文档示例不构成另一套自动填值。契约必须声明 `schema_version: 1`、`template_id`（engineering/whitebox/blackbox/graybox）和 `template_version: 1`。共享 schema 严格拒绝未知字段/版本/类型和重复前置条件 ID；空白裁剪、集合排序/去重不分析原始需求。已提供契约时，objective/targets/scope/evidence/acceptance 缺少基本信息会在创建和派发阶段阻塞；其他补充提示返回 `task_contract_warnings`，每项含 `code/path/message/suggestion`。创建前已知安全阻塞返回 `409 task_contract_blocked` 与 `task_contract_blockers`，不创建任务。无阻塞时返回 201；不要因为 warning 重复创建。
 
 Canvas 保存规范化契约和模板版本，Job 保存冻结契约用于执行提示；模板更新不改旧任务。预算字段用于规划与提醒，不替代平台运行预算。验收文本由创建者确认，模板建议不会自动变成已承诺结果。
 
@@ -169,39 +169,29 @@ Scheduler 在沙箱创建前再次核对当前项目网络策略、引用凭据�
 | 未提交完成回执 | 可能已完成或部分完成，先对账，不只补一句完成标准 |
 | 401/403/scope | 区分过期凭据、错误身份、范围不匹配和禁止；补齐条件须真实授权，不自动提权 |
 
-## 9. 显式成果模式与候选边界（#767 首片）
+## 9. 通用任务标准与研究候选（#767 / #794 首片）
 
-先区分本任务要交付什么。只有用户目标是按指定项目规则形成可提交成果时才选择 bounty_submission，不从“漏洞”、项目名或严重度猜测模式；工程/一般审计可使用 task_defined。该模式不提供任何新增授权。详见[成果准入契约与限制](../../../docs/TASK_OUTCOME_ADMISSION.md)。
+所有已提供的 task_contract 都检查 objective/targets/scope/evidence/acceptance 基本完整性。exclusions 可以为空，有声明则纳入候选判据。省略 outcome、选择 task_defined 或 bounty_submission 都不绕过通用门。仍接受无契约旧入口但返回 unassessed；这是迁移缺口，不代表该任务已达到统一标准，也不是删除已启用契约绕过检查的理由。
 
-以下为可选 task_contract.outcome 子对象示例，不是完整创建请求：
+outcome 子对象可显式为 `{"mode":"task_defined"}`；只有用户要求按指定项目规则形成可提交成果时才选 bounty_submission。后者的 rules_status unknown 可开展补证观察，但不能提交 Finding；supplied 须提供规则快照。用户授权选定的 source.sha256 只是材料身份声明，不是官方规则或权限认证。详见[通用标准与研究候选](../../../docs/TASK_OUTCOME_ADMISSION.md)。
 
-```json
-{"mode":"task_defined"}
-```
-
-```json
-{"mode":"bounty_submission","rules_status":"unknown"}
-```
-
-unknown 允许创建补证/观察任务，但不能提交 Finding。规则齐备后使用 supplied 与版本化 rule_snapshot；由用户授权选择材料来源，记录 source 的 operator_supplied/reference/sha256，以及 program_id/version、targets 的 id/type/reference/baseline、rules 的 id/kind/description。不得把操作者提供的 hash 说成已核验官方规则。不要通过临时删除成果模式绕过阻塞；规则更新应重新创建/冻结明确的新任务上下文，不能改写既有快照。
-
-执行者先 emit_fact 留存观察与 Artifact/Evidence，再通过现有 Job Control API 的 emit_finding 提交 outcome_claim；管理 CLI 不代替 Agent 伪造该控制事件。其结构如下（尖括号必须替换为真实上下文，不可直接执行）：
+先 emit_fact 保存观察/Artifact/Evidence，再经现有 Job Control API 提交研究候选；管理 CLI 不代替 Agent 伪造控制事件。所有已提供契约的 emit_finding 需要如下 outcome_claim（占位符须替换为真实上下文，不可直接执行）：
 
 ```text
 outcome_claim:
-  schema_version: 1
-  rule_snapshot_sha256: <本 Job 服务端给出的规范化规则快照 sha256，不是 source.sha256>
-  target_id: <快照中的目标 ID>
-  baseline: <该目标的冻结基线>
-  attack_prerequisites: [<有依据的攻击前提>]
-  impact_summary: <影响及其与任务目标的关系>
+  task_contract_sha256: <本 Job 服务端给出的整个规范化冻结契约摘要>
+  target: <当前契约目标>
+  baseline: <有适用基线时填写>
   evidence_refs: [<同项目/Canvas 且关联 Artifact 的 Fact UUID>]
-  rule_assessments:
-    - rule_id: <逐条覆盖快照规则>
+  criterion_assessments:
+    - criterion_id: <本 Job 给出的通用判据 ID>
       result: <matches | does_not_match | unknown>
       evidence_refs: [<支持该声明的 Fact UUID>]
+  rule_assessments: <仅赏金附加筛选需要；逐条 rule_id/result/evidence_refs>
 ```
 
-requirement 的 does_not_match 或 exclusion 的 matches 不能产出目标 Finding；unknown/缺项返回补证阻塞。所有声明与引用通过只得到 admitted_for_verification 候选，仍进入既有技术 Verify，submission_eligibility 保持 not_assessed。Fact 存在不证明它支持规则结论；独立资格评审与 #775 目标报告收敛是后续片。无关弱点留作过程观察，不以候选数或 confirmed 数宣称成果达标。
+objective、scope、evidence、每个 exclusion:N 必须评价；acceptance:N 至少一项 matches 只代表候选对验收有贡献关联，不能声称全部任务已完成。不自行猜测判据索引；使用冻结上下文给出的 ID。普通工程不强迫填写攻击前提/影响链，安全发现继续适用既有 FindingImpact 与 Verify。
 
-按用户要求，所有 issue 均不要求真实模型试验，效果未验证须保留说明；不能把免除试验解释为独立资格与整体完成链已实现。
+赏金 requirement 不符或 exclusion 命中不能升级目标 Finding；unknown/缺项补证或阻塞。通用与附加筛选通过都仅为 admitted_for_research，submission_eligibility 保持 not_assessed。Fact 存在不证明语义支持，候选数量不证明成果达标。
+
+高置信提交候选仍需后续独立复核、可复现证据、攻击链、knownness目标版本适用性、资格与 #775 整体报告收敛；不得使用任意数字置信阈值、severity或相似词替代。冻结与压缩约束继续保留。用户免除真实模型验收不等于效果已验证，更不等于这些实现缺口完成。

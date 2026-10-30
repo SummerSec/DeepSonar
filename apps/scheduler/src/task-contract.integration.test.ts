@@ -132,12 +132,34 @@ if (!testDatabaseUrl) {
         assert.ok(body.task_contract_blockers.every((item: { path: string; suggestion: string }) => item.path && item.suggestion));
         assert.deepEqual(await counts(), before);
       });
+      await t.test("all contracted modes require generic goal fields before creating any task", async () => {
+        for (const mode of ["task_defined", "bounty_submission", undefined] as const) {
+          for (const field of ["objective", "targets", "scope", "acceptance", "evidence"] as const) {
+            const submitted = { ...contract(), ...(mode === "bounty_submission"
+              ? { outcome: { mode, rules_status: "unknown" } }
+              : mode ? { outcome: { mode } } : {}) } as Record<string, unknown>;
+            delete submitted[field];
+            const before = await counts();
+            const dispatchBlockers = await taskContractPreflight(sql, projectId, normalizeTaskContract(submitted), false);
+            assert.ok(dispatchBlockers.some((item) => item.code === "task_contract_goal_field_missing"
+              && item.path === `task_contract.${field}`));
+            const response = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`, headers,
+              payload: { title: "Incomplete generic task", content: "目标范围完成标准证据均在标题中，但不能凭此假设已完整", task_contract: submitted } });
+            assert.equal(response.statusCode, 409, `${mode ?? "omitted"}.${field}: ${response.payload}`);
+            const body = response.json();
+            assert.equal(body.error_code, "task_contract_blocked");
+            assert.ok(body.task_contract_blockers.some((item: { code: string; path: string }) =>
+              item.code === "task_contract_goal_field_missing" && item.path === `task_contract.${field}`), response.payload);
+            assert.deepEqual(await counts(), before, "missing task goal fields must not create a canvas or Job");
+          }
+        }
+      });
       await t.test("successful engineering creation freezes canonical contracts and preserves original prose", async () => {
         // Fake mode supports an explicitly empty provider allowlist. No model request,
         // dispatcher, runtime provisioning or real credential is needed for creation.
         await sql`UPDATE projects SET config_json = ${sql.json({ enabled_credential_ids: [] })} WHERE id = ${projectId}`;
         const originalContent = "请修改解析器并提供测试结果。\nThis original request must remain intact.";
-        const submitted = { ...contract([gitId]), scope: [" parser ", "parser"],
+        const submitted = { ...contract([gitId]), outcome: { mode: "task_defined" }, scope: [" parser ", "parser"],
           allowed_actions: ["workspace_write", "read"], required_actions: ["workspace_write", "read"] };
         const expected = normalizeTaskContract(submitted);
         const response = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`, headers,
@@ -153,6 +175,7 @@ if (!testDatabaseUrl) {
         assert.deepEqual(canvas.target_json.task_contract, expected);
         assert.deepEqual(job.agent_snapshot_json.task_contract, expected);
         assert.equal(job.agent_snapshot_json.task_contract.template_version, 1);
+        assert.deepEqual(job.agent_snapshot_json.task_contract.outcome, { mode: "task_defined" });
         const edited = await app.inject({ method: "PATCH", url: `/tasks/${body.canvas_id}`, headers,
           payload: { content: "Later task text" } });
         assert.equal(edited.statusCode, 200, edited.payload);

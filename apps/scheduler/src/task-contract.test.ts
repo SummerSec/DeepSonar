@@ -231,7 +231,7 @@ test("prerequisite feedback uses numeric paths and never echoes untrusted IDs or
 
 test("UUID references normalize case and deduplicate before comparing database identities", () => {
   const lower = "abcdefab-1234-4567-89ab-abcdefabcdef";
-  const value = normalizeTaskContract({ schema_version: 1, template_id: "engineering", template_version: 1,
+  const value = normalizeTaskContract({ ...readTask(),
     allowed_actions: ["read"], required_actions: ["read"], credential_refs: [lower, lower.toUpperCase()] });
   assert.deepEqual(value.credential_refs, [lower]);
   assert.deepEqual(validateTaskContractDispatch(value, { allowEgress: false, availableCredentialIds: [lower] }), []);

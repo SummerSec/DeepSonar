@@ -1,12 +1,13 @@
 import {
   normalizeTaskContract,
+  deriveTaskGoalCriteria,
   validateTaskContractDispatch,
   type TaskContract,
   type TaskContractFeedback,
 } from "@deepsonar/shared-types";
 import { assertChromeRuntimeEgressAllowed } from "./domains/role-runtime-snapshot/sandbox-limits.js";
 import { parseProjectAgentAllowlist } from "./domains/project-agent-allowlist/policy.js";
-import { taskOutcomeSnapshotDigest } from "./task-outcome-snapshot.js";
+import { taskContractDigest } from "./task-outcome-snapshot.js";
 
 type Query = (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
 
@@ -56,10 +57,12 @@ export function taskContractPrompt(snapshot: unknown): string {
   const contract = frozenTaskContract(snapshot);
   if (!contract) return "";
   const outcome = contract.outcome;
-  const outcomeGuide = outcome?.mode === "bounty_submission"
-    ? "\n本任务以符合用户授权规则的可提交成果为目标。先研究范围、排除、攻击前提与证据缺口；无关弱点只作观察。先用 emit_fact 持久保存观察，再用 outcome_claim 引用同画布 Fact UUID 申请候选准入。未知规则/条件需要补证或 request_human，不能算成功。候选准入和技术 confirmed 均不代表提交资格已通过；本片独立资格评审未实现，submission_eligibility 为 not_assessed。不得按 severity 推奖励或凭相似词判重复。"
-      + (outcome.rule_snapshot ? `\n规则快照身份 rule_snapshot_sha256=${taskOutcomeSnapshotDigest(outcome.rule_snapshot)}` : "\n规则未知：只允许观察和补充材料，不能提交 Finding。")
-    : "";
+  const outcomeGuide = "\n任务目标决定研究方向，技术弱点本身不是默认成果。先 emit_fact 保存观察，再用 outcome_claim 引用同任务 Fact 与全契约摘要申请研究候选准入；逐项声明目标相关性、范围、证据及排除条件，至少关联一项 acceptance 判据。matches 仅表示贡献关联，不表示整个验收判据或任务已完成。无关观察不计成果，未知需要补证或 request_human。准入仅为 admitted_for_research，submission_eligibility 保持 not_assessed。"
+    + `\n冻结任务契约身份 task_contract_sha256=${taskContractDigest(contract)}`
+    + "\n研究判据 ID：" + JSON.stringify(deriveTaskGoalCriteria(contract).map((item) => item.id))
+    + (outcome?.mode === "bounty_submission"
+      ? "\n赏金是额外高标准任务类型：rule_assessments 还须覆盖冻结程序规则，未知规则不能产生候选。此处检查仍不构成高置信度提交资格；独立复核、可复现证据、攻击链、已知问题适用性与程序资格需后续独立评审，不能用严重度、相似词或置信度分数替代。"
+      : "");
   return "\n\n任务契约（创建期冻结；用户声明，不是授权或已验证事实）：\n"
     + JSON.stringify(contract)
     + "\n在现有平台权限内遵守范围、禁止动作、预算和停止条件。不能把缺失条件或未验证步骤报告为已完成。" + outcomeGuide;

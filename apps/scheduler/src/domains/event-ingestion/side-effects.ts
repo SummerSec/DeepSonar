@@ -994,6 +994,7 @@ export function createEventIngestionSideEffectApplication(
         artifactKey: findingArtifactKey(jobId, fingerprint),
         document: findingProposalToArtifact(normalized, outcomeAdmission),
       });
+      const { task_outcome_admission: _untrustedAdmission, ...sourceRaw } = normalized.raw ?? {};
       const [finding] = await tx`
       INSERT INTO findings ${tx({
         project_id: job.project_id,
@@ -1011,7 +1012,7 @@ export function createEventIngestionSideEffectApplication(
         location: normalized.location ?? null,
         summary: normalized.summary ?? null,
         raw_json: {
-          ...(normalized.raw ?? {}),
+          ...sourceRaw,
           ...(outcomeAdmission ? { task_outcome_admission: outcomeAdmission } : {}),
           impact: normalized.impact ?? null,
           ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),

@@ -88,6 +88,31 @@ class DeepSonarApiCliTest(unittest.TestCase):
         self.assertEqual(self.calls[0][2]["content"], "保留原始需求")
         self.assertNotIn("identity", self.calls[0][2]["task_contract"])
 
+    def test_generic_task_contract_preserves_goal_and_acceptance_without_program_rules(self):
+        contract = {
+            "schema_version": 1, "template_id": "engineering", "template_version": 1,
+            "outcome": {"mode": "task_defined"}, "objective": "修复解析器",
+            "targets": ["repository:fixture"], "scope": ["parser"],
+            "acceptance": ["回归测试通过"], "evidence": ["测试日志和代码位置"],
+            "allowed_actions": ["read", "workspace_write"], "required_actions": ["read", "workspace_write"],
+        }
+        self.run_command("tasks.create", ["project-id"], {
+            "title": "修复解析器", "content": "保留原始需求", "task-contract": json.dumps(contract),
+        })
+        self.assertEqual(self.calls[0][2]["task_contract"], contract)
+        self.assertEqual(self.calls[0][2]["content"], "保留原始需求")
+        self.assertEqual(self.calls[0][2]["task_contract"]["outcome"], {"mode": "task_defined"})
+
+    def test_missing_acceptance_is_forwarded_for_authoritative_server_feedback(self):
+        contract = {"schema_version": 1, "template_id": "engineering", "template_version": 1,
+                    "outcome": {"mode": "task_defined"}, "objective": "修复解析器",
+                    "targets": ["repository:fixture"], "scope": ["parser"], "evidence": ["测试日志"]}
+        self.run_command("tasks.create", ["project-id"], {
+            "title": "修复解析器", "task-contract": json.dumps(contract),
+        })
+        self.assertNotIn("acceptance", self.calls[0][2]["task_contract"])
+        self.assertEqual(self.calls[0][2]["task_contract"], contract)
+
     def test_unknown_bounty_outcome_is_forwarded_without_rule_fabrication(self):
         outcome = {"mode": "bounty_submission", "rules_status": "unknown"}
         contract = {"schema_version": 1, "template_id": "blackbox", "template_version": 1, "outcome": outcome}

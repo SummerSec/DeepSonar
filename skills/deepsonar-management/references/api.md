@@ -73,7 +73,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 ### 任务 / 事件 / 画布
 
-可选 `task_contract` 的版本、模板、字段与准入语义见[下发指南](task-dispatch.md)。201 返回字段级 `task_contract_warnings`；创建前存在必要条件阻塞时返回 `409 task_contract_blocked`、`task_contract_blockers` 及 warnings，且不创建 Canvas/Job。每条反馈包含 `code/path/message/suggestion`。未提供契约仍接受自由文本，不按 Markdown 标题拒绝。
+可选 `task_contract` 的版本、模板、字段与准入语义见[下发指南](task-dispatch.md)。已提供契约的 objective/targets/scope/evidence/acceptance 基本完整性在创建/派发检查；201 返回其他字段级 `task_contract_warnings`；创建前存在必要条件阻塞时返回 `409 task_contract_blocked`、`task_contract_blockers` 及 warnings，且不创建 Canvas/Job。每条反馈包含 `code/path/message/suggestion`。未提供契约仍接受自由文本，不按 Markdown 标题拒绝。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |

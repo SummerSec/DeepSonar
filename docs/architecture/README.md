@@ -15,7 +15,7 @@
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；自由文本兼容、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
-#767 成果首片见 [FR-TASK-007](01-system-specification.md#fr-task-007-任务成果模式与结构化候选准入)及[候选准入边界](../TASK_OUTCOME_ADMISSION.md)；候选结构化准入与后续独立资格评审、#775 整体收敛分开验收。
+已提供契约执行通用基本完整性与整契约绑定的研究候选检查；省略 outcome 或 task_defined 不绕过，赏金只追加筛选。通过为 admitted_for_research，非目标达标或高置信提交资格。无契约入口仍 unassessed，独立复核/资格与 #775 整体收敛未完成，见[首片边界](../TASK_OUTCOME_ADMISSION.md)。
 
 ## 1. 阅读路径与目录
 

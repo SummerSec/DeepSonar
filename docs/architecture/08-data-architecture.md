@@ -108,4 +108,4 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 
 ## 成果规则与候选依据（#767）
 
-成果模式/规则快照归入既有任务契约与 Job 冻结上下文；源材料摘要是操作员声明，服务端规范化规则快照摘要是不同身份。候选声明与准入依据随 Finding raw_json 和 Artifact 保留，submission_eligibility 保持 not_assessed。观察先经既有 Fact/Artifact 路径保存；不以拒绝 Finding 替代证据落盘。详见[成果准入边界](../TASK_OUTCOME_ADMISSION.md)。
+规范化后的整个任务契约由服务端计算 task_contract_sha256，候选绑定目标/可选基线与逐判据 Fact；赏金源材料 source.sha256 是另外的操作员声明身份，不可混用。Finding raw_json 和 Artifact 保存准入依据，status为 admitted_for_research且submission_eligibility:not_assessed。历史冻结不回写，观察先独立落库。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。

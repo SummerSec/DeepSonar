@@ -151,6 +151,10 @@ export interface TaskContractDispatchFacts {
 /** Refuse dispatch if any declared permitted action exceeds a current trusted boundary. */
 export function validateTaskContractDispatch(contract: TaskContract, facts: TaskContractDispatchFacts): TaskContractFeedback[] {
   const result: TaskContractFeedback[] = [];
+  for (const field of ["objective", "targets", "scope", "acceptance", "evidence"] as const) {
+    const value = contract[field];
+    if (value === undefined || value.length === 0) result.push(feedback("task_contract_goal_field_missing", `task_contract.${field}`, "任务缺少可执行、可关联的目标判据。", "补充目标、资产、范围、证据要求和验收标准；省略成果模式不会跳过已有契约。"));
+  }
   if (contract.required_actions.length === 0) result.push(feedback("task_contract_actions_unknown", "task_contract.required_actions", "尚未声明执行所需动作，无法核对权限边界。", "显式列出 read、workspace_write、write 或 egress；不要从需求文本推断授权。"));
   for (const action of uniqueSorted([...contract.required_actions, ...contract.allowed_actions])) {
     const path = contract.required_actions.includes(action) ? "task_contract.required_actions" : "task_contract.allowed_actions";
@@ -176,4 +180,9 @@ export function validateTaskContractDispatch(contract: TaskContract, facts: Task
     if (item.required && (item.state !== "declared" || !facts.verifiedPrerequisiteIds?.includes(item.id))) result.push(feedback("task_contract_prerequisite_blocked", `task_contract.prerequisites.${index}`, "必要前置条件未经当前可信核验。", "补齐材料并由可信适配器核验，或收窄为不依赖该条件的任务。"));
   }
   return result;
+}
+
+/** Stable full-contract bytes for Scheduler-owned SHA-256 identity. */
+export function canonicalTaskContract(input: unknown): string {
+  return JSON.stringify(normalizeTaskContract(input));
 }

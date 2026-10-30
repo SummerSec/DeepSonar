@@ -1,7 +1,7 @@
-import { taskContractWithOutcomeMode } from "./components/TaskContractEditor";
+import { taskContractTemplateDraft, taskContractWithOutcomeMode } from "./components/TaskContractEditor";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeTaskContract } from "@deepsonar/shared-types";
+import { normalizeTaskContract, TASK_CONTRACT_TEMPLATE_IDS } from "@deepsonar/shared-types";
 import { parseTaskContractDraft, taskFeedbackItems } from "./task-contract-editor";
 import { quickStartTaskPayload } from "./dashboard-quick-start";
 import { ApiRequestError } from "./login-error";
@@ -71,4 +71,32 @@ test("supplied outcome snapshot stays intact across mode selection and Web API t
   assert.deepEqual(parseTaskContractDraft(taskContractWithOutcomeMode(base, "task_defined")).contract?.outcome, { mode: "task_defined" });
   const payload = quickStartTaskPayload({ title: "核对", goal: "保留真实材料", networkOverride: "inherit", task_contract: parsed.contract });
   assert.deepEqual(payload.task_contract, parsed.contract);
+});
+
+
+test("all new UI templates use general task mode and expose missing goal fields", () => {
+  for (const id of TASK_CONTRACT_TEMPLATE_IDS) {
+    const parsed = parseTaskContractDraft(taskContractTemplateDraft(id));
+    assert.equal(parsed.error, undefined);
+    assert.deepEqual(parsed.contract?.outcome, { mode: "task_defined" });
+    for (const field of ["objective", "targets", "scope", "acceptance", "evidence"]) {
+      assert.ok(parsed.warnings.some((item) => item.path === `task_contract.${field}`), `${id}.${field}`);
+    }
+    const withoutOutcome = parseTaskContractDraft(taskContractWithOutcomeMode(parsed.contract!, undefined));
+    assert.ok(withoutOutcome.warnings.some((item) => item.path === "task_contract.acceptance"));
+  }
+});
+
+test("complete generic task keeps goal and acceptance through the shared Web/API path", () => {
+  const contract = normalizeTaskContract({
+    schema_version: 1, template_id: "engineering", template_version: 1, outcome: { mode: "task_defined" },
+    objective: "修复解析器", targets: ["repository:fixture"], scope: ["parser"],
+    acceptance: ["回归测试通过且保留已有行为"], evidence: ["测试结果和代码位置"],
+    allowed_actions: ["read", "workspace_write"], required_actions: ["read", "workspace_write"],
+  });
+  const parsed = parseTaskContractDraft(JSON.stringify(contract));
+  const payload = quickStartTaskPayload({ title: "修复解析器", goal: "原始需求", networkOverride: "inherit", task_contract: parsed.contract });
+  assert.deepEqual(payload.task_contract, contract);
+  assert.deepEqual(payload.task_contract?.outcome, { mode: "task_defined" });
+  assert.equal(payload.content, "原始需求");
 });
