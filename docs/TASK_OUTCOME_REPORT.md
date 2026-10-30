@@ -40,6 +40,8 @@
 
 任务身份、标题、目标、有效协议与范围/网络策略保存在确定性上下文附录；即使无契约、零 Finding 或无 Plan 也保留。技术详情、验证轮次、证据引用和数值仍保存在技术数据附录及原记录中，明确不计为任务达标成果。技术状态不会因此被删除或改写；内部 Finding/Fact/Artifact 与人的 disposition 继续独立。
 
+非 Finding 的工程交付、有界负结果和 blocked/not_executed 已按[执行结果评审](TASK_RESULT_REVIEW.md)接入；它们不改变技术 Finding 的定义。宿主声明绑定核验与执行是否成功分开，失败 Job 的声明仍可显示阻塞/未执行及来源缺口，不贡献正向成果。来源、评审和报告共用 8MiB 证据预算，预算不足或截断不得宣称判据满足。报告将声明种类与判据评价分开，未执行不能显示成负结果，负结果不能自动显示成整体完成。本片不把新评审转换为 #775 的 operator_attestation 或 verified Fact authority。
+
 ## SARIF 边界
 
 有契约或 invalid 的报告不把未评估任务候选导出为达标结果：SARIF `results` 为空，properties 保留目标评价、摘要、缺口及资格原因。空结果表示没有可由该评价路径确认的目标成果，不表示系统无漏洞或技术 Finding 不存在。

@@ -69,6 +69,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[研究候选契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
 - **验证证据**：通用完整性、outcome 不绕过、整契约版本、判据与 Fact/Artifact 来源、依据保存及冻结压缩传播行为测试；实际运行结果见 PR，不以研究候选计目标完成。
 
+非 Finding 交付与执行观察的实现边界见[任务执行结果评审](../TASK_RESULT_REVIEW.md)：通过既有 Fact Artifact 表达 delivery/negative_result/blocked/not_executed，声明种类与判据满足分离；工程任务不得被迫生成漏洞 Finding，阻塞和未执行不计成果。该扩展已接严格声明、恰好一个 Finding/Fact subject 的评审请求、宿主来源绑定和报告投影；失败 Job 的声明仍可显示缺口，不贡献正向成果。来源/评审/报告共享 8MiB 证据预算，超限 fail closed；实际验收见 PR，不自动改变 #775 的完成 authority。
+
 ### FR-HUB-001 Scheduler 派生 Hub Job
 
 - **规范要求**：系统必须由 Scheduler 在 Canvas 锁边界内派生 `hub_reason` Job；同一 Canvas 同时最多一个活跃 Hub。`verify_finding` 与 `report` 必须由 Scheduler 从 `finalizeJob`/画布状态派生，不得由 Hub Intent 直接扮演或改变收敛状态。

@@ -1,11 +1,14 @@
 import {
   normalizeTaskContract, normalizeCandidateOutcomeClaim, deriveTaskGoalCriteria,
-  evaluateTaskOutcomeAdmission, type TaskContract,
+  evaluateTaskOutcomeAdmission, normalizeTaskResultProposal, type TaskContract,
 } from "@deepsonar/shared-types";
 import { loadTaskGoalReviews } from "./task-goal-review.js";
 import { applyTaskGoalReviews } from "./task-goal-review-report.js";
 import type { sql } from "./db.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
+import { loadTaskResultDeclaration, loadTaskResultSource } from "./task-result-source.js";
+import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
+import { ControlInputError } from "./control-input.js";
 
 const MAX_FINDINGS = 100;
 const MAX_FACT_REFS = 5000;
@@ -37,6 +40,12 @@ export interface TaskOutcomeReport {
   gaps: string[];
   truncated: boolean;
   review_records?: Array<{ artifact_id: string; gaps?: string[] }>;
+  task_results?: Array<{
+    artifact_id: string; fact_id: string; source_job_id: string; source_attempt_id: string | null; artifact_revision?: number;
+    kind: "delivery" | "negative_result" | "blocked" | "not_executed" | "unknown";
+    task_contract_sha256: string | null; assessment: TaskOutcomeReport["goal_assessment"]; gaps: string[];
+    limitations: string[]; limitations_truncated?: boolean;
+  }>;
   findings: Array<{
     finding_id: string; source_job_id: string; task_contract_sha256: string | null;
     technical_status: string; research_admission: "admitted_for_research" | "blocked" | "observation_only" | "unassessed";
@@ -133,8 +142,47 @@ export function projectTaskOutcomeReport(input: TaskOutcomeReportInput): TaskOut
     })),
     goal_assessment: mode === "unassessed" ? "not_assessed" : "blocked",
     submission_eligibility: [...contracts.values()].some((value) => value.outcome?.mode === "bounty_submission") ? "not_assessed" : "not_applicable",
-    gaps: [...new Set(gaps)], truncated, findings,
+    gaps: [...new Set(gaps)], truncated, findings, task_results: [],
   };
+}
+
+/** Bounded source scan; independent reviews, not result labels, decide criterion satisfaction. */
+async function loadReportTaskResults(db: typeof sql, projectId: string, canvasId: string, report: TaskOutcomeReport, budget: EvidenceReadBudget) {
+  const rows = await db`SELECT a.id,a.node_id,a.job_id,a.extensions_json FROM artifacts a
+    JOIN jobs j ON j.id=a.job_id
+    WHERE a.project_id=${projectId} AND a.canvas_id=${canvasId} AND j.project_id=${projectId} AND j.canvas_id=${canvasId}
+      AND a.source_operation='emit_fact' AND a.extensions_json ? 'task_result'
+    ORDER BY a.id LIMIT ${MAX_FINDINGS + 1}`;
+  if (rows.length > MAX_FINDINGS) { report.truncated = true; report.gaps.push("task_result_projection_truncated"); }
+  for (const row of rows.slice(0, MAX_FINDINGS)) {
+    const result: NonNullable<TaskOutcomeReport["task_results"]>[number] = { artifact_id: String(row.id), fact_id: String(row.node_id ?? ""),
+      source_job_id: String(row.job_id), source_attempt_id: null, kind: "unknown", task_contract_sha256: null, assessment: "blocked", gaps: [], limitations: [] };
+    try {
+      const proposal = normalizeTaskResultProposal(record(record(row.extensions_json).task_result).proposal);
+      const request = { schema_version: 1, fact_id: result.fact_id, candidate_artifact_id: result.artifact_id,
+        task_contract_sha256: proposal.task_contract_sha256, criterion_ids: proposal.criterion_ids };
+      const declaration = await loadTaskResultDeclaration(db, projectId, canvasId, request);
+      result.kind = declaration.proposal.kind; result.task_contract_sha256 = declaration.proposal.task_contract_sha256;
+      result.source_attempt_id = declaration.trace.attempt_id; result.artifact_revision = declaration.trace.artifact_revision;
+      result.limitations = declaration.proposal.limitations.slice(0, 3).map((text) => text.slice(0, 200));
+      if (declaration.proposal.limitations.length > 3 || declaration.proposal.limitations.some((text) => text.length > 200)) result.limitations_truncated = true;
+      result.gaps.push(...declaration.executionReasons);
+      if (proposal.task_contract_sha256 !== report.current_canvas_contract_sha256) result.gaps.push("source_contract_mismatch");
+      if (proposal.kind === "blocked" || proposal.kind === "not_executed") result.gaps.push("task_result_not_reviewable");
+      if (result.gaps.length) { report.task_results!.push(result); continue; }
+      const source = await loadTaskResultSource(db, projectId, canvasId, request, budget);
+      if (!report.source_contracts.some((item) => item.task_contract_sha256 === proposal.task_contract_sha256)) {
+        report.source_contracts.push({ task_contract_sha256: proposal.task_contract_sha256, contract: source.contract, criteria: reportCriteria(source.contract) });
+      }
+      result.assessment = "not_assessed";
+    } catch (error) {
+      const code = error instanceof ControlInputError ? record(error.details?.task_goal_review).code : undefined;
+      const reason = typeof code === "string" ? code : "task_result_validation_unavailable";
+      result.gaps.push(reason);
+      if (reason.includes("budget_exceeded")) { report.truncated = true; report.gaps.push("task_result_projection_incomplete"); }
+    }
+    report.task_results!.push(result);
+  }
 }
 
 /** Bounded reads; no writes, model calls or automatic evaluation jobs. */
@@ -176,7 +224,9 @@ export async function loadTaskOutcomeReport(db: typeof sql, canvasId: string, pr
     canvasId, projectId, findingScoped: findingIds !== undefined, findings: rows, sourceContracts: sourceJobs.map((row) => row.task_contract), availableEvidenceRefs: facts.map((row) => row.id),
     truncated: refs.size > MAX_FACT_REFS || (findingIds?.length ?? 0) > MAX_FINDINGS,
   });
-  return applyTaskGoalReviews(projection, await loadTaskGoalReviews(db, projectId, canvasId, findingIds));
+  const budget = criterionEvidenceBudget();
+  if (findingIds === undefined) await loadReportTaskResults(db, projectId, canvasId, projection, budget);
+  return applyTaskGoalReviews(projection, await loadTaskGoalReviews(db, projectId, canvasId, findingIds, budget));
 }
 
 /** User text is only quoted data; escaped backticks cannot close the JSON fence. */

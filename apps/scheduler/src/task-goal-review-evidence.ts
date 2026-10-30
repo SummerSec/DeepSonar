@@ -30,6 +30,8 @@ export async function loadGoalReviewEvidence(
     WHERE n.id=ANY(${refs}::uuid[]) AND n.node_type='fact' AND n.canvas_id=${canvasId} AND n.job_id=${jobId}
       AND n.verification_status <> 'rejected' AND a.node_id=n.id AND a.project_id=${projectId}
       AND a.canvas_id=${canvasId} AND a.job_id=${jobId} AND a.source_operation='emit_fact'
+      AND a.kind NOT IN ('task.goal_evaluation','task.result')
+      AND NOT (a.extensions_json ? 'task_goal_review' OR a.extensions_json ? 'task_result')
       AND a.status='submitted' AND a.superseded_at IS NULL AND e.attempt_id=${attemptId}
     ORDER BY n.id LIMIT 161`;
   const blockedReasons: string[] = [];

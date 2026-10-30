@@ -5,14 +5,17 @@
 
 本片接续[研究候选准入](TASK_OUTCOME_ADMISSION.md)和[报告防误报](TASK_OUTCOME_REPORT.md)，允许既有普通 Job 提交有来源、有留存证据的判据评审。它隔离执行来源，不证明 reviewer 与 maker 是不同人、不同模型或组织上独立。所有判断仍须结合来源、证据、适用范围和限制解读，不能称为外部认证。
 
+非 Finding 的工程交付与有界负结果已按[任务执行结果评审](TASK_RESULT_REVIEW.md)接入 Fact Artifact subject；无需构造漏洞 Finding。结果种类与判据评价分开，blocked/not_executed 不贡献成果；请求必须恰好指定 Finding 或结果 Fact 之一。
+
 ## 请求与宿主冻结
 
 机器契约见 [task-goal-review.ts](../packages/shared-types/src/task-goal-review.ts)。普通 `/jobs` 创建的 `payload.goal_review` 或 `HubIntent.goal_review` 可请求：
 
 ```text
 schema_version: 1
-finding_id: <同项目研究候选 UUID>
-candidate_artifact_id: <该候选 Artifact UUID>
+finding_id: <同项目研究候选 UUID，与 fact_id 二选一>
+fact_id: <同项目 task.result Fact UUID，与 finding_id 二选一>
+candidate_artifact_id: <所选 Finding 或 Fact 的 Artifact UUID>
 task_contract_sha256: <整个冻结任务契约摘要>
 criterion_ids: [<1–20 个冻结判据 ID>]
 ```
@@ -49,7 +52,7 @@ criteria:
 
 ## 报告聚合与边界
 
-逐判据可为 satisfied、contradicted、insufficient、conflict 或 not_assessed。不同 reviewer 的当前有效相反评价产生 conflict，不按最后写入覆盖；失效记录保留可查，但不参与满足、否定或冲突判断；历史无证据否定也须重验并标记失效。报告仅保存紧凑 review_records 引用，通过 review_indexes 关联判据，完整评审正文仍在 Artifact；单 Finding 最多 20 条、Task 最多 100 条，截断不得宣称正向完整结论。全局留存证据读取预算耗尽、无法完整检查评价集合时，所有判据均显示 insufficient；不能仅保留先读到的正向评价而漏掉后续反证。
+逐判据可为 satisfied、contradicted、insufficient、conflict 或 not_assessed。不同 reviewer 的当前有效相反评价产生 conflict，不按最后写入覆盖；失效记录保留可查，但不参与满足、否定或冲突判断；历史无证据否定也须重验并标记失效。报告仅保存紧凑 review_records 引用，通过 review_indexes 关联判据，完整评审正文仍在 Artifact；单 Finding 最多 20 条、Task 最多 100 条，截断不得宣称正向完整结论。来源、评审与报告共享的 8MiB 留存证据读取预算耗尽、无法完整检查评价集合时，所有判据均显示 insufficient；不能仅保留先读到的正向评价而漏掉后续反证。
 
 整体 goal_assessment 区分 blocked、not_assessed、partially_satisfied、criteria_satisfied。部分 satisfied 不是整体完成；即使 criteria_satisfied，也只表达当前判据评价集合，不是 Plan/任务完成授权。整体 Plan 完成仍 not_assessed，归 #775；赏金 submission_eligibility 不由本片推导。契约任务 SARIF 仍不作为达标成果导出，逐判据正向展示不改变最终交付策略。
 

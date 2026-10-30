@@ -1,6 +1,7 @@
 import { freezeGoalReviewAssignment } from "../../task-goal-review-source.js";
 import { prepareTaskGoalReview } from "../../task-goal-review.js";
 import { assertNoGoalReviewAuthority } from "../../task-goal-review-input.js";
+import { prepareTaskResult } from "../../task-result-ingestion.js";
 import { analysisCompleteGateExpected } from "./completion-feedback.js";
 import { createHash } from "node:crypto";
 import { findingSourceDigest } from "../artifacts/model.js";
@@ -1104,6 +1105,8 @@ export function createEventIngestionSideEffectApplication(
       if (!canvasId) return;
 
       assertNoGoalReviewAuthority(p.artifact);
+      if (p.artifact?.task_result && p.verification) throw invalidControlPayload("任务结果不能混用 Finding Verify 结论。", "artifact.task_result");
+      const taskResult = p.artifact?.task_result ? await prepareTaskResult(tx, job, services.attemptId ?? null, services.eventId ?? null, p.artifact.task_result) : undefined;
       const review = p.artifact?.goal_review ? await prepareTaskGoalReview(tx, job, services.attemptId ?? null, p.artifact.goal_review) : undefined;
       if (review?.duplicate) return;
       const document = factProposalToArtifact({ title: p.title ?? p.description.slice(0, 60), description: p.description,
@@ -1111,6 +1114,10 @@ export function createEventIngestionSideEffectApplication(
       if (review) {
         document.kind = "task.goal_evaluation";
         document.extensions.task_goal_review = { ...review.extension };
+      }
+      if (taskResult) {
+        document.kind = "task.result";
+        document.extensions.task_result = { ...taskResult.extension };
       }
       const [{ count }] = await tx<[{ count: number }]>`
       SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact'`;
@@ -1121,6 +1128,7 @@ export function createEventIngestionSideEffectApplication(
         sourceEventId: services.eventId ?? null,
         sourceOperation: "emit_fact",
         ...(review ? { artifactKey: review.artifactKey } : {}),
+        ...(taskResult ? { artifactKey: taskResult.artifactKey } : {}),
         document,
       });
       const [node] = await tx`
@@ -1133,6 +1141,7 @@ export function createEventIngestionSideEffectApplication(
           description: p.description,
           artifact_id: artifact.id,
           ...(review ? { goal_review: p.artifact?.goal_review } : {}),
+          ...(taskResult ? { task_result: taskResult.extension } : {}),
           ...(p.quantities && p.quantities.length > 0 ? { quantities: p.quantities } : {}),
         } as never,
         x: ((intentNode?.x as number) ?? 100) + 340,
@@ -1309,7 +1318,7 @@ export function createEventIngestionSideEffectApplication(
           typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
         const snapshotFindingIds = [...new Set([
           ...(followupFindingId ? [followupFindingId] : relatedImportedIds),
-          ...(it.goal_review ? [it.goal_review.finding_id.toLowerCase()] : []),
+          ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : []),
         ])];
         if (it.goal_review && snapshotFindingIds.length > 8) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "intents.goal_review");
         let snapshot;
@@ -1401,7 +1410,7 @@ export function createEventIngestionSideEffectApplication(
               ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
             },
             ...(applyHubFollowup ? { hub_followup: true } : {}),
-            ...((relatedImportedIds.length > 0 || it.goal_review) ? { related_finding_ids: [...new Set([...relatedImportedIds, ...(it.goal_review ? [it.goal_review.finding_id.toLowerCase()] : [])])] } : {}),
+            ...((relatedImportedIds.length > 0 || it.goal_review?.finding_id) ? { related_finding_ids: [...new Set([...relatedImportedIds, ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : [])])] } : {}),
             ...(verificationFollowup
               ? {
                   verification_followup: {

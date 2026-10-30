@@ -60,7 +60,7 @@ export function taskContractPrompt(snapshot: unknown): string {
   const assignment = TaskGoalReviewAssignment.safeParse((snapshot as Record<string, unknown>).task_goal_review);
   const reviewGuide = assignment.success
     ? "\n本 Job 是宿主指定的独立任务判据评审。对整个指定判据作判断，不把局部贡献或技术 confirmed 当作满足。先 emit_fact 保存本 Job 的可复核执行证据，再用 emit_fact artifact.goal_review 提交 assignment_sha256、逐判据 expected/actual/rationale、限制和本 Job Fact 引用。无证据或未覆盖部分使用 insufficient，不能自填 confidence 代替证明；这里只评任务判据，不授予赏金提交资格。\n冻结评审指派：" + JSON.stringify(assignment.data)
-    : "\n需要独立目标评审时可通过普通 Job payload.goal_review 或 Hub intent.goal_review 提出候选 Finding/Artifact、完整契约摘要与待评判据；宿主重新校验并冻结，原作者不能自评。";
+    : "\n需要独立目标评审时可通过普通 Job payload.goal_review 或 Hub intent.goal_review 提出 finding_id 或 fact_id（二选一）、candidate_artifact_id、完整契约摘要与待评判据。工程交付和有界阴性结果先以 emit_fact artifact.task_result 保存，不创建假 Finding；blocked/not_executed 只是缺口。宿主重新校验并冻结，原作者不能自评。";
   const outcome = contract.outcome;
   const outcomeGuide = "\n任务目标决定研究方向，技术弱点本身不是默认成果。先 emit_fact 保存观察，再用 outcome_claim 引用同任务 Fact 与全契约摘要申请研究候选准入；逐项声明目标相关性、范围、证据及排除条件，至少关联一项 acceptance 判据。matches 仅表示贡献关联，不表示整个验收判据或任务已完成。无关观察不计成果，未知需要补证或 request_human。准入仅为 admitted_for_research，submission_eligibility 保持 not_assessed。"
     + `\n冻结任务契约身份 task_contract_sha256=${taskContractDigest(contract)}`

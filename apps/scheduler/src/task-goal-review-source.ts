@@ -1,3 +1,5 @@
+import { loadTaskResultSource } from "./task-result-source.js";
+import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { createHash } from "node:crypto";
 import { normalizeTaskGoalReviewRequest, TaskGoalReviewAssignment, normalizeTaskContract, normalizeCandidateOutcomeClaim,
   deriveTaskGoalCriteria, evaluateTaskOutcomeAdmission, type TaskContract } from "@deepsonar/shared-types";
@@ -17,9 +19,11 @@ const denied = (code: string): never => { throw new ControlInputError("invalid_p
 export interface GoalReviewSource {
   contract: TaskContract; source_sha256: string; forbidden_job_ids: string[]; candidate_revision: number;
 }
-/** Reads only structural provenance. The resulting digest is not a semantic approval. */
-export async function loadGoalReviewSource(db: typeof sql, projectId: string, canvasId: string, rawRequest: unknown): Promise<GoalReviewSource> {
+/** Binds provenance and, for task results, retained execution evidence; never semantic approval. */
+export async function loadGoalReviewSource(db: typeof sql, projectId: string, canvasId: string, rawRequest: unknown, budget: EvidenceReadBudget = criterionEvidenceBudget()): Promise<GoalReviewSource> {
   const request = normalizeTaskGoalReviewRequest(rawRequest);
+  if (request.fact_id) return loadTaskResultSource(db, projectId, canvasId, request, budget);
+  if (!request.finding_id) return denied("goal_review_finding_required");
   const [candidate] = await db`SELECT f.id,f.raw_json,f.node_id,f.artifact_id,j.id AS job_id,j.agent_snapshot_json,
     a.revision,a.body_json,a.extensions_json,a.node_id AS artifact_node_id,e.attempt_id,
     (SELECT jsonb_agg(to_jsonb(c) ORDER BY c.ordinal) FROM artifact_claims c WHERE c.artifact_id=a.id) AS artifact_claims,
