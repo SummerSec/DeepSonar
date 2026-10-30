@@ -29,4 +29,4 @@ knownness helper 尚未接入运行时决策，不能当作 novel 权威。该�
 
 真正独立复现、宿主命令 receipt、攻击链与 knownness 权威接线仍属未交付能力；不通过改诊断字段宣称完成，也不扩大本片为执行或资格系统。
 
-下一关键工程是宿主治理的命令执行 receipt 绑定及可复核攻击链，不是继续增加 Agent 声明字段。knownness 查验需有明确来源、覆盖范围、查询时间及目标版本适用性；没有这些输入不能给出 novel/eligible。当前修复仅管理 evidence-trace/详情诊断，Verify 判决 consumer 未因此改接宿主执行证明。
+宿主治理的命令执行 receipt 是支持可复核执行证据的一种后续工程方案，并非 #767 原文指定的机制，也不是所有通用任务的关闭硬门。当前 RuntimeHost 仅提供底层执行；普通任务尚无可直接复用的命令级授权/幂等/证明绑定 operation，不能把 Agent CLI 退出或工具日志升格为复现命令的宿主回执。新增该能力需单独明确受治理调用契约与操作范围，不能只增加 Agent 声明字段。knownness 查验需有明确来源、覆盖范围、查询时间及目标版本适用性；没有这些输入不能给出 novel/eligible。当前修复仅管理 evidence-trace/详情诊断，Verify 判决 consumer 未因此改接宿主执行证明。
