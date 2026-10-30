@@ -29,6 +29,8 @@ import {
   ROOT_STATUS_REPORT_FAILED,
   shouldKeepRootReporting,
 } from "./report-failure-recovery.js";
+import { loadTaskOutcomeReport, type TaskOutcomeReport } from "./task-outcome-report.js";
+import { goalReportRequired, goalReportMarkdown, outcomeSarifProperties } from "./report-outcome-projection.js";
 import { frozenTaskSeeds } from "./task-compose.js";
 import { inc } from "./metrics.js";
 import {
@@ -117,6 +119,7 @@ export interface ReportInputFinding {
 }
 
 export interface ReportInput {
+  task_outcome?: TaskOutcomeReport;
   plan_gaps?: PlanGapReport;
   task: {
     canvas_id: string;
@@ -163,6 +166,7 @@ export interface ReportInput {
 }
 
 export interface FindingReportInput {
+  task_outcome?: TaskOutcomeReport;
   scope: "finding";
   report_version: number;
   frozen_at: string;
@@ -410,6 +414,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
   }
 
   return {
+    task_outcome: await loadTaskOutcomeReport(db, canvasId, String(canvas.project_id)),
     task: {
       canvas_id: canvasId,
       title: canvas.title as string,
@@ -507,6 +512,7 @@ export async function buildFindingReportInput(
   };
 
   const input: FindingReportInput = {
+    task_outcome: await loadTaskOutcomeReport(db, String(finding.canvas_id), String(finding.project_id), [findingId]),
     scope: "finding",
     report_version: version,
     frozen_at: new Date().toISOString(),
@@ -559,9 +565,10 @@ export async function buildFindingReportInput(
   return enforceFindingReportInputBudget(input);
 }
 
-/** SARIF 2.1.0 子集：仅 confirmed Finding。 */
+/** SARIF 2.1.0: unassessed legacy inputs retain technical results; explicit goals require independent outcome review. */
 export function buildSarifFromConfirmed(input: ReportInput): object {
-  const results = input.confirmed_findings.map((f) => ({
+  const exportable = input.task_outcome && input.task_outcome.mode !== "unassessed" ? [] : input.confirmed_findings;
+  const results = exportable.map((f) => ({
     ruleId: f.id,
     level: f.severity === "critical" || f.severity === "high" ? "error" : "warning",
     message: { text: f.summary || f.title },
@@ -593,11 +600,12 @@ export function buildSarifFromConfirmed(input: ReportInput): object {
     version: "2.1.0",
     runs: [
       {
+        properties: outcomeSarifProperties(input.task_outcome),
         tool: {
           driver: {
             name: "DeepSonar",
             informationUri: "https://github.com/SummerSec/DeepFlowHunter",
-            rules: input.confirmed_findings.map((f) => ({
+            rules: exportable.map((f) => ({
               id: f.id,
               name: f.title,
               shortDescription: { text: f.title },
@@ -764,7 +772,7 @@ function defaultMarkdown(input: ReportInput): string {
   return lines.join("\n");
 }
 
-export type ReportMarkdownFallback = "coverage" | "numeric" | null;
+export type ReportMarkdownFallback = "coverage" | "numeric" | "task_outcome" | null;
 
 
 /**
@@ -781,6 +789,11 @@ export function finalizeTaskReportMarkdown(
   coverageOk: boolean;
   usedDefault: ReportMarkdownFallback;
 } {
+  if (goalReportRequired(input.task_outcome)) {
+    const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
+    const markdown = withPlanGapReport(goalReportMarkdown(input.task_outcome!, declared, { findings: input.findings, facts: input.facts }), input.plan_gaps);
+    return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), coverageOk: true, usedDefault: "task_outcome" };
+  }
   let markdown = agentText.trim();
   const coverageOk = taskReportCoverageOk(input, markdown);
   let usedDefault: ReportMarkdownFallback = null;
@@ -807,6 +820,11 @@ export function finalizeFindingReportMarkdown(
   numeric: NumericFidelityResult;
   usedDefault: ReportMarkdownFallback;
 } {
+  if (goalReportRequired(input.task_outcome)) {
+    const declared = declaredQuantitiesFromPayloads([input.finding]);
+    const markdown = goalReportMarkdown(input.task_outcome!, declared, { finding: input.finding, verification_rounds: input.verification_rounds, evidence: input.evidence });
+    return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), usedDefault: "task_outcome" };
+  }
   let markdown = agentText.trim();
   const coverageOk = markdown.includes(input.finding.id) || markdown.includes(input.finding.title);
   let usedDefault: ReportMarkdownFallback = null;
@@ -1333,6 +1351,7 @@ async function finalizeFindingReportJob(
     await writeFile(path.join(dir, "report.md"), markdown, "utf8");
     const markdownUri = path.posix.join("finding-reports", input.finding.id, `v${input.report_version}`, "report.md");
     const summary = {
+      task_outcome: outcomeSarifProperties(input.task_outcome),
       finding_id: input.finding.id,
       fingerprint: input.finding.fingerprint,
       severity: input.finding.severity,
@@ -1507,7 +1526,7 @@ export async function finalizeReportJob(
 
   const reportJson = {
     ...input,
-    agent_summary: opts.summary ?? null,
+    agent_summary: goalReportRequired(input.task_outcome) ? null : opts.summary ?? null,
     generated_at: new Date().toISOString(),
   };
   // Agent summary 作 Markdown；覆盖不全、过短或口径被改写时回退确定性模板。
@@ -1550,6 +1569,7 @@ export async function finalizeReportJob(
   const sarifUri = path.posix.join("reports", safeCanvasId, `v${version}`, "report.sarif.json");
 
   const summaryJson = {
+    task_outcome: outcomeSarifProperties(input.task_outcome),
     confirmed_count: input.statistics.confirmed_count,
     needs_human_count: input.statistics.needs_human_count,
     refuted_count: input.statistics.refuted_count,

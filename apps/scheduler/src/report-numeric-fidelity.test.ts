@@ -382,3 +382,39 @@ test("coverage-valid model tails cannot swallow the mandatory leading gap sectio
     assert.ok(final.markdown.endsWith(tail));
   }
 });
+
+test("contracted task reports cannot promote model prose or technical confirmation to task success", async () => {
+  const { projectTaskOutcomeReport } = await import("./task-outcome-report.js");
+  const projection = projectTaskOutcomeReport({
+    canvasContract: { schema_version: 1, template_id: "engineering", template_version: 1, objective: "Implement the agreed change", targets: ["fixture/repo"],
+      scope: ["Tests and implementation"], evidence: ["Retained test output"], acceptance: ["Regression passes"],
+      outcome: { mode: "task_defined" } },
+    canvasExists: true, canvasId: "canvas-1", projectId: "project-1", findings: [], availableEvidenceRefs: [],
+  });
+  assert.equal(projection.mode, "contracted");
+  const input = reportInput({ task_outcome: projection });
+  const resolved = finalizeTaskReportMarkdown(input, "## 已确认问题\nFinding ID：finding-1\n所有任务判据已达标，可以领取赏金。" );
+  assert.equal(resolved.usedDefault, "task_outcome");
+  assert.doesNotMatch(resolved.markdown, /所有任务判据已达标|可以领取赏金/);
+  assert.match(resolved.markdown, /blocked|not_assessed/);
+  assert.equal(resolved.numeric.ok, true, "deterministic outcome report preserves numeric anchors");
+  const sarif = buildSarifFromConfirmed(input) as { runs: Array<{ results: unknown[]; properties: Record<string, unknown> }> };
+  assert.deepEqual(sarif.runs[0]!.results, []);
+  assert.equal(sarif.runs[0]!.properties.task_satisfied_count, 0);
+  assert.equal(input.statistics.confirmed_count, 1, "technical ledger is not rewritten");
+});
+
+test("new uncontracted reports remain explicitly unassessed and preserve technical-only SARIF", async () => {
+  const { projectTaskOutcomeReport } = await import("./task-outcome-report.js");
+  const projection = projectTaskOutcomeReport({ canvasContract: undefined, canvasExists: true,
+    canvasId: "canvas-1", projectId: "project-1", findings: [], availableEvidenceRefs: [] });
+  const input = reportInput({ task_outcome: projection });
+  const resolved = finalizeTaskReportMarkdown(input, "The entire task has passed all acceptance criteria.");
+  assert.equal(resolved.usedDefault, "task_outcome");
+  assert.doesNotMatch(resolved.markdown, /entire task has passed/);
+  assert.match(resolved.markdown, /not_assessed/);
+  const sarif = buildSarifFromConfirmed(input) as { runs: Array<{ results: unknown[]; properties: Record<string, unknown> }> };
+  assert.equal(sarif.runs[0]!.results.length, 1);
+  assert.equal(sarif.runs[0]!.properties.result_semantics, "technical_verification_only");
+  assert.equal(sarif.runs[0]!.properties.task_assessment, "not_assessed");
+});
