@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PlanCriterionBindingRequest } from "../plan-protocol/criterion-model.js";
 import { FactVerificationStatus } from "@deepsonar/shared-types";
 
 const commaList = <T extends z.ZodType<string, string>>(item: T, max = 20) => z
@@ -21,5 +22,10 @@ export const FactVerificationPatch = z
   .object({
     status: z.enum(["verified", "rejected", "needs_human"]),
     note: z.string().trim().min(1).max(2000).optional(),
+    plan_binding: PlanCriterionBindingRequest.optional(),
   })
-  .strict();
+  .strict().superRefine((value, ctx) => {
+    if (value.plan_binding && (value.status !== "verified" || !value.note)) {
+      ctx.addIssue({ code: "custom", path: ["plan_binding"], message: "Plan binding requires verified Fact and an explicit operator note" });
+    }
+  });

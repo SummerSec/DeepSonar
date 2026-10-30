@@ -306,7 +306,8 @@ try {
     const capability = await preparePlatformCapability(jobId, snapshot as Parameters<typeof preparePlatformCapability>[1]);
     await activateProvisionedJobCapabilityTokens(jobId);
     registerRuntimeHandler(jobId, async (context) => {
-      calls.push(context.operationId);
+      // Preparation/abort are side-effect-free; count only actual live delivery.
+      if (!context.completionPhase || context.completionPhase === "commit") calls.push(context.operationId);
       return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
     }, [...operations]);
 
@@ -402,6 +403,8 @@ req = urllib.request.Request(
     },
     method="POST",
 )
+if op == "mark_job_done":
+    req.add_header("X-DeepSonar-Proposal-Revision", "0")
 try:
     with urllib.request.urlopen(req, timeout=8) as resp:
         print(f"CALL:{op}={resp.status}")

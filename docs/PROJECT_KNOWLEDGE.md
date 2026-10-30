@@ -71,7 +71,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 本轮在 main `c5a1e7e0` 基础上复查 #756，补齐 create 候选的同身份修订与 PostgreSQL 回归；并发 Scheduler 领取、重建 Scheduler 实例后的未知效果停止及累计预算耗尽都有可复跑数据库断言。测试入口仍为上述知识集成脚本，并由常规 CI 调用。Reverse 真实 Job 验收夹具也必须先持久化 Skill 源 CAS 清单，再冻结全局和项目知识目录；直接插入旧形态快照会被运行时以 `JOB_SKILL_CATALOG_MISSING` 拒绝。数据库回归同时验证旧夹具拒绝与当前快照的搜索/拉取成功。
 
-这些测试使用合成任务/评测记录，证明存储、状态转换和权限硬门；不证明 LLM 能正确生成、独立评测或审查方法。专用授权烟测的固定模型响应也只能证明 Dispatcher/OpenSandbox/Control API 授权链路。完整模型验收仍须保存任务 A 的 maker → case×arm trial → evaluator → reviewer → 激活，以及任务 B 的精确版本使用 → 失败反馈 → 同身份修订的 Job/Attempt/Receipt/Evidence、模型版本、用量和退出码。完整链路未通过前不得据此关闭 #752 或宣称生产模型效果已验收。
+这些测试使用合成任务/评测记录，证明存储、状态转换和权限硬门；不证明 LLM 能正确生成、独立评测或审查方法。专用授权烟测的固定模型响应也只能证明 Dispatcher/OpenSandbox/Control API 授权链路。完整模型验收仍须保存任务 A 的 maker → case×arm trial → evaluator → reviewer → 激活，以及任务 B 的精确版本使用 → 失败反馈 → 同身份修订的 Job/Attempt/Receipt/Evidence、模型版本、用量和退出码。#752 已按用户明确不走真实模型验收的范围，以 #756 实现、隔离集成/重建测试和 CI 完成关闭；真实模型闭环与收益验证属于独立后续 #777，不重开或改写 #752 的完成条件。没有真实证据仍不得宣称生产模型效果已验收。
 
 本轮未调用付费模型、未接触业务数据。该最终试验需要独立空白 Linux Docker 主机、测试数据库、已准入不可变 runtime digest、仅测试用途的模型配置，以及明确的调用费用上限；凭据应通过已有 Model Gateway 配置，不能写入文档或证据。
 
@@ -80,3 +80,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 集成 #758 后当前知识基线为 v61；main v60 的凭据来源规则与 `rebuild --reset-role-identity` 显式确认保持不变。知识表不复用凭据变更的版本号。
 
 本次集成以 main `5b0d9b1f` 的实际 v60 SQL 在全新隔离 PostgreSQL 16 库建立基线，运行 v61 rebuild apply（保留 staging）后复制 63 张表，核对项目记录、显式全局 CLI/model 保留及 9 张知识表建立；迁移套件 22/22、知识集成 24/24 通过。未操作生产库。
+
+### #777 独立效果研究
+
+离线协议、合成案例、预检和待运行报告模板见 [对照研究协议](../agent-harness/knowledge-live/STUDY.md)。当前仅准备材料；真实 A→激活→B 使用→反馈→同身份修订、重复对照与收益判断均 pending。报告复用既有 Job/Attempt/work/receipt/usage 引用，不新增执行器、知识晋升审批或数据库表。
