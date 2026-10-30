@@ -12,7 +12,7 @@ pnpm ci:unit:plan-replay
 pnpm ci:integration:plan-replay
 ```
 
-运行器调用既有 `plan-decision.integration.test.ts`，从实际 Control 响应、投影和 SQL 状态记录 32 个观测；不会将 baseline 的 expected 写成 observed。执行结果位于忽略追踪的 `artifacts/plan-replay/report.json`，CI 上传为 `plan-offline-replay`。失败也尽可能生成缺失/差异报告；未运行或跳过 DB 不能通过。普通 Plan 测试未设置输出变量时不写报告。
+运行器调用既有 `plan-decision.integration.test.ts`，从实际 Control 响应、投影和 SQL 状态记录 32 个观测；不会将 baseline 的 expected 写成 observed。执行结果位于忽略追踪的 `artifacts/plan-replay/report.json`，CI 上传为 `plan-offline-replay`。失败也尽可能生成缺失/差异报告；未运行或跳过 DB 不能通过。普通 Plan 测试未设置输出变量时不写报告。先写实际观测再做预期断言，因此失败值保留为 different，后续未执行场景保持 missing。集成入口先在隔离夹具中故意省略无证据完成预检，使实际响应变为200并验证回放失败、首项different和其余31项missing，再运行无故障正向回放。负例证据保存为 negative-regression.json，外层 regression_passed 表示成功检测故障，不表示内部失败报告通过。故障开关仅存在于测试handler，生产代码不消费它。
 
 每行保留 mode、case ID、expected、observed、match/different/missing。另列故意无证据完成提案的实际接纳/拒绝数和显式人工请求后的 waiting_human 数及各自分母；这不是模型犯错率或自然人工介入率。总分母与分类分母均列 expected/observed/matched/different/missing，重复和额外 ID 独立使运行失败；不能缩小分母掩盖缺失。报告绑定基线 commit/文件 SHA、当前 HEAD、dirty 标记、子进程退出码和整套夹具耗时。耗时包括数据库准备与测试，不是模型时间，也不用于收益门禁。
 

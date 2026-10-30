@@ -52,11 +52,15 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
       if(context.operationId==='graph_query') return executeGraphQuery({jobId:context.jobId,canvasId:canvas,payload:context.input,maxCalls:100,maxBytes:1024*1024});
       const type=({submit_plan:'plan',submit_hub_decision:'hub_decision',mark_job_done:'done',request_human:'human',emit_fact:'fact'} as const)[context.operationId as 'submit_plan'|'submit_hub_decision'|'mark_job_done'|'request_human'|'emit_fact'];
       try{
+        // Fault injection is confined to this isolated test handler.
+        const faultyCompletion=process.env.PLAN_REPLAY_FAULT==='unproven_completion_accepted'
+          && type==='hub_decision' && context.input && typeof context.input==='object' && 'complete' in context.input;
         if(type==='hub_decision' || type==='human') {
+          if(faultyCompletion && context.planPhase==='validate') return {};
           if(context.planPhase!=='commit') await core.preflightDeferredSemanticEvent(context.jobId,type,context.input);
           if(context.planPhase==='validate') return {};
           if(context.planPhase==='commit'){
-            if(failPlanCommit) throw new Error('Fixture lost executor before semantic ingestion');
+            if(failPlanCommit && !faultyCompletion) throw new Error('Fixture lost executor before semantic ingestion');
             planCommits.set(context.jobId,(planCommits.get(context.jobId)??0)+1);
           }
         }
@@ -83,8 +87,8 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     assert.equal(bypass.statusCode,422,bypass.payload);assert.equal(bypass.json().error_code,'plan_context_required');
     assert.deepEqual(await decision.planCompletionBlockers(sql,canvas),['plan_criteria_unproven'],'explicit Plan gates automatic completion before any basis decision');
     const complete=await invoke('submit_hub_decision',{complete:{from:[root.id],description:'Claim completion without evidence'},plan_basis:basis(gap,'complete')});
+    await recordPlanReplay(mode,'unproven_completion',{http_status:complete.statusCode,error_code:complete.json().error_code ?? null});
     assert.equal(complete.statusCode,422,complete.payload);assert.equal(complete.json().error_code,'plan_completion_unproven');
-    await recordPlanReplay(mode,'unproven_completion',{http_status:complete.statusCode,error_code:complete.json().error_code});
     const rejected=await invoke('submit_hub_decision',{intents:[{...intent,role:'not-admitted-role'}],plan_basis:basis(gap)});
     assert.equal(rejected.statusCode,422,rejected.payload);
     assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0);
@@ -106,10 +110,10 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     const original=raced.find(r=>r.statusCode===200)!.json();
     assert.equal(original.receipt_status,'persisted_deferred');
     assert.equal(original.operation,'submit_hub_decision');
-    assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0,'durable acceptance alone creates no child');
     const pendingGap=await read();
-    assert.equal(pendingGap.supplementation_execution.state,'not_dispatched','receipt alone is not committed dispatch');
     await recordPlanReplay(mode,'pending_receipt',{state:pendingGap.supplementation_execution.state,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
+    assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0,'durable acceptance alone creates no child');
+    assert.equal(pendingGap.supplementation_execution.state,'not_dispatched','receipt alone is not committed dispatch');
     const cached=await invoke('submit_hub_decision',requestProposal,key);assert.equal(cached.statusCode,200,cached.payload);
     assert.deepEqual(cached.json(),original);
     api.clearPlatformApiIdempotencyCache();api.unregisterRuntimeHandler(hub);
@@ -188,10 +192,10 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
       await sql`UPDATE jobs SET status=${jobStatus} WHERE id=${childId}`;
       await sql`UPDATE job_attempts SET status=${attemptStatus},phase=${phase} WHERE id=${latestAttempt}`;
       const projected=await execution();
+      await recordPlanReplay(mode,`lifecycle_${jobStatus}_${attemptStatus}`,{state:projected.state,completion_assessment:projected.completion_assessment});
       assert.equal(projected.state,expected,`${jobStatus}/${attemptStatus}`);
       assert.equal(projected.source?.attempt_id,latestAttempt);
       assert.equal(projected.completion_assessment,'unknown');
-      await recordPlanReplay(mode,`lifecycle_${jobStatus}_${attemptStatus}`,{state:projected.state,completion_assessment:projected.completion_assessment});
     }
     await sql`UPDATE jobs SET status='waiting_human' WHERE id=${childId}`;
     await sql`UPDATE job_attempts SET status='active',phase='agent.suspended' WHERE id=${latestAttempt}`;
@@ -199,18 +203,18 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     await sql`INSERT INTO events(job_id,event_id,attempt_id,job_seq,type,payload_json)
       VALUES(${childId},${humanEvent},${latestAttempt},1,'human',${sql.json({reason:'Credential unavailable; do not expose this free-form reason',subject:{type:'platform_blocker',kind:'credential'}})})`;
     const waiting=await execution();
+    await recordPlanReplay(mode,'credential_report',{state:waiting.state,blocker_kind:waiting.reported_blocker?.kind,authority:waiting.reported_blocker?.authority});
     assert.deepEqual(waiting.reported_blocker,{event_id:humanEvent,authority:'agent_report',kind:'credential'});
     assert.ok(!JSON.stringify(waiting).includes('free-form'));
-    await recordPlanReplay(mode,'credential_report',{state:waiting.state,blocker_kind:waiting.reported_blocker?.kind,authority:waiting.reported_blocker?.authority});
     await sql`DELETE FROM events WHERE event_id=${humanEvent}`;
     await sql`UPDATE jobs SET status='succeeded' WHERE id=${childId}`;
     await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${latestAttempt}`;
     await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status)
       VALUES(${historicalAttempt},${childId},'historical-unresolved','execution','unknown')`;
-    assert.equal((await execution()).state,'unknown','a later success cannot hide historical unknown effects');
-    assert.equal((await execution()).reason,'unknown_external_effect');
     const historicalUnknown=await execution();
     await recordPlanReplay(mode,'historical_unknown',{state:historicalUnknown.state,reason:historicalUnknown.reason});
+    assert.equal((await execution()).state,'unknown','a later success cannot hide historical unknown effects');
+    assert.equal((await execution()).reason,'unknown_external_effect');
     await sql`UPDATE jobs SET status='running' WHERE id=${childId}`;
     await sql`UPDATE job_attempts SET status='active',phase='agent.ready' WHERE id=${latestAttempt}`;
     await sql`UPDATE job_attempt_effects SET status='effect_pending' WHERE attempt_id=${historicalAttempt}`;
@@ -301,18 +305,18 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     await api.activateProvisionedJobCapabilityTokens(followup);api.registerRuntimeHandler(followup,handler,operations);
     activeJob=followup;token=followupGrant.token;
     const sourced=await invoke('graph_query',{kind:'plan_gap',ids:[observedFact.node_id]});
+    await recordPlanReplay(mode,'post_execution_unbound',{criterion_state:sourced.json()?.items?.[0]?.criteria?.[0]?.state ?? null,eligible:sourced.json()?.items?.[0]?.source_refs?.[0]?.eligible ?? null});
     assert.equal(sourced.statusCode,200,sourced.payload);assert.equal(sourced.json().items[0].source_refs[0].eligible,true);
     assert.equal(sourced.json().items[0].criteria[0].state,'unbound','execution alone is not semantic authority');
-    await recordPlanReplay(mode,'post_execution_unbound',{criterion_state:sourced.json().items[0].criteria[0].state,eligible:sourced.json().items[0].source_refs[0].eligible});
     await sql`UPDATE canvases SET title='Changed saved objective' WHERE id=${canvas}`;
     const changed=await read();assert.equal(changed.stale_objective,true);
     await sql`UPDATE job_attempt_effects SET status='unknown' WHERE attempt_id=${uncertainAttempt}`;
     const stop=await invoke('request_human',{reason:'Single-step budget is exhausted and current criteria require operator assessment',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:basis(changed,'needs_human')});
+    await recordPlanReplay(mode,'safe_human_stop',{http_status:stop.statusCode,job_status:(await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
     assert.equal(stop.statusCode,200,stop.payload);
     assert.equal(stop.json().receipt_status,'persisted_deferred');
     assert.equal(stop.json().operation,'request_human');
     assert.equal((await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,'waiting_human','unknown effects do not block safe human escalation');
-    await recordPlanReplay(mode,'safe_human_stop',{http_status:stop.statusCode,job_status:(await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
     assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,1);
     assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND type='hub_decision'`).length,1);
     api.unregisterRuntimeHandler(hub);api.unregisterRuntimeHandler(followup);api.unregisterRuntimeHandler(worker);

@@ -302,7 +302,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: plan-offline-replay
-          path: artifacts/plan-replay/report.json
+          path: artifacts/plan-replay/*.json
           if-no-files-found: warn
 
       - name: Hub runtime image proposal Postgres integration
