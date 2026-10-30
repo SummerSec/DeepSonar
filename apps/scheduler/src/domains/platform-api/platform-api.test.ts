@@ -278,3 +278,17 @@ test("only completion requires explicit revision and offers scoped receipt looku
   assert.equal(progress.post.parameters.some((p: any) => p.name === "X-DeepSonar-Proposal-Revision"), false);
   assert.equal(progress.get.parameters.some((p: any) => p.name === "receipt_key"), false);
 });
+
+
+test("reference refresh hints do not change other operations, error classes or codes", async () => {
+  const { controlRuntimeRejection, withScopedReferenceRefresh } = await import("./repair.js");
+  const principal = { jobId: "00000000-0000-4000-8000-000000000001", canvasId: "canvas", operationIds: ["graph_query"] };
+  for (const input of [
+    { operation: "mark_job_done", code: "invalid_node_ref", retryable: true },
+    { operation: "submit_hub_decision", code: "invalid_payload", retryable: true },
+    { operation: "submit_hub_decision", code: "invalid_node_ref", retryable: false },
+  ]) {
+    const body = controlRuntimeRejection({ ...input, message: "rejected" });
+    assert.equal(withScopedReferenceRefresh(body, principal), body);
+  }
+});

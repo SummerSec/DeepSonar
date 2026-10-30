@@ -21,7 +21,7 @@ import {
   type PlatformRuntimeHandlerContext,
 } from "./registry.js";
 import { controlInputCodeForOperation } from "../../control-input.js";
-import { controlPlatformFailure, controlRuntimeRejection, controlSchemaRejection } from "./repair.js";
+import { controlPlatformFailure, controlRuntimeRejection, controlSchemaRejection, withScopedReferenceRefresh } from "./repair.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -241,7 +241,7 @@ async function executeInvocation(
         };
       }
       if (error.code === "OPERATION_REJECTED" && error.rejection) {
-        const body = controlRuntimeRejection({
+        const body = withScopedReferenceRefresh(controlRuntimeRejection({
           operation: operationId,
           code: error.rejection.errorCode,
           message: error.message,
@@ -251,7 +251,7 @@ async function executeInvocation(
           details: error.rejection.details,
           rawInput: input,
           idempotencyKey: key,
-        });
+        }), principal);
         return {
           statusCode: error.rejection.statusCode,
           body,
