@@ -41,6 +41,7 @@ targetUrl.search = "";
 const projectId = randomUUID();
 const canvasId = randomUUID();
 const jobId = randomUUID();
+const attemptId = randomUUID();
 const isolatedJobId = randomUUID();
 const operations = ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"] as const;
 const calls: string[] = [];
@@ -107,6 +108,8 @@ try {
       ${jobId}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json(JSON.parse(JSON.stringify(snapshot)))},
       now(), 3600, now() + interval '1 hour'
     )`;
+  await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, started_at)
+    VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.ready', now())`;
   const capability = await preparePlatformCapability(jobId, snapshot as Parameters<typeof preparePlatformCapability>[1]);
   const expectedBase = `http://${DEEPSONAR_GATEWAY_PROXY_HOST}:3100/control/v1/jobs/${jobId}`;
   if (capability.env.DEEPSONAR_API_BASE_URL !== expectedBase) {
@@ -117,7 +120,8 @@ try {
   }
   await activateProvisionedJobCapabilityTokens(jobId);
   registerRuntimeHandler(jobId, async (context) => {
-    calls.push(context.operationId);
+    // Preparation/abort are side-effect-free; count only actual live delivery.
+    if (!context.completionPhase || context.completionPhase === "commit") calls.push(context.operationId);
     return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
   }, [...operations]);
 
@@ -156,6 +160,8 @@ def http(url, data=None, token=""):
     if token:
         headers["Authorization"] = "Bearer " + token
         headers["Idempotency-Key"] = str(uuid.uuid4())
+    if data and url.endswith("/operations/mark_job_done"):
+        headers["X-DeepSonar-Proposal-Revision"] = "0"
     req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -196,7 +202,7 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
   ) => {
     const handle = await runner.provision({
       jobId: targetJobId,
-      attemptId: randomUUID(),
+      attemptId: targetJobId === jobId ? attemptId : randomUUID(),
       image: runtimeImage,
       network,
       gatewayUpstreamUrl,

@@ -3,6 +3,8 @@
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
 > 同步日期：2026-10-29
 
+mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
+
 ## Schema 基线纪律
 
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前集成版本以该常量与基线一致性为准，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
@@ -92,6 +94,9 @@ Verify round 有 pending/running/rework/confirmed/needs_human/failed/refuted/inc
 
 同 schema 编号不证明相同 DDL：宿主从已验证的当前不可变镜像取得 baseline SHA，目标 CLI 计算目标 SHA；不一致须拒绝版本别名，不能仅凭版本号跳过。角色身份重置必须是独立显式选择并绑定计划，不由维护许可或 force 自动授权。维护记录和激活证据需与本地 journal 对账；未知激活不能触发旧库恢复。代码入口：[候选库管理](../../deploy/platform-upgrade-candidate.mjs)、[schema 计划](../../apps/scheduler/src/platform-upgrade-schema-plan.ts)、[ADR 0008](adr/0008-maintenance-candidate-upgrade.md)。
 
+## Plan 审计与判据绑定（#775 A）
+
+jobs.payload_json.plan_protocol 按 Canvas/项目冻结到报告输入。规范化 raw Plan SHA 与 criterion_id 标识判据；现有 append-only audit_logs 的 canvas.fact.plan_binding 保存操作员评价、来源内容 SHA、Fact 验证 epoch 与 Job/Attempt/event/Artifact revision/Evidence IDs。该审计与 Fact 信任更新原子提交；expected_binding_id 串行 CAS，重复决定幂等。刷新重新核对实际留存内容与来源状态，失效不能自动恢复；历史报告不回写。未新增 schema 或执行账本，整体完成仍 unknown；见 [来源、限额及范围](../PLAN_GAP_PROJECTION.md)。
 
 ## Finding 来源身份（#770 A）
 

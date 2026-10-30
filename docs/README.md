@@ -1,6 +1,7 @@
 # DeepSonar 文档索引
 
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
+> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。真实模型评测与 C 未交付。
 
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
@@ -84,6 +85,10 @@
 
 ---
 
+[#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；作为 B 前历史基线保留。
+
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；完整 C 和真实模型效果仍待交付。
+
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |
@@ -154,3 +159,9 @@
 4. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag 之前，按 [`../AGENTS.md`](../AGENTS.md)「发布前的文档保鲜」清单核一遍（版本字面量、已删机制残留、as-built 与代码一致性、本索引状态行与日期、命令与链接），并同步本文件顶部的「当前同步状态」。其中版本字面量、命令、链接与已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检阻断（`as-built 与代码相反` 仍需人工）；漂移修在同一个 release 分支，不留给下一个版本；展开见 [工程规范](architecture/11-engineering-specs.md)与[发布流程](RELEASE_RUNTIME_IMAGES.md)。
 
 #770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；跨任务关系仍待后续交付，不能由查询上线推定已完成。
+
+## #775 设计目标与实现差额
+
+[有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久成功回执、真实模型收益与 C 尚未验收。A/B 实现入口由 #791 的索引说明维护，本设计入口补充验收差额，不替代其实现说明，也不表示相关 PR 已合入 main。
+
+[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。

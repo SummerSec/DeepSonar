@@ -28,6 +28,8 @@ def invoke(operation, payload, accepted=True):
         headers={'Content-Type': 'application/json',
                  'Authorization': 'Bearer ' + os.environ['DEEPSONAR_API_TOKEN'],
                  'Idempotency-Key': str(uuid.uuid4())})
+    if operation == 'mark_job_done':
+        request.add_header('X-DeepSonar-Proposal-Revision', '0')
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             result = json.load(response)

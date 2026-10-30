@@ -5,6 +5,8 @@ import {
   type GraphQueryPayload as GraphQueryInput,
 } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
+import { ControlInputError } from "./control-input.js";
+import { queryPlanGap, mergePlanRead, type PlanReadProof } from "./domains/plan-protocol/gap-query.js";
 import { config } from "./config.js";
 import { isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
 import { findingVerificationSummaries } from "./verify-summaries.js";
@@ -41,6 +43,7 @@ export interface GraphQueryResult {
 }
 
 export interface GraphQueryState {
+  plan_read?: PlanReadProof;
   calls: number;
   bytes: number;
   projected_node_ids: string[];
@@ -111,6 +114,7 @@ export interface CanvasGraph {
 }
 
 export interface GraphQueryStore {
+  loadPlanGap?(jobId:string,canvasId:string,input:GraphQueryInput):Promise<ReturnType<typeof projectKind> & {plan_read:PlanReadProof}>;
   loadCanvas(canvasId: string): Promise<CanvasGraph>;
   loadState(jobId: string): Promise<GraphQueryState>;
   saveState(jobId: string, state: GraphQueryState): Promise<void>;
@@ -169,6 +173,9 @@ function parseState(payload: unknown): GraphQueryState {
     projected_node_ids: unique(ids),
     blocked: graphQuery.blocked === true,
     trail: trail.slice(-40),
+    ...(typeof asRecord(graphQuery.plan_read).projection_sha256==='string' && Array.isArray(asRecord(graphQuery.plan_read).criterion_ids)
+      ? {plan_read:{projection_sha256:String(asRecord(graphQuery.plan_read).projection_sha256),
+          criterion_ids:(asRecord(graphQuery.plan_read).criterion_ids as unknown[]).filter((id):id is string=>typeof id==='string').slice(0,33)}} : {}),
   };
 }
 
@@ -249,6 +256,7 @@ export async function loadCanvasGraph(canvasId: string): Promise<CanvasGraph> {
 }
 
 export const sqlGraphQueryStore: GraphQueryStore = {
+  loadPlanGap: (jobId,canvasId,input)=>queryPlanGap(sql,jobId,canvasId,input),
   async loadCanvas(canvasId) {
     return loadCanvasGraph(canvasId);
   },
@@ -677,7 +685,11 @@ export async function executeGraphQuery(input: {
   }
 
   const graph = await store.loadCanvas(input.canvasId);
-  const projection = projectKind(graph, parsed.data);
+  if (parsed.data.kind==='plan_gap' && !store.loadPlanGap) throw new PlatformRuntimeHandlerError("OPERATION_REJECTED","Plan gap reader is unavailable",{statusCode:422,errorCode:"invalid_payload",retryable:false});
+  const projection = parsed.data.kind==='plan_gap' ? await store.loadPlanGap!(input.jobId,input.canvasId,parsed.data).catch(error=>{
+    if (error instanceof ControlInputError) throw new PlatformRuntimeHandlerError('OPERATION_REJECTED',error.message,{statusCode:error.retryable?422:409,errorCode:error.code,retryable:error.retryable,path:error.path});
+    throw error;
+  }) : projectKind(graph, parsed.data);
   const membership = new Set(
     graph.nodes
       .filter((node) => node.node_type === "root" || node.node_type === "fact" || node.node_type === "finding")
@@ -709,7 +721,8 @@ export async function executeGraphQuery(input: {
   result.budget.bytes_left = remaining.bytes_left - bytes;
   const nextIds = unique([...state.projected_node_ids, ...referable, ...idsMentionedInText(JSON.stringify(result.items), referable)]);
   const next: GraphQueryState = {
-    calls: state.calls + 1,
+    ...(state.plan_read ? {plan_read:state.plan_read} : {}),
+    ...('plan_read' in projection ? {plan_read:mergePlanRead(state.plan_read,projection.plan_read as PlanReadProof)} : {}),    calls: state.calls + 1,
     bytes: state.bytes + bytes,
     projected_node_ids: nextIds,
     blocked: false,

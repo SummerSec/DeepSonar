@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { PlanResult, SubmitPlanPayload } from "@deepsonar/shared-types";
 import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
+import { loadPlanGapReport } from "../plan-protocol/gap-report.js";
 import { readPlanAudit } from "../plan-protocol/index.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -187,6 +188,28 @@ if (!testDatabaseUrl) {
       assert.equal(resultAudit?.termination_reason, "continue");
       assert.equal(resultAudit?.raw?.tasks.length, 2);
 
+      const gapReport = await loadPlanGapReport(sql, canvasId, projectId);
+      assert.equal(gapReport.entries.length, 1);
+      assert.equal(gapReport.entries[0]?.audit?.completion_assessment, "unknown");
+      assert.equal(gapReport.entries[0]?.job_id, planJobId);
+      assert.deepEqual(gapReport, await loadPlanGapReport(sql, canvasId, projectId));
+      assert.equal((await loadPlanGapReport(sql, canvasId, randomUUID())).entries.length, 0);
+      assert.equal((await loadPlanGapReport(sql, hubCanvasId, projectId)).entries.length, 0);
+      for (const execution of [
+        [{ task_id: "not-in-plan", status: "done" }],
+        [{ task_id: "explore-auth", status: "done" }, { task_id: "explore-auth", status: "blocked" }],
+      ]) {
+        await assert.rejects(ingestEvent(planJobId, {
+          v: 1, event_id: randomUUID(), type: "plan_result",
+          payload: { v: 1, outcome: "continue", summary: "Invalid execution references must be rejected", execution },
+        }), (error: unknown) => error instanceof ControlInputError && error.code === "invalid_payload");
+      }
+      assert.deepEqual(gapReport, await loadPlanGapReport(sql, canvasId, projectId), "rejection does not alter audit");
+      await ingestEvent(planJobId, { v: 1, event_id: randomUUID(), type: "plan", payload: { plan: audit!.raw } });
+      const replaced = await loadPlanGapReport(sql, canvasId, projectId);
+      assert.equal(replaced.entries[0]?.audit?.proposed_outcome, null);
+      assert.notEqual(replaced.entries[0]?.audit?.source_sha256, gapReport.entries[0]?.audit?.source_sha256);
+
       await ingestEvent(hubJobId, {
         v: 1,
         event_id: randomUUID(),
@@ -238,8 +261,56 @@ if (!testDatabaseUrl) {
           return true;
         },
       );
+      const { buildReportInput, refreshTaskReport } = await import("../../report.js");
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE canvas_id = ${canvasId}`;
+      await sql`UPDATE canvas_nodes SET status = 'analysis_complete' WHERE id = ${rootId}`;
+      const beforeReportAudit = await buildReportInput(canvasId, sql);
+      const frozenHash = createHash("sha256").update(JSON.stringify(beforeReportAudit, null, 2)).digest("hex");
+      await sql`INSERT INTO task_reports (canvas_id, project_id, version, status, input_uri, input_sha256)
+        VALUES (${canvasId}, ${projectId}, 1, 'succeeded', 'fixture/report-input.json', ${frozenHash})`;
+      const reportJobId = randomUUID();
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${reportJobId}, ${projectId}, ${canvasId}, 'report', 'running',
+          ${sql.json({ name: "report", role_kind: "system", platform_tools: ["submit_plan"] })}, '{}'::jsonb)`;
+      // The current static system-role allowlist rejects this even when the snapshot asks for it.
+      await assert.rejects(
+        ingestEvent(reportJobId, { v: 1, event_id: randomUUID(), type: "plan", payload: { plan: audit!.raw } }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "tool_not_allowed",
+      );
+      const [reportAudit] = await sql`SELECT payload_json FROM jobs WHERE id = ${reportJobId}`;
+      assert.equal(readPlanAudit(reportAudit!.payload_json), null);
+      await sql`UPDATE jobs SET status = 'succeeded' WHERE id = ${reportJobId}`;
+      // Synthetic durable historical rows exercise projection isolation; not reachable via current ingestion.
+      await sql`INSERT INTO jobs (project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        SELECT ${projectId}, ${canvasId}, 'report', 'succeeded', '{}'::jsonb,
+          ${sql.json({ plan_protocol: audit } as never)} FROM generate_series(1, 33)`;
+      assert.deepEqual(await buildReportInput(canvasId, sql), beforeReportAudit);
+      assert.deepEqual(await refreshTaskReport(canvasId), { ok: false, reason: "plan_criteria_unproven" });
+      assert.deepEqual(await refreshTaskReport(canvasId), { ok: false, reason: "plan_criteria_unproven" });
+      assert.deepEqual(await buildReportInput(canvasId, sql), beforeReportAudit, "blocked refresh must neither append Report audits nor bounce a new Hub");
+      const [versions] = await sql`SELECT count(*)::int AS count FROM task_reports WHERE canvas_id = ${canvasId}`;
+      assert.equal(versions!.count, 1);
+
+      await sql`
+        INSERT INTO jobs (project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        SELECT ${projectId}, ${canvasId}, 'hub_reason', 'succeeded', '{}'::jsonb,
+          ${sql.json({ plan_protocol: audit } as never)}
+        FROM generate_series(1, 33)`;
+      const capped = await loadPlanGapReport(sql, canvasId, projectId);
+      assert.equal(capped.entries.length, 32);
+      assert.equal(capped.truncated, true);
+      const largeAudit = { ...audit!, raw: { ...audit!.raw!, tasks: Array.from({ length: 100 }, (_, index) => ({
+        ...audit!.raw!.tasks[0]!, id: `task-${index}`,
+        expected_outputs: Array.from({ length: 32 }, () => "x".repeat(500)),
+      })) } };
+      await sql`UPDATE jobs SET payload_json = ${sql.json({ plan_protocol: largeAudit } as never)}
+        WHERE canvas_id = ${canvasId}`;
+      const byteCapped = await loadPlanGapReport(sql, canvasId, projectId);
+      assert.equal(byteCapped.entries.length, 0);
+      assert.equal(byteCapped.truncated, true);
     } finally {
       const canvasIds = [canvasId, hubCanvasId];
+      await sql`DELETE FROM task_reports WHERE canvas_id = ANY(${canvasIds})`;
       await sql`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ${projectId})`;
       await sql`DELETE FROM canvas_edges WHERE canvas_id = ANY(${canvasIds})`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ANY(${canvasIds})`;

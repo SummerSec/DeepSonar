@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
+import { projectPlanGaps } from "../plan-protocol/gap-projection.js";
 import { audit } from "../../audit.js";
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import { extractDispatchPrompt, parseJsonRecord } from "../../job-dispatch-prompt.js";
@@ -425,6 +426,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       ...job,
       error: projectCredentialProviderError(job.error),
       payload_json: projectJobPayload(job.payload_json),
+      plan_gaps: projectPlanGaps(String(job.id), job.payload_json),
       agent_snapshot_json: projectJobSnapshot(snapshot),
     };
     const payloadRecord = job.payload_json && typeof job.payload_json === "object" && !Array.isArray(job.payload_json)

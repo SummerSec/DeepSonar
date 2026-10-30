@@ -42,6 +42,7 @@ test("canvas changes invalidate late poll and download completions", async () =>
 });
 
 test("报告状态标签保持服务端原因，不在前端推断收敛状态", () => {
+  assert.equal(taskReportAvailabilityLabel("plan_not_ready"), "计划判据或证据尚未满足完成条件");
   assert.equal(taskReportAvailabilityLabel("findings_not_converged"), "配置阈值范围内仍有 Finding 未收敛");
   assert.equal(taskReportAvailabilityLabel("active_work"), "仍有工作正在执行");
   assert.equal(taskReportAvailabilityLabel("report_failed"), "报告生成失败，可重试");
