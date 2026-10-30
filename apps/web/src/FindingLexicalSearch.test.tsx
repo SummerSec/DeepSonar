@@ -155,3 +155,17 @@ test("revocation and failures clear sensitive results; 409 requires restarting f
     assert.ok(env.container.querySelector('[role="alert"]'));
   } finally { await env.cleanup(); }
 });
+
+
+test("uppercase UUID request accepts the same canonical lowercase subject", async () => {
+  const env = setup();
+  const canonical = "abcdef01-2345-4678-9abc-def012345678";
+  try {
+    await env.render(canonical.toUpperCase());
+    await env.click("查看相似文本");
+    assert.equal(env.requests[0].id, canonical.toUpperCase());
+    await act(async () => env.requests[0].pending.resolve(result(canonical, "canonical-result")));
+    assert.match(env.container.textContent!, /canonical-result/);
+    assert.equal(env.container.querySelector('[role="alert"]'), null);
+  } finally { await env.cleanup(); }
+});

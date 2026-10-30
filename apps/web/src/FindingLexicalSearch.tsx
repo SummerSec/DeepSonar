@@ -35,7 +35,7 @@ function LexicalSearchWindow({ findingId }: { findingId: string }) {
     try {
       const result = await api.findingLexicalSearch(findingId, cursor, abort.signal);
       if (current !== request.current || abort.signal.aborted) return;
-      if (result.subject_id !== findingId) throw new Error("subject mismatch");
+      if (result.subject_id.toLowerCase() !== findingId.toLowerCase()) throw new Error("subject mismatch");
       setPage(result);
     } catch (failure) {
       if (current !== request.current || abort.signal.aborted) return;
