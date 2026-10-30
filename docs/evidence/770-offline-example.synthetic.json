@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "dataset_id": "synthetic-tool-example",
+  "dataset_kind": "synthetic",
+  "metadata": {
+    "labelset_revision": "synthetic-r1",
+    "annotator_ids": [],
+    "labeling_method": "synthetic"
+  },
+  "config": {
+    "k": 25,
+    "scan_limit": 128,
+    "predeclared": true
+  },
+  "sources": [
+    {
+      "id": "77000000-0000-0000-0000-000000000001",
+      "project_id": "77000000-0000-0000-0000-000000000100",
+      "job_id": "77000000-0000-0000-0000-000000001001",
+      "split": "tuning",
+      "asset_group": "tuning-asset",
+      "family_group": "tuning-family",
+      "revision": "synthetic-r1",
+      "digest": null,
+      "title": "中文 查询参数 注入",
+      "location": "/example/search",
+      "summary": "synthetic declaration only",
+      "profile": "security.vulnerability",
+      "category": "synthetic",
+      "identity_declarations": {
+        "asset": "declared-example"
+      }
+    },
+    {
+      "id": "77000000-0000-0000-0000-000000000002",
+      "project_id": "77000000-0000-0000-0000-000000000100",
+      "job_id": "77000000-0000-0000-0000-000000001002",
+      "split": "tuning",
+      "asset_group": "tuning-asset",
+      "family_group": "tuning-family",
+      "revision": "synthetic-r1",
+      "digest": null,
+      "title": "查询参数 SQL 注入",
+      "location": "/example/search",
+      "summary": "synthetic declaration only",
+      "profile": "security.vulnerability",
+      "category": "synthetic",
+      "identity_declarations": {
+        "asset": "declared-example"
+      }
+    },
+    {
+      "id": "77000000-0000-0000-0000-000000000003",
+      "project_id": "77000000-0000-0000-0000-000000000100",
+      "job_id": "77000000-0000-0000-0000-000000001003",
+      "split": "tuning",
+      "asset_group": "tuning-asset",
+      "family_group": "tuning-family",
+      "revision": "synthetic-r1",
+      "digest": null,
+      "title": "unrelated sample",
+      "location": null,
+      "summary": null,
+      "profile": "security.vulnerability",
+      "category": null,
+      "identity_declarations": {
+        "asset": null
+      }
+    },
+    {
+      "id": "77000000-0000-0000-0000-000000000004",
+      "project_id": "77000000-0000-0000-0000-000000000200",
+      "job_id": "77000000-0000-0000-0000-000000001004",
+      "split": "holdout",
+      "asset_group": "holdout-asset",
+      "family_group": "holdout-family",
+      "revision": "synthetic-r1",
+      "digest": null,
+      "title": "中文 查询参数 注入",
+      "location": "/example/search",
+      "summary": "synthetic declaration only",
+      "profile": "security.vulnerability",
+      "category": "synthetic",
+      "identity_declarations": {
+        "asset": "declared-example"
+      }
+    },
+    {
+      "id": "77000000-0000-0000-0000-000000000005",
+      "project_id": "77000000-0000-0000-0000-000000000200",
+      "job_id": "77000000-0000-0000-0000-000000001005",
+      "split": "holdout",
+      "asset_group": "holdout-asset",
+      "family_group": "holdout-family",
+      "revision": "synthetic-r1",
+      "digest": null,
+      "title": "查询参数 SQL 注入",
+      "location": "/example/search",
+      "summary": "synthetic declaration only",
+      "profile": "security.vulnerability",
+      "category": "synthetic",
+      "identity_declarations": {
+        "asset": "declared-example"
+      }
+    },
+    {
+      "id": "77000000-0000-0000-0000-000000000006",
+      "project_id": "77000000-0000-0000-0000-000000000200",
+      "job_id": "77000000-0000-0000-0000-000000001006",
+      "split": "holdout",
+      "asset_group": "holdout-asset",
+      "family_group": "holdout-family",
+      "revision": "synthetic-r1",
+      "digest": null,
+      "title": "unrelated sample",
+      "location": null,
+      "summary": null,
+      "profile": "security.vulnerability",
+      "category": null,
+      "identity_declarations": {
+        "asset": null
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "left_id": "77000000-0000-0000-0000-000000000001",
+      "right_id": "77000000-0000-0000-0000-000000000002",
+      "label": "suspected_same_issue"
+    },
+    {
+      "left_id": "77000000-0000-0000-0000-000000000001",
+      "right_id": "77000000-0000-0000-0000-000000000003",
+      "label": "distinct"
+    },
+    {
+      "left_id": "77000000-0000-0000-0000-000000000002",
+      "right_id": "77000000-0000-0000-0000-000000000003",
+      "label": null
+    },
+    {
+      "left_id": "77000000-0000-0000-0000-000000000004",
+      "right_id": "77000000-0000-0000-0000-000000000005",
+      "label": "similar"
+    },
+    {
+      "left_id": "77000000-0000-0000-0000-000000000004",
+      "right_id": "77000000-0000-0000-0000-000000000006",
+      "label": "same_root_cause_different_instance"
+    },
+    {
+      "left_id": "77000000-0000-0000-0000-000000000005",
+      "right_id": "77000000-0000-0000-0000-000000000006",
+      "label": "insufficient_information"
+    }
+  ]
+}

@@ -173,3 +173,5 @@
 [#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。
 
 #770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C与D词法检索/持久弱候选基础待评审，强关系建议未发布）。
+
+#770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具待评审，独立人工质量验收未完成）。

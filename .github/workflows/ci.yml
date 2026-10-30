@@ -227,6 +227,9 @@ jobs:
       - name: Finding protocol and CVSS unit
         run: pnpm ci:unit:finding-protocol
 
+      - name: Finding offline evaluation unit
+        run: pnpm ci:unit:finding-offline-evaluation
+
       - name: Finding research ranking unit
         run: pnpm ci:unit:finding-research
 
