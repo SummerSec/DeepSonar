@@ -222,9 +222,9 @@ export function evaluateTaskOutcomeAdmission(
   if (outcome?.mode === "bounty_submission") {
     if (outcome.rules_status !== "supplied" || !snapshot) issues.push(issue("outcome_rules_unknown", "task_contract.outcome.rules_status", "附加项目规则尚未确定。", "由授权创建者补充规则材料；当前保存观察并补证。"));
     else {
-      const target = snapshot.targets.find((item) => item.reference === claim.target);
-      if (!target) observations.push(issue("outcome_program_target_excluded", "outcome_claim.target", "候选目标不在附加项目规则范围内。", "保留观察，不作为本任务研究候选。"));
-      else if (claim.baseline !== target.baseline) issues.push(issue("outcome_baseline_mismatch", "outcome_claim.baseline", "候选基线与附加规则适用基线不一致。", "补充匹配基线的证据或重新确认规则。"));
+      const targets = snapshot.targets.filter((item) => item.reference === claim.target);
+      if (targets.length === 0) observations.push(issue("outcome_program_target_excluded", "outcome_claim.target", "候选目标不在附加项目规则范围内。", "保留观察，不作为本任务研究候选。"));
+      else if (!targets.some((item) => item.baseline === claim.baseline)) issues.push(issue("outcome_baseline_mismatch", "outcome_claim.baseline", "候选基线与附加规则适用基线不一致。", "补充匹配基线的证据或重新确认规则。"));
       for (const [index, assessment] of (claim.rule_assessments ?? []).entries()) {
         if (!snapshot.rules.some((rule) => rule.id === assessment.rule_id)) issues.push(issue("outcome_rule_unknown", `outcome_claim.rule_assessments.${index}.rule_id`, "附加规则声明不属于冻结快照。", "使用当前规则快照中的规则 ID。"));
       }

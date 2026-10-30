@@ -41,6 +41,8 @@ bounty_submission 的 `rules_status` 为 supplied 或 unknown；unknown 允许�
 
 源材料 `source.sha256` 是操作员声明的材料身份，不是平台认证官方规则或当前授权；候选引用的 `task_contract_sha256` 是服务端整契约摘要，二者不能混用。基线字符串不证明可达性，规则声明不创建凭据或扩大网络/操作权限。逐规则筛选仅是附加前置门，不是独立提交资格判定。
 
+同一目标 reference 可声明多个 baseline；候选须命中同一条 reference/baseline 组合，不能只取首个同名目标或借用其他目标的版本。若任务自身固定了 baseline，该限制仍同时生效。
+
 ## 后续高置信成果与 #775
 
 高置信提交候选仍需独立复核、可复现证据、适用的攻击前提/链、knownness 的目标版本适用性、项目资格与报告收敛。不能用任意置信度数值阈值、severity、相似文本聚类、人工 disposition 或技术 confirmed 替代这些证据；不硬编码具体项目规则。

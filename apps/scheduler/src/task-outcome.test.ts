@@ -151,6 +151,28 @@ test("program exclusions and unmet requirements are observations, unknown assess
   assert.equal(assess({ ...claim(), rule_assessments: claim(value).rule_assessments }).status, "blocked");
 });
 
+test("program target matching considers every authorized reference and baseline pair", () => {
+  const base = snapshot();
+  const targets = [
+    { ...base.targets[0], id: "a-v1", baseline: "v1" },
+    { ...base.targets[0], id: "b-v2", baseline: "v2" },
+    { ...base.targets[0], id: "c-other", reference: "http://127.0.0.1:9090", baseline: "v3" },
+  ];
+  for (const ordered of [targets, [...targets].reverse()]) {
+    for (const baseline of ["v1", "v2"]) {
+      const value = normalizeTaskContract({ ...contract(true), baseline,
+        outcome: { mode: "bounty_submission", rules_status: "supplied", rule_snapshot: { ...base, targets: ordered } } });
+      const proposal = { ...claim(value), baseline };
+      assert.equal(assess(proposal, value).status, "admitted_for_research");
+      assert.ok(codes(assess({ ...proposal, baseline: baseline === "v1" ? "v2" : "v1" }, value)).includes("outcome_baseline_mismatch"), "a program-authorized version cannot override the task's pinned baseline");
+    }
+    const unpinned = normalizeTaskContract({ ...contract(true),
+      outcome: { mode: "bounty_submission", rules_status: "supplied", rule_snapshot: { ...base, targets: ordered } } });
+    for (const baseline of ["v1", "v2"]) assert.equal(assess({ ...claim(unpinned), baseline }, unpinned).status, "admitted_for_research");
+    for (const baseline of ["v3", undefined]) assert.ok(codes(assess({ ...claim(unpinned), baseline }, unpinned)).includes("outcome_baseline_mismatch"));
+  }
+});
+
 test("bounty target must also match program reference and program baseline", () => {
   const value = contract(true);
   assert.ok(codes(assess({ ...claim(value), baseline: "other" }, value)).includes("outcome_baseline_mismatch"));
