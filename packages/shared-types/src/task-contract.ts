@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TaskOutcomeSpec, normalizeTaskOutcomeSpec } from "./task-outcome.js";
 
 export const TASK_CONTRACT_ACTIONS = ["read", "workspace_write", "write", "egress"] as const;
 export const TASK_CONTRACT_TEMPLATE_IDS = ["engineering", "whitebox", "blackbox", "graybox"] as const;
@@ -12,6 +13,7 @@ export const TaskContract = z.object({
   template_id: z.enum(TASK_CONTRACT_TEMPLATE_IDS),
   template_version: z.literal(1),
   objective: text.optional(),
+  outcome: TaskOutcomeSpec.optional(),
   targets: texts,
   baseline: text.optional(),
   scope: texts,
@@ -91,6 +93,7 @@ export function normalizeTaskContract(input: unknown): TaskContract {
   const value = TaskContract.parse(input);
   return {
     ...value,
+    ...(value.outcome ? { outcome: normalizeTaskOutcomeSpec(value.outcome) } : {}),
     targets: uniqueSorted(value.targets),
     scope: uniqueSorted(value.scope),
     exclusions: uniqueSorted(value.exclusions),
@@ -114,6 +117,9 @@ const feedback = (code: string, path: string, message: string, suggestion: strin
 export function taskContractWarnings(contract?: TaskContract | null): TaskContractFeedback[] {
   if (!contract) return [feedback("task_contract_not_assessed", "task_contract", "未提供任务契约，未评估文本完整性或执行前置条件。", "可使用场景模板补充结构化契约；原始需求仍会保留。")];
   const result: TaskContractFeedback[] = [];
+  if (contract.outcome?.mode === "bounty_submission" && contract.outcome.rules_status === "unknown") {
+    result.push(feedback("task_outcome_rules_unknown", "task_contract.outcome.rules_status", "成果规则未知：可先观察和补证，但不能提交 Finding 或认定成果达标。", "由授权创建者补充可追溯规则后重新下发；已冻结 Job 不自动采用新规则。"));
+  }
   for (const field of TASK_CONTRACT_TEMPLATES[contract.template_id].required_fields) {
     const value = contract[field];
     if (value === undefined || (Array.isArray(value) && value.length === 0)) {
@@ -145,6 +151,10 @@ export interface TaskContractDispatchFacts {
 /** Refuse dispatch if any declared permitted action exceeds a current trusted boundary. */
 export function validateTaskContractDispatch(contract: TaskContract, facts: TaskContractDispatchFacts): TaskContractFeedback[] {
   const result: TaskContractFeedback[] = [];
+  for (const field of ["objective", "targets", "scope", "acceptance", "evidence"] as const) {
+    const value = contract[field];
+    if (value === undefined || value.length === 0) result.push(feedback("task_contract_goal_field_missing", `task_contract.${field}`, "任务缺少可执行、可关联的目标判据。", "补充目标、资产、范围、证据要求和验收标准；省略成果模式不会跳过已有契约。"));
+  }
   if (contract.required_actions.length === 0) result.push(feedback("task_contract_actions_unknown", "task_contract.required_actions", "尚未声明执行所需动作，无法核对权限边界。", "显式列出 read、workspace_write、write 或 egress；不要从需求文本推断授权。"));
   for (const action of uniqueSorted([...contract.required_actions, ...contract.allowed_actions])) {
     const path = contract.required_actions.includes(action) ? "task_contract.required_actions" : "task_contract.allowed_actions";
@@ -170,4 +180,9 @@ export function validateTaskContractDispatch(contract: TaskContract, facts: Task
     if (item.required && (item.state !== "declared" || !facts.verifiedPrerequisiteIds?.includes(item.id))) result.push(feedback("task_contract_prerequisite_blocked", `task_contract.prerequisites.${index}`, "必要前置条件未经当前可信核验。", "补齐材料并由可信适配器核验，或收窄为不依赖该条件的任务。"));
   }
   return result;
+}
+
+/** Stable full-contract bytes for Scheduler-owned SHA-256 identity. */
+export function canonicalTaskContract(input: unknown): string {
+  return JSON.stringify(normalizeTaskContract(input));
 }

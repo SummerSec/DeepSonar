@@ -37,6 +37,14 @@ export interface CompactPromptResult {
   budgetTokens: number;
 }
 
+/** Protected task rules must fail visibly rather than disappear during retry. */
+export class TaskContractPromptBudgetExceededError extends Error {
+  readonly code = "task_contract_prompt_budget_exceeded";
+  constructor(readonly requiredTokens: number, readonly targetTokens: number) {
+    super(`task_contract_prompt_budget_exceeded: frozen task rules require approximately ${requiredTokens} tokens; compact input budget is ${targetTokens}. Reduce the contract or select a larger model budget before a new dispatch.`);
+  }
+}
+
 export function isContextWindowExceededMessage(text: string): boolean {
   return CONTEXT_WINDOW_EXCEEDED_RE.test(text);
 }
@@ -94,18 +102,21 @@ export function resolveContextWindowBudgetTokens(contextWindowTokens: number | n
 
 /**
  * 一次压缩重试：保留首尾、丢弃中间证据/历史大段，并写入明确截断标记。
- * 供 executor 在 payload 带 compact_retry 标记时调用。
+ * 供 executor 在 payload 带 compact_retry 标记时调用。冻结契约作为独立尾段，
+ * 先预留预算再压缩普通上下文；无法完整容纳时明确失败，绝不静默裁剪规则。
  */
 export function compactPromptForContextWindowRetry(
   prompt: string,
   contextWindowTokens?: number | null,
+  protectedTaskContract = "",
 ): CompactPromptResult {
   const budgetTokens = resolveContextWindowBudgetTokens(contextWindowTokens);
   const targetTokens = Math.max(1024, Math.floor(budgetTokens * COMPACT_TARGET_RATIO));
-  const estimatedTokensBefore = estimatePromptTokens(prompt);
+  const fullPrompt = prompt + protectedTaskContract;
+  const estimatedTokensBefore = estimatePromptTokens(fullPrompt);
   if (estimatedTokensBefore <= targetTokens) {
     return {
-      prompt,
+      prompt: fullPrompt,
       compacted: false,
       estimatedTokensBefore,
       estimatedTokensAfter: estimatedTokensBefore,
@@ -114,12 +125,19 @@ export function compactPromptForContextWindowRetry(
   }
   const targetChars = targetTokens * CHARS_PER_TOKEN;
   const marker = `\n\n[deepsonar:context_window_compact_retry omitted_middle chars=${prompt.length} estimated_tokens=${estimatedTokensBefore} budget_tokens=${budgetTokens}]\n\n`;
-  const available = Math.max(256, targetChars - marker.length);
+  const remainingChars = targetChars - marker.length - protectedTaskContract.length;
+  if (protectedTaskContract && remainingChars < 256) {
+    throw new TaskContractPromptBudgetExceededError(
+      estimatePromptTokens(protectedTaskContract + marker) + 64,
+      targetTokens,
+    );
+  }
+  const available = Math.max(256, remainingChars);
   const headLen = Math.max(128, Math.floor(available * COMPACT_HEAD_RATIO));
   const tailLen = Math.max(64, Math.floor(available * COMPACT_TAIL_RATIO));
   const head = prompt.slice(0, headLen);
   const tail = prompt.slice(Math.max(headLen, prompt.length - tailLen));
-  const compactedPrompt = `${head}${marker}${tail}`;
+  const compactedPrompt = `${head}${marker}${tail}${protectedTaskContract}`;
   return {
     prompt: compactedPrompt,
     compacted: true,

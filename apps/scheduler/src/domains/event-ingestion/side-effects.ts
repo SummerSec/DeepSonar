@@ -1,6 +1,7 @@
 import { analysisCompleteGateExpected } from "./completion-feedback.js";
 import { createHash } from "node:crypto";
 import { findingSourceDigest } from "../artifacts/model.js";
+import { admitTaskOutcomeCandidate } from "../../task-outcome-admission.js";
 import {
   DonePayload,
   FactPayload,
@@ -931,10 +932,11 @@ export function createEventIngestionSideEffectApplication(
 
     if (type === "finding") {
       const f = validatedPayload as FindingPayload;
+      const outcomeAdmission = await admitTaskOutcomeCandidate(tx, job, f.outcome_claim);
       const protocol = await ports.findingProtocolForJob(tx, job as Record<string, unknown>);
       let normalized: ReturnType<typeof normalizeFindingProposal>;
       try {
-        normalized = normalizeFindingProposal(f, protocol);
+        normalized = normalizeFindingProposal({ ...f, ...(outcomeAdmission ? { outcome_claim: outcomeAdmission.claim } : {}) }, protocol);
       } catch (error) {
         throw new ControlInputError(
           "invalid_payload",
@@ -990,8 +992,9 @@ export function createEventIngestionSideEffectApplication(
         sourceEventId: services.eventId ?? null,
         sourceOperation: "emit_finding",
         artifactKey: findingArtifactKey(jobId, fingerprint),
-        document: findingProposalToArtifact(normalized),
+        document: findingProposalToArtifact(normalized, outcomeAdmission),
       });
+      const { task_outcome_admission: _untrustedAdmission, ...sourceRaw } = normalized.raw ?? {};
       const [finding] = await tx`
       INSERT INTO findings ${tx({
         project_id: job.project_id,
@@ -1009,7 +1012,8 @@ export function createEventIngestionSideEffectApplication(
         location: normalized.location ?? null,
         summary: normalized.summary ?? null,
         raw_json: {
-          ...(normalized.raw ?? {}),
+          ...sourceRaw,
+          ...(outcomeAdmission ? { task_outcome_admission: outcomeAdmission } : {}),
           impact: normalized.impact ?? null,
           ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
         } as never,

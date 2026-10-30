@@ -31,6 +31,7 @@ const REJECTION_DETAIL_ALLOWLIST = [
   "remaining",
   "calls_left",
   "bytes_left",
+  "task_outcome_admission",
 ] as const;
 
 const DETAIL_STRING_MAX = 240;

@@ -1055,7 +1055,6 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       initialInput += `\n\n${composeWorkerInstruction(composeScopeForPrompt(frozenTaskSeeds(taskTarget)).locations)}`;
     }
   }
-  initialInput += taskContractPrompt(snapshot);
   initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
   initialInput += `\n\n${CONTROL_TRANSPORT_POINTER} 完整调用规则见 /workspace/AGENTS.md「调用规则」与 deepsonar-control Skill。`;
   if (snapshot.knowledge_assignment) {
@@ -1070,14 +1069,16 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     contextWindowCompactMeta = compactPromptForContextWindowRetry(
       initialInput,
       snapshot.context_window_tokens ?? null,
+      taskContractPrompt(snapshot),
     );
+    initialInput = contextWindowCompactMeta.prompt;
     if (contextWindowCompactMeta.compacted) {
-      initialInput = contextWindowCompactMeta.prompt;
       console.error(
         `[real-agent] context_window compact-retry applied job=${jobId} tokens ${contextWindowCompactMeta.estimatedTokensBefore}->${contextWindowCompactMeta.estimatedTokensAfter} budget=${contextWindowCompactMeta.budgetTokens}`,
       );
     }
   }
+  if (!compactRetry) initialInput += taskContractPrompt(snapshot);
   const dispatchedPrompt = operatorVisibleDispatchPrompt(initialInput, graph?.yaml ?? null);
 
   const roleDescription = snapshot.role_description;

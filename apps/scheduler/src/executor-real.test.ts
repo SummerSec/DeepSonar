@@ -762,3 +762,13 @@ test("verify executor input uses blind-verify prompt and frozen subject", () => 
   const verifyBlock = source.slice(source.indexOf("} else if (isVerify)"));
   assert.doesNotMatch(verifyBlock.slice(0, verifyBlock.indexOf("} else if (isReport)")), /finding\.title|finding\.summary|标题：|严重度：|描述：/);
 });
+
+
+test("all executor roles preserve the frozen task contract independently of retry trimming", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const commonInput = source.slice(source.indexOf("  const compactRetry = readContextWindowCompactRetryMarker(payload);"), source.indexOf("  const roleDescription = snapshot.role_description;"));
+  assert.match(commonInput, /compactPromptForContextWindowRetry\(\s*initialInput,\s*snapshot\.context_window_tokens \?\? null,\s*taskContractPrompt\(snapshot\),/);
+  assert.match(commonInput, /initialInput = contextWindowCompactMeta\.prompt;/);
+  assert.match(commonInput, /if \(!compactRetry\) initialInput \+= taskContractPrompt\(snapshot\);/);
+  assert.equal((source.match(/initialInput \+= taskContractPrompt\(snapshot\)/g) ?? []).length, 1);
+});
