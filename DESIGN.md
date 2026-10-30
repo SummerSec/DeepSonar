@@ -113,6 +113,8 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 ### 4.2 Plan
 
+#775 A 在报告冻结 Plan 审计，并通过现有 Fact 人工验证 API 接纳版本化操作员判据绑定。平台核对同任务 Job/Attempt、Artifact 与实际留存字节，刷新时显式标记过期、冲突和不足；报告机器整体判断仍为 unknown。B 首片可在既有 Hub Intent 上携带版本化 plan_basis，以当前任务输入、来源版本与单步预算检查一次补证；只有全判据当前正向操作员评价且已读完整，才允许明确 complete。没有另造执行通道。真实语义评测与 C 未验收；见 [Plan 缺口投影](docs/PLAN_GAP_PROJECTION.md)。
+
 当前 Hub 仍以 Intent 驱动，长期目标是把 Intent 适配为 `PlanTask`，由模型声明目的、依赖、输入引用、期望输出、验证路径、完成理由和预算。平台验证 schema、canonical 引用、依赖环、权限、预算和可执行性；模型判断业务上继续、收敛、阻塞或请求人工。
 
 `maxHubRounds`、follow-up 深度、token、wall time、并发和沙箱限制都是不同的护栏。它们可以阻止失控，但不能单独代替模型说明“为什么已经完成”。Plan 协议全面落地前，现有 Hub 和固定角色闭环仍是唯一生产主路径。
@@ -133,6 +135,10 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 当前 Phase 1 已接入 Control API 的严格 schema/字节约束和标准错误路径。模型收到 `model_correctable` 后应重新读取能力目录、节点引用或当前状态，再以新的提案 revision 和 Idempotency-Key 提交。预算耗尽必须明确进入 `blocked` 或 `needs_human`，不能重复发送相同错误后静默结束。
 
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
+
+A 阶段错误矩阵、冻结契约回放及持久性缺口见 [#776 基线](docs/REPAIR_FEEDBACK_BASELINE.md)；不代表同会话修复或模型质量已验收。
+
+[#776 B](docs/REPAIR_FEEDBACK_DONE_REPAIR.md)仅为 mark_job_done 增加原 Control 通道上的持久拒绝/接受回执与 revision；persisted_deferred 不等于效果结算，完整完成门与真实模型质量尚未验收。C0 仅对已获图查询权限的 Hub 无效引用提供 scoped 刷新指引，不引入图版本锁或自动授权。 C1 将既有 Hub complete 预检的完成门缺失项投影为有界反馈，不改变门判定或 Verify 技术结论，也不将该投影当作已接受效果回执。
 
 ## 5. 当前执行闭环
 

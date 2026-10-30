@@ -45,7 +45,7 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
-assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "456f09e063440d8146add73a521bd975b2ec03695c25218873fbda1846ece7f3");
+assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "c93e4111dd156efa812345df6103a7cc03b6d957415c381ac010756a29477f4e");
 assert.match(skillContent, /所有 CLI 都只能使用 Job 级 HTTP 控制 API/);
 assert.match(skillContent, /Agent 通过当前 CLI 可用的 HTTP 工具/);
 assert.match(skillContent, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
@@ -56,6 +56,9 @@ assert.match(skillContent, /Idempotency-Key/);
 assert.match(skillContent, /不要先尝试 MCP，也不要在 API 失败后回退到 MCP/);
 assert.match(skillContent, /repair/);
 assert.match(skillContent, /model_correctable/);
+assert.match(skillContent, /X-DeepSonar-Proposal-Revision/);
+assert.match(skillContent, /查询只读取持久结果，不恢复执行器本地完成门/);
+assert.match(skillContent, /原 key、revision 和完全相同 payload 再 POST/);
 failOnLegacyControlText(skillContent, "静态控制 Skill");
 
 const overriddenSkills = injectPlatformControlSkill([
