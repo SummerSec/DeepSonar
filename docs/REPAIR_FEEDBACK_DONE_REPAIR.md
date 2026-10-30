@@ -3,7 +3,7 @@
 > 状态：实现中；以独立 PR 的测试和评审结果为验收依据。真实模型理解质量未评测。
 > 同步日期：2026-10-29
 
-本切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；引用与完整完成门扩展属于 C。
+B 切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；C0/C1 的有限扩展及尚未交付的完整 C 边界见下文。
 
 ## 协议
 
@@ -43,10 +43,21 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 `reference-refresh.integration.test.ts` 使用真实 Fastify 注入、短期 token、隔离 PostgreSQL、`executeGraphQuery`、实际 Hub 已见引用解析与数据库预检。夹具 handler 只返回预检结果，不运行真实 executor/CLI，也不结算 Hub 副作用。测试证明跨 Job/项目和伪造 canvas 输入被拒绝、恶意 details 不成为指引、无权限/Canvas 不获得链接，以及已查询后删除的引用仍被拒绝；合法引用仍不能绕过缺少证据的完成门。
 
+
+## Hub complete 的有界缺失项反馈（C1）
+
+`submit_hub_decision.complete` 仍使用既有 `evaluateAnalysisCompleteGate`。预检或最终写入被该门拒绝时，错误保持 `invalid_payload`、路径 `complete`，`repair.expected.kind` 为 `analysis_complete_gate`。投影只依据门结果的已知 blocker 格式生成 `observed_counts`：`active_work`、`no_role_work`、`finding_not_converged`、`missing_verification_round`、`missing_human_blocker`、`open_round`、`other`。未知格式只计入 `other`，不回显原文；不输出 Finding/轮次 ID、标题、issue 文本或证据正文。
+
+每类计数上限为 `count_cap: 1000`，超过时 `count_capped: true`。`counts_scope: gate_observations_not_inventory` 明确这些是门返回的观察计数，不是完整工作清单；例如既有未关闭轮次查询有 `LIMIT 5`，未在此修改。`expected.action` 要求按当前授权补充工作、验证证据或人工处理，禁止改写结论凑门，缺失项解决后新 key 重提。固定字段与标量使反馈大小有界，不放宽通用 handler details 白名单。
+
+预检通过并不锁定状态；最终 ingestion 仍运行相同完成门，期间新增的活跃工作等会使提交失败并回滚。C1 同时替换最终拒绝中原来拼接的自由标题/issue 文本，属于反馈脱敏，不改变收敛条件、Verify 技术确认、权限或未知效果规则。该反馈不编造 `accepted_effects`，不新增 Hub 持久 revision/修正预算或状态，不代表完整 C 已交付。
+
+`completion-feedback.integration.test.ts` 使用真实 Fastify 注入、Job token、隔离 PostgreSQL、原预检与最终 `ingestEvent`。门证据由数据库夹具构造，不代表真实模型产物或独立技术验证质量。测试覆盖各缺失类别、超过 1000 项的截断、原 open-round 查询的观测上限、跨项目/Job/引用拒绝，以及预检后状态变化导致最终回滚。满足原门后真实事件可落地、相同事件重放不重复，root 进入 `analysis_complete` 而 Hub Job 保持 `running`；不将此称为 Job 终态结算。单元测试验证固定大小、确定顺序无关投影及未知 blocker 脱敏，分别接入现有 `ci:unit:capability-pack` 和 `ci:integration:platform-api`。
+
 ## 验收边界
 
 行为验证必须包含首次拒绝后接受、旧 key 重放、冲突/旧 revision、响应丢失、重启、预算耗尽、取消/租约失效、未知效果、scope 和数据库写失败。实际通过项以 PR 记录为准，本文件不把规划当作通过证据。
 
-运行器合成测试仅证明协议行为；真实模型是否理解反馈、恢复率、修正轮数、额外 token/时间成本及人工介入率必须独立评测。本切片不调用真实模型或生产服务。C 的引用刷新、完整产物/证据门和各 CLI 的完整行为覆盖仍需后续交付。
+运行器合成测试仅证明协议行为；真实模型是否理解反馈、恢复率、修正轮数、额外 token/时间成本及人工介入率必须独立评测。本切片不调用真实模型或生产服务。C0/C1 仅覆盖引用指引与既有 Hub complete 门的缺失项投影；完整产物/证据门、Hub 持久修正链和各 CLI 的完整行为验收仍需后续交付。
 
 代码：[回执事务](../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Control 组装](../apps/scheduler/src/domains/platform-api/completion.ts)、[路由](../apps/scheduler/src/domains/platform-api/routes.ts)、[平台控制 Skill](../apps/scheduler/src/platform-control-skill.ts)。

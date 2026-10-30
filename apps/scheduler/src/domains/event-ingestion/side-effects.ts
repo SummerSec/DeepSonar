@@ -1,3 +1,4 @@
+import { analysisCompleteGateExpected } from "./completion-feedback.js";
 import { createHash } from "node:crypto";
 import { findingSourceDigest } from "../artifacts/model.js";
 import {
@@ -513,22 +514,12 @@ export function createEventIngestionSideEffectApplication(
     if (decision.complete) {
       const gate = await ports.findingVerification.evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
       if (!gate.ok) {
-        if (phase === "preflight") {
-          throw new ControlInputError(
-            "invalid_payload",
-            "Hub complete 尚未满足当前画布收敛门；请补充工作或请求人工处理。",
-            "complete",
-          );
-        }
-        const detail = gate.problems.length > 0
-          ? gate.problems
-              .slice(0, 8)
-              .map((problem) => problem.finding_id
-                ? `[${problem.severity}] ${problem.title || problem.finding_id}: ${problem.verify_status}（${problem.issue}）`
-                : problem.issue)
-              .join("; ")
-          : gate.blockers.slice(0, 5).join("; ");
-        throw new ControlInputError("invalid_payload", `Hub complete 被拒绝：${detail}`, "complete");
+        throw new ControlInputError(
+          "invalid_payload",
+          "Hub complete 尚未满足当前画布收敛门；请按 expected 补充工作、验证证据或请求人工处理。",
+          "complete",
+          { expected: analysisCompleteGateExpected(gate) },
+        );
       }
       return {
         decision,
