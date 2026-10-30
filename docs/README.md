@@ -89,7 +89,7 @@
 
 [#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；作为 B 前历史基线保留。
 
-[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；完整 C 和真实模型效果仍待交付。
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；限定 C 实现已交付；独立预算与最后生命周期证据见 [逐项验收及关闭条件](REPAIR_FEEDBACK_ACCEPTANCE.md)，真实模型效果按用户要求不作为验收门。
 
 ## 进行中 / 部分落地
 
@@ -172,4 +172,4 @@
 
 [有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久成功回执、真实模型收益与 C 尚未验收。A/B 实现入口由 #791 的索引说明维护，本设计入口补充验收差额，不替代其实现说明，也不表示相关 PR 已合入 main。
 
-[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。
+[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI十八流程的真实代码、合成协议和未验收边界；不是模型质量报告。

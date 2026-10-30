@@ -1,21 +1,23 @@
 # 完成修正的 CLI 离线矩阵（#776）
 
 > 状态：离线协议验证；不代表真实 CLI 可执行程序或模型理解质量验收。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 本切片复用 [B1 持久完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)，不改变运行时、预算、权限或恢复协议。三个适配器均调用生产 `runRealAgent`、adapter 和 JSONL framer；版本跟随 [适配器定义](../packages/runtime-sandbox/src/runtime-adapters.ts)。
 
 ## 流程与分母
 
-| CLI | 首次有效 revision 0 | 拒绝、查询、修正 | 接受后响应丢失与恢复 |
-| --- | --- | --- | --- |
-| Claude Code | 通过 | 通过 | 通过 |
-| Pi | 通过 | 通过 | 通过 |
-| DSH | 通过 | 通过 | 通过 |
+| CLI | 首次有效 revision 0 | 拒绝、查询、修正 | 接受后响应丢失与恢复 | 无进展停止 | 次数耗尽 | CLI 退出与迟到输入 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | 通过 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| Pi | 通过 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| DSH | 通过 | 通过 | 通过 | 通过 | 通过 | 通过 |
 
 每格使用独立 Job。拒绝后修正流程先拒绝超限 summary，读取拒绝回执，验证同 key 改内容及旧 revision 被拒绝，再以新 key/下一 revision 接受。响应丢失流程故意让受控 handler 的首次本地 commit 失败并丢弃 HTTP 响应：GET 只查到 persisted_deferred，完成门仍关闭；原 key/revision/payload 再 POST 后恢复，prepare 一次、commit 尝试两次。这是可控故障注入，不是 TCP 丢包或真实进程崩溃。
 
-9 个流程是协议断言的分母，不是 9 次模型修复成功。每个流程限定 10 秒、一个进程、一次 prompt、同一 session；不得发生 nudge、restart 或 run.retrying。正常首次提交没有额外修复轮次。
+18 个流程是协议断言的分母（九个接受/恢复流程，九个预期停止流程），不是 18 次模型修复成功。每个流程限定 10 秒、一个进程、一次 prompt、同一 session；不得发生 nudge、restart 或 run.retrying。正常首次提交没有额外修复轮次。
+
+停止流程在实际运行器收到合成非零退出后断言 failure、一个进程/一次 prompt、无 retrying；随后夹具调用生产 unregister 移除 handler，原拒绝回执仍可查/重放，迟到新提案被次数门或 HANDLER_UNAVAILABLE 拒绝，不能产生 accepted receipt。它不声称 CLI 自主理解了停止原因，也不把手动 handler 移除冒充完整 executor 崩溃。
 
 ## 真实与模拟边界
 
@@ -31,3 +33,5 @@
 ## 执行入口
 
 [completion integration](../apps/scheduler/src/domains/platform-api/completion.integration.test.ts) 已接入 `pnpm ci:integration:platform-api`，由主 CI gate 执行，需隔离 `TEST_DATABASE_URL`。缺数据库时测试跳过，不算通过。数据库使用当前 schema，新建随机测试库并结束后清理。本切片不增加 token 计费口径，不扩大 C 的引用/证据完成门。
+
+完整 issue 的逐项判定、用户效果评测豁免和合入关闭条件见 [验收矩阵](REPAIR_FEEDBACK_ACCEPTANCE.md)。

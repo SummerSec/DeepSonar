@@ -99,6 +99,42 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
           assert.deepEqual(runner.calls, { prepare: 1, commit: 2, abort: 0, done: true }, "restore without preparing another effect");
         }, () => runner.calls.done);
       });
+      for (const stop of ["no_progress", "attempt_budget", "cli_exit"] as const) {
+        await t.test(`${cli}: ${stop} stops without accepting late input or relaunching`, async () => {
+          const runner = await setup();
+          const firstKey = randomUUID(), invalid = { summary: "x".repeat(8193) };
+          let firstResponse: unknown;
+          const stopCode = stop === "no_progress" ? "COMPLETION_NO_PROGRESS"
+            : stop === "attempt_budget" ? "COMPLETION_REPAIR_EXHAUSTED" : "SYNTHETIC_CLI_EXIT";
+          await runCompletionInCliSession(cli, async () => {
+            const first = await runner.post(firstKey, 0, invalid);
+            assert.equal(first.statusCode, 422); firstResponse = first.json();
+            assert.equal(runner.calls.done, false);
+            if (stop === "no_progress") {
+              assert.equal((await runner.post(randomUUID(), 1, invalid)).statusCode, 422);
+              assert.equal((await runner.post(randomUUID(), 2, invalid)).json().error_code, stopCode);
+            } else if (stop === "attempt_budget") {
+              for (let revision = 1; revision < 8; revision++) {
+                assert.equal((await runner.post(randomUUID(), revision, { summary: "x".repeat(8193 + revision) })).statusCode, 422);
+              }
+              assert.equal((await runner.post(randomUUID(), 8, { summary: "late valid proposal" })).json().error_code, stopCode);
+            }
+          }, () => runner.calls.done, stopCode);
+          // Emulate executor handler removal after the observed process exit; no new CLI is launched.
+          api.unregisterRuntimeHandler(runner.jobId); api.clearPlatformApiIdempotencyCache();
+          assert.deepEqual((await runner.get(firstKey)).json(), firstResponse);
+          assert.deepEqual((await runner.post(firstKey, 0, invalid)).json(), firstResponse,
+            "replay remains read-only after the original CLI exits");
+          const revision = stop === "no_progress" ? 2 : stop === "attempt_budget" ? 8 : 1;
+          const late = await runner.post(randomUUID(), revision, { summary: "late valid proposal" });
+          assert.equal(late.statusCode, stop === "attempt_budget" ? 409 : 503);
+          assert.equal(late.json().error_code, stop === "attempt_budget" ? stopCode : "HANDLER_UNAVAILABLE");
+          const [accepted] = await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${runner.jobId}
+            AND type='control_receipt' AND payload_json->>'status'='persisted_deferred'`;
+          assert.equal(accepted.n, 0);
+          assert.deepEqual(runner.calls, { prepare: 0, commit: 0, abort: 0, done: false });
+        });
+      }
     }
     const a = await setup();
     let res = await app.inject({ method: "POST", url: a.endpoint, headers: { ...a.headers, "idempotency-key": randomUUID() }, payload: { summary: "ready" } });

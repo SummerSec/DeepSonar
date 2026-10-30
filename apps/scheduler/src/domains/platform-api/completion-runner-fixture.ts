@@ -13,8 +13,9 @@ class CompletionProcess implements RuntimeProcess {
   ended = false;
   stdinClosed = false;
   prompts = 0;
+  exitCode = 0;
   wake?: () => void;
-  constructor(readonly cli: CompletionCli, readonly sessionId: string, private readonly act: () => Promise<void>) {}
+  constructor(readonly cli: CompletionCli, readonly sessionId: string, private readonly act: () => Promise<void>, private readonly exitAfterAct?: string) {}
   emit(record: Record<string, unknown>) {
     // Split records across chunks so the production JSONL framer is exercised.
     const line = `${JSON.stringify(record)}\n`, split = Math.floor(line.length / 2);
@@ -53,6 +54,10 @@ class CompletionProcess implements RuntimeProcess {
       this.emit({ jsonrpc: "2.0", method: "session.status", params: { sessionId: this.sessionId, status: "running" } });
     } else this.emit({ type: "system", subtype: "init", session_id: this.sessionId });
     await this.act();
+    if (this.exitAfterAct) {
+      this.queue.push({ type: "stderr", chunk: `${this.exitAfterAct}\n` });
+      this.exitCode = 17; this.ended = true; this.wake?.(); return;
+    }
     if (this.cli === "pi") {
       this.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "completion submitted" }] } });
       this.emit({ type: "agent_end" });
@@ -71,13 +76,13 @@ class CompletionProcess implements RuntimeProcess {
       if (next) yield next;
       else await new Promise<void>(resolve => { this.wake = resolve; });
     }
-    yield { type: "exit", exitCode: 0 };
+    yield { type: "exit", exitCode: this.exitCode };
   }
 }
 
-export async function runCompletionInCliSession(cli: CompletionCli, act: () => Promise<void>, completionGate: () => boolean) {
+export async function runCompletionInCliSession(cli: CompletionCli, act: () => Promise<void>, completionGate: () => boolean, exitAfterAct?: string) {
   const contextId = `completion_${randomUUID()}`;
-  const process = new CompletionProcess(cli, `session-${contextId}`, act);
+  const process = new CompletionProcess(cli, `session-${contextId}`, act, exitAfterAct);
   let launches = 0;
   const identities: string[] = [], events: string[] = [];
   const host: RuntimeHost = {
@@ -100,11 +105,16 @@ export async function runCompletionInCliSession(cli: CompletionCli, act: () => P
       } : {}),
       onEvent: event => { events.push(String(event.type)); },
       onSessionIdentity: async identity => { identities.push(identity.sessionId); } })]);
-    assert.equal(result.error, undefined);
-    assert.equal(result.terminalOutcome, "success");
+    if (exitAfterAct) {
+      assert.equal(result.terminalOutcome, "failure", "CLI exit before completion must not become success");
+      assert.ok(result.error);
+    } else {
+      assert.equal(result.error, undefined);
+      assert.equal(result.terminalOutcome, "success");
+    }
     assert.equal(launches, 1);
     assert.equal(process.prompts, 1);
-    assert.deepEqual(process.commands, cli === "pi" ? ["get_state", "prompt"] : cli === "dsh" ? ["initialize", "session/prompt", "shutdown"] : ["user"]);
+    if (!exitAfterAct) assert.deepEqual(process.commands, cli === "pi" ? ["get_state", "prompt"] : cli === "dsh" ? ["initialize", "session/prompt", "shutdown"] : ["user"]);
     assert.ok(identities.length > 0);
     assert.ok(identities.every(identity => identity === process.sessionId));
     assert.equal(events.includes("run.retrying"), false);
