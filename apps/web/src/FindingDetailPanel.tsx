@@ -22,6 +22,8 @@ import {
   type FindingReport,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import { FindingCandidates } from "./FindingCandidates";
+import { FindingLexicalSearch } from "./FindingLexicalSearch";
 import { SearchableSelect } from "./SearchableSelect";
 import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
@@ -34,7 +36,6 @@ import {
 } from "./task-workbench/finding-verification-result";
 import { projectFindingActions } from "./task-workbench/task-actions";
 import { projectRepairFeedback } from "./task-workbench/repair-feedback";
-
 const LINK_TYPES: { value: FindingLink["link_type"]; label: string }[] = [
   { value: "related", label: "相关" },
   { value: "ticket", label: "工单" },
@@ -42,15 +43,12 @@ const LINK_TYPES: { value: FindingLink["link_type"]; label: string }[] = [
   { value: "doc", label: "文档" },
   { value: "evidence", label: "证据" },
 ];
-
 const LINK_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   LINK_TYPES.map((t) => [t.value, t.label]),
 );
-
 function shortId(id: string) {
   return id.slice(0, 8);
 }
-
 function ProtocolDatum({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -532,6 +530,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   </section>
                 )}
 
+                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingCandidates key={f.id} findingId={f.id} />}
+                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingLexicalSearch key={f.id} findingId={f.id} />}
                 {reportEligible && (
                   <section className="theme-surface mt-6 rounded-xl ring-1" aria-label="Finding 报告">
                     <div className="theme-divider flex flex-wrap items-center gap-2 border-b px-4 py-3">

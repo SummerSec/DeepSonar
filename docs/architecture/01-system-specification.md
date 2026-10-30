@@ -283,7 +283,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：可由模型修正的 schema、引用、权限、状态和字节限制错误必须返回版本化 RepairFeedback，至少含 category、code、operation、path、脱敏 message/observed_shape、current_state_ref、accepted_effects、idempotency_key、proposal revision、repair attempt、remaining budget 和 next_action；不得回显凭据、Provider 原文、完整不可信输入或内部堆栈。
 - **决策来源**：错误反馈需要足够修复信息又不能扩大泄密面；模型应重新读状态并用新 revision/key 修正。
-- **实现状态**：部分达标（Phase 1）；当前共享类型和部分 Control 拒绝路径具备完整 envelope，Hub、Verify、Completion Gate 和完整 Proposal/Receipt/Settlement 仍未统一。 #776 B 为 mark_job_done 增加持久 revision/key 回执与拒绝额度，仍不代表通用完成门或独立修正 token 预算完成；C0 仅为具备当前图查询权限的 Hub 无效引用提供 scoped 刷新指引，不绑定图版本或扩展权限；C1 投影既有 Hub complete 门的有界缺失项，保留原判定与提交时重校验，不构成统一效果回执；见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
+- **实现状态**：部分达标（Phase 1）；当前共享类型和部分 Control 拒绝路径具备完整 envelope，Hub、Verify、Completion Gate 和完整 Proposal/Receipt/Settlement 仍未统一。 #776 B 为 mark_job_done 增加持久 revision/key 回执与拒绝额度，独立修正 token 已复用原 Gateway usage ledger 实现显式配置、累计熔断与未知停止；单次调用前输入成本上界仍未知，不代表绝对费用上限或通用完成门；C0 仅为具备当前图查询权限的 Hub 无效引用提供 scoped 刷新指引，不绑定图版本或扩展权限；C1 投影既有 Hub complete 门的有界缺失项，保留原判定与提交时重校验，不构成统一效果回执；见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 - **代码入口**：[RepairFeedback shared types](../../packages/shared-types/src/repair-feedback.ts)、[平台修复构造](../../apps/scheduler/src/domains/platform-api/repair.ts)、[Repair tests](../../apps/scheduler/src/repair-feedback.test.ts)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:canvas-facts`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:executor-real`；人工核对反馈只含形状/摘要。
 
@@ -346,9 +346,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CAP-008 能力选择证据审计
 
 - **规范要求**：精确版本/hash 的配置选择、拉取、声明使用和独立结果应分别呈现；不得将 Job 成功、模型反馈或组合成功解释为单能力有效性，不建立第二经验账本。
-- **实现状态**：#778 A 部分实现；离线报告关联本项目未撤销 Skill 与配置 Pack，实际使用、独立质量、成本归因和在线推荐仍未实现。
-- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)。
-- **验证证据**：`pnpm ci:unit:project-knowledge` 的合成行为测试；数据库导出与真实模型评测未执行。
+- **实现状态**：#778 A 离线关联报告与本项目 Skill 在线条件建议/选择声明已实现；曝光、独立质量和成本归因未知，平台源及 Pack 建议未评估。详见[非模型验收矩阵](../SKILL_SUGGESTIONS.md)。
+- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)、[在线建议](../../apps/scheduler/src/domains/project-knowledge/skill-suggestions.ts)。
+- **验证证据**：`pnpm ci:unit:project-knowledge` 与 `pnpm ci:integration:project-knowledge`；固定合成对照、权限/撤权/幂等/选择与拉取分离回归，以及实际只读 SQL 导出到 v2 报告的 PostgreSQL 集成回归。真实模型验收已豁免，不能据此宣称效果收益。
 
 ### FR-CAP-006 Plan 协议的当前边界
 
@@ -1207,3 +1207,16 @@ Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effe
 ## 程序规则附加评审（#767）
 
 FR-TASK-007 / FR-RPT-001 的程序规则评审扩展复用 goal_review，仅 supplied bounty Finding 可评 program_rule:<ruleid>；通用任务 criteria 保持独立。requirement satisfied=满足，exclusion satisfied=未命中排除。报告 program_rule_review 逐规则记录评价与来源，按同 Finding/整契约聚合并对冲突、失效和预算不足 fail closed；rules_satisfied 不授予 submission eligibility。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+## 证据追踪诊断修复
+
+Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Attempt，并宿主重读实际字节；runtime_proof=false，replay 为完整性检查，不改变 Verify verdict、Plan 或资格。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
+
+### FR-FIND-007 可重建特征与关联质量边界
+
+- **规范要求**：项目特征必须保留来源摘要、提取器版本与 provenance；未知权威身份保持未知。派生失败不得改变来源，读取必须核对当前来源和权限，旧代不能覆盖新代。强关系上线前必须通过独立质量门。
+- **决策来源**：#770 分期实施与来源完整性约束。
+- **实现状态**：C 持久扫描、特征重建和状态元数据待评审；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
+- **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
+- **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。

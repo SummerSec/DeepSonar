@@ -89,3 +89,9 @@
 #742 已交付索引骨架，#744 已交付首批三条链路规格与追溯。本次 #741 后续交付十二视图、追溯矩阵、六条 ADR、开发 Skill、逐章迁移标记和追溯/跨平台门禁。验证入口见 [11](11-engineering-specs.md)，本次执行结果以 PR 的验证记录为准。没有修改产品运行时行为、数据库基线或对外 API。
 
 #767 后续目标证据链见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)：研究候选、非 Finding 结果、来源隔离评审与确定性报告已接线；可选 Plan 关联已接线，原操作员 authority 保持不变。对应 FR-TASK-007、FR-RPT-001；资格与授权适配器缺口不得以结构校验冒充完成。
+
+FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的来源与字节完整性，不改变 Verify verdict 或赋予执行/资格 authority。
+
+#770 C 特征投影的字段来源、恢复和未完成的 D 质量门见[专题](../PROJECT_FINDING_RESEARCH.md)；对应 FR-FIND-007。
+
+#778 当前 Job 的条件建议与选择回执已同步 FR-CAP-003 / FR-CAP-008、构件/接口/数据/安全视图；[专题](../SKILL_SUGGESTIONS.md)列出非模型验收矩阵及未评估的效果、平台源和 Pack 范围。

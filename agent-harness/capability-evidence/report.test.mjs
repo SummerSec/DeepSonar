@@ -7,17 +7,17 @@ const sha = 'a'.repeat(64);
 function fixture() {
   const entry = { item_id: id(4), owner_project_id: id(1), version_id: id(5), version: 1,
     kind: 'skill', hash: sha, title: 'untrusted title' };
-  return { schema: 'deepsonar.capability-evidence-export/v1', captured_at: '2026-10-29T00:00:00Z', project_id: id(1),
+  return { schema: 'deepsonar.capability-evidence-export/v2', captured_at: '2026-10-29T00:00:00Z', project_id: id(1),
     jobs: [{ id: id(2), project_id: id(1), status: 'succeeded',
       project_knowledge_catalog: { entries: [entry], hash: sourceDigest([entry]) },
       capability_pack: { id: 'task.audit', version: '1', digest: `sha256:${sha}` } }],
     attempts: [{ id: id(3), job_id: id(2) }],
-    versions: [{ id: id(5), project_id: id(1), item_id: id(4), version: 1, content_sha256: sha, revoked_at: null }],
+    versions: [{ id: id(5), project_id: id(1), item_id: id(4), version: 1, content_sha256: sha, revoked_at: null, item_status: 'active' }],
     usages: [{ id: id(6), project_id: id(1), job_id: id(2), attempt_id: id(3), owner_project_id: id(1),
       version_id: id(5), selector: `project:${id(4)}@1`, content_sha256: sha,
-      feedback_json: { outcome: 'success', reason: 'secret', evidence_refs: [{ ref: 'untrusted-secret' }] } }],
+      declared_outcome: 'success', declared_evidence_count: 1 }],
     receipts: [{ id: id(7), project_id: id(1), job_id: id(2), attempt_id: id(3),
-      operation: 'record_knowledge_feedback', state: 'settled', result_json: { usage_ref: id(6), work_ref: id(8) } }] };
+      operation: 'record_knowledge_feedback', state: 'settled', event_id: id(8), event_seq: 1, result: { usage_ref: id(6) } }] };
 }
 const report = x => buildEvidenceReport(x, sourceDigest(x));
 const skill = x => report(x).records.find(r => r.kind === 'project_skill');
@@ -36,7 +36,7 @@ test('joins existing exact usage and receipt but never promotes a declaration or
 test('cross-project rows never alter records, denominators or explanations', () => {
   const x = fixture(), expected = report(x);
   x.jobs.push({ id: id(20), project_id: id(21), capability_pack: { id: 'secret' } });
-  x.usages.push({ ...x.usages[0], id: id(22), project_id: id(21), feedback_json: { outcome: 'failure' } });
+  x.usages.push({ ...x.usages[0], id: id(22), project_id: id(21), declared_outcome: 'failure' });
   const result = report(x);
   delete result.source_digest; delete expected.source_digest;
   assert.deepEqual(result, expected);
@@ -82,4 +82,71 @@ test('rebuilding is deterministic and does not mutate the source or attribute su
   const pack = report(x).records.find(r => r.kind === 'configured_pack');
   assert.equal(pack.attribution, 'combination_only_no_causal_claim');
   assert.equal(pack.independent_quality, 'unknown');
+});
+
+function addChoice(x, decision = 'select', number = 50, seq = 2) {
+  const selector = `project:${id(4)}@1`;
+  const receipt = { id: id(number), project_id: id(1), job_id: id(2), attempt_id: id(3),
+    operation: 'record_skill_choice', state: 'settled', event_id: id(number + 100), event_seq: seq,
+    result: { decision, selector: decision === 'none' ? null : selector, content_hash: decision === 'none' ? null : sha,
+      policy_version: 'deepsonar.skill-suggestions/v1', context_hash: 'c'.repeat(64),
+      catalog_hash: x.jobs[0].project_knowledge_catalog.hash, reason_present: true,
+      candidate: decision === 'none' ? null : { version_id: id(5), version: 1, selector, content_hash: sha } } };
+  x.receipts.push(receipt); return receipt;
+}
+test('v2 choice declarations retain unpulled select, reject, and none independently of catalog pairs', () => {
+  const x = fixture(); x.usages = []; x.receipts = [];
+  addChoice(x); addChoice(x, 'reject', 51, 3); addChoice(x, 'none', 52, 4);
+  const out = report(x);
+  assert.equal(out.schema, 'deepsonar.capability-evidence-report/v2');
+  assert.equal(out.denominators.choice_declarations, 3);
+  for (const key of ['selected', 'rejected', 'none']) assert.equal(out.denominators[key], 1);
+  assert.ok(out.choices.every(c => c.pulls.length === 0 && c.observed_execution === 'unknown'));
+  assert.equal(out.choices[2].selector, undefined);
+  assert.equal(out.records.filter(r => r.kind === 'project_skill').length, 1);
+});
+test('event order keeps repeated choices distinct while shared pull identity never implies causality', () => {
+  const x = fixture(); addChoice(x, 'select', 51, 5); addChoice(x, 'select', 50, 2);
+  const out = report(x);
+  assert.deepEqual(out.choices.map(c => c.event_seq), [2, 5]);
+  assert.ok(out.choices.every(c => c.pulls[0].usage_ref === id(6)));
+  assert.equal(out.denominators.pulled_usages, 1);
+  assert.ok(out.choices.every(c => c.pull_association === 'same_identity_only_order_and_causality_unknown'));
+  assert.deepEqual(out.choices[0].pulls[0].feedback_receipt_refs, [id(7)]);
+});
+test('stale catalog, missing policy proof or changed candidate version never associates a pull', () => {
+  for (const change of [r => { r.catalog_hash = 'd'.repeat(64); }, r => { r.policy_version = null; },
+    r => { r.candidate.version_id = id(99); }, r => { r.candidate = null; }]) {
+    const x = fixture(); change(addChoice(x).result);
+    const c = report(x).choices[0]; assert.equal(c.evidence_status, 'unknown'); assert.deepEqual(c.pulls, []);
+  }
+  const x = fixture(), c = addChoice(x); x.attempts.push({ id: id(55), job_id: id(2) }); c.attempt_id = id(55);
+  assert.deepEqual(report(x).choices[0].pulls, []);
+});
+test('foreign, revoked, item tombstone and mismatched choice hashes are filtered before choice denominators', () => {
+  for (const change of [x => { x.versions[0].revoked_at = x.captured_at; }, x => { x.versions[0].item_status = 'revoked'; },
+    x => { x.receipts.at(-1).result.content_hash = 'f'.repeat(64); }, x => { x.receipts.at(-1).project_id = id(999); }]) {
+    const x = fixture(); addChoice(x); change(x); assert.equal(report(x).denominators.choice_declarations, 0);
+  }
+});
+test('missing event provenance is not counted and duplicate same-Job event sequence fails closed', () => {
+  for (const change of [r => { r.event_id = null; }, r => { r.event_seq = null; }, r => { r.event_seq = 0; }, r => { r.event_seq = 1.1; }]) {
+    const x = fixture(); change(addChoice(x)); assert.deepEqual(report(x).choices, []);
+  }
+  const x = fixture(); addChoice(x); const second = addChoice(x, 'none', 51, 2);
+  x.attempts.push({ id: id(55), job_id: id(2) }); second.attempt_id = id(55);
+  assert.throws(() => report(x), /DUPLICATE_CHOICE_SEQUENCE/);
+});
+test('v1 is rejected; no free text or complete suggestion propagates into report', () => {
+  const x = fixture(); addChoice(x).result.target = { secret: 'SECRET' }; addChoice(x, 'none', 51, 3).result.reason = 'SECRET';
+  assert.doesNotMatch(JSON.stringify(report(x)), /SECRET|untrusted title/);
+  x.schema = 'deepsonar.capability-evidence-export/v1'; assert.throws(() => report(x), /INVALID_EXPORT/);
+});
+test('event order is Job-wide across feedback and choices; missing feedback events cannot establish linkage', () => {
+  const x = fixture(); addChoice(x, 'select', 50, 1);
+  assert.throws(() => report(x), /DUPLICATE_CHOICE_SEQUENCE/);
+  const y = fixture(); addChoice(y); y.receipts[0].event_id = null;
+  assert.deepEqual(report(y).choices[0].pulls[0].feedback_receipt_refs, []);
+  y.versions[0].item_status = null;
+  assert.equal(report(y).denominators.choice_declarations, 0);
 });

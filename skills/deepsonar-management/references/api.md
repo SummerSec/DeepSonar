@@ -459,3 +459,7 @@ curl -s "$DEEPSONAR_BASE_URL/schema.md"
 ### 可选程序规则评审（#767，本片已通过离线行为验收）
 
 goal_review 的 criterion_ids 可选择 `program_rule:<ruleid>`，但必须是 finding_id 主体且冻结契约为 bounty_submission/supplied；fact_id 或未知规则不得使用。沿用相同 Job、Artifact 和证据接口，不新建评审操作。requirement satisfied 表示满足，exclusion satisfied 表示未命中排除；报告 program_rule_review 不等于 submission eligibility。详见[评审边界](../../../docs/TASK_GOAL_REVIEW.md)。
+
+### Finding 证据完整性诊断
+
+`GET /findings/:id/evidence-trace` 及详情诊断只读核验来源与实际留存字节。逐 Fact 的 `execution_assurance:not_attested`、`runtime_claim_structured`、`retained_bytes_verified` 分开表示执行未认证、结构化声明与字节完整性；trace `runtime_proof=false`，`replay.kind=evidence_integrity_check`，不执行复现命令、不改变 Verify verdict/Plan/资格。精确来源与失败边界见[专题](../../../docs/EVIDENCE_TRACE.md)。

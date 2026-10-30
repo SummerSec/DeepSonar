@@ -48,3 +48,7 @@ Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Te
 实现契约与验收证据分开：`--help` 或 mock 通过不证明 APK 兼容。需用已获许可的 fixture 验证 Manifest、类查询、引用搜索、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件，并逐项保留输出和退出码。amd64/arm64 的构建与实际运行应分别报告，QEMU 运行不能标为原生运行；[已记录的验收证据](../agent-harness/fixtures/asc/validation.md)覆盖最终 amd64 和 arm64（QEMU）镜像，各通过 59 次真实命令检查；不代表原生 arm64、复杂 APK 的普遍兼容或性能提升已验证。
 
 已发布 registry 的 immutable digest 保持原样，不把源码工具迁移伪写为既有镜像内容。新镜像须独立构建验收后再经发布流程登记；本 PR 不发布镜像。
+
+## 留存完整性不等于执行认证
+
+结构化 runtimeProof 的目标 revision、steps、environment/runtime_digest、exit_code 与产物摘要仍由 Agent 声明，不能仅凭字段齐全称为宿主执行认证。管理 evidence-trace 本片重读实际字节，runtime_proof=false、execution_assurance=not_attested，replay 仅 evidence_integrity_check，不运行命令；实现与待验收边界见[证据追踪](EVIDENCE_TRACE.md)。knownness helper 尚未接入运行时，不能作为 novel 权威。

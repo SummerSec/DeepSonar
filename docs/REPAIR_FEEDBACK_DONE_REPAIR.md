@@ -1,9 +1,9 @@
 # mark_job_done 持久修正回执（#776 B）
 
 > 状态：实现中；以独立 PR 的测试和评审结果为验收依据。真实模型理解质量未评测。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
-B 切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；C0/C1 的有限扩展及尚未交付的完整 C 边界见下文。
+B 切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；C0/C1 的限定扩展见下文，原 issue 收口范围见 [验收矩阵](REPAIR_FEEDBACK_ACCEPTANCE.md)。
 
 ## 协议
 
@@ -25,9 +25,27 @@ POST 原 `operations/mark_job_done` 需要 UUID `Idempotency-Key` 与 `X-DeepSon
 
 拒绝计数存于语义事件，进程内 Map 清空不重置。最多保存 8 次拒绝，首次拒绝也计入；耗尽后不能再提交新完成提案。重复旧 key 原结果不再消耗额度，同 key 改内容/revision、旧 revision、另一 Attempt 接续均拒绝。正常首次有效提交仍只需一次 HTTP。
 
-Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未知外部效果须先对账，不得通过修正清空账本。合法完成的接受回执预留一次 terminal 额度；最终 done 在 Job 锁内核对宿主接受回执、Attempt、派生事件身份及规范化 payload 摘要后复用该名额，不重复计费；拒绝回执消耗 standard 额度，普通事件耗尽不能阻断合法完成。确定回滚的限流返回 429/退避，不能冒充未知提交。已有总 token 与事件预算仍适用，**独立 repair-token 成本核算与跨 operation 的 accepted_effects 汇总未交付**，不能宣称满足 #776 的全部预算验收。接收回执不能授予新权限或修改镜像准入。
+Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未知外部效果须先对账，不得通过修正清空账本。合法完成的接受回执预留一次 terminal 额度；最终 done 在 Job 锁内核对宿主接受回执、Attempt、派生事件身份及规范化 payload 摘要后复用该名额，不重复计费；拒绝回执消耗 standard 额度，普通事件耗尽不能阻断合法完成。确定回滚的限流返回 429/退避，不能冒充未知提交。事件与请求数预算继续生效。独立 repair-token 的累计熔断见下节；跨 operation 的 accepted_effects 汇总未交付。接收回执不能授予新权限或修改镜像准入。
 
 本切片通过同一运行会话内的 Control HTTP 响应交付反馈，未引入新的 stdin、Shell 控制文件或通用重试引擎。跨进程查询持久回执不等于恢复原模型会话；DSH 不支持持久 resume 时仍明确停止。保留 #766 可信父子谱系和父等待子任务语义；不修改 #768 framing、控制事件保留或 evidence 保存失败的结论。
+
+## 独立修正 token 用量与额度
+
+`DEEPSONAR_REPAIR_MAX_TOKENS` 由管理员显式设置为 1–2000000 的整数；未设置或非法时不允许新增修正模型请求，不隐式采用无限或默认付费额度。首个持久拒绝回执冻结 `repair_token_limit`，之后配置改变、换 Gateway token 或进程重启不重置它；另一 Attempt 不得继续原修正链，Gateway 在出站前以 REPAIR_ATTEMPT_CHANGED 停止。正常首次模型请求与不调用模型的本地修正不增加修正成本。
+
+归属规则是**首个拒绝提交之后，在 Job 锁内准入的 Gateway 请求**。触发拒绝的先前请求不追溯收费。宿主把 `repair_receipt_ref` 和当前剩余额度预留写入原 `gateway_model_request` effect 的 intent；聚合对应 `job_usage_ledger`，不新建收费表、不重复扣账。原管理 Job 详情中的 effect intent 与 usage ledger 可按 Attempt/effect 关联。此处成本单位是 token，不推导金额、费率或真实模型恢复率。
+
+Gateway 与拒绝/接受回执使用同一 Job 锁。一次修正请求占用剩余额度，未结算时不准入第二次请求；结算事务失败留下 pending，unknown、缺 usage、not_reported 不视为零。反馈投影提供 `usage_status`、`known_tokens` 与可空 `remaining_tokens`；未知时不广告 `remaining_budget.tokens=0`。严格已知零用量仍可继续。额度耗尽、取消、租约/时间失效、完成已接受都会阻止继续调用；新完成提案也拒绝未结算/未知/耗尽的修正链，旧 key 仍读取原回执。
+
+只接受 OpenAI Chat/Completions、Responses、Anthropic Messages 协议根位置的完整 usage（JSON/SSE），不扫描 assistant/tool 正文或模型自报。缓存按协议处理：Anthropic 缓存另加，OpenAI 缓存已在 input 中。帧/JSON 超过 1MiB、总流超过 16MiB、截断、缺终态、非法计数、未知协议或错误结果均保留未知。原宽松解析 helper 不再用于 Gateway 持久用量；正常请求若有内部重试，也不能把此前尝试的未知成本归零。
+
+现有 Provider 配置入口 `INFERENCE_WIRE_PROTOCOLS` 的三种协议（anthropic-messages / openai-completions / openai-responses）均有严格解析夹具。自定义兼容服务若缺少协议根计数、结束事件或返回不支持的 envelope，响应仍可传回，但用量为未知，不能广告已结算。没有单独的 Provider“失败请求确定未收费”契约；普通请求 503→200 时即使前一个错误正文自报零，也保留最后 200 业务响应和观测用量，把整个 effect 的成本标 unknown，首次完成被既有效果门拒绝，Job 不因此直接改成 failed。单次完整成功响应的权威零计数可结算并正常完成；准入前拒绝则没有发起新请求，不制造收费记录。这些区别由真实 loopback 回归验证。
+
+修正 Gateway 请求最多一次上游尝试，禁止隐藏的潜在收费重试。输出上限由宿主限制到剩余 token，Chat SSE 请求开启 usage 返回，n/best_of 多候选与批量 prompt 在出站前拒绝。已有 `job_tokens.max_tokens` 若明确设置，则修正准入还核对整个 Job 的原 usage ledger，未知总用量停止，较小总额度优先；Job 请求数、事件与时间上限仍有效。当前 executor 不自动设置 Job `max_tokens`，不能声称普通 Job 已有全局 token 硬上限。
+
+**边界：这是累计结算后的熔断，不是精确的调用前总成本保证。** 输入/缓存 token 只有上游响应后才能确认，单次已准入请求仍可能超出剩余额度；保留实际超额计数并阻止后续请求/修正完成，不截断账本或伪装成功。若产品要求绝对不超额，需要额外受信的调用前输入计数/计价契约；当前不以字符数或模型自报代替。此限制与未决定的默认付费额度分开记录。
+
+离线 `gateway-repair-budget.integration.test.ts` 调用真实 Gateway/Control HTTP、隔离 PostgreSQL 与 loopback 合成上游，覆盖累计、旧 key 重放、换 token/新 Gateway 子进程、并发预留、配置冻结、已知零/未知、耗尽/超额、总额度、取消/租约/超时、结算写失败及单次上游尝试。`gateway-repair-usage.test.ts` 覆盖协议、缓存、伪造正文、重复累计快照与截断。测试分别接入现有 `ci:integration:platform-api` 和 `ci:unit:executor-real`；不调用真实模型或生产系统。
 
 ## 人工请求与完成提交的并发边界（B2）
 
@@ -52,7 +70,7 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 每类计数上限为 `count_cap: 1000`，超过时 `count_capped: true`。`counts_scope: gate_observations_not_inventory` 明确这些是门返回的观察计数，不是完整工作清单；例如既有未关闭轮次查询有 `LIMIT 5`，未在此修改。`expected.action` 要求按当前授权补充工作、验证证据或人工处理，禁止改写结论凑门，缺失项解决后新 key 重提。固定字段与标量使反馈大小有界，不放宽通用 handler details 白名单。
 
-预检通过并不锁定状态；最终 ingestion 仍运行相同完成门，期间新增的活跃工作等会使提交失败并回滚。C1 同时替换最终拒绝中原来拼接的自由标题/issue 文本，属于反馈脱敏，不改变收敛条件、Verify 技术确认、权限或未知效果规则。该反馈不编造 `accepted_effects`，不新增 Hub 持久 revision/修正预算或状态，不代表完整 C 已交付。
+预检通过并不锁定状态；最终 ingestion 仍运行相同完成门，期间新增的活跃工作等会使提交失败并回滚。C1 同时替换最终拒绝中原来拼接的自由标题/issue 文本，属于反馈脱敏，不改变收敛条件、Verify 技术确认、权限或未知效果规则。该反馈不编造 `accepted_effects`，不新增 Hub 持久 revision/修正预算或状态，不扩展为通用完成门；本 issue 限定 C 的验收范围见验收矩阵。
 
 `completion-feedback.integration.test.ts` 使用真实 Fastify 注入、Job token、隔离 PostgreSQL、原预检与最终 `ingestEvent`。门证据由数据库夹具构造，不代表真实模型产物或独立技术验证质量。测试覆盖各缺失类别、超过 1000 项的截断、原 open-round 查询的观测上限、跨项目/Job/引用拒绝，以及预检后状态变化导致最终回滚。满足原门后真实事件可落地、相同事件重放不重复，root 进入 `analysis_complete` 而 Hub Job 保持 `running`；不将此称为 Job 终态结算。单元测试验证固定大小、确定顺序无关投影及未知 blocker 脱敏，分别接入现有 `ci:unit:capability-pack` 和 `ci:integration:platform-api`。
 
@@ -60,7 +78,7 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 行为验证必须包含首次拒绝后接受、旧 key 重放、冲突/旧 revision、响应丢失、重启、预算耗尽、取消/租约失效、未知效果、scope 和数据库写失败。实际通过项以 PR 记录为准，本文件不把规划当作通过证据。
 
-运行器合成测试仅证明协议行为；真实模型是否理解反馈、恢复率、修正轮数、额外 token/时间成本及人工介入率必须独立评测。本切片不调用真实模型或生产服务。C0/C1 仅覆盖引用指引与既有 Hub complete 门的缺失项投影；完整产物/证据门、Hub 持久修正链和各 CLI 的完整行为验收仍需后续交付。
+运行器合成测试仅证明协议行为；真实模型是否理解反馈、恢复率及人工介入率未测；按当前交付要求，这些质量实验不是实现验收门。本切片不调用真实模型或生产服务。C0/C1 仅覆盖引用指引与既有 Hub complete 门的缺失项投影；通用产物/证据门、Hub 持久修正链和全错误交叉矩阵属于后续可选扩展，不作为本 issue 限定实现的无限验收范围。
 
 代码：[回执事务](../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Control 组装](../apps/scheduler/src/domains/platform-api/completion.ts)、[路由](../apps/scheduler/src/domains/platform-api/routes.ts)、[平台控制 Skill](../apps/scheduler/src/platform-control-skill.ts)。
 

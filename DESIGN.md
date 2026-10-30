@@ -141,6 +141,9 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 当前 Phase 1 已接入 Control API 的严格 schema/字节约束和标准错误路径。模型收到 `model_correctable` 后应重新读取能力目录、节点引用或当前状态，再以新的提案 revision 和 Idempotency-Key 提交。预算耗尽必须明确进入 `blocked` 或 `needs_human`，不能重复发送相同错误后静默结束。
 
+#776 的完成拒绝可冻结独立 repair-token 限额；Gateway 按原 effect/usage ledger 在 Job 锁内累计、预留并对未知用量停止。管理员未配置时不发起新增修正模型请求；不代表精确调用前费用上界，详见 [修正用量与额度](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。 #776 的限定范围、离线证据与用户效果评测豁免见 [验收矩阵](docs/REPAIR_FEEDBACK_ACCEPTANCE.md)。
+
+
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
 
 A 阶段错误矩阵、冻结契约回放及持久性缺口见 [#776 基线](docs/REPAIR_FEEDBACK_BASELINE.md)；不代表同会话修复或模型质量已验收。
@@ -171,6 +174,12 @@ Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Schedule
 
 ## 6. Finding、Verify、Research 和报告
 
+#770 D 检索首片在既有详情内提供当前声明文本的有界跨 Job 窗口检索，展示来源与匹配依据；同步检索不保存关系。另有按代构建的持久词法候选账本，读取复查双端来源与权限，失效即隐藏；不确认同问题或传播处置。
+
+#770 离线标注评估工具仅处理显式本地脱敏样本，报告缺失标签、留出泄漏、分母与质量未验收状态；不为生产提取器补造权威身份，见[离线评估专题](docs/PROJECT_FINDING_EVALUATION.md)。
+
+#770 C 在 Scheduler 内维护可重建特征与持久扫描检查点，详情只显示当前来源匹配的状态/字段覆盖。权威目标/版本字段未知，D 关系质量门未验收；不发布同问题建议，见[项目 Finding 特征研究](docs/PROJECT_FINDING_RESEARCH.md)。
+
 #770 A 的来源身份使用 `(job_id, fingerprint)`，独立于 Control 提交幂等键；不同 Job 的相同文本保留独立 Finding/Artifact，不继承验证或人工处置。相同来源身份的内容冲突明确拒绝，当前没有修订协议。历史 UUID 和 Artifact key 保留，历史丢失来源不自动重建。具体规则见 [数据架构](docs/architecture/08-data-architecture.md#finding-来源身份770-a)。此切片不实现跨任务关联。
 
 项目交付页使用服务端多选/文本筛选与游标分页，汇总共用查询条件，URL 保存筛选与选择；当前来源 `updated_at` 单独展示。#770 切片 B 的权限、当前读一致性与后续范围见[接口规格](docs/architecture/09-interface-specs.md#finding-项目查询770-切片-b)，不代表跨任务来源修复或关联质量已验收。
@@ -183,7 +192,7 @@ review/test/worker 的复核结果必须作为结构化 Fact 提交，至少引�
 
 **#590 叠层（与 #576 对齐）**：每个 `used_fact_ids` 必须在确认前 EXISTS 解析到真实 Fact（finding 归属、ownership、来源 Job ≠ Finding 原始 Job）；悬空引用一律阻断并 rework——缺 Artifact 四表行仍不单独构成悬空（#577）。对 `security.vulnerability` / `security.misconfig` / `security.secret`，独立 review≥1、合格 test≥1、`missing_evidence == []` 为 confirmed 必要断言，配对缺口升为 **required_missing**，不得抹空 missing 放行。`emit_finding` 可选 `impact`（`attacker_entry` / `victim_resource` / `impact_flow` / `preconditions` / `known_issue_refs` / `impact_waiver`）；上述安全 profile 的 confirmed 要求非空 `impact_flow` 或显式 `impact_waiver`，并需 `attempted_refutation` 与合格 test 的 `artifact_refs`。建议项目协议将 `security.vulnerability` 列入 `require_scoring_for_profiles`（默认保持空列表以兼容现有 Agent）；location/summary 中的 TODO/crbug/CVE 自动打 `known_issue` 标签。
 
-确认记录可经只读 `fact_evidence_trace`（#577）按 `used_fact_ids`→`canvas_nodes` Fact 解析来源 Job/Attempt、目标 revision、可选 Artifact/Evidence 与内容完整性摘要；缺 Artifact 四表行不表示悬空。`runtime_digest`/`exit_code`/产物 sha256 与 Hub 唤醒用 `evidence_signature`/`gate_fingerprint` 分离；文本 expected/actual 本身不是运行证明。摘要不符在观测可得时阻断确认；`fact_first` v1 默认不强制 runtime_proof。
+确认记录的只读 fact_evidence_trace 通过 Artifact source_event 精确绑定来源 Attempt，并核验同项目/Canvas/Job/Artifact、最新成功来源及留存真实字节；不以最新 Attempt 代替来源，也不以 manifest 声明摘要当 observed。新增 execution_assurance:not_attested、runtime_claim_structured、retained_bytes_verified 分离声明与完整性；runtime_proof 保持 false，replay.kind=evidence_integrity_check，不执行命令。此修复已通过离线行为验收，不改变 Verify verdict/Plan/eligibility；Verify runtimeProof 仍为 Agent 声明，knownness helper 未运行时接入。详见[证据追踪](docs/EVIDENCE_TRACE.md)。
 
 安全漏洞研究（profile `security.vulnerability`）可另启用可冻结证明契约 `security.vulnerability.proof` v1（#578）：要求固定 revision、受影响组件、攻击者控制点、前置条件、入口→危险操作可达路径，以及静态（文件位置+片段摘要+路径依据）或动态（运行证明）证据；TODO/注释/危险函数存在/单纯行号命中不能单独满足；缺工具/目标/设备降为 inconclusive；Verify 只消费 Fact，不重审源码。该契约默认不启用，以免把通用 fact_first 改成强制动态 PoC。
 
@@ -342,7 +351,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | `apps/image-admission` | OCI 镜像扫描与准入 |
 | `packages/shared-types` | Zod 契约、Capability Pack、RepairFeedback |
 | `packages/runtime-sandbox` | Noop/OpenSandbox、CLI adapter、Session 归档 |
-| `database/schema.sql` | 唯一 schema 基线；当前主线 v63（当前集成基线，非发布版本；合入并行 schema 变更后重新核对） |
+| `database/schema.sql` | 唯一 schema 基线；当前主线 v65（当前集成基线，非发布版本；合入并行 schema 变更后重新核对） |
 | `deploy` / `agent-harness` | 部署、镜像、冒烟与运行时验证 |
 
 实现入口：
@@ -356,7 +365,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 ### #778 离线能力证据审计
 
-[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
+[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、事件有序的选择声明、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
 
 ### 项目知识独立研究准备（#777）
 
@@ -367,3 +376,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。
 
 程序规则独立评审（#767，本片已通过离线行为验收）复用 goal_review，对 supplied bounty Finding 增加 program_rule:<ruleid>，通用目标判据保持不变。requirement satisfied 表示满足，exclusion satisfied 表示未命中；报告独立呈现 program_rule_review，不把通用判据满足当程序规则完成。仅复核 operator_supplied 材料，不认证官方规则、授权或 eligible；攻击链、可复现性、knownness 与资格 authority 映射仍是缺口。详见[评审边界](docs/TASK_GOAL_REVIEW.md)。
+
+### #778 当前 Job 条件建议
+
+当前项目 Skill 可通过 `suggest_project_skills` 做精确版本的条件匹配，再用 `record_skill_choice` 保存选择声明回执；宿主重算、撤权复查与原 `pull_skill` 授权独立。作者条件和调用者目标不是独立效果证据，未测质量分母为 0，不自动启用或晋升 Pack。接口、非模型验收矩阵和范围见[Skill 建议专题](docs/SKILL_SUGGESTIONS.md)。

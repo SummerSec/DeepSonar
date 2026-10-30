@@ -7,6 +7,8 @@
 
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
+> **修正 token（2026-10-30，#776）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，默认需管理员配置；调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
+
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
 
 > **平台升级核查（2026-10-21，#740 / #747）**：官方 digest 清单、严格 dotenv 校验和终态 Attempt 效果排空已接通；维护升级新增数据库身份隔离、源库保全、候选库重建与同目标续做模块。宿主入口、受管 SSH 节点和显式回滚恢复已接线，真实单机/多节点成功场景已通过；最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，见 [升级演练](../deploy/UPGRADE_REHEARSAL.md)。配置 preflight 已接密钥格式/密文认证与 当前持久默认组合的 credential-first 解析，外部认证等仍列为未检查；P2 宿主实现已接线，正式 tag 签名发布已获授权并接线，生产验收见对应 Release 证据，P3 Web 发起为可选。决策见 [ADR 0008](architecture/adr/0008-maintenance-candidate-upgrade.md)，验收边界见 [风险记录](architecture/12-risks-and-tech-debt.md)。
@@ -89,7 +91,7 @@
 
 [#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；作为 B 前历史基线保留。
 
-[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；完整 C 和真实模型效果仍待交付。
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；限定 C 实现已交付；独立预算与最后生命周期证据见 [逐项验收及关闭条件](REPAIR_FEEDBACK_ACCEPTANCE.md)，真实模型效果按用户要求不作为验收门。
 
 ## 进行中 / 部分落地
 
@@ -162,7 +164,7 @@
 
 - [Skill 适用证据离线校验](../agent-harness/capability-applicability/README.md)：#778 A 补强/B 前置工程切片；合成断言与真实效果分开，不提供推荐。
 
-- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 A 部分实现；仅合成行为测试，实际导出、独立质量评测与推荐接口未验收。
+- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 选择/拉取/反馈的 v2 只读关联报告；实际 SQL 已有隔离 PostgreSQL 回归，独立质量与收益未验证。
 
 独立研究 #777 的 [离线协议与报告准备](../agent-harness/knowledge-live/STUDY.md) 已提供；真实模型对照尚未运行，不改变 #752 已完成的实现验收范围。
 
@@ -172,8 +174,18 @@
 
 [有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久 Plan 接纳回执已复用 events.control_receipt，支持原响应恢复及冲突校验；真实模型效果未验证且不作为本批验收前置，C 不启用。
 
-[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。
+[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI十八流程的真实代码、合成协议和未验收边界；不是模型质量报告。
 
 #767 程序规则附加评审已接线：仅 supplied bounty Finding，通过 program_rule:<ruleid> 独立评价材料规则；不改变通用任务判据，不授予提交资格。见[任务判据评审](TASK_GOAL_REVIEW.md)与[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 #775 的[冻结离线控制回放](../agent-harness/plan-replay/README.md)提供32行逐例差异与缺失分母；不代表全部业务样本、模型质量收益或C阶段完成。
+
+[Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
+
+
+#770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C与D词法检索/持久弱候选基础待评审，强关系建议未发布）。
+
+#770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具待评审，独立人工质量验收未完成）。
+
+
+- [当前 Job 的 Skill 条件建议](SKILL_SUGGESTIONS.md)：#778 本项目精确版本条件匹配、选择声明回执与非模型验收矩阵；不自动启用，不声称效果或成本收益。

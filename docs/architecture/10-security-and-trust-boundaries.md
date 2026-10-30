@@ -78,3 +78,11 @@ Plan 回执只绑定原 Job/Attempt、冻结快照及请求内容；查询不恢
 程序规则独立评价只认证执行来源绑定和对 operator_supplied 材料的评审过程，不认证官方规则或当前程序授权，不产生 eligible authority。同 Finding/完整契约匹配、证据和完整集合冲突/失效/预算门继续适用。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
 规则证据失效且没有当前有效替代 review 时以 insufficient 阻塞程序规则结论；有效重评可恢复，不由历史失效永久否决。规则投影超过全报告 100 条 Finding×rule 判据时全部阻塞，不保留先处理的正向结果；程序规则 ID 不得作为 Plan 通用判据 authority。
+
+## 证据追踪诊断修复
+
+证据追踪依精确项目/Canvas/Job/Artifact/事件身份、当前成功来源和 rejected/效果门核验；使用 inspectCriterionEvidence 的 exact URI、manifest、大小、symlink 与共享8MiB实际字节检查。结构化 runtimeProof 不是宿主命令认证。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
+### #778 条件建议的信任边界
+
+作者 applicability sidecar 与调用者 target 均为声明，不能改变 Job 快照或成为事实。在线建议仅检查本项目冻结精确版本；外国条目不进入候选、诊断、计数或排序。CAS 后整批复查版本及 item 撤销，选择事务锁定版本与 item 再查，后续 pull 仍独立授权。选择回执不是使用记录或权限票据，未知质量/token 余额不补估值；描述文本不参与匹配。详见[专题](../SKILL_SUGGESTIONS.md)。

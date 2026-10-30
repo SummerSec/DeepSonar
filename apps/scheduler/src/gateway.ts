@@ -36,6 +36,8 @@ import {
   GatewayFrozenModelMismatchError,
 } from "./domains/provider-adapter/index.js";
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
+import { admitGatewayRepair, boundRepairOutput, RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
+import { createRepairUsageScanner } from "./gateway-repair-usage.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 const JOB_TOKEN_RE = /^deepsonarjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/;
@@ -764,7 +766,7 @@ export function registerGateway(app: FastifyInstance): void {
         throw error;
       }
       const outboundBody = applyGatewayOutboundModelRewrite(rawBody, jt.agent_snapshot_json);
-      const outboundBuf =
+      let outboundBuf =
         outboundBody == null
           ? null
           : Buffer.isBuffer(outboundBody)
@@ -806,8 +808,10 @@ export function registerGateway(app: FastifyInstance): void {
       };
       // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
-      const gatewayInputDigest = createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex");
       const requestIntent = await sql.begin(async (tx) => {
+        const repairBudget = await admitGatewayRepair(tx as unknown as typeof sql, String(jt.job_id), gatewayAttemptId);
+        if (repairBudget) outboundBuf = Buffer.from(JSON.stringify(boundRepairOutput(outboundBody, upstreamPath, repairBudget.remaining_tokens!)), "utf8");
+        const gatewayInputDigest = createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex");
         const [requestCounter] = await tx`
           UPDATE job_tokens
              SET used_requests = used_requests + 1
@@ -821,11 +825,20 @@ export function registerGateway(app: FastifyInstance): void {
           kind: "gateway_model_request",
           inputDigest: gatewayInputDigest,
           resourceIdentity: { job_token_id: String(jt.id), request_no: requestNo },
-          intent: { provider: safeProvider, model: model.slice(0, 200), method: req.method },
+          intent: { provider: safeProvider, model: model.slice(0, 200), method: req.method,
+            ...(repairBudget ? { repair_receipt_ref: repairBudget.receipt_ref,
+              repair_reserved_tokens: repairBudget.remaining_tokens } : {}) },
         });
         if (!effectStarted) throw new Error("Job 的活动 Attempt 已结束");
-        return { requestNo, effectId };
+        return { requestNo, effectId, repairBudget };
+      }).catch(error => {
+        if (error instanceof RepairTokenBudgetError) return error;
+        throw error;
       });
+      if (requestIntent instanceof RepairTokenBudgetError) {
+        return reply.code(409).send({ error: { type: requestIntent.code, message: requestIntent.message },
+          repair_token_budget: requestIntent.budget, retryable: false });
+      }
       if (!requestIntent) return deny(reply, 429, "请求数额度用尽", "quota_exhausted");
       const { requestNo, effectId: gatewayEffectId } = requestIntent;
       const headers: Record<string, string> = {
@@ -853,7 +866,7 @@ export function registerGateway(app: FastifyInstance): void {
             headers,
             body: outboundBuf && req.method !== "GET" ? new Uint8Array(outboundBuf) : undefined,
           },
-        });
+        }, requestIntent.repairBudget ? { maxAttempts: 1 } : {});
       } catch (error) {
         await trySettleGatewayUsage({
           jobId: String(jt.job_id),
@@ -909,7 +922,7 @@ export function registerGateway(app: FastifyInstance): void {
         }, "settled");
         return;
       }
-      const usageScanner = createGatewayUsageScanner();
+      const repairUsageScanner = createRepairUsageScanner(upstreamPath, isSse);
       const reader = upstream.body.getReader();
       let streamInterrupted = false;
       try {
@@ -920,7 +933,7 @@ export function registerGateway(app: FastifyInstance): void {
             reply.raw.write(value);
             // 只解析完整 SSE/JSON 行；保留未完成行，避免重叠尾巴导致
             // 同一 usage JSON 在相邻 chunk 中被重复累计。
-            usageScanner.push(value);
+            repairUsageScanner.push(value);
             noteResponseChunk(value);
           }
         }
@@ -930,8 +943,11 @@ export function registerGateway(app: FastifyInstance): void {
       } finally {
         reply.raw.end();
       }
-      const usage = usageScanner.finish();
+      const trustedUsage = repairUsageScanner.finish();
+      const usage = trustedUsage ?? { ...EMPTY_USAGE };
       const scanned = usage.total;
+      // Earlier hidden attempts and interrupted/error responses cannot establish complete cost.
+      const uncertainUsage = streamInterrupted || upstreamResult.attempts > 1 || !upstream.ok;
       await trySettleGatewayUsage({
         jobId: String(jt.job_id),
         projectId: String(jt.project_id),
@@ -943,9 +959,9 @@ export function registerGateway(app: FastifyInstance): void {
         modelCatalogMatch,
         upstreamReportingModel,
         usage,
-        status: streamInterrupted ? "unknown" : scanned > 0 ? "settled" : "not_reported",
+        status: uncertainUsage ? "unknown" : trustedUsage ? "settled" : "not_reported",
         source: isSse ? "gateway_stream" : "gateway_response",
-      }, streamInterrupted ? "unknown" : "settled", streamInterrupted ? "模型响应流中断" : undefined);
+      }, uncertainUsage ? "unknown" : "settled", uncertainUsage ? "模型请求完整用量无法确认" : undefined);
       if (scanned > 0) {
         inc("deepsonar_model_tokens_total", { provider: safeProvider }, scanned);
         await sql`UPDATE job_tokens SET used_tokens = used_tokens + ${scanned} WHERE id = ${jt.id}`;

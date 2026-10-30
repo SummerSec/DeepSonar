@@ -80,6 +80,10 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 
 Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/request_human 可带严格版本化 plan_basis。字段、只读证明、单步预算、错误/重试边界见 [Plan 协议范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)；OpenAPI 输入 schema 由 shared-types 派生，无新写入 API。
 
+### 修正模型请求额度（#776）
+
+Gateway 在 Job 锁内按首个完成拒绝回执识别修正请求，并复用 Attempt effect / usage ledger 累计。`REPAIR_USAGE_PENDING`、`REPAIR_USAGE_UNKNOWN`、`REPAIR_TOKEN_LIMIT_UNCONFIGURED`、`REPAIR_TOKEN_EXHAUSTED` 返回 409 与有界预算投影，不转发模型请求；未知用量的 remaining_tokens 为 null。显式配置、调用前成本限制和恢复行为见 [修正预算](../REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
+
 带 plan_basis 的 submit_hub_decision/request_human（含 payload_file）返回 persisted_deferred 接纳回执；GET receipt_key 只读原响应，完全相同 POST 仅尝试恢复原活动 Attempt。changed input/operation 返回409；权限仍受原 Job capability 限制。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。
 
 ## 成果候选入口（#767）
@@ -96,4 +100,23 @@ goal_review criterion_ids 增加 program_rule:<ruleid>，仅 supplied bounty Fin
 
 程序规则报告累计上限为 100 条 Finding×rule 判据；超限所有 program_rule_review blocked、criteria 为空，原因 program_rule_projection_limit_exceeded，可读取单 Finding 报告。Plan goal_review_options 过滤程序规则 ID，不扩展通用 Plan 映射。
 
+## 证据追踪诊断修复
+
+GET /findings/:id/evidence-trace 与详情诊断逐 Fact 增加 execution_assurance:not_attested、runtime_claim_structured、retained_bytes_verified；runtime_proof=false，replay.kind=evidence_integrity_check，不执行命令。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
 plan_gap 的 supplementation_execution 只读提供单次补证状态、来源与独立 source_sha256，不改变判据授权摘要或已见引用。Agent 报告的 blocker 类别不认证环境条件。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
+
+## Finding 特征元数据（#770 C）
+
+既有 GET /findings/:id 增加 project_research_features 状态与声明字段覆盖，沿用 findings:read 和项目授权。失败/过期不返回旧特征正文，普通 Job 无新增接口；无关系写入/自动处置接口。细节、质量门与验证见[项目 Finding 特征研究](../PROJECT_FINDING_RESEARCH.md)。
+
+## Finding 词法检索（#770 D 检索首片）
+
+`GET /findings/:id/lexical-search` 使用既有 `findings:read` 与项目鉴权，当前声明文本按128来源窗口seek后排名最多25项，返回游标、窗口/排名截断、声明摘要与规则版本。主体变更使游标409失效；无缓存关系、Evidence内容或资产权限扩张。详情只展示待核验词法候选，不作全项目top-K或同问题判定。字段、权限矩阵、来源跳转及完整D缺口见[专题](../PROJECT_FINDING_RESEARCH.md#当前声明文本检索770-d-检索首片)。
+
+
+`GET /findings/:id/candidates` 沿用 findings:read/项目权限，以25条边窗口读取当前有效持久词法候选。活动代/主体输入改变使游标409失效；失效记录不补扫，可能返回有下一页的空窗口。Web 区分待计算、失败、过期、成功零项与重建。无关系写 API、强关系或处置传播，见[持久候选协议](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。
+
+### #778 Skill 条件建议接口
+
+新增 Job-scoped `suggest_project_skills`（只读）与 `record_skill_choice`（knowledge 事件及 durable receipt），使用 shared strict schema 和动态 OpenAPI。target 是调用者声明；策略/context/catalog 摘要绑定上下文，宿主在选择时重算，摘要不授予权限。两个 operation 必须已在冻结 allowlist 中；不存在隐式启用。候选完整有界过滤后分页，超限整次拒绝。详细条件、未知语义及验收见[专题](../SKILL_SUGGESTIONS.md)。

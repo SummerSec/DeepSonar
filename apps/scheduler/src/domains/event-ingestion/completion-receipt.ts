@@ -4,6 +4,7 @@ import { DonePayload, type RepairFeedback } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
 import { ControlInputError } from "../../control-input.js";
 import { consumeEventRateLimit } from "./rate-limit.js";
+import { configuredRepairTokenLimit, readRepairTokenBudget, assertRepairTokenBudget, RepairTokenBudgetError } from "./repair-token-budget.js";
 
 export const COMPLETION_REPAIR_LIMIT = 8;
 export type CompletionResult = { statusCode: number; body: Record<string, unknown> };
@@ -13,6 +14,7 @@ export type CompletionReceipt = {
   settlement_digest?: string;
   proposal_revision: number; attempt_id: string; snapshot_digest: string;
   status: "rejected" | "persisted_deferred"; result: CompletionResult;
+  repair_token_limit: number | null;
 };
 
 /** Both identities are Job-scoped because event_dedup has a global primary key. */
@@ -116,6 +118,12 @@ export async function recordCompletionProposal(input: {
     }
     const expectedRevision = previous ? previous.proposal_revision + 1 : 0;
     if (input.revision !== expectedRevision) return reject("COMPLETION_REVISION_CONFLICT", `Expected proposal revision ${expectedRevision}`);
+    const tokenBudget = await readRepairTokenBudget(tx, input.jobId);
+    try { assertRepairTokenBudget(tokenBudget, false); }
+    catch (error) {
+      if (!(error instanceof RepairTokenBudgetError)) throw error;
+      return { ...reject(error.code, error.message), body: { ...reject(error.code, error.message).body, repair_token_budget: tokenBudget } };
+    }
     // Unknown effects cannot be cleared or replayed by a corrected completion.
     const [unknown] = await tx`SELECT id FROM job_attempt_effects WHERE job_id=${input.jobId}
       AND (status='unknown' OR (status='effect_pending' AND NOT
@@ -134,7 +142,9 @@ export async function recordCompletionProposal(input: {
       const repair = result.body.repair as RepairFeedback;
       result = { ...result, body: { ...result.body, repair: { ...repair,
         proposal_revision: input.revision, repair_attempt: history.length + 1,
-        remaining_budget: { attempts: COMPLETION_REPAIR_LIMIT - history.length - 1 },
+        remaining_budget: { attempts: COMPLETION_REPAIR_LIMIT - history.length - 1,
+          ...((tokenBudget?.remaining_tokens ?? (tokenBudget ? null : configuredRepairTokenLimit())) !== null
+            ? { tokens: tokenBudget?.remaining_tokens ?? configuredRepairTokenLimit()! } : {}) },
         current_state_ref: `/control/v1/jobs/${input.jobId}/operations/mark_job_done?receipt_key=${input.key}`,
         next_action: history.length + 1 >= COMPLETION_REPAIR_LIMIT
           ? "修正预算耗尽；停止提交并请求人工处理。"
@@ -144,7 +154,8 @@ export async function recordCompletionProposal(input: {
     const receipt: CompletionReceipt = { v: 1, operation: "mark_job_done", idempotency_key: input.key,
       input_digest: digest, proposal_revision: input.revision, attempt_id: String(attempt.id),
       ...(accepted ? { settlement_digest: completionSettlementDigest(input.rawInput) } : {}),
-      snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result };
+      snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result,
+      repair_token_limit: tokenBudget ? tokenBudget.limit_tokens : configuredRepairTokenLimit() };
     // Accepted completion must remain available when ordinary semantic output exhausts its bucket.
     // Rejected proposals stay bounded by the standard bucket and persistent repair limit.
     await consumeEventRateLimit(tx, input.jobId, accepted ? "done" : "control_receipt", new Date());

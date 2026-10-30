@@ -88,3 +88,28 @@
 ### 可信权限适配器仍需的输入
 
 下一片若推进真实身份/写授权正向核验，需明确目标系统、租户/资源边界、权威只读身份与动作权限接口、权限撤销/过期规则，以及对应脱敏 fixture。不能用任务声明、公开元数据或凭据存在替代这些权威事实；在输入与适配器未落实前保持未核验并阻塞依赖步骤，不声称原 issue 的获授权完整动态链已验收。
+
+## 证据追踪修复（基于 #803）
+
+管理 Finding evidence-trace/详情诊断精确绑定 Artifact source_event 与来源 Attempt，在当前来源约束下使用宿主实际字节检查、exact URI 和共享 8MiB 预算，不用 manifest 声明冒充 observed。execution_assurance=not_attested；runtime_claim_structured 与 retained_bytes_verified 分离，runtime_proof=false，replay.kind=evidence_integrity_check。该修复不执行命令，不改 Verify/Plan/eligibility/历史。真正独立复现与攻击链未完成；Verify runtimeProof 仍 Agent 声明，knownness helper 未运行时接入，不是 novel 权威。前片通过数不作为本片证据，验收范围见[专题](EVIDENCE_TRACE.md)。
+
+证据追踪本片实际证据：真实 route/SQL 11/11（已含于 `ci:integration:verify-eligibility` 12/12），verify 单元 157 + authz 78 = 235，完整 build 通过；helper 真实 FS 3 项已计入 157。覆盖来源/范围/角色、共享预算、超量/非法引用、鉴权和历史不变，见[测试](../apps/scheduler/src/fact-evidence-trace.integration.test.ts)。最终 Scheduler TypeScript、docs 10/10 与 file-size 10/10 已通过；helper 已实测拒绝 Job 内外符号链接，仍为 3 项，不重复增加总数。宿主命令 receipt 是一种后续实现方案，不是原 issue 指定的必需机制；可复核攻击链与有来源范围/时间/适用性的 knownness 查验仅适用于对应高标准安全成果。未满足这些成果判据时不能推出 novel/eligible，不能把它们强加给所有工程任务。未改 Verify 判决 consumer，不把诊断完整性当独立复现。
+
+
+## 需求归属与停止扩张边界
+
+本表对照 [#767 原始章节及用户后补要求](https://github.com/SummerSec/DeepSonar/issues/767)，区分需求和本仓库后来提出的实现方案；文档中的待办本身不能新增关闭条件。
+
+| 项目 | 需求归属 | 收口边界 |
+| --- | --- | --- |
+| 指南、场景模板、原始需求、版本快照、跨入口反馈及重新下发指导 | 原 issue §一至§五必需 | 已有离线验收入口，按既有证据核对；不要求理解任意自然语言 |
+| 当前凭据、身份/租户/资源与动作授权；获准 save→publish→trigger 正向样本 | 原 issue §三、§五必需 | 负向阻塞不是正向支持；至少需一个目标系统、租户/资源/动作、可信只读判权来源、撤销规则与脱敏 fixture，不要求通用主动探测引擎 |
+| 目标相关候选、非 Finding 交付、独立判据评审、报告及 #775 完成门 | 用户后补要求 | 已有实现与离线证据分别在 #794/#796/#797/#798/#800；不重复列为待开发，不默认增加全局人工门 |
+| 可复现证据、适用攻击链、knownness 目标版本适用性与独立资格评审 | 用户后补的高标准安全成果要求 | 仅针对要求此类成果的任务；需授权目标与基线、必要前提/步骤/效果判据、指定查验来源与时间范围、规则材料及评审责任。未知仍为未知，有限未命中不等于 novel |
+| 宿主命令执行 receipt | 后续工程方案，非指定的关闭机制 | RuntimeHost 可复用底层执行，但当前无普通任务命令级治理 operation；新增调用契约/权限/幂等与证明绑定须单独设计，不把 CLI 工具日志或 REA agent_reported_observation 升格 |
+| 无契约强制迁移、通用秘密扫描、不同人/模型身份认证 | 未被当前任务统一要求 | 可选契约按原要求保留 unassessed；更严格项目准入另行决策，不作为当前默认关闭阻碍 |
+| 真实模型效果/奖励收益、自动恢复引擎、覆盖率看板、核心状态机重构 | 用户豁免或原明确排除 | 不为关闭 #767 扩建，不宣称未验证效果 |
+
+宿主来源依据：[RuntimeHost 接口](../packages/runtime-sandbox/src/runtime-host.ts)只返回底层进程结果；[REA 归档接纳](../apps/scheduler/src/domains/cli-capability/rea-cli-fact.ts)明确标记 agent_reported_observation；[Control schema](../packages/shared-types/src/index.ts)没有通用复现命令 operation。只读追踪的 not_attested 因此继续保留，不能靠新增字段消除。
+
+本轮仅核对范围与来源，不运行目标命令、不新增执行入口、不扩大 capability/凭据/网络授权。缺业务输入不阻碍独立离线工程，但不能以新添通用执行器或无限延伸待办替代原始正向验收。

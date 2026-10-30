@@ -106,6 +106,8 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 
 基线重建保留已有 Finding UUID、job_id、状态、证据和 Artifact key。历史行的新增 source_digest 为 NULL；原提交事件重放仍由 event_dedup 拦截，但新提交若命中无法证明内容相同的历史来源则 fail closed，不推导摘要或替换旧 Artifact。导入导出携带已有摘要；无摘要的历史行保持未知。此前项目指纹提前去重的提交不自动补造来源，只有另行证明来源和授权才能评估恢复。数据完整性起点是部署本写入契约后接受的独立来源，不是重建日期之前所有事件。跨任务关系、投影和质量评估不属于此切片。
 
+#776 的修正限额冻结在首个 control_receipt 的 repair_token_limit；Gateway effect intent 保存宿主 repair_receipt_ref/repair_reserved_tokens。实际用量仍只在 job_usage_ledger 一次写入，按 Attempt/effect 联结投影累计，无新增表或 schema 版本变更。未知/缺报与已知零分开；详见 [修正预算](../REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
+
 Plan 成功响应复用 events.control_receipt；operation、key、原请求/展开输入/最终语义摘要、snapshot 与 Attempt 绑定。其存在不推进 Plan revision 或单步预算；不新增 schema/执行账本。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。
 
 ## 成果规则与候选依据（#767）
@@ -122,4 +124,19 @@ task.result 保存声明与事件派生身份，task.goal_evaluation 保存宿�
 
 程序规则使用冻结 rule_snapshot 的 rule id 派生 program_rule:<ruleid>，复用 task.goal_evaluation；报告 findings[].program_rule_review 保存规则来源摘要、逐项 review_indexes 与状态，不新增数据库表或官方认证身份。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
+## 证据追踪诊断修复
+
+Artifact source_event 对应真实证据来源 Attempt，最新 Attempt 仅用于有效性核验，不能替代来源。manifest 声明 hash 与宿主 observed hash 分开，历史不回写。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
 补证执行投影复用 events/jobs/job_attempts/job_attempt_effects/canvas_nodes，不新增 schema。固定排序、无 wall-clock/heartbeat 字段；当前报告刷新冻结新投影，历史不回写。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
+
+## 项目 Finding 特征（#770 C）
+
+schema64 的 project_finding_feature_scan/work/features 是可重建派生数据：持久游标、generation、重试和输入摘要不替代 Finding/Artifact 真相。权威资产/版本/根因字段保持未知，读时核对当前来源与规则；详情状态不授予 Evidence 读取。细节、质量门与验证见[项目 Finding 特征研究](../PROJECT_FINDING_RESEARCH.md)。
+
+
+schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canonical 双端弱候选及完整来源摘要。候选与来源进度为可重建派生数据；读前核对当前双端来源，旧代不覆盖新代。真实 v64→65 备份/恢复夹具与运维清理边界见[专题](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。
+
+### #778 选择声明存储
+
+`record_skill_choice` 复用 `project_knowledge_receipts` 的 operation/result_json 与既有 knowledge 事件，保存宿主重算建议快照和声明理由，不写 usage/work 或新经验表。目录、完整 Candidate CAS 和旧回执不变；SQL 基线无变更，不要求 schema bump/rebuild。历史选择不恢复权限。见[Skill 建议专题](../SKILL_SUGGESTIONS.md)。
