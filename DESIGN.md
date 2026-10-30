@@ -294,6 +294,10 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - 审计日志 append-only；过程流、Session、运行产物和错误反馈不得泄露长期密钥或完整 Provider 响应。
 - 物理设备接入走 broker（沙箱不直连设备），设备按不可信输入对待，设备租约与授权细节见 [DEVICE_ACCESS.md](docs/DEVICE_ACCESS.md)。rig 端点与入站凭据只来自平台配置（`DEEPSONAR_DEVICE_BROKER_URL` / `DEEPSONAR_DEVICE_RIGS`），`devices.rig_id` 只存归属标识（schema v50），不存地址与密钥。
 
+### #778 离线适用证据校验
+
+[适用证据 preflight](agent-harness/capability-applicability/README.md)只对单个本项目 Skill 的精确 CAS 内容、原始冻结目录、撤权导出和作者声明做离线一致性检查，并比较独立标识的 expected/actual JSON。compatible 仅表示该冻结案例匹配；不鉴别导出身份，不提供实时授权、排序或推荐，不能推定方法有效。
+
 ## 12. 当前状态与开放演进
 
 | 方向 | 当前状态 | 下一步 |
@@ -344,6 +348,14 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 - [`database/schema.sql`](database/schema.sql)：唯一数据库基线；
 - `/api/openapi.json`：当前 HTTP API；
 - [`AGENTS.md`](AGENTS.md)：编码 Agent 的操作纪律。
+
+### #778 离线能力证据审计
+
+[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
+
+### 项目知识独立研究准备（#777）
+
+[离线对照协议](agent-harness/knowledge-live/STUDY.md) 提供冻结样本、独立 oracle、预算/版本预检和待执行报告模板；复用现有知识 Job/work/receipt，不新增执行通道。#752 的实现验收保持完成，真实模型闭环和收益研究尚未执行。
 
 ### Pi 大输出证据边界（#765）
 

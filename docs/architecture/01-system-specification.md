@@ -313,7 +313,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Agent 必须先从 trusted+enabled 源 `list_available_skills`/`search_skills` 取得 selector 与 content hash，再通过 `pull_skill` 拉取有界文件；拉取不得安装任意包或改变 Job 权限，不得读取未冻结或未授权来源。
 - **决策来源**：业务 Skill 可插拔但不能成为绕过平台准入的安装入口。
-- **实现状态**：as-built；内容 hash、源信任和 Job token 均重新校验。
+- **实现状态**：as-built；内容 hash、源信任和 Job token 均重新校验。 #778 增加独立[离线适用证据校验](../../agent-harness/capability-applicability/README.md)，仅验证导出的一致性及 JSON 断言，不改变在线拉取或证明方法有效。
 - **代码入口**：[Skill operation registry](../../apps/scheduler/src/domains/platform-api/operations.ts)、[Skill source route](../../apps/scheduler/src/domains/skill-source/routes.ts)、[Skill pull 测试](../../apps/scheduler/src/skill-pull.test.ts)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。
 
@@ -333,6 +333,13 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[LSP admission](../../apps/scheduler/src/domains/language-server-capability/admit.ts)、[CLI admission](../../apps/scheduler/src/domains/cli-capability/admit.ts)、[能力契约测试](../../apps/scheduler/src/domains/language-server-capability/language-server-capability.test.ts)。
 - **验证证据**：`pnpm ci:unit:language-server`、`pnpm ci:unit:capability-pack`、`pnpm ci:images`。
 
+### FR-CAP-008 能力选择证据审计
+
+- **规范要求**：精确版本/hash 的配置选择、拉取、声明使用和独立结果应分别呈现；不得将 Job 成功、模型反馈或组合成功解释为单能力有效性，不建立第二经验账本。
+- **实现状态**：#778 A 部分实现；离线报告关联本项目未撤销 Skill 与配置 Pack，实际使用、独立质量、成本归因和在线推荐仍未实现。
+- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)。
+- **验证证据**：`pnpm ci:unit:project-knowledge` 的合成行为测试；数据库导出与真实模型评测未执行。
+
 ### FR-CAP-006 Plan 协议的当前边界
 
 - **规范要求**：系统若接收 Plan/PlanResult，必须版本化保存并校验 goal、任务、依赖、完成策略和预算；在尚未实现 Plan 驱动 Worker 派发前不得把 PlanResult 当作替代 Hub 收敛或 Job 终态。
@@ -347,7 +354,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
 - **实现状态**：#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
 - **代码入口**：[知识域](../../apps/scheduler/src/domains/project-knowledge/)；[schema 基线](../../database/schema.sql)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
-- **验证证据**：`pnpm ci:unit:project-knowledge`、配置独立 `TEST_DATABASE_URL` 后 `pnpm ci:integration:project-knowledge`；真实沙箱和长期模型效果需独立试验记录（本条未完成）。
+- **验证证据**：`pnpm ci:unit:project-knowledge`、配置独立 `TEST_DATABASE_URL` 后 `pnpm ci:integration:project-knowledge`；真实沙箱和长期模型效果需 #777 独立试验记录，离线协议/预检已提供；不改变 #752 已完成的实现验收范围。
 
 ### FR-KNOW-002 跨项目 Skill 精确授权
 
