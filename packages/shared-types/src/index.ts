@@ -261,7 +261,7 @@ export type JobStatus = z.infer<typeof JobStatus>;
 export const JobType = z.string().min(1);
 export type JobType = z.infer<typeof JobType>;
 
-export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision", "plan", "plan_result", "knowledge"]);
+export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision", "plan", "plan_result", "knowledge", "control_receipt"]);
 export type EventType = z.infer<typeof EventType>;
 
 export const Severity = z.enum(["low", "medium", "high", "critical"]);
