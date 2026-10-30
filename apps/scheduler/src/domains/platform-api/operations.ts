@@ -108,7 +108,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   graph_query: {
     summary: "Query the current Job canvas graph on demand",
-    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, or plan_gap). plan_gap reads a current explicit Plan by id, up to four criteria per page and four Fact ids; use its revision/content hashes in optional plan_basis on one existing Intent or complete proposal. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
+    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, or plan_gap). plan_gap reads a current explicit Plan by id, up to four criteria per page and four Fact ids; supplementation_execution separately describes the single linked Job/Attempt lifecycle, never criterion satisfaction or whole-goal execution coverage; use its revision/content hashes in optional plan_basis on one existing Intent or complete proposal. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
     readOnly: true,
     eventType: null,
   },

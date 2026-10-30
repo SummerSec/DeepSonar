@@ -354,7 +354,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统若接收 Plan/PlanResult，必须版本化保存并校验 goal、任务、依赖、完成策略和预算；在尚未实现 Plan 驱动 Worker 派发前不得把 PlanResult 当作替代 Hub 收敛或 Job 终态。
 - **决策来源**：长期协议可以被发现和记录，但不能与当前生产主路径混淆。
-- **实现状态**：进行中；代码记录 Phase 1 Plan/Result，当前不会从该 operation 派发 Worker 或改变 Hub convergence。
+- **实现状态**：进行中；代码记录 Phase 1 Plan/Result，当前不会从该 operation 派发 Worker 或改变 Hub convergence。既有 Intent 的一次补证执行状态可按持久来源只读投影，不把生命周期成功当作目标判据满足。
 - **代码入口**：[Plan protocol](../../apps/scheduler/src/domains/plan-protocol/application.ts)、[Plan tests](../../apps/scheduler/src/plan-protocol.test.ts)、[设计边界](../../DESIGN.md)。
 - **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；人工核对 PlanResult 不绕过 Hub/Job 状态机。
 

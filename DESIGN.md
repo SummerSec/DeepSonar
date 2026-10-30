@@ -120,7 +120,7 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 ### 4.2 Plan
 
-#775 A 在报告冻结 Plan 审计，并通过现有 Fact 人工验证 API 接纳版本化操作员判据绑定。平台核对同任务 Job/Attempt、Artifact 与实际留存字节，刷新时显式标记过期、冲突和不足；报告机器整体判断仍为 unknown。B 首片可在既有 Hub Intent 上携带版本化 plan_basis，以当前任务输入、来源版本与单步预算检查一次补证；只有全判据当前正向操作员评价且已读完整，才允许明确 complete。没有另造执行通道。持久 Plan 接纳回执已复用 control_receipt；真实效果未验证且不作为本批验收前置，C 不启用；见 [Plan 缺口投影](docs/PLAN_GAP_PROJECTION.md)。
+#775 A 在报告冻结 Plan 审计，并通过现有 Fact 人工验证 API 接纳版本化操作员判据绑定。平台核对同任务 Job/Attempt、Artifact 与实际留存字节，刷新时显式标记过期、冲突和不足；报告机器整体判断仍为 unknown。B 首片可在既有 Hub Intent 上携带版本化 plan_basis，以当前任务输入、来源版本与单步预算检查一次补证；只有全判据当前正向操作员评价且已读完整，才允许明确 complete。只读补证执行投影关联既有 decision/Intent/Job/Attempt，状态与判据满足分离，不推断整个目标执行覆盖。没有另造执行通道。持久 Plan 接纳回执已复用 control_receipt；真实效果未验证且不作为本批验收前置，C 不启用；见 [Plan 缺口投影](docs/PLAN_GAP_PROJECTION.md)。
 
 当前 Hub 仍以 Intent 驱动，长期目标是把 Intent 适配为 `PlanTask`，由模型声明目的、依赖、输入引用、期望输出、验证路径、完成理由和预算。平台验证 schema、canonical 引用、依赖环、权限、预算和可执行性；模型判断业务上继续、收敛、阻塞或请求人工。
 

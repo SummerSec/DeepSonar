@@ -104,3 +104,5 @@ Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失�
 ## 程序规则附加评审（#767）
 
 本片已接 supplied bounty Finding 的独立程序规则评审，不再将规则自声明筛选视为全部能力；rules_satisfied 仍非官方规则认证、当前授权或资格闭环。适用攻击链、可复现证据、knownness 与资格 authority 映射继续保留为后续缺口。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+#775 已补一次补证的持久执行状态投影，不能代表所有目标/PlanTask 的执行覆盖；自动环境原因认证、目标修订、依赖图调度与有界自适应仍非本片实现。C 不启用，真实效果未验证且不作为本批验收前置。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
