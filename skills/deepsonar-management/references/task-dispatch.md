@@ -195,3 +195,7 @@ objective、scope、evidence、每个 exclusion:N 必须评价；acceptance:N �
 赏金 requirement 不符或 exclusion 命中不能升级目标 Finding；unknown/缺项补证或阻塞。通用与附加筛选通过都仅为 admitted_for_research，submission_eligibility 保持 not_assessed。Fact 存在不证明语义支持，候选数量不证明成果达标。
 
 高置信提交候选仍需后续独立复核、可复现证据、攻击链、knownness目标版本适用性、资格与 #775 整体报告收敛；不得使用任意数字置信阈值、severity或相似词替代。冻结与压缩约束继续保留。用户免除真实模型验收不等于效果已验证，更不等于这些实现缺口完成。
+
+### 程序规则独立复核边界
+
+对于 supplied bounty Finding，可沿用 goal_review 请求独立评审 `program_rule:<ruleid>`（本片已通过离线行为验收）。这与准入时规则自声明及通用目标验收分开；requirement satisfied 是满足要求，exclusion satisfied 是未命中排除。规则来自 operator_supplied 材料，rules_satisfied 不认证官方规则、当前授权或可提交资格；攻击链、可复现性、knownness 适用性与资格 authority 仍需后续依据。

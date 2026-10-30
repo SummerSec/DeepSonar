@@ -368,3 +368,5 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 ### Pi 大输出证据边界（#765）
 
 RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。
+
+程序规则独立评审（#767，本片已通过离线行为验收）复用 goal_review，对 supplied bounty Finding 增加 program_rule:<ruleid>，通用目标判据保持不变。requirement satisfied 表示满足，exclusion satisfied 表示未命中；报告独立呈现 program_rule_review，不把通用判据满足当程序规则完成。仅复核 operator_supplied 材料，不认证官方规则、授权或 eligible；攻击链、可复现性、knownness 与资格 authority 映射仍是缺口。详见[评审边界](docs/TASK_GOAL_REVIEW.md)。

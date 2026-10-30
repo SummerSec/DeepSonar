@@ -72,3 +72,5 @@ expected_review_sha256: <当前评审依据摘要>
 这是摘要身份的部署边界，不能宣称无兼容影响：旧 v1 摘要可能失效，按当前契约严格拒绝，保留历史记录且不回写，不自动转换或授予新 authority。必要时重新产出 task_result 与独立评审；旧 assignment 不得静默改绑。#797/#798 在本批集成时尚未合并或部署，不消除该版本边界，部署前仍须核对实际保存的证据版本。
 
 #795 的持久接纳回执只恢复原接纳结果与可恢复原 Attempt，不证明最终结算成功。接纳后关联评审失效时，最终完成门仍须拒绝；真实路由与 PostgreSQL 的[完整链测试](../apps/scheduler/src/task-plan-review.integration.test.ts)已通过 9 项（含顶层套件），覆盖 delivery/negative_result、原绑定、冲突/失效、旧摘要与接纳后失效；组合 CI 结果以 PR 最终记录为准。
+
+程序规则附加评审不扩展 Plan 通用判据映射：`goal_review_options` 过滤 `program_rule:<ruleid>`，该 ID 不得作为目标判据映射到 Plan。程序规则满足仍不是 Plan 完成或提交资格授权。

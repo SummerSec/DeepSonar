@@ -1,5 +1,6 @@
 import type { TaskOutcomeReport, TaskOutcomeReportCriterion } from "./task-outcome-report.js";
 import type { TaskGoalReviewRecord } from "./task-goal-review.js";
+import { applyTaskProgramRuleReviews } from "./task-program-rule-report.js";
 
 type State = TaskOutcomeReportCriterion["assessment"];
 function state(values: State[]): State {
@@ -68,5 +69,6 @@ export function applyTaskGoalReviews(
   if (loaded.reviews.some((review) => review.blockedReasons.length)) report.gaps.push("some_review_records_invalid_or_stale");
   report.gaps.push("overall_completion_owned_by_plan", "submission_eligibility_not_inferred");
   report.gaps = [...new Set(report.gaps)];
+  applyTaskProgramRuleReviews(report, loaded);
   return report;
 }

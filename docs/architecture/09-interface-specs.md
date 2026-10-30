@@ -93,3 +93,9 @@ Gateway 在 Job 锁内按首个完成拒绝回执识别修正请求，并复用 
 ## 目标结果与 Plan 显式关联（#767）
 
 emit_fact.artifact.task_result 接收 delivery/negative_result/blocked/not_executed；goal_review 请求恰好选 finding_id 或 fact_id，均绑定 candidate_artifact_id。Plan verification PATCH 本轮加入可选 plan_binding.goal_review 显式引用，不按索引映射，不替代 verified+note、jobs:control 或原绑定。详见[结果评审](../TASK_RESULT_REVIEW.md)、[Plan 关联](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)及[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+## 程序规则附加评审（#767）
+
+goal_review criterion_ids 增加 program_rule:<ruleid>，仅 supplied bounty Finding 主体可用，fact_id 禁止。报告附加 program_rule_review status=not_assessed/partially_satisfied/rules_satisfied/blocked，通用 criteria 不变；exclusion satisfied 表示未命中排除。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+程序规则报告累计上限为 100 条 Finding×rule 判据；超限所有 program_rule_review blocked、criteria 为空，原因 program_rule_projection_limit_exceeded，可读取单 Finding 报告。Plan goal_review_options 过滤程序规则 ID，不扩展通用 Plan 映射。

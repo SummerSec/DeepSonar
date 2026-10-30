@@ -9,6 +9,7 @@ import { taskContractDigest } from "./task-outcome-snapshot.js";
 import { loadTaskResultDeclaration, loadTaskResultSource } from "./task-result-source.js";
 import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { ControlInputError } from "./control-input.js";
+import type { TaskProgramRuleReview } from "./task-program-rule-report.js";
 
 const MAX_FINDINGS = 100;
 const MAX_FACT_REFS = 5000;
@@ -47,6 +48,7 @@ export interface TaskOutcomeReport {
     limitations: string[]; limitations_truncated?: boolean;
   }>;
   findings: Array<{
+    program_rule_review?: TaskProgramRuleReview;
     finding_id: string; source_job_id: string; task_contract_sha256: string | null;
     technical_status: string; research_admission: "admitted_for_research" | "blocked" | "observation_only" | "unassessed";
     goal_assessment: "blocked" | "not_assessed" | "partially_satisfied" | "criteria_satisfied";

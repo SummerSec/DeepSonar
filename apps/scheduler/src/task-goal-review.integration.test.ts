@@ -56,14 +56,15 @@ if (!databaseUrl) {
         const taskContract = bounty ? normalizeTaskContract({ ...contract, outcome: { mode: "bounty_submission", rules_status: "supplied", rule_snapshot: {
           schema_version: 1, program_id: "fixture", version: "1", source: { provenance: "operator_supplied", reference: "attachment://fixture", sha256: `sha256:${"c".repeat(64)}` },
           targets: [{ id: "parser", type: "repository", reference: "fixture-parser", baseline: "fixture-v1" }],
-          rules: [{ id: "scope", kind: "requirement", description: "Fixture-only behavior" }],
+          rules: [{ id: "scope", kind: "requirement", description: "Fixture-only behavior" },
+            { id: "excluded", kind: "exclusion", description: "Reports requiring privileged setup are excluded" }],
         } } }) : contract;
         const projectId = randomUUID(), canvasId = randomUUID();
         await sql`INSERT INTO projects(id,name,config_json) VALUES(${projectId},'goal review fixture',${sql.json({ rules: { hubEnabled: false }, enabled_credential_ids: [] })})`;
         await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'fixture',${sql.json({ task_contract: taskContract, effective_finding_protocol: protocol, network_policy: { allow_egress: false } } as never)})`;
         await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${canvasId},'root','fixture','active')`;
         const maker = await seedJob(projectId, canvasId, { ...snapshot, task_contract: taskContract }), observation = await emitObservation(maker);
-        const claim = { schema_version: 1, task_contract_sha256: taskContractDigest(taskContract), target: "fixture-parser", ...(bounty ? { baseline: "fixture-v1", rule_assessments: [{ rule_id: "scope", result: "matches", evidence_refs: [observation.factId] }] } : {}), evidence_refs: [observation.factId],
+        const claim = { schema_version: 1, task_contract_sha256: taskContractDigest(taskContract), target: "fixture-parser", ...(bounty ? { baseline: "fixture-v1", rule_assessments: [{ rule_id: "scope", result: "matches", evidence_refs: [observation.factId] }, { rule_id: "excluded", result: "does_not_match", evidence_refs: [observation.factId] }] } : {}), evidence_refs: [observation.factId],
           criterion_assessments: ["objective", "scope", "evidence", "acceptance:0"].map((criterion_id) => ({ criterion_id, result: "matches", evidence_refs: [observation.factId] })) };
         await ingestEvent(maker.jobId, { v: 1, event_id: randomUUID(), type: "finding", payload: { title: "Parser fixture candidate", summary: "The parser fixture returned a measurable response for malformed input in the isolated test.", profile: "general", outcome_claim: claim } } as never);
         await finish(maker);
@@ -245,7 +246,7 @@ if (!databaseUrl) {
         assert.equal(report.task_outcome?.criteria.find((item) => item.id === "acceptance:0")?.assessment, "conflict");
       });
       await t.test("shared evidence scan exhaustion blocks every criterion independent of review order", async () => {
-        const candidate = await source(), positive = await reviewer(candidate, true, ["acceptance:0", "scope"]), negative = await reviewer(candidate);
+        const candidate = await source(true), positive = await reviewer(candidate, true, ["acceptance:0", "scope", "program_rule:scope", "program_rule:excluded"]), negative = await reviewer(candidate);
         const largeProof = async (job: Job) => {
           const directory = path.join(blobDir, "jobs", job.jobId), entries = [];
           for (let index = 0; index < 3; index++) {
@@ -259,7 +260,7 @@ if (!databaseUrl) {
           return emitObservation(job, { evidence: entries.map((entry) => ({ kind: "runtime.result", statement: "Retained large fixture evidence", uri: `jobs/${job.jobId}/${entry.path}`, sha256: entry.sha256 })) });
         };
         const a = await largeProof(positive), b = await largeProof(negative), supported = result(positive, [a.factId]);
-        supported.criteria.push({ ...supported.criteria[0], criterion_id: "scope" });
+        for (const criterion_id of ["scope", "program_rule:scope", "program_rule:excluded"]) supported.criteria.push({ ...supported.criteria[0], criterion_id });
         await ingestEvent(positive.jobId, proposal(supported));
         await ingestEvent(negative.jobId, proposal(result(negative, [b.factId], "contradicted")));
         await finish(positive); await finish(negative);
@@ -287,8 +288,86 @@ if (!databaseUrl) {
           assert.ok(report.task_outcome?.criteria.every((criterion) => criterion.assessment === "insufficient"));
           assert.equal(report.task_outcome?.criteria.find((criterion) => criterion.id === "scope")?.assessment, "insufficient", "global conservative policy also blocks the independent criterion");
           assert.equal(report.task_outcome?.goal_assessment, "blocked");
+          assert.equal(report.task_outcome?.findings[0].program_rule_review?.status, "blocked");
+          assert.ok(report.task_outcome?.findings[0].program_rule_review?.criteria.every((criterion) => criterion.assessment === "insufficient"));
           assert.ok(report.task_outcome?.gaps.includes("goal_review_evidence_scan_incomplete"));
         }
+      });
+      await t.test("program rules use independently assigned proof, remain separate from goal completion and eligibility", async () => {
+        const candidate = await source(true), ruleIds = ["program_rule:scope", "program_rule:excluded"];
+        const { buildReportInput } = await import("./report.js");
+        const projection = async () => (await buildReportInput(candidate.canvasId)).task_outcome!;
+        const rules = async () => (await projection()).findings.find((item) => item.finding_id === candidate.request.finding_id)!.program_rule_review!;
+        const submit = async (ids: string[], assessment: "satisfied" | "contradicted" = "satisfied") => {
+          const job = await reviewer(candidate, true, ids), proof = await evidence(job), value = result(job, [proof.factId], assessment);
+          value.criteria = ids.map((criterion_id) => ({ ...value.criteria[0], criterion_id,
+            expected: criterion_id === "program_rule:excluded" ? "Privileged setup exclusion must not apply" : "Fixture-only requirement must hold",
+            actual: criterion_id === "program_rule:excluded" ? (assessment === "satisfied" ? "No privileged setup required" : "Privileged setup required") : "Only fixture target exercised" }));
+          await ingestEvent(job.jobId, proposal(value)); await finish(job); return { job, proof };
+        };
+        assert.equal((await rules()).status, "not_assessed", "maker rule claims are not independent reviews");
+        await submit(["objective", "scope", "evidence", "acceptance:0"]);
+        assert.equal((await projection()).goal_assessment, "criteria_satisfied");
+        assert.equal((await rules()).status, "not_assessed", "generic goal success cannot satisfy program rules");
+        await submit([ruleIds[0]]);
+        assert.equal((await rules()).status, "partially_satisfied");
+        const exclusion = await submit([ruleIds[1]]);
+        const full = await rules();
+        assert.equal(full.status, "rules_satisfied");
+        assert.ok(full.criteria.every((item) => item.assessment === "satisfied"));
+        assert.ok(full.gaps.includes("program_rule_material_not_authenticated"));
+        assert.equal((await projection()).submission_eligibility, "not_assessed");
+        await writeFile(exclusion.proof.file, "changed retained proof");
+        assert.equal((await rules()).status, "blocked", "invalid retained evidence cannot preserve a rules-satisfied decision");
+        await writeFile(exclusion.proof.file, exclusion.proof.bytes);
+        assert.equal((await rules()).status, "rules_satisfied");
+        const effectId = randomUUID();
+        await sql`INSERT INTO job_attempt_effects(id,attempt_id,job_id,effect_id,effect_kind,status)
+          VALUES(${effectId},${exclusion.job.attemptId},${exclusion.job.jobId},'rule-review-unknown','fixture','unknown')`;
+        assert.equal((await rules()).status, "blocked", "unknown review effects invalidate rules satisfaction");
+        await sql`DELETE FROM job_attempt_effects WHERE id=${effectId}`;
+        assert.equal((await rules()).status, "rules_satisfied");
+        const { loadPlanGoalReviewOptions } = await import("./domains/plan-protocol/goal-review-binding.js");
+        const options = await loadPlanGoalReviewOptions(sql, candidate.projectId, candidate.canvasId, exclusion.proof.factId);
+        assert.deepEqual(options.options, [], "program-only review cannot offer an invalid Plan criterion mapping");
+        await writeFile(exclusion.proof.file, "revoked old proof");
+        assert.equal((await rules()).status, "blocked");
+        await submit([ruleIds[1]]);
+        assert.equal((await rules()).status, "rules_satisfied", "fresh valid independent proof can replace unavailable historical evidence");
+        await submit([ruleIds[1]], "contradicted");
+        assert.equal((await rules()).status, "blocked");
+        assert.equal((await rules()).criteria.find((item) => item.id === ruleIds[1])?.assessment, "conflict", "exclusion hit conflicts with independently reviewed non-hit");
+        assert.equal(full.status, "rules_satisfied", "previous report is immutable history");
+      });
+      await t.test("program rule request rejects invented IDs, generic contracts and Fact sources; public route freezes valid rules", async () => {
+        const generic = await source(), bounty = await source(true);
+        for (const [candidate, id] of [[generic, "program_rule:scope"], [bounty, "program_rule:invented"]] as const) {
+          await assert.rejects(reviewer(candidate, true, [id]), /goal_review_criterion_unknown/);
+        }
+        const { finding_id: _findingId, ...request } = bounty.request;
+        await assert.rejects(freezeGoalReviewAssignment(sql, bounty.projectId, bounty.canvasId, snapshot,
+          { ...request, fact_id: bounty.observation.factId, criterion_ids: ["program_rule:scope"] }));
+        const [{ default: Fastify }, { default: websocket }, { registerRoutes }, { generateToken }] = await Promise.all([
+          import("fastify"), import("@fastify/websocket"), import("./routes.js"), import("./auth.js"),
+        ]);
+        const app = Fastify({ logger: false });
+        try {
+          await app.register(websocket); registerRoutes(app); await app.ready();
+          const token = generateToken();
+          await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
+            VALUES('program reviewer',${bounty.projectId},${token.prefix},${token.hash},${["tasks:write", "tasks:read", "jobs:control"]})`;
+          const post = (goalReview: object) => app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token.plaintext}` },
+            payload: { project_id: bounty.projectId, type: "audit", payload: { goal_review: goalReview, prompt: "Independently compare supplied rules with retained proof." } } });
+          const response = await post({ ...bounty.request, criterion_ids: ["program_rule:scope"] });
+          assert.equal(response.statusCode, 201, response.payload);
+          const [stored] = await sql`SELECT agent_snapshot_json FROM jobs WHERE project_id=${bounty.projectId} AND status='pending'`;
+          assert.deepEqual(stored.agent_snapshot_json.task_goal_review.request.criterion_ids, ["program_rule:scope"]);
+          const [before] = await sql`SELECT count(*)::int AS count FROM jobs WHERE project_id=${bounty.projectId}`;
+          assert.ok((await post({ ...bounty.request, criterion_ids: ["program_rule:invented"] })).statusCode >= 400);
+          assert.equal((await post({ ...request, fact_id: bounty.observation.factId, criterion_ids: ["program_rule:scope"] })).statusCode, 400);
+          const [after] = await sql`SELECT count(*)::int AS count FROM jobs WHERE project_id=${bounty.projectId}`;
+          assert.deepEqual(after, before, "rejected rule assignments do not create Jobs");
+        } finally { await app.close(); }
       });
       await t.test("all reviewed criteria can be satisfied without declaring completion or bounty submission eligibility", async () => {
         for (const bounty of [false, true]) {
@@ -303,6 +382,7 @@ if (!databaseUrl) {
           assert.ok(report.task_outcome?.gaps.includes("overall_completion_owned_by_plan"));
           assert.equal(report.task_outcome?.submission_eligibility, bounty ? "not_assessed" : "not_applicable");
           assert.equal("task_completed" in report.task_outcome!, false);
+          if (bounty) assert.equal(report.task_outcome!.findings[0].program_rule_review?.status, "not_assessed");
         }
       });
     } finally {
