@@ -3,6 +3,7 @@ import { sql } from "../../db.js";
 
 export type RepairTokenBudget = {
   receipt_ref: string;
+  attempt_id: string;
   limit_tokens: number | null;
   known_tokens: number;
   remaining_tokens: number | null;
@@ -39,7 +40,7 @@ export async function readRepairTokenBudget(db: typeof sql, jobId: string): Prom
     }
   }
   const cap = Number.isSafeInteger(limit) && limit > 0 ? limit : null;
-  return { receipt_ref: String(first.event_id), limit_tokens: cap, known_tokens: known,
+  return { receipt_ref: String(first.event_id), attempt_id: String(first.payload_json.attempt_id), limit_tokens: cap, known_tokens: known,
     remaining_tokens: state === "known" && cap !== null ? Math.max(0, cap - known) : null, usage_status: state };
 }
 
@@ -96,6 +97,8 @@ export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptI
     FROM jobs WHERE id=${jobId} FOR UPDATE`;
   const budget = await readRepairTokenBudget(db, jobId);
   if (!budget) return null;
+  if (budget.attempt_id !== attemptId) throw new RepairTokenBudgetError(
+    "REPAIR_ATTEMPT_CHANGED", "Another Attempt cannot resume the original repair session", budget);
   const [attempt] = await db`SELECT id FROM job_attempts WHERE id=${attemptId} AND job_id=${jobId}
     AND status='active' AND NOT cancel_requested FOR UPDATE`;
   if (!job || job.status !== "running" || !job.leased || !job.within_time || !attempt) {

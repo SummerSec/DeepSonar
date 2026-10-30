@@ -183,6 +183,13 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     const [notAdmitted] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${unconfigured.jobId}`;
     assert.equal(notAdmitted.n, 0, "denied-before-send is known not to have issued a new billable request");
 
+    const replacedAttempt = await setup(); await replacedAttempt.propose(0, "x".repeat(8193));
+    await sql`UPDATE job_attempts SET status='interrupted',finished_at=now() WHERE job_id=${replacedAttempt.jobId}`;
+    await sql.begin(tx => createAttempt(tx as unknown as typeof sql, replacedAttempt.jobId));
+    const beforeReplacement = calls;
+    assert.equal((await replacedAttempt.request()).json().error.type, "REPAIR_ATTEMPT_CHANGED");
+    assert.equal(calls, beforeReplacement, "another Attempt cannot incur costs against an unresumable completion chain");
+
     for (const kind of ["cancel", "lease", "timeout"]) {
       const stopped = await setup(); await stopped.propose(0, "x".repeat(8193));
       if (kind === "cancel") await sql`UPDATE job_attempts SET cancel_requested=true,cancel_requested_at=now() WHERE job_id=${stopped.jobId}`;

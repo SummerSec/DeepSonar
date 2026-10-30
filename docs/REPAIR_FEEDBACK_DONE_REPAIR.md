@@ -31,7 +31,7 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 ## 独立修正 token 用量与额度
 
-`DEEPSONAR_REPAIR_MAX_TOKENS` 由管理员显式设置为 1–2000000 的整数；未设置或非法时不允许新增修正模型请求，不隐式采用无限或默认付费额度。首个持久拒绝回执冻结 `repair_token_limit`，之后配置改变、换 Gateway token 或进程重启不重置它。正常首次模型请求与不调用模型的本地修正不增加修正成本。
+`DEEPSONAR_REPAIR_MAX_TOKENS` 由管理员显式设置为 1–2000000 的整数；未设置或非法时不允许新增修正模型请求，不隐式采用无限或默认付费额度。首个持久拒绝回执冻结 `repair_token_limit`，之后配置改变、换 Gateway token 或进程重启不重置它；另一 Attempt 不得继续原修正链，Gateway 在出站前以 REPAIR_ATTEMPT_CHANGED 停止。正常首次模型请求与不调用模型的本地修正不增加修正成本。
 
 归属规则是**首个拒绝提交之后，在 Job 锁内准入的 Gateway 请求**。触发拒绝的先前请求不追溯收费。宿主把 `repair_receipt_ref` 和当前剩余额度预留写入原 `gateway_model_request` effect 的 intent；聚合对应 `job_usage_ledger`，不新建收费表、不重复扣账。原管理 Job 详情中的 effect intent 与 usage ledger 可按 Attempt/effect 关联。此处成本单位是 token，不推导金额、费率或真实模型恢复率。
 
