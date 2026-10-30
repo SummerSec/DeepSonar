@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { contentSha256, planCriteria, type CriterionProjection } from "./criterion-model.js";
 import { PlanAuditRecord } from "@deepsonar/shared-types";
 
 /** Read model only: no execution, authorization, or completion authority. */
@@ -21,13 +22,15 @@ export function projectPlanGaps(jobId: string, payload: unknown) {
       updated_at: record.updated_at,
       // This timestamp/hash identifies the read snapshot, not an optimistic-lock revision.
       goal: plan?.goal ?? null,
+      plan_sha256: plan ? contentSha256(plan) : null,
+      criteria: plan ? planCriteria(plan).map((criterion): CriterionProjection => ({ ...criterion, state: "unbound", truncated: false, bindings: [] })) : [],
       completion: plan?.completion ?? null,
       proposed_outcome: record.result?.outcome ?? null,
       proposed_termination_reason: record.termination_reason,
       open_questions: [...new Set([...(plan?.open_questions ?? []), ...(record.result?.open_questions ?? [])])],
       trim_reasons: record.trim_reasons,
       completion_assessment: "unknown",
-      evidence_gap: "criterion_evidence_binding_unavailable",
+      evidence_gap: "overall_completion_authority_unavailable",
       tasks: (plan?.tasks ?? []).map((task) => ({
         task_id: task.id,
         title: task.title,
@@ -59,7 +62,7 @@ export function renderPlanGapReport(report: PlanGapReport | undefined): string {
   const fence = "`".repeat(Math.max(3, ...Array.from(body.matchAll(/`+/g), (m) => m[0].length + 1)));
   return [
     "", "## 目标与缺口（只读计划审计）", "",
-    "以下是计划提案的来源快照，不是执行或验证结论。判据尚未绑定权威证据，完成情况为 unknown；",
+    "以下是计划提案的来源快照，不是执行或验证结论。判据仅在显式操作者关联且来源仍有效时标记 satisfied；整体完成仍为 unknown。",
     "done/complete、停止理由及输入引用均不证明完成或阴性。Job 成功也不等于目标已满足。",
     "未列出的证据不代表不存在；项目关系不授予当前 Job 证据或权限。历史报告保留冻结时内容。",
     report.truncated ? "计划审计超出本报告上限，覆盖不完整。" : "",

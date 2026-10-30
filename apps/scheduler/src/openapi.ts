@@ -1146,6 +1146,8 @@ const OPS: Op[] = [
           },
           finding: FactFindingSchema,
           job: FactJobSchema,
+          plan_criterion_source: { type: "object", nullable: true, additionalProperties: true, description: "当前 Artifact/Job/Attempt 与留存文件内容版本、eligible 和不可用原因；不包含文件原文。" },
+          plan_bindings: { type: "object", additionalProperties: true, description: "最近 32 条操作员判据绑定审计及 truncated；完整决策留在 append-only audit_logs。" },
           trace: {
             type: "object",
             additionalProperties: false,
@@ -1163,7 +1165,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/canvases/{id}/facts/{nodeId}/verification",
     summary: "人工更新 Fact 验证态",
-    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。",
+    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。可选 plan_binding 必须同时提供 verified 和 note；它是明确操作员判据评价，不改变派发或 Finding 状态。来源必须为同 Canvas 的成功 Job/Attempt、当前 Artifact 和实际留存证据；版本冲突返回 409。",
     scope: "jobs:control",
     tags: ["Tasks"],
     body: {
@@ -1173,6 +1175,19 @@ const OPS: Op[] = [
       properties: {
         status: { type: "string", enum: ["verified", "rejected", "needs_human"] },
         note: { type: "string", minLength: 1, maxLength: 2000 },
+        plan_binding: {
+          type: "object", additionalProperties: false,
+          required: ["plan_job_id", "plan_sha256", "criterion_id", "expected_source_sha256", "expected_binding_id", "assessment", "observation"],
+          properties: {
+            plan_job_id: { type: "string", format: "uuid" },
+            plan_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            criterion_id: { type: "string", pattern: "^(completion|output-(?:[0-9]|[12][0-9]|3[01]))$" },
+            expected_source_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            expected_binding_id: { type: "string", format: "uuid", nullable: true },
+            assessment: { type: "string", enum: ["satisfies", "contradicts", "inconclusive"] },
+            observation: { type: "string", enum: ["positive", "negative", "unspecified"] },
+          },
+        },
       },
     },
     responses: {
@@ -1183,7 +1198,7 @@ const OPS: Op[] = [
         properties: { fact: FactSummarySchema },
       },
       "409": {
-        description: "非 Fact 节点或非法迁移（如 rejected→verified）",
+        description: "非 Fact 节点、非法迁移、Plan/证据版本过期、来源不可用或绑定修订冲突",
         content: { "application/json": { schema: ErrorSchema } },
       },
     },
@@ -1331,7 +1346,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}",
     summary: "Job 详情（含事件）",
     description:
-      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。",
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
     scope: "tasks:read",
     tags: ["Jobs"],
   },
