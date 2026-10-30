@@ -82,6 +82,8 @@
 
 ---
 
+[#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；B/C 持久修正闭环待交付。
+
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |
