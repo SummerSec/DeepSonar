@@ -84,6 +84,10 @@
 
 ---
 
+[#776 RepairFeedback 基线](REPAIR_FEEDBACK_BASELINE.md)记录 A 阶段错误矩阵与合成契约回放；作为 B 前历史基线保留。
+
+[#776 B 完成修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md)记录 mark_job_done 的持久提案闭环与未验收边界；C0 提供 scoped 引用刷新指引，C1 提供既有 Hub complete 门的有界缺失项反馈；完整 C 和真实模型效果仍待交付。
+
 ## 进行中 / 部分落地
 
 | 文档 | 状态 | 说明 |
@@ -154,3 +158,5 @@
 4. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag 之前，按 [`../AGENTS.md`](../AGENTS.md)「发布前的文档保鲜」清单核一遍（版本字面量、已删机制残留、as-built 与代码一致性、本索引状态行与日期、命令与链接），并同步本文件顶部的「当前同步状态」。其中版本字面量、命令、链接与已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检阻断（`as-built 与代码相反` 仍需人工）；漂移修在同一个 release 分支，不留给下一个版本；展开见 [工程规范](architecture/11-engineering-specs.md)与[发布流程](RELEASE_RUNTIME_IMAGES.md)。
 
 #770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；跨任务关系仍待后续交付，不能由查询上线推定已完成。
+
+[#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。

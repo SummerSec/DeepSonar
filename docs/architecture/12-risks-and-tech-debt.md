@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-29
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -20,7 +20,7 @@
 | --- | --- | --- | --- | --- |
 | D-01 | 中 | 多 Scheduler 使用各自本地 `BLOB_DIR` 时，过程流非持有副本返回 `visibility=unavailable`，WebSocket 以 4415 关闭；`stream-bus` 只在进程内缓存。代码见 [`process-stream-policy.ts`](../../apps/scheduler/src/process-stream-policy.ts)、[`evidence.ts`](../../apps/scheduler/src/evidence.ts)。 | 非共享卷部署无法提供跨副本过程流连续性；客户端必须处理显式不可见状态。 | 共享卷可证明可见性后才扩大支持面；在此之前保留显式 unavailable，不引入第二消息真相。运行时边界已有 [`process-stream-boundary.test.ts`](../../apps/scheduler/src/process-stream-boundary.test.ts) 覆盖。 |
 | D-02 | 中 | 镜像对账已经从 Worker registry 枚举远端节点，但远端 inspect/repair 平面尚未实现；当前只支持本地执行检查或定向修复，远端明确 `unsupported`。详见 [`DESIGN.md`](../../DESIGN.md) 的运行时镜像恢复段和 [`runtime-image-pull-partial-failure.md`](../runbooks/runtime-image-pull-partial-failure.md)。 | 远端节点可能需要人工确认或单独运维，不能由 Scheduler 本地状态推断全节点已就绪。 | 关联 #724；实现远端平面前不得去掉 `unsupported`、节点枚举或证据要求，也不得把缺失结果当作成功。 |
-| D-03 | 中 | Control API 已有版本化 RepairFeedback 和稳定错误路径，但 Hub、Verify、Completion Gate 与完整 Proposal/Receipt/Settlement 尚未统一；当前内核仍以 Job/Attempt/effect 账本作为效果边界。 | 跨域修复检查点和 durable receipt 语义仍需分别核对，模型修复成功率与副作用账本暂未形成一套统一回放。 | 只在现有 event-ingestion 和 effect 账本上增量收敛；未知外部效果继续停止自动重放。不得以新增内存状态替代数据库事实。 |
+| D-03 | 中 | Control API 已有版本化 RepairFeedback 和稳定错误路径，但 Hub、Verify、Completion Gate 与完整 Proposal/Receipt/Settlement 尚未统一；当前内核仍以 Job/Attempt/effect 账本作为效果边界。 | mark_job_done 的窄范围持久回执见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)；跨域修复检查点、独立 repair-token 预算与完整完成门仍需核对，模型修复成功率尚无实测。 | 只在现有 event-ingestion 和 effect 账本上增量收敛；未知外部效果继续停止自动重放。不得以新增内存状态替代数据库事实。 |
 | D-04 | 中 | Capability Pack 的 manifest、Job 级发现、selector/digest 快照和平台准入已落地，但 task/session 生命周期、评估晋升、临时组合和跨任务经验推荐仍未实现。 | 后续若直接把目录推荐写进角色配置，可能绕过 Job 快照和权限边界，造成能力漂移。 | 关联长期 AI-native 路线；新能力先按当前 Pack/Job scope 落地，未实现的生命周期不写入 as-built，不为未来推荐预留运行时旁路。 |
 | D-05 | 低 | Artifact-first Phase 1 已把 Fact/Finding 提案转换为 Artifact，并将 Finding/SARIF/报告作为投影；Claim/Evidence/Evaluation/Projection 的长期扩展和旧投影路径清理仍未完成。 | 投影种类增加时需要维持 Artifact、Fact、Finding 和报告的版本/来源一致，重复事实源会增加审计成本。 | 继续以 Artifact 为内部写入真相；Verify 只消费结构化 Fact、Artifact、Evidence 和独立 Evaluation。任何新字段先进入现有 schema/共享契约和投影测试。 |
 | D-06 | 低 | 质量指标和 Hub replay 已有只读投影；Experience 经验存储为空，尚未有跨任务经验召回、成本感知计划和策略评估闭环。 | 不能把质量投影或人工标签解读为模型准确率承诺，也不能自动把历史结果当作当前事实。 | 关联长期评估路线；没有冻结数据集、来源、版本和过期策略前，不新增经验写入或推荐路径。 |
