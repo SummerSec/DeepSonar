@@ -112,7 +112,7 @@ export type {
   RuntimeProfileSystemPromptRef as RuntimeProfileSystemPromptRefType,
   RuntimeProfileOverridePayload as RuntimeProfileOverridePayloadType,
 } from "./agent-runtime-profile.js";
-import { SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
+import { PlanDecisionBasis, SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
 
@@ -712,6 +712,7 @@ export type ProgressPayload = z.infer<typeof ProgressPayload>;
 export const HumanPayload = z
   .object({
     reason: meaningfulText(8, 2000),
+    plan_basis: PlanDecisionBasis.optional(),
     subject: z.discriminatedUnion("type", [
       z
         .object({
@@ -728,7 +729,12 @@ export const HumanPayload = z
         .strict(),
     ]),
   })
-  .strict();
+  .strict().superRefine((value, ctx) => {
+    if (value.plan_basis && (!['blocked', 'needs_human'].includes(value.plan_basis.outcome)
+      || value.subject.type !== 'platform_blocker' || value.subject.kind !== 'business_decision')) {
+      ctx.addIssue({ code: "custom", path: ["plan_basis"], message: "Plan stops require blocked/needs_human and a business_decision subject" });
+    }
+  });
 export type HumanPayload = z.infer<typeof HumanPayload>;
 
 export const DonePayload = z
@@ -851,6 +857,7 @@ export const GRAPH_QUERY_LIMITS = {
 } as const;
 
 export const GraphQueryKind = z.enum([
+  "plan_gap",
   "overview",
   "index",
   "node",
@@ -890,6 +897,15 @@ export const GraphQueryPayload = z
     const add = (path: string[], message: string) => {
       ctx.addIssue({ code: "custom", path, message });
     };
+    if (value.kind === "plan_gap") {
+      for (const key of ["node_type","status","since","direction","edge_type","verify_status","unconverged_only","finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `plan_gap does not accept ${key}`);
+      }
+      if (value.limit !== undefined && value.limit > 4) add(["limit"], "plan_gap limit must be <= 4");
+      if (value.ids && value.ids.length > 4) add(["ids"], "plan_gap accepts at most 4 source Facts");
+      if (value.cursor !== undefined && !/^(?:0|[1-9][0-9]?)$/.test(value.cursor)) add(["cursor"], "plan_gap cursor must be a bounded criterion offset");
+      return;
+    }
     if (value.kind === "overview") {
       for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
         if (value[key] !== undefined) add([key], `overview does not accept ${key}`);
@@ -1344,6 +1360,7 @@ export const HubDecisionPayload = z
     complete: HubCompletePayload.optional(),
     intents: z.array(HubIntentPayload).min(1).max(100).optional(),
     payload_file: HubDecisionPayloadFile.optional(),
+    plan_basis: PlanDecisionBasis.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -1357,6 +1374,12 @@ export const HubDecisionPayload = z
         message: "submit_hub_decision must provide exactly one of complete, intents, or payload_file",
       });
       return;
+    }
+    if (value.plan_basis) {
+      if (hasFile || (hasIntents && (value.plan_basis.outcome !== "continue" || value.intents!.length !== 1))
+        || (hasComplete && value.plan_basis.outcome !== "complete")) {
+        ctx.addIssue({ code: "custom", path: ["plan_basis"], message: "Plan decisions require exactly one continue Intent or one complete proposal; file basis belongs inside the file" });
+      }
     }
     if (hasFile) return;
     const violation = hubReferenceBudgetViolation(value);
@@ -1447,6 +1470,7 @@ const HubDecisionEnvelopeInput = z
   .object({
     complete: z.unknown().optional(),
     intents: z.unknown().optional(),
+    plan_basis: PlanDecisionBasis.optional(),
   })
   .strict();
 
@@ -1737,6 +1761,8 @@ export {
   PlanTaskExecution,
   PlanTaskId,
   PlanVerificationStrategy,
+  PlanDecisionBasis,
+  PlanCriterionId,
   SubmitPlanPayload,
   SubmitPlanResultPayload,
   adaptHubCompleteToPlanResult,

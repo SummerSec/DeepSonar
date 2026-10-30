@@ -306,7 +306,7 @@ export function recordFirstSemanticDone<T>(state: { done: T | null }, proposal: 
 export interface DeferredSemanticState {
   done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
   hub: { eventId: string; payload: unknown } | null;
-  human: { eventId: string; reason: string; subject: HumanPayload["subject"] } | null;
+  human: { eventId: string; reason: string; subject: HumanPayload["subject"]; plan_basis?: HumanPayload["plan_basis"] } | null;
 }
 
 /**
@@ -330,7 +330,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
       v: 1,
       event_id: state.human.eventId,
       type: "human",
-      payload: { reason: state.human.reason, subject: state.human.subject },
+      payload: { reason: state.human.reason, subject: state.human.subject, ...(state.human.plan_basis ? {plan_basis:state.human.plan_basis} : {}) },
     }];
   }
   if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
@@ -344,7 +344,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
         v: 1,
         event_id: state.hub.eventId,
         type: "hub_decision",
-        payload: { complete: decision.complete },
+        payload: { complete: decision.complete, ...(decision.plan_basis ? {plan_basis:decision.plan_basis} : {}) },
       });
     } else {
       const intents = (decision.intents ?? []).slice(0, input.maxIntentsPerDecision);
@@ -353,7 +353,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
           v: 1,
           event_id: state.hub.eventId,
           type: "hub_decision",
-          payload: { intents },
+          payload: { intents, ...(decision.plan_basis ? {plan_basis:decision.plan_basis} : {}) },
         });
       }
     }
@@ -1471,7 +1471,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       await preflightDeferredSemanticEvent(jobId, "human", p);
       if (completionReservation) throw toolBoundaryError("duplicateToolCall", "Completion acceptance is pending; reconcile its receipt first");
       assertSemanticTerminalExclusivity(semanticState, "human");
-      semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject };
+      semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject, ...(p.plan_basis ? {plan_basis:p.plan_basis} : {}) };
       return;
     }
     throw new Error("不支持的语义事件");
@@ -1813,7 +1813,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       v: 1,
       event_id: semanticState.human.eventId,
       type: "human",
-      payload: { reason: semanticState.human.reason, subject: semanticState.human.subject },
+      payload: { reason: semanticState.human.reason, subject: semanticState.human.subject, ...(semanticState.human.plan_basis ? {plan_basis:semanticState.human.plan_basis} : {}) },
     });
     return;
   }

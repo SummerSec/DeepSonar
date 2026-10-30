@@ -69,3 +69,7 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 ## Plan 判据管理读取与人工绑定
 
 既有 Job 详情暴露 Plan 内容 SHA/判据；Fact 详情暴露当前来源版本与有界绑定历史。Fact verification PATCH 可附 plan_binding，必须 verified+note、jobs:control；expected_binding_id 与内容 SHA 冲突/不可用返回 409。它不改变 Agent 控制操作或派发契约。字段及限制见 [专题](../PLAN_GAP_PROJECTION.md) 与 OpenAPI。
+
+## Plan 决策元数据（#775 B 首片）
+
+Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/request_human 可带严格版本化 plan_basis。字段、只读证明、单步预算、错误/重试边界见 [Plan 协议范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)；OpenAPI 输入 schema 由 shared-types 派生，无新写入 API。

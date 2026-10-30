@@ -123,7 +123,7 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
       patch(first.fact,await request(first.fact,{ assessment: "inconclusive", expected_binding_id: binding.binding_id })),
     ]);
     assert.deepEqual(concurrent.map(r=>r.statusCode).sort(),[200,409]);
-    const latestId = () => detail(first.fact).then(x=>x.plan_bindings.records[0].after_json.binding_id);
+    const latestId = () => detail(first.fact).then(x=>x.plan_bindings.records.find((r:{after_json:{criterion_id:string}})=>r.after_json.criterion_id==="completion").after_json.binding_id);
     assert.equal((await patch(first.fact,await request(first.fact,{ expected_binding_id: await latestId() }))).statusCode,200);
     assert.equal((await patch(second.fact,await request(second.fact,{ assessment: "contradicts", observation: "positive" }))).statusCode,200);
     assert.equal((await criteria())[0]?.state,"conflict");
@@ -137,6 +137,38 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
     const secondBinding = (await detail(second.fact)).plan_bindings.records[0].after_json.binding_id;
     assert.equal((await patch(second.fact,await request(second.fact,{expected_binding_id:secondBinding}))).statusCode,200);
     assert.equal((await criteria())[0]?.state,"satisfied");
+    // Positive B replay: real retained bytes + operator binding + Job-scoped read + Control commit.
+    for (const evidence of [first,second]) {
+      assert.equal((await patch(evidence.fact,await request(evidence.fact,{criterion_id:"output-0"}))).statusCode,200);
+    }
+    await sql`INSERT INTO events(job_id,event_id,job_seq,type,payload_json) VALUES(${planJob},${randomUUID()},1,'plan',${sql.json({plan} as never)})`;
+    const [root]=await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json) VALUES(${canvas},'root','Scoped objective','active','{}') RETURNING id`;
+    const completingHub=randomUUID();
+    const api=await import("./domains/platform-api/index.js");
+    const {executeGraphQuery}=await import("./graph-query.js");
+    const {ingestEvent}=await import("./core.js");
+    const operations=["graph_query","submit_hub_decision"];
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json) VALUES(${completingHub},${project},${canvas},'hub_reason','provisioning',${sql.json({name:"hub_reason",role_kind:"hub",platform_tools:operations})},'{}')`;
+    const grant=await api.mintJobCapabilityToken(completingHub);
+    await sql`UPDATE jobs SET status='running' WHERE id=${completingHub}`;
+    await api.activateProvisionedJobCapabilityTokens(completingHub);
+    api.registerRuntimeHandler(completingHub,async context=>{
+      if(context.operationId==='graph_query') return executeGraphQuery({jobId:completingHub,canvasId:canvas,payload:context.input});
+      return ingestEvent(completingHub,{v:1,event_id:context.eventId,type:'hub_decision',payload:context.input} as never);
+    },operations);
+    const invoke=(operation:string,payload:unknown)=>app.inject({method:'POST',url:`/control/v1/jobs/${completingHub}/operations/${operation}`,headers:{authorization:`Bearer ${grant.token}`,'idempotency-key':randomUUID()},payload:payload as never});
+    const queried=await invoke('graph_query',{kind:'plan_gap',id:planJob,ids:[first.fact,second.fact]});
+    assert.equal(queried.statusCode,200,queried.payload);
+    const gap=queried.json().items[0];assert.ok(gap.criteria.every((c:{state:string})=>c.state==='satisfied'));
+    const complete=await invoke('submit_hub_decision',{complete:{from:[root.id,first.fact,second.fact],description:'Operator assessed all current scoped criteria'},plan_basis:{v:1,
+      plan_job_id:planJob,plan_sha256:gap.plan_sha256,criterion_id:'completion',expected_revision:gap.revision,
+      expected_task_input_sha256:gap.task_input_sha256,expected_projection_sha256:gap.projection_sha256,
+      source_refs:gap.source_refs.map((source:{fact_id:string;source_sha256:string})=>({fact_id:source.fact_id,source_sha256:source.source_sha256})),
+      outcome:'complete',rationale:'All necessary current criteria have explicit positive operator assessments'}});
+    assert.equal(complete.statusCode,200,complete.payload);
+    const [completedRoot]=await sql`SELECT status FROM canvas_nodes WHERE id=${root.id}`;
+    assert.equal(completedRoot.status,'analysis_complete');
+    api.unregisterRuntimeHandler(completingHub);
     // Ordinary revoke/reverify also serializes with a report transaction holding Canvas.
     for (const [status, frozenState] of [["needs_human","satisfied"],["verified","stale"]] as const) {
       let pendingTrust: ReturnType<typeof patch> | undefined;

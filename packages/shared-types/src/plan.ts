@@ -67,6 +67,32 @@ export type CompletionPolicy = z.infer<typeof CompletionPolicy>;
 export const PlanResultOutcome = z.enum(["continue", "complete", "blocked", "needs_human"]);
 export type PlanResultOutcome = z.infer<typeof PlanResultOutcome>;
 
+/** Versioned evidence/revision metadata for the existing Hub/Intent path, never a second work contract. */
+export const PlanCriterionId = z.string().regex(/^(completion|output-(?:[0-9]|[12][0-9]|3[01]))$/);
+const contentDigest = z.string().regex(/^[a-f0-9]{64}$/);
+export const PlanDecisionBasis = z.object({
+  v: z.literal(1),
+  plan_job_id: z.string().uuid(),
+  plan_sha256: contentDigest,
+  criterion_id: PlanCriterionId,
+  expected_revision: z.string().regex(/^[1-9][0-9]{0,19}$/),
+  expected_task_input_sha256: contentDigest,
+  expected_projection_sha256: contentDigest,
+  source_refs: z.array(z.object({ fact_id: z.string().uuid(), source_sha256: contentDigest }).strict()).max(4),
+  outcome: PlanResultOutcome,
+  rationale: nonEmptyText(2_000),
+  expected_gain: nonEmptyText(500).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (new Set(value.source_refs.map(ref => ref.fact_id)).size !== value.source_refs.length) {
+    ctx.addIssue({ code: "custom", path: ["source_refs"], message: "Plan source references must be unique" });
+  }
+  if ((value.outcome === "continue") !== (value.expected_gain !== undefined)) {
+    ctx.addIssue({ code: "custom", path: ["expected_gain"], message: "Only continue must declare an expected gain" });
+  }
+});
+export type PlanDecisionBasis = z.infer<typeof PlanDecisionBasis>;
+
+
 export const PlanTaskExecution = z
   .object({
     task_id: PlanTaskId,

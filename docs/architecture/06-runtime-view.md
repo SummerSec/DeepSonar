@@ -96,3 +96,7 @@ RPC 按帧有界扫描，默认 8MiB 硬上限（可配置至 64MiB）；超过 
 ## DSH 子代理与完成门（#766）
 
 对应 FR-CRED-005。DSH 父会话 idle 时若仍存在受认证谱系下的活跃子代理，不触发完成门、催促或 shutdown。只有对应 `subagent.finished` 结束该轮子代理活动；子 idle 不是完成依据，恢复 running 会重新计入活动。全部子代理完成后等待父会话接收结果并再次 idle，再按原完成回执契约结算。父错误、Job 超时与取消仍可终止运行。验证入口是现有 `ci:unit:runtime-sandbox` 中的 `runtime-dsh-recovery.test.ts`（新版真实协议回放）及 CI 的 DSH Cordis Docker smoke。
+
+## Plan 单步决策（#775 B 首片）
+
+既有 Hub Intent 可携带 plan_basis，绑定当前 Plan/任务输入/证据/事件 revision；graph_query plan_gap 保存有界已读证明。Canvas 最多一次补证，完成需要全部判据当前正向操作员授权；自动完成亦受该门禁。延迟终态事件保留依据，最终事务重验。假执行回归与真实质量验收限制见 [Plan 范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)。

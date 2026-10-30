@@ -35,7 +35,7 @@ test("aggregation never hides incomplete or conflicting evidence", () => {
 
 test("current evidence, revocation and explicit positive/negative have independent meanings", async () => {
   const { evaluateCriterionBinding } = await import("./domains/plan-protocol/criterion-projection.js");
-  const source = { fact_id: binding.fact_id, source_sha256: binding.expected_source_sha256, verification_epoch: "epoch-1", verification_status: "verified", eligible: true, reasons: [], source: binding.source };
+  const source = { task_input_sha256: "b".repeat(64), fact_id: binding.fact_id, source_sha256: binding.expected_source_sha256, verification_epoch: "epoch-1", verification_status: "verified", eligible: true, reasons: [], source: binding.source };
   const evaluate = (s = source, b = binding) => evaluateCriterionBinding(b, contentSha256(plan), contentSha256(planCriteria(plan)[0]), s).state;
   assert.equal(evaluate(), "satisfied");
   assert.equal(evaluate(source, { ...binding, observation: "positive" }), "satisfied");
