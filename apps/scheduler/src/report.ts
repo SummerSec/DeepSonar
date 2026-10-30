@@ -40,6 +40,9 @@ import {
   type NumericFidelityResult,
 } from "./report-numeric-fidelity.js";
 
+import { loadPlanGapReport } from "./domains/plan-protocol/gap-report.js";
+import { withPlanGapReport, type PlanGapReport } from "./domains/plan-protocol/gap-projection.js";
+
 type Tx = typeof sql;
 
 function sha256(data: string | Buffer): string {
@@ -114,6 +117,7 @@ export interface ReportInputFinding {
 }
 
 export interface ReportInput {
+  plan_gaps?: PlanGapReport;
   task: {
     canvas_id: string;
     title: string;
@@ -431,6 +435,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     inconclusive_findings: inconclusive,
     excluded_findings: excluded,
     seed_findings: reportSeedFindings,
+    plan_gaps: await loadPlanGapReport(db, canvasId, String(canvas.project_id)),
     scope_and_coverage: {
       goal: String(target.goal ?? ""),
       task_kind: target.kind === "compose" ? "compose" : "standard",
@@ -790,6 +795,7 @@ export function finalizeTaskReportMarkdown(
     usedDefault = "numeric";
     numeric = checkReportNumericFidelity(declared, { markdown });
   }
+  markdown = withPlanGapReport(markdown, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }
 

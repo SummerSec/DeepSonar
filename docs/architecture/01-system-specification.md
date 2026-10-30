@@ -551,6 +551,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-RPT-001 Task Report 冻结输入与版本
 
+#775 审计可见性切片将同 Canvas/项目的 Plan 提案纳入冻结报告。缺少判据证据绑定时必须明确 unknown，模型 done/complete 不构成满足证明；详见 [实现范围](../PLAN_GAP_PROJECTION.md)。
+
 - **规范要求**：Finding 确认后必须能生成冻结输入的 Finding Report；Canvas 收敛后必须能生成带 `report-input.json` 和 SHA-256 的版本化 Task Report。相同输入幂等复用，输入变化追加版本；报告投影失败不得改写内部 Fact/Finding/Artifact，覆盖门必须按精确 Finding ID 核对章节。
 - **决策来源**：报告是投影，不应改变产生它的事实；版本和摘要是可重建、可审计的交付身份。
 - **实现状态**：as-built；相同成功输入返回已有版本，失败/进行中同输入可复用版本。

@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+> **#775 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将现有计划审计纳入冻结任务报告；完成判断保守为 unknown，A 的权威证据绑定与 B/C 仍未交付。
+
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
