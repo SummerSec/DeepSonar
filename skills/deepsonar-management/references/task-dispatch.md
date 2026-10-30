@@ -89,7 +89,7 @@ content:
 
 `POST /projects/:id/tasks` 保留 `title/content`，可另提交 `task_contract`。Web 的可选契约编辑器与管理 CLI `tasks create --task-contract @contract.json` 走相同 API。未提供契约时继续接受自由文本并返回 `task_contract_not_assessed`；这不等于完成了前置条件检查。
 
-场景模板和版本的唯一机器来源是 [TaskContract](../../../packages/shared-types/src/task-contract.ts)；API/Web 复用此定义，CLI 传递同一契约，文档示例不构成另一套自动填值。契约必须声明 `schema_version: 1`、`template_id`（engineering/whitebox/blackbox/graybox）和 `template_version: 1`。共享 schema 严格拒绝未知字段/版本/类型和重复前置条件 ID；空白裁剪、集合排序/去重不分析原始需求。缺少非安全信息返回 `task_contract_warnings`，每项含 `code/path/message/suggestion`。创建前已知安全阻塞返回 `409 task_contract_blocked` 与 `task_contract_blockers`，不创建任务。无阻塞时返回 201；不要因为 warning 重复创建。
+场景模板和版本的唯一机器来源是 [TaskContract](../../../packages/shared-types/src/task-contract.ts)；API/Web 复用此定义，CLI 传递同一契约，文档示例不构成另一套自动填值。契约必须声明 `schema_version: 1`、`template_id`（engineering/whitebox/blackbox/graybox）和 `template_version: 1`。共享 schema 严格拒绝未知字段/版本/类型和重复前置条件 ID；空白裁剪、集合排序/去重不分析原始需求。已提供契约时，objective/targets/scope/evidence/acceptance 缺少基本信息会在创建和派发阶段阻塞；其他补充提示返回 `task_contract_warnings`，每项含 `code/path/message/suggestion`。创建前已知安全阻塞返回 `409 task_contract_blocked` 与 `task_contract_blockers`，不创建任务。无阻塞时返回 201；不要因为 warning 重复创建。
 
 Canvas 保存规范化契约和模板版本，Job 保存冻结契约用于执行提示；模板更新不改旧任务。预算字段用于规划与提醒，不替代平台运行预算。验收文本由创建者确认，模板建议不会自动变成已承诺结果。
 
@@ -168,3 +168,34 @@ Scheduler 在沙箱创建前再次核对当前项目网络策略、引用凭据�
 | 429 | 区分临时限流与额度耗尽，遵守等待提示和预算 |
 | 未提交完成回执 | 可能已完成或部分完成，先对账，不只补一句完成标准 |
 | 401/403/scope | 区分过期凭据、错误身份、范围不匹配和禁止；补齐条件须真实授权，不自动提权 |
+
+## 9. 通用任务标准与研究候选（#767 / #794 首片）
+
+所有已提供的 task_contract 都检查 objective/targets/scope/evidence/acceptance 基本完整性。exclusions 可以为空，有声明则纳入候选判据。省略 outcome、选择 task_defined 或 bounty_submission 都不绕过通用门。仍接受无契约旧入口但返回 unassessed；这是迁移缺口，不代表该任务已达到统一标准，也不是删除已启用契约绕过检查的理由。
+
+outcome 子对象可显式为 `{"mode":"task_defined"}`；只有用户要求按指定项目规则形成可提交成果时才选 bounty_submission。后者的 rules_status unknown 可开展补证观察，但不能提交 Finding；supplied 须提供规则快照。用户授权选定的 source.sha256 只是材料身份声明，不是官方规则或权限认证。详见[通用标准与研究候选](../../../docs/TASK_OUTCOME_ADMISSION.md)。
+
+先 emit_fact 保存观察/Artifact/Evidence，再经现有 Job Control API 提交研究候选；管理 CLI 不代替 Agent 伪造控制事件。所有已提供契约的 emit_finding 需要如下 outcome_claim（占位符须替换为真实上下文，不可直接执行）：
+
+```text
+outcome_claim:
+  task_contract_sha256: <本 Job 服务端给出的整个规范化冻结契约摘要>
+  target: <当前契约目标>
+  baseline: <有适用基线时填写>
+  evidence_refs: [<同项目/Canvas 且关联 Artifact 的 Fact UUID>]
+  criterion_assessments:
+    - criterion_id: <本 Job 给出的通用判据 ID>
+      result: <matches | does_not_match | unknown>
+      evidence_refs: [<支持该声明的 Fact UUID>]
+  rule_assessments: <仅赏金附加筛选需要；逐条 rule_id/result/evidence_refs>
+```
+
+objective、scope、evidence、每个 exclusion:N 必须评价；acceptance:N 至少一项 matches 只代表候选对验收有贡献关联，不能声称全部任务已完成。不自行猜测判据索引；使用冻结上下文给出的 ID。普通工程不强迫填写攻击前提/影响链，安全发现继续适用既有 FindingImpact 与 Verify。
+
+赏金 requirement 不符或 exclusion 命中不能升级目标 Finding；unknown/缺项补证或阻塞。通用与附加筛选通过都仅为 admitted_for_research，submission_eligibility 保持 not_assessed。Fact 存在不证明语义支持，候选数量不证明成果达标。
+
+高置信提交候选仍需后续独立复核、可复现证据、攻击链、knownness目标版本适用性、资格与 #775 整体报告收敛；不得使用任意数字置信阈值、severity或相似词替代。冻结与压缩约束继续保留。用户免除真实模型验收不等于效果已验证，更不等于这些实现缺口完成。
+
+### 程序规则独立复核边界
+
+对于 supplied bounty Finding，可沿用 goal_review 请求独立评审 `program_rule:<ruleid>`（本片已通过离线行为验收）。这与准入时规则自声明及通用目标验收分开；requirement satisfied 是满足要求，exclusion satisfied 是未命中排除。规则来自 operator_supplied 材料，rules_satisfied 不认证官方规则、当前授权或可提交资格；攻击链、可复现性、knownness 适用性与资格 authority 仍需后续依据。

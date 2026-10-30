@@ -1,3 +1,5 @@
+import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { projectPlanGaps } from "../plan-protocol/gap-projection.js";
@@ -113,12 +115,22 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       });
     }
     const projectId = scoped.projectId ?? body.project_id;
+    const reviewRequest = body.payload.goal_review === undefined ? undefined : TaskGoalReviewRequest.safeParse(body.payload.goal_review);
+    if (reviewRequest && !reviewRequest.success) return reply.code(400).send({
+      error: "目标评审请求结构无效。", error_code: "GOAL_REVIEW_REQUEST_INVALID", field: "payload.goal_review",
+    });
+    if (reviewRequest) {
+      const [project] = await sql`SELECT status FROM projects WHERE id=${projectId}`;
+      if (!project || project.status !== "active") return reply.code(409).send({
+        error: "目标评审项目不可用。", error_code: "GOAL_REVIEW_PROJECT_UNAVAILABLE", field: "project_id",
+      });
+    }
     // `verify` remains a compatibility alias used by the runtime-image smoke
     // to inspect the governed Verify snapshot. It is still scheduler-owned
     // for priority/purpose, but unlike `verify_finding` it has no Finding
     // lifecycle and cannot confirm anything on its own.
     const systemJobTypes = new Set(["hub_reason", "verify_finding", "report"]);
-    if (systemJobTypes.has(body.type.trim().toLowerCase())) {
+    if (systemJobTypes.has(body.type.trim().toLowerCase()) || (reviewRequest && body.type.trim().toLowerCase() === "verify")) {
       return reply.code(409).send({ error: "scheduler-owned system Job types cannot be created through the public endpoint" });
     }
     if (!isPublicJobTypeAllowed(body.type, await rolesForProject(sql, projectId))) {
@@ -150,29 +162,50 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     }
     let canvasId: string;
     try {
-      canvasId = await ensureCanvasForTask({
-        projectId,
-        title: body.title ?? `${body.type} 任务`,
-        target: { type: body.type, ...payload },
-      });
+      if (reviewRequest?.success) {
+        const [source] = reviewRequest.data.finding_id ? await sql`SELECT c.id FROM findings f JOIN jobs j ON j.id=f.job_id
+          JOIN canvases c ON c.id=j.canvas_id JOIN artifacts a ON a.id=f.artifact_id
+          WHERE f.id=${reviewRequest.data.finding_id} AND a.id=${reviewRequest.data.candidate_artifact_id}
+            AND f.project_id=${projectId} AND j.project_id=${projectId} AND c.project_id=${projectId}
+            AND a.project_id=${projectId} AND a.canvas_id=c.id AND a.job_id=j.id` : await sql`
+          SELECT c.id FROM canvas_nodes n JOIN jobs j ON j.id=n.job_id
+          JOIN canvases c ON c.id=n.canvas_id JOIN artifacts a ON a.node_id=n.id AND a.id::text=n.body_json->>'artifact_id'
+          WHERE n.id=${reviewRequest.data.fact_id!} AND n.node_type='fact' AND a.id=${reviewRequest.data.candidate_artifact_id}
+            AND j.project_id=${projectId} AND c.project_id=${projectId} AND j.canvas_id=c.id
+            AND a.project_id=${projectId} AND a.canvas_id=c.id AND a.job_id=j.id AND a.source_operation='emit_fact'`;
+        if (!source) return reply.code(404).send({
+          error: "目标评审候选在当前项目不可用。", error_code: "GOAL_REVIEW_SOURCE_NOT_FOUND", field: "payload.goal_review",
+        });
+        canvasId = String(source.id);
+        payload.goal_review = reviewRequest.data;
+      } else {
+        canvasId = await ensureCanvasForTask({ projectId, title: body.title ?? `${body.type} 任务`, target: { type: body.type, ...payload } });
+      }
     } catch (error) {
       if (error instanceof TaskSeedInputError) {
         return reply.code(400).send({ error: error.message, error_code: "TASK_SEEDS_NOT_ALLOWED" });
       }
       throw error;
     }
-    const { job, duplicated } = await createJob({
-      projectId,
-      canvasId,
-      type: body.type,
-      payload,
-      priority: body.priority,
-      timeoutSec: body.timeout_sec,
-      stallSec: body.stall_sec,
-      maxRequests: body.max_requests,
-    });
-    if (duplicated) return reply.code(409).send({ error: "冲突的活动 Job 已存在" });
-    return reply.code(201).send(job);
+    try {
+      const { job, duplicated } = await createJob({
+        projectId,
+        canvasId,
+        type: body.type,
+        payload,
+        priority: body.priority,
+        timeoutSec: body.timeout_sec,
+        stallSec: body.stall_sec,
+        maxRequests: body.max_requests,
+      });
+      if (duplicated) return reply.code(409).send({ error: "冲突的活动 Job 已存在" });
+      return reply.code(201).send(job);
+    } catch (error) {
+      if (reviewRequest && error instanceof ControlInputError) return reply.code(409).send({
+        error: error.message, error_code: error.code, field: error.path ?? "payload.goal_review", details: error.details,
+      });
+      throw error;
+    }
   });
 
   app.get("/jobs", async (req, reply) => {

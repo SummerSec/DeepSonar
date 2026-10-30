@@ -18,7 +18,10 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 
 ## 有界 Plan 决策
 
+plan_gap 的 supplementation_execution 只描述已关联的一次补证 Job/Attempt，不覆盖整个目标。not_dispatched 不等于目标未执行，succeeded 不等于判据满足或阴性；reported_blocker 只是 Agent 的结构化报告，unknown 不得重放。
 显式 submit_plan 后，可用 graph_query(kind=plan_gap,id=Plan Job UUID,ids=最多四个 Fact UUID,cursor=返回游标,limit=最多4)读取当前判据、来源、revision 与内容 SHA。沿用查询预算和本 Job 已见引用；翻页读完必要判据后才能提交 complete。plan_basis 使用返回版本，continue 仅可携带一个既有 Intent，并写明 rationale/expected_gain；每任务仅一次补证，改标题、Plan 或 Job 不能重置。全部必要判据必须具有当前有效的操作员 satisfies 评价；verified、阴性观察、模型 done 都不能单独证明完成。预算耗尽或无法确认时使用 request_human；带依据的停止使用 blocked/needs_human 与 platform_blocker.business_decision。依据过期先重读，unknown effect 禁止重放；查询预算耗尽仍可普通 request_human。
+带 plan_basis 的 submit_hub_decision/request_human（含 payload_file）成功返回持久 persisted_deferred 接纳回执，不代表派发或完成。响应丢失时 GET 对应 operation?receipt_key=<原UUID> 只读原结果；POST 完全相同的 key/输入只可恢复原活动 Attempt 的本地提案，不启动新执行。文件输入重试必须保持原路径与内容；未知效果不重放。无活动 handler 时只能读取接纳结果，不推断执行成功。
+
 
 ## 传输方式
 

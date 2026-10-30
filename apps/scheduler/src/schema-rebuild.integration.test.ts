@@ -279,3 +279,17 @@ if (testDatabaseUrl) {
     await runFindingSourceRebuildFixture(testDatabaseUrl);
   });
 }
+
+if (testDatabaseUrl) {
+  test("#770 C exact v63 baseline gains feature tables only after a backed-up rebuild", async () => {
+    const { runFeatureSchemaRebuildFixture } = await import("./schema-rebuild-feature-fixture.js");
+    await runFeatureSchemaRebuildFixture(testDatabaseUrl);
+  });
+}
+
+if (testDatabaseUrl) {
+  test("#770 durable candidates upgrade exact v64 without changing source or feature generations", async () => {
+    const { runCandidateSchemaRebuildFixture } = await import("./schema-rebuild-candidate-fixture.js");
+    await runCandidateSchemaRebuildFixture(testDatabaseUrl);
+  });
+}

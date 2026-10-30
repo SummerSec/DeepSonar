@@ -13,6 +13,8 @@ export interface PlatformOperationDefinition {
 }
 
 const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: string; readOnly: boolean; eventType: string | null }> = {
+  suggest_project_skills: { summary: "Suggest conditional project Skills", description: "Match exact authorized Skill versions against author declarations and current Job observations. Target is caller-declared; effectiveness and exposure remain unknown.", readOnly: true, eventType: null },
+  record_skill_choice: { summary: "Record an agent Skill choice declaration", description: "Recompute authorized suggestions and persist a selection/rejection declaration with a durable receipt. This neither pulls a Skill nor proves execution or benefit.", readOnly: false, eventType: "knowledge" },
   request_project_knowledge: { summary: "Request bounded project knowledge work", description: "Freeze authorized current-Job sources and enqueue durable governance work.", readOnly: false, eventType: "knowledge" },
   search_project_knowledge: { summary: "Search the frozen authorized knowledge catalog", description: "Return only Job-frozen metadata intersected with current revocations, before pagination.", readOnly: true, eventType: null },
   read_project_memory: { summary: "Read one frozen Memory version", description: "Read exact hash and version in this project's Job snapshot.", readOnly: true, eventType: null },
@@ -108,7 +110,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   graph_query: {
     summary: "Query the current Job canvas graph on demand",
-    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, or plan_gap). plan_gap reads a current explicit Plan by id, up to four criteria per page and four Fact ids; use its revision/content hashes in optional plan_basis on one existing Intent or complete proposal. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
+    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, or plan_gap). plan_gap reads a current explicit Plan by id, up to four criteria per page and four Fact ids; supplementation_execution separately describes the single linked Job/Attempt lifecycle, never criterion satisfaction or whole-goal execution coverage; use its revision/content hashes in optional plan_basis on one existing Intent or complete proposal. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
     readOnly: true,
     eventType: null,
   },
@@ -138,7 +140,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   submit_hub_decision: {
     summary: "Submit a Hub decision proposal",
-    description: "Submit the current Hub round's complete or intent decision.",
+    description: "Submit the current Hub round's complete or intent decision. With plan_basis (including payload_file), acceptance returns a durable persisted_deferred receipt. GET receipt_key reads it without execution; unchanged POST may restore only the original active Attempt.",
     readOnly: false,
     eventType: "hub_decision",
   },
@@ -388,14 +390,14 @@ export function buildPlatformOpenApiDocument(input: {
         security: [{ capabilityBearer: [] }],
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
-          ...(definition.operationId === "mark_job_done" ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore the live completion gate. After response loss and persisted_deferred lookup, POST the unchanged original key/revision/payload to restore the original active handler. Requires the active Job capability." }] : []),
+          ...(["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore live state. After response loss and persisted_deferred lookup, POST the unchanged original key/payload (and completion revision when applicable) to restore only the original active Attempt handler. Plan receipts require plan_basis on the accepted proposal. Requires the active Job capability." }] : []),
         ],
         responses: {
           "200": {
-            description: definition.operationId === "mark_job_done" ? "Operation contract without receipt_key; original accepted/rejected result with receipt_key" : "Operation contract",
+            description: ["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? "Operation contract without receipt_key; original accepted/rejected result with receipt_key" : "Operation contract",
             content: {
               "application/json": {
-                schema: definition.operationId === "mark_job_done" ? { type: "object", additionalProperties: true } : {
+                schema: ["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? { type: "object", additionalProperties: true } : {
                   type: "object",
                   required: ["operation_id", "summary", "description", "input_schema", "read_only"],
                   properties: {
@@ -423,7 +425,7 @@ export function buildPlatformOpenApiDocument(input: {
         parameters: [
           { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", format: "uuid" } },
-          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" }, description: "For mark_job_done this must equal Idempotency-Key when supplied." },
+          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" }, description: "For mark_job_done and Plan decisions this must equal Idempotency-Key when supplied." },
           ...(definition.operationId === "mark_job_done" ? [{ name: "X-DeepSonar-Proposal-Revision", in: "header", required: true, schema: { type: "integer", minimum: 0, maximum: 9999 }, description: "Initial 0; use the next revision from rejection feedback for corrected semantics, retaining the original revision for transport retries." }] : []),
         ],
         requestBody: {

@@ -1,3 +1,6 @@
+import { freezeGoalReviewAssignment } from "./task-goal-review-source.js";
+import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { invalidControlPayload } from "./control-input.js";
 import { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
 import { persistPreparedJob } from "./job-creation.js";
 import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
@@ -907,7 +910,15 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
   const schedulingPayload = systemType
     ? { ...requestedPayload }
     : stripPublicSchedulingMarkers(requestedPayload);
+  const reviewRequest = schedulingPayload.goal_review === undefined ? undefined : TaskGoalReviewRequest.safeParse(schedulingPayload.goal_review);
+  if (reviewRequest && !reviewRequest.success) throw invalidControlPayload("goal_review 请求结构无效。", "payload.goal_review");
+  if (reviewRequest && (!input.canvasId || systemType)) throw invalidControlPayload("目标评审必须使用同 Canvas 的普通受治理 Job。", "payload.goal_review");
   const relatedFindingIds = parseRelatedFindingIds(schedulingPayload);
+  if (reviewRequest?.success && reviewRequest.data.finding_id) {
+    relatedFindingIds.push(reviewRequest.data.finding_id.toLowerCase());
+    schedulingPayload.related_finding_ids = [...new Set(relatedFindingIds)];
+    if (new Set(relatedFindingIds).size > MAX_RELATED_FINDING_IDS) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "payload.related_finding_ids");
+  }
   const snapshotFindingIds = [
     ...new Set([...(input.findingId ? [input.findingId.toLowerCase()] : []), ...relatedFindingIds]),
   ];
@@ -935,7 +946,7 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
     ...(input.runtimeProfile ? { runtime_profile: input.runtimeProfile } : {}),
   };
   // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-  const snapshot = await freezeSnapshotDeviceRequirement(
+  let snapshot = await freezeSnapshotDeviceRequirement(
     tx as unknown as typeof sql,
     input.projectId,
     input.canvasId,
@@ -953,6 +964,7 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
       ),
     ),
   );
+  if (reviewRequest?.success) snapshot = await freezeGoalReviewAssignment(tx, input.projectId, input.canvasId!, snapshot, reviewRequest.data);
   return persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
 }
 

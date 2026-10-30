@@ -69,7 +69,7 @@ test('CLI accepts a valid report and rejects unreadable inputs without disclosin
   const invoke = (path, digest) => spawnSync(process.execPath, [cli, path, digest], { encoding: 'utf8', timeout: 5000 });
   try {
     const path = join(dir, 'input.json');
-    const input = { schema: 'deepsonar.capability-evidence-export/v1', captured_at: '2026-10-29T00:00:00Z',
+    const input = { schema: 'deepsonar.capability-evidence-export/v2', captured_at: '2026-10-29T00:00:00Z',
       project_id: '00000000-0000-4000-8000-000000000001', jobs: [], attempts: [], versions: [], usages: [], receipts: [] };
     writeFileSync(path, JSON.stringify(input));
     const valid = invoke(path, sourceDigest(input)); assert.equal(valid.status, 0);

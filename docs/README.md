@@ -1,7 +1,9 @@
 # DeepSonar 文档索引
 
+> **任务目标证据（#767）**：契约与研究候选、确定性报告、来源隔离判据评审、非 Finding 交付/负结果已接线；Plan 可选显式关联已接线，保留原操作员 authority 与完整完成门。赏金资格正向闭环未交付，无契约按原可选设计标为 unassessed。见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)、[任务判据评审](TASK_GOAL_REVIEW.md)、[执行结果评审](TASK_RESULT_REVIEW.md)与[报告](TASK_OUTCOME_REPORT.md)。
+
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
-> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。真实模型评测与 C 未交付。
+> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。持久 Plan 接纳回执可只读恢复；一次补证执行状态按持久来源只读重建，与判据满足分离；真实效果未验证且不作为本批验收前置，C 不启用。
 
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
@@ -162,7 +164,7 @@
 
 - [Skill 适用证据离线校验](../agent-harness/capability-applicability/README.md)：#778 A 补强/B 前置工程切片；合成断言与真实效果分开，不提供推荐。
 
-- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 A 部分实现；仅合成行为测试，实际导出、独立质量评测与推荐接口未验收。
+- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 选择/拉取/反馈的 v2 只读关联报告；实际 SQL 已有隔离 PostgreSQL 回归，独立质量与收益未验证。
 
 独立研究 #777 的 [离线协议与报告准备](../agent-harness/knowledge-live/STUDY.md) 已提供；真实模型对照尚未运行，不改变 #752 已完成的实现验收范围。
 
@@ -170,6 +172,18 @@
 
 ## #775 设计目标与实现差额
 
-[有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久成功回执、真实模型收益与 C 尚未验收。A/B 实现入口由 #791 的索引说明维护，本设计入口补充验收差额，不替代其实现说明，也不表示相关 PR 已合入 main。
+[有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久 Plan 接纳回执已复用 events.control_receipt，支持原响应恢复及冲突校验；真实模型效果未验证且不作为本批验收前置，C 不启用。
 
 [#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI十八流程的真实代码、合成协议和未验收边界；不是模型质量报告。
+
+#767 程序规则附加评审已接线：仅 supplied bounty Finding，通过 program_rule:<ruleid> 独立评价材料规则；不改变通用任务判据，不授予提交资格。见[任务判据评审](TASK_GOAL_REVIEW.md)与[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
+
+[Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
+
+
+#770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C与D词法检索/持久弱候选基础待评审，强关系建议未发布）。
+
+#770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具待评审，独立人工质量验收未完成）。
+
+
+- [当前 Job 的 Skill 条件建议](SKILL_SUGGESTIONS.md)：#778 本项目精确版本条件匹配、选择声明回执与非模型验收矩阵；不自动启用，不声称效果或成本收益。

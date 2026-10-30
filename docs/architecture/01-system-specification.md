@@ -57,9 +57,19 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须支持可选版本化任务契约，保留原始需求及采用的模板版本/规范化快照；缺项返回字段级建议，不通过固定标题或字数评定质量。显式契约必须严格校验版本、结构与未知字段；契约只能收窄平台权限，不得自行证明身份、授权或前置条件。派发前必须按当前可信事实复核必要条件，不能沿用创建时的过期通过结果。
 - **决策来源**：#767；减少不同创建者与入口造成的遗漏，同时保留非审计工程任务和自由文本输入。
-- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；没有契约时返回未评估提示。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
+- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；已提供契约的 objective/targets/scope/evidence/acceptance 缺项在创建/派发阻塞，其他缺项给具体建议。没有契约时返回未评估提示，这是原有可选契约设计；是否强制迁移须另行决策。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
 - **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 - **验证证据**：契约规范化、变形输入与安全边界行为测试；人工核对 API/Web/CLI 对同一结构化意图返回一致缺项/阻塞，并核对创建后撤销权限时派发拒绝。实际运行结果见 PR 验收记录，不以字段校验冒充模型效果评测。
+
+### FR-TASK-007 通用任务标准与研究候选准入
+
+- **规范要求**：已提供的任务契约必须在创建与派发前检查目标、资产、范围、证据与验收要求的基本完整性，不能通过省略 outcome 或选择 task_defined 绕过。研究候选必须绑定整个冻结契约与判据 Fact 引用；观察须独立保留，unknown/无关观察不计成果。赏金规则只作可选附加筛选，不由严重度或相似文本推导资格。
+- **决策来源**：#767 / #794 通用任务下发主轴；#775 拥有目标版本、证据缺口和整体报告收敛。
+- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约入口按原可选设计保持 unassessed，不以强制迁移为本 issue 必须完成项。报告防误报已接确定性目标投影，不能将技术 confirmed 计为任务达标；来源隔离的普通 Job 判据评审已接宿主分配、自有 Fact/留存字节与冲突失效检查，不认证不同人/模型。攻击链、knownness适用性、资格与整体报告收敛仍有后续范围；真实模型验收不作为交付门槛，效果未验证。
+- **代码入口**：[研究候选契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
+- **验证证据**：通用完整性、outcome 不绕过、整契约版本、判据与 Fact/Artifact 来源、依据保存及冻结压缩传播行为测试；实际运行结果见 PR，不以研究候选计目标完成。
+
+非 Finding 交付与执行观察的实现边界见[任务执行结果评审](../TASK_RESULT_REVIEW.md)：通过既有 Fact Artifact 表达 delivery/negative_result/blocked/not_executed，声明种类与判据满足分离；工程任务不得被迫生成漏洞 Finding，阻塞和未执行不计成果。该扩展已接严格声明、恰好一个 Finding/Fact subject 的评审请求、宿主来源绑定和报告投影；失败 Job 的声明仍可显示缺口，不贡献正向成果。来源/评审/报告共享 8MiB 证据预算，超限 fail closed；实际验收见 PR，不自动改变 #775 的完成 authority。
 
 ### FR-HUB-001 Scheduler 派生 Hub Job
 
@@ -336,15 +346,15 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CAP-008 能力选择证据审计
 
 - **规范要求**：精确版本/hash 的配置选择、拉取、声明使用和独立结果应分别呈现；不得将 Job 成功、模型反馈或组合成功解释为单能力有效性，不建立第二经验账本。
-- **实现状态**：#778 A 部分实现；离线报告关联本项目未撤销 Skill 与配置 Pack，实际使用、独立质量、成本归因和在线推荐仍未实现。
-- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)。
-- **验证证据**：`pnpm ci:unit:project-knowledge` 的合成行为测试；数据库导出与真实模型评测未执行。
+- **实现状态**：#778 A 离线关联报告与本项目 Skill 在线条件建议/选择声明已实现；曝光、独立质量和成本归因未知，平台源及 Pack 建议未评估。详见[非模型验收矩阵](../SKILL_SUGGESTIONS.md)。
+- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)、[在线建议](../../apps/scheduler/src/domains/project-knowledge/skill-suggestions.ts)。
+- **验证证据**：`pnpm ci:unit:project-knowledge` 与 `pnpm ci:integration:project-knowledge`；固定合成对照、权限/撤权/幂等/选择与拉取分离回归，以及实际只读 SQL 导出到 v2 报告的 PostgreSQL 集成回归。真实模型验收已豁免，不能据此宣称效果收益。
 
 ### FR-CAP-006 Plan 协议的当前边界
 
 - **规范要求**：系统若接收 Plan/PlanResult，必须版本化保存并校验 goal、任务、依赖、完成策略和预算；在尚未实现 Plan 驱动 Worker 派发前不得把 PlanResult 当作替代 Hub 收敛或 Job 终态。
 - **决策来源**：长期协议可以被发现和记录，但不能与当前生产主路径混淆。
-- **实现状态**：进行中；代码记录 Phase 1 Plan/Result，当前不会从该 operation 派发 Worker 或改变 Hub convergence。
+- **实现状态**：进行中；代码记录 Phase 1 Plan/Result，当前不会从该 operation 派发 Worker 或改变 Hub convergence。既有 Intent 的一次补证执行状态可按持久来源只读投影，不把生命周期成功当作目标判据满足。
 - **代码入口**：[Plan protocol](../../apps/scheduler/src/domains/plan-protocol/application.ts)、[Plan tests](../../apps/scheduler/src/plan-protocol.test.ts)、[设计边界](../../DESIGN.md)。
 - **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；人工核对 PlanResult 不绕过 Hub/Job 状态机。
 
@@ -570,15 +580,19 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Finding 确认后必须能生成冻结输入的 Finding Report；Canvas 收敛后必须能生成带 `report-input.json` 和 SHA-256 的版本化 Task Report。相同输入幂等复用，输入变化追加版本；报告投影失败不得改写内部 Fact/Finding/Artifact，覆盖门必须按精确 Finding ID 核对章节。
 - **决策来源**：报告是投影，不应改变产生它的事实；版本和摘要是可重建、可审计的交付身份。
-- **实现状态**：as-built；相同成功输入返回已有版本，失败/进行中同输入可复用版本。
+- **实现状态**：as-built；相同成功输入返回已有版本，失败/进行中同输入可复用版本。#767 报告片将完整任务契约/摘要、来源快照、研究准入/技术状态与判据缺口纳入冻结输入与 hash，变化追加版本。新报告统一确定性正文；接入来源隔离的普通 Job 评审后，逐判据区分 satisfied/contradicted/insufficient/conflict/not_assessed，整体可表示部分/全部判据已评价满足但不授权 Plan 完成；无有效依据时仍 blocked/not_assessed，无契约明确未评估；技术数据仅作附录，模型不得覆盖目标结论。历史无投影输入不回写，见[报告防误报](../TASK_OUTCOME_REPORT.md)。
 - **代码入口**：[Report implementation](../../apps/scheduler/src/report.ts)、[Report version](../../apps/scheduler/src/task-report-version.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:report-download`。
+
+来源隔离评审通过既有 Job/HubIntent 请求和 emit_fact.artifact.goal_review 保存版本化 Artifact；maker 与候选证据源 Job 不得自评，最新成功 Attempt、无未知效果及实际留存字节必须重核。有效矛盾为 conflict，失效记录保留缺口；不要求普通 Fact 先人工 verified，不新增整体完成门。详见[判据评审](../TASK_GOAL_REVIEW.md)。
+
+Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录评审 Artifact、整契约、任务判据及预期评审摘要；操作员负责语义覆盖，Plan owner 冻结同契约，不按索引自动映射。保留 verified 原始 Fact、jobs:control 和完整 Plan 完成门；关联后必须持续复核完整有效评审集合与共享预算，失效不能静默退回无关联。原合法无关联绑定继续有效，详见[Plan 关联](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)。
 
 ### FR-RPT-002 Finding Report 独立轨
 
 - **规范要求**：单 Finding Report 必须绑定一条 Finding 和冻结输入，拥有独立版本/状态/markdown hash；不得推进 Canvas Root 或改写 Finding verify_status。
 - **决策来源**：单项交付和任务级汇总有不同触发与失败边界。
-- **实现状态**：as-built；`finding_reports` 与 `task_reports` 双轨保存。
+- **实现状态**：as-built；`finding_reports` 与 `task_reports` 双轨保存。新 Finding Report 同样冻结目标投影并使用确定性正文，保留技术来源；不因单条 Finding 技术 confirmed 推导任务目标或提交资格达标。
 - **代码入口**：[Report implementation](../../apps/scheduler/src/report.ts)、[Finding report routes](../../apps/scheduler/src/domains/report-convergence/routes.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:integration:finding-report`、`pnpm ci:unit:verify-eligibility`。
 
@@ -594,7 +608,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须提供经 project/Finding scope 授权的 Markdown 和 SARIF 下载，下载内容只能由冻结 Report 输入和已持久化结果生成；不得把 SARIF 当作模型内部唯一真相。
 - **决策来源**：人和工具需要不同交付格式，内部 Artifact/Fact/Finding 仍需保留。
-- **实现状态**：as-built；Task Report 提供 Markdown/SARIF，Finding Report 提供 Markdown。
+- **实现状态**：as-built；Task Report 提供 Markdown/SARIF，Finding Report 提供 Markdown。#767 目标投影为 contracted/invalid 时 SARIF results 为空并保留评价原因；无契约路径保留技术 confirmed 结果并标记 technical-only/任务未评估。两者均不能计任务达标，空结果不表示无技术问题。
 - **代码入口**：[OpenAPI report operations](../../apps/scheduler/src/openapi.ts)、[Report routes](../../apps/scheduler/src/domains/report-convergence/routes.ts)、[下载测试](../../apps/scheduler/src/report-download.openapi.test.ts)。
 - **验证证据**：`pnpm ci:unit:report-download-openapi`、`pnpm ci:integration:report-download`、`pnpm ci:unit:web-report-download`。
 
@@ -1189,3 +1203,20 @@ Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effe
 ## 7. 事实核查边界
 
 本文件已以 `DESIGN.md`、`docs/ARCHITECTURE.md`、`database/schema.sql`、`apps/scheduler/src/openapi.ts`、现行 bounded context 代码和 package.json 测试脚本逐项反查。测试命令只表示验证入口，不表示本次执行通过；未连接真实 Provider、OpenSandbox、registry、device broker、多副本共享 BlobStore 或 GitHub Release 的项目环境，不在本 PR 声称已验证范围内。长期设计（完整 Proposal/Receipt/Settlement、Plan 驱动派发、全图权威布局、任务/会话 Pack 生命周期）若在代码中只有 Phase 1/骨架，会保留“进行中/暂缓”状态，不写成 as-built。
+
+## 程序规则附加评审（#767）
+
+FR-TASK-007 / FR-RPT-001 的程序规则评审扩展复用 goal_review，仅 supplied bounty Finding 可评 program_rule:<ruleid>；通用任务 criteria 保持独立。requirement satisfied=满足，exclusion satisfied=未命中排除。报告 program_rule_review 逐规则记录评价与来源，按同 Finding/整契约聚合并对冲突、失效和预算不足 fail closed；rules_satisfied 不授予 submission eligibility。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+## 证据追踪诊断修复
+
+Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Attempt，并宿主重读实际字节；runtime_proof=false，replay 为完整性检查，不改变 Verify verdict、Plan 或资格。详见[证据追踪](../EVIDENCE_TRACE.md)。
+
+
+### FR-FIND-007 可重建特征与关联质量边界
+
+- **规范要求**：项目特征必须保留来源摘要、提取器版本与 provenance；未知权威身份保持未知。派生失败不得改变来源，读取必须核对当前来源和权限，旧代不能覆盖新代。强关系上线前必须通过独立质量门。
+- **决策来源**：#770 分期实施与来源完整性约束。
+- **实现状态**：C 持久扫描、特征重建和状态元数据待评审；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
+- **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
+- **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。

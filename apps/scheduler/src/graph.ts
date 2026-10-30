@@ -734,6 +734,7 @@ export function parseJsonLoose(raw: string): unknown | null {
 }
 
 export interface HubIntent {
+  goal_review?: import("@deepsonar/shared-types").TaskGoalReviewRequest;
   from: string[];
   role: string;
   description: string;

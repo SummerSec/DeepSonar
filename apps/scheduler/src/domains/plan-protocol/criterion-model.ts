@@ -4,6 +4,14 @@ import type { Plan } from "@deepsonar/shared-types";
 
 export const PLAN_BINDING_ACTION = "canvas.fact.plan_binding";
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
+export const PlanGoalReviewBinding = z.object({
+  review_artifact_id: z.string().uuid().transform(value => value.toLowerCase()),
+  task_contract_sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  criterion_ids: z.array(z.string().regex(/^(objective|scope|evidence|exclusion:\d+|acceptance:\d+)$/)).min(1).max(20)
+    .refine(values => new Set(values).size === values.length, "Duplicate criterion IDs").transform(values => [...values].sort()),
+  expected_review_sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+}).strict();
+export type PlanGoalReviewBinding = z.infer<typeof PlanGoalReviewBinding>;
 export const PlanCriterionBindingRequest = z.object({
   plan_job_id: z.string().uuid(),
   plan_sha256: digest,
@@ -12,6 +20,7 @@ export const PlanCriterionBindingRequest = z.object({
   expected_binding_id: z.string().uuid().nullable(),
   assessment: z.enum(["satisfies", "contradicts", "inconclusive"]),
   observation: z.enum(["positive", "negative", "unspecified"]),
+  goal_review: PlanGoalReviewBinding.optional(),
 }).strict();
 export type PlanCriterionBindingRequest = z.infer<typeof PlanCriterionBindingRequest>;
 

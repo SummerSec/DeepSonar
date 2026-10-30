@@ -1,3 +1,4 @@
+import { evaluateGoalReviewBinding, loadGoalReviewBindingContext, planGoalReviewContractMatches, type GoalReviewBindingContext } from "./goal-review-binding.js";
 import type { Plan } from "@deepsonar/shared-types";
 import type { sql } from "../../db.js";
 import { contentSha256, planCriteria, PLAN_BINDING_ACTION, StoredPlanCriterionBinding, criterionState, type CriterionProjection, type CriterionState } from "./criterion-model.js";
@@ -37,6 +38,13 @@ export async function loadPlanCriteria(
   });
   const planSha = contentSha256(plan);
   const projections: CriterionProjection[] = [];
+  let reviewContext: GoalReviewBindingContext | undefined;
+  let planSnapshot: unknown;
+  if (rows.some(row => StoredPlanCriterionBinding.safeParse(row.after_json).success && row.after_json.goal_review)) {
+    const [owner] = await db`SELECT agent_snapshot_json FROM jobs WHERE id=${planJobId} AND project_id=${projectId} AND canvas_id=${canvasId}`;
+    planSnapshot = owner?.agent_snapshot_json;
+    reviewContext = await loadGoalReviewBindingContext(db, projectId, canvasId, budget);
+  }
   for (const criterion of planCriteria(plan)) {
     const bindings: CriterionProjection["bindings"] = [];
     // Sequential callers share the same read budget; cache prevents counting a Fact twice.
@@ -45,7 +53,14 @@ export async function loadPlanCriteria(
       if (!parsed.success || parsed.data.criterion_id !== criterion.id) continue;
       const binding = parsed.data;
       if (!cache.has(binding.fact_id)) cache.set(binding.fact_id, await loadCriterionSource(db, canvasId, projectId, binding.fact_id, budget));
-      const result = evaluateCriterionBinding(binding, planSha, contentSha256(criterion), cache.get(binding.fact_id) ?? null);
+      let result = evaluateCriterionBinding(binding, planSha, contentSha256(criterion), cache.get(binding.fact_id) ?? null);
+      if (binding.goal_review) {
+        if (!planGoalReviewContractMatches(planSnapshot, binding.goal_review.task_contract_sha256)) result = { state: "stale", reasons: ["plan_goal_review_contract_changed"] };
+        else {
+          const validation = evaluateGoalReviewBinding(binding.goal_review, binding.fact_id, binding.assessment, reviewContext!);
+          if (!validation.ok) result = { state: "blocked", reasons: validation.reasons };
+        }
+      }
       bindings.push({ binding, ...result });
     }
     projections.push({ ...criterion, truncated, bindings, state: criterionState(bindings.map((item) => item.state), truncated) });

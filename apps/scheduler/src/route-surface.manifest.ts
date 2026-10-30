@@ -69,7 +69,9 @@ GET /exports/:id
 GET /exports/:id/download
 GET /findings
 GET /findings/:id
+GET /findings/:id/candidates
 GET /findings/:id/evidence-trace
+GET /findings/:id/lexical-search
 GET /findings/:id/report
 GET /findings/:id/shared-assets
 GET /gateway/*
@@ -289,7 +291,9 @@ GET /exports/{id}
 GET /exports/{id}/download
 GET /findings
 GET /findings/{id}
+GET /findings/{id}/candidates
 GET /findings/{id}/evidence-trace
+GET /findings/{id}/lexical-search
 GET /findings/{id}/report
 GET /findings/{id}/shared-assets
 GET /global-settings

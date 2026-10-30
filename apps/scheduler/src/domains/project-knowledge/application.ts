@@ -5,7 +5,7 @@ import {
 } from "@deepsonar/shared-types";
 import type { PlatformRuntimeHandlerContext } from "../platform-api/registry.js";
 import { createEventIngestionApplication } from "../event-ingestion/application.js";
-import { readCompletionReceipt } from "../event-ingestion/completion-receipt.js";
+import { readControlReceiptByKey } from "../event-ingestion/control-receipt.js";
 import { canonical, KnowledgeOperationError, knowledgeEventId, reject, sha256, type KnowledgeDb } from "./types.js";
 import { resolveKnowledgeSource, recheckKnowledgeSources, readManifestInput, type KnowledgeActor } from "./inputs.js";
 import { enqueueKnowledgeWork } from "./requests.js";
@@ -18,6 +18,7 @@ import { recordKnowledgeFeedback, validateFeedbackUsage } from "./feedback.js";
 import { frozenGovernorRecipe } from "./recipe.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { recordKnowledgeUsage } from "./usage.js";
+import { prepareSkillSuggestions, computeSkillSuggestions, recordSkillChoice } from "./skill-suggestions.js";
 
 export { KnowledgeOperationError, readKnowledgeVersionContent };
 export { recordKnowledgeUsage } from "./usage.js";
@@ -64,6 +65,7 @@ function catalogFor(actor: KnowledgeActor): { entries: CatalogEntry[]; hash: str
 }
 
 async function readOnly(db: KnowledgeDb, actor: KnowledgeActor, operation: KnowledgeOperation, input: Record<string, unknown>, cursorSecret: Buffer): Promise<Record<string, unknown>> {
+  if (operation === "suggest_project_skills") return computeSkillSuggestions(db, actor, input as never, await prepareSkillSuggestions(db, actor));
   if (operation === "read_knowledge_input") return readManifestInput(db, actor, input as never);
   if (operation === "get_knowledge_receipt") {
     const rows = input.receipt_ref
@@ -132,6 +134,7 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
         if (existing.operation !== operation || existing.input_digest !== inputDigest) return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key has a different operation or input");
         return existing.result_json as Record<string, unknown>;
       }
+      const suggestions = operation === "record_skill_choice" ? await prepareSkillSuggestions(db, actor) : undefined;
       let prepared: { manifest?: KnowledgeInputManifestEntry[] } = {};
       const recipe = operation === "request_project_knowledge" || operation === "record_knowledge_feedback"
         ? await frozenGovernorRecipe(db, actor) : undefined;
@@ -162,8 +165,8 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
         if (envelope.type !== "knowledge" || jobId !== actor.jobId || ingest?.jobStatusAtLock !== "running" || ingest.attemptId !== actor.attemptId) return reject("KNOWLEDGE_JOB_INACTIVE", "Job changed before knowledge settlement");
         // The ingestion transaction already owns the Job lock. An earlier read
         // outside this boundary cannot reserve a key against concurrent completion.
-        if (await readCompletionReceipt(tx, jobId, key)) {
-          return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a completion proposal");
+        if (await readControlReceiptByKey(tx, jobId, key)) {
+          return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a control receipt");
         }
         const [current] = await tx`SELECT lease_expires_at,agent_snapshot_json FROM jobs WHERE id=${jobId}`;
         if (!current || !current.lease_expires_at || new Date(current.lease_expires_at as string).getTime() <= Date.now()) return reject("KNOWLEDGE_JOB_INACTIVE", "Job lease expired");
@@ -172,7 +175,9 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
         const tools = (current.agent_snapshot_json as Record<string, unknown>).platform_tools;
         if (!Array.isArray(tools) || !tools.includes(operation)) return reject("KNOWLEDGE_SCOPE_DENIED", "Operation was removed from Job allowlist");
         let result: Record<string, unknown>;
-        if (operation === "request_project_knowledge") {
+        if (operation === "record_skill_choice") {
+          result = await recordSkillChoice(tx, actor, input as never, suggestions!);
+        } else if (operation === "request_project_knowledge") {
           await recheckKnowledgeSources(tx, actor, input.source_refs as never);
           const work = await enqueueKnowledgeWork(tx, { actor, governanceHash, trigger: input.source_refs, manifest: prepared.manifest!, recipe, reason: String(input.reason) });
           result = { work_ref: work, status: "pending" };

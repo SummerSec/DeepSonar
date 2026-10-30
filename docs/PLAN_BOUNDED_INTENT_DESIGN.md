@@ -1,11 +1,11 @@
 # #775 B：通过现有 Intent 完成一次有界补证（设计）
 
-> 状态：**设计目标与实现对照**。B 的一次补证首片已在 #791 实现并通过假执行闭环；持久成功回执、真实模型收益与 C 尚未验收。本 PR 仍仅修改文档，不代表这些分支已合入 main。
+> 状态：**设计目标与实现对照**。B 的一次补证首片已合入；本切片补持久接纳响应恢复，复用 control_receipt。真实模型效果未验证，本批不要求真实模型验收；C 不启用。
 > 同步日期：2026-10-30
 
 ## 基线与交付边界
 
-本次整合基线为已含 #776 的 main `6e71f418`，A 审计可见性 [#782](https://github.com/SummerSec/DeepSonar/pull/782)（`1b1a1d7a`）、A 操作员判据/留存证据绑定 [#785](https://github.com/SummerSec/DeepSonar/pull/785)（`98fec5cc`）和 B 首片 [#791](https://github.com/SummerSec/DeepSonar/pull/791)（`c15bca91`）。以下“实现现状”仅指这些已核验提交，不把尚未合并的代码称作 main 已上线能力。代码栈顺序为 #782 → #785 → #791；本设计文档独立维护。
+实现基线为 main `0841f827`，已含 A 审计可见性 #782、操作员判据/留存证据绑定 #785、B 首片 #791 与设计对照 #786。本切片仅补 Plan 成功接纳回执恢复，不改变每 Canvas 单步预算。
 
 #791 的 [实现范围](https://github.com/SummerSec/DeepSonar/blob/1c04804e364e7c55522857c1f060bf9f308ace81/docs/PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证) 是当前行为说明；本文保留设计目标及未交付差额，不能通过修改措辞将缺口视为已完成。
 
@@ -17,7 +17,7 @@
 
 最小目标引用为 `plan_job_id + canonical raw Plan SHA`；判据复用 CompletionPolicy 的 `completion` / `output-N`，不让调用者额外写一份完成标准。它说明“该计划的这版判据”，不自动证明计划等于用户全部需求。
 
-实现现状的输入身份来自已保存 Canvas title/target_json（排除 convergence 运行记账）、被引用 Artifact revision、Job/Attempt 冻结快照和留存 Evidence 内容；它不是另一个用户目标修订协议。不存在的目标代码 commit、外部环境版本或账号授权不得由模型补造。缺少完成所需基线时可提补证或 needs_human，不能宣布 complete。无需 #767 新 task_contract，#770 项目关联不参与证据与授权。
+实现现状的输入身份来自已保存 Canvas title/target_json（排除 convergence 运行记账）、被引用 Artifact revision、Job/Attempt 冻结快照和留存 Evidence 内容；它不是另一个用户目标修订协议。不存在的目标代码 commit、外部环境版本或账号授权不得由模型补造。缺少完成所需基线时可提补证或 needs_human，不能宣布 complete。原 Plan 绑定无需 task_contract；可选目标评审关联要求同契约及持续有效来源，见[关联边界](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。#770 项目关联不参与证据与授权。
 
 A 的 operator_attestation 是操作员语义评价，不能升级为模型评价器。B 可因已有证据不足而派发工作；若要提出有证据的 complete，则必须读取完整、非截断且全部必要判据均为当前授权 satisfied 的判据集合，并仍通过原有 Finding/Verify/Task 完成门。没有可用语义权威时停止为 needs_human；不能用 raw PlanResult 的 complete 绕过。
 
@@ -73,7 +73,9 @@ complete 采用正向允许规则，不能只列少数禁止态：必须覆盖�
 
 设计要求事务内先完成所有准备校验，再经既有 Intent 路径原子写入唯一 child Job 与接纳事件。#791 已实现该事务边界；child payload 保存 Scheduler-owned Plan Job/SHA 与决策事件关联，判据/理由可追溯到事件，不改写旧 Job 快照；取消仍走既有生命周期。不同 key 不能重置单步预算，同 expected_revision 并发提案只有一个接纳。
 
-**未交付的回执目标保留：**#776 的 mark_job_done 持久完成回执与这里的 Plan 决策成功响应是不同操作；前者不能证明后者已实现。相同 Idempotency-Key 在进程重启后应可读取持久成功回执并返回原结果。#791 尚未实现此项；现有 HTTP 幂等缓存是进程内的，缓存丢失后已提交的旧 Plan 提案会被版本门禁拒绝，不保证返回原成功响应。持久事件去重、版本和预算检查防止重复派发，但“不重复执行”不等于“恢复原成功回执”。后续仍需补持久回执/响应绑定、重启恢复及冲突输入回归；本次文档修订不降低该设计要求，也不把首片测试当作该项验收。
+**持久接纳回执（as-built）：**带 plan_basis 的 submit_hub_decision/request_human 复用 events.control_receipt，绑定 Job、原 Attempt、operation、key、冻结 snapshot、原请求与展开内容摘要，保存不可变成功响应。先在事务外执行数据库 preflight，再以 Canvas→Job 锁序准备本地预留并保存回执；最终事件 ingestion 仍是 revision、预算、Intent/child 与权限的唯一原子结算点。回执不推进目标 head，也不代表 child 已创建。
+
+GET 原 operation 的 receipt_key 始终只读；进程缓存丢失或 handler 注销后仍可恢复原成功响应。完全相同 POST 仅在原 Attempt 活动且租约有效时尝试恢复本地提案，不新建执行器；Hub 有 unknown effect 时不恢复，人工停止仍允许。payload_file 首次有界展开并完整校验；live handler 重试必须匹配原文件内容，无 handler 仅按原请求身份读响应。异输入、异 operation、原 key 被普通事件/完成/知识操作占用均拒绝；最终语义事件必须匹配回执内容和 Attempt。普通非 Plan 操作仍保留各自原有幂等边界。
 
 不能把现有“裁剪至 maxIntentsPerDecision”当作 B 的接受方式：首片恰好一项，预算不足明确拒绝，禁止部分派发。补证上限和业务停止理由分别记账；maxHubRounds、Job token/时间预算、项目并发/配额仍有效，不跨任务借预算。
 
@@ -92,7 +94,7 @@ complete 采用正向允许规则，不能只列少数禁止态：必须覆盖�
 | 补证成功 | 一条 Intent、一条 child Job，经原路径产生 Artifact/Fact/Evidence；重读后可评价 |
 | 换方法提案 | 仅在本次单步预算未消耗且既有能力允许时接纳；不可扩权 |
 | 冲突、证据过期、目标变化 | complete 拒绝，旧报告不改写；补证必须引用当前版本 |
-| 重复、并发、重启 | 设计目标：durable head/成功回执重建；当前已验证最多一个 child 与清除进程幂等缓存后旧提案被拒绝（模拟重启后的缓存丢失），成功回执恢复仍未交付 |
+| 重复、并发、重启 | 持久 head 与原接纳响应重读；inline/file、清缓存/注销 handler、未结算回执恢复、并发修订与最多一个 child 均有离线 DB 回归 |
 | 取消、超时、unknown effect | 沿既有生命周期停止，不自动重放副作用，不误报阴性 |
 | 非法/跨项目/跨 Canvas/未见引用 | preflight 和最终事务均拒绝，无部分派发 |
 | 非法依赖/越权能力/超额预算 | 复用已有检查，明确拒绝，不裁剪后假装全部接纳 |
@@ -100,10 +102,10 @@ complete 采用正向允许规则，不能只列少数禁止态：必须覆盖�
 
 测试必须通过真实隔离 PostgreSQL 的控制 API → ingestion → Intent/Job → fake Attempt/retained bytes → graph projection；仅单元 mock 或手写数据库断言不算补证闭环。合成 fixtures 使用固定目标与来源字节、逐例记录 expected/observed，不使用真实模型或生产服务。CI 必须实际调用新增单元和 DB 入口，最终对精确 PR head 检查终态。
 
-#791 的精确 head `1c04804e` 已通过 [ci](https://github.com/SummerSec/DeepSonar/actions/runs/40910039012) 与 [双架构 Reverse](https://github.com/SummerSec/DeepSonar/actions/runs/40910038950)。Plan 的三项 PostgreSQL 回归涵盖 Control → 实际 Intent 子 Job → 假 Worker 留存文件/emit_fact → 真实终态结算 → 既有自动 Hub 唤醒 → 重读来源 → 人工停止；另有实际字节、操作员绑定、全判据读取后通过 Control 提交 complete 的正向样本。首次省略依据、自动报告绕过、并发、过期版本、预算重置与 unknown effect 有回归证据。上述证据不宣称本表所有业务样本均已逐例完成，更不覆盖持久成功回执恢复或真实模型收益。
+#791 的精确 head `1c04804e` 已通过 [ci](https://github.com/SummerSec/DeepSonar/actions/runs/40910039012) 与 [双架构 Reverse](https://github.com/SummerSec/DeepSonar/actions/runs/40910038950)。Plan 的三项 PostgreSQL 回归涵盖 Control → 实际 Intent 子 Job → 假 Worker 留存文件/emit_fact → 真实终态结算 → 既有自动 Hub 唤醒 → 重读来源 → 人工停止；另有实际字节、操作员绑定、全判据读取后通过 Control 提交 complete 的正向样本。首次省略依据、自动报告绕过、并发、过期版本、预算重置与 unknown effect 有回归证据。上述证据不宣称本表所有业务样本均已逐例完成，不覆盖真实模型收益；持久回执的新增回归见下文。
 
 ## 真实效果验收和剩余工作
 
-离线样本只证明来源、决策检查与调度原子性。真实执行质量需另获授权的受控模型试验，在冻结任务基线逐例比较目标遗漏、错误完成、无进展轮数、人工介入、证据充分性及 token/时间，报告分母，不预设提升比例。没有这些结果不能进入 C 或关闭 #775。
+离线样本只证明来源、决策检查、调度原子性与恢复边界。用户已明确本批所有 issue 不需要真实模型验收，因此不以模型效果试验作为关闭前置；真实效果未验证，不声称质量或收益提升。C 阶段仍不启用，现有代码/离线验收缺口仍须分别完成。
 
-本 PR 只修订设计/实现对照、索引与风险登记，没有修改运行时、OpenAPI、schema、Job 终态或模型调用。#791 已同步正式字段及 FR-HUB-005 / FR-FACT-002 / FR-RPT-001 追溯，完成 B 的一次补证首片与假执行闭环；持久成功回执、完整业务样本验收、真实目标/环境版本与真实模型收益仍是剩余项。不能据此宣称整个 B 设计或 #775 全部验收完成，C 不启用。
+本切片扩展 plan-decision.integration.test.ts，使用两组 inline/file 业务样本验证：已持久接纳但 ingestion 前失败、无 handler 只读原结果、unknown effect 阻止恢复、原 Attempt 恢复一次、同 key 改输入/文件/operation 冲突与最终 CAS。executor 竞态测试覆盖预留不结算、旧 preflight 不覆盖、同事件 ID 普通调用不能绕过预留及失败释放。测试模拟重启后的内存缓存和 handler 丢失，不声称重新启动真实模型或恢复其会话。

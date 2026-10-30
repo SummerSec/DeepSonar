@@ -1,3 +1,4 @@
+import { startFindingFeatureWorker } from "./domains/project-finding-research/worker.js";
 import { createPlatformMaintenanceGate, registerPlatformMaintenanceGuard, type PlatformUpgradeState } from "./platform-maintenance.js";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
@@ -75,6 +76,7 @@ async function main() {
       registerStop(startSkillSourceBootSync());
       registerStop(startReaper());
       registerStop(startTransferWorker());
+      registerStop(startFindingFeatureWorker());
       registerStop(startRuntimeImageRegistrySync());
       registerStop(startRuntimeImageGc());
       registerStop(managesHostDockerRuntime() ? startHostDiskMonitor(() => {

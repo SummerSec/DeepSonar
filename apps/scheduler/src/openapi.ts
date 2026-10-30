@@ -5,7 +5,8 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { TaskContract } from "@deepsonar/shared-types";
+import { TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
@@ -954,7 +955,7 @@ const OPS: Op[] = [
         content: { type: "string" },
         task_contract: {
           ...z.toJSONSchema(TaskContract, { target: "openapi-3.0", io: "input" }),
-          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。模板建议不自动成为验收承诺；状态不接受 verified。权限仅能收窄，凭据仅引用；预算为规划字段。未知目标身份/写授权/必要前置条件保持未核验并阻塞。",
+          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。已提供契约不论 outcome 省略/task_defined/bounty_submission，都要求目标、资产、范围、证据和验收判据完整；缺项阻塞创建/派发。研究候选须引用同任务 Fact、整个冻结契约摘要与目标判据。赏金仅附加规则：unknown 可补证但拒绝候选，supplied 来源为 operator_supplied，不认证官方真实性。研究候选不等于技术确认、高置信提交资格或任务成功。模板建议不自动成为验收承诺；权限仅能收窄，凭据仅引用，预算为规划字段。",
         },
         allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
         kind: {
@@ -1189,6 +1190,7 @@ const OPS: Op[] = [
           job: FactJobSchema,
           plan_criterion_source: { type: "object", nullable: true, additionalProperties: true, description: "当前 Artifact/Job/Attempt 与留存文件内容版本、eligible 和不可用原因；不包含文件原文。" },
           plan_bindings: { type: "object", additionalProperties: true, description: "最近 32 条操作员判据绑定审计及 truncated；完整决策留在 append-only audit_logs。" },
+          goal_review_options: { type: "object", additionalProperties: true, description: "最多20条可显式关联的目标评审身份、判据、expected_review_sha256及阻塞原因；与证据来源共享8MiB预算。可选项不是操作员授权。" },
           trace: {
             type: "object",
             additionalProperties: false,
@@ -1227,6 +1229,8 @@ const OPS: Op[] = [
             expected_binding_id: { type: "string", format: "uuid", nullable: true },
             assessment: { type: "string", enum: ["satisfies", "contradicts", "inconclusive"] },
             observation: { type: "string", enum: ["positive", "negative", "unspecified"] },
+            goal_review: { ...z.toJSONSchema(PlanGoalReviewBinding, { target: "openapi-3.0", io: "input" }),
+              description: "可选的显式附加证明。操作员确认目标判据如何覆盖当前Plan判据；Plan必须冻结同一任务契约，关联评审与原始证据持续重验，不授予新的完成authority。" },
           },
         },
       },
@@ -1340,7 +1344,11 @@ const OPS: Op[] = [
             "Registered public role name. Public POST rejects scheduler-owned hub_reason, verify_finding, and report (409). leftover audit_module / hub aliases are not current identities. verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
         },
         title: { type: "string" },
-        payload: { type: "object", additionalProperties: true },
+        payload: { type: "object", additionalProperties: true, properties: {
+          goal_review: { ...z.toJSONSchema(TaskGoalReviewRequest, { target: "openapi-3.0", io: "input" }),
+            oneOf: [{ required: ["finding_id"], not: { required: ["fact_id"] } }, { required: ["fact_id"], not: { required: ["finding_id"] } }],
+            description: "Independent execution-source goal review request. Exactly one finding_id or task-result fact_id with candidate_artifact_id. Reuses the source Canvas in this project; the host freezes source/contract/evidence versions. This does not grant permissions or submission eligibility." },
+        } },
         priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },
         timeout_sec: { type: "integer" },
         stall_sec: { type: "integer", minimum: 0, description: "本 Job 产出停滞窗口；0 关闭。优先于角色/项目/平台。" },
@@ -1504,15 +1512,33 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings/{id}",
     summary: "Finding 完整详情与结构化验证追踪",
-    description: "trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
+    description: "project_research_features 仅显示当前来源匹配的特征计算状态/字段覆盖；权威身份不足且关系质量门未验收，不返回跨任务同问题建议。trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
     scope: "findings:read",
     tags: ["Findings"],
   },
   {
     method: "get",
+    path: "/findings/{id}/candidates",
+    summary: "当前有效的持久词法候选",
+    description: "只读活动代的规范双端词法候选；每次复核当前来源摘要与权限，隐藏过期端点。25条关系窗口加1条lookahead，失效过滤后不补扫；next_cursor推进原关系窗口。游标绑定主体与活动代/规则，变化409要求刷新。明确pending/running/succeeded/failed/stale与重建中；没有同问题/同根因、传递分组或自动处置。内部证据元信息摘要只用于失效，不返回证据内容或证据摘要；声明哈希仍读取原文，行数预算不是严格字节上限。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: { cursor: { type: "string", maxLength: 2048, description: "前页游标；省略从当前活动代首窗口读取" } },
+  },
+  {
+    method: "get",
+    path: "/findings/{id}/lexical-search",
+    summary: "跨任务 Finding 有界词法检索",
+    description: "仅对当前项目按 UUID seek 的128条来源窗口排名，另读1条判断后续窗口，返回最多25项；不是全项目top-K或持久关系。相似仅为声明文本线索，身份/版本/根因仍未知；不读取Evidence或共享资产。每次请求重新鉴权。cursor绑定主体声明摘要与规则，主体变化返回409 CURSOR_GAP，需刷新。rank_truncated标记窗口内结果截断；无结果不表示明确不同。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: { cursor: { type: "string", maxLength: 2048, description: "上一窗口返回的不透明游标；省略从头扫描" } },
+  },
+  {
+    method: "get",
     path: "/findings/{id}/evidence-trace",
     summary: "Finding Fact↔Evidence 只读溯源（确认依据可复查）",
-    description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；content_integrity_digest 与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
+    description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；source_event 绑定真实当前成功 Attempt，精确 URI 以共享 8 MiB 预算重读保留字节，不以 manifest 摘要或后缀匹配冒充观测。facts.retained_bytes_verified 仅表示字节核验；runtime_claim_structured 表示 Agent 声明形状，execution_assurance 固定 not_attested，runtime_proof=false。replay.kind=evidence_integrity_check，不运行命令，也不改写 Verify、Plan 或提交资格。content_integrity_digest 为历史冻结摘要，与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
     scope: "findings:read",
     tags: ["Findings"],
   },

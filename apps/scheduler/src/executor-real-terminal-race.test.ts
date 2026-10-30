@@ -172,3 +172,44 @@ test("executeReal: runner failure unregisters a prepared handler and rejects lat
     error => error instanceof PlatformRuntimeHandlerError && error.code === "HANDLER_NOT_REGISTERED");
   assert.equal(completionReady(), false, "late input cannot open the old completion gate");
 });
+
+const planHuman = { reason: 'Current evidence needs an operator decision.',
+  subject: {type:'platform_blocker',kind:'business_decision'},
+  plan_basis: {v:1,plan_job_id:randomUUID(),plan_sha256:'a'.repeat(64),criterion_id:'completion',expected_revision:'1',
+    expected_task_input_sha256:'b'.repeat(64),expected_projection_sha256:'c'.repeat(64),source_refs:[],outcome:'needs_human',rationale:'Evidence is insufficient for completion.'} };
+
+test('executeReal: durable Plan prepare is local-only and blocks an older human preflight', {timeout:5000}, async()=>{
+  const {attemptId}=await import('./executor-real-terminal-race.fixture.js');
+  const entered=barrier(),resume=barrier(),eventId=randomUUID();
+  const terminals=await runExecutor(async()=>{
+    setPreflight(async()=>{entered.release();await resume.promise;});
+    const late=call('request_human',human);
+    const rejected=assert.rejects(late,exclusive);
+    await entered.promise;
+    // The database-aware validate phase already ran before the transaction.
+    const prepared=await call('request_human',planHuman,{eventId,planPhase:'prepare',planAttemptId:attemptId}) as {plan_prepared:boolean};
+    assert.equal(prepared.plan_prepared,true);
+    resume.release();await rejected;
+    await assert.rejects(call('request_human',human,{eventId}),exclusive);
+    await assert.rejects(call('mark_job_done',done,{eventId,completionPhase:'prepare'}),exclusive);
+    setPreflight(async()=>{throw new Error('commit must not reacquire a pool connection');});
+    await call('request_human',planHuman,{eventId,planPhase:'commit',planAttemptId:attemptId});
+    await call('request_human',planHuman,{eventId,planPhase:'commit',planAttemptId:attemptId});
+  });
+  assert.equal(terminals.length,1);assert.equal(terminals[0].type,'human');
+  assert.equal(terminals[0].event_id,eventId);assert.deepEqual((terminals[0].payload as typeof planHuman).plan_basis,planHuman.plan_basis);
+});
+
+test('executeReal: failed Plan persistence releases only its own reservation', {timeout:5000},async()=>{
+  const {attemptId}=await import('./executor-real-terminal-race.fixture.js');
+  const eventId=randomUUID();
+  const terminals=await runExecutor(async()=>{
+    await call('request_human',planHuman,{eventId,planPhase:'validate',planAttemptId:attemptId});
+    await call('request_human',planHuman,{eventId,planPhase:'prepare',planAttemptId:attemptId});
+    await call('request_human',planHuman,{eventId:randomUUID(),planPhase:'abort',planAttemptId:attemptId});
+    await assert.rejects(call('mark_job_done',done,{completionPhase:'prepare'}),exclusive);
+    await call('request_human',planHuman,{eventId,planPhase:'abort',planAttemptId:attemptId});
+    await call('request_human',human);
+  });
+  assert.equal(terminals.length,1);assert.equal((terminals[0].payload as typeof human).reason,human.reason);
+});

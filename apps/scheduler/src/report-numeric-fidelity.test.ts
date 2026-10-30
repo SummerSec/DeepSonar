@@ -382,3 +382,64 @@ test("coverage-valid model tails cannot swallow the mandatory leading gap sectio
     assert.ok(final.markdown.endsWith(tail));
   }
 });
+
+test("contracted task reports cannot promote model prose or technical confirmation to task success", async () => {
+  const { projectTaskOutcomeReport } = await import("./task-outcome-report.js");
+  const projection = projectTaskOutcomeReport({
+    canvasContract: { schema_version: 1, template_id: "engineering", template_version: 1, objective: "Implement the agreed change", targets: ["fixture/repo"],
+      scope: ["Tests and implementation"], evidence: ["Retained test output"], acceptance: ["Regression passes"],
+      outcome: { mode: "task_defined" } },
+    canvasExists: true, canvasId: "canvas-1", projectId: "project-1", findings: [], availableEvidenceRefs: [],
+  });
+  assert.equal(projection.mode, "contracted");
+  const input = reportInput({ task_outcome: projection });
+  const resolved = finalizeTaskReportMarkdown(input, "## 已确认问题\nFinding ID：finding-1\n所有任务判据已达标，可以领取赏金。" );
+  assert.equal(resolved.usedDefault, "task_outcome");
+  assert.doesNotMatch(resolved.markdown, /所有任务判据已达标|可以领取赏金/);
+  assert.match(resolved.markdown, /blocked|not_assessed/);
+  assert.equal(resolved.numeric.ok, true, "deterministic outcome report preserves numeric anchors");
+  const sarif = buildSarifFromConfirmed(input) as { runs: Array<{ results: unknown[]; properties: Record<string, unknown> }> };
+  assert.deepEqual(sarif.runs[0]!.results, []);
+  assert.equal(sarif.runs[0]!.properties.task_satisfied_count, 0);
+  assert.equal(input.statistics.confirmed_count, 1, "technical ledger is not rewritten");
+});
+
+test("new uncontracted reports remain explicitly unassessed and preserve technical-only SARIF", async () => {
+  const { projectTaskOutcomeReport } = await import("./task-outcome-report.js");
+  const projection = projectTaskOutcomeReport({ canvasContract: undefined, canvasExists: true,
+    canvasId: "canvas-1", projectId: "project-1", findings: [], availableEvidenceRefs: [] });
+  const input = reportInput({ task_outcome: projection });
+  const resolved = finalizeTaskReportMarkdown(input, "The entire task has passed all acceptance criteria.");
+  assert.equal(resolved.usedDefault, "task_outcome");
+  assert.doesNotMatch(resolved.markdown, /entire task has passed/);
+  assert.match(resolved.markdown, /not_assessed/);
+  const sarif = buildSarifFromConfirmed(input) as { runs: Array<{ results: unknown[]; properties: Record<string, unknown> }> };
+  assert.equal(sarif.runs[0]!.results.length, 1);
+  assert.equal(sarif.runs[0]!.properties.result_semantics, "technical_verification_only");
+  assert.equal(sarif.runs[0]!.properties.task_assessment, "not_assessed");
+});
+
+test("deterministic task reports retain identity, goal and scope even without a contract or Findings", async () => {
+  const { projectTaskOutcomeReport } = await import("./task-outcome-report.js");
+  const { normalizeTaskContract } = await import("@deepsonar/shared-types");
+  for (const contract of [undefined, normalizeTaskContract({ schema_version: 1, template_id: "engineering", template_version: 1,
+    objective: "Review parser", targets: ["parser"], scope: ["Approved module only"], evidence: ["Tests"], acceptance: ["Regression checked"] })]) {
+    const projection = projectTaskOutcomeReport({ canvasContract: contract, canvasExists: true,
+      canvasId: "canvas-context", projectId: "project-context", findings: [], availableEvidenceRefs: [] });
+    assert.equal(projection.mode, contract ? "contracted" : "unassessed");
+    const input = reportInput({ task_outcome: projection,
+      task: { canvas_id: "canvas-context", project_id: "project-context", title: "Empty research task ``` <script>",
+        goal: "Check the agreed parser behavior", kind: "standard", effective_finding_protocol: { default_profile: "general" } },
+      scope_and_coverage: { goal: "Check the agreed parser behavior", network_policy: { allow_egress: false },
+        effective_finding_protocol: { default_profile: "general" }, authorized_scope: "Approved module only" },
+      statistics: { findings_total: 0, confirmed_count: 0, needs_human_count: 0, refuted_count: 0,
+        inconclusive_count: 0, excluded_count: 0, confirmed_by_severity: {} },
+      findings: [], confirmed_findings: [], facts: [], plan_gaps: undefined });
+    const result = finalizeTaskReportMarkdown(input, "Task goals all achieved");
+    assert.equal(result.usedDefault, "task_outcome");
+    for (const value of ["canvas-context", "project-context", "Empty research task", "Check the agreed parser behavior",
+      "Approved module only", '"allow_egress": false', '"default_profile": "general"']) assert.ok(result.markdown.includes(value), value);
+    assert.doesNotMatch(result.markdown, /Task goals all achieved|<script>/);
+    assert.ok(result.markdown.includes("\\u0060\\u0060\\u0060"), "untrusted title cannot close the data fence");
+  }
+});

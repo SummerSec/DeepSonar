@@ -73,7 +73,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 ### 任务 / 事件 / 画布
 
-可选 `task_contract` 的版本、模板、字段与准入语义见[下发指南](task-dispatch.md)。201 返回字段级 `task_contract_warnings`；创建前存在必要条件阻塞时返回 `409 task_contract_blocked`、`task_contract_blockers` 及 warnings，且不创建 Canvas/Job。每条反馈包含 `code/path/message/suggestion`。未提供契约仍接受自由文本，不按 Markdown 标题拒绝。
+可选 `task_contract` 的版本、模板、字段与准入语义见[下发指南](task-dispatch.md)。已提供契约的 objective/targets/scope/evidence/acceptance 基本完整性在创建/派发检查；201 返回其他字段级 `task_contract_warnings`；创建前存在必要条件阻塞时返回 `409 task_contract_blocked`、`task_contract_blockers` 及 warnings，且不创建 Canvas/Job。每条反馈包含 `code/path/message/suggestion`。未提供契约仍接受自由文本，不按 Markdown 标题拒绝。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
@@ -125,6 +125,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /jobs | tasks:write | 直接建公共角色 job `{project_id, type, title?, payload?, priority?, timeout_sec?}`；`type` 必须是当前角色名；公共入口对 `hub_reason` / `verify_finding` / `report` 返回 409；leftover `audit_module` / `hub` 不再映射为当前身份；`verify` 仅为 runtime-image smoke 兼容别名，不能伪造 scheduling purpose；系统 Job 由 Scheduler 创建 |
+| — | `POST /jobs` 的 `payload.goal_review` | tasks:write | 可选严格评审请求 `{schema_version:1, finding_id? , fact_id?, candidate_artifact_id, task_contract_sha256, criterion_ids}`，`finding_id` 与 `fact_id` 必须恰好提供一个；前者为研究候选，后者为 `emit_fact.artifact.task_result` 生成的 delivery/negative_result Fact（blocked/not_executed 不可评为成果），对应 Artifact 必须一致。复用当前项目候选所属 Canvas 并冻结来源；非法结构 400、来源不可用 404、版本/前置条件不符 409，拒绝不创建新 Canvas。普通 Job 与 Hub 共用冻结规则，不能用请求自授权；详见[任务判据评审](../../../docs/TASK_GOAL_REVIEW.md)。 |
 | GET | /jobs | tasks:read | 列表；`?project_id=` 可选 |
 | GET | /jobs/:id | tasks:read | 详情（含事件）；`query_plane=current`，含导入 `provenance` |
 | GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`）；`query_plane=history`，含 `attempt_id` |
@@ -431,6 +432,14 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 - schema 版本：以运行中 `/schema` 为准；远端 `origin/main` 最新基线为 v24，当前未同步 checkout 仍可能是 v23。空库套对应 checkout 的 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
+## 将目标评审显式关联到 Plan 判据
+
+`GET /canvases/:id/facts/:nodeId` 返回 `plan_criterion_source`、`plan_bindings` 和 `goal_review_options`。后者最多 20 项，提供可选评审 Artifact、契约摘要、目标判据与 `expected_review_sha256`；`blocked` 或 `truncated` 不能当作完成依据，列表本身也不授予权限。
+
+现有 `PATCH /canvases/:id/facts/:nodeId/verification` 的 `plan_binding` 可附加 `goal_review: {review_artifact_id, task_contract_sha256, criterion_ids, expected_review_sha256}`。仍须 `jobs:control`、`status: verified`、明确的操作员说明，以及原 Plan/来源/绑定版本字段。操作员须说明这些目标判据如何覆盖完整的 Plan 判据，不按数组序号推导映射。Plan owner 必须冻结同一任务契约；所绑定 Fact 必须是相应评审使用的原始证据，评审 Artifact 自身不能代替执行证据。
+
+关联后每次投影与最终结算都重验评审、来源和证据；冲突、不足、过期、撤销或预算截断仍阻断。原有未选择关联的合法操作员绑定保持原规则，不新增通用人工审批节点。`accepted` 回执只表示持久接纳，不表示 Plan 已完成。
+
 ## 发现契约（推荐流程）
 
 ```bash
@@ -446,3 +455,11 @@ curl -s "$DEEPSONAR_BASE_URL/schema.md"
 ```
 
 - `GET /platform/updates`（admin）：#740 平台版本发现最近一次检查结果（可更新版本、schema 是否需重建、check_error）；项目级 token 拒绝。
+
+### 可选程序规则评审（#767，本片已通过离线行为验收）
+
+goal_review 的 criterion_ids 可选择 `program_rule:<ruleid>`，但必须是 finding_id 主体且冻结契约为 bounty_submission/supplied；fact_id 或未知规则不得使用。沿用相同 Job、Artifact 和证据接口，不新建评审操作。requirement satisfied 表示满足，exclusion satisfied 表示未命中排除；报告 program_rule_review 不等于 submission eligibility。详见[评审边界](../../../docs/TASK_GOAL_REVIEW.md)。
+
+### Finding 证据完整性诊断
+
+`GET /findings/:id/evidence-trace` 及详情诊断只读核验来源与实际留存字节。逐 Fact 的 `execution_assurance:not_attested`、`runtime_claim_structured`、`retained_bytes_verified` 分开表示执行未认证、结构化声明与字节完整性；trace `runtime_proof=false`，`replay.kind=evidence_integrity_check`，不执行复现命令、不改变 Verify verdict/Plan/资格。精确来源与失败边界见[专题](../../../docs/EVIDENCE_TRACE.md)。

@@ -1,4 +1,10 @@
+import { TaskGoalReviewRequest, TaskGoalReviewResult } from "./task-goal-review.js";
+export * from "./task-goal-review.js";
+import { TaskResultProposal } from "./task-result.js";
+export * from "./task-result.js";
 import { z } from "zod";
+import { CandidateOutcomeClaim } from "./task-outcome.js";
+export * from "./task-outcome.js";
 import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload } from "./project-knowledge.js";
 export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
@@ -495,6 +501,7 @@ export const FindingPayload = z
     rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
     quantities: optionalQuantities,
     impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
     raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
   })
   .strict()
@@ -521,6 +528,7 @@ export const EmitFindingDirectPayload = z
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
     impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
   })
   .strict();
 export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
@@ -539,6 +547,7 @@ export const EmitFindingPayload = z
     rule_id: z.string().max(200).regex(/\S/).optional(),
     quantities: optionalQuantities,
     impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
     payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
   })
   .strict()
@@ -635,6 +644,8 @@ export const ARTIFACT_RELATION_MAX = 20;
 
 export const ArtifactInput = z
   .object({
+    goal_review: TaskGoalReviewResult.optional(),
+    task_result: TaskResultProposal.optional(),
     kind: ArtifactKind.optional(),
     schema_version: ArtifactSchemaVersion.optional(),
     artifact_key: ArtifactKey.optional(),
@@ -1252,6 +1263,7 @@ export type HubRoleDefinitionPayload = z.infer<typeof HubRoleDefinitionPayload>;
  */
 export const HubIntentPayload = z
   .object({
+    goal_review: TaskGoalReviewRequest.optional(),
     from: HubReferenceList,
     role: nonEmptyText(64),
     description: z.string().min(8).max(2_000).regex(/\S/),
@@ -1720,14 +1732,16 @@ export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): Plat
   return ["mark_job_done", "ack_human_message"];
 }
 
-/** 空配置代表启用该角色全部合法工具；显式 false 才关闭可选工具。 */
+/** Ordinary optional tools default on; experimental Skill suggestions require explicit opt-in. */
 export function resolvePlatformTools(
   roleName: string,
   roleKind: "role" | "hub" | "system",
   config: PlatformToolConfig,
 ): PlatformToolName[] {
   const required = new Set(requiredPlatformTools(roleKind));
-  return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name) || config[name] !== false);
+  return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name)
+    || (name === "suggest_project_skills" || name === "record_skill_choice"
+      ? config[name] === true : config[name] !== false));
 }
 
 /**
@@ -1742,7 +1756,8 @@ export function resolvePlatformToolsTightened(
 ): PlatformToolName[] {
   const globalTools = resolvePlatformTools(roleName, roleKind, globalConfig ?? {});
   if (projectConfig == null) return globalTools;
-  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, projectConfig));
+  // An absent project override inherits the global opt-in; an override can only tighten it.
+  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, { ...globalConfig, ...projectConfig }));
   return globalTools.filter((name) => projectAllowed.has(name));
 }
 

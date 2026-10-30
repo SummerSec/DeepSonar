@@ -45,7 +45,7 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
-assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "c93e4111dd156efa812345df6103a7cc03b6d957415c381ac010756a29477f4e");
+assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "c32ccf38780f90fc8d37b9e1e7fb26c80c3557eea30ab97c438eb1a6371002da");
 assert.match(skillContent, /所有 CLI 都只能使用 Job 级 HTTP 控制 API/);
 assert.match(skillContent, /Agent 通过当前 CLI 可用的 HTTP 工具/);
 assert.match(skillContent, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
@@ -85,7 +85,10 @@ assert.deepEqual(
 );
 
 const workerTools = resolvePlatformTools("explore", "role", {});
-assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS);
+assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS.filter(tool => tool !== "suggest_project_skills" && tool !== "record_skill_choice"));
+assert.deepEqual(resolvePlatformTools("explore", "role", {
+  suggest_project_skills: true, record_skill_choice: true,
+}), ALL_PLATFORM_TOOLS);
 assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
 const workerGuide = platformToolGuide(["emit_progress", "emit_fact", "mark_job_done", "request_human"]);
 for (const expected of [
