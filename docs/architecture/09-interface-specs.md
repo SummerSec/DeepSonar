@@ -79,3 +79,5 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 ## Plan 决策元数据（#775 B 首片）
 
 Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/request_human 可带严格版本化 plan_basis。字段、只读证明、单步预算、错误/重试边界见 [Plan 协议范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)；OpenAPI 输入 schema 由 shared-types 派生，无新写入 API。
+
+带 plan_basis 的 submit_hub_decision/request_human（含 payload_file）返回 persisted_deferred 接纳回执；GET receipt_key 只读原响应，完全相同 POST 仅尝试恢复原活动 Attempt。changed input/operation 返回409；权限仍受原 Job capability 限制。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。

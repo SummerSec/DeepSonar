@@ -1,3 +1,4 @@
+import { readControlReceiptByKey, controlInputDigest } from "./control-receipt.js";
 import { createHash } from "node:crypto";
 import { DonePayload, type RepairFeedback } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
@@ -21,14 +22,7 @@ function completionIdentity(kind: "receipt" | "done", jobId: string, key: string
 }
 export const completionReceiptId = (jobId: string, key: string): string => completionIdentity("receipt", jobId, key);
 export const completionDoneEventId = (jobId: string, key: string): string => completionIdentity("done", jobId, key);
-export function completionInputDigest(input: unknown): string {
-  const canonical = (value: unknown): string => {
-    if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
-  };
-  return createHash("sha256").update(canonical(input)).digest("hex");
-}
+export const completionInputDigest = controlInputDigest;
 /** Match the executor's final payload without retaining either request or summary text. */
 function completionSettlementDigest(input: unknown): string {
   const parsed = DonePayload.parse(input);
@@ -42,7 +36,7 @@ export async function hasPrepaidCompletion(
   if (!attemptId) return false;
   const rows = await tx`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
     AND attempt_id=${attemptId} AND type='control_receipt'
-    AND payload_json->>'status'='persisted_deferred' LIMIT 1`;
+    AND payload_json->>'status'='persisted_deferred' AND payload_json->>'operation'='mark_job_done' LIMIT 1`;
   const row = rows[0];
   const receipt = row?.payload_json as CompletionReceipt | undefined;
   if (!receipt || receipt.v !== 1 || receipt.operation !== "mark_job_done"
@@ -89,6 +83,8 @@ export async function recordCompletionProposal(input: {
       return reject("COMPLETION_SNAPSHOT_CHANGED", "Completion snapshot changed; stop repair");
     }
     // Receipt reads survive process restart and never execute a handler.
+    const owned = await readControlReceiptByKey(tx,input.jobId,input.key);
+    if(owned && owned.operation!=="mark_job_done") return reject("IDEMPOTENCY_KEY_CONFLICT","Key belongs to another control operation");
     const prior = await readCompletionReceipt(tx, input.jobId, input.key);
     if (prior) {
       if (prior.input_digest !== digest || prior.proposal_revision !== input.revision) {
@@ -108,7 +104,7 @@ export async function recordCompletionProposal(input: {
     const [used] = await tx`SELECT event_id FROM events WHERE job_id=${input.jobId} AND event_id=${input.key}`;
     if (used) return reject("IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a semantic event");
     const history = await tx`SELECT payload_json FROM events WHERE job_id=${input.jobId}
-      AND type='control_receipt' ORDER BY job_seq DESC LIMIT ${COMPLETION_REPAIR_LIMIT + 1}`;
+      AND type='control_receipt' AND payload_json->>'operation'='mark_job_done' ORDER BY job_seq DESC LIMIT ${COMPLETION_REPAIR_LIMIT + 1}`;
     const previous = history[0]?.payload_json as CompletionReceipt | undefined;
     if (history.some(row => row.payload_json.status === "persisted_deferred")) {
       return reject("COMPLETION_ALREADY_ACCEPTED", "A completion is already durably accepted; read its receipt");

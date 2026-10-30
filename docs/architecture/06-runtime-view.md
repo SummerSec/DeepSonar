@@ -104,3 +104,5 @@ RPC 按帧有界扫描，默认 8MiB 硬上限（可配置至 64MiB）；超过 
 ## Plan 单步决策（#775 B 首片）
 
 既有 Hub Intent 可携带 plan_basis，绑定当前 Plan/任务输入/证据/事件 revision；graph_query plan_gap 保存有界已读证明。Canvas 最多一次补证，完成需要全部判据当前正向操作员授权；自动完成亦受该门禁。延迟终态事件保留依据，最终事务重验。假执行回归与真实质量验收限制见 [Plan 范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)。
+
+Plan 接纳采用事务外 preflight → Canvas/Job 锁内本地 prepare 与持久回执 → 原 Attempt commit；最终事件仍经既有 ingestion 结算。缓存或 handler 丢失可读原响应，不启动新执行。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。

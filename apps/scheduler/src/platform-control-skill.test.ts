@@ -37,7 +37,7 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /persisted_deferred/);
   assert.match(content, /查询只读取持久结果，不恢复执行器本地完成门/);
   assert.match(content, /必须使用原 key、revision 和完全相同 payload 再 POST 一次/);
-  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "c93e4111dd156efa812345df6103a7cc03b6d957415c381ac010756a29477f4e");
+  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "7f2702b8168ce18e8587589e8e89d7f406c5082c68b3d9e135d0b1ce1b01acac");
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {

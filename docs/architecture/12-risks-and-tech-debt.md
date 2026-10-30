@@ -91,6 +91,6 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 风险登记与专题事实的交叉索引在 [`docs/README.md`](../README.md) 和 [`DESIGN.md`](../../DESIGN.md)；架构文档变更按照 [`11-engineering-specs.md`](11-engineering-specs.md) 和 [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 的完整变更面处理。新增风险应优先引用代码/测试入口，避免只引用旧计划或未核实的历史结论。
 
-## #775：持久成功回执与真实收益仍待验收
+## #775：接纳恢复不代表执行结算
 
-#791 的 B 首片已实现首次显式 Plan 激活、每 Canvas 一次补证、全判据正向授权完成门禁，并通过真实 Control/数据库到假执行证据与自动 Hub 唤醒的回归；该说明针对核验提交，不宣称它已合入 main。剩余风险是：进程缓存丢失后旧提案被拒绝，不保证恢复原成功回执；未保存的目标仓库/外部环境版本仍未知；完整业务样本与真实模型收益尚未验收。持久成功回执仍是保留的设计要求，不得以“不重复派发”代替其验收。设计目标与实现差额见 [有界 Intent 对照](../PLAN_BOUNDED_INTENT_DESIGN.md)，C 不启用，#775 不得整体关闭。
+Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失、未结算恢复和冲突回归接入现有 Plan CI。原 handler/Attempt 不可恢复时仅提供持久接纳结果；不创建替代执行器，不重放未知外部效果。未保存的目标仓库/环境版本仍未知。真实模型效果未验证，按本批验收范围不作为关闭前置；C 不启用。设计目标与实现边界见 [有界 Intent 对照](../PLAN_BOUNDED_INTENT_DESIGN.md)。

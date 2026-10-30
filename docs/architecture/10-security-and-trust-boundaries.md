@@ -66,3 +66,5 @@ flowchart LR
 判据满足只来自显式授权操作员评价，并要求同 Canvas/项目的成功 Job/Attempt、当前 Artifact、finalized manifest 与实际留存文件 SHA。模型提案、项目关联、Fact verified 单独均不构成充分性。读取不请求远端 URI、不跟随符号链接；预算/缺失/unknown effect fail closed。整体完成与 Finding Verify 不被绑定改写；详见 [专题](../PLAN_GAP_PROJECTION.md)。
 
 B 首片的 plan_basis 只允许既有 Intent 内一次补证，不新增权限。Task 输入、Plan、来源、已读 projection 与事件 revision 在最终 Canvas→Job 事务重验；完成须所有必要判据当前正向操作员授权。未知外部效果禁止补证和自动完成；普通 request_human 始终可停止。来源 SHA 纳入保存的 Task 输入，不伪造外部目标版本，详见 [Plan 范围](../PLAN_GAP_PROJECTION.md)。
+
+Plan 回执只绑定原 Job/Attempt、冻结快照及请求内容；查询不恢复执行。未知效果阻止 Hub 提案恢复，人工停止不受该阻断；普通调用不能借相同 event_id 穿过宿主预留。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。

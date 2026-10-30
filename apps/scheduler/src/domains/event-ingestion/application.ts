@@ -1,3 +1,4 @@
+import { readControlReceiptByKey, planSettlementDigest } from "./control-receipt.js";
 import { hasPrepaidCompletion } from "./completion-receipt.js";
 import {
   EventEnvelope as EventEnvelopeSchema,
@@ -319,6 +320,12 @@ async function appendAndApplyBundle(
       if (shouldSkipTerminalAfterAcceptedHuman(envelope.type, acceptedHumanInThisIngest)) {
         results.push({ deduped: true });
         continue;
+      }
+      const receipt=await readControlReceiptByKey(tx,jobId,envelope.event_id);
+      if(receipt) {
+        const operation=envelope.type==='hub_decision'?'submit_hub_decision':envelope.type==='human'?'request_human':null;
+        if(!operation || receipt.operation!==operation || receipt.settlement_digest!==planSettlementDigest(operation,envelope.payload)
+          || receipt.attempt_id!==ingest.attemptId) throw new ControlInputError('invalid_payload','Event key belongs to a different accepted control proposal');
       }
       const dedup = await tx`
         INSERT INTO event_dedup (event_id, job_id) VALUES (${envelope.event_id}, ${jobId})
