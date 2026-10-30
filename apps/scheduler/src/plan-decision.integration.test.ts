@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import test from 'node:test';
 import {Plan} from '@deepsonar/shared-types';
+import {recordPlanReplay} from './plan-replay-recorder.js';
 
 const databaseUrl=process.env.TEST_DATABASE_URL;
 test('Plan-aware Control API dispatch is transactional, bounded and refuses unproven completion', {skip:!databaseUrl},async()=>{
@@ -83,6 +84,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     assert.deepEqual(await decision.planCompletionBlockers(sql,canvas),['plan_criteria_unproven'],'explicit Plan gates automatic completion before any basis decision');
     const complete=await invoke('submit_hub_decision',{complete:{from:[root.id],description:'Claim completion without evidence'},plan_basis:basis(gap,'complete')});
     assert.equal(complete.statusCode,422,complete.payload);assert.equal(complete.json().error_code,'plan_completion_unproven');
+    await recordPlanReplay(mode,'unproven_completion',{http_status:complete.statusCode,error_code:complete.json().error_code});
     const rejected=await invoke('submit_hub_decision',{intents:[{...intent,role:'not-admitted-role'}],plan_basis:basis(gap)});
     assert.equal(rejected.statusCode,422,rejected.payload);
     assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0);
@@ -107,6 +109,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0,'durable acceptance alone creates no child');
     const pendingGap=await read();
     assert.equal(pendingGap.supplementation_execution.state,'not_dispatched','receipt alone is not committed dispatch');
+    await recordPlanReplay(mode,'pending_receipt',{state:pendingGap.supplementation_execution.state,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
     const cached=await invoke('submit_hub_decision',requestProposal,key);assert.equal(cached.statusCode,200,cached.payload);
     assert.deepEqual(cached.json(),original);
     api.clearPlatformApiIdempotencyCache();api.unregisterRuntimeHandler(hub);
@@ -188,6 +191,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
       assert.equal(projected.state,expected,`${jobStatus}/${attemptStatus}`);
       assert.equal(projected.source?.attempt_id,latestAttempt);
       assert.equal(projected.completion_assessment,'unknown');
+      await recordPlanReplay(mode,`lifecycle_${jobStatus}_${attemptStatus}`,{state:projected.state,completion_assessment:projected.completion_assessment});
     }
     await sql`UPDATE jobs SET status='waiting_human' WHERE id=${childId}`;
     await sql`UPDATE job_attempts SET status='active',phase='agent.suspended' WHERE id=${latestAttempt}`;
@@ -197,6 +201,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     const waiting=await execution();
     assert.deepEqual(waiting.reported_blocker,{event_id:humanEvent,authority:'agent_report',kind:'credential'});
     assert.ok(!JSON.stringify(waiting).includes('free-form'));
+    await recordPlanReplay(mode,'credential_report',{state:waiting.state,blocker_kind:waiting.reported_blocker?.kind,authority:waiting.reported_blocker?.authority});
     await sql`DELETE FROM events WHERE event_id=${humanEvent}`;
     await sql`UPDATE jobs SET status='succeeded' WHERE id=${childId}`;
     await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${latestAttempt}`;
@@ -204,6 +209,8 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
       VALUES(${historicalAttempt},${childId},'historical-unresolved','execution','unknown')`;
     assert.equal((await execution()).state,'unknown','a later success cannot hide historical unknown effects');
     assert.equal((await execution()).reason,'unknown_external_effect');
+    const historicalUnknown=await execution();
+    await recordPlanReplay(mode,'historical_unknown',{state:historicalUnknown.state,reason:historicalUnknown.reason});
     await sql`UPDATE jobs SET status='running' WHERE id=${childId}`;
     await sql`UPDATE job_attempts SET status='active',phase='agent.ready' WHERE id=${latestAttempt}`;
     await sql`UPDATE job_attempt_effects SET status='effect_pending' WHERE attempt_id=${historicalAttempt}`;
@@ -296,6 +303,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     const sourced=await invoke('graph_query',{kind:'plan_gap',ids:[observedFact.node_id]});
     assert.equal(sourced.statusCode,200,sourced.payload);assert.equal(sourced.json().items[0].source_refs[0].eligible,true);
     assert.equal(sourced.json().items[0].criteria[0].state,'unbound','execution alone is not semantic authority');
+    await recordPlanReplay(mode,'post_execution_unbound',{criterion_state:sourced.json().items[0].criteria[0].state,eligible:sourced.json().items[0].source_refs[0].eligible});
     await sql`UPDATE canvases SET title='Changed saved objective' WHERE id=${canvas}`;
     const changed=await read();assert.equal(changed.stale_objective,true);
     await sql`UPDATE job_attempt_effects SET status='unknown' WHERE attempt_id=${uncertainAttempt}`;
@@ -304,6 +312,7 @@ test('Plan-aware Control API dispatch is transactional, bounded and refuses unpr
     assert.equal(stop.json().receipt_status,'persisted_deferred');
     assert.equal(stop.json().operation,'request_human');
     assert.equal((await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,'waiting_human','unknown effects do not block safe human escalation');
+    await recordPlanReplay(mode,'safe_human_stop',{http_status:stop.statusCode,job_status:(await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
     assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,1);
     assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND type='hub_decision'`).length,1);
     api.unregisterRuntimeHandler(hub);api.unregisterRuntimeHandler(followup);api.unregisterRuntimeHandler(worker);

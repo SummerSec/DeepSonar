@@ -175,3 +175,5 @@
 [#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI九流程的真实代码、合成协议和未验收边界；不是模型质量报告。
 
 #767 程序规则附加评审已接线：仅 supplied bounty Finding，通过 program_rule:<ruleid> 独立评价材料规则；不改变通用任务判据，不授予提交资格。见[任务判据评审](TASK_GOAL_REVIEW.md)与[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
+
+#775 的[冻结离线控制回放](../agent-harness/plan-replay/README.md)提供32行逐例差异与缺失分母；不代表全部业务样本、模型质量收益或C阶段完成。
