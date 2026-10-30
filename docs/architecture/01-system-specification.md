@@ -447,9 +447,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-FIND-002 Finding 唯一性与证据引用
 
-- **规范要求**：同一项目的 Finding 必须以稳定 fingerprint 幂等，保留来源 Job、Artifact、Canvas node 和 evidence_refs；不允许用标题文本替代 canonical Finding UUID 或跨项目引用。
-- **决策来源**：去重、Verify、Report 和人工处置都依赖稳定身份。
-- **实现状态**：as-built；项目+fingerprint 唯一索引和 canonical UUID 校验已落地。
+- **规范要求**：同一 Job 的 Finding 必须以稳定 fingerprint 保留来源幂等；不同 Job/任务必须保留独立来源，保留来源 Job、Artifact、Canvas node 和 evidence_refs；不允许用标题文本替代 canonical Finding UUID 或跨项目引用。
+- **决策来源**：来源、Verify、Report 和人工处置依赖稳定身份；#770 评审要求跨任务关联不得提前抹去独立来源。
+- **实现状态**：as-built（#770 A）；Job+fingerprint 唯一索引和 canonical UUID 校验已落地；提交幂等与来源身份独立，同来源内容冲突拒绝，历史记录保留。
 - **代码入口**：[Finding schema](../../database/schema.sql)、[Finding trace](../../apps/scheduler/src/finding-trace.ts)、[Graph reference validation](../../apps/scheduler/src/graph.ts)。
 - **验证证据**：`pnpm ci:unit:finding-protocol`、`pnpm ci:unit:graph-references`、`pnpm ci:integration:finding-protocol`。
 

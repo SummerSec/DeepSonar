@@ -90,7 +90,7 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
-  assert.equal(SCHEMA_VERSION, 62);
+  assert.equal(SCHEMA_VERSION, 63);
 });
 
 test("role prompt backfill accepts LF and Windows CRLF baselines", async () => {
@@ -219,4 +219,77 @@ test("owned sequence reset is over all public base tables after official seeds",
   assert.match(source, /await assertOwnedSequencesAligned\(db\);/);
   assert.doesNotMatch(source, /resetOwnedSequences\(db, copiedTables\)/);
   assert.doesNotMatch(source, /pg_get_serial_sequence/);
+});
+
+test("Finding backup restore uses private connection environment and redacts child-process failures", async () => {
+  const { restoreFindingSourceBackup } = await import("./schema-rebuild-finding-fixture.js");
+  const target = new URL("postgres://fixture-user:fixture%3Asecret@127.0.0.1:55471/fixture-backup?sslmode=require");
+  let called = false;
+  restoreFindingSourceBackup(target, "/tmp/fixture.dump", (command, args, options) => {
+    called = true;
+    assert.equal(command, "pg_restore");
+    assert.deepEqual(args, ["--exit-on-error", "--dbname", "fixture-backup", "/tmp/fixture.dump"]);
+    assert.equal(options.env?.PGHOST, "127.0.0.1");
+    assert.equal(options.env?.PGPORT, "55471");
+    assert.equal(options.env?.PGUSER, "fixture-user");
+    assert.equal(options.env?.PGPASSWORD, "fixture:secret");
+    assert.equal(options.env?.PGSSLMODE, "require");
+    assert.equal(options.stdio, "pipe");
+    assert.equal(options.timeout, 30_000);
+  });
+  assert.equal(called, true);
+  assert.throws(() => restoreFindingSourceBackup(target, "/tmp/fixture.dump", () => {
+    throw Object.assign(new Error(`Command failed: ${target}`), { stderr: "fixture:secret", stdout: "fixture-user" });
+  }), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /backup restore failed/);
+    assert.doesNotMatch(error.message, /fixture|postgres:\/\//);
+    assert.equal(error.cause, undefined);
+    assert.deepEqual(Object.keys(error), []);
+    return true;
+  });
+});
+
+test("CI dump and restore clients are pinned to the PostgreSQL 16 service", async () => {
+  const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(workflow, /  gate:\n    runs-on: ubuntu-24\.04/);
+  assert.match(workflow, /image: postgres:16-alpine/);
+  assert.match(workflow, /apt-get install -y postgresql-client-16\b/);
+  assert.match(workflow, /echo "\/usr\/lib\/postgresql\/16\/bin" >> "\$GITHUB_PATH"/);
+  assert.doesNotMatch(workflow, /apt-get install -y postgresql-client\s*$/m);
+});
+
+
+test("CI uses installed PG16 without apt and rejects mismatched clients", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const block = workflow.match(/      - name: Select PostgreSQL 16 client[^\n]*\n        run: \|\n([\s\S]*?)\n\n/);
+  assert.ok(block, "execute the actual CI setup script");
+  const directory = await mkdtemp(join(tmpdir(), "deepsonar-pg16-setup-"));
+  try {
+    const script = block[1].split("\n").map(line => line.slice(10)).join("\n")
+      .replaceAll("/usr/lib/postgresql/16/bin", directory);
+    const pathFile = join(directory, "github-path");
+    const aptMarker = join(directory, "apt-called");
+    await writeFile(join(directory, "pg_dump"), '#!/bin/sh\necho "pg_dump (PostgreSQL) 16.15"\n', { mode: 0o755 });
+    await writeFile(join(directory, "pg_restore"), '#!/bin/sh\necho "pg_restore (PostgreSQL) 16.15"\n', { mode: 0o755 });
+    await writeFile(join(directory, "sudo"), `#!/bin/sh\ntouch "${aptMarker}"\nexit 19\n`, { mode: 0o755 });
+    const run = () => spawnSync("bash", ["-e", "-c", script], {
+      encoding: "utf8", env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, GITHUB_PATH: pathFile },
+    });
+    assert.equal(run().status, 0);
+    assert.equal((await readFile(pathFile, "utf8")).trim(), directory);
+    await assert.rejects(readFile(aptMarker), { code: "ENOENT" });
+    await writeFile(join(directory, "pg_restore"), '#!/bin/sh\necho "pg_restore (PostgreSQL) 17.1"\n', { mode: 0o755 });
+    assert.notEqual(run().status, 0, "existing but wrong-major tools must not pass");
+    await assert.rejects(readFile(aptMarker), { code: "ENOENT" });
+    await rm(join(directory, "pg_restore"));
+    assert.notEqual(run().status, 0, "missing tools try installation and fail closed when installation fails");
+    assert.equal(await readFile(aptMarker, "utf8"), "");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
