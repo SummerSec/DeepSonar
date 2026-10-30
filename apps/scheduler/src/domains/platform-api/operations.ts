@@ -146,7 +146,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   submit_plan: {
     summary: "Submit a versioned execution plan",
-    description: "Submit a Plan (goal, tasks, dependencies, completion policy, budget). Scheduler stores the raw plan and a trimmed copy. Phase 1 does not dispatch workers from this operation.",
+    description: "Submit an initial Plan audit, or an explicit v1 route revision with owner, expected event revision, Plan SHA and task-input SHA. Route revisions only change tasks/open questions before supplementation dispatch; goal/completion/assumptions/budget stay identical, no trimming or budget reset. A committed revision is recoverable by the same key or GET receipt_key. This operation never dispatches workers.",
     readOnly: false,
     eventType: "plan",
   },

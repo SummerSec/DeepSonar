@@ -1,4 +1,4 @@
-import { readControlReceiptByKey, planSettlementDigest } from "./control-receipt.js";
+import { readControlReceiptByKey, planSettlementDigest, controlInputDigest } from "./control-receipt.js";
 import { hasPrepaidCompletion } from "./completion-receipt.js";
 import {
   EventEnvelope as EventEnvelopeSchema,
@@ -321,6 +321,10 @@ async function appendAndApplyBundle(
         results.push({ deduped: true });
         continue;
       }
+      if (envelope.type === "plan" && envelope.payload.revision) {
+        const [knowledge] = await tx`SELECT id FROM project_knowledge_receipts WHERE job_id=${jobId} AND idempotency_key=${envelope.event_id}`;
+        if (knowledge) throw new ControlInputError("invalid_payload", "Plan event key belongs to a knowledge receipt");
+      }
       const receipt=await readControlReceiptByKey(tx,jobId,envelope.event_id);
       if(receipt) {
         const operation=envelope.type==='hub_decision'?'submit_hub_decision':envelope.type==='human'?'request_human':null;
@@ -332,6 +336,13 @@ async function appendAndApplyBundle(
         ON CONFLICT (event_id) DO NOTHING
         RETURNING event_id`;
       if (dedup.length === 0) {
+        const [prior] = await tx`SELECT job_id,type,payload_json FROM events WHERE event_id=${envelope.event_id}`;
+        if (envelope.type === "plan" || (prior?.type === "plan" && prior.payload_json?.revision)) {
+          if (!prior || prior.job_id !== jobId || prior.type !== envelope.type
+            || controlInputDigest(prior.payload_json) !== controlInputDigest(envelope.payload)) {
+            throw new ControlInputError("invalid_payload", "Plan event key belongs to a different input or operation");
+          }
+        }
         results.push({ deduped: true });
         continue;
       }

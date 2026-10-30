@@ -1,3 +1,5 @@
+import { taskInputSha256 } from "./task-input.js";
+import { preparePlanRouteRevision } from "./revision.js";
 import {
   Plan,
   PlanAuditRecord,
@@ -41,12 +43,27 @@ export async function applySubmitPlan(
   job: Record<string, unknown>,
   payload: unknown,
   maxTasks: number,
+  eventId?: string,
 ): Promise<PlanAuditRecord> {
   const parsed = SubmitPlanPayload.safeParse(payload);
   if (!parsed.success) {
     throw new ControlInputError("invalid_payload", "submit_plan 参数不符合 Plan 协议。", "plan");
   }
   const raw: Plan = parsed.data.plan;
+  if (parsed.data.revision) {
+    const prepared = await preparePlanRouteRevision(tx, jobId, job, parsed.data, maxTasks, eventId);
+    return persistPlanAudit(tx, parsed.data.revision.plan_job_id, prepared.ownerPayload, {
+      source: "submit_plan", raw, trimmed: prepared.trimmed, trim_reasons: [],
+    });
+  }
+  if (readPlanAudit(job.payload_json)?.raw) {
+    throw new ControlInputError("plan_stale_revision", "替换已有 Plan 必须提交显式路线修订及当前版本。", "revision");
+  }
+  if (job.canvas_id && job.type !== "report") {
+    const [canvas] = await tx`SELECT title,target_json FROM canvases WHERE id=${String(job.canvas_id)}`;
+    if (!canvas) throw new ControlInputError("invalid_payload", "Plan requires a current Canvas");
+    await tx`UPDATE jobs SET payload_json=payload_json || ${tx.json({plan_input_sha256:taskInputSha256(canvas.title,canvas.target_json)} as never)} WHERE id=${jobId}`;
+  }
   const { trimmed, reasons } = trimPlan(raw, { maxTasks });
   return persistPlanAudit(tx, jobId, job.payload_json, {
     source: "submit_plan",
