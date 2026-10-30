@@ -246,6 +246,8 @@ export const config = {
 
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
+    /** Explicit repair allowance; absent/invalid is closed, never unlimited. Frozen on first rejection. */
+    repairMaxTokens: boundedInt("DEEPSONAR_REPAIR_MAX_TOKENS", 0, 2_000_000),
     /** Endpoint injected into every real sandbox CLI configuration. */
     sandboxUrl: str(
       "DEEPSONAR_GATEWAY_SANDBOX_URL",

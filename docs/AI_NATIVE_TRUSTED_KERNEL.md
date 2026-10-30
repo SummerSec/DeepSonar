@@ -234,7 +234,7 @@ proposed
 - 让 Plan、Artifact、Verify 和 Runtime Adapter 使用同一反馈 Envelope。
 - 保留已有稳定错误码，补充 path、expected、current state、accepted effects、repair budget 和 next action。
 - 统一 Completion Gate，使 nudge 带上真实失败上下文而不是固定催促语句。
-- `proposal_revision` / `repair_attempt` 账本尚未持久化；当前 Control API 以 0 起步并广告 `remaining_budget.attempts`。
+- `mark_job_done` 已持久化 proposal_revision / repair_attempt，并以原 Gateway effect/usage ledger 提供独立 token 累计熔断；跨 operation 尚未统一，调用前总 token 上界仍未知。见 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
 ### Phase 2：Proposal/Receipt/Settlement
 
