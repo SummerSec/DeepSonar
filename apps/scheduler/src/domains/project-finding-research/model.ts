@@ -128,12 +128,16 @@ export interface FindingRelationDecision {
   missing_fields: IdentityField[];
   rule_version: string;
   source_digests: [string, string];
-  reason: "project_scope_mismatch" | "identity_conflict" | "version_continuity_unknown" | "lexical_overlap_only" | "identity_evidence_missing";
+  reason: "feature_version_mismatch" | "project_scope_mismatch" | "identity_conflict" | "version_continuity_unknown" | "lexical_overlap_only" | "identity_evidence_missing";
 }
 
 function known(feature: AuthoritativeFeature | null): feature is AuthoritativeFeature {
   return Boolean(feature?.value.trim() && feature.source?.ref.trim() && feature.source.revision.trim()
     && ["frozen_target", "evidence"].includes(feature.source.kind));
+}
+
+function hasCurrentFeatureVersions(feature: FindingFeatures): boolean {
+  return feature.extractor_version === EXTRACTOR_VERSION && feature.normalization_version === NORMALIZATION_VERSION;
 }
 
 /** Jaccard is a ranking signal, not a probability or root-cause assertion. */
@@ -149,6 +153,13 @@ export function lexicalSimilarity(left: FindingFeatures, right: FindingFeatures)
 /** v1 deliberately cannot emit a strong relation: its quality/authority gate is unmet.
  * This is pairwise only; the result of A/B is never an input to B/C or A/C. */
 export function compareFindingFeatures(left: FindingFeatures, right: FindingFeatures): FindingRelationDecision {
+  // Matching old versions are still incompatible with this rule's current feature contract.
+  if (!hasCurrentFeatureVersions(left) || !hasCurrentFeatureVersions(right)) {
+    return {
+      kind: "insufficient_information", matched_fields: [], conflicts: [], missing_fields: [...IDENTITY_FIELDS],
+      rule_version: RELATION_RULE_VERSION, source_digests: [left.source_digest, right.source_digest], reason: "feature_version_mismatch",
+    };
+  }
   const conflicts = IDENTITY_FIELDS.filter((field) => known(left.identity[field]) && known(right.identity[field])
     && left.identity[field]!.value !== right.identity[field]!.value);
   const missing = IDENTITY_FIELDS.filter((field) => !known(left.identity[field]) || !known(right.identity[field]));
@@ -172,15 +183,31 @@ export function rankLexicalCandidates(
   subject: FindingFeatures,
   candidates: readonly FindingFeatures[],
   options: { limit: number; scanBudget: number },
-): { candidates: Array<{ finding_id: string; score: number }>; truncated: boolean; examined: number } {
+): {
+  candidates: Array<{ finding_id: string; score: number }>;
+  truncated: boolean;
+  examined: number;
+  excluded_version_count: number;
+  subject_version_compatible: boolean;
+} {
   if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 50
     || !Number.isInteger(options.scanBudget) || options.scanBudget < 1 || options.scanBudget > 1_000) {
     throw new Error("invalid candidate budget");
   }
+  if (!hasCurrentFeatureVersions(subject)) {
+    return { candidates: [], truncated: false, examined: 0, excluded_version_count: 0, subject_version_compatible: false };
+  }
   const scanned = candidates.slice(0, options.scanBudget);
-  const ranked = scanned.filter((candidate) => candidate.project_id === subject.project_id && candidate.finding_id !== subject.finding_id)
+  const compatible = scanned.filter(hasCurrentFeatureVersions);
+  const ranked = compatible.filter((candidate) => candidate.project_id === subject.project_id && candidate.finding_id !== subject.finding_id)
     .map((candidate) => ({ finding_id: candidate.finding_id, score: lexicalSimilarity(subject, candidate) }))
     .filter((candidate) => candidate.score > 0)
     .sort((left, right) => right.score - left.score || (left.finding_id < right.finding_id ? -1 : left.finding_id > right.finding_id ? 1 : 0));
-  return { candidates: ranked.slice(0, options.limit), truncated: candidates.length > scanned.length || ranked.length > options.limit, examined: scanned.length };
+  return {
+    candidates: ranked.slice(0, options.limit),
+    truncated: candidates.length > scanned.length || ranked.length > options.limit,
+    examined: scanned.length,
+    excluded_version_count: scanned.length - compatible.length,
+    subject_version_compatible: true,
+  };
 }

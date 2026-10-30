@@ -1,3 +1,4 @@
+import type { TransactionSql } from "postgres";
 import { sql } from "../../db.js";
 import { EXTRACTOR_VERSION, extractFindingFeatures, sourceInputDigest, type FindingFeatureSource } from "./model.js";
 import { maintenanceIdentityMatches } from "../../platform-maintenance.js";
@@ -137,8 +138,8 @@ export async function readFeatureStatus(findingId: string, projectId: string, db
   };
 }
 
-/** Operator-only bounded pruning. A row lock fences concurrent rebuild/promotion. */
-export async function pruneInactiveFeatureBatch(projectId: string, db: Db = sql): Promise<number> {
+/** Operator-only bounded pruning. The caller must hold one transaction through deletion. */
+export async function pruneInactiveFeatureBatch(projectId: string, db: TransactionSql): Promise<number> {
   const [work] = await db`SELECT generation, active_generation FROM project_finding_feature_work
     WHERE project_id = ${projectId}::uuid FOR UPDATE`;
   if (!work) return 0;

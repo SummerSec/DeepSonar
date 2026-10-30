@@ -30,7 +30,7 @@ export async function runFeatureRebuildCLI(args: readonly string[]): Promise<{ p
       const [project] = await tx`SELECT id FROM projects WHERE id = ${input.projectId}::uuid FOR SHARE`;
       if (!project) throw new Error("FEATURE_REBUILD_PROJECT_NOT_FOUND");
       if (input.mode === "prune_inactive") {
-        return { project_id: input.projectId, pruned_count: await pruneInactiveFeatureBatch(input.projectId, tx) };
+        return { project_id: input.projectId, pruned_count: await pruneInactiveFeatureBatch(input.projectId, raw) };
       }
       await requestFeatureRebuild(input.projectId, tx);
       const [work] = await tx`SELECT generation FROM project_finding_feature_work WHERE project_id = ${input.projectId}::uuid`;

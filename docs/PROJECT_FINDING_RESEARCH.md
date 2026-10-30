@@ -1,7 +1,7 @@
 # 项目 Finding 特征与关系研究（#770 C）
 
 > 状态：**C 实现待评审；D 仅合成行为验证，质量门未通过，不发布关系建议**。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 本切片依赖 #770 A 的独立 Job 来源身份，独立于 B 的项目查询增强。原 Finding、Artifact、Verify、人工处置和任务内 Research 都不由本投影改写。没有项目 Canvas、项目 Hub、模型调用、Job 跨任务接口或自动处置。
 
@@ -17,6 +17,8 @@
 
 核查入口：`packages/shared-types/src/index.ts` 的 `FindingPayload`、`database/schema.sql` 的 Artifact/Evidence、`domains/role-runtime-snapshot/application.ts`、`core.ts` 与 `task-intent.integration.test.ts`。任务 `target` 是自由内容且执行中可编辑；冻结运行时配置描述 Provider、镜像和能力，不证明被测目标的历史 commit/部署环境。共享文件 ID、当前仓库 HEAD、文本标题都不能代替目标身份。
 
+2026-10-30 复核 main `0841f827`：#767 新增冻结 `task_contract`，其中 targets 与 identity（tenant/role/resource）仍是用户声明；`task-contract-preflight.ts` 明确尚无可信应用身份探针。此切片不改任务契约，也不将这些声明提升为关联的权威身份。
+
 以上为源码可获得性审查，不是用户历史数据抽样。合成夹具的权威身份覆盖率为 0，仅证明未知处理行为。未取得脱敏人工标注集、按问题家族/资产隔离的调参/留出集或预先确定的质量阈值，因此**不报告 recall@K、precision/recall、真实字段覆盖率或节省模型成本**。
 
 ## 持久投影与恢复
@@ -25,13 +27,13 @@
 
 Scheduler 现有维护 gate 注册/停止 worker；事务持有维护行共享锁并校验 runtime 身份。没有进程内通知依赖或外部效果。批次与检查点原子提交，进程中断回滚后从持久游标重试；running 是事务内状态，对外通常看到 pending，不能推断模型正在工作。相同输入摘要不重复写特征、不刷新 processed_at。完整扫描成功后原子切换活动 generation，并在 30 秒后开始下一轮有界扫描以补偿漏通知。内部 `requestFeatureRebuild` 创建新代、清零失败预算，不暴露新的用户写 API；运维命令 `pnpm finding-features:rebuild -- --project-id <UUID>` 必须提供显式 DATABASE_URL，并复查维护身份、schema 和项目。规则版本变更也创建新代，回滚版本不直接复活旧代。
 
-来源读前后计算摘要，保存前重查；读取时再次核对当前 Finding、Artifact、Evidence 和提取器版本。源变更/Artifact Evidence 元数据删除立即呈 stale；Finding 删除级联移除投影。旧 worker 与重建通过项目 work 行锁串行化，不能覆盖新 generation。旧代投影保留作派生历史，当前读只认活动代且必须匹配当前来源；运维可加 `--prune-inactive` 显式清理非活动、非构建代，每次最多 500 行，持有 work 行锁防并发切换。没有自动无限保留承诺；达到 500 行时可再次执行清理。
+来源读前后计算摘要，保存前重查；读取时再次核对当前 Finding、Artifact、Evidence 和提取器版本。源变更/Artifact Evidence 元数据删除立即呈 stale；Finding 删除级联移除投影。旧 worker 与重建通过项目 work 行锁串行化，不能覆盖新 generation。旧代投影保留作派生历史，当前读只认活动代且必须匹配当前来源；运维可加 `--prune-inactive` 显式清理非活动、非构建代，每次最多 500 行，由类型要求调用方提供事务，持续持有 work 行锁直到删除完成，防并发切换。没有自动无限保留承诺；达到 500 行时可再次执行清理。
 
 `GET /findings/:id` 增加 `project_research_features` 元数据：pending/succeeded/failed/stale、重建中、提取器版本、处理时间、有限错误代码、声明字段覆盖、权威身份不足与 `quality_gate_not_evaluated`。沿用当前 `findings:read` 和项目范围，撤权由每次请求的现有鉴权立即拒绝；不返回证据正文或跨任务标题/计数。这只证明 Finding 与 Artifact Evidence 元数据的新鲜度；任意 evidence_refs 指向的冷文件字节、共享资产撤权或外部 URI 有效性尚未接入权威解析。它们不能作为当前关联证据，D 上线仍需单独完成该有效性边界。普通 Job 的 Control/graph scope 未改变。此切片尚未添加 Web 特征状态面板。
 
 ## D 的可验证范围与停止条件
 
-`model.ts` 的候选排序限制最多扫描 1000 个**调用方已提供的候选**、返回 K≤50，并显式报告截断。这是离线词法排序函数，不是 PostgreSQL 召回实现，不能据此声称数据库候选扫描或召回率已验证。逐对策略支持“仅相似/明确冲突/信息不足”；强同问题/同根因类别保留但 v1 永不输出。不同版本仍需根因延续证据；A≈B、B≈C 不生成 A=C 或连通分组。
+`model.ts` 的候选排序限制最多扫描 1000 个**调用方已提供的候选**、返回 K≤50，并显式报告截断。这是离线词法排序函数，不是 PostgreSQL 召回实现，不能据此声称数据库候选扫描或召回率已验证。不兼容的提取器或规范化版本不参与排序，返回版本排除计数；逐对比较降为信息不足，不把旧版特征解释为冲突或相似。逐对策略支持“仅相似/明确冲突/信息不足”；强同问题/同根因类别保留但 v1 永不输出。不同版本仍需根因延续证据；A≈B、B≈C 不生成 A=C 或连通分组。
 
 D 的持久关系边、数据库召回、前端关系展示和人工纠正尚未接线。继续前需要权威目标/版本/根因来源映射、可审查样本、阈值以及实际候选查询计划/性能；当前只交付检索和 C 特征基础，不把“未自动合并”作为质量指标。
 
