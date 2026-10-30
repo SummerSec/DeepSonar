@@ -279,3 +279,10 @@ if (testDatabaseUrl) {
     await runFindingSourceRebuildFixture(testDatabaseUrl);
   });
 }
+
+if (testDatabaseUrl) {
+  test("#770 C exact v63 baseline gains feature tables only after a backed-up rebuild", async () => {
+    const { runFeatureSchemaRebuildFixture } = await import("./schema-rebuild-feature-fixture.js");
+    await runFeatureSchemaRebuildFixture(testDatabaseUrl);
+  });
+}
