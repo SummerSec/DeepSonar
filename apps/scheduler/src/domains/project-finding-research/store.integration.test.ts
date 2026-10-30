@@ -4,12 +4,30 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import postgres from 'postgres';
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 if (!databaseUrl) {
   test('project Finding features require isolated PostgreSQL', { skip: 'TEST_DATABASE_URL is not set' }, () => {});
 } else {
   test('feature generations recover, invalidate immediately, retain source state and enforce read permissions', async () => {
+    // Scheduling is project-global; unrelated suites may leave auditable project shells.
+    // Use a real isolated database, never assume a fixed number of ticks on a shared queue.
+    const adminUrl = new URL(databaseUrl); adminUrl.pathname = '/postgres';
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const name = `feature_fixture_${randomUUID().replaceAll('-', '')}`;
+    const target = new URL(databaseUrl); target.pathname = `/${name}`;
+    try {
+      await admin.unsafe(`CREATE DATABASE "${name}"`);
+      await runFeatureFixture(target.toString());
+    } finally {
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      await admin.end({ timeout: 5 });
+    }
+  });
+}
+
+async function runFeatureFixture(databaseUrl: string): Promise<void> {
     process.env.DATABASE_URL = databaseUrl;
     const [{ migrate, sql }, { processFeatureBatch, requestFeatureRebuild, readFeatureStatus, loadFeatureSource }, { sourceInputDigest }, { default: Fastify }, { default: websocket }, { registerRoutes }, { generateToken }] = await Promise.all([
       import('../../db.js'), import('./store.js'), import('./model.js'), import('fastify'), import('@fastify/websocket'), import('../../routes.js'), import('../../auth.js'),
@@ -134,5 +152,4 @@ if (!databaseUrl) {
       await deleteProjectsLeavingAuditShells(sql,[project,other]);
       await app.close(); await sql.end({timeout:5});
     }
-  });
 }
