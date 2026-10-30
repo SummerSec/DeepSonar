@@ -99,3 +99,7 @@ emit_fact.artifact.task_result 接收 delivery/negative_result/blocked/not_execu
 goal_review criterion_ids 增加 program_rule:<ruleid>，仅 supplied bounty Finding 主体可用，fact_id 禁止。报告附加 program_rule_review status=not_assessed/partially_satisfied/rules_satisfied/blocked，通用 criteria 不变；exclusion satisfied 表示未命中排除。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
 程序规则报告累计上限为 100 条 Finding×rule 判据；超限所有 program_rule_review blocked、criteria 为空，原因 program_rule_projection_limit_exceeded，可读取单 Finding 报告。Plan goal_review_options 过滤程序规则 ID，不扩展通用 Plan 映射。
+
+## 证据追踪诊断修复
+
+GET /findings/:id/evidence-trace 与详情诊断逐 Fact 增加 execution_assurance:not_attested、runtime_claim_structured、retained_bytes_verified；runtime_proof=false，replay.kind=evidence_integrity_check，不执行命令。详见[证据追踪](../EVIDENCE_TRACE.md)。

@@ -104,3 +104,7 @@ Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失�
 ## 程序规则附加评审（#767）
 
 本片已接 supplied bounty Finding 的独立程序规则评审，不再将规则自声明筛选视为全部能力；rules_satisfied 仍非官方规则认证、当前授权或资格闭环。适用攻击链、可复现证据、knownness 与资格 authority 映射继续保留为后续缺口。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+## 证据追踪诊断修复
+
+证据追踪此前混淆 manifest 声明摘要与 observed、路径后缀与精确 URI、最新 Attempt 与来源 Attempt；本片已修正只读完整性诊断并完成行为验收。仍无宿主命令 receipt 或真正独立复现/攻击链；knownness helper 未运行时接入，不可视为 novel authority。详见[证据追踪](../EVIDENCE_TRACE.md)。

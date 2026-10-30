@@ -1207,3 +1207,7 @@ Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effe
 ## 程序规则附加评审（#767）
 
 FR-TASK-007 / FR-RPT-001 的程序规则评审扩展复用 goal_review，仅 supplied bounty Finding 可评 program_rule:<ruleid>；通用任务 criteria 保持独立。requirement satisfied=满足，exclusion satisfied=未命中排除。报告 program_rule_review 逐规则记录评价与来源，按同 Finding/整契约聚合并对冲突、失效和预算不足 fail closed；rules_satisfied 不授予 submission eligibility。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
+## 证据追踪诊断修复
+
+Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Attempt，并宿主重读实际字节；runtime_proof=false，replay 为完整性检查，不改变 Verify verdict、Plan 或资格。详见[证据追踪](../EVIDENCE_TRACE.md)。

@@ -3,7 +3,8 @@
  * Pure diagnostics live in verify-evidence-chain.ts; this module loads scoped rows.
  */
 import { sql } from "./db.js";
-import { readEvidenceManifest } from "./evidence.js";
+import { inspectFactRetainedEvidence } from "./fact-evidence-retained.js";
+import { criterionEvidenceBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import {
   EVIDENCE_RETENTION_LAYERS,
   evaluateDeclaredDigest,
@@ -71,28 +72,13 @@ function extractSubjectRevision(finding: Record<string, unknown>, rounds: readon
   return null;
 }
 
-async function observedDigestsForJob(jobId: string | null): Promise<{
-  observed: Record<string, string>;
-  readable: boolean;
-  reason: string | null;
-}> {
-  if (!jobId) return { observed: {}, readable: false, reason: "no_ownership_job" };
-  try {
-    const manifest = await readEvidenceManifest(jobId);
-    if (!manifest?.files?.length) {
-      return { observed: {}, readable: false, reason: "evidence_manifest_missing_or_empty" };
-    }
-    const observed: Record<string, string> = {};
-    for (const file of manifest.files) {
-      if (file.sha256) {
-        observed[file.path] = file.sha256;
-        observed[file.name] = file.sha256;
-      }
-    }
-    return { observed, readable: true, reason: null };
-  } catch {
-    return { observed: {}, readable: false, reason: "evidence_manifest_unavailable" };
-  }
+function verificationIdentity(value: unknown): string {
+  const v = record(value);
+  return JSON.stringify({ finding_id: v.finding_id, evidence_kind: v.evidence_kind, outcome: v.outcome,
+    subject_revision: v.subject_revision, environment: v.environment ?? null, steps: v.steps ?? [],
+    expected: v.expected ?? null, actual: v.actual ?? null, artifact_refs: v.artifact_refs ?? [],
+    runtime_digest: v.runtime_digest ?? null, exit_code: v.exit_code ?? null,
+    limitations: v.limitations ?? [], attempted_refutation: v.attempted_refutation ?? [] });
 }
 
 export type FactEvidenceTraceResponse = ConfirmChainResolution & {
@@ -100,7 +86,10 @@ export type FactEvidenceTraceResponse = ConfirmChainResolution & {
   evidence_signature: string | null;
   content_integrity_digest: string | null;
   layers: typeof EVIDENCE_RETENTION_LAYERS;
-  replay: { ok: boolean; steps: string[]; blockers: string[] };
+  facts: Array<ConfirmChainResolution["facts"][number] & {
+    execution_assurance: "not_attested"; runtime_claim_structured: boolean; retained_bytes_verified: boolean;
+  }>;
+  replay: { kind: "evidence_integrity_check"; ok: boolean; steps: string[]; blockers: string[] };
 };
 
 /**
@@ -115,7 +104,10 @@ export async function loadFactEvidenceTrace(
   const findingId = String(finding.id ?? "");
   const projectId = String(finding.project_id ?? "");
   const canvasId = (finding.canvas_id as string | null | undefined) ?? null;
-  const usedFactIds = extractUsedFactIds(finding, verificationRounds);
+  const allFactIds = extractUsedFactIds(finding, verificationRounds);
+  const usedFactIds = allFactIds.slice(0, 100);
+  const invalidIds = usedFactIds.some(id => !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id));
+  const scanBlockers = [...(allFactIds.length > 100 ? ["fact_evidence_trace_truncated"] : []), ...(invalidIds ? ["invalid_used_fact_id"] : [])];
   const subjectRevision = extractSubjectRevision(finding, verificationRounds);
   const raw = record(finding.raw_json);
   const state = record(raw.verification_state);
@@ -143,45 +135,51 @@ export async function loadFactEvidenceTrace(
     content_integrity_digest: storedIntegrity,
     layers: EVIDENCE_RETENTION_LAYERS,
     replay: {
+      kind: "evidence_integrity_check",
       ok: false,
       steps: ["load used_fact_ids", "resolve canvas Fact nodes", "diagnose ownership/revision/digest"],
-      blockers: usedFactIds.length === 0 ? ["no_used_fact_ids"] : [],
+      blockers: usedFactIds.length === 0 ? ["no_used_fact_ids"] : scanBlockers,
     },
   };
-  if (usedFactIds.length === 0) return empty;
+  if (usedFactIds.length === 0 || invalidIds) return empty;
 
   const nodes = await tx`
-    SELECT n.id, n.node_type, n.canvas_id, n.job_id, n.body_json,
-           j.project_id, j.status AS job_status,
-           a.id AS attempt_id,
-           art.id AS artifact_id
+    SELECT n.id, n.node_type, n.canvas_id, n.job_id, n.body_json,n.verification_status,
+           j.project_id, j.status AS job_status,j.type AS job_type,
+           e.attempt_id,e.payload_json AS source_payload,
+           attempt.status AS attempt_status,latest.id AS latest_attempt_id,
+           art.id AS artifact_id,art.project_id AS artifact_project_id,art.canvas_id AS artifact_canvas_id,
+           art.job_id AS artifact_job_id,art.status AS artifact_status,art.superseded_at,
+           art.source_operation,
+           EXISTS(SELECT 1 FROM job_attempt_effects x WHERE x.job_id=j.id AND x.status IN ('unknown','effect_pending')) AS unsafe_effect
     FROM canvas_nodes n
-    LEFT JOIN jobs j ON j.id = n.job_id
+    JOIN jobs j ON j.id = n.job_id
+    LEFT JOIN artifacts art ON art.id::text=n.body_json->>'artifact_id' AND art.node_id=n.id
+    LEFT JOIN events e ON e.job_id=j.id AND e.event_id=art.source_event_id AND e.type='fact'
+    LEFT JOIN job_attempts attempt ON attempt.id=e.attempt_id AND attempt.job_id=j.id
     LEFT JOIN LATERAL (
       SELECT id FROM job_attempts WHERE job_id = n.job_id ORDER BY attempt_no DESC LIMIT 1
-    ) a ON true
-    LEFT JOIN artifacts art ON art.node_id = n.id AND art.superseded_at IS NULL
-    WHERE n.id = ANY(${usedFactIds}::uuid[])
-      AND (j.project_id IS NULL OR j.project_id = ${projectId})`;
+    ) latest ON true
+    WHERE n.id = ANY(${usedFactIds}::uuid[]) AND j.project_id=${projectId} AND n.canvas_id=${canvasId} AND j.canvas_id=${canvasId}
+    ORDER BY n.id LIMIT 100`;
 
+  const budget = criterionEvidenceBudget();
+  const byteVerified = new Set<string>();
   const rows: Record<string, unknown>[] = [];
   for (const row of nodes) {
     const body = record(row.body_json);
     const verification = record(body.verification);
     const jobId = (row.job_id as string | null) ?? null;
-    const { observed, readable, reason } = await observedDigestsForJob(jobId);
-    const refs = Array.isArray(verification.artifact_refs) ? verification.artifact_refs : [];
-    // Normalize observed keys to declared uris when path suffix matches.
-    const observedForRefs: Record<string, string> = { ...observed };
-    for (const ref of refs) {
-      if (!ref || typeof ref !== "object") continue;
-      const uri = text((ref as { uri?: unknown }).uri);
-      if (!uri || observedForRefs[uri]) continue;
-      const hit = Object.entries(observed).find(
-        ([key]) => uri.endsWith(key) || key.endsWith(uri) || uri.includes(key),
-      );
-      if (hit) observedForRefs[uri] = hit[1];
-    }
+    const sourceValid = row.node_type === "fact" && verification.finding_id === findingId
+      && jobId && row.attempt_id && row.attempt_id === row.latest_attempt_id
+      && row.job_status === "succeeded" && row.attempt_status === "succeeded" && row.unsafe_effect === false
+      && row.verification_status !== "rejected" && row.artifact_status === "submitted" && row.superseded_at === null
+      && row.artifact_project_id === projectId && row.artifact_canvas_id === canvasId && row.artifact_job_id === jobId
+      && row.source_operation === "emit_fact" && verificationIdentity(verification) === verificationIdentity(record(row.source_payload).verification)
+      && verification.source_job_id === jobId && verification.source_role === row.job_type;
+    const retained = sourceValid ? await inspectFactRetainedEvidence(jobId, String(row.attempt_id), verification.artifact_refs, budget)
+      : { observed: {}, readable: false, reason: "fact_evidence_source_unavailable_or_changed" };
+    if (retained.readable) byteVerified.add(String(row.id));
     rows.push({
       node_id: String(row.id),
       node_type: String(row.node_type),
@@ -203,10 +201,13 @@ export async function loadFactEvidenceTrace(
       environment: text(verification.environment) || null,
       runtime_digest: text(verification.runtime_digest) || null,
       exit_code: typeof verification.exit_code === "number" ? verification.exit_code : null,
-      artifact_refs: verification.artifact_refs ?? [],
-      observed_content_digests: observedForRefs,
-      content_readable: readable || refs.length === 0,
-      content_unreadable_reason: readable || refs.length === 0 ? null : reason,
+      artifact_refs: Array.isArray(verification.artifact_refs) ? verification.artifact_refs.map(ref => {
+        const value = record(ref);
+        return { uri: value.uri, sha256: typeof value.sha256 === "string" ? value.sha256.replace(/^sha256:/, "").toLowerCase() : value.sha256 };
+      }) : [],
+      observed_content_digests: retained.observed,
+      content_readable: retained.readable,
+      content_unreadable_reason: retained.reason,
     });
   }
 
@@ -219,7 +220,8 @@ export async function loadFactEvidenceTrace(
   if (missingIds.length > 0) {
     try {
       const hits = await tx`
-        SELECT id::text AS id FROM artifact_evidence WHERE id = ANY(${missingIds}::uuid[])`;
+        SELECT e.id::text AS id FROM artifact_evidence e JOIN artifacts a ON a.id=e.artifact_id
+        WHERE e.id = ANY(${missingIds}::uuid[]) AND a.project_id=${projectId} AND a.canvas_id=${canvasId}`;
       for (const hit of hits) artifactEvidenceHits.add(String(hit.id));
     } catch {
       // table may be unavailable in unit harness; treat as plain missing
@@ -272,20 +274,25 @@ export async function loadFactEvidenceTrace(
       message: fact.error_message ?? fact.error_code!,
     }));
   resolution.blocking_errors = blocking_errors;
-  const blockers = blocking_errors.map((e) => `${e.error_code}:${e.fact_id}`);
+  const blockers = [...scanBlockers, ...blocking_errors.map((e) => `${e.error_code}:${e.fact_id}`)];
   return {
     ...resolution,
+    facts: resolution.facts.map(fact => ({ ...fact, runtime_claim_structured: fact.runtime_proof,
+      runtime_proof: false, execution_assurance: "not_attested" as const,
+      retained_bytes_verified: byteVerified.has(fact.ref_id) })),
     gate_fingerprint: gate ? gateFingerprint(gate) : null,
     evidence_signature: evidenceSignature,
     content_integrity_digest: storedIntegrity,
     layers: EVIDENCE_RETENTION_LAYERS,
     replay: {
+      kind: "evidence_integrity_check",
       ok: blockers.length === 0,
       steps: [
         "parse confirm used_fact_ids",
         "resolve canvas_nodes Fact + Job/Attempt ownership",
         "compare subject_revision",
-        "recheck artifact_ref content digests vs Evidence manifest",
+        "read exact Job/Attempt retained bytes and compare with artifact_ref and manifest digests",
+        "execution is not replayed or attested by this read-only diagnostic",
       ],
       blockers,
     },
