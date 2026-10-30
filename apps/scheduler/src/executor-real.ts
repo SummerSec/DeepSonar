@@ -1440,6 +1440,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         );
       }
       await preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload);
+      // Other Control calls can be accepted while the read-only preflight awaits.
+      assertSemanticTerminalExclusivity(semanticState, "hub_decision");
+      if (semanticState.hub) throw toolBoundaryError("duplicateToolCall", "submit_hub_decision 已成功接受一次；每个 Job 只能成功提交一次。");
       semanticState.hub = { eventId, payload: event.payload };
       return;
     }

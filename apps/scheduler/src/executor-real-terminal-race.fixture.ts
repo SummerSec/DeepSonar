@@ -14,7 +14,8 @@ export const jobId = randomUUID();
 export const attemptId = randomUUID();
 const projectId = randomUUID();
 const canvasId = randomUUID();
-const operations = ["mark_job_done", "request_human"];
+export const rootId = randomUUID();
+const operations = ["mark_job_done", "request_human", "submit_hub_decision"];
 const snapshot = {
   name: "audit", role_kind: "role", agent_cli: "claude-code",
   agent_runtime: runtime.freezeAgentCliRuntime(runtime.AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
@@ -26,7 +27,7 @@ const snapshot = {
 const job = { id: jobId, project_id: projectId, canvas_id: canvasId, sandbox_id: "offline-sandbox",
   payload_json: {}, agent_snapshot_json: snapshot };
 let scenario: () => Promise<void>;
-let preflight: () => Promise<void> = async () => {};
+let preflight: (type: string) => Promise<void> = async () => {};
 let events: EventEnvelopeInput[] = [];
 let runnerCalls = 0;
 let gate: (() => boolean) | undefined;
@@ -46,10 +47,11 @@ mock.module(new URL("./runtime.js", import.meta.url), { namedExports: { ...runti
 } });
 const core = await import("./core.js");
 mock.module(new URL("./core.js", import.meta.url), { namedExports: { ...core,
+  rolesForProject: async () => [{ name: "audit", title: "Audit", description: "Offline role" }],
   rulesForProject: async () => ({ minVerifySeverity: "low", maxIntentsPerDecision: 8 }),
   preflightDeferredSemanticEvent: async (_job: string, type: string) => {
-    assert.equal(type, "human");
-    await preflight();
+    assert.ok(type === "human" || type === "hub_decision");
+    await preflight(type);
   },
   ingestEvent: async (_job: string, event: EventEnvelopeInput) => { events.push(event); },
   ingestEventBundle: async (_job: string, bundle: EventEnvelopeInput[]) => { events.push(...bundle); },
@@ -57,7 +59,15 @@ mock.module(new URL("./core.js", import.meta.url), { namedExports: { ...core,
 const graph = await import("./graph.js");
 mock.module(new URL("./graph.js", import.meta.url), { namedExports: { ...graph,
   buildGraphSnapshot: async () => ({ scope: "agent", yaml: "root: offline", yamlChars: 13,
-    truncated: false, omitted: {}, nodeCounts: {}, projectedReferableIds: [] }),
+    truncated: false, omitted: {}, nodeCounts: {}, projectedReferableIds: [rootId] }),
+} });
+const images = await import("./runtime-images.js");
+mock.module(new URL("./runtime-images.js", import.meta.url), { namedExports: { ...images,
+  listHubRuntimeImageCatalog: async () => [],
+} });
+const graphQuery = await import("./graph-query.js");
+mock.module(new URL("./graph-query.js", import.meta.url), { namedExports: { ...graphQuery,
+  seedGraphQueryProjectedIds: async () => [],
 } });
 const context = await import("./domains/context/index.js");
 mock.module(new URL("./domains/context/index.js", import.meta.url), { namedExports: { ...context,
@@ -96,13 +106,14 @@ const { executeReal } = await import("./executor-real.js");
 const { invokeRuntimeHandler, listRuntimeHandlers } = await import("./domains/platform-api/registry.js");
 
 export function completionReady() { return gate?.(); }
-export function setPreflight(callback: () => Promise<void>) { preflight = callback; }
+export function setPreflight(callback: (type: string) => Promise<void>) { preflight = callback; }
 export function call(operationId: string, input: unknown, options: Partial<PlatformRuntimeHandlerContext> = {}) {
   return invokeRuntimeHandler({ jobId, projectId, canvasId, operationId, input,
     eventId: randomUUID(), tokenId: "offline-token", idempotencyKey: null,
     completionAttemptId: attemptId, ...options });
 }
-export async function runExecutor(act: () => Promise<void>) {
+export async function runExecutor(act: () => Promise<void>, roleKind = "role") {
+  snapshot.role_kind = roleKind;
   events = []; runnerCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";
   await executeReal(jobId, "audit", { jobId, token, operationIds: operations, env: {
@@ -111,5 +122,5 @@ export async function runExecutor(act: () => Promise<void>) {
   } } as Parameters<typeof executeReal>[2]);
   assert.equal(runnerCalls, 1);
   assert.equal(listRuntimeHandlers(jobId).length, 0, "executor unregisters its live handler");
-  return events.filter(event => event.type === "human" || event.type === "done");
+  return events.filter(event => event.type === "human" || event.type === "done" || event.type === "hub_decision");
 }
