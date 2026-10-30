@@ -1,9 +1,9 @@
 # 任务目标报告防误报（#767 后续片）
 
-> 状态：确定性报告与结构化来源复核；无通用独立目标评审 authority，不提供目标达标或提交资格的正向判定。
+> 状态：确定性报告与结构化来源复核；接入来源隔离的普通 Job 判据评审，不认证不同人/模型；不提供整体完成或提交资格授权。
 > 同步日期：2026-10-30
 
-本片接续[通用任务标准与研究候选准入](TASK_OUTCOME_ADMISSION.md)，防止报告把研究候选或技术 confirmed 写成任务成果。它不是独立语义评价器，不新增 Evaluation 协议、执行通道、Plan 完成门或自动评审 Job。独立复核、可复现证据、适用攻击链、knownness适用性、提交资格和 #775 整体闭环仍需后续交付。
+本片接续[通用任务标准与研究候选准入](TASK_OUTCOME_ADMISSION.md)，防止报告把研究候选或技术 confirmed 写成任务成果。报告消费[来源隔离的普通 Job 评审](TASK_GOAL_REVIEW.md)，不自行生成语义评价，不新增执行通道或 Plan 完成门。当前来源隔离不认证不同人/模型；适用攻击链、knownness、提交资格和 #775 整体闭环仍需后续交付。
 
 ## 冻结输入与来源
 
@@ -12,7 +12,7 @@
 - `mode: contracted | unassessed | invalid`；主完整 `contract` 与服务端整契约 `task_contract_sha256`；
 - `contract_basis: canvas | source_job`：任务报告以 Canvas 为主，单 Finding 报告以该来源 Job 的冻结契约为主；`current_canvas_contract_sha256` 单独保留当前 Canvas 摘要用于冲突检查；
 - `source_contracts`：同主契约摘要仅保留 hash 引用；不同摘要可附完整 contract/criteria，保留来源差异；
-- `criteria`：仅保存派生判据 `id` 与 `assessment: not_assessed`，按 ID 在完整契约定位目标、范围、证据、排除与验收文本，共享顶层缺口；不能只选候选已声明贡献的子集代替任务要求；
+- `criteria`：仅保存派生判据 `id` 与 `assessment`（satisfied/contradicted/insufficient/conflict/not_assessed），按 ID 在完整契约定位目标、范围、证据、排除与验收文本，共享顶层缺口；不能只选候选已声明贡献的子集代替任务要求；
 - 每条 Finding 的 `research_admission`、`technical_status`、`goal_assessment`、资格状态与 `gaps`；
 - 整体 `goal_assessment`、`submission_eligibility`、`gaps` 与 `truncated`。
 
@@ -24,15 +24,15 @@
 
 投影纳入既有 report-input 摘要计算；当前依据变化导致新报告输入及新版本，不回写历史报告。历史已冻结且没有该投影的输入保持原样，不补造当时的评审结论。
 
-## 无正向语义权威时的状态
+## 判据评价与整体完成分开
 
-| 输入情况 | 报告判断 | 含义 |
-| --- | --- | --- |
-| 有契约（含来源 Job 留存契约） | mode=contracted，goal_assessment=blocked | 无通用独立目标评审依据；准入或技术确认不能替代它 |
-| 契约损坏或作用域不可用 | mode=invalid，goal_assessment=blocked | 依据无效，不能退回无契约路径 |
-| 当前及来源都无契约 | mode=unassessed，goal_assessment=not_assessed | 旧入口未评估，不能声称达到统一标准 |
+报告复核宿主冻结的普通 Job 评审记录，满足来源、当前成功 Attempt、无未知效果、自有 Fact 与本 Attempt 留存字节/hash 条件后，才贡献逐判据评价。运行中的提交只绑定，不直接变成正向结果。普通 Fact 不需先人工置 verified；没有新增全局人工评审门。详见[评审来源与证据](TASK_GOAL_REVIEW.md)。
 
-有契约的必要判据均保留，不因 Agent 声明 matches、Fact 存在或技术 confirmed 而变成 satisfied。候选的结构化准入可以是 admitted_for_research，但目标评价仍 blocked；缺口明确包含独立目标评审尚不可用。非赏金资格为 not_applicable，赏金 `submission_eligibility` 为 not_assessed；not_applicable 也不是任务达标。
+逐判据区分 satisfied、contradicted、insufficient、conflict、not_assessed。只有 entire_criterion 的正向评价可贡献 satisfied，Agent 候选声明 matches、Fact 存在或技术 confirmed 本身不够。不同来源有效相反评价保留 conflict，不最后写覆盖；过期/失效记录留 gaps，不贡献正向。未覆盖判据仍未完成。
+
+整体 goal_assessment 为 blocked、not_assessed、partially_satisfied 或 criteria_satisfied。criteria_satisfied 仅表达当前判据集合的评价，不是任务/Plan 完成授权；整体完成仍 not_assessed，归 #775。无契约入口仍 unassessed；invalid 契约不得降级为已评估。有赏金模式的 submission_eligibility 仍 not_assessed，非赏金为 not_applicable，二者都不等于目标完成。
+
+完整评审原文留 Artifact，报告 review_records 为紧凑来源引用，判据通过 review_indexes 关联；单 Finding 最多 20 条、Task 最多 100 条，截断不宣称正向完整结论。来源不同 Job 只证明执行来源隔离，不认证不同人/模型。
 
 ## 确定性正文与技术附录
 
@@ -50,4 +50,4 @@
 
 行为验收应覆盖：技术 confirmed 不计目标完成；伪造 raw_json authority 无效；来源 Job/Artifact/node/events/Attempt 失效；当前 Fact 撤销；Canvas 删除/修改契约；无 Finding 的来源快照；截断；模型正文/Markdown 注入无法覆盖结论；Task/Finding 报告及 SARIF 的一致边界；投影变化生成新版本；近契约上限的单 Finding 输入去重后仍保留全部源规则与判据。实现入口与测试见 [来源投影测试](../apps/scheduler/src/task-outcome-report.test.ts)和[报告正文测试](../apps/scheduler/src/report-numeric-fidelity.test.ts)，实际运行结果以 PR 记录为准。
 
-本片完成报告防误报，不完成独立评审写入、可提交资格正向判定或 #775 整体目标收敛。无契约入口仍有迁移缺口。用户明确无需真实模型验收，不以模型/生产试验作为交付门；真实效果未验证，不能承诺质量收益。
+报告防误报现已接入普通 Job 的来源隔离评审写入与逐判据展示；不完成不同人/模型独立性认证、可提交资格正向判定或 #775 整体目标收敛。无契约入口仍有迁移缺口。用户明确无需真实模型验收，不以模型/生产试验作为交付门；真实效果未验证，不能承诺质量收益。

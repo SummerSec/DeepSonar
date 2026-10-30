@@ -21,6 +21,8 @@ export function outcomeSarifProperties(report: TaskOutcomeReport | undefined) {
     result_semantics: report && report.mode !== "unassessed" ? "task_outcome_review" : "technical_verification_only",
     task_assessment: report?.goal_assessment ?? "historical_input_without_task_assessment",
     task_satisfied_count: 0,
+    satisfied_criterion_count: report?.criteria.filter((criterion) => criterion.assessment === "satisfied").length ?? 0,
+    overall_task_completion: "not_assessed",
     submission_eligibility: report?.submission_eligibility ?? "not_assessed",
     task_contract_sha256: report?.task_contract_sha256 ?? null,
     assessment_gaps: report?.gaps ?? ["task_assessment_unavailable"],

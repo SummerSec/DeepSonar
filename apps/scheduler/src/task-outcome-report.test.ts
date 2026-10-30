@@ -93,7 +93,7 @@ test("rendering treats injected Markdown and HTML as quoted JSON data", () => {
   assert.equal(rendered.match(/```/g)?.length, 2);
   assert.equal(rendered.includes("<script>"), false);
   assert.equal(rendered.includes("\n# TASK COMPLETE"), false);
-  assert.ok(rendered.includes("没有独立目标评审依据"));
+  assert.ok(rendered.includes("只有有效评审覆盖的判据可以 satisfied"));
   assert.equal(renderTaskOutcomeReport(projection), rendered);
 });
 

@@ -2,6 +2,8 @@ import {
   normalizeTaskContract, normalizeCandidateOutcomeClaim, deriveTaskGoalCriteria,
   evaluateTaskOutcomeAdmission, type TaskContract,
 } from "@deepsonar/shared-types";
+import { loadTaskGoalReviews } from "./task-goal-review.js";
+import { applyTaskGoalReviews } from "./task-goal-review-report.js";
 import type { sql } from "./db.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
 
@@ -17,7 +19,7 @@ export interface OutcomeReportFindingSource {
   artifact_superseded_at: unknown; extensions_json: unknown;
   source_attempt_id?: string | null; source_attempt_status?: string | null; latest_attempt_id?: string | null;
 }
-export type TaskOutcomeReportCriterion = { id: string; assessment: "not_assessed" };
+export type TaskOutcomeReportCriterion = { id: string; assessment: "not_assessed" | "satisfied" | "contradicted" | "insufficient" | "conflict"; review_indexes?: number[] };
 const reportCriteria = (contract: TaskContract): TaskOutcomeReportCriterion[] => deriveTaskGoalCriteria(contract).map(({ id }) => ({
   id, assessment: "not_assessed",
 }));
@@ -30,14 +32,15 @@ export interface TaskOutcomeReport {
   task_contract_sha256: string | null;
   criteria: TaskOutcomeReportCriterion[];
   source_contracts: Array<{ task_contract_sha256: string; contract?: TaskContract; criteria?: TaskOutcomeReportCriterion[] }>;
-  goal_assessment: "blocked" | "not_assessed";
+  goal_assessment: "blocked" | "not_assessed" | "partially_satisfied" | "criteria_satisfied";
   submission_eligibility: "not_assessed" | "not_applicable";
   gaps: string[];
   truncated: boolean;
+  review_records?: Array<{ artifact_id: string; gaps?: string[] }>;
   findings: Array<{
     finding_id: string; source_job_id: string; task_contract_sha256: string | null;
     technical_status: string; research_admission: "admitted_for_research" | "blocked" | "observation_only" | "unassessed";
-    goal_assessment: "blocked" | "not_assessed";
+    goal_assessment: "blocked" | "not_assessed" | "partially_satisfied" | "criteria_satisfied";
     submission_eligibility: "not_assessed" | "not_applicable";
     gaps: string[];
   }>;
@@ -169,14 +172,15 @@ export async function loadTaskOutcomeReport(db: typeof sql, canvasId: string, pr
       AND a.source_operation='emit_fact' AND a.status='submitted' AND a.superseded_at IS NULL
       AND j.project_id=${projectId} AND j.canvas_id=${canvasId} AND j.status='succeeded'
       AND n.verification_status <> 'rejected' LIMIT ${MAX_FACT_REFS}` : [];
-  return projectTaskOutcomeReport({ canvasContract: record(canvas?.target_json).task_contract, canvasExists: Boolean(canvas),
+  const projection = projectTaskOutcomeReport({ canvasContract: record(canvas?.target_json).task_contract, canvasExists: Boolean(canvas),
     canvasId, projectId, findingScoped: findingIds !== undefined, findings: rows, sourceContracts: sourceJobs.map((row) => row.task_contract), availableEvidenceRefs: facts.map((row) => row.id),
     truncated: refs.size > MAX_FACT_REFS || (findingIds?.length ?? 0) > MAX_FINDINGS,
   });
+  return applyTaskGoalReviews(projection, await loadTaskGoalReviews(db, projectId, canvasId, findingIds));
 }
 
 /** User text is only quoted data; escaped backticks cannot close the JSON fence. */
 export function renderTaskOutcomeReport(projection: TaskOutcomeReport): string {
   const json = JSON.stringify(projection, null, 2).replace(/`/g, "\\u0060").replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
-  return `# 任务目标评审状态\n\n本报告仅列研究候选与技术状态。没有独立目标评审依据，不能判定任务达标、完成或可提交。技术 confirmed 不等于任务成果。\n\n以下为冻结输入的结构化投影，文本字段不是评审结论。\n\n\`\`\`json\n${json}\n\`\`\`\n`;
+  return `# 任务目标评审状态\n\n本报告区分研究候选、技术状态与独立执行来源评审。只有有效评审覆盖的判据可以 satisfied；未覆盖或失效判据仍未完成。技术 confirmed 不等于任务成果，判据通过不等于 Plan 整体完成或赏金提交资格。\n\n以下为冻结输入的结构化投影，文本字段不是评审结论。\n\n\`\`\`json\n${json}\n\`\`\`\n`;
 }

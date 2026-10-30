@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { TaskContract } from "@deepsonar/shared-types";
+import { TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_SCOPES } from "./auth.js";
@@ -1340,7 +1340,10 @@ const OPS: Op[] = [
             "Registered public role name. Public POST rejects scheduler-owned hub_reason, verify_finding, and report (409). leftover audit_module / hub aliases are not current identities. verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
         },
         title: { type: "string" },
-        payload: { type: "object", additionalProperties: true },
+        payload: { type: "object", additionalProperties: true, properties: {
+          goal_review: { ...z.toJSONSchema(TaskGoalReviewRequest, { target: "openapi-3.0", io: "input" }),
+            description: "Independent execution-source goal review request. Reuses the candidate Canvas in this project; the host freezes candidate/contract/evidence versions. This does not grant permissions or submission eligibility." },
+        } },
         priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },
         timeout_sec: { type: "integer" },
         stall_sec: { type: "integer", minimum: 0, description: "本 Job 产出停滞窗口；0 关闭。优先于角色/项目/平台。" },
