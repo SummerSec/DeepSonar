@@ -114,3 +114,5 @@ Control API 的每个 operation 必须经过三层校验：
 - 未实现或暂缓的边界、风险债务、后续 issue 和是否需要人工验收。
 
 仓库开发 Skill [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 将上述同步面和验收输出用于后续开发任务；它只治理仓库文档，不改变运行时。
+
+Plan [冻结离线回放](../../agent-harness/plan-replay/README.md)独立锁定期望样本和摘要，从实际SQL/HTTP夹具采集观测。CI输出逐例差异、缺失和分母，失败/跳过不能算通过；未测模型指标保持null，不推导收益或C阶段准入。

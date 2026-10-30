@@ -91,3 +91,7 @@ expected_review_sha256: <当前评审依据摘要>
 | unknown | 关联缺失/重复、版本不符、状态矛盾、上下文丢失或未知效果 |
 
 同一 SQL 快照读取 child、最新 Attempt、Intent、human 来源和所有 Attempt 的未知效果，防止新 Attempt 成功遮蔽旧效果；归属冲突、终态 Attempt 或终态 Job 遗留 effect_pending 也保持 unknown。原始错误、凭据、模型理由不回显；只投影固定生命周期原因码，credential 等 human 类别是 Agent 报告，不认证环境缺失。既有 Fact/Artifact/Evidence 绑定独立提供证据来源；执行状态不能代替其语义评价或将失败表达为阴性。未新增表、派发器、外联或自动轮询。
+
+## 冻结离线回放
+
+[控制回放基线](../agent-harness/plan-replay/README.md) 固定 #809 的16场景×inline/file两种输入方式，记录真实 SQL/HTTP 观测和逐例差异、缺失及完整分母；CI 上传可审查 JSON。它是控制行为回归，不是前后模型收益实验，不启动 C。目标遗漏/模型token和质量、多轮无进展未测量保持null；整体样本与C验收仍需后续补齐。

@@ -178,6 +178,8 @@
 
 #767 程序规则附加评审已接线：仅 supplied bounty Finding，通过 program_rule:<ruleid> 独立评价材料规则；不改变通用任务判据，不授予提交资格。见[任务判据评审](TASK_GOAL_REVIEW.md)与[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
+#775 的[冻结离线控制回放](../agent-harness/plan-replay/README.md)提供32行逐例差异与缺失分母；不代表全部业务样本、模型质量收益或C阶段完成。
+
 [Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
 
 

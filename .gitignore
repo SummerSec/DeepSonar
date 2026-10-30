@@ -17,3 +17,5 @@ deploy/master.key
 
 # Host upgrade journal and database recovery backups
 deploy/.upgrade/
+
+/artifacts/plan-replay/
