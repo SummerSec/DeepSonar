@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -336,9 +336,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CAP-008 能力选择证据审计
 
 - **规范要求**：精确版本/hash 的配置选择、拉取、声明使用和独立结果应分别呈现；不得将 Job 成功、模型反馈或组合成功解释为单能力有效性，不建立第二经验账本。
-- **实现状态**：#778 A 部分实现；离线报告关联本项目未撤销 Skill 与配置 Pack，实际使用、独立质量、成本归因和在线推荐仍未实现。
-- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)。
-- **验证证据**：`pnpm ci:unit:project-knowledge` 的合成行为测试；数据库导出与真实模型评测未执行。
+- **实现状态**：#778 A 离线关联报告与本项目 Skill 在线条件建议/选择声明已实现；曝光、独立质量和成本归因未知，平台源及 Pack 建议未评估。详见[非模型验收矩阵](../SKILL_SUGGESTIONS.md)。
+- **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)、[在线建议](../../apps/scheduler/src/domains/project-knowledge/skill-suggestions.ts)。
+- **验证证据**：`pnpm ci:unit:project-knowledge` 与 `pnpm ci:integration:project-knowledge`；固定合成对照、权限/撤权/幂等/选择与拉取分离回归。真实模型验收已豁免，不能据此宣称效果收益。
 
 ### FR-CAP-006 Plan 协议的当前边界
 

@@ -1,7 +1,7 @@
 # 05 构建块与所有权
 
 > 状态：**as-built**（#741）。列出四个应用、三个共享包和 Scheduler 域的责任边界及依赖方向；领域状态机由专题文档维护。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 构建块按照“入口组装、领域负责规则、基础设施负责外部效果”分层。所有权以目录、注册入口和运行时依赖为事实；完整 bounded-context 说明见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -88,3 +88,7 @@ flowchart LR
 ### #778 离线审计构件
 
 [capability-evidence](../../agent-harness/capability-evidence/README.md)从既有快照、usage、版本与 receipt 导出生成可重建报告；属于开发研究工具，不挂运行时路由、不提供候选授权或执行入口。配置组合、拉取和模型反馈与独立质量分别呈现；后者目前未知。
+
+### #778 在线条件建议与选择回执
+
+`project-knowledge/skill-suggestions.ts` 在冻结目录与当前权限交集中读取本项目精确 Skill 的适用声明；纯规则比较当前 Job 条件，完整有界过滤后分页。`record_skill_choice` 复用 knowledge ingestion/receipt，宿主重新计算并锁定复查，实际 pull/usage/feedback 继续独立。没有新表、执行器或经验账本；其他源和 Pack 未评估。完整边界见[专题](../SKILL_SUGGESTIONS.md)。

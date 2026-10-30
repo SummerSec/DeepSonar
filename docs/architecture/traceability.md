@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**（#741 基线；#752 独立试验分支同步）。每行把一个规格编号接到架构视图、决策记录、代码入口和可复验验收入口；测试命令表示验证入口，不表示本次已执行通过。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
 
@@ -44,7 +44,7 @@
 | FR-CTRL-005 | [接口规格](09-interface-specs.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [RepairFeedback shared types](../../packages/shared-types/src/repair-feedback.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:canvas-facts`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:executor-real`；[#776 A 基线](../REPAIR_FEEDBACK_BASELINE.md)；[#776 B 持久完成回执、B2 并发边界、C0 引用指引与 C1 完成门反馈](../REPAIR_FEEDBACK_DONE_REPAIR.md)，[CLI离线矩阵](../REPAIR_FEEDBACK_CLI_MATRIX.md)；人工核对反馈只含形状/摘要。 |
 | FR-CTRL-006 | [安全与信任边界](10-security-and-trust-boundaries.md)；[运行时视图](06-runtime-view.md) | [ADR-0003](adr/0003-api-only-control.md) | [trusted kernel 文档](../AI_NATIVE_TRUSTED_KERNEL.md) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:recovery`、`pnpm ci:smoke:control-api`。 |
 | FR-CAP-001 | [构件视图](05-building-blocks.md)；[安全与信任边界](10-security-and-trust-boundaries.md) | [ADR-0003](adr/0003-api-only-control.md) | [Capability admission](../../apps/scheduler/src/domains/capability-pack/)；[CLI admission](../../apps/scheduler/src/domains/cli-capability/admit.ts)；[LSP admission](../../apps/scheduler/src/domains/language-server-capability/admit.ts)；[Extension admission](../../apps/scheduler/src/domains/extension-materialization/admit.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:cli-capability`、`pnpm ci:unit:language-server`；人工核对 discovery 不直接授权。 |
-| FR-CAP-008 | [构件视图](05-building-blocks.md) | 复用既有权限与数据真相，无新 ADR | [离线报告](../../agent-harness/capability-evidence/report.mjs) | `pnpm ci:unit:project-knowledge`；含离线文件有界读取/竞态/脱敏拒绝回归，真实效果及在线推荐未验收。 |
+| FR-CAP-008 | [构件视图](05-building-blocks.md) | 复用既有权限与数据真相，无新 ADR | [离线报告](../../agent-harness/capability-evidence/report.mjs)；[在线条件建议](../../apps/scheduler/src/domains/project-knowledge/skill-suggestions.ts) | `pnpm ci:unit:project-knowledge`、`pnpm ci:integration:project-knowledge`；合成固定对照、撤权/幂等/选择回执；[范围与未知项](../SKILL_SUGGESTIONS.md)。 |
 | FR-CAP-007 | [构件视图](05-building-blocks.md) | [ADR-0003](adr/0003-api-only-control.md) | [Capability Pack shared types](../../packages/shared-types/src/capability-pack.ts)；[Pack catalog](../../apps/scheduler/src/domains/capability-pack/catalog.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。 |
 | FR-CAP-002 | [构件视图](05-building-blocks.md) | [ADR-0003](adr/0003-api-only-control.md) | [Capability discovery](../../apps/scheduler/src/domains/capability-pack/discovery.ts) | `pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。 |
 | FR-CAP-003 | [构件视图](05-building-blocks.md)；[接口规格](09-interface-specs.md) | [ADR-0003](adr/0003-api-only-control.md) | [Skill operation registry](../../apps/scheduler/src/domains/platform-api/operations.ts) | [离线前置校验](../../agent-harness/capability-applicability/preflight.mjs) / `pnpm ci:unit:project-knowledge`（仅合成工程证据）；`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。 |

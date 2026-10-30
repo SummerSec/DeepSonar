@@ -84,3 +84,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 ### #777 独立效果研究
 
 离线协议、合成案例、预检和待运行报告模板见 [对照研究协议](../agent-harness/knowledge-live/STUDY.md)。当前仅准备材料；真实 A→激活→B 使用→反馈→同身份修订、重复对照与收益判断均 pending。报告复用既有 Job/Attempt/work/receipt/usage 引用，不新增执行器、知识晋升审批或数据库表。
+
+### #778 条件建议与选择声明
+
+当前 Job 可在显式授权后使用 `suggest_project_skills` 查看本项目精确 Skill 的条件匹配，再用 `record_skill_choice` 记录 select/reject/none。宿主重算和撤权复查；选择回执不生成 usage 或触发 work，实际拉取/反馈仍走原链路。作者条件、调用者目标和独立效果分开，token 余额与质量未知时不伪造证据。协议、非模型验收和后续边界见[Skill 建议专题](SKILL_SUGGESTIONS.md)。
