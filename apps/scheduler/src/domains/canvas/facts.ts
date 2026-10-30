@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { attestPlanCriterion, CriterionBindingError, listFactPlanBindings } from "../plan-protocol/criterion-binding.js";
 import { loadCriterionSource } from "../plan-protocol/criterion-source.js";
+import { criterionEvidenceBudget } from "../plan-protocol/criterion-evidence.js";
+import { loadPlanGoalReviewOptions } from "../plan-protocol/goal-review-binding.js";
 import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { cursorForRow, decodeCursor, page } from "../../pagination.js";
@@ -241,9 +243,11 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         LIMIT 100`,
     ]);
     const { finding, job, source_project_id, ...factBody } = fact;
-    const plan_criterion_source = await loadCriterionSource(sql, id, String(source_project_id), nodeId);
+    const evidenceBudget = criterionEvidenceBudget();
+    const plan_criterion_source = await loadCriterionSource(sql, id, String(source_project_id), nodeId, evidenceBudget);
     const plan_bindings = await listFactPlanBindings(sql, String(source_project_id), nodeId);
-    return { fact: factBody, finding, job, plan_criterion_source, plan_bindings, trace: { nodes: traceNodes, edges: traceEdges } };
+    const goal_review_options = await loadPlanGoalReviewOptions(sql, String(source_project_id), id, nodeId, evidenceBudget);
+    return { fact: factBody, finding, job, plan_criterion_source, plan_bindings, goal_review_options, trace: { nodes: traceNodes, edges: traceEdges } };
   });
 
   app.patch("/canvases/:id/facts/:nodeId/verification", async (req, reply) => {

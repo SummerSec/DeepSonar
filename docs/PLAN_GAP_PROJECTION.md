@@ -1,6 +1,6 @@
 # Plan 缺口投影与操作员证据绑定（#775 A）
 
-> 状态：部分实现；A 的审计可见性与操作员判据绑定可用，自动语义判定、代表性真实任务评测、B 单步决策首片及假执行闭环已接线，真实模型收益与 C 尚待验收。
+> 状态：部分实现；A 的审计可见性与操作员判据绑定可用，B 单步决策、假执行闭环及持久接纳回执已接线；可选目标评审关联已接线，不提供自动语义判定。真实模型效果未验证且已豁免验收，C 未启用。
 > 同步日期：2026-10-29
 
 ## 读取与报告
@@ -33,7 +33,7 @@ Fact 的来源由 body.artifact_id → 当前 emit_fact Artifact → 同 Canvas/
 
 `pnpm ci:unit:plan-protocol` 覆盖原有提案边界、聚合/失效、真实留存字节与路径预算；`pnpm ci:integration:plan-protocol` 在隔离 PostgreSQL 覆盖管理 API 权限、作用域、并发 CAS、重试、撤销重验、内容/Artifact/Attempt 失效、审计失败原子回滚与持久重建。入口已接 CI；具体通过结果以 PR 为准。
 
-这份合成样本证明来源检查，不是实际漏洞任务或真实模型收益评测。尚未自动识别未执行/执行中/环境缺失、独立推断语义充分性、建立用户目标 revision 或目标仓库 baseline。B 需复用版本化 Plan/Intent，在 canonical 引用、预算与审计下完成一个补证闭环；C 以固定真实样本改善证据为前提。未运行付费模型或生产试验，未验证遗漏率/错误完成率/token/时间改善，不能关闭 #775。实现不依赖 #767 新 task_contract。
+这份合成样本证明来源检查，不是实际漏洞任务或真实模型收益评测。尚未自动识别未执行/执行中/环境缺失、独立推断语义充分性、建立用户目标 revision 或目标仓库 baseline。B 需复用版本化 Plan/Intent，在 canonical 引用、预算与审计下完成一个补证闭环；C 以固定真实样本改善证据为前提。未运行付费模型或生产试验，未验证遗漏率/错误完成率/token/时间改善，不能关闭 #775。原绑定不依赖 task_contract；显式选择目标评审关联的绑定另须满足下述契约一致性。
 
 ## B：既有 Intent 上的一次补证
 
@@ -50,3 +50,25 @@ blocked/needs_human 使用现有 request_human 的 business_decision；不新增
 来源 SHA 现在包含已保存 Canvas title/target_json（排除运行态 convergence 记账）的 task_input_sha256。已有 A 绑定须显式重新评价，不能静默延续旧内容身份；历史报告不改写。这不等于目标仓库 commit 或外部环境版本，未保存的信息仍未知。
 
 本片测试分别覆盖真实 Control API→PostgreSQL Intent 派发/版本拒绝/一次预算/人工停止，以及实际留存字节→操作员绑定→Job-scoped 读取→Control complete。同一 Control API→真实 Intent→假 Worker 的实际留存文件/Fact→既有自动 Hub 唤醒→再次读取→人工停止样本已加入数据库回归；并发双提案仅一个提交，unknown effect 禁止补证。假 Worker 不调用模型；真实沙箱/模型收益仍待单独验收，C 不启用。
+
+
+## 可选目标评审关联（#767）
+
+操作员可在既有 `plan_binding` 中显式提供 `goal_review`：
+
+```text
+review_artifact_id: <目标评审 Artifact UUID>
+task_contract_sha256: <整个冻结任务契约摘要>
+criterion_ids: [<显式选择的任务判据 ID>]
+expected_review_sha256: <当前评审依据摘要>
+```
+
+这只是现有 operator_attestation 的附加来源约束，不是新 authority。操作员必须在 note 中负责判断所选任务判据是否覆盖该 Plan 判据的自然语言要求，不按索引、文本相似度或同名自动映射。原始 Fact 仍须 verified，原 jobs:control 权限、来源证据、版本/CAS 与完整 Plan 完成门均保留。未选择关联的合法绑定继续按原规则工作，不增加所有任务的人工门。
+
+选择关联时 Plan owner 必须冻结同一完整契约。读取并核验相关评审的完整有效集合，不能只挑正向评审绕过矛盾；关联的契约、来源、证据、Attempt、评价或摘要变化使绑定失效，不得静默退回无关联绑定。评审与既有证据检查共用有界读取预算，不完整或超限保持不足。全部必要 Plan 判据仍须满足原 complete 门，单项任务 criteria_satisfied 不会自动完成 Plan。
+
+执行证据绑定使用 `content_schema_version: 2`，摘要明确排除 `manual_verification` 与 `verification_status`，以免仅改变人工验证注释的操作破坏执行证明身份；Fact rejected 仍拒绝。Plan 所需 verified 授权独立检查，摘要稳定不代表权限或人工信任无需重验。
+
+这是摘要身份的部署边界，不能宣称无兼容影响：旧 v1 摘要可能失效，按当前契约严格拒绝，保留历史记录且不回写，不自动转换或授予新 authority。必要时重新产出 task_result 与独立评审；旧 assignment 不得静默改绑。#797/#798 在本批集成时尚未合并或部署，不消除该版本边界，部署前仍须核对实际保存的证据版本。
+
+#795 的持久接纳回执只恢复原接纳结果与可恢复原 Attempt，不证明最终结算成功。接纳后关联评审失效时，最终完成门仍须拒绝；真实路由与 PostgreSQL 的[完整链测试](../apps/scheduler/src/task-plan-review.integration.test.ts)已通过 9 项（含顶层套件），覆盖 delivery/negative_result、原绑定、冲突/失效、旧摘要与接纳后失效；组合 CI 结果以 PR 最终记录为准。

@@ -57,7 +57,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须支持可选版本化任务契约，保留原始需求及采用的模板版本/规范化快照；缺项返回字段级建议，不通过固定标题或字数评定质量。显式契约必须严格校验版本、结构与未知字段；契约只能收窄平台权限，不得自行证明身份、授权或前置条件。派发前必须按当前可信事实复核必要条件，不能沿用创建时的过期通过结果。
 - **决策来源**：#767；减少不同创建者与入口造成的遗漏，同时保留非审计工程任务和自由文本输入。
-- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；已提供契约的 objective/targets/scope/evidence/acceptance 缺项在创建/派发阻塞，其他缺项给具体建议。没有契约时返回未评估提示，这条旧入口迁移尚未完成。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
+- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；已提供契约的 objective/targets/scope/evidence/acceptance 缺项在创建/派发阻塞，其他缺项给具体建议。没有契约时返回未评估提示，这是原有可选契约设计；是否强制迁移须另行决策。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
 - **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 - **验证证据**：契约规范化、变形输入与安全边界行为测试；人工核对 API/Web/CLI 对同一结构化意图返回一致缺项/阻塞，并核对创建后撤销权限时派发拒绝。实际运行结果见 PR 验收记录，不以字段校验冒充模型效果评测。
 
@@ -65,7 +65,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：已提供的任务契约必须在创建与派发前检查目标、资产、范围、证据与验收要求的基本完整性，不能通过省略 outcome 或选择 task_defined 绕过。研究候选必须绑定整个冻结契约与判据 Fact 引用；观察须独立保留，unknown/无关观察不计成果。赏金规则只作可选附加筛选，不由严重度或相似文本推导资格。
 - **决策来源**：#767 / #794 通用任务下发主轴；#775 拥有目标版本、证据缺口和整体报告收敛。
-- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约旧入口仍 unassessed，迁移未完成。报告防误报已接确定性目标投影，不能将技术 confirmed 计为任务达标；来源隔离的普通 Job 判据评审已接宿主分配、自有 Fact/留存字节与冲突失效检查，不认证不同人/模型。攻击链、knownness适用性、资格与整体报告收敛仍有后续范围；真实模型验收不作为交付门槛，效果未验证。
+- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约入口按原可选设计保持 unassessed，不以强制迁移为本 issue 必须完成项。报告防误报已接确定性目标投影，不能将技术 confirmed 计为任务达标；来源隔离的普通 Job 判据评审已接宿主分配、自有 Fact/留存字节与冲突失效检查，不认证不同人/模型。攻击链、knownness适用性、资格与整体报告收敛仍有后续范围；真实模型验收不作为交付门槛，效果未验证。
 - **代码入口**：[研究候选契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
 - **验证证据**：通用完整性、outcome 不绕过、整契约版本、判据与 Fact/Artifact 来源、依据保存及冻结压缩传播行为测试；实际运行结果见 PR，不以研究候选计目标完成。
 
@@ -585,6 +585,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:report-download`。
 
 来源隔离评审通过既有 Job/HubIntent 请求和 emit_fact.artifact.goal_review 保存版本化 Artifact；maker 与候选证据源 Job 不得自评，最新成功 Attempt、无未知效果及实际留存字节必须重核。有效矛盾为 conflict，失效记录保留缺口；不要求普通 Fact 先人工 verified，不新增整体完成门。详见[判据评审](../TASK_GOAL_REVIEW.md)。
+
+Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录评审 Artifact、整契约、任务判据及预期评审摘要；操作员负责语义覆盖，Plan owner 冻结同契约，不按索引自动映射。保留 verified 原始 Fact、jobs:control 和完整 Plan 完成门；关联后必须持续复核完整有效评审集合与共享预算，失效不能静默退回无关联。原合法无关联绑定继续有效，详见[Plan 关联](../PLAN_GAP_PROJECTION.md#可选目标评审关联767)。
 
 ### FR-RPT-002 Finding Report 独立轨
 

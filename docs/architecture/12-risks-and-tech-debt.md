@@ -97,4 +97,6 @@ Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失�
 
 ## 成果资格与目标收敛缺口（#767）
 
-首片仅通用字段完整性、整契约/判据身份、引用作用域与声明筛选；通过只是研究候选，不是高置信提交成果。无契约旧入口仍 unassessed，不能宣称所有入口已统一强制。后续独立复核、可复现证据、攻击链、knownness适用性、资格与 #775 整体报告收敛不能由severity、相似词或任意置信度数字替代。真实模型验收不作为交付门，效果未验证不消除实现缺口。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。
+研究候选、来源隔离评审、非 Finding 工程/负结果与确定性报告已接线，不能继续将这些能力笼统列为未实现。剩余能力包括可信身份/目标写授权适配器，以及高标准安全提交所需攻击链、knownness 版本适用性与程序资格正向闭环；产品须明确适配器信任来源与资格 authority。无契约是原可选设计，标为 unassessed，不以强制迁移作为本 issue 必须完成项。可选 Plan 显式关联已接线，不能替代原 operator_attestation、verified Fact 或完整完成门；已关联来源需持续有效。验收证据与决策分列见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。真实模型验收已豁免，效果未验证不等于缺口已解决。
+
+执行证据摘要升级为 content_schema_version:2 有失效影响：旧 v1 结果/评审绑定可能不再通过当前校验。虽 #797/#798 在本批集成时尚未合并部署，仍须记录部署边界；禁止自动重写旧摘要或改绑 assignment。重新产出 task_result/独立评审不授予新 authority；历史保留，rejected 与 Plan verified 门不变。
