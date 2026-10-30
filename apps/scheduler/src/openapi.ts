@@ -1510,6 +1510,15 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/findings/{id}/lexical-search",
+    summary: "跨任务 Finding 有界词法检索",
+    description: "仅对当前项目按 UUID seek 的128条来源窗口排名，另读1条判断后续窗口，返回最多25项；不是全项目top-K或持久关系。相似仅为声明文本线索，身份/版本/根因仍未知；不读取Evidence或共享资产。每次请求重新鉴权。cursor绑定主体声明摘要与规则，主体变化返回409 CURSOR_GAP，需刷新。rank_truncated标记窗口内结果截断；无结果不表示明确不同。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: { cursor: { type: "string", maxLength: 2048, description: "上一窗口返回的不透明游标；省略从头扫描" } },
+  },
+  {
+    method: "get",
     path: "/findings/{id}/evidence-trace",
     summary: "Finding Fact↔Evidence 只读溯源（确认依据可复查）",
     description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；content_integrity_digest 与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",

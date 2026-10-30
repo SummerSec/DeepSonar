@@ -1713,6 +1713,29 @@ export class TaskReportUnavailableError extends Error {
   }
 }
 
+export interface FindingLexicalSearchResult {
+  subject_id: string;
+  project_id: string;
+  subject_digest: string;
+  subject_text_truncated: boolean;
+  rule_version: string;
+  normalization_version: string;
+  computed_at: string;
+  examined: number;
+  scan_limit: 128;
+  limit: 25;
+  next_cursor: string | null;
+  window_limited: true;
+  rank_truncated: boolean;
+  identity_status: "insufficient_information";
+  query_plane: "current";
+  items: Array<{
+    finding_id: string; job_id: string; canvas_id: string; title: string;
+    lexical_digest: string; text_truncated: boolean; kind: "similar" | "insufficient_information";
+    matched_fields: string[]; score: number;
+  }>;
+}
+
 export interface FindingReport {
   id: string;
   finding_id: string;
@@ -2456,6 +2479,11 @@ export const api = {
   projectFindingsSummary: (projectId: string, opts?: Omit<FindingQueryFilters, "project_id">) =>
     get<ProjectFindingsSummary>(`/projects/${projectId}/findings/summary${qs({ ...opts })}`),
   finding: (id: string) => get<FindingDetail>(`/findings/${id}`),
+  findingLexicalSearch: async (id: string, cursor?: string | null, signal?: AbortSignal): Promise<FindingLexicalSearchResult> => {
+    const response = await fetch(`/api/findings/${encodeURIComponent(id)}/lexical-search${qs({ cursor })}`, { headers: authHeaders(), signal });
+    if (!response.ok) throw Object.assign(new Error("词法检索读取失败"), { status: response.status });
+    return response.json() as Promise<FindingLexicalSearchResult>;
+  },
   projectSharedAssets: (projectId: string, page: { limit?: number; offset?: number } = {}) =>
     get<SharedAssetPage>(`/projects/${projectId}/shared-assets${qs({ limit: page.limit?.toString(), offset: page.offset?.toString() })}`),
   findingSharedAssets: (findingId: string, page: { limit?: number; offset?: number } = {}) =>

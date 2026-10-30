@@ -166,6 +166,8 @@ Hub 只能提出工作角色 Intent；`verify_finding` 与 `report` 是 Schedule
 
 ## 6. Finding、Verify、Research 和报告
 
+#770 D 检索首片在既有详情内提供当前声明文本的有界跨 Job 窗口检索，展示来源与匹配依据；不持久化关系、不确认同问题，权限逐请求复查。
+
 #770 C 在 Scheduler 内维护可重建特征与持久扫描检查点，详情只显示当前来源匹配的状态/字段覆盖。权威目标/版本字段未知，D 关系质量门未验收；不发布同问题建议，见[项目 Finding 特征研究](docs/PROJECT_FINDING_RESEARCH.md)。
 
 #770 A 的来源身份使用 `(job_id, fingerprint)`，独立于 Control 提交幂等键；不同 Job 的相同文本保留独立 Finding/Artifact，不继承验证或人工处置。相同来源身份的内容冲突明确拒绝，当前没有修订协议。历史 UUID 和 Artifact key 保留，历史丢失来源不自动重建。具体规则见 [数据架构](docs/architecture/08-data-architecture.md#finding-来源身份770-a)。此切片不实现跨任务关联。

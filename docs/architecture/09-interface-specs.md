@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-10-29
+> 同步日期：2026-10-30
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -83,3 +83,7 @@ Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/req
 ## Finding 特征元数据（#770 C）
 
 既有 GET /findings/:id 增加 project_research_features 状态与声明字段覆盖，沿用 findings:read 和项目授权。失败/过期不返回旧特征正文，普通 Job 无新增接口；无关系写入/自动处置接口。细节、质量门与验证见[项目 Finding 特征研究](../PROJECT_FINDING_RESEARCH.md)。
+
+## Finding 词法检索（#770 D 检索首片）
+
+`GET /findings/:id/lexical-search` 使用既有 `findings:read` 与项目鉴权，当前声明文本按128来源窗口seek后排名最多25项，返回游标、窗口/排名截断、声明摘要与规则版本。主体变更使游标409失效；无缓存关系、Evidence内容或资产权限扩张。详情只展示待核验词法候选，不作全项目top-K或同问题判定。字段、权限矩阵、来源跳转及完整D缺口见[专题](../PROJECT_FINDING_RESEARCH.md#当前声明文本检索770-d-检索首片)。

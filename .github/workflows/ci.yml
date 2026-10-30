@@ -235,6 +235,8 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:finding-protocol
 
+      - name: Finding lexical search Web behavior
+        run: pnpm ci:unit:finding-lexical-web
       - name: Finding research PostgreSQL integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
