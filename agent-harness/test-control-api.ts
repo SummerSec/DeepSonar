@@ -85,7 +85,10 @@ assert.deepEqual(
 );
 
 const workerTools = resolvePlatformTools("explore", "role", {});
-assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS);
+assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS.filter(tool => tool !== "suggest_project_skills" && tool !== "record_skill_choice"));
+assert.deepEqual(resolvePlatformTools("explore", "role", {
+  suggest_project_skills: true, record_skill_choice: true,
+}), ALL_PLATFORM_TOOLS);
 assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
 const workerGuide = platformToolGuide(["emit_progress", "emit_fact", "mark_job_done", "request_human"]);
 for (const expected of [
