@@ -16,7 +16,7 @@
 1. Skill 作者将严格的 `deepsonar.skill-applicability/v1` JSON 放入 `references/applicability.json`，随完整 Candidate 一起绑定不可变内容 hash。声明包含任务类型、输入种类、目标版本、runtime digest、所需工具、网络及最低时间/token 预算；缺失、非法或带未知字段的声明为 `unknown`。正文描述不参与条件判定。
 2. Agent 调用 `suggest_project_skills`，提交 `target`、有界 `limit` 和 `offset`。目标字段标为 `caller_declared`，不从任务自由文本猜测，不把调用者说法变成已观察事实。宿主只从当前 Job/Attempt、冻结快照和服务端时间取运行条件。
 3. 宿主校验冻结目录和完整 CAS，过滤当前权限及撤权，再检查条件。只有 compatible 条目进入候选，随后按精确身份稳定展示并截页；该顺序不是质量评分。授权目录超过读取上限时拒绝整次请求，不先截断目录冒充完整候选集。无匹配候选是正常空结果。`next_offset` 仅表示候选续页，`diagnostics_next_offset` 表示非匹配诊断续页，两者使用相同的有界 offset 参数，诊断不计入候选 total。
-4. Agent 用返回的策略版本、context/catalog hash、相同 target/limit/offset 和精确 selector/content hash 记录选择。摘要是上下文绑定，不是授权签名；宿主重新计算当前建议，拒绝过期上下文或已不可选版本。选择事务锁定并复查当前版本，回执保存本次重算依据和 Agent 的理由。
+4. Agent 用返回的策略版本、context/catalog hash、相同 target/limit/offset 和精确 selector/content hash 记录选择。摘要是上下文绑定，不是授权签名；宿主重新计算当前建议，拒绝过期上下文或已不可选版本。选择事务锁定并复查当前版本，使用数据库实时钟检查锁等待后租约，不能沿用事务开始时间。回执保存本次重算依据和 Agent 的理由。
 5. `select` 不生成 usage、不执行 Skill、不触发知识晋升。选择后仍须 `pull_skill`，该操作再次检查当前权限和 hash。实际拉取的 `usage_ref` 才能用于已有 `record_knowledge_feedback`。旧选择回执不恢复撤销权限。
 
 没有与当前模型完整绑定的可靠剩余 token 预算，因此返回 `token_budget=unknown`；要求正 token 余额的 Skill 不能判为匹配。声明 `minimum_tokens=0` 仅表示该方法不要求这类预算，不证明整个 Job 不消耗 token。时间来自 Job 的 started_at/timeout_sec，未知或耗尽不判为匹配。条件匹配仍然不能证明输入资产确实存在或方法有效。

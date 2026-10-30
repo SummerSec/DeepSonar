@@ -384,3 +384,43 @@ test("pagination follows compatibility filtering and choice binds the same offse
     await noUsageOrWork(db);
   });
 });
+
+test("lease expiry while waiting for a version lock rejects choice without a receipt", options, async () => {
+  await isolated(async db => {
+    const job = await seedKnowledgeJob(db), skill = await addSkill(db, job); await freeze(db, job);
+    const runtime = createKnowledgeRuntime({ db, governanceHash: skill.hash });
+    const suggestions = await runtime(context(job)) as unknown as Suggestion;
+    const blocker = await db.reserve();
+    let selection: Promise<{ result?: Record<string, unknown>; error?: unknown }> | undefined;
+    try {
+      await blocker`BEGIN`;
+      const [backend] = await blocker`SELECT pg_backend_pid() AS pid`;
+      await blocker`SELECT id FROM project_knowledge_versions WHERE id=${skill.version} FOR UPDATE`;
+      await db`UPDATE jobs SET lease_expires_at=clock_timestamp()+interval '3 seconds' WHERE id=${job.jobId}`;
+      selection = runtime(context(job, "record_skill_choice", choice(suggestions)))
+        .then(result => ({ result }), error => ({ error }));
+      let blocked = false;
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const [row] = await db`SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+          WHERE datname=current_database() AND ${backend.pid}::int=ANY(pg_blocking_pids(pid))) AS blocked`;
+        if (row.blocked) { blocked = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(blocked, true, "choice must wait on the version lock while its lease is live");
+      const [remaining] = await db`SELECT GREATEST(0,EXTRACT(EPOCH FROM (lease_expires_at-clock_timestamp())))*1000 AS ms
+        FROM jobs WHERE id=${job.jobId}`;
+      await new Promise(resolve => setTimeout(resolve, Number(remaining.ms) + 50));
+      const [expired] = await db`SELECT lease_expires_at<clock_timestamp() AS expired,
+        started_at+timeout_sec*interval '1 second'>clock_timestamp() AS timeout_remaining FROM jobs WHERE id=${job.jobId}`;
+      assert.equal(expired.expired, true); assert.equal(expired.timeout_remaining, true);
+      await blocker`ROLLBACK`;
+      const result = await selection;
+      assert.ok(rejected("KNOWLEDGE_JOB_INACTIVE")(result.error), "expired lease must fail the post-lock authorization check");
+      assert.equal((await db`SELECT COUNT(*)::int AS n FROM project_knowledge_receipts`)[0].n, 0);
+      await noUsageOrWork(db);
+    } finally {
+      await blocker`ROLLBACK`; blocker.release(); await selection;
+    }
+  });
+});

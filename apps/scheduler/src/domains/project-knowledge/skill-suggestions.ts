@@ -18,7 +18,7 @@ async function currentSuggestionScope(db: KnowledgeDb, actor: KnowledgeActor, en
       ON i.id=v.item_id AND i.project_id=v.project_id AND i.kind='skill' AND i.status<>'revoked')
       ON v.project_id=j.project_id AND v.id IN ${db(ids.length ? ids : ["00000000-0000-0000-0000-000000000000"])} AND v.revoked_at IS NULL
     WHERE j.id=${actor.jobId} AND j.project_id=${actor.projectId} AND j.status='running'
-      AND j.lease_expires_at>now() AND a.id=${actor.attemptId} AND a.status='active' AND NOT a.cancel_requested`;
+      AND j.lease_expires_at>clock_timestamp() AND a.id=${actor.attemptId} AND a.status='active' AND NOT a.cancel_requested`;
   const job = rows[0];
   if (!job) return reject("KNOWLEDGE_JOB_INACTIVE", "Job or Attempt is no longer active");
   if (canonical(job.agent_snapshot_json) !== canonical(actor.snapshot))
@@ -55,7 +55,7 @@ export async function computeSkillSuggestions(db: KnowledgeDb, actor: KnowledgeA
     const itemIds = [...new Set(prepared.candidates.map(c => c.entry.item_id))].sort();
     await db`SELECT id FROM project_knowledge_items WHERE project_id=${actor.projectId} AND id IN ${db(itemIds)} ORDER BY id FOR SHARE`;
   }
-  // Final candidate and active Job/Attempt checks share one database statement, including an empty catalog.
+  // Final checks use wall time, not transaction-start now(): version locks may outlive the lease.
   const { job, visible: entries } = await currentSuggestionScope(db, actor, prepared.candidates.map(c => c.entry));
   const snapshot = job.agent_snapshot_json as Record<string, unknown>;
   const image = snapshot.runtime_image as { image_digest?: unknown } | undefined;
