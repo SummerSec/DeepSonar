@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -40,7 +40,7 @@ if (!databaseUrl) {
         await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status) VALUES(${canvasId},${jobId},'intent','fixture','running')`;
         return { projectId, canvasId, jobId, attemptId };
       };
-      type Job = Awaited<ReturnType<typeof seedJob>>;
+      type Job = { projectId: string; canvasId: string; jobId: string; attemptId: string };
       const finish = async (job: Job) => {
         await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
         await sql`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
@@ -82,7 +82,7 @@ if (!databaseUrl) {
       const candidate = await source(), other = await source();
       const token = generateToken();
       await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
-        VALUES('goal reviewer',${candidate.projectId},${token.prefix},${token.hash},${["tasks:write", "tasks:read"]})`;
+        VALUES('goal reviewer',${candidate.projectId},${token.prefix},${token.hash},${["tasks:write", "tasks:read", "jobs:control"]})`;
       const headers = { authorization: `Bearer ${token.plaintext}` };
       const post = (request: unknown = candidate.request, type = "audit", projectId = candidate.projectId) => app.inject({
         method: "POST", url: "/jobs", headers, payload: { project_id: projectId, type,
@@ -119,6 +119,88 @@ if (!databaseUrl) {
         assert.equal(response.json().details.task_goal_review.code, "goal_review_contract_mismatch");
         assert.equal(response.json().stack, undefined); assert.deepEqual(await counts(), before);
       });
+      const createReviewer = async (entry: "public" | "hub") => {
+        if (entry === "public") {
+          const response = await post(); assert.equal(response.statusCode, 201, response.payload);
+          return String(response.json().id);
+        }
+        const hub = await seedJob(candidate.projectId, candidate.canvasId, { ...snapshot, name: "hub_reason", role_kind: "hub", platform_tools: ["submit_hub_decision"] });
+        await sql`UPDATE jobs SET type='hub_reason' WHERE id=${hub.jobId}`;
+        const [finding] = await sql`SELECT node_id FROM findings WHERE id=${candidate.request.finding_id}`;
+        await ingestEvent(hub.jobId, { v: 1, event_id: randomUUID(), type: "hub_decision", payload: { intents: [{
+          from: [String(finding.node_id)], role: "audit", description: `Independent parser review ${hub.jobId}`,
+          prompt: "Compare the entire frozen parser criterion with independently retained test evidence.", goal_review: candidate.request,
+        }] } });
+        return String((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub.jobId}`)[0].id);
+      };
+      const makeRecoverable = async (jobId: string, status: "failed" | "timeout" | "waiting_human") => {
+        const { createAttempt } = await import("./domains/job-attempt/index.js");
+        const attempt = await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId));
+        await sql`UPDATE jobs SET status=${status} WHERE id=${jobId}`;
+        if (status !== "waiting_human") await sql`UPDATE job_attempts SET status=${status} WHERE id=${String(attempt.id)}`;
+        return String(attempt.id);
+      };
+      const rerun = (jobId: string) => app.inject({ method: "POST", url: `/jobs/${jobId}/rerun-current`, headers });
+      for (const entry of ["public", "hub"] as const) {
+        for (const status of ["failed", "timeout", "waiting_human"] as const) {
+          await t.test(`${entry} ${status} rerun preserves validated assignment and accepts new-Attempt evidence`, async () => {
+            const jobId = await createReviewer(entry), oldAttempt = await makeRecoverable(jobId, status);
+            const [before] = await sql`SELECT agent_snapshot_json,payload_json FROM jobs WHERE id=${jobId}`;
+            if (entry === "hub") assert.equal(before.payload_json.goal_review, undefined);
+            const response = await rerun(jobId); assert.equal(response.statusCode, 200, response.payload);
+            const [after] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${jobId}`;
+            assert.equal(after.status, "pending");
+            assert.deepEqual(after.agent_snapshot_json.task_goal_review, before.agent_snapshot_json.task_goal_review);
+            if (status === "waiting_human") assert.equal((await sql`SELECT status FROM job_attempts WHERE id=${oldAttempt}`)[0].status, "interrupted");
+            const attemptId = randomUUID();
+            await sql`UPDATE jobs SET status='running' WHERE id=${jobId}`;
+            await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase) VALUES(${attemptId},${jobId},2,'active','agent.ready')`;
+            const relative = `attempts/${attemptId}/review.txt`, bytes = Buffer.from("independent parser regression passed\n");
+            const hash = createHash("sha256").update(bytes).digest("hex"), directory = path.join(blobDir, "jobs", jobId);
+            await mkdir(path.dirname(path.join(directory, relative)), { recursive: true });
+            await writeFile(path.join(directory, relative), bytes);
+            const job = { jobId, attemptId, projectId: candidate.projectId, canvasId: candidate.canvasId };
+            const evidence = await emitObservation(job, { evidence: [{ kind: "runtime.result", statement: "Independent regression output", uri: `jobs/${jobId}/${relative}`, sha256: hash }] });
+            await ingestEvent(jobId, { v: 1, event_id: randomUUID(), type: "fact", payload: {
+              title: "Independent entire criterion review", description: "The new execution compares the whole parser criterion against retained output.",
+              artifact: { goal_review: { schema_version: 1, assignment_sha256: after.agent_snapshot_json.task_goal_review.assignment_sha256,
+                criteria: [{ criterion_id: "acceptance:0", scope: "entire_criterion", assessment: "satisfied", expected: "Malformed input handled",
+                  actual: "Independent regression passed", rationale: "Retained execution covers the whole assigned criterion", limitations: [], evidence_refs: [evidence.factId] }] } },
+            } });
+            await finish(job);
+            await writeFile(path.join(directory, "manifest.json"), JSON.stringify({ v: 1, job_id: jobId, finalized_at: new Date().toISOString(), files: [{ path: relative, bytes: bytes.length, sha256: hash }] }));
+            const loaded = await loadTaskGoalReviews(sql, candidate.projectId, candidate.canvasId, [candidate.request.finding_id]);
+            const record = loaded.reviews.find((item) => item.jobId === jobId);
+            assert.deepEqual(record?.blockedReasons, []); assert.equal(record?.criteria[0].assessment, "satisfied");
+            assert.equal(record?.attemptId, attemptId);
+          });
+        }
+        for (const mutation of ["source_changed", "revoked", "old_schema", "bad_digest", "contract_changed", "payload_changed", "role_unregistered"] as const) {
+          await t.test(`${entry} rerun refuses ${mutation} without changing status or snapshot`, async () => {
+            const jobId = await createReviewer(entry); await makeRecoverable(jobId, "failed");
+            const [original] = await sql`SELECT agent_snapshot_json,payload_json FROM jobs WHERE id=${jobId}`;
+            if (mutation === "role_unregistered") await sql`UPDATE agent_roles SET name='audit-disabled-fixture' WHERE name='audit'`;
+            if (mutation === "source_changed") await sql`UPDATE artifacts SET revision=revision+1 WHERE id=${candidate.request.candidate_artifact_id}`;
+            if (mutation === "revoked") await sql`UPDATE canvas_nodes SET verification_status='rejected' WHERE id=${candidate.observation.factId}`;
+            if (mutation === "contract_changed") await sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{task_contract,objective}','"Changed goal"'::jsonb) WHERE id=${candidate.canvasId}`;
+            if (mutation === "old_schema") await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{task_goal_review,schema_version}','0'::jsonb) WHERE id=${jobId}`;
+            if (mutation === "bad_digest") await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{task_goal_review,assignment_sha256}',${sql.json(`sha256:${"a".repeat(64)}`)}) WHERE id=${jobId}`;
+            if (mutation === "payload_changed") await sql`UPDATE jobs SET payload_json=jsonb_set(payload_json,'{goal_review}',${sql.json({ ...candidate.request, criterion_ids: ["objective"] })}) WHERE id=${jobId}`;
+            const [before] = await sql`SELECT status,agent_snapshot_json,payload_json FROM jobs WHERE id=${jobId}`;
+            try {
+              const response = await rerun(jobId); assert.equal(response.statusCode, 409, response.payload);
+              assert.equal(response.json().error_code, "SNAPSHOT_STALE");
+              assert.deepEqual((await sql`SELECT status,agent_snapshot_json,payload_json FROM jobs WHERE id=${jobId}`)[0], before);
+            } finally {
+              if (mutation === "role_unregistered") await sql`UPDATE agent_roles SET name='audit' WHERE name='audit-disabled-fixture'`;
+              if (mutation === "source_changed") await sql`UPDATE artifacts SET revision=revision-1 WHERE id=${candidate.request.candidate_artifact_id}`;
+              if (mutation === "revoked") await sql`UPDATE canvas_nodes SET verification_status='unverified' WHERE id=${candidate.observation.factId}`;
+              if (mutation === "contract_changed") await sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{task_contract}',${sql.json(candidate.taskContract as never)}) WHERE id=${candidate.canvasId}`;
+              await sql`UPDATE jobs SET agent_snapshot_json=${sql.json(original.agent_snapshot_json)},payload_json=${sql.json(original.payload_json)} WHERE id=${jobId}`;
+            }
+          });
+        }
+      }
       await t.test("successful API review creation reuses the candidate Canvas and freezes assignment", async () => {
         const before = await counts(), response = await post();
         assert.equal(response.statusCode, 201, response.payload);

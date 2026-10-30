@@ -92,9 +92,16 @@ test("source hashing ignores JSON property order but binds value changes", () =>
 });
 
 
-test("satisfied needs evidence and no limitations; unsupported adverse conclusions remain expressible", () => {
-  for (const assessment of ["contradicted", "insufficient"]) assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [{ ...result().criteria[0], assessment, evidence_refs: [] }] }).success, true);
-  for (const patch of [{ evidence_refs: [] }, { limitations: ["Still untested"] }]) assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [{ ...result().criteria[0], ...patch }] }).success, false);
+test("support and contradiction require evidence; uncertainty can remain unsupported", () => {
+  for (const assessment of ["satisfied", "contradicted"]) {
+    const criterion = { ...result().criteria[0], assessment };
+    assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [criterion] }).success, true);
+    assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [{ ...criterion, evidence_refs: [] }] }).success, false);
+    assert.throws(() => normalizeTaskGoalReviewResult({ ...result(), criteria: [{ ...criterion, evidence_refs: [] }] }));
+  }
+  assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [{ ...result().criteria[0], assessment: "insufficient", evidence_refs: [], limitations: ["No runnable environment"] }] }).success, true);
+  assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [{ ...result().criteria[0], limitations: ["Still untested"] }] }).success, false);
+  assert.equal(TaskGoalReviewResult.safeParse({ ...result(), criteria: [{ ...result().criteria[0], assessment: "contradicted", limitations: ["Only the recorded counterexample was tested"] }] }).success, true);
 });
 test("review request and result set order has canonical identity", () => {
   assert.deepEqual(normalizeTaskGoalReviewRequest({ ...request, criterion_ids: ["scope", "objective"] }), normalizeTaskGoalReviewRequest({ ...request, criterion_ids: ["objective", "scope"] }));

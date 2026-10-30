@@ -116,3 +116,24 @@ test("single-Finding review reads cap at 20 and expose truncation instead of cla
   assert.equal(task.reviews.length, 21);
   assert.deepEqual(task.blockedReasons, []);
 });
+
+
+test("legacy unsupported contradiction is retained as invalid and never loaded as an opposing judgment", async () => {
+  const { db, state, job, result } = await fixture();
+  const insufficient = { ...result, criteria: [{ ...result.criteria[0], assessment: "insufficient", evidence_refs: [] }] };
+  const prepared = await prepareTaskGoalReview(db, job, attempt, insufficient);
+  const legacy = { ...insufficient, criteria: [{ ...insufficient.criteria[0], assessment: "contradicted" }] };
+  await assert.rejects(prepareTaskGoalReview(db, job, attempt, legacy), /result_invalid/);
+  const { submission_sha256: _oldDigest, ...body } = prepared.extension;
+  const legacyBody = { ...body, result: legacy };
+  state.attemptStatus = "succeeded";
+  state.reviews = [{ id: id(20), job_id: reviewer, attempt_id: attempt, job_status: "succeeded", artifact_status: "submitted", artifact_kind: "task.goal_evaluation",
+    superseded_at: null, fact_id: id(21), verification_status: "unverified", agent_snapshot_json: job.agent_snapshot_json,
+    artifact_key: prepared.artifactKey, extensions_json: { task_goal_review: { ...legacyBody, submission_sha256: goalReviewDigest(legacyBody) } },
+    payload_json: { artifact: { goal_review: legacy } } }];
+  const loaded = await loadTaskGoalReviews(db, project, canvas);
+  assert.equal(loaded.reviews.length, 1);
+  assert.equal(loaded.reviews[0].artifactId, id(20));
+  assert.deepEqual(loaded.reviews[0].criteria, []);
+  assert.deepEqual(loaded.reviews[0].blockedReasons, ["goal_review_result_invalid"]);
+});

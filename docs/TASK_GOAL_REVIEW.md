@@ -17,7 +17,7 @@ task_contract_sha256: <整个冻结任务契约摘要>
 criterion_ids: [<1–20 个冻结判据 ID>]
 ```
 
-普通 `/jobs` 复用候选所在的同项目 Canvas，仍走既有角色、权限、镜像、Job/Attempt 准入，不建立独立评审执行通道。宿主生成 `snapshot.task_goal_review`，冻结 project/canvas、request、source_sha256、forbidden_job_ids、candidate_revision 和 assignment_sha256。候选 maker 与候选证据来源 Job 均不能评自己；只更换提案文字不能绕过来源隔离。用户提供请求不是用户可写宿主 assignment。
+普通 `/jobs` 复用候选所在的同项目 Canvas，仍走既有角色、权限、镜像、Job/Attempt 准入，不建立独立评审执行通道。宿主生成 `snapshot.task_goal_review`，冻结 project/canvas、request、source_sha256、forbidden_job_ids、candidate_revision 和 assignment_sha256。候选 maker 与候选证据来源 Job 均不能评自己；只更换提案文字不能绕过来源隔离。用户提供请求不是用户可写宿主 assignment。重跑评审 Job 时重新检查当前权限与前置条件，但保留原 assignment 的来源绑定；不能借重跑静默改绑已变化的候选或证据来源。
 
 ## 通过既有 Fact 提交结果
 
@@ -37,7 +37,7 @@ criteria:
     evidence_refs: [<评审 Job 自己提交的 Fact UUID>]
 ```
 
-结果最多 20KB、20 条判据，每条最多 8 个 Fact 引用。satisfied 必须至少一项证明引用且 limitations 为空；这些结构要求不自动证明文本真实。只允许 entire_criterion 的正向评价，候选对局部验收有贡献不能被写成整个判据满足。未覆盖的判据不算完成。
+结果最多 20KB、20 条判据，每条最多 8 个 Fact 引用。satisfied 与 contradicted 均必须至少一项证明引用，satisfied 还要求 limitations 为空。无证据的否定或无法下结论应使用 insufficient，可不带引用并说明限制；来源隔离本身不能把主张升级为已证实否定。这些结构要求不自动证明文本真实。只允许 entire_criterion 的正向评价，候选对局部验收有贡献不能被写成整个判据满足。未覆盖的判据不算完成。
 
 宿主持久化 Artifact kind `task.goal_evaluation`，使用保留命名空间 `task_goal_review`，key 为 `goal-review:job:attempt`。同内容重复提交幂等，不同内容冲突；不能由普通 artifact extensions 伪造宿主评审来源，也不自动覆盖其他 reviewer 的记录。全部原文留在 Artifact。
 
@@ -49,7 +49,7 @@ criteria:
 
 ## 报告聚合与边界
 
-逐判据可为 satisfied、contradicted、insufficient、conflict 或 not_assessed。不同 reviewer 的当前有效相反评价产生 conflict，不按最后写入覆盖；失效记录保留可查，但不参与正向判断。报告仅保存紧凑 review_records 引用，通过 review_indexes 关联判据，完整评审正文仍在 Artifact；单 Finding 最多 20 条、Task 最多 100 条，截断不得宣称正向完整结论。
+逐判据可为 satisfied、contradicted、insufficient、conflict 或 not_assessed。不同 reviewer 的当前有效相反评价产生 conflict，不按最后写入覆盖；失效记录保留可查，但不参与满足、否定或冲突判断；历史无证据否定也须重验并标记失效。报告仅保存紧凑 review_records 引用，通过 review_indexes 关联判据，完整评审正文仍在 Artifact；单 Finding 最多 20 条、Task 最多 100 条，截断不得宣称正向完整结论。全局留存证据读取预算耗尽、无法完整检查评价集合时，所有判据均显示 insufficient；不能仅保留先读到的正向评价而漏掉后续反证。
 
 整体 goal_assessment 区分 blocked、not_assessed、partially_satisfied、criteria_satisfied。部分 satisfied 不是整体完成；即使 criteria_satisfied，也只表达当前判据评价集合，不是 Plan/任务完成授权。整体 Plan 完成仍 not_assessed，归 #775；赏金 submission_eligibility 不由本片推导。契约任务 SARIF 仍不作为达标成果导出，逐判据正向展示不改变最终交付策略。
 

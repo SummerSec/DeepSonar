@@ -82,3 +82,17 @@ test("near-limit contract with twenty bounded reviews retains a compact report p
   assert.ok(bytes < 36000, `bounded review projection consumes ${bytes} chars, leaving less than 4K for Finding metadata`);
   assert.deepEqual(result.contract, value);
 });
+
+
+test("invalid legacy contradiction stays auditable without manufacturing conflict", () => {
+  // This is the loader's rejected-record shape, not an unvalidated opposing result.
+  const invalid: TaskGoalReviewRecord = { artifactId: "legacy-review", jobId: "legacy-reviewer", attemptId: "legacy-attempt",
+    assignment: null, result: null, criteria: [], blockedReasons: ["goal_review_result_invalid"] };
+  for (const reviews of [[review(["acceptance:0"]), invalid], [invalid, review(["acceptance:0"])]]) {
+    const result = applyTaskGoalReviews(report(), { reviews, blockedReasons: [] });
+    assert.equal(result.criteria.find(item => item.id === "acceptance:0")?.assessment, "satisfied");
+    assert.ok(!result.gaps.includes("independent_goal_review_conflict"));
+    assert.ok(result.gaps.includes("some_review_records_invalid_or_stale"));
+    assert.ok(result.review_records?.some(record => record.artifact_id === invalid.artifactId && record.gaps?.includes("goal_review_result_invalid")));
+  }
+});

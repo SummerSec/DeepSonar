@@ -21,6 +21,9 @@ export const TaskGoalReviewResult = z.object({
   unique(value.criteria.map((item) => item.criterion_id), ctx, ["criteria"]);
   value.criteria.forEach((item, index) => {
     unique(item.evidence_refs.map((ref) => ref.toLowerCase()), ctx, ["criteria", String(index), "evidence_refs"]);
+    if (item.assessment === "contradicted" && !item.evidence_refs.length) {
+      ctx.addIssue({ code: "custom", path: ["criteria", index, "evidence_refs"], message: "Contradicted criterion requires evidence" });
+    }
     if (item.assessment === "satisfied" && (!item.evidence_refs.length || item.limitations.length)) {
       ctx.addIssue({ code: "custom", path: ["criteria", index], message: "Satisfied criterion requires evidence and no unresolved limitations" });
     }

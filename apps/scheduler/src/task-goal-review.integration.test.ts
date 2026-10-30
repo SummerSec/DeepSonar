@@ -244,6 +244,52 @@ if (!databaseUrl) {
         const report = await buildReportInput(candidate.canvasId);
         assert.equal(report.task_outcome?.criteria.find((item) => item.id === "acceptance:0")?.assessment, "conflict");
       });
+      await t.test("shared evidence scan exhaustion blocks every criterion independent of review order", async () => {
+        const candidate = await source(), positive = await reviewer(candidate, true, ["acceptance:0", "scope"]), negative = await reviewer(candidate);
+        const largeProof = async (job: Job) => {
+          const directory = path.join(blobDir, "jobs", job.jobId), entries = [];
+          for (let index = 0; index < 3; index++) {
+            const relative = `attempts/${job.attemptId}/large-${index}.txt`, bytes = Buffer.alloc(1536 * 1024, 65 + index);
+            const sha256 = createHash("sha256").update(bytes).digest("hex");
+            await mkdir(path.dirname(path.join(directory, relative)), { recursive: true });
+            await writeFile(path.join(directory, relative), bytes);
+            entries.push({ path: relative, bytes: bytes.length, sha256 });
+          }
+          await writeFile(path.join(directory, "manifest.json"), JSON.stringify({ v: 1, job_id: job.jobId, finalized_at: new Date().toISOString(), files: entries }));
+          return emitObservation(job, { evidence: entries.map((entry) => ({ kind: "runtime.result", statement: "Retained large fixture evidence", uri: `jobs/${job.jobId}/${entry.path}`, sha256: entry.sha256 })) });
+        };
+        const a = await largeProof(positive), b = await largeProof(negative), supported = result(positive, [a.factId]);
+        supported.criteria.push({ ...supported.criteria[0], criterion_id: "scope" });
+        await ingestEvent(positive.jobId, proposal(supported));
+        await ingestEvent(negative.jobId, proposal(result(negative, [b.factId], "contradicted")));
+        await finish(positive); await finish(negative);
+        // Both orders exercise actual PostgreSQL rows and retained bytes; only the
+        // result ordering is inverted to prove partial scanning cannot select a winner.
+        const reversed = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+          const rows = await sql(strings, ...values as never[]);
+          return /SELECT\s+a\.id,a\.artifact_key/.test(strings.join("")) ? [...rows].reverse() : rows;
+        }) as unknown as typeof sql;
+        const { buildReportInput } = await import("./report.js");
+        let firstOrder: string[] | undefined;
+        let firstAssessment: string | undefined;
+        for (const database of [sql, reversed]) {
+          const loaded = await loadTaskGoalReviews(database, candidate.projectId, candidate.canvasId, [candidate.request.finding_id]);
+          const order = loaded.reviews.map((review) => review.artifactId);
+          const leadingAssessment = loaded.reviews[0].result?.criteria[0].assessment;
+          if (!firstOrder) { firstOrder = order; firstAssessment = leadingAssessment; }
+          else {
+            assert.deepEqual(order, [...firstOrder].reverse(), "real loaded Artifact order is reversed");
+            assert.notEqual(leadingAssessment, firstAssessment, "both positive-first and negative-first scans are exercised");
+          }
+          assert.ok(loaded.blockedReasons.includes("goal_review_evidence_scan_incomplete"));
+          assert.ok(loaded.reviews.some((review) => review.criteria.length > 0), "one review fit the shared budget");
+          const report = await buildReportInput(candidate.canvasId, database);
+          assert.ok(report.task_outcome?.criteria.every((criterion) => criterion.assessment === "insufficient"));
+          assert.equal(report.task_outcome?.criteria.find((criterion) => criterion.id === "scope")?.assessment, "insufficient", "global conservative policy also blocks the independent criterion");
+          assert.equal(report.task_outcome?.goal_assessment, "blocked");
+          assert.ok(report.task_outcome?.gaps.includes("goal_review_evidence_scan_incomplete"));
+        }
+      });
       await t.test("all reviewed criteria can be satisfied without declaring completion or bounty submission eligibility", async () => {
         for (const bounty of [false, true]) {
           const candidate = await source(bounty), ids = ["objective", "scope", "evidence", "acceptance:0"];

@@ -125,6 +125,12 @@ export async function loadTaskGoalReviews(db: typeof sql, projectId: string, can
       await currentAttempt(db, review.jobId, review.attemptId, true);
       await currentSource(db, assignment, review.jobId);
       const evidence = await loadGoalReviewEvidence(db, projectId, canvasId, review.jobId, review.attemptId, factRefs(result), true, budget);
+      // The shared reader deliberately combines unavailable bytes and budget exhaustion.
+      // Either means this bounded scan may have missed contrary evidence. Do not let
+      // earlier positive records survive as a complete assessment of the result set.
+      if (evidence.blockedReasons.includes("goal_review_evidence_unavailable_or_budget_exceeded")) {
+        if (!blockedReasons.includes("goal_review_evidence_scan_incomplete")) blockedReasons.push("goal_review_evidence_scan_incomplete");
+      }
       if (evidence.blockedReasons.length) denied(evidence.blockedReasons[0]);
       if (goalReviewDigest(evidence.bindings) !== goalReviewDigest(extension.evidence_bindings)) denied("goal_review_evidence_changed");
       review.criteria = result.criteria;
