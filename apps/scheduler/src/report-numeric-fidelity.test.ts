@@ -418,3 +418,28 @@ test("new uncontracted reports remain explicitly unassessed and preserve technic
   assert.equal(sarif.runs[0]!.properties.result_semantics, "technical_verification_only");
   assert.equal(sarif.runs[0]!.properties.task_assessment, "not_assessed");
 });
+
+test("deterministic task reports retain identity, goal and scope even without a contract or Findings", async () => {
+  const { projectTaskOutcomeReport } = await import("./task-outcome-report.js");
+  const { normalizeTaskContract } = await import("@deepsonar/shared-types");
+  for (const contract of [undefined, normalizeTaskContract({ schema_version: 1, template_id: "engineering", template_version: 1,
+    objective: "Review parser", targets: ["parser"], scope: ["Approved module only"], evidence: ["Tests"], acceptance: ["Regression checked"] })]) {
+    const projection = projectTaskOutcomeReport({ canvasContract: contract, canvasExists: true,
+      canvasId: "canvas-context", projectId: "project-context", findings: [], availableEvidenceRefs: [] });
+    assert.equal(projection.mode, contract ? "contracted" : "unassessed");
+    const input = reportInput({ task_outcome: projection,
+      task: { canvas_id: "canvas-context", project_id: "project-context", title: "Empty research task ``` <script>",
+        goal: "Check the agreed parser behavior", kind: "standard", effective_finding_protocol: { default_profile: "general" } },
+      scope_and_coverage: { goal: "Check the agreed parser behavior", network_policy: { allow_egress: false },
+        effective_finding_protocol: { default_profile: "general" }, authorized_scope: "Approved module only" },
+      statistics: { findings_total: 0, confirmed_count: 0, needs_human_count: 0, refuted_count: 0,
+        inconclusive_count: 0, excluded_count: 0, confirmed_by_severity: {} },
+      findings: [], confirmed_findings: [], facts: [], plan_gaps: undefined });
+    const result = finalizeTaskReportMarkdown(input, "Task goals all achieved");
+    assert.equal(result.usedDefault, "task_outcome");
+    for (const value of ["canvas-context", "project-context", "Empty research task", "Check the agreed parser behavior",
+      "Approved module only", '"allow_egress": false', '"default_profile": "general"']) assert.ok(result.markdown.includes(value), value);
+    assert.doesNotMatch(result.markdown, /Task goals all achieved|<script>/);
+    assert.ok(result.markdown.includes("\\u0060\\u0060\\u0060"), "untrusted title cannot close the data fence");
+  }
+});

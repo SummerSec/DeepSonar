@@ -791,7 +791,10 @@ export function finalizeTaskReportMarkdown(
 } {
   if (goalReportRequired(input.task_outcome)) {
     const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
-    const markdown = withPlanGapReport(goalReportMarkdown(input.task_outcome!, declared, { findings: input.findings, facts: input.facts }), input.plan_gaps);
+    const markdown = withPlanGapReport(goalReportMarkdown(input.task_outcome!, declared, {
+      task: input.task, scope_and_coverage: input.scope_and_coverage, technical_statistics: input.statistics,
+      findings: input.findings, facts: input.facts, seed_findings: input.seed_findings, evidence: input.evidence,
+    }), input.plan_gaps);
     return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), coverageOk: true, usedDefault: "task_outcome" };
   }
   let markdown = agentText.trim();
@@ -822,7 +825,10 @@ export function finalizeFindingReportMarkdown(
 } {
   if (goalReportRequired(input.task_outcome)) {
     const declared = declaredQuantitiesFromPayloads([input.finding]);
-    const markdown = goalReportMarkdown(input.task_outcome!, declared, { finding: input.finding, verification_rounds: input.verification_rounds, evidence: input.evidence });
+    const markdown = goalReportMarkdown(input.task_outcome!, declared, {
+      project: input.project, task: input.task, finding: input.finding,
+      verification_rounds: input.verification_rounds, evidence: input.evidence, limitations: input.limitations,
+    });
     return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), usedDefault: "task_outcome" };
   }
   let markdown = agentText.trim();

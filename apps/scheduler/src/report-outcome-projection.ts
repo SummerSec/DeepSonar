@@ -9,7 +9,7 @@ export function goalReportRequired(report: TaskOutcomeReport | undefined): boole
 export function goalReportMarkdown(report: TaskOutcomeReport, quantities: readonly DeclaredQuantity[], technicalData?: unknown): string {
   const body = quantities.map((item) => `${item.source}:${item.source_id}: ${formatQuantityLine(item)}`).join("\n");
   const fence = "`".repeat(Math.max(3, ...Array.from(body.matchAll(/`+/g), (match) => match[0].length + 1)));
-  const technical = technicalData === undefined ? "" : "\n\n## 技术证据记录（不计作任务达标成果）\n\n```json\n" +
+  const technical = technicalData === undefined ? "" : "\n\n## 任务上下文与技术证据（不计作任务达标成果）\n\n```json\n" +
     JSON.stringify(technicalData, null, 2).replace(/`/g, "\\u0060").replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + "\n```\n";
   return renderTaskOutcomeReport(report) + technical + (body ? [
     "", "## 已声明数值（来源记录，不是任务达标依据）", "", fence, body, fence,

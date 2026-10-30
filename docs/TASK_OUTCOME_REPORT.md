@@ -38,7 +38,7 @@
 
 所有新报告输入都带投影，统一由[确定性渲染](../apps/scheduler/src/report-outcome-projection.ts)生成正文，包括无契约的明确 unassessed。模型输出不得覆盖目标评价或凭空生成完成结论。任务文本、技术记录和原声明以转义后的引用数据呈现，不能通过 Markdown/HTML 把正文改写成正向结论。
 
-技术详情、验证轮次、证据引用和数值仍保存在技术数据附录及原记录中，明确不计为任务达标成果。技术状态不会因此被删除或改写；内部 Finding/Fact/Artifact 与人的 disposition 继续独立。
+任务身份、标题、目标、有效协议与范围/网络策略保存在确定性上下文附录；即使无契约、零 Finding 或无 Plan 也保留。技术详情、验证轮次、证据引用和数值仍保存在技术数据附录及原记录中，明确不计为任务达标成果。技术状态不会因此被删除或改写；内部 Finding/Fact/Artifact 与人的 disposition 继续独立。
 
 ## SARIF 边界
 
