@@ -42,3 +42,18 @@
 `pnpm ci:unit:project-knowledge` 执行规则、契约、固定合成对照及已有离线工具测试；`pnpm ci:integration:project-knowledge` 使用独立 `TEST_DATABASE_URL` 验证完整调用和数据库回执。后者为每例创建并清理随机临时库，不能使用业务数据库。两个脚本均在 `.github/workflows/ci.yml` 调用。
 
 本次复用 FR-CAP-003 / FR-CAP-008 与既有 knowledge 事务；不增加执行器或 Experience ledger，也不改 #767/#775 的完成协议、#776 的 repair 预算或 #770 的 Finding 特征协议。
+
+## 选择证据导出与阶段收口
+
+[离线报告](../agent-harness/capability-evidence/README.md)的 v2 契约读取既有选择 receipt 和 knowledge 事件，按 Job 事件序号保留 select/reject/none 历史。只有策略、目录 hash 与精确候选身份有效时，才关联同 Job/Attempt 的 pull usage 及反馈 receipt。它保留理由存在标记和原 receipt 引用，不复制理由、target 或反馈正文；不能从同身份关联推断先后、因果或最终胜出选择。缺失事件来源不计数，缺失上下文绑定保留 unknown，撤权身份与外国项目结果不进入计数。
+
+实际 PostgreSQL 回归执行仓库 export.sql 的只读可重复读事务，覆盖真实 runtime 声明、拉取、反馈、跨 Attempt、撤权、跨项目和来源损坏；相同输入可重建相同报告。只支持 v2，旧导出须重新生成，不提供转换兼容；数据库基线和运行时协议不变。
+
+| 原 issue 阶段 | 当前工程交付及收口条件 |
+| --- | --- |
+| A：关联与质量报告 | 精确版本选择/拉取/反馈与来源引用已串联；曝光、独立质量、失败归因和收益未知，不能用自评补齐 |
+| B：只读候选与受控选择 | 当前项目 Skill 条件建议、空结果、选择回执及二次授权验证；#802 提供运行时依赖 |
+| C：对照与是否默认启用 | 冻结合成对照和权限/竞态/幂等回归；决定保持显式 opt-in。原要求是决定是否启用，不是强制默认开启 |
+| D：模型推荐与 Pack 晋升 | 原 issue 的后续范围，本次不实施；平台源、跨项目与 Pack 仍使用已有受控发现，不伪造适用性或收益排序 |
+
+真实模型验收已豁免，效果/成本未验证不单独阻止本次工程范围收口。代码仍须相应 PR 审核合入且精确 head CI 通过；未合入的分支实现不代表主线已交付。本文不关闭 issue，也不声称业务效果已验收。

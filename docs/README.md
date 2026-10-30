@@ -160,7 +160,7 @@
 
 - [Skill 适用证据离线校验](../agent-harness/capability-applicability/README.md)：#778 A 补强/B 前置工程切片；合成断言与真实效果分开，不提供推荐。
 
-- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 A 部分实现；仅合成行为测试，实际导出、独立质量评测与推荐接口未验收。
+- [能力证据离线报告](../agent-harness/capability-evidence/README.md)：#778 选择/拉取/反馈的 v2 只读关联报告；实际 SQL 已有隔离 PostgreSQL 回归，独立质量与收益未验证。
 
 独立研究 #777 的 [离线协议与报告准备](../agent-harness/knowledge-live/STUDY.md) 已提供；真实模型对照尚未运行，不改变 #752 已完成的实现验收范围。
 

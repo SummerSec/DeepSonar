@@ -87,7 +87,7 @@ flowchart LR
 
 ### #778 离线审计构件
 
-[capability-evidence](../../agent-harness/capability-evidence/README.md)从既有快照、usage、版本与 receipt 导出生成可重建报告；属于开发研究工具，不挂运行时路由、不提供候选授权或执行入口。配置组合、拉取和模型反馈与独立质量分别呈现；后者目前未知。
+[capability-evidence](../../agent-harness/capability-evidence/README.md)从既有快照、usage、版本、事件与 receipt 导出生成 v2 可重建报告；选择声明按事件顺序展示，只关联同 Job/Attempt 的精确身份，不推断因果；属于开发研究工具，不挂运行时路由、不提供候选授权或执行入口。配置组合、拉取和模型反馈与独立质量分别呈现；后者目前未知。
 
 ### #778 在线条件建议与选择回执
 

@@ -1,4 +1,4 @@
-# Capability / Skill evidence audit (#778 A)
+# Capability / Skill evidence audit (#778)
 
 Status: offline report implementation; no recommendation policy or real-model effect evaluation.
 
@@ -12,13 +12,16 @@ of authorization or benefit.
 
 On an independently authorized **isolated research database**, use `export.sql`
 with a read-only account and one explicit project UUID. The read-only repeatable
-read transaction captures Jobs and revocation state consistently. This task did
-not run the SQL against a database. Never point it at production. Each table is
+read transaction captures Jobs and revocation state consistently. The integration suite executes this exact SQL against isolated PostgreSQL fixtures,
+including runtime choice → pull → feedback. Never point it at production. Each table is
 bounded at 10,001 rows; the analyzer rejects exports above 10,000 instead of
 silently publishing incomplete denominators. Use a new isolated study if needed.
-The export contains scoped metadata and evidence references: protect it as research
+The export preserves the original frozen catalog metadata for digest verification;
+choice and feedback fields use an explicit whitelist. Protect it as research
 data, do not publish it as a public fixture. It excludes credential values, full
-runtime snapshots, feedback prose, session text and evidence bodies.
+runtime snapshots, choice reason/target text, feedback prose, session text and evidence bodies.
+Only export/report v2 is supported: regenerate exports instead of converting v1.
+This changes no database schema and requires no database rebuild.
 
 ```sh
 psql "$TEST_DATABASE_URL" -X -qAt -v project_id='<isolated-project-UUID>' -f agent-harness/capability-evidence/export.sql > export.json
@@ -49,6 +52,7 @@ cannot prove that authorization has not changed since export.
 | Local Skill in frozen catalog and unrevoked matching version | Catalog membership; actual exposure and selection reason unknown |
 | Exact selector/hash/version plus matching Job/Attempt usage | Observed pull/read only |
 | Usage feedback | Model-declared outcome and reference count; references are not independently verified |
+| Event-backed choice receipt | Ordered select/reject/none declaration; reason presence and receipt reference, not reason prose |
 | Same Job/Attempt settled feedback receipt | Feedback accepted by platform, not a quality verdict |
 | `capability_pack` snapshot | Frozen configured combination ID/version/digest; not an observed Agent recommendation |
 | Job succeeded | Execution terminal state; independent quality remains unknown |
@@ -66,19 +70,27 @@ savings is made. Independent quality rate is null, not zero. Combination effects
 are not distributed to members. Unknown external effects are not retried; this
 tool has no network or replay execution capability.
 
-## Remaining gates
+## Choice association and acceptance boundary
 
-Phase A is partial: selection rationale/exposure observations, global Skill
-materialization, independently checked usage evidence and objective outcome/cost
-association still need source-backed integration. Existing Hub replay and
-`job_usage_ledger` remain authorities for their own execution/cost records; this
-report does not duplicate or allocate their totals to skills without attribution
-evidence. Missing failure categories remain unclassified.
+`choices` is ordered by the existing Job event sequence. The export joins receipt
+and event by Job, Attempt, event identity, type and operation. Missing event
+provenance is omitted; duplicate visible event sequences reject the input.
+Policy/context/catalog binding and exact candidate identity must match before a
+choice can reference pulls from that same Attempt. Missing metadata remains an
+`unknown` declaration without pull links. Current item or version revocation
+removes the identity from report records and denominators.
 
-Phase B requires current Job catalog plus read-time revocation, applicability,
-authorization and bounded pagination reviewed through shared schema/OpenAPI.
-No suggestion API is exposed here. Phase C needs preregistered criteria, frozen
-paired cases, independent labels/executable assertions, approved isolated model
-configuration and explicit cost/time limits. Low samples, injection, unauthorized
-selection or quality regressions cannot be compensated by token savings. Model
-routing, production exploration and Pack promotion remain outside this slice.
+An association means the same identity was pulled in the same Attempt, not that
+the choice caused it or occurred before the pull. Rejection can coexist with a
+pull; no final winning choice is inferred. Multiple declarations remain visible.
+Choice, pulled-usage, feedback-declared-usage and Skill×Job pair denominators are
+separate. Feedback declarations may lack accepted receipt provenance; only joined
+receipts appear in `feedback_receipt_refs`. No declaration becomes verified quality.
+
+The online A/B/C engineering acceptance and deliberately disabled default are
+tracked in [the acceptance matrix](../../docs/SKILL_SUGGESTIONS.md). Real-model
+acceptance is waived by user instruction; business effectiveness, token cost and
+elapsed-time gains remain unverified. That waiver is not evidence of improvement.
+Optional model recommendation, Pack promotion and wider-source suggestions are
+outside the current slice. Existing Hub replay and `job_usage_ledger` retain
+execution/cost authority; this report does not allocate their totals to Skills.

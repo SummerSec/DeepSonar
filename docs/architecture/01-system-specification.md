@@ -338,7 +338,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：精确版本/hash 的配置选择、拉取、声明使用和独立结果应分别呈现；不得将 Job 成功、模型反馈或组合成功解释为单能力有效性，不建立第二经验账本。
 - **实现状态**：#778 A 离线关联报告与本项目 Skill 在线条件建议/选择声明已实现；曝光、独立质量和成本归因未知，平台源及 Pack 建议未评估。详见[非模型验收矩阵](../SKILL_SUGGESTIONS.md)。
 - **代码入口**：[离线证据报告](../../agent-harness/capability-evidence/report.mjs)、[在线建议](../../apps/scheduler/src/domains/project-knowledge/skill-suggestions.ts)。
-- **验证证据**：`pnpm ci:unit:project-knowledge` 与 `pnpm ci:integration:project-knowledge`；固定合成对照、权限/撤权/幂等/选择与拉取分离回归。真实模型验收已豁免，不能据此宣称效果收益。
+- **验证证据**：`pnpm ci:unit:project-knowledge` 与 `pnpm ci:integration:project-knowledge`；固定合成对照、权限/撤权/幂等/选择与拉取分离回归，以及实际只读 SQL 导出到 v2 报告的 PostgreSQL 集成回归。真实模型验收已豁免，不能据此宣称效果收益。
 
 ### FR-CAP-006 Plan 协议的当前边界
 

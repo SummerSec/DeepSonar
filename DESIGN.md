@@ -351,7 +351,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 ### #778 离线能力证据审计
 
-[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
+[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、事件有序的选择声明、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
 
 ### 项目知识独立研究准备（#777）
 
