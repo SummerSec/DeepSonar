@@ -1,11 +1,11 @@
-import { runCompletionInPiSession } from "./completion-runner-fixture.js";
+import { COMPLETION_TEST_CLIS, runCompletionInCliSession } from "./completion-runner-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import postgres from "postgres";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
-test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/failure", { skip: !databaseUrl }, async () => {
+test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/failure", { skip: !databaseUrl }, async (t) => {
   const adminUrl = new URL(databaseUrl!); adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
   const name = `completion_${process.pid}_${Date.now()}`;
@@ -23,7 +23,7 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
     await migrate(); api.registerPlatformControlRoutes(app); await app.ready();
     const projectId = randomUUID();
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'completion test')`;
-    const setup = async () => {
+    const setup = async (failFirstLiveCommit = false) => {
       const jobId = randomUUID();
       const snapshot = { name: "audit", platform_tools: ["mark_job_done", "emit_progress"] };
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
@@ -33,7 +33,11 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       const calls = { prepare: 0, commit: 0, abort: 0, done: false };
       api.registerRuntimeHandler(jobId, context => {
         if (context.completionPhase === "prepare") { calls.prepare++; assert.equal(context.eventId, completionDoneEventId(jobId, context.idempotencyKey!)); return { completion_prepared: true }; }
-        if (context.completionPhase === "commit") { calls.commit++; calls.done = true; return {}; }
+        if (context.completionPhase === "commit") {
+          calls.commit++;
+          if (failFirstLiveCommit && calls.commit === 1) throw new Error("synthetic lost live delivery");
+          calls.done = true; return {};
+        }
         if (context.completionPhase === "abort") { calls.abort++; return {}; }
         assert.fail("completion must use host-only prepared acceptance");
       }, ["mark_job_done"]);
@@ -44,17 +48,58 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       const get = (key: string) => app.inject({ method: "GET", url: `${endpoint}?receipt_key=${key}`, headers });
       return { grant, jobId, attemptId: String(attempt.id), calls, post, get, endpoint, headers };
     };
-    const runner = await setup();
-    await runCompletionInPiSession(async () => {
-      const refusal = await runner.post(randomUUID(), 0, { summary: "界".repeat(2731) });
-      assert.equal(refusal.statusCode, 422, refusal.body);
-      assert.equal(runner.calls.done, false);
-      const repair = refusal.json().repair;
-      assert.equal(repair.remaining_budget.attempts, 7);
-      const corrected = await runner.post(randomUUID(), repair.proposal_revision + 1, { summary: "same session corrected" });
-      assert.equal(corrected.statusCode, 200, corrected.body);
-      assert.equal(corrected.json().receipt_status, "persisted_deferred");
-    }, () => runner.calls.done);
+    // Real adapter/framer + HTTP/PostgreSQL; synthetic process and controlled handler.
+    // This matrix tests protocol plumbing, not model understanding or executeReal semantics.
+    for (const cli of COMPLETION_TEST_CLIS) {
+      await t.test(`${cli}: synthetic session accepts an initial completion once`, async () => {
+        const runner = await setup();
+        await runCompletionInCliSession(cli, async () => {
+          const response = await runner.post(randomUUID(), 0, { summary: "First completion is already valid." });
+          assert.equal(response.statusCode, 200, response.body);
+          assert.equal(response.json().receipt_status, "persisted_deferred");
+          assert.deepEqual(runner.calls, { prepare: 1, commit: 1, abort: 0, done: true });
+        }, () => runner.calls.done);
+      });
+      await t.test(`${cli}: synthetic same-session rejection, receipt, conflicts and correction`, async () => {
+        const runner = await setup();
+        await runCompletionInCliSession(cli, async () => {
+          const key = randomUUID();
+          const refusal = await runner.post(key, 0, { summary: "界".repeat(2731) });
+          assert.equal(refusal.statusCode, 422, refusal.body);
+          assert.deepEqual(runner.calls, { prepare: 0, commit: 0, abort: 0, done: false });
+          assert.deepEqual((await runner.get(key)).json(), refusal.json());
+          const repair = refusal.json().repair;
+          assert.equal(repair.remaining_budget.attempts, 7);
+          const correctedPayload = { summary: "Same session corrected the rejected completion." };
+          assert.equal((await runner.post(key, 0, correctedPayload)).json().error_code, "IDEMPOTENCY_KEY_CONFLICT");
+          assert.equal((await runner.post(randomUUID(), 0, correctedPayload)).json().error_code, "COMPLETION_REVISION_CONFLICT");
+          assert.deepEqual((await runner.get(key)).json(), refusal.json(), "conflicts do not rewrite the original receipt");
+          const corrected = await runner.post(randomUUID(), repair.proposal_revision + 1, correctedPayload);
+          assert.equal(corrected.statusCode, 200, corrected.body);
+          assert.equal(corrected.json().receipt_status, "persisted_deferred");
+          assert.deepEqual(runner.calls, { prepare: 1, commit: 1, abort: 0, done: true });
+        }, () => runner.calls.done);
+      });
+      await t.test(`${cli}: discarded response and failed live delivery recover only through unchanged POST`, async () => {
+        const runner = await setup(true);
+        await runCompletionInCliSession(cli, async () => {
+          const key = randomUUID(), payload = { summary: "Durable receipt survives the lost response and live delivery." };
+          // Discard the HTTP result. The handler also injects one live-delivery failure,
+          // so a durable accepted receipt must not be mistaken for an open completion gate.
+          await runner.post(key, 0, payload);
+          assert.deepEqual(runner.calls, { prepare: 1, commit: 1, abort: 0, done: false });
+          const receipt = await runner.get(key);
+          assert.equal(receipt.statusCode, 200, receipt.body);
+          assert.equal(receipt.json().receipt_status, "persisted_deferred");
+          assert.deepEqual(runner.calls, { prepare: 1, commit: 1, abort: 0, done: false }, "GET is read-only");
+          api.clearPlatformApiIdempotencyCache();
+          const recovered = await runner.post(key, 0, payload);
+          assert.equal(recovered.statusCode, 200, recovered.body);
+          assert.deepEqual(recovered.json(), receipt.json());
+          assert.deepEqual(runner.calls, { prepare: 1, commit: 2, abort: 0, done: true }, "restore without preparing another effect");
+        }, () => runner.calls.done);
+      });
+    }
     const a = await setup();
     let res = await app.inject({ method: "POST", url: a.endpoint, headers: { ...a.headers, "idempotency-key": randomUUID() }, payload: { summary: "ready" } });
     assert.equal(res.statusCode, 400); assert.equal(res.json().error_code, "COMPLETION_REVISION_REQUIRED");

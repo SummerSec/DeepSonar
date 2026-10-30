@@ -61,3 +61,5 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 运行器合成测试仅证明协议行为；真实模型是否理解反馈、恢复率、修正轮数、额外 token/时间成本及人工介入率必须独立评测。本切片不调用真实模型或生产服务。C0/C1 仅覆盖引用指引与既有 Hub complete 门的缺失项投影；完整产物/证据门、Hub 持久修正链和各 CLI 的完整行为验收仍需后续交付。
 
 代码：[回执事务](../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Control 组装](../apps/scheduler/src/domains/platform-api/completion.ts)、[路由](../apps/scheduler/src/domains/platform-api/routes.ts)、[平台控制 Skill](../apps/scheduler/src/platform-control-skill.ts)。
+
+三CLI的活动会话内离线协议验证见 [CLI 矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)；真实模型及跨进程完成恢复仍未验收。
