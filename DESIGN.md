@@ -365,7 +365,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 ### #778 离线能力证据审计
 
-[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
+[能力证据报告](agent-harness/capability-evidence/README.md)只读关联冻结配置、事件有序的选择声明、精确项目 Skill usage 与反馈 receipt，区分拉取、声明和 Job 终态；独立质量仍为未知。该切片不提供推荐、不新增账本或执行器，跨项目效果摘要与全局 Skill 不进入报告。
 
 ### 项目知识独立研究准备（#777）
 
@@ -376,3 +376,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。
 
 程序规则独立评审（#767，本片已通过离线行为验收）复用 goal_review，对 supplied bounty Finding 增加 program_rule:<ruleid>，通用目标判据保持不变。requirement satisfied 表示满足，exclusion satisfied 表示未命中；报告独立呈现 program_rule_review，不把通用判据满足当程序规则完成。仅复核 operator_supplied 材料，不认证官方规则、授权或 eligible；攻击链、可复现性、knownness 与资格 authority 映射仍是缺口。详见[评审边界](docs/TASK_GOAL_REVIEW.md)。
+
+### #778 当前 Job 条件建议
+
+当前项目 Skill 可通过 `suggest_project_skills` 做精确版本的条件匹配，再用 `record_skill_choice` 保存选择声明回执；宿主重算、撤权复查与原 `pull_skill` 授权独立。作者条件和调用者目标不是独立效果证据，未测质量分母为 0，不自动启用或晋升 Pack。接口、非模型验收矩阵和范围见[Skill 建议专题](docs/SKILL_SUGGESTIONS.md)。

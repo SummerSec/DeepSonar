@@ -136,3 +136,7 @@ schema64 的 project_finding_feature_scan/work/features 是可重建派生数据
 
 
 schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canonical 双端弱候选及完整来源摘要。候选与来源进度为可重建派生数据；读前核对当前双端来源，旧代不覆盖新代。真实 v64→65 备份/恢复夹具与运维清理边界见[专题](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。
+
+### #778 选择声明存储
+
+`record_skill_choice` 复用 `project_knowledge_receipts` 的 operation/result_json 与既有 knowledge 事件，保存宿主重算建议快照和声明理由，不写 usage/work 或新经验表。目录、完整 Candidate CAS 和旧回执不变；SQL 基线无变更，不要求 schema bump/rebuild。历史选择不恢复权限。见[Skill 建议专题](../SKILL_SUGGESTIONS.md)。

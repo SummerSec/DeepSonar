@@ -84,7 +84,37 @@ export const RecordKnowledgeFeedbackPayload = z.object({
 export const GetKnowledgeReceiptPayload = z.object({ receipt_ref: uuid.optional(), idempotency_key: uuid.optional() }).strict()
   .refine((input) => Number(Boolean(input.receipt_ref)) + Number(Boolean(input.idempotency_key)) === 1, { message: "Exactly one receipt reference required" });
 
+export const SkillSuggestionTarget = z.object({
+  task_type: text(80), input_kind: text(80), target_version: text(160),
+}).strict();
+export const SkillApplicability = z.object({
+  schema: z.literal("deepsonar.skill-applicability/v1"),
+  task_types: z.array(text(80)).min(1).max(20), input_kinds: z.array(text(80)).min(1).max(20),
+  target_versions: z.array(text(160)).min(1).max(20),
+  runtime_digests: z.array(z.string().regex(/^sha256:[a-f0-9]{64}$/)).min(1).max(20),
+  required_tools: z.array(text(80)).max(40), requires_network: z.boolean(),
+  minimum_seconds: z.number().int().nonnegative().max(86400),
+  minimum_tokens: z.number().int().nonnegative().max(10000000),
+}).strict();
+export const SuggestProjectSkillsPayload = z.object({
+  target: SkillSuggestionTarget, limit: z.number().int().min(1).max(10).default(5),
+  offset: z.number().int().min(0).max(20).default(0),
+}).strict();
+export const RecordSkillChoicePayload = SuggestProjectSkillsPayload.extend({
+  policy_version: z.literal("deepsonar.skill-suggestions/v1"), context_hash: hash, catalog_hash: hash,
+  decision: z.enum(["select", "reject", "none"]), selector: text(240).optional(),
+  expected_content_hash: hash.optional(), reason: text(2000),
+}).strict().superRefine((value, ctx) => {
+  const exact = value.selector !== undefined && value.expected_content_hash !== undefined;
+  if (value.decision === "none" ? value.selector !== undefined || value.expected_content_hash !== undefined : !exact)
+    ctx.addIssue({ code: "custom", message: "Select/reject requires exact identity; none forbids it" });
+});
+export type SuggestProjectSkillsPayload = z.infer<typeof SuggestProjectSkillsPayload>;
+export type RecordSkillChoicePayload = z.infer<typeof RecordSkillChoicePayload>;
+
 export const KnowledgeControlPayloadSchemas = {
+  suggest_project_skills: SuggestProjectSkillsPayload,
+  record_skill_choice: RecordSkillChoicePayload,
   request_project_knowledge: RequestProjectKnowledgePayload,
   search_project_knowledge: SearchProjectKnowledgePayload,
   read_project_memory: ReadProjectMemoryPayload,
@@ -96,7 +126,7 @@ export const KnowledgeControlPayloadSchemas = {
   get_knowledge_receipt: GetKnowledgeReceiptPayload,
 } as const;
 export const KNOWLEDGE_OPERATION_IDS = Object.keys(KnowledgeControlPayloadSchemas) as Array<keyof typeof KnowledgeControlPayloadSchemas>;
-export const KNOWLEDGE_MUTATION_IDS = ["request_project_knowledge", "propose_project_knowledge", "submit_knowledge_evaluation", "review_project_knowledge", "record_knowledge_feedback"] as const;
+export const KNOWLEDGE_MUTATION_IDS = ["record_skill_choice", "request_project_knowledge", "propose_project_knowledge", "submit_knowledge_evaluation", "review_project_knowledge", "record_knowledge_feedback"] as const;
 export const KnowledgeMutationPayload = z.object({ operation: z.enum(KNOWLEDGE_MUTATION_IDS), input: z.unknown() }).strict()
   .superRefine((value, ctx) => {
     const result = KnowledgeControlPayloadSchemas[value.operation].safeParse(value.input);

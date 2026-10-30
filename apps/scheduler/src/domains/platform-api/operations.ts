@@ -13,6 +13,8 @@ export interface PlatformOperationDefinition {
 }
 
 const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: string; readOnly: boolean; eventType: string | null }> = {
+  suggest_project_skills: { summary: "Suggest conditional project Skills", description: "Match exact authorized Skill versions against author declarations and current Job observations. Target is caller-declared; effectiveness and exposure remain unknown.", readOnly: true, eventType: null },
+  record_skill_choice: { summary: "Record an agent Skill choice declaration", description: "Recompute authorized suggestions and persist a selection/rejection declaration with a durable receipt. This neither pulls a Skill nor proves execution or benefit.", readOnly: false, eventType: "knowledge" },
   request_project_knowledge: { summary: "Request bounded project knowledge work", description: "Freeze authorized current-Job sources and enqueue durable governance work.", readOnly: false, eventType: "knowledge" },
   search_project_knowledge: { summary: "Search the frozen authorized knowledge catalog", description: "Return only Job-frozen metadata intersected with current revocations, before pagination.", readOnly: true, eventType: null },
   read_project_memory: { summary: "Read one frozen Memory version", description: "Read exact hash and version in this project's Job snapshot.", readOnly: true, eventType: null },

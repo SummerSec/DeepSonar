@@ -12,6 +12,12 @@ description: Use when a DeepSonar Job needs to discover, reuse or give feedback 
 
 先读 deepsonar-control 获取本 Job 实际获准的操作。按任务关键词调用 search_skills；
 需要浏览才用 list_available_skills，使用返回的 selector 和 content_hash 调用 pull_skill。
+若本 Job 获准 suggest_project_skills，可提交明确声明的 task_type/input_kind/target_version
+查看本项目条件匹配建议。建议仅比较作者 applicability 声明与宿主观测，效果仍未知。
+使用返回的 policy_version/context_hash/catalog_hash 与原 target/limit/offset 调用 record_skill_choice
+记录 select/reject/none 与理由；select/reject 同时提交 selector/expected_content_hash。
+宿主重新检查当前权限和条件，记录的是选择声明，不是拉取、执行或效果证明。
+选择后仍需 pull_skill；撤权/预算变化时重新发现，不从旧建议恢复权限。
 阅读返回的 SKILL.md 与必要的 references，按需组合，保存 usage_ref。结果只属于当前
 Job；不能复制给其他项目、猜测 selector、读取来源项目的 Memory/Evidence，或要求新权限。
 

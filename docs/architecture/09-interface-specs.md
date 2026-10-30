@@ -116,3 +116,7 @@ plan_gap 的 supplementation_execution 只读提供单次补证状态、来源�
 
 
 `GET /findings/:id/candidates` 沿用 findings:read/项目权限，以25条边窗口读取当前有效持久词法候选。活动代/主体输入改变使游标409失效；失效记录不补扫，可能返回有下一页的空窗口。Web 区分待计算、失败、过期、成功零项与重建。无关系写 API、强关系或处置传播，见[持久候选协议](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。
+
+### #778 Skill 条件建议接口
+
+新增 Job-scoped `suggest_project_skills`（只读）与 `record_skill_choice`（knowledge 事件及 durable receipt），使用 shared strict schema 和动态 OpenAPI。target 是调用者声明；策略/context/catalog 摘要绑定上下文，宿主在选择时重算，摘要不授予权限。两个 operation 必须已在冻结 allowlist 中；不存在隐式启用。候选完整有界过滤后分页，超限整次拒绝。详细条件、未知语义及验收见[专题](../SKILL_SUGGESTIONS.md)。
