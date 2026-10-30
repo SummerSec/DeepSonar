@@ -110,3 +110,5 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 ## 成果规则与候选依据（#767）
 
 规范化后的整个任务契约由服务端计算 task_contract_sha256，候选绑定目标/可选基线与逐判据 Fact；赏金源材料 source.sha256 是另外的操作员声明身份，不可混用。Finding raw_json 和 Artifact 保存准入依据，status为 admitted_for_research且submission_eligibility:not_assessed。历史冻结不回写，观察先独立落库。详见[通用标准与研究候选](../TASK_OUTCOME_ADMISSION.md)。
+
+Plan 成功响应复用 events.control_receipt；operation、key、原请求/展开输入/最终语义摘要、snapshot 与 Attempt 绑定。其存在不推进 Plan revision 或单步预算；不新增 schema/执行账本。 详见 [持久化边界](../PLAN_BOUNDED_INTENT_DESIGN.md#持久化与原子性)。

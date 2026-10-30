@@ -146,14 +146,22 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
     const completingHub=randomUUID();
     const api=await import("./domains/platform-api/index.js");
     const {executeGraphQuery}=await import("./graph-query.js");
-    const {ingestEvent}=await import("./core.js");
+    const {ingestEvent,preflightDeferredSemanticEvent}=await import("./core.js");
+    const {createAttempt}=await import("./domains/job-attempt/application.js");
     const operations=["graph_query","submit_hub_decision"];
     await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json) VALUES(${completingHub},${project},${canvas},'hub_reason','provisioning',${sql.json({name:"hub_reason",role_kind:"hub",platform_tools:operations})},'{}')`;
+    const completingAttempt=await createAttempt(sql,completingHub);
     const grant=await api.mintJobCapabilityToken(completingHub);
-    await sql`UPDATE jobs SET status='running' WHERE id=${completingHub}`;
+    await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '5 minutes' WHERE id=${completingHub}`;
     await api.activateProvisionedJobCapabilityTokens(completingHub);
     api.registerRuntimeHandler(completingHub,async context=>{
+      if(context.planPhase==='abort') return {};
+      if(context.planPhase==='prepare') return {plan_prepared:true};
       if(context.operationId==='graph_query') return executeGraphQuery({jobId:completingHub,canvasId:canvas,payload:context.input});
+      if(context.planPhase==='validate'){
+        await preflightDeferredSemanticEvent(completingHub,'hub_decision',context.input);
+        return {};
+      }
       return ingestEvent(completingHub,{v:1,event_id:context.eventId,type:'hub_decision',payload:context.input} as never);
     },operations);
     const invoke=(operation:string,payload:unknown)=>app.inject({method:'POST',url:`/control/v1/jobs/${completingHub}/operations/${operation}`,headers:{authorization:`Bearer ${grant.token}`,'idempotency-key':randomUUID()},payload:payload as never});
@@ -166,6 +174,9 @@ test("operator criterion bindings are scoped, versioned, atomic and rebuilt from
       source_refs:gap.source_refs.map((source:{fact_id:string;source_sha256:string})=>({fact_id:source.fact_id,source_sha256:source.source_sha256})),
       outcome:'complete',rationale:'All necessary current criteria have explicit positive operator assessments'}});
     assert.equal(complete.statusCode,200,complete.payload);
+    assert.equal(complete.json().receipt_status,'persisted_deferred');
+    const [settledDecision]=await sql`SELECT attempt_id FROM events WHERE job_id=${completingHub} AND type='hub_decision'`;
+    assert.equal(settledDecision.attempt_id,completingAttempt.id);
     const [completedRoot]=await sql`SELECT status FROM canvas_nodes WHERE id=${root.id}`;
     assert.equal(completedRoot.status,'analysis_complete');
     api.unregisterRuntimeHandler(completingHub);

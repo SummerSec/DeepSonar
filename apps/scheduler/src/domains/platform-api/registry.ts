@@ -19,6 +19,9 @@ export interface PlatformRuntimeHandlerContext {
   /** Host-only phases; commit only restores validated done state after durable receipt. */
   completionPhase?: "prepare" | "commit" | "abort";
   completionAttemptId?: string;
+  /** Host-only Plan receipt phases; never dispatched from a receipt lookup. */
+  planPhase?: "resolve" | "validate" | "prepare" | "commit" | "abort";
+  planAttemptId?: string;
 }
 
 export type PlatformRuntimeHandler = (context: PlatformRuntimeHandlerContext) => Promise<unknown> | unknown;
