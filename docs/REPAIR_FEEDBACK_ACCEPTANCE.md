@@ -24,14 +24,16 @@ C 在原 issue 中的要求是“扩展引用与完成门，并补各 CLI 行为
 | 原验收项 | 实现/离线证据 | 判定 |
 | --- | --- | --- |
 | 首次拒绝、同会话修正、错误重放、旧 revision、接受后丢响应、无进展、预算耗尽 | [completion integration](../apps/scheduler/src/domains/platform-api/completion.integration.test.ts)：三 CLI 六类共 18 个流程；HTTP/PG 另覆盖 token/次数/事件/Job 时间边界 | 实现满足；最后九个停止流程待本切片合入 |
-| 事件/效果至多一次；并发、重启、退出、取消、超时、迟到输入 | completion 配额与 key 归属集成验证真实 done 只入库一次；实际 executor 交错测试 9 项；#801 Gateway 子进程累计；CLI 退出后旧 key 只读、新提交拒绝 | 实现满足；#801 与本切片待合入。没有把缓存清空冒充完整 CLI 崩溃恢复 |
+| 事件/效果至多一次；并发、重启、退出、取消、超时、迟到输入 | completion 配额与 key 归属集成验证真实 done 只入库一次；实际 executor 交错测试及 runner 抛错后的 finally 注销/迟到 commit 拒绝；#801 Gateway 子进程累计；CLI 退出后旧 key 只读、新提交拒绝 | 实现满足；#801 与本切片待合入。没有把缓存清空冒充完整 CLI 崩溃恢复 |
 | 未知效果、权限/项目错误、恶意反馈 fail closed，秘密不泄漏 | 原 repair-feedback / reference-refresh / completion-feedback 集成、unknown/pending 及 scope 测试；严格 usage 不读 assistant/tool 自报；异常/缺报/写失败保留未结算 | 实现满足；#801 用量分支待合入 |
 | 首次提交不增加修复轮次；真实分母统计效果/成本 | 每 CLI 首次有效提交仅一次 prompt/prepare/commit；协议分母 18，不将九个预期停止算成模型修复失败。持久成本以 Gateway token 记录为依据 | 首次路径满足；真实模型恢复率、收益和人工介入率按用户要求豁免，不伪造分母 |
 | 运行器模拟与模型理解评测分开 | 合成 RuntimeProcess + 实际运行器/adapter/framer + HTTP/PG；模型内容由脚本产生，未调用模型 | 离线实现满足；真实模型理解评测豁免 |
 | 所有本切片新增 accepted 有持久查询依据，接收不等于结算 | receipt_status=persisted_deferred；GET 只读，原活动 handler 原 key POST 恢复；终态依赖原 ingestion；C0/C1 没有新增接受通道 | 满足；不泛化为所有历史 API 已有统一 receipt |
 | shared schema、宿主、事务、adapter、文档一致并接 CI | shared RepairFeedback、实际 handler/PG/三 CLI 流程；package scripts 被 workflow gate 调用；类型、文档、体量及测试接线门禁 | 满足；最新 PR 的精确 head CI 仍是合入前条件 |
 
-实际执行层次不能混称：CLI 矩阵运行生产运行器，但 RuntimeProcess 是合成协议；handler 移除由夹具调用生产 unregister 操作，未宣称测试了完整调度器进程崩溃。原 executor 并发测试、数据库事务测试与 Gateway 子进程测试各自保留真实/替身边界。DSH 不支持持久 resume 时由已有 recovery 测试明确停止；不要求为本 issue 伪造续接能力。
+无进展的精确语义：同一无效内容第三次提交被 COMPLETION_NO_PROGRESS 拒绝并提示人工介入，不把 Attempt/Job 写成终态。不同内容仍可在原 revision 与剩余预算内修正；整链由持久 8 次拒绝上限及 token/时间/事件限制约束。这里的“停止”不代表宿主立即杀死 CLI 或新增全局终态门。
+
+实际执行层次不能混称：CLI 矩阵运行生产运行器，但 RuntimeProcess 是合成协议；handler 移除由夹具调用生产 unregister 操作，未宣称测试了完整调度器进程崩溃。另有生产 executeReal 在替身 runner 抛错后执行真实 finally、注销真实 registry 并拒绝迟到 commit 的测试；其存储/runner 为替身，不冒充完整 CLI 进程崩溃。原 executor 并发测试、数据库事务测试与 Gateway 子进程测试各自保留真实/替身边界。DSH 不支持持久 resume 时由已有 recovery 测试明确停止；不要求为本 issue 伪造续接能力。
 
 ## 明确保留的限制
 

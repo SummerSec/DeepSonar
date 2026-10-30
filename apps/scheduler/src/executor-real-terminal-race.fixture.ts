@@ -116,11 +116,13 @@ export async function runExecutor(act: () => Promise<void>, roleKind = "role") {
   snapshot.role_kind = roleKind;
   events = []; runnerCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";
-  await executeReal(jobId, "audit", { jobId, token, operationIds: operations, env: {
+  try { await executeReal(jobId, "audit", { jobId, token, operationIds: operations, env: {
     DEEPSONAR_JOB_ID: jobId, DEEPSONAR_API_TOKEN: token,
     DEEPSONAR_API_BASE_URL: `${config.platformApi.sandboxUrl.replace(/\/$/, "")}/jobs/${jobId}`,
   } } as Parameters<typeof executeReal>[2]);
-  assert.equal(runnerCalls, 1);
-  assert.equal(listRuntimeHandlers(jobId).length, 0, "executor unregisters its live handler");
+  } finally {
+    assert.equal(runnerCalls, 1);
+    assert.equal(listRuntimeHandlers(jobId).length, 0, "executor unregisters its live handler even when the runner throws");
+  }
   return events.filter(event => event.type === "human" || event.type === "done" || event.type === "hub_decision");
 }
