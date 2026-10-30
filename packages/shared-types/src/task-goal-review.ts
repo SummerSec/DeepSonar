@@ -1,6 +1,20 @@
 import { z } from "zod";
+import type { TaskContract } from "./task-contract.js";
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const criterionId = z.string().min(1).max(100).regex(/^(objective|scope|evidence|exclusion:\d+|acceptance:\d+)$/);
+const criterionId = z.union([
+  z.string().min(1).max(100).regex(/^(objective|scope|evidence|exclusion:\d+|acceptance:\d+)$/),
+  // Snapshot rule IDs already permit 100 characters; the namespace is additional.
+  z.string().max(113).regex(/^program_rule:[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,99}$/),
+]);
+/** Additional program-policy questions, never submission authorization or generic task goals.
+ * satisfied means a requirement holds, or an exclusion does NOT apply.
+ */
+export function deriveTaskProgramRuleCriteria(contract: TaskContract): Array<{ id: string; kind: "requirement" | "exclusion"; description: string }> {
+  const outcome = contract.outcome;
+  if (outcome?.mode !== "bounty_submission" || outcome.rules_status !== "supplied" || !outcome.rule_snapshot) return [];
+  return outcome.rule_snapshot.rules.map(rule => ({ id: `program_rule:${rule.id}`, kind: rule.kind, description: rule.description }))
+    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
 const text = z.string().trim().min(1).max(2000);
 const unique = (values: string[], ctx: z.RefinementCtx, path: string[]) => {
   if (new Set(values).size !== values.length) ctx.addIssue({ code: "custom", path, message: "Duplicate references are not allowed" });
@@ -10,6 +24,7 @@ export const TaskGoalReviewRequest = z.object({
   task_contract_sha256: digest, criterion_ids: z.array(criterionId).min(1).max(20),
 }).strict().superRefine((value, ctx) => {
   unique(value.criterion_ids, ctx, ["criterion_ids"]);
+  if (value.fact_id && value.criterion_ids.some(id => id.startsWith("program_rule:"))) ctx.addIssue({ code: "custom", path: ["criterion_ids"], message: "Program rule review requires a Finding source" });
   if (Boolean(value.finding_id) === Boolean(value.fact_id)) ctx.addIssue({ code: "custom", message: "Exactly one finding_id or fact_id is required" });
 });
 export type TaskGoalReviewRequest = z.infer<typeof TaskGoalReviewRequest>;

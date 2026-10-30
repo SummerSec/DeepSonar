@@ -61,3 +61,30 @@
 | `ci:unit:docs-freshness` | 10/10 |
 
 上述完整链直接覆盖[真实路由测试](../apps/scheduler/src/task-plan-review.integration.test.ts)，终态竞态回归见[terminal-race 测试](../apps/scheduler/src/executor-real-terminal-race.test.ts)。完整 `pnpm build`（含 Scheduler TypeScript 与 Web Vite）已通过；Web 仍提示现有大 chunk 警告。
+
+
+## 程序规则独立评审切片（基于 #800）
+
+本片推进 supplied bounty Finding 的 `program_rule:<ruleid>` 独立规则评价和独立报告投影，复用现有 Job/Artifact/Evidence；不改变通用目标 criteria。验收须覆盖 requirement 与 exclusion 满足方向、错误主体/模式/规则 ID、同 Finding/整契约匹配、规则未覆盖、冲突/失效/预算不足，以及通用全部满足不自动令程序规则满足。结果只反映 operator_supplied 材料；尚无官方规则/当前授权认证或 eligible authority，不宣称 #767 完整闭环。前一节组合测试属于 #800，本片结果见下方定向验收记录，不沿用 #800 结果代替。
+
+本片新增验收边界：报告 Finding×rule 累计最多 100 项，超限全部 program_rule_review blocked、criteria 清空并返回 program_rule_projection_limit_exceeded，不保留先前正例；按 Finding 限定报告可单独读取。无有效替代的失效规则评审 insufficient→blocked；当前有效重评可恢复。Plan goal_review_options 排除程序规则，禁止把新增规则 ID 当作通用判据映射。实现已接线，相应定向行为测试已通过，范围见下方验收记录。
+
+
+### 程序规则切片实际验收
+
+主线程本轮已执行：
+
+| 可定位入口 | 结果与范围 |
+| --- | --- |
+| [task-goal-review.integration.test.ts](../apps/scheduler/src/task-goal-review.integration.test.ts) | 16/16；真实 PostgreSQL 与 POST /jobs 规则评审路径 |
+| `ci:integration:plan-protocol` | 12/12 |
+| `ci:unit:task-intent` | Scheduler 121/121、Web 12/12；包含程序规则报告 5 项 |
+| `ci:unit:authz` | 78/78 |
+| `ci:unit:plan-protocol` | Scheduler 33/33、Web 7/7 |
+| `pnpm build` | 完整构建通过 |
+
+本片 `ci:integration:authz-boundaries` 组合已通过 85/85，与 Plan 12/12 合计 97 项集成；上述单元合计 251 项（121+12+78+33+7）。task-goal-review 16 项与程序规则报告 5 项分别已包含在组合中，不重复加总；最终日志见 PR。没有运行真实模型或生产任务，上述结果不认证外部程序授权或提交资格。
+
+### 可信权限适配器仍需的输入
+
+下一片若推进真实身份/写授权正向核验，需明确目标系统、租户/资源边界、权威只读身份与动作权限接口、权限撤销/过期规则，以及对应脱敏 fixture。不能用任务声明、公开元数据或凭据存在替代这些权威事实；在输入与适配器未落实前保持未核验并阻塞依赖步骤，不声称原 issue 的获授权完整动态链已验收。

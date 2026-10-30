@@ -2,7 +2,7 @@ import { loadTaskResultSource } from "./task-result-source.js";
 import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { createHash } from "node:crypto";
 import { normalizeTaskGoalReviewRequest, TaskGoalReviewAssignment, normalizeTaskContract, normalizeCandidateOutcomeClaim,
-  deriveTaskGoalCriteria, evaluateTaskOutcomeAdmission, type TaskContract } from "@deepsonar/shared-types";
+  deriveTaskGoalCriteria, deriveTaskProgramRuleCriteria, evaluateTaskOutcomeAdmission, type TaskContract } from "@deepsonar/shared-types";
 import type { sql } from "./db.js";
 import { ControlInputError } from "./control-input.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
@@ -44,7 +44,7 @@ export async function loadGoalReviewSource(db: typeof sql, projectId: string, ca
   try { contract = normalizeTaskContract(object(candidate.agent_snapshot_json).task_contract); }
   catch { return denied("goal_review_contract_unavailable"); }
   if (taskContractDigest(contract) !== request.task_contract_sha256) denied("goal_review_contract_mismatch");
-  const criterionIds = new Set(deriveTaskGoalCriteria(contract).map((item) => item.id));
+  const criterionIds = new Set([...deriveTaskGoalCriteria(contract), ...deriveTaskProgramRuleCriteria(contract)].map((item) => item.id));
   if (request.criterion_ids.some((id) => !criterionIds.has(id))) denied("goal_review_criterion_unknown");
   const admission = object(object(candidate.extensions_json).task_outcome_admission);
   let claim: ReturnType<typeof normalizeCandidateOutcomeClaim>;

@@ -46,7 +46,8 @@ export async function loadPlanGoalReviewOptions(db: typeof sql, projectId: strin
   const context = await loadGoalReviewBindingContext(db, projectId, canvasId, budget);
   const options = context.reviews.flatMap(review => {
     if (!review.assignment || !review.result) return [];
-    const ids = review.result.criteria.filter(criterion => criterion.evidence_refs.includes(factId)).map(criterion => criterion.criterion_id).sort();
+    const ids = review.result.criteria.filter(criterion => !criterion.criterion_id.startsWith("program_rule:")
+      && criterion.evidence_refs.includes(factId)).map(criterion => criterion.criterion_id).sort();
     if (!ids.length) return [];
     const mapping = { review_artifact_id: review.artifactId, task_contract_sha256: review.assignment.request.task_contract_sha256,
       criterion_ids: ids, expected_review_sha256: planGoalReviewDigest(review) };

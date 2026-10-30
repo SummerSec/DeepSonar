@@ -1203,3 +1203,7 @@ Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effe
 ## 7. 事实核查边界
 
 本文件已以 `DESIGN.md`、`docs/ARCHITECTURE.md`、`database/schema.sql`、`apps/scheduler/src/openapi.ts`、现行 bounded context 代码和 package.json 测试脚本逐项反查。测试命令只表示验证入口，不表示本次执行通过；未连接真实 Provider、OpenSandbox、registry、device broker、多副本共享 BlobStore 或 GitHub Release 的项目环境，不在本 PR 声称已验证范围内。长期设计（完整 Proposal/Receipt/Settlement、Plan 驱动派发、全图权威布局、任务/会话 Pack 生命周期）若在代码中只有 Phase 1/骨架，会保留“进行中/暂缓”状态，不写成 as-built。
+
+## 程序规则附加评审（#767）
+
+FR-TASK-007 / FR-RPT-001 的程序规则评审扩展复用 goal_review，仅 supplied bounty Finding 可评 program_rule:<ruleid>；通用任务 criteria 保持独立。requirement satisfied=满足，exclusion satisfied=未命中排除。报告 program_rule_review 逐规则记录评价与来源，按同 Finding/整契约聚合并对冲突、失效和预算不足 fail closed；rules_satisfied 不授予 submission eligibility。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。

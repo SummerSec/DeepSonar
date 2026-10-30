@@ -67,3 +67,14 @@ criteria:
 操作员可在原 Plan Fact 绑定中选择 goal_review 来源及任务判据，明确其对 Plan 判据的自然语言覆盖，不按索引自动映射。原 verified Fact、jobs:control、operator_attestation 与全判据完成门保留；未选择关联的合法绑定不变，选择后须持续复核同契约及完整有效评价集合，失效不能静默退回无关联。详见[Plan 关联字段与来源](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。这不是赏金资格或新增所有任务人工门。
 
 执行证据绑定采用 `content_schema_version:2`，摘要排除 `manual_verification` 与 `verification_status`，但 rejected 仍拒绝，Plan verified 授权另行校验。旧 v1 摘要可能失效，保留历史并严格拒绝，不自动转换；需重新产出结果/独立评审时，旧 assignment 不得静默改绑。此变更有部署版本边界，详见[Plan 来源版本](PLAN_GAP_PROJECTION.md#可选目标评审关联767)。
+
+
+## 赏金程序规则的附加评审
+
+沿用相同 goal_review Job、Artifact 与 Evidence，`criterion_ids` 新增 `program_rule:<ruleid>`。只适用于冻结契约为 bounty_submission、rules_status=supplied 且有规则快照的 Finding；fact_id、通用工程契约或未知规则不得使用该判据。通用 objective/scope/evidence/exclusion:N/acceptance:N 判据不变，完成全部通用判据不能推导程序规则完成。
+
+requirement 的 satisfied 表示满足该要求；exclusion 的 satisfied 表示**没有命中该排除条件**，不是证明排除成立。评审仍需 entire_criterion、expected/actual/rationale、自有证明 Fact 与当前有效留存字节；satisfied/contradicted 都须有证据，无法判断使用 insufficient。来源不同 Job 只证明执行来源隔离。
+
+报告在同一 Finding、同一完整冻结契约下聚合独立规则评价，完整集合中的冲突、失效、未知或预算不足不得被正向片段掩盖。rules_satisfied 仅表示按 operator_supplied 材料完成这组规则的独立复核，不认证材料为官方规则、当前程序授权或 submission eligibility。攻击链、可复现性、knownness 适用性和资格 authority 映射仍需后续交付，不能以规则全满足替代。
+
+程序规则评审不进入 Plan 的 `goal_review_options`，不能把 `program_rule:<ruleid>` 当成通用任务判据进行 Plan 映射。失效规则证据无当前有效替代时为 insufficient 并阻塞程序规则结论；有效重评可恢复，历史失效不构成永久否决。报告 Finding×rule 累计 100 条上限及全体阻塞规则见[程序规则投影](TASK_OUTCOME_REPORT.md)。

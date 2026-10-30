@@ -53,3 +53,15 @@
 行为验收应覆盖：技术 confirmed 不计目标完成；伪造 raw_json authority 无效；来源 Job/Artifact/node/events/Attempt 失效；当前 Fact 撤销；Canvas 删除/修改契约；无 Finding 的来源快照；截断；模型正文/Markdown 注入无法覆盖结论；Task/Finding 报告及 SARIF 的一致边界；投影变化生成新版本；近契约上限的单 Finding 输入去重后仍保留全部源规则与判据。实现入口与测试见 [来源投影测试](../apps/scheduler/src/task-outcome-report.test.ts)和[报告正文测试](../apps/scheduler/src/report-numeric-fidelity.test.ts)，实际运行结果以 PR 记录为准。
 
 报告防误报现已接入普通 Job 的来源隔离评审写入与逐判据展示；不完成不同人/模型独立性认证、可提交资格正向判定或 #775 整体目标收敛。无契约入口按原可选设计保持未评估，不是必须迁移的关闭阻碍。用户明确无需真实模型验收，不以模型/生产试验作为交付门；真实效果未验证，不能承诺质量收益。
+
+
+## 独立程序规则投影
+
+`findings[].program_rule_review` 将赏金程序规则与通用目标 criteria 分开，status 为 `not_assessed/partially_satisfied/rules_satisfied/blocked`，保留逐规则评价、证据 `review_indexes` 与规则来源摘要。聚合匹配同一 Finding 和完整冻结契约，不跨候选借用正例；全部通用目标判据满足不等于程序规则已复核。冲突、失效、unknown、截断或证据预算不足 fail closed。
+
+requirement satisfied 表示满足要求，exclusion satisfied 表示未命中排除；规则未知不能推导满足。`rules_satisfied` 只针对操作员提供材料，`submission_eligibility` 仍不因此获得正向资格；官方真实性、当前授权、攻击链、可复现性与 knownness 适用性不是这个结构化投影自动证明的事实。
+
+
+程序规则投影在整份报告累计最多 100 条 Finding×rule 判据。超限时全部 `program_rule_review` 为 blocked、criteria 为空，并记录 `program_rule_projection_limit_exceeded`；不能保留先处理 Finding 的正向结论。可改看按 Finding 限定范围的报告，不把有界投影解释成完整任务覆盖。
+
+规则证据失效且没有当前有效替代 review 时，该规则为 insufficient，程序规则整体 blocked。符合当前来源与证据要求的重新评审可恢复评价，不因历史失效记录永久阻塞；历史仍保留可追溯，不静默改写旧报告。
