@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { ControlToolInputSchemasJson, EventEnvelope } from "@deepsonar/shared-types";
+import { ControlToolInputSchemasJson, EventEnvelope, resolvePlatformTools, resolvePlatformToolsTightened } from "@deepsonar/shared-types";
 import { buildPlatformOpenApiDocument, getPlatformOperation } from "../platform-api/operations.js";
 import { assessSkillApplicability, type SuggestionEnvironment } from "./skill-suggestion-rules.js";
 
 // Independent, frozen engineering expectations. These are not production efficacy labels.
 const fixture = JSON.parse(readFileSync(new URL("../../../../../agent-harness/capability-applicability/online-fixtures/acceptance.json", import.meta.url), "utf8"));
+
+test("suggestions require explicit global opt-in and project overrides can only tighten it", () => {
+  for (const name of ["suggest_project_skills", "record_skill_choice"] as const) {
+    assert.ok(!resolvePlatformTools("explore", "role", {}).includes(name));
+    assert.ok(resolvePlatformTools("explore", "role", { [name]: true }).includes(name));
+    assert.ok(!resolvePlatformToolsTightened("explore", "role", {}, { [name]: true }).includes(name));
+    assert.ok(!resolvePlatformToolsTightened("explore", "role", { [name]: false }, { [name]: true }).includes(name));
+    assert.ok(resolvePlatformToolsTightened("explore", "role", { [name]: true }, {}).includes(name));
+    assert.ok(!resolvePlatformToolsTightened("explore", "role", { [name]: true }, { [name]: false }).includes(name));
+    assert.ok(!resolvePlatformTools("verify", "system", { [name]: true }).includes(name));
+  }
+  assert.ok(resolvePlatformTools("explore", "role", {}).includes("pull_skill"));
+  assert.ok(!resolvePlatformToolsTightened("explore", "role", { pull_skill: false }, {}).includes("pull_skill"));
+});
 
 test("frozen non-model holdout: exact applicability, abstention, and explicit denominators", t => {
   assert.equal(fixture.policy, "deepsonar.skill-suggestions/v1");

@@ -7,7 +7,7 @@
 
 `suggest_project_skills` 在当前 Job 的冻结目录内比较**本项目 Skill 精确版本**的作者声明和运行条件。它只给条件匹配建议，不给效果优胜排名。`record_skill_choice` 记录 `select` / `reject` / `none` 与声明理由，复用 knowledge 事件、事务及持久 receipt。原 `pull_skill`、usage、feedback 和独立评测流程继续分别承担拉取、使用声明和结果证据的职责。
 
-两个操作必须显式存在于当前 Job allowlist；本次不修改已有 RoleConfig 或 Job 快照，不自动启用建议。Skill、Pack、模型、镜像、项目、工具和网络权限不会因建议变化。平台源、跨项目 Skill 和 Pack 的适用性在本版本明确为未评估，仍走原有受控发现接口；不读取它们的内容、来源 Job、Memory 或质量样本来辅助本项目排序。模型推荐、Pack 自动晋级与组合效果归因不属于本实现。
+两个操作必须在全局角色配置显式设为 true，项目覆盖只能进一步收紧；空配置不启用它们。解析结果必须存在于当前 Job allowlist；本次不修改已有 RoleConfig 或 Job 快照，不自动启用建议。Skill、Pack、模型、镜像、项目、工具和网络权限不会因建议变化。平台源、跨项目 Skill 和 Pack 的适用性在本版本明确为未评估，仍走原有受控发现接口；不读取它们的内容、来源 Job、Memory 或质量样本来辅助本项目排序。模型推荐、Pack 自动晋级与组合效果归因不属于本实现。
 
 ## 契约与闭环
 

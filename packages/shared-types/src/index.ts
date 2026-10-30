@@ -1720,14 +1720,16 @@ export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): Plat
   return ["mark_job_done", "ack_human_message"];
 }
 
-/** 空配置代表启用该角色全部合法工具；显式 false 才关闭可选工具。 */
+/** Ordinary optional tools default on; experimental Skill suggestions require explicit opt-in. */
 export function resolvePlatformTools(
   roleName: string,
   roleKind: "role" | "hub" | "system",
   config: PlatformToolConfig,
 ): PlatformToolName[] {
   const required = new Set(requiredPlatformTools(roleKind));
-  return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name) || config[name] !== false);
+  return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name)
+    || (name === "suggest_project_skills" || name === "record_skill_choice"
+      ? config[name] === true : config[name] !== false));
 }
 
 /**
@@ -1742,7 +1744,8 @@ export function resolvePlatformToolsTightened(
 ): PlatformToolName[] {
   const globalTools = resolvePlatformTools(roleName, roleKind, globalConfig ?? {});
   if (projectConfig == null) return globalTools;
-  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, projectConfig));
+  // An absent project override inherits the global opt-in; an override can only tighten it.
+  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, { ...globalConfig, ...projectConfig }));
   return globalTools.filter((name) => projectAllowed.has(name));
 }
 
