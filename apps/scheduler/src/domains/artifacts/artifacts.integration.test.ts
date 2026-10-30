@@ -258,7 +258,7 @@ if (!testDatabaseUrl) {
       }[]>`
         SELECT artifact_key, kind, source_operation, source_event_id
         FROM artifacts WHERE id = ${finding.artifact_id}`;
-      assert.equal(findingArtifact?.artifact_key, `finding:${finding.fingerprint}`);
+      assert.equal(findingArtifact?.artifact_key, `finding:${auditJobId}:${finding.fingerprint}`);
       assert.equal(findingArtifact?.kind, "security.vulnerability");
       assert.equal(findingArtifact?.source_operation, "emit_finding");
       assert.equal(findingArtifact?.source_event_id, findingEventId);
@@ -278,9 +278,58 @@ if (!testDatabaseUrl) {
           (SELECT COUNT(*)::int FROM findings WHERE job_id = ${auditJobId}) AS findings,
           (SELECT COUNT(*)::int FROM artifacts WHERE job_id = ${auditJobId} AND source_operation = 'emit_finding') AS artifacts`;
       assert.deepEqual(findingCount, { findings: 1, artifacts: 1 });
+
+      // A different submission key cannot silently revise this Job-local source.
+      await assert.rejects(ingestEvent(auditJobId, {
+        v: 1, event_id: randomUUID(), type: "finding",
+        payload: { ...findingPayload, raw: { environment: "another environment" } },
+      }), /来源身份已存在/);
+      await sql`UPDATE findings SET verify_status = 'confirmed', disposition = 'resolved' WHERE id = ${finding.id}`;
+      const secondCanvasId = `artifact-${randomUUID()}`;
+      await sql`INSERT INTO canvases (id, project_id, title, target_json)
+        SELECT ${secondCanvasId}, project_id, 'independent task', target_json FROM canvases WHERE id = ${canvasId}`;
+      const sourceJobs = [randomUUID(), randomUUID()];
+      for (const [index, sourceJob] of sourceJobs.entries()) {
+        const sourceCanvas = index === 0 ? canvasId : secondCanvasId;
+        await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+          VALUES (${sourceJob}, ${projectId}, ${sourceCanvas}, 'audit', 'running', ${sql.json(auditSnapshot)})`;
+        await sql`INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status)
+          VALUES (${sourceCanvas}, ${sourceJob}, 'intent', 'independent source', 'running')`;
+        const event = { v: 1 as const, event_id: randomUUID(), type: "finding" as const,
+          payload: { ...findingPayload, raw: { environment: `environment-${index}`, version: `version-${index}` } } };
+        // Concurrent replay is submission-idempotent; a new key with identical content
+        // is also source-idempotent, independently of all other Jobs and tasks.
+        await Promise.all([ingestEvent(sourceJob, event), ingestEvent(sourceJob, event)]);
+        await ingestEvent(sourceJob, { ...event, event_id: randomUUID() });
+      }
+      const sources = await sql`SELECT f.id, f.job_id, f.verify_status, f.disposition,
+          a.artifact_key, a.revision, a.superseded_at, f.node_id, f.source_digest
+        FROM findings f JOIN artifacts a ON a.id = f.artifact_id WHERE f.project_id = ${projectId}`;
+      assert.equal(sources.length, 3);
+      assert.equal(new Set(sources.map(row => row.artifact_key)).size, 3);
+      for (const row of sources) {
+        assert.equal(row.revision, 1);
+        assert.equal(row.superseded_at, null);
+        assert.ok(row.node_id);
+        assert.match(String(row.source_digest), /^v1:[a-f0-9]{64}$/);
+        if (row.id !== finding.id) {
+          assert.notEqual(row.verify_status, 'confirmed');
+          assert.equal(row.disposition, 'open');
+        }
+      }
+      // Preserved historical sources have no digest; original event replay still
+      // succeeds, while a new submission cannot guess equivalence from text.
+      await sql`UPDATE findings SET source_digest = NULL WHERE id = ${finding.id}`;
+      await ingestEvent(auditJobId, { v: 1, event_id: findingEventId, type: "finding", payload: findingPayload });
+      await assert.rejects(ingestEvent(auditJobId, {
+        v: 1, event_id: randomUUID(), type: "finding", payload: findingPayload,
+      }), /历史来源摘要不可用/);
+      const [original] = await sql`SELECT verify_status, disposition FROM findings WHERE id = ${finding.id}`;
+      assert.deepEqual(original, { verify_status: 'confirmed', disposition: 'resolved' });
+
     } finally {
-      await sql`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
-      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM canvas_edges WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id = ${projectId})`;
       await sql`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ${projectId})`;
       await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
       await sql`DELETE FROM artifacts WHERE project_id = ${projectId}`;
