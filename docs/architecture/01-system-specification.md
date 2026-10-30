@@ -305,7 +305,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Agent 必须先从 trusted+enabled 源 `list_available_skills`/`search_skills` 取得 selector 与 content hash，再通过 `pull_skill` 拉取有界文件；拉取不得安装任意包或改变 Job 权限，不得读取未冻结或未授权来源。
 - **决策来源**：业务 Skill 可插拔但不能成为绕过平台准入的安装入口。
-- **实现状态**：as-built；内容 hash、源信任和 Job token 均重新校验。
+- **实现状态**：as-built；内容 hash、源信任和 Job token 均重新校验。 #778 增加独立[离线适用证据校验](../../agent-harness/capability-applicability/README.md)，仅验证导出的一致性及 JSON 断言，不改变在线拉取或证明方法有效。
 - **代码入口**：[Skill operation registry](../../apps/scheduler/src/domains/platform-api/operations.ts)、[Skill source route](../../apps/scheduler/src/domains/skill-source/routes.ts)、[Skill pull 测试](../../apps/scheduler/src/skill-pull.test.ts)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。
 
