@@ -1005,8 +1005,21 @@ async function runJob(jobId: string) {
     const taskContract = frozenTaskContract(snapshot);
     if (taskContract) {
       const currentRules = await rulesForProject(sql, String(job.project_id));
+      const snapshotObject = snapshot as unknown as Record<string, unknown>;
+      const targetAuthorization = snapshotObject.target_authorization;
+      const payload = job.payload_json && typeof job.payload_json === "object" && !Array.isArray(job.payload_json)
+        ? job.payload_json as Record<string, unknown>
+        : {};
       const blockers = await taskContractPreflight(sql, String(job.project_id), taskContract,
-        snapshotAllowEgress && currentRules.allowEgress);
+        snapshotAllowEgress && currentRules.allowEgress, {
+          principalId: targetAuthorization && typeof targetAuthorization === "object" && !Array.isArray(targetAuthorization)
+            && typeof (targetAuthorization as Record<string, unknown>).principal_id === "string"
+            ? (targetAuthorization as Record<string, unknown>).principal_id as string
+            : null,
+          content: typeof payload.content === "string" ? payload.content : undefined,
+          frozenTargetAuthorization: targetAuthorization,
+          requireFrozenTargetAuthorization: true,
+        });
       if (blockers.length) throw new TaskContractBlockedError(blockers);
     }
     const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");

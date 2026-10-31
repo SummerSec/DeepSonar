@@ -1,4 +1,4 @@
-import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -12,6 +12,7 @@ import {
   fixedPriorityForJob,
   lockCanvasForConvergence,
   priorityMatchesJob,
+  rulesForProject,
   rolesForProject,
   triggerHubFromHumanComment,
 } from "../../core.js";
@@ -39,6 +40,8 @@ import {
   requeueJob,
   type RequeueJobResult,
 } from "./rerun.js";
+import { taskContractPreflight } from "../../task-contract-preflight.js";
+import type { TargetAuthorizationSnapshot } from "../target-authorization/contract.js";
 
 const CreateJobBody = z.object({
   project_id: z.string().uuid(),
@@ -67,6 +70,16 @@ function sendRequeueError(
         ?? `Job 状态 ${result.status} 不允许重新入队；仅 failed/timeout/orphan/waiting_human 可操作`,
       error_code: result.error_code ?? JOB_NOT_RESUMABLE,
       status: result.status,
+      ...(result.provenance ? { provenance: result.provenance } : {}),
+    });
+  }
+  if (result.kind === "target_authorization_blocked") {
+    return reply.code(409).send({
+      error: "目标授权 authority 未确认当前任务条件；未重新入队",
+      error_code: "TARGET_AUTHORIZATION_BLOCKED",
+      job_ids: [result.detail.job_id],
+      stale_fields: result.detail.stale_fields,
+      task_contract_blockers: result.blockers,
       ...(result.provenance ? { provenance: result.provenance } : {}),
     });
   }
@@ -160,6 +173,37 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         expected_priority: expectedPriority,
       });
     }
+    let taskContract;
+    let targetAuthorization: TargetAuthorizationSnapshot | undefined;
+    if (payload.task_contract !== undefined) {
+      try {
+        taskContract = normalizeTaskContract(payload.task_contract);
+      } catch {
+        return reply.code(400).send({
+          error: "payload.task_contract 结构无效",
+          error_code: "invalid_payload",
+          field: "payload.task_contract",
+        });
+      }
+      payload.task_contract = taskContract;
+      const networkPolicy = payload.network_policy && typeof payload.network_policy === "object"
+        && !Array.isArray(payload.network_policy)
+        ? payload.network_policy as Record<string, unknown>
+        : {};
+      const currentRules = await rulesForProject(sql, projectId);
+      const taskAllowEgress = currentRules.allowEgress && networkPolicy.allow_egress === true;
+      const preflight = await taskContractPreflight(sql, projectId, taskContract, taskAllowEgress, {
+        detailed: true,
+        principalId: req.actor?.id ?? req.actor?.name ?? null,
+        content: typeof payload.content === "string" ? payload.content : undefined,
+      });
+      targetAuthorization = preflight.targetAuthorization;
+      if (preflight.blockers.length > 0) return reply.code(409).send({
+        error: "任务所需前置条件尚未满足",
+        error_code: "task_contract_blocked",
+        task_contract_blockers: preflight.blockers,
+      });
+    }
     let canvasId: string;
     try {
       if (reviewRequest?.success) {
@@ -197,6 +241,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         timeoutSec: body.timeout_sec,
         stallSec: body.stall_sec,
         maxRequests: body.max_requests,
+        targetAuthorization,
       });
       if (duplicated) return reply.code(409).send({ error: "冲突的活动 Job 已存在" });
       return reply.code(201).send(job);

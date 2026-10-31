@@ -1,5 +1,13 @@
 import { normalizeTaskContract, type TaskContract } from "@deepsonar/shared-types";
 import type { SandboxLimits } from "@deepsonar/runtime-sandbox";
+import {
+  parseReferenceTarget,
+  readLatestTargetAuthorizationGrant,
+  readTargetAuthorizationConfig,
+  targetAuthorizationRequired,
+  targetAuthorizationSnapshot,
+  targetBinding,
+} from "../target-authorization/index.js";
 
 type NetworkPolicyQuery = (
   strings: TemplateStringsArray,
@@ -94,6 +102,7 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
   db: NetworkPolicyQuery,
   canvasId: string | null | undefined,
   snapshot: T,
+  options: { trustedTargetAuthorization?: unknown } = {},
 ): Promise<T & { network_policy: FrozenNetworkPolicy; task_contract?: TaskContract }> {
   if (!canvasId)
     throw new Error(
@@ -105,7 +114,8 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
     );
   }
   const [canvas] =
-    (await db`SELECT target_json FROM canvases WHERE id = ${canvasId} FOR SHARE`) as Array<{
+    (await db`SELECT project_id, target_json FROM canvases WHERE id = ${canvasId} FOR SHARE`) as Array<{
+      project_id?: string;
       target_json?: unknown;
     }>;
   if (!canvas)
@@ -126,11 +136,50 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
     snapshotRuntimeImageKey(snapshot),
     allowEgress,
   );
+  const { target_authorization: _ignoredAuthorization, ...untrustedSnapshotFields } = snapshot as T & {
+    target_authorization?: unknown;
+  };
+  let authorization: unknown;
+  if (taskContract && targetAuthorizationRequired(taskContract)) {
+    const projectId = typeof canvas.project_id === "string" ? canvas.project_id : "";
+    const content = (canvas.target_json as Record<string, unknown>).content;
+    if (!projectId || typeof content !== "string") {
+      throw new Error(`canvas ${canvasId} 缺少目标授权所需的 project_id 或原始 content`);
+    }
+    const config = readTargetAuthorizationConfig();
+    if (!config) throw new Error("target authorization platform configuration is unavailable");
+    const target = parseReferenceTarget(taskContract.targets);
+    const identity = taskContract.identity;
+    const binding = targetBinding(content, taskContract);
+    let candidate = targetAuthorizationSnapshot(options.trustedTargetAuthorization);
+    if (options.trustedTargetAuthorization === undefined) {
+      const grant = await readLatestTargetAuthorizationGrant(db, projectId, canvasId);
+      candidate = grant?.snapshot;
+    }
+    if (!candidate
+      || candidate.authority_id !== config.authorityId
+      || candidate.adapter !== config.adapter
+      || JSON.stringify(candidate.requested_actions) !== JSON.stringify(config.requestedActions)
+      || candidate.project_id !== projectId
+      || candidate.config_identity !== config.configIdentity
+      || candidate.content_sha256 !== binding.content_sha256
+      || candidate.task_contract_sha256 !== binding.task_contract_sha256
+      || candidate.revision !== binding.revision
+      || !target
+      || candidate.target_id !== target.targetId
+      || candidate.tenant !== identity?.tenant
+      || candidate.role !== identity?.role
+      || candidate.resource !== identity?.resource) {
+      throw new Error("target authorization grant is missing or does not match the authoritative Canvas");
+    }
+    authorization = candidate;
+  }
   return {
-    ...snapshot,
+    ...untrustedSnapshotFields,
     network_policy: { allow_egress: allowEgress },
     ...(taskContract ? { task_contract: taskContract } : {}),
-  };
+    ...(authorization ? { target_authorization: authorization } : {}),
+  } as unknown as T & { network_policy: FrozenNetworkPolicy; task_contract?: TaskContract };
 }
 
 /** Read only the immutable network policy embedded in a Job snapshot; undefined when absent. */

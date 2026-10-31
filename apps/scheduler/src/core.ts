@@ -53,6 +53,12 @@ import {
 } from "./domains/hub-orchestration/index.js";
 import { parseFrozenFindingProtocol, resolveFindingProtocol, rewriteFindingProtocolMode } from "./finding-protocol.js";
 import { canonicalizeRoleRuntimeKnobsJson } from "./runtime-knobs.js";
+import {
+  targetAuthorizationRequired,
+  targetAuthorizationSnapshot,
+  recordTargetAuthorizationGrant,
+} from "./domains/target-authorization/index.js";
+import type { TargetAuthorizationSnapshot } from "./domains/target-authorization/contract.js";
 import * as findingVerification from "./verify.js";
 import * as reportConvergence from "./report.js";
 import { revokeJobTokens } from "./gateway.js";
@@ -882,6 +888,8 @@ export interface CreateJobInput {
   ingressKey?: string;
   /** Task/Job-level runtime profile overlay, frozen at Job creation. */
   runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null;
+  /** Secret-free Scheduler result from the trusted target authorization authority. */
+  targetAuthorization?: TargetAuthorizationSnapshot;
 }
 
 export const MAX_RELATED_FINDING_IDS = 8;
@@ -962,8 +970,21 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
         snapshotFindingIds,
         { runtimeProfile: input.runtimeProfile ?? null },
       ),
+      { trustedTargetAuthorization: input.targetAuthorization },
     ),
   );
+  const taskContract = snapshot.task_contract;
+  if (taskContract && targetAuthorizationRequired(taskContract)) {
+    const authorization = targetAuthorizationSnapshot((snapshot as unknown as Record<string, unknown>).target_authorization);
+    if (!authorization
+      || authorization.project_id !== input.projectId
+      || (input.targetAuthorization !== undefined && !targetAuthorizationSnapshot(input.targetAuthorization))) {
+      throw new Error("target authorization snapshot missing or does not match the frozen Job contract");
+    }
+    if (input.targetAuthorization !== undefined) {
+      await recordTargetAuthorizationGrant(tx as unknown as typeof sql, input.projectId, input.canvasId!, authorization);
+    }
+  }
   if (reviewRequest?.success) snapshot = await freezeGoalReviewAssignment(tx, input.projectId, input.canvasId!, snapshot, reviewRequest.data);
   return persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
 }
