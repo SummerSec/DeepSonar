@@ -21,7 +21,19 @@
 - 沙箱 Pi 以 `pi --mode rpc --no-approve --no-extensions -e <准入 stub>` 启动（[runtime-adapters.ts:611](../packages/runtime-sandbox/src/runtime-adapters.ts)），项目 `.pi` 目录不会自动加载，扩展只能来自平台注册表（[pi-extensions.ts:30](../packages/shared-types/src/pi-extensions.ts)）。
 - 因此当前 Job 内的上下文压缩完全由 pi 自身 compaction 完成，逐级 summary 化；Scheduler 侧只有两条兜底：`context_window_exceeded` 自动重试 1 次、`pi_stream_truncated` 自动重试 1 次（[context-window-exceeded.ts](../apps/scheduler/src/context-window-exceeded.ts)、[pi-stream-truncation.ts](../apps/scheduler/src/pi-stream-truncation.ts)）。
 - `pi-observational-memory`（MIT，v3.1.4）把记忆工作提前到 `turn_end` 后台完成，使 compaction 的主要路径变成渲染步骤；存在同步 observer catch-up 和委托 Pi 原生压缩的 fallback 例外，不能保证压缩阶段零模型调用。它的后台 worker（observer / reflector / dropper）通过 `agentLoop` 发起**真实模型请求**，上游默认 `agentMaxTurns: 16`、`agentMaxTokens: 32_000`，在 DeepSonar 里这些请求只能走 Gateway。
-- 准入对象必须是**发布物**，不是上游源码分支。本次实测 npm 发布包 `pi-observational-memory@3.1.4`（`npm pack` 下载后自行计算 sha512，不采信 registry 自报）：
+- 准入对象必须是**发布物**，不是上游源码分支。本次实测 npm 发布包 `pi-observational-memory@3.1.4`（`npm pack` 下载后自行计算 sha512，不采信 registry 自报）。
+
+  发布包接口面（同样取自该 3.1.4 tarball，非上游 master 推断）：
+
+  | 项 | 发布包实测值 |
+  | --- | --- |
+  | 工具名 | **`recall`**（`src/tools/recall-observation.ts:16` `RECALL_OBSERVATION_TOOL_NAME = "recall"`；**文件名与工具名不同**，不能按文件名写工具名） |
+  | 命令 | `om:status`、`om:view` |
+  | hooks 事件 | `session_before_compact`、`agent_settled`、`agent_start`、`turn_end`（不止 `turn_end`） |
+  | 配置键 | `observeAfterTokens`、`reflectAfterTokens`、`observerChunkMaxTokens`、`compactAfterTokens`、`compactAfterTokensMode`、`compactAfterTokensRatio`、`observationsPool*`、`agentMaxTurns`、`agentMaxTokens`、`model`、`passive`、`showWorkerNotifications`、`debugLog` |
+  | 宿主导入 | `@earendil-works/pi-agent-core`、`pi-ai`、`pi-ai/compat`、`pi-coding-agent`、**`pi-tui`（值导入 `Text`，用于工具结果渲染）** |
+
+  因此准入清单不能只看 `entry`：工具名与 schema、hooks 事件、配置键、宿主导入 API 均需按固定 tarball 核验（§2）。
 
   | 项 | 发布包 3.1.4（实测） | 上游 master `022da5e`（源码核对） |
   | --- | --- | --- |
@@ -45,7 +57,14 @@
 | G10 | memory 内容可能随 session 导出，需持久化前过滤 | [cli-session-adapters.ts:94-120](../packages/runtime-sandbox/src/cli-session-adapters.ts) | §3 |
 | G11 | 快照冻结 version/entry，扩展升级后旧快照拒绝重放 | `parseFrozenPiExtensions` | §7.4 |
 
-> 准入依据三条并列，缺一条不得写入注册表：来源 registry（canonical 源需复核，镜像只能作为副本）、tarball 的 `dist.integrity`、tarball 内 `pi.extensions` 与 `files` 的实际值。`entry` 逐版核对（见 §1）。
+> 准入依据必须同时覆盖**入口**与**接口面**，缺任一项不得写入注册表：
+>
+> 1. 来源 registry（canonical 源需复核，镜像只能作为副本）；
+> 2. tarball 的 `dist.integrity`；
+> 3. tarball 内 `pi.extensions` / `files` / 实际`entry`（逐版核对）；
+> 4. tarball 内工具名与参数 schema、hooks 事件、配置键、宿主导入 API（见 §1）。
+>
+> 只核 `entry` 是不够的：工具名、hooks 与宿主导入决定它是否能被现有 adapter 解析、是否会触发 `PI_RPC_UNEXPECTED_EVENT` 或 `extension_error`。当前这些接口面仅在 npm 3.1.4 tarball 上核对过，**canonical 来源仍未证实**。
 
 ## 3. 交付 1：memory 内容分类与脱敏规则
 
@@ -62,9 +81,28 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 | L2 reflection | reflector worker | 用户决策、约束、目标、偏好等持久事实 | session 文件（ledger） | 允许存在；**禁止把 shared asset 正文或 evidence 文件内容粘贴进来**；只允许短句摘要 |
 | L3 worker prompt / response 原文 | observer/reflector/dropper | 送给 worker 的上下文、模型返回 | worker 内存；debug/错误/通知出口需逐项验证 | 不得写入 workspace 其他路径、不得进 evidence、不得进 RPC 帧 |
 | L4 memory 索引/状态（`om:status` 输出、debug log） | 扩展 | 阈值、池大小、token 估算 | debug 默认关闭；启用后写 agent 目录下 NDJSON 文件；状态/通知走 UI API | **冻结关闭**：`debugLog: false`、`showWorkerNotifications: false` |
-| L5 session 文件整体 | pi | 全部会话行（含 L1/L2） | evidence 冷存储 archive | 保留大小与读取权限边界；持久化前执行 §3.3 脱敏及结构化过滤要求（待实现） |
+| L5 session 文件整体 | pi | 全部会话行（含 L1/L2） | evidence 冷存储 archive | 保留大小与读取权限边界；持久化前执行 §3.4 脱敏及结构化过滤要求（待实现） |
 
-### 3.3 规则（供 C/E 片实现）
+### 3.3 出口矩阵（重复副本必须逐项声明）
+
+同一段记忆正文会出现在多个出口上，任何一个未覆盖都等同于未脱敏。下表为必须逐项验收的出口清单；「目标语义」必须在 C/E 片实现，本片只定要求。
+
+| # | 出口 | 具体内容（发布包 3.1.4 核实） | as-built 行为 | 目标语义 |
+| --- | --- | --- | --- | --- |
+| E1 | session 文件与 evidence archive | 全部会话行，含 L1/L2 与工具结果 | 读全文 → `redactRuntimeSecrets`（密钥精确值）→ 归档；无内容分类过滤 | 持久化前按结构化条目过滤；密钥精确值脱敏不得当作内容分类脱敏 |
+| E2 | recall 工具结果正文 | 工具名 `recall`，返回 observation/reflection 正文；`details.sourceEntries[].content` **默认就带**（`includeSourceContent` 默认 `true`）：上游 `src/tools/recall-observation.ts:152,263` | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | 与 E1 同策略；默认关闭或受限 `content` 需先改冻结配置并验收 |
+| E3 | compaction summary / fold | `session_before_compact` hook 产出的压缩结果与 memory fold | 作为 session 内容与 `context.compacted` 身份链的一部分 | 按 E1 过滤；身份字段不得因过滤而失真（否则降级为 `context.compaction_unknown`） |
+| E4 | 大 RPC 事件的落盘副本 | 超 1 MiB 帧投影后写入`/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | 已有密钥脱敏；但只对固定 payload 键做 4 KiB 预览，`content` 不在其中 | 与 E1 同策略；新增出口时必须显式声明保留/过滤规则（见 §6.3） |
+| E5 | 普通工具结果在 Web viewer 的展示 | 现有 `parseAgentSession` 就把 tool result 渲染出来（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)） | 已展示会话内 tool 结果 | **不开 memory 面板 ≠ 正文不显示**；E1/E2 的过滤规则必须先落地，不靠「不新增 UI」代替 |
+| E6 | 配置、日志、通知、debug 文件 | `debugLog`（启用后写 agent 目录 NDJSON）、错误/fallback 通知、`om:status` 输出 | 默认关；catch-up 错误通知不完全受 `showWorkerNotifications` 控制 | 冻结关闭；出现记录即按敏感出口验收 |
+
+撤权与删除语义（必须分开写，不得混用）：
+
+- **撤销读取权限**：只保证按当前权限不再可读；不意味着历史副本已消失。
+- **dropper 删除**：只是把 observation 移出 active memory，**不是**撤权，也不是历史擦除（ledger 仍保留）。
+- **历史擦除**：本 issue **不承诺**任何擦除能力；若将来要做，需单独设计（含 session 归档、evidence blob、RPC 导出文件三处副本）。
+
+### 3.4 规则（供 C/E 片实现）
 
 1. **写入侧优先**：L1/L2 由扩展生成，平台无法逐字审计。关闭 `debugLog` 与 `showWorkerNotifications` 只减少输出，不是敏感正文脱敏保证；写入 session 的 observations/reflections、错误通知仍需检查。C 片须冻结这些配置与 `passive` 语义（见 §8 决策 2），E 片须用含秘密的夹具验证各出口。上游 `src/debug-log.ts` 写文件而非默认 stdout；catch-up 错误通知也不完全受 `showWorkerNotifications` 控制。
 2. **导出侧兜底**：若 E 片发现归档中出现 L3 或凭据明文，必须停止接入；修复方式是收紧扩展配置或加导出期脱敏，**不是**放宽归档正则。
@@ -165,6 +203,19 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 | C4 | 大事件路径（`cat` 大文件 / `curl` 整页）下仍只输出合法帧，且单帧不超上限 | 违反任一 |
 | C5 | 非 JSON 行数为 0（`showWorkerNotifications`/`debugLog` 若写 stdout 即不合格） | 出现任一非 JSON 行 |
 | C6 | 关闭 om 与开启 om 的帧序列在协议层等价（除 compaction 相关时序差异） | 出现白名单内但字段契约变化的帧（例如 `context.compacted` 身份字段缺失） |
+| C7 | recall 返回完整 `details` 时不因结构超限而失败 | 出现 `PI_RPC_UNSUPPORTED_LARGE_STRUCTURE` |
+
+### 6.3 C7 的代码条件反例（未复现运行故障）
+
+`recall` 默认带源条目正文，而大帧保护存在结构盲区：
+
+- 帧字节 > `PI_RPC_INLINE_BYTES`（1 MiB）时进入捕获投影（[pi-rpc-output.ts:4](../packages/runtime-sandbox/src/pi-rpc-output.ts)、[runtime-agent.ts:1531-1532](../packages/runtime-sandbox/src/runtime-agent.ts)）。
+- 投影只对 `PAYLOAD_KEYS = {text, delta, output, result, error, errorMessage, message}` 做 4 KiB 预览（[pi-rpc-output.ts:6](../packages/runtime-sandbox/src/pi-rpc-output.ts)）；**`content` 不在其中**。
+- 投影后仍 > 1 MiB 即抛 `PI_RPC_UNSUPPORTED_LARGE_STRUCTURE`（同文件 `:60`），该错误从帧循环抛出，**不是降级**。
+
+因此「一帧约 1.1 MiB 且体积压在 `details.sourceEntries[].content` 上的 recall 结果」在静态推演下会硬失败，即使原帧小于 8 MiB 上限。此为**代码条件反例**，尚未验证发布版 3.1.4 在真实 rpc 会话中是否产生同形帧，不记作已复现运行故障。
+
+验收要求：离线夹具必须包含带完整 `details` 的 `recall` 用例（不只 `cat` / `curl`），覆盖 4 KiB 预览键与非预览键两种结构；若确认会触发，修法只能是收紧扩展输出或为 `content` 类结构增加明确处理，**不得**把该错误改成静默降级。
 
 验证方法（E 片执行，本片只定标准）：
 
@@ -200,6 +251,23 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 - om 升级后，**旧 Job 快照不可按现注册表重放**（既有语义，不新增兼容分支）。
 - 升级必须在 release note 记录，并接受"旧 Job 不能 resume/rerun 到新扩展"。
 
+### 7.5 移除与回滚语义（F 片承诺的边界）
+
+从角色能力组合移除扩展**只影响之后创建的 Job**：冻结在 Job 创建期（[role-runtime-snapshot/application.ts:637,819](../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)），执行期只读快照（[executor-real.ts:1097-1099](../apps/scheduler/src/executor-real.ts)）。
+
+| Job 状态 | 移除组合后行为 | 要求 |
+| --- | --- | --- |
+| 新建 / 新排队（尚未冻结） | 不带 om | 无额外要求 |
+| 已排队且已冻结带 om | **仍按快照加载 om** | 不得暗改 `agent_snapshot_json`；如需强停，走既有 cancel 路径并记录原因 |
+| 运行中 | 不中断；继续带 om 到终态 | 可选：新推送的人工指令无法关闭扩展，需在 UI/文档如实说明 |
+| 恢复 / retry / rerun | 按快照仍带 om | 不因组合变更而视为快照失效；除非管理员显式选择重解析 |
+
+因此 **F 片不得承诺「移除即回到旧行为、无残留」**。可承诺的只有：新 Job 不再冻结该扩展、历史快照不被暗改、已冻结 Job 仍可审计。
+
+验收（离线）：先创建并冻结一个带 om 的 Job，再从组合移除 om，随后启动/恢复该旧 Job，断言它仍按快照带 om 且快照字节未变。
+
+撤销读取权限与擦除历史内容严格分开（见 §3.3）：移除组合不是撤权，也不是擦除；dropper 删除更不能当作历史擦除。
+
 ## 8. 必须由人拍板的决策点
 
 以下 7 项均为待定方案；本 PR 收录建议不代表这些选项已获批准。A 正式通过所需书面记录见 §10。
@@ -223,9 +291,10 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 5. 后台 worker 的请求量级与对上游限流的影响（上游默认轮数不等于请求总量，fallback/catch-up/retry 也需计数）。
 6. memory ledger 对 session 体积、32 MiB 归档上限与 `BLOB_DIR` 的挤压程度。
 7. 剪贴板路径在无 X/Wayland 沙箱中的失败是否只影响 TUI 命令（不影响 rpc）。
-8. npm tarball/integrity（现已核 3.1.4 的发布物内容与 integrity；canonical 源、宿主兼容、升级到下一版的 `entry` 形态仍未验）、完整配置覆盖隔离、passive 恢复 catch-up、无限额度适配、可信归因与多出口脱敏均未验证。
+8. npm tarball/integrity（现已核 3.1.4 的发布物内容与 integrity；**canonical 来源仍未证实**，npmmirror 副本自算哈希一致不等于 canonical 已验）、宿主兼容、升级到下一版的 `entry` 及 §1 接口面（工具 schema / hooks / 配置键 / 导入 API）仍未验；完整配置覆盖隔离、passive 恢复 catch-up、无限额度适配、可信归因均未验证。
 9. 后台 worker 实际发出的模型是否可能落在冻结白名单外，以及 `GATEWAY_FROZEN_MODEL_MISMATCH` 到 Job 终态的传播路径（§5.4）尚未实测。
-10. 质量收益：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
+10. C7 的 1.1 MiB `details…content` 反例是**代码静态推演**，未在 rpc 会话中复现；`includeSourceContent` 默认 `true` 已从发布包源码核实，但默认值是否被冻结配置改变、以及 Web viewer 是否实际渲染大块 `content`（E5）未验。
+11. 质量收益：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
 
 ## 10. A 片验收
 
@@ -243,5 +312,6 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 | B 准入材料化 | §4.2 新字段（否则注册行无法定义断网行为） |
 | C 配置冻结 | §5.3 冻结段清单与越界 fail closed 语义 |
 | D 预算与归因 | §5.2 保底、降级、来源归因三条语义 |
-| E 归档脱敏 + RPC | §3.3 导出期兜底规则、§6.2 判定表 |
+| E 归档脱敏 + RPC | §3.4 导出期兜底与 §3.3 出口矩阵、§6.2 判定表与 §6.3 C7 反例 |
+| F 移除与回滚 | §7.5（新 Job / 旧冻结 Job / 运行中 / 恢复各自行为，不承诺无残留） |
 | F 灰度 | §7 三层职责不变、§8 决策 4 的实测数值 |
