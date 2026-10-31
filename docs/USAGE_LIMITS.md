@@ -12,7 +12,7 @@
 | 修正 token | `DEEPSONAR_REPAIR_MAX_TOKENS` 默认 0，正数上限 2000000；首次拒绝冻结 0 为无限，正数为有限；历史 null/缺失保持关闭 | `domains/event-ingestion/repair-token-budget.ts` |
 | Hub 总轮数 | `DEEPSONAR_HUB_MAX_ROUNDS` 默认 0；支持 `unlimited`，正数上限 10000 | `config.ts` |
 | Finding 验证轮数 | `maxVerificationRounds` 默认 0；显式 1–20 限制，非法值拒绝；无进展检测单独保留 | `core.ts`、`verify.ts` |
-| 图查询累计调用/字节 | `DEEPSONAR_GRAPH_QUERY_MAX_CALLS` / `DEEPSONAR_GRAPH_QUERY_MAX_BYTES` 默认 0；返回剩余值 null 表示不限，继续记录使用量；已 blocked 的会话不解封 | `graph-query.ts` |
+| 图查询累计调用/字节 | `DEEPSONAR_GRAPH_QUERY_MAX_CALLS` / `DEEPSONAR_GRAPH_QUERY_MAX_BYTES` 默认 0；返回剩余值 null 表示不限，继续记录使用量；已 blocked 的会话不解封；独立单响应 512000 UTF-8 bytes 硬上限包含引用与元数据，超限不写授权状态 | `graph-query.ts` |
 | LSP / CLI 能力调用 | 缺失或 0 不限，正数上限 10000；内置目录不再默认有限；LSP adapter 执行显式调用上限，CLI 字段目前为声明，不冒充已执行计数 | `language-server-adapter.mjs`、能力目录与共享 schema |
 | 内置 Capability Pack token | 不填 `max_tokens`，保留显式声明能力；不是新增的消费计量器 | `domains/capability-pack/catalog.ts` |
 | Plan 用量预算 | 可选字段，无默认额度；本次不宣称未接线字段已实现消费熔断 | `packages/shared-types/src/plan.ts` |
@@ -24,3 +24,5 @@
 Verify 基础设施失败另用已有 `maxAutoRetries`（默认 6）限制连续恢复：初次失败之后最多六次重试，第七次连续失败收口为 `inconclusive`，不再 force Hub。计数来自已完成的持久 round；任一次成功执行（包括业务 verdict 为 rework）重置连续失败段，不使用累计业务轮数。取消仍立即停止，不回写历史 round。
 
 需求与追溯沿用配置优先级、Model Gateway、Graph Query、Verify、Capability 的既有需求，不新建并行配置体系。相关行为入口接入现有 dispatch-limits、executor-real、graph-references、capability-pack、verify 与 platform-api CI；详情以 PR 的已执行命令及结果为准。
+
+图查询累计不限不等于单次响应不限。证据被压缩成预览时不授予被截断的 Fact ID；调用者需通过有界 node/index 查询重新读取引用。完整响应限制不声称限制跨查询累积的已见 ID 集合或整个 Canvas 加载内存。

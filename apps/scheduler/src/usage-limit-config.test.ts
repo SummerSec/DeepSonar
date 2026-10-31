@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,10 +9,14 @@ import test from "node:test";
 const keys = ["DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", "DEEPSONAR_REPAIR_MAX_TOKENS",
   "DEEPSONAR_HUB_MAX_ROUNDS", "DEEPSONAR_GRAPH_QUERY_MAX_CALLS", "DEEPSONAR_GRAPH_QUERY_MAX_BYTES"];
 const loader = fileURLToPath(new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url));
-function readConfig(values: Record<string, string> = {}) {
+function readConfig(values: Record<string, string> = {}, envFile?: string) {
   const dir = mkdtempSync(join(tmpdir(), "usage-limits-"));
   const env = { ...process.env };
   for (const key of [...keys, "DEEPSONAR_OFFLINE_PREFLIGHT"]) delete env[key];
+  if (envFile !== undefined) {
+    for (const match of envFile.matchAll(/^\s*([A-Z0-9_]+)\s*=/gm)) delete env[match[1]];
+    writeFileSync(join(dir, ".env"), envFile);
+  }
   Object.assign(env, values);
   try {
     return spawnSync(process.execPath, ["--import", loader, "--input-type=module", "-e", `
@@ -49,4 +53,21 @@ test("offline preflight records invalid quota field for sanitized blocking outpu
   const run = readConfig({ DEEPSONAR_OFFLINE_PREFLIGHT: "1", DEEPSONAR_JOB_TOKEN_MAX_REQUESTS: "bad" });
   assert.equal(run.status, 0, run.stderr);
   assert.ok(JSON.parse(run.stdout).errors.includes("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS"));
+});
+
+
+test("complete .env.example loads with unlimited usage defaults and strict overrides", () => {
+  const example = readFileSync(new URL("../../../.env.example", import.meta.url), "utf8");
+  const run = readConfig({}, example);
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.deepEqual([result.requests, result.repair, result.rounds, result.calls, result.bytes], [0, 0, 0, 0, 0]);
+  assert.equal(result.errors.some((key: string) => keys.includes(key)), false);
+  const configured = readConfig({ DEEPSONAR_HUB_MAX_ROUNDS: "17" }, example);
+  assert.equal(configured.status, 0, configured.stderr);
+  assert.equal(JSON.parse(configured.stdout).rounds, 17, "process env still takes precedence over the example");
+  const invalid = readConfig({}, example.replace(/^DEEPSONAR_HUB_MAX_ROUNDS=.*$/m, "DEEPSONAR_HUB_MAX_ROUNDS=invalid-explicit-limit"));
+  assert.notEqual(invalid.status, 0);
+  assert.ok(invalid.stderr.includes("DEEPSONAR_HUB_MAX_ROUNDS"));
+  assert.equal(invalid.stderr.includes("invalid-explicit-limit"), false);
 });

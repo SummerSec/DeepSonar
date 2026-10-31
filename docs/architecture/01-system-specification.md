@@ -386,7 +386,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Canvas 查询必须按 Job scope、脱敏规则、单次查询硬上限及显式配置的累计调用/字节额度返回有界结果；每次结果必须标记截断/省略和 `referable_ids`，不得提供任意 `canvas_id`/`project_id` 越权查询。
 - **决策来源**：上下文按需读取降低泄露和上下文失控风险，引用集是提交决策的可验证边界。
-- **实现状态**：as-built；每 Job 累计调用次数与累计字节额度默认不限；对应配置为 0 时不限、正整数时限制。返回 budget 的 null 表示无限；计数和审计仍保留，单类查询 hard cap 不变。
+- **实现状态**：as-built；每 Job 累计调用次数与累计字节额度默认不限；对应配置为 0 时不限、正整数时限制。返回 budget 的 null 表示无限；计数和审计仍保留，单类查询 hard cap 不变。完整响应另有不可配置的 512000 UTF-8 bytes 硬上限（含引用及元数据）；超限返回 `graph_query_response_too_large`，不写入计数、已见引用或 Plan 读取证明。证据仅返回预览时，不授权被截断的 Fact 引用。
 - **代码入口**：[Graph Query](../../apps/scheduler/src/graph-query.ts)、[shared graph schemas](../../packages/shared-types/src/index.ts)、[Graph budget tests](../../apps/scheduler/src/graph-budget.test.ts)。
 - **验证证据**：`pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`。
 

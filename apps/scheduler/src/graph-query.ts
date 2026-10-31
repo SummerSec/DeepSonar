@@ -21,6 +21,9 @@ import {
 } from "./graph.js";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
+/** Immutable transport/projection boundary, independent of opt-in cumulative quotas. */
+export const GRAPH_QUERY_MAX_RESPONSE_BYTES = 512_000;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SECRET_KEY = /token|secret|password|authorization|credential|api[_-]?key|cookie/i;
 const OPEN_INTENT = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
@@ -592,7 +595,8 @@ export function projectEvidence(
     items: truncated ? [{ truncated: true, preview: short(raw, 400), count: items.length }] : items,
     truncated,
     omitted: truncated ? { evidence: items.length } : {},
-    referable_ids: unique([
+    // A preview exposes no complete evidence item and must not authorize hidden IDs.
+    referable_ids: truncated ? [] : unique([
       ...(finding?.node_id ? [finding.node_id] : []),
       ...facts.map((node) => node.id),
     ]),
@@ -711,7 +715,15 @@ export async function executeGraphQuery(input: {
     },
     ...(projection.next_cursor ? { next_cursor: projection.next_cursor } : {}),
   };
+  // Avoid a self-referential byte counter: advertise conservatively, account the final wire bytes exactly.
+  result.budget.bytes_left = remaining.bytes_left === null ? null : Math.max(0, remaining.bytes_left - utf8Bytes(result));
   const bytes = utf8Bytes(result);
+  if (bytes > GRAPH_QUERY_MAX_RESPONSE_BYTES) {
+    throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "graph_query response exceeds the single-response byte limit; narrow the query", {
+      statusCode: 422, errorCode: "graph_query_response_too_large", retryable: true,
+      details: { expected: { max_response_bytes: GRAPH_QUERY_MAX_RESPONSE_BYTES }, observed_shape: { bytes } },
+    });
+  }
   if (remaining.bytes_left !== null && bytes > remaining.bytes_left) {
     await store.saveState(input.jobId, state);
     throw graphQueryBudgetRejection(new GraphQueryBudgetError(
@@ -719,7 +731,6 @@ export async function executeGraphQuery(input: {
       false,
     ));
   }
-  result.budget.bytes_left = remaining.bytes_left === null ? null : remaining.bytes_left - bytes;
   const nextIds = unique([...state.projected_node_ids, ...referable, ...idsMentionedInText(JSON.stringify(result.items), referable)]);
   const next: GraphQueryState = {
     ...(state.plan_read ? {plan_read:state.plan_read} : {}),

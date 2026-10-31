@@ -13,6 +13,7 @@ import {
 import { parseHubDecisionPayload } from "./graph.js";
 import {
   executeGraphQuery,
+  GRAPH_QUERY_MAX_RESPONSE_BYTES,
   projectEdges,
   projectIntentFrontier,
   projectNodeBody,
@@ -366,4 +367,91 @@ test("unlimited config does not reset a previously blocked graph query session",
     payload: { kind: "overview" }, store, maxCalls: 0, maxBytes: 0 }), /graph_query_budget_exceeded/);
   assert.equal(store.snapshot().blocked, true);
   assert.equal(store.snapshot().calls, 40);
+});
+
+
+test("large evidence previews do not authorize omitted Fact IDs", async () => {
+  const graph = fixtureGraph();
+  const facts = Array.from({ length: 20_000 }, (_, i) => node({ id: id(i + 100), type: "fact",
+    body: { verification: { finding_id: FINDING_ID, actual: "observed" } } }));
+  graph.nodes.push(...facts);
+  const store = memoryStore(graph), live = new Set<string>();
+  const result = await executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+    payload: { kind: "evidence", finding_id: FINDING_ID }, store, liveProjectedIds: live, maxCalls: 0, maxBytes: 0 });
+  assert.equal(result.truncated, true);
+  assert.deepEqual(result.referable_ids, []);
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= GRAPH_QUERY_MAX_RESPONSE_BYTES);
+  assert.deepEqual(store.snapshot().projected_node_ids, []);
+  assert.equal(live.size, 0);
+  assert.equal(store.snapshot().calls, 1);
+  assert.throws(() => parseHubDecisionPayload({ complete: { from: [facts[0]!.id], description: "引用被截断的证据" } }, live), /invalid_node_ref/);
+  await executeGraphQuery({ jobId: JOB, canvasId: CANVAS, payload: { kind: "node", ids: [facts[0]!.id] },
+    store, liveProjectedIds: live, maxCalls: 0, maxBytes: 0 });
+  assert.doesNotThrow(() => parseHubDecisionPayload({ complete: { from: [facts[0]!.id], description: "引用已读取的完整证据" } }, live));
+});
+
+test("single-response byte boundary rejects UTF-8 items, reference lists and metadata before authorization", async () => {
+  const graph = fixtureGraph();
+  const ids = Array.from({ length: 20_000 }, (_, i) => id(i + 100));
+  graph.nodes.push(...ids.map(id => node({ id, type: "fact" })));
+  for (const oversized of [
+    { items: [{ text: "界".repeat(200_000) }] },
+    { referable_ids: ids },
+    { omitted: { ["m".repeat(GRAPH_QUERY_MAX_RESPONSE_BYTES)]: 1 } },
+    { next_cursor: "c".repeat(GRAPH_QUERY_MAX_RESPONSE_BYTES) },
+  ]) {
+    const store = memoryStore(graph), live = new Set([ROOT]);
+    const before = structuredClone(store.snapshot());
+    let saves = 0;
+    const save = store.saveState;
+    store.saveState = async (...args) => { saves++; await save(...args); };
+    store.loadPlanGap = async () => ({ items: [], referable_ids: [FACT], truncated: false, omitted: {},
+      ...oversized, plan_read: { projection_sha256: "fixture", criterion_ids: ["must-not-authorize"] } });
+    await assert.rejects(() => executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+      payload: { kind: "plan_gap" }, store, liveProjectedIds: live, maxCalls: 0, maxBytes: 0 }), (error: unknown) => {
+      assert.ok(error instanceof PlatformRuntimeHandlerError);
+      assert.equal(error.rejection?.statusCode, 422);
+      assert.equal(error.rejection?.errorCode, "graph_query_response_too_large");
+      return true;
+    });
+    assert.equal(saves, 0, "no counters, authorization or Plan read proof is persisted");
+    assert.deepEqual(store.snapshot(), before);
+    assert.deepEqual([...live], [ROOT]);
+  }
+});
+
+test("accepted bounded Plan page retains pagination and read proof", async () => {
+  const store = memoryStore(fixtureGraph());
+  store.loadPlanGap = async () => ({ items: [{ fact_id: FACT }], referable_ids: [FACT], truncated: true,
+    omitted: { criteria: 1 }, next_cursor: "1", plan_read: { projection_sha256: "fixture", criterion_ids: ["seen"] } });
+  const result = await executeGraphQuery({ jobId: JOB, canvasId: CANVAS, payload: { kind: "plan_gap" }, store });
+  assert.equal(result.next_cursor, "1");
+  assert.deepEqual(store.snapshot().plan_read, { projection_sha256: "fixture", criterion_ids: ["seen"] });
+  assert.deepEqual(store.snapshot().projected_node_ids, [FACT]);
+});
+
+
+test("finite cumulative accounting counts the final serialized UTF-8 envelope", async () => {
+  const store = memoryStore(fixtureGraph());
+  const result = await executeGraphQuery({ jobId: JOB, canvasId: CANVAS, payload: { kind: "overview" },
+    store, maxCalls: 0, maxBytes: 10_000 });
+  const bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+  assert.equal(store.snapshot().bytes, bytes);
+  assert.ok(result.budget.bytes_left! <= 10_000 - bytes, "feedback cannot overstate remaining allowance");
+});
+
+
+test("oversized overview metadata is rejected before writing graph authorization", async () => {
+  const graph = fixtureGraph();
+  graph.nodes.push(node({ id: id(99), type: "界".repeat(200_000) }));
+  const store = memoryStore(graph), live = new Set<string>();
+  const before = structuredClone(store.snapshot());
+  await assert.rejects(() => executeGraphQuery({ jobId: JOB, canvasId: CANVAS, payload: { kind: "overview" },
+    store, liveProjectedIds: live, maxCalls: 0, maxBytes: 0 }), (error: unknown) => {
+    assert.ok(error instanceof PlatformRuntimeHandlerError);
+    assert.equal(error.rejection?.errorCode, "graph_query_response_too_large");
+    return true;
+  });
+  assert.deepEqual(store.snapshot(), before);
+  assert.equal(live.size, 0);
 });

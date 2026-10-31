@@ -24,7 +24,7 @@
 
 ## 护栏值与 SLA 的边界
 
-以下是实现中可调整、可测试的护栏示例：图查询累计调用/字节额度默认不限，显式正整数配置才限制，单次投影大小与分页硬上限仍生效；事件窗口 60 秒内进度/普通/终态分别受 30/120/8 限制；默认 provisioning 超时 300 秒、lease TTL 120 秒、stall 900 秒、等待人工 1800 秒；全局并发默认 20、项目并发默认 5、provisioning 默认 2；模型修复预算由 RepairFeedback 宣布。它们来自 [`config.ts`](../../apps/scheduler/src/config.ts)、[`graph-query.ts`](../../apps/scheduler/src/graph-query.ts) 和 shared types，表示保护边界或默认值。
+以下是实现中可调整、可测试的护栏示例：图查询累计调用/字节额度默认不限，显式正整数配置才限制，单次投影大小、分页及完整响应 512000 UTF-8 bytes 硬上限仍生效；事件窗口 60 秒内进度/普通/终态分别受 30/120/8 限制；默认 provisioning 超时 300 秒、lease TTL 120 秒、stall 900 秒、等待人工 1800 秒；全局并发默认 20、项目并发默认 5、provisioning 默认 2；模型修复预算由 RepairFeedback 宣布。它们来自 [`config.ts`](../../apps/scheduler/src/config.ts)、[`graph-query.ts`](../../apps/scheduler/src/graph-query.ts) 和 shared types，表示保护边界或默认值。
 
 这些数字不表示“请求必须在某时限内成功”、持续可用率、Provider 成功率、跨副本传播时间或人工响应时间。实际运行应结合 [`metrics.ts`](../../apps/scheduler/src/metrics.ts) 中的队列、失败、时长、Gateway、沙箱和清理指标判断。若未来定义 SLA，应在相应产品/运维契约中单独批准和验证，不能从本表推导。
 
