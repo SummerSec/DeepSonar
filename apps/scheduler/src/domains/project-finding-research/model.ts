@@ -120,7 +120,7 @@ export function extractFindingFeatures(source: FindingFeatureSource): FindingFea
   };
 }
 
-export type RelationKind = "suspected_same_issue" | "same_root_cause_different_instance" | "similar" | "distinct" | "insufficient_information";
+export type RelationKind = "suspected_same_issue" | "same_problem" | "same_root_cause_different_instance" | "similar" | "distinct" | "insufficient_information";
 export interface FindingRelationDecision {
   kind: RelationKind;
   matched_fields: string[];

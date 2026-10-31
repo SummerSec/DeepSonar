@@ -1,8 +1,8 @@
 # 项目 Finding 特征与关系研究（#770 C）
 
-> 状态：**C 实现与 D 检索/持久候选基础已随 #811 合入；强关系质量门未通过，不发布同问题建议**。
-> 收口（2026-10-31）：**#770 按已交付切片关闭**，强关系（同问题 / 同根因不同实例）拆出 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立跟踪并登记为暂缓设计。强关系未交付包含实现缺口——`compareFindingFeatures` 没有强关系输出分支，身份字段全部匹配时仍返回 `similar` / `lexical_overlap_only`。生产执行按 AGENTS.md「验收边界」豁免，但不覆盖本文「强关系验收最小外部输入」与各未验证项。
-> 同步日期：2026-10-30
+> 状态：**C 实现与 D 检索/持久候选已合入；#819 强关系工程、管理 API 与测试已在工作分支接线；强关系质量门未通过，不发布同问题建议**。
+> 收口（2026-10-31）：**#770 按已交付切片关闭**，强关系（同问题 / 同根因不同实例）由 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立实现。生产执行按 AGENTS.md「验收边界」豁免，但不覆盖本文「强关系验收最小外部输入」与各未验证项。
+> 同步日期：2026-10-31
 
 本切片依赖 #770 A 的独立 Job 来源身份，独立于 B 的项目查询增强。原 Finding、Artifact、Verify、人工处置和任务内 Research 都不由本投影改写。没有项目 Canvas、项目 Hub、模型调用、Job 跨任务接口或自动处置。
 
@@ -14,7 +14,7 @@
 | profile / category / location | `FindingPayload` 与 Finding 投影 | 原始声明，保留 provenance，不升级成证据支持 |
 | title / summary / location 文本 | Finding 字段 | Unicode NFKC 小写及词法线索；保留中文、路由和参数差异，不生成权威路由模板 |
 | Evidence | `artifact_evidence` 的 ID、顺序、元信息及内容摘要 | 参与来源失效检测；不复制正文、URI 或证据引用到公开计算状态，不视为根因证明 |
-| 资产 / 服务 / 环境 / 租户 / 权限边界 / 目标版本 / 参数 / 根因 | 当前协议无权威映射 | 一律 `null`，未知相等不表示相同 |
+| 资产 / 服务 / 环境 / 租户 / 权限边界 / 目标版本 / 参数 / 根因 | `project_finding_identity_sources` + 不可变 revisions，mapping 仅保存 source ID/field/CAS | 只有平台管理员准入的 typed manifest 摘要可进入强关系；FindingPayload、标题、task target、caller text 和普通 evidence 不得升级为 authority |
 
 核查入口：`packages/shared-types/src/index.ts` 的 `FindingPayload`、`database/schema.sql` 的 Artifact/Evidence、`domains/role-runtime-snapshot/application.ts`、`core.ts` 与 `task-intent.integration.test.ts`。任务 `target` 是自由内容且执行中可编辑；冻结运行时配置描述 Provider、镜像和能力，不证明被测目标的历史 commit/部署环境。共享文件 ID、当前仓库 HEAD、文本标题都不能代替目标身份。
 
@@ -34,14 +34,38 @@ Scheduler 现有维护 gate 注册/停止 worker；事务持有维护行共享�
 
 ## D 的可验证范围与停止条件
 
-`model.ts` 的候选排序限制最多扫描 1000 个**调用方已提供的候选**、返回 K≤50，并显式报告截断。这是离线词法排序函数，不是 PostgreSQL 召回实现，不能据此声称数据库候选扫描或召回率已验证。不兼容的提取器或规范化版本不参与排序，返回版本排除计数；逐对比较降为信息不足，不把旧版特征解释为冲突或相似。逐对策略支持“仅相似/明确冲突/信息不足”；强同问题/同根因类别保留但 v1 永不输出。不同版本仍需根因延续证据；A≈B、B≈C 不生成 A=C 或连通分组。
+`model.ts` 的候选排序限制最多扫描 1000 个**调用方已提供的候选**、返回 K≤50，并显式报告截断。这是离线词法排序函数，不是 PostgreSQL 召回实现，不能据此声称数据库候选扫描或召回率已验证。不兼容的提取器或规范化版本不参与排序，返回版本排除计数；词法逐对比较不把旧版特征解释为冲突或相似。词法策略仍只产生相似/冲突/信息不足；强关系由 `identity.ts` 的摘要身份比较单独判定。
 
-D 的弱候选账本已接线，权威分区召回、强关系和人工纠正尚未接线。强关系继续前需要权威目标/版本/根因来源映射、独立标注样本、预定阈值与留出评估；不把“未自动合并”作为质量指标。下述当前声明文本检索与持久弱候选切片，不等待这些输入，也不冒充完整 D。
+D 的弱候选账本与 #819 的强关系派生账本已接线；强关系建议仍受质量门关闭。强关系质量门继续需要权威来源修订证据、独立标注样本、按问题家族与资产隔离的调参/留出集，以及查看留出结果前冻结的阈值；不把“未自动合并”作为质量指标。
+
+## #819 强关系工程切片
+
+`identity.ts` 只接受平台映射产生的 `sha256:` 摘要。六个强字段 `asset`、`tenant`、`environment`、`version`、`parameter`、`root_cause` 全部有效且相等时才是 `same_problem`；根因摘要及 authority version 相同、任一实例字段不同则是 `same_root_cause_different_instance`。根因 authority version 冲突、字段冲突、来源过期/撤销、缺失或跨项目输入均 fail closed。上下文字段 `service` 与 `permission_boundary` 若双方都已知且冲突，则拒绝关系。比较是逐对的，不生成传递分组。
+
+`relation-store.ts` 使用平台授权写入的身份映射、不可变 source revision、显式 revoke/remap 和 freshness。相同 source revision 的内容变化拒绝；新 revision 必须走显式 remap，旧映射先撤销。`project_finding_relation_work`、`project_finding_relation_sources` 与 `project_finding_relations` 保存可重启 generation、检查点、两端来源指纹、身份指纹和规则版本。读端每次重读当前 Finding/身份快照并校验所有指纹，因此来源编辑、mapping remap/revocation/expiry、删除或规则漂移都会隐藏旧关系；历史派生行不会成为新的事实。
+
+HTTP registrar 已在根 `registerRoutes` 的认证与项目 ownership hook 之后接线；`auth.ts`、路由清单和 OpenAPI 同步登记以下八条管理面契约。请求体使用同一组 strict Zod schema，OpenAPI 请求和响应由该模块的 JSON Schema 转换生成。身份 mapping 写入不能自行提供 identity digest、source metadata、principal 或 provenance；已认证 `req.actor` 才是写入身份。
+
+| 路由 | scope / 结果 |
+| --- | --- |
+| `GET /findings/:id/relations` | `findings:read`；当前派生状态与受绑定游标 |
+| `GET /canvases/:id/finding-relations` | `findings:read`；单快照有界投影 |
+| `POST /findings/:id/identity-sources` | `admin`；201，注册操作员来源证明 |
+| `POST /findings/:id/identity-sources/:sourceId/revisions` | `admin`；201，来源 revision CAS |
+| `POST /findings/:id/identity-sources/:sourceId/revoke` | `admin`；200，来源撤销 CAS |
+| `POST /findings/:id/identity-mappings` | `admin`；201，首次 mapping，expected version 必须为 null |
+| `POST /findings/:id/identity-mappings/remap` | `admin`；201，mapping CAS 与显式理由 |
+| `POST /findings/:id/identity-mappings/revoke` | `admin`；200，mapping 撤销 CAS |
+
+每条路由均受资源所属项目约束，项目级 admin 不能操作别的项目。Job capability token 即使对 Control API 有效，也不能写这些管理路由。读响应明确返回 `authority_basis=platform_admin_attestation`、`independent_external_verification=false`；`identity_status=authoritative` 只表示所需摘要已由管理员证明准入且当前有效，不证明外部 inventory 真实性。当前 `published=false`、`quality_gate_status=not_evaluated`，公共 `items` 始终为空；`includeSuppressed` 仅供内部测试，不能作为公开查询参数。两条读端均拒绝未知查询字段并返回 `Cache-Control: no-store`。
+
+无效路径 UUID 和 source ID 在进入领域 SQL 前拒绝；读取器也在开启事务前验证 cursor 内的 UUID，不再接受任意 36 字符的十六进制/连字符组合。HTTP 返回稳定 `INVALID_ID`、`INVALID_IDENTITY_SOURCE`、`INVALID_IDENTITY_MAPPING` 或 `INVALID_CURSOR`；游标 scope/快照变化返回 409 `CURSOR_SCOPE_MISMATCH` / `CURSOR_GAP`。本切片不改 Verify、disposition、Report 或 FindingPayload 的自由文本语义，也不新增 timer 或执行通道；派生仍在已有 worker 维护 gate 内执行。
 
 ## 验证入口
 
-- `pnpm ci:unit:finding-research`：合成行为夹具，覆盖中文、未知、冲突、版本、传递性反例和预算；不是人工标注数据。
-- `pnpm ci:integration:finding-research`：显式 `TEST_DATABASE_URL`，覆盖持久检查点/并发、维护停止、重建切换、重试预算、来源与 Evidence 失效、权限与撤权。
+- `pnpm ci:unit:finding-research`：合成行为夹具，覆盖中文、未知、冲突、版本、传递性反例、预算及新增 `identity.test.ts`、`relation-store.test.ts`、`relation-api.test.ts` 的判定、strict 输入、权限、UUID/cursor 在 SQL 前拒绝和 OpenAPI/scope 一致性；不是人工标注数据。
+- `pnpm ci:integration:finding-research`：显式 `TEST_DATABASE_URL`，覆盖持久检查点/并发、维护停止、重建切换、重试预算、来源与 Evidence 失效、权限与撤权；已包含 `relation.integration.test.ts` 的完整关系 SQL 场景，以及 `relation-http.integration.test.ts` 的根路由、真实 HTTP listener、数据库 API Token 和有效 Job capability token 场景。每个 suite 创建并删除自己的数据库，不打开业务目标库。
+- 以上两个脚本已由 `.github/workflows/ci.yml` 的 Finding research unit / PostgreSQL integration 步骤调用；`pnpm ci:unit:finding-offline-evaluation` 保持原评估入口。接线和本地结果不等于本分支 GitHub Actions 已运行通过。
 - `pnpm ci:probe:project-finding-queue`：显式 `TEST_DATABASE_URL`，在独立库测 1k/10k/100k 项目的混合失败队列，比较旧/新执行选择与 25 项目注册扫描；不测候选关联质量。
 - `pnpm ci:probe:project-finding-features`：显式 `TEST_DATABASE_URL`，自行创建/删除隔离库，对 1k/10k/100k 合成 Finding 的 20 条批次采样并输出 EXPLAIN、索引大小、运行环境。该探针不测真实关系质量或线上 SLA。
 - schema64 遵守基线 + rebuild。[真实 v63 回归](../apps/scheduler/src/schema-rebuild-feature-fixture.ts) 从固定提交 `0841f8272ab1c9c64fdfeddba7aff53f2d5c856d` 读取完整 schema63，要求完整 Git 历史（CI fetch-depth: 0），不回退到当前 schema。升级前断言三张 feature 表及相关索引不存在；真实备份恢复和重建保留原 Finding UUID、来源摘要、Verify/disposition、节点/证据/事件；升级后验证扫描种子与派生删除后重建。它与 A 的 v62 Finding 形状夹具分别验证，不能互相替代。
@@ -134,3 +158,10 @@ schema65 新增 candidate_scan/work/sources/edges 四张派生表。注册扫描
 ## 非模型验收工具
 
 标注导入、留出隔离、离线报告口径与待审阅阈值建议见[离线评估专题](PROJECT_FINDING_EVALUATION.md)。工具与合成夹具不代替独立人工标签，不宣称质量门通过。
+## #819 source registry and bounded read correction (2026-10-31)
+
+The authoritative source boundary is now the platform-admin-admitted, typed identity-manifest registry in `project_finding_identity_sources` and its immutable `project_finding_identity_source_revisions` history. A registry row is an explicit operator/platform attestation. It does not independently authenticate or prove the truth of an external inventory, deployment, evidence store, or root-cause system. The API returns this limitation as `authority_basis=platform_admin_attestation` and `independent_external_verification=false`.
+
+Source registration, revision, and revocation are CAS operations. The server computes `content_sha256` from canonical source metadata and strict known-field `sha256:` digests. Mapping writes accept only `{source_id, field, expected_mapping_version}`; source kind, reference, revision, freshness, content digest, and identity digest are resolved from the admitted current source. Mapping history contains no arbitrary provenance JSON and no secret-string heuristic. A source revision change, revocation, or expiry invalidates mappings and derived relations on read without a manual remap. Current snapshots cap mapping history at 64 rows per field and report `IDENTITY_MAPPING_HISTORY_LIMIT` as blocked when exceeded.
+
+The relation implementation is split across `identity-source-store.ts`, `identity-mapping-store.ts`, `relation-computation.ts`, and `relation-read.ts`; `relation-store.ts` is a public export boundary. Canvas reads use one repeatable-read snapshot with shared finding, relation, query-byte, and response-byte limits. Exceeding a limit returns `read_status=truncated` and a reason; an over-limit identity snapshot returns `read_status=blocked`. Both current Finding source fingerprints are revalidated before a relation is exposed. Schema baseline is 66. No Verify, disposition, Report, or FindingPayload propagation is part of this slice.

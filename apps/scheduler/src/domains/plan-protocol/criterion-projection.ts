@@ -21,7 +21,7 @@ export function evaluateCriterionBinding(
 }
 
 export async function loadPlanCriteria(
-  db: typeof sql, canvasId: string, projectId: string, planJobId: string, plan: Plan,
+  db: typeof sql, canvasId: string, projectId: string, planJobId: string, plan: Pick<Plan, "completion">,
   budget: EvidenceReadBudget = criterionEvidenceBudget(), cache = new Map<string, CriterionSource | null>(),
 ): Promise<CriterionProjection[]> {
   // Fetch the latest attestation per Fact/criterion, not only a convenient positive subset.

@@ -1,6 +1,9 @@
 .git
 .claude
+.pi
 .playwright-cli
+.pnpm-store
+Ctemp
 node_modules
 **/node_modules
 **/dist

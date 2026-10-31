@@ -2,6 +2,15 @@ import { createHash } from 'node:crypto';
 import { compareFindingFeatures, EXTRACTOR_VERSION, extractFindingFeatures, IDENTITY_FIELDS,
   NORMALIZATION_VERSION, rankLexicalCandidates, RELATION_RULE_VERSION, type RelationKind } from './model.js';
 import { parseOfflineDataset, RELATION_LABELS, type OfflineDataset, type OfflineSource } from './offline-evaluation-input.js';
+import { compareAuthoritativeIdentity, emptyIdentitySnapshot, identitySnapshotDigest, PLATFORM_IDENTITY_FIELDS,
+  STRONG_RELATION_QUALITY_GATE_STATUS, STRONG_RELATION_RULE_VERSION, type CurrentIdentitySnapshot } from './identity.js';
+
+export const STRONG_RELATION_QUALITY_REQUIREMENTS = {
+  independent_human_labels: 'required',
+  family_and_asset_disjoint_tuning_holdout: 'required',
+  thresholds_frozen_before_holdout: 'required',
+  authoritative_mapping_provenance: 'required',
+} as const;
 
 function canonical(value:unknown):unknown{
   if(Array.isArray(value))return value.map(canonical);
@@ -45,6 +54,34 @@ function features(source:OfflineSource){
     updated_at:'offline-declaration'});
 }
 
+function authoritativeSnapshot(source:OfflineSource):CurrentIdentitySnapshot{
+  const snapshot=emptyIdentitySnapshot(source.id,source.project_id);
+  for(const mapping of source.authoritative_identity_mappings??[]){
+    const field=mapping.field;
+    const valid=new Date(mapping.freshness_until).getTime()>Date.now();
+    snapshot.fields[field]={field,status:valid?'valid':'stale',identity_digest:valid?mapping.identity_digest:null,
+      authority_versions:[mapping.authority_version],mappings:[],invalid_mapping_count:valid?0:1};
+  }
+  snapshot.fingerprint=identitySnapshotDigest(snapshot);return snapshot;
+}
+
+function strongPrediction(left:OfflineSource,right:OfflineSource):ReturnType<typeof compareAuthoritativeIdentity>{
+  return compareAuthoritativeIdentity(authoritativeSnapshot(left),authoritativeSnapshot(right));
+}
+
+function strongQualityGate(dataset:OfflineDataset){
+  return {status:STRONG_RELATION_QUALITY_GATE_STATUS,published:false,
+    independent_human_labels_verified:false,family_asset_split_verified:false,
+    thresholds_frozen_before_holdout:false,authoritative_mapping_provenance_verified:false,
+    missing_inputs:[
+      'independent human labels with provenance and adjudication',
+      'asset-disjoint and problem-family-disjoint tuning/holdout split',
+      'threshold record frozen before holdout inspection',
+      'independently verifiable platform identity source revisions',
+    ],
+    dataset_kind:dataset.dataset_kind,requirements:STRONG_RELATION_QUALITY_REQUIREMENTS};
+}
+
 /** Pure local simulation. Revalidation prevents callers from bypassing the import contract. */
 export function evaluateOfflineDataset(input:OfflineDataset){
   const dataset=parseOfflineDataset(JSON.stringify(input));
@@ -67,7 +104,9 @@ export function evaluateOfflineDataset(input:OfflineDataset){
   });
   const pairs=dataset.pairs.map(pair=>{
     const decision=compareFindingFeatures(projected.get(pair.left_id)!,projected.get(pair.right_id)!);
+    const strong=strongPrediction(byId.get(pair.left_id)!,byId.get(pair.right_id)!);
     return {...pair,split:byId.get(pair.left_id)!.split,prediction:decision.kind,reason:decision.reason,
+      strong_relation_prediction:strong.kind,strong_relation_reason:strong.reason,
       matched_fields:decision.matched_fields,left_retrieves_right:selected.get(pair.left_id)!.has(pair.right_id),
       right_retrieves_left:selected.get(pair.right_id)!.has(pair.left_id)};
   });
@@ -100,11 +139,13 @@ export function evaluateOfflineDataset(input:OfflineDataset){
     configuration_predeclaration_verified:false,independent_label_verification:false,split_group_truth_verified:false,
     production_k:25,production_scan:128,experimental_configuration:dataset.config.k!==25||dataset.config.scan_limit!==128,
     execution_plane:'offline_local_corpus_window_simulation',quality_gate_status:'not_assessed',
+    strong_relation_quality_gate:strongQualityGate(dataset),strong_relation_rule_version:STRONG_RELATION_RULE_VERSION,
     interpretation:'No SQL/live recall measurement, automatic parameter selection, relation clustering, or strong-relation quality certification.',
     canonicalization:'source/pair/annotator sorting, lowercase UUIDs, recursively sorted object keys; raw declaration text preserved',
     coverage:coverage(dataset.sources),
     identity_coverage:{provided_fields:coverage(dataset.sources).provided_identity_fields,
-      available_authoritative_mapping_fields:0,sources_with_authoritative_mapping:0},
+      available_authoritative_mapping_fields:PLATFORM_IDENTITY_FIELDS.filter(field=>dataset.sources.some(source=>source.authoritative_identity_mappings?.some(mapping=>mapping.field===field))).length,
+      sources_with_authoritative_mapping:dataset.sources.filter(source=>(source.authoritative_identity_mappings?.length??0)>0).length},
     sources:dataset.sources.map(row=>({id:row.id,project_id:row.project_id,job_id:row.job_id,split:row.split,revision:row.revision,
       digest:row.digest,input_digest:offlineDigest(row)})),splits,pairs,queries};
   return {...body,report_digest:offlineDigest(body)};

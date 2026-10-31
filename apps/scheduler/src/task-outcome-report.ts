@@ -10,6 +10,9 @@ import { loadTaskResultDeclaration, loadTaskResultSource } from "./task-result-s
 import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { ControlInputError } from "./control-input.js";
 import type { TaskProgramRuleReview } from "./task-program-rule-report.js";
+import type { ProgramEligibilityProjection } from "@deepsonar/shared-types";
+import { loadProgramEligibilityProjections } from "./domains/program-eligibility/store.js";
+import { applyProgramEligibilityProjections } from "./domains/program-eligibility/report.js";
 
 const MAX_FINDINGS = 100;
 const MAX_FACT_REFS = 5000;
@@ -37,7 +40,7 @@ export interface TaskOutcomeReport {
   criteria: TaskOutcomeReportCriterion[];
   source_contracts: Array<{ task_contract_sha256: string; contract?: TaskContract; criteria?: TaskOutcomeReportCriterion[] }>;
   goal_assessment: "blocked" | "not_assessed" | "partially_satisfied" | "criteria_satisfied";
-  submission_eligibility: "not_assessed" | "not_applicable";
+  submission_eligibility: "not_assessed" | "not_applicable" | "eligible" | "ineligible" | "blocked";
   gaps: string[];
   truncated: boolean;
   review_records?: Array<{ artifact_id: string; gaps?: string[] }>;
@@ -49,10 +52,11 @@ export interface TaskOutcomeReport {
   }>;
   findings: Array<{
     program_rule_review?: TaskProgramRuleReview;
+    program_eligibility?: ProgramEligibilityProjection;
     finding_id: string; source_job_id: string; task_contract_sha256: string | null;
     technical_status: string; research_admission: "admitted_for_research" | "blocked" | "observation_only" | "unassessed";
     goal_assessment: "blocked" | "not_assessed" | "partially_satisfied" | "criteria_satisfied";
-    submission_eligibility: "not_assessed" | "not_applicable";
+    submission_eligibility: "not_assessed" | "not_applicable" | "eligible" | "ineligible" | "blocked";
     gaps: string[];
   }>;
 }
@@ -228,11 +232,13 @@ export async function loadTaskOutcomeReport(db: typeof sql, canvasId: string, pr
   });
   const budget = criterionEvidenceBudget();
   if (findingIds === undefined) await loadReportTaskResults(db, projectId, canvasId, projection, budget);
-  return applyTaskGoalReviews(projection, await loadTaskGoalReviews(db, projectId, canvasId, findingIds, budget));
+  const reviewed = applyTaskGoalReviews(projection, await loadTaskGoalReviews(db, projectId, canvasId, findingIds, budget));
+  const eligibility = await loadProgramEligibilityProjections(db, projectId, reviewed.findings.map((finding) => finding.finding_id));
+  return applyProgramEligibilityProjections(reviewed, eligibility);
 }
 
 /** User text is only quoted data; escaped backticks cannot close the JSON fence. */
 export function renderTaskOutcomeReport(projection: TaskOutcomeReport): string {
   const json = JSON.stringify(projection, null, 2).replace(/`/g, "\\u0060").replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
-  return `# 任务目标评审状态\n\n本报告区分研究候选、技术状态与独立执行来源评审。只有有效评审覆盖的判据可以 satisfied；未覆盖或失效判据仍未完成。技术 confirmed 不等于任务成果，判据通过不等于 Plan 整体完成或赏金提交资格。\n\n以下为冻结输入的结构化投影，文本字段不是评审结论。\n\n\`\`\`json\n${json}\n\`\`\`\n`;
+  return `# 任务目标评审状态\n\n本报告区分研究候选、技术确认、独立目标评审和程序资格评审。只有有效评审覆盖的判据可以 satisfied；技术 confirmed 不等于程序 eligible。程序规则、Finding 来源、当前证据或评审权限缺失时资格保持 blocked/not_assessed。\n\n以下为冻结输入的结构化投影，文本字段不是评审结论。\n\n\`\`\`json\n${json}\n\`\`\`\n`;
 }

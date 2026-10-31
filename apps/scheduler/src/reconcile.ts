@@ -3,7 +3,12 @@ import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
-import { advanceCanvasAfterTerminalJob, lockCanvasForConvergence, recoverVerifyJobTerminal } from "./core.js";
+import {
+  advanceCanvasAfterTerminalJob,
+  advancePlanTaskAfterTerminalJob,
+  lockCanvasForConvergence,
+  recoverVerifyJobTerminal,
+} from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
@@ -180,6 +185,7 @@ async function closeOrphanJob(
     await tx`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+    await advancePlanTaskAfterTerminalJob(tx, jobId);
     if (job.type === "report") {
       await finalizeReportJob(tx, jobId, {
         failed: true,

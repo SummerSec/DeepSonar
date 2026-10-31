@@ -72,6 +72,20 @@ test("production Pi runner starts idle completion nudges with prompt once per tu
   assert.deepEqual(fake.processes[0]!.commands.map((record) => record.type), ["get_state", "prompt", "prompt"]);
 });
 
+test("production OM runner rejects a split extension loader error before any prompt", async () => {
+  const fake = host(() => new PiProcess((record, process) => {
+    process.queue.push({ type: "stderr", chunk: "Failed to load exten" },
+      { type: "stderr", chunk: "sion: PI_OM_CONFIG_IDENTITY_MISMATCH\n" });
+    if (record.type === "get_state") state(process, record);
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial",
+    piExtensions: ["/workspace/.deepsonar-home/.pi/agent/extensions/pi-observational-memory.ts"] });
+  assert.match(result.error ?? "", /PI_OM_EXTENSION_LOAD_FAILED/u);
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(fake.processes.length, 1);
+  assert.deepEqual(fake.processes[0]!.commands.map((record) => record.type), ["get_state"]);
+});
+
 test("production Pi runner resets failed attempt and verifies resumed identity before prompt", async () => {
   const fake = host((index) => new PiProcess((record, process) => {
     if (record.type === "get_state") state(process, record);

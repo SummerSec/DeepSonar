@@ -1,7 +1,7 @@
 import { loadPlanExecution } from "./execution-projection.js";
 import type { GraphQueryPayload } from "@deepsonar/shared-types";
 import type { sql } from "../../db.js";
-import { readPlanObjective } from "./objective.js";
+import { readPlanObjective, readPlanExecutionState } from "./objective.js";
 
 export interface PlanReadProof { projection_sha256:string; criterion_ids:string[] }
 export async function queryPlanGap(db:typeof sql,jobId:string,canvasId:string,input:GraphQueryPayload) {
@@ -16,13 +16,17 @@ export async function queryPlanGap(db:typeof sql,jobId:string,canvasId:string,in
       : {fact_id,available:false};
   });
   const [root]=await db`SELECT id FROM canvas_nodes WHERE canvas_id=${canvasId} AND node_type='root' ORDER BY id LIMIT 1`;
+  const [canvas] = objective.plan.v === 2 ? await db`SELECT target_json FROM canvases WHERE id=${canvasId}` : [];
   const more=offset+selected.length<objective.criteria.length;
   const omittedBindings=selected.reduce((sum,c)=>sum+Math.max(0,c.bindings.length-4),0);
   const omittedSources=Math.max(0,objective.sources.size-facts.length);
   return {
     items:[{plan_job_id:objective.planJobId,plan_sha256:objective.planSha,revision:objective.revision,
       task_input_sha256:objective.baseline,projection_sha256:objective.projectionSha,
-      goal:objective.plan.goal,stale_objective:objective.staleObjective,supplementation_remaining:objective.spent?0:1,
+      goal:objective.plan.goal,stale_objective:objective.staleObjective,supplementation_remaining:objective.plan.v === 1 ? 0 : null,
+      ...(objective.plan.v === 2 ? { protocol: 2, objective_id: objective.plan.objective_id,
+        objective_revision: objective.plan.objective_revision, route_revision: objective.plan.route_revision,
+        budget: objective.plan.budget, execution: readPlanExecutionState(canvas?.target_json) } : { historical: true }),
       required_criterion_count:objective.criteria.length,
       supplementation_execution:await loadPlanExecution(db,canvasId,objective.projectId,objective.planJobId,objective.planSha),
       criteria:selected.map(c=>({...c,bindings:c.bindings.slice(0,4).map(({binding,...state})=>({

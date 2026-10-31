@@ -47,6 +47,7 @@ import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index
 import { sql } from "./db.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
 import { executeGraphQuery, seedGraphQueryProjectedIds } from "./graph-query.js";
+import { readPersistedPlanObjective } from "./domains/plan-protocol/objective.js";
 import { parseFrozenFindingProtocol } from "./finding-protocol.js";
 import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import { listHubAgentCliCatalog, listHubProviderCatalog } from "./domains/project-agent-allowlist/index.js";
@@ -93,7 +94,12 @@ import { inc } from "./metrics.js";
 import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/canvas/human-messages.js";
 import { composeHubInstruction, composeScopeForPrompt, composeWorkerInstruction } from "./compose-scope.js";
 import { frozenTaskSeeds } from "./task-compose.js";
-import { materializeFrozenPiExtensions, parseFrozenPiExtensions } from "./pi-extensions.js";
+import {
+  materializeFrozenPiExtensions,
+  observationalMemoryConfig,
+  parseFrozenPiExtensions,
+} from "./pi-extensions.js";
+import { resolveObservationalMemoryBudget } from "./gateway-om-budget.js";
 import {
   assertPiSnapshotLaunchSelection,
   hasProviderSettingsConfig,
@@ -305,6 +311,8 @@ export function recordFirstSemanticDone<T>(state: { done: T | null }, proposal: 
 }
 
 export interface DeferredSemanticState {
+  /** Set only after a current v2 Plan operation commits through ingestion. */
+  executionPlan?: { eventId: string };
   done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
   hub: { eventId: string; payload: unknown } | null;
   human: { eventId: string; reason: string; subject: HumanPayload["subject"]; plan_basis?: HumanPayload["plan_basis"] } | null;
@@ -337,7 +345,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
   if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   const events: EventEnvelopeInput[] = [];
-  if (input.isHub) {
+  if (input.isHub && (state.hub || !state.executionPlan)) {
     const decision = input.hubDecision;
     if (!decision || !state.hub) throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
     if (decision.complete) {
@@ -714,9 +722,14 @@ export async function executeReal(
     : [];
   const availableHubRoleNames = new Set(availableHubRoleCatalog.map((role) => role.name));
   const [canvas] = canvasId
-    ? await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`
+    ? await sql`SELECT c.target_json
+        FROM jobs j
+        JOIN canvases c ON c.id = j.canvas_id AND c.project_id = j.project_id
+        WHERE j.id = ${jobId} AND j.canvas_id = ${canvasId} AND c.id = ${canvasId}`
     : [undefined];
+  if (canvasId && !canvas) throw new Error("JOB_CANVAS_PROJECT_SCOPE_MISMATCH");
   const taskTarget = ((canvas?.target_json ?? {}) as Record<string, unknown>);
+  const persistedPlanObjective = readPersistedPlanObjective(taskTarget);
   const effectiveFindingProtocol = parseFrozenFindingProtocol(taskTarget.effective_finding_protocol);
   if (!effectiveFindingProtocol) {
     throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
@@ -741,7 +754,17 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   let runtimeConfigFiles = snapshot.config_files.map((item) => ({ ...item }));
   let runtimeGatewayRouted = false;
   let gatewayToken: string | null = null;
+  let observationalMemoryGatewayToken: string | null = null;
   let activeCredentialProvider: string | null = null;
+  const frozenPiExtensions = provider === "pi" ? parseFrozenPiExtensions(snapshot.pi_extensions) : [];
+  const observationalMemory = provider === "pi" ? observationalMemoryConfig(frozenPiExtensions) : null;
+  const frozenKnobs = snapshot.runtime_knobs;
+  const observationalMemoryBudget = observationalMemory
+    ? resolveObservationalMemoryBudget({
+        config: observationalMemory,
+        jobTokenMaxRequests: frozenKnobs?.job_token_max_requests,
+      })
+    : null;
   for (const key of snapshot.env_keys) {
     if (!config.runtime.isEnvKeyAllowed(key)) {
       console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
@@ -766,7 +789,6 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       upstreamModel,
       settingsConfig: snapshot.settings_config_json,
     });
-    const frozenKnobs = snapshot.runtime_knobs;
     const jt = await mintJobToken({
       jobId: job.id as string,
       projectId: job.project_id as string,
@@ -774,9 +796,21 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       allowedModels: tokenModels,
       maxRequests: typeof frozenKnobs?.job_token_max_requests === "number" ? frozenKnobs.job_token_max_requests : undefined,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
+      workload: "main",
     });
     gatewayToken = jt.plaintext;
     registerJobEvidenceSecrets(jobId, [gatewayToken]);
+    if (observationalMemory) {
+      const omToken = await mintJobToken({
+        jobId: job.id as string,
+        projectId: job.project_id as string,
+        credentialId: cred.id as string,
+        ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
+        workload: "observational_memory",
+      });
+      observationalMemoryGatewayToken = omToken.plaintext;
+      registerJobEvidenceSecrets(jobId, [observationalMemoryGatewayToken]);
+    }
     env.DEEPSONAR_GATEWAY_TOKEN = gatewayToken;
     if (provider === "pi" && !materializedProviderConfig) {
       runtimeConfigFiles = materializeProviderSettings({
@@ -796,6 +830,9 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
         files: runtimeConfigFiles,
         gatewayBaseUrl: config.gateway.sandboxUrl,
         jobToken: jt.plaintext,
+        ...(observationalMemory
+          ? { observationalMemory: { config: observationalMemory, backgroundToken: observationalMemoryGatewayToken ?? "" } }
+          : {}),
       });
       for (const key of mapping.secretKeys) delete env[key];
       if (mapping.baseUrlKey) delete env[mapping.baseUrlKey];
@@ -834,6 +871,9 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   if (materializedProviderConfig && !runtimeGatewayRouted) {
     throw new Error("冻结的 Provider 配置无法绑定 Job Gateway");
   }
+  if (observationalMemory && !observationalMemoryGatewayToken) {
+    throw new Error("PI_OM_CREDENTIAL_REQUIRED");
+  }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
   if (platformApiDiscoveryUrl) Object.assign(env, platformCapability.env);
@@ -844,7 +884,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   if (isHub) env.DEEPSONAR_AVAILABLE_RUNTIME_IMAGES_JSON = JSON.stringify(availableRuntimeImageCatalog);
 
   const intent = (payload.intent ?? {}) as { description?: string; prompt?: string };
-  const taskGoal = String(taskTarget.goal ?? taskTarget.content ?? taskTarget.title ?? payload.goal ?? payload.content ?? "").trim();
+  const taskGoal = String(persistedPlanObjective?.goal ?? taskTarget.goal ?? taskTarget.content ?? taskTarget.title ?? payload.goal ?? payload.content ?? "").trim();
   const workerPrompt = String(intent.prompt ?? taskGoal).trim();
   // Hub/Worker/Verify/Report each receive a server-side graph projection.
   const isReport = snapshot.name === "report";
@@ -896,6 +936,7 @@ role 只能原样使用 list_available_roles 本轮返回的 name；不得使用
 runtime_image_key 只能原样使用 list_available_runtime_images 本轮返回且 readiness=ready 的 image_key，且须与该角色 CLI 兼容；目录之外或 CLI 不兼容会 invalid_runtime_image，未就绪会 runtime_image_not_ready。
 任务出网策略：${allowEgress ? "本任务允许访问外部网络（Hub 与 Worker 相同）" : "本任务禁止访问模型网关之外的网络（Hub 与 Worker 相同）"}。
 Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
+    initialInput = `Plan v2 first submit requirement: before any v2 submit_plan, call graph_query({kind:"plan_objective"}) and require a truncated=false response whose items[0] is the complete current user objective tuple. Submit plan.v=2; copy items[0].objective_id into plan.objective_id and revision.objective_id, copy items[0].revision into plan.objective_revision and revision.expected_objective_revision, and copy goal, completion, and budget unchanged into plan. The objective v=1, input_sha256, status, and updated_at are read metadata, not v2 Plan fields. If the read is unavailable, invalid, incomplete, or the graph-query budget is too small, stop or request_human; never guess, weaken, or replace the user objective. The YAML plan_objective value is only a bounded read handle, not the complete tuple.\n\n${initialInput}`;
     if (taskTarget.kind === "compose") {
       initialInput += `\n\n${composeHubInstruction()}`;
     }
@@ -1095,7 +1136,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   });
   const mcps = snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME);
   const piExtensionInjection = provider === "pi"
-    ? materializeFrozenPiExtensions(parseFrozenPiExtensions(snapshot.pi_extensions), allowEgress)
+    ? materializeFrozenPiExtensions(frozenPiExtensions, allowEgress, {
+        gatewayAvailable: !observationalMemory || observationalMemoryGatewayToken !== null,
+      })
     : { files: [], paths: [], injected: [], skipped: [] };
   const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
@@ -1121,6 +1164,21 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     provider_files: runtimeConfigFiles.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
     pi_extensions: piExtensionInjection.injected,
     pi_extensions_skipped: piExtensionInjection.skipped,
+    ...(observationalMemory ? {
+      observational_memory: {
+        schema: observationalMemory.schema,
+        package: observationalMemory.package,
+        version: observationalMemory.version,
+        integrity: observationalMemory.integrity,
+        source_provider: observationalMemory.source_provider,
+        source_model: observationalMemory.source_model,
+        model: observationalMemory.model,
+        workload_budget: observationalMemoryBudget,
+        passive: false,
+        showWorkerNotifications: false,
+        debugLog: false,
+      },
+    } : {}),
     provider_gateway_routed: runtimeGatewayRouted,
     system_tools: controlToolNames,
     disabled_system_tools: disabledControlToolNames,
@@ -1171,9 +1229,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
   for (const file of runtimeConfigFiles) {
     if (file.path.startsWith(".pi/agent/extensions/")) continue;
-    const target = provider === "pi" && file.path.startsWith(".pi/")
-      ? `/workspace/.deepsonar-home/${file.path}`
-      : `/workspace/${file.path}`;
+    const target = provider === "pi" && file.path === ".pi/settings.json"
+      ? "/workspace/.pi/settings.json"
+      : provider === "pi" && file.path.startsWith(".pi/")
+        ? `/workspace/.deepsonar-home/${file.path}`
+        : `/workspace/${file.path}`;
     workspaceFiles[target] = file.content;
   }
   for (const file of piExtensionInjection.files) {
@@ -1420,6 +1480,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     if (event.type === "plan" || event.type === "plan_result") {
       await ingestSemanticEventObserved(jobId, { ...event, payload: event.payload });
+      semanticState.executionPlan = { eventId };
       return;
     }
     if (planReservation && !(runtimeControl.planPhase === "commit" && event.event_id === planReservation.eventId && event.type === planReservation.type)

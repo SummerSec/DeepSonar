@@ -53,18 +53,35 @@ import {
 } from "./domains/hub-orchestration/index.js";
 import { parseFrozenFindingProtocol, resolveFindingProtocol, rewriteFindingProtocolMode } from "./finding-protocol.js";
 import { canonicalizeRoleRuntimeKnobsJson } from "./runtime-knobs.js";
+import {
+  targetAuthorizationRequired,
+  targetAuthorizationSnapshot,
+  recordTargetAuthorizationGrant,
+} from "./domains/target-authorization/index.js";
+import type { TargetAuthorizationSnapshot } from "./domains/target-authorization/contract.js";
 import * as findingVerification from "./verify.js";
 import * as reportConvergence from "./report.js";
-import { revokeJobTokens } from "./gateway.js";
+import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
+import {
+  advancePlanTaskAfterTerminal,
+  type PlanExecutionPorts,
+} from "./domains/plan-protocol/execution.js";
 
 const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
+
+let eventIngestionSideEffectApplication!: ReturnType<typeof createEventIngestionSideEffectApplication>;
+
+const planExecutionPorts: PlanExecutionPorts = {
+  materializePlanTask: (tx, input) =>
+    eventIngestionSideEffectApplication.materializePlanTask(tx, input),
+};
 
 /**
  * Atomic status transition.  A null result still means a race or illegal
@@ -97,7 +114,7 @@ export async function assertJobCanPublishSharedAsset(jobId: string, sandboxId: s
 
 // Event-ingestion owns append/dedup/sequence ordering. Semantic event writes
 // are composed through the event-ingestion bounded context's typed ports.
-const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
+eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
   findingVerification,
   // SAFETY: 以下四个适配器都把 postgres.js 事务句柄透传给同接口的 `sql` 实现。
   rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
@@ -111,6 +128,7 @@ const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplic
   insertEdgesIfAbsentBatch: async (tx, edges) => insertEdgesIfAbsentBatch(tx as Tx, edges),
   findingProtocolForJob: async (tx, job) => findingProtocolForJob(tx as Tx, job),
   finalizeJob: async (tx, jobId, status, result) => finalizeJob(tx as Tx, jobId, status, result),
+  planExecution: planExecutionPorts,
 });
 
 const eventIngestionApplication = createEventIngestionApplication(
@@ -882,6 +900,8 @@ export interface CreateJobInput {
   ingressKey?: string;
   /** Task/Job-level runtime profile overlay, frozen at Job creation. */
   runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null;
+  /** Secret-free Scheduler result from the trusted target authorization authority. */
+  targetAuthorization?: TargetAuthorizationSnapshot;
 }
 
 export const MAX_RELATED_FINDING_IDS = 8;
@@ -962,8 +982,21 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
         snapshotFindingIds,
         { runtimeProfile: input.runtimeProfile ?? null },
       ),
+      { trustedTargetAuthorization: input.targetAuthorization },
     ),
   );
+  const taskContract = snapshot.task_contract;
+  if (taskContract && targetAuthorizationRequired(taskContract)) {
+    const authorization = targetAuthorizationSnapshot((snapshot as unknown as Record<string, unknown>).target_authorization);
+    if (!authorization
+      || authorization.project_id !== input.projectId
+      || (input.targetAuthorization !== undefined && !targetAuthorizationSnapshot(input.targetAuthorization))) {
+      throw new Error("target authorization snapshot missing or does not match the frozen Job contract");
+    }
+    if (input.targetAuthorization !== undefined) {
+      await recordTargetAuthorizationGrant(tx as unknown as typeof sql, input.projectId, input.canvasId!, authorization);
+    }
+  }
   if (reviewRequest?.success) snapshot = await freezeGoalReviewAssignment(tx, input.projectId, input.canvasId!, snapshot, reviewRequest.data);
   return persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
 }
@@ -1385,10 +1418,14 @@ export async function finalizeJob(
     WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
 
   // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）
-  await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
-  await revokeJobCapabilityTokens(jobId, `job_${status}`).catch(() => {});
+  await revokeJobTokensInTransaction(tx, jobId, `job_${status}`);
+  await revokeJobCapabilityTokens(jobId, `job_${status}`, tx);
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  // Plan v2 child completion/recovery is derived from the same terminal
+  // transaction.  The driver only releases dependants from durable Job/
+  // Attempt/event output; it never trusts PlanResult text.
+  if (job) await advancePlanTaskAfterTerminal(tx, jobId, planExecutionPorts);
   // §13.1 指标：终态计数 + 时长
   // Canvas is already held as the outer lock for this terminal path. Verify
   // close/recovery and Hub eligibility take Finding/Round locks underneath it.
@@ -1470,6 +1507,11 @@ export async function finalizeJob(
     });
   }
   return true;
+}
+
+/** Shared terminal hook for lifecycle recovery paths that bypass finalizeJob. */
+export async function advancePlanTaskAfterTerminalJob(tx: Tx, jobId: string) {
+  return advancePlanTaskAfterTerminal(tx, jobId, planExecutionPorts);
 }
 
 /**

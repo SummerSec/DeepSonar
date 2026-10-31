@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PlanObjectivePatch } from "./domains/plan-protocol/objective.js";
 
 export const TASK_INTENT_TITLE_MAX = 200;
 export const TASK_INTENT_CONTENT_MAX = 20_000;
@@ -19,8 +20,10 @@ export const TASK_INTENT_SAVED_RUNNING =
 export const PatchTaskIntentBody = z.object({
   title: z.string().trim().min(1).max(TASK_INTENT_TITLE_MAX).optional(),
   content: z.string().trim().min(1).max(TASK_INTENT_CONTENT_MAX).optional(),
-}).refine((value) => value.title !== undefined || value.content !== undefined, {
-  message: "至少提供 title 或 content",
+  /** Authorized user-only objective CAS; Agent plan payloads cannot carry it. */
+  plan_objective: PlanObjectivePatch.optional(),
+}).refine((value) => value.title !== undefined || value.content !== undefined || value.plan_objective !== undefined, {
+  message: "至少提供 title、content 或 plan_objective",
 });
 
 export type TaskIntentPatch = z.infer<typeof PatchTaskIntentBody>;

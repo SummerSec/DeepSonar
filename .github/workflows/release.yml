@@ -756,6 +756,9 @@ jobs:
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
           SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Prepare hosted runner disk for Chrome Fuzz arm64
+        if: ${{ matrix.name == 'chrome-fuzz' && matrix.arch == 'arm64' && steps.resolve.outputs.skip != 'true' }}
+        run: node .github/ci/prepare-hosted-runner-disk.mjs
       - name: Record reused Chrome image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         run: |

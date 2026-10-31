@@ -27,6 +27,8 @@ import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-ad
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
+import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
+import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 
 
 export type ReasoningEffort = string;
@@ -415,7 +417,7 @@ async function readSandboxFileText(host: Pick<RuntimeHost, "run">, filePath: str
   const res = await host.run(`if [ -f ${q} ]; then cat ${q}; else exit 44; fi`, { timeoutMs: 15000 });
   if (res.exitCode === 44) return null;
   if (res.exitCode !== 0) {
-    throw new Error(`读取沙箱文件失败(exit=${res.exitCode}): ${res.stderr.slice(0, 200)}`);
+    throw new Error(`RUNTIME_FILE_READ_FAILED:${res.exitCode}`);
   }
   return res.stdout;
 }
@@ -425,7 +427,11 @@ const CLAUDE_DIR = `${RUNTIME_HOME}/.claude`;
 
 /** 系统拥有的可写 CLI 环境；不依赖镜像继承的 HOME（非 root 镜像常仍错误指向 /root）。 */
 export function runtimeCliEnv(env: Record<string, string>): Record<string, string> {
-  const { CLAUDE_CONFIG_DIR: _ignoredClaudeConfigDir, ...rest } = env;
+  const {
+    CLAUDE_CONFIG_DIR: _ignoredClaudeConfigDir,
+    PI_OBSERVATIONAL_MEMORY_PASSIVE: _ignoredObservationalMemoryPassive,
+    ...rest
+  } = env;
   return {
     ...rest,
     HOME: RUNTIME_HOME,
@@ -845,6 +851,10 @@ function redactSecretValues(value: string, secretValues: readonly string[]): str
   return redacted;
 }
 
+function redactRuntimeText(value: string, secretValues: readonly string[]): string {
+  return redactSecretValues(redactPiObservationalMemoryText(value), secretValues);
+}
+
 export const RUNTIME_STDERR_EVIDENCE_MAX_BYTES = 1024 * 1024;
 
 function utf8Prefix(value: string, maxBytes: number): string {
@@ -870,6 +880,7 @@ function utf8Prefix(value: string, maxBytes: number): string {
 export class BoundedRuntimeStderrEvidence {
   private readonly secrets: string[];
   private readonly maxSecretLength: number;
+  private readonly omTextRedactor?: PiObservationalMemoryTextRedactor;
   private pending = "";
   private capturedBytes = 0;
   private truncated = false;
@@ -878,24 +889,34 @@ export class BoundedRuntimeStderrEvidence {
     secretValues: readonly string[],
     private readonly emit: (event: Record<string, unknown>) => void,
     private readonly maxBytes = RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
+    observationalMemory = false,
   ) {
+    if (observationalMemory) this.omTextRedactor = new PiObservationalMemoryTextRedactor();
     this.secrets = [...new Set(secretValues.filter((entry) => entry.length > 0))]
       .sort((left, right) => right.length - left.length);
     this.maxSecretLength = this.secrets[0]?.length ?? 0;
   }
 
-  push(chunk: string): void {
-    if (!chunk || this.truncated) return;
-    this.pending += chunk;
-    this.flush(false);
+  push(chunk: string): string {
+    if (!chunk || this.truncated) return "";
+    this.pending += this.omTextRedactor?.push(chunk) ?? chunk;
+    return this.flush(false);
   }
 
-  finish(): void {
-    if (this.truncated) return;
-    this.flush(true);
+  finish(): string {
+    if (this.truncated) return "";
+    this.pending += this.omTextRedactor?.finish() ?? "";
+    return this.flush(true);
   }
 
-  private flush(final: boolean): void {
+  /** Flush a process-local partial line before calculating its terminal outcome. */
+  flushPending(): string {
+    if (this.truncated) return "";
+    this.pending += this.omTextRedactor?.finish() ?? "";
+    return this.flush(true);
+  }
+
+  private flush(final: boolean): string {
     let output = "";
     const requiredLookahead = Math.max(1, this.maxSecretLength);
     while (this.pending && (final || this.pending.length >= requiredLookahead)) {
@@ -909,11 +930,11 @@ export class BoundedRuntimeStderrEvidence {
       output += codePoint;
       this.pending = this.pending.slice(codePoint.length);
     }
-    this.emitBounded(output);
+    return this.emitBounded(output);
   }
 
-  private emitBounded(value: string): void {
-    if (!value || this.truncated) return;
+  private emitBounded(value: string): string {
+    if (!value || this.truncated) return "";
     const remaining = Math.max(0, this.maxBytes - this.capturedBytes);
     const captured = utf8Prefix(value, remaining);
     if (captured) {
@@ -930,12 +951,13 @@ export class BoundedRuntimeStderrEvidence {
         max_bytes: this.maxBytes,
       });
     }
+    return captured;
   }
 }
 
 /** Exact-value redaction that preserves result/session object shape and size. */
 function redactSecretsDeep(value: unknown, secretValues: readonly string[], seen = new WeakSet<object>()): unknown {
-  if (typeof value === "string") return redactSecretValues(value, secretValues);
+  if (typeof value === "string") return redactSecretValues(redactPiObservationalMemoryText(value), secretValues);
   if (!value || typeof value !== "object") return value;
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
@@ -947,7 +969,7 @@ function redactSecretsDeep(value: unknown, secretValues: readonly string[], seen
 
 /** Exact secret redaction for result files and archived CLI session bundles. */
 export function redactRuntimeSecrets(value: unknown, secretValues: readonly string[]): unknown {
-  return redactSecretsDeep(value, secretValues);
+  return redactSecretsDeep(redactPiObservationalMemory(value), secretValues);
 }
 
 /** Redact and bound ordinary tool telemetry before it crosses the runtime boundary. */
@@ -957,10 +979,11 @@ export function redactToolTelemetry(
   depth = 0,
   secretValues: readonly string[] = [],
 ): unknown {
+  value = redactPiObservationalMemory(value);
   if (key && SENSITIVE_TOOL_KEY.test(key)) return "[REDACTED]";
   if (depth > 5) return "[TRUNCATED]";
   if (typeof value === "string") {
-    return redactSecretValues(value, secretValues)
+    return redactSecretValues(redactPiObservationalMemoryText(value), secretValues)
       .replace(/\b(?:deepsonar_(?:prod|dev|user|job)_[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,})\b/gi, "[REDACTED]")
       .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
       .replace(/((?:api[-_]?key|token|secret|password|authorization|cookie)\s*[:=]\s*)(?!Bearer\b|Basic\b)([^\s,;]+)/gi, "$1[REDACTED]");
@@ -1122,6 +1145,10 @@ export function mapCliEvent(
   const semanticEvents: Array<Record<string, unknown>> = [];
   const warnings: Array<{ code: string; detail?: string }> = [];
   const type = line.type as string;
+  if (type === "runtime.diagnostic") {
+    emit(redactToolTelemetry(line, undefined, 0, secretValues) as Record<string, unknown>);
+    return { semanticEvents, warnings };
+  }
   if (type === "stream_event") {
     mapClaudeStreamEvent(line, emit, state, warnings);
     return { semanticEvents, warnings };
@@ -1436,9 +1463,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   const sessionResumeMessage = "上游请求暂时失败，请在当前会话中继续完成原任务，不要开启新会话；不要重复已成功的工具调用或副作用，只继续未完成的步骤。";
   const piOutput = new PiRpcOutputCapture(host, secretValues, spec.onRuntimeArtifact, (e) => spec.onEvent?.(e));
   let fatalOutputError: string | undefined;
+  const omEnabled = spec.provider === "pi" && Boolean(spec.piExtensions?.some((entry) => entry.endsWith("/pi-observational-memory.ts")));
   const stderrEvidence = new BoundedRuntimeStderrEvidence(
     secretValues,
     (event) => spec.onEvent?.(event),
+    RUNTIME_STDERR_EVIDENCE_MAX_BYTES,
+    omEnabled,
   );
   const bindObservedResumeIdentity = () => {
     if (!expectedContextIdentity || !sessionId) return;
@@ -1487,13 +1517,21 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       let resumedExec: typeof exec | undefined;
       let resumedInput: string | undefined;
       let processError: unknown;
+      let extensionLoadTail = "";
       const piFramer = spec.provider === "pi" ? new PiJsonlFramer(piRpcMaxEventBytes()) : undefined;
       try {
         for await (const chunk of exec) {
           if (chunk.type === "stderr") {
             const stderrChunk = chunk.chunk ?? "";
-            attemptStderrTail = (attemptStderrTail + stderrChunk).slice(-2000);
-            stderrEvidence.push(stderrChunk);
+            attemptStderrTail = (attemptStderrTail + stderrEvidence.push(stderrChunk)).slice(-2000);
+            if (omEnabled) {
+              extensionLoadTail += stderrChunk;
+              if (extensionLoadTail.includes("Failed to load extension:")) {
+                fatalOutputError = "PI_OM_EXTENSION_LOAD_FAILED";
+                throw new Error(fatalOutputError);
+              }
+              extensionLoadTail = extensionLoadTail.slice(-128);
+            }
             continue;
           }
           if (chunk.type === "exit") {
@@ -1579,7 +1617,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 }
               }, semanticToolState, secretValues);
               for (const warning of outcome.warnings) spec.onWarning?.(warning);
-              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "agent_settled", "agent_end"].includes(String(parsed.type))) {
+              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "agent_settled", "agent_end", "runtime.diagnostic"].includes(String(parsed.type))) {
                 spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
               }
               // 首次捕获后保持 session ID 不变；恢复进程只能继续原会话，不能把
@@ -1647,6 +1685,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           }
         }
       }
+      attemptStderrTail = (attemptStderrTail + stderrEvidence.flushPending()).slice(-2000);
       if (adapter.outputMode === "plain-final" && !processError) {
         const plainResult = normalizePlainFinalOutput(
           stdoutBuffer,
@@ -1779,7 +1818,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   for (const path of spec.resultFiles ?? []) {
     try {
       const text = await readSandboxFileText(host, path);
-      if (text !== null) files[path] = redactSecretValues(text, secretValues);
+      if (text !== null) files[path] = redactRuntimeText(text, secretValues);
     } catch {
       // 文件不存在 = agent 没写，容忍
     }
@@ -1813,20 +1852,20 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   }
 
   return {
-    text: redactSecretValues(finalText, secretValues),
+    text: redactRuntimeText(finalText, secretValues),
     files,
     session,
     ...(semanticError
-      ? { error: `语义事件处理失败: ${redactSecretValues(semanticError, secretValues)}` }
+      ? { error: `语义事件处理失败: ${redactRuntimeText(semanticError, secretValues)}` }
       : runError
-        ? { error: redactSecretValues(runError, secretValues) }
+        ? { error: redactRuntimeText(runError, secretValues) }
         : {}),
     ...(semanticError
       ? { errorKind: "semantic" as const }
       : runError
         ? { errorKind: "runner" as const }
         : {}),
-    ...(semanticErrorDetails ? { errorDetails: semanticErrorDetails } : {}),
+    ...(semanticErrorDetails ? { errorDetails: redactRuntimeSecrets(semanticErrorDetails, secretValues) as RuntimeErrorDetails } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
     ...(sessionFile ? { sessionFile } : {}),
   };

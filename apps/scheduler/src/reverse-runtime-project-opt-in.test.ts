@@ -16,16 +16,13 @@ import {
   parseRuntimeImageRegistry,
   selectRuntimeImageRef,
   toHubRuntimeImageCatalogEntry,
+  type RuntimeImageRegistryChannelEvidence,
 } from "./runtime-images.js";
 import { officialCatalogBackfillSql } from "./schema-rebuild.js";
 
 const schema = readFileSync(new URL("../../../database/schema.sql", import.meta.url), "utf8");
 const registryRaw = JSON.parse(readFileSync(new URL("../../../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
 const registry = parseRuntimeImageRegistry(registryRaw);
-
-/** v0.6.0 Release canonical multi-arch index for deepsonar-reverse (GHCR/Docker Hub/ACR). */
-const REVERSE_0_6_0_DIGEST = "sha256:fb2839c403b9a478b71eb64f2343b2edf787475be3ef280696b479319d591b4c";
-const BUILTIN_ACR_NAMESPACE = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const hubRoleId = "22222222-2222-4222-8222-222222222222";
@@ -180,42 +177,44 @@ test("readiness: project scope resolves reverse unless the project excluded it",
   assert.equal(check?.fix?.action, "runtime_images");
 });
 
-test("bundled reverse 0.6.0 digest binds official catalog admission (static-registry trusted)", () => {
+test("bundled current reverse digest binds official catalog admission (static-registry trusted)", () => {
   const reverse = registry.images.find((image) => image.image_key === "deepsonar-reverse");
   assert.ok(reverse, "bundled registry must include deepsonar-reverse");
   assert.equal(reverse.project_opt_in, true);
-  assert.equal(reverse.versions.length, 1, "v0.6.0 Release must have backfilled exactly one reverse version");
-  const version = reverse.versions[0]!;
-  assert.equal(version.version, "0.6.0");
-  assert.equal(version.digest, REVERSE_0_6_0_DIGEST);
+  assert.equal(typeof registry.platform_version, "string");
+  const version = reverse.versions.find((entry) => entry.version === registry.platform_version);
+  assert.ok(version, "bundled registry must include reverse for its published platform version");
+  const digest = version.digest;
+  assert.ok(typeof digest === "string");
+  assert.match(digest, /^sha256:[a-f0-9]{64}$/);
+  const acrRef = version.registry_refs?.["aliyun-acr"];
+  assert.ok(acrRef);
+  const acrNamespace = acrRef.slice(0, acrRef.lastIndexOf("/"));
   assert.deepEqual(version.platforms, ["linux/amd64", "linux/arm64"]);
   assert.equal(
     version.image_ref,
-    `ghcr.io/summersec/deepsonar-reverse@${REVERSE_0_6_0_DIGEST}`,
+    `ghcr.io/summersec/deepsonar-reverse@${digest}`,
   );
   assert.equal(
     version.registry_refs?.github,
-    `ghcr.io/summersec/deepsonar-reverse@${REVERSE_0_6_0_DIGEST}`,
+    `ghcr.io/summersec/deepsonar-reverse@${digest}`,
   );
   assert.equal(
     version.registry_refs?.dockerhub,
-    `docker.io/sumsec/deepsonar@${REVERSE_0_6_0_DIGEST}`,
+    `docker.io/sumsec/deepsonar@${digest}`,
   );
-  assert.equal(
-    version.registry_refs?.["aliyun-acr"],
-    `${BUILTIN_ACR_NAMESPACE}/deepsonar-reverse@${REVERSE_0_6_0_DIGEST}`,
-  );
+  assert.equal(acrRef, `${acrNamespace}/deepsonar-reverse@${digest}`);
   for (const channel of ["github", "dockerhub", "aliyun-acr"] as const) {
-    const evidence = version.registry_evidence?.[channel];
+    const evidence: RuntimeImageRegistryChannelEvidence | undefined = version.registry_evidence?.[channel];
     assert.ok(evidence, `${channel} registry_evidence required`);
     assert.equal(evidence.available, true, `${channel} must be available`);
-    assert.equal(evidence.inspect_digest, REVERSE_0_6_0_DIGEST, `${channel} inspect must match canonical digest`);
+    assert.equal(evidence.inspect_digest, digest, `${channel} inspect must match canonical digest`);
   }
   // applyOfficialRuntimeCatalog selects deployment ref then inserts trust_status=trusted
   // with scan_summary.source=static-registry (Release catalog digest is the trust root).
   assert.equal(selectRuntimeImageRef("deepsonar-reverse", version, ""), version.image_ref);
   assert.equal(
-    selectRuntimeImageRef("deepsonar-reverse", version, BUILTIN_ACR_NAMESPACE),
+    selectRuntimeImageRef("deepsonar-reverse", version, acrNamespace),
     version.registry_refs!["aliyun-acr"],
   );
   const admissionScanSummary = {

@@ -8,7 +8,25 @@ import {
   sessionHasTokenUsage,
   sessionLedgerTurnCount,
   sessionViewerWorkspaceMode,
+  sessionViewerSafeText,
 } from "./sessionViewerModel";
+import { parseAgentSession } from "./parseAgentSession";
+
+test("viewer timeline, inspector and raw projection all remove actual OM recall details", () => {
+  const privateText = "private OM source canary";
+  const text = JSON.stringify({ type: "message", id: "recall-1", message: {
+    role: "toolResult", toolName: "recall", toolCallId: "call-1",
+    content: [{ type: "text", text: privateText }], details: { memoryId: "abcdef123456", status: "ok",
+      sourceEntries: [{ id: "source-1", content: privateText }] },
+  } });
+  const safe = sessionViewerSafeText(text, "pi");
+  assert.doesNotMatch(safe, /private OM/u);
+  assert.match(safe, /source-1/u);
+  assert.doesNotMatch(JSON.stringify(parseAgentSession(safe, { cli: "pi" })), /private OM/u);
+  const native = JSON.stringify({ type: "compaction", summary: "ordinary native summary" });
+  assert.equal(sessionViewerSafeText(native, "pi"), native);
+  assert.equal(sessionViewerSafeText(text, "claude-code"), text);
+});
 
 const items = [
   { id: "u1", kind: "user", title: "用户", body: "检查登录入口" },
@@ -95,6 +113,26 @@ test("empty session and empty gateway produce no token usage", () => {
   assert.equal(usage.session.peakContext, null);
   assert.equal(usage.gateway, null);
   assert.equal(sessionHasTokenUsage(usage), false);
+});
+
+test("keeps observational-memory gateway usage in an independent workload bucket", () => {
+  const usage = buildSessionTokenUsage([], [
+    {
+      request_no: 1,
+      provider: "openai",
+      model: "memory-model",
+      input_tokens: 4,
+      output_tokens: 6,
+      total_tokens: 10,
+      settlement_status: "settled",
+      workload: "observational_memory",
+    },
+  ]);
+  assert.equal(usage.gateway?.total, 10);
+  assert.equal(usage.gateway?.workloads.main.requests, 0);
+  assert.equal(usage.gateway?.workloads.observational_memory.requests, 1);
+  assert.equal(usage.gateway?.workloads.observational_memory.total, 10);
+  assert.equal(usage.gateway?.models[0]?.workload, "observational_memory");
 });
 
 test("session artifact labels distinguish main and subagent files", () => {

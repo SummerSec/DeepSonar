@@ -1,7 +1,7 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-10-22
+> 同步日期：2026-10-31
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 的 `platform` catalog 用于版本发现；发布路径还提供经 inspect 校验的平台 digest，宿主升级据此选择目标。原同 schema 路径保留，维护升级的身份隔离、候选库和受管节点路径已接线，不能由模块存在推定真实部署验收通过。
 
@@ -53,6 +53,16 @@ flowchart LR
 ```
 
 镜像准入按 `DEEPSONAR_COSIGN_*` 配置检查签名或 keyless identity/issuer、扫描结果、不可变摘要和运行时工具手册契约；未启用签名策略时，官方 catalog 可记录 `signature: skipped`，这不等于已完成签名验证。第三方镜像的 critical/secret 扫描失败会阻止信任；官方镜像的结果也会记录和告警。`image-admission` 直接拉取并检查 Registry，然后把 digest、扫描和 trust 状态写入 PostgreSQL；Scheduler 读取这些管理表，创建 Job 时把可用镜像选择冻结。Agent、Hub、导入包和任意管理文本不能提交新的 OCI 源。实现参考 [`trust-policy.ts`](../../apps/image-admission/src/trust-policy.ts)、[`cosign-verify.ts`](../../apps/image-admission/src/cosign-verify.ts) 和 [`runtime-manual-contract`](../../packages/runtime-manual-contract/src/index.ts)。
+
+## Pi 扩展部署与观测内存准入（#815）
+
+Pi 扩展不是沙箱在启动时从项目目录发现的插件。准入发布物预装在镜像的 `/opt/deepsonar/pi-extensions/node_modules`，Scheduler 从 Job 冻结的 registry row 物化 `.pi/agent/extensions/<id>.ts` stub，并以 `--no-extensions` 加显式 `-e` 启动。当前 OM wrapper 位于 `/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts`，只加载固定的 `pi-observational-memory/src/index.ts`；`package`、`version`、`integrity`、entry、workspace path、wrapper fingerprint 和兼容镜像在 Job snapshot/manifest 侧重新校验，不能由 mutable tag、任务文本或 Agent 下载脚本改变运行时。
+
+当前根代码已注册并物化 `pi-observational-memory`：npm `3.1.4`、entry `src/index.ts`、integrity `sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==`，`requires_egress=false`、`requires_gateway=true`。包与 wrapper 已纳入 base/audit/Kali image inventory/Dockerfile 及 fingerprint 计算；镜像 key 兼容只表示候选，不证明旧 digest 含 OM，v0.6.2 的既有不可变镜像仍不能由 manifest key 推断含 OM。
+
+OM 的 observer/reflector/dropper/recall 模型调用只能经 Scheduler-owned Model Gateway，使用独立且可归因的 `observational_memory` workload credential；route/provider/model、thinking、阈值、memory pool、worker turns/tokens、`passive=false`、通知/debug 关闭和有限预算均冻结在 Job snapshot。没有显式有限 Job 总额时保持 unlimited；有限总额才要求显式 `total_requests`、`main_requests`、`background_requests` 分配，另有可选后台 request/token cap。请求数与 token/memory usage 分账，pending/unknown 按真实效果结算，终态撤销 token；known quota 或内核已证实的 never-started transport 可见降级，provider 5xx/error prose 不构成未开始 authority，协议/权限/未知外部效果硬失败。
+
+新 Job 的 OM 专属版本下限由 [shared registry](../../packages/shared-types/src/pi-extensions.ts) 声明，`freezePiExtensions` 从 Scheduler 选定的 `runtimeImage.image_version` 校验；缺失/非法/旧 metadata fail closed，非 OM/全局下限与历史快照不变。生产 [pi-memory-image-guard](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts) 在 Pi 启动/恢复及首个 prompt 前独立检查 canonical package/entry/wrapper。主线程实际构建的本地 base 镜像已通过内容预检、已安装真实插件 RPC 和缺包/缺 wrapper Docker 拒绝；完整身份、日志、场景及回归分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。该 image ID 不是已发布 OCI manifest/catalog digest，也不证明所有镜像/平台。历史 Session HTTP 脱敏和 Gateway transport/结算另有定向证据；最终组合 CI 与发布通道/平台、registry/catalog 仍另验。memory 不产生 Fact/Evidence authority 或跨 Job 读取，质量与成本收益保持 `unknown`。
 
 ## Mobile ASC 工具供应链（#754）
 
