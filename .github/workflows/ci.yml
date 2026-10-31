@@ -278,6 +278,9 @@ jobs:
       - name: Test wiring ratchet guard
         run: pnpm ci:unit:ci-test-hook
 
+      - name: File size ratchet guard
+        run: pnpm ci:unit:file-size
+
       - name: Authenticated report download web unit
         run: pnpm ci:unit:web-report-download
 
