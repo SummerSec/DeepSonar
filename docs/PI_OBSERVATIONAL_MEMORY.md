@@ -157,7 +157,7 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 ### 5.2 提议语义（待评审）
 
 1. **默认不限（已 as-built）**：请求数默认不限已在 main 落地（`usageLimit` 未设置即 0，[USAGE_LIMITS.md](USAGE_LIMITS.md)）；OM 必须沿用同一语义，不得隐式套用 500、16、32_000 或预留比例。token / 轮数同理只在显式配置时受限。协议大小、权限和防死循环保护不属于预算配额。
-2. **显式有限额度的主会话保底契约**：若管理员配置总请求数 `N > 0`，启用 OM 前必须书面选择并冻结可执行的主会话预留或后台隔离契约，D 片证明其在共享总账下仍有效。未选择契约不得启用 OM，不能将缺失预留 `R` 自动当作 0 后宣称保底，也不得偷偷补默认配额。预留方案要求显式 `0 < R ≤ N`，保证后台不能消耗尚未被主会话使用的预留；这不是主会话无限调用保证。后台隔离若仍共享有限总额，必须证明后台无法耗尽主会话承诺的份额，单有独立后台计数器不够。若选择比例预留，其示例值为 `R = min(N, max(ceil(N * 0.2), 20))`，不是默认策略。`N=1/19/20` 在该显式策略下后台额度为 0，`N=21` 为 1。`N=0`（现有不限哨兵）或未配置走 `unlimited` 分支，不做减法，也不因此要求有限额度契约；独立后台限额只有显式配置才生效。其他显式有限 token/成本总额同样必须说明主会话保底/隔离口径，不能借请求数不限绕过。
+2. **显式有限额度的主会话保底契约**：若管理员配置总请求数 `N > 0`，默认采用比例预留策略 `R = min(N, max(ceil(N * 0.2), 20))`，其中 `R` 为主会话预留、后台可用额度为 `max(0, N - R)`。该策略在 `N=1` 至 `N=20` 时后台额度为 0（OM 在有限总额下实际不启用后台模型调用），`N=21` 时后台额度为 1。管理员可在角色/项目配置中显式覆盖 `R`（覆盖值须满足 `0 < R ≤ N`）或选择"共享总额无保底"策略，但选择后者须书面确认撤回保底保证并记录审计。未配置有限总额（`N=0` 或未设置）走 `unlimited` 分支，不做减法，也不因此启用预留策略；独立后台限额只有显式配置才生效。其他显式有限 token/成本总额须同步说明主会话保底/隔离口径，不能借请求数不限绕过。
 3. **并发预留**：有限额度下在可信 Gateway/Job 锁内原子检查已用量与在途预留后再准入；主会话与后台共用总账，后台另受显式后台额度/主会话保底约束，计算时扣除主会话尚未使用的预留份额。不得用客户端读数先检查后递增；失败/取消按真实请求效果结算，未知用量不得当作零返还。无限额度不做配额拒绝，但继续记账与权限校验。请求数、token 与成本不得混用单位；调用前 token 上界及未知用量策略仍需 D 片证明。
 4. **超限降级可见**：后台额度耗尽跳过本轮 observe/reflect，记录 `skipped_budget_exhausted`；不得把后台耗尽冒充主会话失败。主会话自己达到显式总限额仍受限制。恢复、重试不得重置冻结额度或已有用量。
 5. **可信归因**：新增独立 workload 维度区分主会话与后台，身份必须由可信内核绑定并经 Gateway 校验；沙箱自报 header 不可信。保留现有结算 `source` 的 `gateway_response` / `gateway_stream` / `gateway_error` 语义，不能覆盖。独立 token/可信调用上下文的具体方案留 D 片评审，不能扩大 Job 权限或模型白名单；observer、reflector、dropper、fallback、compaction catch-up、retry 均覆盖同一鉴权、额度与归因规则。
@@ -280,7 +280,7 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 | 1 | 网络契约 | 分开表示业务出网与 Gateway 访问要求 | 准入仍须校验路由/凭据/模型许可，Gateway 可达 ≠ 授权 |
 | 2 | 调用边界 | 接受后台记忆需要模型调用；主动/passive/恢复 catch-up 全部经 Gateway 治理 | passive 不得作为免治理入口 |
 | 3 | 失败策略 | worker 失败可见、受控降级，不拖垮主任务 | 权限违规/协议损坏不得吞错或伪装成功 |
-| 4 | 预算 | 未配置不限，不隐式加预留；显式有限总额时主任务优先 | **具体数值/百分比未选 → 有限总额契约缺失时不得启用 OM（阻断项）** |
+| 4 | 预算 | 未配置不限，不隐式加预留；显式有限总额时默认比例预留 `R = min(N, max(ceil(N * 0.2), 20))`，N≤20 时后台额度为 0 | 共享总额无保底策略须书面确认撤回保证；token/成本维度保底口径仍待 D 片验证 |
 | 5 | 归因 | 后台用量单列且与总账可对账，由可信服务端绑定 | 独立 token / 可信调用上下文的实现留 D 片，不授权创建凭据或扩大权限 |
 | 6 | 压缩身份 | 沿用 DeepSonar 身份和追踪契约，不能表达时如实标 unknown | 暂不扩新 policy |
 | 7 | 模型 | 首版后台仅使用当前 Job 已冻结模型 | 不新增独立模型权限；放宽需 D 片单独评审 |
@@ -308,12 +308,12 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 | # | 结论 | 证据 |
 | --- | --- | --- |
 | S1 | om 自身**不发 HTTP**，模型请求只能经宿主 `streamSimple` → 支持 §4 的 `requires_gateway` 论证 | 全仓无 `fetch` / `undici` / `node:http` |
-| S2 | 子进程 `spawn` **只出现在剪贴板**，且只被 `om:view` 使用 → rpc 模式不受影响 | `src/clipboard.ts:1,49`、`src/commands/view.ts` |
-| S3 | 所有 UI 通知都同时受 `ctx.hasUI` 约束；`showWorkerNotifications` 只是额外开关，不是唯一门 | `runtime.ts:132,306,316-324`、`consolidation-trigger.ts:113,146` |
+| S2 | 子进程 `spawn` **只出现在剪贴板**，且只在 `om:view` 命令路径使用；但 `commands/view.ts` 存在直接 copy/notify 路径，无 `hasUI` guard，其在 `--mode rpc` 下的可达性**仍待验证** | `src/clipboard.ts:1,49`、`src/commands/view.ts:43-74` |
+| S3 | 多数 UI 通知受 `ctx.hasUI` 约束，但 `commands/view.ts:43-74` 存在直接 copy/notify 路径**无 `hasUI` guard**；`showWorkerNotifications` 只是额外开关，不是唯一门。rpc 模式下通知是否出现**仍待验证** | `runtime.ts:132,306,316-324`、`consolidation-trigger.ts:113,146`、`commands/view.ts:43-74` |
 | S4 | 后台 worker 错误被捕获并记录，**不向宿主抛出** | `runtime.ts:310-329` `launchTrackedTask` 全程 try/catch |
 | S5 | `passive` 只关闭 `agent_start` / `turn_end` 触发，**不关闭 `session_before_compact`** → passive 仍可能触发 catch-up 模型调用 | `compaction-trigger.ts:11`、`consolidation-trigger.ts:175` 有 passive 早退；`compaction-hook.ts` 无 |
 | S6 | 压缩 hook 在 summary 为空时**主动让出所有权**交回 pi 原生摘要，在并发压缩时返回 `{cancel:true}` | `compaction-hook.ts:26-45` |
-| S7 | memory 对会话正文的体积贡献受 `observationsPoolMaxTokens`（默认 20k）约束，不是无界增长 | `compaction-hook.ts:14-22`、`buildCompactionProjection` 参数 |
+| S7 | memory **活跃投影**受 `observationsPoolMaxTokens`（默认 20k）约束，不是无界增长；但 ledger 历史、recall 原始正文及其在 session/RPC 中的副本仍会持续累积 | `compaction-hook.ts:14-22`、`buildCompactionProjection` 参数 |
 | S8 | `recall` 的源正文**无法通过调用参数关闭**（参数只有 `id`，唯一调用点用默认 `true`） | `recall-observation.ts:126-141,291` |
 | S9 | 大帧 4 KiB 预览只覆盖固定 payload 键，`content` 不在其中；超限抛错不降级 | `pi-rpc-output.ts:4,6,60`、`runtime-agent.ts:1531-1532` |
 
@@ -328,12 +328,12 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 7. **配置覆盖隔离**：项目 `.pi/settings.json` 与环境变量覆盖链未隔离，也未证明冻结值不可覆盖。
 8. **额度与归因**：请求数默认不限已 as-built（[USAGE_LIMITS.md](USAGE_LIMITS.md)）；未验的是 om 后台 worker 是否确实走该额度与账本路径、后台开销是否在无限额度下仍可审计，以及 token/成本维度的保底/隔离契约与可信 workload 归因的具体方案。
 9. **后台请求量级**：上游默认轮数（16）不等于请求总量，fallback / catch-up / retry 也需计数；对上游限流的影响未测。
-10. **session 体积**：S7 给出 memory 部分的上界，但长 Job 下与 32 MiB 归档上限、`BLOB_DIR` 压边的实际余量未测。
+10. **session 体积**：S7 仅给出活跃投影的 20k 阈值，但 ledger 历史、recall 原始正文及其副本的长期累积，以及长 Job 下与 32 MiB 归档上限、`BLOB_DIR` 压边的实际余量未测。
 11. **质量收益**：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
 
 ## 10. A 片验收
 
-- **合并本 PR 仅收录待决设计草案，不构成 A 正式通过，也不授权启动 B。** §8.1 的 2026-10-31 设计取舍记录已选定 7 项方向，但该记录自述不是运行时验证；**有限总额保底契约的具体数值仍未选（阻断项）**。A 通过仍需明确写出结论并处理未决阻断项，不能把文档 review、CI 成功或合并状态当作该结论。
+- **合并本 PR 仅收录待决设计草案，不构成 A 正式通过，也不授权启动 B。** §8.1 的 2026-10-31 设计取舍记录已选定 7 项方向，其中决策 4 的默认比例预留数值 `R = min(N, max(ceil(N * 0.2), 20))` 已书面冻结，但该记录自述不是运行时验证；**token/成本维度保底口径、可信归因实现及实证门禁仍待 D 片完成**。A 通过须有明确书面结论，不能把文档 review、CI 成功或合并状态当作该结论。
 - 注册前必须完成 canonical 发布物来源、tarball integrity 与实际 entry 的核验；启用前必须完成固定宿主兼容、§6 RPC、配置隔离、额度/归因和 §3 数据出口验收。A 的设计决策通过不代替后续实证验收。
 - 若 A 否决则停止，**不注册、不预装、不启用**。只有 A 已通过并进入后续切片、E 再失败时，才可能已有预装产物；此时默认关闭并停止启用，不能以预装倒推通过 A。
 - `pnpm ci:unit:docs-freshness` 通过（版本字面量、命令存在性、链接、已删机制残留）。
