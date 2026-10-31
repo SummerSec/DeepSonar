@@ -190,7 +190,7 @@ FR-FIND-008 复用 `audit_logs` 保存程序材料准入、替代、撤销及操
 
 ## Plan v2 的目标、路线与执行投影（#775）
 
-`canvases.target_json.plan_objective` 保存用户 CAS 的 objective ID/revision、goal、CompletionPolicy、显式预算、输入 SHA 与状态；`plan_execution` 保存 owner、route revision、累计任务/轮次/无进展及停止原因，是 Scheduler 从持久来源维护的当前投影。修订不重置 lifetime 计数，不改写历史 Job/Attempt、事件或证据。
+`canvases.target_json.plan_objective` 保存用户 CAS 的 objective ID/revision、goal、CompletionPolicy、显式预算、输入 SHA 与状态；`plan_execution` 保存 owner、route revision、累计任务/轮次/无进展及停止原因，是 Scheduler 从持久来源维护的当前投影。`last_no_progress_result_event_id` 在首次可评估的 continue 结果消费前缺省；消费后保存现有 `events.id` 的精确正十进制字符串水位，经当前 owner/Canvas/项目和 PlanResult 身份校验，同一事件在回调或重启重建中不再消耗预算。活动或新 ready 工作延后消费，真正新事件仍计数。修订保留水位及 lifetime 计数，不改写历史 Job/Attempt、事件或证据；该字段不新增表、共享 Plan 契约或执行通道。
 
 当前 `submit_plan`/`submit_plan_result` 严格接收 v2，路线 CAS 绑定 objective/owner/revision/Plan SHA。owner 的 `payload_json.plan_protocol`、plan 语义事件、接纳 receipt、普通 Intent/Job 与 `payload_json.plan_context` 共同记录关联；不新增 Plan 执行表或第二队列。前驱输出来自事件/Artifact 的相同 `plan.output` 扩展、成功且当前的 Attempt 与实际留存 Evidence，并覆盖期望输出；关联不证明语义满足。
 

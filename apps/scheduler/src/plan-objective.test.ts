@@ -4,7 +4,9 @@ import {
   PlanExecutionState,
   PlanObjectivePatch,
   applyPlanObjectivePatch,
+  assessPlanNoProgress,
   readPersistedPlanObjective,
+  readPlanExecutionState,
 } from "./domains/plan-protocol/objective.js";
 
 const OBJECTIVE_PATCH = {
@@ -105,4 +107,54 @@ test("execution state is strict and restart-readable", () => {
   assert.deepEqual(PlanExecutionState.parse(state), state);
   assert.equal(PlanExecutionState.safeParse({ ...state, lifetime_tasks_dispatched: -1 }).success, false);
   assert.equal(PlanExecutionState.safeParse({ ...state, unexpected: true }).success, false);
+  assert.equal(PlanExecutionState.safeParse({ ...state, last_no_progress_result_event_id: "9007199254740993" }).success, true);
+  for (const invalid of [9007199254740992, "0", "-1", "01", "foreign-event"]) {
+    assert.equal(PlanExecutionState.safeParse({ ...state, last_no_progress_result_event_id: invalid }).success, false);
+  }
+});
+
+const idleExecutionState = () => PlanExecutionState.parse({
+  v: 1, objective_id: "11111111-1111-4111-8111-111111111111", objective_revision: "1",
+  plan_job_id: "22222222-2222-4222-8222-222222222222", route_revision: "1",
+  lifetime_tasks_dispatched: 1, lifetime_rounds: 1, no_progress_rounds: 0,
+  last_progress_at: "2026-10-31T00:00:00.000Z", stop_reason: null, stopped_at: null,
+});
+const idleSignal = { newRoute: false, progress: false, canAssessNoProgress: true,
+  continueResultEventId: "9007199254740992" };
+
+test("continue no-progress consumption survives replay/restart and distinguishes the next semantic event", () => {
+  const first = assessPlanNoProgress(idleExecutionState(), idleSignal);
+  assert.equal(first.noProgressSignal, true);
+  assert.equal(first.state.no_progress_rounds, 1);
+  assert.equal(first.state.last_no_progress_result_event_id, idleSignal.continueResultEventId);
+  const restarted = readPlanExecutionState(JSON.parse(JSON.stringify({ plan_execution: first.state })))!;
+  const replay = assessPlanNoProgress(restarted, idleSignal);
+  assert.equal(replay.noProgressSignal, false);
+  assert.deepEqual(replay.state, first.state);
+  const next = assessPlanNoProgress(replay.state, { ...idleSignal, continueResultEventId: "9007199254740993" });
+  assert.equal(next.noProgressSignal, true);
+  assert.equal(next.state.no_progress_rounds, 2);
+  assert.equal(next.state.last_no_progress_result_event_id, "9007199254740993");
+  assert.deepEqual(assessPlanNoProgress(next.state, idleSignal).state, next.state, "older result cannot regress the watermark");
+  assert.deepEqual(assessPlanNoProgress(next.state, { ...idleSignal, continueResultEventId: "9007199254740993" }).state, next.state);
+  assert.equal(next.state.lifetime_tasks_dispatched, 1);
+  assert.equal(next.state.lifetime_rounds, 1);
+});
+
+test("continue assessment defers active/ready work without resetting lifetime no-progress accounting", () => {
+  for (const signal of [{ ...idleSignal, canAssessNoProgress: false }, { ...idleSignal, progress: true }]) {
+    const deferred = assessPlanNoProgress(idleExecutionState(), signal);
+    assert.equal(deferred.noProgressSignal, false);
+    assert.deepEqual(deferred.state, idleExecutionState());
+    assert.equal(assessPlanNoProgress(deferred.state, idleSignal).state.no_progress_rounds, 1);
+  }
+  const first = assessPlanNoProgress(idleExecutionState(), idleSignal).state;
+  const rerouted = { ...first, objective_revision: "2", route_revision: "2",
+    plan_job_id: "33333333-3333-4333-8333-333333333333", lifetime_rounds: 2 };
+  const route = assessPlanNoProgress(rerouted, { ...idleSignal, newRoute: true, continueResultEventId: null });
+  assert.equal(route.state.no_progress_rounds, 2);
+  assert.equal(route.state.last_no_progress_result_event_id, first.last_no_progress_result_event_id);
+  assert.equal(assessPlanNoProgress(route.state, idleSignal).noProgressSignal, false);
+  const combined = assessPlanNoProgress(idleExecutionState(), { ...idleSignal, newRoute: true });
+  assert.equal(combined.state.no_progress_rounds, 1, "route and result are one assessment, not two charges");
 });

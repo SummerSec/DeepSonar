@@ -33,7 +33,7 @@ NFR-UX-001 的权威定义在 [DESIGN](../../DESIGN.md#核心理念优化人的�
 
 程序资格的工程闭环已经接入，但它是操作员对已登记材料和当前 Finding/Verify/Evidence 的可追溯见证；它不认证外部官方规则、站点所有权或自然人/模型之间的物理独立性，也不授予目标执行或自动提交权限。资格 `eligible`、技术 `confirmed` 和任务判据满足仍是不同状态，边界见 [FR-FIND-008](01-system-specification.md#fr-find-008-独立程序资格评审) 与 [ADR-0010](adr/0010-program-eligibility-authority.md)。
 
-#819 的身份 manifest、mapping 和强关系 worker 是已接线的工程机制，但质量门仍关闭：实现固定以源码中的 `STRONG_RELATIONS_PUBLISHED` 与 `STRONG_RELATION_QUALITY_GATE_STATUS` 为准（见 [`identity.ts`](../../apps/scheduler/src/domains/project-finding-research/identity.ts)），当前为 `false` 与 `not_evaluated`，管理读接口不暴露 suppressed relation。独立人工标签、按问题家族/资产隔离的调参集与留出集，以及查看留出结果前冻结的阈值尚未提供；因此不能把 CI、合成断言或操作员 attestation 写成强关系质量通过，也不发布生产建议。
+#819 的身份 manifest、mapping 和强关系 worker 是已接线的工程机制，但质量门仍关闭：实现固定以源码中的 `STRONG_RELATIONS_PUBLISHED` 与 `STRONG_RELATION_QUALITY_GATE_STATUS` 为准（见 [`identity.ts`](../../apps/scheduler/src/domains/project-finding-research/identity.ts)），当前为 `false` 与 `not_evaluated`，管理读接口不暴露 suppressed relation。SQL/public schema/read 仍结构性关闭发布，尚无受治理阈值预注册、独立评审、评估准入及晋升/撤销实现；仅补独立数据不能自动启用生产建议。独立人工标签、按问题家族/资产隔离的调参集与留出集，以及查看留出结果前冻结的阈值尚未提供；因此不能把 CI、合成断言或操作员 attestation 写成强关系质量通过，也不发布生产建议。
 
 2026-10-31 的最新根验证已通过完整 Finding Research 集成及其他分范围套件，分母与来源集中见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)，较早 runner 超时记录不再表示当前整套待验。#815 本地实际镜像 RPC、生产 guard 与请求前 transport/持久结算均有直接证据；schema rebuild/restore 也已完成。当前 PR 远端 CI、最终 main CI 和发布证据未完成，较早 `e23c3b4f` 的 CI 不能替代。#819 的独立质量输入仍缺失，不由工程通过数豁免。
 

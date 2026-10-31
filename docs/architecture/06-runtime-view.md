@@ -143,7 +143,7 @@ Plan 的 supplementation_execution 从已提交 continue 决策及完整 child/I
 
 本节“执行完成”专指 `plan_execution.stop_reason=complete` 和 objective `status=completed` 的工程投影：依赖输出条件已经满足，不授予任务语义完成。后续 Hub/Report 仍由 `criteriaAuthorizeCompletion` 和当前来源重验阻断未获操作员正向授权的收敛。
 
-授权用户通过 `PATCH /tasks/{canvasId}` 提交 `plan_objective.expected_revision` CAS，Scheduler 在 Canvas 行锁内保存目标 ID/revision、完整 CompletionPolicy、生命周期预算、输入 SHA 和状态。模型只能提交与当前用户目标恒等的 v2 Plan；`submit_plan` 必须带 `execution_route` CAS，目标 revision、路线 revision、Plan SHA 和已派发 task 的字节身份都要匹配。用户目标修订、路线重提或新 Idempotency-Key 不能重置已消耗的 lifetime task/round/no-progress 预算，也不能让旧目标 Job/Attempt 的输出成为新目标依赖。
+授权用户通过 `PATCH /tasks/{canvasId}` 提交 `plan_objective.expected_revision` CAS，Scheduler 在 Canvas 行锁内保存目标 ID/revision、完整 CompletionPolicy、生命周期预算、输入 SHA 和状态。模型只能提交与当前用户目标恒等的 v2 Plan；`submit_plan` 必须带 `execution_route` CAS，目标 revision、路线 revision、Plan SHA 和已派发 task 的字节身份都要匹配。用户目标修订、路线重提或新 Idempotency-Key 不能重置已消耗的 lifetime task/round/no-progress 预算，也不能让旧目标 Job/Attempt 的输出成为新目标依赖。已消费的 continue 结果用当前 owner/Canvas/项目及 Plan 身份一致的持久 semantic event 水位去重；活动/ready 工作延后评估，相同事件在 owner/child 回调和进程重建中不重计，新事件即使正文相同仍可计入下一轮。缺失或不一致的来源 fail closed，细节见 [Plan 专题](../PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。
 
 Scheduler 先对完整路线做 Hub Intent admission，再在同一 event-ingestion 事务中调用现有 Hub Intent materializer；任一延迟 task 越权或快照/镜像/CLI/Provider/model/Finding/Verify/网络/共享资产检查失败，整条提案拒绝，不留下部分 child Job。Plan v2 没有专属队列或第二执行通道，普通 Hub/Worker Job 仍使用既有 Job/Attempt 生命周期。
 

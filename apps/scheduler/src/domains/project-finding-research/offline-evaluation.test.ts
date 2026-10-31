@@ -18,6 +18,20 @@ function fixture():OfflineDataset{
       title:'中文 参数 注入',location:null,summary:'synthetic lexical claim',profile:'security.vulnerability',category:null})),
     pairs:[{left_id:uuid(0),right_id:uuid(1),label:'similar'},{left_id:uuid(2),right_id:uuid(3),label:'suspected_same_issue'}]};
 }
+function withStrongMappings(input:OfflineDataset):OfflineDataset{
+  const fields=['asset','tenant','environment','version','parameter','root_cause'] as const;
+  for(const source of input.sources)source.authoritative_identity_mappings=fields.map((field,index)=>({
+    field,identity_digest:`sha256:${['a','b','c','d','e','f'][index].repeat(64)}`,
+    authority_version:field==='root_cause'?'root-cause/v1':'inventory/v1',
+    source_revision:'rev-1',source_digest:`sha256:${'1'.repeat(64)}`,freshness_until:'2099-01-01T00:00:00.000Z',
+  }));
+  return input;
+}
+function tuningStrongFixture():OfflineDataset{
+  const input=withStrongMappings(fixture());
+  input.sources=input.sources.map(source=>({...source,split:'tuning' as const,asset_group:'asset-a',family_group:'family-a'}));
+  return input;
+}
 function reject(value:unknown,code:string){assert.throws(()=>parseOfflineDataset(JSON.stringify(value)),(error:unknown)=>error instanceof OfflineEvaluationError&&error.code===code);}
 test('strict deterministic normalized import and complete report hashes',()=>{
   const input=fixture(),report=evaluateOfflineDataset(input);
@@ -64,6 +78,124 @@ test('offline authoritative mappings are digest-only and never publish strong re
   assert.equal(report.strong_relation_quality_gate.published,false);
   assert.equal(report.strong_relation_quality_gate.status,'not_evaluated');
   assert.equal(report.pairs[0].strong_relation_prediction,'same_problem');
+});
+test('strong metrics canonicalize both same-issue labels without changing lexical metrics or quality gate',()=>{
+  const input=withStrongMappings(fixture());input.pairs[0].label='suspected_same_issue';input.pairs[1].label='same_problem';
+  const report=evaluateOfflineDataset(input);
+  for(const split of ['tuning','holdout']){
+    const metrics=report.splits[split].strong_pair_rule_metrics;
+    assert.equal(metrics.observations,1);assert.equal(metrics.scored_observations,1);
+    assert.deepEqual(metrics.per_class.same_problem.precision,{numerator:1,denominator:1,value:1});
+    assert.deepEqual(metrics.per_class.same_problem.recall,{numerator:1,denominator:1,value:1});
+    assert.equal(metrics.label_mapping.suspected_same_issue,'same_problem');
+    assert.equal(metrics.label_mapping.same_problem,'same_problem');
+    assert.equal(metrics.confusion_matrix.same_problem.same_problem,1);
+    assert.equal(metrics.execution_plane,'offline_caller_declared_identity_pair_comparison');
+  }
+  assert.equal(report.splits.tuning.pair_rule_metrics.per_class.suspected_same_issue.false_negative,1);
+  assert.equal(report.pairs[0].prediction,'similar');assert.equal(report.pairs[0].strong_relation_prediction,'same_problem');
+  assert.equal(report.versions.strong_metric,'offline-strong-metrics/v1');
+  assert.equal(report.strong_relation_quality_gate.status,'not_evaluated');assert.equal(report.strong_relation_quality_gate.published,false);
+  const permuted=structuredClone(input);permuted.sources.reverse();permuted.pairs.reverse();
+  for(const pair of permuted.pairs)[pair.left_id,pair.right_id]=[pair.right_id,pair.left_id];
+  assert.deepEqual(report,evaluateOfflineDataset(permuted));
+  const {report_digest,...body}=report;assert.equal(report_digest,offlineDigest(body));
+});
+test('strong precision and recall count genuine false positives and false negatives independently of lexical matches',()=>{
+  const input=tuningStrongFixture();
+  input.pairs=[{left_id:uuid(0),right_id:uuid(1),label:'suspected_same_issue'},
+    {left_id:uuid(0),right_id:uuid(2),label:'distinct'},{left_id:uuid(0),right_id:uuid(3),label:'same_problem'}];
+  input.sources[3].authoritative_identity_mappings!.find(row=>row.field==='root_cause')!.identity_digest=`sha256:${'2'.repeat(64)}`;
+  const report=evaluateOfflineDataset(input),metrics=report.splits.tuning.strong_pair_rule_metrics;
+  assert.equal(metrics.scored_observations,3);
+  assert.deepEqual(metrics.per_class.same_problem,{true_positive:1,false_positive:1,false_negative:1,
+    precision:{numerator:1,denominator:2,value:0.5},recall:{numerator:1,denominator:2,value:0.5}});
+  assert.equal(metrics.confusion_matrix.distinct.same_problem,1);assert.equal(metrics.confusion_matrix.same_problem.distinct,1);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.per_class.same_problem.true_positive,2);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.per_class.same_problem.false_positive,2);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.per_class.same_problem.false_negative,2);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.per_class.same_problem.recall.value,0.5);
+});
+test('strong root-cause continuation and explicit distinct labels retain separate classes',()=>{
+  const input=withStrongMappings(fixture());input.pairs[0].label='same_root_cause_different_instance';input.pairs[1].label='distinct';
+  input.sources[1].authoritative_identity_mappings!.find(row=>row.field==='version')!.identity_digest=`sha256:${'2'.repeat(64)}`;
+  input.sources[3].authoritative_identity_mappings!.find(row=>row.field==='root_cause')!.identity_digest=`sha256:${'2'.repeat(64)}`;
+  const report=evaluateOfflineDataset(input);
+  assert.equal(report.pairs[0].strong_relation_prediction,'same_root_cause_different_instance');
+  assert.equal(report.pairs[1].strong_relation_prediction,'distinct');
+  assert.equal(report.splits.tuning.strong_pair_rule_metrics.per_class.same_root_cause_different_instance.true_positive,1);
+  assert.equal(report.splits.tuning.strong_pair_rule_metrics.per_class.same_root_cause_different_instance.precision.value,1);
+  assert.equal(report.splits.tuning.strong_pair_rule_metrics.per_class.same_problem.recall.value,null);
+  assert.equal(report.splits.holdout.strong_pair_rule_metrics.per_class.distinct.true_positive,1);
+});
+test('strong metrics preserve missing and weak or insufficient labels outside scored denominators',()=>{
+  const input=tuningStrongFixture();
+  input.pairs=[{left_id:uuid(0),right_id:uuid(1),label:null},{left_id:uuid(0),right_id:uuid(2),label:'similar'},
+    {left_id:uuid(0),right_id:uuid(3),label:'insufficient_information'},{left_id:uuid(1),right_id:uuid(2),label:'distinct'}];
+  const report=evaluateOfflineDataset(input),metrics=report.splits.tuning.strong_pair_rule_metrics;
+  assert.equal(metrics.observations,4);assert.equal(metrics.labeled_observations,3);assert.equal(metrics.scored_observations,1);
+  assert.equal(metrics.missing_labels,1);assert.equal(metrics.ambiguous_labels,2);assert.equal(metrics.weak_similarity_labels,1);
+  assert.equal(metrics.labeled_insufficient,1);assert.equal(metrics.predicted_strong_with_missing_label,1);
+  assert.equal(metrics.predicted_strong_with_ambiguous_label,2);
+  assert.equal(metrics.per_class.same_problem.false_positive,1);
+  assert.deepEqual(metrics.per_class.same_problem.precision,{numerator:0,denominator:1,value:0});
+  assert.deepEqual(metrics.per_class.same_problem.recall,{numerator:0,denominator:0,value:null});
+  assert.equal(metrics.confusion_matrix.missing_label.same_problem,1);
+  assert.equal(metrics.confusion_matrix.ambiguous_weak_similarity.same_problem,1);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.missing_labels,2);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.ambiguous_labels,4);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.candidate_recall_at_k.value,null);
+  assert.equal(report.splits.tuning.strong_candidate_pipeline_metrics.retrieved_without_pair_label,4);
+});
+test('empty or entirely unknown strong populations never manufacture precision or recall',()=>{
+  const input=withStrongMappings(fixture());input.pairs[0].label='similar';input.pairs[1].label=null;
+  const report=evaluateOfflineDataset(input);
+  for(const split of ['tuning','holdout']){
+    const metrics=report.splits[split].strong_pair_rule_metrics;
+    assert.equal(metrics.scored_observations,0);assert.equal(metrics.accuracy.value,null);
+    assert.equal(metrics.per_class.same_problem.precision.value,null);assert.equal(metrics.per_class.same_problem.recall.value,null);
+    assert.equal(report.splits[split].strong_candidate_pipeline_metrics.candidate_recall_at_k.value,null);
+  }
+  input.pairs=[];const empty=evaluateOfflineDataset(input).splits.tuning.strong_pair_rule_metrics;
+  assert.equal(empty.observations,0);assert.equal(empty.missing_label_rate.value,null);assert.equal(empty.ambiguous_label_rate.value,null);
+});
+test('missing and stale identity mappings count as strong abstentions and positive false negatives',()=>{
+  const input=withStrongMappings(fixture());input.pairs[0].label='same_problem';input.pairs[1].label='same_problem';
+  input.sources[0].authoritative_identity_mappings=input.sources[0].authoritative_identity_mappings!.filter(row=>row.field!=='root_cause');
+  for(const mapping of input.sources[2].authoritative_identity_mappings!)mapping.freshness_until='2000-01-01T00:00:00.000Z';
+  const report=evaluateOfflineDataset(input);
+  for(const split of ['tuning','holdout']){
+    const metrics=report.splits[split].strong_pair_rule_metrics;
+    assert.equal(metrics.predicted_insufficient,1);assert.equal(metrics.per_class.same_problem.false_negative,1);
+    assert.equal(metrics.per_class.same_problem.recall.value,0);assert.equal(metrics.per_class.same_problem.precision.value,null);
+    assert.equal(metrics.confusion_matrix.same_problem.insufficient_information,1);
+  }
+  assert.ok(report.pairs.every(pair=>pair.strong_relation_prediction==='insufficient_information'));
+});
+test('strong pipeline includes both same-issue label aliases and lexical-window misses in its denominator',()=>{
+  const input=withStrongMappings(fixture());input.pairs[0].label='same_problem';input.pairs[1].label='suspected_same_issue';input.config.scan_limit=1;
+  const report=evaluateOfflineDataset(input);
+  for(const split of ['tuning','holdout']){
+    const direct=report.splits[split].strong_pair_rule_metrics,pipeline=report.splits[split].strong_candidate_pipeline_metrics;
+    assert.equal(direct.per_class.same_problem.recall.value,1);
+    assert.equal(pipeline.observations,2);assert.equal(pipeline.scored_observations,2);
+    assert.deepEqual(pipeline.candidate_recall_at_k,{numerator:1,denominator:2,value:0.5});
+    assert.equal(pipeline.per_class.same_problem.true_positive,1);assert.equal(pipeline.per_class.same_problem.false_negative,1);
+    assert.equal(pipeline.per_class.same_problem.recall.value,0.5);assert.equal(pipeline.not_retrieved,1);
+    assert.equal(pipeline.not_retrieved_positive,1);assert.equal(pipeline.confusion_matrix.same_problem.not_retrieved,1);
+    assert.equal(pipeline.execution_plane,'offline_local_lexical_corpus_window_then_identity_comparison');
+    assert.ok(pipeline.retrieval_scope.includes('not SQL identity/root-cause worker'));
+  }
+  assert.equal(report.splits.tuning.candidate_pipeline_metrics.candidate_recall_at_k.value,null,'existing lexical label population is unchanged');
+});
+test('strong direct identity matches can remain entirely unretrieved by lexical simulation',()=>{
+  const input=withStrongMappings(fixture());input.pairs[0].label='same_problem';
+  input.sources[1].title='unrelated zzz';input.sources[1].summary=null;
+  const report=evaluateOfflineDataset(input),direct=report.splits.tuning.strong_pair_rule_metrics,pipeline=report.splits.tuning.strong_candidate_pipeline_metrics;
+  assert.equal(direct.per_class.same_problem.true_positive,1);assert.equal(direct.per_class.same_problem.recall.value,1);
+  assert.equal(pipeline.candidate_recall_at_k.value,0);assert.equal(pipeline.not_retrieved_positive,2);
+  assert.equal(pipeline.per_class.same_problem.false_negative,2);assert.equal(pipeline.per_class.same_problem.recall.value,0);
+  assert.equal(pipeline.per_class.same_problem.precision.value,null);
 });
 test('explicit null labels and absent pair labels never become negative examples',()=>{
   const input=fixture();input.pairs[0].label=null;

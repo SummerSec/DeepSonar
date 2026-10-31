@@ -101,7 +101,9 @@ v2 `submit_plan` 必须携带 `execution_route` revision，显式绑定 `plan_jo
 
 每次 Plan owner 或 child Job 终态，以及取消、Reaper、Reconcile 和镜像撤销等生命周期收口路径，都会在原有事务内重建当前状态；重启不依赖进程缓存。旧目标 revision 的 child 回调只能释放其占用的并发槽位，不能用旧输出满足新依赖或完成新目标。历史记录不改写，历史 unknown effect 仍 fail closed。后继任务被撤权时，savepoint 原子撤销整批新派发并持久停止，不回滚前置 Job 已证明的终态成功。
 
-Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 控制生命周期。活动 Job 存在时不误判无进展；路线或目标真正变化且无可派发进展时累计无进展轮；达到预算、无进展、依赖失败、缺失结构化输出、任务终态失败或 unknown external effect 时持久写入停止原因。仅所有当前 task 的权威输出齐全，并满足当前 CompletionPolicy 的 positive authority，才可写入 `complete`；模型 `PlanResult.complete` 不能替代 Worker 输出、Verify 门或报告门。
+Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 控制生命周期。活动 Job 存在时不误判无进展；路线或目标真正变化且无可派发进展时累计无进展轮。持久 `continue` 结果只在没有活动 Job、没有新 ready task 时消费：Scheduler 从当前 owner、Canvas/项目和 objective/route/Plan SHA 严格一致的 `plan_result` 事件解析身份，以精确十进制字符串保存 `plan_execution.last_no_progress_result_event_id` 水位，不经 JavaScript number 转换。相同事件在 owner/child 终态、重复回调或重启重建中不再计数；新事件即使正文相同仍计入下一轮。水位随 lifetime 计数保留，目标 CAS、路线或 owner 变化不能重置；缺失、外域或与当前 audit 不一致的来源 fail closed。达到预算、无进展、依赖失败、缺失结构化输出、任务终态失败或 unknown external effect 时持久写入停止原因。仅所有当前 task 的权威输出齐全，并满足当前 CompletionPolicy 的 positive authority，才可写入 `complete`；模型 `PlanResult.complete` 不能替代 Worker 输出、Verify 门或报告门。
+
+2026-10-31 本地 `ci:unit:plan-protocol` 通过含重启投影、超出 number 精确范围的相邻事件 ID、活动/ready 延后评估及生命周期不重置的单元回归。`plan-execution-stops.integration.test.ts` 已接线真实 SQL/HTTP、owner/child 回调及独立 Node 进程重建回归；本地没有 `TEST_DATABASE_URL`，新增 SQL 场景尚未执行，必须由最终提交的 CI 核验，不能将跳过写成通过。
 
 当前 v2 接口、数据库链路和 fake-worker 夹具位于 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/`、`apps/scheduler/src/domains/event-ingestion/side-effects.ts` 及 `plan-execution*.integration.test.ts`。bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；这只是该 fixture 的方法和结果，不是通用首提案/route 约束。本地回放分项结果见下方[冻结离线回放](#冻结离线回放)；`artifacts/plan-replay/report.json` 的 passed/provenance 为 dirty 的非 HEAD 提交，不能写成 `5619154f` 精确最终验收，也不能把它表述为 17 个独立测试；最终组合 CI 仍待核对。真实模型、生产部署和人工语义质量仍未验证。
 

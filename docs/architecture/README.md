@@ -10,12 +10,12 @@
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
 
 
-#770 A 来源幂等与不可变历史对应 FR-FIND-002；#819 操作员见证身份 manifest/mapping CAS、有界一致查询及持久关系计算对应 FR-FIND-009 与 [ADR 0014](adr/0014-operator-finding-identity.md)。工程已接线，独立外部官方真实性未认证；真实标签、家族/资产隔离调参/留出及预冻结阈值缺失，强关系质量和生产建议未交付。见[数据架构](08-data-architecture.md)、[质量属性](04-quality-attributes.md)及[风险](12-risks-and-tech-debt.md)。
+#770 A 来源幂等与不可变历史对应 FR-FIND-002；#819 操作员见证身份 manifest/mapping CAS、有界一致查询及持久关系计算对应 FR-FIND-009 与 [ADR 0014](adr/0014-operator-finding-identity.md)。工程已接线，独立外部官方真实性未认证；受治理质量评估/独立评审/晋升撤销与公开发布路径尚缺，真实标签、家族/资产隔离调参/留出及预冻结阈值也缺失，强关系质量和生产建议未交付。见[数据架构](08-data-architecture.md)、[质量属性](04-quality-attributes.md)及[风险](12-risks-and-tech-debt.md)。
 
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；可选自由文本、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
-研究候选完整性、目标判据、技术 Verify、独立程序资格及 Plan 完成 authority 分层；admitted_for_research 不表示完成或 eligible，无契约仍 unassessed。#767 可信只读 authority/grant 继承及实时重核见 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)与 [ADR 0011](adr/0011-trusted-target-authorization.md)。#775 当前 v2 objective CAS、lifetime 预算、多轮依赖任务复用 Hub Intent admission，输出关联只证明工程来源，见 [FR-CAP-006](01-system-specification.md#fr-cap-006-plan-协议的当前边界)和 [ADR 0012](adr/0012-plan-v2-execution.md)；普通 Hub 的 v1 writer 已于 2026-10-31 物理删除，immutable v1 audit 仍可读；本地 normal→all7negative→normal 与七故障门禁已核验，但 report provenance 不是当前 HEAD，最终组合 CI 仍待验。
+研究候选完整性、目标判据、技术 Verify、独立程序资格及 Plan 完成 authority 分层；admitted_for_research 不表示完成或 eligible，无契约仍 unassessed。#767 可信只读 authority/grant 继承及实时重核见 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)与 [ADR 0011](adr/0011-trusted-target-authorization.md)。#775 当前 v2 objective CAS、lifetime 预算、多轮依赖任务复用 Hub Intent admission，持久 continue 事件消费水位避免回调/重启重计，新增单元已验、SQL 回归最终 CI 待验，输出关联只证明工程来源，见 [FR-CAP-006](01-system-specification.md#fr-cap-006-plan-协议的当前边界)和 [ADR 0012](adr/0012-plan-v2-execution.md)；普通 Hub 的 v1 writer 已于 2026-10-31 物理删除，immutable v1 audit 仍可读；本地 normal→all7negative→normal 与七故障门禁已核验，但 report provenance 不是当前 HEAD，最终组合 CI 仍待验。
 
 #815 Pi 会话观测记忆的注册/冻结、Gateway workload/账本与 wrapper/RPC 工程已进入根工作树，见 FR-CAP-009 和 [ADR 0013](adr/0013-governed-pi-memory.md)。有限总额必须显式分配，不推导百分比。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及封装/OM 专属版本准入/适配器回归已通过，完整身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；历史 Session HTTP 脱敏与 Gateway 已知请求前 transport/持久结算、防冒充也已核验，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI、发布通道/平台及 registry/catalog 证据未完成，不能以本地 image ID 宣称发布或质量/成本收益。
 

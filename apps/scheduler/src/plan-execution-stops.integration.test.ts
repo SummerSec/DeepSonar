@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import test from "node:test";
 import { contentSha256 } from "./domains/plan-protocol/criterion-model.js";
 import { createPlanExecutionFixture, executionObjective } from "./plan-execution-test-fixture.js";
@@ -117,6 +119,98 @@ test("Plan v2 rejects unretained/mismatched outputs, unauthorized partial routes
       assert.equal(noReset.statusCode, 200, noReset.payload);
       assert.equal((await h.children(stalled.hub)).length, 1, "objective CAS cannot reset the consumed no-progress lifetime guard");
       assert.equal((await h.state(stalled.canvas)).plan_execution.stop_reason, "no_progress");
+    }
+
+    // The same persisted result must survive every terminal/restart rebuild.
+    const replayPatch = executionObjective(); replayPatch.completion.mode = "explicit_result";
+    const replayFixture = await h.fixture(replayPatch);
+    const replayPlan = h.proposal(replayFixture, [h.task("single", replayFixture.root)]);
+    assert.equal((await h.invoke(replayFixture.hub, "submit_plan", replayPlan)).statusCode, 200);
+    const replayChild = String((await h.children(replayFixture.hub))[0].id);
+    await h.emit(replayChild); await h.finish(replayChild);
+    const continueResult = { v: 2, objective_id: replayPlan.plan.objective_id, objective_revision: "1",
+      route_revision: "1", plan_sha256: contentSha256(replayPlan.plan), outcome: "continue",
+      summary: "No further task or output has been proposed" };
+    const resultKey = randomUUID();
+    const firstResult = await h.invoke(replayFixture.hub, "submit_plan_result", continueResult, resultKey);
+    assert.equal(firstResult.statusCode, 200, firstResult.payload);
+    const recorded = (await h.state(replayFixture.canvas)).plan_execution;
+    assert.equal(recorded.no_progress_rounds, 1); assert.equal(recorded.stop_reason, null);
+    assert.match(recorded.last_no_progress_result_event_id, /^[1-9][0-9]*$/);
+    assert.equal((await h.invoke(replayFixture.hub, "submit_plan_result", continueResult, resultKey)).statusCode, 200);
+    await h.sql.begin((tx) => h.core.advancePlanTaskAfterTerminalJob(tx as unknown as typeof h.sql, replayChild));
+    await h.finish(replayFixture.hub);
+    assert.deepEqual((await h.state(replayFixture.canvas)).plan_execution, recorded, "owner terminal must not spend the second round");
+    const eventsBefore = await h.sql`SELECT id::text,event_id,job_seq,attempt_id,type,payload_json,created_at
+      FROM events WHERE job_id=ANY(${[replayFixture.hub,replayChild]}::uuid[]) ORDER BY id`;
+    const jobsBefore = await h.children(replayFixture.hub);
+    const restartScript = `const {sql}=await import(${JSON.stringify(new URL("./db.ts", import.meta.url).href)});
+      const {advancePlanTaskAfterTerminalJob}=await import(${JSON.stringify(new URL("./core.ts", import.meta.url).href)});
+      try { for (const job of ${JSON.stringify([replayFixture.hub,replayChild])})
+        await sql.begin(tx=>advancePlanTaskAfterTerminalJob(tx,job)); }
+      finally { await sql.end({timeout:5}); }`;
+    await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", restartScript], { timeout: 30_000 });
+    for (const job of [replayFixture.hub, replayChild]) {
+      await h.sql.begin((tx) => h.core.advancePlanTaskAfterTerminalJob(tx as unknown as typeof h.sql, job));
+    }
+    assert.deepEqual((await h.state(replayFixture.canvas)).plan_execution, recorded);
+    assert.equal((await h.state(replayFixture.canvas)).plan_objective.status, "active");
+    assert.deepEqual(await h.children(replayFixture.hub), jobsBefore);
+    const eventsAfter = await h.sql`SELECT id::text,event_id,job_seq,attempt_id,type,payload_json,created_at
+      FROM events WHERE job_id=ANY(${[replayFixture.hub,replayChild]}::uuid[]) ORDER BY id`;
+    assert.deepEqual(eventsAfter, eventsBefore, "reconstruction cannot rewrite immutable semantic history");
+
+    // An identical body under a distinct committed event still spends budget.
+    const distinct = await h.fixture(replayPatch), distinctPlan = h.proposal(distinct, [h.task("single", distinct.root)]);
+    assert.equal((await h.invoke(distinct.hub, "submit_plan", distinctPlan)).statusCode, 200);
+    const distinctChild = String((await h.children(distinct.hub))[0].id);
+    const distinctResult = { ...continueResult, objective_id: distinctPlan.plan.objective_id, plan_sha256: contentSha256(distinctPlan.plan) };
+    const distinctKey = randomUUID();
+    assert.equal((await h.invoke(distinct.hub, "submit_plan_result", distinctResult, distinctKey)).statusCode, 200);
+    assert.equal((await h.state(distinct.canvas)).plan_execution.no_progress_rounds, 0, "active task defers assessment");
+    assert.equal((await h.state(distinct.canvas)).plan_execution.last_no_progress_result_event_id, undefined);
+    await h.emit(distinctChild); await h.finish(distinctChild);
+    assert.equal((await h.state(distinct.canvas)).plan_execution.no_progress_rounds, 1);
+    assert.equal((await h.invoke(distinct.hub, "submit_plan_result", distinctResult, distinctKey)).statusCode, 200);
+    const nextResult = await h.invoke(distinct.hub, "submit_plan_result", distinctResult);
+    assert.equal(nextResult.statusCode, 200, nextResult.payload);
+    const distinctEvents = await h.sql`SELECT id::text,payload_json FROM events WHERE job_id=${distinct.hub} AND type='plan_result' ORDER BY id`;
+    assert.equal(distinctEvents.length, 2);
+    assert.notEqual(distinctEvents[0].id, distinctEvents[1].id);
+    assert.deepEqual(distinctEvents[0].payload_json, distinctEvents[1].payload_json);
+    assert.equal((await h.state(distinct.canvas)).plan_execution.no_progress_rounds, 2);
+    assert.equal((await h.state(distinct.canvas)).plan_execution.last_no_progress_result_event_id, distinctEvents[1].id);
+    assert.equal((await h.state(distinct.canvas)).plan_execution.stop_reason, "no_progress");
+    await h.sql.begin((tx) => h.core.advancePlanTaskAfterTerminalJob(tx as unknown as typeof h.sql, distinctChild));
+    assert.equal((await h.state(distinct.canvas)).plan_execution.no_progress_rounds, 2);
+
+    for (const provenance of ["missing", "foreign", "mismatched"] as const) {
+      const f = await h.fixture(replayPatch), p = h.proposal(f, [h.task("single", f.root)]);
+      assert.equal((await h.invoke(f.hub, "submit_plan", p)).statusCode, 200);
+      const child = String((await h.children(f.hub))[0].id);
+      await h.emit(child); await h.finish(child);
+      const result = { ...continueResult, objective_id: p.plan.objective_id, plan_sha256: contentSha256(p.plan) };
+      if (provenance === "foreign") {
+        const foreign = await h.fixture(replayPatch);
+        await h.sql`INSERT INTO events(job_id,event_id,job_seq,type,payload_json)
+          SELECT ${foreign.hub},${randomUUID()},COALESCE(MAX(job_seq),0)+1,'plan_result',${h.sql.json(result)}
+          FROM events WHERE job_id=${foreign.hub}`;
+      }
+      if (provenance === "mismatched") {
+        const accepted = await h.invoke(f.hub, "submit_plan_result", result);
+        assert.equal(accepted.statusCode, 200, accepted.payload);
+      }
+      const [owner] = await h.sql`SELECT payload_json FROM jobs WHERE id=${f.hub}`;
+      // Corrupt only the mutable audit projection; source events stay immutable.
+      const projectedResult = provenance === "mismatched" ? { ...result, summary: "This projection differs from its immutable event" } : result;
+      await h.sql`UPDATE jobs SET payload_json=payload_json || ${h.sql.json({ plan_protocol: {
+        ...owner.payload_json.plan_protocol, result: projectedResult,
+      } })} WHERE id=${f.hub}`;
+      const before = (await h.state(f.canvas)).plan_execution;
+      await assert.rejects(h.sql.begin((tx) => h.core.advancePlanTaskAfterTerminalJob(tx as unknown as typeof h.sql, child)),
+        (error: unknown) => error instanceof Error && "code" in error && error.code === "plan_unknown_effect", provenance);
+      assert.deepEqual((await h.state(f.canvas)).plan_execution, before, provenance);
+      assert.equal((await h.children(f.hub)).length, 1, provenance);
     }
 
     const cappedPatch = executionObjective(); cappedPatch.budget.max_rounds = 1;

@@ -67,6 +67,8 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 交付边界仍然明确：强关系 `published=false`，`quality_gate_status=not_evaluated`，公共 relation items 为空；这套 operator attestation 不证明外部 inventory authenticity，也没有独立人工标注集、按问题家族/资产隔离的调参/留出集或预冻结阈值。`compareFindingFeatures` 的相似/弱候选不能被重新表述为同问题结论，不得传播 Verify/处置状态；质量与收益继续记为 `unknown`。生产执行豁免不覆盖这些非模型质量验收缺口。
 
+受治理阈值预注册、独立证据评审、评估准入、通过质量门晋升及撤销路径仍未实现；SQL `published=false` 约束、公共空数组 schema 和 read 抑制共同使当前派生关系无法发布。这不是只有外部数据缺失的门。新增离线强关系逐类指标已区分直接身份比较与词法窗口模拟，但后者不是实际 SQL identity/root-cause worker 质量。需要先完成版本/项目/来源绑定、CAS/不可变审计、当前门和来源失效联动的软件路径，再以真实独立数据和预冻结协议验收；不得直接翻转常量或以合成 passed 代替真实质量。范围见[离线评估](../PROJECT_FINDING_EVALUATION.md#最小外部输入与剩余工作)。
+
 ## 4. 已收口边界（不作为待办）
 
 下列结论已有代码和测试支撑，本节用于防止历史计划或旧 issue 把已完成能力重新写成债务：

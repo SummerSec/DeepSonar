@@ -39,6 +39,70 @@ function classification(observations:Observation[]){
     not_retrieved:labeled.filter(row=>row.prediction===null).length,
     not_retrieved_rate:ratio(labeled.filter(row=>row.prediction===null).length,labeled.length)};
 }
+const STRONG_METRIC_VERSION = 'offline-strong-metrics/v1';
+const STRONG_LABEL_MAPPING = {
+  suspected_same_issue: 'same_problem',
+  same_problem: 'same_problem',
+  same_root_cause_different_instance: 'same_root_cause_different_instance',
+  distinct: 'distinct',
+  similar: 'ambiguous_weak_similarity',
+  insufficient_information: 'insufficient_information',
+} as const;
+const STRONG_SCORED_LABELS = ['same_problem', 'same_root_cause_different_instance', 'distinct'] as const;
+type StrongMetricLabel = typeof STRONG_LABEL_MAPPING[RelationKind] | 'missing_label';
+type StrongMetricPrediction = ReturnType<typeof compareAuthoritativeIdentity>['kind'] | 'not_retrieved';
+interface StrongObservation { label: RelationKind | null; prediction: StrongMetricPrediction }
+function strongMetricLabel(label: RelationKind | null): StrongMetricLabel {
+  return label === null ? 'missing_label' : STRONG_LABEL_MAPPING[label];
+}
+function isStrongPositive(label: RelationKind | null): boolean {
+  const mapped = strongMetricLabel(label);
+  return mapped === 'same_problem' || mapped === 'same_root_cause_different_instance';
+}
+function strongClassification(observations: StrongObservation[]) {
+  const mapped = observations.map(row => ({ ...row, label: strongMetricLabel(row.label) }));
+  // Weak similarity or human inability to decide is not a negative strong
+  // label. Retain these observations outside precision/recall denominators.
+  const scored = mapped.filter(row => STRONG_SCORED_LABELS.some(label => label === row.label));
+  const missing = mapped.filter(row => row.label === 'missing_label').length;
+  const weak = mapped.filter(row => row.label === 'ambiguous_weak_similarity').length;
+  const insufficient = mapped.filter(row => row.label === 'insufficient_information').length;
+  const labels: StrongMetricLabel[] = [...STRONG_SCORED_LABELS, 'insufficient_information', 'ambiguous_weak_similarity', 'missing_label'];
+  const predictions: StrongMetricPrediction[] = [...STRONG_SCORED_LABELS, 'insufficient_information', 'not_retrieved'];
+  const predictedStrong = (row: { prediction: StrongMetricPrediction }) => row.prediction === 'same_problem'
+    || row.prediction === 'same_root_cause_different_instance';
+  return {
+    metric_version: STRONG_METRIC_VERSION,
+    label_mapping: { ...STRONG_LABEL_MAPPING, null_label: 'missing_label' },
+    scored_population: 'only supplied canonical same_problem/same_root_cause_different_instance/distinct labels; null, weak similar and human insufficient labels are excluded',
+    observations: mapped.length, labeled_observations: mapped.length - missing, scored_observations: scored.length,
+    missing_labels: missing, missing_label_rate: ratio(missing, mapped.length),
+    ambiguous_labels: weak + insufficient, ambiguous_label_rate: ratio(weak + insufficient, mapped.length),
+    weak_similarity_labels: weak, labeled_insufficient: insufficient,
+    raw_label_counts: Object.fromEntries([...RELATION_LABELS, 'missing_label'].map(label => [label,
+      observations.filter(row => (row.label ?? 'missing_label') === label).length])),
+    confusion_matrix: Object.fromEntries(labels.map(label => [label, Object.fromEntries(predictions.map(prediction =>
+      [prediction, mapped.filter(row => row.label === label && row.prediction === prediction).length]))])),
+    per_class: Object.fromEntries(STRONG_SCORED_LABELS.map(kind => {
+      const tp = scored.filter(row => row.label === kind && row.prediction === kind).length;
+      const predicted = scored.filter(row => row.prediction === kind).length;
+      const actual = scored.filter(row => row.label === kind).length;
+      return [kind, { true_positive: tp, false_positive: predicted - tp, false_negative: actual - tp,
+        precision: ratio(tp, predicted), recall: ratio(tp, actual) }];
+    })),
+    accuracy: ratio(scored.filter(row => row.label === row.prediction).length, scored.length),
+    predicted_insufficient: scored.filter(row => row.prediction === 'insufficient_information').length,
+    predicted_insufficient_rate: ratio(scored.filter(row => row.prediction === 'insufficient_information').length, scored.length),
+    predicted_insufficient_all_observations: ratio(mapped.filter(row => row.prediction === 'insufficient_information').length, mapped.length),
+    predicted_strong_with_missing_label: mapped.filter(row => row.label === 'missing_label' && predictedStrong(row)).length,
+    predicted_strong_with_ambiguous_label: mapped.filter(row => (row.label === 'ambiguous_weak_similarity'
+      || row.label === 'insufficient_information') && predictedStrong(row)).length,
+    not_retrieved: scored.filter(row => row.prediction === 'not_retrieved').length,
+    not_retrieved_rate: ratio(scored.filter(row => row.prediction === 'not_retrieved').length, scored.length),
+    not_retrieved_all_observations: mapped.filter(row => row.prediction === 'not_retrieved').length,
+  };
+}
+
 function coverage(sources:OfflineSource[]){
   return {declared_fields:Object.fromEntries((['title','location','summary','profile','category'] as const).map(field=>
     [field,ratio(sources.filter(row=>Boolean(row[field]?.trim())).length,sources.length)])),
@@ -87,7 +151,8 @@ export function evaluateOfflineDataset(input:OfflineDataset){
   const dataset=parseOfflineDataset(JSON.stringify(input));
   const byId=new Map(dataset.sources.map(row=>[row.id,row]));
   const projected=new Map(dataset.sources.map(row=>[row.id,features(row)]));
-  const versions={extractor:EXTRACTOR_VERSION,normalization:NORMALIZATION_VERSION,relation_rule:RELATION_RULE_VERSION,evaluator:'offline-evaluation/v1'};
+  const versions={extractor:EXTRACTOR_VERSION,normalization:NORMALIZATION_VERSION,relation_rule:RELATION_RULE_VERSION,
+    strong_relation_rule:STRONG_RELATION_RULE_VERSION,strong_metric:STRONG_METRIC_VERSION,evaluator:'offline-evaluation/v2'};
   const inputDigest=offlineDigest(dataset),configDigest=offlineDigest({config:dataset.config,versions});
   const selected=new Map<string,Set<string>>();
   const queries=dataset.sources.map(subject=>{
@@ -116,6 +181,10 @@ export function evaluateOfflineDataset(input:OfflineDataset){
     const direct=subset.map(pair=>({label:pair.label,prediction:pair.prediction}));
     const directed=subset.flatMap(pair=>[pair.left_retrieves_right,pair.right_retrieves_left]
       .map(retrieved=>({label:pair.label,prediction:retrieved?pair.prediction:null,retrieved})));
+    const strongDirect=subset.map(pair=>({label:pair.label,prediction:pair.strong_relation_prediction}));
+    const strongDirected=subset.flatMap(pair=>[pair.left_retrieves_right,pair.right_retrieves_left]
+      .map(retrieved=>({label:pair.label,prediction:retrieved?pair.strong_relation_prediction:'not_retrieved' as const,retrieved})));
+    const strongPositive=strongDirected.filter(row=>isStrongPositive(row.label));
     const positive=directed.filter(row=>row.label!==null&&['suspected_same_issue','same_root_cause_different_instance','similar'].includes(row.label));
     let retrievedUnlabeled=0,retrievedWithoutPair=0,retrievedNullLabel=0,retrievedLabeled=0;
     for(const query of queries.filter(row=>row.split===split))for(const candidate of query.candidates){
@@ -132,7 +201,19 @@ export function evaluateOfflineDataset(input:OfflineDataset){
         retrieved_unlabeled_rate:ratio(retrievedUnlabeled,retrievedUnlabeled+retrievedLabeled),
         retrieved_with_null_label:retrievedNullLabel,retrieved_without_pair_label:retrievedWithoutPair,
         not_retrieved_positive:positive.filter(row=>!row.retrieved).length,
-        not_retrieved_positive_rate:ratio(positive.filter(row=>!row.retrieved).length,positive.length)}}];
+        not_retrieved_positive_rate:ratio(positive.filter(row=>!row.retrieved).length,positive.length)},
+      strong_pair_rule_metrics:{...strongClassification(strongDirect),
+        unit:'supplied unordered pair opportunities',
+        execution_plane:'offline_caller_declared_identity_pair_comparison'},
+      strong_candidate_pipeline_metrics:{...strongClassification(strongDirected),
+        unit:'directed supplied pair opportunities',
+        execution_plane:'offline_local_lexical_corpus_window_then_identity_comparison',
+        retrieval_scope:'bounded lexical sample-window simulation only; not SQL identity/root-cause worker or full-corpus recall',
+        candidate_recall_at_k:ratio(strongPositive.filter(row=>row.retrieved).length,strongPositive.length),
+        candidate_recall_population:'only supplied labels same_problem/suspected_same_issue/same_root_cause_different_instance, canonicalized to strong positives; directed lexical-window opportunities',
+        retrieved_without_pair_label:retrievedWithoutPair,retrieved_with_null_label:retrievedNullLabel,
+        not_retrieved_positive:strongPositive.filter(row=>!row.retrieved).length,
+        not_retrieved_positive_rate:ratio(strongPositive.filter(row=>!row.retrieved).length,strongPositive.length)}}];
   }));
   const body={schema_version:1,dataset_id:dataset.dataset_id,dataset_kind:dataset.dataset_kind,metadata:dataset.metadata,
     input_digest:inputDigest,config_digest:configDigest,versions,configuration:dataset.config,

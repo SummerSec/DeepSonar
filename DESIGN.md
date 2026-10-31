@@ -137,7 +137,7 @@ Gateway 区分总量与 memory 归因，对 pending/unknown 保守记账并在�
 
 ### 4.2 Plan
 
-#775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划。
+#775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划；已消费的 continue 语义事件以当前 owner/Canvas/项目与 Plan 身份绑定的持久水位去重，回调和重启不再重计，活动/ready 工作延后评估，新事件仍消耗预算，见 [Plan 重建规则](docs/PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。
 
 可执行 PlanTask 复用现有 Hub Intent admission 与 Job/Attempt/effect 路径。依赖就绪须核对当前成功 Attempt、语义来源事件、未被替代的 Artifact、`plan.output` 对期望输出的精确关联，以及宿主实际留存字节/hash；模型自报 done 或 Job 成功本身不够。输出关联是工程关联，不证明语义满足。接纳与 CAS 回执、依赖执行和终止原因均保留持久来源；具体规则见 [ADR 0012](docs/architecture/adr/0012-plan-v2-execution.md)和[运行时视图](docs/architecture/06-runtime-view.md)。
 
@@ -235,7 +235,7 @@ Research 是报告前的只读辅助层：Scheduler 按有界批次对 Finding �
 
 Research 失败必须显式记录并保留候选 Finding。与 Finding/报告写入同一事务时，Research 使用 savepoint 隔离；研究写失败不能回滚已经接受的 Finding 或报告主路径。读取入口为 `GET /canvases/:id/finding-research`。模型、prompt revision、批次边界和运行状态进入 research run 账本。
 
-跨任务身份与关系工程（#819）已接入不可变操作员见证身份 manifest、mapping CAS、freshness/撤销失效、有界一致读取与持久 worker 计算。操作员准入不认证外部官方来源；强关系发布仍由 `STRONG_RELATIONS_PUBLISHED=false` 关闭，质量为 unknown / not_evaluated。真实人工标签、问题家族/资产隔离的调参及留出集、查看留出结果前冻结的阈值仍缺失，因此强关系质量与生产建议未交付。见 [FR-FIND-009](docs/architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)及 [ADR 0014](docs/architecture/adr/0014-operator-finding-identity.md)。
+跨任务身份与关系工程（#819）已接入不可变操作员见证身份 manifest、mapping CAS、freshness/撤销失效、有界一致读取与持久 worker 计算。操作员准入不认证外部官方来源；强关系发布仍由 `STRONG_RELATIONS_PUBLISHED=false` 关闭，质量为 unknown / not_evaluated。受治理质量协议/阈值预注册、独立评审/评估准入及晋升撤销、受控公开发布的软件路径仍缺；真实人工标签、问题家族/资产隔离调参及留出、预冻结阈值与历史身份来源复核材料也未提供。离线强指标区分身份比较与词法窗口模拟，不是实际 SQL worker 质量；仅补数据或 CI 通过不能启用建议，强关系质量与生产建议未交付。见 [FR-FIND-009](docs/architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)及 [ADR 0014](docs/architecture/adr/0014-operator-finding-identity.md)。
 
 ### 6.3 Projection
 
@@ -353,7 +353,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 | Capability Pack（#447/#459） | Manifest、Job 级发现和快照 selector/digest 已落地；目录发现仍需严格受冻结 selector/digest 上限约束 | live catalog 漂移门禁、task/session 生命周期、准入评估、临时组合、经验推荐 |
 | Pi 会话观测记忆（#815） | 实际本地 base 镜像 canonical RPC、独立生产内容 guard、OM 专属版本准入及回归已通过；历史 Session HTTP 脱敏与内核 transport/持久结算已留证，见 [RPC](docs/PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)/[Gateway](docs/PI_OBSERVATIONAL_MEMORY_GATEWAY.md) | 最终组合 CI、发布通道/平台和 registry/catalog 证据待完成；质量/成本收益 unknown |
 | Plan / 模型主导收敛（#443/#775） | 当前 v2 由用户 objective CAS、lifetime 预算、多轮路线及留存输出校验驱动既有 Hub Intent；Job-scoped objective 读取与首个 Hub submit 边界已核对，完成 authority 保持独立 | v2 回放已本地核验但 provenance 非当前 HEAD；最终组合 CI；模型收益 unknown |
-| Finding Research（#448/#819） | 语义去重、canonical anchor、相对 priority，以及操作员身份/关系计算工程已接线；强关系不发布 | 人工标签、隔离调参/留出与预冻结阈值缺失，强关系质量及生产建议未交付 |
+| Finding Research（#448/#819） | 语义去重、canonical anchor、相对 priority，以及操作员身份/关系计算工程已接线；强关系不发布 | 受治理质量评估/审核/晋升撤销及公开发布路径尚缺；真实人工标签、隔离调参/留出与预冻结阈值也缺失，强关系质量及建议未交付 |
 | Quality / Replay（#445/#456/#580） | 只读指标与 Hub replay 基线已落地，经验召回为空；审计回归以人工标签为真值，平台 confirmed 不是独立真值，缺少 PoC 不等于误报 | 变更模型/prompt/策略前相对冻结基线对比，区分质量退化与环境失败；Experience、成本感知计划和策略评估 |
 | 任务工作台（#449/#451/#454） | 总览、研究地图、事实、发现、运行、报告视图已落地；Job/Finding 错误的只读 `RepairFeedback` 投影；timeout/orphan 无效果账本时不得标可安全重放，也不得推荐 `retry_same_session`，未知外部效果停在 `needs_confirmation` | 研究地图投影、统一详情抽屉、视觉重设计、服务端 overview/actions 聚合 |
 | 项目报告工作台（#484 / #561） | Phase 1 已落地：统一 `ReportDeliverable` 投影；#561 并入项目「风险与报告」台（`/findings` + `?panel=reports`，旧 `/reports` redirect）；任务工作台报告 tab 与下载 API 不变 | URL 筛选排序、详情抽屉、视觉层级、摘要按需加载（PR 2–PR 5） |

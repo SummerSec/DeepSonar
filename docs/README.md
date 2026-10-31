@@ -8,7 +8,7 @@
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
-> **Plan v2（#775）**：当前执行接口只接收 v2，v1 的目标边界是不可变历史只读；普通 Hub 的 v1 writer 已在 2026-10-31 物理删除，历史 `hub_intent_adapter` audit 仍只读。用户 objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission；工程 complete 和输出关联不授予语义完成 authority，仍需全判据当前正向操作员授权。根本地回放已完成 normal→all7negative→normal 三次退出 0，当前 v2 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact 报告 provenance 不是 `5619154f` 的精确 SHA，最终组合 CI 仍未验收。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
+> **Plan v2（#775）**：当前执行接口只接收 v2，v1 的目标边界是不可变历史只读；普通 Hub 的 v1 writer 已在 2026-10-31 物理删除，历史 `hub_intent_adapter` audit 仍只读。用户 objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission；当前 owner/Canvas/项目绑定的 continue 事件消费水位防止终态和重启重计，单元回归已验、新 SQL 场景最终 SHA CI 待验；工程 complete 和输出关联不授予语义完成 authority，仍需全判据当前正向操作员授权。根本地回放已完成 normal→all7negative→normal 三次退出 0，当前 v2 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact 报告 provenance 不是 `5619154f` 的精确 SHA，最终组合 CI 仍未验收。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
 
 > **Finding 身份与关系（2026-10-31，#770/#819）**：来源幂等、不可变历史、词法检索与弱候选已实现。#819 又接通操作员见证身份 manifest、不变 revision、mapping CAS/freshness/撤销、有界一致读取与 durable worker；管理员准入不认证外部官方真实性。强关系发布关闭，quality=unknown / not_evaluated；真实人工标签、问题家族/资产隔离调参/留出及预冻结阈值仍缺失，质量与生产建议未交付，不能把 #819 记为全部完成。见 [FR-FIND-007](architecture/01-system-specification.md#fr-find-007-可重建特征与关联质量边界)、[FR-FIND-009](architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)、[ADR 0014](architecture/adr/0014-operator-finding-identity.md)及[风险](architecture/12-risks-and-tech-debt.md)。
 
@@ -194,7 +194,7 @@
 [Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
 
 
-#770/#819：[项目 Finding 研究](PROJECT_FINDING_RESEARCH.md)及[数据架构](architecture/08-data-architecture.md)区分特征/弱候选、操作员身份/持久关系计算与未交付的独立强关系质量；生产建议仍关闭。
+#770/#819：[项目 Finding 研究](PROJECT_FINDING_RESEARCH.md)及[数据架构](architecture/08-data-architecture.md)区分特征/弱候选、操作员身份/持久关系计算及[离线强指标](PROJECT_FINDING_EVALUATION.md#预测与报告口径)。受治理质量评估/独立审核/晋升撤销与公开发布的软件路径尚缺，真实独立材料与预冻结阈值也缺失；生产建议仍关闭。
 
 #770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具已合入）。2026-10-31 随 #770 收口，但独立人工质量验收仍记为未执行；生产执行豁免不覆盖该验收。
 

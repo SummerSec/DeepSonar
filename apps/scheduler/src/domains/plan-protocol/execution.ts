@@ -1,5 +1,5 @@
 import type { EventIngestionTransaction } from "../event-ingestion/application.js";
-import { type SubmitPlanPayload, type SubmitPlanResultPayload } from "@deepsonar/shared-types";
+import { type SubmitPlanPayload, SubmitPlanResultPayload } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import { contentSha256 } from "./criterion-model.js";
 import { taskInputSha256 } from "./task-input.js";
@@ -9,6 +9,7 @@ import { criterionEvidenceBudget } from "./criterion-evidence.js";
 import { successfulPlanTaskOutput } from "./execution-output.js";
 import {
   PlanExecutionState,
+  assessPlanNoProgress,
   readPersistedPlanObjective,
   readPlanExecutionState,
   type PersistedPlanObjective,
@@ -199,6 +200,7 @@ function currentState(
     lifetime_tasks_dispatched: Math.max(existing?.lifetime_tasks_dispatched ?? 0, lifetimeTasks),
     lifetime_rounds: nextRound,
     no_progress_rounds: existing?.no_progress_rounds ?? 0,
+    ...(existing?.last_no_progress_result_event_id ? { last_no_progress_result_event_id: existing.last_no_progress_result_event_id } : {}),
     last_progress_at: existing?.last_progress_at ?? null,
     // A user CAS creates a new objective revision. It may reopen the current
     // execution projection, but lifetime counters and no-progress state stay
@@ -288,6 +290,33 @@ async function dispatchPreparedTasks(
     created.push(String(materialized.created.id));
   }
   return created;
+}
+
+/** The audit is a projection; only its current scoped semantic event is identity. */
+async function continueResultEventId(tx: EventIngestionTransaction, input: {
+  canvasId: string;
+  projectId: string;
+  planJobId: string;
+  plan: PlanV2;
+  result?: PlanResultV2 | null;
+}): Promise<string | null> {
+  if (input.result?.outcome !== "continue") return null;
+  const [event] = await tx`SELECT e.id::text AS id,e.payload_json FROM events e
+    JOIN jobs j ON j.id=e.job_id AND j.canvas_id=${input.canvasId} AND j.project_id=${input.projectId}
+    JOIN canvases c ON c.id=j.canvas_id AND c.project_id=j.project_id
+      AND lower(c.target_json->'plan_execution'->>'plan_job_id')=j.id::text
+    WHERE e.job_id=${input.planJobId} AND e.type='plan_result'
+    ORDER BY e.id DESC LIMIT 1`;
+  const result = SubmitPlanResultPayload.safeParse(event?.payload_json);
+  if (!positiveRevision.safeParse(event?.id).success || !result.success
+    || result.data.objective_id !== input.plan.objective_id
+    || result.data.objective_revision !== input.plan.objective_revision
+    || result.data.route_revision !== input.plan.route_revision
+    || result.data.plan_sha256 !== contentSha256(input.plan)
+    || contentSha256(result.data) !== contentSha256(input.result)) {
+    throw new ControlInputError("plan_unknown_effect", "Plan continue result 缺少当前 owner、Canvas 和路线一致的持久来源事件", "result");
+  }
+  return String(event.id);
 }
 
 /** Dispatch ready v2 tasks and persist a restart-safe execution projection. */
@@ -432,20 +461,16 @@ export async function drivePlanExecution(
   const newRoute = objectiveChanged || existing?.route_revision !== input.plan.route_revision;
   const progress = newlyReady.length > 0;
   const canAssessNoProgress = activeCount === 0;
-  let nextNoProgress = existing?.no_progress_rounds ?? 0;
-  // This is a lifetime guard.  A new route, objective revision, Hub Job, or
-  // idempotency key cannot erase prior no-progress rounds.  A real dispatch
-  // records progress separately, but it does not grant a fresh no-progress
-  // budget to an otherwise unchanged objective.
-  const noProgressSignal = canAssessNoProgress
-    && !progress
-    && (newRoute || input.result?.outcome === "continue");
-  if (noProgressSignal) nextNoProgress += 1;
-  let nextState = PlanExecutionState.parse({
-    ...state,
-    no_progress_rounds: nextNoProgress,
-    last_progress_at: state.last_progress_at,
+  // Lifetime accounting and the consumed semantic-event watermark survive
+  // owner/child callbacks, restart, route changes and authorized objective CAS.
+  // A new event charges again even when its result bytes match a prior event.
+  const assessed = assessPlanNoProgress(state, {
+    newRoute, progress, canAssessNoProgress,
+    continueResultEventId: await continueResultEventId(tx, input),
   });
+  const noProgressSignal = assessed.noProgressSignal;
+  const nextNoProgress = assessed.state.no_progress_rounds;
+  let nextState = assessed.state;
   if (nextState.lifetime_rounds > input.objective.budget.max_rounds) {
     return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, "budget_exhausted", input.objective) };
   }

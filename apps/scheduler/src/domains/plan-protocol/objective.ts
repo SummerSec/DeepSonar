@@ -51,11 +51,35 @@ export const PlanExecutionState = z.object({
   lifetime_tasks_dispatched: z.number().int().min(0).max(1_000_000),
   lifetime_rounds: z.number().int().min(0).max(1_000_000),
   no_progress_rounds: z.number().int().min(0).max(100_000),
+  // Absent until a continue result is assessed; semantic events.id high-watermark.
+  last_no_progress_result_event_id: revision.optional(),
   last_progress_at: z.string().datetime().nullable(),
   stop_reason: z.string().min(1).max(200).nullable(),
   stopped_at: z.string().datetime().nullable(),
 }).strict();
 export type PlanExecutionState = z.infer<typeof PlanExecutionState>;
+
+/** Charge each durable continue result at most once, deferring active work. */
+export function assessPlanNoProgress(state: PlanExecutionState, input: {
+  newRoute: boolean;
+  progress: boolean;
+  canAssessNoProgress: boolean;
+  continueResultEventId: string | null;
+}): { state: PlanExecutionState; noProgressSignal: boolean } {
+  const resultId = input.continueResultEventId === null ? null : revision.parse(input.continueResultEventId);
+  const unconsumed = resultId !== null && (state.last_no_progress_result_event_id === undefined
+    || BigInt(resultId) > BigInt(state.last_no_progress_result_event_id));
+  const assessable = input.canAssessNoProgress && !input.progress;
+  const noProgressSignal = assessable && (input.newRoute || unconsumed);
+  return {
+    noProgressSignal,
+    state: PlanExecutionState.parse({
+      ...state,
+      no_progress_rounds: state.no_progress_rounds + (noProgressSignal ? 1 : 0),
+      ...(assessable && unconsumed ? { last_no_progress_result_event_id: resultId } : {}),
+    }),
+  };
+}
 
 export function readPersistedPlanObjective(target: unknown): PersistedPlanObjective | null {
   if (!target || typeof target !== "object" || Array.isArray(target)) return null;
