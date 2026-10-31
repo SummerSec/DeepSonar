@@ -33,7 +33,7 @@ Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allo
 
 所有 `/control/v1/jobs/{jobId}/operations/{operationId}` POST（包括只读 discovery、graph/capability 查询和 Skill 拉取）都必须带 UUID `Idempotency-Key`。在同一 Scheduler 进程的接口缓存仍存在时，同 key、同 operation 和同输入可返回已有结果；同 key 改变 operation/input 返回冲突。只读 operation 的 key 只提供请求级缓存和冲突检查，不产生 durable event/effect receipt；改变语义或外部效果的 operation 才继续依赖具体领域的事件 dedup、唯一键或 effect settlement。当前接口层缓存是进程内的，Scheduler 重启后会丢失；重启后的重复请求不能把内存缓存当成跨重启幂等保证。
 
-Control operation 分为两类：`list/search/describe/validate/preview` 能力发现、graph 查询和 Skill 拉取是只读 operation；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 以及 Plan/PlanResult 是语义提交，其中 Plan/PlanResult 当前 Phase 1 只记录版本化输入/结果，不派发 Worker、不改变 Hub convergence。所有 operation 都不直接暴露数据库写入、容器命令、凭据、Job 快照或终态修改；只有语义提交由 event-ingestion/application transaction 产生受审计的领域结果。
+Control operation 分为两类：`list/search/describe/validate/preview` 能力发现、graph 查询和 Skill 拉取是只读 operation；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 以及 Plan/PlanResult 是语义提交，其中 Plan/PlanResult 不直接派发 Worker 或执行依赖图；首次显式 Plan 激活当前 Canvas 的依据门，既有 Hub Intent 可进行一次有界补证，complete/报告受当前全判据授权校验。所有 operation 都不直接暴露数据库写入、容器命令、凭据、Job 快照或终态修改；只有语义提交由 event-ingestion/application transaction 产生受审计的领域结果。
 
 ## 项目知识接口（#752 分支）
 

@@ -5,7 +5,7 @@
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
 > **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。持久 Plan 接纳回执可只读恢复；一次补证执行状态按持久来源只读重建，与判据满足分离；已接线未派发路线的显式 CAS 修订，保留目标/判据/预算及历史；真实效果未验证且不作为本批验收前置，完整 C 不启用。
 
-> **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造，跨任务关联仍未实现。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
+> **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造；项目词法检索与持久弱候选已实现，权威资产映射与强关系质量门仍未完成。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)。
 
 > **修正 token（2026-10-30，#776）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，默认需管理员配置；调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -168,7 +168,7 @@
 
 独立研究 #777 的 [离线协议与报告准备](../agent-harness/knowledge-live/STUDY.md) 已提供；真实模型对照尚未运行，不改变 #752 已完成的实现验收范围。
 
-#770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；跨任务关系仍待后续交付，不能由查询上线推定已完成。
+#770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；项目词法检索与持久弱候选另见下方专题，不能由查询上线推定强关系质量已验收。
 
 ## #775 设计目标与实现差额
 
@@ -183,9 +183,9 @@
 [Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
 
 
-#770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C与D词法检索/持久弱候选基础待评审，强关系建议未发布）。
+#770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C与D词法检索/持久弱候选基础已合入，强关系建议未发布）。
 
-#770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具待评审，独立人工质量验收未完成）。
+#770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具已合入，独立人工质量验收未完成）。
 
 
 - [当前 Job 的 Skill 条件建议](SKILL_SUGGESTIONS.md)：#778 本项目精确版本条件匹配、选择声明回执与非模型验收矩阵；不自动启用，不声称效果或成本收益。

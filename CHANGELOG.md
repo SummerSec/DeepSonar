@@ -1,12 +1,36 @@
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-31
+
+### 发布与升级边界
+
+- 本版发布已合入并通过门禁的功能切片，不代表 #767、#770、#775 整体完成；这些 issue 的外部可信输入、独立标签或后续规划闭环仍按各自验收记录保留。#765 的生产重跑验收已按用户要求豁免并关闭，修复纳入本版；豁免不代表实际生产重跑通过。真实模型效果、恢复率、质量和成本收益未验证，不用离线协议测试代替效果数据。
+- 产品版本由不可变 `v0.6.1` tag 唯一确定；数据库基线由 v0.6.0 的 schema 62 更新到 **65**，包含独立 Finding 来源身份、特征和候选派生状态。已有非空库版本不匹配时拒绝启动；升级须先备份、排空/对账未结算效果，按维护计划、显式审批与候选库重建流程执行。没有增量 ALTER 链，不支持无人值守跨 schema 升级。本次不部署生产系统。
+- 修正模型调用需要管理员显式配置 `DEEPSONAR_REPAIR_MAX_TOKENS`；未设置或非法时不允许新增修正模型请求。首个持久拒绝回执冻结额度，重启不重置；用量未知必须对账，不能记为零。该机制是累计结算后的熔断，输入/缓存成本仍可能使单次已准入请求超出剩余额度，不承诺精确调用前总成本上限。
+- 发布准备不提前改写 bundled 镜像 digest、部署示例或私有 package 版本。镜像、双架构原生验证、配置通道 inspect、三张平台 GHCR index 的 keyless 签名与最终附件必须由本 tag 的 Release workflow 实际成功产生；本节本身不证明发布已完成。
+
+### 新增
+
+- 项目 Finding 查询支持服务端筛选、游标分页及一致汇总；跨 Job 相同文本保留独立来源身份与 Artifact，不补造历史身份。新增持久特征扫描、代际重建、词法检索和有界弱候选；来源变更与权限重新校验，不改 Verify、人工处置或报告结论。离线评估/积压测量工具保留真实分母，尚无权威资产映射及独立质量标签，不发布同问题/同根因强关系或自动处置。
+- 可选任务契约、场景模板、派发前复核、结果评审与判据证据绑定复用既有权限和完成门；无法证明身份、写权限或外部效果时拒绝执行。研究候选、技术验证和目标达标分开记录，契约不授予权限，也不自动认证赏金资格。
+- Plan 增加冻结缺口投影、持久接纳回执、一次补证 Intent 与执行状态投影，以及 32 例冻结离线控制回放和故意错误接纳的负向产物验证。 未派发路线可通过显式 revision 调整 tasks/open_questions，以事件 head、Plan SHA 和冻结用户输入做锁内 CAS；目标、判据、假设与预算不变，已派发/待结算/未知效果拒绝修订，历史 Plan 不补造基线。同 key 结果从既有语义事件恢复，路线改变使旧判据绑定失效并须重新评价。Job 成功不等于目标达标；用户目标修订、依赖图执行及完整自适应规划仍未完成。
+- 当前项目 Job 支持精确版本 Skill 条件建议、选择声明的持久回执与证据回放；保持 opt-in 和当前权限重校验，不自动启用能力。导出保留冻结目录用于摘要复验，不是公共脱敏分享制品。新增能力适用性、证据覆盖和知识研究离线工具；不把合成样本解释为模型质量或收益。
+- 完成提案支持持久 revision/key、可查询回执、有界修正次数、可信 token 用量累计和 scoped 引用反馈，复用现有 Attempt effect/usage ledger。接受回执不等于终态结算；丢响应先查询，需恢复时使用同 key/revision/payload，未知效果不自动重放。
+
+### 生命周期与并发修复
+
+- 保留 DSH 可信父子谱系；父 idle 有活动子任务时不提前结算，子 finish 后等待父会话处理。实际 executor 的人工消息/Hub 完成预留竞态、取消和迟到回调均受既有完成门保护。
+- 修复 Control 完成、Plan 与知识写入之间的 key 归属互斥、终态保留事件配额和已知限流反馈；CLI 协议回放覆盖 Claude/Pi/DSH 的成功、修正、丢响应、次数耗尽、无进展拒绝和退出。替身 runner 异常覆盖实际 executor finally 清理；不声称完整进程崩溃或模型理解已验收。
+
+
+
 ### 变更
 
 - Agent CLI 治理 pin 抬到当前上游版本（无数据库变更）：Claude Code `2.1.296` → `2.1.312`、Pi Coding Agent `1.1.0` → `1.4.0`、官方 DSH `0.2.0-rc.2` → `0.2.1-rc.2`。base / kali-minimal 两个 Dockerfile 的 ARG 与 npm `sha512` integrity 同步更新；`agent-harness/dsh-runtime` 冻结 lockfile 重生成（新版上游移除了 `@deepseek-ai/dsh-invariants`，清单与 runtime manual 目录一并删除该条目）；`agent-harness/runtime-images.json`、`kali-minimal-runtime.json` 与 `runtime-manuals/catalog.json` 跟着重建，adapter 声明的 `version` 与夹具用例断言同步。Pi 1.4.0 要求 node ≥ 22.19.0，base 镜像的 `node:22-bookworm-slim` 满足。Pi rpc 模式与 DSH `lib/bin.js` 入口在新版本中仍存在；旧夹具录制于 Pi 1.1.0 / DSH 0.2.0-rc.2，仅作格式证据，新版本的 live 解码需真机 Job 复核。治理 profile 同步去掉上游已删除的 invariant 插件族，并补上 0.2.1-rc.2 起独立出来的 `working-directory` 插件（`workingDirectory` 服务原来的提供者不再顺带提供它）（`@deepseek-ai/dsh-invariants` 与 dsh-{session,agent,scope,agent-loop} 的 `./invariant` 子路径），否则 DSH 启动即报 required plugin did not activate（base 镜像的 DSH Cordis 真实容器启动门禁发现）。
 
 ### 修复
 
-- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。无需 schema 变更；生产 17 个 Job 未重跑。
+- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。该修复自身无需 schema 变更；生产 17 个 Job 未重跑，其生产验收已获豁免，#765 于 2026-10-31 关闭（[收口记录](https://github.com/SummerSec/DeepSonar/issues/765#issuecomment-6537343628)）。不声称生产审计覆盖已经验证。
 
 
 - 官方运行时镜像清单拉取不再因单次链路抖动失败（#761）：`github.com/.../releases/latest/download` 会 302 到 `release-assets.githubusercontent.com`，部分网络下首跳常超过 10s；原先每次请求只有一次 10s 硬超时且零重试，表现为 `remote registry request timed out` 反复出现。现在：① 仅对瞬时错误（超时/连接重置/429/5xx）做有界重试（默认 3 次，`DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS` 可调 1–5），鉴权/主机/载荷/体积错误立即失败；② 无 token 时公开通道失败后回退 `api.github.com` 的 release asset；③ 瞬时失败**保留上次成功清单**（`stale`/`consecutive_failures`/`last_success_at`），连续 3 次才降级到 bundled，`stale` 期间不写平台更新检查，横幅不再随单次抖动翻转。不 bump schema。
@@ -1286,3 +1310,5 @@
 [0.1.18]: https://github.com/SummerSec/DeepSonar/compare/v0.1.17...v0.1.18
 
 [0.6.0]: https://github.com/SummerSec/DeepSonar/compare/v0.5.6...v0.6.0
+
+[0.6.1]: https://github.com/SummerSec/DeepSonar/compare/v0.6.0...v0.6.1

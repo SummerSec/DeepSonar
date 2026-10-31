@@ -498,7 +498,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须提供按 project、profile、severity、verify_status、disposition 查询 Finding、证据链和项目汇总的管理 API；查询结果不得把 Research priority 或 Fact verification 状态混写成 Finding 技术状态。
 - **决策来源**：管理面需要可筛选的风险对象，维度独立才能正确解释结果。
-- **实现状态**：as-built；Finding、Fact、Research 各自投影字段。 #770 切片 B 在现有项目页接通游标分页与服务端多选/字面文本查询，列表和汇总共用筛选口径；资产/版本特征与跨任务关系尚未交付。
+- **实现状态**：as-built；Finding、Fact、Research 各自投影字段。 #770 切片 B 在现有项目页接通游标分页与服务端多选/字面文本查询，列表和汇总共用筛选口径；来源声明特征、词法检索与持久弱候选已交付；权威资产/版本映射与强关系质量门尚未完成。
 - **代码入口**：[OpenAPI Finding operations](../../apps/scheduler/src/openapi.ts)、[Finding summary](../../apps/scheduler/src/domains/finding-verification/project-findings-summary.ts)、[数据库索引](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:finding-protocol`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:web-facts`。
 
@@ -850,7 +850,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：所有可重复的 Control/数据库写入以及外部效果账本写入必须使用 idempotency、event 或 effect identity，并在数据库唯一约束、事务或明确的外部幂等协议中实现幂等；进程内 cache 不得成为跨副本的权威身份。对不支持安全幂等或效果未知的外部动作必须以 `unknown`/`replay_policy=never` 处理；重放不能重复计入事件预算、版本或外部资源。
 - **决策来源**：HTTP、Worker、Broker 和数据库重试都可能重复到达；进程重启或多副本会使进程内 cache 失去权威性。
-- **实现状态**：部分达标并存在实现违约；Event、Attempt Effect、Report version 和 asset version 有持久身份约束，但当前 Control API 的 `idempotencyCache` 是进程内缓存，尚未构成跨副本 durable receipt；未知外部效果仍按 `unknown`/`never` 禁止自动重放。
+- **实现状态**：部分达标并存在实现违约；Event、Attempt Effect、Report version 和 asset version 有持久身份约束，mark_job_done、带 plan_basis 的 Hub/人工提案及知识写入已有持久回执，其余通用 Control 路径仍不能宣称统一 durable receipt；`idempotencyCache` 仅是进程内缓存；未知外部效果仍按 `unknown`/`never` 禁止自动重放。
 - **代码入口**：[schema uniqueness](../../database/schema.sql)、[platform registry](../../apps/scheduler/src/domains/platform-api/registry.ts)、[Control API routes](../../apps/scheduler/src/domains/platform-api/routes.ts)、[Attempt application](../../apps/scheduler/src/domains/job-attempt/application.ts)、[event ingestion](../../apps/scheduler/src/domains/event-ingestion/application.ts)。
 - **验证证据**：`pnpm ci:integration:event-ingestion`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:job-lifecycle`。
 
@@ -1217,6 +1217,6 @@ Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Att
 
 - **规范要求**：项目特征必须保留来源摘要、提取器版本与 provenance；未知权威身份保持未知。派生失败不得改变来源，读取必须核对当前来源和权限，旧代不能覆盖新代。强关系上线前必须通过独立质量门。
 - **决策来源**：#770 分期实施与来源完整性约束。
-- **实现状态**：C 持久扫描、特征重建和状态元数据待评审；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
+- **实现状态**：C 持久扫描、特征重建和状态元数据已合入；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
 - **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
 - **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。
