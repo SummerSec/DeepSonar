@@ -249,3 +249,13 @@ test("Control and ingest envelopes accept plan and plan_result", () => {
     }).success, false);
   }
 });
+
+test("route revision envelope is explicit and cannot express a goal revision", () => {
+  const plan = adaptHubIntentsToPlan([{from:[],role:"review",description:"Review retained evidence",prompt:"Review the scoped retained evidence without changing the goal."}]);
+  const revision = {v:1,kind:"route",plan_job_id:"11111111-1111-4111-8111-111111111111",expected_revision:"42",
+    expected_plan_sha256:"a".repeat(64),expected_task_input_sha256:"b".repeat(64),rationale:"Change the collection method"};
+  assert.equal(SubmitPlanPayload.safeParse({plan,revision}).success,true);
+  assert.equal(SubmitPlanPayload.safeParse({plan,revision:{...revision,kind:"goal"}}).success,false);
+  assert.equal(SubmitPlanPayload.safeParse({plan,revision:{...revision,v:2}}).success,false);
+  assert.equal(SubmitPlanPayload.safeParse({plan,revision:{...revision,reset_budget:true}}).success,false);
+});

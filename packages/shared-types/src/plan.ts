@@ -168,7 +168,17 @@ export const PlanResult = z
 export type PlanResult = z.infer<typeof PlanResult>;
 
 /** Agent-facing submit_plan body. Single object so MCP/Anthropic accept the schema. */
-export const SubmitPlanPayload = z.object({ plan: Plan }).strict();
+export const PlanRouteRevision = z.object({
+  v: z.literal(1),
+  kind: z.literal("route"),
+  plan_job_id: z.string().uuid(),
+  expected_revision: z.string().regex(/^[1-9][0-9]{0,19}$/),
+  expected_plan_sha256: contentDigest,
+  expected_task_input_sha256: contentDigest,
+  rationale: nonEmptyText(2_000),
+}).strict();
+export type PlanRouteRevision = z.infer<typeof PlanRouteRevision>;
+export const SubmitPlanPayload = z.object({ plan: Plan, revision: PlanRouteRevision.optional() }).strict();
 export type SubmitPlanPayload = z.infer<typeof SubmitPlanPayload>;
 
 /** Agent-facing submit_plan_result body. */

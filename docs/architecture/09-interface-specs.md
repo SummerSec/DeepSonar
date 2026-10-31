@@ -120,3 +120,7 @@ plan_gap 的 supplementation_execution 只读提供单次补证状态、来源�
 ### #778 Skill 条件建议接口
 
 新增 Job-scoped `suggest_project_skills`（只读）与 `record_skill_choice`（knowledge 事件及 durable receipt），使用 shared strict schema 和动态 OpenAPI。target 是调用者声明；策略/context/catalog 摘要绑定上下文，宿主在选择时重算，摘要不授予权限。两个 operation 必须已在冻结 allowlist 中；不存在隐式启用。候选完整有界过滤后分页，超限整次拒绝。详细条件、未知语义及验收见[专题](../SKILL_SUGGESTIONS.md)。
+
+## Plan 未派发路线修订（#775）
+
+submit_plan envelope 接收可选 v1 route revision；仅未派发路线可改，目标/完成判据/假设/预算恒等。版本、权限与剩余预算在 Canvas 锁内重验；GET receipt_key 恢复 committed 修订结果，不代表工作已派发。 详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。

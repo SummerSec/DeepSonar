@@ -205,10 +205,11 @@ if (!testDatabaseUrl) {
         }), (error: unknown) => error instanceof ControlInputError && error.code === "invalid_payload");
       }
       assert.deepEqual(gapReport, await loadPlanGapReport(sql, canvasId, projectId), "rejection does not alter audit");
-      await ingestEvent(planJobId, { v: 1, event_id: randomUUID(), type: "plan", payload: { plan: audit!.raw } });
-      const replaced = await loadPlanGapReport(sql, canvasId, projectId);
-      assert.equal(replaced.entries[0]?.audit?.proposed_outcome, null);
-      assert.notEqual(replaced.entries[0]?.audit?.source_sha256, gapReport.entries[0]?.audit?.source_sha256);
+      const beforeReplacement=await sql`SELECT event_id,payload_json FROM events WHERE job_id=${planJobId} ORDER BY id`;
+      await assert.rejects(ingestEvent(planJobId, { v: 1, event_id: randomUUID(), type: "plan", payload: { plan: audit!.raw } }),
+        (error:unknown)=>error instanceof ControlInputError && error.code==='plan_stale_revision');
+      assert.deepEqual(await loadPlanGapReport(sql,canvasId,projectId),gapReport,'implicit replacement preserves the audit');
+      assert.deepEqual(await sql`SELECT event_id,payload_json FROM events WHERE job_id=${planJobId} ORDER BY id`,beforeReplacement,'rejected replacement preserves history');
 
       await ingestEvent(hubJobId, {
         v: 1,
