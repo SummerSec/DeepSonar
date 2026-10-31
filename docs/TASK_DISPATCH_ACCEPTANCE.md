@@ -39,7 +39,7 @@
 
 真实模型验收已由用户豁免，效果与奖励收益未验证不构成交付阻碍，也不能宣称收益。Pi 输出修复、核心 Job 状态机重构、审计覆盖率看板、自动重试引擎、自动提权或外部漏洞提交不因本矩阵进入范围。可信适配器和资格正向闭环缺口须明确保留，不用负向拒绝测试替代其完成证据。
 
-本轮已验证 content_schema_version:2 旧摘要拒绝边界：manual_verification/verification_status 排除于执行摘要，但 rejected 与 Plan verified 仍独立生效；旧 v1 摘要不自动转换、历史不回写、旧 assignment 不改绑，失效时重新产出结果与评审。#797/#798 尚未合并部署不代表无版本影响。
+本轮已验证 content_schema_version:2 旧摘要拒绝边界：manual_verification/verification_status 排除于执行摘要，但 rejected 与 Plan verified 仍独立生效；旧 v1 摘要不自动转换、历史不回写、旧 assignment 不改绑，失效时重新产出结果与评审。#797/#798 已随本批合入，部署前仍须核对保存证据的版本。
 
 
 [task-plan-review.integration.test.ts](../apps/scheduler/src/task-plan-review.integration.test.ts) 的真实路由/PostgreSQL 完整链已通过 9 项测试（含顶层套件）：delivery 与 negative_result 经评审、显式操作员映射、重新读取后仅完成一次；无映射的原绑定仍有效；错误身份/范围/判据拒绝；完整集合冲突拒绝；unknown effects/读取预算使已接绑定失效；旧证明摘要不得经现存映射获得 Plan authority；持久接纳后来源变更阻止结算且保留原回执。该验收不调用真实模型，不证明任意自然语言覆盖、所有动态授权链或赏金提交资格。组合 CI 结果以 PR 最终记录为准。
