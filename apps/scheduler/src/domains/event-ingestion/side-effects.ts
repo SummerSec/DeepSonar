@@ -1690,13 +1690,15 @@ export function createEventIngestionSideEffectApplication(
       }
 
       if (p.plan_basis && preparedIntents.length!==1) throw new ControlInputError('plan_budget_exhausted','单步补证不得被重复 Intent 跳过或部分派发；请重读当前工作。','intents');
+      const intentEdges: EventCanvasEdgeInput[] = [];
+      const intentServices = { ...services, hubEdgeBatchInsert: async (_tx: EventIngestionTransaction, edges: readonly EventCanvasEdgeInput[]) => { intentEdges.push(...edges); } };
       for (const prepared of preparedIntents) {
         await materializePreparedHubIntent(
           tx,
           job as Record<string, unknown>,
           validation,
           prepared,
-          services,
+          intentServices,
           p.plan_basis
             ? {
                 legacyPlanContext: {
@@ -1709,6 +1711,7 @@ export function createEventIngestionSideEffectApplication(
             : undefined,
         );
       }
+      await insertHubEdges(tx, intentEdges);
       return;
     }
 
