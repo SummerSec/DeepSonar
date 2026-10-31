@@ -2099,11 +2099,11 @@ INSERT INTO global_settings (id, rules_json) VALUES (
     "maxFollowupsPerJob": 60,
     "maxFollowupDepth": 12,
     "maxAutoRetries": 6,
-    "maxVerificationRounds": 3,
+    "maxVerificationRounds": 0,
     "auditTimeoutSec": 18000,
     "verifyTimeoutSec": 10800,
     "hubEnabled": true,
-    "maxHubRounds": 20,
+    "maxHubRounds": 0,
     "maxIntentsPerDecision": 6,
     "allowEgress": true
   }'::jsonb

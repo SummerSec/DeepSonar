@@ -140,11 +140,11 @@ export async function recordCompletionProposal(input: {
         receipt_ref: receiptRef, receipt_status: "persisted_deferred", proposal_revision: input.revision } };
     } else if (result.body.repair) {
       const repair = result.body.repair as RepairFeedback;
+      const remainingTokens = tokenBudget ? tokenBudget.remaining_tokens : configuredRepairTokenLimit();
       result = { ...result, body: { ...result.body, repair: { ...repair,
         proposal_revision: input.revision, repair_attempt: history.length + 1,
         remaining_budget: { attempts: COMPLETION_REPAIR_LIMIT - history.length - 1,
-          ...((tokenBudget?.remaining_tokens ?? (tokenBudget ? null : configuredRepairTokenLimit())) !== null
-            ? { tokens: tokenBudget?.remaining_tokens ?? configuredRepairTokenLimit()! } : {}) },
+          ...(remainingTokens !== null && remainingTokens > 0 ? { tokens: remainingTokens } : {}) },
         current_state_ref: `/control/v1/jobs/${input.jobId}/operations/mark_job_done?receipt_key=${input.key}`,
         next_action: history.length + 1 >= COMPLETION_REPAIR_LIMIT
           ? "修正预算耗尽；停止提交并请求人工处理。"

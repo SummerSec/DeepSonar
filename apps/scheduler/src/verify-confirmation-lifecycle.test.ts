@@ -27,15 +27,16 @@ function row(kind: string, verification: Record<string, unknown> = {}, status = 
     } },
   };
 }
-function transaction(rows: ReturnType<typeof row>[], opts: { explicit?: boolean; attempt?: number; subject?: typeof finding } = {}) {
+function transaction(rows: ReturnType<typeof row>[], opts: { explicit?: boolean; attempt?: number; maxRounds?: number | null; priorRounds?: string[]; subject?: typeof finding } = {}) {
   const subject = opts.subject ?? structuredClone(finding);
   const writes: Array<{ query: string; values: unknown[] }> = [];
   const round = { id: "round", finding_id: FINDING, status: opts.explicit ? "running" : "pending", attempt: opts.attempt ?? 1, verify_job_id: opts.explicit ? "verify-job" : null };
   const tx = (parts: TemplateStringsArray | unknown, ...values: unknown[]): any => {
     if (!Array.isArray(parts)) return parts;
     const query = parts.join("?").replace(/\s+/g, " ").trim();
+    if (query.startsWith("SELECT status FROM finding_verification_rounds")) return Promise.resolve((opts.priorRounds ?? []).slice(0, Number(values[2])).map(status => ({ status })));
     if (query.startsWith("SELECT n.id")) return Promise.resolve(rows);
-    if (query.includes("SELECT config_json FROM projects")) return Promise.resolve([{ config_json: { rules: { minVerifySeverity: "high", maxFollowupDepth: 9, maxVerificationRounds: 3, maxNoProgressRounds: 3 } } }]);
+    if (query.includes("SELECT config_json FROM projects")) return Promise.resolve([{ config_json: { rules: { minVerifySeverity: "high", maxFollowupDepth: 9, ...(opts.maxRounds === null ? {} : { maxVerificationRounds: opts.maxRounds ?? 3 }), maxNoProgressRounds: 3 } } }]);
     if (query.includes("SELECT rules_json")) return Promise.resolve([]);
     if (query.startsWith("SELECT id FROM canvases")) return Promise.resolve([{ id: "canvas" }]);
     if (query.startsWith("SELECT MAX")) return Promise.resolve([{ max_attempt: 0 }]);
@@ -224,4 +225,32 @@ test("fake emitted Finding and Facts satisfy the full security contract; Verify 
     assert.ok(done.missing_evidence?.includes(missing), `${missing}: ${JSON.stringify(done)}`);
   }
   assert.equal(fakeVerifyDone(null, snapshot()).verdict, "rework");
+});
+
+for (const maxRounds of [null, 0, 3]) {
+  test(`verification round budget ${maxRounds ?? "unset"} at round four`, async () => {
+    const { tx, writes } = transaction([row("review")], { explicit: true, attempt: 4, maxRounds });
+    const result = await closeVerifyRound(tx, "verify-job", { jobStatus: "succeeded", proposedVerdict: "confirmed" });
+    assert.equal(result.outcome, maxRounds === 3 ? "inconclusive" : "rework");
+    assert.equal(confirmedWrite(writes), false, "unlimited rounds do not relax the evidence gate");
+  });
+}
+
+for (const scenario of [
+  { name: "initial failure plus five retries can retry once more", prior: Array(5).fill("failed"), stopped: false },
+  { name: "initial failure plus six retries stop", prior: Array(6).fill("failed"), stopped: true },
+  { name: "successful execution resets consecutive failures even when verdict is rework", prior: ["failed", "rework", ...Array(5).fill("failed")], stopped: false },
+]) {
+  test(`unlimited verification retains failure guard: ${scenario.name}`, async () => {
+    const { tx } = transaction([row("review")], { explicit: true, attempt: 20, maxRounds: 0, priorRounds: scenario.prior });
+    const result = await closeVerifyRound(tx, "verify-job", { jobStatus: "failed", error: "transport unavailable" });
+    assert.equal(result.outcome, scenario.stopped ? "inconclusive" : "rework");
+    assert.equal(result.forceHub, !scenario.stopped);
+  });
+}
+test("unlimited verification still stops cancellation immediately", async () => {
+  const { tx } = transaction([row("review")], { explicit: true, attempt: 20, maxRounds: 0 });
+  const result = await closeVerifyRound(tx, "verify-job", { jobStatus: "cancelled" });
+  assert.equal(result.outcome, "inconclusive");
+  assert.equal(result.forceHub, false);
 });

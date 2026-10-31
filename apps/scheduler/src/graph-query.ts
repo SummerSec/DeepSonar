@@ -26,8 +26,9 @@ const SECRET_KEY = /token|secret|password|authorization|credential|api[_-]?key|c
 const OPEN_INTENT = new Set(["pending", "claimed", "provisioning", "running", "waiting_human"]);
 
 export interface GraphQueryBudget {
-  calls_left: number;
-  bytes_left: number;
+  /** null means no configured cumulative quota; each query remains bounded. */
+  calls_left: number | null;
+  bytes_left: number | null;
 }
 
 export interface GraphQueryResult {
@@ -60,10 +61,10 @@ export interface GraphQueryState {
 
 export class GraphQueryBudgetError extends Error {
   readonly code = "graph_query_budget_exceeded" as const;
-  readonly remaining: { calls: number; bytes: number };
+  readonly remaining: { calls: number | null; bytes: number | null };
   readonly blocked: boolean;
 
-  constructor(remaining: { calls: number; bytes: number }, blocked: boolean) {
+  constructor(remaining: { calls: number | null; bytes: number | null }, blocked: boolean) {
     super(
       `[graph_query_budget_exceeded] graph_query budget exhausted (calls_left=${remaining.calls}, bytes_left=${remaining.bytes}); narrow the query or use overview`,
     );
@@ -600,8 +601,8 @@ export function projectEvidence(
 
 function remainingOf(state: GraphQueryState, maxCalls: number, maxBytes: number): GraphQueryBudget {
   return {
-    calls_left: Math.max(0, maxCalls - state.calls),
-    bytes_left: Math.max(0, maxBytes - state.bytes),
+    calls_left: maxCalls === 0 ? null : Math.max(0, maxCalls - state.calls),
+    bytes_left: maxBytes === 0 ? null : Math.max(0, maxBytes - state.bytes),
   };
 }
 
@@ -675,7 +676,7 @@ export async function executeGraphQuery(input: {
   const started = Date.now();
   const state = await store.loadState(input.jobId);
   const remaining = remainingOf(state, maxCalls, maxBytes);
-  if (state.blocked || remaining.calls_left <= 0 || remaining.bytes_left <= 0) {
+  if (state.blocked || remaining.calls_left === 0 || remaining.bytes_left === 0) {
     state.blocked = true;
     await store.saveState(input.jobId, state);
     throw graphQueryBudgetRejection(new GraphQueryBudgetError({
@@ -705,20 +706,20 @@ export async function executeGraphQuery(input: {
     items: projection.items,
     referable_ids: referable,
     budget: {
-      calls_left: remaining.calls_left - 1,
+      calls_left: remaining.calls_left === null ? null : remaining.calls_left - 1,
       bytes_left: remaining.bytes_left,
     },
     ...(projection.next_cursor ? { next_cursor: projection.next_cursor } : {}),
   };
   const bytes = utf8Bytes(result);
-  if (bytes > remaining.bytes_left) {
+  if (remaining.bytes_left !== null && bytes > remaining.bytes_left) {
     await store.saveState(input.jobId, state);
     throw graphQueryBudgetRejection(new GraphQueryBudgetError(
       { calls: remaining.calls_left, bytes: remaining.bytes_left },
       false,
     ));
   }
-  result.budget.bytes_left = remaining.bytes_left - bytes;
+  result.budget.bytes_left = remaining.bytes_left === null ? null : remaining.bytes_left - bytes;
   const nextIds = unique([...state.projected_node_ids, ...referable, ...idsMentionedInText(JSON.stringify(result.items), referable)]);
   const next: GraphQueryState = {
     ...(state.plan_read ? {plan_read:state.plan_read} : {}),

@@ -217,7 +217,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-013 运行时配置按层收紧并冻结
 
-- **规范要求**：对支持覆盖的 runtime knobs，解析顺序必须为 Job > role/project > platform > env，最终值必须冻结到 Job；role/project 只能在平台上限内收紧，env 仅作引导回退，`provisionTimeoutSec` 目前只接受 platform/env；未知或非法字段必须 fail closed。
+- **规范要求**：对支持覆盖的 runtime knobs，解析顺序必须为 Job > role/project > platform > env，最终值必须冻结到 Job；普通请求次数未配置或显式 0 时不限，显式正数才限制；非法 bootstrap 额度拒绝启动。完整用量分类见[用量限制](../USAGE_LIMITS.md)。role/project 只能在平台上限内收紧，env 仅作引导回退，`provisionTimeoutSec` 目前只接受 platform/env；未知或非法字段必须 fail closed。
 - **决策来源**：配置覆盖是权限和资源边界，运行时隐式回退会绕过审计。
 - **实现状态**：as-built；支持的 timeout 合法范围为 60–172800 秒，Job 创建另有 1–172800 秒边界；非所有 knobs 都支持 Job/role/project 覆盖。
 - **代码入口**：[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)、[runtime knob tests](../../apps/scheduler/src/runtime-knobs.test.ts)、[sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)。
@@ -384,9 +384,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-CANVAS-002 有界 graph_query 与引用集
 
-- **规范要求**：Canvas 查询必须按 Job scope、脱敏规则、调用次数和字节预算返回有界结果；每次结果必须标记截断/省略和 `referable_ids`，不得提供任意 `canvas_id`/`project_id` 越权查询。
+- **规范要求**：Canvas 查询必须按 Job scope、脱敏规则、单次查询硬上限及显式配置的累计调用/字节额度返回有界结果；每次结果必须标记截断/省略和 `referable_ids`，不得提供任意 `canvas_id`/`project_id` 越权查询。
 - **决策来源**：上下文按需读取降低泄露和上下文失控风险，引用集是提交决策的可验证边界。
-- **实现状态**：as-built；每 Job 默认最多 40 次、累计 512000 bytes，单类查询还有 hard cap。
+- **实现状态**：as-built；每 Job 累计调用次数与累计字节额度默认不限；对应配置为 0 时不限、正整数时限制。返回 budget 的 null 表示无限；计数和审计仍保留，单类查询 hard cap 不变。
 - **代码入口**：[Graph Query](../../apps/scheduler/src/graph-query.ts)、[shared graph schemas](../../packages/shared-types/src/index.ts)、[Graph budget tests](../../apps/scheduler/src/graph-budget.test.ts)。
 - **验证证据**：`pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`。
 
@@ -538,7 +538,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Finding Verify 必须为每个业务验证轮次保存独立 round，并限制同一 Finding 同时最多一个活跃 Verify Job；Job 基础设施重试不得伪造新的业务 verdict 或覆盖旧证据。
 - **决策来源**：验证轮次表达业务语义，Attempt 重试表达基础设施语义，二者生命周期不同。
-- **实现状态**：as-built；`jobs_one_active_verify_per_finding` 和 round 唯一约束已落地。
+- **实现状态**：as-built；`jobs_one_active_verify_per_finding` 和 round 唯一约束已落地。业务验证轮数 `maxVerificationRounds` 未配置或显式 0 时不限；显式 1–20 才限制，非法值拒绝。独立的 `maxNoProgressRounds` 无进展保护、证据门和基础设施重试保持有效，既有配置与历史 round 不回写。
 - **代码入口**：[Verify routes](../../apps/scheduler/src/domains/finding-verification/routes.ts)、[schema](../../database/schema.sql)、[verification lifecycle tests](../../apps/scheduler/src/verify-confirmation-lifecycle.test.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:verify-eligibility`、`pnpm ci:unit:bounded-contexts`。
 
@@ -904,7 +904,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### NFR-PERF-001 Graph Query 硬预算
 
-- **规范要求**：Graph Query 必须使用源码定义的单类 hard cap 和 Job 总预算；不得用“大图完整注入”替代查询预算。当前默认 Job 总预算为最多 40 次、512000 bytes，单类上限以 `GRAPH_QUERY_LIMITS` 为准。
+- **规范要求**：Graph Query 必须使用源码定义的单类 hard cap，并执行显式配置的 Job 累计额度；不得用“大图完整注入”替代有界查询。累计调用次数与字节额度未配置或为 0 时不限，正整数配置才限制；单类上限以 `GRAPH_QUERY_LIMITS` 为准。
 - **决策来源**：上下文与查询资源必须有可计算上限，防止大图和恶意节点放大成本。
 - **实现状态**：as-built；源码实际值为 index 50、node ids 20、node body/evidence 8192 chars、edges 200、findings 30、intents 50、overview 2048 chars。
 - **代码入口**：[config graph limits](../../apps/scheduler/src/config.ts)、[shared limits](../../packages/shared-types/src/index.ts)、[graph tests](../../apps/scheduler/src/graph-budget.test.ts)。
@@ -1148,7 +1148,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### CON-006 读图按需且有界
 
-- **规范要求**：Hub 启动输入只能包含任务目标和有界 Canvas 骨架/小图投影，大图必须通过当前 Job 的只读 `graph_query` 按需读取；角色 Agent 只能读取其 Job scope、角色快照和 operation 允许的任务/证据上下文，不得默认获得整张 Canvas 或能力目录。所有 graph 查询必须有调用/字节预算，耗尽时返回可修复反馈。
+- **规范要求**：Hub 启动输入只能包含任务目标和有界 Canvas 骨架/小图投影，大图必须通过当前 Job 的只读 `graph_query` 按需读取；角色 Agent 只能读取其 Job scope、角色快照和 operation 允许的任务/证据上下文，不得默认获得整张 Canvas 或能力目录。所有 graph 查询保留单次响应硬上限；累计调用/字节额度仅在显式配置时限制，耗尽时返回可修复反馈。
 - **决策来源**：上下文成本、数据泄漏和引用校验需要由平台控制而不是靠模型自律。
 - **实现状态**：as-built；Graph Query 有 overview/index/node/edges/findings/evidence/intents 分层。
 - **代码入口**：[graph query](../../apps/scheduler/src/graph-query.ts)、[graph budget tests](../../apps/scheduler/src/graph-budget.test.ts)、[设计摘要](../../DESIGN.md)。

@@ -173,8 +173,8 @@ test("T1 overview then index then node returns bounded envelopes", async () => {
   assert.equal(overview.kind, "overview");
   assert.equal(overview.truncated, false);
   assert.deepEqual(overview.referable_ids, [ROOT]);
-  assert.equal(overview.budget.calls_left, 39);
-  assert.ok(overview.budget.bytes_left < 512_000);
+  assert.equal(overview.budget.calls_left, null);
+  assert.equal(overview.budget.bytes_left, null);
 
   const index = await executeGraphQuery({
     jobId: JOB, canvasId: CANVAS, payload: { kind: "index", node_type: "fact", limit: 50 }, store, liveProjectedIds: live,
@@ -290,8 +290,8 @@ test("T9 all seven kinds carry kind/truncated/omitted/referable_ids/budget", asy
     assert.equal(typeof result.omitted, "object");
     assert.ok(Array.isArray(result.items));
     assert.ok(Array.isArray(result.referable_ids));
-    assert.ok(Number.isInteger(result.budget.calls_left));
-    assert.ok(Number.isInteger(result.budget.bytes_left));
+    assert.equal(result.budget.calls_left, null);
+    assert.equal(result.budget.bytes_left, null);
   }
 });
 
@@ -328,4 +328,42 @@ test("phase 1 keeps YAML injection and short-circuits graph_query before unknown
   assert.match(executor, /parseHubDecisionPayload\(payload, graph \? hubProjectedIds/);
   assert.match(executor, /liveProjectedIds: hubProjectedIds/);
   assert.match(executor, /seedGraphQueryProjectedIds\(jobId, graph\.projectedReferableIds\)/);
+});
+
+
+test("unlimited graph quotas preserve accounting beyond previous defaults", async () => {
+  for (const explicit of [false, true]) {
+    const store = memoryStore(fixtureGraph(), { calls: 40, bytes: 512_000 });
+    const result = await executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+      payload: { kind: "overview" }, store, ...(explicit ? { maxCalls: 0, maxBytes: 0 } : {}) });
+    assert.deepEqual(result.budget, { calls_left: null, bytes_left: null });
+    assert.equal(store.snapshot().calls, 41);
+    assert.ok(store.snapshot().bytes > 512_000);
+    assert.equal(store.snapshot().blocked, false);
+    assert.deepEqual(JSON.parse(JSON.stringify(result)).budget, result.budget);
+  }
+});
+
+test("graph cumulative quotas can be configured independently", async () => {
+  const calls = memoryStore(fixtureGraph());
+  const result = await executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+    payload: { kind: "overview" }, store: calls, maxCalls: 1, maxBytes: 0 });
+  assert.deepEqual(result.budget, { calls_left: 0, bytes_left: null });
+  await assert.rejects(() => executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+    payload: { kind: "overview" }, store: calls, maxCalls: 1, maxBytes: 0 }),
+    /graph_query_budget_exceeded/);
+  const bytes = memoryStore(fixtureGraph());
+  await assert.rejects(() => executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+    payload: { kind: "overview" }, store: bytes, maxCalls: 0, maxBytes: 1 }),
+    /graph_query_budget_exceeded/);
+  assert.equal(bytes.snapshot().calls, 0, "oversized response is not admitted");
+  assert.equal(bytes.snapshot().bytes, 0);
+});
+
+test("unlimited config does not reset a previously blocked graph query session", async () => {
+  const store = memoryStore(fixtureGraph(), { calls: 40, bytes: 512_000, blocked: true });
+  await assert.rejects(() => executeGraphQuery({ jobId: JOB, canvasId: CANVAS,
+    payload: { kind: "overview" }, store, maxCalls: 0, maxBytes: 0 }), /graph_query_budget_exceeded/);
+  assert.equal(store.snapshot().blocked, true);
+  assert.equal(store.snapshot().calls, 40);
 });

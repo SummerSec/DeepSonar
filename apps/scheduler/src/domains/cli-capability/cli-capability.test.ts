@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   CLI_UNAVAILABLE_CODE,
   FrozenCliCapability,
+  CliLimits,
   FrozenCliCapabilityPack,
 } from "@deepsonar/shared-types";
 import { buildCapabilityCatalog, describeCapability, listCapabilities, searchCapabilities } from "../capability-pack/discovery.js";
@@ -164,4 +165,15 @@ test("Hub-facing available ids for base/audit include shipped CLI capabilities o
     availableCliCapabilityIdsForImage("deepsonar-audit").sort(),
     base.sort(),
   );
+});
+
+
+test("CLI catalogs use unlimited call quotas", () => {
+  for (const module of listCliCapabilities()) assert.equal(module.limits.max_calls_per_job, 0);
+  const safety = { timeout_ms: 30_000, max_output_bytes: 262_144 };
+  assert.equal(CliLimits.parse(safety).max_calls_per_job, 0);
+  assert.equal(CliLimits.parse({ ...safety, max_calls_per_job: 32 }).max_calls_per_job, 32);
+  for (const value of [-1, 1.5, null, "32", 10_001]) {
+    assert.equal(CliLimits.safeParse({ ...safety, max_calls_per_job: value }).success, false);
+  }
 });
