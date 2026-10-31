@@ -1,6 +1,6 @@
 # Plan 缺口投影与操作员证据绑定（#775 A）
 
-> 状态：部分实现；A 的审计可见性与操作员判据绑定可用，B 单步决策、假执行闭环及持久接纳回执已接线；可选目标评审关联已接线，不提供自动语义判定。真实模型效果未验证且已豁免验收，C 未启用。
+> 状态：部分实现；A 的审计可见性与操作员判据绑定可用，B 单步决策、假执行闭环及持久接纳回执已接线；可选目标评审关联已接线，不提供自动语义判定。真实模型效果未验证且已豁免验收，仅开放派发前的显式路线修订；完整 C 未启用。
 > 同步日期：2026-10-30
 
 ## 读取与报告
@@ -41,7 +41,7 @@ Fact 的来源由 body.artifact_id → 当前 emit_fact Artifact → 同 Canvas/
 
 submit_hub_decision 的可选 plan_basis 是新版本化决策元数据，不是第二套派发契约。它绑定 Plan Job/SHA、criterion_id、最新已提交事件 revision、任务输入 SHA、当前 projection SHA、最多四个已读 Fact 内容版本，以及 outcome/rationale；continue 还要求 expected_gain。仅允许一个既有 Intent，继续使用当前角色、镜像、权限、引用与快照准入。最终事务持有 Canvas→Job 锁后重新核验版本，拒绝旧提案。首片不执行 Plan 依赖图。
 
-首次显式 submit_plan 即启用该 Canvas 的完成/派发依据门禁，省略 plan_basis 或尚未接受首次依据不能绕过；按最早 Plan 事件固定目标 Job，第一次接纳依据后再固定 Plan 内容与输入版本。每 Canvas 至多一次补证；更换标题、Job、Plan 或 Idempotency-Key 不重置预算。已有去重使相同事件不会再次写入；#795 已持久保存带依据提案的成功接纳回执，缓存丢失后可按原 key/输入读取原响应。恢复接纳不等于恢复或成功结算，最终事件仍重验当前来源与版本。后续 Hub 的 plan_context 由既有编排派生，不修改历史快照、不增加轮询或模型通道。
+首次显式 submit_plan 即启用该 Canvas 的完成/派发依据门禁，省略 plan_basis 或尚未接受首次依据不能绕过；按最早 Plan 事件固定目标 Job，首次提交同时保存用户输入摘要；第一次接纳依据固定完成依据，后续仅可显式修订未派发路线。每 Canvas 至多一次补证；更换标题、Job、Plan 或 Idempotency-Key 不重置预算。已有去重使相同事件不会再次写入；#795 已持久保存带依据提案的成功接纳回执，缓存丢失后可按原 key/输入读取原响应。恢复接纳不等于恢复或成功结算，最终事件仍重验当前来源与版本。后续 Hub 的 plan_context 由既有编排派生，不修改历史快照、不增加轮询或模型通道。
 
 complete 要求所有必要判据非空、当前 satisfied、未截断，且每个绑定均为 operator_attestation/satisfies；Job 必须已读完该 projection 的全部必要判据，并声明全部贡献 Fact 的当前版本。unbound/insufficient/contradicted/conflict/stale/blocked/unknown/missing 均拒绝。中央自动完成/报告门禁也检查全判据，不能通过轮数耗尽绕过。报告被 Plan 阻塞时返回 plan_not_ready，不伪称 Finding 未收敛，也不 force 回弹另一个 Hub。任何同任务 unknown effect（或终态 Job 遗留 pending effect）阻止补证和完成，返回 unknown_external_effect，不自动重放。
 
@@ -91,6 +91,20 @@ expected_review_sha256: <当前评审依据摘要>
 | unknown | 关联缺失/重复、版本不符、状态矛盾、上下文丢失或未知效果 |
 
 同一 SQL 快照读取 child、最新 Attempt、Intent、human 来源和所有 Attempt 的未知效果，防止新 Attempt 成功遮蔽旧效果；归属冲突、终态 Attempt 或终态 Job 遗留 effect_pending 也保持 unknown。原始错误、凭据、模型理由不回显；只投影固定生命周期原因码，credential 等 human 类别是 Agent 报告，不认证环境缺失。既有 Fact/Artifact/Evidence 绑定独立提供证据来源；执行状态不能代替其语义评价或将失败表达为阴性。未新增表、派发器、外联或自动轮询。
+
+## 未派发路线修订
+
+`submit_plan` 的 Plan v1 本体不变，envelope 新增可选严格 `revision`：`v:1`、`kind:route`、`plan_job_id`、`expected_revision`、`expected_plan_sha256`、`expected_task_input_sha256` 与非空 `rationale`。首次提交仍用 `{plan}`；替换已有 raw Plan 必须显式修订，不能用新 key 隐式覆盖。
+
+修订仅允许改变 tasks/open_questions；goal、completion、assumptions、budget 必须规范化恒等，不能由模型声称“语义等价”后弱化判据。这是执行路线调整，不是用户目标版本协议。首次 Plan 在 owner 的既有 payload 保存 `plan_input_sha256`；任务 title/target（排除 convergence）改变即失效，即使用新摘要提交也不能悄悄重设目标。缺少冻结输入的历史 Plan 不可修订，不自动补造旧基线。
+
+最终事务沿 Canvas→当前 Job→Plan owner 锁序，校验活动 Attempt/租约、冻结 operation 权限、同项目/Canvas、当前事件 head、Plan/输入摘要、未消耗的一次补证预算。待结算 Plan 接纳回执、unknown effect 或终态 Attempt 遗留 pending effect 均阻止修订；任务/引用预算不足明确拒绝，不裁剪。新计划仍只是审计提案，依赖执行和角色/镜像实际准入仍由原 Intent 派发门负责。
+
+新语义 plan 事件保存请求、作者 Job/Attempt、原版本与理由；原 owner 的 plan_protocol 更新为当前投影，原 events、Job 冻结快照、已派发 child、历史报告不修改。后继同 Canvas Job 可在原权限范围内修订同一 owner。判据仍按完整 Plan SHA 绑定，路线改变会使旧绑定 stale，必须重新评价，不能迁移旧操作员授权。首次 human basis 的旧路线 SHA 不会永久锁死已合法修订的路线；用户输入基线与 Canvas 补证预算不变。
+
+路线修订即时结算，直接以既有 semantic event 恢复 `receipt_status:committed` 响应，无第二账本。相同 key/内容 POST 或 `GET submit_plan?receipt_key=<UUID>` 在当前 capability 授权下可恢复结果，handler/进程缓存缺失也不重执行；同 key 异内容/operation 拒绝。这个结果不同于 Hub 的 persisted_deferred 接纳回执，不声称已派发或完成任务。
+
+`ci:integration:plan-protocol` 接入 `plan-revision.integration.test.ts`，以隔离 PostgreSQL/Control HTTP 覆盖并发 CAS、重放/恢复、撤权与过期租约、范围与版本失效、预算/未知效果/待结算回执、历史不可变。该切片不增加每 Canvas 一次预算，不执行依赖图、不自动取消已运行 Job，也未交付用户目标修订或有界无进展规划；#775 仍部分完成。
 
 ## 冻结离线回放
 

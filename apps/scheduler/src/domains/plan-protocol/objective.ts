@@ -31,8 +31,8 @@ export async function explicitPlanOwner(db:typeof sql,canvasId:string,projectId:
 
 export async function planContext(db:typeof sql,canvasId:string,projectId:string) {
   const active=await activePlanBasis(db,canvasId,projectId);
-  if(active) return {plan_job_id:active.plan_job_id,plan_sha256:active.plan_sha256};
-  const owner=await explicitPlanOwner(db,canvasId,projectId);
+
+  const owner=active?.plan_job_id ?? await explicitPlanOwner(db,canvasId,projectId);
   if(!owner) return null;
   const [row]=await db`SELECT payload_json FROM jobs WHERE id=${owner}`;
   const audit=readPlanAudit(row?.payload_json);
@@ -57,15 +57,18 @@ export async function readPlanObjective(
   const audit=readPlanAudit(owner?.payload_json);
   const plan=audit?.raw;
   if (!plan || audit.source!=="submit_plan") throw new ControlInputError("invalid_payload", "需要当前任务内显式提交的 Plan 原文。", "plan_basis.plan_job_id");
-  const [origin]=await db`SELECT id::text AS id,payload_json FROM events WHERE job_id=${planJobId}
-    AND type='plan' ORDER BY id DESC LIMIT 1`;
+  const [origin]=await db`SELECT e.id::text AS id,e.payload_json FROM events e
+    JOIN jobs j ON j.id=e.job_id AND j.canvas_id=${canvasId} AND j.project_id=${projectId}
+    WHERE e.type='plan' AND e.event_id IS DISTINCT FROM ${excludeEventId ?? null}
+      AND ((e.job_id=${planJobId} AND NOT (e.payload_json ? 'revision'))
+        OR e.payload_json->'revision'->>'plan_job_id'=${planJobId}) ORDER BY e.id DESC LIMIT 1`;
   const original=SubmitPlanPayload.safeParse(origin?.payload_json);
   const planSha=contentSha256(plan);
   if (!original.success || contentSha256(original.data.plan)!==planSha) throw new ControlInputError("invalid_payload", "Plan 原文与持久来源事件不一致。", "plan_basis.plan_sha256");
   const [head]=await db`SELECT e.id::text AS id FROM events e
     JOIN jobs j ON j.id=e.job_id AND j.canvas_id=${canvasId} AND j.project_id=${projectId}
     WHERE e.event_id IS DISTINCT FROM ${excludeEventId ?? null} AND (
-      (e.job_id=${planJobId} AND e.type='plan') OR
+      (e.type='plan' AND (e.job_id=${planJobId} OR e.payload_json->'revision'->>'plan_job_id'=${planJobId})) OR
       (e.type IN ('hub_decision','human') AND e.payload_json->'plan_basis'->>'plan_job_id'=${planJobId}))
     ORDER BY e.id DESC LIMIT 1`;
   const [spent]=await db`SELECT 1 FROM events e
@@ -78,6 +81,7 @@ export async function readPlanObjective(
     if (!sources.has(factId)) sources.set(factId,await loadCriterionSource(db,canvasId,projectId,factId,budget));
   }
   const baseline=taskInputSha256(job.title,job.target_json);
+  const initialInput=(owner?.payload_json as {plan_input_sha256?:unknown}|null)?.plan_input_sha256;
   const revision=String(head?.id ?? origin.id);
   const sourceVersions=[...sources].sort(([a],[b])=>a<b?-1:a>b?1:0).map(([id,source])=>({
     id,sha256:source?.source_sha256 ?? null,eligible:source?.eligible ?? false,
@@ -85,7 +89,7 @@ export async function readPlanObjective(
   }));
   const projectionSha=contentSha256({planJobId,planSha,baseline,revision,criteria,sources:sourceVersions});
   return {jobId,canvasId,projectId,jobPayload:job.payload_json,planJobId,plan,planSha,baseline,revision,
-    active,spent:Boolean(spent),criteria,sources,projectionSha,
-    staleObjective:Boolean(active && (active.plan_sha256!==planSha || active.expected_task_input_sha256!==baseline))};
+    active,initialInput,spent:Boolean(spent),criteria,sources,projectionSha,
+    staleObjective:Boolean((typeof initialInput === "string" && initialInput !== baseline) || active && ((!original.data.revision && active.plan_sha256!==planSha) || active.expected_task_input_sha256!==baseline))};
 }
 export type PlanObjective = Awaited<ReturnType<typeof readPlanObjective>>;

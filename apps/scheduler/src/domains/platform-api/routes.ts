@@ -1,3 +1,4 @@
+import { planRevisionReceipt, isPlanRevisionKey } from "./plan-revision-receipt.js";
 import { invokeDurablePlanDecision, readPlanReceipt, PLAN_RECEIPT_OPERATIONS, type PlanReceiptOperation } from "./plan-receipt.js";
 import { readControlReceiptByKey, controlInputDigest } from "../event-ingestion/control-receipt.js";
 import { sql } from "../../db.js";
@@ -251,6 +252,14 @@ async function executeInvocation(
       const result = await invokeDurablePlanDecision({principal,operation:operationId as PlanReceiptOperation,key,payload:input,requestInput});
       return {...result,cacheable:false};
     }
+    if (key && operationId === "submit_plan" && input && typeof input === "object" && "revision" in input) {
+      const prior = await planRevisionReceipt(jobId, key, input);
+      if (prior) return {...prior,cacheable:false};
+      await invokeRuntimeHandler({...context,input});
+      const settled = await planRevisionReceipt(jobId, key, input);
+      return settled ? {...settled,cacheable:false} : {statusCode:503,cacheable:false,
+        body:{accepted:false,error_code:"PLAN_SETTLEMENT_UNAVAILABLE",error:"No committed revision found; reconcile the same key",retryable:true}};
+    }
     const result = await invokeRuntimeHandler({...context,input});
     return { statusCode: 200, body: result === undefined ? null : result, cacheable: true };
   } catch (error) {
@@ -312,6 +321,10 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   if (!key) return sendError(reply, 400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required");
   if (!isUuid(key)) return sendError(reply, 400, "IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must be a UUID");
   const parsed = parseOperationInput(req, definition, key);
+  if (await isPlanRevisionKey(key) && (definition.operationId !== "submit_plan"
+    || !parsed.input || typeof parsed.input !== "object" || !("revision" in parsed.input))) {
+    return sendError(reply,409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to a committed Plan revision");
+  }
   if (definition.operationId === "mark_job_done") {
     const existing = idempotencyCache.get(idempotencyCacheKey(jobId, key));
     if (existing && existing.operationId !== "mark_job_done") return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key belongs to another operation");
@@ -348,6 +361,15 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
     return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
   }
 
+  if (definition.operationId === "submit_plan" && parsed.input && typeof parsed.input === "object" && "revision" in parsed.input) {
+    if (parsed.eventId !== key) return sendError(reply,400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
+    const previous = idempotencyCache.get(idempotencyCacheKey(jobId,key));
+    if (previous && (previous.operationId !== definition.operationId || previous.inputHash !== inputHash(parsed.input))) {
+      return sendError(reply,409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to another input or operation");
+    }
+    const result=await executeInvocation(principal,jobId,definition.operationId,parsed.input,parsed.eventId,key);
+    return reply.code(result.statusCode).send(result.body);
+  }
   if (planRequest) {
     if (parsed.eventId !== key) return sendError(reply,400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
     const previous=idempotencyCache.get(idempotencyCacheKey(jobId,key));
@@ -419,6 +441,11 @@ export function registerPlatformControlRoutes(app: FastifyInstance): void {
     if (!isAllowed(principal, definition.operationId)) return sendError(reply, 403, "OPERATION_NOT_ALLOWED", "Operation is not allowed for this Job");
     const receiptKey = (typed.query as { receipt_key?: unknown })?.receipt_key;
     if (receiptKey !== undefined) {
+      if (definition.operationId === "submit_plan" && isUuid(receiptKey)) {
+        const receipt=await planRevisionReceipt(principal.jobId,receiptKey);
+        if (!receipt) return sendError(reply,404,"PLAN_RECEIPT_NOT_FOUND","Committed route revision not found");
+        return reply.header("cache-control","no-store").code(receipt.statusCode).send(receipt.body);
+      }
       if (PLAN_RECEIPT_OPERATIONS.includes(definition.operationId as PlanReceiptOperation) && isUuid(receiptKey)) {
         const receipt=await readPlanReceipt(sql,principal.jobId,receiptKey);
         if(!receipt || receipt.operation!==definition.operationId) return sendError(reply,404,"PLAN_RECEIPT_NOT_FOUND","Plan receipt not found");

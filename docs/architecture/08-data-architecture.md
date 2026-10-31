@@ -140,3 +140,7 @@ schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canoni
 ### #778 选择声明存储
 
 `record_skill_choice` 复用 `project_knowledge_receipts` 的 operation/result_json 与既有 knowledge 事件，保存宿主重算建议快照和声明理由，不写 usage/work 或新经验表。目录、完整 Candidate CAS 和旧回执不变；SQL 基线无变更，不要求 schema bump/rebuild。历史选择不恢复权限。见[Skill 建议专题](../SKILL_SUGGESTIONS.md)。
+
+## Plan 未派发路线修订（#775）
+
+路线修订复用 plan 语义事件与 owner 当前 plan_protocol 投影；首次提交保存 plan_input_sha256，CAS 使用事件 head/内容摘要，历史事件与冻结快照不改写。即时结算响应从原事件恢复，不新增表或账本。 详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。

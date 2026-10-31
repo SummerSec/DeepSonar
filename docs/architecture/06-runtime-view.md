@@ -123,3 +123,7 @@ Task result 通过 emit_fact 写入版本 Artifact；delivery/negative_result �
 程序规则附加评审复用普通 goal_review Job 与既有 Artifact/Evidence，不增加执行通道；仅 supplied bounty Finding，program_rule:<ruleid> 与通用目标 criteria 分开。报告按同 Finding/整契约重核完整规则评价集合，失效/冲突/预算不足不得提升。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
 Plan 的 supplementation_execution 从已提交 continue 决策及完整 child/Intent/Attempt 关联重建一次补证生命周期；接纳回执不算执行，后续 Hub 不算补证 child。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
+
+## Plan 未派发路线修订（#775）
+
+Plan 路线修订仅作用于尚未派发的审计路线，通过原 Control→semantic ingestion 完成。新 Plan SHA 使旧判据绑定过期，原事件与快照不变；未知效果、待结算回执、已消耗补证预算均拒绝修订。 详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。

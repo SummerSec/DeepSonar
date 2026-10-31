@@ -165,6 +165,8 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
         if (envelope.type !== "knowledge" || jobId !== actor.jobId || ingest?.jobStatusAtLock !== "running" || ingest.attemptId !== actor.attemptId) return reject("KNOWLEDGE_JOB_INACTIVE", "Job changed before knowledge settlement");
         // The ingestion transaction already owns the Job lock. An earlier read
         // outside this boundary cannot reserve a key against concurrent completion.
+        const [revision] = await tx`SELECT id FROM events WHERE event_id=${key} AND type='plan' AND payload_json ? 'revision'`;
+        if (revision) return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a Plan revision");
         if (await readControlReceiptByKey(tx, jobId, key)) {
           return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a control receipt");
         }

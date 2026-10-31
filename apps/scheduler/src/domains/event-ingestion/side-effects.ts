@@ -868,7 +868,7 @@ export function createEventIngestionSideEffectApplication(
 
     if (type === "plan") {
       const rules = await ports.rulesForProject(tx, job.project_id as string);
-      await applySubmitPlan(tx, jobId, job as Record<string, unknown>, validatedPayload, rules.maxIntentsPerDecision);
+      await applySubmitPlan(tx, jobId, job as Record<string, unknown>, validatedPayload, rules.maxIntentsPerDecision, services.eventId);
       return;
     }
 
