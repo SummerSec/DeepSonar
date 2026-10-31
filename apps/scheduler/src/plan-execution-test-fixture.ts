@@ -94,6 +94,20 @@ export async function createPlanExecutionFixture() {
       jobs.push(job); runtimes.set(job, { token: grant.token, attempt });
       return { token: grant.token, attempt };
     };
+    const retryTruncated = async (job: string) => {
+      assert.equal(process.env.AGENT_MODE, "fake", "fixture retry never executes a real runtime");
+      const runtime = runtimes.get(job);
+      assert.ok(runtime, "fixture retry requires its already-bound runtime");
+      const [current] = await sql`SELECT j.status,a.id AS attempt_id FROM jobs j
+        JOIN job_attempts a ON a.job_id=j.id AND a.status='active' WHERE j.id=${job}`;
+      assert.equal(current?.status, "running", "fixture retry cannot resurrect a terminal Job");
+      assert.equal(String(current?.attempt_id), runtime.attempt, "fixture retry must own the current Attempt");
+      const effects = await sql`SELECT id FROM job_attempt_effects WHERE attempt_id=${runtime.attempt}`;
+      assert.equal(effects.length, 0, "fixture retry cannot replay any recorded external effect");
+      assert.ok(await lifecycle.retryTruncatedExecution(job, "Offline fixture stream truncated", {}, {}),
+        "fixture retry must pass the Scheduler-owned running CAS");
+      return start(job);
+    };
     const invoke = (job: string, operation: string, payload: unknown, key = randomUUID()): Promise<LightMyRequestResponse> => app.inject({
       method: "POST", url: `/control/v1/jobs/${job}/operations/${operation}`,
       headers: { authorization: `Bearer ${runtimes.get(job)!.token}`, "idempotency-key": key,
@@ -154,6 +168,6 @@ export async function createPlanExecutionFixture() {
     };
     const state = async (canvas: string) => (await sql`SELECT target_json FROM canvases WHERE id=${canvas}`)[0].target_json;
     const rebind = (job: string) => api.registerRuntimeHandler(job, handlers.get(job)!, operations);
-    return { sql, app, api, core, blob, start, rebind, invoke, fixture, task, proposal, children, emit, finish, state, holdPlanCommit, close };
+    return { sql, app, api, core, blob, start, retryTruncated, rebind, invoke, fixture, task, proposal, children, emit, finish, state, holdPlanCommit, close };
   } catch (error) { await close(); throw error; }
 }

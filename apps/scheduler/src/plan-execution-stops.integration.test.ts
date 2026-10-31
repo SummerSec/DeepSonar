@@ -25,11 +25,16 @@ test("Plan v2 rejects unretained/mismatched outputs, unauthorized partial routes
         if (mode === "unknown") await h.sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status)
           VALUES(${output.attempt},${child},'unknown-fixture','execution','unknown')`;
         if (mode === "old_attempt") {
-          await h.sql`UPDATE job_attempts SET status='succeeded',phase='terminal',finished_at=now() WHERE id=${output.attempt}`;
-          await h.start(child);
+          const replacement = await h.retryTruncated(child);
+          assert.notEqual(replacement.attempt, output.attempt, "retry creates a distinct current Attempt");
+          const [retained] = await h.sql`SELECT e.attempt_id FROM artifacts a
+            JOIN events e ON e.job_id=a.job_id AND e.event_id=a.source_event_id AND e.type='fact'
+            WHERE a.id=${output.id}`;
+          assert.equal(String(retained.attempt_id), output.attempt, "retry cannot rewrite old Artifact provenance");
         }
       }
       if (mode === "unknown") {
+        await assert.rejects(h.retryTruncated(child), /cannot replay any recorded external effect/);
         const denied = await h.invoke(child, "mark_job_done", { summary: "Unknown effects must never be repaired as success" });
         assert.equal(denied.statusCode, 409, denied.payload);
         await h.sql.begin(async (tx) => {
@@ -39,6 +44,7 @@ test("Plan v2 rejects unretained/mismatched outputs, unauthorized partial routes
           await h.core.advancePlanTaskAfterTerminalJob(tx as unknown as typeof h.sql, child);
         });
       } else await h.finish(child);
+      if (mode === "done") await assert.rejects(h.retryTruncated(child), /cannot resurrect a terminal Job/);
       assert.equal((await h.children(f.hub)).length, 1, mode);
       assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, mode === "unknown" ? "unknown_external_effect" : "missing_output", mode);
       assert.equal((await h.state(f.canvas)).plan_objective.status, "stopped");
